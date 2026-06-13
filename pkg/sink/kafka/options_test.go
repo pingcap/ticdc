@@ -518,105 +518,105 @@ func TestConfigurationCombinations(t *testing.T) {
 	combinations := []struct {
 		name                  string
 		uriTemplate           string
-		uriParams             []interface{}
+		uriParams             []any
 		brokerMessageMaxBytes string
 		topicMaxMessageBytes  string
 	}{
 		{
 			"new topic default limited by broker",
 			"kafka://127.0.0.1:9092/%s",
-			[]interface{}{"not-exist-topic"},
+			[]any{"not-exist-topic"},
 			defaultBrokerMessageBytes,
 			defaultTopicMessageBytes,
 		},
 		{
 			"new topic default equals broker",
 			"kafka://127.0.0.1:9092/%s",
-			[]interface{}{"not-exist-topic"},
+			[]any{"not-exist-topic"},
 			strconv.Itoa(config.DefaultMaxMessageBytes),
 			defaultTopicMessageBytes,
 		},
 		{
 			"new topic default below broker",
 			"kafka://127.0.0.1:9092/%s",
-			[]interface{}{"no-params"},
+			[]any{"no-params"},
 			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
 			defaultTopicMessageBytes,
 		},
 		{
 			"new topic user below broker and default",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{"not-created-topic", strconv.Itoa(1024*1024 - 1)},
+			[]any{"not-created-topic", strconv.Itoa(1024*1024 - 1)},
 			defaultBrokerMessageBytes,
 			defaultTopicMessageBytes,
 		},
 		{
 			"new topic user below default below broker",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes - 1)},
+			[]any{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes - 1)},
 			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
 			defaultTopicMessageBytes,
 		},
 		{
 			"new topic broker overhead below user",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{"not-created-topic", strconv.Itoa(1024*1024 + 1)},
+			[]any{"not-created-topic", strconv.Itoa(1024*1024 + 1)},
 			defaultBrokerMessageBytes,
 			defaultTopicMessageBytes,
 		},
 		{
 			"new topic broker below default and user",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes + 1)},
+			[]any{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes + 1)},
 			defaultBrokerMessageBytes,
 			defaultTopicMessageBytes,
 		},
 		{
 			"new topic user below broker above default",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes + 1)},
+			[]any{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes + 1)},
 			strconv.Itoa(config.DefaultMaxMessageBytes + 2),
 			defaultTopicMessageBytes,
 		},
 		{
 			"new topic broker below user above default",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes + 2)},
+			[]any{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes + 2)},
 			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
 			defaultTopicMessageBytes,
 		},
 		{
 			"existing topic default limited by topic",
 			"kafka://127.0.0.1:9092/%s",
-			[]interface{}{defaultMockTopicName},
+			[]any{defaultMockTopicName},
 			defaultBrokerMessageBytes,
 			defaultTopicMessageBytes,
 		},
 		{
 			"existing topic default equals topic",
 			"kafka://127.0.0.1:9092/%s",
-			[]interface{}{defaultMockTopicName},
+			[]any{defaultMockTopicName},
 			defaultBrokerMessageBytes,
 			strconv.Itoa(config.DefaultMaxMessageBytes),
 		},
 		{
 			"existing topic default below topic",
 			"kafka://127.0.0.1:9092/%s",
-			[]interface{}{defaultMockTopicName},
+			[]any{defaultMockTopicName},
 			defaultBrokerMessageBytes,
 			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
 		},
 		{
 			"existing topic user below topic and default",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{defaultMockTopicName, strconv.Itoa(1024*1024 - 1)},
+			[]any{defaultMockTopicName, strconv.Itoa(1024*1024 - 1)},
 			defaultBrokerMessageBytes,
 			defaultTopicMessageBytes,
 		},
 		{
 			"existing topic user below default below topic",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{
+			[]any{
 				defaultMockTopicName,
 				strconv.Itoa(config.DefaultMaxMessageBytes - 1),
 			},
@@ -626,14 +626,14 @@ func TestConfigurationCombinations(t *testing.T) {
 		{
 			"existing topic topic overhead below user",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{defaultMockTopicName, strconv.Itoa(1024*1024 + 1)},
+			[]any{defaultMockTopicName, strconv.Itoa(1024*1024 + 1)},
 			defaultBrokerMessageBytes,
 			defaultTopicMessageBytes,
 		},
 		{
 			"existing topic topic below default and user",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{
+			[]any{
 				defaultMockTopicName,
 				strconv.Itoa(config.DefaultMaxMessageBytes + 1),
 			},
@@ -643,7 +643,7 @@ func TestConfigurationCombinations(t *testing.T) {
 		{
 			"existing topic user below topic above default",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{
+			[]any{
 				defaultMockTopicName,
 				strconv.Itoa(config.DefaultMaxMessageBytes + 1),
 			},
@@ -653,7 +653,7 @@ func TestConfigurationCombinations(t *testing.T) {
 		{
 			"existing topic topic below user above default",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{
+			[]any{
 				defaultMockTopicName,
 				strconv.Itoa(config.DefaultMaxMessageBytes + 2),
 			},
