@@ -250,6 +250,17 @@ type AreaSettings struct {
 	feedbackInterval   time.Duration // The interval of the feedback. By default 1000ms.
 	// Remove it when we determine the v2 is working well.
 	algorithm int // The algorithm of the memory control.
+
+	// releaseMemoryRatio overrides the fraction of pending memory released on each
+	// release cycle. A value <= 0 falls back to defaultReleaseMemoryRatio, keeping the
+	// pre-scan-window behavior.
+	releaseMemoryRatio float64
+}
+
+// SetReleaseMemoryRatio overrides the fraction of pending memory the area releases on
+// each release cycle. A value <= 0 keeps the default (defaultReleaseMemoryRatio).
+func (s *AreaSettings) SetReleaseMemoryRatio(ratio float64) {
+	s.releaseMemoryRatio = ratio
 }
 
 func (s *AreaSettings) fix() {

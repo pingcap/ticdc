@@ -33,7 +33,14 @@ const (
 	// For now, we only use it in event collector.
 	MemoryControlForEventCollector = 1
 
-	defaultReleaseMemoryRatio     = 0.6
+	// defaultReleaseMemoryRatio is the fraction of an area's pending memory released on
+	// each release cycle when the area does not override it (i.e. the adaptive scan
+	// window is disabled). It matches the pre-scan-window behavior.
+	defaultReleaseMemoryRatio = 0.4
+	// deadlockMemoryHighWaterMark is the memory usage ratio above which a stalled area
+	// is treated as deadlocked. It is independent of the release ratio and stays the
+	// same regardless of whether the scan window is enabled.
+	deadlockMemoryHighWaterMark   = 0.6
 	defaultDeadlockDuration       = 5 * time.Second
 	defaultReleaseMemoryThreshold = 256
 )
@@ -171,7 +178,7 @@ func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 
 	hasEventComeButNotOut := time.Since(as.lastAppendEventTime.Load().(time.Time)) < defaultDeadlockDuration && time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration
 
-	memoryHighWaterMark := as.memoryUsageRatio() > defaultReleaseMemoryRatio
+	memoryHighWaterMark := as.memoryUsageRatio() > deadlockMemoryHighWaterMark
 
 	return hasEventComeButNotOut && memoryHighWaterMark
 }
@@ -193,11 +200,12 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 		return paths[i].lastHandleEventTs.Load() > paths[j].lastHandleEventTs.Load()
 	})
 
-	sizeToRelease := int64(float64(as.totalPendingSize.Load()) * defaultReleaseMemoryRatio)
+	releaseRatio := as.releaseMemoryRatio()
+	sizeToRelease := int64(float64(as.totalPendingSize.Load()) * releaseRatio)
 	releasedSize := int64(0)
 	releasedPaths := make([]*pathInfo[A, P, T, D, H], 0)
 
-	log.Info("release memory", zap.Any("area", as.area), zap.Int64("sizeToRelease", sizeToRelease), zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.Float64("releaseMemoryRatio", defaultReleaseMemoryRatio))
+	log.Info("release memory", zap.Any("area", as.area), zap.Int64("sizeToRelease", sizeToRelease), zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.Float64("releaseMemoryRatio", releaseRatio))
 
 	for _, path := range paths {
 		// Only release path that is blocking and has pending size larger than the threshold.
@@ -225,6 +233,17 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 
 func (as *areaMemStat[A, P, T, D, H]) memoryUsageRatio() float64 {
 	return float64(as.totalPendingSize.Load()) / float64(as.settings.Load().maxPendingSize)
+}
+
+// releaseMemoryRatio returns the fraction of pending memory to release on each cycle.
+// It honors the per-area override (set when the scan window is enabled) and falls back
+// to defaultReleaseMemoryRatio when unset, so a non-overriding area keeps the
+// pre-scan-window behavior.
+func (as *areaMemStat[A, P, T, D, H]) releaseMemoryRatio() float64 {
+	if ratio := as.settings.Load().releaseMemoryRatio; ratio > 0 {
+		return ratio
+	}
+	return defaultReleaseMemoryRatio
 }
 
 func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, T, D, H]) {

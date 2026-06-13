@@ -948,3 +948,60 @@ func TestAddDispatcherFailure(t *testing.T) {
 	_, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
 	require.False(t, ok, "changefeedStatus should be removed after failed registration")
 }
+
+// TestGetScanTaskDataRangeEmptySignalGatedByScanWindow verifies gate 6 of the
+// enable-scan-window switch (see ai_context/switch_4030_4460_4950.md): when the scan
+// range becomes empty due to the pre-existing DDL-state capping, the rate-limited
+// signal resolved-ts is emitted only when the scan window is enabled. With the
+// feature off the behavior matches the baseline (no signal is sent).
+func TestGetScanTaskDataRangeEmptySignalGatedByScanWindow(t *testing.T) {
+	cases := []struct {
+		name             string
+		enableScanWindow bool
+		wantSignal       bool
+	}{
+		{"enabled sends signal", true, true},
+		{"disabled stays silent", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			broker, _, ss, _ := newEventBrokerForTest()
+			// Close the broker so the send-message workers stop; emitted messages then
+			// stay buffered in messageCh and can be observed by length.
+			broker.close()
+
+			info := newMockDispatcherInfoForTest(t)
+			info.epoch = 1
+			// syncPointInterval=0 keeps emitSyncPointEventIfNeeded a no-op.
+			status := newChangefeedStatus(info.GetChangefeedID(), 0, tc.enableScanWindow)
+			disp := newDispatcherStat(info, 1, 1, nil, status)
+			disp.seq.Store(1)
+
+			baseTime := time.Now()
+			commitStart := oracle.GoTimeToTS(baseTime.Add(20 * time.Second))
+			disp.sentResolvedTs.Store(oracle.GoTimeToTS(baseTime))
+			disp.receivedResolvedTs.Store(oracle.GoTimeToTS(baseTime.Add(40 * time.Second)))
+			disp.eventStoreCommitTs.Store(commitStart)
+			disp.lastScannedCommitTs.Store(commitStart) // CommitTsStart
+			disp.lastScannedStartTs.Store(0)            // allow the signal resolved-ts
+			// Make sure the rate limiter does not suppress the signal.
+			disp.lastSentResolvedTsTime.Store(baseTime.Add(-time.Hour))
+
+			// DDL-state ResolvedTs caps CommitTsEnd down to CommitTsStart, producing an empty
+			// range regardless of the scan window. maxDDLCommitTs <= CommitTsStart avoids the
+			// pending-ddl local advance branch.
+			ss.resolvedTs = commitStart
+			ss.maxDDLCommitTs = commitStart
+
+			needScan, _ := broker.getScanTaskDataRange(disp)
+			require.False(t, needScan)
+
+			got := len(broker.messageCh[disp.messageWorkerIndex])
+			if tc.wantSignal {
+				require.Equal(t, 1, got, "expected a signal resolved-ts message when scan window is enabled")
+			} else {
+				require.Equal(t, 0, got, "expected no message when scan window is disabled")
+			}
+		})
+	}
+}

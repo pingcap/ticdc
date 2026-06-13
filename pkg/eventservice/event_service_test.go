@@ -400,6 +400,7 @@ type mockDispatcherInfo struct {
 	enableSyncPoint   bool
 	nextSyncPoint     uint64
 	syncPointInterval time.Duration
+	enableScanWindow  bool
 }
 
 func newMockDispatcherInfo(t *testing.T, startTs uint64, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
@@ -423,6 +424,8 @@ func newMockDispatcherInfo(t *testing.T, startTs uint64, dispatcherID common.Dis
 		},
 		bdrMode:   false,
 		integrity: config.GetDefaultReplicaConfig().Integrity,
+		// Tests exercise the scan window behavior, so enable it by default here.
+		enableScanWindow: true,
 	}
 }
 
@@ -474,6 +477,10 @@ func (m *mockDispatcherInfo) GetSyncPointInterval() time.Duration {
 	return m.syncPointInterval
 }
 
+func (m *mockDispatcherInfo) GetEnableScanWindow() bool {
+	return m.enableScanWindow
+}
+
 func (m *mockDispatcherInfo) IsOnlyReuse() bool {
 	return false
 }
@@ -505,7 +512,7 @@ func (m *mockDispatcherInfo) GetTxnAtomicity() config.AtomicityLevel {
 func newChangefeedStatusForTest(t testing.TB, info DispatcherInfo) *changefeedStatus {
 	t.Helper()
 
-	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval(), info.GetEnableScanWindow())
 	status.filter = newChangefeedFilterForTest(t, info, time.UTC.String())
 	return status
 }
@@ -518,7 +525,7 @@ func addChangefeedStatusToBrokerForTest(
 ) *changefeedStatus {
 	t.Helper()
 
-	status := newChangefeedStatus(changefeedID, syncPointInterval)
+	status := newChangefeedStatus(changefeedID, syncPointInterval, true)
 	broker.changefeedMap.Store(changefeedID, status)
 	return status
 }

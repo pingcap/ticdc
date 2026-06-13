@@ -53,6 +53,10 @@ type DispatcherInfo interface {
 	GetSyncPointTs() uint64
 	GetSyncPointInterval() time.Duration
 
+	// GetEnableScanWindow reports whether the adaptive scan window feature is
+	// enabled for this changefeed.
+	GetEnableScanWindow() bool
+
 	IsOnlyReuse() bool
 	GetBdrMode() bool
 	GetIntegrity() *integrity.Config
