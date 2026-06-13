@@ -130,6 +130,7 @@ func toEventFilterRulePB(rule *config.EventFilterRule) *eventpb.EventFilterRule 
 		IgnoreUpdateOldValueExpr: util.GetOrZero(rule.IgnoreUpdateOldValueExpr),
 		IgnoreDeleteValueExpr:    util.GetOrZero(rule.IgnoreDeleteValueExpr),
 	}
+	eventFilterPB.IgnoreUpdateOnlyColumns = append(eventFilterPB.IgnoreUpdateOnlyColumns, rule.IgnoreUpdateOnlyColumns...)
 
 	eventFilterPB.Matcher = append(eventFilterPB.Matcher, rule.Matcher...)
 
