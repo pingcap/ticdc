@@ -76,6 +76,7 @@ func newTestSharedInfo(
 		syncPointConfig,
 		&defaultAtomicity,
 		enableSplittableCheck,
+		false, // enableScanWindow
 		routing.Router{},
 		0,
 		0,

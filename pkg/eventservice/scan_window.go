@@ -296,6 +296,11 @@ func (w *memoryUsageWindow) pruneLocked(now time.Time) {
 }
 
 func (c *changefeedStatus) updateMemoryUsage(now time.Time, usageRatio float64, memoryReleaseCount uint32) {
+	// When the scan window feature is disabled, keep the scan interval untouched so
+	// the changefeed behaves as if the adaptive scan window was never introduced.
+	if !c.enableScanWindow {
+		return
+	}
 	if c.scanWindowController == nil {
 		return
 	}
@@ -811,6 +816,13 @@ func (c *changefeedStatus) maxScanInterval() time.Duration {
 }
 
 func (c *changefeedStatus) refreshMinSentResolvedTs() {
+	// When the scan window feature is disabled, minSentTs is never consumed
+	// (getScanMaxTs returns 0 unconditionally), so skip the per-changefeed scan and
+	// the base-ts gauge update entirely. This keeps the feature fully inert and
+	// avoids emitting scan-window metrics when it is off.
+	if !c.enableScanWindow {
+		return
+	}
 	now := time.Now()
 	minSentResolvedTs := ^uint64(0)
 	minSentResolvedTsWithStale := ^uint64(0)
@@ -854,6 +866,11 @@ func (c *changefeedStatus) refreshMinSentResolvedTs() {
 }
 
 func (c *changefeedStatus) getScanMaxTs() uint64 {
+	// When the scan window feature is disabled, return 0 so that the scan range is
+	// never capped, behaving as if the scan window was never introduced.
+	if !c.enableScanWindow {
+		return 0
+	}
 	baseTs := c.minSentTs.Load()
 	if baseTs == 0 {
 		return 0

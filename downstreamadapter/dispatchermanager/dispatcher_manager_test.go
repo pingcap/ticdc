@@ -133,6 +133,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		nil,   // syncPointConfig
 		&defaultAtomicity,
 		false,
+		false, // enableScanWindow
 		routing.Router{},
 		0,
 		0,

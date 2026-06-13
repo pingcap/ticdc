@@ -324,6 +324,7 @@ func NewDispatcherManager(
 		syncPointConfig,
 		manager.config.SinkConfig.TxnAtomicity,
 		manager.config.EnableSplittableCheck,
+		manager.config.EnableScanWindow,
 		router,
 		batchCounts,
 		batchBytes,
