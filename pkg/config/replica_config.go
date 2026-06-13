@@ -55,6 +55,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 	SyncPointInterval:  util.AddressOf(10 * time.Minute),
 	SyncPointRetention: util.AddressOf(24 * time.Hour),
 	BDRMode:            util.AddressOf(false),
+	EnableScanWindow:   util.AddressOf(false),
 	Filter:             NewDefaultFilterConfig(),
 	EnableActiveActive: util.AddressOf(false),
 	Mounter: &MounterConfig{
@@ -196,6 +197,11 @@ type replicaConfig struct {
 	// if it's set, will override the default value which derived from the internal sink.
 	EventCollectorBatchCount *int `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
 	EventCollectorBatchBytes *int `toml:"event-collector-batch-bytes" json:"event-collector-batch-bytes,omitempty"`
+
+	// EnableScanWindow controls whether the event service applies the adaptive scan
+	// window (memory control + adaptive scan interval) for this changefeed.
+	// It defaults to false so the feature behaves as if it was never introduced.
+	EnableScanWindow *bool `toml:"enable-scan-window" json:"enable-scan-window,omitempty"`
 
 	// Deprecated: we don't use this field since v8.0.0.
 	SQLMode string `toml:"sql-mode" json:"sql-mode"`

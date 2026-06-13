@@ -40,6 +40,11 @@ const (
 	receiveChanSize               = 1024 * 8
 	commonMsgRetryQuota           = 3 // The number of retries for most droppable dispatcher requests.
 	eventServiceHeartbeatInterval = 10 * time.Second
+
+	// scanWindowReleaseMemoryRatio is the fraction of pending memory the event collector
+	// releases per cycle for changefeeds with the adaptive scan window enabled. It is
+	// more aggressive than the dynstream default to keep up with the larger scan windows.
+	scanWindowReleaseMemoryRatio = 0.6
 )
 
 // DispatcherMessage is the message send to EventService.
@@ -281,6 +286,12 @@ func (c *EventCollector) PrepareAddDispatcher(
 		batchCount,
 		batchBytes,
 	)
+	// The adaptive scan window releases memory more aggressively to keep up with the
+	// larger scan windows. Only apply it when the changefeed enables the scan window,
+	// so a changefeed with the feature off keeps the pre-scan-window release ratio.
+	if target.GetEnableScanWindow() {
+		areaSetting.SetReleaseMemoryRatio(scanWindowReleaseMemoryRatio)
+	}
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))

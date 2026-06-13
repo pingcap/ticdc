@@ -52,6 +52,7 @@ type DispatcherService interface {
 	GetFilterConfig() *eventpb.FilterConfig
 	EnableSyncPoint() bool
 	GetSyncPointInterval() time.Duration
+	GetEnableScanWindow() bool
 	GetSkipSyncpointAtStartTs() bool
 	GetTxnAtomicity() config.AtomicityLevel
 	GetResolvedTs() uint64

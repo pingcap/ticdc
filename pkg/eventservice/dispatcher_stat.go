@@ -428,13 +428,19 @@ type changefeedStatus struct {
 
 	scanWindowController *adaptiveScanWindowController
 	syncPointInterval    time.Duration
+
+	// enableScanWindow controls whether the adaptive scan window (memory control +
+	// adaptive scan interval) takes effect for this changefeed. When false, the
+	// feature behaves as if it was never introduced.
+	enableScanWindow bool
 }
 
-func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
+func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration, enableScanWindow bool) *changefeedStatus {
 	status := &changefeedStatus{
 		changefeedID:         changefeedID,
 		scanWindowController: newAdaptiveScanWindowController(time.Now()),
 		syncPointInterval:    syncPointInterval,
+		enableScanWindow:     enableScanWindow,
 	}
 	status.scanInterval.Store(int64(defaultScanInterval))
 

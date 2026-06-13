@@ -448,7 +448,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		}
 	}
 
-	if dataRange.CommitTsEnd <= dataRange.CommitTsStart && hasPendingDDLEventInCurrentRange {
+	if task.changefeedStat.enableScanWindow && dataRange.CommitTsEnd <= dataRange.CommitTsStart && hasPendingDDLEventInCurrentRange {
 		// Global scan window base can be pinned by other lagging dispatchers.
 		// For a table with pending ddl in current range, use a local bounded step to keep
 		// this dispatcher making forward progress, so barrier coverage can eventually complete.
@@ -472,10 +472,15 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
-		// Scan range can become empty after applying capping (for example, scan window).
-		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
-		// but do not advance the watermark here.
-		c.sendSignalResolvedTs(task)
+		// Scan range can become empty after applying scan-window capping. In that case send a
+		// signal resolved-ts event (rate limited) to keep downstream responsive, but do not
+		// advance the watermark here.
+		// When the scan window is disabled, an empty range can only come from the pre-existing
+		// DDL-state capping, where the baseline behavior is to just return without sending a
+		// signal. Gate the signal on enableScanWindow to keep that parity.
+		if task.changefeedStat.enableScanWindow {
+			c.sendSignalResolvedTs(task)
+		}
 		return false, common.DataRange{}
 	}
 
@@ -1251,14 +1256,18 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 			zap.Error(err))
 	}
 
-	status := newChangefeedStatus(changefeedID, info.GetSyncPointInterval())
+	status := newChangefeedStatus(changefeedID, info.GetSyncPointInterval(), info.GetEnableScanWindow())
 	status.filter = changefeedFilter
 	actual, loaded := c.changefeedMap.LoadOrStore(changefeedID, status)
 	if loaded {
 		return actual.(*changefeedStatus)
 	}
 	log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
-	initializeScanWindowMetrics(changefeedID.String())
+	// Only emit scan-window metrics when the feature is enabled, so a changefeed
+	// running with the feature off stays silent on the scan-window dashboards.
+	if status.enableScanWindow {
+		initializeScanWindowMetrics(changefeedID.String())
+	}
 	return status
 }
 

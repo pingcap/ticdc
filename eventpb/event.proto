@@ -100,4 +100,8 @@ message DispatcherRequest {
     bool output_raw_change_event = 17;
     int64 mode = 18;
     string txn_atomicity = 19;
+    // enable_scan_window controls whether the event service applies the adaptive
+    // scan window (memory control + scan interval) for this changefeed.
+    // It defaults to false so the feature behaves as if it was never introduced.
+    bool enable_scan_window = 20;
 }

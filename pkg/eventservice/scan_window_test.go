@@ -37,7 +37,7 @@ func markScanWindowReadyForDecrease(status *changefeedStatus, now time.Time) {
 func TestAdjustScanIntervalLowPressureSlowsRecoveryForLargeWindow(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute, true)
 
 	now := time.Now()
 	markScanWindowReadyForIncrease(status, now)
@@ -52,7 +52,7 @@ func TestAdjustScanIntervalLowPressureSlowsRecoveryForLargeWindow(t *testing.T) 
 func TestAdjustScanIntervalVeryLowPressureSlowsRecoveryForVeryLargeWindow(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute, true)
 
 	now := time.Now()
 	markScanWindowReadyForIncrease(status, now)
@@ -67,7 +67,7 @@ func TestAdjustScanIntervalVeryLowPressureSlowsRecoveryForVeryLargeWindow(t *tes
 func TestAdjustScanIntervalHighPressureUsesBoundedReduction(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute, true)
 	now := time.Now()
 	markScanWindowReadyForDecrease(status, now)
 
@@ -79,7 +79,7 @@ func TestAdjustScanIntervalHighPressureUsesBoundedReduction(t *testing.T) {
 func TestAdjustScanIntervalDoesNotKeepReducingAfterTransientHighPressure(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 1*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 1*time.Minute, true)
 	changefeed := status.changefeedID.String()
 	t.Cleanup(func() {
 		deleteScanWindowMetrics(changefeed)
@@ -101,7 +101,7 @@ func TestAdjustScanIntervalDoesNotKeepReducingAfterTransientHighPressure(t *test
 func TestAdjustScanIntervalCriticalPressure(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute, true)
 	status.scanInterval.Store(int64(40 * time.Second))
 	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
 	require.Equal(t, int64(scanWindowEmergencyBrakePlateauInterval), status.scanInterval.Load())
@@ -110,7 +110,7 @@ func TestAdjustScanIntervalCriticalPressure(t *testing.T) {
 func TestAdjustScanIntervalCriticalPressureIgnoresLowPressureHistory(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 10*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 10*time.Minute, true)
 	changefeed := status.changefeedID.String()
 	t.Cleanup(func() {
 		deleteScanWindowMetrics(changefeed)
@@ -130,7 +130,7 @@ func TestAdjustScanIntervalCriticalPressureIgnoresLowPressureHistory(t *testing.
 func TestAdjustScanIntervalCriticalPressureUsesDefaultFloor(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute, true)
 	status.scanInterval.Store(int64(8 * time.Second))
 	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 0.95, 0)
 	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
@@ -139,7 +139,7 @@ func TestAdjustScanIntervalCriticalPressureUsesDefaultFloor(t *testing.T) {
 func TestAdjustScanIntervalHighPressureDoesNotIncreaseBelowDefaultFloor(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute, true)
 	now := time.Now()
 	markScanWindowReadyForDecrease(status, now)
 
@@ -151,7 +151,7 @@ func TestAdjustScanIntervalHighPressureDoesNotIncreaseBelowDefaultFloor(t *testi
 func TestAdjustScanIntervalCriticalPressureDoesNotIncreaseBelowDefaultFloor(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute, true)
 	status.scanInterval.Store(int64(2 * time.Second))
 	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 0.95, 0)
 	require.Equal(t, int64(2*time.Second), status.scanInterval.Load())
@@ -160,7 +160,7 @@ func TestAdjustScanIntervalCriticalPressureDoesNotIncreaseBelowDefaultFloor(t *t
 func TestAdjustScanIntervalEmergencyPressureUsesModerateBrakeForSmallWindow(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute, true)
 	status.scanInterval.Store(int64(20 * time.Second))
 	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
 	require.Equal(t, int64(10*time.Second), status.scanInterval.Load())
@@ -183,7 +183,7 @@ func TestScanWindowEmergencyBrakeIntervalUsesStrongBrakeForLargeWindow(t *testin
 func TestAdjustScanIntervalEmergencyPressureUsesDefaultFloorForVerySmallWindow(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute, true)
 	status.scanInterval.Store(int64(8 * time.Second))
 	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
 	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
@@ -192,7 +192,7 @@ func TestAdjustScanIntervalEmergencyPressureUsesDefaultFloorForVerySmallWindow(t
 func TestAdjustScanIntervalEmergencyPressureDoesNotImmediatelyDropBelowDefaultFloor(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute, true)
 	status.scanInterval.Store(int64(defaultScanInterval))
 	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
 	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
@@ -201,7 +201,7 @@ func TestAdjustScanIntervalEmergencyPressureDoesNotImmediatelyDropBelowDefaultFl
 func TestAdjustScanIntervalEmergencyPressureDoesNotIncreaseBelowDefaultFloor(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute, true)
 	status.scanInterval.Store(int64(2 * time.Second))
 	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
 	require.Equal(t, int64(2*time.Second), status.scanInterval.Load())
@@ -210,7 +210,7 @@ func TestAdjustScanIntervalEmergencyPressureDoesNotIncreaseBelowDefaultFloor(t *
 func TestAdjustScanIntervalEmergencyPressureCanReachMinFloorWhenSustained(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute, true)
 	status.scanInterval.Store(int64(defaultScanInterval))
 	start := time.Now()
 
@@ -224,7 +224,7 @@ func TestAdjustScanIntervalEmergencyPressureCanReachMinFloorWhenSustained(t *tes
 func TestAdjustScanIntervalRecoversFromFloorBeforeNormalIncreaseCooldown(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute, true)
 	now := time.Now()
 	status.scanInterval.Store(int64(defaultScanInterval))
 	status.scanWindowController.setLastAdjustTimeForTest(now.Add(-scanWindowFloorRecoveryCooldown - time.Second))
@@ -239,7 +239,7 @@ func TestAdjustScanIntervalRecoversFromFloorBeforeNormalIncreaseCooldown(t *test
 func TestUpdateMemoryUsageDoesNotResetScanIntervalOnMemoryRelease(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute, true)
 	now := time.Now()
 	status.scanInterval.Store(int64(40 * time.Second))
 
@@ -248,7 +248,7 @@ func TestUpdateMemoryUsageDoesNotResetScanIntervalOnMemoryRelease(t *testing.T) 
 }
 
 func TestUpdateMemoryUsageRecordsScanWindowObservationMetrics(t *testing.T) {
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 1*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 1*time.Minute, true)
 	changefeed := status.changefeedID.String()
 	t.Cleanup(func() {
 		deleteScanWindowMetrics(changefeed)
@@ -272,7 +272,7 @@ func TestUpdateMemoryUsageRecordsScanWindowObservationMetrics(t *testing.T) {
 }
 
 func TestUpdateMemoryUsageRecordsScanWindowAdjustCount(t *testing.T) {
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 1*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 1*time.Minute, true)
 	changefeed := status.changefeedID.String()
 	t.Cleanup(func() {
 		deleteScanWindowMetrics(changefeed)
@@ -289,7 +289,7 @@ func TestUpdateMemoryUsageRecordsScanWindowAdjustCount(t *testing.T) {
 }
 
 func TestUpdateMemoryUsageRecordsScanWindowTargetBandMetrics(t *testing.T) {
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 10*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 10*time.Minute, true)
 	changefeed := status.changefeedID.String()
 	t.Cleanup(func() {
 		deleteScanWindowMetrics(changefeed)
@@ -311,7 +311,7 @@ func TestUpdateMemoryUsageRecordsScanWindowTargetBandMetrics(t *testing.T) {
 func TestAdjustScanIntervalIncreaseWithJitteredSamples(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute, true)
 
 	start := time.Now()
 	markScanWindowReadyForIncrease(status, start)
@@ -330,7 +330,7 @@ func TestAdjustScanIntervalIncreaseWithJitteredSamples(t *testing.T) {
 func TestAdjustScanIntervalReducesOnSustainedPressure(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute, true)
 	now := time.Now()
 	markScanWindowReadyForDecrease(status, now)
 
@@ -345,7 +345,7 @@ func TestAdjustScanIntervalReducesOnSustainedPressure(t *testing.T) {
 func TestAdjustScanIntervalSustainedPressureDoesNotIncreaseBelowDefaultFloor(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute, true)
 	now := time.Now()
 	markScanWindowReadyForDecrease(status, now)
 
@@ -360,7 +360,7 @@ func TestAdjustScanIntervalSustainedPressureDoesNotIncreaseBelowDefaultFloor(t *
 func TestAdjustScanIntervalDoesNotIncreaseBeforeCooldown(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute, true)
 	now := time.Now()
 	status.scanInterval.Store(int64(40 * time.Second))
 
@@ -373,7 +373,7 @@ func TestAdjustScanIntervalDoesNotIncreaseBeforeCooldown(t *testing.T) {
 func TestRefreshMinSentResolvedTsMinAndSkipRules(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute, true)
 
 	stale := &dispatcherStat{}
 	stale.seq.Store(1)
@@ -433,7 +433,7 @@ func TestRefreshMinSentResolvedTsMinAndSkipRules(t *testing.T) {
 func TestRefreshMinSentResolvedTsStaleFallback(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute, true)
 
 	stale := &dispatcherStat{}
 	stale.seq.Store(1)
@@ -451,7 +451,7 @@ func TestRefreshMinSentResolvedTsStaleFallback(t *testing.T) {
 func TestGetScanMaxTsFallbackInterval(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute, true)
 
 	baseTime := time.Unix(1234, 0)
 	baseTs := oracle.GoTimeToTS(baseTime)
@@ -465,4 +465,32 @@ func TestGetScanMaxTsFallbackInterval(t *testing.T) {
 
 	status.minSentTs.Store(0)
 	require.Equal(t, uint64(0), status.getScanMaxTs())
+}
+
+// TestScanWindowDisabledIsNoOp verifies that when the scan window feature is
+// disabled (the default), getScanMaxTs never caps the range and updateMemoryUsage
+// keeps the scan interval untouched, so the changefeed behaves as if the feature
+// was never introduced.
+func TestScanWindowDisabledIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 1*time.Minute, false)
+	now := time.Now()
+
+	// Even with a non-zero base ts, the scan range must not be capped.
+	status.minSentTs.Store(oracle.GoTimeToTS(now))
+	require.Equal(t, uint64(0), status.getScanMaxTs())
+
+	// Memory usage reports must not adjust the scan interval.
+	status.scanInterval.Store(int64(40 * time.Second))
+	markScanWindowReadyForDecrease(status, now)
+	status.updateMemoryUsage(now.Add(memoryUsageWindowDuration), 1.0, 0)
+	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
+
+	// refreshMinSentResolvedTs must be a no-op: it leaves minSentTs untouched
+	// (an enabled status would recompute it to 0 here since there is no dispatcher).
+	sentinel := oracle.GoTimeToTS(now)
+	status.minSentTs.Store(sentinel)
+	status.refreshMinSentResolvedTs()
+	require.Equal(t, sentinel, status.minSentTs.Load())
 }
