@@ -74,6 +74,7 @@ func newTestSharedInfo(
 		syncPointConfig,
 		&defaultAtomicity,
 		enableSplittableCheck,
+		false, // enableScanWindow
 		routing.Router{},
 		make(chan TableSpanStatusWithSeq, 128),
 		128,
@@ -128,6 +129,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		}, // syncPointConfig
 		&defaultAtomicity,
 		false, // enableSplittableCheck
+		false, // enableScanWindow
 		routing.Router{},
 		make(chan TableSpanStatusWithSeq, 128),
 		128,
@@ -1090,7 +1092,8 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 			SyncPointRetention: time.Duration(10 * time.Minute),
 		},
 		&defaultAtomicity,
-		true, // enableSplittableCheck = true
+		true,  // enableSplittableCheck = true
+		false, // enableScanWindow
 		routing.Router{},
 		make(chan TableSpanStatusWithSeq, 128),
 		128,
@@ -1201,6 +1204,7 @@ func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
 		},
 		&defaultAtomicity,
 		false,
+		false, // enableScanWindow
 		routing.Router{},
 		make(chan TableSpanStatusWithSeq, 128),
 		128,
@@ -1281,6 +1285,7 @@ func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
 		},
 		&defaultAtomicity,
 		false,
+		false, // enableScanWindow
 		routing.Router{},
 		make(chan TableSpanStatusWithSeq, 128),
 		128,

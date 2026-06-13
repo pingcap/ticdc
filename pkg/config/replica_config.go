@@ -51,6 +51,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 	SyncPointInterval:  util.AddressOf(10 * time.Minute),
 	SyncPointRetention: util.AddressOf(24 * time.Hour),
 	BDRMode:            util.AddressOf(false),
+	EnableScanWindow:   util.AddressOf(false),
 	Filter:             NewDefaultFilterConfig(),
 	Mounter: &MounterConfig{
 		WorkerNum: 16,
@@ -171,6 +172,11 @@ type replicaConfig struct {
 	Integrity                    *integrity.Config   `toml:"integrity" json:"integrity"`
 	ChangefeedErrorStuckDuration *time.Duration      `toml:"changefeed-error-stuck-duration" json:"changefeed-error-stuck-duration,omitempty"`
 	SyncedStatus                 *SyncedStatusConfig `toml:"synced-status" json:"synced-status,omitempty"`
+
+	// EnableScanWindow controls whether the event service applies the adaptive scan
+	// window (memory control + adaptive scan interval) for this changefeed.
+	// It defaults to false so the feature behaves as if it was never introduced.
+	EnableScanWindow *bool `toml:"enable-scan-window" json:"enable-scan-window,omitempty"`
 
 	// Deprecated: we don't use this field since v8.0.0.
 	SQLMode string `toml:"sql-mode" json:"sql-mode"`
