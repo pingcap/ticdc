@@ -188,7 +188,11 @@ func ClassifyEvent(event EventType) (EventType, error) {
 		AlterIndexVisibility,
 		AlterTTLInfo,
 		AlterTTLRemove,
-		MultiSchemaChange:
+		MultiSchemaChange,
+		AddForeignKey,
+		DropForeignKey,
+		AddFullTextIndex,
+		CreateHybridIndex:
 		return incompatibleDDL, nil
 	default:
 		return NullEvent, errors.NotValidf("event type %s", event)

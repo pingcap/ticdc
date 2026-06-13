@@ -192,6 +192,14 @@ func TestSchedulerConfigValidateAndAdjust(t *testing.T) {
 	require.Error(t, conf.ValidateAndAdjust())
 }
 
+func TestSchemaStoreConfigValidateAndAdjust(t *testing.T) {
+	t.Parallel()
+	conf := GetDefaultServerConfig().Clone().Debug.SchemaStore
+	conf.IgnoreDDLCommitTs = nil
+	require.NoError(t, conf.ValidateAndAdjust())
+	require.NotNil(t, conf.IgnoreDDLCommitTs)
+}
+
 func TestIsValidClusterID(t *testing.T) {
 	cases := []struct {
 		id    string

@@ -182,10 +182,38 @@ func (s *keyspaceSchemaStore) writeDDLEvent(ddlEvent DDLJobWithCommitTs) {
 			return
 		}
 	}
-
 	if !filter.IsSysSchema(ddlEvent.Job.SchemaName) {
 		s.unsortedCache.addDDLEvent(ddlEvent)
 	}
+}
+
+func filterIgnoredDDLEvents(events []commonEvent.DDLEvent, tableFilter filter.Filter) []commonEvent.DDLEvent {
+	if tableFilter == nil || len(events) == 0 {
+		return events
+	}
+
+	filteredEvents := events[:0]
+	for _, event := range events {
+		skipped, err := tableFilter.ShouldSkipDDLEventInSchemaStore(event.GetDDLType(), event.Query)
+		if err != nil {
+			log.Warn("schema store ddl filter failed",
+				zap.Any("type", event.GetDDLType()),
+				zap.Uint64("finishedTs", event.FinishedTs),
+				zap.String("query", event.Query),
+				zap.Error(err))
+			filteredEvents = append(filteredEvents, event)
+			continue
+		}
+		if skipped {
+			log.Info("skip ddl event by debug-skip-ddl-types",
+				zap.Any("type", event.GetDDLType()),
+				zap.Uint64("finishedTs", event.FinishedTs),
+				zap.String("query", event.Query))
+			continue
+		}
+		filteredEvents = append(filteredEvents, event)
+	}
+	return filteredEvents
 }
 
 // TODO tenfyzhong 2025-09-13 13:40:26 use a chan to decoupling
@@ -432,7 +460,7 @@ func (s *schemaStore) FetchTableDDLEvents(
 	if err != nil {
 		return nil, err
 	}
-	return events, nil
+	return filterIgnoredDDLEvents(events, tableFilter), nil
 }
 
 // FetchTableTriggerDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
@@ -453,8 +481,9 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMet
 		return nil, 0, err
 	}
 
+	filteredEvents := filterIgnoredDDLEvents(events, tableFilter)
 	if len(events) == limit {
-		return events, events[limit-1].FinishedTs, nil
+		return filteredEvents, events[limit-1].FinishedTs, nil
 	}
 	end := currentResolvedTs
 	// after we get currentResolvedTs, there may be new ddl events with FinishedTs > currentResolvedTs
@@ -469,7 +498,7 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMet
 		zap.Int("limit", limit),
 		zap.Uint64("end", end),
 		zap.Any("events", events))
-	return events, end, nil
+	return filteredEvents, end, nil
 }
 
 // RegisterKeyspace register a keyspace to fetch table ddl

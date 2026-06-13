@@ -82,6 +82,8 @@ func toEventType(es string) (EventType, error) {
 		AddTablePartition,
 		DropTablePartition,
 		TruncateTablePartition,
+		AddForeignKey,
+		DropForeignKey,
 
 		IncompatibleDDLChanges,
 		ValueRangeDecrease,
@@ -118,7 +120,9 @@ func toEventType(es string) (EventType, error) {
 		AlterIndexVisibility,
 		AlterTTLInfo,
 		AlterTTLRemove,
-		MultiSchemaChange:
+		MultiSchemaChange,
+		AddFullTextIndex,
+		CreateHybridIndex:
 		return event, nil
 	case CreateSchema: // alias of CreateDatabase
 		return CreateDatabase, nil

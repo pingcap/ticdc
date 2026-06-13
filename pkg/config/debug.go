@@ -49,6 +49,12 @@ func (c *DebugConfig) ValidateAndAdjust() error {
 	if err := c.Scheduler.ValidateAndAdjust(); err != nil {
 		return errors.Trace(err)
 	}
+	if c.SchemaStore == nil {
+		c.SchemaStore = NewDefaultSchemaStoreConfig()
+	}
+	if err := c.SchemaStore.ValidateAndAdjust(); err != nil {
+		return errors.Trace(err)
+	}
 
 	return nil
 }
@@ -111,6 +117,14 @@ func NewDefaultSchemaStoreConfig() *SchemaStoreConfig {
 		EnableGC:          false,
 		IgnoreDDLCommitTs: []uint64{},
 	}
+}
+
+// ValidateAndAdjust validates and adjusts the schema store configuration.
+func (c *SchemaStoreConfig) ValidateAndAdjust() error {
+	if c.IgnoreDDLCommitTs == nil {
+		c.IgnoreDDLCommitTs = []uint64{}
+	}
+	return nil
 }
 
 // EventServiceConfig represents config for event service

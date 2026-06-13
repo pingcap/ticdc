@@ -14,6 +14,7 @@
 package filter
 
 import (
+	"slices"
 	"strings"
 
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
@@ -71,6 +72,21 @@ func ddlToEventType(jobType timodel.ActionType) bf.EventType {
 	return bf.NullEvent
 }
 
+// DDLToEventType gets the binlog filter event type from a DDL action type.
+func DDLToEventType(jobType timodel.ActionType) bf.EventType {
+	return ddlToEventType(jobType)
+}
+
+// SupportedDDLActionTypes returns all DDL action types supported by TiCDC.
+func SupportedDDLActionTypes() []timodel.ActionType {
+	actionTypes := make([]timodel.ActionType, 0, len(ddlWhiteListMap))
+	for actionType := range ddlWhiteListMap {
+		actionTypes = append(actionTypes, actionType)
+	}
+	slices.Sort(actionTypes)
+	return actionTypes
+}
+
 var alterTableSubType = []timodel.ActionType{
 	// table related DDLs
 	timodel.ActionRenameTable,
@@ -124,6 +140,11 @@ func isAlterTable(jobType timodel.ActionType) bool {
 		}
 	}
 	return false
+}
+
+// IsAlterTableDDL returns true if the DDL action type is an alter table subtype.
+func IsAlterTableDDL(jobType timodel.ActionType) bool {
+	return isAlterTable(jobType)
 }
 
 // SupportedEventTypes returns the supported event types.
