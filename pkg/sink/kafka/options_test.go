@@ -24,12 +24,155 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/golang/mock/gomock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
+
+const (
+	defaultMockTopicName            = "mock_topic"
+	defaultMockPartitionNum   int32 = 3
+	defaultReplicationFactor  int16 = 3
+	defaultBrokerMessageBytes       = "1048588"
+	defaultTopicMessageBytes        = "1048588"
+	defaultMinInsyncReplicas        = "1"
+)
+
+type kafkaAdminFixture struct {
+	admin        *MockClusterAdminClient
+	topics       map[string]TopicDetail
+	brokerConfig map[string]string
+	topicConfig  map[string]map[string]string
+}
+
+func newKafkaAdminFixture(t *testing.T) *kafkaAdminFixture {
+	t.Helper()
+
+	ctrl := gomock.NewController(t)
+	fixture := &kafkaAdminFixture{
+		admin:  NewMockClusterAdminClient(ctrl),
+		topics: make(map[string]TopicDetail),
+		brokerConfig: map[string]string{
+			BrokerMessageMaxBytesConfigName: defaultBrokerMessageBytes,
+			MinInsyncReplicasConfigName:     defaultMinInsyncReplicas,
+		},
+		topicConfig: make(map[string]map[string]string),
+	}
+	fixture.addTopic(defaultMockTopicName, defaultMockPartitionNum)
+	fixture.topicConfig[defaultMockTopicName] = map[string]string{
+		TopicMaxMessageBytesConfigName: defaultTopicMessageBytes,
+		MinInsyncReplicasConfigName:    defaultMinInsyncReplicas,
+	}
+
+	fixture.admin.EXPECT().Close().AnyTimes()
+	fixture.admin.EXPECT().GetTopicsMeta(gomock.Any(), gomock.Any()).
+		DoAndReturn(fixture.getTopicsMeta).AnyTimes()
+	fixture.admin.EXPECT().GetTopicsPartitionsNum(gomock.Any()).
+		DoAndReturn(fixture.getTopicsPartitionsNum).AnyTimes()
+	fixture.admin.EXPECT().GetBrokerConfig(gomock.Any()).
+		DoAndReturn(fixture.getBrokerConfig).AnyTimes()
+	fixture.admin.EXPECT().GetTopicConfig(gomock.Any(), gomock.Any()).
+		DoAndReturn(fixture.getTopicConfig).AnyTimes()
+	fixture.admin.EXPECT().CreateTopic(gomock.Any(), gomock.Any()).
+		DoAndReturn(fixture.createTopic).AnyTimes()
+
+	return fixture
+}
+
+func (f *kafkaAdminFixture) addTopic(name string, partitionNum int32) {
+	f.topics[name] = TopicDetail{Name: name, NumPartitions: partitionNum}
+}
+
+func (f *kafkaAdminFixture) getTopicsMeta(
+	topics []string, _ bool,
+) (map[string]TopicDetail, error) {
+	result := make(map[string]TopicDetail, len(topics))
+	for _, topic := range topics {
+		if detail, ok := f.topics[topic]; ok {
+			result[topic] = detail
+		}
+	}
+	return result, nil
+}
+
+func (f *kafkaAdminFixture) getTopicsPartitionsNum(
+	topics []string,
+) (map[string]int32, error) {
+	result := make(map[string]int32, len(topics))
+	for _, topic := range topics {
+		if detail, ok := f.topics[topic]; ok {
+			result[topic] = detail.NumPartitions
+		}
+	}
+	return result, nil
+}
+
+func (f *kafkaAdminFixture) getBrokerConfig(configName string) (string, error) {
+	if value, ok := f.brokerConfig[configName]; ok {
+		return value, nil
+	}
+	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
+		"cannot find the `%s` from the broker's configuration", configName)
+}
+
+func (f *kafkaAdminFixture) getTopicConfig(topicName string, configName string) (string, error) {
+	if _, ok := f.topics[topicName]; !ok {
+		return "", errors.ErrKafkaConfigNotFound.GenWithStack(
+			"cannot find the `%s` from the topic's configuration", topicName)
+	}
+	if value, ok := f.topicConfig[topicName][configName]; ok {
+		return value, nil
+	}
+	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
+		"cannot find the `%s` from the topic's configuration", configName)
+}
+
+func (f *kafkaAdminFixture) createTopic(detail *TopicDetail, _ bool) error {
+	if detail.ReplicationFactor > defaultReplicationFactor {
+		return sarama.ErrInvalidReplicationFactor
+	}
+	if _, ok := f.brokerConfig[MinInsyncReplicasConfigName]; !ok &&
+		detail.ReplicationFactor != defaultReplicationFactor {
+		return sarama.ErrPolicyViolation
+	}
+	f.topics[detail.Name] = *detail
+	return nil
+}
+
+func (f *kafkaAdminFixture) brokerMessageMaxBytes() int {
+	value, _ := strconv.Atoi(f.brokerConfig[BrokerMessageMaxBytesConfigName])
+	return value
+}
+
+func (f *kafkaAdminFixture) topicMaxMessageBytes(topicName string) int {
+	value, _ := strconv.Atoi(f.topicConfig[topicName][TopicMaxMessageBytesConfigName])
+	return value
+}
+
+func (f *kafkaAdminFixture) setMessageMaxBytes(brokerValue, topicValue string) {
+	f.brokerConfig[BrokerMessageMaxBytesConfigName] = brokerValue
+	f.topicConfig[defaultMockTopicName][TopicMaxMessageBytesConfigName] = topicValue
+}
+
+func expectedAdjustedMaxMessageBytes(configuredMaxMessageBytes, sourceMaxMessageBytes int) int {
+	sourceMaxMessageBytes -= maxMessageBytesOverhead
+	if configuredMaxMessageBytes < sourceMaxMessageBytes {
+		return configuredMaxMessageBytes
+	}
+	return sourceMaxMessageBytes
+}
+
+func (f *kafkaAdminFixture) setMinInsyncReplicas(minInsyncReplicas string) {
+	f.topicConfig[defaultMockTopicName][MinInsyncReplicasConfigName] = minInsyncReplicas
+	f.brokerConfig[MinInsyncReplicasConfigName] = minInsyncReplicas
+}
+
+func (f *kafkaAdminFixture) dropBrokerConfig(configName string) {
+	delete(f.brokerConfig, configName)
+}
 
 func TestCompleteOptions(t *testing.T) {
 	options := NewOptions()
@@ -225,144 +368,76 @@ func TestTimeout(t *testing.T) {
 	require.Equal(t, 2*time.Minute, options.WriteTimeout)
 }
 
-func TestAdjustConfigTopicNotExist(t *testing.T) {
-	// When the topic does not exist, use the broker's configuration to create the topic.
-	adminClient := NewClusterAdminClientMockImpl()
-	defer adminClient.Close()
-
-	options := NewOptions()
-	options.BrokerEndpoints = []string{"127.0.0.1:9092"}
-
-	// topic not exist, `max-message-bytes` = `message.max.bytes`
-	options.MaxMessageBytes = adminClient.GetBrokerMessageMaxBytes()
-	ctx := context.Background()
-	err := adjustOptions(ctx, adminClient, options, "create-random")
-	require.NoError(t, err)
-
-	saramaConfig, err := newSaramaConfig(ctx, options)
-	require.NoError(t, err)
-	require.Equal(t, options.MaxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
-
-	realMaxMessageBytes := adminClient.GetBrokerMessageMaxBytes() - maxMessageBytesOverhead
-	require.Equal(t, realMaxMessageBytes, options.MaxMessageBytes)
-
-	// topic not exist, `max-message-bytes` > `message.max.bytes`
-	options.MaxMessageBytes = adminClient.GetBrokerMessageMaxBytes() + 1
-	err = adjustOptions(ctx, adminClient, options, "create-random1")
-	require.NoError(t, err)
-
-	saramaConfig, err = newSaramaConfig(ctx, options)
-	require.NoError(t, err)
-	require.Equal(t, options.MaxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
-
-	realMaxMessageBytes = adminClient.GetBrokerMessageMaxBytes() - maxMessageBytesOverhead
-	require.Equal(t, realMaxMessageBytes, options.MaxMessageBytes)
-
-	// topic not exist, `max-message-bytes` < `message.max.bytes`
-	options.MaxMessageBytes = adminClient.GetBrokerMessageMaxBytes() - 1
-	err = adjustOptions(ctx, adminClient, options, "create-random2")
-	require.NoError(t, err)
-
-	saramaConfig, err = newSaramaConfig(ctx, options)
-	require.NoError(t, err)
-	require.Equal(t, options.MaxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
-
-	realMaxMessageBytes = adminClient.GetBrokerMessageMaxBytes() - maxMessageBytesOverhead
-	require.Equal(t, realMaxMessageBytes, options.MaxMessageBytes)
-}
-
-func TestAdjustConfigTopicExist(t *testing.T) {
-	adminClient := NewClusterAdminClientMockImpl()
-	defer adminClient.Close()
-
-	options := NewOptions()
-	options.BrokerEndpoints = []string{"127.0.0.1:9092"}
-
-	ctx := context.Background()
-	// topic exists, `max-message-bytes` = `max.message.bytes`.
-	options.MaxMessageBytes = adminClient.GetTopicMaxMessageBytes()
-
-	err := adjustOptions(ctx, adminClient, options, adminClient.GetDefaultMockTopicName())
-	require.NoError(t, err)
-
-	saramaConfig, err := newSaramaConfig(ctx, options)
-	require.NoError(t, err)
-
-	maxMessageBytes := adminClient.GetTopicMaxMessageBytes() - maxMessageBytesOverhead
-	require.Equal(t, maxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
-	require.Equal(t, maxMessageBytes, options.MaxMessageBytes)
-
-	// topic exists, `max-message-bytes` > `max.message.bytes`
-	options.MaxMessageBytes = adminClient.GetTopicMaxMessageBytes() + 1
-
-	err = adjustOptions(ctx, adminClient, options, adminClient.GetDefaultMockTopicName())
-	require.NoError(t, err)
-
-	saramaConfig, err = newSaramaConfig(ctx, options)
-	require.NoError(t, err)
-
-	maxMessageBytes = adminClient.GetTopicMaxMessageBytes() - maxMessageBytesOverhead
-	require.Equal(t, maxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
-	require.Equal(t, maxMessageBytes, options.MaxMessageBytes)
-
-	// topic exists, `max-message-bytes` < `max.message.bytes`
-	options.MaxMessageBytes = adminClient.GetTopicMaxMessageBytes() - 1
-
-	err = adjustOptions(ctx, adminClient, options, adminClient.GetDefaultMockTopicName())
-	require.NoError(t, err)
-
-	saramaConfig, err = newSaramaConfig(ctx, options)
-	require.NoError(t, err)
-
-	maxMessageBytes = adminClient.GetTopicMaxMessageBytes() - maxMessageBytesOverhead
-	require.Equal(t, maxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
-	require.Equal(t, maxMessageBytes, options.MaxMessageBytes)
-
-	// When the topic exists, but the topic does not have `max.message.bytes`
-	// create a topic without `max.message.bytes`
-	topicName := "test-topic"
-	detail := &TopicDetail{
-		Name:          topicName,
-		NumPartitions: 3,
+func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *testing.T) {
+	tests := []struct {
+		name                      string
+		configuredMaxMessageBytes func(*kafkaAdminFixture) int
+	}{
+		{
+			name: "keeps configured value below broker limit",
+			configuredMaxMessageBytes: func(*kafkaAdminFixture) int {
+				return 1024
+			},
+		},
+		{
+			name: "uses broker limit when configured value is within overhead",
+			configuredMaxMessageBytes: func(f *kafkaAdminFixture) int {
+				return f.brokerMessageMaxBytes() - 1
+			},
+		},
+		{
+			name: "uses broker limit when configured value is above broker",
+			configuredMaxMessageBytes: func(f *kafkaAdminFixture) int {
+				return f.brokerMessageMaxBytes() + 1
+			},
+		},
 	}
-	err = adminClient.CreateTopic(detail, false)
-	require.NoError(t, err)
 
-	options.MaxMessageBytes = adminClient.GetBrokerMessageMaxBytes() - 1
-	err = adjustOptions(ctx, adminClient, options, topicName)
-	require.NoError(t, err)
+	topicName := "test-topic"
 
-	saramaConfig, err = newSaramaConfig(ctx, options)
-	require.NoError(t, err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adminFixture := newKafkaAdminFixture(t)
+			adminClient := adminFixture.admin
 
-	// since `max.message.bytes` cannot be found, use broker's `message.max.bytes` instead.
-	maxMessageBytes = adminClient.GetBrokerMessageMaxBytes() - maxMessageBytesOverhead
-	require.Equal(t, maxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
+			detail := &TopicDetail{
+				Name:          topicName,
+				NumPartitions: 3,
+			}
+			err := adminClient.CreateTopic(detail, false)
+			require.NoError(t, err)
 
-	// When the topic exists, but the topic doesn't have `max.message.bytes`
-	// `max-message-bytes` > `message.max.bytes`
-	options.MaxMessageBytes = adminClient.GetBrokerMessageMaxBytes() + 1
+			options := NewOptions()
+			options.BrokerEndpoints = []string{"127.0.0.1:9092"}
+			options.MaxMessageBytes = test.configuredMaxMessageBytes(adminFixture)
+			expectedMaxMessageBytes := expectedAdjustedMaxMessageBytes(
+				options.MaxMessageBytes,
+				adminFixture.brokerMessageMaxBytes(),
+			)
 
-	err = adjustOptions(ctx, adminClient, options, topicName)
-	require.NoError(t, err)
+			ctx := context.Background()
+			err = adjustOptions(ctx, adminClient, options, topicName)
+			require.NoError(t, err)
 
-	saramaConfig, err = newSaramaConfig(ctx, options)
-	require.NoError(t, err)
+			saramaConfig, err := newSaramaConfig(ctx, options)
+			require.NoError(t, err)
 
-	maxMessageBytes = adminClient.GetBrokerMessageMaxBytes() - maxMessageBytesOverhead
-	require.Equal(t, maxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
+			require.Equal(t, expectedMaxMessageBytes, options.MaxMessageBytes)
+			require.Equal(t, expectedMaxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
+		})
+	}
 }
 
 func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
-	adminClient := NewClusterAdminClientMockImpl()
-	defer adminClient.Close()
+	adminFixture := newKafkaAdminFixture(t)
+	adminClient := adminFixture.admin
 
 	options := NewOptions()
 	options.BrokerEndpoints = []string{"127.0.0.1:9092"}
 
 	// Report an error if the replication-factor is less than min.insync.replicas
 	// when the topic does not exist.
-	adminClient.SetMinInsyncReplicas("2")
+	adminFixture.setMinInsyncReplicas("2")
 
 	ctx := context.Background()
 	err := adjustOptions(
@@ -378,7 +453,7 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 	)
 
 	// topic not exist, and `min.insync.replicas` not found in broker's configuration
-	adminClient.DropBrokerConfig(MinInsyncReplicasConfigName)
+	adminFixture.dropBrokerConfig(MinInsyncReplicasConfigName)
 	topicName := "no-topic-no-min-insync-replicas"
 	err = adjustOptions(ctx, adminClient, options, "no-topic-no-min-insync-replicas")
 	require.Nil(t, err)
@@ -403,8 +478,8 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 	require.Nil(t, err)
 
 	// topic found, and have `min.insync.replicas`, but set to 2, larger than `replication-factor`.
-	adminClient.SetMinInsyncReplicas("2")
-	err = adjustOptions(ctx, adminClient, options, adminClient.GetDefaultMockTopicName())
+	adminFixture.setMinInsyncReplicas("2")
+	err = adjustOptions(ctx, adminClient, options, defaultMockTopicName)
 	require.Regexp(t,
 		".*`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of topic.*",
 		errors.Cause(err),
@@ -412,15 +487,15 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 }
 
 func TestSkipAdjustConfigMinInsyncReplicasWhenRequiredAcksIsNotWailAll(t *testing.T) {
-	adminClient := NewClusterAdminClientMockImpl()
-	defer adminClient.Close()
+	adminFixture := newKafkaAdminFixture(t)
+	adminClient := adminFixture.admin
 
 	options := NewOptions()
 	options.BrokerEndpoints = []string{"127.0.0.1:9092"}
 	options.RequiredAcks = WaitForLocal
 
 	// Do not report an error if the replication-factor is less than min.insync.replicas(1<2).
-	adminClient.SetMinInsyncReplicas("2")
+	adminFixture.setMinInsyncReplicas("2")
 	err := adjustOptions(
 		context.Background(),
 		adminClient,
@@ -441,239 +516,202 @@ func TestCreateProducerFailed(t *testing.T) {
 
 func TestConfigurationCombinations(t *testing.T) {
 	combinations := []struct {
-		uriTemplate             string
-		uriParams               []interface{}
-		brokerMessageMaxBytes   string
-		topicMaxMessageBytes    string
-		expectedMaxMessageBytes string
+		name                  string
+		uriTemplate           string
+		uriParams             []any
+		brokerMessageMaxBytes string
+		topicMaxMessageBytes  string
 	}{
-		// topic not created,
-		// `max-message-bytes` not set, `message.max.bytes` < `max-message-bytes`
-		// expected = min(`max-message-bytes`, `message.max.bytes`) = `message.max.bytes`
 		{
+			"new topic default limited by broker",
 			"kafka://127.0.0.1:9092/%s",
-			[]interface{}{"not-exist-topic"},
-			BrokerMessageMaxBytes,
-			TopicMaxMessageBytes,
-			BrokerMessageMaxBytes,
+			[]any{"not-exist-topic"},
+			defaultBrokerMessageBytes,
+			defaultTopicMessageBytes,
 		},
-		// topic not created,
-		// `max-message-bytes` not set, `message.max.bytes` = `max-message-bytes`
-		// expected = min(`max-message-bytes`, `message.max.bytes`) = `max-message-bytes`
 		{
+			"new topic default equals broker",
 			"kafka://127.0.0.1:9092/%s",
-			[]interface{}{"not-exist-topic"},
+			[]any{"not-exist-topic"},
 			strconv.Itoa(config.DefaultMaxMessageBytes),
-			TopicMaxMessageBytes,
-			strconv.Itoa(config.DefaultMaxMessageBytes),
+			defaultTopicMessageBytes,
 		},
-		// topic not created,
-		// `max-message-bytes` not set, broker `message.max.bytes` > `max-message-bytes`
-		// expected = min(`max-message-bytes`, `message.max.bytes`) = `max-message-bytes`
 		{
+			"new topic default below broker",
 			"kafka://127.0.0.1:9092/%s",
-			[]interface{}{"no-params"},
+			[]any{"no-params"},
 			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
-			TopicMaxMessageBytes,
-			strconv.Itoa(config.DefaultMaxMessageBytes),
+			defaultTopicMessageBytes,
 		},
-
-		// topic not created
-		// user set `max-message-bytes` < `message.max.bytes` < default `max-message-bytes`
 		{
+			"new topic user below broker and default",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{"not-created-topic", strconv.Itoa(1024*1024 - 1)},
-			BrokerMessageMaxBytes,
-			TopicMaxMessageBytes,
-			strconv.Itoa(1024*1024 - 1),
+			[]any{"not-created-topic", strconv.Itoa(1024*1024 - 1)},
+			defaultBrokerMessageBytes,
+			defaultTopicMessageBytes,
 		},
-		// topic not created
-		// user set `max-message-bytes` < default `max-message-bytes` < `message.max.bytes`
 		{
+			"new topic user below default below broker",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes - 1)},
+			[]any{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes - 1)},
 			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
-			TopicMaxMessageBytes,
-			strconv.Itoa(config.DefaultMaxMessageBytes - 1),
+			defaultTopicMessageBytes,
 		},
-		// topic not created
-		// `message.max.bytes` < user set `max-message-bytes` < default `max-message-bytes`
 		{
+			"new topic broker overhead below user",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{"not-created-topic", strconv.Itoa(1024*1024 + 1)},
-			BrokerMessageMaxBytes,
-			TopicMaxMessageBytes,
-			BrokerMessageMaxBytes,
+			[]any{"not-created-topic", strconv.Itoa(1024*1024 + 1)},
+			defaultBrokerMessageBytes,
+			defaultTopicMessageBytes,
 		},
-		// topic not created
-		// `message.max.bytes` < default `max-message-bytes` < user set `max-message-bytes`
 		{
+			"new topic broker below default and user",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes + 1)},
-			BrokerMessageMaxBytes,
-			TopicMaxMessageBytes,
-			BrokerMessageMaxBytes,
+			[]any{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes + 1)},
+			defaultBrokerMessageBytes,
+			defaultTopicMessageBytes,
 		},
-		// topic not created
-		// default `max-message-bytes` < user set `max-message-bytes` < `message.max.bytes`
 		{
+			"new topic user below broker above default",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes + 1)},
+			[]any{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes + 1)},
 			strconv.Itoa(config.DefaultMaxMessageBytes + 2),
-			TopicMaxMessageBytes,
-			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
+			defaultTopicMessageBytes,
 		},
-		// topic not created
-		// default `max-message-bytes` < `message.max.bytes` < user set `max-message-bytes`
 		{
+			"new topic broker below user above default",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes + 2)},
+			[]any{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes + 2)},
 			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
-			TopicMaxMessageBytes,
-			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
+			defaultTopicMessageBytes,
 		},
-
-		// topic created,
-		// `max-message-bytes` not set, topic's `max.message.bytes` < `max-message-bytes`
-		// expected = min(`max-message-bytes`, `max.message.bytes`) = `max.message.bytes`
 		{
+			"existing topic default limited by topic",
 			"kafka://127.0.0.1:9092/%s",
-			[]interface{}{DefaultMockTopicName},
-			BrokerMessageMaxBytes,
-			TopicMaxMessageBytes,
-			TopicMaxMessageBytes,
+			[]any{defaultMockTopicName},
+			defaultBrokerMessageBytes,
+			defaultTopicMessageBytes,
 		},
-		// `max-message-bytes` not set, topic created,
-		// topic's `max.message.bytes` = `max-message-bytes`
-		// expected = min(`max-message-bytes`, `max.message.bytes`) = `max-message-bytes`
 		{
+			"existing topic default equals topic",
 			"kafka://127.0.0.1:9092/%s",
-			[]interface{}{DefaultMockTopicName},
-			BrokerMessageMaxBytes,
-			strconv.Itoa(config.DefaultMaxMessageBytes),
+			[]any{defaultMockTopicName},
+			defaultBrokerMessageBytes,
 			strconv.Itoa(config.DefaultMaxMessageBytes),
 		},
-		// `max-message-bytes` not set, topic created,
-		// topic's `max.message.bytes` > `max-message-bytes`
-		// expected = min(`max-message-bytes`, `max.message.bytes`) = `max-message-bytes`
 		{
+			"existing topic default below topic",
 			"kafka://127.0.0.1:9092/%s",
-			[]interface{}{DefaultMockTopicName},
-			BrokerMessageMaxBytes,
+			[]any{defaultMockTopicName},
+			defaultBrokerMessageBytes,
 			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
-			strconv.Itoa(config.DefaultMaxMessageBytes),
 		},
-
-		// topic created
-		// user set `max-message-bytes` < `max.message.bytes` < default `max-message-bytes`
 		{
+			"existing topic user below topic and default",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{DefaultMockTopicName, strconv.Itoa(1024*1024 - 1)},
-			BrokerMessageMaxBytes,
-			TopicMaxMessageBytes,
-			strconv.Itoa(1024*1024 - 1),
+			[]any{defaultMockTopicName, strconv.Itoa(1024*1024 - 1)},
+			defaultBrokerMessageBytes,
+			defaultTopicMessageBytes,
 		},
-		// topic created
-		// user set `max-message-bytes` < default `max-message-bytes` < `max.message.bytes`
 		{
+			"existing topic user below default below topic",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{
-				DefaultMockTopicName,
+			[]any{
+				defaultMockTopicName,
 				strconv.Itoa(config.DefaultMaxMessageBytes - 1),
 			},
-			BrokerMessageMaxBytes,
+			defaultBrokerMessageBytes,
 			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
-			strconv.Itoa(config.DefaultMaxMessageBytes - 1),
 		},
-		// topic created
-		// `max.message.bytes` < user set `max-message-bytes` < default `max-message-bytes`
 		{
+			"existing topic topic overhead below user",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{DefaultMockTopicName, strconv.Itoa(1024*1024 + 1)},
-			BrokerMessageMaxBytes,
-			TopicMaxMessageBytes,
-			TopicMaxMessageBytes,
+			[]any{defaultMockTopicName, strconv.Itoa(1024*1024 + 1)},
+			defaultBrokerMessageBytes,
+			defaultTopicMessageBytes,
 		},
-		// topic created
-		// `max.message.bytes` < default `max-message-bytes` < user set `max-message-bytes`
 		{
+			"existing topic topic below default and user",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{
-				DefaultMockTopicName,
+			[]any{
+				defaultMockTopicName,
 				strconv.Itoa(config.DefaultMaxMessageBytes + 1),
 			},
-			BrokerMessageMaxBytes,
-			TopicMaxMessageBytes,
-			TopicMaxMessageBytes,
+			defaultBrokerMessageBytes,
+			defaultTopicMessageBytes,
 		},
-		// topic created
-		// default `max-message-bytes` < user set `max-message-bytes` < `max.message.bytes`
 		{
+			"existing topic user below topic above default",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{
-				DefaultMockTopicName,
+			[]any{
+				defaultMockTopicName,
 				strconv.Itoa(config.DefaultMaxMessageBytes + 1),
 			},
-			BrokerMessageMaxBytes,
+			defaultBrokerMessageBytes,
 			strconv.Itoa(config.DefaultMaxMessageBytes + 2),
-			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
 		},
-		// topic created
-		// default `max-message-bytes` < `max.message.bytes` < user set `max-message-bytes`
 		{
+			"existing topic topic below user above default",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
-			[]interface{}{
-				DefaultMockTopicName,
+			[]any{
+				defaultMockTopicName,
 				strconv.Itoa(config.DefaultMaxMessageBytes + 2),
 			},
-			BrokerMessageMaxBytes,
-			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
+			defaultBrokerMessageBytes,
 			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
 		},
 	}
 
 	for _, a := range combinations {
-		BrokerMessageMaxBytes = a.brokerMessageMaxBytes
-		TopicMaxMessageBytes = a.topicMaxMessageBytes
+		t.Run(a.name, func(t *testing.T) {
+			adminFixture := newKafkaAdminFixture(t)
+			adminFixture.setMessageMaxBytes(a.brokerMessageMaxBytes, a.topicMaxMessageBytes)
+			adminClient := adminFixture.admin
 
-		uri := fmt.Sprintf(a.uriTemplate, a.uriParams...)
-		sinkURI, err := url.Parse(uri)
-		require.Nil(t, err)
+			uri := fmt.Sprintf(a.uriTemplate, a.uriParams...)
+			sinkURI, err := url.Parse(uri)
+			require.Nil(t, err)
 
-		ctx := context.Background()
-		options := NewOptions()
-		err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
-		require.Nil(t, err)
+			ctx := context.Background()
+			options := NewOptions()
+			err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+			require.Nil(t, err)
 
-		changefeed := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "changefeed-test")
-		factory, err := NewMockFactory(ctx, options, changefeed)
-		require.NoError(t, err)
+			topic, ok := a.uriParams[0].(string)
+			require.True(t, ok)
+			require.NotEqual(t, "", topic)
 
-		adminClient, err := factory.AdminClient(ctx)
-		require.NoError(t, err)
+			sourceMaxMessageBytes := adminFixture.brokerMessageMaxBytes()
+			if _, exists := adminFixture.topics[topic]; exists {
+				sourceMaxMessageBytes = adminFixture.topicMaxMessageBytes(topic)
+			}
+			expectedMaxMessageBytes := expectedAdjustedMaxMessageBytes(options.MaxMessageBytes, sourceMaxMessageBytes)
 
-		topic, ok := a.uriParams[0].(string)
-		require.True(t, ok)
-		require.NotEqual(t, "", topic)
-		err = adjustOptions(ctx, adminClient, options, topic)
-		require.Nil(t, err)
+			err = adjustOptions(ctx, adminClient, options, topic)
+			require.Nil(t, err)
+			require.Equal(t, expectedMaxMessageBytes, options.MaxMessageBytes)
 
-		encoderConfig := common.NewConfig(config.ProtocolOpen)
-		err = encoderConfig.Apply(sinkURI, &config.SinkConfig{
-			KafkaConfig: &config.KafkaConfig{
-				LargeMessageHandle: config.NewDefaultLargeMessageHandleConfig(),
-			},
+			saramaConfig, err := newSaramaConfig(ctx, options)
+			require.Nil(t, err)
+			require.Equal(t, expectedMaxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
+
+			encoderConfig := common.NewConfig(config.ProtocolOpen)
+			err = encoderConfig.Apply(sinkURI, &config.SinkConfig{
+				KafkaConfig: &config.KafkaConfig{
+					LargeMessageHandle: config.NewDefaultLargeMessageHandleConfig(),
+				},
+			})
+			require.Nil(t, err)
+			encoderConfig.WithMaxMessageBytes(options.MaxMessageBytes)
+
+			err = encoderConfig.Validate()
+			require.Nil(t, err)
+
+			// producer's `MaxMessageBytes` = encoder's `MaxMessageBytes`.
+			require.Equal(t, expectedMaxMessageBytes, encoderConfig.MaxMessageBytes)
+
+			adminClient.Close()
 		})
-		require.Nil(t, err)
-		encoderConfig.WithMaxMessageBytes(options.MaxMessageBytes)
-
-		err = encoderConfig.Validate()
-		require.Nil(t, err)
-
-		// producer's `MaxMessageBytes` = encoder's `MaxMessageBytes`.
-		require.Equal(t, encoderConfig.MaxMessageBytes, options.MaxMessageBytes)
-
-		adminClient.Close()
 	}
 }
 

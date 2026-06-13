@@ -142,6 +142,21 @@ FAILPOINT := tools/bin/failpoint-ctl
 FAILPOINT_ENABLE  := $$(echo $(FAILPOINT_DIR) | xargs $(FAILPOINT) enable >/dev/null)
 FAILPOINT_DISABLE := $$(echo $(FAILPOINT_DIR) | xargs $(FAILPOINT) disable >/dev/null)
 
+# ENABLE_FAILPOINT controls whether unit_test_pkg* targets run failpoint
+# enable/disable steps. Set it to 0 for faster test iteration when failpoint
+# injection is not needed; the UNIT_TEST_FAILPOINT_* variables below derive
+# the related prerequisites and commands.
+ENABLE_FAILPOINT ?= 1
+ifeq ($(ENABLE_FAILPOINT),1)
+UNIT_TEST_FAILPOINT_DEPS := check_failpoint_ctl
+UNIT_TEST_FAILPOINT_ENABLE := $(FAILPOINT_ENABLE)
+UNIT_TEST_FAILPOINT_DISABLE := $(FAILPOINT_DISABLE)
+else
+UNIT_TEST_FAILPOINT_DEPS :=
+UNIT_TEST_FAILPOINT_ENABLE := true
+UNIT_TEST_FAILPOINT_DISABLE := true
+endif
+
 # gotestsum -p parameter for unit tests
 P=3
 
@@ -290,31 +305,31 @@ unit_test_in_verify_ci_next_gen: check_failpoint_ctl tools/bin/gotestsum tools/b
 	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
 	$(FAILPOINT_DISABLE)
 
-unit_test_pkg: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov tools/bin/gocov-xml
+unit_test_pkg: $(UNIT_TEST_FAILPOINT_DEPS) tools/bin/gotestsum tools/bin/gocov tools/bin/gocov-xml
 	mkdir -p "$(TEST_DIR)"
-	$(FAILPOINT_ENABLE)
+	@$(UNIT_TEST_FAILPOINT_ENABLE)
 	@echo "Running unit tests..."
 	@export log_level=error;\
 	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest \
 	-parallel=16 \
 	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
 	$(PKG) \
-	|| { $(FAILPOINT_DISABLE); exit 1; }
+	|| { $(UNIT_TEST_FAILPOINT_DISABLE); exit 1; }
 	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
-	$(FAILPOINT_DISABLE)
+	@$(UNIT_TEST_FAILPOINT_DISABLE)
 
-unit_test_pkg_next_gen: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov tools/bin/gocov-xml
+unit_test_pkg_next_gen: $(UNIT_TEST_FAILPOINT_DEPS) tools/bin/gotestsum tools/bin/gocov tools/bin/gocov-xml
 	mkdir -p "$(TEST_DIR)"
-	$(FAILPOINT_ENABLE)
+	@$(UNIT_TEST_FAILPOINT_ENABLE)
 	@echo "Running unit tests..."
 	@export log_level=error;\
 	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest,nextgen \
 	-parallel=16 \
 	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
 	$(PKG) \
-	|| { $(FAILPOINT_DISABLE); exit 1; }
+	|| { $(UNIT_TEST_FAILPOINT_DISABLE); exit 1; }
 	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
-	$(FAILPOINT_DISABLE)
+	@$(UNIT_TEST_FAILPOINT_DISABLE)
 
 tidy:
 	@echo "go mod tidy"

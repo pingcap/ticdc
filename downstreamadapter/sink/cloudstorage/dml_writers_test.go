@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -149,42 +148,31 @@ func TestCloudStoragePostEnqueueBeforeFlush(t *testing.T) {
 func TestCloudStorageWriteEvents(t *testing.T) {
 	t.Run("add dml does not call post enqueue before run", verifyAddDMLEventDoesNotCallPostEnqueueBeforePipelineRun)
 
-	helper, job, dmls, batch := newCloudStorageWriteEventsFixture(t)
+	fixture := newCloudStorageWriteEventsFixture(t)
 	t.Run("without date separator", func(t *testing.T) {
-		verifyCloudStorageWriteEventsWithoutDateSeparator(t, helper, job, dmls, batch)
+		verifyCloudStorageWriteEventsWithoutDateSeparator(t, fixture)
 	})
 	t.Run("with date separator", func(t *testing.T) {
-		verifyCloudStorageWriteEventsWithDateSeparator(t, helper, job, dmls, batch)
+		verifyCloudStorageWriteEventsWithDateSeparator(t, fixture)
 	})
 }
 
 func newCloudStorageWriteEventsFixture(
 	t *testing.T,
-) (*commonEvent.EventTestHelper, *timodel.Job, []string, int) {
+) *commonEvent.SinkTestEventFixture {
 	t.Helper()
-
-	helper := commonEvent.NewEventTestHelper(t)
-	t.Cleanup(helper.Close)
-
-	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job("create table table1(c1 int, c2 varchar(255))")
-	require.NotNil(t, job)
-	helper.ApplyJob(job)
 
 	batch := 100
 	dmls := make([]string, 0, batch)
 	for idx := range batch {
 		dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", idx))
 	}
-	return helper, job, dmls, batch
+	return commonEvent.NewSinkTestEventFixture(t, "create table table1(c1 int, c2 varchar(255))", dmls...)
 }
 
 func verifyCloudStorageWriteEventsWithoutDateSeparator(
 	t *testing.T,
-	helper *commonEvent.EventTestHelper,
-	job *timodel.Job,
-	dmls []string,
-	batch int,
+	fixture *commonEvent.SinkTestEventFixture,
 ) {
 	parentDir := t.TempDir()
 
@@ -212,23 +200,22 @@ func verifyCloudStorageWriteEventsWithoutDateSeparator(
 
 	var cnt atomic.Uint64
 	dispatcherID := common.NewDispatcherID()
-	event := helper.DML2Event(job.SchemaName, job.TableName, dmls...)
-	event.TableInfoVersion = job.BinlogInfo.FinishedTS
+	event := fixture.NewDMLEvent()
 	event.AddPostFlushFunc(func() {
-		cnt.Add(uint64(len(dmls)))
+		cnt.Add(uint64(fixture.DMLCount))
 	})
 	event.DispatcherID = dispatcherID
 
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
-		return cnt.Load() == uint64(batch)
+		return cnt.Load() == uint64(fixture.DMLCount)
 	}, testEventuallyTimeout, testEventuallyTick, "wait for first event consumed")
 	metaDir := path.Join(parentDir, "test/table1/meta")
 	files, err := os.ReadDir(metaDir)
 	require.NoError(t, err)
 	require.Len(t, files, 1)
 
-	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d", job.SchemaName, job.TableName, event.TableInfoVersion))
+	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d", fixture.SchemaName, fixture.TableName, event.TableInfoVersion))
 	fileNames := getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
@@ -240,19 +227,18 @@ func verifyCloudStorageWriteEventsWithoutDateSeparator(
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000001.csv\n", dispatcherID.String()), string(content))
-	require.Equal(t, uint64(batch), cnt.Load())
+	require.Equal(t, uint64(fixture.DMLCount), cnt.Load())
 
 	// generating another dml file.
-	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
-	event.TableInfoVersion = job.BinlogInfo.FinishedTS
+	event = fixture.NewDMLEvent()
 	event.AddPostFlushFunc(func() {
-		cnt.Add(uint64(len(dmls)))
+		cnt.Add(uint64(fixture.DMLCount))
 	})
 	event.DispatcherID = dispatcherID
 
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
-		return cnt.Load() == 2*uint64(batch)
+		return cnt.Load() == 2*uint64(fixture.DMLCount)
 	}, testEventuallyTimeout, testEventuallyTick, "wait for second event consumed")
 
 	fileNames = getTableFiles(t, tableDir)
@@ -267,7 +253,7 @@ func verifyCloudStorageWriteEventsWithoutDateSeparator(
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000002.csv\n", dispatcherID.String()), string(content))
-	require.Equal(t, 2*uint64(batch), cnt.Load())
+	require.Equal(t, 2*uint64(fixture.DMLCount), cnt.Load())
 }
 
 func TestSubmitTaskToEncoderExitOnContextCancel(t *testing.T) {
@@ -294,10 +280,7 @@ func TestSubmitTaskToEncoderExitOnContextCancel(t *testing.T) {
 
 func verifyCloudStorageWriteEventsWithDateSeparator(
 	t *testing.T,
-	helper *commonEvent.EventTestHelper,
-	job *timodel.Job,
-	dmls []string,
-	batch int,
+	fixture *commonEvent.SinkTestEventFixture,
 ) {
 	parentDir := t.TempDir()
 
@@ -326,19 +309,18 @@ func verifyCloudStorageWriteEventsWithDateSeparator(
 	var cnt uint64
 
 	dispatcherID := common.NewDispatcherID()
-	event := helper.DML2Event(job.SchemaName, job.TableName, dmls...)
-	event.TableInfoVersion = job.BinlogInfo.FinishedTS
+	event := fixture.NewDMLEvent()
 	event.AddPostFlushFunc(func() {
-		atomic.AddUint64(&cnt, uint64(len(dmls)))
+		atomic.AddUint64(&cnt, uint64(fixture.DMLCount))
 	})
 	event.DispatcherID = dispatcherID
 
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
-		return atomic.LoadUint64(&cnt) == uint64(batch)
+		return atomic.LoadUint64(&cnt) == uint64(fixture.DMLCount)
 	}, testEventuallyTimeout, testEventuallyTick, "wait for event consumed")
 
-	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d/2023-03-08", job.SchemaName, job.TableName, event.TableInfoVersion))
+	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d/2023-03-08", fixture.SchemaName, fixture.TableName, event.TableInfoVersion))
 	fileNames := getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
@@ -364,16 +346,15 @@ func verifyCloudStorageWriteEventsWithDateSeparator(
 
 	runDone = runSinkInBackground(t, ctx, cloudStorageSink)
 
-	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
-	event.TableInfoVersion = job.BinlogInfo.FinishedTS
+	event = fixture.NewDMLEvent()
 	event.AddPostFlushFunc(func() {
-		atomic.AddUint64(&cnt, uint64(len(dmls)))
+		atomic.AddUint64(&cnt, uint64(fixture.DMLCount))
 	})
 	event.DispatcherID = dispatcherID
 
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
-		return atomic.LoadUint64(&cnt) == 2*uint64(batch)
+		return atomic.LoadUint64(&cnt) == 2*uint64(fixture.DMLCount)
 	}, testEventuallyTimeout, testEventuallyTick, "wait for event consumed")
 
 	fileNames = getTableFiles(t, tableDir)
@@ -400,16 +381,15 @@ func verifyCloudStorageWriteEventsWithDateSeparator(
 
 	runDone = runSinkInBackground(t, ctx, cloudStorageSink)
 
-	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
-	event.TableInfoVersion = job.BinlogInfo.FinishedTS
+	event = fixture.NewDMLEvent()
 	event.AddPostFlushFunc(func() {
-		atomic.AddUint64(&cnt, uint64(len(dmls)))
+		atomic.AddUint64(&cnt, uint64(fixture.DMLCount))
 	})
 	event.DispatcherID = dispatcherID
 
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
-		return atomic.LoadUint64(&cnt) == 3*uint64(batch)
+		return atomic.LoadUint64(&cnt) == 3*uint64(fixture.DMLCount)
 	}, testEventuallyTimeout, testEventuallyTick, "wait for event consumed")
 
 	tableDir = path.Join(parentDir, fmt.Sprintf("test/table1/%d/2023-03-09", event.TableInfoVersion))
@@ -423,7 +403,7 @@ func verifyCloudStorageWriteEventsWithDateSeparator(
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000001.csv\n", dispatcherID.String()), string(content))
-	require.Equal(t, 3*uint64(batch), atomic.LoadUint64(&cnt))
+	require.Equal(t, 3*uint64(fixture.DMLCount), atomic.LoadUint64(&cnt))
 	cancelAndWaitSink(t, cancel, runDone)
 
 	// test table is scheduled from one node to another
@@ -439,16 +419,15 @@ func verifyCloudStorageWriteEventsWithDateSeparator(
 
 	runDone = runSinkInBackground(t, ctx, cloudStorageSink)
 
-	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
-	event.TableInfoVersion = job.BinlogInfo.FinishedTS
+	event = fixture.NewDMLEvent()
 	event.AddPostFlushFunc(func() {
-		atomic.AddUint64(&cnt, uint64(len(dmls)))
+		atomic.AddUint64(&cnt, uint64(fixture.DMLCount))
 	})
 	event.DispatcherID = dispatcherID
 
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
-		return atomic.LoadUint64(&cnt) == uint64(batch)
+		return atomic.LoadUint64(&cnt) == uint64(fixture.DMLCount)
 	}, testEventuallyTimeout, testEventuallyTick, "wait for event consumed")
 
 	fileNames = getTableFiles(t, tableDir)
