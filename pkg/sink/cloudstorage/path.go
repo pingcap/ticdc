@@ -33,7 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/hash"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
@@ -182,7 +182,7 @@ type FilePathGenerator struct {
 	extension    string
 	config       *Config
 	pdClock      pdutil.Clock
-	storage      storage.ExternalStorage
+	storage      storeapi.Storage
 	// fileIndex caches the last emitted data file index for one
 	// VersionedTableName and date bucket.
 	fileIndex map[VersionedTableName]*indexWithDate
@@ -200,7 +200,7 @@ type FilePathGenerator struct {
 func NewFilePathGenerator(
 	changefeedID commonType.ChangeFeedID,
 	config *Config,
-	storage storage.ExternalStorage,
+	storage storeapi.Storage,
 	extension string,
 ) *FilePathGenerator {
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
@@ -278,7 +278,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	}
 	checksumSuffix := fmt.Sprintf("%010d.json", checksum)
 	hasNewerSchemaVersion := false
-	err = f.storage.WalkDir(ctx, &storage.WalkOption{
+	err = f.storage.WalkDir(ctx, &storeapi.WalkOption{
 		SubDir:    subDir, /* use subDir to prevent walk the whole storage */
 		ObjPrefix: "schema_",
 	}, func(path string, _ int64) error {
@@ -389,7 +389,7 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 	if err != nil {
 		return "", err
 	}
-	newIndexFile := false
+	loadedIndexFile := false
 	if idx, ok := f.fileIndex[tbl]; !ok {
 		fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
 		if err != nil {
@@ -400,7 +400,7 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 			currDate: date,
 			index:    fileIdx,
 		}
-		newIndexFile = true
+		loadedIndexFile = true
 	} else {
 		idx.currDate = date
 	}
@@ -409,27 +409,42 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 		f.fileIndex[tbl].prevDate = f.fileIndex[tbl].currDate
 		f.fileIndex[tbl].index = 0
 	}
-	f.fileIndex[tbl].index++
-	name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth)
-	dataFile := path.Join(dir, name)
-	exist, err := f.storage.FileExists(ctx, dataFile)
-	if err != nil {
-		return "", err
+	triedIndexResync := loadedIndexFile
+	// A local file index can lag behind existing data files after sink restart or
+	// dispatcher ownership transfer. If the local cache collides with an existing
+	// data file, reload the index file once before falling back to consecutive
+	// probes for the index-stale recovery path.
+	for {
+		f.fileIndex[tbl].index++
+		name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth)
+		dataFile := path.Join(dir, name)
+		exist, err := f.storage.FileExists(ctx, dataFile)
+		if err != nil {
+			return "", err
+		}
+		if !exist {
+			return dataFile, nil
+		}
+		if !triedIndexResync {
+			fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
+			if err != nil {
+				return "", err
+			}
+			triedIndexResync = true
+			if fileIdx >= f.fileIndex[tbl].index {
+				f.fileIndex[tbl].index = fileIdx
+				continue
+			}
+		}
+		if loadedIndexFile {
+			log.Warn("the data file exists and the index file is stale",
+				zap.String("keyspace", f.changefeedID.Keyspace()),
+				zap.String("changefeedID", f.changefeedID.Name()),
+				zap.Any("versionedTableName", tbl),
+				zap.String("dataFile", dataFile))
+			loadedIndexFile = false
+		}
 	}
-	if !exist {
-		return dataFile, nil
-	}
-	if newIndexFile {
-		log.Warn("the data file exists and the index file is stale",
-			zap.String("keyspace", f.changefeedID.Keyspace()),
-			zap.String("changefeedID", f.changefeedID.Name()),
-			zap.Any("versionedTableName", tbl),
-			zap.String("dataFile", dataFile))
-	}
-	// if the file already exists, which means the fileIndex is stale,
-	// we need to delete the file index in memory and re-generate the file path with the updated file index until we find a non-existing file path.
-	delete(f.fileIndex, tbl)
-	return f.GenerateDataFilePath(ctx, tbl, date)
 }
 
 func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) (string, error) {
@@ -526,7 +541,7 @@ var dateSeparatorDayRegexp *regexp.Regexp
 func RemoveExpiredFiles(
 	ctx context.Context,
 	_ commonType.ChangeFeedID,
-	storage storage.ExternalStorage,
+	storage storeapi.Storage,
 	cfg *Config,
 	checkpointTs uint64,
 ) error {

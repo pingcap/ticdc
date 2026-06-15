@@ -29,7 +29,8 @@ import (
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
@@ -49,7 +50,7 @@ type RedoMeta struct {
 
 	// This fields are used to process meta files and perform
 	// garbage collection of logs.
-	extStorage    storage.ExternalStorage
+	extStorage    storeapi.Storage
 	uuidGenerator uuid.Generator
 	preMetaFile   string
 
@@ -101,7 +102,7 @@ func (m *RedoMeta) Running() bool {
 }
 
 func (m *RedoMeta) PreStart(ctx context.Context) (err error) {
-	uri, err := storage.ParseRawURL(util.GetOrZero(m.cfg.Storage))
+	uri, err := objstore.ParseRawURL(util.GetOrZero(m.cfg.Storage))
 	if err != nil {
 		return err
 	}
@@ -109,7 +110,7 @@ func (m *RedoMeta) PreStart(ctx context.Context) (err error) {
 	redo.FixLocalScheme(uri)
 	// blackhole scheme is converted to "noop" scheme here, so we can use blackhole for testing
 	if redo.IsBlackholeStorage(uri.Scheme) {
-		uri, _ = storage.ParseRawURL("noop://")
+		uri, _ = objstore.ParseRawURL("noop://")
 	}
 
 	extStorage, err := redo.InitExternalStorage(ctx, *uri)
@@ -331,7 +332,7 @@ func (m *RedoMeta) deleteAllLogs(ctx context.Context) error {
 	// otherwise it should have already meet panic during changefeed running time.
 	// the extStorage may be nil in the unit test, so just set the external storage to make unit test happy.
 	if m.extStorage == nil {
-		uri, err := storage.ParseRawURL(util.GetOrZero(m.cfg.Storage))
+		uri, err := objstore.ParseRawURL(util.GetOrZero(m.cfg.Storage))
 		redo.FixLocalScheme(uri)
 		if err != nil {
 			return err
