@@ -108,7 +108,7 @@ func New(
 		metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
 	}
 
-	return NewMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
+	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
 }
 
 func NewMySQLSink(
@@ -120,14 +120,14 @@ func NewMySQLSink(
 	enableActiveActive bool,
 	progressInterval time.Duration,
 ) *Sink {
-	return NewMySQLSinkWithControlDB(ctx, changefeedID, cfg, db, db, bdrMode, enableActiveActive, progressInterval)
+	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, db, db, bdrMode, enableActiveActive, progressInterval)
 }
 
-// NewMySQLSinkWithControlDB creates a MySQL sink with separate pools for DML and
+// newMySQLSinkWithControlDB creates a MySQL sink with separate pools for DML and
 // control-plane operations. The control pool is used by DDL, DDL-ts, syncpoint,
 // and active-active progress metadata paths so they do not wait behind long-lived
 // DML sessions.
-func NewMySQLSinkWithControlDB(
+func newMySQLSinkWithControlDB(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	cfg *mysql.Config,

@@ -75,7 +75,7 @@ func getMysqlSinkWithSeparateDBs(t *testing.T) (context.Context, *Sink, sqlmock.
 	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	sink := NewMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, false, false, time.Minute)
+	sink := newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, false, false, time.Minute)
 	return ctx, sink, dmlMock, controlMock
 }
 
