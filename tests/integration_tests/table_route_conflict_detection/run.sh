@@ -86,7 +86,7 @@ function run_create_table_conflict_case() {
 	check_table_exists "$target_schema.t_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
 
 	run_sql "CREATE DATABASE $source_b; CREATE TABLE $source_b.t (id INT PRIMARY KEY);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} "$changefeed_id" failed conflict ""
+	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} "$changefeed_id" failed ErrTableRouteConflict ""
 	cdc_cli_changefeed remove -c "$changefeed_id" || true
 	echo "[$(date)] finish create table conflict case"
 }
@@ -110,7 +110,7 @@ function run_multi_rename_table_conflict_case() {
 	check_table_exists "$target_schema.other_tmp_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
 
 	run_sql "RENAME TABLE $source_b.tmp TO $source_b.t, $source_b.other_tmp TO $source_b.other_new;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} "$changefeed_id" failed conflict ""
+	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} "$changefeed_id" failed ErrTableRouteConflict ""
 	cdc_cli_changefeed remove -c "$changefeed_id" || true
 	echo "[$(date)] finish multi-rename table conflict case"
 }
