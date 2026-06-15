@@ -238,7 +238,7 @@ func (ra *RedoApplier) applyDDL(
 		if ddl.DDL == nil {
 			// Note this could only happen when using old version of cdc, and the commit ts
 			// of the DDL should be equal to checkpoint ts or resolved ts.
-			log.Warn("ignore DDL without table info", zap.Any("ddl", ddl))
+			log.Warn("ignore DDL without table info", zap.String("ddl", ddl.DDL.Query))
 			return true
 		}
 
@@ -277,12 +277,14 @@ func (ra *RedoApplier) applyDDL(
 				timodel.ActionAlterTablePartitionPlacement, timodel.ActionRecoverSchema:
 				tableDDLTs = ra.getTableDDLTs(commonType.DDLSpanTableID)
 			default:
-				log.Warn("ignore unsupport DDL", zap.Any("ddl", ddl), zap.Any("type", ddl.Type))
+				log.Warn("ignore unsupport DDL", zap.String("ddl", ddl.DDL.Query))
 				return true
 			}
 		}
 		if tableDDLTs.ts >= int64(ddl.DDL.CommitTs) {
-			log.Warn("ignore DDL which commit ts is less than current ts", zap.Any("ddl", ddl), zap.Any("startTs", tableDDLTs.ts))
+			log.Warn("ignore DDL which commit ts is less than current ts",
+				zap.Uint64("commitTs", ddl.DDL.CommitTs), zap.Int64("startTs", tableDDLTs.ts),
+				zap.String("ddl", ddl.DDL.Query))
 			// Ignore the previous dml events, because the drop ddl has replicated the downstream
 			// DML + Drop Table: If the drop table ddl is ignored and the previous dmls should be replicated the downstream in the past.
 			if ddl.DDL.NeedDroppedTables != nil {
@@ -307,7 +309,7 @@ func (ra *RedoApplier) applyDDL(
 		// compatible with old arch
 		if ra.needRecoveryInfo && ddl.DDL.CommitTs == checkpointTs {
 			if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
-				log.Error("ignore unsupported DDL", zap.Any("ddl", ddl))
+				log.Warn("ignore unsupported DDL", zap.String("ddl", ddl.DDL.Query))
 				return true
 			}
 		}
@@ -316,7 +318,7 @@ func (ra *RedoApplier) applyDDL(
 	if shouldSkip() {
 		return nil
 	}
-	log.Warn("apply DDL", zap.Any("ddl", ddl))
+	log.Warn("apply DDL", zap.String("ddl", ddl.DDL.Query))
 	// Wait block tables to flush data before applying DDL.
 	tableIDs := ra.getBlockTableIDs(ddl.DDL.BlockedTables)
 	for tableID := range tableIDs {
