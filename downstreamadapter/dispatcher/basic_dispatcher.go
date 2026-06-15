@@ -184,6 +184,11 @@ type BasicDispatcher struct {
 	// tableProgress is used to calculate the checkpointTs of the dispatcher
 	tableProgress *TableProgress
 
+	// addTableCheckpointBlocker caps the table-trigger checkpoint after an
+	// add-table DDL is flushed locally and before maintainer ACK confirms that
+	// the new table has joined checkpoint calculation.
+	addTableCheckpointBlocker *addTableCheckpointBlocker
+
 	// resendTaskMap is store all the resend task of ddl/sync point event current.
 	// When we meet a block event that need to report to maintainer, we will create a resend task and store it in the map(avoid message lost)
 	// When we receive the ack from maintainer, we will cancel the resend task.
@@ -247,27 +252,28 @@ func NewBasicDispatcher(
 	sharedInfo *SharedInfo,
 ) *BasicDispatcher {
 	dispatcher := &BasicDispatcher{
-		id:                       id,
-		tableSpan:                tableSpan,
-		isCompleteTable:          common.IsCompleteSpan(tableSpan),
-		startTs:                  startTs,
-		skipSyncpointAtStartTs:   skipSyncpointAtStartTs,
-		skipDMLAsStartTs:         skipDMLAsStartTs,
-		sharedInfo:               sharedInfo,
-		eventCollectorBatchCount: eventCollectorBatchCount,
-		eventCollectorBatchBytes: eventCollectorBatchBytes,
-		sink:                     sink,
-		componentStatus:          newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
-		isRemoving:               atomic.Bool{},
-		duringHandleEvents:       atomic.Bool{},
-		blockEventStatus:         BlockEventStatus{blockPendingEvent: nil},
-		tableProgress:            NewTableProgress(),
-		schemaID:                 schemaID,
-		schemaIDToDispatchers:    schemaIDToDispatchers,
-		resendTaskMap:            newResendTaskMap(),
-		creationPDTs:             currentPDTs,
-		mode:                     mode,
-		BootstrapState:           BootstrapFinished,
+		id:                        id,
+		tableSpan:                 tableSpan,
+		isCompleteTable:           common.IsCompleteSpan(tableSpan),
+		startTs:                   startTs,
+		skipSyncpointAtStartTs:    skipSyncpointAtStartTs,
+		skipDMLAsStartTs:          skipDMLAsStartTs,
+		sharedInfo:                sharedInfo,
+		eventCollectorBatchCount:  eventCollectorBatchCount,
+		eventCollectorBatchBytes:  eventCollectorBatchBytes,
+		sink:                      sink,
+		componentStatus:           newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
+		isRemoving:                atomic.Bool{},
+		duringHandleEvents:        atomic.Bool{},
+		blockEventStatus:          BlockEventStatus{blockPendingEvent: nil},
+		tableProgress:             NewTableProgress(),
+		addTableCheckpointBlocker: newAddTableCheckpointBlocker(),
+		schemaID:                  schemaID,
+		schemaIDToDispatchers:     schemaIDToDispatchers,
+		resendTaskMap:             newResendTaskMap(),
+		creationPDTs:              currentPDTs,
+		mode:                      mode,
+		BootstrapState:            BootstrapFinished,
 	}
 	dispatcher.resolvedTs.Store(startTs)
 
@@ -511,13 +517,12 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 	if checkpointTs == 0 {
 		// This means the dispatcher has never send events to the sink,
 		// so we use resolvedTs as checkpointTs
-		return d.GetResolvedTs()
+		checkpointTs = d.GetResolvedTs()
+	} else if isEmpty {
+		checkpointTs = max(checkpointTs, d.GetResolvedTs())
 	}
 
-	if isEmpty {
-		return max(checkpointTs, d.GetResolvedTs())
-	}
-	return checkpointTs
+	return d.addTableCheckpointBlocker.capCheckpointTs(checkpointTs)
 }
 
 // updateDispatcherStatusToWorking updates the dispatcher status to working and adds it to status dynamic stream
@@ -993,10 +998,18 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 		noNeedAddAndDrop := event.GetNeedAddedTables() == nil && event.GetNeedDroppedTables() == nil
 		needsScheduleACKTracking := !shouldBlock && d.IsTableTriggerDispatcher() && !noNeedAddAndDrop
+		needsAddTableCheckpointBlocker := !shouldBlock && d.IsTableTriggerDispatcher() && len(event.GetNeedAddedTables()) > 0
+		identifier := BlockEventIdentifier{
+			CommitTs:    event.GetCommitTs(),
+			IsSyncPoint: false,
+		}
 		if needsScheduleACKTracking {
 			// If this is a table trigger dispatcher, and the DDL leads to add/drop tables,
 			// we track it as a pending schedule-related event until the maintainer ACKs it.
 			d.pendingACKCount.Add(1)
+		}
+		if needsAddTableCheckpointBlocker {
+			d.addTableCheckpointBlocker.add(identifier, event.GetCommitTs())
 		}
 		if shouldBlock {
 			failpoint.Inject("BlockOrWaitBeforeFlush", nil)
@@ -1005,6 +1018,9 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		// For storage sink this waits all previous enqueued DML events flushed.
 		// For non-storage sinks it is usually a no-op.
 		if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
+			if needsAddTableCheckpointBlocker {
+				d.addTableCheckpointBlocker.remove(identifier)
+			}
 			if needsScheduleACKTracking {
 				d.pendingACKCount.Add(-1)
 			}
@@ -1018,6 +1034,9 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		}
 		err := d.AddBlockEventToSink(event)
 		if err != nil {
+			if needsAddTableCheckpointBlocker {
+				d.addTableCheckpointBlocker.remove(identifier)
+			}
 			if needsScheduleACKTracking {
 				d.pendingACKCount.Add(-1)
 			}
@@ -1040,32 +1059,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			},
 			Mode: d.GetMode(),
 		}
-		identifier := BlockEventIdentifier{
-			CommitTs:    event.GetCommitTs(),
-			IsSyncPoint: false,
-		}
-
-		if event.GetNeedAddedTables() != nil {
-			// When the ddl need add tables, we need the maintainer to block the forwarding of checkpointTs
-			// Because the new add table should join the calculation of checkpointTs
-			// So the forwarding of checkpointTs should be blocked until the new dispatcher is created.
-			// While there is a time gap between dispatcher send the block status and
-			// maintainer begin to create dispatcher(and block the forwaring checkpoint)
-			// in order to avoid the checkpointTs forward unexceptedly,
-			// we need to block the checkpoint forwarding in this dispatcher until receive the ack from maintainer.
-			//
-			//     |----> block checkpointTs forwaring of this dispatcher ------>|-----> forwarding checkpointTs normally
-			//     |        send block stauts                 send ack           |
-			// dispatcher -------------------> maintainer ----------------> dispatcher
-			//                                     |
-			//                                     |----------> Block CheckpointTs Forwarding and create new dispatcher
-			// Thus, we add the event to tableProgress again, and call event postFunc when the ack is received from maintainer.
-			event.ClearPostFlushFunc()
-			d.tableProgress.Add(event)
-			d.resendTaskMap.Set(identifier, newResendTask(d, status, event.PostFlush))
-		} else {
-			d.resendTaskMap.Set(identifier, newResendTask(d, status, nil))
-		}
+		d.resendTaskMap.Set(identifier, newResendTask(d, status, nil))
 		d.offerBlockStatus(status)
 	})
 
@@ -1099,6 +1093,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 }
 
 func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
+	d.addTableCheckpointBlocker.remove(identifier)
 	task := d.resendTaskMap.Get(identifier)
 	if task == nil {
 		return
@@ -1252,7 +1247,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	})
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
-	if !d.sink.IsNormal() || (d.tableProgress.Empty() && !d.duringHandleEvents.Load()) {
+	if !d.sink.IsNormal() || (d.tableProgress.Empty() && d.addTableCheckpointBlocker.empty() && !d.duringHandleEvents.Load()) {
 		w.CheckpointTs = d.GetCheckpointTs()
 		w.ResolvedTs = d.GetResolvedTs()
 
@@ -1275,6 +1270,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		zap.Int64("mode", d.mode),
 		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
 		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
+		zap.Int("addTableCheckpointBlockerLen", d.addTableCheckpointBlocker.len()),
 		zap.Int("tableProgressLen", d.tableProgress.Len()),
 		zap.Uint64("tableProgressMaxCommitTs", d.tableProgress.MaxCommitTs())) // check whether continue receive new events.
 	return w, false

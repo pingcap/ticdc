@@ -30,6 +30,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
@@ -58,6 +59,32 @@ func newTestSyncPointConfig() *syncpoint.SyncPointConfig {
 		SyncPointInterval:  5 * time.Second,
 		SyncPointRetention: 10 * time.Minute,
 	}
+}
+
+func newAddTableDDL(commitTs uint64, tableID int64) *commonEvent.DDLEvent {
+	return &commonEvent.DDLEvent{
+		FinishedTs: commitTs,
+		StartTs:    commitTs,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+		NeedAddedTables: []commonEvent.Table{
+			{
+				SchemaID: 1,
+				TableID:  tableID,
+			},
+		},
+	}
+}
+
+func ackBlockEvent(dispatcher *EventDispatcher, commitTs uint64) {
+	dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		Ack: &heartbeatpb.ACK{
+			CommitTs:    commitTs,
+			IsSyncPoint: false,
+		},
+	})
 }
 
 func newTestSharedInfo(
@@ -277,10 +304,11 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
 	require.Nil(t, blockPendingEvent)
 	require.Equal(t, blockStage, heartbeatpb.BlockStage_NONE)
-	// but block table progress until ack
+	// but block dispatcher checkpoint until ack
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
-	require.Equal(t, false, isEmpty)
+	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(3), checkpointTs)
+	require.Equal(t, uint64(3), dispatcher.GetCheckpointTs())
 	require.Equal(t, int32(4), count.Load())
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
@@ -305,10 +333,11 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
 	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
 
-	// clear the event in tableProgress when receive the ack
+	// release the checkpoint blocker when receiving the ack
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(3), checkpointTs)
+	require.Equal(t, uint64(3), dispatcher.GetCheckpointTs())
 
 	// 3. block ddl event
 	ddlEvent3 := &commonEvent.DDLEvent{
@@ -1333,4 +1362,145 @@ func TestHoldBlockEventUntilNoResendTasks(t *testing.T) {
 	require.Equal(t, heartbeatpb.InfluenceType_DB, msg.State.BlockTables.InfluenceType)
 	require.Equal(t, int64(1), msg.State.BlockTables.SchemaID)
 	require.Equal(t, heartbeatpb.BlockStage_WAITING, msg.State.Stage)
+}
+
+func TestAddTableCheckpointBlockerWaitsForMaintainerACK(t *testing.T) {
+	keyspaceID := getTestingKeyspaceID()
+	ddlTableSpan := common.KeyspaceDDLSpan(keyspaceID)
+	mockSink := newDispatcherTestSink(t, common.MysqlSinkType)
+	dispatcher := newDispatcherForTest(mockSink.Sink(), ddlTableSpan)
+
+	nodeID := node.NewID()
+	var flushCount atomic.Int32
+	addTableDDL := newAddTableDDL(100, 101)
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, addTableDDL)}, func() {
+		flushCount.Add(1)
+	})
+	require.True(t, block)
+
+	msg, ok := takeBlockStatusWithTimeout(t, dispatcher, time.Second)
+	require.True(t, ok, "expected add-table block status")
+	require.False(t, msg.State.IsBlocked)
+	require.Equal(t, uint64(100), msg.State.BlockTs)
+	require.Equal(t, int32(1), flushCount.Load())
+	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
+	require.Equal(t, 1, dispatcher.addTableCheckpointBlocker.len())
+
+	resolvedEvent := commonEvent.NewResolvedEvent(200, dispatcher.GetId(), 0)
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, resolvedEvent)}, func() {})
+	require.False(t, block)
+	require.Equal(t, uint64(200), dispatcher.GetResolvedTs())
+	require.Equal(t, uint64(99), dispatcher.GetCheckpointTs())
+
+	ackBlockEvent(dispatcher, 100)
+	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
+	require.Equal(t, 0, dispatcher.addTableCheckpointBlocker.len())
+	require.Equal(t, uint64(200), dispatcher.GetCheckpointTs())
+}
+
+func TestAddTableCheckpointBlockerUsesSmallestPendingBlockTs(t *testing.T) {
+	keyspaceID := getTestingKeyspaceID()
+	ddlTableSpan := common.KeyspaceDDLSpan(keyspaceID)
+	mockSink := newDispatcherTestSink(t, common.MysqlSinkType)
+	dispatcher := newDispatcherForTest(mockSink.Sink(), ddlTableSpan)
+
+	nodeID := node.NewID()
+	for _, ddl := range []*commonEvent.DDLEvent{
+		newAddTableDDL(100, 101),
+		newAddTableDDL(120, 102),
+	} {
+		block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl)}, func() {})
+		require.True(t, block)
+		msg, ok := takeBlockStatusWithTimeout(t, dispatcher, time.Second)
+		require.True(t, ok, "expected add-table block status")
+		require.Equal(t, ddl.GetCommitTs(), msg.State.BlockTs)
+	}
+	require.Equal(t, 2, dispatcher.addTableCheckpointBlocker.len())
+
+	resolvedEvent := commonEvent.NewResolvedEvent(200, dispatcher.GetId(), 0)
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, resolvedEvent)}, func() {})
+	require.False(t, block)
+	require.Equal(t, uint64(99), dispatcher.GetCheckpointTs())
+
+	ackBlockEvent(dispatcher, 100)
+	require.Equal(t, 1, dispatcher.addTableCheckpointBlocker.len())
+	require.Equal(t, uint64(119), dispatcher.GetCheckpointTs())
+
+	ackBlockEvent(dispatcher, 120)
+	require.Equal(t, 0, dispatcher.addTableCheckpointBlocker.len())
+	require.Equal(t, uint64(200), dispatcher.GetCheckpointTs())
+}
+
+func TestAddTableCheckpointBlockerCleanedOnLocalErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hook func(*dispatcherTestSink)
+	}{
+		{
+			name: "flush error",
+			hook: func(mockSink *dispatcherTestSink) {
+				mockSink.SetFlushBeforeBlockHook(func(commonEvent.BlockEvent) error {
+					return cerrors.ErrDispatcherFailed.GenWithStackByArgs("flush failed")
+				})
+			},
+		},
+		{
+			name: "write error",
+			hook: func(mockSink *dispatcherTestSink) {
+				mockSink.SetWriteBlockEventHook(func(commonEvent.BlockEvent) error {
+					return cerrors.ErrDispatcherFailed.GenWithStackByArgs("write failed")
+				})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			keyspaceID := getTestingKeyspaceID()
+			ddlTableSpan := common.KeyspaceDDLSpan(keyspaceID)
+			mockSink := newDispatcherTestSink(t, common.MysqlSinkType)
+			tc.hook(mockSink)
+			dispatcher := newDispatcherForTest(mockSink.Sink(), ddlTableSpan)
+
+			nodeID := node.NewID()
+			block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, newAddTableDDL(100, 101))}, func() {})
+			require.True(t, block)
+
+			select {
+			case err := <-dispatcher.sharedInfo.errCh:
+				require.Error(t, err)
+			case <-time.After(time.Second):
+				require.FailNow(t, "expected local add-table error")
+			}
+			require.Equal(t, int64(0), dispatcher.pendingACKCount.Load())
+			require.Equal(t, 0, dispatcher.addTableCheckpointBlocker.len())
+			require.Equal(t, 0, dispatcher.resendTaskMap.Len())
+		})
+	}
+}
+
+func TestAddTableCheckpointBlockerControlsTryClose(t *testing.T) {
+	keyspaceID := getTestingKeyspaceID()
+	ddlTableSpan := common.KeyspaceDDLSpan(keyspaceID)
+	mockSink := newDispatcherTestSink(t, common.MysqlSinkType)
+	dispatcher := newDispatcherForTest(mockSink.Sink(), ddlTableSpan)
+
+	nodeID := node.NewID()
+	addTableDDL := newAddTableDDL(100, 101)
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, addTableDDL)}, func() {})
+	require.True(t, block)
+	_, ok := takeBlockStatusWithTimeout(t, dispatcher, time.Second)
+	require.True(t, ok, "expected add-table block status")
+
+	resolvedEvent := commonEvent.NewResolvedEvent(200, dispatcher.GetId(), 0)
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, resolvedEvent)}, func() {})
+	require.False(t, block)
+	require.Equal(t, uint64(99), dispatcher.GetCheckpointTs())
+
+	_, ok = dispatcher.TryClose()
+	require.False(t, ok)
+
+	mockSink.SetIsNormal(false)
+	watermark, ok := dispatcher.TryClose()
+	require.True(t, ok)
+	require.Equal(t, uint64(99), watermark.CheckpointTs)
+	require.Equal(t, uint64(200), watermark.ResolvedTs)
 }
