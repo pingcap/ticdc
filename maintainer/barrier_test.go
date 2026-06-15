@@ -557,6 +557,10 @@ func TestBarrierAppliesRecoveredRouteEventBeforeActionResend(t *testing.T) {
 	spanController.MarkSpanReplicating(stm)
 
 	routeAdmin := newRouteAdminForBarrierTest(t, cfID, routeForRename())
+	var reportedErr error
+	routeAdmin.SetErrorReporter(func(err error) {
+		reportedErr = err
+	})
 	barrier := NewBarrier(spanController, operatorController, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"node1": {
 			ChangefeedID: cfID.ToPB(),
@@ -593,13 +597,13 @@ func TestBarrierAppliesRecoveredRouteEventBeforeActionResend(t *testing.T) {
 	}, common.DefaultMode, routeAdmin)
 
 	_ = barrier.Resend()
-	ready, err := routeAdmin.Precheck(20, []routing.Admission{{
+	ready := routeAdmin.Precheck(20, []routing.Admission{{
 		Action:  routing.Admit,
 		Binding: routing.NewRouteBinding("db2", "u", "target", "u"),
 	}})
-	require.Error(t, err)
 	require.False(t, ready)
-	require.Contains(t, err.Error(), "table route conflict")
+	require.NotNil(t, reportedErr)
+	require.Contains(t, reportedErr.Error(), "table route conflict")
 }
 
 func TestBarrierCommitsForwardedRouteEventBeforeLaterRouteEvent(t *testing.T) {
@@ -684,13 +688,13 @@ func TestBarrierCommitsForwardedRouteEventBeforeLaterRouteEvent(t *testing.T) {
 	_ = barrier.Resend()
 	require.NoError(t, reportedErr)
 
-	ready, err := routeAdmin.Precheck(30, []routing.Admission{{
+	ready := routeAdmin.Precheck(30, []routing.Admission{{
 		Action:  routing.Admit,
 		Binding: routing.NewRouteBinding("db3", "t", "target", "t"),
 	}})
-	require.Error(t, err)
 	require.False(t, ready)
-	require.Contains(t, err.Error(), "db2")
+	require.NotNil(t, reportedErr)
+	require.Contains(t, reportedErr.Error(), "db2")
 }
 
 func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
@@ -775,11 +779,10 @@ func TestBarrierRoutePrecheckKeepsFullyReportedBlockedEventAndPreventsWriteActio
 
 	barrier, routeAdmin, cfID, _, tableDispatcherID, _ := newBarrierRoutePrecheckTestFixture(
 		t, routeBySource())
-	ready, err := routeAdmin.Precheck(5, []routing.Admission{{
+	ready := routeAdmin.Precheck(5, []routing.Admission{{
 		Action:  routing.Admit,
 		Binding: routing.NewRouteBinding("db2", "t", "db2_target", "t"),
 	}})
-	require.NoError(t, err)
 	require.True(t, ready)
 	blockTables := &heartbeatpb.InfluencedTables{
 		InfluenceType: heartbeatpb.InfluenceType_Normal,

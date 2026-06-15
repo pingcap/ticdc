@@ -30,14 +30,13 @@ func TestAdminReportsRouteConflict(t *testing.T) {
 		reportedErr = err
 	})
 
-	ready, err := admin.Precheck(10, []Admission{admit("db2", "t", "target", "t")})
-	require.Error(t, err)
+	ready := admin.Precheck(10, []Admission{admit("db2", "t", "target", "t")})
 	require.False(t, ready)
-	require.Same(t, err, reportedErr)
-	require.Contains(t, err.Error(), "table route conflict")
-	require.Contains(t, err.Error(), "source `db1`.`t`")
-	require.Contains(t, err.Error(), "source `db2`.`t`")
-	require.Contains(t, err.Error(), "target `target`.`t`")
+	require.NotNil(t, reportedErr)
+	require.Contains(t, reportedErr.Error(), "table route conflict")
+	require.Contains(t, reportedErr.Error(), "source `db1`.`t`")
+	require.Contains(t, reportedErr.Error(), "source `db2`.`t`")
+	require.Contains(t, reportedErr.Error(), "target `target`.`t`")
 
 	_, ok := admin.activeRoutes[TableKey{Schema: "db2", Table: "t"}]
 	require.False(t, ok)
@@ -51,10 +50,9 @@ func TestAdminMaintainsNameLevelLifecycle(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, TableKey{Schema: "target", Table: "t"}, binding.Target)
 
-	ready, err := admin.Precheck(10, nil)
-	require.NoError(t, err)
+	ready := admin.Precheck(10, nil)
 	require.True(t, ready)
-	require.NoError(t, admin.Apply(10, nil))
+	require.True(t, admin.Apply(10, nil))
 	_, ok = admin.activeRoutes[source]
 	require.True(t, ok)
 
@@ -62,27 +60,24 @@ func TestAdminMaintainsNameLevelLifecycle(t *testing.T) {
 		release("db1", "t"),
 		admit("db2", "t", "target", "t"),
 	}
-	ready, err = admin.Precheck(20, rename)
-	require.NoError(t, err)
+	ready = admin.Precheck(20, rename)
 	require.True(t, ready)
-	require.NoError(t, admin.Apply(20, rename))
+	require.True(t, admin.Apply(20, rename))
 	_, ok = admin.activeRoutes[source]
 	require.False(t, ok)
 	binding, ok = admin.activeRoutes[TableKey{Schema: "db2", Table: "t"}]
 	require.True(t, ok)
 	require.Equal(t, TableKey{Schema: "target", Table: "t"}, binding.Target)
 
-	ready, err = admin.Precheck(30, []Admission{releaseSchema("db2")})
-	require.NoError(t, err)
+	ready = admin.Precheck(30, []Admission{releaseSchema("db2")})
 	require.True(t, ready)
-	require.NoError(t, admin.Apply(30, []Admission{releaseSchema("db2")}))
+	require.True(t, admin.Apply(30, []Admission{releaseSchema("db2")}))
 	_, ok = admin.activeRoutes[TableKey{Schema: "db2", Table: "t"}]
 	require.False(t, ok)
 
-	ready, err = admin.Precheck(40, []Admission{admit("db1", "t", "target", "t")})
-	require.NoError(t, err)
+	ready = admin.Precheck(40, []Admission{admit("db1", "t", "target", "t")})
 	require.True(t, ready)
-	require.NoError(t, admin.Apply(40, []Admission{admit("db1", "t", "target", "t")}))
+	require.True(t, admin.Apply(40, []Admission{admit("db1", "t", "target", "t")}))
 	_, ok = admin.activeRoutes[source]
 	require.True(t, ok)
 }
@@ -91,20 +86,17 @@ func TestAdminSerializesPendingTransitions(t *testing.T) {
 	admin := newAdminForTest(t, routeBySource())
 
 	first := admit("db2", "t", "db2_target", "t")
-	ready, err := admin.Precheck(10, []Admission{first})
-	require.NoError(t, err)
+	ready := admin.Precheck(10, []Admission{first})
 	require.True(t, ready)
 
 	second := admit("db3", "t", "db3_target", "t")
-	ready, err = admin.Precheck(20, []Admission{second})
-	require.NoError(t, err)
+	ready = admin.Precheck(20, []Admission{second})
 	require.False(t, ready)
 
-	require.NoError(t, admin.Apply(10, []Admission{first}))
-	ready, err = admin.Precheck(20, []Admission{second})
-	require.NoError(t, err)
+	require.True(t, admin.Apply(10, []Admission{first}))
+	ready = admin.Precheck(20, []Admission{second})
 	require.True(t, ready)
-	require.NoError(t, admin.Apply(20, []Admission{second}))
+	require.True(t, admin.Apply(20, []Admission{second}))
 
 	binding, ok := admin.activeRoutes[TableKey{Schema: "db3", Table: "t"}]
 	require.True(t, ok)
@@ -130,28 +122,29 @@ func TestAdminIgnoresAlreadyAppliedTransitions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			admin := newAdminForTest(t, routeAllTo("target", "t"))
 
-			ready, err := admin.Precheck(10, tc.first)
-			require.NoError(t, err)
+			ready := admin.Precheck(10, tc.first)
 			require.True(t, ready)
-			require.NoError(t, admin.Apply(10, tc.first))
+			require.True(t, admin.Apply(10, tc.first))
 
 			second := []Admission{admit("db1", "t", "target", "t")}
-			ready, err = admin.Precheck(20, second)
-			require.NoError(t, err)
+			ready = admin.Precheck(20, second)
 			require.True(t, ready)
-			require.NoError(t, admin.Apply(20, second))
+			require.True(t, admin.Apply(20, second))
 
-			ready, err = admin.Precheck(10, tc.first)
-			require.NoError(t, err)
+			ready = admin.Precheck(10, tc.first)
 			require.True(t, ready)
-			require.NoError(t, admin.Apply(10, tc.first))
+			require.True(t, admin.Apply(10, tc.first))
 			require.Empty(t, admin.pendingQueue)
 			require.Empty(t, admin.pendingTransitions)
 
-			ready, err = admin.Precheck(30, []Admission{admit("db2", "t", "target", "t")})
-			require.Error(t, err)
+			var reportedErr error
+			admin.SetErrorReporter(func(err error) {
+				reportedErr = err
+			})
+			ready = admin.Precheck(30, []Admission{admit("db2", "t", "target", "t")})
 			require.False(t, ready)
-			require.Contains(t, err.Error(), "db1")
+			require.NotNil(t, reportedErr)
+			require.Contains(t, reportedErr.Error(), "db1")
 		})
 	}
 }

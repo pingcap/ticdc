@@ -310,12 +310,11 @@ func (b *Barrier) eventsReadyForActionResend(eventList []*BarrierEvent) []*Barri
 		}
 
 		if event.selected.Load() {
-			ready, err := b.precheckRouteEvent(event)
-			if err != nil || !ready {
+			if !b.precheckRouteEvent(event) {
 				continue
 			}
 			if event.writerDispatcherAdvanced {
-				if err := b.applyRouteEvent(event); err != nil {
+				if !b.applyRouteEvent(event) {
 					continue
 				}
 			}
@@ -397,11 +396,10 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 		// Keep selected events when route precheck/apply fails. Other
 		// dispatchers may still need resend actions, and route admission is
 		// responsible for reporting the conflict to changefeed error handling.
-		ready, err := b.precheckRouteEvent(event)
-		if err != nil || !ready {
+		if !b.precheckRouteEvent(event) {
 			return event
 		}
-		if err := b.applyRouteEvent(event); err != nil {
+		if !b.applyRouteEvent(event) {
 			return event
 		}
 		if event.needSchedule {
@@ -495,8 +493,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		// admission would conflict, we can fail fast without waiting for all
 		// dispatchers to reach this barrier.
 		if dispatcherID == b.spanController.GetDDLDispatcherID() {
-			ready, err := b.precheckRouteEvent(event)
-			if err != nil || !ready {
+			if !b.precheckRouteEvent(event) {
 				return event, nil, "", false
 			}
 		}
@@ -507,8 +504,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 			// Re-precheck when all dispatchers have reported. Between the DDL dispatcher's
 			// first report and now, an earlier route transition may have been applied
 			// (releasing the old owner), which can make this event pass a check it previously failed.
-			ready, err := b.precheckRouteEvent(event)
-			if err != nil || !ready {
+			if !b.precheckRouteEvent(event) {
 				return event, nil, "", false
 			}
 		}
@@ -528,12 +524,11 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
 	event := b.getOrInsertNewEvent(changefeedID, dispatcherID, key, blockState)
 	event.writerDispatcher = dispatcherID
-	ready, err := b.precheckRouteEvent(event)
-	if err != nil || !ready {
+	if !b.precheckRouteEvent(event) {
 		b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
 		return event, nil, "", false
 	}
-	if err := b.applyRouteEvent(event); err != nil {
+	if !b.applyRouteEvent(event) {
 		b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
 		return event, nil, "", false
 	}
@@ -620,16 +615,16 @@ func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
 	return true
 }
 
-func (b *Barrier) precheckRouteEvent(event *BarrierEvent) (bool, error) {
+func (b *Barrier) precheckRouteEvent(event *BarrierEvent) bool {
 	if b.routeAdmin == nil || event.isSyncPoint {
-		return true, nil
+		return true
 	}
 	return b.routeAdmin.Precheck(event.commitTs, event.routeAdmissions)
 }
 
-func (b *Barrier) applyRouteEvent(event *BarrierEvent) error {
+func (b *Barrier) applyRouteEvent(event *BarrierEvent) bool {
 	if b.routeAdmin == nil || event.isSyncPoint {
-		return nil
+		return true
 	}
 	return b.routeAdmin.Apply(event.commitTs, event.routeAdmissions)
 }

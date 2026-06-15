@@ -136,40 +136,43 @@ func (a *Admin) SetErrorReporter(reportError func(error)) {
 }
 
 // Precheck validates a route transition without mutating the route registry.
-func (a *Admin) Precheck(commitTs uint64, admissions []Admission) (bool, error) {
-	if !a.needsCheck(admissions) {
-		return true, nil
+// false means the caller must not continue yet: either an earlier route
+// transition still has to apply, or a conflict has already been reported.
+func (a *Admin) Precheck(commitTs uint64, admissions []Admission) bool {
+	if a == nil || a.registry == nil || len(admissions) == 0 {
+		return true
 	}
 	if a.hasApplied(commitTs) {
-		return true, nil
+		return true
 	}
 	transition := a.getOrBuildPendingEvent(commitTs, admissions)
 	if len(a.pendingQueue) == 0 || a.pendingQueue[0] != commitTs {
-		return false, nil
+		return false
 	}
 	if transition.prechecked {
-		return true, nil
+		return true
 	}
 	err := a.applyTransition(transition, false)
 	if err != nil {
-		return false, a.fail(err)
+		a.fail(err)
+		return false
 	}
 	transition.prechecked = true
-	return true, nil
+	return true
 }
 
 // Apply applies a route transition after the DDL has advanced.
-func (a *Admin) Apply(commitTs uint64, admissions []Admission) error {
+func (a *Admin) Apply(commitTs uint64, admissions []Admission) bool {
 	if a == nil || a.registry == nil {
-		return nil
+		return true
 	}
 	if a.hasApplied(commitTs) {
-		return nil
+		return true
 	}
 	transition, ok := a.pendingTransitions[commitTs]
 	if !ok {
 		if len(admissions) == 0 {
-			return nil
+			return true
 		}
 		transition = a.getOrBuildPendingEvent(commitTs, admissions)
 	}
@@ -181,23 +184,17 @@ func (a *Admin) Apply(commitTs uint64, admissions []Admission) error {
 	}
 	err := a.applyTransition(transition, true)
 	if err != nil {
-		return a.fail(err)
+		a.fail(err)
+		return false
 	}
 	a.pendingQueue = a.pendingQueue[1:]
 	delete(a.pendingTransitions, commitTs)
 	a.lastAppliedCommitTs = commitTs
-	return nil
+	return true
 }
 
 func (a *Admin) hasApplied(commitTs uint64) bool {
 	return a != nil && a.lastAppliedCommitTs >= commitTs
-}
-
-func (a *Admin) needsCheck(admissions []Admission) bool {
-	if a == nil || a.registry == nil {
-		return false
-	}
-	return len(admissions) > 0
 }
 
 func (a *Admin) getOrBuildPendingEvent(commitTs uint64, admissions []Admission) *routeTransition {
@@ -206,6 +203,9 @@ func (a *Admin) getOrBuildPendingEvent(commitTs uint64, admissions []Admission) 
 	}
 	transition := a.buildTransition(admissions)
 	a.pendingQueue = append(a.pendingQueue, commitTs)
+	// Admission order is commit-ts order, not arrival order. Recovery/resend and
+	// live status paths can discover pending transitions from different sources,
+	// so keep the smallest unapplied commit ts at the queue head.
 	slices.Sort(a.pendingQueue)
 	a.pendingTransitions[commitTs] = transition
 	return transition
@@ -260,13 +260,12 @@ func (a *Admin) buildAdmissionChange(transition *routeTransition) ([]TableKey, [
 	return releases, admits
 }
 
-func (a *Admin) fail(err error) error {
+func (a *Admin) fail(err error) {
 	if err == nil {
-		return nil
+		return
 	}
 	if a.reportError != nil && !a.failed {
 		a.failed = true
 		a.reportError(err)
 	}
-	return err
 }
