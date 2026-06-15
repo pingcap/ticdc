@@ -1521,6 +1521,38 @@ func TestAddTableCheckpointBlockerCleanedOnLocalErrors(t *testing.T) {
 	}
 }
 
+func TestEmptyAddDropPayloadsDoNotNeedScheduleACK(t *testing.T) {
+	keyspaceID := getTestingKeyspaceID()
+	ddlTableSpan := common.KeyspaceDDLSpan(keyspaceID)
+	mockSink := newDispatcherTestSink(t, common.MysqlSinkType)
+	dispatcher := newDispatcherForTest(mockSink.Sink(), ddlTableSpan)
+
+	nodeID := node.NewID()
+	var flushCount atomic.Int32
+	ddl := &commonEvent.DDLEvent{
+		FinishedTs:      100,
+		StartTs:         100,
+		NeedAddedTables: make([]commonEvent.Table, 0),
+		NeedDroppedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+		},
+	}
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl)}, func() {
+		flushCount.Add(1)
+	})
+	require.True(t, block)
+
+	require.Eventually(t, func() bool {
+		return flushCount.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, int64(0), dispatcher.pendingACKCount.Load())
+	require.Equal(t, 0, dispatcher.addTableCheckpointBlocker.len())
+	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
+
+	msg, ok := takeBlockStatusWithTimeout(t, dispatcher, 200*time.Millisecond)
+	require.False(t, ok, "unexpected empty add/drop block status: %v", msg)
+}
+
 func TestAddTableCheckpointBlockerControlsTryClose(t *testing.T) {
 	keyspaceID := getTestingKeyspaceID()
 	ddlTableSpan := common.KeyspaceDDLSpan(keyspaceID)

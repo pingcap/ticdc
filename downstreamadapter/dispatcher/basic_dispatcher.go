@@ -993,9 +993,16 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		d.holdBlockEvent(event)
 		return
 	}
-	noNeedAddAndDrop := event.GetNeedAddedTables() == nil && event.GetNeedDroppedTables() == nil
+	needAddedTables := event.GetNeedAddedTables()
+	needDroppedTables := event.GetNeedDroppedTables()
+	hasNeedAddedTables := len(needAddedTables) > 0
+	// Normal drop-table payloads must name at least one table. DB/All payloads
+	// carry their scope outside TableIDs, so a non-nil value is meaningful there.
+	hasNeedDroppedTables := needDroppedTables != nil &&
+		(needDroppedTables.InfluenceType != commonEvent.InfluenceTypeNormal || len(needDroppedTables.TableIDs) > 0)
+	noNeedAddAndDrop := !hasNeedAddedTables && !hasNeedDroppedTables
 	needsScheduleACKTracking := !shouldBlock && d.IsTableTriggerDispatcher() && !noNeedAddAndDrop
-	needsAddTableCheckpointBlocker := !shouldBlock && d.IsTableTriggerDispatcher() && len(event.GetNeedAddedTables()) > 0
+	needsAddTableCheckpointBlocker := !shouldBlock && d.IsTableTriggerDispatcher() && hasNeedAddedTables
 	identifier := BlockEventIdentifier{
 		CommitTs:    event.GetCommitTs(),
 		IsSyncPoint: false,
@@ -1055,8 +1062,8 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			ID: d.id.ToPB(),
 			State: &heartbeatpb.State{
 				BlockTs:           event.GetCommitTs(),
-				NeedDroppedTables: cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
-				NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+				NeedDroppedTables: cloneInfluencedTablesPB(needDroppedTables),
+				NeedAddedTables:   commonEvent.ToTablesPB(needAddedTables),
 				Stage:             heartbeatpb.BlockStage_NONE,
 			},
 			Mode: d.GetMode(),
