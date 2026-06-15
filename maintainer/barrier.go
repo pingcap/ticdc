@@ -260,7 +260,17 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 		eventList = append(eventList, barrierEvent)
 		return true
 	})
-	for _, barrierEvent := range b.eventsReadyForActionResend(eventList) {
+	if b.routeAdmin != nil {
+		// blockedEvents is map-backed. Route replay must scan recovered events in
+		// barrier event order before resend can emit WRITE/PASS actions. Syncpoint
+		// is part of the barrier key only to disambiguate events with the same ts;
+		// route precheck/apply still skips syncpoint events.
+		sortBarrierEventsByKey(eventList)
+	}
+	for _, barrierEvent := range eventList {
+		if !b.prepareRouteEventForResend(barrierEvent) {
+			continue
+		}
 		// todo: we can limit the number of messages to send in one round here
 		msgs = append(msgs, barrierEvent.resend(b.mode)...)
 	}
@@ -274,54 +284,34 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 	return msgs
 }
 
-// eventsReadyForActionResend returns the BarrierEvents whose resend path may
-// emit WRITE/PASS actions in this round.
-//
-// A recovered BarrierEvent can be selected from dispatcher BlockState while
-// routeAdmin is new in this maintainer process. Before resending WRITE/PASS
-// actions for those selected events, replay route admission in commit-ts order
-// so the in-memory route registry matches DDLs that already reached WRITING/DONE.
-//
-// Unselected events are allowed through: BarrierEvent.resend does not send
-// actions for them, and only checks whether blocked dispatchers have reached the DDL.
-func (b *Barrier) eventsReadyForActionResend(eventList []*BarrierEvent) []*BarrierEvent {
-	if b.routeAdmin == nil {
-		return eventList
-	}
-	// Route admission is order-sensitive: a later DDL must be checked against
-	// the admission snapshot produced by all earlier DDLs. blockedEvents is
-	// map-backed, so recovered events must be sorted before precheck/apply to
-	// avoid false route conflicts or missed conflicts after maintainer failover.
+func sortBarrierEventsByKey(eventList []*BarrierEvent) {
 	slices.SortFunc(eventList, func(a, b *BarrierEvent) int {
 		return compareEventKey(
 			getEventKey(a.commitTs, a.isSyncPoint),
 			getEventKey(b.commitTs, b.isSyncPoint),
 		)
 	})
+}
 
-	readyEvents := make([]*BarrierEvent, 0, len(eventList))
-	for _, event := range eventList {
-		if !event.selected.Load() {
-			// checkBlockedDispatchers may promote a recovered WAITING event
-			// when one related dispatcher has already checkpointed past this
-			// DDL. Do it before route precheck/apply so an earlier route DDL
-			// is committed before later selected route DDLs in this sorted pass.
-			event.checkBlockedDispatchers()
-		}
-
-		if event.selected.Load() {
-			if !b.precheckRouteEvent(event) {
-				continue
-			}
-			if event.writerDispatcherAdvanced {
-				if !b.applyRouteEvent(event) {
-					continue
-				}
-			}
-		}
-		readyEvents = append(readyEvents, event)
+func (b *Barrier) prepareRouteEventForResend(event *BarrierEvent) bool {
+	if b.routeAdmin == nil {
+		return true
 	}
-	return readyEvents
+	if !event.selected.Load() {
+		// checkBlockedDispatchers may promote a recovered WAITING event when
+		// one related dispatcher has already checkpointed past this DDL.
+		event.checkBlockedDispatchers()
+	}
+	if !event.selected.Load() {
+		return true
+	}
+	if !b.precheckRouteEvent(event) {
+		return false
+	}
+	if !event.writerDispatcherAdvanced {
+		return true
+	}
+	return b.applyRouteEvent(event)
 }
 
 // ShouldBlockCheckpointTs returns ture if there is a block event need block the checkpoint ts forwarding
