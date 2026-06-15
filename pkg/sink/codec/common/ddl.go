@@ -163,7 +163,7 @@ func GetBlockedTables(
 	if action == timodel.ActionRenameTable {
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 		if err != nil {
-			log.Panic("parse statement failed", zap.String("DDL", ddl.GetDDLQuery()), zap.Error(err))
+			log.Panic("parse statement failed", zap.Any("DDL", ddl), zap.Error(err))
 		}
 		// The query in job maybe "RENAME TABLE table1 to table2"
 		oldSchemaName := stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O
@@ -180,7 +180,7 @@ func GetBlockedTables(
 	if action == timodel.ActionExchangeTablePartition {
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 		if err != nil {
-			log.Panic("parse statement failed", zap.String("DDL", ddl.GetDDLQuery()), zap.Error(err))
+			log.Panic("parse statement failed", zap.Any("DDL", ddl), zap.Error(err))
 		}
 		sourceSchemaName := stmt.(*ast.AlterTableStmt).Table.Schema.O
 		if sourceSchemaName == "" {
