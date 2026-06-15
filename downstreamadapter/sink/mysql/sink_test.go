@@ -59,6 +59,26 @@ func getMysqlSinkWithDDLTs() (context.Context, *Sink, sqlmock.Sqlmock) {
 	return ctx, sink, mock
 }
 
+func getMysqlSinkWithSeparateDBs(t *testing.T) (context.Context, *Sink, sqlmock.Sqlmock, sqlmock.Sqlmock) {
+	t.Helper()
+
+	dmlDB, dmlMock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	controlDB, controlMock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	cfg := mysql.New()
+	cfg.WorkerCount = 1
+	cfg.DMLMaxRetry = 1
+	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+	cfg.CachePrepStmts = false
+
+	sink := NewMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, false, false, time.Minute)
+	return ctx, sink, dmlMock, controlMock
+}
+
 func MysqlSinkForTest() (*Sink, sqlmock.Sqlmock) {
 	ctx, sink, mock := getMysqlSink()
 	go sink.Run(ctx)
@@ -187,6 +207,86 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, count.Load(), int64(3))
+}
+
+func TestMysqlSinkUsesSeparateDMLAndControlDBPools(t *testing.T) {
+	ctx, sink, dmlMock, controlMock := getMysqlSinkWithSeparateDBs(t)
+	go sink.Run(ctx)
+	defer sink.Close()
+
+	var count atomic.Int64
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t (id int primary key, name varchar(32));"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      job.Query,
+		SchemaName: job.SchemaName,
+		TableName:  job.TableName,
+		FinishedTs: 1,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
+		PostTxnFlushed: []func(){
+			func() { count.Add(1) },
+		},
+	}
+
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
+	dmlEvent.PostTxnFlushed = []func(){
+		func() { count.Add(1) },
+	}
+	dmlEvent.CommitTs = 2
+
+	controlMock.ExpectBegin()
+	controlMock.ExpectExec("CREATE DATABASE IF NOT EXISTS tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec("USE tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec(`CREATE TABLE IF NOT EXISTS ddl_ts_v1
+		(
+			ticdc_cluster_id varchar (255),
+			changefeed varchar(255),
+			ddl_ts varchar(18),
+			table_id bigint(21),
+			finished bool,
+			is_syncpoint bool,
+			INDEX (ticdc_cluster_id, changefeed, table_id),
+			PRIMARY KEY (ticdc_cluster_id, changefeed, table_id)
+		);`).WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectCommit()
+
+	controlMock.ExpectBegin()
+	controlMock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 0, 0, 0), ('default', 'test/test', '1', 1, 0, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectCommit()
+
+	controlMock.ExpectBegin()
+	controlMock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectCommit()
+
+	controlMock.ExpectBegin()
+	controlMock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 0, 1, 0), ('default', 'test/test', '1', 1, 1, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectCommit()
+
+	dmlMock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
+		WithArgs(1, "test", 2, "test2").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err := sink.WriteBlockEvent(ddlEvent)
+	require.NoError(t, err)
+	require.NoError(t, controlMock.ExpectationsWereMet())
+
+	sink.AddDMLEvent(dmlEvent)
+	require.Eventually(t, func() bool {
+		return dmlMock.ExpectationsWereMet() == nil && count.Load() == 2
+	}, time.Second, 10*time.Millisecond)
 }
 
 // test the situation meets error when executing DML

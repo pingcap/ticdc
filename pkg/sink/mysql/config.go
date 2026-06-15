@@ -91,6 +91,9 @@ const (
 	defaultEnableDDLTs = true
 
 	slowQuery = 5 * time.Second
+
+	dmlDBExtraConns       = 10
+	defaultControlDBConns = 4
 )
 
 type Config struct {
@@ -313,51 +316,76 @@ func (c *Config) Apply(
 func NewMysqlConfigAndDB(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig,
 ) (*Config, *sql.DB, error) {
+	cfg, db, _, err := newMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
+	return cfg, db, err
+}
+
+// NewMysqlConfigAndDBs creates the effective MySQL sink config and independent
+// database pools for DML and control-plane work. The DML pool follows the worker
+// based sizing and DML stress failpoints, while the control pool remains small
+// and independent so DDL, DDL-ts, syncpoint, and progress metadata operations
+// cannot be starved by long-lived DML sessions.
+func NewMysqlConfigAndDBs(
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig,
+) (*Config, *sql.DB, *sql.DB, error) {
+	cfg, dmlDB, dsnStr, err := newMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	controlDB, err := CreateMysqlDBConn(dsnStr)
+	if err != nil {
+		if closeErr := dmlDB.Close(); closeErr != nil {
+			log.Warn("close mysql dml db after control db creation failed",
+				zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
+		}
+		return nil, nil, nil, err
+	}
+	configureControlDBConn(controlDB)
+	return cfg, dmlDB, controlDB, nil
+}
+
+func newMysqlConfigAndDB(
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig,
+) (cfg *Config, db *sql.DB, dsnStr string, err error) {
 	log.Info("create db connection", zap.String("sinkURI", sinkURI.String()))
 	// create db connection
-	cfg := New()
-	err := cfg.Apply(sinkURI, changefeedID, config)
+	cfg = New()
+	err = cfg.Apply(sinkURI, changefeedID, config)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	cfg.EnableActiveActive = config.EnableActiveActive
 	cfg.ActiveActiveSyncStatsInterval = config.ActiveActiveSyncStatsInterval
 
-	dsnStr, err := GenerateDSN(ctx, cfg)
+	dsnStr, err = GenerateDSN(ctx, cfg)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 
-	db, err := CreateMysqlDBConn(dsnStr)
+	db, err = CreateMysqlDBConn(dsnStr)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		if closeErr := db.Close(); closeErr != nil {
+			log.Warn("close mysql db after config creation failed",
+				zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
+		}
+	}()
 
 	cfg.ServerInfo = getTiDBVersion(db)
 	cfg.HasVectorType = shouldFormatVectorType(cfg)
 
-	// By default, cache-prep-stmts=true, an LRU cache is used for prepared statements,
-	// two connections are required to process a transaction.
-	// The first connection is held in the tx variable, which is used to manage the transaction.
-	// The second connection is requested through a call to s.db.Prepare
-	// in case of a cache miss for the statement query.
-	// The connection pool for CDC is configured with a static size, equal to the number of workers.
-	// CDC may hang at the "Get Connection" call is due to the limited size of the connection pool.
-	// When the connection pool is small,
-	// the chance of all connections being active at the same time increases,
-	// leading to exhaustion of available connections and a hang at the "Get Connection" call.
-	// This issue is less likely to occur when the connection pool is larger,
-	// as there are more connections available for use.
-	// Adding extra connections to the pool helps avoid connection exhaustion.
-	// Each DML writer may hold a dedicated session for a while, and additional
-	// connections are also needed for multiple DDL/progress writers and stmt cache misses.
-	extraConn := 10
-	db.SetMaxIdleConns(cfg.WorkerCount + extraConn)
-	db.SetMaxOpenConns(cfg.WorkerCount + extraConn)
-	failpoint.Inject("MySQLSinkForceSingleConnection", func() {
-		db.SetMaxIdleConns(1)
-		db.SetMaxOpenConns(1)
-	})
+	// By default, cache-prep-stmts=true and DML prepared statements are cached
+	// in an LRU. A DML transaction can need one connection for the transaction
+	// itself and another connection for Prepare on a statement cache miss.
+	// Size the DML pool by worker count plus a small margin so long-lived DML
+	// sessions and prepare misses do not exhaust the pool.
+	configureDMLDBConn(db, cfg)
 
 	// Inherit the default value of the prepared statement cache from the SinkURI Options
 	cachePrepStmts := cfg.CachePrepStmts
@@ -365,7 +393,7 @@ func NewMysqlConfigAndDB(
 		// query the size of the prepared statement cache on serverside
 		maxPreparedStmtCount, err := queryMaxPreparedStmtCount(ctx, db)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, "", err
 		}
 		if maxPreparedStmtCount == -1 {
 			// NOTE: seems TiDB doesn't follow MySQL's specification.
@@ -389,7 +417,7 @@ func NewMysqlConfigAndDB(
 			}
 		})
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, "", err
 		}
 	}
 
@@ -402,7 +430,21 @@ func NewMysqlConfigAndDB(
 			zap.Error(err))
 		cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
 	}
-	return cfg, db, nil
+	return cfg, db, dsnStr, nil
+}
+
+func configureDMLDBConn(db *sql.DB, cfg *Config) {
+	db.SetMaxIdleConns(cfg.WorkerCount + dmlDBExtraConns)
+	db.SetMaxOpenConns(cfg.WorkerCount + dmlDBExtraConns)
+	failpoint.Inject("MySQLSinkForceSingleConnection", func() {
+		db.SetMaxIdleConns(1)
+		db.SetMaxOpenConns(1)
+	})
+}
+
+func configureControlDBConn(db *sql.DB) {
+	db.SetMaxIdleConns(defaultControlDBConns)
+	db.SetMaxOpenConns(defaultControlDBConns)
 }
 
 // IsSinkSafeMode returns whether the sink is in safe mode.

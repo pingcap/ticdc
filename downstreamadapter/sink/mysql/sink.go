@@ -50,7 +50,8 @@ type Sink struct {
 	// enableActiveActive is false.
 	progressTableWriter *mysql.ProgressTableWriter
 
-	db         *sql.DB
+	dmlDB      *sql.DB
+	controlDB  *sql.DB
 	statistics *metrics.Statistics
 
 	conflictDetector *causality.ConflictDetector
@@ -91,7 +92,7 @@ func New(
 	config *config.ChangefeedConfig,
 	sinkURI *url.URL,
 ) (*Sink, error) {
-	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
+	cfg, dmlDB, controlDB, err := mysql.NewMysqlConfigAndDBs(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +108,7 @@ func New(
 		metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
 	}
 
-	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
+	return NewMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
 }
 
 func NewMySQLSink(
@@ -119,11 +120,28 @@ func NewMySQLSink(
 	enableActiveActive bool,
 	progressInterval time.Duration,
 ) *Sink {
+	return NewMySQLSinkWithControlDB(ctx, changefeedID, cfg, db, db, bdrMode, enableActiveActive, progressInterval)
+}
+
+// NewMySQLSinkWithControlDB creates a MySQL sink with separate pools for DML and
+// control-plane operations. The control pool is used by DDL, DDL-ts, syncpoint,
+// and active-active progress metadata paths so they do not wait behind long-lived
+// DML sessions.
+func NewMySQLSinkWithControlDB(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	cfg *mysql.Config,
+	dmlDB *sql.DB,
+	controlDB *sql.DB,
+	bdrMode bool,
+	enableActiveActive bool,
+	progressInterval time.Duration,
+) *Sink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
 
 	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {
-		supported, err := mysql.CheckActiveActiveSyncStatsSupported(ctx, db)
+		supported, err := mysql.CheckActiveActiveSyncStatsSupported(ctx, dmlDB)
 		if err != nil {
 			log.Info("failed to check tidb_cdc_active_active_sync_stats support, disable metric collection",
 				zap.String("keyspace", changefeedID.Keyspace()),
@@ -140,7 +158,8 @@ func NewMySQLSink(
 
 	result := &Sink{
 		changefeedID: changefeedID,
-		db:           db,
+		dmlDB:        dmlDB,
+		controlDB:    controlDB,
 		dmlWriter:    make([]*mysql.Writer, cfg.WorkerCount),
 		statistics:   stat,
 		conflictDetector: causality.New(defaultConflictDetectorSlots,
@@ -158,11 +177,11 @@ func NewMySQLSink(
 		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
-		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat, activeActiveSyncStatsCollector)
+		result.dmlWriter[i] = mysql.NewWriter(ctx, i, dmlDB, cfg, changefeedID, stat, activeActiveSyncStatsCollector)
 	}
-	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), db, cfg, changefeedID, stat, nil)
+	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), controlDB, cfg, changefeedID, stat, nil)
 	if enableActiveActive {
-		result.progressTableWriter = mysql.NewProgressTableWriter(ctx, db, changefeedID, cfg.MaxTxnRow, progressInterval)
+		result.progressTableWriter = mysql.NewProgressTableWriter(ctx, controlDB, changefeedID, cfg.MaxTxnRow, progressInterval)
 	}
 	return result
 }
@@ -409,10 +428,17 @@ func (s *Sink) Close() {
 		w.Close()
 	}
 
-	if err := s.db.Close(); err != nil {
-		log.Warn("close mysql sink db meet error",
+	if err := s.dmlDB.Close(); err != nil {
+		log.Warn("close mysql sink dml db meet error",
 			zap.Any("changefeed", s.changefeedID.String()),
 			zap.Error(err))
+	}
+	if s.controlDB != s.dmlDB {
+		if err := s.controlDB.Close(); err != nil {
+			log.Warn("close mysql sink control db meet error",
+				zap.Any("changefeed", s.changefeedID.String()),
+				zap.Error(err))
+		}
 	}
 	if s.activeActiveSyncStatsCollector != nil {
 		s.activeActiveSyncStatsCollector.Close()

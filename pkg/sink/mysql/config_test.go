@@ -231,6 +231,16 @@ func TestGenerateDSNByConfig(t *testing.T) {
 	testIsolationConfig()
 }
 
+func TestConfigureControlDBConn(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	configureControlDBConn(db)
+
+	require.Equal(t, defaultControlDBConns, db.Stats().MaxOpenConnections)
+}
+
 func TestApplySinkURIParamsToConfig(t *testing.T) {
 	t.Parallel()
 
