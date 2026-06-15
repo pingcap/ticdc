@@ -111,6 +111,51 @@ func TestAdminSerializesPendingTransitions(t *testing.T) {
 	require.Equal(t, TableKey{Schema: "db3_target", Table: "t"}, binding.Target)
 }
 
+func TestAdminIgnoresAlreadyAppliedTransitions(t *testing.T) {
+	tests := []struct {
+		name  string
+		first []Admission
+	}{
+		{
+			name:  "release table",
+			first: []Admission{release("db1", "t")},
+		},
+		{
+			name:  "release schema",
+			first: []Admission{releaseSchema("db1")},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			admin := newAdminForTest(t, routeAllTo("target", "t"))
+
+			ready, err := admin.Precheck(10, tc.first)
+			require.NoError(t, err)
+			require.True(t, ready)
+			require.NoError(t, admin.Apply(10, tc.first))
+
+			second := []Admission{admit("db1", "t", "target", "t")}
+			ready, err = admin.Precheck(20, second)
+			require.NoError(t, err)
+			require.True(t, ready)
+			require.NoError(t, admin.Apply(20, second))
+
+			ready, err = admin.Precheck(10, tc.first)
+			require.NoError(t, err)
+			require.True(t, ready)
+			require.NoError(t, admin.Apply(10, tc.first))
+			require.Empty(t, admin.pendingQueue)
+			require.Empty(t, admin.pendingTransitions)
+
+			ready, err = admin.Precheck(30, []Admission{admit("db2", "t", "target", "t")})
+			require.Error(t, err)
+			require.False(t, ready)
+			require.Contains(t, err.Error(), "db1")
+		})
+	}
+}
+
 func newAdminForTest(t *testing.T, rules []*config.DispatchRule) *Admin {
 	t.Helper()
 

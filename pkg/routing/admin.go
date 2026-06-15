@@ -44,6 +44,9 @@ type Admin struct {
 	// earlier route transition has been applied to the admission snapshot.
 	pendingQueue       []uint64
 	pendingTransitions map[uint64]*routeTransition
+	// lastAppliedCommitTs makes Apply idempotent across barrier resends. DDL
+	// commit ts is the ordering fence for route transitions in this admin.
+	lastAppliedCommitTs uint64
 
 	// reportError reports unrecoverable route admission errors to the
 	// changefeed-level error path. failed suppresses duplicate reports from
@@ -137,6 +140,9 @@ func (a *Admin) Precheck(commitTs uint64, admissions []Admission) (bool, error) 
 	if !a.needsCheck(admissions) {
 		return true, nil
 	}
+	if a.hasApplied(commitTs) {
+		return true, nil
+	}
 	transition := a.getOrBuildPendingEvent(commitTs, admissions)
 	if len(a.pendingQueue) == 0 || a.pendingQueue[0] != commitTs {
 		return false, nil
@@ -155,6 +161,9 @@ func (a *Admin) Precheck(commitTs uint64, admissions []Admission) (bool, error) 
 // Apply applies a route transition after the DDL has advanced.
 func (a *Admin) Apply(commitTs uint64, admissions []Admission) error {
 	if a == nil || a.registry == nil {
+		return nil
+	}
+	if a.hasApplied(commitTs) {
 		return nil
 	}
 	transition, ok := a.pendingTransitions[commitTs]
@@ -176,7 +185,12 @@ func (a *Admin) Apply(commitTs uint64, admissions []Admission) error {
 	}
 	a.pendingQueue = a.pendingQueue[1:]
 	delete(a.pendingTransitions, commitTs)
+	a.lastAppliedCommitTs = commitTs
 	return nil
+}
+
+func (a *Admin) hasApplied(commitTs uint64) bool {
+	return a != nil && a.lastAppliedCommitTs >= commitTs
 }
 
 func (a *Admin) needsCheck(admissions []Admission) bool {
