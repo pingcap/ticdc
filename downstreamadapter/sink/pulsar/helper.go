@@ -106,7 +106,7 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.topicManager, err = topicmanager.GetPulsarTopicManagerAndTryCreateTopic(ctx, pulsarComponent.config, topic, pulsarComponent.client)
+	pulsarComponent.topicManager, err = topicmanager.GetPulsarTopicManagerAndTryCreateTopic(ctx, pulsarComponent.config, pulsarComponent.client)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}

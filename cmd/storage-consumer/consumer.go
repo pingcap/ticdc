@@ -21,7 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
@@ -29,13 +28,14 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
 	putil "github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/atomic"
@@ -68,7 +68,7 @@ type storageMetadata struct {
 type consumer struct {
 	replicationCfg  *config.ReplicaConfig
 	codecCfg        *common.Config
-	externalStorage storage.ExternalStorage
+	externalStorage storeapi.Storage
 	fileExtension   string
 	sink            sink.Sink
 	// tableDMLIdxMap maintains a map of <dmlPathKey, fileIndexKeyMap>
@@ -233,7 +233,7 @@ func (c *consumer) getNewFiles(
 	ctx context.Context,
 ) (map[cloudstorage.DmlPathKey]fileIndexRange, error) {
 	tableDMLMap := make(map[cloudstorage.DmlPathKey]fileIndexRange)
-	opt := &storage.WalkOption{SubDir: ""}
+	opt := &storeapi.WalkOption{SubDir: ""}
 
 	origDMLIdxMap := make(map[cloudstorage.DmlPathKey]fileIndexKeyMap, len(c.tableDMLIdxMap))
 	for k, v := range c.tableDMLIdxMap {
@@ -244,7 +244,7 @@ func (c *consumer) getNewFiles(
 		origDMLIdxMap[k] = m
 	}
 
-	err := c.externalStorage.WalkDir(ctx, opt, func(path string, size int64) error {
+	err := c.externalStorage.WalkDir(ctx, opt, func(path string, _ int64) error {
 		if cloudstorage.IsSchemaFile(path) {
 			err := c.parseSchemaFilePath(ctx, path)
 			if err != nil {
@@ -562,7 +562,6 @@ func getRenameTableOldTableKey(tableDef cloudstorage.TableDefinition) (string, b
 		return "", false
 	}
 	schemaName := tableDef.Schema
-	tableName := tableDef.Table
 	stmt, err := parser.New().ParseOneStmt(tableDef.Query, "", "")
 	if err != nil {
 		log.Panic("parse statement failed", zap.Any("DDL", tableDef.Query), zap.Error(err))
@@ -576,7 +575,7 @@ func getRenameTableOldTableKey(tableDef cloudstorage.TableDefinition) (string, b
 	if oldTable.Schema.O != "" {
 		schemaName = oldTable.Schema.O
 	}
-	tableName = oldTable.Name.O
+	tableName := oldTable.Name.O
 	return commonType.QuoteSchema(schemaName, tableName), true
 }
 
@@ -714,7 +713,9 @@ func (c *consumer) handleNewFiles(
 				}
 			}
 		}
-		c.flushDMLEvents(ctx, tableID)
+		if err := c.flushDMLEvents(ctx, tableID); err != nil {
+			return err
+		}
 	}
 
 	return nil

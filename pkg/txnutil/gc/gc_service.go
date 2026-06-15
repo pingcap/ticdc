@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
+	pd "github.com/tikv/pd/client"
 	pdgc "github.com/tikv/pd/client/clients/gc"
 	"go.uber.org/zap"
 )
@@ -39,7 +40,7 @@ const (
 // EnsureChangefeedStartTsSafety checks if the startTs less than the minimum of
 // service GC safepoint and this function will update the service GC to startTs
 func EnsureChangefeedStartTsSafety(
-	ctx context.Context, pdCli GCServiceClient,
+	ctx context.Context, pdCli pd.Client,
 	gcServiceIDPrefix string,
 	keyspaceID uint32,
 	changefeedID common.ChangeFeedID,
@@ -66,18 +67,23 @@ func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli GCServiceCl
 
 	// startTs should be greater than or equal to minServiceGCTs + 1, otherwise gcManager
 	// would return a ErrSnapshotLostByGC even though the changefeed would appear to be successfully
-	// created/resumed. See issue #6350 for more detail.
+	// created/resumed. See issue https://github.com/pingcap/tiflow/issues/6350 for more detail.
 	if startTs > 0 && startTs < minServiceGCTs+1 {
 		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
 	}
 	return nil
 }
 
-func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli GCServiceClient, gcServiceID string, keyspaceID uint32, ttl int64, startTs uint64) error {
-	gcCli := pdCli.GetGCStatesClient(keyspaceID)
-	_, err := SetGCBarrier(ctx, gcCli, gcServiceID, startTs, time.Duration(ttl)*time.Second)
+func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, gcServiceID string, keyspaceID uint32, ttl int64, startTs uint64) error {
+	minServiceGCTs, err := setKeyspaceGCSafepoint(ctx, pdCli, keyspaceID, gcServiceID, ttl, startTs)
 	if err != nil {
-		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs)
+		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
+	}
+	// When UseLegacySafePointInNextGen is true, the logic should follow the classic architecture
+	if kerneltype.UseLegacySafePointInNextGen {
+		if startTs > 0 && startTs < minServiceGCTs+1 {
+			return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
+		}
 	}
 	return nil
 }
@@ -127,6 +133,133 @@ func SetServiceGCSafepoint(
 	return minServiceGCTs, err
 }
 
+func setServiceGCSafepointV2(
+	ctx context.Context,
+	pdCli pdgc.LegacyClientV2,
+	keyspaceID uint32,
+	serviceID string,
+	ttl int64,
+	safePoint uint64,
+) (minServiceGCTs uint64, err error) {
+	err = retry.Do(ctx,
+		func() error {
+			var err1 error
+			minServiceGCTs, err1 = pdCli.SetServiceSafePointV2(ctx, keyspaceID, serviceID, ttl, safePoint)
+			if err1 != nil {
+				log.Warn("Set service GC safepoint v2 failed, retry later",
+					zap.Uint32("keyspaceID", keyspaceID),
+					zap.String("serviceID", serviceID),
+					zap.Error(err1))
+			}
+			return err1
+		},
+		retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
+		retry.WithMaxTries(gcServiceMaxRetries),
+		retry.WithIsRetryableErr(errors.IsRetryableError))
+	return minServiceGCTs, err
+}
+
+func getMinServiceGCSafepointV2(
+	ctx context.Context,
+	pdCli pdgc.LegacyClientV2,
+	keyspaceID uint32,
+) (minServiceGCTs uint64, err error) {
+	err = retry.Do(ctx,
+		func() error {
+			var err1 error
+			minServiceGCTs, err1 = pdCli.GetMinServiceSafePointV2(ctx, keyspaceID)
+			if err1 != nil {
+				log.Warn("Get minimum service GC safepoint v2 failed, retry later",
+					zap.Uint32("keyspaceID", keyspaceID),
+					zap.Error(err1))
+			}
+			return err1
+		},
+		retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
+		retry.WithMaxTries(gcServiceMaxRetries),
+		retry.WithIsRetryableErr(errors.IsRetryableError))
+	return minServiceGCTs, err
+}
+
+func deleteServiceGCSafepointV2(
+	ctx context.Context,
+	pdCli pdgc.LegacyClientV2,
+	keyspaceID uint32,
+	serviceID string,
+) error {
+	return retry.Do(ctx,
+		func() error {
+			_, err := pdCli.DeleteServiceSafePointV2(ctx, keyspaceID, serviceID)
+			if err != nil {
+				log.Warn("Delete service GC safepoint v2 failed, retry later",
+					zap.Uint32("keyspaceID", keyspaceID),
+					zap.String("serviceID", serviceID),
+					zap.Error(err))
+			}
+			return err
+		},
+		retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
+		retry.WithMaxTries(gcServiceMaxRetries),
+		retry.WithIsRetryableErr(errors.IsRetryableError))
+}
+
+func setKeyspaceGCSafepoint(
+	ctx context.Context,
+	pdCli pd.Client,
+	keyspaceID uint32,
+	serviceID string,
+	ttl int64,
+	safePoint uint64,
+) (uint64, error) {
+	if kerneltype.UseLegacySafePointInNextGen {
+		if legacyCli, ok := pdCli.(pdgc.LegacyClientV2); ok {
+			return setServiceGCSafepointV2(ctx, legacyCli, keyspaceID, serviceID, ttl, safePoint)
+		}
+		return 0, errors.ErrUpdateServiceSafepointFailed.GenWithStackByArgs("not support LegacyClientV2")
+	}
+
+	gcCli := pdCli.GetGCStatesClient(keyspaceID)
+	return SetGCBarrier(ctx, gcCli, serviceID, safePoint, time.Duration(ttl)*time.Second)
+}
+
+func getKeyspaceGCSafepoint(
+	ctx context.Context,
+	pdCli GCServiceClient,
+	keyspaceID uint32,
+) (uint64, error) {
+	if kerneltype.UseLegacySafePointInNextGen {
+		if legacyCli, ok := pdCli.(pdgc.LegacyClientV2); ok {
+			return getMinServiceGCSafepointV2(ctx, legacyCli, keyspaceID)
+		}
+		return 0, errors.ErrGetServiceSafepointFailed.GenWithStackByArgs("not support LegacyClientV2")
+	}
+
+	gcCli := pdCli.GetGCStatesClient(keyspaceID)
+	gcState, err := getGCState(ctx, gcCli)
+	if err == nil {
+		return gcState.TxnSafePoint, nil
+	}
+	return 0, err
+}
+
+func deleteKeyspaceGCSafepoint(
+	ctx context.Context,
+	pdCli GCServiceClient,
+	keyspaceID uint32,
+	serviceID string,
+) error {
+	if kerneltype.UseLegacySafePointInNextGen {
+		if legacyCli, ok := pdCli.(pdgc.LegacyClientV2); ok {
+			return deleteServiceGCSafepointV2(ctx, legacyCli, keyspaceID, serviceID)
+		}
+		return errors.ErrDeleteServiceSafepointFailed.GenWithStackByArgs("not support LegacyClientV2")
+	}
+
+	gcCli := pdCli.GetGCStatesClient(keyspaceID)
+	_, err := DeleteGCBarrier(ctx, gcCli, serviceID)
+	return err
+}
+
 // UnifyGetServiceGCSafepoint returns a service gc safepoint on classic mode or
 // a gc barrier on next-gen mode
 func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli GCServiceClient, keyspaceID uint32, serviceID string) (uint64, error) {
@@ -134,12 +267,11 @@ func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli GCServiceClient, keys
 		return SetServiceGCSafepoint(ctx, pdCli, serviceID, 0, 0)
 	}
 
-	gcCli := pdCli.GetGCStatesClient(keyspaceID)
-	gcState, err := getGCState(ctx, gcCli)
+	minSafePoint, err := getKeyspaceGCSafepoint(ctx, pdCli, keyspaceID)
 	if err != nil {
 		return 0, errors.WrapError(errors.ErrGetGCBarrierFailed, err)
 	}
-	return gcState.TxnSafePoint, nil
+	return minSafePoint, nil
 }
 
 // removeServiceGCSafepoint removes a service safepoint from PD.
@@ -201,8 +333,5 @@ func UnifyDeleteGcSafepoint(ctx context.Context, pdCli GCServiceClient, keyspace
 	if kerneltype.IsClassic() {
 		return removeServiceGCSafepoint(ctx, pdCli, serviceID)
 	}
-
-	gcClient := pdCli.GetGCStatesClient(keyspaceID)
-	_, err := DeleteGCBarrier(ctx, gcClient, serviceID)
-	return err
+	return deleteKeyspaceGCSafepoint(ctx, pdCli, keyspaceID, serviceID)
 }

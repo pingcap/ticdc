@@ -16,10 +16,12 @@ package routing
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	ddlutil "github.com/pingcap/tidb/pkg/ddl/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 )
 
@@ -991,7 +993,6 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 	require.GreaterOrEqual(t, len(cases), 39)
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, byte(tc.action), tc.ddl.Type)
 
@@ -1007,7 +1008,7 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 	}
 }
 
-func TestApplyToDDLEventSupportsCreateTables(t *testing.T) {
+func TestApplyToDDLEventRoutesDDLEventMetadata(t *testing.T) {
 	router := newTestRouter(t, false, []*config.DispatchRule{{
 		Matcher:      []string{"source_db.*"},
 		TargetSchema: "target_db",
@@ -1016,25 +1017,82 @@ func TestApplyToDDLEventSupportsCreateTables(t *testing.T) {
 
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
-	schemaDDL := helper.DDL2Event("CREATE DATABASE `source_db`")
-	// TiDB ActionCreateTables is same-schema only. Cross-schema CREATE TABLE
-	// statements are emitted as separate DDL jobs upstream, not one ActionCreateTables event.
-	ddl := helper.BatchCreateTableDDLs2Event("source_db",
-		"CREATE TABLE `source_db`.`t1` (`id` INT PRIMARY KEY)",
-		"CREATE TABLE `source_db`.`t2` (`id` INT PRIMARY KEY)",
-	)
 
+	schemaDDL := helper.DDL2Event("CREATE DATABASE `source_db`")
 	routedSchema, err := router.ApplyToDDLEvent(schemaDDL)
 	require.NoError(t, err)
 	require.Contains(t, routedSchema.Query, "`target_db`")
 
-	routed, err := router.ApplyToDDLEvent(ddl)
+	helper.Tk().MustExec("USE `source_db`")
+	singleCreateDDL := helper.DDL2Event("CREATE TABLE `source_table` (`id` INT PRIMARY KEY)")
+	singleCreateDDL.DispatcherID = common.NewDispatcherID()
+	singleCreateDDL.Seq = 1
+	singleCreateDDL.Epoch = 2
+	singleCreateDDL.TiDBOnly = true
+	singleCreateDDL.BDRMode = string(ast.BDRRolePrimary)
+	singleCreateDDL.PostTxnFlushed = []func(){func() {}, func() {}}
+
+	originalQuery := singleCreateDDL.Query
+	originalTableInfo := singleCreateDDL.TableInfo
+	require.Equal(t, "source_db", singleCreateDDL.SchemaName)
+	require.NotContains(t, originalQuery, "`source_db`")
+	routedSingleCreate, err := router.ApplyToDDLEvent(singleCreateDDL)
 	require.NoError(t, err)
-	require.Contains(t, routed.Query, "CREATE TABLE `target_db`.`t1_r`")
-	require.Contains(t, routed.Query, "CREATE TABLE `target_db`.`t2_r`")
-	require.Len(t, routed.MultipleTableInfos, 2)
-	require.Equal(t, "target_db", routed.MultipleTableInfos[0].GetTargetSchemaName())
-	require.Equal(t, "t1_r", routed.MultipleTableInfos[0].GetTargetTableName())
-	require.Equal(t, "target_db", routed.MultipleTableInfos[1].GetTargetSchemaName())
-	require.Equal(t, "t2_r", routed.MultipleTableInfos[1].GetTargetTableName())
+	require.NotSame(t, singleCreateDDL, routedSingleCreate)
+	require.Equal(t, singleCreateDDL.Version, routedSingleCreate.Version)
+	require.Equal(t, singleCreateDDL.DispatcherID, routedSingleCreate.DispatcherID)
+	require.Equal(t, singleCreateDDL.Type, routedSingleCreate.Type)
+	require.Equal(t, singleCreateDDL.SchemaID, routedSingleCreate.SchemaID)
+	require.Equal(t, singleCreateDDL.SchemaName, routedSingleCreate.SchemaName)
+	require.Equal(t, singleCreateDDL.TableName, routedSingleCreate.TableName)
+	require.Equal(t, singleCreateDDL.FinishedTs, routedSingleCreate.FinishedTs)
+	require.Equal(t, singleCreateDDL.Seq, routedSingleCreate.Seq)
+	require.Equal(t, singleCreateDDL.Epoch, routedSingleCreate.Epoch)
+	require.Equal(t, singleCreateDDL.TiDBOnly, routedSingleCreate.TiDBOnly)
+	require.Equal(t, singleCreateDDL.BDRMode, routedSingleCreate.BDRMode)
+	require.Equal(t, originalQuery, singleCreateDDL.Query)
+	require.Same(t, originalTableInfo, singleCreateDDL.TableInfo)
+	require.Equal(t, "source_db", singleCreateDDL.GetTargetSchemaName())
+	require.Equal(t, "source_table", singleCreateDDL.GetTargetTableName())
+	require.Equal(t, "target_db", routedSingleCreate.GetTargetSchemaName())
+	require.Equal(t, "source_table_r", routedSingleCreate.GetTargetTableName())
+	require.Contains(t, routedSingleCreate.Query, "`target_db`.`source_table_r`")
+	require.NotContains(t, routedSingleCreate.Query, "`source_db`")
+	require.NotSame(t, originalTableInfo, routedSingleCreate.TableInfo)
+	require.Equal(t, "target_db", routedSingleCreate.TableInfo.GetTargetSchemaName())
+	require.Equal(t, "source_table_r", routedSingleCreate.TableInfo.GetTargetTableName())
+	require.Len(t, routedSingleCreate.PostTxnFlushed, 2)
+	require.Len(t, singleCreateDDL.PostTxnFlushed, 2)
+	require.NotEqual(t, &singleCreateDDL.PostTxnFlushed[0], &routedSingleCreate.PostTxnFlushed[0])
+	routedSingleCreate.AddPostFlushFunc(func() {})
+	require.Len(t, routedSingleCreate.PostTxnFlushed, 3)
+	require.Len(t, singleCreateDDL.PostTxnFlushed, 2)
+
+	addIndexDDL := helper.DDL2Event("ALTER TABLE `source_table` ADD INDEX (`id`)")
+	addIndexDDL.IndexIDs = []int64{101}
+	routedAddIndex, err := router.ApplyToDDLEvent(addIndexDDL)
+	require.NoError(t, err)
+	require.NotSame(t, addIndexDDL, routedAddIndex)
+	require.Equal(t, []int64{101}, routedAddIndex.IndexIDs)
+	addIndexDDL.IndexIDs[0] = 202
+	require.Equal(t, []int64{101}, routedAddIndex.IndexIDs)
+
+	createTablesDDL := helper.BatchCreateTableDDLs2Event("source_db",
+		"CREATE TABLE `source_db`.`t1` (`id` INT PRIMARY KEY)",
+		"CREATE TABLE `source_db`.`t2` (`id` INT PRIMARY KEY)",
+	)
+	routedCreateTables, err := router.ApplyToDDLEvent(createTablesDDL)
+	require.NoError(t, err)
+	require.Contains(t, routedCreateTables.Query, "CREATE TABLE `target_db`.`t1_r`")
+	require.Contains(t, routedCreateTables.Query, "CREATE TABLE `target_db`.`t2_r`")
+	require.Len(t, createTablesDDL.MultipleTableInfos, 2)
+	require.Len(t, routedCreateTables.MultipleTableInfos, 2)
+	require.Equal(t, "source_db", createTablesDDL.MultipleTableInfos[0].GetTargetSchemaName())
+	require.Equal(t, "t1", createTablesDDL.MultipleTableInfos[0].GetTargetTableName())
+	require.Equal(t, "source_db", createTablesDDL.MultipleTableInfos[1].GetTargetSchemaName())
+	require.Equal(t, "t2", createTablesDDL.MultipleTableInfos[1].GetTargetTableName())
+	require.Equal(t, "target_db", routedCreateTables.MultipleTableInfos[0].GetTargetSchemaName())
+	require.Equal(t, "t1_r", routedCreateTables.MultipleTableInfos[0].GetTargetTableName())
+	require.Equal(t, "target_db", routedCreateTables.MultipleTableInfos[1].GetTargetSchemaName())
+	require.Equal(t, "t2_r", routedCreateTables.MultipleTableInfos[1].GetTargetTableName())
 }

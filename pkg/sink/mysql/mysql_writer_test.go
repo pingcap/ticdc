@@ -25,15 +25,17 @@ import (
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/tidb/br/pkg/version"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
-	"github.com/pingcap/tidb/pkg/disttask/framework/handle"
+	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/stretchr/testify/require"
@@ -354,6 +356,52 @@ func TestMysqlWriter_Flush_EmptyEvents(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestMysqlWriterExecDDLUsesRoutedSchemaName(t *testing.T) {
+	router, err := routing.NewRouter(
+		common.NewChangefeedID4Test("test", "test"),
+		true,
+		[]*config.DispatchRule{{
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  "{table}_routed",
+		}},
+	)
+	require.NoError(t, err)
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	createSchemaDDL := helper.DDL2Event("CREATE DATABASE `source_db`")
+	routedCreateSchemaDDL, err := router.ApplyToDDLEvent(createSchemaDDL)
+	require.NoError(t, err)
+	require.Equal(t, "target_db", routedCreateSchemaDDL.GetTargetSchemaName())
+
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(routedCreateSchemaDDL.Query).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+	require.NoError(t, writer.execDDL(routedCreateSchemaDDL))
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	createTableDDL := helper.DDL2Event("CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)")
+	routedCreateTableDDL, err := router.ApplyToDDLEvent(createTableDDL)
+	require.NoError(t, err)
+	require.Equal(t, "target_db", routedCreateTableDDL.GetTargetSchemaName())
+	require.Equal(t, "source_table_routed", routedCreateTableDDL.GetTargetTableName())
+
+	writer, db, mock = newTestMysqlWriter(t)
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectExec("USE `target_db`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(routedCreateTableDDL.Query).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+	require.NoError(t, writer.execDDL(routedCreateTableDDL))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
@@ -646,7 +694,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	}
 
 	{
-		// ensure the dml can be writen succesfully before add index finished
+		// ensure the dml can be written successfully before add index finished
 		dmlEvent := helper.DML2Event("test", "t", "insert into t values (3, 'test3');")
 		dmlEvent.CommitTs = 3
 		dmlEvent.ReplicatingTs = 4

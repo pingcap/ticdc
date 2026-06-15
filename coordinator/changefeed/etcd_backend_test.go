@@ -58,7 +58,7 @@ func TestGetAllChangefeeds(t *testing.T) {
 	require.Nil(t, err)
 	require.Len(t, resp, 0)
 
-	// status unmarshal failed, changefeed will not be ignored, and the checkpiont ts will be the start ts
+	// status unmarshal failed, changefeed will not be ignored, and the checkpoint ts will be the start ts
 	// the old version of changefeed without gid
 	cdcClient.EXPECT().GetChangefeedInfoAndStatus(gomock.Any()).Return(
 		int64(0),
@@ -193,6 +193,11 @@ func TestDeleteChangefeed(t *testing.T) {
 }
 
 func TestResumeChangefeed(t *testing.T) {
+	// Scenario: resuming a stopped changefeed persists the normal state and
+	// returns the metadata that was actually loaded from etcd.
+	// Steps:
+	// 1) Load legacy changefeed info without an embedded ChangefeedID.
+	// 2) Resume the changefeed and assert the returned info is normalized.
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -210,8 +215,61 @@ func TestResumeChangefeed(t *testing.T) {
 	cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), changefeedID).Return(status, int64(0), nil).Times(1)
 	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&clientv3.TxnResponse{Succeeded: true}, nil).Times(1)
 
-	err := backend.ResumeChangefeed(context.Background(), changefeedID, 200)
+	resumedInfo, err := backend.ResumeChangefeed(context.Background(), changefeedID, 200)
 	require.Nil(t, err)
+	require.Equal(t, config.StateNormal, resumedInfo.State)
+	require.Equal(t, changefeedID, resumedInfo.ChangefeedID)
+}
+
+func TestResumeChangefeedCompletesLegacySchedulerDefaults(t *testing.T) {
+	// Scenario: an old owner persisted a stopped changefeed with only explicit scheduler fields.
+	// Steps: resume that sparse metadata, inspect the etcd put payload, and verify resume persists
+	// compatibility defaults such as RegionCountPerSpan before returning the resumed info.
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient := etcd.NewMockClient(ctrl)
+	cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
+	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
+	backend := NewEtcdBackend(cdcClient)
+
+	changefeedID := common.NewChangeFeedIDWithName("test-scheduler-defaults", common.DefaultKeyspaceName)
+	enableTableAcrossNodes := false
+	regionThreshold := 20
+	writeKeyThreshold := 10485760
+	info := &config.ChangeFeedInfo{
+		ChangefeedID: changefeedID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateStopped,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}
+	info.Config.Scheduler = &config.ChangefeedSchedulerConfig{
+		EnableTableAcrossNodes: &enableTableAcrossNodes,
+		RegionThreshold:        &regionThreshold,
+		WriteKeyThreshold:      &writeKeyThreshold,
+	}
+
+	cdcClient.EXPECT().GetChangeFeedInfo(gomock.Any(), changefeedID.DisplayName).Return(info, nil).Times(1)
+	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), NewFuncMatcher(func(i interface{}) bool {
+		ops := i.([]clientv3.Op)
+		require.Len(t, ops, 1)
+		require.True(t, ops[0].IsPut())
+
+		persistedInfo := &config.ChangeFeedInfo{}
+		require.NoError(t, persistedInfo.Unmarshal(ops[0].ValueBytes()))
+		require.Equal(t, config.StateNormal, persistedInfo.State)
+		require.NotNil(t, persistedInfo.Config)
+		require.NotNil(t, persistedInfo.Config.Scheduler)
+		require.NotNil(t, persistedInfo.Config.Scheduler.RegionCountPerSpan)
+		require.Greater(t, *persistedInfo.Config.Scheduler.RegionCountPerSpan, 0)
+		return true
+	}), gomock.Any()).Return(&clientv3.TxnResponse{Succeeded: true}, nil).Times(1)
+
+	resumedInfo, err := backend.ResumeChangefeed(context.Background(), changefeedID, 0)
+	require.NoError(t, err)
+	require.NotNil(t, resumedInfo.Config.Scheduler.RegionCountPerSpan)
+	require.Greater(t, *resumedInfo.Config.Scheduler.RegionCountPerSpan, 0)
 }
 
 func TestSetChangefeedProgress(t *testing.T) {

@@ -1023,7 +1023,7 @@ func (s *SinkConfig) applyParameterBySinkURI(sinkURI *url.URL) error {
 		getErrMsg := func(cfgIn map[string]string) string {
 			var errMsg strings.Builder
 			for k, v := range cfgIn {
-				errMsg.WriteString(fmt.Sprintf("%s=%s, ", k, v))
+				fmt.Fprintf(&errMsg, "%s=%s, ", k, v)
 			}
 			return errMsg.String()[0 : errMsg.Len()-2]
 		}

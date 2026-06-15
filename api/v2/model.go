@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/liveness"
-	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
 )
 
@@ -83,12 +82,6 @@ type VerifyTableConfig struct {
 	ReplicaConfig *ReplicaConfig `json:"replica_config"`
 	StartTs       uint64         `json:"start_ts"`
 	SinkURI       string         `json:"sink_uri"`
-}
-
-func getDefaultVerifyTableConfig() *VerifyTableConfig {
-	return &VerifyTableConfig{
-		ReplicaConfig: GetDefaultReplicaConfig(),
-	}
 }
 
 // ResumeChangefeedConfig is used by resume changefeed api
@@ -514,6 +507,8 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				WorkerCount:          c.Sink.CloudStorageConfig.WorkerCount,
 				FlushInterval:        c.Sink.CloudStorageConfig.FlushInterval,
 				FileSize:             c.Sink.CloudStorageConfig.FileSize,
+				SpoolDiskQuota:       c.Sink.CloudStorageConfig.SpoolDiskQuota,
+				SpoolBaseDir:         c.Sink.CloudStorageConfig.SpoolBaseDir,
 				OutputColumnID:       c.Sink.CloudStorageConfig.OutputColumnID,
 				FileExpirationDays:   c.Sink.CloudStorageConfig.FileExpirationDays,
 				FileCleanupCronSpec:  c.Sink.CloudStorageConfig.FileCleanupCronSpec,
@@ -875,6 +870,8 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				WorkerCount:          cloned.Sink.CloudStorageConfig.WorkerCount,
 				FlushInterval:        cloned.Sink.CloudStorageConfig.FlushInterval,
 				FileSize:             cloned.Sink.CloudStorageConfig.FileSize,
+				SpoolDiskQuota:       cloned.Sink.CloudStorageConfig.SpoolDiskQuota,
+				SpoolBaseDir:         cloned.Sink.CloudStorageConfig.SpoolBaseDir,
 				OutputColumnID:       cloned.Sink.CloudStorageConfig.OutputColumnID,
 				FileExpirationDays:   cloned.Sink.CloudStorageConfig.FileExpirationDays,
 				FileCleanupCronSpec:  cloned.Sink.CloudStorageConfig.FileCleanupCronSpec,
@@ -1350,18 +1347,6 @@ type SyncedStatus struct {
 	Info             string       `json:"info"`
 }
 
-// toCredential generates a security.Credential from a PDConfig
-func (cfg *PDConfig) toCredential() *security.Credential {
-	credential := &security.Credential{
-		CAPath:   cfg.CAPath,
-		CertPath: cfg.CertPath,
-		KeyPath:  cfg.KeyPath,
-	}
-	credential.CertAllowedCN = make([]string, len(cfg.CertAllowedCN))
-	copy(credential.CertAllowedCN, cfg.CertAllowedCN)
-	return credential
-}
-
 // Marshal returns the json marshal format of a ChangeFeedInfo
 func (info *ChangeFeedInfo) Marshal() (string, error) {
 	data, err := json.Marshal(info)
@@ -1529,6 +1514,8 @@ type CloudStorageConfig struct {
 	WorkerCount          *int    `json:"worker_count,omitempty"`
 	FlushInterval        *string `json:"flush_interval,omitempty"`
 	FileSize             *int    `json:"file_size,omitempty"`
+	SpoolDiskQuota       *int64  `json:"spool_disk_quota,omitempty"`
+	SpoolBaseDir         *string `json:"spool_base_dir,omitempty"`
 	OutputColumnID       *bool   `json:"output_column_id,omitempty"`
 	FileExpirationDays   *int    `json:"file_expiration_days,omitempty"`
 	FileCleanupCronSpec  *string `json:"file_cleanup_cron_spec,omitempty"`

@@ -71,6 +71,10 @@ type Maintainer struct {
 
 	pdClock pdutil.Clock
 	eventCh *chann.DrainableChann[*Event]
+	// blockStatusPending keeps the dedupe window local to the maintainer event
+	// queue so duplicate block-status resends do not pile up while an earlier
+	// equivalent event is still pending or being handled.
+	blockStatusPending blockStatusPendingSet
 
 	mc messaging.MessageCenter
 
@@ -309,7 +313,10 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 					zap.Stringer("changefeedID", m.changefeedID),
 					zap.Int("eventType", event.eventType),
 					zap.Duration("duration", duration),
-					zap.Any("Message", event.message),
+					zap.String("from", event.message.From.String()),
+					zap.String("to", event.message.To.String()),
+					zap.String("type", event.message.Type.String()),
+					zap.String("topic", event.message.Topic),
 				)
 			} else {
 				log.Info("maintainer is too slow",
@@ -346,6 +353,9 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 }
 
 func (m *Maintainer) checkNodeChanged() {
+	if m.removing.Load() {
+		return
+	}
 	m.nodeChanged.Lock()
 	defer m.nodeChanged.Unlock()
 	if m.nodeChanged.changed {
@@ -542,6 +552,13 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 	m.removing.Store(true)
 	m.cascadeRemoving.Store(cascade)
 	m.changefeedRemoved.Store(changefeedRemoved)
+	// Freeze ordinary scheduling on the old maintainer before we start the close flow.
+	// Only the DDL trigger close operator is allowed to keep running.
+	allowedDispatcherIDs := []common.DispatcherID{m.ddlSpan.ID}
+	if m.enableRedo {
+		allowedDispatcherIDs = append(allowedDispatcherIDs, m.redoDDLSpan.ID)
+	}
+	m.controller.EnterRemovingMode(allowedDispatcherIDs...)
 	closed := m.tryCloseChangefeed()
 	if closed {
 		m.removed.Store(true)
@@ -892,6 +909,14 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	// Process operator status updates AFTER checkpointTsByCapture is updated
 	// This ensures when operators complete, checkpointTsByCapture already contains the complete heartbeat
 	// Works with calCheckpointTs constraint ordering to prevent checkpoint advancing past new dispatcher startTs
+	if m.removing.Load() {
+		// Once RemoveMaintainer starts, we still need status updates for the close flow itself
+		// (for example DDL-trigger close operators reaching terminal states), but we must not run
+		// failover self-healing. A late Stopped/Working heartbeat from a closing dispatcher manager
+		// would otherwise mark spans absent or remove/recreate dispatchers after shutdown has begun.
+		m.controller.handleStatus(msg.From, req.Statuses, false)
+		return
+	}
 	m.controller.HandleStatus(msg.From, req.Statuses)
 }
 
@@ -908,7 +933,7 @@ func (m *Maintainer) onError(from node.ID, err *heartbeatpb.RunningError) {
 
 func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 	// the barrier is not initialized
-	if !m.initialized.Load() {
+	if !m.initialized.Load() || m.removing.Load() {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
@@ -1042,8 +1067,12 @@ func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeat
 
 func (m *Maintainer) handleResendMessage() {
 	// resend closing message
-	if m.removing.Load() && m.cascadeRemoving.Load() {
-		m.trySendMaintainerCloseRequestToAllNode()
+	if m.removing.Load() {
+		// After RemoveMaintainer starts, the old maintainer must stop resending bootstrap/barrier
+		// traffic. Otherwise stale control-plane messages can race with the new maintainer.
+		if m.cascadeRemoving.Load() {
+			m.trySendMaintainerCloseRequestToAllNode()
+		}
 		return
 	}
 	// resend bootstrap message
@@ -1235,7 +1264,13 @@ func (m *Maintainer) runHandleEvents(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case event := <-m.eventCh.Out():
-			m.HandleEvent(event)
+			if event == nil {
+				continue
+			}
+			func() {
+				defer m.blockStatusPending.release(event.blockStatusReleaseKeys)
+				m.HandleEvent(event)
+			}()
 		case <-ticker.C:
 			m.HandleEvent(&Event{
 				changefeedID: m.changefeedID,
@@ -1248,7 +1283,11 @@ func (m *Maintainer) runHandleEvents(ctx context.Context) {
 // pushEvent is used to push event to maintainer's event channel
 // event will be handled by maintainer's main loop
 func (m *Maintainer) pushEvent(event *Event) {
-	m.eventCh.In() <- event
+	filteredEvent, ok := m.filterBlockStatusEvent(event)
+	if !ok {
+		return
+	}
+	m.eventCh.In() <- filteredEvent
 }
 
 func (m *Maintainer) getWatermark() heartbeatpb.Watermark {

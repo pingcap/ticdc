@@ -41,7 +41,7 @@ func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, 
 	)
 	for i := range queries {
 		query := queries[i]
-		newQuery, err := r.rewriteSingleDDLQuery(query)
+		newQuery, err := r.rewriteSingleDDLQuery(query, ddl.GetSchemaName())
 		if err != nil {
 			return "", err
 		}
@@ -78,7 +78,17 @@ func splitMultiStmtDDLQuery(query string) ([]string, error) {
 	return queries, nil
 }
 
-func (r Router) rewriteSingleDDLQuery(query string) (string, error) {
+// rewriteSingleDDLQuery routes a single DDL statement.
+// If the schema is not qualified, fill it with the default schema.
+// Cross schema scenario must be qualified before enter the router.
+// Example:
+//
+//	defaultSchema = "source_db"
+//	query         = "ALTER TABLE t ADD COLUMN c INT"
+//	fillDefaultSchema → [{source_db, t}]
+//	route({source_db, t}) with rule source_db.* → target_db.{table}_r
+//	→ "ALTER TABLE `target_db`.`t_r` ADD COLUMN `c` INT"
+func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, error) {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
 	if err != nil {
@@ -89,22 +99,23 @@ func (r Router) rewriteSingleDDLQuery(query string) (string, error) {
 	if len(sourceTables) == 0 {
 		return query, nil
 	}
+	fillDefaultSchema(sourceTables, defaultSchema)
 
 	var (
 		routed       bool
 		targetTables = make([]commonEvent.SchemaTableName, 0, len(sourceTables))
 	)
 	for _, srcTable := range sourceTables {
-		targetSchema, targetTable, changed, err := r.route(srcTable.SchemaName, srcTable.TableName)
+		binding, err := r.route(srcTable.SchemaName, srcTable.TableName)
 		if err != nil {
 			return "", err
 		}
-		if changed {
+		if binding.routed() {
 			routed = true
 		}
 		targetTables = append(targetTables, commonEvent.SchemaTableName{
-			SchemaName: targetSchema,
-			TableName:  targetTable,
+			SchemaName: binding.Target.Schema,
+			TableName:  binding.Target.Table,
 		})
 	}
 
@@ -112,11 +123,23 @@ func (r Router) rewriteSingleDDLQuery(query string) (string, error) {
 		return query, nil
 	}
 
-	newQuery, err := rewriteDDLStmtTables(stmt, targetTables)
+	newQuery, err := rewriteDDLStmtTables(stmt, sourceTables, targetTables)
 	if err != nil {
 		return "", err
 	}
 	return newQuery, nil
+}
+
+func fillDefaultSchema(tables []commonEvent.SchemaTableName, defaultSchema string) {
+	if defaultSchema == "" {
+		return
+	}
+
+	for i := range tables {
+		if tables[i].SchemaName == "" && tables[i].TableName != "" {
+			tables[i].SchemaName = defaultSchema
+		}
+	}
 }
 
 // tableNameExtractor extracts table names from DDL AST nodes.
@@ -137,12 +160,17 @@ func (tne *tableNameExtractor) Leave(in ast.Node) (ast.Node, bool) {
 	return in, true
 }
 
-// extractTableNames returns tables in DDL statement.
-// Because we use visitor pattern, first tableName is always upper-most table in AST.
-// Specifically:
-//   - for `CREATE TABLE ... LIKE` DDL, result contains [sourceTable, sourceRefTable]
-//   - for RENAME TABLE DDL, result contains [old1, new1, old2, new2, old3, new3, ...] because of TiDB parser
-//   - for other DDL, order of tableName is the node visit order.
+// extractTableNames returns the tables in a DDL statement in AST visit order.
+// The first element is always the topmost table (the DDL target).
+//
+// Examples (sourceTables returned):
+//
+//	CREATE TABLE `db`.`t1` LIKE `db`.`t2`
+//	    → [{db, t1}, {db, t2}]
+//	RENAME TABLE `db`.`a` TO `db`.`b`, `db`.`c` TO `db`.`d`
+//	    → [{db, a}, {db, b}, {db, c}, {db, d}]
+//	ALTER TABLE `db`.`t` ADD COLUMN `c` INT
+//	    → [{db, t}]
 func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
 	// Special cases: schema related SQLs don't have tableName
 	switch v := stmt.(type) {
@@ -162,13 +190,35 @@ func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
 	return e.names
 }
 
-// tableRenameVisitor rewrites *ast.TableName nodes in the same traversal order
-// used by tableNameExtractor. Each visited table consumes one entry from
-// targetNames, so the caller can detect too few or too many target names after
-// traversal.
+// tableRenameVisitor rewrites table names in a DDL AST.
+//
+// TableName nodes are rewritten positionally in the same traversal order as
+// extractTableNames. For CREATE VIEW, TiDB represents `db`.`table`.`column` as
+// a ColumnName node, so the visitor also rewrites the schema/table qualifier
+// when it is explicitly schema-qualified. Unqualified qualifiers such as
+// `table`.`column` may be aliases and are left unchanged.
+//
+// Example for a CREATE VIEW with routing rule source_db.* → target_db.{table}_r:
+//
+//	Source AST:
+//	  CREATE VIEW `source_db`.`v` AS
+//	    SELECT `source_db`.`t`.`id` FROM `source_db`.`t`
+//
+//	Positional: {source_db, v} → {target_db, v_r}
+//	            {source_db, t} → {target_db, t_r}
+//
+//	Schema-qualified column reference: `source_db`.`t`.`id`
+//	    qualified lookup: {source_db, t} → {target_db, t_r}
+//	    → `target_db`.`t_r`.`id`
+//
+//	Rewritten AST:
+//	  CREATE VIEW `target_db`.`v_r` AS
+//	    SELECT `target_db`.`t_r`.`id` FROM `target_db`.`t_r`
 type tableRenameVisitor struct {
 	// targetNames contains routed names aligned with tableNameExtractor output.
 	targetNames []commonEvent.SchemaTableName
+	// targetByQualifiedSource maps qualified source table names to routed names.
+	targetByQualifiedSource map[commonEvent.SchemaTableName]commonEvent.SchemaTableName
 	// i is the next targetNames index to consume.
 	i int
 	// hasErr records targetNames exhaustion because ast.Visitor cannot return an error.
@@ -189,6 +239,10 @@ func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
 		v.i++
 		return in, true
 	}
+	if c, ok := in.(*ast.ColumnName); ok {
+		v.rewriteColumnName(c)
+		return in, true
+	}
 	return in, false
 }
 
@@ -199,10 +253,63 @@ func (v *tableRenameVisitor) Leave(in ast.Node) (ast.Node, bool) {
 	return in, true
 }
 
-// rewriteDDLStmtTables renames tables in DDL by given `targetTables`.
-// Argument `targetTables` should have the same structure as the return value of extractTableNames.
-// Returned DDL is formatted like StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
-func rewriteDDLStmtTables(stmt ast.StmtNode, targetTables []commonEvent.SchemaTableName) (string, error) {
+// rewriteColumnName rewrites only schema-qualified column references
+// (e.g. `db`.`t`.`col`) to match routed table names.
+func (v *tableRenameVisitor) rewriteColumnName(c *ast.ColumnName) {
+	if c == nil || c.Schema.O == "" || c.Table.O == "" {
+		return
+	}
+
+	target, ok := v.targetByQualifiedSource[normalizedSchemaTableName(c.Schema.O, c.Table.O)]
+	if !ok {
+		return
+	}
+	c.Schema = ast.NewCIStr(target.SchemaName)
+	c.Table = ast.NewCIStr(target.TableName)
+}
+
+// newTableRenameVisitor builds the lookup map used for schema-qualified column
+// references. It pairs each source table with its routed target.
+func newTableRenameVisitor(
+	sourceTables []commonEvent.SchemaTableName,
+	targetTables []commonEvent.SchemaTableName,
+) *tableRenameVisitor {
+	visitor := &tableRenameVisitor{
+		targetNames:             targetTables,
+		targetByQualifiedSource: make(map[commonEvent.SchemaTableName]commonEvent.SchemaTableName, len(sourceTables)),
+	}
+
+	for i, source := range sourceTables {
+		if i >= len(targetTables) || source.TableName == "" {
+			continue
+		}
+		target := targetTables[i]
+		if source.SchemaName != "" {
+			visitor.targetByQualifiedSource[normalizedSchemaTableName(source.SchemaName, source.TableName)] = target
+		}
+	}
+	return visitor
+}
+
+func normalizedSchemaTableName(schema, table string) commonEvent.SchemaTableName {
+	return commonEvent.SchemaTableName{
+		SchemaName: strings.ToLower(schema),
+		TableName:  strings.ToLower(table),
+	}
+}
+
+// rewriteDDLStmtTables rewrites table names in a DDL AST.
+// sourceTables and targetTables must have matching lengths and follow the
+// traversal order produced by extractTableNames. TableName nodes are rewritten
+// positionally. For CREATE VIEW, schema-qualified column references are also
+// updated so `db`.`table`.`column` keeps pointing at the routed table.
+//
+// Returned DDL uses StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
+func rewriteDDLStmtTables(
+	stmt ast.StmtNode,
+	sourceTables []commonEvent.SchemaTableName,
+	targetTables []commonEvent.SchemaTableName,
+) (string, error) {
 	if _, ok := stmt.(ast.DDLNode); !ok {
 		return "", errors.ErrTableRoutingFailed.GenWithStack(
 			"rewrite ddl query got non ddl statement: %T", stmt)
@@ -228,9 +335,7 @@ func rewriteDDLStmtTables(stmt ast.StmtNode, targetTables []commonEvent.SchemaTa
 		}
 		v.Name = ast.NewCIStr(targetTables[0].SchemaName)
 	default:
-		visitor := &tableRenameVisitor{
-			targetNames: targetTables,
-		}
+		visitor := newTableRenameVisitor(sourceTables, targetTables)
 		stmt.Accept(visitor)
 		if visitor.hasErr {
 			return "", errors.ErrTableRoutingFailed.GenWithStack(

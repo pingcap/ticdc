@@ -45,7 +45,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		ddlTs := event.GetCommitTs()
 		flag, err := w.isDDLExecuted(tableID, ddlTs)
 		if err != nil {
-			return nil
+			return err
 		}
 		if flag {
 			log.Info("Skip Already Executed DDL", zap.String("sql", event.GetDDLQuery()))
@@ -106,7 +106,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	}
 
 	if shouldSwitchDB {
-		_, err = tx.ExecContext(ctx, "USE "+common.QuoteName(event.GetSchemaName())+";")
+		_, err = tx.ExecContext(ctx, "USE "+common.QuoteName(event.GetTargetSchemaName())+";")
 		if err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {
 				log.Error("Failed to rollback", zap.Error(err))
@@ -228,7 +228,7 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 				// If the error is ignorable, we will ignore the error directly.
 				return nil
 			}
-			if w.cfg.IsTiDB && ddlCreateTime != "" && errors.Cause(err) == mysql.ErrInvalidConn {
+			if w.cfg.IsTiDB && ddlCreateTime != "" && errors.Is(errors.Cause(err), mysql.ErrInvalidConn) {
 				log.Warn("Wait the asynchronous ddl to synchronize", zap.String("ddl", event.Query), zap.String("ddlCreateTime", ddlCreateTime),
 					zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
 					zap.String("readTimeout", w.cfg.ReadTimeout), zap.Error(err))
