@@ -993,24 +993,26 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		d.holdBlockEvent(event)
 		return
 	}
+	noNeedAddAndDrop := event.GetNeedAddedTables() == nil && event.GetNeedDroppedTables() == nil
+	needsScheduleACKTracking := !shouldBlock && d.IsTableTriggerDispatcher() && !noNeedAddAndDrop
+	needsAddTableCheckpointBlocker := !shouldBlock && d.IsTableTriggerDispatcher() && len(event.GetNeedAddedTables()) > 0
+	identifier := BlockEventIdentifier{
+		CommitTs:    event.GetCommitTs(),
+		IsSyncPoint: false,
+	}
+	if needsScheduleACKTracking {
+		// Register schedule-related DDLs before submitting downstream IO so
+		// following DB/All DDLs cannot pass this pending schedule update.
+		d.pendingACKCount.Add(1)
+	}
+	if needsAddTableCheckpointBlocker {
+		// Install the blocker before the async task can be delayed, otherwise
+		// heartbeat reporting may observe this DDL without the checkpoint cap.
+		d.addTableCheckpointBlocker.add(identifier, event.GetCommitTs())
+	}
 	// Writing a block event may involve downstream IO (e.g. executing DDL), so it must not block
 	// the dynamic stream goroutine.
 	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-		noNeedAddAndDrop := event.GetNeedAddedTables() == nil && event.GetNeedDroppedTables() == nil
-		needsScheduleACKTracking := !shouldBlock && d.IsTableTriggerDispatcher() && !noNeedAddAndDrop
-		needsAddTableCheckpointBlocker := !shouldBlock && d.IsTableTriggerDispatcher() && len(event.GetNeedAddedTables()) > 0
-		identifier := BlockEventIdentifier{
-			CommitTs:    event.GetCommitTs(),
-			IsSyncPoint: false,
-		}
-		if needsScheduleACKTracking {
-			// If this is a table trigger dispatcher, and the DDL leads to add/drop tables,
-			// we track it as a pending schedule-related event until the maintainer ACKs it.
-			d.pendingACKCount.Add(1)
-		}
-		if needsAddTableCheckpointBlocker {
-			d.addTableCheckpointBlocker.add(identifier, event.GetCommitTs())
-		}
 		if shouldBlock {
 			failpoint.Inject("BlockOrWaitBeforeFlush", nil)
 		}

@@ -1398,6 +1398,50 @@ func TestAddTableCheckpointBlockerWaitsForMaintainerACK(t *testing.T) {
 	require.Equal(t, uint64(200), dispatcher.GetCheckpointTs())
 }
 
+func TestAddTableCheckpointBlockerInstalledBeforeAsyncWrite(t *testing.T) {
+	keyspaceID := getTestingKeyspaceID()
+	ddlTableSpan := common.KeyspaceDDLSpan(keyspaceID)
+	mockSink := newDispatcherTestSink(t, common.MysqlSinkType)
+	dispatcher := newDispatcherForTest(mockSink.Sink(), ddlTableSpan)
+
+	executorStarted := make(chan struct{})
+	executorRelease := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(executorRelease)
+		}
+	}()
+	dispatcher.sharedInfo.GetBlockEventExecutor().Submit(dispatcher.BasicDispatcher, func() {
+		close(executorStarted)
+		<-executorRelease
+	})
+
+	select {
+	case <-executorStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected blocking executor task to start")
+	}
+
+	nodeID := node.NewID()
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, newAddTableDDL(100, 101))}, func() {})
+	require.True(t, block)
+	require.Equal(t, 1, dispatcher.addTableCheckpointBlocker.len())
+	require.Equal(t, int64(1), dispatcher.pendingACKCount.Load())
+	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
+
+	close(executorRelease)
+	released = true
+	msg, ok := takeBlockStatusWithTimeout(t, dispatcher, time.Second)
+	require.True(t, ok, "expected add-table block status")
+	require.Equal(t, uint64(100), msg.State.BlockTs)
+	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
+
+	ackBlockEvent(dispatcher, 100)
+	require.Equal(t, 0, dispatcher.addTableCheckpointBlocker.len())
+	require.Equal(t, int64(0), dispatcher.pendingACKCount.Load())
+}
+
 func TestAddTableCheckpointBlockerUsesSmallestPendingBlockTs(t *testing.T) {
 	keyspaceID := getTestingKeyspaceID()
 	ddlTableSpan := common.KeyspaceDDLSpan(keyspaceID)
