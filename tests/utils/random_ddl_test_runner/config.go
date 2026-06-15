@@ -81,6 +81,7 @@ type verifyConfig struct {
 	PanicPatterns    []string `json:"panic_patterns"`
 	FailOnPanicMatch bool     `json:"fail_on_panic_match"`
 	ConvergeWait     duration `json:"converge_wait"`
+	ConvergeTimeout  duration `json:"converge_timeout"`
 }
 
 type mysqlSyncpointConfig struct {
@@ -257,6 +258,12 @@ func (c *config) applyDefaultsAndValidate() error {
 	}
 	if c.Verify.ConvergeWait.Duration == 0 {
 		c.Verify.ConvergeWait.Duration = 20 * time.Second
+	}
+	if c.Verify.ConvergeTimeout.Duration == 0 {
+		c.Verify.ConvergeTimeout.Duration = c.Verify.NoAdvanceHard.Duration * 2
+		if c.Verify.ConvergeTimeout.Duration < 2*time.Minute {
+			c.Verify.ConvergeTimeout.Duration = 2 * time.Minute
+		}
 	}
 	if len(c.Verify.PanicPatterns) == 0 {
 		c.Verify.PanicPatterns = []string{"panic", "fatal", "DATA RACE"}

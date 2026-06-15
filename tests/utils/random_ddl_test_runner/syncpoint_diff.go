@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,12 +15,16 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/go-sql-driver/mysql"
 )
 
 type ddlWindow struct {
 	start uint64
 	end   uint64
 }
+
+const mysqlErrNoSuchTable uint16 = 1146
 
 func (r *runner) syncpointDiffLoop(
 	ctx context.Context,
@@ -182,6 +187,11 @@ func pickNextSyncpointCandidate(ctx context.Context, down *sql.DB, after uint64)
 		after,
 	)
 	if err != nil {
+		if isNoSuchTableError(err) {
+			// TiCDC creates tidb_cdc.syncpoint_v1 lazily when the first syncpoint is flushed.
+			// Treat a missing table as "no candidate yet" so early periodic checks keep waiting.
+			return 0, 0, false, nil
+		}
 		return 0, 0, false, err
 	}
 	defer rows.Close()
@@ -197,6 +207,11 @@ func pickNextSyncpointCandidate(ctx context.Context, down *sql.DB, after uint64)
 		return 0, 0, false, err
 	}
 	return 0, 0, false, nil
+}
+
+func isNoSuchTableError(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == mysqlErrNoSuchTable
 }
 
 func fetchDDLWindows(ctx context.Context, host string, port int) ([]ddlWindow, error) {

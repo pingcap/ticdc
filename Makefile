@@ -193,14 +193,6 @@ check_third_party_binary:
 	@which bin/tidb-server
 	@which bin/tikv-server
 	@which bin/pd-server
-	@which bin/tiflash
-	@which bin/pd-ctl
-	@which bin/sync_diff_inspector
-	@which bin/go-ycsb
-	@which bin/etcdctl
-	@which bin/jq
-	@which bin/minio
-	@which bin/bin/schema-registry-start
 
 integration_test_build: check_failpoint_ctl storage_consumer kafka_consumer pulsar_consumer oauth2_server
 	$(FAILPOINT_ENABLE)

@@ -184,11 +184,7 @@ func (r *runner) workload() error {
 	r.logger.Printf("workload finished, waiting for converge: %s", r.cfg.Verify.ConvergeWait.Duration)
 	time.Sleep(r.cfg.Verify.ConvergeWait.Duration)
 
-	convergeTimeout := r.cfg.Verify.NoAdvanceHard.Duration * 2
-	if convergeTimeout < 2*time.Minute {
-		convergeTimeout = 2 * time.Minute
-	}
-	convergeCtx, convergeCancel := context.WithTimeout(context.Background(), convergeTimeout)
+	convergeCtx, convergeCancel := context.WithTimeout(context.Background(), r.cfg.Verify.ConvergeTimeout.Duration)
 	defer convergeCancel()
 
 	if err := r.createAndWaitFinishMark(convergeCtx, up, down, model); err != nil {

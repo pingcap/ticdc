@@ -55,6 +55,7 @@ function write_runner_config() {
     "no_advance_soft": "2m",
     "no_advance_hard": "10m",
     "converge_wait": "30s",
+    "converge_timeout": "30m",
     "panic_patterns": ["panic", "fatal", "DATA RACE"],
     "log_scan_enabled": true,
     "fail_on_panic_match": true
