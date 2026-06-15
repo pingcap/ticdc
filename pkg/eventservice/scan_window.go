@@ -811,6 +811,10 @@ func (c *changefeedStatus) maxScanInterval() time.Duration {
 }
 
 func (c *changefeedStatus) refreshMinSentResolvedTs() {
+	if c.scanWindowController == nil {
+		return
+	}
+
 	now := time.Now()
 	minSentResolvedTs := ^uint64(0)
 	minSentResolvedTsWithStale := ^uint64(0)
@@ -854,6 +858,10 @@ func (c *changefeedStatus) refreshMinSentResolvedTs() {
 }
 
 func (c *changefeedStatus) getScanMaxTs() uint64 {
+	if c.scanWindowController == nil {
+		return 0
+	}
+
 	baseTs := c.minSentTs.Load()
 	if baseTs == 0 {
 		return 0
@@ -872,7 +880,9 @@ func (c *changefeedStatus) storeMinSentTs(value uint64) {
 		return
 	}
 	c.minSentTs.Store(value)
-	metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(c.changefeedID.String()).Set(float64(value))
+	if c.scanWindowController != nil {
+		metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(c.changefeedID.String()).Set(float64(value))
+	}
 }
 
 func scaleDuration(d time.Duration, numerator int64, denominator int64) time.Duration {
