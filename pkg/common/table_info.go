@@ -118,7 +118,7 @@ func (ti *TableInfo) String() string {
 		return "<nil>"
 	}
 	return fmt.Sprintf(
-		"TableInfo{schema:%s, table:%s, tableID:%d, isPartition:%t, targetSchema:%s, targetTable:%s, charset:%s, collate:%s, hasPKOrNotNullUK:%t, activeActiveTable:%t, softDeleteTable:%t, updateTS:%d}",
+		"TableInfo{schema:%s, table:%s, tableID:%d, isPartition:%t, targetSchema:%s, targetTable:%s, charset:%s, collate:%s, hasPKOrNotNullUK:%t, updateTS:%d}",
 		ti.TableName.Schema,
 		ti.TableName.Table,
 		ti.TableName.TableID,
@@ -128,8 +128,6 @@ func (ti *TableInfo) String() string {
 		ti.Charset,
 		ti.Collate,
 		ti.HasPKOrNotNullUK,
-		ti.ActiveActiveTable,
-		ti.SoftDeleteTable,
 		ti.UpdateTS,
 	)
 }
