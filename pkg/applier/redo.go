@@ -238,7 +238,7 @@ func (ra *RedoApplier) applyDDL(
 		if ddl.DDL == nil {
 			// Note this could only happen when using old version of cdc, and the commit ts
 			// of the DDL should be equal to checkpoint ts or resolved ts.
-			log.Warn("ignore DDL without table info", zap.String("ddl", ddl.DDL.Query))
+			log.Warn("ignore DDL without table info", zap.Any("ddl", ddl))
 			return true
 		}
 
