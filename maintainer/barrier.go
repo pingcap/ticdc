@@ -49,7 +49,8 @@ type Barrier struct {
 	// and logs must stay in the same mode.
 	mode int64
 
-	// routeAdmin gates DDL writes when table route is enabled. A nil value keeps Barrier on the normal non-route path.
+	// routeAdmin gates route-affecting DDLs before Barrier emits WRITE/PASS
+	// actions. A nil value keeps Barrier on the normal non-route path.
 	routeAdmin *routing.Admin
 }
 
@@ -383,9 +384,9 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	// which means we have sent pass or write action to it
 	// the writer already synced ddl to downstream
 	if event.writerDispatcher == dispatcherID {
-		// Keep selected events when route precheck/apply fails. Other
-		// dispatchers may still need resend actions, and route admission is
-		// responsible for reporting the conflict to changefeed error handling.
+		// Do not consume writer DONE until this route transition is ready. A false
+		// precheck may mean an earlier route event is still pending; real route
+		// conflicts are reported through routeAdmin.
 		if !b.precheckRouteEvent(event) {
 			return event
 		}
@@ -479,9 +480,9 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 			}
 		}
 
-		// Precheck as early as the table trigger dispatcher reports. If the route
-		// admission would conflict, we can fail fast without waiting for all
-		// dispatchers to reach this barrier.
+		// The table trigger dispatcher is the authoritative source of route
+		// admissions. Check them as soon as they arrive so conflicts can be
+		// reported early; WRITE is still gated by allDispatcherReported below.
 		if dispatcherID == b.spanController.GetDDLDispatcherID() {
 			if !b.precheckRouteEvent(event) {
 				return event, nil, "", false
@@ -505,8 +506,9 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		}
 		return event, status, targetID, true
 	}
-	// it's not a blocked event, it must be sent by table event trigger event dispatcher, just for doing scheduler
-	// and the ddl already synced to downstream , e.g.: create table
+	// Non-blocking metadata updates are reported by the table trigger dispatcher
+	// after it has written the DDL downstream. They still need maintainer ACK for
+	// table scheduling and/or route admission.
 	// if ack failed, dispatcher will send a heartbeat again, so we do not need to care about resend message here
 	//
 	// Besides, we need to add the event into the blockedEvents map first, and then delete after finish scheduler

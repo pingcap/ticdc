@@ -1049,9 +1049,9 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	// Writing a block event may involve downstream IO (e.g. executing DDL), so it must not block
 	// the dynamic stream goroutine.
 	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-		// Non-blocking DDLs have already been written downstream, but the
-		// table-trigger dispatcher still waits for maintainer ACK when the DDL
-		// changes maintainer-side metadata.
+		// Non-blocking DDLs are not coordinated through barrier WRITE/PASS.
+		// The table-trigger dispatcher still waits for maintainer ACK when the
+		// DDL changes maintainer-side metadata.
 		//
 		// NeedAddedTables/NeedDroppedTables covers physical table dispatcher
 		// scheduling. routeAdmissions covers name-only route ownership changes,
@@ -1065,8 +1065,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		needsMaintainerACK := !shouldBlock && d.IsTableTriggerDispatcher() &&
 			(!noNeedAddAndDrop || len(routeAdmissions) > 0)
 		if needsMaintainerACK {
-			// If this is a table trigger dispatcher, and the DDL leads to add/drop tables
-			// or route admissions, track it until the maintainer ACKs it.
+			// Balance this with maintainer ACK or local write failure.
 			d.pendingACKCount.Add(1)
 		}
 		if shouldBlock {
@@ -1282,9 +1281,11 @@ func (d *BasicDispatcher) flushBlockedEventAndReportToMaintainer(event commonEve
 
 // GetBlockEventStatus returns the current in-flight *blocking* barrier state for bootstrap.
 //
-// We only report statuses for events that actually block the event stream (multi-table DDLs, split-span DDLs,
-// and syncpoints). Non-blocking DDLs that only add/drop tables are reported separately and can be recovered by
-// the maintainer from the table trigger dispatcher's startTs, so they don't need to be restored here.
+// We only report statuses for events that actually block the event stream
+// (multi-table DDLs, split-span DDLs, and syncpoints). Non-blocking DDLs report
+// maintainer-side metadata updates through a separate ACK path; after maintainer
+// failover, those updates are reconstructed from the table trigger dispatcher's
+// startTs and the current route snapshot rather than from bootstrap block state.
 func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 	pendingEvent, blockStage := d.blockEventStatus.getEventAndStage()
 
@@ -1293,12 +1294,6 @@ func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 		return nil
 	}
 
-	// we only need to report the block status of these block ddls when maintainer is restarted.
-	// For the non-block but with needDroppedTables and needAddTables ddls,
-	// we don't need to report it when maintainer is restarted, because:
-	// 1. the ddl not block other dispatchers
-	// 2. maintainer can get current available tables based on table trigger event dispatcher's startTs,
-	//    so don't need to do extra add and drop actions.
 	return &heartbeatpb.State{
 		IsBlocked:            true,
 		BlockTs:              pendingEvent.GetCommitTs(),
@@ -1306,8 +1301,8 @@ func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 		NeedDroppedTables:    pendingEvent.GetNeedDroppedTables().ToPB(),
 		NeedAddedTables:      commonEvent.ToTablesPB(pendingEvent.GetNeedAddedTables()),
 		RouteTableAdmissions: d.routeTableAdmissionsForBlockState(pendingEvent),
-		UpdatedSchemas:       commonEvent.ToSchemaIDChangePB(pendingEvent.GetUpdatedSchemas()), // only exists for rename table and rename tables
-		IsSyncPoint:          pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,         // sync point event must should block
+		UpdatedSchemas:       commonEvent.ToSchemaIDChangePB(pendingEvent.GetUpdatedSchemas()),
+		IsSyncPoint:          pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,
 		Stage:                blockStage,
 	}
 }

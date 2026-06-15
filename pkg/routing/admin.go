@@ -70,9 +70,9 @@ type Admission struct {
 	Binding RouteBinding
 }
 
-// routeTransition is the normalized mutation produced from one DDL barrier.
-// The same transition is used for both precheck and apply so the validated
-// state change is not rebuilt differently later.
+// routeTransition is the normalized admission intent produced from one DDL
+// barrier. Precheck and Apply share this intent so resend/retry does not rebuild
+// a different set of admit/release actions from dispatcher payloads.
 type routeTransition struct {
 	releases       []TableKey
 	releaseSchemas []string
@@ -244,9 +244,9 @@ func (a *Admin) applyTransition(transition *routeTransition, mutate bool) error 
 	return nil
 }
 
-// buildAdmissionChange resolves the transition into release and admit slices ready
-// for registry validation. ReleaseSchema actions are expanded into
-// individual per-table releases for every active source under the given schema.
+// buildAdmissionChange resolves the transition into release and admit slices
+// ready for registry validation. ReleaseSchema actions are expanded against the
+// current active route snapshot when the transition is evaluated.
 func (a *Admin) buildAdmissionChange(transition *routeTransition) ([]TableKey, []RouteBinding) {
 	releases := append([]TableKey(nil), transition.releases...)
 	admits := transition.admits

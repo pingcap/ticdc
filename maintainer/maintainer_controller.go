@@ -78,7 +78,8 @@ type Controller struct {
 	// consistent host/target snapshot.
 	drainState *mscheduler.DrainState
 
-	// Table route admission is owned by the maintainer controller.
+	// routeAdmin is initialized during bootstrap and shared with Barrier for
+	// route admission checks during DDL coordination.
 	routeAdmin  *routing.Admin
 	reportError func(error)
 }

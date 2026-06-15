@@ -214,11 +214,11 @@ func (InfluenceType) EnumDescriptor() ([]byte, []int) {
 type RouteTableAdmissionAction int32
 
 const (
-	// ADMIT claims a target name for this source name.
+	// ADMIT claims TargetSchemaName/TargetTableName for SourceSchemaName/SourceTableName.
 	RouteTableAdmissionAction_ADMIT RouteTableAdmissionAction = 0
-	// RELEASE drops the claim for this exact source name.
+	// RELEASE drops the claim for SourceSchemaName/SourceTableName.
 	RouteTableAdmissionAction_RELEASE RouteTableAdmissionAction = 1
-	// RELEASE_SCHEMA drops all source names under the given schema.
+	// RELEASE_SCHEMA drops claims for all source tables under SourceSchemaName.
 	RouteTableAdmissionAction_RELEASE_SCHEMA RouteTableAdmissionAction = 2
 )
 
@@ -2806,7 +2806,9 @@ func (m *Table) GetSplitable() bool {
 	return false
 }
 
-// RouteTableAdmission describes one source route transition reported by dispatcher.
+// RouteTableAdmission describes one source route transition reported by the
+// table trigger dispatcher. ADMIT uses source and target fields, RELEASE uses
+// source schema/table, and RELEASE_SCHEMA uses only source schema.
 type RouteTableAdmission struct {
 	SourceSchemaName string                    `protobuf:"bytes,1,opt,name=SourceSchemaName,proto3" json:"SourceSchemaName,omitempty"`
 	SourceTableName  string                    `protobuf:"bytes,2,opt,name=SourceTableName,proto3" json:"SourceTableName,omitempty"`
@@ -2953,7 +2955,7 @@ type State struct {
 	IsSyncPoint       bool              `protobuf:"varint,7,opt,name=IsSyncPoint,proto3" json:"IsSyncPoint,omitempty"`
 	Stage             BlockStage        `protobuf:"varint,8,opt,name=stage,proto3,enum=heartbeatpb.BlockStage" json:"stage,omitempty"`
 	// RouteTableAdmissions carries name-level source-to-target route transitions
-	// for this barrier event. Non-nil only when the table trigger dispatcher's
+	// for this barrier event. Non-empty only when the table trigger dispatcher's
 	// DDL changes the upstream source name lifecycle (e.g. RENAME TABLE, DROP TABLE).
 	RouteTableAdmissions []*RouteTableAdmission `protobuf:"bytes,9,rep,name=RouteTableAdmissions,proto3" json:"RouteTableAdmissions,omitempty"`
 }

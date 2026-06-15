@@ -264,7 +264,7 @@ func (r Router) RouteTable(originSchema, originTable string) RouteBinding {
 			zap.String("table", originTable))
 		return RouteBinding{}
 	}
-	// RouteTable has already rejected empty table names. Route only returns an
+	// Empty table names were rejected above. Route only returns an
 	// error for schema-level routing ambiguity, so table-level routing cannot fail here.
 	binding, _ := r.Route(originSchema, originTable)
 	return binding

@@ -144,10 +144,8 @@ func (c *Controller) FinishBootstrap(
 	}
 	c.routeAdmin = admin
 
-	// Step 6: Initialize and start sub components
 	c.initializeComponents(allNodesResp)
 
-	// Step 7: Mark the controller as bootstrapped
 	c.bootstrapped = true
 
 	return &heartbeatpb.MaintainerPostBootstrapRequest{
