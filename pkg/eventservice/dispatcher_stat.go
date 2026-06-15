@@ -431,10 +431,32 @@ type changefeedStatus struct {
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
+	return newChangefeedStatusWithScanWindow(
+		changefeedID,
+		syncPointInterval,
+		isScanWindowEnabled(),
+	)
+}
+
+func isScanWindowEnabled() bool {
+	cfg := config.GetGlobalServerConfig()
+	if cfg == nil || cfg.Debug == nil || cfg.Debug.EventService == nil {
+		return true
+	}
+	return cfg.Debug.EventService.EnableScanWindow
+}
+
+func newChangefeedStatusWithScanWindow(
+	changefeedID common.ChangeFeedID,
+	syncPointInterval time.Duration,
+	enableScanWindow bool,
+) *changefeedStatus {
 	status := &changefeedStatus{
-		changefeedID:         changefeedID,
-		scanWindowController: newAdaptiveScanWindowController(time.Now()),
-		syncPointInterval:    syncPointInterval,
+		changefeedID:      changefeedID,
+		syncPointInterval: syncPointInterval,
+	}
+	if enableScanWindow {
+		status.scanWindowController = newAdaptiveScanWindowController(time.Now())
 	}
 	status.scanInterval.Store(int64(defaultScanInterval))
 
