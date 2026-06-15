@@ -437,15 +437,22 @@ func newMysqlConfigAndDB(
 func configureDMLDBConn(db *sql.DB, cfg *Config) {
 	db.SetMaxIdleConns(cfg.WorkerCount + dmlDBExtraConns)
 	db.SetMaxOpenConns(cfg.WorkerCount + dmlDBExtraConns)
-	failpoint.Inject("MySQLSinkForceSingleConnection", func() {
-		db.SetMaxIdleConns(1)
-		db.SetMaxOpenConns(1)
-	})
+	forceSingleConnectionForTest(db)
 }
 
 func configureControlDBConn(db *sql.DB) {
 	db.SetMaxIdleConns(defaultControlDBConns)
 	db.SetMaxOpenConns(defaultControlDBConns)
+	forceSingleConnectionForTest(db)
+}
+
+func forceSingleConnectionForTest(db *sql.DB) {
+	// DDL timestamp tests rely on this failpoint forcing every MySQL sink pool
+	// onto one session so session-variable leakage is deterministic.
+	failpoint.Inject("MySQLSinkForceSingleConnection", func() {
+		db.SetMaxIdleConns(1)
+		db.SetMaxOpenConns(1)
+	})
 }
 
 // IsSinkSafeMode returns whether the sink is in safe mode.
