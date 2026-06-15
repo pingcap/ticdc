@@ -55,7 +55,7 @@ require (
 	github.com/pingcap/tidb v1.1.0-beta.0.20260611081847-e7463a21c08f
 	github.com/pingcap/tidb-dashboard v0.0.0-20260603054940-9e92195886c3
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20260611093756-46989375079c
-	github.com/pingcap/tiflow v0.0.0-20260612064548-0206c5481cab
+	github.com/pingcap/tiflow v0.0.0-20260615112939-12921db8ebdd
 	github.com/prometheus/client_golang v1.23.0
 	github.com/r3labs/diff v1.1.0
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9
@@ -401,4 +401,4 @@ replace github.com/pingcap/tipb => github.com/pingcap/tipb v0.0.0-20260605083900
 
 replace github.com/apache/arrow-go/v18 => github.com/joechenrh/arrow-go/v18 v18.0.0-20250911101656-62c34c9a3b82
 
-replace github.com/IBM/sarama v1.41.2 => github.com/pingcap/sarama v1.41.2-pingcap-20251202-x
+replace github.com/IBM/sarama v1.41.2 => github.com/pingcap/sarama v1.41.2-pingcap-20260508

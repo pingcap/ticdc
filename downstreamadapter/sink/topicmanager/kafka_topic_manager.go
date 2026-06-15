@@ -46,9 +46,6 @@ type kafkaTopicManager struct {
 	cfg   *kafka.AutoCreateTopicConfig
 
 	topics sync.Map
-
-	metaRefreshTicker *time.Ticker
-
 	// cancel is used to cancel the background goroutine.
 	cancel context.CancelFunc
 }
@@ -81,11 +78,10 @@ func newKafkaTopicManager(
 	cfg *kafka.AutoCreateTopicConfig,
 ) *kafkaTopicManager {
 	mgr := &kafkaTopicManager{
-		defaultTopic:      defaultTopic,
-		changefeedID:      changefeedID,
-		admin:             admin,
-		cfg:               cfg,
-		metaRefreshTicker: time.NewTicker(metaRefreshInterval),
+		defaultTopic: defaultTopic,
+		changefeedID: changefeedID,
+		admin:        admin,
+		cfg:          cfg,
 	}
 
 	ctx, mgr.cancel = context.WithCancel(ctx)
@@ -115,7 +111,7 @@ func (m *kafkaTopicManager) GetPartitionNum(
 }
 
 func (m *kafkaTopicManager) backgroundRefreshMeta(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(metaRefreshInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -126,8 +122,6 @@ func (m *kafkaTopicManager) backgroundRefreshMeta(ctx context.Context) {
 			)
 			return
 		case <-ticker.C:
-			m.admin.Heartbeat()
-		case <-m.metaRefreshTicker.C:
 			// We ignore the error here, because the error may be caused by the
 			// network problem, and we can try to get the metadata next time.
 			topicPartitionNums, _ := m.fetchAllTopicsPartitionsNum(ctx)
