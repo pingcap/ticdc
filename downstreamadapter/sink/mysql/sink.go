@@ -70,19 +70,23 @@ type Sink struct {
 	activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 }
 
-// Verify is used to verify the sink uri and config is valid
-// Currently, we verify by create a real mysql connection.
+// Verify is used to verify the sink URI and config are valid.
+// It creates the same DML and control DB pools as New so verification covers
+// connection availability for both data and control-plane paths.
 func Verify(
 	ctx context.Context,
 	uri *url.URL,
 	config *config.ChangefeedConfig,
 ) error {
 	testID := common.NewChangefeedID4Test("test", "mysql_create_sink_test")
-	_, db, err := mysql.NewMysqlConfigAndDB(ctx, testID, uri, config)
+	_, dmlDB, controlDB, err := mysql.NewMysqlConfigAndDBs(ctx, testID, uri, config)
 	if err != nil {
 		return err
 	}
-	_ = db.Close()
+	_ = dmlDB.Close()
+	if controlDB != dmlDB {
+		_ = controlDB.Close()
+	}
 	return nil
 }
 
