@@ -30,7 +30,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
@@ -1440,7 +1440,7 @@ func TestAddTableCheckpointBlockerCleanedOnLocalErrors(t *testing.T) {
 			name: "flush error",
 			hook: func(mockSink *dispatcherTestSink) {
 				mockSink.SetFlushBeforeBlockHook(func(commonEvent.BlockEvent) error {
-					return cerrors.ErrDispatcherFailed.GenWithStackByArgs("flush failed")
+					return errors.ErrDispatcherFailed.GenWithStackByArgs("flush failed")
 				})
 			},
 		},
@@ -1448,7 +1448,7 @@ func TestAddTableCheckpointBlockerCleanedOnLocalErrors(t *testing.T) {
 			name: "write error",
 			hook: func(mockSink *dispatcherTestSink) {
 				mockSink.SetWriteBlockEventHook(func(commonEvent.BlockEvent) error {
-					return cerrors.ErrDispatcherFailed.GenWithStackByArgs("write failed")
+					return errors.ErrDispatcherFailed.GenWithStackByArgs("write failed")
 				})
 			},
 		},
