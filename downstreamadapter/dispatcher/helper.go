@@ -85,32 +85,43 @@ type BlockEventIdentifier struct {
 // DDLs are waiting for maintainer ACK. A small map keeps deletion idempotent
 // for duplicate ACK and local error cleanup paths.
 type addTableCheckpointBlocker struct {
-	mutex sync.Mutex
-	m     map[BlockEventIdentifier]uint64
+	mutex       sync.Mutex
+	m           map[BlockEventIdentifier]struct{}
+	minCommitTs atomic.Uint64
 }
 
 func newAddTableCheckpointBlocker() *addTableCheckpointBlocker {
 	return &addTableCheckpointBlocker{
-		m: make(map[BlockEventIdentifier]uint64),
+		m: make(map[BlockEventIdentifier]struct{}),
 	}
 }
 
-func (b *addTableCheckpointBlocker) add(identifier BlockEventIdentifier, blockTs uint64) {
+func (b *addTableCheckpointBlocker) add(identifier BlockEventIdentifier) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
-	b.m[identifier] = blockTs
+	minCommitTs := b.minCommitTs.Load()
+	if minCommitTs == 0 || identifier.CommitTs < minCommitTs {
+		// Checkpoint readers only look at minCommitTs, so publish the cap
+		// before making the pending blocker visible in the map.
+		b.minCommitTs.Store(identifier.CommitTs)
+	}
+	b.m[identifier] = struct{}{}
 }
 
 func (b *addTableCheckpointBlocker) remove(identifier BlockEventIdentifier) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
+	if _, ok := b.m[identifier]; !ok {
+		return
+	}
 	delete(b.m, identifier)
+	if identifier.CommitTs == b.minCommitTs.Load() {
+		b.minCommitTs.Store(b.minCommitTsLocked())
+	}
 }
 
 func (b *addTableCheckpointBlocker) empty() bool {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-	return len(b.m) == 0
+	return b.minCommitTs.Load() == 0
 }
 
 func (b *addTableCheckpointBlocker) len() int {
@@ -120,22 +131,21 @@ func (b *addTableCheckpointBlocker) len() int {
 }
 
 func (b *addTableCheckpointBlocker) capCheckpointTs(checkpointTs uint64) uint64 {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-	if len(b.m) == 0 {
+	minCommitTs := b.minCommitTs.Load()
+	if minCommitTs == 0 {
 		return checkpointTs
 	}
+	return min(checkpointTs, minCommitTs-1)
+}
 
+func (b *addTableCheckpointBlocker) minCommitTsLocked() uint64 {
 	var minBlockTs uint64
-	for _, blockTs := range b.m {
-		if minBlockTs == 0 || blockTs < minBlockTs {
-			minBlockTs = blockTs
+	for identifier := range b.m {
+		if minBlockTs == 0 || identifier.CommitTs < minBlockTs {
+			minBlockTs = identifier.CommitTs
 		}
 	}
-	if minBlockTs == 0 {
-		return 0
-	}
-	return min(checkpointTs, minBlockTs-1)
+	return minBlockTs
 }
 
 type BlockEventStatus struct {

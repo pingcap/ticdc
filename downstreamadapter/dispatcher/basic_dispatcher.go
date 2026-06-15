@@ -186,7 +186,8 @@ type BasicDispatcher struct {
 
 	// addTableCheckpointBlocker caps the table-trigger checkpoint after an
 	// add-table DDL is flushed locally and before maintainer ACK confirms that
-	// the new table has joined checkpoint calculation.
+	// the new table has joined checkpoint calculation. It is nil for ordinary
+	// table/span dispatchers to keep checkpoint reads allocation and lock free.
 	addTableCheckpointBlocker *addTableCheckpointBlocker
 
 	// resendTaskMap is store all the resend task of ddl/sync point event current.
@@ -252,28 +253,30 @@ func NewBasicDispatcher(
 	sharedInfo *SharedInfo,
 ) *BasicDispatcher {
 	dispatcher := &BasicDispatcher{
-		id:                        id,
-		tableSpan:                 tableSpan,
-		isCompleteTable:           common.IsCompleteSpan(tableSpan),
-		startTs:                   startTs,
-		skipSyncpointAtStartTs:    skipSyncpointAtStartTs,
-		skipDMLAsStartTs:          skipDMLAsStartTs,
-		sharedInfo:                sharedInfo,
-		eventCollectorBatchCount:  eventCollectorBatchCount,
-		eventCollectorBatchBytes:  eventCollectorBatchBytes,
-		sink:                      sink,
-		componentStatus:           newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
-		isRemoving:                atomic.Bool{},
-		duringHandleEvents:        atomic.Bool{},
-		blockEventStatus:          BlockEventStatus{blockPendingEvent: nil},
-		tableProgress:             NewTableProgress(),
-		addTableCheckpointBlocker: newAddTableCheckpointBlocker(),
-		schemaID:                  schemaID,
-		schemaIDToDispatchers:     schemaIDToDispatchers,
-		resendTaskMap:             newResendTaskMap(),
-		creationPDTs:              currentPDTs,
-		mode:                      mode,
-		BootstrapState:            BootstrapFinished,
+		id:                       id,
+		tableSpan:                tableSpan,
+		isCompleteTable:          common.IsCompleteSpan(tableSpan),
+		startTs:                  startTs,
+		skipSyncpointAtStartTs:   skipSyncpointAtStartTs,
+		skipDMLAsStartTs:         skipDMLAsStartTs,
+		sharedInfo:               sharedInfo,
+		eventCollectorBatchCount: eventCollectorBatchCount,
+		eventCollectorBatchBytes: eventCollectorBatchBytes,
+		sink:                     sink,
+		componentStatus:          newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
+		isRemoving:               atomic.Bool{},
+		duringHandleEvents:       atomic.Bool{},
+		blockEventStatus:         BlockEventStatus{blockPendingEvent: nil},
+		tableProgress:            NewTableProgress(),
+		schemaID:                 schemaID,
+		schemaIDToDispatchers:    schemaIDToDispatchers,
+		resendTaskMap:            newResendTaskMap(),
+		creationPDTs:             currentPDTs,
+		mode:                     mode,
+		BootstrapState:           BootstrapFinished,
+	}
+	if dispatcher.IsTableTriggerDispatcher() {
+		dispatcher.addTableCheckpointBlocker = newAddTableCheckpointBlocker()
 	}
 	dispatcher.resolvedTs.Store(startTs)
 
@@ -522,7 +525,10 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 		checkpointTs = max(checkpointTs, d.GetResolvedTs())
 	}
 
-	return d.addTableCheckpointBlocker.capCheckpointTs(checkpointTs)
+	if d.addTableCheckpointBlocker != nil {
+		return d.addTableCheckpointBlocker.capCheckpointTs(checkpointTs)
+	}
+	return checkpointTs
 }
 
 // updateDispatcherStatusToWorking updates the dispatcher status to working and adds it to status dynamic stream
@@ -970,6 +976,22 @@ func (d *BasicDispatcher) shouldHoldBlockEvent(event commonEvent.BlockEvent) boo
 		blockedTables.InfluenceType != commonEvent.InfluenceTypeNormal
 }
 
+func hasTableScheduleChanges(
+	needAddedTables []commonEvent.Table,
+	needDroppedTables *commonEvent.InfluencedTables,
+) bool {
+	if len(needAddedTables) > 0 {
+		return true
+	}
+	if needDroppedTables == nil {
+		return false
+	}
+	// Normal drop-table payloads must name at least one table. DB/All payloads
+	// carry their scope outside TableIDs, so a non-nil value is meaningful there.
+	return needDroppedTables.InfluenceType != commonEvent.InfluenceTypeNormal ||
+		len(needDroppedTables.TableIDs) > 0
+}
+
 // DealWithBlockEvent handles DDL and sync-point events.
 //
 // The event goes through one of three paths:
@@ -996,12 +1018,8 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	needAddedTables := event.GetNeedAddedTables()
 	needDroppedTables := event.GetNeedDroppedTables()
 	hasNeedAddedTables := len(needAddedTables) > 0
-	// Normal drop-table payloads must name at least one table. DB/All payloads
-	// carry their scope outside TableIDs, so a non-nil value is meaningful there.
-	hasNeedDroppedTables := needDroppedTables != nil &&
-		(needDroppedTables.InfluenceType != commonEvent.InfluenceTypeNormal || len(needDroppedTables.TableIDs) > 0)
-	noNeedAddAndDrop := !hasNeedAddedTables && !hasNeedDroppedTables
-	needsScheduleACKTracking := !shouldBlock && d.IsTableTriggerDispatcher() && !noNeedAddAndDrop
+	hasScheduleTableChanges := hasTableScheduleChanges(needAddedTables, needDroppedTables)
+	needsScheduleACKTracking := !shouldBlock && d.IsTableTriggerDispatcher() && hasScheduleTableChanges
 	needsAddTableCheckpointBlocker := !shouldBlock && d.IsTableTriggerDispatcher() && hasNeedAddedTables
 	identifier := BlockEventIdentifier{
 		CommitTs:    event.GetCommitTs(),
@@ -1015,7 +1033,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	if needsAddTableCheckpointBlocker {
 		// Install the blocker before the async task can be delayed, otherwise
 		// heartbeat reporting may observe this DDL without the checkpoint cap.
-		d.addTableCheckpointBlocker.add(identifier, event.GetCommitTs())
+		d.addTableCheckpointBlocker.add(identifier)
 	}
 	// Writing a block event may involve downstream IO (e.g. executing DDL), so it must not block
 	// the dynamic stream goroutine.
@@ -1052,7 +1070,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			d.HandleError(err)
 			return
 		}
-		if noNeedAddAndDrop {
+		if !hasScheduleTableChanges {
 			return
 		}
 
@@ -1102,7 +1120,9 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 }
 
 func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
-	d.addTableCheckpointBlocker.remove(identifier)
+	if d.addTableCheckpointBlocker != nil {
+		d.addTableCheckpointBlocker.remove(identifier)
+	}
 	task := d.resendTaskMap.Get(identifier)
 	if task == nil {
 		return
@@ -1254,9 +1274,10 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	failpoint.Inject("NotReadyToCloseDispatcher", func() {
 		failpoint.Return(w, false)
 	})
+	addTableCheckpointBlockerEmpty := d.addTableCheckpointBlocker == nil || d.addTableCheckpointBlocker.empty()
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
-	if !d.sink.IsNormal() || (d.tableProgress.Empty() && d.addTableCheckpointBlocker.empty() && !d.duringHandleEvents.Load()) {
+	if !d.sink.IsNormal() || (d.tableProgress.Empty() && addTableCheckpointBlockerEmpty && !d.duringHandleEvents.Load()) {
 		w.CheckpointTs = d.GetCheckpointTs()
 		w.ResolvedTs = d.GetResolvedTs()
 
@@ -1273,13 +1294,17 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		)
 		return w, true
 	}
+	addTableCheckpointBlockerLen := 0
+	if d.addTableCheckpointBlocker != nil {
+		addTableCheckpointBlockerLen = d.addTableCheckpointBlocker.len()
+	}
 	log.Info("dispatcher is not ready to close",
 		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("mode", d.mode),
 		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
 		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
-		zap.Int("addTableCheckpointBlockerLen", d.addTableCheckpointBlocker.len()),
+		zap.Int("addTableCheckpointBlockerLen", addTableCheckpointBlockerLen),
 		zap.Int("tableProgressLen", d.tableProgress.Len()),
 		zap.Uint64("tableProgressMaxCommitTs", d.tableProgress.MaxCommitTs())) // check whether continue receive new events.
 	return w, false

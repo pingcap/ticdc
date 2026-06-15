@@ -87,6 +87,63 @@ func ackBlockEvent(dispatcher *EventDispatcher, commitTs uint64) {
 	})
 }
 
+func TestHasTableScheduleChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		needAddedTables   []commonEvent.Table
+		needDroppedTables *commonEvent.InfluencedTables
+		expected          bool
+	}{
+		{
+			name:     "no add drop payload",
+			expected: false,
+		},
+		{
+			name:            "empty add payload",
+			needAddedTables: make([]commonEvent.Table, 0),
+			expected:        false,
+		},
+		{
+			name:            "non empty add payload",
+			needAddedTables: []commonEvent.Table{{SchemaID: 1, TableID: 1}},
+			expected:        true,
+		},
+		{
+			name: "empty normal drop payload",
+			needDroppedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+			},
+			expected: false,
+		},
+		{
+			name: "non empty normal drop payload",
+			needDroppedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				TableIDs:      []int64{1},
+			},
+			expected: true,
+		},
+		{
+			name: "db drop payload",
+			needDroppedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeDB,
+			},
+			expected: true,
+		},
+		{
+			name: "all drop payload",
+			needDroppedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeAll,
+			},
+			expected: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.expected, hasTableScheduleChanges(tc.needAddedTables, tc.needDroppedTables))
+		})
+	}
+}
+
 func newTestSharedInfo(
 	enableActiveActive bool,
 	enableSplittableCheck bool,
