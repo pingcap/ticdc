@@ -20,7 +20,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore"
 )
 
 // ConsistentConfig represents replication consistency config for a changefeed.
@@ -32,6 +32,7 @@ type ConsistentConfig struct {
 	Level *string `toml:"level" json:"level,omitempty"`
 	// MaxLogSize is the max size(MiB) of a log file written by redo log.
 	// Default is 64MiB.
+	// It also controls the redo default event collector batch bytes.
 	MaxLogSize *int64 `toml:"max-log-size" json:"max-log-size,omitempty"`
 	// FlushIntervalInMs is the flush interval(ms) of redo log to flush log to storage.
 	// Default is 2000ms.
@@ -40,6 +41,9 @@ type ConsistentConfig struct {
 	// flush meta(resolvedTs and checkpointTs) to storage.
 	// Default is 200ms.
 	MetaFlushIntervalInMs *int64 `toml:"meta-flush-interval" json:"meta-flush-interval,omitempty"`
+	// EventCollectorBatchCount overrides redo event collector batch count.
+	// If unset, redo uses the sink-derived default.
+	EventCollectorBatchCount *int `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
 	// EncodingWorkerNum is the number of workers to encode `RowChangeEvent`` to redo log.
 	// Default is 16.
 	EncodingWorkerNum *int `toml:"encoding-worker-num" json:"encoding-worker-num,omitempty"`
@@ -107,6 +111,15 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 				util.GetOrZero(c.MetaFlushIntervalInMs), redo.MinFlushIntervalInMs))
 	}
 
+	if c.EventCollectorBatchCount != nil {
+		if *c.EventCollectorBatchCount < 0 {
+			return errors.ErrInvalidReplicaConfig.FastGenByArgs("consistent.event-collector-batch-count must be set not smaller than 0")
+		}
+		if *c.EventCollectorBatchCount > MaxEventCollectorBatchCount {
+			return errors.ErrInvalidReplicaConfig.FastGenByArgs("consistent.event-collector-batch-count must be set not larger than %d", MaxEventCollectorBatchCount)
+		}
+	}
+
 	compressionType := util.GetOrZero(c.Compression)
 	if len(compressionType) == 0 {
 		compressionType = compression.None
@@ -125,7 +138,7 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 		c.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
 	}
 
-	uri, err := storage.ParseRawURL(util.GetOrZero(c.Storage))
+	uri, err := objstore.ParseRawURL(util.GetOrZero(c.Storage))
 	if err != nil {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
 			fmt.Sprintf("invalid storage uri: %s", util.GetOrZero(c.Storage)))

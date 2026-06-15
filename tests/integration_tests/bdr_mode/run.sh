@@ -37,6 +37,7 @@ function run() {
 
 	run_sql_file $CUR/data/finished.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
+	# syncpoint table should exists in secondary tidb, but does not exists in primary cluster
 	check_table_exists "tidb_cdc.syncpoint_v1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
 	check_table_exists "tidb_cdc.syncpoint_v1" ${UP_TIDB_HOST} ${UP_TIDB_PORT} 60
 

@@ -63,12 +63,12 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	// The authenticateMiddleware will retire the KeyspaceMeta from the context,
 	// which is set by the keyspaceCheckerMiddleware.
 	// Therefore, the The authenticateMiddleware must be called after the keyspaceCheckerMiddleware.
-	changefeedGroup.POST("", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.CreateChangefeed)
+	changefeedGroup.POST("", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("create"), keyspaceCheckerMiddleware, authenticateMiddleware, api.CreateChangefeed)
 	changefeedGroup.GET("", coordinatorMiddleware, keyspaceCheckerMiddleware, api.ListChangeFeeds)
-	changefeedGroup.PUT("/:changefeed_id", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.UpdateChangefeed)
-	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.ResumeChangefeed)
-	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.PauseChangefeed)
-	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.DeleteChangefeed)
+	changefeedGroup.PUT("/:changefeed_id", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("update"), keyspaceCheckerMiddleware, authenticateMiddleware, api.UpdateChangefeed)
+	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("resume"), keyspaceCheckerMiddleware, authenticateMiddleware, api.ResumeChangefeed)
+	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("pause"), keyspaceCheckerMiddleware, authenticateMiddleware, api.PauseChangefeed)
+	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("delete"), keyspaceCheckerMiddleware, authenticateMiddleware, api.DeleteChangefeed)
 	changefeedGroup.GET("/:changefeed_id/status", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.status)
 	changefeedGroup.GET("/:changefeed_id/synced", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.synced)
 

@@ -32,7 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
@@ -44,7 +44,7 @@ type ddlWriter struct {
 
 	cfg        *writer.Config
 	op         *writer.LogWriterOptions
-	extStorage storage.ExternalStorage
+	extStorage storeapi.Storage
 	uuidGen    uuid.Generator
 
 	tableSchema *commonEvent.TableSchemaStore
@@ -162,7 +162,7 @@ func (l *ddlWriter) closeMetrics() {
 }
 
 func (l *ddlWriter) multiPartUpload(ctx context.Context, fileName string, data []byte) error {
-	multipartWrite, err := l.extStorage.Create(ctx, fileName, &storage.WriterOption{
+	multipartWrite, err := l.extStorage.Create(ctx, fileName, &storeapi.WriterOption{
 		Concurrency: l.cfg.FlushConcurrency(),
 	})
 	if err != nil {

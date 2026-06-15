@@ -110,7 +110,7 @@ func (b *decoder) HasNext() (common.MessageType, bool) {
 	err := b.parser.ReadRow()
 	if err != nil {
 		b.closed = true
-		if errors.Cause(err) == io.EOF {
+		if errors.Is(errors.Cause(err), io.EOF) {
 			return common.MessageTypeUnknown, false
 		}
 		log.Panic("read csv row failed", zap.Error(err))
@@ -239,7 +239,7 @@ func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableI
 		e.RowTypes = append(e.RowTypes, commonType.RowTypeInsert)
 	}
 	e.Rows = chk
-	e.Length += 1
+	e.Length++
 	return e, nil
 }
 

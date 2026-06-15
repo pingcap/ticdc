@@ -19,6 +19,6 @@ func (l *LogCoordinatorBroadcastRequest) Marshal() ([]byte, error) {
 	return nil, nil
 }
 
-func (l *LogCoordinatorBroadcastRequest) Unmarshal(data []byte) error {
+func (l *LogCoordinatorBroadcastRequest) Unmarshal(_ []byte) error {
 	return nil
 }

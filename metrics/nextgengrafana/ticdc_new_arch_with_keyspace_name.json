@@ -2337,6 +2337,78 @@
         },
         {
           "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Downstream type of each changefeed. For MySQL-compatible sinks, it shows \"mysql/tidb\" unless the downstream is confirmed to be TiDB.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": null,
+                "filterable": true
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 26
+          },
+          "id": 62043,
+          "options": {
+            "showHeader": true,
+            "sortBy": []
+          },
+          "pluginVersion": "7.5.17",
+          "targets": [
+            {
+              "expr": "label_replace(max by (keyspace_name, changefeed) (ticdc_sink_changefeed_downstream_is_tidb{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}), \"downstream_type\", \"tidb\", \"__name__\", \".*\") or (max by (keyspace_name, changefeed, downstream_type) (ticdc_owner_changefeed_downstream_info{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) unless on (keyspace_name, changefeed) max by (keyspace_name, changefeed) (ticdc_sink_changefeed_downstream_is_tidb{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}))",
+              "format": "time_series",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Changefeed Downstream Type",
+          "transformations": [
+            {
+              "id": "labelsToFields",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Metric": true,
+                  "Time": true,
+                  "Value": true,
+                  "__name__": true
+                },
+                "indexByName": {
+                  "changefeed": 1,
+                  "downstream_type": 2,
+                  "keyspace_name": 0
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Current warning or failed reason of each changefeed. The metric message is normalized to a single line and truncated to 256 characters.",
           "fieldConfig": {
             "defaults": {
@@ -2408,6 +2480,18 @@
                     "value": 180
                   }
                 ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "error_time"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 180
+                  }
+                ]
               }
             ]
           },
@@ -2415,7 +2499,7 @@
             "h": 8,
             "w": 24,
             "x": 0,
-            "y": 26
+            "y": 34
           },
           "id": 62010,
           "options": {
@@ -2425,7 +2509,7 @@
           "pluginVersion": "7.5.17",
           "targets": [
             {
-              "expr": "max by (keyspace_name, changefeed, state, code, message) (ticdc_owner_changefeed_error_info{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"})",
+              "expr": "max by (keyspace_name, changefeed, state, code, error_time, message) (ticdc_owner_changefeed_error_info{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"})",
               "format": "time_series",
               "instant": true,
               "refId": "A"
@@ -2447,13 +2531,188 @@
                   "__name__": true
                 },
                 "indexByName": {
-                  "changefeed": 1,
-                  "code": 3,
-                  "message": 4,
                   "keyspace_name": 0,
-                  "state": 2
+                  "changefeed": 1,
+                  "state": 2,
+                  "error_time": 3,
+                  "code": 4,
+                  "message": 5
                 },
                 "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Recent user initiated changefeed mutations retained in memory on the coordinator for oncall investigation. Use TiCDC logs for durable history beyond the latest 100 operations.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": null,
+                "filterable": false
+              },
+              "links": [],
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "keyspace_name"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 120
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "changefeed"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 180
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "operation_time"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 180
+                  },
+                  {
+                    "id": "unit",
+                    "value": "dateTimeAsIso"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "operation"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 100
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "result"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 90
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "username"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 120
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "details"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 320
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 42
+          },
+          "id": 62042,
+          "options": {
+            "showHeader": true,
+            "sortBy": [
+              {
+                "displayName": "operation_time",
+                "desc": true
+              }
+            ]
+          },
+          "pluginVersion": "7.5.17",
+          "targets": [
+            {
+              "expr": "max by (keyspace_name, changefeed, operation, result, username, details, error, event_id) (ticdc_owner_changefeed_operation_time{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"})",
+              "format": "time_series",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Changefeed Operation History",
+          "transformations": [
+            {
+              "id": "labelsToFields",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Metric": true,
+                  "Time": true,
+                  "__name__": true,
+                  "event_id": true
+                },
+                "indexByName": {
+                  "keyspace_name": 0,
+                  "changefeed": 1,
+                  "Value": 2,
+                  "operation": 3,
+                  "result": 4,
+                  "username": 5,
+                  "details": 6,
+                  "error": 7
+                },
+                "renameByName": {
+                  "Value": "operation_time"
+                }
               }
             }
           ],
@@ -11488,7 +11747,7 @@
     ]
   },
   "timezone": "browser",
-  "title": "test-cluster-TiCDC-New-Arch",
+  "title": "${DS_TEST-CLUSTER}-TiCDC-New-Arch-KeyspaceName",
   "uid": "lGT5hED6vqTn",
-  "version": 40
+  "version": 41
 }

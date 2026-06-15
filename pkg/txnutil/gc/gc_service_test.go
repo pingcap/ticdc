@@ -30,6 +30,9 @@ import (
 
 func TestCheckSafetyOfStartTs(t *testing.T) {
 	t.Parallel()
+	if !kerneltype.IsClassic() && kerneltype.UseLegacySafePointInNextGen {
+		t.Skip("GC Barrier path is disabled with legacy_safepoint tag")
+	}
 
 	pdCli := &mockPdClientForServiceGCSafePoint{
 		serviceSafePoint: make(map[string]uint64),
@@ -224,15 +227,35 @@ func (m *mockGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID stri
 	return pdgc.NewGCBarrierInfo(barrierID, barrierTS, 0, time.Now()), nil
 }
 
-func (m *mockGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+func (m *mockGCStatesClient) GetGCState(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
 	gcBarriers := make([]*pdgc.GCBarrierInfo, 0, len(m.parent.gcBarriers))
 	for id, ts := range m.parent.gcBarriers {
 		gcBarriers = append(gcBarriers, pdgc.NewGCBarrierInfo(id, ts, 0, time.Now()))
 	}
 
-	return pdgc.GCState{
-		KeyspaceID:   m.keyspaceID,
-		TxnSafePoint: m.parent.txnSafePoint,
-		GCBarriers:   gcBarriers,
-	}, nil
+	return pdgc.NewGCStateWithGCBarriers(m.keyspaceID, m.parent.txnSafePoint, 0, gcBarriers), nil
+}
+
+func (m *mockGCStatesClient) SetGlobalGCBarrier(
+	ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return nil, errors.New("SetGlobalGCBarrier is not supported by mockGCStatesClient")
+}
+
+func (m *mockGCStatesClient) DeleteGlobalGCBarrier(
+	ctx context.Context, barrierID string,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return nil, errors.New("DeleteGlobalGCBarrier is not supported by mockGCStatesClient")
+}
+
+func (m *mockGCStatesClient) GetAllKeyspacesGCStates(
+	ctx context.Context, opts ...pdgc.GCStatesAPIOption,
+) (pdgc.ClusterGCStates, error) {
+	gcState, err := m.GetGCState(ctx, opts...)
+	if err != nil {
+		return pdgc.ClusterGCStates{}, err
+	}
+	return pdgc.NewClusterGCStatesWithoutGlobalGCBarriers(map[uint32]pdgc.GCState{
+		m.keyspaceID: gcState,
+	}), nil
 }

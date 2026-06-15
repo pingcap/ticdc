@@ -256,7 +256,21 @@ func (c *coordinator) handleStateChange(
 		log.Warn("changefeed not found", zap.String("changefeed", event.changefeedID.String()))
 		return nil
 	}
-	cfInfo, err := cf.GetInfo().Clone()
+	currentInfo := cf.GetInfo()
+	if currentInfo == nil {
+		log.Warn("changefeed info is nil, skip state change",
+			zap.String("changefeed", event.changefeedID.String()),
+			zap.String("state", string(event.state)))
+		return nil
+	}
+	if isUnchangedRuntimeState(currentInfo, event.state, event.err) {
+		log.Debug("skip persisting unchanged changefeed runtime state",
+			zap.String("changefeed", event.changefeedID.String()),
+			zap.String("state", string(event.state)))
+		return nil
+	}
+
+	cfInfo, err := currentInfo.Clone()
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -279,6 +293,7 @@ func (c *coordinator) handleStateChange(
 		c.controller.updateChangefeedEpoch(ctx, event.changefeedID)
 		c.controller.moveChangefeedToSchedulingQueue(event.changefeedID, false, false)
 	case config.StateFailed, config.StateFinished:
+		failpoint.Inject("BlockBeforeStopChangefeed", func() {})
 		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
 	default:
 	}
@@ -408,6 +423,14 @@ func (c *coordinator) ListChangefeeds(ctx context.Context, keyspace string) ([]*
 
 func (c *coordinator) GetChangefeed(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error) {
 	return c.controller.GetChangefeed(ctx, changefeedDisplayName)
+}
+
+func (c *coordinator) GetPersistedChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error) {
+	return c.controller.GetPersistedChangefeedInfo(ctx, id)
+}
+
+func (c *coordinator) DrainNode(ctx context.Context, target node.ID) (int, error) {
+	return c.controller.DrainNode(ctx, target)
 }
 
 func (c *coordinator) Initialized() bool {

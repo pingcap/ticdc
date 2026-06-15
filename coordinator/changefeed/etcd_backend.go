@@ -124,6 +124,21 @@ func (b *EtcdBackend) GetAllChangefeeds(ctx context.Context) (map[common.ChangeF
 	return cfMap, nil
 }
 
+// GetChangefeedInfo returns the latest persisted changefeed info from etcd.
+func (b *EtcdBackend) GetChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error) {
+	info, err := b.etcdClient.GetChangeFeedInfo(ctx, id.DisplayName)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	// Old metadata may not embed ChangefeedID in the value. Keep the backend
+	// lookup key as the source of truth so callers can safely use the returned
+	// info for validation and in-memory replacement.
+	if info.ChangefeedID.Name() == "" {
+		info.ChangefeedID = id
+	}
+	return info, nil
+}
+
 func (b *EtcdBackend) CreateChangefeed(ctx context.Context,
 	info *config.ChangeFeedInfo,
 ) error {
@@ -248,17 +263,25 @@ func (b *EtcdBackend) DeleteChangefeed(ctx context.Context,
 	return nil
 }
 
+// ResumeChangefeed persists a resumed changefeed and returns the metadata used by the caller.
 func (b *EtcdBackend) ResumeChangefeed(ctx context.Context,
 	id common.ChangeFeedID, newCheckpointTs uint64,
-) error {
-	info, err := b.etcdClient.GetChangeFeedInfo(ctx, id.DisplayName)
+) (*config.ChangeFeedInfo, error) {
+	info, err := b.GetChangefeedInfo(ctx, id)
 	if err != nil {
-		return errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
+	// Legacy stopped changefeeds can contain sparse metadata that was completed
+	// during coordinator bootstrap. Complete it again before persisting the
+	// resumed state so backend-loaded metadata does not drop compatibility defaults.
+	if info.Config == nil {
+		info.Config = config.GetDefaultReplicaConfig()
+	}
+	info.VerifyAndComplete()
 	info.State = config.StateNormal
 	newStr, err := info.Marshal()
 	if err != nil {
-		return errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 	infoKey := etcd.GetEtcdKeyChangeFeedInfo(b.etcdClient.GetClusterID(), id.DisplayName)
 	opsThen := []clientv3.Op{
@@ -267,13 +290,13 @@ func (b *EtcdBackend) ResumeChangefeed(ctx context.Context,
 	if newCheckpointTs > 0 {
 		status, _, err := b.etcdClient.GetChangeFeedStatus(ctx, id)
 		if err != nil {
-			return errors.Trace(err)
+			return nil, errors.Trace(err)
 		}
 		status.CheckpointTs = newCheckpointTs
 		status.Progress = config.ProgressNone
 		jobValue, err := status.Marshal()
 		if err != nil {
-			return errors.Trace(err)
+			return nil, errors.Trace(err)
 		}
 		jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), id.DisplayName)
 		opsThen = append(opsThen, clientv3.OpPut(jobKey, jobValue))
@@ -281,13 +304,13 @@ func (b *EtcdBackend) ResumeChangefeed(ctx context.Context,
 
 	putResp, err := b.etcdClient.GetEtcdClient().Txn(ctx, nil, opsThen, []clientv3.Op{})
 	if err != nil {
-		return errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 	if !putResp.Succeeded {
 		err = cerror.ErrMetaOpFailed.GenWithStackByArgs(fmt.Sprintf("resume changefeed %s", info.ChangefeedID.Name()))
-		return errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
-	return nil
+	return info, nil
 }
 
 func (b *EtcdBackend) SetChangefeedProgress(ctx context.Context, id common.ChangeFeedID, progress config.Progress) error {

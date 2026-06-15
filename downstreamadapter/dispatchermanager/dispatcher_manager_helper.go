@@ -64,7 +64,7 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 		return &heartbeatpb.TableSpanStatus{
 			ID:                 id.ToPB(),
 			ComponentStatus:    heartBeatInfo.ComponentStatus,
-			CheckpointTs:       heartBeatInfo.Watermark.CheckpointTs,
+			CheckpointTs:       heartBeatInfo.CheckpointTs,
 			EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
 			Mode:               dispatcherItem.GetMode(),
 		}, nil, &heartBeatInfo.Watermark

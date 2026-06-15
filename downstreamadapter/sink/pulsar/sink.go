@@ -89,13 +89,33 @@ func New(
 		sinkConfig,
 		comp,
 		protocol,
-		func(changefeedID commonType.ChangeFeedID, comp component, failpointCh chan error) (dmlProducer, error) {
-			return newDMLProducers(changefeedID, comp, failpointCh)
-		},
-		func(changefeedID commonType.ChangeFeedID, comp component, sinkConfig *config.SinkConfig) (ddlProducer, error) {
-			return newDDLProducers(changefeedID, comp, sinkConfig)
-		},
+		newPulsarDMLProducer,
+		newPulsarDDLProducer,
 	)
+}
+
+func newPulsarDMLProducer(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	failpointCh chan error,
+) (dmlProducer, error) {
+	producer, err := newDMLProducers(changefeedID, comp, failpointCh)
+	if err != nil {
+		return nil, err
+	}
+	return producer, nil
+}
+
+func newPulsarDDLProducer(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	sinkConfig *config.SinkConfig,
+) (ddlProducer, error) {
+	producer, err := newDDLProducers(changefeedID, comp, sinkConfig)
+	if err != nil {
+		return nil, err
+	}
+	return producer, nil
 }
 
 func newWithComponent(
@@ -110,6 +130,7 @@ func newWithComponent(
 	var (
 		dmlProducer dmlProducer
 		ddlProducer ddlProducer
+		statistics  *metrics.Statistics
 	)
 	defer func() {
 		if err != nil {
@@ -119,12 +140,15 @@ func newWithComponent(
 			if dmlProducer != nil {
 				dmlProducer.close()
 			}
+			if statistics != nil {
+				statistics.Close()
+			}
 			comp.close()
 		}
 	}()
 
 	failpointCh := make(chan error, 1)
-	statistics := metrics.NewStatistics(changefeedID, "pulsar")
+	statistics = metrics.NewStatistics(changefeedID, "pulsar")
 	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
 	if err != nil {
 		return nil, err
@@ -469,7 +493,7 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 
 // batch collects a batch of messages from w.msgChan into buffer.
 // Note: It will block until at least one message is received.
-func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) ([]*commonEvent.MQRowEvent, error) {
+func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, _ *time.Ticker) ([]*commonEvent.MQRowEvent, error) {
 	// We need to receive at least one message or be interrupted,
 	// otherwise it will lead to idling.
 	select {
@@ -569,7 +593,7 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 	return s.tableSchemaStore.GetAllTableNames(ts, true)
 }
 
-func (s *sink) Close(_ bool) {
+func (s *sink) Close() {
 	s.ddlProducer.close()
 	s.dmlProducer.close()
 	s.comp.close()

@@ -45,22 +45,17 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 	config.Metadata.Retry.Max = 10
 	config.Metadata.Retry.Backoff = 200 * time.Millisecond
 	config.Metadata.Timeout = 2 * time.Minute
-	// The kafka server side connections.max.idle.ms default value is 10 minutes.
-	// it will close the connection if idle for too long.
-	// so we need to refresh the metadata frequently to avoid the connection being closed by server,
-	// and then trigger the `fetching metadata: write broken pipe` error, it's annoying.
-	config.Metadata.RefreshFrequency = 9 * time.Minute
-
 	config.Admin.Retry.Max = 10
 	config.Admin.Retry.Backoff = 200 * time.Millisecond
 	// This timeout control the request timeout for each admin request.
 	// set it as the read timeout.
 	config.Admin.Timeout = 10 * time.Second
 
-	// According to the https://github.com/IBM/sarama/issues/2619,
-	// sarama may send message out of order even set the `config.Net.MaxOpenRequest` to 1,
-	// when the kafka cluster is unhealthy and trigger the internal retry mechanism.
-	config.Producer.Retry.Max = 0
+	// Keep a bounded producer retry budget to tolerate transient broker-side
+	// connection failures such as stale connections or broken pipe errors.
+	// The PingCAP Sarama fork includes the partition-muting ordering fix, while
+	// Net.MaxOpenRequests=1 below remains an extra ordering guard.
+	config.Producer.Retry.Max = o.MaxRetry
 	config.Producer.Retry.Backoff = 100 * time.Millisecond
 
 	// make sure sarama producer flush messages as soon as possible.

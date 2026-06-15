@@ -408,51 +408,68 @@ func createDispatcherByInfo(
 	if len(redoInfos) > 0 {
 		err := dispatcherManager.newRedoDispatchers(redoInfos, false)
 		if err != nil {
+			if IsWritePathClosedError(err) {
+				log.Info("dispatcher manager write path closed, keep add operators for redo dispatchers",
+					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+					zap.Int("count", len(redoInfos)),
+					zap.Error(err),
+				)
+				return
+			}
 			dispatcherManager.handleError(context.Background(), err)
 		}
-		for _, info := range redoInfos {
-			// Create requests are stored in currentOperatorMap before creation and should be deleted once the dispatcher is created.
-			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
-				req := v.(SchedulerDispatcherRequest)
-				if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
-					log.Debug("delete current working add operator for redo dispatcher",
-						zap.String("changefeedID", dispatcherManager.changefeedID.String()),
-						zap.String("dispatcherID", info.Id.String()),
-						zap.Any("operator", req),
-					)
-					dispatcherManager.currentOperatorMap.Delete(info.Id)
-				}
-			}
-		}
+		deleteCreatedOperators(dispatcherManager, redoInfos, dispatcherManager.redoDispatcherMap, "redo dispatcher")
 	}
 	if len(infos) > 0 {
 		err := dispatcherManager.newEventDispatchers(infos, false)
 		if err != nil {
+			if IsWritePathClosedError(err) {
+				log.Info("dispatcher manager write path closed, keep add operators",
+					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+					zap.Int("count", len(infos)),
+					zap.Error(err),
+				)
+				return
+			}
 			dispatcherManager.handleError(context.Background(), err)
 		}
-		for _, info := range infos {
-			// Create requests are stored in currentOperatorMap before creation and should be deleted once the dispatcher is created.
-			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
-				req := v.(SchedulerDispatcherRequest)
-				if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
-					log.Debug("delete current working add operator",
-						zap.String("changefeedID", dispatcherManager.changefeedID.String()),
-						zap.String("dispatcherID", info.Id.String()),
-						zap.Any("operator", req),
-					)
-					dispatcherManager.currentOperatorMap.Delete(info.Id)
-				}
+		deleteCreatedOperators(dispatcherManager, infos, dispatcherManager.dispatcherMap, "dispatcher")
+	}
+}
+
+func deleteCreatedOperators[T dispatcher.Dispatcher](
+	dispatcherManager *DispatcherManager,
+	infos map[common.DispatcherID]dispatcherCreateInfo,
+	dispatcherMap *DispatcherMap[T],
+	dispatcherKind string,
+) {
+	for _, info := range infos {
+		if _, exists := dispatcherMap.Get(info.Id); !exists {
+			continue
+		}
+		// Create requests are stored in currentOperatorMap before creation and
+		// should be deleted only after the dispatcher is actually created.
+		if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
+			req := v.(SchedulerDispatcherRequest)
+			if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
+				log.Debug("delete current working add operator",
+					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+					zap.String("dispatcherID", info.Id.String()),
+					zap.String("dispatcherKind", dispatcherKind),
+					zap.Any("operator", req),
+				)
+				dispatcherManager.currentOperatorMap.Delete(info.Id)
 			}
 		}
 	}
 }
 
-func (h *SchedulerDispatcherRequestHandler) GetSize(event SchedulerDispatcherRequest) int { return 0 }
-func (h *SchedulerDispatcherRequestHandler) IsPaused(event SchedulerDispatcherRequest) bool {
+func (h *SchedulerDispatcherRequestHandler) GetSize(_ SchedulerDispatcherRequest) int { return 0 }
+func (h *SchedulerDispatcherRequestHandler) IsPaused(_ SchedulerDispatcherRequest) bool {
 	return false
 }
 
-func (h *SchedulerDispatcherRequestHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *SchedulerDispatcherRequestHandler) GetArea(_ common.GID, _ *DispatcherManager) int {
 	return 0
 }
 
@@ -460,7 +477,7 @@ func (h *SchedulerDispatcherRequestHandler) GetMetricLabel(dest *DispatcherManag
 	return dest.changefeedID.String()
 }
 
-func (h *SchedulerDispatcherRequestHandler) GetTimestamp(event SchedulerDispatcherRequest) dynstream.Timestamp {
+func (h *SchedulerDispatcherRequestHandler) GetTimestamp(_ SchedulerDispatcherRequest) dynstream.Timestamp {
 	return 0
 }
 
@@ -553,7 +570,7 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 
 func (h *HeartBeatResponseHandler) GetSize(event HeartBeatResponse) int   { return 0 }
 func (h *HeartBeatResponseHandler) IsPaused(event HeartBeatResponse) bool { return false }
-func (h *HeartBeatResponseHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *HeartBeatResponseHandler) GetArea(_ common.GID, _ *DispatcherManager) int {
 	return 0
 }
 
@@ -602,14 +619,14 @@ func (h *CheckpointTsMessageHandler) Handle(dispatcherManager *DispatcherManager
 	}
 	if dispatcherManager.GetTableTriggerEventDispatcher() != nil {
 		checkpointTsMessage := messages[0]
-		dispatcherManager.sink.AddCheckpointTs(checkpointTsMessage.CheckpointTs)
+		dispatcherManager.addCheckpointTs(checkpointTsMessage.CheckpointTs)
 	}
 	return false
 }
 
 func (h *CheckpointTsMessageHandler) GetSize(event CheckpointTsMessage) int   { return 0 }
 func (h *CheckpointTsMessageHandler) IsPaused(event CheckpointTsMessage) bool { return false }
-func (h *CheckpointTsMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *CheckpointTsMessageHandler) GetArea(_ common.GID, _ *DispatcherManager) int {
 	return 0
 }
 
@@ -663,7 +680,7 @@ func (h *RedoResolvedTsForwardMessageHandler) Handle(dispatcherManager *Dispatch
 	msg := messages[0]
 	ok := dispatcherManager.SetRedoResolvedTs(msg.ResolvedTs)
 	if ok {
-		dispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
+		dispatcherManager.dispatcherMap.ForEach(func(_ common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
 			dispatcher.HandleCacheEvents()
 		})
 	}
@@ -678,7 +695,7 @@ func (h *RedoResolvedTsForwardMessageHandler) IsPaused(event RedoResolvedTsForwa
 	return false
 }
 
-func (h *RedoResolvedTsForwardMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *RedoResolvedTsForwardMessageHandler) GetArea(_ common.GID, _ *DispatcherManager) int {
 	return 0
 }
 
@@ -738,7 +755,7 @@ func (h *RedoMetaMessageHandler) Handle(dispatcherManager *DispatcherManager, me
 
 func (h *RedoMetaMessageHandler) GetSize(event RedoMetaMessage) int   { return 0 }
 func (h *RedoMetaMessageHandler) IsPaused(event RedoMetaMessage) bool { return false }
-func (h *RedoMetaMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *RedoMetaMessageHandler) GetArea(_ common.GID, _ *DispatcherManager) int {
 	return 0
 }
 
@@ -803,7 +820,7 @@ func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherMana
 
 func (h *MergeDispatcherRequestHandler) GetSize(event MergeDispatcherRequest) int   { return 0 }
 func (h *MergeDispatcherRequestHandler) IsPaused(event MergeDispatcherRequest) bool { return false }
-func (h *MergeDispatcherRequestHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *MergeDispatcherRequestHandler) GetArea(_ common.GID, _ *DispatcherManager) int {
 	return 0
 }
 

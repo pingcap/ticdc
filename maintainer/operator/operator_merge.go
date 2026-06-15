@@ -65,8 +65,8 @@ type MergeDispatcherOperator struct {
 func buildMergedSpanInfo(toMergedSpans []*heartbeatpb.TableSpan) string {
 	var spansInfo strings.Builder
 	for _, span := range toMergedSpans {
-		spansInfo.WriteString(fmt.Sprintf("[%s,%s,%d]",
-			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey), span.TableID))
+		fmt.Fprintf(&spansInfo, "[%s,%s,%d]",
+			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey), span.TableID)
 	}
 	return spansInfo.String()
 }
