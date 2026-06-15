@@ -40,7 +40,7 @@ type Admin struct {
 	activeRoutes map[TableKey]RouteBinding
 
 	// pendingQueue and pendingTransitions keep route-affecting DDL transitions in
-	// commit order. A later route transition can be prechecked only after every
+	// commit order. A later route transition can be validated only after every
 	// earlier route transition has been applied to the admission snapshot.
 	pendingQueue       []uint64
 	pendingTransitions map[uint64]*routeTransition
@@ -77,7 +77,6 @@ type routeTransition struct {
 	releases       []TableKey
 	releaseSchemas []string
 	admits         []RouteBinding
-	prechecked     bool
 }
 
 // NewAdmin creates a table route admin when table route is enabled.
@@ -149,15 +148,11 @@ func (a *Admin) Precheck(commitTs uint64, admissions []Admission) bool {
 	if len(a.pendingQueue) == 0 || a.pendingQueue[0] != commitTs {
 		return false
 	}
-	if transition.prechecked {
-		return true
-	}
 	err := a.applyTransition(transition, false)
 	if err != nil {
 		a.fail(err)
 		return false
 	}
-	transition.prechecked = true
 	return true
 }
 

@@ -103,6 +103,34 @@ func TestAdminSerializesPendingTransitions(t *testing.T) {
 	require.Equal(t, TableKey{Schema: "db3_target", Table: "t"}, binding.Target)
 }
 
+func TestAdminRechecksTransitionAfterEarlierApply(t *testing.T) {
+	admin := newAdminForTest(t, routeAllTo("target", "t"))
+
+	later := []Admission{
+		release("db1", "t"),
+		admit("db2", "t", "target", "t"),
+	}
+	require.True(t, admin.Precheck(20, later))
+
+	earlier := []Admission{
+		release("db1", "t"),
+		admit("db3", "t", "target", "t"),
+	}
+	require.True(t, admin.Precheck(10, earlier))
+	require.True(t, admin.Apply(10, earlier))
+
+	var reportedErr error
+	admin.SetErrorReporter(func(err error) {
+		reportedErr = err
+	})
+
+	require.False(t, admin.Precheck(20, later))
+	require.NotNil(t, reportedErr)
+	require.Contains(t, reportedErr.Error(), "source `db3`.`t`")
+	require.Contains(t, reportedErr.Error(), "source `db2`.`t`")
+	require.Contains(t, reportedErr.Error(), "target `target`.`t`")
+}
+
 func TestAdminIgnoresAlreadyAppliedTransitions(t *testing.T) {
 	tests := []struct {
 		name  string
