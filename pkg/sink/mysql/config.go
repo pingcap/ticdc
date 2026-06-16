@@ -92,8 +92,8 @@ const (
 
 	slowQuery = 5 * time.Second
 
-	dmlDBExtraConns       = 10
-	defaultControlDBConns = 4
+	dmlDBPrepareExtraConns = 1
+	defaultControlDBConns  = 4
 )
 
 type Config struct {
@@ -435,8 +435,11 @@ func newMysqlConfigAndDB(
 }
 
 func configureDMLDBConn(db *sql.DB, cfg *Config) {
-	db.SetMaxIdleConns(cfg.WorkerCount + dmlDBExtraConns)
-	db.SetMaxOpenConns(cfg.WorkerCount + dmlDBExtraConns)
+	// Keep one spare DML connection so db.Prepare on a statement-cache miss
+	// cannot wait behind all writer-owned transaction sessions. Control-plane
+	// work uses a separate pool.
+	db.SetMaxIdleConns(cfg.WorkerCount + dmlDBPrepareExtraConns)
+	db.SetMaxOpenConns(cfg.WorkerCount + dmlDBPrepareExtraConns)
 	forceSingleConnectionForTest(db)
 }
 

@@ -258,6 +258,19 @@ func TestConfigureControlDBConn(t *testing.T) {
 	require.Equal(t, 1, db.Stats().MaxOpenConnections)
 }
 
+func TestConfigureDMLDBConn(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	cfg := New()
+	cfg.WorkerCount = 3
+	configureDMLDBConn(db, cfg)
+
+	require.Equal(t, cfg.WorkerCount+dmlDBPrepareExtraConns, db.Stats().MaxOpenConnections)
+	require.Equal(t, 4, db.Stats().MaxOpenConnections)
+}
+
 func TestApplySinkURIParamsToConfig(t *testing.T) {
 	t.Parallel()
 

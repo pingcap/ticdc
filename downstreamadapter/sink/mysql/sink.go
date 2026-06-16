@@ -50,8 +50,10 @@ type Sink struct {
 	// enableActiveActive is false.
 	progressTableWriter *mysql.ProgressTableWriter
 
-	dmlDB      *sql.DB
-	controlDB  *sql.DB
+	// ownedDBs contains the DB pools this sink is responsible for closing.
+	// Production sinks own separate DML and control pools, while compatibility
+	// callers built through NewMySQLSink own a single shared pool.
+	ownedDBs   []*sql.DB
 	statistics *metrics.Statistics
 
 	conflictDetector *causality.ConflictDetector
@@ -84,9 +86,7 @@ func Verify(
 		return err
 	}
 	_ = dmlDB.Close()
-	if controlDB != dmlDB {
-		_ = controlDB.Close()
-	}
+	_ = controlDB.Close()
 	return nil
 }
 
@@ -124,7 +124,7 @@ func NewMySQLSink(
 	enableActiveActive bool,
 	progressInterval time.Duration,
 ) *Sink {
-	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, db, db, bdrMode, enableActiveActive, progressInterval)
+	return newMySQLSinkWithOwnedDBs(ctx, changefeedID, cfg, db, db, []*sql.DB{db}, bdrMode, enableActiveActive, progressInterval)
 }
 
 // newMySQLSinkWithControlDB creates a MySQL sink with separate pools for DML and
@@ -137,6 +137,23 @@ func newMySQLSinkWithControlDB(
 	cfg *mysql.Config,
 	dmlDB *sql.DB,
 	controlDB *sql.DB,
+	bdrMode bool,
+	enableActiveActive bool,
+	progressInterval time.Duration,
+) *Sink {
+	return newMySQLSinkWithOwnedDBs(
+		ctx, changefeedID, cfg, dmlDB, controlDB,
+		[]*sql.DB{dmlDB, controlDB},
+		bdrMode, enableActiveActive, progressInterval)
+}
+
+func newMySQLSinkWithOwnedDBs(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	cfg *mysql.Config,
+	dmlDB *sql.DB,
+	controlDB *sql.DB,
+	ownedDBs []*sql.DB,
 	bdrMode bool,
 	enableActiveActive bool,
 	progressInterval time.Duration,
@@ -162,8 +179,7 @@ func newMySQLSinkWithControlDB(
 
 	result := &Sink{
 		changefeedID: changefeedID,
-		dmlDB:        dmlDB,
-		controlDB:    controlDB,
+		ownedDBs:     ownedDBs,
 		dmlWriter:    make([]*mysql.Writer, cfg.WorkerCount),
 		statistics:   stat,
 		conflictDetector: causality.New(defaultConflictDetectorSlots,
@@ -432,15 +448,11 @@ func (s *Sink) Close() {
 		w.Close()
 	}
 
-	if err := s.dmlDB.Close(); err != nil {
-		log.Warn("close mysql sink dml db meet error",
-			zap.Any("changefeed", s.changefeedID.String()),
-			zap.Error(err))
-	}
-	if s.controlDB != s.dmlDB {
-		if err := s.controlDB.Close(); err != nil {
-			log.Warn("close mysql sink control db meet error",
+	for idx, db := range s.ownedDBs {
+		if err := db.Close(); err != nil {
+			log.Warn("close mysql sink db pool meet error",
 				zap.Any("changefeed", s.changefeedID.String()),
+				zap.Int("dbIndex", idx),
 				zap.Error(err))
 		}
 	}
