@@ -14,12 +14,10 @@
 package util
 
 import (
+	stderrors "errors"
 	"net"
 	"net/url"
 	"strings"
-
-	"github.com/pingcap/log"
-	"go.uber.org/zap"
 )
 
 // IsValidIPv6AddressFormatInURI reports whether hostPort is a valid IPv6 address in URI.
@@ -70,7 +68,6 @@ func validOptionalPort(port string) bool {
 func MaskSinkURI(uri string) (string, error) {
 	uriParsed, err := url.Parse(uri)
 	if err != nil {
-		log.Error("failed to parse sink URI", zap.Error(err))
 		return "", err
 	}
 	queries := uriParsed.Query()
@@ -99,7 +96,6 @@ var sensitiveQueryParameterNames = []string{
 func MaskSensitiveDataInURI(uri string) string {
 	uriParsed, err := url.Parse(uri)
 	if err != nil {
-		log.Error("failed to parse sink URI", zap.Error(err))
 		return ""
 	}
 	queries := uriParsed.Query()
@@ -113,4 +109,26 @@ func MaskSensitiveDataInURI(uri string) string {
 	}
 	uriParsed.RawQuery = queries.Encode()
 	return uriParsed.Redacted()
+}
+
+// MaskSensitiveDataInURIForError masks sensitive data in a URI for error messages.
+func MaskSensitiveDataInURIForError(uri string) string {
+	maskedURI := MaskSensitiveDataInURI(uri)
+	if maskedURI == "" && uri != "" {
+		return "<invalid uri>"
+	}
+	return maskedURI
+}
+
+// MaskSensitiveDataInURLError masks the URL carried by net/url errors.
+func MaskSensitiveDataInURLError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var urlErr *url.Error
+	if !stderrors.As(err, &urlErr) {
+		return err
+	}
+	urlErr.URL = MaskSensitiveDataInURIForError(urlErr.URL)
+	return err
 }
