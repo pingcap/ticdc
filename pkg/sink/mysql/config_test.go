@@ -259,6 +259,11 @@ func TestConfigureControlDBConn(t *testing.T) {
 }
 
 func TestConfigureDMLDBConn(t *testing.T) {
+	require.NoError(t, failpoint.Enable("github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkForceSingleConnection", "return(true)"))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable("github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkForceSingleConnection"))
+	})
+
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -267,6 +272,9 @@ func TestConfigureDMLDBConn(t *testing.T) {
 	cfg.WorkerCount = 3
 	configureDMLDBConn(db, cfg)
 
+	// The DDL timestamp failpoint is scoped to the control pool. DML writers must
+	// keep their worker-based pool size so table-level DDLs are not blocked by
+	// unflushed DML events.
 	require.Equal(t, cfg.WorkerCount+dmlDBPrepareExtraConns, db.Stats().MaxOpenConnections)
 	require.Equal(t, 4, db.Stats().MaxOpenConnections)
 }

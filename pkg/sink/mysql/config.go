@@ -440,18 +440,18 @@ func configureDMLDBConn(db *sql.DB, cfg *Config) {
 	// work uses a separate pool.
 	db.SetMaxIdleConns(cfg.WorkerCount + dmlDBPrepareExtraConns)
 	db.SetMaxOpenConns(cfg.WorkerCount + dmlDBPrepareExtraConns)
-	forceSingleConnectionForTest(db)
 }
 
 func configureControlDBConn(db *sql.DB) {
 	db.SetMaxIdleConns(defaultControlDBConns)
 	db.SetMaxOpenConns(defaultControlDBConns)
-	forceSingleConnectionForTest(db)
+	forceControlDBSingleConnectionForTest(db)
 }
 
-func forceSingleConnectionForTest(db *sql.DB) {
-	// DDL timestamp tests rely on this failpoint forcing every MySQL sink pool
-	// onto one session so session-variable leakage is deterministic.
+func forceControlDBSingleConnectionForTest(db *sql.DB) {
+	// DDL timestamp tests rely on this failpoint forcing the DDL writer to reuse
+	// one downstream session so session-variable leakage is deterministic. Keep
+	// it scoped to the control pool so DML writers can still flush before DDLs.
 	failpoint.Inject("MySQLSinkForceSingleConnection", func() {
 		db.SetMaxIdleConns(1)
 		db.SetMaxOpenConns(1)
