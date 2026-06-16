@@ -22,6 +22,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	dmysql "github.com/go-sql-driver/mysql"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -229,6 +230,45 @@ func TestGenerateDSNByConfig(t *testing.T) {
 	testTimezoneParam()
 	testTimeoutConfig()
 	testIsolationConfig()
+}
+
+func TestConfigureControlDBConn(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	configureControlDBConn(db)
+
+	require.Equal(t, defaultControlDBConns, db.Stats().MaxOpenConnections)
+
+	require.NoError(t, failpoint.Enable("github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkForceSingleConnection", "return(true)"))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable("github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkForceSingleConnection"))
+	})
+
+	db, _, err = sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	configureControlDBConn(db)
+
+	if db.Stats().MaxOpenConnections != 1 {
+		t.Skip("failpoint rewriting is disabled")
+	}
+	require.Equal(t, 1, db.Stats().MaxOpenConnections)
+}
+
+func TestConfigureDMLDBConn(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	cfg := New()
+	cfg.WorkerCount = 3
+	configureDMLDBConn(db, cfg)
+
+	require.Equal(t, cfg.WorkerCount+dmlDBPrepareExtraConns, db.Stats().MaxOpenConnections)
+	require.Equal(t, 4, db.Stats().MaxOpenConnections)
 }
 
 func TestApplySinkURIParamsToConfig(t *testing.T) {

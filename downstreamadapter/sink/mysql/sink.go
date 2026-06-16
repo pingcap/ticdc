@@ -50,7 +50,10 @@ type Sink struct {
 	// enableActiveActive is false.
 	progressTableWriter *mysql.ProgressTableWriter
 
-	db         *sql.DB
+	// ownedDBs contains the DB pools this sink is responsible for closing.
+	// Production sinks own separate DML and control pools, while compatibility
+	// callers built through NewMySQLSink own a single shared pool.
+	ownedDBs   []*sql.DB
 	statistics *metrics.Statistics
 
 	conflictDetector *causality.ConflictDetector
@@ -69,19 +72,21 @@ type Sink struct {
 	activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 }
 
-// Verify is used to verify the sink uri and config is valid
-// Currently, we verify by create a real mysql connection.
+// Verify is used to verify the sink URI and config are valid.
+// It creates the same DML and control DB pools as New so verification covers
+// connection availability for both data and control-plane paths.
 func Verify(
 	ctx context.Context,
 	uri *url.URL,
 	config *config.ChangefeedConfig,
 ) error {
 	testID := common.NewChangefeedID4Test("test", "mysql_create_sink_test")
-	_, db, err := mysql.NewMysqlConfigAndDB(ctx, testID, uri, config)
+	_, dmlDB, controlDB, err := mysql.NewMysqlConfigAndDBs(ctx, testID, uri, config)
 	if err != nil {
 		return err
 	}
-	_ = db.Close()
+	_ = dmlDB.Close()
+	_ = controlDB.Close()
 	return nil
 }
 
@@ -91,7 +96,7 @@ func New(
 	config *config.ChangefeedConfig,
 	sinkURI *url.URL,
 ) (*Sink, error) {
-	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
+	cfg, dmlDB, controlDB, err := mysql.NewMysqlConfigAndDBs(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +112,7 @@ func New(
 		metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
 	}
 
-	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
+	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
 }
 
 func NewMySQLSink(
@@ -119,11 +124,45 @@ func NewMySQLSink(
 	enableActiveActive bool,
 	progressInterval time.Duration,
 ) *Sink {
+	return newMySQLSinkWithOwnedDBs(ctx, changefeedID, cfg, db, db, []*sql.DB{db}, bdrMode, enableActiveActive, progressInterval)
+}
+
+// newMySQLSinkWithControlDB creates a MySQL sink with separate pools for DML and
+// control-plane operations. The control pool is used by DDL, DDL-ts, syncpoint,
+// and active-active progress metadata paths so they do not wait behind long-lived
+// DML sessions.
+func newMySQLSinkWithControlDB(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	cfg *mysql.Config,
+	dmlDB *sql.DB,
+	controlDB *sql.DB,
+	bdrMode bool,
+	enableActiveActive bool,
+	progressInterval time.Duration,
+) *Sink {
+	return newMySQLSinkWithOwnedDBs(
+		ctx, changefeedID, cfg, dmlDB, controlDB,
+		[]*sql.DB{dmlDB, controlDB},
+		bdrMode, enableActiveActive, progressInterval)
+}
+
+func newMySQLSinkWithOwnedDBs(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	cfg *mysql.Config,
+	dmlDB *sql.DB,
+	controlDB *sql.DB,
+	ownedDBs []*sql.DB,
+	bdrMode bool,
+	enableActiveActive bool,
+	progressInterval time.Duration,
+) *Sink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
 
 	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {
-		supported, err := mysql.CheckActiveActiveSyncStatsSupported(ctx, db)
+		supported, err := mysql.CheckActiveActiveSyncStatsSupported(ctx, dmlDB)
 		if err != nil {
 			log.Info("failed to check tidb_cdc_active_active_sync_stats support, disable metric collection",
 				zap.String("keyspace", changefeedID.Keyspace()),
@@ -140,7 +179,7 @@ func NewMySQLSink(
 
 	result := &Sink{
 		changefeedID: changefeedID,
-		db:           db,
+		ownedDBs:     ownedDBs,
 		dmlWriter:    make([]*mysql.Writer, cfg.WorkerCount),
 		statistics:   stat,
 		conflictDetector: causality.New(defaultConflictDetectorSlots,
@@ -158,11 +197,11 @@ func NewMySQLSink(
 		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
-		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat, activeActiveSyncStatsCollector)
+		result.dmlWriter[i] = mysql.NewWriter(ctx, i, dmlDB, cfg, changefeedID, stat, activeActiveSyncStatsCollector)
 	}
-	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), db, cfg, changefeedID, stat, nil)
+	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), controlDB, cfg, changefeedID, stat, nil)
 	if enableActiveActive {
-		result.progressTableWriter = mysql.NewProgressTableWriter(ctx, db, changefeedID, cfg.MaxTxnRow, progressInterval)
+		result.progressTableWriter = mysql.NewProgressTableWriter(ctx, controlDB, changefeedID, cfg.MaxTxnRow, progressInterval)
 	}
 	return result
 }
@@ -409,10 +448,13 @@ func (s *Sink) Close() {
 		w.Close()
 	}
 
-	if err := s.db.Close(); err != nil {
-		log.Warn("close mysql sink db meet error",
-			zap.Any("changefeed", s.changefeedID.String()),
-			zap.Error(err))
+	for idx, db := range s.ownedDBs {
+		if err := db.Close(); err != nil {
+			log.Warn("close mysql sink db pool meet error",
+				zap.Any("changefeed", s.changefeedID.String()),
+				zap.Int("dbIndex", idx),
+				zap.Error(err))
+		}
 	}
 	if s.activeActiveSyncStatsCollector != nil {
 		s.activeActiveSyncStatsCollector.Close()

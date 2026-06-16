@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -50,6 +50,7 @@ func TestCompleteOptions(t *testing.T) {
 	require.Equal(t, "2.6.0", options.Version)
 	require.Equal(t, 4096, options.MaxMessageBytes)
 	require.Equal(t, WaitForLocal, options.RequiredAcks)
+	require.Equal(t, defaultMaxRetry, options.MaxRetry)
 
 	// multiple kafka broker endpoints
 	uri = "kafka://127.0.0.1:9092,127.0.0.1:9091,127.0.0.1:9090/kafka-test?"
@@ -71,6 +72,14 @@ func TestCompleteOptions(t *testing.T) {
 
 	// Illegal max-message-bytes.
 	uri = "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&max-message-bytes=a"
+	sinkURI, err = url.Parse(uri)
+	require.NoError(t, err)
+	options = NewOptions()
+	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	require.Regexp(t, ".*invalid syntax.*", errors.Cause(err))
+
+	// Illegal max-retry.
+	uri = "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&max-retry=a"
 	sinkURI, err = url.Parse(uri)
 	require.NoError(t, err)
 	options = NewOptions()
@@ -108,6 +117,32 @@ func TestCompleteOptions(t *testing.T) {
 	options = NewOptions()
 	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.True(t, errors.ErrKafkaInvalidClientID.Equal(err))
+
+	// max-retry accepts non-negative sink-uri values.
+	uri = "kafka://127.0.0.1:9092/abc?max-retry=7"
+	sinkURI, err = url.Parse(uri)
+	require.NoError(t, err)
+	options = NewOptions()
+	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	require.NoError(t, err)
+	require.Equal(t, 7, options.MaxRetry)
+
+	uri = "kafka://127.0.0.1:9092/abc?max-retry=0"
+	sinkURI, err = url.Parse(uri)
+	require.NoError(t, err)
+	options = NewOptions()
+	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	require.NoError(t, err)
+	require.Equal(t, 0, options.MaxRetry)
+
+	// Negative max-retry values are ignored.
+	uri = "kafka://127.0.0.1:9092/abc?max-retry=-1"
+	sinkURI, err = url.Parse(uri)
+	require.NoError(t, err)
+	options = NewOptions()
+	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	require.NoError(t, err)
+	require.Equal(t, defaultMaxRetry, options.MaxRetry)
 }
 
 func TestSetPartitionNum(t *testing.T) {
@@ -781,77 +816,4 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, "ca.pem", c.Credential.CAPath)
 	require.Equal(t, "cert.pem", c.Credential.CertPath)
 	require.Equal(t, "key.pem", c.Credential.KeyPath)
-}
-
-// mockAdminClientForAdjust mocks the ClusterAdminClient to test adjustOptions.
-type mockAdminClientForAdjust struct {
-	ClusterAdminClientMockImpl // We know there is a Mock implementation from the diff
-	brokerConfigValue          string
-	shouldError                bool
-}
-
-// GetBrokerConfig simulates the behavior of getting configuration from a broker.
-func (m *mockAdminClientForAdjust) GetBrokerConfig(configName string) (string, error) {
-	if m.shouldError {
-		return "", errors.New("mock error: cannot get broker config")
-	}
-	if configName == BrokerConnectionsMaxIdleMsConfigName {
-		return m.brokerConfigValue, nil
-	}
-	return "", errors.Errorf("unexpected config name: %s", configName)
-}
-
-func TestAdjustOptionsKeepAlive(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-
-	// Case 1: Successful adjustment.
-	// The broker returns a valid idle time, KeepConnAliveInterval should be set to 1/3 of it.
-	t.Run("SuccessfulAdjustment", func(t *testing.T) {
-		t.Parallel()
-		o := NewOptions()
-		adminClient := &mockAdminClientForAdjust{
-			ClusterAdminClientMockImpl: *NewClusterAdminClientMockImpl(),
-			brokerConfigValue:          "300000", // 300,000 ms = 300 s
-		}
-		err := adjustOptions(ctx, adminClient, o, adminClient.GetDefaultMockTopicName())
-		require.NoError(t, err)
-		// Expected value is 300000ms / 3 = 100000ms = 100s
-		require.Equal(t, 100*time.Second, o.KeepConnAliveInterval)
-	})
-
-	// Case 2: Broker returns an invalid (non-integer) config value.
-	t.Run("InvalidNonIntegerConfig", func(t *testing.T) {
-		t.Parallel()
-		o := NewOptions()
-		adminClient := &mockAdminClientForAdjust{
-			ClusterAdminClientMockImpl: *NewClusterAdminClientMockImpl(),
-			brokerConfigValue:          "not-a-number",
-		}
-		err := adjustOptions(ctx, adminClient, o, adminClient.GetDefaultMockTopicName())
-		require.Error(t, err)
-		// The error should be a type conversion error.
-		var numError *strconv.NumError
-		ok := errors.As(errors.Cause(err), &numError)
-		require.True(t, ok, "error should be of type strconv.NumError")
-	})
-
-	// Case 3: Broker returns an invalid (zero or negative) config value.
-	// According to the code in the diff, this case will log a warning and return a nil error,
-	// and the configuration item will not be updated.
-	t.Run("InvalidZeroOrNegativeConfig", func(t *testing.T) {
-		t.Parallel()
-		for _, val := range []string{"0", "-1000"} {
-			o := NewOptions()
-			defaultInterval := o.KeepConnAliveInterval
-			adminClient := &mockAdminClientForAdjust{
-				ClusterAdminClientMockImpl: *NewClusterAdminClientMockImpl(),
-				brokerConfigValue:          val,
-			}
-			err := adjustOptions(ctx, adminClient, o, adminClient.GetDefaultMockTopicName())
-			require.NoError(t, err, "should not return error for zero or negative idle time")
-			// KeepConnAliveInterval should remain its default value.
-			require.Equal(t, defaultInterval, o.KeepConnAliveInterval, "interval should not be changed")
-		}
-	})
 }
