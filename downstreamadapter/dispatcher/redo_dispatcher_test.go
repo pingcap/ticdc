@@ -14,7 +14,7 @@
 package dispatcher
 
 import (
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"sync/atomic"
 	"testing"
 	"time"

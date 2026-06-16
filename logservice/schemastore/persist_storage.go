@@ -360,7 +360,6 @@ func (p *persistentStorage) getTableInfo(tableID int64, ts uint64) (*common.Tabl
 }
 
 func (p *persistentStorage) forceGetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error) {
-	log.Info("forceGetTableInfo", zap.Int64("tableID", tableID), zap.Uint64("ts", ts))
 	p.mu.RLock()
 	// if there is already a store, it must contain all table info on disk, so we can use it directly
 	if store, ok := p.tableInfoStoreMap[tableID]; ok {
@@ -370,7 +369,9 @@ func (p *persistentStorage) forceGetTableInfo(tableID int64, ts uint64) (*common
 	p.mu.RUnlock()
 	// build a temp store to get table info
 	store := newEmptyVersionedTableInfoStore(tableID)
-	p.buildVersionedTableInfoStore(store)
+	if err := p.buildVersionedTableInfoStore(store); err != nil {
+		return nil, err
+	}
 	return store.getTableInfo(ts)
 }
 

@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -70,6 +71,11 @@ type Controller struct {
 
 	keyspaceMeta common.KeyspaceMeta
 	enableRedo   bool
+
+	// routeAdmin is initialized during bootstrap and shared with Barrier for
+	// route admission checks during DDL coordination.
+	routeAdmin  *routing.Admin
+	reportError func(error)
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -138,7 +144,14 @@ func NewController(changefeedID common.ChangeFeedID,
 	}
 }
 
-// HandleStatus handle the status report from the node
+func (c *Controller) SetErrorReporter(reportError func(error)) {
+	c.reportError = reportError
+	if c.routeAdmin != nil {
+		c.routeAdmin.SetErrorReporter(reportError)
+	}
+}
+
+// HandleStatus handle the status report from the node.
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
 	// HandleStatus reconciles runtime dispatcher reports with maintainer-side state.
 	//

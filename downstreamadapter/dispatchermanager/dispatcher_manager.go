@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
@@ -40,6 +39,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -699,11 +699,20 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 	delay := time.NewTimer(0)
 	defer delay.Stop()
 	enqueueBlockStatus := func(blockStatusMessage []*heartbeatpb.TableSpanBlockStatus, mode int64) {
-		var message heartbeatpb.BlockStatusRequest
-		message.ChangefeedID = e.changefeedID.ToPB()
-		message.BlockStatuses = blockStatusMessage
-		message.Mode = mode
-		e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+		// Split oversized batches so one protobuf message does not monopolize
+		// serialization, transport, and maintainer-side processing.
+		for start := 0; start < len(blockStatusMessage); start += maxBlockStatusesPerRequest {
+			end := min(start+maxBlockStatusesPerRequest, len(blockStatusMessage))
+			// Copy each chunk so queue-side in-place filtering owns the backing
+			// array and cannot mutate another batch's slice accidentally.
+			chunk := make([]*heartbeatpb.TableSpanBlockStatus, end-start)
+			copy(chunk, blockStatusMessage[start:end])
+			var message heartbeatpb.BlockStatusRequest
+			message.ChangefeedID = e.changefeedID.ToPB()
+			message.BlockStatuses = chunk
+			message.Mode = mode
+			e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+		}
 	}
 	for {
 		blockStatusMessage := make([]*heartbeatpb.TableSpanBlockStatus, 0)

@@ -131,7 +131,7 @@ func (e *encodingWorkerGroup) AddEvent(ctx context.Context, event writer.RedoEve
 	case <-ctx.Done():
 		return errors.Trace(context.Cause(ctx))
 	case err := <-e.closed:
-		return errors.ErrRedoWriterStopped.FastGenByArgs(err)
+		return errors.WrapError(errors.ErrRedoWriterStopped, err)
 	case e.inputChs[idx] <- event:
 	}
 	return nil
@@ -157,7 +157,7 @@ func (e *encodingWorkerGroup) runWorker(ctx context.Context, idx int) error {
 			case <-ctx.Done():
 				return errors.Trace(context.Cause(ctx))
 			case err := <-e.closed:
-				return errors.ErrRedoWriterStopped.FastGenByArgs(err)
+				return errors.WrapError(errors.ErrRedoWriterStopped, err)
 			case e.outputCh <- redoLogEvent:
 			}
 		}
