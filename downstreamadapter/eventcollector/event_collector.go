@@ -448,22 +448,36 @@ func (c *EventCollector) processDSFeedback(ctx context.Context) error {
 			return context.Cause(ctx)
 		case feedback := <-c.ds.Feedback():
 			if feedback.FeedbackType == dynstream.ReleasePath {
-				if v, ok := c.changefeedMap.Load(feedback.Area); ok {
-					v.(*changefeedStat).memoryReleaseCount.Add(1)
-				}
-				log.Info("release dispatcher memory in DS", zap.Any("dispatcherID", feedback.Path))
-				c.ds.Release(feedback.Path)
+				c.handleReleasePathFeedback(feedback, c.ds.Release, "DS")
 			}
 		case feedback := <-c.redoDs.Feedback():
 			if feedback.FeedbackType == dynstream.ReleasePath {
-				if v, ok := c.changefeedMap.Load(feedback.Area); ok {
-					v.(*changefeedStat).memoryReleaseCount.Add(1)
-				}
-				log.Info("release dispatcher memory in redo DS", zap.Any("dispatcherID", feedback.Path))
-				c.redoDs.Release(feedback.Path)
+				c.handleReleasePathFeedback(feedback, c.redoDs.Release, "redo DS")
 			}
 		}
 	}
+}
+
+func (c *EventCollector) handleReleasePathFeedback(
+	feedback dynstream.Feedback[common.GID, common.DispatcherID, *dispatcherStat],
+	release func(common.DispatcherID),
+	streamName string,
+) {
+	if v, ok := c.changefeedMap.Load(feedback.Area); ok {
+		v.(*changefeedStat).memoryReleaseCount.Add(1)
+	}
+	log.Info("release dispatcher memory in "+streamName, zap.Any("dispatcherID", feedback.Path))
+	release(feedback.Path)
+
+	stat := c.getDispatcherStatByID(feedback.Path)
+	if stat == nil {
+		return
+	}
+	log.Info("reset dispatcher after releasing queued events",
+		zap.Stringer("changefeedID", stat.target.GetChangefeedID()),
+		zap.Stringer("dispatcherID", feedback.Path),
+		zap.String("stream", streamName))
+	stat.session.resetCurrentEventService()
 }
 
 func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
