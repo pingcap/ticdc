@@ -1122,14 +1122,14 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 }
 
 func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
-	if d.addTableCheckpointBlocker != nil {
-		d.addTableCheckpointBlocker.remove(identifier)
-	}
 	task := d.resendTaskMap.Get(identifier)
 	if task == nil {
 		return
 	}
 
+	if d.addTableCheckpointBlocker != nil {
+		d.addTableCheckpointBlocker.remove(identifier)
+	}
 	task.Cancel()
 	d.resendTaskMap.Delete(identifier)
 

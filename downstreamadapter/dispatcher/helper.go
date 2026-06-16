@@ -83,8 +83,9 @@ type BlockEventIdentifier struct {
 }
 
 // addTableCheckpointBlocker caps the table-trigger checkpoint while add-table
-// DDLs are waiting for maintainer ACK. The list keeps add order, and the map
-// gives O(1) removal when ACKs arrive out of order.
+// DDLs are waiting for maintainer ACK. Block events for one dispatcher arrive
+// in commit-ts order, so the queue front is the smallest pending commitTs. The
+// map gives O(1) removal when ACKs arrive out of order.
 type addTableCheckpointBlocker struct {
 	mutex       sync.Mutex
 	pending     map[BlockEventIdentifier]*list.Element
