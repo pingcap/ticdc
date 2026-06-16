@@ -714,7 +714,7 @@ func newMaintainerForCheckpointCalculationTest(t testing.TB) (*Maintainer, node.
 		spanController:     spanController,
 		operatorController: operatorController,
 	}
-	controller.barrier = NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
+	controller.barrier = NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, nil)
 
 	bootstrapper := bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](
 		"test",
@@ -767,8 +767,8 @@ func newMaintainerForRedoCheckpointCalculationTest(t testing.TB) (*Maintainer, n
 		redoOperatorController: redoOperatorController,
 		enableRedo:             true,
 	}
-	controller.barrier = NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
-	controller.redoBarrier = NewBarrier(redoSpanController, redoOperatorController, false, nil, common.RedoMode)
+	controller.barrier = NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, nil)
+	controller.redoBarrier = NewBarrier(redoSpanController, redoOperatorController, false, nil, common.RedoMode, nil)
 
 	bootstrapper := bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](
 		"test",
