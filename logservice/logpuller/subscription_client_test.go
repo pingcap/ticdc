@@ -569,7 +569,6 @@ func TestErrCacheDispatchBatch(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
 func TestGCResolveLastRunMap(t *testing.T) {
 	now := time.Now()
 	resolveLastRun := make(map[uint64]time.Time, resolveLastRunGCThreshold+1)
@@ -588,11 +587,11 @@ func TestGCResolveLastRunMap(t *testing.T) {
 		_, ok := resolveLastRun[uint64(i)]
 		require.True(t, ok)
 	}
-=======
+}
+
 func TestGetResolvedTargetTs(t *testing.T) {
 	client := &subscriptionClient{
-		resolveLockTaskCh:      make(chan resolveLockTask, 10),
-		resolveLockRateLimiter: newResolveLockRateLimiter(),
+		resolveLockTaskCh: make(chan resolveLockTask, 10),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
@@ -677,5 +676,4 @@ func TestGetResolvedTargetTs(t *testing.T) {
 	targetTs5 := getResolvedTargetTs(span, localClockNow, currentTs)
 	require.Equal(t, uint64(0), targetTs5,
 		"targetTs should be 0 when currentTime - resolvedTime < resolveLockFence")
->>>>>>> 50cfdb0df (logservice: cap resolve lock target ts by PD tso (#5419))
 }
