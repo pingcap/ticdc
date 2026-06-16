@@ -459,6 +459,9 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	replicaConfig := &config.ChangefeedConfig{
 		SinkURI:    sinkURI.String(),
 		SinkConfig: &config.SinkConfig{},
+		// Redo apply runs without a CDC server instance, so use the default
+		// server timezone for the same sink URI validation as normal changefeeds.
+		TimeZone: config.GetGlobalServerConfig().TZ,
 	}
 	if ra.mysqlSink == nil {
 		ra.mysqlSink, err = mysql.New(egCtx, ra.rd.GetChangefeedID(), replicaConfig, sinkURI)
