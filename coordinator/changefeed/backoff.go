@@ -120,11 +120,27 @@ func (m *Backoff) resetErrRetry() {
 //
 // The method handles several cases:
 //  1. If the changefeed is marked as failed, returns Failed state
-//  2. If checkpoint has advanced (making progress), resets any retry attempts and returns Normal state
-//  3. If there are errors and checkpoint hasn't advanced, initiates the retry mechanism
+//  2. If a fast-fail error is reported, returns Failed state
+//  3. If checkpoint has advanced (making progress), resets any retry attempts and returns Normal state
+//  4. If there are errors and checkpoint hasn't advanced, initiates the retry mechanism
 func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, config.FeedState, *heartbeatpb.RunningError) {
 	if m.failed.Load() {
 		return false, config.StateFailed, nil
+	}
+
+	if err := findFastFailError(status.Err); err != nil {
+		if m.checkpointTs < status.CheckpointTs {
+			m.checkpointTs = status.CheckpointTs
+		}
+		log.Error("changefeed maintainer report a fast fail error",
+			zap.Stringer("changefeed", m.id),
+			zap.Uint64("checkpointTs", m.checkpointTs),
+			zap.String("node", err.Node),
+			zap.String("code", err.Code),
+			zap.String("state", string(config.StateFailed)),
+			zap.Any("error", err))
+		m.failed.Store(true)
+		return true, config.StateFailed, err
 	}
 
 	if m.checkpointTs < status.CheckpointTs {
@@ -182,16 +198,15 @@ func (m *Backoff) StartFinished() {
 
 // ShouldFailChangefeed return true if a running error contains a changefeed not retry error.
 func ShouldFailChangefeed(e *heartbeatpb.RunningError) bool {
+	if e == nil {
+		return false
+	}
 	return cerrors.ShouldFailChangefeed(errors.New(e.Message + e.Code))
 }
 
 func (m *Backoff) HandleError(errs []*heartbeatpb.RunningError) (bool, *heartbeatpb.RunningError) {
-	// if there are a fastFail error in errs, we can just fastFail the changefeed
-	for _, err := range errs {
-		if cerrors.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(err.Code)) ||
-			ShouldFailChangefeed(err) {
-			return true, err
-		}
+	if err := findFastFailError(errs); err != nil {
+		return true, err
 	}
 
 	lastError := errs[len(errs)-1]
@@ -224,4 +239,17 @@ func (m *Backoff) HandleError(errs []*heartbeatpb.RunningError) (bool, *heartbea
 		zap.Any("error", errs))
 	// patch the last error to changefeed info
 	return false, lastError
+}
+
+func findFastFailError(errs []*heartbeatpb.RunningError) *heartbeatpb.RunningError {
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		if cerrors.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(err.Code)) ||
+			ShouldFailChangefeed(err) {
+			return err
+		}
+	}
+	return nil
 }
