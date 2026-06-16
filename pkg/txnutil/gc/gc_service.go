@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
@@ -79,8 +80,9 @@ func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, 
 	if err != nil {
 		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
 	}
-	// When UseLegacySafePointInNextGen is true, the logic should follow the classic architecture
-	if kerneltype.UseLegacySafePointInNextGen {
+	// When legacy safepoint is enabled in next-gen, the logic should follow
+	// the classic architecture.
+	if useLegacySafePointInNextGen() {
 		if startTs > 0 && startTs < minServiceGCTs+1 {
 			return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
 		}
@@ -211,7 +213,7 @@ func setKeyspaceGCSafepoint(
 	ttl int64,
 	safePoint uint64,
 ) (uint64, error) {
-	if kerneltype.UseLegacySafePointInNextGen {
+	if useLegacySafePointInNextGen() {
 		if legacyCli, ok := pdCli.(pdgc.LegacyClientV2); ok {
 			return setServiceGCSafepointV2(ctx, legacyCli, keyspaceID, serviceID, ttl, safePoint)
 		}
@@ -227,7 +229,7 @@ func getKeyspaceGCSafepoint(
 	pdCli GCServiceClient,
 	keyspaceID uint32,
 ) (uint64, error) {
-	if kerneltype.UseLegacySafePointInNextGen {
+	if useLegacySafePointInNextGen() {
 		if legacyCli, ok := pdCli.(pdgc.LegacyClientV2); ok {
 			return getMinServiceGCSafepointV2(ctx, legacyCli, keyspaceID)
 		}
@@ -248,7 +250,7 @@ func deleteKeyspaceGCSafepoint(
 	keyspaceID uint32,
 	serviceID string,
 ) error {
-	if kerneltype.UseLegacySafePointInNextGen {
+	if useLegacySafePointInNextGen() {
 		if legacyCli, ok := pdCli.(pdgc.LegacyClientV2); ok {
 			return deleteServiceGCSafepointV2(ctx, legacyCli, keyspaceID, serviceID)
 		}
@@ -334,4 +336,8 @@ func UnifyDeleteGcSafepoint(ctx context.Context, pdCli GCServiceClient, keyspace
 		return removeServiceGCSafepoint(ctx, pdCli, serviceID)
 	}
 	return deleteKeyspaceGCSafepoint(ctx, pdCli, keyspaceID, serviceID)
+}
+
+func useLegacySafePointInNextGen() bool {
+	return !kerneltype.IsClassic() && config.GetGlobalServerConfig().EnableLegacySafePoint
 }

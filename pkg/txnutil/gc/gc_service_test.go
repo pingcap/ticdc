@@ -30,8 +30,8 @@ import (
 
 func TestCheckSafetyOfStartTs(t *testing.T) {
 	t.Parallel()
-	if !kerneltype.IsClassic() && kerneltype.UseLegacySafePointInNextGen {
-		t.Skip("GC Barrier path is disabled with legacy_safepoint tag")
+	if !kerneltype.IsClassic() && useLegacySafePointInNextGen() {
+		t.Skip("GC Barrier path is disabled when legacy safepoint is enabled")
 	}
 
 	pdCli := &mockPdClientForServiceGCSafePoint{
