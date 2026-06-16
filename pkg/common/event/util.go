@@ -153,15 +153,6 @@ func NewSinkTestEventFixture(t testing.TB, createTableSQL string, dmls ...string
 	}
 }
 
-// NewBasicSinkTestEventFixture creates a basic create-table plus two-row insert
-// fixture using EventTestHelper.
-func NewBasicSinkTestEventFixture(t testing.TB) *SinkTestEventFixture {
-	return NewSinkTestEventFixture(t,
-		"create table t (id int primary key, name varchar(32));",
-		"insert into t values (1, 'test')",
-		"insert into t values (2, 'test2');")
-}
-
 // NewDDLEvent returns a fresh DDL event from the fixture.
 func (f *SinkTestEventFixture) NewDDLEvent(
 	finishedTs uint64,
