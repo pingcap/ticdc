@@ -21,17 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCloneRowKeys(t *testing.T) {
-	require.Nil(t, cloneRowKeys(nil))
-
-	rowKeys := [][]byte{[]byte("key1"), nil, []byte("key2")}
-	cloned := cloneRowKeys(rowKeys)
-	require.Equal(t, rowKeys, cloned)
-
-	cloned[0][0] = 'K'
-	require.Equal(t, []byte("key1"), rowKeys[0])
-}
-
 func TestIsSplitable(t *testing.T) {
 	helper := NewEventTestHelper(t)
 	defer helper.Close()

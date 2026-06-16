@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewProducerConfig(t *testing.T) {
+func TestNewSaramaConfig(t *testing.T) {
 	options := NewOptions()
 	options.Version = "invalid"
 	options.IsAssignedVersion = true
@@ -85,7 +85,7 @@ func TestNewProducerConfig(t *testing.T) {
 	require.Equal(t, sarama.SASLMechanism("SCRAM-SHA-256"), cfg.Net.SASL.Mechanism)
 }
 
-func TestProducerConfigMaxRetryFromSinkURI(t *testing.T) {
+func TestNewSaramaConfigMaxRetryFromSinkURI(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -404,7 +404,7 @@ func TestApplyTLS(t *testing.T) {
 	}
 }
 
-func TestCompleteProducerSASLConfig(t *testing.T) {
+func TestCompleteSaramaSASLConfig(t *testing.T) {
 	t.Parallel()
 
 	// Test that SASL is turned on correctly.
@@ -438,7 +438,7 @@ func TestCompleteProducerSASLConfig(t *testing.T) {
 	require.NotNil(t, saramaConfig.Net.SASL.SCRAMClientGeneratorFunc)
 }
 
-func TestProducerTimeout(t *testing.T) {
+func TestSaramaTimeout(t *testing.T) {
 	options := NewOptions()
 	saramaConfig, err := newSaramaConfig(context.Background(), options)
 	require.NoError(t, err)
