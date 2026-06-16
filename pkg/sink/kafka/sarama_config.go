@@ -70,7 +70,7 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 	config.Net.ReadTimeout = o.ReadTimeout
 
 	config.Producer.Partitioner = sarama.NewManualPartitioner
-	config.Producer.MaxMessageBytes = o.MaxMessageBytes
+	config.Producer.MaxMessageBytes = o.ProducerMaxMessageBytes
 	config.Producer.Return.Successes = true
 	config.Producer.Return.Errors = true
 	config.Producer.RequiredAcks = sarama.RequiredAcks(o.RequiredAcks)

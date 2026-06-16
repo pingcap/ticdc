@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/IBM/sarama"
 	"github.com/gin-gonic/gin/binding"
 	"github.com/imdario/mergo"
 	"github.com/pingcap/errors"
@@ -40,13 +41,6 @@ const (
 	defaultPartitionNum = 3
 	// defaultMaxRetry is the default retry budget for Kafka producers.
 	defaultMaxRetry = 5
-
-	// the `max-message-bytes` is set equal to topic's `max.message.bytes`, and is used to check
-	// whether the message is larger than the max size limit. It's found some message pass the message
-	// size limit check at the client side and failed at the broker side since message enlarged during
-	// the network transmission. so we set the `max-message-bytes` to a smaller value to avoid this problem.
-	// maxMessageBytesOverhead is used to reduce the `max-message-bytes`.
-	maxMessageBytesOverhead = 128
 )
 
 const (
@@ -156,11 +150,14 @@ type options struct {
 	Version           string
 	IsAssignedVersion bool
 	RequestVersion    int16
-	MaxMessageBytes   int
-	MaxRetry          int
-	Compression       string
-	ClientID          string
-	RequiredAcks      RequiredAcks
+	// MaxMessageBytes is the user configured TiCDC batch threshold.
+	MaxMessageBytes int
+	// ProducerMaxMessageBytes is the final producer limit derived from Kafka.
+	ProducerMaxMessageBytes int
+	MaxRetry                int
+	Compression             string
+	ClientID                string
+	RequiredAcks            RequiredAcks
 	// Only for test. User can not set this value.
 	// The current prod default value is 0.
 	MaxMessages int
@@ -180,20 +177,20 @@ type options struct {
 // NewOptions returns a default Kafka configuration
 func NewOptions() *options {
 	return &options{
-		Version: "2.4.0",
-		// MaxMessageBytes will be used to initialize producer
-		MaxMessageBytes:    config.DefaultMaxMessageBytes,
-		MaxRetry:           defaultMaxRetry,
-		ReplicationFactor:  1,
-		Compression:        "none",
-		RequiredAcks:       WaitForAll,
-		Credential:         &security.Credential{},
-		InsecureSkipVerify: false,
-		SASL:               &security.SASL{},
-		AutoCreate:         true,
-		DialTimeout:        10 * time.Second,
-		WriteTimeout:       10 * time.Second,
-		ReadTimeout:        10 * time.Second,
+		Version:                 "2.4.0",
+		MaxMessageBytes:         config.DefaultMaxMessageBytes,
+		ProducerMaxMessageBytes: config.DefaultMaxMessageBytes,
+		MaxRetry:                defaultMaxRetry,
+		ReplicationFactor:       1,
+		Compression:             "none",
+		RequiredAcks:            WaitForAll,
+		Credential:              &security.Credential{},
+		InsecureSkipVerify:      false,
+		SASL:                    &security.SASL{},
+		AutoCreate:              true,
+		DialTimeout:             10 * time.Second,
+		WriteTimeout:            10 * time.Second,
+		ReadTimeout:             10 * time.Second,
 	}
 }
 
@@ -601,7 +598,6 @@ func adjustOptions(
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
 	if exists {
-		// make sure that producer's `MaxMessageBytes` smaller than topic's `max.message.bytes`
 		topicMaxMessageBytesStr, err := getTopicConfig(
 			ctx, admin, info.Name,
 			TopicMaxMessageBytesConfigName,
@@ -614,19 +610,8 @@ func adjustOptions(
 		if err != nil {
 			return errors.Trace(err)
 		}
-
-		maxMessageBytes := topicMaxMessageBytes - maxMessageBytesOverhead
-		if topicMaxMessageBytes <= options.MaxMessageBytes {
-			log.Warn("topic's `max.message.bytes` less than the `max-message-bytes`,"+
-				"use topic's `max.message.bytes` to initialize the Kafka producer",
-				zap.Int("max.message.bytes", topicMaxMessageBytes),
-				zap.Int("max-message-bytes", options.MaxMessageBytes),
-				zap.Int("real-max-message-bytes", maxMessageBytes))
-			options.MaxMessageBytes = maxMessageBytes
-		} else {
-			if maxMessageBytes < options.MaxMessageBytes {
-				options.MaxMessageBytes = maxMessageBytes
-			}
+		if err = options.setProducerMaxMessageBytes(topicMaxMessageBytes); err != nil {
+			return err
 		}
 
 		// no need to create the topic,
@@ -655,20 +640,8 @@ func adjustOptions(
 
 	// when create the topic, `max.message.bytes` is decided by the broker,
 	// it would use broker's `message.max.bytes` to set topic's `max.message.bytes`.
-	// TiCDC need to make sure that the producer's `MaxMessageBytes` won't larger than
-	// broker's `message.max.bytes`.
-	maxMessageBytes := brokerMessageMaxBytes - maxMessageBytesOverhead
-	if brokerMessageMaxBytes <= options.MaxMessageBytes {
-		log.Warn("broker's `message.max.bytes` less than the `max-message-bytes`,"+
-			"use broker's `message.max.bytes` to initialize the Kafka producer",
-			zap.Int("message.max.bytes", brokerMessageMaxBytes),
-			zap.Int("max-message-bytes", options.MaxMessageBytes),
-			zap.Int("real-max-message-bytes", maxMessageBytes))
-		options.MaxMessageBytes = maxMessageBytes
-	} else {
-		if maxMessageBytes < options.MaxMessageBytes {
-			options.MaxMessageBytes = maxMessageBytes
-		}
+	if err = options.setProducerMaxMessageBytes(brokerMessageMaxBytes); err != nil {
+		return err
 	}
 
 	// topic not exists yet, and user does not specify the `partition-num` in the sink uri.
@@ -676,6 +649,16 @@ func adjustOptions(
 		options.PartitionNum = defaultPartitionNum
 		log.Warn("partition-num is not set, use the default partition count",
 			zap.String("topic", topic), zap.Int32("partitions", options.PartitionNum))
+	}
+	return nil
+}
+
+func (o *options) setProducerMaxMessageBytes(kafkaMaxMessageBytes int) error {
+	// Sarama ignores Producer.MaxMessageBytes when it is not smaller than MaxRequestSize.
+	o.ProducerMaxMessageBytes = min(kafkaMaxMessageBytes, int(sarama.MaxRequestSize)-1)
+	if o.ProducerMaxMessageBytes <= 0 {
+		return cerror.ErrKafkaInvalidConfig.GenWithStack(
+			"invalid Kafka max message bytes %d", kafkaMaxMessageBytes)
 	}
 	return nil
 }

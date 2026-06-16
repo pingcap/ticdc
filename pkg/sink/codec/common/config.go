@@ -41,9 +41,12 @@ type Config struct {
 
 	Protocol config.Protocol
 
-	// control batch behavior, only for `open-protocol` and `craft` at the moment.
+	// MaxMessageBytes is the final encoded message size limit.
 	MaxMessageBytes int
-	MaxBatchSize    int
+	// MaxBatchMessageBytes controls batch splitting and large-message handling.
+	// If it is not set, codecs use MaxMessageBytes to keep the old behavior.
+	MaxBatchMessageBytes int
+	MaxBatchSize         int
 
 	// DeleteOnlyHandleKeyColumns is true, for the delete event only output the handle key columns.
 	DeleteOnlyHandleKeyColumns bool
@@ -344,6 +347,20 @@ func (c *Config) WithMaxMessageBytes(bytes int) *Config {
 	return c
 }
 
+// WithMaxBatchMessageBytes sets the batch splitting and large-message threshold.
+func (c *Config) WithMaxBatchMessageBytes(bytes int) *Config {
+	c.MaxBatchMessageBytes = bytes
+	return c
+}
+
+// BatchMaxMessageBytes returns the batch splitting and large-message threshold.
+func (c *Config) BatchMaxMessageBytes() int {
+	if c.MaxBatchMessageBytes > 0 {
+		return c.MaxBatchMessageBytes
+	}
+	return c.MaxMessageBytes
+}
+
 // WithChangefeedID set the `changefeedID`
 func (c *Config) WithChangefeedID(id common.ChangeFeedID) *Config {
 	c.ChangefeedID = id
@@ -413,6 +430,11 @@ func (c *Config) Validate() error {
 	if c.MaxMessageBytes <= 0 {
 		return errors.ErrCodecInvalidConfig.Wrap(
 			errors.Errorf("invalid max-message-bytes %d", c.MaxMessageBytes),
+		)
+	}
+	if c.MaxBatchMessageBytes < 0 {
+		return errors.ErrCodecInvalidConfig.Wrap(
+			errors.Errorf("invalid max-batch-message-bytes %d", c.MaxBatchMessageBytes),
 		)
 	}
 

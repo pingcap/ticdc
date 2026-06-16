@@ -1592,6 +1592,24 @@ func TestDMLMessageTooLarge(t *testing.T) {
 	}
 }
 
+func TestDMLLargerThanBatchLimit(t *testing.T) {
+	_, insertEvent, _, _ := common.NewLargeEvent4Test(t)
+
+	codecConfig := common.NewConfig(config.ProtocolSimple)
+	codecConfig.MaxMessageBytes = config.DefaultMaxMessageBytes
+	codecConfig.MaxBatchMessageBytes = 50
+
+	enc, err := NewEncoder(context.Background(), codecConfig)
+	require.NoError(t, err)
+
+	err = enc.AppendRowChangedEvent(context.Background(), "", insertEvent)
+	require.NoError(t, err)
+
+	messages := enc.Build()
+	require.Len(t, messages, 1)
+	require.Equal(t, 1, messages[0].GetRowsCount())
+}
+
 func TestLargerMessageHandleClaimCheck(t *testing.T) {
 	ddlEvent, _, updateEvent, _ := common.NewLargeEvent4Test(t)
 

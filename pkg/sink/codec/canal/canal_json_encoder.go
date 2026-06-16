@@ -441,7 +441,12 @@ func (c *JSONRowEventEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message,
 		return nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
 
-	return common.NewMsg(nil, value), nil
+	message := common.NewMsg(nil, value)
+	if message.Length() > c.config.MaxMessageBytes {
+		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(
+			"checkpoint", message.Length(), c.config.MaxMessageBytes)
+	}
+	return message, nil
 }
 
 // AppendRowChangedEvent implements the interface EventJSONBatchEncoder
@@ -468,16 +473,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 
 	targetTable := e.TableInfo.GetTargetTableName()
 	originLength := m.Length()
-	if m.Length() > c.config.MaxMessageBytes {
-		// for single message that is longer than max-message-bytes, do not send it.
-		if c.config.LargeMessageHandle.Disabled() {
-			log.Error("Single message is too large for canal-json",
-				zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
-				zap.Int("length", originLength),
-				zap.Any("table", e.TableInfo.TableName))
-			return errors.ErrMessageTooLarge.GenWithStackByArgs(targetTable, originLength, c.config.MaxMessageBytes)
-		}
-
+	if m.Length() > c.config.BatchMaxMessageBytes() && !c.config.LargeMessageHandle.Disabled() {
 		if c.config.LargeMessageHandle.HandleKeyOnly() {
 			value, err = newJSONMessageForDML(e, c.config, true, "")
 			if err != nil {
@@ -501,6 +497,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 				return errors.ErrMessageTooLarge.GenWithStackByArgs(targetTable, length, c.config.MaxMessageBytes)
 			}
 			log.Warn("Single message is too large for canal-json, only encode handle-key columns",
+				zap.Int("maxBatchMessageBytes", c.config.BatchMaxMessageBytes()),
 				zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
 				zap.Int("originLength", originLength),
 				zap.Int("length", length),
@@ -518,6 +515,14 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 				return err
 			}
 		}
+	}
+
+	if m.Length() > c.config.MaxMessageBytes {
+		log.Error("Single message is too large for canal-json",
+			zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
+			zap.Int("length", m.Length()),
+			zap.Any("table", e.TableInfo.TableName))
+		return errors.ErrMessageTooLarge.GenWithStackByArgs(targetTable, m.Length(), c.config.MaxMessageBytes)
 	}
 
 	c.messages = append(c.messages, m)
@@ -580,7 +585,12 @@ func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.M
 		return nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
 
-	return common.NewMsg(nil, value), nil
+	result := common.NewMsg(nil, value)
+	if result.Length() > c.config.MaxMessageBytes {
+		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(
+			e.GetTargetTableName(), result.Length(), c.config.MaxMessageBytes)
+	}
+	return result, nil
 }
 
 func (c *JSONRowEventEncoder) Clean() {
