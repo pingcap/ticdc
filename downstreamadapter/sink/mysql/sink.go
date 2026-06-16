@@ -450,8 +450,8 @@ func (s *Sink) Close() {
 
 	for idx, db := range s.ownedDBs {
 		if err := db.Close(); err != nil {
-			log.Warn("close mysql sink db pool meet error",
-				zap.Any("changefeed", s.changefeedID.String()),
+			log.Warn("failed to close mysql sink db pool",
+				zap.String("changefeed", s.changefeedID.String()),
 				zap.Int("dbIndex", idx),
 				zap.Error(err))
 		}

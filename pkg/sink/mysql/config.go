@@ -322,9 +322,9 @@ func NewMysqlConfigAndDB(
 
 // NewMysqlConfigAndDBs creates the effective MySQL sink config and independent
 // database pools for DML and control-plane work. The DML pool follows the worker
-// based sizing and DML stress failpoints, while the control pool remains small
-// and independent so DDL, DDL-ts, syncpoint, and progress metadata operations
-// cannot be starved by long-lived DML sessions.
+// based sizing, while the control pool remains small and independent so DDL,
+// DDL-ts, syncpoint, and progress metadata operations cannot be starved by
+// long-lived DML sessions.
 func NewMysqlConfigAndDBs(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig,
 ) (*Config, *sql.DB, *sql.DB, error) {
@@ -445,10 +445,6 @@ func configureDMLDBConn(db *sql.DB, cfg *Config) {
 func configureControlDBConn(db *sql.DB) {
 	db.SetMaxIdleConns(defaultControlDBConns)
 	db.SetMaxOpenConns(defaultControlDBConns)
-	forceControlDBSingleConnectionForTest(db)
-}
-
-func forceControlDBSingleConnectionForTest(db *sql.DB) {
 	// DDL timestamp tests rely on this failpoint forcing the DDL writer to reuse
 	// one downstream session so session-variable leakage is deterministic. Keep
 	// it scoped to the control pool so DML writers can still flush before DDLs.
