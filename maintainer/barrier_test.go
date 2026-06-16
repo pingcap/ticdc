@@ -826,6 +826,491 @@ func TestSyncPointBlock(t *testing.T) {
 	require.Len(t, barrier.blockedEvents.m, 0)
 }
 
+func TestSyncPointBarrierRecreatedCountsAlreadyDoneDispatchers(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
+	absents := spanController.GetAbsentForTest(10000)
+	require.Len(t, absents, 2)
+	for _, stm := range absents {
+		spanController.BindSpanToNode("", "node1", stm)
+		spanController.MarkSpanReplicating(stm)
+	}
+
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
+	waitingState := &heartbeatpb.State{
+		IsBlocked: true,
+		BlockTs:   10,
+		Stage:     heartbeatpb.BlockStage_WAITING,
+		BlockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_All,
+		},
+		IsSyncPoint: true,
+	}
+
+	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{ID: spanController.GetDDLDispatcherID().ToPB(), State: waitingState},
+			{ID: absents[0].ID.ToPB(), State: waitingState},
+			{ID: absents[1].ID.ToPB(), State: waitingState},
+		},
+	})
+	require.NotEmpty(t, msgs)
+	key := getEventKey(10, true)
+	event := barrier.blockedEvents.m[key]
+	require.NotNil(t, event)
+	require.True(t, event.selected.Load())
+
+	doneState := &heartbeatpb.State{
+		IsBlocked:   true,
+		BlockTs:     10,
+		Stage:       heartbeatpb.BlockStage_DONE,
+		IsSyncPoint: true,
+	}
+	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{ID: spanController.GetDDLDispatcherID().ToPB(), State: doneState},
+			{ID: absents[0].ID.ToPB(), State: doneState},
+			{ID: absents[1].ID.ToPB(), State: doneState},
+		},
+	})
+	require.Len(t, barrier.blockedEvents.m, 0)
+
+	// A late WAITING report for the same syncpoint can recreate the barrier after
+	// the first one was removed. The recreated event must still count dispatchers
+	// whose span state already says DONE for this exact syncpoint.
+	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{ID: absents[1].ID.ToPB(), State: waitingState},
+		},
+	})
+	event = barrier.blockedEvents.m[key]
+	require.NotNil(t, event)
+	require.Nil(t, event.rangeChecker)
+
+	absents[1].UpdateStatus(&heartbeatpb.TableSpanStatus{
+		ID:              absents[1].ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    11,
+	})
+
+	resendMsgs := barrier.Resend()
+	require.Empty(t, resendMsgs)
+	require.Len(t, barrier.blockedEvents.m, 0)
+}
+
+func TestNormalBarrierRecreatedAfterDroppedTableRemoved(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+
+	oldTableID := int64(267)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: oldTableID}, 1)
+	oldReplication := spanController.GetTasksByTableID(oldTableID)[0]
+	spanController.BindSpanToNode("", "node1", oldReplication)
+	spanController.MarkSpanReplicating(oldReplication)
+
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
+	dropState := &heartbeatpb.State{
+		IsBlocked: true,
+		BlockTs:   10,
+		Stage:     heartbeatpb.BlockStage_WAITING,
+		BlockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{oldTableID, common.DDLSpanTableID},
+		},
+		NeedDroppedTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{oldTableID},
+		},
+	}
+
+	// The original barrier has already scheduled the DROP TABLE and removed the
+	// table dispatcher. A late WAITING report from the DDL dispatcher recreates
+	// the same barrier and must not wait forever for the removed table dispatcher.
+	spanController.RemoveByTableIDs(oldTableID)
+	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{ID: spanController.GetDDLDispatcherID().ToPB(), State: dropState},
+		},
+	})
+	require.NotEmpty(t, msgs)
+	key := getEventKey(10, false)
+	event := barrier.blockedEvents.m[key]
+	require.NotNil(t, event)
+	require.False(t, event.selected.Load())
+
+	resendMsgs := barrier.Resend()
+	require.Empty(t, resendMsgs)
+	event = barrier.blockedEvents.m[key]
+	require.NotNil(t, event)
+	require.True(t, event.selected.Load())
+	require.True(t, event.writerDispatcherAdvanced)
+
+	resendMsgs = barrier.Resend()
+	require.Len(t, resendMsgs, 1)
+	resp := resendMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, resp.DispatcherStatuses, 1)
+	require.Equal(t, heartbeatpb.Action_Pass, resp.DispatcherStatuses[0].Action.Action)
+	require.Equal(t, uint64(10), resp.DispatcherStatuses[0].Action.CommitTs)
+	require.Len(t, resp.DispatcherStatuses[0].InfluencedDispatchers.DispatcherIDs, 1)
+	require.Equal(t, spanController.GetDDLDispatcherID().ToPB(), resp.DispatcherStatuses[0].InfluencedDispatchers.DispatcherIDs[0])
+
+	doneState := &heartbeatpb.State{IsBlocked: true, BlockTs: 10, Stage: heartbeatpb.BlockStage_DONE}
+	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{ID: spanController.GetDDLDispatcherID().ToPB(), State: doneState},
+		},
+	})
+	require.Len(t, barrier.blockedEvents.m, 0)
+}
+
+func TestNormalBarrierDoesNotCoverMissingNonDroppedTable(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+
+	missingTableID := int64(267)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: missingTableID}, 1)
+	missingReplication := spanController.GetTasksByTableID(missingTableID)[0]
+	spanController.BindSpanToNode("", "node1", missingReplication)
+	spanController.MarkSpanReplicating(missingReplication)
+	spanController.RemoveByTableIDs(missingTableID)
+
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
+	alterState := &heartbeatpb.State{
+		IsBlocked: true,
+		BlockTs:   10,
+		Stage:     heartbeatpb.BlockStage_WAITING,
+		BlockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{missingTableID, common.DDLSpanTableID},
+		},
+	}
+	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{ID: spanController.GetDDLDispatcherID().ToPB(), State: alterState},
+		},
+	})
+	require.NotEmpty(t, msgs)
+	key := getEventKey(10, false)
+	event := barrier.blockedEvents.m[key]
+	require.NotNil(t, event)
+	require.False(t, event.selected.Load())
+
+	resendMsgs := barrier.Resend()
+	require.Empty(t, resendMsgs)
+	event = barrier.blockedEvents.m[key]
+	require.NotNil(t, event)
+	require.False(t, event.selected.Load())
+	require.Contains(t, event.rangeChecker.Detail(), "267")
+}
+
+func TestNormalBarrierUsesDDLDispatcherForDDLSpanTableID(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    11,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
+	tableReplication := spanController.GetTasksByTableID(1)[0]
+	spanController.BindSpanToNode("", "node1", tableReplication)
+	spanController.MarkSpanReplicating(tableReplication)
+
+	state := &heartbeatpb.State{
+		IsBlocked: true,
+		BlockTs:   10,
+		Stage:     heartbeatpb.BlockStage_WAITING,
+		BlockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{1, common.DDLSpanTableID},
+		},
+	}
+	event := NewBlockEvent(cfID, tableReplication.ID, spanController, operatorController, state, false, common.DefaultMode)
+	require.False(t, event.selected.Load())
+	require.False(t, event.allDispatcherReported())
+
+	event.checkBlockedDispatchers()
+	require.True(t, event.selected.Load())
+	require.True(t, event.writerDispatcherAdvanced)
+
+	event.lastResendTime = time.Now().Add(-2 * time.Second)
+	msgs := event.resend(common.DefaultMode)
+	require.Len(t, msgs, 1)
+	resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, resp.DispatcherStatuses, 1)
+	status := resp.DispatcherStatuses[0]
+	require.Equal(t, heartbeatpb.Action_Pass, status.Action.Action)
+	require.Equal(t, uint64(10), status.Action.CommitTs)
+	require.Len(t, status.InfluencedDispatchers.DispatcherIDs, 2)
+
+	gotDispatchers := make(map[common.DispatcherID]struct{}, len(status.InfluencedDispatchers.DispatcherIDs))
+	for _, dispatcherID := range status.InfluencedDispatchers.DispatcherIDs {
+		gotDispatchers[common.NewDispatcherIDFromPB(dispatcherID)] = struct{}{}
+	}
+	_, ok := gotDispatchers[tableReplication.ID]
+	require.True(t, ok)
+	_, ok = gotDispatchers[spanController.GetDDLDispatcherID()]
+	require.True(t, ok)
+}
+
+func TestResendSchedulesForwardedNeedScheduleBarrierBeforePass(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    20,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
+
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
+		IsBlocked: true,
+		BlockTs:   10,
+		Stage:     heartbeatpb.BlockStage_WAITING,
+		BlockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{common.DDLSpanTableID},
+		},
+		NeedAddedTables: []*heartbeatpb.Table{{SchemaID: 1, TableID: 2}},
+	}, false, common.DefaultMode)
+	event.selected.Store(true)
+	event.writerDispatcher = tableTriggerEventDispatcherID
+	event.lastResendTime = time.Now().Add(-2 * time.Second)
+	barrier.blockedEvents.Set(getEventKey(10, false), event)
+	barrier.pendingEvents.add(event)
+
+	msgs := barrier.Resend()
+	require.NotEmpty(t, msgs)
+	require.True(t, event.writerDispatcherAdvanced)
+	require.Equal(t, 0, barrier.pendingEvents.Len())
+	require.Equal(t, 1, spanController.GetAbsentSize())
+	resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Equal(t, heartbeatpb.Action_Pass, resp.DispatcherStatuses[0].Action.Action)
+}
+
+func TestSelectedBarrierRefreshesAdvancedReplications(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
+	absents := spanController.GetAbsentForTest(10000)
+	require.Len(t, absents, 2)
+	for _, stm := range absents {
+		spanController.BindSpanToNode("", "node1", stm)
+		spanController.MarkSpanReplicating(stm)
+	}
+
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
+		IsBlocked: true,
+		BlockTs:   10,
+		Stage:     heartbeatpb.BlockStage_WAITING,
+		BlockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_All,
+		},
+		IsSyncPoint: true,
+	}, false, common.DefaultMode)
+	event.ensureRangeChecker()
+	event.selected.Store(true)
+	event.writerDispatcher = tableTriggerEventDispatcherID
+	event.lastResendTime = time.Now().Add(-2 * time.Second)
+
+	for _, replication := range event.relatedReplications() {
+		replication.UpdateBlockState(heartbeatpb.State{
+			IsBlocked: true,
+			BlockTs:   20,
+			Stage:     heartbeatpb.BlockStage_WAITING,
+		})
+	}
+
+	_ = event.resend(common.DefaultMode)
+	require.True(t, event.writerDispatcherAdvanced)
+	require.True(t, event.allDispatcherReported())
+}
+
+func TestUpdateSpanBlockStateSkipsStaleState(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	dispatcherID := common.NewDispatcherID()
+	tableSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
+	replication := replica.NewWorkingSpanReplication(cfID, dispatcherID, 1, &tableSpan, &heartbeatpb.TableSpanStatus{
+		ID:              dispatcherID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    1,
+	}, "node1", false)
+
+	updateSpanBlockState(replication, &heartbeatpb.State{BlockTs: 10, IsSyncPoint: true, Stage: heartbeatpb.BlockStage_DONE})
+	updateSpanBlockState(replication, &heartbeatpb.State{BlockTs: 10, IsSyncPoint: true, Stage: heartbeatpb.BlockStage_WAITING})
+	state := replication.GetBlockState()
+	require.Equal(t, uint64(10), state.BlockTs)
+	require.True(t, state.IsSyncPoint)
+	require.Equal(t, heartbeatpb.BlockStage_DONE, state.Stage)
+
+	updateSpanBlockState(replication, &heartbeatpb.State{BlockTs: 9, Stage: heartbeatpb.BlockStage_WAITING})
+	state = replication.GetBlockState()
+	require.Equal(t, uint64(10), state.BlockTs)
+	require.True(t, state.IsSyncPoint)
+	require.Equal(t, heartbeatpb.BlockStage_DONE, state.Stage)
+
+	updateSpanBlockState(replication, &heartbeatpb.State{BlockTs: 11, Stage: heartbeatpb.BlockStage_WAITING})
+	state = replication.GetBlockState()
+	require.Equal(t, uint64(11), state.BlockTs)
+	require.False(t, state.IsSyncPoint)
+	require.Equal(t, heartbeatpb.BlockStage_WAITING, state.Stage)
+}
+
+func TestForwardBarrierEventBoundaries(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	tableSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
+	newReplication := func(checkpointTs uint64, blockState *heartbeatpb.State) *replica.SpanReplication {
+		dispatcherID := common.NewDispatcherID()
+		replication := replica.NewWorkingSpanReplication(cfID, dispatcherID,
+			1, &tableSpan, &heartbeatpb.TableSpanStatus{
+				ID:              dispatcherID.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Working,
+				CheckpointTs:    checkpointTs,
+			}, "node1", false)
+		if blockState != nil {
+			replication.UpdateBlockState(*blockState)
+		}
+		return replication
+	}
+
+	ddlEvent := &BarrierEvent{commitTs: 10, isSyncPoint: false}
+	syncpointEvent := &BarrierEvent{commitTs: 10, isSyncPoint: true}
+	tests := []struct {
+		name         string
+		checkpointTs uint64
+		blockState   *heartbeatpb.State
+		event        *BarrierEvent
+		want         bool
+	}{
+		{
+			name:         "checkpoint equal commit ts does not forward syncpoint",
+			checkpointTs: 10,
+			event:        syncpointEvent,
+			want:         false,
+		},
+		{
+			name:         "checkpoint greater than commit ts forwards syncpoint",
+			checkpointTs: 11,
+			event:        syncpointEvent,
+			want:         true,
+		},
+		{
+			name:         "same ts syncpoint waiting does not forward syncpoint",
+			checkpointTs: 9,
+			blockState:   &heartbeatpb.State{BlockTs: 10, IsSyncPoint: true, Stage: heartbeatpb.BlockStage_WAITING},
+			event:        syncpointEvent,
+			want:         false,
+		},
+		{
+			name:         "same ts ddl done does not forward syncpoint",
+			checkpointTs: 9,
+			blockState:   &heartbeatpb.State{BlockTs: 10, IsSyncPoint: false, Stage: heartbeatpb.BlockStage_DONE},
+			event:        syncpointEvent,
+			want:         false,
+		},
+		{
+			name:         "same ts syncpoint done forwards syncpoint",
+			checkpointTs: 9,
+			blockState:   &heartbeatpb.State{BlockTs: 10, IsSyncPoint: true, Stage: heartbeatpb.BlockStage_DONE},
+			event:        syncpointEvent,
+			want:         true,
+		},
+		{
+			name:         "same ts syncpoint waiting forwards ddl",
+			checkpointTs: 9,
+			blockState:   &heartbeatpb.State{BlockTs: 10, IsSyncPoint: true, Stage: heartbeatpb.BlockStage_WAITING},
+			event:        ddlEvent,
+			want:         true,
+		},
+		{
+			name:         "same ts ddl done forwards ddl",
+			checkpointTs: 9,
+			blockState:   &heartbeatpb.State{BlockTs: 10, IsSyncPoint: false, Stage: heartbeatpb.BlockStage_DONE},
+			event:        ddlEvent,
+			want:         true,
+		},
+		{
+			name:         "later normal waiting forwards syncpoint",
+			checkpointTs: 9,
+			blockState:   &heartbeatpb.State{BlockTs: 11, IsSyncPoint: false, Stage: heartbeatpb.BlockStage_WAITING},
+			event:        syncpointEvent,
+			want:         true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			replication := newReplication(tt.checkpointTs, tt.blockState)
+			require.Equal(t, tt.want, forwardBarrierEvent(replication, tt.event))
+		})
+	}
+}
+
 func TestNonBlocked(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()

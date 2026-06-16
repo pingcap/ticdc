@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -252,7 +253,7 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 	eventList := make([]*BarrierEvent, 0)
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		// todo: we can limit the number of messages to send in one round here
-		msgs = append(msgs, barrierEvent.resend(b.mode)...)
+		msgs = append(msgs, barrierEvent.resendWithSchedule(b.mode, b.tryScheduleEvent)...)
 
 		eventList = append(eventList, barrierEvent)
 		return true
@@ -308,13 +309,45 @@ func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status
 			Mode:            status.Mode,
 		})
 		if status.State != nil {
-			span.UpdateBlockState(*status.State)
+			updateSpanBlockState(span, status.State)
 		}
 	}
 	if status.State.Stage == heartbeatpb.BlockStage_DONE {
 		return b.handleEventDone(cfID, dispatcherID, status), nil, "", true
 	}
 	return b.handleBlockState(cfID, dispatcherID, status)
+}
+
+func updateSpanBlockState(span *replica.SpanReplication, newState *heartbeatpb.State) {
+	oldState := span.GetBlockState()
+	if oldState != nil && compareBlockState(oldState, newState) > 0 {
+		log.Debug("ignore stale block state",
+			zap.String("dispatcher", span.ID.String()),
+			zap.Uint64("oldBlockTs", oldState.BlockTs),
+			zap.Bool("oldIsSyncPoint", oldState.IsSyncPoint),
+			zap.String("oldStage", oldState.Stage.String()),
+			zap.Uint64("newBlockTs", newState.BlockTs),
+			zap.Bool("newIsSyncPoint", newState.IsSyncPoint),
+			zap.String("newStage", newState.Stage.String()))
+		return
+	}
+	span.UpdateBlockState(*newState)
+}
+
+func compareBlockState(a, b *heartbeatpb.State) int {
+	if a.BlockTs < b.BlockTs {
+		return -1
+	}
+	if a.BlockTs > b.BlockTs {
+		return 1
+	}
+	if a.IsSyncPoint != b.IsSyncPoint {
+		if !a.IsSyncPoint && b.IsSyncPoint {
+			return -1
+		}
+		return 1
+	}
+	return int(a.Stage) - int(b.Stage)
 }
 
 func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID, status *heartbeatpb.TableSpanBlockStatus) *BarrierEvent {

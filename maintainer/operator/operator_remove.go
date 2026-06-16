@@ -97,6 +97,7 @@ func (m *removeDispatcherOperator) Check(from node.ID, status *heartbeatpb.Table
 		(status.ComponentStatus == heartbeatpb.ComponentState_Stopped ||
 			status.ComponentStatus == heartbeatpb.ComponentState_Removed) {
 		m.replicaSet.UpdateStatus(status)
+		m.spanController.RecordRemovedSpanCheckpoint(m.replicaSet, status.CheckpointTs)
 		log.Info("dispatcher report non-working status",
 			zap.String("replicaSet", m.replicaSet.ID.String()))
 		m.finished.Store(true)

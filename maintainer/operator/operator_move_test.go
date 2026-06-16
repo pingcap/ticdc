@@ -243,6 +243,26 @@ func TestMoveOperator_OriginNodeRemovedAfterOriginStopped(t *testing.T) {
 	require.True(t, op.IsFinished())
 }
 
+func TestMoveOperatorUsesStoppedCheckpointWhenAddingDest(t *testing.T) {
+	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB)
+
+	op.Start()
+	stoppedStatus := &heartbeatpb.TableSpanStatus{
+		ID:              replicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Stopped,
+		CheckpointTs:    1500,
+	}
+	op.Check(nodeA, stoppedStatus)
+	require.Equal(t, moveStateAddDest, op.state)
+
+	msg := op.Schedule()
+	require.NotNil(t, msg)
+	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+	require.Equal(t, heartbeatpb.ScheduleAction_Create, req.ScheduleAction)
+	require.Equal(t, uint64(1500), req.Config.StartTs)
+}
+
 func TestMoveOperator_BothNodesRemovedBeforeStartDoesNotLeaveSchedulingWithoutNodeID(t *testing.T) {
 	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)

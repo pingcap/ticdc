@@ -70,6 +70,10 @@ type Controller struct {
 	tableTasks map[int64]map[common.DispatcherID]*replica.SpanReplication
 	// nonReplicatingCheckpointTs tracks absent and scheduling spans so checkpoint calculation does not scan all spans.
 	nonReplicatingCheckpointTs *checkpointTsTracker
+	// removedTableCheckpointTs records the highest checkpoint reported by removed dispatchers for each table.
+	// It prevents a stale add-table barrier from recreating a dispatcher below events already flushed by
+	// the previous dispatcher of the same physical table.
+	removedTableCheckpointTs map[int64]uint64
 
 	// newGroupChecker creates a GroupChecker for validating span groups
 	newGroupChecker func(groupID pkgreplica.GroupID) pkgreplica.GroupChecker[common.DispatcherID, *replica.SpanReplication]
@@ -115,6 +119,7 @@ func NewController(
 		tableTasks:                 make(map[int64]map[common.DispatcherID]*replica.SpanReplication),
 		allTasks:                   make(map[common.DispatcherID]*replica.SpanReplication),
 		nonReplicatingCheckpointTs: newCheckpointTsTracker(),
+		removedTableCheckpointTs:   make(map[int64]uint64),
 	}
 	c.ReplicationDB = pkgreplica.NewReplicationDB(changefeedID.String(), c.doWithRLock, c.newGroupChecker)
 	c.initializeDDLSpan(ddlSpan)
@@ -227,9 +232,45 @@ func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.Table
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
 		span.KeyspaceID = c.GetkeyspaceID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.mode, enabledSplit)
+		safeStartTs := c.getSafeStartTsForTable(span.TableID, startTs)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, safeStartTs, c.mode, enabledSplit)
 		c.AddAbsentReplicaSet(replicaSet)
 	}
+}
+
+// RecordRemovedSpanCheckpoint records the final checkpoint of a dispatcher that has been removed.
+func (c *Controller) RecordRemovedSpanCheckpoint(span *replica.SpanReplication, checkpointTs uint64) {
+	if span == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.advanceRemovedTableCheckpointTsWithoutLock(span.Span.TableID, checkpointTs)
+}
+
+func (c *Controller) getSafeStartTsForTable(tableID int64, startTs uint64) uint64 {
+	c.mu.RLock()
+	removedCheckpointTs := c.removedTableCheckpointTs[tableID]
+	c.mu.RUnlock()
+	if removedCheckpointTs <= startTs {
+		return startTs
+	}
+	log.Info("clamp new table dispatcher start ts to removed table checkpoint",
+		zap.Stringer("changefeedID", c.changefeedID),
+		zap.Int64("tableID", tableID),
+		zap.Uint64("originalStartTs", startTs),
+		zap.Uint64("removedCheckpointTs", removedCheckpointTs))
+	return removedCheckpointTs
+}
+
+func (c *Controller) advanceRemovedTableCheckpointTsWithoutLock(tableID int64, checkpointTs uint64) {
+	if checkpointTs == 0 {
+		return
+	}
+	if old := c.removedTableCheckpointTs[tableID]; old >= checkpointTs {
+		return
+	}
+	c.removedTableCheckpointTs[tableID] = checkpointTs
 }
 
 func (c *Controller) GetMinCheckpointTsForNonReplicatingSpans(minCheckpointTs uint64) uint64 {
@@ -590,6 +631,9 @@ func (c *Controller) RemoveBySchemaID(schemaID int64) {
 // removeSpanWithoutLock removes the spans from the db without lock
 func (c *Controller) removeSpanWithoutLock(spans ...*replica.SpanReplication) {
 	for _, span := range spans {
+		if status := span.GetStatus(); status != nil {
+			c.advanceRemovedTableCheckpointTsWithoutLock(span.Span.TableID, status.CheckpointTs)
+		}
 		c.RemoveReplicaWithoutLock(span)
 		c.untrackNonReplicatingSpan(span)
 

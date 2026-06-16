@@ -224,11 +224,8 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 	}
 
 	// Once the event enters selected state, we start a new reporting phase that
-	// tracks completion after write/pass rather than the initial WAITING
-	// coverage. Reset both structures so DONE reports are measured from scratch.
-	be.rangeChecker.Reset()
-	be.reportedDispatchers = make(map[common.DispatcherID]struct{})
-
+	// tracks completion after write/pass rather than the initial WAITING coverage.
+	be.resetProgressAfterSelection()
 	be.selected.Store(true)
 	be.writerDispatcher = dispatcher
 	be.lastResendTime = time.Now()
@@ -323,6 +320,152 @@ func (be *BarrierEvent) addDispatchersToRangeChecker() {
 		}
 		be.rangeChecker.AddSubRange(replicaSpan.Span.TableID, replicaSpan.Span.StartKey, replicaSpan.Span.EndKey)
 	}
+}
+
+func (be *BarrierEvent) ensureRangeChecker() {
+	if be.rangeChecker != nil || be.blockedDispatchers == nil {
+		return
+	}
+
+	switch be.blockedDispatchers.InfluenceType {
+	case heartbeatpb.InfluenceType_Normal:
+		if be.dynamicSplitEnabled {
+			be.rangeChecker = range_checker.NewTableSpanRangeChecker(be.spanController.GetkeyspaceID(), be.blockedDispatchers.TableIDs)
+		} else {
+			be.rangeChecker = range_checker.NewTableCountChecker(be.blockedDispatchers.TableIDs)
+		}
+	case heartbeatpb.InfluenceType_DB:
+		be.createRangeCheckerForTypeDB()
+	case heartbeatpb.InfluenceType_All:
+		be.createRangeCheckerForTypeAll()
+	}
+}
+
+func (be *BarrierEvent) getTasksByBlockedTableID(tableID int64) []*replica.SpanReplication {
+	if tableID != common.DDLSpanTableID {
+		return be.spanController.GetTasksByTableID(tableID)
+	}
+	ddlReplication := be.spanController.GetTaskByID(be.spanController.GetDDLDispatcherID())
+	if ddlReplication == nil {
+		return nil
+	}
+	return []*replica.SpanReplication{ddlReplication}
+}
+
+func (be *BarrierEvent) relatedReplications() []*replica.SpanReplication {
+	if be.blockedDispatchers == nil {
+		return nil
+	}
+
+	switch be.blockedDispatchers.InfluenceType {
+	case heartbeatpb.InfluenceType_Normal:
+		replications := make([]*replica.SpanReplication, 0, len(be.blockedDispatchers.TableIDs))
+		for _, tableID := range be.blockedDispatchers.TableIDs {
+			replications = append(replications, be.getTasksByBlockedTableID(tableID)...)
+		}
+		return replications
+	case heartbeatpb.InfluenceType_DB:
+		replications := be.spanController.GetTasksBySchemaID(be.blockedDispatchers.SchemaID)
+		if ddlReplication := be.spanController.GetTaskByID(be.spanController.GetDDLDispatcherID()); ddlReplication != nil {
+			replications = append(replications, ddlReplication)
+		}
+		return replications
+	case heartbeatpb.InfluenceType_All:
+		return be.spanController.GetAllTasks()
+	}
+	return nil
+}
+
+func (be *BarrierEvent) addAdvancedReplicationsToRangeChecker() {
+	if be.rangeChecker == nil {
+		return
+	}
+
+	for _, replication := range be.relatedReplications() {
+		if replication == nil || !forwardBarrierEvent(replication, be) {
+			continue
+		}
+		be.reportedDispatchers[replication.ID] = struct{}{}
+		be.rangeChecker.AddSubRange(replication.Span.TableID, replication.Span.StartKey, replication.Span.EndKey)
+	}
+}
+
+func (be *BarrierEvent) refreshSelectedProgress() bool {
+	be.ensureRangeChecker()
+	be.addAdvancedReplicationsToRangeChecker()
+	if be.writerDispatcherAdvanced {
+		return false
+	}
+
+	writer := be.spanController.GetTaskByID(be.writerDispatcher)
+	if writer == nil || !forwardBarrierEvent(writer, be) {
+		return false
+	}
+	if be.needSchedule {
+		return true
+	}
+	be.writerDispatcherAdvanced = true
+	be.lastResendTime = time.Now().Add(-20 * time.Second)
+	return true
+}
+
+func (be *BarrierEvent) resetProgressAfterSelection() {
+	be.ensureRangeChecker()
+	if be.rangeChecker != nil {
+		be.rangeChecker.Reset()
+	}
+	be.reportedDispatchers = make(map[common.DispatcherID]struct{})
+	be.addAdvancedReplicationsToRangeChecker()
+}
+
+func (be *BarrierEvent) selectByForwardedDispatcher() {
+	be.resetProgressAfterSelection()
+	be.selected.Store(true)
+	be.writerDispatcherAdvanced = true
+	be.passActionSent = false
+}
+
+func (be *BarrierEvent) markMissingDroppedTablesDone() bool {
+	if be.blockedDispatchers == nil || be.blockedDispatchers.InfluenceType != heartbeatpb.InfluenceType_Normal ||
+		be.dropDispatchers == nil || be.dropDispatchers.InfluenceType != heartbeatpb.InfluenceType_Normal {
+		return false
+	}
+
+	be.ensureRangeChecker()
+	if be.rangeChecker == nil {
+		return false
+	}
+
+	marked := false
+	for _, tableID := range be.dropDispatchers.TableIDs {
+		if tableID == common.DDLSpanTableID || !containsTableID(be.blockedDispatchers.TableIDs, tableID) {
+			continue
+		}
+		if len(be.spanController.GetTasksByTableID(tableID)) != 0 {
+			continue
+		}
+		if be.spanController.GetTaskByID(be.spanController.GetDDLDispatcherID()) == nil {
+			continue
+		}
+
+		be.markTableDone(tableID)
+		marked = true
+		log.Info("blocked table has no active dispatcher, mark it done",
+			zap.String("changefeed", be.cfID.Name()),
+			zap.Uint64("commitTs", be.commitTs),
+			zap.Int64("tableID", tableID),
+			zap.Int64("mode", be.mode))
+	}
+	return marked
+}
+
+func containsTableID(tableIDs []int64, target int64) bool {
+	for _, tableID := range tableIDs {
+		if tableID == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID) {
@@ -480,7 +623,7 @@ func (be *BarrierEvent) sendPassAction(mode int64) []*messaging.TargetMessage {
 		}
 	case heartbeatpb.InfluenceType_Normal:
 		for _, tableID := range be.blockedDispatchers.TableIDs {
-			spans := be.spanController.GetTasksByTableID(tableID)
+			spans := be.getTasksByBlockedTableID(tableID)
 			if len(spans) == 0 {
 				be.markTableDone(tableID)
 			} else {
@@ -521,17 +664,30 @@ func (be *BarrierEvent) sendPassAction(mode int64) []*messaging.TargetMessage {
 func (be *BarrierEvent) checkBlockedDispatchers() {
 	switch be.blockedDispatchers.InfluenceType {
 	case heartbeatpb.InfluenceType_Normal:
-		for _, tableId := range be.blockedDispatchers.TableIDs {
-			replications := be.spanController.GetTasksByTableID(tableId)
+		if be.markMissingDroppedTablesDone() && be.allDispatcherReported() {
+			// A normal DDL barrier can be recreated by a late WAITING status after the
+			// original barrier has already scheduled the drop and removed the table
+			// dispatcher. The removed table cannot report again, so advance the
+			// recreated barrier and let sendPassAction notify the remaining DDL span.
+			be.selectByForwardedDispatcher()
+			log.Info("all missing dropped blocked tables are removed, advance block event",
+				zap.String("changefeed", be.cfID.Name()),
+				zap.Uint64("commitTs", be.commitTs),
+				zap.Any("blocker", be.blockedDispatchers),
+				zap.Int64("mode", be.mode))
+			return
+		}
+
+		for _, tableID := range be.blockedDispatchers.TableIDs {
+			replications := be.getTasksByBlockedTableID(tableID)
 			for _, replication := range replications {
 				if forwardBarrierEvent(replication, be) {
 					// one related table has forward checkpointTs, means the block event can be advanced
-					be.selected.Store(true)
-					be.writerDispatcherAdvanced = true
+					be.selectByForwardedDispatcher()
 					log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
 						zap.String("changefeed", be.cfID.Name()),
 						zap.Uint64("commitTs", be.commitTs),
-						zap.Int64("tableId", tableId),
+						zap.Int64("tableID", tableID),
 						zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
 						zap.String("dispatcher", replication.ID.String()),
 						zap.Int64("mode", be.mode),
@@ -546,8 +702,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		for _, replication := range replications {
 			if forwardBarrierEvent(replication, be) {
 				// One related dispatcher has moved past the barrier, so the block event can advance.
-				be.selected.Store(true)
-				be.writerDispatcherAdvanced = true
+				be.selectByForwardedDispatcher()
 				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
 					zap.String("changefeed", be.cfID.Name()),
 					zap.Uint64("commitTs", be.commitTs),
@@ -564,8 +719,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		for _, replication := range replications {
 			if forwardBarrierEvent(replication, be) {
 				// One related dispatcher has moved past the barrier, so the block event can advance.
-				be.selected.Store(true)
-				be.writerDispatcherAdvanced = true
+				be.selectByForwardedDispatcher()
 				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
 					zap.String("changefeed", be.cfID.Name()),
 					zap.Uint64("commitTs", be.commitTs),
@@ -582,10 +736,10 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 // forwardBarrierEvent returns true if `replication` is known to have passed `event`.
 //
 // We intentionally avoid `checkpointTs >= commitTs`: a dispatcher may be recreated with
-// `startTs == commitTs` and not skip the syncpoint at that ts, so it may report
-// `checkpointTs == commitTs` before the syncpoint is actually flushed. We only forward when the
-// replication is strictly beyond the barrier, or when ordering guarantees it (replication is in a
-// syncpoint barrier at the same ts while `event` is a DDL barrier).
+// `startTs == commitTs` and still need to flush the syncpoint at that ts. We only forward when the
+// replication is strictly beyond the barrier, when it already reported DONE for this exact barrier,
+// or when ordering guarantees it (replication is in a syncpoint barrier at the same ts while `event`
+// is a DDL barrier).
 func forwardBarrierEvent(replication *replica.SpanReplication, event *BarrierEvent) bool {
 	if replication.GetStatus().CheckpointTs > event.commitTs {
 		return true
@@ -596,6 +750,9 @@ func forwardBarrierEvent(replication *replica.SpanReplication, event *BarrierEve
 		if blockState.BlockTs > event.commitTs {
 			return true
 		} else if blockState.BlockTs == event.commitTs {
+			if blockState.Stage == heartbeatpb.BlockStage_DONE && blockState.IsSyncPoint == event.isSyncPoint {
+				return true
+			}
 			// If the replication is already blocked by a syncpoint at the same ts, it must have
 			// processed the DDL barrier at that ts already (barrier events are ordered by (commitTs, isSyncPoint)).
 			if blockState.IsSyncPoint && !event.isSyncPoint {
@@ -607,6 +764,10 @@ func forwardBarrierEvent(replication *replica.SpanReplication, event *BarrierEve
 }
 
 func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
+	return be.resendWithSchedule(mode, nil)
+}
+
+func (be *BarrierEvent) resendWithSchedule(mode int64, trySchedule func(*BarrierEvent) bool) []*messaging.TargetMessage {
 	now := time.Now()
 	if now.Sub(be.lastResendTime) < time.Second {
 		return nil
@@ -657,6 +818,12 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 		be.checkBlockedDispatchers()
 		return nil
 	}
+	writerForwarded := be.refreshSelectedProgress()
+	if writerForwarded && be.needSchedule && !be.writerDispatcherAdvanced {
+		if trySchedule == nil || !trySchedule(be) {
+			return nil
+		}
+	}
 	// we select a dispatcher as the writer, still waiting for that dispatcher advance its checkpoint ts
 	if !be.writerDispatcherAdvanced {
 		be.lastResendTime = now
@@ -684,7 +851,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 			}
 
 			tableID := be.blockedDispatchers.TableIDs[0]
-			replications := be.spanController.GetTasksByTableID(tableID)
+			replications := be.getTasksByBlockedTableID(tableID)
 
 			if len(replications) == 0 {
 				log.Panic("replications for this block event should not be empty",

@@ -118,6 +118,7 @@ func (m *MoveDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSp
 	if from == m.origin && status.ComponentStatus != heartbeatpb.ComponentState_Working {
 		log.Info("replica set removed from origin node",
 			zap.String("replicaSet", m.replicaSet.ID.String()))
+		m.replicaSet.UpdateStatus(status)
 
 		// reset last send message time
 		m.sendThrottler.reset()

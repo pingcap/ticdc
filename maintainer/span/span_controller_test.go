@@ -610,6 +610,63 @@ func TestMarkSpanAbsent(t *testing.T) {
 	require.Equal(t, "", replicaSpan.GetNodeID().String())
 }
 
+func TestControllerAddNewTableClampsToRemovedTableCheckpoint(t *testing.T) {
+	controller := newControllerWithCheckerForTest(t)
+	tableID := int64(100)
+	oldID := common.NewDispatcherID()
+	oldSpan := replica.NewWorkingSpanReplication(
+		controller.changefeedID,
+		oldID,
+		1,
+		testutil.GetTableSpanByID(tableID),
+		&heartbeatpb.TableSpanStatus{
+			ID:              oldID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1000,
+		},
+		"node1",
+		false,
+	)
+
+	controller.AddReplicatingSpan(oldSpan)
+	controller.RemoveByTableIDs(tableID)
+	controller.RecordRemovedSpanCheckpoint(oldSpan, 1500)
+
+	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: tableID}, 900)
+	tasks := controller.GetTasksByTableID(tableID)
+	require.Len(t, tasks, 1)
+	require.Equal(t, uint64(1500), tasks[0].GetStatus().CheckpointTs)
+
+	msg := tasks[0].NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add)
+	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+	require.Equal(t, uint64(1500), req.Config.StartTs)
+}
+
+func TestControllerAddNewTableIgnoresLowerRemovedTableCheckpoint(t *testing.T) {
+	controller := newControllerWithCheckerForTest(t)
+	tableID := int64(101)
+	oldID := common.NewDispatcherID()
+	oldSpan := replica.NewWorkingSpanReplication(
+		controller.changefeedID,
+		oldID,
+		1,
+		testutil.GetTableSpanByID(tableID),
+		&heartbeatpb.TableSpanStatus{
+			ID:              oldID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1000,
+		},
+		"node1",
+		false,
+	)
+
+	controller.RecordRemovedSpanCheckpoint(oldSpan, 800)
+	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: tableID}, 900)
+	tasks := controller.GetTasksByTableID(tableID)
+	require.Len(t, tasks, 1)
+	require.Equal(t, uint64(900), tasks[0].GetStatus().CheckpointTs)
+}
+
 func newControllerWithCheckerForTest(t *testing.T) *Controller {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
