@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	schemaStoreGCRefreshInterval  = 10 * time.Second
+	schemaStoreGCRefreshInterval  = 2 * time.Minute
 	schemaStoreGCServiceKeeperTag = "-keeper-"
 )
 
