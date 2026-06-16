@@ -284,14 +284,6 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent, wak
 	// be rewritten into deletes when enable-active-active is disabled).
 	filteredEvents := make([]*commonEvent.DMLEvent, 0, len(events))
 	for _, event := range events {
-		if d.blockEventStatus.isDMLCompletedOrObsolete(event.GetCommitTs()) {
-			log.Info("skip obsolete dml event",
-				zap.Stringer("dispatcher", d.id),
-				zap.Uint64("commitTs", event.GetCommitTs()),
-				zap.Uint64("seq", event.GetSeq()))
-			continue
-		}
-
 		// FilterDMLEvent returns the original event for normal tables and only
 		// allocates a new event when the table needs active-active or soft-delete
 		// processing. Skip is true when every row in the event is dropped, or when
@@ -910,10 +902,6 @@ func (d *BasicDispatcher) reportBlockedEventDone(
 	actionCommitTs uint64,
 	actionIsSyncPoint bool,
 ) {
-	d.blockEventStatus.recordCompleted(BlockEventIdentifier{
-		CommitTs:    actionCommitTs,
-		IsSyncPoint: actionIsSyncPoint,
-	})
 	d.offerDoneBlockStatus(actionCommitTs, actionIsSyncPoint)
 	GetDispatcherStatusDynamicStream().Wake(d.id)
 }
@@ -997,9 +985,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	shouldBlock := d.shouldBlock(event)
 	shouldHoldBlocked := d.shouldHoldBlockEvent(event)
 	if shouldBlock && shouldHoldBlocked {
-		if !d.completeObsoleteBlockEvent(event) {
-			d.holdBlockEvent(event)
-		}
+		d.holdBlockEvent(event)
 		return
 	}
 	// Writing a block event may involve downstream IO (e.g. executing DDL), so it must not block
@@ -1027,9 +1013,6 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		}
 		if shouldBlock {
 			failpoint.Inject("BlockAfterFlush", nil)
-			if d.completeObsoleteBlockEvent(event) {
-				return
-			}
 			d.reportBlockedEventToMaintainer(event)
 			return
 		}
@@ -1212,20 +1195,6 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 	d.offerBlockStatus(status)
 }
 
-func (d *BasicDispatcher) completeObsoleteBlockEvent(event commonEvent.BlockEvent) bool {
-	if !d.blockEventStatus.isCompletedOrObsolete(event) {
-		return false
-	}
-	identifier := blockEventIdentifier(event)
-	log.Info("skip obsolete block event",
-		zap.Stringer("dispatcher", d.id),
-		zap.Uint64("commitTs", identifier.CommitTs),
-		zap.Bool("isSyncPoint", identifier.IsSyncPoint))
-	d.PassBlockEventToSink(event)
-	d.reportBlockedEventDone(identifier.CommitTs, identifier.IsSyncPoint)
-	return true
-}
-
 func (d *BasicDispatcher) flushBlockedEventAndReportToMaintainer(event commonEvent.BlockEvent) {
 	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 		failpoint.Inject("BlockOrWaitBeforeFlush", nil)
@@ -1234,9 +1203,6 @@ func (d *BasicDispatcher) flushBlockedEventAndReportToMaintainer(event commonEve
 			return
 		}
 		failpoint.Inject("BlockAfterFlush", nil)
-		if d.completeObsoleteBlockEvent(event) {
-			return
-		}
 		d.reportBlockedEventToMaintainer(event)
 	})
 }

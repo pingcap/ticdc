@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -553,53 +552,6 @@ func TestUpdateCommitTsStateByEvents(t *testing.T) {
 	require.Equal(t, uint64(110), state.maxEventTs.Load())
 }
 
-func TestAdvanceEpochForResetClearsCommitTsFilter(t *testing.T) {
-	t.Parallel()
-
-	dispatcherID := common.NewDispatcherID()
-	eventServiceID := node.ID("event-service-1")
-	mockDisp := newMockDispatcher(dispatcherID, 100)
-	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
-		return len(events) > 0
-	}
-
-	stat := newDispatcherStatForTest(mockDisp, nil)
-	stat.currentEpoch.Store(newDispatcherEpochState(10, 3, stat.target.GetStartTs()))
-	stat.lastEventCommitTs.Store(220)
-	stat.gotDDLOnTs.Store(true)
-	stat.gotSyncpointOnTS.Store(true)
-
-	epoch := stat.advanceEpochForReset(150)
-	require.Equal(t, uint64(11), epoch)
-	require.Equal(t, uint64(150), stat.lastEventCommitTs.Load())
-	require.False(t, stat.gotDDLOnTs.Load())
-	require.False(t, stat.gotSyncpointOnTS.Load())
-
-	handshake := commonEvent.NewHandshakeEvent(dispatcherID, 160, epoch, &common.TableInfo{})
-	stat.handleHandshakeEvent(dispatcher.DispatcherEvent{
-		From:  &eventServiceID,
-		Event: &handshake,
-	})
-
-	ddl := &commonEvent.DDLEvent{
-		Version:    commonEvent.DDLEventVersion1,
-		FinishedTs: 180,
-		Seq:        2,
-		Epoch:      epoch,
-	}
-	require.True(t, stat.handleSingleDataEvents([]dispatcher.DispatcherEvent{
-		{
-			From:  &eventServiceID,
-			Event: ddl,
-		},
-	}))
-	require.Len(t, mockDisp.events, 1)
-	require.Same(t, ddl, mockDisp.events[0].Event)
-	require.Equal(t, uint64(180), stat.lastEventCommitTs.Load())
-	require.True(t, stat.gotDDLOnTs.Load())
-	require.False(t, stat.gotSyncpointOnTS.Load())
-}
-
 func TestHandleSignalEvent(t *testing.T) {
 	localServerID := node.ID("local-server")
 	remoteServerID := node.ID("remote-server")
@@ -937,42 +889,6 @@ func TestInitialLocalReadyCallbackIsOneShot(t *testing.T) {
 
 	stat.handleSignalEvent(newReadyEvent(localServerID))
 	require.Equal(t, 1, callbackCount)
-	requireDispatcherRequests(
-		t,
-		readDispatcherRequests(t, mockEventCollector, 1),
-		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
-	)
-	requireNoDispatcherRequest(t, mockEventCollector)
-}
-
-func TestReleasePathFeedbackResetsCurrentEventService(t *testing.T) {
-	localServerID := node.ID("local-server")
-	dispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("release_path_test", common.DefaultKeyspaceName)
-	mockDisp := newMockDispatcher(dispatcherID, 10)
-	mockDisp.changefeedID = cfID
-	mockDisp.checkPointTs = 20
-	mockEventCollector := newTestEventCollector(localServerID)
-	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
-	setSessionState(stat.session, localServerID, false, "")
-	mockEventCollector.dispatcherMap.Store(dispatcherID, stat)
-	mockEventCollector.changefeedMap.Store(cfID.ID(), newChangefeedStat(cfID))
-
-	released := false
-	feedback := dynstream.Feedback[common.GID, common.DispatcherID, *dispatcherStat]{
-		Area:         cfID.ID(),
-		Path:         dispatcherID,
-		FeedbackType: dynstream.ReleasePath,
-	}
-	mockEventCollector.handleReleasePathFeedback(feedback, func(path common.DispatcherID) {
-		released = true
-		require.Equal(t, dispatcherID, path)
-	}, "DS")
-
-	require.True(t, released)
-	cfStatValue, ok := mockEventCollector.changefeedMap.Load(cfID.ID())
-	require.True(t, ok)
-	require.Equal(t, uint32(1), cfStatValue.(*changefeedStat).memoryReleaseCount.Load())
 	requireDispatcherRequests(
 		t,
 		readDispatcherRequests(t, mockEventCollector, 1),

@@ -137,12 +137,6 @@ func (d *dispatcherStat) advanceEpochForReset(resetTs uint64) uint64 {
 		currentState := d.loadCurrentEpochState()
 		nextState := newDispatcherEpochState(currentState.epoch+1, 0, resetTs)
 		if d.currentEpoch.CompareAndSwap(currentState, nextState) {
-			// The new epoch replays events from resetTs. Commit-ts based
-			// deduplication from the old epoch must not filter replayed DDL or
-			// SyncPoint events.
-			d.lastEventCommitTs.Store(resetTs)
-			d.gotDDLOnTs.Store(false)
-			d.gotSyncpointOnTS.Store(false)
 			return nextState.epoch
 		}
 	}
