@@ -38,8 +38,8 @@ GITHASH := $(shell git rev-parse HEAD)
 GITBRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 GOVERSION := $(shell go version)
 REQUIRED_GO_MINOR := $(shell awk '/^go / { split($$2, v, "."); print v[1]"."v[2]; exit }' go.mod)
-CURRENT_GO_VERSION := $(shell go env GOVERSION 2>/dev/null)
-CURRENT_GO_MINOR := $(shell printf '%s\n' '$(CURRENT_GO_VERSION)' | sed -E 's/^go([0-9]+\.[0-9]+).*/\1/')
+CURRENT_GO_VERSION := $(shell go env GOVERSION 2>/dev/null | sed -E 's/^go//')
+CURRENT_GO_MINOR := $(shell printf '%s\n' '$(CURRENT_GO_VERSION)' | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
 
 # Since TiDB add a new dependency on github.com/cloudfoundry/gosigar,
 # We need to add CGO_ENABLED=1 to make it work when build TiCDC in Darwin OS.
@@ -172,7 +172,7 @@ check-go-version:
 		exit 1; \
 	fi
 	@if [ "$(CURRENT_GO_MINOR)" != "$(REQUIRED_GO_MINOR)" ]; then \
-		echo "Error: TiCDC must be built with Go $(REQUIRED_GO_MINOR).x; found $(CURRENT_GO_VERSION)."; \
+		echo "Error: TiCDC must be built with Go $(REQUIRED_GO_MINOR).x; found Go $(CURRENT_GO_VERSION)."; \
 		echo "Install Go $(REQUIRED_GO_MINOR).x or update PATH before running make cdc."; \
 		exit 1; \
 	fi
