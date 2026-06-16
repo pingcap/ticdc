@@ -349,6 +349,30 @@ message Table {
     bool Splitable = 3;
 }
 
+// RouteTableAdmissionAction describes the name-level lifecycle change for one
+// source table under a table route rule. These actions are carried by the table
+// trigger dispatcher's block status so the maintainer can validate and apply
+// route ownership transitions in commit-ts order.
+enum RouteTableAdmissionAction {
+    // ADMIT claims TargetSchemaName/TargetTableName for SourceSchemaName/SourceTableName.
+    ADMIT = 0;
+    // RELEASE drops the claim for SourceSchemaName/SourceTableName.
+    RELEASE = 1;
+    // RELEASE_SCHEMA drops claims for all source tables under SourceSchemaName.
+    RELEASE_SCHEMA = 2;
+}
+
+// RouteTableAdmission describes one source route transition reported by the
+// table trigger dispatcher. ADMIT uses source and target fields, RELEASE uses
+// source schema/table, and RELEASE_SCHEMA uses only source schema.
+message RouteTableAdmission {
+    string SourceSchemaName = 1;
+    string SourceTableName = 2;
+    string TargetSchemaName = 3;
+    string TargetTableName = 4;
+    RouteTableAdmissionAction Action = 5;
+}
+
 message SchemaIDChange {
     int64 TableID = 1;
     int64 OldSchemaID = 2;
@@ -364,6 +388,10 @@ message State {
     repeated SchemaIDChange UpdatedSchemas = 6;
     bool IsSyncPoint = 7;
     BlockStage stage = 8;  // means whether the block is waiting / writing / done
+    // RouteTableAdmissions carries name-level source-to-target route transitions
+    // for this barrier event. Non-empty only when the table trigger dispatcher's
+    // DDL changes the upstream source name lifecycle (e.g. RENAME TABLE, DROP TABLE).
+    repeated RouteTableAdmission RouteTableAdmissions = 9;
 }
 
 message TableSpanBlockStatus {
