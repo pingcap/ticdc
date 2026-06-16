@@ -171,6 +171,10 @@ check-go-version:
 		echo "Error: go is not available in PATH"; \
 		exit 1; \
 	fi
+	@if [ -z "$(REQUIRED_GO_MINOR)" ]; then \
+		echo "Error: failed to read required Go version from go.mod"; \
+		exit 1; \
+	fi
 	@if [ "$(CURRENT_GO_MINOR)" != "$(REQUIRED_GO_MINOR)" ]; then \
 		echo "Error: TiCDC must be built with Go $(REQUIRED_GO_MINOR).x; found Go $(CURRENT_GO_VERSION)."; \
 		echo "Install Go $(REQUIRED_GO_MINOR).x or update PATH before running make cdc."; \
