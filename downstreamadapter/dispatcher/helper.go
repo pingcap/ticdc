@@ -82,42 +82,47 @@ type BlockEventIdentifier struct {
 }
 
 // addTableCheckpointBlocker caps the table-trigger checkpoint while add-table
-// DDLs are waiting for maintainer ACK. A small map keeps deletion idempotent
-// for duplicate ACK and local error cleanup paths.
+// DDLs are waiting for maintainer ACK. Table-trigger DDLs are added with
+// nondecreasing commitTs, while ACKs may arrive out of order. The queue keeps
+// add order and the pending map marks acknowledged holes, so removing the
+// current minimum only advances over each queued item once.
 type addTableCheckpointBlocker struct {
 	mutex       sync.Mutex
-	m           map[BlockEventIdentifier]struct{}
+	pending     map[BlockEventIdentifier]struct{}
+	queue       []BlockEventIdentifier
+	head        int
 	minCommitTs atomic.Uint64
 }
 
 func newAddTableCheckpointBlocker() *addTableCheckpointBlocker {
 	return &addTableCheckpointBlocker{
-		m: make(map[BlockEventIdentifier]struct{}),
+		pending: make(map[BlockEventIdentifier]struct{}),
 	}
 }
 
 func (b *addTableCheckpointBlocker) add(identifier BlockEventIdentifier) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
-	minCommitTs := b.minCommitTs.Load()
-	if minCommitTs == 0 || identifier.CommitTs < minCommitTs {
+	if _, ok := b.pending[identifier]; ok {
+		return
+	}
+	if len(b.pending) == 0 {
 		// Checkpoint readers only look at minCommitTs, so publish the cap
-		// before making the pending blocker visible in the map.
+		// before returning the newly pending blocker to the caller.
 		b.minCommitTs.Store(identifier.CommitTs)
 	}
-	b.m[identifier] = struct{}{}
+	b.pending[identifier] = struct{}{}
+	b.queue = append(b.queue, identifier)
 }
 
 func (b *addTableCheckpointBlocker) remove(identifier BlockEventIdentifier) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
-	if _, ok := b.m[identifier]; !ok {
+	if _, ok := b.pending[identifier]; !ok {
 		return
 	}
-	delete(b.m, identifier)
-	if identifier.CommitTs == b.minCommitTs.Load() {
-		b.minCommitTs.Store(b.minCommitTsLocked())
-	}
+	delete(b.pending, identifier)
+	b.advanceHeadLocked()
 }
 
 func (b *addTableCheckpointBlocker) empty() bool {
@@ -127,7 +132,7 @@ func (b *addTableCheckpointBlocker) empty() bool {
 func (b *addTableCheckpointBlocker) len() int {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
-	return len(b.m)
+	return len(b.pending)
 }
 
 func (b *addTableCheckpointBlocker) capCheckpointTs(checkpointTs uint64) uint64 {
@@ -138,14 +143,28 @@ func (b *addTableCheckpointBlocker) capCheckpointTs(checkpointTs uint64) uint64 
 	return min(checkpointTs, minCommitTs-1)
 }
 
-func (b *addTableCheckpointBlocker) minCommitTsLocked() uint64 {
-	var minBlockTs uint64
-	for identifier := range b.m {
-		if minBlockTs == 0 || identifier.CommitTs < minBlockTs {
-			minBlockTs = identifier.CommitTs
+func (b *addTableCheckpointBlocker) advanceHeadLocked() {
+	for b.head < len(b.queue) {
+		identifier := b.queue[b.head]
+		if _, ok := b.pending[identifier]; ok {
+			b.minCommitTs.Store(identifier.CommitTs)
+			b.compactQueueLocked()
+			return
 		}
+		b.head++
 	}
-	return minBlockTs
+	b.minCommitTs.Store(0)
+	b.queue = nil
+	b.head = 0
+}
+
+func (b *addTableCheckpointBlocker) compactQueueLocked() {
+	if b.head == 0 || b.head < len(b.queue)/2 {
+		return
+	}
+	copy(b.queue, b.queue[b.head:])
+	b.queue = b.queue[:len(b.queue)-b.head]
+	b.head = 0
 }
 
 type BlockEventStatus struct {

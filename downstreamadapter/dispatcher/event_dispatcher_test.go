@@ -1509,6 +1509,7 @@ func TestAddTableCheckpointBlockerUsesSmallestPendingBlockTs(t *testing.T) {
 	for _, ddl := range []*commonEvent.DDLEvent{
 		newAddTableDDL(100, 101),
 		newAddTableDDL(120, 102),
+		newAddTableDDL(140, 103),
 	} {
 		block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl)}, func() {})
 		require.True(t, block)
@@ -1516,18 +1517,22 @@ func TestAddTableCheckpointBlockerUsesSmallestPendingBlockTs(t *testing.T) {
 		require.True(t, ok, "expected add-table block status")
 		require.Equal(t, ddl.GetCommitTs(), msg.State.BlockTs)
 	}
-	require.Equal(t, 2, dispatcher.addTableCheckpointBlocker.len())
+	require.Equal(t, 3, dispatcher.addTableCheckpointBlocker.len())
 
 	resolvedEvent := commonEvent.NewResolvedEvent(200, dispatcher.GetId(), 0)
 	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, resolvedEvent)}, func() {})
 	require.False(t, block)
 	require.Equal(t, uint64(99), dispatcher.GetCheckpointTs())
 
+	ackBlockEvent(dispatcher, 120)
+	require.Equal(t, 2, dispatcher.addTableCheckpointBlocker.len())
+	require.Equal(t, uint64(99), dispatcher.GetCheckpointTs())
+
 	ackBlockEvent(dispatcher, 100)
 	require.Equal(t, 1, dispatcher.addTableCheckpointBlocker.len())
-	require.Equal(t, uint64(119), dispatcher.GetCheckpointTs())
+	require.Equal(t, uint64(139), dispatcher.GetCheckpointTs())
 
-	ackBlockEvent(dispatcher, 120)
+	ackBlockEvent(dispatcher, 140)
 	require.Equal(t, 0, dispatcher.addTableCheckpointBlocker.len())
 	require.Equal(t, uint64(200), dispatcher.GetCheckpointTs())
 }
