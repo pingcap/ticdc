@@ -103,7 +103,7 @@ func TestAdminSerializesPendingTransitions(t *testing.T) {
 	require.Equal(t, TableKey{Schema: "db3_target", Table: "t"}, binding.Target)
 }
 
-func TestAdminRechecksTransitionAfterEarlierApply(t *testing.T) {
+func TestAdminRejectsStalePendingRoute(t *testing.T) {
 	admin := newAdminForTest(t, routeAllTo("target", "t"))
 
 	later := []Admission{

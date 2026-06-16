@@ -169,12 +169,8 @@ func TestBlockStatusBufferKeepsDistinctDoneKeys(t *testing.T) {
 
 func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
-	dispatcher := newRouteAdmissionTestDispatcher(t, true)
 	event := &commonEvent.DDLEvent{
 		FinishedTs: 100,
-		Type:       byte(model.ActionCreateTable),
-		SchemaName: "db",
-		TableName:  "t",
 		BlockedTables: &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{common.DDLSpanTableID, 1, 2},
@@ -190,254 +186,162 @@ func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 				Splitable: true,
 			},
 		},
-		TableNameChange: &commonEvent.TableNameChange{
-			AddName: []commonEvent.SchemaTableName{{SchemaName: "db", TableName: "t"}},
-		},
 		UpdatedSchemas: []commonEvent.SchemaIDChange{
 			{TableID: 12, OldSchemaID: 13, NewSchemaID: 14},
 		},
 	}
-	event = commonEvent.NewRoutedDDLEvent(event, event.Query, "target_db", "t_routed", "", "", &common.TableInfo{
-		TableName: common.TableName{
-			Schema:       "db",
-			Table:        "t",
-			TableID:      11,
-			TargetSchema: "target_db",
-			TargetTable:  "t_routed",
-		},
-	}, nil, nil)
-	routeAdmissions := dispatcher.routeTableAdmissionsForBlockState(event)
 
 	status := &heartbeatpb.TableSpanBlockStatus{
 		ID: dispatcherID.ToPB(),
 		State: &heartbeatpb.State{
-			IsBlocked:            true,
-			BlockTs:              event.GetCommitTs(),
-			BlockTables:          cloneInfluencedTablesPB(event.GetBlockedTables()),
-			NeedDroppedTables:    cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
-			NeedAddedTables:      commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-			RouteTableAdmissions: routeAdmissions,
-			UpdatedSchemas:       commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
-			Stage:                heartbeatpb.BlockStage_WAITING,
+			IsBlocked:         true,
+			BlockTs:           event.GetCommitTs(),
+			BlockTables:       cloneInfluencedTablesPB(event.GetBlockedTables()),
+			NeedDroppedTables: cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
+			NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+			UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
+			Stage:             heartbeatpb.BlockStage_WAITING,
 		},
 		Mode: common.DefaultMode,
 	}
 	require.Equal(t, []int64{common.DDLSpanTableID, 1, 2}, status.State.BlockTables.TableIDs)
 	require.Equal(t, []int64{3, 4}, status.State.NeedDroppedTables.TableIDs)
 	require.Equal(t, int64(11), status.State.NeedAddedTables[0].TableID)
-	require.Equal(t, "db", status.State.RouteTableAdmissions[0].SourceSchemaName)
-	require.Equal(t, "t", status.State.RouteTableAdmissions[0].SourceTableName)
-	require.Equal(t, "target_db", status.State.RouteTableAdmissions[0].TargetSchemaName)
-	require.Equal(t, "t_routed", status.State.RouteTableAdmissions[0].TargetTableName)
-	require.Equal(t, heartbeatpb.RouteTableAdmissionAction_ADMIT, status.State.RouteTableAdmissions[0].Action)
 	require.Equal(t, int64(14), status.State.UpdatedSchemas[0].NewSchemaID)
 
 	event.BlockedTables.TableIDs[0] = 101
 	event.NeedDroppedTables.TableIDs[0] = 102
 	event.NeedAddedTables[0].TableID = 103
-	event.TableNameChange.AddName[0].SchemaName = "changed"
-	event.TableNameChange.AddName[0].TableName = "changed"
 	event.UpdatedSchemas[0].NewSchemaID = 104
 
 	require.Equal(t, []int64{common.DDLSpanTableID, 1, 2}, status.State.BlockTables.TableIDs)
 	require.Equal(t, []int64{3, 4}, status.State.NeedDroppedTables.TableIDs)
 	require.Equal(t, int64(11), status.State.NeedAddedTables[0].TableID)
-	require.Equal(t, "db", status.State.RouteTableAdmissions[0].SourceSchemaName)
-	require.Equal(t, "t", status.State.RouteTableAdmissions[0].SourceTableName)
-	require.Equal(t, "target_db", status.State.RouteTableAdmissions[0].TargetSchemaName)
-	require.Equal(t, "t_routed", status.State.RouteTableAdmissions[0].TargetTableName)
-	require.Equal(t, heartbeatpb.RouteTableAdmissionAction_ADMIT, status.State.RouteTableAdmissions[0].Action)
 	require.Equal(t, int64(14), status.State.UpdatedSchemas[0].NewSchemaID)
 }
 
 func TestRouteTableAdmissionsForNameLevelDDLs(t *testing.T) {
 	dispatcher := newRouteAdmissionTestDispatcher(t, true)
 
-	createEvent := commonEvent.NewRoutedDDLEvent(
-		&commonEvent.DDLEvent{
-			Type:       byte(model.ActionCreateTable),
-			SchemaName: "db",
-			TableName:  "p",
-			TableNameChange: &commonEvent.TableNameChange{
-				AddName: []commonEvent.SchemaTableName{{SchemaName: "db", TableName: "p"}},
+	tests := []struct {
+		name  string
+		event commonEvent.BlockEvent
+		want  []*heartbeatpb.RouteTableAdmission
+	}{
+		{
+			name: "create table",
+			event: &commonEvent.DDLEvent{
+				Type: byte(model.ActionCreateTable),
+				TableNameChange: &commonEvent.TableNameChange{
+					AddName: []commonEvent.SchemaTableName{{SchemaName: "db", TableName: "p"}},
+				},
+			},
+			want: []*heartbeatpb.RouteTableAdmission{
+				routeAdmitPB("db", "p", "target_db", "p_routed"),
 			},
 		},
-		"create table target_db.p_routed(id int)",
-		"target_db",
-		"p_routed",
-		"",
-		"",
-		nil,
-		nil,
-		nil,
-	)
-	admissions := dispatcher.routeTableAdmissionsForBlockState(createEvent)
-	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
 		{
-			SourceSchemaName: "db",
-			SourceTableName:  "p",
-			TargetSchemaName: "target_db",
-			TargetTableName:  "p_routed",
-			Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
-		},
-	}, admissions)
-
-	createTablesEvent := &commonEvent.DDLEvent{
-		Type: byte(model.ActionCreateTables),
-		TableNameChange: &commonEvent.TableNameChange{
-			AddName: []commonEvent.SchemaTableName{
-				{SchemaName: "db", TableName: "t1"},
-				{SchemaName: "db", TableName: "t2"},
+			name: "create tables",
+			event: &commonEvent.DDLEvent{
+				Type: byte(model.ActionCreateTables),
+				TableNameChange: &commonEvent.TableNameChange{
+					AddName: []commonEvent.SchemaTableName{
+						{SchemaName: "db", TableName: "t1"},
+						{SchemaName: "db", TableName: "t2"},
+					},
+				},
+			},
+			want: []*heartbeatpb.RouteTableAdmission{
+				routeAdmitPB("db", "t1", "target_db", "t1_routed"),
+				routeAdmitPB("db", "t2", "target_db", "t2_routed"),
 			},
 		},
-	}
-	admissions = dispatcher.routeTableAdmissionsForBlockState(createTablesEvent)
-	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
 		{
-			SourceSchemaName: "db",
-			SourceTableName:  "t1",
-			TargetSchemaName: "target_db",
-			TargetTableName:  "t1_routed",
-			Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
-		},
-		{
-			SourceSchemaName: "db",
-			SourceTableName:  "t2",
-			TargetSchemaName: "target_db",
-			TargetTableName:  "t2_routed",
-			Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
-		},
-	}, admissions)
-
-	dropEvent := &commonEvent.DDLEvent{
-		Type:       byte(model.ActionDropTable),
-		SchemaName: "db",
-		TableName:  "p",
-		TableNameChange: &commonEvent.TableNameChange{
-			DropName: []commonEvent.SchemaTableName{{SchemaName: "db", TableName: "p"}},
-		},
-	}
-	admissions = dispatcher.routeTableAdmissionsForBlockState(dropEvent)
-	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
-		{
-			SourceSchemaName: "db",
-			SourceTableName:  "p",
-			Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
-		},
-	}, admissions)
-
-	renameEvent := commonEvent.NewRoutedDDLEvent(
-		&commonEvent.DDLEvent{
-			Type: byte(model.ActionRenameTable),
-			TableNameChange: &commonEvent.TableNameChange{
-				AddName:  []commonEvent.SchemaTableName{{SchemaName: "db2", TableName: "p2"}},
-				DropName: []commonEvent.SchemaTableName{{SchemaName: "db", TableName: "p"}},
+			name: "drop table",
+			event: &commonEvent.DDLEvent{
+				Type: byte(model.ActionDropTable),
+				TableNameChange: &commonEvent.TableNameChange{
+					DropName: []commonEvent.SchemaTableName{{SchemaName: "db", TableName: "p"}},
+				},
 			},
-			SchemaName: "db2",
-			TableName:  "p2",
-		},
-		"rename table target_db.p_routed to target_db.p2_routed",
-		"target_db",
-		"p2_routed",
-		"",
-		"",
-		nil,
-		nil,
-		nil,
-	)
-	admissions = dispatcher.routeTableAdmissionsForBlockState(renameEvent)
-	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
-		{
-			SourceSchemaName: "db",
-			SourceTableName:  "p",
-			Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
-		},
-		{
-			SourceSchemaName: "db2",
-			SourceTableName:  "p2",
-			TargetSchemaName: "target_db",
-			TargetTableName:  "p2_routed",
-			Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
-		},
-	}, admissions)
-
-	renameTablesEvent := &commonEvent.DDLEvent{
-		Type: byte(model.ActionRenameTables),
-		TableNameChange: &commonEvent.TableNameChange{
-			DropName: []commonEvent.SchemaTableName{
-				{SchemaName: "db", TableName: "t1"},
-				{SchemaName: "db", TableName: "t2"},
+			want: []*heartbeatpb.RouteTableAdmission{
+				routeReleasePB("db", "p"),
 			},
-			AddName: []commonEvent.SchemaTableName{
-				{SchemaName: "db2", TableName: "t1_new"},
-				{SchemaName: "db2", TableName: "t2_new"},
+		},
+		{
+			name: "rename table",
+			event: &commonEvent.DDLEvent{
+				Type: byte(model.ActionRenameTable),
+				TableNameChange: &commonEvent.TableNameChange{
+					DropName: []commonEvent.SchemaTableName{{SchemaName: "db", TableName: "p"}},
+					AddName:  []commonEvent.SchemaTableName{{SchemaName: "db2", TableName: "p2"}},
+				},
+			},
+			want: []*heartbeatpb.RouteTableAdmission{
+				routeReleasePB("db", "p"),
+				routeAdmitPB("db2", "p2", "target_db", "p2_routed"),
+			},
+		},
+		{
+			name: "rename tables",
+			event: &commonEvent.DDLEvent{
+				Type: byte(model.ActionRenameTables),
+				TableNameChange: &commonEvent.TableNameChange{
+					DropName: []commonEvent.SchemaTableName{
+						{SchemaName: "db", TableName: "t1"},
+						{SchemaName: "db", TableName: "t2"},
+					},
+					AddName: []commonEvent.SchemaTableName{
+						{SchemaName: "db2", TableName: "t1_new"},
+						{SchemaName: "db2", TableName: "t2_new"},
+					},
+				},
+			},
+			want: []*heartbeatpb.RouteTableAdmission{
+				routeReleasePB("db", "t1"),
+				routeReleasePB("db", "t2"),
+				routeAdmitPB("db2", "t1_new", "target_db", "t1_new_routed"),
+				routeAdmitPB("db2", "t2_new", "target_db", "t2_new_routed"),
+			},
+		},
+		{
+			name: "drop schema",
+			event: &commonEvent.DDLEvent{
+				Type: byte(model.ActionDropSchema),
+				TableNameChange: &commonEvent.TableNameChange{
+					DropDatabaseName: "db",
+				},
+			},
+			want: []*heartbeatpb.RouteTableAdmission{
+				routeReleaseSchemaPB("db"),
+			},
+		},
+		{
+			name: "partition ddl",
+			event: &commonEvent.DDLEvent{
+				Type: byte(model.ActionTruncateTablePartition),
+				NeedAddedTables: []commonEvent.Table{
+					{SchemaID: 1, TableID: 101},
+				},
+				NeedDroppedTables: &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal,
+					TableIDs:      []int64{100},
+				},
+			},
+		},
+		{
+			name: "no table name change",
+			event: &commonEvent.DDLEvent{
+				Type: byte(model.ActionDropTable),
 			},
 		},
 	}
-	admissions = dispatcher.routeTableAdmissionsForBlockState(renameTablesEvent)
-	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
-		{
-			SourceSchemaName: "db",
-			SourceTableName:  "t1",
-			Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
-		},
-		{
-			SourceSchemaName: "db",
-			SourceTableName:  "t2",
-			Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
-		},
-		{
-			SourceSchemaName: "db2",
-			SourceTableName:  "t1_new",
-			TargetSchemaName: "target_db",
-			TargetTableName:  "t1_new_routed",
-			Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
-		},
-		{
-			SourceSchemaName: "db2",
-			SourceTableName:  "t2_new",
-			TargetSchemaName: "target_db",
-			TargetTableName:  "t2_new_routed",
-			Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
-		},
-	}, admissions)
 
-	dropSchemaEvent := &commonEvent.DDLEvent{
-		Type:       byte(model.ActionDropSchema),
-		SchemaName: "db",
-		TableNameChange: &commonEvent.TableNameChange{
-			DropDatabaseName: "db",
-		},
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, dispatcher.routeTableAdmissionsForBlockState(tc.event))
+		})
 	}
-	admissions = dispatcher.routeTableAdmissionsForBlockState(dropSchemaEvent)
-	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
-		{
-			SourceSchemaName: "db",
-			Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE_SCHEMA,
-		},
-	}, admissions)
-
-	partitionEvent := &commonEvent.DDLEvent{
-		Type:       byte(model.ActionTruncateTablePartition),
-		SchemaName: "db",
-		TableName:  "p",
-		NeedAddedTables: []commonEvent.Table{
-			{SchemaID: 1, TableID: 101},
-		},
-		NeedDroppedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{100},
-		},
-	}
-	admissions = dispatcher.routeTableAdmissionsForBlockState(partitionEvent)
-	require.Nil(t, admissions)
-
-	admissions = dispatcher.routeTableAdmissionsForBlockState(&commonEvent.DDLEvent{
-		Type:       byte(model.ActionDropTable),
-		SchemaName: "db",
-		TableName:  "p",
-	})
-	require.Nil(t, admissions)
 }
 
 func TestRouteTableAdmissionsOnlyReportedByTableTrigger(t *testing.T) {
@@ -456,6 +360,31 @@ func TestRouteTableAdmissionsOnlyReportedByTableTrigger(t *testing.T) {
 
 	require.NotEmpty(t, tableTriggerDispatcher.routeTableAdmissionsForBlockState(event))
 	require.Nil(t, tableDispatcher.routeTableAdmissionsForBlockState(event))
+}
+
+func routeAdmitPB(sourceSchema, sourceTable, targetSchema, targetTable string) *heartbeatpb.RouteTableAdmission {
+	return &heartbeatpb.RouteTableAdmission{
+		SourceSchemaName: sourceSchema,
+		SourceTableName:  sourceTable,
+		TargetSchemaName: targetSchema,
+		TargetTableName:  targetTable,
+		Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
+	}
+}
+
+func routeReleasePB(sourceSchema, sourceTable string) *heartbeatpb.RouteTableAdmission {
+	return &heartbeatpb.RouteTableAdmission{
+		SourceSchemaName: sourceSchema,
+		SourceTableName:  sourceTable,
+		Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
+	}
+}
+
+func routeReleaseSchemaPB(sourceSchema string) *heartbeatpb.RouteTableAdmission {
+	return &heartbeatpb.RouteTableAdmission{
+		SourceSchemaName: sourceSchema,
+		Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE_SCHEMA,
+	}
 }
 
 func newRouteAdmissionTestDispatcher(t *testing.T, tableTrigger bool) *BasicDispatcher {

@@ -478,7 +478,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	require.Len(t, barrier.blockedEvents.m, 0)
 }
 
-func TestBarrierPrechecksRouteEventWhenDDLDispatcherBlocks(t *testing.T) {
+func TestBarrierPrechecksDDLRoute(t *testing.T) {
 	barrier, _, cfID, tableTriggerEventDispatcherID, _, blockTables := newBarrierRoutePrecheckTestFixture(
 		t, routeAllTo("target", "t"))
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -519,12 +519,7 @@ func TestBarrierPrechecksRouteEventWhenDDLDispatcherBlocks(t *testing.T) {
 						{SchemaID: 2, TableID: 2},
 					},
 					RouteTableAdmissions: []*heartbeatpb.RouteTableAdmission{
-						{
-							SourceSchemaName: "db2",
-							SourceTableName:  "t",
-							TargetSchemaName: "target",
-							TargetTableName:  "t",
-						},
+						routeAdmitPB("db2", "t", "target", "t"),
 					},
 				},
 			},
@@ -535,6 +530,42 @@ func TestBarrierPrechecksRouteEventWhenDDLDispatcherBlocks(t *testing.T) {
 	require.NotNil(t, msgs)
 	require.NotEmpty(t, msgs)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Empty(t, resp.DispatcherStatuses)
+}
+
+func TestBarrierRejectsNonblockingRouteConflict(t *testing.T) {
+	barrier, routeAdmin, cfID, tableTriggerEventDispatcherID, _, _ := newBarrierRoutePrecheckTestFixture(
+		t, routeAllTo("target", "t"))
+	var reportedErr error
+	routeAdmin.SetErrorReporter(func(err error) {
+		reportedErr = err
+	})
+
+	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: tableTriggerEventDispatcherID.ToPB(),
+				State: &heartbeatpb.State{
+					BlockTs: 10,
+					NeedAddedTables: []*heartbeatpb.Table{
+						{SchemaID: 2, TableID: 2},
+					},
+					RouteTableAdmissions: []*heartbeatpb.RouteTableAdmission{
+						routeAdmitPB("db2", "t", "target", "t"),
+					},
+					Stage: heartbeatpb.BlockStage_NONE,
+				},
+			},
+		},
+	})
+
+	require.NotNil(t, reportedErr)
+	require.Contains(t, reportedErr.Error(), "table route conflict")
+	require.Equal(t, 0, barrier.pendingEvents.Len())
+	require.NotNil(t, msgs)
+	require.NotEmpty(t, msgs)
+	resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Empty(t, resp.DispatcherStatuses)
 }
 
@@ -575,18 +606,8 @@ func TestBarrierAppliesRecoveredRouteEventBeforeActionResend(t *testing.T) {
 							TableIDs:      []int64{common.DDLSpanTableID, 1},
 						},
 						RouteTableAdmissions: []*heartbeatpb.RouteTableAdmission{
-							{
-								SourceSchemaName: "db1",
-								SourceTableName:  "t",
-								Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
-							},
-							{
-								SourceSchemaName: "db1",
-								SourceTableName:  "u",
-								TargetSchemaName: "target",
-								TargetTableName:  "u",
-								Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
-							},
+							routeReleasePB("db1", "t"),
+							routeAdmitPB("db1", "u", "target", "u"),
 						},
 						Stage: heartbeatpb.BlockStage_DONE,
 					},
@@ -649,11 +670,7 @@ func TestBarrierCommitsForwardedRouteEventBeforeLaterRouteEvent(t *testing.T) {
 							TableIDs:      []int64{common.DDLSpanTableID, 1},
 						},
 						RouteTableAdmissions: []*heartbeatpb.RouteTableAdmission{
-							{
-								SourceSchemaName: "db1",
-								SourceTableName:  "t",
-								Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
-							},
+							routeReleasePB("db1", "t"),
 						},
 						Stage: heartbeatpb.BlockStage_WAITING,
 					},
@@ -669,13 +686,7 @@ func TestBarrierCommitsForwardedRouteEventBeforeLaterRouteEvent(t *testing.T) {
 							TableIDs:      []int64{common.DDLSpanTableID, 1},
 						},
 						RouteTableAdmissions: []*heartbeatpb.RouteTableAdmission{
-							{
-								SourceSchemaName: "db2",
-								SourceTableName:  "t",
-								TargetSchemaName: "target",
-								TargetTableName:  "t",
-								Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
-							},
+							routeAdmitPB("db2", "t", "target", "t"),
 						},
 						Stage: heartbeatpb.BlockStage_DONE,
 					},
@@ -697,7 +708,7 @@ func TestBarrierCommitsForwardedRouteEventBeforeLaterRouteEvent(t *testing.T) {
 	require.Contains(t, reportedErr.Error(), "db2")
 }
 
-func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
+func TestBarrierRejectsRouteConflict(t *testing.T) {
 	barrier, routeAdmin, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables := newBarrierRoutePrecheckTestFixture(
 		t, routeAllTo("target", "t"))
 	var reportedErr error
@@ -728,12 +739,7 @@ func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
 						{SchemaID: 2, TableID: 2},
 					},
 					RouteTableAdmissions: []*heartbeatpb.RouteTableAdmission{
-						{
-							SourceSchemaName: "db2",
-							SourceTableName:  "t",
-							TargetSchemaName: "target",
-							TargetTableName:  "t",
-						},
+						routeAdmitPB("db2", "t", "target", "t"),
 					},
 				},
 			},
@@ -751,7 +757,7 @@ func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
 	requireNoDispatcherActions(t, msgs)
 }
 
-func TestBarrierRoutePrecheckKeepsFullyReportedBlockedEventAndPreventsWriteAction(t *testing.T) {
+func TestBarrierKeepsBlockedRouteConflict(t *testing.T) {
 	handleBlockedDispatchers := func(
 		barrier *Barrier,
 		cfID common.ChangeFeedID,
@@ -790,18 +796,8 @@ func TestBarrierRoutePrecheckKeepsFullyReportedBlockedEventAndPreventsWriteActio
 	}
 	msgs := handleBlockedDispatchers(
 		barrier, cfID, tableDispatcherID, blockTables, nil, []*heartbeatpb.RouteTableAdmission{
-			{
-				SourceSchemaName: "db1",
-				SourceTableName:  "t",
-				Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
-			},
-			{
-				SourceSchemaName: "db1",
-				SourceTableName:  "u",
-				TargetSchemaName: "db1_target",
-				TargetTableName:  "u",
-				Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
-			},
+			routeReleasePB("db1", "t"),
+			routeAdmitPB("db1", "u", "db1_target", "u"),
 		})
 	event := barrier.blockedEvents.m[getEventKey(10, false)]
 	require.NotNil(t, event)
@@ -827,12 +823,7 @@ func TestBarrierRoutePrecheckKeepsFullyReportedBlockedEventAndPreventsWriteActio
 		barrier, cfID, tableDispatcherID, blockTables, []*heartbeatpb.Table{
 			{SchemaID: 2, TableID: 2},
 		}, []*heartbeatpb.RouteTableAdmission{
-			{
-				SourceSchemaName: "db2",
-				SourceTableName:  "t",
-				TargetSchemaName: "target",
-				TargetTableName:  "t",
-			},
+			routeAdmitPB("db2", "t", "target", "t"),
 		})
 	require.NotNil(t, reportedErr)
 	require.Contains(t, reportedErr.Error(), "table route conflict")
@@ -934,6 +925,24 @@ func routeExact(sourceSchema, sourceTable, targetSchema, targetTable string) *co
 		Matcher:      []string{sourceSchema + "." + sourceTable},
 		TargetSchema: targetSchema,
 		TargetTable:  targetTable,
+	}
+}
+
+func routeAdmitPB(sourceSchema, sourceTable, targetSchema, targetTable string) *heartbeatpb.RouteTableAdmission {
+	return &heartbeatpb.RouteTableAdmission{
+		SourceSchemaName: sourceSchema,
+		SourceTableName:  sourceTable,
+		TargetSchemaName: targetSchema,
+		TargetTableName:  targetTable,
+		Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
+	}
+}
+
+func routeReleasePB(sourceSchema, sourceTable string) *heartbeatpb.RouteTableAdmission {
+	return &heartbeatpb.RouteTableAdmission{
+		SourceSchemaName: sourceSchema,
+		SourceTableName:  sourceTable,
+		Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
 	}
 }
 

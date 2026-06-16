@@ -1049,7 +1049,13 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	// Writing a block event may involve downstream IO (e.g. executing DDL), so it must not block
 	// the dynamic stream goroutine.
 	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-		// Non-blocking DDLs are not coordinated through barrier WRITE/PASS.
+		// Non-blocking DDLs are not coordinated through barrier WRITE/PASS, so
+		// they keep the original DDL fast path and write downstream before the
+		// maintainer sees this status. Table Route functionality does not change
+		// this behavior, route admission conflicts reported here stop maintainer-side
+		// route registry updates and scheduling new dispatchers to prevent multiple dispatchers
+		// belongs to different logic table write to the same downstream table.
+		//
 		// The table-trigger dispatcher still waits for maintainer ACK when the
 		// DDL changes maintainer-side metadata.
 		//

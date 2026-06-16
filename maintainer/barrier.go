@@ -507,8 +507,12 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		return event, status, targetID, true
 	}
 	// Non-blocking metadata updates are reported by the table trigger dispatcher
-	// after it has written the DDL downstream. They still need maintainer ACK for
-	// table scheduling and/or route admission.
+	// after it has written the DDL downstream. Route admission precheck here is
+	// a maintainer-side fence: on conflict, do not apply the route registry
+	// transition and do not schedule newly added dispatchers.
+	//
+	// These events still need maintainer ACK for table scheduling and/or route
+	// admission.
 	// if ack failed, dispatcher will send a heartbeat again, so we do not need to care about resend message here
 	//
 	// Besides, we need to add the event into the blockedEvents map first, and then delete after finish scheduler

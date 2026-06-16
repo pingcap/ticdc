@@ -55,11 +55,18 @@ type Admin struct {
 	failed      bool
 }
 
+// Action is a mapping of RouteTableAdmissionAction in the table trigger dispatcher's block status.
+// it describes how a source table participates in route admission.
 type Action int
 
 const (
+	// Admit registers a source table as the owner of its routed target table.
 	Admit Action = iota
+	// Release removes one source table from route admission.
 	Release
+	// ReleaseSchema removes every admitted source table in the source schema.
+	// The schema is expanded against the current active route snapshot when the
+	// transition is evaluated.
 	ReleaseSchema
 )
 
