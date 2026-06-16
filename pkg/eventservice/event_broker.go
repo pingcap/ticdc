@@ -1258,7 +1258,9 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 		return actual.(*changefeedStatus)
 	}
 	log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
-	initializeScanWindowMetrics(changefeedID.String())
+	if status.scanWindowController != nil {
+		initializeScanWindowMetrics(changefeedID.String())
+	}
 	return status
 }
 

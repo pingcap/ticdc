@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/middleware"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
@@ -43,6 +42,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
@@ -770,6 +770,14 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 	middleware.SetChangefeedOperationTarget(c, cfInfo.ChangefeedID.Keyspace(), cfInfo.ChangefeedID.Name())
+
+	// Resume validation must use persisted metadata because stopped changefeeds
+	// can be edited outside the coordinator process during legacy migration.
+	cfInfo, err = co.GetPersistedChangefeedInfo(ctx, cfInfo.ChangefeedID)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
 
 	// If there is no overrideCheckpointTs, then check whether the currentCheckpointTs is smaller than gc safepoint or not.
 	newCheckpointTs := status.CheckpointTs

@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
@@ -39,6 +38,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -54,6 +54,21 @@ const (
 	// value-retention window in front of the manager.
 	blockStatusBufferSize = 16 * 1024
 )
+
+// IsWritePathClosedError reports whether err means the local write path has
+// already been fenced. Callers should stop the in-flight local request instead
+// of treating it as a successful dispatcher creation.
+func IsWritePathClosedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	code, ok := errors.RFCCode(err)
+	return ok && code == errors.ErrDispatcherManagerWritePathClosed.RFCCode()
+}
+
+func newWritePathClosedError() error {
+	return errors.ErrDispatcherManagerWritePathClosed.FastGenByArgs()
+}
 
 /*
 DispatcherManager manages dispatchers for a changefeed instance with responsibilities including:
@@ -141,8 +156,10 @@ type DispatcherManager struct {
 	latestWatermark     Watermark
 	latestRedoWatermark Watermark
 
-	closing atomic.Bool
-	closed  atomic.Bool
+	closing         atomic.Bool
+	closed          atomic.Bool
+	writePathMu     sync.Mutex
+	writePathClosed atomic.Bool
 	// removeChangefeedRequested is sticky once any close request asks for removed=true.
 	// A later removed=false request must not downgrade the final cleanup semantics.
 	removeChangefeedRequested atomic.Bool
@@ -192,7 +209,8 @@ func NewDispatcherManager(
 	startTs uint64,
 	maintainerID node.ID,
 	newChangefeed bool,
-) (*DispatcherManager, error) {
+	registerInitializing func(*DispatcherManager) bool,
+) (manager *DispatcherManager, err error) {
 	failpoint.Inject("NewDispatcherManagerDelay", nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -208,7 +226,7 @@ func NewDispatcherManager(
 		integrityCfg = cfConfig.SinkConfig.Integrity.ToPB()
 	}
 
-	manager := &DispatcherManager{
+	manager = &DispatcherManager{
 		ctx:                   ctx,
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
 		currentOperatorMap:    sync.Map{},
@@ -240,6 +258,17 @@ func NewDispatcherManager(
 	// Set the epoch and maintainerID of the event dispatcher manager
 	manager.meta.maintainerEpoch = cfConfig.Epoch
 	manager.meta.maintainerID = maintainerID
+	cleanupManager := manager
+	defer func() {
+		if err != nil && cleanupManager != nil {
+			cleanupManager.LocalFence()
+			manager = nil
+		}
+	}()
+	// The manager must be fenceable before any write-capable resource is initialized.
+	if registerInitializing != nil && !registerInitializing(manager) {
+		return nil, newWritePathClosedError()
+	}
 
 	// Set Sync Point Config
 	var syncPointConfig *syncpoint.SyncPointConfig
@@ -251,11 +280,18 @@ func NewDispatcherManager(
 		}
 	}
 
-	var err error
-	manager.sink, err = sink.New(ctx, manager.config, manager.changefeedID)
+	createdSink, err := sink.New(ctx, manager.config, manager.changefeedID)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	manager.writePathMu.Lock()
+	if manager.writePathClosed.Load() {
+		manager.writePathMu.Unlock()
+		createdSink.Close()
+		return nil, newWritePathClosedError()
+	}
+	manager.sink = createdSink
+	manager.writePathMu.Unlock()
 
 	sinkType := manager.sink.SinkType()
 	if sinkType != common.KafkaSinkType {
@@ -288,7 +324,7 @@ func NewDispatcherManager(
 
 	batchCounts, batchBytes := manager.getEventCollectorBatchCountAndBytes(manager.sink)
 	// Create shared info for all dispatchers
-	manager.sharedInfo = dispatcher.NewSharedInfo(
+	sharedInfo := dispatcher.NewSharedInfo(
 		manager.changefeedID,
 		manager.config.TimeZone,
 		manager.config.BDRMode,
@@ -306,10 +342,24 @@ func NewDispatcherManager(
 		blockStatusBufferSize,
 		make(chan error, 1),
 	)
+	manager.writePathMu.Lock()
+	if manager.writePathClosed.Load() {
+		manager.writePathMu.Unlock()
+		sharedInfo.Close()
+		return nil, newWritePathClosedError()
+	}
+	manager.sharedInfo = sharedInfo
+	manager.writePathMu.Unlock()
 
 	// Register Event Dispatcher Manager in HeartBeatCollector,
 	// which is responsible for communication with the maintainer.
+	manager.writePathMu.Lock()
+	if manager.writePathClosed.Load() {
+		manager.writePathMu.Unlock()
+		return nil, newWritePathClosedError()
+	}
 	err = appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterDispatcherManager(manager)
+	manager.writePathMu.Unlock()
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -410,33 +460,61 @@ func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.Dispa
 	if err != nil {
 		return errors.Trace(err)
 	}
+	tableTriggerDispatcher := e.GetTableTriggerEventDispatcher()
+	if tableTriggerDispatcher == nil {
+		if e.writePathClosed.Load() {
+			return newWritePathClosedError()
+		}
+		return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+			FastGenByArgs("table trigger event dispatcher was not created")
+	}
 	log.Info("table trigger event dispatcher created",
 		zap.Stringer("changefeedID", e.changefeedID),
-		zap.Stringer("dispatcherID", e.GetTableTriggerEventDispatcher().GetId()),
-		zap.Uint64("startTs", e.GetTableTriggerEventDispatcher().GetStartTs()),
+		zap.Stringer("dispatcherID", tableTriggerDispatcher.GetId()),
+		zap.Uint64("startTs", tableTriggerDispatcher.GetStartTs()),
 	)
 	return nil
 }
 
 func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
-	if e.GetTableTriggerEventDispatcher() == nil {
+	e.writePathMu.Lock()
+	if e.writePathClosed.Load() {
+		e.writePathMu.Unlock()
+		return newWritePathClosedError()
+	}
+	tableTriggerDispatcher := e.GetTableTriggerEventDispatcher()
+	if tableTriggerDispatcher == nil {
+		e.writePathMu.Unlock()
 		return nil
 	}
-	needAddDispatcher, err := e.GetTableTriggerEventDispatcher().InitializeTableSchemaStore(schemaInfo)
+	needAddDispatcher, err := tableTriggerDispatcher.InitializeTableSchemaStore(schemaInfo)
 	if err != nil {
+		e.writePathMu.Unlock()
 		return errors.Trace(err)
 	}
+	e.writePathMu.Unlock()
 	if !needAddDispatcher {
 		return nil
 	}
+	if e.writePathClosed.Load() {
+		return newWritePathClosedError()
+	}
 	// before bootstrap finished, cannot send any event.
-	success := e.GetTableTriggerEventDispatcher().EmitBootstrap()
+	success := tableTriggerDispatcher.EmitBootstrap(e.writePathClosed.Load)
+	if e.writePathClosed.Load() {
+		return newWritePathClosedError()
+	}
 	if !success {
 		return errors.ErrDispatcherFailed.GenWithStackByArgs()
 	}
 
+	e.writePathMu.Lock()
+	defer e.writePathMu.Unlock()
+	if e.writePathClosed.Load() {
+		return newWritePathClosedError()
+	}
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
-	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.GetTableTriggerEventDispatcher(), e.sinkQuota)
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(tableTriggerDispatcher, e.sinkQuota)
 
 	// The table trigger event dispatcher needs changefeed-level checkpoint updates only
 	// when downstream components must maintain table names (for non-MySQL sinks), or
@@ -478,6 +556,9 @@ func (e *DispatcherManager) getTableRecoveryInfoFromMysqlSink(tableIds, startTsL
 // 1. newEventDispatchers is called by NewTableTriggerEventDispatcher(just means when creating table trigger event dispatcher)
 // 2. changefeed is total new created, or resumed with overwriteCheckpointTs
 func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, removeDDLTs bool) error {
+	if e.writePathClosed.Load() {
+		return newWritePathClosedError()
+	}
 	start := time.Now()
 	currentPdTs := e.pdClock.CurrentTS()
 
@@ -541,6 +622,12 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			e.heartBeatTask = newHeartBeatTask(e)
 		}
 
+		e.writePathMu.Lock()
+		if e.writePathClosed.Load() {
+			e.writePathMu.Unlock()
+			d.Remove()
+			return newWritePathClosedError()
+		}
 		if d.IsTableTriggerDispatcher() {
 			if util.GetOrZero(e.config.SinkConfig.SendAllBootstrapAtStart) {
 				d.BootstrapState = dispatcher.BootstrapNotStarted
@@ -556,6 +643,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 
 		seq := e.dispatcherMap.Set(id, d)
 		d.SetSeq(seq)
+		e.writePathMu.Unlock()
 
 		if d.IsTableTriggerDispatcher() {
 			e.metricTableTriggerEventDispatcherCount.Inc()
@@ -641,10 +729,7 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 		// Split oversized batches so one protobuf message does not monopolize
 		// serialization, transport, and maintainer-side processing.
 		for start := 0; start < len(blockStatusMessage); start += maxBlockStatusesPerRequest {
-			end := start + maxBlockStatusesPerRequest
-			if end > len(blockStatusMessage) {
-				end = len(blockStatusMessage)
-			}
+			end := min(start+maxBlockStatusesPerRequest, len(blockStatusMessage))
 			// Copy each chunk so queue-side in-place filtering owns the backing
 			// array and cannot mutate another batch's slice accidentally.
 			chunk := make([]*heartbeatpb.TableSpanBlockStatus, end-start)
@@ -926,7 +1011,14 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		zap.Stringer("dispatcherID", mergedDispatcherID),
 		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
 
+	e.writePathMu.Lock()
+	if e.writePathClosed.Load() {
+		e.writePathMu.Unlock()
+		mergedDispatcher.Remove()
+		return nil
+	}
 	registerMergeDispatcher(e.changefeedID, dispatcherIDs, e.dispatcherMap, mergedDispatcherID, mergedDispatcher, e.schemaIDToDispatchers, e.metricEventDispatcherCount, e.sinkQuota)
+	e.writePathMu.Unlock()
 	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
 }
 
@@ -940,45 +1032,88 @@ func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 		e.tryScheduleRemoveChangefeedCleanup()
 		return true
 	}
-	if e.closing.Load() {
+	if !e.closing.CompareAndSwap(false, true) {
 		return e.closed.Load()
 	}
 
-	e.closing.Store(true)
 	go e.close()
 	return false
+}
+
+// LocalFence stops the local write path immediately without waiting for
+// dispatcher progress to drain. The remaining cleanup continues asynchronously.
+func (e *DispatcherManager) LocalFence() {
+	if e.closed.Load() {
+		return
+	}
+	startClose := e.closing.CompareAndSwap(false, true)
+	e.stopWritePath(true)
+	if startClose {
+		go e.finishClose()
+	}
 }
 
 func (e *DispatcherManager) close() {
 	log.Info("closing event dispatcher manager",
 		zap.Stringer("changefeedID", e.changefeedID))
 
-	defer e.closing.Store(false)
-	if e.IsRedoEnabled() {
+	e.stopWritePath(false)
+	e.finishClose()
+}
+
+func (e *DispatcherManager) stopWritePath(cancelFirst bool) {
+	e.writePathMu.Lock()
+	if e.writePathClosed.Load() {
+		e.writePathMu.Unlock()
+		return
+	}
+	e.writePathClosed.Store(true)
+	e.writePathMu.Unlock()
+
+	log.Info("stopping dispatcher manager write path",
+		zap.Stringer("changefeedID", e.changefeedID))
+
+	if cancelFirst && e.cancel != nil {
+		e.cancel()
+	}
+
+	if e.IsRedoEnabled() && e.redoSink != nil {
 		closeAllDispatchers(e.changefeedID, e.redoDispatcherMap, e.redoSink.SinkType())
 		log.Info("closed all redo dispatchers",
 			zap.Stringer("changefeedID", e.changefeedID))
-		err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveRedoMessage(e.changefeedID)
-		if err != nil {
-			log.Error("remove redo message failed",
+		if heartbeatCollector, ok := appcontext.TryGetService[*HeartBeatCollector](appcontext.HeartbeatCollector); ok {
+			err := heartbeatCollector.RemoveRedoMessage(e.changefeedID)
+			if err != nil {
+				log.Error("remove redo message failed",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Error(err),
+				)
+			}
+		} else {
+			log.Warn("heartbeat collector is not available when stopping redo write path",
 				zap.Stringer("changefeedID", e.changefeedID),
-				zap.Error(err),
 			)
-			return
 		}
 	}
 
-	closeAllDispatchers(e.changefeedID, e.dispatcherMap, e.sink.SinkType())
+	if e.sink != nil {
+		closeAllDispatchers(e.changefeedID, e.dispatcherMap, e.sink.SinkType())
+	}
 	log.Info("closed all event dispatchers",
 		zap.Stringer("changefeedID", e.changefeedID))
 
-	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveDispatcherManager(e.changefeedID)
-	if err != nil {
-		log.Error("remove dispatcher manager from heartbeat collector failed",
+	if heartbeatCollector, ok := appcontext.TryGetService[*HeartBeatCollector](appcontext.HeartbeatCollector); ok {
+		err := heartbeatCollector.RemoveDispatcherManager(e.changefeedID)
+		if err != nil {
+			log.Error("remove dispatcher manager from heartbeat collector failed",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Error(err),
+			)
+		}
+	} else {
+		log.Warn("heartbeat collector is not available when stopping dispatcher manager write path",
 			zap.Stringer("changefeedID", e.changefeedID),
-			zap.Error(err),
 		)
-		return
 	}
 
 	// heartbeatTask only will be generated when create new dispatchers.
@@ -989,10 +1124,9 @@ func (e *DispatcherManager) close() {
 		e.heartBeatTask.Cancel()
 	}
 
-	// Cancel the context to signal all dependent components to stop.
-	// This is important to prevent `e.sink.Close() / e.sharedInfo.Close()` from blocking,
-	// especially when a long-running DDL is being executed by the sink.
-	e.cancel()
+	if !cancelFirst && e.cancel != nil {
+		e.cancel()
+	}
 
 	if e.sharedInfo != nil {
 		e.sharedInfo.Close()
@@ -1000,13 +1134,34 @@ func (e *DispatcherManager) close() {
 
 	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
-	if e.IsRedoEnabled() {
+	if e.IsRedoEnabled() && e.redoSink != nil {
 		e.redoSink.Close()
 	}
-	e.sink.Close()
+	if e.sink != nil {
+		e.sink.Close()
+	}
 	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))
+}
 
+func (e *DispatcherManager) addCheckpointTs(checkpointTs uint64) {
+	if e.writePathClosed.Load() {
+		return
+	}
+	if e.GetTableTriggerEventDispatcher() == nil || e.sink == nil {
+		return
+	}
+	if e.writePathClosed.Load() {
+		return
+	}
+	e.sink.AddCheckpointTs(checkpointTs)
+}
+
+func (e *DispatcherManager) finishClose() {
+	defer e.closing.Store(false)
 	e.wg.Wait()
+	if !e.closed.CompareAndSwap(false, true) {
+		return
+	}
 
 	e.removeTaskHandles.Range(func(key, value interface{}) bool {
 		handle := value.(*threadpool.TaskHandle)
@@ -1016,7 +1171,6 @@ func (e *DispatcherManager) close() {
 
 	e.cleanMetrics()
 
-	e.closed.Store(true)
 	e.tryScheduleRemoveChangefeedCleanup()
 	log.Info("event dispatcher manager closed",
 		zap.Stringer("changefeedID", e.changefeedID))

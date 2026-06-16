@@ -27,6 +27,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/server/watcher"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -56,6 +57,7 @@ type BarrierEvent struct {
 	blockedDispatchers *heartbeatpb.InfluencedTables
 	dropDispatchers    *heartbeatpb.InfluencedTables
 	newTables          []*heartbeatpb.Table
+	routeAdmissions    []routing.Admission
 	schemaIDChange     []*heartbeatpb.SchemaIDChange
 	isSyncPoint        bool
 	needSchedule       bool
@@ -110,13 +112,14 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		blockedDispatchers: status.BlockTables,
 		dropDispatchers:    status.NeedDroppedTables,
 		newTables:          status.NeedAddedTables,
+		routeAdmissions:    routeTableAdmissionsFromPB(status.RouteTableAdmissions),
 		schemaIDChange:     status.UpdatedSchemas,
 		isSyncPoint:        status.IsSyncPoint,
 		needSchedule:       needSchedule(status),
 		mode:               mode,
 		// if the split table is enable for this changefeed, if not we can use tableID to check coverage
 		dynamicSplitEnabled: dynamicSplitEnabled,
-
+		rangeChecker:        newRangeCheck(status, dynamicSplitEnabled, spanController.GetkeyspaceID()),
 		reportedDispatchers: make(map[common.DispatcherID]struct{}),
 		lastResendTime:      time.Time{},
 
@@ -124,24 +127,79 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		lastWarningLogTime:     time.Now(),
 	}
 
-	if status.BlockTables != nil {
-		switch status.BlockTables.InfluenceType {
-		case heartbeatpb.InfluenceType_Normal:
-			if dynamicSplitEnabled {
-				event.rangeChecker = range_checker.NewTableSpanRangeChecker(spanController.GetkeyspaceID(), status.BlockTables.TableIDs)
-			} else {
-				event.rangeChecker = range_checker.NewTableCountChecker(status.BlockTables.TableIDs)
-			}
-		}
-	}
-
 	log.Info("new block event is created",
 		zap.String("changefeedID", cfID.Name()),
+		zap.String("dispatcher", dispatcherID.String()),
 		zap.Uint64("blockTs", event.commitTs),
 		zap.Bool("syncPoint", event.isSyncPoint),
-		zap.Any("detail", status),
-		zap.Int64("mode", event.mode))
+		zap.Bool("needSchedule", event.needSchedule),
+		zap.Int64("mode", event.mode),
+		zap.String("blockedType", status.BlockTables.GetInfluenceType().String()),
+		zap.Int("blockedTableCount", len(status.BlockTables.GetTableIDs())),
+		zap.Int64("blockedSchemaID", status.BlockTables.GetSchemaID()),
+		zap.String("dropType", status.NeedDroppedTables.GetInfluenceType().String()),
+		zap.Int("dropTableCount", len(status.NeedDroppedTables.GetTableIDs())),
+		zap.Int64("dropSchemaID", status.NeedDroppedTables.GetSchemaID()),
+		zap.Int("addTableCount", len(status.NeedAddedTables)),
+		zap.Int("schemaChangeCount", len(status.UpdatedSchemas)),
+		zap.Int("routeAdmissionCount", len(status.RouteTableAdmissions)),
+	)
 	return event
+}
+
+func newRangeCheck(status *heartbeatpb.State, dynamicSplitEnabled bool, keyspaceID uint32) range_checker.RangeChecker {
+	if status.BlockTables == nil {
+		return nil
+	}
+
+	if status.BlockTables.InfluenceType != heartbeatpb.InfluenceType_Normal {
+		return nil
+	}
+
+	if dynamicSplitEnabled {
+		return range_checker.NewTableSpanRangeChecker(keyspaceID, status.BlockTables.TableIDs)
+	}
+
+	return range_checker.NewTableCountChecker(status.BlockTables.TableIDs)
+}
+
+func routeTableAdmissionsFromPB(admissions []*heartbeatpb.RouteTableAdmission) []routing.Admission {
+	if len(admissions) == 0 {
+		return nil
+	}
+	result := make([]routing.Admission, 0, len(admissions))
+	for _, item := range admissions {
+		if item == nil {
+			continue
+		}
+		switch item.Action {
+		case heartbeatpb.RouteTableAdmissionAction_ADMIT:
+			result = append(result, routing.Admission{
+				Action: routing.Admit,
+				Binding: routing.NewRouteBinding(
+					item.SourceSchemaName,
+					item.SourceTableName,
+					item.TargetSchemaName,
+					item.TargetTableName,
+				),
+			})
+		case heartbeatpb.RouteTableAdmissionAction_RELEASE:
+			result = append(result, routing.Admission{
+				Action: routing.Release,
+				Source: routing.TableKey{
+					Schema: item.SourceSchemaName,
+					Table:  item.SourceTableName,
+				},
+			})
+		case heartbeatpb.RouteTableAdmissionAction_RELEASE_SCHEMA:
+			result = append(result, routing.Admission{
+				Action: routing.ReleaseSchema,
+				Source: routing.TableKey{Schema: item.SourceSchemaName},
+			})
+		default:
+		}
+	}
+	return result
 }
 
 func needSchedule(state *heartbeatpb.State) bool {

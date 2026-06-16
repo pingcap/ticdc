@@ -180,13 +180,6 @@ func (a *saramaAdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) 
 	return nil
 }
 
-func (a *saramaAdminClient) Heartbeat() {
-	brokers := a.client.Brokers()
-	for _, b := range brokers {
-		_, _ = b.ApiVersions(&sarama.ApiVersionsRequest{})
-	}
-}
-
 func (a *saramaAdminClient) Close() {
 	// For admins created via sarama.NewClusterAdminFromClient, admin.Close() takes care
 	// of closing the underlying client as well. Fall back to closing the client directly

@@ -26,7 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -46,7 +46,7 @@ func TestValidateResumeChangefeedState(t *testing.T) {
 
 	for _, state := range []config.FeedState{config.StateNormal, config.StateWarning, config.StatePending} {
 		err := validateResumeChangefeedState(state)
-		require.True(t, cerror.ErrChangefeedUpdateRefused.Equal(err))
+		require.True(t, errors.ErrChangefeedUpdateRefused.Equal(err))
 		require.Contains(t, err.Error(), string(state))
 	}
 }
@@ -73,7 +73,7 @@ func TestResumeChangefeedRejectsNormalBeforeGC(t *testing.T) {
 	h.ResumeChangefeed(c)
 
 	require.Len(t, c.Errors, 1)
-	require.True(t, cerror.ErrChangefeedUpdateRefused.Equal(c.Errors.Last().Err))
+	require.True(t, errors.ErrChangefeedUpdateRefused.Equal(c.Errors.Last().Err))
 	require.False(t, srv.pdClientRequested)
 	require.False(t, srv.etcdClientRequested)
 	require.False(t, co.resumeCalled)
@@ -135,6 +135,13 @@ func (c *resumeNormalCoordinator) GetChangefeed(ctx context.Context, changefeedD
 		}, &config.ChangeFeedStatus{
 			CheckpointTs: 123,
 		}, nil
+}
+
+func (c *resumeNormalCoordinator) GetPersistedChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error) {
+	return &config.ChangeFeedInfo{
+		ChangefeedID: id,
+		State:        config.StateNormal,
+	}, nil
 }
 
 func (c *resumeNormalCoordinator) CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error {
@@ -229,12 +236,12 @@ func TestVerifyRouteConflict(t *testing.T) {
 		replicaCfg,
 	)
 	require.Error(t, err)
-	require.True(t, cerror.ErrTableRouteConflict.Equal(err))
+	require.True(t, errors.ErrTableRouteConflict.Equal(err))
 
 	replicaCfg.ForceReplicate = util.AddressOf(true)
 	err = verifyRouteConflict(changefeedID, eligibleTables, ineligibleTables, replicaCfg)
 	require.Error(t, err)
-	require.True(t, cerror.ErrTableRouteConflict.Equal(err))
+	require.True(t, errors.ErrTableRouteConflict.Equal(err))
 	require.Contains(t, err.Error(), "target `archive`.`orders`")
 	require.Contains(t, err.Error(), "source `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db2`.`orders`")
@@ -250,7 +257,7 @@ func TestVerifyRouteConflict(t *testing.T) {
 		replicaCfg,
 	)
 	require.Error(t, err)
-	require.True(t, cerror.ErrTableRouteConflict.Equal(err))
+	require.True(t, errors.ErrTableRouteConflict.Equal(err))
 	require.Contains(t, err.Error(), "target `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db2`.`orders`")

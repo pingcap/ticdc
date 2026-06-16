@@ -942,7 +942,7 @@ func (s *subscriptionClient) runResolveLockChecker(ctx context.Context) error {
 	maxCacheSize := 1024
 	subSpanAndTsCache := make([]subscriptionAndTargetTs, 0, maxCacheSize)
 	// getResolvedTargetTs returns the targetTs to resolve stale locks. 0 means no need to resolve.
-	getResolvedTargetTs := func(subSpan *subscribedSpan, currentTime time.Time) uint64 {
+	getResolvedTargetTs := func(subSpan *subscribedSpan, currentTime time.Time, currentTs uint64) uint64 {
 		resolvedTsUpdated := time.Unix(subSpan.resolvedTsUpdated.Load(), 0)
 		if !subSpan.initialized.Load() || time.Since(resolvedTsUpdated) < resolveLockFence {
 			return 0
@@ -952,7 +952,7 @@ func (s *subscriptionClient) runResolveLockChecker(ctx context.Context) error {
 		if currentTime.Sub(resolvedTime) < resolveLockFence {
 			return 0
 		}
-		return oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence))
+		return min(currentTs, oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence)))
 	}
 
 	for {
@@ -961,11 +961,18 @@ func (s *subscriptionClient) runResolveLockChecker(ctx context.Context) error {
 			return ctx.Err()
 		case <-resolveLockTicker.C:
 		}
+
+		physical, logic, err := s.pd.GetTS(ctx)
+		if err != nil {
+			log.Warn("get ts from pd failed", zap.Error(err))
+			continue
+		}
+		currentTs := oracle.ComposeTS(physical, logic)
 		currentTime := s.pdClock.CurrentTime()
 		s.totalSpans.Lock()
 		for _, subSpan := range s.totalSpans.spanMap {
 			if subSpan != nil {
-				targetTs := getResolvedTargetTs(subSpan, currentTime)
+				targetTs := getResolvedTargetTs(subSpan, currentTime, currentTs)
 				if targetTs > 0 {
 					subSpanAndTsCache = append(subSpanAndTsCache, subscriptionAndTargetTs{
 						subSpan:  subSpan,
