@@ -367,12 +367,11 @@ func newMysqlConfigAndDB(
 	if err != nil {
 		return nil, nil, "", err
 	}
-	openedDB := db
 	defer func() {
 		if err == nil {
 			return
 		}
-		if closeErr := openedDB.Close(); closeErr != nil {
+		if closeErr := db.Close(); closeErr != nil {
 			log.Warn("close mysql db after config creation failed",
 				zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
 		}

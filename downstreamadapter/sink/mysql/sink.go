@@ -50,10 +50,10 @@ type Sink struct {
 	// enableActiveActive is false.
 	progressTableWriter *mysql.ProgressTableWriter
 
-	// ownedDBs contains the DB pools this sink is responsible for closing.
-	// Production sinks own separate DML and control pools, while compatibility
-	// callers built through NewMySQLSink own a single shared pool.
-	ownedDBs   []*sql.DB
+	// dmlDB and controlDB are the DB pools this sink is responsible for closing.
+	// Compatibility callers built through NewMySQLSink use one shared pool.
+	dmlDB      *sql.DB
+	controlDB  *sql.DB
 	statistics *metrics.Statistics
 
 	conflictDetector *causality.ConflictDetector
@@ -124,7 +124,7 @@ func NewMySQLSink(
 	enableActiveActive bool,
 	progressInterval time.Duration,
 ) *Sink {
-	return newMySQLSinkWithOwnedDBs(ctx, changefeedID, cfg, db, db, []*sql.DB{db}, bdrMode, enableActiveActive, progressInterval)
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, db, db, bdrMode, enableActiveActive, progressInterval)
 }
 
 // newMySQLSinkWithControlDB creates a MySQL sink with separate pools for DML and
@@ -141,19 +141,15 @@ func newMySQLSinkWithControlDB(
 	enableActiveActive bool,
 	progressInterval time.Duration,
 ) *Sink {
-	return newMySQLSinkWithOwnedDBs(
-		ctx, changefeedID, cfg, dmlDB, controlDB,
-		[]*sql.DB{dmlDB, controlDB},
-		bdrMode, enableActiveActive, progressInterval)
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, bdrMode, enableActiveActive, progressInterval)
 }
 
-func newMySQLSinkWithOwnedDBs(
+func newMySQLSinkWithDBs(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	cfg *mysql.Config,
 	dmlDB *sql.DB,
 	controlDB *sql.DB,
-	ownedDBs []*sql.DB,
 	bdrMode bool,
 	enableActiveActive bool,
 	progressInterval time.Duration,
@@ -179,7 +175,8 @@ func newMySQLSinkWithOwnedDBs(
 
 	result := &Sink{
 		changefeedID: changefeedID,
-		ownedDBs:     ownedDBs,
+		dmlDB:        dmlDB,
+		controlDB:    controlDB,
 		dmlWriter:    make([]*mysql.Writer, cfg.WorkerCount),
 		statistics:   stat,
 		conflictDetector: causality.New(defaultConflictDetectorSlots,
@@ -448,13 +445,9 @@ func (s *Sink) Close() {
 		w.Close()
 	}
 
-	for idx, db := range s.ownedDBs {
-		if err := db.Close(); err != nil {
-			log.Warn("failed to close mysql sink db pool",
-				zap.String("changefeed", s.changefeedID.String()),
-				zap.Int("dbIndex", idx),
-				zap.Error(err))
-		}
+	s.closeDBPool("dml", s.dmlDB)
+	if s.controlDB != s.dmlDB {
+		s.closeDBPool("control", s.controlDB)
 	}
 	if s.activeActiveSyncStatsCollector != nil {
 		s.activeActiveSyncStatsCollector.Close()
@@ -462,6 +455,15 @@ func (s *Sink) Close() {
 	s.statistics.Close()
 
 	metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+}
+
+func (s *Sink) closeDBPool(role string, db *sql.DB) {
+	if err := db.Close(); err != nil {
+		log.Warn("failed to close mysql sink db pool",
+			zap.String("changefeed", s.changefeedID.String()),
+			zap.String("dbRole", role),
+			zap.Error(err))
+	}
 }
 
 // CleanupRemovedChangefeed removes ddl_ts state for a deleted changefeed.
