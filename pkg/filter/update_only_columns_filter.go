@@ -174,11 +174,19 @@ func (r *updateOnlyColumnsRule) resolveColumns(tableInfo *common.TableInfo) reso
 	for _, columnName := range r.configured {
 		col, ok := r.resolveColumnByName(tableInfo, columnName)
 		if !ok {
-			r.warnInvalidColumn(tableInfo, columnName)
+			log.Warn("ignore update only column not found, skip it",
+				zap.String("schema", tableInfo.GetSchemaName()),
+				zap.String("table", tableInfo.GetTableName()),
+				zap.String("column", columnName),
+				zap.Bool("caseSensitive", r.caseSensitive))
 			continue
 		}
 		if _, ok := rowColumnsOffset[col.ID]; !ok {
-			r.warnInvalidColumn(tableInfo, columnName)
+			log.Warn("ignore update only column not found, skip it",
+				zap.String("schema", tableInfo.GetSchemaName()),
+				zap.String("table", tableInfo.GetTableName()),
+				zap.String("column", columnName),
+				zap.Bool("caseSensitive", r.caseSensitive))
 			continue
 		}
 		resolved.ignoredColID[col.ID] = struct{}{}
@@ -197,14 +205,6 @@ func (r *updateOnlyColumnsRule) resolveColumnByName(tableInfo *common.TableInfo,
 		}
 	}
 	return nil, false
-}
-
-func (r *updateOnlyColumnsRule) warnInvalidColumn(tableInfo *common.TableInfo, columnName string) {
-	log.Warn("ignore update only column not found, skip it",
-		zap.String("schema", tableInfo.GetSchemaName()),
-		zap.String("table", tableInfo.GetTableName()),
-		zap.String("column", columnName),
-		zap.Bool("caseSensitive", r.caseSensitive))
 }
 
 func makeColumnIDSet(indexColumns [][]int64) map[int64]struct{} {
