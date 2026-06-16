@@ -1031,8 +1031,10 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		d.pendingACKCount.Add(1)
 	}
 	if needsAddTableCheckpointBlocker {
-		// Install the blocker before the async task can be delayed, otherwise
-		// heartbeat reporting may observe this DDL without the checkpoint cap.
+		// The blocker covers the window after this add-table DDL is flushed locally
+		// but before the maintainer ACK confirms that the new table dispatcher has
+		// joined checkpoint calculation. Install it before submitting async IO because
+		// the write can be delayed while heartbeat reporting continues.
 		d.addTableCheckpointBlocker.add(identifier)
 	}
 	// Writing a block event may involve downstream IO (e.g. executing DDL), so it must not block
