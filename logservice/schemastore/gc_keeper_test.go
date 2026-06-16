@@ -32,6 +32,7 @@ func TestSchemaStoreGCKeeperLifecycle(t *testing.T) {
 	originalConfig := config.GetGlobalServerConfig()
 	cfg := originalConfig.Clone()
 	cfg.AdvertiseAddr = "127.0.0.1:8300"
+	cfg.EnableLegacySafePoint = false
 	config.StoreGlobalServerConfig(cfg)
 	defer config.StoreGlobalServerConfig(originalConfig)
 
@@ -53,7 +54,7 @@ func TestSchemaStoreGCKeeperLifecycle(t *testing.T) {
 		require.Equal(t, uint64(math.MaxUint64), state.serviceSafePoint[serviceID])
 		return
 	}
-	if kerneltype.UseLegacySafePointInNextGen {
+	if config.GetGlobalServerConfig().EnableLegacySafePoint {
 		_, ok := state.legacyServiceSafePoint[serviceID]
 		require.False(t, ok)
 		return
@@ -66,6 +67,7 @@ func TestCloseSchemaStoreGCKeeperUsesFreshContext(t *testing.T) {
 	originalConfig := config.GetGlobalServerConfig()
 	cfg := originalConfig.Clone()
 	cfg.AdvertiseAddr = "127.0.0.1:8300"
+	cfg.EnableLegacySafePoint = false
 	config.StoreGlobalServerConfig(cfg)
 	defer config.StoreGlobalServerConfig(originalConfig)
 
@@ -86,7 +88,7 @@ func TestCloseSchemaStoreGCKeeperUsesFreshContext(t *testing.T) {
 		require.Equal(t, uint64(math.MaxUint64), state.serviceSafePoint[serviceID])
 		return
 	}
-	if kerneltype.UseLegacySafePointInNextGen {
+	if config.GetGlobalServerConfig().EnableLegacySafePoint {
 		_, ok := state.legacyServiceSafePoint[serviceID]
 		require.False(t, ok)
 		return
@@ -146,7 +148,7 @@ func assertSchemaStoreBarrierTS(t *testing.T, state *schemaStoreGCMockState, ser
 		require.Equal(t, expected, state.serviceSafePoint[serviceID])
 		return
 	}
-	if kerneltype.UseLegacySafePointInNextGen {
+	if config.GetGlobalServerConfig().EnableLegacySafePoint {
 		require.Equal(t, expected, state.legacyServiceSafePoint[serviceID])
 		return
 	}
