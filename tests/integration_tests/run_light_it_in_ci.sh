@@ -59,7 +59,7 @@ mysql_groups=(
 	# ds_memory_control
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
-	# maintainer_failover_when_operator is temporarily excluded from release-8.5 CI because this branch
+	# maintainer_failover_when_operator is temporarily excluded from this release branch CI because this branch
 	# disables the no-operator terminal-status fallback; the case depends on that rescheduling path.
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
@@ -99,7 +99,7 @@ kafka_groups=(
 	# G12
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
-	# maintainer_failover_when_operator is temporarily excluded from release-8.5 CI because this branch
+	# maintainer_failover_when_operator is temporarily excluded from this release branch CI because this branch
 	# disables the no-operator terminal-status fallback; the case depends on that rescheduling path.
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
@@ -139,7 +139,7 @@ pulsar_groups=(
 	# G12
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
-	# maintainer_failover_when_operator is temporarily excluded from release-8.5 CI because this branch
+	# maintainer_failover_when_operator is temporarily excluded from this release branch CI because this branch
 	# disables the no-operator terminal-status fallback; the case depends on that rescheduling path.
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
@@ -179,7 +179,7 @@ storage_groups=(
 	# G12
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
-	# maintainer_failover_when_operator is temporarily excluded from release-8.5 CI because this branch
+	# maintainer_failover_when_operator is temporarily excluded from this release branch CI because this branch
 	# disables the no-operator terminal-status fallback; the case depends on that rescheduling path.
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
