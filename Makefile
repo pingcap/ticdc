@@ -74,27 +74,14 @@ ifeq ("${NEXT_GEN}", "1")
 	else
 		BUILD_FLAG := $(BUILD_FLAG),nextgen
 	endif
-	ifeq ("${LEGACY_SAFEPOINT}", "1")
-		ifeq ($(BUILD_FLAG),)
-			BUILD_FLAG := -tags legacy_safepoint
-		else
-			BUILD_FLAG := $(BUILD_FLAG),legacy_safepoint
-		endif
-	endif
 endif
 
 TEST_FLAG=intest
 ifeq ("${NEXT_GEN}", "1")
 	TEST_FLAG := $(TEST_FLAG),nextgen
-	ifeq ("${LEGACY_SAFEPOINT}", "1")
-		TEST_FLAG := $(TEST_FLAG),legacy_safepoint
-	endif
 endif
 
 NEXT_GEN_TEST_FLAG=intest,nextgen
-ifeq ("${LEGACY_SAFEPOINT}", "1")
-	NEXT_GEN_TEST_FLAG := $(NEXT_GEN_TEST_FLAG),legacy_safepoint
-endif
 
 GOTEST := CGO_ENABLED=1 $(GO) test -p 3 --race --tags=$(TEST_FLAG)
 

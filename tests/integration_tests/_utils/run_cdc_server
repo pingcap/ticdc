@@ -162,6 +162,24 @@ EOF
 	fi
 fi
 
+if [ "${LEGACY_SAFEPOINT:-0}" = "1" ]; then
+	legacy_safepoint_config_file="${workdir}/cdc_legacy_safepoint.toml"
+	merged_config_file="${workdir}/cdc_legacy_safepoint${logsuffix}_server.toml"
+	if [ -f "$legacy_safepoint_config_file" ]; then
+		cat "$legacy_safepoint_config_file" >"$merged_config_file"
+	else
+		cat >"$merged_config_file" <<EOF
+enable-legacy-safepoint = true
+EOF
+	fi
+
+	if [ -n "$config_path" ]; then
+		existing_config=$(echo "$config_path" | sed 's/--config //')
+		sed '/^[[:space:]]*enable-legacy-safepoint[[:space:]]*=/d' "$existing_config" >>"$merged_config_file"
+	fi
+	config_path="--config $merged_config_file"
+fi
+
 echo "[$(date)] <<<<<< START cdc server in $TEST_NAME case >>>>>>"
 cd $workdir
 pid=$$
