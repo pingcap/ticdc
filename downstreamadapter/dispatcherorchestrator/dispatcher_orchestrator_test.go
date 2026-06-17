@@ -15,15 +15,20 @@ package dispatcherorchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
+	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -173,6 +178,7 @@ func newTestDispatcherOrchestrator() *DispatcherOrchestrator {
 	orchestrator := &DispatcherOrchestrator{
 		dispatcherManagers:             make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
 		initializingDispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		closedMaintainerEpochs:         make(map[common.ChangeFeedID]uint64),
 		shards:                         make([]*orchestratorShard, dispatcherOrchestratorShardCount),
 	}
 	for i := range orchestrator.shards {
@@ -303,6 +309,75 @@ func TestPendingMessageQueue_CloseRequestRemovedTrueOverridesPendingFalse(t *tes
 	require.NotNil(t, poppedMsg)
 	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
 	require.True(t, req.Removed)
+}
+
+func TestPendingMessageQueue_StaleRemovedCloseCannotOverrideNewerEpochClose(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerCloseRequest,
+	}
+
+	newerClose := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 2,
+			Removed:         false,
+		},
+	)
+	staleRemovedClose := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 1,
+			Removed:         true,
+		},
+	)
+
+	require.True(t, q.TryEnqueue(key, newerClose))
+	require.False(t, q.TryEnqueue(key, staleRemovedClose))
+
+	poppedMsg, ok := q.Pop()
+	require.True(t, ok)
+	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
+	require.Equal(t, uint64(2), req.MaintainerEpoch)
+	require.False(t, req.Removed)
+}
+
+func TestPendingMessageQueue_NewerMaintainerEpochOverridesPendingRequest(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerBootstrapRequest,
+	}
+
+	oldMsg := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB(), MaintainerEpoch: 1},
+	)
+	newMsg := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB(), MaintainerEpoch: 2},
+	)
+
+	require.True(t, q.TryEnqueue(key, oldMsg))
+	require.True(t, q.TryEnqueue(key, newMsg))
+
+	poppedMsg, ok := q.Pop()
+	require.True(t, ok)
+	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
+	require.Equal(t, uint64(2), req.MaintainerEpoch)
 }
 
 func TestPendingMessageQueue_CloseRequestUpgradeAfterPopKeepsReturnedMessageStable(t *testing.T) {
@@ -514,4 +589,283 @@ func TestDispatcherOrchestratorLocalFenceFencesInitializingManagersImmediately(t
 
 	err := manager.InitalizeTableTriggerEventDispatcher(nil)
 	require.True(t, dispatchermanager.IsWritePathClosedError(err))
+}
+
+func TestBootstrapResponseRestoresCurrentOperatorsAndStaleRemoves(t *testing.T) {
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
+	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
+	heartbeatCollector.Run(context.Background())
+	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
+	t.Cleanup(heartbeatCollector.Close)
+	appcontext.SetService(appcontext.EventCollector, eventcollector.New(node.ID("receiver")))
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	currentDispatcherID := common.NewDispatcherID()
+	oldCreateDispatcherID := common.NewDispatcherID()
+	staleRemoveDispatcherID := common.NewDispatcherID()
+	manager, err := dispatchermanager.NewDispatcherManager(
+		0,
+		cfID,
+		newBootstrapResponseTestChangefeedConfig(cfID),
+		staleRemoveDispatcherID.ToPB(),
+		nil,
+		100,
+		node.ID("current-maintainer"),
+		2,
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		manager.TryClose(false)
+	})
+
+	manager.GetCurrentOperatorMap().Store(
+		currentDispatcherID,
+		dispatchermanager.NewSchedulerDispatcherRequest(
+			node.ID("current-maintainer"),
+			newBootstrapResponseTestScheduleRequest(cfID, currentDispatcherID, 2),
+		),
+	)
+	manager.GetCurrentOperatorMap().Store(
+		oldCreateDispatcherID,
+		dispatchermanager.NewSchedulerDispatcherRequest(
+			node.ID("old-maintainer"),
+			newBootstrapResponseTestScheduleRequest(cfID, oldCreateDispatcherID, 1),
+		),
+	)
+	staleRemoveReq := newBootstrapResponseTestScheduleRequest(cfID, staleRemoveDispatcherID, 1)
+	staleRemoveReq.ScheduleAction = heartbeatpb.ScheduleAction_Remove
+	staleRemoveReq.OperatorType = heartbeatpb.OperatorType_O_Move
+	manager.GetCurrentOperatorMap().Store(
+		staleRemoveDispatcherID,
+		dispatchermanager.NewSchedulerDispatcherRequest(
+			node.ID("old-maintainer"),
+			staleRemoveReq,
+		),
+	)
+
+	response := createBootstrapResponse(cfID.ToPB(), manager, 0, 0)
+	require.Len(t, response.Operators, 2)
+	operators := make(map[common.DispatcherID]*heartbeatpb.ScheduleDispatcherRequest)
+	for _, op := range response.Operators {
+		operators[common.NewDispatcherIDFromPB(op.Config.DispatcherID)] = op
+	}
+	currentOp, ok := operators[currentDispatcherID]
+	require.True(t, ok)
+	require.Equal(t, uint64(2), currentOp.MaintainerEpoch)
+	require.Equal(t, heartbeatpb.ScheduleAction_Create, currentOp.ScheduleAction)
+	require.NotContains(t, operators, oldCreateDispatcherID)
+	staleRemoveOp, ok := operators[staleRemoveDispatcherID]
+	require.True(t, ok)
+	require.Equal(t, uint64(1), staleRemoveOp.MaintainerEpoch)
+	require.Equal(t, heartbeatpb.ScheduleAction_Remove, staleRemoveOp.ScheduleAction)
+	require.Equal(t, heartbeatpb.OperatorType_O_Move, staleRemoveOp.OperatorType)
+}
+
+func TestBootstrapResponseUsesSpanSnapshotForStaleRemove(t *testing.T) {
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
+	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
+	heartbeatCollector.Run(context.Background())
+	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
+	t.Cleanup(heartbeatCollector.Close)
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager, err := dispatchermanager.NewDispatcherManager(
+		0,
+		cfID,
+		newBootstrapResponseTestChangefeedConfig(cfID),
+		nil,
+		nil,
+		100,
+		node.ID("current-maintainer"),
+		2,
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		manager.TryClose(false)
+	})
+
+	reportedRemoveDispatcherID := common.NewDispatcherID()
+	reportedRemoveReq := newBootstrapResponseTestScheduleRequest(cfID, reportedRemoveDispatcherID, 1)
+	reportedRemoveReq.ScheduleAction = heartbeatpb.ScheduleAction_Remove
+	reportedRemoveReq.OperatorType = heartbeatpb.OperatorType_O_Move
+	manager.GetCurrentOperatorMap().Store(
+		reportedRemoveDispatcherID,
+		dispatchermanager.NewSchedulerDispatcherRequest(node.ID("old-maintainer"), reportedRemoveReq),
+	)
+
+	missingRemoveDispatcherID := common.NewDispatcherID()
+	missingRemoveReq := newBootstrapResponseTestScheduleRequest(cfID, missingRemoveDispatcherID, 1)
+	missingRemoveReq.ScheduleAction = heartbeatpb.ScheduleAction_Remove
+	missingRemoveReq.OperatorType = heartbeatpb.OperatorType_O_Split
+	manager.GetCurrentOperatorMap().Store(
+		missingRemoveDispatcherID,
+		dispatchermanager.NewSchedulerDispatcherRequest(node.ID("old-maintainer"), missingRemoveReq),
+	)
+
+	response := &heartbeatpb.MaintainerBootstrapResponse{
+		ChangefeedID: cfID.ToPB(),
+		Spans: []*heartbeatpb.BootstrapTableSpan{
+			{
+				ID:              reportedRemoveDispatcherID.ToPB(),
+				Span:            &heartbeatpb.TableSpan{TableID: 1},
+				ComponentStatus: heartbeatpb.ComponentState_Working,
+				Mode:            common.DefaultMode,
+			},
+		},
+	}
+	retrieveOperatorsForBootstrapResponse(cfID.ToPB(), manager, response)
+
+	require.Len(t, response.Operators, 1)
+	require.Equal(t, reportedRemoveDispatcherID, common.NewDispatcherIDFromPB(response.Operators[0].Config.DispatcherID))
+	require.Equal(t, heartbeatpb.ScheduleAction_Remove, response.Operators[0].ScheduleAction)
+	require.Equal(t, heartbeatpb.OperatorType_O_Move, response.Operators[0].OperatorType)
+}
+
+func TestHandleCloseRequestAcksStaleMaintainerEpoch(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
+	heartbeatCollector.Run(context.Background())
+	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
+	t.Cleanup(heartbeatCollector.Close)
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager, err := dispatchermanager.NewDispatcherManager(
+		0,
+		cfID,
+		newBootstrapResponseTestChangefeedConfig(cfID),
+		nil,
+		nil,
+		100,
+		node.ID("current-maintainer"),
+		2,
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		manager.TryClose(false)
+	})
+
+	orchestrator := &DispatcherOrchestrator{
+		mc:                     mc,
+		dispatcherManagers:     map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{cfID: manager},
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+	}
+	err = orchestrator.handleCloseRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerCloseRequest{
+		ChangefeedID:    cfID.ToPB(),
+		MaintainerEpoch: 1,
+	})
+	require.NoError(t, err)
+
+	responseMsg := <-mc.GetMessageChannel()
+	response := responseMsg.Message[0].(*heartbeatpb.MaintainerCloseResponse)
+	require.True(t, response.Success)
+	require.Equal(t, uint64(1), response.MaintainerEpoch)
+	require.Contains(t, orchestrator.dispatcherManagers, cfID)
+	require.NotContains(t, orchestrator.closedMaintainerEpochs, cfID)
+}
+
+func TestHandleBootstrapRequestRejectsClosedOlderMaintainerEpoch(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+
+	orchestrator := &DispatcherOrchestrator{
+		mc:                 messaging.NewMockMessageCenter(),
+		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		closedMaintainerEpochs: map[common.ChangeFeedID]uint64{
+			cfID: 2,
+		},
+	}
+	err := orchestrator.handleBootstrapRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerBootstrapRequest{
+		ChangefeedID:    cfID.ToPB(),
+		Config:          []byte("invalid config"),
+		MaintainerEpoch: 1,
+	})
+	require.NoError(t, err)
+	require.Empty(t, orchestrator.dispatcherManagers)
+}
+
+func TestHandleCloseRequestDoesNotRecordEpochZeroTombstoneForCompatClose(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+
+	orchestrator := &DispatcherOrchestrator{
+		mc:                     messaging.NewMockMessageCenter(),
+		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+	}
+
+	err := orchestrator.handleCloseRequest(node.ID("compat-maintainer"), &heartbeatpb.MaintainerCloseRequest{
+		ChangefeedID:    cfID.ToPB(),
+		Removed:         false,
+		MaintainerEpoch: 0,
+	})
+	require.NoError(t, err)
+	_, ok := orchestrator.closedMaintainerEpochs[cfID]
+	require.False(t, ok)
+}
+
+func TestHandleCloseRequestRecordsEpochZeroTombstoneForRemovedChangefeed(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	configBytes, err := json.Marshal(newBootstrapResponseTestChangefeedConfig(cfID))
+	require.NoError(t, err)
+
+	orchestrator := &DispatcherOrchestrator{
+		mc:                     messaging.NewMockMessageCenter(),
+		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+	}
+
+	err = orchestrator.handleCloseRequest(node.ID("compat-maintainer"), &heartbeatpb.MaintainerCloseRequest{
+		ChangefeedID:    cfID.ToPB(),
+		Removed:         true,
+		MaintainerEpoch: 0,
+	})
+	require.NoError(t, err)
+	closedEpoch, ok := orchestrator.closedMaintainerEpochs[cfID]
+	require.True(t, ok)
+	require.Zero(t, closedEpoch)
+
+	err = orchestrator.handleBootstrapRequest(node.ID("compat-maintainer"), &heartbeatpb.MaintainerBootstrapRequest{
+		ChangefeedID:    cfID.ToPB(),
+		Config:          configBytes,
+		MaintainerEpoch: 0,
+	})
+	require.NoError(t, err)
+	require.Empty(t, orchestrator.dispatcherManagers)
+}
+
+func newBootstrapResponseTestChangefeedConfig(cfID common.ChangeFeedID) *config.ChangefeedConfig {
+	replicaConfig := config.GetDefaultReplicaConfig()
+	return &config.ChangefeedConfig{
+		ChangefeedID: cfID,
+		SinkURI:      "blackhole://",
+		SinkConfig:   replicaConfig.Sink,
+		Filter:       replicaConfig.Filter,
+	}
+}
+
+func newBootstrapResponseTestScheduleRequest(
+	cfID common.ChangeFeedID,
+	dispatcherID common.DispatcherID,
+	maintainerEpoch uint64,
+) *heartbeatpb.ScheduleDispatcherRequest {
+	return &heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: cfID.ToPB(),
+		Config: &heartbeatpb.DispatcherConfig{
+			Span:         &heartbeatpb.TableSpan{TableID: 1},
+			StartTs:      100,
+			DispatcherID: dispatcherID.ToPB(),
+			Mode:         common.DefaultMode,
+		},
+		ScheduleAction:  heartbeatpb.ScheduleAction_Create,
+		OperatorType:    heartbeatpb.OperatorType_O_Add,
+		MaintainerEpoch: maintainerEpoch,
+	}
 }
