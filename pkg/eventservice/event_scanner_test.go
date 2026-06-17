@@ -39,6 +39,20 @@ type mockMounter struct {
 	decodeCount atomic.Int64
 }
 
+type countingDMLTypeFilter struct {
+	filter.Filter
+	dmlTypeCallCount atomic.Int64
+}
+
+func (f *countingDMLTypeFilter) ShouldIgnoreDMLByEventType(
+	dmlType common.RowType,
+	tableInfo *common.TableInfo,
+	startTs uint64,
+) (bool, error) {
+	f.dmlTypeCallCount.Inc()
+	return f.Filter.ShouldIgnoreDMLByEventType(dmlType, tableInfo, startTs)
+}
+
 type stubEventGetter struct {
 	iter eventstore.EventIterator
 	err  error
@@ -1043,6 +1057,46 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 		require.Equal(t, int64(0), mounter.decodeCount.Load())
 		require.Equal(t, int32(0), processor.batchDML.Len())
 		require.Empty(t, processor.insertRowCache)
+	})
+
+	t.Run("IgnoreDeleteByEventTypeCachedWithinTxn", func(t *testing.T) {
+		mounter := &mockMounter{}
+		changefeedFilter, err := filter.NewFilter(&config.FilterConfig{
+			Rules: []string{"test.*"},
+			EventFilters: []*config.EventFilterRule{
+				{
+					Matcher:     []string{"test.t"},
+					IgnoreEvent: []bf.EventType{bf.DeleteEvent},
+				},
+			},
+		}, "UTC", false, false)
+		require.NoError(t, err)
+		countingFilter := &countingDMLTypeFilter{Filter: changefeedFilter}
+		processor := newDMLProcessor(mounter, mockSchemaGetter, countingFilter, false, common.DefaultMode, false)
+
+		rawEvent := kvEvents[0]
+		deleteRow := insertToDeleteRow(rawEvent)
+
+		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs, rawEvent.CRTs, false)
+		for range 3 {
+			err = processor.appendRow(deleteRow)
+			require.NoError(t, err)
+		}
+		require.Equal(t, int64(1), countingFilter.dmlTypeCallCount.Load())
+		require.Equal(t, int64(0), mounter.decodeCount.Load())
+
+		err = processor.commitTxn()
+		require.NoError(t, err)
+
+		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs+1, rawEvent.CRTs+1, false)
+		nextTxnDeleteRow := insertToDeleteRow(kvEvents[1])
+		nextTxnDeleteRow.StartTs = rawEvent.StartTs + 1
+		nextTxnDeleteRow.CRTs = rawEvent.CRTs + 1
+		err = processor.appendRow(nextTxnDeleteRow)
+		require.NoError(t, err)
+
+		require.Equal(t, int64(2), countingFilter.dmlTypeCallCount.Load())
+		require.Equal(t, int64(0), mounter.decodeCount.Load())
 	})
 
 	// Test case 4: appendRow for update operation without unique key change
