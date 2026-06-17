@@ -790,6 +790,17 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	rawType := rawEvent.GetType()
 	if !rawEvent.IsUpdate() {
 		updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, false)
+		rowType := common.RowTypeInsert
+		if rawEvent.IsDelete() {
+			rowType = common.RowTypeDelete
+		}
+		ignore, err := p.shouldIgnoreDMLByEventType(rowType, rawEvent.StartTs)
+		if err != nil {
+			return err
+		}
+		if ignore {
+			return nil
+		}
 		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter, p.filterContext)
 	}
 
@@ -819,6 +830,21 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	}
 	p.insertRowCache = append(p.insertRowCache, insertRow)
 	return p.currentTxn.AppendRow(deleteRow, p.mounter.DecodeToChunk, p.filter, p.filterContext)
+}
+
+func (p *dmlProcessor) shouldIgnoreDMLByEventType(rowType common.RowType, startTs uint64) (bool, error) {
+	if p.filter == nil {
+		return false, nil
+	}
+	ignore, err := p.filter.ShouldIgnoreDMLByEventType(
+		rowType,
+		p.currentTxn.CurrentDMLEvent.TableInfo,
+		startTs,
+	)
+	if err != nil {
+		return false, errors.Trace(err)
+	}
+	return ignore, nil
 }
 
 // getCurrentBatchDML returns the current batch DML event
