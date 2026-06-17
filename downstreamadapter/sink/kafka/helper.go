@@ -137,12 +137,3 @@ func newKafkaSinkComponent(
 ) (components, config.Protocol, error) {
 	return newKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, kafka.NewSaramaFactory)
 }
-
-func newKafkaSinkComponentForTest(
-	ctx context.Context,
-	changefeedID commonType.ChangeFeedID,
-	sinkURI *url.URL,
-	sinkConfig *config.SinkConfig,
-) (components, config.Protocol, error) {
-	return newKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, kafka.NewMockFactory)
-}
