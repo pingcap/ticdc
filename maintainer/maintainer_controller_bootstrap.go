@@ -1013,23 +1013,32 @@ func (c *Controller) restoreCurrentMergeOperators(
 					zap.String("nodeID", nodeID.String()),
 					zap.String("changefeed", resp.ChangefeedID.String()),
 					zap.String("dispatcher", mergedDispatcherID.String()))
-				for _, replicaSet := range sourceReplicaSets {
-					spanController.MarkSpanScheduling(replicaSet)
-				}
 				if mergedSpanInfo != nil {
 					if mergedReplicaSet == nil {
 						splitEnabled := spanController.ShouldEnableSplit(tableSplitMap[mergedSpanInfo.Span.TableID])
 						mergedReplicaSet = c.createSpanReplication(mergedSpanInfo, nodeID, splitEnabled)
-						if mergedSpanInfo.ComponentStatus == heartbeatpb.ComponentState_Working {
-							spanController.AddReplicatingSpan(mergedReplicaSet)
-						} else {
-							spanController.AddSchedulingReplicaSet(mergedReplicaSet, nodeID)
-						}
-					} else if mergedSpanInfo.ComponentStatus == heartbeatpb.ComponentState_Working {
-						spanController.MarkSpanReplicating(mergedReplicaSet)
+						spanController.AddReplicatingSpan(mergedReplicaSet)
 					} else {
-						spanController.MarkSpanScheduling(mergedReplicaSet)
+						spanController.MarkSpanReplicating(mergedReplicaSet)
 					}
+					// If any source dispatcher is already missing, the dispatcher manager has moved past
+					// the reversible part of merge cleanup. Keep the existing merged dispatcher as the
+					// desired span and drop leftover source spans so their late terminal statuses are ignored.
+					for _, replicaSet := range sourceReplicaSets {
+						if replicaSet.ID == mergedReplicaSet.ID {
+							continue
+						}
+						spanController.RemoveReplicatingSpan(replicaSet)
+					}
+					log.Info("continue merge from existing merged dispatcher after source loss",
+						zap.String("nodeID", nodeID.String()),
+						zap.String("changefeed", resp.ChangefeedID.String()),
+						zap.String("dispatcher", mergedDispatcherID.String()),
+						zap.Any("status", mergedSpanInfo.ComponentStatus))
+					continue
+				}
+				for _, replicaSet := range sourceReplicaSets {
+					spanController.MarkSpanScheduling(replicaSet)
 				}
 				continue
 			}

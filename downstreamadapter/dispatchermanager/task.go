@@ -307,7 +307,6 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 		}
 		dispatcher.Remove()
 	}
-	t.manager.RemoveMergeOperator(t.mergedDispatcher.GetId())
 }
 
 type mergedStartTsCandidate struct {

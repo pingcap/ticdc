@@ -933,6 +933,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 			}
 		}
 	}
+	e.cleanupFinishedMergeOperators()
 
 	e.metricCheckpointTs.Set(float64(message.Watermark.CheckpointTs))
 	e.metricResolvedTs.Set(float64(message.Watermark.ResolvedTs))

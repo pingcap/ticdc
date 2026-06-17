@@ -1808,6 +1808,216 @@ func TestFinishBootstrapKeepsOverlapCoveredAfterMergeJournalCleanup(t *testing.T
 	require.NotNil(t, s.spanController.GetTaskByID(mergedDispatcherID))
 }
 
+type mergeBootstrapTestEnv struct {
+	controller          *Controller
+	cfID                common.ChangeFeedID
+	sourceSpan1         *heartbeatpb.TableSpan
+	sourceSpan2         *heartbeatpb.TableSpan
+	mergedSpan          *heartbeatpb.TableSpan
+	sourceDispatcherID1 common.DispatcherID
+	sourceDispatcherID2 common.DispatcherID
+	mergedDispatcherID  common.DispatcherID
+}
+
+func newMergeBootstrapTestEnv(t *testing.T) *mergeBootstrapTestEnv {
+	t.Helper()
+
+	testutil.SetUpTestServices(t)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+
+	cfg := config.GetDefaultReplicaConfig().Clone()
+	cfg.Scheduler = &config.ChangefeedSchedulerConfig{
+		EnableTableAcrossNodes: util.AddressOf(true),
+		BalanceScoreThreshold:  util.AddressOf(1),
+		MinTrafficPercentage:   util.AddressOf(0.8),
+		MaxTrafficPercentage:   util.AddressOf(1.2),
+	}
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	controller := NewController(cfID, 1, &mockThreadPool{}, cfg, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize)
+
+	schemaStore := eventservice.NewMockSchemaStore()
+	schemaStore.SetTables([]commonEvent.Table{
+		{
+			TableID:         1,
+			SchemaID:        1,
+			Splitable:       true,
+			SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t1"},
+		},
+	})
+	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+
+	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
+	midKey := appendNew(totalSpan.StartKey, 'a')
+	return &mergeBootstrapTestEnv{
+		controller: controller,
+		cfID:       cfID,
+		sourceSpan1: &heartbeatpb.TableSpan{
+			TableID:    1,
+			StartKey:   totalSpan.StartKey,
+			EndKey:     midKey,
+			KeyspaceID: common.DefaultKeyspaceID,
+		},
+		sourceSpan2: &heartbeatpb.TableSpan{
+			TableID:    1,
+			StartKey:   midKey,
+			EndKey:     totalSpan.EndKey,
+			KeyspaceID: common.DefaultKeyspaceID,
+		},
+		mergedSpan: &heartbeatpb.TableSpan{
+			TableID:    1,
+			StartKey:   totalSpan.StartKey,
+			EndKey:     totalSpan.EndKey,
+			KeyspaceID: common.DefaultKeyspaceID,
+		},
+		sourceDispatcherID1: common.NewDispatcherID(),
+		sourceDispatcherID2: common.NewDispatcherID(),
+		mergedDispatcherID:  common.NewDispatcherID(),
+	}
+}
+
+// TestHandleStatusDropsTerminalSourcesCoveredByMergedSpanAfterJournalCleanup covers the post-bootstrap
+// merge cleanup window where source dispatchers still report terminal statuses after the merge journal
+// is gone. The test bootstraps overlapping source and merged spans, then sends terminal source
+// heartbeats and expects the obsolete sources to be removed instead of rescheduled as absent spans.
+func TestHandleStatusDropsTerminalSourcesCoveredByMergedSpanAfterJournalCleanup(t *testing.T) {
+	env := newMergeBootstrapTestEnv(t)
+
+	_, err := env.controller.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: env.cfID.ToPB(),
+			Spans: []*heartbeatpb.BootstrapTableSpan{
+				{
+					ID:              env.sourceDispatcherID1.ToPB(),
+					SchemaID:        1,
+					Span:            env.sourceSpan1,
+					ComponentStatus: heartbeatpb.ComponentState_WaitingMerge,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+				{
+					ID:              env.sourceDispatcherID2.ToPB(),
+					SchemaID:        1,
+					Span:            env.sourceSpan2,
+					ComponentStatus: heartbeatpb.ComponentState_WaitingMerge,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+				{
+					ID:              env.mergedDispatcherID.ToPB(),
+					SchemaID:        1,
+					Span:            env.mergedSpan,
+					ComponentStatus: heartbeatpb.ComponentState_Initializing,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+			},
+			CheckpointTs: 10,
+		},
+	}, false)
+	require.NoError(t, err)
+
+	env.controller.HandleStatus("node1", []*heartbeatpb.TableSpanStatus{
+		{
+			ID:              env.sourceDispatcherID1.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Stopped,
+			CheckpointTs:    10,
+			Mode:            common.DefaultMode,
+		},
+		{
+			ID:              env.sourceDispatcherID2.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Removed,
+			CheckpointTs:    10,
+			Mode:            common.DefaultMode,
+		},
+	})
+
+	require.Zero(t, env.controller.spanController.GetAbsentSize())
+	require.Zero(t, env.controller.spanController.GetSchedulingSize())
+	require.Equal(t, 1, env.controller.spanController.GetReplicatingSize())
+	require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
+	require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID2))
+	require.NotNil(t, env.controller.spanController.GetTaskByID(env.mergedDispatcherID))
+	require.Len(t, env.controller.spanController.GetTasksByTableID(1), 1)
+}
+
+// TestFinishBootstrapContinuesFromMergedDispatcherWhenMergeSourceMissing covers failover after one
+// source dispatcher has already been cleaned up but the persisted merge request is still reported.
+// Bootstrap should keep the existing merged dispatcher as the desired span, drop any leftover source
+// span, and allow a later Working heartbeat to move normally without an add operator.
+func TestFinishBootstrapContinuesFromMergedDispatcherWhenMergeSourceMissing(t *testing.T) {
+	env := newMergeBootstrapTestEnv(t)
+
+	_, err := env.controller.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: env.cfID.ToPB(),
+			Spans: []*heartbeatpb.BootstrapTableSpan{
+				{
+					ID:              env.sourceDispatcherID1.ToPB(),
+					SchemaID:        1,
+					Span:            env.sourceSpan1,
+					ComponentStatus: heartbeatpb.ComponentState_WaitingMerge,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+				{
+					ID:              env.mergedDispatcherID.ToPB(),
+					SchemaID:        1,
+					Span:            env.mergedSpan,
+					ComponentStatus: heartbeatpb.ComponentState_Initializing,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+			},
+			MergeOperators: []*heartbeatpb.MergeDispatcherRequest{
+				{
+					ChangefeedID: env.cfID.ToPB(),
+					DispatcherIDs: []*heartbeatpb.DispatcherID{
+						env.sourceDispatcherID1.ToPB(),
+						env.sourceDispatcherID2.ToPB(),
+					},
+					MergedDispatcherID: env.mergedDispatcherID.ToPB(),
+					Mode:               common.DefaultMode,
+				},
+			},
+			CheckpointTs: 10,
+		},
+	}, false)
+	require.NoError(t, err)
+	require.True(t, env.controller.bootstrapped)
+	require.Zero(t, env.controller.operatorController.OperatorSize())
+	require.Zero(t, env.controller.spanController.GetAbsentSize())
+	require.Zero(t, env.controller.spanController.GetSchedulingSize())
+	require.Equal(t, 1, env.controller.spanController.GetReplicatingSize())
+	require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
+	require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID2))
+	require.NotNil(t, env.controller.spanController.GetTaskByID(env.mergedDispatcherID))
+
+	env.controller.HandleStatus("node1", []*heartbeatpb.TableSpanStatus{
+		{
+			ID:              env.mergedDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    20,
+			Mode:            common.DefaultMode,
+		},
+	})
+	mergedReplicaSet := env.controller.spanController.GetTaskByID(env.mergedDispatcherID)
+	require.NotNil(t, mergedReplicaSet)
+	require.Equal(t, heartbeatpb.ComponentState_Working, mergedReplicaSet.GetStatus().ComponentStatus)
+	require.Zero(t, env.controller.spanController.GetSchedulingSize())
+	require.Equal(t, 1, env.controller.spanController.GetReplicatingSize())
+}
+
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
