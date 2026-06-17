@@ -99,6 +99,19 @@ func (rac *RedoApplierConfig) toLogReaderConfig() (string, *reader.LogReaderConf
 	return uri.Scheme, cfg, nil
 }
 
+func getRedoApplyTimezone(sinkURI *url.URL) (string, error) {
+	timezone := sinkURI.Query().Get("time-zone")
+	if timezone == "" {
+		timezone = config.GetGlobalServerConfig().TZ
+	}
+
+	tz, err := util.GetTimezone(timezone)
+	if err != nil {
+		return "", errors.WrapError(errors.ErrMySQLInvalidConfig, err)
+	}
+	return tz.String(), nil
+}
+
 func (ra *RedoApplier) getBlockTableIDs(blockTables *commonEvent.InfluencedTables) map[int64]struct{} {
 	tableIDs := make(map[int64]struct{})
 	if blockTables == nil {
@@ -458,16 +471,16 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 		log.Warn("The redo log version is different the current version, enable-ddl-ts will be set to false", zap.Any("logVersion", ra.rd.GetVersion()), zap.Any("currentVersion", misc.Version))
 	}
 	sinkURI.RawQuery = query.Encode()
-	serverTimezone, err := util.GetTimezone(config.GetGlobalServerConfig().TZ)
+	timezone, err := getRedoApplyTimezone(sinkURI)
 	if err != nil {
 		return err
 	}
 	replicaConfig := &config.ChangefeedConfig{
-		SinkURI:    sinkURI.String(),
-		SinkConfig: &config.SinkConfig{},
+		SinkURI: sinkURI.String(),
 		// Redo apply runs without a CDC server instance, so resolve the default
 		// server timezone for the same sink URI validation as normal changefeeds.
-		TimeZone: serverTimezone.String(),
+		TimeZone:   timezone,
+		SinkConfig: &config.SinkConfig{},
 	}
 	if ra.mysqlSink == nil {
 		ra.mysqlSink, err = mysql.New(egCtx, ra.rd.GetChangefeedID(), replicaConfig, sinkURI)
