@@ -289,7 +289,7 @@ func TestDrainNodeEpochExceedsObservedOldUnixNanoEpoch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, remaining)
 
-	_, epoch, ok := c.getDispatcherDrainTarget()
+	_, _, ok := c.getDispatcherDrainTarget()
 	require.False(t, ok)
 
 	c.observeDispatcherDrainTargetHeartbeat(target, &heartbeatpb.NodeHeartbeat{
@@ -301,7 +301,7 @@ func TestDrainNodeEpochExceedsObservedOldUnixNanoEpoch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, remaining)
 
-	_, epoch, ok = c.getDispatcherDrainTarget()
+	_, epoch, ok := c.getDispatcherDrainTarget()
 	require.True(t, ok)
 	require.Equal(t, oldEpoch+1, epoch)
 }
