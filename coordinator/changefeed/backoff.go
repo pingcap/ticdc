@@ -17,12 +17,11 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -201,7 +200,7 @@ func ShouldFailChangefeed(e *heartbeatpb.RunningError) bool {
 	if e == nil {
 		return false
 	}
-	return cerrors.ShouldFailChangefeed(errors.New(e.Message + e.Code))
+	return errors.ShouldFailChangefeed(errors.New(e.Message + e.Code))
 }
 
 func (m *Backoff) HandleError(errs []*heartbeatpb.RunningError) (bool, *heartbeatpb.RunningError) {
@@ -246,7 +245,7 @@ func findFastFailError(errs []*heartbeatpb.RunningError) *heartbeatpb.RunningErr
 		if err == nil {
 			continue
 		}
-		if cerrors.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(err.Code)) ||
+		if errors.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(err.Code)) ||
 			ShouldFailChangefeed(err) {
 			return err
 		}

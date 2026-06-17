@@ -173,6 +173,12 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 
 	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
 		c.status.Store(newStatus)
+
+		changed, state, err := c.backoff.CheckStatus(newStatus)
+		if changed || err != nil || state == config.StateFailed {
+			return changed, state, err
+		}
+
 		if old.BootstrapDone != newStatus.BootstrapDone {
 			log.Info("Received changefeed status with bootstrapDone",
 				zap.Stringer("changefeed", c.ID),
@@ -186,7 +192,7 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 			return true, config.StateFinished, nil
 		}
 
-		return c.backoff.CheckStatus(newStatus)
+		return changed, state, err
 	}
 
 	return false, config.StateNormal, nil

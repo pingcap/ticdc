@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
@@ -88,6 +89,34 @@ func TestChangefeed_UpdateStatus(t *testing.T) {
 	require.Equal(t, config.StateNormal, state)
 	require.Nil(t, err)
 	require.Equal(t, newStatus, cf.GetStatus())
+}
+
+func TestChangefeed_UpdateStatusFastFailWhenBootstrapDoneChanges(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	info := &config.ChangeFeedInfo{
+		SinkURI: "kafka://127.0.0.1:9092",
+		State:   config.StateNormal,
+		Config:  config.GetDefaultReplicaConfig(),
+	}
+	cf := NewChangefeed(cfID, info, 100, true)
+
+	fastFailErr := &heartbeatpb.RunningError{
+		Node:    "node-1",
+		Code:    string(errors.ErrTableRouteConflict.RFCCode()),
+		Message: "table route conflict",
+	}
+	newStatus := &heartbeatpb.MaintainerStatus{
+		CheckpointTs:  200,
+		BootstrapDone: true,
+		Err:           []*heartbeatpb.RunningError{fastFailErr},
+	}
+	updated, state, err := cf.UpdateStatus(newStatus)
+
+	require.True(t, updated)
+	require.Equal(t, config.StateFailed, state)
+	require.Same(t, fastFailErr, err)
+	require.Equal(t, newStatus, cf.GetStatus())
+	require.False(t, cf.ShouldRun())
 }
 
 func TestChangefeed_IsMQSink(t *testing.T) {
