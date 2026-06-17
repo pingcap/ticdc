@@ -190,10 +190,11 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
 	require.Nil(t, blockPendingEvent)
 	require.Equal(t, blockStage, heartbeatpb.BlockStage_NONE)
-	// but block table progress until ack
+	// but block dispatcher checkpoint until ack
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
-	require.Equal(t, false, isEmpty)
+	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(3), checkpointTs)
+	require.Equal(t, uint64(3), dispatcher.GetCheckpointTs())
 	require.Equal(t, int32(4), redoCount.Load())
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
@@ -218,10 +219,11 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
 	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
 
-	// clear the event in tableProgress when receive the ack
+	// release the checkpoint blocker when receiving the ack
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(3), checkpointTs)
+	require.Equal(t, uint64(3), dispatcher.GetCheckpointTs())
 
 	// 3. block ddl event
 	ddlEvent3 := &commonEvent.DDLEvent{

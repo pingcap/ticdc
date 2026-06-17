@@ -110,7 +110,7 @@ func (c *mockGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID stri
 	return info, nil
 }
 
-func (c *mockGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+func (c *mockGCStatesClient) GetGCState(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -118,12 +118,31 @@ func (c *mockGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, erro
 	for _, info := range c.barriers {
 		barriers = append(barriers, info)
 	}
-	return pdgc.GCState{
-		KeyspaceID:   c.keyspaceID,
-		TxnSafePoint: 0,
-		GCSafePoint:  0,
-		GCBarriers:   barriers,
-	}, nil
+	return pdgc.NewGCStateWithGCBarriers(c.keyspaceID, 0, 0, barriers), nil
+}
+
+func (c *mockGCStatesClient) SetGlobalGCBarrier(
+	ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return pdgc.NewGlobalGCBarrierInfo(barrierID, barrierTS, ttl, time.Now()), nil
+}
+
+func (c *mockGCStatesClient) DeleteGlobalGCBarrier(
+	ctx context.Context, barrierID string,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return nil, nil
+}
+
+func (c *mockGCStatesClient) GetAllKeyspacesGCStates(
+	ctx context.Context, opts ...pdgc.GCStatesAPIOption,
+) (pdgc.ClusterGCStates, error) {
+	gcState, err := c.GetGCState(ctx, opts...)
+	if err != nil {
+		return pdgc.ClusterGCStates{}, err
+	}
+	return pdgc.NewClusterGCStatesWithoutGlobalGCBarriers(map[uint32]pdgc.GCState{
+		c.keyspaceID: gcState,
+	}), nil
 }
 
 type mockMaintainerManager struct {
@@ -523,6 +542,7 @@ func TestScaleNode(t *testing.T) {
 			config.CaptureID(info3.ID): {ID: config.CaptureID(info3.ID), AdvertiseAddr: info3.AdvertiseAddr},
 		},
 	})
+	requireBootstrapReady(t, co, waitTime, info2.ID, info3.ID)
 
 	require.Eventually(t, func() bool {
 		return co.controller.changefeedDB.GetReplicatingSize() == changefeedNumber
@@ -540,6 +560,7 @@ func TestScaleNode(t *testing.T) {
 			config.CaptureID(info2.ID): {ID: config.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
 		},
 	})
+	requireBootstrapNodeRemoved(t, co, waitTime, info3.ID)
 
 	require.Eventually(t, func() bool {
 		return co.controller.changefeedDB.GetReplicatingSize() == changefeedNumber
@@ -550,6 +571,27 @@ func TestScaleNode(t *testing.T) {
 	}, waitTime, time.Millisecond*5)
 
 	log.Info("pass scale node")
+}
+
+func requireBootstrapReady(t *testing.T, co *coordinator, waitTime time.Duration, nodes ...node.ID) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		for _, id := range nodes {
+			if !co.controller.bootstrapper.NodeInitialized(id) {
+				return false
+			}
+		}
+		return true
+	}, waitTime, time.Millisecond*5)
+}
+
+func requireBootstrapNodeRemoved(t *testing.T, co *coordinator, waitTime time.Duration, id node.ID) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		return !co.controller.bootstrapper.HasNode(id)
+	}, waitTime, time.Millisecond*5)
 }
 
 func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
