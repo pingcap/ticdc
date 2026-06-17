@@ -108,8 +108,6 @@ jobs:
             command: NEXT_GEN=1 make cdc
           - name: Next Gen Unit Tests
             command: make unit_test_in_verify_ci_next_gen
-          - name: Next Gen Unit Tests With Legacy Safepoint
-            command: LEGACY_SAFEPOINT=1 make unit_test_in_verify_ci_next_gen
     name: ${{ matrix.task.name }}
     steps:
       - name: Check out code

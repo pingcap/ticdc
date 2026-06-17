@@ -24,7 +24,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	"github.com/pingcap/ticdc/pkg/config"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
@@ -33,10 +33,21 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+func setEnableLegacySafePointForTest(t *testing.T, enable bool) {
+	t.Helper()
+
+	original := config.GetGlobalServerConfig()
+	cfg := original.Clone()
+	cfg.EnableLegacySafePoint = enable
+	config.StoreGlobalServerConfig(cfg)
+
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(original)
+	})
+}
+
 func TestTryUpdateKeyspaceGCBarrierDoesNotReturnSnapshotLost(t *testing.T) {
-	if kerneltype.UseLegacySafePointInNextGen {
-		t.Skip("GC Barrier path is disabled with legacy_safepoint tag")
-	}
+	setEnableLegacySafePointForTest(t, false)
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
 
 	keyspaceID := uint32(1)
@@ -79,9 +90,7 @@ func TestTryUpdateKeyspaceGCBarrierDoesNotReturnSnapshotLost(t *testing.T) {
 }
 
 func TestTryUpdateKeyspaceGCBarrierUsesServiceSafePointV2WhenEnabled(t *testing.T) {
-	if !kerneltype.UseLegacySafePointInNextGen {
-		t.Skip("legacy safepoint path requires legacy_safepoint tag")
-	}
+	setEnableLegacySafePointForTest(t, true)
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
 
 	keyspaceID := uint32(1)
@@ -131,9 +140,7 @@ func TestTryUpdateKeyspaceGCBarrierUsesServiceSafePointV2WhenEnabled(t *testing.
 }
 
 func TestEnsureChangefeedStartTsSafetyUsesServiceSafePointV2WhenEnabled(t *testing.T) {
-	if !kerneltype.UseLegacySafePointInNextGen {
-		t.Skip("legacy safepoint path requires legacy_safepoint tag")
-	}
+	setEnableLegacySafePointForTest(t, true)
 
 	const (
 		keyspaceID = uint32(1)
@@ -188,9 +195,7 @@ func TestEnsureChangefeedStartTsSafetyUsesServiceSafePointV2WhenEnabled(t *testi
 }
 
 func TestTryUpdateKeyspaceGCBarrierDoesNotUseServiceSafePointV2WhenDisabled(t *testing.T) {
-	if kerneltype.UseLegacySafePointInNextGen {
-		t.Skip("GC Barrier path is disabled with legacy_safepoint tag")
-	}
+	setEnableLegacySafePointForTest(t, false)
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
 
 	keyspaceID := uint32(1)
@@ -223,9 +228,7 @@ func TestTryUpdateKeyspaceGCBarrierDoesNotUseServiceSafePointV2WhenDisabled(t *t
 }
 
 func TestUnifyGetAndDeleteGcSafepointUseServiceSafePointV2WhenEnabled(t *testing.T) {
-	if !kerneltype.UseLegacySafePointInNextGen {
-		t.Skip("legacy safepoint path requires legacy_safepoint tag")
-	}
+	setEnableLegacySafePointForTest(t, true)
 
 	keyspaceID := uint32(1)
 	serviceID := "test-service"
