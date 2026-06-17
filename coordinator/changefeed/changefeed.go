@@ -174,7 +174,7 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
 		c.status.Store(newStatus)
 
-		changed, state, err := c.backoff.CheckStatus(newStatus)
+		changed, state, err := c.backoff.checkFailedStatus(newStatus)
 		if state == config.StateFailed {
 			return changed, state, err
 		}
@@ -192,7 +192,7 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 			return true, config.StateFinished, nil
 		}
 
-		return changed, state, err
+		return c.backoff.CheckStatus(newStatus)
 	}
 
 	return false, config.StateNormal, nil
