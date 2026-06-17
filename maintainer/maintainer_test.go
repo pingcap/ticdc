@@ -15,15 +15,18 @@ package maintainer
 
 import (
 	"context"
+	"math"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/testutil"
+	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -34,6 +37,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -394,4 +398,412 @@ func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
 	status := m.GetMaintainerStatus()
 	require.Equal(t, uint64(20), status.CheckpointTs)
 	require.Equal(t, uint64(50), status.LastSyncedTs)
+}
+
+func TestMaintainerHeartbeatDuringRemovingSkipsFailoverRecovery(t *testing.T) {
+	buildMaintainer := func(t *testing.T) (*Maintainer, *replica.SpanReplication, node.ID) {
+		t.Helper()
+		testutil.SetUpTestServices(t)
+
+		nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+		captureID := node.ID("node1")
+		nodeManager.GetAliveNodes()[captureID] = &node.Info{ID: captureID}
+
+		cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+		ddlDispatcherID := common.NewDispatcherID()
+		ddlSpan := replica.NewWorkingSpanReplication(cfID, ddlDispatcherID,
+			common.DDLSpanSchemaID,
+			common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+				ID:              ddlDispatcherID.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Working,
+				CheckpointTs:    10,
+				Mode:            common.DefaultMode,
+			}, captureID, false)
+		refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+		controller := NewController(cfID, 10, &mockThreadPool{},
+			config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize)
+
+		totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
+		dispatcherID := common.NewDispatcherID()
+		workingSpan := replica.NewWorkingSpanReplication(cfID, dispatcherID,
+			1,
+			&heartbeatpb.TableSpan{
+				TableID:    totalSpan.TableID,
+				StartKey:   totalSpan.StartKey,
+				EndKey:     totalSpan.EndKey,
+				KeyspaceID: common.DefaultKeyspaceID,
+			}, &heartbeatpb.TableSpanStatus{
+				ID:              dispatcherID.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Working,
+				CheckpointTs:    10,
+				Mode:            common.DefaultMode,
+			}, captureID, false)
+		controller.spanController.AddReplicatingSpan(workingSpan)
+
+		m := &Maintainer{
+			changefeedID:          cfID,
+			controller:            controller,
+			checkpointTsByCapture: newWatermarkCaptureMap(),
+			redoTsByCapture:       newWatermarkCaptureMap(),
+			statusChanged:         atomic.NewBool(false),
+		}
+		m.watermark.Watermark = &heartbeatpb.Watermark{}
+		m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
+		m.initialized.Store(true)
+		return m, workingSpan, captureID
+	}
+
+	makeHeartbeat := func(dispatcherID common.DispatcherID, from node.ID) *messaging.TargetMessage {
+		req := &heartbeatpb.HeartBeatRequest{
+			Watermark: &heartbeatpb.Watermark{
+				CheckpointTs: 20,
+				ResolvedTs:   20,
+			},
+			Statuses: []*heartbeatpb.TableSpanStatus{
+				{
+					ID:              dispatcherID.ToPB(),
+					ComponentStatus: heartbeatpb.ComponentState_Stopped,
+					CheckpointTs:    20,
+					Mode:            common.DefaultMode,
+				},
+			},
+		}
+		return &messaging.TargetMessage{
+			From:    from,
+			Type:    messaging.TypeHeartBeatRequest,
+			Message: []messaging.IOTypeT{req},
+		}
+	}
+
+	// Normal failover recovery should still mark a non-working span absent when the runtime
+	// reports Stopped but maintainer has no operator for it.
+	t.Run("normal maintainer still self heals", func(t *testing.T) {
+		m, workingSpan, captureID := buildMaintainer(t)
+
+		m.onHeartbeatRequest(makeHeartbeat(workingSpan.ID, captureID))
+
+		require.Equal(t, 1, m.controller.spanController.GetAbsentSize())
+		require.Equal(t, heartbeatpb.ComponentState_Stopped, workingSpan.GetStatus().ComponentStatus)
+		require.Equal(t, node.ID(""), workingSpan.GetNodeID())
+	})
+
+	// When RemoveMaintainer has started, the same late Stopped heartbeat must only update runtime
+	// status bookkeeping. Re-marking the span absent here would let the scheduler recreate a
+	// dispatcher while the changefeed is shutting down.
+	t.Run("removing maintainer skips self healing", func(t *testing.T) {
+		m, workingSpan, captureID := buildMaintainer(t)
+		m.removing.Store(true)
+
+		m.onHeartbeatRequest(makeHeartbeat(workingSpan.ID, captureID))
+
+		require.Equal(t, 0, m.controller.spanController.GetAbsentSize())
+		require.Equal(t, heartbeatpb.ComponentState_Stopped, workingSpan.GetStatus().ComponentStatus)
+		require.Equal(t, captureID, workingSpan.GetNodeID())
+		require.Zero(t, m.controller.operatorController.OperatorSize())
+	})
+}
+
+func TestMaintainerRemovingSuppressesLegacyControlPlaneActions(t *testing.T) {
+	mockMC := messaging.NewMockMessageCenter()
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	m := &Maintainer{
+		changefeedID:  cfID,
+		mc:            mockMC,
+		nodeManager:   nodeManager,
+		closedNodes:   make(map[node.ID]struct{}),
+		statusChanged: atomic.NewBool(false),
+		postBootstrapMsg: &heartbeatpb.MaintainerPostBootstrapRequest{
+			ChangefeedID: cfID.ToPB(),
+		},
+	}
+	m.watermark.Watermark = &heartbeatpb.Watermark{CheckpointTs: 100, ResolvedTs: 100}
+	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
+	m.initialized.Store(true)
+	m.removing.Store(true)
+
+	// Removing maintainer must not keep resending bootstrap/post-bootstrap or barrier traffic.
+	// The only remaining control-plane action should be cascade close requests.
+	m.handleResendMessage()
+	require.Len(t, mockMC.GetMessageChannel(), 0)
+
+	// Block status handling must also stop once removal starts, otherwise the old maintainer
+	// can still schedule DDL-driven add/remove operations after handoff begins.
+	m.onBlockStateRequest(&messaging.TargetMessage{
+		From: "node1",
+		Type: messaging.TypeBlockStatusRequest,
+		Message: []messaging.IOTypeT{&heartbeatpb.BlockStatusRequest{
+			ChangefeedID: cfID.ToPB(),
+			Mode:         common.DefaultMode,
+		}},
+	})
+	require.Len(t, mockMC.GetMessageChannel(), 0)
+
+	m.cascadeRemoving.Store(true)
+	m.handleResendMessage()
+	require.Len(t, mockMC.GetMessageChannel(), 2)
+	for i := 0; i < 2; i++ {
+		msg := <-mockMC.GetMessageChannel()
+		require.Equal(t, messaging.TypeMaintainerCloseRequest, msg.Type)
+		req := msg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
+		require.Equal(t, cfID.ToPB(), req.ChangefeedID)
+	}
+}
+
+func TestMaintainerCalculateNewCheckpointTs(t *testing.T) {
+	t.Run("uses reported checkpoint", func(t *testing.T) {
+		m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
+		m.checkpointTsByCapture.Set(selfNodeID, heartbeatpb.Watermark{
+			CheckpointTs: 100,
+			ResolvedTs:   100,
+		})
+
+		newWatermark, canUpdate := m.calculateNewCheckpointTs()
+
+		require.True(t, canUpdate)
+		require.NotNil(t, newWatermark)
+		require.Equal(t, uint64(100), newWatermark.CheckpointTs)
+		require.Equal(t, uint64(100), newWatermark.ResolvedTs)
+	})
+
+	t.Run("drops max checkpoint", func(t *testing.T) {
+		m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
+		m.checkpointTsByCapture.Set(selfNodeID, heartbeatpb.Watermark{
+			CheckpointTs: math.MaxUint64,
+			ResolvedTs:   math.MaxUint64,
+		})
+
+		newWatermark, canUpdate := m.calculateNewCheckpointTs()
+
+		require.False(t, canUpdate)
+		require.Nil(t, newWatermark)
+	})
+
+	t.Run("removing keeps blocked add operator checkpoint constraint", func(t *testing.T) {
+		// Scenario: the old maintainer enters removing mode while an Add operator is still in flight.
+		// Steps: report a higher capture watermark, quiesce all ordinary operators, and verify the
+		// checkpoint calculation remains capped at the in-flight add span's start checkpoint.
+		m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
+		nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+		nodeManager.GetAliveNodes()[selfNodeID] = &node.Info{ID: selfNodeID}
+
+		dispatcherID := common.NewDispatcherID()
+		replicaSet := replica.NewWorkingSpanReplication(
+			m.changefeedID,
+			dispatcherID,
+			1,
+			testutil.GetTableSpanByID(101),
+			&heartbeatpb.TableSpanStatus{
+				ID:              dispatcherID.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Working,
+				CheckpointTs:    10,
+				Mode:            common.DefaultMode,
+			},
+			"",
+			false,
+		)
+		m.controller.spanController.AddAbsentReplicaSet(replicaSet)
+		require.True(t, m.controller.operatorController.AddOperator(operator.NewAddDispatcherOperator(
+			m.controller.spanController,
+			replicaSet,
+			selfNodeID,
+			heartbeatpb.OperatorType_O_Add,
+		)))
+
+		m.removing.Store(true)
+		m.controller.EnterRemovingMode(m.ddlSpan.ID)
+		m.checkpointTsByCapture.Set(selfNodeID, heartbeatpb.Watermark{
+			CheckpointTs: 100,
+			ResolvedTs:   100,
+		})
+
+		newWatermark, canUpdate := m.calculateNewCheckpointTs()
+
+		require.True(t, canUpdate)
+		require.NotNil(t, newWatermark)
+		require.Equal(t, uint64(10), newWatermark.CheckpointTs)
+		require.Equal(t, uint64(10), newWatermark.ResolvedTs)
+	})
+}
+
+func TestMaintainerCalCheckpointTsSkipsInvalidGlobalCheckpoint(t *testing.T) {
+	m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
+	m.initialized.Store(true)
+	m.watermark.Watermark = &heartbeatpb.Watermark{
+		CheckpointTs: 1,
+		ResolvedTs:   1,
+	}
+	m.checkpointTsByCapture.Set(selfNodeID, heartbeatpb.Watermark{
+		CheckpointTs: math.MaxUint64,
+		ResolvedTs:   math.MaxUint64,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		m.calCheckpointTs(ctx)
+	}()
+
+	require.Never(t, func() bool {
+		watermark := m.getWatermark()
+		return m.controller.spanController.GetMaintainerCommittedCheckpointTs() != 1 ||
+			watermark.CheckpointTs != 1 ||
+			watermark.ResolvedTs != 1
+	}, 250*time.Millisecond, 50*time.Millisecond)
+
+	m.checkpointTsByCapture.Set(selfNodeID, heartbeatpb.Watermark{
+		CheckpointTs: 2,
+		ResolvedTs:   2,
+	})
+	require.Eventually(t, func() bool {
+		watermark := m.getWatermark()
+		return m.controller.spanController.GetMaintainerCommittedCheckpointTs() == 2 &&
+			watermark.CheckpointTs == 2 &&
+			watermark.ResolvedTs == 2
+	}, time.Second, 50*time.Millisecond)
+
+	cancel()
+	wg.Wait()
+}
+
+func TestMaintainerHandleRedoMetaTsMessageUsesRedoCheckpointForRedoController(t *testing.T) {
+	m, selfNodeID := newMaintainerForRedoCheckpointCalculationTest(t)
+	m.initialized.Store(true)
+	m.watermark.Watermark = &heartbeatpb.Watermark{
+		CheckpointTs: 100,
+		ResolvedTs:   100,
+	}
+
+	m.redoTsByCapture.Set(selfNodeID, heartbeatpb.Watermark{
+		CheckpointTs: 40,
+		ResolvedTs:   40,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		m.handleRedoMetaTsMessage(ctx)
+	}()
+
+	require.Eventually(t, func() bool {
+		return m.controller.redoSpanController.GetMaintainerCommittedCheckpointTs() == 40
+	}, 2*time.Second, 50*time.Millisecond)
+
+	cancel()
+	wg.Wait()
+}
+
+func newMaintainerForCheckpointCalculationTest(t testing.TB) (*Maintainer, node.ID) {
+	t.Helper()
+	testutil.SetUpTestServices(t)
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	selfNode := node.NewInfo("127.0.0.1:8300", "")
+	_, ddlSpan := newDDLSpan(common.DefaultKeyspaceID, cfID, 1, selfNode, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1, common.DefaultMode)
+
+	controller := &Controller{
+		spanController:     spanController,
+		operatorController: operatorController,
+	}
+	controller.barrier = NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, nil)
+
+	bootstrapper := bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](
+		"test",
+		func(id node.ID, addr string) *messaging.TargetMessage { return nil },
+	)
+	_, _, _, _ = bootstrapper.HandleNodesChange(map[node.ID]*node.Info{selfNode.ID: selfNode})
+
+	m := &Maintainer{
+		changefeedID:          cfID,
+		selfNode:              selfNode,
+		controller:            controller,
+		ddlSpan:               ddlSpan,
+		pdClock:               pdutil.NewClock4Test(),
+		bootstrapper:          bootstrapper,
+		checkpointTsByCapture: newWatermarkCaptureMap(),
+		checkpointTsGauge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "test_checkpoint_ts",
+		}),
+		checkpointTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "test_checkpoint_ts_lag",
+		}),
+		resolvedTsGauge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "test_resolved_ts",
+		}),
+		resolvedTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "test_resolved_ts_lag",
+		}),
+	}
+	m.watermark.Watermark = heartbeatpb.NewMaxWatermark()
+	return m, selfNode.ID
+}
+
+func newMaintainerForRedoCheckpointCalculationTest(t testing.TB) (*Maintainer, node.ID) {
+	t.Helper()
+	testutil.SetUpTestServices(t)
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	selfNode := node.NewInfo("127.0.0.1:8300", "")
+	_, ddlSpan := newDDLSpan(common.DefaultKeyspaceID, cfID, 1, selfNode, common.DefaultMode)
+	_, redoDDLSpan := newDDLSpan(common.DefaultKeyspaceID, cfID, 1, selfNode, common.RedoMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1, common.DefaultMode)
+	redoSpanController := span.NewController(cfID, redoDDLSpan, nil, nil, nil, common.DefaultKeyspaceID, common.RedoMode)
+	redoOperatorController := operator.NewOperatorController(cfID, redoSpanController, 1, common.RedoMode)
+
+	controller := &Controller{
+		spanController:         spanController,
+		operatorController:     operatorController,
+		redoSpanController:     redoSpanController,
+		redoOperatorController: redoOperatorController,
+		enableRedo:             true,
+	}
+	controller.barrier = NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, nil)
+	controller.redoBarrier = NewBarrier(redoSpanController, redoOperatorController, false, nil, common.RedoMode, nil)
+
+	bootstrapper := bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](
+		"test",
+		func(id node.ID, addr string) *messaging.TargetMessage { return nil },
+	)
+	_, _, _, _ = bootstrapper.HandleNodesChange(map[node.ID]*node.Info{selfNode.ID: selfNode})
+
+	m := &Maintainer{
+		changefeedID:          cfID,
+		selfNode:              selfNode,
+		controller:            controller,
+		mc:                    appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
+		pdClock:               pdutil.NewClock4Test(),
+		bootstrapper:          bootstrapper,
+		checkpointTsByCapture: newWatermarkCaptureMap(),
+		redoTsByCapture:       newWatermarkCaptureMap(),
+		redoMetaTs: &heartbeatpb.RedoMetaMessage{
+			ChangefeedID: cfID.ToPB(),
+			CheckpointTs: 1,
+			ResolvedTs:   1,
+		},
+		enableRedo: true,
+		checkpointTsGauge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "test_redo_checkpoint_ts",
+		}),
+		checkpointTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "test_redo_checkpoint_ts_lag",
+		}),
+		resolvedTsGauge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "test_redo_resolved_ts",
+		}),
+		resolvedTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "test_redo_resolved_ts_lag",
+		}),
+	}
+	m.watermark.Watermark = heartbeatpb.NewMaxWatermark()
+	return m, selfNode.ID
 }

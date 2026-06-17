@@ -20,24 +20,20 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
-const (
-	defaultTimeout = 5 * time.Minute
-)
-
 // ClaimCheck manage send message to the claim-check external storage.
 type ClaimCheck struct {
-	storage  storage.ExternalStorage
+	storage  storeapi.Storage
 	rawValue bool
 
 	changefeedID commonType.ChangeFeedID

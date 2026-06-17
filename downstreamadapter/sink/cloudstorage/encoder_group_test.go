@@ -201,6 +201,7 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 				}
 				task := future.task
 				require.Equal(t, taskValue, task)
+				require.Nil(t, task.event)
 				done <- struct{}{}
 				return nil
 			}

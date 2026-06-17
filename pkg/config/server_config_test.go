@@ -37,6 +37,24 @@ func TestServerConfigMarshal(t *testing.T) {
 	require.Equal(t, conf, conf2)
 }
 
+func TestServerConfigDecodeEnableLegacySafePoint(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "server.toml")
+	configContent := strings.TrimSpace(`
+enable-legacy-safepoint = true
+`)
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644))
+
+	cfg := GetDefaultServerConfig()
+	require.False(t, cfg.EnableLegacySafePoint)
+
+	metaData, err := toml.DecodeFile(configPath, cfg)
+	require.NoError(t, err)
+	require.Empty(t, metaData.Undecoded())
+	require.True(t, cfg.EnableLegacySafePoint)
+}
+
 func TestServerConfigClone(t *testing.T) {
 	t.Parallel()
 	conf := GetDefaultServerConfig()
@@ -185,6 +203,10 @@ func TestSchedulerConfigValidateAndAdjust(t *testing.T) {
 
 	conf = GetDefaultServerConfig().Clone().Debug.Scheduler
 	conf.AddTableBatchSize = 0
+	require.Error(t, conf.ValidateAndAdjust())
+
+	conf = GetDefaultServerConfig().Clone().Debug.Scheduler
+	conf.BalanceMoveBatchSize = 0
 	require.Error(t, conf.ValidateAndAdjust())
 }
 

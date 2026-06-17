@@ -92,7 +92,7 @@ func (m *MockCache) SetRegions(key string, regions []*tikv.Region) {
 }
 
 func (m *MockCache) LoadRegionsInKeyRange(
-	bo *tikv.Backoffer, startKey, endKey []byte,
+	_ *tikv.Backoffer, startKey, endKey []byte,
 ) (regions []*tikv.Region, err error) {
 	if m.err != nil {
 		return nil, m.err

@@ -123,10 +123,6 @@ func isUnique(flag uint64) bool {
 	return flag&uniqueKeyFlag != 0
 }
 
-func isMultiKey(flag uint64) bool {
-	return flag&multipleKeyFlag != 0
-}
-
 func isNullable(flag uint64) bool {
 	return flag&nullableFlag != 0
 }
