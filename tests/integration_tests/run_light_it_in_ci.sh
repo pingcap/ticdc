@@ -38,7 +38,11 @@ mysql_groups=(
 	# G02
 	'new_ci_collation safe_mode savepoint fail_over_ddl_C unsplittable_tables'
 	# G03
+<<<<<<< HEAD
 	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D ddl_default_current_timestamp'
+=======
+	'capture_suicide_while_balance_table capture_local_fence_on_session_done kv_client_stream_reconnect ddl_default_current_timestamp fail_over_ddl_D'
+>>>>>>> 5880b634f (sink/mysql: split DML and control DB pools (#5397))
 	# G04
 	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
