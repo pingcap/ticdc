@@ -437,6 +437,15 @@ func (c *Config) Validate() error {
 			errors.Errorf("invalid max-batch-message-bytes %d", c.MaxBatchMessageBytes),
 		)
 	}
+	if c.MaxBatchMessageBytes > c.MaxMessageBytes {
+		return errors.ErrCodecInvalidConfig.Wrap(
+			errors.Errorf(
+				"max-batch-message-bytes %d cannot be greater than max-message-bytes %d",
+				c.MaxBatchMessageBytes,
+				c.MaxMessageBytes,
+			),
+		)
+	}
 
 	if c.MaxBatchSize <= 0 {
 		return errors.ErrCodecInvalidConfig.Wrap(

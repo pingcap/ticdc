@@ -67,20 +67,7 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 
 	result.IncRowsCount()
 	length := result.Length()
-	if length <= e.config.BatchMaxMessageBytes() {
-		if length > e.config.MaxMessageBytes {
-			log.Error("Single message is too large for simple",
-				zap.Int("maxMessageBytes", e.config.MaxMessageBytes),
-				zap.Int("length", length),
-				zap.Any("table", event.TableInfo.TableName))
-			return errors.ErrMessageTooLarge.GenWithStackByArgs(
-				event.TableInfo.GetTargetTableName(), length, e.config.MaxMessageBytes)
-		}
-		e.messages = append(e.messages, result)
-		return nil
-	}
-
-	if e.config.LargeMessageHandle.Disabled() {
+	if length <= e.config.BatchMaxMessageBytes() || e.config.LargeMessageHandle.Disabled() {
 		if length > e.config.MaxMessageBytes {
 			log.Error("Single message is too large for simple",
 				zap.Int("maxMessageBytes", e.config.MaxMessageBytes),

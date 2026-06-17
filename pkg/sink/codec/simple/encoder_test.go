@@ -1607,6 +1607,8 @@ func TestDMLLargerThanBatchLimit(t *testing.T) {
 
 	messages := enc.Build()
 	require.Len(t, messages, 1)
+	require.Greater(t, messages[0].Length(), codecConfig.MaxBatchMessageBytes)
+	require.LessOrEqual(t, messages[0].Length(), codecConfig.MaxMessageBytes)
 	require.Equal(t, 1, messages[0].GetRowsCount())
 }
 
