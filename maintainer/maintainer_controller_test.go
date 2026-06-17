@@ -1886,6 +1886,116 @@ func newMergeBootstrapTestEnv(t *testing.T) *mergeBootstrapTestEnv {
 	}
 }
 
+// TestFinishBootstrapSkipsMergeOperatorForDroppedTable covers failover after a DROP TABLE
+// while dispatcher manager still reports an in-flight merge journal. The test boots from an
+// empty schema snapshot, feeds source and merged dispatcher snapshots plus the stale merge
+// request, and expects bootstrap to skip restoring ghost table tasks/operators.
+func TestFinishBootstrapSkipsMergeOperatorForDroppedTable(t *testing.T) {
+	env := newMergeBootstrapTestEnv(t)
+
+	schemaStore := eventservice.NewMockSchemaStore()
+	schemaStore.SetTables(nil)
+	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+
+	_, err := env.controller.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: env.cfID.ToPB(),
+			Spans: []*heartbeatpb.BootstrapTableSpan{
+				{
+					ID:              env.sourceDispatcherID1.ToPB(),
+					SchemaID:        1,
+					Span:            env.sourceSpan1,
+					ComponentStatus: heartbeatpb.ComponentState_WaitingMerge,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+				{
+					ID:              env.sourceDispatcherID2.ToPB(),
+					SchemaID:        1,
+					Span:            env.sourceSpan2,
+					ComponentStatus: heartbeatpb.ComponentState_WaitingMerge,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+				{
+					ID:              env.mergedDispatcherID.ToPB(),
+					SchemaID:        1,
+					Span:            env.mergedSpan,
+					ComponentStatus: heartbeatpb.ComponentState_Preparing,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+			},
+			MergeOperators: []*heartbeatpb.MergeDispatcherRequest{
+				{
+					ChangefeedID: env.cfID.ToPB(),
+					DispatcherIDs: []*heartbeatpb.DispatcherID{
+						env.sourceDispatcherID1.ToPB(),
+						env.sourceDispatcherID2.ToPB(),
+					},
+					MergedDispatcherID: env.mergedDispatcherID.ToPB(),
+					Mode:               common.DefaultMode,
+				},
+			},
+			CheckpointTs: 10,
+		},
+	}, false)
+	require.NoError(t, err)
+	require.True(t, env.controller.bootstrapped)
+	require.Zero(t, env.controller.operatorController.OperatorSize())
+	require.Zero(t, env.controller.spanController.GetAbsentSize())
+	require.Zero(t, env.controller.spanController.GetSchedulingSize())
+	require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
+	require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID2))
+	require.Nil(t, env.controller.spanController.GetTaskByID(env.mergedDispatcherID))
+	require.Empty(t, env.controller.spanController.GetTasksByTableID(env.sourceSpan1.TableID))
+}
+
+// TestFinishBootstrapSkipsIncompleteMergeJournalWithoutMergedDispatcher covers a stale merge
+// journal whose source list is incomplete and whose merged dispatcher snapshot is absent. The
+// test restores a table with one surviving source span and expects bootstrap to skip the merge
+// operator without moving that source into scheduling state.
+func TestFinishBootstrapSkipsIncompleteMergeJournalWithoutMergedDispatcher(t *testing.T) {
+	env := newMergeBootstrapTestEnv(t)
+
+	_, err := env.controller.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: env.cfID.ToPB(),
+			Spans: []*heartbeatpb.BootstrapTableSpan{
+				{
+					ID:              env.sourceDispatcherID1.ToPB(),
+					SchemaID:        1,
+					Span:            env.sourceSpan1,
+					ComponentStatus: heartbeatpb.ComponentState_WaitingMerge,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+			},
+			MergeOperators: []*heartbeatpb.MergeDispatcherRequest{
+				{
+					ChangefeedID: env.cfID.ToPB(),
+					DispatcherIDs: []*heartbeatpb.DispatcherID{
+						env.sourceDispatcherID1.ToPB(),
+						env.sourceDispatcherID2.ToPB(),
+					},
+					MergedDispatcherID: env.mergedDispatcherID.ToPB(),
+					Mode:               common.DefaultMode,
+				},
+			},
+			CheckpointTs: 10,
+		},
+	}, false)
+	require.NoError(t, err)
+	require.True(t, env.controller.bootstrapped)
+	require.Zero(t, env.controller.operatorController.OperatorSize())
+	require.Zero(t, env.controller.spanController.GetSchedulingSize())
+
+	sourceReplicaSet := env.controller.spanController.GetTaskByID(env.sourceDispatcherID1)
+	require.NotNil(t, sourceReplicaSet)
+	require.True(t, env.controller.spanController.IsReplicating(sourceReplicaSet))
+	require.Nil(t, env.controller.spanController.GetTaskByID(env.mergedDispatcherID))
+}
+
 // TestHandleStatusDropsTerminalSourcesCoveredByMergedSpanAfterJournalCleanup covers the post-bootstrap
 // merge cleanup window where source dispatchers still report terminal statuses after the merge journal
 // is gone. The test bootstraps overlapping source and merged spans, then sends terminal source

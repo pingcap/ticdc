@@ -137,7 +137,13 @@ func (c *Controller) FinishBootstrap(
 	// Restore merge operators after task state is rebuilt from bootstrap spans/operators.
 	// Merge restoration needs the per-dispatcher task map from buildTaskInfo, but must run
 	// before we discard any leftover working tasks as dropped-table artifacts.
-	if err := c.restoreCurrentMergeOperators(allNodesResp, buildTableSplitMap(tables)); err != nil {
+	mergeTableSplitMaps := map[int64]map[int64]bool{
+		common.DefaultMode: buildTableSplitMap(tables),
+	}
+	if c.enableRedo {
+		mergeTableSplitMaps[common.RedoMode] = buildTableSplitMap(redoTables)
+	}
+	if err := c.restoreCurrentMergeOperators(allNodesResp, mergeTableSplitMaps); err != nil {
 		return nil, errors.Trace(err)
 	}
 
@@ -940,7 +946,7 @@ func (c *Controller) handleCurrentWorkingRemove(
 // remaining stuck in scheduling state or leaking an incomplete merged dispatcher.
 func (c *Controller) restoreCurrentMergeOperators(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
-	tableSplitMap map[int64]bool,
+	tableSplitMaps map[int64]map[int64]bool,
 ) error {
 	for nodeID, resp := range allNodesResp {
 		if len(resp.MergeOperators) == 0 {
@@ -958,13 +964,35 @@ func (c *Controller) restoreCurrentMergeOperators(
 				continue
 			}
 
+			tableSplitMap, ok := tableSplitMapForMode(mergeReq.Mode, tableSplitMaps)
+			if !ok {
+				log.Warn("skip restoring merge operator due to unavailable mode",
+					zap.String("nodeID", nodeID.String()),
+					zap.String("changefeed", resp.ChangefeedID.String()),
+					zap.Int64("mode", mergeReq.Mode))
+				continue
+			}
 			spanController := c.getSpanController(mergeReq.Mode)
 			operatorController := c.getOperatorController(mergeReq.Mode)
+			if spanController == nil || operatorController == nil {
+				log.Warn("skip restoring merge operator due to uninitialized controller",
+					zap.String("nodeID", nodeID.String()),
+					zap.String("changefeed", resp.ChangefeedID.String()),
+					zap.Int64("mode", mergeReq.Mode))
+				continue
+			}
 			spanInfoByID := indexBootstrapSpans(resp.Spans, mergeReq.Mode)
 			mergedDispatcherID := common.NewDispatcherIDFromPB(mergeReq.MergedDispatcherID)
 
 			sourceReplicaSets := make([]*replica.SpanReplication, 0, len(mergeReq.DispatcherIDs))
+			createdSourceReplicaSets := make([]*replica.SpanReplication, 0, len(mergeReq.DispatcherIDs))
+			cleanupCreatedSourceReplicaSets := func() {
+				for _, replicaSet := range createdSourceReplicaSets {
+					spanController.RemoveReplicatingSpan(replicaSet)
+				}
+			}
 			sourceComplete := true
+			skipMerge := false
 			seenSources := make(map[common.DispatcherID]struct{}, len(mergeReq.DispatcherIDs))
 			for _, idPB := range mergeReq.DispatcherIDs {
 				if idPB == nil {
@@ -980,19 +1008,80 @@ func (c *Controller) restoreCurrentMergeOperators(
 				replicaSet := spanController.GetTaskByID(dispatcherID)
 				if replicaSet == nil {
 					spanInfo := spanInfoByID[dispatcherID]
-					if spanInfo == nil {
+					if spanInfo == nil || spanInfo.Span == nil {
 						sourceComplete = false
 						break
 					}
-					splitEnabled := spanController.ShouldEnableSplit(tableSplitMap[spanInfo.Span.TableID])
+					splitable, tableExists := tableSplitMap[spanInfo.Span.TableID]
+					if !tableExists {
+						log.Warn("skip restoring merge operator because source table is missing from schema snapshot",
+							zap.String("nodeID", nodeID.String()),
+							zap.String("changefeed", resp.ChangefeedID.String()),
+							zap.String("dispatcher", dispatcherID.String()),
+							zap.Int64("tableID", spanInfo.Span.TableID),
+							zap.Int64("mode", mergeReq.Mode))
+						skipMerge = true
+						break
+					}
+					splitEnabled := spanController.ShouldEnableSplit(splitable)
 					replicaSet = c.createSpanReplication(spanInfo, nodeID, splitEnabled)
 					spanController.AddReplicatingSpan(replicaSet)
+					createdSourceReplicaSets = append(createdSourceReplicaSets, replicaSet)
+				} else if replicaSet.Span == nil {
+					sourceComplete = false
+					break
+				} else if _, tableExists := tableSplitMap[replicaSet.Span.TableID]; !tableExists {
+					log.Warn("skip restoring merge operator because source table is missing from schema snapshot",
+						zap.String("nodeID", nodeID.String()),
+						zap.String("changefeed", resp.ChangefeedID.String()),
+						zap.String("dispatcher", dispatcherID.String()),
+						zap.Int64("tableID", replicaSet.Span.TableID),
+						zap.Int64("mode", mergeReq.Mode))
+					skipMerge = true
+					break
 				}
 				sourceReplicaSets = append(sourceReplicaSets, replicaSet)
+			}
+			if skipMerge {
+				cleanupCreatedSourceReplicaSets()
+				continue
 			}
 
 			mergedSpanInfo := spanInfoByID[mergedDispatcherID]
 			mergedReplicaSet := spanController.GetTaskByID(mergedDispatcherID)
+			if mergedSpanInfo != nil {
+				if mergedSpanInfo.Span == nil {
+					log.Warn("skip restoring merge operator because merged span is missing",
+						zap.String("nodeID", nodeID.String()),
+						zap.String("changefeed", resp.ChangefeedID.String()),
+						zap.String("dispatcher", mergedDispatcherID.String()),
+						zap.Int64("mode", mergeReq.Mode))
+					cleanupCreatedSourceReplicaSets()
+					continue
+				}
+				if _, tableExists := tableSplitMap[mergedSpanInfo.Span.TableID]; !tableExists {
+					log.Warn("skip restoring merge operator because merged table is missing from schema snapshot",
+						zap.String("nodeID", nodeID.String()),
+						zap.String("changefeed", resp.ChangefeedID.String()),
+						zap.String("dispatcher", mergedDispatcherID.String()),
+						zap.Int64("tableID", mergedSpanInfo.Span.TableID),
+						zap.Int64("mode", mergeReq.Mode))
+					cleanupCreatedSourceReplicaSets()
+					continue
+				}
+			}
+			if mergedReplicaSet != nil && mergedReplicaSet.Span != nil {
+				if _, tableExists := tableSplitMap[mergedReplicaSet.Span.TableID]; !tableExists {
+					log.Warn("skip restoring merge operator because merged table is missing from schema snapshot",
+						zap.String("nodeID", nodeID.String()),
+						zap.String("changefeed", resp.ChangefeedID.String()),
+						zap.String("dispatcher", mergedDispatcherID.String()),
+						zap.Int64("tableID", mergedReplicaSet.Span.TableID),
+						zap.Int64("mode", mergeReq.Mode))
+					cleanupCreatedSourceReplicaSets()
+					continue
+				}
+			}
 			if mergedSpanInfo != nil && mergedSpanInfo.ComponentStatus == heartbeatpb.ComponentState_Working {
 				if mergedReplicaSet == nil {
 					splitEnabled := spanController.ShouldEnableSplit(tableSplitMap[mergedSpanInfo.Span.TableID])
@@ -1044,9 +1133,10 @@ func (c *Controller) restoreCurrentMergeOperators(
 						zap.Any("status", mergedSpanInfo.ComponentStatus))
 					continue
 				}
-				for _, replicaSet := range sourceReplicaSets {
-					spanController.MarkSpanScheduling(replicaSet)
-				}
+				// Without a merged dispatcher snapshot, a merge journal with missing sources is stale
+				// and cannot be driven by any restored operator. Leave the surviving source spans in
+				// their bootstrap state so normal scheduling can repair any uncovered table ranges.
+				cleanupCreatedSourceReplicaSets()
 				continue
 			}
 
@@ -1067,6 +1157,7 @@ func (c *Controller) restoreCurrentMergeOperators(
 							zap.String("nodeID", nodeID.String()),
 							zap.String("changefeed", resp.ChangefeedID.String()),
 							zap.String("dispatcher", mergedDispatcherID.String()))
+						cleanupCreatedSourceReplicaSets()
 						continue
 					}
 					splitEnabled := spanController.ShouldEnableSplit(tableSplitMap[mergedSpan.TableID])
@@ -1117,6 +1208,18 @@ func (c *Controller) restoreCurrentMergeOperators(
 		}
 	}
 	return nil
+}
+
+func tableSplitMapForMode(
+	mode int64,
+	tableSplitMaps map[int64]map[int64]bool,
+) (map[int64]bool, bool) {
+	if common.IsRedoMode(mode) {
+		tableSplitMap, ok := tableSplitMaps[common.RedoMode]
+		return tableSplitMap, ok
+	}
+	tableSplitMap, ok := tableSplitMaps[common.DefaultMode]
+	return tableSplitMap, ok
 }
 
 // buildMergedSpanFromReplicas synthesizes the merged span shape from consecutive source replica sets.
