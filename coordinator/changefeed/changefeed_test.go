@@ -119,6 +119,52 @@ func TestChangefeed_UpdateStatusFastFailWhenBootstrapDoneChanges(t *testing.T) {
 	require.False(t, cf.ShouldRun())
 }
 
+func TestChangefeed_UpdateStatusRetryableErrorWhenBootstrapDoneChanges(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	info := &config.ChangeFeedInfo{
+		SinkURI: "kafka://127.0.0.1:9092",
+		State:   config.StateNormal,
+		Config:  config.GetDefaultReplicaConfig(),
+	}
+	cf := NewChangefeed(cfID, info, 100, true)
+
+	retryableErr := &heartbeatpb.RunningError{
+		Node:    "node-1",
+		Code:    "CDC:ErrChangefeedRetryable",
+		Message: "retryable error",
+	}
+	newStatus := &heartbeatpb.MaintainerStatus{
+		CheckpointTs:  100,
+		BootstrapDone: true,
+		Err:           []*heartbeatpb.RunningError{retryableErr},
+	}
+	updated, state, err := cf.UpdateStatus(newStatus)
+
+	require.True(t, updated)
+	require.Equal(t, config.StateNormal, state)
+	require.Nil(t, err)
+	require.Equal(t, newStatus, cf.GetStatus())
+	require.True(t, cf.ShouldRun())
+	require.False(t, cf.backoff.retrying.Load())
+	require.False(t, cf.backoff.isRestarting.Load())
+	require.True(t, cf.backoff.nextRetryTime.Load().IsZero())
+
+	nextStatus := &heartbeatpb.MaintainerStatus{
+		CheckpointTs:  100,
+		BootstrapDone: true,
+		Err:           []*heartbeatpb.RunningError{retryableErr},
+	}
+	updated, state, err = cf.UpdateStatus(nextStatus)
+
+	require.True(t, updated)
+	require.Equal(t, config.StateWarning, state)
+	require.Same(t, retryableErr, err)
+	require.Equal(t, nextStatus, cf.GetStatus())
+	require.False(t, cf.ShouldRun())
+	require.True(t, cf.backoff.retrying.Load())
+	require.True(t, cf.backoff.isRestarting.Load())
+}
+
 func TestChangefeed_IsMQSink(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{

@@ -110,19 +110,7 @@ func (m *Backoff) resetErrRetry() {
 	m.retrying.Store(false)
 }
 
-// CheckStatus checks the current status of a changefeed and determines its state transition.
-// It takes a MaintainerStatus which contains the current checkpoint timestamp and any errors.
-// Returns:
-//   - bool: whether the state has changed and needs to be updated
-//   - config.FeedState: the new state of the changefeed (Normal, Warning, or Failed)
-//   - *heartbeatpb.RunningError: any error that occurred during processing
-//
-// The method handles several cases:
-//  1. If the changefeed is marked as failed, returns Failed state
-//  2. If a fast-fail error is reported, returns Failed state
-//  3. If checkpoint has advanced (making progress), resets any retry attempts and returns Normal state
-//  4. If there are errors and checkpoint hasn't advanced, initiates the retry mechanism
-func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, config.FeedState, *heartbeatpb.RunningError) {
+func (m *Backoff) checkFailedStatus(status *heartbeatpb.MaintainerStatus) (bool, config.FeedState, *heartbeatpb.RunningError) {
 	if m.failed.Load() {
 		return false, config.StateFailed, nil
 	}
@@ -140,6 +128,26 @@ func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, confi
 			zap.Any("error", err))
 		m.failed.Store(true)
 		return true, config.StateFailed, err
+	}
+
+	return false, config.StateNormal, nil
+}
+
+// CheckStatus checks the current status of a changefeed and determines its state transition.
+// It takes a MaintainerStatus which contains the current checkpoint timestamp and any errors.
+// Returns:
+//   - bool: whether the state has changed and needs to be updated
+//   - config.FeedState: the new state of the changefeed (Normal, Warning, or Failed)
+//   - *heartbeatpb.RunningError: any error that occurred during processing
+//
+// The method handles several cases:
+//  1. If the changefeed is marked as failed, returns Failed state
+//  2. If a fast-fail error is reported, returns Failed state
+//  3. If checkpoint has advanced (making progress), resets any retry attempts and returns Normal state
+//  4. If there are errors and checkpoint hasn't advanced, initiates the retry mechanism
+func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, config.FeedState, *heartbeatpb.RunningError) {
+	if changed, state, err := m.checkFailedStatus(status); state == config.StateFailed {
+		return changed, state, err
 	}
 
 	if m.checkpointTs < status.CheckpointTs {
