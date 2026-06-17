@@ -62,7 +62,7 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 	config.Producer.Flush.Bytes = 0
 	config.Producer.Flush.Messages = 0
 	config.Producer.Flush.Frequency = time.Duration(0)
-	config.Producer.Flush.MaxMessages = o.MaxMessages
+	config.Producer.Flush.MaxMessages = 0
 
 	config.Net.MaxOpenRequests = 1
 	config.Net.DialTimeout = o.DialTimeout
@@ -70,7 +70,7 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 	config.Net.ReadTimeout = o.ReadTimeout
 
 	config.Producer.Partitioner = sarama.NewManualPartitioner
-	config.Producer.MaxMessageBytes = o.ProducerMaxMessageBytes
+	config.Producer.MaxMessageBytes = o.MaxMessageBytes
 	config.Producer.Return.Successes = true
 	config.Producer.Return.Errors = true
 	config.Producer.RequiredAcks = sarama.RequiredAcks(o.RequiredAcks)

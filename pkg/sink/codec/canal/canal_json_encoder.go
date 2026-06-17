@@ -473,7 +473,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 
 	targetTable := e.TableInfo.GetTargetTableName()
 	originLength := m.Length()
-	if m.Length() > c.config.BatchMaxMessageBytes() && !c.config.LargeMessageHandle.Disabled() {
+	if m.Length() > c.config.MaxMessageBytes && !c.config.LargeMessageHandle.Disabled() {
 		if c.config.LargeMessageHandle.HandleKeyOnly() {
 			value, err = newJSONMessageForDML(e, c.config, true, "")
 			if err != nil {
@@ -497,7 +497,6 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 				return errors.ErrMessageTooLarge.GenWithStackByArgs(targetTable, length, c.config.MaxMessageBytes)
 			}
 			log.Warn("Single message is too large for canal-json, only encode handle-key columns",
-				zap.Int("maxBatchMessageBytes", c.config.BatchMaxMessageBytes()),
 				zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
 				zap.Int("originLength", originLength),
 				zap.Int("length", length),

@@ -50,16 +50,15 @@ func GetEncoderConfig(
 	sinkURI *url.URL,
 	protocol config.Protocol,
 	sinkConfig *config.SinkConfig,
-	configuredMaxMessageBytes int,
-	producerMaxMessageBytes int,
+	maxMessageBytes int,
+	batchMaxMessageBytes int,
 ) (*common.Config, error) {
 	encoderConfig := common.NewConfig(protocol)
 	if err := encoderConfig.Apply(sinkURI, sinkConfig); err != nil {
 		return nil, errors.WrapError(errors.ErrSinkInvalidConfig, err)
 	}
-	batchMaxMessageBytes := min(configuredMaxMessageBytes, producerMaxMessageBytes)
 	encoderConfig = encoderConfig.
-		WithMaxMessageBytes(producerMaxMessageBytes).
+		WithMaxMessageBytes(maxMessageBytes).
 		WithMaxBatchMessageBytes(batchMaxMessageBytes).
 		WithChangefeedID(changefeedID)
 

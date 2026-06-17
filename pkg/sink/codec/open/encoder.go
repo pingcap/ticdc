@@ -95,7 +95,7 @@ func (d *batchEncoder) AppendRowChangedEvent(
 		return errors.Trace(err)
 	}
 
-	if length > d.config.BatchMaxMessageBytes() && !d.config.LargeMessageHandle.Disabled() {
+	if length > d.config.MaxMessageBytes && !d.config.LargeMessageHandle.Disabled() {
 		if d.config.LargeMessageHandle.EnableClaimCheck() {
 			// send the large message to the external storage first, then
 			// create a new message contains the reference of the large message.

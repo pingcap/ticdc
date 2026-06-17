@@ -43,7 +43,7 @@ type Config struct {
 
 	// MaxMessageBytes is the final encoded message size limit.
 	MaxMessageBytes int
-	// MaxBatchMessageBytes controls batch splitting and large-message handling.
+	// MaxBatchMessageBytes controls batch splitting.
 	// If it is not set, codecs use MaxMessageBytes to keep the old behavior.
 	MaxBatchMessageBytes int
 	MaxBatchSize         int
@@ -347,13 +347,13 @@ func (c *Config) WithMaxMessageBytes(bytes int) *Config {
 	return c
 }
 
-// WithMaxBatchMessageBytes sets the batch splitting and large-message threshold.
+// WithMaxBatchMessageBytes sets the batch splitting threshold.
 func (c *Config) WithMaxBatchMessageBytes(bytes int) *Config {
 	c.MaxBatchMessageBytes = bytes
 	return c
 }
 
-// BatchMaxMessageBytes returns the batch splitting and large-message threshold.
+// BatchMaxMessageBytes returns the batch splitting threshold.
 func (c *Config) BatchMaxMessageBytes() int {
 	if c.MaxBatchMessageBytes > 0 {
 		return c.MaxBatchMessageBytes
