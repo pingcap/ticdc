@@ -175,7 +175,7 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 		c.status.Store(newStatus)
 
 		changed, state, err := c.backoff.CheckStatus(newStatus)
-		if changed || err != nil || state == config.StateFailed {
+		if state == config.StateFailed {
 			return changed, state, err
 		}
 
