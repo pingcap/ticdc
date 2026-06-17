@@ -82,25 +82,25 @@ type BlockEventIdentifier struct {
 	IsSyncPoint bool
 }
 
-// addTableCheckpointBlocker caps the table-trigger checkpoint while add-table
-// DDLs are waiting for maintainer ACK. Block events for one dispatcher arrive
-// in commit-ts order, so the queue front is the smallest pending commitTs. The
-// map gives O(1) removal when ACKs arrive out of order.
-type addTableCheckpointBlocker struct {
+// checkpointBlocker is a dispatcher-level checkpoint gate independent from
+// TableProgress, which only tracks sink flush progress. Block events for one
+// dispatcher arrive in commit-ts order, so the queue front is the smallest
+// pending commitTs. The map gives O(1) removal when ACKs arrive out of order.
+type checkpointBlocker struct {
 	mutex       sync.Mutex
 	pending     map[BlockEventIdentifier]*list.Element
 	queue       *list.List
 	minCommitTs atomic.Uint64
 }
 
-func newAddTableCheckpointBlocker() *addTableCheckpointBlocker {
-	return &addTableCheckpointBlocker{
+func newCheckpointBlocker() *checkpointBlocker {
+	return &checkpointBlocker{
 		pending: make(map[BlockEventIdentifier]*list.Element),
 		queue:   list.New(),
 	}
 }
 
-func (b *addTableCheckpointBlocker) add(identifier BlockEventIdentifier) {
+func (b *checkpointBlocker) add(identifier BlockEventIdentifier) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 	if _, ok := b.pending[identifier]; ok {
@@ -114,7 +114,7 @@ func (b *addTableCheckpointBlocker) add(identifier BlockEventIdentifier) {
 	b.pending[identifier] = b.queue.PushBack(identifier)
 }
 
-func (b *addTableCheckpointBlocker) remove(identifier BlockEventIdentifier) {
+func (b *checkpointBlocker) remove(identifier BlockEventIdentifier) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 	elem, ok := b.pending[identifier]
@@ -129,17 +129,17 @@ func (b *addTableCheckpointBlocker) remove(identifier BlockEventIdentifier) {
 	}
 }
 
-func (b *addTableCheckpointBlocker) empty() bool {
+func (b *checkpointBlocker) empty() bool {
 	return b.minCommitTs.Load() == 0
 }
 
-func (b *addTableCheckpointBlocker) len() int {
+func (b *checkpointBlocker) len() int {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 	return len(b.pending)
 }
 
-func (b *addTableCheckpointBlocker) capCheckpointTs(checkpointTs uint64) uint64 {
+func (b *checkpointBlocker) capCheckpointTs(checkpointTs uint64) uint64 {
 	minCommitTs := b.minCommitTs.Load()
 	if minCommitTs == 0 {
 		return checkpointTs
@@ -147,7 +147,7 @@ func (b *addTableCheckpointBlocker) capCheckpointTs(checkpointTs uint64) uint64 
 	return min(checkpointTs, minCommitTs-1)
 }
 
-func (b *addTableCheckpointBlocker) storeMinCommitTsLocked() {
+func (b *checkpointBlocker) storeMinCommitTsLocked() {
 	front := b.queue.Front()
 	if front == nil {
 		b.minCommitTs.Store(0)

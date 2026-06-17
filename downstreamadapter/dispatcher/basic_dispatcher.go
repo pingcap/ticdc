@@ -186,9 +186,11 @@ type BasicDispatcher struct {
 
 	// addTableCheckpointBlocker caps the table-trigger checkpoint after an
 	// add-table DDL is flushed locally and before maintainer ACK confirms that
-	// the new table has joined checkpoint calculation. It is nil for ordinary
-	// table/span dispatchers to keep checkpoint reads allocation and lock free.
-	addTableCheckpointBlocker *addTableCheckpointBlocker
+	// the new table has joined checkpoint calculation. This remains outside
+	// TableProgress because it is driven by maintainer ACKs rather than sink
+	// flush progress. It is nil for ordinary table/span dispatchers to keep
+	// checkpoint reads allocation and lock free.
+	addTableCheckpointBlocker *checkpointBlocker
 
 	// resendTaskMap is store all the resend task of ddl/sync point event current.
 	// When we meet a block event that need to report to maintainer, we will create a resend task and store it in the map(avoid message lost)
@@ -276,7 +278,7 @@ func NewBasicDispatcher(
 		BootstrapState:           BootstrapFinished,
 	}
 	if dispatcher.IsTableTriggerDispatcher() {
-		dispatcher.addTableCheckpointBlocker = newAddTableCheckpointBlocker()
+		dispatcher.addTableCheckpointBlocker = newCheckpointBlocker()
 	}
 	dispatcher.resolvedTs.Store(startTs)
 
