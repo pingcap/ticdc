@@ -305,9 +305,20 @@ func NewDispatcherManager(
 	manager.writeSink = withCaptureWriteGate(ctx, createdSink)
 	manager.writePathMu.Unlock()
 
+	sinkType := manager.sink.SinkType()
+	if sinkType != common.KafkaSinkType {
+		ignoreUpdateOnlyColumnsRuleCount := countIgnoreUpdateOnlyColumnsRules(cfConfig.Filter)
+		if ignoreUpdateOnlyColumnsRuleCount > 0 {
+			log.Warn("ignore update only columns is configured but does not take effect for this sink",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.String("sinkType", metrics.DownstreamTypeFromSinkURI(manager.config.SinkURI)),
+				zap.Int("eventFilterRuleCount", ignoreUpdateOnlyColumnsRuleCount))
+		}
+	}
+
 	// Determine outputRawChangeEvent based on sink type
 	var outputRawChangeEvent bool
-	switch manager.sink.SinkType() {
+	switch sinkType {
 	case common.CloudStorageSinkType:
 		outputRawChangeEvent = manager.config.SinkConfig.CloudStorageConfig.GetOutputRawChangeEvent()
 	case common.KafkaSinkType:
@@ -416,6 +427,7 @@ func NewDispatcherManager(
 	return manager, nil
 }
 
+<<<<<<< HEAD
 func withCaptureWriteGate(ctx context.Context, inner sink.Sink) sink.Sink {
 	gate, ok := appcontext.TryGetService[*writelease.Gate](appcontext.CaptureWriteGate)
 	if !ok {
@@ -429,6 +441,19 @@ func (e *DispatcherManager) getWriteSink() sink.Sink {
 		return e.writeSink
 	}
 	return e.sink
+=======
+func countIgnoreUpdateOnlyColumnsRules(filter *config.FilterConfig) int {
+	if filter == nil {
+		return 0
+	}
+	count := 0
+	for _, rule := range filter.EventFilters {
+		if rule != nil && len(rule.IgnoreUpdateOnlyColumns) > 0 {
+			count++
+		}
+	}
+	return count
+>>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 }
 
 func (e *DispatcherManager) getEventCollectorBatchCountAndBytes(s sink.Sink) (int, int) {

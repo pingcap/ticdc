@@ -144,8 +144,13 @@ func (m *mockEventDispatcher) IsOutputRawChangeEvent() bool {
 	return false
 }
 
+<<<<<<< HEAD
 func (m *mockEventDispatcher) GetRouter() routing.Router {
 	return routing.Router{}
+=======
+func (m *mockEventDispatcher) EnableIgnoreUpdateOnlyColumns() bool {
+	return false
+>>>>>>> 640d3d31e (filter: support ignore update only columns for kafka sink (#5194))
 }
 
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
