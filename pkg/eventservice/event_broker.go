@@ -65,6 +65,7 @@ type eventBroker struct {
 	eventStore  eventstore.EventStore
 	schemaStore schemastore.SchemaStore
 	mounter     event.Mounter
+	newMounter  func() event.Mounter
 	timezone    string
 	// msgSender is used to send the events to the dispatchers.
 	msgSender messaging.MessageSender
@@ -131,6 +132,7 @@ func newEventBroker(
 		eventStore:              eventStore,
 		pdClock:                 pdClock,
 		mounter:                 event.NewMounter(tz, integrity),
+		newMounter:              func() event.Mounter { return event.NewMounter(tz, integrity) },
 		timezone:                tz.String(),
 		schemaStore:             schemaStore,
 		changefeedMap:           sync.Map{},
@@ -697,7 +699,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
+	scanner := newEventScanner(
+		c.eventStore,
+		c.schemaStore,
+		c.mounter,
+		task.info.GetMode(),
+		withEventScannerMounterFactory(c.newMounter),
+		withEventScannerParallelDecodeWorkers(defaultParallelDecodeWorkers))
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if scannedBytes < 0 {
 		releaseQuota(available, uint64(sl.maxDMLBytes))

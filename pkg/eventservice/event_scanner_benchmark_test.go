@@ -233,3 +233,78 @@ func BenchmarkEventScannerIgnoreDelete(b *testing.B) {
 		bench(b, disableDMLTypeFastPathFilter{Filter: ignoreDeleteFilter})
 	})
 }
+
+func BenchmarkEventScannerNoIgnoreDelete(b *testing.B) {
+	helper := event.NewEventTestHelper(b)
+	defer helper.Close()
+
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`,
+		`insert into test.t(id,c) values (1, "c1")`)
+	tableID := ddlEvent.GetTableID()
+	deleteRow := insertToDeleteRow(kvEvents[0])
+	dispatcherID := common.NewDispatcherID()
+	mockSchemaGetter := NewMockSchemaStore()
+	mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
+
+	changefeedFilter, err := filter.NewFilter(&config.FilterConfig{
+		Rules: []string{"test.*"},
+	}, "UTC", false, false)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	rowsPerScan := 50000
+	bench := func(b *testing.B, parallel bool) {
+		disInfo := newBenchmarkDispatcherInfo(
+			ddlEvent.FinishedTs,
+			dispatcherID,
+			tableID,
+		)
+		changefeedStatus := newChangefeedStatus(disInfo.GetChangefeedID(), 0)
+		changefeedStatus.filter = changefeedFilter
+		disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+		makeDispatcherReady(disp)
+		opts := []eventScannerOption{}
+		if parallel {
+			opts = append(opts,
+				withEventScannerMounterFactory(func() event.Mounter {
+					return event.NewMounter(time.UTC, &integrity.Config{})
+				}),
+				withEventScannerParallelDecodeWorkers(defaultParallelDecodeWorkers))
+		}
+		scanner := newEventScanner(
+			&benchmarkEventGetter{raw: deleteRow, rows: rowsPerScan},
+			mockSchemaGetter,
+			event.NewMounter(time.UTC, &integrity.Config{}),
+			common.DefaultMode,
+			opts...,
+		)
+		dataRange := common.DataRange{
+			Span:          disInfo.GetTableSpan(),
+			CommitTsStart: ddlEvent.FinishedTs,
+			CommitTsEnd:   deleteRow.CRTs + 1,
+		}
+		limit := scanLimit{maxDMLBytes: 1 << 60}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		start := time.Now()
+		for i := 0; i < b.N; i++ {
+			_, _, interrupted, err := scanner.scan(context.Background(), disp, dataRange, limit)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if interrupted {
+				b.Fatal("scan interrupted")
+			}
+		}
+		b.ReportMetric(float64(b.N*rowsPerScan)/time.Since(start).Seconds(), "rows/s")
+	}
+
+	b.Run("sequential", func(b *testing.B) {
+		bench(b, false)
+	})
+	b.Run("parallel", func(b *testing.B) {
+		bench(b, true)
+	})
+}

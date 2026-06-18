@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"runtime"
 	"time"
 
 	"github.com/pingcap/log"
@@ -29,6 +30,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
+)
+
+const (
+	defaultParallelDecodeWorkers = 4
+	parallelDecodeMinRows        = 1024
 )
 
 // eventGetter is the interface for getting iterator of events
@@ -60,7 +67,45 @@ type eventScanner struct {
 	eventGetter  eventGetter
 	schemaGetter schemaGetter
 	mounter      event.Mounter
+	newMounter   func() event.Mounter
 	mode         int64
+
+	parallelDecodeWorkers int
+}
+
+type eventScannerOption func(*eventScanner)
+
+func withEventScannerMounterFactory(newMounter func() event.Mounter) eventScannerOption {
+	return func(s *eventScanner) {
+		s.newMounter = newMounter
+	}
+}
+
+func withEventScannerParallelDecodeWorkers(workers int) eventScannerOption {
+	return func(s *eventScanner) {
+		s.parallelDecodeWorkers = normalizeParallelDecodeWorkers(workers)
+	}
+}
+
+func normalizeParallelDecodeWorkers(workers int) int {
+	if workers <= 1 {
+		return workers
+	}
+	if maxProcs := runtime.GOMAXPROCS(0); maxProcs > 0 && workers > maxProcs {
+		return maxProcs
+	}
+	return workers
+}
+
+func cloneRawKVEntry(raw *common.RawKVEntry) *common.RawKVEntry {
+	if raw == nil {
+		return nil
+	}
+	cloned := *raw
+	cloned.Key = append([]byte(nil), raw.Key...)
+	cloned.Value = append([]byte(nil), raw.Value...)
+	cloned.OldValue = append([]byte(nil), raw.OldValue...)
+	return &cloned
 }
 
 // newEventScanner creates a new EventScanner
@@ -69,13 +114,18 @@ func newEventScanner(
 	schemaStore schemastore.SchemaStore,
 	mounter event.Mounter,
 	mode int64,
+	opts ...eventScannerOption,
 ) *eventScanner {
-	return &eventScanner{
+	scanner := &eventScanner{
 		eventGetter:  eventStore,
 		schemaGetter: schemaStore,
 		mounter:      mounter,
 		mode:         mode,
 	}
+	for _, opt := range opts {
+		opt(scanner)
+	}
+	return scanner
 }
 
 // scan retrieves and processes events from both eventStore and schemaStore based on the provided scanTask and limits.
@@ -212,7 +262,10 @@ func (s *eventScanner) scanAndMergeEvents(
 		dispatcher.filter,
 		dispatcher.info.IsOutputRawChangeEvent(),
 		s.mode,
-		dispatcher.info.EnableIgnoreUpdateOnlyColumns())
+		dispatcher.info.EnableIgnoreUpdateOnlyColumns(),
+		withDMLProcessorMounterFactory(s.newMounter),
+		withDMLProcessorParallelDecodeWorkers(s.parallelDecodeWorkers))
+	txnRows := make([]*common.RawKVEntry, 0)
 
 	for {
 		shouldStop, err := s.checkScanConditions(session)
@@ -225,6 +278,13 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		rawEvent, isNewTxn := iter.Next()
 		if rawEvent == nil {
+			if err = processor.appendRows(session.ctx, txnRows); err != nil {
+				log.Error("append txn rows failed", zap.Error(err),
+					zap.Stringer("dispatcherID", session.dispatcherStat.id),
+					zap.Int64("tableID", tableID),
+					zap.Int64("mode", s.mode))
+				return false, err
+			}
 			err = finalizeScan(merger, processor, session, session.dataRange.CommitTsEnd)
 			return false, err
 		}
@@ -237,10 +297,25 @@ func (s *eventScanner) scanAndMergeEvents(
 			}
 			// table is deleted, still append remaining DDL event and resolved event.
 			if tableInfo == nil {
+				if err = processor.appendRows(session.ctx, txnRows); err != nil {
+					log.Error("append txn rows failed", zap.Error(err),
+						zap.Stringer("dispatcherID", session.dispatcherStat.id),
+						zap.Int64("tableID", tableID),
+						zap.Int64("mode", s.mode))
+					return false, err
+				}
 				err = finalizeScan(merger, processor, session, rawEvent.CRTs-1)
 				return false, err
 			}
 
+			if err = processor.appendRows(session.ctx, txnRows); err != nil {
+				log.Error("append txn rows failed", zap.Error(err),
+					zap.Stringer("dispatcherID", session.dispatcherStat.id),
+					zap.Int64("tableID", tableID),
+					zap.Int64("mode", s.mode))
+				return false, err
+			}
+			txnRows = txnRows[:0]
 			if err = s.commitTxn(session, merger, processor, rawEvent.CRTs, tableInfo.GetUpdateTS()); err != nil {
 				return false, err
 			}
@@ -257,15 +332,7 @@ func (s *eventScanner) scanAndMergeEvents(
 			}
 		}
 
-		if err = processor.appendRow(rawEvent); err != nil {
-			log.Error("append row failed", zap.Error(err),
-				zap.Stringer("dispatcherID", session.dispatcherStat.id),
-				zap.Int64("tableID", tableID),
-				zap.Uint64("startTs", rawEvent.StartTs),
-				zap.Uint64("commitTs", rawEvent.CRTs),
-				zap.Int64("mode", s.mode))
-			return false, err
-		}
+		txnRows = append(txnRows, cloneRawKVEntry(rawEvent))
 	}
 }
 
@@ -682,9 +749,77 @@ func (t *TxnEvent) AppendRow(
 	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter, filterContext)
 }
 
+func (t *TxnEvent) AppendDecodedRow(
+	decoded *decodedDMLRow,
+	dmlFilter filter.Filter,
+	filterContext filter.DMLFilterContext,
+) error {
+	if decoded == nil || decoded.count == 0 {
+		return nil
+	}
+	if t.shouldSplitTxn && (t.CurrentDMLEvent.Len() >= t.DMLEventMaxRows || t.CurrentDMLEvent.GetSize() >= t.DMLEventMaxBytes) {
+		newDMLEvent := event.NewDMLEvent(
+			t.CurrentDMLEvent.DispatcherID,
+			t.CurrentDMLEvent.PhysicalTableID,
+			t.CurrentDMLEvent.StartTs,
+			t.CurrentDMLEvent.CommitTs,
+			t.CurrentDMLEvent.TableInfo)
+		t.CurrentDMLEvent = newDMLEvent
+		if err := t.BatchDML.AppendDMLEvent(newDMLEvent); err != nil {
+			return err
+		}
+	}
+
+	var preRow, row chunk.Row
+	switch decoded.rowType {
+	case common.RowTypeInsert:
+		row = decoded.rows.GetRow(decoded.rowIndex)
+	case common.RowTypeDelete:
+		preRow = decoded.rows.GetRow(decoded.rowIndex)
+	default:
+		log.Panic("TxnEvent.AppendDecodedRow: unsupported row type",
+			zap.Uint8("rowType", uint8(decoded.rowType)),
+			zap.Any("raw", decoded.raw),
+			zap.Any("tableInfo", t.CurrentDMLEvent.TableInfo))
+	}
+
+	if dmlFilter != nil {
+		start := time.Now()
+		skip, err := dmlFilter.ShouldIgnoreDML(
+			decoded.rowType,
+			preRow,
+			row,
+			t.CurrentDMLEvent.TableInfo,
+			decoded.raw.StartTs,
+			filterContext)
+		event.DMLIgnoreComputeDuration.Observe(time.Since(start).Seconds())
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if skip {
+			return nil
+		}
+	}
+
+	t.CurrentDMLEvent.Rows.Append(decoded.rows, decoded.rowIndex, decoded.rowIndex+decoded.count)
+	for range decoded.count {
+		t.CurrentDMLEvent.RowTypes = append(t.CurrentDMLEvent.RowTypes, decoded.rowType)
+		keyCopy := make([]byte, len(decoded.raw.Key))
+		copy(keyCopy, decoded.raw.Key)
+		t.CurrentDMLEvent.RowKeys = append(t.CurrentDMLEvent.RowKeys, keyCopy)
+	}
+	t.CurrentDMLEvent.Length++
+	t.CurrentDMLEvent.ApproximateSize += decoded.raw.GetSize()
+	if decoded.checksum != nil {
+		t.CurrentDMLEvent.Checksum = append(t.CurrentDMLEvent.Checksum, decoded.checksum)
+	}
+	return nil
+}
+
 // dmlProcessor handles DML event processing and batching
 type dmlProcessor struct {
 	mounter      event.Mounter
+	newMounter   func() event.Mounter
 	schemaGetter schemaGetter
 
 	filter        filter.Filter
@@ -708,6 +843,22 @@ type dmlProcessor struct {
 	batchDML             *event.BatchDMLEvent
 	outputRawChangeEvent bool
 	mode                 int64
+
+	parallelDecodeWorkers int
+}
+
+type dmlProcessorOption func(*dmlProcessor)
+
+func withDMLProcessorMounterFactory(newMounter func() event.Mounter) dmlProcessorOption {
+	return func(p *dmlProcessor) {
+		p.newMounter = newMounter
+	}
+}
+
+func withDMLProcessorParallelDecodeWorkers(workers int) dmlProcessorOption {
+	return func(p *dmlProcessor) {
+		p.parallelDecodeWorkers = normalizeParallelDecodeWorkers(workers)
+	}
 }
 
 // newDMLProcessor creates a new DML processor
@@ -715,12 +866,13 @@ func newDMLProcessor(
 	mounter event.Mounter, schemaGetter schemaGetter,
 	dmlFilter filter.Filter, outputRawChangeEvent bool, mode int64,
 	enableIgnoreUpdateOnlyColumns bool,
+	opts ...dmlProcessorOption,
 ) *dmlProcessor {
 	filterContext := filter.DMLFilterContext{}
 	if enableIgnoreUpdateOnlyColumns {
 		filterContext.EnableIgnoreUpdateOnlyColumns = true
 	}
-	return &dmlProcessor{
+	processor := &dmlProcessor{
 		mounter:              mounter,
 		schemaGetter:         schemaGetter,
 		filter:               dmlFilter,
@@ -730,6 +882,10 @@ func newDMLProcessor(
 		outputRawChangeEvent: outputRawChangeEvent,
 		mode:                 mode,
 	}
+	for _, opt := range opts {
+		opt(processor)
+	}
+	return processor
 }
 
 // startTxn should be called after flush the current transaction
@@ -761,6 +917,165 @@ func (p *dmlProcessor) commitTxn() error {
 	}
 	p.currentTxn = nil
 	return nil
+}
+
+func (p *dmlProcessor) appendRows(ctx context.Context, rawEvents []*common.RawKVEntry) error {
+	if len(rawEvents) == 0 {
+		return nil
+	}
+	if p.canParallelDecode(rawEvents) {
+		return p.appendRowsParallel(ctx, rawEvents)
+	}
+	for _, rawEvent := range rawEvents {
+		if err := p.appendRow(rawEvent); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *dmlProcessor) canParallelDecode(rawEvents []*common.RawKVEntry) bool {
+	if p.currentTxn == nil || p.newMounter == nil || len(rawEvents) < parallelDecodeMinRows {
+		return false
+	}
+	if p.outputRawChangeEvent || p.parallelDecodeWorkers <= 1 {
+		return false
+	}
+	for _, rawEvent := range rawEvents {
+		if rawEvent.IsUpdate() {
+			return false
+		}
+	}
+	return true
+}
+
+type decodedDMLRow struct {
+	raw      *common.RawKVEntry
+	rowType  common.RowType
+	rows     *chunk.Chunk
+	checksum *integrity.Checksum
+	count    int
+	rowIndex int
+}
+
+type decodedDMLRowSegment struct {
+	rawEvents []*common.RawKVEntry
+	rowTypes  []common.RowType
+	rows      *chunk.Chunk
+	checksums []*integrity.Checksum
+}
+
+func (p *dmlProcessor) appendRowsParallel(ctx context.Context, rawEvents []*common.RawKVEntry) error {
+	rowsToDecode := make([]*common.RawKVEntry, 0, len(rawEvents))
+	rowTypes := make([]common.RowType, 0, len(rawEvents))
+	for _, rawEvent := range rawEvents {
+		rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
+		rawType := rawEvent.GetType()
+		updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, false)
+
+		rowType := common.RowTypeInsert
+		if rawEvent.IsDelete() {
+			rowType = common.RowTypeDelete
+		}
+		ignore, err := p.shouldIgnoreDMLByEventType(rowType, rawEvent.StartTs)
+		if err != nil {
+			return err
+		}
+		if ignore {
+			continue
+		}
+		if len(rawEvent.Value) == 0 && len(rawEvent.OldValue) == 0 {
+			log.Debug("the value and old_value of the raw kv entry are both nil, skip it", zap.String("raw", rawEvent.String()))
+			continue
+		}
+		rowsToDecode = append(rowsToDecode, rawEvent)
+		rowTypes = append(rowTypes, rowType)
+	}
+	if len(rowsToDecode) == 0 {
+		return nil
+	}
+
+	workerCount := min(p.parallelDecodeWorkers, len(rowsToDecode))
+	results := make([]decodedDMLRowSegment, workerCount)
+	g, ctx := errgroup.WithContext(ctx)
+	rowsPerWorker := (len(rowsToDecode) + workerCount - 1) / workerCount
+	for workerIndex := range workerCount {
+		start := workerIndex * rowsPerWorker
+		end := min(start+rowsPerWorker, len(rowsToDecode))
+		if start >= end {
+			continue
+		}
+		g.Go(func() error {
+			decoded, err := p.decodeDMLRowSegment(ctx, p.newMounter(), rowsToDecode[start:end], rowTypes[start:end])
+			if err != nil {
+				return err
+			}
+			results[workerIndex] = decoded
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	for i := range results {
+		segment := &results[i]
+		for j := range segment.rawEvents {
+			decoded := decodedDMLRow{
+				raw:      segment.rawEvents[j],
+				rowType:  segment.rowTypes[j],
+				rows:     segment.rows,
+				checksum: segment.checksums[j],
+				count:    1,
+				rowIndex: j,
+			}
+			if err := p.currentTxn.AppendDecodedRow(&decoded, p.filter, p.filterContext); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (p *dmlProcessor) decodeDMLRowSegment(
+	ctx context.Context,
+	mounter event.Mounter,
+	rawEvents []*common.RawKVEntry,
+	rowTypes []common.RowType,
+) (decodedDMLRowSegment, error) {
+	rows := chunk.NewChunkWithCapacity(p.currentTxn.CurrentDMLEvent.TableInfo.GetFieldSlice(), len(rawEvents))
+	checksums := make([]*integrity.Checksum, len(rawEvents))
+	for i, rawEvent := range rawEvents {
+		select {
+		case <-ctx.Done():
+			return decodedDMLRowSegment{}, ctx.Err()
+		default:
+		}
+
+		start := time.Now()
+		count, checksum, err := mounter.DecodeToChunk(rawEvent, p.currentTxn.CurrentDMLEvent.TableInfo, rows)
+		event.DMLDecodeDuration.Observe(time.Since(start).Seconds())
+		if err != nil {
+			return decodedDMLRowSegment{}, err
+		}
+		if count <= 0 {
+			log.Panic("dmlProcessor.decodeDMLRowSegment: no rows decoded from the raw KV entry",
+				zap.String("raw", rawEvent.String()))
+		}
+		if count != 1 {
+			log.Panic("dmlProcessor.decodeDMLRowSegment: insert/delete row count should be 1",
+				zap.Int("count", count),
+				zap.Any("raw", rawEvent),
+				zap.Any("tableInfo", p.currentTxn.CurrentDMLEvent.TableInfo))
+		}
+		checksums[i] = checksum
+	}
+	return decodedDMLRowSegment{
+		rawEvents: rawEvents,
+		rowTypes:  rowTypes,
+		rows:      rows,
+		checksums: checksums,
+	}, nil
 }
 
 // appendRow appends a row to the current DML event.

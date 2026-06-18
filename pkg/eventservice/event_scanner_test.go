@@ -16,6 +16,7 @@ package eventservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -33,6 +34,17 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
+
+type rawEventGetter struct {
+	events []*common.RawKVEntry
+}
+
+func (g *rawEventGetter) GetIterator(
+	common.DispatcherID,
+	common.DataRange,
+) (eventstore.EventIterator, error) {
+	return &mockEventIterator{events: append([]*common.RawKVEntry(nil), g.events...)}, nil
+}
 
 type mockMounter struct {
 	event.Mounter
@@ -1724,6 +1736,111 @@ func TestGetTableInfo4Txn(t *testing.T) {
 		require.Equal(t, otherErr, err)
 		require.Nil(t, info)
 	})
+}
+
+func TestEventScannerParallelDecodeMatchesSequential(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	rowCount := parallelDecodeMinRows + 1
+	ddlEvent, _ := genEvents(helper, `create table test.t(id int primary key, c char(50))`)
+	tableID := ddlEvent.GetTableID()
+	kvEvents := make([]*common.RawKVEntry, 0, rowCount)
+	for i := 1; i <= rowCount; i++ {
+		events := helper.DML2RawKv(
+			tableID,
+			ddlEvent.FinishedTs,
+			fmt.Sprintf(`insert into test.t(id,c) values (%d, "c%d")`, i, i))
+		require.Len(t, events, 1)
+		kvEvents = append(kvEvents, events[0])
+	}
+
+	txnStartTs := kvEvents[0].StartTs
+	txnCommitTs := kvEvents[0].CRTs
+	deleteRows := make([]*common.RawKVEntry, 0, len(kvEvents))
+	for _, kvEvent := range kvEvents {
+		deleteRow := insertToDeleteRow(kvEvent)
+		deleteRow.StartTs = txnStartTs
+		deleteRow.CRTs = txnCommitTs
+		deleteRows = append(deleteRows, deleteRow)
+	}
+	dispatcherID := common.NewDispatcherID()
+	mockSchemaGetter := NewMockSchemaStore()
+	mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
+
+	changefeedFilter, err := filter.NewFilter(&config.FilterConfig{
+		Rules: []string{"test.*"},
+	}, "UTC", false, false)
+	require.NoError(t, err)
+
+	runScan := func(parallel bool) []event.Event {
+		disInfo := newBenchmarkDispatcherInfo(ddlEvent.FinishedTs, dispatcherID, tableID)
+		changefeedStatus := newChangefeedStatus(disInfo.GetChangefeedID(), 0)
+		changefeedStatus.filter = changefeedFilter
+		disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+		makeDispatcherReady(disp)
+
+		opts := []eventScannerOption{}
+		if parallel {
+			opts = append(opts,
+				withEventScannerMounterFactory(func() event.Mounter {
+					return event.NewMounter(time.UTC, &integrity.Config{})
+				}),
+				withEventScannerParallelDecodeWorkers(defaultParallelDecodeWorkers))
+		}
+		scanner := newEventScanner(
+			&rawEventGetter{events: deleteRows},
+			mockSchemaGetter,
+			event.NewMounter(time.UTC, &integrity.Config{}),
+			common.DefaultMode,
+			opts...,
+		)
+		dataRange := common.DataRange{
+			Span:          disInfo.GetTableSpan(),
+			CommitTsStart: ddlEvent.FinishedTs,
+			CommitTsEnd:   deleteRows[len(deleteRows)-1].CRTs + 1,
+		}
+		_, events, interrupted, err := scanner.scan(context.Background(), disp, dataRange, scanLimit{maxDMLBytes: 1 << 60})
+		require.NoError(t, err)
+		require.False(t, interrupted)
+		return events
+	}
+
+	sequentialEvents := runScan(false)
+	parallelEvents := runScan(true)
+	require.Equal(t, len(sequentialEvents), len(parallelEvents))
+	require.Equal(t, sequentialEvents[len(sequentialEvents)-1].GetCommitTs(), parallelEvents[len(parallelEvents)-1].GetCommitTs())
+
+	seqBatch, ok := sequentialEvents[0].(*event.BatchDMLEvent)
+	require.True(t, ok)
+	parBatch, ok := parallelEvents[0].(*event.BatchDMLEvent)
+	require.True(t, ok)
+	require.Equal(t, seqBatch.Len(), parBatch.Len())
+	require.Equal(t, seqBatch.GetCommitTs(), parBatch.GetCommitTs())
+	require.Equal(t, len(seqBatch.DMLEvents), len(parBatch.DMLEvents))
+	require.Equal(t, int32(rowCount), parBatch.Len())
+
+	collectDeleteIDs := func(batch *event.BatchDMLEvent) []int64 {
+		ids := make([]int64, 0, batch.Len())
+		for _, dml := range batch.DMLEvents {
+			for {
+				row, ok := dml.GetNextRow()
+				if !ok {
+					break
+				}
+				require.Equal(t, common.RowTypeDelete, row.RowType)
+				ids = append(ids, row.PreRow.GetInt64(0))
+			}
+		}
+		return ids
+	}
+	seqIDs := collectDeleteIDs(seqBatch)
+	parIDs := collectDeleteIDs(parBatch)
+	require.Equal(t, seqIDs, parIDs)
+	require.Len(t, parIDs, rowCount)
+	for i, id := range parIDs {
+		require.Equal(t, int64(i+1), id)
+	}
 }
 
 func TestHasDDLAtLastCommitTs(t *testing.T) {
