@@ -31,6 +31,7 @@ import (
 	pbank2 "workload/schema/bank2"
 	pbank3 "workload/schema/bank3"
 	"workload/schema/bankupdate"
+	pbisbatchmetadata "workload/schema/bisbatchmetadata"
 	pcrawler "workload/schema/crawler"
 	pdc "workload/schema/dc"
 	"workload/schema/largerow"
@@ -82,6 +83,7 @@ const (
 	bank2             = "bank2"
 	bank3             = "bank3"
 	bankUpdate        = "bank_update"
+	bisBatchMetadata  = "bis_batch_metadata"
 	dc                = "dc"
 	wideTableWithJSON = "wide_table_with_json"
 )
@@ -142,6 +144,8 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = pbank3.NewBankWorkload(app.Config.Partitioned)
 	case bankUpdate:
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
+	case bisBatchMetadata:
+		workload = pbisbatchmetadata.NewBISBatchMetadataWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount)
 	case dc:
 		workload = pdc.NewDCWorkload()
 	case wideTableWithJSON:
@@ -363,6 +367,9 @@ func (app *WorkloadApp) doInsertOnce(conn *sql.Conn) (uint64, error) {
 		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
 	case wideTableWithJSON:
 		insertSQL, values := app.Workload.(*pwidetablewithjson.WideTableWithJSONWorkload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
+		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
+	case bisBatchMetadata:
+		insertSQL, values := app.Workload.(*pbisbatchmetadata.BISBatchMetadataWorkload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
 		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
 	default:
 		insertSQL := app.Workload.BuildInsertSql(tableIndex, app.Config.BatchSize)

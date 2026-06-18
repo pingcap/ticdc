@@ -25,6 +25,7 @@ import (
 	"go.uber.org/zap"
 	"workload/schema"
 	pbank2 "workload/schema/bank2"
+	pbisbatchmetadata "workload/schema/bisbatchmetadata"
 	psysbench "workload/schema/sysbench"
 	pwidetablewithjson "workload/schema/wide_table_with_json"
 )
@@ -165,6 +166,8 @@ func (app *WorkloadApp) executeUpdate(conn *sql.Conn, task *updateTask) (sql.Res
 		return app.executeSysbenchUpdate(conn, task)
 	case wideTableWithJSON:
 		return app.executeWideTableWithJSONUpdate(conn, task)
+	case bisBatchMetadata:
+		return app.executeBISBatchMetadataUpdate(conn, task)
 	default:
 		return app.executeRegularUpdate(conn, task)
 	}
@@ -180,6 +183,12 @@ func (app *WorkloadApp) executeBank2Update(conn *sql.Conn, task *updateTask) (sq
 
 func (app *WorkloadApp) executeWideTableWithJSONUpdate(conn *sql.Conn, task *updateTask) (sql.Result, error) {
 	updateSQL, values := app.Workload.(*pwidetablewithjson.WideTableWithJSONWorkload).BuildUpdateSqlWithValues(task.UpdateOption)
+	task.generatedSQL = updateSQL
+	return app.executeWithValues(conn, updateSQL, task.UpdateOption.TableIndex, values)
+}
+
+func (app *WorkloadApp) executeBISBatchMetadataUpdate(conn *sql.Conn, task *updateTask) (sql.Result, error) {
+	updateSQL, values := app.Workload.(*pbisbatchmetadata.BISBatchMetadataWorkload).BuildUpdateSqlWithValues(task.UpdateOption)
 	task.generatedSQL = updateSQL
 	return app.executeWithValues(conn, updateSQL, task.UpdateOption.TableIndex, values)
 }

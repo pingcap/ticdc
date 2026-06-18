@@ -195,11 +195,32 @@ Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_sec
     -percentage-for-delete 0.05
 ```
 
+### 8. BIS Batch Metadata Workload
+
+Generate high-throughput traffic for the `bis_batch_metadata` table shape. The table is created with
+`TTL=updated_at + INTERVAL 1 HOUR`, `TTL_ENABLE='ON'`, and `TTL_JOB_INTERVAL='1h'`.
+
+```bash
+./workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name bulk_ingestion \
+    -total-row-count 1000000 \
+    -table-count 1 \
+    -workload-type bis_batch_metadata \
+    -row-size $((16 * 1024)) \
+    -thread 64 \
+    -batch-size 64 \
+    -percentage-for-update 0.8 \
+    -percentage-for-delete 0
+```
+
 ## Notes
 
 - Ensure the database is properly configured and has the necessary permissions.
 - Adjust the thread and batch-size parameters based on your needs.
 - Use `-batch-in-txn` to wrap each batch in a single explicit transaction (BEGIN/COMMIT).
 - `wide_table_with_json` always generates JSON-like payload data.
+- `bis_batch_metadata` uses `-row-size` to control the `metadata` payload size and emits the observed insert/update patterns.
 - For workloads that support partitioned tables (e.g. bank3), set `-partitioned=false` to create non-partitioned tables.
 - `-bank3-partitioned` is deprecated; use `-partitioned`.
