@@ -29,12 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
-<<<<<<< HEAD
-=======
 	"github.com/pingcap/ticdc/pkg/routing"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
-	tidbTypes "github.com/pingcap/tidb/pkg/types"
->>>>>>> 4b0a2a2c2 (maintainer, route: add target table registry to detect route confliction (#5098))
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"

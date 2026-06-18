@@ -163,9 +163,6 @@ func NewController(changefeedID common.ChangeFeedID,
 	return controller
 }
 
-<<<<<<< HEAD
-// HandleStatus handle the status report from the node
-=======
 func (c *Controller) SetErrorReporter(reportError func(error)) {
 	c.reportError = reportError
 	if c.routeAdmin != nil {
@@ -174,7 +171,6 @@ func (c *Controller) SetErrorReporter(reportError func(error)) {
 }
 
 // HandleStatus handle the status report from the node.
->>>>>>> 4b0a2a2c2 (maintainer, route: add target table registry to detect route confliction (#5098))
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
 	// HandleStatus reconciles runtime dispatcher reports with maintainer-side state.
 	//
