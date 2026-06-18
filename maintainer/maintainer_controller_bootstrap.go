@@ -219,11 +219,11 @@ func (c *Controller) buildWorkingTaskMap(
 	spanController := c.getSpanController(mode)
 	for node, resp := range allNodesResp {
 		for _, spanInfo := range resp.Spans {
-			if spanInfo.Mode != mode {
+			if spanInfo == nil || spanInfo.ID == nil || spanInfo.Span == nil || spanInfo.Mode != mode {
 				continue
 			}
 			dispatcherID := common.NewDispatcherIDFromPB(spanInfo.ID)
-			if spanController.IsDDLDispatcher(dispatcherID) {
+			if dispatcherID.IsZero() || spanController.IsDDLDispatcher(dispatcherID) {
 				continue
 			}
 			splitEnabled := spanController.ShouldEnableSplit(tableSplitMap[spanInfo.Span.TableID])
@@ -304,7 +304,7 @@ func (c *Controller) processTableSpans(
 
 		if c.enableTableAcrossNodes {
 			if !isTableWorking && tableSpans == nil {
-				tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
+				tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](lessBootstrapTableSpan)
 			}
 			if isTableSpanExists {
 				for _, replicaSet := range replicaSets {
@@ -358,6 +358,7 @@ func (c *Controller) buildTaskInfo(
 	if err := c.restoreCurrentWorkingOperators(allNodesResp, tableSplitMap, mode); err != nil {
 		return nil, nil, err
 	}
+	c.removeUnexpectedBootstrapOverlaps(workingTaskMap, allNodesResp, mode)
 	schemaInfos := c.processTablesAndBuildSchemaInfo(tables, workingTaskMap, isMysqlCompatibleBackend, mode)
 	return workingTaskMap, schemaInfos, nil
 }
@@ -472,10 +473,215 @@ func addToWorkingTaskMap(
 ) {
 	tableSpans, ok := workingTaskMap[span.TableID]
 	if !ok {
-		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
+		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](lessBootstrapTableSpan)
 		workingTaskMap[span.TableID] = tableSpans
 	}
 	tableSpans.ReplaceOrInsert(span, spanReplication)
+}
+
+// lessBootstrapTableSpan keeps spans with the same start key but different end keys distinct.
+// Merge bootstrap snapshots can contain a source span and its covering merged span with the same
+// start key, so the normal start-key-only comparator would silently replace one of them.
+func lessBootstrapTableSpan(left, right *heartbeatpb.TableSpan) bool {
+	if left.TableID != right.TableID {
+		return left.TableID < right.TableID
+	}
+	if cmp := bytes.Compare(left.StartKey, right.StartKey); cmp != 0 {
+		return cmp < 0
+	}
+	if cmp := bytes.Compare(left.EndKey, right.EndKey); cmp != 0 {
+		// Put the wider span first so unexpected same-start overlaps retain the covering span.
+		return cmp > 0
+	}
+	return left.KeyspaceID < right.KeyspaceID
+}
+
+type bootstrapMergeEvidence struct {
+	sourceToTargets map[common.DispatcherID]map[common.DispatcherID]struct{}
+}
+
+func buildBootstrapMergeEvidence(
+	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+	mode int64,
+) bootstrapMergeEvidence {
+	evidence := bootstrapMergeEvidence{
+		sourceToTargets: make(map[common.DispatcherID]map[common.DispatcherID]struct{}),
+	}
+	for _, resp := range allNodesResp {
+		if resp == nil {
+			continue
+		}
+		for _, mergeReq := range resp.MergeOperators {
+			if mergeReq == nil || mergeReq.MergedDispatcherID == nil || mergeReq.Mode != mode {
+				continue
+			}
+			mergedID := common.NewDispatcherIDFromPB(mergeReq.MergedDispatcherID)
+			if mergedID.IsZero() {
+				continue
+			}
+
+			sourceIDs := make(map[common.DispatcherID]struct{}, len(mergeReq.DispatcherIDs))
+			for _, idPB := range mergeReq.DispatcherIDs {
+				if idPB == nil {
+					continue
+				}
+				dispatcherID := common.NewDispatcherIDFromPB(idPB)
+				if dispatcherID.IsZero() || dispatcherID == mergedID {
+					continue
+				}
+				sourceIDs[dispatcherID] = struct{}{}
+			}
+			if len(sourceIDs) < 2 {
+				continue
+			}
+
+			for dispatcherID := range sourceIDs {
+				addBootstrapMergeEvidence(evidence, dispatcherID, mergedID)
+			}
+		}
+	}
+	return evidence
+}
+
+func addBootstrapMergeEvidence(
+	evidence bootstrapMergeEvidence,
+	dispatcherID common.DispatcherID,
+	mergeID common.DispatcherID,
+) {
+	targets, ok := evidence.sourceToTargets[dispatcherID]
+	if !ok {
+		targets = make(map[common.DispatcherID]struct{})
+		evidence.sourceToTargets[dispatcherID] = targets
+	}
+	targets[mergeID] = struct{}{}
+}
+
+func (e bootstrapMergeEvidence) relates(left, right common.DispatcherID) bool {
+	if _, ok := e.sourceToTargets[left][right]; ok {
+		return true
+	}
+	_, ok := e.sourceToTargets[right][left]
+	return ok
+}
+
+func spansOverlap(left, right *heartbeatpb.TableSpan) bool {
+	if left == nil || right == nil ||
+		left.TableID != right.TableID ||
+		left.KeyspaceID != right.KeyspaceID {
+		return false
+	}
+	return bytes.Compare(left.StartKey, right.EndKey) < 0 &&
+		bytes.Compare(right.StartKey, left.EndKey) < 0
+}
+
+func isMergeTargetState(status heartbeatpb.ComponentState) bool {
+	switch status {
+	case heartbeatpb.ComponentState_Preparing,
+		heartbeatpb.ComponentState_MergeReady,
+		heartbeatpb.ComponentState_Initializing,
+		heartbeatpb.ComponentState_Working:
+		return true
+	default:
+		return false
+	}
+}
+
+func isWaitingMergeSpanCoveredByTarget(
+	source, target *replica.SpanReplication,
+) bool {
+	if source == nil || target == nil || source.Span == nil || target.Span == nil {
+		return false
+	}
+	sourceStatus := source.GetStatus()
+	targetStatus := target.GetStatus()
+	if sourceStatus == nil || targetStatus == nil ||
+		sourceStatus.ComponentStatus != heartbeatpb.ComponentState_WaitingMerge ||
+		!isMergeTargetState(targetStatus.ComponentStatus) {
+		return false
+	}
+	return source.GetMode() == target.GetMode() &&
+		source.Span.TableID == target.Span.TableID &&
+		source.Span.KeyspaceID == target.Span.KeyspaceID &&
+		bytes.Compare(target.Span.StartKey, source.Span.StartKey) <= 0 &&
+		bytes.Compare(target.Span.EndKey, source.Span.EndKey) >= 0
+}
+
+func isExpectedBootstrapOverlap(
+	left, right *replica.SpanReplication,
+	evidence bootstrapMergeEvidence,
+) bool {
+	if evidence.relates(left.ID, right.ID) {
+		return true
+	}
+	return isWaitingMergeSpanCoveredByTarget(left, right) ||
+		isWaitingMergeSpanCoveredByTarget(right, left)
+}
+
+// removeUnexpectedBootstrapOverlaps rejects overlapping desired spans unless bootstrap state
+// proves an in-flight transition. Unproven overlaps would otherwise be registered as independent
+// replicating tasks and could duplicate downstream writes indefinitely.
+func (c *Controller) removeUnexpectedBootstrapOverlaps(
+	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+	mode int64,
+) {
+	evidence := buildBootstrapMergeEvidence(allNodesResp, mode)
+	operatorController := c.getOperatorController(mode)
+	for tableID, tableSpans := range workingTaskMap {
+		accepted := make([]*replica.SpanReplication, 0, tableSpans.Len())
+		rejectedSpans := make([]*heartbeatpb.TableSpan, 0)
+		tableSpans.Ascend(func(span *heartbeatpb.TableSpan, candidate *replica.SpanReplication) bool {
+			for _, existing := range accepted {
+				if !spansOverlap(existing.Span, candidate.Span) {
+					continue
+				}
+				// Ordinary bootstrap operators also prove that the overlap is already converging.
+				if operatorController.GetOperator(existing.ID) != nil ||
+					operatorController.GetOperator(candidate.ID) != nil ||
+					isExpectedBootstrapOverlap(existing, candidate, evidence) {
+					continue
+				}
+
+				log.Warn("remove unexpected overlapping dispatcher reported during bootstrap",
+					zap.Stringer("changefeed", c.changefeedID),
+					zap.Int64("tableID", tableID),
+					zap.String("keptDispatcherID", existing.ID.String()),
+					zap.String("removedDispatcherID", candidate.ID.String()),
+					zap.String("keptSpan", common.FormatTableSpan(existing.Span)),
+					zap.String("removedSpan", common.FormatTableSpan(candidate.Span)),
+					zap.Int64("mode", mode))
+				rejectedSpans = append(rejectedSpans, span)
+				c.removeUnexpectedBootstrapDispatcher(candidate)
+				return true
+			}
+			accepted = append(accepted, candidate)
+			return true
+		})
+		for _, span := range rejectedSpans {
+			tableSpans.Delete(span)
+		}
+	}
+}
+
+func (c *Controller) removeUnexpectedBootstrapDispatcher(replicaSet *replica.SpanReplication) {
+	if replicaSet == nil || replicaSet.ID.IsZero() || replicaSet.GetNodeID() == "" {
+		return
+	}
+	err := c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(
+		replicaSet.GetNodeID(),
+		c.changefeedID,
+		replicaSet.ID.ToPB(),
+		nil,
+		replicaSet.GetMode(),
+		heartbeatpb.OperatorType_O_Remove,
+	))
+	if err != nil {
+		log.Warn("failed to remove unexpected overlapping dispatcher during bootstrap",
+			zap.Stringer("changefeed", c.changefeedID),
+			zap.String("dispatcherID", replicaSet.ID.String()),
+			zap.String("nodeID", replicaSet.GetNodeID().String()),
+			zap.Error(errors.Trace(err)))
+	}
 }
 
 // findHoles returns the uncovered sub-spans in totalSpan.
@@ -983,6 +1189,13 @@ func (c *Controller) restoreCurrentMergeOperators(
 			}
 			spanInfoByID := indexBootstrapSpans(resp.Spans, mergeReq.Mode)
 			mergedDispatcherID := common.NewDispatcherIDFromPB(mergeReq.MergedDispatcherID)
+			if mergedDispatcherID.IsZero() {
+				log.Warn("skip restoring merge operator due to invalid merged dispatcher ID",
+					zap.String("nodeID", nodeID.String()),
+					zap.String("changefeed", resp.ChangefeedID.String()),
+					zap.Int64("mode", mergeReq.Mode))
+				continue
+			}
 
 			sourceReplicaSets := make([]*replica.SpanReplication, 0, len(mergeReq.DispatcherIDs))
 			createdSourceReplicaSets := make([]*replica.SpanReplication, 0, len(mergeReq.DispatcherIDs))
@@ -1000,6 +1213,10 @@ func (c *Controller) restoreCurrentMergeOperators(
 					break
 				}
 				dispatcherID := common.NewDispatcherIDFromPB(idPB)
+				if dispatcherID.IsZero() {
+					sourceComplete = false
+					break
+				}
 				if _, ok := seenSources[dispatcherID]; ok {
 					continue
 				}
@@ -1082,6 +1299,24 @@ func (c *Controller) restoreCurrentMergeOperators(
 					continue
 				}
 			}
+
+			conflictingDispatcherID, conflictingOperatorType, hasConflict :=
+				findBootstrapMergeOperatorConflict(operatorController, sourceReplicaSets, mergedDispatcherID)
+			if hasConflict {
+				// Regular create/remove recovery has higher priority than a merge journal because it
+				// represents a later concrete action for the same dispatcher. Treat the merge record
+				// as stale instead of failing the entire bootstrap.
+				log.Warn("skip restoring stale merge operator due to conflicting bootstrap operator",
+					zap.String("nodeID", nodeID.String()),
+					zap.String("changefeed", resp.ChangefeedID.String()),
+					zap.String("dispatcher", conflictingDispatcherID.String()),
+					zap.String("operatorType", conflictingOperatorType),
+					zap.String("mergedDispatcher", mergedDispatcherID.String()),
+					zap.Int64("mode", mergeReq.Mode))
+				cleanupCreatedSourceReplicaSets()
+				continue
+			}
+
 			if mergedSpanInfo != nil && mergedSpanInfo.ComponentStatus == heartbeatpb.ComponentState_Working {
 				if mergedReplicaSet == nil {
 					splitEnabled := spanController.ShouldEnableSplit(tableSplitMap[mergedSpanInfo.Span.TableID])
@@ -1189,11 +1424,9 @@ func (c *Controller) restoreCurrentMergeOperators(
 				continue
 			}
 
-			spanController.MarkSpanScheduling(mergedReplicaSet)
-
 			mergeOp := operatorController.AddRestoredMergeOperator(sourceReplicaSets, mergedReplicaSet)
 			if mergeOp == nil {
-				log.Error("restore merge operator failed",
+				log.Warn("skip stale merge operator that cannot be restored",
 					zap.String("nodeID", nodeID.String()),
 					zap.String("changefeed", resp.ChangefeedID.String()),
 					zap.String("dispatcher", mergedDispatcherID.String()),
@@ -1202,12 +1435,33 @@ func (c *Controller) restoreCurrentMergeOperators(
 				if createdMerged {
 					spanController.RemoveReplicatingSpan(mergedReplicaSet)
 				}
-				return errors.ErrOperatorIsNil.GenWithStack("restore merge operator failed when bootstrap")
+				cleanupCreatedSourceReplicaSets()
+				continue
 			}
+			spanController.MarkSpanScheduling(mergedReplicaSet)
 			mergeOp.Start()
 		}
 	}
 	return nil
+}
+
+func findBootstrapMergeOperatorConflict(
+	operatorController *operator.Controller,
+	sourceReplicaSets []*replica.SpanReplication,
+	mergedDispatcherID common.DispatcherID,
+) (common.DispatcherID, string, bool) {
+	if op := operatorController.GetOperator(mergedDispatcherID); op != nil {
+		return mergedDispatcherID, op.Type(), true
+	}
+	for _, replicaSet := range sourceReplicaSets {
+		if replicaSet == nil {
+			continue
+		}
+		if op := operatorController.GetOperator(replicaSet.ID); op != nil {
+			return replicaSet.ID, op.Type(), true
+		}
+	}
+	return common.DispatcherID{}, "", false
 }
 
 func tableSplitMapForMode(

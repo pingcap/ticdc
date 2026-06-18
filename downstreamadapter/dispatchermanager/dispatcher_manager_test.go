@@ -1030,6 +1030,20 @@ func TestDoMergeKeepsMergeJournalUntilSourcesAreCleaned(t *testing.T) {
 	require.Empty(t, manager.GetMergeOperators())
 }
 
+// TestTrackMergeOperatorRejectsZeroMergedDispatcherID covers a malformed merge request.
+// The test tracks a request with an all-zero merged ID and verifies it cannot occupy the shared
+// zero-value map key or appear in later bootstrap responses.
+func TestTrackMergeOperatorRejectsZeroMergedDispatcherID(t *testing.T) {
+	manager := createTestManager(t)
+	manager.TrackMergeOperator(&heartbeatpb.MergeDispatcherRequest{
+		ChangefeedID:       manager.changefeedID.ToPB(),
+		DispatcherIDs:      []*heartbeatpb.DispatcherID{common.NewDispatcherID().ToPB(), common.NewDispatcherID().ToPB()},
+		MergedDispatcherID: (&common.DispatcherID{}).ToPB(),
+		Mode:               common.DefaultMode,
+	})
+	require.Empty(t, manager.GetMergeOperators())
+}
+
 func TestDoMergeWithThreeDispatchers(t *testing.T) {
 	manager := createTestManager(t)
 

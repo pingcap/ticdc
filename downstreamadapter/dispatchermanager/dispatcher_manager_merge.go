@@ -27,6 +27,12 @@ func (e *DispatcherManager) TrackMergeOperator(req *heartbeatpb.MergeDispatcherR
 		return
 	}
 	mergedID := common.NewDispatcherIDFromPB(req.MergedDispatcherID)
+	if mergedID.IsZero() {
+		log.Warn("ignore merge operator with invalid merged dispatcher ID",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Int64("mode", req.Mode))
+		return
+	}
 	e.mergeOperatorMap.Store(mergedID.String(), cloneMergeDispatcherRequest(req))
 }
 
