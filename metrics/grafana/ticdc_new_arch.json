@@ -9274,7 +9274,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The number of events received by event store.",
+          "description": "The number of events and insert, update, and delete KV entries received by event store per second.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -9323,6 +9323,14 @@
               "interval": "",
               "legendFormat": "{{instance}}-{{type}}",
               "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_event_store_kv_entry_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, type)",
+              "format": "time_series",
+              "interval": "",
+              "legendFormat": "{{instance}}-{{type}}",
+              "refId": "B"
             }
           ],
           "thresholds": [],
@@ -10832,7 +10840,22 @@
             "align": false,
             "alignLevel": null
           }
-        },
+        }
+      ],
+      "title": "Event Store",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "id": 62046,
+      "panels": [
         {
           "aliasColors": {},
           "bars": false,
@@ -10850,7 +10873,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 130
+            "y": 1
           },
           "hiddenSeries": false,
           "id": 60011,
@@ -10949,7 +10972,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 130
+            "y": 1
           },
           "hiddenSeries": false,
           "id": 62003,
@@ -11052,7 +11075,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 138
+            "y": 9
           },
           "hiddenSeries": false,
           "id": 60006,
@@ -11155,7 +11178,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 138
+            "y": 9
           },
           "hiddenSeries": false,
           "id": 60007,
@@ -11258,7 +11281,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 146
+            "y": 17
           },
           "hiddenSeries": false,
           "id": 60013,
@@ -11363,7 +11386,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 146
+            "y": 17
           },
           "hiddenSeries": false,
           "id": 60008,
@@ -11466,7 +11489,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 154
+            "y": 25
           },
           "hiddenSeries": false,
           "id": 60010,
@@ -11565,7 +11588,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 154
+            "y": 25
           },
           "hiddenSeries": false,
           "id": 60012,
@@ -11649,7 +11672,7 @@
           }
         }
       ],
-      "title": "Event Store",
+      "title": "Event Store Pebble",
       "type": "row"
     },
     {
@@ -11659,7 +11682,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 10
+        "y": 11
       },
       "id": 12058,
       "panels": [
@@ -12242,7 +12265,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 11
+        "y": 12
       },
       "id": 20007,
       "panels": [
@@ -14338,7 +14361,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 12
+        "y": 13
       },
       "id": 20059,
       "panels": [
@@ -14569,7 +14592,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 13
+        "y": 14
       },
       "id": 20103,
       "panels": [
@@ -15741,7 +15764,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 15
       },
       "id": 20189,
       "panels": [
@@ -16570,7 +16593,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 15
+        "y": 16
       },
       "id": 608,
       "panels": [
@@ -16869,7 +16892,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 16
+        "y": 17
       },
       "id": 617,
       "panels": [
@@ -17511,7 +17534,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 17
+        "y": 18
       },
       "id": 623,
       "panels": [
@@ -19065,7 +19088,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 19
       },
       "id": 62007,
       "panels": [
@@ -20471,7 +20494,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 20
       },
       "id": 528,
       "panels": [
@@ -21825,7 +21848,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 20
+        "y": 21
       },
       "id": 58,
       "panels": [
@@ -24107,7 +24130,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 21
+        "y": 22
       },
       "id": 62006,
       "panels": [
@@ -24255,7 +24278,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 23
       },
       "id": 10021,
       "panels": [
@@ -25202,7 +25225,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 24
       },
       "id": 155,
       "panels": [
@@ -25803,7 +25826,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 25
       },
       "id": 607,
       "panels": [
@@ -26285,7 +26308,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 25
+        "y": 26
       },
       "id": 10000,
       "panels": [
