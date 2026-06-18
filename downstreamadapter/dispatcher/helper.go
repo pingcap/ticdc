@@ -162,7 +162,6 @@ type BlockEventStatus struct {
 	blockStage        heartbeatpb.BlockStage
 	blockCommitTs     uint64
 	completed         BlockEventIdentifier
-	hasCompleted      bool
 }
 
 func (b *BlockEventStatus) clear() {
@@ -187,7 +186,7 @@ func (b *BlockEventStatus) isCompletedOrObsolete(event commonEvent.BlockEvent) b
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 
-	if !b.hasCompleted {
+	if b.completed.CommitTs == 0 {
 		return false
 	}
 	return compareBlockEventIdentifier(blockEventIdentifier(event), b.completed) <= 0
@@ -197,16 +196,15 @@ func (b *BlockEventStatus) isDMLCompletedOrObsolete(commitTs uint64) bool {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 
-	return b.hasCompleted && commitTs <= b.completed.CommitTs
+	return b.completed.CommitTs != 0 && commitTs <= b.completed.CommitTs
 }
 
 func (b *BlockEventStatus) recordCompleted(identifier BlockEventIdentifier) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 
-	if !b.hasCompleted || compareBlockEventIdentifier(identifier, b.completed) > 0 {
+	if b.completed.CommitTs == 0 || compareBlockEventIdentifier(identifier, b.completed) > 0 {
 		b.completed = identifier
-		b.hasCompleted = true
 	}
 }
 

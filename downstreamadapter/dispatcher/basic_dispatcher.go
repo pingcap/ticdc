@@ -1112,10 +1112,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	needsMaintainerACK := !shouldBlock && d.IsTableTriggerDispatcher() &&
 		needsScheduleStatus
 	needsAddTableCheckpointBlocker := !shouldBlock && d.IsTableTriggerDispatcher() && hasNeedAddedTables
-	identifier := BlockEventIdentifier{
-		CommitTs:    event.GetCommitTs(),
-		IsSyncPoint: false,
-	}
+	identifier := blockEventIdentifier(event)
 	if needsMaintainerACK {
 		// Register maintainer-visible DDLs before submitting downstream IO so
 		// following DB/All DDLs cannot pass this pending schedule update.
@@ -1292,10 +1289,7 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 		d.pendingACKCount.Add(1)
 	}
 	d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
-	identifier := BlockEventIdentifier{
-		CommitTs:    event.GetCommitTs(),
-		IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
-	}
+	identifier := blockEventIdentifier(event)
 	// WAITING retries reuse this protobuf object, so clone mutable metadata once
 	// here and keep resend on the same immutable payload.
 	status := &heartbeatpb.TableSpanBlockStatus{
