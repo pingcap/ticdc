@@ -48,8 +48,9 @@ type mockDispatcher struct {
 	checkPointTs uint64
 	tableSpan    *heartbeatpb.TableSpan
 
-	skipSyncpointAtStartTs bool
-	router                 routing.Router
+	skipSyncpointAtStartTs        bool
+	router                        routing.Router
+	enableIgnoreUpdateOnlyColumns bool
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -153,6 +154,9 @@ func (m *mockDispatcher) IsOutputRawChangeEvent() bool {
 	return false
 }
 
+func (m *mockDispatcher) EnableIgnoreUpdateOnlyColumns() bool {
+	return m.enableIgnoreUpdateOnlyColumns
+}
 func (m *mockDispatcher) GetRouter() routing.Router {
 	return m.router
 }
@@ -1700,6 +1704,7 @@ func TestRegistrationEntrypoints(t *testing.T) {
 
 	// Create a mock dispatcher and event collector
 	mockDisp := newMockDispatcher(dispatcherID, 0)
+	mockDisp.enableIgnoreUpdateOnlyColumns = true
 	mockEventCollector := newTestEventCollector(localServerID)
 	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
 
@@ -1714,6 +1719,7 @@ func TestRegistrationEntrypoints(t *testing.T) {
 			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
 			require.False(t, req.OnlyReuse, "OnlyReuse should be false for local registration")
 			require.Equal(t, dispatcherID.ToPB(), req.DispatcherId)
+			require.True(t, req.EnableIgnoreUpdateOnlyColumns())
 		case <-time.After(1 * time.Second):
 			require.Fail(t, "timed out waiting for message")
 		}
@@ -1730,6 +1736,7 @@ func TestRegistrationEntrypoints(t *testing.T) {
 			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
 			require.True(t, req.OnlyReuse, "OnlyReuse should be true for remote registration")
 			require.Equal(t, dispatcherID.ToPB(), req.DispatcherId)
+			require.True(t, req.EnableIgnoreUpdateOnlyColumns())
 		case <-time.After(1 * time.Second):
 			require.Fail(t, "timed out waiting for message")
 		}

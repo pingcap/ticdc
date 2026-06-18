@@ -256,9 +256,20 @@ func NewDispatcherManager(
 		return nil, errors.Trace(err)
 	}
 
+	sinkType := manager.sink.SinkType()
+	if sinkType != common.KafkaSinkType {
+		ignoreUpdateOnlyColumnsRuleCount := countIgnoreUpdateOnlyColumnsRules(cfConfig.Filter)
+		if ignoreUpdateOnlyColumnsRuleCount > 0 {
+			log.Warn("ignore update only columns is configured but does not take effect for this sink",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.Int("sinkType", int(sinkType)),
+				zap.Int("eventFilterRuleCount", ignoreUpdateOnlyColumnsRuleCount))
+		}
+	}
+
 	// Determine outputRawChangeEvent based on sink type
 	var outputRawChangeEvent bool
-	switch manager.sink.SinkType() {
+	switch sinkType {
 	case common.CloudStorageSinkType:
 		outputRawChangeEvent = manager.config.SinkConfig.CloudStorageConfig.GetOutputRawChangeEvent()
 	case common.KafkaSinkType:
@@ -348,6 +359,19 @@ func NewDispatcherManager(
 		zap.String("filterConfig", filterCfg.String()),
 	)
 	return manager, nil
+}
+
+func countIgnoreUpdateOnlyColumnsRules(filter *config.FilterConfig) int {
+	if filter == nil {
+		return 0
+	}
+	count := 0
+	for _, rule := range filter.EventFilters {
+		if rule != nil && len(rule.IgnoreUpdateOnlyColumns) > 0 {
+			count++
+		}
+	}
+	return count
 }
 
 func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {

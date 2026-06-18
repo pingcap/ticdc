@@ -293,6 +293,10 @@ func (r DispatcherRequest) IsOutputRawChangeEvent() bool {
 	return r.OutputRawChangeEvent
 }
 
+func (r DispatcherRequest) EnableIgnoreUpdateOnlyColumns() bool {
+	return r.DispatcherRequest.EnableIgnoreUpdateOnlyColumns
+}
+
 func (r DispatcherRequest) GetTxnAtomicity() config.AtomicityLevel {
 	return config.AtomicityLevel(r.TxnAtomicity)
 }

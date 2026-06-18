@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/filter"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	tiddl "github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/domain"
@@ -553,7 +554,7 @@ func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *
 		_ = batchDMLEvent.AppendDMLEvent(dmlEvent)
 		rawKvs := s.DML2RawKv(physicalTableID, ts, dml)
 		for _, rawKV := range rawKvs {
-			err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil)
+			err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 			require.NoError(s.t, err)
 		}
 	}
@@ -572,7 +573,7 @@ func (s *EventTestHelper) DML2Event4PartitionTable(schema, table, partition, dml
 	dmlEvent.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1))
 	rawKvs := s.DML2RawKv(physicalTableID, ts, dml)
 	for _, rawKV := range rawKvs {
-		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil)
+		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 		require.NoError(s.t, err)
 	}
 	return dmlEvent
@@ -596,7 +597,7 @@ func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEv
 
 	rawKvs := s.DML2RawKv(physicalTableID, ts, dmls...)
 	for _, rawKV := range rawKvs {
-		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil)
+		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 		require.NoError(s.t, err)
 	}
 	return dmlEvent
@@ -637,7 +638,8 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) (
 		CRTs:        rawKvs[1].CRTs,
 	}
 
-	dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk, nil)
+	err := dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
+	require.NoError(s.t, err)
 
 	return dmlEvent, raw
 }
@@ -672,7 +674,7 @@ func (s *EventTestHelper) DML2DeleteEvent(schema, table string, dml string, dele
 		StartTs:  rawKv[0].StartTs,
 		CRTs:     rawKv[0].CRTs,
 	}
-	err := dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk, nil)
+	err := dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 	require.NoError(s.t, err)
 
 	_ = s.DML2RawKv(physicalTableID, ts, deleteDml)
