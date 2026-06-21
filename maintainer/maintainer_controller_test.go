@@ -1810,8 +1810,8 @@ func TestFinishBootstrapKeepsOverlapCoveredAfterMergeJournalCleanup(t *testing.T
 
 // TestFinishBootstrapRemovesUnexpectedOverlappingWorkingSpan covers a corrupt bootstrap snapshot
 // with two partially overlapping Working dispatchers and no operator or merge evidence. The test
-// keeps the earlier span, excludes the conflicting dispatcher from desired state, and creates an
-// absent task for the uncovered tail so normal scheduling can repair coverage without duplication.
+// keeps the conflicting dispatcher as temporary coverage under a remove operator, confirms no
+// replacement is scheduled early, then repairs the uncovered tail after removal reaches terminal.
 func TestFinishBootstrapRemovesUnexpectedOverlappingWorkingSpan(t *testing.T) {
 	env := newMergeBootstrapTestEnv(t)
 	overlapStart := appendNew(env.mergedSpan.StartKey, 'a')
@@ -1858,6 +1858,28 @@ func TestFinishBootstrapRemovesUnexpectedOverlappingWorkingSpan(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, env.controller.bootstrapped)
 	require.NotNil(t, env.controller.spanController.GetTaskByID(keptDispatcherID))
+	require.NotNil(t, env.controller.spanController.GetTaskByID(rejectedDispatcherID))
+	require.Equal(t, 2, env.controller.spanController.GetReplicatingSize())
+	require.Zero(t, env.controller.spanController.GetAbsentSize())
+
+	removeOp := env.controller.operatorController.GetOperator(rejectedDispatcherID)
+	require.NotNil(t, removeOp)
+	require.Equal(t, "remove", removeOp.Type())
+	env.controller.schedulerController.GetScheduler(scheduler.BasicScheduler).Execute()
+	require.Zero(t, env.controller.spanController.GetAbsentSize())
+
+	// The cleanup owner waits for a terminal status before dropping temporary coverage and
+	// creating the exact replacement range.
+	removeOp.Check("node1", &heartbeatpb.TableSpanStatus{
+		ID:              rejectedDispatcherID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Stopped,
+		CheckpointTs:    10,
+		Mode:            common.DefaultMode,
+	})
+	require.True(t, removeOp.IsFinished())
+	removeOp.PostFinish()
+	env.controller.operatorController.RemoveOp(rejectedDispatcherID)
+
 	require.Nil(t, env.controller.spanController.GetTaskByID(rejectedDispatcherID))
 	require.Equal(t, 1, env.controller.spanController.GetReplicatingSize())
 	require.Equal(t, 1, env.controller.spanController.GetAbsentSize())
@@ -1872,6 +1894,152 @@ func TestFinishBootstrapRemovesUnexpectedOverlappingWorkingSpan(t *testing.T) {
 	require.NotNil(t, repairedTail)
 	require.Equal(t, keptEnd, repairedTail.Span.StartKey)
 	require.Equal(t, env.mergedSpan.EndKey, repairedTail.Span.EndKey)
+}
+
+// TestFinishBootstrapAbortsUncommittedMergeWhenSourceMissing covers failover before the merge
+// commit point. For Preparing and MergeReady targets, dispatcher manager aborts when a source is
+// missing; bootstrap must keep the target only as temporary coverage and repair after it stops.
+func TestFinishBootstrapAbortsUncommittedMergeWhenSourceMissing(t *testing.T) {
+	for _, targetStatus := range []heartbeatpb.ComponentState{
+		heartbeatpb.ComponentState_Preparing,
+		heartbeatpb.ComponentState_MergeReady,
+	} {
+		t.Run(targetStatus.String(), func(t *testing.T) {
+			env := newMergeBootstrapTestEnv(t)
+
+			_, err := env.controller.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+				"node1": {
+					ChangefeedID: env.cfID.ToPB(),
+					Spans: []*heartbeatpb.BootstrapTableSpan{
+						{
+							ID:              env.sourceDispatcherID1.ToPB(),
+							SchemaID:        1,
+							Span:            env.sourceSpan1,
+							ComponentStatus: heartbeatpb.ComponentState_WaitingMerge,
+							CheckpointTs:    10,
+							Mode:            common.DefaultMode,
+						},
+						{
+							ID:              env.mergedDispatcherID.ToPB(),
+							SchemaID:        1,
+							Span:            env.mergedSpan,
+							ComponentStatus: targetStatus,
+							CheckpointTs:    10,
+							Mode:            common.DefaultMode,
+						},
+					},
+					MergeOperators: []*heartbeatpb.MergeDispatcherRequest{
+						{
+							ChangefeedID: env.cfID.ToPB(),
+							DispatcherIDs: []*heartbeatpb.DispatcherID{
+								env.sourceDispatcherID1.ToPB(),
+								env.sourceDispatcherID2.ToPB(),
+							},
+							MergedDispatcherID: env.mergedDispatcherID.ToPB(),
+							Mode:               common.DefaultMode,
+						},
+					},
+					CheckpointTs: 10,
+				},
+			}, false)
+			require.NoError(t, err)
+			require.Zero(t, env.controller.spanController.GetAbsentSize())
+			require.NotNil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
+			require.NotNil(t, env.controller.spanController.GetTaskByID(env.mergedDispatcherID))
+
+			removeOp := env.controller.operatorController.GetOperator(env.mergedDispatcherID)
+			require.NotNil(t, removeOp)
+			require.Equal(t, "remove", removeOp.Type())
+			removeOp.Check("node1", &heartbeatpb.TableSpanStatus{
+				ID:              env.mergedDispatcherID.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Stopped,
+				CheckpointTs:    10,
+				Mode:            common.DefaultMode,
+			})
+			require.True(t, removeOp.IsFinished())
+			removeOp.PostFinish()
+			env.controller.operatorController.RemoveOp(env.mergedDispatcherID)
+
+			require.Nil(t, env.controller.spanController.GetTaskByID(env.mergedDispatcherID))
+			require.NotNil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
+			require.Equal(t, 1, env.controller.spanController.GetReplicatingSize())
+			require.Equal(t, 1, env.controller.spanController.GetAbsentSize())
+		})
+	}
+}
+
+// TestFinishBootstrapRejectsInvalidMergeJournalGeometry covers a stale journal whose source spans
+// are not consecutive. Bootstrap must not use dispatcher IDs alone as overlap proof; it removes the
+// uncommitted target and creates only the real source gap after the target reaches terminal.
+func TestFinishBootstrapRejectsInvalidMergeJournalGeometry(t *testing.T) {
+	env := newMergeBootstrapTestEnv(t)
+	gapEnd := appendNew(env.sourceSpan1.EndKey, 'b')
+	env.sourceSpan2.StartKey = gapEnd
+
+	_, err := env.controller.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: env.cfID.ToPB(),
+			Spans: []*heartbeatpb.BootstrapTableSpan{
+				{
+					ID:              env.sourceDispatcherID1.ToPB(),
+					SchemaID:        1,
+					Span:            env.sourceSpan1,
+					ComponentStatus: heartbeatpb.ComponentState_WaitingMerge,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+				{
+					ID:              env.sourceDispatcherID2.ToPB(),
+					SchemaID:        1,
+					Span:            env.sourceSpan2,
+					ComponentStatus: heartbeatpb.ComponentState_WaitingMerge,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+				{
+					ID:              env.mergedDispatcherID.ToPB(),
+					SchemaID:        1,
+					Span:            env.mergedSpan,
+					ComponentStatus: heartbeatpb.ComponentState_Preparing,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+			},
+			MergeOperators: []*heartbeatpb.MergeDispatcherRequest{
+				{
+					ChangefeedID: env.cfID.ToPB(),
+					DispatcherIDs: []*heartbeatpb.DispatcherID{
+						env.sourceDispatcherID1.ToPB(),
+						env.sourceDispatcherID2.ToPB(),
+					},
+					MergedDispatcherID: env.mergedDispatcherID.ToPB(),
+					Mode:               common.DefaultMode,
+				},
+			},
+			CheckpointTs: 10,
+		},
+	}, false)
+	require.NoError(t, err)
+	require.Zero(t, env.controller.spanController.GetAbsentSize())
+
+	removeOp := env.controller.operatorController.GetOperator(env.mergedDispatcherID)
+	require.NotNil(t, removeOp)
+	require.Equal(t, "remove", removeOp.Type())
+	removeOp.Check("node1", &heartbeatpb.TableSpanStatus{
+		ID:              env.mergedDispatcherID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Removed,
+		CheckpointTs:    10,
+		Mode:            common.DefaultMode,
+	})
+	require.True(t, removeOp.IsFinished())
+	removeOp.PostFinish()
+	env.controller.operatorController.RemoveOp(env.mergedDispatcherID)
+
+	require.Nil(t, env.controller.spanController.GetTaskByID(env.mergedDispatcherID))
+	require.NotNil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
+	require.NotNil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID2))
+	require.Equal(t, 2, env.controller.spanController.GetReplicatingSize())
+	require.Equal(t, 1, env.controller.spanController.GetAbsentSize())
 }
 
 type mergeBootstrapTestEnv struct {
@@ -2064,8 +2232,8 @@ func TestFinishBootstrapSkipsIncompleteMergeJournalWithoutMergedDispatcher(t *te
 
 // TestFinishBootstrapSkipsMergeJournalConflictingWithWorkingOperator covers non-atomic bootstrap
 // snapshots where a stale merge journal overlaps a newer create or remove request. Each subtest
-// restores the regular operator first, then verifies merge recovery yields to it without failing
-// FinishBootstrap or installing a merge operator.
+// restores the regular operator first, then verifies merge recovery yields to it and gives the
+// uncommitted merged target a cleanup owner instead of leaving unmanaged overlapping desired state.
 func TestFinishBootstrapSkipsMergeJournalConflictingWithWorkingOperator(t *testing.T) {
 	testCases := []struct {
 		name                  string
@@ -2162,8 +2330,11 @@ func TestFinishBootstrapSkipsMergeJournalConflictingWithWorkingOperator(t *testi
 			workingOp := env.controller.operatorController.GetOperator(env.sourceDispatcherID1)
 			require.NotNil(t, workingOp)
 			require.Equal(t, tc.expectedOperatorType, workingOp.Type())
-			require.Nil(t, env.controller.operatorController.GetOperator(env.mergedDispatcherID))
-			require.Equal(t, 1, env.controller.operatorController.OperatorSize())
+			mergedCleanupOp := env.controller.operatorController.GetOperator(env.mergedDispatcherID)
+			require.NotNil(t, mergedCleanupOp)
+			require.Equal(t, "remove", mergedCleanupOp.Type())
+			require.Equal(t, 2, env.controller.operatorController.OperatorSize())
+			require.Zero(t, env.controller.spanController.GetAbsentSize())
 		})
 	}
 }
