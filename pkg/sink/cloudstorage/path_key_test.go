@@ -59,7 +59,7 @@ func TestSchemaPathKey(t *testing.T) {
 	}
 }
 
-func TestDmlPathKey(t *testing.T) {
+func TestIndexFileKey(t *testing.T) {
 	t.Parallel()
 
 	dispatcherID := common.NewDispatcherID()
@@ -103,6 +103,45 @@ func TestDmlPathKey(t *testing.T) {
 			},
 			Idx: tc.index,
 		}
+		fileName := dmlkey.GenerateDMLFilePath(fileIndex, tc.extension, tc.fileIndexWidth)
+		require.Equal(t, tc.path, fileName)
+	}
+}
+
+func TestDmlPathKey(t *testing.T) {
+	t.Parallel()
+
+	dispatcherID := common.NewDispatcherID()
+	testCases := []struct {
+		index          int
+		fileIndexWidth int
+		extension      string
+		path           string
+		dmlkey         DmlPathKey
+	}{
+		{
+			index:          10,
+			fileIndexWidth: 20,
+			extension:      ".csv",
+			path:           fmt.Sprintf("schema1/table1/123456/2023-05-09/CDC_%s_00000000000000000010.csv", dispatcherID.String()),
+			dmlkey: DmlPathKey{
+				SchemaPathKey: SchemaPathKey{
+					Schema:       "schema1",
+					Table:        "table1",
+					TableVersion: 123456,
+				},
+				PartitionNum: 0,
+				Date:         "2023-05-09",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		var dmlkey DmlPathKey
+		fileIndex, err := dmlkey.ParseDMLFilePath("day", tc.path)
+		require.NoError(t, err)
+		require.Equal(t, tc.dmlkey, dmlkey)
+
 		fileName := dmlkey.GenerateDMLFilePath(fileIndex, tc.extension, tc.fileIndexWidth)
 		require.Equal(t, tc.path, fileName)
 	}
