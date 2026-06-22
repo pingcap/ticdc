@@ -55,6 +55,12 @@ func NewChangefeed(cfID common.ChangeFeedID,
 	checkpointTs uint64,
 	isNew bool,
 ) *Changefeed {
+	if info == nil {
+		log.Panic("changefeed info is nil", zap.Stringer("changefeedID", cfID))
+	}
+	if info.Config == nil {
+		log.Panic("changefeed config is nil", zap.Stringer("changefeedID", cfID))
+	}
 	uri, err := url.Parse(info.SinkURI)
 	if err != nil {
 		log.Panic("unable to parse sink-uri",
@@ -91,7 +97,7 @@ func NewChangefeed(cfID common.ChangeFeedID,
 
 // GetInfo returns the latest ChangeFeedInfo stored in memory.
 //
-// It may return nil if the changefeed hasn't been fully initialized.
+// Changefeed keeps info non-nil after construction.
 func (c *Changefeed) GetInfo() *config.ChangeFeedInfo {
 	if c == nil || c.info == nil {
 		return nil
@@ -100,14 +106,12 @@ func (c *Changefeed) GetInfo() *config.ChangeFeedInfo {
 }
 
 // SetInfo updates the in-memory ChangeFeedInfo for the changefeed.
-//
-// It lazily initializes the internal pointer for uninitialized changefeeds
-// (primarily used by unit tests).
-//
-// If the receiver is nil, it does nothing.
 func (c *Changefeed) SetInfo(info *config.ChangeFeedInfo) {
 	if c == nil {
 		return
+	}
+	if info == nil {
+		log.Panic("changefeed info is nil", zap.Stringer("changefeedID", c.ID))
 	}
 	if c.info == nil {
 		c.info = atomic.NewPointer(info)
@@ -238,7 +242,8 @@ func (c *Changefeed) GetStatusForResume() *heartbeatpb.MaintainerStatus {
 		FeedState:       status.FeedState,
 		State:           status.State,
 		MaintainerEpoch: status.MaintainerEpoch,
-		// Old errors are meaningless for resume and can only block the resumed task.
+		// Resume creates a new maintainer owner, so errors reported by the
+		// previous owner must not block the resumed in-memory status.
 		Err: []*heartbeatpb.RunningError{},
 	}
 
@@ -265,18 +270,19 @@ func (c *Changefeed) GetLastSavedCheckPointTs() uint64 {
 
 func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMessage {
 	info := c.GetInfo()
-	if info == nil {
-		log.Panic("changefeed info is nil", zap.String("changefeedID", c.ID.String()))
-	}
 	configData, err := info.MarshalWithTruncation(false)
 	if err != nil {
 		log.Panic("unable to marshal changefeed config", zap.Error(err))
+	}
+	checkpointTs := c.GetLastSavedCheckPointTs()
+	if status := c.GetStatus(); status != nil {
+		checkpointTs = status.CheckpointTs
 	}
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.AddMaintainerRequest{
 			Id:              c.ID.ToPB(),
-			CheckpointTs:    c.GetStatus().CheckpointTs,
+			CheckpointTs:    checkpointTs,
 			Config:          []byte(configData),
 			IsNewChangefeed: c.isNew,
 			KeyspaceId:      info.KeyspaceID,

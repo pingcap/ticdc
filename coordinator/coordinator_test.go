@@ -412,7 +412,7 @@ func mockBumpChangefeedEpoch(
 			if err != nil {
 				return nil, err
 			}
-			info.Epoch, err = pdutil.AdvanceChangefeedEpoch(candidateEpoch, info.Epoch)
+			info.Epoch, err = common.AdvanceChangefeedEpoch(candidateEpoch, info.Epoch)
 			if err != nil {
 				return nil, err
 			}
@@ -1031,40 +1031,6 @@ func TestHandleStateChangeBumpsEpochForWarningState(t *testing.T) {
 	require.NotNil(t, op)
 	req := op.Schedule().Message[0].(*heartbeatpb.RemoveMaintainerRequest)
 	require.Equal(t, oldEpoch, req.MaintainerEpoch)
-}
-
-func TestHandleStateChangeSkipsNilChangefeedInfo(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	t.Cleanup(ctrl.Finish)
-
-	backend := mock_changefeed.NewMockBackend(ctrl)
-	changefeedDB := changefeed.NewChangefeedDB(1216)
-	controller := &Controller{
-		backend:      backend,
-		changefeedDB: changefeedDB,
-	}
-	co := &coordinator{
-		backend:    backend,
-		controller: controller,
-	}
-
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
-		ChangefeedID: cfID,
-		Config:       config.GetDefaultReplicaConfig(),
-		State:        config.StateNormal,
-		SinkURI:      "mysql://127.0.0.1:3306",
-	}, 1, false)
-	changefeedDB.AddAbsentChangefeed(cf)
-	cf.SetInfo(nil)
-
-	event := newChangefeedChange(cf, config.StateWarning, ChangeState, &config.RunningError{
-		Time:    time.Unix(1, 0),
-		Addr:    "127.0.0.1:8300",
-		Code:    "CDC:ErrSinkURIInvalid",
-		Message: "sink uri invalid",
-	})
-	require.NoError(t, co.handleStateChange(context.Background(), event))
 }
 
 func TestHandleStateChangePersistsRuntimeStateWhenStateChanges(t *testing.T) {

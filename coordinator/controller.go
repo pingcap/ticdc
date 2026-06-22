@@ -1012,14 +1012,7 @@ func (c *Controller) ResumeChangefeed(
 		checkpointTs = newCheckpointTs
 	}
 	epoch := pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
-	normalState := config.StateNormal
-	info, err := c.backend.BumpChangefeedEpoch(ctx, id, epoch, changefeed.EpochBumpOptions{
-		CheckpointTs: checkpointTs,
-		Progress:     config.ProgressNone,
-		UpdateStatus: true,
-		State:        &normalState,
-		UpdateError:  true,
-	})
+	info, err := c.backend.ResumeChangefeed(ctx, id, epoch, checkpointTs)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -1190,6 +1183,9 @@ func (c *Controller) updateChangefeedEpoch(
 	info, err := c.backend.BumpChangefeedEpoch(ctx, id, epoch, options)
 	if err != nil {
 		return errors.Trace(err)
+	}
+	if info == nil {
+		return errors.New("bumped changefeed info is nil")
 	}
 	cf.SetInfo(info)
 	return nil

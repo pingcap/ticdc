@@ -13,6 +13,8 @@
 
 package common
 
+import cerror "github.com/pingcap/ticdc/pkg/errors"
+
 // MaintainerEpochMatches keeps rolling-upgrade compatibility while enforcing
 // exact owner epochs after upgraded maintainers report them. Epoch 0 means
 // either side predates the maintainer epoch field, so it stays accepted during
@@ -20,4 +22,17 @@ package common
 // mixed-version race, only stale non-zero epochs after rollout completes.
 func MaintainerEpochMatches(reportedEpoch, currentEpoch uint64) bool {
 	return reportedEpoch == 0 || currentEpoch == 0 || reportedEpoch == currentEpoch
+}
+
+// AdvanceChangefeedEpoch returns max(candidate, current+1).
+func AdvanceChangefeedEpoch(candidate, current uint64) (uint64, error) {
+	if candidate > current {
+		return candidate, nil
+	}
+	if current == ^uint64(0) {
+		// This guard is defensive. Normal PD TSO based epochs should never reach
+		// MaxUint64, but wrapping here would let a stale owner look newer.
+		return 0, cerror.ErrSchedulerRequestFailed.GenWithStackByArgs("changefeed epoch overflow")
+	}
+	return current + 1, nil
 }
