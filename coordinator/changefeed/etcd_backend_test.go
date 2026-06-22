@@ -267,6 +267,74 @@ func TestBumpChangefeedEpochUpdatesStatus(t *testing.T) {
 	require.Equal(t, uint64(9), got.Epoch)
 }
 
+func TestResumeChangefeed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient := etcd.NewMockClient(ctrl)
+	cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
+	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
+	backend := NewEtcdBackend(cdcClient)
+
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	info := &config.ChangeFeedInfo{
+		ChangefeedID: changefeedID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateFailed,
+		Error:        &config.RunningError{Message: "old error"},
+		Epoch:        8,
+	}
+	value, err := info.Marshal()
+	require.NoError(t, err)
+	infoKey := etcd.GetEtcdKeyChangeFeedInfo("test-cluster-id", changefeedID.DisplayName)
+	persistedStatus := &config.ChangeFeedStatus{
+		CheckpointTs: 200,
+		Progress:     config.ProgressStopping,
+	}
+
+	etcdClient.EXPECT().
+		Get(gomock.Any(), infoKey).
+		Return(&clientv3.GetResponse{
+			Kvs: []*mvccpb.KeyValue{{
+				Value:       []byte(value),
+				ModRevision: 3,
+			}},
+		}, nil).
+		Times(1)
+	cdcClient.EXPECT().
+		GetChangeFeedStatus(gomock.Any(), changefeedID).
+		Return(persistedStatus, int64(5), nil).
+		Times(1)
+	etcdClient.EXPECT().
+		Txn(gomock.Any(), gomock.Len(2), NewFuncMatcher(func(i any) bool {
+			ops := i.([]clientv3.Op)
+			require.Len(t, ops, 2)
+			require.True(t, ops[0].IsPut())
+			require.True(t, ops[1].IsPut())
+
+			persistedInfo := &config.ChangeFeedInfo{}
+			require.NoError(t, persistedInfo.Unmarshal(ops[0].ValueBytes()))
+			require.Equal(t, uint64(9), persistedInfo.Epoch)
+			require.Equal(t, config.StateNormal, persistedInfo.State)
+			require.Nil(t, persistedInfo.Error)
+
+			status := &config.ChangeFeedStatus{}
+			require.NoError(t, status.Unmarshal(ops[1].ValueBytes()))
+			require.Equal(t, uint64(300), status.CheckpointTs)
+			require.Equal(t, config.ProgressNone, status.Progress)
+			return true
+		}), gomock.Len(0)).
+		Return(&clientv3.TxnResponse{Succeeded: true}, nil).
+		Times(1)
+
+	got, err := backend.ResumeChangefeed(context.Background(), changefeedID, 9, 300)
+	require.NoError(t, err)
+	require.Equal(t, uint64(9), got.Epoch)
+	require.Equal(t, config.StateNormal, got.State)
+	require.Nil(t, got.Error)
+}
+
 func TestBumpChangefeedEpochRetriesOnCASConflict(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

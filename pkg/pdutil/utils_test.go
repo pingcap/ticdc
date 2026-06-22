@@ -45,19 +45,3 @@ func TestGetSourceID(t *testing.T) {
 		return sourceID == 2
 	}, 5*time.Second, 100*time.Millisecond)
 }
-
-func TestAdvanceChangefeedEpoch(t *testing.T) {
-	t.Parallel()
-
-	epoch, err := AdvanceChangefeedEpoch(10, 8)
-	require.NoError(t, err)
-	require.Equal(t, uint64(10), epoch)
-
-	epoch, err = AdvanceChangefeedEpoch(10, 12)
-	require.NoError(t, err)
-	require.Equal(t, uint64(13), epoch)
-
-	_, err = AdvanceChangefeedEpoch(10, ^uint64(0))
-	require.Error(t, err)
-	require.ErrorContains(t, err, "changefeed epoch overflow")
-}

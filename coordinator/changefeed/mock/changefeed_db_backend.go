@@ -124,6 +124,21 @@ func (mr *MockBackendMockRecorder) PauseChangefeed(ctx, id interface{}) *gomock.
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PauseChangefeed", reflect.TypeOf((*MockBackend)(nil).PauseChangefeed), ctx, id)
 }
 
+// ResumeChangefeed mocks base method.
+func (m *MockBackend) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, candidateEpoch uint64, checkpointTs uint64) (*config.ChangeFeedInfo, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResumeChangefeed", ctx, id, candidateEpoch, checkpointTs)
+	ret0, _ := ret[0].(*config.ChangeFeedInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ResumeChangefeed indicates an expected call of ResumeChangefeed.
+func (mr *MockBackendMockRecorder) ResumeChangefeed(ctx, id, candidateEpoch, checkpointTs interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResumeChangefeed", reflect.TypeOf((*MockBackend)(nil).ResumeChangefeed), ctx, id, candidateEpoch, checkpointTs)
+}
+
 // SetChangefeedProgress mocks base method.
 func (m *MockBackend) SetChangefeedProgress(ctx context.Context, id common.ChangeFeedID, progress config.Progress) error {
 	m.ctrl.T.Helper()
