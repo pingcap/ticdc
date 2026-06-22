@@ -129,7 +129,8 @@ type subscribedSpan struct {
 	kvEventsCache []common.RawKVEntry
 
 	// To handle span removing.
-	stopped atomic.Bool
+	stopped   atomic.Bool
+	stoppedCh chan struct{}
 
 	// To handle stale lock resolvings.
 	tryResolveLock     func(regionID uint64, state *regionlock.LockedRangeState)
@@ -194,6 +195,8 @@ type subscriptionClient struct {
 	stores sync.Map
 
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
+	// memoryQuota controls puller backpressure and new region scan admission.
+	memoryQuota *pullerMemoryQuota
 	// the following three fields are used to manage feedback from ds and notify other goroutines
 	mu     sync.Mutex
 	cond   *sync.Cond
@@ -248,6 +251,7 @@ func NewSubscriptionClient(
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
+	subClient.memoryQuota = newPullerMemoryQuota()
 
 	option := dynstream.NewOption()
 	// Note: it is max batch size of the kv sent from tikv(not committed rows)
@@ -366,7 +370,9 @@ func (s *subscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
+	pullerConfig := config.GetGlobalServerConfig().Debug.Puller
+	areaSetting := dynstream.NewAreaSettingsWithMemoryControlAlgorithm(
+		pullerConfig.MemoryQuota, s.memoryQuota, "logPuller")
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	select {
@@ -492,6 +498,9 @@ func (s *subscriptionClient) setTableStopped(rt *subscribedSpan) {
 	// Then send a special singleRegionInfo to regionRouter to deregister the table
 	// from all TiKV instances.
 	if rt.stopped.CompareAndSwap(false, true) {
+		if rt.stoppedCh != nil {
+			close(rt.stoppedCh)
+		}
 		s.regionTaskQueue.Push(NewRegionPriorityTask(TaskHighPrior, regionInfo{subscribedSpan: rt, filterLoop: rt.filterLoop}, s.pdClock.CurrentTS()))
 		if rt.rangeLock.Stop() {
 			s.onTableDrained(rt)
@@ -727,6 +736,13 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 	nextSpan := span
 	backoffBeforeLoad := false
 	for {
+		stopped, err := s.waitRegionScanAllowed(ctx, subscribedSpan)
+		if err != nil {
+			return err
+		}
+		if stopped {
+			return nil
+		}
 		if backoffBeforeLoad {
 			if err := util.Hang(ctx, loadRegionRetryInterval); err != nil {
 				return err
@@ -763,6 +779,13 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		}
 
 		for _, regionMeta := range regionMetas {
+			stopped, err := s.waitRegionScanAllowed(ctx, subscribedSpan)
+			if err != nil {
+				return err
+			}
+			if stopped {
+				return nil
+			}
 			regionSpan := heartbeatpb.TableSpan{
 				StartKey:   regionMeta.StartKey,
 				EndKey:     regionMeta.EndKey,
@@ -794,6 +817,34 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			}
 		}
 	}
+}
+
+func (s *subscriptionClient) waitRegionScanAllowed(
+	ctx context.Context, subscribedSpan *subscribedSpan,
+) (bool, error) {
+	if subscribedSpan.stopped.Load() {
+		return true, nil
+	}
+	if s.memoryQuota == nil {
+		return false, nil
+	}
+	for {
+		resume, paused := s.memoryQuota.regionScanResumeNotify()
+		if !paused {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-subscribedSpan.stoppedCh:
+			return true, nil
+		case <-resume:
+		}
+	}
+	if subscribedSpan.stopped.Load() {
+		return true, nil
+	}
+	return false, nil
 }
 
 // scheduleRegionRequest locks the region's range and send the region to regionTaskQueue,
@@ -1089,6 +1140,7 @@ func (s *subscriptionClient) newSubscribedSpan(
 		startTs:    startTs,
 		filterLoop: filterLoop,
 		rangeLock:  rangeLock,
+		stoppedCh:  make(chan struct{}),
 
 		consumeKVEvents:   consumeKVEvents,
 		advanceResolvedTs: advanceResolvedTs,

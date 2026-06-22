@@ -362,6 +362,29 @@ func (s *regionRequestWorker) processRegionSendTask(
 		// TODO: add a metric?
 		return nil
 	}
+	handleDeregister := func(region regionInfo) error {
+		subID := region.subscribedSpan.subID
+		req := &cdcpb.ChangeDataRequest{
+			Header:    &cdcpb.Header{ClusterId: s.client.clusterID, TicdcVersion: version.ReleaseSemver()},
+			RequestId: uint64(subID),
+			Request: &cdcpb.ChangeDataRequest_Deregister_{
+				Deregister: &cdcpb.ChangeDataRequest_Deregister{},
+			},
+			FilterLoop: region.filterLoop,
+		}
+		s.requestCache.markDone()
+		if err := doSend(req); err != nil {
+			return err
+		}
+		for _, state := range s.takeRegionStates(subID) {
+			state.markStopped(&requestCancelledErr{})
+			regionEvent := regionEvent{
+				states: []*regionFeedState{state},
+			}
+			s.client.pushRegionEventToDS(subID, regionEvent)
+		}
+		return nil
+	}
 
 	// Handle pre-fetched region first
 	region := *s.preFetchForConnecting
@@ -371,6 +394,21 @@ func (s *regionRequestWorker) processRegionSendTask(
 	for {
 		region := regionReq.regionInfo
 		subID := region.subscribedSpan.subID
+		for !region.isStopped() && !region.subscribedSpan.stopped.Load() && s.client.memoryQuota != nil {
+			resume, paused := s.client.memoryQuota.regionScanResumeNotify()
+			if !paused {
+				break
+			}
+			controlReq, ok, err := s.requestCache.popControlOrWait(ctx, resume)
+			if err != nil {
+				return err
+			}
+			if ok {
+				if err := handleDeregister(controlReq.regionInfo); err != nil {
+					return err
+				}
+			}
+		}
 		log.Debug("region request worker gets a singleRegionInfo",
 			zap.Uint64("workerID", s.workerID),
 			zap.Uint64("subscriptionID", uint64(subID)),
@@ -380,24 +418,8 @@ func (s *regionRequestWorker) processRegionSendTask(
 
 		// It means it's a special task for stopping the table.
 		if region.isStopped() {
-			req := &cdcpb.ChangeDataRequest{
-				Header:    &cdcpb.Header{ClusterId: s.client.clusterID, TicdcVersion: version.ReleaseSemver()},
-				RequestId: uint64(subID),
-				Request: &cdcpb.ChangeDataRequest_Deregister_{
-					Deregister: &cdcpb.ChangeDataRequest_Deregister{},
-				},
-				FilterLoop: region.filterLoop,
-			}
-			s.requestCache.markDone()
-			if err := doSend(req); err != nil {
+			if err := handleDeregister(region); err != nil {
 				return err
-			}
-			for _, state := range s.takeRegionStates(subID) {
-				state.markStopped(&requestCancelledErr{})
-				regionEvent := regionEvent{
-					states: []*regionFeedState{state},
-				}
-				s.client.pushRegionEventToDS(subID, regionEvent)
 			}
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from

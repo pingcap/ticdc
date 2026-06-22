@@ -17,6 +17,7 @@ import (
 	"context"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
@@ -35,6 +36,16 @@ import (
 type mockEventFeedV2Client struct {
 	sendErr error
 	recvErr error
+}
+
+type recordingEventFeedV2Client struct {
+	*mockEventFeedV2Client
+	sent chan *cdcpb.ChangeDataRequest
+}
+
+func (m *recordingEventFeedV2Client) Send(req *cdcpb.ChangeDataRequest) error {
+	m.sent <- req
+	return nil
 }
 
 func (m *mockEventFeedV2Client) Send(*cdcpb.ChangeDataRequest) error   { return m.sendErr }
@@ -335,6 +346,62 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	require.Empty(t, worker.requestCache.sentRequests.regionReqs)
 	state := worker.getRegionState(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
 	require.True(t, state == nil || state.isStale(), "region state should be removed or marked stale after send failure")
+}
+
+func TestProcessRegionSendTaskAllowsDeregisterWhileScanPaused(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	quota := newPullerMemoryQuota()
+	quota.ShouldPauseArea(false, 50, 100)
+	worker := &regionRequestWorker{
+		requestCache: newRequestCache(10),
+		store:        &requestedStore{storeAddr: "store-1"},
+		client:       &subscriptionClient{memoryQuota: quota},
+	}
+	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
+
+	registerRegion := prepareRegionForSendTest(createTestRegionInfo(1, 1))
+	ok, err := worker.requestCache.add(ctx, registerRegion, false)
+	require.NoError(t, err)
+	require.True(t, ok)
+	registerReq, err := worker.requestCache.pop(ctx)
+	require.NoError(t, err)
+	worker.preFetchForConnecting = &registerReq.regionInfo
+
+	deregisterRegion := regionInfo{subscribedSpan: &subscribedSpan{subID: 2}}
+	ok, err = worker.requestCache.add(ctx, deregisterRegion, true)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	client := &recordingEventFeedV2Client{
+		mockEventFeedV2Client: &mockEventFeedV2Client{},
+		sent:                  make(chan *cdcpb.ChangeDataRequest, 2),
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- worker.processRegionSendTask(ctx, &ConnAndClient{
+			Client: client,
+			Conn:   &grpc.ClientConn{},
+		})
+	}()
+
+	request := <-client.sent
+	require.NotNil(t, request.GetDeregister())
+	require.Equal(t, uint64(2), request.RequestId)
+	select {
+	case request = <-client.sent:
+		t.Fatalf("register request sent while scan gate was closed: %v", request)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	quota.ShouldPauseArea(false, 39, 100)
+	request = <-client.sent
+	require.Nil(t, request.GetDeregister())
+	require.Equal(t, uint64(1), request.RequestId)
+
+	cancel()
+	require.ErrorIs(t, <-errCh, context.Canceled)
 }
 
 func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {

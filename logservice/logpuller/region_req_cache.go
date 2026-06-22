@@ -53,6 +53,9 @@ func (r *regionReq) isStale() bool {
 type requestCache struct {
 	// pending requests waiting to be sent
 	pendingQueue chan regionReq
+	// controlQueue contains deregister requests. It is separate so cleanup can
+	// proceed while normal register requests are gated by puller memory usage.
+	controlQueue chan regionReq
 
 	// sent requests waiting for initialization (subscriptionID -> regions -> regionReq)
 	sentRequests struct {
@@ -78,6 +81,7 @@ type requestCache struct {
 func newRequestCache(maxPendingCount int) *requestCache {
 	res := &requestCache{
 		pendingQueue: make(chan regionReq, maxPendingCount), // Large buffer to reduce blocking
+		controlQueue: make(chan regionReq, maxPendingCount),
 		sentRequests: struct {
 			sync.RWMutex
 			regionReqs map[SubscriptionID]map[uint64]regionReq
@@ -104,10 +108,14 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (
 		if current < c.maxPendingCount || force {
 			// Try to add the request
 			req := newRegionReq(region)
+			queue := c.pendingQueue
+			if region.isStopped() {
+				queue = c.controlQueue
+			}
 			select {
 			case <-ctx.Done():
 				return false, ctx.Err()
-			case c.pendingQueue <- req:
+			case queue <- req:
 				c.pendingCount.Inc()
 				cost := time.Since(start)
 				metrics.SubscriptionClientAddRegionRequestDuration.Observe(cost.Seconds())
@@ -142,10 +150,32 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (
 // (e.g. resolve/markStopped/markDone).
 func (c *requestCache) pop(ctx context.Context) (regionReq, error) {
 	select {
+	case req := <-c.controlQueue:
+		return req, nil
+	default:
+	}
+	select {
+	case req := <-c.controlQueue:
+		return req, nil
 	case req := <-c.pendingQueue:
 		return req, nil
 	case <-ctx.Done():
 		return regionReq{}, ctx.Err()
+	}
+}
+
+// popControlOrWait returns a deregister request while normal register requests
+// are gated, or returns false after the gate is resumed.
+func (c *requestCache) popControlOrWait(
+	ctx context.Context, resume <-chan struct{},
+) (regionReq, bool, error) {
+	select {
+	case req := <-c.controlQueue:
+		return req, true, nil
+	case <-resume:
+		return regionReq{}, false, nil
+	case <-ctx.Done():
+		return regionReq{}, false, ctx.Err()
 	}
 }
 
@@ -265,7 +295,7 @@ func (c *requestCache) clearStaleRequest() {
 
 	// If there are no in-cache region requests but pendingCount isn't 0, it means pendingCount is stale.
 	// Reset it to avoid blocking add() forever.
-	if reqCount == 0 && len(c.pendingQueue) == 0 && c.pendingCount.Load() != 0 {
+	if reqCount == 0 && len(c.pendingQueue) == 0 && len(c.controlQueue) == 0 && c.pendingCount.Load() != 0 {
 		log.Info("region worker pending request count is not equal to actual region request count, correct it",
 			zap.Int("pendingCount", int(c.pendingCount.Load())),
 			zap.Int("actualReqCount", reqCount),
@@ -294,6 +324,17 @@ LOOP:
 			c.markDone()
 		default:
 			break LOOP
+		}
+	}
+
+CONTROL_LOOP:
+	for {
+		select {
+		case req := <-c.controlQueue:
+			regions = append(regions, req.regionInfo)
+			c.markDone()
+		default:
+			break CONTROL_LOOP
 		}
 	}
 
