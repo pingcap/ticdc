@@ -582,11 +582,12 @@ func TestResumeChangefeed(t *testing.T) {
 	// no changefeed
 	require.NotNil(t, controller.ResumeChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName), 12, true))
 
-	backend.EXPECT().BumpChangefeedEpoch(gomock.Any(), cfID, gomock.Any(), gomock.Any()).Return(nil, errors.New("failed")).Times(1)
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), cfID, gomock.Any(), uint64(12)).
+		Return(nil, errors.New("failed")).Times(1)
 	require.NotNil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, true))
 	require.Equal(t, config.StateFailed, changefeedDB.GetByID(cfID).GetInfo().State)
 
-	expectResumeEpochBump(t, backend, cfID, cf, 12)
+	expectResumeChangefeed(t, backend, cfID, cf, 12)
 	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, false))
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
 }
@@ -640,7 +641,7 @@ func TestResumeChangefeedOverwriteUpdatesLastSavedCheckpointTs(t *testing.T) {
 	changefeedDB.AddStoppedChangefeed(cf)
 
 	newCheckpointTs := uint64(120)
-	expectResumeEpochBump(t, backend, cfID, cf, newCheckpointTs)
+	expectResumeChangefeed(t, backend, cfID, cf, newCheckpointTs)
 	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, newCheckpointTs, true))
 	require.Equal(t, newCheckpointTs, changefeedDB.GetByID(cfID).GetLastSavedCheckPointTs())
 }
@@ -677,7 +678,7 @@ func TestResumeChangefeedIgnoresStaleMaintainerErrorAndSchedules(t *testing.T) {
 	_, _, err := cf.ForceUpdateStatus(stale)
 	require.NotNil(t, err)
 
-	expectResumeEpochBump(t, backend, cfID, cf, 100)
+	expectResumeChangefeed(t, backend, cfID, cf, 100)
 	require.NoError(t, controller.ResumeChangefeed(context.Background(), cfID, 100, false))
 
 	// The changefeed should be enqueued for scheduling and should not be blocked by the stale error.
@@ -716,13 +717,10 @@ func TestResumeChangefeedUsesBackendReturnedInfo(t *testing.T) {
 	require.NoError(t, err)
 	backendInfo.SinkURI = "mysql://upstream:4000"
 	backendInfo.State = config.StateNormal
-	backend.EXPECT().BumpChangefeedEpoch(gomock.Any(), cfID, gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _ common.ChangeFeedID, candidateEpoch uint64, options changefeed.EpochBumpOptions) (*config.ChangeFeedInfo, error) {
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), cfID, gomock.Any(), uint64(100)).
+		DoAndReturn(func(_ context.Context, _ common.ChangeFeedID, candidateEpoch uint64, checkpointTs uint64) (*config.ChangeFeedInfo, error) {
 			require.NotZero(t, candidateEpoch)
-			require.True(t, options.UpdateStatus)
-			require.True(t, options.UpdateError)
-			require.NotNil(t, options.State)
-			require.Equal(t, config.StateNormal, *options.State)
+			require.Equal(t, uint64(100), checkpointTs)
 			backendInfo.Epoch = candidateEpoch
 			return backendInfo, nil
 		}).Times(1)
@@ -732,7 +730,7 @@ func TestResumeChangefeedUsesBackendReturnedInfo(t *testing.T) {
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
 }
 
-func expectResumeEpochBump(
+func expectResumeChangefeed(
 	t *testing.T,
 	backend *mock_changefeed.MockBackend,
 	cfID common.ChangeFeedID,
@@ -741,17 +739,13 @@ func expectResumeEpochBump(
 ) {
 	t.Helper()
 
-	backend.EXPECT().BumpChangefeedEpoch(gomock.Any(), cfID, gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _ common.ChangeFeedID, candidateEpoch uint64, options changefeed.EpochBumpOptions) (*config.ChangeFeedInfo, error) {
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), cfID, gomock.Any(), checkpointTs).
+		DoAndReturn(func(_ context.Context, _ common.ChangeFeedID, candidateEpoch uint64, gotCheckpointTs uint64) (*config.ChangeFeedInfo, error) {
 			require.NotZero(t, candidateEpoch)
-			require.NotNil(t, options.State)
-			require.Equal(t, config.StateNormal, *options.State)
-			require.True(t, options.UpdateStatus)
-			require.Equal(t, checkpointTs, options.CheckpointTs)
-			require.Equal(t, config.ProgressNone, options.Progress)
+			require.Equal(t, checkpointTs, gotCheckpointTs)
 			info, err := cf.GetInfo().Clone()
 			require.NoError(t, err)
-			info.State = *options.State
+			info.State = config.StateNormal
 			info.Epoch = candidateEpoch
 			return info, nil
 		}).Times(1)

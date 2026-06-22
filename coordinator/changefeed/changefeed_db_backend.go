@@ -43,8 +43,11 @@ type Backend interface {
 	CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error
 	// UpdateChangefeed updates changefeed info  to db
 	UpdateChangefeed(ctx context.Context, info *config.ChangeFeedInfo, checkpointTs uint64, progress config.Progress) error
-	// BumpChangefeedEpoch persists a strictly newer epoch using the latest stored
-	// ChangeFeedInfo. It only reads and updates stored status when UpdateStatus is set.
+	// ResumeChangefeed persists the resumed status with a new owner epoch.
+	ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, candidateEpoch uint64, checkpointTs uint64) (*config.ChangeFeedInfo, error)
+	// BumpChangefeedEpoch is the low-level ownership boundary used before a
+	// coordinator path can create a new maintainer owner. It only reads and
+	// updates stored status when UpdateStatus is set.
 	BumpChangefeedEpoch(ctx context.Context, id common.ChangeFeedID, candidateEpoch uint64, options EpochBumpOptions) (*config.ChangeFeedInfo, error)
 	// PauseChangefeed persists the pause status to db for a changefeed
 	PauseChangefeed(ctx context.Context, id common.ChangeFeedID) error

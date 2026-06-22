@@ -43,6 +43,21 @@ func TestNewChangefeed(t *testing.T) {
 	require.True(t, cf.NeedCheckpointTsMessage())
 }
 
+func TestNewChangefeedRejectsInvalidInfo(t *testing.T) {
+	t.Parallel()
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	require.Panics(t, func() {
+		NewChangefeed(cfID, nil, 100, true)
+	})
+	require.Panics(t, func() {
+		NewChangefeed(cfID, &config.ChangeFeedInfo{
+			SinkURI: "kafka://127.0.0.1:9092",
+			State:   config.StateNormal,
+		}, 100, true)
+	})
+}
+
 func TestChangefeed_GetSetInfo(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
@@ -59,6 +74,9 @@ func TestChangefeed_GetSetInfo(t *testing.T) {
 	}
 	cf.SetInfo(newInfo)
 	require.Equal(t, newInfo, cf.GetInfo())
+	require.Panics(t, func() {
+		cf.SetInfo(nil)
+	})
 }
 
 func TestChangefeed_GetSetNodeID(t *testing.T) {

@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -245,7 +244,7 @@ func (b *EtcdBackend) BumpChangefeedEpoch(
 		// Keep compatibility defaults when the bumped info replaces the
 		// coordinator's in-memory copy after an upgrade.
 		info.VerifyAndComplete()
-		epoch, err := pdutil.AdvanceChangefeedEpoch(candidateEpoch, info.Epoch)
+		epoch, err := common.AdvanceChangefeedEpoch(candidateEpoch, info.Epoch)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -323,6 +322,23 @@ func (b *EtcdBackend) BumpChangefeedEpoch(
 
 	err := cerror.ErrMetaOpFailed.GenWithStackByArgs(fmt.Sprintf("bump changefeed epoch %s failed", id.Name()))
 	return nil, errors.Trace(err)
+}
+
+// ResumeChangefeed persists the resumed state with a new owner epoch.
+func (b *EtcdBackend) ResumeChangefeed(
+	ctx context.Context,
+	id common.ChangeFeedID,
+	candidateEpoch uint64,
+	checkpointTs uint64,
+) (*config.ChangeFeedInfo, error) {
+	normalState := config.StateNormal
+	return b.BumpChangefeedEpoch(ctx, id, candidateEpoch, EpochBumpOptions{
+		CheckpointTs: checkpointTs,
+		Progress:     config.ProgressNone,
+		UpdateStatus: true,
+		State:        &normalState,
+		UpdateError:  true,
+	})
 }
 
 func (b *EtcdBackend) PauseChangefeed(ctx context.Context, id common.ChangeFeedID) error {
