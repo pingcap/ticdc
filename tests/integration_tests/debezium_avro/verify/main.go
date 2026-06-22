@@ -29,8 +29,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/IBM/sarama"
 	"github.com/linkedin/goavro/v2"
-	"github.com/segmentio/kafka-go"
 )
 
 var requiredChecks = []string{
@@ -68,6 +68,12 @@ type rowEvent struct {
 	after  map[string]any
 }
 
+type kafkaMessage struct {
+	offset int64
+	key    []byte
+	value  []byte
+}
+
 type coverage struct {
 	checks map[string]bool
 	tables map[string]bool
@@ -103,59 +109,78 @@ func run() error {
 		codecs:  make(map[int]*goavro.Codec),
 	}
 
-	reader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:        []string{*kafkaAddr},
-		Topic:          *topic,
-		Partition:      0,
-		MinBytes:       1,
-		MaxBytes:       10e6,
-		MaxWait:        500 * time.Millisecond,
-		ReadBackoffMin: 100 * time.Millisecond,
-		ReadBackoffMax: time.Second,
-	})
-	defer reader.Close()
-	if err := reader.SetOffset(kafka.FirstOffset); err != nil {
-		return fmt.Errorf("set kafka reader offset: %w", err)
+	saramaConfig := sarama.NewConfig()
+	saramaConfig.Version = sarama.V2_4_0_0
+	saramaConfig.Consumer.Return.Errors = true
+	saramaConfig.Net.DialTimeout = 10 * time.Second
+	saramaConfig.Net.ReadTimeout = 10 * time.Second
+	saramaConfig.Net.WriteTimeout = 10 * time.Second
+
+	consumer, err := sarama.NewConsumer([]string{*kafkaAddr}, saramaConfig)
+	if err != nil {
+		return fmt.Errorf("create kafka consumer: %w", err)
 	}
+	defer consumer.Close()
+
+	partitionConsumer, err := consumer.ConsumePartition(*topic, 0, sarama.OffsetOldest)
+	if err != nil {
+		return fmt.Errorf("consume kafka partition: %w", err)
+	}
+	defer partitionConsumer.Close()
 
 	result := &coverage{
 		checks: make(map[string]bool),
 		tables: make(map[string]bool),
 	}
 	var lastErr error
+	messagesCh := partitionConsumer.Messages()
+	errorsCh := partitionConsumer.Errors()
 	for {
-		message, err := reader.ReadMessage(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return fmt.Errorf("timed out waiting for Debezium Avro row events on topic %s; coverage: %s; last error: %w", *topic, result.summary(), lastErr)
+			}
+			return fmt.Errorf("timed out waiting for Debezium Avro row events on topic %s; coverage: %s", *topic, result.summary())
+		case err, ok := <-errorsCh:
+			if ok {
+				lastErr = err
+			} else {
+				errorsCh = nil
+			}
+		case message, ok := <-messagesCh:
+			if !ok {
 				if lastErr != nil {
-					return fmt.Errorf("timed out waiting for Debezium Avro row events on topic %s; coverage: %s; last error: %w", *topic, result.summary(), lastErr)
+					return fmt.Errorf("kafka message channel closed for topic %s; coverage: %s; last error: %w", *topic, result.summary(), lastErr)
 				}
-				return fmt.Errorf("timed out waiting for Debezium Avro row events on topic %s; coverage: %s", *topic, result.summary())
+				return fmt.Errorf("kafka message channel closed for topic %s; coverage: %s", *topic, result.summary())
 			}
-			lastErr = err
-			continue
-		}
 
-		event, err := decodeRowEvent(ctx, registry, message)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if event == nil {
-			continue
-		}
-		if err := result.observe(event); err != nil {
-			return err
-		}
-		if result.done() {
-			if err := registry.ensureSubject(ctx, *topic+"-key"); err != nil {
+			event, err := decodeRowEvent(ctx, registry, kafkaMessage{
+				offset: message.Offset,
+				key:    message.Key,
+				value:  message.Value,
+			})
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if event == nil {
+				continue
+			}
+			if err := result.observe(event); err != nil {
 				return err
 			}
-			if err := registry.ensureSubject(ctx, *topic+"-value"); err != nil {
-				return err
+			if result.done() {
+				if err := registry.ensureSubject(ctx, *topic+"-key"); err != nil {
+					return err
+				}
+				if err := registry.ensureSubject(ctx, *topic+"-value"); err != nil {
+					return err
+				}
+				fmt.Printf("verified %d Debezium Confluent Avro row events from topic %s; coverage: %s\n", result.count, *topic, result.summary())
+				return nil
 			}
-			fmt.Printf("verified %d Debezium Confluent Avro row events from topic %s; coverage: %s\n", result.count, *topic, result.summary())
-			return nil
 		}
 	}
 }
@@ -163,15 +188,15 @@ func run() error {
 func decodeRowEvent(
 	ctx context.Context,
 	registry *schemaRegistryClient,
-	message kafka.Message,
+	message kafkaMessage,
 ) (*rowEvent, error) {
-	key, err := decodeConfluentAvro(ctx, registry, message.Key)
+	key, err := decodeConfluentAvro(ctx, registry, message.key)
 	if err != nil {
-		return nil, fmt.Errorf("decode key at offset %d: %w", message.Offset, err)
+		return nil, fmt.Errorf("decode key at offset %d: %w", message.offset, err)
 	}
-	value, err := decodeConfluentAvro(ctx, registry, message.Value)
+	value, err := decodeConfluentAvro(ctx, registry, message.value)
 	if err != nil {
-		return nil, fmt.Errorf("decode value at offset %d: %w", message.Offset, err)
+		return nil, fmt.Errorf("decode value at offset %d: %w", message.offset, err)
 	}
 
 	op, ok := value["op"].(string)
@@ -181,18 +206,18 @@ func decodeRowEvent(
 
 	source, ok := asMap(value["source"])
 	if !ok {
-		return nil, fmt.Errorf("source is not a record at offset %d: %T", message.Offset, value["source"])
+		return nil, fmt.Errorf("source is not a record at offset %d: %T", message.offset, value["source"])
 	}
 	if source["db"] != "test" {
-		return nil, fmt.Errorf("unexpected source db at offset %d: %v", message.Offset, source["db"])
+		return nil, fmt.Errorf("unexpected source db at offset %d: %v", message.offset, source["db"])
 	}
 	table, ok := stringValue(source["table"])
 	if !ok {
-		return nil, fmt.Errorf("source table is not a string at offset %d: %v", message.Offset, source["table"])
+		return nil, fmt.Errorf("source table is not a string at offset %d: %v", message.offset, source["table"])
 	}
 
 	event := &rowEvent{
-		offset: message.Offset,
+		offset: message.offset,
 		op:     op,
 		table:  table,
 		key:    key,
