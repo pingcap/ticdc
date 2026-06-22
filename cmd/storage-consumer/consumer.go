@@ -286,7 +286,7 @@ func (c *consumer) appendRow2Group(dml *event.DMLEvent, enableTableAcrossNodes b
 	}
 	if commitTs >= group.HighWatermark {
 		group.Append(dml, false)
-		log.Info("DML event append to the group",
+		log.Debug("DML event append to the group",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", dml.RowTypes[0]))
