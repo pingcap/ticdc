@@ -1021,6 +1021,74 @@ func TestDoMerge(t *testing.T) {
 	require.False(t, exists)
 }
 
+// TestDoMergeKeepsMergeJournalUntilSourcesAreCleaned covers maintainer failover between merged
+// dispatcher commit and source dispatcher cleanup. The test tracks a merge request, runs doMerge,
+// verifies the journal is still reported while sources are being removed, then marks the merged
+// dispatcher Working and expects heartbeat cleanup to drop the finished journal.
+func TestDoMergeKeepsMergeJournalUntilSourcesAreCleaned(t *testing.T) {
+	manager := createTestManager(t)
+
+	dispatcher1 := createTestDispatcher(t, manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("a"),
+		[]byte("m"),
+	)
+	dispatcher2 := createTestDispatcher(t, manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("m"),
+		[]byte("z"),
+	)
+
+	manager.dispatcherMap.Set(dispatcher1.GetId(), dispatcher1)
+	manager.dispatcherMap.Set(dispatcher2.GetId(), dispatcher2)
+
+	mergedID := common.NewDispatcherID()
+	mergeReq := &heartbeatpb.MergeDispatcherRequest{
+		ChangefeedID:       manager.changefeedID.ToPB(),
+		DispatcherIDs:      []*heartbeatpb.DispatcherID{dispatcher1.GetId().ToPB(), dispatcher2.GetId().ToPB()},
+		MergedDispatcherID: mergedID.ToPB(),
+		Mode:               common.DefaultMode,
+	}
+	manager.TrackMergeOperator(mergeReq)
+	task := manager.mergeEventDispatcher([]common.DispatcherID{
+		dispatcher1.GetId(),
+		dispatcher2.GetId(),
+	}, mergedID)
+	require.NotNil(t, task)
+
+	doMerge(task, task.manager.dispatcherMap)
+	require.Len(t, manager.GetMergeOperators(), 1)
+
+	manager.aggregateDispatcherHeartbeats(false)
+	require.Len(t, manager.GetMergeOperators(), 1)
+	_, exists := manager.dispatcherMap.Get(dispatcher1.GetId())
+	require.False(t, exists)
+	_, exists = manager.dispatcherMap.Get(dispatcher2.GetId())
+	require.False(t, exists)
+
+	mergedDispatcher, exists := manager.dispatcherMap.Get(mergedID)
+	require.True(t, exists)
+	mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Working)
+	manager.aggregateDispatcherHeartbeats(false)
+	require.Empty(t, manager.GetMergeOperators())
+}
+
+// TestTrackMergeOperatorRejectsZeroMergedDispatcherID covers a malformed merge request.
+// The test tracks a request with an all-zero merged ID and verifies it cannot occupy the shared
+// zero-value map key or appear in later bootstrap responses.
+func TestTrackMergeOperatorRejectsZeroMergedDispatcherID(t *testing.T) {
+	manager := createTestManager(t)
+	manager.TrackMergeOperator(&heartbeatpb.MergeDispatcherRequest{
+		ChangefeedID:       manager.changefeedID.ToPB(),
+		DispatcherIDs:      []*heartbeatpb.DispatcherID{common.NewDispatcherID().ToPB(), common.NewDispatcherID().ToPB()},
+		MergedDispatcherID: (&common.DispatcherID{}).ToPB(),
+		Mode:               common.DefaultMode,
+	})
+	require.Empty(t, manager.GetMergeOperators())
+}
+
 func TestDoMergeWithThreeDispatchers(t *testing.T) {
 	manager := createTestManager(t)
 

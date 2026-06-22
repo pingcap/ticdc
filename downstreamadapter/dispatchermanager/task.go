@@ -208,6 +208,7 @@ func abortMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispa
 	}
 
 	removeDispatcher(t.manager, t.mergedDispatcher.GetId(), dispatcherMap, sinkType)
+	t.manager.RemoveMergeOperator(t.mergedDispatcher.GetId())
 }
 
 func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *DispatcherMap[T]) {

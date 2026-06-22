@@ -279,6 +279,8 @@ message MaintainerBootstrapResponse {
     // It will be used when redo enable.
     uint64 redo_checkpoint_ts = 5;
     repeated ScheduleDispatcherRequest operators = 6;
+    // merge_operators contains in-flight merge dispatcher requests for bootstrap recovery.
+    repeated MergeDispatcherRequest merge_operators = 7;
 }
 
 message MaintainerPostBootstrapRequest {

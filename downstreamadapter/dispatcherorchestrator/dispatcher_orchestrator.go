@@ -674,4 +674,6 @@ func retrieveOperatorsForBootstrapResponse(
 		})
 		return true
 	})
+
+	response.MergeOperators = append(response.MergeOperators, manager.GetMergeOperators()...)
 }

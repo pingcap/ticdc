@@ -5,13 +5,14 @@ set -eu
 # This integration test verifies operator consistency across maintainer failover.
 #
 # What it validates:
-# - Dispatcher managers persist "in-flight" scheduling requests (Create/Remove with an OperatorType).
+# - Dispatcher managers persist "in-flight" scheduling requests (Create/Remove with an OperatorType)
+#   and merge requests.
 # - After the maintainer fails over, the new maintainer can restore these unfinished operators from
 #   bootstrap responses and keep table scheduling converging instead of leaking or duplicating dispatchers.
 #
 # Main steps (per subcase):
 # 1) Start a 3-capture CDC cluster and create a changefeed.
-# 2) Trigger Move / Split / Remove / Create operators and keep them in-progress using failpoints.
+# 2) Trigger Move / Split / Remove / Create / Merge operators and keep them in-progress using failpoints.
 # 3) Kill the current maintainer capture to force a maintainer move.
 # 4) Disable failpoints and verify tables eventually converge (scheduled on a live capture, dropped table
 #    stays dropped, and downstream data matches upstream via sync-diff).
@@ -25,7 +26,25 @@ ROOT_WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
-CDC_ADDRS=("127.0.0.1:8300" "127.0.0.1:8301" "127.0.0.1:8302")
+CDC_ADDRS_OVERRIDE=${CDC_ADDRS_OVERRIDE:-"127.0.0.1:8300 127.0.0.1:8301 127.0.0.1:8302"}
+read -r -a CDC_ADDRS <<<"$CDC_ADDRS_OVERRIDE"
+if [ "${#CDC_ADDRS[@]}" -ne 3 ]; then
+	echo "CDC_ADDRS_OVERRIDE must contain exactly 3 addresses" >&2
+	exit 1
+fi
+# Keep CLI-based helpers (changefeed create/query and move/split/merge operations) pointed at the same
+# first capture when the case overrides the CDC addresses for isolated local reruns.
+export CDC_HOST=${CDC_ADDRS[0]%:*}
+export CDC_PORT=${CDC_ADDRS[0]#*:}
+CDC_API_SERVER="http://${CDC_ADDRS[0]}"
+
+function cdc_cli_changefeed() {
+	command cdc_cli_changefeed "$@" --server "$CDC_API_SERVER"
+}
+
+function run_cdc_cli() {
+	command run_cdc_cli "$@" --server "$CDC_API_SERVER"
+}
 FAILPOINT_NOT_READY_TO_CLOSE_DISPATCHER="github.com/pingcap/ticdc/downstreamadapter/dispatcher/NotReadyToCloseDispatcher"
 FAILPOINT_BLOCK_CREATE_DISPATCHER="github.com/pingcap/ticdc/downstreamadapter/dispatchermanager/BlockCreateDispatcher"
 
@@ -51,6 +70,83 @@ function get_table_replication_count() {
 	local mode=$4
 	curl -s "http://${api_addr}/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME&mode=$mode" |
 		jq -r --argjson tid "$table_id" '[.items[].table_ids[] | select(. == $tid)] | length'
+}
+
+function wait_for_table_replication_count() {
+	local api_addr=$1
+	local changefeed_id=$2
+	local table_id=$3
+	local target_count=$4
+	local comparison_mode=$5
+	local mode=$6
+	local retry=${7:-30}
+
+	for ((i = 0; i < retry; i++)); do
+		local count
+		count=$(get_table_replication_count "$api_addr" "$changefeed_id" "$table_id" "$mode")
+		if [ -n "$count" ] && [ "$count" != "null" ]; then
+			case "$comparison_mode" in
+			eq)
+				if [ "$count" -eq "$target_count" ]; then
+					echo "$count"
+					return 0
+				fi
+				;;
+			ge)
+				if [ "$count" -ge "$target_count" ]; then
+					echo "$count"
+					return 0
+				fi
+				;;
+			le)
+				if [ "$count" -le "$target_count" ]; then
+					echo "$count"
+					return 0
+				fi
+				;;
+			*)
+				echo "unknown comparison mode: $comparison_mode" >&2
+				return 1
+				;;
+			esac
+		fi
+		sleep 2
+	done
+	echo "table $table_id replication count did not satisfy $comparison_mode $target_count" >&2
+	return 1
+}
+
+function wait_for_all_table_replications_on_addr() {
+	local api_addr=$1
+	local changefeed_id=$2
+	local table_id=$3
+	local target_addr=$4
+	local mode=$5
+	local retry=${6:-30}
+
+	for ((i = 0; i < retry; i++)); do
+		local target_id
+		target_id=$(get_capture_id_by_addr "$api_addr" "$target_addr")
+		if [ -z "$target_id" ] || [ "$target_id" == "null" ]; then
+			sleep 2
+			continue
+		fi
+
+		local resp
+		resp=$(curl -s "http://${api_addr}/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME&mode=$mode")
+		local total_count
+		total_count=$(echo "$resp" | jq -r --argjson tid "$table_id" '[.items[] | select(.table_ids | index($tid))] | length')
+		local target_count
+		target_count=$(echo "$resp" | jq -r --argjson tid "$table_id" --arg target "$target_id" '[.items[] | select((.table_ids | index($tid)) and .node_id == $target)] | length')
+		if [ "$total_count" != "null" ] && [ "$target_count" != "null" ] &&
+			[ "$total_count" -gt 0 ] && [ "$total_count" -eq "$target_count" ]; then
+			echo "$target_count"
+			return 0
+		fi
+		sleep 2
+	done
+	echo "table $table_id still has replicas outside $target_addr" >&2
+	return 1
 }
 
 function get_maintainer_addr() {
@@ -122,6 +218,20 @@ function wait_for_add_operator_inflight_in_logs() {
 		sleep 2
 	done
 	echo "add operator for table $table_id not observed in logs" >&2
+	return 1
+}
+
+function wait_for_restored_merge_operator_in_logs() {
+	local work_dir=$1
+	local retry=$2
+
+	for ((i = 0; i < retry; i++)); do
+		if grep -qs "restore merge operator" "$work_dir"/cdc*.log 2>/dev/null; then
+			return 0
+		fi
+		sleep 2
+	done
+	echo "restored merge operator not observed in logs" >&2
 	return 1
 }
 
@@ -223,8 +333,13 @@ function create_diff_config() {
 	local work_dir=$1
 	local target_config_path=$2
 
-	# update output-dir to point to current work directory to avoid collision between subcases.
-	sed "s|output-dir = \".*\"|output-dir = \"$work_dir/sync_diff/output\"|" "$CUR/conf/diff_config.toml" >"$target_config_path"
+	# Keep sync-diff aligned with the TiDB endpoints selected for this run, so isolated local reruns do not
+	# accidentally compare against another default-port cluster on the machine.
+	sed \
+		-e "s|output-dir = \".*\"|output-dir = \"$work_dir/sync_diff/output\"|" \
+		-e "/\\[data-sources.mysql1\\]/,/^$/{s/host = \".*\"/host = \"$UP_TIDB_HOST\"/; s/port = [0-9][0-9]*/port = $UP_TIDB_PORT/;}" \
+		-e "/\\[data-sources.tidb0\\]/,/^$/{s/host = \".*\"/host = \"$DOWN_TIDB_HOST\"/; s/port = [0-9][0-9]*/port = $DOWN_TIDB_PORT/;}" \
+		"$CUR/conf/diff_config.toml" >"$target_config_path"
 }
 
 function run_impl() {
@@ -239,9 +354,11 @@ function run_impl() {
 
 	# Disable balance scheduler to avoid unexpected auto split/move interfering with this test.
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
-	run_cdc_server --workdir "$work_dir" --binary $CDC_BINARY --logsuffix 1 --addr "127.0.0.1:8300"
-	run_cdc_server --workdir "$work_dir" --binary $CDC_BINARY --logsuffix 2 --addr "127.0.0.1:8301"
-	run_cdc_server --workdir "$work_dir" --binary $CDC_BINARY --logsuffix 3 --addr "127.0.0.1:8302"
+	# Always pass the freshly started upstream PD explicitly so every capture joins the test cluster
+	# instead of silently falling back to the default 2379 endpoint during isolated local reruns.
+	run_cdc_server --workdir "$work_dir" --binary $CDC_BINARY --logsuffix 1 --addr "${CDC_ADDRS[0]}" --pd "$pd_addr"
+	run_cdc_server --workdir "$work_dir" --binary $CDC_BINARY --logsuffix 2 --addr "${CDC_ADDRS[1]}" --pd "$pd_addr"
+	run_cdc_server --workdir "$work_dir" --binary $CDC_BINARY --logsuffix 3 --addr "${CDC_ADDRS[2]}" --pd "$pd_addr"
 	export GO_FAILPOINTS=''
 
 	TOPIC_NAME="ticdc-move-table-maintainer-failover-$RANDOM"
@@ -252,7 +369,7 @@ function run_impl() {
 		run_pulsar_cluster "$work_dir" normal
 		SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
 		;;
-	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1" ;;
+	*) SINK_URI="mysql://normal:123456@127.0.0.1:${DOWN_TIDB_PORT}/?max-txn-row=1" ;;
 	esac
 	changefeed_config="$work_dir/changefeed.toml"
 	create_changefeed_config "$mode" "$work_dir" "$changefeed_config"
@@ -267,17 +384,22 @@ function run_impl() {
 	run_sql "CREATE TABLE maintainer_failover_when_operator.t1(id INT PRIMARY KEY, val VARCHAR(20));" ${UP_TIDB_HOST} ${UP_TIDB_PORT} # move
 	run_sql "CREATE TABLE maintainer_failover_when_operator.t2(id INT PRIMARY KEY, val VARCHAR(20));" ${UP_TIDB_HOST} ${UP_TIDB_PORT} # split
 	run_sql "CREATE TABLE maintainer_failover_when_operator.t3(id INT PRIMARY KEY, val VARCHAR(20));" ${UP_TIDB_HOST} ${UP_TIDB_PORT} # remove
+	run_sql "CREATE TABLE maintainer_failover_when_operator.t6(id INT PRIMARY KEY, val VARCHAR(20));" ${UP_TIDB_HOST} ${UP_TIDB_PORT} # merge
 	run_sql "split table maintainer_failover_when_operator.t2 between (1) and (100000) regions 20;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "split table maintainer_failover_when_operator.t6 between (1) and (100000) regions 20;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t1 VALUES (1, 'a'), (2, 'b');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t2 VALUES (1, 'a'), (2, 'b');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t3 VALUES (1, 'a'), (2, 'b');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "INSERT INTO maintainer_failover_when_operator.t6 VALUES (1, 'a'), (2, 'b');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	check_table_exists "maintainer_failover_when_operator.t1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists "maintainer_failover_when_operator.t2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists "maintainer_failover_when_operator.t3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+	check_table_exists "maintainer_failover_when_operator.t6" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	table_id_1=$(get_table_id "maintainer_failover_when_operator" "t1")
 	table_id_2=$(get_table_id "maintainer_failover_when_operator" "t2")
 	table_id_3=$(get_table_id "maintainer_failover_when_operator" "t3")
+	table_id_6=$(get_table_id "maintainer_failover_when_operator" "t6")
 
 	api_addr=${CDC_ADDRS[0]}
 	maintainer_addr=$(get_maintainer_addr "$api_addr" "$changefeed_id")
@@ -297,9 +419,28 @@ function run_impl() {
 	ensure_table_single_replication "$api_addr" "$changefeed_id" "$table_id_1" "$mode"
 	ensure_table_single_replication "$api_addr" "$changefeed_id" "$table_id_2" "$mode"
 	ensure_table_single_replication "$api_addr" "$changefeed_id" "$table_id_3" "$mode"
+	ensure_table_single_replication "$api_addr" "$changefeed_id" "$table_id_6" "$mode"
 	ensure_table_on_addr "$api_addr" "$changefeed_id" "$table_id_1" "$origin_addr" "$mode"
 	ensure_table_on_addr "$api_addr" "$changefeed_id" "$table_id_2" "$origin_addr" "$mode"
 	ensure_table_on_addr "$api_addr" "$changefeed_id" "$table_id_3" "$origin_addr" "$mode"
+	ensure_table_on_addr "$api_addr" "$changefeed_id" "$table_id_6" "$origin_addr" "$mode"
+
+	# Prepare a dedicated split table for the merge failover scenario.
+	# Steps:
+	# 1) Split the table into multiple replications.
+	# 2) Move all split dispatchers onto the surviving origin capture, so the merge request is persisted on a
+	#    node that stays alive after the maintainer moves.
+	# 3) Record the replication count before issuing merge; a blocked merge should temporarily add one more
+	#    merged dispatcher, and a successful restored merge should later reduce the count by one.
+	split_table_with_retry "$table_id_6" "$changefeed_id" 10 "$mode"
+	wait_for_table_replication_count "$api_addr" "$changefeed_id" "$table_id_6" 2 ge "$mode" 60
+	move_split_table_with_retry "$origin_addr" "$table_id_6" "$changefeed_id" 10 "$mode"
+	wait_for_all_table_replications_on_addr "$api_addr" "$changefeed_id" "$table_id_6" "$origin_addr" "$mode" 60
+	merge_replication_count_before=$(get_table_replication_count "$api_addr" "$changefeed_id" "$table_id_6" "$mode")
+	if [ -z "$merge_replication_count_before" ] || [ "$merge_replication_count_before" == "null" ] || [ "$merge_replication_count_before" -lt 2 ]; then
+		echo "table $table_id_6 does not have enough replications for merge, count=$merge_replication_count_before" >&2
+		exit 1
+	fi
 
 	enable_failpoint --addr "$origin_addr" --name "$FAILPOINT_NOT_READY_TO_CLOSE_DISPATCHER" --expr "return(true)"
 	enable_failpoint_on_all_addrs "$FAILPOINT_BLOCK_CREATE_DISPATCHER" "pause"
@@ -337,6 +478,15 @@ function run_impl() {
 	# failpoint is enabled on origin, so the table should not move to target
 	wait_for_table_on_addr "$api_addr" "$changefeed_id" "$table_id_1" "$origin_addr" "$mode"
 
+	# Merge operator: issue merge against the dedicated split table while source dispatcher close is blocked.
+	# Once the merged dispatcher appears, the maintainer can be killed safely because the merge request has
+	# already reached dispatcher manager state and must be restored from bootstrap on failover.
+	set +e
+	merge_table_with_retry "$table_id_6" "$changefeed_id" 1 "$mode" &
+	merge_pid=$!
+	set -e
+	wait_for_table_replication_count "$api_addr" "$changefeed_id" "$table_id_6" "$((merge_replication_count_before + 1))" ge "$mode" 60
+
 	# Remove operator: drop one table while dispatcher close is blocked.
 	run_sql "DROP TABLE maintainer_failover_when_operator.t3;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -353,8 +503,12 @@ function run_impl() {
 	disable_failpoint --addr "$origin_addr" --name "$FAILPOINT_NOT_READY_TO_CLOSE_DISPATCHER"
 	disable_failpoint_on_all_addrs_best_effort "$FAILPOINT_BLOCK_CREATE_DISPATCHER"
 
+	wait_for_restored_merge_operator_in_logs "$work_dir" 60
+	wait_for_table_replication_count "$api_addr" "$changefeed_id" "$table_id_6" "$((merge_replication_count_before - 1))" eq "$mode" 60
+
 	set +e
 	wait "$split_pid"
+	wait "$merge_pid"
 	set -e
 
 	# After removing failpoints, the table should be scheduled eventually.
@@ -364,6 +518,7 @@ function run_impl() {
 
 	check_table_exists "maintainer_failover_when_operator.t4" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists "maintainer_failover_when_operator.t5" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+	check_table_exists "maintainer_failover_when_operator.t6" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_not_exists "maintainer_failover_when_operator.t3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 
 	run_sql "ALTER TABLE maintainer_failover_when_operator.t1 ADD COLUMN c2 INT DEFAULT 0;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -372,6 +527,7 @@ function run_impl() {
 	run_sql "INSERT INTO maintainer_failover_when_operator.t2 VALUES (3, 'c');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t4 VALUES (3, 'c');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t5 VALUES (3, 'c');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "INSERT INTO maintainer_failover_when_operator.t6 VALUES (3, 'c');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	diff_config="$work_dir/diff_config.toml"
 	create_diff_config "$work_dir" "$diff_config"
