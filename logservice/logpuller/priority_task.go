@@ -33,9 +33,8 @@ const (
 )
 
 const (
-	highPriorityBase   = 0
-	lowPriorityBase    = 60 * 60 * 24 // 1 day
-	forcedPriorityBase = 60 * 60      // 60 minutes
+	highPriorityBase = 0
+	lowPriorityBase  = 60 * 60 * 24 // 1 day
 )
 
 func (t TaskType) String() string {

@@ -304,10 +304,12 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			pendingRegionReqCount := 0
 			s.stores.Range(func(_, value any) bool {
 				store := value.(*requestedStore)
+				pendingRegionReqCount += store.registerQueue.len()
+				activeScanCount, _ := store.scanLimiter.usage()
+				pendingRegionReqCount += activeScanCount
 				store.requestWorkers.RLock()
 				for _, worker := range store.requestWorkers.s {
-					worker.requestCache.clearStaleRequest()
-					pendingRegionReqCount += worker.requestCache.getPendingCount()
+					pendingRegionReqCount += len(worker.controlQueue)
 				}
 				store.requestWorkers.RUnlock()
 				return true
@@ -484,22 +486,14 @@ func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
 
 // requestedStore represents a store that has been connected.
 type requestedStore struct {
-	storeAddr string
-	// Use to select a worker to send request.
-	nextWorker atomic.Uint32
+	storeAddr     string
+	registerQueue *regionRegisterQueue
+	scanLimiter   *regionScanLimiter
 
 	requestWorkers struct {
 		sync.RWMutex
 		s []*regionRequestWorker
 	}
-}
-
-func (rs *requestedStore) getRequestWorker() *regionRequestWorker {
-	rs.requestWorkers.RLock()
-	defer rs.requestWorkers.RUnlock()
-
-	index := rs.nextWorker.Add(1) % uint32(len(rs.requestWorkers.s))
-	return rs.requestWorkers.s[index]
 }
 
 // handleRegions receives regionInfo from regionTaskQueue and attach rpcCtx to them,
@@ -514,7 +508,11 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			return rs
 		}
 
-		rs = &requestedStore{storeAddr: storeAddr}
+		rs = &requestedStore{
+			storeAddr:     storeAddr,
+			registerQueue: newRegionRegisterQueue(pendingRegionRequestQueueSize),
+			scanLimiter:   newRegionScanLimiter(pendingRegionRequestQueueSize),
+		}
 		rs.requestWorkers.s = make([]*regionRequestWorker, 0, s.config.RegionRequestWorkerPerStore)
 		s.stores.Store(storeAddr, rs)
 
@@ -538,10 +536,19 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 	defer func() {
 		s.stores.Range(func(_, value any) bool {
 			rs := value.(*requestedStore)
+			rs.registerQueue.clear()
 
 			rs.requestWorkers.RLock()
 			for _, w := range rs.requestWorkers.s {
-				w.requestCache.clear()
+			DRAIN_CONTROL:
+				for {
+					select {
+					case <-w.controlQueue:
+					default:
+						break DRAIN_CONTROL
+					}
+				}
+				w.requestTracker.clear()
 			}
 			rs.requestWorkers.RUnlock()
 
@@ -582,10 +589,8 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		}
 
 		store := getStore(region.rpcCtx.Addr)
-		worker := store.getRequestWorker()
-		force := regionTask.Priority() <= forcedPriorityBase
 
-		ok, err = worker.add(ctx, region, force)
+		ok, err = store.registerQueue.add(ctx, region, regionTask.Priority())
 		if err != nil {
 			log.Warn("subscription client add region request failed",
 				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
@@ -600,7 +605,6 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		}
 
 		log.Debug("subscription client will request a region",
-			zap.Uint64("workID", worker.workerID),
 			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 			zap.Uint64("regionID", region.verID.GetID()),
 			zap.String("addr", store.storeAddr))
@@ -616,7 +620,7 @@ func (s *subscriptionClient) enqueueRegionToAllStores(ctx context.Context, regio
 		workers := rs.requestWorkers.s
 		rs.requestWorkers.RUnlock()
 		for _, worker := range workers {
-			ok, err := worker.add(ctx, region, true)
+			ok, err := worker.addControl(ctx, region)
 			if err != nil {
 				firstErr = err
 				enqueued = false

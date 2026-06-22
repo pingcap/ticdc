@@ -28,9 +28,8 @@ const (
 	regionScanResumeRatio = 0.4
 )
 
-// pullerMemoryQuota is the admission controller for events entering the puller
-// dynamic stream. It is intentionally independent from dynamic stream memory
-// control because it also controls region scan admission.
+// pullerMemoryQuota bounds memory held by admitted events and controls region
+// scan admission based on current usage.
 type pullerMemoryQuota struct {
 	mu sync.Mutex
 

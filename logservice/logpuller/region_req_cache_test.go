@@ -15,8 +15,8 @@ package logpuller
 
 import (
 	"context"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/stretchr/testify/require"
@@ -25,312 +25,187 @@ import (
 
 func createTestRegionInfo(subID SubscriptionID, regionID uint64) regionInfo {
 	verID := tikv.NewRegionVerID(regionID, 1, 1)
-
 	span := heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte("start"),
 		EndKey:   []byte("end"),
 	}
-
-	subscribedSpan := &subscribedSpan{
+	return newRegionInfo(verID, span, nil, &subscribedSpan{
 		subID:   subID,
 		startTs: 100,
 		span:    span,
+	}, false)
+}
+
+func TestRegionRegisterQueuePriorityAndCapacity(t *testing.T) {
+	queue := newRegionRegisterQueue(2)
+	ctx := context.Background()
+
+	ok, err := queue.add(ctx, createTestRegionInfo(1, 1), 10)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = queue.add(ctx, createTestRegionInfo(1, 2), 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = queue.add(ctx, createTestRegionInfo(1, 3), 0)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	req, ok, _ := queue.tryPopOrNotify()
+	require.True(t, ok)
+	require.Equal(t, uint64(2), req.regionInfo.verID.GetID())
+
+	ok, err = queue.add(ctx, createTestRegionInfo(1, 3), 0)
+	require.NoError(t, err)
+	require.True(t, ok)
+	req, ok, _ = queue.tryPopOrNotify()
+	require.True(t, ok)
+	require.Equal(t, uint64(3), req.regionInfo.verID.GetID())
+	require.Equal(t, 1, queue.len())
+}
+
+func TestRegionRegisterQueueContextCancellation(t *testing.T) {
+	queue := newRegionRegisterQueue(1)
+	ok, err := queue.add(context.Background(), createTestRegionInfo(1, 1), 0)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ok, err = queue.add(ctx, createTestRegionInfo(1, 2), 0)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, ok)
+}
+
+func TestRegionScanLimiterExactLimitAndIdempotentRelease(t *testing.T) {
+	limiter := newRegionScanLimiter(2)
+	slot1, _ := limiter.tryAcquireOrNotify()
+	slot2, _ := limiter.tryAcquireOrNotify()
+	slot3, notify := limiter.tryAcquireOrNotify()
+	require.NotNil(t, slot1)
+	require.NotNil(t, slot2)
+	require.Nil(t, slot3)
+	require.NotNil(t, notify)
+	require.Equal(t, 2, activeScanCount(limiter))
+
+	slot1.release()
+	slot1.release()
+	require.Equal(t, 1, activeScanCount(limiter))
+	select {
+	case <-notify:
+	default:
+		t.Fatal("slot release must notify waiters")
 	}
 
-	return newRegionInfo(verID, span, nil, subscribedSpan, false)
+	slot3, _ = limiter.tryAcquireOrNotify()
+	require.NotNil(t, slot3)
+	require.Equal(t, 2, activeScanCount(limiter))
+	slot2.release()
+	slot3.release()
+	require.Equal(t, 0, activeScanCount(limiter))
 }
 
-func TestRequestCacheAdd_NormalCase(t *testing.T) {
-	cache := newRequestCache(10)
-	ctx := context.Background()
+func TestRegionScanLimiterNeverExceedsLimit(t *testing.T) {
+	const (
+		limit      = 4
+		goroutines = 32
+	)
+	limiter := newRegionScanLimiter(limit)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	maxActive := 0
+	var maxMu sync.Mutex
 
-	region := createTestRegionInfo(1, 1)
-
-	ok, err := cache.add(ctx, region, false)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, 1, cache.getPendingCount())
-
-	// Verify the request was added to the queue
-	req, err := cache.pop(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, req)
-	require.Equal(t, region.verID.GetID(), req.regionInfo.verID.GetID())
-	require.Equal(t, region.subscribedSpan.subID, req.regionInfo.subscribedSpan.subID)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for {
+				slot, notify := limiter.tryAcquireOrNotify()
+				if slot == nil {
+					<-notify
+					continue
+				}
+				active := activeScanCount(limiter)
+				maxMu.Lock()
+				if active > maxActive {
+					maxActive = active
+				}
+				maxMu.Unlock()
+				slot.release()
+				return
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	require.LessOrEqual(t, maxActive, limit)
+	require.Equal(t, 0, activeScanCount(limiter))
 }
 
-func TestRequestCacheAdd_ForceFlag(t *testing.T) {
-	cache := newRequestCache(1)
-	ctx := context.Background()
-
-	// Fill up the cache
-	region1 := createTestRegionInfo(1, 1)
-	ok, err := cache.add(ctx, region1, false)
-	require.True(t, ok)
-	require.NoError(t, err)
-	require.Equal(t, 1, cache.getPendingCount())
-
-	// Try to add another request without force - should fail due to retry limit
-	region2 := createTestRegionInfo(1, 2)
-	ok, err = cache.add(ctx, region2, false)
-	require.False(t, ok)
-	require.NoError(t, err)
-
-	// With force=true, it should still fail because the channel is full
-	// The force flag only bypasses the pendingCount check, not the channel capacity
-	region3 := createTestRegionInfo(1, 3)
-	ok, err = cache.add(ctx, region3, true)
-	require.False(t, ok)
-	require.NoError(t, err)
-
-	// consume the pending queue ann add with force
-	req, err := cache.pop(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, req)
-	require.Equal(t, region1.verID.GetID(), req.regionInfo.verID.GetID())
-	require.Equal(t, region1.subscribedSpan.subID, req.regionInfo.subscribedSpan.subID)
-	cache.markSent(req)
-	require.Equal(t, 1, cache.getPendingCount())
-
-	ok, err = cache.add(ctx, region3, true)
-	require.True(t, ok)
-	require.NoError(t, err)
-	// It is 2 since region1 is unresolved
-	require.Equal(t, 2, cache.getPendingCount())
-
-	// resolve region1
-	cache.resolve(region1.subscribedSpan.subID, region1.verID.GetID())
-	require.Equal(t, 1, cache.getPendingCount())
-}
-
-func TestRequestCacheAdd_ContextCancellation(t *testing.T) {
-	cache := newRequestCache(1)
-
-	// Fill up the cache
-	region1 := createTestRegionInfo(1, 1)
-	ctx1 := context.Background()
-	ok, err := cache.add(ctx1, region1, false)
-	require.True(t, ok)
-	require.NoError(t, err)
-
-	// Try to add another request with a cancelled context
-	ctx2, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
-	region2 := createTestRegionInfo(1, 2)
-	ok, err = cache.add(ctx2, region2, false)
-	require.False(t, ok)
-	require.Error(t, err)
-	require.Equal(t, context.Canceled, err)
-}
-
-func TestRequestCacheAdd_RetryLimitExceeded(t *testing.T) {
-	cache := newRequestCache(1)
-	ctx := context.Background()
-
-	// Fill up the cache
-	region1 := createTestRegionInfo(1, 1)
-	ok, err := cache.add(ctx, region1, false)
-	require.True(t, ok)
-	require.NoError(t, err)
-
-	// Try to add another request - should eventually hit retry limit
-	region2 := createTestRegionInfo(1, 2)
-	ok, err = cache.add(ctx, region2, false)
-	require.False(t, ok)
-	require.NoError(t, err)
-}
-
-func TestRequestCacheAdd_SpaceAvailableNotification(t *testing.T) {
-	cache := newRequestCache(2)
-	ctx := context.Background()
-
-	// Fill up the cache
-	region1 := createTestRegionInfo(1, 1)
-	ok, err := cache.add(ctx, region1, false)
-	require.True(t, ok)
-	require.NoError(t, err)
-	require.Equal(t, 1, cache.getPendingCount())
-
-	region2 := createTestRegionInfo(1, 2)
-	ok, err = cache.add(ctx, region2, false)
-	require.True(t, ok)
-	require.NoError(t, err)
-	require.Equal(t, 2, cache.getPendingCount())
-
-	// Pop a request and mark it as sent, then resolve it to free up space
-	req, err := cache.pop(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, req)
-	require.Equal(t, 2, cache.getPendingCount()) // pop doesn't change pendingCount
-	// Mark as sent
-	cache.markSent(req)
-	require.Equal(t, 2, cache.getPendingCount())
-
-	// Resolve the request to free up space
-	success := cache.resolve(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
-	require.True(t, success)
-	require.Equal(t, 1, cache.getPendingCount())
-
-	// Now we should be able to add another request
-	region3 := createTestRegionInfo(1, 3)
-	ok, err = cache.add(ctx, region3, false)
-	require.True(t, ok)
-	require.NoError(t, err)
-	require.Equal(t, 2, cache.getPendingCount())
-}
-
-func TestRequestCacheAdd_ConcurrentAdds(t *testing.T) {
-	cache := newRequestCache(10)
-	ctx := context.Background()
-
-	const numGoroutines = 5
-	done := make(chan error, numGoroutines)
-
-	// Start multiple goroutines adding requests concurrently
-	for i := 0; i < numGoroutines; i++ {
-		go func(id int) {
-			region := createTestRegionInfo(SubscriptionID(id%3), uint64(id))
-			ok, err := cache.add(ctx, region, false)
-			require.True(t, ok)
-			require.NoError(t, err)
-			done <- err
-		}(i)
+func TestRegionRequestTrackerTerminalReleasePaths(t *testing.T) {
+	testCases := []struct {
+		name    string
+		release func(*testing.T, *regionRequestTracker, SubscriptionID, uint64)
+	}{
+		{
+			name: "initialized",
+			release: func(t *testing.T, tracker *regionRequestTracker, subID SubscriptionID, regionID uint64) {
+				require.True(t, tracker.resolve(subID, regionID))
+			},
+		},
+		{
+			name: "region error or send failure",
+			release: func(t *testing.T, tracker *regionRequestTracker, subID SubscriptionID, regionID uint64) {
+				require.True(t, tracker.stop(subID, regionID))
+			},
+		},
+		{
+			name: "deregister",
+			release: func(_ *testing.T, tracker *regionRequestTracker, subID SubscriptionID, _ uint64) {
+				tracker.removeSubscription(subID)
+			},
+		},
+		{
+			name: "reconnect or shutdown",
+			release: func(t *testing.T, tracker *regionRequestTracker, _ SubscriptionID, _ uint64) {
+				require.Len(t, tracker.clear(), 1)
+			},
+		},
 	}
 
-	// Wait for all goroutines to complete
-	for i := 0; i < numGoroutines; i++ {
-		select {
-		case err := <-done:
-			require.NoError(t, err)
-		case <-time.After(1 * time.Second):
-			t.Fatal("Timeout waiting for concurrent adds to complete")
-		}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			limiter := newRegionScanLimiter(1)
+			slot, _ := limiter.tryAcquireOrNotify()
+			tracker := newRegionRequestTracker()
+			req := newRegionReq(createTestRegionInfo(1, 1), 0)
+			require.True(t, tracker.track(req, slot))
+			require.Equal(t, 1, activeScanCount(limiter))
+
+			tc.release(t, tracker, 1, 1)
+			require.Equal(t, 0, activeScanCount(limiter))
+			require.Equal(t, 0, tracker.len())
+			require.False(t, tracker.stop(1, 1))
+		})
 	}
-
-	require.Equal(t, numGoroutines, cache.getPendingCount())
 }
 
-func TestRequestCacheAdd_StaleRequestCleanup(t *testing.T) {
-	cache := newRequestCache(10)
-	ctx := context.Background()
-
-	// Add a request and mark it as sent
-	region := createTestRegionInfo(1, 1)
-	ok, err := cache.add(ctx, region, false)
-	require.True(t, ok)
-	require.NoError(t, err)
-
-	req, err := cache.pop(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, req)
-
-	// Mark as sent
-	cache.markSent(req)
-	require.Equal(t, 1, cache.getPendingCount())
-
-	// Manually set the request as stale by modifying createTime
-	cache.sentRequests.Lock()
-	regionReqs := cache.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID]
-	regionReqs[req.regionInfo.verID.GetID()] = regionReq{
-		regionInfo: req.regionInfo,
-		createTime: time.Now().Add(-requestGCLifeTime - time.Second), // Make it stale
-	}
-	cache.sentRequests.Unlock()
-
-	// Manually set lastCheckStaleRequestTime to bypass the time interval check
-	cache.lastCheckStaleRequestTime.Store(time.Now().Add(-checkStaleRequestInterval - time.Second))
-
-	// Manually trigger stale cleanup by calling clearStaleRequest
-	cache.clearStaleRequest()
-
-	// The stale request should be cleaned up
-	require.Equal(t, 0, cache.getPendingCount())
+func TestRegionRequestTrackerRejectsDuplicate(t *testing.T) {
+	limiter := newRegionScanLimiter(2)
+	tracker := newRegionRequestTracker()
+	req := newRegionReq(createTestRegionInfo(1, 1), 0)
+	slot1, _ := limiter.tryAcquireOrNotify()
+	slot2, _ := limiter.tryAcquireOrNotify()
+	require.True(t, tracker.track(req, slot1))
+	require.False(t, tracker.track(newRegionReq(req.regionInfo, 0), slot2))
+	slot2.release()
+	tracker.clear()
+	require.Equal(t, 0, activeScanCount(limiter))
 }
 
-func TestRequestCacheAdd_WithStoppedRegion(t *testing.T) {
-	cache := newRequestCache(10)
-	ctx := context.Background()
-
-	// Create a region info with stopped state (lockedRangeState = nil)
-	region := createTestRegionInfo(1, 1)
-	region.lockedRangeState = nil // This makes it stopped
-
-	ok, err := cache.add(ctx, region, false)
-	require.True(t, ok)
-	require.NoError(t, err)
-	require.Equal(t, 1, cache.getPendingCount())
-
-	req, err := cache.pop(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, req)
-
-	// Mark as sent
-	cache.markSent(req)
-	require.Equal(t, 1, cache.getPendingCount())
-
-	// Manually set lastCheckStaleRequestTime to bypass the time interval check
-	cache.lastCheckStaleRequestTime.Store(time.Now().Add(-checkStaleRequestInterval - time.Second))
-
-	// Manually trigger cleanup of stopped region
-	cache.clearStaleRequest()
-
-	// The stopped region should be cleaned up
-	require.Equal(t, 0, cache.getPendingCount())
-}
-
-func TestRequestCacheMarkSent_DuplicateReleaseSlot(t *testing.T) {
-	cache := newRequestCache(10)
-	ctx := context.Background()
-
-	region := createTestRegionInfo(1, 1)
-
-	ok, err := cache.add(ctx, region, false)
-	require.True(t, ok)
-	require.NoError(t, err)
-
-	// Add a duplicate request for the same region. It should not leak pendingCount even if
-	// markSent overwrites the existing entry.
-	ok, err = cache.add(ctx, region, false)
-	require.True(t, ok)
-	require.NoError(t, err)
-	require.Equal(t, 2, cache.getPendingCount())
-
-	req1, err := cache.pop(ctx)
-	require.NoError(t, err)
-	cache.markSent(req1)
-	require.Equal(t, 2, cache.getPendingCount())
-
-	req2, err := cache.pop(ctx)
-	require.NoError(t, err)
-	cache.markSent(req2)
-	require.Equal(t, 1, cache.getPendingCount())
-
-	// Finish the remaining tracked request.
-	require.True(t, cache.resolve(region.subscribedSpan.subID, region.verID.GetID()))
-	require.Equal(t, 0, cache.getPendingCount())
-}
-
-func TestRequestCacheMarkStopped_ReleasesSlot(t *testing.T) {
-	cache := newRequestCache(10)
-	ctx := context.Background()
-
-	region := createTestRegionInfo(1, 1)
-
-	ok, err := cache.add(ctx, region, false)
-	require.True(t, ok)
-	require.NoError(t, err)
-	require.Equal(t, 1, cache.getPendingCount())
-
-	req, err := cache.pop(ctx)
-	require.NoError(t, err)
-
-	cache.markSent(req)
-	require.Equal(t, 1, cache.getPendingCount())
-	require.Contains(t, cache.sentRequests.regionReqs, req.regionInfo.subscribedSpan.subID)
-
-	cache.markStopped(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
-	require.Equal(t, 0, cache.getPendingCount())
-	require.NotContains(t, cache.sentRequests.regionReqs, req.regionInfo.subscribedSpan.subID)
+func activeScanCount(limiter *regionScanLimiter) int {
+	active, _ := limiter.usage()
+	return active
 }
