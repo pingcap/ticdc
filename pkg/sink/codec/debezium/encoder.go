@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/avro"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
@@ -31,6 +32,8 @@ type BatchEncoder struct {
 
 	config *common.Config
 	codec  *dbzCodec
+
+	schemaM avro.SchemaManager
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
@@ -43,6 +46,15 @@ func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error)
 	err := d.codec.EncodeCheckpointEvent(ts, &keyMap, &valueBuf)
 	if err != nil {
 		return nil, errors.Trace(err)
+	}
+	if d.schemaM != nil {
+		return d.encodeAvroMessage(
+			context.Background(),
+			"",
+			keyMap.Bytes(),
+			valueBuf.Bytes(),
+			0,
+		)
 	}
 	key, err := common.Compress(
 		d.config.ChangefeedID,
@@ -66,10 +78,14 @@ func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error)
 
 // AppendRowChangedEvent implements the RowEventEncoder interface
 func (d *BatchEncoder) AppendRowChangedEvent(
-	_ context.Context,
-	_ string,
+	ctx context.Context,
+	topic string,
 	e *commonEvent.RowEvent,
 ) error {
+	if d.schemaM != nil {
+		return d.appendAvroRowChangedEvent(ctx, topic, e)
+	}
+
 	var key []byte
 	var value []byte
 	var err error
@@ -102,6 +118,15 @@ func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 			return nil, nil
 		}
 		return nil, errors.Trace(err)
+	}
+	if d.schemaM != nil {
+		return d.encodeAvroMessage(
+			context.Background(),
+			"",
+			keyMap.Bytes(),
+			valueBuf.Bytes(),
+			0,
+		)
 	}
 	key, err := common.Compress(
 		d.config.ChangefeedID,
@@ -179,4 +204,29 @@ func NewBatchEncoder(c *common.Config, clusterID string) common.EventEncoder {
 		},
 	}
 	return batch
+}
+
+func NewAvroBatchEncoder(
+	ctx context.Context,
+	c *common.Config,
+	clusterID string,
+) (common.EventEncoder, error) {
+	schemaM, err := avro.NewConfluentSchemaManager(ctx, c.AvroConfluentSchemaRegistry, nil)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	codecConfig := *c
+	codecConfig.DebeziumDisableSchema = false
+	batch := &BatchEncoder{
+		messages: nil,
+		config:   c,
+		codec: &dbzCodec{
+			config:    &codecConfig,
+			clusterID: clusterID,
+			nowFunc:   time.Now,
+		},
+		schemaM: schemaM,
+	}
+	return batch, nil
 }

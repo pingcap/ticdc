@@ -55,7 +55,8 @@ type Config struct {
 
 	OutputRowKey bool
 
-	// avro only
+	// avro only, except AvroConfluentSchemaRegistry is also used by debezium
+	// protocol when Confluent Avro encoding is enabled.
 	AvroConfluentSchemaRegistry    string
 	AvroDecimalHandlingMode        string
 	AvroBigintUnsignedHandlingMode string
@@ -408,6 +409,13 @@ func (c *Config) Validate() error {
 					codecOPTAvroBigintUnsignedHandlingMode, BigintUnsignedHandlingModeString)
 			}
 		}
+	}
+
+	if c.Protocol == config.ProtocolDebezium && c.AvroGlueSchemaRegistry != nil {
+		return errors.ErrCodecInvalidConfig.GenWithStack(
+			`Debezium protocol only supports "%s" for Confluent Avro Schema Registry`,
+			codecOPTAvroSchemaRegistry,
+		)
 	}
 
 	if c.MaxMessageBytes <= 0 {

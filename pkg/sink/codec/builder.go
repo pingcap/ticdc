@@ -40,6 +40,9 @@ func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncod
 	case config.ProtocolCanalJSON:
 		return canal.NewJSONRowEventEncoder(ctx, cfg)
 	case config.ProtocolDebezium:
+		if cfg.AvroConfluentSchemaRegistry != "" {
+			return debezium.NewAvroBatchEncoder(ctx, cfg, config.GetGlobalServerConfig().ClusterID)
+		}
 		return debezium.NewBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID), nil
 	case config.ProtocolSimple:
 		return simple.NewEncoder(ctx, cfg)
