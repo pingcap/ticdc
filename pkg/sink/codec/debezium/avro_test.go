@@ -98,6 +98,98 @@ func TestDebeziumConfluentAvroEncodeRowEvent(t *testing.T) {
 	require.Equal(t, "dbserver1", source["name"])
 }
 
+func TestDebeziumConfluentAvroDecodeRowEvent(t *testing.T) {
+	ctx := context.Background()
+	_, err := avro.SetupEncoderAndSchemaRegistry4Testing(
+		ctx,
+		common.NewConfig(config.ProtocolAvro),
+	)
+	require.NoError(t, err)
+	defer avro.TeardownEncoderAndSchemaRegistry4Testing()
+
+	helper := NewSQLTestHelper(t, "foo", `
+		create table foo(
+			id int primary key,
+			name varchar(16),
+			v bigint null
+		)`)
+	defer helper.Close()
+
+	dmls := helper.helper.DML2Event("test", "foo", "insert into foo values (1, 'alice', null)")
+	row, ok := dmls.GetNextRow()
+	require.True(t, ok)
+
+	cfg := common.NewConfig(config.ProtocolDebezium)
+	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
+	cfg.EnableTiDBExtension = true
+	cfg.TimeZone = time.UTC
+
+	encoder, err := NewAvroBatchEncoder(ctx, cfg, "dbserver1")
+	require.NoError(t, err)
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, "dbserver1.test.foo", &commonEvent.RowEvent{
+		TableInfo:      helper.tableInfo,
+		CommitTs:       1,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	decoder, err := NewAvroDecoder(ctx, cfg, 0, nil)
+	require.NoError(t, err)
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decoded := decoder.NextDMLEvent()
+	require.Equal(t, "test", decoded.TableInfo.GetSchemaName())
+	require.Equal(t, "foo", decoded.TableInfo.GetTableName())
+
+	change, ok := decoded.GetNextRow()
+	require.True(t, ok)
+	common.CompareRow(t, row, helper.tableInfo, change, decoded.TableInfo)
+}
+
+func TestDebeziumConfluentAvroDecodeDDLEvent(t *testing.T) {
+	ctx := context.Background()
+	_, err := avro.SetupEncoderAndSchemaRegistry4Testing(
+		ctx,
+		common.NewConfig(config.ProtocolAvro),
+	)
+	require.NoError(t, err)
+	defer avro.TeardownEncoderAndSchemaRegistry4Testing()
+
+	cfg := common.NewConfig(config.ProtocolDebezium)
+	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
+	cfg.EnableTiDBExtension = true
+	cfg.TimeZone = time.UTC
+
+	encoder, err := NewAvroBatchEncoder(ctx, cfg, "dbserver1")
+	require.NoError(t, err)
+
+	routedDDL := common.NewRoutedDDLEvent4Test()
+	message, err := encoder.EncodeDDLEvent(routedDDL)
+	require.NoError(t, err)
+	require.NotNil(t, message)
+
+	decoder, err := NewAvroDecoder(ctx, cfg, 0, nil)
+	require.NoError(t, err)
+	decoder.AddKeyValue(message.Key, message.Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	decoded := decoder.NextDDLEvent()
+	require.Equal(t, "target_db", decoded.SchemaName)
+	require.Equal(t, "target_table", decoded.TableName)
+	require.Equal(t, routedDDL.Query, decoded.Query)
+}
+
 func decodeConfluentAvroForTest(t *testing.T, data []byte) map[string]any {
 	t.Helper()
 

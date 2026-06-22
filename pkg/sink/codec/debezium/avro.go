@@ -29,6 +29,9 @@ import (
 const (
 	debeziumAvroKeySchemaSuffix   = "-key"
 	debeziumAvroValueSchemaSuffix = "-value"
+
+	debeziumAvroConnectFieldKey = "connect.field"
+	debeziumAvroTiDBTypeKey     = "tidb_type"
 )
 
 type debeziumAvroMessage struct {
@@ -45,6 +48,7 @@ type debeziumConnectSchema struct {
 	Fields     []*debeziumConnectSchema `json:"fields"`
 	Items      *debeziumConnectSchema   `json:"items"`
 	Parameters map[string]string        `json:"parameters"`
+	TiDBType   string                   `json:"tidb_type"`
 }
 
 type debeziumAvroSchemaConverter struct {
@@ -233,6 +237,12 @@ func (c *debeziumAvroSchemaConverter) toAvroSchema(
 			field := map[string]any{
 				"name": fieldName,
 				"type": fieldType,
+			}
+			if fieldSchema.Field != "" {
+				field[debeziumAvroConnectFieldKey] = fieldSchema.Field
+			}
+			if fieldSchema.TiDBType != "" {
+				field[debeziumAvroTiDBTypeKey] = fieldSchema.TiDBType
 			}
 			if fieldSchema.Optional {
 				field["type"] = []any{"null", fieldType}

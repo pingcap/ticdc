@@ -35,7 +35,6 @@ function run() {
 
 	start_schema_registry
 	start_tidb_cluster --workdir "$WORK_DIR"
-	run_sql_file "$CUR/data/prepare.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 
 	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
 
@@ -47,14 +46,14 @@ function run() {
 	changefeed_id="debezium-avro-$RANDOM"
 
 	cdc_cli_changefeed create --start-ts="$start_ts" --sink-uri="$SINK_URI" -c "$changefeed_id" --schema-registry="$schema_registry_uri"
-	run_sql_file "$CUR/data/workload.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	sleep 5 # wait for changefeed to start
+	run_kafka_consumer "$WORK_DIR" "$SINK_URI" "" "$schema_registry_uri"
 
-	GO111MODULE=on go run ./tests/integration_tests/debezium_avro/verify \
-		--topic "$TOPIC_NAME" \
-		--kafka-addr "127.0.0.1:9092" \
-		--schema-registry "$schema_registry_uri" \
-		--timeout "120s" \
-		2>&1 | tee "$WORK_DIR/debezium_avro_verify.log"
+	run_sql_file "$CUR/data/prepare.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql_file "$CUR/data/workload.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "CREATE TABLE test.finish_mark (id int primary key);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_table_exists test.finish_mark "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 200
+	check_sync_diff "$WORK_DIR" "$CUR/conf/diff_config.toml"
 
 	cleanup_process "$CDC_BINARY"
 }

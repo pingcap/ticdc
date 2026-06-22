@@ -843,6 +843,18 @@ func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter) {
 				writer.WriteBoolField("optional", true)
 				writer.WriteStringField("field", "query")
 			})
+			if c.config.EnableTiDBExtension {
+				writer.WriteObjectElement(func() {
+					writer.WriteStringField("type", "int64")
+					writer.WriteBoolField("optional", false)
+					writer.WriteStringField("field", "commit_ts")
+				})
+				writer.WriteObjectElement(func() {
+					writer.WriteStringField("type", "string")
+					writer.WriteBoolField("optional", false)
+					writer.WriteStringField("field", "cluster_id")
+				})
+			}
 		})
 		writer.WriteBoolField("optional", false)
 		writer.WriteStringField("name", "io.debezium.connector.mysql.Source")

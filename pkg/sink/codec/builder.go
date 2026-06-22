@@ -69,6 +69,9 @@ func NewEventDecoder(
 	case config.ProtocolSimple:
 		return simple.NewDecoder(ctx, codecConfig, upstreamTiDB)
 	case config.ProtocolDebezium:
+		if codecConfig.AvroConfluentSchemaRegistry != "" {
+			return debezium.NewAvroDecoder(ctx, codecConfig, idx, upstreamTiDB)
+		}
 		return debezium.NewDecoder(codecConfig, idx, upstreamTiDB), nil
 	default:
 	}
