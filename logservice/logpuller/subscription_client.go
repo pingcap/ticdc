@@ -197,10 +197,6 @@ type subscriptionClient struct {
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
 	// memoryQuota controls puller backpressure and new region scan admission.
 	memoryQuota *pullerMemoryQuota
-	// the following three fields are used to manage feedback from ds and notify other goroutines
-	mu     sync.Mutex
-	cond   *sync.Cond
-	paused atomic.Bool
 
 	// the credential to connect tikv
 	credential *security.Credential
@@ -227,13 +223,13 @@ type subscriptionClient struct {
 
 // NewSubscriptionClient creates a client.
 func NewSubscriptionClient(
-	config *SubscriptionClientConfig,
+	clientConfig *SubscriptionClientConfig,
 	pd pd.Client,
 	lockResolver txnutil.LockResolver,
 	credential *security.Credential,
 ) SubscriptionClient {
 	subClient := &subscriptionClient{
-		config: config,
+		config: clientConfig,
 
 		stores:       sync.Map{},
 		pd:           pd,
@@ -251,7 +247,8 @@ func NewSubscriptionClient(
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
-	subClient.memoryQuota = newPullerMemoryQuota()
+	pullerConfig := config.GetGlobalServerConfig().Debug.Puller
+	subClient.memoryQuota = newPullerMemoryQuota(pullerConfig.MemoryQuota)
 
 	option := dynstream.NewOption()
 	// Note: it is max batch size of the kv sent from tikv(not committed rows)
@@ -259,7 +256,6 @@ func NewSubscriptionClient(
 	// TODO: Set `UseBuffer` to true until we refactor the `regionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
 	// 	ds.handleLoop fetch events from `ch` -> regionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
 	option.UseBuffer = true
-	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
 		"log-puller",
 		&regionEventHandler{subClient: subClient},
@@ -267,7 +263,6 @@ func NewSubscriptionClient(
 	)
 	ds.Start()
 	subClient.ds = ds
-	subClient.cond = sync.NewCond(&subClient.mu)
 
 	subClient.initMetrics()
 	return subClient
@@ -302,24 +297,9 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			dsMetrics := s.ds.GetMetrics()
 			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
-			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 1 {
-				log.Panic("subscription client should have only one area")
-			}
-			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 0 {
-				areaMetric := dsMetrics.MemoryControl.AreaMemoryMetrics[0]
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"log-puller",
-					"max",
-					"default",
-					"default",
-				).Set(float64(areaMetric.MaxMemory()))
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"log-puller",
-					"used",
-					"default",
-					"default",
-				).Set(float64(areaMetric.MemoryUsage()))
-			}
+			usedMemory, memoryQuota := s.memoryQuota.usage()
+			metrics.PullerMemoryQuota.WithLabelValues("quota").Set(float64(memoryQuota))
+			metrics.PullerMemoryQuota.WithLabelValues("used").Set(float64(usedMemory))
 
 			pendingRegionReqCount := 0
 			s.stores.Range(func(_, value any) bool {
@@ -370,10 +350,7 @@ func (s *subscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	pullerConfig := config.GetGlobalServerConfig().Debug.Puller
-	areaSetting := dynstream.NewAreaSettingsWithMemoryControlAlgorithm(
-		pullerConfig.MemoryQuota, s.memoryQuota, "logPuller")
-	s.ds.AddPath(rt.subID, rt, areaSetting)
+	s.ds.AddPath(rt.subID, rt)
 
 	select {
 	case <-s.ctx.Done():
@@ -408,49 +385,18 @@ func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
 }
 
 func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
-	// fast path
-	if !s.paused.Load() {
+	if s.memoryQuota == nil {
 		s.ds.Push(subID, event)
 		return
 	}
-	// slow path: wait until paused is false
-	s.mu.Lock()
-	for s.paused.Load() {
-		select {
-		case <-s.ctx.Done():
-			s.mu.Unlock()
-			return
-		default:
-			s.cond.Wait()
-		}
+	span := event.mustFirstState().region.subscribedSpan
+	reservation, err := s.memoryQuota.acquire(
+		s.ctx, subID, uint64(event.getSize()), span.stoppedCh)
+	if err != nil {
+		return
 	}
-	s.mu.Unlock()
+	event.memoryReservation = reservation
 	s.ds.Push(subID, event)
-}
-
-func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case feedback := <-s.ds.Feedback():
-			switch feedback.FeedbackType {
-			case dynstream.PauseArea:
-				s.mu.Lock()
-				s.paused.Store(true)
-				s.mu.Unlock()
-				log.Info("subscription client pause push region event")
-			case dynstream.ResumeArea:
-				s.mu.Lock()
-				s.paused.Store(false)
-				s.cond.Broadcast()
-				s.mu.Unlock()
-				log.Info("subscription client resume push region event")
-			case dynstream.ReleasePath, dynstream.ResumePath:
-				// Ignore it, because it is no need to pause and resume a path in puller.
-			}
-		}
-	}
 }
 
 func (s *subscriptionClient) Run(ctx context.Context) error {
@@ -464,7 +410,6 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error { return s.updateMetrics(ctx) })
-	g.Go(func() error { return s.handleDSFeedBack(ctx) })
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.handleRegions(ctx, g) })
 	g.Go(func() error { return s.handleErrors(ctx) })
@@ -481,10 +426,9 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 // Close closes the client. Must be called after `Run` returns.
 func (s *subscriptionClient) Close(ctx context.Context) error {
 	s.cancel()
-	s.mu.Lock()
-	s.paused.Store(false)
-	s.cond.Broadcast()
-	s.mu.Unlock()
+	if s.memoryQuota != nil {
+		s.memoryQuota.close()
+	}
 	s.ds.Close()
 	s.regionTaskQueue.Close()
 	return nil
@@ -512,6 +456,9 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 	log.Info("subscription client stop span is finished",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
+	if s.memoryQuota != nil {
+		s.memoryQuota.releaseSubscription(rt.subID)
+	}
 	err := s.ds.RemovePath(rt.subID)
 	if err != nil {
 		log.Warn("subscription client remove path failed",

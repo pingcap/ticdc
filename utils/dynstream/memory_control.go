@@ -70,17 +70,13 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	feedbackChan chan<- Feedback[A, P, D],
 ) *areaMemStat[A, P, T, D, H] {
 	settings.fix()
-	algorithm := settings.memoryControlAlgorithm
-	if algorithm == nil {
-		algorithm = NewMemoryControlAlgorithm(settings.algorithm)
-	}
 	res := &areaMemStat[A, P, T, D, H]{
 		area:                 area,
 		memControl:           memoryControl,
 		feedbackChan:         feedbackChan,
 		lastSendFeedbackTime: atomic.Value{},
 		lastSizeDecreaseTime: atomic.Value{},
-		algorithm:            algorithm,
+		algorithm:            NewMemoryControlAlgorithm(settings.algorithm),
 	}
 
 	res.lastAppendEventTime.Store(time.Now())

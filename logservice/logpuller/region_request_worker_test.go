@@ -352,8 +352,9 @@ func TestProcessRegionSendTaskAllowsDeregisterWhileScanPaused(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	quota := newPullerMemoryQuota()
-	quota.ShouldPauseArea(false, 50, 100)
+	quota := newPullerMemoryQuota(100)
+	reservation, err := quota.acquire(ctx, 99, 50, nil)
+	require.NoError(t, err)
 	worker := &regionRequestWorker{
 		requestCache: newRequestCache(10),
 		store:        &requestedStore{storeAddr: "store-1"},
@@ -395,7 +396,7 @@ func TestProcessRegionSendTaskAllowsDeregisterWhileScanPaused(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 
-	quota.ShouldPauseArea(false, 39, 100)
+	reservation.release()
 	request = <-client.sent
 	require.Nil(t, request.GetDeregister())
 	require.Equal(t, uint64(1), request.RequestId)

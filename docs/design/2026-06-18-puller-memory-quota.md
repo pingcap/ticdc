@@ -83,7 +83,7 @@ The quota controls two independent actions:
                        usage >= 50%
     NORMAL ---------------------------------> SCAN_THROTTLED
       ^                                             |
-      | usage < 40%                                 | usage >= 100%
+      | usage < 40%                                 | next event does not fit
       |                                             v
       +------------------------------------------- FULL
                                                     |
@@ -92,9 +92,9 @@ The quota controls two independent actions:
                                              SCAN_THROTTLED
 ```
 
-`FULL` does not have a separate low-watermark. Input resumes as soon as usage
-falls below 100%. This removes the current behavior where input remains paused
-until usage falls from 80% to 50%.
+`FULL` does not have a separate low-watermark. A waiting event proceeds as soon
+as sufficient quota is released. This removes the current behavior where input
+remains paused until usage falls from 80% to 50%.
 
 The 50%/40% hysteresis applies only to Region scan admission. It prevents Region
 requests from repeatedly pausing and resuming when usage fluctuates around 50%.
@@ -103,29 +103,40 @@ requests from repeatedly pausing and resuming when usage fluctuates around 50%.
 
 The quota controller belongs to `logservice/logpuller`, rather than a shared
 package, because its Region scan gate and lifecycle semantics are puller-specific.
-It is installed as the memory control algorithm for the puller's dynamic stream.
-Dynamic stream remains responsible for pending-event memory accounting, including
-normal dequeue and path removal, while the puller-owned controller makes the
-backpressure and Region scan decisions.
+It is independent from dynamic stream memory control. The puller does not enable
+dynamic stream memory control, consume its feedback, or implement its memory
+control algorithm interface.
 
 ### Event admission
 
-Dynamic stream continues accepting events while pending usage is below 100%.
-When an append moves usage to or above 100%, it sends `PauseArea` feedback and
-the subscription client stops pushing subsequent Region events. Once usage falls
-below 100%, it sends `ResumeArea` immediately.
+After receiving a Region event and calculating its size, the subscription client
+acquires a puller-owned reservation before calling `DynamicStream.Push`.
 
-Feedback and already-buffered events make this a bounded soft overshoot rather
-than a strict allocation barrier. The overshoot consists of events already in
-the receive and dynamic stream input buffers when the threshold is crossed. This
-matches the safety model of the existing puller flow control while allowing the
-full configured quota to be used.
+- The event is admitted immediately when it fits in the remaining quota.
+- Otherwise its receive goroutine waits for a reservation release, subscription
+  stop, or context cancellation.
+- Concurrent waiters are serialized by the quota and cannot over-admit memory.
+- A single event larger than the configured quota is admitted only when it can
+  run alone, avoiding permanent deadlock.
+
+The event has already been allocated by gRPC when its size becomes known. Each
+receive goroutine may therefore hold one unadmitted event while waiting. These
+events are outside the logical quota, but no additional events are received by
+the blocked goroutines.
 
 ### Event release
 
-Memory is released through the existing dynamic stream accounting when an event
-is dequeued or a path is removed. The old puller 80%/50% algorithm is replaced by
-the puller-owned controller and must not independently trigger flow control.
+Every admitted event carries a puller reservation. The reservation is released:
+
+- At the start of normal dynamic stream handling, when the event leaves the
+  buffered pipeline.
+- From `OnDrop` when dynamic stream rejects the event.
+- In aggregate when its subscription is removed.
+- In aggregate when the subscription client closes.
+
+Reservations refer to an internal subscription accounting object. Aggregate
+subscription release removes that object, so a later release from an in-flight
+stale event becomes a no-op instead of decrementing unrelated memory.
 
 ## Region Scan Gate
 
@@ -229,10 +240,11 @@ No TiKV protocol change is required.
 
 ### Quota unit tests
 
-- Input is not paused below 100% usage.
-- Input pauses when usage reaches 100%.
-- Input resumes immediately after usage falls below 100%.
-- Existing dynamic stream path removal correctly reduces accounted memory.
+- An event is admitted whenever it fits in the remaining quota.
+- A non-fitting event waits and resumes as soon as sufficient quota is released.
+- An oversized event runs alone without deadlocking the puller.
+- Subscription removal releases all of its reservations.
+- Releases from stale subscriptions do not corrupt accounting.
 
 ### Region gate unit tests
 

@@ -256,10 +256,6 @@ type AreaSettings struct {
 	// Remove it when we determine the v2 is working well.
 	// The algorithm of the memory control.
 	algorithm int
-	// memoryControlAlgorithm overrides algorithm when it is set. It allows a
-	// component to own state derived from memory usage without moving that state
-	// into dynamic stream.
-	memoryControlAlgorithm MemoryControlAlgorithm
 
 	// control how to batch events
 	batchConfig batchConfig
@@ -288,16 +284,6 @@ func NewAreaSettingsWithMaxPendingSize(
 		algorithm:          algorithm,
 		batchConfig:        batchConfig{},
 	}
-}
-
-// NewAreaSettingsWithMemoryControlAlgorithm creates area settings with a
-// component-owned memory control algorithm.
-func NewAreaSettingsWithMemoryControlAlgorithm(
-	quota uint64, algorithm MemoryControlAlgorithm, component string,
-) AreaSettings {
-	settings := NewAreaSettingsWithMaxPendingSize(quota, MemoryControlForPuller, component)
-	settings.memoryControlAlgorithm = algorithm
-	return settings
 }
 
 func NewAreaSettingsWithMaxPendingSizeAndBatchConfig(

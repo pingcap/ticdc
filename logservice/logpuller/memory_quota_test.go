@@ -21,64 +21,102 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPullerMemoryQuotaThresholds(t *testing.T) {
-	quota := newPullerMemoryQuota()
+func TestPullerMemoryQuotaAdmissionAndScanThresholds(t *testing.T) {
+	quota := newPullerMemoryQuota(100)
+	ctx := context.Background()
 
-	pause, resume, _ := quota.ShouldPauseArea(false, 49, 100)
-	require.False(t, pause)
-	require.False(t, resume)
+	first, err := quota.acquire(ctx, 1, 49, nil)
+	require.NoError(t, err)
 	_, scanPaused := quota.regionScanResumeNotify()
 	require.False(t, scanPaused)
 
-	pause, resume, _ = quota.ShouldPauseArea(false, 50, 100)
-	require.False(t, pause)
-	require.False(t, resume)
+	second, err := quota.acquire(ctx, 1, 1, nil)
+	require.NoError(t, err)
 	_, scanPaused = quota.regionScanResumeNotify()
 	require.True(t, scanPaused)
 
-	pause, resume, _ = quota.ShouldPauseArea(false, 100, 100)
-	require.True(t, pause)
-	require.False(t, resume)
+	third, err := quota.acquire(ctx, 1, 50, nil)
+	require.NoError(t, err)
+	used, capacity := quota.usage()
+	require.Equal(t, uint64(100), used)
+	require.Equal(t, uint64(100), capacity)
 
-	pause, resume, _ = quota.ShouldPauseArea(true, 99, 100)
-	require.False(t, pause)
-	require.True(t, resume)
+	blocked := make(chan *pullerMemoryReservation, 1)
+	go func() {
+		reservation, acquireErr := quota.acquire(ctx, 2, 1, nil)
+		require.NoError(t, acquireErr)
+		blocked <- reservation
+	}()
+	select {
+	case <-blocked:
+		t.Fatal("event admitted when quota was full")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	third.release()
+	fourth := <-blocked
+	used, _ = quota.usage()
+	require.Equal(t, uint64(51), used)
 	_, scanPaused = quota.regionScanResumeNotify()
 	require.True(t, scanPaused)
 
-	quota.ShouldPauseArea(false, 40, 100)
-	_, scanPaused = quota.regionScanResumeNotify()
-	require.True(t, scanPaused)
-
-	quota.ShouldPauseArea(false, 39, 100)
+	first.release()
 	_, scanPaused = quota.regionScanResumeNotify()
 	require.False(t, scanPaused)
-	require.NoError(t, quota.waitRegionScanAllowed(context.Background()))
+	require.NoError(t, quota.waitRegionScanAllowed(ctx))
+
+	second.release()
+	fourth.release()
+	used, _ = quota.usage()
+	require.Zero(t, used)
 }
 
-func TestPullerMemoryQuotaWaitCancellation(t *testing.T) {
-	quota := newPullerMemoryQuota()
-	quota.ShouldPauseArea(false, 50, 100)
+func TestPullerMemoryQuotaReleaseSubscription(t *testing.T) {
+	quota := newPullerMemoryQuota(100)
+	reservation, err := quota.acquire(context.Background(), 1, 60, nil)
+	require.NoError(t, err)
+
+	quota.releaseSubscription(1)
+	used, _ := quota.usage()
+	require.Zero(t, used)
+
+	// A stale event can still be handled after subscription cleanup. Its release
+	// must not affect a later generation of accounting.
+	newReservation, err := quota.acquire(context.Background(), 1, 20, nil)
+	require.NoError(t, err)
+	reservation.release()
+	used, _ = quota.usage()
+	require.Equal(t, uint64(20), used)
+	newReservation.release()
+}
+
+func TestPullerMemoryQuotaOversizedEventRunsAlone(t *testing.T) {
+	quota := newPullerMemoryQuota(100)
+	reservation, err := quota.acquire(context.Background(), 1, 101, nil)
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- quota.waitRegionScanAllowed(ctx)
+		_, acquireErr := quota.acquire(ctx, 2, 1, nil)
+		done <- acquireErr
 	}()
-
 	select {
 	case err := <-done:
-		t.Fatalf("wait returned before cancellation: %v", err)
+		t.Fatalf("second event admitted with oversized event: %v", err)
 	case <-time.After(20 * time.Millisecond):
 	}
 
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
+	reservation.release()
 }
 
 func TestProducerGateStopsWaitingAfterUnsubscribe(t *testing.T) {
-	quota := newPullerMemoryQuota()
-	quota.ShouldPauseArea(false, 50, 100)
+	quota := newPullerMemoryQuota(100)
+	reservation, err := quota.acquire(context.Background(), 1, 50, nil)
+	require.NoError(t, err)
+	defer reservation.release()
 	client := &subscriptionClient{memoryQuota: quota}
 	span := &subscribedSpan{stoppedCh: make(chan struct{})}
 
@@ -88,8 +126,8 @@ func TestProducerGateStopsWaitingAfterUnsubscribe(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		stopped, err := client.waitRegionScanAllowed(context.Background(), span)
-		done <- result{stopped: stopped, err: err}
+		stopped, waitErr := client.waitRegionScanAllowed(context.Background(), span)
+		done <- result{stopped: stopped, err: waitErr}
 	}()
 
 	span.stopped.Store(true)

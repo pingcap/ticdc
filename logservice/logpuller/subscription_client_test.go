@@ -382,18 +382,22 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 }
 
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
+	quota := newPullerMemoryQuota(1)
+	reservation, err := quota.acquire(context.Background(), 2, 1, nil)
+	require.NoError(t, err)
+	defer reservation.release()
+	span := &subscribedSpan{stoppedCh: make(chan struct{})}
+	state := &regionFeedState{region: regionInfo{subscribedSpan: span}}
 	client := &subscriptionClient{
 		ds:              &mockDynamicStream{},
+		memoryQuota:     quota,
 		regionTaskQueue: NewPriorityQueue(),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
-	client.cond = sync.NewCond(&client.mu)
-
-	client.paused.Store(true)
 
 	done := make(chan struct{})
 	go func() {
-		client.pushRegionEventToDS(SubscriptionID(1), regionEvent{})
+		client.pushRegionEventToDS(SubscriptionID(1), regionEvent{states: []*regionFeedState{state}})
 		close(done)
 	}()
 
