@@ -52,6 +52,9 @@ import (
 var (
 	kvEventCount        = metrics.EventStoreReceivedEventCount.WithLabelValues("kv")
 	resolvedEventCount  = metrics.EventStoreReceivedEventCount.WithLabelValues("resolved")
+	insertKVEntryCount  = metrics.EventStoreKVEntryCount.WithLabelValues("insert")
+	updateKVEntryCount  = metrics.EventStoreKVEntryCount.WithLabelValues("update")
+	deleteKVEntryCount  = metrics.EventStoreKVEntryCount.WithLabelValues("delete")
 	scannedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("scanned")
 	skippedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("skipped")
 )
@@ -1355,6 +1358,9 @@ func (e *eventStore) writeEvents(
 	batch := db.NewBatch()
 	defer batch.Close()
 	kvCount := 0
+	insertCount := 0
+	updateCount := 0
+	deleteCount := 0
 	var totalValueBytesBefore int64
 	var totalValueBytesAfter int64
 	var dstBuf []byte
@@ -1369,6 +1375,14 @@ func (e *eventStore) writeEvents(
 		kvCount += len(event.kvs)
 		for i := range event.kvs {
 			kv := &event.kvs[i]
+			switch {
+			case kv.IsInsert():
+				insertCount++
+			case kv.IsUpdate():
+				updateCount++
+			case kv.IsDelete():
+				deleteCount++
+			}
 			if kv.CRTs <= event.currentResolvedTs {
 				log.Warn("event store received kv with commitTs less than resolvedTs",
 					zap.Uint64("commitTs", kv.CRTs),
@@ -1456,6 +1470,9 @@ func (e *eventStore) writeEvents(
 		*rawValueBuf = rawBuf
 	}
 	kvEventCount.Add(float64(kvCount))
+	insertKVEntryCount.Add(float64(insertCount))
+	updateKVEntryCount.Add(float64(updateCount))
+	deleteKVEntryCount.Add(float64(deleteCount))
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
 	metrics.EventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
 	metrics.EventStoreWriteBytes.Add(float64(batch.Len()))

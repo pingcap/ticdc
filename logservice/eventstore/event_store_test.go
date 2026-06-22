@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -1419,6 +1420,43 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	rowCount, err := iter.Close()
 	require.NoError(t, err)
 	require.Equal(t, int64(len(expectedValues)), rowCount)
+}
+
+func TestEventStoreKVEntryCount(t *testing.T) {
+	dir := t.TempDir()
+	_, storeInt := newEventStoreForTest(dir)
+	store := storeInt.(*eventStore)
+	defer store.Close(context.Background())
+
+	events := []eventWithCallback{{
+		subID:   1,
+		tableID: 1,
+		kvs: []common.RawKVEntry{
+			{OpType: common.OpTypePut, StartTs: 1, CRTs: 2, Key: []byte("insert"), Value: []byte("new")},
+			{OpType: common.OpTypePut, StartTs: 3, CRTs: 4, Key: []byte("update"), Value: []byte("new"), OldValue: []byte("old")},
+			{OpType: common.OpTypeDelete, StartTs: 5, CRTs: 6, Key: []byte("delete"), OldValue: []byte("old")},
+		},
+		callback: func() {},
+	}}
+
+	entryMetrics := []prometheus.Counter{
+		metrics.EventStoreKVEntryCount.WithLabelValues("insert"),
+		metrics.EventStoreKVEntryCount.WithLabelValues("update"),
+		metrics.EventStoreKVEntryCount.WithLabelValues("delete"),
+	}
+	before := make([]float64, len(entryMetrics))
+	for i, metric := range entryMetrics {
+		before[i] = testutil.ToFloat64(metric)
+	}
+
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+	require.NoError(t, store.writeEvents(store.dbs[0], events, encoder, nil, nil))
+
+	for i, metric := range entryMetrics {
+		require.Equal(t, before[i]+1, testutil.ToFloat64(metric))
+	}
 }
 
 func TestEventStoreIterReadsLegacyCompressedValuesWithEncryptionManager(t *testing.T) {
