@@ -15,7 +15,6 @@ package logpuller
 
 import (
 	"context"
-	stderrs "errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -604,7 +603,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		// Use blocking Pop to wait for tasks
 		regionTask, err := s.regionTaskQueue.Pop(ctx)
 		if err != nil {
-			if stderrs.Is(err, priorityqueue.ErrClosed) {
+			if errors.Is(err, priorityqueue.ErrClosed) {
 				return nil
 			}
 			return err
