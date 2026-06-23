@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -224,6 +225,69 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 
 	require.Len(t, client.errCache.cache, 1)
 	require.NotContains(t, client.totalSpans.spanMap, span.subID)
+}
+
+func TestBusyRetryPreservesScanPriority(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		priority cdcpb.ScanPriority
+		cdcErr   *cdcpb.Error
+		expected TaskType
+	}{
+		{
+			name:     "server is busy high",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			cdcErr:   &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
+			expected: TaskHighPrior,
+		},
+		{
+			name:     "server is busy low",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			cdcErr:   &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
+			expected: TaskLowPrior,
+		},
+		{
+			name:     "congested high",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			cdcErr:   &cdcpb.Error{Congested: &cdcpb.Congested{}},
+			expected: TaskHighPrior,
+		},
+		{
+			name:     "congested low",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			cdcErr:   &cdcpb.Error{Congested: &cdcpb.Congested{}},
+			expected: TaskLowPrior,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &subscriptionClient{
+				regionTaskQueue: NewPriorityQueue(),
+			}
+			client.pdClock = pdutil.NewClock4Test()
+			rawSpan := heartbeatpb.TableSpan{
+				TableID:  1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+			}
+			span := &subscribedSpan{
+				subID:     SubscriptionID(1),
+				span:      rawSpan,
+				rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
+			}
+			region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), rawSpan, nil, span, false)
+			region.scanPriority = tc.priority
+
+			err := client.doHandleError(context.Background(), newRegionErrorInfo(region, &eventError{err: tc.cdcErr}))
+			require.NoError(t, err)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			task, err := client.regionTaskQueue.Pop(ctx)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, task.(*regionPriorityTask).taskType)
+			require.Equal(t, tc.priority, task.GetRegionInfo().scanPriority)
+		})
+	}
 }
 
 type mockDynamicStream struct{}

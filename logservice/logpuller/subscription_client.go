@@ -796,6 +796,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 // scheduleRegionRequest locks the region's range and send the region to regionTaskQueue,
 // which will be handled by handleRegions.
 func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region regionInfo, priority TaskType) {
+	region.scanPriority = priority.scanPriority()
 	lockRangeResult := region.subscribedSpan.rangeLock.LockRange(
 		ctx, region.span.StartKey, region.span.EndKey, region.verID.GetID(), region.verID.GetVer())
 
@@ -872,12 +873,12 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		}
 		if innerErr.GetCongested() != nil {
 			metricKvCongestedCounter.Inc()
-			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
+			s.scheduleRegionRequest(ctx, errInfo.regionInfo, taskTypeFromScanPriority(errInfo.scanPriority))
 			return nil
 		}
 		if innerErr.GetServerIsBusy() != nil {
 			metricKvIsBusyCounter.Inc()
-			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
+			s.scheduleRegionRequest(ctx, errInfo.regionInfo, taskTypeFromScanPriority(errInfo.scanPriority))
 			return nil
 		}
 		if duplicated := innerErr.GetDuplicateRequest(); duplicated != nil {
