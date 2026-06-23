@@ -1202,6 +1202,121 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, common.RowTypeUpdate, nextRow.RowType)
 	})
+
+	t.Run("IgnoreUpdateByEventTypeSkipsDecode", func(t *testing.T) {
+		mounter := &mockMounter{}
+		changefeedFilter, err := filter.NewFilter(&config.FilterConfig{
+			Rules: []string{"test.*"},
+			EventFilters: []*config.EventFilterRule{
+				{
+					Matcher:     []string{"test.t"},
+					IgnoreEvent: []bf.EventType{bf.UpdateEvent},
+				},
+			},
+		}, "UTC", false, false)
+		require.NoError(t, err)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode, false)
+
+		insertSQL := "insert into test.t(id,a,b) values (103, 'a103', 'b103')"
+		updateSQL := "update test.t set b = 'b103_updated' where id = 103"
+		_, updateEvent := helper.DML2UpdateEvent("test", "t", insertSQL, updateSQL)
+
+		processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, false)
+		err = processor.appendRow(updateEvent)
+		require.NoError(t, err)
+
+		require.Equal(t, int64(0), mounter.decodeCount.Load())
+		require.Equal(t, int32(0), processor.batchDML.Len())
+		require.Empty(t, processor.insertRowCache)
+	})
+
+	t.Run("IgnoreUpdateByEventTypeSkipsSplitCheck", func(t *testing.T) {
+		mounter := &mockMounter{}
+		changefeedFilter, err := filter.NewFilter(&config.FilterConfig{
+			Rules: []string{"test.*"},
+			EventFilters: []*config.EventFilterRule{
+				{
+					Matcher:     []string{"test.t"},
+					IgnoreEvent: []bf.EventType{bf.UpdateEvent},
+				},
+			},
+		}, "UTC", false, false)
+		require.NoError(t, err)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode, false)
+
+		insertSQL := "insert into test.t(id,a,b) values (104, 'a104', 'b104')"
+		updateSQL := "update test.t set a = 'a104_updated' where id = 104"
+		_, updateEvent := helper.DML2UpdateEvent("test", "t", insertSQL, updateSQL)
+
+		processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, false)
+		err = processor.appendRow(updateEvent)
+		require.NoError(t, err)
+
+		require.Equal(t, int64(0), mounter.decodeCount.Load())
+		require.Equal(t, int32(0), processor.batchDML.Len())
+		require.Empty(t, processor.insertRowCache)
+	})
+
+	t.Run("SplitUpdateSkipsIgnoredDeleteBeforeDecode", func(t *testing.T) {
+		mounter := &mockMounter{}
+		changefeedFilter, err := filter.NewFilter(&config.FilterConfig{
+			Rules: []string{"test.*"},
+			EventFilters: []*config.EventFilterRule{
+				{
+					Matcher:     []string{"test.t"},
+					IgnoreEvent: []bf.EventType{bf.DeleteEvent},
+				},
+			},
+		}, "UTC", false, false)
+		require.NoError(t, err)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode, false)
+
+		insertSQL := "insert into test.t(id,a,b) values (105, 'a105', 'b105')"
+		updateSQL := "update test.t set a = 'a105_updated' where id = 105"
+		_, updateEvent := helper.DML2UpdateEvent("test", "t", insertSQL, updateSQL)
+
+		processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, false)
+		err = processor.appendRow(updateEvent)
+		require.NoError(t, err)
+		require.Len(t, processor.insertRowCache, 1)
+
+		err = processor.commitTxn()
+		require.NoError(t, err)
+
+		require.Equal(t, int64(1), mounter.decodeCount.Load())
+		require.Equal(t, int32(1), processor.batchDML.Len())
+		require.Empty(t, processor.insertRowCache)
+	})
+
+	t.Run("SplitUpdateSkipsIgnoredInsertBeforeDecode", func(t *testing.T) {
+		mounter := &mockMounter{}
+		changefeedFilter, err := filter.NewFilter(&config.FilterConfig{
+			Rules: []string{"test.*"},
+			EventFilters: []*config.EventFilterRule{
+				{
+					Matcher:     []string{"test.t"},
+					IgnoreEvent: []bf.EventType{bf.InsertEvent},
+				},
+			},
+		}, "UTC", false, false)
+		require.NoError(t, err)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode, false)
+
+		insertSQL := "insert into test.t(id,a,b) values (106, 'a106', 'b106')"
+		updateSQL := "update test.t set a = 'a106_updated' where id = 106"
+		_, updateEvent := helper.DML2UpdateEvent("test", "t", insertSQL, updateSQL)
+
+		processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, false)
+		err = processor.appendRow(updateEvent)
+		require.NoError(t, err)
+		require.Empty(t, processor.insertRowCache)
+
+		err = processor.commitTxn()
+		require.NoError(t, err)
+
+		require.Equal(t, int64(1), mounter.decodeCount.Load())
+		require.Equal(t, int32(1), processor.batchDML.Len())
+	})
 }
 
 func TestScanSession(t *testing.T) {
