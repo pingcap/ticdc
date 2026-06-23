@@ -148,6 +148,51 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	return manager
 }
 
+func TestCountIgnoreUpdateOnlyColumnsRules(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		filter *config.FilterConfig
+		count  int
+	}{
+		{
+			name: "nil filter",
+		},
+		{
+			name: "nil event filter rule",
+			filter: &config.FilterConfig{
+				EventFilters: []*config.EventFilterRule{nil},
+			},
+		},
+		{
+			name: "empty ignore update only columns",
+			filter: &config.FilterConfig{
+				EventFilters: []*config.EventFilterRule{
+					{Matcher: []string{"test.t"}},
+				},
+			},
+		},
+		{
+			name: "configured rules",
+			filter: &config.FilterConfig{
+				EventFilters: []*config.EventFilterRule{
+					{Matcher: []string{"test.t1"}, IgnoreUpdateOnlyColumns: []string{"version"}},
+					{Matcher: []string{"test.t2"}},
+					{Matcher: []string{"test.t3"}, IgnoreUpdateOnlyColumns: []string{"updated_at"}},
+				},
+			},
+			count: 2,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.count, countIgnoreUpdateOnlyColumnsRules(tc.filter))
+		})
+	}
+}
+
 type bootstrapSchemaStoreForTest struct{}
 
 func (s *bootstrapSchemaStoreForTest) Name() string { return "bootstrap-schema-store-for-test" }

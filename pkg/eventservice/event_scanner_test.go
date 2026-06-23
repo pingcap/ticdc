@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -745,7 +746,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 0: create a new DML processor
 	t.Run("CreateNewDMLProcessor", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		require.NotNil(t, processor)
 		require.NotNil(t, processor.batchDML)
 		require.Nil(t, processor.currentTxn)
@@ -754,7 +755,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 1: commitTxn with no current DML, happens when the iter is nil.
 	t.Run("CommitTxnWithNoCurrentDML", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		err := processor.commitTxn()
 		require.NoError(t, err)
 		require.Nil(t, processor.currentTxn)
@@ -764,7 +765,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 1: start the first transaction
 	t.Run("FirstTransactionWithoutCache", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		rawEvent := kvEvents[0]
 
 		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs, rawEvent.CRTs, false)
@@ -786,7 +787,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 2: Process new transaction when there are cached insert rows
 	t.Run("NewTransactionWithInsertCache", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		// Setup first transaction
 		firstEvent := kvEvents[0]
@@ -839,7 +840,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 3: Multiple consecutive transactions
 	t.Run("ConsecutiveTransactions", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		// Process multiple transactions
 		for i, item := range kvEvents {
@@ -872,7 +873,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 5: Process transaction with empty insert cache followed by one with cache
 	t.Run("EmptyThenNonEmptyCache", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		// First transaction - no cache
 		firstEvent := kvEvents[0]
@@ -914,7 +915,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test 6: First event is update that changes UK
 	t.Run("UpdateThatChangesUK", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		helper.Tk().MustExec("use test")
 		ddlEvent := helper.DDL2Event("create table t2 (id int primary key, a int(50), b char(50), unique key uk_a(a))")
@@ -969,7 +970,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 1: appendRow before txn started, illegal usage.
 	t.Run("NoCurrentDMLEvent", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		rawEvent := kvEvents[0]
 
 		require.Panics(t, func() {
@@ -979,7 +980,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 2: appendRow for insert operation (non-update)
 	t.Run("AppendInsertRow", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		firstEvent := kvEvents[0]
 		processor.startTxn(dispatcherID, tableID, tableInfo, firstEvent.StartTs, firstEvent.CRTs, false)
@@ -997,7 +998,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 3: appendRow for delete operation (non-update)
 	t.Run("AppendDeleteRow", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		rawEvent := kvEvents[0]
 		deleteRow := insertToDeleteRow(rawEvent)
@@ -1016,7 +1017,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 4: appendRow for update operation without unique key change
 	t.Run("AppendUpdateRowWithoutUKChange", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		// Create a current DML event first
 		rawEvent := kvEvents[0]
@@ -1040,7 +1041,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 5: appendRow for update operation with unique key change (split update)
 	t.Run("AppendUpdateRowWithUKChange", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		// Create a current DML event first
 		rawEvent := kvEvents[0]
@@ -1068,7 +1069,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 6: Test multiple appendRow calls
 	t.Run("MultipleAppendRows", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		// Create a current DML event first
 		rawEvent := kvEvents[0]
@@ -1100,7 +1101,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 7: appendRow for update operation with unique key change and outputRawChangeEvent is true (do not split update)
 	t.Run("AppendUpdateRowWithUKChangeAndOutputRawChangeEvent", func(t *testing.T) {
-		processor := newDMLProcessor(event.NewMounter(time.UTC, &integrity.Config{}), mockSchemaGetter, nil, true, common.DefaultMode)
+		processor := newDMLProcessor(event.NewMounter(time.UTC, &integrity.Config{}), mockSchemaGetter, nil, true, common.DefaultMode, false)
 		// Generate a real update event that changes unique key using helper
 		// This updates the unique key column 'a' from 'a1' to 'a1_new'
 		insertSQL, updateSQL := "insert into test.t(id,a,b) values (7, 'a7', 'b7')", "update test.t set a = 'a7_updated' where id = 7"
@@ -1285,7 +1286,7 @@ func TestEventMerger(t *testing.T) {
 		mockSchemaGetter := NewMockSchemaStore()
 		mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 
-		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		processor.startTxn(dispatcherID, tableID, ddlEvent.TableInfo, kvEvents[0].StartTs, kvEvents[0].CRTs, false)
 
 		err := processor.appendRow(kvEvents[0])
@@ -1317,7 +1318,7 @@ func TestEventMerger(t *testing.T) {
 		tableID := ddlEvent.GetTableID()
 		mockSchemaGetter := NewMockSchemaStore()
 		mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
-		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		processor.startTxn(dispatcherID, tableID, ddlEvent.TableInfo, kvEvents[0].StartTs, kvEvents[0].CRTs, false)
 
@@ -1369,7 +1370,7 @@ func TestEventMerger(t *testing.T) {
 
 		tableID := ddlEvent1.GetTableID()
 		tableInfo := ddlEvent1.TableInfo
-		processor := newDMLProcessor(mounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		processor.startTxn(dispatcherID, tableID, tableInfo, kvEvents1[0].StartTs, kvEvents1[0].CRTs, false)
 
@@ -1802,7 +1803,7 @@ func TestTxnEventSplit(t *testing.T) {
 
 		// Append 4 rows
 		for _, rawEvent := range kvEvents {
-			err := txn.AppendRow(rawEvent, mockMounter.DecodeToChunk, nil)
+			err := txn.AppendRow(rawEvent, mockMounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 			require.NoError(t, err)
 		}
 
@@ -1826,7 +1827,7 @@ func TestTxnEventSplit(t *testing.T) {
 
 		// Append 4 rows
 		for _, rawEvent := range kvEvents {
-			err := txn.AppendRow(rawEvent, mockMounter.DecodeToChunk, nil)
+			err := txn.AppendRow(rawEvent, mockMounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 			require.NoError(t, err)
 		}
 
