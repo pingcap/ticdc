@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	stderrs "errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -601,12 +602,12 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		default:
 		}
 		// Use blocking Pop to wait for tasks
-		regionTask, ok, err := s.regionTaskQueue.Pop(ctx)
+		regionTask, err := s.regionTaskQueue.Pop(ctx)
 		if err != nil {
+			if stderrs.Is(err, priorityqueue.ErrClosed) {
+				return nil
+			}
 			return err
-		}
-		if !ok {
-			return nil
 		}
 
 		region := regionTask.GetRegionInfo()
@@ -634,7 +635,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		worker := store.getRequestWorker()
 		force := regionTask.Priority() <= forcedPriorityBase
 
-		ok, err = worker.add(ctx, region, force)
+		added, err := worker.add(ctx, region, force)
 		if err != nil {
 			log.Warn("subscription client add region request failed",
 				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
@@ -643,7 +644,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			return err
 		}
 
-		if !ok {
+		if !added {
 			s.regionTaskQueue.Push(regionTask)
 			continue
 		}

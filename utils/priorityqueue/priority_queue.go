@@ -16,10 +16,14 @@ package priorityqueue
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/pingcap/ticdc/utils/heap"
 )
+
+// ErrClosed is returned by Pop when the queue has been closed and drained.
+var ErrClosed = errors.New("priority queue is closed")
 
 // PriorityQueue is a thread-safe priority queue based on utils/heap.
 //
@@ -30,8 +34,8 @@ import (
 // restore heap order.
 //
 // Pop blocks until an item is available, the context is canceled, or the queue
-// is closed. TryPop never blocks: it returns the current top item if one exists,
-// or ok=false immediately when the queue is empty.
+// is closed and drained. TryPop never blocks: it returns the current top item if
+// one exists, or ok=false immediately when the queue is empty.
 type PriorityQueue[T heap.Item[T]] struct {
 	mu     sync.Mutex
 	heap   *heap.Heap[T]
@@ -67,28 +71,29 @@ func (q *PriorityQueue[T]) AddOrUpdate(item T) bool {
 	return true
 }
 
-// Pop blocks until an item is available, the queue is closed, or ctx is done.
-// ok is false only when the queue is closed and empty.
-func (q *PriorityQueue[T]) Pop(ctx context.Context) (item T, ok bool, err error) {
+// Pop blocks until an item is available, the queue is closed and drained, or ctx
+// is done.
+func (q *PriorityQueue[T]) Pop(ctx context.Context) (item T, err error) {
 	for {
 		q.mu.Lock()
+		var ok bool
 		item, ok = q.heap.PopTop()
 		if ok {
 			if q.heap.Len() > 0 {
 				q.notifyOneLocked()
 			}
 			q.mu.Unlock()
-			return item, true, nil
+			return item, nil
 		}
 		if q.closed {
 			q.mu.Unlock()
-			return item, false, nil
+			return item, ErrClosed
 		}
 		q.mu.Unlock()
 
 		select {
 		case <-ctx.Done():
-			return item, false, ctx.Err()
+			return item, ctx.Err()
 		case _, open := <-q.notify:
 			if !open {
 				continue
