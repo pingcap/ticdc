@@ -125,7 +125,7 @@ func (mr *MockBackendMockRecorder) PauseChangefeed(ctx, id interface{}) *gomock.
 }
 
 // ResumeChangefeed mocks base method.
-func (m *MockBackend) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, candidateEpoch uint64, checkpointTs uint64) (*config.ChangeFeedInfo, error) {
+func (m *MockBackend) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, candidateEpoch, checkpointTs uint64) (*config.ChangeFeedInfo, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ResumeChangefeed", ctx, id, candidateEpoch, checkpointTs)
 	ret0, _ := ret[0].(*config.ChangeFeedInfo)
