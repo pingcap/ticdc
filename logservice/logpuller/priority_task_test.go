@@ -14,7 +14,6 @@
 package logpuller
 
 import (
-	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -206,8 +205,7 @@ func TestEdgeCases(t *testing.T) {
 
 func TestRegionPriorityTaskQueueOrder(t *testing.T) {
 	queue := priorityqueue.New[PriorityTask]()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	currentTs := oracle.GoTimeToTS(time.Now())
 	verID := tikv.NewRegionVerID(1, 1, 1)
