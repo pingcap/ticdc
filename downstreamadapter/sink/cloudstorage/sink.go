@@ -63,9 +63,9 @@ type sink struct {
 	lastCheckpointTs         atomic.Uint64
 	lastSendCheckpointTsTime time.Time
 
-	tableSchemaStore *commonEvent.TableSchemaStore
-	cron             *cron.Cron
-	statistics       *metrics.Statistics
+	schemaStore *commonEvent.TableSchemaStore
+	cron        *cron.Cron
+	statistics  *metrics.Statistics
 
 	isNormal    *atomic.Bool
 	cleanupJobs []func() /* only for test */
@@ -244,37 +244,31 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		}
 		sourceTableInfo := event.MultipleTableInfos[1]
 
-		var def cloudstorage.TableDefinition
-		def.FromTableInfo(
+		schemaEvent := *event
+		schemaEvent.TableInfo = event.TableInfo.CloneWithRouting(
 			event.GetTargetExtraSchemaName(),
 			event.GetTargetExtraTableName(),
-			event.TableInfo,
-			event.FinishedTs,
-			s.cfg.OutputColumnID,
 		)
-		def.Query = event.Query
-		def.Type = event.Type
-		if err := s.writeFile(event, def); err != nil {
+		var schemaFile cloudstorage.SchemaFile
+		schemaFile.Build(&schemaEvent, s.cfg.OutputColumnID)
+		if err := s.writeFile(event, schemaFile); err != nil {
 			return err
 		}
-		var sourceTableDef cloudstorage.TableDefinition
-		sourceTableDef.FromTableInfo(
+		sourceEvent := *event
+		sourceEvent.TableInfo = sourceTableInfo.CloneWithRouting(
 			event.GetTargetSchemaName(),
 			event.GetTargetTableName(),
-			sourceTableInfo,
-			event.FinishedTs,
-			s.cfg.OutputColumnID,
 		)
-		sourceEvent := *event
-		sourceEvent.TableInfo = sourceTableInfo
-		if err := s.writeFile(&sourceEvent, sourceTableDef); err != nil {
+		var sourceSchemaFile cloudstorage.SchemaFile
+		sourceSchemaFile.Build(&sourceEvent, s.cfg.OutputColumnID)
+		if err := s.writeFile(&sourceEvent, sourceSchemaFile); err != nil {
 			return err
 		}
 	} else {
 		for _, e := range event.GetEvents() {
-			var def cloudstorage.TableDefinition
-			def.FromDDLEvent(e, s.cfg.OutputColumnID)
-			if err := s.writeFile(e, def); err != nil {
+			var schemaFile cloudstorage.SchemaFile
+			schemaFile.Build(e, s.cfg.OutputColumnID)
+			if err := s.writeFile(e, schemaFile); err != nil {
 				return err
 			}
 		}
@@ -291,22 +285,22 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 	return nil
 }
 
-func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefinition) error {
+func (s *sink) writeFile(v *commonEvent.DDLEvent, schemaFile cloudstorage.SchemaFile) error {
 	// skip write database-level event for 'use-table-id-as-path' mode
-	if s.cfg.UseTableIDAsPath && def.Table == "" {
+	if s.cfg.UseTableIDAsPath && schemaFile.Table == "" {
 		return nil
 	}
-	encodedDef, err := def.MarshalWithQuery()
+	encodedSchemaFile, err := schemaFile.Marshal()
 	if err != nil {
 		return err
 	}
 
-	path, err := def.GenerateSchemaFilePath(s.cfg.UseTableIDAsPath, v.GetTableID())
+	path, err := schemaFile.GenerateSchemaFilePath(s.cfg.UseTableIDAsPath, v.GetTableID())
 	if err != nil {
 		return err
 	}
 	return s.statistics.RecordDDLExecution(func() (string, error) {
-		err = s.storage.WriteFile(s.ctx, path, encodedDef)
+		err = s.storage.WriteFile(s.ctx, path, encodedSchemaFile)
 		if err != nil {
 			return "", err
 		}
@@ -382,8 +376,8 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 	}
 }
 
-func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
-	s.tableSchemaStore = tableSchemaStore
+func (s *sink) SetTableSchemaStore(schemaStore *commonEvent.TableSchemaStore) {
+	s.schemaStore = schemaStore
 }
 
 func (s *sink) initCron(

@@ -273,7 +273,7 @@ func TestWriteDDLEvent(t *testing.T) {
 	err = cloudStorageSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
-	tableSchema, err := os.ReadFile(path.Join(tableDir, "schema_100_4192708364.json"))
+	schemaContent, err := os.ReadFile(path.Join(tableDir, "schema_100_4192708364.json"))
 	require.NoError(t, err)
 	require.JSONEq(t, `{
 		"Table": "table1",
@@ -295,7 +295,7 @@ func TestWriteDDLEvent(t *testing.T) {
 			}
 		],
 		"TableColumnsTotal": 2
-	}`, string(tableSchema))
+	}`, string(schemaContent))
 	t.Run("flush dml before write ddl", verifyWriteDDLEventFlushDMLBeforeBlock)
 }
 
@@ -408,9 +408,9 @@ func TestWriteDDLEventWithTableIDAsPath(t *testing.T) {
 	require.NoError(t, err)
 
 	tableDir := path.Join(parentDir, "20/meta/")
-	tableSchema, err := os.ReadFile(path.Join(tableDir, "schema_100_4192708364.json"))
+	schemaContent, err := os.ReadFile(path.Join(tableDir, "schema_100_4192708364.json"))
 	require.NoError(t, err)
-	require.Contains(t, string(tableSchema), `"Table": "table1"`)
+	require.Contains(t, string(schemaContent), `"Table": "table1"`)
 }
 
 func TestSkipDatabaseSchemaWithTableIDAsPath(t *testing.T) {
@@ -514,7 +514,7 @@ func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {
 	}
 }
 
-func readSchemaDefinitionForTest(t *testing.T, parentDir, schema, table string) pkgcloudstorage.TableDefinition {
+func readSchemaFileForTest(t *testing.T, parentDir, schema, table string) pkgcloudstorage.SchemaFile {
 	t.Helper()
 
 	files, err := os.ReadDir(filepath.Join(parentDir, schema, table, "meta"))
@@ -524,9 +524,9 @@ func readSchemaDefinitionForTest(t *testing.T, parentDir, schema, table string) 
 	content, err := os.ReadFile(filepath.Join(parentDir, schema, table, "meta", files[0].Name()))
 	require.NoError(t, err)
 
-	var def pkgcloudstorage.TableDefinition
-	require.NoError(t, json.Unmarshal(content, &def))
-	return def
+	var schemaFile pkgcloudstorage.SchemaFile
+	require.NoError(t, json.Unmarshal(content, &schemaFile))
+	return schemaFile
 }
 
 func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
@@ -605,15 +605,15 @@ func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
 	err = cloudStorageSink.WriteBlockEvent(routedEvent)
 	require.NoError(t, err)
 
-	exchangeDef := readSchemaDefinitionForTest(t, parentDir, "target_db", "exchange_table_routed")
-	require.Equal(t, "target_db", exchangeDef.Schema)
-	require.Equal(t, "exchange_table_routed", exchangeDef.Table)
-	require.Equal(t, "partition_value", exchangeDef.Columns[1].Name)
+	exchangeSchemaFile := readSchemaFileForTest(t, parentDir, "target_db", "exchange_table_routed")
+	require.Equal(t, "target_db", exchangeSchemaFile.Schema)
+	require.Equal(t, "exchange_table_routed", exchangeSchemaFile.Table)
+	require.Equal(t, "partition_value", exchangeSchemaFile.Columns[1].Name)
 
-	partitionedDef := readSchemaDefinitionForTest(t, parentDir, "target_db", "partitioned_routed")
-	require.Equal(t, "target_db", partitionedDef.Schema)
-	require.Equal(t, "partitioned_routed", partitionedDef.Table)
-	require.Equal(t, "exchange_value", partitionedDef.Columns[1].Name)
+	partitionedSchemaFile := readSchemaFileForTest(t, parentDir, "target_db", "partitioned_routed")
+	require.Equal(t, "target_db", partitionedSchemaFile.Schema)
+	require.Equal(t, "partitioned_routed", partitionedSchemaFile.Table)
+	require.Equal(t, "exchange_value", partitionedSchemaFile.Columns[1].Name)
 
 	_, err = os.Stat(filepath.Join(parentDir, "source_db"))
 	require.ErrorIs(t, err, os.ErrNotExist)

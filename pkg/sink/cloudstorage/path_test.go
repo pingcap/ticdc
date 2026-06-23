@@ -402,7 +402,7 @@ func TestIsSchemaFile(t *testing.T) {
 			"schema2/meta/schema_123_0123456789.json", true,
 		},
 		{
-			"valid table schema <schema>/<table>/meta/",
+			"valid table-level schema file <schema>/<table>/meta/",
 			"schema1/table1/meta/schema_123_0123456789.json", true,
 		},
 		{"valid special prefix", "meta/meta/schema_123_0123456789.json", true},

@@ -32,7 +32,7 @@ type SchemaPathKey struct {
 	// Schema is the first directory level in storage sink paths.
 	// Example: <schema>/<table>/<tableVersion>/...
 	Schema string
-	// Table is the second directory level for table schema/data paths.
+	// Table is the second directory level for table-level schema file and data paths.
 	// For database-level schema files, this field is empty and the path is
 	// <schema>/meta/schema_{tableVersion}_{checksum}.json.
 	Table string
@@ -69,7 +69,7 @@ func (s *SchemaPathKey) ParseSchemaFilePath(path string) (uint32, error) {
 	}
 
 	schemaFileName := matches[len(matches)-1]
-	version, checksum := mustParseSchemaName(schemaFileName)
+	version, checksum := mustParseSchemaFileName(schemaFileName)
 
 	*s = SchemaPathKey{
 		Schema:       schema,

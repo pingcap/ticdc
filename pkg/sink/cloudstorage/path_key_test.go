@@ -39,7 +39,7 @@ func TestSchemaPathKey(t *testing.T) {
 			},
 			checksum: 2,
 		},
-		// Test for table schema path: <schema>/<table>/meta/schema_{tableVersion}_{checksum}.json
+		// Test for table-level schema file path: <schema>/<table>/meta/schema_{tableVersion}_{checksum}.json
 		{
 			path: "test_schema/test_table/meta/schema_11_22.json",
 			schemakey: SchemaPathKey{
