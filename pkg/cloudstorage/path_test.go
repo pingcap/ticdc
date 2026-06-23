@@ -176,7 +176,7 @@ func TestGenerateDataFilePathWithTableIDAsPath(t *testing.T) {
 	require.Equal(t, fmt.Sprintf("12345/5/CDC_%s_000001.json", table.DispatcherID.String()), path)
 }
 
-func TestFetchIndexFromFileName(t *testing.T) {
+func TestParseFileIndexFromFileName(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.TODO())
@@ -215,7 +215,7 @@ func TestFetchIndexFromFileName(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		_, err := FetchIndexFromFileName(tc.fileName, f.extension)
+		_, err := ParseFileIndexFromFileName(tc.fileName, f.extension)
 		if len(tc.wantErr) != 0 {
 			require.Contains(t, err.Error(), tc.wantErr)
 		} else {

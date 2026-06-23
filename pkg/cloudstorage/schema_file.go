@@ -19,7 +19,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -30,7 +29,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
-	"go.uber.org/zap"
 )
 
 const (
@@ -274,11 +272,13 @@ func (t *SchemaFile) ToTableInfo() (*common.TableInfo, error) {
 }
 
 // isTableLevel returns whether this file describes a table.
-func (t *SchemaFile) isTableLevel() bool {
+func (t *SchemaFile) isTableLevel() (bool, error) {
 	if len(t.Columns) != t.TotalColumns {
-		log.Panic("invalid schema file", zap.Any("schemaFile", t))
+		return false, errors.ErrInternalCheckFailed.GenWithStack(
+			"invalid schema file: columns %d does not match total columns %d",
+			len(t.Columns), t.TotalColumns)
 	}
-	return t.TotalColumns != 0
+	return t.TotalColumns != 0, nil
 }
 
 // Marshal marshals SchemaFile.

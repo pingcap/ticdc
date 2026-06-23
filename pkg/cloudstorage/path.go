@@ -240,7 +240,11 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	}
 	var schemaFile SchemaFile
 	schemaFile.Build(event, f.config.OutputColumnID)
-	if !schemaFile.isTableLevel() {
+	isTableLevel, err := schemaFile.isTableLevel()
+	if err != nil {
+		return false, err
+	}
+	if !isTableLevel {
 		// only check schema for table
 		log.Error("invalid schema file",
 			zap.String("keyspace", keyspace),
@@ -519,11 +523,7 @@ func (f *FilePathGenerator) getFileIdxFromIndexFile(
 		return 0, err
 	}
 	fileName := strings.TrimSuffix(string(data), "\n")
-	return FetchIndexFromFileName(fileName, f.extension)
-}
-
-func FetchIndexFromFileName(fileName string, extension string) (uint64, error) {
-	fileIndex, err := ParseFileIndexFromFileName(fileName, extension)
+	fileIndex, err := ParseFileIndexFromFileName(fileName, f.extension)
 	if err != nil {
 		return 0, err
 	}

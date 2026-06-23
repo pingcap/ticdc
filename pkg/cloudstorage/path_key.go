@@ -166,11 +166,15 @@ func (d DmlPathKey) generateDMLDataDirPath() string {
 	elems := make([]string, 0, 5)
 	if d.UseTableIDAsPath {
 		elems = append(elems, strconv.FormatInt(d.TableID, 10))
-	} else {
-		elems = append(elems, d.Schema, d.Table)
+		elems = append(elems, strconv.FormatUint(d.TableVersion, 10))
+		if d.Date != "" {
+			elems = append(elems, d.Date)
+		}
+		return path.Join(elems...)
 	}
+	elems = append(elems, d.Schema, d.Table)
 	elems = append(elems, strconv.FormatUint(d.TableVersion, 10))
-	if d.PartitionNum != 0 && !d.UseTableIDAsPath {
+	if d.PartitionNum != 0 {
 		elems = append(elems, strconv.FormatInt(d.PartitionNum, 10))
 	}
 	if d.Date != "" {

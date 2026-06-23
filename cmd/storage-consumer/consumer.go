@@ -442,16 +442,13 @@ func (c *consumer) parseDMLFilePath(ctx context.Context, path string) error {
 		return errors.Trace(err)
 	}
 	fileName := strings.TrimSuffix(string(data), "\n")
-	fileIdx, err := cloudstorage.FetchIndexFromFileName(fileName, c.fileExtension)
+	fileIndex, err := cloudstorage.ParseFileIndexFromFileName(fileName, c.fileExtension)
 	if err != nil {
 		return err
 	}
-	fileIndex := &cloudstorage.FileIndex{
-		FileIndexKey: cloudstorage.FileIndexKey{
-			DispatcherID:           dispatcherID,
-			EnableTableAcrossNodes: dispatcherID != "",
-		},
-		Idx: fileIdx,
+	fileIndex.FileIndexKey = cloudstorage.FileIndexKey{
+		DispatcherID:           dispatcherID,
+		EnableTableAcrossNodes: dispatcherID != "",
 	}
 
 	m, ok := c.tableDMLIdxMap[dmlkey]
