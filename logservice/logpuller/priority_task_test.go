@@ -14,11 +14,16 @@
 package logpuller
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/utils/priorityqueue"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/tikv"
 )
 
 // TestPriorityCalculationLogic tests the priority calculation logic in isolation
@@ -197,4 +202,50 @@ func TestEdgeCases(t *testing.T) {
 		// wait time longer task priority should be higher
 		require.Less(t, priority2, priority1, "wait time longer task priority should be higher")
 	})
+}
+
+func TestRegionPriorityTaskQueueOrder(t *testing.T) {
+	queue := priorityqueue.New[PriorityTask]()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	currentTs := oracle.GoTimeToTS(time.Now())
+	verID := tikv.NewRegionVerID(1, 1, 1)
+	span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
+
+	subscribedSpan := &subscribedSpan{
+		resolvedTs: atomic.Uint64{},
+	}
+	subscribedSpan.resolvedTs.Store(oracle.GoTimeToTS(time.Now().Add(-time.Second)))
+
+	regionInfo := regionInfo{
+		verID:          verID,
+		span:           span,
+		subscribedSpan: subscribedSpan,
+	}
+
+	errorTask := NewRegionPriorityTask(TaskHighPrior, regionInfo, currentTs+1)
+	highTask := NewRegionPriorityTask(TaskHighPrior, regionInfo, currentTs)
+	lowTask := NewRegionPriorityTask(TaskLowPrior, regionInfo, currentTs)
+
+	require.True(t, queue.Push(lowTask))
+	require.True(t, queue.Push(errorTask))
+	require.True(t, queue.Push(highTask))
+
+	first, ok, err := queue.Pop(ctx)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, TaskHighPrior, first.(*regionPriorityTask).taskType)
+
+	second, ok, err := queue.Pop(ctx)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, TaskHighPrior, second.(*regionPriorityTask).taskType)
+
+	third, ok, err := queue.Pop(ctx)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, TaskLowPrior, third.(*regionPriorityTask).taskType)
+
+	require.Equal(t, 0, queue.Len())
 }
