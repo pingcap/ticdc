@@ -456,16 +456,17 @@ func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date str
 	}
 
 	if f.config.UseTableIDAsPath {
-		if _, err := generateTablePath(
+		tableIDPathPart, err := generateTablePath(
 			tbl.TableNameWithPhysicTableID.Table,
 			tbl.TableNameWithPhysicTableID.TableID,
 			true,
-		); err != nil {
+		)
+		if err != nil {
 			return "", err
 		}
 		return DmlPathKey{
 			SchemaPathKey: SchemaPathKey{
-				Schema:       strconv.FormatInt(tbl.TableNameWithPhysicTableID.TableID, 10),
+				Schema:       tableIDPathPart,
 				TableVersion: tableVersion,
 			},
 			UseTableIDAsPath: true,

@@ -489,7 +489,7 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 	}
 
 	// Read tableDef from schema file and check checksum.
-	_, tableDef, err := cloudstorage.ReadTableDefinitionFromSchemaFile(ctx, c.externalStorage, path)
+	_, tableDef, err := cloudstorage.ParseTableDefinition(ctx, c.externalStorage, path)
 	if err != nil {
 		if errors.ErrStorageSinkInvalidFileName.Equal(err) {
 			log.Panic("checksum mismatch", zap.Error(err), zap.String("path", path))

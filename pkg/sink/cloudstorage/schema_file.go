@@ -21,9 +21,8 @@ import (
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 )
 
-// ReadTableDefinitionFromSchemaFile reads a schema file and validates that the
-// file name checksum and table version match its table definition content.
-func ReadTableDefinitionFromSchemaFile(
+// ParseTableDefinition parses a schema file and validates its path metadata.
+func ParseTableDefinition(
 	ctx context.Context,
 	storage storeapi.Storage,
 	path string,

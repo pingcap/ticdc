@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReadTableDefinitionFromSchemaFile(t *testing.T) {
+func TestParseTableDefinition(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -39,7 +39,7 @@ func TestReadTableDefinitionFromSchemaFile(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, storage.WriteFile(ctx, schemaFilePath, encodedDef))
 
-	schemaKey, got, err := ReadTableDefinitionFromSchemaFile(ctx, storage, schemaFilePath)
+	schemaKey, got, err := ParseTableDefinition(ctx, storage, schemaFilePath)
 	require.NoError(t, err)
 	require.Equal(t, SchemaPathKey{
 		Schema:       def.Schema,
@@ -60,7 +60,7 @@ func TestReadTableDefinitionFromSchemaFile(t *testing.T) {
 	require.Equal(t, expectedChecksum, gotChecksum)
 }
 
-func TestReadTableDefinitionFromSchemaFileChecksumMismatch(t *testing.T) {
+func TestParseTableDefinitionChecksumMismatch(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -78,7 +78,7 @@ func TestReadTableDefinitionFromSchemaFileChecksumMismatch(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, storage.WriteFile(ctx, schemaFilePath, encodedDef))
 
-	_, _, err = ReadTableDefinitionFromSchemaFile(ctx, storage, schemaFilePath)
+	_, _, err = ParseTableDefinition(ctx, storage, schemaFilePath)
 	require.Error(t, err)
 	require.True(t, errors.ErrStorageSinkInvalidFileName.Equal(err))
 }
