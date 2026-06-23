@@ -14,8 +14,9 @@
 package cloudstorage
 
 import (
+	"cmp"
 	"fmt"
-	"regexp"
+	"path"
 	"strconv"
 	"strings"
 
@@ -23,6 +24,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 )
+
+const schemaFilePartitionNum int64 = -1
 
 // SchemaPathKey is the key of schema path.
 type SchemaPathKey struct {
@@ -88,13 +91,19 @@ type FileIndexKey struct {
 type FileIndex struct {
 	FileIndexKey
 	// Idx is the monotonically increasing file sequence number in one
-	// directory scope (schema/table/version[/partition][/date]).
+	// directory scope (schema/table/version[/partition][/date] or
+	// tableID/version[/date]).
 	Idx uint64
 }
 
 // DmlPathKey is the key of dml path.
 type DmlPathKey struct {
 	SchemaPathKey
+	// UseTableIDAsPath controls whether TableID is used as the first path
+	// element instead of Schema/Table.
+	UseTableIDAsPath bool
+	// TableID is set when UseTableIDAsPath is true.
+	TableID int64
 	// PartitionNum is an optional path level for partition table output.
 	// It is present only when partition-separator is enabled.
 	PartitionNum int64
@@ -103,25 +112,205 @@ type DmlPathKey struct {
 	Date string
 }
 
+// NewSchemaFileDMLPathKey returns the synthetic DML path key used to order a
+// schema file before data files with the same schema version.
+func NewSchemaFileDMLPathKey(schemaKey SchemaPathKey) DmlPathKey {
+	return DmlPathKey{
+		SchemaPathKey: schemaKey,
+		PartitionNum:  schemaFilePartitionNum,
+	}
+}
+
+// IsSchemaFileDMLPathKey checks whether the key represents a schema file marker.
+func (d DmlPathKey) IsSchemaFileDMLPathKey() bool {
+	return d.PartitionNum == schemaFilePartitionNum && d.Date == ""
+}
+
+// CompareDMLPathKey compares DML path keys in cloud storage replay order.
+func CompareDMLPathKey(x, y DmlPathKey) int {
+	if r := cmp.Compare(x.TableVersion, y.TableVersion); r != 0 {
+		return r
+	}
+	if r := cmp.Compare(x.PartitionNum, y.PartitionNum); r != 0 {
+		return r
+	}
+	if r := cmp.Compare(x.Date, y.Date); r != 0 {
+		return r
+	}
+	if x.UseTableIDAsPath != y.UseTableIDAsPath {
+		if x.UseTableIDAsPath {
+			return 1
+		}
+		return -1
+	}
+	if r := cmp.Compare(x.TableID, y.TableID); r != 0 {
+		return r
+	}
+	if r := cmp.Compare(x.Schema, y.Schema); r != 0 {
+		return r
+	}
+	return cmp.Compare(x.Table, y.Table)
+}
+
 // GenerateDMLFilePath generates the dml file path.
 func (d *DmlPathKey) GenerateDMLFilePath(
 	fileIndex *FileIndex, extension string, fileIndexWidth int,
 ) string {
-	var elems []string
+	fileName := generateDataFileName(
+		fileIndex.EnableTableAcrossNodes, fileIndex.DispatcherID,
+		fileIndex.Idx, extension, fileIndexWidth)
+	return path.Join(d.generateDMLDataDirPath(), fileName)
+}
 
-	elems = append(elems, d.Schema)
-	elems = append(elems, d.Table)
-	elems = append(elems, fmt.Sprintf("%d", d.TableVersion))
-
-	if d.PartitionNum != 0 {
-		elems = append(elems, fmt.Sprintf("%d", d.PartitionNum))
+func (d DmlPathKey) generateDMLDataDirPath() string {
+	elems := make([]string, 0, 5)
+	if d.UseTableIDAsPath {
+		elems = append(elems, strconv.FormatInt(d.TableID, 10))
+	} else {
+		elems = append(elems, d.Schema, d.Table)
 	}
-	if len(d.Date) != 0 {
+	elems = append(elems, strconv.FormatUint(d.TableVersion, 10))
+	if d.PartitionNum != 0 && !d.UseTableIDAsPath {
+		elems = append(elems, strconv.FormatInt(d.PartitionNum, 10))
+	}
+	if d.Date != "" {
 		elems = append(elems, d.Date)
 	}
-	elems = append(elems, generateDataFileName(fileIndex.EnableTableAcrossNodes, fileIndex.DispatcherID, fileIndex.Idx, extension, fileIndexWidth))
+	return path.Join(elems...)
+}
 
-	return strings.Join(elems, "/")
+// ParseDMLFilePath parses a cloud storage data file path.
+func (d *DmlPathKey) ParseDMLFilePath(
+	dateSeparator, filePath, extension string,
+) (FileIndex, error) {
+	parts := strings.Split(filePath, "/")
+	fileIndex, err := ParseFileIndexFromFileName(parts[len(parts)-1], extension)
+	if err != nil {
+		return FileIndex{}, err
+	}
+	if err = d.parseDMLDataDir(dateSeparator, parts[:len(parts)-1], filePath); err != nil {
+		return FileIndex{}, err
+	}
+	return fileIndex, nil
+}
+
+func (d *DmlPathKey) parseDMLDataDir(
+	dateSeparator string, parts []string, filePath string,
+) error {
+	var (
+		key        DmlPathKey
+		versionIdx int
+		dateIdx    int
+		err        error
+	)
+	switch dateSeparator {
+	case config.DateSeparatorNone.String():
+		switch len(parts) {
+		case 2:
+			key.UseTableIDAsPath = true
+			key.Schema = parts[0]
+			key.TableID, err = parseTableIDPathPart(parts[0])
+			versionIdx = 1
+		case 3:
+			key.Schema, key.Table, versionIdx = parts[0], parts[1], 2
+		case 4:
+			key.Schema, key.Table, versionIdx = parts[0], parts[1], 2
+			key.PartitionNum, err = strconv.ParseInt(parts[3], 10, 64)
+			if err != nil {
+				return err
+			}
+		default:
+			return errors.ErrStorageSinkInvalidFileName.GenWithStack(
+				"cannot match dml path pattern for %s", filePath)
+		}
+	case config.DateSeparatorYear.String(),
+		config.DateSeparatorMonth.String(),
+		config.DateSeparatorDay.String():
+		switch len(parts) {
+		case 3:
+			key.UseTableIDAsPath = true
+			key.Schema = parts[0]
+			key.TableID, err = parseTableIDPathPart(parts[0])
+			versionIdx, dateIdx = 1, 2
+		case 4:
+			key.Schema, key.Table, versionIdx, dateIdx = parts[0], parts[1], 2, 3
+		case 5:
+			key.Schema, key.Table, versionIdx, dateIdx = parts[0], parts[1], 2, 4
+			key.PartitionNum, err = strconv.ParseInt(parts[3], 10, 64)
+			if err != nil {
+				return err
+			}
+		default:
+			return errors.ErrStorageSinkInvalidFileName.GenWithStack(
+				"cannot match dml path pattern for %s", filePath)
+		}
+		if !matchDateSeparatorValue(dateSeparator, parts[dateIdx]) {
+			return errors.ErrStorageSinkInvalidFileName.GenWithStack(
+				"cannot match date separator %s for %s", dateSeparator, parts[dateIdx])
+		}
+		key.Date = parts[dateIdx]
+	default:
+		return errors.ErrStorageSinkInvalidDateSeparator.GenWithStackByArgs(dateSeparator)
+	}
+	if err != nil {
+		return err
+	}
+	if !key.UseTableIDAsPath && (key.Schema == "" || key.Table == "") {
+		return errors.ErrStorageSinkInvalidFileName.GenWithStack(
+			"cannot match dml path pattern for %s", filePath)
+	}
+	version, err := strconv.ParseUint(parts[versionIdx], 10, 64)
+	if err != nil {
+		return err
+	}
+	key.TableVersion = version
+	*d = key
+	return nil
+}
+
+func parseTableIDPathPart(part string) (int64, error) {
+	tableID, err := strconv.ParseInt(part, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if tableID <= 0 {
+		return 0, errors.ErrStorageSinkInvalidFileName.GenWithStack(
+			"invalid table id path part %s", part)
+	}
+	return tableID, nil
+}
+
+func matchDateSeparatorValue(separator string, value string) bool {
+	switch separator {
+	case config.DateSeparatorYear.String():
+		return len(value) == 4 && isDigits(value)
+	case config.DateSeparatorMonth.String():
+		return len(value) == 7 &&
+			value[4] == '-' &&
+			isDigits(value[:4]) &&
+			isDigits(value[5:])
+	case config.DateSeparatorDay.String():
+		return len(value) == 10 &&
+			value[4] == '-' &&
+			value[7] == '-' &&
+			isDigits(value[:4]) &&
+			isDigits(value[5:7]) &&
+			isDigits(value[8:])
+	default:
+		return false
+	}
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // ParseIndexFilePath parses the index file path and returns the max file index.
@@ -130,53 +319,35 @@ func (d *DmlPathKey) GenerateDMLFilePath(
 // partition-separator and date-separator could be empty.
 // DML file name pattern is as follows: CDC_{dispatcherID}.index or CDC.index
 func (d *DmlPathKey) ParseIndexFilePath(dateSeparator, path string) (string, error) {
-	var partitionNum int64
-
-	str := `(\w+)\/(\w+)\/(\d+)\/(\d+)?\/*`
-	switch dateSeparator {
-	case config.DateSeparatorNone.String():
-		str += `(\d{4})*`
-	case config.DateSeparatorYear.String():
-		str += `(\d{4})\/`
-	case config.DateSeparatorMonth.String():
-		str += `(\d{4}-\d{2})\/`
-	case config.DateSeparatorDay.String():
-		str += `(\d{4}-\d{2}-\d{2})\/`
+	parts := strings.Split(path, "/")
+	if len(parts) < 4 || parts[len(parts)-2] != "meta" {
+		return "", errors.ErrStorageSinkInvalidFileName.GenWithStack(
+			"cannot match dml path pattern for %s", path)
 	}
-	str += `meta\/`
-	// CDC[_{dispatcherID}].index
-	str += `CDC(?:_(\w+))?.index`
-	pathRE, err := regexp.Compile(str)
+	dispatcherID, err := parseIndexFileName(parts[len(parts)-1])
 	if err != nil {
 		return "", err
 	}
-
-	matches := pathRE.FindStringSubmatch(path)
-	if len(matches) != 7 {
-		return "", fmt.Errorf("cannot match dml path pattern for %s", path)
-	}
-
-	version, err := strconv.ParseUint(matches[3], 10, 64)
-	if err != nil {
+	if err = d.parseDMLDataDir(dateSeparator, parts[:len(parts)-2], path); err != nil {
 		return "", err
 	}
 
-	if len(matches[4]) > 0 {
-		partitionNum, err = strconv.ParseInt(matches[4], 10, 64)
-		if err != nil {
-			return "", err
-		}
-	}
+	return dispatcherID, nil
+}
 
-	*d = DmlPathKey{
-		SchemaPathKey: SchemaPathKey{
-			Schema:       matches[1],
-			Table:        matches[2],
-			TableVersion: version,
-		},
-		PartitionNum: partitionNum,
-		Date:         matches[5],
+func parseIndexFileName(fileName string) (string, error) {
+	const indexFileExtension = ".index"
+	if !strings.HasPrefix(fileName, "CDC") || !strings.HasSuffix(fileName, indexFileExtension) {
+		return "", errors.ErrStorageSinkInvalidFileName.GenWithStack(
+			"cannot match dml index file name pattern for %q", fileName)
 	}
-
-	return matches[6], nil
+	dispatcherID := strings.TrimSuffix(strings.TrimPrefix(fileName, "CDC"), indexFileExtension)
+	if dispatcherID == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(dispatcherID, "_") || len(dispatcherID) == 1 {
+		return "", errors.ErrStorageSinkInvalidFileName.GenWithStack(
+			"cannot match dml index file name pattern for %q", fileName)
+	}
+	return dispatcherID[1:], nil
 }

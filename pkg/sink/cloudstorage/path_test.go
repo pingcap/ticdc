@@ -174,6 +174,25 @@ func TestGenerateDataFilePathWithTableIDAsPath(t *testing.T) {
 	path, err := f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("12345/5/CDC_%s_000001.json", table.DispatcherID.String()), path)
+
+	var dmlkey DmlPathKey
+	fileIndex, err := dmlkey.ParseDMLFilePath(config.DateSeparatorNone.String(), path, ".json")
+	require.NoError(t, err)
+	require.Equal(t, DmlPathKey{
+		SchemaPathKey: SchemaPathKey{
+			Schema:       "12345",
+			TableVersion: 5,
+		},
+		UseTableIDAsPath: true,
+		TableID:          12345,
+	}, dmlkey)
+	require.Equal(t, FileIndex{
+		FileIndexKey: FileIndexKey{
+			DispatcherID:           table.DispatcherID.String(),
+			EnableTableAcrossNodes: true,
+		},
+		Idx: 1,
+	}, fileIndex)
 }
 
 func TestFetchIndexFromFileName(t *testing.T) {
@@ -222,6 +241,28 @@ func TestFetchIndexFromFileName(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
+}
+
+func TestParseFileIndexFromFileName(t *testing.T) {
+	t.Parallel()
+
+	dispatcherID := commonType.NewDispatcherID().String()
+	fileIndex, err := ParseFileIndexFromFileName(
+		fmt.Sprintf("CDC_%s_000011.json", dispatcherID),
+		".json",
+	)
+	require.NoError(t, err)
+	require.Equal(t, FileIndex{
+		FileIndexKey: FileIndexKey{
+			DispatcherID:           dispatcherID,
+			EnableTableAcrossNodes: true,
+		},
+		Idx: 11,
+	}, fileIndex)
+
+	fileIndex, err = ParseFileIndexFromFileName("CDC000012.json", ".json")
+	require.NoError(t, err)
+	require.Equal(t, FileIndex{Idx: 12}, fileIndex)
 }
 
 func TestGenerateDataFilePathWithIndexFile(t *testing.T) {

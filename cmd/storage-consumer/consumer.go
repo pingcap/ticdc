@@ -44,10 +44,9 @@ import (
 )
 
 const (
-	defaultChangefeedName         = "storage-consumer"
-	defaultLogInterval            = 5 * time.Second
-	fakePartitionNumForSchemaFile = -1
-	metadataFileName              = "metadata"
+	defaultChangefeedName = "storage-consumer"
+	defaultLogInterval    = 5 * time.Second
+	metadataFileName      = "metadata"
 )
 
 type (
@@ -468,7 +467,7 @@ func (c *consumer) parseDMLFilePath(ctx context.Context, path string) error {
 
 func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 	var schemaKey cloudstorage.SchemaPathKey
-	checksumInFile, err := schemaKey.ParseSchemaFilePath(path)
+	_, err := schemaKey.ParseSchemaFilePath(path)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -490,26 +489,12 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 	}
 
 	// Read tableDef from schema file and check checksum.
-	var tableDef cloudstorage.TableDefinition
-	schemaContent, err := c.externalStorage.ReadFile(ctx, path)
+	_, tableDef, err := cloudstorage.ReadTableDefinitionFromSchemaFile(ctx, c.externalStorage, path)
 	if err != nil {
+		if errors.ErrStorageSinkInvalidFileName.Equal(err) {
+			log.Panic("checksum mismatch", zap.Error(err), zap.String("path", path))
+		}
 		return errors.Trace(err)
-	}
-	err = json.Unmarshal(schemaContent, &tableDef)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	checksumInMem, err := tableDef.Sum32(nil)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if checksumInMem != checksumInFile || schemaKey.TableVersion != tableDef.TableVersion {
-		log.Panic("checksum mismatch",
-			zap.Uint32("checksumInMem", checksumInMem),
-			zap.Uint32("checksumInFile", checksumInFile),
-			zap.Uint64("tableversionInMem", schemaKey.TableVersion),
-			zap.Uint64("tableversionInFile", tableDef.TableVersion),
-			zap.String("path", path))
 	}
 
 	// Update tableDefMap.
@@ -530,11 +515,7 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 	//
 	// the DDL event recorded in schema.json should be executed first, then the DML events
 	// in csv files can be executed.
-	dmlkey := cloudstorage.DmlPathKey{
-		SchemaPathKey: schemaKey,
-		PartitionNum:  fakePartitionNumForSchemaFile,
-		Date:          "",
-	}
+	dmlkey := cloudstorage.NewSchemaFileDMLPathKey(schemaKey)
 	if _, ok := c.tableDMLIdxMap[dmlkey]; !ok {
 		c.tableDMLIdxMap[dmlkey] = fileIndexKeyMap{}
 	} else {
@@ -606,19 +587,7 @@ func (c *consumer) handleNewFiles(
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].TableVersion != keys[j].TableVersion {
-			return keys[i].TableVersion < keys[j].TableVersion
-		}
-		if keys[i].PartitionNum != keys[j].PartitionNum {
-			return keys[i].PartitionNum < keys[j].PartitionNum
-		}
-		if keys[i].Date != keys[j].Date {
-			return keys[i].Date < keys[j].Date
-		}
-		if keys[i].Schema != keys[j].Schema {
-			return keys[i].Schema < keys[j].Schema
-		}
-		return keys[i].Table < keys[j].Table
+		return cloudstorage.CompareDMLPathKey(keys[i], keys[j]) < 0
 	})
 
 	for order, key := range keys {
@@ -637,7 +606,7 @@ func (c *consumer) handleNewFiles(
 
 		// if the key is a fake dml path key which is mainly used for
 		// sorting schema.json file before the dml files, then execute the ddl query.
-		if key.PartitionNum == fakePartitionNumForSchemaFile && len(key.Date) == 0 && len(tableDef.Query) > 0 {
+		if key.IsSchemaFileDMLPathKey() && len(tableDef.Query) > 0 {
 			if key.TableVersion <= ddlWatermark {
 				log.Warn("DDL event replayed with stale table version, ignore it",
 					zap.String("schema", key.Schema), zap.String("table", key.Table),
