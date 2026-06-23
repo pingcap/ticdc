@@ -39,8 +39,9 @@ import (
 const timeout = time.Second * 30
 
 var (
-	nFailed = 0
-	nPassed = 0
+	nFailed  = 0
+	nPassed  = 0
+	nSkipped = 0
 )
 
 var (
@@ -58,6 +59,19 @@ var defaultLength = map[string]float64{
 	"BIGINT":           20,
 	"BIT":              1,
 	"CHAR":             1,
+}
+
+var skippedTestCases = map[string]string{
+	"debezium/mysql-dbz-193.ddl": "TiDB classic rejects FULLTEXT indexes because they are starter deployment mode only",
+}
+
+func shouldSkipTestCase(rootDir, testCasePath string) (string, bool) {
+	relPath, err := filepath.Rel(rootDir, testCasePath)
+	if err != nil {
+		relPath = testCasePath
+	}
+	reason, ok := skippedTestCases[filepath.ToSlash(relPath)]
+	return reason, ok
 }
 
 func parseSQLText(data string) (res []ast.StmtNode, warns []error, err error) {
@@ -102,6 +116,14 @@ func runAllTestCases(dir, dbConnMySQL, dbConnTiDB string) bool {
 		logger.Panic("Failed to read test case directory", zap.String("dir", dir), zap.Error(err))
 	}
 	for _, path := range files {
+		if reason, ok := shouldSkipTestCase(dir, path); ok {
+			// This suite runs against classic TiDB. Since TiDB #69012, FULLTEXT
+			// indexes are supported only in starter deployment mode, so keep the
+			// Debezium corpus unchanged and skip this classic-incompatible case.
+			nSkipped++
+			logger.Info("Skip", zap.String("case", path), zap.String("reason", reason))
+			continue
+		}
 		logger.Info("Run", zap.String("case", path))
 		runTestCase(path, dbConnMySQL, dbConnTiDB)
 	}
@@ -110,11 +132,13 @@ func runAllTestCases(dir, dbConnMySQL, dbConnTiDB string) bool {
 		logger.Error(
 			"Test finished with error",
 			zap.Int("passed", nPassed),
+			zap.Int("skipped", nSkipped),
 			zap.Int("failed", nFailed))
 	} else {
 		logger.Info(
 			"All tests pass",
 			zap.Int("passed", nPassed),
+			zap.Int("skipped", nSkipped),
 			zap.Int("failed", nFailed))
 	}
 
