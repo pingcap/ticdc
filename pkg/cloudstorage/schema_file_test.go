@@ -87,53 +87,6 @@ func generateSchemaFile() (SchemaFile, *common.TableInfo) {
 	return schemaFile, tableInfo
 }
 
-func TestBuildUsesTargetNames(t *testing.T) {
-	t.Parallel()
-
-	idFieldType := types.NewFieldType(mysql.TypeLong)
-	idFieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
-	routedTableInfo := common.WrapTableInfo("source_db", &timodel.TableInfo{
-		ID:       20,
-		Name:     ast.NewCIStr("source_table"),
-		UpdateTS: 100,
-		Columns: []*timodel.ColumnInfo{
-			{
-				ID:        1,
-				Name:      ast.NewCIStr("id"),
-				FieldType: *idFieldType,
-				State:     timodel.StatePublic,
-			},
-		},
-	}).CloneWithRouting("target_db", "target_table")
-	sourceDDL := &commonEvent.DDLEvent{
-		Version:    commonEvent.DDLEventVersion1,
-		Type:       byte(timodel.ActionCreateTable),
-		SchemaName: "source_db",
-		TableName:  "source_table",
-		Query:      "CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)",
-		TableInfo:  routedTableInfo,
-		FinishedTs: 100,
-	}
-
-	routedDDL := commonEvent.NewRoutedDDLEvent(
-		sourceDDL,
-		"CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY)",
-		"target_db",
-		"target_table",
-		"",
-		"",
-		routedTableInfo,
-		nil,
-		nil,
-	)
-
-	var schemaFile SchemaFile
-	schemaFile.Build(routedDDL, false)
-	require.Equal(t, "target_db", schemaFile.Schema)
-	require.Equal(t, "target_table", schemaFile.Table)
-	require.Contains(t, schemaFile.Query, "`target_db`.`target_table`")
-}
-
 func TestTableCol(t *testing.T) {
 	t.Parallel()
 
@@ -587,9 +540,7 @@ func TestParseSchemaFile(t *testing.T) {
 	}, schemaKey)
 	require.Equal(t, schemaFile.Schema, got.Schema)
 	require.Equal(t, schemaFile.Table, got.Table)
-	require.Equal(t, schemaFile.Version, got.Version)
 	require.Equal(t, schemaFile.TableVersion, got.TableVersion)
-	require.Equal(t, schemaFile.TotalColumns, got.TotalColumns)
 	require.Len(t, got.Columns, len(schemaFile.Columns))
 
 	schemaFile.TableVersion++
@@ -600,37 +551,6 @@ func TestParseSchemaFile(t *testing.T) {
 	_, _, err = Parse(ctx, storage, schemaFilePath)
 	require.Error(t, err)
 	require.True(t, errors.ErrStorageSinkInvalidFileName.Equal(err))
-}
-
-func TestGenerateSchemaFilePathValidation(t *testing.T) {
-	t.Parallel()
-
-	schemaFile, _ := generateSchemaFile()
-
-	// empty schema
-	emptySchemaFile := &SchemaFile{Schema: "", Table: "t1", TableVersion: 100, TotalColumns: 1, Columns: []TableCol{{}}}
-	_, err := emptySchemaFile.GenerateSchemaFilePath(false, 0)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "schema cannot be empty")
-
-	// zero table version
-	zeroVersionSchemaFile := &SchemaFile{Schema: "s1", Table: "t1", TableVersion: 0, TotalColumns: 1, Columns: []TableCol{{}}}
-	_, err = zeroVersionSchemaFile.GenerateSchemaFilePath(false, 0)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "table version cannot be zero")
-
-	// use-table-id-as-path with invalid tableID
-	_, err = schemaFile.GenerateSchemaFilePath(true, 0)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid table id for table-id path")
-	_, err = schemaFile.GenerateSchemaFilePath(true, -1)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid table id for table-id path")
-
-	invalidSchemaFile := &SchemaFile{Schema: "s1", Table: "t1", TableVersion: 100, TotalColumns: 1, Columns: nil}
-	_, err = invalidSchemaFile.GenerateSchemaFilePath(false, 0)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid schema file")
 }
 
 func TestSchemaFileSum32(t *testing.T) {

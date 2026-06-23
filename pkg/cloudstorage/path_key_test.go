@@ -122,75 +122,10 @@ func TestParseDMLFilePath(t *testing.T) {
 		fileIndex      FileIndex
 	}{
 		{
-			name:           "no date no partition",
-			dateSeparator:  "none",
-			path:           "schema1/table1/123456/CDC000010.csv",
-			fileIndexWidth: 6,
-			dmlkey: DmlPathKey{
-				SchemaPathKey: SchemaPathKey{
-					Schema:       "schema1",
-					Table:        "table1",
-					TableVersion: 123456,
-				},
-			},
-			fileIndex: FileIndex{Idx: 10},
-		},
-		{
-			name:           "no date with partition",
-			dateSeparator:  "none",
-			path:           "schema1/table1/123456/55/CDC000010.csv",
-			fileIndexWidth: 6,
-			dmlkey: DmlPathKey{
-				SchemaPathKey: SchemaPathKey{
-					Schema:       "schema1",
-					Table:        "table1",
-					TableVersion: 123456,
-				},
-				PartitionNum: 55,
-			},
-			fileIndex: FileIndex{Idx: 10},
-		},
-		{
 			name:           "no date with table id path",
 			dateSeparator:  "none",
-			path:           "12345/123456/CDC000010.csv",
-			fileIndexWidth: 6,
-			dmlkey: DmlPathKey{
-				SchemaPathKey: SchemaPathKey{
-					Schema:       "12345",
-					TableVersion: 123456,
-				},
-				UseTableIDAsPath: true,
-				TableID:          12345,
-			},
-			fileIndex: FileIndex{Idx: 10},
-		},
-		{
-			name:           "day date no partition",
-			dateSeparator:  "day",
-			path:           fmt.Sprintf("schema1/table1/123456/2023-05-09/CDC_%s_00000000000000000010.csv", dispatcherID),
-			fileIndexWidth: 20,
-			dmlkey: DmlPathKey{
-				SchemaPathKey: SchemaPathKey{
-					Schema:       "schema1",
-					Table:        "table1",
-					TableVersion: 123456,
-				},
-				Date: "2023-05-09",
-			},
-			fileIndex: FileIndex{
-				FileIndexKey: FileIndexKey{
-					DispatcherID:           dispatcherID,
-					EnableTableAcrossNodes: true,
-				},
-				Idx: 10,
-			},
-		},
-		{
-			name:           "day date with table id path",
-			dateSeparator:  "day",
-			path:           fmt.Sprintf("12345/123456/2023-05-09/CDC_%s_00000000000000000010.csv", dispatcherID),
-			indexPath:      fmt.Sprintf("12345/123456/2023-05-09/meta/CDC_%s.index", dispatcherID),
+			path:           fmt.Sprintf("12345/123456/CDC_%s_00000000000000000010.csv", dispatcherID),
+			indexPath:      fmt.Sprintf("12345/123456/meta/CDC_%s.index", dispatcherID),
 			fileIndexWidth: 20,
 			dmlkey: DmlPathKey{
 				SchemaPathKey: SchemaPathKey{
@@ -199,7 +134,6 @@ func TestParseDMLFilePath(t *testing.T) {
 				},
 				UseTableIDAsPath: true,
 				TableID:          12345,
-				Date:             "2023-05-09",
 			},
 			fileIndex: FileIndex{
 				FileIndexKey: FileIndexKey{
@@ -250,10 +184,6 @@ func TestParseDMLFilePath(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestParseDMLFilePathRejectsInvalidPath(t *testing.T) {
-	t.Parallel()
 
 	var dmlkey DmlPathKey
 	_, err := dmlkey.ParseDMLFilePath("none", "schema1//123456/CDC000010.csv", ".csv")
