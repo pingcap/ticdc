@@ -586,7 +586,6 @@ func (s *EventTestHelper) DML2Event4PartitionTable(schema, table, partition, dml
 // 3. You must set the preRow of the DMLEvent by yourself, since we can not get it from TiDB.
 func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEvent {
 	key := toTableInfosKey(schema, table)
-	log.Info("dml2event", zap.String("key", key))
 	tableInfo, ok := s.tableInfos[key]
 	require.True(s.t, ok)
 	did := common.NewDispatcherID()
