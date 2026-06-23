@@ -232,19 +232,16 @@ func TestRegionPriorityTaskQueueOrder(t *testing.T) {
 	require.True(t, queue.Push(errorTask))
 	require.True(t, queue.Push(highTask))
 
-	first, ok, err := queue.Pop(ctx)
+	first, err := queue.Pop(ctx)
 	require.NoError(t, err)
-	require.True(t, ok)
 	require.Equal(t, TaskHighPrior, first.(*regionPriorityTask).taskType)
 
-	second, ok, err := queue.Pop(ctx)
+	second, err := queue.Pop(ctx)
 	require.NoError(t, err)
-	require.True(t, ok)
 	require.Equal(t, TaskHighPrior, second.(*regionPriorityTask).taskType)
 
-	third, ok, err := queue.Pop(ctx)
+	third, err := queue.Pop(ctx)
 	require.NoError(t, err)
-	require.True(t, ok)
 	require.Equal(t, TaskLowPrior, third.(*regionPriorityTask).taskType)
 
 	require.Equal(t, 0, queue.Len())

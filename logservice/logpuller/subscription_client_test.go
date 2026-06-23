@@ -301,9 +301,8 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	task, ok, err := client.regionTaskQueue.Pop(ctx)
+	task, err := client.regionTaskQueue.Pop(ctx)
 	require.NoError(t, err)
-	require.True(t, ok)
 	region := task.GetRegionInfo()
 	require.True(t, region.isStopped())
 	require.True(t, region.filterLoop)

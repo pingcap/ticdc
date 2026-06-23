@@ -70,9 +70,8 @@ func TestQueuePushPeekPopOrder(t *testing.T) {
 
 	expectedOrder := []string{"task2", "task4", "task1", "task5", "task3"}
 	for _, expected := range expectedOrder {
-		task, ok, err := q.Pop(context.Background())
+		task, err := q.Pop(context.Background())
 		require.NoError(t, err)
-		require.True(t, ok)
 		require.Equal(t, expected, task.description)
 	}
 	require.Equal(t, 0, q.Len())
@@ -85,9 +84,8 @@ func TestQueuePopBlocking(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	task, ok, err := q.Pop(ctx)
+	task, err := q.Pop(ctx)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.False(t, ok)
 	require.Nil(t, task)
 	require.GreaterOrEqual(t, time.Since(start), 50*time.Millisecond)
 
@@ -97,9 +95,8 @@ func TestQueuePopBlocking(t *testing.T) {
 	}()
 
 	start = time.Now()
-	task, ok, err = q.Pop(context.Background())
+	task, err = q.Pop(context.Background())
 	require.NoError(t, err)
-	require.True(t, ok)
 	require.Equal(t, "task1", task.description)
 	require.GreaterOrEqual(t, time.Since(start), 50*time.Millisecond)
 }
@@ -142,8 +139,8 @@ func TestQueueConcurrentOperations(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for {
-				task, ok, err := q.Pop(ctx)
-				if err != nil || !ok {
+				task, err := q.Pop(ctx)
+				if err != nil {
 					return
 				}
 				require.NotNil(t, task)
@@ -189,19 +186,16 @@ func TestQueueClose(t *testing.T) {
 	q.Close()
 	require.False(t, q.Push(newMockItem(1, "closed")))
 
-	task, ok, err := q.Pop(context.Background())
+	task, err := q.Pop(context.Background())
 	require.NoError(t, err)
-	require.True(t, ok)
 	require.Equal(t, "task2", task.description)
 
-	task, ok, err = q.Pop(context.Background())
+	task, err = q.Pop(context.Background())
 	require.NoError(t, err)
-	require.True(t, ok)
 	require.Equal(t, "task1", task.description)
 
-	task, ok, err = q.Pop(context.Background())
-	require.NoError(t, err)
-	require.False(t, ok)
+	task, err = q.Pop(context.Background())
+	require.ErrorIs(t, err, ErrClosed)
 	require.Nil(t, task)
 
 	require.NotPanics(t, q.Close)
@@ -213,9 +207,8 @@ func TestQueueCloseWakesBlockedPop(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		task, ok, err := q.Pop(context.Background())
-		require.NoError(t, err)
-		require.False(t, ok)
+		task, err := q.Pop(context.Background())
+		require.ErrorIs(t, err, ErrClosed)
 		require.Nil(t, task)
 	}()
 
@@ -236,9 +229,8 @@ func TestQueuePushMultipleItemsWakesMultipleBlockedPop(t *testing.T) {
 	for i := 0; i < waiters; i++ {
 		go func() {
 			ready <- struct{}{}
-			task, ok, err := q.Pop(context.Background())
+			task, err := q.Pop(context.Background())
 			require.NoError(t, err)
-			require.True(t, ok)
 			require.NotNil(t, task)
 			done <- struct{}{}
 		}()
