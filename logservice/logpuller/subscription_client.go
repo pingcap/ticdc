@@ -624,10 +624,9 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			continue
 		}
 
-		var rpcCtxOK bool
-		region, rpcCtxOK = s.attachRPCContextForRegion(ctx, region)
+		region, ok := s.attachRPCContextForRegion(ctx, region)
 		// If attachRPCContextForRegion fails, the region will be re-scheduled.
-		if !rpcCtxOK {
+		if !ok {
 			continue
 		}
 
@@ -635,7 +634,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		worker := store.getRequestWorker()
 		force := regionTask.Priority() <= forcedPriorityBase
 
-		added, err := worker.add(ctx, region, force)
+		ok, err = worker.add(ctx, region, force)
 		if err != nil {
 			log.Warn("subscription client add region request failed",
 				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
@@ -644,7 +643,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			return err
 		}
 
-		if !added {
+		if !ok {
 			s.regionTaskQueue.Push(regionTask)
 			continue
 		}
