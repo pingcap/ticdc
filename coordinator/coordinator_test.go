@@ -44,6 +44,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -57,6 +58,97 @@ func (m *mockPdClient) UpdateServiceGCSafePoint(ctx context.Context, serviceID s
 	return safePoint, nil
 }
 
+<<<<<<< HEAD
+=======
+func (m *mockPdClient) GetTS(ctx context.Context) (int64, int64, error) {
+	return oracle.GetPhysical(time.Now()), 0, nil
+}
+
+func (m *mockPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.gcClient == nil {
+		m.gcClient = make(map[uint32]*mockGCStatesClient)
+	}
+	if cli, ok := m.gcClient[keyspaceID]; ok {
+		return cli
+	}
+	cli := newMockGCStatesClient(keyspaceID)
+	m.gcClient[keyspaceID] = cli
+	return cli
+}
+
+type mockGCStatesClient struct {
+	keyspaceID uint32
+
+	mu       sync.Mutex
+	barriers map[string]*pdgc.GCBarrierInfo
+}
+
+func newMockGCStatesClient(keyspaceID uint32) *mockGCStatesClient {
+	return &mockGCStatesClient{
+		keyspaceID: keyspaceID,
+		barriers:   make(map[string]*pdgc.GCBarrierInfo),
+	}
+}
+
+func (c *mockGCStatesClient) SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GCBarrierInfo, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	info := pdgc.NewGCBarrierInfo(barrierID, barrierTS, ttl, time.Now())
+	c.barriers[barrierID] = info
+	return info, nil
+}
+
+func (c *mockGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID string) (*pdgc.GCBarrierInfo, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	info, ok := c.barriers[barrierID]
+	if ok {
+		delete(c.barriers, barrierID)
+	}
+	return info, nil
+}
+
+func (c *mockGCStatesClient) GetGCState(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	barriers := make([]*pdgc.GCBarrierInfo, 0, len(c.barriers))
+	for _, info := range c.barriers {
+		barriers = append(barriers, info)
+	}
+	return pdgc.NewGCStateWithGCBarriers(c.keyspaceID, 0, 0, barriers), nil
+}
+
+func (c *mockGCStatesClient) SetGlobalGCBarrier(
+	ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return pdgc.NewGlobalGCBarrierInfo(barrierID, barrierTS, ttl, time.Now()), nil
+}
+
+func (c *mockGCStatesClient) DeleteGlobalGCBarrier(
+	ctx context.Context, barrierID string,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return nil, nil
+}
+
+func (c *mockGCStatesClient) GetAllKeyspacesGCStates(
+	ctx context.Context, opts ...pdgc.GCStatesAPIOption,
+) (pdgc.ClusterGCStates, error) {
+	gcState, err := c.GetGCState(ctx, opts...)
+	if err != nil {
+		return pdgc.ClusterGCStates{}, err
+	}
+	return pdgc.NewClusterGCStatesWithoutGlobalGCBarriers(map[uint32]pdgc.GCState{
+		c.keyspaceID: gcState,
+	}), nil
+}
+
+>>>>>>> 0eec97153 (coordinator: persist maintainer epochs before ownership changes (#5434))
 type mockMaintainerManager struct {
 	mc                 messaging.MessageCenter
 	msgCh              chan *messaging.TargetMessage
@@ -244,6 +336,53 @@ func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (config.CaptureID, erro
 	return config.CaptureID(m.ownerID), nil
 }
 
+func mockBumpChangefeedEpoch(
+	backend *mock_changefeed.MockBackend,
+	cfs map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper,
+) {
+	var mu sync.Mutex
+	backend.EXPECT().
+		BumpChangefeedEpoch(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(
+			_ context.Context,
+			id common.ChangeFeedID,
+			candidateEpoch uint64,
+			options changefeed.EpochBumpOptions,
+		) (*config.ChangeFeedInfo, error) {
+			mu.Lock()
+			defer mu.Unlock()
+
+			cf, ok := cfs[id]
+			if !ok {
+				return nil, fmt.Errorf("changefeed %s not found", id.String())
+			}
+			info, err := cf.Info.Clone()
+			if err != nil {
+				return nil, err
+			}
+			info.Epoch, err = common.AdvanceChangefeedEpoch(candidateEpoch, info.Epoch)
+			if err != nil {
+				return nil, err
+			}
+			if options.State != nil {
+				info.State = *options.State
+			}
+			if options.UpdateError {
+				info.Error = options.Error
+			}
+			cf.Info = info
+			if cf.Status == nil {
+				cf.Status = &config.ChangeFeedStatus{}
+			}
+			if options.UpdateStatus {
+				cf.Status.CheckpointTs = options.CheckpointTs
+				cf.Status.Progress = options.Progress
+			}
+			return info, nil
+		}).
+		AnyTimes()
+}
+
 func TestCoordinatorScheduling(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
@@ -294,6 +433,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 	cfs := make(map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper)
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(cfs, nil).AnyTimes()
 	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	mockBumpChangefeedEpoch(backend, cfs)
 	for i := 0; i < cfSize; i++ {
 		cfID := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			Name:     fmt.Sprintf("%d", i),
@@ -366,6 +506,7 @@ func TestScaleNode(t *testing.T) {
 	}
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(cfs, nil).AnyTimes()
 	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	mockBumpChangefeedEpoch(backend, cfs)
 
 	cr := New(info, &mockPdClient{}, backend, serviceID, 100, 10000, time.Millisecond*1)
 
@@ -752,6 +893,7 @@ func TestHandleStateChangeSkipsDuplicateRuntimeStatePersistence(t *testing.T) {
 			self,
 			changefeedDB,
 			backend,
+			nil,
 			10,
 		),
 	}
@@ -792,15 +934,28 @@ func TestHandleStateChangeSkipsDuplicateRuntimeStatePersistence(t *testing.T) {
 	require.Equal(t, 1, changefeedDB.GetReplicatingSize())
 }
 
-func TestHandleStateChangeSkipsNilChangefeedInfo(t *testing.T) {
+func TestHandleStateChangeBumpsEpochForWarningState(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
 
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	changefeedDB := changefeed.NewChangefeedDB(1216)
+	self := node.NewInfo("localhost:8300", "")
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()[self.ID] = self
+	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
 	controller := &Controller{
 		backend:      backend,
 		changefeedDB: changefeedDB,
+		operatorController: operator.NewOperatorController(
+			self,
+			changefeedDB,
+			backend,
+			nil,
+			10,
+		),
 	}
 	co := &coordinator{
 		backend:    backend,
@@ -808,22 +963,50 @@ func TestHandleStateChangeSkipsNilChangefeedInfo(t *testing.T) {
 	}
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	oldEpoch := uint64(233)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
 		State:        config.StateNormal,
 		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        oldEpoch,
 	}, 1, false)
-	changefeedDB.AddAbsentChangefeed(cf)
-	cf.SetInfo(nil)
+	changefeedDB.AddReplicatingMaintainer(cf, self.ID)
 
-	event := newChangefeedChange(cf, config.StateWarning, ChangeState, &config.RunningError{
-		Time:    time.Unix(1, 0),
+	newError := &config.RunningError{
+		Time:    time.Unix(2, 0),
 		Addr:    "127.0.0.1:8300",
 		Code:    "CDC:ErrSinkURIInvalid",
 		Message: "sink uri invalid",
-	})
+	}
+	backend.EXPECT().
+		BumpChangefeedEpoch(gomock.Any(), cfID, gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ common.ChangeFeedID, candidateEpoch uint64, options changefeed.EpochBumpOptions) (*config.ChangeFeedInfo, error) {
+			require.NotZero(t, candidateEpoch)
+			require.NotNil(t, options.State)
+			require.Equal(t, config.StateWarning, *options.State)
+			require.True(t, options.UpdateError)
+			require.Equal(t, newError, options.Error)
+			require.False(t, options.UpdateStatus)
+			info, err := cf.GetInfo().Clone()
+			require.NoError(t, err)
+			info.State = *options.State
+			info.Error = options.Error
+			info.Epoch = candidateEpoch
+			return info, nil
+		}).
+		Times(1)
+
+	event := newChangefeedChange(cf, config.StateWarning, ChangeState, newError)
 	require.NoError(t, co.handleStateChange(context.Background(), event))
+
+	require.Equal(t, config.StateWarning, cf.GetInfo().State)
+	require.Equal(t, newError, cf.GetInfo().Error)
+	require.Greater(t, cf.GetInfo().Epoch, oldEpoch)
+	op := controller.operatorController.GetOperator(cfID)
+	require.NotNil(t, op)
+	req := op.Schedule().Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, oldEpoch, req.MaintainerEpoch)
 }
 
 func TestHandleStateChangePersistsRuntimeStateWhenStateChanges(t *testing.T) {
