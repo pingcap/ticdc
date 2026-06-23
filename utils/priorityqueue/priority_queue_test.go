@@ -134,10 +134,8 @@ func TestQueueConcurrentOperations(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	for i := 0; i < numConsumers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numConsumers {
+		wg.Go(func() {
 			for {
 				task, err := q.Pop(ctx)
 				if err != nil {
@@ -149,18 +147,16 @@ func TestQueueConcurrentOperations(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 
-	for i := 0; i < numProducers; i++ {
-		wg.Add(1)
-		go func(producerID int) {
-			defer wg.Done()
-			for j := 0; j < tasksPerProducer; j++ {
+	for producerID := range numProducers {
+		wg.Go(func() {
+			for j := range tasksPerProducer {
 				priority := producerID*tasksPerProducer + j
 				require.True(t, q.Push(newMockItem(priority, "task")))
 			}
-		}(i)
+		})
 	}
 
 	done := make(chan struct{})

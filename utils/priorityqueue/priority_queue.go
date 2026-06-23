@@ -16,9 +16,9 @@ package priorityqueue
 
 import (
 	"context"
-	"errors"
 	"sync"
 
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/utils/heap"
 )
 
