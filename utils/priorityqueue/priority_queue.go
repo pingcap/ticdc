@@ -108,9 +108,6 @@ func (q *PriorityQueue[T]) TryPop() (item T, ok bool) {
 	defer q.mu.Unlock()
 
 	item, ok = q.heap.PopTop()
-	if ok && q.heap.Len() > 0 {
-		q.notifyOneLocked()
-	}
 	return item, ok
 }
 
