@@ -270,6 +270,21 @@ func (c *coordinator) handleStateChange(
 		return nil
 	}
 
+	if event.state == config.StateWarning {
+		warningState := config.StateWarning
+		currentMaintainerEpoch := currentInfo.Epoch
+		if err := c.controller.updateChangefeedEpoch(ctx, event.changefeedID, changefeed.EpochBumpOptions{
+			State:       &warningState,
+			Error:       event.err,
+			UpdateError: true,
+		}); err != nil {
+			return errors.Trace(err)
+		}
+		c.controller.operatorController.StopChangefeedWithMaintainerEpoch(ctx, event.changefeedID, false, currentMaintainerEpoch)
+		c.controller.moveChangefeedToSchedulingQueue(event.changefeedID, false, false)
+		return nil
+	}
+
 	cfInfo, err := currentInfo.Clone()
 	if err != nil {
 		return errors.Trace(err)
@@ -287,15 +302,9 @@ func (c *coordinator) handleStateChange(
 	}
 	cf.SetInfo(cfInfo)
 
-	switch event.state {
-	case config.StateWarning:
-		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
-		c.controller.updateChangefeedEpoch(ctx, event.changefeedID)
-		c.controller.moveChangefeedToSchedulingQueue(event.changefeedID, false, false)
-	case config.StateFailed, config.StateFinished:
+	if event.state == config.StateFailed || event.state == config.StateFinished {
 		failpoint.Inject("BlockBeforeStopChangefeed", func() {})
 		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
-	default:
 	}
 	return nil
 }
