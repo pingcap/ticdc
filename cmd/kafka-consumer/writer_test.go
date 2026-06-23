@@ -324,3 +324,43 @@ func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) 
 	resolved = group.ResolveInto(150, resolvedEvents)
 	require.Empty(t, resolved)
 }
+
+func TestFlushPartitionDMLEventsFlushesWithoutResolved(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+
+	flushedCommitTs := make([]uint64, 0)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(e *commonEvent.DMLEvent) {
+		flushedCommitTs = append(flushedCommitTs, e.CommitTs)
+		e.PostFlush()
+	}).AnyTimes()
+
+	w := &writer{mysqlSink: s}
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: map[int64]*util.EventsGroup{1: util.NewEventsGroup(0, 1)},
+	}
+	newDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
+		return &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			CommitTs:        commitTs,
+			RowTypes:        []common.RowType{common.RowTypeUpdate},
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t"},
+			},
+		}
+	}
+	group := progress.eventsGroup[1]
+	group.Append(newDMLEvent(100), false)
+	group.Append(newDMLEvent(200), false)
+
+	require.NoError(t, w.flushPartitionDMLEvents(ctx, progress, 150))
+	require.Equal(t, []uint64{100}, flushedCommitTs)
+	require.Equal(t, uint64(100), group.AppliedWatermark)
+
+	remaining := group.ResolveInto(300, nil)
+	require.Len(t, remaining, 1)
+	require.Equal(t, uint64(200), remaining[0].CommitTs)
+}

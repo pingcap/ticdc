@@ -1,0 +1,3 @@
+USE test;
+
+ALTER TABLE tp_account ADD COLUMN note VARCHAR(32) NULL;

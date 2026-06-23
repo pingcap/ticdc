@@ -966,7 +966,7 @@ func (s *SinkConfig) ValidateProtocol(scheme string) error {
 		if s.OpenProtocol != nil {
 			outputOldValue = s.OpenProtocol.OutputOldValue
 		}
-	case ProtocolDebezium:
+	case ProtocolDebezium, ProtocolDebeziumAvro:
 		if s.Debezium != nil {
 			outputOldValue = s.Debezium.OutputOldValue
 		}

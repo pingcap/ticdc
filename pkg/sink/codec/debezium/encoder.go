@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/avro"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -38,6 +39,9 @@ type BatchEncoder struct {
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
 func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
+	if d.config.Protocol == config.ProtocolDebeziumAvro {
+		return nil, nil
+	}
 	if !d.config.EnableTiDBExtension {
 		return nil, nil
 	}
@@ -109,6 +113,9 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 // EncodeDDLEvent implements the RowEventEncoder interface
 // DDL message unresolved tso
 func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message, error) {
+	if d.config.Protocol == config.ProtocolDebeziumAvro {
+		return nil, nil
+	}
 	valueBuf := bytes.Buffer{}
 	keyMap := bytes.Buffer{}
 	err := d.codec.EncodeDDLEvent(e, &keyMap, &valueBuf)

@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"math/big"
+	"strconv"
 	"strings"
 
 	"github.com/linkedin/goavro/v2"
@@ -32,6 +34,7 @@ const (
 
 	debeziumAvroConnectFieldKey = "connect.field"
 	debeziumAvroTiDBTypeKey     = "tidb_type"
+	debeziumAvroDecimalName     = "org.apache.kafka.connect.data.Decimal"
 )
 
 type debeziumAvroMessage struct {
@@ -267,6 +270,21 @@ func (c *debeziumAvroSchemaConverter) toAvroSchema(
 		addConnectMetadata(arraySchema, schema)
 		return arraySchema, nil
 	default:
+		if isDebeziumAvroDecimalSchema(schema) {
+			precision, scale, err := decimalSchemaPrecisionAndScale(schema)
+			if err != nil {
+				return nil, err
+			}
+			decimalSchema := map[string]any{
+				"type":        "bytes",
+				"logicalType": "decimal",
+				"precision":   precision,
+				"scale":       scale,
+			}
+			addConnectMetadata(decimalSchema, schema)
+			return decimalSchema, nil
+		}
+
 		avroType, err := connectPrimitiveToAvro(schema.Type)
 		if err != nil {
 			return nil, err
@@ -360,6 +378,18 @@ func (c *debeziumAvroSchemaConverter) toNative(
 		}
 		return v, nil
 	case "bytes":
+		if isDebeziumAvroDecimalSchema(schema) {
+			v, ok := value.(string)
+			if !ok {
+				return nil, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("decimal payload is invalid")
+			}
+			rat, ok := new(big.Rat).SetString(v)
+			if !ok {
+				return nil, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("decimal payload is invalid")
+			}
+			return rat, nil
+		}
+
 		v, ok := value.(string)
 		if !ok {
 			return nil, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("bytes payload is invalid")
@@ -411,6 +441,25 @@ func connectPrimitiveToAvro(connectType string) (string, error) {
 	}
 }
 
+func isDebeziumAvroDecimalSchema(schema *debeziumConnectSchema) bool {
+	return schema.Type == "bytes" && schema.Name == debeziumAvroDecimalName
+}
+
+func decimalSchemaPrecisionAndScale(schema *debeziumConnectSchema) (int, int, error) {
+	if schema.Parameters == nil {
+		return 0, 0, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("decimal schema is missing parameters")
+	}
+	precision, err := strconv.Atoi(schema.Parameters["precision"])
+	if err != nil {
+		return 0, 0, errors.WrapError(errors.ErrDebeziumInvalidMessage, err)
+	}
+	scale, err := strconv.Atoi(schema.Parameters["scale"])
+	if err != nil {
+		return 0, 0, errors.WrapError(errors.ErrDebeziumInvalidMessage, err)
+	}
+	return precision, scale, nil
+}
+
 func addConnectMetadata(avroSchema map[string]any, schema *debeziumConnectSchema) {
 	if schema.Name != "" {
 		avroSchema["connect.name"] = schema.Name
@@ -450,6 +499,10 @@ func avroFieldName(field string) string {
 }
 
 func avroUnionBranchName(schema *debeziumConnectSchema, fallbackName string) string {
+	if isDebeziumAvroDecimalSchema(schema) {
+		return "bytes.decimal"
+	}
+
 	switch schema.Type {
 	case "struct":
 		return avroFullName(schema.Name, fallbackName)

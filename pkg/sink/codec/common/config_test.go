@@ -20,14 +20,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDebeziumSchemaRegistryConfig(t *testing.T) {
+func TestDebeziumAvroSchemaRegistryConfig(t *testing.T) {
 	t.Parallel()
 
-	cfg := NewConfig(config.ProtocolDebezium)
+	cfg := NewConfig(config.ProtocolDebeziumAvro)
 	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
 	require.NoError(t, cfg.Validate())
 
-	cfg = NewConfig(config.ProtocolDebezium)
+	cfg = NewConfig(config.ProtocolDebeziumAvro)
+	require.ErrorContains(t, cfg.Validate(), `Debezium Avro protocol requires parameter "schema-registry"`)
+
+	cfg = NewConfig(config.ProtocolDebeziumAvro)
 	cfg.AvroGlueSchemaRegistry = &config.GlueSchemaRegistryConfig{}
-	require.ErrorContains(t, cfg.Validate(), `Debezium protocol only supports "schema-registry"`)
+	require.ErrorContains(t, cfg.Validate(), `Debezium Avro protocol only supports "schema-registry"`)
+
+	cfg = NewConfig(config.ProtocolDebezium)
+	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
+	require.ErrorContains(t, cfg.Validate(), `Debezium protocol does not support schema registry`)
 }

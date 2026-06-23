@@ -26,6 +26,13 @@ function start_schema_registry() {
 	curl -X PUT -H "Content-Type: application/vnd.schemaregistry.v1+json" --data '{"compatibility": "NONE"}' http://127.0.0.1:8088/config
 }
 
+function check_schema_registry_subject() {
+	local subject=$1
+	local expected=$2
+
+	curl -fsS "http://127.0.0.1:8088/subjects/${subject}/versions/latest" | grep -q "$expected"
+}
+
 function run() {
 	if [ "$SINK_TYPE" != "kafka" ]; then
 		return
@@ -36,12 +43,15 @@ function run() {
 	start_schema_registry
 	start_tidb_cluster --workdir "$WORK_DIR"
 
+	run_sql_file "$CUR/data/prepare.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql_file "$CUR/data/prepare.sql" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+
 	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
 
 	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY"
 
 	TOPIC_NAME="ticdc-debezium-avro-$RANDOM"
-	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=debezium&enable-tidb-extension=true&partition-num=1&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760"
+	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=debezium-avro&enable-tidb-extension=true&partition-num=1&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760&avro-decimal-handling-mode=precise&avro-bigint-unsigned-handling-mode=string"
 	schema_registry_uri="http://127.0.0.1:8088"
 	changefeed_id="debezium-avro-$RANDOM"
 
@@ -49,11 +59,14 @@ function run() {
 	sleep 5 # wait for changefeed to start
 	run_kafka_consumer "$WORK_DIR" "$SINK_URI" "" "$schema_registry_uri"
 
-	run_sql_file "$CUR/data/prepare.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	run_sql_file "$CUR/data/workload.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	run_sql "CREATE TABLE test.finish_mark (id int primary key);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	check_table_exists test.finish_mark "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 200
-	check_sync_diff "$WORK_DIR" "$CUR/conf/diff_config.toml"
+	run_sql_file "$CUR/data/ddl.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql_file "$CUR/data/ddl.sql" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	run_sql_file "$CUR/data/post_ddl_workload.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+
+	check_sync_diff "$WORK_DIR" "$CUR/conf/diff_config.toml" 120
+	check_schema_registry_subject "$TOPIC_NAME-key" "tp_accountKey"
+	check_schema_registry_subject "$TOPIC_NAME-value" "tp_accountEnvelope"
 
 	cleanup_process "$CDC_BINARY"
 }

@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"io"
+	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -276,6 +277,9 @@ func avroNativeToConnectPayload(schema any, value any, namedSchemas map[string]a
 					rawValue, exists = valueMap[connectFieldName]
 				}
 				if !exists {
+					rawValue, exists = avroMissingFieldValue(field)
+				}
+				if !exists {
 					return nil, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs(
 						"avro record payload is missing field " + avroFieldName)
 				}
@@ -311,6 +315,11 @@ func avroNativeToConnectPayload(schema any, value any, namedSchemas map[string]a
 				result = append(result, itemValue)
 			}
 			return result, nil
+		case "bytes":
+			if avroSchemaIsDecimal(typedSchema) {
+				return avroDecimalNativeToString(typedSchema, value)
+			}
+			return value, nil
 		default:
 			return value, nil
 		}
@@ -440,6 +449,10 @@ func collectAvroNamedSchemas(schema any, namedSchemas map[string]any) {
 			name := avroBranchName(typedSchema)
 			if name != "" {
 				namedSchemas[name] = typedSchema
+				shortName := avroShortBranchName(name)
+				if _, exists := namedSchemas[shortName]; shortName != "" && !exists {
+					namedSchemas[shortName] = typedSchema
+				}
 			}
 			fields, _ := typedSchema["fields"].([]any)
 			for _, rawField := range fields {
@@ -527,6 +540,50 @@ func avroPrimitiveToConnectType(avroType string, schemaMeta map[string]any) (str
 	}
 }
 
+func avroSchemaIsDecimal(schema map[string]any) bool {
+	typeName, _ := schema["type"].(string)
+	logicalType, _ := schema["logicalType"].(string)
+	return typeName == "bytes" && logicalType == "decimal"
+}
+
+func avroDecimalNativeToString(schema map[string]any, value any) (string, error) {
+	scale, err := avroDecimalScale(schema)
+	if err != nil {
+		return "", err
+	}
+	switch v := value.(type) {
+	case *big.Rat:
+		return v.FloatString(scale), nil
+	case big.Rat:
+		return v.FloatString(scale), nil
+	case string:
+		return v, nil
+	default:
+		return "", errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("decimal payload is invalid")
+	}
+}
+
+func avroDecimalScale(schema map[string]any) (int, error) {
+	switch scale := schema["scale"].(type) {
+	case float64:
+		return int(scale), nil
+	case int:
+		return scale, nil
+	case int32:
+		return int(scale), nil
+	case int64:
+		return int(scale), nil
+	case json.Number:
+		value, err := scale.Int64()
+		if err != nil {
+			return 0, errors.WrapError(errors.ErrDebeziumInvalidMessage, err)
+		}
+		return int(value), nil
+	default:
+		return 0, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("decimal schema is missing scale")
+	}
+}
+
 func avroUnionBranch(union []any, value any) (any, any, error) {
 	if value == nil {
 		return nil, nil, nil
@@ -553,7 +610,7 @@ func avroUnionBranch(union []any, value any) (any, any, error) {
 	}
 	if hasWrappedBranch &&
 		isSingleNonNullBranch &&
-		avroShortBranchName(branchSchema) == wrappedBranchName {
+		avroShortBranchName(branchSchema) == avroShortBranchName(wrappedBranchName) {
 		return branchSchema, wrappedBranchValue, nil
 	}
 	return branchSchema, value, nil
@@ -593,6 +650,9 @@ func avroBranchName(schema any) string {
 		case "array":
 			return "array"
 		default:
+			if avroSchemaIsDecimal(typedSchema) {
+				return "bytes.decimal"
+			}
 			return typeName
 		}
 	default:
@@ -617,6 +677,48 @@ func avroShortBranchName(schema any) string {
 	default:
 		return ""
 	}
+}
+
+func avroFieldAllowsMissing(field map[string]any) bool {
+	if _, hasDefault := field["default"]; hasDefault {
+		return true
+	}
+	return avroSchemaAllowsNull(field["type"])
+}
+
+func avroMissingFieldValue(field map[string]any) (any, bool) {
+	if avroFieldAllowsMissing(field) {
+		return nil, true
+	}
+	if avroSchemaIsArray(field["type"]) {
+		return []any{}, true
+	}
+	return nil, false
+}
+
+func avroSchemaIsArray(schema any) bool {
+	switch typedSchema := schema.(type) {
+	case map[string]any:
+		typeName, _ := typedSchema["type"].(string)
+		return typeName == "array"
+	case string:
+		return typedSchema == "array"
+	default:
+		return false
+	}
+}
+
+func avroSchemaAllowsNull(schema any) bool {
+	union, ok := schema.([]any)
+	if !ok {
+		return false
+	}
+	for _, branch := range union {
+		if avroBranchName(branch) == "null" {
+			return true
+		}
+	}
+	return false
 }
 
 func avroConnectFieldName(field map[string]any, fallback string) string {
