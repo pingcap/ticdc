@@ -222,7 +222,7 @@ func TestQueuePushMultipleItemsWakesMultipleBlockedPop(t *testing.T) {
 	const waiters = 2
 	ready := make(chan struct{}, waiters)
 	done := make(chan struct{}, waiters)
-	for i := 0; i < waiters; i++ {
+	for range waiters {
 		go func() {
 			ready <- struct{}{}
 			task, err := q.Pop(context.Background())
@@ -232,13 +232,13 @@ func TestQueuePushMultipleItemsWakesMultipleBlockedPop(t *testing.T) {
 		}()
 	}
 
-	for i := 0; i < waiters; i++ {
+	for range waiters {
 		<-ready
 	}
 	require.True(t, q.Push(newMockItem(10, "task1")))
 	require.True(t, q.Push(newMockItem(20, "task2")))
 
-	for i := 0; i < waiters; i++ {
+	for range waiters {
 		select {
 		case <-done:
 		case <-time.After(time.Second):
