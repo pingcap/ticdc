@@ -287,6 +287,9 @@ func avroNativeToConnectPayload(schema any, value any, namedSchemas map[string]a
 			if !ok {
 				return nil, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("avro array schema is missing items")
 			}
+			if value == nil {
+				return []any{}, nil
+			}
 			values, ok := value.([]any)
 			if !ok {
 				return nil, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("avro array payload is invalid")

@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/avro"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -188,6 +189,48 @@ func TestDebeziumConfluentAvroDecodeDDLEvent(t *testing.T) {
 	require.Equal(t, "target_db", decoded.SchemaName)
 	require.Equal(t, "target_table", decoded.TableName)
 	require.Equal(t, routedDDL.Query, decoded.Query)
+}
+
+func TestDebeziumConfluentAvroDecodeSchemaDDLEvent(t *testing.T) {
+	ctx := context.Background()
+	_, err := avro.SetupEncoderAndSchemaRegistry4Testing(
+		ctx,
+		common.NewConfig(config.ProtocolAvro),
+	)
+	require.NoError(t, err)
+	defer avro.TeardownEncoderAndSchemaRegistry4Testing()
+
+	cfg := common.NewConfig(config.ProtocolDebezium)
+	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
+	cfg.EnableTiDBExtension = true
+	cfg.TimeZone = time.UTC
+
+	encoder, err := NewAvroBatchEncoder(ctx, cfg, "dbserver1")
+	require.NoError(t, err)
+
+	ddl := &commonEvent.DDLEvent{
+		Version:    commonEvent.DDLEventVersion1,
+		Type:       byte(timodel.ActionCreateSchema),
+		SchemaName: "test",
+		Query:      "CREATE DATABASE `test`",
+		FinishedTs: 100,
+	}
+	message, err := encoder.EncodeDDLEvent(ddl)
+	require.NoError(t, err)
+	require.NotNil(t, message)
+
+	decoder, err := NewAvroDecoder(ctx, cfg, 0, nil)
+	require.NoError(t, err)
+	decoder.AddKeyValue(message.Key, message.Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	decoded := decoder.NextDDLEvent()
+	require.Equal(t, "test", decoded.SchemaName)
+	require.Empty(t, decoded.TableName)
+	require.Equal(t, ddl.Query, decoded.Query)
 }
 
 func decodeConfluentAvroForTest(t *testing.T, data []byte) map[string]any {
