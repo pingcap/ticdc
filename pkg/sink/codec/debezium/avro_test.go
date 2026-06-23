@@ -155,6 +155,176 @@ func TestDebeziumConfluentAvroDecodeRowEvent(t *testing.T) {
 	common.CompareRow(t, row, helper.tableInfo, change, decoded.TableInfo)
 }
 
+func TestDebeziumConfluentAvroDecodeAccountDMLEvents(t *testing.T) {
+	ctx := context.Background()
+	_, err := avro.SetupEncoderAndSchemaRegistry4Testing(
+		ctx,
+		common.NewConfig(config.ProtocolAvro),
+	)
+	require.NoError(t, err)
+	defer avro.TeardownEncoderAndSchemaRegistry4Testing()
+
+	helper := NewSQLTestHelper(t, "tp_account", `
+		create table tp_account(
+			id int primary key,
+			account_id int not null
+		)`)
+	defer helper.Close()
+
+	insertDML := helper.helper.DML2Event("test", "tp_account",
+		"insert into tp_account values (12, 34)")
+	updateDML, _ := helper.helper.DML2UpdateEvent("test", "tp_account",
+		"insert into tp_account values (13, 34)",
+		"update tp_account set account_id = 35 where id = 13")
+	deleteDML := helper.helper.DML2DeleteEvent("test", "tp_account",
+		"insert into tp_account values (14, 34)",
+		"delete from tp_account where id = 14")
+
+	cfg := common.NewConfig(config.ProtocolDebezium)
+	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
+	cfg.EnableTiDBExtension = true
+	cfg.TimeZone = time.UTC
+
+	encoder, err := NewAvroBatchEncoder(ctx, cfg, "dbserver1")
+	require.NoError(t, err)
+
+	rows := make([]commonEvent.RowChange, 0, 3)
+	for _, dml := range []*commonEvent.DMLEvent{insertDML, updateDML, deleteDML} {
+		row, ok := dml.GetNextRow()
+		if !ok {
+			continue
+		}
+		rows = append(rows, row)
+		require.NoError(t, encoder.AppendRowChangedEvent(ctx, "dbserver1.test.tp_account", &commonEvent.RowEvent{
+			TableInfo:      helper.tableInfo,
+			CommitTs:       1,
+			Event:          row,
+			ColumnSelector: columnselector.NewDefaultColumnSelector(),
+			Callback:       func() {},
+		}))
+	}
+	require.Len(t, rows, 3)
+
+	messages := encoder.Build()
+	require.Len(t, messages, 3)
+	for idx, message := range messages {
+		decoder, err := NewAvroDecoder(ctx, cfg, 0, nil)
+		require.NoError(t, err)
+		decoder.AddKeyValue(message.Key, message.Value)
+
+		messageType, hasNext := decoder.HasNext()
+		require.True(t, hasNext)
+		require.Equal(t, common.MessageTypeRow, messageType)
+
+		decoded := decoder.NextDMLEvent()
+		require.Equal(t, "test", decoded.TableInfo.GetSchemaName())
+		require.Equal(t, "tp_account", decoded.TableInfo.GetTableName())
+
+		change, ok := decoded.GetNextRow()
+		require.True(t, ok)
+		common.CompareRow(t, rows[idx], helper.tableInfo, change, decoded.TableInfo)
+	}
+}
+
+func TestDebeziumConfluentAvroDecodeShortNamedUnionBranch(t *testing.T) {
+	valueSchema := map[string]any{
+		"type":      "record",
+		"name":      "Value",
+		"namespace": "dbserver1.test.tp_account",
+		"fields": []any{
+			map[string]any{
+				"name":                      "id",
+				"type":                      "int",
+				debeziumAvroConnectFieldKey: "id",
+			},
+			map[string]any{
+				"name":                      "account_id",
+				"type":                      "int",
+				debeziumAvroConnectFieldKey: "account_id",
+			},
+		},
+	}
+	namedSchemas := map[string]any{
+		"dbserver1.test.tp_account.Value": valueSchema,
+	}
+
+	payload, err := avroNativeToConnectPayload(
+		[]any{"null", "dbserver1.test.tp_account.Value"},
+		map[string]any{
+			"Value": map[string]any{
+				"id":         int32(12),
+				"account_id": int32(34),
+			},
+		},
+		namedSchemas,
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{
+		"id":         int32(12),
+		"account_id": int32(34),
+	}, payload)
+}
+
+func TestDebeziumConfluentAvroDecodeSingleFieldUnionRecord(t *testing.T) {
+	valueSchema := map[string]any{
+		"type":      "record",
+		"name":      "Value",
+		"namespace": "dbserver1.test.only_pk",
+		"fields": []any{
+			map[string]any{
+				"name":                      "id",
+				"type":                      "int",
+				debeziumAvroConnectFieldKey: "id",
+			},
+		},
+	}
+	namedSchemas := map[string]any{
+		"dbserver1.test.only_pk.Value": valueSchema,
+	}
+
+	payload, err := avroNativeToConnectPayload(
+		[]any{"null", "dbserver1.test.only_pk.Value"},
+		map[string]any{
+			"id": int32(12),
+		},
+		namedSchemas,
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{
+		"id": int32(12),
+	}, payload)
+}
+
+func TestDebeziumConfluentAvroDecodeMissingRecordField(t *testing.T) {
+	valueSchema := map[string]any{
+		"type":      "record",
+		"name":      "Value",
+		"namespace": "dbserver1.test.tp_account",
+		"fields": []any{
+			map[string]any{
+				"name":                      "id",
+				"type":                      "int",
+				debeziumAvroConnectFieldKey: "id",
+			},
+			map[string]any{
+				"name":                      "account_id",
+				"type":                      "int",
+				debeziumAvroConnectFieldKey: "account_id",
+			},
+		},
+	}
+
+	_, err := avroNativeToConnectPayload(
+		valueSchema,
+		map[string]any{
+			"id": int32(12),
+		},
+		nil,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "avro record payload is missing field account_id")
+}
+
 func TestDebeziumConfluentAvroDecodeDDLEvent(t *testing.T) {
 	ctx := context.Background()
 	_, err := avro.SetupEncoderAndSchemaRegistry4Testing(

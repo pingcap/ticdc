@@ -271,9 +271,17 @@ func avroNativeToConnectPayload(schema any, value any, namedSchemas map[string]a
 					return nil, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("avro field is missing name")
 				}
 				connectFieldName := avroConnectFieldName(field, avroFieldName)
+				rawValue, exists := valueMap[avroFieldName]
+				if !exists && connectFieldName != avroFieldName {
+					rawValue, exists = valueMap[connectFieldName]
+				}
+				if !exists {
+					return nil, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs(
+						"avro record payload is missing field " + avroFieldName)
+				}
 				fieldValue, err := avroNativeToConnectPayload(
 					field["type"],
-					valueMap[avroFieldName],
+					rawValue,
 					namedSchemas,
 				)
 				if err != nil {
@@ -523,8 +531,14 @@ func avroUnionBranch(union []any, value any) (any, any, error) {
 	if value == nil {
 		return nil, nil, nil
 	}
+	var wrappedBranchName string
+	var wrappedBranchValue any
+	hasWrappedBranch := false
 	if branchValueMap, ok := value.(map[string]any); ok && len(branchValueMap) == 1 {
 		for branchName, branchValue := range branchValueMap {
+			wrappedBranchName = branchName
+			wrappedBranchValue = branchValue
+			hasWrappedBranch = true
 			for _, branchSchema := range union {
 				if avroBranchName(branchSchema) == branchName {
 					return branchSchema, branchValue, nil
@@ -533,18 +547,31 @@ func avroUnionBranch(union []any, value any) (any, any, error) {
 		}
 	}
 
-	branchSchema, _, err := avroNonNullUnionBranch(union)
+	branchSchema, isSingleNonNullBranch, err := avroNonNullUnionBranch(union)
 	if err != nil {
 		return nil, nil, err
+	}
+	if hasWrappedBranch &&
+		isSingleNonNullBranch &&
+		avroShortBranchName(branchSchema) == wrappedBranchName {
+		return branchSchema, wrappedBranchValue, nil
 	}
 	return branchSchema, value, nil
 }
 
 func avroNonNullUnionBranch(union []any) (any, bool, error) {
+	var result any
+	count := 0
 	for _, branch := range union {
 		if avroBranchName(branch) != "null" {
-			return branch, true, nil
+			if count == 0 {
+				result = branch
+			}
+			count++
 		}
+	}
+	if count > 0 {
+		return result, count == 1, nil
 	}
 	return nil, false, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("avro union has no non-null branch")
 }
@@ -568,6 +595,25 @@ func avroBranchName(schema any) string {
 		default:
 			return typeName
 		}
+	default:
+		return ""
+	}
+}
+
+func avroShortBranchName(schema any) string {
+	switch typedSchema := schema.(type) {
+	case string:
+		if idx := strings.LastIndex(typedSchema, "."); idx >= 0 {
+			return typedSchema[idx+1:]
+		}
+		return typedSchema
+	case map[string]any:
+		typeName, _ := typedSchema["type"].(string)
+		if typeName == "record" {
+			name, _ := typedSchema["name"].(string)
+			return name
+		}
+		return avroBranchName(schema)
 	default:
 		return ""
 	}
