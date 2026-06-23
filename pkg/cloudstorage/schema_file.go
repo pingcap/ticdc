@@ -13,6 +13,7 @@
 package cloudstorage
 
 import (
+	"context"
 	"encoding/json"
 	"sort"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/hash"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -286,6 +288,33 @@ func (t *SchemaFile) Marshal() ([]byte, error) {
 		return nil, errors.WrapError(errors.ErrMarshalFailed, err)
 	}
 	return data, nil
+}
+
+// Parse parses a schema file and validates its path metadata.
+func Parse(ctx context.Context, storage storeapi.Storage, path string) (SchemaPathKey, SchemaFile, error) {
+	var schemaKey SchemaPathKey
+	checksum, err := schemaKey.ParseSchemaFilePath(path)
+	if err != nil {
+		return schemaKey, SchemaFile{}, err
+	}
+	var schemaFile SchemaFile
+	schemaContent, err := storage.ReadFile(ctx, path)
+	if err != nil {
+		return schemaKey, schemaFile, errors.Trace(err)
+	}
+	if err = json.Unmarshal(schemaContent, &schemaFile); err != nil {
+		return schemaKey, schemaFile, errors.Trace(err)
+	}
+	checksumInMem, err := schemaFile.Sum32(nil)
+	if err != nil {
+		return schemaKey, schemaFile, errors.Trace(err)
+	}
+	if checksumInMem != checksum || schemaKey.TableVersion != schemaFile.TableVersion {
+		return schemaKey, schemaFile, errors.ErrStorageSinkInvalidFileName.GenWithStack(
+			"checksum mismatch in schema file %s: checksum in memory %d, checksum in file %d, table version in path %d, table version in file %d",
+			path, checksumInMem, checksum, schemaKey.TableVersion, schemaFile.TableVersion)
+	}
+	return schemaKey, schemaFile, nil
 }
 
 // marshalForChecksum marshals fields covered by the path checksum.

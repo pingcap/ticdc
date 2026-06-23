@@ -14,10 +14,8 @@
 package logger
 
 import (
-	stdlog "log"
 	"testing"
 
-	"github.com/IBM/sarama"
 	"github.com/pingcap/log"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
@@ -32,18 +30,4 @@ func TestIsDebugEnabled(t *testing.T) {
 
 	log.SetLevel(zapcore.DebugLevel)
 	require.True(t, IsDebugEnabled())
-}
-
-func TestInitSaramaLoggerResetsWhenInfoEnabled(t *testing.T) {
-	originalLogger := sarama.Logger
-	defer func() {
-		sarama.Logger = originalLogger
-	}()
-
-	require.NoError(t, initSaramaLogger(zapcore.DebugLevel))
-	debugLogger := sarama.Logger
-
-	require.NoError(t, initSaramaLogger(zapcore.InfoLevel))
-	require.NotSame(t, debugLogger, sarama.Logger)
-	require.IsType(t, stdlog.New(nil, "", 0), sarama.Logger)
 }

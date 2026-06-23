@@ -26,11 +26,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	pkgcloudstorage "github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -219,7 +219,7 @@ func TestIgnoreCallsAfterRunError(t *testing.T) {
 
 func TestCloudStorageSinkBatchConfig(t *testing.T) {
 	sink := &sink{
-		cfg: &pkgcloudstorage.Config{
+		cfg: &cloudstorage.Config{
 			FileSize: 2048,
 		},
 	}
@@ -514,7 +514,7 @@ func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {
 	}
 }
 
-func readSchemaFileForTest(t *testing.T, parentDir, schema, table string) pkgcloudstorage.SchemaFile {
+func readSchemaFileForTest(t *testing.T, parentDir, schema, table string) cloudstorage.SchemaFile {
 	t.Helper()
 
 	files, err := os.ReadDir(filepath.Join(parentDir, schema, table, "meta"))
@@ -524,7 +524,7 @@ func readSchemaFileForTest(t *testing.T, parentDir, schema, table string) pkgclo
 	content, err := os.ReadFile(filepath.Join(parentDir, schema, table, "meta", files[0].Name()))
 	require.NoError(t, err)
 
-	var schemaFile pkgcloudstorage.SchemaFile
+	var schemaFile cloudstorage.SchemaFile
 	require.NoError(t, json.Unmarshal(content, &schemaFile))
 	return schemaFile
 }
@@ -710,7 +710,7 @@ func TestCleanupExpiredFiles(t *testing.T) {
 
 	cloudStorageSink := &sink{
 		changefeedID: common.NewChangefeedID4Test("test", "test"),
-		cfg: &pkgcloudstorage.Config{
+		cfg: &cloudstorage.Config{
 			DateSeparator:       config.DateSeparatorDay.String(),
 			FileExpirationDays:  1,
 			FileCleanupCronSpec: util.GetOrZero(replicaConfig.Sink.CloudStorageConfig.FileCleanupCronSpec),

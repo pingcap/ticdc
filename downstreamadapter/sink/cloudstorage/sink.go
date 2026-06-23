@@ -22,12 +22,12 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
@@ -63,9 +63,8 @@ type sink struct {
 	lastCheckpointTs         atomic.Uint64
 	lastSendCheckpointTsTime time.Time
 
-	schemaStore *commonEvent.TableSchemaStore
-	cron        *cron.Cron
-	statistics  *metrics.Statistics
+	cron       *cron.Cron
+	statistics *metrics.Statistics
 
 	isNormal    *atomic.Bool
 	cleanupJobs []func() /* only for test */
@@ -376,8 +375,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 	}
 }
 
-func (s *sink) SetTableSchemaStore(schemaStore *commonEvent.TableSchemaStore) {
-	s.schemaStore = schemaStore
+func (s *sink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {
 }
 
 func (s *sink) initCron(

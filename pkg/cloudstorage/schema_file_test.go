@@ -13,13 +13,17 @@
 package cloudstorage
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"math/rand"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
@@ -557,6 +561,45 @@ func TestSchemaFileGenFilePath(t *testing.T) {
 	tablePath, err = schemaFile.GenerateSchemaFilePath(true, 12345)
 	require.NoError(t, err)
 	require.Equal(t, "12345/meta/schema_100_3752767265.json", tablePath)
+}
+
+func TestParseSchemaFile(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, fmt.Sprintf("file:///%s", t.TempDir()))
+	require.NoError(t, err)
+	defer storage.Close()
+
+	schemaFile, _ := generateSchemaFile()
+	schemaFilePath, err := schemaFile.GenerateSchemaFilePath(false, 0)
+	require.NoError(t, err)
+	encodedSchemaFile, err := schemaFile.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, storage.WriteFile(ctx, schemaFilePath, encodedSchemaFile))
+
+	schemaKey, got, err := Parse(ctx, storage, schemaFilePath)
+	require.NoError(t, err)
+	require.Equal(t, SchemaPathKey{
+		Schema:       schemaFile.Schema,
+		Table:        schemaFile.Table,
+		TableVersion: schemaFile.TableVersion,
+	}, schemaKey)
+	require.Equal(t, schemaFile.Schema, got.Schema)
+	require.Equal(t, schemaFile.Table, got.Table)
+	require.Equal(t, schemaFile.Version, got.Version)
+	require.Equal(t, schemaFile.TableVersion, got.TableVersion)
+	require.Equal(t, schemaFile.TotalColumns, got.TotalColumns)
+	require.Len(t, got.Columns, len(schemaFile.Columns))
+
+	schemaFile.TableVersion++
+	encodedSchemaFile, err = schemaFile.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, storage.WriteFile(ctx, schemaFilePath, encodedSchemaFile))
+
+	_, _, err = Parse(ctx, storage, schemaFilePath)
+	require.Error(t, err)
+	require.True(t, errors.ErrStorageSinkInvalidFileName.Equal(err))
 }
 
 func TestGenerateSchemaFilePathValidation(t *testing.T) {

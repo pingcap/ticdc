@@ -116,6 +116,7 @@ func TestParseDMLFilePath(t *testing.T) {
 		name           string
 		dateSeparator  string
 		path           string
+		indexPath      string
 		fileIndexWidth int
 		dmlkey         DmlPathKey
 		fileIndex      FileIndex
@@ -189,6 +190,7 @@ func TestParseDMLFilePath(t *testing.T) {
 			name:           "day date with table id path",
 			dateSeparator:  "day",
 			path:           fmt.Sprintf("12345/123456/2023-05-09/CDC_%s_00000000000000000010.csv", dispatcherID),
+			indexPath:      fmt.Sprintf("12345/123456/2023-05-09/meta/CDC_%s.index", dispatcherID),
 			fileIndexWidth: 20,
 			dmlkey: DmlPathKey{
 				SchemaPathKey: SchemaPathKey{
@@ -239,6 +241,13 @@ func TestParseDMLFilePath(t *testing.T) {
 			require.Equal(t, tc.dmlkey, dmlkey)
 			require.Equal(t, tc.fileIndex, fileIndex)
 			require.Equal(t, tc.path, dmlkey.GenerateDMLFilePath(&fileIndex, ".csv", tc.fileIndexWidth))
+			if tc.indexPath != "" {
+				var indexKey DmlPathKey
+				id, err := indexKey.ParseIndexFilePath(tc.dateSeparator, tc.indexPath)
+				require.NoError(t, err)
+				require.Equal(t, tc.fileIndex.DispatcherID, id)
+				require.Equal(t, tc.dmlkey, indexKey)
+			}
 		})
 	}
 }
@@ -249,27 +258,6 @@ func TestParseDMLFilePathRejectsInvalidPath(t *testing.T) {
 	var dmlkey DmlPathKey
 	_, err := dmlkey.ParseDMLFilePath("none", "schema1//123456/CDC000010.csv", ".csv")
 	require.Error(t, err)
-}
-
-func TestParseIndexFilePathWithTableIDAsPath(t *testing.T) {
-	t.Parallel()
-
-	dispatcherID := common.NewDispatcherID().String()
-	indexPath := fmt.Sprintf("12345/123456/2023-05-09/meta/CDC_%s.index", dispatcherID)
-
-	var dmlkey DmlPathKey
-	id, err := dmlkey.ParseIndexFilePath("day", indexPath)
-	require.NoError(t, err)
-	require.Equal(t, dispatcherID, id)
-	require.Equal(t, DmlPathKey{
-		SchemaPathKey: SchemaPathKey{
-			Schema:       "12345",
-			TableVersion: 123456,
-		},
-		UseTableIDAsPath: true,
-		TableID:          12345,
-		Date:             "2023-05-09",
-	}, dmlkey)
 }
 
 func TestSchemaFileDMLPathKeyOrder(t *testing.T) {
