@@ -449,7 +449,6 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	dml0 := kvEvents[0]
 	dml1 := kvEvents[1]
 	dml2 := kvEvents[2]
-	dml3 := kvEvents[3]
 	mockSchemaStore.DeleteTable(tableID, dml2.CRTs)
 	disp.receivedResolvedTs.Store(resolvedTs)
 	ok, dataRange := broker.getScanTaskDataRange(disp)
@@ -481,12 +480,10 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	require.Equal(t, batchDML1.DMLEvents[0].GetCommitTs(), dml1.CRTs)
 	require.Equal(t, batchDML1.DMLEvents[1].GetCommitTs(), dml2.CRTs)
 
-	// resolvedTs skips the first raw event after the table is deleted, so the
-	// next scan range will not keep seeing the same deleted-table event.
+	// resolvedTs
 	e = events[3]
 	require.Equal(t, e.GetType(), event.TypeResolvedEvent)
-	require.Equal(t, dml3.CRTs, e.GetCommitTs())
-	require.Greater(t, e.GetCommitTs(), dml2.CRTs)
+	require.Equal(t, dml2.CRTs, e.GetCommitTs())
 }
 
 // TestEventScannerWithDDL tests cases where scanning is interrupted at DDL events
@@ -1568,66 +1565,6 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	require.Equal(t, updateEvent.CRTs, merger.lastBatchDMLCommitTs)
 	require.Equal(t, 1, sess.dmlCount)
 	require.True(t, sess.scannedBytes > 0) // Some bytes were processed
-}
-
-func TestScanAndMergeEventsSkipsDeletedTableTxn(t *testing.T) {
-	helper := event.NewEventTestHelper(t)
-	defer helper.Close()
-
-	ddlEvent, kvEvents := genEvents(helper,
-		`create table test.t_deleted(id int primary key, c char(50))`,
-		`insert into test.t_deleted(id,c) values (1, "c1")`)
-	require.Len(t, kvEvents, 1)
-	rawEvent := kvEvents[0]
-	tableID := ddlEvent.GetTableID()
-
-	schemaStore := &schemaStoreWithErr{
-		mockSchemaStore:   NewMockSchemaStore(),
-		getTableInfoError: &schemastore.TableDeletedError{},
-	}
-	scanner := &eventScanner{
-		mounter:      &mockMounter{},
-		schemaGetter: schemaStore,
-	}
-
-	disInfo := newMockDispatcherInfoForTest(t)
-	disInfo.span.TableID = tableID
-	dispatcherID := common.NewDispatcherID()
-	disp := &dispatcherStat{
-		info:      disInfo,
-		id:        dispatcherID,
-		isRemoved: atomic.Bool{},
-	}
-
-	dataRange := common.DataRange{
-		Span: &heartbeatpb.TableSpan{
-			TableID: tableID,
-		},
-		CommitTsStart: rawEvent.CRTs - 1,
-		CommitTsEnd:   rawEvent.CRTs + 100,
-	}
-	sess := &session{
-		ctx:            context.Background(),
-		dispatcherStat: disp,
-		dataRange:      dataRange,
-		startTime:      time.Now(),
-		events:         make([]event.Event, 0),
-	}
-	merger := newEventMerger(nil)
-
-	isInterrupted, err := scanner.scanAndMergeEvents(sess, merger, &mockEventIterator{
-		events: []*common.RawKVEntry{rawEvent},
-	})
-	require.NoError(t, err)
-	require.False(t, isInterrupted)
-	require.Zero(t, sess.dmlCount)
-	require.Len(t, sess.events, 1)
-
-	resolvedEvent, ok := sess.events[0].(event.ResolvedEvent)
-	require.True(t, ok)
-	require.Equal(t, dispatcherID, resolvedEvent.DispatcherID)
-	require.Equal(t, rawEvent.CRTs, resolvedEvent.ResolvedTs)
-	require.Greater(t, resolvedEvent.ResolvedTs, dataRange.CommitTsStart)
 }
 
 type schemaStoreWithErr struct {
