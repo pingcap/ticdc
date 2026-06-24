@@ -29,6 +29,7 @@ type PriorityQueue struct {
 
 	// signal channel for blocking operations
 	signal chan struct{}
+	closed bool
 }
 
 // NewPriorityQueue creates a new priority queue
@@ -43,8 +44,12 @@ func NewPriorityQueue() *PriorityQueue {
 // This is a non-blocking operation
 func (pq *PriorityQueue) Push(task PriorityTask) {
 	pq.mu.Lock()
+	defer pq.mu.Unlock()
+
+	if pq.closed {
+		return
+	}
 	pq.heap.AddOrUpdate(task)
-	pq.mu.Unlock()
 
 	// Send signal to notify waiting consumers
 	select {
@@ -117,8 +122,15 @@ func (pq *PriorityQueue) Len() int {
 	return pq.heap.Len()
 }
 
-// Close closes the signal channel
+// Close drains queued tasks and wakes blocked Pop callers.
 func (pq *PriorityQueue) Close() {
+	pq.mu.Lock()
+	if !pq.closed {
+		close(pq.signal)
+		pq.closed = true
+	}
+	pq.mu.Unlock()
+
 	// pop all tasks
 	for pq.Len() > 0 {
 		pq.TryPop()
