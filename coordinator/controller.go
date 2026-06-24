@@ -223,6 +223,7 @@ func NewController(
 func (c *Controller) collectMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	defer metrics.ResetChangefeedCheckpointMetrics()
 
 	// changefeedDownstreamTypeCache is used to cleanup the previous downstream type
 	// label value when a changefeed's sink-uri is updated.
@@ -265,16 +266,15 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 
 				metrics.ChangefeedStatusGauge.WithLabelValues(keyspace, name).Set(float64(info.State.ToInt()))
 
-				// don't update checkpoint ts and checkpoint ts lag for stopped changefeed
-				if info.State == config.StateStopped {
+				if !updateChangefeedCheckpointMetrics(
+					keyspace,
+					name,
+					info.State,
+					cf.GetLastSavedCheckPointTs(),
+					c.pdClock.CurrentTime(),
+				) {
 					return
 				}
-
-				pdPhysicalTime := oracle.GetPhysical(c.pdClock.CurrentTime())
-				phyCkpTs := oracle.ExtractPhysical(cf.GetLastSavedCheckPointTs())
-				lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
-				metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
-				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
 
 				// sync changefeed error metrics
 				currentChangefeeds[cf.ID] = struct{}{}
@@ -319,6 +319,27 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func updateChangefeedCheckpointMetrics(
+	keyspace string,
+	name string,
+	state config.FeedState,
+	checkpointTs uint64,
+	pdTime time.Time,
+) bool {
+	switch state {
+	case config.StateStopped, config.StateFinished, config.StateRemoved:
+		metrics.DeleteChangefeedCheckpointMetrics(keyspace, name)
+		return false
+	}
+
+	pdPhysicalTime := oracle.GetPhysical(pdTime)
+	phyCkpTs := oracle.ExtractPhysical(checkpointTs)
+	lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
+	metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
+	metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
+	return true
 }
 
 // HandleEvent implements the event-driven process mode

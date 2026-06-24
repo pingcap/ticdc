@@ -32,11 +32,14 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 )
 
@@ -48,6 +51,36 @@ func (noopScheduler) Execute() time.Time {
 
 func (noopScheduler) Name() string {
 	return pkgscheduler.BasicScheduler
+}
+
+func TestUpdateChangefeedCheckpointMetricsDeletesFinishedLabels(t *testing.T) {
+	metrics.ResetChangefeedCheckpointMetrics()
+	t.Cleanup(metrics.ResetChangefeedCheckpointMetrics)
+
+	keyspace := common.DefaultKeyspaceName
+	name := "finished-metrics"
+	pdTime := time.UnixMilli(2000)
+	checkpointTs := oracle.ComposeTS(1000, 0)
+
+	require.True(t, updateChangefeedCheckpointMetrics(
+		keyspace,
+		name,
+		config.StateNormal,
+		checkpointTs,
+		pdTime,
+	))
+	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
+	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
+
+	require.False(t, updateChangefeedCheckpointMetrics(
+		keyspace,
+		name,
+		config.StateFinished,
+		checkpointTs,
+		pdTime,
+	))
+	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
+	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
 }
 
 func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
