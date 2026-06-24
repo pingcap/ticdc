@@ -773,6 +773,67 @@ func TestHandleCloseRequestAcksStaleMaintainerEpoch(t *testing.T) {
 	require.NotContains(t, orchestrator.closedMaintainerEpochs, cfID)
 }
 
+func TestHandlePostBootstrapWritePathClosedReleasesMaintainerFence(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
+	heartbeatCollector.Run(context.Background())
+	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
+	t.Cleanup(heartbeatCollector.Close)
+	appcontext.SetService(appcontext.EventCollector, eventcollector.New(node.ID("receiver")))
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	tableTriggerID := common.NewDispatcherID()
+	manager, err := dispatchermanager.NewDispatcherManager(
+		0,
+		cfID,
+		newBootstrapResponseTestChangefeedConfig(cfID),
+		tableTriggerID.ToPB(),
+		nil,
+		100,
+		node.ID("current-maintainer"),
+		2,
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		manager.TryClose(false)
+	})
+
+	orchestrator := &DispatcherOrchestrator{
+		mc:                     mc,
+		dispatcherManagers:     map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{cfID: manager},
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+	}
+	manager.LocalFence()
+
+	err = orchestrator.handlePostBootstrapRequest(node.ID("current-maintainer"), &heartbeatpb.MaintainerPostBootstrapRequest{
+		ChangefeedID:                  cfID.ToPB(),
+		TableTriggerEventDispatcherId: tableTriggerID.ToPB(),
+		MaintainerEpoch:               2,
+		Schemas:                       nil,
+		RedoSchemas:                   nil,
+	})
+	require.NoError(t, err)
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- orchestrator.handleCloseRequest(node.ID("current-maintainer"), &heartbeatpb.MaintainerCloseRequest{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 2,
+		})
+	}()
+
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "close request blocked after post-bootstrap write-path-closed return")
+	}
+}
+
 func TestHandleBootstrapRequestRejectsClosedOlderMaintainerEpoch(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("cf", "default")
 

@@ -456,6 +456,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		if dispatchermanager.IsWritePathClosedError(err) {
 			log.Info("dispatcher manager write path closed while initializing table trigger event dispatcher",
 				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+			manager.MaintainerFenceMu.Unlock()
 			return nil
 		}
 		log.Error("failed to initialize table trigger event dispatcher",
@@ -469,6 +470,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			if dispatchermanager.IsWritePathClosedError(err) {
 				log.Info("dispatcher manager write path closed while initializing table trigger redo dispatcher",
 					zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+				manager.MaintainerFenceMu.Unlock()
 				return nil
 			}
 			log.Error("failed to initialize table trigger redo dispatcher",
@@ -479,6 +481,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	}
 
 	if m.fenced.Load() {
+		manager.MaintainerFenceMu.Unlock()
 		manager.LocalFence()
 		return nil
 	}
