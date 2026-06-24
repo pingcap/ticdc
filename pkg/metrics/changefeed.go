@@ -144,9 +144,12 @@ func DeleteChangefeedCheckpointMetrics(keyspace, changefeed string) {
 	ChangefeedCheckpointTsLagGauge.DeleteLabelValues(keyspace, changefeed)
 }
 
-func ResetChangefeedCheckpointMetrics() {
+func ResetOwnerChangefeedMetrics() {
+	ChangefeedStatusGauge.Reset()
+	ChangefeedErrorInfoGauge.Reset()
 	ChangefeedCheckpointTsGauge.Reset()
 	ChangefeedCheckpointTsLagGauge.Reset()
+	ChangefeedDownstreamInfoGauge.Reset()
 }
 
 func initChangefeedMetrics(registry *prometheus.Registry) {

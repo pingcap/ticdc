@@ -136,8 +136,8 @@ func TestRemoveChangefeed(t *testing.T) {
 }
 
 func TestStopByChangefeedIDDeletesCheckpointMetrics(t *testing.T) {
-	metrics.ResetChangefeedCheckpointMetrics()
-	t.Cleanup(metrics.ResetChangefeedCheckpointMetrics)
+	metrics.ResetOwnerChangefeedMetrics()
+	t.Cleanup(metrics.ResetOwnerChangefeedMetrics)
 
 	db := NewChangefeedDB(1216)
 	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test-metrics", common.DefaultKeyspaceName)}

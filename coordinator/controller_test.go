@@ -54,8 +54,8 @@ func (noopScheduler) Name() string {
 }
 
 func TestUpdateChangefeedCheckpointMetricsDeletesFinishedLabels(t *testing.T) {
-	metrics.ResetChangefeedCheckpointMetrics()
-	t.Cleanup(metrics.ResetChangefeedCheckpointMetrics)
+	metrics.ResetOwnerChangefeedMetrics()
+	t.Cleanup(metrics.ResetOwnerChangefeedMetrics)
 
 	keyspace := common.DefaultKeyspaceName
 	name := "finished-metrics"
