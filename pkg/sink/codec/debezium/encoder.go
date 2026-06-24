@@ -39,7 +39,7 @@ type BatchEncoder struct {
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
 func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
-	if d.config.Protocol == config.ProtocolDebeziumAvro {
+	if d.config.Protocol == config.ProtocolDebeziumAvro && !d.config.AvroEnableWatermark {
 		return nil, nil
 	}
 	if !d.config.EnableTiDBExtension {

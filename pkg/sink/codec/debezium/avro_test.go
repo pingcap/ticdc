@@ -480,7 +480,7 @@ func TestDebeziumConfluentAvroDoesNotEncodeDDLEvent(t *testing.T) {
 	require.Nil(t, message)
 }
 
-func TestDebeziumConfluentAvroDoesNotEncodeCheckpointEvent(t *testing.T) {
+func TestDebeziumConfluentAvroEncodeCheckpointEvent(t *testing.T) {
 	ctx := context.Background()
 	_, err := avro.SetupEncoderAndSchemaRegistry4Testing(
 		ctx,
@@ -493,6 +493,37 @@ func TestDebeziumConfluentAvroDoesNotEncodeCheckpointEvent(t *testing.T) {
 	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
 	cfg.EnableTiDBExtension = true
 	cfg.AvroEnableWatermark = true
+	cfg.TimeZone = time.UTC
+
+	encoder, err := NewAvroBatchEncoder(ctx, cfg, "dbserver1")
+	require.NoError(t, err)
+
+	message, err := encoder.EncodeCheckpointEvent(100)
+	require.NoError(t, err)
+	require.NotNil(t, message)
+
+	decoder, err := NewAvroDecoder(ctx, cfg, 0, nil)
+	require.NoError(t, err)
+	decoder.AddKeyValue(message.Key, message.Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeResolved, messageType)
+	require.Equal(t, uint64(100), decoder.NextResolvedEvent())
+}
+
+func TestDebeziumConfluentAvroDoesNotEncodeCheckpointEventByDefault(t *testing.T) {
+	ctx := context.Background()
+	_, err := avro.SetupEncoderAndSchemaRegistry4Testing(
+		ctx,
+		common.NewConfig(config.ProtocolAvro),
+	)
+	require.NoError(t, err)
+	defer avro.TeardownEncoderAndSchemaRegistry4Testing()
+
+	cfg := common.NewConfig(config.ProtocolDebeziumAvro)
+	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
+	cfg.EnableTiDBExtension = true
 	cfg.TimeZone = time.UTC
 
 	encoder, err := NewAvroBatchEncoder(ctx, cfg, "dbserver1")

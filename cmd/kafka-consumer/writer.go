@@ -311,78 +311,6 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	}
 }
 
-func (w *writer) flushPartitionDMLEvents(
-	ctx context.Context,
-	progress *partitionProgress,
-	watermark uint64,
-) error {
-	var (
-		done = make(chan struct{}, 1)
-
-		total   int
-		flushed atomic.Int64
-	)
-
-	resolvedEvents := make([]*event.DMLEvent, 0)
-	resolvedGroups := make([]struct {
-		group       *util.EventsGroup
-		maxCommitTs uint64
-	}, 0)
-	for _, group := range progress.eventsGroup {
-		before := len(resolvedEvents)
-		resolvedEvents = group.ResolveInto(watermark, resolvedEvents)
-		resolvedCount := len(resolvedEvents) - before
-		if resolvedCount == 0 {
-			continue
-		}
-
-		resolvedGroups = append(resolvedGroups, struct {
-			group       *util.EventsGroup
-			maxCommitTs uint64
-		}{
-			group:       group,
-			maxCommitTs: resolvedEvents[len(resolvedEvents)-1].GetCommitTs(),
-		})
-		total += resolvedCount
-	}
-	if total == 0 {
-		return nil
-	}
-	for _, e := range resolvedEvents {
-		e.AddPostFlushFunc(func() {
-			if flushed.Inc() == int64(total) {
-				close(done)
-			}
-		})
-		w.mysqlSink.AddDMLEvent(e)
-		log.Debug("flush partition DML event", zap.Int64("tableID", e.GetTableID()),
-			zap.Uint64("commitTs", e.GetCommitTs()), zap.Any("startTs", e.GetStartTs()))
-	}
-
-	log.Info("flush partition DML events", zap.Int32("partition", progress.partition),
-		zap.Uint64("watermark", watermark), zap.Int("total", total))
-	start := time.Now()
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-done:
-			log.Info("flush partition DML events done", zap.Int32("partition", progress.partition),
-				zap.Uint64("watermark", watermark), zap.Int("total", total),
-				zap.Duration("duration", time.Since(start)))
-			progress.updateWatermark(watermark, progress.watermarkOffset)
-			return nil
-		case <-ticker.C:
-			log.Warn("partition DML events cannot be flushed in time",
-				zap.Int32("partition", progress.partition),
-				zap.Uint64("watermark", watermark),
-				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
-		}
-	}
-}
-
 // WriteMessage is to decode kafka message to event.
 // return true if the message is flushed to the downstream.
 // return error if flush messages failed.
@@ -455,7 +383,6 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 			break
 		}
 
-		maxCommitTs := row.GetCommitTs()
 		w.appendRow2Group(row, progress, offset)
 		counter++
 		for {
@@ -464,9 +391,6 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 				break
 			}
 			row = progress.decoder.NextDMLEvent()
-			if row.GetCommitTs() > maxCommitTs {
-				maxCommitTs = row.GetCommitTs()
-			}
 			w.appendRow2Group(row, progress, offset)
 			counter++
 		}
@@ -481,15 +405,6 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 			log.Panic("Open Protocol max-batch-size exceeded",
 				zap.Int("maxBatchSize", w.maxBatchSize), zap.Int("actualBatchSize", counter),
 				zap.Int32("partition", partition), zap.Any("offset", offset))
-		}
-		if w.protocol == config.ProtocolDebeziumAvro {
-			progress.watermarkOffset = offset
-			if err := w.flushPartitionDMLEvents(ctx, progress, maxCommitTs); err != nil {
-				log.Panic("flush debezium avro dml events failed", zap.Error(err),
-					zap.Int32("partition", partition), zap.Any("offset", offset),
-					zap.Uint64("watermark", maxCommitTs))
-			}
-			return true
 		}
 	default:
 		log.Panic("unknown message type", zap.Any("messageType", messageType),
