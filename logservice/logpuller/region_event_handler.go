@@ -56,6 +56,14 @@ type regionEvent struct {
 
 	entries    *cdcpb.Event_Entries_
 	resolvedTs uint64
+
+	memoryReservation *pullerMemoryReservation
+}
+
+func (event *regionEvent) releaseMemory() {
+	if event != nil {
+		event.memoryReservation.release()
+	}
 }
 
 func (event *regionEvent) getSize() int {
@@ -63,6 +71,7 @@ func (event *regionEvent) getSize() int {
 		return 0
 	}
 	size := int(unsafe.Sizeof(*event))
+	size += int(unsafe.Sizeof(pullerMemoryReservation{}))
 	if event.entries != nil {
 		size += int(unsafe.Sizeof(*event.entries))
 		size += int(unsafe.Sizeof(*event.entries.Entries))
@@ -95,6 +104,9 @@ func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {
 }
 
 func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent) bool {
+	for i := range events {
+		events[i].releaseMemory()
+	}
 	startTime := time.Now()
 	hasEntries := false
 	hasResolved := false
@@ -226,7 +238,7 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 }
 
 func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
-	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
+	event.releaseMemory()
 	state := event.mustFirstState()
 	fields := []zap.Field{
 		zap.Bool("hasEntries", event.entries != nil),

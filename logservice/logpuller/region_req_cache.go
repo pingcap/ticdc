@@ -16,326 +16,315 @@ package logpuller
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"go.uber.org/atomic"
+	"github.com/pingcap/ticdc/utils/heap"
 	"go.uber.org/zap"
 )
 
 const (
-	checkStaleRequestInterval    = time.Second * 10
-	requestGCLifeTime            = time.Minute * 180
-	addReqRetryInterval          = time.Millisecond * 1
+	addReqRetryInterval          = time.Millisecond
 	addReqRetryLimit             = 3
 	abnormalRequestDurationInSec = 60 * 60 * 2 // 2 hours
 )
 
-// regionReq represents a wrapped region request with state
+// regionReq is a pending or in-flight Region register request.
 type regionReq struct {
 	regionInfo regionInfo
 	createTime time.Time
+	priority   int
+	heapIndex  int
 }
 
-func newRegionReq(region regionInfo) regionReq {
-	return regionReq{
+func newRegionReq(region regionInfo, priority int) *regionReq {
+	return &regionReq{
 		regionInfo: region,
 		createTime: time.Now(),
+		priority:   priority,
 	}
 }
 
-func (r *regionReq) isStale() bool {
-	return time.Since(r.createTime) > requestGCLifeTime
+func (r *regionReq) SetHeapIndex(index int) {
+	r.heapIndex = index
 }
 
-// requestCache manages region requests with flow control
-type requestCache struct {
-	// pending requests waiting to be sent
-	pendingQueue chan regionReq
+func (r *regionReq) GetHeapIndex() int {
+	return r.heapIndex
+}
 
-	// sent requests waiting for initialization (subscriptionID -> regions -> regionReq)
-	sentRequests struct {
-		sync.RWMutex
-		regionReqs map[SubscriptionID]map[uint64]regionReq
+func (r *regionReq) LessThan(other *regionReq) bool {
+	if r.priority == other.priority {
+		return r.createTime.Before(other.createTime)
 	}
-
-	// pendingCount is a flow control slot counter.
-	// A slot is acquired when a request is successfully enqueued into pendingQueue (see add),
-	// and is released when the request is finished/removed (resolve/markStopped/markDone/clear).
-	// pop and markSent don't change it. If markSent overwrites an existing request for the same region,
-	// it will release a slot for the replaced request to avoid leaking pendingCount.
-	pendingCount atomic.Int64
-	// maximum number of pending requests allowed
-	maxPendingCount int64
-
-	// channel to signal when space becomes available
-	spaceAvailable chan struct{}
-
-	lastCheckStaleRequestTime atomic.Time
+	return r.priority < other.priority
 }
 
-func newRequestCache(maxPendingCount int) *requestCache {
-	res := &requestCache{
-		pendingQueue: make(chan regionReq, maxPendingCount), // Large buffer to reduce blocking
-		sentRequests: struct {
-			sync.RWMutex
-			regionReqs map[SubscriptionID]map[uint64]regionReq
-		}{regionReqs: make(map[SubscriptionID]map[uint64]regionReq)},
-		pendingCount:    atomic.Int64{},
-		maxPendingCount: int64(maxPendingCount),
-		spaceAvailable:  make(chan struct{}, 16), // Buffered to avoid blocking
+// regionRegisterQueue is the bounded, store-level queue shared by all workers.
+// Queue capacity limits local pending work only; active scans are controlled by
+// regionScanLimiter.
+type regionRegisterQueue struct {
+	mu       sync.Mutex
+	requests *heap.Heap[*regionReq]
+	capacity int
+	changed  chan struct{}
+}
+
+func newRegionRegisterQueue(capacity int) *regionRegisterQueue {
+	if capacity <= 0 {
+		capacity = 1
 	}
-
-	res.lastCheckStaleRequestTime.Store(time.Now())
-	return res
+	return &regionRegisterQueue{
+		requests: heap.NewHeap[*regionReq](),
+		capacity: capacity,
+		changed:  make(chan struct{}),
+	}
 }
 
-// add adds a new region request to the cache
-// It blocks if pendingCount >= maxPendingCount until there's space or ctx is cancelled
-func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (bool, error) {
+func (q *regionRegisterQueue) add(
+	ctx context.Context, region regionInfo, priority int,
+) (bool, error) {
 	start := time.Now()
 	ticker := time.NewTicker(addReqRetryInterval)
 	defer ticker.Stop()
-	addReqRetryLimit := addReqRetryLimit
+	retries := addReqRetryLimit
 
 	for {
-		current := c.pendingCount.Load()
-		if current < c.maxPendingCount || force {
-			// Try to add the request
-			req := newRegionReq(region)
-			select {
-			case <-ctx.Done():
-				return false, ctx.Err()
-			case c.pendingQueue <- req:
-				c.pendingCount.Inc()
-				cost := time.Since(start)
-				metrics.SubscriptionClientAddRegionRequestDuration.Observe(cost.Seconds())
-				return true, nil
-			case <-ticker.C:
-				addReqRetryLimit--
-				if addReqRetryLimit <= 0 {
-					return false, nil
-				}
-				continue
-			}
+		q.mu.Lock()
+		if q.requests.Len() < q.capacity {
+			q.requests.AddOrUpdate(newRegionReq(region, priority))
+			q.notifyChangedLocked()
+			q.mu.Unlock()
+			metrics.SubscriptionClientAddRegionRequestDuration.Observe(time.Since(start).Seconds())
+			return true, nil
 		}
+		changed := q.changed
+		q.mu.Unlock()
 
-		// Wait for space to become available
 		select {
-		case <-ticker.C:
-			addReqRetryLimit--
-			if addReqRetryLimit <= 0 {
-				return false, nil
-			}
-			continue
-		case <-c.spaceAvailable:
-			continue
 		case <-ctx.Done():
 			return false, ctx.Err()
-		}
-	}
-}
-
-// pop gets the next pending request.
-// Note: it doesn't change pendingCount. The slot acquired in add() should be released later
-// (e.g. resolve/markStopped/markDone).
-func (c *requestCache) pop(ctx context.Context) (regionReq, error) {
-	select {
-	case req := <-c.pendingQueue:
-		return req, nil
-	case <-ctx.Done():
-		return regionReq{}, ctx.Err()
-	}
-}
-
-// markSent marks a request as sent and adds it to sent requests.
-// It doesn't change pendingCount: the slot is released when the request is finished/removed.
-func (c *requestCache) markSent(req regionReq) {
-	c.sentRequests.Lock()
-	defer c.sentRequests.Unlock()
-
-	m, ok := c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID]
-
-	if !ok {
-		m = make(map[uint64]regionReq)
-		c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID] = m
-	}
-
-	if oldReq, exists := m[req.regionInfo.verID.GetID()]; exists {
-		log.Warn("region request overwritten",
-			zap.Uint64("subID", uint64(req.regionInfo.subscribedSpan.subID)),
-			zap.Uint64("regionID", req.regionInfo.verID.GetID()),
-			zap.Float64("oldAgeSec", time.Since(oldReq.createTime).Seconds()),
-			zap.Float64("newAgeSec", time.Since(req.createTime).Seconds()),
-			zap.Int("pendingCount", int(c.pendingCount.Load())),
-			zap.Int("pendingQueueLen", len(c.pendingQueue)))
-		c.markDone()
-	}
-	m[req.regionInfo.verID.GetID()] = req
-}
-
-// markStopped removes a sent request and releases a slot.
-func (c *requestCache) markStopped(subID SubscriptionID, regionID uint64) {
-	c.sentRequests.Lock()
-	defer c.sentRequests.Unlock()
-
-	regionReqs, ok := c.sentRequests.regionReqs[subID]
-	if !ok {
-		return
-	}
-
-	_, exists := regionReqs[regionID]
-	if !exists {
-		return
-	}
-
-	delete(regionReqs, regionID)
-	if len(regionReqs) == 0 {
-		delete(c.sentRequests.regionReqs, subID)
-	}
-	c.markDone()
-}
-
-// resolve marks a region as initialized and removes it from sent requests
-func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) bool {
-	c.sentRequests.Lock()
-	defer c.sentRequests.Unlock()
-	regionReqs, ok := c.sentRequests.regionReqs[subscriptionID]
-	if !ok {
-		return false
-	}
-
-	req, exists := regionReqs[regionID]
-	if !exists {
-		return false
-	}
-
-	// Check if the subscription ID matches
-	if req.regionInfo.subscribedSpan.subID == subscriptionID {
-		delete(regionReqs, regionID)
-		c.markDone()
-		cost := time.Since(req.createTime).Seconds()
-		if cost > 0 && cost < abnormalRequestDurationInSec {
-			log.Debug("cdc resolve region request", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID), zap.Float64("cost", cost), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
-			metrics.RegionRequestFinishScanDuration.Observe(cost)
-		} else {
-			log.Info("region request duration abnormal, skip metric", zap.Float64("cost", cost), zap.Uint64("regionID", regionID))
-		}
-		return true
-	}
-
-	return false
-}
-
-// clearStaleRequest clears stale requests from the cache
-// Note: Sometimes, the CDC sends the same region request to TiKV multiple times. In such cases, this method is needed to reduce the pendingSize.
-func (c *requestCache) clearStaleRequest() {
-	if time.Since(c.lastCheckStaleRequestTime.Load()) < checkStaleRequestInterval {
-		return
-	}
-	c.sentRequests.Lock()
-	defer c.sentRequests.Unlock()
-	reqCount := 0
-	for subID, regionReqs := range c.sentRequests.regionReqs {
-		for regionID, regionReq := range regionReqs {
-			if regionReq.regionInfo.isStopped() ||
-				regionReq.regionInfo.subscribedSpan.stopped.Load() ||
-				regionReq.regionInfo.lockedRangeState.Initialized.Load() ||
-				regionReq.isStale() {
-				c.markDone()
-				log.Warn("region worker delete stale region request",
-					zap.Uint64("subID", uint64(subID)),
-					zap.Uint64("regionID", regionID),
-					zap.Int("pendingCount", int(c.pendingCount.Load())),
-					zap.Int("pendingQueueLen", len(c.pendingQueue)),
-					zap.Bool("isRegionStopped", regionReq.regionInfo.isStopped()),
-					zap.Bool("isSubscribedSpanStopped", regionReq.regionInfo.subscribedSpan.stopped.Load()),
-					zap.Bool("isStale", regionReq.isStale()),
-					zap.Time("createTime", regionReq.createTime))
-				delete(regionReqs, regionID)
-			} else {
-				reqCount++
+		case <-changed:
+		case <-ticker.C:
+			retries--
+			if retries <= 0 {
+				return false, nil
 			}
 		}
-		if len(regionReqs) == 0 {
-			delete(c.sentRequests.regionReqs, subID)
-		}
 	}
-
-	// If there are no in-cache region requests but pendingCount isn't 0, it means pendingCount is stale.
-	// Reset it to avoid blocking add() forever.
-	if reqCount == 0 && len(c.pendingQueue) == 0 && c.pendingCount.Load() != 0 {
-		log.Info("region worker pending request count is not equal to actual region request count, correct it",
-			zap.Int("pendingCount", int(c.pendingCount.Load())),
-			zap.Int("actualReqCount", reqCount),
-			zap.Int("pendingQueueLen", len(c.pendingQueue)))
-		c.pendingCount.Store(0)
-		// Notify waiting add operations that there's space available.
-		select {
-		case c.spaceAvailable <- struct{}{}:
-		default:
-		}
-	}
-
-	c.lastCheckStaleRequestTime.Store(time.Now())
 }
 
-// clear removes all requests and returns them
-func (c *requestCache) clear() []regionInfo {
-	var regions []regionInfo
-
-	// Drain pending requests from channel
-LOOP:
-	for {
-		select {
-		case req := <-c.pendingQueue:
-			regions = append(regions, req.regionInfo)
-			c.markDone()
-		default:
-			break LOOP
-		}
+func (q *regionRegisterQueue) tryPopOrNotify() (*regionReq, bool, <-chan struct{}) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	req, ok := q.requests.PopTop()
+	if ok {
+		q.notifyChangedLocked()
+		return req, true, nil
 	}
+	return nil, false, q.changed
+}
 
-	c.sentRequests.Lock()
-	defer c.sentRequests.Unlock()
+func (q *regionRegisterQueue) len() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.requests.Len()
+}
 
-	for subID, regionReqs := range c.sentRequests.regionReqs {
-		for regionID := range regionReqs {
-			regions = append(regions, regionReqs[regionID].regionInfo)
-			delete(regionReqs, regionID)
-			c.markDone()
+func (q *regionRegisterQueue) clear() []regionInfo {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	regions := make([]regionInfo, 0, q.requests.Len())
+	for {
+		req, ok := q.requests.PopTop()
+		if !ok {
+			break
 		}
-		delete(c.sentRequests.regionReqs, subID)
+		regions = append(regions, req.regionInfo)
+	}
+	q.notifyChangedLocked()
+	return regions
+}
+
+func (q *regionRegisterQueue) notifyChangedLocked() {
+	close(q.changed)
+	q.changed = make(chan struct{})
+}
+
+// regionScanLimiter controls the exact number of active incremental scans for
+// one store.
+type regionScanLimiter struct {
+	mu        sync.Mutex
+	limit     int
+	active    int
+	available chan struct{}
+}
+
+func newRegionScanLimiter(limit int) *regionScanLimiter {
+	if limit <= 0 {
+		limit = 1
+	}
+	return &regionScanLimiter{
+		limit:     limit,
+		available: make(chan struct{}),
+	}
+}
+
+func (l *regionScanLimiter) tryAcquireOrNotify() (*regionScanSlot, <-chan struct{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.active >= l.limit {
+		return nil, l.available
+	}
+	l.active++
+	return &regionScanSlot{limiter: l}, nil
+}
+
+func (l *regionScanLimiter) usage() (active, limit int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.active, l.limit
+}
+
+func (l *regionScanLimiter) release() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.active <= 0 {
+		log.Error("region scan limiter underflow", zap.Int("limit", l.limit))
+		return
+	}
+	l.active--
+	close(l.available)
+	l.available = make(chan struct{})
+}
+
+// regionScanSlot is an idempotent ownership token for one active scan.
+type regionScanSlot struct {
+	limiter  *regionScanLimiter
+	released atomic.Bool
+}
+
+func (s *regionScanSlot) release() {
+	if s == nil || !s.released.CompareAndSwap(false, true) {
+		return
+	}
+	s.limiter.release()
+}
+
+type trackedRegionRequest struct {
+	req  *regionReq
+	slot *regionScanSlot
+}
+
+// regionRequestTracker owns the sent Register requests and scan slots for one
+// worker's gRPC stream.
+type regionRequestTracker struct {
+	mu       sync.Mutex
+	requests map[SubscriptionID]map[uint64]trackedRegionRequest
+}
+
+func newRegionRequestTracker() *regionRequestTracker {
+	return &regionRequestTracker{
+		requests: make(map[SubscriptionID]map[uint64]trackedRegionRequest),
+	}
+}
+
+func (t *regionRequestTracker) track(req *regionReq, slot *regionScanSlot) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	subID := req.regionInfo.subscribedSpan.subID
+	regionID := req.regionInfo.verID.GetID()
+	regions := t.requests[subID]
+	if regions == nil {
+		regions = make(map[uint64]trackedRegionRequest)
+		t.requests[subID] = regions
+	}
+	if _, exists := regions[regionID]; exists {
+		return false
+	}
+	regions[regionID] = trackedRegionRequest{req: req, slot: slot}
+	return true
+}
+
+func (t *regionRequestTracker) stop(subID SubscriptionID, regionID uint64) bool {
+	tracked, ok := t.remove(subID, regionID)
+	if ok {
+		tracked.slot.release()
+	}
+	return ok
+}
+
+func (t *regionRequestTracker) resolve(subID SubscriptionID, regionID uint64) bool {
+	tracked, ok := t.remove(subID, regionID)
+	if !ok {
+		return false
+	}
+	tracked.slot.release()
+	cost := time.Since(tracked.req.createTime).Seconds()
+	if cost > 0 && cost < abnormalRequestDurationInSec {
+		metrics.RegionRequestFinishScanDuration.Observe(cost)
+	} else {
+		log.Info("region request duration abnormal, skip metric",
+			zap.Float64("cost", cost),
+			zap.Uint64("regionID", regionID))
+	}
+	return true
+}
+
+func (t *regionRequestTracker) remove(
+	subID SubscriptionID, regionID uint64,
+) (trackedRegionRequest, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	regions := t.requests[subID]
+	if regions == nil {
+		return trackedRegionRequest{}, false
+	}
+	tracked, ok := regions[regionID]
+	if !ok {
+		return trackedRegionRequest{}, false
+	}
+	delete(regions, regionID)
+	if len(regions) == 0 {
+		delete(t.requests, subID)
+	}
+	return tracked, true
+}
+
+func (t *regionRequestTracker) removeSubscription(subID SubscriptionID) {
+	t.mu.Lock()
+	regions := t.requests[subID]
+	delete(t.requests, subID)
+	t.mu.Unlock()
+	for _, tracked := range regions {
+		tracked.slot.release()
+	}
+}
+
+func (t *regionRequestTracker) clear() []regionInfo {
+	t.mu.Lock()
+	requests := t.requests
+	t.requests = make(map[SubscriptionID]map[uint64]trackedRegionRequest)
+	t.mu.Unlock()
+
+	var regions []regionInfo
+	for _, trackedRegions := range requests {
+		for _, tracked := range trackedRegions {
+			regions = append(regions, tracked.req.regionInfo)
+			tracked.slot.release()
+		}
 	}
 	return regions
 }
 
-// getPendingCount returns the current pending count
-func (c *requestCache) getPendingCount() int {
-	return int(c.pendingCount.Load())
-}
-
-func (c *requestCache) markDone() {
-	// Decrement pendingCount by 1, but never let it go below 0.
-	// Do it with CAS to avoid clobbering concurrent Inc() calls.
-	for {
-		old := c.pendingCount.Load()
-		if old == 0 {
-			break
-		} else if old < 0 {
-			if c.pendingCount.CompareAndSwap(old, 0) {
-				break
-			}
-		} else {
-			if c.pendingCount.CompareAndSwap(old, old-1) {
-				break
-			}
-		}
+func (t *regionRequestTracker) len() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	count := 0
+	for _, regions := range t.requests {
+		count += len(regions)
 	}
-	// Notify waiting add operations that there's space available.
-	select {
-	case c.spaceAvailable <- struct{}{}:
-	default: // If channel is full, skip notification
-	}
+	return count
 }

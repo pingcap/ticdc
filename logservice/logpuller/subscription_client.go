@@ -129,7 +129,8 @@ type subscribedSpan struct {
 	kvEventsCache []common.RawKVEntry
 
 	// To handle span removing.
-	stopped atomic.Bool
+	stopped   atomic.Bool
+	stoppedCh chan struct{}
 
 	// To handle stale lock resolvings.
 	tryResolveLock     func(regionID uint64, state *regionlock.LockedRangeState)
@@ -194,10 +195,8 @@ type subscriptionClient struct {
 	stores sync.Map
 
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
-	// the following three fields are used to manage feedback from ds and notify other goroutines
-	mu     sync.Mutex
-	cond   *sync.Cond
-	paused atomic.Bool
+	// memoryQuota controls puller backpressure and new region scan admission.
+	memoryQuota *pullerMemoryQuota
 
 	// the credential to connect tikv
 	credential *security.Credential
@@ -224,13 +223,13 @@ type subscriptionClient struct {
 
 // NewSubscriptionClient creates a client.
 func NewSubscriptionClient(
-	config *SubscriptionClientConfig,
+	clientConfig *SubscriptionClientConfig,
 	pd pd.Client,
 	lockResolver txnutil.LockResolver,
 	credential *security.Credential,
 ) SubscriptionClient {
 	subClient := &subscriptionClient{
-		config: config,
+		config: clientConfig,
 
 		stores:       sync.Map{},
 		pd:           pd,
@@ -248,6 +247,8 @@ func NewSubscriptionClient(
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
+	pullerConfig := config.GetGlobalServerConfig().Debug.Puller
+	subClient.memoryQuota = newPullerMemoryQuota(pullerConfig.MemoryQuota)
 
 	option := dynstream.NewOption()
 	// Note: it is max batch size of the kv sent from tikv(not committed rows)
@@ -255,7 +256,6 @@ func NewSubscriptionClient(
 	// TODO: Set `UseBuffer` to true until we refactor the `regionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
 	// 	ds.handleLoop fetch events from `ch` -> regionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
 	option.UseBuffer = true
-	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
 		"log-puller",
 		&regionEventHandler{subClient: subClient},
@@ -263,7 +263,6 @@ func NewSubscriptionClient(
 	)
 	ds.Start()
 	subClient.ds = ds
-	subClient.cond = sync.NewCond(&subClient.mu)
 
 	subClient.initMetrics()
 	return subClient
@@ -298,32 +297,19 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			dsMetrics := s.ds.GetMetrics()
 			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
-			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 1 {
-				log.Panic("subscription client should have only one area")
-			}
-			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 0 {
-				areaMetric := dsMetrics.MemoryControl.AreaMemoryMetrics[0]
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"log-puller",
-					"max",
-					"default",
-					"default",
-				).Set(float64(areaMetric.MaxMemory()))
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"log-puller",
-					"used",
-					"default",
-					"default",
-				).Set(float64(areaMetric.MemoryUsage()))
-			}
+			usedMemory, memoryQuota := s.memoryQuota.usage()
+			metrics.PullerMemoryQuota.WithLabelValues("quota").Set(float64(memoryQuota))
+			metrics.PullerMemoryQuota.WithLabelValues("used").Set(float64(usedMemory))
 
 			pendingRegionReqCount := 0
 			s.stores.Range(func(_, value any) bool {
 				store := value.(*requestedStore)
+				pendingRegionReqCount += store.registerQueue.len()
+				activeScanCount, _ := store.scanLimiter.usage()
+				pendingRegionReqCount += activeScanCount
 				store.requestWorkers.RLock()
 				for _, worker := range store.requestWorkers.s {
-					worker.requestCache.clearStaleRequest()
-					pendingRegionReqCount += worker.requestCache.getPendingCount()
+					pendingRegionReqCount += len(worker.controlQueue)
 				}
 				store.requestWorkers.RUnlock()
 				return true
@@ -366,8 +352,7 @@ func (s *subscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
-	s.ds.AddPath(rt.subID, rt, areaSetting)
+	s.ds.AddPath(rt.subID, rt)
 
 	select {
 	case <-s.ctx.Done():
@@ -402,49 +387,18 @@ func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
 }
 
 func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
-	// fast path
-	if !s.paused.Load() {
+	if s.memoryQuota == nil {
 		s.ds.Push(subID, event)
 		return
 	}
-	// slow path: wait until paused is false
-	s.mu.Lock()
-	for s.paused.Load() {
-		select {
-		case <-s.ctx.Done():
-			s.mu.Unlock()
-			return
-		default:
-			s.cond.Wait()
-		}
+	span := event.mustFirstState().region.subscribedSpan
+	reservation, err := s.memoryQuota.acquire(
+		s.ctx, subID, uint64(event.getSize()), span.stoppedCh)
+	if err != nil {
+		return
 	}
-	s.mu.Unlock()
+	event.memoryReservation = reservation
 	s.ds.Push(subID, event)
-}
-
-func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case feedback := <-s.ds.Feedback():
-			switch feedback.FeedbackType {
-			case dynstream.PauseArea:
-				s.mu.Lock()
-				s.paused.Store(true)
-				s.mu.Unlock()
-				log.Info("subscription client pause push region event")
-			case dynstream.ResumeArea:
-				s.mu.Lock()
-				s.paused.Store(false)
-				s.cond.Broadcast()
-				s.mu.Unlock()
-				log.Info("subscription client resume push region event")
-			case dynstream.ReleasePath, dynstream.ResumePath:
-				// Ignore it, because it is no need to pause and resume a path in puller.
-			}
-		}
-	}
 }
 
 func (s *subscriptionClient) Run(ctx context.Context) error {
@@ -458,7 +412,6 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error { return s.updateMetrics(ctx) })
-	g.Go(func() error { return s.handleDSFeedBack(ctx) })
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.handleRegions(ctx, g) })
 	g.Go(func() error { return s.handleErrors(ctx) })
@@ -475,10 +428,9 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 // Close closes the client. Must be called after `Run` returns.
 func (s *subscriptionClient) Close(ctx context.Context) error {
 	s.cancel()
-	s.mu.Lock()
-	s.paused.Store(false)
-	s.cond.Broadcast()
-	s.mu.Unlock()
+	if s.memoryQuota != nil {
+		s.memoryQuota.close()
+	}
 	s.ds.Close()
 	s.regionTaskQueue.Close()
 	return nil
@@ -492,6 +444,9 @@ func (s *subscriptionClient) setTableStopped(rt *subscribedSpan) {
 	// Then send a special singleRegionInfo to regionRouter to deregister the table
 	// from all TiKV instances.
 	if rt.stopped.CompareAndSwap(false, true) {
+		if rt.stoppedCh != nil {
+			close(rt.stoppedCh)
+		}
 		s.regionTaskQueue.Push(NewRegionPriorityTask(TaskHighPrior, regionInfo{subscribedSpan: rt, filterLoop: rt.filterLoop}, s.pdClock.CurrentTS()))
 		if rt.rangeLock.Stop() {
 			s.onTableDrained(rt)
@@ -503,6 +458,9 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 	log.Info("subscription client stop span is finished",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
+	if s.memoryQuota != nil {
+		s.memoryQuota.releaseSubscription(rt.subID)
+	}
 	err := s.ds.RemovePath(rt.subID)
 	if err != nil {
 		log.Warn("subscription client remove path failed",
@@ -528,22 +486,14 @@ func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
 
 // requestedStore represents a store that has been connected.
 type requestedStore struct {
-	storeAddr string
-	// Use to select a worker to send request.
-	nextWorker atomic.Uint32
+	storeAddr     string
+	registerQueue *regionRegisterQueue
+	scanLimiter   *regionScanLimiter
 
 	requestWorkers struct {
 		sync.RWMutex
 		s []*regionRequestWorker
 	}
-}
-
-func (rs *requestedStore) getRequestWorker() *regionRequestWorker {
-	rs.requestWorkers.RLock()
-	defer rs.requestWorkers.RUnlock()
-
-	index := rs.nextWorker.Add(1) % uint32(len(rs.requestWorkers.s))
-	return rs.requestWorkers.s[index]
 }
 
 // handleRegions receives regionInfo from regionTaskQueue and attach rpcCtx to them,
@@ -558,7 +508,11 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			return rs
 		}
 
-		rs = &requestedStore{storeAddr: storeAddr}
+		rs = &requestedStore{
+			storeAddr:     storeAddr,
+			registerQueue: newRegionRegisterQueue(pendingRegionRequestQueueSize),
+			scanLimiter:   newRegionScanLimiter(pendingRegionRequestQueueSize),
+		}
 		rs.requestWorkers.s = make([]*regionRequestWorker, 0, s.config.RegionRequestWorkerPerStore)
 		s.stores.Store(storeAddr, rs)
 
@@ -582,10 +536,19 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 	defer func() {
 		s.stores.Range(func(_, value any) bool {
 			rs := value.(*requestedStore)
+			rs.registerQueue.clear()
 
 			rs.requestWorkers.RLock()
 			for _, w := range rs.requestWorkers.s {
-				w.requestCache.clear()
+			DRAIN_CONTROL:
+				for {
+					select {
+					case <-w.controlQueue:
+					default:
+						break DRAIN_CONTROL
+					}
+				}
+				w.requestTracker.clear()
 			}
 			rs.requestWorkers.RUnlock()
 
@@ -626,10 +589,8 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		}
 
 		store := getStore(region.rpcCtx.Addr)
-		worker := store.getRequestWorker()
-		force := regionTask.Priority() <= forcedPriorityBase
 
-		ok, err = worker.add(ctx, region, force)
+		ok, err = store.registerQueue.add(ctx, region, regionTask.Priority())
 		if err != nil {
 			log.Warn("subscription client add region request failed",
 				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
@@ -644,7 +605,6 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		}
 
 		log.Debug("subscription client will request a region",
-			zap.Uint64("workID", worker.workerID),
 			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 			zap.Uint64("regionID", region.verID.GetID()),
 			zap.String("addr", store.storeAddr))
@@ -660,7 +620,7 @@ func (s *subscriptionClient) enqueueRegionToAllStores(ctx context.Context, regio
 		workers := rs.requestWorkers.s
 		rs.requestWorkers.RUnlock()
 		for _, worker := range workers {
-			ok, err := worker.add(ctx, region, true)
+			ok, err := worker.addControl(ctx, region)
 			if err != nil {
 				firstErr = err
 				enqueued = false
@@ -727,6 +687,13 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 	nextSpan := span
 	backoffBeforeLoad := false
 	for {
+		stopped, err := s.waitRegionScanAllowed(ctx, subscribedSpan)
+		if err != nil {
+			return err
+		}
+		if stopped {
+			return nil
+		}
 		if backoffBeforeLoad {
 			if err := util.Hang(ctx, loadRegionRetryInterval); err != nil {
 				return err
@@ -763,6 +730,13 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		}
 
 		for _, regionMeta := range regionMetas {
+			stopped, err := s.waitRegionScanAllowed(ctx, subscribedSpan)
+			if err != nil {
+				return err
+			}
+			if stopped {
+				return nil
+			}
 			regionSpan := heartbeatpb.TableSpan{
 				StartKey:   regionMeta.StartKey,
 				EndKey:     regionMeta.EndKey,
@@ -794,6 +768,34 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			}
 		}
 	}
+}
+
+func (s *subscriptionClient) waitRegionScanAllowed(
+	ctx context.Context, subscribedSpan *subscribedSpan,
+) (bool, error) {
+	if subscribedSpan.stopped.Load() {
+		return true, nil
+	}
+	if s.memoryQuota == nil {
+		return false, nil
+	}
+	for {
+		resume, paused := s.memoryQuota.regionScanResumeNotify()
+		if !paused {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-subscribedSpan.stoppedCh:
+			return true, nil
+		case <-resume:
+		}
+	}
+	if subscribedSpan.stopped.Load() {
+		return true, nil
+	}
+	return false, nil
 }
 
 // scheduleRegionRequest locks the region's range and send the region to regionTaskQueue,
@@ -1089,6 +1091,7 @@ func (s *subscriptionClient) newSubscribedSpan(
 		startTs:    startTs,
 		filterLoop: filterLoop,
 		rangeLock:  rangeLock,
+		stoppedCh:  make(chan struct{}),
 
 		consumeKVEvents:   consumeKVEvents,
 		advanceResolvedTs: advanceResolvedTs,

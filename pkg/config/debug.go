@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 )
 
 // DebugConfig represents config for ticdc unexposed feature configurations
@@ -49,12 +50,18 @@ func (c *DebugConfig) ValidateAndAdjust() error {
 	if err := c.Scheduler.ValidateAndAdjust(); err != nil {
 		return errors.Trace(err)
 	}
+	if c.Puller.MemoryQuota == 0 {
+		return cerror.ErrInvalidServerOption.GenWithStackByArgs(
+			"debug.puller.memory-quota must be greater than 0")
+	}
 
 	return nil
 }
 
 // PullerConfig represents config for puller
 type PullerConfig struct {
+	// MemoryQuota is the memory quota in bytes for events buffered by the puller.
+	MemoryQuota uint64 `toml:"memory-quota" json:"memory_quota"`
 	// EnableResolvedTsStuckDetection is used to enable resolved ts stuck detection.
 	EnableResolvedTsStuckDetection bool `toml:"enable-resolved-ts-stuck-detection" json:"enable_resolved_ts_stuck_detection"`
 	// ResolvedTsStuckInterval is the interval of checking resolved ts stuck.
@@ -62,16 +69,16 @@ type PullerConfig struct {
 	// LogRegionDetails determines whether logs Region details or not in puller and kv-client.
 	LogRegionDetails bool `toml:"log-region-details" json:"log_region_details"`
 
-	// PendingRegionRequestQueueSize is the total size of the pending region request queue shared across
-	// all puller workers connecting to a single TiKV store. This size is divided equally among all workers.
-	// For example, if PendingRegionRequestQueueSize is 32 and there are 8 workers connecting to the same store,
-	// each worker's queue size will be 32 / 8 = 4.
+	// PendingRegionRequestQueueSize is the capacity of the pending Register queue
+	// shared by all puller workers connecting to one TiKV store. It also limits
+	// the number of active incremental scans for that store.
 	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending_region_request_queue_size"`
 }
 
 // NewDefaultPullerConfig return the default puller configuration
 func NewDefaultPullerConfig() *PullerConfig {
 	return &PullerConfig{
+		MemoryQuota:                    1024 * 1024 * 1024, // 1 GiB.
 		EnableResolvedTsStuckDetection: false,
 		ResolvedTsStuckInterval:        TomlDuration(5 * time.Minute),
 		LogRegionDetails:               false,

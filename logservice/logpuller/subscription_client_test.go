@@ -92,7 +92,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	}
 
 	worker := &regionRequestWorker{
-		requestCache: &requestCache{},
+		requestTracker: newRegionRequestTracker(),
 	}
 	// Lock another range, no task will be triggered before initialized.
 	res = span.rangeLock.LockRange(context.Background(), []byte{'c'}, []byte{'d'}, 2, 100)
@@ -382,18 +382,22 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 }
 
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
+	quota := newPullerMemoryQuota(1)
+	reservation, err := quota.acquire(context.Background(), 2, 1, nil)
+	require.NoError(t, err)
+	defer reservation.release()
+	span := &subscribedSpan{stoppedCh: make(chan struct{})}
+	state := &regionFeedState{region: regionInfo{subscribedSpan: span}}
 	client := &subscriptionClient{
 		ds:              &mockDynamicStream{},
+		memoryQuota:     quota,
 		regionTaskQueue: NewPriorityQueue(),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
-	client.cond = sync.NewCond(&client.mu)
-
-	client.paused.Store(true)
 
 	done := make(chan struct{})
 	go func() {
-		client.pushRegionEventToDS(SubscriptionID(1), regionEvent{})
+		client.pushRegionEventToDS(SubscriptionID(1), regionEvent{states: []*regionFeedState{state}})
 		close(done)
 	}()
 
@@ -412,22 +416,19 @@ func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 	}
 }
 
-func TestEnqueueRegionToAllStoresRetryWhenCacheFull(t *testing.T) {
+func TestEnqueueStopRegionWhenRegisterCacheFull(t *testing.T) {
 	ctx := context.Background()
 	client := &subscriptionClient{}
 
-	worker := &regionRequestWorker{
-		requestCache: newRequestCache(1),
-	}
-	store := &requestedStore{storeAddr: "store-1"}
-	store.requestWorkers.s = []*regionRequestWorker{worker}
+	worker := newTestRegionRequestWorker(1, client)
+	store := worker.store
 	client.stores.Store(store.storeAddr, store)
 
 	dummyRegion := regionInfo{
 		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
 		lockedRangeState: &regionlock.LockedRangeState{},
 	}
-	ok, err := worker.add(ctx, dummyRegion, true)
+	ok, err := store.registerQueue.add(ctx, dummyRegion, 0)
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -436,15 +437,9 @@ func TestEnqueueRegionToAllStoresRetryWhenCacheFull(t *testing.T) {
 	}
 	enqueued, err := client.enqueueRegionToAllStores(ctx, stopRegion)
 	require.NoError(t, err)
-	require.False(t, enqueued)
-
-	<-worker.requestCache.pendingQueue
-	worker.requestCache.markDone()
-
-	enqueued, err = client.enqueueRegionToAllStores(ctx, stopRegion)
-	require.NoError(t, err)
 	require.True(t, enqueued)
-	require.Equal(t, 1, len(worker.requestCache.pendingQueue))
+	require.Equal(t, 1, store.registerQueue.len())
+	require.Equal(t, 1, len(worker.controlQueue))
 }
 
 func TestSubscriptionWithFailedTiKV(t *testing.T) {

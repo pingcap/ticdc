@@ -64,6 +64,27 @@ var (
 			Name:      "resolved_ts_lag",
 			Help:      "The lag of resolved ts",
 		})
+	PullerRegionScanGate = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "region_scan_gate_open",
+			Help:      "Whether the puller region scan gate is open.",
+		})
+	PullerRegionScanGateTransition = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "region_scan_gate_transition_count",
+			Help:      "The number of puller region scan gate state transitions.",
+		}, []string{"type"})
+	PullerMemoryQuota = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota_bytes",
+			Help:      "Puller memory quota and current usage in bytes.",
+		}, []string{"type"})
 
 	SubscriptionClientResolvedTsLagGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
@@ -164,6 +185,9 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(LogPullerPrewriteCacheRowNum)
 	registry.MustRegister(LogPullerMatcherCount)
 	registry.MustRegister(LogPullerResolvedTsLag)
+	registry.MustRegister(PullerRegionScanGate)
+	registry.MustRegister(PullerRegionScanGateTransition)
+	registry.MustRegister(PullerMemoryQuota)
 	registry.MustRegister(SubscriptionClientRequestedRegionCount)
 	registry.MustRegister(SubscriptionClientAddRegionRequestDuration)
 	registry.MustRegister(RegionRequestFinishScanDuration)
