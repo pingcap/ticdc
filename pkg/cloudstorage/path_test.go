@@ -270,7 +270,7 @@ func TestGenerateAndParseIndexFilePath(t *testing.T) {
 			}
 			require.Equal(t, indexPath, tc.expectedDMLPathKey.GenerateIndexFilePath(indexKey))
 			var pathKey DMLPathKey
-			pathKey.ParseIndexFilePath(tc.dateSeparator, indexPath)
+			require.NoError(t, pathKey.ParseIndexFilePath(tc.dateSeparator, indexPath))
 			require.Equal(t, tc.expectedDMLPathKey, pathKey)
 		})
 	}

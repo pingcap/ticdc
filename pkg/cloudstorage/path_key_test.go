@@ -162,3 +162,34 @@ func TestSchemaFileDMLPathKeyOrder(t *testing.T) {
 	}
 	require.NotZero(t, CompareDMLPathKey(dataDMLKey, tableIDPathKey))
 }
+
+func TestParseIndexFilePathRejectsUnsupportedPath(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name          string
+		dateSeparator string
+		path          string
+	}{
+		{
+			name:          "legacy schema table date index",
+			dateSeparator: config.DateSeparatorDay.String(),
+			path:          "test/binary_columns_dummy/2026-06-23/meta/CDC.index",
+		},
+		{
+			name:          "invalid index file name",
+			dateSeparator: config.DateSeparatorNone.String(),
+			path:          "schema1/table1/123456/meta/notCDC.index",
+		},
+		{
+			name:          "date does not match separator",
+			dateSeparator: config.DateSeparatorMonth.String(),
+			path:          "schema1/table1/123456/2023-05-09/meta/CDC.index",
+		},
+	}
+
+	for _, tc := range testCases {
+		var pathKey DMLPathKey
+		require.Error(t, pathKey.ParseIndexFilePath(tc.dateSeparator, tc.path), tc.name)
+	}
+}

@@ -244,6 +244,7 @@ func (c *consumer) getNewFiles(
 		origDMLIdxMap[k] = m
 	}
 
+	dateSeparator := putil.GetOrZero(c.replicationCfg.Sink.DateSeparator)
 	err := c.externalStorage.WalkDir(ctx, opt, func(path string, _ int64) error {
 		if cloudstorage.IsSchemaFile(path) {
 			c.parseSchemaFilePath(ctx, path)
@@ -251,7 +252,10 @@ func (c *consumer) getNewFiles(
 		}
 		if strings.HasSuffix(path, ".index") {
 			var dmlkey cloudstorage.DMLPathKey
-			dmlkey.ParseIndexFilePath(putil.GetOrZero(c.replicationCfg.Sink.DateSeparator), path)
+			if err := dmlkey.ParseIndexFilePath(dateSeparator, path); err != nil {
+				log.Debug("ignore handling unsupported dml index file", zap.String("path", path))
+				return nil
+			}
 			c.parseDMLIndexFile(ctx, path, dmlkey)
 			return nil
 		}

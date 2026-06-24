@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -181,6 +182,41 @@ func (d *DMLPathKey) GenerateIndexFilePath(fileIndexKey FileIndexKey) string {
 	)
 }
 
+func isDMLIndexFileName(fileName string) bool {
+	if fileName == "CDC.index" {
+		return true
+	}
+	return strings.HasPrefix(fileName, "CDC_") &&
+		strings.HasSuffix(fileName, ".index") &&
+		len(fileName) > len("CDC_.index")
+}
+
+func isDatePathPart(dateSeparator, value string) bool {
+	switch dateSeparator {
+	case config.DateSeparatorYear.String():
+		return len(value) == len("2006") && isDigits(value)
+	case config.DateSeparatorMonth.String():
+		return len(value) == len("2006-01") &&
+			value[4] == '-' &&
+			isDigits(value[:4]) && isDigits(value[5:])
+	case config.DateSeparatorDay.String():
+		return len(value) == len("2006-01-02") &&
+			value[4] == '-' && value[7] == '-' &&
+			isDigits(value[:4]) && isDigits(value[5:7]) && isDigits(value[8:])
+	default:
+		return false
+	}
+}
+
+func isDigits(value string) bool {
+	for _, c := range value {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return value != ""
+}
+
 // generateDMLDataDirPath returns the canonical data directory path.
 // Output is either <tableID>/<version>[/date] or
 // <schema>/<table>/<version>[/partition][/date].
@@ -207,7 +243,7 @@ func (d DMLPathKey) generateDMLDataDirPath() string {
 
 func (d *DMLPathKey) parseDMLDataDir(
 	dateSeparator string, parts []string, filePath string,
-) {
+) error {
 	var (
 		key       DMLPathKey
 		version   string
@@ -222,7 +258,7 @@ func (d *DMLPathKey) parseDMLDataDir(
 		config.DateSeparatorDay.String():
 		hasDate = true
 	default:
-		log.Panic("invalid date separator", zap.String("dateSeparator", dateSeparator))
+		return errors.ErrStorageSinkInvalidDateSeparator.GenWithStackByArgs(dateSeparator)
 	}
 
 	switch {
@@ -252,13 +288,16 @@ func (d *DMLPathKey) parseDMLDataDir(
 		key.Date = parts[4]
 		version = parts[2]
 	default:
-		log.Panic("cannot match dml path pattern", zap.String("path", filePath))
+		return invalidDMLPathError(filePath)
 	}
 
+	if hasDate && !isDatePathPart(dateSeparator, key.Date) {
+		return invalidDMLPathError(filePath)
+	}
 	if tableID != "" {
 		tableIDNum, err := strconv.ParseInt(tableID, 10, 64)
 		if err != nil {
-			log.Panic("parse table id failed", zap.String("value", tableID), zap.Error(err))
+			return invalidDMLPathWrapError(err, filePath)
 		}
 		key.UseTableIDAsPath = true
 		key.TableID = tableIDNum
@@ -266,29 +305,30 @@ func (d *DMLPathKey) parseDMLDataDir(
 	if partition != "" {
 		partitionNum, err := strconv.ParseInt(partition, 10, 64)
 		if err != nil {
-			log.Panic("parse partition number failed", zap.String("value", partition), zap.Error(err))
+			return invalidDMLPathWrapError(err, filePath)
 		}
 		key.PartitionNum = partitionNum
 	}
 	tableVersion, err := strconv.ParseUint(version, 10, 64)
 	if err != nil {
-		log.Panic("parse table version failed", zap.String("value", version), zap.Error(err))
+		return invalidDMLPathWrapError(err, filePath)
 	}
 	key.TableVersion = tableVersion
 	*d = key
+	return nil
 }
 
 // ParseIndexFilePath fills DMLPathKey from an index file path.
 // Input is <data-dir>/meta/CDC.index or
 // <data-dir>/meta/CDC_<dispatcherID>.index. Only the data directory portion is
 // parsed here; the file index itself is stored in the index file content and is
-// read by the caller. Invalid paths panic.
-func (d *DMLPathKey) ParseIndexFilePath(dateSeparator, path string) {
+// read by the caller.
+func (d *DMLPathKey) ParseIndexFilePath(dateSeparator, path string) error {
 	parts := strings.Split(path, "/")
-	if len(parts) < 4 || parts[len(parts)-2] != "meta" {
-		log.Panic("cannot match dml path pattern", zap.String("path", path))
+	if len(parts) < 4 || parts[len(parts)-2] != "meta" || !isDMLIndexFileName(parts[len(parts)-1]) {
+		return invalidDMLPathError(path)
 	}
-	d.parseDMLDataDir(dateSeparator, parts[:len(parts)-2], path)
+	return d.parseDMLDataDir(dateSeparator, parts[:len(parts)-2], path)
 }
 
 // ParseDMLFilePath fills DMLPathKey from a data file path and returns the file
@@ -302,6 +342,20 @@ func (d *DMLPathKey) ParseDMLFilePath(dateSeparator, filePath, extension string)
 		log.Panic("parse file index from file name failed",
 			zap.String("path", filePath), zap.Error(err))
 	}
-	d.parseDMLDataDir(dateSeparator, parts[:len(parts)-1], filePath)
+	if err := d.parseDMLDataDir(dateSeparator, parts[:len(parts)-1], filePath); err != nil {
+		log.Panic("parse dml data dir failed",
+			zap.String("path", filePath), zap.Error(err))
+	}
 	return fileIndex
+}
+
+func invalidDMLPathError(filePath string) error {
+	return errors.ErrStorageSinkInvalidFileName.GenWithStack(
+		"cannot match dml path pattern for %q", filePath)
+}
+
+func invalidDMLPathWrapError(err error, filePath string) error {
+	return errors.WrapError(
+		errors.ErrStorageSinkInvalidFileName, err,
+		"cannot match dml path pattern for %q", filePath)
 }
