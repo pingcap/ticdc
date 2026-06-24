@@ -373,11 +373,6 @@ func (w *writer) flushPartitionDMLEvents(
 				zap.Uint64("watermark", watermark), zap.Int("total", total),
 				zap.Duration("duration", time.Since(start)))
 			progress.updateWatermark(watermark, progress.watermarkOffset)
-			for _, item := range resolvedGroups {
-				if item.maxCommitTs > item.group.AppliedWatermark {
-					item.group.AppliedWatermark = item.maxCommitTs
-				}
-			}
 			return nil
 		case <-ticker.C:
 			log.Warn("partition DML events cannot be flushed in time",

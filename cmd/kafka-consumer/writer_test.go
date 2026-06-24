@@ -352,7 +352,6 @@ func TestFlushPartitionDMLEventsFlushesWithoutResolved(t *testing.T) {
 
 	require.NoError(t, w.flushPartitionDMLEvents(ctx, progress, 150))
 	require.Equal(t, []uint64{100}, flushedCommitTs)
-	require.Equal(t, uint64(100), group.AppliedWatermark)
 
 	remaining := group.ResolveInto(300, nil)
 	require.Len(t, remaining, 1)
