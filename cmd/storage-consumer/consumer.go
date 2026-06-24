@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -477,6 +478,20 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 	if err := json.Unmarshal(data, &schemaFile); err != nil {
 		log.Panic("unmarshal schema file failed, this should not happen",
 			zap.ByteString("content", data), zap.Error(err))
+	}
+	schemaFileName := path[strings.LastIndex(path, "/")+1:]
+	checksumText := strings.TrimSuffix(schemaFileName[strings.LastIndex(schemaFileName, "_")+1:], ".json")
+	checksum, err := strconv.ParseUint(checksumText, 10, 32)
+	if err != nil {
+		log.Panic("parse schema file checksum failed, this should not happen",
+			zap.String("path", path), zap.Error(err))
+	}
+	checksumInMem := schemaFile.Sum32(nil)
+	if checksumInMem != uint32(checksum) {
+		log.Panic("checksum mismatch in the schema file",
+			zap.String("path", path),
+			zap.Uint32("checksum", uint32(checksum)),
+			zap.Uint32("checksumInMem", checksumInMem))
 	}
 	// Update schemaFileMap.
 	c.schemaFileMap[key][schemaFile.TableVersion] = &schemaFile
