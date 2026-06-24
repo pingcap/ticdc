@@ -608,11 +608,15 @@ func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
 	exchangeSchemaFile := readSchemaFileForTest(t, parentDir, "target_db", "exchange_table_routed")
 	require.Equal(t, "target_db", exchangeSchemaFile.Schema)
 	require.Equal(t, "exchange_table_routed", exchangeSchemaFile.Table)
+	require.Equal(t, routedEvent.Query, exchangeSchemaFile.Query)
+	require.Equal(t, byte(timodel.ActionExchangeTablePartition), exchangeSchemaFile.Type)
 	require.Equal(t, "partition_value", exchangeSchemaFile.Columns[1].Name)
 
 	partitionedSchemaFile := readSchemaFileForTest(t, parentDir, "target_db", "partitioned_routed")
 	require.Equal(t, "target_db", partitionedSchemaFile.Schema)
 	require.Equal(t, "partitioned_routed", partitionedSchemaFile.Table)
+	require.Empty(t, partitionedSchemaFile.Query)
+	require.Zero(t, partitionedSchemaFile.Type)
 	require.Equal(t, "exchange_value", partitionedSchemaFile.Columns[1].Name)
 
 	_, err = os.Stat(filepath.Join(parentDir, "source_db"))

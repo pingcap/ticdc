@@ -251,7 +251,6 @@ func (t *SchemaFile) TableInfo() *common.TableInfo {
 }
 
 // Marshal returns the indented JSON payload written to schema files.
-// Marshal failures panic.
 func (t *SchemaFile) Marshal() []byte {
 	data, err := json.MarshalIndent(t, marshalPrefix, marshalIndent)
 	if err != nil {

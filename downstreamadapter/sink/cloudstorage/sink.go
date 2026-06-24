@@ -260,6 +260,10 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		)
 		var sourceSchemaFile cloudstorage.SchemaFile
 		sourceSchemaFile.Build(&sourceEvent, s.cfg.OutputColumnID)
+		// Source schema file carries table structure only. The DDL is replayed
+		// from the exchanged table schema file.
+		sourceSchemaFile.Query = ""
+		sourceSchemaFile.Type = 0
 		if err := s.writeFile(&sourceEvent, sourceSchemaFile); err != nil {
 			return err
 		}
