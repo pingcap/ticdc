@@ -361,6 +361,109 @@ func TestHeartBeatResponseHandlerDropsStaleMaintainerEpoch(t *testing.T) {
 	})
 }
 
+func TestRedoControlMessagesAllowedByMaintainerEpoch(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", "test-namespace")
+	strictDM := &DispatcherManager{
+		changefeedID: changefeedID,
+	}
+	strictDM.meta.maintainerID = "current-maintainer"
+	strictDM.meta.maintainerEpoch = 2
+
+	staleMeta := NewRedoMetaMessage(
+		node.ID("old-maintainer"),
+		&heartbeatpb.RedoMetaMessage{
+			ChangefeedID:    changefeedID.ToPB(),
+			CheckpointTs:    100,
+			ResolvedTs:      200,
+			MaintainerEpoch: 1,
+		},
+	)
+	require.False(t, isRedoMetaMessageAllowed(strictDM, staleMeta))
+
+	currentMeta := NewRedoMetaMessage(
+		node.ID("current-maintainer"),
+		&heartbeatpb.RedoMetaMessage{
+			ChangefeedID:    changefeedID.ToPB(),
+			CheckpointTs:    100,
+			ResolvedTs:      200,
+			MaintainerEpoch: 2,
+		},
+	)
+	require.True(t, isRedoMetaMessageAllowed(strictDM, currentMeta))
+
+	staleResolved := NewRedoResolvedTsForwardMessage(
+		node.ID("old-maintainer"),
+		&heartbeatpb.RedoResolvedTsForwardMessage{
+			ChangefeedID:    changefeedID.ToPB(),
+			ResolvedTs:      200,
+			MaintainerEpoch: 1,
+		},
+	)
+	require.False(t, isRedoResolvedTsForwardMessageAllowed(strictDM, staleResolved))
+
+	currentResolved := NewRedoResolvedTsForwardMessage(
+		node.ID("current-maintainer"),
+		&heartbeatpb.RedoResolvedTsForwardMessage{
+			ChangefeedID:    changefeedID.ToPB(),
+			ResolvedTs:      200,
+			MaintainerEpoch: 2,
+		},
+	)
+	require.True(t, isRedoResolvedTsForwardMessageAllowed(strictDM, currentResolved))
+
+	compatDM := &DispatcherManager{
+		changefeedID: changefeedID,
+	}
+	compatDM.meta.maintainerID = "compat-maintainer"
+	compatMeta := NewRedoMetaMessage(
+		node.ID("compat-maintainer"),
+		&heartbeatpb.RedoMetaMessage{
+			ChangefeedID: changefeedID.ToPB(),
+			CheckpointTs: 100,
+			ResolvedTs:   200,
+		},
+	)
+	require.True(t, isRedoMetaMessageAllowed(compatDM, compatMeta))
+}
+
+func TestRedoResolvedTsForwardMessageHandlerDropsStaleMaintainerEpoch(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", "test-namespace")
+	dispatcherManager := &DispatcherManager{
+		changefeedID:  changefeedID,
+		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
+	}
+	dispatcherManager.meta.maintainerID = "current-maintainer"
+	dispatcherManager.meta.maintainerEpoch = 2
+	dispatcherManager.redoGlobalTs.Store(50)
+
+	handler := &RedoResolvedTsForwardMessageHandler{}
+	staleMessage := NewRedoResolvedTsForwardMessage(
+		node.ID("old-maintainer"),
+		&heartbeatpb.RedoResolvedTsForwardMessage{
+			ChangefeedID:    changefeedID.ToPB(),
+			ResolvedTs:      100,
+			MaintainerEpoch: 1,
+		},
+	)
+	require.False(t, handler.Handle(dispatcherManager, staleMessage))
+	require.Equal(t, uint64(50), dispatcherManager.redoGlobalTs.Load())
+
+	currentMessage := NewRedoResolvedTsForwardMessage(
+		node.ID("current-maintainer"),
+		&heartbeatpb.RedoResolvedTsForwardMessage{
+			ChangefeedID:    changefeedID.ToPB(),
+			ResolvedTs:      120,
+			MaintainerEpoch: 2,
+		},
+	)
+	require.False(t, handler.Handle(dispatcherManager, currentMessage))
+	require.Equal(t, uint64(120), dispatcherManager.redoGlobalTs.Load())
+}
+
 func TestDispatcherManagerIsRedoReadyRequiresPublication(t *testing.T) {
 	t.Parallel()
 

@@ -692,11 +692,14 @@ func newRedoResolvedTsForwardMessageDynamicStream() dynstream.DynamicStream[int,
 }
 
 type RedoResolvedTsForwardMessage struct {
+	From node.ID
 	*heartbeatpb.RedoResolvedTsForwardMessage
 }
 
-func NewRedoResolvedTsForwardMessage(msg *heartbeatpb.RedoResolvedTsForwardMessage) RedoResolvedTsForwardMessage {
-	return RedoResolvedTsForwardMessage{msg}
+// NewRedoResolvedTsForwardMessage carries the sender node with redo
+// resolved-ts updates so stale maintainers cannot unblock redo dispatchers.
+func NewRedoResolvedTsForwardMessage(from node.ID, msg *heartbeatpb.RedoResolvedTsForwardMessage) RedoResolvedTsForwardMessage {
+	return RedoResolvedTsForwardMessage{From: from, RedoResolvedTsForwardMessage: msg}
 }
 
 type RedoResolvedTsForwardMessageHandler struct{}
@@ -715,12 +718,32 @@ func (h *RedoResolvedTsForwardMessageHandler) Handle(dispatcherManager *Dispatch
 		panic("invalid message count")
 	}
 	msg := messages[0]
+	dispatcherManager.MaintainerFenceMu.Lock()
+	defer dispatcherManager.MaintainerFenceMu.Unlock()
+	if !isRedoResolvedTsForwardMessageAllowed(dispatcherManager, msg) {
+		return false
+	}
 	ok := dispatcherManager.SetRedoResolvedTs(msg.ResolvedTs)
 	if ok {
 		dispatcherManager.dispatcherMap.ForEach(func(_ common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
 			dispatcher.HandleCacheEvents()
 		})
 	}
+	return false
+}
+
+// isRedoResolvedTsForwardMessageAllowed drops redo resolved-ts updates from
+// stale maintainers before they can unblock cached events.
+func isRedoResolvedTsForwardMessageAllowed(dispatcherManager *DispatcherManager, msg RedoResolvedTsForwardMessage) bool {
+	if dispatcherManager.IsMaintainerRequestAllowed(msg.From, msg.MaintainerEpoch) {
+		return true
+	}
+	log.Warn("drop stale redo resolved ts forward message",
+		zap.String("changefeedID", msg.ChangefeedID.String()),
+		zap.String("from", msg.From.String()),
+		zap.Uint64("requestMaintainerEpoch", msg.MaintainerEpoch),
+		zap.Uint64("currentMaintainerEpoch", dispatcherManager.GetMaintainerEpoch()),
+		zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
 	return false
 }
 
@@ -761,11 +784,14 @@ func newRedoMetaMessageDynamicStream() dynstream.DynamicStream[int, common.GID, 
 }
 
 type RedoMetaMessage struct {
+	From node.ID
 	*heartbeatpb.RedoMetaMessage
 }
 
-func NewRedoMetaMessage(msg *heartbeatpb.RedoMetaMessage) RedoMetaMessage {
-	return RedoMetaMessage{msg}
+// NewRedoMetaMessage carries the sender node with redo meta updates so redo
+// metadata cannot be advanced by stale maintainers after ownership changes.
+func NewRedoMetaMessage(from node.ID, msg *heartbeatpb.RedoMetaMessage) RedoMetaMessage {
+	return RedoMetaMessage{From: from, RedoMetaMessage: msg}
 }
 
 type RedoMetaMessageHandler struct{}
@@ -783,10 +809,30 @@ func (h *RedoMetaMessageHandler) Handle(dispatcherManager *DispatcherManager, me
 		// TODO: Support batch
 		panic("invalid message count")
 	}
+	msg := messages[0]
+	dispatcherManager.MaintainerFenceMu.Lock()
+	defer dispatcherManager.MaintainerFenceMu.Unlock()
+	if !isRedoMetaMessageAllowed(dispatcherManager, msg) {
+		return false
+	}
 	if dispatcherManager.GetTableTriggerRedoDispatcher() != nil {
-		msg := messages[0]
 		dispatcherManager.UpdateRedoMeta(msg.CheckpointTs, msg.ResolvedTs)
 	}
+	return false
+}
+
+// isRedoMetaMessageAllowed drops redo meta updates from stale maintainers
+// before they can advance redo recovery boundaries.
+func isRedoMetaMessageAllowed(dispatcherManager *DispatcherManager, msg RedoMetaMessage) bool {
+	if dispatcherManager.IsMaintainerRequestAllowed(msg.From, msg.MaintainerEpoch) {
+		return true
+	}
+	log.Warn("drop stale redo meta message",
+		zap.String("changefeedID", msg.ChangefeedID.String()),
+		zap.String("from", msg.From.String()),
+		zap.Uint64("requestMaintainerEpoch", msg.MaintainerEpoch),
+		zap.Uint64("currentMaintainerEpoch", dispatcherManager.GetMaintainerEpoch()),
+		zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
 	return false
 }
 

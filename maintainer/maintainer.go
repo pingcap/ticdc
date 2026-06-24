@@ -245,9 +245,10 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		ResolvedTs:   checkpointTs,
 	}
 	m.redoMetaTs = &heartbeatpb.RedoMetaMessage{
-		ChangefeedID: cfID.ToPB(),
-		CheckpointTs: checkpointTs,
-		ResolvedTs:   checkpointTs,
+		ChangefeedID:    cfID.ToPB(),
+		CheckpointTs:    checkpointTs,
+		ResolvedTs:      checkpointTs,
+		MaintainerEpoch: m.currentMaintainerEpoch(),
 	}
 	m.redoResolvedTs = checkpointTs
 	m.scheduleState.Store(int32(heartbeatpb.ComponentState_Working))
@@ -602,8 +603,9 @@ func (m *Maintainer) onRedoPersisted(req *heartbeatpb.RedoResolvedTsProgressMess
 		msgs := make([]*messaging.TargetMessage, 0, len(m.bootstrapper.GetAllNodeIDs()))
 		for _, id := range m.bootstrapper.GetAllNodeIDs() {
 			msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoResolvedTsForwardMessage{
-				ChangefeedID: req.ChangefeedID,
-				ResolvedTs:   m.redoResolvedTs,
+				ChangefeedID:    req.ChangefeedID,
+				ResolvedTs:      m.redoResolvedTs,
+				MaintainerEpoch: m.currentMaintainerEpoch(),
 			}))
 		}
 		m.sendMessages(msgs)
@@ -674,9 +676,10 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 			if needUpdate {
 				m.sendMessages([]*messaging.TargetMessage{
 					messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMetaMessage{
-						ChangefeedID: m.redoMetaTs.ChangefeedID,
-						CheckpointTs: m.redoMetaTs.CheckpointTs,
-						ResolvedTs:   m.redoMetaTs.ResolvedTs,
+						ChangefeedID:    m.redoMetaTs.ChangefeedID,
+						CheckpointTs:    m.redoMetaTs.CheckpointTs,
+						ResolvedTs:      m.redoMetaTs.ResolvedTs,
+						MaintainerEpoch: m.currentMaintainerEpoch(),
 					}),
 				})
 			}
