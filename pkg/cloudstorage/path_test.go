@@ -293,7 +293,8 @@ func TestParseFileIndexFromFileName(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		ParseFileIndexFromFileName(tc.fileName, f.extension)
+		_, err := ParseFileIndexFromFileName(tc.fileName, f.extension)
+		require.NoError(t, err)
 	}
 }
 

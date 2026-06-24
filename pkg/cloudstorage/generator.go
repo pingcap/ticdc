@@ -30,7 +30,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/hash"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
@@ -174,7 +174,6 @@ type FilePathGenerator struct {
 	// VersionedTableName and date bucket.
 	fileIndex map[VersionedTableName]*indexWithDate
 
-	hasher *hash.PositionInertia
 	// versionMap maps an input VersionedTableName to the effective table version
 	// used in output directory:
 	// <schema>/<table>/<effectiveTableVersion>/...
@@ -199,7 +198,6 @@ func NewFilePathGenerator(
 		storage:      storage,
 		pdClock:      pdClock,
 		fileIndex:    make(map[VersionedTableName]*indexWithDate),
-		hasher:       hash.NewPositionInertia(),
 		versionMap:   make(map[VersionedTableName]uint64),
 	}
 }
@@ -469,18 +467,21 @@ func (f *FilePathGenerator) getFileIdxFromIndexFile(
 		return 0, err
 	}
 	fileName := strings.TrimSuffix(string(data), "\n")
-	fileIndex := ParseFileIndexFromFileName(fileName, f.extension)
+	fileIndex, err := ParseFileIndexFromFileName(fileName, f.extension)
+	if err != nil {
+		return 0, err
+	}
 	return fileIndex.Idx, nil
 }
 
 // ParseFileIndexFromFileName returns the dispatcher ID and numeric index
-// encoded in a data file name. extension must match the file suffix. Invalid
-// names panic.
-func ParseFileIndexFromFileName(fileName string, extension string) FileIndex {
+// encoded in a data file name. extension must match the file suffix.
+func ParseFileIndexFromFileName(fileName string, extension string) (FileIndex, error) {
 	if len(fileName) < minFileNamePrefixLen+len(extension) ||
 		!strings.HasPrefix(fileName, "CDC") ||
 		!strings.HasSuffix(fileName, extension) {
-		log.Panic("filename in storage sink is invalid", zap.String("fileName", fileName))
+		return FileIndex{}, errors.ErrStorageSinkInvalidFileName.GenWithStack(
+			"filename in storage sink is invalid: %q", fileName)
 	}
 
 	// CDC[_{dispatcherID}_]{num}.fileExtension
@@ -490,14 +491,16 @@ func ParseFileIndexFromFileName(fileName string, extension string) FileIndex {
 	if strings.HasPrefix(name, "_") {
 		idxSep := strings.LastIndex(name, "_")
 		if idxSep <= 1 {
-			log.Panic("cannot match dml path pattern", zap.String("fileName", fileName))
+			return FileIndex{}, errors.ErrStorageSinkInvalidFileName.GenWithStack(
+				"cannot match dml path pattern for %q", fileName)
 		}
 		dispatcherID = name[1:idxSep]
 		idxStr = name[idxSep+1:]
 	}
 	idx, err := strconv.ParseUint(idxStr, 10, 64)
 	if err != nil {
-		log.Panic("cannot match dml path pattern", zap.String("fileName", fileName), zap.Error(err))
+		return FileIndex{}, errors.WrapError(
+			errors.ErrStorageSinkInvalidFileName, err, "cannot match dml path pattern for %q", fileName)
 	}
 	return FileIndex{
 		FileIndexKey: FileIndexKey{
@@ -505,7 +508,7 @@ func ParseFileIndexFromFileName(fileName string, extension string) FileIndex {
 			EnableTableAcrossNodes: dispatcherID != "",
 		},
 		Idx: idx,
-	}
+	}, nil
 }
 
 var dateSeparatorDayRegexp *regexp.Regexp

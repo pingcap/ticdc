@@ -324,7 +324,7 @@ func (c *consumer) appendDMLEvents(
 	var decoder common.Decoder
 	switch c.codecCfg.Protocol {
 	case config.ProtocolCsv:
-		decoder, err = csv.NewDecoder(ctx, c.codecCfg, schemaFile.BuildTableInfo(), content)
+		decoder, err = csv.NewDecoder(ctx, c.codecCfg, schemaFile.TableInfo(), content)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -434,7 +434,11 @@ func (c *consumer) parseDMLFilePath(ctx context.Context, path string) error {
 		return errors.Trace(err)
 	}
 	fileName := strings.TrimSuffix(string(data), "\n")
-	fileIndex := cloudstorage.ParseFileIndexFromFileName(fileName, c.fileExtension)
+	fileIndex, err := cloudstorage.ParseFileIndexFromFileName(fileName, c.fileExtension)
+	if err != nil {
+		log.Panic("parse file index from file name failed",
+			zap.String("fileName", fileName), zap.Error(err))
+	}
 
 	m, ok := c.tableDMLIdxMap[dmlkey]
 	if !ok {
@@ -486,7 +490,7 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 		log.Panic("parse schema file checksum failed, this should not happen",
 			zap.String("path", path), zap.Error(err))
 	}
-	checksumInMem := schemaFile.Sum32(nil)
+	checksumInMem := schemaFile.Checksum()
 	if checksumInMem != uint32(checksum) {
 		log.Panic("checksum mismatch in the schema file",
 			zap.String("path", path),
@@ -622,7 +626,7 @@ func (c *consumer) handleNewFiles(
 				zap.Uint64("ddlWatermark", ddlWatermark),
 				zap.String("query", schemaFile.Query))
 
-			ddlEvent := schemaFile.BuildDDLEvent()
+			ddlEvent := schemaFile.DDLEvent()
 			if err := c.sink.WriteBlockEvent(ddlEvent); err != nil {
 				return errors.Trace(err)
 			}

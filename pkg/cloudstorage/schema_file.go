@@ -49,9 +49,9 @@ type TableCol struct {
 	Elems     []string `json:"ColumnElems,omitempty"`
 }
 
-// FromTiColumnInfo fills TableCol from a TiDB column. outputColumnID controls
+// fromTiColumnInfo fills TableCol from a TiDB column. outputColumnID controls
 // whether ColumnId is written into the schema file payload.
-func (t *TableCol) FromTiColumnInfo(col *model.ColumnInfo, outputColumnID bool) {
+func (t *TableCol) fromTiColumnInfo(col *model.ColumnInfo, outputColumnID bool) {
 	defaultFlen, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(col.GetType())
 	isDecimalNotDefault := col.GetDecimal() != defaultDecimal &&
 		col.GetDecimal() != 0 &&
@@ -105,19 +105,10 @@ func (t *TableCol) FromTiColumnInfo(col *model.ColumnInfo, outputColumnID bool) 
 	}
 }
 
-// ToTiColumnInfo returns a TiDB column reconstructed from TableCol. colID is
+// toTiColumnInfo returns a TiDB column reconstructed from TableCol. colID is
 // used as the returned column ID.
-func (t *TableCol) ToTiColumnInfo(colID int64) *model.ColumnInfo {
+func (t *TableCol) toTiColumnInfo(colID int64) *model.ColumnInfo {
 	col := new(model.ColumnInfo)
-
-	if t.ID != "" {
-		var err error
-		col.ID, err = strconv.ParseInt(t.ID, 10, 64)
-		if err != nil {
-			log.Panic("parse column id failed, this should not happen", zap.String("id", t.ID), zap.Error(err))
-		}
-	}
-
 	col.ID = colID
 	col.Name = ast.NewCIStr(t.Name)
 	tp := types.StrToType(strings.ToLower(strings.TrimSuffix(t.Tp, " UNSIGNED")))
@@ -200,12 +191,12 @@ type checksumPayload struct {
 	TotalColumns int        `json:"TableColumnsTotal"`
 }
 
-// BuildDDLEvent returns the DDL event represented by SchemaFile.
+// DDLEvent returns the DDL event represented by SchemaFile.
 // The returned event includes a TableInfo rebuilt from Columns plus the Query,
 // Type, schema/table name, and FinishedTs from the schema file.
-func (t *SchemaFile) BuildDDLEvent() *commonEvent.DDLEvent {
+func (t *SchemaFile) DDLEvent() *commonEvent.DDLEvent {
 	return &commonEvent.DDLEvent{
-		TableInfo:     t.BuildTableInfo(),
+		TableInfo:     t.TableInfo(),
 		FinishedTs:    t.TableVersion,
 		Type:          t.Type,
 		Query:         t.Query,
@@ -235,20 +226,20 @@ func (t *SchemaFile) Build(event *commonEvent.DDLEvent, outputColumnID bool) {
 	t.TotalColumns = len(info.GetColumns())
 	for _, col := range info.GetColumns() {
 		var tableCol TableCol
-		tableCol.FromTiColumnInfo(col, outputColumnID)
+		tableCol.fromTiColumnInfo(col, outputColumnID)
 		t.Columns = append(t.Columns, tableCol)
 	}
 }
 
-// BuildTableInfo returns decoder TableInfo rebuilt from SchemaFile columns.
+// TableInfo returns decoder TableInfo rebuilt from SchemaFile columns.
 // It uses deterministic mock column IDs starting from 100.
-func (t *SchemaFile) BuildTableInfo() *common.TableInfo {
+func (t *SchemaFile) TableInfo() *common.TableInfo {
 	tidbTableInfo := &model.TableInfo{
 		Name: ast.NewCIStr(t.Table),
 	}
 	nextMockID := int64(100) // 100 is an arbitrary number
 	for _, col := range t.Columns {
-		tiCol := col.ToTiColumnInfo(nextMockID)
+		tiCol := col.toTiColumnInfo(nextMockID)
 		if mysql.HasPriKeyFlag(tiCol.GetFlag()) {
 			// use PKIsHandle to make sure that the primary keys can be detected
 			tidbTableInfo.PKIsHandle = true
@@ -294,12 +285,9 @@ func (t *SchemaFile) marshalForChecksum() []byte {
 	return data
 }
 
-// Sum32 returns the checksum used in schema file names.
-// The optional hasher is reset before use; nil uses a new hasher.
-func (t *SchemaFile) Sum32(hasher *hash.PositionInertia) uint32 {
-	if hasher == nil {
-		hasher = hash.NewPositionInertia()
-	}
+// Checksum returns the checksum used in schema file names.
+func (t *SchemaFile) Checksum() uint32 {
+	hasher := hash.NewPositionInertia()
 	hasher.Reset()
 	data := t.marshalForChecksum()
 
@@ -318,5 +306,5 @@ func (t *SchemaFile) Path(useTableIDAsPath bool, tableID int64) string {
 		table = generateTablePath(t.Table, tableID, useTableIDAsPath)
 	}
 	omitSchema := useTableIDAsPath && tableLevel
-	return generateSchemaFilePath(t.Schema, table, t.TableVersion, t.Sum32(nil), omitSchema)
+	return generateSchemaFilePath(t.Schema, table, t.TableVersion, t.Checksum(), omitSchema)
 }

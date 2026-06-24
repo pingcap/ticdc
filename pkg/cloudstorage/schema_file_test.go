@@ -372,12 +372,12 @@ func TestTableCol(t *testing.T) {
 		}
 		col := &timodel.ColumnInfo{FieldType: *ft}
 		var tableCol TableCol
-		tableCol.FromTiColumnInfo(col, false)
+		tableCol.fromTiColumnInfo(col, false)
 		encodedCol, err := json.Marshal(tableCol)
 		require.Nil(t, err, tc.name)
 		require.JSONEq(t, tc.expected, string(encodedCol), tc.name)
 
-		_ = tableCol.ToTiColumnInfo(100)
+		_ = tableCol.toTiColumnInfo(100)
 	}
 }
 
@@ -475,10 +475,10 @@ func TestSchemaFile(t *testing.T) {
 		"TableColumnsTotal": 4
 	}`, string(encodedSchemaFile))
 
-	tableInfo = schemaFile.BuildTableInfo()
+	tableInfo = schemaFile.TableInfo()
 	require.Len(t, tableInfo.GetColumns(), 4)
 
-	event = schemaFile.BuildDDLEvent()
+	event = schemaFile.DDLEvent()
 	require.Equal(t, byte(timodel.ActionAddColumn), event.Type)
 	require.Equal(t, uint64(100), event.FinishedTs)
 }
@@ -519,12 +519,12 @@ func TestParseSchemaFile(t *testing.T) {
 	require.Len(t, got.Columns, len(schemaFile.Columns))
 }
 
-func TestSchemaFileSum32(t *testing.T) {
+func TestSchemaFileChecksum(t *testing.T) {
 	t.Parallel()
 
 	schemaFile, _ := generateSchemaFile()
-	checksum1 := schemaFile.Sum32(nil)
-	checksum2 := schemaFile.Sum32(nil)
+	checksum1 := schemaFile.Checksum()
+	checksum2 := schemaFile.Checksum()
 	require.Equal(t, checksum1, checksum2)
 
 	n := len(schemaFile.Columns)
@@ -536,7 +536,7 @@ func TestSchemaFileSum32(t *testing.T) {
 	for i := range n {
 		target := rand.Intn(n)
 		newSchemaFile.Columns[i], newSchemaFile.Columns[target] = newSchemaFile.Columns[target], newSchemaFile.Columns[i]
-		newChecksum := newSchemaFile.Sum32(nil)
+		newChecksum := newSchemaFile.Checksum()
 		require.Equal(t, checksum1, newChecksum)
 	}
 }
