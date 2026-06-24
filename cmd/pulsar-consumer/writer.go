@@ -533,7 +533,7 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 		return
 	}
 	group.Append(dml, false)
-	log.Info("DML event append to the group",
+	log.Debug("DML event append to the group",
 		zap.Int32("partition", group.Partition),
 		zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 		zap.Uint64("appliedWatermark", group.AppliedWatermark),
