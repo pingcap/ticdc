@@ -57,15 +57,9 @@ func init() {
 		config.DefaultFileIndexWidth, "file index width")
 	flag.BoolVar(&enableProfiling, "enable-profiling", false, "whether to enable profiling")
 	flag.StringVar(&timezone, "tz", "System", "Specify time zone of storage consumer")
-}
-
-func main() {
-	var consumer *consumer
-	var err error
-
 	flag.Parse()
 
-	err = logger.InitLogger(&logger.Config{
+	err := logger.InitLogger(&logger.Config{
 		Level: logLevel,
 		File:  logFile,
 	})
@@ -85,6 +79,11 @@ func main() {
 		log.Error("invalid storage scheme, the scheme of upstream-uri must be file/s3/azblob/gcs")
 		os.Exit(1)
 	}
+}
+
+func main() {
+	var consumer *consumer
+	var err error
 
 	if enableProfiling {
 		go func() {

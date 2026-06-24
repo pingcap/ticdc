@@ -416,14 +416,8 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 // Output matches DMLPathKey.generateDMLDataDirPath.
 func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) string {
 	if f.config.UseTableIDAsPath {
-		tableIDPathPart := generateTablePath(
-			tbl.TableNameWithPhysicTableID.Table,
-			tbl.TableNameWithPhysicTableID.TableID,
-			true,
-		)
 		return DMLPathKey{
 			SchemaPathKey: SchemaPathKey{
-				Schema:       tableIDPathPart,
 				TableVersion: tbl.TableInfoVersion,
 			},
 			UseTableIDAsPath: true,

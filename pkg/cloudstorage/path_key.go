@@ -16,6 +16,7 @@ package cloudstorage
 import (
 	"cmp"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -191,32 +192,6 @@ func isDMLIndexFileName(fileName string) bool {
 		len(fileName) > len("CDC_.index")
 }
 
-func isDatePathPart(dateSeparator, value string) bool {
-	switch dateSeparator {
-	case config.DateSeparatorYear.String():
-		return len(value) == len("2006") && isDigits(value)
-	case config.DateSeparatorMonth.String():
-		return len(value) == len("2006-01") &&
-			value[4] == '-' &&
-			isDigits(value[:4]) && isDigits(value[5:])
-	case config.DateSeparatorDay.String():
-		return len(value) == len("2006-01-02") &&
-			value[4] == '-' && value[7] == '-' &&
-			isDigits(value[:4]) && isDigits(value[5:7]) && isDigits(value[8:])
-	default:
-		return false
-	}
-}
-
-func isDigits(value string) bool {
-	for _, c := range value {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return value != ""
-}
-
 // generateDMLDataDirPath returns the canonical data directory path.
 // Output is either <tableID>/<version>[/date] or
 // <schema>/<table>/<version>[/partition][/date].
@@ -250,13 +225,19 @@ func (d *DMLPathKey) parseDMLDataDir(
 		tableID   string
 		partition string
 		hasDate   bool
+		dateRE    string
 	)
 	switch dateSeparator {
 	case config.DateSeparatorNone.String():
-	case config.DateSeparatorYear.String(),
-		config.DateSeparatorMonth.String(),
-		config.DateSeparatorDay.String():
+	case config.DateSeparatorYear.String():
 		hasDate = true
+		dateRE = config.DateSeparatorYear.GetPattern()
+	case config.DateSeparatorMonth.String():
+		hasDate = true
+		dateRE = config.DateSeparatorMonth.GetPattern()
+	case config.DateSeparatorDay.String():
+		hasDate = true
+		dateRE = config.DateSeparatorDay.GetPattern()
 	default:
 		return errors.ErrStorageSinkInvalidDateSeparator.GenWithStackByArgs(dateSeparator)
 	}
@@ -291,7 +272,7 @@ func (d *DMLPathKey) parseDMLDataDir(
 		return invalidDMLPathError(filePath)
 	}
 
-	if hasDate && !isDatePathPart(dateSeparator, key.Date) {
+	if hasDate && !regexp.MustCompile("^"+dateRE+"$").MatchString(key.Date) {
 		return invalidDMLPathError(filePath)
 	}
 	if tableID != "" {

@@ -428,7 +428,7 @@ func TestDeleteChangefeed(t *testing.T) {
 
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
-	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), NewFuncMatcher(func(i any) bool {
+	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), NewFuncMatcher(func(i interface{}) bool {
 		ops := i.([]clientv3.Op)
 		require.Len(t, ops, 2)
 		require.True(t, ops[0].IsDelete())
