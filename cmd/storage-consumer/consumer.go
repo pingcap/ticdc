@@ -246,16 +246,13 @@ func (c *consumer) getNewFiles(
 
 	err := c.externalStorage.WalkDir(ctx, opt, func(path string, _ int64) error {
 		if cloudstorage.IsSchemaFile(path) {
-			err := c.parseSchemaFilePath(ctx, path)
-			if err != nil {
-				log.Error("failed to parse schema file path", zap.Error(err))
-				// skip handling this file
-				return nil
-			}
+			c.parseSchemaFilePath(ctx, path)
 			return nil
 		}
-		if strings.HasSuffix(path, c.fileExtension) {
-			c.parseDMLFilePath(path)
+		if strings.HasSuffix(path, ".index") {
+			var dmlkey cloudstorage.DMLPathKey
+			dmlkey.ParseIndexFilePath(putil.GetOrZero(c.replicationCfg.Sink.DateSeparator), path)
+			c.parseDMLIndexFile(ctx, path, dmlkey)
 			return nil
 		}
 		log.Debug("ignore handling file", zap.String("path", path))
@@ -413,19 +410,24 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 	}
 }
 
-func (c *consumer) parseDMLFilePath(path string) {
-	var dmlkey cloudstorage.DMLPathKey
-	fileIndex := dmlkey.ParseDMLFilePath(
-		putil.GetOrZero(c.replicationCfg.Sink.DateSeparator),
-		path,
-		c.fileExtension,
-	)
+func (c *consumer) parseDMLIndexFile(ctx context.Context, path string, dmlkey cloudstorage.DMLPathKey) {
 	if c.globalCheckpointTs > 0 && dmlkey.TableVersion > c.globalCheckpointTs {
-		log.Debug("skip dml file by checkpoint",
+		log.Debug("skip dml index file by checkpoint",
 			zap.String("path", path),
 			zap.Uint64("tableVersion", dmlkey.TableVersion),
 			zap.Uint64("checkpointTs", c.globalCheckpointTs))
 		return
+	}
+	data, err := c.externalStorage.ReadFile(ctx, path)
+	if err != nil {
+		log.Panic("read dml index file failed",
+			zap.String("path", path), zap.Error(err))
+	}
+	fileName := strings.TrimSuffix(string(data), "\n")
+	fileIndex, err := cloudstorage.ParseFileIndexFromFileName(fileName, c.fileExtension)
+	if err != nil {
+		log.Panic("parse file index from file name failed",
+			zap.String("path", path), zap.String("fileName", fileName), zap.Error(err))
 	}
 
 	m, ok := c.tableDMLIdxMap[dmlkey]
@@ -440,7 +442,7 @@ func (c *consumer) parseDMLFilePath(path string) {
 	}
 }
 
-func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
+func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) {
 	var schemaKey cloudstorage.SchemaPathKey
 	schemaKey.Parse(path)
 	if c.globalCheckpointTs > 0 && schemaKey.TableVersion > c.globalCheckpointTs {
@@ -448,22 +450,24 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 			zap.String("path", path),
 			zap.Uint64("tableVersion", schemaKey.TableVersion),
 			zap.Uint64("checkpointTs", c.globalCheckpointTs))
-		return nil
+		return
 	}
 	key := schemaKey.GetKey()
 	if schemaFiles, ok := c.schemaFileMap[key]; ok {
 		if _, ok := schemaFiles[schemaKey.TableVersion]; ok {
 			// Skip if schema file already exists.
-			return nil
+			return
 		}
-	} else {
+	}
+	if _, ok := c.schemaFileMap[key]; !ok {
 		c.schemaFileMap[key] = make(map[uint64]*cloudstorage.SchemaFile)
 	}
 
 	// Read schema file.
 	data, err := c.externalStorage.ReadFile(ctx, path)
 	if err != nil {
-		return errors.Trace(err)
+		log.Panic("read schema file failed",
+			zap.String("path", path), zap.Error(err))
 	}
 	var schemaFile cloudstorage.SchemaFile
 	if err := json.Unmarshal(data, &schemaFile); err != nil {
@@ -478,14 +482,16 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 			zap.String("path", path), zap.Error(err))
 	}
 	checksumInMem := schemaFile.Checksum()
-	if checksumInMem != uint32(checksum) {
+	if checksumInMem != uint32(checksum) || schemaKey.TableVersion != schemaFile.TableVersion {
 		log.Panic("checksum mismatch in the schema file",
 			zap.String("path", path),
 			zap.Uint32("checksum", uint32(checksum)),
-			zap.Uint32("checksumInMem", checksumInMem))
+			zap.Uint32("checksumInMem", checksumInMem),
+			zap.Uint64("tableVersion", schemaFile.TableVersion),
+			zap.Uint64("schemaKeyTableVersion", schemaKey.TableVersion))
 	}
 	// Update schemaFileMap.
-	c.schemaFileMap[key][schemaFile.TableVersion] = &schemaFile
+	c.schemaFileMap[key][schemaKey.TableVersion] = &schemaFile
 
 	// Fake a dml key for schema.json file, which is useful for putting DDL
 	// in front of the DML files when sorting.
@@ -503,15 +509,13 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 	// the DDL event recorded in schema.json should be executed first, then the DML events
 	// in csv files can be executed.
 	dmlkey := cloudstorage.NewSchemaFileDMLPathKey(schemaKey)
-	if _, ok := c.tableDMLIdxMap[dmlkey]; !ok {
-		c.tableDMLIdxMap[dmlkey] = fileIndexKeyMap{}
-	} else {
+	if _, ok := c.tableDMLIdxMap[dmlkey]; ok {
 		// duplicate schema file found, this should not happen.
 		log.Panic("duplicate schema file found",
 			zap.String("path", path), zap.Any("schemaFile", schemaFile),
 			zap.Any("schemaKey", schemaKey), zap.Any("dmlkey", dmlkey))
 	}
-	return nil
+	c.tableDMLIdxMap[dmlkey] = fileIndexKeyMap{}
 }
 
 func (c *consumer) mustGetSchemaFile(key cloudstorage.SchemaPathKey) cloudstorage.SchemaFile {

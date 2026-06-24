@@ -210,16 +210,18 @@ func NewFilePathGenerator(
 }
 
 // CheckOrWriteSchema ensures the schema file for table/tableInfo exists.
-// It records the effective table version used by later data/index path
-// generation. It returns true when storage already contains a newer schema file
-// with the same checksum and a version greater than table.TableInfoVersion.
+// The first return value is the schema version that must be used in later
+// data/index paths. The second return value is true when storage already has a
+// newer schema with the same checksum, so the caller should discard the old DML
+// batch. Storage errors are returned from checking, walking, or writing schema
+// files.
 func (f *FilePathGenerator) CheckOrWriteSchema(
 	ctx context.Context,
 	table VersionedTableName,
 	tableInfo *commonType.TableInfo,
-) (bool, error) {
-	if _, ok := f.versionMap[table]; ok {
-		return false, nil
+) (uint64, bool, error) {
+	if version, ok := f.versionMap[table]; ok {
+		return version, false, nil
 	}
 
 	keyspace := f.changefeedID.Keyspace()
@@ -238,11 +240,11 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	schemaFilePath := schemaFile.Path(f.config.UseTableIDAsPath, table.TableNameWithPhysicTableID.TableID)
 	exist, err := f.storage.FileExists(ctx, schemaFilePath)
 	if err != nil {
-		return false, err
+		return 0, false, err
 	}
 	if exist {
 		f.versionMap[table] = table.TableInfoVersion
-		return false, nil
+		return table.TableInfoVersion, false, nil
 	}
 	// walk the table meta path to find the last schema file
 	_, checksum := mustParseSchemaFileName(schemaFilePath)
@@ -273,10 +275,10 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		return nil
 	})
 	if err != nil {
-		return false, err
+		return 0, false, err
 	}
 	if hasNewerSchemaVersion {
-		return true, nil
+		return table.TableInfoVersion, true, nil
 	}
 
 	// Case 2: the table meta path is not empty.
@@ -290,7 +292,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		// record the last version of the schema file.
 		// we don't need to write schema file to external storage again.
 		f.versionMap[table] = lastVersion
-		return false, nil
+		return lastVersion, false, nil
 	}
 
 	// Case 3: the table meta path is empty, which happens when:
@@ -305,7 +307,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	}
 	encodedSchemaFile := schemaFile.Marshal()
 	f.versionMap[table] = table.TableInfoVersion
-	return false, f.storage.WriteFile(ctx, schemaFilePath, encodedSchemaFile)
+	return table.TableInfoVersion, false, f.storage.WriteFile(ctx, schemaFilePath, encodedSchemaFile)
 }
 
 // SetClock sets the clock used by GenerateDateStr. It is used by tests.
@@ -410,10 +412,9 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 }
 
 // generateDataDirPath returns the data directory for tbl and date.
-// The table version comes from versionMap, which is set by CheckOrWriteSchema.
+// The table version comes from tbl.TableInfoVersion.
 // Output matches DMLPathKey.generateDMLDataDirPath.
 func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) string {
-	tableVersion := f.versionMap[tbl]
 	if f.config.UseTableIDAsPath {
 		tableIDPathPart := generateTablePath(
 			tbl.TableNameWithPhysicTableID.Table,
@@ -423,7 +424,7 @@ func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date str
 		return DMLPathKey{
 			SchemaPathKey: SchemaPathKey{
 				Schema:       tableIDPathPart,
-				TableVersion: tableVersion,
+				TableVersion: tbl.TableInfoVersion,
 			},
 			UseTableIDAsPath: true,
 			TableID:          tbl.TableNameWithPhysicTableID.TableID,
@@ -444,7 +445,7 @@ func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date str
 		SchemaPathKey: SchemaPathKey{
 			Schema:       tbl.TableNameWithPhysicTableID.Schema,
 			Table:        tablePathPart,
-			TableVersion: tableVersion,
+			TableVersion: tbl.TableInfoVersion,
 		},
 		PartitionNum: partitionNum,
 		Date:         date,

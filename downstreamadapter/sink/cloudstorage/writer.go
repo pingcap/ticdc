@@ -147,7 +147,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					continue
 				}
 
-				hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, tableTask.tableInfo)
+				tableVersion, hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, tableTask.tableInfo)
 				if err != nil {
 					log.Error("failed to write schema file to external storage",
 						zap.String("keyspace", keyspace),
@@ -168,6 +168,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 						zap.Int("shardID", d.shardID))
 					continue
 				}
+				table.TableInfoVersion = tableVersion
 
 				date := d.filePathGenerator.GenerateDateStr()
 				dataFilePath, err := d.filePathGenerator.GenerateDataFilePath(ctx, table, date)

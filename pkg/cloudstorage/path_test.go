@@ -84,7 +84,6 @@ func TestGenerateDataFilePath(t *testing.T) {
 
 	dir := t.TempDir()
 	f := testFilePathGenerator(ctx, t, dir)
-	f.versionMap[table] = table.TableInfoVersion
 	date := f.GenerateDateStr()
 	// date-separator: none
 	path, err := f.GenerateDataFilePath(ctx, table, date)
@@ -94,7 +93,6 @@ func TestGenerateDataFilePath(t *testing.T) {
 	// date-separator: year
 	mockClock := clock.NewMock()
 	f = testFilePathGenerator(ctx, t, dir)
-	f.versionMap[table] = table.TableInfoVersion
 	f.config.DateSeparator = config.DateSeparatorYear.String()
 	f.SetClock(pdutil.NewMonotonicClock(mockClock))
 	mockClock.Set(time.Date(2022, 12, 31, 23, 59, 59, 0, time.UTC))
@@ -112,7 +110,6 @@ func TestGenerateDataFilePath(t *testing.T) {
 	// date-separator: month
 	mockClock = clock.NewMock()
 	f = testFilePathGenerator(ctx, t, dir)
-	f.versionMap[table] = table.TableInfoVersion
 	f.config.DateSeparator = config.DateSeparatorMonth.String()
 	f.SetClock(pdutil.NewMonotonicClock(mockClock))
 
@@ -131,7 +128,6 @@ func TestGenerateDataFilePath(t *testing.T) {
 	// date-separator: day
 	mockClock = clock.NewMock()
 	f = testFilePathGenerator(ctx, t, dir)
-	f.versionMap[table] = table.TableInfoVersion
 	f.config.DateSeparator = config.DateSeparatorDay.String()
 	f.SetClock(pdutil.NewMonotonicClock(mockClock))
 
@@ -166,7 +162,6 @@ func TestGenerateDataFilePathWithTableIDAsPath(t *testing.T) {
 	dir := t.TempDir()
 	f := testFilePathGenerator(ctx, t, dir)
 	f.config.UseTableIDAsPath = true
-	f.versionMap[table] = table.TableInfoVersion
 
 	date := f.GenerateDateStr()
 	path, err := f.GenerateDataFilePath(ctx, table, date)
@@ -267,7 +262,6 @@ func TestGenerateAndParseIndexFilePath(t *testing.T) {
 			f.config.UseTableIDAsPath = tc.useTableIDAsPath
 			f.config.EnablePartitionSeparator = tc.enablePartition
 			f.config.EnableTableAcrossNodes = tc.enableTableAcross
-			f.versionMap[tc.table] = tc.table.TableInfoVersion
 
 			indexPath := f.GenerateIndexFilePath(tc.table, tc.date)
 			indexKey := FileIndexKey{
@@ -327,7 +321,6 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 		TableInfoVersion: 5,
 		DispatcherID:     dispatcherID,
 	}
-	f.versionMap[table] = table.TableInfoVersion
 	date := f.GenerateDateStr()
 	indexFilePath := f.GenerateIndexFilePath(table, date)
 	err := f.storage.WriteFile(ctx, indexFilePath, fmt.Appendf(nil, "CDC_%s_000005.json\n", dispatcherID.String()))
@@ -356,8 +349,6 @@ func TestGenerateDataFilePathResyncIndexFile(t *testing.T) {
 		TableInfoVersion: 5,
 		DispatcherID:     dispatcherID,
 	}
-	f1.versionMap[table] = table.TableInfoVersion
-	f2.versionMap[table] = table.TableInfoVersion
 
 	date := ""
 	indexFilePath := f1.GenerateIndexFilePath(table, date)
@@ -411,7 +402,6 @@ func TestGenerateDataFilePathReconcilesStaleIndexFile(t *testing.T) {
 		TableInfoVersion: 5,
 		DispatcherID:     dispatcherID,
 	}
-	f.versionMap[table] = table.TableInfoVersion
 
 	date := ""
 	firstDataFile := fmt.Sprintf("test/table1/5/CDC_%s_000001.json", dispatcherID.String())
@@ -489,24 +479,24 @@ func TestCheckOrWriteSchema(t *testing.T) {
 		TableInfoVersion:           100,
 	}
 
-	hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+	effectiveTableVersion, hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
 	require.False(t, hasNewerSchemaVersion)
-	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
+	require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
 
 	// test old dml file can be ignored
 	table.TableInfoVersion = 99
-	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+	effectiveTableVersion, hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
 	require.True(t, hasNewerSchemaVersion)
-	require.Equal(t, 1, len(f.versionMap))
+	require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
 
 	// test only table version changed, schema file should be reused
 	table.TableInfoVersion = 101
-	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+	effectiveTableVersion, hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
 	require.False(t, hasNewerSchemaVersion)
-	require.Equal(t, uint64(tidbInfo.Version), f.versionMap[table])
+	require.Equal(t, uint64(tidbInfo.Version), effectiveTableVersion)
 
 	dir = filepath.Join(dir, "test/table1/meta")
 	files, err := os.ReadDir(dir)
@@ -521,10 +511,10 @@ func TestCheckOrWriteSchema(t *testing.T) {
 	err = os.Remove(filepath.Join(dir, files[0].Name()))
 	require.NoError(t, err)
 	delete(f.versionMap, table)
-	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+	effectiveTableVersion, hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
 	require.False(t, hasNewerSchemaVersion)
-	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
+	require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
 
 	files, err = os.ReadDir(dir)
 	require.NoError(t, err)
@@ -560,9 +550,10 @@ func TestCheckOrWriteSchemaUsesRoutedTargetNames(t *testing.T) {
 		TableInfoVersion: 100,
 	}
 
-	hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+	effectiveTableVersion, hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
 	require.False(t, hasNewerSchemaVersion)
+	require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
 
 	files, err := os.ReadDir(filepath.Join(dir, "target_db", "target_table", "meta"))
 	require.NoError(t, err)
