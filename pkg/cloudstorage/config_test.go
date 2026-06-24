@@ -14,7 +14,6 @@
 package cloudstorage
 
 import (
-	"context"
 	"net/url"
 	"testing"
 	"time"
@@ -44,7 +43,7 @@ func TestConfigApply(t *testing.T) {
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 	cfg := NewConfig()
-	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, false)
+	err = cfg.Apply(t.Context(), sinkURI, replicaConfig.Sink, false)
 	require.NoError(t, err)
 	require.Equal(t, expected, cfg)
 }
@@ -126,7 +125,7 @@ func TestVerifySinkURIParams(t *testing.T) {
 		sinkURI, err := url.Parse(tc.uri)
 		require.NoError(t, err)
 		cfg := NewConfig()
-		err = cfg.Apply(context.TODO(), sinkURI, config.GetDefaultReplicaConfig().Sink, true)
+		err = cfg.Apply(t.Context(), sinkURI, config.GetDefaultReplicaConfig().Sink, true)
 		if tc.expectedErr == "" {
 			require.NoError(t, err)
 			require.LessOrEqual(t, cfg.WorkerCount, maxWorkerCount)
@@ -150,7 +149,7 @@ func TestMergeConfig(t *testing.T) {
 		OutputColumnID: aws.Bool(false),
 	}
 	c := NewConfig()
-	err = c.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
+	err = c.Apply(t.Context(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 	require.Equal(t, 12, c.WorkerCount)
 	require.Equal(t, 1485760, c.FileSize)
@@ -167,7 +166,7 @@ func TestMergeConfig(t *testing.T) {
 		OutputColumnID: aws.Bool(false),
 	}
 	c = NewConfig()
-	err = c.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
+	err = c.Apply(t.Context(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 	require.Equal(t, 64, c.WorkerCount)
 	require.Equal(t, 33554432, c.FileSize)
@@ -185,7 +184,7 @@ func TestSpoolDiskQuotaConfig(t *testing.T) {
 	}
 
 	cfg := NewConfig()
-	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	err = cfg.Apply(t.Context(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 	require.Equal(t, int64(2147483648), cfg.SpoolDiskQuota)
 
@@ -193,7 +192,7 @@ func TestSpoolDiskQuotaConfig(t *testing.T) {
 	sinkURI, err = url.Parse(uri)
 	require.NoError(t, err)
 	cfg = NewConfig()
-	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	err = cfg.Apply(t.Context(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 	require.Equal(t, int64(3221225472), cfg.SpoolDiskQuota)
 }
@@ -212,7 +211,7 @@ func TestSpoolBaseDirConfig(t *testing.T) {
 	}
 
 	cfg := NewConfig()
-	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	err = cfg.Apply(t.Context(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 	require.Equal(t, uriSpoolBaseDir, cfg.SpoolBaseDir)
 
@@ -221,7 +220,7 @@ func TestSpoolBaseDirConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg = NewConfig()
-	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	err = cfg.Apply(t.Context(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 	require.Equal(t, configSpoolBaseDir, cfg.SpoolBaseDir)
 }
@@ -232,7 +231,7 @@ func TestInvalidSpoolBaseDirConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := NewConfig()
-	err = cfg.Apply(context.Background(), sinkURI, config.GetDefaultReplicaConfig().Sink, true)
+	err = cfg.Apply(t.Context(), sinkURI, config.GetDefaultReplicaConfig().Sink, true)
 	require.Error(t, err)
 	require.True(t, errors.ErrStorageSinkInvalidConfig.Equal(err))
 
@@ -245,7 +244,7 @@ func TestInvalidSpoolBaseDirConfig(t *testing.T) {
 	}
 
 	cfg = NewConfig()
-	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	err = cfg.Apply(t.Context(), sinkURI, replicaConfig.Sink, true)
 	require.Error(t, err)
 	require.True(t, errors.ErrStorageSinkInvalidConfig.Equal(err))
 }

@@ -27,7 +27,6 @@ func TestSchemaPathKey(t *testing.T) {
 	testCases := []struct {
 		path      string
 		schemakey SchemaPathKey
-		checksum  uint32
 	}{
 		// Test for database schema path: <schema>/meta/schema_{tableVersion}_{checksum}.json
 		{
@@ -37,7 +36,6 @@ func TestSchemaPathKey(t *testing.T) {
 				Table:        "",
 				TableVersion: 1,
 			},
-			checksum: 2,
 		},
 		// Test for table-level schema file path: <schema>/<table>/meta/schema_{tableVersion}_{checksum}.json
 		{
@@ -47,19 +45,16 @@ func TestSchemaPathKey(t *testing.T) {
 				Table:        "test_table",
 				TableVersion: 11,
 			},
-			checksum: 22,
 		},
 	}
 	for _, tc := range testCases {
 		var schemaKey SchemaPathKey
-		checksum, err := schemaKey.ParseSchemaFilePath(tc.path)
-		require.NoError(t, err)
+		schemaKey.Parse(tc.path)
 		require.Equal(t, tc.schemakey, schemaKey)
-		require.Equal(t, tc.checksum, checksum)
 	}
 }
 
-func TestDmlPathKey(t *testing.T) {
+func TestGenerateDMLFilePath(t *testing.T) {
 	t.Parallel()
 
 	dispatcherID := common.NewDispatcherID()
@@ -68,16 +63,14 @@ func TestDmlPathKey(t *testing.T) {
 		fileIndexWidth int
 		extension      string
 		path           string
-		indexPath      string
-		dmlkey         DmlPathKey
+		dmlkey         DMLPathKey
 	}{
 		{
 			index:          10,
 			fileIndexWidth: 20,
 			extension:      ".csv",
 			path:           fmt.Sprintf("schema1/table1/123456/2023-05-09/CDC_%s_00000000000000000010.csv", dispatcherID.String()),
-			indexPath:      fmt.Sprintf("schema1/table1/123456/2023-05-09/meta/CDC_%s.index", dispatcherID.String()),
-			dmlkey: DmlPathKey{
+			dmlkey: DMLPathKey{
 				SchemaPathKey: SchemaPathKey{
 					Schema:       "schema1",
 					Table:        "table1",
@@ -87,47 +80,12 @@ func TestDmlPathKey(t *testing.T) {
 				Date:         "2023-05-09",
 			},
 		},
-	}
-
-	for _, tc := range testCases {
-		var dmlkey DmlPathKey
-		id, err := dmlkey.ParseIndexFilePath("day", tc.indexPath)
-		require.NoError(t, err)
-		require.Equal(t, tc.dmlkey, dmlkey)
-		require.Equal(t, id, dispatcherID.String())
-
-		fileIndex := &FileIndex{
-			FileIndexKey: FileIndexKey{
-				DispatcherID:           id,
-				EnableTableAcrossNodes: id != "",
-			},
-			Idx: tc.index,
-		}
-		fileName := dmlkey.GenerateDMLFilePath(fileIndex, tc.extension, tc.fileIndexWidth)
-		require.Equal(t, tc.path, fileName)
-	}
-}
-
-func TestParseDMLFilePath(t *testing.T) {
-	t.Parallel()
-
-	dispatcherID := common.NewDispatcherID().String()
-	testCases := []struct {
-		name           string
-		dateSeparator  string
-		path           string
-		indexPath      string
-		fileIndexWidth int
-		dmlkey         DmlPathKey
-		fileIndex      FileIndex
-	}{
 		{
-			name:           "no date with table id path",
-			dateSeparator:  "none",
-			path:           fmt.Sprintf("12345/123456/CDC_%s_00000000000000000010.csv", dispatcherID),
-			indexPath:      fmt.Sprintf("12345/123456/meta/CDC_%s.index", dispatcherID),
+			index:          10,
 			fileIndexWidth: 20,
-			dmlkey: DmlPathKey{
+			extension:      ".csv",
+			path:           fmt.Sprintf("12345/123456/CDC_%s_00000000000000000010.csv", dispatcherID.String()),
+			dmlkey: DMLPathKey{
 				SchemaPathKey: SchemaPathKey{
 					Schema:       "12345",
 					TableVersion: 123456,
@@ -135,20 +93,13 @@ func TestParseDMLFilePath(t *testing.T) {
 				UseTableIDAsPath: true,
 				TableID:          12345,
 			},
-			fileIndex: FileIndex{
-				FileIndexKey: FileIndexKey{
-					DispatcherID:           dispatcherID,
-					EnableTableAcrossNodes: true,
-				},
-				Idx: 10,
-			},
 		},
 		{
-			name:           "day date with partition",
-			dateSeparator:  "day",
-			path:           fmt.Sprintf("schema1/table1/123456/55/2023-05-09/CDC_%s_00000000000000000010.csv", dispatcherID),
+			index:          10,
 			fileIndexWidth: 20,
-			dmlkey: DmlPathKey{
+			extension:      ".csv",
+			path:           fmt.Sprintf("schema1/table1/123456/55/2023-05-09/CDC_%s_00000000000000000010.csv", dispatcherID.String()),
+			dmlkey: DMLPathKey{
 				SchemaPathKey: SchemaPathKey{
 					Schema:       "schema1",
 					Table:        "table1",
@@ -157,37 +108,20 @@ func TestParseDMLFilePath(t *testing.T) {
 				PartitionNum: 55,
 				Date:         "2023-05-09",
 			},
-			fileIndex: FileIndex{
-				FileIndexKey: FileIndexKey{
-					DispatcherID:           dispatcherID,
-					EnableTableAcrossNodes: true,
-				},
-				Idx: 10,
-			},
 		},
 	}
 
 	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			var dmlkey DmlPathKey
-			fileIndex, err := dmlkey.ParseDMLFilePath(tc.dateSeparator, tc.path, ".csv")
-			require.NoError(t, err)
-			require.Equal(t, tc.dmlkey, dmlkey)
-			require.Equal(t, tc.fileIndex, fileIndex)
-			require.Equal(t, tc.path, dmlkey.GenerateDMLFilePath(&fileIndex, ".csv", tc.fileIndexWidth))
-			if tc.indexPath != "" {
-				var indexKey DmlPathKey
-				id, err := indexKey.ParseIndexFilePath(tc.dateSeparator, tc.indexPath)
-				require.NoError(t, err)
-				require.Equal(t, tc.fileIndex.DispatcherID, id)
-				require.Equal(t, tc.dmlkey, indexKey)
-			}
-		})
+		fileIndex := &FileIndex{
+			FileIndexKey: FileIndexKey{
+				DispatcherID:           dispatcherID.String(),
+				EnableTableAcrossNodes: true,
+			},
+			Idx: tc.index,
+		}
+		fileName := tc.dmlkey.GenerateDMLFilePath(fileIndex, tc.extension, tc.fileIndexWidth)
+		require.Equal(t, tc.path, fileName)
 	}
-
-	var dmlkey DmlPathKey
-	_, err := dmlkey.ParseDMLFilePath("none", "schema1//123456/CDC000010.csv", ".csv")
-	require.Error(t, err)
 }
 
 func TestSchemaFileDMLPathKeyOrder(t *testing.T) {
@@ -201,7 +135,7 @@ func TestSchemaFileDMLPathKeyOrder(t *testing.T) {
 	schemaDMLKey := NewSchemaFileDMLPathKey(schemaKey)
 	require.True(t, schemaDMLKey.IsSchemaFileDMLPathKey())
 
-	dataDMLKey := DmlPathKey{
+	dataDMLKey := DMLPathKey{
 		SchemaPathKey: schemaKey,
 		Date:          "2023-05-09",
 	}
@@ -209,7 +143,7 @@ func TestSchemaFileDMLPathKeyOrder(t *testing.T) {
 	require.Greater(t, CompareDMLPathKey(dataDMLKey, schemaDMLKey), 0)
 	require.Zero(t, CompareDMLPathKey(schemaDMLKey, NewSchemaFileDMLPathKey(schemaKey)))
 
-	tableIDPathKey := DmlPathKey{
+	tableIDPathKey := DMLPathKey{
 		SchemaPathKey: SchemaPathKey{
 			Schema:       "12345",
 			TableVersion: schemaKey.TableVersion,

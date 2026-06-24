@@ -180,7 +180,7 @@ func TestDeleteChangefeed(t *testing.T) {
 
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
-	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), NewFuncMatcher(func(i interface{}) bool {
+	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), NewFuncMatcher(func(i any) bool {
 		ops := i.([]clientv3.Op)
 		require.Len(t, ops, 2)
 		require.True(t, ops[0].IsDelete())
@@ -350,16 +350,16 @@ func TestUpdateChangefeedCheckpointTs(t *testing.T) {
 }
 
 type FuncMarcher struct {
-	m func(interface{}) bool
+	m func(any) bool
 }
 
-func NewFuncMatcher(m func(interface{}) bool) gomock.Matcher {
+func NewFuncMatcher(m func(any) bool) gomock.Matcher {
 	return &FuncMarcher{
 		m: m,
 	}
 }
 
-func (f *FuncMarcher) Matches(x interface{}) bool {
+func (f *FuncMarcher) Matches(x any) bool {
 	return f.m(x)
 }
 

@@ -289,17 +289,10 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, schemaFile cloudstorage.Schema
 	if s.cfg.UseTableIDAsPath && schemaFile.Table == "" {
 		return nil
 	}
-	encodedSchemaFile, err := schemaFile.Marshal()
-	if err != nil {
-		return err
-	}
-
-	path, err := schemaFile.GenerateSchemaFilePath(s.cfg.UseTableIDAsPath, v.GetTableID())
-	if err != nil {
-		return err
-	}
+	encodedSchemaFile := schemaFile.Marshal()
+	path := schemaFile.Path(s.cfg.UseTableIDAsPath, v.GetTableID())
 	return s.statistics.RecordDDLExecution(func() (string, error) {
-		err = s.storage.WriteFile(s.ctx, path, encodedSchemaFile)
+		err := s.storage.WriteFile(s.ctx, path, encodedSchemaFile)
 		if err != nil {
 			return "", err
 		}

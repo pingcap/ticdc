@@ -30,7 +30,6 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/hash"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -60,12 +59,14 @@ const (
 
 var schemaRE = regexp.MustCompile(`meta/schema_\d+_\d{10}\.json$`)
 
-// IsSchemaFile checks whether the file is a schema file.
+// IsSchemaFile reports whether path matches a schema file under a meta
+// directory.
 func IsSchemaFile(path string) bool {
 	return schemaRE.MatchString(path)
 }
 
-// mustParseSchemaFileName parses the version from the schema file name.
+// mustParseSchemaFileName returns tableVersion and checksum encoded in a schema
+// file name. Invalid names panic.
 func mustParseSchemaFileName(path string) (uint64, uint32) {
 	reportErr := func(reason string, fields ...zap.Field) {
 		fields = append([]zap.Field{
@@ -95,6 +96,10 @@ func mustParseSchemaFileName(path string) (uint64, uint32) {
 	return tableVersion, uint32(tableChecksum)
 }
 
+// generateSchemaFilePath returns the schema file path.
+// When table is empty, output is <schema>/meta/schema_<version>_<checksum>.json.
+// When omitSchema is true, output is <table-path>/meta/schema_<version>_<checksum>.json.
+// Otherwise output is <schema>/<table>/meta/schema_<version>_<checksum>.json.
 func generateSchemaFilePath(
 	schema, table string, tableVersion uint64, checksum uint32, omitSchema bool,
 ) string {
@@ -108,6 +113,8 @@ func generateSchemaFilePath(
 	return path.Join(fmt.Sprintf(tableMetaPrefix, schema, table), name)
 }
 
+// generateTablePath returns either the table name or physical table ID path
+// segment according to useTableIDAsPath.
 func generateTablePath(tableName string, tableID int64, useTableIDAsPath bool) string {
 	if useTableIDAsPath {
 		return fmt.Sprintf("%d", tableID)
@@ -115,6 +122,8 @@ func generateTablePath(tableName string, tableID int64, useTableIDAsPath bool) s
 	return tableName
 }
 
+// generateDataFileName returns CDC<index><extension> or
+// CDC_<dispatcherID>_<index><extension>. fileIndexWidth controls zero padding.
 func generateDataFileName(enableTableAcrossNodes bool, dispatcherID string, index uint64, extension string, fileIndexWidth int) string {
 	indexFmt := "%0" + strconv.Itoa(fileIndexWidth) + "d"
 	if enableTableAcrossNodes {
@@ -153,7 +162,8 @@ type VersionedTableName struct {
 	DispatcherID commonType.DispatcherID
 }
 
-// FilePathGenerator is used to generate data file path and index file path.
+// FilePathGenerator generates schema, data, and index paths for one storage
+// sink.
 type FilePathGenerator struct {
 	changefeedID commonType.ChangeFeedID
 	extension    string
@@ -173,7 +183,8 @@ type FilePathGenerator struct {
 	versionMap map[VersionedTableName]uint64
 }
 
-// NewFilePathGenerator creates a FilePathGenerator.
+// NewFilePathGenerator creates a FilePathGenerator for one changefeed storage
+// sink. extension is the data file suffix used by GenerateDataFilePath.
 func NewFilePathGenerator(
 	changefeedID commonType.ChangeFeedID,
 	config *Config,
@@ -193,9 +204,10 @@ func NewFilePathGenerator(
 	}
 }
 
-// CheckOrWriteSchema checks whether the schema file exists in the storage and
-// write scheme.json if necessary.
-// It returns true if there is a newer schema version in storage than the passed table version.
+// CheckOrWriteSchema ensures the schema file for table/tableInfo exists.
+// It records the effective table version used by later data/index path
+// generation. It returns true when storage already contains a newer schema file
+// with the same checksum and a version greater than table.TableInfoVersion.
 func (f *FilePathGenerator) CheckOrWriteSchema(
 	ctx context.Context,
 	table VersionedTableName,
@@ -218,10 +230,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	schemaFile.Build(event, f.config.OutputColumnID)
 
 	// Case 1: point check if the schema file exists.
-	schemaFilePath, err := schemaFile.GenerateSchemaFilePath(f.config.UseTableIDAsPath, table.TableNameWithPhysicTableID.TableID)
-	if err != nil {
-		return false, err
-	}
+	schemaFilePath := schemaFile.Path(f.config.UseTableIDAsPath, table.TableNameWithPhysicTableID.TableID)
 	exist, err := f.storage.FileExists(ctx, schemaFilePath)
 	if err != nil {
 		return false, err
@@ -289,21 +298,18 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 			zap.Any("versionedTableName", table),
 			zap.Uint32("checksum", checksum))
 	}
-	encodedSchemaFile, err := schemaFile.Marshal()
-	if err != nil {
-		return false, err
-	}
+	encodedSchemaFile := schemaFile.Marshal()
 	f.versionMap[table] = table.TableInfoVersion
 	return false, f.storage.WriteFile(ctx, schemaFilePath, encodedSchemaFile)
 }
 
-// SetClock is used for unit test
+// SetClock sets the clock used by GenerateDateStr. It is used by tests.
 func (f *FilePathGenerator) SetClock(pdClock pdutil.Clock) {
 	f.pdClock = pdClock
 }
 
-// GenerateDateStr generates a date string base on current time
-// and the date-separator configuration item.
+// GenerateDateStr returns the current date bucket from the date-separator
+// config: "2006", "2006-01", "2006-01-02", or "" when disabled.
 func (f *FilePathGenerator) GenerateDateStr() string {
 	var dateStr string
 
@@ -322,7 +328,10 @@ func (f *FilePathGenerator) GenerateDateStr() string {
 	return dateStr
 }
 
-// GenerateIndexFilePath generates a canonical path for index file.
+// GenerateIndexFilePath returns the index file path for tbl and date.
+// The directory uses the effective table version recorded by CheckOrWriteSchema.
+// Output is <data-dir>/meta/CDC.index or
+// <data-dir>/meta/CDC_<dispatcherID>.index.
 func (f *FilePathGenerator) GenerateIndexFilePath(tbl VersionedTableName, date string) string {
 	dir := f.generateDataDirPath(tbl, date)
 	name := defaultIndexFileName
@@ -332,7 +341,9 @@ func (f *FilePathGenerator) GenerateIndexFilePath(tbl VersionedTableName, date s
 	return path.Join(dir, name)
 }
 
-// GenerateDataFilePath generates a canonical path for data file.
+// GenerateDataFilePath returns the next available data file path for tbl and
+// date. It updates the in-memory file index and may read storage to avoid
+// colliding with existing files. Storage errors are returned.
 func (f *FilePathGenerator) GenerateDataFilePath(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (string, error) {
@@ -397,6 +408,9 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 	}
 }
 
+// generateDataDirPath returns the data directory for tbl and date.
+// The table version comes from versionMap, which is set by CheckOrWriteSchema.
+// Output matches DMLPathKey.generateDMLDataDirPath.
 func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) string {
 	tableVersion := f.versionMap[tbl]
 	if f.config.UseTableIDAsPath {
@@ -405,7 +419,7 @@ func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date str
 			tbl.TableNameWithPhysicTableID.TableID,
 			true,
 		)
-		return DmlPathKey{
+		return DMLPathKey{
 			SchemaPathKey: SchemaPathKey{
 				Schema:       tableIDPathPart,
 				TableVersion: tableVersion,
@@ -425,7 +439,7 @@ func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date str
 	if f.config.EnablePartitionSeparator && tbl.TableNameWithPhysicTableID.IsPartition {
 		partitionNum = tbl.TableNameWithPhysicTableID.TableID
 	}
-	return DmlPathKey{
+	return DMLPathKey{
 		SchemaPathKey: SchemaPathKey{
 			Schema:       tbl.TableNameWithPhysicTableID.Schema,
 			Table:        tablePathPart,
@@ -436,6 +450,8 @@ func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date str
 	}.generateDMLDataDirPath()
 }
 
+// getFileIdxFromIndexFile returns the max file index recorded in the index
+// file for tbl/date. Missing index files return 0.
 func (f *FilePathGenerator) getFileIdxFromIndexFile(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (uint64, error) {
@@ -453,19 +469,18 @@ func (f *FilePathGenerator) getFileIdxFromIndexFile(
 		return 0, err
 	}
 	fileName := strings.TrimSuffix(string(data), "\n")
-	fileIndex, err := ParseFileIndexFromFileName(fileName, f.extension)
-	if err != nil {
-		return 0, err
-	}
+	fileIndex := ParseFileIndexFromFileName(fileName, f.extension)
 	return fileIndex.Idx, nil
 }
 
-// ParseFileIndexFromFileName parses a cloud storage data file name.
-func ParseFileIndexFromFileName(fileName string, extension string) (FileIndex, error) {
+// ParseFileIndexFromFileName returns the dispatcher ID and numeric index
+// encoded in a data file name. extension must match the file suffix. Invalid
+// names panic.
+func ParseFileIndexFromFileName(fileName string, extension string) FileIndex {
 	if len(fileName) < minFileNamePrefixLen+len(extension) ||
 		!strings.HasPrefix(fileName, "CDC") ||
 		!strings.HasSuffix(fileName, extension) {
-		return FileIndex{}, errors.ErrStorageSinkInvalidFileName.GenWithStack("filename in storage sink is invalid: %q", fileName)
+		log.Panic("filename in storage sink is invalid", zap.String("fileName", fileName))
 	}
 
 	// CDC[_{dispatcherID}_]{num}.fileExtension
@@ -475,17 +490,14 @@ func ParseFileIndexFromFileName(fileName string, extension string) (FileIndex, e
 	if strings.HasPrefix(name, "_") {
 		idxSep := strings.LastIndex(name, "_")
 		if idxSep <= 1 {
-			return FileIndex{}, errors.ErrStorageSinkInvalidFileName.GenWithStack("cannot match dml path pattern for %q", fileName)
+			log.Panic("cannot match dml path pattern", zap.String("fileName", fileName))
 		}
 		dispatcherID = name[1:idxSep]
 		idxStr = name[idxSep+1:]
 	}
-	if !isDigits(idxStr) {
-		return FileIndex{}, errors.ErrStorageSinkInvalidFileName.GenWithStack("cannot match dml path pattern for %q", fileName)
-	}
 	idx, err := strconv.ParseUint(idxStr, 10, 64)
 	if err != nil {
-		return FileIndex{}, err
+		log.Panic("cannot match dml path pattern", zap.String("fileName", fileName), zap.Error(err))
 	}
 	return FileIndex{
 		FileIndexKey: FileIndexKey{
@@ -493,7 +505,7 @@ func ParseFileIndexFromFileName(fileName string, extension string) (FileIndex, e
 			EnableTableAcrossNodes: dispatcherID != "",
 		},
 		Idx: idx,
-	}, nil
+	}
 }
 
 var dateSeparatorDayRegexp *regexp.Regexp

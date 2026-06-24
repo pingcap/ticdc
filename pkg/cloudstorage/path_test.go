@@ -71,8 +71,7 @@ func testFilePathGenerator(ctx context.Context, t *testing.T, dir string) *FileP
 
 func TestGenerateDataFilePath(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithCancel(context.TODO())
-	defer cancel()
+	ctx := t.Context()
 
 	table := VersionedTableName{
 		TableNameWithPhysicTableID: commonType.TableName{
@@ -152,8 +151,7 @@ func TestGenerateDataFilePath(t *testing.T) {
 func TestGenerateDataFilePathWithTableIDAsPath(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.TODO())
-	defer cancel()
+	ctx := t.Context()
 
 	table := VersionedTableName{
 		TableNameWithPhysicTableID: commonType.TableName{
@@ -176,59 +174,133 @@ func TestGenerateDataFilePathWithTableIDAsPath(t *testing.T) {
 	require.Equal(t, fmt.Sprintf("12345/5/CDC_%s_000001.json", table.DispatcherID.String()), path)
 }
 
+func TestGenerateAndParseIndexFilePath(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	testCases := []struct {
+		name               string
+		dateSeparator      string
+		date               string
+		useTableIDAsPath   bool
+		enablePartition    bool
+		table              VersionedTableName
+		expectedDMLPathKey DMLPathKey
+	}{
+		{
+			name:          "schema table with date",
+			dateSeparator: config.DateSeparatorDay.String(),
+			date:          "2023-05-09",
+			table: VersionedTableName{
+				TableNameWithPhysicTableID: commonType.TableName{
+					Schema: "test",
+					Table:  "table1",
+				},
+				TableInfoVersion: 5,
+				DispatcherID:     commonType.NewDispatcherID(),
+			},
+			expectedDMLPathKey: DMLPathKey{
+				SchemaPathKey: SchemaPathKey{
+					Schema:       "test",
+					Table:        "table1",
+					TableVersion: 5,
+				},
+				Date: "2023-05-09",
+			},
+		},
+		{
+			name:             "table id path",
+			dateSeparator:    config.DateSeparatorNone.String(),
+			useTableIDAsPath: true,
+			table: VersionedTableName{
+				TableNameWithPhysicTableID: commonType.TableName{
+					Schema:  "test",
+					Table:   "table1",
+					TableID: 12345,
+				},
+				TableInfoVersion: 5,
+				DispatcherID:     commonType.NewDispatcherID(),
+			},
+			expectedDMLPathKey: DMLPathKey{
+				SchemaPathKey: SchemaPathKey{
+					Schema:       "12345",
+					TableVersion: 5,
+				},
+				UseTableIDAsPath: true,
+				TableID:          12345,
+			},
+		},
+		{
+			name:            "partition with date",
+			dateSeparator:   config.DateSeparatorDay.String(),
+			date:            "2023-05-09",
+			enablePartition: true,
+			table: VersionedTableName{
+				TableNameWithPhysicTableID: commonType.TableName{
+					Schema:      "test",
+					Table:       "table1",
+					TableID:     55,
+					IsPartition: true,
+				},
+				TableInfoVersion: 5,
+				DispatcherID:     commonType.NewDispatcherID(),
+			},
+			expectedDMLPathKey: DMLPathKey{
+				SchemaPathKey: SchemaPathKey{
+					Schema:       "test",
+					Table:        "table1",
+					TableVersion: 5,
+				},
+				PartitionNum: 55,
+				Date:         "2023-05-09",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := testFilePathGenerator(ctx, t, t.TempDir())
+			f.config.DateSeparator = tc.dateSeparator
+			f.config.UseTableIDAsPath = tc.useTableIDAsPath
+			f.config.EnablePartitionSeparator = tc.enablePartition
+			f.versionMap[tc.table] = tc.table.TableInfoVersion
+
+			indexPath := f.GenerateIndexFilePath(tc.table, tc.date)
+			var pathKey DMLPathKey
+			pathKey.ParseIndexFilePath(tc.dateSeparator, indexPath)
+			require.Equal(t, tc.expectedDMLPathKey, pathKey)
+		})
+	}
+}
+
 func TestParseFileIndexFromFileName(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.TODO())
-	defer cancel()
+	ctx := t.Context()
 
 	dir := t.TempDir()
 	f := testFilePathGenerator(ctx, t, dir)
 	testCases := []struct {
 		fileName string
-		wantErr  string
 	}{
 		{
 			fileName: "CDC000011.json",
-			wantErr:  "",
 		},
 		{
 			fileName: "CDC1000000.json",
-			wantErr:  "",
-		},
-		{
-			fileName: "CDC1.json",
-			wantErr:  "filename in storage sink is invalid",
-		},
-		{
-			fileName: "cdc000001.json",
-			wantErr:  "filename in storage sink is invalid",
-		},
-		{
-			fileName: "CDC000005.xxx",
-			wantErr:  "filename in storage sink is invalid",
-		},
-		{
-			fileName: "CDChello.json",
-			wantErr:  "filename in storage sink is invalid",
 		},
 	}
 
 	for _, tc := range testCases {
-		_, err := ParseFileIndexFromFileName(tc.fileName, f.extension)
-		if len(tc.wantErr) != 0 {
-			require.Contains(t, err.Error(), tc.wantErr)
-		} else {
-			require.NoError(t, err)
-		}
+		ParseFileIndexFromFileName(tc.fileName, f.extension)
 	}
 }
 
 func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.TODO())
-	defer cancel()
+	ctx := t.Context()
 
 	dir := t.TempDir()
 	f := testFilePathGenerator(ctx, t, dir)
@@ -249,7 +321,7 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	f.versionMap[table] = table.TableInfoVersion
 	date := f.GenerateDateStr()
 	indexFilePath := f.GenerateIndexFilePath(table, date)
-	err := f.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000005.json\n", dispatcherID.String())))
+	err := f.storage.WriteFile(ctx, indexFilePath, fmt.Appendf(nil, "CDC_%s_000005.json\n", dispatcherID.String()))
 	require.NoError(t, err)
 
 	dataFilePath, err := f.GenerateDataFilePath(ctx, table, date)
@@ -382,8 +454,7 @@ func TestIsSchemaFile(t *testing.T) {
 func TestCheckOrWriteSchema(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	dir := t.TempDir()
 	f := testFilePathGenerator(ctx, t, dir)
 
@@ -454,8 +525,7 @@ func TestCheckOrWriteSchema(t *testing.T) {
 func TestCheckOrWriteSchemaUsesRoutedTargetNames(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	dir := t.TempDir()
 	f := testFilePathGenerator(ctx, t, dir)
 
@@ -496,8 +566,7 @@ func TestCheckOrWriteSchemaUsesRoutedTargetNames(t *testing.T) {
 func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	dir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)
 	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)

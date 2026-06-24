@@ -13,22 +13,21 @@
 package cloudstorage
 
 import (
-	"context"
 	"encoding/json"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/hash"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
+	"go.uber.org/zap"
 )
 
 const (
@@ -37,20 +36,21 @@ const (
 	marshalIndent            = "    "
 )
 
-// TableCol denotes column info stored in a schema file.
+// TableCol is one column entry persisted in a schema file.
 type TableCol struct {
-	ID        string      `json:"ColumnId,omitempty"`
-	Name      string      `json:"ColumnName" `
-	Tp        string      `json:"ColumnType"`
-	Default   interface{} `json:"ColumnDefault,omitempty"`
-	Precision string      `json:"ColumnPrecision,omitempty"`
-	Scale     string      `json:"ColumnScale,omitempty"`
-	Nullable  string      `json:"ColumnNullable,omitempty"`
-	IsPK      string      `json:"ColumnIsPk,omitempty"`
-	Elems     []string    `json:"ColumnElems,omitempty"`
+	ID        string   `json:"ColumnId,omitempty"`
+	Name      string   `json:"ColumnName" `
+	Tp        string   `json:"ColumnType"`
+	Default   any      `json:"ColumnDefault,omitempty"`
+	Precision string   `json:"ColumnPrecision,omitempty"`
+	Scale     string   `json:"ColumnScale,omitempty"`
+	Nullable  string   `json:"ColumnNullable,omitempty"`
+	IsPK      string   `json:"ColumnIsPk,omitempty"`
+	Elems     []string `json:"ColumnElems,omitempty"`
 }
 
-// FromTiColumnInfo converts from TiDB ColumnInfo to TableCol.
+// FromTiColumnInfo fills TableCol from a TiDB column. outputColumnID controls
+// whether ColumnId is written into the schema file payload.
 func (t *TableCol) FromTiColumnInfo(col *model.ColumnInfo, outputColumnID bool) {
 	defaultFlen, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(col.GetType())
 	isDecimalNotDefault := col.GetDecimal() != defaultDecimal &&
@@ -105,15 +105,16 @@ func (t *TableCol) FromTiColumnInfo(col *model.ColumnInfo, outputColumnID bool) 
 	}
 }
 
-// ToTiColumnInfo converts from TableCol to TiDB ColumnInfo.
-func (t *TableCol) ToTiColumnInfo(colID int64) (*model.ColumnInfo, error) {
+// ToTiColumnInfo returns a TiDB column reconstructed from TableCol. colID is
+// used as the returned column ID.
+func (t *TableCol) ToTiColumnInfo(colID int64) *model.ColumnInfo {
 	col := new(model.ColumnInfo)
 
 	if t.ID != "" {
 		var err error
 		col.ID, err = strconv.ParseInt(t.ID, 10, 64)
 		if err != nil {
-			return nil, errors.WrapError(errors.ErrInternalCheckFailed, err)
+			log.Panic("parse column id failed, this should not happen", zap.String("id", t.ID), zap.Error(err))
 		}
 	}
 
@@ -136,56 +137,46 @@ func (t *TableCol) ToTiColumnInfo(colID int64) (*model.ColumnInfo, error) {
 	} else {
 		col.SetCharset(charset.CharsetUTF8MB4)
 	}
-	setFlen := func(precision string) error {
+	setFlen := func(precision string) {
 		if len(precision) > 0 {
 			flen, err := strconv.Atoi(precision)
 			if err != nil {
-				return errors.WrapError(errors.ErrInternalCheckFailed, err)
+				log.Panic("parse precision failed, this should not happen",
+					zap.String("precision", precision), zap.Error(err))
 			}
 			col.SetFlen(flen)
 		}
-		return nil
 	}
-	setDecimal := func(scale string) error {
+	setDecimal := func(scale string) {
 		if len(scale) > 0 {
 			decimal, err := strconv.Atoi(scale)
 			if err != nil {
-				return errors.WrapError(errors.ErrInternalCheckFailed, err)
+				log.Panic("parse scale failed, this should not happen",
+					zap.String("scale", scale), zap.Error(err))
 			}
 			col.SetDecimal(decimal)
 		}
-		return nil
 	}
 	switch col.GetType() {
 	case mysql.TypeTimestamp, mysql.TypeDatetime, mysql.TypeDuration:
-		err := setDecimal(t.Scale)
-		if err != nil {
-			return nil, err
-		}
+		setDecimal(t.Scale)
 	case mysql.TypeDouble, mysql.TypeFloat, mysql.TypeNewDecimal:
-		err := setFlen(t.Precision)
-		if err != nil {
-			return nil, err
-		}
-		err = setDecimal(t.Scale)
-		if err != nil {
-			return nil, err
-		}
+		setFlen(t.Precision)
+		setDecimal(t.Scale)
 	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong, mysql.TypeLonglong,
 		mysql.TypeBit, mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeBlob,
 		mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeYear:
-		err := setFlen(t.Precision)
-		if err != nil {
-			return nil, err
-		}
+		setFlen(t.Precision)
 	case mysql.TypeEnum, mysql.TypeSet:
 		col.SetElems(t.Elems)
 	}
 
-	return col, nil
+	return col
 }
 
 // SchemaFile is the payload persisted as schema_*.json.
+// It carries table structure in Columns/TotalColumns and DDL replay metadata in
+// Query/Type/TableVersion.
 type SchemaFile struct {
 	Table   string `json:"Table"`
 	Schema  string `json:"Schema"`
@@ -209,24 +200,24 @@ type checksumPayload struct {
 	TotalColumns int        `json:"TableColumnsTotal"`
 }
 
-// ToDDLEvent converts SchemaFile to DDLEvent.
-func (t *SchemaFile) ToDDLEvent() (*commonEvent.DDLEvent, error) {
-	tableInfo, err := t.ToTableInfo()
-	if err != nil {
-		return nil, err
-	}
+// BuildDDLEvent returns the DDL event represented by SchemaFile.
+// The returned event includes a TableInfo rebuilt from Columns plus the Query,
+// Type, schema/table name, and FinishedTs from the schema file.
+func (t *SchemaFile) BuildDDLEvent() *commonEvent.DDLEvent {
 	return &commonEvent.DDLEvent{
-		TableInfo:     tableInfo,
+		TableInfo:     t.BuildTableInfo(),
 		FinishedTs:    t.TableVersion,
 		Type:          t.Type,
 		Query:         t.Query,
 		SchemaName:    t.Schema,
 		TableName:     t.Table,
 		BlockedTables: &commonEvent.InfluencedTables{InfluenceType: commonEvent.InfluenceTypeAll},
-	}, nil
+	}
 }
 
-// Build fills SchemaFile from DDLEvent.
+// Build fills SchemaFile from a DDL event for persistence.
+// outputColumnID controls whether column IDs are written. If event.TableInfo is
+// nil, only schema/table name and DDL metadata are filled.
 func (t *SchemaFile) Build(event *commonEvent.DDLEvent, outputColumnID bool) {
 	t.Version = defaultSchemaFileVersion
 	t.TableVersion = event.FinishedTs
@@ -249,17 +240,15 @@ func (t *SchemaFile) Build(event *commonEvent.DDLEvent, outputColumnID bool) {
 	}
 }
 
-// ToTableInfo converts SchemaFile to TableInfo.
-func (t *SchemaFile) ToTableInfo() (*common.TableInfo, error) {
+// BuildTableInfo returns decoder TableInfo rebuilt from SchemaFile columns.
+// It uses deterministic mock column IDs starting from 100.
+func (t *SchemaFile) BuildTableInfo() *common.TableInfo {
 	tidbTableInfo := &model.TableInfo{
 		Name: ast.NewCIStr(t.Table),
 	}
 	nextMockID := int64(100) // 100 is an arbitrary number
 	for _, col := range t.Columns {
-		tiCol, err := col.ToTiColumnInfo(nextMockID)
-		if err != nil {
-			return nil, err
-		}
+		tiCol := col.ToTiColumnInfo(nextMockID)
 		if mysql.HasPriKeyFlag(tiCol.GetFlag()) {
 			// use PKIsHandle to make sure that the primary keys can be detected
 			tidbTableInfo.PKIsHandle = true
@@ -267,48 +256,22 @@ func (t *SchemaFile) ToTableInfo() (*common.TableInfo, error) {
 		tidbTableInfo.Columns = append(tidbTableInfo.Columns, tiCol)
 		nextMockID++
 	}
-	info := common.NewTableInfo4Decoder(t.Schema, tidbTableInfo)
-	return info, nil
+	return common.NewTableInfo4Decoder(t.Schema, tidbTableInfo)
 }
 
-// Marshal marshals SchemaFile.
-func (t *SchemaFile) Marshal() ([]byte, error) {
+// Marshal returns the indented JSON payload written to schema files.
+// Marshal failures panic.
+func (t *SchemaFile) Marshal() []byte {
 	data, err := json.MarshalIndent(t, marshalPrefix, marshalIndent)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrMarshalFailed, err)
+		log.Panic("marshal the schema file failed, this should not happen",
+			zap.Any("schemaFile", t), zap.Error(err))
 	}
-	return data, nil
-}
-
-// Parse parses a schema file and validates its path metadata.
-func Parse(ctx context.Context, storage storeapi.Storage, path string) (SchemaPathKey, SchemaFile, error) {
-	var schemaKey SchemaPathKey
-	checksum, err := schemaKey.ParseSchemaFilePath(path)
-	if err != nil {
-		return schemaKey, SchemaFile{}, err
-	}
-	var schemaFile SchemaFile
-	schemaContent, err := storage.ReadFile(ctx, path)
-	if err != nil {
-		return schemaKey, schemaFile, errors.Trace(err)
-	}
-	if err = json.Unmarshal(schemaContent, &schemaFile); err != nil {
-		return schemaKey, schemaFile, errors.Trace(err)
-	}
-	checksumInMem, err := schemaFile.Sum32(nil)
-	if err != nil {
-		return schemaKey, schemaFile, errors.Trace(err)
-	}
-	if checksumInMem != checksum || schemaKey.TableVersion != schemaFile.TableVersion {
-		return schemaKey, schemaFile, errors.ErrStorageSinkInvalidFileName.GenWithStack(
-			"checksum mismatch in schema file %s: checksum in memory %d, checksum in file %d, table version in path %d, table version in file %d",
-			path, checksumInMem, checksum, schemaKey.TableVersion, schemaFile.TableVersion)
-	}
-	return schemaKey, schemaFile, nil
+	return data
 }
 
 // marshalForChecksum marshals fields covered by the path checksum.
-func (t *SchemaFile) marshalForChecksum() ([]byte, error) {
+func (t *SchemaFile) marshalForChecksum() []byte {
 	// sort columns by name
 	sortedColumns := make([]TableCol, len(t.Columns))
 	copy(sortedColumns, t.Columns)
@@ -325,38 +288,35 @@ func (t *SchemaFile) marshalForChecksum() ([]byte, error) {
 
 	data, err := json.MarshalIndent(payload, marshalPrefix, marshalIndent)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrMarshalFailed, err)
+		log.Panic("marshal for the schema file checksum failed, this should not happen",
+			zap.Any("payload", payload), zap.Error(err))
 	}
-	return data, nil
+	return data
 }
 
-// Sum32 returns the 32-bits hash value of SchemaFile.
-func (t *SchemaFile) Sum32(hasher *hash.PositionInertia) (uint32, error) {
+// Sum32 returns the checksum used in schema file names.
+// The optional hasher is reset before use; nil uses a new hasher.
+func (t *SchemaFile) Sum32(hasher *hash.PositionInertia) uint32 {
 	if hasher == nil {
 		hasher = hash.NewPositionInertia()
 	}
 	hasher.Reset()
-	data, err := t.marshalForChecksum()
-	if err != nil {
-		return 0, err
-	}
+	data := t.marshalForChecksum()
 
 	hasher.Write(data)
-	return hasher.Sum32(), nil
+	return hasher.Sum32()
 }
 
-// GenerateSchemaFilePath generates the schema file path for SchemaFile
-// with optional table id path.
-func (t *SchemaFile) GenerateSchemaFilePath(useTableIDAsPath bool, tableID int64) (string, error) {
-	checksum, err := t.Sum32(nil)
-	if err != nil {
-		return "", err
-	}
+// Path returns the schema file path for this payload.
+// Database-level schema files use <schema>/meta/...
+// Table-level schema files use <schema>/<table>/meta/... or <tableID>/meta/...
+// when useTableIDAsPath is true. The file name includes the generated checksum.
+func (t *SchemaFile) Path(useTableIDAsPath bool, tableID int64) string {
 	tableLevel := t.TotalColumns != 0
 	table := t.Table
 	if tableLevel {
 		table = generateTablePath(t.Table, tableID, useTableIDAsPath)
 	}
 	omitSchema := useTableIDAsPath && tableLevel
-	return generateSchemaFilePath(t.Schema, table, t.TableVersion, checksum, omitSchema), nil
+	return generateSchemaFilePath(t.Schema, table, t.TableVersion, t.Sum32(nil), omitSchema)
 }

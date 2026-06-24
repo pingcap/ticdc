@@ -13,17 +13,13 @@
 package cloudstorage
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"math"
 	"math/rand"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
@@ -381,8 +377,7 @@ func TestTableCol(t *testing.T) {
 		require.Nil(t, err, tc.name)
 		require.JSONEq(t, tc.expected, string(encodedCol), tc.name)
 
-		_, err = tableCol.ToTiColumnInfo(100)
-		require.NoError(t, err)
+		_ = tableCol.ToTiColumnInfo(100)
 	}
 }
 
@@ -480,12 +475,10 @@ func TestSchemaFile(t *testing.T) {
 		"TableColumnsTotal": 4
 	}`, string(encodedSchemaFile))
 
-	tableInfo, err = schemaFile.ToTableInfo()
-	require.NoError(t, err)
+	tableInfo = schemaFile.BuildTableInfo()
 	require.Len(t, tableInfo.GetColumns(), 4)
 
-	event, err = schemaFile.ToDDLEvent()
-	require.NoError(t, err)
+	event = schemaFile.BuildDDLEvent()
 	require.Equal(t, byte(timodel.ActionAddColumn), event.Type)
 	require.Equal(t, uint64(100), event.FinishedTs)
 }
@@ -498,69 +491,40 @@ func TestSchemaFileGenFilePath(t *testing.T) {
 		Version:      defaultSchemaFileVersion,
 		TableVersion: 100,
 	}
-	schemaPath, err := dbSchemaFile.GenerateSchemaFilePath(false, 0)
-	require.NoError(t, err)
+	schemaPath := dbSchemaFile.Path(false, 0)
 	require.Equal(t, "schema1/meta/schema_100_3233644819.json", schemaPath)
 
-	schemaPath, err = dbSchemaFile.GenerateSchemaFilePath(true, 0)
-	require.NoError(t, err)
+	schemaPath = dbSchemaFile.Path(true, 0)
 	require.Equal(t, "schema1/meta/schema_100_3233644819.json", schemaPath)
 
 	schemaFile, _ := generateSchemaFile()
-	tablePath, err := schemaFile.GenerateSchemaFilePath(false, 0)
-	require.NoError(t, err)
+	tablePath := schemaFile.Path(false, 0)
 	require.Equal(t, "schema1/table1/meta/schema_100_3752767265.json", tablePath)
 
-	tablePath, err = schemaFile.GenerateSchemaFilePath(true, 12345)
-	require.NoError(t, err)
+	tablePath = schemaFile.Path(true, 12345)
 	require.Equal(t, "12345/meta/schema_100_3752767265.json", tablePath)
 }
 
 func TestParseSchemaFile(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
-	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, fmt.Sprintf("file:///%s", t.TempDir()))
-	require.NoError(t, err)
-	defer storage.Close()
-
 	schemaFile, _ := generateSchemaFile()
-	schemaFilePath, err := schemaFile.GenerateSchemaFilePath(false, 0)
-	require.NoError(t, err)
-	encodedSchemaFile, err := schemaFile.Marshal()
-	require.NoError(t, err)
-	require.NoError(t, storage.WriteFile(ctx, schemaFilePath, encodedSchemaFile))
+	encodedSchemaFile := schemaFile.Marshal()
 
-	schemaKey, got, err := Parse(ctx, storage, schemaFilePath)
-	require.NoError(t, err)
-	require.Equal(t, SchemaPathKey{
-		Schema:       schemaFile.Schema,
-		Table:        schemaFile.Table,
-		TableVersion: schemaFile.TableVersion,
-	}, schemaKey)
+	var got SchemaFile
+	require.NoError(t, json.Unmarshal(encodedSchemaFile, &got))
 	require.Equal(t, schemaFile.Schema, got.Schema)
 	require.Equal(t, schemaFile.Table, got.Table)
 	require.Equal(t, schemaFile.TableVersion, got.TableVersion)
 	require.Len(t, got.Columns, len(schemaFile.Columns))
-
-	schemaFile.TableVersion++
-	encodedSchemaFile, err = schemaFile.Marshal()
-	require.NoError(t, err)
-	require.NoError(t, storage.WriteFile(ctx, schemaFilePath, encodedSchemaFile))
-
-	_, _, err = Parse(ctx, storage, schemaFilePath)
-	require.Error(t, err)
-	require.True(t, errors.ErrStorageSinkInvalidFileName.Equal(err))
 }
 
 func TestSchemaFileSum32(t *testing.T) {
 	t.Parallel()
 
 	schemaFile, _ := generateSchemaFile()
-	checksum1, err := schemaFile.Sum32(nil)
-	require.NoError(t, err)
-	checksum2, err := schemaFile.Sum32(nil)
-	require.NoError(t, err)
+	checksum1 := schemaFile.Sum32(nil)
+	checksum2 := schemaFile.Sum32(nil)
 	require.Equal(t, checksum1, checksum2)
 
 	n := len(schemaFile.Columns)
@@ -569,11 +533,10 @@ func TestSchemaFileSum32(t *testing.T) {
 	newSchemaFile := schemaFile
 	newSchemaFile.Columns = newCol
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		target := rand.Intn(n)
 		newSchemaFile.Columns[i], newSchemaFile.Columns[target] = newSchemaFile.Columns[target], newSchemaFile.Columns[i]
-		newChecksum, err := newSchemaFile.Sum32(nil)
-		require.NoError(t, err)
+		newChecksum := newSchemaFile.Sum32(nil)
 		require.Equal(t, checksum1, newChecksum)
 	}
 }
