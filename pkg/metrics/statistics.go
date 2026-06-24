@@ -113,8 +113,8 @@ func (b *Statistics) Close() {
 	keyspace := b.changefeedID.Keyspace()
 	changefeedID := b.changefeedID.Name()
 	ExecDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
-	ExecBatchHistogram.DeleteLabelValues(keyspace, changefeedID)
-	ExecBatchWriteBytesHistogram.DeleteLabelValues(keyspace, changefeedID)
+	ExecBatchHistogram.DeleteLabelValues(keyspace, changefeedID, b.sinkType)
+	ExecBatchWriteBytesHistogram.DeleteLabelValues(keyspace, changefeedID, b.sinkType)
 	EventSizeHistogram.DeleteLabelValues(keyspace, changefeedID)
 	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "ddl")
 	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "dml")
@@ -123,6 +123,6 @@ func (b *Statistics) Close() {
 		ExecDDLCounter.DeleteLabelValues(keyspace, changefeedID, ddlType)
 		return true
 	})
-	TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)
+	TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID, b.sinkType)
 	ExecDMLEventCounter.DeleteLabelValues(keyspace, changefeedID)
 }

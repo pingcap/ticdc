@@ -226,13 +226,16 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		return false, nil
 	}
 
+	keyspace := f.changefeedID.Keyspace()
+	changefeed := f.changefeedID.Name()
+
 	var def TableDefinition
 	def.FromTableInfo(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo, table.TableInfoVersion, f.config.OutputColumnID)
 	if !def.IsTableSchema() {
 		// only check schema for table
 		log.Error("invalid table schema",
-			zap.String("keyspace", f.changefeedID.Keyspace()),
-			zap.Stringer("changefeedID", f.changefeedID.ID()),
+			zap.String("keyspace", keyspace),
+			zap.String("changefeedID", changefeed),
 			zap.Any("versionedTableName", table),
 			zap.Any("tableInfo", tableInfo))
 		return false, errors.ErrInternalCheckFailed.GenWithStackByArgs("invalid table schema in FilePathGenerator")
@@ -278,8 +281,8 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		version, parsedChecksum := mustParseSchemaName(path)
 		if parsedChecksum != checksum {
 			log.Error("invalid schema file name",
-				zap.String("keyspace", f.changefeedID.Keyspace()),
-				zap.Stringer("changefeedID", f.changefeedID.ID()),
+				zap.String("keyspace", keyspace),
+				zap.String("changefeedID", changefeed),
 				zap.String("path", path), zap.Any("checksum", checksum))
 			errMsg := fmt.Sprintf("invalid schema filename in storage sink, "+
 				"expected checksum: %d, actual checksum: %d", checksum, parsedChecksum)
@@ -303,8 +306,8 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	// Case 2: the table meta path is not empty.
 	if schemaFileCnt != 0 && lastVersion != 0 {
 		log.Info("table schema file with exact version not found, using latest available",
-			zap.String("keyspace", f.changefeedID.Keyspace()),
-			zap.Stringer("changefeedID", f.changefeedID.ID()),
+			zap.String("keyspace", keyspace),
+			zap.String("changefeedID", changefeed),
 			zap.Any("versionedTableName", table),
 			zap.Uint64("tableVersion", lastVersion),
 			zap.Uint32("checksum", checksum))
@@ -319,8 +322,8 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	//  b. the schema file is deleted by the consumer. We write schema file to external storage too.
 	if schemaFileCnt != 0 && lastVersion == 0 {
 		log.Warn("no table schema file found in an non-empty meta path",
-			zap.String("keyspace", f.changefeedID.Keyspace()),
-			zap.Stringer("changefeedID", f.changefeedID.ID()),
+			zap.String("keyspace", keyspace),
+			zap.String("changefeedID", changefeed),
 			zap.Any("versionedTableName", table),
 			zap.Uint32("checksum", checksum))
 	}
@@ -378,7 +381,7 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 	if err != nil {
 		return "", err
 	}
-	newIndexFile := false
+	loadedIndexFile := false
 	if idx, ok := f.fileIndex[tbl]; !ok {
 		fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
 		if err != nil {
@@ -389,7 +392,7 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 			currDate: date,
 			index:    fileIdx,
 		}
-		newIndexFile = true
+		loadedIndexFile = true
 	} else {
 		idx.currDate = date
 	}
@@ -398,27 +401,42 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 		f.fileIndex[tbl].prevDate = f.fileIndex[tbl].currDate
 		f.fileIndex[tbl].index = 0
 	}
-	f.fileIndex[tbl].index++
-	name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth)
-	dataFile := path.Join(dir, name)
-	exist, err := f.storage.FileExists(ctx, dataFile)
-	if err != nil {
-		return "", err
+	triedIndexResync := loadedIndexFile
+	// A local file index can lag behind existing data files after sink restart or
+	// dispatcher ownership transfer. If the local cache collides with an existing
+	// data file, reload the index file once before falling back to consecutive
+	// probes for the index-stale recovery path.
+	for {
+		f.fileIndex[tbl].index++
+		name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth)
+		dataFile := path.Join(dir, name)
+		exist, err := f.storage.FileExists(ctx, dataFile)
+		if err != nil {
+			return "", err
+		}
+		if !exist {
+			return dataFile, nil
+		}
+		if !triedIndexResync {
+			fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
+			if err != nil {
+				return "", err
+			}
+			triedIndexResync = true
+			if fileIdx >= f.fileIndex[tbl].index {
+				f.fileIndex[tbl].index = fileIdx
+				continue
+			}
+		}
+		if loadedIndexFile {
+			log.Warn("the data file exists and the index file is stale",
+				zap.String("keyspace", f.changefeedID.Keyspace()),
+				zap.String("changefeedID", f.changefeedID.Name()),
+				zap.Any("versionedTableName", tbl),
+				zap.String("dataFile", dataFile))
+			loadedIndexFile = false
+		}
 	}
-	if !exist {
-		return dataFile, nil
-	}
-	if newIndexFile {
-		log.Warn("the data file exists and the index file is stale",
-			zap.String("keyspace", f.changefeedID.Keyspace()),
-			zap.Stringer("changefeedID", f.changefeedID.ID()),
-			zap.Any("versionedTableName", tbl),
-			zap.String("dataFile", dataFile))
-	}
-	// if the file already exists, which means the fileIndex is stale,
-	// we need to delete the file index in memory and re-generate the file path with the updated file index until we find a non-existing file path.
-	delete(f.fileIndex, tbl)
-	return f.GenerateDataFilePath(ctx, tbl, date)
 }
 
 func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) (string, error) {
@@ -566,7 +584,7 @@ func RemoveEmptyDirs(
 			if err == nil && len(files) == 0 {
 				log.Debug("Deleting empty directory",
 					zap.String("keyspace", id.Keyspace()),
-					zap.Stringer("changeFeedID", id.ID()),
+					zap.String("changeFeedID", id.Name()),
 					zap.String("path", path))
 				os.Remove(path)
 				cnt++

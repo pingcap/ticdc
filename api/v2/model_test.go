@@ -36,6 +36,8 @@ func TestReplicaConfigConversion(t *testing.T) {
 		Sink: &SinkConfig{
 			CloudStorageConfig: &CloudStorageConfig{
 				UseTableIDAsPath: util.AddressOf(true),
+				SpoolDiskQuota:   util.AddressOf(int64(1024)),
+				SpoolBaseDir:     util.AddressOf("/tmp/ticdc-spool"),
 			},
 		},
 		Mounter: &MounterConfig{
@@ -67,6 +69,8 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(internalCfg.EnableTableMonitor))
 	require.True(t, util.GetOrZero(internalCfg.BDRMode))
 	require.True(t, util.GetOrZero(internalCfg.Sink.CloudStorageConfig.UseTableIDAsPath))
+	require.Equal(t, int64(1024), util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolDiskQuota))
+	require.Equal(t, "/tmp/ticdc-spool", util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolBaseDir))
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
 	require.True(t, util.GetOrZero(internalCfg.Scheduler.EnableTableAcrossNodes))
 	require.Equal(t, 1000, util.GetOrZero(internalCfg.Scheduler.RegionThreshold))
@@ -92,6 +96,8 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, *apiCfgBack.ForceReplicate)
 	require.True(t, *apiCfgBack.IgnoreIneligibleTable)
 	require.True(t, *apiCfgBack.Sink.CloudStorageConfig.UseTableIDAsPath)
+	require.Equal(t, int64(1024), *apiCfgBack.Sink.CloudStorageConfig.SpoolDiskQuota)
+	require.Equal(t, "/tmp/ticdc-spool", *apiCfgBack.Sink.CloudStorageConfig.SpoolBaseDir)
 	require.Equal(t, 16, *apiCfgBack.Mounter.WorkerNum)
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
