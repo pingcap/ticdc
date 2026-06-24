@@ -595,6 +595,10 @@ func persistSchemaSnapshot(
 		start := time.Now()
 		dbInfos, err := meta.ListDatabases()
 		if err != nil {
+			// The snapshot is already GC'ed and retrying the same ts cannot recover.
+			if isGCLifeTimeError(err) {
+				return nil, nil, nil, err
+			}
 			time.Sleep(100 * time.Millisecond)
 			log.Warn("list databases failed, retrying", zap.Error(err))
 			continue
