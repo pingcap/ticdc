@@ -179,15 +179,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 						zap.Error(err))
 					return err
 				}
-				indexFilePath, err := d.filePathGenerator.GenerateIndexFilePath(table, date)
-				if err != nil {
-					log.Error("failed to generate index file path",
-						zap.String("keyspace", keyspace),
-						zap.String("changefeed", changefeed),
-						zap.Int("shardID", d.shardID),
-						zap.Error(err))
-					return err
-				}
+				indexFilePath := d.filePathGenerator.GenerateIndexFilePath(table, date)
 
 				payload, err := buildPayload(d.spool, tableTask)
 				if err != nil {

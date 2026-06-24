@@ -271,16 +271,6 @@ func (t *SchemaFile) ToTableInfo() (*common.TableInfo, error) {
 	return info, nil
 }
 
-// isTableLevel returns whether this file describes a table.
-func (t *SchemaFile) isTableLevel() (bool, error) {
-	if len(t.Columns) != t.TotalColumns {
-		return false, errors.ErrInternalCheckFailed.GenWithStack(
-			"invalid schema file: columns %d does not match total columns %d",
-			len(t.Columns), t.TotalColumns)
-	}
-	return t.TotalColumns != 0, nil
-}
-
 // Marshal marshals SchemaFile.
 func (t *SchemaFile) Marshal() ([]byte, error) {
 	data, err := json.MarshalIndent(t, marshalPrefix, marshalIndent)
@@ -362,35 +352,11 @@ func (t *SchemaFile) GenerateSchemaFilePath(useTableIDAsPath bool, tableID int64
 	if err != nil {
 		return "", err
 	}
-	if t.Schema == "" {
-		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs("schema cannot be empty")
-	}
-	if t.TableVersion == 0 {
-		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs("table version cannot be zero")
-	}
-	if len(t.Columns) != t.TotalColumns {
-		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs("invalid schema file")
-	}
-	isTableLevel := t.TotalColumns != 0
-	if !isTableLevel && t.Table != "" {
-		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs("invalid schema file")
-	}
-	if useTableIDAsPath && isTableLevel && tableID <= 0 {
-		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs("invalid table id for table-id path")
-	}
-
+	tableLevel := t.TotalColumns != 0
 	table := t.Table
-	if isTableLevel {
-		tablePath, err := generateTablePath(t.Table, tableID, useTableIDAsPath)
-		if err != nil {
-			return "", err
-		}
-		table = tablePath
+	if tableLevel {
+		table = generateTablePath(t.Table, tableID, useTableIDAsPath)
 	}
-	omitSchema := useTableIDAsPath && isTableLevel
-	path, err := generateSchemaFilePath(t.Schema, table, t.TableVersion, checksum, omitSchema)
-	if err != nil {
-		return "", err
-	}
-	return path, nil
+	omitSchema := useTableIDAsPath && tableLevel
+	return generateSchemaFilePath(t.Schema, table, t.TableVersion, checksum, omitSchema), nil
 }

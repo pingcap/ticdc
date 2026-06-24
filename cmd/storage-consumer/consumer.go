@@ -423,7 +423,7 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 
 func (c *consumer) parseDMLFilePath(ctx context.Context, path string) error {
 	var dmlkey cloudstorage.DmlPathKey
-	dispatcherID, err := dmlkey.ParseIndexFilePath(
+	_, err := dmlkey.ParseIndexFilePath(
 		putil.GetOrZero(c.replicationCfg.Sink.DateSeparator),
 		path,
 	)
@@ -446,17 +446,15 @@ func (c *consumer) parseDMLFilePath(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	fileIndex.FileIndexKey = cloudstorage.FileIndexKey{
-		DispatcherID:           dispatcherID,
-		EnableTableAcrossNodes: dispatcherID != "",
-	}
 
 	m, ok := c.tableDMLIdxMap[dmlkey]
 	if !ok {
 		c.tableDMLIdxMap[dmlkey] = fileIndexKeyMap{
 			fileIndex.FileIndexKey: fileIndex.Idx,
 		}
-	} else if fileIndex.Idx >= m[fileIndex.FileIndexKey] {
+		return nil
+	}
+	if fileIndex.Idx >= m[fileIndex.FileIndexKey] {
 		c.tableDMLIdxMap[dmlkey][fileIndex.FileIndexKey] = fileIndex.Idx
 	}
 	return nil

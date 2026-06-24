@@ -97,46 +97,22 @@ func mustParseSchemaFileName(path string) (uint64, uint32) {
 
 func generateSchemaFilePath(
 	schema, table string, tableVersion uint64, checksum uint32, omitSchema bool,
-) (string, error) {
-	if schema == "" || tableVersion == 0 {
-		return "", errors.ErrInternalCheckFailed.GenWithStack(
-			"invalid schema or tableVersion, schema=%q table=%q tableVersion=%d",
-			schema, table, tableVersion,
-		)
-	}
-
-	var dir string
-	if omitSchema {
-		if table == "" {
-			return "", errors.ErrInternalCheckFailed.GenWithStackByArgs(
-				"table cannot be empty when 'use-table-id-as-path' is true",
-			)
-		}
-		// use-table-id-as-path: omit schema, path is <table_id>/meta/
-		dir = fmt.Sprintf(tableIDPrefix, table)
-	} else {
-		if table == "" {
-			// Generate db schema file path.
-			dir = fmt.Sprintf(dbSchemaPrefix, schema)
-		} else {
-			// Generate table-level schema file path.
-			dir = fmt.Sprintf(tableMetaPrefix, schema, table)
-		}
-	}
+) string {
 	name := fmt.Sprintf(schemaFileNameFormat, tableVersion, checksum)
-	return path.Join(dir, name), nil
+	if omitSchema {
+		return path.Join(fmt.Sprintf(tableIDPrefix, table), name)
+	}
+	if table == "" {
+		return path.Join(fmt.Sprintf(dbSchemaPrefix, schema), name)
+	}
+	return path.Join(fmt.Sprintf(tableMetaPrefix, schema, table), name)
 }
 
-func generateTablePath(tableName string, tableID int64, useTableIDAsPath bool) (string, error) {
+func generateTablePath(tableName string, tableID int64, useTableIDAsPath bool) string {
 	if useTableIDAsPath {
-		if tableID <= 0 {
-			return "", errors.ErrInternalCheckFailed.GenWithStackByArgs(
-				"invalid table id for table-id path",
-			)
-		}
-		return fmt.Sprintf("%d", tableID), nil
+		return fmt.Sprintf("%d", tableID)
 	}
-	return tableName, nil
+	return tableName
 }
 
 func generateDataFileName(enableTableAcrossNodes bool, dispatcherID string, index uint64, extension string, fileIndexWidth int) string {
@@ -240,19 +216,6 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	}
 	var schemaFile SchemaFile
 	schemaFile.Build(event, f.config.OutputColumnID)
-	isTableLevel, err := schemaFile.isTableLevel()
-	if err != nil {
-		return false, err
-	}
-	if !isTableLevel {
-		// only check schema for table
-		log.Error("invalid schema file",
-			zap.String("keyspace", keyspace),
-			zap.String("changefeedID", changefeed),
-			zap.Any("versionedTableName", table),
-			zap.Any("tableInfo", tableInfo))
-		return false, errors.ErrInternalCheckFailed.GenWithStackByArgs("invalid schema file in FilePathGenerator")
-	}
 
 	// Case 1: point check if the schema file exists.
 	schemaFilePath, err := schemaFile.GenerateSchemaFilePath(f.config.UseTableIDAsPath, table.TableNameWithPhysicTableID.TableID)
@@ -271,15 +234,10 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	_, checksum := mustParseSchemaFileName(schemaFilePath)
 	schemaFileCount := 0
 	lastVersion := uint64(0)
-	tablePathPart, err := generateTablePath(schemaFile.Table, table.TableNameWithPhysicTableID.TableID, f.config.UseTableIDAsPath)
-	if err != nil {
-		return false, err
-	}
-	var subDir string
+	tablePathPart := generateTablePath(schemaFile.Table, table.TableNameWithPhysicTableID.TableID, f.config.UseTableIDAsPath)
+	subDir := fmt.Sprintf(tableMetaPrefix, schemaFile.Schema, tablePathPart)
 	if f.config.UseTableIDAsPath {
 		subDir = fmt.Sprintf(tableIDPrefix, tablePathPart)
-	} else {
-		subDir = fmt.Sprintf(tableMetaPrefix, schemaFile.Schema, tablePathPart)
 	}
 	checksumSuffix := fmt.Sprintf("%010d.json", checksum)
 	hasNewerSchemaVersion := false
@@ -291,16 +249,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		if !strings.HasSuffix(path, checksumSuffix) {
 			return nil
 		}
-		version, parsedChecksum := mustParseSchemaFileName(path)
-		if parsedChecksum != checksum {
-			log.Error("invalid schema file name",
-				zap.String("keyspace", keyspace),
-				zap.String("changefeedID", changefeed),
-				zap.String("path", path), zap.Any("checksum", checksum))
-			return errors.ErrInternalCheckFailed.GenWithStack(
-				"invalid schema filename in storage sink, expected checksum: %d, actual checksum: %d",
-				checksum, parsedChecksum)
-		}
+		version, _ := mustParseSchemaFileName(path)
 		if version > table.TableInfoVersion {
 			hasNewerSchemaVersion = true
 		}
@@ -374,28 +323,23 @@ func (f *FilePathGenerator) GenerateDateStr() string {
 }
 
 // GenerateIndexFilePath generates a canonical path for index file.
-func (f *FilePathGenerator) GenerateIndexFilePath(tbl VersionedTableName, date string) (string, error) {
-	dir, err := f.generateDataDirPath(tbl, date)
-	if err != nil {
-		return "", err
-	}
+func (f *FilePathGenerator) GenerateIndexFilePath(tbl VersionedTableName, date string) string {
+	dir := f.generateDataDirPath(tbl, date)
 	name := defaultIndexFileName
 	if f.config.EnableTableAcrossNodes {
 		name = fmt.Sprintf(defaultTableAcrossNodesIndexFileName, tbl.DispatcherID.String())
 	}
-	return path.Join(dir, name), nil
+	return path.Join(dir, name)
 }
 
 // GenerateDataFilePath generates a canonical path for data file.
 func (f *FilePathGenerator) GenerateDataFilePath(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (string, error) {
-	dir, err := f.generateDataDirPath(tbl, date)
-	if err != nil {
-		return "", err
-	}
+	dir := f.generateDataDirPath(tbl, date)
 	loadedIndexFile := false
-	if idx, ok := f.fileIndex[tbl]; !ok {
+	idx, ok := f.fileIndex[tbl]
+	if !ok {
 		fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
 		if err != nil {
 			return "", err
@@ -406,7 +350,8 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 			index:    fileIdx,
 		}
 		loadedIndexFile = true
-	} else {
+	}
+	if ok {
 		idx.currDate = date
 	}
 	// if date changed, reset the counter
@@ -452,23 +397,14 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 	}
 }
 
-func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) (string, error) {
-	tableVersion, ok := f.versionMap[tbl]
-	if !ok || tableVersion == 0 {
-		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs(
-			"schema file version is not initialized",
-		)
-	}
-
+func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) string {
+	tableVersion := f.versionMap[tbl]
 	if f.config.UseTableIDAsPath {
-		tableIDPathPart, err := generateTablePath(
+		tableIDPathPart := generateTablePath(
 			tbl.TableNameWithPhysicTableID.Table,
 			tbl.TableNameWithPhysicTableID.TableID,
 			true,
 		)
-		if err != nil {
-			return "", err
-		}
 		return DmlPathKey{
 			SchemaPathKey: SchemaPathKey{
 				Schema:       tableIDPathPart,
@@ -477,17 +413,14 @@ func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date str
 			UseTableIDAsPath: true,
 			TableID:          tbl.TableNameWithPhysicTableID.TableID,
 			Date:             date,
-		}.generateDMLDataDirPath(), nil
+		}.generateDMLDataDirPath()
 	}
 
-	tablePathPart, err := generateTablePath(
+	tablePathPart := generateTablePath(
 		tbl.TableNameWithPhysicTableID.Table,
 		tbl.TableNameWithPhysicTableID.TableID,
 		false,
 	)
-	if err != nil {
-		return "", err
-	}
 	var partitionNum int64
 	if f.config.EnablePartitionSeparator && tbl.TableNameWithPhysicTableID.IsPartition {
 		partitionNum = tbl.TableNameWithPhysicTableID.TableID
@@ -500,16 +433,13 @@ func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date str
 		},
 		PartitionNum: partitionNum,
 		Date:         date,
-	}.generateDMLDataDirPath(), nil
+	}.generateDMLDataDirPath()
 }
 
 func (f *FilePathGenerator) getFileIdxFromIndexFile(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (uint64, error) {
-	indexFile, err := f.GenerateIndexFilePath(tbl, date)
-	if err != nil {
-		return 0, err
-	}
+	indexFile := f.GenerateIndexFilePath(tbl, date)
 	exist, err := f.storage.FileExists(ctx, indexFile)
 	if err != nil {
 		return 0, err

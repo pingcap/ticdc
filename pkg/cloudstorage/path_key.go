@@ -277,10 +277,6 @@ func parseTableIDPathPart(part string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if tableID <= 0 {
-		return 0, errors.ErrStorageSinkInvalidFileName.GenWithStack(
-			"invalid table id path part %s", part)
-	}
 	return tableID, nil
 }
 

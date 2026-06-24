@@ -248,9 +248,8 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	}
 	f.versionMap[table] = table.TableInfoVersion
 	date := f.GenerateDateStr()
-	indexFilePath, err := f.GenerateIndexFilePath(table, date)
-	require.NoError(t, err)
-	err = f.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000005.json\n", dispatcherID.String())))
+	indexFilePath := f.GenerateIndexFilePath(table, date)
+	err := f.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000005.json\n", dispatcherID.String())))
 	require.NoError(t, err)
 
 	dataFilePath, err := f.GenerateDataFilePath(ctx, table, date)
@@ -280,8 +279,7 @@ func TestGenerateDataFilePathResyncIndexFile(t *testing.T) {
 	f2.versionMap[table] = table.TableInfoVersion
 
 	date := ""
-	indexFilePath, err := f1.GenerateIndexFilePath(table, date)
-	require.NoError(t, err)
+	indexFilePath := f1.GenerateIndexFilePath(table, date)
 
 	// Simulate dispatcher moved between captures:
 	// 1) f1 generates CDC_..._000001 and writes index file.
@@ -337,8 +335,7 @@ func TestGenerateDataFilePathReconcilesStaleIndexFile(t *testing.T) {
 	date := ""
 	firstDataFile := fmt.Sprintf("test/table1/5/CDC_%s_000001.json", dispatcherID.String())
 	secondDataFile := fmt.Sprintf("test/table1/5/CDC_%s_000002.json", dispatcherID.String())
-	indexFilePath, err := f.GenerateIndexFilePath(table, date)
-	require.NoError(t, err)
+	indexFilePath := f.GenerateIndexFilePath(table, date)
 	require.NoError(t, f.storage.WriteFile(ctx, firstDataFile, []byte("test1")))
 	require.NoError(t, f.storage.WriteFile(ctx, secondDataFile, []byte("test2")))
 	require.NoError(t, f.storage.WriteFile(ctx, indexFilePath, fmt.Appendf(nil, "CDC_%s_000001.json\n", dispatcherID.String())))
