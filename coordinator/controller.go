@@ -186,6 +186,15 @@ func NewController(
 func (c *Controller) collectMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+<<<<<<< HEAD
+=======
+	defer metrics.ResetOwnerChangefeedMetrics()
+
+	// changefeedDownstreamTypeCache is used to cleanup the previous downstream type
+	// label value when a changefeed's sink-uri is updated.
+	changefeedDownstreamTypeCache := make(map[common.ChangeFeedDisplayName]string)
+	errorMetricLabels := make(map[common.ChangeFeedID]changefeedErrorMetricLabels)
+>>>>>>> 5d5121dfa (coordinator: clean stale owner checkpoint metrics (#5491))
 	for {
 		select {
 		case <-ctx.Done():
@@ -203,19 +212,68 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				name := info.ChangefeedID.Name()
 				metrics.ChangefeedStatusGauge.WithLabelValues(keyspace, name).Set(float64(info.State.ToInt()))
 
-				// don't update checkpoint ts and checkpoint ts lag for stopped changefeed
-				if info.State == config.StateStopped {
+				if !updateChangefeedCheckpointMetrics(
+					keyspace,
+					name,
+					info.State,
+					cf.GetLastSavedCheckPointTs(),
+					c.pdClock.CurrentTime(),
+				) {
 					return
 				}
 
+<<<<<<< HEAD
 				pdPhysicalTime := oracle.GetPhysical(c.pdClock.CurrentTime())
 				phyCkpTs := oracle.ExtractPhysical(cf.GetLastSavedCheckPointTs())
 				lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
 				metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
 				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
+=======
+				// sync changefeed error metrics
+				currentChangefeeds[cf.ID] = struct{}{}
+				oldLabels, exists := errorMetricLabels[cf.ID]
+				newLabels, hasError := getChangefeedErrorMetricLabels(cf.GetInfo())
+				// If the error state has not changed, do nothing.
+				if exists && hasError && oldLabels == newLabels {
+					return
+				}
+				// If there was an old metric, delete it, as the state has changed.
+				if exists {
+					metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
+				}
+				if hasError {
+					// An error exists (either new or changed). Set the new metric and update cache.
+					metrics.ChangefeedErrorInfoGauge.WithLabelValues(newLabels.labelValues()...).Set(1)
+					errorMetricLabels[cf.ID] = newLabels
+				} else {
+					// The error has disappeared, remove from cache.
+					delete(errorMetricLabels, cf.ID)
+				}
+>>>>>>> 5d5121dfa (coordinator: clean stale owner checkpoint metrics (#5491))
 			})
 		}
 	}
+}
+
+func updateChangefeedCheckpointMetrics(
+	keyspace string,
+	name string,
+	state config.FeedState,
+	checkpointTs uint64,
+	pdTime time.Time,
+) bool {
+	switch state {
+	case config.StateStopped, config.StateFinished, config.StateRemoved:
+		metrics.DeleteChangefeedCheckpointMetrics(keyspace, name)
+		return false
+	}
+
+	pdPhysicalTime := oracle.GetPhysical(pdTime)
+	phyCkpTs := oracle.ExtractPhysical(checkpointTs)
+	lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
+	metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
+	metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
+	return true
 }
 
 // HandleEvent implements the event-driven process mode
