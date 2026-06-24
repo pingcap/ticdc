@@ -93,8 +93,7 @@ func TestClearPendingRegionsReleaseSlotForPreFetchedRegion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, worker.requestCache.getPendingCount())
 
-	worker.preFetchForConnecting = new(regionInfo)
-	*worker.preFetchForConnecting = req.regionInfo
+	worker.preFetchForConnecting = req
 
 	regions := worker.clearPendingRegions()
 	require.Len(t, regions, 1)
@@ -285,16 +284,15 @@ func TestClearPendingRegionsDoesNotReturnStoppedSentRegion(t *testing.T) {
 	req, err := worker.requestCache.pop(ctx)
 	require.NoError(t, err)
 
-	state := newRegionFeedState(req.regionInfo, uint64(req.regionInfo.subscribedSpan.subID), worker)
+	state := newRegionFeedState(req.regionInfo, uint64(req.regionInfo.subscribedSpan.subID), worker, req)
 	state.start()
 	worker.addRegionState(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID(), state)
 
-	// Simulate the race we are fixing in processRegionSendTask:
-	// once a request is visible in sentRequests, a fast region error may mark the
-	// region stopped before worker cleanup runs. In that case, markStopped should
-	// remove the sent request immediately, so clearPendingRegions must not return
-	// the stale region again during worker shutdown.
-	worker.requestCache.markSent(req)
+	// Simulate the race we are fixing in processRegionSendTask: once a request is
+	// visible as sent, a fast region error may mark the region stopped before
+	// worker cleanup runs. In that case, markStopped should finish the request
+	// immediately, so clearPendingRegions must not return the stale region again.
+	req.markSent()
 	state.markStopped(errors.New("send request to store error"))
 	worker.takeRegionState(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
 
@@ -320,8 +318,7 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 
 	req, err := worker.requestCache.pop(ctx)
 	require.NoError(t, err)
-	worker.preFetchForConnecting = new(regionInfo)
-	*worker.preFetchForConnecting = req.regionInfo
+	worker.preFetchForConnecting = req
 
 	sendErr := errors.New("send failed")
 	conn := &ConnAndClient{
@@ -332,7 +329,6 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	err = worker.processRegionSendTask(ctx, conn)
 	require.ErrorIs(t, err, sendErr)
 	require.Equal(t, 0, worker.requestCache.getPendingCount())
-	require.Empty(t, worker.requestCache.sentRequests.regionReqs)
 	state := worker.getRegionState(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
 	require.True(t, state == nil || state.isStale(), "region state should be removed or marked stale after send failure")
 }
@@ -370,8 +366,7 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 
 			req, err := worker.requestCache.pop(ctx)
 			require.NoError(t, err)
-			worker.preFetchForConnecting = new(regionInfo)
-			*worker.preFetchForConnecting = req.regionInfo
+			worker.preFetchForConnecting = req
 
 			conn := &ConnAndClient{
 				Client: &mockEventFeedV2Client{sendErr: tc.sendErr},
@@ -382,7 +377,6 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 			var streamErr *storeStreamErr
 			require.ErrorAs(t, err, &streamErr)
 			require.Equal(t, 0, worker.requestCache.getPendingCount())
-			require.Empty(t, worker.requestCache.sentRequests.regionReqs)
 
 			state := worker.getRegionState(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
 			require.NotNil(t, state)

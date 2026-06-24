@@ -20,322 +20,396 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
 const (
-	checkStaleRequestInterval    = time.Second * 10
-	requestGCLifeTime            = time.Minute * 180
 	addReqRetryInterval          = time.Millisecond * 1
 	addReqRetryLimit             = 3
 	abnormalRequestDurationInSec = 60 * 60 * 2 // 2 hours
 )
 
-// regionReq represents a wrapped region request with state
+type regionReqStage uint8
+
+const (
+	regionReqStageQueued regionReqStage = iota
+	regionReqStageProcessing
+	regionReqStageSent
+	regionReqStageFinished
+)
+
+type regionReqKey struct {
+	subID    SubscriptionID
+	regionID uint64
+}
+
+func newRegionReqKey(region regionInfo) regionReqKey {
+	return regionReqKey{
+		subID:    region.subscribedSpan.subID,
+		regionID: region.verID.GetID(),
+	}
+}
+
+// regionReq tracks one data request from admission to completion.
 type regionReq struct {
 	regionInfo regionInfo
 	createTime time.Time
+
+	cache *requestCache
+	key   regionReqKey
+	stage regionReqStage
+
+	replacesActive bool
 }
 
-func newRegionReq(region regionInfo) regionReq {
-	return regionReq{
+func newRegionReq(cache *requestCache, region regionInfo) *regionReq {
+	return &regionReq{
 		regionInfo: region,
 		createTime: time.Now(),
+		cache:      cache,
+		key:        newRegionReqKey(region),
+		stage:      regionReqStageQueued,
 	}
 }
 
-func (r *regionReq) isStale() bool {
-	return time.Since(r.createTime) > requestGCLifeTime
+func (r *regionReq) markSent() {
+	if r == nil || r.cache == nil {
+		return
+	}
+	r.cache.markSent(r)
 }
 
-// requestCache manages region requests with flow control
+func (r *regionReq) resolve() bool {
+	if r == nil || r.cache == nil {
+		return false
+	}
+	return r.cache.resolve(r)
+}
+
+func (r *regionReq) finish() bool {
+	if r == nil || r.cache == nil {
+		return false
+	}
+	return r.cache.finish(r)
+}
+
+// requestCache manages worker-local data requests with flow control.
+//
+// requests is the source of truth for live requests. A request is inserted by
+// add(), moves through queued/processing/sent, and is removed by resolve(),
+// finish(), takeUnsentRegions(), or clear().
 type requestCache struct {
-	// pending requests waiting to be sent
-	pendingQueue chan regionReq
+	mu sync.Mutex
 
-	// sent requests waiting for initialization (subscriptionID -> regions -> regionReq)
-	sentRequests struct {
-		sync.RWMutex
-		regionReqs map[SubscriptionID]map[uint64]regionReq
-	}
+	requests map[*regionReq]struct{}
+	current  map[regionReqKey]*regionReq
 
-	// pendingCount is a flow control slot counter.
-	// A slot is acquired when a request is successfully enqueued into pendingQueue (see add),
-	// and is released when the request is finished/removed (resolve/markStopped/markDone/clear).
-	// pop and markSent don't change it. If markSent overwrites an existing request for the same region,
-	// it will release a slot for the replaced request to avoid leaking pendingCount.
-	pendingCount atomic.Int64
-	// maximum number of pending requests allowed
-	maxPendingCount int64
+	ready    []*regionReq
+	readyIdx int
 
-	// channel to signal when space becomes available
-	spaceAvailable chan struct{}
+	maxPendingCount int
 
-	lastCheckStaleRequestTime atomic.Time
+	readyAvailable   chan struct{}
+	spaceAvailable   chan struct{}
+	onSpaceAvailable func()
 }
 
-func newRequestCache(maxPendingCount int) *requestCache {
+func newRequestCache(maxPendingCount int, onSpaceAvailable ...func()) *requestCache {
 	res := &requestCache{
-		pendingQueue: make(chan regionReq, maxPendingCount), // Large buffer to reduce blocking
-		sentRequests: struct {
-			sync.RWMutex
-			regionReqs map[SubscriptionID]map[uint64]regionReq
-		}{regionReqs: make(map[SubscriptionID]map[uint64]regionReq)},
-		pendingCount:    atomic.Int64{},
-		maxPendingCount: int64(maxPendingCount),
-		spaceAvailable:  make(chan struct{}, 16), // Buffered to avoid blocking
+		requests:         make(map[*regionReq]struct{}),
+		current:          make(map[regionReqKey]*regionReq),
+		ready:            make([]*regionReq, 0, maxPendingCount),
+		maxPendingCount:  maxPendingCount,
+		readyAvailable:   make(chan struct{}, 1),
+		spaceAvailable:   make(chan struct{}, 1),
+		onSpaceAvailable: nil,
+	}
+	if len(onSpaceAvailable) > 0 {
+		res.onSpaceAvailable = onSpaceAvailable[0]
 	}
 
-	res.lastCheckStaleRequestTime.Store(time.Now())
 	return res
 }
 
-// add adds a new region request to the cache
-// It blocks if pendingCount >= maxPendingCount until there's space or ctx is cancelled
+// add admits a data request into the worker window.
 func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (bool, error) {
 	start := time.Now()
 	ticker := time.NewTicker(addReqRetryInterval)
 	defer ticker.Stop()
-	addReqRetryLimit := addReqRetryLimit
+	retries := addReqRetryLimit
 
 	for {
-		current := c.pendingCount.Load()
-		if current < c.maxPendingCount || force {
-			// Try to add the request
-			req := newRegionReq(region)
-			select {
-			case <-ctx.Done():
-				return false, ctx.Err()
-			case c.pendingQueue <- req:
-				c.pendingCount.Inc()
-				cost := time.Since(start)
-				metrics.SubscriptionClientAddRegionRequestDuration.Observe(cost.Seconds())
-				return true, nil
-			case <-ticker.C:
-				addReqRetryLimit--
-				if addReqRetryLimit <= 0 {
-					return false, nil
-				}
-				continue
-			}
+		if c.tryAdd(region, force) {
+			metrics.SubscriptionClientAddRegionRequestDuration.Observe(time.Since(start).Seconds())
+			return true, nil
 		}
 
-		// Wait for space to become available
 		select {
 		case <-ticker.C:
-			addReqRetryLimit--
-			if addReqRetryLimit <= 0 {
+			retries--
+			if retries <= 0 {
 				return false, nil
 			}
-			continue
 		case <-c.spaceAvailable:
-			continue
 		case <-ctx.Done():
 			return false, ctx.Err()
 		}
 	}
 }
 
-// pop gets the next pending request.
-// Note: it doesn't change pendingCount. The slot acquired in add() should be released later
-// (e.g. resolve/markStopped/markDone).
-func (c *requestCache) pop(ctx context.Context) (regionReq, error) {
-	select {
-	case req := <-c.pendingQueue:
-		return req, nil
-	case <-ctx.Done():
-		return regionReq{}, ctx.Err()
-	}
-}
+func (c *requestCache) tryAdd(region regionInfo, force bool) bool {
+	req := newRegionReq(c, region)
+	notifyReady := false
 
-// markSent marks a request as sent and adds it to sent requests.
-// It doesn't change pendingCount: the slot is released when the request is finished/removed.
-func (c *requestCache) markSent(req regionReq) {
-	c.sentRequests.Lock()
-	defer c.sentRequests.Unlock()
-
-	m, ok := c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID]
-
-	if !ok {
-		m = make(map[uint64]regionReq)
-		c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID] = m
-	}
-
-	if oldReq, exists := m[req.regionInfo.verID.GetID()]; exists {
-		log.Warn("region request overwritten",
-			zap.Uint64("subID", uint64(req.regionInfo.subscribedSpan.subID)),
-			zap.Uint64("regionID", req.regionInfo.verID.GetID()),
-			zap.Float64("oldAgeSec", time.Since(oldReq.createTime).Seconds()),
-			zap.Float64("newAgeSec", time.Since(req.createTime).Seconds()),
-			zap.Int("pendingCount", int(c.pendingCount.Load())),
-			zap.Int("pendingQueueLen", len(c.pendingQueue)))
-		c.markDone()
-	}
-	m[req.regionInfo.verID.GetID()] = req
-}
-
-// markStopped removes a sent request and releases a slot.
-func (c *requestCache) markStopped(subID SubscriptionID, regionID uint64) {
-	c.sentRequests.Lock()
-	defer c.sentRequests.Unlock()
-
-	regionReqs, ok := c.sentRequests.regionReqs[subID]
-	if !ok {
-		return
-	}
-
-	_, exists := regionReqs[regionID]
-	if !exists {
-		return
-	}
-
-	delete(regionReqs, regionID)
-	if len(regionReqs) == 0 {
-		delete(c.sentRequests.regionReqs, subID)
-	}
-	c.markDone()
-}
-
-// resolve marks a region as initialized and removes it from sent requests
-func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) bool {
-	c.sentRequests.Lock()
-	defer c.sentRequests.Unlock()
-	regionReqs, ok := c.sentRequests.regionReqs[subscriptionID]
-	if !ok {
-		return false
-	}
-
-	req, exists := regionReqs[regionID]
-	if !exists {
-		return false
-	}
-
-	// Check if the subscription ID matches
-	if req.regionInfo.subscribedSpan.subID == subscriptionID {
-		delete(regionReqs, regionID)
-		c.markDone()
-		cost := time.Since(req.createTime).Seconds()
-		if cost > 0 && cost < abnormalRequestDurationInSec {
-			log.Debug("cdc resolve region request", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID), zap.Float64("cost", cost), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
-			metrics.RegionRequestFinishScanDuration.Observe(cost)
-		} else {
-			log.Info("region request duration abnormal, skip metric", zap.Float64("cost", cost), zap.Uint64("regionID", regionID))
+	c.mu.Lock()
+	defer func() {
+		c.mu.Unlock()
+		if notifyReady {
+			c.notifyReady()
 		}
-		return true
+	}()
+
+	if existing, ok := c.current[req.key]; ok {
+		if existing.stage == regionReqStageQueued {
+			existing.regionInfo = region
+			return true
+		}
+		req.replacesActive = true
+		log.Warn("duplicate active region request detected, keep newest request",
+			zap.Uint64("subID", uint64(existing.key.subID)),
+			zap.Uint64("regionID", existing.key.regionID),
+			zap.Uint8("stage", uint8(existing.stage)),
+			zap.Int("pendingCount", len(c.requests)))
+	}
+	if len(c.requests) >= c.maxPendingCount && !force {
+		return false
 	}
 
-	return false
+	c.requests[req] = struct{}{}
+	c.current[req.key] = req
+	c.ready = append(c.ready, req)
+	notifyReady = true
+	return true
 }
 
-// clearStaleRequest clears stale requests from the cache
-// Note: Sometimes, the CDC sends the same region request to TiKV multiple times. In such cases, this method is needed to reduce the pendingSize.
-func (c *requestCache) clearStaleRequest() {
-	if time.Since(c.lastCheckStaleRequestTime.Load()) < checkStaleRequestInterval {
-		return
+func (c *requestCache) canAdd(force bool) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return force || len(c.requests) < c.maxPendingCount
+}
+
+// pop takes the next queued request and moves it into processing state.
+func (c *requestCache) pop(ctx context.Context) (*regionReq, error) {
+	for {
+		if req := c.tryPop(); req != nil {
+			return req, nil
+		}
+
+		select {
+		case <-c.readyAvailable:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	c.sentRequests.Lock()
-	defer c.sentRequests.Unlock()
-	reqCount := 0
-	for subID, regionReqs := range c.sentRequests.regionReqs {
-		for regionID, regionReq := range regionReqs {
-			if regionReq.regionInfo.isStopped() ||
-				regionReq.regionInfo.subscribedSpan.stopped.Load() ||
-				regionReq.regionInfo.lockedRangeState.Initialized.Load() ||
-				regionReq.isStale() {
-				c.markDone()
-				log.Warn("region worker delete stale region request",
-					zap.Uint64("subID", uint64(subID)),
-					zap.Uint64("regionID", regionID),
-					zap.Int("pendingCount", int(c.pendingCount.Load())),
-					zap.Int("pendingQueueLen", len(c.pendingQueue)),
-					zap.Bool("isRegionStopped", regionReq.regionInfo.isStopped()),
-					zap.Bool("isSubscribedSpanStopped", regionReq.regionInfo.subscribedSpan.stopped.Load()),
-					zap.Bool("isStale", regionReq.isStale()),
-					zap.Time("createTime", regionReq.createTime))
-				delete(regionReqs, regionID)
-			} else {
-				reqCount++
+}
+
+func (c *requestCache) tryPop() *regionReq {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for c.readyIdx < len(c.ready) {
+		req := c.ready[c.readyIdx]
+		c.ready[c.readyIdx] = nil
+		c.readyIdx++
+
+		if req == nil {
+			continue
+		}
+		if _, ok := c.requests[req]; !ok || req.stage != regionReqStageQueued {
+			continue
+		}
+
+		req.stage = regionReqStageProcessing
+		c.compactReadyLocked()
+		return req
+	}
+
+	c.compactReadyLocked()
+	return nil
+}
+
+func (c *requestCache) markSent(req *regionReq) {
+	removed := false
+	c.mu.Lock()
+	if _, ok := c.requests[req]; ok && req.stage == regionReqStageProcessing {
+		if req.replacesActive {
+			if old := c.findSentLocked(req.key, req); old != nil {
+				removed = c.removeLocked(old) || removed
 			}
 		}
-		if len(regionReqs) == 0 {
-			delete(c.sentRequests.regionReqs, subID)
-		}
+		req.stage = regionReqStageSent
 	}
+	c.mu.Unlock()
 
-	// If there are no in-cache region requests but pendingCount isn't 0, it means pendingCount is stale.
-	// Reset it to avoid blocking add() forever.
-	if reqCount == 0 && len(c.pendingQueue) == 0 && c.pendingCount.Load() != 0 {
-		log.Info("region worker pending request count is not equal to actual region request count, correct it",
-			zap.Int("pendingCount", int(c.pendingCount.Load())),
-			zap.Int("actualReqCount", reqCount),
-			zap.Int("pendingQueueLen", len(c.pendingQueue)))
-		c.pendingCount.Store(0)
-		// Notify waiting add operations that there's space available.
-		select {
-		case c.spaceAvailable <- struct{}{}:
-		default:
-		}
+	if removed {
+		c.notifySpace()
 	}
-
-	c.lastCheckStaleRequestTime.Store(time.Now())
 }
 
-// clear removes all requests and returns them
-func (c *requestCache) clear() []regionInfo {
-	var regions []regionInfo
-
-	// Drain pending requests from channel
-LOOP:
-	for {
-		select {
-		case req := <-c.pendingQueue:
-			regions = append(regions, req.regionInfo)
-			c.markDone()
-		default:
-			break LOOP
-		}
+func (c *requestCache) resolve(req *regionReq) bool {
+	if !c.remove(req) {
+		return false
 	}
 
-	c.sentRequests.Lock()
-	defer c.sentRequests.Unlock()
+	cost := time.Since(req.createTime).Seconds()
+	if cost > 0 && cost < abnormalRequestDurationInSec {
+		log.Debug("cdc resolve region request",
+			zap.Uint64("subID", uint64(req.key.subID)),
+			zap.Uint64("regionID", req.key.regionID),
+			zap.Float64("cost", cost),
+			zap.Int("pendingCount", c.getPendingCount()))
+		metrics.RegionRequestFinishScanDuration.Observe(cost)
+		return true
+	}
+	log.Info("region request duration abnormal, skip metric",
+		zap.Float64("cost", cost),
+		zap.Uint64("regionID", req.key.regionID))
+	return true
+}
 
-	for subID, regionReqs := range c.sentRequests.regionReqs {
-		for regionID := range regionReqs {
-			regions = append(regions, regionReqs[regionID].regionInfo)
-			delete(regionReqs, regionID)
-			c.markDone()
+func (c *requestCache) finish(req *regionReq) bool {
+	return c.remove(req)
+}
+
+func (c *requestCache) remove(req *regionReq) bool {
+	if req == nil {
+		return false
+	}
+
+	c.mu.Lock()
+	removed := c.removeLocked(req)
+	c.mu.Unlock()
+
+	if removed {
+		c.notifySpace()
+	}
+	return removed
+}
+
+func (c *requestCache) takeUnsentRegions() []regionInfo {
+	c.mu.Lock()
+	regions := make([]regionInfo, 0, len(c.requests))
+	removed := 0
+	for req := range c.requests {
+		if req.stage == regionReqStageSent {
+			continue
 		}
-		delete(c.sentRequests.regionReqs, subID)
+		regions = append(regions, req.regionInfo)
+		if c.removeLocked(req) {
+			removed++
+		}
+	}
+	if removed > 0 {
+		c.compactReadyLocked()
+	}
+	c.mu.Unlock()
+
+	if removed > 0 {
+		c.notifySpace()
 	}
 	return regions
 }
 
-// getPendingCount returns the current pending count
-func (c *requestCache) getPendingCount() int {
-	return int(c.pendingCount.Load())
+// clear removes all live requests and returns their regions.
+func (c *requestCache) clear() []regionInfo {
+	c.mu.Lock()
+	regions := make([]regionInfo, 0, len(c.requests))
+	for req := range c.requests {
+		regions = append(regions, req.regionInfo)
+		delete(c.requests, req)
+		req.stage = regionReqStageFinished
+	}
+	removed := len(regions)
+	c.current = make(map[regionReqKey]*regionReq)
+	c.ready = c.ready[:0]
+	c.readyIdx = 0
+	c.mu.Unlock()
+
+	if removed > 0 {
+		c.notifySpace()
+	}
+	return regions
 }
 
-func (c *requestCache) markDone() {
-	// Decrement pendingCount by 1, but never let it go below 0.
-	// Do it with CAS to avoid clobbering concurrent Inc() calls.
-	for {
-		old := c.pendingCount.Load()
-		if old == 0 {
-			break
-		} else if old < 0 {
-			if c.pendingCount.CompareAndSwap(old, 0) {
-				break
-			}
-		} else {
-			if c.pendingCount.CompareAndSwap(old, old-1) {
-				break
-			}
+// getPendingCount returns the number of queued, processing and sent requests.
+func (c *requestCache) getPendingCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.requests)
+}
+
+func (c *requestCache) removeLocked(req *regionReq) bool {
+	if req == nil {
+		return false
+	}
+	if _, ok := c.requests[req]; !ok {
+		return false
+	}
+
+	stage := req.stage
+	delete(c.requests, req)
+	req.stage = regionReqStageFinished
+	if c.current[req.key] == req {
+		delete(c.current, req.key)
+	}
+	if stage != regionReqStageSent {
+		c.compactReadyLocked()
+	}
+	return true
+}
+
+func (c *requestCache) findSentLocked(key regionReqKey, except *regionReq) *regionReq {
+	for req := range c.requests {
+		if req == except {
+			continue
+		}
+		if req.key == key && req.stage == regionReqStageSent {
+			return req
 		}
 	}
-	// Notify waiting add operations that there's space available.
+	return nil
+}
+
+func (c *requestCache) notifyReady() {
+	select {
+	case c.readyAvailable <- struct{}{}:
+	default:
+	}
+}
+
+func (c *requestCache) notifySpace() {
 	select {
 	case c.spaceAvailable <- struct{}{}:
-	default: // If channel is full, skip notification
+	default:
 	}
+	if c.onSpaceAvailable != nil {
+		c.onSpaceAvailable()
+	}
+}
+
+func (c *requestCache) compactReadyLocked() {
+	if c.readyIdx == 0 {
+		return
+	}
+	if c.readyIdx < len(c.ready) && c.readyIdx < 1024 {
+		return
+	}
+
+	n := copy(c.ready, c.ready[c.readyIdx:])
+	for i := n; i < len(c.ready); i++ {
+		c.ready[i] = nil
+	}
+	c.ready = c.ready[:n]
+	c.readyIdx = 0
 }

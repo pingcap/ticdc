@@ -103,15 +103,25 @@ type regionFeedState struct {
 		err error
 	}
 
-	worker *regionRequestWorker
+	worker  *regionRequestWorker
+	request *regionReq
 }
 
-func newRegionFeedState(region regionInfo, requestID uint64, worker *regionRequestWorker) *regionFeedState {
-	return &regionFeedState{
+func newRegionFeedState(
+	region regionInfo,
+	requestID uint64,
+	worker *regionRequestWorker,
+	request ...*regionReq,
+) *regionFeedState {
+	state := &regionFeedState{
 		region:    region,
 		requestID: requestID,
 		worker:    worker,
 	}
+	if len(request) > 0 {
+		state.request = request[0]
+	}
+	return state
 }
 
 func (s *regionFeedState) start() {
@@ -126,7 +136,9 @@ func (s *regionFeedState) markStopped(err error) {
 		s.state.v = stateStopped
 		s.state.err = err
 	}
-	s.worker.requestCache.markStopped(s.region.subscribedSpan.subID, s.region.verID.GetID())
+	if s.request != nil {
+		s.request.finish()
+	}
 }
 
 // mark regionFeedState as removed if possible.
@@ -138,7 +150,9 @@ func (s *regionFeedState) markRemoved() (changed bool) {
 		changed = true
 		s.matcher.clear()
 	}
-	s.worker.requestCache.markStopped(s.region.subscribedSpan.subID, s.region.verID.GetID())
+	if s.request != nil {
+		s.request.finish()
+	}
 	return
 }
 
@@ -162,7 +176,9 @@ func (s *regionFeedState) isInitialized() bool {
 
 func (s *regionFeedState) setInitialized() {
 	s.region.lockedRangeState.Initialized.Store(true)
-	s.worker.requestCache.resolve(s.region.subscribedSpan.subID, s.region.verID.GetID())
+	if s.request != nil {
+		s.request.resolve()
+	}
 }
 
 func (s *regionFeedState) getRegionID() uint64 {

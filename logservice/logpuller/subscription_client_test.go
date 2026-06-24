@@ -279,7 +279,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh: make(chan resolveLockTask, 1),
-		regionTaskQueue:   priorityqueue.New[PriorityTask](),
+		regionTaskQueue:   priorityqueue.New[*regionPriorityTask](),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
@@ -297,15 +297,17 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	res := span.rangeLock.LockRange(context.Background(), rawSpan.StartKey, rawSpan.EndKey, 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
 
+	worker := &regionRequestWorker{controlQueue: newControlQueue()}
+	store := &requestedStore{storeAddr: "store-1"}
+	store.requestWorkers.s = []*regionRequestWorker{worker}
+	client.stores.Store(store.storeAddr, store)
+
 	client.setTableStopped(span)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	task, err := client.regionTaskQueue.Pop(ctx)
-	require.NoError(t, err)
-	region := task.GetRegionInfo()
-	require.True(t, region.isStopped())
-	require.True(t, region.filterLoop)
+	req, ok := worker.controlQueue.tryPop()
+	require.True(t, ok)
+	require.Equal(t, SubscriptionID(1), req.subID)
+	require.True(t, req.filterLoop)
 }
 
 func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
@@ -385,7 +387,7 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 	client := &subscriptionClient{
 		ds:              &mockDynamicStream{},
-		regionTaskQueue: priorityqueue.New[PriorityTask](),
+		regionTaskQueue: priorityqueue.New[*regionPriorityTask](),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	client.cond = sync.NewCond(&client.mu)
@@ -413,12 +415,13 @@ func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 	}
 }
 
-func TestEnqueueRegionToAllStoresRetryWhenCacheFull(t *testing.T) {
+func TestEnqueueDeregisterToAllStoresUsesControlQueue(t *testing.T) {
 	ctx := context.Background()
 	client := &subscriptionClient{}
 
 	worker := &regionRequestWorker{
 		requestCache: newRequestCache(1),
+		controlQueue: newControlQueue(),
 	}
 	store := &requestedStore{storeAddr: "store-1"}
 	store.requestWorkers.s = []*regionRequestWorker{worker}
@@ -432,20 +435,44 @@ func TestEnqueueRegionToAllStoresRetryWhenCacheFull(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	stopRegion := regionInfo{
-		subscribedSpan: &subscribedSpan{subID: SubscriptionID(1)},
-	}
-	enqueued, err := client.enqueueRegionToAllStores(ctx, stopRegion)
-	require.NoError(t, err)
-	require.False(t, enqueued)
+	client.enqueueDeregisterToAllStores(SubscriptionID(1), true)
+	require.Equal(t, 1, worker.controlQueue.ch.Len())
+	req, ok := worker.controlQueue.tryPop()
+	require.True(t, ok)
+	require.Equal(t, SubscriptionID(1), req.subID)
+	require.True(t, req.filterLoop)
+	require.Equal(t, 1, worker.requestCache.getPendingCount())
+}
 
-	<-worker.requestCache.pendingQueue
-	worker.requestCache.markDone()
+func TestRequestedStoreDeferredTasksBlockSameStore(t *testing.T) {
+	queue := priorityqueue.New[*regionPriorityTask]()
+	store := &requestedStore{storeAddr: "store-1"}
+	currentTs := oracle.GoTimeToTS(time.Now())
+	span := &subscribedSpan{subID: SubscriptionID(1)}
+	span.resolvedTs.Store(currentTs)
+	region := regionInfo{subscribedSpan: span}
 
-	enqueued, err = client.enqueueRegionToAllStores(ctx, stopRegion)
+	firstTask := newRegionPriorityTask(TaskHighPrior, region, currentTs, 1)
+	secondTask := newRegionPriorityTask(TaskHighPrior, region, currentTs, 2)
+
+	store.deferTask(firstTask)
+	require.False(t, store.canAdmitTask(secondTask))
+
+	store.promoteDeferredTask(queue)
+	promoted, err := queue.Pop(t.Context())
 	require.NoError(t, err)
-	require.True(t, enqueued)
-	require.Equal(t, 1, len(worker.requestCache.pendingQueue))
+	require.Same(t, firstTask, promoted)
+	require.True(t, store.canAdmitTask(firstTask))
+	require.False(t, store.canAdmitTask(secondTask))
+
+	store.deferTask(firstTask)
+	store.promoteDeferredTask(queue)
+	promoted, err = queue.Pop(t.Context())
+	require.NoError(t, err)
+	require.Same(t, firstTask, promoted)
+
+	store.finishPromotedTask(firstTask)
+	require.True(t, store.canAdmitTask(secondTask))
 }
 
 func TestSubscriptionWithFailedTiKV(t *testing.T) {

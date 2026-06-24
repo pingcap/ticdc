@@ -35,35 +35,30 @@ func TestPriorityCalculationLogic(t *testing.T) {
 		name                    string
 		taskType                TaskType
 		resolvedTsOffsetSeconds int64 // Offset relative to currentTs (negative means resolvedTs is older)
-		waitTimeSeconds         int   // Task wait time
 		description             string
 	}{
 		{
 			name:                    "high_priority_new_resolvedTs",
 			taskType:                TaskHighPrior,
 			resolvedTsOffsetSeconds: -5, // resolvedTs is 5 seconds earlier than currentTs
-			waitTimeSeconds:         10, // Waited for 10 seconds
 			description:             "High priority task with newer resolvedTs",
 		},
 		{
 			name:                    "high_priority_old_resolvedTs",
 			taskType:                TaskHighPrior,
 			resolvedTsOffsetSeconds: -30, // resolvedTs is 30 seconds earlier than currentTs
-			waitTimeSeconds:         10,  // Waited for 10 seconds
 			description:             "High priority task with older resolvedTs",
 		},
 		{
 			name:                    "low_priority_new_resolvedTs",
 			taskType:                TaskLowPrior,
 			resolvedTsOffsetSeconds: -5, // resolvedTs is 5 seconds earlier than currentTs
-			waitTimeSeconds:         10, // Waited for 10 seconds
 			description:             "Low priority task with newer resolvedTs",
 		},
 		{
 			name:                    "low_priority_old_resolvedTs",
 			taskType:                TaskLowPrior,
 			resolvedTsOffsetSeconds: -30, // resolvedTs is 30 seconds earlier than currentTs
-			waitTimeSeconds:         10,  // Waited for 10 seconds
 			description:             "Low priority task with older resolvedTs",
 		},
 	}
@@ -77,8 +72,7 @@ func TestPriorityCalculationLogic(t *testing.T) {
 			resolvedTime := oracle.GetTimeFromTS(currentTs).Add(time.Duration(tt.resolvedTsOffsetSeconds) * time.Second)
 			resolvedTs := oracle.GoTimeToTS(resolvedTime)
 
-			// Simulate priority calculation logic
-			priority := calculatePriorityDirectly(tt.taskType, currentTs, resolvedTs, tt.waitTimeSeconds)
+			priority := calculatePriorityDirectly(tt.taskType, currentTs, resolvedTs)
 
 			t.Logf("%s: Priority = %d", tt.description, priority)
 			priorities = append(priorities, priority)
@@ -114,27 +108,20 @@ func TestPriorityCalculationLogic(t *testing.T) {
 	})
 }
 
-// calculatePriorityDirectly directly calculates priority for testing
-// Copies the logic from regionPriorityTask.Priority()
-func calculatePriorityDirectly(taskType TaskType, currentTs, resolvedTs uint64, waitTimeSeconds int) int {
-	// Base priority based on task type
+// calculatePriorityDirectly directly calculates priority for testing.
+func calculatePriorityDirectly(taskType TaskType, currentTs, resolvedTs uint64) int {
 	basePriority := 0
 	switch taskType {
 	case TaskHighPrior:
-		basePriority = highPriorityBase // 1200
+		basePriority = highPriorityBase
 	case TaskLowPrior:
-		basePriority = lowPriorityBase // 3600
+		basePriority = lowPriorityBase
 	}
 
-	// Add time-based priority bonus
-	// Wait time in seconds, longer wait time means higher priority (lower value)
-	timeBonus := waitTimeSeconds
-
-	// Calculate resolvedTs lag
 	resolvedTsLag := oracle.GetTimeFromTS(currentTs).Sub(oracle.GetTimeFromTS(resolvedTs))
 	resolvedTsLagBonus := int(resolvedTsLag.Seconds())
 
-	priority := basePriority - timeBonus + resolvedTsLagBonus
+	priority := basePriority + resolvedTsLagBonus
 
 	if priority < 0 {
 		priority = 0
@@ -161,8 +148,8 @@ func TestResolvedTsLagLogic(t *testing.T) {
 		require.Less(t, lag2, lag1, "newer resolvedTs should have smaller lag")
 
 		// Calculate the impact on priority
-		priority1 := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs1, 5)
-		priority2 := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs2, 5)
+		priority1 := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs1)
+		priority2 := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs2)
 
 		t.Logf("Priority with resolvedTs 10 seconds old: %d", priority1)
 		t.Logf("Priority with resolvedTs 1 second old: %d", priority2)
@@ -183,28 +170,28 @@ func TestEdgeCases(t *testing.T) {
 		lag := oracle.GetTimeFromTS(currentTs).Sub(oracle.GetTimeFromTS(resolvedTs))
 		t.Logf("resolvedTs in the future 5 seconds, lag = %v (%.0f seconds)", lag, lag.Seconds())
 
-		priority := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs, 5)
+		priority := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs)
 		t.Logf("resolvedTs in the future priority: %d", priority)
 
 		require.GreaterOrEqual(t, priority, 0, "priority should not be less than 0")
 	})
 
-	t.Run("different wait time impact", func(t *testing.T) {
+	t.Run("priority is stable after task creation", func(t *testing.T) {
 		resolvedTs := oracle.GoTimeToTS(currentTime.Add(-10 * time.Second))
+		subscribedSpan := &subscribedSpan{}
+		subscribedSpan.resolvedTs.Store(resolvedTs)
+		regionInfo := regionInfo{subscribedSpan: subscribedSpan}
 
-		priority1 := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs, 2)
-		priority2 := calculatePriorityDirectly(TaskHighPrior, currentTs, resolvedTs, 10)
+		task := newRegionPriorityTask(TaskHighPrior, regionInfo, currentTs, 1)
+		priority := task.Priority()
+		subscribedSpan.resolvedTs.Store(currentTs)
 
-		t.Logf("wait 2 seconds priority: %d", priority1)
-		t.Logf("wait 10 seconds priority: %d", priority2)
-
-		// wait time longer task priority should be higher
-		require.Less(t, priority2, priority1, "wait time longer task priority should be higher")
+		require.Equal(t, priority, task.Priority())
 	})
 }
 
 func TestRegionPriorityTaskQueueOrder(t *testing.T) {
-	queue := priorityqueue.New[PriorityTask]()
+	queue := priorityqueue.New[*regionPriorityTask]()
 	ctx := t.Context()
 
 	currentTs := oracle.GoTimeToTS(time.Now())
@@ -222,25 +209,25 @@ func TestRegionPriorityTaskQueueOrder(t *testing.T) {
 		subscribedSpan: subscribedSpan,
 	}
 
-	errorTask := NewRegionPriorityTask(TaskHighPrior, regionInfo, currentTs+1)
-	highTask := NewRegionPriorityTask(TaskHighPrior, regionInfo, currentTs)
-	lowTask := NewRegionPriorityTask(TaskLowPrior, regionInfo, currentTs)
+	firstHighTask := newRegionPriorityTask(TaskHighPrior, regionInfo, currentTs, 1)
+	secondHighTask := newRegionPriorityTask(TaskHighPrior, regionInfo, currentTs, 2)
+	lowTask := newRegionPriorityTask(TaskLowPrior, regionInfo, currentTs, 3)
 
 	require.True(t, queue.Push(lowTask))
-	require.True(t, queue.Push(errorTask))
-	require.True(t, queue.Push(highTask))
+	require.True(t, queue.Push(secondHighTask))
+	require.True(t, queue.Push(firstHighTask))
 
 	first, err := queue.Pop(ctx)
 	require.NoError(t, err)
-	require.Equal(t, TaskHighPrior, first.(*regionPriorityTask).taskType)
+	require.Same(t, firstHighTask, first)
 
 	second, err := queue.Pop(ctx)
 	require.NoError(t, err)
-	require.Equal(t, TaskHighPrior, second.(*regionPriorityTask).taskType)
+	require.Same(t, secondHighTask, second)
 
 	third, err := queue.Pop(ctx)
 	require.NoError(t, err)
-	require.Equal(t, TaskLowPrior, third.(*regionPriorityTask).taskType)
+	require.Same(t, lowTask, third)
 
 	require.Equal(t, 0, queue.Len())
 }
