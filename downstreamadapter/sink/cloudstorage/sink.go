@@ -267,7 +267,8 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		if err := s.writeFile(&sourceEvent, sourceSchemaFile); err != nil {
 			return err
 		}
-	} else {
+	}
+	if event.GetDDLType() != model.ActionExchangeTablePartition {
 		for _, e := range event.GetEvents() {
 			var schemaFile cloudstorage.SchemaFile
 			schemaFile.Build(e, s.cfg.OutputColumnID)

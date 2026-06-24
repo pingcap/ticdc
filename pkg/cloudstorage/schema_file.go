@@ -123,10 +123,9 @@ func (t *TableCol) toTiColumnInfo(colID int64) *model.ColumnInfo {
 		col.AddFlag(mysql.NotNullFlag)
 	}
 	col.DefaultValue = t.Default
+	col.SetCharset(charset.CharsetUTF8MB4)
 	if strings.Contains(t.Tp, "BLOB") || strings.Contains(t.Tp, "BINARY") {
 		col.SetCharset(charset.CharsetBin)
-	} else {
-		col.SetCharset(charset.CharsetUTF8MB4)
 	}
 	setFlen := func(precision string) {
 		if len(precision) > 0 {

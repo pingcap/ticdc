@@ -126,14 +126,14 @@ func TestVerifySinkURIParams(t *testing.T) {
 		require.NoError(t, err)
 		cfg := NewConfig()
 		err = cfg.Apply(t.Context(), sinkURI, config.GetDefaultReplicaConfig().Sink, true)
-		if tc.expectedErr == "" {
-			require.NoError(t, err)
-			require.LessOrEqual(t, cfg.WorkerCount, maxWorkerCount)
-			require.LessOrEqual(t, cfg.FlushInterval, maxFlushInterval)
-			require.LessOrEqual(t, cfg.FileSize, maxFileSize)
-		} else {
+		if tc.expectedErr != "" {
 			require.Regexp(t, tc.expectedErr, err)
+			continue
 		}
+		require.NoError(t, err)
+		require.LessOrEqual(t, cfg.WorkerCount, maxWorkerCount)
+		require.LessOrEqual(t, cfg.FlushInterval, maxFlushInterval)
+		require.LessOrEqual(t, cfg.FileSize, maxFileSize)
 	}
 }
 
