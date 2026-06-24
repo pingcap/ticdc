@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -404,7 +405,7 @@ func (c *debeziumAvroSchemaConverter) toNative(
 		if err != nil {
 			return nil, err
 		}
-		return int32(v), nil
+		return int64ToInt32(v)
 	case "int64":
 		return numberToInt64(value)
 	case "float":
@@ -540,12 +541,26 @@ func numberToInt64(value any) (int64, error) {
 	case int64:
 		return v, nil
 	case uint64:
-		return int64(v), nil
+		return uint64ToInt64(v)
 	case float64:
 		return int64(v), nil
 	default:
 		return 0, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("number payload is invalid")
 	}
+}
+
+func int64ToInt32(value int64) (int32, error) {
+	if value < math.MinInt32 || value > math.MaxInt32 {
+		return 0, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("number payload is out of int32 range")
+	}
+	return int32(value), nil
+}
+
+func uint64ToInt64(value uint64) (int64, error) {
+	if value > math.MaxInt64 {
+		return 0, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("number payload is out of int64 range")
+	}
+	return int64(value), nil
 }
 
 func numberToFloat64(value any) (float64, error) {

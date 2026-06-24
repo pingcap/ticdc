@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -830,6 +831,10 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 				if c.config.AvroBigintUnsignedHandlingMode == common.BigintUnsignedHandlingModeString {
 					writer.WriteStringField(colName, strconv.FormatUint(v, 10))
 				} else {
+					if v > math.MaxInt64 {
+						return errors.ErrDebeziumEncodeFailed.GenWithStackByArgs(
+							fmt.Sprintf("unsigned bigint value %d overflows avro long", v))
+					}
 					writer.WriteInt64Field(colName, int64(v))
 				}
 				return nil
