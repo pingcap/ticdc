@@ -359,6 +359,9 @@ func validateBootstrapTableTriggerEventDispatcher(
 	id *heartbeatpb.DispatcherID,
 ) error {
 	if id == nil {
+		// A nil ID means the incoming maintainer does not assign the table trigger
+		// to this node. Normal maintainer handoff removes the old owner before
+		// adding the new owner, so any old local trigger should already be closed.
 		return nil
 	}
 	expectedID := common.NewDispatcherIDFromPB(id)
@@ -415,6 +418,9 @@ func validateBootstrapTableTriggerRedoDispatcher(
 	id *heartbeatpb.DispatcherID,
 ) error {
 	if id == nil {
+		// A nil ID means the incoming maintainer does not assign the redo table
+		// trigger to this node. Normal maintainer handoff removes the old owner
+		// before adding the new owner, so any old local trigger should already be closed.
 		return nil
 	}
 	expectedID := common.NewDispatcherIDFromPB(id)
