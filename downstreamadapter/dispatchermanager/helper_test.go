@@ -263,6 +263,9 @@ func TestDispatcherManagerTryUpdateMaintainerEpoch(t *testing.T) {
 	strictDM.meta.maintainerID = "current-maintainer"
 	strictDM.meta.maintainerEpoch = 2
 
+	require.False(t, strictDM.CanUpdateMaintainer("current-maintainer", 0))
+	require.Equal(t, node.ID("current-maintainer"), strictDM.GetMaintainerID())
+	require.Equal(t, uint64(2), strictDM.GetMaintainerEpoch())
 	require.False(t, strictDM.TryUpdateMaintainer("current-maintainer", 0))
 	require.Equal(t, node.ID("current-maintainer"), strictDM.GetMaintainerID())
 	require.Equal(t, uint64(2), strictDM.GetMaintainerEpoch())

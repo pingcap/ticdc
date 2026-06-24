@@ -727,6 +727,69 @@ func TestBootstrapResponseUsesSpanSnapshotForStaleRemove(t *testing.T) {
 	require.Equal(t, heartbeatpb.OperatorType_O_Move, response.Operators[0].OperatorType)
 }
 
+func TestHandleBootstrapTriggerMismatchKeepsOldMaintainerOwner(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
+	heartbeatCollector.Run(context.Background())
+	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
+	t.Cleanup(heartbeatCollector.Close)
+	appcontext.SetService(appcontext.EventCollector, eventcollector.New(node.ID("receiver")))
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	oldTableTriggerID := common.NewDispatcherID()
+	newTableTriggerID := common.NewDispatcherID()
+	manager, err := dispatchermanager.NewDispatcherManager(
+		0,
+		cfID,
+		newBootstrapResponseTestChangefeedConfig(cfID),
+		oldTableTriggerID.ToPB(),
+		nil,
+		100,
+		node.ID("old-maintainer"),
+		2,
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		manager.TryClose(false)
+	})
+
+	orchestrator := &DispatcherOrchestrator{
+		mc:                     mc,
+		dispatcherManagers:     map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{cfID: manager},
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+	}
+
+	err = orchestrator.handleBootstrapRequest(node.ID("new-maintainer"), &heartbeatpb.MaintainerBootstrapRequest{
+		ChangefeedID:                  cfID.ToPB(),
+		TableTriggerEventDispatcherId: newTableTriggerID.ToPB(),
+		StartTs:                       100,
+		MaintainerEpoch:               3,
+	})
+	require.NoError(t, err)
+
+	bootstrapResponseMsg := <-mc.GetMessageChannel()
+	bootstrapResponse := bootstrapResponseMsg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
+	require.Equal(t, uint64(3), bootstrapResponse.MaintainerEpoch)
+	require.NotNil(t, bootstrapResponse.Err)
+	require.Equal(t, node.ID("old-maintainer"), manager.GetMaintainerID())
+	require.Equal(t, uint64(2), manager.GetMaintainerEpoch())
+
+	err = orchestrator.handleCloseRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerCloseRequest{
+		ChangefeedID:    cfID.ToPB(),
+		MaintainerEpoch: 2,
+	})
+	require.NoError(t, err)
+
+	closeResponseMsg := <-mc.GetMessageChannel()
+	closeResponse := closeResponseMsg.Message[0].(*heartbeatpb.MaintainerCloseResponse)
+	require.Equal(t, uint64(2), closeResponse.MaintainerEpoch)
+	require.False(t, closeResponse.Success)
+}
+
 func TestHandleCloseRequestAcksStaleMaintainerEpoch(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())

@@ -272,8 +272,32 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	}
 
 	manager.MaintainerFenceMu.Lock()
-	if !manager.TryUpdateMaintainer(from, maintainerEpoch) {
+	if !manager.CanUpdateMaintainer(from, maintainerEpoch) {
 		log.Warn("drop stale maintainer bootstrap request",
+			zap.String("changefeed", cfId.Name()),
+			zap.String("from", from.String()),
+			zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
+			zap.String("currentMaintainer", manager.GetMaintainerID().String()))
+		manager.MaintainerFenceMu.Unlock()
+		return nil
+	}
+	if exists {
+		if err := validateBootstrapTableTriggerEventDispatcher(
+			cfId, manager, req.TableTriggerEventDispatcherId,
+		); err != nil {
+			manager.MaintainerFenceMu.Unlock()
+			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
+		}
+		if err := validateBootstrapTableTriggerRedoDispatcher(
+			cfId, manager, req.TableTriggerRedoDispatcherId,
+		); err != nil {
+			manager.MaintainerFenceMu.Unlock()
+			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
+		}
+	}
+	if !manager.TryUpdateMaintainer(from, maintainerEpoch) {
+		log.Warn("drop stale maintainer bootstrap request after trigger validation",
 			zap.String("changefeed", cfId.Name()),
 			zap.String("from", from.String()),
 			zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
@@ -326,6 +350,30 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
 
+// validateBootstrapTableTriggerEventDispatcher checks whether an existing event
+// table trigger can be owned by the incoming bootstrap request before the
+// maintainer owner/epoch is updated.
+func validateBootstrapTableTriggerEventDispatcher(
+	cfId common.ChangeFeedID,
+	manager *dispatchermanager.DispatcherManager,
+	id *heartbeatpb.DispatcherID,
+) error {
+	if id == nil {
+		return nil
+	}
+	expectedID := common.NewDispatcherIDFromPB(id)
+	tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
+	if tableTriggerDispatcher == nil || tableTriggerDispatcher.GetId() == expectedID {
+		return nil
+	}
+	log.Error("table trigger event dispatcher id mismatch during bootstrap",
+		zap.Stringer("changefeedID", cfId),
+		zap.Stringer("expectedDispatcherID", expectedID),
+		zap.Stringer("actualDispatcherID", tableTriggerDispatcher.GetId()))
+	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+		GenWithStackByArgs("table trigger event dispatcher id mismatch during bootstrap")
+}
+
 // ensureBootstrapTableTriggerEventDispatcher verifies that a reused manager has
 // the bootstrap owner's table trigger, or creates it when no trigger exists yet.
 func ensureBootstrapTableTriggerEventDispatcher(
@@ -356,6 +404,30 @@ func ensureBootstrapTableTriggerEventDispatcher(
 		zap.Stringer("actualDispatcherID", tableTriggerDispatcher.GetId()))
 	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 		GenWithStackByArgs("table trigger event dispatcher id mismatch during bootstrap")
+}
+
+// validateBootstrapTableTriggerRedoDispatcher checks whether an existing redo
+// table trigger can be owned by the incoming bootstrap request before the
+// maintainer owner/epoch is updated.
+func validateBootstrapTableTriggerRedoDispatcher(
+	cfId common.ChangeFeedID,
+	manager *dispatchermanager.DispatcherManager,
+	id *heartbeatpb.DispatcherID,
+) error {
+	if id == nil {
+		return nil
+	}
+	expectedID := common.NewDispatcherIDFromPB(id)
+	tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher()
+	if tableTriggerRedoDispatcher == nil || tableTriggerRedoDispatcher.GetId() == expectedID {
+		return nil
+	}
+	log.Error("table trigger redo dispatcher id mismatch during bootstrap",
+		zap.Stringer("changefeedID", cfId),
+		zap.Stringer("expectedDispatcherID", expectedID),
+		zap.Stringer("actualDispatcherID", tableTriggerRedoDispatcher.GetId()))
+	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+		GenWithStackByArgs("table trigger redo dispatcher id mismatch during bootstrap")
 }
 
 // ensureBootstrapTableTriggerRedoDispatcher verifies that a reused manager has
