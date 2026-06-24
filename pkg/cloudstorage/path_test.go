@@ -185,13 +185,15 @@ func TestGenerateAndParseIndexFilePath(t *testing.T) {
 		date               string
 		useTableIDAsPath   bool
 		enablePartition    bool
+		enableTableAcross  bool
 		table              VersionedTableName
 		expectedDMLPathKey DMLPathKey
 	}{
 		{
-			name:          "schema table with date",
-			dateSeparator: config.DateSeparatorDay.String(),
-			date:          "2023-05-09",
+			name:              "schema table with date",
+			dateSeparator:     config.DateSeparatorDay.String(),
+			date:              "2023-05-09",
+			enableTableAcross: true,
 			table: VersionedTableName{
 				TableNameWithPhysicTableID: commonType.TableName{
 					Schema: "test",
@@ -264,9 +266,15 @@ func TestGenerateAndParseIndexFilePath(t *testing.T) {
 			f.config.DateSeparator = tc.dateSeparator
 			f.config.UseTableIDAsPath = tc.useTableIDAsPath
 			f.config.EnablePartitionSeparator = tc.enablePartition
+			f.config.EnableTableAcrossNodes = tc.enableTableAcross
 			f.versionMap[tc.table] = tc.table.TableInfoVersion
 
 			indexPath := f.GenerateIndexFilePath(tc.table, tc.date)
+			indexKey := FileIndexKey{
+				DispatcherID:           tc.table.DispatcherID.String(),
+				EnableTableAcrossNodes: tc.enableTableAcross,
+			}
+			require.Equal(t, indexPath, tc.expectedDMLPathKey.GenerateIndexFilePath(indexKey))
 			var pathKey DMLPathKey
 			pathKey.ParseIndexFilePath(tc.dateSeparator, indexPath)
 			require.Equal(t, tc.expectedDMLPathKey, pathKey)

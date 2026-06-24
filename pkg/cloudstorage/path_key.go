@@ -172,6 +172,15 @@ func (d *DMLPathKey) GenerateDMLFilePath(
 	return path.Join(d.generateDMLDataDirPath(), fileName)
 }
 
+// GenerateIndexFilePath returns the index file path for this data directory.
+// Output is <data-dir>/meta/CDC.index or <data-dir>/meta/CDC_<dispatcherID>.index.
+func (d *DMLPathKey) GenerateIndexFilePath(fileIndexKey FileIndexKey) string {
+	return path.Join(
+		d.generateDMLDataDirPath(),
+		generateIndexFileName(fileIndexKey.EnableTableAcrossNodes, fileIndexKey.DispatcherID),
+	)
+}
+
 // generateDMLDataDirPath returns the canonical data directory path.
 // Output is either <tableID>/<version>[/date] or
 // <schema>/<table>/<version>[/partition][/date].
@@ -280,4 +289,19 @@ func (d *DMLPathKey) ParseIndexFilePath(dateSeparator, path string) {
 		log.Panic("cannot match dml path pattern", zap.String("path", path))
 	}
 	d.parseDMLDataDir(dateSeparator, parts[:len(parts)-2], path)
+}
+
+// ParseDMLFilePath fills DMLPathKey from a data file path and returns the file
+// index encoded in the file name.
+// Input is <data-dir>/CDC<idx><extension> or
+// <data-dir>/CDC_<dispatcherID>_<idx><extension>. Invalid paths panic.
+func (d *DMLPathKey) ParseDMLFilePath(dateSeparator, filePath, extension string) FileIndex {
+	parts := strings.Split(filePath, "/")
+	fileIndex, err := ParseFileIndexFromFileName(parts[len(parts)-1], extension)
+	if err != nil {
+		log.Panic("parse file index from file name failed",
+			zap.String("path", filePath), zap.Error(err))
+	}
+	d.parseDMLDataDir(dateSeparator, parts[:len(parts)-1], filePath)
+	return fileIndex
 }

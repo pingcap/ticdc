@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,6 +63,7 @@ func TestGenerateDMLFilePath(t *testing.T) {
 		index          uint64
 		fileIndexWidth int
 		extension      string
+		dateSeparator  string
 		path           string
 		dmlkey         DMLPathKey
 	}{
@@ -69,6 +71,7 @@ func TestGenerateDMLFilePath(t *testing.T) {
 			index:          10,
 			fileIndexWidth: 20,
 			extension:      ".csv",
+			dateSeparator:  config.DateSeparatorDay.String(),
 			path:           fmt.Sprintf("schema1/table1/123456/2023-05-09/CDC_%s_00000000000000000010.csv", dispatcherID.String()),
 			dmlkey: DMLPathKey{
 				SchemaPathKey: SchemaPathKey{
@@ -84,6 +87,7 @@ func TestGenerateDMLFilePath(t *testing.T) {
 			index:          10,
 			fileIndexWidth: 20,
 			extension:      ".csv",
+			dateSeparator:  config.DateSeparatorNone.String(),
 			path:           fmt.Sprintf("12345/123456/CDC_%s_00000000000000000010.csv", dispatcherID.String()),
 			dmlkey: DMLPathKey{
 				SchemaPathKey: SchemaPathKey{
@@ -98,6 +102,7 @@ func TestGenerateDMLFilePath(t *testing.T) {
 			index:          10,
 			fileIndexWidth: 20,
 			extension:      ".csv",
+			dateSeparator:  config.DateSeparatorDay.String(),
 			path:           fmt.Sprintf("schema1/table1/123456/55/2023-05-09/CDC_%s_00000000000000000010.csv", dispatcherID.String()),
 			dmlkey: DMLPathKey{
 				SchemaPathKey: SchemaPathKey{
@@ -121,6 +126,10 @@ func TestGenerateDMLFilePath(t *testing.T) {
 		}
 		fileName := tc.dmlkey.GenerateDMLFilePath(fileIndex, tc.extension, tc.fileIndexWidth)
 		require.Equal(t, tc.path, fileName)
+		var pathKey DMLPathKey
+		gotFileIndex := pathKey.ParseDMLFilePath(tc.dateSeparator, fileName, tc.extension)
+		require.Equal(t, tc.dmlkey, pathKey)
+		require.Equal(t, *fileIndex, gotFileIndex)
 	}
 }
 

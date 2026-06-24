@@ -252,16 +252,13 @@ func (c *consumer) getNewFiles(
 				// skip handling this file
 				return nil
 			}
-		} else if strings.HasSuffix(path, ".index") {
-			err := c.parseDMLFilePath(ctx, path)
-			if err != nil {
-				log.Error("failed to parse dml file path", zap.Error(err))
-				// skip handling this file
-				return nil
-			}
-		} else {
-			log.Debug("ignore handling file", zap.String("path", path))
+			return nil
 		}
+		if strings.HasSuffix(path, c.fileExtension) {
+			c.parseDMLFilePath(path)
+			return nil
+		}
+		log.Debug("ignore handling file", zap.String("path", path))
 		return nil
 	})
 	if err != nil {
@@ -416,28 +413,19 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 	}
 }
 
-func (c *consumer) parseDMLFilePath(ctx context.Context, path string) error {
+func (c *consumer) parseDMLFilePath(path string) {
 	var dmlkey cloudstorage.DMLPathKey
-	dmlkey.ParseIndexFilePath(
+	fileIndex := dmlkey.ParseDMLFilePath(
 		putil.GetOrZero(c.replicationCfg.Sink.DateSeparator),
 		path,
+		c.fileExtension,
 	)
 	if c.globalCheckpointTs > 0 && dmlkey.TableVersion > c.globalCheckpointTs {
-		log.Debug("skip dml index file by checkpoint",
+		log.Debug("skip dml file by checkpoint",
 			zap.String("path", path),
 			zap.Uint64("tableVersion", dmlkey.TableVersion),
 			zap.Uint64("checkpointTs", c.globalCheckpointTs))
-		return nil
-	}
-	data, err := c.externalStorage.ReadFile(ctx, path)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	fileName := strings.TrimSuffix(string(data), "\n")
-	fileIndex, err := cloudstorage.ParseFileIndexFromFileName(fileName, c.fileExtension)
-	if err != nil {
-		log.Panic("parse file index from file name failed",
-			zap.String("fileName", fileName), zap.Error(err))
+		return
 	}
 
 	m, ok := c.tableDMLIdxMap[dmlkey]
@@ -445,12 +433,11 @@ func (c *consumer) parseDMLFilePath(ctx context.Context, path string) error {
 		c.tableDMLIdxMap[dmlkey] = fileIndexKeyMap{
 			fileIndex.FileIndexKey: fileIndex.Idx,
 		}
-		return nil
+		return
 	}
 	if fileIndex.Idx >= m[fileIndex.FileIndexKey] {
 		c.tableDMLIdxMap[dmlkey][fileIndex.FileIndexKey] = fileIndex.Idx
 	}
-	return nil
 }
 
 func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {

@@ -132,6 +132,13 @@ func generateDataFileName(enableTableAcrossNodes bool, dispatcherID string, inde
 	return fmt.Sprintf("CDC"+indexFmt+"%s", index, extension)
 }
 
+func generateIndexFileName(enableTableAcrossNodes bool, dispatcherID string) string {
+	if enableTableAcrossNodes {
+		return fmt.Sprintf(defaultTableAcrossNodesIndexFileName, dispatcherID)
+	}
+	return defaultIndexFileName
+}
+
 type indexWithDate struct {
 	// index is the current max data file sequence in one date bucket.
 	index uint64
@@ -332,11 +339,7 @@ func (f *FilePathGenerator) GenerateDateStr() string {
 // <data-dir>/meta/CDC_<dispatcherID>.index.
 func (f *FilePathGenerator) GenerateIndexFilePath(tbl VersionedTableName, date string) string {
 	dir := f.generateDataDirPath(tbl, date)
-	name := defaultIndexFileName
-	if f.config.EnableTableAcrossNodes {
-		name = fmt.Sprintf(defaultTableAcrossNodesIndexFileName, tbl.DispatcherID.String())
-	}
-	return path.Join(dir, name)
+	return path.Join(dir, generateIndexFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String()))
 }
 
 // GenerateDataFilePath returns the next available data file path for tbl and
