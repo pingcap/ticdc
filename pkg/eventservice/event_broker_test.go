@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -199,6 +200,198 @@ func TestAddDispatcherUnregisterOnSchemaStoreError(t *testing.T) {
 	_, ok := es.spansMap.Load(info.GetTableSpan())
 	require.False(t, ok)
 	require.Equal(t, uint64(1), es.unregisterCount.Load())
+}
+
+func TestScanRangeCappedByScanWindow(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+
+	dispPtr := &atomic.Pointer[dispatcherStat]{}
+	dispPtr.Store(disp)
+	changefeedStatus.addDispatcher(disp.id, dispPtr)
+
+	baseTime := time.Now()
+	baseTs := oracle.GoTimeToTS(baseTime)
+	disp.sentResolvedTs.Store(baseTs)
+	disp.receivedResolvedTs.Store(oracle.GoTimeToTS(baseTime.Add(20 * time.Second)))
+	disp.eventStoreCommitTs.Store(oracle.GoTimeToTS(baseTime.Add(15 * time.Second)))
+	changefeedStatus.refreshMinSentResolvedTs()
+
+	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, needScan)
+	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), dataRange.CommitTsEnd)
+}
+
+func TestGetScanTaskDataRangeEmptyAfterCappingDoesNotResetScanRange(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+
+	baseTime := time.Now()
+	baseTs := oracle.GoTimeToTS(baseTime)
+	commitStart := oracle.GoTimeToTS(baseTime.Add(20 * time.Second))
+	lastStartTs := commitStart - 1
+
+	disp.sentResolvedTs.Store(baseTs)
+	disp.receivedResolvedTs.Store(oracle.GoTimeToTS(baseTime.Add(40 * time.Second)))
+	disp.eventStoreCommitTs.Store(commitStart)
+	disp.lastScannedCommitTs.Store(commitStart)
+	disp.lastScannedStartTs.Store(lastStartTs)
+
+	changefeedStatus.minSentTs.Store(baseTs)
+	changefeedStatus.scanInterval.Store(int64(defaultScanInterval))
+
+	needScan, _ := broker.getScanTaskDataRange(disp)
+	require.False(t, needScan)
+	require.Equal(t, commitStart, disp.lastScannedCommitTs.Load())
+	require.Equal(t, lastStartTs, disp.lastScannedStartTs.Load())
+}
+
+func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+
+	baseTime := time.Now()
+	baseTs := oracle.GoTimeToTS(baseTime)
+	commitStart := oracle.GoTimeToTS(baseTime.Add(20 * time.Second))
+	ddlCommitTs := oracle.GoTimeToTS(baseTime.Add(23 * time.Second))
+	resolvedTs := oracle.GoTimeToTS(baseTime.Add(40 * time.Second))
+
+	disp.sentResolvedTs.Store(baseTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(commitStart)
+	disp.lastScannedCommitTs.Store(commitStart)
+	disp.lastScannedStartTs.Store(commitStart - 1)
+
+	changefeedStatus.minSentTs.Store(baseTs)
+	changefeedStatus.scanInterval.Store(int64(defaultScanInterval))
+
+	ss.resolvedTs = resolvedTs
+	ss.maxDDLCommitTs = ddlCommitTs
+
+	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, needScan)
+	require.Equal(t, commitStart, dataRange.CommitTsStart)
+	require.Equal(t, oracle.GoTimeToTS(oracle.GetTimeFromTS(commitStart).Add(defaultScanInterval)), dataRange.CommitTsEnd)
+}
+
+func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	changefeedID := common.NewChangefeedID4Test("default", "test")
+	changefeedStatus := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, 0)
+	changefeedStatus.scanInterval.Store(int64(1 * time.Second))
+
+	baseTime := time.Now()
+	ts100 := oracle.GoTimeToTS(baseTime)
+	ts101 := oracle.GoTimeToTS(baseTime.Add(1 * time.Second))
+	ts102 := oracle.GoTimeToTS(baseTime.Add(2 * time.Second))
+	ts103 := oracle.GoTimeToTS(baseTime.Add(3 * time.Second))
+	ts110 := oracle.GoTimeToTS(baseTime.Add(10 * time.Second))
+
+	newDispatcher := func(tableID int64, sentTs uint64) *dispatcherStat {
+		info := newMockDispatcherInfo(t, ts100, common.NewDispatcherID(), tableID, eventpb.ActionType_ACTION_TYPE_REGISTER)
+		info.epoch = 1
+		disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+		disp.seq.Store(1)
+		disp.sentResolvedTs.Store(sentTs)
+		disp.lastReceivedHeartbeatTime.Store(time.Now().Unix())
+
+		dispPtr := &atomic.Pointer[dispatcherStat]{}
+		dispPtr.Store(disp)
+		changefeedStatus.addDispatcher(disp.id, dispPtr)
+		return disp
+	}
+
+	// D0(table trigger) and D2(other table) form the same changefeed.
+	// D0 lags at ts100, so global scan window base is pinned at ts100.
+	_ = newDispatcher(common.DDLSpanTableID, ts100)
+	// D1 is the blocked table waiting to cross a truncate ddl barrier at ts103.
+	d1 := newDispatcher(1313112, ts101)
+	_ = newDispatcher(1313999, ts110)
+
+	changefeedStatus.refreshMinSentResolvedTs()
+	require.Equal(t, ts100, changefeedStatus.minSentTs.Load())
+
+	d1.receivedResolvedTs.Store(ts110)
+	d1.eventStoreCommitTs.Store(ts103)
+	d1.lastScannedCommitTs.Store(ts101)
+	d1.lastScannedStartTs.Store(ts101 - 1)
+
+	ss.resolvedTs = ts110
+	ss.maxDDLCommitTs = ts103
+
+	// Round 1: global cap makes range empty (end=ts101), fallback should locally move it to ts102.
+	needScan, dataRange := broker.getScanTaskDataRange(d1)
+	require.True(t, needScan)
+	require.Equal(t, ts101, dataRange.CommitTsStart)
+	require.Equal(t, ts102, dataRange.CommitTsEnd)
+
+	// Round 2: still globally capped by ts100, but fallback should continue moving to ts103,
+	// which allows this dispatcher to eventually reach the pending truncate ddl barrier.
+	d1.lastScannedCommitTs.Store(ts102)
+	d1.lastScannedStartTs.Store(0)
+	needScan, dataRange = broker.getScanTaskDataRange(d1)
+	require.True(t, needScan)
+	require.Equal(t, ts102, dataRange.CommitTsStart)
+	require.Equal(t, ts103, dataRange.CommitTsEnd)
+}
+
+func TestHandleCongestionControlV2DoesNotResetScanIntervalOnMemoryRelease(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	changefeedID := common.NewChangefeedID4Test("default", "test")
+	status := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, time.Second*10)
+
+	status.scanInterval.Store(int64(40 * time.Second))
+
+	control := event.NewCongestionControlWithVersion(event.CongestionControlVersion2)
+	control.AddAvailableMemoryWithDispatchersAndUsageAndReleaseCount(changefeedID.ID(), 0, 0.5, nil, 1)
+	broker.handleCongestionControl(node.ID("event-collector-1"), control)
+
+	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
+}
+
+func TestHandleCongestionControlV1DoesNotAdjustScanInterval(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	changefeedID := common.NewChangefeedID4Test("default", "test")
+	status := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, time.Second*10)
+
+	status.scanInterval.Store(int64(40 * time.Second))
+
+	control := event.NewCongestionControl()
+	control.AddAvailableMemoryWithDispatchers(changefeedID.ID(), 0, nil)
+	broker.handleCongestionControl(node.ID("event-collector-1"), control)
+
+	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
 }
 
 func TestDoScanSkipWhenChangefeedStatusNotFound(t *testing.T) {
@@ -754,4 +947,61 @@ func TestAddDispatcherFailure(t *testing.T) {
 
 	_, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
 	require.False(t, ok, "changefeedStatus should be removed after failed registration")
+}
+
+// TestGetScanTaskDataRangeEmptySignalGatedByScanWindow verifies gate 6 of the
+// enable-scan-window switch (see ai_context/switch_4030_4460_4950.md): when the scan
+// range becomes empty due to the pre-existing DDL-state capping, the rate-limited
+// signal resolved-ts is emitted only when the scan window is enabled. With the
+// feature off the behavior matches the baseline (no signal is sent).
+func TestGetScanTaskDataRangeEmptySignalGatedByScanWindow(t *testing.T) {
+	cases := []struct {
+		name             string
+		enableScanWindow bool
+		wantSignal       bool
+	}{
+		{"enabled sends signal", true, true},
+		{"disabled stays silent", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			broker, _, ss, _ := newEventBrokerForTest()
+			// Close the broker so the send-message workers stop; emitted messages then
+			// stay buffered in messageCh and can be observed by length.
+			broker.close()
+
+			info := newMockDispatcherInfoForTest(t)
+			info.epoch = 1
+			// syncPointInterval=0 keeps emitSyncPointEventIfNeeded a no-op.
+			status := newChangefeedStatus(info.GetChangefeedID(), 0, tc.enableScanWindow)
+			disp := newDispatcherStat(info, 1, 1, nil, status)
+			disp.seq.Store(1)
+
+			baseTime := time.Now()
+			commitStart := oracle.GoTimeToTS(baseTime.Add(20 * time.Second))
+			disp.sentResolvedTs.Store(oracle.GoTimeToTS(baseTime))
+			disp.receivedResolvedTs.Store(oracle.GoTimeToTS(baseTime.Add(40 * time.Second)))
+			disp.eventStoreCommitTs.Store(commitStart)
+			disp.lastScannedCommitTs.Store(commitStart) // CommitTsStart
+			disp.lastScannedStartTs.Store(0)            // allow the signal resolved-ts
+			// Make sure the rate limiter does not suppress the signal.
+			disp.lastSentResolvedTsTime.Store(baseTime.Add(-time.Hour))
+
+			// DDL-state ResolvedTs caps CommitTsEnd down to CommitTsStart, producing an empty
+			// range regardless of the scan window. maxDDLCommitTs <= CommitTsStart avoids the
+			// pending-ddl local advance branch.
+			ss.resolvedTs = commitStart
+			ss.maxDDLCommitTs = commitStart
+
+			needScan, _ := broker.getScanTaskDataRange(disp)
+			require.False(t, needScan)
+
+			got := len(broker.messageCh[disp.messageWorkerIndex])
+			if tc.wantSignal {
+				require.Equal(t, 1, got, "expected a signal resolved-ts message when scan window is enabled")
+			} else {
+				require.Equal(t, 0, got, "expected no message when scan window is disabled")
+			}
+		})
+	}
 }

@@ -55,6 +55,10 @@ type SharedInfo struct {
 	// will break the splittability of this table.
 	enableSplittableCheck bool
 
+	// enableScanWindow controls whether the event service applies the adaptive scan
+	// window (memory control + adaptive scan interval) for this changefeed.
+	enableScanWindow bool
+
 	// router is used to route source schema/table names to target schema/table names.
 	// It is used to apply routing to TableInfo before storing it.
 	router routing.Router
@@ -90,6 +94,7 @@ func NewSharedInfo(
 	syncPointConfig *syncpoint.SyncPointConfig,
 	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
+	enableScanWindow bool,
 	router routing.Router,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusBufferSize int,
@@ -104,6 +109,7 @@ func NewSharedInfo(
 		filterConfig:          filterConfig,
 		syncPointConfig:       syncPointConfig,
 		enableSplittableCheck: enableSplittableCheck,
+		enableScanWindow:      enableScanWindow,
 		router:                router,
 		statusesChan:          statusesChan,
 		blockStatusBuffer:     NewBlockStatusBuffer(blockStatusBufferSize),
@@ -213,6 +219,10 @@ func (d *BasicDispatcher) GetSyncPointInterval() time.Duration {
 		return d.sharedInfo.syncPointConfig.SyncPointInterval
 	}
 	return time.Duration(0)
+}
+
+func (d *BasicDispatcher) GetEnableScanWindow() bool {
+	return d.sharedInfo.enableScanWindow
 }
 
 func (d *BasicDispatcher) GetTableSpan() *heartbeatpb.TableSpan {

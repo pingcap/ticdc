@@ -49,6 +49,7 @@ type DispatcherService interface {
 	GetFilterConfig() *eventpb.FilterConfig
 	EnableSyncPoint() bool
 	GetSyncPointInterval() time.Duration
+	GetEnableScanWindow() bool
 	GetSkipSyncpointAtStartTs() bool
 	GetTxnAtomicity() config.AtomicityLevel
 	GetResolvedTs() uint64
@@ -526,8 +527,8 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
 				zap.String("query", ddl.Query),
-				zap.Any("tableSpan", d.GetTableSpan()),
-				zap.Int64("table", ddl.GetTableID()),
+				zap.Int64("oldTableID", d.tableSpan.GetTableID()),
+				zap.Int64("currentTableID", ddl.GetTableID()),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))
 			now := time.Now()

@@ -116,6 +116,10 @@ func (m *mockDispatcher) GetSyncPointInterval() time.Duration {
 	return time.Second * 10
 }
 
+func (m *mockDispatcher) GetEnableScanWindow() bool {
+	return false
+}
+
 func (m *mockDispatcher) GetSkipSyncpointAtStartTs() bool {
 	return m.skipSyncpointAtStartTs
 }

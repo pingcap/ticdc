@@ -204,6 +204,9 @@ type ChangefeedConfig struct {
 	// redo releated
 	Consistent             *ConsistentConfig `toml:"consistent" json:"consistent,omitempty"`
 	EnableTableAcrossNodes bool              `toml:"enable-table-across-nodes" json:"enable-table-across-nodes,omitempty"`
+	// EnableScanWindow controls whether the event service applies the adaptive scan
+	// window (memory control + adaptive scan interval) for this changefeed.
+	EnableScanWindow bool `json:"enable_scan_window" default:"false"`
 }
 
 // String implements fmt.Stringer interface, but hide some sensitive information
@@ -280,6 +283,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		TimeZone:               GetGlobalServerConfig().TZ,
 		Consistent:             info.Config.Consistent,
 		EnableTableAcrossNodes: util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes),
+		EnableScanWindow:       util.GetOrZero(info.Config.EnableScanWindow),
 		// other fields are not necessary for dispatcherManager
 	}
 }

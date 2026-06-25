@@ -47,6 +47,7 @@ func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) 
 		nil, // redo dispatcher doesn't need syncPointConfig
 		&defaultAtomicity,
 		false, // enableSplittableCheck
+		false, // enableScanWindow
 		routing.Router{},
 		make(chan TableSpanStatusWithSeq, 128),
 		128,

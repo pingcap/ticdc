@@ -533,6 +533,7 @@ func (s *dispatcherSession) newDispatcherRegisterRequest(serverID string, onlyRe
 			Integrity:            s.target.GetIntegrityConfig(),
 			OutputRawChangeEvent: s.target.IsOutputRawChangeEvent(),
 			TxnAtomicity:         string(s.target.GetTxnAtomicity()),
+			EnableScanWindow:     s.target.GetEnableScanWindow(),
 		},
 	}
 }
@@ -568,6 +569,7 @@ func (s *dispatcherSession) newDispatcherResetRequest(serverID string, resetTs u
 			Integrity:            s.target.GetIntegrityConfig(),
 			OutputRawChangeEvent: s.target.IsOutputRawChangeEvent(),
 			TxnAtomicity:         string(s.target.GetTxnAtomicity()),
+			EnableScanWindow:     s.target.GetEnableScanWindow(),
 		},
 	}
 }

@@ -130,6 +130,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		nil,   // syncPointConfig
 		&defaultAtomicity,
 		false,
+		false, // enableScanWindow
 		routing.Router{},
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		blockStatusBufferSize,
