@@ -593,16 +593,14 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 // isHeartBeatResponseAllowed drops dispatcher heartbeats from stale maintainers
 // before they can update table state or complete scheduler operators.
 func isHeartBeatResponseAllowed(dispatcherManager *DispatcherManager, heartbeatResponse HeartBeatResponse) bool {
-	if dispatcherManager.IsMaintainerRequestAllowed(heartbeatResponse.From, heartbeatResponse.MaintainerEpoch) {
-		return true
-	}
-	log.Warn("drop stale heartbeat response",
-		zap.String("changefeedID", heartbeatResponse.ChangefeedID.String()),
-		zap.String("from", heartbeatResponse.From.String()),
-		zap.Uint64("responseMaintainerEpoch", heartbeatResponse.MaintainerEpoch),
-		zap.Uint64("currentMaintainerEpoch", dispatcherManager.GetMaintainerEpoch()),
-		zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
-	return false
+	return isMaintainerControlMessageAllowed(
+		dispatcherManager,
+		"drop stale heartbeat response",
+		"responseMaintainerEpoch",
+		heartbeatResponse.ChangefeedID,
+		heartbeatResponse.From,
+		heartbeatResponse.MaintainerEpoch,
+	)
 }
 
 func (h *HeartBeatResponseHandler) GetSize(event HeartBeatResponse) int   { return 0 }
@@ -719,15 +717,20 @@ func (h *RedoResolvedTsForwardMessageHandler) Handle(dispatcherManager *Dispatch
 	}
 	msg := messages[0]
 	dispatcherManager.MaintainerFenceMu.Lock()
-	defer dispatcherManager.MaintainerFenceMu.Unlock()
 	if !isRedoResolvedTsForwardMessageAllowed(dispatcherManager, msg) {
+		dispatcherManager.MaintainerFenceMu.Unlock()
 		return false
 	}
 	ok := dispatcherManager.SetRedoResolvedTs(msg.ResolvedTs)
+	var dispatchers []*dispatcher.EventDispatcher
 	if ok {
 		dispatcherManager.dispatcherMap.ForEach(func(_ common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
-			dispatcher.HandleCacheEvents()
+			dispatchers = append(dispatchers, dispatcher)
 		})
+	}
+	dispatcherManager.MaintainerFenceMu.Unlock()
+	for _, dispatcher := range dispatchers {
+		dispatcher.HandleCacheEvents()
 	}
 	return false
 }
@@ -735,16 +738,14 @@ func (h *RedoResolvedTsForwardMessageHandler) Handle(dispatcherManager *Dispatch
 // isRedoResolvedTsForwardMessageAllowed drops redo resolved-ts updates from
 // stale maintainers before they can unblock cached events.
 func isRedoResolvedTsForwardMessageAllowed(dispatcherManager *DispatcherManager, msg RedoResolvedTsForwardMessage) bool {
-	if dispatcherManager.IsMaintainerRequestAllowed(msg.From, msg.MaintainerEpoch) {
-		return true
-	}
-	log.Warn("drop stale redo resolved ts forward message",
-		zap.String("changefeedID", msg.ChangefeedID.String()),
-		zap.String("from", msg.From.String()),
-		zap.Uint64("requestMaintainerEpoch", msg.MaintainerEpoch),
-		zap.Uint64("currentMaintainerEpoch", dispatcherManager.GetMaintainerEpoch()),
-		zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
-	return false
+	return isMaintainerControlMessageAllowed(
+		dispatcherManager,
+		"drop stale redo resolved ts forward message",
+		"requestMaintainerEpoch",
+		msg.ChangefeedID,
+		msg.From,
+		msg.MaintainerEpoch,
+	)
 }
 
 func (h *RedoResolvedTsForwardMessageHandler) GetSize(event RedoResolvedTsForwardMessage) int {
@@ -824,13 +825,31 @@ func (h *RedoMetaMessageHandler) Handle(dispatcherManager *DispatcherManager, me
 // isRedoMetaMessageAllowed drops redo meta updates from stale maintainers
 // before they can advance redo recovery boundaries.
 func isRedoMetaMessageAllowed(dispatcherManager *DispatcherManager, msg RedoMetaMessage) bool {
-	if dispatcherManager.IsMaintainerRequestAllowed(msg.From, msg.MaintainerEpoch) {
+	return isMaintainerControlMessageAllowed(
+		dispatcherManager,
+		"drop stale redo meta message",
+		"requestMaintainerEpoch",
+		msg.ChangefeedID,
+		msg.From,
+		msg.MaintainerEpoch,
+	)
+}
+
+func isMaintainerControlMessageAllowed(
+	dispatcherManager *DispatcherManager,
+	logMessage string,
+	epochField string,
+	changefeedID *heartbeatpb.ChangefeedID,
+	from node.ID,
+	maintainerEpoch uint64,
+) bool {
+	if dispatcherManager.IsMaintainerRequestAllowed(from, maintainerEpoch) {
 		return true
 	}
-	log.Warn("drop stale redo meta message",
-		zap.String("changefeedID", msg.ChangefeedID.String()),
-		zap.String("from", msg.From.String()),
-		zap.Uint64("requestMaintainerEpoch", msg.MaintainerEpoch),
+	log.Warn(logMessage,
+		zap.String("changefeedID", changefeedID.String()),
+		zap.String("from", from.String()),
+		zap.Uint64(epochField, maintainerEpoch),
 		zap.Uint64("currentMaintainerEpoch", dispatcherManager.GetMaintainerEpoch()),
 		zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
 	return false
@@ -890,13 +909,14 @@ func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherMana
 	mergeDispatcherRequest := reqs[0]
 	dispatcherManager.MaintainerFenceMu.Lock()
 	defer dispatcherManager.MaintainerFenceMu.Unlock()
-	if !dispatcherManager.IsMaintainerRequestAllowed(mergeDispatcherRequest.From, mergeDispatcherRequest.MaintainerEpoch) {
-		log.Warn("drop stale merge dispatcher request",
-			zap.String("changefeedID", mergeDispatcherRequest.ChangefeedID.String()),
-			zap.String("from", mergeDispatcherRequest.From.String()),
-			zap.Uint64("requestMaintainerEpoch", mergeDispatcherRequest.MaintainerEpoch),
-			zap.Uint64("currentMaintainerEpoch", dispatcherManager.GetMaintainerEpoch()),
-			zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
+	if !isMaintainerControlMessageAllowed(
+		dispatcherManager,
+		"drop stale merge dispatcher request",
+		"requestMaintainerEpoch",
+		mergeDispatcherRequest.ChangefeedID,
+		mergeDispatcherRequest.From,
+		mergeDispatcherRequest.MaintainerEpoch,
+	) {
 		return false
 	}
 	dispatcherIDs := make([]common.DispatcherID, 0, len(mergeDispatcherRequest.DispatcherIDs))
