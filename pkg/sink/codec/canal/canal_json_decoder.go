@@ -18,7 +18,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -203,22 +205,38 @@ func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string
 
 	for i := 0; i < columnsCount; i++ {
 		t := holder.Types[i]
-		name := holder.Types[i].Name()
+		name := t.Name()
 		mysqlType := strings.ToLower(t.DatabaseTypeName())
+		// Snapshot query returns enum/set as their string representations, while canal-json format
+		// uses integer/bitset values for these types. Downgrade enum/set to varchar to keep the
+		// assembled handle-key-only events decodable.
+		if strings.HasPrefix(mysqlType, "enum") || strings.HasPrefix(mysqlType, "set") {
+			mysqlType = "varchar"
+		}
 
-		var value string
-		rawValue := holder.Values[i].([]uint8)
-		if common.IsBinaryMySQLType(mysqlType) {
-			rawValue, err := bytesDecoder.Bytes(rawValue)
-			if err != nil {
-				log.Panic("decode binary value failed", zap.String("value", util.RedactAny(rawValue)), zap.Error(err))
+		var value any
+		switch rawValue := holder.Values[i].(type) {
+		case nil:
+			value = nil
+		case []byte:
+			if common.IsBinaryMySQLType(mysqlType) {
+				rawValue, err := bytesDecoder.Bytes(rawValue)
+				if err != nil {
+					log.Panic("decode binary value failed", zap.String("value", util.RedactAny(rawValue)), zap.Error(err))
+				}
+				value = string(rawValue)
+			} else if strings.Contains(mysqlType, "bit") {
+				bitValue := common.MustBinaryLiteralToInt(rawValue)
+				value = strconv.FormatUint(bitValue, 10)
+			} else {
+				value = string(rawValue)
 			}
-			value = string(rawValue)
-		} else if strings.Contains(mysqlType, "bit") || strings.Contains(mysqlType, "set") {
-			bitValue := common.MustBinaryLiteralToInt(rawValue)
-			value = strconv.FormatUint(bitValue, 10)
-		} else {
-			value = string(rawValue)
+		case string:
+			value = rawValue
+		case int64, uint64, float32, float64:
+			value = fmt.Sprintf("%v", rawValue)
+		default:
+			log.Panic("unexpected column value type", zap.Any("type", reflect.TypeOf(rawValue)), zap.Any("rawValue", util.RedactAny(rawValue)), zap.Any("mysqlType", mysqlType))
 		}
 		mysqlTypeMap[name] = mysqlType
 		data[name] = value
@@ -360,12 +378,9 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
 
 	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
-	cacheKey := tableKey{
-		schema: result.SchemaName,
-		table:  result.TableName,
-	}
 	// if receive a table level DDL, just remove the table info to trigger create a new one.
-	delete(d.tableInfoCache, cacheKey)
+	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
+	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
 	return result
 }
 
