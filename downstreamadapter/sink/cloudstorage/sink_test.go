@@ -25,12 +25,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	pkgcloudstorage "github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
@@ -198,6 +198,19 @@ func TestIgnoreCallsAfterRunError(t *testing.T) {
 	require.Error(t, err)
 }
 
+<<<<<<< HEAD
+=======
+func TestCloudStorageSinkBatchConfig(t *testing.T) {
+	sink := &sink{
+		cfg: &cloudstorage.Config{
+			FileSize: 2048,
+		},
+	}
+	require.Equal(t, 4096, sink.BatchCount())
+	require.Equal(t, 2048, sink.BatchBytes())
+}
+
+>>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
 func TestWriteDDLEvent(t *testing.T) {
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
@@ -246,7 +259,7 @@ func TestWriteDDLEvent(t *testing.T) {
 	err = cloudStorageSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
-	tableSchema, err := os.ReadFile(path.Join(tableDir, "schema_100_4192708364.json"))
+	schemaContent, err := os.ReadFile(path.Join(tableDir, "schema_100_4192708364.json"))
 	require.NoError(t, err)
 	require.JSONEq(t, `{
 		"Table": "table1",
@@ -268,7 +281,7 @@ func TestWriteDDLEvent(t *testing.T) {
 			}
 		],
 		"TableColumnsTotal": 2
-	}`, string(tableSchema))
+	}`, string(schemaContent))
 	t.Run("flush dml before write ddl", verifyWriteDDLEventFlushDMLBeforeBlock)
 }
 
@@ -383,9 +396,9 @@ func TestWriteDDLEventWithTableIDAsPath(t *testing.T) {
 	require.NoError(t, err)
 
 	tableDir := path.Join(parentDir, "20/meta/")
-	tableSchema, err := os.ReadFile(path.Join(tableDir, "schema_100_4192708364.json"))
+	schemaContent, err := os.ReadFile(path.Join(tableDir, "schema_100_4192708364.json"))
 	require.NoError(t, err)
-	require.Contains(t, string(tableSchema), `"Table": "table1"`)
+	require.Contains(t, string(schemaContent), `"Table": "table1"`)
 }
 
 func TestSkipDatabaseSchemaWithTableIDAsPath(t *testing.T) {
@@ -490,7 +503,7 @@ func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {
 	}
 }
 
-func readSchemaDefinitionForTest(t *testing.T, parentDir, schema, table string) pkgcloudstorage.TableDefinition {
+func readSchemaFileForTest(t *testing.T, parentDir, schema, table string) cloudstorage.SchemaFile {
 	t.Helper()
 
 	files, err := os.ReadDir(filepath.Join(parentDir, schema, table, "meta"))
@@ -500,9 +513,9 @@ func readSchemaDefinitionForTest(t *testing.T, parentDir, schema, table string) 
 	content, err := os.ReadFile(filepath.Join(parentDir, schema, table, "meta", files[0].Name()))
 	require.NoError(t, err)
 
-	var def pkgcloudstorage.TableDefinition
-	require.NoError(t, json.Unmarshal(content, &def))
-	return def
+	var schemaFile cloudstorage.SchemaFile
+	require.NoError(t, json.Unmarshal(content, &schemaFile))
+	return schemaFile
 }
 
 func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
@@ -582,15 +595,19 @@ func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
 	err = cloudStorageSink.WriteBlockEvent(routedEvent)
 	require.NoError(t, err)
 
-	exchangeDef := readSchemaDefinitionForTest(t, parentDir, "target_db", "exchange_table_routed")
-	require.Equal(t, "target_db", exchangeDef.Schema)
-	require.Equal(t, "exchange_table_routed", exchangeDef.Table)
-	require.Equal(t, "partition_value", exchangeDef.Columns[1].Name)
+	exchangeSchemaFile := readSchemaFileForTest(t, parentDir, "target_db", "exchange_table_routed")
+	require.Equal(t, "target_db", exchangeSchemaFile.Schema)
+	require.Equal(t, "exchange_table_routed", exchangeSchemaFile.Table)
+	require.Equal(t, routedEvent.Query, exchangeSchemaFile.Query)
+	require.Equal(t, byte(timodel.ActionExchangeTablePartition), exchangeSchemaFile.Type)
+	require.Equal(t, "partition_value", exchangeSchemaFile.Columns[1].Name)
 
-	partitionedDef := readSchemaDefinitionForTest(t, parentDir, "target_db", "partitioned_routed")
-	require.Equal(t, "target_db", partitionedDef.Schema)
-	require.Equal(t, "partitioned_routed", partitionedDef.Table)
-	require.Equal(t, "exchange_value", partitionedDef.Columns[1].Name)
+	partitionedSchemaFile := readSchemaFileForTest(t, parentDir, "target_db", "partitioned_routed")
+	require.Equal(t, "target_db", partitionedSchemaFile.Schema)
+	require.Equal(t, "partitioned_routed", partitionedSchemaFile.Table)
+	require.Empty(t, partitionedSchemaFile.Query)
+	require.Zero(t, partitionedSchemaFile.Type)
+	require.Equal(t, "exchange_value", partitionedSchemaFile.Columns[1].Name)
 
 	_, err = os.Stat(filepath.Join(parentDir, "source_db"))
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -683,8 +700,20 @@ func TestCleanupExpiredFiles(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+<<<<<<< HEAD
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+=======
+	cloudStorageSink := &sink{
+		changefeedID: common.NewChangefeedID4Test("test", "test"),
+		cfg: &cloudstorage.Config{
+			DateSeparator:       config.DateSeparatorDay.String(),
+			FileExpirationDays:  1,
+			FileCleanupCronSpec: util.GetOrZero(replicaConfig.Sink.CloudStorageConfig.FileCleanupCronSpec),
+		},
+	}
+	require.NoError(t, cloudStorageSink.initCron(ctx, sinkURI, cleanupJobs))
+>>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, cleanupJobs)
 	go cloudStorageSink.Run(ctx)

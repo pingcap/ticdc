@@ -22,11 +22,16 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
+<<<<<<< HEAD
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/tidb/br/pkg/storage"
+=======
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
+>>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -147,7 +152,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					continue
 				}
 
-				hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, tableTask.tableInfo)
+				tableVersion, hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, tableTask.tableInfo)
 				if err != nil {
 					log.Error("failed to write schema file to external storage",
 						zap.String("keyspace", keyspace),
@@ -168,6 +173,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 						zap.Int("shardID", d.shardID))
 					continue
 				}
+				table.TableInfoVersion = tableVersion
 
 				date := d.filePathGenerator.GenerateDateStr()
 				dataFilePath, err := d.filePathGenerator.GenerateDataFilePath(ctx, table, date)
@@ -179,15 +185,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 						zap.Error(err))
 					return err
 				}
-				indexFilePath, err := d.filePathGenerator.GenerateIndexFilePath(table, date)
-				if err != nil {
-					log.Error("failed to generate index file path",
-						zap.String("keyspace", keyspace),
-						zap.String("changefeed", changefeed),
-						zap.Int("shardID", d.shardID),
-						zap.Error(err))
-					return err
-				}
+				indexFilePath := d.filePathGenerator.GenerateIndexFilePath(table, date)
 
 				payload, err := buildPayload(d.spool, tableTask)
 				if err != nil {

@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	stdlog "log"
 	"os"
 	"strconv"
 	"strings"
@@ -255,6 +256,7 @@ func initMySQLLogger() error {
 
 // initSaramaLogger hacks logger used in sarama lib
 func initSaramaLogger(level zapcore.Level) error {
+<<<<<<< HEAD
 	// only available less than info level
 	if !zapcore.InfoLevel.Enabled(level) {
 		logger, err := zap.NewStdLogAt(log.L().With(zap.String("component", "sarama")), level)
@@ -262,6 +264,16 @@ func initSaramaLogger(level zapcore.Level) error {
 			return errors.Trace(err)
 		}
 		sarama.Logger = logger
+=======
+	if zapcore.InfoLevel.Enabled(level) {
+		sarama.Logger = stdlog.New(io.Discard, "[Sarama] ", stdlog.LstdFlags)
+		return nil
+	}
+
+	logger, err := zap.NewStdLogAt(log.L().With(zap.String("component", "sarama")), level)
+	if err != nil {
+		return errors.Trace(err)
+>>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
 	}
 	return nil
 }
