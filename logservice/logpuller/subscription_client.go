@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/pingcap/ticdc/utils/priorityqueue"
 	"github.com/prometheus/client_golang/prometheus"
 	kvclientv2 "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -212,7 +213,7 @@ type subscriptionClient struct {
 	rangeTaskCh chan rangeTask
 	// regionTaskQueue is used to receive region tasks with priority.
 	// The region will be handled in `handleRegions` goroutine.
-	regionTaskQueue *PriorityQueue
+	regionTaskQueue *priorityqueue.PriorityQueue[PriorityTask]
 	// resolveLockTaskCh is used to receive resolve lock tasks.
 	// The tasks will be handled in `handleResolveLockTasks` goroutine.
 	resolveLockTaskCh      chan resolveLockTask
@@ -241,7 +242,7 @@ func NewSubscriptionClient(
 		credential: credential,
 
 		rangeTaskCh:            make(chan rangeTask, 1024),
-		regionTaskQueue:        NewPriorityQueue(),
+		regionTaskQueue:        priorityqueue.New[PriorityTask](),
 		resolveLockTaskCh:      make(chan resolveLockTask, 1024),
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
 		errCache:               newErrCache(),
@@ -602,6 +603,9 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		// Use blocking Pop to wait for tasks
 		regionTask, err := s.regionTaskQueue.Pop(ctx)
 		if err != nil {
+			if errors.Is(err, priorityqueue.ErrClosed) {
+				return nil
+			}
 			return err
 		}
 
