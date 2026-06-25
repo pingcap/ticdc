@@ -112,7 +112,7 @@ func newRegionRequestWorker(
 		client:   client,
 		store:    store,
 		requestCache: newRequestCache(requestCacheSize, func() {
-			store.promoteDeferredTask(client.regionTaskQueue)
+			store.promoteDeferredTask()
 		}),
 		controlQueue: newControlQueue(),
 	}
@@ -389,10 +389,6 @@ func (s *regionRequestWorker) processRegionSendTask(
 	ctx context.Context,
 	conn *ConnAndClient,
 ) error {
-	if s.controlQueue == nil {
-		s.controlQueue = newControlQueue()
-	}
-
 	doSend := func(req *cdcpb.ChangeDataRequest) error {
 		if err := conn.Client.Send(req); err != nil {
 			log.Warn("region request worker send request to grpc stream failed",
@@ -598,4 +594,8 @@ func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
 
 	regions = append(regions, s.requestCache.takeUnsentRegions()...)
 	return regions
+}
+
+func (s *regionRequestWorker) releaseAdmittedRegionRequests() {
+	s.requestCache.clear()
 }

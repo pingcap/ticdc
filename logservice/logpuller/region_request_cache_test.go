@@ -181,7 +181,7 @@ func TestRequestCacheAdd_ConcurrentAdds(t *testing.T) {
 	done := make(chan error, numGoroutines)
 
 	// Start multiple goroutines adding requests concurrently
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		go func(id int) {
 			region := createTestRegionInfo(SubscriptionID(id%3), uint64(id))
 			ok, err := cache.add(ctx, region, false)
@@ -192,7 +192,7 @@ func TestRequestCacheAdd_ConcurrentAdds(t *testing.T) {
 	}
 
 	// Wait for all goroutines to complete
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		select {
 		case err := <-done:
 			require.NoError(t, err)

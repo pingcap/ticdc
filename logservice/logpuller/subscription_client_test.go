@@ -279,11 +279,11 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh: make(chan resolveLockTask, 1),
-		regionTaskQueue:   priorityqueue.New[*regionPriorityTask](),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
 	client.pdClock = pdutil.NewClock4Test()
+	client.regionScheduler = newRegionRequestScheduler(client)
 
 	rawSpan := heartbeatpb.TableSpan{
 		TableID:  1,
@@ -298,9 +298,9 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
 
 	worker := &regionRequestWorker{controlQueue: newControlQueue()}
-	store := &requestedStore{storeAddr: "store-1"}
+	store := &requestedStore{scheduler: client.regionScheduler, storeAddr: "store-1"}
 	store.requestWorkers = []*regionRequestWorker{worker}
-	client.stores.Store(store.storeAddr, store)
+	client.regionScheduler.stores.Store(store.storeAddr, store)
 
 	client.setTableStopped(span)
 
@@ -386,11 +386,11 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 	client := &subscriptionClient{
-		ds:              &mockDynamicStream{},
-		regionTaskQueue: priorityqueue.New[*regionPriorityTask](),
+		ds: &mockDynamicStream{},
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	client.cond = sync.NewCond(&client.mu)
+	client.regionScheduler = newRegionRequestScheduler(client)
 
 	client.paused.Store(true)
 
@@ -418,14 +418,15 @@ func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 func TestEnqueueDeregisterToAllStoresUsesControlQueue(t *testing.T) {
 	ctx := context.Background()
 	client := &subscriptionClient{}
+	scheduler := newRegionRequestScheduler(client)
 
 	worker := &regionRequestWorker{
 		requestCache: newRequestCache(1),
 		controlQueue: newControlQueue(),
 	}
-	store := &requestedStore{storeAddr: "store-1"}
+	store := &requestedStore{scheduler: scheduler, storeAddr: "store-1"}
 	store.requestWorkers = []*regionRequestWorker{worker}
-	client.stores.Store(store.storeAddr, store)
+	scheduler.stores.Store(store.storeAddr, store)
 
 	dummyRegion := regionInfo{
 		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
@@ -435,7 +436,7 @@ func TestEnqueueDeregisterToAllStoresUsesControlQueue(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	client.enqueueDeregisterToAllStores(SubscriptionID(1), true)
+	scheduler.broadcastDeregister(SubscriptionID(1), true)
 	require.Equal(t, 1, worker.controlQueue.ch.Len())
 	req, ok := worker.controlQueue.tryPop()
 	require.True(t, ok)
@@ -446,7 +447,8 @@ func TestEnqueueDeregisterToAllStoresUsesControlQueue(t *testing.T) {
 
 func TestRequestedStoreDeferredTasksBlockSameStore(t *testing.T) {
 	queue := priorityqueue.New[*regionPriorityTask]()
-	store := &requestedStore{storeAddr: "store-1"}
+	scheduler := &regionRequestScheduler{queue: queue}
+	store := &requestedStore{scheduler: scheduler, storeAddr: "store-1"}
 	currentTs := oracle.GoTimeToTS(time.Now())
 	span := &subscribedSpan{subID: SubscriptionID(1)}
 	span.resolvedTs.Store(currentTs)
@@ -456,23 +458,23 @@ func TestRequestedStoreDeferredTasksBlockSameStore(t *testing.T) {
 	secondTask := newRegionPriorityTask(TaskHighPrior, region, currentTs, 2)
 
 	store.deferTask(firstTask)
-	require.False(t, store.canAdmitTask(secondTask))
+	require.True(t, store.hasDeferredTaskAhead(secondTask))
 
-	store.promoteDeferredTask(queue)
+	store.promoteDeferredTask()
 	promoted, err := queue.Pop(t.Context())
 	require.NoError(t, err)
 	require.Same(t, firstTask, promoted)
-	require.True(t, store.canAdmitTask(firstTask))
-	require.False(t, store.canAdmitTask(secondTask))
+	require.False(t, store.hasDeferredTaskAhead(firstTask))
+	require.True(t, store.hasDeferredTaskAhead(secondTask))
 
 	store.deferTask(firstTask)
-	store.promoteDeferredTask(queue)
+	store.promoteDeferredTask()
 	promoted, err = queue.Pop(t.Context())
 	require.NoError(t, err)
 	require.Same(t, firstTask, promoted)
 
 	store.finishPromotedTask(firstTask)
-	require.True(t, store.canAdmitTask(secondTask))
+	require.False(t, store.hasDeferredTaskAhead(secondTask))
 }
 
 func TestSubscriptionWithFailedTiKV(t *testing.T) {

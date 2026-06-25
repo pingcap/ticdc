@@ -121,12 +121,7 @@ func calculatePriorityDirectly(taskType TaskType, currentTs, resolvedTs uint64) 
 	resolvedTsLag := oracle.GetTimeFromTS(currentTs).Sub(oracle.GetTimeFromTS(resolvedTs))
 	resolvedTsLagBonus := int(resolvedTsLag.Seconds())
 
-	priority := basePriority + resolvedTsLagBonus
-
-	if priority < 0 {
-		priority = 0
-	}
-	return priority
+	return max(basePriority+resolvedTsLagBonus, 0)
 }
 
 func TestResolvedTsLagLogic(t *testing.T) {

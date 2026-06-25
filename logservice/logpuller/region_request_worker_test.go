@@ -334,6 +334,7 @@ func TestClearPendingRegionsDoesNotReturnStoppedSentRegion(t *testing.T) {
 func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	worker := &regionRequestWorker{
 		requestCache: newRequestCache(10),
+		controlQueue: newControlQueue(),
 		store:        &requestedStore{storeAddr: "store-1"},
 		client:       &subscriptionClient{},
 	}
@@ -383,6 +384,7 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			worker := &regionRequestWorker{
 				requestCache: newRequestCache(10),
+				controlQueue: newControlQueue(),
 				store:        &requestedStore{storeAddr: "store-1"},
 				client:       &subscriptionClient{},
 			}

@@ -53,6 +53,9 @@ type regionPriorityTask struct {
 	regionInfo regionInfo
 	heapIndex  int // for heap.Item interface
 
+	// deferredStore is set when a task deferred by one store is promoted back
+	// to the global priority queue. It lets the scheduler clear the store's
+	// promoted marker after the task is admitted, moved, or dropped.
 	deferredStore atomic.Pointer[requestedStore]
 }
 
@@ -80,11 +83,7 @@ func calculateRegionTaskPriority(taskType TaskType, regionInfo regionInfo, curre
 	resolvedTsLag := oracle.GetTimeFromTS(currentTs).Sub(oracle.GetTimeFromTS(regionInfo.subscribedSpan.resolvedTs.Load()))
 	resolvedTsLagPenalty := int(resolvedTsLag.Seconds())
 
-	priority := basePriority + resolvedTsLagPenalty
-	if priority < 0 {
-		priority = 0
-	}
-	return priority
+	return max(basePriority+resolvedTsLagPenalty, 0)
 }
 
 // Priority returns the fixed priority value, lower value means higher priority.
