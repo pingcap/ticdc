@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
@@ -254,8 +255,6 @@ func TestNewLogReaderAndReadMeta(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
-=======
 func TestInitMetaClosesExternalStorage(t *testing.T) {
 	controller := gomock.NewController(t)
 	mockStorage := mockobjstore.NewMockStorage(controller)
@@ -293,7 +292,6 @@ func TestInitMetaClosesExternalStorage(t *testing.T) {
 	require.Equal(t, uint64(22), reader.meta.ResolvedTs)
 }
 
->>>>>>> 6b8fdc0d3 (gc: support keyspace for old safepoint (#5195))
 func genMetaFile(t *testing.T, dir string, meta *misc.LogMeta) {
 	fileName := fmt.Sprintf(redo.RedoMetaFileFormat, "capture", "default",
 		"changefeed", redo.RedoMetaFileType, uuid.NewString(), redo.MetaEXT)

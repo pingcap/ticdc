@@ -101,13 +101,8 @@ func (m *RedoMeta) Running() bool {
 	return m.running.Load()
 }
 
-<<<<<<< HEAD
-func (m *RedoMeta) PreStart(ctx context.Context) error {
-	uri, err := storage.ParseRawURL(util.GetOrZero(m.cfg.Storage))
-=======
 func (m *RedoMeta) PreStart(ctx context.Context) (err error) {
 	uri, err := objstore.ParseRawURL(util.GetOrZero(m.cfg.Storage))
->>>>>>> 6b8fdc0d3 (gc: support keyspace for old safepoint (#5195))
 	if err != nil {
 		return err
 	}

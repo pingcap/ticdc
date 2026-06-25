@@ -17,13 +17,6 @@ import (
 	"testing"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-<<<<<<< HEAD
-=======
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	ticonfig "github.com/pingcap/tidb/pkg/config"
-	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
-	"github.com/pingcap/tidb/pkg/meta/model"
->>>>>>> 6b8fdc0d3 (gc: support keyspace for old safepoint (#5195))
 	"github.com/stretchr/testify/require"
 )
 

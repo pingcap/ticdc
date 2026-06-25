@@ -20,13 +20,11 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/redo"
-<<<<<<< HEAD
-=======
 	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
->>>>>>> 6b8fdc0d3 (gc: support keyspace for old safepoint (#5195))
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,8 +80,6 @@ func TestFileReaderRead(t *testing.T) {
 		require.NoError(t, r.Close())
 	}
 }
-<<<<<<< HEAD
-=======
 
 func TestDownLoadAndSortFilesClosesExternalStorage(t *testing.T) {
 	controller := gomock.NewController(t)
@@ -115,4 +111,3 @@ func TestDownLoadAndSortFilesClosesExternalStorage(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, files)
 }
->>>>>>> 6b8fdc0d3 (gc: support keyspace for old safepoint (#5195))

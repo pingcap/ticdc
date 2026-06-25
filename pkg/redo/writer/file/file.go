@@ -180,13 +180,8 @@ func newWriter(
 // NewFileWriter returns a file rotated writer for the normal redo writer path.
 func NewFileWriter(
 	ctx context.Context, cfg *writer.Config, logType string, opts ...writer.Option,
-<<<<<<< HEAD
-) (*Writer, error) {
-	var extStorage storage.ExternalStorage
-=======
 ) (w *Writer, err error) {
 	var extStorage storeapi.Storage
->>>>>>> 6b8fdc0d3 (gc: support keyspace for old safepoint (#5195))
 	if cfg.UseExternalStorage() {
 		var err error
 		extStorage, err = redo.InitExternalStorage(ctx, *cfg.URI())

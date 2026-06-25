@@ -16,11 +16,13 @@ package redo
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -29,11 +31,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-<<<<<<< HEAD
-=======
 	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
->>>>>>> 6b8fdc0d3 (gc: support keyspace for old safepoint (#5195))
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -371,8 +370,6 @@ func TestRedoMetaMetrics(t *testing.T) {
 	cancel()
 	require.ErrorIs(t, eg.Wait(), context.Canceled)
 }
-<<<<<<< HEAD
-=======
 
 func TestPreStartClosesExternalStorageOnFailure(t *testing.T) {
 	controller := gomock.NewController(t)
@@ -400,4 +397,3 @@ func TestPreStartClosesExternalStorageOnFailure(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, m.extStorage)
 }
->>>>>>> 6b8fdc0d3 (gc: support keyspace for old safepoint (#5195))
