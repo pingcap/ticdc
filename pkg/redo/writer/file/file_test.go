@@ -31,7 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
+	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
 	"github.com/stretchr/testify/require"
 	"github.com/uber-go/atomic"
 	"go.uber.org/mock/gomock"
@@ -240,7 +240,7 @@ func TestNewWriter(t *testing.T) {
 	require.False(t, w.IsRunning())
 
 	controller := gomock.NewController(t)
-	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage := mockobjstore.NewMockStorage(controller)
 
 	changefeed := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 		Keyspace: "abcd",
@@ -307,7 +307,7 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 	t.Parallel()
 
 	controller := gomock.NewController(t)
-	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage := mockobjstore.NewMockStorage(controller)
 
 	dir := t.TempDir()
 	uuidGen := uuid.NewMock()
@@ -373,7 +373,7 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 	t.Parallel()
 
 	controller := gomock.NewController(t)
-	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage := mockobjstore.NewMockStorage(controller)
 
 	dir := t.TempDir()
 	uuidGen := uuid.NewMock()

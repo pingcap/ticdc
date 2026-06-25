@@ -588,6 +588,14 @@ var (
 		"updating service safepoint failed",
 		errors.RFCCodeText("CDC:ErrUpdateServiceSafepointFailed"),
 	)
+	ErrGetServiceSafepointFailed = errors.Normalize(
+		"get service safepoint failed",
+		errors.RFCCodeText("CDC:ErrGetServiceSafepointFailed"),
+	)
+	ErrDeleteServiceSafepointFailed = errors.Normalize(
+		"delete service safepoint failed",
+		errors.RFCCodeText("CDC:ErrDeleteServiceSafepointFailed"),
+	)
 	ErrUpdateGCBarrierFailed = errors.Normalize(
 		"updating gc barrier failed",
 		errors.RFCCodeText("CDC:ErrUpdateGCBarrierFailed"),
