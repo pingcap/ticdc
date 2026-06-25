@@ -14,6 +14,7 @@
 package common
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
@@ -37,4 +38,18 @@ func TestDebeziumAvroSchemaRegistryConfig(t *testing.T) {
 	cfg = NewConfig(config.ProtocolDebezium)
 	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
 	require.ErrorContains(t, cfg.Validate(), `Debezium protocol does not support schema registry`)
+}
+
+func TestDebeziumAvroWatermarkConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := NewConfig(config.ProtocolDebeziumAvro)
+	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=debezium-avro&enable-tidb-extension=true&avro-enable-watermark=true&schema-registry=http://127.0.0.1:8081")
+	require.NoError(t, err)
+
+	err = cfg.Apply(sinkURI, config.GetDefaultReplicaConfig().Sink)
+	require.NoError(t, err)
+	require.True(t, cfg.EnableTiDBExtension)
+	require.True(t, cfg.AvroEnableWatermark)
+	require.Equal(t, "http://127.0.0.1:8081", cfg.AvroConfluentSchemaRegistry)
 }

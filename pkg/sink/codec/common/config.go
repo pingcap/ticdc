@@ -169,7 +169,7 @@ type urlConfig struct {
 	AvroDecimalHandlingMode        *string `form:"avro-decimal-handling-mode"`
 	AvroBigintUnsignedHandlingMode *string `form:"avro-bigint-unsigned-handling-mode"`
 
-	// AvroEnableWatermark is the option for enabling watermark in avro protocol
+	// AvroEnableWatermark is the option for enabling watermark in avro and debezium-avro protocol
 	// only used for internal testing, do not set this in the production environment since the
 	// confluent official consumer cannot handle watermark.
 	AvroEnableWatermark *bool `form:"avro-enable-watermark"`
@@ -226,7 +226,8 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 		c.AvroBigintUnsignedHandlingMode = *urlParameter.AvroBigintUnsignedHandlingMode
 	}
 	if urlParameter.AvroEnableWatermark != nil {
-		if c.EnableTiDBExtension && c.Protocol == config.ProtocolAvro {
+		if c.EnableTiDBExtension &&
+			(c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebeziumAvro) {
 			c.AvroEnableWatermark = *urlParameter.AvroEnableWatermark
 		}
 	}
