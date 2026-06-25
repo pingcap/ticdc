@@ -299,7 +299,7 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 
 	worker := &regionRequestWorker{controlQueue: newControlQueue()}
 	store := &requestedStore{storeAddr: "store-1"}
-	store.requestWorkers.s = []*regionRequestWorker{worker}
+	store.requestWorkers = []*regionRequestWorker{worker}
 	client.stores.Store(store.storeAddr, store)
 
 	client.setTableStopped(span)
@@ -424,7 +424,7 @@ func TestEnqueueDeregisterToAllStoresUsesControlQueue(t *testing.T) {
 		controlQueue: newControlQueue(),
 	}
 	store := &requestedStore{storeAddr: "store-1"}
-	store.requestWorkers.s = []*regionRequestWorker{worker}
+	store.requestWorkers = []*regionRequestWorker{worker}
 	client.stores.Store(store.storeAddr, store)
 
 	dummyRegion := regionInfo{
