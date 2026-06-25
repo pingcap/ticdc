@@ -152,9 +152,6 @@ func (b *Statistics) Close() {
 		ExecDDLCounter.DeleteLabelValues(keyspace, changefeedID, ddlType)
 		return true
 	})
-<<<<<<< HEAD
-	TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID, b.sinkType)
-=======
 	b.rowsAffectedMap.Range(func(key, value any) bool {
 		countTypeAndRowType := key.(string)
 		splitTypes := strings.Split(countTypeAndRowType, "-")
@@ -163,6 +160,5 @@ func (b *Statistics) Close() {
 		return true
 	})
 	TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)
->>>>>>> bd2023796 (metrics: add DML rows affected metric (#3909))
 	ExecDMLEventCounter.DeleteLabelValues(keyspace, changefeedID)
 }

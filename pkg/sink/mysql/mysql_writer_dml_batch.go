@@ -628,13 +628,8 @@ func (w *Writer) genUpdateSQL(rows ...*sqlmodel.RowChange) ([]string, [][]interf
 	}
 	if size < w.cfg.MaxMultiUpdateRowSize*len(rows) {
 		// use multi update in one SQL
-<<<<<<< HEAD
 		sql, value := sqlmodel.GenUpdateSQL(w.cfg.whereClause, rows...)
-		return []string{sql}, [][]interface{}{value}
-=======
-		sql, value := sqlmodel.GenUpdateSQL(rows...)
 		return []string{sql}, [][]interface{}{value}, []common.RowType{common.RowTypeUpdate}
->>>>>>> bd2023796 (metrics: add DML rows affected metric (#3909))
 	}
 	// each row has one independent update SQL.
 	sqls := make([]string, 0, len(rows))

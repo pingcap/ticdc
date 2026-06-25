@@ -5799,11 +5799,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-<<<<<<< HEAD
             "y": 33
-=======
-            "y": 32
->>>>>>> bd2023796 (metrics: add DML rows affected metric (#3909))
           },
           "hiddenSeries": false,
           "id": 636,

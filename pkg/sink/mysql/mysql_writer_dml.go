@@ -95,13 +95,8 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 			if w.cfg.EnableActiveActive {
 				queryList, argsList, rowTypesList = w.genActiveActiveSQL(tableInfo, eventsInGroup)
 			} else {
-<<<<<<< HEAD
-				if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
-					queryList, argsList = w.generateNormalSQLs(eventsInGroup)
-=======
 				if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
 					queryList, argsList, rowTypesList = w.generateNormalSQLs(eventsInGroup)
->>>>>>> bd2023796 (metrics: add DML rows affected metric (#3909))
 				} else {
 					queryList, argsList, rowTypesList = w.generateBatchSQL(eventsInGroup)
 				}
@@ -119,13 +114,8 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	return dmls, nil
 }
 
-<<<<<<< HEAD
-func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
-=======
 func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup []*commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
 	if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
->>>>>>> bd2023796 (metrics: add DML rows affected metric (#3909))
 		return w.generateActiveActiveNormalSQLs(eventsInGroup)
 	}
 	return w.generateActiveActiveBatchSQL(eventsInGroup)
@@ -138,10 +128,11 @@ func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup [
 // 3. The table doesn't have virtual columns
 // 4. There's more than one row in the group
 // 5. All events have the same safe mode status
-func (w *Writer) shouldGenBatchSQL(hasPKOrNotNullUK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent) bool {
+func (w *Writer) shouldGenBatchSQL(tableInfo *common.TableInfo, events []*commonEvent.DMLEvent) bool {
 	if !w.cfg.BatchDMLEnable {
 		return false
 	}
+	hasPKOrNotNullUK, hasVirtualCols := tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns()
 
 	if !hasPKOrNotNullUK || hasVirtualCols {
 		return false
