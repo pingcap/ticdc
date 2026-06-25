@@ -204,29 +204,7 @@ func TestRequestCacheAdd_ConcurrentAdds(t *testing.T) {
 	require.Equal(t, numGoroutines, cache.getPendingCount())
 }
 
-func TestRequestCacheAdd_DuplicateQueuedRequestUpdatesExisting(t *testing.T) {
-	cache := newRequestCache(10)
-	ctx := context.Background()
-
-	region := createTestRegionInfo(1, 1)
-	updatedRegion := region
-	updatedRegion.filterLoop = true
-
-	ok, err := cache.add(ctx, region, false)
-	require.True(t, ok)
-	require.NoError(t, err)
-
-	ok, err = cache.add(ctx, updatedRegion, false)
-	require.True(t, ok)
-	require.NoError(t, err)
-	require.Equal(t, 1, cache.getPendingCount())
-
-	req, err := cache.pop(ctx)
-	require.NoError(t, err)
-	require.True(t, req.regionInfo.filterLoop)
-}
-
-func TestRequestCacheMarkSent_DuplicateActiveRequestReleasesOldSent(t *testing.T) {
+func TestRequestCacheAdd_DuplicateQueuedRequestsAreTrackedIndependently(t *testing.T) {
 	cache := newRequestCache(10)
 	ctx := context.Background()
 
@@ -235,24 +213,17 @@ func TestRequestCacheMarkSent_DuplicateActiveRequestReleasesOldSent(t *testing.T
 	ok, err := cache.add(ctx, region, false)
 	require.True(t, ok)
 	require.NoError(t, err)
-
-	req1, err := cache.pop(ctx)
-	require.NoError(t, err)
-	req1.markSent()
 
 	ok, err = cache.add(ctx, region, false)
 	require.True(t, ok)
 	require.NoError(t, err)
 	require.Equal(t, 2, cache.getPendingCount())
 
+	req1, err := cache.pop(ctx)
+	require.NoError(t, err)
 	req2, err := cache.pop(ctx)
 	require.NoError(t, err)
-	req2.markSent()
-	require.Equal(t, 1, cache.getPendingCount())
-
-	// Finish the remaining tracked request.
-	require.True(t, req2.resolve())
-	require.Equal(t, 0, cache.getPendingCount())
+	require.NotSame(t, req1, req2)
 }
 
 func TestRequestCacheFinish_ReleasesSlot(t *testing.T) {

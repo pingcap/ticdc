@@ -32,34 +32,29 @@ const (
 type regionReqStage uint8
 
 const (
+	// regionReqStageQueued means the request has been admitted but not yet
+	// picked up by the worker send loop.
 	regionReqStageQueued regionReqStage = iota
+	// regionReqStageProcessing means the send loop has popped the request, but
+	// it has not been recorded as sent yet.
 	regionReqStageProcessing
+	// regionReqStageSent means the request has been sent to TiKV and is waiting
+	// for initialized/resolved/stopped cleanup.
 	regionReqStageSent
+	// regionReqStageFinished means the request has left the worker window.
 	regionReqStageFinished
 )
-
-type regionReqKey struct {
-	subID    SubscriptionID
-	regionID uint64
-}
-
-func newRegionReqKey(region regionInfo) regionReqKey {
-	return regionReqKey{
-		subID:    region.subscribedSpan.subID,
-		regionID: region.verID.GetID(),
-	}
-}
 
 // regionReq tracks one data request from admission to completion.
 type regionReq struct {
 	regionInfo regionInfo
 	createTime time.Time
 
+	// cache is set by requestCache.add. It lets regionFeedState finish exactly
+	// the request that created it instead of looking up by subID/regionID.
 	cache *requestCache
-	key   regionReqKey
+	// stage is guarded by requestCache.mu.
 	stage regionReqStage
-
-	replacesActive bool
 }
 
 func newRegionReq(cache *requestCache, region regionInfo) *regionReq {
@@ -67,7 +62,6 @@ func newRegionReq(cache *requestCache, region regionInfo) *regionReq {
 		regionInfo: region,
 		createTime: time.Now(),
 		cache:      cache,
-		key:        newRegionReqKey(region),
 		stage:      regionReqStageQueued,
 	}
 }
@@ -101,28 +95,37 @@ func (r *regionReq) finish() bool {
 type requestCache struct {
 	mu sync.Mutex
 
+	// requests owns every live data request in this worker. Its length is the
+	// flow-control count used by add(), getPendingCount(), and metrics.
 	requests map[*regionReq]struct{}
-	current  map[regionReqKey]*regionReq
 
+	// ready is the FIFO list of queued requests. Entries already popped or
+	// removed are left as nil/stale and skipped by tryPop; readyIdx is the next
+	// candidate index. compactReadyLocked occasionally drops skipped entries.
 	ready    []*regionReq
 	readyIdx int
 
+	// maxPendingCount limits len(requests) for non-force adds. force adds bypass
+	// this limit, matching the old force behavior for high-priority data requests.
 	maxPendingCount int
 
-	readyAvailable   chan struct{}
-	spaceAvailable   chan struct{}
+	// readyAvailable wakes a worker blocked in pop() when a queued request is
+	// appended. It is a level-trigger hint; callers must re-check ready under mu.
+	readyAvailable chan struct{}
+	// spaceAvailable wakes add() when a live request leaves requests.
+	spaceAvailable chan struct{}
+	// onSpaceAvailable lets the store-level deferred scheduler retry a task when
+	// this worker frees request capacity.
 	onSpaceAvailable func()
 }
 
 func newRequestCache(maxPendingCount int, onSpaceAvailable ...func()) *requestCache {
 	res := &requestCache{
-		requests:         make(map[*regionReq]struct{}),
-		current:          make(map[regionReqKey]*regionReq),
-		ready:            make([]*regionReq, 0, maxPendingCount),
-		maxPendingCount:  maxPendingCount,
-		readyAvailable:   make(chan struct{}, 1),
-		spaceAvailable:   make(chan struct{}, 1),
-		onSpaceAvailable: nil,
+		requests:        make(map[*regionReq]struct{}),
+		ready:           make([]*regionReq, 0, maxPendingCount),
+		maxPendingCount: maxPendingCount,
+		readyAvailable:  make(chan struct{}, 1),
+		spaceAvailable:  make(chan struct{}, 1),
 	}
 	if len(onSpaceAvailable) > 0 {
 		res.onSpaceAvailable = onSpaceAvailable[0]
@@ -158,7 +161,6 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (
 }
 
 func (c *requestCache) tryAdd(region regionInfo, force bool) bool {
-	req := newRegionReq(c, region)
 	notifyReady := false
 
 	c.mu.Lock()
@@ -169,24 +171,12 @@ func (c *requestCache) tryAdd(region regionInfo, force bool) bool {
 		}
 	}()
 
-	if existing, ok := c.current[req.key]; ok {
-		if existing.stage == regionReqStageQueued {
-			existing.regionInfo = region
-			return true
-		}
-		req.replacesActive = true
-		log.Warn("duplicate active region request detected, keep newest request",
-			zap.Uint64("subID", uint64(existing.key.subID)),
-			zap.Uint64("regionID", existing.key.regionID),
-			zap.Uint8("stage", uint8(existing.stage)),
-			zap.Int("pendingCount", len(c.requests)))
-	}
 	if len(c.requests) >= c.maxPendingCount && !force {
 		return false
 	}
 
+	req := newRegionReq(c, region)
 	c.requests[req] = struct{}{}
-	c.current[req.key] = req
 	c.ready = append(c.ready, req)
 	notifyReady = true
 	return true
@@ -240,21 +230,11 @@ func (c *requestCache) tryPop() *regionReq {
 }
 
 func (c *requestCache) markSent(req *regionReq) {
-	removed := false
 	c.mu.Lock()
 	if _, ok := c.requests[req]; ok && req.stage == regionReqStageProcessing {
-		if req.replacesActive {
-			if old := c.findSentLocked(req.key, req); old != nil {
-				removed = c.removeLocked(old) || removed
-			}
-		}
 		req.stage = regionReqStageSent
 	}
 	c.mu.Unlock()
-
-	if removed {
-		c.notifySpace()
-	}
 }
 
 func (c *requestCache) resolve(req *regionReq) bool {
@@ -265,8 +245,8 @@ func (c *requestCache) resolve(req *regionReq) bool {
 	cost := time.Since(req.createTime).Seconds()
 	if cost > 0 && cost < abnormalRequestDurationInSec {
 		log.Debug("cdc resolve region request",
-			zap.Uint64("subID", uint64(req.key.subID)),
-			zap.Uint64("regionID", req.key.regionID),
+			zap.Uint64("subID", uint64(req.regionInfo.subscribedSpan.subID)),
+			zap.Uint64("regionID", req.regionInfo.verID.GetID()),
 			zap.Float64("cost", cost),
 			zap.Int("pendingCount", c.getPendingCount()))
 		metrics.RegionRequestFinishScanDuration.Observe(cost)
@@ -274,7 +254,7 @@ func (c *requestCache) resolve(req *regionReq) bool {
 	}
 	log.Info("region request duration abnormal, skip metric",
 		zap.Float64("cost", cost),
-		zap.Uint64("regionID", req.key.regionID))
+		zap.Uint64("regionID", req.regionInfo.verID.GetID()))
 	return true
 }
 
@@ -331,7 +311,6 @@ func (c *requestCache) clear() []regionInfo {
 		req.stage = regionReqStageFinished
 	}
 	removed := len(regions)
-	c.current = make(map[regionReqKey]*regionReq)
 	c.ready = c.ready[:0]
 	c.readyIdx = 0
 	c.mu.Unlock()
@@ -360,25 +339,10 @@ func (c *requestCache) removeLocked(req *regionReq) bool {
 	stage := req.stage
 	delete(c.requests, req)
 	req.stage = regionReqStageFinished
-	if c.current[req.key] == req {
-		delete(c.current, req.key)
-	}
 	if stage != regionReqStageSent {
 		c.compactReadyLocked()
 	}
 	return true
-}
-
-func (c *requestCache) findSentLocked(key regionReqKey, except *regionReq) *regionReq {
-	for req := range c.requests {
-		if req == except {
-			continue
-		}
-		if req.key == key && req.stage == regionReqStageSent {
-			return req
-		}
-	}
-	return nil
 }
 
 func (c *requestCache) notifyReady() {

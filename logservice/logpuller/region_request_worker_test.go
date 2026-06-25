@@ -77,6 +77,37 @@ func TestRegionStatesOperation(t *testing.T) {
 	require.Equal(t, 0, len(worker.requestedRegions.subscriptions))
 }
 
+func TestAddRegionStateReleasesOverwrittenRequest(t *testing.T) {
+	worker := &regionRequestWorker{
+		requestCache: newRequestCache(10),
+	}
+	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
+
+	ctx := context.Background()
+	region := createTestRegionInfo(1, 1)
+
+	ok, err := worker.requestCache.add(ctx, region, false)
+	require.NoError(t, err)
+	require.True(t, ok)
+	req1, err := worker.requestCache.pop(ctx)
+	require.NoError(t, err)
+	req1.markSent()
+	state1 := newRegionFeedState(req1.regionInfo, uint64(req1.regionInfo.subscribedSpan.subID), worker, req1)
+	worker.addRegionState(req1.regionInfo.subscribedSpan.subID, req1.regionInfo.verID.GetID(), state1)
+
+	ok, err = worker.requestCache.add(ctx, region, false)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 2, worker.requestCache.getPendingCount())
+	req2, err := worker.requestCache.pop(ctx)
+	require.NoError(t, err)
+	state2 := newRegionFeedState(req2.regionInfo, uint64(req2.regionInfo.subscribedSpan.subID), worker, req2)
+	worker.addRegionState(req2.regionInfo.subscribedSpan.subID, req2.regionInfo.verID.GetID(), state2)
+
+	require.Equal(t, 1, worker.requestCache.getPendingCount())
+	require.Same(t, state2, worker.getRegionState(req2.regionInfo.subscribedSpan.subID, req2.regionInfo.verID.GetID()))
+}
+
 func TestClearPendingRegionsReleaseSlotForPreFetchedRegion(t *testing.T) {
 	worker := &regionRequestWorker{
 		requestCache: newRequestCache(10),

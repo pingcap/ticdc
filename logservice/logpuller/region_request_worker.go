@@ -528,6 +528,15 @@ func (s *regionRequestWorker) addRegionState(subscriptionID SubscriptionID, regi
 		s.requestedRegions.subscriptions[subscriptionID] = states
 	}
 
+	if oldState := states[regionID]; oldState != nil && oldState.request != state.request {
+		log.Warn("region request state overwritten",
+			zap.Uint64("workerID", s.workerID),
+			zap.Uint64("subscriptionID", uint64(subscriptionID)),
+			zap.Uint64("regionID", regionID))
+		if oldState.request != nil {
+			oldState.request.finish()
+		}
+	}
 	states[regionID] = state
 }
 
