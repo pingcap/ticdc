@@ -56,8 +56,10 @@ type clientOptions struct {
 	ReadTimeout  time.Duration
 }
 
-const defaultRequestTimeout = 10 * time.Second
-const defaultRecordRetries = 5
+const (
+	defaultRequestTimeout = 10 * time.Second
+	defaultRecordRetries  = 5
+)
 
 func maxTimeoutWithDefault(readTimeout, writeTimeout time.Duration) time.Duration {
 	timeout := readTimeout
