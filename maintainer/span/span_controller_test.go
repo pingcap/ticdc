@@ -487,7 +487,7 @@ func TestController_BindCommittedCheckpointToManagedSpan(t *testing.T) {
 	task := controller.GetTasksByTableID(100)[0]
 	controller.AdvanceMaintainerCommittedCheckpointTs(20)
 
-	msg := task.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add)
+	msg := task.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add, 7)
 	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	require.Equal(t, uint64(20), req.Config.StartTs)
 }
