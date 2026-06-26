@@ -21,7 +21,10 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/priorityqueue"
+	kvclientv2 "github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -29,7 +32,11 @@ import (
 // regionRequestScheduler owns region request admission from the global
 // priority queue to per-store request workers.
 type regionRequestScheduler struct {
-	client *subscriptionClient
+	config   *SubscriptionClientConfig
+	upstream *upstreamHandle
+
+	pushRegionEventToDS func(SubscriptionID, regionEvent)
+	onRegionFail        func(regionErrorInfo)
 
 	queue *priorityqueue.PriorityQueue[*regionPriorityTask]
 	seq   atomic.Uint64
@@ -39,13 +46,16 @@ type regionRequestScheduler struct {
 
 func newRegionRequestScheduler(client *subscriptionClient) *regionRequestScheduler {
 	return &regionRequestScheduler{
-		client: client,
-		queue:  priorityqueue.New[*regionPriorityTask](),
+		config:              client.config,
+		upstream:            client.upstream,
+		pushRegionEventToDS: client.pushRegionEventToDS,
+		onRegionFail:        client.onRegionFail,
+		queue:               priorityqueue.New[*regionPriorityTask](),
 	}
 }
 
 func (s *regionRequestScheduler) submit(taskType TaskType, region regionInfo) {
-	task := newRegionPriorityTask(taskType, region, s.client.pdClock.CurrentTS(), s.seq.Add(1))
+	task := newRegionPriorityTask(taskType, region, s.upstream.pdClock.CurrentTS(), s.seq.Add(1))
 	s.queue.Push(task)
 }
 
@@ -54,7 +64,7 @@ func (s *regionRequestScheduler) close() {
 	s.releaseAdmittedRegionRequests()
 }
 
-func (s *regionRequestScheduler) pendingRequestCount() int {
+func (s *regionRequestScheduler) updateMetrics() {
 	count := 0
 	s.stores.Range(func(_, value any) bool {
 		store := value.(*requestedStore)
@@ -63,7 +73,8 @@ func (s *regionRequestScheduler) pendingRequestCount() int {
 		}
 		return true
 	})
-	return count
+	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").
+		Set(float64(count))
 }
 
 func (s *regionRequestScheduler) broadcastDeregister(subID SubscriptionID, filterLoop bool) {
@@ -77,6 +88,23 @@ func (s *regionRequestScheduler) broadcastDeregister(subID SubscriptionID, filte
 		}
 		return true
 	})
+}
+
+func (s *regionRequestScheduler) attachRPCContextForRegion(ctx context.Context, region regionInfo) (regionInfo, bool) {
+	bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
+	rpcCtx, err := s.upstream.regionCache.GetTiKVRPCContext(bo, region.verID, kvclientv2.ReplicaReadLeader, 0)
+	if rpcCtx != nil {
+		region.rpcCtx = rpcCtx
+		return region, true
+	}
+	if err != nil {
+		log.Debug("subscription client get rpc context fail",
+			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
+			zap.Uint64("regionID", region.verID.GetID()),
+			zap.Error(err))
+	}
+	s.onRegionFail(newRegionErrorInfo(region, &rpcCtxUnavailableErr{verID: region.verID}))
+	return region, false
 }
 
 // releaseAdmittedRegionRequests releases region requests admitted to store
@@ -102,21 +130,29 @@ func (s *regionRequestScheduler) Run(ctx context.Context, eg *errgroup.Group) er
 			return rs
 		}
 
-		perWorkerQueueSize := pendingRegionRequestQueueSize / int(s.client.config.RegionRequestWorkerPerStore)
+		perWorkerQueueSize := pendingRegionRequestQueueSize / int(s.config.RegionRequestWorkerPerStore)
 		if perWorkerQueueSize <= 0 {
 			log.Warn("pending region request queue size is smaller than the number of workers, adjust per worker queue size to 1",
 				zap.Int("pendingRegionRequestQueueSize", pendingRegionRequestQueueSize),
-				zap.Uint("regionRequestWorkerPerStore", s.client.config.RegionRequestWorkerPerStore))
+				zap.Uint("regionRequestWorkerPerStore", s.config.RegionRequestWorkerPerStore))
 			perWorkerQueueSize = 1
 		}
 
 		rs = &requestedStore{
 			scheduler:      s,
 			storeAddr:      storeAddr,
-			requestWorkers: make([]*regionRequestWorker, 0, s.client.config.RegionRequestWorkerPerStore),
+			requestWorkers: make([]*regionRequestWorker, 0, s.config.RegionRequestWorkerPerStore),
 		}
-		for i := uint(0); i < s.client.config.RegionRequestWorkerPerStore; i++ {
-			requestWorker := newRegionRequestWorker(ctx, s.client, s.client.credential, eg, rs, perWorkerQueueSize)
+		for i := uint(0); i < s.config.RegionRequestWorkerPerStore; i++ {
+			requestWorker := newRegionRequestWorker(
+				ctx,
+				eg,
+				rs,
+				perWorkerQueueSize,
+				s.upstream,
+				s.pushRegionEventToDS,
+				s.onRegionFail,
+			)
 			rs.requestWorkers = append(rs.requestWorkers, requestWorker)
 		}
 		s.stores.Store(storeAddr, rs)
@@ -144,7 +180,7 @@ func (s *regionRequestScheduler) Run(ctx context.Context, eg *errgroup.Group) er
 		}
 
 		promotedStore := regionTask.deferredStore.Load()
-		region, ok := s.client.attachRPCContextForRegion(ctx, region)
+		region, ok := s.attachRPCContextForRegion(ctx, region)
 		if !ok {
 			if promotedStore != nil {
 				promotedStore.finishPromotedTask(regionTask)

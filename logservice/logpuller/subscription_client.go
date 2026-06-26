@@ -33,8 +33,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
-	"github.com/prometheus/client_golang/prometheus"
-	kvclientv2 "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
@@ -154,8 +152,12 @@ type SubscriptionClientConfig struct {
 	RegionRequestWorkerPerStore uint
 }
 
-type sharedClientMetrics struct {
-	batchResolvedSize prometheus.Observer
+type upstreamHandle struct {
+	pd          pd.Client
+	credential  *security.Credential
+	pdClock     pdutil.Clock
+	regionCache *tikv.RegionCache
+	clusterID   uint64
 }
 
 // subscriptionClient is used to subscribe events of table ranges from TiKV.
@@ -179,15 +181,11 @@ type SubscriptionClient interface {
 }
 
 type subscriptionClient struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	config    *SubscriptionClientConfig
-	metrics   sharedClientMetrics
-	clusterID uint64
+	ctx      context.Context
+	cancel   context.CancelFunc
+	config   *SubscriptionClientConfig
+	upstream *upstreamHandle
 
-	pd           pd.Client
-	regionCache  *tikv.RegionCache
-	pdClock      pdutil.Clock
 	lockResolver txnutil.LockResolver
 
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
@@ -195,9 +193,6 @@ type subscriptionClient struct {
 	mu     sync.Mutex
 	cond   *sync.Cond
 	paused atomic.Bool
-
-	// the credential to connect tikv
-	credential *security.Credential
 
 	totalSpans struct {
 		sync.RWMutex
@@ -224,22 +219,23 @@ func NewSubscriptionClient(
 	lockResolver txnutil.LockResolver,
 	credential *security.Credential,
 ) SubscriptionClient {
+	regionCache := appcontext.GetService[*tikv.RegionCache](appcontext.RegionCache)
+	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	subClient := &subscriptionClient{
 		config: config,
-
-		pd:           pd,
-		regionCache:  appcontext.GetService[*tikv.RegionCache](appcontext.RegionCache),
-		pdClock:      appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		upstream: &upstreamHandle{
+			pd:          pd,
+			credential:  credential,
+			pdClock:     pdClock,
+			regionCache: regionCache,
+		},
 		lockResolver: lockResolver,
-
-		credential: credential,
 
 		rangeTaskCh:            make(chan rangeTask, 1024),
 		resolveLockTaskCh:      make(chan resolveLockTask, 1024),
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
 		errCache:               newErrCache(),
 	}
-	subClient.regionScheduler = newRegionRequestScheduler(subClient)
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
@@ -259,7 +255,7 @@ func NewSubscriptionClient(
 	subClient.ds = ds
 	subClient.cond = sync.NewCond(&subClient.mu)
 
-	subClient.initMetrics()
+	subClient.regionScheduler = newRegionRequestScheduler(subClient)
 	return subClient
 }
 
@@ -270,11 +266,6 @@ func (s *subscriptionClient) Name() string {
 // AllocsubscriptionID gets an ID can be used in `Subscribe`.
 func (s *subscriptionClient) AllocSubscriptionID() SubscriptionID {
 	return SubscriptionID(subscriptionIDGen.Add(1))
-}
-
-func (s *subscriptionClient) initMetrics() {
-	// TODO: fix metrics
-	s.metrics.batchResolvedSize = metrics.BatchResolvedEventSize.WithLabelValues("event-store")
 }
 
 func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
@@ -311,8 +302,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 				).Set(float64(areaMetric.MemoryUsage()))
 			}
 
-			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").
-				Set(float64(s.regionScheduler.pendingRequestCount()))
+			s.regionScheduler.updateMetrics()
 
 			count := 0
 			s.totalSpans.RLock()
@@ -432,11 +422,11 @@ func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
 
 func (s *subscriptionClient) Run(ctx context.Context) error {
 	// s.consume = consume
-	if s.pd == nil {
+	if s.upstream == nil || s.upstream.pd == nil {
 		log.Warn("subscription client should be in test mode, skip run")
 		return nil
 	}
-	s.clusterID = s.pd.GetClusterID(ctx)
+	s.upstream.clusterID = s.upstream.pd.GetClusterID(ctx)
 
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -511,23 +501,6 @@ func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
 	s.errCache.add(errInfo)
 }
 
-func (s *subscriptionClient) attachRPCContextForRegion(ctx context.Context, region regionInfo) (regionInfo, bool) {
-	bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-	rpcCtx, err := s.regionCache.GetTiKVRPCContext(bo, region.verID, kvclientv2.ReplicaReadLeader, 0)
-	if rpcCtx != nil {
-		region.rpcCtx = rpcCtx
-		return region, true
-	}
-	if err != nil {
-		log.Debug("subscription client get rpc context fail",
-			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
-			zap.Uint64("regionID", region.verID.GetID()),
-			zap.Error(err))
-	}
-	s.onRegionFail(newRegionErrorInfo(region, &rpcCtxUnavailableErr{verID: region.verID}))
-	return region, false
-}
-
 func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	// Limit the concurrent number of goroutines to convert range tasks to region tasks.
@@ -572,7 +545,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			zap.Any("span", common.FormatTableSpan(&nextSpan)))
 
 		backoff := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-		regions, err := s.regionCache.BatchLoadRegionsWithKeyRange(backoff, nextSpan.StartKey, nextSpan.EndKey, limit)
+		regions, err := s.upstream.regionCache.BatchLoadRegionsWithKeyRange(backoff, nextSpan.StartKey, nextSpan.EndKey, limit)
 		if err != nil {
 			log.Warn("subscription client load regions failed",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
@@ -694,7 +667,7 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		innerErr := eerr.err
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
 			metricFeedNotLeaderCounter.Inc()
-			s.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
+			s.upstream.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
 			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
 			return nil
 		}
@@ -744,13 +717,13 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		metricGetStoreErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		// cannot get the store the region belongs to, so we need to reload the region.
-		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
+		s.upstream.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
 		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 		return nil
 	case *storeStreamErr:
 		metricStoreSendRequestErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
+		s.upstream.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
 		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
 		return nil
 	case *requestCancelledErr:
@@ -796,13 +769,13 @@ func (s *subscriptionClient) runResolveLockChecker(ctx context.Context) error {
 		case <-resolveLockTicker.C:
 		}
 
-		physical, logic, err := s.pd.GetTS(ctx)
+		physical, logic, err := s.upstream.pd.GetTS(ctx)
 		if err != nil {
 			log.Warn("get ts from pd failed", zap.Error(err))
 			continue
 		}
 		currentTs := oracle.ComposeTS(physical, logic)
-		currentTime := s.pdClock.CurrentTime()
+		currentTime := s.upstream.pdClock.CurrentTime()
 		s.totalSpans.Lock()
 		for _, subSpan := range s.totalSpans.spanMap {
 			if subSpan != nil {
@@ -874,7 +847,7 @@ func (s *subscriptionClient) logSlowRegions(ctx context.Context) error {
 		case <-ticker.C:
 		}
 
-		currTime := s.pdClock.CurrentTime()
+		currTime := s.upstream.pdClock.CurrentTime()
 		s.totalSpans.RLock()
 		slowInitializeRegion := 0
 		for subscriptionID, rt := range s.totalSpans.spanMap {
@@ -972,7 +945,7 @@ func (s *subscriptionClient) GetResolvedTsLag() float64 {
 	if pullerMinResolvedTs == 0 {
 		return 0
 	}
-	pdTime := s.pdClock.CurrentTime()
+	pdTime := s.upstream.pdClock.CurrentTime()
 	phyResolvedTs := oracle.ExtractPhysical(pullerMinResolvedTs)
 	lag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
 	return lag

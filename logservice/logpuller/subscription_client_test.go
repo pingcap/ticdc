@@ -57,6 +57,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh:      make(chan resolveLockTask, 10),
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
+		upstream:               &upstreamHandle{pdClock: pdutil.NewClock4Test()},
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	rawSpan := heartbeatpb.TableSpan{
@@ -69,7 +70,6 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, false)
 	client.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 	client.totalSpans.spanMap[SubscriptionID(1)] = span
-	client.pdClock = pdutil.NewClock4Test()
 
 	// Lock a range, and then ResolveLock will trigger a task for it.
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
@@ -279,10 +279,10 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh: make(chan resolveLockTask, 1),
+		upstream:          &upstreamHandle{pdClock: pdutil.NewClock4Test()},
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
-	client.pdClock = pdutil.NewClock4Test()
 	client.regionScheduler = newRegionRequestScheduler(client)
 
 	rawSpan := heartbeatpb.TableSpan{
@@ -417,7 +417,7 @@ func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 
 func TestEnqueueDeregisterToAllStoresUsesControlQueue(t *testing.T) {
 	ctx := context.Background()
-	client := &subscriptionClient{}
+	client := &subscriptionClient{upstream: &upstreamHandle{}}
 	scheduler := newRegionRequestScheduler(client)
 
 	worker := &regionRequestWorker{

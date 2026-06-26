@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/utils/dynstream"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
 	"google.golang.org/grpc"
@@ -182,13 +181,9 @@ func (m *mockRegionEventDynamicStream) GetMetrics() dynstream.Metrics[int, Subsc
 
 func newDispatchResolvedTsTestWorker(regionCount int) (*regionRequestWorker, *mockRegionEventDynamicStream, *cdcpb.ResolvedTs) {
 	ds := &mockRegionEventDynamicStream{}
+	client := &subscriptionClient{ds: ds}
 	worker := &regionRequestWorker{
-		client: &subscriptionClient{
-			metrics: sharedClientMetrics{
-				batchResolvedSize: prometheus.ObserverFunc(func(float64) {}),
-			},
-			ds: ds,
-		},
+		pushRegionEventToDS: client.pushRegionEventToDS,
 	}
 	worker.requestedRegions.subscriptions = map[SubscriptionID]regionFeedStates{
 		1: make(regionFeedStates, regionCount),
@@ -218,7 +213,7 @@ func dispatchResolvedTsEventLegacyForBenchmark(s *regionRequestWorker, resolvedT
 			return
 		}
 		states := resolvedStates
-		s.client.pushRegionEventToDS(subscriptionID, regionEvent{
+		s.pushRegionEventToDS(subscriptionID, regionEvent{
 			resolvedTs: resolvedTsEvent.Ts,
 			states:     states,
 		})
@@ -333,10 +328,12 @@ func TestClearPendingRegionsDoesNotReturnStoppedSentRegion(t *testing.T) {
 
 func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	worker := &regionRequestWorker{
-		requestCache: newRequestCache(10),
-		controlQueue: newControlQueue(),
-		store:        &requestedStore{storeAddr: "store-1"},
-		client:       &subscriptionClient{},
+		requestCache:        newRequestCache(10),
+		controlQueue:        newControlQueue(),
+		store:               &requestedStore{storeAddr: "store-1"},
+		upstream:            &upstreamHandle{},
+		pushRegionEventToDS: func(SubscriptionID, regionEvent) {},
+		onRegionFail:        func(regionErrorInfo) {},
 	}
 	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
 
@@ -383,10 +380,12 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			worker := &regionRequestWorker{
-				requestCache: newRequestCache(10),
-				controlQueue: newControlQueue(),
-				store:        &requestedStore{storeAddr: "store-1"},
-				client:       &subscriptionClient{},
+				requestCache:        newRequestCache(10),
+				controlQueue:        newControlQueue(),
+				store:               &requestedStore{storeAddr: "store-1"},
+				upstream:            &upstreamHandle{},
+				pushRegionEventToDS: func(SubscriptionID, regionEvent) {},
+				onRegionFail:        func(regionErrorInfo) {},
 			}
 			worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
 
