@@ -26,10 +26,16 @@ type DataRange struct {
 	CommitTsStart uint64
 	CommitTsEnd   uint64
 
+	// RowLevelScanPosition is an opaque eventstore-owned token used to resume
+	// scanning after a specific row inside the scan window.
+	RowLevelScanPosition ScanPosition
+
 	// LastScannedTxnStartTs is the start-ts of the last scanned DML event.
 	// it should less than the CommitTsStart
 	LastScannedTxnStartTs uint64
 }
+
+type ScanPosition []byte
 
 func NewDataRange(clusterID uint64, span *heartbeatpb.TableSpan, startTs, endTs uint64) *DataRange {
 	return &DataRange{
@@ -53,7 +59,10 @@ func (d *DataRange) String() string {
 }
 
 func (d *DataRange) Equal(other *DataRange) bool {
-	return d.Span.Equal(other.Span) && d.CommitTsStart == other.CommitTsStart && d.CommitTsEnd == other.CommitTsEnd
+	return d.Span.Equal(other.Span) &&
+		d.CommitTsStart == other.CommitTsStart &&
+		d.CommitTsEnd == other.CommitTsEnd &&
+		bytes.Equal(d.RowLevelScanPosition, other.RowLevelScanPosition)
 }
 
 // Merge merges two DataRange, if the two DataRange have different Span, return nil.

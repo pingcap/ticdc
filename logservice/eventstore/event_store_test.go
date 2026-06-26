@@ -1608,6 +1608,124 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 	wg.Wait()
 }
 
+func TestEventStoreResumeTokenSupportsRowLevelResume(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	_, storeInt := newEventStoreForTest(dir)
+	store := storeInt.(*eventStore)
+	defer store.Close(ctx)
+
+	const (
+		tableID      int64  = 1
+		txnStartTs   uint64 = 120
+		txnCommitTs  uint64 = 200
+		nextStartTs  uint64 = 130
+		nextCommitTs uint64 = 201
+	)
+
+	dispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	span := &heartbeatpb.TableSpan{TableID: tableID, StartKey: []byte("a"), EndKey: []byte("z")}
+	ok := store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(watermark, latestCommitTs uint64) {}, false, false)
+	require.True(t, ok)
+
+	dispatcherStat := store.dispatcherMeta.dispatcherStats[dispatcherID]
+	require.NotNil(t, dispatcherStat)
+	subStat := dispatcherStat.subStat
+	require.NotNil(t, subStat)
+
+	events := []eventWithCallback{
+		{
+			subID:   subStat.subID,
+			tableID: tableID,
+			kvs: []common.RawKVEntry{
+				{OpType: common.OpTypePut, StartTs: txnStartTs, CRTs: txnCommitTs, Key: []byte("row-1"), Value: []byte("value-1")},
+				{OpType: common.OpTypePut, StartTs: txnStartTs, CRTs: txnCommitTs, Key: []byte("row-2"), Value: []byte("value-2")},
+				{OpType: common.OpTypePut, StartTs: nextStartTs, CRTs: nextCommitTs, Key: []byte("next-row"), Value: []byte("value-3")},
+			},
+			callback: func() {},
+		},
+	}
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+	var compressionBuf []byte
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[subStat.dbIndex], events, encoder, &compressionBuf, &rawValueBuf)
+	require.NoError(t, err)
+	subStat.resolvedTs.Store(nextCommitTs)
+
+	type scannedEvent struct {
+		key      string
+		position common.ScanPosition
+	}
+	collectEvents := func(dataRange common.DataRange) []scannedEvent {
+		iter, err := store.GetIterator(dispatcherID, dataRange)
+		require.NoError(t, err)
+		if iter == nil {
+			return nil
+		}
+		positionIter, ok := iter.(EventIteratorWithScanPosition)
+		require.True(t, ok)
+
+		events := make([]scannedEvent, 0)
+		for {
+			rawKV, position, _ := positionIter.NextWithScanPosition()
+			if rawKV == nil {
+				break
+			}
+			require.NotEmpty(t, position)
+			events = append(events, scannedEvent{
+				key:      string(rawKV.Key),
+				position: position,
+			})
+		}
+		rowCount, err := iter.Close()
+		require.NoError(t, err)
+		require.Equal(t, int64(len(events)), rowCount)
+		return events
+	}
+
+	fullRange := common.DataRange{
+		Span:          span,
+		CommitTsStart: txnCommitTs - 1,
+		CommitTsEnd:   nextCommitTs,
+	}
+	fullEvents := collectEvents(fullRange)
+	require.Len(t, fullEvents, 3)
+	require.Equal(t, []string{"row-1", "row-2", "next-row"}, []string{
+		fullEvents[0].key,
+		fullEvents[1].key,
+		fullEvents[2].key,
+	})
+
+	resumeAfterTxnStart := common.DataRange{
+		Span:                  span,
+		CommitTsStart:         txnCommitTs,
+		CommitTsEnd:           nextCommitTs,
+		LastScannedTxnStartTs: txnStartTs,
+	}
+	// LastScannedTxnStartTs can resume after a txn start-ts, but it cannot
+	// identify a specific row inside the same txn. Once set to txnStartTs, all
+	// rows in that txn are skipped, including row-2.
+	txnLevelEvents := collectEvents(resumeAfterTxnStart)
+	require.Len(t, txnLevelEvents, 1)
+	require.Equal(t, []string{"next-row"}, []string{txnLevelEvents[0].key})
+
+	resumeAfterRow1 := common.DataRange{
+		Span:                 span,
+		CommitTsStart:        txnCommitTs,
+		CommitTsEnd:          nextCommitTs,
+		RowLevelScanPosition: fullEvents[0].position,
+	}
+	rowLevelEvents := collectEvents(resumeAfterRow1)
+	require.Len(t, rowLevelEvents, 2)
+	require.Equal(t, []string{"row-2", "next-row"}, []string{
+		rowLevelEvents[0].key,
+		rowLevelEvents[1].key,
+	})
+}
+
 func TestEventWithCallbackSizerUsesCurrentKVBytes(t *testing.T) {
 	event := eventWithCallback{
 		kvs: []common.RawKVEntry{{

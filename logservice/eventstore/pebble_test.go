@@ -170,6 +170,11 @@ func TestEventStoreKeyBounds(t *testing.T) {
 	require.Len(t, lowerBound, encodedKeyTxnStartTsOffset+encodedKeyTxnStartTsLen)
 	require.True(t, bytes.HasPrefix(key, lowerBound))
 
+	rowLevelPosition := encodeRowLevelScanPosition(key)
+	require.Equal(t, common.ScanPosition(key[encodedKeyTxnCommitTsOffset:]), rowLevelPosition)
+	rowLevelLowerBound := encodeRowLevelScanPositionLowerBound(1, 1, rowLevelPosition)
+	require.Less(t, bytes.Compare(key, rowLevelLowerBound), 0)
+
 	previousEvent := &common.RawKVEntry{
 		OpType:  common.OpTypePut,
 		StartTs: event.StartTs - 1,
@@ -177,4 +182,12 @@ func TestEventStoreKeyBounds(t *testing.T) {
 		Key:     []byte("key"),
 	}
 	require.Less(t, bytes.Compare(EncodeKey(1, 1, previousEvent, CompressionNone), lowerBound), 0)
+
+	nextRowSameTxn := &common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: event.StartTs,
+		CRTs:    event.CRTs,
+		Key:     []byte("key\x00"),
+	}
+	require.LessOrEqual(t, bytes.Compare(rowLevelLowerBound, EncodeKey(1, 1, nextRowSameTxn, CompressionNone)), 0)
 }
