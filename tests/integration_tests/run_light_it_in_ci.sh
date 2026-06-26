@@ -83,7 +83,7 @@ kafka_groups=(
 	# G05
 	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
 	# G06
-	'multi_topics mq_sink_dispatcher fail_over_ddl_G'
+	'debezium_avro multi_topics mq_sink_dispatcher fail_over_ddl_G'
 	# G07
 	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08
@@ -99,7 +99,7 @@ kafka_groups=(
 	# G13
 	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
-	'kafka_simple_basic avro_basic debezium_avro fail_over_ddl_O update_changefeed_check_config'
+	'kafka_simple_basic avro_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'kafka_simple_basic_avro split_region autorandom gc_safepoint kafka_log_info'
 )
