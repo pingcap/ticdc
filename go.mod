@@ -401,4 +401,4 @@ replace github.com/pingcap/tipb => github.com/pingcap/tipb v0.0.0-20260605083900
 
 replace github.com/apache/arrow-go/v18 => github.com/joechenrh/arrow-go/v18 v18.0.0-20250911101656-62c34c9a3b82
 
-replace github.com/IBM/sarama v1.41.2 => github.com/3AceShowHand/sarama v0.0.0-20260626033143-2f774d5beda8
+replace github.com/IBM/sarama v1.41.2 => github.com/pingcap/sarama v1.41.2-pingcap-20260622.1.0.20260626154357-52ec3dca6fb6
