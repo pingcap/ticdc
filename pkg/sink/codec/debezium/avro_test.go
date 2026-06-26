@@ -112,6 +112,73 @@ func TestDebeziumConfluentAvroEncodeRowEvent(t *testing.T) {
 	require.NotContains(t, valueSchema, `"field":"transaction"`)
 }
 
+func TestDebeziumConfluentAvroSanitizesFullNameAndUnionBranch(t *testing.T) {
+	ctx := context.Background()
+	_, err := avro.SetupEncoderAndSchemaRegistry4Testing(
+		ctx,
+		common.NewConfig(config.ProtocolAvro),
+	)
+	require.NoError(t, err)
+	defer avro.TeardownEncoderAndSchemaRegistry4Testing()
+
+	cfg := common.NewConfig(config.ProtocolDebeziumAvro)
+	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
+	cfg.TimeZone = time.UTC
+
+	eventEncoder, err := NewAvroBatchEncoder(ctx, cfg, "db-server")
+	require.NoError(t, err)
+	encoder, ok := eventEncoder.(*BatchEncoder)
+	require.True(t, ok)
+
+	payload, err := encoder.encodeAvroPayload(
+		ctx,
+		"topic-with-invalid-schema-name",
+		debeziumAvroValueSchemaSuffix,
+		&debeziumAvroMessage{
+			Schema: &debeziumConnectSchema{
+				Type: "struct",
+				Name: "db-server.test-db.foo-barEnvelope",
+				Fields: []*debeziumConnectSchema{
+					{
+						Type:     "struct",
+						Optional: true,
+						Name:     "db-server.test-db.foo-bar",
+						Field:    "after",
+						Fields: []*debeziumConnectSchema{
+							{
+								Type:  "int32",
+								Field: "id",
+							},
+						},
+					},
+					{
+						Type:  "string",
+						Field: "op",
+					},
+				},
+			},
+			Payload: map[string]any{
+				"after": map[string]any{
+					"id": int32(1),
+				},
+				"op": "c",
+			},
+		},
+		1,
+	)
+	require.NoError(t, err)
+
+	schema := decodeConfluentAvroSchemaForTest(t, payload)
+	require.Contains(t, schema, `"name":"foo_barEnvelope"`)
+	require.Contains(t, schema, `"namespace":"db_server.test_db"`)
+	require.Contains(t, schema, `"name":"foo_bar"`)
+	require.NotContains(t, schema, `"namespace":"db-server.test-db"`)
+
+	value := decodeConfluentAvroForTest(t, payload)
+	after := unwrapAvroUnionForTest(t, value["after"], "db_server.test_db.foo_bar")
+	require.Equal(t, map[string]any{"id": int32(1)}, after)
+}
+
 func TestDebeziumConfluentAvroDecodeRowEvent(t *testing.T) {
 	ctx := context.Background()
 	_, err := avro.SetupEncoderAndSchemaRegistry4Testing(
