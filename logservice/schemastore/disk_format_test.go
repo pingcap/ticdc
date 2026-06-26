@@ -15,7 +15,6 @@ package schemastore
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/cockroachdb/pebble"
@@ -28,9 +27,15 @@ func TestPersistSchemaSnapshotReturnsWhenListDatabasesSnapshotLost(t *testing.T)
 	require.NoError(t, err)
 	defer db.Close()
 
-	snapshotLostErr := errors.New("GC life time is shorter than transaction duration")
+	snapshotLostErr := snapshotLostByGCError{}
 	_, _, _, err = persistSchemaSnapshot(db, &snapshotLostStorage{err: snapshotLostErr}, 100, true)
 	require.ErrorIs(t, err, snapshotLostErr)
+}
+
+type snapshotLostByGCError struct{}
+
+func (snapshotLostByGCError) Error() string {
+	return "GC life time is shorter than transaction duration"
 }
 
 type snapshotLostStorage struct {
