@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -401,21 +400,101 @@ func (c *debeziumAvroSchemaConverter) toNative(
 		}
 		return data, nil
 	case "int8", "int16", "int32":
-		v, err := numberToInt64(value)
-		if err != nil {
-			return nil, err
+		switch v := value.(type) {
+		case json.Number:
+			i, err := v.Int64()
+			if err == nil {
+				return int32(i), nil
+			}
+			f, err := v.Float64()
+			if err != nil {
+				return nil, errors.WrapError(errors.ErrDebeziumInvalidMessage, err)
+			}
+			return int32(f), nil
+		case int:
+			return int32(v), nil
+		case int32:
+			return v, nil
+		case int64:
+			return int32(v), nil
+		case uint64:
+			return int32(v), nil
+		case float64:
+			return int32(v), nil
+		default:
+			return nil, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("number payload is invalid")
 		}
-		return int64ToInt32(v)
 	case "int64":
-		return numberToInt64(value)
-	case "float":
-		v, err := numberToFloat64(value)
-		if err != nil {
-			return nil, err
+		switch v := value.(type) {
+		case json.Number:
+			i, err := v.Int64()
+			if err == nil {
+				return i, nil
+			}
+			f, err := v.Float64()
+			if err != nil {
+				return nil, errors.WrapError(errors.ErrDebeziumInvalidMessage, err)
+			}
+			return int64(f), nil
+		case int:
+			return int64(v), nil
+		case int32:
+			return int64(v), nil
+		case int64:
+			return v, nil
+		case uint64:
+			return int64(v), nil
+		case float64:
+			return int64(v), nil
+		default:
+			return nil, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("number payload is invalid")
 		}
-		return float32(v), nil
+	case "float":
+		switch v := value.(type) {
+		case json.Number:
+			f, err := v.Float64()
+			if err != nil {
+				return nil, errors.WrapError(errors.ErrDebeziumInvalidMessage, err)
+			}
+			return float32(f), nil
+		case int:
+			return float32(v), nil
+		case int32:
+			return float32(v), nil
+		case int64:
+			return float32(v), nil
+		case uint64:
+			return float32(v), nil
+		case float32:
+			return v, nil
+		case float64:
+			return float32(v), nil
+		default:
+			return nil, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("number payload is invalid")
+		}
 	case "double":
-		return numberToFloat64(value)
+		switch v := value.(type) {
+		case json.Number:
+			f, err := v.Float64()
+			if err != nil {
+				return nil, errors.WrapError(errors.ErrDebeziumInvalidMessage, err)
+			}
+			return f, nil
+		case int:
+			return float64(v), nil
+		case int32:
+			return float64(v), nil
+		case int64:
+			return float64(v), nil
+		case uint64:
+			return float64(v), nil
+		case float32:
+			return float64(v), nil
+		case float64:
+			return v, nil
+		default:
+			return nil, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("number payload is invalid")
+		}
 	default:
 		return nil, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("unsupported schema type " + schema.Type)
 	}
@@ -519,71 +598,5 @@ func avroUnionBranchName(schema *debeziumConnectSchema, fallbackName string) str
 		return "double"
 	default:
 		return schema.Type
-	}
-}
-
-func numberToInt64(value any) (int64, error) {
-	switch v := value.(type) {
-	case json.Number:
-		i, err := v.Int64()
-		if err == nil {
-			return i, nil
-		}
-		f, err := v.Float64()
-		if err != nil {
-			return 0, errors.WrapError(errors.ErrDebeziumInvalidMessage, err)
-		}
-		return int64(f), nil
-	case int:
-		return int64(v), nil
-	case int32:
-		return int64(v), nil
-	case int64:
-		return v, nil
-	case uint64:
-		return uint64ToInt64(v)
-	case float64:
-		return int64(v), nil
-	default:
-		return 0, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("number payload is invalid")
-	}
-}
-
-func int64ToInt32(value int64) (int32, error) {
-	if value < math.MinInt32 || value > math.MaxInt32 {
-		return 0, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("number payload is out of int32 range")
-	}
-	return int32(value), nil
-}
-
-func uint64ToInt64(value uint64) (int64, error) {
-	if value > math.MaxInt64 {
-		return 0, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("number payload is out of int64 range")
-	}
-	return int64(value), nil
-}
-
-func numberToFloat64(value any) (float64, error) {
-	switch v := value.(type) {
-	case json.Number:
-		f, err := v.Float64()
-		if err != nil {
-			return 0, errors.WrapError(errors.ErrDebeziumInvalidMessage, err)
-		}
-		return f, nil
-	case int:
-		return float64(v), nil
-	case int32:
-		return float64(v), nil
-	case int64:
-		return float64(v), nil
-	case uint64:
-		return float64(v), nil
-	case float32:
-		return float64(v), nil
-	case float64:
-		return v, nil
-	default:
-		return 0, errors.ErrDebeziumInvalidMessage.GenWithStackByArgs("number payload is invalid")
 	}
 }
