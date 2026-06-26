@@ -67,7 +67,8 @@ func NewHTTPError(err error) HTTPError {
 // httpBadRequestError is some errors that will cause a BadRequestError in http handler
 var httpBadRequestError = []*errors.Error{
 	cerror.ErrAPIInvalidParam, cerror.ErrSinkURIInvalid, cerror.ErrStartTsBeforeGC,
-	cerror.ErrChangeFeedNotExists, cerror.ErrTargetTsBeforeStartTs, cerror.ErrTableIneligible,
+	cerror.ErrChangeFeedNotExists, cerror.ErrChangeFeedAlreadyExists,
+	cerror.ErrTargetTsBeforeStartTs, cerror.ErrTableIneligible,
 	cerror.ErrFilterRuleInvalid, cerror.ErrChangefeedUpdateRefused, cerror.ErrMySQLConnectionError,
 	cerror.ErrMySQLInvalidConfig, cerror.ErrCaptureNotExist, cerror.ErrSchedulerRequestFailed,
 	cerror.ErrActiveActiveTSOIndexIncompatible,
