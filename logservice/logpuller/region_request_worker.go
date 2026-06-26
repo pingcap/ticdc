@@ -384,6 +384,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 		subID := region.subscribedSpan.subID
 		log.Debug("region request worker gets a singleRegionInfo",
 			zap.Uint64("workerID", s.workerID),
+			zap.String("changefeedID", region.subscribedSpan.changefeedID),
 			zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Uint64("regionID", region.verID.GetID()),
 			zap.String("addr", s.store.storeAddr),
@@ -452,6 +453,7 @@ func (s *regionRequestWorker) createRegionRequest(region regionInfo) *cdcpb.Chan
 		Header:       &cdcpb.Header{ClusterId: s.client.clusterID, TicdcVersion: version.ReleaseSemver()},
 		RegionId:     region.verID.GetID(),
 		RequestId:    uint64(region.subscribedSpan.subID),
+		ChangefeedId: region.subscribedSpan.changefeedID,
 		RegionEpoch:  region.rpcCtx.Meta.RegionEpoch,
 		CheckpointTs: region.resolvedTs(),
 		StartKey:     region.span.StartKey,

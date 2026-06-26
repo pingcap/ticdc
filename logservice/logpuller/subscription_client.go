@@ -110,8 +110,9 @@ const kvEventsCacheMaxSize = 32
 // It contains a sub span of a table(or the total span of a table),
 // the startTs of the table, and the output event channel.
 type subscribedSpan struct {
-	subID   SubscriptionID
-	startTs uint64
+	subID        SubscriptionID
+	changefeedID string
+	startTs      uint64
 	// Whether to filter out the value written by TiCDC itself.
 	// It should be `true` in BDR mode.
 	filterLoop bool
@@ -170,6 +171,7 @@ type SubscriptionClient interface {
 	AllocSubscriptionID() SubscriptionID
 	// subscribe a table span
 	Subscribe(
+		changefeedID string,
 		subID SubscriptionID,
 		span heartbeatpb.TableSpan,
 		startTs uint64,
@@ -349,6 +351,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 // and send a rangeTask to `s.rangeTaskCh`.
 // The rangeTask will be handled in `handleRangeTasks` goroutine.
 func (s *subscriptionClient) Subscribe(
+	changefeedID string,
 	subID SubscriptionID,
 	span heartbeatpb.TableSpan,
 	startTs uint64,
@@ -362,7 +365,7 @@ func (s *subscriptionClient) Subscribe(
 		return
 	}
 
-	rt := s.newSubscribedSpan(subID, span, startTs, consumeKVEvents, advanceResolvedTs, advanceInterval, bdrMode)
+	rt := s.newSubscribedSpan(changefeedID, subID, span, startTs, consumeKVEvents, advanceResolvedTs, advanceInterval, bdrMode)
 	s.totalSpans.Lock()
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
@@ -374,7 +377,9 @@ func (s *subscriptionClient) Subscribe(
 	case <-s.ctx.Done():
 		log.Warn("subscribes span failed, the subscription client has closed")
 	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: rt.filterLoop, priority: TaskLowPrior}:
-		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
+		log.Info("subscribes span done",
+			zap.String("changefeedID", changefeedID),
+			zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
 			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
 	}
@@ -808,6 +813,17 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
 		s.regionTaskQueue.Push(NewRegionPriorityTask(priority, region, s.pdClock.CurrentTS()))
+		log.Info("cdc region scan task enqueued",
+			zap.String("changefeedID", region.subscribedSpan.changefeedID),
+			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
+			zap.Int64("tableID", region.subscribedSpan.span.TableID),
+			zap.Uint64("startTs", region.subscribedSpan.startTs),
+			zap.Uint64("regionID", region.verID.GetID()),
+			zap.Uint64("regionEpochVersion", region.verID.GetVer()),
+			zap.Uint64("regionEpochConfVer", region.verID.GetConfVer()),
+			zap.String("priority", taskTypeLogName(priority)),
+			zap.String("scanPriority", region.scanPriority.String()),
+			zap.String("span", common.FormatTableSpan(&region.span)))
 	case regionlock.LockRangeStatusStale:
 		for _, r := range lockRangeResult.RetryRanges {
 			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop, priority)
@@ -1081,6 +1097,7 @@ func (s *subscriptionClient) logSlowRegions(ctx context.Context) error {
 }
 
 func (s *subscriptionClient) newSubscribedSpan(
+	changefeedID string,
 	subID SubscriptionID,
 	span heartbeatpb.TableSpan,
 	startTs uint64,
@@ -1092,11 +1109,12 @@ func (s *subscriptionClient) newSubscribedSpan(
 	rangeLock := regionlock.NewRangeLock(uint64(subID), span.StartKey, span.EndKey, startTs)
 
 	rt := &subscribedSpan{
-		subID:      subID,
-		span:       span,
-		startTs:    startTs,
-		filterLoop: filterLoop,
-		rangeLock:  rangeLock,
+		subID:        subID,
+		changefeedID: changefeedID,
+		span:         span,
+		startTs:      startTs,
+		filterLoop:   filterLoop,
+		rangeLock:    rangeLock,
 
 		consumeKVEvents:   consumeKVEvents,
 		advanceResolvedTs: advanceResolvedTs,

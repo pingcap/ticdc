@@ -463,12 +463,14 @@ func (e *eventStore) RegisterDispatcher(
 	metrics.EventStoreRegisterDispatcherStartTsLagHist.Observe(lag.Seconds())
 	if lag >= 10*time.Second {
 		log.Warn("register dispatcher with large startTs lag",
+			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 			zap.Uint64("startTs", startTs),
 			zap.Duration("lag", lag))
 	} else {
 		log.Info("register dispatcher",
+			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 			zap.Uint64("startTs", startTs))
@@ -478,6 +480,7 @@ func (e *eventStore) RegisterDispatcher(
 	defer func() {
 		if success {
 			log.Info("register dispatcher success",
+				zap.Stringer("changefeedID", changefeedID),
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
@@ -486,6 +489,7 @@ func (e *eventStore) RegisterDispatcher(
 				zap.Duration("duration", time.Since(start)))
 		} else {
 			log.Info("register dispatcher failed",
+				zap.Stringer("changefeedID", changefeedID),
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
@@ -533,6 +537,7 @@ func (e *eventStore) RegisterDispatcher(
 						e.addSubscriberToSubStat(subStat, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
 						e.dispatcherMeta.Unlock()
 						log.Info("reuse existing subscription with exact span match",
+							zap.Stringer("changefeedID", changefeedID),
 							zap.Stringer("dispatcherID", dispatcherID),
 							zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
 							zap.Uint64("startTs", startTs),
@@ -559,6 +564,7 @@ func (e *eventStore) RegisterDispatcher(
 			e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
 			e.addSubscriberToSubStat(bestMatch, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
 			log.Info("reuse existing subscription with smallest containing span",
+				zap.Stringer("changefeedID", changefeedID),
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
@@ -661,8 +667,9 @@ func (e *eventStore) RegisterDispatcher(
 	serverConfig := config.GetGlobalServerConfig()
 	resolvedTsAdvanceInterval := int64(serverConfig.KVClient.AdvanceIntervalInMs)
 	// Note: don't hold any lock when call Subscribe
-	e.subClient.Subscribe(subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, bdrMode)
+	e.subClient.Subscribe(changefeedID.String(), subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, bdrMode)
 	log.Info("new subscription created",
+		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Uint64("startTs", startTs),
 		zap.Uint64("subscriptionID", uint64(subStat.subID)),

@@ -43,6 +43,17 @@ func (t TaskType) String() string {
 	return fmt.Sprintf("%d", t)
 }
 
+func taskTypeLogName(t TaskType) string {
+	switch t {
+	case TaskHighPrior:
+		return "high"
+	case TaskLowPrior:
+		return "low"
+	default:
+		return "unknown"
+	}
+}
+
 func (t TaskType) scanPriority() cdcpb.ScanPriority {
 	switch t {
 	case TaskHighPrior:
