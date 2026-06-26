@@ -42,6 +42,7 @@ type Options struct {
 	IsAssignedVersion bool
 
 	MaxMessageBytes int
+	MaxRetry        int
 	Compression     string
 	RequiredAcks    int16
 
@@ -56,6 +57,7 @@ type Options struct {
 }
 
 const defaultRequestTimeout = 10 * time.Second
+const defaultRecordRetries = 5
 
 func maxTimeoutWithDefault(readTimeout, writeTimeout time.Duration) time.Duration {
 	timeout := readTimeout
@@ -211,8 +213,11 @@ func newOauthTokenSource(ctx context.Context, o *Options) (oauth2.TokenSource, e
 func newProducerOptions(
 	o *Options,
 ) []kgo.Opt {
+	recordRetries := defaultRecordRetries
 	if o == nil {
 		o = &Options{}
+	} else {
+		recordRetries = o.MaxRetry
 	}
 
 	produceTimeout := o.ReadTimeout
@@ -225,7 +230,7 @@ func newProducerOptions(
 		kgo.RequiredAcks(newRequiredAcks(o)),
 		kgo.DisableIdempotentWrite(),
 		kgo.MaxProduceRequestsInflightPerBroker(1),
-		kgo.RecordRetries(5),
+		kgo.RecordRetries(recordRetries),
 		kgo.ProducerBatchMaxBytes(int32(o.MaxMessageBytes)),
 		kgo.ProduceRequestTimeout(produceTimeout),
 		kgo.ProducerLinger(0),

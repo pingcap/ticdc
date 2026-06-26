@@ -51,3 +51,13 @@ func TestNewFranzOptionsMapsRequiredAcks(t *testing.T) {
 		})
 	}
 }
+
+func TestNewFranzOptionsMapsMaxRetry(t *testing.T) {
+	t.Parallel()
+
+	options := NewOptions()
+	options.MaxRetry = 7
+
+	franzOptions := newFranzOptions(options)
+	require.Equal(t, 7, franzOptions.MaxRetry)
+}

@@ -14,9 +14,11 @@
 package franz
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -68,4 +70,32 @@ func TestMaxTimeoutWithDefault(t *testing.T) {
 			require.Equal(t, tc.expected, maxTimeoutWithDefault(tc.readTimeout, tc.writeTimeout))
 		})
 	}
+}
+
+func TestNewOptionsRejectsInvalidAssignedVersion(t *testing.T) {
+	t.Parallel()
+
+	opts, err := newOptions(context.Background(), &Options{
+		Version:           "invalid",
+		IsAssignedVersion: true,
+	}, nil)
+	require.Nil(t, opts)
+	require.ErrorContains(t, err, "invalid kafka version invalid")
+}
+
+func TestNewOauthTokenSourceRejectsInvalidTokenURL(t *testing.T) {
+	t.Parallel()
+
+	_, err := newOauthTokenSource(context.Background(), &Options{
+		SASL: &security.SASL{
+			OAuth2: security.OAuth2{
+				ClientID:     "client-id",
+				ClientSecret: "client-secret",
+				TokenURL:     "http://test.com/Segment%%2815197306101420000%29",
+				Scopes:       []string{"scope1", "scope2"},
+				GrantType:    "client_credentials",
+			},
+		},
+	})
+	require.ErrorContains(t, err, "invalid URL escape")
 }

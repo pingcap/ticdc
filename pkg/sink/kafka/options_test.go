@@ -15,6 +15,7 @@ package kafka
 
 import (
 	"context"
+	stdErrors "errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -22,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/golang/mock/gomock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -133,11 +133,11 @@ func (f *kafkaAdminFixture) getTopicConfig(topicName string, configName string) 
 
 func (f *kafkaAdminFixture) createTopic(detail *TopicDetail, _ bool) error {
 	if detail.ReplicationFactor > mockClusterReplicationFactor {
-		return sarama.ErrInvalidReplicationFactor
+		return stdErrors.New("invalid replication factor")
 	}
 	if _, ok := f.brokerConfig[MinInsyncReplicasConfigName]; !ok &&
 		detail.ReplicationFactor != mockClusterReplicationFactor {
-		return sarama.ErrPolicyViolation
+		return stdErrors.New("policy violation")
 	}
 	f.topics[detail.Name] = *detail
 	return nil
@@ -289,13 +289,6 @@ func TestCompleteOptions(t *testing.T) {
 	require.Equal(t, defaultMaxRetry, options.MaxRetry)
 }
 
-func TestNewOptionsDefaultKafkaClient(t *testing.T) {
-	t.Parallel()
-
-	options := NewOptions()
-	require.Equal(t, "franz", options.KafkaClient)
-}
-
 func TestSetPartitionNum(t *testing.T) {
 	options := NewOptions()
 	err := options.setPartitionNum(2)
@@ -427,11 +420,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 			err = adjustOptions(ctx, adminClient, options, topicName)
 			require.NoError(t, err)
 
-			saramaConfig, err := newSaramaConfig(ctx, options)
-			require.NoError(t, err)
-
 			require.Equal(t, expectedMaxMessageBytes, options.MaxMessageBytes)
-			require.Equal(t, expectedMaxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
 		})
 	}
 }
@@ -469,7 +458,7 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 		Name:              topicName,
 		ReplicationFactor: 1,
 	}, false)
-	require.ErrorIs(t, err, sarama.ErrPolicyViolation)
+	require.ErrorContains(t, err, "policy violation")
 
 	// Report an error if the replication-factor is less than min.insync.replicas
 	// when the topic does exist.
@@ -511,15 +500,6 @@ func TestSkipAdjustConfigMinInsyncReplicasWhenRequiredAcksIsNotWailAll(t *testin
 		"skip-check-min-insync-replicas",
 	)
 	require.Nil(t, err, "Should not report an error when `required-acks` is not `all`")
-}
-
-func TestCreateProducerFailed(t *testing.T) {
-	options := NewOptions()
-	options.Version = "invalid"
-	options.IsAssignedVersion = true
-	saramaConfig, err := newSaramaConfig(context.Background(), options)
-	require.Regexp(t, "invalid version.*", errors.Cause(err))
-	require.Nil(t, saramaConfig)
 }
 
 func TestConfigurationCombinations(t *testing.T) {
@@ -698,10 +678,6 @@ func TestConfigurationCombinations(t *testing.T) {
 			err = adjustOptions(ctx, adminClient, options, topic)
 			require.Nil(t, err)
 			require.Equal(t, expectedMaxMessageBytes, options.MaxMessageBytes)
-
-			saramaConfig, err := newSaramaConfig(ctx, options)
-			require.Nil(t, err)
-			require.Equal(t, expectedMaxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
 
 			encoderConfig := common.NewConfig(config.ProtocolOpen)
 			err = encoderConfig.Apply(sinkURI, &config.SinkConfig{

@@ -48,19 +48,14 @@ type SyncProducer interface {
 	// SendMessages will return an error.
 	SendMessages(topic string, partitionNum int32, message *common.Message) error
 
-	// Close shuts down the producer; you must call this function before a producer
-	// object passes out of scope, as it may otherwise leak memory.
-	// You must call this before calling Close on the underlying client.
+	// Close shuts down the producer and releases its Kafka client resources.
 	Close()
 }
 
 // AsyncProducer is the kafka async producer
 type AsyncProducer interface {
-	// Close shuts down the producer and waits for any buffered messages to be
-	// flushed. You must call this function before a producer object passes out of
-	// scope, as it may otherwise leak memory. You must call this before process
-	// shutting down, or you may lose messages. You must call this before calling
-	// Close on the underlying client.
+	// Close shuts down the producer asynchronously and releases its Kafka client
+	// resources. It does not wait for buffered messages to be flushed.
 	Close()
 
 	// AsyncSend is the input channel for the user to write messages to that they

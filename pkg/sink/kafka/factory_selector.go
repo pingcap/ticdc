@@ -15,24 +15,15 @@ package kafka
 
 import (
 	"context"
-	"strings"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/errors"
 )
 
-// NewFactory selects a Kafka client implementation based on options.
+// NewFactory creates the Kafka client factory.
 func NewFactory(
 	ctx context.Context,
 	o *options,
 	changefeedID common.ChangeFeedID,
 ) (Factory, error) {
-	switch strings.ToLower(strings.TrimSpace(o.KafkaClient)) {
-	case "", "franz":
-		return NewFranzFactory(ctx, o, changefeedID)
-	case "sarama":
-		return NewSaramaFactory(ctx, o, changefeedID)
-	default:
-		return nil, errors.ErrKafkaInvalidConfig.GenWithStack("unsupported kafka client %s", o.KafkaClient)
-	}
+	return NewFranzFactory(ctx, o, changefeedID)
 }

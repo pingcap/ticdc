@@ -64,6 +64,14 @@ func newFranzMetricsHook(changefeedID common.ChangeFeedID, clientType string) *f
 			ResponseRate:      franzResponseTotalByClientGauge,
 			CompressionRatio:  franzCompressionRatioHistogram,
 			RecordsPerRequest: franzRecordsPerRequestHistogram,
+
+			LegacyRequestsInFlight:  requestsInFlightGauge,
+			LegacyOutgoingByteRate:  OutgoingByteRateGauge,
+			LegacyRequestRate:       RequestRateGauge,
+			LegacyRequestLatency:    RequestLatencyGauge,
+			LegacyResponseRate:      responseRateGauge,
+			LegacyCompressionRatio:  compressionRatioGauge,
+			LegacyRecordsPerRequest: recordsPerRequestGauge,
 		},
 	)
 	return hook
@@ -144,6 +152,7 @@ func newFranzOptions(o *options) *franz.Options {
 		IsAssignedVersion: o.IsAssignedVersion,
 
 		MaxMessageBytes: o.MaxMessageBytes,
+		MaxRetry:        o.MaxRetry,
 		Compression:     o.Compression,
 		RequiredAcks:    int16(o.RequiredAcks),
 

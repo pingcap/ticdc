@@ -40,7 +40,20 @@ type PrometheusMetrics struct {
 	ResponseRate      *prometheus.GaugeVec
 	CompressionRatio  *prometheus.HistogramVec
 	RecordsPerRequest *prometheus.HistogramVec
+
+	LegacyRequestsInFlight  *prometheus.GaugeVec
+	LegacyOutgoingByteRate  *prometheus.GaugeVec
+	LegacyRequestRate       *prometheus.GaugeVec
+	LegacyRequestLatency    *prometheus.GaugeVec
+	LegacyResponseRate      *prometheus.GaugeVec
+	LegacyCompressionRatio  *prometheus.GaugeVec
+	LegacyRecordsPerRequest *prometheus.GaugeVec
 }
+
+const (
+	legacyMetricAvg = "avg"
+	legacyMetricP99 = "p99"
+)
 
 func NewMetricsHook(clientType string) *MetricsHook {
 	return &MetricsHook{clientType: clientType}
@@ -98,6 +111,18 @@ func (h *MetricsHook) CleanupPrometheusMetrics() {
 	deleteHistogramVecPartialMatch(metrics.RequestLatency, labels)
 	deleteHistogramVecPartialMatch(metrics.CompressionRatio, labels)
 	deleteHistogramVecPartialMatch(metrics.RecordsPerRequest, labels)
+
+	legacyLabels := prometheus.Labels{
+		"namespace":  keyspace,
+		"changefeed": changefeed,
+	}
+	deleteGaugeVecPartialMatch(metrics.LegacyOutgoingByteRate, legacyLabels)
+	deleteGaugeVecPartialMatch(metrics.LegacyRequestRate, legacyLabels)
+	deleteGaugeVecPartialMatch(metrics.LegacyResponseRate, legacyLabels)
+	deleteGaugeVecPartialMatch(metrics.LegacyRequestsInFlight, legacyLabels)
+	deleteGaugeVecPartialMatch(metrics.LegacyRequestLatency, legacyLabels)
+	deleteGaugeVecPartialMatch(metrics.LegacyCompressionRatio, legacyLabels)
+	deleteGaugeVecPartialMatch(metrics.LegacyRecordsPerRequest, legacyLabels)
 }
 
 func (h *MetricsHook) RecordBrokerWrite(nodeID int32, bytesWritten int, err error) {
@@ -114,11 +139,20 @@ func (h *MetricsHook) RecordBrokerWrite(nodeID int32, bytesWritten int, err erro
 	if ctx.metrics.OutgoingByteRate != nil && bytesWritten > 0 {
 		ctx.metrics.OutgoingByteRate.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType, brokerID).Add(float64(bytesWritten))
 	}
+	if ctx.metrics.LegacyOutgoingByteRate != nil && bytesWritten > 0 {
+		ctx.metrics.LegacyOutgoingByteRate.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(float64(bytesWritten))
+	}
 	if ctx.metrics.RequestRate != nil {
 		ctx.metrics.RequestRate.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType, brokerID).Add(1)
 	}
+	if ctx.metrics.LegacyRequestRate != nil {
+		ctx.metrics.LegacyRequestRate.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(1)
+	}
 	if err == nil && ctx.metrics.RequestsInFlight != nil {
 		ctx.metrics.RequestsInFlight.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType, brokerID).Add(1)
+	}
+	if err == nil && ctx.metrics.LegacyRequestsInFlight != nil {
+		ctx.metrics.LegacyRequestsInFlight.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(1)
 	}
 }
 
@@ -151,12 +185,23 @@ func (h *MetricsHook) OnBrokerE2E(
 	if e2e.WriteErr == nil && ctx.metrics.RequestsInFlight != nil {
 		ctx.metrics.RequestsInFlight.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType, brokerID).Add(-1)
 	}
+	if e2e.WriteErr == nil && ctx.metrics.LegacyRequestsInFlight != nil {
+		ctx.metrics.LegacyRequestsInFlight.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(-1)
+	}
 	if e2e.BytesRead > 0 && e2e.ReadErr == nil && ctx.metrics.ResponseRate != nil {
 		ctx.metrics.ResponseRate.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType, brokerID).Add(1)
+	}
+	if e2e.BytesRead > 0 && e2e.ReadErr == nil && ctx.metrics.LegacyResponseRate != nil {
+		ctx.metrics.LegacyResponseRate.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(1)
 	}
 	if e2e.Err() == nil && ctx.metrics.RequestLatency != nil {
 		latencyMs := float64(e2e.DurationE2E().Microseconds()) / 1000
 		ctx.metrics.RequestLatency.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType, brokerID).Observe(latencyMs)
+	}
+	if e2e.Err() == nil && ctx.metrics.LegacyRequestLatency != nil {
+		latencyMs := float64(e2e.DurationE2E().Microseconds()) / 1000
+		ctx.metrics.LegacyRequestLatency.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID, legacyMetricAvg).Set(latencyMs)
+		ctx.metrics.LegacyRequestLatency.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID, legacyMetricP99).Set(latencyMs)
 	}
 }
 
@@ -179,9 +224,19 @@ func (h *MetricsHook) RecordProduceBatchWritten(numRecords int, uncompressedByte
 		records := float64(numRecords)
 		ctx.metrics.RecordsPerRequest.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType).Observe(records)
 	}
+	if ctx.metrics.LegacyRecordsPerRequest != nil && numRecords > 0 {
+		records := float64(numRecords)
+		ctx.metrics.LegacyRecordsPerRequest.WithLabelValues(ctx.keyspace, ctx.changefeed, legacyMetricAvg).Set(records)
+		ctx.metrics.LegacyRecordsPerRequest.WithLabelValues(ctx.keyspace, ctx.changefeed, legacyMetricP99).Set(records)
+	}
 	if ctx.metrics.CompressionRatio != nil && uncompressedBytes > 0 && compressedBytes > 0 {
 		ratio := float64(uncompressedBytes) / float64(compressedBytes) * 100
 		ctx.metrics.CompressionRatio.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType).Observe(ratio)
+	}
+	if ctx.metrics.LegacyCompressionRatio != nil && uncompressedBytes > 0 && compressedBytes > 0 {
+		ratio := float64(uncompressedBytes) / float64(compressedBytes) * 100
+		ctx.metrics.LegacyCompressionRatio.WithLabelValues(ctx.keyspace, ctx.changefeed, legacyMetricAvg).Set(ratio)
+		ctx.metrics.LegacyCompressionRatio.WithLabelValues(ctx.keyspace, ctx.changefeed, legacyMetricP99).Set(ratio)
 	}
 }
 
