@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -23,16 +23,16 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-type MetricsHook struct {
-	promMu     sync.RWMutex
-	promBound  bool
-	keyspace   string
-	changefeed string
-	clientType string
-	prom       PrometheusMetrics
+type metricsHook struct {
+	metricsMu    sync.RWMutex
+	metricsBound bool
+	keyspace     string
+	changefeed   string
+	clientType   string
+	metrics      metricVectors
 }
 
-type PrometheusMetrics struct {
+type metricVectors struct {
 	RequestsInFlight  *prometheus.GaugeVec
 	OutgoingByteRate  *prometheus.GaugeVec
 	RequestRate       *prometheus.GaugeVec
@@ -55,33 +55,33 @@ const (
 	legacyMetricP99 = "p99"
 )
 
-func NewMetricsHook(clientType string) *MetricsHook {
-	return &MetricsHook{clientType: clientType}
+func newMetricsHook(clientType string) *metricsHook {
+	return &metricsHook{clientType: clientType}
 }
 
-func (h *MetricsHook) BindPrometheusMetrics(
+func (h *metricsHook) bindMetrics(
 	keyspace string,
 	changefeed string,
-	metrics PrometheusMetrics,
+	metrics metricVectors,
 ) {
-	h.promMu.Lock()
-	defer h.promMu.Unlock()
+	h.metricsMu.Lock()
+	defer h.metricsMu.Unlock()
 
 	h.keyspace = keyspace
 	h.changefeed = changefeed
-	h.prom = metrics
-	h.promBound = true
+	h.metrics = metrics
+	h.metricsBound = true
 }
 
-func (h *MetricsHook) loadPrometheusMetrics() (string, string, PrometheusMetrics, bool) {
-	h.promMu.RLock()
-	defer h.promMu.RUnlock()
+func (h *metricsHook) loadMetrics() (string, string, metricVectors, bool) {
+	h.metricsMu.RLock()
+	defer h.metricsMu.RUnlock()
 
-	return h.keyspace, h.changefeed, h.prom, h.promBound
+	return h.keyspace, h.changefeed, h.metrics, h.metricsBound
 }
 
-func (h *MetricsHook) Run(ctx context.Context) {
-	_, _, _, bound := h.loadPrometheusMetrics()
+func (h *metricsHook) Run(ctx context.Context) {
+	_, _, _, bound := h.loadMetrics()
 
 	if !bound {
 		<-ctx.Done()
@@ -89,11 +89,11 @@ func (h *MetricsHook) Run(ctx context.Context) {
 	}
 
 	<-ctx.Done()
-	h.CleanupPrometheusMetrics()
+	h.cleanupMetrics()
 }
 
-func (h *MetricsHook) CleanupPrometheusMetrics() {
-	keyspace, changefeed, metrics, bound := h.loadPrometheusMetrics()
+func (h *metricsHook) cleanupMetrics() {
+	keyspace, changefeed, metrics, bound := h.loadMetrics()
 
 	if !bound {
 		return
@@ -125,7 +125,7 @@ func (h *MetricsHook) CleanupPrometheusMetrics() {
 	deleteGaugeVecPartialMatch(metrics.LegacyRecordsPerRequest, legacyLabels)
 }
 
-func (h *MetricsHook) RecordBrokerWrite(nodeID int32, bytesWritten int, err error) {
+func (h *metricsHook) RecordBrokerWrite(nodeID int32, bytesWritten int, err error) {
 	if nodeID < 0 {
 		return
 	}
@@ -156,7 +156,7 @@ func (h *MetricsHook) RecordBrokerWrite(nodeID int32, bytesWritten int, err erro
 	}
 }
 
-func (h *MetricsHook) OnBrokerWrite(
+func (h *metricsHook) OnBrokerWrite(
 	meta kgo.BrokerMetadata,
 	_ int16,
 	bytesWritten int,
@@ -167,7 +167,7 @@ func (h *MetricsHook) OnBrokerWrite(
 	h.RecordBrokerWrite(meta.NodeID, bytesWritten, err)
 }
 
-func (h *MetricsHook) OnBrokerE2E(
+func (h *metricsHook) OnBrokerE2E(
 	meta kgo.BrokerMetadata,
 	_ int16,
 	e2e kgo.BrokerE2E,
@@ -205,7 +205,7 @@ func (h *MetricsHook) OnBrokerE2E(
 	}
 }
 
-func (h *MetricsHook) OnProduceBatchWritten(
+func (h *metricsHook) OnProduceBatchWritten(
 	_ kgo.BrokerMetadata,
 	_ string,
 	_ int32,
@@ -214,7 +214,7 @@ func (h *MetricsHook) OnProduceBatchWritten(
 	h.RecordProduceBatchWritten(m.NumRecords, m.UncompressedBytes, m.CompressedBytes)
 }
 
-func (h *MetricsHook) RecordProduceBatchWritten(numRecords int, uncompressedBytes int, compressedBytes int) {
+func (h *metricsHook) RecordProduceBatchWritten(numRecords int, uncompressedBytes int, compressedBytes int) {
 	ctx, ok := h.loadMetricsContext()
 	if !ok {
 		return
@@ -244,11 +244,11 @@ type metricsContext struct {
 	keyspace   string
 	changefeed string
 	clientType string
-	metrics    PrometheusMetrics
+	metrics    metricVectors
 }
 
-func (h *MetricsHook) loadMetricsContext() (metricsContext, bool) {
-	keyspace, changefeed, metrics, bound := h.loadPrometheusMetrics()
+func (h *metricsHook) loadMetricsContext() (metricsContext, bool) {
+	keyspace, changefeed, metrics, bound := h.loadMetrics()
 	if !bound {
 		return metricsContext{}, false
 	}

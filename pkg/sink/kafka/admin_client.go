@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -27,14 +27,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// TopicDetail represent a topic's detail information.
-type TopicDetail struct {
-	Name              string
-	NumPartitions     int32
-	ReplicationFactor int16
-}
-
-type AdminClient struct {
+type kafkaAdminClient struct {
 	changefeed common.ChangeFeedID
 
 	client  *kgo.Client
@@ -42,14 +35,14 @@ type AdminClient struct {
 	timeout time.Duration
 }
 
-func NewAdminClient(
+func newAdminClient(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
-	o *Options,
+	o *clientOptions,
 	hook kgo.Hook,
-) (*AdminClient, error) {
+) (*kafkaAdminClient, error) {
 	if o == nil {
-		o = &Options{}
+		o = &clientOptions{}
 	}
 
 	opts, err := newOptions(ctx, o, hook)
@@ -64,7 +57,7 @@ func NewAdminClient(
 
 	timeout := maxTimeoutWithDefault(o.ReadTimeout, o.WriteTimeout)
 
-	return &AdminClient{
+	return &kafkaAdminClient{
 		changefeed: changefeedID,
 		client:     client,
 		admin:      kadm.NewClient(client),
@@ -72,11 +65,11 @@ func NewAdminClient(
 	}, nil
 }
 
-func (a *AdminClient) newRequestContext() (context.Context, context.CancelFunc) {
+func (a *kafkaAdminClient) newRequestContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(a.client.Context(), a.timeout)
 }
 
-func (a *AdminClient) GetAllBrokers() []int32 {
+func (a *kafkaAdminClient) GetAllBrokers() []Broker {
 	startTime := time.Now()
 	ctx, cancel := a.newRequestContext()
 	defer cancel()
@@ -92,10 +85,15 @@ func (a *AdminClient) GetAllBrokers() []int32 {
 	}
 
 	observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetAllBrokers, nil, time.Since(startTime))
-	return meta.Brokers.NodeIDs()
+	brokerIDs := meta.Brokers.NodeIDs()
+	brokers := make([]Broker, 0, len(brokerIDs))
+	for _, brokerID := range brokerIDs {
+		brokers = append(brokers, Broker{ID: brokerID})
+	}
+	return brokers
 }
 
-func (a *AdminClient) GetBrokerConfig(configName string) (value string, err error) {
+func (a *kafkaAdminClient) GetBrokerConfig(configName string) (value string, err error) {
 	startTime := time.Now()
 	defer func() {
 		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetBrokerConfig, err, time.Since(startTime))
@@ -140,7 +138,7 @@ func (a *AdminClient) GetBrokerConfig(configName string) (value string, err erro
 		"cannot find the `%s` from the broker's configuration", configName)
 }
 
-func (a *AdminClient) GetTopicConfig(topicName string, configName string) (value string, err error) {
+func (a *kafkaAdminClient) GetTopicConfig(topicName string, configName string) (value string, err error) {
 	startTime := time.Now()
 	defer func() {
 		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetTopicConfig, err, time.Since(startTime))
@@ -181,7 +179,7 @@ func (a *AdminClient) GetTopicConfig(topicName string, configName string) (value
 		"cannot find the `%s` from the topic's configuration", configName)
 }
 
-func (a *AdminClient) GetTopicsMeta(
+func (a *kafkaAdminClient) GetTopicsMeta(
 	topics []string,
 	ignoreTopicError bool,
 ) (result map[string]TopicDetail, err error) {
@@ -228,7 +226,7 @@ func (a *AdminClient) GetTopicsMeta(
 	return result, nil
 }
 
-func (a *AdminClient) GetTopicsPartitionsNum(topics []string) (result map[string]int32, err error) {
+func (a *kafkaAdminClient) GetTopicsPartitionsNum(topics []string) (result map[string]int32, err error) {
 	startTime := time.Now()
 	defer func() {
 		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetTopicsPartitions, err, time.Since(startTime))
@@ -260,11 +258,16 @@ func (a *AdminClient) GetTopicsPartitionsNum(topics []string) (result map[string
 	return result, nil
 }
 
-func (a *AdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) (err error) {
+func (a *kafkaAdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) (err error) {
 	startTime := time.Now()
 	defer func() {
 		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodCreateTopic, err, time.Since(startTime))
 	}()
+
+	if detail == nil {
+		err = errors.ErrKafkaInvalidConfig.GenWithStack("topic detail must not be nil")
+		return err
+	}
 
 	ctx, cancel := a.newRequestContext()
 	defer cancel()
@@ -292,9 +295,9 @@ func (a *AdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) (err e
 	return errors.Trace(resp.Err)
 }
 
-func (a *AdminClient) Heartbeat() {}
+func (a *kafkaAdminClient) Heartbeat() {}
 
-func (a *AdminClient) Close() {
+func (a *kafkaAdminClient) Close() {
 	if a.admin != nil {
 		a.admin.Close()
 	}

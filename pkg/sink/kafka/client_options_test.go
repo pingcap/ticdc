@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -41,7 +41,7 @@ func TestNewRequiredAcks(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			require.Equal(t, tc.expected, newRequiredAcks(&Options{RequiredAcks: tc.requiredAcks}))
+			require.Equal(t, tc.expected, newRequiredAcks(&clientOptions{RequiredAcks: tc.requiredAcks}))
 		})
 	}
 
@@ -75,7 +75,7 @@ func TestMaxTimeoutWithDefault(t *testing.T) {
 func TestNewOptionsRejectsInvalidAssignedVersion(t *testing.T) {
 	t.Parallel()
 
-	opts, err := newOptions(context.Background(), &Options{
+	opts, err := newOptions(context.Background(), &clientOptions{
 		Version:           "invalid",
 		IsAssignedVersion: true,
 	}, nil)
@@ -86,7 +86,7 @@ func TestNewOptionsRejectsInvalidAssignedVersion(t *testing.T) {
 func TestNewOauthTokenSourceRejectsInvalidTokenURL(t *testing.T) {
 	t.Parallel()
 
-	_, err := newOauthTokenSource(context.Background(), &Options{
+	_, err := newOauthTokenSource(context.Background(), &clientOptions{
 		SASL: &security.SASL{
 			OAuth2: security.OAuth2{
 				ClientID:     "client-id",

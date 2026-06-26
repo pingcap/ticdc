@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -112,7 +112,7 @@ func (s *gssapiSession) Challenge(challenge []byte) (bool, []byte, error) {
 			return false, nil, errors.Trace(err)
 		}
 		// Return a final payload while marking done=true.
-		// franz-go will write this message and finish the auth flow.
+		// The Kafka client writes this message and finishes the auth flow.
 		s.close()
 		return true, msg, nil
 	case gssAPIFinished:

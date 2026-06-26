@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -21,10 +21,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildFranzSaslMechanismGSSAPIUserAuth(t *testing.T) {
+func TestBuildSaslMechanismGSSAPIUserAuth(t *testing.T) {
 	t.Parallel()
 
-	o := &Options{
+	o := &clientOptions{
 		SASL: &security.SASL{
 			SASLMechanism: security.GSSAPIMechanism,
 			GSSAPI: security.GSSAPI{
@@ -38,15 +38,15 @@ func TestBuildFranzSaslMechanismGSSAPIUserAuth(t *testing.T) {
 		},
 	}
 
-	mechanism, err := buildFranzSaslMechanism(context.Background(), o)
+	mechanism, err := buildSaslMechanism(context.Background(), o)
 	require.NoError(t, err)
 	require.Equal(t, "GSSAPI", mechanism.Name())
 }
 
-func TestBuildFranzSaslMechanismGSSAPIKeytabAuth(t *testing.T) {
+func TestBuildSaslMechanismGSSAPIKeytabAuth(t *testing.T) {
 	t.Parallel()
 
-	o := &Options{
+	o := &clientOptions{
 		SASL: &security.SASL{
 			SASLMechanism: security.GSSAPIMechanism,
 			GSSAPI: security.GSSAPI{
@@ -60,7 +60,7 @@ func TestBuildFranzSaslMechanismGSSAPIKeytabAuth(t *testing.T) {
 		},
 	}
 
-	mechanism, err := buildFranzSaslMechanism(context.Background(), o)
+	mechanism, err := buildSaslMechanism(context.Background(), o)
 	require.NoError(t, err)
 	require.Equal(t, "GSSAPI", mechanism.Name())
 }

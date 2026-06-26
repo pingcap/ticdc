@@ -16,7 +16,6 @@ package kafka
 import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
-	"github.com/pingcap/ticdc/pkg/sink/kafka/franz"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -80,54 +79,54 @@ var (
 			Help:      "Responses/second received from all brokers.",
 		}, []string{"namespace", "changefeed", "broker"})
 
-	franzRequestsInFlightByClientGauge = prometheus.NewGaugeVec(
+	kafkaClientRequestsInFlightGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "kafka_franz_producer_in_flight_requests",
+			Name:      "kafka_client_producer_in_flight_requests",
 			Help:      "Current number of in-flight requests by client type and broker.",
 		}, []string{"namespace", "changefeed", "client", "broker"})
-	franzOutgoingByteTotalByClientGauge = prometheus.NewGaugeVec(
+	kafkaClientOutgoingByteTotalGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "kafka_franz_producer_outgoing_byte_total",
+			Name:      "kafka_client_producer_outgoing_byte_total",
 			Help:      "Total bytes written by kafka sink clients.",
 		}, []string{"namespace", "changefeed", "client", "broker"})
-	franzRequestTotalByClientGauge = prometheus.NewGaugeVec(
+	kafkaClientRequestTotalGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "kafka_franz_producer_request_total",
+			Name:      "kafka_client_producer_request_total",
 			Help:      "Total requests sent by kafka sink clients.",
 		}, []string{"namespace", "changefeed", "client", "broker"})
-	franzResponseTotalByClientGauge = prometheus.NewGaugeVec(
+	kafkaClientResponseTotalGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "kafka_franz_producer_response_total",
+			Name:      "kafka_client_producer_response_total",
 			Help:      "Total responses received by kafka sink clients.",
 		}, []string{"namespace", "changefeed", "client", "broker"})
 
-	franzRequestLatencyHistogram = prometheus.NewHistogramVec(
+	kafkaClientRequestLatencyHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "kafka_franz_producer_request_latency_histogram",
+			Name:      "kafka_client_producer_request_latency_histogram",
 			Help:      "Request latency histogram for kafka producer in milliseconds.",
 		}, []string{"namespace", "changefeed", "client", "broker"})
-	franzCompressionRatioHistogram = prometheus.NewHistogramVec(
+	kafkaClientCompressionRatioHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "kafka_franz_producer_compression_ratio_histogram",
+			Name:      "kafka_client_producer_compression_ratio_histogram",
 			Help:      "Compression ratio times 100 histogram for kafka producer.",
 		}, []string{"namespace", "changefeed", "client"})
-	franzRecordsPerRequestHistogram = prometheus.NewHistogramVec(
+	kafkaClientRecordsPerRequestHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "kafka_franz_producer_records_per_request_histogram",
+			Name:      "kafka_client_producer_records_per_request_histogram",
 			Help:      "Records per request histogram for kafka producer.",
 		}, []string{"namespace", "changefeed", "client"})
 )
@@ -142,15 +141,15 @@ func InitMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(requestsInFlightGauge)
 	registry.MustRegister(responseRateGauge)
 
-	registry.MustRegister(franzRequestsInFlightByClientGauge)
-	registry.MustRegister(franzOutgoingByteTotalByClientGauge)
-	registry.MustRegister(franzRequestTotalByClientGauge)
-	registry.MustRegister(franzResponseTotalByClientGauge)
-	registry.MustRegister(franzRequestLatencyHistogram)
-	registry.MustRegister(franzCompressionRatioHistogram)
-	registry.MustRegister(franzRecordsPerRequestHistogram)
+	registry.MustRegister(kafkaClientRequestsInFlightGauge)
+	registry.MustRegister(kafkaClientOutgoingByteTotalGauge)
+	registry.MustRegister(kafkaClientRequestTotalGauge)
+	registry.MustRegister(kafkaClientResponseTotalGauge)
+	registry.MustRegister(kafkaClientRequestLatencyHistogram)
+	registry.MustRegister(kafkaClientCompressionRatioHistogram)
+	registry.MustRegister(kafkaClientRecordsPerRequestHistogram)
 
-	franz.InitAdminMetrics(registry)
+	initAdminMetrics(registry)
 	claimcheck.InitMetrics(registry)
 	codec.InitMetrics(registry)
 }

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -34,7 +34,7 @@ import (
 	"golang.org/x/oauth2/clientcredentials"
 )
 
-type Options struct {
+type clientOptions struct {
 	BrokerEndpoints []string
 	ClientID        string
 
@@ -72,11 +72,11 @@ func maxTimeoutWithDefault(readTimeout, writeTimeout time.Duration) time.Duratio
 
 func newOptions(
 	ctx context.Context,
-	o *Options,
+	o *clientOptions,
 	hook kgo.Hook,
 ) ([]kgo.Opt, error) {
 	if o == nil {
-		o = &Options{}
+		o = &clientOptions{}
 	}
 
 	timeoutOverhead := maxTimeoutWithDefault(o.ReadTimeout, o.WriteTimeout)
@@ -109,7 +109,7 @@ func newOptions(
 	}
 
 	if o.SASL != nil && o.SASL.SASLMechanism != "" {
-		mechanism, err := buildFranzSaslMechanism(ctx, o)
+		mechanism, err := buildSaslMechanism(ctx, o)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -119,7 +119,7 @@ func newOptions(
 	return opts, nil
 }
 
-func newTLSConfig(o *Options) (*tls.Config, error) {
+func newTLSConfig(o *clientOptions) (*tls.Config, error) {
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		NextProtos: []string{"h2", "http/1.1"},
@@ -143,7 +143,7 @@ func newTLSConfig(o *Options) (*tls.Config, error) {
 	return tlsConfig, nil
 }
 
-func buildFranzSaslMechanism(ctx context.Context, o *Options) (sasl.Mechanism, error) {
+func buildSaslMechanism(ctx context.Context, o *clientOptions) (sasl.Mechanism, error) {
 	if o.SASL == nil {
 		return nil, nil
 	}
@@ -186,7 +186,7 @@ func buildFranzSaslMechanism(ctx context.Context, o *Options) (sasl.Mechanism, e
 	return nil, errors.ErrKafkaInvalidConfig.GenWithStack("unsupported sasl mechanism %s", o.SASL.SASLMechanism)
 }
 
-func newOauthTokenSource(ctx context.Context, o *Options) (oauth2.TokenSource, error) {
+func newOauthTokenSource(ctx context.Context, o *clientOptions) (oauth2.TokenSource, error) {
 	endpointParams := url.Values{}
 	if o.SASL.OAuth2.GrantType != "" {
 		endpointParams.Set("grant_type", o.SASL.OAuth2.GrantType)
@@ -211,11 +211,11 @@ func newOauthTokenSource(ctx context.Context, o *Options) (oauth2.TokenSource, e
 }
 
 func newProducerOptions(
-	o *Options,
+	o *clientOptions,
 ) []kgo.Opt {
 	recordRetries := defaultRecordRetries
 	if o == nil {
-		o = &Options{}
+		o = &clientOptions{}
 	} else {
 		recordRetries = o.MaxRetry
 	}
@@ -238,7 +238,7 @@ func newProducerOptions(
 	}
 }
 
-func newRequiredAcks(o *Options) kgo.Acks {
+func newRequiredAcks(o *clientOptions) kgo.Acks {
 	if o == nil {
 		return kgo.AllISRAcks()
 	}
@@ -256,7 +256,7 @@ func newRequiredAcks(o *Options) kgo.Acks {
 	}
 }
 
-func newCompressionOption(o *Options) kgo.Opt {
+func newCompressionOption(o *clientOptions) kgo.Opt {
 	if o == nil {
 		return kgo.ProducerBatchCompression(kgo.NoCompression())
 	}

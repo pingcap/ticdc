@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -24,10 +24,21 @@ import (
 func TestNewAdminClientNilOptionsReturnsError(t *testing.T) {
 	t.Parallel()
 
-	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "franz-admin-nil-options")
-	client, err := NewAdminClient(context.Background(), changefeedID, nil, nil)
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "kafka-admin-nil-options")
+	client, err := newAdminClient(context.Background(), changefeedID, nil, nil)
 	if client != nil {
 		client.Close()
 	}
 	require.Error(t, err)
+}
+
+func TestAdminClientCreateTopicNilDetailReturnsError(t *testing.T) {
+	t.Parallel()
+
+	client := &kafkaAdminClient{}
+
+	err := client.CreateTopic(nil, false)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "topic detail must not be nil")
 }

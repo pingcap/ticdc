@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"time"
@@ -35,25 +35,25 @@ var (
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "kafka_franz_admin_call_total",
+			Name:      "kafka_client_admin_call_total",
 			Help:      "Total kafka admin calls by method and result.",
 		}, []string{"namespace", "changefeed", "method", "result"})
 	adminCallLatency = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "kafka_franz_admin_call_duration_seconds",
+			Name:      "kafka_client_admin_call_duration_seconds",
 			Help:      "Latency of kafka admin calls by method and result.",
 			Buckets:   prometheus.DefBuckets,
 		}, []string{"namespace", "changefeed", "method", "result"})
 )
 
-func InitAdminMetrics(registry *prometheus.Registry) {
+func initAdminMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(adminCallCount)
 	registry.MustRegister(adminCallLatency)
 }
 
-func CleanupAdminMetrics(keyspace string, changefeed string) {
+func cleanupAdminMetrics(keyspace string, changefeed string) {
 	labels := prometheus.Labels{
 		"namespace":  keyspace,
 		"changefeed": changefeed,

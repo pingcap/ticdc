@@ -19,14 +19,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewFranzOptionsNilUsesWaitForAll(t *testing.T) {
+func TestNewKafkaOptionsNilUsesWaitForAll(t *testing.T) {
 	t.Parallel()
 
-	options := newFranzOptions(nil)
+	options := newKafkaOptions(nil)
 	require.Equal(t, int16(WaitForAll), options.RequiredAcks)
 }
 
-func TestNewFranzOptionsMapsRequiredAcks(t *testing.T) {
+func TestNewKafkaOptionsMapsRequiredAcks(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
@@ -46,18 +46,18 @@ func TestNewFranzOptionsMapsRequiredAcks(t *testing.T) {
 			options := NewOptions()
 			options.RequiredAcks = tc.requiredAcks
 
-			franzOptions := newFranzOptions(options)
-			require.Equal(t, int16(tc.requiredAcks), franzOptions.RequiredAcks)
+			kafkaOptions := newKafkaOptions(options)
+			require.Equal(t, int16(tc.requiredAcks), kafkaOptions.RequiredAcks)
 		})
 	}
 }
 
-func TestNewFranzOptionsMapsMaxRetry(t *testing.T) {
+func TestNewKafkaOptionsMapsMaxRetry(t *testing.T) {
 	t.Parallel()
 
 	options := NewOptions()
 	options.MaxRetry = 7
 
-	franzOptions := newFranzOptions(options)
-	require.Equal(t, 7, franzOptions.MaxRetry)
+	kafkaOptions := newKafkaOptions(options)
+	require.Equal(t, 7, kafkaOptions.MaxRetry)
 }

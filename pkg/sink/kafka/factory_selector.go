@@ -25,5 +25,5 @@ func NewFactory(
 	o *options,
 	changefeedID common.ChangeFeedID,
 ) (Factory, error) {
-	return NewFranzFactory(ctx, o, changefeedID)
+	return NewKafkaFactory(ctx, o, changefeedID)
 }

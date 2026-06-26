@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -28,7 +28,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type AsyncProducer struct {
+type kafkaAsyncProducer struct {
 	client       *kgo.Client
 	changefeedID commonType.ChangeFeedID
 
@@ -36,12 +36,12 @@ type AsyncProducer struct {
 	errCh  chan error
 }
 
-func NewAsyncProducer(
+func newAsyncProducer(
 	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
-	o *Options,
+	o *clientOptions,
 	hook kgo.Hook,
-) (*AsyncProducer, error) {
+) (*kafkaAsyncProducer, error) {
 	opts, err := newOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -52,7 +52,7 @@ func NewAsyncProducer(
 		return nil, errors.Trace(err)
 	}
 
-	return &AsyncProducer{
+	return &kafkaAsyncProducer{
 		client:       client,
 		changefeedID: changefeedID,
 		closed:       atomic.NewBool(false),
@@ -60,7 +60,7 @@ func NewAsyncProducer(
 	}, nil
 }
 
-func (p *AsyncProducer) Close() {
+func (p *kafkaAsyncProducer) Close() {
 	if !p.closed.CompareAndSwap(false, true) {
 		return
 	}
@@ -75,7 +75,7 @@ func (p *AsyncProducer) Close() {
 	}()
 }
 
-func (p *AsyncProducer) AsyncSend(
+func (p *kafkaAsyncProducer) AsyncSend(
 	ctx context.Context,
 	topic string,
 	partition int32,
@@ -96,19 +96,27 @@ func (p *AsyncProducer) AsyncSend(
 		changefeed = p.changefeedID.Name()
 	)
 
-	failpoint.Inject("KafkaSinkAsyncSendError", func() {
+	if legacyKafkaSinkFailpointEnabled(kafkaSinkAsyncSendErrorFailpoint) {
 		log.Info("KafkaSinkAsyncSendError error injected",
 			zap.String("keyspace", keyspace), zap.String("changefeed", changefeed))
-		errWithInfo := logutil.AnnotateEventError(
+		p.enqueueAsyncSendError(
 			keyspace,
 			changefeed,
 			message.LogInfo,
 			errors.New("kafka sink injected error"),
 		)
-		select {
-		case p.errCh <- errors.WrapError(errors.ErrKafkaAsyncSendMessage, errWithInfo):
-		default:
-		}
+		return nil
+	}
+
+	failpoint.Inject("KafkaSinkAsyncSendError", func() {
+		log.Info("KafkaSinkAsyncSendError error injected",
+			zap.String("keyspace", keyspace), zap.String("changefeed", changefeed))
+		p.enqueueAsyncSendError(
+			keyspace,
+			changefeed,
+			message.LogInfo,
+			errors.New("kafka sink injected error"),
+		)
 		failpoint.Return(nil)
 	})
 
@@ -123,16 +131,11 @@ func (p *AsyncProducer) AsyncSend(
 	logInfo := message.LogInfo
 	promise := func(_ *kgo.Record, err error) {
 		if err != nil {
-			errWithInfo := logutil.AnnotateEventError(
+			p.enqueueAsyncSendError(
 				keyspace, changefeed,
 				logInfo,
 				err,
 			)
-			select {
-			case p.errCh <- errors.WrapError(errors.ErrKafkaAsyncSendMessage, errWithInfo):
-			// todo: remove this default after support dispatcher recover logic.
-			default:
-			}
 			return
 		}
 		if callback != nil {
@@ -143,9 +146,28 @@ func (p *AsyncProducer) AsyncSend(
 	return nil
 }
 
-func (p *AsyncProducer) Heartbeat() {}
+func (p *kafkaAsyncProducer) enqueueAsyncSendError(
+	keyspace string,
+	changefeed string,
+	logInfo *common.MessageLogInfo,
+	err error,
+) {
+	errWithInfo := logutil.AnnotateEventError(
+		keyspace,
+		changefeed,
+		logInfo,
+		err,
+	)
+	select {
+	case p.errCh <- errors.WrapError(errors.ErrKafkaAsyncSendMessage, errWithInfo):
+	// todo: remove this default after support dispatcher recover logic.
+	default:
+	}
+}
 
-func (p *AsyncProducer) AsyncRunCallback(ctx context.Context) error {
+func (p *kafkaAsyncProducer) Heartbeat() {}
+
+func (p *kafkaAsyncProducer) AsyncRunCallback(ctx context.Context) error {
 	defer p.closed.Store(true)
 	for {
 		select {

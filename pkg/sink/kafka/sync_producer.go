@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -28,7 +28,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type SyncProducer struct {
+type kafkaSyncProducer struct {
 	id commonType.ChangeFeedID
 
 	client  *kgo.Client
@@ -36,14 +36,14 @@ type SyncProducer struct {
 	timeout time.Duration
 }
 
-func NewSyncProducer(
+func newSyncProducer(
 	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
-	o *Options,
+	o *clientOptions,
 	hook kgo.Hook,
-) (*SyncProducer, error) {
+) (*kafkaSyncProducer, error) {
 	if o == nil {
-		o = &Options{}
+		o = &clientOptions{}
 	}
 
 	opts, err := newOptions(ctx, o, hook)
@@ -59,7 +59,7 @@ func NewSyncProducer(
 
 	timeout := maxTimeoutWithDefault(o.ReadTimeout, 0)
 
-	return &SyncProducer{
+	return &kafkaSyncProducer{
 		id:      changefeedID,
 		client:  client,
 		closed:  atomic.NewBool(false),
@@ -67,11 +67,11 @@ func NewSyncProducer(
 	}, nil
 }
 
-func (p *SyncProducer) newRequestContext() (context.Context, context.CancelFunc) {
+func (p *kafkaSyncProducer) newRequestContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(p.client.Context(), p.timeout)
 }
 
-func (p *SyncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
+func (p *kafkaSyncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
 	}
@@ -82,6 +82,10 @@ func (p *SyncProducer) SendMessage(topic string, partitionNum int32, message *co
 	record := buildRecord(topic, partitionNum, message)
 	err := p.client.ProduceSync(ctx, record).FirstErr()
 
+	if legacyKafkaSinkFailpointEnabled(kafkaSinkSyncSendMessageErrorFailpoint) {
+		err = errors.New("kafka sink sync send message injected error")
+	}
+
 	failpoint.Inject("KafkaSinkSyncSendMessageError", func() {
 		err = errors.New("kafka sink sync send message injected error")
 	})
@@ -89,7 +93,7 @@ func (p *SyncProducer) SendMessage(topic string, partitionNum int32, message *co
 	return p.wrapSendError(message, err)
 }
 
-func (p *SyncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
+func (p *kafkaSyncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
 	}
@@ -104,6 +108,10 @@ func (p *SyncProducer) SendMessages(topic string, partitionNum int32, message *c
 
 	err := p.client.ProduceSync(ctx, records...).FirstErr()
 
+	if legacyKafkaSinkFailpointEnabled(kafkaSinkSyncSendMessagesErrorFailpoint) {
+		err = errors.New("kafka sink sync send messages injected error")
+	}
+
 	failpoint.Inject("KafkaSinkSyncSendMessagesError", func() {
 		err = errors.New("kafka sink sync send messages injected error")
 	})
@@ -111,9 +119,9 @@ func (p *SyncProducer) SendMessages(topic string, partitionNum int32, message *c
 	return p.wrapSendError(message, err)
 }
 
-func (p *SyncProducer) Heartbeat() {}
+func (p *kafkaSyncProducer) Heartbeat() {}
 
-func (p *SyncProducer) Close() {
+func (p *kafkaSyncProducer) Close() {
 	if !p.closed.CompareAndSwap(false, true) {
 		log.Warn("kafka DDL producer already closed",
 			zap.String("keyspace", p.id.Keyspace()),
@@ -138,7 +146,7 @@ func buildRecord(topic string, partition int32, message *common.Message) *kgo.Re
 	}
 }
 
-func (p *SyncProducer) wrapSendError(message *common.Message, err error) error {
+func (p *kafkaSyncProducer) wrapSendError(message *common.Message, err error) error {
 	if err != nil {
 		err = logutil.AnnotateEventError(
 			p.id.Keyspace(),
