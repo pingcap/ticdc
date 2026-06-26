@@ -258,6 +258,18 @@ func TestBusyRetryPreservesScanPriority(t *testing.T) {
 			cdcErr:   &cdcpb.Error{Congested: &cdcpb.Congested{}},
 			expected: TaskLowPrior,
 		},
+		{
+			name:     "unknown retry high",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			cdcErr:   &cdcpb.Error{},
+			expected: TaskHighPrior,
+		},
+		{
+			name:     "unknown retry low",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			cdcErr:   &cdcpb.Error{},
+			expected: TaskLowPrior,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := &subscriptionClient{
@@ -286,6 +298,81 @@ func TestBusyRetryPreservesScanPriority(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.expected, task.(*regionPriorityTask).taskType)
 			require.Equal(t, tc.priority, task.GetRegionInfo().scanPriority)
+		})
+	}
+}
+
+func TestRangeRetryPreservesScanPriority(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		priority cdcpb.ScanPriority
+		err      error
+		expected TaskType
+	}{
+		{
+			name:     "epoch not match high",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			err:      &eventError{err: &cdcpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}},
+			expected: TaskHighPrior,
+		},
+		{
+			name:     "epoch not match low",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			err:      &eventError{err: &cdcpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}},
+			expected: TaskLowPrior,
+		},
+		{
+			name:     "region not found high",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			err:      &eventError{err: &cdcpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}},
+			expected: TaskHighPrior,
+		},
+		{
+			name:     "region not found low",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			err:      &eventError{err: &cdcpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}},
+			expected: TaskLowPrior,
+		},
+		{
+			name:     "rpc context unavailable high",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			err:      &rpcCtxUnavailableErr{verID: tikv.NewRegionVerID(1, 1, 1)},
+			expected: TaskHighPrior,
+		},
+		{
+			name:     "rpc context unavailable low",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			err:      &rpcCtxUnavailableErr{verID: tikv.NewRegionVerID(1, 1, 1)},
+			expected: TaskLowPrior,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &subscriptionClient{
+				rangeTaskCh: make(chan rangeTask, 1),
+			}
+			rawSpan := heartbeatpb.TableSpan{
+				TableID:  1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+			}
+			span := &subscribedSpan{
+				subID:     SubscriptionID(1),
+				span:      rawSpan,
+				rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
+			}
+			region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), rawSpan, nil, span, false)
+			region.scanPriority = tc.priority
+
+			err := client.doHandleError(context.Background(), newRegionErrorInfo(region, tc.err))
+			require.NoError(t, err)
+
+			select {
+			case task := <-client.rangeTaskCh:
+				require.Equal(t, tc.expected, task.priority)
+				require.Equal(t, rawSpan, task.span)
+			case <-time.After(time.Second):
+				require.Fail(t, "expected range retry task")
+			}
 		})
 	}
 }
