@@ -59,7 +59,7 @@ func TestBasicSchedulerRequiresTargetAckBeforeUsingDestination(t *testing.T) {
 	cfID := addAbsentChangefeed(t, db, "cf-absent")
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 	s := NewBasicScheduler("test", 10, oc, db, drainController)
 	_ = s.Execute()
 
@@ -85,7 +85,7 @@ func TestBasicSchedulerSkipsWhenSchedulingFrozen(t *testing.T) {
 	cfID := addAbsentChangefeed(t, db, "cf-frozen")
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 	s := NewBasicScheduler("test", 10, oc, db, drainController)
 	_ = s.Execute()
 

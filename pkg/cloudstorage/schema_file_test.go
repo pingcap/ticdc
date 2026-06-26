@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func generateTableDef() (TableDefinition, *common.TableInfo) {
+func generateSchemaFile() (SchemaFile, *common.TableInfo) {
 	var columns []*timodel.ColumnInfo
 	ft := types.NewFieldType(mysql.TypeLong)
 	ft.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
@@ -72,56 +72,15 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 		Columns:  columns,
 		UpdateTS: 100,
 	})
-	var def TableDefinition
-	def.FromTableInfo(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo, tableInfo.GetUpdateTS(), false)
-	return def, tableInfo
-}
-
-func TestFromDDLEventUsesTargetNames(t *testing.T) {
-	t.Parallel()
-
-	idFieldType := types.NewFieldType(mysql.TypeLong)
-	idFieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
-	routedTableInfo := common.WrapTableInfo("source_db", &timodel.TableInfo{
-		ID:       20,
-		Name:     ast.NewCIStr("source_table"),
-		UpdateTS: 100,
-		Columns: []*timodel.ColumnInfo{
-			{
-				ID:        1,
-				Name:      ast.NewCIStr("id"),
-				FieldType: *idFieldType,
-				State:     timodel.StatePublic,
-			},
-		},
-	}).CloneWithRouting("target_db", "target_table")
-	sourceDDL := &commonEvent.DDLEvent{
-		Version:    commonEvent.DDLEventVersion1,
-		Type:       byte(timodel.ActionCreateTable),
-		SchemaName: "source_db",
-		TableName:  "source_table",
-		Query:      "CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)",
-		TableInfo:  routedTableInfo,
-		FinishedTs: 100,
+	event := &commonEvent.DDLEvent{
+		SchemaName: tableInfo.GetSchemaName(),
+		TableName:  tableInfo.GetTableName(),
+		TableInfo:  tableInfo,
+		FinishedTs: tableInfo.GetUpdateTS(),
 	}
-
-	routedDDL := commonEvent.NewRoutedDDLEvent(
-		sourceDDL,
-		"CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY)",
-		"target_db",
-		"target_table",
-		"",
-		"",
-		routedTableInfo,
-		nil,
-		nil,
-	)
-
-	var def TableDefinition
-	def.FromDDLEvent(routedDDL, false)
-	require.Equal(t, "target_db", def.Schema)
-	require.Equal(t, "target_table", def.Table)
-	require.Contains(t, def.Query, "`target_db`.`target_table`")
+	var schemaFile SchemaFile
+	schemaFile.Build(event, false)
+	return schemaFile, tableInfo
 }
 
 func TestTableCol(t *testing.T) {
@@ -413,21 +372,20 @@ func TestTableCol(t *testing.T) {
 		}
 		col := &timodel.ColumnInfo{FieldType: *ft}
 		var tableCol TableCol
-		tableCol.FromTiColumnInfo(col, false)
+		tableCol.fromTiColumnInfo(col, false)
 		encodedCol, err := json.Marshal(tableCol)
 		require.Nil(t, err, tc.name)
 		require.JSONEq(t, tc.expected, string(encodedCol), tc.name)
 
-		_, err = tableCol.ToTiColumnInfo(100)
-		require.NoError(t, err)
+		_ = tableCol.toTiColumnInfo(100)
 	}
 }
 
-func TestTableDefinition(t *testing.T) {
+func TestSchemaFile(t *testing.T) {
 	t.Parallel()
 
-	def, tableInfo := generateTableDef()
-	encodedDef, err := json.MarshalIndent(def, "", "    ")
+	schemaFile, tableInfo := generateSchemaFile()
+	encodedSchemaFile, err := json.MarshalIndent(schemaFile, "", "    ")
 	require.NoError(t, err)
 	require.JSONEq(t, `{
 		"Table": "table1",
@@ -465,9 +423,9 @@ func TestTableDefinition(t *testing.T) {
 			}
 		],
 		"TableColumnsTotal": 4
-	}`, string(encodedDef))
+	}`, string(encodedSchemaFile))
 
-	def = TableDefinition{}
+	schemaFile = SchemaFile{}
 	event := &commonEvent.DDLEvent{
 		FinishedTs: tableInfo.GetUpdateTS(),
 		Type:       byte(timodel.ActionAddColumn),
@@ -476,8 +434,8 @@ func TestTableDefinition(t *testing.T) {
 		SchemaName: "schema1",
 		TableName:  "table1",
 	}
-	def.FromDDLEvent(event, false)
-	encodedDef, err = json.MarshalIndent(def, "", "    ")
+	schemaFile.Build(event, false)
+	encodedSchemaFile, err = json.MarshalIndent(schemaFile, "", "    ")
 	require.NoError(t, err)
 	require.JSONEq(t, `{
 		"Table": "table1",
@@ -515,97 +473,70 @@ func TestTableDefinition(t *testing.T) {
 			}
 		],
 		"TableColumnsTotal": 4
-	}`, string(encodedDef))
+	}`, string(encodedSchemaFile))
 
-	tableInfo, err = def.ToTableInfo()
-	require.NoError(t, err)
+	tableInfo = schemaFile.TableInfo()
 	require.Len(t, tableInfo.GetColumns(), 4)
 
-	event, err = def.ToDDLEvent()
-	require.NoError(t, err)
+	event = schemaFile.DDLEvent()
 	require.Equal(t, byte(timodel.ActionAddColumn), event.Type)
 	require.Equal(t, uint64(100), event.FinishedTs)
 }
 
-func TestTableDefinitionGenFilePath(t *testing.T) {
+func TestSchemaFileGenFilePath(t *testing.T) {
 	t.Parallel()
 
-	schemaDef := &TableDefinition{
+	dbSchemaFile := &SchemaFile{
 		Schema:       "schema1",
-		Version:      defaultTableDefinitionVersion,
+		Version:      defaultSchemaFileVersion,
 		TableVersion: 100,
 	}
-	schemaPath, err := schemaDef.GenerateSchemaFilePath(false, 0)
-	require.NoError(t, err)
+	schemaPath := dbSchemaFile.Path(false, 0)
 	require.Equal(t, "schema1/meta/schema_100_3233644819.json", schemaPath)
 
-	schemaPath, err = schemaDef.GenerateSchemaFilePath(true, 0)
-	require.NoError(t, err)
+	schemaPath = dbSchemaFile.Path(true, 0)
 	require.Equal(t, "schema1/meta/schema_100_3233644819.json", schemaPath)
 
-	def, _ := generateTableDef()
-	tablePath, err := def.GenerateSchemaFilePath(false, 0)
-	require.NoError(t, err)
+	schemaFile, _ := generateSchemaFile()
+	tablePath := schemaFile.Path(false, 0)
 	require.Equal(t, "schema1/table1/meta/schema_100_3752767265.json", tablePath)
 
-	tablePath, err = def.GenerateSchemaFilePath(true, 12345)
-	require.NoError(t, err)
+	tablePath = schemaFile.Path(true, 12345)
 	require.Equal(t, "12345/meta/schema_100_3752767265.json", tablePath)
 }
 
-func TestGenerateSchemaFilePathValidation(t *testing.T) {
+func TestParseSchemaFile(t *testing.T) {
 	t.Parallel()
 
-	def, _ := generateTableDef()
+	schemaFile, _ := generateSchemaFile()
+	encodedSchemaFile := schemaFile.Marshal()
 
-	// empty schema
-	emptySchemaDef := &TableDefinition{Schema: "", Table: "t1", TableVersion: 100, TotalColumns: 1, Columns: []TableCol{{}}}
-	_, err := emptySchemaDef.GenerateSchemaFilePath(false, 0)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "schema cannot be empty")
-
-	// zero table version
-	zeroVersionDef := &TableDefinition{Schema: "s1", Table: "t1", TableVersion: 0, TotalColumns: 1, Columns: []TableCol{{}}}
-	_, err = zeroVersionDef.GenerateSchemaFilePath(false, 0)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "table version cannot be zero")
-
-	// use-table-id-as-path with invalid tableID
-	_, err = def.GenerateSchemaFilePath(true, 0)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid table id for table-id path")
-	_, err = def.GenerateSchemaFilePath(true, -1)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid table id for table-id path")
-
-	// invalid table definition
-	invalidDef := &TableDefinition{Schema: "s1", Table: "t1", TableVersion: 100, TotalColumns: 1, Columns: nil}
-	_, err = invalidDef.GenerateSchemaFilePath(false, 0)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid table definition")
+	var got SchemaFile
+	require.NoError(t, json.Unmarshal(encodedSchemaFile, &got))
+	require.Equal(t, schemaFile.Schema, got.Schema)
+	require.Equal(t, schemaFile.Table, got.Table)
+	require.Equal(t, schemaFile.TableVersion, got.TableVersion)
+	require.Len(t, got.Columns, len(schemaFile.Columns))
 }
 
-func TestTableDefinitionSum32(t *testing.T) {
+func TestSchemaFileChecksum(t *testing.T) {
 	t.Parallel()
 
-	def, _ := generateTableDef()
-	checksum1, err := def.Sum32(nil)
-	require.NoError(t, err)
-	checksum2, err := def.Sum32(nil)
-	require.NoError(t, err)
+	schemaFile, _ := generateSchemaFile()
+	checksum1 := schemaFile.Checksum()
+	checksum2 := schemaFile.Checksum()
 	require.Equal(t, checksum1, checksum2)
 
-	n := len(def.Columns)
+	n := len(schemaFile.Columns)
 	newCol := make([]TableCol, n)
-	copy(newCol, def.Columns)
-	newDef := def
-	newDef.Columns = newCol
+	copy(newCol, schemaFile.Columns)
+	newSchemaFile := schemaFile
+	newSchemaFile.Columns = newCol
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		target := rand.Intn(n)
-		newDef.Columns[i], newDef.Columns[target] = newDef.Columns[target], newDef.Columns[i]
-		newChecksum, err := newDef.Sum32(nil)
-		require.NoError(t, err)
+		newSchemaFile.Columns[i], newSchemaFile.Columns[target] = newSchemaFile.Columns[target], newSchemaFile.Columns[i]
+		newChecksum := newSchemaFile.Checksum()
 		require.Equal(t, checksum1, newChecksum)
 	}
 }

@@ -14,6 +14,7 @@
 package changefeed
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -42,6 +43,21 @@ func TestNewChangefeed(t *testing.T) {
 	require.True(t, cf.NeedCheckpointTsMessage())
 }
 
+func TestNewChangefeedRejectsInvalidInfo(t *testing.T) {
+	t.Parallel()
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	require.Panics(t, func() {
+		NewChangefeed(cfID, nil, 100, true)
+	})
+	require.Panics(t, func() {
+		NewChangefeed(cfID, &config.ChangeFeedInfo{
+			SinkURI: "kafka://127.0.0.1:9092",
+			State:   config.StateNormal,
+		}, 100, true)
+	})
+}
+
 func TestChangefeed_GetSetInfo(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
@@ -58,6 +74,9 @@ func TestChangefeed_GetSetInfo(t *testing.T) {
 	}
 	cf.SetInfo(newInfo)
 	require.Equal(t, newInfo, cf.GetInfo())
+	require.Panics(t, func() {
+		cf.SetInfo(nil)
+	})
 }
 
 func TestChangefeed_GetSetNodeID(t *testing.T) {
@@ -227,28 +246,22 @@ func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
+		Epoch:   7,
 	}
+	info.KeyspaceID = 123
 	cf := NewChangefeed(cfID, info, 100, true)
 
 	server := node.ID("server-1")
 	msg := cf.NewAddMaintainerMessage(server)
 	require.Equal(t, server, msg.To)
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
-}
-
-func TestChangefeed_NewRemoveMaintainerMessage(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	info := &config.ChangeFeedInfo{
-		SinkURI: "kafka://127.0.0.1:9092",
-		State:   config.StateNormal,
-		Config:  config.GetDefaultReplicaConfig(),
-	}
-	cf := NewChangefeed(cfID, info, 100, true)
-
-	server := node.ID("server-1")
-	msg := cf.NewRemoveMaintainerMessage(server, true, true)
-	require.Equal(t, server, msg.To)
-	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
+	req := msg.Message[0].(*heartbeatpb.AddMaintainerRequest)
+	require.Equal(t, info.KeyspaceID, req.KeyspaceId)
+	require.Equal(t, info.Epoch, req.MaintainerEpoch)
+	configInfo := &config.ChangeFeedInfo{}
+	require.NoError(t, json.Unmarshal(req.Config, configInfo))
+	require.Equal(t, info.Epoch, configInfo.Epoch)
+	require.Equal(t, info.SinkURI, configInfo.SinkURI)
 }
 
 func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
@@ -269,9 +282,11 @@ func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
 func TestRemoveMaintainerMessage(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	server := node.ID("server-1")
-	msg := RemoveMaintainerMessage(common.DefaultKeyspaceID, cfID, server, true, true)
+	msg := RemoveMaintainerMessage(common.DefaultKeyspaceID, cfID, server, true, true, 10)
 	require.Equal(t, server, msg.To)
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
+	req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, uint64(10), req.MaintainerEpoch)
 }
 
 func TestChangefeedGetStatusForResume(t *testing.T) {
@@ -283,9 +298,10 @@ func TestChangefeedGetStatusForResume(t *testing.T) {
 			Name:     "test-changefeed",
 			Keyspace: "test-keyspace",
 		},
-		CheckpointTs: 789,
-		FeedState:    "normal",
-		State:        heartbeatpb.ComponentState_Working,
+		CheckpointTs:    789,
+		FeedState:       "normal",
+		State:           heartbeatpb.ComponentState_Working,
+		MaintainerEpoch: 42,
 		Err: []*heartbeatpb.RunningError{
 			{
 				Time:    "2024-01-01 00:00:00",
@@ -312,6 +328,7 @@ func TestChangefeedGetStatusForResume(t *testing.T) {
 	require.Equal(t, originalStatus.CheckpointTs, clonedStatus.CheckpointTs)
 	require.Equal(t, originalStatus.FeedState, clonedStatus.FeedState)
 	require.Equal(t, originalStatus.State, clonedStatus.State)
+	require.Equal(t, originalStatus.MaintainerEpoch, clonedStatus.MaintainerEpoch)
 
 	require.Equal(t, 0, len(clonedStatus.Err))
 }
