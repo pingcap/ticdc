@@ -26,13 +26,11 @@ import (
 	"github.com/pingcap/ticdc/logservice/txnutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
@@ -44,11 +42,6 @@ const (
 	// Maximum total sleep time(in ms), 20 seconds.
 	tikvRequestMaxBackoff = 20000
 
-	// TiCDC always interacts with region leader, every time something goes wrong,
-	// failed region will be reloaded via `BatchLoadRegionsWithKeyRange` API. So we
-	// don't need to force reload region anymore.
-	regionScheduleReload = false
-
 	loadRegionRetryInterval time.Duration = 100 * time.Millisecond
 	resolveLockMinInterval  time.Duration = 10 * time.Second
 	resolveLockTickInterval time.Duration = 2 * time.Second
@@ -56,18 +49,8 @@ const (
 )
 
 var (
-	metricFeedNotLeaderCounter        = metrics.EventFeedErrorCounter.WithLabelValues("NotLeader")
-	metricFeedEpochNotMatchCounter    = metrics.EventFeedErrorCounter.WithLabelValues("EpochNotMatch")
-	metricFeedRegionNotFoundCounter   = metrics.EventFeedErrorCounter.WithLabelValues("RegionNotFound")
-	metricFeedDuplicateRequestCounter = metrics.EventFeedErrorCounter.WithLabelValues("DuplicateRequest")
-	metricFeedUnknownErrorCounter     = metrics.EventFeedErrorCounter.WithLabelValues("Unknown")
-	metricFeedRPCCtxUnavailable       = metrics.EventFeedErrorCounter.WithLabelValues("RPCCtxUnavailable")
-	metricGetStoreErr                 = metrics.EventFeedErrorCounter.WithLabelValues("GetStoreErr")
-	metricStoreSendRequestErr         = metrics.EventFeedErrorCounter.WithLabelValues("SendRequestToStore")
-	metricKvIsBusyCounter             = metrics.EventFeedErrorCounter.WithLabelValues("KvIsBusy")
-	metricKvCongestedCounter          = metrics.EventFeedErrorCounter.WithLabelValues("KvCongested")
-	metricResolveLockSuccessCounter   = metrics.SubscriptionClientResolveLockCounter.WithLabelValues("success")
-	metricResolveLockFailureCounter   = metrics.SubscriptionClientResolveLockCounter.WithLabelValues("failure")
+	metricResolveLockSuccessCounter = metrics.SubscriptionClientResolveLockCounter.WithLabelValues("success")
+	metricResolveLockFailureCounter = metrics.SubscriptionClientResolveLockCounter.WithLabelValues("failure")
 
 	metricSubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store")
 	metricSubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store")
@@ -188,11 +171,8 @@ type subscriptionClient struct {
 
 	lockResolver txnutil.LockResolver
 
-	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
-	// the following three fields are used to manage feedback from ds and notify other goroutines
-	mu     sync.Mutex
-	cond   *sync.Cond
-	paused atomic.Bool
+	eventSink       *regionEventSink
+	failureReporter *regionFailureReporter
 
 	totalSpans struct {
 		sync.RWMutex
@@ -207,9 +187,6 @@ type subscriptionClient struct {
 	// The tasks will be handled in `handleResolveLockTasks` goroutine.
 	resolveLockTaskCh      chan resolveLockTask
 	resolveLockRateLimiter *resolveLockRateLimiter
-	// errCh is used to receive region errors.
-	// The errors will be handled in `handleErrors` goroutine.
-	errCache *errCache
 }
 
 // NewSubscriptionClient creates a client.
@@ -234,27 +211,17 @@ func NewSubscriptionClient(
 		rangeTaskCh:            make(chan rangeTask, 1024),
 		resolveLockTaskCh:      make(chan resolveLockTask, 1024),
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
-		errCache:               newErrCache(),
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
-	option := dynstream.NewOption()
-	// Note: it is max batch size of the kv sent from tikv(not committed rows)
-	option.BatchCount = 1024
-	// TODO: Set `UseBuffer` to true until we refactor the `regionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
-	// 	ds.handleLoop fetch events from `ch` -> regionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
-	option.UseBuffer = true
-	option.EnableMemoryControl = true
-	ds := dynstream.NewParallelDynamicStream(
-		"log-puller",
-		&regionEventHandler{subClient: subClient},
-		option,
+	subClient.failureReporter = newRegionFailureReporter(
+		subClient.upstream,
+		subClient.onTableDrained,
+		subClient.scheduleRegionRequest,
+		subClient.scheduleRangeRequest,
 	)
-	ds.Start()
-	subClient.ds = ds
-	subClient.cond = sync.NewCond(&subClient.mu)
-
+	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient.failureReporter)
 	subClient.regionScheduler = newRegionRequestScheduler(subClient)
 	return subClient
 }
@@ -280,7 +247,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			if resolvedTsLag > 0 {
 				metrics.LogPullerResolvedTsLag.Set(resolvedTsLag)
 			}
-			dsMetrics := s.ds.GetMetrics()
+			dsMetrics := s.eventSink.Metrics()
 			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
 			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 1 {
@@ -339,8 +306,7 @@ func (s *subscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
-	s.ds.AddPath(rt.subID, rt, areaSetting)
+	s.eventSink.AddPath(rt)
 
 	select {
 	case <-s.ctx.Done():
@@ -370,56 +336,6 @@ func (s *subscriptionClient) Unsubscribe(subID SubscriptionID) {
 		zap.Bool("exists", rt != nil))
 }
 
-func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
-	s.ds.Wake(subID)
-}
-
-func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
-	// fast path
-	if !s.paused.Load() {
-		s.ds.Push(subID, event)
-		return
-	}
-	// slow path: wait until paused is false
-	s.mu.Lock()
-	for s.paused.Load() {
-		select {
-		case <-s.ctx.Done():
-			s.mu.Unlock()
-			return
-		default:
-			s.cond.Wait()
-		}
-	}
-	s.mu.Unlock()
-	s.ds.Push(subID, event)
-}
-
-func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case feedback := <-s.ds.Feedback():
-			switch feedback.FeedbackType {
-			case dynstream.PauseArea:
-				s.mu.Lock()
-				s.paused.Store(true)
-				s.mu.Unlock()
-				log.Info("subscription client pause push region event")
-			case dynstream.ResumeArea:
-				s.mu.Lock()
-				s.paused.Store(false)
-				s.cond.Broadcast()
-				s.mu.Unlock()
-				log.Info("subscription client resume push region event")
-			case dynstream.ReleasePath, dynstream.ResumePath:
-				// Ignore it, because it is no need to pause and resume a path in puller.
-			}
-		}
-	}
-}
-
 func (s *subscriptionClient) Run(ctx context.Context) error {
 	// s.consume = consume
 	if s.upstream == nil || s.upstream.pd == nil {
@@ -431,14 +347,13 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error { return s.updateMetrics(ctx) })
-	g.Go(func() error { return s.handleDSFeedBack(ctx) })
+	g.Go(func() error { return s.eventSink.Run(ctx) })
+	g.Go(func() error { return s.failureReporter.Run(ctx) })
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.regionScheduler.Run(ctx, g) })
-	g.Go(func() error { return s.handleErrors(ctx) })
 	g.Go(func() error { return s.runResolveLockChecker(ctx) })
 	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
 	g.Go(func() error { return s.logSlowRegions(ctx) })
-	g.Go(func() error { return s.errCache.dispatch(ctx) })
 
 	log.Info("subscription client starts")
 	defer log.Info("subscription client exits")
@@ -448,11 +363,7 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 // Close closes the client. Must be called after `Run` returns.
 func (s *subscriptionClient) Close(ctx context.Context) error {
 	s.cancel()
-	s.mu.Lock()
-	s.paused.Store(false)
-	s.cond.Broadcast()
-	s.mu.Unlock()
-	s.ds.Close()
+	s.eventSink.Close()
 	if s.regionScheduler != nil {
 		s.regionScheduler.close()
 	}
@@ -478,7 +389,7 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 	log.Info("subscription client stop span is finished",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
-	err := s.ds.RemovePath(rt.subID)
+	err := s.eventSink.RemovePath(rt.subID)
 	if err != nil {
 		log.Warn("subscription client remove path failed",
 			zap.Uint64("subscriptionID", uint64(rt.subID)),
@@ -487,18 +398,6 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 	s.totalSpans.Lock()
 	defer s.totalSpans.Unlock()
 	delete(s.totalSpans.spanMap, rt.subID)
-}
-
-// Note: don't block the caller, otherwise there may be deadlock
-func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
-	// unlock the range early to prevent blocking the range.
-	if errInfo.subscribedSpan.rangeLock.UnlockRange(
-		errInfo.span.StartKey, errInfo.span.EndKey,
-		errInfo.verID.GetID(), errInfo.verID.GetVer(), errInfo.resolvedTs()) {
-		s.onTableDrained(errInfo.subscribedSpan)
-		return
-	}
-	s.errCache.add(errInfo)
 }
 
 func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
@@ -635,106 +534,6 @@ func (s *subscriptionClient) scheduleRangeRequest(
 	select {
 	case <-ctx.Done():
 	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: subscribedSpan, filterLoop: filterLoop, priority: priority}:
-	}
-}
-
-func (s *subscriptionClient) handleErrors(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			log.Info("subscription client handle errors and exit")
-			return ctx.Err()
-		case errInfo := <-s.errCache.errCh:
-			if err := s.doHandleError(ctx, errInfo); err != nil {
-				return err
-			}
-		}
-	}
-}
-
-func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
-	err := errors.Cause(errInfo.err)
-	if _, requestCancelled := err.(*requestCancelledErr); !requestCancelled {
-		log.Debug("cdc region error",
-			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
-			zap.Uint64("regionID", errInfo.verID.GetID()),
-			zap.Error(err))
-	}
-
-	//nolint:errorlint // converting large type switch to errors.As is a significant refactor
-	switch eerr := err.(type) {
-	case *eventError:
-		innerErr := eerr.err
-		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
-			metricFeedNotLeaderCounter.Inc()
-			s.upstream.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
-			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
-			return nil
-		}
-		if innerErr.GetEpochNotMatch() != nil {
-			metricFeedEpochNotMatchCounter.Inc()
-			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
-			return nil
-		}
-		if innerErr.GetRegionNotFound() != nil {
-			metricFeedRegionNotFoundCounter.Inc()
-			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
-			return nil
-		}
-		if innerErr.GetCongested() != nil {
-			metricKvCongestedCounter.Inc()
-			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
-			return nil
-		}
-		if innerErr.GetServerIsBusy() != nil {
-			metricKvIsBusyCounter.Inc()
-			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
-			return nil
-		}
-		if duplicated := innerErr.GetDuplicateRequest(); duplicated != nil {
-			// TODO(qupeng): It's better to add a new machanism to deregister one region.
-			metricFeedDuplicateRequestCounter.Inc()
-			return errors.New("duplicate request")
-		}
-		if compatibility := innerErr.GetCompatibility(); compatibility != nil {
-			return errors.ErrVersionIncompatible.GenWithStackByArgs(compatibility)
-		}
-		if mismatch := innerErr.GetClusterIdMismatch(); mismatch != nil {
-			return errors.ErrClusterIDMismatch.GenWithStackByArgs(mismatch.Current, mismatch.Request)
-		}
-
-		log.Warn("empty or unknown cdc error",
-			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
-			zap.Stringer("error", innerErr))
-		metricFeedUnknownErrorCounter.Inc()
-		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
-		return nil
-	case *rpcCtxUnavailableErr:
-		metricFeedRPCCtxUnavailable.Inc()
-		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
-		return nil
-	case *getStoreErr:
-		metricGetStoreErr.Inc()
-		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-		// cannot get the store the region belongs to, so we need to reload the region.
-		s.upstream.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
-		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
-		return nil
-	case *storeStreamErr:
-		metricStoreSendRequestErr.Inc()
-		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-		s.upstream.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
-		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
-		return nil
-	case *requestCancelledErr:
-		// the corresponding subscription has been unsubscribed, just ignore.
-		return nil
-	default:
-		// TODO(qupeng): for some errors it's better to just deregister the region from TiKVs.
-		log.Warn("subscription client meets an internal error, fail the changefeed",
-			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
-			zap.Error(err))
-		return err
 	}
 }
 
@@ -957,94 +756,4 @@ func (r *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	log.Debug("subscription client finds slow locked ranges",
 		zap.Uint64("subscriptionID", uint64(r.subID)),
 		zap.Any("ranges", res))
-}
-
-type errCache struct {
-	sync.Mutex
-	cache  []regionErrorInfo
-	errCh  chan regionErrorInfo
-	notify chan struct{}
-}
-
-const errCacheDispatchBatchSize = 1024
-
-func newErrCache() *errCache {
-	return &errCache{
-		cache:  make([]regionErrorInfo, 0, 1024),
-		errCh:  make(chan regionErrorInfo, 4096),
-		notify: make(chan struct{}, 1024),
-	}
-}
-
-func (e *errCache) add(errInfo regionErrorInfo) {
-	e.Lock()
-	defer e.Unlock()
-	e.cache = append(e.cache, errInfo)
-	select {
-	case e.notify <- struct{}{}:
-	default:
-	}
-}
-
-func (e *errCache) popBatch(limit int) []regionErrorInfo {
-	e.Lock()
-	defer e.Unlock()
-	if len(e.cache) == 0 {
-		return nil
-	}
-	if limit <= 0 || limit > len(e.cache) {
-		limit = len(e.cache)
-	}
-	batch := make([]regionErrorInfo, limit)
-	copy(batch, e.cache[:limit])
-	clear(e.cache[:limit])
-	if limit == len(e.cache) {
-		e.cache = e.cache[:0]
-	} else {
-		e.cache = e.cache[limit:]
-	}
-	return batch
-}
-
-func (e *errCache) dispatchBatch(ctx context.Context, limit int) (int, error) {
-	batch := e.popBatch(limit)
-	for _, errInfo := range batch {
-		select {
-		case <-ctx.Done():
-			log.Info("subscription client dispatch err cache done")
-			return 0, ctx.Err()
-		case e.errCh <- errInfo:
-		}
-	}
-	return len(batch), nil
-}
-
-func (e *errCache) dispatch(ctx context.Context) error {
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	sendToErrCh := func() error {
-		for {
-			n, err := e.dispatchBatch(ctx, errCacheDispatchBatchSize)
-			if err != nil {
-				return err
-			}
-			if n < errCacheDispatchBatchSize {
-				return nil
-			}
-		}
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if err := sendToErrCh(); err != nil {
-				return err
-			}
-		case <-e.notify:
-			if err := sendToErrCh(); err != nil {
-				return err
-			}
-		}
-	}
 }

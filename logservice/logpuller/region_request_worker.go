@@ -82,9 +82,9 @@ type regionRequestWorker struct {
 
 	store *requestedStore
 
-	upstream            *upstreamHandle
-	pushRegionEventToDS func(SubscriptionID, regionEvent)
-	onRegionFail        func(regionErrorInfo)
+	upstream        *upstreamHandle
+	eventSink       *regionEventSink
+	failureReporter *regionFailureReporter
 
 	// we must always get a region to request before create a grpc stream.
 	// only in this way we can avoid to try to connect to an offline store infinitely.
@@ -108,15 +108,15 @@ func newRegionRequestWorker(
 	store *requestedStore,
 	requestCacheSize int,
 	upstream *upstreamHandle,
-	pushRegionEventToDS func(SubscriptionID, regionEvent),
-	onRegionFail func(regionErrorInfo),
+	eventSink *regionEventSink,
+	failureReporter *regionFailureReporter,
 ) *regionRequestWorker {
 	worker := &regionRequestWorker{
-		workerID:            workerIDGen.Add(1),
-		store:               store,
-		upstream:            upstream,
-		pushRegionEventToDS: pushRegionEventToDS,
-		onRegionFail:        onRegionFail,
+		workerID:        workerIDGen.Add(1),
+		store:           store,
+		upstream:        upstream,
+		eventSink:       eventSink,
+		failureReporter: failureReporter,
 		requestCache: newRequestCache(requestCacheSize, func() {
 			store.promoteDeferredTask()
 		}),
@@ -175,7 +175,7 @@ func newRegionRequestWorker(
 					regionEvent := regionEvent{
 						states: []*regionFeedState{state},
 					}
-					worker.pushRegionEventToDS(subID, regionEvent)
+					worker.eventSink.Push(subID, regionEvent)
 				}
 			}
 			// The store may fail forever, so we need try to re-schedule all pending regions.
@@ -184,7 +184,7 @@ func newRegionRequestWorker(
 					// It means it's a special task for stopping the table.
 					continue
 				}
-				worker.onRegionFail(newRegionErrorInfo(region, regionErr))
+				worker.failureReporter.Report(newRegionErrorInfo(region, regionErr))
 			}
 			if err := util.Hang(ctx, time.Second); err != nil {
 				return err
@@ -317,7 +317,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.pushRegionEventToDS(subscriptionID, regionEvent)
+			s.eventSink.Push(subscriptionID, regionEvent)
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
@@ -360,7 +360,7 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 		if len(resolvedStates) == 0 {
 			return
 		}
-		s.pushRegionEventToDS(subscriptionID, regionEvent{
+		s.eventSink.Push(subscriptionID, regionEvent{
 			resolvedTs: resolvedTsEvent.Ts,
 			states:     resolvedStates,
 		})
@@ -425,7 +425,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 			regionEvent := regionEvent{
 				states: []*regionFeedState{state},
 			}
-			s.pushRegionEventToDS(req.subID, regionEvent)
+			s.eventSink.Push(req.subID, regionEvent)
 		}
 		return nil
 	}
@@ -478,7 +478,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 			// It can be skipped directly because there must be no pending states from
 			// the stopped subscribedTable, or the special singleRegionInfo for stopping
 			// the table will be handled later.
-			s.onRegionFail(newRegionErrorInfo(region, &storeStreamErr{}))
+			s.failureReporter.Report(newRegionErrorInfo(region, &storeStreamErr{}))
 			regionReq.finish()
 		} else {
 			state := newRegionFeedState(region, uint64(subID), s, regionReq)

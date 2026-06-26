@@ -181,9 +181,8 @@ func (m *mockRegionEventDynamicStream) GetMetrics() dynstream.Metrics[int, Subsc
 
 func newDispatchResolvedTsTestWorker(regionCount int) (*regionRequestWorker, *mockRegionEventDynamicStream, *cdcpb.ResolvedTs) {
 	ds := &mockRegionEventDynamicStream{}
-	client := &subscriptionClient{ds: ds}
 	worker := &regionRequestWorker{
-		pushRegionEventToDS: client.pushRegionEventToDS,
+		eventSink: &regionEventSink{ctx: context.Background(), ds: ds},
 	}
 	worker.requestedRegions.subscriptions = map[SubscriptionID]regionFeedStates{
 		1: make(regionFeedStates, regionCount),
@@ -213,7 +212,7 @@ func dispatchResolvedTsEventLegacyForBenchmark(s *regionRequestWorker, resolvedT
 			return
 		}
 		states := resolvedStates
-		s.pushRegionEventToDS(subscriptionID, regionEvent{
+		s.eventSink.Push(subscriptionID, regionEvent{
 			resolvedTs: resolvedTsEvent.Ts,
 			states:     states,
 		})
@@ -328,12 +327,12 @@ func TestClearPendingRegionsDoesNotReturnStoppedSentRegion(t *testing.T) {
 
 func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	worker := &regionRequestWorker{
-		requestCache:        newRequestCache(10),
-		controlQueue:        newControlQueue(),
-		store:               &requestedStore{storeAddr: "store-1"},
-		upstream:            &upstreamHandle{},
-		pushRegionEventToDS: func(SubscriptionID, regionEvent) {},
-		onRegionFail:        func(regionErrorInfo) {},
+		requestCache:    newRequestCache(10),
+		controlQueue:    newControlQueue(),
+		store:           &requestedStore{storeAddr: "store-1"},
+		upstream:        &upstreamHandle{},
+		eventSink:       &regionEventSink{ctx: context.Background(), ds: &mockRegionEventDynamicStream{}},
+		failureReporter: newRegionFailureReporter(&upstreamHandle{}, func(*subscribedSpan) {}, nil, nil),
 	}
 	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
 
@@ -380,12 +379,12 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			worker := &regionRequestWorker{
-				requestCache:        newRequestCache(10),
-				controlQueue:        newControlQueue(),
-				store:               &requestedStore{storeAddr: "store-1"},
-				upstream:            &upstreamHandle{},
-				pushRegionEventToDS: func(SubscriptionID, regionEvent) {},
-				onRegionFail:        func(regionErrorInfo) {},
+				requestCache:    newRequestCache(10),
+				controlQueue:    newControlQueue(),
+				store:           &requestedStore{storeAddr: "store-1"},
+				upstream:        &upstreamHandle{},
+				eventSink:       &regionEventSink{ctx: context.Background(), ds: &mockRegionEventDynamicStream{}},
+				failureReporter: newRegionFailureReporter(&upstreamHandle{}, func(*subscribedSpan) {}, nil, nil),
 			}
 			worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
 
