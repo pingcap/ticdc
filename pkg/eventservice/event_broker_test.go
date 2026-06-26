@@ -16,6 +16,7 @@ package eventservice
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -423,6 +424,46 @@ func TestDoScanSkipWhenChangefeedStatusNotFound(t *testing.T) {
 	require.False(t, disp.isTaskScanning.Load())
 }
 
+func TestDoScanKeepsRowLevelProgressAfterSendingFragment(t *testing.T) {
+	broker, mockStore, mockSchemaStore, _ := newEventBrokerForTest()
+	broker.close()
+
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t_do_scan_split(id int primary key, c char(50))`, []string{
+		`insert into test.t_do_scan_split(id,c) values (0, "c0")`,
+		`insert into test.t_do_scan_split(id,c) values (1, "c1")`,
+	}...)
+	require.Len(t, kvEvents, 2)
+	kvEvents[1].StartTs = kvEvents[0].StartTs
+	kvEvents[1].CRTs = kvEvents[0].CRTs
+	resolvedTs := kvEvents[0].CRTs
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	dispInfo.startTs = ddlEvent.FinishedTs
+	require.NoError(t, broker.addDispatcher(dispInfo))
+
+	disp := broker.getDispatcher(dispInfo.GetID()).Load()
+	require.NotNil(t, disp)
+	disp.setHandshaked()
+	disp.currentScanLimitInBytes.Store(1)
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(resolvedTs)
+
+	status := broker.getOrSetChangefeedStatus(dispInfo)
+	status.availableMemoryQuota.Store(node.ID(dispInfo.GetServerID()), atomic.NewUint64(broker.scanLimitInBytes))
+
+	mockSchemaStore.AppendDDLEvent(dispInfo.GetTableSpan().TableID, ddlEvent)
+	require.NoError(t, mockStore.AppendEvents(dispInfo.GetID(), resolvedTs, kvEvents...))
+
+	broker.doScan(context.Background(), disp)
+
+	require.Equal(t, resolvedTs, disp.lastScannedCommitTs.Load())
+	require.Equal(t, kvEvents[0].StartTs, disp.lastScannedStartTs.Load())
+	require.NotEmpty(t, disp.getLastScannedPosition())
+	require.True(t, disp.isTaskScanning.Load())
+}
+
 func TestCURDDispatcher(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
@@ -542,6 +583,57 @@ func TestResetDispatcher(t *testing.T) {
 	require.Equal(t, uint64(1), newStat.epoch)
 	require.Equal(t, uint64(500), newStat.startTs)
 	require.Equal(t, dispInfo.GetID(), newStat.id)
+}
+
+func TestDispatcherLifecycleCleansLargeTxnState(t *testing.T) {
+	t.Run("reset", func(t *testing.T) {
+		broker, _, _, _ := newEventBrokerForTest()
+		defer broker.close()
+
+		dispInfo := newMockDispatcherInfoForTest(t)
+		require.NoError(t, broker.addDispatcher(dispInfo))
+
+		dispPtr := broker.getDispatcher(dispInfo.GetID())
+		require.NotNil(t, dispPtr)
+		oldStat := dispPtr.Load()
+		spillPath := mustCreateLargeTxnState(t, oldStat, dispInfo.GetTableSpan().TableID)
+
+		resetInfo := newMockDispatcherInfo(t, 500, dispInfo.GetID(), dispInfo.GetTableSpan().TableID, eventpb.ActionType_ACTION_TYPE_RESET)
+		resetInfo.epoch = oldStat.epoch + 1
+		require.NoError(t, broker.resetDispatcher(resetInfo))
+
+		require.Nil(t, oldStat.getLargeTxnState())
+		_, err := os.Stat(spillPath)
+		require.True(t, os.IsNotExist(err))
+	})
+
+	t.Run("remove", func(t *testing.T) {
+		broker, _, _, _ := newEventBrokerForTest()
+		defer broker.close()
+
+		dispInfo := newMockDispatcherInfoForTest(t)
+		require.NoError(t, broker.addDispatcher(dispInfo))
+
+		dispPtr := broker.getDispatcher(dispInfo.GetID())
+		require.NotNil(t, dispPtr)
+		stat := dispPtr.Load()
+		spillPath := mustCreateLargeTxnState(t, stat, dispInfo.GetTableSpan().TableID)
+
+		broker.removeDispatcher(dispInfo)
+
+		require.Nil(t, stat.getLargeTxnState())
+		_, err := os.Stat(spillPath)
+		require.True(t, os.IsNotExist(err))
+	})
+}
+
+func mustCreateLargeTxnState(t *testing.T, stat *dispatcherStat, tableID int64) string {
+	t.Helper()
+
+	state, err := stat.getOrCreateLargeTxnState(t.TempDir(), tableID, nil, 90, 100)
+	require.NoError(t, err)
+	require.NoError(t, state.appendInsert(newTestSpillRawKVEntry(1)))
+	return state.spill.path
 }
 
 func TestResetDispatcherConcurrently(t *testing.T) {

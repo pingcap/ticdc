@@ -108,14 +108,27 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 	r, ok = stat.getDataRange()
 	require.False(t, ok)
 
-	// case 4: get range after resolved ts update again
+	// case 4: same commit-ts may still have later transactions when the
+	// transaction-level resume start-ts is set.
+	stat.updateScanRange(200, 150)
+	r, ok = stat.getDataRange()
+	require.True(t, ok)
+	require.Equal(t, uint64(200), r.CommitTsStart)
+	require.Equal(t, uint64(150), r.LastScannedTxnStartTs)
+	require.Equal(t, uint64(200), r.CommitTsEnd)
+
+	// case 5: get range after resolved ts update again
 	stat.onResolvedTs(300)
 	r, ok = stat.getDataRange()
 	require.True(t, ok)
 	require.Equal(t, uint64(200), r.CommitTsStart)
-	require.Equal(t, uint64(0), r.LastScannedTxnStartTs)
+	require.Equal(t, uint64(150), r.LastScannedTxnStartTs)
 	require.Equal(t, uint64(300), r.CommitTsEnd)
 	require.Equal(t, info.GetTableSpan(), r.Span)
+
+	stat.updateSentResolvedTs(300)
+	r, ok = stat.getDataRange()
+	require.False(t, ok)
 }
 
 func TestDispatcherStatUpdateWatermark(t *testing.T) {
