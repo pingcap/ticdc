@@ -96,7 +96,7 @@ func (p *ddlJobFetcher) run(startTs uint64) error {
 		advanceSubSpanResolvedTs := func(ts uint64) {
 			p.tryAdvanceResolvedTs(subID, ts)
 		}
-		p.subClient.Subscribe(subID, span, startTs, p.input, advanceSubSpanResolvedTs, 0, ddlPullerFilterLoop)
+		p.subClient.Subscribe("schema-store/ddl-job-fetcher", subID, span, startTs, p.input, advanceSubSpanResolvedTs, 0, ddlPullerFilterLoop)
 	}
 	return nil
 }

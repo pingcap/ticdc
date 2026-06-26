@@ -120,6 +120,7 @@ func (s *mockSubscriptionClient) AllocSubscriptionID() logpuller.SubscriptionID 
 }
 
 func (s *mockSubscriptionClient) Subscribe(
+	_ string,
 	subID logpuller.SubscriptionID,
 	span heartbeatpb.TableSpan,
 	startTs uint64,
