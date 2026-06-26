@@ -69,6 +69,55 @@ var (
 			Name:      "scan_window_interval",
 			Help:      "The scan window interval in seconds for each changefeed",
 		}, []string{"changefeed"})
+	EventServiceScanWindowUsageRatioGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_usage_ratio",
+			Help:      "The usage ratio observed by the scan window controller for each changefeed",
+		}, []string{"changefeed", "type"})
+	EventServiceScanWindowUsageEMAGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_usage_ema",
+			Help:      "The usage EMA values used by the scan window controller for each changefeed",
+		}, []string{"changefeed", "type"})
+	EventServiceScanWindowTargetBandGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_target_band",
+			Help:      "Whether the observed scan window value is currently inside the target band for each changefeed",
+		}, []string{"changefeed", "type"})
+	EventServiceScanWindowTargetBandCrossCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_target_band_cross_count",
+			Help:      "The number of target band state changes observed by the scan window controller for each changefeed",
+		}, []string{"changefeed", "type"})
+	EventServiceScanWindowPressureScoreGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_pressure_score",
+			Help:      "The pressure score maintained by the scan window controller for each changefeed",
+		}, []string{"changefeed"})
+	EventServiceScanWindowMemoryReleaseCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_memory_release_count",
+			Help:      "The number of memory release events reported to the scan window controller for each changefeed",
+		}, []string{"changefeed"})
+	EventServiceScanWindowAdjustCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_adjust_count",
+			Help:      "The number of scan window adjustments made by the controller for each changefeed",
+		}, []string{"changefeed", "reason"})
 	EventServiceScanDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -201,6 +250,13 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceResolvedTsLagGauge)
 	registry.MustRegister(EventServiceScanWindowBaseTsGaugeVec)
 	registry.MustRegister(EventServiceScanWindowIntervalGaugeVec)
+	registry.MustRegister(EventServiceScanWindowUsageRatioGaugeVec)
+	registry.MustRegister(EventServiceScanWindowUsageEMAGaugeVec)
+	registry.MustRegister(EventServiceScanWindowTargetBandGaugeVec)
+	registry.MustRegister(EventServiceScanWindowTargetBandCrossCount)
+	registry.MustRegister(EventServiceScanWindowPressureScoreGaugeVec)
+	registry.MustRegister(EventServiceScanWindowMemoryReleaseCount)
+	registry.MustRegister(EventServiceScanWindowAdjustCount)
 	registry.MustRegister(EventServiceScanDuration)
 	registry.MustRegister(EventServiceScannedCount)
 	registry.MustRegister(EventServiceDispatcherGauge)

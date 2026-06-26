@@ -96,6 +96,12 @@ func TestHandleEventsIgnoreSpecialTableOnNonMySQLSink(t *testing.T) {
 	}
 }
 
+func TestEnableIgnoreUpdateOnlyColumns(t *testing.T) {
+	require.True(t, newTestBasicDispatcher(t, common.KafkaSinkType, false).EnableIgnoreUpdateOnlyColumns())
+	require.False(t, newTestBasicDispatcher(t, common.MysqlSinkType, false).EnableIgnoreUpdateOnlyColumns())
+	require.False(t, newTestBasicDispatcher(t, common.PulsarSinkType, false).EnableIgnoreUpdateOnlyColumns())
+}
+
 func TestDDLEventsAlwaysValidateActiveActive(t *testing.T) {
 	dispatcher := newTestBasicDispatcher(t, common.MysqlSinkType, false)
 	dispatcher.tableModeCompatibilityChecked = true
@@ -128,24 +134,7 @@ func TestDDLEventsAlwaysValidateActiveActive(t *testing.T) {
 
 func newTestBasicDispatcher(t *testing.T, sinkType common.SinkType, enableActiveActive bool) *BasicDispatcher {
 	t.Helper()
-	statuses := make(chan TableSpanStatusWithSeq, 2)
-	blockStatuses := make(chan *heartbeatpb.TableSpanBlockStatus, 1)
-	errCh := make(chan error, 1)
-	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID("test"),
-		"",
-		false,
-		enableActiveActive,
-		false,
-		nil,
-		nil,
-		nil,
-		nil,
-		false,
-		statuses,
-		blockStatuses,
-		errCh,
-	)
+	sharedInfo := newTestSharedInfo(enableActiveActive, false, nil)
 	dispatcherSink := newDispatcherTestSink(t, sinkType)
 	tableSpan := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{0}, EndKey: []byte{1}}
 	dispatcher := NewBasicDispatcher(
@@ -156,6 +145,8 @@ func newTestBasicDispatcher(t *testing.T, sinkType common.SinkType, enableActive
 		NewSchemaIDToDispatchers(),
 		false,
 		false,
+		4096,
+		0,
 		200,
 		common.DefaultMode,
 		dispatcherSink.Sink(),

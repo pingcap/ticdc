@@ -113,6 +113,8 @@ func (eg *encoderGroup) runEncoder(ctx context.Context, index int) error {
 				return err
 			}
 			task.encodedMsgs = encoder.Build()
+			task.replacePostFlushCallbacks()
+			task.event = nil
 			future.Done()
 		}
 	}

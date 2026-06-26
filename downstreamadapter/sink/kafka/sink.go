@@ -375,17 +375,12 @@ func (s *sink) sendMessages(ctx context.Context) error {
 	metricSendMessageDuration := metrics.WorkerSendMessageDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 	defer metrics.WorkerSendMessageDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
 	var err error
 	outCh := s.comp.encoderGroup.Output()
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case <-ticker.C:
-			s.dmlProducer.Heartbeat()
 		case future, ok := <-outCh:
 			if !ok {
 				log.Info("kafka sink encoder's output channel closed",
@@ -483,9 +478,6 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 	}()
 
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
 	var (
 		msg          *common.Message
 		partitionNum int32
@@ -495,8 +487,6 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case <-ticker.C:
-			s.ddlProducer.Heartbeat()
 		case ts, ok := <-s.checkpointChan:
 			if !ok {
 				log.Warn("kafka sink checkpoint channel closed",
@@ -563,7 +553,7 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 	return s.tableSchemaStore.GetAllTableNames(ts, true)
 }
 
-func (s *sink) Close(_ bool) {
+func (s *sink) Close() {
 	s.ddlProducer.Close()
 	s.dmlProducer.Close()
 	s.comp.close()

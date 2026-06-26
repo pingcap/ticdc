@@ -15,6 +15,7 @@ package eventcollector
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -35,11 +37,20 @@ import (
 var _ dispatcher.DispatcherService = (*mockEventDispatcher)(nil)
 
 type mockEventDispatcher struct {
-	id           common.DispatcherID
-	tableSpan    *heartbeatpb.TableSpan
-	handle       func(commonEvent.Event)
-	changefeedID common.ChangeFeedID
-	checkpointTs uint64
+	id                       common.DispatcherID
+	tableSpan                *heartbeatpb.TableSpan
+	handle                   func(commonEvent.Event)
+	handleEvents             func([]dispatcher.DispatcherEvent, func()) bool
+	changefeedID             common.ChangeFeedID
+	checkpointTs             uint64
+	eventCollectorBatchCount int
+	eventCollectorBatchBytes int
+	batchRecords             chan batchRecord
+}
+
+type batchRecord struct {
+	size      int
+	eventType int
 }
 
 func (m *mockEventDispatcher) GetId() common.DispatcherID {
@@ -62,8 +73,16 @@ func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
 }
 
+func (m *mockEventDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
+	return m.eventCollectorBatchCount, m.eventCollectorBatchBytes
+}
+
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return m.tableSpan
+}
+
+func (m *mockEventDispatcher) GetRouter() routing.Router {
+	return routing.Router{}
 }
 
 func (m *mockEventDispatcher) GetTimezone() string {
@@ -103,6 +122,15 @@ func (m *mockEventDispatcher) GetCheckpointTs() uint64 {
 }
 
 func (m *mockEventDispatcher) HandleEvents(dispatcherEvents []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+	if m.batchRecords != nil && len(dispatcherEvents) > 0 {
+		m.batchRecords <- batchRecord{
+			size:      len(dispatcherEvents),
+			eventType: dispatcherEvents[0].GetType(),
+		}
+	}
+	if m.handleEvents != nil {
+		return m.handleEvents(dispatcherEvents, wakeCallback)
+	}
 	for _, dispatcherEvent := range dispatcherEvents {
 		m.handle(dispatcherEvent.Event)
 	}
@@ -114,6 +142,10 @@ func (m *mockEventDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 }
 
 func (m *mockEventDispatcher) IsOutputRawChangeEvent() bool {
+	return false
+}
+
+func (m *mockEventDispatcher) EnableIgnoreUpdateOnlyColumns() bool {
 	return false
 }
 
@@ -254,8 +286,7 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	c.AddDispatcher(localDispatcher, 1024)
 	localStat := c.getDispatcherStatByID(localDispatcher.id)
 	require.NotNil(t, localStat)
-	localStat.connState.setEventServiceID(serverInfo.ID)
-	localStat.connState.readyEventReceived.Store(true)
+	markSessionReceiving(localStat.session, serverInfo.ID)
 	localStat.currentEpoch.Store(newDispatcherEpochState(3, 0, 150))
 
 	remoteID := node.ID("remote-server")
@@ -268,8 +299,7 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	c.AddDispatcher(remoteDispatcher, 1024)
 	remoteStat := c.getDispatcherStatByID(remoteDispatcher.id)
 	require.NotNil(t, remoteStat)
-	remoteStat.connState.setEventServiceID(remoteID)
-	remoteStat.connState.readyEventReceived.Store(true)
+	markSessionReceiving(remoteStat.session, remoteID)
 	remoteStat.currentEpoch.Store(newDispatcherEpochState(5, 1, 210))
 
 	grouped := c.groupHeartbeat()
@@ -314,12 +344,11 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	c.AddDispatcher(mockDisp, 1024)
 	stat := c.getDispatcherStatByID(dispatcherID)
 	require.NotNil(t, stat)
-	stat.connState.setEventServiceID(serverInfo.ID)
-	stat.connState.readyEventReceived.Store(true)
+	markSessionReceiving(stat.session, serverInfo.ID)
 
 	// Simulate a reset to a smaller ts while old in-flight flushes have already
 	// advanced sink checkpoint to a larger value.
-	stat.doReset(serverInfo.ID, 150)
+	stat.session.doReset(serverInfo.ID, 150)
 
 	grouped := c.groupHeartbeat()
 	heartbeat := grouped[serverInfo.ID]
@@ -353,4 +382,197 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	require.Equal(t, uint8(commonEvent.DispatcherProgressVersion1), heartbeat.DispatcherProgresses[0].Version)
 	require.Equal(t, uint64(210), heartbeat.DispatcherProgresses[0].CheckpointTs)
 	require.Equal(t, uint64(1), heartbeat.DispatcherProgresses[0].Epoch)
+}
+
+// TestEventCollectorBatchByCount blocks the first wake-up so pending DMLs
+// accumulate and the dynamic stream must honor the configured batch count.
+func TestEventCollectorBatchByCount(t *testing.T) {
+	ctx := context.Background()
+	localServerID := node.NewID()
+	c := newTestEventCollector(localServerID)
+	defer c.ds.Close()
+	defer c.redoDs.Close()
+
+	const batchCount = 3
+	const totalDML = 10
+
+	did := common.NewDispatcherID()
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	ddl := helper.DDL2Event("create table t(id int primary key, v int)")
+	require.NotNil(t, ddl)
+
+	batchRecords := make(chan batchRecord, totalDML+8)
+	done := make(chan struct{})
+	release := make(chan struct{})
+	var seenDML atomic.Int64
+	var blocked atomic.Bool
+
+	d := &mockEventDispatcher{
+		id:                       did,
+		tableSpan:                &heartbeatpb.TableSpan{TableID: 1},
+		changefeedID:             common.NewChangefeedID(common.DefaultKeyspaceName),
+		eventCollectorBatchCount: batchCount,
+		eventCollectorBatchBytes: 0,
+		batchRecords:             batchRecords,
+	}
+	d.handle = func(e commonEvent.Event) {
+		if e.GetType() != commonEvent.TypeDMLEvent {
+			return
+		}
+		if seenDML.Add(1) == totalDML {
+			close(done)
+		}
+	}
+	d.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
+		for _, event := range events {
+			d.handle(event.Event)
+		}
+		if blocked.CompareAndSwap(false, true) {
+			go func() {
+				<-release
+				wakeCallback()
+			}()
+			return true
+		}
+		return false
+	}
+	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
+
+	from := localServerID
+	readyEvent := commonEvent.NewReadyEvent(did)
+	c.ds.Push(did, dispatcher.NewDispatcherEvent(&from, &readyEvent))
+
+	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, ddl.TableInfo)
+	c.ds.Push(did, dispatcher.NewDispatcherEvent(&from, &handshakeEvent))
+
+	var seq atomic.Uint64
+	seq.Store(1) // handshake event has seq 1
+	for i := 1; i <= totalDML; i++ {
+		dml := helper.DML2Event("test", "t", fmt.Sprintf("insert into t values(%d, %d)", i, i))
+		require.NotNil(t, dml)
+		dml.DispatcherID = did
+		dml.Seq = seq.Add(1)
+		dml.Epoch = 1
+		dml.CommitTs = ddl.FinishedTs + uint64(i)
+		c.ds.Push(did, dispatcher.NewDispatcherEvent(&from, dml))
+	}
+	close(release)
+
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		require.FailNow(t, "timeout waiting for dml events")
+	}
+
+	sumDML := 0
+	maxBatch := 0
+	for sumDML < totalDML {
+		select {
+		case r := <-batchRecords:
+			if r.eventType != commonEvent.TypeDMLEvent {
+				continue
+			}
+			sumDML += r.size
+			if r.size > maxBatch {
+				maxBatch = r.size
+			}
+		case <-ctx.Done():
+			require.FailNow(t, "timeout collecting dml batch records")
+		}
+	}
+
+	require.Equal(t, batchCount, maxBatch)
+	require.Equal(t, totalDML, sumDML)
+}
+
+// TestEventCollectorBatchByBytes uses a tiny byte budget so each DML must be
+// delivered alone once the per-dispatcher batch bytes wiring is applied.
+func TestEventCollectorBatchByBytes(t *testing.T) {
+	ctx := context.Background()
+	localServerID := node.NewID()
+	c := newTestEventCollector(localServerID)
+	defer c.ds.Close()
+	defer c.redoDs.Close()
+
+	const totalDML = 12
+
+	did := common.NewDispatcherID()
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	ddl := helper.DDL2Event("create table t(id int primary key, v int)")
+	require.NotNil(t, ddl)
+
+	batchRecords := make(chan batchRecord, totalDML+8)
+	done := make(chan struct{})
+	var seenDML atomic.Int64
+
+	d := &mockEventDispatcher{
+		id:                       did,
+		tableSpan:                &heartbeatpb.TableSpan{TableID: 1},
+		changefeedID:             common.NewChangefeedID(common.DefaultKeyspaceName),
+		eventCollectorBatchCount: 1024,
+		eventCollectorBatchBytes: 1,
+		batchRecords:             batchRecords,
+	}
+	d.handle = func(e commonEvent.Event) {
+		if e.GetType() != commonEvent.TypeDMLEvent {
+			return
+		}
+		if seenDML.Add(1) == totalDML {
+			close(done)
+		}
+	}
+	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
+
+	from := localServerID
+	readyEvent := commonEvent.NewReadyEvent(did)
+	c.ds.Push(did, dispatcher.NewDispatcherEvent(&from, &readyEvent))
+
+	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, ddl.TableInfo)
+	c.ds.Push(did, dispatcher.NewDispatcherEvent(&from, &handshakeEvent))
+
+	var seq atomic.Uint64
+	seq.Store(1) // handshake event has seq 1
+	for i := 1; i <= totalDML; i++ {
+		dml := helper.DML2Event("test", "t", fmt.Sprintf("insert into t values(%d, %d)", i, i))
+		require.NotNil(t, dml)
+		dml.DispatcherID = did
+		dml.Seq = seq.Add(1)
+		dml.Epoch = 1
+		dml.CommitTs = ddl.FinishedTs + uint64(i)
+		c.ds.Push(did, dispatcher.NewDispatcherEvent(&from, dml))
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		require.FailNow(t, "timeout waiting for dml events")
+	}
+
+	sumDML := 0
+	maxBatch := 0
+	for sumDML < totalDML {
+		select {
+		case r := <-batchRecords:
+			if r.eventType != commonEvent.TypeDMLEvent {
+				continue
+			}
+			sumDML += r.size
+			if r.size > maxBatch {
+				maxBatch = r.size
+			}
+		case <-ctx.Done():
+			require.FailNow(t, "timeout collecting dml batch records")
+		}
+	}
+
+	require.Equal(t, totalDML, sumDML)
+	require.Equal(t, 1, maxBatch)
 }

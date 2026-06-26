@@ -875,7 +875,7 @@ func testMultiDDLs(srcs []*sql.DB, wg *sync.WaitGroup) {
 	}()
 
 	var wg1 sync.WaitGroup
-	// seperate every case to different table
+	// separate every case to different table
 	for i, unit := range Units {
 		wg1.Add(1)
 

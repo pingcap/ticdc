@@ -20,9 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/soheilhy/cmux"
 	"go.uber.org/atomic"
@@ -109,7 +108,7 @@ func NewTCPServer(address string, credentials *security.Credential) (TCPServer, 
 // Run runs the mux. The mux has to be running to accept connections.
 func (s *tcpServerImpl) Run(ctx context.Context) (err error) {
 	if s.isClosed.Load() {
-		return cerror.ErrTCPServerClosed.GenWithStackByArgs()
+		return errors.ErrTCPServerClosed.GenWithStackByArgs()
 	}
 	log.Info("tcp server start to serve")
 	defer func() {
@@ -127,11 +126,11 @@ func (s *tcpServerImpl) Run(ctx context.Context) (err error) {
 
 	errg.Go(func() error {
 		err := s.mux.Serve()
-		if err == cmux.ErrServerClosed {
-			return cerror.ErrTCPServerClosed.GenWithStackByArgs()
+		if errors.Is(err, cmux.ErrServerClosed) {
+			return errors.ErrTCPServerClosed.GenWithStackByArgs()
 		}
 		if err != nil && strings.Contains(err.Error(), "use of closed network connection") {
-			return cerror.ErrTCPServerClosed.GenWithStackByArgs()
+			return errors.ErrTCPServerClosed.GenWithStackByArgs()
 		}
 		return errors.Trace(err)
 	})
@@ -179,9 +178,8 @@ func wrapTLSListener(inner net.Listener, credentials *security.Credential) (net.
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	// This is a hack to make `ToTLSConfigWithVerify` work with cmux,
-	// since cmux does not support ALPN.
-	config.NextProtos = nil
-
+	// Prefer HTTP/1.1 for non-gRPC traffic. gRPC clients will still negotiate
+	// "h2" because they only advertise "h2" in ALPN.
+	config.NextProtos = []string{"http/1.1", "h2"}
 	return tls.NewListener(inner, config), nil
 }

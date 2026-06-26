@@ -45,7 +45,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		ddlTs := event.GetCommitTs()
 		flag, err := w.isDDLExecuted(tableID, ddlTs)
 		if err != nil {
-			return nil
+			return err
 		}
 		if flag {
 			log.Info("Skip Already Executed DDL", zap.String("sql", event.GetDDLQuery()))
@@ -56,6 +56,28 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	ctx := w.ctx
 	shouldSwitchDB := needSwitchDB(event)
 
+	switch event.GetDDLType() {
+	case timodel.ActionMultiSchemaChange, timodel.ActionAddIndex:
+		// TiDB may generate index names for anonymous ADD INDEX clauses. Rewrite
+		// the DDL to use the upstream-generated names so downstream schema stays
+		// deterministic across retries and CREATE TABLE LIKE replication.
+		// event.IndexIDs is pre-filtered to contain only ADD INDEX IDs in clause
+		// order, so restoreAnonymousIndexToNamedIndex can remap each anonymous
+		// secondary index to the exact upstream-generated name.
+		newQuery, changed, err := restoreAnonymousIndexToNamedIndex(event.Query, event.TableInfo, event.IndexIDs)
+		if err != nil {
+			log.Warn("failed to restore anonymous index name",
+				zap.String("changefeed", w.ChangefeedID.String()),
+				zap.String("query", event.Query),
+				zap.Error(err))
+		} else if changed {
+			log.Info("restore anonymous index to named index",
+				zap.String("changefeed", w.ChangefeedID.String()),
+				zap.String("query", event.Query),
+				zap.String("newQuery", newQuery))
+			event.Query = newQuery
+		}
+	}
 	// Convert vector type to string type for unsupport database
 	if w.cfg.HasVectorType {
 		if newQuery := formatQuery(event.Query); newQuery != event.Query {
@@ -84,7 +106,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	}
 
 	if shouldSwitchDB {
-		_, err = tx.ExecContext(ctx, "USE "+common.QuoteName(event.GetSchemaName())+";")
+		_, err = tx.ExecContext(ctx, "USE "+common.QuoteName(event.GetTargetSchemaName())+";")
 		if err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {
 				log.Error("Failed to rollback", zap.Error(err))
@@ -200,28 +222,27 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 			if errors.IsIgnorableMySQLDDLError(err) {
 				// NOTE: don't change the log, some tests depend on it.
 				log.Info("Execute DDL failed, but error can be ignored",
-					zap.String("ddl", event.Query),
 					zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
-					zap.Error(err))
+					zap.String("ddl", event.Query), zap.Error(err))
 				// If the error is ignorable, we will ignore the error directly.
 				return nil
 			}
-			if w.cfg.IsTiDB && ddlCreateTime != "" && errors.Cause(err) == mysql.ErrInvalidConn {
-				log.Warn("Wait the asynchronous ddl to synchronize", zap.String("ddl", event.Query), zap.String("ddlCreateTime", ddlCreateTime),
+			if w.cfg.IsTiDB && ddlCreateTime != "" && errors.Is(errors.Cause(err), mysql.ErrInvalidConn) {
+				log.Warn("Wait the asynchronous ddl to synchronize",
 					zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
+					zap.String("ddl", event.Query), zap.String("ddlCreateTime", ddlCreateTime),
 					zap.String("readTimeout", w.cfg.ReadTimeout), zap.Error(err))
 				return w.waitDDLDone(w.ctx, event, ddlCreateTime)
 			}
 			log.Warn("Execute DDL with error, retry later",
-				zap.String("ddl", event.Query),
 				zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
-				zap.Error(err))
+				zap.String("ddl", event.Query), zap.Error(err))
 			return errors.WrapError(errors.ErrExecDDLFailed, errors.WithMessage(err, fmt.Sprintf("Execute DDL failed, Query info: %s; ", event.GetDDLQuery())))
 		}
 		log.Info("Execute DDL succeeded",
-			zap.String("changefeed", w.ChangefeedID.String()), zap.String("query", event.GetDDLQuery()),
+			zap.String("changefeed", w.ChangefeedID.String()),
 			zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
-			zap.Any("ddl", event))
+			zap.String("query", event.GetDDLQuery()))
 		return nil
 	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
 		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),

@@ -14,7 +14,6 @@
 package changefeed
 
 import (
-	"encoding/json"
 	"net/url"
 	"sync"
 
@@ -41,7 +40,6 @@ type Changefeed struct {
 	nodeIDMu sync.Mutex
 	nodeID   node.ID
 
-	configBytes []byte
 	// it's saved to the backend db
 	lastSavedCheckpointTs    *atomic.Uint64
 	logCoordinatorResolvedTs *atomic.Uint64
@@ -57,21 +55,20 @@ func NewChangefeed(cfID common.ChangeFeedID,
 	checkpointTs uint64,
 	isNew bool,
 ) *Changefeed {
+	if info == nil {
+		log.Panic("changefeed info is nil", zap.Stringer("changefeedID", cfID))
+	}
+	if info.Config == nil {
+		log.Panic("changefeed config is nil", zap.Stringer("changefeedID", cfID))
+	}
 	uri, err := url.Parse(info.SinkURI)
 	if err != nil {
 		log.Panic("unable to parse sink-uri",
 			zap.String("url", info.SinkURI), zap.Error(err))
 	}
-	bytes, err := json.Marshal(info)
-	if err != nil {
-		log.Panic("unable to marshal changefeed config",
-			zap.Error(err))
-	}
-
 	res := &Changefeed{
 		ID:                       cfID,
 		info:                     atomic.NewPointer(info),
-		configBytes:              bytes,
 		lastSavedCheckpointTs:    atomic.NewUint64(checkpointTs),
 		logCoordinatorResolvedTs: atomic.NewUint64(checkpointTs),
 		sinkType:                 getSinkType(uri.Scheme),
@@ -98,11 +95,28 @@ func NewChangefeed(cfID common.ChangeFeedID,
 	return res
 }
 
+// GetInfo returns the latest ChangeFeedInfo stored in memory.
+//
+// Changefeed keeps info non-nil after construction.
 func (c *Changefeed) GetInfo() *config.ChangeFeedInfo {
+	if c == nil || c.info == nil {
+		return nil
+	}
 	return c.info.Load()
 }
 
+// SetInfo updates the in-memory ChangeFeedInfo for the changefeed.
 func (c *Changefeed) SetInfo(info *config.ChangeFeedInfo) {
+	if c == nil {
+		return
+	}
+	if info == nil {
+		log.Panic("changefeed info is nil", zap.Stringer("changefeedID", c.ID))
+	}
+	if c.info == nil {
+		c.info = atomic.NewPointer(info)
+		return
+	}
 	c.info.Store(info)
 }
 
@@ -154,6 +168,12 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 
 	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
 		c.status.Store(newStatus)
+
+		changed, state, err := c.backoff.checkFailedStatus(newStatus)
+		if state == config.StateFailed {
+			return changed, state, err
+		}
+
 		if old.BootstrapDone != newStatus.BootstrapDone {
 			log.Info("Received changefeed status with bootstrapDone",
 				zap.Stringer("changefeed", c.ID),
@@ -218,10 +238,12 @@ func (c *Changefeed) GetStatusForResume() *heartbeatpb.MaintainerStatus {
 	}
 
 	clone := &heartbeatpb.MaintainerStatus{
-		CheckpointTs: status.CheckpointTs,
-		FeedState:    status.FeedState,
-		State:        status.State,
-		// we don't clone the errors from status, because the old error is meaningless for the resume action, but only blocks.
+		CheckpointTs:    status.CheckpointTs,
+		FeedState:       status.FeedState,
+		State:           status.State,
+		MaintainerEpoch: status.MaintainerEpoch,
+		// Resume creates a new maintainer owner, so errors reported by the
+		// previous owner must not block the resumed in-memory status.
 		Err: []*heartbeatpb.RunningError{},
 	}
 
@@ -247,19 +269,25 @@ func (c *Changefeed) GetLastSavedCheckPointTs() uint64 {
 }
 
 func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMessage {
+	info := c.GetInfo()
+	configData, err := info.MarshalWithTruncation(false)
+	if err != nil {
+		log.Panic("unable to marshal changefeed config", zap.Error(err))
+	}
+	checkpointTs := c.GetLastSavedCheckPointTs()
+	if status := c.GetStatus(); status != nil {
+		checkpointTs = status.CheckpointTs
+	}
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.AddMaintainerRequest{
 			Id:              c.ID.ToPB(),
-			CheckpointTs:    c.GetStatus().CheckpointTs,
-			Config:          c.configBytes,
+			CheckpointTs:    checkpointTs,
+			Config:          []byte(configData),
 			IsNewChangefeed: c.isNew,
-			KeyspaceId:      c.GetKeyspaceID(),
+			KeyspaceId:      info.KeyspaceID,
+			MaintainerEpoch: info.Epoch,
 		})
-}
-
-func (c *Changefeed) NewRemoveMaintainerMessage(server node.ID, casCade, removed bool) *messaging.TargetMessage {
-	return RemoveMaintainerMessage(c.GetKeyspaceID(), c.ID, server, casCade, removed)
 }
 
 func (c *Changefeed) NewCheckpointTsMessage(ts uint64) *messaging.TargetMessage {
@@ -271,15 +299,25 @@ func (c *Changefeed) NewCheckpointTsMessage(ts uint64) *messaging.TargetMessage 
 		})
 }
 
-func RemoveMaintainerMessage(keyspaceID uint32, id common.ChangeFeedID, server node.ID, casCade bool, removed bool) *messaging.TargetMessage {
+// RemoveMaintainerMessage builds the fenced remove request sent to a maintainer owner.
+// The maintainer epoch identifies the owner generation that is allowed to stop.
+func RemoveMaintainerMessage(
+	keyspaceID uint32,
+	id common.ChangeFeedID,
+	server node.ID,
+	casCade bool,
+	removed bool,
+	maintainerEpoch uint64,
+) *messaging.TargetMessage {
 	casCade = casCade || removed
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.RemoveMaintainerRequest{
-			Id:         id.ToPB(),
-			Cascade:    casCade,
-			Removed:    removed,
-			KeyspaceId: keyspaceID,
+			Id:              id.ToPB(),
+			Cascade:         casCade,
+			Removed:         removed,
+			KeyspaceId:      keyspaceID,
+			MaintainerEpoch: maintainerEpoch,
 		})
 }
 

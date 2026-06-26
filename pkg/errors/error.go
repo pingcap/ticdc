@@ -269,6 +269,14 @@ var (
 		"invalid table routing rule",
 		errors.RFCCodeText("CDC:ErrInvalidTableRoutingRule"),
 	)
+	ErrTableRoutingFailed = errors.Normalize(
+		"table routing failed",
+		errors.RFCCodeText("CDC:ErrTableRoutingFailed"),
+	)
+	ErrTableRouteConflict = errors.Normalize(
+		"table route conflict: target `%s`.`%s` is mapped by both source `%s`.`%s` and source `%s`.`%s`",
+		errors.RFCCodeText("CDC:ErrTableRouteConflict"),
+	)
 	ErrMessageTooLarge = errors.Normalize(
 		"message is too large. table:%s, length:%d, maxMessageBytes:%d",
 		errors.RFCCodeText("CDC:ErrMessageTooLarge"),
@@ -600,6 +608,14 @@ var (
 		"updating service safepoint failed",
 		errors.RFCCodeText("CDC:ErrUpdateServiceSafepointFailed"),
 	)
+	ErrGetServiceSafepointFailed = errors.Normalize(
+		"get service safepoint failed",
+		errors.RFCCodeText("CDC:ErrGetServiceSafepointFailed"),
+	)
+	ErrDeleteServiceSafepointFailed = errors.Normalize(
+		"delete service safepoint failed",
+		errors.RFCCodeText("CDC:ErrDeleteServiceSafepointFailed"),
+	)
 	ErrUpdateGCBarrierFailed = errors.Normalize(
 		"updating gc barrier failed",
 		errors.RFCCodeText("CDC:ErrUpdateGCBarrierFailed"),
@@ -785,6 +801,10 @@ var (
 	ErrChangefeedInitTableTriggerDispatcherFailed = errors.Normalize(
 		"failed to init table trigger dispatcher",
 		errors.RFCCodeText("CDC:ErrChangefeedInitTableTriggerDispatcherFailed"),
+	)
+	ErrDispatcherManagerWritePathClosed = errors.Normalize(
+		"dispatcher manager write path is closed",
+		errors.RFCCodeText("CDC:ErrDispatcherManagerWritePathClosed"),
 	)
 	ErrDDLEventError = errors.Normalize(
 		"ddl event meets error",
