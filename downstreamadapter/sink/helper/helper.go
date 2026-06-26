@@ -50,17 +50,16 @@ func GetEncoderConfig(
 	sinkURI *url.URL,
 	protocol config.Protocol,
 	sinkConfig *config.SinkConfig,
-	maxMsgBytes int,
+	maxMessageBytes int,
+	batchMaxMessageBytes int,
 ) (*common.Config, error) {
 	encoderConfig := common.NewConfig(protocol)
 	if err := encoderConfig.Apply(sinkURI, sinkConfig); err != nil {
 		return nil, errors.WrapError(errors.ErrSinkInvalidConfig, err)
 	}
-	// Always set encoder's `MaxMessageBytes` equal to producer's `MaxMessageBytes`
-	// to prevent that the encoder generate batched message too large
-	// then cause producer meet `message too large`.
 	encoderConfig = encoderConfig.
-		WithMaxMessageBytes(maxMsgBytes).
+		WithMaxMessageBytes(maxMessageBytes).
+		WithMaxBatchMessageBytes(batchMaxMessageBytes).
 		WithChangefeedID(changefeedID)
 
 	tz, err := util.GetTimezone(config.GetGlobalServerConfig().TZ)

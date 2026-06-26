@@ -885,6 +885,46 @@ func TestMessageTooLarge(t *testing.T) {
 	require.Equal(t, count, 0)
 }
 
+func TestMessageLargerThanBatchLimit(t *testing.T) {
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen).
+		WithMaxMessageBytes(400).
+		WithMaxBatchMessageBytes(100)
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+
+	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int)`)
+	tableInfo := helper.GetTableInfo(job)
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 123)`)
+	require.NotNil(t, dmlEvent)
+	insertRow, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	count := 0
+	insertRowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       dmlEvent.GetCommitTs(),
+		Event:          insertRow,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() { count += 1 },
+	}
+
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	require.NoError(t, err)
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+	require.Equal(t, 1, messages[0].GetRowsCount())
+	require.Equal(t, 0, count)
+
+	messages[0].Callback()
+	require.Equal(t, 1, count)
+}
+
 func TestLargeMessageWithHandleEnableHandleKeyOnly(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()

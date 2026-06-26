@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/IBM/sarama"
 	"github.com/gin-gonic/gin/binding"
 	"github.com/imdario/mergo"
 	"github.com/pingcap/errors"
@@ -40,13 +41,6 @@ const (
 	defaultPartitionNum = 3
 	// defaultMaxRetry is the default retry budget for Kafka producers.
 	defaultMaxRetry = 5
-
-	// the `max-message-bytes` is set equal to topic's `max.message.bytes`, and is used to check
-	// whether the message is larger than the max size limit. It's found some message pass the message
-	// size limit check at the client side and failed at the broker side since message enlarged during
-	// the network transmission. so we set the `max-message-bytes` to a smaller value to avoid this problem.
-	// maxMessageBytesOverhead is used to reduce the `max-message-bytes`.
-	maxMessageBytesOverhead = 128
 )
 
 const (
@@ -143,7 +137,7 @@ type urlConfig struct {
 	InsecureSkipVerify           *bool   `form:"insecure-skip-verify"`
 }
 
-// options stores user specified configurations
+// options stores Kafka sink configurations
 type options struct {
 	Topic           string
 	BrokerEndpoints []string
@@ -156,14 +150,17 @@ type options struct {
 	Version           string
 	IsAssignedVersion bool
 	RequestVersion    int16
-	MaxMessageBytes   int
-	MaxRetry          int
-	Compression       string
-	ClientID          string
-	RequiredAcks      RequiredAcks
-	// Only for test. User can not set this value.
-	// The current prod default value is 0.
-	MaxMessages int
+
+	// MaxMessageBytes controls the byte size limit of the producer.
+	MaxMessageBytes int
+	// BatchMaxMessageBytes controls the byte size limit when batching messages.
+	// this is not exposed, and is inferred from the `MaxMessageBytes` and kafka related configurations in the `adjustOption`.
+	BatchMaxMessageBytes int
+
+	MaxRetry     int
+	Compression  string
+	ClientID     string
+	RequiredAcks RequiredAcks
 
 	// Credential is used to connect to kafka cluster.
 	EnableTLS          bool
@@ -180,20 +177,20 @@ type options struct {
 // NewOptions returns a default Kafka configuration
 func NewOptions() *options {
 	return &options{
-		Version: "2.4.0",
-		// MaxMessageBytes will be used to initialize producer
-		MaxMessageBytes:    config.DefaultMaxMessageBytes,
-		MaxRetry:           defaultMaxRetry,
-		ReplicationFactor:  1,
-		Compression:        "none",
-		RequiredAcks:       WaitForAll,
-		Credential:         &security.Credential{},
-		InsecureSkipVerify: false,
-		SASL:               &security.SASL{},
-		AutoCreate:         true,
-		DialTimeout:        10 * time.Second,
-		WriteTimeout:       10 * time.Second,
-		ReadTimeout:        10 * time.Second,
+		Version:              "2.4.0",
+		MaxMessageBytes:      config.DefaultMaxMessageBytes,
+		BatchMaxMessageBytes: config.DefaultMaxMessageBytes,
+		MaxRetry:             defaultMaxRetry,
+		ReplicationFactor:    1,
+		Compression:          "none",
+		RequiredAcks:         WaitForAll,
+		Credential:           &security.Credential{},
+		InsecureSkipVerify:   false,
+		SASL:                 &security.SASL{},
+		AutoCreate:           true,
+		DialTimeout:          10 * time.Second,
+		WriteTimeout:         10 * time.Second,
+		ReadTimeout:          10 * time.Second,
 	}
 }
 
@@ -260,6 +257,7 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	if urlParameter.MaxMessageBytes != nil {
 		o.MaxMessageBytes = *urlParameter.MaxMessageBytes
 	}
+	o.BatchMaxMessageBytes = o.MaxMessageBytes
 
 	if urlParameter.MaxRetry != nil && *urlParameter.MaxRetry >= 0 {
 		o.MaxRetry = *urlParameter.MaxRetry
@@ -575,7 +573,9 @@ func NewKafkaClientID(captureAddr string,
 	return
 }
 
-// adjustOptions adjust the `options` and `sarama.Config` by condition.
+// adjustOptions adjusts options with Kafka runtime metadata.
+// It overwrites MaxMessageBytes with the final producer message limit derived
+// from the topic or broker configuration.
 func adjustOptions(
 	ctx context.Context,
 	admin ClusterAdminClient,
@@ -587,88 +587,94 @@ func adjustOptions(
 		return errors.Trace(err)
 	}
 
-	// Only check replicationFactor >= minInsyncReplicas when producer's required acks is -1.
-	// If we don't check it, the producer probably can not send message to the topic.
-	// Because it will wait for the ack from all replicas. But we do not have enough replicas.
-	if options.RequiredAcks == WaitForAll {
-		err = validateMinInsyncReplicas(ctx, admin, topics, topic, int(options.ReplicationFactor))
-		if err != nil {
-			return errors.Trace(err)
-		}
+	if err = validateRequiredAcks(ctx, admin, topics, topic, options); err != nil {
+		return errors.Trace(err)
 	}
+	return adjustTopicOptions(ctx, admin, options, topic, topics)
+}
 
+func adjustTopicOptions(
+	ctx context.Context,
+	admin ClusterAdminClient,
+	options *options,
+	topic string,
+	topics map[string]TopicDetail,
+) error {
+	batchMaxBytes := options.MaxMessageBytes
 	info, exists := topics[topic]
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
+	var err error
 	if exists {
-		// make sure that producer's `MaxMessageBytes` smaller than topic's `max.message.bytes`
-		topicMaxMessageBytesStr, err := getTopicConfig(
-			ctx, admin, info.Name,
-			TopicMaxMessageBytesConfigName,
-			BrokerMessageMaxBytesConfigName,
-		)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		topicMaxMessageBytes, err := strconv.Atoi(topicMaxMessageBytesStr)
-		if err != nil {
-			return errors.Trace(err)
-		}
+		err = adjustExistingTopicOptions(ctx, admin, options, topic, info)
+	} else {
+		err = adjustNewTopicOptions(admin, options, topic)
+	}
+	if err != nil {
+		return err
+	}
 
-		maxMessageBytes := topicMaxMessageBytes - maxMessageBytesOverhead
-		if topicMaxMessageBytes <= options.MaxMessageBytes {
-			log.Warn("topic's `max.message.bytes` less than the `max-message-bytes`,"+
-				"use topic's `max.message.bytes` to initialize the Kafka producer",
-				zap.Int("max.message.bytes", topicMaxMessageBytes),
-				zap.Int("max-message-bytes", options.MaxMessageBytes),
-				zap.Int("real-max-message-bytes", maxMessageBytes))
-			options.MaxMessageBytes = maxMessageBytes
-		} else {
-			if maxMessageBytes < options.MaxMessageBytes {
-				options.MaxMessageBytes = maxMessageBytes
-			}
-		}
+	options.BatchMaxMessageBytes = min(batchMaxBytes, options.MaxMessageBytes)
+	return nil
+}
 
-		// no need to create the topic,
-		// but we would have to log user if they found enter wrong topic name later
-		if options.AutoCreate {
-			log.Warn("topic already exist, TiCDC will not create the topic",
-				zap.String("topic", topic), zap.Any("detail", info))
-		}
-
-		if err = options.setPartitionNum(info.NumPartitions); err != nil {
-			return errors.Trace(err)
-		}
-
+func validateRequiredAcks(
+	ctx context.Context,
+	admin ClusterAdminClient,
+	topics map[string]TopicDetail,
+	topic string,
+	options *options,
+) error {
+	// Only check replicationFactor >= minInsyncReplicas when producer's required acks is -1.
+	// If we don't check it, the producer probably can not send message to the topic.
+	// Because it will wait for the ack from all replicas. But we do not have enough replicas.
+	if options.RequiredAcks != WaitForAll {
 		return nil
 	}
+	return validateMinInsyncReplicas(ctx, admin, topics, topic, int(options.ReplicationFactor))
+}
 
-	brokerMessageMaxBytesStr, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
+func adjustExistingTopicOptions(
+	ctx context.Context,
+	admin ClusterAdminClient,
+	options *options,
+	topic string,
+	info TopicDetail,
+) error {
+	topicMaxMessageBytes, err := getTopicMaxMessageBytes(ctx, admin, info.Name)
 	if err != nil {
-		log.Warn("TiCDC cannot find `message.max.bytes` from broker's configuration")
+		return err
+	}
+	if err = options.setMaxMessageBytes(topicMaxMessageBytes); err != nil {
+		return err
+	}
+
+	// no need to create the topic,
+	// but we would have to log user if they found enter wrong topic name later
+	if options.AutoCreate {
+		log.Warn("topic already exist, TiCDC will not create the topic",
+			zap.String("topic", topic), zap.Any("detail", info))
+	}
+
+	if err = options.setPartitionNum(info.NumPartitions); err != nil {
 		return errors.Trace(err)
 	}
-	brokerMessageMaxBytes, err := strconv.Atoi(brokerMessageMaxBytesStr)
-	if err != nil {
-		return errors.Trace(err)
-	}
+	return nil
+}
 
+func adjustNewTopicOptions(
+	admin ClusterAdminClient,
+	options *options,
+	topic string,
+) error {
 	// when create the topic, `max.message.bytes` is decided by the broker,
 	// it would use broker's `message.max.bytes` to set topic's `max.message.bytes`.
-	// TiCDC need to make sure that the producer's `MaxMessageBytes` won't larger than
-	// broker's `message.max.bytes`.
-	maxMessageBytes := brokerMessageMaxBytes - maxMessageBytesOverhead
-	if brokerMessageMaxBytes <= options.MaxMessageBytes {
-		log.Warn("broker's `message.max.bytes` less than the `max-message-bytes`,"+
-			"use broker's `message.max.bytes` to initialize the Kafka producer",
-			zap.Int("message.max.bytes", brokerMessageMaxBytes),
-			zap.Int("max-message-bytes", options.MaxMessageBytes),
-			zap.Int("real-max-message-bytes", maxMessageBytes))
-		options.MaxMessageBytes = maxMessageBytes
-	} else {
-		if maxMessageBytes < options.MaxMessageBytes {
-			options.MaxMessageBytes = maxMessageBytes
-		}
+	brokerMessageMaxBytes, err := getBrokerMaxMessageBytes(admin)
+	if err != nil {
+		return err
+	}
+	if err = options.setMaxMessageBytes(brokerMessageMaxBytes); err != nil {
+		return err
 	}
 
 	// topic not exists yet, and user does not specify the `partition-num` in the sink uri.
@@ -676,6 +682,49 @@ func adjustOptions(
 		options.PartitionNum = defaultPartitionNum
 		log.Warn("partition-num is not set, use the default partition count",
 			zap.String("topic", topic), zap.Int32("partitions", options.PartitionNum))
+	}
+	return nil
+}
+
+func getTopicMaxMessageBytes(
+	ctx context.Context,
+	admin ClusterAdminClient,
+	topic string,
+) (int, error) {
+	maxMessageBytesStr, err := getTopicConfig(
+		ctx, admin, topic,
+		TopicMaxMessageBytesConfigName,
+		BrokerMessageMaxBytesConfigName,
+	)
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	maxMessageBytes, err := strconv.Atoi(maxMessageBytesStr)
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	return maxMessageBytes, nil
+}
+
+func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, error) {
+	maxMessageBytesStr, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
+	if err != nil {
+		log.Warn("TiCDC cannot find `message.max.bytes` from broker's configuration")
+		return 0, errors.Trace(err)
+	}
+	maxMessageBytes, err := strconv.Atoi(maxMessageBytesStr)
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	return maxMessageBytes, nil
+}
+
+func (o *options) setMaxMessageBytes(kafkaMaxMessageBytes int) error {
+	// Sarama ignores Producer.MaxMessageBytes when it is not smaller than MaxRequestSize.
+	o.MaxMessageBytes = min(kafkaMaxMessageBytes, int(sarama.MaxRequestSize)-1)
+	if o.MaxMessageBytes <= 0 {
+		return cerror.ErrKafkaInvalidConfig.GenWithStack(
+			"invalid Kafka max message bytes %d", kafkaMaxMessageBytes)
 	}
 	return nil
 }

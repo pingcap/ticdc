@@ -93,7 +93,8 @@ func (a *BatchEncoder) AppendRowChangedEvent(
 			zap.Int("maxMessageBytes", a.config.MaxMessageBytes),
 			zap.Int("length", message.Length()),
 			zap.Any("table", e.TableInfo.TableName))
-		return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), message.Length(), a.config.MaxMessageBytes)
+		return errors.ErrMessageTooLarge.GenWithStackByArgs(
+			e.TableInfo.GetTargetTableName(), message.Length(), a.config.MaxMessageBytes)
 	}
 
 	a.result = append(a.result, message)
@@ -114,7 +115,12 @@ func (a *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error)
 		}
 
 		value := buf.Bytes()
-		return common.NewMsg(nil, value), nil
+		message := common.NewMsg(nil, value)
+		if message.Length() > a.config.MaxMessageBytes {
+			return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(
+				"checkpoint", message.Length(), a.config.MaxMessageBytes)
+		}
+		return message, nil
 	}
 	return nil, nil
 }
@@ -140,7 +146,12 @@ func (a *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 		buf.Write(data)
 
 		value := buf.Bytes()
-		return common.NewMsg(nil, value), nil
+		message := common.NewMsg(nil, value)
+		if message.Length() > a.config.MaxMessageBytes {
+			return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(
+				e.GetTargetTableName(), message.Length(), a.config.MaxMessageBytes)
+		}
+		return message, nil
 	}
 
 	return nil, nil

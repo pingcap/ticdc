@@ -38,7 +38,7 @@ var (
 )
 
 // batchEncoder for open protocol will batch multiple row changed events into a single message.
-// One message can contain at most MaxBatchSize events, and the total size of the message cannot exceed MaxMessageBytes.
+// One message can contain at most MaxBatchSize events, and the total size of the message cannot exceed BatchMaxMessageBytes.
 type batchEncoder struct {
 	messages []*common.Message
 	// buff the callback of the latest message
@@ -95,17 +95,7 @@ func (d *batchEncoder) AppendRowChangedEvent(
 		return errors.Trace(err)
 	}
 
-	if length > d.config.MaxMessageBytes {
-		// message len is larger than max-message-bytes
-		if d.config.LargeMessageHandle.Disabled() {
-			log.Warn("Single message is too large for open-protocol",
-				zap.Int("maxMessageBytes", d.config.MaxMessageBytes),
-				zap.Int("length", length),
-				zap.Any("table", e.TableInfo.TableName),
-				zap.Any("key", key))
-			return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), length, d.config.MaxMessageBytes)
-		}
-
+	if length > d.config.MaxMessageBytes && !d.config.LargeMessageHandle.Disabled() {
 		if d.config.LargeMessageHandle.EnableClaimCheck() {
 			// send the large message to the external storage first, then
 			// create a new message contains the reference of the large message.
@@ -149,6 +139,15 @@ func (d *batchEncoder) AppendRowChangedEvent(
 		}
 	}
 
+	if length > d.config.MaxMessageBytes {
+		log.Warn("Single message is too large for open-protocol",
+			zap.Int("maxMessageBytes", d.config.MaxMessageBytes),
+			zap.Int("length", length),
+			zap.Any("table", e.TableInfo.TableName),
+			zap.Any("key", key))
+		return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), length, d.config.MaxMessageBytes)
+	}
+
 	d.pushMessage(key, value, e.Callback)
 	return nil
 }
@@ -174,7 +173,7 @@ func (d *batchEncoder) pushMessage(key, value []byte, callback func()) {
 	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
 	binary.BigEndian.PutUint64(valueLenByte[:], uint64(len(value)))
 
-	if len(d.messages) == 0 || d.messages[len(d.messages)-1].Length()+length > d.config.MaxMessageBytes || d.messages[len(d.messages)-1].GetRowsCount() >= d.config.MaxBatchSize {
+	if len(d.messages) == 0 || d.messages[len(d.messages)-1].Length()+length > d.config.BatchMaxMessageBytes() || d.messages[len(d.messages)-1].GetRowsCount() >= d.config.MaxBatchSize {
 		d.finalizeCallback()
 		// create a new message
 		versionHead := make([]byte, 8)
@@ -244,7 +243,12 @@ func (d *batchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 		return nil, errors.Trace(err)
 	}
 
-	return common.NewMsg(key, value), nil
+	message := common.NewMsg(key, value)
+	if message.Length() > d.config.MaxMessageBytes {
+		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(
+			e.GetTargetTableName(), message.Length(), d.config.MaxMessageBytes)
+	}
+	return message, nil
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
@@ -279,5 +283,10 @@ func (d *batchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error)
 
 	key = keyOutput.Bytes()
 	value := valueOutput.Bytes()
-	return common.NewMsg(key, value), nil
+	message := common.NewMsg(key, value)
+	if message.Length() > d.config.MaxMessageBytes {
+		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(
+			"checkpoint", message.Length(), d.config.MaxMessageBytes)
+	}
+	return message, nil
 }

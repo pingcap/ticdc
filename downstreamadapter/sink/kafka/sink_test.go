@@ -97,7 +97,10 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, options.MaxMessageBytes)
+	encoderConfig, err := helper.GetEncoderConfig(
+		changefeedID, sinkURI, protocol, sinkConfig,
+		options.MaxMessageBytes, options.MaxMessageBytes,
+	)
 	if err != nil {
 		return nil, err
 	}
