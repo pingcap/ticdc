@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -35,7 +34,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/routing"
-	mysqlcfg "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
@@ -415,6 +413,7 @@ func TestMergeDispatcherInvalidIDs(t *testing.T) {
 
 func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+<<<<<<< HEAD
 	mysqlConfig := mysqlcfg.New()
 	mysqlConfig.EnableDDLTs = false
 	mysqlSink := mysql.NewMySQLSink(
@@ -424,9 +423,11 @@ func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t
 		nil,
 		false,
 	)
+=======
+>>>>>>> a0066dcc5 (maintainer,dispatcher: fence stale maintainer epochs (#5435))
 	manager := &DispatcherManager{
 		changefeedID: changefeedID,
-		sink:         mysqlSink,
+		sink:         newDispatcherManagerTestSink(t, common.BlackHoleSinkType),
 	}
 	manager.closed.Store(true)
 
@@ -441,6 +442,310 @@ func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t
 	require.True(t, manager.TryClose(true))
 }
 
+<<<<<<< HEAD
+=======
+func TestLocalFenceCancelsWritePathWithoutWaitingForCleanup(t *testing.T) {
+	manager := createTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	manager.ctx = ctx
+	manager.cancel = cancel
+
+	manager.wg.Add(1)
+	done := make(chan struct{})
+	go func() {
+		manager.LocalFence()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.FailNow(t, "local fence should not wait for dispatcher manager cleanup")
+	}
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+
+	manager.wg.Done()
+	require.Eventually(t, func() bool {
+		return manager.TryClose(false)
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestLocalFenceDoesNotWaitForBootstrapWriteBlockEvent(t *testing.T) {
+	manager := createTestManager(t)
+	appcontext.SetService(appcontext.SchemaStore, &bootstrapSchemaStoreForTest{})
+	heartbeatCollector := &HeartBeatCollector{}
+	heartbeatCollector.isClosed.Store(true)
+	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	writeStarted := make(chan struct{})
+	releaseWrite := make(chan struct{})
+	mockSink := mock.NewMockSink(ctrl)
+	mockSink.EXPECT().SinkType().Return(common.KafkaSinkType).AnyTimes()
+	mockSink.EXPECT().IsNormal().Return(true).AnyTimes()
+	mockSink.EXPECT().SetTableSchemaStore(gomock.Any()).AnyTimes()
+	mockSink.EXPECT().Close().AnyTimes()
+	mockSink.EXPECT().WriteBlockEvent(gomock.Any()).DoAndReturn(func(blockEvent event.BlockEvent) error {
+		close(writeStarted)
+		<-releaseWrite
+		blockEvent.PostFlush()
+		return nil
+	}).Times(1)
+	manager.sink = mockSink
+
+	dispatcherID := common.NewDispatcherID()
+	var redoTs atomic.Uint64
+	redoTs.Store(math.MaxUint64)
+	tableTriggerDispatcher := dispatcher.NewEventDispatcher(
+		dispatcherID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID),
+		1,
+		0,
+		manager.schemaIDToDispatchers,
+		false,
+		false,
+		0,
+		manager.sink,
+		manager.sharedInfo,
+		false,
+		&redoTs,
+	)
+	tableTriggerDispatcher.BootstrapState = dispatcher.BootstrapNotStarted
+	manager.SetTableTriggerEventDispatcher(tableTriggerDispatcher)
+	manager.dispatcherMap.Set(dispatcherID, tableTriggerDispatcher)
+
+	initErrCh := make(chan error, 1)
+	go func() {
+		initErrCh <- manager.InitalizeTableTriggerEventDispatcher([]*heartbeatpb.SchemaInfo{
+			{
+				SchemaID:   1,
+				SchemaName: "test",
+				Tables: []*heartbeatpb.TableInfo{
+					{TableID: 11, TableName: "t"},
+				},
+			},
+		})
+	}()
+
+	select {
+	case <-writeStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "bootstrap should reach WriteBlockEvent")
+	}
+
+	fenceDone := make(chan struct{})
+	go func() {
+		manager.LocalFence()
+		close(fenceDone)
+	}()
+	select {
+	case <-fenceDone:
+	case <-time.After(100 * time.Millisecond):
+		require.FailNow(t, "local fence should not wait for blocked bootstrap WriteBlockEvent")
+	}
+
+	close(releaseWrite)
+	select {
+	case err := <-initErrCh:
+		require.True(t, IsWritePathClosedError(err))
+	case <-time.After(time.Second):
+		require.FailNow(t, "bootstrap initialization should return after write unblocks")
+	}
+	require.False(t, appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).HasDispatcher(dispatcherID))
+}
+
+func TestNewDispatcherManagerReturnsFenceErrorWhenInitializingRegistrationRejected(t *testing.T) {
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	cfConfig := &config.ChangefeedConfig{
+		SinkURI:     "blackhole://",
+		SinkConfig:  replicaConfig.Sink,
+		Filter:      replicaConfig.Filter,
+		MemoryQuota: util.GetOrZero(replicaConfig.MemoryQuota),
+		TimeZone:    "system",
+		Consistent:  replicaConfig.Consistent,
+	}
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	var hookCalled atomic.Bool
+	var initializingManager *DispatcherManager
+
+	manager, err := NewDispatcherManager(
+		common.DefaultKeyspaceID,
+		changefeedID,
+		cfConfig,
+		nil,
+		nil,
+		1,
+		node.ID("maintainer"),
+		1,
+		true,
+		func(manager *DispatcherManager) bool {
+			hookCalled.Store(true)
+			initializingManager = manager
+			return false
+		},
+	)
+
+	require.Nil(t, manager)
+	require.True(t, hookCalled.Load())
+	require.NotNil(t, initializingManager)
+	require.True(t, IsWritePathClosedError(err))
+	require.True(t, initializingManager.writePathClosed.Load())
+	require.Eventually(t, func() bool {
+		return initializingManager.TryClose(false)
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestCheckpointTsMessageHandlerSkipsWriteAfterLocalFence(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockSink := mock.NewMockSink(ctrl)
+	mockSink.EXPECT().SinkType().Return(common.MysqlSinkType).AnyTimes()
+	mockSink.EXPECT().Close().AnyTimes()
+	mockSink.EXPECT().AddCheckpointTs(gomock.Any()).Times(0)
+
+	manager := createTestManager(t)
+	manager.sink = mockSink
+	manager.SetTableTriggerEventDispatcher(&dispatcher.EventDispatcher{})
+	heartbeatCollector := &HeartBeatCollector{}
+	heartbeatCollector.isClosed.Store(true)
+	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
+
+	handlerStarted := make(chan struct{})
+	proceed := make(chan struct{})
+	handlerDone := make(chan struct{})
+	go func() {
+		close(handlerStarted)
+		<-proceed
+		handler := &CheckpointTsMessageHandler{}
+		handler.Handle(manager, NewCheckpointTsMessage(&heartbeatpb.CheckpointTsMessage{
+			ChangefeedID: manager.changefeedID.ToPB(),
+			CheckpointTs: 100,
+		}))
+		close(handlerDone)
+	}()
+
+	select {
+	case <-handlerStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "handler goroutine should start")
+	}
+	manager.LocalFence()
+	close(proceed)
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		require.FailNow(t, "handler should return without writing checkpoint ts")
+	}
+}
+
+func TestLocalFenceWithRedoEnabledBeforeRedoSinkInitialized(t *testing.T) {
+	manager := createTestManager(t)
+	manager.redoEnabled = true
+	manager.redoSink = nil
+
+	require.NotPanics(t, func() {
+		manager.LocalFence()
+	})
+	require.Eventually(t, func() bool {
+		return manager.TryClose(false)
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestNewTableTriggerDispatchersReturnFenceErrorWhenWritePathClosed(t *testing.T) {
+	manager := createTestManager(t)
+	manager.writePathClosed.Store(true)
+
+	dispatcherID := common.NewDispatcherID()
+	require.NotPanics(t, func() {
+		err := manager.NewTableTriggerEventDispatcher(dispatcherID.ToPB(), 1, false)
+		require.True(t, IsWritePathClosedError(err))
+	})
+	require.Nil(t, manager.GetTableTriggerEventDispatcher())
+
+	redoDispatcherID := common.NewDispatcherID()
+	require.NotPanics(t, func() {
+		err := manager.NewTableTriggerRedoDispatcher(redoDispatcherID.ToPB(), 1, false)
+		require.True(t, IsWritePathClosedError(err))
+	})
+	require.Nil(t, manager.GetTableTriggerRedoDispatcher())
+}
+
+func TestInitializeTableTriggerEventDispatcherReturnsFenceErrorWhenWritePathClosed(t *testing.T) {
+	manager := createTestManager(t)
+	dispatcherID := common.NewDispatcherID()
+	var redoTs atomic.Uint64
+	redoTs.Store(math.MaxUint64)
+	tableTriggerDispatcher := dispatcher.NewEventDispatcher(
+		dispatcherID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID),
+		1,
+		0,
+		manager.schemaIDToDispatchers,
+		false,
+		false,
+		0,
+		manager.sink,
+		manager.sharedInfo,
+		false,
+		&redoTs,
+	)
+	manager.SetTableTriggerEventDispatcher(tableTriggerDispatcher)
+	manager.dispatcherMap.Set(dispatcherID, tableTriggerDispatcher)
+	manager.writePathClosed.Store(true)
+
+	err := manager.InitalizeTableTriggerEventDispatcher(nil)
+	require.True(t, IsWritePathClosedError(err))
+
+	err = manager.InitalizeTableTriggerRedoDispatcher(nil)
+	require.True(t, IsWritePathClosedError(err))
+
+	eventCollector := appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector)
+	require.False(t, eventCollector.HasDispatcher(dispatcherID))
+}
+
+func TestCreateDispatcherByInfoKeepsCreateOperatorWhenFenced(t *testing.T) {
+	manager := createTestManager(t)
+	manager.writePathClosed.Store(true)
+	dispatcherID := common.NewDispatcherID()
+	createReq := NewSchedulerDispatcherRequest(node.ID("maintainer"), &heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: manager.changefeedID.ToPB(),
+		Config: &heartbeatpb.DispatcherConfig{
+			DispatcherID: dispatcherID.ToPB(),
+			Span: &heartbeatpb.TableSpan{
+				TableID: 1,
+			},
+			StartTs: 1,
+			Mode:    common.DefaultMode,
+		},
+		ScheduleAction: heartbeatpb.ScheduleAction_Create,
+		OperatorType:   heartbeatpb.OperatorType_O_Add,
+	})
+	manager.currentOperatorMap.Store(dispatcherID, createReq)
+
+	createDispatcherByInfo(manager, map[common.DispatcherID]dispatcherCreateInfo{
+		dispatcherID: {
+			ID: dispatcherID,
+			TableSpan: &heartbeatpb.TableSpan{
+				TableID: 1,
+			},
+			StartTs:  1,
+			SchemaID: 1,
+		},
+	}, nil)
+
+	_, dispatcherExists := manager.dispatcherMap.Get(dispatcherID)
+	require.False(t, dispatcherExists)
+	operator, operatorExists := manager.currentOperatorMap.Load(dispatcherID)
+	require.True(t, operatorExists)
+	require.Equal(t, createReq, operator)
+}
+
+>>>>>>> a0066dcc5 (maintainer,dispatcher: fence stale maintainer epochs (#5435))
 func TestMergeDispatcherExistingID(t *testing.T) {
 	manager := createTestManager(t)
 

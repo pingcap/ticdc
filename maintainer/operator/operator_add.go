@@ -57,7 +57,8 @@ type AddDispatcherOperator struct {
 	// (for example merge) don't go through ScheduleDispatcherRequest and therefore don't need operatorType here.
 	operatorType heartbeatpb.OperatorType
 
-	sendThrottler sendThrottler
+	maintainerEpoch uint64
+	sendThrottler   sendThrottler
 }
 
 func NewAddDispatcherOperator(
@@ -65,13 +66,15 @@ func NewAddDispatcherOperator(
 	replicaSet *replica.SpanReplication,
 	dest node.ID,
 	operatorType heartbeatpb.OperatorType,
+	maintainerEpoch uint64,
 ) *AddDispatcherOperator {
 	return &AddDispatcherOperator{
-		replicaSet:     replicaSet,
-		dest:           dest,
-		spanController: spanController,
-		operatorType:   operatorType,
-		sendThrottler:  newSendThrottler(),
+		replicaSet:      replicaSet,
+		dest:            dest,
+		spanController:  spanController,
+		operatorType:    operatorType,
+		maintainerEpoch: maintainerEpoch,
+		sendThrottler:   newSendThrottler(),
 	}
 }
 
@@ -107,7 +110,7 @@ func (m *AddDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if !m.sendThrottler.shouldSend() {
 		return nil
 	}
-	return m.replicaSet.NewAddDispatcherMessage(m.dest, m.operatorType)
+	return m.replicaSet.NewAddDispatcherMessage(m.dest, m.operatorType, m.maintainerEpoch)
 }
 
 // OnNodeRemove is called when node offline, and the replicaset must already move to absent status and will be scheduled again

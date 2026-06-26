@@ -16,13 +16,13 @@ package operator
 import (
 	"container/heap"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
-	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -45,13 +45,13 @@ var _ operator.Controller[common.DispatcherID, *heartbeatpb.TableSpanStatus] = &
 // Controller is the operator controller, it manages all operators.
 // And the Controller is responsible for the execution of the operator.
 type Controller struct {
-	role           string
-	changefeedID   common.ChangeFeedID
-	batchSize      int
-	messageCenter  messaging.MessageCenter
-	spanController *span.Controller
-	nodeManager    *watcher.NodeManager
-	splitter       *split.Splitter
+	role            string
+	changefeedID    common.ChangeFeedID
+	batchSize       int
+	messageCenter   messaging.MessageCenter
+	spanController  *span.Controller
+	nodeManager     *watcher.NodeManager
+	maintainerEpoch atomic.Uint64
 
 	mu           sync.RWMutex // protect the following fields
 	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
@@ -82,6 +82,61 @@ func NewOperatorController(
 	}
 }
 
+<<<<<<< HEAD
+=======
+// QuiesceExcept freezes the controller so only the listed dispatcher IDs remain active.
+//
+// This is used when a maintainer enters removing mode. The old maintainer must stop
+// issuing or advancing ordinary table operators, but the DDL trigger dispatcher close
+// operator still needs to complete.
+func (oc *Controller) QuiesceExcept(ids ...common.DispatcherID) {
+	oc.admissionMu.Lock()
+	defer oc.admissionMu.Unlock()
+
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+
+	oc.quiescing = true
+	clear(oc.allowedOperatorIDs)
+	for _, id := range ids {
+		if id.IsZero() {
+			continue
+		}
+		oc.allowedOperatorIDs[id] = struct{}{}
+	}
+}
+
+func (oc *Controller) isOperatorAllowedLocked(id common.DispatcherID) bool {
+	if !oc.quiescing {
+		return true
+	}
+	_, ok := oc.allowedOperatorIDs[id]
+	return ok
+}
+
+func (oc *Controller) isOperatorAllowed(id common.DispatcherID) bool {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+	return oc.isOperatorAllowedLocked(id)
+}
+
+func (oc *Controller) isQuiescing() bool {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+	return oc.quiescing
+}
+
+// SetMaintainerEpoch sets the epoch used by scheduler requests.
+func (oc *Controller) SetMaintainerEpoch(maintainerEpoch uint64) {
+	oc.maintainerEpoch.Store(maintainerEpoch)
+}
+
+// MaintainerEpoch returns the epoch used by maintainer-to-dispatcher-manager requests.
+func (oc *Controller) MaintainerEpoch() uint64 {
+	return oc.maintainerEpoch.Load()
+}
+
+>>>>>>> a0066dcc5 (maintainer,dispatcher: fence stale maintainer epochs (#5435))
 // Execute poll the operator from the queue and execute it
 // It will be called in the thread pool.
 func (oc *Controller) Execute() time.Time {
@@ -117,7 +172,12 @@ func (oc *Controller) Execute() time.Time {
 func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 	tasks := oc.spanController.GetRemoveTasksBySchemaID(schemaID)
 	for _, task := range tasks {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task, heartbeatpb.OperatorType_O_Remove))
+		oc.removeReplicaSet(newRemoveDispatcherOperator(
+			oc.spanController,
+			task,
+			heartbeatpb.OperatorType_O_Remove,
+			oc.MaintainerEpoch(),
+		))
 	}
 	oc.spanController.RemoveBySchemaID(schemaID)
 }
@@ -135,7 +195,12 @@ func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	tasks := oc.spanController.GetRemoveTasksByTableIDs(tables...)
 	for _, task := range tasks {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task, heartbeatpb.OperatorType_O_Remove))
+		oc.removeReplicaSet(newRemoveDispatcherOperator(
+			oc.spanController,
+			task,
+			heartbeatpb.OperatorType_O_Remove,
+			oc.MaintainerEpoch(),
+		))
 	}
 	oc.spanController.RemoveByTableIDs(tables...)
 }
@@ -402,7 +467,7 @@ func (oc *Controller) checkAffectedNodes(op operator.Operator[common.DispatcherI
 }
 
 func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origin, dest node.ID) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	return NewMoveDispatcherOperator(oc.spanController, replicaSet, origin, dest)
+	return NewMoveDispatcherOperator(oc.spanController, replicaSet, origin, dest, oc.MaintainerEpoch())
 }
 
 func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
@@ -463,7 +528,7 @@ func (oc *Controller) AddMergeOperator(
 		}
 	}
 
-	mergeOperator := NewMergeDispatcherOperator(oc.spanController, affectedReplicaSets, operators)
+	mergeOperator := NewMergeDispatcherOperator(oc.spanController, affectedReplicaSets, operators, oc.MaintainerEpoch())
 	ret := oc.AddOperator(mergeOperator)
 	if !ret {
 		log.Error("failed to add merge dispatcher operator",
