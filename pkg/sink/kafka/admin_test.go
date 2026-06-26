@@ -16,76 +16,49 @@ package kafka
 import (
 	"testing"
 
-	"github.com/IBM/sarama"
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 )
 
-type testSaramaClient struct {
-	closed bool
-}
-
-func (c *testSaramaClient) Brokers() []*sarama.Broker {
-	return nil
-}
-
-func (c *testSaramaClient) Partitions(string) ([]int32, error) {
-	return nil, nil
-}
-
-func (c *testSaramaClient) Close() error {
-	c.closed = true
-	return nil
-}
-
-type testSaramaClusterAdmin struct {
-	closed      bool
-	closeClient *testSaramaClient
-}
-
-func (a *testSaramaClusterAdmin) DescribeCluster() ([]*sarama.Broker, int32, error) {
-	return nil, 0, nil
-}
-
-func (a *testSaramaClusterAdmin) DescribeConfig(sarama.ConfigResource) ([]sarama.ConfigEntry, error) {
-	return nil, nil
-}
-
-func (a *testSaramaClusterAdmin) DescribeTopics([]string) ([]*sarama.TopicMetadata, error) {
-	return nil, nil
-}
-
-func (a *testSaramaClusterAdmin) CreateTopic(string, *sarama.TopicDetail, bool) error {
-	return nil
-}
-
-func (a *testSaramaClusterAdmin) Close() error {
-	a.closed = true
-	if a.closeClient != nil {
-		return a.closeClient.Close()
+func TestAdminClientClose(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*gomock.Controller) *saramaAdminClient
+	}{
+		{
+			name: "uses admin close",
+			setup: func(ctrl *gomock.Controller) *saramaAdminClient {
+				client := NewMocksaramaClient(ctrl)
+				admin := NewMocksaramaClusterAdmin(ctrl)
+				admin.EXPECT().Close().Return(nil)
+				client.EXPECT().Close().Times(0)
+				return &saramaAdminClient{
+					changefeed: common.NewChangeFeedIDWithName("test", "default"),
+					client:     client,
+					admin:      admin,
+				}
+			},
+		},
+		{
+			name: "falls back to client when admin is nil",
+			setup: func(ctrl *gomock.Controller) *saramaAdminClient {
+				client := NewMocksaramaClient(ctrl)
+				client.EXPECT().Close().Return(nil)
+				return &saramaAdminClient{
+					changefeed: common.NewChangeFeedIDWithName("test", "default"),
+					client:     client,
+				}
+			},
+		},
 	}
-	return nil
-}
 
-func TestSaramaAdminClientCloseDelegatesClientCleanupToAdmin(t *testing.T) {
-	client := &testSaramaClient{}
-	admin := &testSaramaClusterAdmin{closeClient: client}
-	a := &saramaAdminClient{
-		changefeed: common.NewChangeFeedIDWithName("test", "default"),
-		client:     client,
-		admin:      admin,
-	}
-	a.Close()
-	require.True(t, admin.closed)
-	require.True(t, client.closed)
-}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			adminClient := test.setup(ctrl)
 
-func TestSaramaAdminClientCloseFallsBackToClientWhenAdminIsNil(t *testing.T) {
-	client := &testSaramaClient{}
-	a := &saramaAdminClient{
-		changefeed: common.NewChangeFeedIDWithName("test", "default"),
-		client:     client,
+			require.NotPanics(t, func() { adminClient.Close() })
+		})
 	}
-	require.NotPanics(t, func() { a.Close() })
-	require.True(t, client.closed)
 }

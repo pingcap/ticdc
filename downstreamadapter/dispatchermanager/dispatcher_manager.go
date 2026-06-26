@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
@@ -39,6 +38,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -293,9 +293,20 @@ func NewDispatcherManager(
 	manager.sink = createdSink
 	manager.writePathMu.Unlock()
 
+	sinkType := manager.sink.SinkType()
+	if sinkType != common.KafkaSinkType {
+		ignoreUpdateOnlyColumnsRuleCount := countIgnoreUpdateOnlyColumnsRules(cfConfig.Filter)
+		if ignoreUpdateOnlyColumnsRuleCount > 0 {
+			log.Warn("ignore update only columns is configured but does not take effect for this sink",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.String("sinkType", metrics.DownstreamTypeFromSinkURI(manager.config.SinkURI)),
+				zap.Int("eventFilterRuleCount", ignoreUpdateOnlyColumnsRuleCount))
+		}
+	}
+
 	// Determine outputRawChangeEvent based on sink type
 	var outputRawChangeEvent bool
-	switch manager.sink.SinkType() {
+	switch sinkType {
 	case common.CloudStorageSinkType:
 		outputRawChangeEvent = manager.config.SinkConfig.CloudStorageConfig.GetOutputRawChangeEvent()
 	case common.KafkaSinkType:
@@ -404,6 +415,19 @@ func NewDispatcherManager(
 		zap.String("filterConfig", filterCfg.String()),
 	)
 	return manager, nil
+}
+
+func countIgnoreUpdateOnlyColumnsRules(filter *config.FilterConfig) int {
+	if filter == nil {
+		return 0
+	}
+	count := 0
+	for _, rule := range filter.EventFilters {
+		if rule != nil && len(rule.IgnoreUpdateOnlyColumns) > 0 {
+			count++
+		}
+	}
+	return count
 }
 
 func (e *DispatcherManager) getEventCollectorBatchCountAndBytes(s sink.Sink) (int, int) {
@@ -705,10 +729,7 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 		// Split oversized batches so one protobuf message does not monopolize
 		// serialization, transport, and maintainer-side processing.
 		for start := 0; start < len(blockStatusMessage); start += maxBlockStatusesPerRequest {
-			end := start + maxBlockStatusesPerRequest
-			if end > len(blockStatusMessage) {
-				end = len(blockStatusMessage)
-			}
+			end := min(start+maxBlockStatusesPerRequest, len(blockStatusMessage))
 			// Copy each chunk so queue-side in-place filtering owns the backing
 			// array and cannot mutate another batch's slice accidentally.
 			chunk := make([]*heartbeatpb.TableSpanBlockStatus, end-start)

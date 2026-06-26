@@ -22,7 +22,6 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
@@ -37,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/routing"
 	mysqlcfg "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -146,6 +146,51 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	ec := eventcollector.New(nodeID)
 	appcontext.SetService(appcontext.EventCollector, ec)
 	return manager
+}
+
+func TestCountIgnoreUpdateOnlyColumnsRules(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		filter *config.FilterConfig
+		count  int
+	}{
+		{
+			name: "nil filter",
+		},
+		{
+			name: "nil event filter rule",
+			filter: &config.FilterConfig{
+				EventFilters: []*config.EventFilterRule{nil},
+			},
+		},
+		{
+			name: "empty ignore update only columns",
+			filter: &config.FilterConfig{
+				EventFilters: []*config.EventFilterRule{
+					{Matcher: []string{"test.t"}},
+				},
+			},
+		},
+		{
+			name: "configured rules",
+			filter: &config.FilterConfig{
+				EventFilters: []*config.EventFilterRule{
+					{Matcher: []string{"test.t1"}, IgnoreUpdateOnlyColumns: []string{"version"}},
+					{Matcher: []string{"test.t2"}},
+					{Matcher: []string{"test.t3"}, IgnoreUpdateOnlyColumns: []string{"updated_at"}},
+				},
+			},
+			count: 2,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.count, countIgnoreUpdateOnlyColumnsRules(tc.filter))
+		})
+	}
 }
 
 type bootstrapSchemaStoreForTest struct{}
@@ -296,10 +341,10 @@ func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
 func TestCollectBlockStatusRequestSplitsOversizedMessages(t *testing.T) {
 	manager := createTestManager(t)
 
-	for i := 0; i < maxBlockStatusesPerRequest+2; i++ {
+	for i := range maxBlockStatusesPerRequest + 2 {
 		manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.DefaultMode, uint64(i+1)))
 	}
-	for i := 0; i < maxBlockStatusesPerRequest+1; i++ {
+	for i := range maxBlockStatusesPerRequest + 1 {
 		manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.RedoMode, uint64(i+10000)))
 	}
 

@@ -206,7 +206,13 @@ func (s *eventScanner) scanAndMergeEvents(
 ) (bool, error) {
 	tableID := session.dataRange.Span.TableID
 	dispatcher := session.dispatcherStat
-	processor := newDMLProcessor(s.mounter, s.schemaGetter, dispatcher.filter, dispatcher.info.IsOutputRawChangeEvent(), s.mode)
+	processor := newDMLProcessor(
+		s.mounter,
+		s.schemaGetter,
+		dispatcher.filter,
+		dispatcher.info.IsOutputRawChangeEvent(),
+		s.mode,
+		dispatcher.info.EnableIgnoreUpdateOnlyColumns())
 
 	for {
 		shouldStop, err := s.checkScanConditions(session)
@@ -229,9 +235,11 @@ func (s *eventScanner) scanAndMergeEvents(
 			if err != nil {
 				return false, err
 			}
-			// table is deleted, still append remaining DDL event and resolved event.
+			// The table has been deleted, so the current raw event cannot be
+			// decoded as DML. Resolve to its commit ts to skip it; resolving to
+			// rawEvent.CRTs-1 can equal the scan start and cause a no-progress loop.
 			if tableInfo == nil {
-				err = finalizeScan(merger, processor, session, rawEvent.CRTs-1)
+				err = finalizeScan(merger, processor, session, rawEvent.CRTs)
 				return false, err
 			}
 
@@ -658,6 +666,7 @@ func (t *TxnEvent) AppendRow(
 		chk *chunk.Chunk,
 	) (int, *integrity.Checksum, error),
 	filter filter.Filter,
+	filterContext filter.DMLFilterContext,
 ) error {
 	if t.shouldSplitTxn && (t.CurrentDMLEvent.Len() >= t.DMLEventMaxRows || t.CurrentDMLEvent.GetSize() >= t.DMLEventMaxBytes) {
 		newDMLEvent := event.NewDMLEvent(
@@ -672,7 +681,7 @@ func (t *TxnEvent) AppendRow(
 			return err
 		}
 	}
-	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter)
+	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter, filterContext)
 }
 
 // dmlProcessor handles DML event processing and batching
@@ -680,7 +689,8 @@ type dmlProcessor struct {
 	mounter      event.Mounter
 	schemaGetter schemaGetter
 
-	filter filter.Filter
+	filter        filter.Filter
+	filterContext filter.DMLFilterContext
 
 	// insertRowCache is used to cache the split update event's insert part of the current transaction.
 	// It will be used to append to the current DML event when the transaction is finished.
@@ -698,12 +708,18 @@ type dmlProcessor struct {
 // newDMLProcessor creates a new DML processor
 func newDMLProcessor(
 	mounter event.Mounter, schemaGetter schemaGetter,
-	filter filter.Filter, outputRawChangeEvent bool, mode int64,
+	dmlFilter filter.Filter, outputRawChangeEvent bool, mode int64,
+	enableIgnoreUpdateOnlyColumns bool,
 ) *dmlProcessor {
+	filterContext := filter.DMLFilterContext{}
+	if enableIgnoreUpdateOnlyColumns {
+		filterContext.EnableIgnoreUpdateOnlyColumns = true
+	}
 	return &dmlProcessor{
 		mounter:              mounter,
 		schemaGetter:         schemaGetter,
-		filter:               filter,
+		filter:               dmlFilter,
+		filterContext:        filterContext,
 		batchDML:             event.NewBatchDMLEvent(),
 		insertRowCache:       make([]*common.RawKVEntry, 0),
 		outputRawChangeEvent: outputRawChangeEvent,
@@ -731,7 +747,7 @@ func (p *dmlProcessor) startTxn(
 func (p *dmlProcessor) commitTxn() error {
 	if p.currentTxn != nil && len(p.insertRowCache) > 0 {
 		for _, insertRow := range p.insertRowCache {
-			if err := p.currentTxn.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter); err != nil {
+			if err := p.currentTxn.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter, p.filterContext); err != nil {
 				return err
 			}
 		}
@@ -776,7 +792,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	rawType := rawEvent.GetType()
 	if !rawEvent.IsUpdate() {
 		updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, false)
-		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
+		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter, p.filterContext)
 	}
 
 	var (
@@ -793,7 +809,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, shouldSplit)
 
 	if !shouldSplit {
-		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
+		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter, p.filterContext)
 	}
 
 	log.Debug("split update event", zap.Uint64("startTs", rawEvent.StartTs),
@@ -804,7 +820,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		return err
 	}
 	p.insertRowCache = append(p.insertRowCache, insertRow)
-	return p.currentTxn.AppendRow(deleteRow, p.mounter.DecodeToChunk, p.filter)
+	return p.currentTxn.AppendRow(deleteRow, p.mounter.DecodeToChunk, p.filter, p.filterContext)
 }
 
 // getCurrentBatchDML returns the current batch DML event

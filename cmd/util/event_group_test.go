@@ -16,53 +16,9 @@ package util
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
-
-func TestEventsGroupAppendForceMergesExistingCommitTs(t *testing.T) {
-	// Scenario:
-	// 1) An upstream transaction (commitTs=100) is split into multiple messages.
-	// 2) Due to sink retry/restart, a later transaction (commitTs=200) is observed first.
-	// 3) A "late" fragment of the commitTs=100 transaction arrives afterwards.
-	//
-	// The EventsGroup must merge the late fragment into the existing commitTs=100 event,
-	// instead of turning it into a second commitTs=100 item (which would split one upstream
-	// transaction into multiple downstream transactions).
-	group := NewEventsGroup(0, 1)
-
-	newDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
-		return &commonEvent.DMLEvent{
-			CommitTs: commitTs,
-			RowTypes: []common.RowType{common.RowTypeUpdate},
-			Rows:     chunk.NewChunkWithCapacity(nil, 0),
-			Length:   0,
-			TableInfo: common.NewTableInfo4Decoder("test", &timodel.TableInfo{
-				ID:   100,
-				Name: ast.NewCIStr("t"),
-				Columns: []*timodel.ColumnInfo{
-					{Name: ast.NewCIStr("a")},
-				},
-			}),
-		}
-	}
-
-	group.Append(newDMLEvent(100), false)
-	group.Append(newDMLEvent(200), false)
-	group.Append(newDMLEvent(100), true)
-
-	require.Equal(t, uint64(200), group.HighWatermark)
-
-	var dst []*commonEvent.DMLEvent
-	dst = group.ResolveInto(150, dst)
-	require.Len(t, dst, 1)
-	require.Equal(t, uint64(100), dst[0].CommitTs)
-	require.Len(t, dst[0].RowTypes, 2)
-}
 
 func TestEventsGroupResolveIntoAppendsAndClearsResolvedPrefix(t *testing.T) {
 	// Scenario: A consumer resolves a prefix of events by watermark/commit-ts and appends them

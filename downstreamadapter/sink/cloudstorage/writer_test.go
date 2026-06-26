@@ -27,12 +27,12 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -146,15 +146,18 @@ func TestWriterRun(t *testing.T) {
 		_ = d.run(ctx)
 	}()
 
+	dataFileName := fmt.Sprintf("CDC_%s_000001.json", dispatcherID.String())
+	indexFileName := fmt.Sprintf("CDC_%s.index", dispatcherID.String())
 	require.Eventually(t, func() bool {
-		files, err := os.ReadDir(table1Dir)
-		return err == nil && len(files) == 2
+		_, dataErr := os.Stat(path.Join(table1Dir, dataFileName))
+		_, indexErr := os.Stat(path.Join(table1Dir, "meta", indexFileName))
+		return dataErr == nil && indexErr == nil
 	}, 10*time.Second, 100*time.Millisecond)
 
 	// check whether files for table1 has been generated
 	fileNames := getTableFiles(t, table1Dir)
 	require.Len(t, fileNames, 2)
-	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.json", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
+	require.ElementsMatch(t, []string{dataFileName, indexFileName}, fileNames)
 	cancel()
 	wg.Wait()
 }
