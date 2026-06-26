@@ -235,9 +235,11 @@ func (s *eventScanner) scanAndMergeEvents(
 			if err != nil {
 				return false, err
 			}
-			// table is deleted, still append remaining DDL event and resolved event.
+			// The table has been deleted, so the current raw event cannot be
+			// decoded as DML. Resolve to its commit ts to skip it; resolving to
+			// rawEvent.CRTs-1 can equal the scan start and cause a no-progress loop.
 			if tableInfo == nil {
-				err = finalizeScan(merger, processor, session, rawEvent.CRTs-1)
+				err = finalizeScan(merger, processor, session, rawEvent.CRTs)
 				return false, err
 			}
 

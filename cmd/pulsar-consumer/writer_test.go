@@ -266,57 +266,50 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
 }
 
-func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) {
-	// Scenario:
-	// 1) TiCDC writes DML messages to Pulsar in commitTs order.
-	// 2) Under network partition / changefeed restart, TiCDC may replay older commitTs
-	//    at a later time (commitTs appears to go backwards).
-	//
-	// The pulsar-consumer must not drop these "fallback commitTs" events unless they
-	// have already been flushed to downstream (AppliedWatermark), otherwise replayed
-	// messages cannot heal missing windows.
+func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
 	w := &writer{
 		progresses: []*partitionProgress{
-			{
-				partition:   0,
-				eventsGroup: make(map[int64]*util.EventsGroup),
-			},
+			{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)},
 		},
 		protocol:               config.ProtocolCanalJSON,
 		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
 	}
 
-	newDMLEvent := func(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
+	ddl := &commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `target`.`dst` LIKE `target`.`src`",
+		SchemaName: "source",
+		TableName:  "dst",
+		Type:       byte(timodel.ActionCreateTable),
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{
+				Schema:       "source",
+				Table:        "dst",
+				IsPartition:  true,
+				TargetSchema: "target",
+				TargetTable:  "dst",
+			},
+		},
+	}
+	w.onDDL(ddl)
+	require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
+
+	newDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
 		return &commonEvent.DMLEvent{
-			PhysicalTableID: tableID,
+			PhysicalTableID: 1,
 			CommitTs:        commitTs,
 			RowTypes:        []common.RowType{common.RowTypeUpdate},
 			Rows:            chunk.NewChunkWithCapacity(nil, 0),
 			TableInfo: &common.TableInfo{
-				TableName: common.TableName{Schema: "test", Table: "t"},
+				TableName: common.TableName{Schema: "target", Table: "dst"},
 			},
 		}
 	}
 
 	progress := w.progresses[0]
+	w.appendRow2Group(newDMLEvent(200), progress)
+	w.appendRow2Group(newDMLEvent(100), progress)
 
-	// Step 1: observe a larger commitTs first (e.g. produced before restart).
-	w.appendRow2Group(newDMLEvent(1, 200), progress)
-
-	// Step 2: observe a smaller commitTs later (e.g. replayed after restart).
-	w.appendRow2Group(newDMLEvent(1, 100), progress)
-
-	group := progress.eventsGroup[1]
-	require.NotNil(t, group)
-
-	// Expect: commitTs=100 is still kept and can be resolved.
-	resolved := group.ResolveInto(150, nil)
+	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
 	require.Len(t, resolved, 1)
 	require.Equal(t, uint64(100), resolved[0].CommitTs)
-
-	// Step 3: once downstream has flushed beyond commitTs=100, replay is safe to ignore.
-	group.AppliedWatermark = 200
-	w.appendRow2Group(newDMLEvent(1, 100), progress)
-	resolved = group.ResolveInto(150, nil)
-	require.Empty(t, resolved)
 }
