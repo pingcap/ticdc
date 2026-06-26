@@ -79,55 +79,6 @@ type rangeTask struct {
 	priority       TaskType
 }
 
-const kvEventsCacheMaxSize = 32
-
-// subscribedSpan represents a span to subscribe.
-// It contains a sub span of a table(or the total span of a table),
-// the startTs of the table, and the output event channel.
-type subscribedSpan struct {
-	subID   SubscriptionID
-	startTs uint64
-	// Whether to filter out the value written by TiCDC itself.
-	// It should be `true` in BDR mode.
-	filterLoop bool
-
-	// The target span
-	span heartbeatpb.TableSpan
-	// The range lock of the span,
-	// it is used to prevent duplicate requests to the same region range,
-	// and it also used to calculate this table's resolvedTs.
-	rangeLock *regionlock.RangeLock
-
-	consumeKVEvents func(events []common.RawKVEntry, wakeCallback func()) bool
-
-	advanceResolvedTs func(ts uint64)
-
-	advanceInterval int64
-
-	kvEventsCache []common.RawKVEntry
-
-	// To handle span removing.
-	stopped atomic.Bool
-
-	// To handle stale lock resolvings.
-	tryResolveLock     func(regionID uint64, state *regionlock.LockedRangeState)
-	staleLocksTargetTs atomic.Uint64
-
-	lastAdvanceTime atomic.Int64
-
-	initialized       atomic.Bool
-	resolvedTsUpdated atomic.Int64
-	resolvedTs        atomic.Uint64
-}
-
-func (span *subscribedSpan) clearKVEventsCache() {
-	if cap(span.kvEventsCache) > kvEventsCacheMaxSize {
-		span.kvEventsCache = nil
-	} else {
-		span.kvEventsCache = span.kvEventsCache[:0]
-	}
-}
-
 type SubscriptionClientConfig struct {
 	// The number of region request workers to send region task for every tikv store
 	RegionRequestWorkerPerStore uint
@@ -289,7 +240,18 @@ func (s *subscriptionClient) Subscribe(
 		return
 	}
 
-	rt := s.newSubscribedSpan(subID, span, startTs, consumeKVEvents, advanceResolvedTs, advanceInterval, bdrMode)
+	rt := newSubscribedSpan(
+		s.ctx,
+		s.resolveLockRateLimiter,
+		s.resolveLockTaskCh,
+		subID,
+		span,
+		startTs,
+		consumeKVEvents,
+		advanceResolvedTs,
+		advanceInterval,
+		bdrMode,
+	)
 	s.spanRegistry.Add(rt)
 
 	s.eventSink.AddPath(rt)
@@ -512,11 +474,6 @@ func (s *subscriptionClient) scheduleRangeRequest(
 	}
 }
 
-type subscriptionAndTargetTs struct {
-	subSpan  *subscribedSpan
-	targetTs uint64
-}
-
 func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 	doResolve := func(task resolveLockTask) {
 		keyspaceID := task.keyspaceID
@@ -553,65 +510,4 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 			doResolve(task)
 		}
 	}
-}
-
-func (s *subscriptionClient) newSubscribedSpan(
-	subID SubscriptionID,
-	span heartbeatpb.TableSpan,
-	startTs uint64,
-	consumeKVEvents func(raw []common.RawKVEntry, wakeCallback func()) bool,
-	advanceResolvedTs func(ts uint64),
-	advanceInterval int64,
-	filterLoop bool,
-) *subscribedSpan {
-	rangeLock := regionlock.NewRangeLock(uint64(subID), span.StartKey, span.EndKey, startTs)
-
-	rt := &subscribedSpan{
-		subID:      subID,
-		span:       span,
-		startTs:    startTs,
-		filterLoop: filterLoop,
-		rangeLock:  rangeLock,
-
-		consumeKVEvents:   consumeKVEvents,
-		advanceResolvedTs: advanceResolvedTs,
-		advanceInterval:   advanceInterval,
-	}
-	rt.initialized.Store(false)
-	rt.resolvedTsUpdated.Store(time.Now().Unix())
-	rt.resolvedTs.Store(startTs)
-
-	rt.tryResolveLock = func(regionID uint64, state *regionlock.LockedRangeState) {
-		targetTs := rt.staleLocksTargetTs.Load()
-		if !state.Initialized.Load() || state.ResolvedTs.Load() >= targetTs {
-			return
-		}
-		key := resolveLockKey{keyspaceID: span.KeyspaceID, regionID: regionID}
-		if !s.resolveLockRateLimiter.trySchedule(key, time.Now()) {
-			return
-		}
-		select {
-		case <-s.ctx.Done():
-			s.resolveLockRateLimiter.cancel(key)
-		case s.resolveLockTaskCh <- resolveLockTask{
-			keyspaceID: span.KeyspaceID,
-			regionID:   regionID,
-			targetTs:   targetTs,
-			state:      state,
-		}:
-		// it is ok to ignore resolve lock task when the channel is full
-		default:
-			s.resolveLockRateLimiter.cancel(key)
-			metrics.SubscriptionClientResolveLockTaskDropCounter.Inc()
-		}
-	}
-	return rt
-}
-
-func (r *subscribedSpan) resolveStaleLocks(targetTs uint64) {
-	util.MustCompareAndMonotonicIncrease(&r.staleLocksTargetTs, targetTs)
-	res := r.rangeLock.IterAll(r.tryResolveLock)
-	log.Debug("subscription client finds slow locked ranges",
-		zap.Uint64("subscriptionID", uint64(r.subID)),
-		zap.Any("ranges", res))
 }
