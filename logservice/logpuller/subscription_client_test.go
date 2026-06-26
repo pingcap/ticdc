@@ -60,6 +60,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 		upstream:               &upstreamHandle{pdClock: pdutil.NewClock4Test()},
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
+	client.spanRegistry = newSpanRegistry(client.upstream)
 	rawSpan := heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte{'a'},
@@ -68,8 +69,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
 	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, false)
-	client.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
-	client.totalSpans.spanMap[SubscriptionID(1)] = span
+	client.spanRegistry.Add(span)
 
 	// Lock a range, and then ResolveLock will trigger a task for it.
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
@@ -315,7 +315,8 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	client := &subscriptionClient{
 		eventSink: &regionEventSink{ds: &mockDynamicStream{}},
 	}
-	client.failureReporter = newRegionFailureReporter(&upstreamHandle{}, client.onTableDrained, nil, nil)
+	client.spanRegistry = newSpanRegistry(&upstreamHandle{})
+	client.failureHandler = newRegionFailureHandler(&upstreamHandle{}, client.onTableDrained, nil, nil)
 	rawSpan := heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte("a"),
@@ -326,7 +327,7 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 		span:      rawSpan,
 		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
 	}
-	client.totalSpans.spanMap = map[SubscriptionID]*subscribedSpan{span.subID: span}
+	client.spanRegistry.Add(span)
 
 	res1 := span.rangeLock.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res1.Status)
@@ -334,25 +335,25 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res2.Status)
 	require.False(t, span.rangeLock.Stop())
 
-	client.failureReporter.Report(newRegionErrorInfo(regionInfo{
+	client.failureHandler.Report(newRegionErrorInfo(regionInfo{
 		verID:            tikv.NewRegionVerID(1, 1, 1),
 		span:             heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("m")},
 		subscribedSpan:   span,
 		lockedRangeState: res1.LockedRangeState,
 	}, &requestCancelledErr{}))
 
-	require.Len(t, client.failureReporter.cache.cache, 1)
+	require.Len(t, client.failureHandler.cache.cache, 1)
 	require.Len(t, span.rangeLock.IterAll(nil).UnLockedRanges, 1)
 
-	client.failureReporter.Report(newRegionErrorInfo(regionInfo{
+	client.failureHandler.Report(newRegionErrorInfo(regionInfo{
 		verID:            tikv.NewRegionVerID(2, 1, 1),
 		span:             heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("m"), EndKey: []byte("z")},
 		subscribedSpan:   span,
 		lockedRangeState: res2.LockedRangeState,
 	}, &requestCancelledErr{}))
 
-	require.Len(t, client.failureReporter.cache.cache, 1)
-	require.NotContains(t, client.totalSpans.spanMap, span.subID)
+	require.Len(t, client.failureHandler.cache.cache, 1)
+	require.Nil(t, client.spanRegistry.Get(span.subID))
 }
 
 type mockDynamicStream struct{}
@@ -739,7 +740,7 @@ func TestGetResolvedTargetTs(t *testing.T) {
 	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
 	span.initialized.Store(true)
 
-	// Replicate the getResolvedTargetTs closure from runResolveLockChecker
+	// Replicate the getResolvedTargetTs closure from spanRegistry.runResolveLockChecker.
 	getResolvedTargetTs := func(subSpan *subscribedSpan, currentTime time.Time, currentTs uint64) uint64 {
 		resolvedTsUpdated := time.Unix(subSpan.resolvedTsUpdated.Load(), 0)
 		if !subSpan.initialized.Load() || time.Since(resolvedTsUpdated) < resolveLockFence {

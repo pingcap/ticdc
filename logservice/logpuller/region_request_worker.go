@@ -82,9 +82,9 @@ type regionRequestWorker struct {
 
 	store *requestedStore
 
-	upstream        *upstreamHandle
-	eventSink       *regionEventSink
-	failureReporter *regionFailureReporter
+	upstream       *upstreamHandle
+	eventSink      *regionEventSink
+	failureHandler *regionFailureHandler
 
 	// we must always get a region to request before create a grpc stream.
 	// only in this way we can avoid to try to connect to an offline store infinitely.
@@ -109,14 +109,14 @@ func newRegionRequestWorker(
 	requestCacheSize int,
 	upstream *upstreamHandle,
 	eventSink *regionEventSink,
-	failureReporter *regionFailureReporter,
+	failureHandler *regionFailureHandler,
 ) *regionRequestWorker {
 	worker := &regionRequestWorker{
-		workerID:        workerIDGen.Add(1),
-		store:           store,
-		upstream:        upstream,
-		eventSink:       eventSink,
-		failureReporter: failureReporter,
+		workerID:       workerIDGen.Add(1),
+		store:          store,
+		upstream:       upstream,
+		eventSink:      eventSink,
+		failureHandler: failureHandler,
 		requestCache: newRequestCache(requestCacheSize, func() {
 			store.promoteDeferredTask()
 		}),
@@ -184,7 +184,7 @@ func newRegionRequestWorker(
 					// It means it's a special task for stopping the table.
 					continue
 				}
-				worker.failureReporter.Report(newRegionErrorInfo(region, regionErr))
+				worker.failureHandler.Report(newRegionErrorInfo(region, regionErr))
 			}
 			if err := util.Hang(ctx, time.Second); err != nil {
 				return err
@@ -478,7 +478,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 			// It can be skipped directly because there must be no pending states from
 			// the stopped subscribedTable, or the special singleRegionInfo for stopping
 			// the table will be handled later.
-			s.failureReporter.Report(newRegionErrorInfo(region, &storeStreamErr{}))
+			s.failureHandler.Report(newRegionErrorInfo(region, &storeStreamErr{}))
 			regionReq.finish()
 		} else {
 			state := newRegionFeedState(region, uint64(subID), s, regionReq)

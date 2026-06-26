@@ -35,8 +35,8 @@ type regionRequestScheduler struct {
 	config   *SubscriptionClientConfig
 	upstream *upstreamHandle
 
-	eventSink       *regionEventSink
-	failureReporter *regionFailureReporter
+	eventSink      *regionEventSink
+	failureHandler *regionFailureHandler
 
 	queue *priorityqueue.PriorityQueue[*regionPriorityTask]
 	seq   atomic.Uint64
@@ -46,11 +46,11 @@ type regionRequestScheduler struct {
 
 func newRegionRequestScheduler(client *subscriptionClient) *regionRequestScheduler {
 	return &regionRequestScheduler{
-		config:          client.config,
-		upstream:        client.upstream,
-		eventSink:       client.eventSink,
-		failureReporter: client.failureReporter,
-		queue:           priorityqueue.New[*regionPriorityTask](),
+		config:         client.config,
+		upstream:       client.upstream,
+		eventSink:      client.eventSink,
+		failureHandler: client.failureHandler,
+		queue:          priorityqueue.New[*regionPriorityTask](),
 	}
 }
 
@@ -103,7 +103,7 @@ func (s *regionRequestScheduler) attachRPCContextForRegion(ctx context.Context, 
 			zap.Uint64("regionID", region.verID.GetID()),
 			zap.Error(err))
 	}
-	s.failureReporter.Report(newRegionErrorInfo(region, &rpcCtxUnavailableErr{verID: region.verID}))
+	s.failureHandler.Report(newRegionErrorInfo(region, &rpcCtxUnavailableErr{verID: region.verID}))
 	return region, false
 }
 
@@ -151,7 +151,7 @@ func (s *regionRequestScheduler) Run(ctx context.Context, eg *errgroup.Group) er
 				perWorkerQueueSize,
 				s.upstream,
 				s.eventSink,
-				s.failureReporter,
+				s.failureHandler,
 			)
 			rs.requestWorkers = append(rs.requestWorkers, requestWorker)
 		}

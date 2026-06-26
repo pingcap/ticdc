@@ -87,8 +87,8 @@ func (event regionEvent) mustFirstState() *regionFeedState {
 }
 
 type regionEventHandler struct {
-	eventSink       *regionEventSink
-	failureReporter *regionFailureReporter
+	eventSink      *regionEventSink
+	failureHandler *regionFailureHandler
 }
 
 func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {
@@ -256,7 +256,7 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState) {
 	}
 	if stepsToRemoved {
 		worker.takeRegionState(SubscriptionID(state.requestID), state.getRegionID())
-		h.failureReporter.Report(newRegionErrorInfo(state.getRegionInfo(), err))
+		h.failureHandler.Report(newRegionErrorInfo(state.getRegionInfo(), err))
 	}
 }
 

@@ -15,7 +15,6 @@ package logpuller
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -143,6 +141,10 @@ type upstreamHandle struct {
 	clusterID   uint64
 }
 
+func (u *upstreamHandle) initialize(ctx context.Context) {
+	u.clusterID = u.pd.GetClusterID(ctx)
+}
+
 // subscriptionClient is used to subscribe events of table ranges from TiKV.
 // All exported Methods are thread-safe.
 type SubscriptionClient interface {
@@ -171,13 +173,10 @@ type subscriptionClient struct {
 
 	lockResolver txnutil.LockResolver
 
-	eventSink       *regionEventSink
-	failureReporter *regionFailureReporter
+	eventSink      *regionEventSink
+	failureHandler *regionFailureHandler
 
-	totalSpans struct {
-		sync.RWMutex
-		spanMap map[SubscriptionID]*subscribedSpan
-	}
+	spanRegistry *spanRegistry
 
 	// rangeTaskCh is used to receive range tasks.
 	// The tasks will be handled in `handleRangeTask` goroutine.
@@ -213,15 +212,15 @@ func NewSubscriptionClient(
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
-	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
+	subClient.spanRegistry = newSpanRegistry(subClient.upstream)
 
-	subClient.failureReporter = newRegionFailureReporter(
+	subClient.failureHandler = newRegionFailureHandler(
 		subClient.upstream,
 		subClient.onTableDrained,
 		subClient.scheduleRegionRequest,
 		subClient.scheduleRangeRequest,
 	)
-	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient.failureReporter)
+	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient.failureHandler)
 	subClient.regionScheduler = newRegionRequestScheduler(subClient)
 	return subClient
 }
@@ -235,7 +234,7 @@ func (s *subscriptionClient) AllocSubscriptionID() SubscriptionID {
 	return SubscriptionID(subscriptionIDGen.Add(1))
 }
 
-func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
+func (s *subscriptionClient) runMetricsUpdater(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -243,10 +242,6 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			resolvedTsLag := s.GetResolvedTsLag()
-			if resolvedTsLag > 0 {
-				metrics.LogPullerResolvedTsLag.Set(resolvedTsLag)
-			}
 			dsMetrics := s.eventSink.Metrics()
 			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
@@ -270,21 +265,14 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			}
 
 			s.regionScheduler.updateMetrics()
-
-			count := 0
-			s.totalSpans.RLock()
-			for _, rt := range s.totalSpans.spanMap {
-				count += rt.rangeLock.Len()
-			}
-			s.totalSpans.RUnlock()
-			metrics.SubscriptionClientSubscribedRegionCount.Set(float64(count))
+			s.spanRegistry.UpdateMetrics()
 		}
 	}
 }
 
 // Subscribe the given table span.
 // NOTE: `span.TableID` must be set correctly.
-// It new a subscribedSpan and store it in `s.totalSpans`,
+// It new a subscribedSpan and store it in spanRegistry,
 // and send a rangeTask to `s.rangeTaskCh`.
 // The rangeTask will be handled in `handleRangeTasks` goroutine.
 func (s *subscriptionClient) Subscribe(
@@ -302,9 +290,7 @@ func (s *subscriptionClient) Subscribe(
 	}
 
 	rt := s.newSubscribedSpan(subID, span, startTs, consumeKVEvents, advanceResolvedTs, advanceInterval, bdrMode)
-	s.totalSpans.Lock()
-	s.totalSpans.spanMap[subID] = rt
-	s.totalSpans.Unlock()
+	s.spanRegistry.Add(rt)
 
 	s.eventSink.AddPath(rt)
 
@@ -321,10 +307,8 @@ func (s *subscriptionClient) Subscribe(
 // Unsubscribe the given table span. All covered regions will be deregistered asynchronously.
 // NOTE: `span.TableID` must be set correctly.
 func (s *subscriptionClient) Unsubscribe(subID SubscriptionID) {
-	// NOTE: `subID` is cleared from `s.totalSpans` in `onTableDrained`.
-	s.totalSpans.Lock()
-	rt := s.totalSpans.spanMap[subID]
-	s.totalSpans.Unlock()
+	// NOTE: `subID` is cleared from `spanRegistry` in `onTableDrained`.
+	rt := s.spanRegistry.Get(subID)
 	if rt == nil {
 		log.Warn("unknown subscription", zap.Uint64("subscriptionID", uint64(subID)))
 		return
@@ -337,23 +321,16 @@ func (s *subscriptionClient) Unsubscribe(subID SubscriptionID) {
 }
 
 func (s *subscriptionClient) Run(ctx context.Context) error {
-	// s.consume = consume
-	if s.upstream == nil || s.upstream.pd == nil {
-		log.Warn("subscription client should be in test mode, skip run")
-		return nil
-	}
-	s.upstream.clusterID = s.upstream.pd.GetClusterID(ctx)
+	s.upstream.initialize(ctx)
 
 	g, ctx := errgroup.WithContext(ctx)
-
-	g.Go(func() error { return s.updateMetrics(ctx) })
 	g.Go(func() error { return s.eventSink.Run(ctx) })
-	g.Go(func() error { return s.failureReporter.Run(ctx) })
-	g.Go(func() error { return s.handleRangeTasks(ctx) })
+	g.Go(func() error { return s.failureHandler.Run(ctx) })
 	g.Go(func() error { return s.regionScheduler.Run(ctx, g) })
-	g.Go(func() error { return s.runResolveLockChecker(ctx) })
+	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
-	g.Go(func() error { return s.logSlowRegions(ctx) })
+	g.Go(func() error { return s.spanRegistry.Run(ctx) })
+	g.Go(func() error { return s.runMetricsUpdater(ctx) })
 
 	log.Info("subscription client starts")
 	defer log.Info("subscription client exits")
@@ -395,9 +372,7 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 			zap.Uint64("subscriptionID", uint64(rt.subID)),
 			zap.Error(err))
 	}
-	s.totalSpans.Lock()
-	defer s.totalSpans.Unlock()
-	delete(s.totalSpans.spanMap, rt.subID)
+	s.spanRegistry.Remove(rt.subID)
 }
 
 func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
@@ -542,62 +517,6 @@ type subscriptionAndTargetTs struct {
 	targetTs uint64
 }
 
-func (s *subscriptionClient) runResolveLockChecker(ctx context.Context) error {
-	resolveLockTicker := time.NewTicker(resolveLockTickInterval)
-	defer resolveLockTicker.Stop()
-	maxCacheSize := 1024
-	subSpanAndTsCache := make([]subscriptionAndTargetTs, 0, maxCacheSize)
-	// getResolvedTargetTs returns the targetTs to resolve stale locks. 0 means no need to resolve.
-	getResolvedTargetTs := func(subSpan *subscribedSpan, currentTime time.Time, currentTs uint64) uint64 {
-		resolvedTsUpdated := time.Unix(subSpan.resolvedTsUpdated.Load(), 0)
-		if !subSpan.initialized.Load() || time.Since(resolvedTsUpdated) < resolveLockFence {
-			return 0
-		}
-		resolvedTs := subSpan.resolvedTs.Load()
-		resolvedTime := oracle.GetTimeFromTS(resolvedTs)
-		if currentTime.Sub(resolvedTime) < resolveLockFence {
-			return 0
-		}
-		return min(currentTs, oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence)))
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-resolveLockTicker.C:
-		}
-
-		physical, logic, err := s.upstream.pd.GetTS(ctx)
-		if err != nil {
-			log.Warn("get ts from pd failed", zap.Error(err))
-			continue
-		}
-		currentTs := oracle.ComposeTS(physical, logic)
-		currentTime := s.upstream.pdClock.CurrentTime()
-		s.totalSpans.Lock()
-		for _, subSpan := range s.totalSpans.spanMap {
-			if subSpan != nil {
-				targetTs := getResolvedTargetTs(subSpan, currentTime, currentTs)
-				if targetTs > 0 {
-					subSpanAndTsCache = append(subSpanAndTsCache, subscriptionAndTargetTs{
-						subSpan:  subSpan,
-						targetTs: targetTs,
-					})
-				}
-			}
-		}
-		s.totalSpans.Unlock()
-		for _, subSpanAndTs := range subSpanAndTsCache {
-			subSpanAndTs.subSpan.resolveStaleLocks(subSpanAndTs.targetTs)
-		}
-		subSpanAndTsCache = subSpanAndTsCache[:0]
-		if cap(subSpanAndTsCache) > maxCacheSize {
-			subSpanAndTsCache = make([]subscriptionAndTargetTs, 0, maxCacheSize)
-		}
-	}
-}
-
 func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 	doResolve := func(task resolveLockTask) {
 		keyspaceID := task.keyspaceID
@@ -633,48 +552,6 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 		case task := <-s.resolveLockTaskCh:
 			doResolve(task)
 		}
-	}
-}
-
-func (s *subscriptionClient) logSlowRegions(ctx context.Context) error {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-
-		currTime := s.upstream.pdClock.CurrentTime()
-		s.totalSpans.RLock()
-		slowInitializeRegion := 0
-		for subscriptionID, rt := range s.totalSpans.spanMap {
-			attr := rt.rangeLock.IterAll(nil)
-			ckptTime := oracle.GetTimeFromTS(attr.SlowestRegion.ResolvedTs)
-			if attr.SlowestRegion.Initialized {
-				if currTime.Sub(ckptTime) > 6*resolveLockMinInterval {
-					log.Info("subscription client finds a initialized slow region",
-						zap.Uint64("subscriptionID", uint64(subscriptionID)),
-						zap.Any("slowRegion", attr.SlowestRegion))
-				}
-			} else if currTime.Sub(attr.SlowestRegion.Created) > 10*time.Minute {
-				slowInitializeRegion++
-				log.Info("subscription client initializes a region too slow",
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("slowRegion", attr.SlowestRegion))
-			} else if currTime.Sub(ckptTime) > 10*time.Minute {
-				log.Info("subscription client finds a uninitialized slow region",
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("slowRegion", attr.SlowestRegion))
-			}
-			if len(attr.UnLockedRanges) > 0 {
-				log.Info("subscription client holes exist",
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("holes", attr.UnLockedRanges))
-			}
-		}
-		s.totalSpans.RUnlock()
 	}
 }
 
@@ -729,25 +606,6 @@ func (s *subscriptionClient) newSubscribedSpan(
 		}
 	}
 	return rt
-}
-
-func (s *subscriptionClient) GetResolvedTsLag() float64 {
-	pullerMinResolvedTs := uint64(0)
-	s.totalSpans.RLock()
-	for _, rt := range s.totalSpans.spanMap {
-		resolvedTs := rt.resolvedTs.Load()
-		if pullerMinResolvedTs == 0 || resolvedTs < pullerMinResolvedTs {
-			pullerMinResolvedTs = resolvedTs
-		}
-	}
-	s.totalSpans.RUnlock()
-	if pullerMinResolvedTs == 0 {
-		return 0
-	}
-	pdTime := s.upstream.pdClock.CurrentTime()
-	phyResolvedTs := oracle.ExtractPhysical(pullerMinResolvedTs)
-	lag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
-	return lag
 }
 
 func (r *subscribedSpan) resolveStaleLocks(targetTs uint64) {

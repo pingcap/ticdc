@@ -327,12 +327,12 @@ func TestClearPendingRegionsDoesNotReturnStoppedSentRegion(t *testing.T) {
 
 func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	worker := &regionRequestWorker{
-		requestCache:    newRequestCache(10),
-		controlQueue:    newControlQueue(),
-		store:           &requestedStore{storeAddr: "store-1"},
-		upstream:        &upstreamHandle{},
-		eventSink:       &regionEventSink{ctx: context.Background(), ds: &mockRegionEventDynamicStream{}},
-		failureReporter: newRegionFailureReporter(&upstreamHandle{}, func(*subscribedSpan) {}, nil, nil),
+		requestCache:   newRequestCache(10),
+		controlQueue:   newControlQueue(),
+		store:          &requestedStore{storeAddr: "store-1"},
+		upstream:       &upstreamHandle{},
+		eventSink:      &regionEventSink{ctx: context.Background(), ds: &mockRegionEventDynamicStream{}},
+		failureHandler: newRegionFailureHandler(&upstreamHandle{}, func(*subscribedSpan) {}, nil, nil),
 	}
 	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
 
@@ -379,12 +379,12 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			worker := &regionRequestWorker{
-				requestCache:    newRequestCache(10),
-				controlQueue:    newControlQueue(),
-				store:           &requestedStore{storeAddr: "store-1"},
-				upstream:        &upstreamHandle{},
-				eventSink:       &regionEventSink{ctx: context.Background(), ds: &mockRegionEventDynamicStream{}},
-				failureReporter: newRegionFailureReporter(&upstreamHandle{}, func(*subscribedSpan) {}, nil, nil),
+				requestCache:   newRequestCache(10),
+				controlQueue:   newControlQueue(),
+				store:          &requestedStore{storeAddr: "store-1"},
+				upstream:       &upstreamHandle{},
+				eventSink:      &regionEventSink{ctx: context.Background(), ds: &mockRegionEventDynamicStream{}},
+				failureHandler: newRegionFailureHandler(&upstreamHandle{}, func(*subscribedSpan) {}, nil, nil),
 			}
 			worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
 

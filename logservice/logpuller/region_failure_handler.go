@@ -46,7 +46,7 @@ var (
 	metricKvCongestedCounter          = metrics.EventFeedErrorCounter.WithLabelValues("KvCongested")
 )
 
-type regionFailureReporter struct {
+type regionFailureHandler struct {
 	cache *errCache
 
 	upstream              *upstreamHandle
@@ -55,13 +55,13 @@ type regionFailureReporter struct {
 	scheduleRangeRequest  func(context.Context, heartbeatpb.TableSpan, *subscribedSpan, bool, TaskType)
 }
 
-func newRegionFailureReporter(
+func newRegionFailureHandler(
 	upstream *upstreamHandle,
 	onTableDrained func(*subscribedSpan),
 	scheduleRegionRequest func(context.Context, regionInfo, TaskType),
 	scheduleRangeRequest func(context.Context, heartbeatpb.TableSpan, *subscribedSpan, bool, TaskType),
-) *regionFailureReporter {
-	return &regionFailureReporter{
+) *regionFailureHandler {
+	return &regionFailureHandler{
 		cache:                 newErrCache(),
 		upstream:              upstream,
 		onTableDrained:        onTableDrained,
@@ -73,7 +73,7 @@ func newRegionFailureReporter(
 // Report admits a region failure into the recovery pipeline. It releases the
 // corresponding range lock before enqueueing the failure so new range tasks are
 // not blocked by stale region ownership.
-func (r *regionFailureReporter) Report(errInfo regionErrorInfo) {
+func (r *regionFailureHandler) Report(errInfo regionErrorInfo) {
 	if errInfo.subscribedSpan.rangeLock.UnlockRange(
 		errInfo.span.StartKey, errInfo.span.EndKey,
 		errInfo.verID.GetID(), errInfo.verID.GetVer(), errInfo.resolvedTs()) {
@@ -83,7 +83,7 @@ func (r *regionFailureReporter) Report(errInfo regionErrorInfo) {
 	r.cache.add(errInfo)
 }
 
-func (r *regionFailureReporter) Run(ctx context.Context) error {
+func (r *regionFailureHandler) Run(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	handlePendingFailures := func() error {
@@ -122,7 +122,7 @@ func (r *regionFailureReporter) Run(ctx context.Context) error {
 	}
 }
 
-func (r *regionFailureReporter) handleError(ctx context.Context, errInfo regionErrorInfo) error {
+func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
 	//nolint:errorlint // errors.Cause unwraps repository errors before the concrete type check.
 	if _, requestCancelled := err.(*requestCancelledErr); !requestCancelled {

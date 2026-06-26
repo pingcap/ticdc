@@ -32,7 +32,7 @@ type regionEventSink struct {
 	paused atomic.Bool
 }
 
-func newRegionEventSink(ctx context.Context, failureReporter *regionFailureReporter) *regionEventSink {
+func newRegionEventSink(ctx context.Context, failureHandler *regionFailureHandler) *regionEventSink {
 	sink := &regionEventSink{ctx: ctx}
 	sink.cond = sync.NewCond(&sink.mu)
 
@@ -45,7 +45,7 @@ func newRegionEventSink(ctx context.Context, failureReporter *regionFailureRepor
 	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
 		"log-puller",
-		&regionEventHandler{eventSink: sink, failureReporter: failureReporter},
+		&regionEventHandler{eventSink: sink, failureHandler: failureHandler},
 		option,
 	)
 	ds.Start()
