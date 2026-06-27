@@ -42,7 +42,7 @@ func createTestRegionInfo(subID SubscriptionID, regionID uint64) regionInfo {
 }
 
 func TestRequestCacheAdd_NormalCase(t *testing.T) {
-	cache := newRequestCache(10)
+	cache := newRequestCache(10, nil)
 	ctx := context.Background()
 
 	region := createTestRegionInfo(1, 1)
@@ -61,7 +61,7 @@ func TestRequestCacheAdd_NormalCase(t *testing.T) {
 }
 
 func TestRequestCacheAdd_ForceFlag(t *testing.T) {
-	cache := newRequestCache(1)
+	cache := newRequestCache(1, nil)
 	ctx := context.Background()
 
 	// Fill up the cache
@@ -98,7 +98,7 @@ func TestRequestCacheAdd_ForceFlag(t *testing.T) {
 }
 
 func TestRequestCacheAdd_ContextCancellation(t *testing.T) {
-	cache := newRequestCache(1)
+	cache := newRequestCache(1, nil)
 
 	// Fill up the cache
 	region1 := createTestRegionInfo(1, 1)
@@ -119,7 +119,7 @@ func TestRequestCacheAdd_ContextCancellation(t *testing.T) {
 }
 
 func TestRequestCacheAdd_RetryLimitExceeded(t *testing.T) {
-	cache := newRequestCache(1)
+	cache := newRequestCache(1, nil)
 	ctx := context.Background()
 
 	// Fill up the cache
@@ -136,7 +136,7 @@ func TestRequestCacheAdd_RetryLimitExceeded(t *testing.T) {
 }
 
 func TestRequestCacheAdd_SpaceAvailableNotification(t *testing.T) {
-	cache := newRequestCache(2)
+	cache := newRequestCache(2, nil)
 	ctx := context.Background()
 
 	// Fill up the cache
@@ -174,7 +174,7 @@ func TestRequestCacheAdd_SpaceAvailableNotification(t *testing.T) {
 }
 
 func TestRequestCacheAdd_ConcurrentAdds(t *testing.T) {
-	cache := newRequestCache(10)
+	cache := newRequestCache(10, nil)
 	ctx := context.Background()
 
 	const numGoroutines = 5
@@ -205,7 +205,7 @@ func TestRequestCacheAdd_ConcurrentAdds(t *testing.T) {
 }
 
 func TestRequestCacheAdd_DuplicateQueuedRequestsAreTrackedIndependently(t *testing.T) {
-	cache := newRequestCache(10)
+	cache := newRequestCache(10, nil)
 	ctx := context.Background()
 
 	region := createTestRegionInfo(1, 1)
@@ -227,7 +227,7 @@ func TestRequestCacheAdd_DuplicateQueuedRequestsAreTrackedIndependently(t *testi
 }
 
 func TestRequestCacheFinish_ReleasesSlot(t *testing.T) {
-	cache := newRequestCache(10)
+	cache := newRequestCache(10, nil)
 	ctx := context.Background()
 
 	region := createTestRegionInfo(1, 1)

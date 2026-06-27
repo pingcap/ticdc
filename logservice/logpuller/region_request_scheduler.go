@@ -174,11 +174,6 @@ func (s *regionRequestScheduler) Run(ctx context.Context, eg *errgroup.Group) er
 		}
 
 		region := regionTask.GetRegionInfo()
-		if region.isStopped() {
-			s.broadcastDeregister(region.subscribedSpan.subID, region.filterLoop)
-			continue
-		}
-
 		promotedStore := regionTask.deferredStore.Load()
 		region, ok := s.attachRPCContextForRegion(ctx, region)
 		if !ok {

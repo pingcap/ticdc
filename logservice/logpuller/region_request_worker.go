@@ -130,18 +130,12 @@ func newRegionRequestWorker(
 				zap.Uint64("workerID", worker.workerID),
 				zap.String("addr", store.storeAddr))
 		}
-		for {
-			req, err := worker.requestCache.pop(ctx)
-			if err != nil {
-				return err
-			}
-			if req.regionInfo.isStopped() {
-				req.finish()
-				continue
-			}
-			worker.preFetchForConnecting = req
-			return nil
+		req, err := worker.requestCache.pop(ctx)
+		if err != nil {
+			return err
 		}
+		worker.preFetchForConnecting = req
+		return nil
 	}
 
 	g.Go(func() error {
@@ -180,10 +174,6 @@ func newRegionRequestWorker(
 			}
 			// The store may fail forever, so we need try to re-schedule all pending regions.
 			for _, region := range worker.clearPendingRegions() {
-				if region.isStopped() {
-					// It means it's a special task for stopping the table.
-					continue
-				}
 				worker.failureHandler.Report(newRegionErrorInfo(region, regionErr))
 			}
 			if err := util.Hang(ctx, time.Second); err != nil {
@@ -445,65 +435,59 @@ func (s *regionRequestWorker) processRegionSendTask(
 	regionReq := s.preFetchForConnecting
 	s.preFetchForConnecting = nil
 	for {
+		if regionReq != nil {
+			region := regionReq.regionInfo
+			subID := region.subscribedSpan.subID
+			log.Debug("region request worker gets a singleRegionInfo",
+				zap.Uint64("workerID", s.workerID),
+				zap.Uint64("subscriptionID", uint64(subID)),
+				zap.Uint64("regionID", region.verID.GetID()),
+				zap.String("addr", s.store.storeAddr),
+				zap.Bool("bdrMode", region.filterLoop))
+
+			if region.subscribedSpan.stopped.Load() {
+				// The subscription has been stopped before this queued request is sent.
+				s.failureHandler.Report(newRegionErrorInfo(region, &storeStreamErr{}))
+				regionReq.finish()
+			} else {
+				state := newRegionFeedState(region, uint64(subID), s, regionReq)
+				state.start()
+				s.addRegionState(subID, region.verID.GetID(), state)
+				// Mark the request as sent before sending it.
+				// Otherwise there is a race with the receiver goroutine:
+				//  1. addRegionState makes the region visible to error handling.
+				//  2. doSend sends the request.
+				//  3. the receiver goroutine may receive a region error immediately.
+				//  4. markStopped runs before markSent, so the request may be finished
+				//     before it is marked as sent.
+				//  5. the sender goroutine then calls markSent and must not make the
+				//     finished request live again.
+				//
+				// Tracking the request before Send keeps requestedRegions and
+				// request lifecycle visible in the same order and avoids leaving stale
+				// requests behind.
+				regionReq.markSent()
+				if err := doSend(s.createRegionRequest(region)); err != nil {
+					state.markStopped(err)
+					return err
+				}
+			}
+			regionReq = nil
+			continue
+		}
+
 		if err := drainControl(); err != nil {
 			return err
 		}
-		if regionReq == nil {
-			if regionReq = s.requestCache.tryPop(); regionReq != nil {
-				continue
-			}
-			select {
-			case <-s.controlQueue.notify:
-				continue
-			case <-s.requestCache.readyAvailable:
-				regionReq = s.requestCache.tryPop()
-				continue
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+		if regionReq = s.requestCache.tryPop(); regionReq != nil {
+			continue
 		}
-
-		region := regionReq.regionInfo
-		subID := region.subscribedSpan.subID
-		log.Debug("region request worker gets a singleRegionInfo",
-			zap.Uint64("workerID", s.workerID),
-			zap.Uint64("subscriptionID", uint64(subID)),
-			zap.Uint64("regionID", region.verID.GetID()),
-			zap.String("addr", s.store.storeAddr),
-			zap.Bool("bdrMode", region.filterLoop))
-
-		if region.isStopped() {
-			regionReq.finish()
-		} else if region.subscribedSpan.stopped.Load() {
-			// It can be skipped directly because there must be no pending states from
-			// the stopped subscribedTable, or the special singleRegionInfo for stopping
-			// the table will be handled later.
-			s.failureHandler.Report(newRegionErrorInfo(region, &storeStreamErr{}))
-			regionReq.finish()
-		} else {
-			state := newRegionFeedState(region, uint64(subID), s, regionReq)
-			state.start()
-			s.addRegionState(subID, region.verID.GetID(), state)
-			// Mark the request as sent before sending it.
-			// Otherwise there is a race with the receiver goroutine:
-			//  1. addRegionState makes the region visible to error handling.
-			//  2. doSend sends the request.
-			//  3. the receiver goroutine may receive a region error immediately.
-			//  4. markStopped runs before markSent, so the request may be finished
-			//     before it is marked as sent.
-			//  5. the sender goroutine then calls markSent and must not make the
-			//     finished request live again.
-			//
-			// Tracking the request before Send keeps requestedRegions and
-			// request lifecycle visible in the same order and avoids leaving stale
-			// requests behind.
-			regionReq.markSent()
-			if err := doSend(s.createRegionRequest(region)); err != nil {
-				state.markStopped(err)
-				return err
-			}
+		select {
+		case <-s.controlQueue.notify:
+		case <-s.requestCache.readyAvailable:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		regionReq = nil
 	}
 }
 

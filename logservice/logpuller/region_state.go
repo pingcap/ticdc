@@ -48,11 +48,6 @@ type regionInfo struct {
 	filterLoop bool
 }
 
-func (s *regionInfo) isStopped() bool {
-	// lockedRange only nil when the region's subscribedTable is stopped.
-	return s.lockedRangeState == nil
-}
-
 func newRegionInfo(
 	verID tikv.RegionVerID,
 	span heartbeatpb.TableSpan,

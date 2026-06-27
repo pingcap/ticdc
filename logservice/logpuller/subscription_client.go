@@ -314,8 +314,7 @@ func (s *subscriptionClient) setTableStopped(rt *subscribedSpan) {
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
 	// Set stopped to true so we can stop handling region events from the table.
-	// Then send a special singleRegionInfo to regionRouter to deregister the table
-	// from all TiKV instances.
+	// Then broadcast deregister requests to all region request workers.
 	if rt.stopped.CompareAndSwap(false, true) {
 		s.regionScheduler.broadcastDeregister(rt.subID, rt.filterLoop)
 		if rt.rangeLock.Stop() {

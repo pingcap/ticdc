@@ -78,7 +78,7 @@ func TestRegionStatesOperation(t *testing.T) {
 
 func TestAddRegionStateReleasesOverwrittenRequest(t *testing.T) {
 	worker := &regionRequestWorker{
-		requestCache: newRequestCache(10),
+		requestCache: newRequestCache(10, nil),
 	}
 	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
 
@@ -109,7 +109,7 @@ func TestAddRegionStateReleasesOverwrittenRequest(t *testing.T) {
 
 func TestClearPendingRegionsReleaseSlotForPreFetchedRegion(t *testing.T) {
 	worker := &regionRequestWorker{
-		requestCache: newRequestCache(10),
+		requestCache: newRequestCache(10, nil),
 	}
 
 	ctx := context.Background()
@@ -295,7 +295,7 @@ func BenchmarkDispatchResolvedTsEventSmallBatchCurrent(b *testing.B) {
 
 func TestClearPendingRegionsDoesNotReturnStoppedSentRegion(t *testing.T) {
 	worker := &regionRequestWorker{
-		requestCache: newRequestCache(10),
+		requestCache: newRequestCache(10, nil),
 	}
 	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
 
@@ -327,7 +327,7 @@ func TestClearPendingRegionsDoesNotReturnStoppedSentRegion(t *testing.T) {
 
 func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	worker := &regionRequestWorker{
-		requestCache:   newRequestCache(10),
+		requestCache:   newRequestCache(10, nil),
 		controlQueue:   newControlQueue(),
 		store:          &requestedStore{storeAddr: "store-1"},
 		upstream:       &upstreamHandle{},
@@ -379,7 +379,7 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			worker := &regionRequestWorker{
-				requestCache:   newRequestCache(10),
+				requestCache:   newRequestCache(10, nil),
 				controlQueue:   newControlQueue(),
 				store:          &requestedStore{storeAddr: "store-1"},
 				upstream:       &upstreamHandle{},

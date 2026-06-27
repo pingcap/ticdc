@@ -119,19 +119,15 @@ type requestCache struct {
 	onSpaceAvailable func()
 }
 
-func newRequestCache(maxPendingCount int, onSpaceAvailable ...func()) *requestCache {
-	res := &requestCache{
-		requests:        make(map[*regionReq]struct{}),
-		ready:           make([]*regionReq, 0, maxPendingCount),
-		maxPendingCount: maxPendingCount,
-		readyAvailable:  make(chan struct{}, 1),
-		spaceAvailable:  make(chan struct{}, 1),
+func newRequestCache(maxPendingCount int, onSpaceAvailable func()) *requestCache {
+	return &requestCache{
+		requests:         make(map[*regionReq]struct{}),
+		ready:            make([]*regionReq, 0, maxPendingCount),
+		maxPendingCount:  maxPendingCount,
+		readyAvailable:   make(chan struct{}, 1),
+		spaceAvailable:   make(chan struct{}, 1),
+		onSpaceAvailable: onSpaceAvailable,
 	}
-	if len(onSpaceAvailable) > 0 {
-		res.onSpaceAvailable = onSpaceAvailable[0]
-	}
-
-	return res
 }
 
 // add admits a data request into the worker window.

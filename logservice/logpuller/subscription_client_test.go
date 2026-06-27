@@ -454,7 +454,7 @@ func TestEnqueueDeregisterToAllStoresUsesControlQueue(t *testing.T) {
 	scheduler := newRegionRequestScheduler(client)
 
 	worker := &regionRequestWorker{
-		requestCache: newRequestCache(1),
+		requestCache: newRequestCache(1, nil),
 		controlQueue: newControlQueue(),
 	}
 	store := &requestedStore{scheduler: scheduler, storeAddr: "store-1"}
