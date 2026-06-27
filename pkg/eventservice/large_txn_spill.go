@@ -36,6 +36,9 @@ func newLargeTxnInsertSpill(dir string) (*largeTxnInsertSpill, error) {
 	if dir == "" {
 		return nil, errors.New("large txn spill dir is empty")
 	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, errors.Trace(err)
+	}
 
 	file, err := os.CreateTemp(dir, "eventservice-large-txn-insert-*.spill")
 	if err != nil {

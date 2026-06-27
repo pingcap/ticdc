@@ -16,6 +16,7 @@ package eventservice
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -50,6 +51,14 @@ func (g *stubEventGetter) GetIterator(
 
 func makeDispatcherReady(disp *dispatcherStat) {
 	disp.setHandshaked()
+}
+
+func setLargeTxnInsertSpillThresholdForTest(t *testing.T, threshold int64) {
+	original := largeTxnInsertSpillThreshold
+	largeTxnInsertSpillThreshold = threshold
+	t.Cleanup(func() {
+		largeTxnInsertSpillThreshold = original
+	})
 }
 
 func (m *mockMounter) DecodeToChunk(rawKV *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error) {
@@ -487,6 +496,8 @@ func TestEventScannerSplitsLargeTxnWithRowLevelProgress(t *testing.T) {
 }
 
 func TestEventScannerSpillsSplitUKUpdateInLargeTxn(t *testing.T) {
+	setLargeTxnInsertSpillThresholdForTest(t, 0)
+
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
@@ -569,6 +580,8 @@ func TestEventScannerSpillsSplitUKUpdateInLargeTxn(t *testing.T) {
 }
 
 func TestEventScannerDrainsSpillBeforeFollowingSameCommitTxn(t *testing.T) {
+	setLargeTxnInsertSpillThresholdForTest(t, 0)
+
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
@@ -1025,11 +1038,20 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 0: create a new DML processor
 	t.Run("CreateNewDMLProcessor", func(t *testing.T) {
+		originalConfig := config.GetGlobalServerConfig().Clone()
+		cfg := originalConfig.Clone()
+		cfg.DataDir = t.TempDir()
+		config.StoreGlobalServerConfig(cfg)
+		t.Cleanup(func() {
+			config.StoreGlobalServerConfig(originalConfig)
+		})
+
 		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		require.NotNil(t, processor)
 		require.NotNil(t, processor.batchDML)
 		require.Nil(t, processor.currentTxn)
 		require.Empty(t, processor.insertRowCache)
+		require.Equal(t, filepath.Join(cfg.DataDir, largeTxnInsertSpillDirName), processor.spillDir)
 	})
 
 	// Test case 1: commitTxn with no current DML, happens when the iter is nil.
@@ -1225,7 +1247,32 @@ func TestDMLProcessor(t *testing.T) {
 		require.Equal(t, int32(2), processor.batchDML.Len())
 	})
 
-	t.Run("UpdateThatChangesUKSpillsInsertWhenSplitTxn", func(t *testing.T) {
+	t.Run("UpdateThatChangesUKCachesInsertWhenSplitTxnIsBelowSpillThreshold", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
+		disp := &dispatcherStat{id: dispatcherID}
+		processor.dispatcherStat = disp
+		processor.spillDir = t.TempDir()
+
+		helper.Tk().MustExec("use test")
+		ddlEvent := helper.DDL2Event("create table t4 (id int primary key, a int(50), b char(50), unique key uk_a(a))")
+		tableInfo := ddlEvent.TableInfo
+		tableID := ddlEvent.GetTableID()
+
+		_, updateEvent := helper.DML2UpdateEvent("test", "t4",
+			"insert into test.t4(id, a, b) values (0, 1, 'b0')",
+			"update test.t4 set a = 2 where id = 0")
+		require.NoError(t, processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, true))
+		require.NoError(t, processor.appendRow(updateEvent))
+
+		require.Equal(t, 1, len(processor.insertRowCache))
+		require.Nil(t, disp.getLargeTxnState())
+
+		require.NoError(t, processor.commitTxn())
+		require.Empty(t, processor.insertRowCache)
+		require.Equal(t, int32(2), processor.batchDML.Len())
+	})
+
+	t.Run("UpdateThatChangesUKSpillsInsertWhenSplitTxnExceedsThreshold", func(t *testing.T) {
 		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		disp := &dispatcherStat{id: dispatcherID}
 		processor.dispatcherStat = disp
@@ -1241,10 +1288,53 @@ func TestDMLProcessor(t *testing.T) {
 			"update test.t3 set a = 2 where id = 0")
 		require.NoError(t, processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, true))
 		require.NoError(t, processor.appendRow(updateEvent))
+		require.Equal(t, 1, len(processor.insertRowCache))
+		require.Nil(t, disp.getLargeTxnState())
+
+		processor.currentTxn.rawKVBytes = largeTxnInsertSpillThreshold
+		require.NoError(t, processor.appendRow(updateEvent))
 
 		require.Empty(t, processor.insertRowCache)
 		state := disp.getLargeTxnState()
 		require.NotNil(t, state)
+		insertRow, err := state.nextInsert()
+		require.NoError(t, err)
+		require.Equal(t, common.OpTypePut, insertRow.OpType)
+		require.False(t, insertRow.IsUpdate())
+		insertRow, err = state.nextInsert()
+		require.NoError(t, err)
+		require.Equal(t, common.OpTypePut, insertRow.OpType)
+		require.False(t, insertRow.IsUpdate())
+		require.NoError(t, disp.cleanupLargeTxnState())
+	})
+
+	t.Run("UpdateThatChangesUKKeepsSpillingAfterLargeTxnResume", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
+		disp := &dispatcherStat{id: dispatcherID}
+		processor.dispatcherStat = disp
+		processor.spillDir = t.TempDir()
+
+		helper.Tk().MustExec("use test")
+		ddlEvent := helper.DDL2Event("create table t5 (id int primary key, a int(50), b char(50), unique key uk_a(a))")
+		tableInfo := ddlEvent.TableInfo
+		tableID := ddlEvent.GetTableID()
+
+		_, updateEvent := helper.DML2UpdateEvent("test", "t5",
+			"insert into test.t5(id, a, b) values (0, 1, 'b0')",
+			"update test.t5 set a = 2 where id = 0")
+		require.NoError(t, processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, true))
+
+		state, err := disp.getOrCreateLargeTxnState(
+			processor.spillDir,
+			tableID,
+			tableInfo,
+			updateEvent.StartTs,
+			updateEvent.CRTs,
+		)
+		require.NoError(t, err)
+		require.NoError(t, processor.appendRow(updateEvent))
+
+		require.Empty(t, processor.insertRowCache)
 		insertRow, err := state.nextInsert()
 		require.NoError(t, err)
 		require.Equal(t, common.OpTypePut, insertRow.OpType)

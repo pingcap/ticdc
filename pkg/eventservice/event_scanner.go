@@ -16,7 +16,7 @@ package eventservice
 import (
 	"context"
 	"io"
-	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/pingcap/log"
@@ -470,6 +470,9 @@ func (s *eventScanner) finishCurrentTxn(
 	currentCommitTs := processor.currentTxn.CurrentDMLEvent.GetCommitTs()
 
 	if processor.hasSpilledInsertsForCurrentTxn() && merger.hasDDLAtCommitTs(currentCommitTs) {
+		if err := processor.flushCachedInsertRows(); err != nil {
+			return false, err
+		}
 		if err := processor.flushSpilledInsertsIntoCurrentTxn(); err != nil {
 			return false, err
 		}
@@ -509,6 +512,9 @@ func (s *eventScanner) canInterruptCurrentTxn(
 	position common.ScanPosition,
 ) bool {
 	if len(position) == 0 || !session.dispatcherStat.txnAtomicity.ShouldSplitTxn() {
+		return false
+	}
+	if len(processor.insertRowCache) > 0 {
 		return false
 	}
 	if !merger.canInterrupt(rawEvent.CRTs, processor.batchDML) {
@@ -906,7 +912,19 @@ type TxnEvent struct {
 	CurrentDMLEvent  *event.DMLEvent
 	DMLEventMaxRows  int32
 	DMLEventMaxBytes int64
+	rawKVBytes       int64
 	shouldSplitTxn   bool
+}
+
+const (
+	largeTxnInsertSpillDirName          = "eventservice"
+	defaultLargeTxnInsertSpillThreshold = int64(128 * 1024 * 1024)
+)
+
+var largeTxnInsertSpillThreshold = defaultLargeTxnInsertSpillThreshold
+
+func getLargeTxnInsertSpillDir() string {
+	return filepath.Join(config.GetGlobalServerConfig().DataDir, largeTxnInsertSpillDirName)
 }
 
 func newTxnEvent(
@@ -955,6 +973,14 @@ func (t *TxnEvent) AppendRow(
 	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter, filterContext)
 }
 
+func (t *TxnEvent) observeRawKVBytes(rawEvent *common.RawKVEntry) {
+	t.rawKVBytes += rawEvent.GetSize()
+}
+
+func (t *TxnEvent) shouldSpillSplitUpdateInsert() bool {
+	return t.shouldSplitTxn && t.rawKVBytes > largeTxnInsertSpillThreshold
+}
+
 // dmlProcessor handles DML event processing and batching
 type dmlProcessor struct {
 	mounter      event.Mounter
@@ -995,7 +1021,7 @@ func newDMLProcessor(
 		filterContext:        filterContext,
 		batchDML:             event.NewBatchDMLEvent(),
 		insertRowCache:       make([]*common.RawKVEntry, 0),
-		spillDir:             os.TempDir(),
+		spillDir:             getLargeTxnInsertSpillDir(),
 		outputRawChangeEvent: outputRawChangeEvent,
 		mode:                 mode,
 	}
@@ -1019,16 +1045,48 @@ func (p *dmlProcessor) startTxn(
 }
 
 func (p *dmlProcessor) commitTxn() error {
-	if p.currentTxn != nil && len(p.insertRowCache) > 0 {
-		for _, insertRow := range p.insertRowCache {
-			if err := p.currentTxn.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter, p.filterContext); err != nil {
-				return err
-			}
-		}
-		p.insertRowCache = make([]*common.RawKVEntry, 0)
+	if err := p.flushCachedInsertRows(); err != nil {
+		return err
 	}
 	p.currentTxn = nil
 	return nil
+}
+
+func (p *dmlProcessor) flushCachedInsertRows() error {
+	if p.currentTxn == nil || len(p.insertRowCache) == 0 {
+		return nil
+	}
+	for _, insertRow := range p.insertRowCache {
+		if err := p.currentTxn.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter, p.filterContext); err != nil {
+			return err
+		}
+	}
+	p.insertRowCache = make([]*common.RawKVEntry, 0)
+	return nil
+}
+
+func (p *dmlProcessor) spillCachedInsertRows() error {
+	if len(p.insertRowCache) == 0 {
+		return nil
+	}
+	state, err := p.getOrCreateLargeTxnState()
+	if err != nil {
+		return err
+	}
+	for _, insertRow := range p.insertRowCache {
+		if err := state.appendInsert(insertRow); err != nil {
+			return err
+		}
+	}
+	p.insertRowCache = make([]*common.RawKVEntry, 0)
+	return nil
+}
+
+func (p *dmlProcessor) shouldSpillSplitUpdateInsert() bool {
+	if p.currentTxn == nil {
+		return false
+	}
+	return p.currentTxn.shouldSpillSplitUpdateInsert() || p.hasSpilledInsertsForCurrentTxn()
 }
 
 func (p *dmlProcessor) hasSpilledInsertsForCurrentTxn() bool {
@@ -1072,6 +1130,20 @@ func (p *dmlProcessor) flushSpilledInsertsIntoCurrentTxn() error {
 	}
 }
 
+func (p *dmlProcessor) getOrCreateLargeTxnState() (*largeTxnScanState, error) {
+	if p.dispatcherStat == nil {
+		return nil, errors.New("dispatcher stat is required for large txn update spill")
+	}
+	currentDML := p.currentTxn.CurrentDMLEvent
+	return p.dispatcherStat.getOrCreateLargeTxnState(
+		p.spillDir,
+		currentDML.GetTableID(),
+		currentDML.TableInfo,
+		currentDML.GetStartTs(),
+		currentDML.GetCommitTs(),
+	)
+}
+
 func (p *dmlProcessor) appendInsertRow(rawEvent *common.RawKVEntry) error {
 	if p.currentTxn == nil {
 		log.Panic("no current DML event to append to")
@@ -1112,6 +1184,12 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	}
 
 	rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
+	p.currentTxn.observeRawKVBytes(rawEvent)
+	if p.shouldSpillSplitUpdateInsert() {
+		if err := p.spillCachedInsertRows(); err != nil {
+			return err
+		}
+	}
 
 	rawType := rawEvent.GetType()
 	if !rawEvent.IsUpdate() {
@@ -1143,18 +1221,8 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	if err != nil {
 		return err
 	}
-	if p.currentTxn.shouldSplitTxn {
-		if p.dispatcherStat == nil {
-			return errors.New("dispatcher stat is required for large txn update spill")
-		}
-		currentDML := p.currentTxn.CurrentDMLEvent
-		state, err := p.dispatcherStat.getOrCreateLargeTxnState(
-			p.spillDir,
-			currentDML.GetTableID(),
-			currentDML.TableInfo,
-			currentDML.GetStartTs(),
-			currentDML.GetCommitTs(),
-		)
+	if p.shouldSpillSplitUpdateInsert() {
+		state, err := p.getOrCreateLargeTxnState()
 		if err != nil {
 			return err
 		}

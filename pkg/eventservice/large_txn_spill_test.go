@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -53,6 +54,19 @@ func TestLargeTxnInsertSpillReadOrder(t *testing.T) {
 	actual, err := reader.Next()
 	require.ErrorIs(t, err, io.EOF)
 	require.Nil(t, actual)
+}
+
+func TestLargeTxnInsertSpillCreatesDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data-dir", largeTxnInsertSpillDirName)
+
+	spill, err := newLargeTxnInsertSpill(dir)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, spill.Cleanup())
+	}()
+
+	require.DirExists(t, dir)
+	require.Equal(t, dir, filepath.Dir(spill.path))
 }
 
 func TestLargeTxnInsertSpillCleanup(t *testing.T) {
