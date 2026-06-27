@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -405,6 +406,112 @@ func (s *mockDynamicStream) SetAreaSettings(_ int, _ dynstream.AreaSettings) {}
 
 func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] {
 	return dynstream.Metrics[int, SubscriptionID]{}
+}
+
+func TestInitialScanTaskPriority(t *testing.T) {
+	restore := setInitialScanLowPriorityThresholdForTest(t, 30*time.Minute)
+	defer restore()
+
+	currentTime := time.Date(2026, time.June, 27, 12, 0, 0, 0, time.UTC)
+	pdClock := pdutil.NewClock4Test()
+	pdClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(currentTime))
+	client := &subscriptionClient{
+		pdClock: pdClock,
+	}
+
+	for _, tc := range []struct {
+		name     string
+		startTs  uint64
+		expected TaskType
+	}{
+		{
+			name:     "zero start ts",
+			startTs:  0,
+			expected: TaskLowPrior,
+		},
+		{
+			name:     "recent start ts",
+			startTs:  oracle.GoTimeToTS(currentTime.Add(-29 * time.Minute)),
+			expected: TaskHighPrior,
+		},
+		{
+			name:     "threshold boundary",
+			startTs:  oracle.GoTimeToTS(currentTime.Add(-30 * time.Minute)),
+			expected: TaskHighPrior,
+		},
+		{
+			name:     "old start ts",
+			startTs:  oracle.GoTimeToTS(currentTime.Add(-31 * time.Minute)),
+			expected: TaskLowPrior,
+		},
+		{
+			name:     "future start ts",
+			startTs:  oracle.GoTimeToTS(currentTime.Add(time.Minute)),
+			expected: TaskHighPrior,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.expected, client.initialScanTaskPriority(tc.startTs))
+		})
+	}
+}
+
+func TestSubscribeUsesInitialScanTaskPriority(t *testing.T) {
+	restore := setInitialScanLowPriorityThresholdForTest(t, 30*time.Minute)
+	defer restore()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	currentTime := time.Date(2026, time.June, 27, 12, 0, 0, 0, time.UTC)
+	pdClock := pdutil.NewClock4Test()
+	pdClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(currentTime))
+	client := &subscriptionClient{
+		ctx:         ctx,
+		ds:          &mockDynamicStream{},
+		rangeTaskCh: make(chan rangeTask, 2),
+		pdClock:     pdClock,
+	}
+	client.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
+
+	span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
+	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
+	advanceResolvedTs := func(uint64) {}
+
+	client.Subscribe(
+		"test/recent-changefeed",
+		SubscriptionID(1),
+		span,
+		oracle.GoTimeToTS(currentTime.Add(-time.Minute)),
+		consumeKVEvents,
+		advanceResolvedTs,
+		0,
+		false,
+	)
+	client.Subscribe(
+		"test/old-changefeed",
+		SubscriptionID(2),
+		span,
+		oracle.GoTimeToTS(currentTime.Add(-31*time.Minute)),
+		consumeKVEvents,
+		advanceResolvedTs,
+		0,
+		false,
+	)
+
+	require.Equal(t, TaskHighPrior, (<-client.rangeTaskCh).priority)
+	require.Equal(t, TaskLowPrior, (<-client.rangeTaskCh).priority)
+}
+
+func setInitialScanLowPriorityThresholdForTest(t *testing.T, threshold time.Duration) func() {
+	t.Helper()
+	oldConfig := config.GetGlobalServerConfig()
+	testConfig := oldConfig.Clone()
+	testConfig.Debug.Puller.OldStartTsScanLowPriorityThreshold = config.TomlDuration(threshold)
+	config.StoreGlobalServerConfig(testConfig)
+	return func() {
+		config.StoreGlobalServerConfig(oldConfig)
+	}
 }
 
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {

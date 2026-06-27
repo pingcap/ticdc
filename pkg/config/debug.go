@@ -19,6 +19,12 @@ import (
 	"github.com/pingcap/errors"
 )
 
+const (
+	// DefaultOldStartTsScanLowPriorityThreshold is the default age threshold for
+	// classifying initial scan tasks as low priority.
+	DefaultOldStartTsScanLowPriorityThreshold = 30 * time.Minute
+)
+
 // DebugConfig represents config for ticdc unexposed feature configurations
 type DebugConfig struct {
 	DB *DBConfig `toml:"db" json:"db"`
@@ -49,6 +55,7 @@ func (c *DebugConfig) ValidateAndAdjust() error {
 	if err := c.Scheduler.ValidateAndAdjust(); err != nil {
 		return errors.Trace(err)
 	}
+	c.Puller.ValidateAndAdjust()
 
 	return nil
 }
@@ -67,6 +74,9 @@ type PullerConfig struct {
 	// For example, if PendingRegionRequestQueueSize is 32 and there are 8 workers connecting to the same store,
 	// each worker's queue size will be 32 / 8 = 4.
 	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending_region_request_queue_size"`
+	// OldStartTsScanLowPriorityThreshold is the startTs age threshold for initial scans.
+	// Initial scans older than this threshold are scheduled as low priority.
+	OldStartTsScanLowPriorityThreshold TomlDuration `toml:"old-start-ts-scan-low-priority-threshold" json:"old_start_ts_scan_low_priority_threshold"`
 }
 
 // NewDefaultPullerConfig return the default puller configuration
@@ -76,6 +86,15 @@ func NewDefaultPullerConfig() *PullerConfig {
 		ResolvedTsStuckInterval:        TomlDuration(5 * time.Minute),
 		LogRegionDetails:               false,
 		PendingRegionRequestQueueSize:  32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
+		OldStartTsScanLowPriorityThreshold: TomlDuration(
+			DefaultOldStartTsScanLowPriorityThreshold),
+	}
+}
+
+// ValidateAndAdjust validates and adjusts puller configuration.
+func (c *PullerConfig) ValidateAndAdjust() {
+	if c.OldStartTsScanLowPriorityThreshold <= 0 {
+		c.OldStartTsScanLowPriorityThreshold = TomlDuration(DefaultOldStartTsScanLowPriorityThreshold)
 	}
 }
 

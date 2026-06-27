@@ -373,16 +373,35 @@ func (s *subscriptionClient) Subscribe(
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
+	initialPriority := s.initialScanTaskPriority(startTs)
 	select {
 	case <-s.ctx.Done():
 		log.Warn("subscribes span failed, the subscription client has closed")
-	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: rt.filterLoop, priority: TaskLowPrior}:
+	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: rt.filterLoop, priority: initialPriority}:
 		log.Info("subscribes span done",
 			zap.String("changefeedID", changefeedID),
 			zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
+			zap.String("initialScanPriority", taskTypeLogName(initialPriority)),
 			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
 	}
+}
+
+func (s *subscriptionClient) initialScanTaskPriority(startTs uint64) TaskType {
+	if startTs == 0 {
+		return TaskLowPrior
+	}
+
+	threshold := time.Duration(config.GetGlobalServerConfig().Debug.Puller.OldStartTsScanLowPriorityThreshold)
+	if threshold <= 0 {
+		threshold = config.DefaultOldStartTsScanLowPriorityThreshold
+	}
+
+	startTime := oracle.GetTimeFromTS(startTs)
+	if s.pdClock.CurrentTime().Sub(startTime) > threshold {
+		return TaskLowPrior
+	}
+	return TaskHighPrior
 }
 
 // Unsubscribe the given table span. All covered regions will be deregistered asynchronously.
