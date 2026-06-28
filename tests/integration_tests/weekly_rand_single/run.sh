@@ -79,6 +79,13 @@ function write_runner_config() {
     "upstream_status_host": "$UP_TIDB_HOST",
     "upstream_status_port": $UP_TIDB_STATUS
   },
+  "dml": {
+    "max_workers": 5,
+    "initial_workers": 3,
+    "big_txn_interval": "100s",
+    "big_txn_rows_min": 40,
+    "big_txn_rows_max": 80
+  },
   "bootstrap": {
     "db_count": 5,
     "tables_per_db": 20,
