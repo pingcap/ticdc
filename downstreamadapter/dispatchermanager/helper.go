@@ -722,15 +722,13 @@ func (h *RedoResolvedTsForwardMessageHandler) Handle(dispatcherManager *Dispatch
 		return false
 	}
 	ok := dispatcherManager.SetRedoResolvedTs(msg.ResolvedTs)
-	var dispatchers []*dispatcher.EventDispatcher
+	// Redo resolved-ts is already atomic; wake dispatchers outside the maintainer
+	// fence so scheduler/bootstrap requests do not wait for a full dispatcher scan.
+	dispatcherManager.MaintainerFenceMu.Unlock()
 	if ok {
 		dispatcherManager.dispatcherMap.ForEach(func(_ common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
-			dispatchers = append(dispatchers, dispatcher)
+			dispatcher.HandleCacheEvents()
 		})
-	}
-	dispatcherManager.MaintainerFenceMu.Unlock()
-	for _, dispatcher := range dispatchers {
-		dispatcher.HandleCacheEvents()
 	}
 	return false
 }
