@@ -71,10 +71,6 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-<<<<<<< HEAD
-	defer func() {
-		if err != nil {
-=======
 	return newWithComponent(
 		ctx,
 		changefeedID,
@@ -135,19 +131,13 @@ func newWithComponent(
 			if statistics != nil {
 				statistics.Close()
 			}
->>>>>>> 35f308fb1 (sink: fix a panic when closing pulsar sink (#4938))
 			comp.close()
 		}
 	}()
 
 	failpointCh := make(chan error, 1)
-<<<<<<< HEAD
-	statistics := metrics.NewStatistics(changefeedID, "pulsar")
-	dmlProducer, err := newDMLProducers(changefeedID, comp, failpointCh)
-=======
 	statistics = metrics.NewStatistics(changefeedID, "pulsar")
 	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
->>>>>>> 35f308fb1 (sink: fix a panic when closing pulsar sink (#4938))
 	if err != nil {
 		return nil, err
 	}
