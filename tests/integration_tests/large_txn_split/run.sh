@@ -7,6 +7,7 @@ source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
+CDC_ADDR="127.0.0.1:18300"
 
 function prepare() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
@@ -19,11 +20,13 @@ function prepare() {
 	run_cdc_server \
 		--workdir $WORK_DIR \
 		--binary $CDC_BINARY \
-		--addr "127.0.0.1:8300" \
+		--addr "$CDC_ADDR" \
 		--pd $pd_addr \
 		--config "$CUR/conf/server.toml"
 
-	cdc_cli_changefeed create --sink-uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/?transaction-atomicity=none"
+	cdc_cli_changefeed create \
+		--server "$CDC_ADDR" \
+		--sink-uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/?transaction-atomicity=none"
 }
 
 function generate_workload() {
