@@ -26,6 +26,37 @@ function prepare() {
 	cdc_cli_changefeed create --sink-uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/?transaction-atomicity=none"
 }
 
+function generate_workload() {
+	local sql_file=$1
+	local rows=2048
+
+	{
+		echo "USE large_txn_split;"
+		echo "CREATE TABLE IF NOT EXISTS large_txn_table (id INT AUTO_INCREMENT PRIMARY KEY, batch_id INT, data LONGTEXT);"
+
+		echo "BEGIN;"
+		for i in $(seq 1 "$rows"); do
+			echo "INSERT INTO large_txn_table (batch_id, data) VALUES (0, REPEAT('a', 1024));"
+		done
+		echo "COMMIT;"
+
+		echo "BEGIN;"
+		echo "UPDATE large_txn_table SET data = REPEAT('b', 1024) WHERE batch_id = 0;"
+		echo "COMMIT;"
+
+		echo "BEGIN;"
+		echo "DELETE FROM large_txn_table WHERE batch_id = 0;"
+		echo "COMMIT;"
+
+		echo "TRUNCATE TABLE large_txn_table;"
+		echo "BEGIN;"
+		for i in $(seq 1 "$rows"); do
+			echo "INSERT INTO large_txn_table (batch_id, data) VALUES (1, REPEAT('c', 1024));"
+		done
+		echo "COMMIT;"
+	} >"$sql_file"
+}
+
 trap 'stop_test $WORK_DIR' EXIT
 
 if [ "$SINK_TYPE" == "mysql" ]; then
@@ -35,10 +66,9 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 
 	echo "[$(date)] Starting large transaction split workload..."
 
-	GO111MODULE=on go run "$CUR/../large_txn/main.go" \
-		-dsn "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/large_txn_split" \
-		--rows=2048 \
-		--txns=1
+	workload_sql=$WORK_DIR/large_txn_split_workload.sql
+	generate_workload "$workload_sql"
+	run_sql_file "$workload_sql" ${UP_TIDB_HOST} ${UP_TIDB_PORT} large_txn_split
 
 	echo "[$(date)] Workload completed, verifying split path and data consistency..."
 
