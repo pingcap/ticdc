@@ -382,37 +382,6 @@ func TestPendingMessageQueue_NewerMaintainerEpochOverridesPendingRequest(t *test
 	require.Equal(t, uint64(2), req.MaintainerEpoch)
 }
 
-func TestPendingMessageQueue_CloseRequestUpgradeAfterPopKeepsReturnedMessageStable(t *testing.T) {
-	t.Parallel()
-
-	q := newPendingMessageQueue()
-	cfID := common.NewChangeFeedIDWithName("cf", "default")
-	key := pendingMessageKey{
-		changefeedID: cfID,
-		msgType:      messaging.TypeMaintainerCloseRequest,
-	}
-
-	msgFalse := messaging.NewSingleTargetMessage(
-		node.ID("to"),
-		messaging.DispatcherManagerManagerTopic,
-		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB(), Removed: false},
-	)
-	msgTrue := messaging.NewSingleTargetMessage(
-		node.ID("to"),
-		messaging.DispatcherManagerManagerTopic,
-		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB(), Removed: true},
-	)
-
-	require.True(t, q.TryEnqueue(key, msgFalse))
-	poppedMsg, ok := q.Pop()
-	require.True(t, ok)
-	require.NotNil(t, poppedMsg)
-
-	require.True(t, q.TryEnqueue(key, msgTrue))
-	req2 := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
-	require.False(t, req2.Removed)
-}
-
 func TestPendingMessageQueue_CloseRequestUpgradeAfterPopRequeuesNextRound(t *testing.T) {
 	t.Parallel()
 
@@ -444,6 +413,7 @@ func TestPendingMessageQueue_CloseRequestUpgradeAfterPopRequeuesNextRound(t *tes
 	require.False(t, req.Removed)
 
 	require.True(t, q.TryEnqueue(key, msgTrue))
+	require.False(t, req.Removed)
 
 	type popResult struct {
 		msg *messaging.TargetMessage
@@ -594,13 +564,7 @@ func TestDispatcherOrchestratorLocalFenceFencesInitializingManagersImmediately(t
 }
 
 func TestBootstrapResponseRestoresCurrentOperatorsAndStaleRemoves(t *testing.T) {
-	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
-	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
-	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
-	heartbeatCollector.Run(context.Background())
-	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
-	t.Cleanup(heartbeatCollector.Close)
-	appcontext.SetService(appcontext.EventCollector, eventcollector.New(node.ID("receiver")))
+	setupBootstrapTestServices(t, messaging.NewMockMessageCenter(), true)
 
 	cfID := common.NewChangeFeedIDWithName("cf", "default")
 	currentDispatcherID := common.NewDispatcherID()
@@ -665,12 +629,7 @@ func TestBootstrapResponseRestoresCurrentOperatorsAndStaleRemoves(t *testing.T) 
 }
 
 func TestBootstrapResponseUsesSpanSnapshotForStaleRemove(t *testing.T) {
-	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
-	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
-	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
-	heartbeatCollector.Run(context.Background())
-	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
-	t.Cleanup(heartbeatCollector.Close)
+	setupBootstrapTestServices(t, messaging.NewMockMessageCenter(), false)
 
 	cfID := common.NewChangeFeedIDWithName("cf", "default")
 	manager, err := dispatchermanager.NewDispatcherManager(
@@ -727,13 +686,7 @@ func TestBootstrapResponseUsesSpanSnapshotForStaleRemove(t *testing.T) {
 
 func TestHandleBootstrapTriggerMismatchKeepsOldMaintainerOwner(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
-	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
-	appcontext.SetService(appcontext.MessageCenter, mc)
-	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
-	heartbeatCollector.Run(context.Background())
-	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
-	t.Cleanup(heartbeatCollector.Close)
-	appcontext.SetService(appcontext.EventCollector, eventcollector.New(node.ID("receiver")))
+	setupBootstrapTestServices(t, mc, true)
 
 	cfID := common.NewChangeFeedIDWithName("cf", "default")
 	oldTableTriggerID := common.NewDispatcherID()
@@ -788,13 +741,7 @@ func TestHandleBootstrapTriggerMismatchKeepsOldMaintainerOwner(t *testing.T) {
 
 func TestHandleBootstrapNilTriggerRejectsExistingTableTrigger(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
-	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
-	appcontext.SetService(appcontext.MessageCenter, mc)
-	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
-	heartbeatCollector.Run(context.Background())
-	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
-	t.Cleanup(heartbeatCollector.Close)
-	appcontext.SetService(appcontext.EventCollector, eventcollector.New(node.ID("receiver")))
+	setupBootstrapTestServices(t, mc, true)
 
 	cfID := common.NewChangeFeedIDWithName("cf", "default")
 	tableTriggerID := common.NewDispatcherID()
@@ -860,12 +807,7 @@ func TestValidateBootstrapNilRedoTriggerRejectsExistingRedoTrigger(t *testing.T)
 
 func TestHandleCloseRequestAcksStaleMaintainerEpoch(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
-	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
-	appcontext.SetService(appcontext.MessageCenter, mc)
-	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
-	heartbeatCollector.Run(context.Background())
-	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
-	t.Cleanup(heartbeatCollector.Close)
+	setupBootstrapTestServices(t, mc, false)
 
 	cfID := common.NewChangeFeedIDWithName("cf", "default")
 	manager, err := dispatchermanager.NewDispatcherManager(
@@ -904,13 +846,7 @@ func TestHandleCloseRequestAcksStaleMaintainerEpoch(t *testing.T) {
 
 func TestHandlePostBootstrapWritePathClosedReleasesMaintainerFence(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
-	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
-	appcontext.SetService(appcontext.MessageCenter, mc)
-	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
-	heartbeatCollector.Run(context.Background())
-	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
-	t.Cleanup(heartbeatCollector.Close)
-	appcontext.SetService(appcontext.EventCollector, eventcollector.New(node.ID("receiver")))
+	setupBootstrapTestServices(t, mc, true)
 
 	cfID := common.NewChangeFeedIDWithName("cf", "default")
 	tableTriggerID := common.NewDispatcherID()
@@ -1042,6 +978,20 @@ func cleanupDispatcherManager(t *testing.T, manager *dispatchermanager.Dispatche
 			return manager.TryClose(false)
 		}, time.Second, 10*time.Millisecond)
 	})
+}
+
+func setupBootstrapTestServices(t *testing.T, mc messaging.MessageCenter, withEventCollector bool) {
+	t.Helper()
+
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
+	heartbeatCollector.Run(context.Background())
+	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
+	t.Cleanup(heartbeatCollector.Close)
+	if withEventCollector {
+		appcontext.SetService(appcontext.EventCollector, eventcollector.New(node.ID("receiver")))
+	}
 }
 
 func TestHandleBootstrapRequestRejectsClosedOlderMaintainerEpoch(t *testing.T) {
