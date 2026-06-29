@@ -860,24 +860,21 @@ func retrieveRedoDispatcherSpanForBootstrapResponse(
 	if !manager.IsRedoReady() {
 		return
 	}
-	manager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.RedoDispatcher) {
-		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
-			ID:              id.ToPB(),
-			SchemaID:        d.GetSchemaID(),
-			Span:            d.GetTableSpan(),
-			ComponentStatus: d.GetComponentStatus(),
-			CheckpointTs:    d.GetCheckpointTs(),
-			BlockState:      d.GetBlockEventStatus(),
-			Mode:            d.GetMode(),
-		})
-	})
+	appendBootstrapSpans(manager.GetRedoDispatcherMap(), response)
 }
 
 func retrieveDispatcherSpanForBootstrapResponse(
 	manager *dispatchermanager.DispatcherManager,
 	response *heartbeatpb.MaintainerBootstrapResponse,
 ) {
-	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.EventDispatcher) {
+	appendBootstrapSpans(manager.GetDispatcherMap(), response)
+}
+
+func appendBootstrapSpans[T dispatcher.Dispatcher](
+	dispatcherMap *dispatchermanager.DispatcherMap[T],
+	response *heartbeatpb.MaintainerBootstrapResponse,
+) {
+	dispatcherMap.ForEach(func(id common.DispatcherID, d T) {
 		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
 			ID:              id.ToPB(),
 			SchemaID:        d.GetSchemaID(),
@@ -941,10 +938,11 @@ func retrieveOperatorsForBootstrapResponse(
 		// It's possible that the dispatcher is not found when the action is create
 		// because the dispatcher may be created after the operator is stored.
 		if dispatcherExistsKnown && req.ScheduleAction != heartbeatpb.ScheduleAction_Create {
-			if !dispatcherReported {
-				dispatcherReported = isDispatcherReported(dispatcherID, req.Config.Mode)
+			dispatcherExists := dispatcherReported
+			if requestAllowed {
+				dispatcherExists = isDispatcherInLiveMap(manager, dispatcherID, req.Config.Mode)
 			}
-			if !dispatcherReported {
+			if !dispatcherExists {
 				if common.IsRedoMode(req.Config.Mode) {
 					log.Error("Redo dispatcher not found, this should not happen",
 						zap.String("changefeed", changefeedID.String()),
@@ -960,6 +958,19 @@ func retrieveOperatorsForBootstrapResponse(
 			proto.Clone(req.ScheduleDispatcherRequest).(*heartbeatpb.ScheduleDispatcherRequest))
 		return true
 	})
+}
+
+func isDispatcherInLiveMap(
+	manager *dispatchermanager.DispatcherManager,
+	dispatcherID common.DispatcherID,
+	mode int64,
+) bool {
+	if common.IsRedoMode(mode) {
+		_, ok := manager.GetRedoDispatcherMap().Get(dispatcherID)
+		return ok
+	}
+	_, ok := manager.GetDispatcherMap().Get(dispatcherID)
+	return ok
 }
 
 type reportedDispatcherKey struct {
