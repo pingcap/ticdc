@@ -53,11 +53,13 @@ func makeDispatcherReady(disp *dispatcherStat) {
 	disp.setHandshaked()
 }
 
-func setLargeTxnInsertSpillThresholdForTest(t *testing.T, threshold int64) {
-	original := largeTxnInsertSpillThreshold
-	largeTxnInsertSpillThreshold = threshold
+func setLargeTxnThresholdForTest(t *testing.T, threshold int64) {
+	original := config.GetGlobalServerConfig().Clone()
+	cfg := original.Clone()
+	cfg.Debug.EventService.LargeTxnThresholdInBytes = threshold
+	config.StoreGlobalServerConfig(cfg)
 	t.Cleanup(func() {
-		largeTxnInsertSpillThreshold = original
+		config.StoreGlobalServerConfig(original)
 	})
 }
 
@@ -424,6 +426,8 @@ func TestEventScanner(t *testing.T) {
 }
 
 func TestEventScannerSplitsLargeTxnWithRowLevelProgress(t *testing.T) {
+	setLargeTxnThresholdForTest(t, 0)
+
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 	ddlEvent, kvEvents := genEvents(helper, `create table test.t_split(id int primary key, c char(50))`, []string{
@@ -495,8 +499,60 @@ func TestEventScannerSplitsLargeTxnWithRowLevelProgress(t *testing.T) {
 	require.Equal(t, resolvedTs, resolved.ResolvedTs)
 }
 
+func TestEventScannerDoesNotSplitCurrentTxnBelowLargeTxnThreshold(t *testing.T) {
+	setLargeTxnThresholdForTest(t, 1<<30)
+
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t_no_split(id int primary key, c char(50))`, []string{
+		`insert into test.t_no_split(id,c) values (0, "c0")`,
+		`insert into test.t_no_split(id,c) values (1, "c1")`,
+	}...)
+	require.Len(t, kvEvents, 2)
+
+	kvEvents[1].StartTs = kvEvents[0].StartTs
+	kvEvents[1].CRTs = kvEvents[0].CRTs
+	resolvedTs := kvEvents[0].CRTs
+
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+	mockStore := broker.eventStore.(*mockEventStore)
+	mockSchemaStore := broker.schemaStore.(*mockSchemaStore)
+
+	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.startTs = ddlEvent.FinishedTs
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
+	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+	makeDispatcherReady(disp)
+	require.NoError(t, broker.addDispatcher(disp.info))
+
+	mockSchemaStore.AppendDDLEvent(disInfo.GetTableSpan().TableID, ddlEvent)
+	require.NoError(t, mockStore.AppendEvents(disInfo.GetID(), resolvedTs, kvEvents...))
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(resolvedTs)
+
+	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
+	sl := scanLimit{maxDMLBytes: 1, isInUnitTest: true}
+
+	dataRange, ok := disp.getDataRange()
+	require.True(t, ok)
+	_, events, progress, interrupted, err := scanner.scan(context.Background(), disp, dataRange, sl)
+	require.NoError(t, err)
+	require.False(t, interrupted)
+	require.True(t, progress.valid)
+	require.Empty(t, progress.rowLevelScanPosition)
+	require.Len(t, events, 2)
+
+	batch := events[0].(*event.BatchDMLEvent)
+	require.Equal(t, int32(2), batch.Len())
+	require.Equal(t, kvEvents[0].CRTs, batch.GetCommitTs())
+	resolved, ok := events[1].(event.ResolvedEvent)
+	require.True(t, ok)
+	require.Equal(t, resolvedTs, resolved.ResolvedTs)
+}
+
 func TestEventScannerSpillsSplitUKUpdateInLargeTxn(t *testing.T) {
-	setLargeTxnInsertSpillThresholdForTest(t, 0)
+	setLargeTxnThresholdForTest(t, 0)
 
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
@@ -580,7 +636,7 @@ func TestEventScannerSpillsSplitUKUpdateInLargeTxn(t *testing.T) {
 }
 
 func TestEventScannerDrainsSpillBeforeFollowingSameCommitTxn(t *testing.T) {
-	setLargeTxnInsertSpillThresholdForTest(t, 0)
+	setLargeTxnThresholdForTest(t, 0)
 
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
@@ -660,6 +716,7 @@ func TestEventScannerDrainsSpillBeforeFollowingSameCommitTxn(t *testing.T) {
 	require.Empty(t, events)
 	require.Nil(t, disp.getLargeTxnState())
 
+	setLargeTxnThresholdForTest(t, 1<<30)
 	events, _, interrupted = scanAndAdvance(scanLimit{maxDMLBytes: 100, isInUnitTest: true})
 	require.False(t, interrupted)
 	require.Len(t, events, 2)
@@ -1291,7 +1348,7 @@ func TestDMLProcessor(t *testing.T) {
 		require.Equal(t, 1, len(processor.insertRowCache))
 		require.Nil(t, disp.getLargeTxnState())
 
-		processor.currentTxn.rawKVBytes = largeTxnInsertSpillThreshold
+		processor.currentTxn.rawKVBytes = processor.currentTxn.largeTxnThresholdInBytes
 		require.NoError(t, processor.appendRow(updateEvent))
 
 		require.Empty(t, processor.insertRowCache)

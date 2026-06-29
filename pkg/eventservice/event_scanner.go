@@ -517,10 +517,13 @@ func (s *eventScanner) canInterruptCurrentTxn(
 	if len(processor.insertRowCache) > 0 {
 		return false
 	}
+	if processor.currentTxn == nil || !processor.currentTxn.exceedsLargeTxnThreshold() {
+		return false
+	}
 	if !merger.canInterrupt(rawEvent.CRTs, processor.batchDML) {
 		return false
 	}
-	return session.exceedLimit(processor.batchDML.GetSize(), processor.batchDML)
+	return true
 }
 
 // finalizeScan finalizes the scan when all events have been processed
@@ -908,20 +911,16 @@ func (m *eventMerger) canInterrupt(newCommitTs uint64, currentBatchDML *event.Ba
 
 // TxnEvent represents a transaction, it may generates one or multiple DMLEvents
 type TxnEvent struct {
-	BatchDML         *event.BatchDMLEvent
-	CurrentDMLEvent  *event.DMLEvent
-	DMLEventMaxRows  int32
-	DMLEventMaxBytes int64
-	rawKVBytes       int64
-	shouldSplitTxn   bool
+	BatchDML                 *event.BatchDMLEvent
+	CurrentDMLEvent          *event.DMLEvent
+	DMLEventMaxRows          int32
+	DMLEventMaxBytes         int64
+	rawKVBytes               int64
+	largeTxnThresholdInBytes int64
+	shouldSplitTxn           bool
 }
 
-const (
-	largeTxnInsertSpillDirName          = "eventservice"
-	defaultLargeTxnInsertSpillThreshold = int64(128 * 1024 * 1024)
-)
-
-var largeTxnInsertSpillThreshold = defaultLargeTxnInsertSpillThreshold
+const largeTxnInsertSpillDirName = "eventservice"
 
 func getLargeTxnInsertSpillDir() string {
 	return filepath.Join(config.GetGlobalServerConfig().DataDir, largeTxnInsertSpillDirName)
@@ -938,11 +937,12 @@ func newTxnEvent(
 ) (*TxnEvent, error) {
 	serverConfig := config.GetGlobalServerConfig()
 	txn := &TxnEvent{
-		BatchDML:         batchDML,
-		CurrentDMLEvent:  event.NewDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo),
-		DMLEventMaxRows:  serverConfig.Debug.EventService.DMLEventMaxRows,
-		DMLEventMaxBytes: serverConfig.Debug.EventService.DMLEventMaxBytes,
-		shouldSplitTxn:   shouldSplitTxn,
+		BatchDML:                 batchDML,
+		CurrentDMLEvent:          event.NewDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo),
+		DMLEventMaxRows:          serverConfig.Debug.EventService.DMLEventMaxRows,
+		DMLEventMaxBytes:         serverConfig.Debug.EventService.DMLEventMaxBytes,
+		largeTxnThresholdInBytes: serverConfig.Debug.EventService.LargeTxnThresholdInBytes,
+		shouldSplitTxn:           shouldSplitTxn,
 	}
 	return txn, txn.BatchDML.AppendDMLEvent(txn.CurrentDMLEvent)
 }
@@ -977,8 +977,8 @@ func (t *TxnEvent) observeRawKVBytes(rawEvent *common.RawKVEntry) {
 	t.rawKVBytes += rawEvent.GetSize()
 }
 
-func (t *TxnEvent) shouldSpillSplitUpdateInsert() bool {
-	return t.shouldSplitTxn && t.rawKVBytes > largeTxnInsertSpillThreshold
+func (t *TxnEvent) exceedsLargeTxnThreshold() bool {
+	return t.shouldSplitTxn && t.rawKVBytes > t.largeTxnThresholdInBytes
 }
 
 // dmlProcessor handles DML event processing and batching
@@ -1086,7 +1086,7 @@ func (p *dmlProcessor) shouldSpillSplitUpdateInsert() bool {
 	if p.currentTxn == nil {
 		return false
 	}
-	return p.currentTxn.shouldSpillSplitUpdateInsert() || p.hasSpilledInsertsForCurrentTxn()
+	return p.currentTxn.exceedsLargeTxnThreshold() || p.hasSpilledInsertsForCurrentTxn()
 }
 
 func (p *dmlProcessor) hasSpilledInsertsForCurrentTxn() bool {

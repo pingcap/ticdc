@@ -425,6 +425,8 @@ func TestDoScanSkipWhenChangefeedStatusNotFound(t *testing.T) {
 }
 
 func TestDoScanKeepsRowLevelProgressAfterSendingFragment(t *testing.T) {
+	setLargeTxnThresholdForTest(t, 0)
+
 	broker, mockStore, mockSchemaStore, _ := newEventBrokerForTest()
 	broker.close()
 
