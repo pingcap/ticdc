@@ -87,8 +87,8 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 
 	echo "[$(date)] Workload completed, verifying split path and data consistency..."
 
-	$CUR/../_utils/check_logs_contains $WORK_DIR "scan interrupted inside a large txn"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 200 3
+	$CUR/../_utils/check_logs_contains $WORK_DIR "scan interrupted inside a large txn"
 
 	cleanup_process $CDC_BINARY
 	echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
