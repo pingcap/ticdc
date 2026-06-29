@@ -139,7 +139,7 @@ func NewDefaultEventServiceConfig() *EventServiceConfig {
 		ScanLimitInBytes:         1024 * 1024 * 256, // 256MB
 		DMLEventMaxRows:          256,
 		DMLEventMaxBytes:         1024 * 1024 * 1, // 1MB
-		EnableScanWindow:         false,
+		EnableScanWindow:         true,
 		EnableRemoteEventService: true,
 	}
 }
