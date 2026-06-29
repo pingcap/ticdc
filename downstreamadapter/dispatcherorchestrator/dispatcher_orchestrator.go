@@ -542,12 +542,19 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	manager, exists := m.dispatcherManagers[cfId]
 	m.mutex.Unlock()
 
-	if !exists || manager.GetTableTriggerEventDispatcher() == nil {
+	if !exists {
 		log.Error("Receive post bootstrap request but there is no table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()))
 		return nil
 	}
 	manager.MaintainerFenceMu.Lock()
+	tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
+	if tableTriggerDispatcher == nil {
+		log.Error("Receive post bootstrap request but there is no table trigger event dispatcher",
+			zap.Any("changefeedID", cfId.Name()))
+		manager.MaintainerFenceMu.Unlock()
+		return nil
+	}
 	if !manager.IsMaintainerRequestAllowed(from, req.MaintainerEpoch) {
 		log.Warn("drop stale maintainer post bootstrap request",
 			zap.String("changefeed", cfId.Name()),
@@ -558,14 +565,13 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		manager.MaintainerFenceMu.Unlock()
 		return nil
 	}
-	if manager.GetTableTriggerEventDispatcher().GetId() !=
-		common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId) {
+	expectedDispatcherID := tableTriggerDispatcher.GetId()
+	actualDispatcherID := common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId)
+	if expectedDispatcherID != actualDispatcherID {
 		log.Error("Receive post bootstrap request but the table trigger event dispatcher id is not match",
 			zap.Any("changefeedID", cfId.Name()),
-			zap.String("expectedDispatcherID",
-				manager.GetTableTriggerEventDispatcher().GetId().String()),
-			zap.String("actualDispatcherID",
-				common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId).String()))
+			zap.String("expectedDispatcherID", expectedDispatcherID.String()),
+			zap.String("actualDispatcherID", actualDispatcherID.String()))
 
 		err := errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 			GenWithStackByArgs("Receive post bootstrap request but the table trigger event dispatcher id is not match")
