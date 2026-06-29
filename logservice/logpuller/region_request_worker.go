@@ -86,10 +86,6 @@ type regionRequestWorker struct {
 	eventSink      *regionEventSink
 	failureHandler *regionFailureHandler
 
-	// we must always get a region to request before create a grpc stream.
-	// only in this way we can avoid to try to connect to an offline store infinitely.
-	preFetchForConnecting *regionReq
-
 	// request cache with flow control
 	requestCache *requestCache
 	controlQueue *controlQueue
@@ -124,58 +120,23 @@ func newRegionRequestWorker(
 	}
 	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
 
-	waitForPreFetching := func() error {
-		if worker.preFetchForConnecting != nil {
-			log.Panic("preFetchForConnecting should be nil",
-				zap.Uint64("workerID", worker.workerID),
-				zap.String("addr", store.storeAddr))
-		}
-		req, err := worker.requestCache.Pop(ctx)
-		if err != nil {
-			return err
-		}
-		worker.preFetchForConnecting = req
-		return nil
-	}
-
 	g.Go(func() error {
 		for {
-			if err := waitForPreFetching(); err != nil {
+			firstReq, err := worker.waitForRegion(ctx)
+			if err != nil {
 				return err
 			}
-			var regionErr error
-			if err := version.CheckStoreVersion(ctx, worker.upstream.pd); err != nil {
-				if errors.Cause(err) == context.Canceled {
-					return nil
-				}
-				log.Error("event feed check store version fails",
-					zap.Uint64("workerID", worker.workerID),
-					zap.String("addr", worker.store.storeAddr),
-					zap.Error(err))
-				if cerror.Is(err, cerror.ErrGetAllStoresFailed) {
-					regionErr = &getStoreErr{}
-				} else {
-					regionErr = &storeStreamErr{}
-				}
-			} else {
-				if canceled := worker.Run(ctx, worker.upstream.credential); canceled {
-					return nil
-				}
-				regionErr = &storeStreamErr{}
+			err = worker.checkStoreVersion(ctx)
+			if err == nil {
+				err = worker.Run(ctx, worker.upstream.credential, firstReq)
 			}
-			for subID, m := range worker.clearRegionStates() {
-				for _, state := range m {
-					state.markStopped(regionErr)
-					regionEvent := regionEvent{
-						states: []*regionFeedState{state},
-					}
-					worker.eventSink.Push(subID, regionEvent)
-				}
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-			// The store may fail forever, so we need try to re-schedule all pending regions.
-			for _, region := range worker.clearPendingRegions() {
-				worker.failureHandler.Report(newRegionErrorInfo(region, regionErr))
+			if err == nil {
+				err = &storeStreamErr{}
 			}
+			worker.handleStoreFailure(err)
 			if err := util.Hang(ctx, time.Second); err != nil {
 				return err
 			}
@@ -185,16 +146,51 @@ func newRegionRequestWorker(
 	return worker
 }
 
-func (s *regionRequestWorker) Run(ctx context.Context, credential *security.Credential) (canceled bool) {
-	isCanceled := func() bool {
-		select {
-		case <-ctx.Done():
-			return true
-		default:
-			return false
+func (s *regionRequestWorker) waitForRegion(ctx context.Context) (*regionReq, error) {
+	req, err := s.requestCache.pop(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return req, nil
+}
+
+func (s *regionRequestWorker) checkStoreVersion(ctx context.Context) error {
+	err := version.CheckStoreVersion(ctx, s.upstream.pd)
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	log.Error("event feed check store version fails",
+		zap.Uint64("workerID", s.workerID),
+		zap.String("addr", s.store.storeAddr),
+		zap.Error(err))
+	if cerror.Is(err, cerror.ErrGetAllStoresFailed) {
+		return &getStoreErr{}
+	}
+	return &storeStreamErr{}
+}
+
+func (s *regionRequestWorker) handleStoreFailure(regionErr error) {
+	for subID, m := range s.clearRegionStates() {
+		for _, state := range m {
+			state.markStopped(regionErr)
+			regionEvent := regionEvent{
+				states: []*regionFeedState{state},
+			}
+			s.eventSink.Push(subID, regionEvent)
 		}
 	}
+	// The store may fail forever, so we need try to re-schedule all pending regions.
+	for _, region := range s.clearPendingRegions() {
+		s.failureHandler.Report(newRegionErrorInfo(region, regionErr))
+	}
+}
 
+func (s *regionRequestWorker) Run(
+	ctx context.Context, credential *security.Credential, firstReq *regionReq,
+) (err error) {
 	log.Info("region request worker going to create grpc stream",
 		zap.Uint64("workerID", s.workerID),
 		zap.String("addr", s.store.storeAddr))
@@ -203,7 +199,7 @@ func (s *regionRequestWorker) Run(ctx context.Context, credential *security.Cred
 		log.Info("region request worker exits",
 			zap.Uint64("workerID", s.workerID),
 			zap.String("addr", s.store.storeAddr),
-			zap.Bool("canceled", canceled))
+			zap.Error(err))
 	}()
 
 	g, gctx := errgroup.WithContext(ctx)
@@ -217,7 +213,10 @@ func (s *regionRequestWorker) Run(ctx context.Context, credential *security.Cred
 		if conn != nil && conn.Conn != nil {
 			_ = conn.Conn.Close()
 		}
-		return isCanceled()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &storeStreamErr{}
 	}
 	defer func() {
 		_ = conn.Conn.Close()
@@ -226,7 +225,7 @@ func (s *regionRequestWorker) Run(ctx context.Context, credential *security.Cred
 	g.Go(func() error {
 		return s.receiveAndDispatchChangeEvents(conn)
 	})
-	g.Go(func() error { return s.processRegionSendTask(gctx, conn) })
+	g.Go(func() error { return s.processRegionSendTask(gctx, conn, firstReq) })
 
 	failpoint.Inject("InjectForceReconnect", func() {
 		timer := time.After(10 * time.Second)
@@ -238,8 +237,14 @@ func (s *regionRequestWorker) Run(ctx context.Context, credential *security.Cred
 		})
 	})
 
-	_ = g.Wait()
-	return isCanceled()
+	err = g.Wait()
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &storeStreamErr{}
+	}
+	return nil
 }
 
 func normalizeStreamError(err error) error {
@@ -384,6 +389,7 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 func (s *regionRequestWorker) processRegionSendTask(
 	ctx context.Context,
 	conn *ConnAndClient,
+	firstReq *regionReq,
 ) error {
 	doSend := func(req *cdcpb.ChangeDataRequest) error {
 		if err := conn.Client.Send(req); err != nil {
@@ -431,9 +437,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 		}
 	}
 
-	// Handle pre-fetched region first
-	regionReq := s.preFetchForConnecting
-	s.preFetchForConnecting = nil
+	regionReq := firstReq
 	for {
 		if regionReq != nil {
 			region := regionReq.regionInfo
@@ -479,7 +483,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 		if err := drainControl(); err != nil {
 			return err
 		}
-		if regionReq = s.requestCache.TryPop(); regionReq != nil {
+		if regionReq = s.requestCache.tryPop(); regionReq != nil {
 			continue
 		}
 		select {
@@ -565,29 +569,20 @@ func (s *regionRequestWorker) clearRegionStates() map[SubscriptionID]regionFeedS
 	return subscriptions
 }
 
-// Add adds a region request to the worker's cache.
-// It blocks if the cache is full until there's space or ctx is cancelled
-func (s *regionRequestWorker) Add(
+func (s *regionRequestWorker) AddRegionRequest(
 	ctx context.Context, region regionInfo, force bool, quota *regionRequestQuota,
 ) (bool, error) {
-	return s.requestCache.Add(ctx, region, force, quota)
+	return s.requestCache.add(ctx, region, force, quota)
+}
+
+func (s *regionRequestWorker) ClearRegionRequests() {
+	s.requestCache.clear()
+}
+
+func (s *regionRequestWorker) PendingRequestCount() int {
+	return s.requestCache.pendingCount()
 }
 
 func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
-	var regions []regionInfo
-
-	// Clear pre-fetched region
-	if s.preFetchForConnecting != nil {
-		req := s.preFetchForConnecting
-		s.preFetchForConnecting = nil
-		regions = append(regions, req.regionInfo)
-		req.Finish()
-	}
-
-	regions = append(regions, s.requestCache.TakeUnsentRegions()...)
-	return regions
-}
-
-func (s *regionRequestWorker) ReleaseAdmittedRegionRequests() {
-	s.requestCache.Clear()
+	return s.requestCache.takeUnsentRegions()
 }

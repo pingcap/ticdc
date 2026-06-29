@@ -14,6 +14,7 @@
 package logpuller
 
 import (
+	"container/list"
 	"context"
 	"sync"
 	"time"
@@ -41,8 +42,6 @@ const (
 	// regionReqStageSent means the request has been sent to TiKV and is waiting
 	// for initialized/resolved/stopped cleanup.
 	regionReqStageSent
-	// regionReqStageFinished means the request has left the worker window.
-	regionReqStageFinished
 )
 
 // regionReq tracks one data request from admission to completion.
@@ -54,9 +53,11 @@ type regionReq struct {
 	// when the request leaves the worker window.
 	quota *regionRequestQuota
 
-	// cache is set by requestCache.Add. It lets regionFeedState finish exactly
+	// cache is set by requestCache.add. It lets regionFeedState finish exactly
 	// the request that created it instead of looking up by subID/regionID.
 	cache *requestCache
+	// readyElement is set while the request is waiting in requestCache.ready.
+	readyElement *list.Element
 	// stage is guarded by requestCache.mu.
 	stage regionReqStage
 }
@@ -90,29 +91,26 @@ func (r *regionReq) ReleaseQuota() {
 // requestCache manages worker-local data requests with flow control.
 //
 // requests is the source of truth for live requests. A request is inserted by
-// Add(), moves through queued/processing/sent, and is removed by resolve(),
-// finish(), TakeUnsentRegions(), or Clear().
+// add(), moves through queued/processing/sent, and is removed by resolve(),
+// finish(), takeUnsentRegions(), or clear().
 type requestCache struct {
 	mu sync.Mutex
 
 	// requests owns every live data request in this worker. Its length is the
-	// flow-control count used by Add(), PendingCount(), and metrics.
+	// flow-control count used by add(), pendingCount(), and metrics.
 	requests map[*regionReq]struct{}
 
-	// ready is the FIFO list of queued requests. Entries already popped or
-	// removed are left as nil/stale and skipped by TryPop; readyIdx is the next
-	// candidate index. compactReadyLocked occasionally drops skipped entries.
-	ready    []*regionReq
-	readyIdx int
+	// ready is the FIFO list of queued requests.
+	ready *list.List
 
 	// maxPendingCount limits len(requests) for non-force adds. force adds bypass
 	// this limit, matching the old force behavior for high-priority data requests.
 	maxPendingCount int
 
-	// readyAvailable wakes a worker blocked in Pop() when a queued request is
+	// readyAvailable wakes a worker blocked in pop() when a queued request is
 	// appended. It is a level-trigger hint; callers must re-check ready under mu.
 	readyAvailable chan struct{}
-	// spaceAvailable wakes Add() when a live request leaves requests.
+	// spaceAvailable wakes add() when a live request leaves requests.
 	spaceAvailable chan struct{}
 	// onSpaceAvailable lets the store-level deferred scheduler retry a task when
 	// this worker frees request capacity.
@@ -122,7 +120,7 @@ type requestCache struct {
 func newRequestCache(maxPendingCount int, onSpaceAvailable func()) *requestCache {
 	return &requestCache{
 		requests:         make(map[*regionReq]struct{}),
-		ready:            make([]*regionReq, 0, maxPendingCount),
+		ready:            list.New(),
 		maxPendingCount:  maxPendingCount,
 		readyAvailable:   make(chan struct{}, 1),
 		spaceAvailable:   make(chan struct{}, 1),
@@ -130,8 +128,8 @@ func newRequestCache(maxPendingCount int, onSpaceAvailable func()) *requestCache
 	}
 }
 
-// Add admits a data request into the worker window.
-func (c *requestCache) Add(
+// add admits a data request into the worker window.
+func (c *requestCache) add(
 	ctx context.Context, region regionInfo, force bool, quota *regionRequestQuota,
 ) (bool, error) {
 	start := time.Now()
@@ -175,15 +173,15 @@ func (c *requestCache) tryAdd(region regionInfo, force bool, quota *regionReques
 
 	req := newRegionReq(c, region, quota)
 	c.requests[req] = struct{}{}
-	c.ready = append(c.ready, req)
+	req.readyElement = c.ready.PushBack(req)
 	notifyReady = true
 	return true
 }
 
 // pop takes the next queued request and moves it into processing state.
-func (c *requestCache) Pop(ctx context.Context) (*regionReq, error) {
+func (c *requestCache) pop(ctx context.Context) (*regionReq, error) {
 	for {
-		if req := c.TryPop(); req != nil {
+		if req := c.tryPop(); req != nil {
 			return req, nil
 		}
 
@@ -195,29 +193,19 @@ func (c *requestCache) Pop(ctx context.Context) (*regionReq, error) {
 	}
 }
 
-func (c *requestCache) TryPop() *regionReq {
+func (c *requestCache) tryPop() *regionReq {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for c.readyIdx < len(c.ready) {
-		req := c.ready[c.readyIdx]
-		c.ready[c.readyIdx] = nil
-		c.readyIdx++
-
-		if req == nil {
-			continue
-		}
-		if _, ok := c.requests[req]; !ok || req.stage != regionReqStageQueued {
-			continue
-		}
-
-		req.stage = regionReqStageProcessing
-		c.compactReadyLocked()
-		return req
+	elem := c.ready.Front()
+	if elem == nil {
+		return nil
 	}
-
-	c.compactReadyLocked()
-	return nil
+	req := elem.Value.(*regionReq)
+	c.ready.Remove(elem)
+	req.readyElement = nil
+	req.stage = regionReqStageProcessing
+	return req
 }
 
 func (c *requestCache) markSent(req *regionReq) {
@@ -239,7 +227,7 @@ func (c *requestCache) resolve(req *regionReq) bool {
 			zap.Uint64("subID", uint64(req.regionInfo.subscribedSpan.subID)),
 			zap.Uint64("regionID", req.regionInfo.verID.GetID()),
 			zap.Float64("cost", cost),
-			zap.Int("pendingCount", c.PendingCount()))
+			zap.Int("pendingCount", c.pendingCount()))
 		metrics.RegionRequestFinishScanDuration.Observe(cost)
 		return true
 	}
@@ -269,62 +257,53 @@ func (c *requestCache) remove(req *regionReq) bool {
 	return removed
 }
 
-func (c *requestCache) TakeUnsentRegions() []regionInfo {
+func (c *requestCache) takeUnsentRegions() []regionInfo {
 	c.mu.Lock()
-	regions := make([]regionInfo, 0, len(c.requests))
 	removedReqs := make([]*regionReq, 0, len(c.requests))
-	removed := 0
+	regions := make([]regionInfo, 0, len(c.requests))
 	for req := range c.requests {
 		if req.stage == regionReqStageSent {
 			continue
 		}
-		regions = append(regions, req.regionInfo)
 		if c.removeLocked(req) {
-			removed++
 			removedReqs = append(removedReqs, req)
+			regions = append(regions, req.regionInfo)
 		}
-	}
-	if removed > 0 {
-		c.compactReadyLocked()
 	}
 	c.mu.Unlock()
 
-	if removed > 0 {
-		for _, req := range removedReqs {
-			req.ReleaseQuota()
-		}
-		c.notifySpace()
-	}
+	c.releaseRemovedReqs(removedReqs)
 	return regions
 }
 
 // clear removes all live requests and returns their regions.
-func (c *requestCache) Clear() []regionInfo {
+func (c *requestCache) clear() []regionInfo {
 	c.mu.Lock()
-	regions := make([]regionInfo, 0, len(c.requests))
 	removedReqs := make([]*regionReq, 0, len(c.requests))
+	regions := make([]regionInfo, 0, len(c.requests))
 	for req := range c.requests {
-		regions = append(regions, req.regionInfo)
-		removedReqs = append(removedReqs, req)
-		delete(c.requests, req)
-		req.stage = regionReqStageFinished
+		if c.removeLocked(req) {
+			removedReqs = append(removedReqs, req)
+			regions = append(regions, req.regionInfo)
+		}
 	}
-	removed := len(regions)
-	c.ready = c.ready[:0]
-	c.readyIdx = 0
 	c.mu.Unlock()
 
-	if removed > 0 {
+	c.releaseRemovedReqs(removedReqs)
+	return regions
+}
+
+func (c *requestCache) releaseRemovedReqs(removedReqs []*regionReq) {
+	if len(removedReqs) > 0 {
 		for _, req := range removedReqs {
 			req.ReleaseQuota()
 		}
 		c.notifySpace()
 	}
-	return regions
 }
 
-// getPendingCount returns the number of queued, processing and sent requests.
-func (c *requestCache) PendingCount() int {
+// pendingCount returns the number of queued, processing and sent requests.
+func (c *requestCache) pendingCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.requests)
@@ -338,11 +317,10 @@ func (c *requestCache) removeLocked(req *regionReq) bool {
 		return false
 	}
 
-	stage := req.stage
 	delete(c.requests, req)
-	req.stage = regionReqStageFinished
-	if stage != regionReqStageSent {
-		c.compactReadyLocked()
+	if req.readyElement != nil {
+		c.ready.Remove(req.readyElement)
+		req.readyElement = nil
 	}
 	return true
 }
@@ -362,20 +340,4 @@ func (c *requestCache) notifySpace() {
 	if c.onSpaceAvailable != nil {
 		c.onSpaceAvailable()
 	}
-}
-
-func (c *requestCache) compactReadyLocked() {
-	if c.readyIdx == 0 {
-		return
-	}
-	if c.readyIdx < len(c.ready) && c.readyIdx < 1024 {
-		return
-	}
-
-	n := copy(c.ready, c.ready[c.readyIdx:])
-	for i := n; i < len(c.ready); i++ {
-		c.ready[i] = nil
-	}
-	c.ready = c.ready[:n]
-	c.readyIdx = 0
 }

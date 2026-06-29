@@ -499,7 +499,7 @@ func TestEnqueueDeregisterToAllStoresUsesControlQueue(t *testing.T) {
 		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
 		lockedRangeState: &regionlock.LockedRangeState{},
 	}
-	ok, err := worker.Add(ctx, dummyRegion, true, testRegionRequestQuota())
+	ok, err := worker.AddRegionRequest(ctx, dummyRegion, true, testRegionRequestQuota())
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -509,7 +509,7 @@ func TestEnqueueDeregisterToAllStoresUsesControlQueue(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, SubscriptionID(1), req.subID)
 	require.True(t, req.filterLoop)
-	require.Equal(t, 1, worker.requestCache.PendingCount())
+	require.Equal(t, 1, worker.PendingRequestCount())
 }
 
 func TestRequestedStoreDeferredTasksPriority(t *testing.T) {
