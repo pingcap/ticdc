@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -894,6 +895,67 @@ func TestHandlePostBootstrapWritePathClosedReleasesMaintainerFence(t *testing.T)
 		require.NoError(t, err)
 	case <-time.After(time.Second):
 		require.FailNow(t, "close request blocked after post-bootstrap write-path-closed return")
+	}
+}
+
+func TestHandleBootstrapWritePathClosedDoesNotReportBootstrapError(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	orchestrator := &DispatcherOrchestrator{
+		mc: mc,
+	}
+	manager := &dispatchermanager.DispatcherManager{}
+	manager.LocalFence()
+
+	err := manager.NewTableTriggerEventDispatcher(common.NewDispatcherID().ToPB(), 100, false)
+	require.True(t, dispatchermanager.IsWritePathClosedError(err))
+
+	err = orchestrator.handleBootstrapTriggerError(
+		node.ID("current-maintainer"),
+		cfID.ToPB(),
+		2,
+		cfID,
+		"table trigger event dispatcher",
+		err,
+	)
+	require.NoError(t, err)
+	requireNoMessage(t, mc.GetMessageChannel(), "bootstrap write path closed should not send response")
+}
+
+func TestHandleBootstrapTriggerErrorReportsNonWritePathClosedError(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	orchestrator := &DispatcherOrchestrator{
+		mc: mc,
+	}
+	bootstrapErr := cerrors.ErrChangefeedInitTableTriggerDispatcherFailed.FastGenByArgs("inject")
+
+	err := orchestrator.handleBootstrapTriggerError(
+		node.ID("current-maintainer"),
+		cfID.ToPB(),
+		2,
+		cfID,
+		"table trigger event dispatcher",
+		bootstrapErr,
+	)
+	require.NoError(t, err)
+
+	msg := <-mc.GetMessageChannel()
+	require.Equal(t, messaging.TypeMaintainerBootstrapResponse, msg.Type)
+	response := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
+	require.Equal(t, uint64(2), response.MaintainerEpoch)
+	require.NotNil(t, response.Err)
+	require.Equal(t, string(cerrors.ErrorCode(bootstrapErr)), response.Err.Code)
+	require.Contains(t, response.Err.Message, "inject")
+}
+
+func requireNoMessage(t *testing.T, messageCh <-chan *messaging.TargetMessage, message string) {
+	t.Helper()
+
+	select {
+	case msg := <-messageCh:
+		require.FailNow(t, message, "message: %v", msg.Message)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

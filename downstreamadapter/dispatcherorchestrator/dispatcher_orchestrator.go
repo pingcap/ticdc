@@ -317,13 +317,19 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			cfId, manager, req.TableTriggerEventDispatcherId, req.StartTs,
 		); err != nil {
 			manager.MaintainerFenceMu.Unlock()
-			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
+			return m.handleBootstrapTriggerError(
+				from, req.ChangefeedID, maintainerEpoch, cfId,
+				"table trigger event dispatcher", err,
+			)
 		}
 		if err := ensureBootstrapTableTriggerRedoDispatcher(
 			cfId, manager, req.TableTriggerRedoDispatcherId, req.StartTs,
 		); err != nil {
 			manager.MaintainerFenceMu.Unlock()
-			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
+			return m.handleBootstrapTriggerError(
+				from, req.ChangefeedID, maintainerEpoch, cfId,
+				"table trigger redo dispatcher", err,
+			)
 		}
 	}
 
@@ -478,6 +484,22 @@ func validateBootstrapTableTriggerDispatcherID(
 		zap.Stringer("actualDispatcherID", current.GetId()))
 	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 		GenWithStackByArgs(triggerName + " id mismatch during bootstrap")
+}
+
+func (m *DispatcherOrchestrator) handleBootstrapTriggerError(
+	from node.ID,
+	changefeedID *heartbeatpb.ChangefeedID,
+	maintainerEpoch uint64,
+	cfId common.ChangeFeedID,
+	triggerName string,
+	err error,
+) error {
+	if dispatchermanager.IsWritePathClosedError(err) || m.fenced.Load() || m.closed.Load() {
+		log.Info("dispatcher manager write path closed while creating "+triggerName,
+			zap.Stringer("changefeedID", cfId), zap.Error(err))
+		return nil
+	}
+	return m.handleDispatcherError(from, changefeedID, maintainerEpoch, err)
 }
 
 // handlePostBootstrapRequest handles the maintainer post-bootstrap request message.
