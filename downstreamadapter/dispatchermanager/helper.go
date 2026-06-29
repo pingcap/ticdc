@@ -281,7 +281,7 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 	if !admission.allowed {
 		logStaleMaintainerControlMessage(
 			"drop stale schedule dispatcher request",
-			"requestMaintainerEpoch",
+			staleRequestMaintainerEpochField,
 			req.ChangefeedID,
 			req.From,
 			req.MaintainerEpoch,
@@ -599,7 +599,7 @@ func isHeartBeatResponseAllowed(dispatcherManager *DispatcherManager, heartbeatR
 	return isMaintainerControlMessageAllowed(
 		dispatcherManager,
 		"drop stale heartbeat response",
-		"responseMaintainerEpoch",
+		staleResponseMaintainerEpochField,
 		heartbeatResponse.ChangefeedID,
 		heartbeatResponse.From,
 		heartbeatResponse.MaintainerEpoch,
@@ -742,7 +742,7 @@ func isRedoResolvedTsForwardMessageAllowed(dispatcherManager *DispatcherManager,
 	return isMaintainerControlMessageAllowed(
 		dispatcherManager,
 		"drop stale redo resolved ts forward message",
-		"requestMaintainerEpoch",
+		staleRequestMaintainerEpochField,
 		msg.ChangefeedID,
 		msg.From,
 		msg.MaintainerEpoch,
@@ -829,12 +829,17 @@ func isRedoMetaMessageAllowed(dispatcherManager *DispatcherManager, msg RedoMeta
 	return isMaintainerControlMessageAllowed(
 		dispatcherManager,
 		"drop stale redo meta message",
-		"requestMaintainerEpoch",
+		staleRequestMaintainerEpochField,
 		msg.ChangefeedID,
 		msg.From,
 		msg.MaintainerEpoch,
 	)
 }
+
+const (
+	staleRequestMaintainerEpochField  = "requestMaintainerEpoch"
+	staleResponseMaintainerEpochField = "responseMaintainerEpoch"
+)
 
 func isMaintainerControlMessageAllowed(
 	dispatcherManager *DispatcherManager,
@@ -931,7 +936,7 @@ func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherMana
 	if !isMaintainerControlMessageAllowed(
 		dispatcherManager,
 		"drop stale merge dispatcher request",
-		"requestMaintainerEpoch",
+		staleRequestMaintainerEpochField,
 		mergeDispatcherRequest.ChangefeedID,
 		mergeDispatcherRequest.From,
 		mergeDispatcherRequest.MaintainerEpoch,

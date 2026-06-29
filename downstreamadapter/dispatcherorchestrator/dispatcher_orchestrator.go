@@ -295,16 +295,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
 		}
 	}
-	if !manager.TryUpdateMaintainer(from, maintainerEpoch) {
-		log.Warn("drop stale maintainer bootstrap request after trigger validation",
-			zap.String("changefeed", cfId.Name()),
-			zap.String("from", from.String()),
-			zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
-			zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
-			zap.String("currentMaintainer", manager.GetMaintainerID().String()))
-		manager.MaintainerFenceMu.Unlock()
-		return nil
-	}
+	manager.SetMaintainerAfterValidation(from, maintainerEpoch)
 	if exists {
 		// A higher-epoch maintainer may reuse an existing DispatcherManager with
 		// the same table trigger ID. A fresh trigger ID is allowed only after the
@@ -911,27 +902,13 @@ func retrieveOperatorsForBootstrapResponse(
 	// owner snapshot cannot change during the operator-map iteration.
 	currentMaintainer := manager.GetMaintainerID()
 	currentMaintainerEpoch := manager.GetMaintainerEpoch()
-	var reportedDispatchers map[reportedDispatcherKey]struct{}
-	isDispatcherReported := func(dispatcherID common.DispatcherID, mode int64) bool {
-		if reportedDispatchers == nil {
-			reportedDispatchers = make(map[reportedDispatcherKey]struct{}, len(response.Spans))
-			for _, span := range response.Spans {
-				reportedDispatchers[reportedDispatcherKey{
-					id:   common.NewDispatcherIDFromPB(span.ID),
-					mode: span.Mode,
-				}] = struct{}{}
-			}
-		}
-		_, ok := reportedDispatchers[reportedDispatcherKey{
-			id:   dispatcherID,
-			mode: mode,
-		}]
-		return ok
+	reportedDispatchers := reportedDispatcherChecker{
+		spans: response.Spans,
 	}
 
 	manager.GetCurrentOperatorMap().Range(func(_, value any) bool {
 		req := value.(dispatchermanager.SchedulerDispatcherRequest)
-		requestAllowed := isMaintainerRequestAllowedBySnapshot(
+		requestAllowed := dispatchermanager.IsMaintainerRequestAllowedBySnapshot(
 			req.From,
 			req.MaintainerEpoch,
 			currentMaintainer,
@@ -946,7 +923,7 @@ func retrieveOperatorsForBootstrapResponse(
 			if req.ScheduleAction != heartbeatpb.ScheduleAction_Remove {
 				return true
 			}
-			dispatcherReported = isDispatcherReported(dispatcherID, req.Config.Mode)
+			dispatcherReported = reportedDispatchers.isReported(dispatcherID, req.Config.Mode)
 			if !dispatcherReported {
 				return true
 			}
@@ -984,18 +961,6 @@ func retrieveOperatorsForBootstrapResponse(
 	})
 }
 
-func isMaintainerRequestAllowedBySnapshot(
-	from node.ID,
-	maintainerEpoch uint64,
-	currentMaintainer node.ID,
-	currentMaintainerEpoch uint64,
-) bool {
-	if maintainerEpoch == 0 {
-		return currentMaintainerEpoch == 0 && (currentMaintainer == "" || currentMaintainer == from)
-	}
-	return currentMaintainerEpoch == maintainerEpoch && currentMaintainer == from
-}
-
 func isDispatcherInLiveMap(
 	manager *dispatchermanager.DispatcherManager,
 	dispatcherID common.DispatcherID,
@@ -1007,6 +972,48 @@ func isDispatcherInLiveMap(
 	}
 	_, ok := manager.GetDispatcherMap().Get(dispatcherID)
 	return ok
+}
+
+// Small stale-remove batches avoid building a full reported-dispatcher map.
+const linearReportedDispatcherLookupLimit = 4
+
+type reportedDispatcherChecker struct {
+	spans        []*heartbeatpb.BootstrapTableSpan
+	reported     map[reportedDispatcherKey]struct{}
+	linearLookup int
+}
+
+func (c *reportedDispatcherChecker) isReported(dispatcherID common.DispatcherID, mode int64) bool {
+	if c.reported != nil {
+		_, ok := c.reported[reportedDispatcherKey{id: dispatcherID, mode: mode}]
+		return ok
+	}
+	if c.linearLookup < linearReportedDispatcherLookupLimit {
+		c.linearLookup++
+		return isDispatcherInBootstrapSpans(c.spans, dispatcherID, mode)
+	}
+	c.reported = make(map[reportedDispatcherKey]struct{}, len(c.spans))
+	for _, span := range c.spans {
+		c.reported[reportedDispatcherKey{
+			id:   common.NewDispatcherIDFromPB(span.ID),
+			mode: span.Mode,
+		}] = struct{}{}
+	}
+	_, ok := c.reported[reportedDispatcherKey{id: dispatcherID, mode: mode}]
+	return ok
+}
+
+func isDispatcherInBootstrapSpans(
+	spans []*heartbeatpb.BootstrapTableSpan,
+	dispatcherID common.DispatcherID,
+	mode int64,
+) bool {
+	for _, span := range spans {
+		if span.Mode == mode && common.NewDispatcherIDFromPB(span.ID) == dispatcherID {
+			return true
+		}
+	}
+	return false
 }
 
 type reportedDispatcherKey struct {

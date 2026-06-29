@@ -75,6 +75,15 @@ func (e *DispatcherManager) CanUpdateMaintainer(from node.ID, maintainerEpoch ui
 	return e.canUpdateMaintainerLocked(from, maintainerEpoch)
 }
 
+// SetMaintainerAfterValidation records a maintainer update that has already
+// passed CanUpdateMaintainer while the caller holds MaintainerFenceMu.
+func (e *DispatcherManager) SetMaintainerAfterValidation(from node.ID, maintainerEpoch uint64) {
+	e.meta.Lock()
+	defer e.meta.Unlock()
+	e.meta.maintainerEpoch = maintainerEpoch
+	e.meta.maintainerID = from
+}
+
 func (e *DispatcherManager) canUpdateMaintainerLocked(from node.ID, maintainerEpoch uint64) bool {
 	if maintainerEpoch == 0 {
 		if e.meta.maintainerEpoch != 0 {
@@ -112,12 +121,27 @@ func (e *DispatcherManager) maintainerRequestAdmission(from node.ID, maintainerE
 		currentEpoch:      e.meta.maintainerEpoch,
 		currentMaintainer: e.meta.maintainerID,
 	}
-	if maintainerEpoch == 0 {
-		admission.allowed = e.meta.maintainerEpoch == 0 && (e.meta.maintainerID == "" || e.meta.maintainerID == from)
-		return admission
-	}
-	admission.allowed = e.meta.maintainerEpoch == maintainerEpoch && e.meta.maintainerID == from
+	admission.allowed = IsMaintainerRequestAllowedBySnapshot(
+		from,
+		maintainerEpoch,
+		admission.currentMaintainer,
+		admission.currentEpoch,
+	)
 	return admission
+}
+
+// IsMaintainerRequestAllowedBySnapshot applies maintainer admission rules to a
+// caller-held owner/epoch snapshot.
+func IsMaintainerRequestAllowedBySnapshot(
+	from node.ID,
+	maintainerEpoch uint64,
+	currentMaintainer node.ID,
+	currentMaintainerEpoch uint64,
+) bool {
+	if maintainerEpoch == 0 {
+		return currentMaintainerEpoch == 0 && (currentMaintainer == "" || currentMaintainer == from)
+	}
+	return currentMaintainerEpoch == maintainerEpoch && currentMaintainer == from
 }
 
 func (e *DispatcherManager) GetMaintainerEpoch() uint64 {
