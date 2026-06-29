@@ -199,7 +199,8 @@ func (c *server) initialize(ctx context.Context) error {
 	schemaStore := schemastore.New(conf.DataDir, c.pdClient)
 	subscriptionClient := logpuller.NewSubscriptionClient(
 		&logpuller.SubscriptionClientConfig{
-			RegionRequestWorkerPerStore: 8,
+			RegionRequestWorkerPerStore:   8,
+			PendingRegionRequestQueueSize: conf.Debug.Puller.PendingRegionRequestQueueSize,
 		}, c.pdClient,
 		txnutil.NewLockerResolver(),
 		c.security,

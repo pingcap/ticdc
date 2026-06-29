@@ -82,6 +82,8 @@ type rangeTask struct {
 type SubscriptionClientConfig struct {
 	// The number of region request workers to send region task for every tikv store
 	RegionRequestWorkerPerStore uint
+	// PendingRegionRequestQueueSize is the total pending region request quota for one TiKV store.
+	PendingRegionRequestQueueSize int
 }
 
 type upstreamHandle struct {
@@ -92,7 +94,7 @@ type upstreamHandle struct {
 	clusterID   uint64
 }
 
-func (u *upstreamHandle) initialize(ctx context.Context) {
+func (u *upstreamHandle) Initialize(ctx context.Context) {
 	u.clusterID = u.pd.GetClusterID(ctx)
 }
 
@@ -215,7 +217,7 @@ func (s *subscriptionClient) runMetricsUpdater(ctx context.Context) error {
 				).Set(float64(areaMetric.MemoryUsage()))
 			}
 
-			s.regionScheduler.updateMetrics()
+			s.regionScheduler.UpdateMetrics()
 			s.spanRegistry.UpdateMetrics()
 		}
 	}
@@ -283,7 +285,7 @@ func (s *subscriptionClient) Unsubscribe(subID SubscriptionID) {
 }
 
 func (s *subscriptionClient) Run(ctx context.Context) error {
-	s.upstream.initialize(ctx)
+	s.upstream.Initialize(ctx)
 
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return s.eventSink.Run(ctx) })
@@ -304,7 +306,7 @@ func (s *subscriptionClient) Close(ctx context.Context) error {
 	s.cancel()
 	s.eventSink.Close()
 	if s.regionScheduler != nil {
-		s.regionScheduler.close()
+		s.regionScheduler.Close()
 	}
 	return nil
 }
@@ -316,7 +318,7 @@ func (s *subscriptionClient) setTableStopped(rt *subscribedSpan) {
 	// Set stopped to true so we can stop handling region events from the table.
 	// Then broadcast deregister requests to all region request workers.
 	if rt.stopped.CompareAndSwap(false, true) {
-		s.regionScheduler.broadcastDeregister(rt.subID, rt.filterLoop)
+		s.regionScheduler.BroadcastDeregister(rt.subID, rt.filterLoop)
 		if rt.rangeLock.Stop() {
 			s.onTableDrained(rt)
 		}
@@ -451,7 +453,7 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 	switch lockRangeResult.Status {
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
-		s.regionScheduler.submit(priority, region)
+		s.regionScheduler.Submit(priority, region)
 	case regionlock.LockRangeStatusStale:
 		for _, r := range lockRangeResult.RetryRanges {
 			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop, priority)

@@ -132,7 +132,7 @@ func (s *regionFeedState) markStopped(err error) {
 		s.state.err = err
 	}
 	if s.request != nil {
-		s.request.finish()
+		s.request.Finish()
 	}
 }
 
@@ -146,7 +146,7 @@ func (s *regionFeedState) markRemoved() (changed bool) {
 		s.matcher.clear()
 	}
 	if s.request != nil {
-		s.request.finish()
+		s.request.Finish()
 	}
 	return
 }
@@ -172,7 +172,7 @@ func (s *regionFeedState) isInitialized() bool {
 func (s *regionFeedState) setInitialized() {
 	s.region.lockedRangeState.Initialized.Store(true)
 	if s.request != nil {
-		s.request.resolve()
+		s.request.Resolve()
 	}
 }
 

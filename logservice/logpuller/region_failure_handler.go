@@ -184,6 +184,9 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		metricFeedRPCCtxUnavailable.Inc()
 		r.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 		return nil
+	case *rpcCtxChangedError:
+		r.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
+		return nil
 	case *getStoreErr:
 		metricGetStoreErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)

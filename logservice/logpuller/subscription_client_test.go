@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/ticdc/utils/priorityqueue"
 	"github.com/pingcap/tidb/pkg/store/mockstore/mockcopr"
@@ -389,6 +390,39 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	require.Nil(t, client.spanRegistry.Get(span.subID))
 }
 
+func TestRegionFailureHandlerReschedulesRegionWhenRPCCtxChanged(t *testing.T) {
+	var regionScheduleCount int
+	var rangeScheduleCount int
+	var scheduledPriority TaskType
+	handler := newRegionFailureHandler(
+		&upstreamHandle{},
+		func(*subscribedSpan) {},
+		func(_ context.Context, _ regionInfo, priority TaskType) {
+			regionScheduleCount++
+			scheduledPriority = priority
+		},
+		func(_ context.Context, _ heartbeatpb.TableSpan, _ *subscribedSpan, _ bool, _ TaskType) {
+			rangeScheduleCount++
+		},
+	)
+
+	span := &subscribedSpan{subID: SubscriptionID(1)}
+	region := regionInfo{
+		verID:          tikv.NewRegionVerID(1, 1, 1),
+		subscribedSpan: span,
+	}
+	err := handler.handleError(t.Context(), newRegionErrorInfo(region, &rpcCtxChangedError{
+		verID: region.verID,
+		from:  "store-1",
+		to:    "store-2",
+	}))
+
+	require.NoError(t, err)
+	require.Equal(t, 1, regionScheduleCount)
+	require.Equal(t, 0, rangeScheduleCount)
+	require.Equal(t, TaskHighPrior, scheduledPriority)
+}
+
 type mockDynamicStream struct{}
 
 func (s *mockDynamicStream) Start() {}
@@ -465,49 +499,74 @@ func TestEnqueueDeregisterToAllStoresUsesControlQueue(t *testing.T) {
 		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
 		lockedRangeState: &regionlock.LockedRangeState{},
 	}
-	ok, err := worker.add(ctx, dummyRegion, true)
+	ok, err := worker.Add(ctx, dummyRegion, true, testRegionRequestQuota())
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	scheduler.broadcastDeregister(SubscriptionID(1), true)
+	scheduler.BroadcastDeregister(SubscriptionID(1), true)
 	require.Equal(t, 1, worker.controlQueue.ch.Len())
 	req, ok := worker.controlQueue.tryPop()
 	require.True(t, ok)
 	require.Equal(t, SubscriptionID(1), req.subID)
 	require.True(t, req.filterLoop)
-	require.Equal(t, 1, worker.requestCache.getPendingCount())
+	require.Equal(t, 1, worker.requestCache.PendingCount())
 }
 
-func TestRequestedStoreDeferredTasksBlockSameStore(t *testing.T) {
-	queue := priorityqueue.New[*regionPriorityTask]()
-	scheduler := &regionRequestScheduler{queue: queue}
-	store := &requestedStore{scheduler: scheduler, storeAddr: "store-1"}
+func TestRequestedStoreDeferredTasksPriority(t *testing.T) {
+	store := &requestedStore{storeAddr: "store-1", pendingTasks: priorityqueue.New[*regionPriorityTask]()}
 	currentTs := oracle.GoTimeToTS(time.Now())
 	span := &subscribedSpan{subID: SubscriptionID(1)}
 	span.resolvedTs.Store(currentTs)
 	region := regionInfo{subscribedSpan: span}
 
-	firstTask := newRegionPriorityTask(TaskHighPrior, region, currentTs, 1)
-	secondTask := newRegionPriorityTask(TaskHighPrior, region, currentTs, 2)
+	lowTask := newRegionPriorityTask(TaskLowPrior, region, currentTs, 1)
+	highTask := newRegionPriorityTask(TaskHighPrior, region, currentTs, 2)
 
-	store.deferTask(firstTask)
-	require.True(t, store.hasDeferredTaskAhead(secondTask))
+	store.pendingTasks.Push(lowTask)
+	store.pendingTasks.Push(highTask)
 
-	store.promoteDeferredTask()
-	promoted, err := queue.Pop(t.Context())
+	task, ok := store.pendingTasks.TryPop()
+	require.True(t, ok)
+	require.Same(t, highTask, task)
+	task, ok = store.pendingTasks.TryPop()
+	require.True(t, ok)
+	require.Same(t, lowTask, task)
+	_, ok = store.pendingTasks.TryPop()
+	require.False(t, ok)
+}
+
+func TestRequestedStoreQuotaReleaseNotifiesSchedulerOnce(t *testing.T) {
+	scheduler := &regionRequestScheduler{
+		schedulerNotify: make(chan struct{}, 1),
+		storeAvailable:  chann.NewUnlimitedChannelDefault[*requestedStore](),
+	}
+	store := &requestedStore{scheduler: scheduler, storeAddr: "store-1"}
+	store.quota = newStoreQuota(1, store.NotifyAvailable)
+
+	quota, ok := store.quota.TryAcquire()
+	require.True(t, ok)
+	_, ok = store.quota.TryAcquire()
+	require.False(t, ok)
+
+	quota.Release()
+	quota.Release()
+	require.Equal(t, 1, scheduler.storeAvailable.Len())
+	select {
+	case <-scheduler.schedulerNotify:
+	default:
+		require.Fail(t, "quota release should notify scheduler")
+	}
+
+	readyStore, ok, err := scheduler.storeAvailable.GetWithContext(context.Background())
 	require.NoError(t, err)
-	require.Same(t, firstTask, promoted)
-	require.False(t, store.hasDeferredTaskAhead(firstTask))
-	require.True(t, store.hasDeferredTaskAhead(secondTask))
+	require.True(t, ok)
+	require.Same(t, store, readyStore)
+	readyStore.MarkAvailableDequeued()
 
-	store.deferTask(firstTask)
-	store.promoteDeferredTask()
-	promoted, err = queue.Pop(t.Context())
-	require.NoError(t, err)
-	require.Same(t, firstTask, promoted)
-
-	store.finishPromotedTask(firstTask)
-	require.False(t, store.hasDeferredTaskAhead(secondTask))
+	quota, ok = store.quota.TryAcquire()
+	require.True(t, ok)
+	quota.Release()
+	require.Equal(t, 1, scheduler.storeAvailable.Len())
 }
 
 func TestSubscriptionWithFailedTiKV(t *testing.T) {
@@ -540,7 +599,8 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	cluster.Bootstrap(11, []uint64{1, 2, 3}, []uint64{4, 5, 6}, 6)
 
 	clientConfig := &SubscriptionClientConfig{
-		RegionRequestWorkerPerStore: 2,
+		RegionRequestWorkerPerStore:   2,
+		PendingRegionRequestQueueSize: 32,
 	}
 	client := NewSubscriptionClient(
 		clientConfig,

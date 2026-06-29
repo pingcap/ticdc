@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,19 +42,23 @@ func createTestRegionInfo(subID SubscriptionID, regionID uint64) regionInfo {
 	return newRegionInfo(verID, span, nil, subscribedSpan, false)
 }
 
+func testRegionRequestQuota() *regionRequestQuota {
+	return &regionRequestQuota{release: func() {}}
+}
+
 func TestRequestCacheAdd_NormalCase(t *testing.T) {
 	cache := newRequestCache(10, nil)
 	ctx := context.Background()
 
 	region := createTestRegionInfo(1, 1)
 
-	ok, err := cache.add(ctx, region, false)
+	ok, err := cache.Add(ctx, region, false, testRegionRequestQuota())
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Equal(t, 1, cache.getPendingCount())
+	require.Equal(t, 1, cache.PendingCount())
 
 	// Verify the request was added to the queue
-	req, err := cache.pop(ctx)
+	req, err := cache.Pop(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, req)
 	require.Equal(t, region.verID.GetID(), req.regionInfo.verID.GetID())
@@ -66,35 +71,35 @@ func TestRequestCacheAdd_ForceFlag(t *testing.T) {
 
 	// Fill up the cache
 	region1 := createTestRegionInfo(1, 1)
-	ok, err := cache.add(ctx, region1, false)
+	ok, err := cache.Add(ctx, region1, false, testRegionRequestQuota())
 	require.True(t, ok)
 	require.NoError(t, err)
-	require.Equal(t, 1, cache.getPendingCount())
+	require.Equal(t, 1, cache.PendingCount())
 
 	// Try to add another request without force - should fail due to retry limit
 	region2 := createTestRegionInfo(1, 2)
-	ok, err = cache.add(ctx, region2, false)
+	ok, err = cache.Add(ctx, region2, false, testRegionRequestQuota())
 	require.False(t, ok)
 	require.NoError(t, err)
 
 	// With force=true, the request bypasses the live request limit.
 	region3 := createTestRegionInfo(1, 3)
-	ok, err = cache.add(ctx, region3, true)
+	ok, err = cache.Add(ctx, region3, true, testRegionRequestQuota())
 	require.True(t, ok)
 	require.NoError(t, err)
-	require.Equal(t, 2, cache.getPendingCount())
+	require.Equal(t, 2, cache.PendingCount())
 
-	req, err := cache.pop(ctx)
+	req, err := cache.Pop(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, req)
 	require.Equal(t, region1.verID.GetID(), req.regionInfo.verID.GetID())
 	require.Equal(t, region1.subscribedSpan.subID, req.regionInfo.subscribedSpan.subID)
-	require.Equal(t, 2, cache.getPendingCount())
-	req.markSent()
+	require.Equal(t, 2, cache.PendingCount())
+	req.MarkSent()
 
 	// resolve region1
-	req.resolve()
-	require.Equal(t, 1, cache.getPendingCount())
+	req.Resolve()
+	require.Equal(t, 1, cache.PendingCount())
 }
 
 func TestRequestCacheAdd_ContextCancellation(t *testing.T) {
@@ -103,7 +108,7 @@ func TestRequestCacheAdd_ContextCancellation(t *testing.T) {
 	// Fill up the cache
 	region1 := createTestRegionInfo(1, 1)
 	ctx1 := context.Background()
-	ok, err := cache.add(ctx1, region1, false)
+	ok, err := cache.Add(ctx1, region1, false, testRegionRequestQuota())
 	require.True(t, ok)
 	require.NoError(t, err)
 
@@ -112,7 +117,7 @@ func TestRequestCacheAdd_ContextCancellation(t *testing.T) {
 	cancel() // Cancel immediately
 
 	region2 := createTestRegionInfo(1, 2)
-	ok, err = cache.add(ctx2, region2, false)
+	ok, err = cache.Add(ctx2, region2, false, testRegionRequestQuota())
 	require.False(t, ok)
 	require.Error(t, err)
 	require.Equal(t, context.Canceled, err)
@@ -124,13 +129,13 @@ func TestRequestCacheAdd_RetryLimitExceeded(t *testing.T) {
 
 	// Fill up the cache
 	region1 := createTestRegionInfo(1, 1)
-	ok, err := cache.add(ctx, region1, false)
+	ok, err := cache.Add(ctx, region1, false, testRegionRequestQuota())
 	require.True(t, ok)
 	require.NoError(t, err)
 
 	// Try to add another request - should eventually hit retry limit
 	region2 := createTestRegionInfo(1, 2)
-	ok, err = cache.add(ctx, region2, false)
+	ok, err = cache.Add(ctx, region2, false, testRegionRequestQuota())
 	require.False(t, ok)
 	require.NoError(t, err)
 }
@@ -141,36 +146,36 @@ func TestRequestCacheAdd_SpaceAvailableNotification(t *testing.T) {
 
 	// Fill up the cache
 	region1 := createTestRegionInfo(1, 1)
-	ok, err := cache.add(ctx, region1, false)
+	ok, err := cache.Add(ctx, region1, false, testRegionRequestQuota())
 	require.True(t, ok)
 	require.NoError(t, err)
-	require.Equal(t, 1, cache.getPendingCount())
+	require.Equal(t, 1, cache.PendingCount())
 
 	region2 := createTestRegionInfo(1, 2)
-	ok, err = cache.add(ctx, region2, false)
+	ok, err = cache.Add(ctx, region2, false, testRegionRequestQuota())
 	require.True(t, ok)
 	require.NoError(t, err)
-	require.Equal(t, 2, cache.getPendingCount())
+	require.Equal(t, 2, cache.PendingCount())
 
 	// Pop a request and mark it as sent, then resolve it to free up space
-	req, err := cache.pop(ctx)
+	req, err := cache.Pop(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, req)
-	require.Equal(t, 2, cache.getPendingCount()) // pop doesn't change pendingCount
-	req.markSent()
-	require.Equal(t, 2, cache.getPendingCount())
+	require.Equal(t, 2, cache.PendingCount()) // pop doesn't change pendingCount
+	req.MarkSent()
+	require.Equal(t, 2, cache.PendingCount())
 
 	// Resolve the request to free up space
-	success := req.resolve()
+	success := req.Resolve()
 	require.True(t, success)
-	require.Equal(t, 1, cache.getPendingCount())
+	require.Equal(t, 1, cache.PendingCount())
 
 	// Now we should be able to add another request
 	region3 := createTestRegionInfo(1, 3)
-	ok, err = cache.add(ctx, region3, false)
+	ok, err = cache.Add(ctx, region3, false, testRegionRequestQuota())
 	require.True(t, ok)
 	require.NoError(t, err)
-	require.Equal(t, 2, cache.getPendingCount())
+	require.Equal(t, 2, cache.PendingCount())
 }
 
 func TestRequestCacheAdd_ConcurrentAdds(t *testing.T) {
@@ -184,7 +189,7 @@ func TestRequestCacheAdd_ConcurrentAdds(t *testing.T) {
 	for i := range numGoroutines {
 		go func(id int) {
 			region := createTestRegionInfo(SubscriptionID(id%3), uint64(id))
-			ok, err := cache.add(ctx, region, false)
+			ok, err := cache.Add(ctx, region, false, testRegionRequestQuota())
 			require.True(t, ok)
 			require.NoError(t, err)
 			done <- err
@@ -201,7 +206,7 @@ func TestRequestCacheAdd_ConcurrentAdds(t *testing.T) {
 		}
 	}
 
-	require.Equal(t, numGoroutines, cache.getPendingCount())
+	require.Equal(t, numGoroutines, cache.PendingCount())
 }
 
 func TestRequestCacheAdd_DuplicateQueuedRequestsAreTrackedIndependently(t *testing.T) {
@@ -210,18 +215,18 @@ func TestRequestCacheAdd_DuplicateQueuedRequestsAreTrackedIndependently(t *testi
 
 	region := createTestRegionInfo(1, 1)
 
-	ok, err := cache.add(ctx, region, false)
+	ok, err := cache.Add(ctx, region, false, testRegionRequestQuota())
 	require.True(t, ok)
 	require.NoError(t, err)
 
-	ok, err = cache.add(ctx, region, false)
+	ok, err = cache.Add(ctx, region, false, testRegionRequestQuota())
 	require.True(t, ok)
 	require.NoError(t, err)
-	require.Equal(t, 2, cache.getPendingCount())
+	require.Equal(t, 2, cache.PendingCount())
 
-	req1, err := cache.pop(ctx)
+	req1, err := cache.Pop(ctx)
 	require.NoError(t, err)
-	req2, err := cache.pop(ctx)
+	req2, err := cache.Pop(ctx)
 	require.NoError(t, err)
 	require.NotSame(t, req1, req2)
 }
@@ -232,17 +237,39 @@ func TestRequestCacheFinish_ReleasesSlot(t *testing.T) {
 
 	region := createTestRegionInfo(1, 1)
 
-	ok, err := cache.add(ctx, region, false)
+	ok, err := cache.Add(ctx, region, false, testRegionRequestQuota())
 	require.True(t, ok)
 	require.NoError(t, err)
-	require.Equal(t, 1, cache.getPendingCount())
+	require.Equal(t, 1, cache.PendingCount())
 
-	req, err := cache.pop(ctx)
+	req, err := cache.Pop(ctx)
 	require.NoError(t, err)
 
-	req.markSent()
-	require.Equal(t, 1, cache.getPendingCount())
+	req.MarkSent()
+	require.Equal(t, 1, cache.PendingCount())
 
-	req.finish()
-	require.Equal(t, 0, cache.getPendingCount())
+	req.Finish()
+	require.Equal(t, 0, cache.PendingCount())
+}
+
+func TestRequestCacheFinishReleasesQuotaOnce(t *testing.T) {
+	cache := newRequestCache(10, nil)
+	ctx := context.Background()
+	region := createTestRegionInfo(1, 1)
+	var releaseCount atomic.Int32
+	quota := &regionRequestQuota{
+		release: func() {
+			releaseCount.Add(1)
+		},
+	}
+
+	ok, err := cache.Add(ctx, region, false, quota)
+	require.True(t, ok)
+	require.NoError(t, err)
+
+	req, err := cache.Pop(ctx)
+	require.NoError(t, err)
+	require.True(t, req.Finish())
+	require.False(t, req.Finish())
+	require.Equal(t, int32(1), releaseCount.Load())
 }

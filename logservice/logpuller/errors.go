@@ -38,6 +38,17 @@ func (e *rpcCtxUnavailableErr) Error() string {
 		e.verID.GetID(), e.verID.GetVer(), e.verID.GetConfVer())
 }
 
+type rpcCtxChangedError struct {
+	verID tikv.RegionVerID
+	from  string
+	to    string
+}
+
+func (e *rpcCtxChangedError) Error() string {
+	return fmt.Sprintf("rpcCtx for region %v changed from %s to %s. ver:%v, confver:%v",
+		e.verID.GetID(), e.from, e.to, e.verID.GetVer(), e.verID.GetConfVer())
+}
+
 type getStoreErr struct{}
 
 func (e *getStoreErr) Error() string { return "get store error" }

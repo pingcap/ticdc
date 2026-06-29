@@ -118,7 +118,7 @@ func newRegionRequestWorker(
 		eventSink:      eventSink,
 		failureHandler: failureHandler,
 		requestCache: newRequestCache(requestCacheSize, func() {
-			store.promoteDeferredTask()
+			store.NotifyAvailable()
 		}),
 		controlQueue: newControlQueue(),
 	}
@@ -130,7 +130,7 @@ func newRegionRequestWorker(
 				zap.Uint64("workerID", worker.workerID),
 				zap.String("addr", store.storeAddr))
 		}
-		req, err := worker.requestCache.pop(ctx)
+		req, err := worker.requestCache.Pop(ctx)
 		if err != nil {
 			return err
 		}
@@ -158,7 +158,7 @@ func newRegionRequestWorker(
 					regionErr = &storeStreamErr{}
 				}
 			} else {
-				if canceled := worker.run(ctx, worker.upstream.credential); canceled {
+				if canceled := worker.Run(ctx, worker.upstream.credential); canceled {
 					return nil
 				}
 				regionErr = &storeStreamErr{}
@@ -185,7 +185,7 @@ func newRegionRequestWorker(
 	return worker
 }
 
-func (s *regionRequestWorker) run(ctx context.Context, credential *security.Credential) (canceled bool) {
+func (s *regionRequestWorker) Run(ctx context.Context, credential *security.Credential) (canceled bool) {
 	isCanceled := func() bool {
 		select {
 		case <-ctx.Done():
@@ -448,7 +448,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 			if region.subscribedSpan.stopped.Load() {
 				// The subscription has been stopped before this queued request is sent.
 				s.failureHandler.Report(newRegionErrorInfo(region, &storeStreamErr{}))
-				regionReq.finish()
+				regionReq.Finish()
 			} else {
 				state := newRegionFeedState(region, uint64(subID), s, regionReq)
 				state.start()
@@ -466,7 +466,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 				// Tracking the request before Send keeps requestedRegions and
 				// request lifecycle visible in the same order and avoids leaving stale
 				// requests behind.
-				regionReq.markSent()
+				regionReq.MarkSent()
 				if err := doSend(s.createRegionRequest(region)); err != nil {
 					state.markStopped(err)
 					return err
@@ -479,7 +479,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 		if err := drainControl(); err != nil {
 			return err
 		}
-		if regionReq = s.requestCache.tryPop(); regionReq != nil {
+		if regionReq = s.requestCache.TryPop(); regionReq != nil {
 			continue
 		}
 		select {
@@ -520,7 +520,7 @@ func (s *regionRequestWorker) addRegionState(subscriptionID SubscriptionID, regi
 			zap.Uint64("subscriptionID", uint64(subscriptionID)),
 			zap.Uint64("regionID", regionID))
 		if oldState.request != nil {
-			oldState.request.finish()
+			oldState.request.Finish()
 		}
 	}
 	states[regionID] = state
@@ -565,10 +565,12 @@ func (s *regionRequestWorker) clearRegionStates() map[SubscriptionID]regionFeedS
 	return subscriptions
 }
 
-// add adds a region request to the worker's cache
+// Add adds a region request to the worker's cache.
 // It blocks if the cache is full until there's space or ctx is cancelled
-func (s *regionRequestWorker) add(ctx context.Context, region regionInfo, force bool) (bool, error) {
-	return s.requestCache.add(ctx, region, force)
+func (s *regionRequestWorker) Add(
+	ctx context.Context, region regionInfo, force bool, quota *regionRequestQuota,
+) (bool, error) {
+	return s.requestCache.Add(ctx, region, force, quota)
 }
 
 func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
@@ -579,13 +581,13 @@ func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
 		req := s.preFetchForConnecting
 		s.preFetchForConnecting = nil
 		regions = append(regions, req.regionInfo)
-		req.finish()
+		req.Finish()
 	}
 
-	regions = append(regions, s.requestCache.takeUnsentRegions()...)
+	regions = append(regions, s.requestCache.TakeUnsentRegions()...)
 	return regions
 }
 
-func (s *regionRequestWorker) releaseAdmittedRegionRequests() {
-	s.requestCache.clear()
+func (s *regionRequestWorker) ReleaseAdmittedRegionRequests() {
+	s.requestCache.Clear()
 }

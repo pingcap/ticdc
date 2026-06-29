@@ -15,7 +15,6 @@ package logpuller
 
 import (
 	"fmt"
-	"sync/atomic"
 
 	"github.com/tikv/client-go/v2/oracle"
 )
@@ -52,11 +51,6 @@ type regionPriorityTask struct {
 	seq        uint64
 	regionInfo regionInfo
 	heapIndex  int // for heap.Item interface
-
-	// deferredStore is set when a task deferred by one store is promoted back
-	// to the global priority queue. It lets the scheduler clear the store's
-	// promoted marker after the task is admitted, moved, or dropped.
-	deferredStore atomic.Pointer[requestedStore]
 }
 
 // newRegionPriorityTask creates a new priority task for region.

@@ -85,25 +85,25 @@ func TestAddRegionStateReleasesOverwrittenRequest(t *testing.T) {
 	ctx := context.Background()
 	region := createTestRegionInfo(1, 1)
 
-	ok, err := worker.requestCache.add(ctx, region, false)
+	ok, err := worker.requestCache.Add(ctx, region, false, testRegionRequestQuota())
 	require.NoError(t, err)
 	require.True(t, ok)
-	req1, err := worker.requestCache.pop(ctx)
+	req1, err := worker.requestCache.Pop(ctx)
 	require.NoError(t, err)
-	req1.markSent()
+	req1.MarkSent()
 	state1 := newRegionFeedState(req1.regionInfo, uint64(req1.regionInfo.subscribedSpan.subID), worker, req1)
 	worker.addRegionState(req1.regionInfo.subscribedSpan.subID, req1.regionInfo.verID.GetID(), state1)
 
-	ok, err = worker.requestCache.add(ctx, region, false)
+	ok, err = worker.requestCache.Add(ctx, region, false, testRegionRequestQuota())
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Equal(t, 2, worker.requestCache.getPendingCount())
-	req2, err := worker.requestCache.pop(ctx)
+	require.Equal(t, 2, worker.requestCache.PendingCount())
+	req2, err := worker.requestCache.Pop(ctx)
 	require.NoError(t, err)
 	state2 := newRegionFeedState(req2.regionInfo, uint64(req2.regionInfo.subscribedSpan.subID), worker, req2)
 	worker.addRegionState(req2.regionInfo.subscribedSpan.subID, req2.regionInfo.verID.GetID(), state2)
 
-	require.Equal(t, 1, worker.requestCache.getPendingCount())
+	require.Equal(t, 1, worker.requestCache.PendingCount())
 	require.Same(t, state2, worker.getRegionState(req2.regionInfo.subscribedSpan.subID, req2.regionInfo.verID.GetID()))
 }
 
@@ -115,20 +115,20 @@ func TestClearPendingRegionsReleaseSlotForPreFetchedRegion(t *testing.T) {
 	ctx := context.Background()
 	region := createTestRegionInfo(1, 1)
 
-	ok, err := worker.requestCache.add(ctx, region, false)
+	ok, err := worker.requestCache.Add(ctx, region, false, testRegionRequestQuota())
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	req, err := worker.requestCache.pop(ctx)
+	req, err := worker.requestCache.Pop(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 1, worker.requestCache.getPendingCount())
+	require.Equal(t, 1, worker.requestCache.PendingCount())
 
 	worker.preFetchForConnecting = req
 
 	regions := worker.clearPendingRegions()
 	require.Len(t, regions, 1)
 	require.Nil(t, worker.preFetchForConnecting)
-	require.Equal(t, 0, worker.requestCache.getPendingCount())
+	require.Equal(t, 0, worker.requestCache.PendingCount())
 }
 
 type pushedResolvedEvent struct {
@@ -302,11 +302,11 @@ func TestClearPendingRegionsDoesNotReturnStoppedSentRegion(t *testing.T) {
 	ctx := context.Background()
 	region := createTestRegionInfo(1, 1)
 
-	ok, err := worker.requestCache.add(ctx, region, false)
+	ok, err := worker.requestCache.Add(ctx, region, false, testRegionRequestQuota())
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	req, err := worker.requestCache.pop(ctx)
+	req, err := worker.requestCache.Pop(ctx)
 	require.NoError(t, err)
 
 	state := newRegionFeedState(req.regionInfo, uint64(req.regionInfo.subscribedSpan.subID), worker, req)
@@ -317,11 +317,11 @@ func TestClearPendingRegionsDoesNotReturnStoppedSentRegion(t *testing.T) {
 	// visible as sent, a fast region error may mark the region stopped before
 	// worker cleanup runs. In that case, markStopped should finish the request
 	// immediately, so clearPendingRegions must not return the stale region again.
-	req.markSent()
+	req.MarkSent()
 	state.markStopped(errors.New("send request to store error"))
 	worker.takeRegionState(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
 
-	require.Equal(t, 0, worker.requestCache.getPendingCount())
+	require.Equal(t, 0, worker.requestCache.PendingCount())
 	require.Empty(t, worker.clearPendingRegions())
 }
 
@@ -339,12 +339,12 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	ctx := context.Background()
 	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
 
-	ok, err := worker.requestCache.add(ctx, region, false)
+	ok, err := worker.requestCache.Add(ctx, region, false, testRegionRequestQuota())
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Equal(t, 1, worker.requestCache.getPendingCount())
+	require.Equal(t, 1, worker.requestCache.PendingCount())
 
-	req, err := worker.requestCache.pop(ctx)
+	req, err := worker.requestCache.Pop(ctx)
 	require.NoError(t, err)
 	worker.preFetchForConnecting = req
 
@@ -356,7 +356,7 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 
 	err = worker.processRegionSendTask(ctx, conn)
 	require.ErrorIs(t, err, sendErr)
-	require.Equal(t, 0, worker.requestCache.getPendingCount())
+	require.Equal(t, 0, worker.requestCache.PendingCount())
 	state := worker.getRegionState(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
 	require.True(t, state == nil || state.isStale(), "region state should be removed or marked stale after send failure")
 }
@@ -391,11 +391,11 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 			ctx := context.Background()
 			region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
 
-			ok, err := worker.requestCache.add(ctx, region, false)
+			ok, err := worker.requestCache.Add(ctx, region, false, testRegionRequestQuota())
 			require.NoError(t, err)
 			require.True(t, ok)
 
-			req, err := worker.requestCache.pop(ctx)
+			req, err := worker.requestCache.Pop(ctx)
 			require.NoError(t, err)
 			worker.preFetchForConnecting = req
 
@@ -407,7 +407,7 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 			err = worker.processRegionSendTask(ctx, conn)
 			var streamErr *storeStreamErr
 			require.ErrorAs(t, err, &streamErr)
-			require.Equal(t, 0, worker.requestCache.getPendingCount())
+			require.Equal(t, 0, worker.requestCache.PendingCount())
 
 			state := worker.getRegionState(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
 			require.NotNil(t, state)

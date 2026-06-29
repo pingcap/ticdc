@@ -50,57 +50,57 @@ type regionReq struct {
 	regionInfo regionInfo
 	createTime time.Time
 
-	// cache is set by requestCache.add. It lets regionFeedState finish exactly
+	// quota is acquired before the request enters requestCache and released
+	// when the request leaves the worker window.
+	quota *regionRequestQuota
+
+	// cache is set by requestCache.Add. It lets regionFeedState finish exactly
 	// the request that created it instead of looking up by subID/regionID.
 	cache *requestCache
 	// stage is guarded by requestCache.mu.
 	stage regionReqStage
 }
 
-func newRegionReq(cache *requestCache, region regionInfo) *regionReq {
+func newRegionReq(cache *requestCache, region regionInfo, quota *regionRequestQuota) *regionReq {
 	return &regionReq{
 		regionInfo: region,
 		createTime: time.Now(),
+		quota:      quota,
 		cache:      cache,
 		stage:      regionReqStageQueued,
 	}
 }
 
-func (r *regionReq) markSent() {
-	if r == nil || r.cache == nil {
-		return
-	}
+func (r *regionReq) MarkSent() {
 	r.cache.markSent(r)
 }
 
-func (r *regionReq) resolve() bool {
-	if r == nil || r.cache == nil {
-		return false
-	}
+func (r *regionReq) Resolve() bool {
 	return r.cache.resolve(r)
 }
 
-func (r *regionReq) finish() bool {
-	if r == nil || r.cache == nil {
-		return false
-	}
+func (r *regionReq) Finish() bool {
 	return r.cache.finish(r)
+}
+
+func (r *regionReq) ReleaseQuota() {
+	r.quota.Release()
 }
 
 // requestCache manages worker-local data requests with flow control.
 //
 // requests is the source of truth for live requests. A request is inserted by
-// add(), moves through queued/processing/sent, and is removed by resolve(),
-// finish(), takeUnsentRegions(), or clear().
+// Add(), moves through queued/processing/sent, and is removed by resolve(),
+// finish(), TakeUnsentRegions(), or Clear().
 type requestCache struct {
 	mu sync.Mutex
 
 	// requests owns every live data request in this worker. Its length is the
-	// flow-control count used by add(), getPendingCount(), and metrics.
+	// flow-control count used by Add(), PendingCount(), and metrics.
 	requests map[*regionReq]struct{}
 
 	// ready is the FIFO list of queued requests. Entries already popped or
-	// removed are left as nil/stale and skipped by tryPop; readyIdx is the next
+	// removed are left as nil/stale and skipped by TryPop; readyIdx is the next
 	// candidate index. compactReadyLocked occasionally drops skipped entries.
 	ready    []*regionReq
 	readyIdx int
@@ -109,10 +109,10 @@ type requestCache struct {
 	// this limit, matching the old force behavior for high-priority data requests.
 	maxPendingCount int
 
-	// readyAvailable wakes a worker blocked in pop() when a queued request is
+	// readyAvailable wakes a worker blocked in Pop() when a queued request is
 	// appended. It is a level-trigger hint; callers must re-check ready under mu.
 	readyAvailable chan struct{}
-	// spaceAvailable wakes add() when a live request leaves requests.
+	// spaceAvailable wakes Add() when a live request leaves requests.
 	spaceAvailable chan struct{}
 	// onSpaceAvailable lets the store-level deferred scheduler retry a task when
 	// this worker frees request capacity.
@@ -130,15 +130,17 @@ func newRequestCache(maxPendingCount int, onSpaceAvailable func()) *requestCache
 	}
 }
 
-// add admits a data request into the worker window.
-func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (bool, error) {
+// Add admits a data request into the worker window.
+func (c *requestCache) Add(
+	ctx context.Context, region regionInfo, force bool, quota *regionRequestQuota,
+) (bool, error) {
 	start := time.Now()
 	ticker := time.NewTicker(addReqRetryInterval)
 	defer ticker.Stop()
 	retries := addReqRetryLimit
 
 	for {
-		if c.tryAdd(region, force) {
+		if c.tryAdd(region, force, quota) {
 			metrics.SubscriptionClientAddRegionRequestDuration.Observe(time.Since(start).Seconds())
 			return true, nil
 		}
@@ -156,7 +158,7 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (
 	}
 }
 
-func (c *requestCache) tryAdd(region regionInfo, force bool) bool {
+func (c *requestCache) tryAdd(region regionInfo, force bool, quota *regionRequestQuota) bool {
 	notifyReady := false
 
 	c.mu.Lock()
@@ -171,24 +173,17 @@ func (c *requestCache) tryAdd(region regionInfo, force bool) bool {
 		return false
 	}
 
-	req := newRegionReq(c, region)
+	req := newRegionReq(c, region, quota)
 	c.requests[req] = struct{}{}
 	c.ready = append(c.ready, req)
 	notifyReady = true
 	return true
 }
 
-func (c *requestCache) canAdd(force bool) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return force || len(c.requests) < c.maxPendingCount
-}
-
 // pop takes the next queued request and moves it into processing state.
-func (c *requestCache) pop(ctx context.Context) (*regionReq, error) {
+func (c *requestCache) Pop(ctx context.Context) (*regionReq, error) {
 	for {
-		if req := c.tryPop(); req != nil {
+		if req := c.TryPop(); req != nil {
 			return req, nil
 		}
 
@@ -200,7 +195,7 @@ func (c *requestCache) pop(ctx context.Context) (*regionReq, error) {
 	}
 }
 
-func (c *requestCache) tryPop() *regionReq {
+func (c *requestCache) TryPop() *regionReq {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -244,7 +239,7 @@ func (c *requestCache) resolve(req *regionReq) bool {
 			zap.Uint64("subID", uint64(req.regionInfo.subscribedSpan.subID)),
 			zap.Uint64("regionID", req.regionInfo.verID.GetID()),
 			zap.Float64("cost", cost),
-			zap.Int("pendingCount", c.getPendingCount()))
+			zap.Int("pendingCount", c.PendingCount()))
 		metrics.RegionRequestFinishScanDuration.Observe(cost)
 		return true
 	}
@@ -268,14 +263,16 @@ func (c *requestCache) remove(req *regionReq) bool {
 	c.mu.Unlock()
 
 	if removed {
+		req.ReleaseQuota()
 		c.notifySpace()
 	}
 	return removed
 }
 
-func (c *requestCache) takeUnsentRegions() []regionInfo {
+func (c *requestCache) TakeUnsentRegions() []regionInfo {
 	c.mu.Lock()
 	regions := make([]regionInfo, 0, len(c.requests))
+	removedReqs := make([]*regionReq, 0, len(c.requests))
 	removed := 0
 	for req := range c.requests {
 		if req.stage == regionReqStageSent {
@@ -284,6 +281,7 @@ func (c *requestCache) takeUnsentRegions() []regionInfo {
 		regions = append(regions, req.regionInfo)
 		if c.removeLocked(req) {
 			removed++
+			removedReqs = append(removedReqs, req)
 		}
 	}
 	if removed > 0 {
@@ -292,17 +290,22 @@ func (c *requestCache) takeUnsentRegions() []regionInfo {
 	c.mu.Unlock()
 
 	if removed > 0 {
+		for _, req := range removedReqs {
+			req.ReleaseQuota()
+		}
 		c.notifySpace()
 	}
 	return regions
 }
 
 // clear removes all live requests and returns their regions.
-func (c *requestCache) clear() []regionInfo {
+func (c *requestCache) Clear() []regionInfo {
 	c.mu.Lock()
 	regions := make([]regionInfo, 0, len(c.requests))
+	removedReqs := make([]*regionReq, 0, len(c.requests))
 	for req := range c.requests {
 		regions = append(regions, req.regionInfo)
+		removedReqs = append(removedReqs, req)
 		delete(c.requests, req)
 		req.stage = regionReqStageFinished
 	}
@@ -312,13 +315,16 @@ func (c *requestCache) clear() []regionInfo {
 	c.mu.Unlock()
 
 	if removed > 0 {
+		for _, req := range removedReqs {
+			req.ReleaseQuota()
+		}
 		c.notifySpace()
 	}
 	return regions
 }
 
 // getPendingCount returns the number of queued, processing and sent requests.
-func (c *requestCache) getPendingCount() int {
+func (c *requestCache) PendingCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.requests)
