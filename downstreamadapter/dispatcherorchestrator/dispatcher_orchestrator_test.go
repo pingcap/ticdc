@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -618,9 +619,7 @@ func TestBootstrapResponseRestoresCurrentOperatorsAndStaleRemoves(t *testing.T) 
 		nil,
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		manager.TryClose(false)
-	})
+	cleanupDispatcherManager(t, manager)
 
 	manager.GetCurrentOperatorMap().Store(
 		currentDispatcherID,
@@ -687,9 +686,7 @@ func TestBootstrapResponseUsesSpanSnapshotForStaleRemove(t *testing.T) {
 		nil,
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		manager.TryClose(false)
-	})
+	cleanupDispatcherManager(t, manager)
 
 	reportedRemoveDispatcherID := common.NewDispatcherID()
 	reportedRemoveReq := newBootstrapResponseTestScheduleRequest(cfID, reportedRemoveDispatcherID, 1)
@@ -754,9 +751,7 @@ func TestHandleBootstrapTriggerMismatchKeepsOldMaintainerOwner(t *testing.T) {
 		nil,
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		manager.TryClose(false)
-	})
+	cleanupDispatcherManager(t, manager)
 
 	orchestrator := &DispatcherOrchestrator{
 		mc:                     mc,
@@ -772,7 +767,7 @@ func TestHandleBootstrapTriggerMismatchKeepsOldMaintainerOwner(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	bootstrapResponseMsg := <-mc.GetMessageChannel()
+	bootstrapResponseMsg := requireMessage(t, mc.GetMessageChannel(), "bootstrap response was not sent")
 	bootstrapResponse := bootstrapResponseMsg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
 	require.Equal(t, uint64(3), bootstrapResponse.MaintainerEpoch)
 	require.NotNil(t, bootstrapResponse.Err)
@@ -785,10 +780,82 @@ func TestHandleBootstrapTriggerMismatchKeepsOldMaintainerOwner(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	closeResponseMsg := <-mc.GetMessageChannel()
+	closeResponseMsg := requireMessage(t, mc.GetMessageChannel(), "close response was not sent")
 	closeResponse := closeResponseMsg.Message[0].(*heartbeatpb.MaintainerCloseResponse)
 	require.Equal(t, uint64(2), closeResponse.MaintainerEpoch)
 	require.False(t, closeResponse.Success)
+}
+
+func TestHandleBootstrapNilTriggerRejectsExistingTableTrigger(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
+	heartbeatCollector.Run(context.Background())
+	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
+	t.Cleanup(heartbeatCollector.Close)
+	appcontext.SetService(appcontext.EventCollector, eventcollector.New(node.ID("receiver")))
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	tableTriggerID := common.NewDispatcherID()
+	manager, err := dispatchermanager.NewDispatcherManager(
+		0,
+		cfID,
+		newBootstrapResponseTestChangefeedConfig(cfID),
+		tableTriggerID.ToPB(),
+		nil,
+		100,
+		node.ID("old-maintainer"),
+		2,
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	cleanupDispatcherManager(t, manager)
+
+	orchestrator := &DispatcherOrchestrator{
+		mc:                     mc,
+		dispatcherManagers:     map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{cfID: manager},
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+	}
+
+	err = orchestrator.handleBootstrapRequest(node.ID("new-maintainer"), &heartbeatpb.MaintainerBootstrapRequest{
+		ChangefeedID:    cfID.ToPB(),
+		StartTs:         100,
+		MaintainerEpoch: 3,
+	})
+	require.NoError(t, err)
+
+	bootstrapResponseMsg := requireMessage(t, mc.GetMessageChannel(), "nil trigger bootstrap response was not sent")
+	bootstrapResponse := bootstrapResponseMsg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
+	require.Equal(t, uint64(3), bootstrapResponse.MaintainerEpoch)
+	require.NotNil(t, bootstrapResponse.Err)
+	require.Equal(t, node.ID("old-maintainer"), manager.GetMaintainerID())
+	require.Equal(t, uint64(2), manager.GetMaintainerEpoch())
+}
+
+func TestValidateBootstrapNilRedoTriggerRejectsExistingRedoTrigger(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	redoID := common.NewDispatcherID()
+	redoDispatcher := dispatcher.NewRedoDispatcher(
+		redoID,
+		common.KeyspaceDDLSpan(0),
+		100,
+		0,
+		dispatcher.NewSchemaIDToDispatchers(),
+		false,
+		false,
+		0,
+		0,
+		nil,
+		nil,
+	)
+	manager := &dispatchermanager.DispatcherManager{}
+	manager.SetTableTriggerRedoDispatcher(redoDispatcher)
+
+	err := validateBootstrapTableTriggerRedoDispatcher(cfID, manager, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "table trigger redo dispatcher present during nil trigger bootstrap")
 }
 
 func TestHandleCloseRequestAcksStaleMaintainerEpoch(t *testing.T) {
@@ -814,9 +881,7 @@ func TestHandleCloseRequestAcksStaleMaintainerEpoch(t *testing.T) {
 		nil,
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		manager.TryClose(false)
-	})
+	cleanupDispatcherManager(t, manager)
 
 	orchestrator := &DispatcherOrchestrator{
 		mc:                     mc,
@@ -829,7 +894,7 @@ func TestHandleCloseRequestAcksStaleMaintainerEpoch(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	responseMsg := <-mc.GetMessageChannel()
+	responseMsg := requireMessage(t, mc.GetMessageChannel(), "close response was not sent")
 	response := responseMsg.Message[0].(*heartbeatpb.MaintainerCloseResponse)
 	require.True(t, response.Success)
 	require.Equal(t, uint64(1), response.MaintainerEpoch)
@@ -862,9 +927,7 @@ func TestHandlePostBootstrapWritePathClosedReleasesMaintainerFence(t *testing.T)
 		nil,
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		manager.TryClose(false)
-	})
+	cleanupDispatcherManager(t, manager)
 
 	orchestrator := &DispatcherOrchestrator{
 		mc:                     mc,
@@ -940,7 +1003,7 @@ func TestHandleBootstrapTriggerErrorReportsNonWritePathClosedError(t *testing.T)
 	)
 	require.NoError(t, err)
 
-	msg := <-mc.GetMessageChannel()
+	msg := requireMessage(t, mc.GetMessageChannel(), "bootstrap error response was not sent")
 	require.Equal(t, messaging.TypeMaintainerBootstrapResponse, msg.Type)
 	response := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
 	require.Equal(t, uint64(2), response.MaintainerEpoch)
@@ -957,6 +1020,28 @@ func requireNoMessage(t *testing.T, messageCh <-chan *messaging.TargetMessage, m
 		require.FailNow(t, message, "message: %v", msg.Message)
 	case <-time.After(50 * time.Millisecond):
 	}
+}
+
+func requireMessage(t *testing.T, messageCh <-chan *messaging.TargetMessage, message string) *messaging.TargetMessage {
+	t.Helper()
+
+	select {
+	case msg := <-messageCh:
+		return msg
+	case <-time.After(time.Second):
+		require.FailNow(t, message)
+		return nil
+	}
+}
+
+func cleanupDispatcherManager(t *testing.T, manager *dispatchermanager.DispatcherManager) {
+	t.Helper()
+
+	t.Cleanup(func() {
+		require.Eventually(t, func() bool {
+			return manager.TryClose(false)
+		}, time.Second, 10*time.Millisecond)
+	})
 }
 
 func TestHandleBootstrapRequestRejectsClosedOlderMaintainerEpoch(t *testing.T) {

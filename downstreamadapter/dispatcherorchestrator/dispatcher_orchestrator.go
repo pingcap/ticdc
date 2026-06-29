@@ -364,19 +364,24 @@ func validateBootstrapTableTriggerEventDispatcher(
 	manager *dispatchermanager.DispatcherManager,
 	id *heartbeatpb.DispatcherID,
 ) error {
+	tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
 	if id == nil {
-		// A nil trigger ID means this bootstrap targets a non-owner node.
-		// Coordinator handoff is origin-first: the target maintainer is added
-		// only after the origin maintainer reports stopped. That stopped report is
-		// produced after dispatcher manager cleanup removes the old table trigger
-		// from the local maps, so accepting nil here does not transfer trigger
-		// ownership to the incoming maintainer.
+		if tableTriggerDispatcher == nil {
+			return nil
+		}
+		return validateBootstrapNoTableTriggerDispatcher(
+			cfId,
+			tableTriggerDispatcher.GetId(),
+			"table trigger event dispatcher",
+		)
+	}
+	if tableTriggerDispatcher == nil {
 		return nil
 	}
 	return validateBootstrapTableTriggerDispatcherID(
 		cfId,
 		id,
-		manager.GetTableTriggerEventDispatcher(),
+		tableTriggerDispatcher.GetId(),
 		"table trigger event dispatcher",
 	)
 }
@@ -392,14 +397,21 @@ func ensureBootstrapTableTriggerEventDispatcher(
 	if id == nil {
 		return nil
 	}
-	return ensureBootstrapTableTriggerDispatcher(
+	tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
+	if tableTriggerDispatcher == nil {
+		return ensureBootstrapTableTriggerDispatcher(
+			cfId,
+			"table trigger event dispatcher",
+			func() error {
+				return manager.NewTableTriggerEventDispatcher(id, startTs, false)
+			},
+		)
+	}
+	return validateBootstrapTableTriggerDispatcherID(
 		cfId,
 		id,
-		manager.GetTableTriggerEventDispatcher(),
+		tableTriggerDispatcher.GetId(),
 		"table trigger event dispatcher",
-		func() error {
-			return manager.NewTableTriggerEventDispatcher(id, startTs, false)
-		},
 	)
 }
 
@@ -411,19 +423,24 @@ func validateBootstrapTableTriggerRedoDispatcher(
 	manager *dispatchermanager.DispatcherManager,
 	id *heartbeatpb.DispatcherID,
 ) error {
+	tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher()
 	if id == nil {
-		// A nil redo trigger ID means this bootstrap targets a non-owner node.
-		// Coordinator handoff is origin-first: the target maintainer is added
-		// only after the origin maintainer reports stopped. That stopped report is
-		// produced after dispatcher manager cleanup removes the old redo trigger
-		// from the local maps, so accepting nil here does not transfer redo trigger
-		// ownership to the incoming maintainer.
+		if tableTriggerRedoDispatcher == nil {
+			return nil
+		}
+		return validateBootstrapNoTableTriggerDispatcher(
+			cfId,
+			tableTriggerRedoDispatcher.GetId(),
+			"table trigger redo dispatcher",
+		)
+	}
+	if tableTriggerRedoDispatcher == nil {
 		return nil
 	}
 	return validateBootstrapTableTriggerDispatcherID(
 		cfId,
 		id,
-		manager.GetTableTriggerRedoDispatcher(),
+		tableTriggerRedoDispatcher.GetId(),
 		"table trigger redo dispatcher",
 	)
 }
@@ -439,49 +456,71 @@ func ensureBootstrapTableTriggerRedoDispatcher(
 	if id == nil {
 		return nil
 	}
-	return ensureBootstrapTableTriggerDispatcher(
+	tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher()
+	if tableTriggerRedoDispatcher == nil {
+		return ensureBootstrapTableTriggerDispatcher(
+			cfId,
+			"table trigger redo dispatcher",
+			func() error {
+				return manager.NewTableTriggerRedoDispatcher(id, startTs, false)
+			},
+		)
+	}
+	return validateBootstrapTableTriggerDispatcherID(
 		cfId,
 		id,
-		manager.GetTableTriggerRedoDispatcher(),
+		tableTriggerRedoDispatcher.GetId(),
 		"table trigger redo dispatcher",
-		func() error {
-			return manager.NewTableTriggerRedoDispatcher(id, startTs, false)
-		},
 	)
 }
 
 func ensureBootstrapTableTriggerDispatcher(
 	cfId common.ChangeFeedID,
-	id *heartbeatpb.DispatcherID,
-	current dispatcher.Dispatcher,
 	triggerName string,
 	create func() error,
 ) error {
-	if current == nil {
-		if err := create(); err != nil {
-			log.Error("failed to create "+triggerName,
-				zap.Stringer("changefeedID", cfId), zap.Error(err))
-			return err
+	if err := create(); err != nil {
+		if !dispatchermanager.IsWritePathClosedError(err) {
+			log.Error("failed to create table trigger dispatcher",
+				zap.Stringer("changefeedID", cfId),
+				zap.String("triggerName", triggerName),
+				zap.Error(err))
 		}
-		return nil
+		return err
 	}
-	return validateBootstrapTableTriggerDispatcherID(cfId, id, current, triggerName)
+	return nil
+}
+
+func validateBootstrapNoTableTriggerDispatcher(
+	cfId common.ChangeFeedID,
+	currentID common.DispatcherID,
+	triggerName string,
+) error {
+	// A nil trigger ID is valid only after local trigger cleanup has removed the
+	// previous owner; otherwise owner transfer would leave stale DDL ownership.
+	log.Error("table trigger dispatcher present during nil trigger bootstrap",
+		zap.Stringer("changefeedID", cfId),
+		zap.String("triggerName", triggerName),
+		zap.Stringer("actualDispatcherID", currentID))
+	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+		GenWithStackByArgs(triggerName + " present during nil trigger bootstrap")
 }
 
 func validateBootstrapTableTriggerDispatcherID(
 	cfId common.ChangeFeedID,
 	id *heartbeatpb.DispatcherID,
-	current dispatcher.Dispatcher,
+	currentID common.DispatcherID,
 	triggerName string,
 ) error {
 	expectedID := common.NewDispatcherIDFromPB(id)
-	if current == nil || current.GetId() == expectedID {
+	if currentID == expectedID {
 		return nil
 	}
-	log.Error(triggerName+" id mismatch during bootstrap",
+	log.Error("table trigger dispatcher id mismatch during bootstrap",
 		zap.Stringer("changefeedID", cfId),
+		zap.String("triggerName", triggerName),
 		zap.Stringer("expectedDispatcherID", expectedID),
-		zap.Stringer("actualDispatcherID", current.GetId()))
+		zap.Stringer("actualDispatcherID", currentID))
 	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 		GenWithStackByArgs(triggerName + " id mismatch during bootstrap")
 }
@@ -494,9 +533,18 @@ func (m *DispatcherOrchestrator) handleBootstrapTriggerError(
 	triggerName string,
 	err error,
 ) error {
-	if dispatchermanager.IsWritePathClosedError(err) || m.fenced.Load() || m.closed.Load() {
-		log.Info("dispatcher manager write path closed while creating "+triggerName,
-			zap.Stringer("changefeedID", cfId), zap.Error(err))
+	if dispatchermanager.IsWritePathClosedError(err) {
+		log.Info("dispatcher manager write path closed while creating table trigger dispatcher",
+			zap.Stringer("changefeedID", cfId),
+			zap.String("triggerName", triggerName),
+			zap.Error(err))
+		return nil
+	}
+	if m.fenced.Load() || m.closed.Load() {
+		log.Info("dispatcher orchestrator closed while creating table trigger dispatcher",
+			zap.Stringer("changefeedID", cfId),
+			zap.String("triggerName", triggerName),
+			zap.Error(err))
 		return nil
 	}
 	return m.handleDispatcherError(from, changefeedID, maintainerEpoch, err)
