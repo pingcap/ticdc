@@ -39,12 +39,14 @@ type BatchEncoder struct {
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
 func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
-	if d.config.Protocol == config.ProtocolDebeziumAvro && !d.config.AvroEnableWatermark {
+	if d.config.Protocol == config.ProtocolDebeziumAvro &&
+		(!d.config.EnableTiDBExtension || !d.config.AvroEnableWatermark) {
 		return nil, nil
 	}
 	if !d.config.EnableTiDBExtension {
 		return nil, nil
 	}
+
 	keyMap := bytes.Buffer{}
 	valueBuf := bytes.Buffer{}
 	err := d.codec.EncodeCheckpointEvent(ts, &keyMap, &valueBuf)
@@ -113,9 +115,11 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 // EncodeDDLEvent implements the RowEventEncoder interface
 // DDL message unresolved tso
 func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message, error) {
-	if d.config.Protocol == config.ProtocolDebeziumAvro {
+	if d.config.Protocol == config.ProtocolDebeziumAvro &&
+		(!d.config.EnableTiDBExtension || !d.config.AvroEnableWatermark) {
 		return nil, nil
 	}
+
 	valueBuf := bytes.Buffer{}
 	keyMap := bytes.Buffer{}
 	err := d.codec.EncodeDDLEvent(e, &keyMap, &valueBuf)

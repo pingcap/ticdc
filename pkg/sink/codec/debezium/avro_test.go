@@ -524,7 +524,7 @@ func TestDebeziumConfluentAvroDecodeMissingArrayRecordField(t *testing.T) {
 	}, payload)
 }
 
-func TestDebeziumConfluentAvroDoesNotEncodeDDLEvent(t *testing.T) {
+func TestDebeziumConfluentAvroEncodeDDLEvent(t *testing.T) {
 	ctx := context.Background()
 	_, err := avro.SetupEncoderAndSchemaRegistry4Testing(
 		ctx,
@@ -538,13 +538,37 @@ func TestDebeziumConfluentAvroDoesNotEncodeDDLEvent(t *testing.T) {
 	cfg.EnableTiDBExtension = true
 	cfg.TimeZone = time.UTC
 
+	routedDDL := common.NewRoutedDDLEvent4Test()
+
 	encoder, err := NewAvroBatchEncoder(ctx, cfg, "dbserver1")
 	require.NoError(t, err)
-
-	routedDDL := common.NewRoutedDDLEvent4Test()
 	message, err := encoder.EncodeDDLEvent(routedDDL)
 	require.NoError(t, err)
 	require.Nil(t, message)
+
+	cfg.AvroEnableWatermark = true
+	encoder, err = NewAvroBatchEncoder(ctx, cfg, "dbserver1")
+	require.NoError(t, err)
+	message, err = encoder.EncodeDDLEvent(routedDDL)
+	require.NoError(t, err)
+	require.NotNil(t, message)
+	require.Equal(t, byte(0), message.Key[0])
+	require.Equal(t, byte(0), message.Value[0])
+
+	decoder, err := NewAvroDecoder(ctx, cfg, 0, nil)
+	require.NoError(t, err)
+	decoder.AddKeyValue(message.Key, message.Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	decoded := decoder.NextDDLEvent()
+	require.Equal(t, routedDDL.GetCommitTs(), decoded.GetCommitTs())
+	require.Equal(t, routedDDL.GetDDLType(), decoded.GetDDLType())
+	require.Equal(t, "target_db", decoded.SchemaName)
+	require.Equal(t, "target_table", decoded.TableName)
+	require.Equal(t, routedDDL.Query, decoded.Query)
 }
 
 func TestDebeziumConfluentAvroEncodeCheckpointEvent(t *testing.T) {

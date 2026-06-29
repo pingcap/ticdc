@@ -76,7 +76,6 @@ function run() {
 
 	run_sql_file "$CUR/data/workload.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	run_sql_file "$CUR/data/ddl.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	run_sql_file "$CUR/data/ddl.sql" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 	run_sql_file "$CUR/data/post_ddl_workload.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 
 	check_sync_diff "$WORK_DIR" "$CUR/conf/diff_config.toml" 120

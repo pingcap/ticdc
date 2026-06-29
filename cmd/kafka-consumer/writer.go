@@ -634,7 +634,8 @@ func (w *writer) appendRow2Group(dml *event.DMLEvent, progress *partitionProgres
 			zap.Stringer("eventType", dml.RowTypes[0]),
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
-	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro, config.ProtocolDebezium:
+	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro,
+		config.ProtocolDebezium, config.ProtocolDebeziumAvro:
 		// for partition table, these protocols cannot assign physical table id to each dml message,
 		// we cannot distinguish whether it's a real fallback event or not, still append it.
 		if w.partitionTableAccessor.IsPartitionTable(schema, table) {
