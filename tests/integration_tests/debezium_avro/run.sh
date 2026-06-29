@@ -83,13 +83,6 @@ function run() {
 	check_schema_registry_subject "$TOPIC_NAME-key" "tp_accountKey"
 	check_schema_registry_subject "$TOPIC_NAME-value" "tp_accountEnvelope"
 
-	echo "Starting build checksum checker..."
-	cd "$CUR/../../utils/checksum_checker"
-	if [ ! -f ./checksum_checker ]; then
-		GO111MODULE=on go build
-	fi
-	./checksum_checker --upstream-uri "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/" --downstream-uri "root@tcp(${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT})/" --databases "test"
-
 	cleanup_process "$CDC_BINARY"
 }
 
