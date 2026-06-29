@@ -277,15 +277,17 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 		log.Warn("scheduleDispatcherRequest has no valid operator key, skip")
 		return common.DispatcherID{}, false
 	}
-	if !isMaintainerControlMessageAllowed(
-		dispatcherManager,
-		"drop stale schedule dispatcher request",
-		"requestMaintainerEpoch",
-		req.ChangefeedID,
-		req.From,
-		req.MaintainerEpoch,
-		zap.String("dispatcherID", dispatcherID.String()),
-	) {
+	admission := dispatcherManager.maintainerRequestAdmission(req.From, req.MaintainerEpoch)
+	if !admission.allowed {
+		logStaleMaintainerControlMessage(
+			"drop stale schedule dispatcher request",
+			"requestMaintainerEpoch",
+			req.ChangefeedID,
+			req.From,
+			req.MaintainerEpoch,
+			admission,
+			zap.String("dispatcherID", dispatcherID.String()),
+		)
 		return common.DispatcherID{}, false
 	}
 	isRedo := common.IsRedoMode(req.Config.Mode)
@@ -847,6 +849,19 @@ func isMaintainerControlMessageAllowed(
 	if admission.allowed {
 		return true
 	}
+	logStaleMaintainerControlMessage(logMessage, epochField, changefeedID, from, maintainerEpoch, admission, extraFields...)
+	return false
+}
+
+func logStaleMaintainerControlMessage(
+	logMessage string,
+	epochField string,
+	changefeedID *heartbeatpb.ChangefeedID,
+	from node.ID,
+	maintainerEpoch uint64,
+	admission maintainerRequestAdmission,
+	extraFields ...zap.Field,
+) {
 	fields := make([]zap.Field, 0, 5+len(extraFields))
 	fields = append(fields,
 		zap.String("changefeedID", changefeedID.String()),
@@ -857,7 +872,6 @@ func isMaintainerControlMessageAllowed(
 	)
 	fields = append(fields, extraFields...)
 	log.Warn(logMessage, fields...)
-	return false
 }
 
 func (h *RedoMetaMessageHandler) GetSize(event RedoMetaMessage) int   { return 0 }

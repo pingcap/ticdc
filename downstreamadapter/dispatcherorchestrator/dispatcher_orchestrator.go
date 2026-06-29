@@ -892,6 +892,10 @@ func retrieveOperatorsForBootstrapResponse(
 	manager *dispatchermanager.DispatcherManager,
 	response *heartbeatpb.MaintainerBootstrapResponse,
 ) {
+	// The caller holds MaintainerFenceMu while building this response, so the
+	// owner snapshot cannot change during the operator-map iteration.
+	currentMaintainer := manager.GetMaintainerID()
+	currentMaintainerEpoch := manager.GetMaintainerEpoch()
 	var reportedDispatchers map[reportedDispatcherKey]struct{}
 	isDispatcherReported := func(dispatcherID common.DispatcherID, mode int64) bool {
 		if reportedDispatchers == nil {
@@ -912,7 +916,12 @@ func retrieveOperatorsForBootstrapResponse(
 
 	manager.GetCurrentOperatorMap().Range(func(_, value any) bool {
 		req := value.(dispatchermanager.SchedulerDispatcherRequest)
-		requestAllowed := manager.IsMaintainerRequestAllowed(req.From, req.MaintainerEpoch)
+		requestAllowed := isMaintainerRequestAllowedBySnapshot(
+			req.From,
+			req.MaintainerEpoch,
+			currentMaintainer,
+			currentMaintainerEpoch,
+		)
 		dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
 		dispatcherExistsKnown := !common.IsRedoMode(req.Config.Mode) || manager.IsRedoReady()
 		dispatcherReported := false
@@ -931,8 +940,8 @@ func retrieveOperatorsForBootstrapResponse(
 				zap.String("dispatcherID", req.Config.DispatcherID.String()),
 				zap.String("from", req.From.String()),
 				zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
-				zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
-				zap.String("currentMaintainer", manager.GetMaintainerID().String()))
+				zap.Uint64("currentMaintainerEpoch", currentMaintainerEpoch),
+				zap.String("currentMaintainer", currentMaintainer.String()))
 		}
 		// Log error if dispatcher not found and action is not create.
 		// It's possible that the dispatcher is not found when the action is create
@@ -958,6 +967,18 @@ func retrieveOperatorsForBootstrapResponse(
 			proto.Clone(req.ScheduleDispatcherRequest).(*heartbeatpb.ScheduleDispatcherRequest))
 		return true
 	})
+}
+
+func isMaintainerRequestAllowedBySnapshot(
+	from node.ID,
+	maintainerEpoch uint64,
+	currentMaintainer node.ID,
+	currentMaintainerEpoch uint64,
+) bool {
+	if maintainerEpoch == 0 {
+		return currentMaintainerEpoch == 0 && (currentMaintainer == "" || currentMaintainer == from)
+	}
+	return currentMaintainerEpoch == maintainerEpoch && currentMaintainer == from
 }
 
 func isDispatcherInLiveMap(
