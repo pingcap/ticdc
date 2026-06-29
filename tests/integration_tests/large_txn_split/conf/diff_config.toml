@@ -1,4 +1,3 @@
-tz = "Asia/Shanghai"
 check-thread-count = 4
 export-fix-sql = true
 check-struct-only = false
