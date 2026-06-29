@@ -277,14 +277,15 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 		log.Warn("scheduleDispatcherRequest has no valid operator key, skip")
 		return common.DispatcherID{}, false
 	}
-	if !dispatcherManager.IsMaintainerRequestAllowed(req.From, req.MaintainerEpoch) {
-		log.Warn("drop stale schedule dispatcher request",
-			zap.String("changefeedID", req.ChangefeedID.String()),
-			zap.String("dispatcherID", dispatcherID.String()),
-			zap.String("from", req.From.String()),
-			zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
-			zap.Uint64("currentMaintainerEpoch", dispatcherManager.GetMaintainerEpoch()),
-			zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
+	if !isMaintainerControlMessageAllowed(
+		dispatcherManager,
+		"drop stale schedule dispatcher request",
+		"requestMaintainerEpoch",
+		req.ChangefeedID,
+		req.From,
+		req.MaintainerEpoch,
+		zap.String("dispatcherID", dispatcherID.String()),
+	) {
 		return common.DispatcherID{}, false
 	}
 	isRedo := common.IsRedoMode(req.Config.Mode)
@@ -840,16 +841,22 @@ func isMaintainerControlMessageAllowed(
 	changefeedID *heartbeatpb.ChangefeedID,
 	from node.ID,
 	maintainerEpoch uint64,
+	extraFields ...zap.Field,
 ) bool {
-	if dispatcherManager.IsMaintainerRequestAllowed(from, maintainerEpoch) {
+	admission := dispatcherManager.maintainerRequestAdmission(from, maintainerEpoch)
+	if admission.allowed {
 		return true
 	}
-	log.Warn(logMessage,
+	fields := make([]zap.Field, 0, 5+len(extraFields))
+	fields = append(fields,
 		zap.String("changefeedID", changefeedID.String()),
 		zap.String("from", from.String()),
 		zap.Uint64(epochField, maintainerEpoch),
-		zap.Uint64("currentMaintainerEpoch", dispatcherManager.GetMaintainerEpoch()),
-		zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
+		zap.Uint64("currentMaintainerEpoch", admission.currentEpoch),
+		zap.String("currentMaintainer", admission.currentMaintainer.String()),
+	)
+	fields = append(fields, extraFields...)
+	log.Warn(logMessage, fields...)
 	return false
 }
 

@@ -91,15 +91,33 @@ func (e *DispatcherManager) canUpdateMaintainerLocked(from node.ID, maintainerEp
 	return true
 }
 
+// maintainerRequestAdmission is a single meta-lock snapshot for request fencing
+// and stale-request logs.
+type maintainerRequestAdmission struct {
+	allowed           bool
+	currentEpoch      uint64
+	currentMaintainer node.ID
+}
+
 // IsMaintainerRequestAllowed reports whether a request belongs to the current
 // maintainer owner/epoch view known by this dispatcher manager.
 func (e *DispatcherManager) IsMaintainerRequestAllowed(from node.ID, maintainerEpoch uint64) bool {
+	return e.maintainerRequestAdmission(from, maintainerEpoch).allowed
+}
+
+func (e *DispatcherManager) maintainerRequestAdmission(from node.ID, maintainerEpoch uint64) maintainerRequestAdmission {
 	e.meta.Lock()
 	defer e.meta.Unlock()
-	if maintainerEpoch == 0 {
-		return e.meta.maintainerEpoch == 0 && (e.meta.maintainerID == "" || e.meta.maintainerID == from)
+	admission := maintainerRequestAdmission{
+		currentEpoch:      e.meta.maintainerEpoch,
+		currentMaintainer: e.meta.maintainerID,
 	}
-	return e.meta.maintainerEpoch == maintainerEpoch && e.meta.maintainerID == from
+	if maintainerEpoch == 0 {
+		admission.allowed = e.meta.maintainerEpoch == 0 && (e.meta.maintainerID == "" || e.meta.maintainerID == from)
+		return admission
+	}
+	admission.allowed = e.meta.maintainerEpoch == maintainerEpoch && e.meta.maintainerID == from
+	return admission
 }
 
 func (e *DispatcherManager) GetMaintainerEpoch() uint64 {
