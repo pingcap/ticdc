@@ -991,6 +991,10 @@ func setupBootstrapTestServices(t *testing.T, mc messaging.MessageCenter, withEv
 	t.Cleanup(heartbeatCollector.Close)
 	if withEventCollector {
 		appcontext.SetService(appcontext.EventCollector, eventcollector.New(node.ID("receiver")))
+	} else {
+		// Store a typed nil so tests that do not need EventCollector cannot
+		// accidentally reuse an instance from an earlier test.
+		appcontext.SetService[*eventcollector.EventCollector](appcontext.EventCollector, nil)
 	}
 }
 
