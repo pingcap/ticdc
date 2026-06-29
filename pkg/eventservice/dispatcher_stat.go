@@ -108,6 +108,10 @@ type dispatcherStat struct {
 	// These two values are used to construct the scan range for the next scan task.
 	lastScannedCommitTs atomic.Uint64
 	lastScannedStartTs  atomic.Uint64
+	lastScannedPosition atomic.Value
+
+	largeTxnStateMu sync.Mutex
+	largeTxnState   *largeTxnScanState
 
 	// isRemoved is used to indicate whether the dispatcher is removed.
 	// it is set to true in the following two cases:
@@ -211,8 +215,41 @@ func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 }
 
 func (a *dispatcherStat) updateScanRange(txnCommitTs, txnStartTs uint64) {
+	a.updateScanRangeWithPosition(txnCommitTs, txnStartTs, nil)
+}
+
+func (a *dispatcherStat) updateScanRangeWithPosition(
+	txnCommitTs uint64,
+	txnStartTs uint64,
+	position common.ScanPosition,
+) {
 	a.lastScannedCommitTs.Store(txnCommitTs)
 	a.lastScannedStartTs.Store(txnStartTs)
+	a.storeLastScannedPosition(position)
+}
+
+func (a *dispatcherStat) storeLastScannedPosition(position common.ScanPosition) {
+	if len(position) == 0 {
+		a.lastScannedPosition.Store(common.ScanPosition{})
+		return
+	}
+	positionCopy := make(common.ScanPosition, len(position))
+	copy(positionCopy, position)
+	a.lastScannedPosition.Store(positionCopy)
+}
+
+func (a *dispatcherStat) getLastScannedPosition() common.ScanPosition {
+	value := a.lastScannedPosition.Load()
+	if value == nil {
+		return nil
+	}
+	position := value.(common.ScanPosition)
+	if len(position) == 0 {
+		return nil
+	}
+	positionCopy := make(common.ScanPosition, len(position))
+	copy(positionCopy, position)
+	return positionCopy
 }
 
 // onResolvedTs try to update the resolved ts of the dispatcher.
@@ -239,10 +276,16 @@ func (a *dispatcherStat) onLatestCommitTs(latestCommitTs uint64) bool {
 func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	lastTxnCommitTs := a.lastScannedCommitTs.Load()
 	lastTxnStartTs := a.lastScannedStartTs.Load()
+	lastPosition := a.getLastScannedPosition()
+	hasPendingLargeTxn := a.hasPendingLargeTxnState()
 
 	// the data not received by the event store yet, so just skip it.
 	resolvedTs := a.receivedResolvedTs.Load()
-	if lastTxnCommitTs >= resolvedTs {
+	if lastTxnCommitTs > resolvedTs {
+		return common.DataRange{}, false
+	}
+	if lastTxnCommitTs == resolvedTs && lastTxnStartTs == 0 &&
+		len(lastPosition) == 0 && !hasPendingLargeTxn {
 		return common.DataRange{}, false
 	}
 	// Range: (CommitTsStart-lastScannedStartTs, CommitTsEnd],
@@ -251,6 +294,7 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 		Span:                  a.info.GetTableSpan(),
 		CommitTsStart:         lastTxnCommitTs,
 		CommitTsEnd:           resolvedTs,
+		RowLevelScanPosition:  lastPosition,
 		LastScannedTxnStartTs: lastTxnStartTs,
 	}
 	return r, true

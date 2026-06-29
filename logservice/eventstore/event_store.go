@@ -115,6 +115,14 @@ type EventIterator interface {
 	Close() (eventCnt int64, err error)
 }
 
+type EventIteratorWithScanPosition interface {
+	EventIterator
+
+	// NextWithScanPosition returns the next event, the opaque position of the
+	// returned event, and whether this event is from a new txn.
+	NextWithScanPosition() (*common.RawKVEntry, common.ScanPosition, bool)
+}
+
 type dispatcherStat struct {
 	dispatcherID common.DispatcherID
 	// data span of this dispatcher
@@ -918,6 +926,9 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	// Pebble uses [LowerBound, UpperBound), so end is always encoded as
 	// CommitTsEnd+1.
 	//
+	// If RowLevelScanPosition is present, continue scanning from the next
+	// eventstore key after that opaque position.
+	//
 	// If LastScannedTxnStartTs is zero, scan commit ts in
 	// (CommitTsStart, CommitTsEnd], and use CommitTsStart+1 as LowerBound.
 	//
@@ -926,7 +937,13 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	// later commit ts up to CommitTsEnd.
 	//
 	var start []byte
-	if dataRange.LastScannedTxnStartTs != 0 {
+	if len(dataRange.RowLevelScanPosition) != 0 {
+		start = encodeRowLevelScanPositionLowerBound(
+			uint64(subStat.subID),
+			stat.tableSpan.TableID,
+			dataRange.RowLevelScanPosition,
+		)
+	} else if dataRange.LastScannedTxnStartTs != 0 {
 		start = encodeScanLowerBound(
 			uint64(subStat.subID),
 			stat.tableSpan.TableID,
@@ -1563,10 +1580,16 @@ type eventStoreIter struct {
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
+	rawKV, _, isNewTxn := iter.NextWithScanPosition()
+	return rawKV, isNewTxn
+}
+
+func (iter *eventStoreIter) NextWithScanPosition() (*common.RawKVEntry, common.ScanPosition, bool) {
 	rawKV := &common.RawKVEntry{}
+	var scanPosition common.ScanPosition
 	for {
 		if !iter.innerIter.Valid() {
-			return nil, false
+			return nil, nil, false
 		}
 		key := iter.innerIter.Key()
 		value := iter.innerIter.Value()
@@ -1605,11 +1628,13 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		}
 		scannedBytesMetrics.Add(float64(len(value)))
 		if !iter.needCheckSpan {
+			scanPosition = encodeRowLevelScanPosition(key)
 			break
 		}
 		comparableKey := common.ToComparableKey(rawKV.Key)
 		if bytes.Compare(comparableKey, iter.tableSpan.StartKey) >= 0 &&
 			bytes.Compare(comparableKey, iter.tableSpan.EndKey) < 0 {
+			scanPosition = encodeRowLevelScanPosition(key)
 			break
 		}
 		log.Debug("event store iter skip kv not in table span",
@@ -1635,7 +1660,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 	startTime := time.Now()
 	iter.innerIter.Next()
 	metricEventStoreNextReadDurationHistogram.Observe(time.Since(startTime).Seconds())
-	return rawKV, isNewTxn
+	return rawKV, scanPosition, isNewTxn
 }
 
 func (iter *eventStoreIter) Close() (int64, error) {

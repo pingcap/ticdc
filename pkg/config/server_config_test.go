@@ -58,6 +58,7 @@ enable-legacy-safepoint = true
 func TestServerConfigClone(t *testing.T) {
 	t.Parallel()
 	conf := GetDefaultServerConfig()
+	require.Equal(t, int64(32*1024*1024), conf.Debug.EventService.LargeTxnThresholdInBytes)
 	conf.Addr = "192.155.22.33:8887"
 	conf.Sorter.SortDir = "/tmp"
 	conf2 := conf.Clone()

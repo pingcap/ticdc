@@ -471,6 +471,13 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	}
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
+		hasSameCommitTxnResume := dataRange.LastScannedTxnStartTs != 0 &&
+			dataRange.CommitTsEnd == dataRange.CommitTsStart
+		if len(dataRange.RowLevelScanPosition) != 0 ||
+			hasSameCommitTxnResume ||
+			task.hasPendingLargeTxnState() {
+			return true, dataRange
+		}
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		// Scan range can become empty after applying capping (for example, scan window).
 		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
@@ -698,7 +705,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
-	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
+	scannedBytes, events, progress, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if scannedBytes < 0 {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
 	} else if scannedBytes >= 0 && scannedBytes < sl.maxDMLBytes {
@@ -757,6 +764,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		default:
 			log.Panic("unknown event type", zap.Any("event", e))
 		}
+	}
+	if progress.valid {
+		task.updateScanRangeWithPosition(
+			progress.txnCommitTs,
+			progress.txnStartTs,
+			progress.rowLevelScanPosition,
+		)
 	}
 	task.info.GetMode()
 	// Update metrics
@@ -1095,6 +1109,12 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
 	stat.isRemoved.Store(true)
+	if err := stat.cleanupLargeTxnState(); err != nil {
+		log.Warn("cleanup large txn state failed when removing dispatcher",
+			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+			zap.Stringer("dispatcherID", id),
+			zap.Error(err))
+	}
 
 	if isTableTriggerDispatcher {
 		c.tableTriggerDispatchers.Delete(id)
@@ -1168,6 +1188,12 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	// No need to worry that the old dispatcher is still scanning,
 	// because its data will be filtered by event collector because of stale epoch.
 	oldStat.isRemoved.Store(true)
+	if err := oldStat.cleanupLargeTxnState(); err != nil {
+		log.Warn("cleanup large txn state failed when resetting dispatcher",
+			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+			zap.Stringer("dispatcherID", dispatcherID),
+			zap.Error(err))
+	}
 
 	// Create a new dispatcherStat and replace the old one.
 	// The new dispatcherStat will be used for all future operations.
@@ -1218,6 +1244,12 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			return nil
 		}
 		oldStat.isRemoved.Store(true)
+		if err := oldStat.cleanupLargeTxnState(); err != nil {
+			log.Warn("cleanup large txn state failed when retrying dispatcher reset",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.Error(err))
+		}
 	}
 
 	log.Info("reset dispatcher",

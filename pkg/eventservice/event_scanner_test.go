@@ -16,6 +16,7 @@ package eventservice
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -49,6 +51,16 @@ func (g *stubEventGetter) GetIterator(
 
 func makeDispatcherReady(disp *dispatcherStat) {
 	disp.setHandshaked()
+}
+
+func setLargeTxnThresholdForTest(t *testing.T, threshold int64) {
+	original := config.GetGlobalServerConfig().Clone()
+	cfg := original.Clone()
+	cfg.Debug.EventService.LargeTxnThresholdInBytes = threshold
+	config.StoreGlobalServerConfig(cfg)
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(original)
+	})
 }
 
 func (m *mockMounter) DecodeToChunk(rawKV *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error) {
@@ -78,7 +90,7 @@ func TestEventScannerReturnsIteratorErrors(t *testing.T) {
 		&mockMounter{},
 		0,
 	)
-	_, events, interrupted, err := scanner.scan(context.Background(), disp, dataRange, scanLimit{})
+	_, events, _, interrupted, err := scanner.scan(context.Background(), disp, dataRange, scanLimit{})
 	require.ErrorIs(t, err, getIterErr)
 	require.Nil(t, events)
 	require.False(t, interrupted)
@@ -90,7 +102,7 @@ func TestEventScannerReturnsIteratorErrors(t *testing.T) {
 		&mockMounter{},
 		0,
 	)
-	_, events, interrupted, err = scanner.scan(context.Background(), disp, dataRange, scanLimit{})
+	_, events, _, interrupted, err = scanner.scan(context.Background(), disp, dataRange, scanLimit{})
 	require.ErrorIs(t, err, closeErr)
 	require.Nil(t, events)
 	require.False(t, interrupted)
@@ -118,6 +130,7 @@ func TestEventScanner(t *testing.T) {
 	ctx := context.Background()
 
 	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+	disp.txnAtomicity = config.AtomicityLevel("table")
 	makeDispatcherReady(disp)
 	err := broker.addDispatcher(disp.info)
 	require.NoError(t, err)
@@ -134,7 +147,7 @@ func TestEventScanner(t *testing.T) {
 	ok, dataRange := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
 
-	_, events, isInterrupted, err := scanner.scan(ctx, disp, dataRange, sl)
+	_, events, _, isInterrupted, err := scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isInterrupted)
 	require.Equal(t, 1, len(events))
@@ -155,7 +168,7 @@ func TestEventScanner(t *testing.T) {
 	}
 
 	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
-	_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
+	_, events, _, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isInterrupted)
 	require.Equal(t, 2, len(events))
@@ -185,7 +198,7 @@ func TestEventScanner(t *testing.T) {
 	}
 
 	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
-	_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
+	_, events, _, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isInterrupted)
 	require.Equal(t, 2, len(events))
@@ -224,7 +237,7 @@ func TestEventScanner(t *testing.T) {
 		maxDMLBytes: 1000,
 	}
 	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
-	_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
+	_, events, _, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isInterrupted)
 	require.Equal(t, 4, len(events))
@@ -241,6 +254,7 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, batchDML2.DMLEvents[1].GetCommitTs(), kvEvents[2].CRTs)
 	require.Equal(t, batchDML2.DMLEvents[2].GetCommitTs(), kvEvents[3].CRTs)
 
+	disp.txnAtomicity = config.AtomicityLevel("table")
 	// case 5: Reaches scan limit, only 1 DDL and 1 DML event scanned
 	// Tests that when MaxBytes limit is reached, the scanner returns partial events with isInterrupted=true
 	// Event sequence:
@@ -254,7 +268,7 @@ func TestEventScanner(t *testing.T) {
 	}
 
 	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
-	_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
+	_, events, _, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isInterrupted)
 	require.Equal(t, 3, len(events))
@@ -298,7 +312,7 @@ func TestEventScanner(t *testing.T) {
 
 	require.True(t, ok)
 	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
-	_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
+	_, events, _, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isInterrupted)
 	require.Equal(t, 2, len(events))
@@ -337,7 +351,7 @@ func TestEventScanner(t *testing.T) {
 	}
 
 	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
-	_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
+	_, events, _, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isInterrupted)
 	require.Equal(t, 3, len(events))
@@ -376,7 +390,7 @@ func TestEventScanner(t *testing.T) {
 		maxDMLBytes: 1000,
 	}
 	scanner = newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
-	_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
+	_, events, _, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isInterrupted)
 	require.Equal(t, 5, len(events))
@@ -411,6 +425,336 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, resolvedTs, e.GetCommitTs())
 }
 
+func TestEventScannerSplitsLargeTxnWithRowLevelProgress(t *testing.T) {
+	setLargeTxnThresholdForTest(t, 0)
+
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t_split(id int primary key, c char(50))`, []string{
+		`insert into test.t_split(id,c) values (0, "c0")`,
+		`insert into test.t_split(id,c) values (1, "c1")`,
+	}...)
+	require.Len(t, kvEvents, 2)
+
+	kvEvents[1].StartTs = kvEvents[0].StartTs
+	kvEvents[1].CRTs = kvEvents[0].CRTs
+	resolvedTs := kvEvents[0].CRTs
+
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+	mockStore := broker.eventStore.(*mockEventStore)
+	mockSchemaStore := broker.schemaStore.(*mockSchemaStore)
+
+	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.startTs = ddlEvent.FinishedTs
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
+	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+	makeDispatcherReady(disp)
+	require.NoError(t, broker.addDispatcher(disp.info))
+
+	mockSchemaStore.AppendDDLEvent(disInfo.GetTableSpan().TableID, ddlEvent)
+	require.NoError(t, mockStore.AppendEvents(disInfo.GetID(), resolvedTs, kvEvents...))
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(resolvedTs)
+
+	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
+	sl := scanLimit{maxDMLBytes: 1, isInUnitTest: true}
+
+	dataRange, ok := disp.getDataRange()
+	require.True(t, ok)
+	_, events, progress, interrupted, err := scanner.scan(context.Background(), disp, dataRange, sl)
+	require.NoError(t, err)
+	require.True(t, interrupted)
+	require.True(t, progress.valid)
+	require.NotEmpty(t, progress.rowLevelScanPosition)
+	require.Len(t, events, 1)
+	firstBatch := events[0].(*event.BatchDMLEvent)
+	require.Equal(t, int32(1), firstBatch.Len())
+	require.Equal(t, kvEvents[0].CRTs, firstBatch.GetCommitTs())
+
+	disp.updateScanRangeWithPosition(progress.txnCommitTs, progress.txnStartTs, progress.rowLevelScanPosition)
+	dataRange, ok = disp.getDataRange()
+	require.True(t, ok)
+	require.Equal(t, progress.rowLevelScanPosition, dataRange.RowLevelScanPosition)
+	_, events, progress, interrupted, err = scanner.scan(context.Background(), disp, dataRange, sl)
+	require.NoError(t, err)
+	require.True(t, interrupted)
+	require.True(t, progress.valid)
+	require.NotEmpty(t, progress.rowLevelScanPosition)
+	require.Len(t, events, 1)
+	secondBatch := events[0].(*event.BatchDMLEvent)
+	require.Equal(t, int32(1), secondBatch.Len())
+	require.Equal(t, kvEvents[1].CRTs, secondBatch.GetCommitTs())
+
+	disp.updateScanRangeWithPosition(progress.txnCommitTs, progress.txnStartTs, progress.rowLevelScanPosition)
+	dataRange, ok = disp.getDataRange()
+	require.True(t, ok)
+	_, events, progress, interrupted, err = scanner.scan(context.Background(), disp, dataRange, sl)
+	require.NoError(t, err)
+	require.False(t, interrupted)
+	require.True(t, progress.valid)
+	require.Len(t, events, 1)
+	resolved, ok := events[0].(event.ResolvedEvent)
+	require.True(t, ok)
+	require.Equal(t, resolvedTs, resolved.ResolvedTs)
+}
+
+func TestEventScannerDoesNotSplitCurrentTxnBelowLargeTxnThreshold(t *testing.T) {
+	setLargeTxnThresholdForTest(t, 1<<30)
+
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t_no_split(id int primary key, c char(50))`, []string{
+		`insert into test.t_no_split(id,c) values (0, "c0")`,
+		`insert into test.t_no_split(id,c) values (1, "c1")`,
+	}...)
+	require.Len(t, kvEvents, 2)
+
+	kvEvents[1].StartTs = kvEvents[0].StartTs
+	kvEvents[1].CRTs = kvEvents[0].CRTs
+	resolvedTs := kvEvents[0].CRTs
+
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+	mockStore := broker.eventStore.(*mockEventStore)
+	mockSchemaStore := broker.schemaStore.(*mockSchemaStore)
+
+	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.startTs = ddlEvent.FinishedTs
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
+	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+	makeDispatcherReady(disp)
+	require.NoError(t, broker.addDispatcher(disp.info))
+
+	mockSchemaStore.AppendDDLEvent(disInfo.GetTableSpan().TableID, ddlEvent)
+	require.NoError(t, mockStore.AppendEvents(disInfo.GetID(), resolvedTs, kvEvents...))
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(resolvedTs)
+
+	scanner := newEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{}, 0)
+	sl := scanLimit{maxDMLBytes: 1, isInUnitTest: true}
+
+	dataRange, ok := disp.getDataRange()
+	require.True(t, ok)
+	_, events, progress, interrupted, err := scanner.scan(context.Background(), disp, dataRange, sl)
+	require.NoError(t, err)
+	require.False(t, interrupted)
+	require.True(t, progress.valid)
+	require.Empty(t, progress.rowLevelScanPosition)
+	require.Len(t, events, 2)
+
+	batch := events[0].(*event.BatchDMLEvent)
+	require.Equal(t, int32(2), batch.Len())
+	require.Equal(t, kvEvents[0].CRTs, batch.GetCommitTs())
+	resolved, ok := events[1].(event.ResolvedEvent)
+	require.True(t, ok)
+	require.Equal(t, resolvedTs, resolved.ResolvedTs)
+}
+
+func TestEventScannerSpillsSplitUKUpdateInLargeTxn(t *testing.T) {
+	setLargeTxnThresholdForTest(t, 0)
+
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	ddlEvent := helper.DDL2Event("create table t_uk_split (id int primary key, a int, b char(50), unique key uk_a(a))")
+	_, updateEvent := helper.DML2UpdateEvent("test", "t_uk_split",
+		"insert into test.t_uk_split(id,a,b) values (1, 10, 'old_b')",
+		"update test.t_uk_split set a = 20 where id = 1")
+	resolvedTs := updateEvent.CRTs
+
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+	mockStore := broker.eventStore.(*mockEventStore)
+	mockSchemaStore := broker.schemaStore.(*mockSchemaStore)
+
+	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.startTs = updateEvent.StartTs
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
+	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+	makeDispatcherReady(disp)
+	require.NoError(t, broker.addDispatcher(disp.info))
+
+	mockSchemaStore.AppendDDLEvent(disInfo.GetTableSpan().TableID, *ddlEvent)
+	require.NoError(t, mockStore.AppendEvents(disInfo.GetID(), resolvedTs, updateEvent))
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(resolvedTs)
+
+	scanner := newEventScanner(broker.eventStore, broker.schemaStore, event.NewMounter(time.UTC, &integrity.Config{}), 0)
+	sl := scanLimit{maxDMLBytes: 1, isInUnitTest: true}
+
+	dataRange, ok := disp.getDataRange()
+	require.True(t, ok)
+	_, events, progress, interrupted, err := scanner.scan(context.Background(), disp, dataRange, sl)
+	require.NoError(t, err)
+	require.True(t, interrupted)
+	require.True(t, progress.valid)
+	require.NotEmpty(t, progress.rowLevelScanPosition)
+	require.Len(t, events, 1)
+	deleteBatch := events[0].(*event.BatchDMLEvent)
+	require.Equal(t, int32(1), deleteBatch.Len())
+	deleteRow, ok := deleteBatch.DMLEvents[0].GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, common.RowTypeDelete, deleteRow.RowType)
+	require.NotNil(t, disp.getLargeTxnState())
+
+	disp.updateScanRangeWithPosition(progress.txnCommitTs, progress.txnStartTs, progress.rowLevelScanPosition)
+	dataRange, ok = disp.getDataRange()
+	require.True(t, ok)
+	_, events, progress, interrupted, err = scanner.scan(context.Background(), disp, dataRange, sl)
+	require.NoError(t, err)
+	require.True(t, interrupted)
+	require.Empty(t, events)
+	require.True(t, progress.valid)
+
+	disp.updateScanRangeWithPosition(progress.txnCommitTs, progress.txnStartTs, progress.rowLevelScanPosition)
+	dataRange, ok = disp.getDataRange()
+	require.True(t, ok)
+	_, events, progress, interrupted, err = scanner.scan(context.Background(), disp, dataRange, sl)
+	require.NoError(t, err)
+	require.True(t, interrupted)
+	require.True(t, progress.valid)
+	require.Len(t, events, 1)
+	insertBatch := events[0].(*event.BatchDMLEvent)
+	require.Equal(t, int32(1), insertBatch.Len())
+	insertRow, ok := insertBatch.DMLEvents[0].GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, common.RowTypeInsert, insertRow.RowType)
+
+	disp.updateScanRangeWithPosition(progress.txnCommitTs, progress.txnStartTs, progress.rowLevelScanPosition)
+	dataRange, ok = disp.getDataRange()
+	require.True(t, ok)
+	_, events, progress, interrupted, err = scanner.scan(context.Background(), disp, dataRange, sl)
+	require.NoError(t, err)
+	require.False(t, interrupted)
+	require.True(t, progress.valid)
+	require.Len(t, events, 1)
+	resolved, ok := events[0].(event.ResolvedEvent)
+	require.True(t, ok)
+	require.Equal(t, resolvedTs, resolved.ResolvedTs)
+	require.Nil(t, disp.getLargeTxnState())
+}
+
+func TestEventScannerDrainsSpillBeforeFollowingSameCommitTxn(t *testing.T) {
+	setLargeTxnThresholdForTest(t, 0)
+
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	ddlEvent := helper.DDL2Event("create table t_uk_follow (id int primary key, a int, b char(50), unique key uk_a(a))")
+	_, updateEvent := helper.DML2UpdateEvent("test", "t_uk_follow",
+		"insert into test.t_uk_follow(id,a,b) values (1, 10, 'old_b')",
+		"update test.t_uk_follow set a = 20 where id = 1")
+	followingEvents := helper.DML2RawKv(
+		ddlEvent.GetTableID(),
+		ddlEvent.FinishedTs,
+		"insert into test.t_uk_follow(id,a,b) values (2, 30, 'new_b')")
+	require.Len(t, followingEvents, 1)
+	followingEvent := followingEvents[0]
+
+	resolvedTs := updateEvent.CRTs
+	updateEvent.StartTs = resolvedTs - 2
+	followingEvent.StartTs = resolvedTs - 1
+	followingEvent.CRTs = resolvedTs
+
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+	mockStore := broker.eventStore.(*mockEventStore)
+	mockSchemaStore := broker.schemaStore.(*mockSchemaStore)
+
+	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.startTs = updateEvent.StartTs - 1
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
+	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+	makeDispatcherReady(disp)
+	require.NoError(t, broker.addDispatcher(disp.info))
+
+	mockSchemaStore.AppendDDLEvent(disInfo.GetTableSpan().TableID, *ddlEvent)
+	require.NoError(t, mockStore.AppendEvents(disInfo.GetID(), resolvedTs, updateEvent, followingEvent))
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(resolvedTs)
+
+	scanner := newEventScanner(broker.eventStore, broker.schemaStore, event.NewMounter(time.UTC, &integrity.Config{}), 0)
+	smallLimit := scanLimit{maxDMLBytes: 1, isInUnitTest: true}
+
+	scanAndAdvance := func(limit scanLimit) ([]event.Event, scanProgress, bool) {
+		ok, dataRange := broker.getScanTaskDataRange(disp)
+		require.True(t, ok)
+		_, events, progress, interrupted, err := scanner.scan(context.Background(), disp, dataRange, limit)
+		require.NoError(t, err)
+		require.True(t, progress.valid)
+		disp.updateScanRangeWithPosition(progress.txnCommitTs, progress.txnStartTs, progress.rowLevelScanPosition)
+		return events, progress, interrupted
+	}
+
+	events, progress, interrupted := scanAndAdvance(smallLimit)
+	require.True(t, interrupted)
+	require.NotEmpty(t, progress.rowLevelScanPosition)
+	require.Len(t, events, 1)
+	deleteBatch := events[0].(*event.BatchDMLEvent)
+	deleteRow, ok := deleteBatch.DMLEvents[0].GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, common.RowTypeDelete, deleteRow.RowType)
+
+	events, _, interrupted = scanAndAdvance(smallLimit)
+	require.True(t, interrupted)
+	require.Empty(t, events)
+	state := disp.getLargeTxnState()
+	require.NotNil(t, state)
+	require.Equal(t, largeTxnScanPhaseDrainInserts, state.getPhase())
+
+	events, _, interrupted = scanAndAdvance(smallLimit)
+	require.True(t, interrupted)
+	require.Len(t, events, 1)
+	insertBatch := events[0].(*event.BatchDMLEvent)
+	insertRow, ok := insertBatch.DMLEvents[0].GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, common.RowTypeInsert, insertRow.RowType)
+
+	events, _, interrupted = scanAndAdvance(smallLimit)
+	require.True(t, interrupted)
+	require.Empty(t, events)
+	require.Nil(t, disp.getLargeTxnState())
+
+	setLargeTxnThresholdForTest(t, 1<<30)
+	events, _, interrupted = scanAndAdvance(scanLimit{maxDMLBytes: 100, isInUnitTest: true})
+	require.False(t, interrupted)
+	require.Len(t, events, 2)
+	followingBatch := events[0].(*event.BatchDMLEvent)
+	require.Equal(t, followingEvent.StartTs, followingBatch.DMLEvents[0].GetStartTs())
+	require.Equal(t, followingEvent.CRTs, followingBatch.GetCommitTs())
+	followingRow, ok := followingBatch.DMLEvents[0].GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, common.RowTypeInsert, followingRow.RowType)
+	resolved, ok := events[1].(event.ResolvedEvent)
+	require.True(t, ok)
+	require.Equal(t, resolvedTs, resolved.ResolvedTs)
+}
+
+func TestDrainLargeTxnInsertsStopsWhenDispatcherRemoved(t *testing.T) {
+	info := newMockDispatcherInfoForTest(t)
+	status := newChangefeedStatusForTest(t, info)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	state, err := disp.getOrCreateLargeTxnState(t.TempDir(), info.GetTableSpan().TableID, nil, 90, 100)
+	require.NoError(t, err)
+	require.NoError(t, state.appendInsert(newTestSpillRawKVEntry(1)))
+	disp.markLargeTxnDrainInserts(90, 100, false, 0)
+	disp.isRemoved.Store(true)
+
+	scanner := newEventScanner(nil, NewMockSchemaStore(), &mockMounter{}, 0)
+	sess := newSession(context.Background(), disp, common.DataRange{
+		Span:          info.GetTableSpan(),
+		CommitTsStart: 100,
+		CommitTsEnd:   100,
+	}, scanLimit{maxDMLBytes: 1, isInUnitTest: true})
+
+	interrupted, err := scanner.drainLargeTxnInserts(sess, state)
+	require.NoError(t, err)
+	require.False(t, interrupted)
+	require.Empty(t, sess.events)
+	require.NoError(t, disp.cleanupLargeTxnState())
+}
+
 // Test the case where some DMLs have commit timestamps newer than the table's delete version
 func TestEventScannerWithDeleteTable(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
@@ -426,6 +770,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	dispatcherID := disInfo.GetID()
 
 	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+	disp.txnAtomicity = config.AtomicityLevel("table")
 	makeDispatcherReady(disp)
 	err := broker.addDispatcher(disp.info)
 	require.NoError(t, err)
@@ -459,7 +804,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	sl := scanLimit{
 		maxDMLBytes: 10000,
 	}
-	_, events, isInterrupted, err := scanner.scan(context.Background(), disp, dataRange, sl)
+	_, events, _, isInterrupted, err := scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isInterrupted)
 	require.Equal(t, 4, len(events))
@@ -507,6 +852,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	dispatcherID := disInfo.GetID()
 
 	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+	disp.txnAtomicity = config.AtomicityLevel("table")
 	makeDispatcherReady(disp)
 
 	err := broker.addDispatcher(disp.info)
@@ -561,7 +907,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, events, isInterrupted, err := scanner.scan(ctx, disp, dataRange, sl)
+	_, events, _, isInterrupted, err := scanner.scan(ctx, disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isInterrupted)
 	require.Equal(t, 3, len(events))
@@ -596,7 +942,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 			maxDMLBytes:  2,
 			isInUnitTest: true,
 		}
-		_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
+		_, events, _, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 		require.NoError(t, err)
 		require.True(t, isInterrupted)
 		require.Equal(t, 3, len(events))
@@ -635,7 +981,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 			maxDMLBytes:  3, // Event if we set 3, it should not be interrupted at DML2
 			isInUnitTest: true,
 		}
-		_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
+		_, events, _, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 
 		require.NoError(t, err)
 		require.True(t, isInterrupted)
@@ -702,7 +1048,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 		ok, dataRange = broker.getScanTaskDataRange(disp)
 		require.True(t, ok)
 
-		_, events, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
+		_, events, _, isInterrupted, err = scanner.scan(ctx, disp, dataRange, sl)
 		require.NoError(t, err)
 		require.False(t, isInterrupted)
 
@@ -749,11 +1095,20 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 0: create a new DML processor
 	t.Run("CreateNewDMLProcessor", func(t *testing.T) {
+		originalConfig := config.GetGlobalServerConfig().Clone()
+		cfg := originalConfig.Clone()
+		cfg.DataDir = t.TempDir()
+		config.StoreGlobalServerConfig(cfg)
+		t.Cleanup(func() {
+			config.StoreGlobalServerConfig(originalConfig)
+		})
+
 		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		require.NotNil(t, processor)
 		require.NotNil(t, processor.batchDML)
 		require.Nil(t, processor.currentTxn)
 		require.Empty(t, processor.insertRowCache)
+		require.Equal(t, filepath.Join(cfg.DataDir, largeTxnInsertSpillDirName), processor.spillDir)
 	})
 
 	// Test case 1: commitTxn with no current DML, happens when the iter is nil.
@@ -948,6 +1303,101 @@ func TestDMLProcessor(t *testing.T) {
 		require.Equal(t, 1, len(processor.batchDML.DMLEvents))
 		require.Equal(t, int32(2), processor.batchDML.Len())
 	})
+
+	t.Run("UpdateThatChangesUKCachesInsertWhenSplitTxnIsBelowSpillThreshold", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
+		disp := &dispatcherStat{id: dispatcherID}
+		processor.dispatcherStat = disp
+		processor.spillDir = t.TempDir()
+
+		helper.Tk().MustExec("use test")
+		ddlEvent := helper.DDL2Event("create table t4 (id int primary key, a int(50), b char(50), unique key uk_a(a))")
+		tableInfo := ddlEvent.TableInfo
+		tableID := ddlEvent.GetTableID()
+
+		_, updateEvent := helper.DML2UpdateEvent("test", "t4",
+			"insert into test.t4(id, a, b) values (0, 1, 'b0')",
+			"update test.t4 set a = 2 where id = 0")
+		require.NoError(t, processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, true))
+		require.NoError(t, processor.appendRow(updateEvent))
+
+		require.Equal(t, 1, len(processor.insertRowCache))
+		require.Nil(t, disp.getLargeTxnState())
+
+		require.NoError(t, processor.commitTxn())
+		require.Empty(t, processor.insertRowCache)
+		require.Equal(t, int32(2), processor.batchDML.Len())
+	})
+
+	t.Run("UpdateThatChangesUKSpillsInsertWhenSplitTxnExceedsThreshold", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
+		disp := &dispatcherStat{id: dispatcherID}
+		processor.dispatcherStat = disp
+		processor.spillDir = t.TempDir()
+
+		helper.Tk().MustExec("use test")
+		ddlEvent := helper.DDL2Event("create table t3 (id int primary key, a int(50), b char(50), unique key uk_a(a))")
+		tableInfo := ddlEvent.TableInfo
+		tableID := ddlEvent.GetTableID()
+
+		_, updateEvent := helper.DML2UpdateEvent("test", "t3",
+			"insert into test.t3(id, a, b) values (0, 1, 'b0')",
+			"update test.t3 set a = 2 where id = 0")
+		require.NoError(t, processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, true))
+		require.NoError(t, processor.appendRow(updateEvent))
+		require.Equal(t, 1, len(processor.insertRowCache))
+		require.Nil(t, disp.getLargeTxnState())
+
+		processor.currentTxn.rawKVBytes = processor.currentTxn.largeTxnThresholdInBytes
+		require.NoError(t, processor.appendRow(updateEvent))
+
+		require.Empty(t, processor.insertRowCache)
+		state := disp.getLargeTxnState()
+		require.NotNil(t, state)
+		insertRow, err := state.nextInsert()
+		require.NoError(t, err)
+		require.Equal(t, common.OpTypePut, insertRow.OpType)
+		require.False(t, insertRow.IsUpdate())
+		insertRow, err = state.nextInsert()
+		require.NoError(t, err)
+		require.Equal(t, common.OpTypePut, insertRow.OpType)
+		require.False(t, insertRow.IsUpdate())
+		require.NoError(t, disp.cleanupLargeTxnState())
+	})
+
+	t.Run("UpdateThatChangesUKKeepsSpillingAfterLargeTxnResume", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
+		disp := &dispatcherStat{id: dispatcherID}
+		processor.dispatcherStat = disp
+		processor.spillDir = t.TempDir()
+
+		helper.Tk().MustExec("use test")
+		ddlEvent := helper.DDL2Event("create table t5 (id int primary key, a int(50), b char(50), unique key uk_a(a))")
+		tableInfo := ddlEvent.TableInfo
+		tableID := ddlEvent.GetTableID()
+
+		_, updateEvent := helper.DML2UpdateEvent("test", "t5",
+			"insert into test.t5(id, a, b) values (0, 1, 'b0')",
+			"update test.t5 set a = 2 where id = 0")
+		require.NoError(t, processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, true))
+
+		state, err := disp.getOrCreateLargeTxnState(
+			processor.spillDir,
+			tableID,
+			tableInfo,
+			updateEvent.StartTs,
+			updateEvent.CRTs,
+		)
+		require.NoError(t, err)
+		require.NoError(t, processor.appendRow(updateEvent))
+
+		require.Empty(t, processor.insertRowCache)
+		insertRow, err := state.nextInsert()
+		require.NoError(t, err)
+		require.Equal(t, common.OpTypePut, insertRow.OpType)
+		require.False(t, insertRow.IsUpdate())
+		require.NoError(t, disp.cleanupLargeTxnState())
+	})
 }
 
 // TestDMLProcessorAppendRow tests the appendRow method of dmlProcessor
@@ -1141,12 +1591,12 @@ func TestScanSession(t *testing.T) {
 			Key:     []byte("insert_key_1"),
 			Value:   []byte("insert_value_1"),
 		}
-		sess.observeRawEntry(entry)
+		sess.observeRawEntry(entry, nil)
 		require.Equal(t, entry.GetSize(), sess.scannedBytes)
 		require.Equal(t, 1, sess.scannedEntryCount)
 
 		// Test adding more bytes
-		sess.observeRawEntry(entry)
+		sess.observeRawEntry(entry, nil)
 		require.Equal(t, 2*entry.GetSize(), sess.scannedBytes)
 		require.Equal(t, 2, sess.scannedEntryCount)
 	})
@@ -1497,9 +1947,10 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	stat := &dispatcherStat{
-		info:      disInfo,
-		id:        dispatcherID,
-		isRemoved: atomic.Bool{},
+		info:         disInfo,
+		id:           dispatcherID,
+		txnAtomicity: config.AtomicityLevel("table"),
+		isRemoved:    atomic.Bool{},
 	}
 
 	dataRange := common.DataRange{
