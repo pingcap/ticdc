@@ -21,6 +21,7 @@ import (
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -700,6 +701,52 @@ func TestColumnValueEqual(t *testing.T) {
 			require.Equal(t, tc.equal, equal)
 		})
 	}
+}
+
+func TestShouldIgnoreDMLByEventType(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.FilterConfig{
+		Rules:            []string{"test.*", "!test.t4"},
+		IgnoreTxnStartTs: []uint64{100},
+		EventFilters: []*config.EventFilterRule{
+			{
+				Matcher:     []string{"test.t2"},
+				IgnoreEvent: []bf.EventType{bf.InsertEvent},
+			},
+			{
+				Matcher:               []string{"test.t3"},
+				IgnoreDeleteValueExpr: util.AddressOf("id = 1"),
+			},
+		},
+	}
+	f, err := NewFilter(cfg, "UTC", false, false)
+	require.NoError(t, err)
+
+	ti1 := mustNewCommonTableInfo("test", "t1", []*model.ColumnInfo{newColumnInfo(1, "id", mysql.TypeLong, mysql.PriKeyFlag)}, nil)
+	ti2 := mustNewCommonTableInfo("test", "t2", []*model.ColumnInfo{newColumnInfo(1, "id", mysql.TypeLong, mysql.PriKeyFlag)}, nil)
+	ti3 := mustNewCommonTableInfo("test", "t3", []*model.ColumnInfo{newColumnInfo(1, "id", mysql.TypeLong, mysql.PriKeyFlag)}, nil)
+	ti4 := mustNewCommonTableInfo("test", "t4", []*model.ColumnInfo{newColumnInfo(1, "id", mysql.TypeLong, mysql.PriKeyFlag)}, nil)
+
+	ignore, err := f.ShouldIgnoreDMLByEventType(common.RowTypeInsert, ti1, 100)
+	require.NoError(t, err)
+	require.True(t, ignore)
+
+	ignore, err = f.ShouldIgnoreDMLByEventType(common.RowTypeInsert, ti4, 0)
+	require.NoError(t, err)
+	require.True(t, ignore)
+
+	ignore, err = f.ShouldIgnoreDMLByEventType(common.RowTypeInsert, ti2, 0)
+	require.NoError(t, err)
+	require.True(t, ignore)
+
+	ignore, err = f.ShouldIgnoreDMLByEventType(common.RowTypeDelete, ti3, 0)
+	require.NoError(t, err)
+	require.False(t, ignore, "expression filters need decoded row values")
+
+	ignore, err = f.ShouldIgnoreDMLByEventType(common.RowTypeInsert, ti1, 0)
+	require.NoError(t, err)
+	require.False(t, ignore)
 }
 
 func TestShouldIgnoreDMLCaseSensitivity(t *testing.T) {
