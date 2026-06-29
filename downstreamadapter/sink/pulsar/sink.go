@@ -32,6 +32,18 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+type newPulsarDMLProducerFunc func(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	failpointCh chan error,
+) (dmlProducer, error)
+
+type newPulsarDDLProducerFunc func(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	sinkConfig *config.SinkConfig,
+) (ddlProducer, error)
+
 type sink struct {
 	changefeedID commonType.ChangeFeedID
 
