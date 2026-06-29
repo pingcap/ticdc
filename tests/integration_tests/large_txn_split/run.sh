@@ -60,6 +60,16 @@ function generate_workload() {
 	} >"$sql_file"
 }
 
+function run_workload() {
+	local sql_file=$1
+	local workload_log=$WORK_DIR/workload.log
+
+	if ! mysql -uroot -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} --default-character-set utf8mb4 <"$sql_file" >"$workload_log" 2>&1; then
+		cat "$workload_log"
+		return 1
+	fi
+}
+
 trap 'stop_test $WORK_DIR' EXIT
 
 if [ "$SINK_TYPE" == "mysql" ]; then
@@ -70,8 +80,10 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 	echo "[$(date)] Starting large transaction split workload..."
 
 	workload_sql=$WORK_DIR/large_txn_split_workload.sql
+	set +x
 	generate_workload "$workload_sql"
-	run_sql_file "$workload_sql" ${UP_TIDB_HOST} ${UP_TIDB_PORT} large_txn_split
+	set -x
+	run_workload "$workload_sql"
 
 	echo "[$(date)] Workload completed, verifying split path and data consistency..."
 
