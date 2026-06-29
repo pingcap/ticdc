@@ -404,14 +404,14 @@ func bootstrapRedoTableTrigger(
 
 // validate checks whether an existing table trigger can be owned by the
 // incoming bootstrap request before the maintainer owner/epoch is updated.
-func (t bootstrapTableTrigger) validate(cfId common.ChangeFeedID) error {
+func (t bootstrapTableTrigger) validate(cfID common.ChangeFeedID) error {
 	currentID, ok := t.currentID()
 	if t.id == nil {
 		if !ok {
 			return nil
 		}
 		return validateBootstrapNoTableTriggerDispatcher(
-			cfId,
+			cfID,
 			currentID,
 			t.name,
 		)
@@ -420,7 +420,7 @@ func (t bootstrapTableTrigger) validate(cfId common.ChangeFeedID) error {
 		return nil
 	}
 	return validateBootstrapTableTriggerDispatcherID(
-		cfId,
+		cfID,
 		t.id,
 		currentID,
 		t.name,
@@ -429,20 +429,20 @@ func (t bootstrapTableTrigger) validate(cfId common.ChangeFeedID) error {
 
 // ensure verifies that a reused manager has the bootstrap owner's table
 // trigger, or creates it when no trigger exists yet.
-func (t bootstrapTableTrigger) ensure(cfId common.ChangeFeedID) error {
+func (t bootstrapTableTrigger) ensure(cfID common.ChangeFeedID) error {
 	if t.id == nil {
 		return nil
 	}
 	currentID, ok := t.currentID()
 	if !ok {
 		return ensureBootstrapTableTriggerDispatcher(
-			cfId,
+			cfID,
 			t.name,
 			t.create,
 		)
 	}
 	return validateBootstrapTableTriggerDispatcherID(
-		cfId,
+		cfID,
 		t.id,
 		currentID,
 		t.name,
@@ -450,14 +450,14 @@ func (t bootstrapTableTrigger) ensure(cfId common.ChangeFeedID) error {
 }
 
 func ensureBootstrapTableTriggerDispatcher(
-	cfId common.ChangeFeedID,
+	cfID common.ChangeFeedID,
 	triggerName string,
 	create func() error,
 ) error {
 	if err := create(); err != nil {
 		if !dispatchermanager.IsWritePathClosedError(err) {
 			log.Error("failed to create table trigger dispatcher",
-				zap.Stringer("changefeedID", cfId),
+				zap.Stringer("changefeedID", cfID),
 				zap.String("triggerName", triggerName),
 				zap.Error(err))
 		}
@@ -467,14 +467,14 @@ func ensureBootstrapTableTriggerDispatcher(
 }
 
 func validateBootstrapNoTableTriggerDispatcher(
-	cfId common.ChangeFeedID,
+	cfID common.ChangeFeedID,
 	currentID common.DispatcherID,
 	triggerName string,
 ) error {
 	// A nil trigger ID is valid only after local trigger cleanup has removed the
 	// previous owner; otherwise owner transfer would leave stale DDL ownership.
 	log.Error("table trigger dispatcher present during nil trigger bootstrap",
-		zap.Stringer("changefeedID", cfId),
+		zap.Stringer("changefeedID", cfID),
 		zap.String("triggerName", triggerName),
 		zap.Stringer("actualDispatcherID", currentID))
 	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
@@ -482,7 +482,7 @@ func validateBootstrapNoTableTriggerDispatcher(
 }
 
 func validateBootstrapTableTriggerDispatcherID(
-	cfId common.ChangeFeedID,
+	cfID common.ChangeFeedID,
 	id *heartbeatpb.DispatcherID,
 	currentID common.DispatcherID,
 	triggerName string,
@@ -492,7 +492,7 @@ func validateBootstrapTableTriggerDispatcherID(
 		return nil
 	}
 	log.Error("table trigger dispatcher id mismatch during bootstrap",
-		zap.Stringer("changefeedID", cfId),
+		zap.Stringer("changefeedID", cfID),
 		zap.String("triggerName", triggerName),
 		zap.Stringer("expectedDispatcherID", expectedID),
 		zap.Stringer("actualDispatcherID", currentID))
@@ -504,20 +504,20 @@ func (m *DispatcherOrchestrator) handleBootstrapTriggerError(
 	from node.ID,
 	changefeedID *heartbeatpb.ChangefeedID,
 	maintainerEpoch uint64,
-	cfId common.ChangeFeedID,
+	cfID common.ChangeFeedID,
 	triggerName string,
 	err error,
 ) error {
 	if dispatchermanager.IsWritePathClosedError(err) {
 		log.Info("dispatcher manager write path closed while creating table trigger dispatcher",
-			zap.Stringer("changefeedID", cfId),
+			zap.Stringer("changefeedID", cfID),
 			zap.String("triggerName", triggerName),
 			zap.Error(err))
 		return nil
 	}
 	if m.fenced.Load() || m.closed.Load() {
 		log.Info("dispatcher orchestrator closed while creating table trigger dispatcher",
-			zap.Stringer("changefeedID", cfId),
+			zap.Stringer("changefeedID", cfID),
 			zap.String("triggerName", triggerName),
 			zap.Error(err))
 		return nil

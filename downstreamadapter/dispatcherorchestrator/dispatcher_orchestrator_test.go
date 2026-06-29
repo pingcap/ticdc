@@ -27,7 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -927,7 +927,7 @@ func TestHandleBootstrapTriggerErrorReportsNonWritePathClosedError(t *testing.T)
 	orchestrator := &DispatcherOrchestrator{
 		mc: mc,
 	}
-	bootstrapErr := cerrors.ErrChangefeedInitTableTriggerDispatcherFailed.FastGenByArgs("inject")
+	bootstrapErr := errors.ErrChangefeedInitTableTriggerDispatcherFailed.FastGenByArgs("inject")
 
 	err := orchestrator.handleBootstrapTriggerError(
 		node.ID("current-maintainer"),
@@ -944,7 +944,7 @@ func TestHandleBootstrapTriggerErrorReportsNonWritePathClosedError(t *testing.T)
 	response := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
 	require.Equal(t, uint64(2), response.MaintainerEpoch)
 	require.NotNil(t, response.Err)
-	require.Equal(t, string(cerrors.ErrorCode(bootstrapErr)), response.Err.Code)
+	require.Equal(t, string(errors.ErrorCode(bootstrapErr)), response.Err.Code)
 	require.Contains(t, response.Err.Message, "inject")
 }
 
