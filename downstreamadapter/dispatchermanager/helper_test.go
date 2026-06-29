@@ -377,61 +377,32 @@ func TestRedoControlMessagesAllowedByMaintainerEpoch(t *testing.T) {
 	strictDM.meta.maintainerID = "current-maintainer"
 	strictDM.meta.maintainerEpoch = 2
 
-	staleMeta := NewRedoMetaMessage(
-		node.ID("old-maintainer"),
-		&heartbeatpb.RedoMetaMessage{
+	newRedoMeta := func(from node.ID, epoch uint64) RedoMetaMessage {
+		return NewRedoMetaMessage(from, &heartbeatpb.RedoMetaMessage{
 			ChangefeedID:    changefeedID.ToPB(),
 			CheckpointTs:    100,
 			ResolvedTs:      200,
-			MaintainerEpoch: 1,
-		},
-	)
-	require.False(t, isRedoMetaMessageAllowed(strictDM, staleMeta))
-
-	currentMeta := NewRedoMetaMessage(
-		node.ID("current-maintainer"),
-		&heartbeatpb.RedoMetaMessage{
-			ChangefeedID:    changefeedID.ToPB(),
-			CheckpointTs:    100,
-			ResolvedTs:      200,
-			MaintainerEpoch: 2,
-		},
-	)
-	require.True(t, isRedoMetaMessageAllowed(strictDM, currentMeta))
-
-	staleResolved := NewRedoResolvedTsForwardMessage(
-		node.ID("old-maintainer"),
-		&heartbeatpb.RedoResolvedTsForwardMessage{
+			MaintainerEpoch: epoch,
+		})
+	}
+	newRedoResolved := func(from node.ID, epoch uint64) RedoResolvedTsForwardMessage {
+		return NewRedoResolvedTsForwardMessage(from, &heartbeatpb.RedoResolvedTsForwardMessage{
 			ChangefeedID:    changefeedID.ToPB(),
 			ResolvedTs:      200,
-			MaintainerEpoch: 1,
-		},
-	)
-	require.False(t, isRedoResolvedTsForwardMessageAllowed(strictDM, staleResolved))
+			MaintainerEpoch: epoch,
+		})
+	}
 
-	currentResolved := NewRedoResolvedTsForwardMessage(
-		node.ID("current-maintainer"),
-		&heartbeatpb.RedoResolvedTsForwardMessage{
-			ChangefeedID:    changefeedID.ToPB(),
-			ResolvedTs:      200,
-			MaintainerEpoch: 2,
-		},
-	)
-	require.True(t, isRedoResolvedTsForwardMessageAllowed(strictDM, currentResolved))
+	require.False(t, isRedoMetaMessageAllowed(strictDM, newRedoMeta("old-maintainer", 1)))
+	require.True(t, isRedoMetaMessageAllowed(strictDM, newRedoMeta("current-maintainer", 2)))
+	require.False(t, isRedoResolvedTsForwardMessageAllowed(strictDM, newRedoResolved("old-maintainer", 1)))
+	require.True(t, isRedoResolvedTsForwardMessageAllowed(strictDM, newRedoResolved("current-maintainer", 2)))
 
 	compatDM := &DispatcherManager{
 		changefeedID: changefeedID,
 	}
 	compatDM.meta.maintainerID = "compat-maintainer"
-	compatMeta := NewRedoMetaMessage(
-		node.ID("compat-maintainer"),
-		&heartbeatpb.RedoMetaMessage{
-			ChangefeedID: changefeedID.ToPB(),
-			CheckpointTs: 100,
-			ResolvedTs:   200,
-		},
-	)
-	require.True(t, isRedoMetaMessageAllowed(compatDM, compatMeta))
+	require.True(t, isRedoMetaMessageAllowed(compatDM, newRedoMeta("compat-maintainer", 0)))
 }
 
 func TestRedoResolvedTsForwardMessageHandlerDropsStaleMaintainerEpoch(t *testing.T) {
@@ -447,26 +418,18 @@ func TestRedoResolvedTsForwardMessageHandlerDropsStaleMaintainerEpoch(t *testing
 	dispatcherManager.redoGlobalTs.Store(50)
 
 	handler := &RedoResolvedTsForwardMessageHandler{}
-	staleMessage := NewRedoResolvedTsForwardMessage(
-		node.ID("old-maintainer"),
-		&heartbeatpb.RedoResolvedTsForwardMessage{
+	newResolvedMessage := func(from node.ID, resolvedTs, epoch uint64) RedoResolvedTsForwardMessage {
+		return NewRedoResolvedTsForwardMessage(from, &heartbeatpb.RedoResolvedTsForwardMessage{
 			ChangefeedID:    changefeedID.ToPB(),
-			ResolvedTs:      100,
-			MaintainerEpoch: 1,
-		},
-	)
-	require.False(t, handler.Handle(dispatcherManager, staleMessage))
+			ResolvedTs:      resolvedTs,
+			MaintainerEpoch: epoch,
+		})
+	}
+
+	require.False(t, handler.Handle(dispatcherManager, newResolvedMessage("old-maintainer", 100, 1)))
 	require.Equal(t, uint64(50), dispatcherManager.redoGlobalTs.Load())
 
-	currentMessage := NewRedoResolvedTsForwardMessage(
-		node.ID("current-maintainer"),
-		&heartbeatpb.RedoResolvedTsForwardMessage{
-			ChangefeedID:    changefeedID.ToPB(),
-			ResolvedTs:      120,
-			MaintainerEpoch: 2,
-		},
-	)
-	require.False(t, handler.Handle(dispatcherManager, currentMessage))
+	require.False(t, handler.Handle(dispatcherManager, newResolvedMessage("current-maintainer", 120, 2)))
 	require.Equal(t, uint64(120), dispatcherManager.redoGlobalTs.Load())
 }
 
