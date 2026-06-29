@@ -126,12 +126,17 @@ func newEventScanner(
 // - At TS40, DML4 is processed first, then DML5, then DDL2 (same timestamp)
 //
 // The scan operation may be interrupted when ANY of these limits are reached:
-// - Maximum bytes processed (limit.MaxBytes)
-// - Timeout duration (limit.Timeout)
+// - Maximum bytes processed (limit.MaxBytes) at a transaction boundary
+// - Timeout duration (limit.Timeout) at a transaction boundary
+// - Large transaction threshold inside the current transaction
 //
-// A scan interruption is ONLY allowed when both conditions are met:
+// A transaction-boundary scan interruption is ONLY allowed when both conditions are met:
 // 1. The current event's commit timestamp is greater than the lastCommitTs (a commit TS boundary is reached)
 // 2. At least one DML event has been successfully scanned
+//
+// A current-transaction interruption is ONLY allowed when split transaction is enabled,
+// the eventstore iterator provides a row-level scan position, and the current
+// transaction fragment exceeds the large transaction threshold.
 //
 // Returns:
 // - events: The scanned events in commitTs order
