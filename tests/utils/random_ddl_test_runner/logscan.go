@@ -17,7 +17,8 @@ func scanLogsForPatterns(workdir string, patterns []string, failOnMatch bool, lo
 	// runner can be used in minimal environments.
 	//
 	// Implementation notes:
-	//   - Convert to lowercase on the fly and use bytes.Contains for substring search.
+	//   - Convert to lowercase on the fly and match built-in failure patterns precisely.
+	//   - Keep custom patterns as substring matches for ad-hoc checks.
 	//   - Use bufio.Reader.ReadLine to cap memory and handle very long lines by stitching
 	//     a small suffix ("carry") across fragments.
 	files, err := collectLogFiles(workdir)
@@ -31,9 +32,9 @@ func scanLogsForPatterns(workdir string, patterns []string, failOnMatch bool, lo
 		return nil
 	}
 
-	lowerPatterns := make([]string, 0, len(patterns))
+	matchers := make([]logPatternMatcher, 0, len(patterns))
 	for _, p := range patterns {
-		lowerPatterns = append(lowerPatterns, strings.ToLower(p))
+		matchers = append(matchers, newLogPatternMatcher(p))
 	}
 
 	type hit struct {
@@ -44,12 +45,9 @@ func scanLogsForPatterns(workdir string, patterns []string, failOnMatch bool, lo
 	var hits []hit
 
 	maxPatternLen := 0
-	patternBytes := make([][]byte, 0, len(lowerPatterns))
-	for _, p := range lowerPatterns {
-		b := []byte(p)
-		patternBytes = append(patternBytes, b)
-		if len(b) > maxPatternLen {
-			maxPatternLen = len(b)
+	for _, matcher := range matchers {
+		if l := matcher.maxPatternLen(); l > maxPatternLen {
+			maxPatternLen = l
 		}
 	}
 
@@ -88,9 +86,9 @@ func scanLogsForPatterns(workdir string, patterns []string, failOnMatch bool, lo
 				scratch = append(scratch[:0], carry...)
 				scratch = append(scratch, tmp...)
 
-				for i, p := range patternBytes {
-					if bytes.Contains(scratch, p) {
-						hits = append(hits, hit{file: filepath.Base(path), line: lineNo + 1, pat: lowerPatterns[i]})
+				for _, matcher := range matchers {
+					if matcher.match(scratch) {
+						hits = append(hits, hit{file: filepath.Base(path), line: lineNo + 1, pat: matcher.pattern})
 						lineMatched = true
 						break
 					}
@@ -147,6 +145,57 @@ func scanLogsForPatterns(workdir string, patterns []string, failOnMatch bool, lo
 		return fmt.Errorf("log scan found %d panic/fatal/race matches", len(hits))
 	}
 	return nil
+}
+
+type logPatternMatcher struct {
+	pattern string
+	kind    string
+	lower   []byte
+}
+
+func newLogPatternMatcher(pattern string) logPatternMatcher {
+	lower := strings.ToLower(pattern)
+	matcher := logPatternMatcher{
+		pattern: lower,
+		lower:   []byte(lower),
+	}
+	switch lower {
+	case "panic", "fatal", "data race":
+		matcher.kind = lower
+	}
+	return matcher
+}
+
+func (m logPatternMatcher) maxPatternLen() int {
+	switch m.kind {
+	case "panic":
+		return len(`"level":"panic"`)
+	case "fatal":
+		return len(`"level":"fatal"`)
+	case "data race":
+		return len("warning: data race")
+	default:
+		return len(m.lower)
+	}
+}
+
+func (m logPatternMatcher) match(line []byte) bool {
+	switch m.kind {
+	case "panic":
+		return bytes.Contains(line, []byte("[panic]")) ||
+			bytes.Contains(line, []byte("panic:")) ||
+			bytes.Contains(line, []byte("level=panic")) ||
+			bytes.Contains(line, []byte(`"level":"panic"`))
+	case "fatal":
+		return bytes.Contains(line, []byte("[fatal]")) ||
+			bytes.Contains(line, []byte("fatal error:")) ||
+			bytes.Contains(line, []byte("level=fatal")) ||
+			bytes.Contains(line, []byte(`"level":"fatal"`))
+	case "data race":
+		return bytes.Contains(line, []byte("warning: data race"))
+	default:
+		return bytes.Contains(line, m.lower)
+	}
 }
 
 func collectLogFiles(workdir string) ([]string, error) {

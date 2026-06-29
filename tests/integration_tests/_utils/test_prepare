@@ -166,3 +166,27 @@ function skip_if_tidb_version_less_than() {
 		exit 0
 	fi
 }
+
+function scan_logs_for_failures() {
+	local workdir=$1
+
+	if ! command -v rg >/dev/null 2>&1; then
+		return 0
+	fi
+
+	local pattern='\[(panic|fatal)\]|panic:|fatal error:|warning: data race|level=(panic|fatal)|"level":"(panic|fatal)"'
+	local -a logFiles=(
+		"$workdir"/runner.log
+		"$workdir"/ddl_trace.log
+		"$workdir"/stdout*.log
+		"$workdir"/cdc*.log
+		"$workdir"/cdc_*_consumer*.log
+		"$workdir"/cdc_*_consumer_stdout*.log
+	)
+
+	if rg -n -i "$pattern" "${logFiles[@]}" 2>/dev/null | head -n 20 | rg -n . >/dev/null 2>&1; then
+		echo "log scan: panic/fatal/race detected"
+		rg -n -i "$pattern" "${logFiles[@]}" 2>/dev/null | head -n 50 || true
+		return 1
+	fi
+}

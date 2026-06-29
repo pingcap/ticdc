@@ -185,12 +185,6 @@ DIFF_CHECK_TIME=${DIFF_CHECK_TIME:-300}
 check_sync_diff $WORK_DIR "$WORK_DIR/diff_config.toml" $DIFF_CHECK_TIME
 
 # Scan logs after diff to catch late panics while consumers are still draining.
-if command -v rg >/dev/null 2>&1; then
-	if rg -n -i "panic|fatal|data race" "$WORK_DIR"/runner.log "$WORK_DIR"/ddl_trace.log "$WORK_DIR"/stdout*.log "$WORK_DIR"/cdc*.log "$WORK_DIR"/cdc_*_consumer*.log "$WORK_DIR"/cdc_*_consumer_stdout*.log 2>/dev/null | head -n 20 | rg -n . >/dev/null 2>&1; then
-		echo "log scan: panic/fatal/race detected"
-		rg -n -i "panic|fatal|data race" "$WORK_DIR"/runner.log "$WORK_DIR"/ddl_trace.log "$WORK_DIR"/stdout*.log "$WORK_DIR"/cdc*.log "$WORK_DIR"/cdc_*_consumer*.log "$WORK_DIR"/cdc_*_consumer_stdout*.log 2>/dev/null | head -n 50 || true
-		exit 1
-	fi
-fi
+scan_logs_for_failures "$WORK_DIR"
 
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
