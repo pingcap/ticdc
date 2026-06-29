@@ -548,13 +548,6 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		return nil
 	}
 	manager.MaintainerFenceMu.Lock()
-	tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
-	if tableTriggerDispatcher == nil {
-		log.Error("Receive post bootstrap request but there is no table trigger event dispatcher",
-			zap.Any("changefeedID", cfId.Name()))
-		manager.MaintainerFenceMu.Unlock()
-		return nil
-	}
 	if !manager.IsMaintainerRequestAllowed(from, req.MaintainerEpoch) {
 		log.Warn("drop stale maintainer post bootstrap request",
 			zap.String("changefeed", cfId.Name()),
@@ -564,6 +557,15 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			zap.String("currentMaintainer", manager.GetMaintainerID().String()))
 		manager.MaintainerFenceMu.Unlock()
 		return nil
+	}
+	tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
+	if tableTriggerDispatcher == nil {
+		err := errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+			GenWithStackByArgs("receive post bootstrap request but there is no table trigger event dispatcher")
+		log.Error("receive post bootstrap request but there is no table trigger event dispatcher",
+			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+		manager.MaintainerFenceMu.Unlock()
+		return m.sendPostBootstrapErrorResponse(from, req, err)
 	}
 	expectedDispatcherID := tableTriggerDispatcher.GetId()
 	actualDispatcherID := common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId)
@@ -576,19 +578,8 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		err := errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 			GenWithStackByArgs("Receive post bootstrap request but the table trigger event dispatcher id is not match")
 
-		response := &heartbeatpb.MaintainerPostBootstrapResponse{
-			ChangefeedID:    req.ChangefeedID,
-			MaintainerEpoch: req.MaintainerEpoch,
-			Err: &heartbeatpb.RunningError{
-				Time:    time.Now().String(),
-				Node:    from.String(),
-				Code:    string(errors.ErrorCode(err)),
-				Message: err.Error(),
-			},
-		}
-
 		manager.MaintainerFenceMu.Unlock()
-		return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
+		return m.sendPostBootstrapErrorResponse(from, req, err)
 	}
 
 	// init table schema store
@@ -633,6 +624,24 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		MaintainerEpoch:               req.MaintainerEpoch,
 	}
 	manager.MaintainerFenceMu.Unlock()
+	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
+}
+
+func (m *DispatcherOrchestrator) sendPostBootstrapErrorResponse(
+	from node.ID,
+	req *heartbeatpb.MaintainerPostBootstrapRequest,
+	err error,
+) error {
+	response := &heartbeatpb.MaintainerPostBootstrapResponse{
+		ChangefeedID:    req.ChangefeedID,
+		MaintainerEpoch: req.MaintainerEpoch,
+		Err: &heartbeatpb.RunningError{
+			Time:    time.Now().String(),
+			Node:    from.String(),
+			Code:    string(errors.ErrorCode(err)),
+			Message: err.Error(),
+		},
+	}
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
 

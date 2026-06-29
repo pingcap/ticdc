@@ -897,6 +897,49 @@ func TestHandlePostBootstrapWritePathClosedReleasesMaintainerFence(t *testing.T)
 	}
 }
 
+func TestHandlePostBootstrapMissingTriggerReportsError(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	setupBootstrapTestServices(t, mc, false)
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager, err := dispatchermanager.NewDispatcherManager(
+		0,
+		cfID,
+		newBootstrapResponseTestChangefeedConfig(cfID),
+		nil,
+		nil,
+		100,
+		node.ID("current-maintainer"),
+		2,
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	cleanupDispatcherManager(t, manager)
+
+	orchestrator := &DispatcherOrchestrator{
+		mc:                     mc,
+		dispatcherManagers:     map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{cfID: manager},
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+	}
+
+	err = orchestrator.handlePostBootstrapRequest(node.ID("current-maintainer"), &heartbeatpb.MaintainerPostBootstrapRequest{
+		ChangefeedID:                  cfID.ToPB(),
+		TableTriggerEventDispatcherId: common.NewDispatcherID().ToPB(),
+		MaintainerEpoch:               2,
+	})
+	require.NoError(t, err)
+
+	msg := requireMessage(t, mc.GetMessageChannel(), "post-bootstrap error response was not sent")
+	require.Equal(t, messaging.TypeMaintainerPostBootstrapResponse, msg.Type)
+	response := msg.Message[0].(*heartbeatpb.MaintainerPostBootstrapResponse)
+	require.Equal(t, uint64(2), response.MaintainerEpoch)
+	require.NotNil(t, response.Err)
+	expectedErr := errors.ErrChangefeedInitTableTriggerDispatcherFailed.FastGenByArgs("inject")
+	require.Equal(t, string(errors.ErrorCode(expectedErr)), response.Err.Code)
+	require.Contains(t, response.Err.Message, "no table trigger event dispatcher")
+}
+
 func TestHandleBootstrapWritePathClosedDoesNotReportBootstrapError(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	cfID := common.NewChangeFeedIDWithName("cf", "default")

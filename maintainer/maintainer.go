@@ -245,10 +245,9 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		ResolvedTs:   checkpointTs,
 	}
 	m.redoMetaTs = &heartbeatpb.RedoMetaMessage{
-		ChangefeedID:    cfID.ToPB(),
-		CheckpointTs:    checkpointTs,
-		ResolvedTs:      checkpointTs,
-		MaintainerEpoch: m.currentMaintainerEpoch(),
+		ChangefeedID: cfID.ToPB(),
+		CheckpointTs: checkpointTs,
+		ResolvedTs:   checkpointTs,
 	}
 	m.redoResolvedTs = checkpointTs
 	m.scheduleState.Store(int32(heartbeatpb.ComponentState_Working))
