@@ -33,6 +33,7 @@ const (
 	tidbOp           = "_tidb_op"
 	tidbCommitTs     = "_tidb_commit_ts"
 	tidbPhysicalTime = "_tidb_commit_physical_time"
+	ticdcBefore      = "_ticdc_before"
 
 	// row level checksum related fields
 	tidbRowLevelChecksum = "_tidb_row_level_checksum"
@@ -43,6 +44,7 @@ const (
 const (
 	insertOperation = "c"
 	updateOperation = "u"
+	deleteOperation = "d"
 )
 
 const (
@@ -149,6 +151,8 @@ func getOperation(e *commonEvent.RowEvent) string {
 		return insertOperation
 	} else if e.IsUpdate() {
 		return updateOperation
+	} else if e.IsDelete() {
+		return deleteOperation
 	}
 	return ""
 }
