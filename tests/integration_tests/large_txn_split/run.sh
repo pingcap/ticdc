@@ -8,6 +8,7 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 CDC_ADDR="127.0.0.1:18300"
+RESET_AFTER_BATCH_FAILPOINT="github.com/pingcap/ticdc/downstreamadapter/eventcollector/InjectResetDispatcherAfterBatchDataEvents=3*return(true)"
 
 function prepare() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
@@ -22,7 +23,8 @@ function prepare() {
 		--binary $CDC_BINARY \
 		--addr "$CDC_ADDR" \
 		--pd $pd_addr \
-		--config "$CUR/conf/server.toml"
+		--config "$CUR/conf/server.toml" \
+		--failpoint "$RESET_AFTER_BATCH_FAILPOINT"
 
 	cdc_cli_changefeed create \
 		--server "$CDC_ADDR" \
@@ -70,6 +72,15 @@ function run_workload() {
 	fi
 }
 
+function render_diff_config() {
+	local output=$1
+
+	sed \
+		-e "s/port = 3306/port = ${DOWN_TIDB_PORT}/" \
+		-e "s/port = 4000/port = ${UP_TIDB_PORT}/" \
+		"$CUR/conf/diff_config.toml" >"$output"
+}
+
 trap 'stop_test $WORK_DIR' EXIT
 
 if [ "$SINK_TYPE" == "mysql" ]; then
@@ -84,11 +95,14 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 	generate_workload "$workload_sql"
 	set -x
 	run_workload "$workload_sql"
+	diff_config=$WORK_DIR/diff_config.toml
+	render_diff_config "$diff_config"
 
 	echo "[$(date)] Workload completed, verifying split path and data consistency..."
 
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 200 3
+	check_sync_diff $WORK_DIR "$diff_config" 200 3
 	$CUR/../_utils/check_logs_contains $WORK_DIR "scan interrupted inside a large txn"
+	$CUR/../_utils/check_logs_contains $WORK_DIR "inject dispatcher reset after batch data events"
 
 	cleanup_process $CDC_BINARY
 	echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
