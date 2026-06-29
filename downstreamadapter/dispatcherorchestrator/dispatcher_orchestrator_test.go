@@ -853,7 +853,7 @@ func TestValidateBootstrapNilRedoTriggerRejectsExistingRedoTrigger(t *testing.T)
 	manager := &dispatchermanager.DispatcherManager{}
 	manager.SetTableTriggerRedoDispatcher(redoDispatcher)
 
-	err := validateBootstrapTableTriggerRedoDispatcher(cfID, manager, nil)
+	err := bootstrapRedoTableTrigger(manager, nil, 0).validate(cfID)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "table trigger redo dispatcher present during nil trigger bootstrap")
 }

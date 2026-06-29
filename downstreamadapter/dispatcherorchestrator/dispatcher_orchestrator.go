@@ -282,16 +282,15 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		manager.MaintainerFenceMu.Unlock()
 		return nil
 	}
+	var eventTrigger, redoTrigger bootstrapTableTrigger
 	if exists {
-		if err := validateBootstrapTableTriggerEventDispatcher(
-			cfId, manager, req.TableTriggerEventDispatcherId,
-		); err != nil {
+		eventTrigger = bootstrapEventTableTrigger(manager, req.TableTriggerEventDispatcherId, req.StartTs)
+		redoTrigger = bootstrapRedoTableTrigger(manager, req.TableTriggerRedoDispatcherId, req.StartTs)
+		if err := eventTrigger.validate(cfId); err != nil {
 			manager.MaintainerFenceMu.Unlock()
 			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
 		}
-		if err := validateBootstrapTableTriggerRedoDispatcher(
-			cfId, manager, req.TableTriggerRedoDispatcherId,
-		); err != nil {
+		if err := redoTrigger.validate(cfId); err != nil {
 			manager.MaintainerFenceMu.Unlock()
 			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
 		}
@@ -313,22 +312,18 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		// different trigger ID is still present, the scheduler has violated the
 		// handover ordering; replacing it in place can duplicate DDL ownership,
 		// so fail the bootstrap instead.
-		if err := ensureBootstrapTableTriggerEventDispatcher(
-			cfId, manager, req.TableTriggerEventDispatcherId, req.StartTs,
-		); err != nil {
+		if err := eventTrigger.ensure(cfId); err != nil {
 			manager.MaintainerFenceMu.Unlock()
 			return m.handleBootstrapTriggerError(
 				from, req.ChangefeedID, maintainerEpoch, cfId,
-				"table trigger event dispatcher", err,
+				eventTrigger.name, err,
 			)
 		}
-		if err := ensureBootstrapTableTriggerRedoDispatcher(
-			cfId, manager, req.TableTriggerRedoDispatcherId, req.StartTs,
-		); err != nil {
+		if err := redoTrigger.ensure(cfId); err != nil {
 			manager.MaintainerFenceMu.Unlock()
 			return m.handleBootstrapTriggerError(
 				from, req.ChangefeedID, maintainerEpoch, cfId,
-				"table trigger redo dispatcher", err,
+				redoTrigger.name, err,
 			)
 		}
 	}
@@ -356,121 +351,101 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
 
-// validateBootstrapTableTriggerEventDispatcher checks whether an existing event
-// table trigger can be owned by the incoming bootstrap request before the
-// maintainer owner/epoch is updated.
-func validateBootstrapTableTriggerEventDispatcher(
-	cfId common.ChangeFeedID,
+// bootstrapTableTrigger describes one table trigger flavor during bootstrap
+// validation and creation.
+type bootstrapTableTrigger struct {
+	name      string
+	id        *heartbeatpb.DispatcherID
+	currentID func() (common.DispatcherID, bool)
+	create    func() error
+}
+
+func bootstrapEventTableTrigger(
 	manager *dispatchermanager.DispatcherManager,
 	id *heartbeatpb.DispatcherID,
-) error {
-	tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
-	if id == nil {
-		if tableTriggerDispatcher == nil {
+	startTs uint64,
+) bootstrapTableTrigger {
+	return bootstrapTableTrigger{
+		name: "table trigger event dispatcher",
+		id:   id,
+		currentID: func() (common.DispatcherID, bool) {
+			dispatcher := manager.GetTableTriggerEventDispatcher()
+			if dispatcher == nil {
+				return common.DispatcherID{}, false
+			}
+			return dispatcher.GetId(), true
+		},
+		create: func() error {
+			return manager.NewTableTriggerEventDispatcher(id, startTs, false)
+		},
+	}
+}
+
+func bootstrapRedoTableTrigger(
+	manager *dispatchermanager.DispatcherManager,
+	id *heartbeatpb.DispatcherID,
+	startTs uint64,
+) bootstrapTableTrigger {
+	return bootstrapTableTrigger{
+		name: "table trigger redo dispatcher",
+		id:   id,
+		currentID: func() (common.DispatcherID, bool) {
+			dispatcher := manager.GetTableTriggerRedoDispatcher()
+			if dispatcher == nil {
+				return common.DispatcherID{}, false
+			}
+			return dispatcher.GetId(), true
+		},
+		create: func() error {
+			return manager.NewTableTriggerRedoDispatcher(id, startTs, false)
+		},
+	}
+}
+
+// validate checks whether an existing table trigger can be owned by the
+// incoming bootstrap request before the maintainer owner/epoch is updated.
+func (t bootstrapTableTrigger) validate(cfId common.ChangeFeedID) error {
+	currentID, ok := t.currentID()
+	if t.id == nil {
+		if !ok {
 			return nil
 		}
 		return validateBootstrapNoTableTriggerDispatcher(
 			cfId,
-			tableTriggerDispatcher.GetId(),
-			"table trigger event dispatcher",
+			currentID,
+			t.name,
 		)
 	}
-	if tableTriggerDispatcher == nil {
+	if !ok {
 		return nil
 	}
 	return validateBootstrapTableTriggerDispatcherID(
 		cfId,
-		id,
-		tableTriggerDispatcher.GetId(),
-		"table trigger event dispatcher",
+		t.id,
+		currentID,
+		t.name,
 	)
 }
 
-// ensureBootstrapTableTriggerEventDispatcher verifies that a reused manager has
-// the bootstrap owner's table trigger, or creates it when no trigger exists yet.
-func ensureBootstrapTableTriggerEventDispatcher(
-	cfId common.ChangeFeedID,
-	manager *dispatchermanager.DispatcherManager,
-	id *heartbeatpb.DispatcherID,
-	startTs uint64,
-) error {
-	if id == nil {
+// ensure verifies that a reused manager has the bootstrap owner's table
+// trigger, or creates it when no trigger exists yet.
+func (t bootstrapTableTrigger) ensure(cfId common.ChangeFeedID) error {
+	if t.id == nil {
 		return nil
 	}
-	tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
-	if tableTriggerDispatcher == nil {
+	currentID, ok := t.currentID()
+	if !ok {
 		return ensureBootstrapTableTriggerDispatcher(
 			cfId,
-			"table trigger event dispatcher",
-			func() error {
-				return manager.NewTableTriggerEventDispatcher(id, startTs, false)
-			},
+			t.name,
+			t.create,
 		)
 	}
 	return validateBootstrapTableTriggerDispatcherID(
 		cfId,
-		id,
-		tableTriggerDispatcher.GetId(),
-		"table trigger event dispatcher",
-	)
-}
-
-// validateBootstrapTableTriggerRedoDispatcher checks whether an existing redo
-// table trigger can be owned by the incoming bootstrap request before the
-// maintainer owner/epoch is updated.
-func validateBootstrapTableTriggerRedoDispatcher(
-	cfId common.ChangeFeedID,
-	manager *dispatchermanager.DispatcherManager,
-	id *heartbeatpb.DispatcherID,
-) error {
-	tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher()
-	if id == nil {
-		if tableTriggerRedoDispatcher == nil {
-			return nil
-		}
-		return validateBootstrapNoTableTriggerDispatcher(
-			cfId,
-			tableTriggerRedoDispatcher.GetId(),
-			"table trigger redo dispatcher",
-		)
-	}
-	if tableTriggerRedoDispatcher == nil {
-		return nil
-	}
-	return validateBootstrapTableTriggerDispatcherID(
-		cfId,
-		id,
-		tableTriggerRedoDispatcher.GetId(),
-		"table trigger redo dispatcher",
-	)
-}
-
-// ensureBootstrapTableTriggerRedoDispatcher verifies that a reused manager has
-// the bootstrap owner's redo table trigger, or creates it when no trigger exists yet.
-func ensureBootstrapTableTriggerRedoDispatcher(
-	cfId common.ChangeFeedID,
-	manager *dispatchermanager.DispatcherManager,
-	id *heartbeatpb.DispatcherID,
-	startTs uint64,
-) error {
-	if id == nil {
-		return nil
-	}
-	tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher()
-	if tableTriggerRedoDispatcher == nil {
-		return ensureBootstrapTableTriggerDispatcher(
-			cfId,
-			"table trigger redo dispatcher",
-			func() error {
-				return manager.NewTableTriggerRedoDispatcher(id, startTs, false)
-			},
-		)
-	}
-	return validateBootstrapTableTriggerDispatcherID(
-		cfId,
-		id,
-		tableTriggerRedoDispatcher.GetId(),
-		"table trigger redo dispatcher",
+		t.id,
+		currentID,
+		t.name,
 	)
 }
 
