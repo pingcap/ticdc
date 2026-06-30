@@ -222,9 +222,23 @@ func NewAvroBatchEncoder(
 	c *common.Config,
 	clusterID string,
 ) (common.EventEncoder, error) {
-	schemaM, err := avro.NewConfluentSchemaManager(ctx, c.AvroConfluentSchemaRegistry, nil)
-	if err != nil {
-		return nil, errors.Trace(err)
+	var schemaM avro.SchemaManager
+	var err error
+
+	schemaRegistryType := c.SchemaRegistryType()
+	switch schemaRegistryType {
+	case common.SchemaRegistryTypeConfluent:
+		schemaM, err = avro.NewConfluentSchemaManager(ctx, c.AvroConfluentSchemaRegistry, nil)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+	case common.SchemaRegistryTypeGlue:
+		schemaM, err = avro.NewGlueSchemaManager(ctx, c.AvroGlueSchemaRegistry)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+	default:
+		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(schemaRegistryType)
 	}
 
 	codecConfig := *c

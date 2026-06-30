@@ -398,12 +398,6 @@ func (c *Config) Validate() error {
 			)
 		}
 
-		if c.Protocol == config.ProtocolDebeziumAvro && c.AvroGlueSchemaRegistry != nil {
-			return errors.ErrCodecInvalidConfig.GenWithStack(
-				`Debezium Avro protocol only supports "%s" for Confluent Avro Schema Registry`,
-				codecOPTAvroSchemaRegistry,
-			)
-		}
 	}
 
 	if c.Protocol == config.ProtocolAvro {
