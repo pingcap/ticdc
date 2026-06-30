@@ -75,15 +75,6 @@ func (e *DispatcherManager) CanUpdateMaintainer(from node.ID, maintainerEpoch ui
 	return e.canUpdateMaintainerLocked(from, maintainerEpoch)
 }
 
-// SetMaintainerAfterValidation records a maintainer update that has already
-// passed CanUpdateMaintainer while the caller holds MaintainerFenceMu.
-func (e *DispatcherManager) SetMaintainerAfterValidation(from node.ID, maintainerEpoch uint64) {
-	e.meta.Lock()
-	defer e.meta.Unlock()
-	e.meta.maintainerEpoch = maintainerEpoch
-	e.meta.maintainerID = from
-}
-
 func (e *DispatcherManager) canUpdateMaintainerLocked(from node.ID, maintainerEpoch uint64) bool {
 	if maintainerEpoch == 0 {
 		if e.meta.maintainerEpoch != 0 {

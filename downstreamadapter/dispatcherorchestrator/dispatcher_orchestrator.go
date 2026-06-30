@@ -290,7 +290,16 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
 		}
 	}
-	manager.SetMaintainerAfterValidation(from, maintainerEpoch)
+	if !manager.TryUpdateMaintainer(from, maintainerEpoch) {
+		log.Warn("drop stale maintainer bootstrap request after trigger validation",
+			zap.String("changefeed", cfId.Name()),
+			zap.String("from", from.String()),
+			zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
+			zap.String("currentMaintainer", manager.GetMaintainerID().String()))
+		manager.MaintainerFenceMu.Unlock()
+		return nil
+	}
 	if exists {
 		// A higher-epoch maintainer may reuse an existing DispatcherManager with
 		// the same table trigger ID. A fresh trigger ID is allowed only after the
