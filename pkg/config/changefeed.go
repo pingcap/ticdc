@@ -491,8 +491,9 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 		info.rmMQOnlyFields()
 	} else {
 		// remove schema registry for MQ downstream with
-		// protocol other than avro
-		if util.GetOrZero(info.Config.Sink.Protocol) != ProtocolAvro.String() {
+		// protocol other than avro or debezium-avro
+		protocol := util.GetOrZero(info.Config.Sink.Protocol)
+		if protocol != ProtocolAvro.String() && protocol != ProtocolDebeziumAvro.String() {
 			info.Config.Sink.SchemaRegistry = nil
 		}
 	}

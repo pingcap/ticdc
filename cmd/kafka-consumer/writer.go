@@ -119,7 +119,8 @@ func newWriter(ctx context.Context, o *option) *writer {
 		w.progresses[i] = newPartitionProgress(int32(i), decoder)
 	}
 
-	eventRouter, err := eventrouter.NewEventRouter(o.sinkConfig, o.topic, false, o.protocol == config.ProtocolAvro)
+	isAvroLike := o.protocol == config.ProtocolAvro || o.protocol == config.ProtocolDebeziumAvro
+	eventRouter, err := eventrouter.NewEventRouter(o.sinkConfig, o.topic, false, isAvroLike)
 	if err != nil {
 		log.Panic("initialize the event router failed",
 			zap.Any("protocol", o.protocol), zap.Any("topic", o.topic),
@@ -493,7 +494,8 @@ func (w *writer) onDDL(ddl *event.DDLEvent) {
 		return
 	}
 	switch w.protocol {
-	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro, config.ProtocolSimple, config.ProtocolDebezium:
+	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro, config.ProtocolSimple,
+		config.ProtocolDebezium, config.ProtocolDebeziumAvro:
 	default:
 		return
 	}
@@ -632,7 +634,8 @@ func (w *writer) appendRow2Group(dml *event.DMLEvent, progress *partitionProgres
 			zap.Stringer("eventType", dml.RowTypes[0]),
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
-	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro, config.ProtocolDebezium:
+	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro,
+		config.ProtocolDebezium, config.ProtocolDebeziumAvro:
 		// for partition table, these protocols cannot assign physical table id to each dml message,
 		// we cannot distinguish whether it's a real fallback event or not, still append it.
 		if w.partitionTableAccessor.IsPartitionTable(schema, table) {
