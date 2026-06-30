@@ -200,6 +200,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			appcontext.GetService[*dispatchermanager.HeartBeatCollector](appcontext.HeartbeatCollector).RemoveDispatcherManager(cfId)
 
 			response := &heartbeatpb.MaintainerBootstrapResponse{
+<<<<<<< HEAD
 				ChangefeedID: req.ChangefeedID,
 				Err: &heartbeatpb.RunningError{
 					Time:    time.Now().String(),
@@ -207,6 +208,11 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 					Code:    string(errors.ErrorCode(err)),
 					Message: err.Error(),
 				},
+=======
+				ChangefeedID:    req.ChangefeedID,
+				MaintainerEpoch: maintainerEpoch,
+				Err:             newRunningError(from, err),
+>>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 			}
 			log.Error("create new dispatcher manager failed",
 				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
@@ -217,6 +223,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		m.dispatcherManagers[cfId] = manager
 		m.mutex.Unlock()
 		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
+<<<<<<< HEAD
 	} else {
 		// Check and potentially add a table trigger event dispatcher.
 		// This is necessary during maintainer node migration, as the existing
@@ -251,6 +258,64 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 					return m.handleDispatcherError(from, req.ChangefeedID, err)
 				}
 			}
+=======
+	}
+
+	manager.MaintainerFenceMu.Lock()
+	if !manager.CanUpdateMaintainer(from, maintainerEpoch) {
+		log.Warn("drop stale maintainer bootstrap request",
+			zap.String("changefeed", cfId.Name()),
+			zap.String("from", from.String()),
+			zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
+			zap.String("currentMaintainer", manager.GetMaintainerID().String()))
+		manager.MaintainerFenceMu.Unlock()
+		return nil
+	}
+	var eventTrigger, redoTrigger bootstrapTableTrigger
+	if exists {
+		eventTrigger = bootstrapEventTableTrigger(manager, req.TableTriggerEventDispatcherId, req.StartTs)
+		redoTrigger = bootstrapRedoTableTrigger(manager, req.TableTriggerRedoDispatcherId, req.StartTs)
+		if err := eventTrigger.validate(cfId); err != nil {
+			manager.MaintainerFenceMu.Unlock()
+			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
+		}
+		if err := redoTrigger.validate(cfId); err != nil {
+			manager.MaintainerFenceMu.Unlock()
+			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
+		}
+	}
+	if !manager.TryUpdateMaintainer(from, maintainerEpoch) {
+		log.Warn("drop stale maintainer bootstrap request after trigger validation",
+			zap.String("changefeed", cfId.Name()),
+			zap.String("from", from.String()),
+			zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
+			zap.String("currentMaintainer", manager.GetMaintainerID().String()))
+		manager.MaintainerFenceMu.Unlock()
+		return nil
+	}
+	if exists {
+		// A higher-epoch maintainer may reuse an existing DispatcherManager with
+		// the same table trigger ID. A fresh trigger ID is allowed only after the
+		// old maintainer handover leaves no old trigger on this node. If a
+		// different trigger ID is still present, the scheduler has violated the
+		// handover ordering; replacing it in place can duplicate DDL ownership,
+		// so fail the bootstrap instead.
+		if err := eventTrigger.ensure(cfId); err != nil {
+			manager.MaintainerFenceMu.Unlock()
+			return m.handleBootstrapTriggerError(
+				from, req.ChangefeedID, maintainerEpoch, cfId,
+				eventTrigger.name, err,
+			)
+		}
+		if err := redoTrigger.ensure(cfId); err != nil {
+			manager.MaintainerFenceMu.Unlock()
+			return m.handleBootstrapTriggerError(
+				from, req.ChangefeedID, maintainerEpoch, cfId,
+				redoTrigger.name, err,
+			)
+>>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 		}
 	}
 
@@ -283,6 +348,180 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
 
+// bootstrapTableTrigger describes one table trigger flavor during bootstrap
+// validation and creation.
+type bootstrapTableTrigger struct {
+	name      string
+	id        *heartbeatpb.DispatcherID
+	currentID func() (common.DispatcherID, bool)
+	create    func() error
+}
+
+func bootstrapEventTableTrigger(
+	manager *dispatchermanager.DispatcherManager,
+	id *heartbeatpb.DispatcherID,
+	startTs uint64,
+) bootstrapTableTrigger {
+	return bootstrapTableTrigger{
+		name: "table trigger event dispatcher",
+		id:   id,
+		currentID: func() (common.DispatcherID, bool) {
+			dispatcher := manager.GetTableTriggerEventDispatcher()
+			if dispatcher == nil {
+				return common.DispatcherID{}, false
+			}
+			return dispatcher.GetId(), true
+		},
+		create: func() error {
+			return manager.NewTableTriggerEventDispatcher(id, startTs, false)
+		},
+	}
+}
+
+func bootstrapRedoTableTrigger(
+	manager *dispatchermanager.DispatcherManager,
+	id *heartbeatpb.DispatcherID,
+	startTs uint64,
+) bootstrapTableTrigger {
+	return bootstrapTableTrigger{
+		name: "table trigger redo dispatcher",
+		id:   id,
+		currentID: func() (common.DispatcherID, bool) {
+			dispatcher := manager.GetTableTriggerRedoDispatcher()
+			if dispatcher == nil {
+				return common.DispatcherID{}, false
+			}
+			return dispatcher.GetId(), true
+		},
+		create: func() error {
+			return manager.NewTableTriggerRedoDispatcher(id, startTs, false)
+		},
+	}
+}
+
+// validate checks whether an existing table trigger can be owned by the
+// incoming bootstrap request before the maintainer owner/epoch is updated.
+func (t bootstrapTableTrigger) validate(cfID common.ChangeFeedID) error {
+	currentID, ok := t.currentID()
+	if t.id == nil {
+		if !ok {
+			return nil
+		}
+		return validateBootstrapNoTableTriggerDispatcher(
+			cfID,
+			currentID,
+			t.name,
+		)
+	}
+	if !ok {
+		return nil
+	}
+	return validateBootstrapTableTriggerDispatcherID(
+		cfID,
+		t.id,
+		currentID,
+		t.name,
+	)
+}
+
+// ensure verifies that a reused manager has the bootstrap owner's table
+// trigger, or creates it when no trigger exists yet.
+func (t bootstrapTableTrigger) ensure(cfID common.ChangeFeedID) error {
+	if t.id == nil {
+		return nil
+	}
+	currentID, ok := t.currentID()
+	if !ok {
+		return ensureBootstrapTableTriggerDispatcher(
+			cfID,
+			t.name,
+			t.create,
+		)
+	}
+	return validateBootstrapTableTriggerDispatcherID(
+		cfID,
+		t.id,
+		currentID,
+		t.name,
+	)
+}
+
+func ensureBootstrapTableTriggerDispatcher(
+	cfID common.ChangeFeedID,
+	triggerName string,
+	create func() error,
+) error {
+	if err := create(); err != nil {
+		if !dispatchermanager.IsWritePathClosedError(err) {
+			log.Error("failed to create table trigger dispatcher",
+				zap.Stringer("changefeedID", cfID),
+				zap.String("triggerName", triggerName),
+				zap.Error(err))
+		}
+		return err
+	}
+	return nil
+}
+
+func validateBootstrapNoTableTriggerDispatcher(
+	cfID common.ChangeFeedID,
+	currentID common.DispatcherID,
+	triggerName string,
+) error {
+	// A nil trigger ID is valid only after local trigger cleanup has removed the
+	// previous owner; otherwise owner transfer would leave stale DDL ownership.
+	log.Error("table trigger dispatcher present during nil trigger bootstrap",
+		zap.Stringer("changefeedID", cfID),
+		zap.String("triggerName", triggerName),
+		zap.Stringer("actualDispatcherID", currentID))
+	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+		GenWithStackByArgs(triggerName + " present during nil trigger bootstrap")
+}
+
+func validateBootstrapTableTriggerDispatcherID(
+	cfID common.ChangeFeedID,
+	id *heartbeatpb.DispatcherID,
+	currentID common.DispatcherID,
+	triggerName string,
+) error {
+	expectedID := common.NewDispatcherIDFromPB(id)
+	if currentID == expectedID {
+		return nil
+	}
+	log.Error("table trigger dispatcher id mismatch during bootstrap",
+		zap.Stringer("changefeedID", cfID),
+		zap.String("triggerName", triggerName),
+		zap.Stringer("expectedDispatcherID", expectedID),
+		zap.Stringer("actualDispatcherID", currentID))
+	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+		GenWithStackByArgs(triggerName + " id mismatch during bootstrap")
+}
+
+func (m *DispatcherOrchestrator) handleBootstrapTriggerError(
+	from node.ID,
+	changefeedID *heartbeatpb.ChangefeedID,
+	maintainerEpoch uint64,
+	cfID common.ChangeFeedID,
+	triggerName string,
+	err error,
+) error {
+	if dispatchermanager.IsWritePathClosedError(err) {
+		log.Info("dispatcher manager write path closed while creating table trigger dispatcher",
+			zap.Stringer("changefeedID", cfID),
+			zap.String("triggerName", triggerName),
+			zap.Error(err))
+		return nil
+	}
+	if m.fenced.Load() || m.closed.Load() {
+		log.Info("dispatcher orchestrator closed while creating table trigger dispatcher",
+			zap.Stringer("changefeedID", cfID),
+			zap.String("triggerName", triggerName),
+			zap.Error(err))
+		return nil
+	}
+	return m.handleDispatcherError(from, changefeedID, maintainerEpoch, err)
+}
+
 // handlePostBootstrapRequest handles the maintainer post-bootstrap request message.
 // It initializes the table trigger event dispatcher with table schema information,
 // which serves as the initial state for the table schema store. After initialization,
@@ -297,23 +536,48 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	manager, exists := m.dispatcherManagers[cfId]
 	m.mutex.Unlock()
 
-	if !exists || manager.GetTableTriggerEventDispatcher() == nil {
+	if !exists {
 		log.Error("Receive post bootstrap request but there is no table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()))
 		return nil
 	}
+<<<<<<< HEAD
 	if manager.GetTableTriggerEventDispatcher().GetId() !=
 		common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId) {
+=======
+	manager.MaintainerFenceMu.Lock()
+	if !manager.IsMaintainerRequestAllowed(from, req.MaintainerEpoch) {
+		log.Warn("drop stale maintainer post bootstrap request",
+			zap.String("changefeed", cfId.Name()),
+			zap.String("from", from.String()),
+			zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
+			zap.String("currentMaintainer", manager.GetMaintainerID().String()))
+		manager.MaintainerFenceMu.Unlock()
+		return nil
+	}
+	tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
+	if tableTriggerDispatcher == nil {
+		err := errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+			GenWithStackByArgs("receive post bootstrap request but there is no table trigger event dispatcher")
+		log.Error("receive post bootstrap request but there is no table trigger event dispatcher",
+			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+		manager.MaintainerFenceMu.Unlock()
+		return m.sendPostBootstrapErrorResponse(from, req, err)
+	}
+	expectedDispatcherID := tableTriggerDispatcher.GetId()
+	actualDispatcherID := common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId)
+	if expectedDispatcherID != actualDispatcherID {
+>>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 		log.Error("Receive post bootstrap request but the table trigger event dispatcher id is not match",
 			zap.Any("changefeedID", cfId.Name()),
-			zap.String("expectedDispatcherID",
-				manager.GetTableTriggerEventDispatcher().GetId().String()),
-			zap.String("actualDispatcherID",
-				common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId).String()))
+			zap.String("expectedDispatcherID", expectedDispatcherID.String()),
+			zap.String("actualDispatcherID", actualDispatcherID.String()))
 
 		err := errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 			GenWithStackByArgs("Receive post bootstrap request but the table trigger event dispatcher id is not match")
 
+<<<<<<< HEAD
 		response := &heartbeatpb.MaintainerPostBootstrapResponse{
 			ChangefeedID: req.ChangefeedID,
 			Err: &heartbeatpb.RunningError{
@@ -325,11 +589,24 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		}
 
 		return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
+=======
+		manager.MaintainerFenceMu.Unlock()
+		return m.sendPostBootstrapErrorResponse(from, req, err)
+>>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 	}
 
 	// init table schema store
 	err := manager.InitalizeTableTriggerEventDispatcher(req.Schemas)
 	if err != nil {
+<<<<<<< HEAD
+=======
+		if dispatchermanager.IsWritePathClosedError(err) {
+			log.Info("dispatcher manager write path closed while initializing table trigger event dispatcher",
+				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+			manager.MaintainerFenceMu.Unlock()
+			return nil
+		}
+>>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 		log.Error("failed to initialize table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 		return m.handleDispatcherError(from, req.ChangefeedID, err)
@@ -337,6 +614,15 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	if manager.IsRedoReady() {
 		err := manager.InitalizeTableTriggerRedoDispatcher(req.RedoSchemas)
 		if err != nil {
+<<<<<<< HEAD
+=======
+			if dispatchermanager.IsWritePathClosedError(err) {
+				log.Info("dispatcher manager write path closed while initializing table trigger redo dispatcher",
+					zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+				manager.MaintainerFenceMu.Unlock()
+				return nil
+			}
+>>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 			log.Error("failed to initialize table trigger redo dispatcher",
 				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 			return m.handleDispatcherError(from, req.ChangefeedID, err)
@@ -348,6 +634,28 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		TableTriggerEventDispatcherId: req.TableTriggerEventDispatcherId,
 	}
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
+}
+
+func (m *DispatcherOrchestrator) sendPostBootstrapErrorResponse(
+	from node.ID,
+	req *heartbeatpb.MaintainerPostBootstrapRequest,
+	err error,
+) error {
+	response := &heartbeatpb.MaintainerPostBootstrapResponse{
+		ChangefeedID:    req.ChangefeedID,
+		MaintainerEpoch: req.MaintainerEpoch,
+		Err:             newRunningError(from, err),
+	}
+	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
+}
+
+func newRunningError(from node.ID, err error) *heartbeatpb.RunningError {
+	return &heartbeatpb.RunningError{
+		Time:    time.Now().String(),
+		Node:    from.String(),
+		Code:    string(errors.ErrorCode(err)),
+		Message: err.Error(),
+	}
 }
 
 func (m *DispatcherOrchestrator) handleCloseRequest(
@@ -451,6 +759,7 @@ func (m *DispatcherOrchestrator) handleDispatcherError(
 	err error,
 ) error {
 	response := &heartbeatpb.MaintainerBootstrapResponse{
+<<<<<<< HEAD
 		ChangefeedID: changefeedID,
 		Err: &heartbeatpb.RunningError{
 			Time:    time.Now().String(),
@@ -458,6 +767,11 @@ func (m *DispatcherOrchestrator) handleDispatcherError(
 			Code:    string(errors.ErrorCode(err)),
 			Message: err.Error(),
 		},
+=======
+		ChangefeedID:    changefeedID,
+		MaintainerEpoch: maintainerEpoch,
+		Err:             newRunningError(from, err),
+>>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 	}
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
@@ -469,24 +783,21 @@ func retrieveRedoDispatcherSpanForBootstrapResponse(
 	if !manager.IsRedoReady() {
 		return
 	}
-	manager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.RedoDispatcher) {
-		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
-			ID:              id.ToPB(),
-			SchemaID:        d.GetSchemaID(),
-			Span:            d.GetTableSpan(),
-			ComponentStatus: d.GetComponentStatus(),
-			CheckpointTs:    d.GetCheckpointTs(),
-			BlockState:      d.GetBlockEventStatus(),
-			Mode:            d.GetMode(),
-		})
-	})
+	appendBootstrapSpans(manager.GetRedoDispatcherMap(), response)
 }
 
 func retrieveDispatcherSpanForBootstrapResponse(
 	manager *dispatchermanager.DispatcherManager,
 	response *heartbeatpb.MaintainerBootstrapResponse,
 ) {
-	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.EventDispatcher) {
+	appendBootstrapSpans(manager.GetDispatcherMap(), response)
+}
+
+func appendBootstrapSpans[T dispatcher.Dispatcher](
+	dispatcherMap *dispatchermanager.DispatcherMap[T],
+	response *heartbeatpb.MaintainerBootstrapResponse,
+) {
+	dispatcherMap.ForEach(func(id common.DispatcherID, d T) {
 		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
 			ID:              id.ToPB(),
 			SchemaID:        d.GetSchemaID(),
@@ -504,32 +815,76 @@ func retrieveOperatorsForBootstrapResponse(
 	manager *dispatchermanager.DispatcherManager,
 	response *heartbeatpb.MaintainerBootstrapResponse,
 ) {
+<<<<<<< HEAD
 	manager.GetCurrentOperatorMap().Range(func(key, value any) bool {
+=======
+	// The caller holds MaintainerFenceMu while building this response, so the
+	// owner snapshot cannot change during the operator-map iteration.
+	currentMaintainer := manager.GetMaintainerID()
+	currentMaintainerEpoch := manager.GetMaintainerEpoch()
+	var reportedDispatchers map[reportedDispatcherKey]struct{}
+	isDispatcherReported := func(dispatcherID common.DispatcherID, mode int64) bool {
+		if reportedDispatchers == nil {
+			reportedDispatchers = make(map[reportedDispatcherKey]struct{}, len(response.Spans))
+			for _, span := range response.Spans {
+				reportedDispatchers[reportedDispatcherKey{
+					id:   common.NewDispatcherIDFromPB(span.ID),
+					mode: span.Mode,
+				}] = struct{}{}
+			}
+		}
+		_, ok := reportedDispatchers[reportedDispatcherKey{id: dispatcherID, mode: mode}]
+		return ok
+	}
+
+	manager.GetCurrentOperatorMap().Range(func(_, value any) bool {
+>>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 		req := value.(dispatchermanager.SchedulerDispatcherRequest)
+		requestAllowed := dispatchermanager.IsMaintainerRequestAllowedBySnapshot(
+			req.From,
+			req.MaintainerEpoch,
+			currentMaintainer,
+			currentMaintainerEpoch,
+		)
 		dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
-		if common.IsRedoMode(req.Config.Mode) {
-			if manager.IsRedoReady() {
-				_, ok := manager.GetRedoDispatcherMap().Get(dispatcherID)
-				// Log error if dispatcher not found and action is not create
-				// It's possible that the dispatcher is not found when the action is create
-				// because the dispatcher may be created after the operator is stored
-				if !ok && req.ScheduleAction != heartbeatpb.ScheduleAction_Create {
+		dispatcherExistsKnown := !common.IsRedoMode(req.Config.Mode) || manager.IsRedoReady()
+		dispatcherReported := false
+		if !requestAllowed {
+			// Restore stale remove only when the same bootstrap snapshot reports the dispatcher.
+			// This keeps the working span and cleanup intent consistent even if live maps change during cleanup.
+			if req.ScheduleAction != heartbeatpb.ScheduleAction_Remove {
+				return true
+			}
+			dispatcherReported = isDispatcherReported(dispatcherID, req.Config.Mode)
+			if !dispatcherReported {
+				return true
+			}
+			log.Info("include stale remove operator in bootstrap response",
+				zap.String("changefeed", changefeedID.String()),
+				zap.String("dispatcherID", req.Config.DispatcherID.String()),
+				zap.String("from", req.From.String()),
+				zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
+				zap.Uint64("currentMaintainerEpoch", currentMaintainerEpoch),
+				zap.String("currentMaintainer", currentMaintainer.String()))
+		}
+		// Log error if dispatcher not found and action is not create.
+		// It's possible that the dispatcher is not found when the action is create
+		// because the dispatcher may be created after the operator is stored.
+		if dispatcherExistsKnown && req.ScheduleAction != heartbeatpb.ScheduleAction_Create {
+			dispatcherExists := dispatcherReported
+			if requestAllowed {
+				dispatcherExists = isDispatcherInLiveMap(manager, dispatcherID, req.Config.Mode)
+			}
+			if !dispatcherExists {
+				if common.IsRedoMode(req.Config.Mode) {
 					log.Error("Redo dispatcher not found, this should not happen",
 						zap.String("changefeed", changefeedID.String()),
-						zap.String("dispatcherID", req.Config.DispatcherID.String()),
-					)
+						zap.String("dispatcherID", req.Config.DispatcherID.String()))
+				} else {
+					log.Error("Dispatcher not found, this should not happen",
+						zap.String("changefeed", changefeedID.String()),
+						zap.String("dispatcherID", req.Config.DispatcherID.String()))
 				}
-			}
-		} else {
-			_, ok := manager.GetDispatcherMap().Get(dispatcherID)
-			// Log error if dispatcher not found and action is not create
-			// It's possible that the dispatcher is not found when the action is create
-			// because the dispatcher may be created after the operator is stored
-			if !ok && req.ScheduleAction != heartbeatpb.ScheduleAction_Create {
-				log.Error("Dispatcher not found, this should not happen",
-					zap.String("changefeed", changefeedID.String()),
-					zap.String("dispatcherID", req.Config.DispatcherID.String()),
-				)
 			}
 		}
 		response.Operators = append(response.Operators, &heartbeatpb.ScheduleDispatcherRequest{
@@ -540,4 +895,22 @@ func retrieveOperatorsForBootstrapResponse(
 		})
 		return true
 	})
+}
+
+func isDispatcherInLiveMap(
+	manager *dispatchermanager.DispatcherManager,
+	dispatcherID common.DispatcherID,
+	mode int64,
+) bool {
+	if common.IsRedoMode(mode) {
+		_, ok := manager.GetRedoDispatcherMap().Get(dispatcherID)
+		return ok
+	}
+	_, ok := manager.GetDispatcherMap().Get(dispatcherID)
+	return ok
+}
+
+type reportedDispatcherKey struct {
+	id   common.DispatcherID
+	mode int64
 }
