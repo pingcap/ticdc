@@ -280,6 +280,10 @@ func newCompressionOption(o *clientOptions) kgo.Opt {
 		codec = kgo.NoCompression()
 	default:
 		log.Warn("unsupported compression algorithm", zap.String("compression", o.Compression))
+		codec = kgo.NoCompression()
+	}
+	if codec != kgo.NoCompression() {
+		log.Info("Kafka producer uses " + compression + " compression algorithm")
 	}
 	return kgo.ProducerBatchCompression(codec)
 }
