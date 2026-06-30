@@ -299,6 +299,166 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 	require.False(t, sink.IsNormal())
 }
 
+func TestMysqlSinkFlushDMLBeforeBlockReturnsOnDMLError(t *testing.T) {
+	sink, mock := MysqlSinkForTest()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t (id int primary key, name varchar(32));"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')")
+	dmlEvent.CommitTs = 100
+
+	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
+		WithArgs(1, "test").
+		WillDelayFor(100 * time.Millisecond).
+		WillReturnError(errors.New("connect: connection refused"))
+
+	sink.AddDMLEvent(dmlEvent)
+
+	syncPointEvent := commonEvent.NewSyncPointEvent(common.NewDispatcherID(), 200, 0, 0)
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- sink.FlushDMLBeforeBlock(syncPointEvent)
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-flushDone:
+			require.Error(t, err)
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	require.False(t, sink.IsNormal())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMysqlSinkFlushDMLBeforeBlockWaitsForDMLPostFlush(t *testing.T) {
+	sink, mock := MysqlSinkForTest()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t (id int primary key, name varchar(32));"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	postFlushEntered := make(chan struct{})
+	releasePostFlush := make(chan struct{})
+	var dmlFlushed atomic.Bool
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')")
+	dmlEvent.CommitTs = 100
+	dmlEvent.AddPostFlushFunc(func() {
+		close(postFlushEntered)
+		<-releasePostFlush
+		dmlFlushed.Store(true)
+	})
+
+	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
+		WithArgs(1, "test").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	sink.AddDMLEvent(dmlEvent)
+	require.Eventually(t, func() bool {
+		return mock.ExpectationsWereMet() == nil
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		select {
+		case <-postFlushEntered:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	require.False(t, dmlFlushed.Load())
+
+	syncPointEvent := commonEvent.NewSyncPointEvent(common.NewDispatcherID(), 200, 0, 0)
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- sink.FlushDMLBeforeBlock(syncPointEvent)
+	}()
+
+	require.Never(t, func() bool {
+		select {
+		case err := <-flushDone:
+			require.NoError(t, err)
+			return true
+		default:
+			return false
+		}
+	}, 200*time.Millisecond, 10*time.Millisecond)
+
+	close(releasePostFlush)
+
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-flushDone:
+			require.NoError(t, err)
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	require.True(t, dmlFlushed.Load())
+}
+
+func TestDMLBarrierAckFailAndDoneAreIdempotent(t *testing.T) {
+	barrier := newDMLBarrier(2)
+	doneCount := atomic.Int64{}
+	barrier.OnDone(func() { doneCount.Add(1) })
+
+	barrier.Ack(0)
+	barrier.Ack(0)
+	require.Never(t, func() bool {
+		select {
+		case <-barrier.done:
+			return true
+		default:
+			return false
+		}
+	}, 50*time.Millisecond, 10*time.Millisecond)
+
+	barrier.Ack(1)
+	require.NoError(t, barrier.Wait())
+	barrier.Fail(errors.New("late failure"))
+	barrier.Ack(1)
+	require.Equal(t, int64(1), doneCount.Load())
+
+	lateDone := atomic.Bool{}
+	barrier.OnDone(func() { lateDone.Store(true) })
+	require.True(t, lateDone.Load())
+}
+
+func TestMysqlSinkCloseUnblocksWaitingBarrier(t *testing.T) {
+	_, sink, mock := getMysqlSink()
+	barrier := newDMLBarrier(1)
+	sink.registerBarrier(barrier)
+	mock.ExpectClose()
+
+	flushDone := make(chan error, 1)
+	go func() { flushDone <- barrier.Wait() }()
+
+	sink.Close()
+
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-flushDone:
+			require.Error(t, err)
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // test the situation meets error when executing DDL
 // whether the sink state is correct
 func TestMysqlSinkMeetsDDLError(t *testing.T) {
