@@ -154,7 +154,7 @@ func newWithComponent(
 		return nil, err
 	}
 
-	ddlProducer, err := newDDLProducers(changefeedID, comp, sinkConfig)
+	ddlProducer, err = newDDLProducers(changefeedID, comp, sinkConfig)
 	if err != nil {
 		return nil, err
 	}
