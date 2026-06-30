@@ -42,28 +42,48 @@ func getPartitionNum(o *option) (int32, error) {
 	}
 	defer admin.Close()
 
+	topics := strings.Split(o.topic, ",")
+	maxPartitionNum := int32(0)
 	timeout := 3000
-	for i := 0; i <= 30; i++ {
-		resp, err := admin.GetMetadata(&o.topic, false, timeout)
-		if err != nil {
-			if err.(kafka.Error).Code() == kafka.ErrTransport {
-				log.Info("retry get partition number", zap.Int("retryTime", i), zap.Int("timeout", timeout))
-				timeout += 100
-				continue
+	for _, topic := range topics {
+		topic = strings.TrimSpace(topic)
+		if topic == "" {
+			continue
+		}
+		found := false
+		for i := 0; i <= 30; i++ {
+			resp, err := admin.GetMetadata(&topic, false, timeout)
+			if err != nil {
+				var kafkaErr kafka.Error
+				if errors.As(err, &kafkaErr) && kafkaErr.Code() == kafka.ErrTransport {
+					log.Info("retry get partition number", zap.String("topic", topic), zap.Int("retryTime", i), zap.Int("timeout", timeout))
+					timeout += 100
+					continue
+				}
+				return 0, errors.Trace(err)
 			}
-			return 0, errors.Trace(err)
+			if topicDetail, ok := resp.Topics[topic]; ok {
+				numPartitions := int32(len(topicDetail.Partitions))
+				log.Info("get partition number of topic",
+					zap.String("topic", topic),
+					zap.Int32("partitionNum", numPartitions))
+				if numPartitions > maxPartitionNum {
+					maxPartitionNum = numPartitions
+				}
+				found = true
+				break
+			}
+			log.Info("retry get partition number", zap.String("topic", topic))
+			time.Sleep(1 * time.Second)
 		}
-		if topicDetail, ok := resp.Topics[o.topic]; ok {
-			numPartitions := int32(len(topicDetail.Partitions))
-			log.Info("get partition number of topic",
-				zap.String("topic", o.topic),
-				zap.Int32("partitionNum", numPartitions))
-			return numPartitions, nil
+		if !found {
+			return 0, errors.Errorf("get partition number(%s) timeout", topic)
 		}
-		log.Info("retry get partition number", zap.String("topic", o.topic))
-		time.Sleep(1 * time.Second)
 	}
-	return 0, errors.Errorf("get partition number(%s) timeout", o.topic)
+	if maxPartitionNum == 0 {
+		return 0, errors.Errorf("get partition number(%s) timeout", o.topic)
+	}
+	return maxPartitionNum, nil
 }
 
 type consumer struct {

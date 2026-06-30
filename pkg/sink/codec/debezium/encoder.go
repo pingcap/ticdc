@@ -20,7 +20,9 @@ import (
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/avro"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
@@ -31,18 +33,34 @@ type BatchEncoder struct {
 
 	config *common.Config
 	codec  *dbzCodec
+
+	schemaM avro.SchemaManager
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
 func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
+	if d.config.Protocol == config.ProtocolDebeziumAvro &&
+		(!d.config.EnableTiDBExtension || !d.config.AvroEnableWatermark) {
+		return nil, nil
+	}
 	if !d.config.EnableTiDBExtension {
 		return nil, nil
 	}
+
 	keyMap := bytes.Buffer{}
 	valueBuf := bytes.Buffer{}
 	err := d.codec.EncodeCheckpointEvent(ts, &keyMap, &valueBuf)
 	if err != nil {
 		return nil, errors.Trace(err)
+	}
+	if d.schemaM != nil {
+		return d.encodeAvroMessage(
+			context.Background(),
+			"",
+			keyMap.Bytes(),
+			valueBuf.Bytes(),
+			0,
+		)
 	}
 	key, err := common.Compress(
 		d.config.ChangefeedID,
@@ -66,10 +84,14 @@ func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error)
 
 // AppendRowChangedEvent implements the RowEventEncoder interface
 func (d *BatchEncoder) AppendRowChangedEvent(
-	_ context.Context,
-	_ string,
+	ctx context.Context,
+	topic string,
 	e *commonEvent.RowEvent,
 ) error {
+	if d.schemaM != nil {
+		return d.appendAvroRowChangedEvent(ctx, topic, e)
+	}
+
 	var key []byte
 	var value []byte
 	var err error
@@ -93,6 +115,11 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 // EncodeDDLEvent implements the RowEventEncoder interface
 // DDL message unresolved tso
 func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message, error) {
+	if d.config.Protocol == config.ProtocolDebeziumAvro &&
+		(!d.config.EnableTiDBExtension || !d.config.AvroEnableWatermark) {
+		return nil, nil
+	}
+
 	valueBuf := bytes.Buffer{}
 	keyMap := bytes.Buffer{}
 	err := d.codec.EncodeDDLEvent(e, &keyMap, &valueBuf)
@@ -102,6 +129,15 @@ func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 			return nil, nil
 		}
 		return nil, errors.Trace(err)
+	}
+	if d.schemaM != nil {
+		return d.encodeAvroMessage(
+			context.Background(),
+			"",
+			keyMap.Bytes(),
+			valueBuf.Bytes(),
+			0,
+		)
 	}
 	key, err := common.Compress(
 		d.config.ChangefeedID,
@@ -179,4 +215,43 @@ func NewBatchEncoder(c *common.Config, clusterID string) common.EventEncoder {
 		},
 	}
 	return batch
+}
+
+func NewAvroBatchEncoder(
+	ctx context.Context,
+	c *common.Config,
+	clusterID string,
+) (common.EventEncoder, error) {
+	var schemaM avro.SchemaManager
+	var err error
+
+	schemaRegistryType := c.SchemaRegistryType()
+	switch schemaRegistryType {
+	case common.SchemaRegistryTypeConfluent:
+		schemaM, err = avro.NewConfluentSchemaManager(ctx, c.AvroConfluentSchemaRegistry, nil)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+	case common.SchemaRegistryTypeGlue:
+		schemaM, err = avro.NewGlueSchemaManager(ctx, c.AvroGlueSchemaRegistry)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+	default:
+		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(schemaRegistryType)
+	}
+
+	codecConfig := *c
+	codecConfig.DebeziumDisableSchema = false
+	batch := &BatchEncoder{
+		messages: nil,
+		config:   c,
+		codec: &dbzCodec{
+			config:    &codecConfig,
+			clusterID: clusterID,
+			nowFunc:   time.Now,
+		},
+		schemaM: schemaM,
+	}
+	return batch, nil
 }

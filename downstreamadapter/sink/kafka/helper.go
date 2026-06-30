@@ -77,8 +77,9 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
 	kafkaComponent.eventRouter, err = eventrouter.NewEventRouter(
-		sinkConfig, topic, false, protocol == config.ProtocolAvro)
+		sinkConfig, topic, false, isAvroLike)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
