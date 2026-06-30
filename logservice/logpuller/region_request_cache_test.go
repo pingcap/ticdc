@@ -95,10 +95,10 @@ func TestRequestCacheAdd_ForceFlag(t *testing.T) {
 	require.Equal(t, region1.verID.GetID(), req.regionInfo.verID.GetID())
 	require.Equal(t, region1.subscribedSpan.subID, req.regionInfo.subscribedSpan.subID)
 	require.Equal(t, 2, cache.pendingCount())
-	req.MarkSent()
+	cache.markSent(req)
 
 	// resolve region1
-	req.Resolve()
+	cache.finishScan(req)
 	require.Equal(t, 1, cache.pendingCount())
 }
 
@@ -162,11 +162,11 @@ func TestRequestCacheAdd_SpaceAvailableNotification(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, req)
 	require.Equal(t, 2, cache.pendingCount()) // pop doesn't change pendingCount
-	req.MarkSent()
+	cache.markSent(req)
 	require.Equal(t, 2, cache.pendingCount())
 
 	// Resolve the request to free up space
-	success := req.Resolve()
+	success := cache.finishScan(req)
 	require.True(t, success)
 	require.Equal(t, 1, cache.pendingCount())
 
@@ -231,7 +231,7 @@ func TestRequestCacheAdd_DuplicateQueuedRequestsAreTrackedIndependently(t *testi
 	require.NotSame(t, req1, req2)
 }
 
-func TestRequestCacheFinish_ReleasesSlot(t *testing.T) {
+func TestRequestCacheAbortReleasesSlot(t *testing.T) {
 	cache := newRequestCache(10, nil)
 	ctx := context.Background()
 
@@ -245,14 +245,14 @@ func TestRequestCacheFinish_ReleasesSlot(t *testing.T) {
 	req, err := cache.pop(ctx)
 	require.NoError(t, err)
 
-	req.MarkSent()
+	cache.markSent(req)
 	require.Equal(t, 1, cache.pendingCount())
 
-	req.Finish()
+	cache.abortScan(req)
 	require.Equal(t, 0, cache.pendingCount())
 }
 
-func TestRequestCacheFinishReleasesQuotaOnce(t *testing.T) {
+func TestRequestCacheAbortReleasesQuotaOnce(t *testing.T) {
 	cache := newRequestCache(10, nil)
 	ctx := context.Background()
 	region := createTestRegionInfo(1, 1)
@@ -269,7 +269,25 @@ func TestRequestCacheFinishReleasesQuotaOnce(t *testing.T) {
 
 	req, err := cache.pop(ctx)
 	require.NoError(t, err)
-	require.True(t, req.Finish())
-	require.False(t, req.Finish())
+	require.True(t, cache.abortScan(req))
+	require.False(t, cache.abortScan(req))
 	require.Equal(t, int32(1), releaseCount.Load())
+}
+
+func TestRequestCacheCloseDrainsQueuedRequests(t *testing.T) {
+	cache := newRequestCache(10, nil)
+	ctx := context.Background()
+
+	ok, err := cache.add(ctx, createTestRegionInfo(1, 1), false, testRegionRequestQuota())
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = cache.add(ctx, createTestRegionInfo(1, 2), false, testRegionRequestQuota())
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 2, cache.queue.Len())
+
+	cache.close()
+	require.Equal(t, 0, cache.pendingCount())
+	require.Equal(t, 0, cache.queue.Len())
+	require.Nil(t, cache.tryPop())
 }

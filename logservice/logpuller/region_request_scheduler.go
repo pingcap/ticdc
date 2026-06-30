@@ -77,8 +77,9 @@ func (s *regionRequestScheduler) Run(ctx context.Context, eg *errgroup.Group) er
 			return rs
 		}
 
-		rs = newRequestedStore(ctx, eg, s, storeAddr)
+		rs = newRequestedStore(s, storeAddr)
 		s.stores.Store(storeAddr, rs)
+		rs.Run(ctx, eg)
 		return rs
 	}
 
@@ -144,7 +145,7 @@ func (s *regionRequestScheduler) UpdateMetrics() {
 	s.stores.Range(func(_, value any) bool {
 		store := value.(*requestedStore)
 		for _, worker := range store.requestWorkers {
-			count += worker.PendingRequestCount()
+			count += worker.requestCache.pendingCount()
 		}
 		return true
 	})

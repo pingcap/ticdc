@@ -98,29 +98,28 @@ type regionFeedState struct {
 		err error
 	}
 
-	worker  *regionRequestWorker
-	request *regionReq
+	regionReq struct {
+		sync.Mutex
+		request *regionReq
+	}
+
+	worker *regionRequestWorker
 }
 
 func newRegionFeedState(
 	region regionInfo,
 	requestID uint64,
 	worker *regionRequestWorker,
-	request ...*regionReq,
+	request *regionReq,
 ) *regionFeedState {
 	state := &regionFeedState{
 		region:    region,
 		requestID: requestID,
+		matcher:   newMatcher(),
 		worker:    worker,
 	}
-	if len(request) > 0 {
-		state.request = request[0]
-	}
+	state.regionReq.request = request
 	return state
-}
-
-func (s *regionFeedState) start() {
-	s.matcher = newMatcher()
 }
 
 // mark regionFeedState as stopped with the given error if possible.
@@ -131,9 +130,7 @@ func (s *regionFeedState) markStopped(err error) {
 		s.state.v = stateStopped
 		s.state.err = err
 	}
-	if s.request != nil {
-		s.request.Finish()
-	}
+	s.abortScanIfNeeded()
 }
 
 // mark regionFeedState as removed if possible.
@@ -145,9 +142,7 @@ func (s *regionFeedState) markRemoved() (changed bool) {
 		changed = true
 		s.matcher.clear()
 	}
-	if s.request != nil {
-		s.request.Finish()
-	}
+	s.abortScanIfNeeded()
 	return
 }
 
@@ -171,8 +166,26 @@ func (s *regionFeedState) isInitialized() bool {
 
 func (s *regionFeedState) setInitialized() {
 	s.region.lockedRangeState.Initialized.Store(true)
-	if s.request != nil {
-		s.request.Resolve()
+	s.finishScan()
+}
+
+func (s *regionFeedState) finishScan() {
+	s.regionReq.Lock()
+	request := s.regionReq.request
+	s.regionReq.request = nil
+	s.regionReq.Unlock()
+
+	s.worker.requestCache.finishScan(request)
+}
+
+func (s *regionFeedState) abortScanIfNeeded() {
+	s.regionReq.Lock()
+	request := s.regionReq.request
+	s.regionReq.request = nil
+	s.regionReq.Unlock()
+
+	if request != nil {
+		s.worker.requestCache.abortScan(request)
 	}
 }
 

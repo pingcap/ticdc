@@ -90,12 +90,7 @@ type requestedStore struct {
 	notifyEnqueued bool
 }
 
-func newRequestedStore(
-	ctx context.Context,
-	eg *errgroup.Group,
-	scheduler *regionRequestScheduler,
-	storeAddr string,
-) *requestedStore {
+func newRequestedStore(scheduler *regionRequestScheduler, storeAddr string) *requestedStore {
 	pendingRegionRequestQueueSize := scheduler.config.PendingRegionRequestQueueSize
 	regionRequestWorkerPerStore := scheduler.config.RegionRequestWorkerPerStore
 	perWorkerQueueSize := pendingRegionRequestQueueSize / int(regionRequestWorkerPerStore)
@@ -115,11 +110,10 @@ func newRequestedStore(
 	}
 	rs.quota = newStoreQuota(perStoreQuotaSize, rs.NotifyAvailable)
 	for range regionRequestWorkerPerStore {
+		requestCache := newRequestCache(perWorkerQueueSize, rs.NotifyAvailable)
 		requestWorker := newRegionRequestWorker(
-			ctx,
-			eg,
-			rs,
-			perWorkerQueueSize,
+			storeAddr,
+			requestCache,
 			scheduler.upstream,
 			scheduler.eventSink,
 			scheduler.failureHandler,
@@ -129,9 +123,17 @@ func newRequestedStore(
 	return rs
 }
 
+func (rs *requestedStore) Run(ctx context.Context, eg *errgroup.Group) {
+	for _, worker := range rs.requestWorkers {
+		eg.Go(func() error {
+			return worker.Run(ctx)
+		})
+	}
+}
+
 func (rs *requestedStore) Close() {
 	for _, worker := range rs.requestWorkers {
-		worker.ClearRegionRequests()
+		worker.requestCache.close()
 	}
 }
 
@@ -143,7 +145,7 @@ func (rs *requestedStore) AddRegion(
 	start := int(rs.nextWorker.Add(1)) % len(workers)
 	for i := range len(workers) {
 		worker := workers[(start+i)%len(workers)]
-		ok, err := worker.AddRegionRequest(ctx, region, force, quota)
+		ok, err := worker.requestCache.add(ctx, region, force, quota)
 		if err != nil || ok {
 			return ok, worker, err
 		}
