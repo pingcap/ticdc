@@ -26,7 +26,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const timeFormat = `"2006-01-02 15:04:05.000"`
+const (
+	timeFormat     = `"2006-01-02 15:04:05.000"`
+	textTimeFormat = "2006-01-02 15:04:05.000"
+)
 
 // JSONTime used to wrap time into json format
 type JSONTime time.Time
@@ -45,6 +48,22 @@ func (t *JSONTime) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
+	*t = JSONTime(tm)
+	return nil
+}
+
+// MarshalText implements encoding.TextMarshaler so that TOML (and other text
+// encoders) serialize JSONTime as a string value instead of a table/struct.
+func (t JSONTime) MarshalText() ([]byte, error) {
+	return []byte(time.Time(t).Format(textTimeFormat)), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler for round-trip support.
+func (t *JSONTime) UnmarshalText(data []byte) error {
+	tm, err := time.Parse(textTimeFormat, string(data))
+	if err != nil {
+		return err
+	}
 	*t = JSONTime(tm)
 	return nil
 }
