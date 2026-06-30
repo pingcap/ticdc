@@ -1,0 +1,97 @@
+// Copyright 2026 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package common
+
+import (
+	"net/url"
+	"testing"
+
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/stretchr/testify/require"
+)
+
+func TestDebeziumAvroSchemaRegistryConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := NewConfig(config.ProtocolDebeziumAvro)
+	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
+	require.NoError(t, cfg.Validate())
+
+	cfg = NewConfig(config.ProtocolDebeziumAvro)
+	cfg.AvroGlueSchemaRegistry = &config.GlueSchemaRegistryConfig{
+		RegistryName: "test-registry",
+		Region:       "us-east-1",
+	}
+	require.NoError(t, cfg.Validate())
+
+	cfg = NewConfig(config.ProtocolDebeziumAvro)
+	require.ErrorContains(
+		t,
+		cfg.Validate(),
+		`Debezium Avro protocol requires parameter "schema-registry" or "glue-schema-registry"`,
+	)
+
+	cfg = NewConfig(config.ProtocolDebeziumAvro)
+	cfg.AvroGlueSchemaRegistry = &config.GlueSchemaRegistryConfig{}
+	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
+	require.ErrorContains(
+		t,
+		cfg.Validate(),
+		`Debezium Avro protocol requires only one of "schema-registry" or "glue-schema-registry"`,
+	)
+
+	cfg = NewConfig(config.ProtocolDebezium)
+	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
+	require.ErrorContains(t, cfg.Validate(), `Debezium protocol does not support schema registry`)
+}
+
+func TestDebeziumAvroGlueSchemaRegistryConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := NewConfig(config.ProtocolDebeziumAvro)
+	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=debezium-avro")
+	require.NoError(t, err)
+
+	glueSchemaRegistryConfig := &config.GlueSchemaRegistryConfig{
+		RegistryName: "test-registry",
+		Region:       "us-east-1",
+	}
+	sinkConfig := config.GetDefaultReplicaConfig().Sink
+	sinkConfig.KafkaConfig = &config.KafkaConfig{
+		GlueSchemaRegistryConfig: glueSchemaRegistryConfig,
+	}
+
+	err = cfg.Apply(sinkURI, sinkConfig)
+	require.NoError(t, err)
+	require.Same(t, glueSchemaRegistryConfig, cfg.AvroGlueSchemaRegistry)
+	require.Empty(t, cfg.AvroConfluentSchemaRegistry)
+	require.NoError(t, cfg.Validate())
+}
+
+func TestDebeziumAvroWatermarkConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := NewConfig(config.ProtocolDebeziumAvro)
+	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=debezium-avro&enable-tidb-extension=true&avro-enable-watermark=true")
+	require.NoError(t, err)
+
+	sinkConfig := config.GetDefaultReplicaConfig().Sink
+	sinkConfig.SchemaRegistry = util.AddressOf("http://127.0.0.1:8081")
+	err = cfg.Apply(sinkURI, sinkConfig)
+	require.NoError(t, err)
+	require.True(t, cfg.EnableTiDBExtension)
+	require.True(t, cfg.AvroEnableWatermark)
+	require.Equal(t, "http://127.0.0.1:8081", cfg.AvroConfluentSchemaRegistry)
+}

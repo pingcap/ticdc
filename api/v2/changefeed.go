@@ -1708,6 +1708,63 @@ func getVerifiedTables(
 	return ineligibleTables, eligibleTables, allTables, nil
 }
 
+<<<<<<< HEAD
+=======
+func verifyTable4MQ(
+	replicaConfig *config.ReplicaConfig,
+	scheme string,
+	topic string,
+	protocol config.Protocol,
+	tableInfos []*common.TableInfo,
+) error {
+	if !config.IsMQScheme(scheme) {
+		return nil
+	}
+
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), isAvroLike)
+	if err != nil {
+		return err
+	}
+	if err = eventRouter.VerifyTables(tableInfos); err != nil {
+		return err
+	}
+
+	selectors, err := columnselector.New(replicaConfig.Sink)
+	if err != nil {
+		return err
+	}
+	return selectors.VerifyTables(tableInfos, eventRouter)
+}
+
+func verifyRouteConflict(
+	changefeedID common.ChangeFeedID,
+	eligibleTables []common.TableName,
+	ineligibleTables []common.TableName,
+	replicaCfg *config.ReplicaConfig,
+) error {
+	if len(eligibleTables)+len(ineligibleTables) == 0 || replicaCfg == nil ||
+		replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
+		return nil
+	}
+	if util.GetOrZero(replicaCfg.ForceReplicate) {
+		return routing.ValidateNoStaticRouteConflict(
+			changefeedID,
+			util.GetOrZero(replicaCfg.CaseSensitive),
+			replicaCfg.Sink.DispatchRules,
+			eligibleTables,
+			ineligibleTables,
+		)
+	}
+	return routing.ValidateNoStaticRouteConflict(
+		changefeedID,
+		util.GetOrZero(replicaCfg.CaseSensitive),
+		replicaCfg.Sink.DispatchRules,
+		eligibleTables,
+	)
+}
+
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 func GetKeyspaceValueWithDefault(c *gin.Context) string {
 	if kerneltype.IsClassic() {
 		return common.DefaultKeyspaceName
