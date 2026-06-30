@@ -42,7 +42,6 @@ function check_schema_registry_subject() {
 	return 1
 }
 
-
 function run() {
 	if [ "$SINK_TYPE" != "kafka" ]; then
 		return
