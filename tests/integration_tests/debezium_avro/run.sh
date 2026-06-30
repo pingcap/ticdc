@@ -42,10 +42,6 @@ function check_schema_registry_subject() {
 	return 1
 }
 
-function build_sink_uri() {
-	local topic=$1
-	echo "kafka://127.0.0.1:9092/$topic?protocol=debezium-avro&enable-tidb-extension=true&avro-enable-watermark=true&partition-num=1&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760&avro-decimal-handling-mode=precise&avro-bigint-unsigned-handling-mode=string"
-}
 
 function run() {
 	if [ "$SINK_TYPE" != "kafka" ]; then
@@ -65,7 +61,7 @@ function run() {
 	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY"
 
 	TOPIC_NAME="ticdc-debezium-avro-$RANDOM"
-	SINK_URI=$(build_sink_uri "$TOPIC_NAME")
+	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=debezium-avro&enable-tidb-extension=true&avro-enable-watermark=true&partition-num=1&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760&avro-decimal-handling-mode=precise&avro-bigint-unsigned-handling-mode=string"
 	schema_registry_uri="http://127.0.0.1:8088"
 	changefeed_id="debezium-avro-$RANDOM"
 
