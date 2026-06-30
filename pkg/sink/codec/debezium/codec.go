@@ -49,6 +49,7 @@ func (c *dbzCodec) isDebeziumAvro() bool {
 	return c.config.Protocol == config.ProtocolDebeziumAvro
 }
 
+<<<<<<< HEAD
 func (c *dbzCodec) encodeUnsignedBigintAsString() bool {
 	if c.isDebeziumAvro() {
 		return c.config.AvroBigintUnsignedHandlingMode == common.BigintUnsignedHandlingModeString
@@ -56,6 +57,8 @@ func (c *dbzCodec) encodeUnsignedBigintAsString() bool {
 	return c.config.DebeziumBigintUnsignedHandlingMode == common.BigintUnsignedHandlingModeString
 }
 
+=======
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 func (c *dbzCodec) debeziumAvroNamespace(schema string) string {
 	return fmt.Sprintf("%s.%s",
 		common.SanitizeName(c.clusterID),
@@ -216,8 +219,12 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 		case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeTinyBlob,
 			mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
+<<<<<<< HEAD
 			if mysql.HasBinaryFlag(ft.GetFlag()) &&
 				(c.isDebeziumAvro() || c.config.DebeziumBinaryHandlingMode == common.BinaryHandlingModeBytes) {
+=======
+			if c.isDebeziumAvro() && mysql.HasBinaryFlag(ft.GetFlag()) {
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 				writer.WriteStringField("type", "bytes")
 			} else {
 				writer.WriteStringField("type", "string")
@@ -472,7 +479,13 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 				writer.WriteFloat64Field("default", floatV)
 			}
 		case mysql.TypeLonglong: // BIGINT
+<<<<<<< HEAD
 			if mysql.HasUnsignedFlag(ft.GetFlag()) && c.encodeUnsignedBigintAsString() {
+=======
+			if c.isDebeziumAvro() &&
+				mysql.HasUnsignedFlag(ft.GetFlag()) &&
+				c.config.AvroBigintUnsignedHandlingMode == common.BigintUnsignedHandlingModeString {
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 				writer.WriteStringField("type", "string")
 			} else {
 				writer.WriteStringField("type", "int64")
@@ -548,9 +561,14 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 					writer.WriteStringField("precision", strconv.Itoa(precision))
 					writer.WriteStringField("scale", strconv.Itoa(scale))
 				})
+<<<<<<< HEAD
 			} else if (c.isDebeziumAvro() &&
 				c.config.AvroDecimalHandlingMode == common.DecimalHandlingModeString) ||
 				(!c.isDebeziumAvro() && c.config.DebeziumDecimalHandlingMode == common.DecimalHandlingModeString) {
+=======
+			} else if c.isDebeziumAvro() &&
+				c.config.AvroDecimalHandlingMode == common.DecimalHandlingModeString {
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 				writer.WriteStringField("type", "string")
 			} else {
 				writer.WriteStringField("type", "double")
@@ -562,7 +580,11 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 				if !ok {
 					return
 				}
+<<<<<<< HEAD
 				if c.isDebeziumAvro() || c.config.DebeziumDecimalHandlingMode == common.DecimalHandlingModeString {
+=======
+				if c.isDebeziumAvro() {
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 					writer.WriteStringField("default", v)
 					return
 				}
@@ -690,7 +712,11 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 		return nil
 
 	case mysql.TypeNewDecimal:
+<<<<<<< HEAD
 		if c.isDebeziumAvro() || c.config.DebeziumDecimalHandlingMode == common.DecimalHandlingModeString {
+=======
+		if c.isDebeziumAvro() {
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 			writer.WriteStringField(colName, datum.GetMysqlDecimal().String())
 			return nil
 		}
@@ -851,6 +877,7 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 		isUnsigned := mysql.HasUnsignedFlag(colInfo.GetFlag())
 		if isUnsigned {
 			v := datum.GetUint64()
+<<<<<<< HEAD
 			if ft.GetType() == mysql.TypeLonglong && c.encodeUnsignedBigintAsString() {
 				writer.WriteStringField(colName, strconv.FormatUint(v, 10))
 				return nil
@@ -861,6 +888,18 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 						fmt.Sprintf("unsigned bigint value %d overflows avro long", v))
 				}
 				writer.WriteInt64Field(colName, int64(v))
+=======
+			if c.isDebeziumAvro() && ft.GetType() == mysql.TypeLonglong {
+				if c.config.AvroBigintUnsignedHandlingMode == common.BigintUnsignedHandlingModeString {
+					writer.WriteStringField(colName, strconv.FormatUint(v, 10))
+				} else {
+					if v > math.MaxInt64 {
+						return errors.ErrDebeziumEncodeFailed.GenWithStackByArgs(
+							fmt.Sprintf("unsigned bigint value %d overflows avro long", v))
+					}
+					writer.WriteInt64Field(colName, int64(v))
+				}
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 				return nil
 			}
 			if ft.GetType() == mysql.TypeLonglong && v == maxValue.GetUint64() || v > maxValue.GetUint64() {
@@ -920,10 +959,14 @@ func (c *dbzCodec) writeBinaryField(writer *util.JSONWriter, fieldName string, v
 	writer.WriteBase64StringField(fieldName, value)
 }
 
+<<<<<<< HEAD
 // includeStartTs indicates whether start_ts should be declared in the source
 // schema. DML callers pass the configured value, while DDL and checkpoint
 // callers pass false because their payloads do not carry the field.
 func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter, schemaName string, includeStartTs bool) {
+=======
+func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter, schemaName string) {
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 	writer.WriteObjectElement(func() {
 		writer.WriteStringField("type", "struct")
 		writer.WriteArrayField("fields", func() {
@@ -1012,6 +1055,7 @@ func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter, schemaName string,
 				writer.WriteBoolField("optional", true)
 				writer.WriteStringField("field", "query")
 			})
+<<<<<<< HEAD
 			if includeStartTs {
 				writer.WriteObjectElement(func() {
 					writer.WriteStringField("type", "int64")
@@ -1019,6 +1063,8 @@ func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter, schemaName string,
 					writer.WriteStringField("field", "start_ts")
 				})
 			}
+=======
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 			if c.config.EnableTiDBExtension || c.isDebeziumAvro() {
 				writer.WriteObjectElement(func() {
 					writer.WriteStringField("type", "int64")
@@ -1217,7 +1263,11 @@ func (c *dbzCodec) EncodeValue(
 							jWriter.WriteRaw(fieldsJSON)
 						})
 					})
+<<<<<<< HEAD
 					c.writeSourceSchema(jWriter, schemaName, c.config.DebeziumIncludeStartTs)
+=======
+					c.writeSourceSchema(jWriter, schemaName)
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("type", "string")
 						jWriter.WriteBoolField("optional", false)
@@ -1505,7 +1555,11 @@ func (c *dbzCodec) EncodeDDLEvent(
 				jWriter.WriteIntField("version", 1)
 				jWriter.WriteStringField("name", "io.debezium.connector.mysql.SchemaChangeValue")
 				jWriter.WriteArrayField("fields", func() {
+<<<<<<< HEAD
 					c.writeSourceSchema(jWriter, dbName, false)
+=======
+					c.writeSourceSchema(jWriter, dbName)
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("field", "ts_ms")
 						jWriter.WriteBoolField("optional", false)
@@ -1744,7 +1798,11 @@ func (c *dbzCodec) EncodeCheckpointEvent(
 					fmt.Sprintf("%s.%s.Envelope", common.SanitizeName(c.clusterID), "watermark"))
 				jWriter.WriteIntField("version", 1)
 				jWriter.WriteArrayField("fields", func() {
+<<<<<<< HEAD
 					c.writeSourceSchema(jWriter, "watermark", false)
+=======
+					c.writeSourceSchema(jWriter, "watermark")
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("type", "string")
 						jWriter.WriteBoolField("optional", false)

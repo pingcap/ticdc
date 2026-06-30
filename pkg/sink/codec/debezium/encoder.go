@@ -22,7 +22,11 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+<<<<<<< HEAD
 	codecavro "github.com/pingcap/ticdc/pkg/sink/codec/avro"
+=======
+	"github.com/pingcap/ticdc/pkg/sink/codec/avro"
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"go.uber.org/zap"
@@ -35,8 +39,12 @@ type BatchEncoder struct {
 	config *common.Config
 	codec  *dbzCodec
 
+<<<<<<< HEAD
 	schemaM    schemamanager.SchemaManager
 	codecCache *codecavro.CodecCache
+=======
+	schemaM avro.SchemaManager
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
@@ -218,12 +226,36 @@ func NewBatchEncoder(c *common.Config, clusterID string) common.EventEncoder {
 }
 
 func NewAvroBatchEncoder(
+<<<<<<< HEAD
 	c *common.Config,
 	clusterID string,
 	schemaM schemamanager.SchemaManager,
 ) (common.EventEncoder, error) {
 	if schemaM == nil {
 		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs("schema manager is nil")
+=======
+	ctx context.Context,
+	c *common.Config,
+	clusterID string,
+) (common.EventEncoder, error) {
+	var schemaM avro.SchemaManager
+	var err error
+
+	schemaRegistryType := c.SchemaRegistryType()
+	switch schemaRegistryType {
+	case common.SchemaRegistryTypeConfluent:
+		schemaM, err = avro.NewConfluentSchemaManager(ctx, c.AvroConfluentSchemaRegistry, nil)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+	case common.SchemaRegistryTypeGlue:
+		schemaM, err = avro.NewGlueSchemaManager(ctx, c.AvroGlueSchemaRegistry)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+	default:
+		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(schemaRegistryType)
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 	}
 
 	codecConfig := *c
@@ -236,8 +268,12 @@ func NewAvroBatchEncoder(
 			clusterID: clusterID,
 			nowFunc:   time.Now,
 		},
+<<<<<<< HEAD
 		schemaM:    schemaM,
 		codecCache: codecavro.NewCodecCache(schemaM),
+=======
+		schemaM: schemaM,
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 	}
 	return batch, nil
 }

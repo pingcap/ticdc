@@ -23,8 +23,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+<<<<<<< HEAD
 
 	lru "github.com/hashicorp/golang-lru"
+=======
+	"sync"
+
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 	"github.com/linkedin/goavro/v2"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -34,10 +39,14 @@ import (
 	"go.uber.org/zap"
 )
 
+<<<<<<< HEAD
 const (
 	confluentAvroHeaderLen             = 5
 	debeziumAvroDecoderSchemaCacheSize = 128
 )
+=======
+const confluentAvroHeaderLen = 5
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 
 type avroDecoder struct {
 	ctx         context.Context
@@ -45,7 +54,12 @@ type avroDecoder struct {
 	httpClient  *http.Client
 	inner       *decoder
 
+<<<<<<< HEAD
 	schemas *lru.Cache
+=======
+	mu      sync.RWMutex
+	schemas map[int]*registeredDebeziumAvroSchema
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 }
 
 type registeredDebeziumAvroSchema struct {
@@ -67,14 +81,21 @@ func NewAvroDecoder(
 	if registryURL == "" {
 		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs("schema registry URI is empty")
 	}
+<<<<<<< HEAD
 	schemas, _ := lru.New(debeziumAvroDecoderSchemaCacheSize)
+=======
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 
 	return &avroDecoder{
 		ctx:         ctx,
 		registryURL: registryURL,
 		httpClient:  http.DefaultClient,
 		inner:       NewDecoder(config, idx, db).(*decoder),
+<<<<<<< HEAD
 		schemas:     schemas,
+=======
+		schemas:     make(map[int]*registeredDebeziumAvroSchema),
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 	}, nil
 }
 
@@ -98,8 +119,13 @@ func (d *avroDecoder) NextResolvedEvent() uint64 {
 	return d.inner.NextResolvedEvent()
 }
 
+<<<<<<< HEAD
 func (d *avroDecoder) NextDMLMessage() *common.DMLMessage {
 	return d.inner.NextDMLMessage()
+=======
+func (d *avroDecoder) NextDMLEvent() *commonEvent.DMLEvent {
+	return d.inner.NextDMLEvent()
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 }
 
 func (d *avroDecoder) NextDDLEvent() *commonEvent.DDLEvent {
@@ -165,9 +191,17 @@ func (d *avroDecoder) decodeConfluentAvroMessage(data []byte) (any, map[string]a
 }
 
 func (d *avroDecoder) getSchema(schemaID int) (*registeredDebeziumAvroSchema, error) {
+<<<<<<< HEAD
 	cached, ok := d.schemas.Get(schemaID)
 	if ok {
 		return cached.(*registeredDebeziumAvroSchema), nil
+=======
+	d.mu.RLock()
+	schema, ok := d.schemas[schemaID]
+	d.mu.RUnlock()
+	if ok {
+		return schema, nil
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 	}
 
 	uri := d.registryURL + "/schemas/ids/" + strconv.Itoa(schemaID)
@@ -220,12 +254,22 @@ func (d *avroDecoder) getSchema(schemaID int) (*registeredDebeziumAvroSchema, er
 	namedSchemas := make(map[string]any)
 	collectAvroNamedSchemas(schemaDef, namedSchemas)
 
+<<<<<<< HEAD
 	schema := &registeredDebeziumAvroSchema{
+=======
+	schema = &registeredDebeziumAvroSchema{
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 		schema:       schemaDef,
 		namedSchemas: namedSchemas,
 		codec:        codec,
 	}
+<<<<<<< HEAD
 	d.schemas.Add(schemaID, schema)
+=======
+	d.mu.Lock()
+	d.schemas[schemaID] = schema
+	d.mu.Unlock()
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 	return schema, nil
 }
 

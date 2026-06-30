@@ -17,9 +17,13 @@ import (
 	"net/url"
 	"testing"
 
+<<<<<<< HEAD
 	"github.com/BurntSushi/toml"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+=======
+	"github.com/pingcap/ticdc/pkg/config"
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -97,6 +101,7 @@ func TestDebeziumAvroWatermarkConfig(t *testing.T) {
 	require.True(t, cfg.AvroEnableWatermark)
 	require.Equal(t, "http://127.0.0.1:8081", cfg.AvroConfluentSchemaRegistry)
 }
+<<<<<<< HEAD
 
 func TestApplyReturnsSinkInvalidConfigForQueryBindingError(t *testing.T) {
 	cfg := NewConfig(config.ProtocolOpen)
@@ -384,3 +389,5 @@ func TestDebeziumBinaryHandlingConfig(t *testing.T) {
 		})
 	}
 }
+=======
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))

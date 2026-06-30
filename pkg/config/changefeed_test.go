@@ -102,6 +102,7 @@ func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *test
 		})
 	}
 }
+<<<<<<< HEAD
 
 func TestMaskChangefeedInfoRedactsErrorMessages(t *testing.T) {
 	originalMode := errors.RedactLogEnabled.Load()
@@ -409,3 +410,5 @@ func TestChangeFeedInfoToChangefeedConfigIntegrity(t *testing.T) {
 	replicaConfig.Sink = nil
 	require.Nil(t, info.ToChangefeedConfig().SinkConfig)
 }
+=======
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))

@@ -55,6 +55,72 @@ func (c components) close() {
 	if c.factory != nil {
 		c.factory.Close()
 	}
+<<<<<<< HEAD
+=======
+
+	options := kafka.NewOptions()
+	if err = options.Apply(changefeedID, sinkURI, sinkConfig); err != nil {
+		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+	}
+	options.Topic = topic
+
+	kafkaComponent.factory, err = factoryCreator(ctx, options, changefeedID)
+	if err != nil {
+		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
+	}
+
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	kafkaComponent.eventRouter, err = eventrouter.NewEventRouter(
+		sinkConfig, topic, false, isAvroLike)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
+
+	kafkaComponent.columnSelector, err = columnselector.New(sinkConfig)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
+
+	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, options.MaxMessageBytes)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
+
+	kafkaComponent.encoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
+
+	kafkaComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
+
+	kafkaComponent.adminClient, err = kafkaComponent.factory.AdminClient(ctx)
+	if err != nil {
+		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
+	}
+
+	// We must close adminClient when this func return cause by an error
+	// otherwise the adminClient will never be closed and lead to a goroutine leak.
+	defer func() {
+		if err != nil && kafkaComponent.adminClient != nil {
+			kafkaComponent.adminClient.Close()
+		}
+	}()
+
+	kafkaComponent.topicManager, err = topicmanager.GetTopicManagerAndTryCreateTopic(
+		ctx,
+		changefeedID,
+		topic,
+		options.DeriveTopicConfig(),
+		kafkaComponent.adminClient,
+	)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
+	return kafkaComponent, protocol, nil
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 }
 
 func newKafkaSinkComponent(

@@ -416,7 +416,11 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 	} {
 		t.Run(protocol.String(), func(t *testing.T) {
 			replicaCfg := config.GetDefaultReplicaConfig()
+<<<<<<< HEAD
 			eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, false, "test-topic", false, false)
+=======
+			eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 			require.NoError(t, err)
 
 			w := &writer{
@@ -449,6 +453,7 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 			}
 
 			progress := w.progresses[0]
+<<<<<<< HEAD
 			w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(200)), progress, kafka.Offset(10))
 			w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(100)), progress, kafka.Offset(11))
 
@@ -507,4 +512,14 @@ func TestMessageWithPartitionCheckRejectsNilEvent(t *testing.T) {
 	require.PanicsWithValue(t, "DML message decoded to nil event", func() {
 		checked.ToDMLEvent()
 	})
+=======
+			w.appendRow2Group(newDMLEvent(200), progress, kafka.Offset(10))
+			w.appendRow2Group(newDMLEvent(100), progress, kafka.Offset(11))
+
+			resolved := progress.eventsGroup[1].ResolveInto(150, nil)
+			require.Len(t, resolved, 1)
+			require.Equal(t, uint64(100), resolved[0].CommitTs)
+		})
+	}
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 }

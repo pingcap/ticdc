@@ -47,7 +47,11 @@ func NewEventEncoder(
 	case config.ProtocolDebezium:
 		return debezium.NewBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID), nil
 	case config.ProtocolDebeziumAvro:
+<<<<<<< HEAD
 		return debezium.NewAvroBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID, schemaM)
+=======
+		return debezium.NewAvroBatchEncoder(ctx, cfg, config.GetGlobalServerConfig().ClusterID)
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 	case config.ProtocolSimple:
 		return simple.NewEncoder(cfg, claimCheck)
 	default:
