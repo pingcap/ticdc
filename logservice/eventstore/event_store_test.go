@@ -1135,6 +1135,123 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	}
 }
 
+func TestEventStoreRowLevelScanPositionSurvivesSubStatSwitch(t *testing.T) {
+	restoreCfg := setDataSharingForTest(t, true)
+	defer restoreCfg()
+
+	ctx := context.Background()
+	_, storeInt := newEventStoreForTest(t.TempDir())
+	store := storeInt.(*eventStore)
+	defer store.Close(ctx)
+
+	const (
+		tableID      int64  = 1
+		txnStartTs   uint64 = 120
+		txnCommitTs  uint64 = 200
+		nextStartTs  uint64 = 130
+		nextCommitTs uint64 = 201
+	)
+
+	dispatcherID1 := common.NewDispatcherID()
+	dispatcherID2 := common.NewDispatcherID()
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	fullSpan := &heartbeatpb.TableSpan{TableID: tableID, StartKey: []byte("a"), EndKey: []byte("z")}
+	dispatcherSpan := &heartbeatpb.TableSpan{TableID: tableID, StartKey: []byte("b"), EndKey: []byte("h")}
+
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID1, fullSpan, 100, func(uint64, uint64) {}, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID2, dispatcherSpan, 100, func(uint64, uint64) {}, false, false))
+
+	dispatcherStat := store.dispatcherMeta.dispatcherStats[dispatcherID2]
+	require.NotNil(t, dispatcherStat)
+	oldSubStat := dispatcherStat.subStat
+	newSubStat := dispatcherStat.pendingSubStat
+	require.NotNil(t, oldSubStat)
+	require.NotNil(t, newSubStat)
+	require.NotEqual(t, oldSubStat.subID, newSubStat.subID)
+
+	rows := []common.RawKVEntry{
+		{OpType: common.OpTypePut, StartTs: txnStartTs, CRTs: txnCommitTs, Key: []byte("c-row-1"), Value: []byte("value-1")},
+		{OpType: common.OpTypePut, StartTs: txnStartTs, CRTs: txnCommitTs, Key: []byte("c-row-2"), Value: []byte("value-2")},
+		{OpType: common.OpTypePut, StartTs: nextStartTs, CRTs: nextCommitTs, Key: []byte("c-next-row"), Value: []byte("value-3")},
+	}
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+	var compressionBuf []byte
+	var rawValueBuf []byte
+	writeRows := func(subStat *subscriptionStat) {
+		err := store.writeEvents(store.dbs[subStat.dbIndex], []eventWithCallback{{
+			subID:    subStat.subID,
+			tableID:  tableID,
+			kvs:      rows,
+			callback: func() {},
+		}}, encoder, &compressionBuf, &rawValueBuf)
+		require.NoError(t, err)
+	}
+	writeRows(oldSubStat)
+	writeRows(newSubStat)
+
+	type scannedEvent struct {
+		key      string
+		position common.ScanPosition
+	}
+	collectEvents := func(dataRange common.DataRange) []scannedEvent {
+		iter, err := store.GetIterator(dispatcherID2, dataRange)
+		require.NoError(t, err)
+		require.NotNil(t, iter)
+		positionIter, ok := iter.(EventIteratorWithScanPosition)
+		require.True(t, ok)
+
+		events := make([]scannedEvent, 0)
+		for {
+			rawKV, position, _ := positionIter.NextWithScanPosition()
+			if rawKV == nil {
+				break
+			}
+			require.NotEmpty(t, position)
+			events = append(events, scannedEvent{
+				key:      string(rawKV.Key),
+				position: position,
+			})
+		}
+		rowCount, err := iter.Close()
+		require.NoError(t, err)
+		require.Equal(t, int64(len(events)), rowCount)
+		return events
+	}
+
+	oldSubStat.resolvedTs.Store(nextCommitTs)
+	firstScanEvents := collectEvents(common.DataRange{
+		Span:          dispatcherSpan,
+		CommitTsStart: txnCommitTs - 1,
+		CommitTsEnd:   nextCommitTs,
+	})
+	require.Len(t, firstScanEvents, 3)
+	require.Equal(t, []string{"c-row-1", "c-row-2", "c-next-row"}, []string{
+		firstScanEvents[0].key,
+		firstScanEvents[1].key,
+		firstScanEvents[2].key,
+	})
+	require.Equal(t, oldSubStat.subID, dispatcherStat.subStat.subID)
+	require.Equal(t, newSubStat.subID, dispatcherStat.pendingSubStat.subID)
+
+	newSubStat.resolvedTs.Store(nextCommitTs)
+	resumedEvents := collectEvents(common.DataRange{
+		Span:                 dispatcherSpan,
+		CommitTsStart:        txnCommitTs,
+		CommitTsEnd:          nextCommitTs,
+		RowLevelScanPosition: firstScanEvents[0].position,
+	})
+	require.Len(t, resumedEvents, 2)
+	require.Equal(t, []string{"c-row-2", "c-next-row"}, []string{
+		resumedEvents[0].key,
+		resumedEvents[1].key,
+	})
+	require.Equal(t, newSubStat.subID, dispatcherStat.subStat.subID)
+	require.Nil(t, dispatcherStat.pendingSubStat)
+	require.Equal(t, oldSubStat.subID, dispatcherStat.removingSubStat.subID)
+}
+
 func TestWriteToEventStore(t *testing.T) {
 	dir := t.TempDir()
 	_, storeInt := newEventStoreForTest(dir)
