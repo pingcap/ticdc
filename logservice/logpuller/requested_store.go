@@ -89,9 +89,12 @@ type requestedStore struct {
 
 	// pendingTasks holds tasks that have been routed to this store but are
 	// waiting for store quota or worker request-cache capacity. It is mutated
-	// by the scheduler loop and read by metrics updater.
-	pendingTasksMu sync.Mutex
-	pendingTasks   *priorityqueue.PriorityQueue[*regionPriorityTask]
+	// only by the single regionRequestScheduler.Run loop.
+	pendingTasks *priorityqueue.PriorityQueue[*regionPriorityTask]
+	// pendingTaskCount mirrors pendingTasks.Len() for metrics. It lets the
+	// metrics updater observe the size without touching the scheduler-owned
+	// priority queue.
+	pendingTaskCount atomic.Int64
 
 	notifyMu       sync.Mutex
 	notifyEnqueued bool
@@ -145,21 +148,20 @@ func (rs *requestedStore) Close() {
 }
 
 func (rs *requestedStore) PushPendingTask(task *regionPriorityTask) {
-	rs.pendingTasksMu.Lock()
 	rs.pendingTasks.Push(task)
-	rs.pendingTasksMu.Unlock()
+	rs.pendingTaskCount.Add(1)
 }
 
 func (rs *requestedStore) TryPopPendingTask() (*regionPriorityTask, bool) {
-	rs.pendingTasksMu.Lock()
-	defer rs.pendingTasksMu.Unlock()
-	return rs.pendingTasks.TryPop()
+	task, ok := rs.pendingTasks.TryPop()
+	if ok {
+		rs.pendingTaskCount.Add(-1)
+	}
+	return task, ok
 }
 
 func (rs *requestedStore) PendingTaskCount() int {
-	rs.pendingTasksMu.Lock()
-	defer rs.pendingTasksMu.Unlock()
-	return rs.pendingTasks.Len()
+	return int(rs.pendingTaskCount.Load())
 }
 
 func (rs *requestedStore) AddRegion(
