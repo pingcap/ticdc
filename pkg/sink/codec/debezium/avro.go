@@ -232,8 +232,8 @@ func debeziumAvroSubject(topic string, subjectSuffix string, schemaName string) 
 func (c *dbzCodec) buildDebeziumAvroKeyMessage(
 	e *commonEvent.RowEvent,
 ) (*debeziumAvroMessage, error) {
-	schemaName := e.TableInfo.GetTargetSchemaName()
-	tableName := e.TableInfo.GetTargetTableName()
+	schemaName := e.TableInfo.GetSchemaName()
+	tableName := e.TableInfo.GetTableName()
 	columns := e.TableInfo.GetColumns()
 	row := e.GetRows()
 	if e.IsDelete() {
@@ -273,8 +273,8 @@ func (c *dbzCodec) buildDebeziumAvroKeyMessage(
 func (c *dbzCodec) buildDebeziumAvroValueMessage(
 	e *commonEvent.RowEvent,
 ) (*debeziumAvroMessage, error) {
-	schemaName := e.TableInfo.GetTargetSchemaName()
-	tableName := e.TableInfo.GetTargetTableName()
+	schemaName := e.TableInfo.GetSchemaName()
+	tableName := e.TableInfo.GetTableName()
 	rowSchema, err := c.buildDebeziumAvroRowSchema(e.TableInfo, e.ColumnSelector)
 	if err != nil {
 		return nil, err

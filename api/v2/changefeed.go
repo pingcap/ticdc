@@ -1679,25 +1679,8 @@ func getVerifiedTables(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if !config.IsMQScheme(scheme) {
-		return ineligibleTables, eligibleTables, allTables, nil
-	}
 
-	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	err = eventRouter.VerifyTables(tableInfos)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	selectors, err := columnselector.New(replicaConfig.Sink)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	err = selectors.VerifyTables(tableInfos, eventRouter)
-	if err != nil {
+	if err := verifyTable4MQ(replicaConfig, scheme, topic, protocol, tableInfos); err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -1708,8 +1691,6 @@ func getVerifiedTables(
 	return ineligibleTables, eligibleTables, allTables, nil
 }
 
-<<<<<<< HEAD
-=======
 func verifyTable4MQ(
 	replicaConfig *config.ReplicaConfig,
 	scheme string,
@@ -1737,34 +1718,6 @@ func verifyTable4MQ(
 	return selectors.VerifyTables(tableInfos, eventRouter)
 }
 
-func verifyRouteConflict(
-	changefeedID common.ChangeFeedID,
-	eligibleTables []common.TableName,
-	ineligibleTables []common.TableName,
-	replicaCfg *config.ReplicaConfig,
-) error {
-	if len(eligibleTables)+len(ineligibleTables) == 0 || replicaCfg == nil ||
-		replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
-		return nil
-	}
-	if util.GetOrZero(replicaCfg.ForceReplicate) {
-		return routing.ValidateNoStaticRouteConflict(
-			changefeedID,
-			util.GetOrZero(replicaCfg.CaseSensitive),
-			replicaCfg.Sink.DispatchRules,
-			eligibleTables,
-			ineligibleTables,
-		)
-	}
-	return routing.ValidateNoStaticRouteConflict(
-		changefeedID,
-		util.GetOrZero(replicaCfg.CaseSensitive),
-		replicaCfg.Sink.DispatchRules,
-		eligibleTables,
-	)
-}
-
->>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 func GetKeyspaceValueWithDefault(c *gin.Context) string {
 	if kerneltype.IsClassic() {
 		return common.DefaultKeyspaceName

@@ -1005,6 +1005,8 @@ func (c *dbzCodec) EncodeKey(
 	defer util.ReturnJSONWriter(jWriter)
 
 	var err error
+	schemaName := e.TableInfo.GetSchemaName()
+	tableName := e.TableInfo.GetTableName()
 	jWriter.WriteObject(func() {
 		jWriter.WriteObjectField("payload", func() {
 			columns := e.TableInfo.GetColumns()
@@ -1021,12 +1023,7 @@ func (c *dbzCodec) EncodeKey(
 		if !c.config.DebeziumDisableSchema {
 			jWriter.WriteObjectField("schema", func() {
 				jWriter.WriteStringField("type", "struct")
-<<<<<<< HEAD
-				jWriter.WriteStringField("name",
-					fmt.Sprintf("%s.Key", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
-=======
 				jWriter.WriteStringField("name", c.keySchemaName(schemaName, tableName))
->>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 				jWriter.WriteBoolField("optional", false)
 				jWriter.WriteArrayField("fields", func() {
 					columns := e.TableInfo.GetColumns()
@@ -1053,6 +1050,8 @@ func (c *dbzCodec) EncodeValue(
 	commitTime := oracle.GetTimeFromTS(e.CommitTs)
 
 	var err error
+	schemaName := e.TableInfo.GetSchemaName()
+	tableName := e.TableInfo.GetTableName()
 
 	jWriter.WriteObject(func() {
 		jWriter.WriteObjectField("payload", func() {
@@ -1064,11 +1063,6 @@ func (c *dbzCodec) EncodeValue(
 				// https://debezium.io/documentation/reference/stable/connectors/mysql.html#mysql-create-events
 				jWriter.WriteInt64Field("ts_ms", commitTime.UnixMilli())
 				// snapshot field is a string of true,last,false,incremental
-<<<<<<< HEAD
-				jWriter.WriteStringField("snapshot", "false")
-				jWriter.WriteStringField("db", e.TableInfo.GetSchemaName())
-				jWriter.WriteStringField("table", e.TableInfo.GetTableName())
-=======
 				if c.isDebeziumAvro() {
 					jWriter.WriteNullField("snapshot")
 				} else {
@@ -1076,7 +1070,6 @@ func (c *dbzCodec) EncodeValue(
 				}
 				jWriter.WriteStringField("db", schemaName)
 				jWriter.WriteStringField("table", tableName)
->>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 				jWriter.WriteInt64Field("server_id", 0)
 				jWriter.WriteNullField("gtid")
 				jWriter.WriteStringField("file", "")
@@ -1139,12 +1132,7 @@ func (c *dbzCodec) EncodeValue(
 			jWriter.WriteObjectField("schema", func() {
 				jWriter.WriteStringField("type", "struct")
 				jWriter.WriteBoolField("optional", false)
-<<<<<<< HEAD
-				jWriter.WriteStringField("name",
-					fmt.Sprintf("%s.Envelope", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
-=======
 				jWriter.WriteStringField("name", c.envelopeSchemaName(schemaName, tableName))
->>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 				jWriter.WriteIntField("version", 1)
 				jWriter.WriteArrayField("fields", func() {
 					// schema is the same for `before` and `after`. So we build a new buffer to
@@ -1173,12 +1161,7 @@ func (c *dbzCodec) EncodeValue(
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("type", "struct")
 						jWriter.WriteBoolField("optional", true)
-<<<<<<< HEAD
-						jWriter.WriteStringField("name",
-							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
-=======
 						jWriter.WriteStringField("name", c.valueSchemaName(schemaName, tableName))
->>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 						jWriter.WriteStringField("field", "before")
 						jWriter.WriteArrayField("fields", func() {
 							jWriter.WriteRaw(fieldsJSON)
@@ -1187,12 +1170,7 @@ func (c *dbzCodec) EncodeValue(
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("type", "struct")
 						jWriter.WriteBoolField("optional", true)
-<<<<<<< HEAD
-						jWriter.WriteStringField("name",
-							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
-=======
 						jWriter.WriteStringField("name", c.valueSchemaName(schemaName, tableName))
->>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 						jWriter.WriteStringField("field", "after")
 						jWriter.WriteArrayField("fields", func() {
 							jWriter.WriteRaw(fieldsJSON)

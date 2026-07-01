@@ -284,63 +284,6 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
 }
 
-<<<<<<< HEAD
-func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) {
-	// Scenario:
-	// 1) TiCDC writes DML messages to Kafka in commitTs order.
-	// 2) Under network partition / changefeed restart, TiCDC may replay older commitTs,
-	//    which will be appended to Kafka at a larger offset (commitTs appears to go backwards).
-	//
-	// The kafka-consumer must not drop these "fallback commitTs" events unless they have
-	// already been flushed to downstream (AppliedWatermark), otherwise the replay cannot
-	// heal the missing window.
-	replicaCfg := config.GetDefaultReplicaConfig()
-	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
-	require.NoError(t, err)
-
-	w := &writer{
-		progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
-		eventRouter:            eventRouter,
-		protocol:               config.ProtocolCanalJSON,
-		partitionTableAccessor: codecCommon.NewPartitionTableAccessor(),
-	}
-
-	newDMLEvent := func(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
-		return &commonEvent.DMLEvent{
-			PhysicalTableID: tableID,
-			CommitTs:        commitTs,
-			RowTypes:        []common.RowType{common.RowTypeUpdate},
-			Rows:            chunk.NewChunkWithCapacity(nil, 0),
-			TableInfo: &common.TableInfo{
-				TableName: common.TableName{Schema: "test", Table: "t"},
-			},
-		}
-	}
-
-	progress := w.progresses[0]
-
-	// Step 1: observe a larger commitTs first (e.g. produced before restart).
-	w.appendRow2Group(newDMLEvent(1, 200), progress, kafka.Offset(10))
-
-	// Step 2: observe a smaller commitTs later (e.g. replayed after restart).
-	w.appendRow2Group(newDMLEvent(1, 100), progress, kafka.Offset(11))
-
-	group := progress.eventsGroup[1]
-	require.NotNil(t, group)
-
-	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
-	// Expect: commitTs=100 is still kept and can be resolved.
-	resolved := group.ResolveInto(150, nil)
-	require.Len(t, resolved, 1)
-	require.Equal(t, uint64(100), resolved[0].CommitTs)
-
-	// Step 3: once downstream has flushed beyond commitTs=100, the replay is safe to ignore.
-	resolvedEvents = make([]*commonEvent.DMLEvent, 0)
-	group.AppliedWatermark = 200
-	w.appendRow2Group(newDMLEvent(1, 100), progress, kafka.Offset(12))
-	resolved = group.ResolveInto(150, resolvedEvents)
-	require.Empty(t, resolved)
-=======
 func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	replicaCfg := config.GetDefaultReplicaConfig()
 	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, true)
@@ -440,5 +383,4 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 			require.Equal(t, uint64(100), resolved[0].CommitTs)
 		})
 	}
->>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 }

@@ -356,12 +356,8 @@ func (c *Config) WithChangefeedID(id common.ChangeFeedID) *Config {
 // Validate the Config
 func (c *Config) Validate() error {
 	if c.EnableTiDBExtension &&
-<<<<<<< HEAD
-		!(c.Protocol == config.ProtocolCanalJSON || c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebezium) {
-=======
 		(c.Protocol != config.ProtocolCanalJSON && c.Protocol != config.ProtocolAvro &&
 			c.Protocol != config.ProtocolDebezium && c.Protocol != config.ProtocolDebeziumAvro) {
->>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 		log.Warn("ignore invalid config, enable-tidb-extension"+
 			"only supports canal-json/avro/debezium/debezium-avro protocol",
 			zap.Bool("enableTidbExtension", c.EnableTiDBExtension),
