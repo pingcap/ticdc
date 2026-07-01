@@ -85,7 +85,7 @@ kafka_groups=(
 	# G05
 	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
 	# G06
-	'multi_topics mq_sink_dispatcher fail_over_ddl_G'
+	'debezium_avro multi_topics mq_sink_dispatcher fail_over_ddl_G'
 	# G07
 	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08

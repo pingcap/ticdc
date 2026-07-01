@@ -121,7 +121,8 @@ func newWriter(ctx context.Context, o *option) *writer {
 		w.progresses[i] = newPartitionProgress(int32(i), decoder)
 	}
 
-	eventRouter, err := eventrouter.NewEventRouter(o.sinkConfig, o.topic, false, o.protocol == config.ProtocolAvro)
+	isAvroLike := o.protocol == config.ProtocolAvro || o.protocol == config.ProtocolDebeziumAvro
+	eventRouter, err := eventrouter.NewEventRouter(o.sinkConfig, o.topic, false, isAvroLike)
 	if err != nil {
 		log.Panic("initialize the event router failed",
 			zap.Any("protocol", o.protocol), zap.Any("topic", o.topic),
@@ -538,7 +539,8 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 
 func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
 	switch w.protocol {
-	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro:
+	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro, config.ProtocolSimple,
+		config.ProtocolDebezium, config.ProtocolDebeziumAvro:
 	default:
 		return
 	}
