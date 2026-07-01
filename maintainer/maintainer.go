@@ -599,11 +599,14 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 func (m *Maintainer) onRedoPersisted(req *heartbeatpb.RedoResolvedTsProgressMessage) {
 	if m.redoResolvedTs < req.ResolvedTs {
 		m.redoResolvedTs = req.ResolvedTs
-		msgs := make([]*messaging.TargetMessage, 0, len(m.bootstrapper.GetAllNodeIDs()))
-		for _, id := range m.bootstrapper.GetAllNodeIDs() {
+		nodeIDs := m.bootstrapper.GetAllNodeIDs()
+		maintainerEpoch := m.currentMaintainerEpoch()
+		msgs := make([]*messaging.TargetMessage, 0, len(nodeIDs))
+		for _, id := range nodeIDs {
 			msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoResolvedTsForwardMessage{
-				ChangefeedID: req.ChangefeedID,
-				ResolvedTs:   m.redoResolvedTs,
+				ChangefeedID:    req.ChangefeedID,
+				ResolvedTs:      m.redoResolvedTs,
+				MaintainerEpoch: maintainerEpoch,
 			}))
 		}
 		m.sendMessages(msgs)
@@ -674,9 +677,10 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 			if needUpdate {
 				m.sendMessages([]*messaging.TargetMessage{
 					messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMetaMessage{
-						ChangefeedID: m.redoMetaTs.ChangefeedID,
-						CheckpointTs: m.redoMetaTs.CheckpointTs,
-						ResolvedTs:   m.redoMetaTs.ResolvedTs,
+						ChangefeedID:    m.redoMetaTs.ChangefeedID,
+						CheckpointTs:    m.redoMetaTs.CheckpointTs,
+						ResolvedTs:      m.redoMetaTs.ResolvedTs,
+						MaintainerEpoch: m.currentMaintainerEpoch(),
 					}),
 				})
 			}
