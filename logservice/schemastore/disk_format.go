@@ -162,7 +162,7 @@ func writeUpperBoundMeta(db *pebble.DB, upperBound UpperBoundMeta) {
 	}
 }
 
-func loadDatabasesInKVSnap(snap *pebble.Snapshot, gcTs uint64) (map[int64]*BasicDatabaseInfo, error) {
+func loadDatabasesInKVSnap(snap *pebble.Snapshot, gcTs uint64) map[int64]*BasicDatabaseInfo {
 	databaseMap := make(map[int64]*BasicDatabaseInfo)
 
 	startKey, err := schemaInfoKey(gcTs, 0)
@@ -194,14 +194,14 @@ func loadDatabasesInKVSnap(snap *pebble.Snapshot, gcTs uint64) (map[int64]*Basic
 		databaseMap[dbInfo.ID] = databaseInfo
 	}
 
-	return databaseMap, nil
+	return databaseMap
 }
 
 func loadTablesInKVSnap(
 	snap *pebble.Snapshot,
 	gcTs uint64,
 	databaseMap map[int64]*BasicDatabaseInfo,
-) (map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
+) (map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo) {
 	tablesInKVSnap := make(map[int64]*BasicTableInfo)
 	partitionsInKVSnap := make(map[int64]BasicPartitionInfo)
 
@@ -252,14 +252,14 @@ func loadTablesInKVSnap(
 			partitionsInKVSnap[tableInfo.ID] = partitionInfo
 		}
 	}
-	return tablesInKVSnap, partitionsInKVSnap, nil
+	return tablesInKVSnap, partitionsInKVSnap
 }
 
 func loadFullTablesInKVSnap(
 	snap *pebble.Snapshot,
 	gcTs uint64,
 	databaseMap map[int64]*BasicDatabaseInfo,
-) (map[int64]*model.TableInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
+) (map[int64]*model.TableInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo) {
 	tableInfosInKVSnap := make(map[int64]*model.TableInfo)
 	tablesInKVSnap := make(map[int64]*BasicTableInfo)
 	partitionsInKVSnap := make(map[int64]BasicPartitionInfo)
@@ -312,7 +312,7 @@ func loadFullTablesInKVSnap(
 			partitionsInKVSnap[tableInfo.ID] = partitionInfo
 		}
 	}
-	return tableInfosInKVSnap, tablesInKVSnap, partitionsInKVSnap, nil
+	return tableInfosInKVSnap, tablesInKVSnap, partitionsInKVSnap
 }
 
 // load the ddl jobs in the range (gcTs, upperBound] and apply the ddl job to update database and table info
@@ -323,7 +323,7 @@ func loadAndApplyDDLHistory(
 	databaseMap map[int64]*BasicDatabaseInfo,
 	tableMap map[int64]*BasicTableInfo,
 	partitionMap map[int64]BasicPartitionInfo,
-) (map[int64][]uint64, []uint64, error) {
+) (map[int64][]uint64, []uint64) {
 	tablesDDLHistory := make(map[int64][]uint64)
 	tableTriggerDDLHistory := make([]uint64, 0)
 
@@ -369,7 +369,7 @@ func loadAndApplyDDLHistory(
 		})
 	}
 
-	return tablesDDLHistory, tableTriggerDDLHistory, nil
+	return tablesDDLHistory, tableTriggerDDLHistory
 }
 
 // if tableID is a physical partition id, return the logic table id of it
@@ -738,17 +738,11 @@ func loadAllPhysicalTablesAtTs(
 	gcTs uint64,
 	snapVersion uint64,
 	tableFilter filter.Filter,
-) ([]commonEvent.Table, error) {
+) []commonEvent.Table {
 	// TODO: respect tableFilter(filter table in kv snap is easy, filter ddl jobs need more attention)
-	databaseMap, err := loadDatabasesInKVSnap(storageSnap, gcTs)
-	if err != nil {
-		return nil, err
-	}
+	databaseMap := loadDatabasesInKVSnap(storageSnap, gcTs)
 
-	tableInfoMap, tableMap, partitionMap, err := loadFullTablesInKVSnap(storageSnap, gcTs, databaseMap)
-	if err != nil {
-		return nil, err
-	}
+	tableInfoMap, tableMap, partitionMap := loadFullTablesInKVSnap(storageSnap, gcTs, databaseMap)
 	log.Info("after load tables in kv snap",
 		zap.Int("tableInfoMapLen", len(tableInfoMap)),
 		zap.Int("tableMapLen", len(tableMap)),
@@ -846,5 +840,5 @@ func loadAllPhysicalTablesAtTs(
 	}
 	log.Info("loadAllPhysicalTablesAtTs",
 		zap.Int("tableLen", len(tables)))
-	return tables, nil
+	return tables
 }
