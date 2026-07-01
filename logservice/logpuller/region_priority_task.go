@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/tikv/client-go/v2/oracle"
 )
@@ -49,6 +50,7 @@ type regionPriorityTask struct {
 	taskType   TaskType
 	priority   int
 	seq        uint64
+	createTime time.Time
 	regionInfo regionInfo
 	heapIndex  int // for heap.Item interface
 }
@@ -59,6 +61,7 @@ func newRegionPriorityTask(taskType TaskType, regionInfo regionInfo, currentTs u
 		taskType:   taskType,
 		priority:   calculateRegionTaskPriority(taskType, regionInfo, currentTs),
 		seq:        seq,
+		createTime: time.Now(),
 		regionInfo: regionInfo,
 		heapIndex:  0, // 0 means not in heap
 	}

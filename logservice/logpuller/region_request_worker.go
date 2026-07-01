@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -469,6 +470,10 @@ func (s *regionRequestWorker) processRegionSendTask(
 					state.markStopped(err)
 					return err
 				}
+				metrics.SubscriptionClientRegionRequestSendCounter.WithLabelValues(
+					s.storeAddr,
+					strconv.FormatUint(s.workerID, 10),
+				).Inc()
 			}
 			regionReq = nil
 			continue

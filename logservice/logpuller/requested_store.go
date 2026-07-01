@@ -69,6 +69,12 @@ func (q *storeQuota) TryAcquire() (*regionRequestQuota, bool) {
 	}, true
 }
 
+func (q *storeQuota) Snapshot() (used int, capacity int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.used, q.capacity
+}
+
 // requestedStore is the scheduler's local state for one TiKV store.
 type requestedStore struct {
 	scheduler *regionRequestScheduler
@@ -83,8 +89,9 @@ type requestedStore struct {
 
 	// pendingTasks holds tasks that have been routed to this store but are
 	// waiting for store quota or worker request-cache capacity. It is mutated
-	// only by the single regionRequestScheduler.Run loop.
-	pendingTasks *priorityqueue.PriorityQueue[*regionPriorityTask]
+	// by the scheduler loop and read by metrics updater.
+	pendingTasksMu sync.Mutex
+	pendingTasks   *priorityqueue.PriorityQueue[*regionPriorityTask]
 
 	notifyMu       sync.Mutex
 	notifyEnqueued bool
@@ -135,6 +142,24 @@ func (rs *requestedStore) Close() {
 	for _, worker := range rs.requestWorkers {
 		worker.requestCache.close()
 	}
+}
+
+func (rs *requestedStore) PushPendingTask(task *regionPriorityTask) {
+	rs.pendingTasksMu.Lock()
+	rs.pendingTasks.Push(task)
+	rs.pendingTasksMu.Unlock()
+}
+
+func (rs *requestedStore) TryPopPendingTask() (*regionPriorityTask, bool) {
+	rs.pendingTasksMu.Lock()
+	defer rs.pendingTasksMu.Unlock()
+	return rs.pendingTasks.TryPop()
+}
+
+func (rs *requestedStore) PendingTaskCount() int {
+	rs.pendingTasksMu.Lock()
+	defer rs.pendingTasksMu.Unlock()
+	return rs.pendingTasks.Len()
 }
 
 func (rs *requestedStore) AddRegion(

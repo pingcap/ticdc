@@ -15,8 +15,10 @@ package logpuller
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -26,6 +28,12 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+)
+
+const (
+	deferReasonStorePending = "store_pending"
+	deferReasonStoreQuota   = "store_quota"
+	deferReasonWorkerCache  = "worker_cache"
 )
 
 // regionRequestScheduler owns region request admission from the global
@@ -144,8 +152,20 @@ func (s *regionRequestScheduler) UpdateMetrics() {
 	count := 0
 	s.stores.Range(func(_, value any) bool {
 		store := value.(*requestedStore)
+		quotaUsed, quotaCapacity := store.quota.Snapshot()
+		metrics.SubscriptionClientStoreDeferredRegionCount.WithLabelValues(store.storeAddr).
+			Set(float64(store.PendingTaskCount()))
+		metrics.SubscriptionClientStoreQuotaGauge.WithLabelValues(store.storeAddr, "used").
+			Set(float64(quotaUsed))
+		metrics.SubscriptionClientStoreQuotaGauge.WithLabelValues(store.storeAddr, "capacity").
+			Set(float64(quotaCapacity))
 		for _, worker := range store.requestWorkers {
-			count += worker.requestCache.pendingCount()
+			pendingCount := worker.requestCache.pendingCount()
+			count += pendingCount
+			metrics.SubscriptionClientWorkerPendingRegionCount.WithLabelValues(
+				store.storeAddr,
+				strconv.FormatUint(worker.workerID, 10),
+			).Set(float64(pendingCount))
 		}
 		return true
 	})
@@ -191,7 +211,7 @@ type getRequestedStoreFunc func(storeAddr string) *requestedStore
 
 func (s *regionRequestScheduler) handleDeferredTasks(ctx context.Context, store *requestedStore) error {
 	for {
-		task, ok := store.pendingTasks.TryPop()
+		task, ok := store.TryPopPendingTask()
 		if !ok {
 			return nil
 		}
@@ -211,12 +231,13 @@ func (s *regionRequestScheduler) handleDeferredTasks(ctx context.Context, store 
 			continue
 		}
 
-		ok, err := s.tryAdmitTask(ctx, store, task, region)
+		ok, reason, err := s.tryAdmitTask(ctx, store, task, region)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			store.pendingTasks.Push(task)
+			store.PushPendingTask(task)
+			s.observeDeferredTask(store, reason)
 			return nil
 		}
 	}
@@ -234,18 +255,20 @@ func (s *regionRequestScheduler) handleNewTask(
 	task.regionInfo = region
 
 	store := getStore(region.rpcCtx.Addr)
-	if store.pendingTasks.Len() > 0 {
-		store.pendingTasks.Push(task)
+	if store.PendingTaskCount() > 0 {
+		store.PushPendingTask(task)
 		store.NotifyAvailable()
+		s.observeDeferredTask(store, deferReasonStorePending)
 		return nil
 	}
 
-	ok, err := s.tryAdmitTask(ctx, store, task, region)
+	ok, reason, err := s.tryAdmitTask(ctx, store, task, region)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		store.pendingTasks.Push(task)
+		store.PushPendingTask(task)
+		s.observeDeferredTask(store, reason)
 	}
 	return nil
 }
@@ -255,11 +278,11 @@ func (s *regionRequestScheduler) tryAdmitTask(
 	store *requestedStore,
 	task *regionPriorityTask,
 	region regionInfo,
-) (bool, error) {
+) (bool, string, error) {
 	force := task.Priority() <= forcedPriorityBase
 	acquiredQuota, ok := store.quota.TryAcquire()
 	if !ok {
-		return false, nil
+		return false, deferReasonStoreQuota, nil
 	}
 	ok, worker, err := store.AddRegion(ctx, region, force, acquiredQuota)
 	if err != nil {
@@ -268,17 +291,25 @@ func (s *regionRequestScheduler) tryAdmitTask(
 			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 			zap.Uint64("regionID", region.verID.GetID()),
 			zap.Error(err))
-		return false, err
+		return false, "", err
 	}
 	if !ok {
 		acquiredQuota.Release()
-		return false, nil
+		return false, deferReasonWorkerCache, nil
 	}
 
+	metrics.SubscriptionClientRegionRequestAdmitDuration.Observe(time.Since(task.createTime).Seconds())
 	log.Debug("subscription client will request a region",
 		zap.Uint64("workID", worker.workerID),
 		zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 		zap.Uint64("regionID", region.verID.GetID()),
 		zap.String("addr", store.storeAddr))
-	return true, nil
+	return true, "", nil
+}
+
+func (s *regionRequestScheduler) observeDeferredTask(store *requestedStore, reason string) {
+	if reason == "" {
+		return
+	}
+	metrics.SubscriptionClientRegionRequestDeferCounter.WithLabelValues(store.storeAddr, reason).Inc()
 }
