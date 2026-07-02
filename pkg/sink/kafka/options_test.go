@@ -159,7 +159,6 @@ func (f *kafkaAdminFixture) setMessageMaxBytes(brokerValue, topicValue string) {
 }
 
 func expectedAdjustedMaxMessageBytes(configuredMaxMessageBytes, sourceMaxMessageBytes int) int {
-	sourceMaxMessageBytes -= maxMessageBytesOverhead
 	if configuredMaxMessageBytes < sourceMaxMessageBytes {
 		return configuredMaxMessageBytes
 	}
@@ -381,7 +380,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 			},
 		},
 		{
-			name: "uses broker limit when configured value is within overhead",
+			name: "keeps configured value below broker limit by one byte",
 			configuredMaxMessageBytes: func(f *kafkaAdminFixture) int {
 				return f.brokerMessageMaxBytes() - 1
 			},
@@ -546,7 +545,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			mockTopicMessageMaxBytes,
 		},
 		{
-			"new topic broker overhead below user",
+			"new topic broker below user",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
 			[]any{"not-created-topic", strconv.Itoa(1024*1024 + 1)},
 			mockBrokerMessageMaxBytes,
@@ -612,7 +611,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
 		},
 		{
-			"existing topic topic overhead below user",
+			"existing topic topic below user",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
 			[]any{defaultMockTopicName, strconv.Itoa(1024*1024 + 1)},
 			mockBrokerMessageMaxBytes,
