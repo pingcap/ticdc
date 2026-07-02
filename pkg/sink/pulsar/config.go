@@ -16,6 +16,7 @@ package pulsar
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -53,13 +54,34 @@ func checkSinkURI(sinkURI *url.URL) error {
 // NewPulsarConfig new pulsar config
 // TODO(dongmen): make this method more concise.
 func NewPulsarConfig(sinkURI *url.URL, pulsarConfig *config.PulsarConfig) (*config.PulsarConfig, error) {
+	// Parse max-message-bytes from the URI first so it can take precedence over TOML.
+	var uriMaxMessageBytes *int
+	if s := sinkURI.Query().Get("max-message-bytes"); s != "" {
+		v, err := strconv.Atoi(s)
+		if err != nil {
+			return nil, fmt.Errorf("invalid max-message-bytes %s: %w", s, err)
+		}
+		if v <= 0 {
+			return nil, fmt.Errorf("max-message-bytes must be positive, got %d", v)
+		}
+		uriMaxMessageBytes = &v
+	}
+
+	defaultMaxMessageBytes := config.DefaultMaxMessageBytes
+	effectiveMaxMessageBytes := &defaultMaxMessageBytes
+	if uriMaxMessageBytes != nil {
+		effectiveMaxMessageBytes = uriMaxMessageBytes
+	}
+
 	c := &config.PulsarConfig{
 		ConnectionTimeout:       toSec(defaultConnectionTimeout),
 		OperationTimeout:        toSec(defaultOperationTimeout),
 		BatchingMaxMessages:     toUint(defaultBatchingMaxSize),
 		BatchingMaxPublishDelay: toMill(defaultBatchingMaxPublishDelay),
 		SendTimeout:             toSec(defaultSendTimeout),
+		MaxMessageBytes:         effectiveMaxMessageBytes,
 	}
+
 	err := checkSinkURI(sinkURI)
 	if err != nil {
 		return nil, err
@@ -106,6 +128,12 @@ func NewPulsarConfig(sinkURI *url.URL, pulsarConfig *config.PulsarConfig) (*conf
 	}
 	if pulsarConfig.SendTimeout == nil {
 		pulsarConfig.SendTimeout = c.SendTimeout
+	}
+	// URI parameter takes precedence over TOML; fall back to TOML, then default.
+	if uriMaxMessageBytes != nil {
+		pulsarConfig.MaxMessageBytes = uriMaxMessageBytes
+	} else if pulsarConfig.MaxMessageBytes == nil {
+		pulsarConfig.MaxMessageBytes = c.MaxMessageBytes
 	}
 
 	log.Debug("new pulsar config success", zap.Any("config", pulsarConfig))
