@@ -1239,6 +1239,10 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		zap.Uint64("newEpoch", newStat.epoch),
 		zap.Duration("resetTime", time.Since(start)))
 
+	if c.scanReady(newStat) {
+		c.pushTask(newStat, false)
+	}
+
 	return nil
 }
 
