@@ -611,11 +611,11 @@ func adjustOptions(
 		if err != nil {
 			log.Warn("TiCDC cannot find `max.message.bytes` from topic's configuration, use the option `MaxMessageBytes` as default")
 			topicMaxMessageBytes = options.MaxMessageBytes
-			// return errors.Trace(err)
-		}
-		topicMaxMessageBytes, err = strconv.Atoi(topicMaxMessageBytesStr)
-		if err != nil {
-			return errors.Trace(err)
+		} else {
+			topicMaxMessageBytes, err = strconv.Atoi(topicMaxMessageBytesStr)
+			if err != nil {
+				return errors.Trace(err)
+			}
 		}
 
 		maxMessageBytes := topicMaxMessageBytes - maxMessageBytesOverhead
@@ -651,10 +651,11 @@ func adjustOptions(
 	if err != nil {
 		log.Warn("TiCDC cannot find `message.max.bytes` from broker's configuration, use the option `MaxMessageBytes` as default")
 		brokerMessageMaxBytes = options.MaxMessageBytes
-	}
-	brokerMessageMaxBytes, err = strconv.Atoi(brokerMessageMaxBytesStr)
-	if err != nil {
-		return errors.Trace(err)
+	} else {
+		brokerMessageMaxBytes, err = strconv.Atoi(brokerMessageMaxBytesStr)
+		if err != nil {
+			return errors.Trace(err)
+		}
 	}
 
 	// when create the topic, `max.message.bytes` is decided by the broker,
