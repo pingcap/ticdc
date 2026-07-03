@@ -684,6 +684,9 @@ func (t *TxnEvent) AppendRow(
 	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter, filterContext)
 }
 
+// dmlTypeFilterCacheSize follows common.RowType iota values: delete, insert, update.
+const dmlTypeFilterCacheSize = int(common.RowTypeUpdate) + 1
+
 // dmlProcessor handles DML event processing and batching
 type dmlProcessor struct {
 	mounter      event.Mounter
@@ -691,6 +694,13 @@ type dmlProcessor struct {
 
 	filter        filter.Filter
 	filterContext filter.DMLFilterContext
+	// dmlTypeFilterCache caches the pre-decode filter result within the current transaction.
+	// The cache is reset when a new transaction starts. It is safe because tableInfo
+	// and startTs are fixed for the current transaction.
+	dmlTypeFilterCache [dmlTypeFilterCacheSize]struct {
+		valid  bool
+		ignore bool
+	}
 
 	// insertRowCache is used to cache the split update event's insert part of the current transaction.
 	// It will be used to append to the current DML event when the transaction is finished.
@@ -739,6 +749,7 @@ func (p *dmlProcessor) startTxn(
 	if p.currentTxn != nil {
 		log.Panic("there is a transaction not flushed yet")
 	}
+	p.resetDMLTypeFilterCache()
 	var err error
 	p.currentTxn, err = newTxnEvent(p.batchDML, dispatcherID, tableID, tableInfo, startTs, commitTs, shouldSplitTxn)
 	return err
@@ -792,6 +803,13 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	rawType := rawEvent.GetType()
 	if !rawEvent.IsUpdate() {
 		updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, false)
+		ignore, err := p.shouldIgnoreRawEventByDMLType(rawEvent)
+		if err != nil {
+			return err
+		}
+		if ignore {
+			return nil
+		}
 		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter, p.filterContext)
 	}
 
@@ -799,6 +817,15 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		shouldSplit bool
 		err         error
 	)
+	ignore, err := p.shouldIgnoreDMLByEventType(common.RowTypeUpdate, rawEvent.StartTs)
+	if err != nil {
+		return err
+	}
+	if ignore {
+		updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, false)
+		return nil
+	}
+
 	if !p.outputRawChangeEvent {
 		shouldSplit, err = event.IsUKChanged(rawEvent, p.currentTxn.CurrentDMLEvent.TableInfo)
 		if err != nil {
@@ -819,8 +846,71 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	if err != nil {
 		return err
 	}
-	p.insertRowCache = append(p.insertRowCache, insertRow)
+	ignoreInsert, err := p.shouldIgnoreRawEventByDMLType(insertRow)
+	if err != nil {
+		return err
+	}
+	if !ignoreInsert {
+		p.insertRowCache = append(p.insertRowCache, insertRow)
+	}
+	ignoreDelete, err := p.shouldIgnoreRawEventByDMLType(deleteRow)
+	if err != nil {
+		return err
+	}
+	if ignoreDelete {
+		return nil
+	}
 	return p.currentTxn.AppendRow(deleteRow, p.mounter.DecodeToChunk, p.filter, p.filterContext)
+}
+
+func (p *dmlProcessor) shouldIgnoreRawEventByDMLType(rawEvent *common.RawKVEntry) (bool, error) {
+	rowType := common.RowTypeInsert
+	if rawEvent.IsDelete() {
+		rowType = common.RowTypeDelete
+	} else if rawEvent.IsUpdate() {
+		rowType = common.RowTypeUpdate
+	}
+	return p.shouldIgnoreDMLByEventType(rowType, rawEvent.StartTs)
+}
+
+func (p *dmlProcessor) shouldIgnoreDMLByEventType(rowType common.RowType, startTs uint64) (bool, error) {
+	idx := int(rowType)
+	if idx >= 0 && idx < len(p.dmlTypeFilterCache) {
+		if p.dmlTypeFilterCache[idx].valid {
+			return p.dmlTypeFilterCache[idx].ignore, nil
+		}
+	}
+
+	if p.filter == nil {
+		p.setDMLTypeFilterCache(rowType, false)
+		return false, nil
+	}
+	ignore, err := p.filter.ShouldIgnoreDMLByEventType(
+		rowType,
+		p.currentTxn.CurrentDMLEvent.TableInfo,
+		startTs,
+	)
+	if err != nil {
+		return false, errors.Trace(err)
+	}
+	p.setDMLTypeFilterCache(rowType, ignore)
+	return ignore, nil
+}
+
+func (p *dmlProcessor) setDMLTypeFilterCache(rowType common.RowType, ignore bool) {
+	idx := int(rowType)
+	if idx < 0 || idx >= len(p.dmlTypeFilterCache) {
+		return
+	}
+	p.dmlTypeFilterCache[idx].valid = true
+	p.dmlTypeFilterCache[idx].ignore = ignore
+}
+
+func (p *dmlProcessor) resetDMLTypeFilterCache() {
+	for i := range p.dmlTypeFilterCache {
+		p.dmlTypeFilterCache[i].valid = false
+		p.dmlTypeFilterCache[i].ignore = false
+	}
 }
 
 // getCurrentBatchDML returns the current batch DML event

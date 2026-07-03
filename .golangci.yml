@@ -83,7 +83,7 @@ linters:
         - name: var-declaration
 
     # G104: Audit errors not checked (duplicates errcheck).
-    # G115: Integer conversion overflow warnings are too noisy for bounded protocol values.
+    # G115: integer overflow conversions are too noisy for this codebase.
     gosec:
       excludes:
         - G104

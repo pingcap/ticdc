@@ -51,6 +51,10 @@ type managerMaintainerSet struct {
 	// taskScheduler is shared by all local maintainers to run background tasks.
 	taskScheduler threadpool.ThreadPool
 
+	// registryMu serializes registry mutations that create, replace, or fully
+	// close maintainers because maintainer metrics share changefeed labels across
+	// epochs.
+	registryMu sync.Mutex
 	// registry is the in-memory changefeedID -> maintainer mapping.
 	registry sync.Map
 }
@@ -179,10 +183,16 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 	getDrainTarget func() (node.ID, uint64),
 ) *heartbeatpb.MaintainerStatus {
 	changefeedID := common.NewChangefeedIDFromPB(req.Id)
-	if _, ok := p.registry.Load(changefeedID); ok {
+	if req.CheckpointTs == 0 {
+		log.Error("ignore add maintainer request with invalid checkpointTs",
+			zap.Stringer("changefeedID", changefeedID),
+			zap.Uint64("checkpointTs", req.CheckpointTs))
 		return nil
 	}
-
+	requestEpoch := req.MaintainerEpoch
+	if !p.mayRegisterMaintainerForAdd(changefeedID, requestEpoch) {
+		return nil
+	}
 	info := &config.ChangeFeedInfo{}
 	if err := json.Unmarshal(req.Config, info); err != nil {
 		log.Error("ignore add maintainer request with invalid config",
@@ -191,28 +201,115 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 			zap.Error(err))
 		return nil
 	}
-	if req.CheckpointTs == 0 {
-		log.Error("ignore add maintainer request with invalid checkpointTs",
-			zap.Stringer("changefeedID", changefeedID),
-			zap.Uint64("checkpointTs", req.CheckpointTs))
+	// The wire epoch is the sender capability signal. If an old coordinator sends
+	// epoch 0, keep the maintainer in compatibility mode even when the serialized
+	// config still carries a non-zero ChangeFeedInfo epoch.
+	info.Epoch = requestEpoch
+	// Create the maintainer only after epoch admission so normal duplicate
+	// add retries do not start short-lived goroutines or metrics.
+	newMaintainer := func() *Maintainer {
+		return NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
+	}
+	registeredMaintainer := p.registerMaintainerForAdd(changefeedID, requestEpoch, newMaintainer)
+	if registeredMaintainer == nil {
 		return nil
 	}
-	maintainer := NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
-	registered, loaded := p.registry.LoadOrStore(changefeedID, maintainer)
-	if loaded {
-		// Duplicate add requests can race on the same changefeed. Drop the loser and
-		// stop the redundant maintainer immediately so background goroutines do not leak.
-		maintainer.Close()
-		return nil
-	}
-
-	registeredMaintainer := registered.(*Maintainer)
 	// Register the maintainer before seeding the drain snapshot so concurrent
 	// manager-level drain fanout can always observe it in the registry.
 	target, epoch := getDrainTarget()
 	registeredMaintainer.SetDispatcherDrainTarget(target, epoch)
 	registeredMaintainer.pushEvent(&Event{changefeedID: changefeedID, eventType: EventInit})
 	return nil
+}
+
+// mayRegisterMaintainerForAdd performs a cheap admission check before decoding
+// config and constructing a maintainer.
+func (p *managerMaintainerSet) mayRegisterMaintainerForAdd(
+	changefeedID common.ChangeFeedID,
+	requestEpoch uint64,
+) bool {
+	registered, loaded := p.registry.Load(changefeedID)
+	if !loaded {
+		return true
+	}
+	existing := registered.(*Maintainer)
+	allowed := canRegisterAfterExistingMaintainer(existing, requestEpoch)
+	if !allowed {
+		logRejectedAddMaintainer(changefeedID, existing, requestEpoch)
+	}
+	return allowed
+}
+
+// registerMaintainerForAdd installs a newly created maintainer after rechecking
+// epoch and stopped-state admission under the registry mutation lock.
+func (p *managerMaintainerSet) registerMaintainerForAdd(
+	changefeedID common.ChangeFeedID,
+	requestEpoch uint64,
+	newMaintainer func() *Maintainer,
+) *Maintainer {
+	p.registryMu.Lock()
+	defer p.registryMu.Unlock()
+
+	registered, loaded := p.registry.Load(changefeedID)
+	if !loaded {
+		maintainer := newMaintainer()
+		p.registry.Store(changefeedID, maintainer)
+		return maintainer
+	}
+	existing := registered.(*Maintainer)
+	if !canRegisterAfterExistingMaintainer(existing, requestEpoch) {
+		logRejectedAddMaintainer(changefeedID, existing, requestEpoch)
+		return nil
+	}
+	// The old maintainer has fully stopped, so it is safe to release the
+	// shared metric labels before the new maintainer creates its own metric
+	// children for the same changefeed.
+	existing.Close()
+	maintainer := newMaintainer()
+	p.registry.Store(changefeedID, maintainer)
+	return maintainer
+}
+
+// canRegisterAfterExistingMaintainer reports whether an add request can replace
+// the existing local maintainer without overlapping two live owners.
+func canRegisterAfterExistingMaintainer(existing *Maintainer, requestEpoch uint64) bool {
+	if !isMaintainerFullyStopped(existing) {
+		return false
+	}
+	return isNewerMaintainerEpoch(existing.currentMaintainerEpoch(), requestEpoch)
+}
+
+// isNewerMaintainerEpoch applies strict epoch ordering for replacement adds.
+func isNewerMaintainerEpoch(existingEpoch, requestEpoch uint64) bool {
+	if requestEpoch == 0 {
+		return false
+	}
+	if existingEpoch == 0 {
+		return true
+	}
+	return requestEpoch > existingEpoch
+}
+
+// isMaintainerFullyStopped reports whether the old maintainer has finished its
+// remove flow and released scheduler ownership.
+func isMaintainerFullyStopped(maintainer *Maintainer) bool {
+	return maintainer.removed.Load() &&
+		heartbeatpb.ComponentState(maintainer.scheduleState.Load()) == heartbeatpb.ComponentState_Stopped
+}
+
+// logRejectedAddMaintainer emits detail only for newer requests blocked by a
+// still-running local maintainer.
+func logRejectedAddMaintainer(changefeedID common.ChangeFeedID, existing *Maintainer, requestEpoch uint64) {
+	existingEpoch := existing.currentMaintainerEpoch()
+	if requestEpoch <= existingEpoch || isMaintainerFullyStopped(existing) {
+		return
+	}
+	log.Warn("reject add maintainer request because existing maintainer is still running",
+		zap.Stringer("changefeedID", changefeedID),
+		zap.Uint64("requestMaintainerEpoch", requestEpoch),
+		zap.Uint64("existingMaintainerEpoch", existingEpoch),
+		zap.Bool("existingRemoved", existing.removed.Load()),
+		zap.String("existingState", heartbeatpb.ComponentState(existing.scheduleState.Load()).String()))
 }
 
 // handleRemoveMaintainer handles both normal remove and cascade-remove flows.
@@ -227,15 +324,28 @@ func (p *managerMaintainerSet) handleRemoveMaintainer(msg *messaging.TargetMessa
 				zap.Stringer("changefeedID", changefeedID),
 				zap.Any("request", req))
 			return &heartbeatpb.MaintainerStatus{
-				ChangefeedID: req.GetId(),
-				State:        heartbeatpb.ComponentState_Stopped,
+				ChangefeedID:    req.GetId(),
+				State:           heartbeatpb.ComponentState_Stopped,
+				MaintainerEpoch: req.MaintainerEpoch,
 			}
 		}
 
 		// It's cascade remove, we should remove the dispatcher from all node.
 		// Here we create a maintainer to run the remove dispatcher logic.
-		maintainer = NewMaintainerForRemove(changefeedID, p.conf, p.nodeInfo, p.taskScheduler, req.KeyspaceId)
-		p.registry.Store(changefeedID, maintainer)
+		p.registryMu.Lock()
+		maintainer, ok = p.registry.Load(changefeedID)
+		if !ok {
+			maintainer = NewMaintainerForRemove(
+				changefeedID,
+				p.conf,
+				p.nodeInfo,
+				p.taskScheduler,
+				req.KeyspaceId,
+				req.MaintainerEpoch,
+			)
+			p.registry.Store(changefeedID, maintainer)
+		}
+		p.registryMu.Unlock()
 	}
 	maintainer.(*Maintainer).pushEvent(&Event{
 		changefeedID: changefeedID,
@@ -270,17 +380,31 @@ func (p *managerMaintainerSet) buildHeartbeat() *heartbeatpb.MaintainerHeartbeat
 // cleanupRemovedMaintainers closes maintainers after their remove flow has finished.
 func (p *managerMaintainerSet) cleanupRemovedMaintainers() {
 	p.registry.Range(func(key, value interface{}) bool {
-		cf := value.(*Maintainer)
-		if cf.removed.Load() {
-			cf.Close()
-			log.Info("maintainer removed, remove it from dynamic stream",
-				zap.Stringer("changefeedID", cf.changefeedID),
-				zap.Uint64("checkpointTs", cf.getWatermark().CheckpointTs),
-			)
-			p.registry.Delete(key)
-		}
+		p.cleanupRemovedMaintainer(key, value)
 		return true
 	})
+}
+
+// cleanupRemovedMaintainer removes only the registry entry that still owns the
+// shared changefeed metric labels observed by Range.
+func (p *managerMaintainerSet) cleanupRemovedMaintainer(key, value interface{}) {
+	p.registryMu.Lock()
+	defer p.registryMu.Unlock()
+
+	cf := value.(*Maintainer)
+	if !cf.removed.Load() {
+		return
+	}
+	// Range can observe a removed maintainer just before a newer epoch replaces it.
+	// Only the value still stored in the registry owns the shared metric labels.
+	if !p.registry.CompareAndDelete(key, cf) {
+		return
+	}
+	cf.Close()
+	log.Info("maintainer removed, remove it from dynamic stream",
+		zap.Stringer("changefeedID", cf.changefeedID),
+		zap.Uint64("checkpointTs", cf.getWatermark().CheckpointTs),
+	)
 }
 
 // applyDispatcherDrainTarget fans out the latest node-scoped drain target to

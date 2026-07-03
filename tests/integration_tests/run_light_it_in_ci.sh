@@ -59,7 +59,7 @@ mysql_groups=(
 	# ds_memory_control
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
-	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator cli_missing_keyspace_error'
+	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator cli_missing_keyspace_error changefeed_query_toml_api'
 	# G14
 	'batch_add_table batch_update_to_no_batch fail_over_ddl_O update_changefeed_check_config pause_changefeed_with_long_time_ddl'
 	# G15
@@ -83,7 +83,7 @@ kafka_groups=(
 	# G05
 	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
 	# G06
-	'multi_topics mq_sink_dispatcher fail_over_ddl_G'
+	'debezium_avro multi_topics mq_sink_dispatcher fail_over_ddl_G'
 	# G07
 	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08

@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -346,6 +347,13 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo, timeZone *time
 		}
 		value = types.NewDuration(0, 0, 0, int(val), types.MaxFsp)
 	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
+		if strVal, ok := value.(string); ok && mysql.HasUnsignedFlag(colInfo.GetFlag()) {
+			uintVal, err := strconv.ParseUint(strVal, 10, 64)
+			if err != nil {
+				log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			}
+			return uintVal
+		}
 		var intVal int64
 		intVal, err = value.(json.Number).Int64()
 		if err != nil {
@@ -371,6 +379,14 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo, timeZone *time
 			return types.NewBinaryLiteralFromUint(uint64(0), -1)
 		}
 	case mysql.TypeNewDecimal:
+		if strVal, ok := value.(string); ok {
+			dec := new(types.MyDecimal)
+			err = dec.FromString([]byte(strVal))
+			if err != nil {
+				log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			}
+			return dec
+		}
 		var f64 float64
 		f64, err = value.(json.Number).Float64()
 		if err != nil {
