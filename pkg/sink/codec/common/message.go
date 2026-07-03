@@ -13,15 +13,7 @@
 
 package common
 
-import (
-	"encoding/binary"
-	"encoding/json"
-)
-
-// MaxRecordOverhead is used to calculate the expected Kafka record size.
-// For TiCDC, minimum supported Kafka version is `0.11.0.2`, which uses record
-// batch format v2 and varint encoded fields.
-const MaxRecordOverhead = 5*binary.MaxVarintLen32 + binary.MaxVarintLen64 + 1
+import "encoding/json"
 
 // MessageType is the type of message, which is used by MqSink and RedoLog.
 type MessageType int
@@ -85,11 +77,9 @@ type CheckpointLogInfo struct {
 	CommitTs uint64
 }
 
-// Length returns the expected size of the Kafka message
-// We didn't append any `Headers` when send the message, so ignore the calculations related to it.
-// If `ProducerMessage` Headers fields used, this method should also adjust.
+// Length returns the encoded key/value payload size of the sink message.
 func (m *Message) Length() int {
-	return len(m.Key) + len(m.Value) + MaxRecordOverhead
+	return len(m.Key) + len(m.Value)
 }
 
 // GetRowsCount returns the number of rows batched in one Message

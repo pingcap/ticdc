@@ -146,10 +146,11 @@ func newKafkaOptions(o *options) *clientOptions {
 		Version:           o.Version,
 		IsAssignedVersion: o.IsAssignedVersion,
 
-		MaxMessageBytes: o.MaxMessageBytes,
-		MaxRetry:        o.MaxRetry,
-		Compression:     o.Compression,
-		RequiredAcks:    int16(o.RequiredAcks),
+		MaxMessageBytes:       o.MaxMessageBytes,
+		ProducerBatchMaxBytes: o.ProducerBatchMaxBytes,
+		MaxRetry:              o.MaxRetry,
+		Compression:           o.Compression,
+		RequiredAcks:          int16(o.RequiredAcks),
 
 		EnableTLS:          o.EnableTLS,
 		Credential:         o.Credential,

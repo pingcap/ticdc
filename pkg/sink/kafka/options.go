@@ -149,11 +149,15 @@ type options struct {
 	Version           string
 	IsAssignedVersion bool
 	RequestVersion    int16
-	MaxMessageBytes   int
-	MaxRetry          int
-	Compression       string
-	ClientID          string
-	RequiredAcks      RequiredAcks
+	// MaxMessageBytes is the TiCDC encoder payload limit used by batching and
+	// large-message handling.
+	MaxMessageBytes int
+	// ProducerBatchMaxBytes is the Kafka record batch limit used by franz-go.
+	ProducerBatchMaxBytes int
+	MaxRetry              int
+	Compression           string
+	ClientID              string
+	RequiredAcks          RequiredAcks
 	// Only for test. User can not set this value.
 	// The current prod default value is 0.
 	MaxMessages int
@@ -173,20 +177,20 @@ type options struct {
 // NewOptions returns a default Kafka configuration
 func NewOptions() *options {
 	return &options{
-		Version: "2.4.0",
-		// MaxMessageBytes will be used to initialize producer
-		MaxMessageBytes:    config.DefaultMaxMessageBytes,
-		MaxRetry:           defaultMaxRetry,
-		ReplicationFactor:  1,
-		Compression:        "none",
-		RequiredAcks:       WaitForAll,
-		Credential:         &security.Credential{},
-		InsecureSkipVerify: false,
-		SASL:               &security.SASL{},
-		AutoCreate:         true,
-		DialTimeout:        10 * time.Second,
-		WriteTimeout:       10 * time.Second,
-		ReadTimeout:        10 * time.Second,
+		Version:               "2.4.0",
+		MaxMessageBytes:       config.DefaultMaxMessageBytes,
+		ProducerBatchMaxBytes: config.DefaultMaxMessageBytes,
+		MaxRetry:              defaultMaxRetry,
+		ReplicationFactor:     1,
+		Compression:           "none",
+		RequiredAcks:          WaitForAll,
+		Credential:            &security.Credential{},
+		InsecureSkipVerify:    false,
+		SASL:                  &security.SASL{},
+		AutoCreate:            true,
+		DialTimeout:           10 * time.Second,
+		WriteTimeout:          10 * time.Second,
+		ReadTimeout:           10 * time.Second,
 	}
 }
 
@@ -594,7 +598,7 @@ func adjustOptions(
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
 	if exists {
-		// make sure that producer's `MaxMessageBytes` is not larger than topic's `max.message.bytes`.
+		// Make sure the encoder does not generate messages larger than topic's `max.message.bytes`.
 		topicMaxMessageBytesStr, err := getTopicConfig(
 			ctx, admin, info.Name,
 			TopicMaxMessageBytesConfigName,
@@ -607,10 +611,11 @@ func adjustOptions(
 		if err != nil {
 			return errors.Trace(err)
 		}
+		options.ProducerBatchMaxBytes = topicMaxMessageBytes
 
 		if topicMaxMessageBytes < options.MaxMessageBytes {
 			log.Warn("topic's `max.message.bytes` less than the `max-message-bytes`,"+
-				"use topic's `max.message.bytes` to initialize the Kafka producer",
+				"use topic's `max.message.bytes` as max-message-bytes",
 				zap.Int("max.message.bytes", topicMaxMessageBytes),
 				zap.Int("max-message-bytes", options.MaxMessageBytes))
 			options.MaxMessageBytes = topicMaxMessageBytes
@@ -642,11 +647,12 @@ func adjustOptions(
 
 	// when create the topic, `max.message.bytes` is decided by the broker,
 	// it would use broker's `message.max.bytes` to set topic's `max.message.bytes`.
-	// TiCDC need to make sure that the producer's `MaxMessageBytes` won't be larger than
+	options.ProducerBatchMaxBytes = brokerMessageMaxBytes
+	// TiCDC needs to make sure the encoder does not generate messages larger than
 	// broker's `message.max.bytes`.
 	if brokerMessageMaxBytes < options.MaxMessageBytes {
 		log.Warn("broker's `message.max.bytes` less than the `max-message-bytes`,"+
-			"use broker's `message.max.bytes` to initialize the Kafka producer",
+			"use broker's `message.max.bytes` as max-message-bytes",
 			zap.Int("message.max.bytes", brokerMessageMaxBytes),
 			zap.Int("max-message-bytes", options.MaxMessageBytes))
 		options.MaxMessageBytes = brokerMessageMaxBytes

@@ -414,12 +414,14 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 				options.MaxMessageBytes,
 				adminFixture.brokerMessageMaxBytes(),
 			)
+			expectedProducerBatchMaxBytes := adminFixture.brokerMessageMaxBytes()
 
 			ctx := context.Background()
 			err = adjustOptions(ctx, adminClient, options, topicName)
 			require.NoError(t, err)
 
 			require.Equal(t, expectedMaxMessageBytes, options.MaxMessageBytes)
+			require.Equal(t, expectedProducerBatchMaxBytes, options.ProducerBatchMaxBytes)
 		})
 	}
 }
@@ -538,6 +540,13 @@ func TestConfigurationCombinations(t *testing.T) {
 			mockTopicMessageMaxBytes,
 		},
 		{
+			"new topic claim check threshold below broker",
+			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
+			[]any{"not-created-topic", "800"},
+			mockBrokerMessageMaxBytes,
+			mockTopicMessageMaxBytes,
+		},
+		{
 			"new topic user below default below broker",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
 			[]any{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes - 1)},
@@ -597,6 +606,13 @@ func TestConfigurationCombinations(t *testing.T) {
 			"existing topic user below topic and default",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
 			[]any{defaultMockTopicName, strconv.Itoa(1024*1024 - 1)},
+			mockBrokerMessageMaxBytes,
+			mockTopicMessageMaxBytes,
+		},
+		{
+			"existing topic claim check threshold below topic",
+			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
+			[]any{defaultMockTopicName, "800"},
 			mockBrokerMessageMaxBytes,
 			mockTopicMessageMaxBytes,
 		},
@@ -677,6 +693,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			err = adjustOptions(ctx, adminClient, options, topic)
 			require.Nil(t, err)
 			require.Equal(t, expectedMaxMessageBytes, options.MaxMessageBytes)
+			require.Equal(t, sourceMaxMessageBytes, options.ProducerBatchMaxBytes)
 
 			encoderConfig := common.NewConfig(config.ProtocolOpen)
 			err = encoderConfig.Apply(sinkURI, &config.SinkConfig{
@@ -690,7 +707,6 @@ func TestConfigurationCombinations(t *testing.T) {
 			err = encoderConfig.Validate()
 			require.Nil(t, err)
 
-			// producer's `MaxMessageBytes` = encoder's `MaxMessageBytes`.
 			require.Equal(t, expectedMaxMessageBytes, encoderConfig.MaxMessageBytes)
 
 			adminClient.Close()

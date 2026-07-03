@@ -41,10 +41,11 @@ type clientOptions struct {
 	Version           string
 	IsAssignedVersion bool
 
-	MaxMessageBytes int
-	MaxRetry        int
-	Compression     string
-	RequiredAcks    int16
+	MaxMessageBytes       int
+	ProducerBatchMaxBytes int
+	MaxRetry              int
+	Compression           string
+	RequiredAcks          int16
 
 	EnableTLS          bool
 	Credential         *security.Credential
@@ -226,6 +227,10 @@ func newProducerOptions(
 	if produceTimeout < 100*time.Millisecond {
 		produceTimeout = defaultRequestTimeout
 	}
+	producerBatchMaxBytes := o.ProducerBatchMaxBytes
+	if producerBatchMaxBytes <= 0 {
+		producerBatchMaxBytes = o.MaxMessageBytes
+	}
 
 	return []kgo.Opt{
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
@@ -233,7 +238,7 @@ func newProducerOptions(
 		kgo.DisableIdempotentWrite(),
 		kgo.MaxProduceRequestsInflightPerBroker(1),
 		kgo.RecordRetries(recordRetries),
-		kgo.ProducerBatchMaxBytes(int32(o.MaxMessageBytes)),
+		kgo.ProducerBatchMaxBytes(int32(producerBatchMaxBytes)),
 		kgo.ProduceRequestTimeout(produceTimeout),
 		kgo.ProducerLinger(0),
 		newCompressionOption(o),

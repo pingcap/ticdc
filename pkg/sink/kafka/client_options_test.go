@@ -83,6 +83,31 @@ func TestNewOptionsRejectsInvalidAssignedVersion(t *testing.T) {
 	require.ErrorContains(t, err, "invalid kafka version invalid")
 }
 
+func TestNewProducerOptionsUsesProducerBatchMaxBytes(t *testing.T) {
+	t.Parallel()
+
+	const (
+		encoderMaxMessageBytes = 800
+		producerBatchMaxBytes  = 1048588
+	)
+	o := &clientOptions{
+		BrokerEndpoints:       []string{"127.0.0.1:9092"},
+		MaxMessageBytes:       encoderMaxMessageBytes,
+		ProducerBatchMaxBytes: producerBatchMaxBytes,
+		MaxRetry:              defaultRecordRetries,
+		RequiredAcks:          int16(WaitForAll),
+	}
+
+	opts, err := newOptions(context.Background(), o, nil)
+	require.NoError(t, err)
+	opts = append(opts, newProducerOptions(o)...)
+	client, err := kgo.NewClient(opts...)
+	require.NoError(t, err)
+	defer client.Close()
+
+	require.Equal(t, int32(producerBatchMaxBytes), client.OptValue(kgo.ProducerBatchMaxBytes))
+}
+
 func TestNewOauthTokenSourceRejectsInvalidTokenURL(t *testing.T) {
 	t.Parallel()
 
