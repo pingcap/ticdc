@@ -108,6 +108,36 @@ func TestNewProducerOptionsUsesProducerBatchMaxBytes(t *testing.T) {
 	require.Equal(t, int32(producerBatchMaxBytes), client.OptValue(kgo.ProducerBatchMaxBytes))
 }
 
+func TestNewCompressionOptionMapsToProducerBatchCompression(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		compression string
+		expected    kgo.CompressionCodec
+	}{
+		{compression: "gzip", expected: kgo.GzipCompression()},
+		{compression: "snappy", expected: kgo.SnappyCompression()},
+		{compression: "lz4", expected: kgo.Lz4Compression()},
+		{compression: "zstd", expected: kgo.ZstdCompression()},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.compression, func(t *testing.T) {
+			t.Parallel()
+
+			client, err := kgo.NewClient(
+				kgo.SeedBrokers("127.0.0.1:9092"),
+				newCompressionOption(&clientOptions{Compression: tc.compression}),
+			)
+			require.NoError(t, err)
+			defer client.Close()
+
+			require.Equal(t, []kgo.CompressionCodec{tc.expected}, client.OptValue(kgo.ProducerBatchCompression))
+		})
+	}
+}
+
 func TestNewOauthTokenSourceRejectsInvalidTokenURL(t *testing.T) {
 	t.Parallel()
 
