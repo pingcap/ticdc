@@ -32,6 +32,7 @@ import (
 	pbank3 "workload/schema/bank3"
 	"workload/schema/bankupdate"
 	pcrawler "workload/schema/crawler"
+	"workload/schema/customerworkload"
 	pdc "workload/schema/dc"
 	"workload/schema/largerow"
 	"workload/schema/shop"
@@ -55,6 +56,7 @@ type WorkloadExecutor struct {
 // WorkloadStats saves the statistics of the workload
 type WorkloadStats struct {
 	FlushedRowCount atomic.Uint64
+	RateRowCount    atomic.Uint64
 	QueryCount      atomic.Uint64
 	ErrorCount      atomic.Uint64
 	CreatedTableNum atomic.Int32
@@ -70,6 +72,8 @@ type WorkloadApp struct {
 	DBManager *DBManager
 	Workload  schema.Workload
 	Stats     *WorkloadStats
+	StartedAt time.Time
+	rateMu    sync.Mutex
 }
 
 const (
@@ -84,6 +88,7 @@ const (
 	bankUpdate        = "bank_update"
 	dc                = "dc"
 	wideTableWithJSON = "wide_table_with_json"
+	customerWorkload  = "customer_workload"
 )
 
 // stmtCacheKey is used as the key for statement cache
@@ -95,8 +100,9 @@ type stmtCacheKey struct {
 // NewWorkloadApp creates a new workload application
 func NewWorkloadApp(config *WorkloadConfig) *WorkloadApp {
 	return &WorkloadApp{
-		Config: config,
-		Stats:  &WorkloadStats{},
+		Config:    config,
+		Stats:     &WorkloadStats{},
+		StartedAt: time.Now(),
 	}
 }
 
@@ -146,10 +152,64 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = pdc.NewDCWorkload()
 	case wideTableWithJSON:
 		workload = pwidetablewithjson.NewWideTableWithJSONWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount)
+	case customerWorkload:
+		initialSeq := app.Config.CustomerInitialSeq
+		if initialSeq == 0 && app.Config.Action != "prepare" && app.Config.CustomerKeyspace > 0 {
+			initialSeq = app.Config.CustomerKeyspace
+		}
+		workload = customerworkload.NewCustomerWorkload(customerworkload.Options{
+			Model:           app.Config.CustomerModel,
+			TableCount:      app.Config.TableCount,
+			TableStartIndex: app.Config.TableStartIndex,
+			TotalRowCount:   app.Config.TotalRowCount,
+			RowSize:         app.Config.CustomerRowSize,
+			KeyspaceSize:    app.Config.CustomerKeyspace,
+			InitialSeq:      initialSeq,
+			RandomizeInsert: app.Config.Action != "prepare",
+		})
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))
 	}
 	return workload
+}
+
+func (app *WorkloadApp) shouldStop() bool {
+	return app.Config.MaxRuntime > 0 && time.Since(app.StartedAt) >= app.Config.MaxRuntime
+}
+
+func (app *WorkloadApp) markRunStarted() {
+	app.StartedAt = time.Now()
+}
+
+func (app *WorkloadApp) throttleRows(rowCount uint64) {
+	if app.Config.TargetRowsPerSec <= 0 {
+		return
+	}
+	if rowCount == 0 {
+		return
+	}
+
+	app.rateMu.Lock()
+	defer app.rateMu.Unlock()
+
+	totalRows := app.Stats.RateRowCount.Add(rowCount)
+	if totalRows == 0 {
+		return
+	}
+
+	expectedElapsed := time.Duration(float64(totalRows) / float64(app.Config.TargetRowsPerSec) * float64(time.Second))
+	if sleepFor := app.StartedAt.Add(expectedElapsed).Sub(time.Now()); sleepFor > 0 {
+		if app.Config.MaxRuntime > 0 {
+			remaining := app.Config.MaxRuntime - time.Since(app.StartedAt)
+			if remaining <= 0 {
+				return
+			}
+			if sleepFor > remaining {
+				sleepFor = remaining
+			}
+		}
+		time.Sleep(sleepFor)
+	}
 }
 
 // Execute executes the workload
@@ -222,6 +282,7 @@ func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, mainWg *sync.
 	}
 
 	if app.Config.TotalRowCount != 0 {
+		app.markRunStarted()
 		app.executeInsertWorkers(insertConcurrency, mainWg)
 	}
 	return nil
@@ -229,6 +290,8 @@ func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, mainWg *sync.
 
 // handleWorkloadExecution handles the workload execution
 func (app *WorkloadApp) handleWorkloadExecution(insertConcurrency, updateConcurrency, deleteConcurrency int, wg *sync.WaitGroup) {
+	app.markRunStarted()
+
 	plog.Info("start running workload",
 		zap.String("workloadType", app.Config.WorkloadType),
 		zap.Float64("largeRatio", app.Config.LargeRowRatio),
@@ -295,7 +358,7 @@ func (app *WorkloadApp) executeInsertWorkers(insertConcurrency int, wg *sync.Wai
 
 			plog.Info("start insert worker to write data to db", zap.Int("worker", workerID), zap.String("db", db.Name))
 
-			for {
+			for !app.shouldStop() {
 				flushedRows, err := app.runTransaction(conn, func() (uint64, error) {
 					return app.doInsertOnce(conn)
 				})
@@ -327,6 +390,7 @@ func (app *WorkloadApp) executeInsertWorkers(insertConcurrency int, wg *sync.Wai
 				if flushedRows != 0 {
 					app.Stats.FlushedRowCount.Add(flushedRows)
 				}
+				app.throttleRows(uint64(max(1, app.Config.BatchSize)))
 			}
 		}(i)
 	}
@@ -354,17 +418,10 @@ func (app *WorkloadApp) doInsertOnce(conn *sql.Conn) (uint64, error) {
 		err error
 	)
 
-	switch app.Config.WorkloadType {
-	case uuu:
-		insertSQL, values := app.Workload.(*puuu.UUUWorkload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
+	if valueWorkload, ok := app.Workload.(schema.InsertValuesWorkload); ok {
+		insertSQL, values := valueWorkload.BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
 		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
-	case bank2:
-		insertSQL, values := app.Workload.(*pbank2.Bank2Workload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
-		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
-	case wideTableWithJSON:
-		insertSQL, values := app.Workload.(*pwidetablewithjson.WideTableWithJSONWorkload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
-		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
-	default:
+	} else {
 		insertSQL := app.Workload.BuildInsertSql(tableIndex, app.Config.BatchSize)
 		res, err = app.execute(conn, insertSQL, tableIndex)
 	}
