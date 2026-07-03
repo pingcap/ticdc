@@ -24,7 +24,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/gin-gonic/gin/binding"
 	"github.com/imdario/mergo"
 	"github.com/pingcap/errors"
@@ -606,7 +605,7 @@ func adjustTopicOptions(
 	// make sure user input parameters are valid.
 	var err error
 	if exists {
-		err = adjustExistingTopicOptions(ctx, admin, options, topic, info)
+		err = adjustExistingTopicOption(ctx, admin, options, topic, info)
 	} else {
 		err = adjustNewTopicOptions(admin, options, topic)
 	}
@@ -634,7 +633,7 @@ func validateRequiredAcks(
 	return validateMinInsyncReplicas(ctx, admin, topics, topic, int(options.ReplicationFactor))
 }
 
-func adjustExistingTopicOptions(
+func adjustExistingTopicOption(
 	ctx context.Context,
 	admin ClusterAdminClient,
 	options *options,
@@ -645,9 +644,7 @@ func adjustExistingTopicOptions(
 	if err != nil {
 		return err
 	}
-	if err = options.setMaxMessageBytes(topicMaxMessageBytes); err != nil {
-		return err
-	}
+	options.MaxMessageBytes = topicMaxMessageBytes
 
 	// no need to create the topic,
 	// but we would have to log user if they found enter wrong topic name later
@@ -673,9 +670,7 @@ func adjustNewTopicOptions(
 	if err != nil {
 		return err
 	}
-	if err = options.setMaxMessageBytes(brokerMessageMaxBytes); err != nil {
-		return err
-	}
+	options.MaxMessageBytes = brokerMessageMaxBytes
 
 	// topic not exists yet, and user does not specify the `partition-num` in the sink uri.
 	if options.PartitionNum == 0 {
@@ -717,16 +712,6 @@ func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, error) {
 		return 0, errors.Trace(err)
 	}
 	return maxMessageBytes, nil
-}
-
-func (o *options) setMaxMessageBytes(kafkaMaxMessageBytes int) error {
-	// Sarama ignores Producer.MaxMessageBytes when it is not smaller than MaxRequestSize.
-	o.MaxMessageBytes = min(kafkaMaxMessageBytes, int(sarama.MaxRequestSize)-1)
-	if o.MaxMessageBytes <= 0 {
-		return cerror.ErrKafkaInvalidConfig.GenWithStack(
-			"invalid Kafka max message bytes %d", kafkaMaxMessageBytes)
-	}
-	return nil
 }
 
 func validateMinInsyncReplicas(
