@@ -14,18 +14,73 @@
 package kafka
 
 import (
+	"encoding/json"
+	"strconv"
+	"strings"
+
+	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/kafka/internal/logutil"
 )
 
 // DetermineEventType infers the event type based on MessageLogInfo content.
 func DetermineEventType(info *common.MessageLogInfo) string {
-	return logutil.DetermineEventType(info)
+	if info == nil {
+		return "unknown"
+	}
+	if info.DDL != nil {
+		return "ddl"
+	}
+	if info.Checkpoint != nil {
+		return "checkpoint"
+	}
+	if len(info.Rows) > 0 {
+		return "dml"
+	}
+	return "unknown"
 }
 
 // BuildEventLogContext builds a textual representation of event info.
 func BuildEventLogContext(keyspace, changefeed string, info *common.MessageLogInfo) string {
-	return logutil.BuildEventLogContext(keyspace, changefeed, info)
+	var sb strings.Builder
+	sb.WriteString("keyspace=")
+	sb.WriteString(keyspace)
+	sb.WriteString(", changefeed=")
+	sb.WriteString(changefeed)
+	sb.WriteString(", eventType=")
+	sb.WriteString(DetermineEventType(info))
+
+	if info == nil {
+		return sb.String()
+	}
+
+	if len(info.Rows) > 0 {
+		if rowsStr := formatDMLInfo(info.Rows); rowsStr != "" {
+			sb.WriteString(", dmlInfo=")
+			sb.WriteString(rowsStr)
+		}
+	}
+
+	if info.DDL != nil {
+		if info.DDL.Query != "" {
+			sb.WriteString(", ddlQuery=")
+			sb.WriteString(strconv.Quote(info.DDL.Query))
+		}
+		if info.DDL.StartTs != 0 {
+			sb.WriteString(", ddlStartTs=")
+			sb.WriteString(strconv.FormatUint(info.DDL.StartTs, 10))
+		}
+		if info.DDL.CommitTs != 0 {
+			sb.WriteString(", ddlCommitTs=")
+			sb.WriteString(strconv.FormatUint(info.DDL.CommitTs, 10))
+		}
+	}
+
+	if info.Checkpoint != nil && info.Checkpoint.CommitTs != 0 {
+		sb.WriteString(", checkpointTs=")
+		sb.WriteString(strconv.FormatUint(info.Checkpoint.CommitTs, 10))
+	}
+
+	return sb.String()
 }
 
 // AnnotateEventError logs the event context and annotates the error with that context.
@@ -34,5 +89,19 @@ func AnnotateEventError(
 	info *common.MessageLogInfo,
 	err error,
 ) error {
-	return logutil.AnnotateEventError(keyspace, changefeed, info, err)
+	if err == nil {
+		return nil
+	}
+	if contextStr := BuildEventLogContext(keyspace, changefeed, info); contextStr != "" {
+		return errors.Annotate(err, contextStr+"; ErrorInfo:"+err.Error())
+	}
+	return err
+}
+
+func formatDMLInfo(rows []common.RowLogInfo) string {
+	data, err := json.Marshal(rows)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }

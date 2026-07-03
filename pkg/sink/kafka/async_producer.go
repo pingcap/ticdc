@@ -22,7 +22,6 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/kafka/internal/logutil"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -152,7 +151,7 @@ func (p *kafkaAsyncProducer) enqueueAsyncSendError(
 	logInfo *common.MessageLogInfo,
 	err error,
 ) {
-	errWithInfo := logutil.AnnotateEventError(
+	errWithInfo := AnnotateEventError(
 		keyspace,
 		changefeed,
 		logInfo,

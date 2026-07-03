@@ -22,7 +22,6 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/kafka/internal/logutil"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -148,7 +147,7 @@ func buildRecord(topic string, partition int32, message *common.Message) *kgo.Re
 
 func (p *kafkaSyncProducer) wrapSendError(message *common.Message, err error) error {
 	if err != nil {
-		err = logutil.AnnotateEventError(
+		err = AnnotateEventError(
 			p.id.Keyspace(),
 			p.id.Name(),
 			message.LogInfo,

@@ -69,30 +69,6 @@ func (a *kafkaAdminClient) newRequestContext() (context.Context, context.CancelF
 	return context.WithTimeout(a.client.Context(), a.timeout)
 }
 
-func (a *kafkaAdminClient) GetAllBrokers() []Broker {
-	startTime := time.Now()
-	ctx, cancel := a.newRequestContext()
-	defer cancel()
-
-	meta, err := a.admin.BrokerMetadata(ctx)
-	if err != nil {
-		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetAllBrokers, err, time.Since(startTime))
-		log.Warn("Kafka admin client fetch broker metadata failed",
-			zap.String("keyspace", a.changefeed.Keyspace()),
-			zap.String("changefeed", a.changefeed.Name()),
-			zap.Error(err))
-		return nil
-	}
-
-	observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetAllBrokers, nil, time.Since(startTime))
-	brokerIDs := meta.Brokers.NodeIDs()
-	brokers := make([]Broker, 0, len(brokerIDs))
-	for _, brokerID := range brokerIDs {
-		brokers = append(brokers, Broker{ID: brokerID})
-	}
-	return brokers
-}
-
 func (a *kafkaAdminClient) GetBrokerConfig(configName string) (value string, err error) {
 	startTime := time.Now()
 	defer func() {

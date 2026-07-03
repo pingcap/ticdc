@@ -51,10 +51,10 @@ func (c *kafkaMetricsCollector) Run(ctx context.Context) {
 }
 
 func newKafkaMetricsHook(changefeedID common.ChangeFeedID, clientType string) *metricsHook {
-	hook := newMetricsHook(clientType)
-	hook.bindMetrics(
+	return newMetricsHook(
 		changefeedID.Keyspace(),
 		changefeedID.Name(),
+		clientType,
 		metricVectors{
 			RequestsInFlight:  kafkaClientRequestsInFlightGauge,
 			OutgoingByteRate:  kafkaClientOutgoingByteTotalGauge,
@@ -73,7 +73,6 @@ func newKafkaMetricsHook(changefeedID common.ChangeFeedID, clientType string) *m
 			LegacyRecordsPerRequest: recordsPerRequestGauge,
 		},
 	)
-	return hook
 }
 
 // NewKafkaFactory constructs a Factory.
@@ -125,7 +124,7 @@ func (f *kafkaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error)
 	return producer, nil
 }
 
-func (f *kafkaFactory) MetricsCollector(_ ClusterAdminClient) MetricsCollector {
+func (f *kafkaFactory) MetricsCollector() MetricsCollector {
 	return &kafkaMetricsCollector{changefeedID: f.changefeedID, hooks: []*metricsHook{
 		f.asyncMetricsHook,
 		f.syncMetricsHook,

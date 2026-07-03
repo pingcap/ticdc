@@ -29,7 +29,7 @@ type Factory interface {
 	// AsyncProducer creates an async producer to writer message to kafka
 	AsyncProducer(ctx context.Context) (AsyncProducer, error)
 	// MetricsCollector returns the kafka metrics collector
-	MetricsCollector(adminClient ClusterAdminClient) MetricsCollector
+	MetricsCollector() MetricsCollector
 }
 
 // FactoryCreator defines the type of factory creator.

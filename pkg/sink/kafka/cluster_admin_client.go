@@ -20,17 +20,9 @@ type TopicDetail struct {
 	ReplicationFactor int16
 }
 
-// Broker represents a Kafka broker.
-type Broker struct {
-	ID int32
-}
-
 // ClusterAdminClient is the administrative client for Kafka,
 // which supports managing and inspecting topics, brokers, configurations and ACLs.
 type ClusterAdminClient interface {
-	// GetAllBrokers return all brokers among the cluster
-	GetAllBrokers() []Broker
-
 	// GetBrokerConfig return the broker level configuration with the `configName`
 	GetBrokerConfig(configName string) (string, error)
 

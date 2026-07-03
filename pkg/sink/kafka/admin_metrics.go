@@ -20,7 +20,6 @@ import (
 )
 
 const (
-	adminMethodGetAllBrokers       = "get_all_brokers"
 	adminMethodGetBrokerConfig     = "get_broker_config"
 	adminMethodGetTopicConfig      = "get_topic_config"
 	adminMethodGetTopicsMeta       = "get_topics_meta"

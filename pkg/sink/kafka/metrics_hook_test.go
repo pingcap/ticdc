@@ -43,8 +43,7 @@ func TestMetricsHookRecordsLegacyMetricsAndCleanup(t *testing.T) {
 		[]string{"namespace", "changefeed", "type"},
 	)
 
-	hook := newMetricsHook("async_producer")
-	hook.bindMetrics("default", "cf", metricVectors{
+	hook := newMetricsHook("default", "cf", "async_producer", metricVectors{
 		LegacyOutgoingByteRate:  outgoingByteRate,
 		LegacyRequestRate:       requestRate,
 		LegacyRequestsInFlight:  requestsInFlight,

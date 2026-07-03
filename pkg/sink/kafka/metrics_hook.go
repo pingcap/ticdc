@@ -14,9 +14,7 @@
 package kafka
 
 import (
-	"context"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -24,12 +22,10 @@ import (
 )
 
 type metricsHook struct {
-	metricsMu    sync.RWMutex
-	metricsBound bool
-	keyspace     string
-	changefeed   string
-	clientType   string
-	metrics      metricVectors
+	keyspace   string
+	changefeed string
+	clientType string
+	metrics    metricVectors
 }
 
 type metricVectors struct {
@@ -55,74 +51,45 @@ const (
 	legacyMetricP99 = "p99"
 )
 
-func newMetricsHook(clientType string) *metricsHook {
-	return &metricsHook{clientType: clientType}
-}
-
-func (h *metricsHook) bindMetrics(
+func newMetricsHook(
 	keyspace string,
 	changefeed string,
+	clientType string,
 	metrics metricVectors,
-) {
-	h.metricsMu.Lock()
-	defer h.metricsMu.Unlock()
-
-	h.keyspace = keyspace
-	h.changefeed = changefeed
-	h.metrics = metrics
-	h.metricsBound = true
-}
-
-func (h *metricsHook) loadMetrics() (string, string, metricVectors, bool) {
-	h.metricsMu.RLock()
-	defer h.metricsMu.RUnlock()
-
-	return h.keyspace, h.changefeed, h.metrics, h.metricsBound
-}
-
-func (h *metricsHook) Run(ctx context.Context) {
-	_, _, _, bound := h.loadMetrics()
-
-	if !bound {
-		<-ctx.Done()
-		return
+) *metricsHook {
+	return &metricsHook{
+		keyspace:   keyspace,
+		changefeed: changefeed,
+		clientType: clientType,
+		metrics:    metrics,
 	}
-
-	<-ctx.Done()
-	h.cleanupMetrics()
 }
 
 func (h *metricsHook) cleanupMetrics() {
-	keyspace, changefeed, metrics, bound := h.loadMetrics()
-
-	if !bound {
-		return
-	}
-
 	labels := prometheus.Labels{
-		"namespace":  keyspace,
-		"changefeed": changefeed,
+		"namespace":  h.keyspace,
+		"changefeed": h.changefeed,
 		"client":     h.clientType,
 	}
-	deleteGaugeVecPartialMatch(metrics.OutgoingByteRate, labels)
-	deleteGaugeVecPartialMatch(metrics.RequestRate, labels)
-	deleteGaugeVecPartialMatch(metrics.ResponseRate, labels)
-	deleteGaugeVecPartialMatch(metrics.RequestsInFlight, labels)
-	deleteHistogramVecPartialMatch(metrics.RequestLatency, labels)
-	deleteHistogramVecPartialMatch(metrics.CompressionRatio, labels)
-	deleteHistogramVecPartialMatch(metrics.RecordsPerRequest, labels)
+	deleteGaugeVecPartialMatch(h.metrics.OutgoingByteRate, labels)
+	deleteGaugeVecPartialMatch(h.metrics.RequestRate, labels)
+	deleteGaugeVecPartialMatch(h.metrics.ResponseRate, labels)
+	deleteGaugeVecPartialMatch(h.metrics.RequestsInFlight, labels)
+	deleteHistogramVecPartialMatch(h.metrics.RequestLatency, labels)
+	deleteHistogramVecPartialMatch(h.metrics.CompressionRatio, labels)
+	deleteHistogramVecPartialMatch(h.metrics.RecordsPerRequest, labels)
 
 	legacyLabels := prometheus.Labels{
-		"namespace":  keyspace,
-		"changefeed": changefeed,
+		"namespace":  h.keyspace,
+		"changefeed": h.changefeed,
 	}
-	deleteGaugeVecPartialMatch(metrics.LegacyOutgoingByteRate, legacyLabels)
-	deleteGaugeVecPartialMatch(metrics.LegacyRequestRate, legacyLabels)
-	deleteGaugeVecPartialMatch(metrics.LegacyResponseRate, legacyLabels)
-	deleteGaugeVecPartialMatch(metrics.LegacyRequestsInFlight, legacyLabels)
-	deleteGaugeVecPartialMatch(metrics.LegacyRequestLatency, legacyLabels)
-	deleteGaugeVecPartialMatch(metrics.LegacyCompressionRatio, legacyLabels)
-	deleteGaugeVecPartialMatch(metrics.LegacyRecordsPerRequest, legacyLabels)
+	deleteGaugeVecPartialMatch(h.metrics.LegacyOutgoingByteRate, legacyLabels)
+	deleteGaugeVecPartialMatch(h.metrics.LegacyRequestRate, legacyLabels)
+	deleteGaugeVecPartialMatch(h.metrics.LegacyResponseRate, legacyLabels)
+	deleteGaugeVecPartialMatch(h.metrics.LegacyRequestsInFlight, legacyLabels)
+	deleteGaugeVecPartialMatch(h.metrics.LegacyRequestLatency, legacyLabels)
+	deleteGaugeVecPartialMatch(h.metrics.LegacyCompressionRatio, legacyLabels)
+	deleteGaugeVecPartialMatch(h.metrics.LegacyRecordsPerRequest, legacyLabels)
 }
 
 func (h *metricsHook) RecordBrokerWrite(nodeID int32, bytesWritten int, err error) {
@@ -248,15 +215,11 @@ type metricsContext struct {
 }
 
 func (h *metricsHook) loadMetricsContext() (metricsContext, bool) {
-	keyspace, changefeed, metrics, bound := h.loadMetrics()
-	if !bound {
-		return metricsContext{}, false
-	}
 	return metricsContext{
-		keyspace:   keyspace,
-		changefeed: changefeed,
+		keyspace:   h.keyspace,
+		changefeed: h.changefeed,
 		clientType: h.clientType,
-		metrics:    metrics,
+		metrics:    h.metrics,
 	}, true
 }
 
