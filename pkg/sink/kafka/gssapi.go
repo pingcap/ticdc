@@ -259,12 +259,12 @@ func newKrb5Token(
 		return nil, errors.Trace(err)
 	}
 
-	prefix := make([]byte, 2)
-	binary.BigEndian.PutUint16(prefix, tokIDKrbAPReq)
 	body, err := apReq.Marshal()
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	prefix := make([]byte, 2, 2+len(body))
+	binary.BigEndian.PutUint16(prefix, tokIDKrbAPReq)
 	return append(prefix, body...), nil
 }
 

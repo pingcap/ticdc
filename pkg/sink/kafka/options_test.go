@@ -15,7 +15,6 @@ package kafka
 
 import (
 	"context"
-	stdErrors "errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -133,11 +132,11 @@ func (f *kafkaAdminFixture) getTopicConfig(topicName string, configName string) 
 
 func (f *kafkaAdminFixture) createTopic(detail *TopicDetail, _ bool) error {
 	if detail.ReplicationFactor > mockClusterReplicationFactor {
-		return stdErrors.New("invalid replication factor")
+		return errors.New("invalid replication factor")
 	}
 	if _, ok := f.brokerConfig[MinInsyncReplicasConfigName]; !ok &&
 		detail.ReplicationFactor != mockClusterReplicationFactor {
-		return stdErrors.New("policy violation")
+		return errors.New("policy violation")
 	}
 	f.topics[detail.Name] = *detail
 	return nil

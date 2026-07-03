@@ -638,7 +638,7 @@ func retrieveOperatorsForBootstrapResponse(
 	manager *dispatchermanager.DispatcherManager,
 	response *heartbeatpb.MaintainerBootstrapResponse,
 ) {
-	manager.GetCurrentOperatorMap().Range(func(key, value any) bool {
+	manager.GetCurrentOperatorMap().Range(func(_, value any) bool {
 		req := value.(dispatchermanager.SchedulerDispatcherRequest)
 		dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
 		if common.IsRedoMode(req.Config.Mode) {

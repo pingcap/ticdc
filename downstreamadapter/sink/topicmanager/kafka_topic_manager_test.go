@@ -15,11 +15,11 @@ package topicmanager
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
 )

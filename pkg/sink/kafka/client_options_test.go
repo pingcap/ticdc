@@ -38,7 +38,6 @@ func TestNewRequiredAcks(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			require.Equal(t, tc.expected, newRequiredAcks(&clientOptions{RequiredAcks: tc.requiredAcks}))
@@ -64,7 +63,6 @@ func TestMaxTimeoutWithDefault(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			require.Equal(t, tc.expected, maxTimeoutWithDefault(tc.readTimeout, tc.writeTimeout))
@@ -122,7 +120,6 @@ func TestNewCompressionOptionMapsToProducerBatchCompression(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.compression, func(t *testing.T) {
 			t.Parallel()
 

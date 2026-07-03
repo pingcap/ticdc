@@ -225,12 +225,12 @@ func (h *metricsHook) loadMetricsContext() (metricsContext, bool) {
 
 func deleteGaugeVecPartialMatch(gaugeVec *prometheus.GaugeVec, labels prometheus.Labels) {
 	if gaugeVec != nil {
-		gaugeVec.MetricVec.DeletePartialMatch(labels)
+		gaugeVec.DeletePartialMatch(labels)
 	}
 }
 
 func deleteHistogramVecPartialMatch(histogramVec *prometheus.HistogramVec, labels prometheus.Labels) {
 	if histogramVec != nil {
-		histogramVec.MetricVec.DeletePartialMatch(labels)
+		histogramVec.DeletePartialMatch(labels)
 	}
 }

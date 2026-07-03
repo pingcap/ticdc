@@ -15,12 +15,11 @@ package kafka
 
 import (
 	"context"
-	stderrors "errors"
 	"testing"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
@@ -31,7 +30,7 @@ func TestAsyncSendClosedProducer(t *testing.T) {
 
 	err := producer.AsyncSend(context.Background(), "topic", 0, &codeccommon.Message{})
 
-	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
+	require.ErrorIs(t, err, errors.ErrKafkaProducerClosed)
 }
 
 func TestAsyncRunCallbackReturnsQueuedErrorAndCloses(t *testing.T) {
@@ -40,7 +39,7 @@ func TestAsyncRunCallbackReturnsQueuedErrorAndCloses(t *testing.T) {
 		closed:       atomic.NewBool(false),
 		errCh:        make(chan error, 1),
 	}
-	producer.errCh <- stderrors.New("queued async error")
+	producer.errCh <- errors.New("queued async error")
 
 	err := producer.AsyncRunCallback(context.Background())
 

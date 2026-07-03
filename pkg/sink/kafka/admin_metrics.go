@@ -57,8 +57,8 @@ func cleanupAdminMetrics(keyspace string, changefeed string) {
 		"namespace":  keyspace,
 		"changefeed": changefeed,
 	}
-	adminCallCount.MetricVec.DeletePartialMatch(labels)
-	adminCallLatency.MetricVec.DeletePartialMatch(labels)
+	adminCallCount.DeletePartialMatch(labels)
+	adminCallLatency.DeletePartialMatch(labels)
 }
 
 func observeAdminCall(

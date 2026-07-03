@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
-	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -51,7 +50,6 @@ type Controller struct {
 	messageCenter  messaging.MessageCenter
 	spanController *span.Controller
 	nodeManager    *watcher.NodeManager
-	splitter       *split.Splitter
 
 	// admissionMu serializes removing-mode quiesce with normal operator side effects.
 	// A normal operator must hold the read side from its final allow check through

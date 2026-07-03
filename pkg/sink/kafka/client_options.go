@@ -63,10 +63,7 @@ const (
 )
 
 func maxTimeoutWithDefault(readTimeout, writeTimeout time.Duration) time.Duration {
-	timeout := readTimeout
-	if writeTimeout > timeout {
-		timeout = writeTimeout
-	}
+	timeout := max(readTimeout, writeTimeout)
 	if timeout <= 0 {
 		timeout = defaultRequestTimeout
 	}

@@ -14,12 +14,11 @@
 package kafka
 
 import (
-	stderrors "errors"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/errors"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -27,15 +26,15 @@ import (
 func TestSyncProducerClosedReturnsProducerClosed(t *testing.T) {
 	producer := &kafkaSyncProducer{closed: atomic.NewBool(true)}
 
-	err := producer.SendMessage("topic", 1, &codeccommon.Message{})
-	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
+	err := producer.SendMessage("topic", 1, &codecCommon.Message{})
+	require.ErrorIs(t, err, errors.ErrKafkaProducerClosed)
 
-	err = producer.SendMessages("topic", 1, &codeccommon.Message{})
-	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
+	err = producer.SendMessages("topic", 1, &codecCommon.Message{})
+	require.ErrorIs(t, err, errors.ErrKafkaProducerClosed)
 }
 
 func TestBuildRecord(t *testing.T) {
-	message := &codeccommon.Message{
+	message := &codecCommon.Message{
 		Key:   []byte("key"),
 		Value: []byte("value"),
 	}
@@ -55,13 +54,13 @@ func TestSyncProducerWrapSendErrorAnnotatesEventContext(t *testing.T) {
 
 	testCases := []struct {
 		name     string
-		message  *codeccommon.Message
+		message  *codecCommon.Message
 		contains []string
 	}{
 		{
 			name: "ddl",
-			message: &codeccommon.Message{LogInfo: &codeccommon.MessageLogInfo{
-				DDL: &codeccommon.DDLLogInfo{
+			message: &codecCommon.Message{LogInfo: &codecCommon.MessageLogInfo{
+				DDL: &codecCommon.DDLLogInfo{
 					Query:    "create table t(id int primary key)",
 					StartTs:  10,
 					CommitTs: 20,
@@ -78,8 +77,8 @@ func TestSyncProducerWrapSendErrorAnnotatesEventContext(t *testing.T) {
 		},
 		{
 			name: "checkpoint",
-			message: &codeccommon.Message{LogInfo: &codeccommon.MessageLogInfo{
-				Checkpoint: &codeccommon.CheckpointLogInfo{CommitTs: 30},
+			message: &codecCommon.Message{LogInfo: &codecCommon.MessageLogInfo{
+				Checkpoint: &codecCommon.CheckpointLogInfo{CommitTs: 30},
 			}},
 			contains: []string{
 				"keyspace=default",
@@ -91,10 +90,9 @@ func TestSyncProducerWrapSendErrorAnnotatesEventContext(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			err := producer.wrapSendError(tc.message, stderrors.New("send failed"))
-			require.ErrorIs(t, err, cerror.ErrKafkaSendMessage)
+			err := producer.wrapSendError(tc.message, errors.New("send failed"))
+			require.ErrorIs(t, err, errors.ErrKafkaSendMessage)
 			require.ErrorContains(t, err, "send failed")
 			for _, expected := range tc.contains {
 				require.ErrorContains(t, err, expected)
