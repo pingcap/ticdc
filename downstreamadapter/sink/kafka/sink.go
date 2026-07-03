@@ -120,7 +120,7 @@ func newWithComponents(
 		changefeedID:     changefeedID,
 		dmlProducer:      asyncProducer,
 		ddlProducer:      syncProducer,
-		metricsCollector: comp.factory.MetricsCollector(comp.adminClient),
+		metricsCollector: comp.factory.MetricsCollector(),
 
 		partitionRule: helper.GetDDLDispatchRule(protocol),
 		protocol:      protocol,

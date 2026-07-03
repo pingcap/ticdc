@@ -59,20 +59,6 @@ func (mr *MockClusterAdminClientMockRecorder) CreateTopic(detail, validateOnly i
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTopic", reflect.TypeOf((*MockClusterAdminClient)(nil).CreateTopic), detail, validateOnly)
 }
 
-// GetAllBrokers mocks base method.
-func (m *MockClusterAdminClient) GetAllBrokers() []Broker {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetAllBrokers")
-	ret0, _ := ret[0].([]Broker)
-	return ret0
-}
-
-// GetAllBrokers indicates an expected call of GetAllBrokers.
-func (mr *MockClusterAdminClientMockRecorder) GetAllBrokers() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllBrokers", reflect.TypeOf((*MockClusterAdminClient)(nil).GetAllBrokers))
-}
-
 // GetBrokerConfig mocks base method.
 func (m *MockClusterAdminClient) GetBrokerConfig(configName string) (string, error) {
 	m.ctrl.T.Helper()

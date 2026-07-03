@@ -28,13 +28,6 @@ var defaultOpts = []goleak.Option{
 	// The stack top is usually runtime_pollWait, so match by any-frame.
 	goleak.IgnoreAnyFunction("github.com/godbus/dbus.(*Conn).inWorker"),
 	goleak.IgnoreAnyFunction("github.com/godbus/dbus/v5.(*Conn).inWorker"),
-	// library used by sarama, ref: https://github.com/rcrowley/go-metrics/pull/266
-	goleak.IgnoreTopFunction("github.com/rcrowley/go-metrics.(*meterArbiter).tick"),
-	// Because we close the sarama producer asynchronously, so we have to ignore these funcs.
-	goleak.IgnoreTopFunction("github.com/Shopify/sarama.(*client).backgroundMetadataUpdater"),
-	goleak.IgnoreTopFunction("github.com/Shopify/sarama.(*Broker).responseReceiver"),
-	goleak.IgnoreTopFunction("github.com/IBM/sarama.(*client).backgroundMetadataUpdater"),
-	goleak.IgnoreTopFunction("github.com/IBM/sarama.(*Broker).responseReceiver"),
 	goleak.IgnoreTopFunction("github.com/lestrrat-go/httprc.runFetchWorker"),
 }
 

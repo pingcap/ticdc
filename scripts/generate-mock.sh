@@ -37,8 +37,6 @@ fi
 "$MOCKGEN" -source pkg/sink/kafka/cluster_admin_client.go -destination pkg/sink/kafka/cluster_admin_client_mock.go -package kafka
 "$MOCKGEN" -source pkg/sink/kafka/factory.go -destination pkg/sink/kafka/factory_mock.go -package kafka
 "$MOCKGEN" -source pkg/sink/kafka/metrics_collector.go -destination pkg/sink/kafka/metrics_collector_mock.go -package kafka
-"$MOCKGEN" -source pkg/sink/kafka/admin.go -destination pkg/sink/kafka/admin_mock.go -package kafka
-"$MOCKGEN" -source pkg/sink/kafka/sarama_sync_producer.go -destination pkg/sink/kafka/sarama_sync_producer_mock.go -package kafka
 "$MOCKGEN" -source pkg/keyspace/keyspace_manager.go -destination pkg/keyspace/keyspace_manager_mock.go -package keyspace
 "$MOCKGEN" -source pkg/txnutil/gc/gc_manager.go -destination pkg/txnutil/gc/gc_manager_mock.go -package gc
 "$MOCKGEN" -source pkg/txnutil/gc/gc_client.go -destination pkg/txnutil/gc/gc_client_mock.go -package gc

@@ -87,7 +87,7 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 	factory := kafka.NewMockFactory(ctrl)
 	factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
 	factory.EXPECT().SyncProducer(gomock.Any()).Return(syncProducer, nil)
-	factory.EXPECT().MetricsCollector(adminClient).Return(metricsCollector)
+	factory.EXPECT().MetricsCollector().Return(metricsCollector)
 
 	eventRouter, err := eventrouter.NewEventRouter(sinkConfig, topic, false, false)
 	if err != nil {

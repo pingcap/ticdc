@@ -13,17 +13,7 @@
 
 package common
 
-import (
-	"encoding/binary"
-	"encoding/json"
-)
-
-// MaxRecordOverhead is used to calculate message size by sarama kafka client.
-// reference: https://github.com/IBM/sarama/blob/
-// 66521126c71c522c15a36663ae9cddc2b024c799/async_producer.go#L233
-// For TiCDC, minimum supported kafka version is `0.11.0.2`,
-// which will be treated as `version = 2` by sarama producer.
-const MaxRecordOverhead = 5*binary.MaxVarintLen32 + binary.MaxVarintLen64 + 1
+import "encoding/json"
 
 // MessageType is the type of message, which is used by MqSink and RedoLog.
 type MessageType int
@@ -87,11 +77,9 @@ type CheckpointLogInfo struct {
 	CommitTs uint64
 }
 
-// Length returns the expected size of the Kafka message
-// We didn't append any `Headers` when send the message, so ignore the calculations related to it.
-// If `ProducerMessage` Headers fields used, this method should also adjust.
+// Length returns the encoded key/value payload size of the sink message.
 func (m *Message) Length() int {
-	return len(m.Key) + len(m.Value) + MaxRecordOverhead
+	return len(m.Key) + len(m.Value)
 }
 
 // GetRowsCount returns the number of rows batched in one Message

@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,11 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kafka
+package common
 
-import "context"
+import (
+	"testing"
 
-// MetricsCollector is the interface for kafka metrics collector.
-type MetricsCollector interface {
-	Run(ctx context.Context)
+	"github.com/stretchr/testify/require"
+)
+
+func TestMessageLengthIsPayloadSize(t *testing.T) {
+	message := &Message{
+		Key:   []byte("key"),
+		Value: []byte("value"),
+	}
+
+	require.Equal(t, len(message.Key)+len(message.Value), message.Length())
 }

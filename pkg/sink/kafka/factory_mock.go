@@ -66,17 +66,17 @@ func (mr *MockFactoryMockRecorder) AsyncProducer(ctx interface{}) *gomock.Call {
 }
 
 // MetricsCollector mocks base method.
-func (m *MockFactory) MetricsCollector(adminClient ClusterAdminClient) MetricsCollector {
+func (m *MockFactory) MetricsCollector() MetricsCollector {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MetricsCollector", adminClient)
+	ret := m.ctrl.Call(m, "MetricsCollector")
 	ret0, _ := ret[0].(MetricsCollector)
 	return ret0
 }
 
 // MetricsCollector indicates an expected call of MetricsCollector.
-func (mr *MockFactoryMockRecorder) MetricsCollector(adminClient interface{}) *gomock.Call {
+func (mr *MockFactoryMockRecorder) MetricsCollector() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MetricsCollector", reflect.TypeOf((*MockFactory)(nil).MetricsCollector), adminClient)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MetricsCollector", reflect.TypeOf((*MockFactory)(nil).MetricsCollector))
 }
 
 // SyncProducer mocks base method.
