@@ -127,6 +127,7 @@ func newRequestedStore(scheduler *regionRequestScheduler, storeAddr string) *req
 			scheduler.upstream,
 			scheduler.eventSink,
 			scheduler.failureHandler,
+			scheduler.memoryQuota,
 		)
 		rs.requestWorkers = append(rs.requestWorkers, requestWorker)
 	}

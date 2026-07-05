@@ -121,6 +121,7 @@ func (s *mockSubscriptionClient) AllocSubscriptionID() logpuller.SubscriptionID 
 
 func (s *mockSubscriptionClient) Subscribe(
 	subID logpuller.SubscriptionID,
+	meta logpuller.SubscriptionMeta,
 	span heartbeatpb.TableSpan,
 	startTs uint64,
 	consumeKVEvents func(raw []common.RawKVEntry, wakeCallback func()) bool,
@@ -128,6 +129,7 @@ func (s *mockSubscriptionClient) Subscribe(
 	advanceInterval int64,
 	bdrMode bool,
 ) {
+	_ = meta
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.subscriptions[subID] = &mockSubscriptionStat{

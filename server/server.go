@@ -201,6 +201,7 @@ func (c *server) initialize(ctx context.Context) error {
 		&logpuller.SubscriptionClientConfig{
 			RegionRequestWorkerPerStore:   8,
 			PendingRegionRequestQueueSize: conf.Debug.Puller.PendingRegionRequestQueueSize,
+			MemoryQuota:                   conf.Debug.Puller.MemoryQuota,
 		}, c.pdClient,
 		txnutil.NewLockerResolver(),
 		c.security,

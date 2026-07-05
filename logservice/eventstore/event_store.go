@@ -460,7 +460,7 @@ func (e *eventStore) Close(_ context.Context) error {
 }
 
 func (e *eventStore) RegisterDispatcher(
-	_ common.ChangeFeedID,
+	changefeedID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	dispatcherSpan *heartbeatpb.TableSpan,
 	startTs uint64,
@@ -678,7 +678,15 @@ func (e *eventStore) RegisterDispatcher(
 	serverConfig := config.GetGlobalServerConfig()
 	resolvedTsAdvanceInterval := int64(serverConfig.KVClient.AdvanceIntervalInMs)
 	// Note: don't hold any lock when call Subscribe
-	e.subClient.Subscribe(subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, bdrMode)
+	e.subClient.Subscribe(
+		subStat.subID,
+		logpuller.NewChangefeedSubscriptionMeta(changefeedID),
+		*dispatcherSpan,
+		startTs,
+		consumeKVEvents,
+		advanceResolvedTs,
+		resolvedTsAdvanceInterval,
+		bdrMode)
 	log.Info("new subscription created",
 		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Uint64("startTs", startTs),

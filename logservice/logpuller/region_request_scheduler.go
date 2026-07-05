@@ -31,9 +31,11 @@ import (
 )
 
 const (
-	deferReasonStorePending = "store_pending"
-	deferReasonStoreQuota   = "store_quota"
-	deferReasonWorkerCache  = "worker_cache"
+	deferReasonStorePending  = "store_pending"
+	deferReasonStoreQuota    = "store_quota"
+	deferReasonWorkerCache   = "worker_cache"
+	deferReasonMemoryWarming = "memory_warming"
+	deferReasonMemoryFreeze  = "memory_freeze"
 )
 
 // regionRequestScheduler owns region request admission from the global
@@ -44,6 +46,7 @@ type regionRequestScheduler struct {
 
 	eventSink      *regionEventSink
 	failureHandler *regionFailureHandler
+	memoryQuota    *memoryQuotaController
 
 	// queue stores newly submitted tasks before they are routed to a TiKV store.
 	queue *priorityqueue.PriorityQueue[*regionPriorityTask]
@@ -68,6 +71,7 @@ func newRegionRequestScheduler(client *subscriptionClient) *regionRequestSchedul
 		upstream:        client.upstream,
 		eventSink:       client.eventSink,
 		failureHandler:  client.failureHandler,
+		memoryQuota:     client.memoryQuota,
 		queue:           priorityqueue.New[*regionPriorityTask](),
 		schedulerNotify: make(chan struct{}, 1),
 		storeAvailable:  chann.NewUnlimitedChannelDefault[*requestedStore](),
@@ -183,6 +187,14 @@ func (s *regionRequestScheduler) Close() {
 	})
 }
 
+func (s *regionRequestScheduler) NotifyAvailable() {
+	s.stores.Range(func(_, value any) bool {
+		value.(*requestedStore).NotifyAvailable()
+		return true
+	})
+	s.notifyScheduler()
+}
+
 func (s *regionRequestScheduler) notifyScheduler() {
 	select {
 	case s.schedulerNotify <- struct{}{}:
@@ -280,6 +292,11 @@ func (s *regionRequestScheduler) tryAdmitTask(
 	region regionInfo,
 ) (bool, string, error) {
 	force := task.Priority() <= forcedPriorityBase
+	if s.memoryQuota != nil {
+		if ok, reason := s.memoryQuota.allowNewScan(region.subscribedSpan); !ok {
+			return false, reason, nil
+		}
+	}
 	acquiredQuota, ok := store.quota.TryAcquire()
 	if !ok {
 		return false, deferReasonStoreQuota, nil

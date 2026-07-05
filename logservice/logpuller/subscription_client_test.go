@@ -74,6 +74,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 		client.resolveLockRateLimiter,
 		client.resolveLockTaskCh,
 		SubscriptionID(1),
+		NewSystemSubscriptionMeta(),
 		rawSpan,
 		100,
 		consumeKVEvents,
@@ -149,12 +150,12 @@ func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
 
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	span1 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(1), heartbeatpb.TableSpan{
+	span1 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(1), NewSystemSubscriptionMeta(), heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
 	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
-	span2 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(2), heartbeatpb.TableSpan{
+	span2 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(2), NewSystemSubscriptionMeta(), heartbeatpb.TableSpan{
 		TableID:  2,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
@@ -262,6 +263,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 		client.resolveLockRateLimiter,
 		client.resolveLockTaskCh,
 		SubscriptionID(1),
+		NewSystemSubscriptionMeta(),
 		rawSpan,
 		100,
 		consumeKVEvents,
@@ -322,6 +324,7 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 		client.resolveLockRateLimiter,
 		client.resolveLockTaskCh,
 		SubscriptionID(1),
+		NewSystemSubscriptionMeta(),
 		rawSpan,
 		100,
 		consumeKVEvents,
@@ -644,7 +647,7 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 		case tsCh <- ts:
 		}
 	}
-	client.Subscribe(subID, span, 1, consumeKVEvents, advanceResolvedTs, 0, false)
+	client.Subscribe(subID, NewSystemSubscriptionMeta(), span, 1, consumeKVEvents, advanceResolvedTs, 0, false)
 
 	eventsCh1 <- mockInitializedEvent(11, uint64(subID))
 	targetTs := oracle.GoTimeToTS(pdClock.CurrentTime())
@@ -827,7 +830,7 @@ func TestGetResolvedTargetTs(t *testing.T) {
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
 
-	span := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(1), heartbeatpb.TableSpan{
+	span := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(1), NewSystemSubscriptionMeta(), heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},

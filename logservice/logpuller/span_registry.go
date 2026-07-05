@@ -35,6 +35,7 @@ const kvEventsCacheMaxSize = 32
 // subscribedSpan is the local state for one subscribed table span.
 type subscribedSpan struct {
 	subID   SubscriptionID
+	meta    SubscriptionMeta
 	startTs uint64
 	// Whether to filter out the value written by TiCDC itself.
 	// It should be `true` in BDR mode.
@@ -86,6 +87,7 @@ func newSubscribedSpan(
 	resolveLockRateLimiter *resolveLockRateLimiter,
 	resolveLockTaskCh chan resolveLockTask,
 	subID SubscriptionID,
+	meta SubscriptionMeta,
 	span heartbeatpb.TableSpan,
 	startTs uint64,
 	consumeKVEvents func(raw []common.RawKVEntry, wakeCallback func()) bool,
@@ -97,6 +99,7 @@ func newSubscribedSpan(
 
 	rt := &subscribedSpan{
 		subID:      subID,
+		meta:       meta,
 		span:       span,
 		startTs:    startTs,
 		filterLoop: filterLoop,

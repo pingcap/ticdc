@@ -27,13 +27,19 @@ type regionEventSink struct {
 	ctx context.Context
 	ds  dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
 
+	memoryQuota *memoryQuotaController
+
 	mu     sync.Mutex
 	cond   *sync.Cond
 	paused atomic.Bool
 }
 
-func newRegionEventSink(ctx context.Context, failureHandler *regionFailureHandler) *regionEventSink {
-	sink := &regionEventSink{ctx: ctx}
+func newRegionEventSink(
+	ctx context.Context,
+	failureHandler *regionFailureHandler,
+	memoryQuota *memoryQuotaController,
+) *regionEventSink {
+	sink := &regionEventSink{ctx: ctx, memoryQuota: memoryQuota}
 	sink.cond = sync.NewCond(&sink.mu)
 
 	option := dynstream.NewOption()
@@ -42,7 +48,7 @@ func newRegionEventSink(ctx context.Context, failureHandler *regionFailureHandle
 	// TODO: Set `UseBuffer` to true until we refactor the `regionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
 	// 	ds.handleLoop fetch events from `ch` -> regionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
 	option.UseBuffer = true
-	option.EnableMemoryControl = true
+	option.EnableMemoryControl = false
 	ds := dynstream.NewParallelDynamicStream(
 		"log-puller",
 		&regionEventHandler{eventSink: sink, failureHandler: failureHandler},
@@ -54,8 +60,7 @@ func newRegionEventSink(ctx context.Context, failureHandler *regionFailureHandle
 }
 
 func (s *regionEventSink) AddPath(rt *subscribedSpan) {
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
-	if err := s.ds.AddPath(rt.subID, rt, areaSetting); err != nil {
+	if err := s.ds.AddPath(rt.subID, rt); err != nil {
 		log.Warn("subscription client add path failed",
 			zap.Uint64("subscriptionID", uint64(rt.subID)),
 			zap.Error(err))
@@ -71,6 +76,13 @@ func (s *regionEventSink) Wake(subID SubscriptionID) {
 }
 
 func (s *regionEventSink) Push(subID SubscriptionID, event regionEvent) {
+	if event.needMemoryQuota() && s.memoryQuota != nil {
+		span := event.mustFirstState().region.subscribedSpan
+		event.memoryQuota = s.memoryQuota.acquireEvent(s.ctx, span, uint64(event.getSize()))
+		if event.memoryQuota == nil && s.ctx.Err() != nil {
+			return
+		}
+	}
 	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)
@@ -125,6 +137,9 @@ func (s *regionEventSink) Metrics() dynstream.Metrics[int, SubscriptionID] {
 }
 
 func (s *regionEventSink) Close() {
+	if s.memoryQuota != nil {
+		s.memoryQuota.WakeAll()
+	}
 	s.mu.Lock()
 	s.paused.Store(false)
 	s.cond.Broadcast()
