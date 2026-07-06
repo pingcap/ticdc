@@ -55,7 +55,8 @@ type Config struct {
 
 	OutputRowKey bool
 
-	// avro only
+	// avro and debezium-avro only
+	// protocol when Confluent Avro encoding is enabled.
 	AvroConfluentSchemaRegistry    string
 	AvroDecimalHandlingMode        string
 	AvroBigintUnsignedHandlingMode string
@@ -168,7 +169,7 @@ type urlConfig struct {
 	AvroDecimalHandlingMode        *string `form:"avro-decimal-handling-mode"`
 	AvroBigintUnsignedHandlingMode *string `form:"avro-bigint-unsigned-handling-mode"`
 
-	// AvroEnableWatermark is the option for enabling watermark in avro protocol
+	// AvroEnableWatermark is the option for enabling watermark in avro and debezium-avro protocol
 	// only used for internal testing, do not set this in the production environment since the
 	// confluent official consumer cannot handle watermark.
 	AvroEnableWatermark *bool `form:"avro-enable-watermark"`
@@ -225,7 +226,8 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 		c.AvroBigintUnsignedHandlingMode = *urlParameter.AvroBigintUnsignedHandlingMode
 	}
 	if urlParameter.AvroEnableWatermark != nil {
-		if c.EnableTiDBExtension && c.Protocol == config.ProtocolAvro {
+		if c.EnableTiDBExtension &&
+			(c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebeziumAvro) {
 			c.AvroEnableWatermark = *urlParameter.AvroEnableWatermark
 		}
 	}
@@ -236,9 +238,10 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 		sinkConfig.KafkaConfig.GlueSchemaRegistryConfig != nil {
 		c.AvroGlueSchemaRegistry = sinkConfig.KafkaConfig.GlueSchemaRegistryConfig
 	}
-	if c.Protocol == config.ProtocolAvro && util.GetOrZero(sinkConfig.ForceReplicate) {
+	if (c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebeziumAvro) &&
+		util.GetOrZero(sinkConfig.ForceReplicate) {
 		return errors.ErrCodecInvalidConfig.GenWithStack(
-			`force-replicate must be disabled, when using avro protocol`)
+			`force-replicate must be disabled, when using avro or debezium-avro protocol`)
 	}
 
 	if sinkConfig != nil {
@@ -353,30 +356,51 @@ func (c *Config) WithChangefeedID(id common.ChangeFeedID) *Config {
 // Validate the Config
 func (c *Config) Validate() error {
 	if c.EnableTiDBExtension &&
-		(c.Protocol != config.ProtocolCanalJSON && c.Protocol != config.ProtocolAvro && c.Protocol != config.ProtocolDebezium) {
+		(c.Protocol != config.ProtocolCanalJSON && c.Protocol != config.ProtocolAvro &&
+			c.Protocol != config.ProtocolDebezium && c.Protocol != config.ProtocolDebeziumAvro) {
 		log.Warn("ignore invalid config, enable-tidb-extension"+
-			"only supports canal-json/avro/debezium protocol",
+			"only supports canal-json/avro/debezium/debezium-avro protocol",
 			zap.Bool("enableTidbExtension", c.EnableTiDBExtension),
 			zap.String("protocol", c.Protocol.String()))
 	}
 
-	if c.Protocol == config.ProtocolAvro {
+	if c.Protocol == config.ProtocolDebezium &&
+		(c.AvroConfluentSchemaRegistry != "" || c.AvroGlueSchemaRegistry != nil) {
+		return errors.ErrCodecInvalidConfig.GenWithStack(
+			`Debezium protocol does not support schema registry; use protocol "debezium-avro"`,
+		)
+	}
+
+	if c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebeziumAvro {
 		if c.AvroConfluentSchemaRegistry != "" && c.AvroGlueSchemaRegistry != nil {
+			protocol := "Avro"
+			if c.Protocol == config.ProtocolDebeziumAvro {
+				protocol = "Debezium Avro"
+			}
 			return errors.ErrCodecInvalidConfig.GenWithStack(
-				`Avro protocol requires only one of "%s" or "%s" to specify the schema registry`,
+				`%s protocol requires only one of "%s" or "%s" to specify the schema registry`,
+				protocol,
 				codecOPTAvroSchemaRegistry,
 				coderOPTAvroGlueSchemaRegistry,
 			)
 		}
 
 		if c.AvroConfluentSchemaRegistry == "" && c.AvroGlueSchemaRegistry == nil {
+			protocol := "Avro"
+			if c.Protocol == config.ProtocolDebeziumAvro {
+				protocol = "Debezium Avro"
+			}
 			return errors.ErrCodecInvalidConfig.GenWithStack(
-				`Avro protocol requires parameter "%s" or "%s" to specify the schema registry`,
+				`%s protocol requires parameter "%s" or "%s" to specify the schema registry`,
+				protocol,
 				codecOPTAvroSchemaRegistry,
 				coderOPTAvroGlueSchemaRegistry,
 			)
 		}
 
+	}
+
+	if c.Protocol == config.ProtocolAvro {
 		if c.AvroDecimalHandlingMode != DecimalHandlingModePrecise &&
 			c.AvroDecimalHandlingMode != DecimalHandlingModeString {
 			return errors.ErrCodecInvalidConfig.GenWithStack(
@@ -407,6 +431,28 @@ func (c *Config) Validate() error {
 					codecOPTAvroDecimalHandlingMode, DecimalHandlingModeString,
 					codecOPTAvroBigintUnsignedHandlingMode, BigintUnsignedHandlingModeString)
 			}
+		}
+	}
+
+	if c.Protocol == config.ProtocolDebeziumAvro {
+		if c.AvroDecimalHandlingMode != DecimalHandlingModePrecise &&
+			c.AvroDecimalHandlingMode != DecimalHandlingModeString {
+			return errors.ErrCodecInvalidConfig.GenWithStack(
+				`%s value could only be "%s" or "%s"`,
+				codecOPTAvroDecimalHandlingMode,
+				DecimalHandlingModeString,
+				DecimalHandlingModePrecise,
+			)
+		}
+
+		if c.AvroBigintUnsignedHandlingMode != BigintUnsignedHandlingModeLong &&
+			c.AvroBigintUnsignedHandlingMode != BigintUnsignedHandlingModeString {
+			return errors.ErrCodecInvalidConfig.GenWithStack(
+				`%s value could only be "%s" or "%s"`,
+				codecOPTAvroBigintUnsignedHandlingMode,
+				BigintUnsignedHandlingModeLong,
+				BigintUnsignedHandlingModeString,
+			)
 		}
 	}
 

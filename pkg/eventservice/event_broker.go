@@ -432,6 +432,8 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	// this dispatcher still has pending ddl to catch up.
 	hasPendingDDLEventInCurrentRange := dataRange.CommitTsStart < ddlState.MaxEventCommitTs &&
 		ddlState.MaxEventCommitTs <= commitTsEndBeforeWindow
+	nextSyncPointTs := task.nextSyncPoint.Load()
+	hasPendingSyncPointEventInCurrentRange := task.enableSyncPoint && commitTsEndBeforeWindow > nextSyncPointTs
 	scanMaxTs := task.changefeedStat.getScanMaxTs()
 	if scanMaxTs > 0 {
 		dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, scanMaxTs)
@@ -448,24 +450,32 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		}
 	}
 
-	if dataRange.CommitTsEnd <= dataRange.CommitTsStart && hasPendingDDLEventInCurrentRange {
+	if dataRange.CommitTsEnd <= dataRange.CommitTsStart &&
+		(hasPendingDDLEventInCurrentRange || hasPendingSyncPointEventInCurrentRange) {
 		// Global scan window base can be pinned by other lagging dispatchers.
-		// For a table with pending ddl in current range, use a local bounded step to keep
-		// this dispatcher making forward progress, so barrier coverage can eventually complete.
+		// For a table with pending ddl or syncpoint in current range, use a local bounded step
+		// to keep this dispatcher making forward progress, so barrier coverage can eventually complete.
 		interval := time.Duration(task.changefeedStat.scanInterval.Load())
 		if interval <= 0 {
 			interval = defaultScanInterval
 		}
 		localScanMaxTs := oracle.GoTimeToTS(oracle.GetTimeFromTS(dataRange.CommitTsStart).Add(interval))
+		if hasPendingSyncPointEventInCurrentRange && nextSyncPointTs >= dataRange.CommitTsStart &&
+			localScanMaxTs <= nextSyncPointTs {
+			localScanMaxTs = nextSyncPointTs + 1
+		}
 		dataRange.CommitTsEnd = min(commitTsEndBeforeWindow, localScanMaxTs)
 		if dataRange.CommitTsEnd > dataRange.CommitTsStart {
-			log.Info("scan window local advance due to pending ddl",
+			log.Info("scan window local advance due to pending barrier event",
 				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 				zap.Stringer("dispatcherID", task.id),
 				zap.Uint64("startTs", dataRange.CommitTsStart),
 				zap.Uint64("globalScanMaxTs", scanMaxTs),
 				zap.Uint64("localScanMaxTs", localScanMaxTs),
+				zap.Bool("hasPendingDDL", hasPendingDDLEventInCurrentRange),
 				zap.Uint64("ddlCommitTs", ddlState.MaxEventCommitTs),
+				zap.Bool("hasPendingSyncPoint", hasPendingSyncPointEventInCurrentRange),
+				zap.Uint64("nextSyncPointTs", nextSyncPointTs),
 				zap.Uint64("newEndTs", dataRange.CommitTsEnd))
 		}
 	}

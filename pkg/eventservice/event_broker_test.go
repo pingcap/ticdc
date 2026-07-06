@@ -301,6 +301,45 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow
 	require.Equal(t, oracle.GoTimeToTS(oracle.GetTimeFromTS(commitStart).Add(defaultScanInterval)), dataRange.CommitTsEnd)
 }
 
+func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingSyncPointCrossesSyncPoint(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	baseTime := time.Now()
+	baseTs := oracle.GoTimeToTS(baseTime)
+	commitStart := oracle.GoTimeToTS(baseTime.Add(20 * time.Second))
+	nextSyncPointTs := oracle.GoTimeToTS(baseTime.Add(23 * time.Second))
+	resolvedTs := oracle.GoTimeToTS(baseTime.Add(40 * time.Second))
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.nextSyncPoint = nextSyncPointTs
+	info.syncPointInterval = 10 * time.Second
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+
+	disp.sentResolvedTs.Store(baseTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(commitStart)
+	disp.lastScannedCommitTs.Store(commitStart)
+	disp.lastScannedStartTs.Store(commitStart - 1)
+
+	changefeedStatus.minSentTs.Store(baseTs)
+	changefeedStatus.scanInterval.Store(int64(time.Second))
+
+	ss.resolvedTs = resolvedTs
+	ss.maxDDLCommitTs = 0
+
+	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, needScan)
+	require.Equal(t, commitStart, dataRange.CommitTsStart)
+	require.Equal(t, nextSyncPointTs+1, dataRange.CommitTsEnd)
+}
+
 func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t *testing.T) {
 	broker, _, ss, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.

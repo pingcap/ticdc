@@ -87,6 +87,8 @@ message RedoMetaMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
     uint64 checkpointTs = 3;
+    // maintainer_epoch fences redo meta updates from stale maintainers.
+    uint64 maintainer_epoch = 4;
 }
 
 // RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs
@@ -101,6 +103,8 @@ message RedoResolvedTsProgressMessage {
 message RedoResolvedTsForwardMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
+    // maintainer_epoch fences redo resolved-ts updates from stale maintainers.
+    uint64 maintainer_epoch = 3;
 }
 
 enum ScheduleAction {

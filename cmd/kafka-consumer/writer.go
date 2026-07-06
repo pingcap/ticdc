@@ -119,7 +119,8 @@ func newWriter(ctx context.Context, o *option) *writer {
 		w.progresses[i] = newPartitionProgress(int32(i), decoder)
 	}
 
-	eventRouter, err := eventrouter.NewEventRouter(o.sinkConfig, o.topic, false, o.protocol == config.ProtocolAvro)
+	isAvroLike := o.protocol == config.ProtocolAvro || o.protocol == config.ProtocolDebeziumAvro
+	eventRouter, err := eventrouter.NewEventRouter(o.sinkConfig, o.topic, false, isAvroLike)
 	if err != nil {
 		log.Panic("initialize the event router failed",
 			zap.Any("protocol", o.protocol), zap.Any("topic", o.topic),
@@ -493,7 +494,8 @@ func (w *writer) onDDL(ddl *event.DDLEvent) {
 		return
 	}
 	switch w.protocol {
-	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro, config.ProtocolSimple, config.ProtocolDebezium:
+	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro, config.ProtocolSimple,
+		config.ProtocolDebezium, config.ProtocolDebeziumAvro:
 	default:
 		return
 	}
@@ -618,7 +620,7 @@ func (w *writer) appendRow2Group(dml *event.DMLEvent, progress *partitionProgres
 		return
 	}
 	switch w.protocol {
-	case config.ProtocolSimple, config.ProtocolDebezium:
+	case config.ProtocolSimple:
 		// simple protocol set the table id for all row message, it can be known which table the row message belongs to,
 		// also consider the table partition.
 		// open protocol set the partition table id if the table is partitioned.
@@ -632,15 +634,16 @@ func (w *writer) appendRow2Group(dml *event.DMLEvent, progress *partitionProgres
 			zap.Stringer("eventType", dml.RowTypes[0]),
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
-	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro:
-		// for partition table, the canal-json, avro and open-protocol message cannot assign physical table id to each dml message,
+	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro,
+		config.ProtocolDebezium, config.ProtocolDebeziumAvro:
+		// for partition table, these protocols cannot assign physical table id to each dml message,
 		// we cannot distinguish whether it's a real fallback event or not, still append it.
 		if w.partitionTableAccessor.IsPartitionTable(schema, table) {
-			log.Warn("DML events fallback, but it's canal-json, avro or open-protocol and the table is a partition table, still append it",
+			log.Warn("DML events fallback, but the table is a partition table, still append it",
 				zap.Int32("partition", group.Partition), zap.Any("offset", offset),
 				zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-				zap.Stringer("eventType", dml.RowTypes[0]))
+				zap.Stringer("eventType", dml.RowTypes[0]), zap.Any("protocol", w.protocol))
 			group.Append(dml, true)
 			return
 		}
