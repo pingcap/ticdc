@@ -205,6 +205,8 @@ func (s *subscriptionClient) runMetricsUpdater(ctx context.Context) error {
 			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
 			used, capacity, _ := s.memoryQuota.Snapshot()
+			metrics.LogPullerMemoryQuota.WithLabelValues("max").Set(float64(capacity))
+			metrics.LogPullerMemoryQuota.WithLabelValues("used").Set(float64(used))
 			metrics.DynamicStreamMemoryUsage.WithLabelValues(
 				"log-puller",
 				"max",
