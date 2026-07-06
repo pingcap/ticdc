@@ -151,7 +151,6 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 	var (
 		done = make(chan struct{}, 1)
 
-		total   int
 		flushed atomic.Int64
 	)
 
@@ -164,12 +163,16 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 			if !ok {
 				continue
 			}
-			before := len(resolvedEvents)
-			resolvedEvents = g.ResolveInto(commitTs, resolvedEvents)
-			total += len(resolvedEvents) - before
+			messages := g.ResolveInto(commitTs, nil)
+			events := make([]*event.DMLEvent, 0, len(messages))
+			for _, message := range messages {
+				events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
+			}
+			resolvedEvents = append(resolvedEvents, events...)
 		}
 	}
 
+	total := len(resolvedEvents)
 	if total == 0 {
 		return w.mysqlSink.WriteBlockEvent(ddl)
 	}
@@ -265,7 +268,6 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	var (
 		done = make(chan struct{}, 1)
 
-		total   int
 		flushed atomic.Int64
 	)
 
@@ -273,11 +275,15 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	resolvedEvents := make([]*event.DMLEvent, 0)
 	for _, p := range w.progresses {
 		for _, group := range p.eventsGroup {
-			before := len(resolvedEvents)
-			resolvedEvents = group.ResolveInto(watermark, resolvedEvents)
-			total += len(resolvedEvents) - before
+			messages := group.ResolveInto(watermark, nil)
+			events := make([]*event.DMLEvent, 0, len(messages))
+			for _, message := range messages {
+				events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
+			}
+			resolvedEvents = append(resolvedEvents, events...)
 		}
 	}
+	total := len(resolvedEvents)
 	if total == 0 {
 		return nil
 	}
@@ -349,7 +355,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 				log.Info("simple protocol cached event resolved, append to the group",
 					zap.Int64("tableID", row.GetTableID()), zap.Uint64("commitTs", row.CommitTs),
 					zap.Int32("partition", partition), zap.Any("offset", offset))
-				w.appendRow2Group(row, progress, offset)
+				w.appendMessage2Group(common.NewDMLMessageFromEvent(row), progress, offset)
 			}
 		}
 
@@ -373,7 +379,11 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		needFlush = true
 	case common.MessageTypeRow:
 		var counter int
-		row := progress.decoder.NextDMLEvent()
+		dmlMessage := progress.decoder.NextDMLMessage()
+		var row *event.DMLEvent
+		if dmlMessage != nil {
+			row = dmlMessage.ToDMLEvent()
+		}
 		if row == nil {
 			if w.protocol != config.ProtocolSimple {
 				log.Panic("DML event is nil, it's not expected",
@@ -383,15 +393,15 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 			break
 		}
 
-		w.appendRow2Group(row, progress, offset)
+		w.appendMessage2Group(common.NewDMLMessageFromEvent(row), progress, offset)
 		counter++
 		for {
 			_, hasNext = progress.decoder.HasNext()
 			if !hasNext {
 				break
 			}
-			row = progress.decoder.NextDMLEvent()
-			w.appendRow2Group(row, progress, offset)
+			row = progress.decoder.NextDMLMessage().ToDMLEvent()
+			w.appendMessage2Group(common.NewDMLMessageFromEvent(row), progress, offset)
 			counter++
 		}
 		// If the message containing only one event exceeds the length limit, CDC will allow it and issue a warning.
@@ -578,15 +588,16 @@ func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset kaf
 	}
 }
 
-func (w *writer) appendRow2Group(dml *event.DMLEvent, progress *partitionProgress, offset kafka.Offset) {
+func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *partitionProgress, offset kafka.Offset) {
+	dml := message.ToDMLEvent()
 	w.checkPartition(dml, progress.partition, offset)
 	// if the kafka cluster is normal, this should not hit.
 	// else if the cluster is abnormal, the consumer may consume old message, then cause the watermark fallback.
 	var (
-		tableID  = dml.GetTableID()
-		schema   = dml.TableInfo.GetSchemaName()
-		table    = dml.TableInfo.GetTableName()
-		commitTs = dml.GetCommitTs()
+		tableID  = message.TableID
+		schema   = message.Schema
+		table    = message.Table
+		commitTs = message.GetCommitTs()
 	)
 	group := progress.eventsGroup[tableID]
 	if group == nil {
@@ -602,12 +613,12 @@ func (w *writer) appendRow2Group(dml *event.DMLEvent, progress *partitionProgres
 		return
 	}
 	if commitTs >= group.HighWatermark {
-		group.Append(dml, false)
+		group.AppendMessage(message, false)
 		log.Debug("DML event append to the group",
 			zap.Int32("partition", group.Partition), zap.Any("offset", offset),
 			zap.Uint64("commitTs", commitTs), zap.Uint64("HighWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", dml.RowTypes[0]))
+			zap.Stringer("eventType", message.RowType))
 		return
 	}
 	if w.enableTableAcrossNodes {
@@ -615,8 +626,8 @@ func (w *writer) appendRow2Group(dml *event.DMLEvent, progress *partitionProgres
 			zap.Int32("partition", group.Partition), zap.Any("offset", offset),
 			zap.Uint64("commitTs", commitTs), zap.Uint64("HighWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", dml.RowTypes[0]))
-		group.Append(dml, true)
+			zap.Stringer("eventType", message.RowType))
+		group.AppendMessage(message, true)
 		return
 	}
 	switch w.protocol {
@@ -631,7 +642,7 @@ func (w *writer) appendRow2Group(dml *event.DMLEvent, progress *partitionProgres
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.Any("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", dml.RowTypes[0]),
+			zap.Stringer("eventType", message.RowType),
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
 	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro,
@@ -643,8 +654,8 @@ func (w *writer) appendRow2Group(dml *event.DMLEvent, progress *partitionProgres
 				zap.Int32("partition", group.Partition), zap.Any("offset", offset),
 				zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-				zap.Stringer("eventType", dml.RowTypes[0]), zap.Any("protocol", w.protocol))
-			group.Append(dml, true)
+				zap.Stringer("eventType", message.RowType), zap.Any("protocol", w.protocol))
+			group.AppendMessage(message, true)
 			return
 		}
 		log.Warn("DML event fallback row, since less than the group high watermark, ignore it",
@@ -652,7 +663,7 @@ func (w *writer) appendRow2Group(dml *event.DMLEvent, progress *partitionProgres
 			zap.Uint64("commitTs", commitTs), zap.Uint64("HighWatermark", group.HighWatermark),
 			zap.Any("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", dml.RowTypes[0]),
+			zap.Stringer("eventType", message.RowType),
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
 	default:

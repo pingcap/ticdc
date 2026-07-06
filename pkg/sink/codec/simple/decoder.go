@@ -147,8 +147,16 @@ func (d *Decoder) NextResolvedEvent() uint64 {
 	return ts
 }
 
-// NextDMLEvent returns the next dml event if exists
-func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
+// NextDMLMessage returns the next dml message if exists
+func (d *Decoder) NextDMLMessage() *common.DMLMessage {
+	event := d.nextDMLEvent()
+	if event == nil {
+		return nil
+	}
+	return common.NewDMLMessageFromEvent(event)
+}
+
+func (d *Decoder) nextDMLEvent() *commonEvent.DMLEvent {
 	if d.msg == nil || (d.msg.Data == nil && d.msg.Old == nil) {
 		log.Panic("invalid data for the DML event", zap.String("message", util.RedactAny(d.msg)))
 	}
@@ -211,7 +219,7 @@ func (d *Decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) *
 		log.Panic("unmarshal claim check message failed", zap.Any("value", util.RedactAny(value)), zap.Error(err))
 	}
 	d.msg = m
-	return d.NextDMLEvent()
+	return d.nextDMLEvent()
 }
 
 func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.DMLEvent {
@@ -260,7 +268,7 @@ func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.
 	}
 
 	d.msg = result
-	return d.NextDMLEvent()
+	return d.nextDMLEvent()
 }
 
 func (d *Decoder) buildData(
@@ -292,7 +300,7 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 
 	for ele := d.cachedMessages.Front(); ele != nil; {
 		d.msg = ele.Value.(*message)
-		event := d.NextDMLEvent()
+		event := d.nextDMLEvent()
 		d.CachedRowChangedEvents = append(d.CachedRowChangedEvents, event)
 
 		next := ele.Next()

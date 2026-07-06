@@ -150,8 +150,16 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return event
 }
 
-// NextDMLEvent returns the next dml event if exists
-func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
+// NextDMLMessage returns the next dml message if exists
+func (d *decoder) NextDMLMessage() *common.DMLMessage {
+	event := d.nextDMLEvent()
+	if event == nil {
+		return nil
+	}
+	return common.NewDMLMessageFromEvent(event)
+}
+
+func (d *decoder) nextDMLEvent() *commonEvent.DMLEvent {
 	if len(d.valuePayload) == 0 {
 		log.Panic("next DML event failed, since value payload is empty")
 	}

@@ -129,8 +129,8 @@ func (b *decoder) NextResolvedEvent() uint64 {
 	return 0
 }
 
-// NextDMLEvent implements the Decoder interface.
-func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
+// NextDMLMessage implements the Decoder interface.
+func (b *decoder) NextDMLMessage() *common.DMLMessage {
 	if b.closed {
 		log.Panic("batch decoder is closed, cannot fetch the next DML event")
 	}
@@ -139,7 +139,7 @@ func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if err != nil {
 		log.Panic("convert message to event failed", zap.Error(err))
 	}
-	return e
+	return common.NewDMLMessageFromEvent(e)
 }
 
 // NextDDLEvent implements the Decoder interface.

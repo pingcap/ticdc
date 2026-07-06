@@ -96,7 +96,15 @@ func (d *txnDecoder) HasNext() (common.MessageType, bool) {
 	return d.msg.messageType(), true
 }
 
-func (d *txnDecoder) NextDMLEvent() *commonEvent.DMLEvent {
+func (d *txnDecoder) NextDMLMessage() *common.DMLMessage {
+	event := d.nextDMLEvent()
+	if event == nil {
+		return nil
+	}
+	return common.NewDMLMessageFromEvent(event)
+}
+
+func (d *txnDecoder) nextDMLEvent() *commonEvent.DMLEvent {
 	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
 		log.Panic("message type is not row changed",
 			zap.Any("messageType", d.msg.messageType()), zap.Any("msg", d.msg))

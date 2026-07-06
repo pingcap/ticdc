@@ -192,8 +192,16 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return result
 }
 
-// NextDMLEvent implements the Decoder interface
-func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
+// NextDMLMessage implements the Decoder interface
+func (b *decoder) NextDMLMessage() *common.DMLMessage {
+	event := b.nextDMLEvent()
+	if event == nil {
+		return nil
+	}
+	return common.NewDMLMessageFromEvent(event)
+}
+
+func (b *decoder) nextDMLEvent() *commonEvent.DMLEvent {
 	if b.nextKey.Type != common.MessageTypeRow {
 		log.Panic("message type is not row", zap.Any("messageType", b.nextKey.Type))
 	}

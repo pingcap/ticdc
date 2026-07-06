@@ -203,8 +203,7 @@ func (d *decoder) assembleClaimCheckDMLEvent(
 		log.Panic("unmarshal claim check message failed", zap.Any("value", util.RedactAny(value)), zap.Error(err))
 	}
 
-	d.msg = message
-	return d.NextDMLEvent()
+	return d.decodeDMLMessage(message)
 }
 
 func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string) {
@@ -301,19 +300,46 @@ func (d *decoder) assembleHandleKeyOnlyDMLEvent(
 		result.Data = []map[string]interface{}{data}
 	}
 
-	d.msg = result
-	return d.NextDMLEvent()
+	return d.decodeDMLMessage(result)
 }
 
-// NextDMLEvent implements the Decoder interface
+// NextDMLMessage implements the Decoder interface
 // `HasNext` should be called before this.
-func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
+func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
+		messageType := common.MessageTypeUnknown
+		if d.msg != nil {
+			messageType = d.msg.messageType()
+		}
 		log.Panic("message type is not row changed",
-			zap.Any("messageType", d.msg.messageType()), zap.Any("msg", d.msg))
+			zap.Any("messageType", messageType), zap.Any("msg", d.msg))
 	}
 
-	message, withExtension := d.msg.(*canalJSONMessageWithTiDBExtension)
+	msg := d.msg
+	schemaName := *msg.getSchema()
+	tableName := *msg.getTable()
+	tableID := tableIDAllocator.Allocate(schemaName, tableName)
+	tableIDAllocator.AddBlockTableID(schemaName, tableName, tableID)
+
+	var rowType commonType.RowType
+	switch msg.eventType() {
+	case canal.EventType_DELETE:
+		rowType = commonType.RowTypeDelete
+	case canal.EventType_INSERT:
+		rowType = commonType.RowTypeInsert
+	case canal.EventType_UPDATE:
+		rowType = commonType.RowTypeUpdate
+	default:
+		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
+	}
+
+	return common.NewDMLMessage(tableID, schemaName, tableName, msg.getCommitTs(), rowType, func() *commonEvent.DMLEvent {
+		return d.decodeDMLMessage(msg)
+	})
+}
+
+func (d *decoder) decodeDMLMessage(msg canalJSONMessageInterface) *commonEvent.DMLEvent {
+	message, withExtension := msg.(*canalJSONMessageWithTiDBExtension)
 	if withExtension {
 		ctx := context.Background()
 		if message.Extensions.OnlyHandleKey && d.upstreamTiDB != nil {
@@ -323,11 +349,10 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 			return d.assembleClaimCheckDMLEvent(ctx, message.Extensions.ClaimCheckLocation)
 		}
 	}
-	return d.canalJSONMessage2DMLEvent()
+	return d.canalJSONMessage2DMLEvent(msg)
 }
 
-func (d *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
-	msg := d.msg
+func (d *decoder) canalJSONMessage2DMLEvent(msg canalJSONMessageInterface) *commonEvent.DMLEvent {
 	tableInfo := d.queryTableInfo(msg)
 
 	result := new(commonEvent.DMLEvent)

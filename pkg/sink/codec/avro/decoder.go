@@ -113,8 +113,16 @@ func (d *decoder) NextResolvedEvent() uint64 {
 	return ts
 }
 
-// NextDMLEvent returns the next row changed event if exists
-func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
+// NextDMLMessage returns the next row changed message if exists
+func (d *decoder) NextDMLMessage() *common.DMLMessage {
+	event := d.nextDMLEvent()
+	if event == nil {
+		return nil
+	}
+	return common.NewDMLMessageFromEvent(event)
+}
+
+func (d *decoder) nextDMLEvent() *commonEvent.DMLEvent {
 	var (
 		valueMap    map[string]interface{}
 		valueSchema map[string]interface{}
