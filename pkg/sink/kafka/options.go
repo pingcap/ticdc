@@ -607,12 +607,15 @@ func adjustOptions(
 			TopicMaxMessageBytesConfigName,
 			BrokerMessageMaxBytesConfigName,
 		)
+		var topicMaxMessageBytes int
 		if err != nil {
-			return errors.Trace(err)
-		}
-		topicMaxMessageBytes, err := strconv.Atoi(topicMaxMessageBytesStr)
-		if err != nil {
-			return errors.Trace(err)
+			log.Warn("TiCDC cannot find `max.message.bytes` from topic's configuration, use the option `MaxMessageBytes` as default")
+			topicMaxMessageBytes = options.MaxMessageBytes
+		} else {
+			topicMaxMessageBytes, err = strconv.Atoi(topicMaxMessageBytesStr)
+			if err != nil {
+				return errors.Trace(err)
+			}
 		}
 
 		maxMessageBytes := topicMaxMessageBytes - maxMessageBytesOverhead
@@ -643,14 +646,16 @@ func adjustOptions(
 		return nil
 	}
 
+	var brokerMessageMaxBytes int
 	brokerMessageMaxBytesStr, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
 	if err != nil {
-		log.Warn("TiCDC cannot find `message.max.bytes` from broker's configuration")
-		return errors.Trace(err)
-	}
-	brokerMessageMaxBytes, err := strconv.Atoi(brokerMessageMaxBytesStr)
-	if err != nil {
-		return errors.Trace(err)
+		log.Warn("TiCDC cannot find `message.max.bytes` from broker's configuration, use the option `MaxMessageBytes` as default")
+		brokerMessageMaxBytes = options.MaxMessageBytes
+	} else {
+		brokerMessageMaxBytes, err = strconv.Atoi(brokerMessageMaxBytesStr)
+		if err != nil {
+			return errors.Trace(err)
+		}
 	}
 
 	// when create the topic, `max.message.bytes` is decided by the broker,
@@ -717,9 +722,9 @@ func validateMinInsyncReplicas(
 				"to the minimum number of in-sync replicas" +
 				"if you want to use `required-acks` = -1." +
 				"Otherwise, TiCDC will not be able to send messages to the topic.")
-			return nil
 		}
-		return err
+		log.Warn("TiCDC meets error when get `min.insync.replicas` from broker's configuration, assume the config is valid")
+		return nil
 	}
 	minInsyncReplicas, err := strconv.Atoi(minInsyncReplicasStr)
 	if err != nil {
