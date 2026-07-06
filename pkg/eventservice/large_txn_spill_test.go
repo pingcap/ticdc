@@ -110,7 +110,7 @@ func newTestSpillRawKVEntry(index int) *common.RawKVEntry {
 		CRTs:     100,
 		StartTs:  90,
 		RegionID: uint64(index),
-		Key:      []byte(fmt.Sprintf("key-%02d", index)),
-		Value:    []byte(fmt.Sprintf("value-%02d", index)),
+		Key:      fmt.Appendf(nil, "key-%02d", index),
+		Value:    fmt.Appendf(nil, "value-%02d", index),
 	}
 }
