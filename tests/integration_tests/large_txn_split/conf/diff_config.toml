@@ -19,4 +19,4 @@ check-struct-only = false
     output-dir = "./output"
     source-instances = ["mysql1"]
     target-instance = "tidb0"
-    target-check-tables = ["large_txn_split.large_txn_table"]
+    target-check-tables = ["large_txn_split.large_txn_table", "large_txn_split.large_txn_uk_update_table"]

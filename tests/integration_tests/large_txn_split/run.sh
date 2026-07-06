@@ -38,6 +38,7 @@ function generate_workload() {
 	{
 		echo "USE large_txn_split;"
 		echo "CREATE TABLE IF NOT EXISTS large_txn_table (id INT AUTO_INCREMENT PRIMARY KEY, batch_id INT, data LONGTEXT);"
+		echo "CREATE TABLE IF NOT EXISTS large_txn_uk_update_table (id INT PRIMARY KEY, uk INT NOT NULL, data LONGTEXT, UNIQUE KEY uk_idx (uk));"
 
 		echo "BEGIN;"
 		for i in $(seq 1 "$rows"); do
@@ -58,6 +59,16 @@ function generate_workload() {
 		for i in $(seq 1 "$rows"); do
 			echo "INSERT INTO large_txn_table (batch_id, data) VALUES (1, REPEAT('c', 1024));"
 		done
+		echo "COMMIT;"
+
+		echo "BEGIN;"
+		for i in $(seq 1 "$rows"); do
+			echo "INSERT INTO large_txn_uk_update_table (id, uk, data) VALUES ($i, $i, REPEAT('u', 1024));"
+		done
+		echo "COMMIT;"
+
+		echo "BEGIN;"
+		echo "UPDATE large_txn_uk_update_table SET uk = uk + 1000000, data = REPEAT('v', 1024);"
 		echo "COMMIT;"
 	} >"$sql_file"
 }
@@ -102,6 +113,7 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 
 	check_sync_diff $WORK_DIR "$diff_config" 200 3
 	$CUR/../_utils/check_logs_contains $WORK_DIR "scan interrupted inside a large txn"
+	$CUR/../_utils/check_logs_contains $WORK_DIR "split update event"
 	$CUR/../_utils/check_logs_contains $WORK_DIR "inject dispatcher reset after batch data events"
 
 	cleanup_process $CDC_BINARY
