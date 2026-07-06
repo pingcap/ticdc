@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -44,6 +45,12 @@ import (
 )
 
 type tableKey struct {
+	schema      string
+	table       string
+	ddlCommitTs uint64
+}
+
+type tableNameKey struct {
 	schema string
 	table  string
 }
@@ -92,6 +99,7 @@ type decoder struct {
 	storage        storeapi.Storage
 	upstreamTiDB   *sql.DB
 	tableInfoCache map[tableKey]*commonType.TableInfo
+	ddlCommitTs    map[tableNameKey][]uint64
 }
 
 var tableIDAllocator = common.NewTableIDAllocator()
@@ -125,6 +133,7 @@ func NewDecoder(
 		storage:        externalStorage,
 		upstreamTiDB:   db,
 		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
+		ddlCommitTs:    make(map[tableNameKey][]uint64),
 	}, nil
 }
 
@@ -378,9 +387,8 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
 
 	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
-	// if receive a table level DDL, just remove the table info to trigger create a new one.
-	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
-	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
+	d.addDDLCommitTs(result.SchemaName, result.TableName, result.GetCommitTs())
+	d.addDDLCommitTs(result.ExtraSchemaName, result.ExtraTableName, result.GetCommitTs())
 	return result
 }
 
@@ -537,8 +545,9 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 	tableName := *msg.getTable()
 
 	cacheKey := tableKey{
-		schema: schemaName,
-		table:  tableName,
+		schema:      schemaName,
+		table:       tableName,
+		ddlCommitTs: d.getDDLCommitTs(schemaName, tableName, msg.getCommitTs()),
 	}
 	tableInfo, ok := d.tableInfoCache[cacheKey]
 	if !ok {
@@ -555,6 +564,37 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 		d.tableInfoCache[cacheKey] = tableInfo
 	}
 	return tableInfo
+}
+
+func (d *decoder) addDDLCommitTs(schema, table string, commitTs uint64) {
+	if schema == "" || table == "" || commitTs == 0 {
+		return
+	}
+
+	key := tableNameKey{schema: schema, table: table}
+	commitTsList := d.ddlCommitTs[key]
+	i := sort.Search(len(commitTsList), func(i int) bool {
+		return commitTsList[i] >= commitTs
+	})
+	if i < len(commitTsList) && commitTsList[i] == commitTs {
+		return
+	}
+	d.ddlCommitTs[key] = slices.Insert(commitTsList, i, commitTs)
+}
+
+func (d *decoder) getDDLCommitTs(schema, table string, commitTs uint64) uint64 {
+	if commitTs == 0 {
+		return 0
+	}
+
+	commitTsList := d.ddlCommitTs[tableNameKey{schema: schema, table: table}]
+	i := sort.Search(len(commitTsList), func(i int) bool {
+		return commitTsList[i] > commitTs
+	})
+	if i == 0 {
+		return 0
+	}
+	return commitTsList[i-1]
 }
 
 func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
