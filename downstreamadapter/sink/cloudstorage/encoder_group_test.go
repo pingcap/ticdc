@@ -16,6 +16,7 @@ package cloudstorage
 import (
 	"context"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -174,6 +175,15 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 	})
 
 	dispatcherID := commonType.NewDispatcherID()
+	var flushCount atomic.Int64
+	var enqueueCount atomic.Int64
+	event := newTestDMLEvent(dispatcherID, 100)
+	event.AddPostFlushFunc(func() {
+		flushCount.Add(1)
+	})
+	event.AddPostEnqueueFunc(func() {
+		enqueueCount.Add(1)
+	})
 	taskValue := newDMLTask(
 		cloudstorage.VersionedTableName{
 			TableNameWithPhysicTableID: commonType.TableName{
@@ -184,7 +194,7 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 			TableInfoVersion: 1,
 			DispatcherID:     dispatcherID,
 		},
-		newTestDMLEvent(dispatcherID, 100),
+		event,
 	)
 	require.NoError(t, group.add(ctx, taskValue))
 
@@ -201,7 +211,15 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 				}
 				task := future.task
 				require.Equal(t, taskValue, task)
-				require.Nil(t, task.event)
+				require.Nil(t, task.rowEvents)
+				require.Len(t, task.encodedMsgs, 1)
+				require.NotNil(t, task.encodedMsgs[0].Callback)
+				task.encodedMsgs[0].Callback()
+				require.Equal(t, int64(1), flushCount.Load())
+				require.Equal(t, int64(0), enqueueCount.Load())
+				require.NotNil(t, task.postEnqueue)
+				task.postEnqueue()
+				require.Equal(t, int64(1), enqueueCount.Load())
 				done <- struct{}{}
 				return nil
 			}
@@ -250,6 +268,8 @@ func newTestDMLEvent(dispatcherID commonType.DispatcherID, tableID int64) *commo
 		PhysicalTableID:  tableID,
 		TableInfo:        tableInfo,
 		TableInfoVersion: 1,
+		Length:           1,
+		RowTypes:         []commonType.RowType{commonType.RowTypeInsert},
 		Rows:             chunk.MutRowFromValues(1, "hello world").ToRow().Chunk(),
 	}
 }

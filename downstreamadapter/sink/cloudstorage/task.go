@@ -15,9 +15,8 @@ package cloudstorage
 
 import (
 	"context"
-	"sync/atomic"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -39,11 +38,10 @@ type task struct {
 	dispatcherID commonType.DispatcherID
 
 	// DML-only fields.
-	event          *commonEvent.DMLEvent           // Original DML event to encode and flush.
-	callbacks      *txnCallbacks                   // Lightweight txn callbacks detached from event.
+	postEnqueue    func()                          // Transaction enqueue callback.
 	tableInfo      *commonType.TableInfo           // Table info used after event is released.
 	versionedTable cloudstorage.VersionedTableName // Versioned output identity for the DML event.
-	columnSelector commonEvent.Selector            // Column selector used by the txn encoder.
+	rowEvents      []*commonEvent.RowEvent         // Row events to encode and flush.
 	encodedMsgs    []*common.Message               // Encoded result built from event.
 
 	// Flush-only field.
@@ -56,19 +54,18 @@ func newDMLTask(
 	selectors ...commonEvent.Selector,
 ) *task {
 	// The dispatcher path registers progress callbacks before calling
-	// Sink.AddDMLEvent, so snapshot callbacks here and release the large event
-	// object after encoding.
-	selector := commonEvent.Selector(columnselector.NewDefaultColumnSelector())
+	// Sink.AddDMLEvent. Put the flush callback into RowEvents before encoding
+	// so txn encoders do not need extra callback parameters.
+	var selector commonEvent.Selector
 	if len(selectors) > 0 && selectors[0] != nil {
 		selector = selectors[0]
 	}
 	return &task{
 		kind:           taskKindDML,
-		event:          event,
-		callbacks:      newTxnCallbacks(event),
+		postEnqueue:    event.PostEnqueue,
 		tableInfo:      event.TableInfo,
 		versionedTable: version,
-		columnSelector: selector,
+		rowEvents:      helper.NewRowEvents(event, selector, newPostTxnFlushedCallback(event)),
 		dispatcherID:   event.GetDispatcherID(),
 	}
 }
@@ -88,62 +85,19 @@ func (t *task) isFlushTask() bool {
 	return t != nil && t.kind == taskKindFlush
 }
 
-func (t *task) replacePostFlushCallbacks() {
-	if len(t.encodedMsgs) == 0 {
-		return
-	}
-
-	// Txn encoders put event.PostFlush into message.Callback. That method value
-	// keeps the original DMLEvent reachable through the encoded messages, so
-	// replace it with the lightweight callback copy before releasing task.event.
-	for _, msg := range t.encodedMsgs {
-		msg.Callback = nil
-	}
-	// One callback on the last message is enough because all messages in a task
-	// are enqueued and flushed as one spool entry.
-	t.encodedMsgs[len(t.encodedMsgs)-1].Callback = t.callbacks.postFlush
-}
-
-// txnCallbacks is a lightweight copy of a DMLEvent's enqueue and flush
-// callbacks. It lets cloud storage release the full DMLEvent after encoding
-// while preserving the event callback semantics: each stage runs at most once.
-type txnCallbacks struct {
-	flushed  []func()
-	enqueued []func()
-
-	flushedCalled  atomic.Bool
-	enqueuedCalled atomic.Bool
-}
-
-func newTxnCallbacks(event *commonEvent.DMLEvent) *txnCallbacks {
+func newPostTxnFlushedCallback(event *commonEvent.DMLEvent) func() {
 	if event == nil {
-		return &txnCallbacks{}
+		return nil
 	}
-	return &txnCallbacks{
-		flushed:  append([]func(){}, event.PostTxnFlushed...),
-		enqueued: append([]func(){}, event.PostTxnEnqueued...),
+	callbacks := append([]func(){}, event.PostTxnFlushed...)
+	if len(callbacks) == 0 {
+		return nil
 	}
-}
-
-func (c *txnCallbacks) postFlush() {
-	if c == nil || !c.flushedCalled.CompareAndSwap(false, true) {
-		return
-	}
-	for _, f := range c.flushed {
-		if f != nil {
-			f()
-		}
-	}
-	c.postEnqueue()
-}
-
-func (c *txnCallbacks) postEnqueue() {
-	if c == nil || !c.enqueuedCalled.CompareAndSwap(false, true) {
-		return
-	}
-	for _, f := range c.enqueued {
-		if f != nil {
-			f()
+	return func() {
+		for _, f := range callbacks {
+			if f != nil {
+				f()
+			}
 		}
 	}
 }

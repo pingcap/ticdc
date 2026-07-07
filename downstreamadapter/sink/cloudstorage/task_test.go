@@ -16,11 +16,10 @@ package cloudstorage
 import (
 	"context"
 	"errors"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,41 +50,26 @@ func TestFlushMarkerWaitReturnsContextCause(t *testing.T) {
 	require.ErrorIs(t, err, cause)
 }
 
-func TestReplacePostFlushCallbacksDetachesOriginalMessageCallbacks(t *testing.T) {
+func TestPostTxnFlushedCallbackDoesNotRunPostEnqueue(t *testing.T) {
 	t.Parallel()
 
-	var originalCallbackCount atomic.Int32
-	var flushCallbackCount atomic.Int32
-	var enqueueCallbackCount atomic.Int32
-	task := &task{
-		callbacks: &txnCallbacks{
-			flushed: []func(){
-				func() {
-					flushCallbackCount.Add(1)
-				},
-			},
-			enqueued: []func(){
-				func() {
-					enqueueCallbackCount.Add(1)
-				},
-			},
-		},
-		encodedMsgs: []*common.Message{
-			{Callback: func() { originalCallbackCount.Add(1) }},
-			{Callback: func() { originalCallbackCount.Add(1) }},
-			{},
-		},
-	}
+	event := &commonEvent.DMLEvent{}
+	flushCallbackCount := 0
+	enqueueCallbackCount := 0
+	event.AddPostFlushFunc(func() {
+		flushCallbackCount++
+	})
+	event.AddPostEnqueueFunc(func() {
+		enqueueCallbackCount++
+	})
 
-	task.replacePostFlushCallbacks()
+	callback := newPostTxnFlushedCallback(event)
+	require.NotNil(t, callback)
+	callback()
+	require.Equal(t, 1, flushCallbackCount)
+	require.Equal(t, 0, enqueueCallbackCount)
 
-	require.Nil(t, task.encodedMsgs[0].Callback)
-	require.Nil(t, task.encodedMsgs[1].Callback)
-	require.NotNil(t, task.encodedMsgs[2].Callback)
-
-	task.encodedMsgs[2].Callback()
-	task.encodedMsgs[2].Callback()
-	require.Equal(t, int32(0), originalCallbackCount.Load())
-	require.Equal(t, int32(1), flushCallbackCount.Load())
-	require.Equal(t, int32(1), enqueueCallbackCount.Load())
+	event.PostEnqueue()
+	event.PostEnqueue()
+	require.Equal(t, 1, enqueueCallbackCount)
 }

@@ -26,23 +26,12 @@ func NewMQRowEvents(
 	partitionGenerator partition.Generator,
 	selector commonEvent.Selector,
 ) ([]*commonEvent.MQRowEvent, error) {
-	if selector == nil {
-		selector = columnselector.NewDefaultColumnSelector()
-	}
+	rowEvents := NewRowEvents(event, selector, NewTxnPostFlushRowCallback(event, uint64(event.Len())))
+	events := make([]*commonEvent.MQRowEvent, 0, len(rowEvents))
 
-	rowsCount := event.Len()
-	events := make([]*commonEvent.MQRowEvent, 0, rowsCount)
-	rowCallback := NewTxnPostFlushRowCallback(event, uint64(rowsCount))
-
-	for {
-		row, ok := event.GetNextRow()
-		if !ok {
-			event.Rewind()
-			break
-		}
-
+	for _, rowEvent := range rowEvents {
 		index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(
-			&row, partitionNum, event.TableInfo, event.CommitTs)
+			&rowEvent.Event, partitionNum, event.TableInfo, event.CommitTs)
 		if err != nil {
 			return nil, err
 		}
@@ -54,17 +43,39 @@ func NewMQRowEvents(
 				PartitionKey:   key,
 				TotalPartition: partitionNum,
 			},
-			RowEvent: commonEvent.RowEvent{
-				PhysicalTableID: event.PhysicalTableID,
-				TableInfo:       event.TableInfo,
-				StartTs:         event.StartTs,
-				CommitTs:        event.CommitTs,
-				Event:           row,
-				Callback:        rowCallback,
-				ColumnSelector:  selector,
-				Checksum:        row.Checksum,
-			},
+			RowEvent: *rowEvent,
 		})
 	}
 	return events, nil
+}
+
+func NewRowEvents(
+	event *commonEvent.DMLEvent,
+	selector commonEvent.Selector,
+	callback func(),
+) []*commonEvent.RowEvent {
+	if selector == nil {
+		selector = columnselector.NewDefaultColumnSelector()
+	}
+
+	events := make([]*commonEvent.RowEvent, 0, event.Len())
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			event.Rewind()
+			break
+		}
+
+		events = append(events, &commonEvent.RowEvent{
+			PhysicalTableID: event.PhysicalTableID,
+			TableInfo:       event.TableInfo,
+			StartTs:         event.StartTs,
+			CommitTs:        event.CommitTs,
+			Event:           row,
+			Callback:        callback,
+			ColumnSelector:  selector,
+			Checksum:        row.Checksum,
+		})
+	}
+	return events
 }

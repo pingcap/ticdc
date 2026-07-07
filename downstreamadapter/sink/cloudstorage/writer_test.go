@@ -384,7 +384,7 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
-func TestWriterPostFlushRunsPausedPostEnqueueBeforeLowWatermark(t *testing.T) {
+func TestWriterPostFlushDoesNotRunPausedPostEnqueue(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
@@ -411,21 +411,13 @@ func TestWriterPostFlushRunsPausedPostEnqueueBeforeLowWatermark(t *testing.T) {
 
 	var secondFlushed atomic.Int64
 	var secondEnqueued atomic.Int64
-	secondCallbacks := &txnCallbacks{
-		flushed: []func(){
-			func() {
-				secondFlushed.Add(1)
-			},
-		},
-		enqueued: []func(){
-			func() {
-				secondEnqueued.Add(1)
-			},
-		},
-	}
 	secondMsg := common.NewMsg(nil, []byte(strings.Repeat("b", 120)))
-	secondMsg.Callback = secondCallbacks.postFlush
-	secondEntry, err := spoolBuffer.Enqueue([]*common.Message{secondMsg}, secondCallbacks.postEnqueue)
+	secondMsg.Callback = func() {
+		secondFlushed.Add(1)
+	}
+	secondEntry, err := spoolBuffer.Enqueue([]*common.Message{secondMsg}, func() {
+		secondEnqueued.Add(1)
+	})
 	require.NoError(t, err)
 	defer spoolBuffer.Release(secondEntry)
 	require.Equal(t, int64(0), secondEnqueued.Load())
@@ -442,7 +434,7 @@ func TestWriterPostFlushRunsPausedPostEnqueueBeforeLowWatermark(t *testing.T) {
 	}
 
 	require.Equal(t, int64(1), secondFlushed.Load())
-	require.Equal(t, int64(1), secondEnqueued.Load())
+	require.Equal(t, int64(0), secondEnqueued.Load())
 
 	spoolBuffer.Release(firstEntry)
 	require.Equal(t, int64(1), secondEnqueued.Load())

@@ -16,7 +16,6 @@ package csv
 import (
 	"bytes"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -29,50 +28,33 @@ type batchEncoder struct {
 	callback  func()
 	batchSize int
 	config    *common.Config
-
-	columnSelector commonEvent.Selector
 }
 
 // NewTxnEventEncoder creates a new csv BatchEncoder.
 func NewTxnEventEncoder(config *common.Config) common.TxnEventEncoder {
 	return &batchEncoder{
-		config:         config,
-		valueBuf:       &bytes.Buffer{},
-		columnSelector: columnselector.NewDefaultColumnSelector(),
+		config:   config,
+		valueBuf: &bytes.Buffer{},
 	}
-}
-
-func (b *batchEncoder) SetColumnSelector(selector commonEvent.Selector) {
-	if selector == nil {
-		selector = columnselector.NewDefaultColumnSelector()
-	}
-	b.columnSelector = selector
 }
 
 // AppendTxnEvent implements the TxnEventEncoder interface
-func (b *batchEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error {
-	if b.config.CSVOutputFieldHeader && b.batchSize == 0 {
-		b.setHeader(event.TableInfo, b.columnSelector)
+func (b *batchEncoder) AppendTxnEvent(rowEvents []*commonEvent.RowEvent) error {
+	if len(rowEvents) == 0 {
+		return nil
 	}
-	for {
-		row, ok := event.GetNextRow()
-		if !ok {
-			event.Rewind()
-			break
-		}
-		msg, err := rowChangedEvent2CSVMsg(b.config, &commonEvent.RowEvent{
-			TableInfo:      event.TableInfo,
-			CommitTs:       event.CommitTs,
-			Event:          row,
-			ColumnSelector: b.columnSelector,
-		})
+	if b.config.CSVOutputFieldHeader && b.batchSize == 0 {
+		b.setHeader(rowEvents[0].TableInfo, rowEvents[0].ColumnSelector)
+	}
+	for _, rowEvent := range rowEvents {
+		msg, err := rowChangedEvent2CSVMsg(b.config, rowEvent)
 		if err != nil {
 			return err
 		}
 		b.valueBuf.Write(msg.encode())
 		b.batchSize++
 	}
-	b.callback = event.PostFlush
+	b.callback = rowEvents[len(rowEvents)-1].Callback
 	return nil
 }
 
