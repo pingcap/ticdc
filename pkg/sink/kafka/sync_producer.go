@@ -27,6 +27,23 @@ import (
 	"go.uber.org/zap"
 )
 
+// SyncProducer is the kafka sync producer
+type SyncProducer interface {
+	// SendMessage produces a given message, and returns only when it either has
+	// succeeded or failed to produce. It will return the partition and the offset
+	// of the produced message, or an error if the message failed to produce.
+	SendMessage(topic string, partitionNum int32, message *common.Message) error
+
+	// SendMessages produces a given set of messages, and returns only when all
+	// messages in the set have either succeeded or failed. Note that messages
+	// can succeed and fail individually; if some succeed and some fail,
+	// SendMessages will return an error.
+	SendMessages(topic string, partitionNum int32, message *common.Message) error
+
+	// Close shuts down the producer and releases its Kafka client resources.
+	Close()
+}
+
 type kafkaSyncProducer struct {
 	id commonType.ChangeFeedID
 

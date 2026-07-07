@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -41,6 +42,22 @@ const (
 	legacyMetricAvg = "avg"
 	legacyMetricP99 = "p99"
 )
+
+func newKafkaMetricsHook(changefeedID common.ChangeFeedID) *metricsHook {
+	return newMetricsHook(
+		changefeedID.Keyspace(),
+		changefeedID.Name(),
+		metricVectors{
+			RequestsInFlight:  requestsInFlightGauge,
+			OutgoingByteRate:  OutgoingByteRateGauge,
+			RequestRate:       RequestRateGauge,
+			RequestLatency:    RequestLatencyGauge,
+			ResponseRate:      responseRateGauge,
+			CompressionRatio:  compressionRatioGauge,
+			RecordsPerRequest: recordsPerRequestGauge,
+		},
+	)
+}
 
 func newMetricsHook(
 	keyspace string,

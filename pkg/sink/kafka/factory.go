@@ -16,8 +16,8 @@ package kafka
 import (
 	"context"
 
-	commonType "github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // Factory is used to produce all kafka components.
@@ -32,38 +32,85 @@ type Factory interface {
 	MetricsCollector() MetricsCollector
 }
 
-// FactoryCreator defines the type of factory creator.
-type FactoryCreator func(context.Context, *options, commonType.ChangeFeedID) (Factory, error)
+type factory struct {
+	changefeedID common.ChangeFeedID
+	clientOption *clientOptions
 
-// SyncProducer is the kafka sync producer
-type SyncProducer interface {
-	// SendMessage produces a given message, and returns only when it either has
-	// succeeded or failed to produce. It will return the partition and the offset
-	// of the produced message, or an error if the message failed to produce.
-	SendMessage(topic string, partitionNum int32, message *common.Message) error
-
-	// SendMessages produces a given set of messages, and returns only when all
-	// messages in the set have either succeeded or failed. Note that messages
-	// can succeed and fail individually; if some succeed and some fail,
-	// SendMessages will return an error.
-	SendMessages(topic string, partitionNum int32, message *common.Message) error
-
-	// Close shuts down the producer and releases its Kafka client resources.
-	Close()
+	metricsHook *metricsHook
 }
 
-// AsyncProducer is the kafka async producer
-type AsyncProducer interface {
-	// Close shuts down the producer asynchronously and releases its Kafka client
-	// resources. It does not wait for buffered messages to be flushed.
-	Close()
+// NewFactory constructs a Factory.
+func NewFactory(
+	ctx context.Context,
+	o *options,
+	changefeedID common.ChangeFeedID,
+) (Factory, error) {
+	admin, err := newAdminClient(ctx, changefeedID, newClientOption(o), nil)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	defer admin.Close()
 
-	// AsyncSend is the input channel for the user to write messages to that they
-	// wish to send.
-	AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error
+	if err := adjustOptions(ctx, admin, o, o.Topic); err != nil {
+		return nil, errors.Trace(err)
+	}
 
-	// AsyncRunCallback process the messages that has sent to kafka,
-	// and run tha attached callback. the caller should call this
-	// method in a background goroutine
-	AsyncRunCallback(ctx context.Context) error
+	return &factory{
+		changefeedID: changefeedID,
+		clientOption: newClientOption(o),
+		metricsHook:  newKafkaMetricsHook(changefeedID),
+	}, nil
+}
+
+func (f *factory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
+	admin, err := newAdminClient(ctx, f.changefeedID, f.clientOption, f.metricsHook)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+	}
+	return admin, nil
+}
+
+func (f *factory) SyncProducer(ctx context.Context) (SyncProducer, error) {
+	producer, err := newSyncProducer(ctx, f.changefeedID, f.clientOption, f.metricsHook)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+	}
+	return producer, nil
+}
+
+func (f *factory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
+	producer, err := newAsyncProducer(ctx, f.changefeedID, f.clientOption, f.metricsHook)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+	}
+	return producer, nil
+}
+
+func (f *factory) MetricsCollector() MetricsCollector {
+	return &kafkaMetricsCollector{changefeedID: f.changefeedID, hook: f.metricsHook}
+}
+
+func newClientOption(o *options) *clientOptions {
+	return &clientOptions{
+		BrokerEndpoints: o.BrokerEndpoints,
+		ClientID:        o.ClientID,
+
+		Version:           o.Version,
+		IsAssignedVersion: o.IsAssignedVersion,
+
+		MaxMessageBytes:       o.MaxMessageBytes,
+		ProducerBatchMaxBytes: o.ProducerBatchMaxBytes,
+		MaxRetry:              o.MaxRetry,
+		Compression:           o.Compression,
+		RequiredAcks:          int16(o.RequiredAcks),
+
+		EnableTLS:          o.EnableTLS,
+		Credential:         o.Credential,
+		InsecureSkipVerify: o.InsecureSkipVerify,
+		sasl:               o.sasl,
+
+		DialTimeout:  o.DialTimeout,
+		WriteTimeout: o.WriteTimeout,
+		ReadTimeout:  o.ReadTimeout,
+	}
 }

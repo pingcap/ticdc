@@ -13,9 +13,25 @@
 
 package kafka
 
-import "context"
+import (
+	"context"
+
+	"github.com/pingcap/ticdc/pkg/common"
+)
 
 // MetricsCollector is the interface for kafka metrics collector.
 type MetricsCollector interface {
 	Run(ctx context.Context)
+}
+
+type kafkaMetricsCollector struct {
+	changefeedID common.ChangeFeedID
+	hook         *metricsHook
+}
+
+func (c *kafkaMetricsCollector) Run(ctx context.Context) {
+	<-ctx.Done()
+	if c.hook != nil {
+		c.hook.cleanupMetrics()
+	}
 }

@@ -27,6 +27,22 @@ import (
 	"go.uber.org/zap"
 )
 
+// AsyncProducer is the kafka async producer
+type AsyncProducer interface {
+	// Close shuts down the producer asynchronously and releases its Kafka client
+	// resources. It does not wait for buffered messages to be flushed.
+	Close()
+
+	// AsyncSend is the input channel for the user to write messages to that they
+	// wish to send.
+	AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error
+
+	// AsyncRunCallback process the messages that has sent to kafka,
+	// and run tha attached callback. the caller should call this
+	// method in a background goroutine
+	AsyncRunCallback(ctx context.Context) error
+}
+
 type kafkaAsyncProducer struct {
 	client       *kgo.Client
 	changefeedID commonType.ChangeFeedID
