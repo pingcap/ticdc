@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,28 +47,4 @@ func TestFlushMarkerWaitReturnsContextCause(t *testing.T) {
 	marker := newFlushMarker(100)
 	err := marker.wait(ctx)
 	require.ErrorIs(t, err, cause)
-}
-
-func TestPostTxnFlushedCallbackDoesNotRunPostEnqueue(t *testing.T) {
-	t.Parallel()
-
-	event := &commonEvent.DMLEvent{}
-	flushCallbackCount := 0
-	enqueueCallbackCount := 0
-	event.AddPostFlushFunc(func() {
-		flushCallbackCount++
-	})
-	event.AddPostEnqueueFunc(func() {
-		enqueueCallbackCount++
-	})
-
-	callback := newPostTxnFlushedCallback(event)
-	require.NotNil(t, callback)
-	callback()
-	require.Equal(t, 1, flushCallbackCount)
-	require.Equal(t, 0, enqueueCallbackCount)
-
-	event.PostEnqueue()
-	event.PostEnqueue()
-	require.Equal(t, 1, enqueueCallbackCount)
 }

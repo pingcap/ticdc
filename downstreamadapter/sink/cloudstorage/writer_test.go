@@ -128,7 +128,7 @@ func TestWriterRun(t *testing.T) {
 			TableInfo:       tableInfo,
 			Rows:            chunk.MutRowFromValues(100, "hello world").ToRow().Chunk(),
 		}
-		tableTask := newDMLTask(tableName, dmlEvent)
+		tableTask := newDMLTask(tableName, dmlEvent, nil)
 		tableTask.encodedMsgs = []*common.Message{
 			{
 				Value: []byte(fmt.Sprintf(`{"id":%d,"database":"test","table":"table1","pkNames":[],"isDdl":false,`+
@@ -201,6 +201,7 @@ func TestWriterFlushMarker(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	tableTask.encodedMsgs = []*common.Message{msg}
 	require.NoError(t, d.enqueueTask(ctx, tableTask))
@@ -264,6 +265,7 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	msgA := common.NewMsg(nil, []byte(`{"id":"a"}`))
 	msgA.SetRowsCount(1)
@@ -292,6 +294,7 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 				},
 			}),
 		},
+		nil,
 	)
 	msgB := common.NewMsg(nil, []byte(`{"id":"b"}`))
 	msgB.SetRowsCount(1)
@@ -361,6 +364,7 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 			DispatcherID:     dispatcherID,
 		},
 		dmlEvent,
+		nil,
 	)
 	tableTask.encodedMsgs = []*common.Message{
 		{
@@ -505,6 +509,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	msg := common.NewMsg(nil, []byte(`{"id":1}`))
 	msg.SetRowsCount(1)
@@ -670,6 +675,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	msg := common.NewMsg(nil, []byte(`{"id":1}`))
 	msg.SetRowsCount(1)
@@ -735,6 +741,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 
 	var callbackCount atomic.Int64

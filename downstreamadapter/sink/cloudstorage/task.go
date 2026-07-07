@@ -58,7 +58,7 @@ func newDMLTask(
 		postEnqueue:    event.PostEnqueue,
 		tableInfo:      event.TableInfo,
 		versionedTable: version,
-		rowEvents:      helper.NewRowEvents(event, selector, helper.NewTxnPostFlushRowCallback(event, uint64(event.Length))),
+		rowEvents:      helper.NewRowEvents(event, selector, event.PostFlush),
 		dispatcherID:   event.GetDispatcherID(),
 	}
 }
@@ -76,23 +76,6 @@ func newFlushTask(
 
 func (t *task) isFlushTask() bool {
 	return t != nil && t.kind == taskKindFlush
-}
-
-func newPostTxnFlushedCallback(event *commonEvent.DMLEvent) func() {
-	if event == nil {
-		return nil
-	}
-	callbacks := append([]func(){}, event.PostTxnFlushed...)
-	if len(callbacks) == 0 {
-		return nil
-	}
-	return func() {
-		for _, f := range callbacks {
-			if f != nil {
-				f()
-			}
-		}
-	}
 }
 
 func (t *task) wait(ctx context.Context) error {

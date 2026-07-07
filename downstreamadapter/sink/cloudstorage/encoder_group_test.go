@@ -195,6 +195,7 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 			DispatcherID:     dispatcherID,
 		},
 		event,
+		nil,
 	)
 	require.NoError(t, group.add(ctx, taskValue))
 
@@ -216,7 +217,7 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 				require.NotNil(t, task.encodedMsgs[0].Callback)
 				task.encodedMsgs[0].Callback()
 				require.Equal(t, int64(1), flushCount.Load())
-				require.Equal(t, int64(0), enqueueCount.Load())
+				require.Equal(t, int64(1), enqueueCount.Load())
 				require.NotNil(t, task.postEnqueue)
 				task.postEnqueue()
 				require.Equal(t, int64(1), enqueueCount.Load())

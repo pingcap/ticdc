@@ -26,7 +26,7 @@ func NewMQRowEvents(
 	partitionGenerator partition.Generator,
 	selector commonEvent.Selector,
 ) ([]*commonEvent.MQRowEvent, error) {
-	rowEvents := NewRowEvents(event, selector, NewTxnPostFlushRowCallback(event, uint64(event.Len())))
+	rowEvents := NewRowEvents(event, selector, NewPostFlushRowCallback(event, uint64(event.Len())))
 	events := make([]*commonEvent.MQRowEvent, 0, len(rowEvents))
 
 	for _, rowEvent := range rowEvents {
