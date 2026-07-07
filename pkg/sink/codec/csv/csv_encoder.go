@@ -16,6 +16,7 @@ package csv
 import (
 	"bytes"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -28,20 +29,30 @@ type batchEncoder struct {
 	callback  func()
 	batchSize int
 	config    *common.Config
+
+	columnSelector commonEvent.Selector
 }
 
 // NewTxnEventEncoder creates a new csv BatchEncoder.
 func NewTxnEventEncoder(config *common.Config) common.TxnEventEncoder {
 	return &batchEncoder{
-		config:   config,
-		valueBuf: &bytes.Buffer{},
+		config:         config,
+		valueBuf:       &bytes.Buffer{},
+		columnSelector: columnselector.NewDefaultColumnSelector(),
 	}
+}
+
+func (b *batchEncoder) SetColumnSelector(selector commonEvent.Selector) {
+	if selector == nil {
+		selector = columnselector.NewDefaultColumnSelector()
+	}
+	b.columnSelector = selector
 }
 
 // AppendTxnEvent implements the TxnEventEncoder interface
 func (b *batchEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error {
 	if b.config.CSVOutputFieldHeader && b.batchSize == 0 {
-		b.setHeader(event.TableInfo)
+		b.setHeader(event.TableInfo, b.columnSelector)
 	}
 	for {
 		row, ok := event.GetNextRow()
@@ -50,9 +61,10 @@ func (b *batchEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error {
 			break
 		}
 		msg, err := rowChangedEvent2CSVMsg(b.config, &commonEvent.RowEvent{
-			TableInfo: event.TableInfo,
-			CommitTs:  event.CommitTs,
-			Event:     row,
+			TableInfo:      event.TableInfo,
+			CommitTs:       event.CommitTs,
+			Event:          row,
+			ColumnSelector: b.columnSelector,
 		})
 		if err != nil {
 			return err
@@ -84,10 +96,13 @@ func (b *batchEncoder) Build() (messages []*common.Message) {
 	return []*common.Message{ret}
 }
 
-func (b *batchEncoder) setHeader(tableInfo *commonType.TableInfo) {
+func (b *batchEncoder) setHeader(tableInfo *commonType.TableInfo, selector commonEvent.Selector) {
 	buf := &bytes.Buffer{}
 	colNames := make([]string, 0, len(tableInfo.GetColumns()))
 	for _, col := range tableInfo.GetColumns() {
+		if !shouldEncodeColumn(col, selector) {
+			continue
+		}
 		colNames = append(colNames, col.Name.O)
 	}
 	buf.Write(encodeHeader(b.config, colNames))

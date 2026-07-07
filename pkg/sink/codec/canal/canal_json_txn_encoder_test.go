@@ -16,6 +16,7 @@ package canal
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -99,4 +100,32 @@ func TestCanalJSONAppendTxnEventEncoderWithCallback(t *testing.T) {
 	require.Nil(t, encoder.(*JSONTxnEventEncoder).callback)
 	require.Equal(t, 0, encoder.(*JSONTxnEventEncoder).batchSize)
 	require.Equal(t, 0, encoder.(*JSONTxnEventEncoder).valueBuf.Len())
+}
+
+func TestCanalJSONTxnEventEncoderWithColumnSelector(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.DDL2Event("create table test.t(col1 int primary key, col2 varchar(255))")
+	event := helper.DML2Event("test", "t", `insert into test.t values (1, "filtered")`)
+
+	selectors, err := columnselector.New(&config.SinkConfig{
+		ColumnSelectors: []*config.ColumnSelector{
+			{Matcher: []string{"test.t"}, Columns: []string{"col1"}},
+		},
+	})
+	require.NoError(t, err)
+
+	encoder := NewJSONTxnEventEncoder(common.NewConfig(config.ProtocolCanalJSON))
+	selectorSetter, ok := encoder.(common.ColumnSelectorAwareTxnEventEncoder)
+	require.True(t, ok)
+	selectorSetter.SetColumnSelector(selectors.GetForTableInfo(event.TableInfo))
+
+	require.NoError(t, encoder.AppendTxnEvent(event))
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+	value := string(messages[0].Value)
+	require.Contains(t, value, "col1")
+	require.NotContains(t, value, "col2")
+	require.NotContains(t, value, "filtered")
 }

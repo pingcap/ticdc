@@ -99,6 +99,13 @@ func (c *ColumnSelectors) Get(schema, table string) *ColumnSelector {
 	return &ColumnSelector{}
 }
 
+func (c *ColumnSelectors) GetForTableInfo(tableInfo *common.TableInfo) *ColumnSelector {
+	if c == nil || tableInfo == nil {
+		return NewDefaultColumnSelector()
+	}
+	return c.Get(tableInfo.GetSchemaName(), tableInfo.GetTableName())
+}
+
 // VerifyTables return the error if any given table cannot satisfy the column selector constraints.
 // 1. if the column is filter out, it must not be a part of handle key or the unique key.
 // 2. if the filtered out column is used in the column dispatcher, return error.

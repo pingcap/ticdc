@@ -44,6 +44,10 @@ type TxnEventEncoder interface {
 	Build() []*Message
 }
 
+type ColumnSelectorAwareTxnEventEncoder interface {
+	SetColumnSelector(commonEvent.Selector)
+}
+
 // IsColumnValueEqual checks whether the preValue and updatedValue are equal.
 func IsColumnValueEqual(preValue, updatedValue interface{}) bool {
 	if preValue == nil || updatedValue == nil {

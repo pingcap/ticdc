@@ -108,6 +108,9 @@ func (eg *encoderGroup) runEncoder(ctx context.Context, index int) error {
 				continue
 			}
 
+			if setter, ok := encoder.(common.ColumnSelectorAwareTxnEventEncoder); ok {
+				setter.SetColumnSelector(task.columnSelector)
+			}
 			err = encoder.AppendTxnEvent(task.event)
 			if err != nil {
 				return err

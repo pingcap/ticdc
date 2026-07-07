@@ -47,6 +47,13 @@ func NewJSONTxnEventEncoder(config *common.Config) common.TxnEventEncoder {
 	}
 }
 
+func (j *JSONTxnEventEncoder) SetColumnSelector(selector commonEvent.Selector) {
+	if selector == nil {
+		selector = columnselector.NewDefaultColumnSelector()
+	}
+	j.columnSelector = selector
+}
+
 // AppendTxnEvent appends a txn event to the encoder.
 func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error {
 	for {

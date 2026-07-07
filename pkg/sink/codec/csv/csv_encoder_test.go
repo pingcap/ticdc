@@ -17,7 +17,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
@@ -127,4 +129,39 @@ func TestCSVBatchCodecWithHeader(t *testing.T) {
 	require.Nil(t, err)
 	messages = encoder.Build()
 	require.Len(t, messages, 0)
+}
+
+func TestCSVTxnEventEncoderWithColumnSelector(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.DDL2Event("create table test.table1(col1 int primary key, col2 varchar(255))")
+	event := helper.DML2Event("test", "table1", `insert into test.table1 values (1, "filtered")`)
+
+	selectors, err := columnselector.New(&config.SinkConfig{
+		ColumnSelectors: []*config.ColumnSelector{
+			{Matcher: []string{"test.table1"}, Columns: []string{"col1"}},
+		},
+	})
+	require.NoError(t, err)
+
+	cfg := &common.Config{
+		Delimiter:            ",",
+		Quote:                "\"",
+		Terminator:           "\n",
+		NullString:           "\\N",
+		IncludeCommitTs:      true,
+		CSVOutputFieldHeader: true,
+	}
+	encoder := NewTxnEventEncoder(cfg)
+	selectorSetter, ok := encoder.(common.ColumnSelectorAwareTxnEventEncoder)
+	require.True(t, ok)
+	selectorSetter.SetColumnSelector(selectors.GetForTableInfo(event.TableInfo))
+
+	require.NoError(t, encoder.AppendTxnEvent(event))
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+	require.Equal(t, "ticdc-meta$operation,ticdc-meta$table,ticdc-meta$schema,ticdc-meta$commit-ts,col1\n", string(messages[0].Key))
+	require.NotContains(t, string(messages[0].Key), "col2")
+	require.NotContains(t, string(messages[0].Value), "filtered")
 }

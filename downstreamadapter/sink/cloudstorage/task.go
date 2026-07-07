@@ -17,6 +17,7 @@ import (
 	"context"
 	"sync/atomic"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -42,6 +43,7 @@ type task struct {
 	callbacks      *txnCallbacks                   // Lightweight txn callbacks detached from event.
 	tableInfo      *commonType.TableInfo           // Table info used after event is released.
 	versionedTable cloudstorage.VersionedTableName // Versioned output identity for the DML event.
+	columnSelector commonEvent.Selector            // Column selector used by the txn encoder.
 	encodedMsgs    []*common.Message               // Encoded result built from event.
 
 	// Flush-only field.
@@ -51,16 +53,22 @@ type task struct {
 func newDMLTask(
 	version cloudstorage.VersionedTableName,
 	event *commonEvent.DMLEvent,
+	selectors ...commonEvent.Selector,
 ) *task {
 	// The dispatcher path registers progress callbacks before calling
 	// Sink.AddDMLEvent, so snapshot callbacks here and release the large event
 	// object after encoding.
+	selector := commonEvent.Selector(columnselector.NewDefaultColumnSelector())
+	if len(selectors) > 0 && selectors[0] != nil {
+		selector = selectors[0]
+	}
 	return &task{
 		kind:           taskKindDML,
 		event:          event,
 		callbacks:      newTxnCallbacks(event),
 		tableInfo:      event.TableInfo,
 		versionedTable: version,
+		columnSelector: selector,
 		dispatcherID:   event.GetDispatcherID(),
 	}
 }
