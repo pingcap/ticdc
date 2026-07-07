@@ -38,6 +38,8 @@ import (
 const (
 	// defaultPartitionNum specifies the default number of partitions when we create the topic.
 	defaultPartitionNum = 3
+	// defaultMaxRetry is the default retry budget for Kafka producers.
+	defaultMaxRetry = 5
 
 	// the `max-message-bytes` is set equal to topic's `max.message.bytes`, and is used to check
 	// whether the message is larger than the max size limit. It's found some message pass the message
@@ -62,10 +64,6 @@ const (
 	// See: https://kafka.apache.org/documentation/#brokerconfigs_min.insync.replicas and
 	// https://kafka.apache.org/documentation/#topicconfigs_min.insync.replicas
 	MinInsyncReplicasConfigName = "min.insync.replicas"
-	// BrokerConnectionsMaxIdleMsConfigName specifies the maximum idle time of a connection to a broker.
-	// Broker will close the connection if it is idle for this long.
-	// See: https://kafka.apache.org/documentation/#brokerconfigs_connections.max.idle.ms
-	BrokerConnectionsMaxIdleMsConfigName = "connections.max.idle.ms"
 )
 
 const (
@@ -119,6 +117,7 @@ type urlConfig struct {
 	ReplicationFactor            *int16  `form:"replication-factor"`
 	KafkaVersion                 *string `form:"kafka-version"`
 	MaxMessageBytes              *int    `form:"max-message-bytes"`
+	MaxRetry                     *int    `form:"max-retry"`
 	Compression                  *string `form:"compression"`
 	KafkaClientID                *string `form:"kafka-client-id"`
 	AutoCreateTopic              *bool   `form:"auto-create-topic"`
@@ -158,6 +157,7 @@ type options struct {
 	IsAssignedVersion bool
 	RequestVersion    int16
 	MaxMessageBytes   int
+	MaxRetry          int
 	Compression       string
 	ClientID          string
 	RequiredAcks      RequiredAcks
@@ -172,10 +172,9 @@ type options struct {
 	SASL               *security.SASL
 
 	// Timeout for network configurations, default to `10s`
-	DialTimeout           time.Duration
-	WriteTimeout          time.Duration
-	ReadTimeout           time.Duration
-	KeepConnAliveInterval time.Duration
+	DialTimeout  time.Duration
+	WriteTimeout time.Duration
+	ReadTimeout  time.Duration
 }
 
 // NewOptions returns a default Kafka configuration
@@ -184,6 +183,7 @@ func NewOptions() *options {
 		Version: "2.4.0",
 		// MaxMessageBytes will be used to initialize producer
 		MaxMessageBytes:    config.DefaultMaxMessageBytes,
+		MaxRetry:           defaultMaxRetry,
 		ReplicationFactor:  1,
 		Compression:        "none",
 		RequiredAcks:       WaitForAll,
@@ -259,6 +259,10 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 
 	if urlParameter.MaxMessageBytes != nil {
 		o.MaxMessageBytes = *urlParameter.MaxMessageBytes
+	}
+
+	if urlParameter.MaxRetry != nil && *urlParameter.MaxRetry >= 0 {
+		o.MaxRetry = *urlParameter.MaxRetry
 	}
 
 	if urlParameter.Compression != nil {
@@ -593,21 +597,6 @@ func adjustOptions(
 		}
 	}
 
-	// adjust keepConnAliveInterval by `connections.max.idle.ms` broker config.
-	idleMs, err := admin.GetBrokerConfig(BrokerConnectionsMaxIdleMsConfigName)
-	if err != nil {
-		log.Warn("GetBrokerConfig failed for connections.max.idle.ms", zap.Error(err))
-	} else {
-		idleMsInt, err := strconv.Atoi(idleMs)
-		if err != nil || idleMsInt <= 0 {
-			log.Warn("invalid broker config",
-				zap.String("configName", BrokerConnectionsMaxIdleMsConfigName), zap.String("configValue", idleMs))
-			return errors.Trace(err)
-		}
-		options.KeepConnAliveInterval = time.Duration(idleMsInt/3) * time.Millisecond
-		log.Info("Adjust KeepConnAliveInterval", zap.Duration("KeepConnAliveInterval", options.KeepConnAliveInterval))
-	}
-
 	info, exists := topics[topic]
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
@@ -618,12 +607,15 @@ func adjustOptions(
 			TopicMaxMessageBytesConfigName,
 			BrokerMessageMaxBytesConfigName,
 		)
+		var topicMaxMessageBytes int
 		if err != nil {
-			return errors.Trace(err)
-		}
-		topicMaxMessageBytes, err := strconv.Atoi(topicMaxMessageBytesStr)
-		if err != nil {
-			return errors.Trace(err)
+			log.Warn("TiCDC cannot find `max.message.bytes` from topic's configuration, use the option `MaxMessageBytes` as default")
+			topicMaxMessageBytes = options.MaxMessageBytes
+		} else {
+			topicMaxMessageBytes, err = strconv.Atoi(topicMaxMessageBytesStr)
+			if err != nil {
+				return errors.Trace(err)
+			}
 		}
 
 		maxMessageBytes := topicMaxMessageBytes - maxMessageBytesOverhead
@@ -654,14 +646,16 @@ func adjustOptions(
 		return nil
 	}
 
+	var brokerMessageMaxBytes int
 	brokerMessageMaxBytesStr, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
 	if err != nil {
-		log.Warn("TiCDC cannot find `message.max.bytes` from broker's configuration")
-		return errors.Trace(err)
-	}
-	brokerMessageMaxBytes, err := strconv.Atoi(brokerMessageMaxBytesStr)
-	if err != nil {
-		return errors.Trace(err)
+		log.Warn("TiCDC cannot find `message.max.bytes` from broker's configuration, use the option `MaxMessageBytes` as default")
+		brokerMessageMaxBytes = options.MaxMessageBytes
+	} else {
+		brokerMessageMaxBytes, err = strconv.Atoi(brokerMessageMaxBytesStr)
+		if err != nil {
+			return errors.Trace(err)
+		}
 	}
 
 	// when create the topic, `max.message.bytes` is decided by the broker,
@@ -728,9 +722,9 @@ func validateMinInsyncReplicas(
 				"to the minimum number of in-sync replicas" +
 				"if you want to use `required-acks` = -1." +
 				"Otherwise, TiCDC will not be able to send messages to the topic.")
-			return nil
 		}
-		return err
+		log.Warn("TiCDC meets error when get `min.insync.replicas` from broker's configuration, assume the config is valid")
+		return nil
 	}
 	minInsyncReplicas, err := strconv.Atoi(minInsyncReplicasStr)
 	if err != nil {

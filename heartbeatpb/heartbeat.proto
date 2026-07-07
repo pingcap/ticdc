@@ -72,6 +72,8 @@ message HeartBeatResponse {
     ChangefeedID changefeedID = 1;
     repeated DispatcherStatus dispatcherStatuses = 2;
     int64 mode = 3;
+    // maintainer_epoch fences barrier decisions from stale maintainers.
+    uint64 maintainer_epoch = 4;
 }
 
 message CheckpointTsMessage {
@@ -79,26 +81,30 @@ message CheckpointTsMessage {
     uint64 checkpointTs = 2;
 }
 
-// RedoMetaMessage used to send unflushed ts to update redo meta 
+// RedoMetaMessage used to send unflushed ts to update redo meta
 // from maintainer to dispatcher manager
 message RedoMetaMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
     uint64 checkpointTs = 3;
+    // maintainer_epoch fences redo meta updates from stale maintainers.
+    uint64 maintainer_epoch = 4;
 }
 
-// RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs 
+// RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs
 // from dispatcher manager to maintainer
 message RedoResolvedTsProgressMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
 }
 
-// RedoResolvedTsForwardMessage used to send redoGlobalTs (redo meta flushed resolvedTs) 
+// RedoResolvedTsForwardMessage used to send redoGlobalTs (redo meta flushed resolvedTs)
 // from maintainer to dispatcher manager
 message RedoResolvedTsForwardMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
+    // maintainer_epoch fences redo resolved-ts updates from stale maintainers.
+    uint64 maintainer_epoch = 3;
 }
 
 enum ScheduleAction {
@@ -132,6 +138,7 @@ message ScheduleDispatcherRequest {
     DispatcherConfig config = 2;
     ScheduleAction scheduleAction = 3;
     OperatorType operatorType = 4;
+    uint64 maintainer_epoch = 5;
 }
 
 message MergeDispatcherRequest {
@@ -139,6 +146,7 @@ message MergeDispatcherRequest {
     repeated DispatcherID dispatcherIDs = 2;  // dispatcherIDs from the dispatchers that need to be merged
     DispatcherID mergedDispatcherID = 3;      // the dispatcherID of the new dispatcher to be merged to.
     int64 mode = 4;
+    uint64 maintainer_epoch = 5;
 }
 
 message MaintainerHeartbeat {
@@ -172,6 +180,7 @@ message MaintainerStatus {
     // drain_progress reports the active dispatcher drain target observed by this maintainer.
     // Nil means no active dispatcher drain target.
     DrainProgress drain_progress = 8;
+    uint64 maintainer_epoch = 9;
 }
 
 // NodeLiveness is node-reported liveness.
@@ -224,6 +233,17 @@ message CoordinatorBootstrapRequest {
 
 message CoordinatorBootstrapResponse {
     repeated MaintainerStatus statuses = 1;
+    // drain_protocol_version is the node-scoped drain capability supported by
+    // the bootstrap responder. Zero means the node only supports the legacy
+    // hard-restart behavior. Non-zero versions opt into the coordinator-driven
+    // drain protocol used by rolling restart orchestration.
+    uint32 drain_protocol_version = 2;
+    // dispatcher_drain_target_* reports the manager-level drain target snapshot
+    // applied before this bootstrap response is sent. Coordinator uses it to
+    // clear stale targets inherited across coordinator failover before
+    // scheduling resumes.
+    string dispatcher_drain_target_node_id = 3;
+    uint64 dispatcher_drain_target_epoch = 4;
 }
 
 message AddMaintainerRequest {
@@ -232,6 +252,7 @@ message AddMaintainerRequest {
     uint64 checkpoint_ts = 3;
     bool is_new_changefeed = 4;  // only true when the changefeed is new created or resumed with overwriteCheckpointTs
     uint32 keyspace_id = 5;
+    uint64 maintainer_epoch = 6;
 }
 
 message RemoveMaintainerRequest {
@@ -239,6 +260,7 @@ message RemoveMaintainerRequest {
     bool cascade = 2;
     bool removed = 3;
     uint32 keyspace_id = 4;
+    uint64 maintainer_epoch = 5;
 }
 
 message MaintainerBootstrapRequest {
@@ -249,6 +271,7 @@ message MaintainerBootstrapRequest {
     bool is_new_changefeed = 5;                               // only true when the changefeed is new created or resumed with overwriteCheckpointTs
     DispatcherID table_trigger_redo_dispatcher_id = 6;  // only for redo
     uint32 keyspace_id = 7;
+    uint64 maintainer_epoch = 8;
 }
 
 message MaintainerBootstrapResponse {
@@ -268,6 +291,7 @@ message MaintainerBootstrapResponse {
     // It will be used when redo enable.
     uint64 redo_checkpoint_ts = 5;
     repeated ScheduleDispatcherRequest operators = 6;
+    uint64 maintainer_epoch = 7;
 }
 
 message MaintainerPostBootstrapRequest {
@@ -275,12 +299,14 @@ message MaintainerPostBootstrapRequest {
     DispatcherID table_trigger_event_dispatcher_id = 2;
     repeated SchemaInfo schemas = 3;
     repeated SchemaInfo redo_schemas = 4;
+    uint64 maintainer_epoch = 5;
 }
 
 message MaintainerPostBootstrapResponse {
     ChangefeedID changefeedID = 1;
     DispatcherID table_trigger_event_dispatcher_id = 2;
     RunningError err = 3;
+    uint64 maintainer_epoch = 4;
 }
 
 message SchemaInfo {
@@ -315,11 +341,13 @@ message MaintainerCloseRequest {
     ChangefeedID changefeedID = 1;
     // true when remove changefeed, false when pause the changefeed.
     bool removed = 2;
+    uint64 maintainer_epoch = 3;
 }
 
 message MaintainerCloseResponse {
     ChangefeedID changefeedID = 1;
     bool success = 2;
+    uint64 maintainer_epoch = 3;
 }
 
 enum InfluenceType {
@@ -342,6 +370,30 @@ message Table {
     bool Splitable = 3;
 }
 
+// RouteTableAdmissionAction describes the name-level lifecycle change for one
+// source table under a table route rule. These actions are carried by the table
+// trigger dispatcher's block status so the maintainer can validate and apply
+// route ownership transitions in commit-ts order.
+enum RouteTableAdmissionAction {
+    // ADMIT claims TargetSchemaName/TargetTableName for SourceSchemaName/SourceTableName.
+    ADMIT = 0;
+    // RELEASE drops the claim for SourceSchemaName/SourceTableName.
+    RELEASE = 1;
+    // RELEASE_SCHEMA drops claims for all source tables under SourceSchemaName.
+    RELEASE_SCHEMA = 2;
+}
+
+// RouteTableAdmission describes one source route transition reported by the
+// table trigger dispatcher. ADMIT uses source and target fields, RELEASE uses
+// source schema/table, and RELEASE_SCHEMA uses only source schema.
+message RouteTableAdmission {
+    string SourceSchemaName = 1;
+    string SourceTableName = 2;
+    string TargetSchemaName = 3;
+    string TargetTableName = 4;
+    RouteTableAdmissionAction Action = 5;
+}
+
 message SchemaIDChange {
     int64 TableID = 1;
     int64 OldSchemaID = 2;
@@ -357,6 +409,10 @@ message State {
     repeated SchemaIDChange UpdatedSchemas = 6;
     bool IsSyncPoint = 7;
     BlockStage stage = 8;  // means whether the block is waiting / writing / done
+    // RouteTableAdmissions carries name-level source-to-target route transitions
+    // for this barrier event. Non-empty only when the table trigger dispatcher's
+    // DDL changes the upstream source name lifecycle (e.g. RENAME TABLE, DROP TABLE).
+    repeated RouteTableAdmission RouteTableAdmissions = 9;
 }
 
 message TableSpanBlockStatus {
@@ -429,7 +485,7 @@ enum ChecksumState {
 
 message ChecksumMeta {
     ChecksumState state = 1;
-    // checksumStateSeq is a monotonic version for checksumState, 
+    // checksumStateSeq is a monotonic version for checksumState,
     // used to discard out-of-order meta info.
     uint64 checksumStateSeq = 2;
 }

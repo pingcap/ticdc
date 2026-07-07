@@ -206,10 +206,8 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 		lastStartTs  uint64
 		lastCommitTs uint64
 	)
-	for {
-		if idx >= len(batchEvent.DMLEvents) {
-			break
-		}
+	for idx < len(batchEvent.DMLEvents) {
+
 		dml := batchEvent.DMLEvents[idx]
 		if c.hasSyncPointEventsBeforeTs(dml.GetCommitTs(), d) {
 			events := batchEvent.PopHeadDMLEvents(idx)
@@ -434,6 +432,8 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	// this dispatcher still has pending ddl to catch up.
 	hasPendingDDLEventInCurrentRange := dataRange.CommitTsStart < ddlState.MaxEventCommitTs &&
 		ddlState.MaxEventCommitTs <= commitTsEndBeforeWindow
+	nextSyncPointTs := task.nextSyncPoint.Load()
+	hasPendingSyncPointEventInCurrentRange := task.enableSyncPoint && commitTsEndBeforeWindow > nextSyncPointTs
 	scanMaxTs := task.changefeedStat.getScanMaxTs()
 	if scanMaxTs > 0 {
 		dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, scanMaxTs)
@@ -450,24 +450,32 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		}
 	}
 
-	if dataRange.CommitTsEnd <= dataRange.CommitTsStart && hasPendingDDLEventInCurrentRange {
+	if dataRange.CommitTsEnd <= dataRange.CommitTsStart &&
+		(hasPendingDDLEventInCurrentRange || hasPendingSyncPointEventInCurrentRange) {
 		// Global scan window base can be pinned by other lagging dispatchers.
-		// For a table with pending ddl in current range, use a local bounded step to keep
-		// this dispatcher making forward progress, so barrier coverage can eventually complete.
+		// For a table with pending ddl or syncpoint in current range, use a local bounded step
+		// to keep this dispatcher making forward progress, so barrier coverage can eventually complete.
 		interval := time.Duration(task.changefeedStat.scanInterval.Load())
 		if interval <= 0 {
 			interval = defaultScanInterval
 		}
 		localScanMaxTs := oracle.GoTimeToTS(oracle.GetTimeFromTS(dataRange.CommitTsStart).Add(interval))
+		if hasPendingSyncPointEventInCurrentRange && nextSyncPointTs >= dataRange.CommitTsStart &&
+			localScanMaxTs <= nextSyncPointTs {
+			localScanMaxTs = nextSyncPointTs + 1
+		}
 		dataRange.CommitTsEnd = min(commitTsEndBeforeWindow, localScanMaxTs)
 		if dataRange.CommitTsEnd > dataRange.CommitTsStart {
-			log.Info("scan window local advance due to pending ddl",
+			log.Info("scan window local advance due to pending barrier event",
 				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 				zap.Stringer("dispatcherID", task.id),
 				zap.Uint64("startTs", dataRange.CommitTsStart),
 				zap.Uint64("globalScanMaxTs", scanMaxTs),
 				zap.Uint64("localScanMaxTs", localScanMaxTs),
+				zap.Bool("hasPendingDDL", hasPendingDDLEventInCurrentRange),
 				zap.Uint64("ddlCommitTs", ddlState.MaxEventCommitTs),
+				zap.Bool("hasPendingSyncPoint", hasPendingSyncPointEventInCurrentRange),
+				zap.Uint64("nextSyncPointTs", nextSyncPointTs),
 				zap.Uint64("newEndTs", dataRange.CommitTsEnd))
 		}
 	}
@@ -712,7 +720,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	if err != nil {
-
 		log.Error("scan events failed",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
@@ -1142,9 +1149,7 @@ func (c *eventBroker) removeChangefeedStatus(status *changefeedStatus) {
 	}
 
 	filter.GetSharedFilterStorage().RemoveFilter(changefeedID)
-	metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
-	metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
-	metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
+	deleteScanWindowMetrics(changefeedID.String())
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
@@ -1263,8 +1268,9 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 		return actual.(*changefeedStatus)
 	}
 	log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
-	metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(changefeedID.String()).Set(0)
-	metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeedID.String()).Set(defaultScanInterval.Seconds())
+	if status.scanWindowController != nil {
+		initializeScanWindowMetrics(changefeedID.String())
+	}
 	return status
 }
 
@@ -1286,12 +1292,21 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		}
 		dispatcher := dispatcherPtr.Load()
 		if checkEpoch && heartbeatEpoch != dispatcher.epoch {
-			log.Warn("ignore dispatcher heartbeat from stale epoch",
+			fields := []zap.Field{
 				zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
 				zap.Stringer("dispatcherID", dispatcher.id),
 				zap.Uint64("heartbeatEpoch", heartbeatEpoch),
 				zap.Uint64("dispatcherEpoch", dispatcher.epoch),
-				zap.Uint64("checkpointTs", checkpointTs))
+				zap.Uint64("checkpointTs", checkpointTs),
+			}
+			if heartbeatEpoch < dispatcher.epoch {
+				log.Warn("ignore dispatcher heartbeat from stale epoch", fields...)
+			} else {
+				// Dispatcher reset requests and heartbeat messages are routed through
+				// different EventService queues, so a heartbeat from the next epoch can
+				// be handled before the corresponding reset request is applied.
+				log.Debug("ignore dispatcher heartbeat before reset is applied", fields...)
+			}
 			return
 		}
 		// TODO: Should we check if the dispatcher's serverID is the same as the heartbeat's serverID?

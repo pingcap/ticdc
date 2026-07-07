@@ -173,13 +173,18 @@ func (r *SpanReplication) GetMode() int64 {
 //
 //	The new status is only stored if its checkpointTs is greater than or equal to
 //	the current status's checkpointTs.
-func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) {
-	if newStatus != nil {
-		oldStatus := r.status.Load()
-		if newStatus.CheckpointTs >= oldStatus.CheckpointTs {
-			r.status.Store(newStatus)
-		}
+//
+// It returns true when the stored checkpointTs changes.
+func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) bool {
+	if newStatus == nil {
+		return false
 	}
+	oldStatus := r.status.Load()
+	if newStatus.CheckpointTs < oldStatus.CheckpointTs {
+		return false
+	}
+	r.status.Store(newStatus)
+	return newStatus.CheckpointTs != oldStatus.CheckpointTs
 }
 
 // ShouldRun always returns true.
@@ -255,7 +260,11 @@ func (r *SpanReplication) getCommittedCheckpointTs() uint64 {
 // moved/recreated during an in-flight barrier (DDL or syncpoint), starting from the raw checkpoint can
 // violate barrier semantics (e.g. replaying events that have already been acknowledged by the barrier),
 // so we adjust StartTs and (for DDL) optionally skip DML at StartTs+1.
-func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, operatorType heartbeatpb.OperatorType) *messaging.TargetMessage {
+func (r *SpanReplication) NewAddDispatcherMessage(
+	server node.ID,
+	operatorType heartbeatpb.OperatorType,
+	maintainerEpoch uint64,
+) *messaging.TargetMessage {
 	startTs := r.status.Load().CheckpointTs
 	skipDMLAsStartTs := false
 	ddlBarrierBlockTs := uint64(0)
@@ -325,22 +334,35 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, operatorType h
 				SkipDMLAsStartTs: skipDMLAsStartTs,
 				Mode:             r.GetMode(),
 			},
-			ScheduleAction: heartbeatpb.ScheduleAction_Create,
-			OperatorType:   operatorType,
+			ScheduleAction:  heartbeatpb.ScheduleAction_Create,
+			OperatorType:    operatorType,
+			MaintainerEpoch: maintainerEpoch,
 		})
 }
 
 // NewRemoveDispatcherMessage creates a ScheduleDispatcherRequest(Remove) for this span.
 // Span and OperatorType are included so a new maintainer can reconstruct intent during bootstrap/failover,
 // even if the dispatcher has already disappeared from the node span snapshot.
-func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID, operatorType heartbeatpb.OperatorType) *messaging.TargetMessage {
-	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.Span, r.GetMode(), operatorType)
+func (r *SpanReplication) NewRemoveDispatcherMessage(
+	server node.ID,
+	operatorType heartbeatpb.OperatorType,
+	maintainerEpoch uint64,
+) *messaging.TargetMessage {
+	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.Span, r.GetMode(), operatorType, maintainerEpoch)
 }
 
 // NewRemoveDispatcherMessage creates a ScheduleDispatcherRequest(Remove) for a dispatcherID.
 // The span is optional for the dispatcher manager, but is useful for maintainer bootstrap to correlate
 // in-flight remove requests with table spans when the dispatcher no longer exists.
-func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, span *heartbeatpb.TableSpan, mode int64, operatorType heartbeatpb.OperatorType) *messaging.TargetMessage {
+func NewRemoveDispatcherMessage(
+	server node.ID,
+	cfID common.ChangeFeedID,
+	dispatcherID *heartbeatpb.DispatcherID,
+	span *heartbeatpb.TableSpan,
+	mode int64,
+	operatorType heartbeatpb.OperatorType,
+	maintainerEpoch uint64,
+) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
@@ -350,7 +372,8 @@ func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispat
 				Span:         span,
 				Mode:         mode,
 			},
-			ScheduleAction: heartbeatpb.ScheduleAction_Remove,
-			OperatorType:   operatorType,
+			ScheduleAction:  heartbeatpb.ScheduleAction_Remove,
+			OperatorType:    operatorType,
+			MaintainerEpoch: maintainerEpoch,
 		})
 }

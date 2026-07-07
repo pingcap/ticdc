@@ -446,9 +446,6 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 const (
 	// batchSize is the maximum size of the number of messages in a batch.
 	batchSize = 2048
-	// batchInterval is the interval of the worker to collect a batch of messages.
-	// It shouldn't be too large, otherwise it will lead to a high latency.
-	batchInterval = 15 * time.Millisecond
 )
 
 // batchEncodeRun collect messages into batch and add them to the encoder group.
@@ -461,12 +458,10 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 		metrics.WorkerBatchSize.DeleteLabelValues(keyspace, changefeed)
 	}()
 
-	ticker := time.NewTicker(batchInterval)
-	defer ticker.Stop()
 	msgsBuf := make([]*commonEvent.MQRowEvent, batchSize)
 	for {
 		start := time.Now()
-		msgs, err := s.batch(ctx, msgsBuf, ticker)
+		msgs, err := s.batch(ctx, msgsBuf)
 		if err != nil {
 			log.Error("pulsar sink batch dml events failed",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -493,7 +488,7 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 
 // batch collects a batch of messages from w.msgChan into buffer.
 // Note: It will block until at least one message is received.
-func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) ([]*commonEvent.MQRowEvent, error) {
+func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent) ([]*commonEvent.MQRowEvent, error) {
 	// We need to receive at least one message or be interrupted,
 	// otherwise it will lead to idling.
 	select {

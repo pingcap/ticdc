@@ -182,7 +182,13 @@ func (c *logCoordinator) sendResolvedTsToCoordinator(id node.ID, changefeedID co
 			ResolvedTs:   resolvedTs,
 		},
 	)
-	c.messageCenter.SendEvent(msg)
+	if err := c.messageCenter.SendEvent(msg); err != nil {
+		log.Warn("failed to send resolved ts to coordinator",
+			zap.Stringer("target", id),
+			zap.String("changefeed", changefeedID.DisplayName.String()),
+			zap.Uint64("resolvedTs", resolvedTs),
+			zap.Error(err))
+	}
 }
 
 func (c *logCoordinator) handleNodeChange(allNodes map[node.ID]*node.Info) {

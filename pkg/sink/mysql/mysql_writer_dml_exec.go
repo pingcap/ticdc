@@ -22,10 +22,9 @@ import (
 	"time"
 
 	dmysql "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -35,7 +34,10 @@ import (
 // execDMLWithMaxRetries executes prepared DMLs with retry/backoff handling.
 func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	if len(dmls.sqls) != len(dmls.values) || len(dmls.sqls) != len(dmls.rowTypes) {
-		return cerror.ErrUnexpected.FastGenByArgs(fmt.Sprintf("unexpected number of sqls and values or rowTypes, sqls is %s, values is %s, row types is %s", dmls.sqls, util.RedactAny(dmls.values), dmls.rowTypes))
+		return errors.ErrUnexpected.FastGen(
+			"unexpected number of sqls and values or rowTypes, sqls is %s, values is %s, row types is %s",
+			dmls.sqls, util.RedactAny(dmls.values), dmls.rowTypes,
+		)
 	}
 
 	// approximateSize is multiplied by 2 because in extreme circustumas, every
@@ -93,26 +95,28 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		failpoint.Inject("MySQLSinkTxnRandomError", func() {
 			log.Warn("inject MySQLSinkTxnRandomError")
 			err := errors.Trace(driver.ErrBadConn)
-			w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
+			err = w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
 			failpoint.Return(err)
 		})
 
-		failpoint.Inject("MySQLSinkHangLongTime", func() { _ = util.Hang(w.ctx, time.Hour) })
+		failpoint.Inject("MySQLSinkHangLongTime", func() {
+			log.Warn("inject MySQLSinkHangLongTime")
+			_ = util.Hang(w.ctx, time.Hour)
+		})
 
 		failpoint.Inject("MySQLDuplicateEntryError", func() {
 			log.Warn("inject MySQLDuplicateEntryError")
-			err := cerror.WrapError(cerror.ErrMySQLDuplicateEntry, &dmysql.MySQLError{
+			err := errors.WrapError(errors.ErrMySQLDuplicateEntry, &dmysql.MySQLError{
 				Number:  uint16(mysql.ErrDupEntry),
 				Message: "Duplicate entry",
 			})
-			w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
+			err = w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
 			failpoint.Return(err)
 		})
 
 		err := w.statistics.RecordBatchExecution(tryExec)
 		if err != nil {
-			w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
-			return errors.Trace(err)
+			return errors.Trace(w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls))
 		}
 		return nil
 	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
@@ -158,12 +162,12 @@ func (w *Writer) sequenceExecute(
 		if execError != nil {
 			log.Error("ExecContext", zap.Error(execError), zap.Any("dmls", dmls), zap.Int("writerID", w.id))
 			if rbErr := tx.Rollback(); rbErr != nil {
-				if errors.Cause(rbErr) != context.Canceled {
+				if !errors.Is(errors.Cause(rbErr), context.Canceled) {
 					log.Warn("failed to rollback txn", zap.Error(rbErr), zap.Int("writerID", w.id))
 				}
 			}
 			cancelFunc()
-			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(execError, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", query, util.RedactArgs(args))))
+			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(execError, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", query, util.RedactArgs(args))))
 		}
 		if rowsAffected, err := res.RowsAffected(); err != nil {
 			log.Warn("get rows affected rows failed", zap.Error(err))
@@ -205,7 +209,7 @@ func (w *Writer) multiStmtExecute(
 				zap.Int("writerID", w.id),
 				zap.Error(rbErr))
 		}
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, util.RedactArgs(multiStmtArgs))))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, util.RedactArgs(multiStmtArgs))))
 	}
 	if rowsAffected, err := res.RowsAffected(); err != nil {
 		log.Warn("get rows affected rows failed", zap.Error(err))

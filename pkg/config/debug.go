@@ -142,6 +142,8 @@ type EventServiceConfig struct {
 	// DMLEventMaxBytes is the maximum size of a DML event in bytes when split txn is enabled.
 	DMLEventMaxBytes int64 `toml:"dml-event-max-bytes" json:"dml_event_max_bytes"`
 
+	EnableScanWindow bool `toml:"enable-scan-window" json:"enable_scan_window"`
+
 	// FIXME: For now we found cdc may OOM when there is a large amount of events to be sent to event collector from a remote event service.
 	// So we add this config to be able to disable remote event service in such scenario.
 	// TODO: Remove this config after we find a proper way to fix the OOM issue.
@@ -156,6 +158,7 @@ func NewDefaultEventServiceConfig() *EventServiceConfig {
 		ScanLimitInBytes:         1024 * 1024 * 256, // 256MB
 		DMLEventMaxRows:          256,
 		DMLEventMaxBytes:         1024 * 1024 * 1, // 1MB
+		EnableScanWindow:         true,
 		EnableRemoteEventService: true,
 	}
 }

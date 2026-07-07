@@ -300,6 +300,45 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow
 	require.Equal(t, oracle.GoTimeToTS(oracle.GetTimeFromTS(commitStart).Add(defaultScanInterval)), dataRange.CommitTsEnd)
 }
 
+func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingSyncPointCrossesSyncPoint(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	baseTime := time.Now()
+	baseTs := oracle.GoTimeToTS(baseTime)
+	commitStart := oracle.GoTimeToTS(baseTime.Add(20 * time.Second))
+	nextSyncPointTs := oracle.GoTimeToTS(baseTime.Add(23 * time.Second))
+	resolvedTs := oracle.GoTimeToTS(baseTime.Add(40 * time.Second))
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.nextSyncPoint = nextSyncPointTs
+	info.syncPointInterval = 10 * time.Second
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+
+	disp.sentResolvedTs.Store(baseTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(commitStart)
+	disp.lastScannedCommitTs.Store(commitStart)
+	disp.lastScannedStartTs.Store(commitStart - 1)
+
+	changefeedStatus.minSentTs.Store(baseTs)
+	changefeedStatus.scanInterval.Store(int64(time.Second))
+
+	ss.resolvedTs = resolvedTs
+	ss.maxDDLCommitTs = 0
+
+	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, needScan)
+	require.Equal(t, commitStart, dataRange.CommitTsStart)
+	require.Equal(t, nextSyncPointTs+1, dataRange.CommitTsEnd)
+}
+
 func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t *testing.T) {
 	broker, _, ss, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
@@ -365,24 +404,7 @@ func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t 
 	require.Equal(t, ts103, dataRange.CommitTsEnd)
 }
 
-func TestHandleCongestionControlV2AdjustsScanInterval(t *testing.T) {
-	broker, _, _, _ := newEventBrokerForTest()
-	defer broker.close()
-
-	changefeedID := common.NewChangefeedID4Test("default", "test")
-	status := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, time.Second*10)
-
-	status.scanInterval.Store(int64(40 * time.Second))
-	status.lastAdjustTime.Store(time.Now())
-
-	control := event.NewCongestionControlWithVersion(event.CongestionControlVersion2)
-	control.AddAvailableMemoryWithDispatchersAndUsage(changefeedID.ID(), 0, 1, nil)
-	broker.handleCongestionControl(node.ID("event-collector-1"), control)
-
-	require.Equal(t, int64(10*time.Second), status.scanInterval.Load())
-}
-
-func TestHandleCongestionControlV2ResetsScanIntervalOnMemoryRelease(t *testing.T) {
+func TestHandleCongestionControlV2DoesNotResetScanIntervalOnMemoryRelease(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
 
@@ -395,7 +417,7 @@ func TestHandleCongestionControlV2ResetsScanIntervalOnMemoryRelease(t *testing.T
 	control.AddAvailableMemoryWithDispatchersAndUsageAndReleaseCount(changefeedID.ID(), 0, 0.5, nil, 1)
 	broker.handleCongestionControl(node.ID("event-collector-1"), control)
 
-	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
+	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
 }
 
 func TestHandleCongestionControlV1DoesNotAdjustScanInterval(t *testing.T) {
@@ -406,7 +428,6 @@ func TestHandleCongestionControlV1DoesNotAdjustScanInterval(t *testing.T) {
 	status := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, time.Second*10)
 
 	status.scanInterval.Store(int64(40 * time.Second))
-	status.lastAdjustTime.Store(time.Now())
 
 	control := event.NewCongestionControl()
 	control.AddAvailableMemoryWithDispatchers(changefeedID.ID(), 0, nil)
@@ -749,6 +770,24 @@ func TestHandleDispatcherHeartbeatEpochFilter(t *testing.T) {
 		},
 	}
 	broker.handleDispatcherHeartbeat(staleHeartbeat)
+	require.Equal(t, uint64(100), dispatcher.checkpointTs.Load())
+	require.Equal(t, int64(0), dispatcher.lastReceivedHeartbeatTime.Load())
+
+	futureHeartbeat := &DispatcherHeartBeatWithServerID{
+		serverID: "test-server-1",
+		heartbeat: &event.DispatcherHeartbeat{
+			Version:         event.DispatcherHeartbeatVersion2,
+			ClusterID:       0,
+			DispatcherCount: 1,
+			DispatcherProgresses: []event.DispatcherProgress{{
+				Version:      event.DispatcherProgressVersion1,
+				DispatcherID: dispInfo.GetID(),
+				CheckpointTs: 220,
+				Epoch:        4,
+			}},
+		},
+	}
+	broker.handleDispatcherHeartbeat(futureHeartbeat)
 	require.Equal(t, uint64(100), dispatcher.checkpointTs.Load())
 	require.Equal(t, int64(0), dispatcher.lastReceivedHeartbeatTime.Load())
 

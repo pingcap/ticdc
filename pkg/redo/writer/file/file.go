@@ -34,7 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/uber-go/atomic"
 	pioutil "go.etcd.io/etcd/pkg/v3/ioutil"
@@ -116,7 +116,7 @@ type Writer struct {
 	ongoingFilePath string
 	bw              *pioutil.PageWriter
 	uint64buf       []byte
-	storage         storage.ExternalStorage
+	storage         storeapi.Storage
 	sync.RWMutex
 	uuidGenerator uuid.Generator
 	allocator     *fsutil.FileAllocator
@@ -130,7 +130,7 @@ type Writer struct {
 func newWriter(
 	cfg fileWriterConfig,
 	logType string,
-	extStorage storage.ExternalStorage,
+	extStorage storeapi.Storage,
 	opts ...writer.Option,
 ) (*Writer, error) {
 	op := &writer.LogWriterOptions{}
@@ -181,7 +181,7 @@ func newWriter(
 func NewFileWriter(
 	ctx context.Context, cfg *writer.Config, logType string, opts ...writer.Option,
 ) (w *Writer, err error) {
-	var extStorage storage.ExternalStorage
+	var extStorage storeapi.Storage
 	if cfg.UseExternalStorage() {
 		extStorage, err = redo.InitExternalStorage(ctx, *cfg.URI())
 		if err != nil {
@@ -565,7 +565,7 @@ func (w *Writer) flushAndRotateFile() error {
 	// which could cause considerable network bandwidth waste.
 	err = w.rotate()
 	if err != nil {
-		return nil
+		return err
 	}
 	w.metricFlushAllDuration.Observe(time.Since(start).Seconds())
 

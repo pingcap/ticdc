@@ -18,12 +18,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 )
 
 const (
@@ -71,10 +70,6 @@ func (c *bufferManager) run(ctx context.Context) error {
 	defer ticker.Stop()
 
 	for {
-		failpoint.Inject("passTickerOnce", func() {
-			<-ticker.C
-		})
-
 		select {
 		case <-ctx.Done():
 			return errors.Trace(context.Cause(ctx))
@@ -104,12 +99,12 @@ func (c *bufferManager) run(ctx context.Context) error {
 
 func (c *bufferManager) handleDMLTask(ctx context.Context, task *task) error {
 	if len(task.encodedMsgs) == 0 {
-		task.event.PostEnqueue()
+		task.callbacks.postEnqueue()
 		return nil
 	}
 
 	for {
-		action, entry, err := c.spool.TryEnqueue(task.encodedMsgs, task.event.PostEnqueue)
+		action, entry, err := c.spool.TryEnqueue(task.encodedMsgs, task.callbacks.postEnqueue)
 		if err != nil {
 			return err
 		}
@@ -200,7 +195,7 @@ func (t *tableBatches) addEntry(event *task, entry *spool.Entry) {
 	if _, ok := t.tables[table]; !ok {
 		t.tables[table] = &tableBatch{
 			size:      0,
-			tableInfo: event.event.TableInfo,
+			tableInfo: event.tableInfo,
 		}
 	}
 
@@ -246,29 +241,20 @@ func (t *tableBatches) detachByDispatcher(dispatcherID common.DispatcherID) tabl
 }
 
 func (c *bufferManager) emitFlushTask(ctx context.Context, batch tableBatches, reason string) error {
-	batches := make([]tablePayload, 0, len(batch.tables))
-	for table, tableTask := range batch.tables {
-		payload, err := c.buildPayload(tableTask)
-		if err != nil {
-			return err
-		}
-		batches = append(batches, tablePayload{
-			table:   table,
-			payload: payload,
-		})
+	if batch.isEmpty() {
+		return nil
 	}
-
-	if err := c.enqueueFlushTask(ctx, flushTask{batches: batches}); err != nil {
+	if err := c.enqueueFlushTask(ctx, flushTask{batch: batch}); err != nil {
 		return err
 	}
 	metrics.CloudStorageFlushReasonCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), reason).Inc()
 	return nil
 }
 
-func (c *bufferManager) buildPayload(batch *tableBatch) (*payload, error) {
+func buildPayload(spoolBuffer *spool.Spool, batch *tableBatch) (*payload, error) {
 	builder := newPayloadBuilder(batch)
 	for _, entry := range batch.entries {
-		if err := builder.appendEntry(c.spool, entry); err != nil {
+		if err := builder.appendEntry(spoolBuffer, entry); err != nil {
 			return nil, err
 		}
 	}

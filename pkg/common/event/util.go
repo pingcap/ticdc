@@ -20,13 +20,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/filter"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	tiddl "github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/domain"
+	tidbexecutor "github.com/pingcap/tidb/pkg/executor"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -37,6 +40,7 @@ import (
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
 	"github.com/pingcap/tidb/pkg/session"
+	"github.com/pingcap/tidb/pkg/sessionctx"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/pingcap/tidb/pkg/store/mockstore"
 	"github.com/pingcap/tidb/pkg/testkit"
@@ -45,6 +49,8 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
+
+const disableTiDBDistTaskFailpoint = "github.com/pingcap/tidb/pkg/domain/MockDisableDistTask"
 
 // CAUTION:
 // ALL METHODS IN THIS FILE ARE FOR TESTING ONLY!!!
@@ -57,6 +63,8 @@ type EventTestHelper struct {
 	storage kv.Storage
 	domain  *domain.Domain
 	mounter Mounter
+
+	originalEnableDistTask bool
 
 	tableInfos map[string]*common.TableInfo
 	// each partition table's partition ID, Name -> ID.
@@ -72,18 +80,30 @@ func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestH
 	})
 	vardef.SetSchemaLease(time.Second)
 	session.DisableStats4Test()
+
+	// EventTestHelper executes TiDB DDL only to synthesize CDC test events.
+	// mockstore does not provide managed dist task nodes, so keep reorg DDLs
+	// off the dist task path and skip the bootstrap DXF loop when failpoints are active.
+	originalEnableDistTask := vardef.EnableDistTask.Load()
+	vardef.EnableDistTask.Store(false)
+	require.NoError(t, failpoint.Enable(disableTiDBDistTaskFailpoint, "return(true)"))
+	defer func() {
+		require.NoError(t, failpoint.Disable(disableTiDBDistTaskFailpoint))
+	}()
+
 	domain, err := session.BootstrapSession(store)
 	require.NoError(t, err)
 	domain.SetStatsUpdating(true)
 	tk := testkit.NewTestKit(t, store)
 	return &EventTestHelper{
-		t:            t,
-		tk:           tk,
-		storage:      store,
-		domain:       domain,
-		mounter:      NewMounter(tz, config.GetDefaultReplicaConfig().Integrity),
-		tableInfos:   make(map[string]*common.TableInfo),
-		partitionIDs: make(map[string]map[string]int64),
+		t:                      t,
+		tk:                     tk,
+		storage:                store,
+		domain:                 domain,
+		mounter:                NewMounter(tz, config.GetDefaultReplicaConfig().Integrity),
+		originalEnableDistTask: originalEnableDistTask,
+		tableInfos:             make(map[string]*common.TableInfo),
+		partitionIDs:           make(map[string]map[string]int64),
 	}
 }
 
@@ -93,6 +113,15 @@ func NewEventTestHelper(t testing.TB) *EventTestHelper {
 }
 
 func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
+	if job.BinlogInfo != nil && len(job.BinlogInfo.MultipleTableInfos) > 0 {
+		for _, tableInfo := range job.BinlogInfo.MultipleTableInfos {
+			s.storeTableInfo(job.SchemaName, tableInfo)
+		}
+		if job.BinlogInfo.TableInfo == nil {
+			return
+		}
+	}
+
 	var tableInfo *timodel.TableInfo
 	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
 		tableInfo = job.BinlogInfo.TableInfo
@@ -105,8 +134,14 @@ func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 		}
 	}
 
-	info := common.WrapTableInfo(job.SchemaName, tableInfo)
-	info.InitPrivateFields()
+	s.storeTableInfo(job.SchemaName, tableInfo)
+}
+
+func (s *EventTestHelper) storeTableInfo(schemaName string, tableInfo *timodel.TableInfo) {
+	info := common.WrapTableInfo(schemaName, tableInfo)
+	if info == nil {
+		return
+	}
 	key := toTableInfosKey(info.GetSchemaName(), info.GetTableName())
 	if tableInfo.Partition != nil {
 		if _, ok := s.partitionIDs[key]; !ok {
@@ -116,7 +151,7 @@ func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 			s.partitionIDs[key][partition.Name.O] = partition.ID
 		}
 	}
-	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
+	log.Info("store table info", zap.String("jobKey", key))
 	s.tableInfos[key] = info
 }
 
@@ -136,6 +171,16 @@ func (s *EventTestHelper) GetTableInfo(job *timodel.Job) *common.TableInfo {
 
 // DDL2Job executes the DDL stmt and returns the DDL job
 func (s *EventTestHelper) DDL2Job(ddl string) *timodel.Job {
+	requireSingleDDLStmt(s.t, ddl)
+
+	// EventTestHelper uses mockstore only to synthesize CDC test events from TiDB DDL jobs.
+	// In TiDB NextGen, reorg DDLs such as ADD INDEX and REORGANIZE PARTITION calculate
+	// DXF resources through managed dist task nodes. mockstore has no such nodes, so run
+	// the helper DDL in TiDB's bootstrap/upgrade test mode. TiDB upstream uses the same
+	// sessionctx.Initing marker in bootstrap tests to avoid NextGen resource calculation.
+	s.tk.Session().SetValue(sessionctx.Initing, true)
+	defer s.tk.Session().ClearValue(sessionctx.Initing)
+	vardef.EnableDistTask.Store(false)
 	s.tk.MustExec(ddl)
 	jobs, err := tiddl.GetLastNHistoryDDLJobs(s.GetCurrentMeta(), 1)
 	require.Nil(s.t, err)
@@ -203,8 +248,61 @@ func (s *EventTestHelper) DDL2Job(ddl string) *timodel.Job {
 
 func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 	job := s.DDL2Job(ddl)
-	info := s.GetTableInfo(job)
-	return &DDLEvent{
+	return s.job2Event(job)
+}
+
+// BatchCreateTableDDLs2Event executes CREATE TABLE DDLs through TiDB's batch
+// create table path and returns the resulting ActionCreateTables event.
+// TiDB only merges CREATE TABLE jobs in the same schema:
+// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/job_submitter.go#L152-L159
+func (s *EventTestHelper) BatchCreateTableDDLs2Event(schema string, ddls ...string) *DDLEvent {
+	require.NotEmpty(s.t, ddls)
+
+	tableInfos := make([]*timodel.TableInfo, 0, len(ddls))
+	queries, err := SplitQueries(strings.Join(ddls, ";"))
+	require.NoError(s.t, err)
+	for _, ddl := range ddls {
+		requireSingleDDLStmt(s.t, ddl)
+
+		stmt, err := parser.New().ParseOneStmt(ddl, "", "")
+		require.NoError(s.t, err)
+		createStmt, ok := stmt.(*ast.CreateTableStmt)
+		require.True(s.t, ok)
+
+		tableSchema := createStmt.Table.Schema.O
+		if tableSchema != "" {
+			require.Equal(s.t, schema, tableSchema)
+		}
+		tableInfo, err := tiddl.MockTableInfo(s.tk.Session(), createStmt, 0)
+		require.NoError(s.t, err)
+		tableInfos = append(tableInfos, tableInfo)
+	}
+
+	s.tk.Session().SetValue(sessionctx.Initing, true)
+	defer s.tk.Session().ClearValue(sessionctx.Initing)
+	err = tidbexecutor.BRIECreateTables(s.tk.Session(), map[string][]*timodel.TableInfo{
+		schema: tableInfos,
+	}, "")
+	require.NoError(s.t, err)
+
+	jobs, err := tiddl.GetLastNHistoryDDLJobs(s.GetCurrentMeta(), 1)
+	require.Nil(s.t, err)
+	require.Len(s.t, jobs, 1)
+	jobs[0].State = timodel.JobStateDone
+	require.Equal(s.t, timodel.ActionCreateTables, jobs[0].Type)
+	jobs[0].Query = strings.Join(queries, "")
+
+	s.ApplyJob(jobs[0])
+	return s.job2Event(jobs[0])
+}
+
+func (s *EventTestHelper) job2Event(job *timodel.Job) *DDLEvent {
+	var info *common.TableInfo
+	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
+		info = s.GetTableInfo(job)
+	}
+	ddlEvent := &DDLEvent{
+		Version:    DDLEventVersion1,
 		SchemaID:   job.SchemaID,
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
@@ -214,6 +312,259 @@ func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 		StartTs:    job.StartTS,
 		FinishedTs: job.BinlogInfo.FinishedTS,
 	}
+	s.fillDDLEventMetadata(ddlEvent, job)
+	return ddlEvent
+}
+
+func requireSingleDDLStmt(t testing.TB, ddl string) {
+	stmts, _, err := parser.New().Parse(ddl, "", "")
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+}
+
+func (s *EventTestHelper) fillDDLEventMetadata(ddlEvent *DDLEvent, job *timodel.Job) {
+	switch job.Type {
+	case timodel.ActionDropSchema:
+		ddlEvent.TableNameChange = &TableNameChange{DropDatabaseName: ddlEvent.SchemaName}
+	case timodel.ActionCreateTable:
+		ddlEvent.TableNameChange = &TableNameChange{
+			AddName: []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}},
+		}
+		s.fillCreateTableLikeBlockedTableNames(ddlEvent, job)
+	case timodel.ActionRecoverTable:
+		ddlEvent.TableNameChange = &TableNameChange{
+			AddName: []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}},
+		}
+	case timodel.ActionCreateTables:
+		s.fillCreateTablesEventMetadata(ddlEvent, job)
+	case timodel.ActionDropTable:
+		ddlEvent.TableNameChange = &TableNameChange{
+			DropName: []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}},
+		}
+		ddlEvent.BlockedTableNames = []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}}
+	case timodel.ActionRenameTable:
+		s.fillRenameTableEventMetadata(ddlEvent)
+	case timodel.ActionRenameTables:
+		s.fillRenameTablesEventMetadata(ddlEvent, job)
+	case timodel.ActionCreateView:
+		s.normalizeCreateViewQueryWithStoredSelect(ddlEvent)
+	case timodel.ActionCreateSchema, timodel.ActionModifySchemaCharsetAndCollate,
+		timodel.ActionDropView:
+	default:
+		if ddlEvent.SchemaName != "" && ddlEvent.TableName != "" {
+			ddlEvent.BlockedTableNames = []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}}
+		}
+	}
+}
+
+// fillCreateTableLikeBlockedTableNames populates BlockedTableNames for a
+// CREATE TABLE ... LIKE event. It first checks the query for an explicit
+// refer schema, then falls back to job.InvolvingSchemaInfo, and finally to
+// the event SchemaName. When the refer schema differs from the event schema,
+// it rewrites the query to include the qualified schema name so that
+// downstream routing can correctly resolve the cross-schema reference.
+func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEvent, job *timodel.Job) {
+	stmt, err := parser.New().ParseOneStmt(ddlEvent.Query, "", "")
+	require.NoError(s.t, err)
+
+	createStmt, ok := stmt.(*ast.CreateTableStmt)
+	if !ok || createStmt.ReferTable == nil {
+		return
+	}
+
+	refSchema := createStmt.ReferTable.Schema.O
+	if refSchema == "" {
+		refSchema = findCreateTableLikeReferSchema(job, ddlEvent.SchemaName, ddlEvent.TableName, createStmt.ReferTable.Name.O)
+	}
+	if refSchema == "" && createStmt.Table != nil && createStmt.Table.Schema.O == "" {
+		refSchema = ddlEvent.SchemaName
+	}
+	if refSchema == "" {
+		return
+	}
+	if createStmt.ReferTable.Schema.O == "" && !strings.EqualFold(refSchema, ddlEvent.SchemaName) {
+		createStmt.ReferTable.Schema = ast.NewCIStr(refSchema)
+		query, err := Restore(createStmt)
+		require.NoError(s.t, err)
+		ddlEvent.Query = query
+	}
+	ddlEvent.BlockedTableNames = []SchemaTableName{{
+		SchemaName: refSchema,
+		TableName:  createStmt.ReferTable.Name.O,
+	}}
+}
+
+func (s *EventTestHelper) normalizeCreateViewQueryWithStoredSelect(ddlEvent *DDLEvent) {
+	if ddlEvent.TableInfo == nil || ddlEvent.TableInfo.View == nil {
+		return
+	}
+
+	query, err := NormalizeCreateViewQueryWithStoredSelect(
+		ddlEvent.Query,
+		ddlEvent.TableInfo.View.SelectStmt,
+		ddlEvent.SchemaName,
+	)
+	require.NoError(s.t, err)
+	ddlEvent.Query = query
+}
+
+// findCreateTableLikeReferSchema resolves the source schema for CREATE TABLE
+// ... LIKE by inspecting job.InvolvingSchemaInfo.
+//
+// Example — "CREATE TABLE extra.t2 LIKE t1" with session in db1:
+//
+//	InvolvingSchemaInfo = [
+//	    {Database: "extra", Table: "t2"},               // target (exclusive)
+//	    {Database: "db1",   Table: "t1", SharedInvolving}, // refer source
+//	]
+//	→ returns "db1" (SharedInvolving match on table "t1")
+//
+// SharedInvolving entries are preferred because TiDB marks the LIKE source
+// table with this mode. Without the mode check, the DDL target table may be
+// mistaken for the refer table when both happen to share the same name.
+func findCreateTableLikeReferSchema(job *timodel.Job, targetSchema, targetTable, referTable string) string {
+	for _, info := range job.InvolvingSchemaInfo {
+		if info.Mode == timodel.SharedInvolving && strings.EqualFold(info.Table, referTable) {
+			return info.Database
+		}
+	}
+	for _, info := range job.InvolvingSchemaInfo {
+		if !strings.EqualFold(info.Table, referTable) {
+			continue
+		}
+		if strings.EqualFold(info.Database, targetSchema) && strings.EqualFold(info.Table, targetTable) {
+			continue
+		}
+		return info.Database
+	}
+	return ""
+}
+
+func (s *EventTestHelper) fillCreateTablesEventMetadata(ddlEvent *DDLEvent, job *timodel.Job) {
+	tableInfos := wrapMultipleTableInfos(job.SchemaName, job.BinlogInfo.MultipleTableInfos)
+	ddlEvent.MultipleTableInfos = tableInfos
+	ddlEvent.TableNameChange = &TableNameChange{
+		AddName: make([]SchemaTableName, 0, len(tableInfos)),
+	}
+	for _, tableInfo := range tableInfos {
+		ddlEvent.TableNameChange.AddName = append(ddlEvent.TableNameChange.AddName, SchemaTableName{
+			SchemaName: tableInfo.GetSchemaName(),
+			TableName:  tableInfo.GetTableName(),
+		})
+	}
+}
+
+func (s *EventTestHelper) fillRenameTableEventMetadata(ddlEvent *DDLEvent) {
+	pairs := s.parseRenameTablePairs(ddlEvent.Query, ddlEvent.SchemaName)
+	require.Len(s.t, pairs, 1)
+
+	pair := pairs[0]
+	ddlEvent.ExtraSchemaName = pair.oldSchemaName
+	ddlEvent.ExtraTableName = pair.oldTableName
+	ddlEvent.SchemaName = pair.newSchemaName
+	ddlEvent.TableName = pair.newTableName
+	ddlEvent.BlockedTableNames = []SchemaTableName{{SchemaName: pair.oldSchemaName, TableName: pair.oldTableName}}
+	ddlEvent.TableNameChange = &TableNameChange{
+		AddName:  []SchemaTableName{{SchemaName: pair.newSchemaName, TableName: pair.newTableName}},
+		DropName: []SchemaTableName{{SchemaName: pair.oldSchemaName, TableName: pair.oldTableName}},
+	}
+}
+
+func (s *EventTestHelper) fillRenameTablesEventMetadata(ddlEvent *DDLEvent, job *timodel.Job) {
+	pairs := s.parseRenameTablePairs(ddlEvent.Query, ddlEvent.SchemaName)
+	require.Len(s.t, pairs, len(job.BinlogInfo.MultipleTableInfos))
+
+	ddlEvent.MultipleTableInfos = make([]*common.TableInfo, 0, len(job.BinlogInfo.MultipleTableInfos))
+	ddlEvent.BlockedTableNames = make([]SchemaTableName, 0, len(pairs))
+	ddlEvent.TableNameChange = &TableNameChange{
+		AddName:  make([]SchemaTableName, 0, len(pairs)),
+		DropName: make([]SchemaTableName, 0, len(pairs)),
+	}
+	for i, pair := range pairs {
+		ddlEvent.MultipleTableInfos = append(
+			ddlEvent.MultipleTableInfos,
+			common.WrapTableInfo(pair.newSchemaName, job.BinlogInfo.MultipleTableInfos[i]),
+		)
+		ddlEvent.BlockedTableNames = append(ddlEvent.BlockedTableNames, SchemaTableName{
+			SchemaName: pair.oldSchemaName,
+			TableName:  pair.oldTableName,
+		})
+		ddlEvent.TableNameChange.AddName = append(ddlEvent.TableNameChange.AddName, SchemaTableName{
+			SchemaName: pair.newSchemaName,
+			TableName:  pair.newTableName,
+		})
+		ddlEvent.TableNameChange.DropName = append(ddlEvent.TableNameChange.DropName, SchemaTableName{
+			SchemaName: pair.oldSchemaName,
+			TableName:  pair.oldTableName,
+		})
+	}
+}
+
+type renameTableNamePair struct {
+	oldSchemaName string
+	oldTableName  string
+	newSchemaName string
+	newTableName  string
+}
+
+func (s *EventTestHelper) parseRenameTablePairs(query string, defaultSchema string) []renameTableNamePair {
+	stmt, err := parser.New().ParseOneStmt(query, "", "")
+	require.NoError(s.t, err)
+
+	switch renameStmt := stmt.(type) {
+	case *ast.RenameTableStmt:
+		pairs := make([]renameTableNamePair, 0, len(renameStmt.TableToTables))
+		for _, tableToTable := range renameStmt.TableToTables {
+			pairs = append(pairs, buildRenameTableNamePair(
+				tableToTable.OldTable,
+				tableToTable.NewTable,
+				defaultSchema,
+			))
+		}
+		return pairs
+	case *ast.AlterTableStmt:
+		pairs := make([]renameTableNamePair, 0, 1)
+		for _, spec := range renameStmt.Specs {
+			if spec.Tp != ast.AlterTableRenameTable {
+				continue
+			}
+			pairs = append(pairs, buildRenameTableNamePair(renameStmt.Table, spec.NewTable, defaultSchema))
+		}
+		require.NotEmpty(s.t, pairs)
+		return pairs
+	default:
+		require.Failf(s.t, "unexpected rename table statement", "query: %s, stmt: %T", query, stmt)
+		return nil
+	}
+}
+
+func buildRenameTableNamePair(oldTable, newTable *ast.TableName, defaultSchema string) renameTableNamePair {
+	oldSchemaName := oldTable.Schema.O
+	if oldSchemaName == "" {
+		oldSchemaName = defaultSchema
+	}
+	newSchemaName := newTable.Schema.O
+	if newSchemaName == "" {
+		newSchemaName = oldSchemaName
+	}
+	return renameTableNamePair{
+		oldSchemaName: oldSchemaName,
+		oldTableName:  oldTable.Name.O,
+		newSchemaName: newSchemaName,
+		newTableName:  newTable.Name.O,
+	}
+}
+
+func wrapMultipleTableInfos(schemaName string, tableInfos []*timodel.TableInfo) []*common.TableInfo {
+	if len(tableInfos) == 0 {
+		return nil
+	}
+
+	wrapped := make([]*common.TableInfo, 0, len(tableInfos))
+	for _, tableInfo := range tableInfos {
+		wrapped = append(wrapped, common.WrapTableInfo(schemaName, tableInfo))
+	}
+	return wrapped
 }
 
 func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *BatchDMLEvent {
@@ -230,7 +581,7 @@ func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *
 		_ = batchDMLEvent.AppendDMLEvent(dmlEvent)
 		rawKvs := s.DML2RawKv(physicalTableID, ts, dml)
 		for _, rawKV := range rawKvs {
-			err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil)
+			err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 			require.NoError(s.t, err)
 		}
 	}
@@ -249,7 +600,7 @@ func (s *EventTestHelper) DML2Event4PartitionTable(schema, table, partition, dml
 	dmlEvent.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1))
 	rawKvs := s.DML2RawKv(physicalTableID, ts, dml)
 	for _, rawKV := range rawKvs {
-		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil)
+		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 		require.NoError(s.t, err)
 	}
 	return dmlEvent
@@ -263,7 +614,6 @@ func (s *EventTestHelper) DML2Event4PartitionTable(schema, table, partition, dml
 // 3. You must set the preRow of the DMLEvent by yourself, since we can not get it from TiDB.
 func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEvent {
 	key := toTableInfosKey(schema, table)
-	log.Info("dml2event", zap.String("key", key))
 	tableInfo, ok := s.tableInfos[key]
 	require.True(s.t, ok)
 	did := common.NewDispatcherID()
@@ -274,7 +624,7 @@ func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEv
 
 	rawKvs := s.DML2RawKv(physicalTableID, ts, dmls...)
 	for _, rawKV := range rawKvs {
-		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil)
+		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 		require.NoError(s.t, err)
 	}
 	return dmlEvent
@@ -315,7 +665,8 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) (
 		CRTs:        rawKvs[1].CRTs,
 	}
 
-	dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk, nil)
+	err := dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
+	require.NoError(s.t, err)
 
 	return dmlEvent, raw
 }
@@ -350,7 +701,7 @@ func (s *EventTestHelper) DML2DeleteEvent(schema, table string, dml string, dele
 		StartTs:  rawKv[0].StartTs,
 		CRTs:     rawKv[0].CRTs,
 	}
-	err := dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk, nil)
+	err := dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 	require.NoError(s.t, err)
 
 	_ = s.DML2RawKv(physicalTableID, ts, deleteDml)
@@ -430,6 +781,7 @@ func (s *EventTestHelper) GetCurrentMeta() meta.Reader {
 func (s *EventTestHelper) Close() {
 	s.domain.Close()
 	s.storage.Close() //nolint:errcheck
+	vardef.EnableDistTask.Store(s.originalEnableDistTask)
 }
 
 func toTableInfosKey(schema, table string) string {

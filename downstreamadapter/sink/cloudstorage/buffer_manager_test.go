@@ -19,10 +19,10 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
@@ -85,10 +85,9 @@ func TestBufferManagerFlushesPendingBatchBeforeWaitingForDiskQuota(t *testing.T)
 	select {
 	case flushed := <-flushSink.ch:
 		require.Nil(t, flushed.marker)
-		require.Len(t, flushed.batches, 1)
-		for _, batch := range flushed.batches {
-			require.NotEmpty(t, batch.payload.data)
-			require.Len(t, batch.payload.entries, 1)
+		require.Len(t, flushed.batch.tables, 1)
+		for _, batch := range flushed.batch.tables {
+			require.Len(t, batch.entries, 1)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("buffer controller did not flush pending batch before waiting for disk quota")
@@ -133,12 +132,11 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 
 	select {
 	case flushed := <-flushSink.ch:
-		require.Len(t, flushed.batches, 1)
-		for _, batch := range flushed.batches {
-			require.NotEmpty(t, batch.payload.data)
-			require.Len(t, batch.payload.entries, 1)
-			require.True(t, batch.payload.entries[0].InMemory())
-			require.False(t, batch.payload.entries[0].IsSpilled())
+		require.Len(t, flushed.batch.tables, 1)
+		for _, batch := range flushed.batch.tables {
+			require.Len(t, batch.entries, 1)
+			require.True(t, batch.entries[0].InMemory())
+			require.False(t, batch.entries[0].IsSpilled())
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("buffer controller did not flush oversized batch immediately")

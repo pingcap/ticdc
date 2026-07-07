@@ -82,8 +82,8 @@ func (c *Config) Parse(arguments []string) error {
 		return errors.Trace(err)
 	}
 
-	if len(c.FlagSet.Args()) != 0 {
-		return errors.Errorf("'%s' is an invalid flag", c.FlagSet.Arg(0))
+	if len(c.Args()) != 0 {
+		return errors.Errorf("'%s' is an invalid flag", c.Arg(0))
 	}
 
 	return nil
