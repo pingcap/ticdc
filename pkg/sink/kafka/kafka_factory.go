@@ -20,12 +20,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 )
 
-const (
-	clientTypeAsyncProducer = "async_producer"
-	clientTypeSyncProducer  = "sync_producer"
-	clientTypeAdminClient   = "admin_client"
-)
-
 type factory struct {
 	changefeedID common.ChangeFeedID
 	option       *options
@@ -50,27 +44,18 @@ func (c *kafkaMetricsCollector) Run(ctx context.Context) {
 	cleanupAdminMetrics(c.changefeedID.Keyspace(), c.changefeedID.Name())
 }
 
-func newKafkaMetricsHook(changefeedID common.ChangeFeedID, clientType string) *metricsHook {
+func newKafkaMetricsHook(changefeedID common.ChangeFeedID) *metricsHook {
 	return newMetricsHook(
 		changefeedID.Keyspace(),
 		changefeedID.Name(),
-		clientType,
 		metricVectors{
-			RequestsInFlight:  kafkaClientRequestsInFlightGauge,
-			OutgoingByteRate:  kafkaClientOutgoingByteTotalGauge,
-			RequestRate:       kafkaClientRequestTotalGauge,
-			RequestLatency:    kafkaClientRequestLatencyHistogram,
-			ResponseRate:      kafkaClientResponseTotalGauge,
-			CompressionRatio:  kafkaClientCompressionRatioHistogram,
-			RecordsPerRequest: kafkaClientRecordsPerRequestHistogram,
-
-			LegacyRequestsInFlight:  requestsInFlightGauge,
-			LegacyOutgoingByteRate:  OutgoingByteRateGauge,
-			LegacyRequestRate:       RequestRateGauge,
-			LegacyRequestLatency:    RequestLatencyGauge,
-			LegacyResponseRate:      responseRateGauge,
-			LegacyCompressionRatio:  compressionRatioGauge,
-			LegacyRecordsPerRequest: recordsPerRequestGauge,
+			RequestsInFlight:  requestsInFlightGauge,
+			OutgoingByteRate:  OutgoingByteRateGauge,
+			RequestRate:       RequestRateGauge,
+			RequestLatency:    RequestLatencyGauge,
+			ResponseRate:      responseRateGauge,
+			CompressionRatio:  compressionRatioGauge,
+			RecordsPerRequest: recordsPerRequestGauge,
 		},
 	)
 }
@@ -94,9 +79,9 @@ func NewFactory(
 	return &factory{
 		changefeedID:     changefeedID,
 		option:           o,
-		asyncMetricsHook: newKafkaMetricsHook(changefeedID, clientTypeAsyncProducer),
-		syncMetricsHook:  newKafkaMetricsHook(changefeedID, clientTypeSyncProducer),
-		adminMetricsHook: newKafkaMetricsHook(changefeedID, clientTypeAdminClient),
+		asyncMetricsHook: newKafkaMetricsHook(changefeedID),
+		syncMetricsHook:  newKafkaMetricsHook(changefeedID),
+		adminMetricsHook: newKafkaMetricsHook(changefeedID),
 	}, nil
 }
 
