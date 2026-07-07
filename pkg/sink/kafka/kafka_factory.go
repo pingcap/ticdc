@@ -26,7 +26,7 @@ const (
 	clientTypeAdminClient   = "admin_client"
 )
 
-type kafkaFactory struct {
+type factory struct {
 	changefeedID common.ChangeFeedID
 	option       *options
 
@@ -75,8 +75,8 @@ func newKafkaMetricsHook(changefeedID common.ChangeFeedID, clientType string) *m
 	)
 }
 
-// NewKafkaFactory constructs a Factory.
-func NewKafkaFactory(
+// NewFactory constructs a Factory.
+func NewFactory(
 	ctx context.Context,
 	o *options,
 	changefeedID common.ChangeFeedID,
@@ -91,7 +91,7 @@ func NewKafkaFactory(
 		return nil, errors.Trace(err)
 	}
 
-	return &kafkaFactory{
+	return &factory{
 		changefeedID:     changefeedID,
 		option:           o,
 		asyncMetricsHook: newKafkaMetricsHook(changefeedID, clientTypeAsyncProducer),
@@ -100,7 +100,7 @@ func NewKafkaFactory(
 	}, nil
 }
 
-func (f *kafkaFactory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
+func (f *factory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
 	admin, err := newAdminClient(ctx, f.changefeedID, newKafkaOptions(f.option), f.adminMetricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
@@ -108,7 +108,7 @@ func (f *kafkaFactory) AdminClient(ctx context.Context) (ClusterAdminClient, err
 	return admin, nil
 }
 
-func (f *kafkaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
+func (f *factory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 	producer, err := newSyncProducer(ctx, f.changefeedID, newKafkaOptions(f.option), f.syncMetricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
@@ -116,7 +116,7 @@ func (f *kafkaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 	return producer, nil
 }
 
-func (f *kafkaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
+func (f *factory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
 	producer, err := newAsyncProducer(ctx, f.changefeedID, newKafkaOptions(f.option), f.asyncMetricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
@@ -124,7 +124,7 @@ func (f *kafkaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error)
 	return producer, nil
 }
 
-func (f *kafkaFactory) MetricsCollector() MetricsCollector {
+func (f *factory) MetricsCollector() MetricsCollector {
 	return &kafkaMetricsCollector{changefeedID: f.changefeedID, hooks: []*metricsHook{
 		f.asyncMetricsHook,
 		f.syncMetricsHook,
