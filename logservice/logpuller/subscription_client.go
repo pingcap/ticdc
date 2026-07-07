@@ -387,7 +387,7 @@ func (s *subscriptionClient) Subscribe(
 			zap.String("changefeedID", changefeedID),
 			zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
-			zap.String("initialScanPriority", taskTypeLogName(initialPriority)),
+			zap.String("initialScanPriority", initialPriority.String()),
 			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
 	}
 }
@@ -882,7 +882,7 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 				zap.Uint64("regionID", region.verID.GetID()),
 				zap.Uint64("regionEpochVersion", region.verID.GetVer()),
 				zap.Uint64("regionEpochConfVer", region.verID.GetConfVer()),
-				zap.String("priority", taskTypeLogName(priority)),
+				zap.String("priority", priority.String()),
 				zap.String("scanPriority", region.scanPriority.String()),
 				zap.String("span", common.FormatTableSpan(&region.span)))
 		}

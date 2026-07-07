@@ -14,7 +14,6 @@
 package logpuller
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
@@ -40,10 +39,6 @@ const (
 )
 
 func (t TaskType) String() string {
-	return fmt.Sprintf("%d", t)
-}
-
-func taskTypeLogName(t TaskType) string {
 	switch t {
 	case TaskHighPrior:
 		return "high"
