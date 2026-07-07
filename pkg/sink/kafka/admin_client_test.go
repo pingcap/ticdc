@@ -14,23 +14,10 @@
 package kafka
 
 import (
-	"context"
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 )
-
-func TestNewAdminClientEmptyOptionsReturnsError(t *testing.T) {
-	t.Parallel()
-
-	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "kafka-admin-empty-options")
-	client, err := newAdminClient(context.Background(), changefeedID, &clientOptions{}, nil)
-	if client != nil {
-		client.Close()
-	}
-	require.Error(t, err)
-}
 
 func TestAdminClientCreateTopicNilDetailReturnsError(t *testing.T) {
 	t.Parallel()

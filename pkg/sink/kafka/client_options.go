@@ -50,7 +50,7 @@ type clientOptions struct {
 	EnableTLS          bool
 	Credential         *security.Credential
 	InsecureSkipVerify bool
-	SASL               *SASL
+	sasl               *saslConfig
 
 	DialTimeout  time.Duration
 	WriteTimeout time.Duration
@@ -103,7 +103,7 @@ func newOptions(
 		opts = append(opts, kgo.DialTLSConfig(tlsConfig))
 	}
 
-	if o.SASL != nil && o.SASL.SASLMechanism != "" {
+	if o.sasl != nil && o.sasl.mechanism != "" {
 		mechanism, err := buildSaslMechanism(ctx, o)
 		if err != nil {
 			return nil, errors.Trace(err)
@@ -139,30 +139,30 @@ func newTLSConfig(o *clientOptions) (*tls.Config, error) {
 }
 
 func buildSaslMechanism(ctx context.Context, o *clientOptions) (sasl.Mechanism, error) {
-	if o.SASL == nil {
+	if o.sasl == nil {
 		return nil, nil
 	}
 
-	switch SASLMechanism(strings.ToUpper(string(o.SASL.SASLMechanism))) {
-	case PlainMechanism:
+	switch saslMechanism(strings.ToUpper(string(o.sasl.mechanism))) {
+	case plainMechanism:
 		auth := plain.Auth{
-			User: o.SASL.SASLUser,
-			Pass: o.SASL.SASLPassword,
+			User: o.sasl.user,
+			Pass: o.sasl.password,
 		}
 		return auth.AsMechanism(), nil
-	case SCRAM256Mechanism:
+	case scram256Mechanism:
 		auth := scram.Auth{
-			User: o.SASL.SASLUser,
-			Pass: o.SASL.SASLPassword,
+			User: o.sasl.user,
+			Pass: o.sasl.password,
 		}
 		return auth.AsSha256Mechanism(), nil
-	case SCRAM512Mechanism:
+	case scram512Mechanism:
 		auth := scram.Auth{
-			User: o.SASL.SASLUser,
-			Pass: o.SASL.SASLPassword,
+			User: o.sasl.user,
+			Pass: o.sasl.password,
 		}
 		return auth.AsSha512Mechanism(), nil
-	case OAuthMechanism:
+	case oauthMechanism:
 		tokenSource, err := newOauthTokenSource(ctx, o)
 		if err != nil {
 			return nil, errors.Trace(err)
@@ -174,33 +174,33 @@ func buildSaslMechanism(ctx context.Context, o *clientOptions) (sasl.Mechanism, 
 			}
 			return oauth.Auth{Token: token.AccessToken}, nil
 		}), nil
-	case GSSAPIMechanism:
-		return buildGSSAPIMechanism(o.SASL.GSSAPI)
+	case gssapiMechanismName:
+		return buildGSSAPIMechanism(o.sasl.gssapi)
 	default:
 	}
-	return nil, errors.ErrKafkaInvalidConfig.GenWithStack("unsupported sasl mechanism %s", o.SASL.SASLMechanism)
+	return nil, errors.ErrKafkaInvalidConfig.GenWithStack("unsupported sasl mechanism %s", o.sasl.mechanism)
 }
 
 func newOauthTokenSource(ctx context.Context, o *clientOptions) (oauth2.TokenSource, error) {
 	endpointParams := url.Values{}
-	if o.SASL.OAuth2.GrantType != "" {
-		endpointParams.Set("grant_type", o.SASL.OAuth2.GrantType)
+	if o.sasl.oauth2.grantType != "" {
+		endpointParams.Set("grant_type", o.sasl.oauth2.grantType)
 	}
-	if o.SASL.OAuth2.Audience != "" {
-		endpointParams.Set("audience", o.SASL.OAuth2.Audience)
+	if o.sasl.oauth2.audience != "" {
+		endpointParams.Set("audience", o.sasl.oauth2.audience)
 	}
 
-	tokenURL, err := url.Parse(o.SASL.OAuth2.TokenURL)
+	tokenURL, err := url.Parse(o.sasl.oauth2.tokenURL)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
 	cfg := &clientcredentials.Config{
-		ClientID:       o.SASL.OAuth2.ClientID,
-		ClientSecret:   o.SASL.OAuth2.ClientSecret,
+		ClientID:       o.sasl.oauth2.clientID,
+		ClientSecret:   o.sasl.oauth2.clientSecret,
 		TokenURL:       tokenURL.String(),
 		EndpointParams: endpointParams,
-		Scopes:         o.SASL.OAuth2.Scopes,
+		Scopes:         o.sasl.oauth2.scopes,
 	}
 	return cfg.TokenSource(ctx), nil
 }

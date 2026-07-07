@@ -136,13 +136,13 @@ func TestNewOauthTokenSourceRejectsInvalidTokenURL(t *testing.T) {
 	t.Parallel()
 
 	_, err := newOauthTokenSource(context.Background(), &clientOptions{
-		SASL: &SASL{
-			OAuth2: OAuth2{
-				ClientID:     "client-id",
-				ClientSecret: "client-secret",
-				TokenURL:     "http://test.com/Segment%%2815197306101420000%29",
-				Scopes:       []string{"scope1", "scope2"},
-				GrantType:    "client_credentials",
+		sasl: &saslConfig{
+			oauth2: oauth2Config{
+				clientID:     "client-id",
+				clientSecret: "client-secret",
+				tokenURL:     "http://test.com/Segment%%2815197306101420000%29",
+				scopes:       []string{"scope1", "scope2"},
+				grantType:    "client_credentials",
 			},
 		},
 	})

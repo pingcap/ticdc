@@ -66,7 +66,7 @@ const (
 	SASLTypeSCRAMSHA256 = "SCRAM-SHA-256"
 	// SASLTypeSCRAMSHA512 represents the SCRAM-SHA-512 mechanism.
 	SASLTypeSCRAMSHA512 = "SCRAM-SHA-512"
-	// SASLTypeGSSAPI represents the gssapi mechanism.
+	// SASLTypeGSSAPI represents the GSSAPI mechanism.
 	SASLTypeGSSAPI = "GSSAPI"
 	// SASLTypeOAuth represents the SASL/OAUTHBEARER mechanism (Kafka 2.0.0+)
 	SASLTypeOAuth = "OAUTHBEARER"
@@ -166,7 +166,7 @@ type options struct {
 	EnableTLS          bool
 	Credential         *security.Credential
 	InsecureSkipVerify bool
-	SASL               *SASL
+	sasl               *saslConfig
 
 	// Timeout for network configurations, default to `10s`
 	DialTimeout  time.Duration
@@ -186,7 +186,7 @@ func NewOptions() *options {
 		RequiredAcks:          WaitForAll,
 		Credential:            &security.Credential{},
 		InsecureSkipVerify:    false,
-		SASL:                  &SASL{},
+		sasl:                  &saslConfig{},
 		AutoCreate:            true,
 		DialTimeout:           10 * time.Second,
 		WriteTimeout:          10 * time.Second,
@@ -418,56 +418,56 @@ func (o *options) applyTLS(params *urlConfig) error {
 
 func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConfig) error {
 	if urlParameter.SASLUser != nil && *urlParameter.SASLUser != "" {
-		o.SASL.SASLUser = *urlParameter.SASLUser
+		o.sasl.user = *urlParameter.SASLUser
 	}
 
 	if urlParameter.SASLPassword != nil && *urlParameter.SASLPassword != "" {
-		o.SASL.SASLPassword = *urlParameter.SASLPassword
+		o.sasl.password = *urlParameter.SASLPassword
 	}
 
 	if urlParameter.SASLMechanism != nil && *urlParameter.SASLMechanism != "" {
-		mechanism, err := SASLMechanismFromString(*urlParameter.SASLMechanism)
+		mechanism, err := saslMechanismFromString(*urlParameter.SASLMechanism)
 		if err != nil {
 			return cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
 		}
-		o.SASL.SASLMechanism = mechanism
+		o.sasl.mechanism = mechanism
 	}
 
 	if urlParameter.SASLGssAPIAuthType != nil && *urlParameter.SASLGssAPIAuthType != "" {
-		authType, err := AuthTypeFromString(*urlParameter.SASLGssAPIAuthType)
+		authType, err := gssapiAuthTypeFromString(*urlParameter.SASLGssAPIAuthType)
 		if err != nil {
 			return cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
 		}
-		o.SASL.GSSAPI.AuthType = authType
+		o.sasl.gssapi.authType = authType
 	}
 
 	if urlParameter.SASLGssAPIKeytabPath != nil && *urlParameter.SASLGssAPIKeytabPath != "" {
-		o.SASL.GSSAPI.KeyTabPath = *urlParameter.SASLGssAPIKeytabPath
+		o.sasl.gssapi.keyTabPath = *urlParameter.SASLGssAPIKeytabPath
 	}
 
 	if urlParameter.SASLGssAPIKerberosConfigPath != nil &&
 		*urlParameter.SASLGssAPIKerberosConfigPath != "" {
-		o.SASL.GSSAPI.KerberosConfigPath = *urlParameter.SASLGssAPIKerberosConfigPath
+		o.sasl.gssapi.kerberosConfigPath = *urlParameter.SASLGssAPIKerberosConfigPath
 	}
 
 	if urlParameter.SASLGssAPIServiceName != nil && *urlParameter.SASLGssAPIServiceName != "" {
-		o.SASL.GSSAPI.ServiceName = *urlParameter.SASLGssAPIServiceName
+		o.sasl.gssapi.serviceName = *urlParameter.SASLGssAPIServiceName
 	}
 
 	if urlParameter.SASLGssAPIUser != nil && *urlParameter.SASLGssAPIUser != "" {
-		o.SASL.GSSAPI.Username = *urlParameter.SASLGssAPIUser
+		o.sasl.gssapi.username = *urlParameter.SASLGssAPIUser
 	}
 
 	if urlParameter.SASLGssAPIPassword != nil && *urlParameter.SASLGssAPIPassword != "" {
-		o.SASL.GSSAPI.Password = *urlParameter.SASLGssAPIPassword
+		o.sasl.gssapi.password = *urlParameter.SASLGssAPIPassword
 	}
 
 	if urlParameter.SASLGssAPIRealm != nil && *urlParameter.SASLGssAPIRealm != "" {
-		o.SASL.GSSAPI.Realm = *urlParameter.SASLGssAPIRealm
+		o.sasl.gssapi.realm = *urlParameter.SASLGssAPIRealm
 	}
 
 	if urlParameter.SASLGssAPIDisablePafxfast != nil {
-		o.SASL.GSSAPI.DisablePAFXFAST = *urlParameter.SASLGssAPIDisablePafxfast
+		o.sasl.gssapi.disablePAFXFAST = *urlParameter.SASLGssAPIDisablePafxfast
 	}
 
 	if sinkConfig != nil && sinkConfig.KafkaConfig != nil {
@@ -476,7 +476,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			if clientID == "" {
 				return cerror.ErrKafkaInvalidConfig.GenWithStack("OAuth2 client ID cannot be empty")
 			}
-			o.SASL.OAuth2.ClientID = clientID
+			o.sasl.oauth2.clientID = clientID
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthClientSecret != nil {
@@ -493,7 +493,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 				return cerror.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 client secret is not base64 encoded")
 			}
-			o.SASL.OAuth2.ClientSecret = string(decodedClientSecret)
+			o.sasl.oauth2.clientSecret = string(decodedClientSecret)
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthTokenURL != nil {
@@ -502,32 +502,32 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 				return cerror.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 token URL cannot be empty")
 			}
-			o.SASL.OAuth2.TokenURL = tokenURL
+			o.sasl.oauth2.tokenURL = tokenURL
 		}
 
-		if o.SASL.OAuth2.IsEnable() {
-			if o.SASL.SASLMechanism != OAuthMechanism {
+		if o.sasl.oauth2.isEnabled() {
+			if o.sasl.mechanism != oauthMechanism {
 				return cerror.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 is only supported with SASL mechanism type OAUTHBEARER, but got %s",
-					o.SASL.SASLMechanism)
+					o.sasl.mechanism)
 			}
 
-			if err := o.SASL.OAuth2.Validate(); err != nil {
+			if err := o.sasl.oauth2.validate(); err != nil {
 				return cerror.ErrKafkaInvalidConfig.Wrap(err)
 			}
-			o.SASL.OAuth2.SetDefault()
+			o.sasl.oauth2.setDefault()
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthScopes != nil {
-			o.SASL.OAuth2.Scopes = sinkConfig.KafkaConfig.SASLOAuthScopes
+			o.sasl.oauth2.scopes = sinkConfig.KafkaConfig.SASLOAuthScopes
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthGrantType != nil {
-			o.SASL.OAuth2.GrantType = *sinkConfig.KafkaConfig.SASLOAuthGrantType
+			o.sasl.oauth2.grantType = *sinkConfig.KafkaConfig.SASLOAuthGrantType
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthAudience != nil {
-			o.SASL.OAuth2.Audience = *sinkConfig.KafkaConfig.SASLOAuthAudience
+			o.sasl.oauth2.audience = *sinkConfig.KafkaConfig.SASLOAuthAudience
 		}
 	}
 

@@ -124,7 +124,7 @@ func newClientOption(o *options) *clientOptions {
 		EnableTLS:          o.EnableTLS,
 		Credential:         o.Credential,
 		InsecureSkipVerify: o.InsecureSkipVerify,
-		SASL:               o.SASL,
+		sasl:               o.sasl,
 
 		DialTimeout:  o.DialTimeout,
 		WriteTimeout: o.WriteTimeout,

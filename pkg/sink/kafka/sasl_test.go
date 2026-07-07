@@ -24,15 +24,15 @@ func TestBuildSaslMechanismGSSAPIUserAuth(t *testing.T) {
 	t.Parallel()
 
 	o := &clientOptions{
-		SASL: &SASL{
-			SASLMechanism: GSSAPIMechanism,
-			GSSAPI: GSSAPI{
-				AuthType:           UserAuth,
-				KerberosConfigPath: "/etc/krb5.conf",
-				ServiceName:        "kafka",
-				Username:           "alice",
-				Password:           "pwd",
-				Realm:              "EXAMPLE.COM",
+		sasl: &saslConfig{
+			mechanism: gssapiMechanismName,
+			gssapi: gssapiConfig{
+				authType:           userAuth,
+				kerberosConfigPath: "/etc/krb5.conf",
+				serviceName:        "kafka",
+				username:           "alice",
+				password:           "pwd",
+				realm:              "EXAMPLE.COM",
 			},
 		},
 	}
@@ -46,15 +46,15 @@ func TestBuildSaslMechanismGSSAPIKeytabAuth(t *testing.T) {
 	t.Parallel()
 
 	o := &clientOptions{
-		SASL: &SASL{
-			SASLMechanism: GSSAPIMechanism,
-			GSSAPI: GSSAPI{
-				AuthType:           KeyTabAuth,
-				KerberosConfigPath: "/etc/krb5.conf",
-				ServiceName:        "kafka",
-				Username:           "alice",
-				KeyTabPath:         "/tmp/a.keytab",
-				Realm:              "EXAMPLE.COM",
+		sasl: &saslConfig{
+			mechanism: gssapiMechanismName,
+			gssapi: gssapiConfig{
+				authType:           keyTabAuth,
+				kerberosConfigPath: "/etc/krb5.conf",
+				serviceName:        "kafka",
+				username:           "alice",
+				keyTabPath:         "/tmp/a.keytab",
+				realm:              "EXAMPLE.COM",
 			},
 		},
 	}

@@ -19,120 +19,120 @@ import (
 	"github.com/pingcap/errors"
 )
 
-// SASLMechanism defines SASL mechanism.
-type SASLMechanism string
+// saslMechanism defines SASL mechanism.
+type saslMechanism string
 
 // The mechanisms we currently support.
 const (
-	// UnknownMechanism means the SASL mechanism is unknown.
-	UnknownMechanism SASLMechanism = ""
-	// PlainMechanism means the SASL mechanism is plain.
-	PlainMechanism SASLMechanism = "PLAIN"
-	// SCRAM256Mechanism means the SASL mechanism is SCRAM-SHA-256.
-	SCRAM256Mechanism SASLMechanism = "SCRAM-SHA-256"
-	// SCRAM512Mechanism means the SASL mechanism is SCRAM-SHA-512.
-	SCRAM512Mechanism SASLMechanism = "SCRAM-SHA-512"
-	// GSSAPIMechanism means the SASL mechanism is GSSAPI.
-	GSSAPIMechanism SASLMechanism = "GSSAPI"
-	// OAuthMechanism means the SASL mechanism is OAuth2.
-	OAuthMechanism SASLMechanism = "OAUTHBEARER"
+	// unknownMechanism means the SASL mechanism is unknown.
+	unknownMechanism saslMechanism = ""
+	// plainMechanism means the SASL mechanism is plain.
+	plainMechanism saslMechanism = "PLAIN"
+	// scram256Mechanism means the SASL mechanism is SCRAM-SHA-256.
+	scram256Mechanism saslMechanism = "SCRAM-SHA-256"
+	// scram512Mechanism means the SASL mechanism is SCRAM-SHA-512.
+	scram512Mechanism saslMechanism = "SCRAM-SHA-512"
+	// gssapiMechanismName means the SASL mechanism is GSSAPI.
+	gssapiMechanismName saslMechanism = "GSSAPI"
+	// oauthMechanism means the SASL mechanism is OAUTHBEARER.
+	oauthMechanism saslMechanism = "OAUTHBEARER"
 )
 
-// SASLMechanismFromString converts the string to SASL mechanism.
-func SASLMechanismFromString(s string) (SASLMechanism, error) {
+// saslMechanismFromString converts the string to a SASL mechanism.
+func saslMechanismFromString(s string) (saslMechanism, error) {
 	switch strings.ToLower(s) {
 	case "plain":
-		return PlainMechanism, nil
+		return plainMechanism, nil
 	case "scram-sha-256":
-		return SCRAM256Mechanism, nil
+		return scram256Mechanism, nil
 	case "scram-sha-512":
-		return SCRAM512Mechanism, nil
+		return scram512Mechanism, nil
 	case "gssapi":
-		return GSSAPIMechanism, nil
+		return gssapiMechanismName, nil
 	case "oauthbearer":
-		return OAuthMechanism, nil
+		return oauthMechanism, nil
 	default:
-		return UnknownMechanism, errors.Errorf("unknown %s SASL mechanism", s)
+		return unknownMechanism, errors.Errorf("unknown %s SASL mechanism", s)
 	}
 }
 
-// SASL holds necessary path parameter to support sasl-scram
-type SASL struct {
-	SASLUser      string
-	SASLPassword  string
-	SASLMechanism SASLMechanism
-	GSSAPI        GSSAPI
-	OAuth2        OAuth2
+// saslConfig holds necessary path parameter to support sasl-scram
+type saslConfig struct {
+	user      string
+	password  string
+	mechanism saslMechanism
+	gssapi    gssapiConfig
+	oauth2    oauth2Config
 }
 
-// OAuth2 holds necessary parameters to support sasl-oauth2.
-type OAuth2 struct {
-	ClientID     string
-	ClientSecret string
-	TokenURL     string
-	Scopes       []string
-	GrantType    string
-	Audience     string
+// oauth2Config holds necessary parameters to support sasl-oauth2.
+type oauth2Config struct {
+	clientID     string
+	clientSecret string
+	tokenURL     string
+	scopes       []string
+	grantType    string
+	audience     string
 }
 
-// Validate validates the parameters of OAuth2.
+// validate validates the parameters of oauth2Config.
 // Some parameters are required, some are optional.
-func (o *OAuth2) Validate() error {
-	if len(o.ClientID) == 0 {
+func (o *oauth2Config) validate() error {
+	if len(o.clientID) == 0 {
 		return errors.New("OAuth2 client id is empty")
 	}
-	if len(o.ClientSecret) == 0 {
+	if len(o.clientSecret) == 0 {
 		return errors.New("OAuth2 client secret is empty")
 	}
-	if len(o.TokenURL) == 0 {
+	if len(o.tokenURL) == 0 {
 		return errors.New("OAuth2 token url is empty")
 	}
 	return nil
 }
 
-// SetDefault sets the default value of OAuth2.
-func (o *OAuth2) SetDefault() {
-	o.GrantType = "client_credentials"
+// setDefault sets the default value of oauth2Config.
+func (o *oauth2Config) setDefault() {
+	o.grantType = "client_credentials"
 }
 
-// IsEnable checks whether the OAuth2 is enabled.
-// One of values of ClientID, ClientSecret and TokenURL is not empty means enabled.
-func (o *OAuth2) IsEnable() bool {
-	return len(o.ClientID) > 0 || len(o.ClientSecret) > 0 || len(o.TokenURL) > 0
+// isEnabled checks whether the oauth2Config is enabled.
+// One of values of clientID, clientSecret and tokenURL is not empty means enabled.
+func (o *oauth2Config) isEnabled() bool {
+	return len(o.clientID) > 0 || len(o.clientSecret) > 0 || len(o.tokenURL) > 0
 }
 
-// GSSAPIAuthType defines the type of GSSAPI authentication.
-type GSSAPIAuthType int
+// gssapiAuthType defines the type of GSSAPI authentication.
+type gssapiAuthType int
 
 const (
-	// UnknownAuth means the auth type is unknown.
-	UnknownAuth GSSAPIAuthType = 0
-	// UserAuth means the auth type is user.
-	UserAuth GSSAPIAuthType = 1
-	// KeyTabAuth means the auth type is keytab.
-	KeyTabAuth GSSAPIAuthType = 2
+	// unknownAuth means the auth type is unknown.
+	unknownAuth gssapiAuthType = 0
+	// userAuth means the auth type is user.
+	userAuth gssapiAuthType = 1
+	// keyTabAuth means the auth type is keytab.
+	keyTabAuth gssapiAuthType = 2
 )
 
-// AuthTypeFromString convent the string to GSSAPIAuthType.
-func AuthTypeFromString(s string) (GSSAPIAuthType, error) {
+// gssapiAuthTypeFromString convent the string to gssapiAuthType.
+func gssapiAuthTypeFromString(s string) (gssapiAuthType, error) {
 	switch strings.ToLower(s) {
 	case "user":
-		return UserAuth, nil
+		return userAuth, nil
 	case "keytab":
-		return KeyTabAuth, nil
+		return keyTabAuth, nil
 	default:
-		return UnknownAuth, errors.Errorf("unknown %s auth type", s)
+		return unknownAuth, errors.Errorf("unknown %s auth type", s)
 	}
 }
 
-// GSSAPI holds necessary path parameter to support sasl-gssapi.
-type GSSAPI struct {
-	AuthType           GSSAPIAuthType `toml:"sasl-gssapi-auth-type" json:"sasl-gssapi-auth-type"`
-	KeyTabPath         string         `toml:"sasl-gssapi-keytab-path" json:"sasl-gssapi-keytab-path"`
-	KerberosConfigPath string         `toml:"sasl-gssapi-kerberos-config-path" json:"sasl-gssapi-kerberos-config-path"`
-	ServiceName        string         `toml:"sasl-gssapi-service-name" json:"sasl-gssapi-service-name"`
-	Username           string         `toml:"sasl-gssapi-user" json:"sasl-gssapi-user"`
-	Password           string         `toml:"sasl-gssapi-password" json:"sasl-gssapi-password"`
-	Realm              string         `toml:"sasl-gssapi-realm" json:"sasl-gssapi-realm"`
-	DisablePAFXFAST    bool           `toml:"sasl-gssapi-disable-pafxfast" json:"sasl-gssapi-disable-pafxfast"`
+// gssapiConfig holds necessary path parameter to support sasl-gssapi.
+type gssapiConfig struct {
+	authType           gssapiAuthType
+	keyTabPath         string
+	kerberosConfigPath string
+	serviceName        string
+	username           string
+	password           string
+	realm              string
+	disablePAFXFAST    bool
 }

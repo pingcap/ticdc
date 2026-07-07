@@ -22,8 +22,8 @@ import (
 
 	"github.com/jcmturner/gofork/encoding/asn1"
 	"github.com/jcmturner/gokrb5/v8/asn1tools"
-	krb5client "github.com/jcmturner/gokrb5/v8/client"
-	krb5config "github.com/jcmturner/gokrb5/v8/config"
+	"github.com/jcmturner/gokrb5/v8/client"
+	"github.com/jcmturner/gokrb5/v8/config"
 	"github.com/jcmturner/gokrb5/v8/gssapi"
 	"github.com/jcmturner/gokrb5/v8/iana/chksumtype"
 	"github.com/jcmturner/gokrb5/v8/iana/keyusage"
@@ -51,11 +51,11 @@ type kerborosClient interface {
 }
 
 type gssapiMechanism struct {
-	config GSSAPI
+	config gssapiConfig
 }
 
 func (m *gssapiMechanism) Name() string {
-	return "GSSAPI"
+	return string(gssapiMechanismName)
 }
 
 func (m *gssapiMechanism) Authenticate(
@@ -72,7 +72,7 @@ func (m *gssapiMechanism) Authenticate(
 	}
 
 	serverHost := strings.SplitN(host, ":", 2)[0]
-	spn := fmt.Sprintf("%s/%s", m.config.ServiceName, serverHost)
+	spn := fmt.Sprintf("%s/%s", m.config.serviceName, serverHost)
 	ticket, encKey, err := client.GetServiceTicket(spn)
 	if err != nil {
 		client.Destroy()
@@ -164,45 +164,45 @@ func (s *gssapiSession) nextMessage(challenge []byte) ([]byte, error) {
 	}
 }
 
-func buildGSSAPIMechanism(g GSSAPI) (sasl.Mechanism, error) {
-	if g.ServiceName == "" {
+func buildGSSAPIMechanism(g gssapiConfig) (sasl.Mechanism, error) {
+	if g.serviceName == "" {
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 			"sasl-gssapi-service-name must not be empty when sasl mechanism is GSSAPI")
 	}
-	if g.KerberosConfigPath == "" {
+	if g.kerberosConfigPath == "" {
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 			"sasl-gssapi-kerberos-config-path must not be empty when sasl mechanism is GSSAPI")
 	}
-	if g.Username == "" {
+	if g.username == "" {
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 			"sasl-gssapi-user must not be empty when sasl mechanism is GSSAPI")
 	}
-	if g.Realm == "" {
+	if g.realm == "" {
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 			"sasl-gssapi-realm must not be empty when sasl mechanism is GSSAPI")
 	}
 
-	switch g.AuthType {
-	case UserAuth:
-		if g.Password == "" {
+	switch g.authType {
+	case userAuth:
+		if g.password == "" {
 			return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 				"sasl-gssapi-password must not be empty when sasl-gssapi-auth-type is USER")
 		}
-	case KeyTabAuth:
-		if g.KeyTabPath == "" {
+	case keyTabAuth:
+		if g.keyTabPath == "" {
 			return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 				"sasl-gssapi-keytab-path must not be empty when sasl-gssapi-auth-type is KEYTAB")
 		}
 	default:
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
-			"unsupported sasl-gssapi-auth-type %d", g.AuthType)
+			"unsupported sasl-gssapi-auth-type %d", g.authType)
 	}
 
 	return &gssapiMechanism{config: g}, nil
 }
 
 type krb5Client struct {
-	krb5client.Client
+	client.Client
 }
 
 func (c *krb5Client) Domain() string {
@@ -213,29 +213,29 @@ func (c *krb5Client) CName() types.PrincipalName {
 	return c.Credentials.CName()
 }
 
-func newKerborosClient(g GSSAPI) (kerborosClient, error) {
-	cfg, err := krb5config.Load(g.KerberosConfigPath)
+func newKerborosClient(g gssapiConfig) (kerborosClient, error) {
+	cfg, err := config.Load(g.kerberosConfigPath)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	var client *krb5client.Client
-	switch g.AuthType {
-	case KeyTabAuth:
-		kt, err := keytab.Load(g.KeyTabPath)
+	var krbClient *client.Client
+	switch g.authType {
+	case keyTabAuth:
+		kt, err := keytab.Load(g.keyTabPath)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		client = krb5client.NewWithKeytab(
-			g.Username, g.Realm, kt, cfg, krb5client.DisablePAFXFAST(g.DisablePAFXFAST))
-	case UserAuth:
-		client = krb5client.NewWithPassword(
-			g.Username, g.Realm, g.Password, cfg, krb5client.DisablePAFXFAST(g.DisablePAFXFAST))
+		krbClient = client.NewWithKeytab(
+			g.username, g.realm, kt, cfg, client.DisablePAFXFAST(g.disablePAFXFAST))
+	case userAuth:
+		krbClient = client.NewWithPassword(
+			g.username, g.realm, g.password, cfg, client.DisablePAFXFAST(g.disablePAFXFAST))
 	default:
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
-			"unsupported sasl-gssapi-auth-type %d", g.AuthType)
+			"unsupported sasl-gssapi-auth-type %d", g.authType)
 	}
-	return &krb5Client{*client}, nil
+	return &krb5Client{*krbClient}, nil
 }
 
 func newKrb5Token(
