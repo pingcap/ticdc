@@ -61,11 +61,11 @@ type regionEvent struct {
 }
 
 func (event *regionEvent) needMemoryQuota() bool {
-	return event != nil && event.entries != nil
+	return event.entries != nil
 }
 
 func (event *regionEvent) releaseMemoryQuota() {
-	if event == nil || event.memoryQuota == nil {
+	if event.memoryQuota == nil {
 		return
 	}
 	event.memoryQuota.Release()
@@ -73,9 +73,6 @@ func (event *regionEvent) releaseMemoryQuota() {
 }
 
 func (event *regionEvent) getSize() int {
-	if event == nil {
-		return 0
-	}
 	size := int(unsafe.Sizeof(*event))
 	if event.entries != nil {
 		size += int(unsafe.Sizeof(*event.entries))
@@ -426,9 +423,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 				zap.Uint64("subscriptionID", uint64(span.subID)),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("resolvedTs", ts))
-			if state.worker != nil && state.worker.memoryQuota != nil {
-				state.worker.memoryQuota.markSubscriptionInitialized(span)
-			}
+			state.worker.memoryQuota.markSubscriptionInitialized(span)
 		}
 		lastResolvedTs := span.resolvedTs.Load()
 		nextResolvedPhyTs := oracle.ExtractPhysical(ts)

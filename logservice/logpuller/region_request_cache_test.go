@@ -52,7 +52,7 @@ func TestRequestCacheAdd_NormalCase(t *testing.T) {
 
 	region := createTestRegionInfo(1, 1)
 
-	ok, err := cache.add(ctx, region, false, testRegionRequestQuota())
+	ok, err := cache.add(ctx, region, false, testRegionRequestQuota(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, 1, cache.pendingCount())
@@ -71,20 +71,20 @@ func TestRequestCacheAdd_ForceFlag(t *testing.T) {
 
 	// Fill up the cache
 	region1 := createTestRegionInfo(1, 1)
-	ok, err := cache.add(ctx, region1, false, testRegionRequestQuota())
+	ok, err := cache.add(ctx, region1, false, testRegionRequestQuota(), nil)
 	require.True(t, ok)
 	require.NoError(t, err)
 	require.Equal(t, 1, cache.pendingCount())
 
 	// Try to add another request without force - should fail due to retry limit
 	region2 := createTestRegionInfo(1, 2)
-	ok, err = cache.add(ctx, region2, false, testRegionRequestQuota())
+	ok, err = cache.add(ctx, region2, false, testRegionRequestQuota(), nil)
 	require.False(t, ok)
 	require.NoError(t, err)
 
 	// With force=true, the request bypasses the live request limit.
 	region3 := createTestRegionInfo(1, 3)
-	ok, err = cache.add(ctx, region3, true, testRegionRequestQuota())
+	ok, err = cache.add(ctx, region3, true, testRegionRequestQuota(), nil)
 	require.True(t, ok)
 	require.NoError(t, err)
 	require.Equal(t, 2, cache.pendingCount())
@@ -108,7 +108,7 @@ func TestRequestCacheAdd_ContextCancellation(t *testing.T) {
 	// Fill up the cache
 	region1 := createTestRegionInfo(1, 1)
 	ctx1 := context.Background()
-	ok, err := cache.add(ctx1, region1, false, testRegionRequestQuota())
+	ok, err := cache.add(ctx1, region1, false, testRegionRequestQuota(), nil)
 	require.True(t, ok)
 	require.NoError(t, err)
 
@@ -117,7 +117,7 @@ func TestRequestCacheAdd_ContextCancellation(t *testing.T) {
 	cancel() // Cancel immediately
 
 	region2 := createTestRegionInfo(1, 2)
-	ok, err = cache.add(ctx2, region2, false, testRegionRequestQuota())
+	ok, err = cache.add(ctx2, region2, false, testRegionRequestQuota(), nil)
 	require.False(t, ok)
 	require.Error(t, err)
 	require.Equal(t, context.Canceled, err)
@@ -129,13 +129,13 @@ func TestRequestCacheAdd_RetryLimitExceeded(t *testing.T) {
 
 	// Fill up the cache
 	region1 := createTestRegionInfo(1, 1)
-	ok, err := cache.add(ctx, region1, false, testRegionRequestQuota())
+	ok, err := cache.add(ctx, region1, false, testRegionRequestQuota(), nil)
 	require.True(t, ok)
 	require.NoError(t, err)
 
 	// Try to add another request - should eventually hit retry limit
 	region2 := createTestRegionInfo(1, 2)
-	ok, err = cache.add(ctx, region2, false, testRegionRequestQuota())
+	ok, err = cache.add(ctx, region2, false, testRegionRequestQuota(), nil)
 	require.False(t, ok)
 	require.NoError(t, err)
 }
@@ -146,13 +146,13 @@ func TestRequestCacheAdd_SpaceAvailableNotification(t *testing.T) {
 
 	// Fill up the cache
 	region1 := createTestRegionInfo(1, 1)
-	ok, err := cache.add(ctx, region1, false, testRegionRequestQuota())
+	ok, err := cache.add(ctx, region1, false, testRegionRequestQuota(), nil)
 	require.True(t, ok)
 	require.NoError(t, err)
 	require.Equal(t, 1, cache.pendingCount())
 
 	region2 := createTestRegionInfo(1, 2)
-	ok, err = cache.add(ctx, region2, false, testRegionRequestQuota())
+	ok, err = cache.add(ctx, region2, false, testRegionRequestQuota(), nil)
 	require.True(t, ok)
 	require.NoError(t, err)
 	require.Equal(t, 2, cache.pendingCount())
@@ -172,7 +172,7 @@ func TestRequestCacheAdd_SpaceAvailableNotification(t *testing.T) {
 
 	// Now we should be able to add another request
 	region3 := createTestRegionInfo(1, 3)
-	ok, err = cache.add(ctx, region3, false, testRegionRequestQuota())
+	ok, err = cache.add(ctx, region3, false, testRegionRequestQuota(), nil)
 	require.True(t, ok)
 	require.NoError(t, err)
 	require.Equal(t, 2, cache.pendingCount())
@@ -189,7 +189,7 @@ func TestRequestCacheAdd_ConcurrentAdds(t *testing.T) {
 	for i := range numGoroutines {
 		go func(id int) {
 			region := createTestRegionInfo(SubscriptionID(id%3), uint64(id))
-			ok, err := cache.add(ctx, region, false, testRegionRequestQuota())
+			ok, err := cache.add(ctx, region, false, testRegionRequestQuota(), nil)
 			require.True(t, ok)
 			require.NoError(t, err)
 			done <- err
@@ -215,11 +215,11 @@ func TestRequestCacheAdd_DuplicateQueuedRequestsAreTrackedIndependently(t *testi
 
 	region := createTestRegionInfo(1, 1)
 
-	ok, err := cache.add(ctx, region, false, testRegionRequestQuota())
+	ok, err := cache.add(ctx, region, false, testRegionRequestQuota(), nil)
 	require.True(t, ok)
 	require.NoError(t, err)
 
-	ok, err = cache.add(ctx, region, false, testRegionRequestQuota())
+	ok, err = cache.add(ctx, region, false, testRegionRequestQuota(), nil)
 	require.True(t, ok)
 	require.NoError(t, err)
 	require.Equal(t, 2, cache.pendingCount())
@@ -237,7 +237,7 @@ func TestRequestCacheAbortReleasesSlot(t *testing.T) {
 
 	region := createTestRegionInfo(1, 1)
 
-	ok, err := cache.add(ctx, region, false, testRegionRequestQuota())
+	ok, err := cache.add(ctx, region, false, testRegionRequestQuota(), nil)
 	require.True(t, ok)
 	require.NoError(t, err)
 	require.Equal(t, 1, cache.pendingCount())
@@ -263,7 +263,7 @@ func TestRequestCacheAbortReleasesQuotaOnce(t *testing.T) {
 		},
 	}
 
-	ok, err := cache.add(ctx, region, false, quota)
+	ok, err := cache.add(ctx, region, false, quota, nil)
 	require.True(t, ok)
 	require.NoError(t, err)
 
@@ -274,14 +274,36 @@ func TestRequestCacheAbortReleasesQuotaOnce(t *testing.T) {
 	require.Equal(t, int32(1), releaseCount.Load())
 }
 
+func TestRequestCacheAbortReleasesScanQuotaOnce(t *testing.T) {
+	cache := newRequestCache(10, nil)
+	ctx := context.Background()
+	region := createTestRegionInfo(1, 1)
+	var releaseCount atomic.Int32
+	scanQuota := &memoryQuotaLease{
+		release: func() {
+			releaseCount.Add(1)
+		},
+	}
+
+	ok, err := cache.add(ctx, region, false, testRegionRequestQuota(), scanQuota)
+	require.True(t, ok)
+	require.NoError(t, err)
+
+	req, err := cache.pop(ctx)
+	require.NoError(t, err)
+	require.True(t, cache.finishScan(req))
+	require.False(t, cache.abortScan(req))
+	require.Equal(t, int32(1), releaseCount.Load())
+}
+
 func TestRequestCacheCloseDrainsQueuedRequests(t *testing.T) {
 	cache := newRequestCache(10, nil)
 	ctx := context.Background()
 
-	ok, err := cache.add(ctx, createTestRegionInfo(1, 1), false, testRegionRequestQuota())
+	ok, err := cache.add(ctx, createTestRegionInfo(1, 1), false, testRegionRequestQuota(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
-	ok, err = cache.add(ctx, createTestRegionInfo(1, 2), false, testRegionRequestQuota())
+	ok, err = cache.add(ctx, createTestRegionInfo(1, 2), false, testRegionRequestQuota(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, 2, cache.queue.Len())

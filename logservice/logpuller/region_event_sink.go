@@ -76,12 +76,9 @@ func (s *regionEventSink) Wake(subID SubscriptionID) {
 }
 
 func (s *regionEventSink) Push(subID SubscriptionID, event regionEvent) {
-	if event.needMemoryQuota() && s.memoryQuota != nil {
+	if event.needMemoryQuota() {
 		span := event.mustFirstState().region.subscribedSpan
-		event.memoryQuota = s.memoryQuota.acquireEvent(s.ctx, span, uint64(event.getSize()))
-		if event.memoryQuota == nil && s.ctx.Err() != nil {
-			return
-		}
+		event.memoryQuota = s.memoryQuota.trackEvent(span, uint64(event.getSize()))
 	}
 	// fast path
 	if !s.paused.Load() {
@@ -137,9 +134,6 @@ func (s *regionEventSink) Metrics() dynstream.Metrics[int, SubscriptionID] {
 }
 
 func (s *regionEventSink) Close() {
-	if s.memoryQuota != nil {
-		s.memoryQuota.WakeAll()
-	}
 	s.mu.Lock()
 	s.paused.Store(false)
 	s.cond.Broadcast()

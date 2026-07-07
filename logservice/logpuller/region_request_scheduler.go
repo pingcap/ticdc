@@ -248,8 +248,14 @@ func (s *regionRequestScheduler) handleDeferredTasks(ctx context.Context, store 
 			return err
 		}
 		if !ok {
-			store.PushPendingTask(task)
 			s.observeDeferredTask(store, reason)
+			if reason == deferReasonMemoryWarming || reason == deferReasonMemoryFreeze {
+				if s.queue.Push(task) {
+					s.notifyScheduler()
+				}
+				return nil
+			}
+			store.PushPendingTask(task)
 			return nil
 		}
 	}
@@ -279,8 +285,14 @@ func (s *regionRequestScheduler) handleNewTask(
 		return err
 	}
 	if !ok {
-		store.PushPendingTask(task)
 		s.observeDeferredTask(store, reason)
+		if reason == deferReasonMemoryWarming || reason == deferReasonMemoryFreeze {
+			if s.queue.Push(task) {
+				s.notifyScheduler()
+			}
+			return nil
+		}
+		store.PushPendingTask(task)
 	}
 	return nil
 }
@@ -292,18 +304,26 @@ func (s *regionRequestScheduler) tryAdmitTask(
 	region regionInfo,
 ) (bool, string, error) {
 	force := task.Priority() <= forcedPriorityBase
-	if s.memoryQuota != nil {
-		if ok, reason := s.memoryQuota.allowNewScan(region.subscribedSpan); !ok {
-			return false, reason, nil
-		}
+	var scanQuota *memoryQuotaLease
+	currentTs := s.upstream.pdClock.CurrentTS()
+	quota, ok, reason := s.memoryQuota.acquireScan(region, currentTs)
+	if !ok {
+		return false, reason, nil
 	}
+	scanQuota = quota
 	acquiredQuota, ok := store.quota.TryAcquire()
 	if !ok {
+		if scanQuota != nil {
+			scanQuota.Release()
+		}
 		return false, deferReasonStoreQuota, nil
 	}
-	ok, worker, err := store.AddRegion(ctx, region, force, acquiredQuota)
+	ok, worker, err := store.AddRegion(ctx, region, force, acquiredQuota, scanQuota)
 	if err != nil {
 		acquiredQuota.Release()
+		if scanQuota != nil {
+			scanQuota.Release()
+		}
 		log.Warn("subscription client add region request failed",
 			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 			zap.Uint64("regionID", region.verID.GetID()),
@@ -312,6 +332,9 @@ func (s *regionRequestScheduler) tryAdmitTask(
 	}
 	if !ok {
 		acquiredQuota.Release()
+		if scanQuota != nil {
+			scanQuota.Release()
+		}
 		return false, deferReasonWorkerCache, nil
 	}
 

@@ -166,14 +166,18 @@ func (rs *requestedStore) PendingTaskCount() int {
 }
 
 func (rs *requestedStore) AddRegion(
-	ctx context.Context, region regionInfo, force bool, quota *regionRequestQuota,
+	ctx context.Context,
+	region regionInfo,
+	force bool,
+	quota *regionRequestQuota,
+	scanQuota *memoryQuotaLease,
 ) (bool, *regionRequestWorker, error) {
 	workers := rs.requestWorkers
 
 	start := int(rs.nextWorker.Add(1)) % len(workers)
 	for i := range len(workers) {
 		worker := workers[(start+i)%len(workers)]
-		ok, err := worker.requestCache.add(ctx, region, force, quota)
+		ok, err := worker.requestCache.add(ctx, region, force, quota, scanQuota)
 		if err != nil || ok {
 			return ok, worker, err
 		}

@@ -69,6 +69,8 @@ type PullerConfig struct {
 	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending_region_request_queue_size"`
 	// MemoryQuota is the log puller local memory quota in bytes.
 	MemoryQuota uint64 `toml:"memory-quota" json:"memory_quota"`
+	// ScanBaseSize is the base admission cost in bytes for one warming region scan.
+	ScanBaseSize uint64 `toml:"scan-base-size" json:"scan_base_size"`
 }
 
 // NewDefaultPullerConfig return the default puller configuration
@@ -79,6 +81,7 @@ func NewDefaultPullerConfig() *PullerConfig {
 		LogRegionDetails:               false,
 		PendingRegionRequestQueueSize:  32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
 		MemoryQuota:                    1024 * 1024 * 1024,
+		ScanBaseSize:                   4 * 1024 * 1024,
 	}
 }
 

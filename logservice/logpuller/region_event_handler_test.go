@@ -80,6 +80,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 	worker := &regionRequestWorker{
 		requestCache: &requestCache{},
 		tracker:      newRegionTracker(0),
+		memoryQuota:  newMemoryQuotaController(0, 0),
 	}
 	region := newRegionInfo(
 		tikv.RegionVerID{},
@@ -219,6 +220,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	worker := &regionRequestWorker{
 		requestCache: &requestCache{},
 		tracker:      newRegionTracker(0),
+		memoryQuota:  newMemoryQuotaController(0, 0),
 	}
 	state1 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(1, 1, 1)}, uint64(subID1), worker, nil)
 	{
@@ -359,8 +361,10 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 		advanceInterval: 100,
 	}
 	span.lastAdvanceTime.Store(0)
-	worker := &regionRequestWorker{}
-	worker.tracker = newRegionTracker(0)
+	worker := &regionRequestWorker{
+		tracker:     newRegionTracker(0),
+		memoryQuota: newMemoryQuotaController(0, 0),
+	}
 	state := newRegionFeedState(
 		regionInfo{
 			verID:            tikv.NewRegionVerID(1, 1, 1),

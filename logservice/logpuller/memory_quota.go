@@ -14,11 +14,13 @@
 package logpuller
 
 import (
-	"context"
+	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/tikv/client-go/v2/oracle"
 )
 
 const (
@@ -28,6 +30,12 @@ const (
 	defaultResumeWarmingRatio = 0.1
 	defaultFreezeAllRatio     = 0.9
 	defaultResumeAllRatio     = 0.7
+
+	defaultScanBaseSize            uint64 = 4 * 1024 * 1024
+	defaultWarmingScanLagThreshold        = 30 * time.Minute
+	defaultScanLagUnit                    = 10 * time.Minute
+	defaultScanLagWeight                  = 0.15
+	defaultMaxScanLagFactor               = 16
 )
 
 type subscriptionKind uint8
@@ -67,65 +75,60 @@ const (
 	admissionFreezeAllNewScans
 )
 
-type changefeedPhase uint8
-
-const (
-	changefeedPhaseWarming changefeedPhase = iota
-	changefeedPhaseNormal
-)
-
 type memoryQuotaLease struct {
 	once    sync.Once
 	release func()
 }
 
 func (l *memoryQuotaLease) Release() {
-	if l == nil {
-		return
-	}
 	l.once.Do(l.release)
 }
 
-type changefeedQuotaState struct {
-	id common.ChangeFeedID
-
-	mu      sync.Mutex
-	phase   changefeedPhase
-	spans   map[SubscriptionID]*subscribedSpan
-	leases  map[*memoryQuotaLease]SubscriptionID
-	memUsed uint64
+type subscriptionQuotaState struct {
+	eventLeases map[*memoryQuotaLease]uint64
+	scanLeases  map[*memoryQuotaLease]uint64
+	scanUsed    uint64
 }
 
-func newChangefeedQuotaState(id common.ChangeFeedID) *changefeedQuotaState {
-	return &changefeedQuotaState{
-		id:     id,
-		phase:  changefeedPhaseWarming,
-		spans:  make(map[SubscriptionID]*subscribedSpan),
-		leases: make(map[*memoryQuotaLease]SubscriptionID),
+func newSubscriptionQuotaState() *subscriptionQuotaState {
+	return &subscriptionQuotaState{
+		eventLeases: make(map[*memoryQuotaLease]uint64),
+		scanLeases:  make(map[*memoryQuotaLease]uint64),
 	}
 }
 
 type memoryQuotaController struct {
-	mu   sync.Mutex
-	cond *sync.Cond
+	mu sync.Mutex
 
 	capacity uint64
-	used     uint64
-	level    admissionLevel
+	// used tracks log puller bytes currently waiting for downstream callback.
+	// It is observed for admission decisions, but the receive path never waits
+	// on it after an event has arrived from TiKV.
+	used uint64
+	// scanUsed tracks estimated bytes of admitted warming region scans that
+	// have not finished initialization yet.
+	scanUsed        uint64
+	warmingScanUsed uint64
+	level           admissionLevel
 
 	pauseWarmingRatio  float64
 	resumeWarmingRatio float64
 	freezeAllRatio     float64
 	resumeAllRatio     float64
 
-	changefeeds map[common.ChangeFeedID]*changefeedQuotaState
+	scanEstimate uint64
+
+	subscriptions map[SubscriptionID]*subscriptionQuotaState
 
 	onAvailable atomic.Value // func()
 }
 
-func newMemoryQuotaController(capacity uint64) *memoryQuotaController {
+func newMemoryQuotaController(capacity uint64, scanBaseSize uint64) *memoryQuotaController {
 	if capacity == 0 {
 		capacity = defaultLogPullerMemoryQuota
+	}
+	if scanBaseSize == 0 {
+		scanBaseSize = defaultScanBaseSize
 	}
 	c := &memoryQuotaController{
 		capacity:           capacity,
@@ -134,20 +137,14 @@ func newMemoryQuotaController(capacity uint64) *memoryQuotaController {
 		resumeWarmingRatio: defaultResumeWarmingRatio,
 		freezeAllRatio:     defaultFreezeAllRatio,
 		resumeAllRatio:     defaultResumeAllRatio,
-		changefeeds:        make(map[common.ChangeFeedID]*changefeedQuotaState),
+		scanEstimate:       scanBaseSize,
+		subscriptions:      make(map[SubscriptionID]*subscriptionQuotaState),
 	}
-	c.cond = sync.NewCond(&c.mu)
 	return c
 }
 
 func (c *memoryQuotaController) SetOnAvailable(fn func()) {
 	c.onAvailable.Store(fn)
-}
-
-func (c *memoryQuotaController) WakeAll() {
-	c.mu.Lock()
-	c.cond.Broadcast()
-	c.mu.Unlock()
 }
 
 func (c *memoryQuotaController) onMemoryAvailable() {
@@ -162,6 +159,17 @@ func (c *memoryQuotaController) Snapshot() (used uint64, capacity uint64, level 
 	return c.used, c.capacity, c.level
 }
 
+func (c *memoryQuotaController) ScanSnapshot() (
+	scanUsed uint64,
+	warmingScanUsed uint64,
+	warmingScanBudget uint64,
+	scanEstimate uint64,
+) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.scanUsed, c.warmingScanUsed, c.warmingScanBudgetLocked(), c.scanEstimate
+}
+
 func (c *memoryQuotaController) addSubscription(span *subscribedSpan) {
 	if span.meta.isSystem() {
 		return
@@ -169,33 +177,24 @@ func (c *memoryQuotaController) addSubscription(span *subscribedSpan) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	state := c.getOrCreateChangefeedStateLocked(span.meta.ChangefeedID)
-	state.mu.Lock()
-	state.spans[span.subID] = span
-	state.mu.Unlock()
+	c.subscriptions[span.subID] = newSubscriptionQuotaState()
 }
 
 func (c *memoryQuotaController) removeSubscription(span *subscribedSpan) {
-	if span == nil || span.meta.isSystem() {
+	if span.meta.isSystem() {
 		return
 	}
 
 	var leases []*memoryQuotaLease
 	c.mu.Lock()
-	state := c.changefeeds[span.meta.ChangefeedID]
-	if state != nil {
-		state.mu.Lock()
-		delete(state.spans, span.subID)
-		for lease, subID := range state.leases {
-			if subID == span.subID {
-				leases = append(leases, lease)
-			}
-		}
-		if len(state.spans) == 0 {
-			delete(c.changefeeds, span.meta.ChangefeedID)
-		}
-		state.mu.Unlock()
+	state := c.subscriptions[span.subID]
+	for lease := range state.eventLeases {
+		leases = append(leases, lease)
 	}
+	for lease := range state.scanLeases {
+		leases = append(leases, lease)
+	}
+	delete(c.subscriptions, span.subID)
 	c.mu.Unlock()
 
 	for _, lease := range leases {
@@ -204,76 +203,75 @@ func (c *memoryQuotaController) removeSubscription(span *subscribedSpan) {
 }
 
 func (c *memoryQuotaController) markSubscriptionInitialized(span *subscribedSpan) {
-	if span == nil || span.meta.isSystem() {
-		return
-	}
-
-	c.mu.Lock()
-	state := c.changefeeds[span.meta.ChangefeedID]
-	c.mu.Unlock()
-	if state == nil {
-		return
-	}
-
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.phase == changefeedPhaseNormal {
-		return
-	}
-	for _, subSpan := range state.spans {
-		if !subSpan.initialized.Load() {
-			return
-		}
-	}
-	state.phase = changefeedPhaseNormal
 	c.onMemoryAvailable()
 }
 
-func (c *memoryQuotaController) allowNewScan(span *subscribedSpan) (bool, string) {
-	if span == nil || span.meta.isSystem() {
-		return true, ""
+func (c *memoryQuotaController) acquireScan(region regionInfo, currentTs uint64) (*memoryQuotaLease, bool, string) {
+	span := region.subscribedSpan
+	if span.meta.isSystem() {
+		return nil, true, ""
 	}
 
 	c.mu.Lock()
 	c.refreshLevelLocked()
-	level := c.level
-	state := c.getOrCreateChangefeedStateLocked(span.meta.ChangefeedID)
-	c.mu.Unlock()
+	if c.level == admissionFreezeAllNewScans {
+		c.mu.Unlock()
+		return nil, false, deferReasonMemoryFreeze
+	}
+	bytes := c.estimateScanSizeLocked(region, currentTs)
+	warming := isWarmingScan(region, currentTs)
+	if c.isWarmingScanBlockedLocked(warming, bytes) {
+		c.mu.Unlock()
+		return nil, false, deferReasonMemoryWarming
+	}
 
-	if level == admissionFreezeAllNewScans {
-		return false, deferReasonMemoryFreeze
-	}
-	if level == admissionPauseWarming {
-		state.mu.Lock()
-		phase := state.phase
-		state.mu.Unlock()
-		if phase == changefeedPhaseWarming {
-			return false, deferReasonMemoryWarming
+	state := c.getSubscriptionStateLocked(span)
+	lease := &memoryQuotaLease{}
+	lease.release = func() {
+		c.mu.Lock()
+		if c.scanUsed >= bytes {
+			c.scanUsed -= bytes
+		} else {
+			c.scanUsed = 0
 		}
+		if warming {
+			if c.warmingScanUsed >= bytes {
+				c.warmingScanUsed -= bytes
+			} else {
+				c.warmingScanUsed = 0
+			}
+		}
+		if state.scanUsed >= bytes {
+			state.scanUsed -= bytes
+		} else {
+			state.scanUsed = 0
+		}
+		delete(state.scanLeases, lease)
+		c.refreshLevelLocked()
+		c.mu.Unlock()
+
+		c.onMemoryAvailable()
 	}
-	return true, ""
+	c.scanUsed += bytes
+	if warming {
+		c.warmingScanUsed += bytes
+	}
+	state.scanUsed += bytes
+	state.scanLeases[lease] = bytes
+	c.refreshLevelLocked()
+	c.mu.Unlock()
+	return lease, true, ""
 }
 
-func (c *memoryQuotaController) acquireEvent(
-	ctx context.Context,
-	span *subscribedSpan,
-	bytes uint64,
-) *memoryQuotaLease {
-	if span == nil || span.meta.isSystem() || bytes == 0 {
+func (c *memoryQuotaController) trackEvent(span *subscribedSpan, bytes uint64) *memoryQuotaLease {
+	if span.meta.isSystem() || bytes == 0 {
 		return nil
 	}
 
 	c.mu.Lock()
-	for c.used+bytes > c.capacity && c.used > 0 {
-		if ctx.Err() != nil {
-			c.mu.Unlock()
-			return nil
-		}
-		c.cond.Wait()
-	}
 	c.used += bytes
 	c.refreshLevelLocked()
-	state := c.getOrCreateChangefeedStateLocked(span.meta.ChangefeedID)
+	state := c.getSubscriptionStateLocked(span)
 
 	lease := &memoryQuotaLease{}
 	lease.release = func() {
@@ -283,40 +281,85 @@ func (c *memoryQuotaController) acquireEvent(
 		} else {
 			c.used = 0
 		}
+		delete(state.eventLeases, lease)
 		c.refreshLevelLocked()
-		c.cond.Broadcast()
 		c.mu.Unlock()
-
-		state.mu.Lock()
-		delete(state.leases, lease)
-		if state.memUsed >= bytes {
-			state.memUsed -= bytes
-		} else {
-			state.memUsed = 0
-		}
-		state.mu.Unlock()
 
 		c.onMemoryAvailable()
 	}
-
-	state.mu.Lock()
-	state.leases[lease] = span.subID
-	state.memUsed += bytes
-	state.mu.Unlock()
+	state.eventLeases[lease] = bytes
 	c.mu.Unlock()
 	return lease
 }
 
-func (c *memoryQuotaController) getOrCreateChangefeedStateLocked(
-	changefeedID common.ChangeFeedID,
-) *changefeedQuotaState {
-	state := c.changefeeds[changefeedID]
-	if state != nil {
-		return state
+func (c *memoryQuotaController) getSubscriptionStateLocked(
+	span *subscribedSpan,
+) *subscriptionQuotaState {
+	return c.subscriptions[span.subID]
+}
+
+func (c *memoryQuotaController) estimateScanSizeLocked(region regionInfo, currentTs uint64) uint64 {
+	raw := float64(c.scanEstimate) * scanLagFactor(region.resolvedTs(), currentTs)
+
+	estimate := uint64(raw)
+	minEstimate := c.scanEstimate
+	if estimate < minEstimate {
+		estimate = minEstimate
 	}
-	state = newChangefeedQuotaState(changefeedID)
-	c.changefeeds[changefeedID] = state
-	return state
+
+	maxEstimate := c.scanEstimate * defaultMaxScanLagFactor
+	if estimate > maxEstimate {
+		estimate = maxEstimate
+	}
+	if estimate == 0 {
+		estimate = c.scanEstimate
+	}
+	return estimate
+}
+
+func scanLagFactor(startTs uint64, currentTs uint64) float64 {
+	lag := scanLagDuration(startTs, currentTs)
+	if lag <= 0 {
+		return 1
+	}
+	return min(defaultMaxScanLagFactor, 1+defaultScanLagWeight*math.Log2(1+float64(lag)/float64(defaultScanLagUnit)))
+}
+
+func isWarmingScan(region regionInfo, currentTs uint64) bool {
+	span := region.subscribedSpan
+	if span.initialized.Load() {
+		return false
+	}
+	return scanLagDuration(region.resolvedTs(), currentTs) >= defaultWarmingScanLagThreshold
+}
+
+func scanLagDuration(startTs uint64, currentTs uint64) time.Duration {
+	if startTs == 0 || currentTs <= startTs {
+		return 0
+	}
+	lag := oracle.GetTimeFromTS(currentTs).Sub(oracle.GetTimeFromTS(startTs))
+	if lag <= 0 {
+		return 0
+	}
+	return lag
+}
+
+func (c *memoryQuotaController) isWarmingScanBlockedLocked(warming bool, bytes uint64) bool {
+	if !warming {
+		return false
+	}
+	if c.level == admissionPauseWarming {
+		return true
+	}
+	return c.warmingScanUsed+bytes > c.warmingScanBudgetLocked()
+}
+
+func (c *memoryQuotaController) warmingScanBudgetLocked() uint64 {
+	if c.capacity == 0 {
+		return 0
+	}
+	budget := uint64(float64(c.capacity) * c.pauseWarmingRatio)
+	return max(budget, c.scanEstimate)
 }
 
 func (c *memoryQuotaController) refreshLevelLocked() {
@@ -324,7 +367,8 @@ func (c *memoryQuotaController) refreshLevelLocked() {
 		c.level = admissionNormal
 		return
 	}
-	usage := float64(c.used) / float64(c.capacity)
+	pressure := max(c.used, c.scanUsed)
+	usage := float64(pressure) / float64(c.capacity)
 	switch c.level {
 	case admissionFreezeAllNewScans:
 		if usage <= c.resumeAllRatio {

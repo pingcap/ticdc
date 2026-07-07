@@ -14,10 +14,10 @@
 package logpuller
 
 import (
-	"context"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -32,34 +32,58 @@ func newTestQuotaSpan(subID SubscriptionID, changefeedID common.ChangeFeedID) *s
 	return span
 }
 
+func newTestQuotaRegion(span *subscribedSpan) regionInfo {
+	state := &regionlock.LockedRangeState{}
+	if span != nil {
+		state.ResolvedTs.Store(span.resolvedTs.Load())
+	}
+	return regionInfo{
+		subscribedSpan:   span,
+		lockedRangeState: state,
+	}
+}
+
+func setTestQuotaSpanLag(span *subscribedSpan, lag time.Duration) uint64 {
+	currentTime := time.Now()
+	span.resolvedTs.Store(oracle.GoTimeToTS(currentTime.Add(-lag)))
+	return oracle.GoTimeToTS(currentTime)
+}
+
 func TestMemoryQuotaAdmissionLevels(t *testing.T) {
-	controller := newMemoryQuotaController(100)
+	controller := newMemoryQuotaController(100, 0)
+	controller.scanEstimate = 10
 
 	warmingSpan := newTestQuotaSpan(1, common.NewChangeFeedIDWithName("warming", common.DefaultKeyspaceName))
 	normalSpan := newTestQuotaSpan(2, common.NewChangeFeedIDWithName("normal", common.DefaultKeyspaceName))
 	normalSpan.initialized.Store(true)
+	currentTs := setTestQuotaSpanLag(warmingSpan, defaultWarmingScanLagThreshold+time.Minute)
+	normalCurrentTs := setTestQuotaSpanLag(normalSpan, defaultWarmingScanLagThreshold+time.Minute)
 
 	controller.addSubscription(warmingSpan)
 	controller.addSubscription(normalSpan)
 	controller.markSubscriptionInitialized(normalSpan)
 
-	ok, reason := controller.allowNewScan(warmingSpan)
+	lease, ok, reason := controller.acquireScan(newTestQuotaRegion(warmingSpan), currentTs)
 	require.True(t, ok)
 	require.Empty(t, reason)
+	lease.Release()
 
-	softLease := controller.acquireEvent(context.Background(), normalSpan, 20)
+	softLease := controller.trackEvent(normalSpan, 20)
 	t.Cleanup(softLease.Release)
-	ok, reason = controller.allowNewScan(warmingSpan)
+	lease, ok, reason = controller.acquireScan(newTestQuotaRegion(warmingSpan), currentTs)
 	require.False(t, ok)
+	require.Nil(t, lease)
 	require.Equal(t, deferReasonMemoryWarming, reason)
-	ok, reason = controller.allowNewScan(normalSpan)
+	lease, ok, reason = controller.acquireScan(newTestQuotaRegion(normalSpan), normalCurrentTs)
 	require.True(t, ok)
 	require.Empty(t, reason)
+	lease.Release()
 
-	hardLease := controller.acquireEvent(context.Background(), normalSpan, 70)
+	hardLease := controller.trackEvent(normalSpan, 70)
 	t.Cleanup(hardLease.Release)
-	ok, reason = controller.allowNewScan(normalSpan)
+	lease, ok, reason = controller.acquireScan(newTestQuotaRegion(normalSpan), normalCurrentTs)
 	require.False(t, ok)
+	require.Nil(t, lease)
 	require.Equal(t, deferReasonMemoryFreeze, reason)
 
 	hardLease.Release()
@@ -71,33 +95,32 @@ func TestMemoryQuotaAdmissionLevels(t *testing.T) {
 	require.Equal(t, admissionNormal, level)
 }
 
-func TestWarmingHighPriorityTaskBlockedByMemoryGate(t *testing.T) {
-	controller := newMemoryQuotaController(100)
+func TestHighLagUninitializedScanBlockedByMemoryGate(t *testing.T) {
+	controller := newMemoryQuotaController(100, 0)
+	controller.scanEstimate = 10
 	warmingSpan := newTestQuotaSpan(1, common.NewChangeFeedIDWithName("warming", common.DefaultKeyspaceName))
 	controller.addSubscription(warmingSpan)
-	lease := controller.acquireEvent(context.Background(), warmingSpan, 20)
+	currentTs := setTestQuotaSpanLag(warmingSpan, defaultWarmingScanLagThreshold+time.Minute)
+	lease := controller.trackEvent(warmingSpan, 20)
 	t.Cleanup(lease.Release)
 
-	scheduler := &regionRequestScheduler{memoryQuota: controller}
-	region := regionInfo{subscribedSpan: warmingSpan}
-	task := newRegionPriorityTask(TaskHighPrior, region, oracle.GoTimeToTS(time.Now()), 1)
-
-	ok, reason, err := scheduler.tryAdmitTask(context.Background(), &requestedStore{}, task, region)
-	require.NoError(t, err)
+	region := newTestQuotaRegion(warmingSpan)
+	scanLease, ok, reason := controller.acquireScan(region, currentTs)
 	require.False(t, ok)
+	require.Nil(t, scanLease)
 	require.Equal(t, deferReasonMemoryWarming, reason)
 }
 
 func TestRemoveSubscriptionReleasesOnlyItsOutstandingMemory(t *testing.T) {
-	controller := newMemoryQuotaController(100)
+	controller := newMemoryQuotaController(100, 0)
 	changefeedID := common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName)
 	span1 := newTestQuotaSpan(1, changefeedID)
 	span2 := newTestQuotaSpan(2, changefeedID)
 	controller.addSubscription(span1)
 	controller.addSubscription(span2)
 
-	lease1 := controller.acquireEvent(context.Background(), span1, 30)
-	lease2 := controller.acquireEvent(context.Background(), span2, 40)
+	lease1 := controller.trackEvent(span1, 30)
+	lease2 := controller.trackEvent(span2, 40)
 	t.Cleanup(lease2.Release)
 
 	used, _, _ := controller.Snapshot()
@@ -114,4 +137,126 @@ func TestRemoveSubscriptionReleasesOnlyItsOutstandingMemory(t *testing.T) {
 	lease2.Release()
 	used, _, _ = controller.Snapshot()
 	require.Equal(t, uint64(0), used)
+}
+
+func TestWarmingScanBudgetLimitsOutstandingScans(t *testing.T) {
+	controller := newMemoryQuotaController(150, 0)
+	controller.scanEstimate = 10
+	warmingSpan := newTestQuotaSpan(1, common.NewChangeFeedIDWithName("warming", common.DefaultKeyspaceName))
+	controller.addSubscription(warmingSpan)
+	currentTs := setTestQuotaSpanLag(warmingSpan, defaultWarmingScanLagThreshold+time.Minute)
+
+	lease1, ok, reason := controller.acquireScan(newTestQuotaRegion(warmingSpan), currentTs)
+	require.True(t, ok)
+	require.Empty(t, reason)
+	t.Cleanup(lease1.Release)
+	lease2, ok, reason := controller.acquireScan(newTestQuotaRegion(warmingSpan), currentTs)
+	require.True(t, ok)
+	require.Empty(t, reason)
+	t.Cleanup(lease2.Release)
+
+	lease3, ok, reason := controller.acquireScan(newTestQuotaRegion(warmingSpan), currentTs)
+	require.False(t, ok)
+	require.Nil(t, lease3)
+	require.Equal(t, deferReasonMemoryWarming, reason)
+
+	lease1.Release()
+	lease3, ok, reason = controller.acquireScan(newTestQuotaRegion(warmingSpan), currentTs)
+	require.True(t, ok)
+	require.Empty(t, reason)
+	require.NotNil(t, lease3)
+	lease3.Release()
+}
+
+func TestInitializedSubscriptionBypassesWarmingScanBudget(t *testing.T) {
+	controller := newMemoryQuotaController(100, 0)
+	controller.scanEstimate = 10
+	warmingSpan := newTestQuotaSpan(1, common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName))
+	normalSpan := newTestQuotaSpan(2, common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName))
+	normalSpan.initialized.Store(true)
+	warmingCurrentTs := setTestQuotaSpanLag(warmingSpan, defaultWarmingScanLagThreshold+time.Minute)
+	normalCurrentTs := setTestQuotaSpanLag(normalSpan, defaultWarmingScanLagThreshold+time.Minute)
+	controller.addSubscription(warmingSpan)
+	controller.addSubscription(normalSpan)
+
+	lease := controller.trackEvent(normalSpan, 20)
+	t.Cleanup(lease.Release)
+
+	scanLease, ok, reason := controller.acquireScan(newTestQuotaRegion(warmingSpan), warmingCurrentTs)
+	require.False(t, ok)
+	require.Nil(t, scanLease)
+	require.Equal(t, deferReasonMemoryWarming, reason)
+
+	scanLease, ok, reason = controller.acquireScan(newTestQuotaRegion(normalSpan), normalCurrentTs)
+	require.True(t, ok)
+	require.Empty(t, reason)
+	require.NotNil(t, scanLease)
+	scanUsed, warmingScanUsed, _, _ := controller.ScanSnapshot()
+	require.Equal(t, uint64(13), scanUsed)
+	require.Equal(t, uint64(0), warmingScanUsed)
+	scanLease.Release()
+}
+
+func TestLowLagUninitializedSubscriptionBypassesWarmingGate(t *testing.T) {
+	controller := newMemoryQuotaController(100, 0)
+	controller.scanEstimate = 10
+	warmingSpan := newTestQuotaSpan(1, common.NewChangeFeedIDWithName("warming", common.DefaultKeyspaceName))
+	controller.addSubscription(warmingSpan)
+	currentTs := setTestQuotaSpanLag(warmingSpan, defaultWarmingScanLagThreshold-time.Second)
+
+	lease := controller.trackEvent(warmingSpan, 20)
+	t.Cleanup(lease.Release)
+
+	scanLease, ok, reason := controller.acquireScan(newTestQuotaRegion(warmingSpan), currentTs)
+	require.True(t, ok)
+	require.Empty(t, reason)
+	require.NotNil(t, scanLease)
+	scanUsed, warmingScanUsed, _, _ := controller.ScanSnapshot()
+	require.Greater(t, scanUsed, uint64(0))
+	require.Equal(t, uint64(0), warmingScanUsed)
+	scanLease.Release()
+}
+
+func TestInitializedSubscriptionBlockedByMemoryFreeze(t *testing.T) {
+	controller := newMemoryQuotaController(100, 0)
+	normalSpan := newTestQuotaSpan(1, common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName))
+	normalSpan.initialized.Store(true)
+	controller.addSubscription(normalSpan)
+
+	lease := controller.trackEvent(normalSpan, 90)
+	t.Cleanup(lease.Release)
+
+	scanLease, ok, reason := controller.acquireScan(newTestQuotaRegion(normalSpan), 0)
+	require.False(t, ok)
+	require.Nil(t, scanLease)
+	require.Equal(t, deferReasonMemoryFreeze, reason)
+}
+
+func TestWarmingScanBudgetKeepsAdmissionWideEnough(t *testing.T) {
+	controller := newMemoryQuotaController(defaultLogPullerMemoryQuota, 0)
+	warmingSpan := newTestQuotaSpan(1, common.NewChangeFeedIDWithName("warming", common.DefaultKeyspaceName))
+	controller.addSubscription(warmingSpan)
+	currentTs := setTestQuotaSpanLag(warmingSpan, defaultWarmingScanLagThreshold+time.Minute)
+	region := newTestQuotaRegion(warmingSpan)
+	_, _, warmingScanBudget, scanEstimate := controller.ScanSnapshot()
+	require.Equal(t, defaultScanBaseSize, scanEstimate)
+	scanSize := controller.estimateScanSizeLocked(region, currentTs)
+	allowedScans := int(warmingScanBudget / scanSize)
+	require.GreaterOrEqual(t, allowedScans, 35)
+
+	var leases []*memoryQuotaLease
+	for range allowedScans {
+		lease, ok, reason := controller.acquireScan(region, currentTs)
+		require.True(t, ok)
+		require.Empty(t, reason)
+		leases = append(leases, lease)
+	}
+	lease, ok, reason := controller.acquireScan(region, currentTs)
+	require.False(t, ok)
+	require.Nil(t, lease)
+	require.Equal(t, deferReasonMemoryWarming, reason)
+
+	for _, lease := range leases {
+		lease.Release()
+	}
 }

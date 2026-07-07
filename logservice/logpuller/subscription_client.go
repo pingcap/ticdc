@@ -86,6 +86,8 @@ type SubscriptionClientConfig struct {
 	PendingRegionRequestQueueSize int
 	// MemoryQuota is the log puller local memory quota in bytes.
 	MemoryQuota uint64
+	// ScanBaseSize is the base admission cost in bytes for one warming region scan.
+	ScanBaseSize uint64
 }
 
 type upstreamHandle struct {
@@ -170,7 +172,7 @@ func NewSubscriptionClient(
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	subClient.spanRegistry = newSpanRegistry(subClient.upstream)
-	subClient.memoryQuota = newMemoryQuotaController(config.MemoryQuota)
+	subClient.memoryQuota = newMemoryQuotaController(config.MemoryQuota, config.ScanBaseSize)
 
 	subClient.failureHandler = newRegionFailureHandler(
 		subClient.upstream,
@@ -205,8 +207,13 @@ func (s *subscriptionClient) runMetricsUpdater(ctx context.Context) error {
 			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
 			used, capacity, _ := s.memoryQuota.Snapshot()
+			scanUsed, warmingScanUsed, warmingScanBudget, scanEstimate := s.memoryQuota.ScanSnapshot()
 			metrics.LogPullerMemoryQuota.WithLabelValues("max").Set(float64(capacity))
 			metrics.LogPullerMemoryQuota.WithLabelValues("used").Set(float64(used))
+			metrics.LogPullerMemoryQuota.WithLabelValues("scan_used").Set(float64(scanUsed))
+			metrics.LogPullerMemoryQuota.WithLabelValues("warming_scan_used").Set(float64(warmingScanUsed))
+			metrics.LogPullerMemoryQuota.WithLabelValues("warming_scan_budget").Set(float64(warmingScanBudget))
+			metrics.LogPullerMemoryQuota.WithLabelValues("scan_estimate").Set(float64(scanEstimate))
 			metrics.DynamicStreamMemoryUsage.WithLabelValues(
 				"log-puller",
 				"max",
@@ -260,9 +267,7 @@ func (s *subscriptionClient) Subscribe(
 		bdrMode,
 	)
 	s.spanRegistry.Add(rt)
-	if s.memoryQuota != nil {
-		s.memoryQuota.addSubscription(rt)
-	}
+	s.memoryQuota.addSubscription(rt)
 
 	s.eventSink.AddPath(rt)
 
@@ -343,9 +348,7 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 			zap.Uint64("subscriptionID", uint64(rt.subID)),
 			zap.Error(err))
 	}
-	if s.memoryQuota != nil {
-		s.memoryQuota.removeSubscription(rt)
-	}
+	s.memoryQuota.removeSubscription(rt)
 	s.spanRegistry.Remove(rt.subID)
 }
 

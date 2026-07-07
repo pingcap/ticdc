@@ -83,7 +83,7 @@ func TestAddRegionStateReleasesOverwrittenRequest(t *testing.T) {
 	ctx := context.Background()
 	region := createTestRegionInfo(1, 1)
 
-	ok, err := worker.requestCache.add(ctx, region, false, testRegionRequestQuota())
+	ok, err := worker.requestCache.add(ctx, region, false, testRegionRequestQuota(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	req1, err := worker.requestCache.pop(ctx)
@@ -92,7 +92,7 @@ func TestAddRegionStateReleasesOverwrittenRequest(t *testing.T) {
 	state1 := newRegionFeedState(req1.regionInfo, uint64(req1.regionInfo.subscribedSpan.subID), worker, req1)
 	worker.tracker.Track(req1.regionInfo.subscribedSpan.subID, req1.regionInfo.verID.GetID(), state1)
 
-	ok, err = worker.requestCache.add(ctx, region, false, testRegionRequestQuota())
+	ok, err = worker.requestCache.add(ctx, region, false, testRegionRequestQuota(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, 2, worker.requestCache.pendingCount())
@@ -115,7 +115,7 @@ func TestInitializedRegionStateDetachesRequest(t *testing.T) {
 	ctx := context.Background()
 	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
 
-	ok, err := worker.requestCache.add(ctx, region, false, testRegionRequestQuota())
+	ok, err := worker.requestCache.add(ctx, region, false, testRegionRequestQuota(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	req, err := worker.requestCache.pop(ctx)
@@ -141,7 +141,7 @@ func TestDrainUnsentRegionsReleaseSlotForProcessingRegion(t *testing.T) {
 	ctx := context.Background()
 	region := createTestRegionInfo(1, 1)
 
-	ok, err := worker.requestCache.add(ctx, region, false, testRegionRequestQuota())
+	ok, err := worker.requestCache.add(ctx, region, false, testRegionRequestQuota(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -322,7 +322,7 @@ func TestDrainUnsentRegionsDoesNotReturnStoppedSentRegion(t *testing.T) {
 	ctx := context.Background()
 	region := createTestRegionInfo(1, 1)
 
-	ok, err := worker.requestCache.add(ctx, region, false, testRegionRequestQuota())
+	ok, err := worker.requestCache.add(ctx, region, false, testRegionRequestQuota(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -359,7 +359,7 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	ctx := context.Background()
 	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
 
-	ok, err := worker.requestCache.add(ctx, region, false, testRegionRequestQuota())
+	ok, err := worker.requestCache.add(ctx, region, false, testRegionRequestQuota(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, 1, worker.requestCache.pendingCount())
@@ -411,7 +411,7 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 			ctx := context.Background()
 			region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
 
-			ok, err := worker.requestCache.add(ctx, region, false, testRegionRequestQuota())
+			ok, err := worker.requestCache.add(ctx, region, false, testRegionRequestQuota(), nil)
 			require.NoError(t, err)
 			require.True(t, ok)
 

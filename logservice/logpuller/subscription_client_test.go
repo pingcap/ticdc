@@ -307,6 +307,7 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 		resolveLockTaskCh: make(chan resolveLockTask, 1),
 		upstream:          &upstreamHandle{pdClock: pdutil.NewClock4Test()},
 		eventSink:         &regionEventSink{ds: &mockDynamicStream{}},
+		memoryQuota:       newMemoryQuotaController(0, 0),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
@@ -351,7 +352,8 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 
 func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	client := &subscriptionClient{
-		eventSink: &regionEventSink{ds: &mockDynamicStream{}},
+		eventSink:   &regionEventSink{ds: &mockDynamicStream{}},
+		memoryQuota: newMemoryQuotaController(0, 0),
 	}
 	client.spanRegistry = newSpanRegistry(&upstreamHandle{})
 	client.failureHandler = newRegionFailureHandler(&upstreamHandle{}, client.onTableDrained, nil, nil)
@@ -366,6 +368,7 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
 	}
 	client.spanRegistry.Add(span)
+	client.memoryQuota.addSubscription(span)
 
 	res1 := span.rangeLock.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res1.Status)
@@ -503,7 +506,7 @@ func TestEnqueueDeregisterToAllStoresUsesControlQueue(t *testing.T) {
 		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
 		lockedRangeState: &regionlock.LockedRangeState{},
 	}
-	ok, err := worker.requestCache.add(ctx, dummyRegion, true, testRegionRequestQuota())
+	ok, err := worker.requestCache.add(ctx, dummyRegion, true, testRegionRequestQuota(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 
