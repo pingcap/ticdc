@@ -37,7 +37,6 @@ func (c *kafkaMetricsCollector) Run(ctx context.Context) {
 	if c.hook != nil {
 		c.hook.cleanupMetrics()
 	}
-	cleanupAdminMetrics(c.changefeedID.Keyspace(), c.changefeedID.Name())
 }
 
 func newKafkaMetricsHook(changefeedID common.ChangeFeedID) *metricsHook {

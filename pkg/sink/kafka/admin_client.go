@@ -61,12 +61,7 @@ func newAdminClient(
 	}, nil
 }
 
-func (a *kafkaAdminClient) GetBrokerConfig(configName string) (value string, err error) {
-	startTime := time.Now()
-	defer func() {
-		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetBrokerConfig, err, time.Since(startTime))
-	}()
-
+func (a *kafkaAdminClient) GetBrokerConfig(configName string) (string, error) {
 	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
@@ -106,12 +101,7 @@ func (a *kafkaAdminClient) GetBrokerConfig(configName string) (value string, err
 		"cannot find the `%s` from the broker's configuration", configName)
 }
 
-func (a *kafkaAdminClient) GetTopicConfig(topicName string, configName string) (value string, err error) {
-	startTime := time.Now()
-	defer func() {
-		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetTopicConfig, err, time.Since(startTime))
-	}()
-
+func (a *kafkaAdminClient) GetTopicConfig(topicName string, configName string) (string, error) {
 	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
@@ -150,12 +140,7 @@ func (a *kafkaAdminClient) GetTopicConfig(topicName string, configName string) (
 func (a *kafkaAdminClient) GetTopicsMeta(
 	topics []string,
 	ignoreTopicError bool,
-) (result map[string]TopicDetail, err error) {
-	startTime := time.Now()
-	defer func() {
-		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetTopicsMeta, err, time.Since(startTime))
-	}()
-
+) (map[string]TopicDetail, error) {
 	if len(topics) == 0 {
 		return make(map[string]TopicDetail), nil
 	}
@@ -168,7 +153,7 @@ func (a *kafkaAdminClient) GetTopicsMeta(
 		return nil, errors.Trace(err)
 	}
 
-	result = make(map[string]TopicDetail, len(topics))
+	result := make(map[string]TopicDetail, len(topics))
 	for _, topic := range topics {
 		detail, ok := meta.Topics[topic]
 		if !ok {
@@ -194,12 +179,7 @@ func (a *kafkaAdminClient) GetTopicsMeta(
 	return result, nil
 }
 
-func (a *kafkaAdminClient) GetTopicsPartitionsNum(topics []string) (result map[string]int32, err error) {
-	startTime := time.Now()
-	defer func() {
-		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetTopicsPartitions, err, time.Since(startTime))
-	}()
-
+func (a *kafkaAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
 	if len(topics) == 0 {
 		return make(map[string]int32), nil
 	}
@@ -212,7 +192,7 @@ func (a *kafkaAdminClient) GetTopicsPartitionsNum(topics []string) (result map[s
 		return nil, errors.Trace(err)
 	}
 
-	result = make(map[string]int32, len(topics))
+	result := make(map[string]int32, len(topics))
 	for _, topic := range topics {
 		detail, ok := meta.Topics[topic]
 		if !ok {
@@ -226,21 +206,16 @@ func (a *kafkaAdminClient) GetTopicsPartitionsNum(topics []string) (result map[s
 	return result, nil
 }
 
-func (a *kafkaAdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) (err error) {
-	startTime := time.Now()
-	defer func() {
-		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodCreateTopic, err, time.Since(startTime))
-	}()
-
+func (a *kafkaAdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) error {
 	if detail == nil {
-		err = errors.ErrKafkaInvalidConfig.GenWithStack("topic detail must not be nil")
-		return err
+		return errors.ErrKafkaInvalidConfig.GenWithStack("topic detail must not be nil")
 	}
 
 	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
 	var responses kadm.CreateTopicResponses
+	var err error
 	if validateOnly {
 		responses, err = a.admin.ValidateCreateTopics(ctx, detail.NumPartitions, detail.ReplicationFactor, nil, detail.Name)
 	} else {

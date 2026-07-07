@@ -90,7 +90,6 @@ func InitMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(requestsInFlightGauge)
 	registry.MustRegister(responseRateGauge)
 
-	initAdminMetrics(registry)
 	claimcheck.InitMetrics(registry)
 	codec.InitMetrics(registry)
 }
