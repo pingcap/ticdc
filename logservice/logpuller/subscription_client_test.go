@@ -173,7 +173,7 @@ func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
 }
 
 func TestHandleResolveLockTasksMetrics(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	resolver := &mockLockResolver{}
@@ -586,8 +586,7 @@ func TestSubscribeUsesInitialScanTaskPriority(t *testing.T) {
 	restore := setInitialScanLowPriorityThresholdForTest(t, 30*time.Minute)
 	defer restore()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	currentTime := time.Date(2026, time.June, 27, 12, 0, 0, 0, time.UTC)
 	pdClock := pdutil.NewClock4Test()
