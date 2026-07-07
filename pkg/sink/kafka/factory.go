@@ -20,16 +20,14 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 )
 
-// Factory is used to produce all kafka components.
+// Factory is used to produce all Kafka components.
 type Factory interface {
-	// AdminClient return a kafka cluster admin client
+	// AdminClient returns a Kafka cluster admin client.
 	AdminClient(ctx context.Context) (ClusterAdminClient, error)
-	// SyncProducer creates a sync producer to writer message to kafka
+	// SyncProducer creates a sync producer to write messages to Kafka.
 	SyncProducer(ctx context.Context) (SyncProducer, error)
-	// AsyncProducer creates an async producer to writer message to kafka
+	// AsyncProducer creates an async producer to write messages to Kafka.
 	AsyncProducer(ctx context.Context) (AsyncProducer, error)
-	// MetricsCollector returns the kafka metrics collector
-	MetricsCollector() MetricsCollector
 }
 
 type factory struct {
@@ -84,10 +82,6 @@ func (f *factory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 	return producer, nil
-}
-
-func (f *factory) MetricsCollector() MetricsCollector {
-	return &kafkaMetricsCollector{changefeedID: f.changefeedID, hook: f.metricsHook}
 }
 
 func newClientOption(o *options) *clientOptions {

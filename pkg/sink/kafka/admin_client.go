@@ -27,7 +27,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type kafkaAdminClient struct {
+type adminClient struct {
 	changefeed common.ChangeFeedID
 
 	client  *kgo.Client
@@ -40,7 +40,7 @@ func newAdminClient(
 	changefeedID common.ChangeFeedID,
 	o *clientOptions,
 	hook kgo.Hook,
-) (*kafkaAdminClient, error) {
+) (*adminClient, error) {
 	opts, err := newOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -53,7 +53,7 @@ func newAdminClient(
 
 	timeout := maxTimeoutWithDefault(o.ReadTimeout, o.WriteTimeout)
 
-	return &kafkaAdminClient{
+	return &adminClient{
 		changefeed: changefeedID,
 		client:     client,
 		admin:      kadm.NewClient(client),
@@ -61,7 +61,7 @@ func newAdminClient(
 	}, nil
 }
 
-func (a *kafkaAdminClient) GetBrokerConfig(configName string) (string, error) {
+func (a *adminClient) GetBrokerConfig(configName string) (string, error) {
 	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
@@ -101,7 +101,7 @@ func (a *kafkaAdminClient) GetBrokerConfig(configName string) (string, error) {
 		"cannot find the `%s` from the broker's configuration", configName)
 }
 
-func (a *kafkaAdminClient) GetTopicConfig(topicName string, configName string) (string, error) {
+func (a *adminClient) GetTopicConfig(topicName string, configName string) (string, error) {
 	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
@@ -137,7 +137,7 @@ func (a *kafkaAdminClient) GetTopicConfig(topicName string, configName string) (
 		"cannot find the `%s` from the topic's configuration", configName)
 }
 
-func (a *kafkaAdminClient) GetTopicsMeta(
+func (a *adminClient) GetTopicsMeta(
 	topics []string,
 	ignoreTopicError bool,
 ) (map[string]TopicDetail, error) {
@@ -179,7 +179,7 @@ func (a *kafkaAdminClient) GetTopicsMeta(
 	return result, nil
 }
 
-func (a *kafkaAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
+func (a *adminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
 	if len(topics) == 0 {
 		return make(map[string]int32), nil
 	}
@@ -206,7 +206,7 @@ func (a *kafkaAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]i
 	return result, nil
 }
 
-func (a *kafkaAdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) error {
+func (a *adminClient) CreateTopic(detail *TopicDetail, validateOnly bool) error {
 	if detail == nil {
 		return errors.ErrKafkaInvalidConfig.GenWithStack("topic detail must not be nil")
 	}
@@ -238,9 +238,9 @@ func (a *kafkaAdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) e
 	return errors.Trace(resp.Err)
 }
 
-func (a *kafkaAdminClient) Heartbeat() {}
+func (a *adminClient) Heartbeat() {}
 
-func (a *kafkaAdminClient) Close() {
+func (a *adminClient) Close() {
 	if a.admin != nil {
 		a.admin.Close()
 	}

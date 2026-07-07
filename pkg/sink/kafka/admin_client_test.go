@@ -22,7 +22,7 @@ import (
 func TestAdminClientCreateTopicNilDetailReturnsError(t *testing.T) {
 	t.Parallel()
 
-	client := &kafkaAdminClient{}
+	client := &adminClient{}
 
 	err := client.CreateTopic(nil, false)
 

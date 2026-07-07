@@ -44,7 +44,7 @@ type SyncProducer interface {
 	Close()
 }
 
-type kafkaSyncProducer struct {
+type syncProducer struct {
 	id commonType.ChangeFeedID
 
 	client  *kgo.Client
@@ -57,7 +57,7 @@ func newSyncProducer(
 	changefeedID commonType.ChangeFeedID,
 	o *clientOptions,
 	hook kgo.Hook,
-) (*kafkaSyncProducer, error) {
+) (*syncProducer, error) {
 	opts, err := newOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -71,7 +71,7 @@ func newSyncProducer(
 
 	timeout := maxTimeoutWithDefault(o.ReadTimeout, 0)
 
-	return &kafkaSyncProducer{
+	return &syncProducer{
 		id:      changefeedID,
 		client:  client,
 		closed:  atomic.NewBool(false),
@@ -79,7 +79,7 @@ func newSyncProducer(
 	}, nil
 }
 
-func (p *kafkaSyncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
+func (p *syncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
 	}
@@ -114,7 +114,7 @@ func (p *kafkaSyncProducer) SendMessage(topic string, partitionNum int32, messag
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 
-func (p *kafkaSyncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
+func (p *syncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
 	}
@@ -153,9 +153,9 @@ func (p *kafkaSyncProducer) SendMessages(topic string, partitionNum int32, messa
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 
-func (p *kafkaSyncProducer) Heartbeat() {}
+func (p *syncProducer) Heartbeat() {}
 
-func (p *kafkaSyncProducer) Close() {
+func (p *syncProducer) Close() {
 	if !p.closed.CompareAndSwap(false, true) {
 		log.Warn("kafka DDL producer already closed",
 			zap.String("keyspace", p.id.Keyspace()),

@@ -43,7 +43,7 @@ type AsyncProducer interface {
 	AsyncRunCallback(ctx context.Context) error
 }
 
-type kafkaAsyncProducer struct {
+type asyncProducer struct {
 	client       *kgo.Client
 	changefeedID commonType.ChangeFeedID
 
@@ -56,7 +56,7 @@ func newAsyncProducer(
 	changefeedID commonType.ChangeFeedID,
 	o *clientOptions,
 	hook kgo.Hook,
-) (*kafkaAsyncProducer, error) {
+) (*asyncProducer, error) {
 	opts, err := newOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -67,7 +67,7 @@ func newAsyncProducer(
 		return nil, errors.Trace(err)
 	}
 
-	return &kafkaAsyncProducer{
+	return &asyncProducer{
 		client:       client,
 		changefeedID: changefeedID,
 		closed:       atomic.NewBool(false),
@@ -75,7 +75,7 @@ func newAsyncProducer(
 	}, nil
 }
 
-func (p *kafkaAsyncProducer) Close() {
+func (p *asyncProducer) Close() {
 	if !p.closed.CompareAndSwap(false, true) {
 		return
 	}
@@ -90,7 +90,7 @@ func (p *kafkaAsyncProducer) Close() {
 	}()
 }
 
-func (p *kafkaAsyncProducer) AsyncSend(
+func (p *asyncProducer) AsyncSend(
 	ctx context.Context,
 	topic string,
 	partition int32,
@@ -161,7 +161,7 @@ func (p *kafkaAsyncProducer) AsyncSend(
 	return nil
 }
 
-func (p *kafkaAsyncProducer) enqueueAsyncSendError(
+func (p *asyncProducer) enqueueAsyncSendError(
 	keyspace string,
 	changefeed string,
 	logInfo *common.MessageLogInfo,
@@ -180,9 +180,9 @@ func (p *kafkaAsyncProducer) enqueueAsyncSendError(
 	}
 }
 
-func (p *kafkaAsyncProducer) Heartbeat() {}
+func (p *asyncProducer) Heartbeat() {}
 
-func (p *kafkaAsyncProducer) AsyncRunCallback(ctx context.Context) error {
+func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
 	defer p.closed.Store(true)
 	for {
 		select {

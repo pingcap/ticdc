@@ -26,7 +26,7 @@ import (
 )
 
 func TestAsyncSendClosedProducer(t *testing.T) {
-	producer := &kafkaAsyncProducer{closed: atomic.NewBool(true)}
+	producer := &asyncProducer{closed: atomic.NewBool(true)}
 
 	err := producer.AsyncSend(context.Background(), "topic", 0, &codeccommon.Message{})
 
@@ -34,7 +34,7 @@ func TestAsyncSendClosedProducer(t *testing.T) {
 }
 
 func TestAsyncRunCallbackReturnsQueuedErrorAndCloses(t *testing.T) {
-	producer := &kafkaAsyncProducer{
+	producer := &asyncProducer{
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-callback"),
 		closed:       atomic.NewBool(false),
 		errCh:        make(chan error, 1),
@@ -50,7 +50,7 @@ func TestAsyncRunCallbackReturnsQueuedErrorAndCloses(t *testing.T) {
 func TestAsyncSendLegacyFailpointAnnotatesDMLContext(t *testing.T) {
 	enableLegacyKafkaSinkFailpointForTest(t, kafkaSinkAsyncSendErrorFailpoint)
 
-	producer := &kafkaAsyncProducer{
+	producer := &asyncProducer{
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-legacy-failpoint"),
 		closed:       atomic.NewBool(false),
 		errCh:        make(chan error, 1),

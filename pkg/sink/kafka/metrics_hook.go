@@ -22,73 +22,40 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+// metricsHook adapts franz-go client callbacks to TiCDC's Kafka sink metrics.
+// franz-go calls these hook methods while writing requests, receiving responses,
+// and flushing produce batches. The hook does not poll Kafka; it only converts
+// the callback payloads into the existing TiCDC Kafka metric vectors.
 type metricsHook struct {
 	keyspace   string
 	changefeed string
-	metrics    metricVectors
-}
-
-type metricVectors struct {
-	RequestsInFlight  *prometheus.GaugeVec
-	OutgoingByteRate  *prometheus.GaugeVec
-	RequestRate       *prometheus.GaugeVec
-	RequestLatency    *prometheus.GaugeVec
-	ResponseRate      *prometheus.GaugeVec
-	CompressionRatio  *prometheus.GaugeVec
-	RecordsPerRequest *prometheus.GaugeVec
 }
 
 const (
-	legacyMetricAvg = "avg"
-	legacyMetricP99 = "p99"
+	metricAvg = "avg"
+	metricP99 = "p99"
 )
 
 func newKafkaMetricsHook(changefeedID common.ChangeFeedID) *metricsHook {
-	return newMetricsHook(
-		changefeedID.Keyspace(),
-		changefeedID.Name(),
-		metricVectors{
-			RequestsInFlight:  requestsInFlightGauge,
-			OutgoingByteRate:  OutgoingByteRateGauge,
-			RequestRate:       RequestRateGauge,
-			RequestLatency:    RequestLatencyGauge,
-			ResponseRate:      responseRateGauge,
-			CompressionRatio:  compressionRatioGauge,
-			RecordsPerRequest: recordsPerRequestGauge,
-		},
-	)
-}
-
-func newMetricsHook(
-	keyspace string,
-	changefeed string,
-	metrics metricVectors,
-) *metricsHook {
 	return &metricsHook{
-		keyspace:   keyspace,
-		changefeed: changefeed,
-		metrics:    metrics,
+		keyspace:   changefeedID.Keyspace(),
+		changefeed: changefeedID.Name(),
 	}
 }
 
-func (h *metricsHook) cleanupMetrics() {
+// CleanupMetrics removes Kafka sink metric series for a changefeed when its sink exits.
+func CleanupMetrics(changefeedID common.ChangeFeedID) {
 	labels := prometheus.Labels{
-		"namespace":  h.keyspace,
-		"changefeed": h.changefeed,
+		"namespace":  changefeedID.Keyspace(),
+		"changefeed": changefeedID.Name(),
 	}
-	for _, gaugeVec := range []*prometheus.GaugeVec{
-		h.metrics.OutgoingByteRate,
-		h.metrics.RequestRate,
-		h.metrics.ResponseRate,
-		h.metrics.RequestsInFlight,
-		h.metrics.RequestLatency,
-		h.metrics.CompressionRatio,
-		h.metrics.RecordsPerRequest,
-	} {
-		if gaugeVec != nil {
-			gaugeVec.DeletePartialMatch(labels)
-		}
-	}
+	OutgoingByteRateGauge.DeletePartialMatch(labels)
+	RequestRateGauge.DeletePartialMatch(labels)
+	responseRateGauge.DeletePartialMatch(labels)
+	requestsInFlightGauge.DeletePartialMatch(labels)
+	RequestLatencyGauge.DeletePartialMatch(labels)
+	compressionRatioGauge.DeletePartialMatch(labels)
+	recordsPerRequestGauge.DeletePartialMatch(labels)
 }
 
 func (h *metricsHook) OnBrokerWrite(
@@ -104,14 +71,12 @@ func (h *metricsHook) OnBrokerWrite(
 	}
 	brokerID := strconv.Itoa(int(meta.NodeID))
 
-	if h.metrics.OutgoingByteRate != nil && bytesWritten > 0 {
-		h.metrics.OutgoingByteRate.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(float64(bytesWritten))
+	if bytesWritten > 0 {
+		OutgoingByteRateGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(float64(bytesWritten))
 	}
-	if h.metrics.RequestRate != nil {
-		h.metrics.RequestRate.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(1)
-	}
-	if err == nil && h.metrics.RequestsInFlight != nil {
-		h.metrics.RequestsInFlight.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(1)
+	RequestRateGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(1)
+	if err == nil {
+		requestsInFlightGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(1)
 	}
 }
 
@@ -125,16 +90,16 @@ func (h *metricsHook) OnBrokerE2E(
 	}
 	brokerID := strconv.Itoa(int(meta.NodeID))
 
-	if e2e.WriteErr == nil && h.metrics.RequestsInFlight != nil {
-		h.metrics.RequestsInFlight.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(-1)
+	if e2e.WriteErr == nil {
+		requestsInFlightGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(-1)
 	}
-	if e2e.BytesRead > 0 && e2e.ReadErr == nil && h.metrics.ResponseRate != nil {
-		h.metrics.ResponseRate.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(1)
+	if e2e.BytesRead > 0 && e2e.ReadErr == nil {
+		responseRateGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(1)
 	}
-	if e2e.Err() == nil && h.metrics.RequestLatency != nil {
+	if e2e.Err() == nil {
 		latencyMs := float64(e2e.DurationE2E().Microseconds()) / 1000
-		h.metrics.RequestLatency.WithLabelValues(h.keyspace, h.changefeed, brokerID, legacyMetricAvg).Set(latencyMs)
-		h.metrics.RequestLatency.WithLabelValues(h.keyspace, h.changefeed, brokerID, legacyMetricP99).Set(latencyMs)
+		RequestLatencyGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID, metricAvg).Set(latencyMs)
+		RequestLatencyGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID, metricP99).Set(latencyMs)
 	}
 }
 
@@ -144,14 +109,14 @@ func (h *metricsHook) OnProduceBatchWritten(
 	_ int32,
 	m kgo.ProduceBatchMetrics,
 ) {
-	if h.metrics.RecordsPerRequest != nil && m.NumRecords > 0 {
+	if m.NumRecords > 0 {
 		records := float64(m.NumRecords)
-		h.metrics.RecordsPerRequest.WithLabelValues(h.keyspace, h.changefeed, legacyMetricAvg).Set(records)
-		h.metrics.RecordsPerRequest.WithLabelValues(h.keyspace, h.changefeed, legacyMetricP99).Set(records)
+		recordsPerRequestGauge.WithLabelValues(h.keyspace, h.changefeed, metricAvg).Set(records)
+		recordsPerRequestGauge.WithLabelValues(h.keyspace, h.changefeed, metricP99).Set(records)
 	}
-	if h.metrics.CompressionRatio != nil && m.UncompressedBytes > 0 && m.CompressedBytes > 0 {
+	if m.UncompressedBytes > 0 && m.CompressedBytes > 0 {
 		ratio := float64(m.UncompressedBytes) / float64(m.CompressedBytes) * 100
-		h.metrics.CompressionRatio.WithLabelValues(h.keyspace, h.changefeed, legacyMetricAvg).Set(ratio)
-		h.metrics.CompressionRatio.WithLabelValues(h.keyspace, h.changefeed, legacyMetricP99).Set(ratio)
+		compressionRatioGauge.WithLabelValues(h.keyspace, h.changefeed, metricAvg).Set(ratio)
+		compressionRatioGauge.WithLabelValues(h.keyspace, h.changefeed, metricP99).Set(ratio)
 	}
 }
