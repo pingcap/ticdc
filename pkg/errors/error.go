@@ -725,6 +725,10 @@ var (
 		"fail to open storage for redo log",
 		errors.RFCCodeText("CDC:ErrStorageInitialize"),
 	)
+	ErrSpillFileOp = errors.Normalize(
+		"spill file operation failed: %s",
+		errors.RFCCodeText("CDC:ErrSpillFileOp"),
+	)
 
 	ErrRedoConfigInvalid = errors.Normalize(
 		"redo log config invalid",
