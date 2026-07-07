@@ -233,9 +233,8 @@ func (a *dispatcherStat) storeLastScannedPosition(position common.ScanPosition) 
 		a.lastScannedPosition.Store(common.ScanPosition{})
 		return
 	}
-	positionCopy := make(common.ScanPosition, len(position))
-	copy(positionCopy, position)
-	a.lastScannedPosition.Store(positionCopy)
+	// ScanPosition is produced as an immutable snapshot by the scanner path.
+	a.lastScannedPosition.Store(position)
 }
 
 func (a *dispatcherStat) getLastScannedPosition() common.ScanPosition {
@@ -247,9 +246,7 @@ func (a *dispatcherStat) getLastScannedPosition() common.ScanPosition {
 	if len(position) == 0 {
 		return nil
 	}
-	positionCopy := make(common.ScanPosition, len(position))
-	copy(positionCopy, position)
-	return positionCopy
+	return position
 }
 
 // onResolvedTs try to update the resolved ts of the dispatcher.
