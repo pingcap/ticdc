@@ -278,6 +278,7 @@ func (s *eventScanner) scanAndMergeEvents(
 			if state := dispatcher.getLargeTxnState(); processor.currentTxn == nil &&
 				state != nil &&
 				state.getPhase() == largeTxnScanPhaseOriginal {
+				dispatcher.finishPendingBigTxnMetric()
 				dispatcher.markLargeTxnDrainInserts(state.startTs, state.commitTs, false, 0)
 				session.progress = newTxnScanProgress(state.commitTs, state.startTs)
 				return true, nil
@@ -296,11 +297,13 @@ func (s *eventScanner) scanAndMergeEvents(
 			err = finalizeScan(merger, processor, session, session.dataRange.CommitTsEnd)
 			return false, err
 		}
+		dispatcher.finishPendingBigTxnMetricBefore(rawEvent.StartTs, rawEvent.CRTs)
 
 		if state := dispatcher.getLargeTxnState(); processor.currentTxn == nil &&
 			state != nil &&
 			state.getPhase() == largeTxnScanPhaseOriginal &&
 			(rawEvent.StartTs != state.startTs || rawEvent.CRTs != state.commitTs) {
+			dispatcher.finishPendingBigTxnMetric()
 			dispatcher.markLargeTxnDrainInserts(state.startTs, state.commitTs, true, rawEvent.CRTs)
 			session.progress = newTxnScanProgress(state.commitTs, state.startTs)
 			return true, nil
@@ -438,8 +441,26 @@ func (s *eventScanner) commitTxn(
 	processor *dmlProcessor,
 	eventCommitTs, tableInfoUpdateTs uint64,
 ) error {
+	var (
+		startTs                  uint64
+		commitTs                 uint64
+		rawKVBytes               int64
+		largeTxnThresholdInBytes int64
+		hasCurrentTxn            bool
+	)
+	if processor.currentTxn != nil {
+		currentTxn := processor.currentTxn
+		startTs = currentTxn.CurrentDMLEvent.GetStartTs()
+		commitTs = currentTxn.CurrentDMLEvent.GetCommitTs()
+		rawKVBytes = currentTxn.rawKVBytes
+		largeTxnThresholdInBytes = currentTxn.largeTxnThresholdInBytes
+		hasCurrentTxn = true
+	}
 	if err := processor.commitTxn(); err != nil {
 		return err
+	}
+	if hasCurrentTxn {
+		session.dispatcherStat.finishBigTxnMetric(startTs, commitTs, rawKVBytes, largeTxnThresholdInBytes)
 	}
 	currentBatchDML := processor.getCurrentBatchDML()
 
@@ -540,8 +561,28 @@ func finalizeScan(
 	sess *session,
 	endTs uint64,
 ) error {
+	var (
+		startTs                  uint64
+		commitTs                 uint64
+		rawKVBytes               int64
+		largeTxnThresholdInBytes int64
+		hasCurrentTxn            bool
+	)
+	if processor.currentTxn != nil {
+		currentTxn := processor.currentTxn
+		startTs = currentTxn.CurrentDMLEvent.GetStartTs()
+		commitTs = currentTxn.CurrentDMLEvent.GetCommitTs()
+		rawKVBytes = currentTxn.rawKVBytes
+		largeTxnThresholdInBytes = currentTxn.largeTxnThresholdInBytes
+		hasCurrentTxn = true
+	}
 	if err := processor.commitTxn(); err != nil {
 		return err
+	}
+	if hasCurrentTxn {
+		sess.dispatcherStat.finishBigTxnMetric(startTs, commitTs, rawKVBytes, largeTxnThresholdInBytes)
+	} else {
+		sess.dispatcherStat.finishPendingBigTxnMetric()
 	}
 
 	resolvedBatch := processor.getCurrentBatchDML()
@@ -606,6 +647,15 @@ func interruptCurrentTxn(
 	startTs uint64,
 	position common.ScanPosition,
 ) {
+	if processor.currentTxn != nil {
+		currentTxn := processor.currentTxn
+		currentDML := currentTxn.CurrentDMLEvent
+		session.dispatcherStat.addBigTxnMetricFragment(
+			currentDML.GetStartTs(),
+			currentDML.GetCommitTs(),
+			currentTxn.rawKVBytes,
+			currentTxn.largeTxnThresholdInBytes)
+	}
 	events := merger.mergeWithPrecedingDDLs(processor.getCurrentBatchDML())
 	session.appendEvents(events)
 	session.progress = newRowLevelScanProgress(commitTs, startTs, position)
