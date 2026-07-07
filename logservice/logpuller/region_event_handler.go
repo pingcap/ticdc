@@ -137,13 +137,13 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 				if resolvedTs > newResolvedTs {
 					newResolvedTs = resolvedTs
 				}
-				if resolvedTs > 0 && h.subClient != nil {
-					h.subClient.maybeEnableRealtimeScanPriority(span, resolvedTs)
-				}
 			}
 		} else {
 			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
 		}
+	}
+	if newResolvedTs > 0 && h.subClient != nil {
+		h.subClient.maybeEnableRealtimeScanPriority(span, newResolvedTs)
 	}
 	tryAdvanceResolvedTs := func() {
 		if newResolvedTs != 0 {

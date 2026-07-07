@@ -639,12 +639,7 @@ func TestRealtimeScanPriorityEnabledAfterSubscriptionCatchesUp(t *testing.T) {
 		pdClock: pdClock,
 	}
 
-	rawSpan := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
-	span := &subscribedSpan{
-		subID:     SubscriptionID(1),
-		span:      rawSpan,
-		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
-	}
+	_, span := newRealtimePriorityTestSpan()
 
 	client.maybeEnableRealtimeScanPriority(span, oracle.GoTimeToTS(currentTime.Add(-time.Minute)))
 	require.False(t, span.realtimeScanPriority.Load())
@@ -663,18 +658,9 @@ func TestRealtimeScanPriorityUpgradesRegionRetry(t *testing.T) {
 		regionTaskQueue: priorityqueue.New[PriorityTask](),
 	}
 	client.pdClock = pdutil.NewClock4Test()
-	rawSpan := heartbeatpb.TableSpan{
-		TableID:  1,
-		StartKey: []byte("a"),
-		EndKey:   []byte("z"),
-	}
-	span := &subscribedSpan{
-		subID:     SubscriptionID(1),
-		span:      rawSpan,
-		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
-	}
+	_, span := newRealtimePriorityTestSpan()
 	span.realtimeScanPriority.Store(true)
-	region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), rawSpan, nil, span, false)
+	region := newRealtimePriorityTestRegion(span)
 	region.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_LOW
 
 	err := client.doHandleError(context.Background(), newRegionErrorInfo(region, &eventError{err: &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}}))
@@ -692,18 +678,9 @@ func TestRealtimeScanPriorityUpgradesRangeRetry(t *testing.T) {
 	client := &subscriptionClient{
 		rangeTaskCh: make(chan rangeTask, 1),
 	}
-	rawSpan := heartbeatpb.TableSpan{
-		TableID:  1,
-		StartKey: []byte("a"),
-		EndKey:   []byte("z"),
-	}
-	span := &subscribedSpan{
-		subID:     SubscriptionID(1),
-		span:      rawSpan,
-		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
-	}
+	rawSpan, span := newRealtimePriorityTestSpan()
 	span.realtimeScanPriority.Store(true)
-	region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), rawSpan, nil, span, false)
+	region := newRealtimePriorityTestRegion(span)
 	region.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_LOW
 
 	err := client.doHandleError(context.Background(), newRegionErrorInfo(region, &eventError{err: &cdcpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}}))
@@ -716,6 +693,25 @@ func TestRealtimeScanPriorityUpgradesRangeRetry(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "expected range retry task")
 	}
+}
+
+func newRealtimePriorityTestSpan() (heartbeatpb.TableSpan, *subscribedSpan) {
+	rawSpan := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+	}
+	span := &subscribedSpan{
+		subID:        SubscriptionID(1),
+		changefeedID: "test/test-changefeed",
+		span:         rawSpan,
+		rangeLock:    regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
+	}
+	return rawSpan, span
+}
+
+func newRealtimePriorityTestRegion(span *subscribedSpan) regionInfo {
+	return newRegionInfo(tikv.NewRegionVerID(1, 1, 1), span.span, nil, span, false)
 }
 
 func setInitialScanLowPriorityThresholdForTest(t *testing.T, threshold time.Duration) func() {

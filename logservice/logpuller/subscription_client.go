@@ -872,7 +872,7 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
 		s.regionTaskQueue.Push(NewRegionPriorityTask(priority, region, s.pdClock.CurrentTS()))
-		log.Info("cdc region scan task enqueued",
+		log.Debug("cdc region scan task enqueued",
 			zap.String("changefeedID", region.subscribedSpan.changefeedID),
 			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 			zap.Int64("tableID", region.subscribedSpan.span.TableID),

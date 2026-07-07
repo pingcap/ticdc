@@ -73,10 +73,7 @@ func taskTypeFromScanPriority(priority cdcpb.ScanPriority) TaskType {
 }
 
 func normalizeScanPriority(priority cdcpb.ScanPriority) cdcpb.ScanPriority {
-	if priority == cdcpb.ScanPriority_SCAN_PRIORITY_HIGH {
-		return cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
-	}
-	return cdcpb.ScanPriority_SCAN_PRIORITY_LOW
+	return taskTypeFromScanPriority(priority).scanPriority()
 }
 
 // PriorityTask is the interface for priority-based tasks
