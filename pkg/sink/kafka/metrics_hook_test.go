@@ -63,14 +63,18 @@ func TestMetricsHookRecordsMetricsAndCleanup(t *testing.T) {
 		CompressionRatio:  compressionRatio,
 	})
 
-	hook.RecordBrokerWrite(1, 42, nil)
+	hook.OnBrokerWrite(kgo.BrokerMetadata{NodeID: 1}, 0, 42, 0, 0, nil)
 	hook.OnBrokerE2E(kgo.BrokerMetadata{NodeID: 1}, 0, kgo.BrokerE2E{
 		BytesRead:   42,
 		TimeToWrite: 10 * time.Millisecond,
 		ReadWait:    20 * time.Millisecond,
 		TimeToRead:  30 * time.Millisecond,
 	})
-	hook.RecordProduceBatchWritten(3, 100, 50)
+	hook.OnProduceBatchWritten(kgo.BrokerMetadata{}, "", 0, kgo.ProduceBatchMetrics{
+		NumRecords:        3,
+		UncompressedBytes: 100,
+		CompressedBytes:   50,
+	})
 
 	require.Equal(t, float64(42), testutil.ToFloat64(outgoingByteRate.WithLabelValues("default", "cf", "1")))
 	require.Equal(t, float64(1), testutil.ToFloat64(requestRate.WithLabelValues("default", "cf", "1")))

@@ -61,17 +61,13 @@ func newAdminClient(
 	}, nil
 }
 
-func (a *kafkaAdminClient) newRequestContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(a.client.Context(), a.timeout)
-}
-
 func (a *kafkaAdminClient) GetBrokerConfig(configName string) (value string, err error) {
 	startTime := time.Now()
 	defer func() {
 		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetBrokerConfig, err, time.Since(startTime))
 	}()
 
-	ctx, cancel := a.newRequestContext()
+	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
 	meta, err := a.admin.BrokerMetadata(ctx)
@@ -116,7 +112,7 @@ func (a *kafkaAdminClient) GetTopicConfig(topicName string, configName string) (
 		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetTopicConfig, err, time.Since(startTime))
 	}()
 
-	ctx, cancel := a.newRequestContext()
+	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
 	configs, err := a.admin.DescribeTopicConfigs(ctx, topicName)
@@ -164,7 +160,7 @@ func (a *kafkaAdminClient) GetTopicsMeta(
 		return make(map[string]TopicDetail), nil
 	}
 
-	ctx, cancel := a.newRequestContext()
+	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
 	meta, err := a.admin.Metadata(ctx, topics...)
@@ -208,7 +204,7 @@ func (a *kafkaAdminClient) GetTopicsPartitionsNum(topics []string) (result map[s
 		return make(map[string]int32), nil
 	}
 
-	ctx, cancel := a.newRequestContext()
+	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
 	meta, err := a.admin.Metadata(ctx, topics...)
@@ -241,7 +237,7 @@ func (a *kafkaAdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) (
 		return err
 	}
 
-	ctx, cancel := a.newRequestContext()
+	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
 	var responses kadm.CreateTopicResponses

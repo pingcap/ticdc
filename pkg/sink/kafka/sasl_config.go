@@ -90,17 +90,6 @@ func (o *oauth2Config) validate() error {
 	return nil
 }
 
-// setDefault sets the default value of oauth2Config.
-func (o *oauth2Config) setDefault() {
-	o.grantType = "client_credentials"
-}
-
-// isEnabled checks whether the oauth2Config is enabled.
-// One of values of clientID, clientSecret and tokenURL is not empty means enabled.
-func (o *oauth2Config) isEnabled() bool {
-	return len(o.clientID) > 0 || len(o.clientSecret) > 0 || len(o.tokenURL) > 0
-}
-
 // gssapiAuthType defines the type of GSSAPI authentication.
 type gssapiAuthType int
 

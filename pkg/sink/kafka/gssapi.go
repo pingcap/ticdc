@@ -18,7 +18,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/jcmturner/gofork/encoding/asn1"
 	"github.com/jcmturner/gokrb5/v8/asn1tools"
@@ -87,7 +86,7 @@ func (m *gssapiMechanism) Authenticate(
 	}
 	firstMessage, err := session.nextMessage(nil)
 	if err != nil {
-		session.close()
+		client.Destroy()
 		return nil, nil, errors.Trace(err)
 	}
 	return session, firstMessage, nil
@@ -98,37 +97,25 @@ type gssapiSession struct {
 	ticket messages.Ticket
 	encKey types.EncryptionKey
 	step   int
-
-	closeOnce sync.Once
 }
 
 func (s *gssapiSession) Challenge(challenge []byte) (bool, []byte, error) {
+	defer s.client.Destroy()
+
 	switch s.step {
 	case gssAPIVerify:
 		msg, err := s.nextMessage(challenge)
 		if err != nil {
-			s.close()
 			return false, nil, errors.Trace(err)
 		}
 		// Return a final payload while marking done=true.
 		// The Kafka client writes this message and finishes the auth flow.
-		s.close()
 		return true, msg, nil
 	case gssAPIFinished:
-		s.close()
 		return true, nil, nil
 	default:
-		s.close()
 		return false, nil, errors.New("invalid gssapi session state")
 	}
-}
-
-func (s *gssapiSession) close() {
-	s.closeOnce.Do(func() {
-		if s.client != nil {
-			s.client.Destroy()
-		}
-	})
 }
 
 func (s *gssapiSession) nextMessage(challenge []byte) ([]byte, error) {

@@ -62,19 +62,20 @@ func newSyncProducer(
 	}, nil
 }
 
-func (p *kafkaSyncProducer) newRequestContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(p.client.Context(), p.timeout)
-}
-
 func (p *kafkaSyncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
 	}
 
-	ctx, cancel := p.newRequestContext()
+	ctx, cancel := context.WithTimeout(p.client.Context(), p.timeout)
 	defer cancel()
 
-	record := buildRecord(topic, partitionNum, message)
+	record := &kgo.Record{
+		Topic:     topic,
+		Partition: partitionNum,
+		Key:       message.Key,
+		Value:     message.Value,
+	}
 	err := p.client.ProduceSync(ctx, record).FirstErr()
 
 	if legacyKafkaSinkFailpointEnabled(kafkaSinkSyncSendMessageErrorFailpoint) {
@@ -85,7 +86,15 @@ func (p *kafkaSyncProducer) SendMessage(topic string, partitionNum int32, messag
 		err = errors.New("kafka sink sync send message injected error")
 	})
 
-	return p.wrapSendError(message, err)
+	if err != nil {
+		err = AnnotateEventError(
+			p.id.Keyspace(),
+			p.id.Name(),
+			message.LogInfo,
+			err,
+		)
+	}
+	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 
 func (p *kafkaSyncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
@@ -95,10 +104,15 @@ func (p *kafkaSyncProducer) SendMessages(topic string, partitionNum int32, messa
 
 	records := make([]*kgo.Record, 0, partitionNum)
 	for i := 0; i < int(partitionNum); i++ {
-		records = append(records, buildRecord(topic, int32(i), message))
+		records = append(records, &kgo.Record{
+			Topic:     topic,
+			Partition: int32(i),
+			Key:       message.Key,
+			Value:     message.Value,
+		})
 	}
 
-	ctx, cancel := p.newRequestContext()
+	ctx, cancel := context.WithTimeout(p.client.Context(), p.timeout)
 	defer cancel()
 
 	err := p.client.ProduceSync(ctx, records...).FirstErr()
@@ -111,7 +125,15 @@ func (p *kafkaSyncProducer) SendMessages(topic string, partitionNum int32, messa
 		err = errors.New("kafka sink sync send messages injected error")
 	})
 
-	return p.wrapSendError(message, err)
+	if err != nil {
+		err = AnnotateEventError(
+			p.id.Keyspace(),
+			p.id.Name(),
+			message.LogInfo,
+			err,
+		)
+	}
+	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 
 func (p *kafkaSyncProducer) Heartbeat() {}
@@ -130,25 +152,4 @@ func (p *kafkaSyncProducer) Close() {
 		zap.String("keyspace", p.id.Keyspace()),
 		zap.String("changefeed", p.id.Name()),
 		zap.Duration("duration", time.Since(start)))
-}
-
-func buildRecord(topic string, partition int32, message *common.Message) *kgo.Record {
-	return &kgo.Record{
-		Topic:     topic,
-		Partition: partition,
-		Key:       message.Key,
-		Value:     message.Value,
-	}
-}
-
-func (p *kafkaSyncProducer) wrapSendError(message *common.Message, err error) error {
-	if err != nil {
-		err = AnnotateEventError(
-			p.id.Keyspace(),
-			p.id.Name(),
-			message.LogInfo,
-			err,
-		)
-	}
-	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }

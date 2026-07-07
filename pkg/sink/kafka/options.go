@@ -505,7 +505,9 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			o.sasl.oauth2.tokenURL = tokenURL
 		}
 
-		if o.sasl.oauth2.isEnabled() {
+		if o.sasl.oauth2.clientID != "" ||
+			o.sasl.oauth2.clientSecret != "" ||
+			o.sasl.oauth2.tokenURL != "" {
 			if o.sasl.mechanism != oauthMechanism {
 				return cerror.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 is only supported with SASL mechanism type OAUTHBEARER, but got %s",
@@ -515,7 +517,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			if err := o.sasl.oauth2.validate(); err != nil {
 				return cerror.ErrKafkaInvalidConfig.Wrap(err)
 			}
-			o.sasl.oauth2.setDefault()
+			o.sasl.oauth2.grantType = "client_credentials"
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthScopes != nil {

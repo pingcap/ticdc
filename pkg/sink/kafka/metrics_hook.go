@@ -59,34 +59,18 @@ func (h *metricsHook) cleanupMetrics() {
 		"namespace":  h.keyspace,
 		"changefeed": h.changefeed,
 	}
-	deleteGaugeVecPartialMatch(h.metrics.OutgoingByteRate, labels)
-	deleteGaugeVecPartialMatch(h.metrics.RequestRate, labels)
-	deleteGaugeVecPartialMatch(h.metrics.ResponseRate, labels)
-	deleteGaugeVecPartialMatch(h.metrics.RequestsInFlight, labels)
-	deleteGaugeVecPartialMatch(h.metrics.RequestLatency, labels)
-	deleteGaugeVecPartialMatch(h.metrics.CompressionRatio, labels)
-	deleteGaugeVecPartialMatch(h.metrics.RecordsPerRequest, labels)
-}
-
-func (h *metricsHook) RecordBrokerWrite(nodeID int32, bytesWritten int, err error) {
-	if nodeID < 0 {
-		return
-	}
-
-	ctx, ok := h.loadMetricsContext()
-	if !ok {
-		return
-	}
-	brokerID := strconv.Itoa(int(nodeID))
-
-	if ctx.metrics.OutgoingByteRate != nil && bytesWritten > 0 {
-		ctx.metrics.OutgoingByteRate.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(float64(bytesWritten))
-	}
-	if ctx.metrics.RequestRate != nil {
-		ctx.metrics.RequestRate.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(1)
-	}
-	if err == nil && ctx.metrics.RequestsInFlight != nil {
-		ctx.metrics.RequestsInFlight.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(1)
+	for _, gaugeVec := range []*prometheus.GaugeVec{
+		h.metrics.OutgoingByteRate,
+		h.metrics.RequestRate,
+		h.metrics.ResponseRate,
+		h.metrics.RequestsInFlight,
+		h.metrics.RequestLatency,
+		h.metrics.CompressionRatio,
+		h.metrics.RecordsPerRequest,
+	} {
+		if gaugeVec != nil {
+			gaugeVec.DeletePartialMatch(labels)
+		}
 	}
 }
 
@@ -98,7 +82,20 @@ func (h *metricsHook) OnBrokerWrite(
 	_ time.Duration,
 	err error,
 ) {
-	h.RecordBrokerWrite(meta.NodeID, bytesWritten, err)
+	if meta.NodeID < 0 {
+		return
+	}
+	brokerID := strconv.Itoa(int(meta.NodeID))
+
+	if h.metrics.OutgoingByteRate != nil && bytesWritten > 0 {
+		h.metrics.OutgoingByteRate.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(float64(bytesWritten))
+	}
+	if h.metrics.RequestRate != nil {
+		h.metrics.RequestRate.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(1)
+	}
+	if err == nil && h.metrics.RequestsInFlight != nil {
+		h.metrics.RequestsInFlight.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(1)
+	}
 }
 
 func (h *metricsHook) OnBrokerE2E(
@@ -109,23 +106,18 @@ func (h *metricsHook) OnBrokerE2E(
 	if meta.NodeID < 0 {
 		return
 	}
-
-	ctx, ok := h.loadMetricsContext()
-	if !ok {
-		return
-	}
 	brokerID := strconv.Itoa(int(meta.NodeID))
 
-	if e2e.WriteErr == nil && ctx.metrics.RequestsInFlight != nil {
-		ctx.metrics.RequestsInFlight.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(-1)
+	if e2e.WriteErr == nil && h.metrics.RequestsInFlight != nil {
+		h.metrics.RequestsInFlight.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(-1)
 	}
-	if e2e.BytesRead > 0 && e2e.ReadErr == nil && ctx.metrics.ResponseRate != nil {
-		ctx.metrics.ResponseRate.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(1)
+	if e2e.BytesRead > 0 && e2e.ReadErr == nil && h.metrics.ResponseRate != nil {
+		h.metrics.ResponseRate.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(1)
 	}
-	if e2e.Err() == nil && ctx.metrics.RequestLatency != nil {
+	if e2e.Err() == nil && h.metrics.RequestLatency != nil {
 		latencyMs := float64(e2e.DurationE2E().Microseconds()) / 1000
-		ctx.metrics.RequestLatency.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID, legacyMetricAvg).Set(latencyMs)
-		ctx.metrics.RequestLatency.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID, legacyMetricP99).Set(latencyMs)
+		h.metrics.RequestLatency.WithLabelValues(h.keyspace, h.changefeed, brokerID, legacyMetricAvg).Set(latencyMs)
+		h.metrics.RequestLatency.WithLabelValues(h.keyspace, h.changefeed, brokerID, legacyMetricP99).Set(latencyMs)
 	}
 }
 
@@ -135,43 +127,14 @@ func (h *metricsHook) OnProduceBatchWritten(
 	_ int32,
 	m kgo.ProduceBatchMetrics,
 ) {
-	h.RecordProduceBatchWritten(m.NumRecords, m.UncompressedBytes, m.CompressedBytes)
-}
-
-func (h *metricsHook) RecordProduceBatchWritten(numRecords int, uncompressedBytes int, compressedBytes int) {
-	ctx, ok := h.loadMetricsContext()
-	if !ok {
-		return
+	if h.metrics.RecordsPerRequest != nil && m.NumRecords > 0 {
+		records := float64(m.NumRecords)
+		h.metrics.RecordsPerRequest.WithLabelValues(h.keyspace, h.changefeed, legacyMetricAvg).Set(records)
+		h.metrics.RecordsPerRequest.WithLabelValues(h.keyspace, h.changefeed, legacyMetricP99).Set(records)
 	}
-
-	if ctx.metrics.RecordsPerRequest != nil && numRecords > 0 {
-		records := float64(numRecords)
-		ctx.metrics.RecordsPerRequest.WithLabelValues(ctx.keyspace, ctx.changefeed, legacyMetricAvg).Set(records)
-		ctx.metrics.RecordsPerRequest.WithLabelValues(ctx.keyspace, ctx.changefeed, legacyMetricP99).Set(records)
-	}
-	if ctx.metrics.CompressionRatio != nil && uncompressedBytes > 0 && compressedBytes > 0 {
-		ratio := float64(uncompressedBytes) / float64(compressedBytes) * 100
-		ctx.metrics.CompressionRatio.WithLabelValues(ctx.keyspace, ctx.changefeed, legacyMetricAvg).Set(ratio)
-		ctx.metrics.CompressionRatio.WithLabelValues(ctx.keyspace, ctx.changefeed, legacyMetricP99).Set(ratio)
-	}
-}
-
-type metricsContext struct {
-	keyspace   string
-	changefeed string
-	metrics    metricVectors
-}
-
-func (h *metricsHook) loadMetricsContext() (metricsContext, bool) {
-	return metricsContext{
-		keyspace:   h.keyspace,
-		changefeed: h.changefeed,
-		metrics:    h.metrics,
-	}, true
-}
-
-func deleteGaugeVecPartialMatch(gaugeVec *prometheus.GaugeVec, labels prometheus.Labels) {
-	if gaugeVec != nil {
-		gaugeVec.DeletePartialMatch(labels)
+	if h.metrics.CompressionRatio != nil && m.UncompressedBytes > 0 && m.CompressedBytes > 0 {
+		ratio := float64(m.UncompressedBytes) / float64(m.CompressedBytes) * 100
+		h.metrics.CompressionRatio.WithLabelValues(h.keyspace, h.changefeed, legacyMetricAvg).Set(ratio)
+		h.metrics.CompressionRatio.WithLabelValues(h.keyspace, h.changefeed, legacyMetricP99).Set(ratio)
 	}
 }
