@@ -41,6 +41,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -872,17 +873,19 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
 		s.regionTaskQueue.Push(NewRegionPriorityTask(priority, region, s.pdClock.CurrentTS()))
-		log.Debug("cdc region scan task enqueued",
-			zap.String("changefeedID", region.subscribedSpan.changefeedID),
-			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
-			zap.Int64("tableID", region.subscribedSpan.span.TableID),
-			zap.Uint64("startTs", region.subscribedSpan.startTs),
-			zap.Uint64("regionID", region.verID.GetID()),
-			zap.Uint64("regionEpochVersion", region.verID.GetVer()),
-			zap.Uint64("regionEpochConfVer", region.verID.GetConfVer()),
-			zap.String("priority", taskTypeLogName(priority)),
-			zap.String("scanPriority", region.scanPriority.String()),
-			zap.String("span", common.FormatTableSpan(&region.span)))
+		if log.GetLevel() <= zapcore.DebugLevel {
+			log.Debug("cdc region scan task enqueued",
+				zap.String("changefeedID", region.subscribedSpan.changefeedID),
+				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
+				zap.Int64("tableID", region.subscribedSpan.span.TableID),
+				zap.Uint64("startTs", region.subscribedSpan.startTs),
+				zap.Uint64("regionID", region.verID.GetID()),
+				zap.Uint64("regionEpochVersion", region.verID.GetVer()),
+				zap.Uint64("regionEpochConfVer", region.verID.GetConfVer()),
+				zap.String("priority", taskTypeLogName(priority)),
+				zap.String("scanPriority", region.scanPriority.String()),
+				zap.String("span", common.FormatTableSpan(&region.span)))
+		}
 	case regionlock.LockRangeStatusStale:
 		for _, r := range lockRangeResult.RetryRanges {
 			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop, priority)
