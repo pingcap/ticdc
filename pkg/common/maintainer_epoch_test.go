@@ -11,8 +11,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build legacy_safepoint
+package common
 
-package kerneltype
+import (
+	"testing"
 
-const UseLegacySafePointInNextGen = true
+	"github.com/stretchr/testify/require"
+)
+
+func TestAdvanceChangefeedEpoch(t *testing.T) {
+	t.Parallel()
+
+	epoch, err := AdvanceChangefeedEpoch(10, 8)
+	require.NoError(t, err)
+	require.Equal(t, uint64(10), epoch)
+
+	epoch, err = AdvanceChangefeedEpoch(10, 12)
+	require.NoError(t, err)
+	require.Equal(t, uint64(13), epoch)
+
+	_, err = AdvanceChangefeedEpoch(10, ^uint64(0))
+	require.Error(t, err)
+	require.ErrorContains(t, err, "changefeed epoch overflow")
+}

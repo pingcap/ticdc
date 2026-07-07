@@ -32,6 +32,7 @@ func TestSchemaStoreGCKeeperLifecycle(t *testing.T) {
 	originalConfig := config.GetGlobalServerConfig()
 	cfg := originalConfig.Clone()
 	cfg.AdvertiseAddr = "127.0.0.1:8300"
+	cfg.EnableLegacySafePoint = false
 	config.StoreGlobalServerConfig(cfg)
 	defer config.StoreGlobalServerConfig(originalConfig)
 
@@ -53,7 +54,7 @@ func TestSchemaStoreGCKeeperLifecycle(t *testing.T) {
 		require.Equal(t, uint64(math.MaxUint64), state.serviceSafePoint[serviceID])
 		return
 	}
-	if kerneltype.UseLegacySafePointInNextGen {
+	if config.GetGlobalServerConfig().EnableLegacySafePoint {
 		_, ok := state.legacyServiceSafePoint[serviceID]
 		require.False(t, ok)
 		return
@@ -66,6 +67,7 @@ func TestCloseSchemaStoreGCKeeperUsesFreshContext(t *testing.T) {
 	originalConfig := config.GetGlobalServerConfig()
 	cfg := originalConfig.Clone()
 	cfg.AdvertiseAddr = "127.0.0.1:8300"
+	cfg.EnableLegacySafePoint = false
 	config.StoreGlobalServerConfig(cfg)
 	defer config.StoreGlobalServerConfig(originalConfig)
 
@@ -86,13 +88,58 @@ func TestCloseSchemaStoreGCKeeperUsesFreshContext(t *testing.T) {
 		require.Equal(t, uint64(math.MaxUint64), state.serviceSafePoint[serviceID])
 		return
 	}
-	if kerneltype.UseLegacySafePointInNextGen {
+	if config.GetGlobalServerConfig().EnableLegacySafePoint {
 		_, ok := state.legacyServiceSafePoint[serviceID]
 		require.False(t, ok)
 		return
 	}
 	_, ok := state.gcBarriers[serviceID]
 	require.False(t, ok)
+}
+
+func TestAcquireInitialGCSafePointCleansStaleKeeperService(t *testing.T) {
+	if !kerneltype.IsClassic() {
+		t.Skip("stale classic service safepoints only affect classic mode")
+	}
+
+	originalConfig := config.GetGlobalServerConfig()
+	cfg := originalConfig.Clone()
+	cfg.AdvertiseAddr = "127.0.0.1:8301"
+	config.StoreGlobalServerConfig(cfg)
+	defer config.StoreGlobalServerConfig(originalConfig)
+
+	pdCli, state := newMockGCServiceClientForSchemaStoreGC(t)
+	keeper := newSchemaStoreGCKeeper(pdCli, common.DefaultKeyspace)
+	serviceID := keeper.serviceID()
+
+	state.serviceSafePoint[serviceID] = 100
+	state.serviceSafePoint["ticdc-default-changefeed"] = 200
+	pdCli.UpdateServiceGCSafePointFunc = func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if ttl == 0 && safePoint == math.MaxUint64 {
+			delete(state.serviceSafePoint, serviceID)
+			return minSchemaStoreServiceSafePoint(state), nil
+		}
+		if serviceID == defaultSchemaStoreGcServiceID && ttl == 0 && safePoint == 0 {
+			return minSchemaStoreServiceSafePoint(state), nil
+		}
+
+		minBefore := minSchemaStoreServiceSafePoint(state)
+		_, existed := state.serviceSafePoint[serviceID]
+		state.serviceSafePoint[serviceID] = safePoint
+		if existed {
+			return minSchemaStoreServiceSafePoint(state), nil
+		}
+		return minBefore, nil
+	}
+
+	s := &schemaStore{pdCli: pdCli}
+	gcSafePoint, err := s.acquireInitialGCSafePoint(context.Background(), common.DefaultKeyspace, keeper)
+	require.NoError(t, err)
+	require.Equal(t, uint64(200), gcSafePoint)
+	require.Equal(t, uint64(201), state.serviceSafePoint[serviceID])
 }
 
 func TestSanitizeSchemaStoreNodeID(t *testing.T) {
@@ -146,11 +193,21 @@ func assertSchemaStoreBarrierTS(t *testing.T, state *schemaStoreGCMockState, ser
 		require.Equal(t, expected, state.serviceSafePoint[serviceID])
 		return
 	}
-	if kerneltype.UseLegacySafePointInNextGen {
+	if config.GetGlobalServerConfig().EnableLegacySafePoint {
 		require.Equal(t, expected, state.legacyServiceSafePoint[serviceID])
 		return
 	}
 	require.Equal(t, expected, state.gcBarriers[serviceID])
+}
+
+func minSchemaStoreServiceSafePoint(state *schemaStoreGCMockState) uint64 {
+	minSafePoint := uint64(math.MaxUint64)
+	for _, ts := range state.serviceSafePoint {
+		if ts < minSafePoint {
+			minSafePoint = ts
+		}
+	}
+	return minSafePoint
 }
 
 type schemaStoreGCMockState struct {

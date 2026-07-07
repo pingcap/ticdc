@@ -639,7 +639,8 @@ func adjustExistingTopicOption(
 	topic string,
 	info TopicDetail,
 ) error {
-	topicMaxMessageBytes, err := getTopicMaxMessageBytes(ctx, admin, info.Name)
+	topicMaxMessageBytes, err := getTopicMaxMessageBytes(
+		ctx, admin, info.Name, options.MaxMessageBytes)
 	if err != nil {
 		return err
 	}
@@ -665,7 +666,7 @@ func adjustNewTopicOptions(
 ) error {
 	// when create the topic, `max.message.bytes` is decided by the broker,
 	// it would use broker's `message.max.bytes` to set topic's `max.message.bytes`.
-	brokerMessageMaxBytes, err := getBrokerMaxMessageBytes(admin)
+	brokerMessageMaxBytes, err := getBrokerMaxMessageBytes(admin, options.MaxMessageBytes)
 	if err != nil {
 		return err
 	}
@@ -684,6 +685,7 @@ func getTopicMaxMessageBytes(
 	ctx context.Context,
 	admin ClusterAdminClient,
 	topic string,
+	defaultMaxMessageBytes int,
 ) (int, error) {
 	maxMessageBytesStr, err := getTopicConfig(
 		ctx, admin, topic,
@@ -691,7 +693,8 @@ func getTopicMaxMessageBytes(
 		BrokerMessageMaxBytesConfigName,
 	)
 	if err != nil {
-		return 0, errors.Trace(err)
+		log.Warn("TiCDC cannot find `max.message.bytes` from topic's configuration, use the option `MaxMessageBytes` as default")
+		return defaultMaxMessageBytes, nil
 	}
 	maxMessageBytes, err := strconv.Atoi(maxMessageBytesStr)
 	if err != nil {
@@ -700,11 +703,14 @@ func getTopicMaxMessageBytes(
 	return maxMessageBytes, nil
 }
 
-func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, error) {
+func getBrokerMaxMessageBytes(
+	admin ClusterAdminClient,
+	defaultMaxMessageBytes int,
+) (int, error) {
 	maxMessageBytesStr, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
 	if err != nil {
-		log.Warn("TiCDC cannot find `message.max.bytes` from broker's configuration")
-		return 0, errors.Trace(err)
+		log.Warn("TiCDC cannot find `message.max.bytes` from broker's configuration, use the option `MaxMessageBytes` as default")
+		return defaultMaxMessageBytes, nil
 	}
 	maxMessageBytes, err := strconv.Atoi(maxMessageBytesStr)
 	if err != nil {
@@ -750,9 +756,9 @@ func validateMinInsyncReplicas(
 				"to the minimum number of in-sync replicas" +
 				"if you want to use `required-acks` = -1." +
 				"Otherwise, TiCDC will not be able to send messages to the topic.")
-			return nil
 		}
-		return err
+		log.Warn("TiCDC meets error when get `min.insync.replicas` from broker's configuration, assume the config is valid")
+		return nil
 	}
 	minInsyncReplicas, err := strconv.Atoi(minInsyncReplicasStr)
 	if err != nil {

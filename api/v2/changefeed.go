@@ -542,7 +542,7 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 
 	taskStatus := make([]config.CaptureTaskStatus, 0)
 	detail := CfInfoToAPIModel(cfInfo, status, taskStatus)
-	c.JSON(http.StatusOK, detail)
+	respondWithFormat(c, http.StatusOK, detail)
 }
 
 func shouldShowRunningError(state config.FeedState) bool {
@@ -1770,7 +1770,8 @@ func verifyTable4MQ(
 		return nil
 	}
 
-	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), isAvroLike)
 	if err != nil {
 		return err
 	}

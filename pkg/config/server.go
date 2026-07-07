@@ -104,6 +104,9 @@ var defaultServerConfig = &ServerConfig{
 	DataDir: "",
 	GcTTL:   24 * 60 * 60, // 24H
 	TZ:      "System",
+	// Disabled by default. When enabled in next-gen mode, TiCDC uses
+	// service safepoint v2 instead of GC barriers.
+	EnableLegacySafePoint: false,
 	// The default election-timeout in PD is 3s and minimum session TTL is 5s,
 	// which is calculated by `math.Ceil(3 * election-timeout / 2)`, we choose
 	// default capture session ttl to 10s to increase robust to PD jitter,
@@ -147,6 +150,8 @@ type ServerConfig struct {
 
 	GcTTL int64  `toml:"gc-ttl" json:"gc-ttl"`
 	TZ    string `toml:"tz" json:"tz"`
+
+	EnableLegacySafePoint bool `toml:"enable-legacy-safepoint" json:"enable-legacy-safepoint"`
 
 	CaptureSessionTTL int `toml:"capture-session-ttl" json:"capture-session-ttl"`
 

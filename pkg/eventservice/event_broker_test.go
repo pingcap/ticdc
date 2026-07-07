@@ -300,6 +300,45 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow
 	require.Equal(t, oracle.GoTimeToTS(oracle.GetTimeFromTS(commitStart).Add(defaultScanInterval)), dataRange.CommitTsEnd)
 }
 
+func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingSyncPointCrossesSyncPoint(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	baseTime := time.Now()
+	baseTs := oracle.GoTimeToTS(baseTime)
+	commitStart := oracle.GoTimeToTS(baseTime.Add(20 * time.Second))
+	nextSyncPointTs := oracle.GoTimeToTS(baseTime.Add(23 * time.Second))
+	resolvedTs := oracle.GoTimeToTS(baseTime.Add(40 * time.Second))
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.nextSyncPoint = nextSyncPointTs
+	info.syncPointInterval = 10 * time.Second
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+
+	disp.sentResolvedTs.Store(baseTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(commitStart)
+	disp.lastScannedCommitTs.Store(commitStart)
+	disp.lastScannedStartTs.Store(commitStart - 1)
+
+	changefeedStatus.minSentTs.Store(baseTs)
+	changefeedStatus.scanInterval.Store(int64(time.Second))
+
+	ss.resolvedTs = resolvedTs
+	ss.maxDDLCommitTs = 0
+
+	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, needScan)
+	require.Equal(t, commitStart, dataRange.CommitTsStart)
+	require.Equal(t, nextSyncPointTs+1, dataRange.CommitTsEnd)
+}
+
 func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t *testing.T) {
 	broker, _, ss, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
@@ -542,6 +581,68 @@ func TestResetDispatcher(t *testing.T) {
 	require.Equal(t, uint64(1), newStat.epoch)
 	require.Equal(t, uint64(500), newStat.startTs)
 	require.Equal(t, dispInfo.GetID(), newStat.id)
+}
+
+func TestResetDispatcherSendsHandshakeWithoutNextNotify(t *testing.T) {
+	broker, _, schemaStore, _ := newEventBrokerForTest()
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	require.NoError(t, broker.addDispatcher(dispInfo))
+	broker.close()
+
+	dispPtr := broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, dispPtr)
+	oldStat := dispPtr.Load()
+	oldStat.receivedResolvedTs.Store(500)
+	oldStat.hasReceivedFirstResolvedTs.Store(true)
+	schemaStore.resolvedTs = 500
+	schemaStore.maxDDLCommitTs = 0
+
+	resetInfo := newMockDispatcherInfo(t, dispInfo.GetStartTs(), dispInfo.GetID(), dispInfo.GetTableSpan().TableID, eventpb.ActionType_ACTION_TYPE_RESET)
+	resetInfo.epoch = oldStat.epoch + 1
+	require.NoError(t, broker.resetDispatcher(resetInfo))
+
+	newStat := dispPtr.Load()
+	require.NotSame(t, oldStat, newStat)
+	require.Equal(t, uint64(1), newStat.seq.Load())
+
+	handshake := <-broker.messageCh[newStat.messageWorkerIndex]
+	require.Equal(t, event.TypeHandshakeEvent, handshake.msgType)
+	require.Equal(t, resetInfo.GetEpoch(), handshake.e.(*event.HandshakeEvent).GetEpoch())
+
+	resolved := <-broker.messageCh[newStat.messageWorkerIndex]
+	require.Equal(t, event.TypeResolvedEvent, resolved.msgType)
+	require.Equal(t, uint64(500), resolved.resolvedTsEvent.GetCommitTs())
+}
+
+func TestResetTableTriggerDispatcherDoesNotUseNormalScan(t *testing.T) {
+	broker, _, schemaStore, _ := newEventBrokerForTest()
+
+	dispInfo := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), common.DDLSpanTableID, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	dispInfo.span = common.KeyspaceDDLSpan(testTableTriggerKeyspaceID)
+	require.NoError(t, broker.addDispatcher(dispInfo))
+	broker.close()
+
+	dispPtr := broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, dispPtr)
+	oldStat := dispPtr.Load()
+	oldStat.receivedResolvedTs.Store(500)
+	oldStat.hasReceivedFirstResolvedTs.Store(true)
+	schemaStore.resolvedTs = 500
+	schemaStore.maxDDLCommitTs = 0
+
+	resetInfo := newMockDispatcherInfo(t, 100, dispInfo.GetID(), common.DDLSpanTableID, eventpb.ActionType_ACTION_TYPE_RESET)
+	resetInfo.span = common.KeyspaceDDLSpan(testTableTriggerKeyspaceID)
+	resetInfo.epoch = oldStat.epoch + 1
+	require.NoError(t, broker.resetDispatcher(resetInfo))
+
+	newStat := dispPtr.Load()
+	require.NotSame(t, oldStat, newStat)
+	require.Equal(t, uint64(0), newStat.seq.Load())
+	require.Equal(t, uint64(100), newStat.sentResolvedTs.Load())
+	require.Equal(t, uint64(100), newStat.lastScannedCommitTs.Load())
+	require.False(t, newStat.isTaskScanning.Load())
+	require.Empty(t, broker.messageCh[newStat.messageWorkerIndex])
 }
 
 func TestResetDispatcherConcurrently(t *testing.T) {

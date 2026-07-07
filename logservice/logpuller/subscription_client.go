@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/pingcap/ticdc/utils/priorityqueue"
 	"github.com/prometheus/client_golang/prometheus"
 	kvclientv2 "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -212,7 +213,7 @@ type subscriptionClient struct {
 	rangeTaskCh chan rangeTask
 	// regionTaskQueue is used to receive region tasks with priority.
 	// The region will be handled in `handleRegions` goroutine.
-	regionTaskQueue *PriorityQueue
+	regionTaskQueue *priorityqueue.PriorityQueue[PriorityTask]
 	// resolveLockTaskCh is used to receive resolve lock tasks.
 	// The tasks will be handled in `handleResolveLockTasks` goroutine.
 	resolveLockTaskCh      chan resolveLockTask
@@ -241,7 +242,7 @@ func NewSubscriptionClient(
 		credential: credential,
 
 		rangeTaskCh:            make(chan rangeTask, 1024),
-		regionTaskQueue:        NewPriorityQueue(),
+		regionTaskQueue:        priorityqueue.New[PriorityTask](),
 		resolveLockTaskCh:      make(chan resolveLockTask, 1024),
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
 		errCache:               newErrCache(),
@@ -602,6 +603,9 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		// Use blocking Pop to wait for tasks
 		regionTask, err := s.regionTaskQueue.Pop(ctx)
 		if err != nil {
+			if errors.Is(err, priorityqueue.ErrClosed) {
+				return nil
+			}
 			return err
 		}
 
@@ -942,7 +946,7 @@ func (s *subscriptionClient) runResolveLockChecker(ctx context.Context) error {
 	maxCacheSize := 1024
 	subSpanAndTsCache := make([]subscriptionAndTargetTs, 0, maxCacheSize)
 	// getResolvedTargetTs returns the targetTs to resolve stale locks. 0 means no need to resolve.
-	getResolvedTargetTs := func(subSpan *subscribedSpan, currentTime time.Time) uint64 {
+	getResolvedTargetTs := func(subSpan *subscribedSpan, currentTime time.Time, currentTs uint64) uint64 {
 		resolvedTsUpdated := time.Unix(subSpan.resolvedTsUpdated.Load(), 0)
 		if !subSpan.initialized.Load() || time.Since(resolvedTsUpdated) < resolveLockFence {
 			return 0
@@ -952,7 +956,7 @@ func (s *subscriptionClient) runResolveLockChecker(ctx context.Context) error {
 		if currentTime.Sub(resolvedTime) < resolveLockFence {
 			return 0
 		}
-		return oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence))
+		return min(currentTs, oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence)))
 	}
 
 	for {
@@ -961,11 +965,18 @@ func (s *subscriptionClient) runResolveLockChecker(ctx context.Context) error {
 			return ctx.Err()
 		case <-resolveLockTicker.C:
 		}
+
+		physical, logic, err := s.pd.GetTS(ctx)
+		if err != nil {
+			log.Warn("get ts from pd failed", zap.Error(err))
+			continue
+		}
+		currentTs := oracle.ComposeTS(physical, logic)
 		currentTime := s.pdClock.CurrentTime()
 		s.totalSpans.Lock()
 		for _, subSpan := range s.totalSpans.spanMap {
 			if subSpan != nil {
-				targetTs := getResolvedTargetTs(subSpan, currentTime)
+				targetTs := getResolvedTargetTs(subSpan, currentTime, currentTs)
 				if targetTs > 0 {
 					subSpanAndTsCache = append(subSpanAndTsCache, subscriptionAndTargetTs{
 						subSpan:  subSpan,

@@ -107,7 +107,7 @@ func TestDrainSchedulerIgnoresUnrelatedOperatorCapacity(t *testing.T) {
 
 	onTarget := addReplicatingSpan(t, cfID, sc, 1, target)
 	unrelated := addReplicatingSpan(t, cfID, sc, 2, other)
-	require.True(t, oc.AddOperator(operator.NewMoveDispatcherOperator(sc, unrelated, other, dest)))
+	require.True(t, oc.AddOperator(operator.NewMoveDispatcherOperator(sc, unrelated, other, dest, oc.MaintainerEpoch())))
 	drainState.SetSelfNodeID(self)
 	drainState.SetDispatcherDrainTarget(target, 1)
 

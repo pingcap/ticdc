@@ -159,7 +159,7 @@ func (f *kafkaAdminFixture) setMessageMaxBytes(brokerValue, topicValue string) {
 }
 
 func expectedAdjustedMaxMessageBytes(sourceMaxMessageBytes int) int {
-	return min(sourceMaxMessageBytes, int(sarama.MaxRequestSize)-1)
+	return sourceMaxMessageBytes
 }
 
 func (f *kafkaAdminFixture) setMinInsyncReplicas(minInsyncReplicas string) {
@@ -634,7 +634,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			mockTopicMessageMaxBytes,
 		},
 		{
-			"existing topic topic above sarama request limit",
+			"existing topic topic above sarama request limit is preserved",
 			"kafka://127.0.0.1:9092/%s",
 			[]any{defaultMockTopicName},
 			mockBrokerMessageMaxBytes,

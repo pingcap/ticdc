@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -37,7 +36,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/routing"
-	mysqlcfg "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
@@ -146,6 +144,51 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	ec := eventcollector.New(nodeID)
 	appcontext.SetService(appcontext.EventCollector, ec)
 	return manager
+}
+
+func TestCountIgnoreUpdateOnlyColumnsRules(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		filter *config.FilterConfig
+		count  int
+	}{
+		{
+			name: "nil filter",
+		},
+		{
+			name: "nil event filter rule",
+			filter: &config.FilterConfig{
+				EventFilters: []*config.EventFilterRule{nil},
+			},
+		},
+		{
+			name: "empty ignore update only columns",
+			filter: &config.FilterConfig{
+				EventFilters: []*config.EventFilterRule{
+					{Matcher: []string{"test.t"}},
+				},
+			},
+		},
+		{
+			name: "configured rules",
+			filter: &config.FilterConfig{
+				EventFilters: []*config.EventFilterRule{
+					{Matcher: []string{"test.t1"}, IgnoreUpdateOnlyColumns: []string{"version"}},
+					{Matcher: []string{"test.t2"}},
+					{Matcher: []string{"test.t3"}, IgnoreUpdateOnlyColumns: []string{"updated_at"}},
+				},
+			},
+			count: 2,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.count, countIgnoreUpdateOnlyColumnsRules(tc.filter))
+		})
+	}
 }
 
 type bootstrapSchemaStoreForTest struct{}
@@ -455,20 +498,9 @@ func TestMergeDispatcherInvalidIDs(t *testing.T) {
 
 func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	mysqlConfig := mysqlcfg.New()
-	mysqlConfig.EnableDDLTs = false
-	mysqlSink := mysql.NewMySQLSink(
-		context.Background(),
-		changefeedID,
-		mysqlConfig,
-		nil,
-		false,
-		false,
-		time.Minute,
-	)
 	manager := &DispatcherManager{
 		changefeedID: changefeedID,
-		sink:         mysqlSink,
+		sink:         newDispatcherManagerTestSink(t, common.BlackHoleSinkType),
 	}
 	manager.closed.Store(true)
 
@@ -619,6 +651,7 @@ func TestNewDispatcherManagerReturnsFenceErrorWhenInitializingRegistrationReject
 		nil,
 		1,
 		node.ID("maintainer"),
+		1,
 		true,
 		func(manager *DispatcherManager) bool {
 			hookCalled.Store(true)
@@ -750,7 +783,7 @@ func TestCreateDispatcherByInfoKeepsCreateOperatorWhenFenced(t *testing.T) {
 	manager := createTestManager(t)
 	manager.writePathClosed.Store(true)
 	dispatcherID := common.NewDispatcherID()
-	createReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
+	createReq := NewSchedulerDispatcherRequest(node.ID("maintainer"), &heartbeatpb.ScheduleDispatcherRequest{
 		ChangefeedID: manager.changefeedID.ToPB(),
 		Config: &heartbeatpb.DispatcherConfig{
 			DispatcherID: dispatcherID.ToPB(),
@@ -767,7 +800,7 @@ func TestCreateDispatcherByInfoKeepsCreateOperatorWhenFenced(t *testing.T) {
 
 	createDispatcherByInfo(manager, map[common.DispatcherID]dispatcherCreateInfo{
 		dispatcherID: {
-			Id: dispatcherID,
+			ID: dispatcherID,
 			TableSpan: &heartbeatpb.TableSpan{
 				TableID: 1,
 			},

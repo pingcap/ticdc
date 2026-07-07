@@ -174,6 +174,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 			ChangefeedID:       request.ChangefeedID,
 			DispatcherStatuses: dispatcherStatus,
 			Mode:               b.mode,
+			MaintainerEpoch:    b.operatorController.MaintainerEpoch(),
 		})
 	msgs := []*messaging.TargetMessage{msg}
 
@@ -185,6 +186,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 					ChangefeedID:       request.ChangefeedID,
 					DispatcherStatuses: action,
 					Mode:               b.mode,
+					MaintainerEpoch:    b.operatorController.MaintainerEpoch(),
 				})
 			msgs = append(msgs, msg)
 		}
