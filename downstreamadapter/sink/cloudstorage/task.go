@@ -51,21 +51,14 @@ type task struct {
 func newDMLTask(
 	version cloudstorage.VersionedTableName,
 	event *commonEvent.DMLEvent,
-	selectors ...commonEvent.Selector,
+	selector commonEvent.Selector,
 ) *task {
-	// The dispatcher path registers progress callbacks before calling
-	// Sink.AddDMLEvent. Put the flush callback into RowEvents before encoding
-	// so txn encoders do not need extra callback parameters.
-	var selector commonEvent.Selector
-	if len(selectors) > 0 && selectors[0] != nil {
-		selector = selectors[0]
-	}
 	return &task{
 		kind:           taskKindDML,
 		postEnqueue:    event.PostEnqueue,
 		tableInfo:      event.TableInfo,
 		versionedTable: version,
-		rowEvents:      helper.NewRowEvents(event, selector, newPostTxnFlushedCallback(event)),
+		rowEvents:      helper.NewRowEvents(event, selector, helper.NewTxnPostFlushRowCallback(event, uint64(event.Length))),
 		dispatcherID:   event.GetDispatcherID(),
 	}
 }
