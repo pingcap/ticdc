@@ -207,13 +207,14 @@ func (s *subscriptionClient) runMetricsUpdater(ctx context.Context) error {
 			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
 			used, capacity, _ := s.memoryQuota.Snapshot()
-			scanUsed, warmingScanUsed, warmingScanBudget, scanEstimate := s.memoryQuota.ScanSnapshot()
+			scanUsed, warmingScanUsed, warmingScanBudget, scanEstimate, hardLimit := s.memoryQuota.ScanSnapshot()
 			metrics.LogPullerMemoryQuota.WithLabelValues("max").Set(float64(capacity))
 			metrics.LogPullerMemoryQuota.WithLabelValues("used").Set(float64(used))
 			metrics.LogPullerMemoryQuota.WithLabelValues("scan_used").Set(float64(scanUsed))
 			metrics.LogPullerMemoryQuota.WithLabelValues("warming_scan_used").Set(float64(warmingScanUsed))
 			metrics.LogPullerMemoryQuota.WithLabelValues("warming_scan_budget").Set(float64(warmingScanBudget))
 			metrics.LogPullerMemoryQuota.WithLabelValues("scan_estimate").Set(float64(scanEstimate))
+			metrics.LogPullerMemoryQuota.WithLabelValues("hard_limit").Set(float64(hardLimit))
 			metrics.DynamicStreamMemoryUsage.WithLabelValues(
 				"log-puller",
 				"max",

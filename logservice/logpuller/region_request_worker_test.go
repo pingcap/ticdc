@@ -205,7 +205,7 @@ func (m *mockRegionEventDynamicStream) GetMetrics() dynstream.Metrics[int, Subsc
 func newDispatchResolvedTsTestWorker(regionCount int) (*regionRequestWorker, *mockRegionEventDynamicStream, *cdcpb.ResolvedTs) {
 	ds := &mockRegionEventDynamicStream{}
 	worker := &regionRequestWorker{
-		eventSink: &regionEventSink{ctx: context.Background(), ds: ds},
+		eventSink: &regionEventSink{ctx: context.Background(), ds: ds, memoryQuota: newMemoryQuotaController(0, 0)},
 		tracker:   newRegionTracker(0),
 	}
 	regions := make([]uint64, regionCount)
@@ -351,7 +351,7 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 		controlQueue:   newControlQueue(),
 		storeAddr:      "store-1",
 		upstream:       &upstreamHandle{},
-		eventSink:      &regionEventSink{ctx: context.Background(), ds: &mockRegionEventDynamicStream{}},
+		eventSink:      &regionEventSink{ctx: context.Background(), ds: &mockRegionEventDynamicStream{}, memoryQuota: newMemoryQuotaController(0, 0)},
 		failureHandler: newRegionFailureHandler(&upstreamHandle{}, func(*subscribedSpan) {}, nil, nil),
 		tracker:        newRegionTracker(0),
 	}
@@ -403,7 +403,7 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 				controlQueue:   newControlQueue(),
 				storeAddr:      "store-1",
 				upstream:       &upstreamHandle{},
-				eventSink:      &regionEventSink{ctx: context.Background(), ds: &mockRegionEventDynamicStream{}},
+				eventSink:      &regionEventSink{ctx: context.Background(), ds: &mockRegionEventDynamicStream{}, memoryQuota: newMemoryQuotaController(0, 0)},
 				failureHandler: newRegionFailureHandler(&upstreamHandle{}, func(*subscribedSpan) {}, nil, nil),
 				tracker:        newRegionTracker(0),
 			}

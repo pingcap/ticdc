@@ -14,6 +14,7 @@
 package logpuller
 
 import (
+	"context"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -30,11 +31,12 @@ const (
 	defaultResumeWarmingRatio = 0.1
 	defaultFreezeAllRatio     = 0.9
 	defaultResumeAllRatio     = 0.7
+	defaultHardLimitRatio     = 5.0
 
-	defaultScanBaseSize            uint64 = 4 * 1024 * 1024
+	defaultScanBaseSize            uint64 = 8 * 1024 * 1024
 	defaultWarmingScanLagThreshold        = 30 * time.Minute
 	defaultScanLagUnit                    = 10 * time.Minute
-	defaultScanLagWeight                  = 0.15
+	defaultScanLagWeight                  = 0.22
 	defaultMaxScanLagFactor               = 16
 )
 
@@ -98,12 +100,13 @@ func newSubscriptionQuotaState() *subscriptionQuotaState {
 }
 
 type memoryQuotaController struct {
-	mu sync.Mutex
+	mu   sync.Mutex
+	cond *sync.Cond
 
 	capacity uint64
 	// used tracks log puller bytes currently waiting for downstream callback.
-	// It is observed for admission decisions, but the receive path never waits
-	// on it after an event has arrived from TiKV.
+	// It is observed for admission decisions, and the receive path is blocked
+	// only when used reaches the hard limit.
 	used uint64
 	// scanUsed tracks estimated bytes of admitted warming region scans that
 	// have not finished initialization yet.
@@ -115,6 +118,7 @@ type memoryQuotaController struct {
 	resumeWarmingRatio float64
 	freezeAllRatio     float64
 	resumeAllRatio     float64
+	hardLimitRatio     float64
 
 	scanEstimate uint64
 
@@ -137,9 +141,11 @@ func newMemoryQuotaController(capacity uint64, scanBaseSize uint64) *memoryQuota
 		resumeWarmingRatio: defaultResumeWarmingRatio,
 		freezeAllRatio:     defaultFreezeAllRatio,
 		resumeAllRatio:     defaultResumeAllRatio,
+		hardLimitRatio:     defaultHardLimitRatio,
 		scanEstimate:       scanBaseSize,
 		subscriptions:      make(map[SubscriptionID]*subscriptionQuotaState),
 	}
+	c.cond = sync.NewCond(&c.mu)
 	return c
 }
 
@@ -153,6 +159,12 @@ func (c *memoryQuotaController) onMemoryAvailable() {
 	}
 }
 
+func (c *memoryQuotaController) WakeAll() {
+	c.mu.Lock()
+	c.cond.Broadcast()
+	c.mu.Unlock()
+}
+
 func (c *memoryQuotaController) Snapshot() (used uint64, capacity uint64, level admissionLevel) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -164,10 +176,11 @@ func (c *memoryQuotaController) ScanSnapshot() (
 	warmingScanUsed uint64,
 	warmingScanBudget uint64,
 	scanEstimate uint64,
+	hardLimit uint64,
 ) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.scanUsed, c.warmingScanUsed, c.warmingScanBudgetLocked(), c.scanEstimate
+	return c.scanUsed, c.warmingScanUsed, c.warmingScanBudgetLocked(), c.scanEstimate, c.hardLimitLocked()
 }
 
 func (c *memoryQuotaController) addSubscription(span *subscribedSpan) {
@@ -263,15 +276,29 @@ func (c *memoryQuotaController) acquireScan(region regionInfo, currentTs uint64)
 	return lease, true, ""
 }
 
-func (c *memoryQuotaController) trackEvent(span *subscribedSpan, bytes uint64) *memoryQuotaLease {
-	if span.meta.isSystem() || bytes == 0 {
+func (c *memoryQuotaController) trackEvent(
+	ctx context.Context,
+	span *subscribedSpan,
+	bytes uint64,
+) *memoryQuotaLease {
+	if bytes == 0 {
 		return nil
 	}
 
 	c.mu.Lock()
+	for c.used+bytes > c.hardLimitLocked() && c.used > 0 {
+		if ctx.Err() != nil {
+			c.mu.Unlock()
+			return nil
+		}
+		c.cond.Wait()
+	}
 	c.used += bytes
 	c.refreshLevelLocked()
-	state := c.getSubscriptionStateLocked(span)
+	var state *subscriptionQuotaState
+	if !span.meta.isSystem() {
+		state = c.getSubscriptionStateLocked(span)
+	}
 
 	lease := &memoryQuotaLease{}
 	lease.release = func() {
@@ -281,13 +308,18 @@ func (c *memoryQuotaController) trackEvent(span *subscribedSpan, bytes uint64) *
 		} else {
 			c.used = 0
 		}
-		delete(state.eventLeases, lease)
+		if state != nil {
+			delete(state.eventLeases, lease)
+		}
 		c.refreshLevelLocked()
+		c.cond.Broadcast()
 		c.mu.Unlock()
 
 		c.onMemoryAvailable()
 	}
-	state.eventLeases[lease] = bytes
+	if state != nil {
+		state.eventLeases[lease] = bytes
+	}
 	c.mu.Unlock()
 	return lease
 }
@@ -360,6 +392,10 @@ func (c *memoryQuotaController) warmingScanBudgetLocked() uint64 {
 	}
 	budget := uint64(float64(c.capacity) * c.pauseWarmingRatio)
 	return max(budget, c.scanEstimate)
+}
+
+func (c *memoryQuotaController) hardLimitLocked() uint64 {
+	return uint64(float64(c.capacity) * c.hardLimitRatio)
 }
 
 func (c *memoryQuotaController) refreshLevelLocked() {

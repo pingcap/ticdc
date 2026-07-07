@@ -81,7 +81,7 @@ func NewDefaultPullerConfig() *PullerConfig {
 		LogRegionDetails:               false,
 		PendingRegionRequestQueueSize:  32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
 		MemoryQuota:                    1024 * 1024 * 1024,
-		ScanBaseSize:                   4 * 1024 * 1024,
+		ScanBaseSize:                   8 * 1024 * 1024,
 	}
 }
 

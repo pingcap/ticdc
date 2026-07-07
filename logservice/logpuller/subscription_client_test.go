@@ -306,7 +306,7 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh: make(chan resolveLockTask, 1),
 		upstream:          &upstreamHandle{pdClock: pdutil.NewClock4Test()},
-		eventSink:         &regionEventSink{ds: &mockDynamicStream{}},
+		eventSink:         &regionEventSink{ds: &mockDynamicStream{}, memoryQuota: newMemoryQuotaController(0, 0)},
 		memoryQuota:       newMemoryQuotaController(0, 0),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
@@ -352,7 +352,7 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 
 func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	client := &subscriptionClient{
-		eventSink:   &regionEventSink{ds: &mockDynamicStream{}},
+		eventSink:   &regionEventSink{ds: &mockDynamicStream{}, memoryQuota: newMemoryQuotaController(0, 0)},
 		memoryQuota: newMemoryQuotaController(0, 0),
 	}
 	client.spanRegistry = newSpanRegistry(&upstreamHandle{})
@@ -462,7 +462,7 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	sink := &regionEventSink{ctx: ctx, ds: &mockDynamicStream{}}
+	sink := &regionEventSink{ctx: ctx, ds: &mockDynamicStream{}, memoryQuota: newMemoryQuotaController(0, 0)}
 	sink.cond = sync.NewCond(&sink.mu)
 	client := &subscriptionClient{cancel: cancel, eventSink: sink}
 
