@@ -166,7 +166,7 @@ storage_groups=(
 	# G13
 	'fail_over region_merge multi_changefeeds'
 	# G14
-	'fail_over_ddl_mix'
+	'column_selector fail_over_ddl_mix'
 	# G15
 	'random_drop_message'
 )
