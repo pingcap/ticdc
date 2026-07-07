@@ -87,7 +87,7 @@ kafka_groups=(
 	# G09
 	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro mq_sink_error_resume multi_source'
 	# G10
-	'kafka_column_selector kafka_column_selector_avro ddl_with_random_move_table'
+	'column_selector kafka_column_selector_avro ddl_with_random_move_table'
 	# G11
 	'fail_over region_merge multi_changefeeds split_table_check'
 	# G12
