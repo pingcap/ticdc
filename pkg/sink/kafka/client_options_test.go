@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -139,8 +138,8 @@ func TestNewOauthTokenSourceRejectsInvalidTokenURL(t *testing.T) {
 	t.Parallel()
 
 	_, err := newOauthTokenSource(context.Background(), &clientOptions{
-		SASL: &security.SASL{
-			OAuth2: security.OAuth2{
+		SASL: &SASL{
+			OAuth2: OAuth2{
 				ClientID:     "client-id",
 				ClientSecret: "client-secret",
 				TokenURL:     "http://test.com/Segment%%2815197306101420000%29",

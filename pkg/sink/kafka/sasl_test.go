@@ -17,7 +17,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,10 +24,10 @@ func TestBuildSaslMechanismGSSAPIUserAuth(t *testing.T) {
 	t.Parallel()
 
 	o := &clientOptions{
-		SASL: &security.SASL{
-			SASLMechanism: security.GSSAPIMechanism,
-			GSSAPI: security.GSSAPI{
-				AuthType:           security.UserAuth,
+		SASL: &SASL{
+			SASLMechanism: GSSAPIMechanism,
+			GSSAPI: GSSAPI{
+				AuthType:           UserAuth,
 				KerberosConfigPath: "/etc/krb5.conf",
 				ServiceName:        "kafka",
 				Username:           "alice",
@@ -47,10 +46,10 @@ func TestBuildSaslMechanismGSSAPIKeytabAuth(t *testing.T) {
 	t.Parallel()
 
 	o := &clientOptions{
-		SASL: &security.SASL{
-			SASLMechanism: security.GSSAPIMechanism,
-			GSSAPI: security.GSSAPI{
-				AuthType:           security.KeyTabAuth,
+		SASL: &SASL{
+			SASLMechanism: GSSAPIMechanism,
+			GSSAPI: GSSAPI{
+				AuthType:           KeyTabAuth,
 				KerberosConfigPath: "/etc/krb5.conf",
 				ServiceName:        "kafka",
 				Username:           "alice",

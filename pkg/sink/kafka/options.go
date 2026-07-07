@@ -166,7 +166,7 @@ type options struct {
 	EnableTLS          bool
 	Credential         *security.Credential
 	InsecureSkipVerify bool
-	SASL               *security.SASL
+	SASL               *SASL
 
 	// Timeout for network configurations, default to `10s`
 	DialTimeout  time.Duration
@@ -186,7 +186,7 @@ func NewOptions() *options {
 		RequiredAcks:          WaitForAll,
 		Credential:            &security.Credential{},
 		InsecureSkipVerify:    false,
-		SASL:                  &security.SASL{},
+		SASL:                  &SASL{},
 		AutoCreate:            true,
 		DialTimeout:           10 * time.Second,
 		WriteTimeout:          10 * time.Second,
@@ -426,7 +426,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 	}
 
 	if urlParameter.SASLMechanism != nil && *urlParameter.SASLMechanism != "" {
-		mechanism, err := security.SASLMechanismFromString(*urlParameter.SASLMechanism)
+		mechanism, err := SASLMechanismFromString(*urlParameter.SASLMechanism)
 		if err != nil {
 			return cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
 		}
@@ -434,7 +434,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 	}
 
 	if urlParameter.SASLGssAPIAuthType != nil && *urlParameter.SASLGssAPIAuthType != "" {
-		authType, err := security.AuthTypeFromString(*urlParameter.SASLGssAPIAuthType)
+		authType, err := AuthTypeFromString(*urlParameter.SASLGssAPIAuthType)
 		if err != nil {
 			return cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
 		}
@@ -506,7 +506,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 		}
 
 		if o.SASL.OAuth2.IsEnable() {
-			if o.SASL.SASLMechanism != security.OAuthMechanism {
+			if o.SASL.SASLMechanism != OAuthMechanism {
 				return cerror.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 is only supported with SASL mechanism type OAUTHBEARER, but got %s",
 					o.SASL.SASLMechanism)

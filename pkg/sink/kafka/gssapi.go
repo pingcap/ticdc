@@ -31,7 +31,6 @@ import (
 	"github.com/jcmturner/gokrb5/v8/messages"
 	"github.com/jcmturner/gokrb5/v8/types"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/twmb/franz-go/pkg/sasl"
 )
 
@@ -52,7 +51,7 @@ type kerborosClient interface {
 }
 
 type gssapiMechanism struct {
-	config security.GSSAPI
+	config GSSAPI
 }
 
 func (m *gssapiMechanism) Name() string {
@@ -165,7 +164,7 @@ func (s *gssapiSession) nextMessage(challenge []byte) ([]byte, error) {
 	}
 }
 
-func buildGSSAPIMechanism(g security.GSSAPI) (sasl.Mechanism, error) {
+func buildGSSAPIMechanism(g GSSAPI) (sasl.Mechanism, error) {
 	if g.ServiceName == "" {
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 			"sasl-gssapi-service-name must not be empty when sasl mechanism is GSSAPI")
@@ -184,12 +183,12 @@ func buildGSSAPIMechanism(g security.GSSAPI) (sasl.Mechanism, error) {
 	}
 
 	switch g.AuthType {
-	case security.UserAuth:
+	case UserAuth:
 		if g.Password == "" {
 			return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 				"sasl-gssapi-password must not be empty when sasl-gssapi-auth-type is USER")
 		}
-	case security.KeyTabAuth:
+	case KeyTabAuth:
 		if g.KeyTabPath == "" {
 			return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 				"sasl-gssapi-keytab-path must not be empty when sasl-gssapi-auth-type is KEYTAB")
@@ -214,7 +213,7 @@ func (c *krb5Client) CName() types.PrincipalName {
 	return c.Credentials.CName()
 }
 
-func newKerborosClient(g security.GSSAPI) (kerborosClient, error) {
+func newKerborosClient(g GSSAPI) (kerborosClient, error) {
 	cfg, err := krb5config.Load(g.KerberosConfigPath)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -222,14 +221,14 @@ func newKerborosClient(g security.GSSAPI) (kerborosClient, error) {
 
 	var client *krb5client.Client
 	switch g.AuthType {
-	case security.KeyTabAuth:
+	case KeyTabAuth:
 		kt, err := keytab.Load(g.KeyTabPath)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
 		client = krb5client.NewWithKeytab(
 			g.Username, g.Realm, kt, cfg, krb5client.DisablePAFXFAST(g.DisablePAFXFAST))
-	case security.UserAuth:
+	case UserAuth:
 		client = krb5client.NewWithPassword(
 			g.Username, g.Realm, g.Password, cfg, krb5client.DisablePAFXFAST(g.DisablePAFXFAST))
 	default:

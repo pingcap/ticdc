@@ -50,7 +50,7 @@ type clientOptions struct {
 	EnableTLS          bool
 	Credential         *security.Credential
 	InsecureSkipVerify bool
-	SASL               *security.SASL
+	SASL               *SASL
 
 	DialTimeout  time.Duration
 	WriteTimeout time.Duration
@@ -148,26 +148,26 @@ func buildSaslMechanism(ctx context.Context, o *clientOptions) (sasl.Mechanism, 
 		return nil, nil
 	}
 
-	switch security.SASLMechanism(strings.ToUpper(string(o.SASL.SASLMechanism))) {
-	case security.PlainMechanism:
+	switch SASLMechanism(strings.ToUpper(string(o.SASL.SASLMechanism))) {
+	case PlainMechanism:
 		auth := plain.Auth{
 			User: o.SASL.SASLUser,
 			Pass: o.SASL.SASLPassword,
 		}
 		return auth.AsMechanism(), nil
-	case security.SCRAM256Mechanism:
+	case SCRAM256Mechanism:
 		auth := scram.Auth{
 			User: o.SASL.SASLUser,
 			Pass: o.SASL.SASLPassword,
 		}
 		return auth.AsSha256Mechanism(), nil
-	case security.SCRAM512Mechanism:
+	case SCRAM512Mechanism:
 		auth := scram.Auth{
 			User: o.SASL.SASLUser,
 			Pass: o.SASL.SASLPassword,
 		}
 		return auth.AsSha512Mechanism(), nil
-	case security.OAuthMechanism:
+	case OAuthMechanism:
 		tokenSource, err := newOauthTokenSource(ctx, o)
 		if err != nil {
 			return nil, errors.Trace(err)
@@ -179,7 +179,7 @@ func buildSaslMechanism(ctx context.Context, o *clientOptions) (sasl.Mechanism, 
 			}
 			return oauth.Auth{Token: token.AccessToken}, nil
 		}), nil
-	case security.GSSAPIMechanism:
+	case GSSAPIMechanism:
 		return buildGSSAPIMechanism(o.SASL.GSSAPI)
 	default:
 	}
