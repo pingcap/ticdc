@@ -443,7 +443,7 @@ func (m fakePulsarMessage) GetReplicatedFrom() string {
 	return ""
 }
 
-func (m fakePulsarMessage) GetSchemaValue(interface{}) error {
+func (m fakePulsarMessage) GetSchemaValue(any) error {
 	return nil
 }
 
