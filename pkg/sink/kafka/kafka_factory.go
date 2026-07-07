@@ -22,24 +22,20 @@ import (
 
 type factory struct {
 	changefeedID common.ChangeFeedID
-	option       *options
+	clientOption *clientOptions
 
-	asyncMetricsHook *metricsHook
-	syncMetricsHook  *metricsHook
-	adminMetricsHook *metricsHook
+	metricsHook *metricsHook
 }
 
 type kafkaMetricsCollector struct {
 	changefeedID common.ChangeFeedID
-	hooks        []*metricsHook
+	hook         *metricsHook
 }
 
 func (c *kafkaMetricsCollector) Run(ctx context.Context) {
 	<-ctx.Done()
-	for _, hook := range c.hooks {
-		if hook != nil {
-			hook.cleanupMetrics()
-		}
+	if c.hook != nil {
+		c.hook.cleanupMetrics()
 	}
 	cleanupAdminMetrics(c.changefeedID.Keyspace(), c.changefeedID.Name())
 }
@@ -66,7 +62,7 @@ func NewFactory(
 	o *options,
 	changefeedID common.ChangeFeedID,
 ) (Factory, error) {
-	admin, err := newAdminClient(ctx, changefeedID, newKafkaOptions(o), nil)
+	admin, err := newAdminClient(ctx, changefeedID, newClientOption(o), nil)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -77,16 +73,14 @@ func NewFactory(
 	}
 
 	return &factory{
-		changefeedID:     changefeedID,
-		option:           o,
-		asyncMetricsHook: newKafkaMetricsHook(changefeedID),
-		syncMetricsHook:  newKafkaMetricsHook(changefeedID),
-		adminMetricsHook: newKafkaMetricsHook(changefeedID),
+		changefeedID: changefeedID,
+		clientOption: newClientOption(o),
+		metricsHook:  newKafkaMetricsHook(changefeedID),
 	}, nil
 }
 
 func (f *factory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
-	admin, err := newAdminClient(ctx, f.changefeedID, newKafkaOptions(f.option), f.adminMetricsHook)
+	admin, err := newAdminClient(ctx, f.changefeedID, f.clientOption, f.metricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -94,7 +88,7 @@ func (f *factory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
 }
 
 func (f *factory) SyncProducer(ctx context.Context) (SyncProducer, error) {
-	producer, err := newSyncProducer(ctx, f.changefeedID, newKafkaOptions(f.option), f.syncMetricsHook)
+	producer, err := newSyncProducer(ctx, f.changefeedID, f.clientOption, f.metricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -102,7 +96,7 @@ func (f *factory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 }
 
 func (f *factory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
-	producer, err := newAsyncProducer(ctx, f.changefeedID, newKafkaOptions(f.option), f.asyncMetricsHook)
+	producer, err := newAsyncProducer(ctx, f.changefeedID, f.clientOption, f.metricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -110,19 +104,10 @@ func (f *factory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
 }
 
 func (f *factory) MetricsCollector() MetricsCollector {
-	return &kafkaMetricsCollector{changefeedID: f.changefeedID, hooks: []*metricsHook{
-		f.asyncMetricsHook,
-		f.syncMetricsHook,
-		f.adminMetricsHook,
-	}}
+	return &kafkaMetricsCollector{changefeedID: f.changefeedID, hook: f.metricsHook}
 }
 
-func newKafkaOptions(o *options) *clientOptions {
-	if o == nil {
-		return &clientOptions{
-			RequiredAcks: int16(WaitForAll),
-		}
-	}
+func newClientOption(o *options) *clientOptions {
 	return &clientOptions{
 		BrokerEndpoints: o.BrokerEndpoints,
 		ClientID:        o.ClientID,

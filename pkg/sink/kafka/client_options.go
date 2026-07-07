@@ -59,7 +59,6 @@ type clientOptions struct {
 
 const (
 	defaultRequestTimeout = 10 * time.Second
-	defaultRecordRetries  = 5
 )
 
 func maxTimeoutWithDefault(readTimeout, writeTimeout time.Duration) time.Duration {
@@ -75,10 +74,6 @@ func newOptions(
 	o *clientOptions,
 	hook kgo.Hook,
 ) ([]kgo.Opt, error) {
-	if o == nil {
-		o = &clientOptions{}
-	}
-
 	timeoutOverhead := maxTimeoutWithDefault(o.ReadTimeout, o.WriteTimeout)
 
 	opts := []kgo.Opt{
@@ -213,13 +208,6 @@ func newOauthTokenSource(ctx context.Context, o *clientOptions) (oauth2.TokenSou
 func newProducerOptions(
 	o *clientOptions,
 ) []kgo.Opt {
-	recordRetries := defaultRecordRetries
-	if o == nil {
-		o = &clientOptions{}
-	} else {
-		recordRetries = o.MaxRetry
-	}
-
 	produceTimeout := o.ReadTimeout
 	if produceTimeout < 100*time.Millisecond {
 		produceTimeout = defaultRequestTimeout
@@ -234,7 +222,7 @@ func newProducerOptions(
 		kgo.RequiredAcks(newRequiredAcks(o)),
 		kgo.DisableIdempotentWrite(),
 		kgo.MaxProduceRequestsInflightPerBroker(1),
-		kgo.RecordRetries(recordRetries),
+		kgo.RecordRetries(o.MaxRetry),
 		kgo.ProducerBatchMaxBytes(int32(producerBatchMaxBytes)),
 		kgo.ProduceRequestTimeout(produceTimeout),
 		kgo.ProducerLinger(0),
@@ -243,10 +231,6 @@ func newProducerOptions(
 }
 
 func newRequiredAcks(o *clientOptions) kgo.Acks {
-	if o == nil {
-		return kgo.AllISRAcks()
-	}
-
 	switch o.RequiredAcks {
 	case -1:
 		return kgo.AllISRAcks()
@@ -261,10 +245,6 @@ func newRequiredAcks(o *clientOptions) kgo.Acks {
 }
 
 func newCompressionOption(o *clientOptions) kgo.Opt {
-	if o == nil {
-		return kgo.ProducerBatchCompression(kgo.NoCompression())
-	}
-
 	compression := strings.ToLower(strings.TrimSpace(o.Compression))
 	var codec kgo.CompressionCodec
 	switch compression {

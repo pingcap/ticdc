@@ -41,10 +41,6 @@ func newSyncProducer(
 	o *clientOptions,
 	hook kgo.Hook,
 ) (*kafkaSyncProducer, error) {
-	if o == nil {
-		o = &clientOptions{}
-	}
-
 	opts, err := newOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)

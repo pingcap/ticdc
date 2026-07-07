@@ -41,10 +41,6 @@ func newAdminClient(
 	o *clientOptions,
 	hook kgo.Hook,
 ) (*kafkaAdminClient, error) {
-	if o == nil {
-		o = &clientOptions{}
-	}
-
 	opts, err := newOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)

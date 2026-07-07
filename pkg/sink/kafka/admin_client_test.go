@@ -21,11 +21,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewAdminClientNilOptionsReturnsError(t *testing.T) {
+func TestNewAdminClientEmptyOptionsReturnsError(t *testing.T) {
 	t.Parallel()
 
-	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "kafka-admin-nil-options")
-	client, err := newAdminClient(context.Background(), changefeedID, nil, nil)
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "kafka-admin-empty-options")
+	client, err := newAdminClient(context.Background(), changefeedID, &clientOptions{}, nil)
 	if client != nil {
 		client.Close()
 	}

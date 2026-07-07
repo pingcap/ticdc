@@ -42,8 +42,6 @@ func TestNewRequiredAcks(t *testing.T) {
 			require.Equal(t, tc.expected, newRequiredAcks(&clientOptions{RequiredAcks: tc.requiredAcks}))
 		})
 	}
-
-	require.Equal(t, kgo.AllISRAcks(), newRequiredAcks(nil))
 }
 
 func TestMaxTimeoutWithDefault(t *testing.T) {
@@ -91,7 +89,7 @@ func TestNewProducerOptionsUsesProducerBatchMaxBytes(t *testing.T) {
 		BrokerEndpoints:       []string{"127.0.0.1:9092"},
 		MaxMessageBytes:       encoderMaxMessageBytes,
 		ProducerBatchMaxBytes: producerBatchMaxBytes,
-		MaxRetry:              defaultRecordRetries,
+		MaxRetry:              defaultMaxRetry,
 		RequiredAcks:          int16(WaitForAll),
 	}
 
