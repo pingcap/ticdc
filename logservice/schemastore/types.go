@@ -111,8 +111,12 @@ type BasicDatabaseInfo struct {
 
 //msgp:ignore BasicTableInfo
 type BasicTableInfo struct {
-	SchemaID              int64
-	Name                  string
+	SchemaID int64
+	Name     string
+	// IsMaterializedViewLog is a narrow marker used to recognize DROP MATERIALIZED VIEW LOG,
+	// which TiDB emits as ActionDropTable without full TableInfo.
+	// TODO: replace this with a generic internal table kind when more internal-table types need
+	// special schema-store handling.
 	IsMaterializedViewLog bool
 }
 
