@@ -22,10 +22,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 )
 
-// event_dispatcher_mananger_info.go is used to store the basic info and function of the event dispatcher manager
+// dispatcher_manager_info.go stores the basic info and functions of the dispatcher manager.
 
 type dispatcherCreateInfo struct {
-	Id        common.DispatcherID
+	ID        common.DispatcherID
 	TableSpan *heartbeatpb.TableSpan
 	StartTs   uint64
 	SchemaID  int64
@@ -52,10 +52,87 @@ func (e *DispatcherManager) GetMaintainerID() node.ID {
 	return e.meta.maintainerID
 }
 
-func (e *DispatcherManager) SetMaintainerID(maintainerID node.ID) {
+// TryUpdateMaintainer records the active maintainer owner and epoch.
+// Maintainer epoch 0 is accepted only while the manager is still in compatibility
+// mode. Once a non-zero epoch is known, epoch 0 must never downgrade the receiver
+// back to compatibility mode.
+func (e *DispatcherManager) TryUpdateMaintainer(from node.ID, maintainerEpoch uint64) bool {
 	e.meta.Lock()
 	defer e.meta.Unlock()
-	e.meta.maintainerID = maintainerID
+	if !e.canUpdateMaintainerLocked(from, maintainerEpoch) {
+		return false
+	}
+	e.meta.maintainerEpoch = maintainerEpoch
+	e.meta.maintainerID = from
+	return true
+}
+
+// CanUpdateMaintainer reports whether a bootstrap request can become the
+// dispatcher manager owner without mutating the current owner/epoch.
+func (e *DispatcherManager) CanUpdateMaintainer(from node.ID, maintainerEpoch uint64) bool {
+	e.meta.Lock()
+	defer e.meta.Unlock()
+	return e.canUpdateMaintainerLocked(from, maintainerEpoch)
+}
+
+func (e *DispatcherManager) canUpdateMaintainerLocked(from node.ID, maintainerEpoch uint64) bool {
+	if maintainerEpoch == 0 {
+		if e.meta.maintainerEpoch != 0 {
+			return false
+		}
+		return true
+	}
+	if e.meta.maintainerEpoch > maintainerEpoch {
+		return false
+	}
+	if e.meta.maintainerEpoch == maintainerEpoch && e.meta.maintainerID != "" && e.meta.maintainerID != from {
+		return false
+	}
+	return true
+}
+
+// maintainerRequestAdmission is a single meta-lock snapshot for request fencing
+// and stale-request logs.
+type maintainerRequestAdmission struct {
+	allowed           bool
+	currentEpoch      uint64
+	currentMaintainer node.ID
+}
+
+// IsMaintainerRequestAllowed reports whether a request belongs to the current
+// maintainer owner/epoch view known by this dispatcher manager.
+func (e *DispatcherManager) IsMaintainerRequestAllowed(from node.ID, maintainerEpoch uint64) bool {
+	return e.maintainerRequestAdmission(from, maintainerEpoch).allowed
+}
+
+func (e *DispatcherManager) maintainerRequestAdmission(from node.ID, maintainerEpoch uint64) maintainerRequestAdmission {
+	e.meta.Lock()
+	defer e.meta.Unlock()
+	admission := maintainerRequestAdmission{
+		currentEpoch:      e.meta.maintainerEpoch,
+		currentMaintainer: e.meta.maintainerID,
+	}
+	admission.allowed = IsMaintainerRequestAllowedBySnapshot(
+		from,
+		maintainerEpoch,
+		admission.currentMaintainer,
+		admission.currentEpoch,
+	)
+	return admission
+}
+
+// IsMaintainerRequestAllowedBySnapshot applies maintainer admission rules to a
+// caller-held owner/epoch snapshot.
+func IsMaintainerRequestAllowedBySnapshot(
+	from node.ID,
+	maintainerEpoch uint64,
+	currentMaintainer node.ID,
+	currentMaintainerEpoch uint64,
+) bool {
+	if maintainerEpoch == 0 {
+		return currentMaintainerEpoch == 0 && (currentMaintainer == "" || currentMaintainer == from)
+	}
+	return currentMaintainerEpoch == maintainerEpoch && currentMaintainer == from
 }
 
 func (e *DispatcherManager) GetMaintainerEpoch() uint64 {

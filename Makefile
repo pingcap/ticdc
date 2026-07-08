@@ -1,6 +1,7 @@
 # Phony targets are targets that are not associated with files.
 # Add new phony targets here to make them available in the `make` command.
 .PHONY: clean fmt check check-static local-static-check tidy \
+	check-go-version \
 	generate-protobuf generate_mock \
 	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
 	prepare_test_binaries \
@@ -36,6 +37,9 @@ BUILDTS := $(shell date -u '+%Y-%m-%d %H:%M:%S')
 GITHASH := $(shell git rev-parse HEAD)
 GITBRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 GOVERSION := $(shell go version)
+REQUIRED_GO_MINOR := $(shell awk '/^go / { split($$2, v, "."); print v[1]"."v[2]; exit }' go.mod)
+CURRENT_GO_VERSION := $(shell go env GOVERSION 2>/dev/null | sed -E 's/^go//')
+CURRENT_GO_MINOR := $(shell printf '%s\n' '$(CURRENT_GO_VERSION)' | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
 
 # Since TiDB add a new dependency on github.com/cloudfoundry/gosigar,
 # We need to add CGO_ENABLED=1 to make it work when build TiCDC in Darwin OS.
@@ -149,13 +153,28 @@ generate_mock: ## Generate mock code.
 generate_mock: tools/bin/mockgen
 	scripts/generate-mock.sh
 
-build-cdc-with-failpoint: check_failpoint_ctl
+check-go-version:
+	@if [ -z "$(CURRENT_GO_VERSION)" ]; then \
+		echo "Error: go is not available in PATH"; \
+		exit 1; \
+	fi
+	@if [ -z "$(REQUIRED_GO_MINOR)" ]; then \
+		echo "Error: failed to read required Go version from go.mod"; \
+		exit 1; \
+	fi
+	@if [ "$(CURRENT_GO_MINOR)" != "$(REQUIRED_GO_MINOR)" ]; then \
+		echo "Error: TiCDC must be built with Go $(REQUIRED_GO_MINOR).x; found Go $(CURRENT_GO_VERSION)."; \
+		echo "Install Go $(REQUIRED_GO_MINOR).x or update PATH before running make cdc."; \
+		exit 1; \
+	fi
+
+build-cdc-with-failpoint: check-go-version check_failpoint_ctl
 build-cdc-with-failpoint: ## Build cdc with failpoint enabled.
 	$(FAILPOINT_ENABLE)
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc/main.go
 	$(FAILPOINT_DISABLE)
 
-cdc:
+cdc: check-go-version
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc
 
 kafka_consumer:

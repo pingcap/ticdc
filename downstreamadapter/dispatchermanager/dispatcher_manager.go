@@ -99,6 +99,9 @@ type DispatcherManager struct {
 		maintainerEpoch uint64
 		maintainerID    node.ID
 	}
+	// MaintainerFenceMu serializes maintainer owner/epoch changes with request
+	// fence checks and scheduler side effects.
+	MaintainerFenceMu sync.Mutex
 
 	pdClock pdutil.Clock
 
@@ -112,15 +115,12 @@ type DispatcherManager struct {
 	dispatcherMap *DispatcherMap[*dispatcher.EventDispatcher]
 	// redoDispatcherMap restore all the redo dispatchers in the DispatcherManager, including table trigger redo dispatcher
 	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
-	// currentOperatorMap stores at most one in-flight scheduling request per dispatcherID (event and redo).
+	// currentOperatorMap stores one in-flight scheduling request per dispatcherID.
 	//
-	// It is used for:
-	//   - suppressing duplicate maintainer requests for the same dispatcher,
-	//   - reporting unfinished requests during bootstrap so a new maintainer can restore operators,
-	//   - cleaning up remove requests when a dispatcher is fully removed.
-	//
-	// Entries must be deleted on completion (create -> after creation; remove -> on cleanup), otherwise
-	// future maintainer requests for the same dispatcherID will be ignored.
+	// The value carries sender and maintainer epoch so bootstrap recovery can
+	// return only current-epoch operators, and precheck can replace stale entries.
+	// Entries must be deleted on completion, otherwise future requests for the
+	// same dispatcherID will be ignored.
 	currentOperatorMap sync.Map // map[common.DispatcherID]SchedulerDispatcherRequest (in dispatcher manager, not heartbeatpb)
 	// mergeOperatorMap keeps in-flight merge requests so bootstrap can reconstruct merge operators after maintainer failover.
 	mergeOperatorMap sync.Map // map[mergedDispatcherID.String()]*heartbeatpb.MergeDispatcherRequest
@@ -210,6 +210,7 @@ func NewDispatcherManager(
 	tableTriggerRedoDispatcherID *heartbeatpb.DispatcherID,
 	startTs uint64,
 	maintainerID node.ID,
+	maintainerEpoch uint64,
 	newChangefeed bool,
 	registerInitializing func(*DispatcherManager) bool,
 ) (manager *DispatcherManager, err error) {
@@ -258,8 +259,10 @@ func NewDispatcherManager(
 		metricRedoCreateDispatcherDuration:    metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
 	}
 
-	// Set the epoch and maintainerID of the event dispatcher manager
-	manager.meta.maintainerEpoch = cfConfig.Epoch
+	// Trust only the explicit request maintainer epoch for receiver fencing. The
+	// config epoch may be newer than an old rolling-upgrade request and must not
+	// turn epoch 0 compatibility traffic into strict-mode traffic.
+	manager.meta.maintainerEpoch = maintainerEpoch
 	manager.meta.maintainerID = maintainerID
 	cleanupManager := manager
 	defer func() {
@@ -296,9 +299,20 @@ func NewDispatcherManager(
 	manager.sink = createdSink
 	manager.writePathMu.Unlock()
 
+	sinkType := manager.sink.SinkType()
+	if sinkType != common.KafkaSinkType {
+		ignoreUpdateOnlyColumnsRuleCount := countIgnoreUpdateOnlyColumnsRules(cfConfig.Filter)
+		if ignoreUpdateOnlyColumnsRuleCount > 0 {
+			log.Warn("ignore update only columns is configured but does not take effect for this sink",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.String("sinkType", metrics.DownstreamTypeFromSinkURI(manager.config.SinkURI)),
+				zap.Int("eventFilterRuleCount", ignoreUpdateOnlyColumnsRuleCount))
+		}
+	}
+
 	// Determine outputRawChangeEvent based on sink type
 	var outputRawChangeEvent bool
-	switch manager.sink.SinkType() {
+	switch sinkType {
 	case common.CloudStorageSinkType:
 		outputRawChangeEvent = manager.config.SinkConfig.CloudStorageConfig.GetOutputRawChangeEvent()
 	case common.KafkaSinkType:
@@ -409,6 +423,19 @@ func NewDispatcherManager(
 	return manager, nil
 }
 
+func countIgnoreUpdateOnlyColumnsRules(filter *config.FilterConfig) int {
+	if filter == nil {
+		return 0
+	}
+	count := 0
+	for _, rule := range filter.EventFilters {
+		if rule != nil && len(rule.IgnoreUpdateOnlyColumns) > 0 {
+			count++
+		}
+	}
+	return count
+}
+
 func (e *DispatcherManager) getEventCollectorBatchCountAndBytes(s sink.Sink) (int, int) {
 	var (
 		batchCount = s.BatchCount()
@@ -430,7 +457,7 @@ func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.Dispa
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
 	dispatcherID := common.NewDispatcherIDFromPB(id)
 	infos[dispatcherID] = dispatcherCreateInfo{
-		Id:        dispatcherID,
+		ID:        dispatcherID,
 		TableSpan: common.KeyspaceDDLSpan(e.keyspaceID),
 		StartTs:   startTs,
 		SchemaID:  0,

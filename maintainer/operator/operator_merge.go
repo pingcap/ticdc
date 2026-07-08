@@ -41,10 +41,11 @@ import (
 //   - OnNodeRemove(originNode): abort merge, mark old replicas absent, and remove the merged replica.
 //   - OnTaskRemoved(): abort merge due to DDL and clean up without clearing node binding of old replicas.
 type MergeDispatcherOperator struct {
-	spanController *span.Controller
-	originNode     node.ID
-	id             common.DispatcherID
-	dispatcherIDs  []*heartbeatpb.DispatcherID
+	spanController  *span.Controller
+	originNode      node.ID
+	id              common.DispatcherID
+	dispatcherIDs   []*heartbeatpb.DispatcherID
+	maintainerEpoch uint64
 
 	// aborted indicates the merge should not be applied successfully. It can be set by OnNodeRemove
 	// or OnTaskRemoved. When aborted is true, PostFinish follows the abort path.
@@ -101,6 +102,7 @@ func NewMergeDispatcherOperator(
 	spanController *span.Controller,
 	toMergedReplicaSets []*replica.SpanReplication,
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+	maintainerEpoch uint64,
 ) *MergeDispatcherOperator {
 	toMergedSpans := make([]*heartbeatpb.TableSpan, 0, len(toMergedReplicaSets))
 	for _, replicaSet := range toMergedReplicaSets {
@@ -140,6 +142,7 @@ func NewMergeDispatcherOperator(
 		originNode:          nodeID,
 		id:                  newDispatcherID,
 		dispatcherIDs:       dispatcherIDs,
+		maintainerEpoch:     maintainerEpoch,
 		toMergedReplicaSets: toMergedReplicaSets,
 		checkpointTs:        0,
 		mergedSpanInfo:      spansInfo,
@@ -240,6 +243,7 @@ func (m *MergeDispatcherOperator) Schedule() *messaging.TargetMessage {
 			DispatcherIDs:      m.dispatcherIDs,
 			MergedDispatcherID: m.id.ToPB(),
 			Mode:               m.newReplicaSet.GetMode(),
+			MaintainerEpoch:    m.maintainerEpoch,
 		})
 }
 

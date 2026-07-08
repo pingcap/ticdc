@@ -12,6 +12,7 @@ message EventFilterRule {
     string ignore_update_new_value_expr = 5;
     string ignore_update_old_value_expr = 6;
     string ignore_delete_value_expr = 7;
+    repeated string ignore_update_only_columns = 8;
 }
 
 message InnerFilterConfig {
@@ -100,4 +101,5 @@ message DispatcherRequest {
     bool output_raw_change_event = 17;
     int64 mode = 18;
     string txn_atomicity = 19;
+    bool enable_ignore_update_only_columns = 20;
 }
