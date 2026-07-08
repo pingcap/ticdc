@@ -165,6 +165,15 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventIgnore,
 	},
+	model.ActionCreateMaterializedViewLog: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateMaterializedViewLog,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventIgnore,
+	},
 	model.ActionDropTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForDropTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
@@ -691,6 +700,7 @@ func buildPersistedDDLEventForCreateMaterializedView(args buildPersistedDDLEvent
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableInfo = getCreateMaterializedViewTableInfo(args.job)
+	event.TableID = event.TableInfo.ID
 	event.TableName = event.TableInfo.Name.O
 	return event
 }
@@ -709,6 +719,36 @@ func getCreateMaterializedViewTableInfo(job *model.Job) *model.TableInfo {
 		return job.BinlogInfo.TableInfo
 	}
 	log.Panic("table info not found for create materialized view",
+		zap.Error(err),
+		zap.Int64("jobID", job.ID),
+		zap.Int64("tableID", job.TableID),
+		zap.String("tableName", job.TableName))
+	return nil
+}
+
+func buildPersistedDDLEventForCreateMaterializedViewLog(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
+	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
+	event.TableInfo = getCreateMaterializedViewLogTableInfo(args.job)
+	event.TableID = event.TableInfo.ID
+	event.TableName = event.TableInfo.Name.O
+	return event
+}
+
+func getCreateMaterializedViewLogTableInfo(job *model.Job) *model.TableInfo {
+	args, err := model.GetCreateMaterializedViewLogArgs(job)
+	if err == nil && args != nil && args.TableInfo != nil {
+		return args.TableInfo
+	}
+	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
+		log.Warn("fallback to binlog table info for create materialized view log",
+			zap.Error(err),
+			zap.Int64("jobID", job.ID),
+			zap.Int64("tableID", job.TableID),
+			zap.String("tableName", job.TableName))
+		return job.BinlogInfo.TableInfo
+	}
+	log.Panic("table info not found for create materialized view log",
 		zap.Error(err),
 		zap.Int64("jobID", job.ID),
 		zap.Int64("tableID", job.TableID),
