@@ -46,8 +46,6 @@ import (
 	"go.uber.org/zap"
 )
 
-<<<<<<< HEAD
-=======
 const (
 	maxBlockStatusesPerRequest = 2048
 	// The local buffer only needs to cover the short gap before dispatcher
@@ -72,7 +70,17 @@ func newWritePathClosedError() error {
 	return errors.ErrDispatcherManagerWritePathClosed.FastGenByArgs()
 }
 
->>>>>>> f73e8dba2 (server, dispatcher: improve node liveness self fence (#5106))
+func getHeartbeatCollectorIfAvailable() (collector *HeartBeatCollector, ok bool) {
+	defer func() {
+		if recover() != nil {
+			collector = nil
+			ok = false
+		}
+	}()
+	collector = appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector)
+	return collector, collector != nil
+}
+
 /*
 DispatcherManager manages dispatchers for a changefeed instance with responsibilities including:
 
@@ -159,12 +167,6 @@ type DispatcherManager struct {
 	latestWatermark     Watermark
 	latestRedoWatermark Watermark
 
-<<<<<<< HEAD
-	closing atomic.Bool
-	closed  atomic.Bool
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-=======
 	closing         atomic.Bool
 	closed          atomic.Bool
 	writePathMu     sync.Mutex
@@ -182,7 +184,6 @@ type DispatcherManager struct {
 	removeChangefeedCleanupRunning atomic.Bool
 	cancel                         context.CancelFunc
 	wg                             sync.WaitGroup
->>>>>>> f73e8dba2 (server, dispatcher: improve node liveness self fence (#5106))
 
 	// removeTaskHandles stores the task handles for async dispatcher removal
 	// map[common.DispatcherID]*threadpool.TaskHandle
@@ -219,7 +220,7 @@ func NewDispatcherManager(
 	startTs uint64,
 	maintainerID node.ID,
 	newChangefeed bool,
-	registerInitializing func(*DispatcherManager) bool,
+	registerInitializing ...func(*DispatcherManager) bool,
 ) (manager *DispatcherManager, err error) {
 	failpoint.Inject("NewDispatcherManagerDelay", nil)
 
@@ -276,7 +277,7 @@ func NewDispatcherManager(
 		}
 	}()
 	// The manager must be fenceable before any write-capable resource is initialized.
-	if registerInitializing != nil && !registerInitializing(manager) {
+	if len(registerInitializing) > 0 && registerInitializing[0] != nil && !registerInitializing[0](manager) {
 		return nil, newWritePathClosedError()
 	}
 
@@ -297,7 +298,7 @@ func NewDispatcherManager(
 	manager.writePathMu.Lock()
 	if manager.writePathClosed.Load() {
 		manager.writePathMu.Unlock()
-		createdSink.Close()
+		createdSink.Close(false)
 		return nil, newWritePathClosedError()
 	}
 	manager.sink = createdSink
@@ -1008,21 +1009,17 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 // ==== remove and clean related functions ====
 
 func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
+	if removeChangefeed {
+		e.removeChangefeedRequested.Store(true)
+	}
 	if e.closed.Load() {
+		e.tryScheduleRemoveChangefeedCleanup()
 		return true
 	}
 	if !e.closing.CompareAndSwap(false, true) {
 		return e.closed.Load()
 	}
 
-<<<<<<< HEAD
-	e.closing.Store(true)
-	go e.close(removeChangefeed)
-	return false
-}
-
-func (e *DispatcherManager) close(removeChangefeed bool) {
-=======
 	go e.close()
 	return false
 }
@@ -1041,7 +1038,6 @@ func (e *DispatcherManager) LocalFence() {
 }
 
 func (e *DispatcherManager) close() {
->>>>>>> f73e8dba2 (server, dispatcher: improve node liveness self fence (#5106))
 	log.Info("closing event dispatcher manager",
 		zap.Stringer("changefeedID", e.changefeedID))
 
@@ -1069,7 +1065,7 @@ func (e *DispatcherManager) stopWritePath(cancelFirst bool) {
 		closeAllDispatchers(e.changefeedID, e.redoDispatcherMap, e.redoSink.SinkType())
 		log.Info("closed all redo dispatchers",
 			zap.Stringer("changefeedID", e.changefeedID))
-		if heartbeatCollector, ok := appcontext.TryGetService[*HeartBeatCollector](appcontext.HeartbeatCollector); ok {
+		if heartbeatCollector, ok := getHeartbeatCollectorIfAvailable(); ok {
 			err := heartbeatCollector.RemoveRedoMessage(e.changefeedID)
 			if err != nil {
 				log.Error("remove redo message failed",
@@ -1090,7 +1086,7 @@ func (e *DispatcherManager) stopWritePath(cancelFirst bool) {
 	log.Info("closed all event dispatchers",
 		zap.Stringer("changefeedID", e.changefeedID))
 
-	if heartbeatCollector, ok := appcontext.TryGetService[*HeartBeatCollector](appcontext.HeartbeatCollector); ok {
+	if heartbeatCollector, ok := getHeartbeatCollectorIfAvailable(); ok {
 		err := heartbeatCollector.RemoveDispatcherManager(e.changefeedID)
 		if err != nil {
 			log.Error("remove dispatcher manager from heartbeat collector failed",
@@ -1122,21 +1118,17 @@ func (e *DispatcherManager) stopWritePath(cancelFirst bool) {
 
 	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
-<<<<<<< HEAD
-	if e.IsRedoEnabled() {
-		e.redoSink.Close(removeChangefeed)
-		// FIXME: cleanup redo log when remove the changefeed
-		e.closeRedoMeta(removeChangefeed)
-	}
-	e.sink.Close(removeChangefeed)
-=======
 	if e.IsRedoEnabled() && e.redoSink != nil {
-		e.redoSink.Close()
+		e.redoSink.Close(false)
+		if err := e.closeRedoMeta(false); err != nil {
+			log.Warn("failed to cleanup redo meta while stopping write path",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Error(err))
+		}
 	}
 	if e.sink != nil {
-		e.sink.Close()
+		e.sink.Close(false)
 	}
->>>>>>> f73e8dba2 (server, dispatcher: improve node liveness self fence (#5106))
 	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))
 }
 
@@ -1168,13 +1160,52 @@ func (e *DispatcherManager) finishClose() {
 
 	e.cleanMetrics()
 
-<<<<<<< HEAD
-	e.closed.Store(true)
-=======
 	e.tryScheduleRemoveChangefeedCleanup()
->>>>>>> f73e8dba2 (server, dispatcher: improve node liveness self fence (#5106))
 	log.Info("event dispatcher manager closed",
 		zap.Stringer("changefeedID", e.changefeedID))
+}
+
+func (e *DispatcherManager) tryScheduleRemoveChangefeedCleanup() {
+	if !e.removeChangefeedRequested.Load() {
+		return
+	}
+	if e.removeChangefeedCleaned.Load() {
+		return
+	}
+	if !e.removeChangefeedCleanupRunning.CompareAndSwap(false, true) {
+		return
+	}
+
+	go func() {
+		defer e.removeChangefeedCleanupRunning.Store(false)
+
+		if err := e.runRemoveChangefeedCleanup(); err != nil {
+			log.Warn("failed to cleanup removed changefeed",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Error(err))
+			return
+		}
+		e.removeChangefeedCleaned.Store(true)
+	}()
+}
+
+func (e *DispatcherManager) runRemoveChangefeedCleanup() error {
+	if !e.removeChangefeedRequested.Load() || e.removeChangefeedCleaned.Load() {
+		return nil
+	}
+
+	if e.IsRedoEnabled() {
+		if err := e.closeRedoMeta(true); err != nil {
+			return errors.Trace(err)
+		}
+	}
+
+	if mysqlSink, ok := e.sink.(*mysql.Sink); ok {
+		if err := mysqlSink.CleanupRemovedChangefeed(); err != nil {
+			return errors.Trace(err)
+		}
+	}
+	return nil
 }
 
 // cleanEventDispatcher is called when the event dispatcher is removed successfully.

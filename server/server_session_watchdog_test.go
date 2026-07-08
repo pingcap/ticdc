@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/pingcap/ticdc/pkg/api"
 	appctx "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -48,7 +48,7 @@ func TestSessionWatchdogFencesOnSessionDone(t *testing.T) {
 
 	require.True(t, errors.ErrCaptureSuicide.Equal(err), err)
 	require.Equal(t, int32(1), fencer.count.Load())
-	require.Equal(t, liveness.CaptureStopping, c.liveness.Load())
+	require.Equal(t, api.LivenessCaptureStopping, c.liveness.Load())
 }
 
 func TestSessionWatchdogFencesOnExpiredLease(t *testing.T) {
@@ -72,7 +72,7 @@ func TestSessionWatchdogFencesOnExpiredLease(t *testing.T) {
 
 	require.True(t, errors.ErrCaptureSuicide.Equal(err), err)
 	require.Equal(t, int32(1), fencer.count.Load())
-	require.Equal(t, liveness.CaptureStopping, c.liveness.Load())
+	require.Equal(t, api.LivenessCaptureStopping, c.liveness.Load())
 }
 
 func TestLocalFenceIsIdempotent(t *testing.T) {
@@ -84,5 +84,5 @@ func TestLocalFenceIsIdempotent(t *testing.T) {
 	c.localFence("second")
 
 	require.Equal(t, int32(1), fencer.count.Load())
-	require.Equal(t, liveness.CaptureStopping, c.liveness.Load())
+	require.Equal(t, api.LivenessCaptureStopping, c.liveness.Load())
 }

@@ -73,7 +73,7 @@ func initRedoComponet(
 	manager.writePathMu.Lock()
 	if manager.writePathClosed.Load() {
 		manager.writePathMu.Unlock()
-		redoSink.Close()
+		redoSink.Close(false)
 		return newWritePathClosedError()
 	}
 	manager.redoDispatcherMap = redoDispatcherMap
@@ -159,25 +159,10 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 	return nil
 }
 
-<<<<<<< HEAD
-func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, removeDDLTs bool) error {
-=======
-func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(redoSink *redo.Sink) (int, int) {
-	var (
-		batchCount = redoSink.BatchCount()
-		batchBytes = redoSink.BatchBytes()
-	)
-	if e.config.Consistent != nil && e.config.Consistent.EventCollectorBatchCount != nil {
-		batchCount = *e.config.Consistent.EventCollectorBatchCount
-	}
-	return batchCount, batchBytes
-}
-
 func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, _ bool) error {
 	if e.writePathClosed.Load() {
 		return newWritePathClosedError()
 	}
->>>>>>> f73e8dba2 (server, dispatcher: improve node liveness self fence (#5106))
 	start := time.Now()
 
 	dispatcherIds, _, startTsList, tableSpans, schemaIds, scheduleSkipDMLAsStartTsList := prepareCreateDispatcher(infos, e.redoDispatcherMap)
@@ -320,16 +305,17 @@ func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID
 	)
 }
 
-func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) {
+func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) error {
 	if d := e.GetTableTriggerRedoDispatcher(); d != nil {
 		redoMeta := d.GetRedoMeta()
 		if redoMeta != nil {
 			redoMeta.CleanupMetrics()
 			if removeChangefeed {
-				redoMeta.Cleanup(context.Background())
+				return redoMeta.Cleanup(context.Background())
 			}
 		}
 	}
+	return nil
 }
 
 func (e *DispatcherManager) InitalizeTableTriggerRedoDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {

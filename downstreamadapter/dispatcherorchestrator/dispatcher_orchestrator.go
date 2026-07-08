@@ -60,19 +60,10 @@ type DispatcherOrchestrator struct {
 
 func New() *DispatcherOrchestrator {
 	m := &DispatcherOrchestrator{
-<<<<<<< HEAD
-		mc:                 appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
-		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		msgQueue:           newPendingMessageQueue(),
-=======
 		mc:                             appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		dispatcherManagers:             make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
 		initializingDispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		shards:                         make([]*orchestratorShard, dispatcherOrchestratorShardCount),
-	}
-	for i := range m.shards {
-		m.shards[i] = newOrchestratorShard(m.processMessage)
->>>>>>> f73e8dba2 (server, dispatcher: improve node liveness self fence (#5106))
+		msgQueue:                       newPendingMessageQueue(),
 	}
 	m.mc.RegisterHandler(messaging.DispatcherManagerManagerTopic, m.RecvMaintainerRequest)
 	return m
@@ -132,7 +123,6 @@ func getPendingMessageKey(msg *messaging.TargetMessage) (pendingMessageKey, bool
 	}, true
 }
 
-<<<<<<< HEAD
 // handleMessages processes messages from the queue
 func (m *DispatcherOrchestrator) handleMessages() {
 	for {
@@ -140,23 +130,14 @@ func (m *DispatcherOrchestrator) handleMessages() {
 		if !ok {
 			log.Info("dispatcher orchestrator is shutting down, exit handleMessages")
 			return
-=======
-// processMessage dispatches a queued control message to the existing handler
-// implementation. Shards only change concurrency, not per-message behavior.
-func (m *DispatcherOrchestrator) processMessage(msg *messaging.TargetMessage) {
-	if m.fenced.Load() {
-		log.Info("dispatcher orchestrator is fenced, drop pending message",
-			zap.String("type", msg.Type.String()))
-		return
-	}
-
-	switch req := msg.Message[0].(type) {
-	case *heartbeatpb.MaintainerBootstrapRequest:
-		if err := m.handleBootstrapRequest(msg.From, req); err != nil {
-			log.Error("failed to handle bootstrap request", zap.Error(err))
->>>>>>> f73e8dba2 (server, dispatcher: improve node liveness self fence (#5106))
 		}
 		msg := m.msgQueue.Get(key)
+		if m.fenced.Load() {
+			log.Info("dispatcher orchestrator is fenced, drop pending message",
+				zap.String("type", msg.Type.String()))
+			m.msgQueue.Done(key)
+			continue
+		}
 
 		// Process the message
 		switch req := msg.Message[0].(type) {
@@ -466,9 +447,7 @@ func (m *DispatcherOrchestrator) LocalFence() {
 	m.mc.DeRegisterHandler(messaging.DispatcherManagerManagerTopic)
 	m.localFenceManagers()
 	m.msgGuardWaitGroup.Wait()
-	for _, shard := range m.shards {
-		shard.CloseAsync()
-	}
+	m.msgQueue.Close()
 	m.localFenceManagers()
 }
 

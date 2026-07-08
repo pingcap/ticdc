@@ -426,15 +426,25 @@ func (c *server) localFence(reason string) {
 
 	log.Warn("local fence triggered", zap.String("reason", reason))
 
-	c.liveness.Store(liveness.CaptureDraining)
-	c.liveness.Store(liveness.CaptureStopping)
+	c.liveness.Store(api.LivenessCaptureStopping)
 
-	fencer, ok := appctx.TryGetService[localFencer](appctx.DispatcherOrchestrator)
+	fencer, ok := getLocalFencerIfAvailable()
 	if !ok {
 		log.Warn("dispatcher orchestrator is not available when local fence triggered")
 		return
 	}
 	fencer.LocalFence()
+}
+
+func getLocalFencerIfAvailable() (fencer localFencer, ok bool) {
+	defer func() {
+		if recover() != nil {
+			fencer = nil
+			ok = false
+		}
+	}()
+	fencer = appctx.GetService[localFencer](appctx.DispatcherOrchestrator)
+	return fencer, fencer != nil
 }
 
 // validCheck checks whether the environment is valid to start the server

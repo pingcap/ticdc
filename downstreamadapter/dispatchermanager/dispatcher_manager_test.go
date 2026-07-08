@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -35,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	mysqlcfg "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
@@ -352,8 +354,6 @@ func TestMergeDispatcherInvalidIDs(t *testing.T) {
 	require.False(t, exists)
 }
 
-<<<<<<< HEAD
-=======
 func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	mysqlConfig := mysqlcfg.New()
@@ -426,7 +426,7 @@ func TestLocalFenceDoesNotWaitForBootstrapWriteBlockEvent(t *testing.T) {
 	mockSink.EXPECT().SinkType().Return(common.KafkaSinkType).AnyTimes()
 	mockSink.EXPECT().IsNormal().Return(true).AnyTimes()
 	mockSink.EXPECT().SetTableSchemaStore(gomock.Any()).AnyTimes()
-	mockSink.EXPECT().Close().AnyTimes()
+	mockSink.EXPECT().Close(gomock.Any()).AnyTimes()
 	mockSink.EXPECT().WriteBlockEvent(gomock.Any()).DoAndReturn(func(blockEvent event.BlockEvent) error {
 		close(writeStarted)
 		<-releaseWrite
@@ -544,7 +544,7 @@ func TestCheckpointTsMessageHandlerSkipsWriteAfterLocalFence(t *testing.T) {
 
 	mockSink := mock.NewMockSink(ctrl)
 	mockSink.EXPECT().SinkType().Return(common.MysqlSinkType).AnyTimes()
-	mockSink.EXPECT().Close().AnyTimes()
+	mockSink.EXPECT().Close(gomock.Any()).AnyTimes()
 	mockSink.EXPECT().AddCheckpointTs(gomock.Any()).Times(0)
 
 	manager := createTestManager(t)
@@ -684,7 +684,6 @@ func TestCreateDispatcherByInfoKeepsCreateOperatorWhenFenced(t *testing.T) {
 	require.Equal(t, createReq, operator)
 }
 
->>>>>>> f73e8dba2 (server, dispatcher: improve node liveness self fence (#5106))
 func TestMergeDispatcherExistingID(t *testing.T) {
 	manager := createTestManager(t)
 
