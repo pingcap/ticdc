@@ -235,6 +235,14 @@ func newEligibleMaterializedViewTableInfoForTest(
 	return tableInfo
 }
 
+func newEligibleMaterializedViewLogTableInfoForTest(tableID int64, tableName string, baseTableID int64) *model.TableInfo {
+	tableInfo := newEligibleTableInfoForTest(tableID, tableName)
+	tableInfo.MaterializedViewLog = &model.MaterializedViewLogInfo{
+		BaseTableID: baseTableID,
+	}
+	return tableInfo
+}
+
 func buildCreateSchemaJobForTest(schemaID int64, schemaName string, finishedTs uint64) *model.Job {
 	return &model.Job{
 		Type:     model.ActionCreateSchema,
@@ -294,6 +302,24 @@ func buildCreateMaterializedViewJobForTest(
 	}
 	job.FillArgs(&model.CreateMaterializedViewArgs{
 		TableInfo: tableInfo,
+	})
+	return job
+}
+
+func buildCreateMaterializedViewLogJobForTest(
+	schemaID, tableID int64, tableName string, baseTableID int64, finishedTs uint64,
+) *model.Job {
+	job := &model.Job{
+		Type:      model.ActionCreateMaterializedViewLog,
+		Version:   model.JobVersion2,
+		SchemaID:  schemaID,
+		TableName: tableName,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+	job.FillArgs(&model.CreateMaterializedViewLogArgs{
+		TableInfo: newEligibleMaterializedViewLogTableInfoForTest(tableID, tableName, baseTableID),
 	})
 	return job
 }

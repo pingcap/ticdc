@@ -778,7 +778,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	switch model.ActionType(job.Type) {
-	// Skipping ActionCreateTable, ActionCreateMaterializedView and ActionCreateTables when the table already exists:
+	// Skipping create-table-like actions when the table already exists:
 	// 1. It is possible to receive ActionCreateTable and ActionCreateTables multiple times,
 	//    and filtering duplicates in a generic way is challenging.
 	//    (SchemaVersion checks are unreliable because versions might not be strictly ordered in some cases.)
@@ -786,10 +786,16 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	//    One of these actions could be garbage collected, leaving the table present in the snapshot.
 	//    Therefore, the only reliable way to determine if a later DDL operation is redundant
 	//    is by verifying whether the table already exists.
-	case model.ActionCreateTable, model.ActionCreateMaterializedView, model.ActionCreateMaterializedViewShadow:
+	case model.ActionCreateTable,
+		model.ActionCreateMaterializedView,
+		model.ActionCreateMaterializedViewShadow,
+		model.ActionCreateMaterializedViewLog:
 		tableInfo := job.BinlogInfo.TableInfo
-		if model.ActionType(job.Type) == model.ActionCreateMaterializedView {
+		switch model.ActionType(job.Type) {
+		case model.ActionCreateMaterializedView:
 			tableInfo = getCreateMaterializedViewTableInfo(job)
+		case model.ActionCreateMaterializedViewLog:
+			tableInfo = getCreateMaterializedViewLogTableInfo(job)
 		}
 		// Note: partition table's logical table id is also in tableMap
 		if _, ok := tableMap[tableInfo.ID]; ok {

@@ -2822,6 +2822,168 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 	checkDroppedState(t, pStorage)
 }
 
+func TestActionCreateMaterializedViewLogDDL(t *testing.T) {
+	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dbPath)
+	})
+
+	const (
+		schemaID               int64  = 100
+		schemaName             string = "test"
+		baseTableID            int64  = 150
+		baseTableName          string = "t_base"
+		mlogTableID            int64  = 200
+		mlogTableName          string = "$mlog$t_base"
+		expectedDropTableQuery string = "DROP TABLE `test`.`$mlog$t_base`"
+	)
+
+	readDDLEventForTest := func(t *testing.T, pStorage *persistentStorage, ts uint64) PersistedDDLEvent {
+		t.Helper()
+
+		snap := pStorage.db.NewSnapshot()
+		defer snap.Close()
+		return readPersistedDDLEvent(snap, ts)
+	}
+
+	checkPhysicalTables := func(t *testing.T, pStorage *persistentStorage, snapTs uint64, expected map[int64]string) {
+		t.Helper()
+
+		tables, err := pStorage.getAllPhysicalTables(snapTs, nil)
+		require.NoError(t, err)
+		actual := make(map[int64]string, len(tables))
+		for _, table := range tables {
+			require.NotNil(t, table.SchemaTableName)
+			actual[table.TableID] = table.SchemaTableName.TableName
+		}
+		require.Equal(t, expected, actual)
+	}
+
+	checkCreatedState := func(t *testing.T, pStorage *persistentStorage) {
+		t.Helper()
+
+		require.Equal(t, map[int64]*BasicTableInfo{
+			baseTableID: {
+				SchemaID: schemaID,
+				Name:     baseTableName,
+			},
+			mlogTableID: {
+				SchemaID:              schemaID,
+				Name:                  mlogTableName,
+				IsMaterializedViewLog: true,
+			},
+		}, pStorage.tableMap)
+		require.Equal(t, map[int64]*BasicDatabaseInfo{
+			schemaID: {
+				Name: schemaName,
+				Tables: map[int64]bool{
+					baseTableID: true,
+					mlogTableID: true,
+				},
+			},
+		}, pStorage.databaseMap)
+		require.Equal(t, map[int64][]uint64{
+			baseTableID: {1010},
+			mlogTableID: {1020},
+		}, pStorage.tablesDDLHistory)
+		require.Equal(t, []uint64{1000, 1010}, pStorage.tableTriggerDDLHistory)
+
+		checkPhysicalTables(t, pStorage, 1025, map[int64]string{
+			baseTableID: baseTableName,
+		})
+
+		createMLogDDL := readDDLEventForTest(t, pStorage, 1020)
+		require.Equal(t, byte(model.ActionCreateMaterializedViewLog), createMLogDDL.Type)
+		require.Equal(t, schemaName, createMLogDDL.SchemaName)
+		require.Equal(t, mlogTableID, createMLogDDL.TableID)
+		require.Equal(t, mlogTableName, createMLogDDL.TableName)
+		require.NotNil(t, createMLogDDL.TableInfo)
+		require.NotNil(t, createMLogDDL.TableInfo.MaterializedViewLog)
+		require.Equal(t, baseTableID, createMLogDDL.TableInfo.MaterializedViewLog.BaseTableID)
+
+		tableInfo, err := pStorage.forceGetTableInfo(mlogTableID, 1025)
+		require.NoError(t, err)
+		require.NotNil(t, tableInfo)
+		require.Equal(t, mlogTableID, tableInfo.TableName.TableID)
+		require.Equal(t, mlogTableName, tableInfo.TableName.Table)
+
+		tableEvents, err := pStorage.fetchTableDDLEvents(common.NewDispatcherID(), mlogTableID, nil, 0, 1029)
+		require.NoError(t, err)
+		require.Empty(t, tableEvents)
+	}
+
+	checkDroppedState := func(t *testing.T, pStorage *persistentStorage) {
+		t.Helper()
+
+		require.Equal(t, map[int64]*BasicTableInfo{
+			baseTableID: {
+				SchemaID: schemaID,
+				Name:     baseTableName,
+			},
+		}, pStorage.tableMap)
+		require.Equal(t, map[int64]*BasicDatabaseInfo{
+			schemaID: {
+				Name: schemaName,
+				Tables: map[int64]bool{
+					baseTableID: true,
+				},
+			},
+		}, pStorage.databaseMap)
+		require.Equal(t, map[int64][]uint64{
+			baseTableID: {1010},
+			mlogTableID: {1020, 1030},
+		}, pStorage.tablesDDLHistory)
+		require.Equal(t, []uint64{1000, 1010}, pStorage.tableTriggerDDLHistory)
+
+		checkPhysicalTables(t, pStorage, 1035, map[int64]string{
+			baseTableID: baseTableName,
+		})
+
+		dropMLogDDL := readDDLEventForTest(t, pStorage, 1030)
+		require.Equal(t, byte(model.ActionDropTable), dropMLogDDL.Type)
+		require.Equal(t, schemaName, dropMLogDDL.SchemaName)
+		require.Equal(t, mlogTableID, dropMLogDDL.TableID)
+		require.Equal(t, mlogTableName, dropMLogDDL.TableName)
+		require.Equal(t, expectedDropTableQuery, dropMLogDDL.Query)
+
+		var deletedErr *TableDeletedError
+		_, err := pStorage.forceGetTableInfo(mlogTableID, 1030)
+		require.ErrorAs(t, err, &deletedErr)
+
+		tableEvents, err := pStorage.fetchTableDDLEvents(common.NewDispatcherID(), mlogTableID, nil, 0, 2000)
+		require.NoError(t, err)
+		require.Empty(t, tableEvents)
+
+		triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(nil, 999, 10)
+		require.NoError(t, err)
+		require.Len(t, triggerEvents, 2)
+		require.Equal(t, byte(model.ActionCreateSchema), triggerEvents[0].Type)
+		require.Equal(t, byte(model.ActionCreateTable), triggerEvents[1].Type)
+	}
+
+	pStorage := newPersistentStorageForTest(dbPath, nil)
+	for _, job := range []*model.Job{
+		buildCreateSchemaJobForTest(schemaID, schemaName, 1000),
+		buildCreateTableJobForTest(schemaID, baseTableID, baseTableName, 1010),
+		buildCreateMaterializedViewLogJobForTest(schemaID, mlogTableID, mlogTableName, baseTableID, 1020),
+	} {
+		require.NoError(t, pStorage.handleDDLJob(job))
+	}
+	checkCreatedState(t, pStorage)
+
+	pStorage.close()
+	pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
+	checkCreatedState(t, pStorage)
+
+	require.NoError(t, pStorage.handleDDLJob(buildDropTableJobForTest(schemaID, mlogTableID, 1030)))
+	checkDroppedState(t, pStorage)
+	pStorage.close()
+
+	pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
+	defer pStorage.close()
+	checkDroppedState(t, pStorage)
+}
+
 func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
 	t.Cleanup(func() {
