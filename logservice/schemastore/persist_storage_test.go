@@ -2868,8 +2868,9 @@ func TestActionCreateMaterializedViewLogDDL(t *testing.T) {
 				Name:     baseTableName,
 			},
 			mlogTableID: {
-				SchemaID: schemaID,
-				Name:     mlogTableName,
+				SchemaID:              schemaID,
+				Name:                  mlogTableName,
+				IsMaterializedViewLog: true,
 			},
 		}, pStorage.tableMap)
 		require.Equal(t, map[int64]*BasicDatabaseInfo{
@@ -2932,7 +2933,7 @@ func TestActionCreateMaterializedViewLogDDL(t *testing.T) {
 			baseTableID: {1010},
 			mlogTableID: {1020, 1030},
 		}, pStorage.tablesDDLHistory)
-		require.Equal(t, []uint64{1000, 1010, 1030}, pStorage.tableTriggerDDLHistory)
+		require.Equal(t, []uint64{1000, 1010}, pStorage.tableTriggerDDLHistory)
 
 		checkPhysicalTables(t, pStorage, 1035, map[int64]string{
 			baseTableID: baseTableName,
@@ -2951,19 +2952,13 @@ func TestActionCreateMaterializedViewLogDDL(t *testing.T) {
 
 		tableEvents, err := pStorage.fetchTableDDLEvents(common.NewDispatcherID(), mlogTableID, nil, 0, 2000)
 		require.NoError(t, err)
-		require.Len(t, tableEvents, 1)
-		require.Equal(t, byte(model.ActionDropTable), tableEvents[0].Type)
-		require.Equal(t, expectedDropTableQuery, tableEvents[0].Query)
-		require.NotNil(t, tableEvents[0].NeedDroppedTables)
-		require.Equal(t, []int64{mlogTableID}, tableEvents[0].NeedDroppedTables.TableIDs)
+		require.Empty(t, tableEvents)
 
 		triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(nil, 999, 10)
 		require.NoError(t, err)
-		require.Len(t, triggerEvents, 3)
+		require.Len(t, triggerEvents, 2)
 		require.Equal(t, byte(model.ActionCreateSchema), triggerEvents[0].Type)
 		require.Equal(t, byte(model.ActionCreateTable), triggerEvents[1].Type)
-		require.Equal(t, byte(model.ActionDropTable), triggerEvents[2].Type)
-		require.Equal(t, expectedDropTableQuery, triggerEvents[2].Query)
 	}
 
 	pStorage := newPersistentStorageForTest(dbPath, nil)

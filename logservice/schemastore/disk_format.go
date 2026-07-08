@@ -241,8 +241,9 @@ func loadTablesInKVSnap(
 		// TODO: add a unit test for this case
 		databaseInfo.Tables[tableInfo.ID] = true
 		tablesInKVSnap[tableInfo.ID] = &BasicTableInfo{
-			SchemaID: table_info_entry.SchemaID,
-			Name:     tableInfo.Name.O,
+			SchemaID:              table_info_entry.SchemaID,
+			Name:                  tableInfo.Name.O,
+			IsMaterializedViewLog: isMaterializedViewLogTable(&tableInfo),
 		}
 		if tableInfo.Partition != nil {
 			partitionInfo := make(BasicPartitionInfo)
@@ -301,8 +302,9 @@ func loadFullTablesInKVSnap(
 		tableInfosInKVSnap[tableInfo.ID] = &tableInfo
 		databaseInfo.Tables[tableInfo.ID] = true
 		tablesInKVSnap[tableInfo.ID] = &BasicTableInfo{
-			SchemaID: table_info_entry.SchemaID,
-			Name:     tableInfo.Name.O,
+			SchemaID:              table_info_entry.SchemaID,
+			Name:                  tableInfo.Name.O,
+			IsMaterializedViewLog: isMaterializedViewLogTable(&tableInfo),
 		}
 		if tableInfo.Partition != nil {
 			partitionInfo := make(BasicPartitionInfo)
@@ -542,7 +544,7 @@ func addTableInfoToBatch(
 	ts uint64,
 	dbInfo *model.DBInfo,
 	tableInfoValue []byte,
-) (int64, string, []int64) {
+) (int64, string, bool, []int64) {
 	tableInfo := model.TableInfo{}
 	if err := json.Unmarshal(tableInfoValue, &tableInfo); err != nil {
 		log.Fatal("unmarshal table info failed", zap.Error(err))
@@ -579,7 +581,7 @@ func addTableInfoToBatch(
 			partitionIDs = append(partitionIDs, partition.ID)
 		}
 	}
-	return tableInfo.ID, tableInfo.Name.O, partitionIDs
+	return tableInfo.ID, tableInfo.Name.O, isMaterializedViewLogTable(&tableInfo), partitionIDs
 }
 
 // persistSchemaSnapshot write database/table/partition info to disks.
@@ -625,11 +627,12 @@ func persistSchemaSnapshot(
 						if !isTableRawKey(rawTable.Field) {
 							continue
 						}
-						tableID, tableName, partitionIDs := addTableInfoToBatch(batch, snapTs, dbInfo, rawTable.Value)
+						tableID, tableName, isMaterializedViewLog, partitionIDs := addTableInfoToBatch(batch, snapTs, dbInfo, rawTable.Value)
 						if collectMetaInfo {
 							tableMap[tableID] = &BasicTableInfo{
-								SchemaID: dbInfo.ID,
-								Name:     tableName,
+								SchemaID:              dbInfo.ID,
+								Name:                  tableName,
+								IsMaterializedViewLog: isMaterializedViewLog,
 							}
 							tablesInDB[tableID] = true
 							if len(partitionIDs) > 0 {
@@ -821,7 +824,7 @@ func loadAllPhysicalTablesAtTs(
 		if !ok {
 			log.Panic("table info not found", zap.Int64("tableID", tableID))
 		}
-		if fullTableInfo.MaterializedViewLog != nil || fullTableInfo.MaterializedViewShadow != nil {
+		if isMaterializedViewLogTable(fullTableInfo) || fullTableInfo.MaterializedViewShadow != nil {
 			continue
 		}
 		if tableFilter != nil {

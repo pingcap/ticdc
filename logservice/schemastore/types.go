@@ -111,8 +111,9 @@ type BasicDatabaseInfo struct {
 
 //msgp:ignore BasicTableInfo
 type BasicTableInfo struct {
-	SchemaID int64
-	Name     string
+	SchemaID              int64
+	Name                  string
+	IsMaterializedViewLog bool
 }
 
 type BasicPartitionInfo map[int64]interface{}
