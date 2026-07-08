@@ -657,7 +657,13 @@ func (oc *Controller) AddRestoredMergeOperator(
 		}
 	}
 
-	mergeOperator := NewRestoredMergeDispatcherOperator(oc.spanController, affectedReplicaSets, mergedReplicaSet, operators)
+	mergeOperator := NewRestoredMergeDispatcherOperator(
+		oc.spanController,
+		affectedReplicaSets,
+		mergedReplicaSet,
+		operators,
+		oc.MaintainerEpoch(),
+	)
 	ret := oc.AddOperator(mergeOperator)
 	if !ret {
 		log.Error("failed to add merge dispatcher operator when restoring merge",

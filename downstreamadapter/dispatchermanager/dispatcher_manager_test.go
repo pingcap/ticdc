@@ -1063,6 +1063,65 @@ func TestDoMergeKeepsMergeJournalUntilSourcesAreCleaned(t *testing.T) {
 	require.Empty(t, manager.GetMergeOperators())
 }
 
+func TestMergeDispatcherRequestRecvDoesNotTrackStaleMaintainerEpoch(t *testing.T) {
+	// Scenario: an old maintainer sends a delayed merge request after dispatcher manager
+	// ownership has moved to a newer epoch.
+	// Steps: receive the request through HeartBeatCollector and verify the journal is not
+	// updated before the dynamic stream handler applies its epoch fence.
+	manager := createTestManager(t)
+	require.True(t, manager.TryUpdateMaintainer("current-maintainer", 2))
+
+	collector := &HeartBeatCollector{
+		mergeDispatcherRequestDynamicStream: newMergeDispatcherRequestDynamicStream(),
+	}
+	defer collector.mergeDispatcherRequestDynamicStream.Close()
+	require.NoError(t, collector.mergeDispatcherRequestDynamicStream.AddPath(manager.changefeedID.Id, manager))
+	collector.dispatcherManagers.Store(manager.changefeedID.Id, manager)
+
+	mergeReq := &heartbeatpb.MergeDispatcherRequest{
+		ChangefeedID: manager.changefeedID.ToPB(),
+		DispatcherIDs: []*heartbeatpb.DispatcherID{
+			common.NewDispatcherID().ToPB(),
+			common.NewDispatcherID().ToPB(),
+		},
+		MergedDispatcherID: common.NewDispatcherID().ToPB(),
+		Mode:               common.DefaultMode,
+		MaintainerEpoch:    1,
+	}
+	msg := messaging.NewSingleTargetMessage(
+		"receiver",
+		messaging.HeartbeatCollectorTopic,
+		mergeReq,
+	)
+	msg.From = "old-maintainer"
+
+	require.NoError(t, collector.RecvMessages(context.Background(), msg))
+	require.Empty(t, manager.GetMergeOperators())
+}
+
+func TestTrackMergeOperatorPreservesMaintainerEpoch(t *testing.T) {
+	// Scenario: bootstrap later reads a cloned in-flight merge request from the journal.
+	// Steps: track a strict-epoch request, fetch it back, and verify the cloned request
+	// still carries the epoch needed by downstream admission checks.
+	manager := createTestManager(t)
+	mergeReq := &heartbeatpb.MergeDispatcherRequest{
+		ChangefeedID: manager.changefeedID.ToPB(),
+		DispatcherIDs: []*heartbeatpb.DispatcherID{
+			common.NewDispatcherID().ToPB(),
+			common.NewDispatcherID().ToPB(),
+		},
+		MergedDispatcherID: common.NewDispatcherID().ToPB(),
+		Mode:               common.DefaultMode,
+		MaintainerEpoch:    7,
+	}
+
+	manager.TrackMergeOperator(mergeReq)
+
+	operators := manager.GetMergeOperators()
+	require.Len(t, operators, 1)
+	require.Equal(t, uint64(7), operators[0].MaintainerEpoch)
+}
+
 // TestTrackMergeOperatorRejectsZeroMergedDispatcherID covers a malformed merge request.
 // The test tracks a request with an all-zero merged ID and verifies it cannot occupy the shared
 // zero-value map key or appear in later bootstrap responses.

@@ -153,7 +153,8 @@ func cloneMergeDispatcherRequest(req *heartbeatpb.MergeDispatcherRequest) *heart
 		return nil
 	}
 	clone := &heartbeatpb.MergeDispatcherRequest{
-		Mode: req.Mode,
+		Mode:            req.Mode,
+		MaintainerEpoch: req.MaintainerEpoch,
 	}
 	if req.ChangefeedID != nil {
 		id := *req.ChangefeedID

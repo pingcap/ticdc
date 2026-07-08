@@ -154,11 +154,13 @@ func NewMergeDispatcherOperator(
 }
 
 // NewRestoredMergeDispatcherOperator builds a merge operator whose occupy sub-operators were restored from bootstrap.
+// The restored operator must keep the current maintainer epoch so dispatcher-manager fences accept its requests.
 func NewRestoredMergeDispatcherOperator(
 	spanController *span.Controller,
 	toMergedReplicaSets []*replica.SpanReplication,
 	mergedReplicaSet *replica.SpanReplication,
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+	maintainerEpoch uint64,
 ) *MergeDispatcherOperator {
 	toMergedSpans := make([]*heartbeatpb.TableSpan, 0, len(toMergedReplicaSets))
 	for _, replicaSet := range toMergedReplicaSets {
@@ -173,6 +175,7 @@ func NewRestoredMergeDispatcherOperator(
 		originNode:          toMergedReplicaSets[0].GetNodeID(),
 		id:                  mergedReplicaSet.ID,
 		dispatcherIDs:       dispatcherIDs,
+		maintainerEpoch:     maintainerEpoch,
 		toMergedReplicaSets: toMergedReplicaSets,
 		checkpointTs:        0,
 		mergedSpanInfo:      spansInfo,
