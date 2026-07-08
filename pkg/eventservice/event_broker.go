@@ -1023,7 +1023,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 
 	start := time.Now()
 	success := c.eventStore.RegisterDispatcher(
-		changefeedID,
 		id,
 		span,
 		info.GetStartTs(),

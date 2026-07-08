@@ -287,7 +287,6 @@ func (m *mockEventStore) GetLogCoordinatorNodeID() node.ID {
 }
 
 func (m *mockEventStore) RegisterDispatcher(
-	changefeedID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	span *heartbeatpb.TableSpan,
 	startTS common.Ts,
