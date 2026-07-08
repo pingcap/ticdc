@@ -86,6 +86,7 @@ type regionRequestWorker struct {
 	upstream       *upstreamHandle
 	eventSink      *regionEventSink
 	failureHandler *regionFailureHandler
+	memoryQuota    *memoryQuotaController
 
 	// request cache with flow control
 	requestCache *requestCache
@@ -100,6 +101,7 @@ func newRegionRequestWorker(
 	upstream *upstreamHandle,
 	eventSink *regionEventSink,
 	failureHandler *regionFailureHandler,
+	memoryQuota *memoryQuotaController,
 ) *regionRequestWorker {
 	workerID := workerIDGen.Add(1)
 	worker := &regionRequestWorker{
@@ -108,6 +110,7 @@ func newRegionRequestWorker(
 		upstream:       upstream,
 		eventSink:      eventSink,
 		failureHandler: failureHandler,
+		memoryQuota:    memoryQuota,
 		requestCache:   requestCache,
 		controlQueue:   newControlQueue(),
 		tracker:        newRegionTracker(workerID),

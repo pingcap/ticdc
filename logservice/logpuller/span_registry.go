@@ -35,6 +35,7 @@ const kvEventsCacheMaxSize = 32
 // subscribedSpan is the local state for one subscribed table span.
 type subscribedSpan struct {
 	subID   SubscriptionID
+	meta    SubscriptionMeta
 	startTs uint64
 	// Whether to filter out the value written by TiCDC itself.
 	// It should be `true` in BDR mode.
@@ -86,6 +87,7 @@ func newSubscribedSpan(
 	resolveLockRateLimiter *resolveLockRateLimiter,
 	resolveLockTaskCh chan resolveLockTask,
 	subID SubscriptionID,
+	meta SubscriptionMeta,
 	span heartbeatpb.TableSpan,
 	startTs uint64,
 	consumeKVEvents func(raw []common.RawKVEntry, wakeCallback func()) bool,
@@ -97,6 +99,7 @@ func newSubscribedSpan(
 
 	rt := &subscribedSpan{
 		subID:      subID,
+		meta:       meta,
 		span:       span,
 		startTs:    startTs,
 		filterLoop: filterLoop,
@@ -151,6 +154,24 @@ func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	log.Debug("subscription client finds slow locked ranges",
 		zap.Uint64("subscriptionID", uint64(span.subID)),
 		zap.Any("ranges", res))
+}
+
+func (span *subscribedSpan) tryMarkInitialized(regionID uint64, resolvedTs uint64) bool {
+	if resolvedTs <= span.startTs {
+		return false
+	}
+	if span.initialized.Load() {
+		return false
+	}
+	if !span.initialized.CompareAndSwap(false, true) {
+		return false
+	}
+	log.Info("subscription client is initialized",
+		zap.Uint64("subscriptionID", uint64(span.subID)),
+		zap.Uint64("regionID", regionID),
+		zap.Uint64("resolvedTs", resolvedTs),
+		zap.Uint64("startTs", span.startTs))
+	return true
 }
 
 func newSpanRegistry(upstream *upstreamHandle) *spanRegistry {

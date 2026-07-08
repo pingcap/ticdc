@@ -31,9 +31,11 @@ import (
 )
 
 const (
-	deferReasonStorePending = "store_pending"
-	deferReasonStoreQuota   = "store_quota"
-	deferReasonWorkerCache  = "worker_cache"
+	deferReasonStorePending  = "store_pending"
+	deferReasonStoreQuota    = "store_quota"
+	deferReasonWorkerCache   = "worker_cache"
+	deferReasonMemoryWarming = "memory_warming"
+	deferReasonMemoryFreeze  = "memory_freeze"
 )
 
 // regionRequestScheduler owns region request admission from the global
@@ -44,6 +46,7 @@ type regionRequestScheduler struct {
 
 	eventSink      *regionEventSink
 	failureHandler *regionFailureHandler
+	memoryQuota    *memoryQuotaController
 
 	// queue stores newly submitted tasks before they are routed to a TiKV store.
 	queue *priorityqueue.PriorityQueue[*regionPriorityTask]
@@ -68,6 +71,7 @@ func newRegionRequestScheduler(client *subscriptionClient) *regionRequestSchedul
 		upstream:        client.upstream,
 		eventSink:       client.eventSink,
 		failureHandler:  client.failureHandler,
+		memoryQuota:     client.memoryQuota,
 		queue:           priorityqueue.New[*regionPriorityTask](),
 		schedulerNotify: make(chan struct{}, 1),
 		storeAvailable:  chann.NewUnlimitedChannelDefault[*requestedStore](),
@@ -183,6 +187,14 @@ func (s *regionRequestScheduler) Close() {
 	})
 }
 
+func (s *regionRequestScheduler) NotifyAvailable() {
+	s.stores.Range(func(_, value any) bool {
+		value.(*requestedStore).NotifyAvailable()
+		return true
+	})
+	s.notifyScheduler()
+}
+
 func (s *regionRequestScheduler) notifyScheduler() {
 	select {
 	case s.schedulerNotify <- struct{}{}:
@@ -236,8 +248,14 @@ func (s *regionRequestScheduler) handleDeferredTasks(ctx context.Context, store 
 			return err
 		}
 		if !ok {
-			store.PushPendingTask(task)
 			s.observeDeferredTask(store, reason)
+			if reason == deferReasonMemoryWarming || reason == deferReasonMemoryFreeze {
+				if s.queue.Push(task) {
+					s.notifyScheduler()
+				}
+				return nil
+			}
+			store.PushPendingTask(task)
 			return nil
 		}
 	}
@@ -267,8 +285,14 @@ func (s *regionRequestScheduler) handleNewTask(
 		return err
 	}
 	if !ok {
-		store.PushPendingTask(task)
 		s.observeDeferredTask(store, reason)
+		if reason == deferReasonMemoryWarming || reason == deferReasonMemoryFreeze {
+			if s.queue.Push(task) {
+				s.notifyScheduler()
+			}
+			return nil
+		}
+		store.PushPendingTask(task)
 	}
 	return nil
 }
@@ -280,13 +304,26 @@ func (s *regionRequestScheduler) tryAdmitTask(
 	region regionInfo,
 ) (bool, string, error) {
 	force := task.Priority() <= forcedPriorityBase
+	var scanQuota *memoryQuotaLease
+	currentTs := s.upstream.pdClock.CurrentTS()
+	quota, ok, reason := s.memoryQuota.acquireScan(region, currentTs)
+	if !ok {
+		return false, reason, nil
+	}
+	scanQuota = quota
 	acquiredQuota, ok := store.quota.TryAcquire()
 	if !ok {
+		if scanQuota != nil {
+			scanQuota.Release()
+		}
 		return false, deferReasonStoreQuota, nil
 	}
-	ok, worker, err := store.AddRegion(ctx, region, force, acquiredQuota)
+	ok, worker, err := store.AddRegion(ctx, region, force, acquiredQuota, scanQuota)
 	if err != nil {
 		acquiredQuota.Release()
+		if scanQuota != nil {
+			scanQuota.Release()
+		}
 		log.Warn("subscription client add region request failed",
 			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 			zap.Uint64("regionID", region.verID.GetID()),
@@ -295,6 +332,9 @@ func (s *regionRequestScheduler) tryAdmitTask(
 	}
 	if !ok {
 		acquiredQuota.Release()
+		if scanQuota != nil {
+			scanQuota.Release()
+		}
 		return false, deferReasonWorkerCache, nil
 	}
 

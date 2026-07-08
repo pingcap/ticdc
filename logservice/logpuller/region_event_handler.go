@@ -56,12 +56,23 @@ type regionEvent struct {
 
 	entries    *cdcpb.Event_Entries_
 	resolvedTs uint64
+
+	memoryQuota *memoryQuotaLease
+}
+
+func (event *regionEvent) needMemoryQuota() bool {
+	return event.entries != nil
+}
+
+func (event *regionEvent) releaseMemoryQuota() {
+	if event.memoryQuota == nil {
+		return
+	}
+	event.memoryQuota.Release()
+	event.memoryQuota = nil
 }
 
 func (event *regionEvent) getSize() int {
-	if event == nil {
-		return 0
-	}
 	size := int(unsafe.Sizeof(*event))
 	if event.entries != nil {
 		size += int(unsafe.Sizeof(*event.entries))
@@ -122,7 +133,12 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	}
 
 	newResolvedTs := uint64(0)
+	quotaEvents := make([]*regionEvent, 0, len(events))
 	for _, event := range events {
+		event := event
+		if event.memoryQuota != nil {
+			quotaEvents = append(quotaEvents, &event)
+		}
 		if len(event.states) == 1 && event.states[0].isStale() {
 			hasError = true
 			h.handleRegionError(event.states[0])
@@ -148,9 +164,15 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			span.advanceResolvedTs(newResolvedTs)
 		}
 	}
+	releaseMemoryQuota := func() {
+		for _, event := range quotaEvents {
+			event.releaseMemoryQuota()
+		}
+	}
 	if len(span.kvEventsCache) > 0 {
 		metricsEventCount.Add(float64(len(span.kvEventsCache)))
 		await := span.consumeKVEvents(span.kvEventsCache, func() {
+			defer releaseMemoryQuota()
 			start := time.Now()
 			span.clearKVEventsCache()
 			metricConsumeKVEventsCallbackDurationClearCache.Observe(time.Since(start).Seconds())
@@ -167,10 +189,12 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		if !await {
 			span.clearKVEventsCache()
 			tryAdvanceResolvedTs()
+			releaseMemoryQuota()
 		}
 		return await
 	} else {
 		tryAdvanceResolvedTs()
+		releaseMemoryQuota()
 	}
 	return false
 }
@@ -227,6 +251,7 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 }
 
 func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
+	event.releaseMemoryQuota()
 	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
 	state := event.mustFirstState()
 	fields := []zap.Field{
@@ -393,11 +418,8 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	}
 
 	if shouldAdvance {
-		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
-			log.Info("subscription client is initialized",
-				zap.Uint64("subscriptionID", uint64(span.subID)),
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("resolvedTs", ts))
+		if span.tryMarkInitialized(regionID, ts) {
+			state.worker.memoryQuota.markSubscriptionInitialized()
 		}
 		lastResolvedTs := span.resolvedTs.Load()
 		nextResolvedPhyTs := oracle.ExtractPhysical(ts)

@@ -84,6 +84,10 @@ type SubscriptionClientConfig struct {
 	RegionRequestWorkerPerStore uint
 	// PendingRegionRequestQueueSize is the total pending region request quota for one TiKV store.
 	PendingRegionRequestQueueSize int
+	// MemoryQuota is the log puller local memory quota in bytes.
+	MemoryQuota uint64
+	// ScanBaseSize is the base admission cost in bytes for one warming region scan.
+	ScanBaseSize uint64
 }
 
 type upstreamHandle struct {
@@ -107,6 +111,7 @@ type SubscriptionClient interface {
 	// subscribe a table span
 	Subscribe(
 		subID SubscriptionID,
+		meta SubscriptionMeta,
 		span heartbeatpb.TableSpan,
 		startTs uint64,
 		consumeKVEvents func(raw []common.RawKVEntry, wakeCallback func()) bool,
@@ -130,6 +135,7 @@ type subscriptionClient struct {
 	failureHandler *regionFailureHandler
 
 	spanRegistry *spanRegistry
+	memoryQuota  *memoryQuotaController
 
 	// rangeTaskCh is used to receive range tasks.
 	// The tasks will be handled in `handleRangeTask` goroutine.
@@ -166,6 +172,7 @@ func NewSubscriptionClient(
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	subClient.spanRegistry = newSpanRegistry(subClient.upstream)
+	subClient.memoryQuota = newMemoryQuotaController(config.MemoryQuota, config.ScanBaseSize)
 
 	subClient.failureHandler = newRegionFailureHandler(
 		subClient.upstream,
@@ -173,8 +180,9 @@ func NewSubscriptionClient(
 		subClient.scheduleRegionRequest,
 		subClient.scheduleRangeRequest,
 	)
-	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient.failureHandler)
+	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient.failureHandler, subClient.memoryQuota)
 	subClient.regionScheduler = newRegionRequestScheduler(subClient)
+	subClient.memoryQuota.SetOnAvailable(subClient.regionScheduler.NotifyAvailable)
 	return subClient
 }
 
@@ -198,24 +206,27 @@ func (s *subscriptionClient) runMetricsUpdater(ctx context.Context) error {
 			dsMetrics := s.eventSink.Metrics()
 			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
-			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 1 {
-				log.Panic("subscription client should have only one area")
-			}
-			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 0 {
-				areaMetric := dsMetrics.MemoryControl.AreaMemoryMetrics[0]
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"log-puller",
-					"max",
-					"default",
-					"default",
-				).Set(float64(areaMetric.MaxMemory()))
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"log-puller",
-					"used",
-					"default",
-					"default",
-				).Set(float64(areaMetric.MemoryUsage()))
-			}
+			used, capacity, _ := s.memoryQuota.Snapshot()
+			scanUsed, warmingScanUsed, warmingScanBudget, scanEstimate, hardLimit := s.memoryQuota.ScanSnapshot()
+			metrics.LogPullerMemoryQuota.WithLabelValues("max").Set(float64(capacity))
+			metrics.LogPullerMemoryQuota.WithLabelValues("used").Set(float64(used))
+			metrics.LogPullerMemoryQuota.WithLabelValues("scan_used").Set(float64(scanUsed))
+			metrics.LogPullerMemoryQuota.WithLabelValues("warming_scan_used").Set(float64(warmingScanUsed))
+			metrics.LogPullerMemoryQuota.WithLabelValues("warming_scan_budget").Set(float64(warmingScanBudget))
+			metrics.LogPullerMemoryQuota.WithLabelValues("scan_estimate").Set(float64(scanEstimate))
+			metrics.LogPullerMemoryQuota.WithLabelValues("hard_limit").Set(float64(hardLimit))
+			metrics.DynamicStreamMemoryUsage.WithLabelValues(
+				"log-puller",
+				"max",
+				"default",
+				"default",
+			).Set(float64(capacity))
+			metrics.DynamicStreamMemoryUsage.WithLabelValues(
+				"log-puller",
+				"used",
+				"default",
+				"default",
+			).Set(float64(used))
 
 			s.regionScheduler.UpdateMetrics()
 			s.spanRegistry.UpdateMetrics()
@@ -230,6 +241,7 @@ func (s *subscriptionClient) runMetricsUpdater(ctx context.Context) error {
 // The rangeTask will be handled in `handleRangeTasks` goroutine.
 func (s *subscriptionClient) Subscribe(
 	subID SubscriptionID,
+	meta SubscriptionMeta,
 	span heartbeatpb.TableSpan,
 	startTs uint64,
 	consumeKVEvents func(raw []common.RawKVEntry, wakeCallback func()) bool,
@@ -247,6 +259,7 @@ func (s *subscriptionClient) Subscribe(
 		s.resolveLockRateLimiter,
 		s.resolveLockTaskCh,
 		subID,
+		meta,
 		span,
 		startTs,
 		consumeKVEvents,
@@ -255,6 +268,7 @@ func (s *subscriptionClient) Subscribe(
 		bdrMode,
 	)
 	s.spanRegistry.Add(rt)
+	s.memoryQuota.addSubscription(rt)
 
 	s.eventSink.AddPath(rt)
 
@@ -335,6 +349,7 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 			zap.Uint64("subscriptionID", uint64(rt.subID)),
 			zap.Error(err))
 	}
+	s.memoryQuota.removeSubscription(rt)
 	s.spanRegistry.Remove(rt.subID)
 }
 

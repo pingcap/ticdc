@@ -74,6 +74,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 		client.resolveLockRateLimiter,
 		client.resolveLockTaskCh,
 		SubscriptionID(1),
+		NewSystemSubscriptionMeta(),
 		rawSpan,
 		100,
 		consumeKVEvents,
@@ -149,12 +150,12 @@ func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
 
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	span1 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(1), heartbeatpb.TableSpan{
+	span1 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(1), NewSystemSubscriptionMeta(), heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
 	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
-	span2 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(2), heartbeatpb.TableSpan{
+	span2 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(2), NewSystemSubscriptionMeta(), heartbeatpb.TableSpan{
 		TableID:  2,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
@@ -262,6 +263,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 		client.resolveLockRateLimiter,
 		client.resolveLockTaskCh,
 		SubscriptionID(1),
+		NewSystemSubscriptionMeta(),
 		rawSpan,
 		100,
 		consumeKVEvents,
@@ -304,7 +306,8 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh: make(chan resolveLockTask, 1),
 		upstream:          &upstreamHandle{pdClock: pdutil.NewClock4Test()},
-		eventSink:         &regionEventSink{ds: &mockDynamicStream{}},
+		eventSink:         &regionEventSink{ds: &mockDynamicStream{}, memoryQuota: newMemoryQuotaController(0, 0)},
+		memoryQuota:       newMemoryQuotaController(0, 0),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
@@ -322,6 +325,7 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 		client.resolveLockRateLimiter,
 		client.resolveLockTaskCh,
 		SubscriptionID(1),
+		NewSystemSubscriptionMeta(),
 		rawSpan,
 		100,
 		consumeKVEvents,
@@ -348,7 +352,8 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 
 func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	client := &subscriptionClient{
-		eventSink: &regionEventSink{ds: &mockDynamicStream{}},
+		eventSink:   &regionEventSink{ds: &mockDynamicStream{}, memoryQuota: newMemoryQuotaController(0, 0)},
+		memoryQuota: newMemoryQuotaController(0, 0),
 	}
 	client.spanRegistry = newSpanRegistry(&upstreamHandle{})
 	client.failureHandler = newRegionFailureHandler(&upstreamHandle{}, client.onTableDrained, nil, nil)
@@ -363,6 +368,7 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
 	}
 	client.spanRegistry.Add(span)
+	client.memoryQuota.addSubscription(span)
 
 	res1 := span.rangeLock.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res1.Status)
@@ -456,7 +462,7 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	sink := &regionEventSink{ctx: ctx, ds: &mockDynamicStream{}}
+	sink := &regionEventSink{ctx: ctx, ds: &mockDynamicStream{}, memoryQuota: newMemoryQuotaController(0, 0)}
 	sink.cond = sync.NewCond(&sink.mu)
 	client := &subscriptionClient{cancel: cancel, eventSink: sink}
 
@@ -500,7 +506,7 @@ func TestEnqueueDeregisterToAllStoresUsesControlQueue(t *testing.T) {
 		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
 		lockedRangeState: &regionlock.LockedRangeState{},
 	}
-	ok, err := worker.requestCache.add(ctx, dummyRegion, true, testRegionRequestQuota())
+	ok, err := worker.requestCache.add(ctx, dummyRegion, true, testRegionRequestQuota(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -644,7 +650,7 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 		case tsCh <- ts:
 		}
 	}
-	client.Subscribe(subID, span, 1, consumeKVEvents, advanceResolvedTs, 0, false)
+	client.Subscribe(subID, NewSystemSubscriptionMeta(), span, 1, consumeKVEvents, advanceResolvedTs, 0, false)
 
 	eventsCh1 <- mockInitializedEvent(11, uint64(subID))
 	targetTs := oracle.GoTimeToTS(pdClock.CurrentTime())
@@ -827,7 +833,7 @@ func TestGetResolvedTargetTs(t *testing.T) {
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
 
-	span := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(1), heartbeatpb.TableSpan{
+	span := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(1), NewSystemSubscriptionMeta(), heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},

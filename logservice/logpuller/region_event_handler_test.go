@@ -80,6 +80,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 	worker := &regionRequestWorker{
 		requestCache: &requestCache{},
 		tracker:      newRegionTracker(0),
+		memoryQuota:  newMemoryQuotaController(0, 0),
 	}
 	region := newRegionInfo(
 		tikv.RegionVerID{},
@@ -219,6 +220,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	worker := &regionRequestWorker{
 		requestCache: &requestCache{},
 		tracker:      newRegionTracker(0),
+		memoryQuota:  newMemoryQuotaController(0, 0),
 	}
 	state1 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(1, 1, 1)}, uint64(subID1), worker, nil)
 	{
@@ -355,12 +357,15 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 
 	span := &subscribedSpan{
 		subID:           SubscriptionID(1),
+		startTs:         100,
 		rangeLock:       l,
 		advanceInterval: 100,
 	}
 	span.lastAdvanceTime.Store(0)
-	worker := &regionRequestWorker{}
-	worker.tracker = newRegionTracker(0)
+	worker := &regionRequestWorker{
+		tracker:     newRegionTracker(0),
+		memoryQuota: newMemoryQuotaController(0, 0),
+	}
 	state := newRegionFeedState(
 		regionInfo{
 			verID:            tikv.NewRegionVerID(1, 1, 1),
@@ -373,4 +378,18 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 	)
 
 	require.Equal(t, uint64(200), handleResolvedTs(span, state, 300))
+	require.True(t, span.initialized.Load())
+}
+
+func TestTryMarkSpanInitializedByResolvedTs(t *testing.T) {
+	span := &subscribedSpan{
+		subID:   SubscriptionID(1),
+		startTs: 100,
+	}
+
+	require.False(t, span.tryMarkInitialized(1, 100))
+	require.False(t, span.initialized.Load())
+	require.True(t, span.tryMarkInitialized(1, 101))
+	require.True(t, span.initialized.Load())
+	require.False(t, span.tryMarkInitialized(1, 102))
 }

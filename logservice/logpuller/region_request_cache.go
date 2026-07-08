@@ -55,16 +55,21 @@ type regionReq struct {
 	// quota is acquired before the request enters requestCache and released
 	// when the request leaves the worker window.
 	quota *regionRequestQuota
+	// scanQuota is acquired by the memory quota controller before a warming
+	// scan enters requestCache. It is released when the scan initializes or is
+	// aborted.
+	scanQuota *memoryQuotaLease
 
 	// stage is guarded by requestCache.mu.
 	stage regionReqStage
 }
 
-func newRegionReq(region regionInfo, quota *regionRequestQuota) *regionReq {
+func newRegionReq(region regionInfo, quota *regionRequestQuota, scanQuota *memoryQuotaLease) *regionReq {
 	return &regionReq{
 		regionInfo: region,
 		createTime: time.Now(),
 		quota:      quota,
+		scanQuota:  scanQuota,
 		stage:      regionReqStageQueued,
 	}
 }
@@ -108,7 +113,11 @@ func newRequestCache(maxPendingCount int, onSpaceAvailable func()) *requestCache
 
 // add admits a region request into the worker window.
 func (c *requestCache) add(
-	ctx context.Context, region regionInfo, force bool, quota *regionRequestQuota,
+	ctx context.Context,
+	region regionInfo,
+	force bool,
+	quota *regionRequestQuota,
+	scanQuota *memoryQuotaLease,
 ) (bool, error) {
 	start := time.Now()
 	ticker := time.NewTicker(addReqRetryInterval)
@@ -116,7 +125,7 @@ func (c *requestCache) add(
 	retries := addReqRetryLimit
 
 	for {
-		if c.tryAdd(region, force, quota) {
+		if c.tryAdd(region, force, quota, scanQuota) {
 			metrics.SubscriptionClientAddRegionRequestDuration.Observe(time.Since(start).Seconds())
 			return true, nil
 		}
@@ -134,7 +143,12 @@ func (c *requestCache) add(
 	}
 }
 
-func (c *requestCache) tryAdd(region regionInfo, force bool, quota *regionRequestQuota) bool {
+func (c *requestCache) tryAdd(
+	region regionInfo,
+	force bool,
+	quota *regionRequestQuota,
+	scanQuota *memoryQuotaLease,
+) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -142,7 +156,7 @@ func (c *requestCache) tryAdd(region regionInfo, force bool, quota *regionReques
 		return false
 	}
 
-	req := newRegionReq(region, quota)
+	req := newRegionReq(region, quota, scanQuota)
 	c.requests[req] = struct{}{}
 	c.queue.Push(req)
 	return true
@@ -235,6 +249,9 @@ func (c *requestCache) remove(req *regionReq) bool {
 
 	if removed {
 		req.quota.Release()
+		if req.scanQuota != nil {
+			req.scanQuota.Release()
+		}
 		c.notifySpace()
 	}
 	return removed
@@ -281,6 +298,9 @@ func (c *requestCache) releaseRemovedReqs(removedReqs []*regionReq) {
 	if len(removedReqs) > 0 {
 		for _, req := range removedReqs {
 			req.quota.Release()
+			if req.scanQuota != nil {
+				req.scanQuota.Release()
+			}
 		}
 		c.notifySpace()
 	}
