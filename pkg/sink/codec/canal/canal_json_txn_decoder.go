@@ -97,11 +97,37 @@ func (d *txnDecoder) HasNext() (common.MessageType, bool) {
 }
 
 func (d *txnDecoder) NextDMLMessage() *common.DMLMessage {
-	event := d.nextDMLEvent()
-	if event == nil {
-		return nil
+	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
+		messageType := common.MessageTypeUnknown
+		if d.msg != nil {
+			messageType = d.msg.messageType()
+		}
+		log.Panic("message type is not row changed",
+			zap.Any("messageType", messageType), zap.Any("msg", d.msg))
 	}
-	return common.NewDMLMessageFromEvent(event)
+
+	msg := d.msg
+	d.msg = nil
+	schemaName := *msg.getSchema()
+	tableName := *msg.getTable()
+	tableID := tableIDAllocator.Allocate(schemaName, tableName)
+
+	var rowType commonType.RowType
+	switch msg.eventType() {
+	case canal.EventType_DELETE:
+		rowType = commonType.RowTypeDelete
+	case canal.EventType_INSERT:
+		rowType = commonType.RowTypeInsert
+	case canal.EventType_UPDATE:
+		rowType = commonType.RowTypeUpdate
+	default:
+		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
+	}
+
+	return common.NewDMLMessage(tableID, schemaName, tableName, msg.getCommitTs(), rowType, func() *commonEvent.DMLEvent {
+		d.msg = msg
+		return d.nextDMLEvent()
+	})
 }
 
 func (d *txnDecoder) nextDMLEvent() *commonEvent.DMLEvent {

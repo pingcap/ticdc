@@ -149,11 +149,31 @@ func (d *Decoder) NextResolvedEvent() uint64 {
 
 // NextDMLMessage returns the next dml message if exists
 func (d *Decoder) NextDMLMessage() *common.DMLMessage {
-	event := d.nextDMLEvent()
-	if event == nil {
-		return nil
+	if d.msg == nil || (d.msg.Data == nil && d.msg.Old == nil) {
+		log.Panic("invalid data for the DML event", zap.String("message", util.RedactAny(d.msg)))
 	}
-	return common.NewDMLMessageFromEvent(event)
+
+	msg := d.msg
+	d.msg = nil
+
+	return common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), func() *commonEvent.DMLEvent {
+		d.msg = msg
+		return d.nextDMLEvent()
+	})
+}
+
+func rowTypeFromMessageType(tp MessageType) commonType.RowType {
+	switch tp {
+	case DMLTypeInsert:
+		return commonType.RowTypeInsert
+	case DMLTypeUpdate:
+		return commonType.RowTypeUpdate
+	case DMLTypeDelete:
+		return commonType.RowTypeDelete
+	default:
+		log.Panic("unknown row type for the DML message", zap.Any("type", tp))
+	}
+	return commonType.RowTypeInsert
 }
 
 func (d *Decoder) nextDMLEvent() *commonEvent.DMLEvent {

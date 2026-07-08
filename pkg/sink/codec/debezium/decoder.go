@@ -152,11 +152,52 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 
 // NextDMLMessage returns the next dml message if exists
 func (d *decoder) NextDMLMessage() *common.DMLMessage {
-	event := d.nextDMLEvent()
-	if event == nil {
-		return nil
+	if len(d.valuePayload) == 0 {
+		log.Panic("next DML message failed, since value payload is empty")
 	}
-	return common.NewDMLMessageFromEvent(event)
+	if d.config.DebeziumDisableSchema {
+		log.Panic("next DML message failed, since DebeziumDisableSchema is true")
+	}
+	if !d.config.EnableTiDBExtension {
+		log.Panic("next DML message failed, since EnableTiDBExtension is false")
+	}
+
+	keyPayload := d.keyPayload
+	keySchema := d.keySchema
+	valuePayload := d.valuePayload
+	valueSchema := d.valueSchema
+	commitTs := d.getCommitTs()
+	schemaName := d.getSchemaName()
+	tableName := d.getTableName()
+	rowType := d.rowType()
+	tableID := tableIDAllocator.Allocate(schemaName, tableName)
+	d.clear()
+
+	return common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
+		d.keyPayload = keyPayload
+		d.keySchema = keySchema
+		d.valuePayload = valuePayload
+		d.valueSchema = valueSchema
+		return d.nextDMLEvent()
+	})
+}
+
+func (d *decoder) rowType() commonType.RowType {
+	op, ok := d.valuePayload["op"]
+	if !ok {
+		log.Panic("DML message op not found")
+	}
+	switch op {
+	case "c":
+		return commonType.RowTypeInsert
+	case "u":
+		return commonType.RowTypeUpdate
+	case "d":
+		return commonType.RowTypeDelete
+	default:
+		log.Panic("unknown op for the DML message", zap.Any("op", op))
+	}
+	return commonType.RowTypeInsert
 }
 
 func (d *decoder) nextDMLEvent() *commonEvent.DMLEvent {

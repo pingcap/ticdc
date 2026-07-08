@@ -380,28 +380,32 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 	case common.MessageTypeRow:
 		var counter int
 		dmlMessage := progress.decoder.NextDMLMessage()
-		var row *event.DMLEvent
-		if dmlMessage != nil {
-			row = dmlMessage.ToDMLEvent()
-		}
-		if row == nil {
+		if dmlMessage == nil {
 			if w.protocol != config.ProtocolSimple {
-				log.Panic("DML event is nil, it's not expected",
+				log.Panic("DML message is nil, it's not expected",
 					zap.Int32("partition", partition), zap.Any("offset", offset))
 			}
-			log.Debug("DML event is nil, it's cached", zap.Int32("partition", partition), zap.Any("offset", offset))
+			log.Debug("DML message is nil, it's cached", zap.Int32("partition", partition), zap.Any("offset", offset))
 			break
 		}
 
-		w.appendMessage2Group(common.NewDMLMessageFromEvent(row), progress, offset)
+		w.appendMessage2Group(dmlMessage, progress, offset)
 		counter++
 		for {
 			_, hasNext = progress.decoder.HasNext()
 			if !hasNext {
 				break
 			}
-			row = progress.decoder.NextDMLMessage().ToDMLEvent()
-			w.appendMessage2Group(common.NewDMLMessageFromEvent(row), progress, offset)
+			dmlMessage = progress.decoder.NextDMLMessage()
+			if dmlMessage == nil {
+				if w.protocol != config.ProtocolSimple {
+					log.Panic("DML message is nil, it's not expected",
+						zap.Int32("partition", partition), zap.Any("offset", offset))
+				}
+				log.Debug("DML message is nil, it's cached", zap.Int32("partition", partition), zap.Any("offset", offset))
+				break
+			}
+			w.appendMessage2Group(dmlMessage, progress, offset)
 			counter++
 		}
 		// If the message containing only one event exceeds the length limit, CDC will allow it and issue a warning.
@@ -588,9 +592,15 @@ func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset kaf
 	}
 }
 
+func (w *writer) messageWithPartitionCheck(message *common.DMLMessage, partition int32, offset kafka.Offset) *common.DMLMessage {
+	return common.NewDMLMessage(message.TableID, message.Schema, message.Table, message.GetCommitTs(), message.RowType, func() *event.DMLEvent {
+		row := message.ToDMLEvent()
+		w.checkPartition(row, partition, offset)
+		return row
+	})
+}
+
 func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *partitionProgress, offset kafka.Offset) {
-	dml := message.ToDMLEvent()
-	w.checkPartition(dml, progress.partition, offset)
 	// if the kafka cluster is normal, this should not hit.
 	// else if the cluster is abnormal, the consumer may consume old message, then cause the watermark fallback.
 	var (
@@ -613,6 +623,7 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 		return
 	}
 	if commitTs >= group.HighWatermark {
+		message = w.messageWithPartitionCheck(message, progress.partition, offset)
 		group.AppendMessage(message, false)
 		log.Debug("DML event append to the group",
 			zap.Int32("partition", group.Partition), zap.Any("offset", offset),
@@ -627,7 +638,7 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 			zap.Uint64("commitTs", commitTs), zap.Uint64("HighWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", message.RowType))
-		group.AppendMessage(message, true)
+		group.AppendMessage(w.messageWithPartitionCheck(message, progress.partition, offset), true)
 		return
 	}
 	switch w.protocol {
@@ -644,7 +655,7 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", message.RowType),
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
-			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
+			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", false))
 	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro,
 		config.ProtocolDebezium, config.ProtocolDebeziumAvro:
 		// for partition table, these protocols cannot assign physical table id to each dml message,
@@ -655,7 +666,7 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 				zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 				zap.Stringer("eventType", message.RowType), zap.Any("protocol", w.protocol))
-			group.AppendMessage(message, true)
+			group.AppendMessage(w.messageWithPartitionCheck(message, progress.partition, offset), true)
 			return
 		}
 		log.Warn("DML event fallback row, since less than the group high watermark, ignore it",
@@ -665,7 +676,7 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", message.RowType),
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
-			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
+			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", false))
 	default:
 		log.Panic("unknown protocol", zap.Any("protocol", w.protocol))
 	}

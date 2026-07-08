@@ -351,9 +351,8 @@ func (c *consumer) appendDMLEvents(
 		if tp == common.MessageTypeRow {
 			c.dmlCount.Add(1)
 
-			row := decoder.NextDMLMessage().ToDMLEvent()
-			row.PhysicalTableID = tableID
-			c.appendMessage2Group(common.NewDMLMessageFromEvent(row), fileIdx.EnableTableAcrossNodes)
+			message := decoder.NextDMLMessage()
+			c.appendMessage2Group(messageWithPhysicalTableID(message, tableID), fileIdx.EnableTableAcrossNodes)
 			filteredCnt++
 		}
 	}
@@ -364,6 +363,14 @@ func (c *consumer) appendDMLEvents(
 		zap.Int("filteredRowsCnt", filteredCnt))
 
 	return err
+}
+
+func messageWithPhysicalTableID(message *common.DMLMessage, tableID int64) *common.DMLMessage {
+	return common.NewDMLMessage(tableID, message.Schema, message.Table, message.GetCommitTs(), message.RowType, func() *event.DMLEvent {
+		row := message.ToDMLEvent()
+		row.PhysicalTableID = tableID
+		return row
+	})
 }
 
 func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {

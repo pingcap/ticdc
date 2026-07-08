@@ -135,11 +135,28 @@ func (b *decoder) NextDMLMessage() *common.DMLMessage {
 		log.Panic("batch decoder is closed, cannot fetch the next DML event")
 	}
 
-	e, err := csvMsg2RowChangedEvent(b.codecConfig, b.msg, b.tableInfo)
-	if err != nil {
-		log.Panic("convert message to event failed", zap.Error(err))
+	msg := *b.msg
+	msg.columns = append([]any(nil), b.msg.columns...)
+	msg.preColumns = append([]any(nil), b.msg.preColumns...)
+
+	rowType := commonType.RowTypeInsert
+	if msg.opType == operationDelete {
+		rowType = commonType.RowTypeDelete
 	}
-	return common.NewDMLMessageFromEvent(e)
+
+	return common.NewDMLMessage(
+		b.tableInfo.TableName.TableID,
+		msg.schemaName,
+		msg.tableName,
+		msg.commitTs,
+		rowType,
+		func() *commonEvent.DMLEvent {
+			e, err := csvMsg2RowChangedEvent(b.codecConfig, &msg, b.tableInfo)
+			if err != nil {
+				log.Panic("convert message to event failed", zap.Error(err))
+			}
+			return e
+		})
 }
 
 // NextDDLEvent implements the Decoder interface.

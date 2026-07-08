@@ -115,30 +115,48 @@ func (d *decoder) NextResolvedEvent() uint64 {
 
 // NextDMLMessage returns the next row changed message if exists
 func (d *decoder) NextDMLMessage() *common.DMLMessage {
-	event := d.nextDMLEvent()
-	if event == nil {
-		return nil
+	keyMap, valueMap, valueSchema, isDelete, deleteCommitTs := d.decodeDMLPayload()
+	schemaName, tableName := schemaAndTableName(valueSchema)
+	commitTs := deleteCommitTs
+	if commitTs == 0 && !isDelete {
+		commitTs = uint64(valueMap[tidbCommitTs].(int64))
 	}
-	return common.NewDMLMessageFromEvent(event)
+	rowType := commonType.RowTypeInsert
+	if isDelete {
+		rowType = commonType.RowTypeDelete
+	}
+	tableID := tableIDAllocator.Allocate(schemaName, tableName)
+	return common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
+		return d.assembleDMLEventFromDecoded(keyMap, valueMap, valueSchema, isDelete, deleteCommitTs)
+	})
 }
 
 func (d *decoder) nextDMLEvent() *commonEvent.DMLEvent {
+	keyMap, valueMap, valueSchema, isDelete, deleteCommitTs := d.decodeDMLPayload()
+	return d.assembleDMLEventFromDecoded(keyMap, valueMap, valueSchema, isDelete, deleteCommitTs)
+}
+
+func (d *decoder) decodeDMLPayload() (
+	keyMap map[string]interface{},
+	valueMap map[string]interface{},
+	valueSchema map[string]interface{},
+	isDelete bool,
+	deleteCommitTs uint64,
+) {
 	var (
-		valueMap    map[string]interface{}
-		valueSchema map[string]interface{}
-		err         error
+		keySchema map[string]interface{}
+		err       error
 	)
 
 	ctx := context.Background()
-	keyMap, keySchema, err := d.decodeKey(ctx)
+	keyMap, keySchema, err = d.decodeKey(ctx)
 	if err != nil {
 		log.Panic("decode key failed", zap.Error(err))
 	}
 
 	// for the delete event, only have key part, it holds primary key or the unique key columns.
 	// for the insert / update, extract the value part, it holds all columns.
-	isDelete := len(d.value) == 0 || d.isDeleteValue()
-	deleteCommitTs := uint64(0)
+	isDelete = len(d.value) == 0 || d.isDeleteValue()
 	if isDelete {
 		// delete event only have key part, treat it as the value part also.
 		if d.isDeleteValue() {
@@ -153,6 +171,16 @@ func (d *decoder) nextDMLEvent() *commonEvent.DMLEvent {
 		}
 	}
 
+	return keyMap, valueMap, valueSchema, isDelete, deleteCommitTs
+}
+
+func (d *decoder) assembleDMLEventFromDecoded(
+	keyMap map[string]interface{},
+	valueMap map[string]interface{},
+	valueSchema map[string]interface{},
+	isDelete bool,
+	deleteCommitTs uint64,
+) *commonEvent.DMLEvent {
 	event, err := assembleEvent(keyMap, valueMap, valueSchema, isDelete)
 	if err != nil {
 		log.Panic("assemble event failed", zap.Error(err))
@@ -281,10 +309,7 @@ func assembleEvent(
 		columns = append(columns, tiCol)
 	}
 
-	// "namespace.schema"
-	namespace := schema["namespace"].(string)
-	schemaName := strings.Split(namespace, ".")[1]
-	tableName := schema["name"].(string)
+	schemaName, tableName := schemaAndTableName(schema)
 
 	var commitTs int64
 	if !isDelete {
@@ -313,6 +338,11 @@ func assembleEvent(
 	}
 	event.RowTypes = append(event.RowTypes, rowType)
 	return event, nil
+}
+
+func schemaAndTableName(schema map[string]interface{}) (string, string) {
+	namespace := schema["namespace"].(string)
+	return strings.Split(namespace, ".")[1], schema["name"].(string)
 }
 
 func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]interface{}) *commonType.TableInfo {
