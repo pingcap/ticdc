@@ -15,7 +15,6 @@ package schemastore
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"sync"
 
@@ -98,7 +97,6 @@ func (p *ddlJobFetcher) run(startTs uint64) error {
 			p.tryAdvanceResolvedTs(subID, ts)
 		}
 		p.subClient.Subscribe(
-			fmt.Sprintf("schema-store/ddl-job-fetcher-%d", p.keyspaceID),
 			subID,
 			span,
 			startTs,

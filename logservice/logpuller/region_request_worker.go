@@ -373,7 +373,6 @@ func (s *regionRequestWorker) processRegionSendTask(
 		subID := region.subscribedSpan.subID
 		log.Debug("region request worker gets a singleRegionInfo",
 			zap.Uint64("workerID", s.workerID),
-			zap.String("changefeedID", region.subscribedSpan.changefeedID),
 			zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Uint64("regionID", region.verID.GetID()),
 			zap.String("addr", s.store.storeAddr),

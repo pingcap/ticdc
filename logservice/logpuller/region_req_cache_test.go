@@ -33,10 +33,9 @@ func createTestRegionInfo(subID SubscriptionID, regionID uint64) regionInfo {
 	}
 
 	subscribedSpan := &subscribedSpan{
-		subID:        subID,
-		changefeedID: "test/test-changefeed",
-		startTs:      100,
-		span:         span,
+		subID:   subID,
+		startTs: 100,
+		span:    span,
 	}
 
 	return newRegionInfo(verID, span, nil, subscribedSpan, false)

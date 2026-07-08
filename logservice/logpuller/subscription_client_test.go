@@ -68,7 +68,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	}
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	span := client.newSubscribedSpan("test/test-changefeed", SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, false)
 	client.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 	client.totalSpans.spanMap[SubscriptionID(1)] = span
 	client.pdClock = pdutil.NewClock4Test()
@@ -138,12 +138,12 @@ func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
 
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	span1 := client.newSubscribedSpan("test/test-changefeed", SubscriptionID(1), heartbeatpb.TableSpan{
+	span1 := client.newSubscribedSpan(SubscriptionID(1), heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
 	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
-	span2 := client.newSubscribedSpan("test/test-changefeed", SubscriptionID(2), heartbeatpb.TableSpan{
+	span2 := client.newSubscribedSpan(SubscriptionID(2), heartbeatpb.TableSpan{
 		TableID:  2,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
@@ -246,7 +246,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 	}
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	span := client.newSubscribedSpan("test/test-changefeed", SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, false)
 
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
@@ -294,7 +294,7 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	}
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	span := client.newSubscribedSpan("test/test-changefeed", SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, true)
+	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, true)
 
 	res := span.rangeLock.LockRange(context.Background(), rawSpan.StartKey, rawSpan.EndKey, 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
@@ -586,7 +586,6 @@ func TestSubscribeUsesInitialScanTaskPriority(t *testing.T) {
 	advanceResolvedTs := func(uint64) {}
 
 	client.Subscribe(
-		"test/recent-changefeed",
 		SubscriptionID(1),
 		span,
 		oracle.GoTimeToTS(currentTime.Add(-time.Minute)),
@@ -596,7 +595,6 @@ func TestSubscribeUsesInitialScanTaskPriority(t *testing.T) {
 		false,
 	)
 	client.Subscribe(
-		"test/old-changefeed",
 		SubscriptionID(2),
 		span,
 		oracle.GoTimeToTS(currentTime.Add(-31*time.Minute)),
@@ -684,10 +682,9 @@ func newScanPriorityTestSpan() (heartbeatpb.TableSpan, *subscribedSpan) {
 		EndKey:   []byte("z"),
 	}
 	span := &subscribedSpan{
-		subID:        SubscriptionID(1),
-		changefeedID: "test/test-changefeed",
-		span:         rawSpan,
-		rangeLock:    regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
+		subID:     SubscriptionID(1),
+		span:      rawSpan,
+		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
 	}
 	return rawSpan, span
 }
@@ -846,7 +843,7 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 		case tsCh <- ts:
 		}
 	}
-	client.Subscribe("test/test-changefeed", subID, span, 1, consumeKVEvents, advanceResolvedTs, 0, false)
+	client.Subscribe(subID, span, 1, consumeKVEvents, advanceResolvedTs, 0, false)
 
 	eventsCh1 <- mockInitializedEvent(11, uint64(subID))
 	targetTs := oracle.GoTimeToTS(pdClock.CurrentTime())
@@ -1029,7 +1026,7 @@ func TestGetResolvedTargetTs(t *testing.T) {
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
 
-	span := client.newSubscribedSpan("test/test-changefeed", SubscriptionID(1), heartbeatpb.TableSpan{
+	span := client.newSubscribedSpan(SubscriptionID(1), heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
