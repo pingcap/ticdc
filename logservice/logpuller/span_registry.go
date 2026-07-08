@@ -156,6 +156,24 @@ func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 		zap.Any("ranges", res))
 }
 
+func (span *subscribedSpan) tryMarkInitialized(regionID uint64, resolvedTs uint64) bool {
+	if resolvedTs <= span.startTs {
+		return false
+	}
+	if span.initialized.Load() {
+		return false
+	}
+	if !span.initialized.CompareAndSwap(false, true) {
+		return false
+	}
+	log.Info("subscription client is initialized",
+		zap.Uint64("subscriptionID", uint64(span.subID)),
+		zap.Uint64("regionID", regionID),
+		zap.Uint64("resolvedTs", resolvedTs),
+		zap.Uint64("startTs", span.startTs))
+	return true
+}
+
 func newSpanRegistry(upstream *upstreamHandle) *spanRegistry {
 	return &spanRegistry{
 		spans:    make(map[SubscriptionID]*subscribedSpan),

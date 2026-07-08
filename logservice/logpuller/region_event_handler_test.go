@@ -357,6 +357,7 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 
 	span := &subscribedSpan{
 		subID:           SubscriptionID(1),
+		startTs:         100,
 		rangeLock:       l,
 		advanceInterval: 100,
 	}
@@ -377,4 +378,18 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 	)
 
 	require.Equal(t, uint64(200), handleResolvedTs(span, state, 300))
+	require.True(t, span.initialized.Load())
+}
+
+func TestTryMarkSpanInitializedByResolvedTs(t *testing.T) {
+	span := &subscribedSpan{
+		subID:   SubscriptionID(1),
+		startTs: 100,
+	}
+
+	require.False(t, span.tryMarkInitialized(1, 100))
+	require.False(t, span.initialized.Load())
+	require.True(t, span.tryMarkInitialized(1, 101))
+	require.True(t, span.initialized.Load())
+	require.False(t, span.tryMarkInitialized(1, 102))
 }

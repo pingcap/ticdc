@@ -62,7 +62,6 @@ func TestMemoryQuotaAdmissionLevels(t *testing.T) {
 
 	controller.addSubscription(warmingSpan)
 	controller.addSubscription(normalSpan)
-	controller.markSubscriptionInitialized(normalSpan)
 
 	lease, ok, reason := controller.acquireScan(newTestQuotaRegion(warmingSpan), currentTs)
 	require.True(t, ok)
@@ -96,7 +95,7 @@ func TestMemoryQuotaAdmissionLevels(t *testing.T) {
 	require.Equal(t, admissionNormal, level)
 }
 
-func TestHighLagUninitializedScanBlockedByMemoryGate(t *testing.T) {
+func TestHighLagScanBlockedByMemoryGate(t *testing.T) {
 	controller := newMemoryQuotaController(100, 0)
 	controller.scanEstimate = 10
 	warmingSpan := newTestQuotaSpan(1, common.NewChangeFeedIDWithName("warming", common.DefaultKeyspaceName))

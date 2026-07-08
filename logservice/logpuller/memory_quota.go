@@ -215,7 +215,7 @@ func (c *memoryQuotaController) removeSubscription(span *subscribedSpan) {
 	}
 }
 
-func (c *memoryQuotaController) markSubscriptionInitialized(span *subscribedSpan) {
+func (c *memoryQuotaController) markSubscriptionInitialized() {
 	c.onMemoryAvailable()
 }
 
