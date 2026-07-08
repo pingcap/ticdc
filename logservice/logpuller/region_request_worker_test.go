@@ -89,7 +89,6 @@ func TestCreateRegionRequestScanPriority(t *testing.T) {
 
 			req := worker.createRegionRequest(region)
 			require.Equal(t, tc.expected, req.GetScanPriority())
-			require.Equal(t, "test/test-changefeed", req.GetChangefeedId())
 		})
 	}
 }

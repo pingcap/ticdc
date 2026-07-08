@@ -22644,7 +22644,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "",
+          "description": "Queued CDC incremental scan jobs by priority per TiKV instance.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -22656,6 +22656,335 @@
             "w": 12,
             "x": 0,
             "y": 41
+          },
+          "hiddenSeries": false,
+          "id": 62042,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": false,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "paceLength": 10,
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(tikv_cdc_scan_scheduler_queue_length{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}) by (instance, priority)",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-{{priority}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "CDC Scan Scheduler Queue Length",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "Running CDC incremental scan jobs by slot kind per TiKV instance.",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 41
+          },
+          "hiddenSeries": false,
+          "id": 62043,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": false,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "paceLength": 10,
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(tikv_cdc_scan_scheduler_running{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}) by (instance, slot)",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-{{slot}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "CDC Scan Scheduler Running",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "Time spent waiting in the CDC scan scheduler before dispatch.",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 48
+          },
+          "hiddenSeries": false,
+          "id": 62044,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": false,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "paceLength": 10,
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_cdc_scan_scheduler_dispatch_latency_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (le, instance, priority, slot))",
+              "format": "time_series",
+              "hide": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-{{priority}}-{{slot}}-p99",
+              "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(tikv_cdc_scan_scheduler_dispatch_latency_seconds_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance, priority, slot) / sum(rate(tikv_cdc_scan_scheduler_dispatch_latency_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance, priority, slot)",
+              "format": "time_series",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "{{instance}}-{{priority}}-{{slot}}-avg",
+              "refId": "B"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "CDC Scan Scheduler Dispatch Latency",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 55
           },
           "hiddenSeries": false,
           "id": 72,
@@ -22776,7 +23105,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 41
+            "y": 55
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -22853,7 +23182,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 48
+            "y": 62
           },
           "hiddenSeries": false,
           "id": 22297,
@@ -22971,7 +23300,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 48
+            "y": 62
           },
           "hiddenSeries": false,
           "id": 139,
@@ -23082,7 +23411,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 55
+            "y": 69
           },
           "hiddenSeries": false,
           "id": 76,
@@ -23193,7 +23522,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 55
+            "y": 69
           },
           "hiddenSeries": false,
           "id": 22298,
@@ -23306,7 +23635,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 62
+            "y": 76
           },
           "hiddenSeries": false,
           "id": 152,
@@ -23444,7 +23773,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 62
+            "y": 76
           },
           "hiddenSeries": false,
           "id": 70,
@@ -23549,7 +23878,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 69
+            "y": 83
           },
           "hiddenSeries": false,
           "id": 143,
@@ -23674,7 +24003,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 69
+            "y": 83
           },
           "hiddenSeries": false,
           "id": 153,
@@ -23788,7 +24117,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 76
+            "y": 90
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -23864,7 +24193,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 76
+            "y": 90
           },
           "hiddenSeries": false,
           "id": 145,
@@ -24002,7 +24331,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 83
+            "y": 97
           },
           "hiddenSeries": false,
           "id": 142,
@@ -24119,7 +24448,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 83
+            "y": 97
           },
           "hiddenSeries": false,
           "id": 141,
