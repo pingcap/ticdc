@@ -306,6 +306,7 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 	g.Go(func() error { return s.eventSink.Run(ctx) })
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.handleRegions(ctx, g) })
+	g.Go(func() error { return s.failureHandler.Dispatch(ctx) })
 	g.Go(func() error { return s.failureHandler.Run(ctx) })
 	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
 	g.Go(func() error { return s.spanRegistry.Run(ctx) })

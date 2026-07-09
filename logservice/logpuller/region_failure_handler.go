@@ -64,44 +64,21 @@ func (r *regionFailureHandler) Report(errInfo regionErrorInfo) {
 }
 
 func (r *regionFailureHandler) Run(ctx context.Context) error {
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-
-	handlePendingFailures := func() error {
-		for {
-			batch := r.cache.popBatch(errCacheDispatchBatchSize)
-			for _, errInfo := range batch {
-				select {
-				case <-ctx.Done():
-					log.Info("subscription client handle errors and exit")
-					return ctx.Err()
-				default:
-				}
-				if err := r.handleError(ctx, errInfo); err != nil {
-					return err
-				}
-			}
-			if len(batch) < errCacheDispatchBatchSize {
-				return nil
-			}
-		}
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info("subscription client handle errors and exit")
 			return ctx.Err()
-		case <-ticker.C:
-			if err := handlePendingFailures(); err != nil {
-				return err
-			}
-		case <-r.cache.notify:
-			if err := handlePendingFailures(); err != nil {
+		case errInfo := <-r.cache.errCh:
+			if err := r.handleError(ctx, errInfo); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+func (r *regionFailureHandler) Dispatch(ctx context.Context) error {
+	return r.cache.dispatch(ctx)
 }
 
 func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionErrorInfo) error {
