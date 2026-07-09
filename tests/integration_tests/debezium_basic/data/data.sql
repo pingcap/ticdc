@@ -118,7 +118,7 @@ create table tp_time
     c_timestamp timestamp null,
     c_time      time      null,
     c_year      year      null,
-    c_txt varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+    c_varchar varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
     constraint pk
         primary key (id)
 );
@@ -126,11 +126,11 @@ create table tp_time
 insert into tp_time()
 values ();
 
-insert into tp_time(c_date, c_datetime, c_timestamp, c_time, c_year, c_txt)
-values ('2020-02-20', '2020-02-20 02:20:20', '2020-02-20 02:20:20', '02:20:20', '2020','cc');
+insert into tp_time(c_date, c_datetime, c_timestamp, c_time, c_year, c_varchar)
+values ('2020-02-20', '2020-02-20 02:20:20', '2020-02-20 02:20:20', '02:20:20', '2020','2020');
 
-insert into tp_time(c_date, c_datetime, c_timestamp, c_time, c_year, c_txt)
-values ('2022-02-22', '2022-02-22 22:22:22', '2020-02-20 02:20:20', '02:20:20', '2021', 'dd');
+insert into tp_time(c_date, c_datetime, c_timestamp, c_time, c_year, c_varchar)
+values ('2022-02-22', '2022-02-22 22:22:22', '2020-02-20 02:20:20', '02:20:20', '2021', '2021');
 
 update tp_time set c_year = '2022' where c_year = '2020';
 update tp_time set c_date = '2022-02-22' where c_datetime = '2020-02-20 02:20:20';
