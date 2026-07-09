@@ -81,11 +81,6 @@ type spanRegistry struct {
 	pdClock pdutil.Clock
 }
 
-type spanAndTargetTs struct {
-	span     *subscribedSpan
-	targetTs uint64
-}
-
 func newSubscribedSpan(
 	ctx context.Context,
 	resolveLockRateLimiter *resolveLockRateLimiter,
@@ -213,6 +208,11 @@ func (r *spanRegistry) UpdateMetrics() {
 			metrics.LogPullerResolvedTsLag.Set(resolvedTsLag)
 		}
 	}
+}
+
+type spanAndTargetTs struct {
+	span     *subscribedSpan
+	targetTs uint64
 }
 
 func (r *spanRegistry) runResolveLockChecker(ctx context.Context) error {
