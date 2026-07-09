@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -64,21 +65,22 @@ func (r *regionFailureHandler) Report(errInfo regionErrorInfo) {
 }
 
 func (r *regionFailureHandler) Run(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			log.Info("subscription client handle errors and exit")
-			return ctx.Err()
-		case errInfo := <-r.cache.errCh:
-			if err := r.handleError(ctx, errInfo); err != nil {
-				return err
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error { return r.cache.dispatch(ctx) })
+	g.Go(func() error {
+		for {
+			select {
+			case <-ctx.Done():
+				log.Info("subscription client handle errors and exit")
+				return ctx.Err()
+			case errInfo := <-r.cache.errCh:
+				if err := r.handleError(ctx, errInfo); err != nil {
+					return err
+				}
 			}
 		}
-	}
-}
-
-func (r *regionFailureHandler) Dispatch(ctx context.Context) error {
-	return r.cache.dispatch(ctx)
+	})
+	return g.Wait()
 }
 
 func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionErrorInfo) error {
