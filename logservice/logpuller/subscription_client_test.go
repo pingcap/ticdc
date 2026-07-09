@@ -418,10 +418,9 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 	sink := &regionEventSink{
-		ctx: context.Background(),
-		ds:  &mockDynamicStream{},
+		ds:     &mockDynamicStream{},
+		stopCh: make(chan struct{}),
 	}
-	sink.cond = sync.NewCond(&sink.mu)
 	client := &subscriptionClient{
 		eventSink:       sink,
 		regionTaskQueue: priorityqueue.New[PriorityTask](),
