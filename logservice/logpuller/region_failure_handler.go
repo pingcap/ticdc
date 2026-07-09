@@ -65,7 +65,7 @@ func (r *regionFailureHandler) Report(errInfo regionErrorInfo) {
 }
 
 func (r *regionFailureHandler) Run(ctx context.Context) error {
-	ticker := time.NewTicker(10 * time.Millisecond)
+	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 
 	handleCachedErrors := func() error {
