@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -70,15 +71,20 @@ func (s *mockRegionEventSinkStream) GetMetrics() dynstream.Metrics[int, Subscrip
 	return s.metrics
 }
 
+func newTestRegionEventSink(
+	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler],
+) *regionEventSink {
+	sink := &regionEventSink{ds: ds}
+	sink.cond = sync.NewCond(&sink.mu)
+	return sink
+}
+
 func TestRegionEventSinkRunPausesAndResumesPush(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	ds := newMockRegionEventSinkStream()
-	sink := &regionEventSink{
-		ds:     ds,
-		stopCh: make(chan struct{}),
-	}
+	sink := newTestRegionEventSink(ds)
 
 	runErrCh := make(chan error, 1)
 	go func() {
@@ -215,10 +221,7 @@ func TestRegionEventSinkRunCancelUnblocksPush(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	ds := newMockRegionEventSinkStream()
-	sink := &regionEventSink{
-		ds:     ds,
-		stopCh: make(chan struct{}),
-	}
+	sink := newTestRegionEventSink(ds)
 
 	runErrCh := make(chan error, 1)
 	go func() {

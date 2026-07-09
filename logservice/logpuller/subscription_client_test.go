@@ -343,7 +343,7 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 
 func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	client := &subscriptionClient{
-		eventSink: &regionEventSink{ds: &mockDynamicStream{}},
+		eventSink: newTestRegionEventSink(&mockDynamicStream{}),
 	}
 	client.spanRegistry = newSpanRegistry(nil, nil)
 	client.failureHandler = newRegionFailureHandler(client)
@@ -417,10 +417,7 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 }
 
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
-	sink := &regionEventSink{
-		ds:     &mockDynamicStream{},
-		stopCh: make(chan struct{}),
-	}
+	sink := newTestRegionEventSink(&mockDynamicStream{})
 	client := &subscriptionClient{
 		eventSink:       sink,
 		regionTaskQueue: priorityqueue.New[PriorityTask](),
