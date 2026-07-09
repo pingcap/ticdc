@@ -202,7 +202,7 @@ const errCacheBatchSize = 1024
 func newErrCache() *errCache {
 	return &errCache{
 		cache:  make([]regionErrorInfo, 0, 1024),
-		notify: make(chan struct{}, 1024),
+		notify: make(chan struct{}, 1),
 	}
 }
 
