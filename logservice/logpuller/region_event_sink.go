@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"go.uber.org/zap"
 )
@@ -26,7 +27,7 @@ import (
 type regionEventSink struct {
 	ctx context.Context
 	ds  dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
-
+	// the following three fields are used to manage feedback from ds and notify other goroutines
 	mu     sync.Mutex
 	cond   *sync.Cond
 	paused atomic.Bool
@@ -34,7 +35,6 @@ type regionEventSink struct {
 
 func newRegionEventSink(ctx context.Context, subClient *subscriptionClient) *regionEventSink {
 	sink := &regionEventSink{ctx: ctx}
-	sink.cond = sync.NewCond(&sink.mu)
 
 	option := dynstream.NewOption()
 	// Note: it is max batch size of the kv sent from tikv(not committed rows)
@@ -50,6 +50,7 @@ func newRegionEventSink(ctx context.Context, subClient *subscriptionClient) *reg
 	)
 	ds.Start()
 	sink.ds = ds
+	sink.cond = sync.NewCond(&sink.mu)
 	return sink
 }
 
@@ -122,8 +123,30 @@ func (s *regionEventSink) Run(ctx context.Context) error {
 	}
 }
 
-func (s *regionEventSink) Metrics() dynstream.Metrics[int, SubscriptionID] {
-	return s.ds.GetMetrics()
+func (s *regionEventSink) UpdateMetrics() {
+	dsMetrics := s.ds.GetMetrics()
+	metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
+	metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
+	if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 1 {
+		log.Panic("subscription client should have only one area")
+	}
+	if len(dsMetrics.MemoryControl.AreaMemoryMetrics) == 0 {
+		return
+	}
+
+	areaMetric := dsMetrics.MemoryControl.AreaMemoryMetrics[0]
+	metrics.DynamicStreamMemoryUsage.WithLabelValues(
+		"log-puller",
+		"max",
+		"default",
+		"default",
+	).Set(float64(areaMetric.MaxMemory()))
+	metrics.DynamicStreamMemoryUsage.WithLabelValues(
+		"log-puller",
+		"used",
+		"default",
+		"default",
+	).Set(float64(areaMetric.MemoryUsage()))
 }
 
 func (s *regionEventSink) Close() {

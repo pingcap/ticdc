@@ -176,9 +176,9 @@ func NewSubscriptionClient(
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
-	subClient.spanRegistry = newSpanRegistry(subClient.pd, subClient.pdClock)
-	subClient.failureHandler = newRegionFailureHandler(subClient)
 	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient)
+	subClient.failureHandler = newRegionFailureHandler(subClient)
+	subClient.spanRegistry = newSpanRegistry(subClient.pd, subClient.pdClock)
 
 	subClient.initMetrics()
 	return subClient
@@ -206,28 +206,6 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			dsMetrics := s.eventSink.Metrics()
-			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
-			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
-			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 1 {
-				log.Panic("subscription client should have only one area")
-			}
-			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 0 {
-				areaMetric := dsMetrics.MemoryControl.AreaMemoryMetrics[0]
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"log-puller",
-					"max",
-					"default",
-					"default",
-				).Set(float64(areaMetric.MaxMemory()))
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"log-puller",
-					"used",
-					"default",
-					"default",
-				).Set(float64(areaMetric.MemoryUsage()))
-			}
-
 			pendingRegionReqCount := 0
 			s.stores.Range(func(_, value any) bool {
 				store := value.(*requestedStore)
@@ -241,6 +219,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			})
 
 			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(float64(pendingRegionReqCount))
+			s.eventSink.UpdateMetrics()
 			s.spanRegistry.UpdateMetrics()
 		}
 	}
