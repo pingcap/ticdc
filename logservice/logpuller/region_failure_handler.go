@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -65,22 +64,43 @@ func (r *regionFailureHandler) Report(errInfo regionErrorInfo) {
 }
 
 func (r *regionFailureHandler) Run(ctx context.Context) error {
-	g, ctx := errgroup.WithContext(ctx)
-	g.Go(func() error { return r.cache.dispatch(ctx) })
-	g.Go(func() error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	handleCachedErrors := func() error {
 		for {
-			select {
-			case <-ctx.Done():
-				log.Info("subscription client handle errors and exit")
-				return ctx.Err()
-			case errInfo := <-r.cache.errCh:
+			batch := r.cache.popBatch(errCacheBatchSize)
+			for _, errInfo := range batch {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
 				if err := r.handleError(ctx, errInfo); err != nil {
 					return err
 				}
 			}
+			if len(batch) < errCacheBatchSize {
+				return nil
+			}
 		}
-	})
-	return g.Wait()
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info("subscription client handle errors and exit")
+			return ctx.Err()
+		case <-ticker.C:
+			if err := handleCachedErrors(); err != nil {
+				return err
+			}
+		case <-r.cache.notify:
+			if err := handleCachedErrors(); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionErrorInfo) error {
@@ -173,16 +193,14 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 type errCache struct {
 	sync.Mutex
 	cache  []regionErrorInfo
-	errCh  chan regionErrorInfo
 	notify chan struct{}
 }
 
-const errCacheDispatchBatchSize = 1024
+const errCacheBatchSize = 1024
 
 func newErrCache() *errCache {
 	return &errCache{
 		cache:  make([]regionErrorInfo, 0, 1024),
-		errCh:  make(chan regionErrorInfo, 4096),
 		notify: make(chan struct{}, 1024),
 	}
 }
@@ -215,47 +233,4 @@ func (e *errCache) popBatch(limit int) []regionErrorInfo {
 		e.cache = e.cache[limit:]
 	}
 	return batch
-}
-
-func (e *errCache) dispatchBatch(ctx context.Context, limit int) (int, error) {
-	batch := e.popBatch(limit)
-	for _, errInfo := range batch {
-		select {
-		case <-ctx.Done():
-			log.Info("subscription client dispatch err cache done")
-			return 0, ctx.Err()
-		case e.errCh <- errInfo:
-		}
-	}
-	return len(batch), nil
-}
-
-func (e *errCache) dispatch(ctx context.Context) error {
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	sendToErrCh := func() error {
-		for {
-			n, err := e.dispatchBatch(ctx, errCacheDispatchBatchSize)
-			if err != nil {
-				return err
-			}
-			if n < errCacheDispatchBatchSize {
-				return nil
-			}
-		}
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if err := sendToErrCh(); err != nil {
-				return err
-			}
-		case <-e.notify:
-			if err := sendToErrCh(); err != nil {
-				return err
-			}
-		}
-	}
 }
