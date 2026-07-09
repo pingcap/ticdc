@@ -28,17 +28,15 @@ import (
 type regionEventSink struct {
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
 	// the following fields are used to coordinate pause/resume feedback with event producers.
-	mu       sync.Mutex
-	resumeCh chan struct{}
-	stopCh   chan struct{}
-	stopOnce sync.Once
-	paused   atomic.Bool
+	mu      sync.Mutex
+	cond    *sync.Cond
+	paused  atomic.Bool
+	stopped atomic.Bool
 }
 
-func newRegionEventSink(_ context.Context, failureHandler *regionFailureHandler) *regionEventSink {
-	sink := &regionEventSink{
-		stopCh: make(chan struct{}),
-	}
+func newRegionEventSink(failureHandler *regionFailureHandler) *regionEventSink {
+	sink := &regionEventSink{}
+	sink.cond = sync.NewCond(&sink.mu)
 
 	option := dynstream.NewOption()
 	// Note: it is max batch size of the kv sent from tikv(not committed rows)
@@ -75,36 +73,32 @@ func (s *regionEventSink) Wake(subID SubscriptionID) {
 }
 
 func (s *regionEventSink) Push(subID SubscriptionID, event regionEvent) {
-	for {
-		// fast path
-		select {
-		case <-s.stopCh:
-			return
-		default:
-		}
-		if !s.paused.Load() {
-			s.ds.Push(subID, event)
-			return
-		}
-
-		resumeCh := s.getResumeCh()
-		if resumeCh == nil {
-			continue
-		}
-
-		select {
-		case <-s.stopCh:
-			return
-		case <-resumeCh:
-		}
+	if s.stopped.Load() {
+		return
 	}
+	if !s.paused.Load() {
+		s.ds.Push(subID, event)
+		return
+	}
+
+	s.mu.Lock()
+	for s.paused.Load() && !s.stopped.Load() {
+		s.cond.Wait()
+	}
+	stopped := s.stopped.Load()
+	s.mu.Unlock()
+
+	if stopped {
+		return
+	}
+	s.ds.Push(subID, event)
 }
 
 func (s *regionEventSink) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			s.stopWaiting()
+			s.stop()
 			return nil
 		case feedback := <-s.ds.Feedback():
 			switch feedback.FeedbackType {
@@ -150,53 +144,35 @@ func (s *regionEventSink) UpdateMetrics() {
 }
 
 func (s *regionEventSink) Close() {
-	s.stopWaiting()
+	s.stop()
 	s.ds.Close()
-}
-
-func (s *regionEventSink) getResumeCh() <-chan struct{} {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.paused.Load() {
-		return nil
-	}
-	return s.resumeCh
 }
 
 func (s *regionEventSink) pause() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.paused.Load() {
+	if s.stopped.Load() || s.paused.Load() {
 		return
 	}
 	s.paused.Store(true)
-	s.resumeCh = make(chan struct{})
 }
 
 func (s *regionEventSink) resume() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.resumeLocked()
-}
-
-func (s *regionEventSink) resumeLocked() {
 	if !s.paused.Load() {
 		return
 	}
 	s.paused.Store(false)
-	if s.resumeCh != nil {
-		close(s.resumeCh)
-		s.resumeCh = nil
-	}
+	s.cond.Broadcast()
 }
 
-func (s *regionEventSink) stopWaiting() {
-	s.stopOnce.Do(func() {
-		s.mu.Lock()
-		s.resumeLocked()
-		s.mu.Unlock()
-		if s.stopCh != nil {
-			close(s.stopCh)
-		}
-	})
+func (s *regionEventSink) stop() {
+	if !s.stopped.CompareAndSwap(false, true) {
+		return
+	}
+	s.mu.Lock()
+	s.paused.Store(false)
+	s.cond.Broadcast()
+	s.mu.Unlock()
 }
