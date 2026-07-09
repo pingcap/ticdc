@@ -42,67 +42,50 @@ func (t TaskType) String() string {
 	return fmt.Sprintf("%d", t)
 }
 
-// PriorityTask is the interface for priority-based tasks
-// It implements heap.Item interface
-type PriorityTask interface {
-	// Priority returns the priority value, lower value means higher priority
-	Priority() int
-
-	// GetRegionInfo returns the underlying regionInfo
-	GetRegionInfo() regionInfo
-
-	// heap.Item interface methods
-	SetHeapIndex(int)
-	GetHeapIndex() int
-	LessThan(PriorityTask) bool
-}
-
-// regionPriorityTask implements PriorityTask interface
+// regionPriorityTask is a heap item for region scheduling.
+// Lower priority values are popped first. The priority value is calculated when
+// the task is created, so queued tasks do not rely on heap reordering as time
+// passes or resolved-ts changes.
 type regionPriorityTask struct {
 	taskType   TaskType
+	priority   int
+	seq        uint64
 	createTime time.Time
 	regionInfo regionInfo
 	heapIndex  int // for heap.Item interface
-	currentTs  uint64
 }
 
-// NewRegionPriorityTask creates a new priority task for region
-func NewRegionPriorityTask(taskType TaskType, regionInfo regionInfo, currentTs uint64) PriorityTask {
+// newRegionPriorityTask creates a new priority task for region.
+func newRegionPriorityTask(taskType TaskType, regionInfo regionInfo, currentTs uint64, seq uint64) *regionPriorityTask {
 	return &regionPriorityTask{
 		taskType:   taskType,
+		priority:   calculateRegionTaskPriority(taskType, regionInfo, currentTs),
+		seq:        seq,
 		createTime: time.Now(),
 		regionInfo: regionInfo,
 		heapIndex:  0, // 0 means not in heap
-		currentTs:  currentTs,
 	}
 }
 
-// Priority calculates the priority based on task type and wait time
-// Lower value means higher priority
-func (pt *regionPriorityTask) Priority() int {
-	// Base priority based on task type
+func calculateRegionTaskPriority(taskType TaskType, regionInfo regionInfo, currentTs uint64) int {
 	basePriority := 0
-	switch pt.taskType {
+	switch taskType {
 	case TaskHighPrior:
 		basePriority = highPriorityBase // Highest priority
 	case TaskLowPrior:
 		basePriority = lowPriorityBase // Lowest priority
 	}
 
-	// Add time-based priority bonus
-	// Wait time in seconds, longer wait time means higher priority (lower value)
-	waitTime := time.Since(pt.createTime)
-	timeBonus := int(waitTime.Seconds())
-
 	// ResolvedTsLag in seconds, longer lag means lower priority (higher value)
-	resolvedTsLag := oracle.GetTimeFromTS(pt.currentTs).Sub(oracle.GetTimeFromTS(pt.regionInfo.subscribedSpan.resolvedTs.Load()))
+	resolvedTsLag := oracle.GetTimeFromTS(currentTs).Sub(oracle.GetTimeFromTS(regionInfo.subscribedSpan.resolvedTs.Load()))
 	resolvedTsLagPenalty := int(resolvedTsLag.Seconds())
 
-	priority := basePriority - timeBonus + resolvedTsLagPenalty
-	if priority < 0 {
-		priority = 0
-	}
-	return priority
+	return max(basePriority+resolvedTsLagPenalty, 0)
+}
+
+// Priority returns the fixed priority value, lower value means higher priority.
+func (pt *regionPriorityTask) Priority() int {
+	return pt.priority
 }
 
 // GetRegionInfo returns the underlying regionInfo
@@ -121,7 +104,10 @@ func (pt *regionPriorityTask) GetHeapIndex() int {
 }
 
 // LessThan implements heap.Item interface
-// Returns true if this task has higher priority (lower priority value) than the other task
-func (pt *regionPriorityTask) LessThan(other PriorityTask) bool {
-	return pt.Priority() < other.Priority()
+// Returns true if this task has higher priority (lower priority value) than the other task.
+func (pt *regionPriorityTask) LessThan(other *regionPriorityTask) bool {
+	if pt.priority != other.priority {
+		return pt.priority < other.priority
+	}
+	return pt.seq < other.seq
 }

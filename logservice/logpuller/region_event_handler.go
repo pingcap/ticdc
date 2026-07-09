@@ -87,7 +87,8 @@ func (event regionEvent) mustFirstState() *regionFeedState {
 }
 
 type regionEventHandler struct {
-	subClient *subscriptionClient
+	eventSink      *regionEventSink
+	failureHandler *regionFailureHandler
 }
 
 func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {
@@ -159,7 +160,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			metricConsumeKVEventsCallbackDurationAdvanceResolvedTs.Observe(time.Since(start).Seconds())
 
 			start = time.Now()
-			h.subClient.wakeSubscription(span.subID)
+			h.eventSink.Wake(span.subID)
 			metricConsumeKVEventsCallbackDurationWakeSubscription.Observe(time.Since(start).Seconds())
 		})
 		// if not await, the wake callback will not be called, we need clear the cache manually.
@@ -254,8 +255,8 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState) {
 			zap.Error(err))
 	}
 	if stepsToRemoved {
-		worker.takeRegionState(SubscriptionID(state.requestID), state.getRegionID())
-		h.subClient.onRegionFail(newRegionErrorInfo(state.getRegionInfo(), err))
+		worker.tracker.RemoveRegion(SubscriptionID(state.requestID), state.getRegionID())
+		h.failureHandler.Report(newRegionErrorInfo(state.getRegionInfo(), err))
 	}
 }
 
