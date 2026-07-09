@@ -65,9 +65,6 @@ func (r *regionFailureHandler) Report(errInfo regionErrorInfo) {
 }
 
 func (r *regionFailureHandler) Run(ctx context.Context) error {
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
 	handleCachedErrors := func() error {
 		for {
 			batch := r.cache.popBatch(errCacheBatchSize)
@@ -87,6 +84,10 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 		}
 	}
 
+	// r.cache.ready() should handle failures promptly in normal flow. The ticker is only a
+	// fallback scan and is not expected to be needed in practice.
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
