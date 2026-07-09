@@ -78,16 +78,11 @@ func (s *regionEventSink) Push(subID SubscriptionID, event regionEvent) {
 		return
 	}
 
-	ctx := s.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	// slow path: wait until paused is false
 	s.mu.Lock()
 	for s.paused.Load() {
 		select {
-		case <-ctx.Done():
+		case <-s.ctx.Done():
 			s.mu.Unlock()
 			return
 		default:

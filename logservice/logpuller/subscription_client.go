@@ -136,9 +136,12 @@ type subscriptionClient struct {
 	// the credential to connect tikv
 	credential *security.Credential
 
-	eventSink      *regionEventSink
+	// failureHandler handles failed regions and owns reschedule/retry decisions.
 	failureHandler *regionFailureHandler
-	spanRegistry   *spanRegistry
+	// eventSink delivers region events and owns dynstream interaction.
+	eventSink *regionEventSink
+	// spanRegistry tracks subscribed spans and owns span-level background tasks.
+	spanRegistry *spanRegistry
 
 	// rangeTaskCh is used to receive range tasks.
 	// The tasks will be handled in `handleRangeTask` goroutine.
@@ -244,7 +247,18 @@ func (s *subscriptionClient) Subscribe(
 		return
 	}
 
-	rt := s.newSubscribedSpan(subID, span, startTs, consumeKVEvents, advanceResolvedTs, advanceInterval, bdrMode)
+	rt := newSubscribedSpan(
+		s.ctx,
+		s.resolveLockRateLimiter,
+		s.resolveLockTaskCh,
+		subID,
+		span,
+		startTs,
+		consumeKVEvents,
+		advanceResolvedTs,
+		advanceInterval,
+		bdrMode,
+	)
 	s.spanRegistry.Add(rt)
 	s.eventSink.AddPath(rt)
 
@@ -686,34 +700,4 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 			doResolve(task)
 		}
 	}
-}
-
-func (s *subscriptionClient) newSubscribedSpan(
-	subID SubscriptionID,
-	span heartbeatpb.TableSpan,
-	startTs uint64,
-	consumeKVEvents func(raw []common.RawKVEntry, wakeCallback func()) bool,
-	advanceResolvedTs func(ts uint64),
-	advanceInterval int64,
-	filterLoop bool,
-) *subscribedSpan {
-	return newSubscribedSpan(
-		s.ctx,
-		s.resolveLockRateLimiter,
-		s.resolveLockTaskCh,
-		subID,
-		span,
-		startTs,
-		consumeKVEvents,
-		advanceResolvedTs,
-		advanceInterval,
-		filterLoop,
-	)
-}
-
-func (s *subscriptionClient) GetResolvedTsLag() float64 {
-	if s.spanRegistry == nil {
-		return 0
-	}
-	return s.spanRegistry.GetResolvedTsLag()
 }

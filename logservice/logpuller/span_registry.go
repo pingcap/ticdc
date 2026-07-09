@@ -166,6 +166,13 @@ func newSpanRegistry(pd pd.Client, pdClock pdutil.Clock) *spanRegistry {
 	}
 }
 
+func (r *spanRegistry) Run(ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error { return r.runResolveLockChecker(ctx) })
+	g.Go(func() error { return r.logSlowRegions(ctx) })
+	return g.Wait()
+}
+
 func (r *spanRegistry) Add(span *subscribedSpan) {
 	r.Lock()
 	defer r.Unlock()
@@ -184,44 +191,28 @@ func (r *spanRegistry) Remove(subID SubscriptionID) {
 	delete(r.spans, subID)
 }
 
-func (r *spanRegistry) GetResolvedTsLag() float64 {
+func (r *spanRegistry) UpdateMetrics() {
+	count := 0
 	pullerMinResolvedTs := uint64(0)
 	r.RLock()
 	for _, span := range r.spans {
+		count += span.rangeLock.Len()
 		resolvedTs := span.resolvedTs.Load()
 		if pullerMinResolvedTs == 0 || resolvedTs < pullerMinResolvedTs {
 			pullerMinResolvedTs = resolvedTs
 		}
 	}
 	r.RUnlock()
-	if pullerMinResolvedTs == 0 {
-		return 0
-	}
-	pdTime := r.pdClock.CurrentTime()
-	phyResolvedTs := oracle.ExtractPhysical(pullerMinResolvedTs)
-	return float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
-}
-
-func (r *spanRegistry) UpdateMetrics() {
-	count := 0
-	r.RLock()
-	for _, span := range r.spans {
-		count += span.rangeLock.Len()
-	}
-	r.RUnlock()
 	metrics.SubscriptionClientSubscribedRegionCount.Set(float64(count))
 
-	resolvedTsLag := r.GetResolvedTsLag()
-	if resolvedTsLag > 0 {
-		metrics.LogPullerResolvedTsLag.Set(resolvedTsLag)
+	if pullerMinResolvedTs != 0 {
+		pdTime := r.pdClock.CurrentTime()
+		phyResolvedTs := oracle.ExtractPhysical(pullerMinResolvedTs)
+		resolvedTsLag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
+		if resolvedTsLag > 0 {
+			metrics.LogPullerResolvedTsLag.Set(resolvedTsLag)
+		}
 	}
-}
-
-func (r *spanRegistry) Run(ctx context.Context) error {
-	g, ctx := errgroup.WithContext(ctx)
-	g.Go(func() error { return r.runResolveLockChecker(ctx) })
-	g.Go(func() error { return r.logSlowRegions(ctx) })
-	return g.Wait()
 }
 
 func (r *spanRegistry) runResolveLockChecker(ctx context.Context) error {
