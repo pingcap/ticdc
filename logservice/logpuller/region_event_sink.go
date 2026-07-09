@@ -26,12 +26,16 @@ import (
 
 // regionEventSink delivers region events to dynstream and owns push-side flow control.
 type regionEventSink struct {
-	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
-	// the following fields are used to coordinate pause/resume feedback with event producers.
-	mu      sync.Mutex
-	cond    *sync.Cond
-	paused  atomic.Bool
+	// mu/cond coordinate the paused push path with pause/resume and shutdown signals.
+	mu   sync.Mutex
+	cond *sync.Cond
+	// paused tracks whether region event pushing is temporarily held back by feedback.
+	paused atomic.Bool
+	// stopped marks the sink as shutting down so blocked pushers can exit instead of waiting for resume.
 	stopped atomic.Bool
+
+	// ds owns the dynstream used to deliver region events and receive flow-control feedback.
+	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
 }
 
 func newRegionEventSink(failureHandler *regionFailureHandler) *regionEventSink {
@@ -76,11 +80,13 @@ func (s *regionEventSink) Push(subID SubscriptionID, event regionEvent) {
 	if s.stopped.Load() {
 		return
 	}
+	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)
 		return
 	}
 
+	// slow path: wait until paused is false
 	s.mu.Lock()
 	for s.paused.Load() && !s.stopped.Load() {
 		s.cond.Wait()
