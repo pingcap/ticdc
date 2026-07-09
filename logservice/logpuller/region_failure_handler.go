@@ -96,7 +96,7 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 			if err := handleCachedErrors(); err != nil {
 				return err
 			}
-		case <-r.cache.notify:
+		case <-r.cache.ready():
 			if err := handleCachedErrors(); err != nil {
 				return err
 			}
@@ -234,4 +234,8 @@ func (e *errCache) popBatch(limit int) []regionErrorInfo {
 		e.cache = e.cache[limit:]
 	}
 	return batch
+}
+
+func (e *errCache) ready() <-chan struct{} {
+	return e.notify
 }
