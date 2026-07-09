@@ -33,7 +33,7 @@ type regionEventSink struct {
 	paused atomic.Bool
 }
 
-func newRegionEventSink(ctx context.Context, subClient *subscriptionClient) *regionEventSink {
+func newRegionEventSink(ctx context.Context, failureHandler *regionFailureHandler) *regionEventSink {
 	sink := &regionEventSink{ctx: ctx}
 
 	option := dynstream.NewOption()
@@ -45,7 +45,7 @@ func newRegionEventSink(ctx context.Context, subClient *subscriptionClient) *reg
 	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
 		"log-puller",
-		&regionEventHandler{subClient: subClient},
+		&regionEventHandler{eventSink: sink, failureHandler: failureHandler},
 		option,
 	)
 	ds.Start()
@@ -127,10 +127,8 @@ func (s *regionEventSink) UpdateMetrics() {
 	dsMetrics := s.ds.GetMetrics()
 	metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 	metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
-	if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 1 {
-		log.Panic("subscription client should have only one area")
-	}
-	if len(dsMetrics.MemoryControl.AreaMemoryMetrics) == 0 {
+	if len(dsMetrics.MemoryControl.AreaMemoryMetrics) != 1 {
+		log.Warn("subscription client should have exactly one area")
 		return
 	}
 

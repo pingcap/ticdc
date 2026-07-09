@@ -176,8 +176,8 @@ func NewSubscriptionClient(
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
-	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient)
 	subClient.failureHandler = newRegionFailureHandler(subClient)
+	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient.failureHandler)
 	subClient.spanRegistry = newSpanRegistry(subClient.pd, subClient.pdClock)
 
 	subClient.initMetrics()
@@ -272,10 +272,6 @@ func (s *subscriptionClient) Unsubscribe(subID SubscriptionID) {
 	log.Info("unsubscribe span success",
 		zap.Uint64("subscriptionID", uint64(rt.subID)),
 		zap.Bool("exists", rt != nil))
-}
-
-func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
-	s.eventSink.Wake(subID)
 }
 
 func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
