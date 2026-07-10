@@ -13,7 +13,11 @@
 
 package logpuller
 
-import "sync"
+import (
+	"maps"
+	"slices"
+	"sync"
+)
 
 type regionStatesByID map[uint64]*regionFeedState
 
@@ -96,7 +100,7 @@ func (t *regionTracker) TakeSubscription(subscriptionID SubscriptionID) []*regio
 	delete(t.statesBySubscription, subscriptionID)
 	t.mu.Unlock()
 
-	return collectRegionStates(states)
+	return slices.Collect(maps.Values(states))
 }
 
 // Drain removes and returns all tracked states grouped by subscription.
@@ -108,17 +112,7 @@ func (t *regionTracker) Drain() map[SubscriptionID][]*regionFeedState {
 
 	drainedStates := make(map[SubscriptionID][]*regionFeedState, len(statesBySubscription))
 	for subID, states := range statesBySubscription {
-		drainedStates[subID] = collectRegionStates(states)
+		drainedStates[subID] = slices.Collect(maps.Values(states))
 	}
 	return drainedStates
-}
-
-func collectRegionStates(statesByID regionStatesByID) []*regionFeedState {
-	states := make([]*regionFeedState, 0, len(statesByID))
-	for _, state := range statesByID {
-		if state != nil {
-			states = append(states, state)
-		}
-	}
-	return states
 }
