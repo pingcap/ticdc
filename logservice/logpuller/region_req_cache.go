@@ -158,12 +158,14 @@ func (c *requestCache) tryPop() *regionReq {
 	}
 }
 
-func (c *requestCache) markSent(req *regionReq) {
+func (c *requestCache) markSent(req *regionReq) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.requests[req]; ok && req.stage == regionReqStageProcessing {
-		req.stage = regionReqStageSent
+	if _, ok := c.requests[req]; !ok || req.stage != regionReqStageProcessing {
+		return false
 	}
+	req.stage = regionReqStageSent
+	return true
 }
 
 func (c *requestCache) finishScan(req *regionReq) bool {

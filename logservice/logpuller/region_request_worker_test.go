@@ -76,7 +76,7 @@ func TestRegionRequestWorkerReplaceRegionStateAbortsOldRequest(t *testing.T) {
 	require.True(t, ok)
 	req1, err := worker.requestCache.pop(t.Context())
 	require.NoError(t, err)
-	worker.requestCache.markSent(req1)
+	require.True(t, worker.requestCache.markSent(req1))
 	state1 := newRegionFeedState(region, uint64(region.subscribedSpan.subID), worker, req1)
 	worker.replaceRegionState(region.subscribedSpan.subID, region.verID.GetID(), state1)
 
@@ -102,6 +102,15 @@ type mockRegionEventDynamicStream struct {
 	pushCount   int
 	totalStates int
 	pushed      []pushedResolvedEvent
+}
+
+type countingRegionEventDynamicStream struct {
+	mockRegionEventDynamicStream
+	pushCount int
+}
+
+func (m *countingRegionEventDynamicStream) Push(_ SubscriptionID, _ regionEvent) {
+	m.pushCount++
 }
 
 func (m *mockRegionEventDynamicStream) Start() {}
@@ -194,7 +203,9 @@ func dispatchResolvedTsEventLegacyForBenchmark(s *regionRequestWorker, resolvedT
 }
 
 func benchmarkDispatchResolvedTsEvent(b *testing.B, regionCount int, useLegacy bool) {
-	worker, ds, event := newDispatchResolvedTsTestWorker(regionCount)
+	worker, _, event := newDispatchResolvedTsTestWorker(regionCount)
+	ds := &countingRegionEventDynamicStream{}
+	worker.client.eventSink.ds = ds
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -208,6 +219,44 @@ func benchmarkDispatchResolvedTsEvent(b *testing.B, regionCount int, useLegacy b
 	if ds.pushCount == 0 {
 		b.Fatal("expected at least one push")
 	}
+}
+
+func TestWaitForRegionRequestDrainsIdleControlQueue(t *testing.T) {
+	worker := &regionRequestWorker{
+		requestCache: newRequestCache(1),
+		controlQueue: newControlQueue(),
+	}
+
+	type waitResult struct {
+		req *regionReq
+		err error
+	}
+	resultCh := make(chan waitResult, 1)
+	go func() {
+		req, err := worker.waitForRegionRequest(t.Context())
+		resultCh <- waitResult{req: req, err: err}
+	}()
+
+	for subID := SubscriptionID(1); subID <= 100; subID++ {
+		worker.controlQueue.push(deregisterRequest{subID: subID})
+	}
+	require.Eventually(t, func() bool {
+		return worker.controlQueue.len() == 0
+	}, time.Second, 10*time.Millisecond)
+
+	ok, err := worker.requestCache.add(t.Context(), createTestRegionInfo(1, 1), false)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	select {
+	case result := <-resultCh:
+		require.NoError(t, result.err)
+		require.NotNil(t, result.req)
+		require.Equal(t, uint64(1), result.req.regionInfo.verID.GetID())
+	case <-time.After(time.Second):
+		t.Fatal("worker did not receive the first region request")
+	}
+	require.Zero(t, worker.controlQueue.len())
 }
 
 func TestDispatchResolvedTsEventSingleRegion(t *testing.T) {
@@ -272,7 +321,7 @@ func TestStoppedStateRemovesSentRequest(t *testing.T) {
 
 	state := newRegionFeedState(req.regionInfo, uint64(req.regionInfo.subscribedSpan.subID), worker, req)
 	worker.tracker.Replace(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID(), state)
-	worker.requestCache.markSent(req)
+	require.True(t, worker.requestCache.markSent(req))
 	state.markStopped(errors.New("send request to store error"))
 	worker.tracker.RemoveIf(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID(), state)
 
@@ -310,6 +359,34 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	require.Equal(t, 0, worker.requestCache.pendingCount())
 	state := worker.tracker.Get(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
 	require.True(t, state == nil || state.isStale(), "region state should be removed or marked stale after send failure")
+}
+
+func TestProcessRegionSendTaskDoesNotSendRemovedRequest(t *testing.T) {
+	worker := &regionRequestWorker{
+		requestCache: newRequestCache(1),
+		controlQueue: newControlQueue(),
+		store:        &requestedStore{storeAddr: "store-1"},
+		client:       &subscriptionClient{},
+		tracker:      newRegionTracker(),
+	}
+	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
+	require.True(t, worker.requestCache.tryAdd(region, false))
+	req := worker.requestCache.tryPop()
+	require.NotNil(t, req)
+	require.True(t, worker.requestCache.abortScan(req))
+
+	sendCh := make(chan *cdcpb.ChangeDataRequest, 1)
+	err := worker.processRegionSendTask(t.Context(), &ConnAndClient{
+		Client: &mockEventFeedV2Client{sendCh: sendCh},
+		Conn:   &grpc.ClientConn{},
+	}, req)
+	var streamErr *storeStreamErr
+	require.ErrorAs(t, err, &streamErr)
+	select {
+	case sentReq := <-sendCh:
+		t.Fatalf("removed request was sent: %+v", sentReq)
+	default:
+	}
 }
 
 func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {

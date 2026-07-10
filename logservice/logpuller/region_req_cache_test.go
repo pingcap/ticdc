@@ -15,7 +15,9 @@ package logpuller
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/stretchr/testify/require"
@@ -51,7 +53,7 @@ func TestRequestCacheLifecycle(t *testing.T) {
 	require.Equal(t, regionReqStageProcessing, req.stage)
 	require.Equal(t, 1, cache.pendingCount())
 
-	cache.markSent(req)
+	require.True(t, cache.markSent(req))
 	require.Equal(t, regionReqStageSent, req.stage)
 	require.True(t, cache.finishScan(req))
 	require.False(t, cache.finishScan(req))
@@ -117,7 +119,7 @@ func TestRequestCacheDrainOnlyUnsentRegions(t *testing.T) {
 
 	sentReq, err := cache.pop(t.Context())
 	require.NoError(t, err)
-	cache.markSent(sentReq)
+	require.True(t, cache.markSent(sentReq))
 	processingReq, err := cache.pop(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, regionReqStageProcessing, processingReq.stage)
@@ -139,10 +141,103 @@ func TestRequestCacheCloseRemovesAllRequests(t *testing.T) {
 
 	req, err := cache.pop(t.Context())
 	require.NoError(t, err)
-	cache.markSent(req)
+	require.True(t, cache.markSent(req))
 	cache.close()
 
 	require.Equal(t, 0, cache.pendingCount())
 	require.Nil(t, cache.tryPop())
+	require.False(t, cache.abortScan(req))
+}
+
+func TestRequestCacheConcurrentAdds(t *testing.T) {
+	const requestCount = 16
+	cache := newRequestCache(requestCount)
+	start := make(chan struct{})
+	results := make(chan bool, requestCount)
+
+	for regionID := uint64(1); regionID <= requestCount; regionID++ {
+		go func() {
+			<-start
+			ok, err := cache.add(t.Context(), createTestRegionInfo(1, regionID), false)
+			results <- ok && err == nil
+		}()
+	}
+	close(start)
+
+	for range requestCount {
+		require.True(t, <-results)
+	}
+	require.Equal(t, requestCount, cache.pendingCount())
+}
+
+func TestRequestCacheSpaceAvailableWakesAdd(t *testing.T) {
+	cache := newRequestCache(1)
+	require.True(t, cache.tryAdd(createTestRegionInfo(1, 1), false))
+	firstReq := cache.tryPop()
+	require.NotNil(t, firstReq)
+
+	type addResult struct {
+		ok  bool
+		err error
+	}
+	started := make(chan struct{})
+	resultCh := make(chan addResult, 1)
+	go func() {
+		close(started)
+		ok, err := cache.add(t.Context(), createTestRegionInfo(1, 2), false)
+		resultCh <- addResult{ok: ok, err: err}
+	}()
+	<-started
+	require.True(t, cache.abortScan(firstReq))
+
+	select {
+	case result := <-resultCh:
+		require.NoError(t, result.err)
+		require.True(t, result.ok)
+	case <-time.After(time.Second):
+		t.Fatal("add was not woken after request cache space became available")
+	}
+	require.Equal(t, uint64(2), cache.tryPop().regionInfo.verID.GetID())
+}
+
+func TestRequestCacheMarkSentRejectsInvalidTransition(t *testing.T) {
+	cache := newRequestCache(1)
+	require.True(t, cache.tryAdd(createTestRegionInfo(1, 1), false))
+	req := cache.tryPop()
+	require.NotNil(t, req)
+
+	require.True(t, cache.markSent(req))
+	require.False(t, cache.markSent(req))
+	require.True(t, cache.abortScan(req))
+	require.False(t, cache.markSent(req))
+}
+
+func TestRegionFeedStateCleansRequestOnce(t *testing.T) {
+	cache := newRequestCache(1)
+	require.True(t, cache.tryAdd(createTestRegionInfo(1, 1), false))
+	req := cache.tryPop()
+	require.NotNil(t, req)
+	require.True(t, cache.markSent(req))
+
+	worker := &regionRequestWorker{requestCache: cache}
+	state := newRegionFeedState(req.regionInfo, uint64(req.regionInfo.subscribedSpan.subID), worker, req)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		state.finishScan()
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		state.abortScanIfNeeded()
+	}()
+	close(start)
+	wg.Wait()
+
+	require.Nil(t, state.regionReq.Load())
+	require.Zero(t, cache.pendingCount())
 	require.False(t, cache.abortScan(req))
 }

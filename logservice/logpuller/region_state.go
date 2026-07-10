@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
@@ -97,10 +98,7 @@ type regionFeedState struct {
 		// `err` is used to retrieve errors generated outside.
 		err error
 	}
-	regionReq struct {
-		sync.Mutex
-		request *regionReq
-	}
+	regionReq atomic.Pointer[regionReq]
 
 	worker *regionRequestWorker
 }
@@ -117,7 +115,7 @@ func newRegionFeedState(
 		matcher:   newMatcher(),
 		worker:    worker,
 	}
-	state.regionReq.request = request
+	state.regionReq.Store(request)
 	return state
 }
 
@@ -169,22 +167,14 @@ func (s *regionFeedState) setInitialized() {
 }
 
 func (s *regionFeedState) finishScan() {
-	s.regionReq.Lock()
-	request := s.regionReq.request
-	s.regionReq.request = nil
-	s.regionReq.Unlock()
-
+	request := s.regionReq.Swap(nil)
 	if request != nil {
 		s.worker.requestCache.finishScan(request)
 	}
 }
 
 func (s *regionFeedState) abortScanIfNeeded() {
-	s.regionReq.Lock()
-	request := s.regionReq.request
-	s.regionReq.request = nil
-	s.regionReq.Unlock()
-
+	request := s.regionReq.Swap(nil)
 	if request != nil {
 		s.worker.requestCache.abortScan(request)
 	}

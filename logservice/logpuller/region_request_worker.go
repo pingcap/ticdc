@@ -70,6 +70,16 @@ func (q *controlQueue) len() int {
 	return q.queue.Len()
 }
 
+func (q *controlQueue) drain() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for {
+		if _, ok := q.queue.TryPop(); !ok {
+			return
+		}
+	}
+}
+
 func (q *controlQueue) ready() <-chan struct{} {
 	return q.queue.Ready()
 }
@@ -106,7 +116,7 @@ func newRegionRequestWorker(
 func (s *regionRequestWorker) Run(ctx context.Context) error {
 	for {
 		// Do not connect an idle worker to an unavailable store indefinitely.
-		firstReq, err := s.requestCache.pop(ctx)
+		firstReq, err := s.waitForRegionRequest(ctx)
 		if err != nil {
 			return err
 		}
@@ -132,9 +142,32 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 		for _, region := range s.requestCache.drainUnsentRegions() {
 			s.client.onRegionFail(newRegionErrorInfo(region, regionErr))
 		}
+		// The failed stream no longer owns remote registrations, so queued
+		// deregistration requests are obsolete.
+		s.controlQueue.drain()
 
 		if err := util.Hang(ctx, storeReconnectBackoff); err != nil {
 			return err
+		}
+	}
+}
+
+func (s *regionRequestWorker) waitForRegionRequest(ctx context.Context) (*regionReq, error) {
+	for {
+		// Without a stream there are no remote registrations to deregister.
+		s.controlQueue.drain()
+		if req := s.requestCache.tryPop(); req != nil {
+			// Drop controls that raced with selecting the first request. Any later
+			// controls will be handled by the stream send loop.
+			s.controlQueue.drain()
+			return req, nil
+		}
+
+		select {
+		case <-s.controlQueue.ready():
+		case <-s.requestCache.ready():
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
 	}
 }
@@ -400,7 +433,13 @@ func (s *regionRequestWorker) processRegionSendTask(
 				s.replaceRegionState(subID, region.verID.GetID(), state)
 				// Make the request and its state visible in the same order. A fast
 				// region error can then clean the request without racing markSent.
-				s.requestCache.markSent(regionReq)
+				if !s.requestCache.markSent(regionReq) {
+					log.Warn("region request transition to sent failed",
+						zap.Uint64("workerID", s.workerID),
+						zap.Uint64("subscriptionID", uint64(subID)),
+						zap.Uint64("regionID", region.verID.GetID()))
+					return &storeStreamErr{}
+				}
 				if err := doSend(s.createRegionRequest(region)); err != nil {
 					state.markStopped(err)
 					return err
