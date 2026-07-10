@@ -66,7 +66,7 @@ func cleanupLargeTxnInsertSpillFiles(dir string) (int, error) {
 
 func newLargeTxnInsertSpill(dir string) (*largeTxnInsertSpill, error) {
 	if dir == "" {
-		return nil, errors.New("large txn spill dir is empty")
+		return nil, errors.ErrSpillFileOp.GenWithStackByArgs("empty large transaction spill directory")
 	}
 	file, err := recordspill.NewRecordFile(dir, largeTxnInsertSpillPattern)
 	if err != nil {
@@ -78,7 +78,7 @@ func newLargeTxnInsertSpill(dir string) (*largeTxnInsertSpill, error) {
 
 func (s *largeTxnInsertSpill) Append(entry *common.RawKVEntry) error {
 	if entry == nil {
-		return errors.New("cannot append nil RawKVEntry to large txn spill")
+		return errors.ErrSpillFileOp.GenWithStackByArgs("cannot append nil RawKVEntry")
 	}
 
 	_, err := s.file.Append(entry.Encode())

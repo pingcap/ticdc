@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -102,6 +103,19 @@ func TestLargeTxnInsertSpillEmpty(t *testing.T) {
 	entry, err := reader.Next()
 	require.ErrorIs(t, err, io.EOF)
 	require.Nil(t, entry)
+}
+
+func TestLargeTxnInsertSpillValidationErrors(t *testing.T) {
+	spill, err := newLargeTxnInsertSpill("")
+	require.True(t, errors.ErrSpillFileOp.Equal(err))
+	require.Nil(t, spill)
+
+	spill, err = newLargeTxnInsertSpill(t.TempDir())
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, spill.Cleanup())
+	}()
+	require.True(t, errors.ErrSpillFileOp.Equal(spill.Append(nil)))
 }
 
 func TestCleanupLargeTxnInsertSpillFiles(t *testing.T) {

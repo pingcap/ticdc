@@ -271,6 +271,7 @@ func (a *dispatcherStat) addBigTxnMetricFragment(
 	if a.bigTxnMetricState == nil ||
 		a.bigTxnMetricState.startTs != startTs ||
 		a.bigTxnMetricState.commitTs != commitTs {
+		a.finishPendingBigTxnMetricBefore(startTs, commitTs)
 		a.bigTxnMetricState = &bigTxnMetricState{
 			startTs:                  startTs,
 			commitTs:                 commitTs,

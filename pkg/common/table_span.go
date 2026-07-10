@@ -62,6 +62,7 @@ func (d *DataRange) Equal(other *DataRange) bool {
 	return d.Span.Equal(other.Span) &&
 		d.CommitTsStart == other.CommitTsStart &&
 		d.CommitTsEnd == other.CommitTsEnd &&
+		d.LastScannedTxnStartTs == other.LastScannedTxnStartTs &&
 		bytes.Equal(d.RowLevelScanPosition, other.RowLevelScanPosition)
 }
 

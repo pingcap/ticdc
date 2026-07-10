@@ -99,6 +99,26 @@ func TestDispatcherStatBigTxnMetricsCountSplitTxnOnce(t *testing.T) {
 	require.Equal(t, beforeCounter+1, readBigTxnCountMetric(t))
 }
 
+func TestDispatcherStatBigTxnMetricsFlushPreviousTxn(t *testing.T) {
+	beforeHistogramCount, beforeHistogramSum := readBigTxnSizeMetric(t)
+	beforeCounter := readBigTxnCountMetric(t)
+
+	stat := &dispatcherStat{}
+	stat.addBigTxnMetricFragment(100, 200, 70, 50)
+	stat.addBigTxnMetricFragment(101, 201, 80, 50)
+
+	histogramCount, histogramSum := readBigTxnSizeMetric(t)
+	require.Equal(t, beforeHistogramCount+1, histogramCount)
+	require.Equal(t, beforeHistogramSum+70, histogramSum)
+	require.Equal(t, beforeCounter+1, readBigTxnCountMetric(t))
+	require.Equal(t, &bigTxnMetricState{
+		startTs:                  101,
+		commitTs:                 201,
+		rawKVBytes:               80,
+		largeTxnThresholdInBytes: 50,
+	}, stat.bigTxnMetricState)
+}
+
 func readBigTxnSizeMetric(t *testing.T) (uint64, float64) {
 	t.Helper()
 
