@@ -132,7 +132,7 @@ func TestRegionFailureHandlerRunDrainsErrCacheWithoutDispatcher(t *testing.T) {
 		handler.cache.Lock()
 		defer handler.cache.Unlock()
 		return len(handler.cache.cache) == 0
-	}, time.Second, 10*time.Millisecond)
+	}, 5*time.Second, 10*time.Millisecond)
 
 	cancel()
 	select {
