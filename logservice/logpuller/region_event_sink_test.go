@@ -134,7 +134,6 @@ func TestRegionEventSinkRunPausesAndResumesPush(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
 func TestRegionEventSinkUpdateMetrics(t *testing.T) {
 	t.Run("empty area metrics returns after queue gauges", func(t *testing.T) {
 		ds := newMockRegionEventSinkStream()
@@ -157,8 +156,7 @@ func TestRegionEventSinkUpdateMetrics(t *testing.T) {
 		).Set(456)
 
 		sink := &regionEventSink{
-			ds:     ds,
-			stopCh: make(chan struct{}),
+			ds: ds,
 		}
 		sink.UpdateMetrics()
 
@@ -195,8 +193,7 @@ func TestRegionEventSinkUpdateMetrics(t *testing.T) {
 		}
 
 		sink := &regionEventSink{
-			ds:     ds,
-			stopCh: make(chan struct{}),
+			ds: ds,
 		}
 		sink.UpdateMetrics()
 
