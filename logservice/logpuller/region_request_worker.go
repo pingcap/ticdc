@@ -99,7 +99,7 @@ func newRegionRequestWorker(
 		store:        store,
 		requestCache: requestCache,
 		controlQueue: newControlQueue(),
-		tracker:      newRegionTracker(workerID),
+		tracker:      newRegionTracker(),
 	}
 }
 
@@ -362,7 +362,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 		if err := doSend(changeDataReq); err != nil {
 			return err
 		}
-		for _, state := range s.tracker.RemoveSubscription(req.subID) {
+		for _, state := range s.tracker.TakeSubscription(req.subID) {
 			state.markStopped(&requestCancelledErr{})
 			s.client.eventSink.Push(req.subID, regionEvent{states: []*regionFeedState{state}})
 		}
@@ -397,7 +397,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 				s.requestCache.abortScan(regionReq)
 			} else {
 				state := newRegionFeedState(region, uint64(subID), s, regionReq)
-				s.tracker.Track(subID, region.verID.GetID(), state)
+				s.replaceRegionState(subID, region.verID.GetID(), state)
 				// Make the request and its state visible in the same order. A fast
 				// region error can then clean the request without racing markSent.
 				s.requestCache.markSent(regionReq)
@@ -437,6 +437,23 @@ func (s *regionRequestWorker) createRegionRequest(region regionInfo) *cdcpb.Chan
 		ExtraOp:      kvrpcpb.ExtraOp_ReadOldValue,
 		FilterLoop:   region.filterLoop,
 	}
+}
+
+func (s *regionRequestWorker) replaceRegionState(
+	subscriptionID SubscriptionID,
+	regionID uint64,
+	state *regionFeedState,
+) {
+	oldState := s.tracker.Replace(subscriptionID, regionID, state)
+	if oldState == nil {
+		return
+	}
+
+	log.Warn("region request state overwritten",
+		zap.Uint64("workerID", s.workerID),
+		zap.Uint64("subscriptionID", uint64(subscriptionID)),
+		zap.Uint64("regionID", regionID))
+	oldState.abortScanIfNeeded()
 }
 
 func (s *regionRequestWorker) add(ctx context.Context, region regionInfo, force bool) (bool, error) {

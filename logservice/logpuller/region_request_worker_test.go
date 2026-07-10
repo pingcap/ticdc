@@ -64,27 +64,10 @@ func prepareRegionForSendTest(region regionInfo) regionInfo {
 	return region
 }
 
-func TestRegionStatesOperation(t *testing.T) {
-	tracker := newRegionTracker(0)
-
-	require.Nil(t, tracker.Get(1, 2))
-	require.Nil(t, tracker.RemoveRegion(1, 2))
-
-	tracker.Track(1, 2, &regionFeedState{})
-	require.NotNil(t, tracker.Get(1, 2))
-	require.NotNil(t, tracker.RemoveRegion(1, 2))
-	require.Nil(t, tracker.Get(1, 2))
-
-	tracker.Track(1, 2, &regionFeedState{})
-	require.NotNil(t, tracker.Get(1, 2))
-	require.NotNil(t, tracker.RemoveRegion(1, 2))
-	require.Nil(t, tracker.Get(1, 2))
-}
-
-func TestRegionTrackerOverwriteAbortsOldRequest(t *testing.T) {
+func TestRegionRequestWorkerReplaceRegionStateAbortsOldRequest(t *testing.T) {
 	worker := &regionRequestWorker{
 		requestCache: newRequestCache(10),
-		tracker:      newRegionTracker(0),
+		tracker:      newRegionTracker(),
 	}
 	region := createTestRegionInfo(1, 1)
 
@@ -95,7 +78,7 @@ func TestRegionTrackerOverwriteAbortsOldRequest(t *testing.T) {
 	require.NoError(t, err)
 	worker.requestCache.markSent(req1)
 	state1 := newRegionFeedState(region, uint64(region.subscribedSpan.subID), worker, req1)
-	worker.tracker.Track(region.subscribedSpan.subID, region.verID.GetID(), state1)
+	worker.replaceRegionState(region.subscribedSpan.subID, region.verID.GetID(), state1)
 
 	ok, err = worker.requestCache.add(t.Context(), region, false)
 	require.NoError(t, err)
@@ -103,7 +86,7 @@ func TestRegionTrackerOverwriteAbortsOldRequest(t *testing.T) {
 	req2, err := worker.requestCache.pop(t.Context())
 	require.NoError(t, err)
 	state2 := newRegionFeedState(region, uint64(region.subscribedSpan.subID), worker, req2)
-	worker.tracker.Track(region.subscribedSpan.subID, region.verID.GetID(), state2)
+	worker.replaceRegionState(region.subscribedSpan.subID, region.verID.GetID(), state2)
 
 	require.Equal(t, 1, worker.requestCache.pendingCount())
 	require.Same(t, state2, worker.tracker.Get(region.subscribedSpan.subID, region.verID.GetID()))
@@ -166,13 +149,13 @@ func newDispatchResolvedTsTestWorker(regionCount int) (*regionRequestWorker, *mo
 			},
 			eventSink: &regionEventSink{ds: ds},
 		},
-		tracker: newRegionTracker(0),
+		tracker: newRegionTracker(),
 	}
 	regions := make([]uint64, regionCount)
 	for i := 0; i < regionCount; i++ {
 		regionID := uint64(i + 1)
 		regions[i] = regionID
-		worker.tracker.Track(1, regionID, &regionFeedState{
+		worker.tracker.Replace(1, regionID, &regionFeedState{
 			requestID: 1,
 		})
 	}
@@ -277,7 +260,7 @@ func BenchmarkDispatchResolvedTsEventSmallBatchCurrent(b *testing.B) {
 func TestStoppedStateRemovesSentRequest(t *testing.T) {
 	worker := &regionRequestWorker{
 		requestCache: newRequestCache(10),
-		tracker:      newRegionTracker(0),
+		tracker:      newRegionTracker(),
 	}
 	region := createTestRegionInfo(1, 1)
 
@@ -288,10 +271,10 @@ func TestStoppedStateRemovesSentRequest(t *testing.T) {
 	require.NoError(t, err)
 
 	state := newRegionFeedState(req.regionInfo, uint64(req.regionInfo.subscribedSpan.subID), worker, req)
-	worker.tracker.Track(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID(), state)
+	worker.tracker.Replace(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID(), state)
 	worker.requestCache.markSent(req)
 	state.markStopped(errors.New("send request to store error"))
-	worker.tracker.RemoveRegion(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
+	worker.tracker.RemoveIf(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID(), state)
 
 	require.Equal(t, 0, worker.requestCache.pendingCount())
 	require.Empty(t, worker.requestCache.drainUnsentRegions())
@@ -303,7 +286,7 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 		controlQueue: newControlQueue(),
 		store:        &requestedStore{storeAddr: "store-1"},
 		client:       &subscriptionClient{},
-		tracker:      newRegionTracker(0),
+		tracker:      newRegionTracker(),
 	}
 
 	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
@@ -351,7 +334,7 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 				controlQueue: newControlQueue(),
 				store:        &requestedStore{storeAddr: "store-1"},
 				client:       &subscriptionClient{},
-				tracker:      newRegionTracker(0),
+				tracker:      newRegionTracker(),
 			}
 			region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
 
@@ -391,10 +374,10 @@ func TestProcessRegionSendTaskHandlesDeregisterFromControlQueue(t *testing.T) {
 		client: &subscriptionClient{
 			eventSink: &regionEventSink{ds: ds},
 		},
-		tracker: newRegionTracker(0),
+		tracker: newRegionTracker(),
 	}
 	state := &regionFeedState{worker: worker}
-	worker.tracker.Track(1, 1, state)
+	worker.tracker.Replace(1, 1, state)
 	worker.controlQueue.push(deregisterRequest{subID: 1, filterLoop: true})
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -13,57 +13,27 @@
 
 package logpuller
 
-import (
-	"sync"
-
-	"github.com/pingcap/log"
-	"go.uber.org/zap"
-)
+import "sync"
 
 type trackedRegionStates map[uint64]*regionFeedState
 
 // regionTracker owns the region states tracked by one region request worker.
 type regionTracker struct {
-	sync.RWMutex
-	workerID uint64
+	mu sync.RWMutex
 
 	regionsBySubscription map[SubscriptionID]trackedRegionStates
 }
 
-func newRegionTracker(workerID uint64) *regionTracker {
+func newRegionTracker() *regionTracker {
 	return &regionTracker{
-		workerID:              workerID,
 		regionsBySubscription: make(map[SubscriptionID]trackedRegionStates),
 	}
 }
 
-// Track records a region after the worker picks its request and before the
-// request is sent to TiKV. An overwritten state no longer has another owner
-// that can clean up its request, so Track aborts it explicitly.
-func (t *regionTracker) Track(subscriptionID SubscriptionID, regionID uint64, state *regionFeedState) {
-	t.Lock()
-	regions := t.regionsBySubscription[subscriptionID]
-	if regions == nil {
-		regions = make(trackedRegionStates)
-		t.regionsBySubscription[subscriptionID] = regions
-	}
-	oldState := regions[regionID]
-	regions[regionID] = state
-	t.Unlock()
-
-	if oldState == nil {
-		return
-	}
-	log.Warn("region request state overwritten",
-		zap.Uint64("workerID", t.workerID),
-		zap.Uint64("subscriptionID", uint64(subscriptionID)),
-		zap.Uint64("regionID", regionID))
-	oldState.abortScanIfNeeded()
-}
-
+// Get returns the state tracked by a subscription and region.
 func (t *regionTracker) Get(subscriptionID SubscriptionID, regionID uint64) *regionFeedState {
-	t.RLock()
-	defer t.RUnlock()
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 
 	if regions, ok := t.regionsBySubscription[subscriptionID]; ok {
 		return regions[regionID]
@@ -71,34 +41,70 @@ func (t *regionTracker) Get(subscriptionID SubscriptionID, regionID uint64) *reg
 	return nil
 }
 
-func (t *regionTracker) RemoveRegion(subscriptionID SubscriptionID, regionID uint64) *regionFeedState {
-	t.Lock()
-	var state *regionFeedState
+// Replace records a region state and returns the state previously tracked by
+// the same subscription and region, if any.
+func (t *regionTracker) Replace(
+	subscriptionID SubscriptionID,
+	regionID uint64,
+	state *regionFeedState,
+) *regionFeedState {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	regions := t.regionsBySubscription[subscriptionID]
+	if regions == nil {
+		regions = make(trackedRegionStates)
+		t.regionsBySubscription[subscriptionID] = regions
+	}
+	oldState := regions[regionID]
+	regions[regionID] = state
+	return oldState
+}
+
+// RemoveIf removes a region only when it is still tracked by the expected
+// state. It prevents delayed events for an old state from removing its
+// replacement.
+func (t *regionTracker) RemoveIf(
+	subscriptionID SubscriptionID,
+	regionID uint64,
+	expected *regionFeedState,
+) bool {
+	if expected == nil {
+		return false
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	if regions, ok := t.regionsBySubscription[subscriptionID]; ok {
-		state = regions[regionID]
+		if regions[regionID] != expected {
+			return false
+		}
 		delete(regions, regionID)
 		if len(regions) == 0 {
 			delete(t.regionsBySubscription, subscriptionID)
 		}
+		return true
 	}
-	t.Unlock()
-	return state
+	return false
 }
 
-func (t *regionTracker) RemoveSubscription(subscriptionID SubscriptionID) []*regionFeedState {
-	t.Lock()
+// TakeSubscription removes and returns all states tracked by a subscription.
+func (t *regionTracker) TakeSubscription(subscriptionID SubscriptionID) []*regionFeedState {
+	t.mu.Lock()
 	regions := t.regionsBySubscription[subscriptionID]
 	delete(t.regionsBySubscription, subscriptionID)
-	t.Unlock()
+	t.mu.Unlock()
 
 	return collectTrackedRegionStates(regions)
 }
 
+// Drain removes and returns all tracked states grouped by subscription.
 func (t *regionTracker) Drain() map[SubscriptionID][]*regionFeedState {
-	t.Lock()
+	t.mu.Lock()
 	regionsBySubscription := t.regionsBySubscription
 	t.regionsBySubscription = make(map[SubscriptionID]trackedRegionStates)
-	t.Unlock()
+	t.mu.Unlock()
 
 	statesBySubscription := make(map[SubscriptionID][]*regionFeedState, len(regionsBySubscription))
 	for subID, regions := range regionsBySubscription {

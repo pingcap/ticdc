@@ -105,7 +105,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 
 	worker := &regionRequestWorker{
 		requestCache: &requestCache{},
-		tracker:      newRegionTracker(0),
+		tracker:      newRegionTracker(),
 	}
 	// Lock another range, no task will be triggered before initialized.
 	res = span.rangeLock.LockRange(context.Background(), []byte{'c'}, []byte{'d'}, 2, 100)
