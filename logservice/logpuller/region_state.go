@@ -48,11 +48,6 @@ type regionInfo struct {
 	filterLoop bool
 }
 
-func (s *regionInfo) isStopped() bool {
-	// lockedRange only nil when the region's subscribedTable is stopped.
-	return s.lockedRangeState == nil
-}
-
 func newRegionInfo(
 	verID tikv.RegionVerID,
 	span heartbeatpb.TableSpan,
@@ -102,20 +97,28 @@ type regionFeedState struct {
 		// `err` is used to retrieve errors generated outside.
 		err error
 	}
+	regionReq struct {
+		sync.Mutex
+		request *regionReq
+	}
 
 	worker *regionRequestWorker
 }
 
-func newRegionFeedState(region regionInfo, requestID uint64, worker *regionRequestWorker) *regionFeedState {
-	return &regionFeedState{
+func newRegionFeedState(
+	region regionInfo,
+	requestID uint64,
+	worker *regionRequestWorker,
+	request *regionReq,
+) *regionFeedState {
+	state := &regionFeedState{
 		region:    region,
 		requestID: requestID,
+		matcher:   newMatcher(),
 		worker:    worker,
 	}
-}
-
-func (s *regionFeedState) start() {
-	s.matcher = newMatcher()
+	state.regionReq.request = request
+	return state
 }
 
 // mark regionFeedState as stopped with the given error if possible.
@@ -126,7 +129,7 @@ func (s *regionFeedState) markStopped(err error) {
 		s.state.v = stateStopped
 		s.state.err = err
 	}
-	s.worker.requestCache.markStopped(s.region.subscribedSpan.subID, s.region.verID.GetID())
+	s.abortScanIfNeeded()
 }
 
 // mark regionFeedState as removed if possible.
@@ -138,7 +141,7 @@ func (s *regionFeedState) markRemoved() (changed bool) {
 		changed = true
 		s.matcher.clear()
 	}
-	s.worker.requestCache.markStopped(s.region.subscribedSpan.subID, s.region.verID.GetID())
+	s.abortScanIfNeeded()
 	return
 }
 
@@ -162,7 +165,29 @@ func (s *regionFeedState) isInitialized() bool {
 
 func (s *regionFeedState) setInitialized() {
 	s.region.lockedRangeState.Initialized.Store(true)
-	s.worker.requestCache.resolve(s.region.subscribedSpan.subID, s.region.verID.GetID())
+	s.finishScan()
+}
+
+func (s *regionFeedState) finishScan() {
+	s.regionReq.Lock()
+	request := s.regionReq.request
+	s.regionReq.request = nil
+	s.regionReq.Unlock()
+
+	if request != nil {
+		s.worker.requestCache.finishScan(request)
+	}
+}
+
+func (s *regionFeedState) abortScanIfNeeded() {
+	s.regionReq.Lock()
+	request := s.regionReq.request
+	s.regionReq.request = nil
+	s.regionReq.Unlock()
+
+	if request != nil {
+		s.worker.requestCache.abortScan(request)
+	}
 }
 
 func (s *regionFeedState) getRegionID() uint64 {

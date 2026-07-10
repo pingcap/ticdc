@@ -79,6 +79,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 
 	worker := &regionRequestWorker{
 		requestCache: &requestCache{},
+		tracker:      newRegionTracker(0),
 	}
 	region := newRegionInfo(
 		tikv.RegionVerID{},
@@ -88,8 +89,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 		false,
 	)
 	region.lockedRangeState = &regionlock.LockedRangeState{}
-	state := newRegionFeedState(region, 1, worker)
-	state.start()
+	state := newRegionFeedState(region, 1, worker, nil)
 
 	// Receive prewrite2 with empty value.
 	{
@@ -218,9 +218,9 @@ func TestHandleResolvedTs(t *testing.T) {
 	subID1 := SubscriptionID(1)
 	worker := &regionRequestWorker{
 		requestCache: &requestCache{},
+		tracker:      newRegionTracker(0),
 	}
-	state1 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(1, 1, 1)}, uint64(subID1), worker)
-	state1.start()
+	state1 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(1, 1, 1)}, uint64(subID1), worker, nil)
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
@@ -243,8 +243,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	}
 
 	subID2 := SubscriptionID(2)
-	state2 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(2, 2, 2)}, uint64(subID2), worker)
-	state2.start()
+	state2 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(2, 2, 2)}, uint64(subID2), worker, nil)
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
@@ -267,8 +266,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	}
 
 	subID3 := SubscriptionID(3)
-	state3 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(3, 3, 3)}, uint64(subID3), worker)
-	state3.start()
+	state3 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(3, 3, 3)}, uint64(subID3), worker, nil)
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
@@ -361,6 +359,7 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 		advanceInterval: 100,
 	}
 	span.lastAdvanceTime.Store(0)
+	worker := &regionRequestWorker{tracker: newRegionTracker(0)}
 	state := newRegionFeedState(
 		regionInfo{
 			verID:            tikv.NewRegionVerID(1, 1, 1),
@@ -368,9 +367,9 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 			lockedRangeState: res1.LockedRangeState,
 		},
 		1,
+		worker,
 		nil,
 	)
-	state.start()
 
 	require.Equal(t, uint64(200), handleResolvedTs(span, state, 300))
 }

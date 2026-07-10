@@ -214,8 +214,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 				store := value.(*requestedStore)
 				store.requestWorkers.RLock()
 				for _, worker := range store.requestWorkers.s {
-					worker.requestCache.clearStaleRequest()
-					pendingRegionReqCount += worker.requestCache.getPendingCount()
+					pendingRegionReqCount += worker.requestCache.pendingCount()
 				}
 				store.requestWorkers.RUnlock()
 				return true
@@ -327,11 +326,10 @@ func (s *subscriptionClient) setTableStopped(rt *subscribedSpan) {
 	log.Info("subscription client starts to stop table",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
-	// Set stopped to true so we can stop handling region events from the table.
-	// Then send a special singleRegionInfo to regionRouter to deregister the table
-	// from all TiKV instances.
+	// Set stopped to true so we can stop handling region events from the table,
+	// then notify every existing worker to deregister the subscription.
 	if rt.stopped.CompareAndSwap(false, true) {
-		s.regionTaskQueue.Push(NewRegionPriorityTask(TaskHighPrior, regionInfo{subscribedSpan: rt, filterLoop: rt.filterLoop}, s.pdClock.CurrentTS()))
+		s.broadcastDeregister(rt.subID, rt.filterLoop)
 		if rt.rangeLock.Stop() {
 			s.onTableDrained(rt)
 		}
@@ -390,7 +388,6 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 		rs = &requestedStore{storeAddr: storeAddr}
 		rs.requestWorkers.s = make([]*regionRequestWorker, 0, s.config.RegionRequestWorkerPerStore)
-		s.stores.Store(storeAddr, rs)
 
 		perWorkerQueueSize := pendingRegionRequestQueueSize / int(s.config.RegionRequestWorkerPerStore)
 		if perWorkerQueueSize <= 0 {
@@ -402,10 +399,16 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 		rs.requestWorkers.Lock()
 		for i := uint(0); i < s.config.RegionRequestWorkerPerStore; i++ {
-			requestWorker := newRegionRequestWorker(ctx, s, s.credential, eg, rs, perWorkerQueueSize)
+			requestWorker := newRegionRequestWorker(s, rs, newRequestCache(perWorkerQueueSize))
 			rs.requestWorkers.s = append(rs.requestWorkers.s, requestWorker)
 		}
 		rs.requestWorkers.Unlock()
+
+		// Publish the store only after its immutable worker list is complete.
+		s.stores.Store(storeAddr, rs)
+		for _, requestWorker := range rs.requestWorkers.s {
+			eg.Go(func() error { return requestWorker.Run(ctx) })
+		}
 		return rs
 	}
 
@@ -415,7 +418,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 			rs.requestWorkers.RLock()
 			for _, w := range rs.requestWorkers.s {
-				w.requestCache.clear()
+				w.requestCache.close()
 			}
 			rs.requestWorkers.RUnlock()
 
@@ -439,19 +442,6 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		}
 
 		region := regionTask.GetRegionInfo()
-		if region.isStopped() {
-			enqueued, err := s.enqueueRegionToAllStores(ctx, region)
-			if err != nil {
-				return err
-			}
-			if !enqueued {
-				log.Debug("enqueue stop request failed, retry later",
-					zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)))
-				s.regionTaskQueue.Push(regionTask)
-			}
-			continue
-		}
-
 		region, ok := s.attachRPCContextForRegion(ctx, region)
 		// If attachRPCContextForRegion fails, the region will be re-scheduled.
 		if !ok {
@@ -484,30 +474,16 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 	}
 }
 
-func (s *subscriptionClient) enqueueRegionToAllStores(ctx context.Context, region regionInfo) (bool, error) {
-	enqueued := true
-	var firstErr error
+func (s *subscriptionClient) broadcastDeregister(subID SubscriptionID, filterLoop bool) {
 	s.stores.Range(func(_ any, value any) bool {
 		rs := value.(*requestedStore)
 		rs.requestWorkers.RLock()
-		workers := rs.requestWorkers.s
-		rs.requestWorkers.RUnlock()
-		for _, worker := range workers {
-			ok, err := worker.add(ctx, region, true)
-			if err != nil {
-				firstErr = err
-				enqueued = false
-				return false
-			}
-			if !ok {
-				enqueued = false
-				// It is likely the store is busy, no need to try other workers in this store now.
-				break
-			}
+		for _, worker := range rs.requestWorkers.s {
+			worker.controlQueue.push(deregisterRequest{subID: subID, filterLoop: filterLoop})
 		}
+		rs.requestWorkers.RUnlock()
 		return true
 	})
-	return enqueued, firstErr
 }
 
 func (s *subscriptionClient) attachRPCContextForRegion(ctx context.Context, region regionInfo) (regionInfo, bool) {
