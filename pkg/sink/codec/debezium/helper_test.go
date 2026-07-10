@@ -48,14 +48,14 @@ func TestGetColumns(t *testing.T) {
 		},
 	}
 	parsedColumns := parseColumns(sql, columnInfos)
-	require.Equal(t, "CURRENT_TIMESTAMP", parsedColumns[1].GetDefaultValue())
-	require.Equal(t, 2, parsedColumns[2].GetDecimal())
-	require.Equal(t, "0", parsedColumns[2].GetDefaultValue())
-	require.Equal(t, 3, parsedColumns[3].GetDecimal())
-	require.Equal(t, "CURRENT_TIMESTAMP", parsedColumns[3].GetDefaultValue())
-	require.Equal(t, 4, parsedColumns[4].GetFlen())
-	require.Equal(t, "1970", parsedColumns[4].GetDefaultValue())
-	require.Equal(t, "", parsedColumns[4].Comment)
+	require.Equal(t, parsedColumns[1].GetDefaultValue(), "CURRENT_TIMESTAMP")
+	require.Equal(t, parsedColumns[2].GetDecimal(), 2)
+	require.Equal(t, parsedColumns[2].GetDefaultValue(), "0")
+	require.Equal(t, parsedColumns[3].GetDecimal(), 3)
+	require.Equal(t, parsedColumns[3].GetDefaultValue(), "CURRENT_TIMESTAMP")
+	require.Equal(t, parsedColumns[4].GetFlen(), 4)
+	require.Equal(t, parsedColumns[4].GetDefaultValue(), "1970")
+	require.Equal(t, parsedColumns[4].Comment, "")
 }
 
 func TestGetSchemaTopicName(t *testing.T) {

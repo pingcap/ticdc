@@ -117,10 +117,10 @@ func newReaders(ctx context.Context, cfg *readerConfig) ([]fileReader, error) {
 	return readers, nil
 }
 
-func downLoadAndSortFiles(ctx context.Context, cfg *readerConfig) (_ []io.ReadCloser, err error) {
+func downLoadAndSortFiles(ctx context.Context, cfg *readerConfig) ([]io.ReadCloser, error) {
 	dir := cfg.dir
 	// create temp dir in local storage
-	err = os.MkdirAll(dir, redo.DefaultDirMode)
+	err := os.MkdirAll(dir, redo.DefaultDirMode)
 	if err != nil {
 		return nil, cerror.WrapError(cerror.ErrRedoFileOp, err)
 	}
