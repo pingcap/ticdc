@@ -46,6 +46,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/upstream"
 	"github.com/pingcap/ticdc/server/watcher"
 	pd "github.com/tikv/pd/client"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -55,9 +56,14 @@ const (
 	closeServiceTimeout  = 15 * time.Second
 	cleanMetaDuration    = 10 * time.Second
 	oldArchCheckInterval = 100 * time.Millisecond
+	sessionWatchInterval = time.Second
 	// GracefulShutdownTimeout is used to prevent the CDC process from hanging for an extended period due to certain modules don't exit immediately.
 	GracefulShutdownTimeout = 30 * time.Second
 )
+
+type localFencer interface {
+	LocalFence()
+}
 
 // server represents the main TiCDC server with carefully orchestrated module lifecycle management.
 //
@@ -135,6 +141,8 @@ type server struct {
 	subModules []common.SubModule
 
 	closed atomic.Bool
+
+	localFenceOnce atomic.Bool
 }
 
 // New returns a new Server instance
@@ -307,7 +315,9 @@ func (c *server) Run(ctx context.Context) error {
 		}(sub)
 	}
 
-	g, gctx := errgroup.WithContext(egctx)
+	groupCtx, cancelGroup := context.WithCancel(egctx)
+	defer cancelGroup()
+	g, gctx := errgroup.WithContext(groupCtx)
 	// start all subCommonModules
 	for _, sub := range c.nodeModules {
 		func(m common.SubModule) {
@@ -341,6 +351,14 @@ func (c *server) Run(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
+	fatalErrCh := make(chan error, 1)
+	go func() {
+		if err := c.runSessionWatchdog(gctx, sessionWatchInterval); err != nil {
+			fatalErrCh <- err
+			cancelGroup()
+		}
+	}()
+
 	// if it takes too long for all sub modules to exit, then exit directly to avoid hanging.
 	ch := make(chan error, 1)
 	go func() {
@@ -351,8 +369,82 @@ func (c *server) Run(ctx context.Context) error {
 	go func() {
 		ch <- g.Wait()
 	}()
-	err = <-ch
+	select {
+	case err = <-fatalErrCh:
+	case err = <-ch:
+	}
 	return err
+}
+
+func (c *server) runSessionWatchdog(ctx context.Context, checkInterval time.Duration) error {
+	if c.session == nil {
+		return nil
+	}
+	return c.watchEtcdSession(ctx, c.session.Done(), c.session.Lease(), checkInterval)
+}
+
+func (c *server) watchEtcdSession(
+	ctx context.Context,
+	sessionDone <-chan struct{},
+	leaseID clientv3.LeaseID,
+	checkInterval time.Duration,
+) error {
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-sessionDone:
+			if ctx.Err() != nil {
+				return nil
+			}
+			c.localFence("etcd session done")
+			return errors.ErrCaptureSuicide.GenWithStackByArgs()
+		case <-ticker.C:
+			ttl, err := c.EtcdClient.GetEtcdClient().TimeToLive(ctx, leaseID)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				log.Warn("check etcd session ttl failed", zap.Error(err))
+				continue
+			}
+			if ttl != nil && ttl.TTL == -1 {
+				c.localFence("etcd lease expired")
+				return errors.ErrCaptureSuicide.GenWithStackByArgs()
+			}
+		}
+	}
+}
+
+func (c *server) localFence(reason string) {
+	if !c.localFenceOnce.CompareAndSwap(false, true) {
+		return
+	}
+
+	log.Warn("local fence triggered", zap.String("reason", reason))
+
+	c.liveness.Store(api.LivenessCaptureStopping)
+
+	fencer, ok := getLocalFencerIfAvailable()
+	if !ok {
+		log.Warn("dispatcher orchestrator is not available when local fence triggered")
+		return
+	}
+	fencer.LocalFence()
+}
+
+func getLocalFencerIfAvailable() (fencer localFencer, ok bool) {
+	defer func() {
+		if recover() != nil {
+			fencer = nil
+			ok = false
+		}
+	}()
+	fencer = appctx.GetService[localFencer](appctx.DispatcherOrchestrator)
+	return fencer, fencer != nil
 }
 
 // validCheck checks whether the environment is valid to start the server

@@ -207,7 +207,6 @@ func TestExecDDL_RestoreAnonymousIndexToNamedIndex(t *testing.T) {
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
 		TableInfo:  tableInfo,
-		IndexIDs:   indexIDs,
 	}
 
 	mock.ExpectBegin()
@@ -321,7 +320,6 @@ func TestExecDDL_RestoreAnonymousIndexToNamedIndexForMultiSchemaChange(t *testin
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
 		TableInfo:  tableInfo,
-		IndexIDs:   indexIDs,
 	}
 
 	mock.ExpectBegin()

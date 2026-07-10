@@ -14,9 +14,11 @@
 package dispatcherorchestrator
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -197,4 +199,68 @@ func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	key, ok = getPendingMessageKey(closeReq)
 	require.True(t, ok)
 	require.Equal(t, pendingMessageKey{changefeedID: cfID, msgType: messaging.TypeMaintainerCloseRequest}, key)
+}
+
+func TestDispatcherOrchestratorLocalFenceDropsNewMessages(t *testing.T) {
+	mc, _, stop := messaging.NewMessageCenterForTest(t)
+	defer stop()
+
+	orchestrator := &DispatcherOrchestrator{
+		mc:                             mc,
+		dispatcherManagers:             make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		initializingDispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		msgQueue:                       newPendingMessageQueue(),
+	}
+	orchestrator.LocalFence()
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	msg := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB()},
+	)
+	require.NoError(t, orchestrator.RecvMaintainerRequest(context.Background(), msg))
+
+	_, ok := orchestrator.msgQueue.Pop()
+	require.False(t, ok)
+}
+
+func TestDispatcherOrchestratorLocalFenceFencesManagersImmediately(t *testing.T) {
+	mc, _, stop := messaging.NewMessageCenterForTest(t)
+	defer stop()
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager := &dispatchermanager.DispatcherManager{}
+	orchestrator := &DispatcherOrchestrator{
+		mc: mc,
+		dispatcherManagers: map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{
+			cfID: manager,
+		},
+		initializingDispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		msgQueue:                       newPendingMessageQueue(),
+	}
+	orchestrator.LocalFence()
+
+	err := manager.InitalizeTableTriggerEventDispatcher(nil)
+	require.True(t, dispatchermanager.IsWritePathClosedError(err))
+}
+
+func TestDispatcherOrchestratorLocalFenceFencesInitializingManagersImmediately(t *testing.T) {
+	mc, _, stop := messaging.NewMessageCenterForTest(t)
+	defer stop()
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager := &dispatchermanager.DispatcherManager{}
+	orchestrator := &DispatcherOrchestrator{
+		mc:                 mc,
+		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		initializingDispatcherManagers: map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{
+			cfID: manager,
+		},
+		msgQueue: newPendingMessageQueue(),
+	}
+	orchestrator.LocalFence()
+
+	err := manager.InitalizeTableTriggerEventDispatcher(nil)
+	require.True(t, dispatchermanager.IsWritePathClosedError(err))
 }
