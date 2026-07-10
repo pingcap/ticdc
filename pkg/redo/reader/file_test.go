@@ -20,12 +20,12 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
 
 func TestReaderNewReader(t *testing.T) {

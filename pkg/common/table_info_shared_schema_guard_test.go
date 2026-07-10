@@ -83,7 +83,7 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 				"Partition", "Compression", "View", "Sequence", "Lock", "Version", "TiFlashReplica", "IsColumnar",
 				"TempTableType", "TableCacheStatusType", "PlacementPolicyRef", "StatsOptions",
 				"ExchangePartitionInfo", "TTLInfo", "IsActiveActive", "SoftdeleteInfo", "Affinity",
-				"Revision", "DBID", "Mode",
+				"Revision", "DBID", "Mode", "EngineAttribute", "StorageClassTier", "StorageClassTransitions",
 			},
 		},
 		{

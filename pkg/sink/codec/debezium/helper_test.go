@@ -47,15 +47,15 @@ func TestGetColumns(t *testing.T) {
 			FieldType: *types.NewFieldType(mysql.TypeYear),
 		},
 	}
-	parseColumns(sql, columnInfos)
-	require.Equal(t, columnInfos[1].GetDefaultValue(), "CURRENT_TIMESTAMP")
-	require.Equal(t, columnInfos[2].GetDecimal(), 2)
-	require.Equal(t, columnInfos[2].GetDefaultValue(), "0")
-	require.Equal(t, columnInfos[3].GetDecimal(), 3)
-	require.Equal(t, columnInfos[3].GetDefaultValue(), "CURRENT_TIMESTAMP")
-	require.Equal(t, columnInfos[4].GetFlen(), 4)
-	require.Equal(t, columnInfos[4].GetDefaultValue(), "1970")
-	require.Equal(t, columnInfos[4].Comment, "")
+	parsedColumns := parseColumns(sql, columnInfos)
+	require.Equal(t, parsedColumns[1].GetDefaultValue(), "CURRENT_TIMESTAMP")
+	require.Equal(t, parsedColumns[2].GetDecimal(), 2)
+	require.Equal(t, parsedColumns[2].GetDefaultValue(), "0")
+	require.Equal(t, parsedColumns[3].GetDecimal(), 3)
+	require.Equal(t, parsedColumns[3].GetDefaultValue(), "CURRENT_TIMESTAMP")
+	require.Equal(t, parsedColumns[4].GetFlen(), 4)
+	require.Equal(t, parsedColumns[4].GetDefaultValue(), "1970")
+	require.Equal(t, parsedColumns[4].Comment, "")
 }
 
 func TestGetSchemaTopicName(t *testing.T) {
