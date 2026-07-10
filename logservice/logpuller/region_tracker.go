@@ -15,18 +15,18 @@ package logpuller
 
 import "sync"
 
-type trackedRegionStates map[uint64]*regionFeedState
+type regionStatesByID map[uint64]*regionFeedState
 
 // regionTracker owns the region states tracked by one region request worker.
 type regionTracker struct {
 	mu sync.RWMutex
 
-	regionsBySubscription map[SubscriptionID]trackedRegionStates
+	statesBySubscription map[SubscriptionID]regionStatesByID
 }
 
 func newRegionTracker() *regionTracker {
 	return &regionTracker{
-		regionsBySubscription: make(map[SubscriptionID]trackedRegionStates),
+		statesBySubscription: make(map[SubscriptionID]regionStatesByID),
 	}
 }
 
@@ -35,8 +35,8 @@ func (t *regionTracker) Get(subscriptionID SubscriptionID, regionID uint64) *reg
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	if regions, ok := t.regionsBySubscription[subscriptionID]; ok {
-		return regions[regionID]
+	if states, ok := t.statesBySubscription[subscriptionID]; ok {
+		return states[regionID]
 	}
 	return nil
 }
@@ -51,13 +51,13 @@ func (t *regionTracker) Replace(
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	regions := t.regionsBySubscription[subscriptionID]
-	if regions == nil {
-		regions = make(trackedRegionStates)
-		t.regionsBySubscription[subscriptionID] = regions
+	states := t.statesBySubscription[subscriptionID]
+	if states == nil {
+		states = make(regionStatesByID)
+		t.statesBySubscription[subscriptionID] = states
 	}
-	oldState := regions[regionID]
-	regions[regionID] = state
+	oldState := states[regionID]
+	states[regionID] = state
 	return oldState
 }
 
@@ -76,13 +76,13 @@ func (t *regionTracker) RemoveIf(
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if regions, ok := t.regionsBySubscription[subscriptionID]; ok {
-		if regions[regionID] != expected {
+	if states, ok := t.statesBySubscription[subscriptionID]; ok {
+		if states[regionID] != expected {
 			return false
 		}
-		delete(regions, regionID)
-		if len(regions) == 0 {
-			delete(t.regionsBySubscription, subscriptionID)
+		delete(states, regionID)
+		if len(states) == 0 {
+			delete(t.statesBySubscription, subscriptionID)
 		}
 		return true
 	}
@@ -92,30 +92,30 @@ func (t *regionTracker) RemoveIf(
 // TakeSubscription removes and returns all states tracked by a subscription.
 func (t *regionTracker) TakeSubscription(subscriptionID SubscriptionID) []*regionFeedState {
 	t.mu.Lock()
-	regions := t.regionsBySubscription[subscriptionID]
-	delete(t.regionsBySubscription, subscriptionID)
+	states := t.statesBySubscription[subscriptionID]
+	delete(t.statesBySubscription, subscriptionID)
 	t.mu.Unlock()
 
-	return collectTrackedRegionStates(regions)
+	return collectRegionStates(states)
 }
 
 // Drain removes and returns all tracked states grouped by subscription.
 func (t *regionTracker) Drain() map[SubscriptionID][]*regionFeedState {
 	t.mu.Lock()
-	regionsBySubscription := t.regionsBySubscription
-	t.regionsBySubscription = make(map[SubscriptionID]trackedRegionStates)
+	statesBySubscription := t.statesBySubscription
+	t.statesBySubscription = make(map[SubscriptionID]regionStatesByID)
 	t.mu.Unlock()
 
-	statesBySubscription := make(map[SubscriptionID][]*regionFeedState, len(regionsBySubscription))
-	for subID, regions := range regionsBySubscription {
-		statesBySubscription[subID] = collectTrackedRegionStates(regions)
+	drainedStates := make(map[SubscriptionID][]*regionFeedState, len(statesBySubscription))
+	for subID, states := range statesBySubscription {
+		drainedStates[subID] = collectRegionStates(states)
 	}
-	return statesBySubscription
+	return drainedStates
 }
 
-func collectTrackedRegionStates(regions trackedRegionStates) []*regionFeedState {
-	states := make([]*regionFeedState, 0, len(regions))
-	for _, state := range regions {
+func collectRegionStates(statesByID regionStatesByID) []*regionFeedState {
+	states := make([]*regionFeedState, 0, len(statesByID))
+	for _, state := range statesByID {
 		if state != nil {
 			states = append(states, state)
 		}
