@@ -109,6 +109,8 @@ func (c *ColumnSelectors) GetForTableInfo(tableInfo *common.TableInfo) *ColumnSe
 // VerifyTables return the error if any given table cannot satisfy the column selector constraints.
 // 1. if the column is filter out, it must not be a part of handle key or the unique key.
 // 2. if the filtered out column is used in the column dispatcher, return error.
+//
+// The column dispatcher check is only applied when eventRouter is not nil.
 func (c *ColumnSelectors) VerifyTables(
 	infos []*common.TableInfo, eventRouter *eventrouter.EventRouter,
 ) error {
@@ -130,17 +132,19 @@ func (c *ColumnSelectors) VerifyTables(
 					continue
 				}
 
-				partitionDispatcher := eventRouter.GetPartitionGenerator(table.TableName.Schema, table.TableName.Table)
-				switch v := partitionDispatcher.(type) {
-				case *partition.ColumnsPartitionGenerator:
-					for _, col := range v.Columns {
-						if col == columnInfo.Name.O {
-							return errors.ErrColumnSelectorFailed.GenWithStack(
-								"the filtered out column is used in the column dispatcher, "+
-									"table: %v, column: %s", table.TableName, columnInfo.Name)
+				if eventRouter != nil {
+					partitionDispatcher := eventRouter.GetPartitionGenerator(table.TableName.Schema, table.TableName.Table)
+					switch v := partitionDispatcher.(type) {
+					case *partition.ColumnsPartitionGenerator:
+						for _, col := range v.Columns {
+							if col == columnInfo.Name.O {
+								return errors.ErrColumnSelectorFailed.GenWithStack(
+									"the filtered out column is used in the column dispatcher, "+
+										"table: %v, column: %s", table.TableName, columnInfo.Name)
+							}
 						}
+					default:
 					}
-				default:
 				}
 			}
 
@@ -158,16 +162,18 @@ func (c *ColumnSelectors) VerifyTables(
 func verifyIndices(table *common.TableInfo, retainedColumns map[string]struct{}) bool {
 	primaryKeyColumns := table.GetPrimaryKeyColumnNames()
 
-	retained := true
-	for _, name := range primaryKeyColumns {
-		if _, ok := retainedColumns[name]; !ok {
-			retained = false
-			break
+	if len(primaryKeyColumns) > 0 {
+		retained := true
+		for _, name := range primaryKeyColumns {
+			if _, ok := retainedColumns[name]; !ok {
+				retained = false
+				break
+			}
 		}
-	}
-	// primary key columns are retained, return true.
-	if retained {
-		return true
+		// primary key columns are retained, return true.
+		if retained {
+			return true
+		}
 	}
 
 	// at least one unique key columns are retained, return true.
@@ -176,7 +182,7 @@ func verifyIndices(table *common.TableInfo, retainedColumns map[string]struct{})
 			continue
 		}
 
-		retained = true
+		retained := true
 		for _, col := range index.Columns {
 			if _, ok := retainedColumns[col.Name.O]; !ok {
 				retained = false

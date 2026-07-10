@@ -53,17 +53,18 @@ func newDMLTask(
 	event *commonEvent.DMLEvent,
 	selector commonEvent.Selector,
 ) *task {
+	postEnqueue, postFlush := event.DetachPostCallbacks()
 	return &task{
 		kind:           taskKindDML,
-		postEnqueue:    event.PostEnqueue,
+		postEnqueue:    postEnqueue,
 		tableInfo:      event.TableInfo,
 		versionedTable: version,
 		// Storage txn encoders attach only the last row callback to the built
 		// batch message, so the callback is triggered once per encoded txn
 		// message. Kafka uses row-level callbacks and counts all rows before
 		// PostFlush, which cannot be reused here for multi-row txns.
-		rowEvents:      helper.NewRowEvents(event, selector, event.PostFlush),
-		dispatcherID:   event.GetDispatcherID(),
+		rowEvents:    helper.NewRowEvents(event, selector, postFlush),
+		dispatcherID: event.GetDispatcherID(),
 	}
 }
 

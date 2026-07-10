@@ -32,6 +32,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/util"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 )
@@ -261,4 +265,46 @@ func TestVerifyRouteConflict(t *testing.T) {
 	require.Contains(t, err.Error(), "target `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db2`.`orders`")
+}
+
+func TestVerifyTablesForSinkValidatesStorageColumnSelectors(t *testing.T) {
+	t.Parallel()
+
+	replicaCfg := config.GetDefaultReplicaConfig()
+	replicaCfg.Sink.ColumnSelectors = []*config.ColumnSelector{
+		{Matcher: []string{"test.t"}, Columns: []string{"name"}},
+	}
+	tableInfos := []*common.TableInfo{newTableInfoWithPrimaryKeyForTest()}
+
+	err := verifyTablesForSink(replicaCfg, config.FileScheme, "", config.ProtocolCanalJSON, tableInfos)
+	require.Error(t, err)
+	require.True(t, errors.ErrColumnSelectorFailed.Equal(err))
+
+	replicaCfg.Sink.ColumnSelectors[0].Columns = []string{"id", "name"}
+	require.NoError(t, verifyTablesForSink(replicaCfg, config.FileScheme, "", config.ProtocolCanalJSON, tableInfos))
+}
+
+func newTableInfoWithPrimaryKeyForTest() *common.TableInfo {
+	idFieldType := types.NewFieldType(mysql.TypeLong)
+	idFieldType.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+
+	return common.WrapTableInfo("test", &timodel.TableInfo{
+		ID:         1,
+		Name:       ast.NewCIStr("t"),
+		PKIsHandle: true,
+		Columns: []*timodel.ColumnInfo{
+			{
+				ID:        1,
+				Name:      ast.NewCIStr("id"),
+				FieldType: *idFieldType,
+				State:     timodel.StatePublic,
+			},
+			{
+				ID:        2,
+				Name:      ast.NewCIStr("name"),
+				FieldType: *types.NewFieldType(mysql.TypeVarchar),
+				State:     timodel.StatePublic,
+			},
+		},
+	})
 }
