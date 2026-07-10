@@ -39,6 +39,7 @@ var (
 	metricKvCongestedCounter          = metrics.EventFeedErrorCounter.WithLabelValues("KvCongested")
 )
 
+// regionFailureHandler handles failed regions and owns retry and reschedule decisions.
 type regionFailureHandler struct {
 	cache  *errCache
 	client *subscriptionClient

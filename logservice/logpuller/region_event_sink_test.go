@@ -20,7 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,6 +30,7 @@ type mockRegionEventSinkStream struct {
 	feedbackCh chan dynstream.Feedback[int, SubscriptionID, *subscribedSpan]
 	pushCount  atomic.Int32
 	pushCh     chan struct{}
+	metrics    dynstream.Metrics[int, SubscriptionID]
 }
 
 func newMockRegionEventSinkStream() *mockRegionEventSinkStream {
@@ -65,7 +68,7 @@ func (s *mockRegionEventSinkStream) Release(_ SubscriptionID) {}
 func (s *mockRegionEventSinkStream) SetAreaSettings(_ int, _ dynstream.AreaSettings) {}
 
 func (s *mockRegionEventSinkStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] {
-	return dynstream.Metrics[int, SubscriptionID]{}
+	return s.metrics
 }
 
 func TestRegionEventSinkRunPausesAndResumesPush(t *testing.T) {
@@ -125,4 +128,88 @@ func TestRegionEventSinkRunPausesAndResumesPush(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Run should exit after context cancellation")
 	}
+}
+
+func TestRegionEventSinkUpdateMetrics(t *testing.T) {
+	t.Run("empty area metrics returns after queue gauges", func(t *testing.T) {
+		ds := newMockRegionEventSinkStream()
+		ds.metrics = dynstream.Metrics[int, SubscriptionID]{
+			EventChanSize:   11,
+			PendingQueueLen: 22,
+		}
+
+		metrics.DynamicStreamMemoryUsage.WithLabelValues(
+			"log-puller",
+			"max",
+			"default",
+			"default",
+		).Set(123)
+		metrics.DynamicStreamMemoryUsage.WithLabelValues(
+			"log-puller",
+			"used",
+			"default",
+			"default",
+		).Set(456)
+
+		sink := &regionEventSink{
+			ctx: context.Background(),
+			ds:  ds,
+		}
+		sink.cond = sync.NewCond(&sink.mu)
+		sink.UpdateMetrics()
+
+		require.Equal(t, float64(11), testutil.ToFloat64(metricSubscriptionClientDSChannelSize))
+		require.Equal(t, float64(22), testutil.ToFloat64(metricSubscriptionClientDSPendingQueueLen))
+		require.Equal(t, float64(123), testutil.ToFloat64(metrics.DynamicStreamMemoryUsage.WithLabelValues(
+			"log-puller",
+			"max",
+			"default",
+			"default",
+		)))
+		require.Equal(t, float64(456), testutil.ToFloat64(metrics.DynamicStreamMemoryUsage.WithLabelValues(
+			"log-puller",
+			"used",
+			"default",
+			"default",
+		)))
+	})
+
+	t.Run("single area metrics updates memory gauges", func(t *testing.T) {
+		ds := newMockRegionEventSinkStream()
+		ds.metrics = dynstream.Metrics[int, SubscriptionID]{
+			EventChanSize:   33,
+			PendingQueueLen: 44,
+			MemoryControl: dynstream.MemoryMetric[int, SubscriptionID]{
+				AreaMemoryMetrics: []dynstream.AreaMemoryMetric[int, SubscriptionID]{
+					{
+						UsedMemoryValue:    55,
+						MaxMemoryValue:     66,
+						PathMaxMemoryValue: 66,
+					},
+				},
+			},
+		}
+
+		sink := &regionEventSink{
+			ctx: context.Background(),
+			ds:  ds,
+		}
+		sink.cond = sync.NewCond(&sink.mu)
+		sink.UpdateMetrics()
+
+		require.Equal(t, float64(33), testutil.ToFloat64(metricSubscriptionClientDSChannelSize))
+		require.Equal(t, float64(44), testutil.ToFloat64(metricSubscriptionClientDSPendingQueueLen))
+		require.Equal(t, float64(66), testutil.ToFloat64(metrics.DynamicStreamMemoryUsage.WithLabelValues(
+			"log-puller",
+			"max",
+			"default",
+			"default",
+		)))
+		require.Equal(t, float64(55), testutil.ToFloat64(metrics.DynamicStreamMemoryUsage.WithLabelValues(
+			"log-puller",
+			"used",
+			"default",
+			"default",
+		)))
+	})
 }

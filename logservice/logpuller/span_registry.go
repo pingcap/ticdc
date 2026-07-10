@@ -73,6 +73,7 @@ type subscribedSpan struct {
 	resolvedTs        atomic.Uint64
 }
 
+// spanRegistry tracks subscribed spans and owns span-level background maintenance.
 type spanRegistry struct {
 	sync.RWMutex
 	spans map[SubscriptionID]*subscribedSpan

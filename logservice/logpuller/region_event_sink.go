@@ -24,6 +24,7 @@ import (
 	"go.uber.org/zap"
 )
 
+// regionEventSink delivers region events to dynstream and owns push-side flow control.
 type regionEventSink struct {
 	ctx context.Context
 	ds  dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
@@ -122,6 +123,10 @@ func (s *regionEventSink) UpdateMetrics() {
 	dsMetrics := s.ds.GetMetrics()
 	metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 	metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
+
+	if len(dsMetrics.MemoryControl.AreaMemoryMetrics) == 0 {
+		return
+	}
 	if len(dsMetrics.MemoryControl.AreaMemoryMetrics) != 1 {
 		log.Warn("subscription client should have exactly one area")
 		return
