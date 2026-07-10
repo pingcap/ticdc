@@ -17,6 +17,8 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -59,6 +61,27 @@ func startEventService(
 		}
 	}()
 	return esImpl
+}
+
+func TestNewEventServiceRemovesOrphanedLargeTxnSpillFiles(t *testing.T) {
+	original := config.GetGlobalServerConfig().Clone()
+	cfg := original.Clone()
+	cfg.DataDir = t.TempDir()
+	config.StoreGlobalServerConfig(cfg)
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(original)
+	})
+
+	spillDir := getLargeTxnInsertSpillDir()
+	require.NoError(t, os.MkdirAll(spillDir, 0o700))
+	orphanPath := filepath.Join(spillDir, "eventservice-large-txn-insert-orphan.spill")
+	require.NoError(t, os.WriteFile(orphanPath, []byte("orphan"), 0o600))
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	_ = New(newMockEventStore(100), NewMockSchemaStore())
+
+	require.NoFileExists(t, orphanPath)
 }
 
 func TestEventServiceBasic(t *testing.T) {

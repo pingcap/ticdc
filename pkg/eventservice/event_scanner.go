@@ -16,7 +16,6 @@ package eventservice
 import (
 	"context"
 	"io"
-	"path/filepath"
 	"time"
 
 	"github.com/pingcap/log"
@@ -155,9 +154,6 @@ func (s *eventScanner) scan(
 	if state := dispatcherStat.getLargeTxnState(); state != nil &&
 		state.getPhase() == largeTxnScanPhaseDrainInserts {
 		interrupted, err := s.drainLargeTxnInserts(sess, state)
-		if err != nil {
-			_ = dispatcherStat.cleanupLargeTxnState()
-		}
 		return sess.eventBytes, sess.events, sess.progress, interrupted, err
 	}
 
@@ -174,6 +170,7 @@ func (s *eventScanner) scan(
 		return 0, nil, scanProgress{}, false, err
 	}
 	if iter == nil {
+		dispatcherStat.finishPendingBigTxnMetric()
 		if state := dispatcherStat.getLargeTxnState(); state != nil &&
 			state.getPhase() == largeTxnScanPhaseOriginal {
 			dispatcherStat.markLargeTxnDrainInserts(state.startTs, state.commitTs, false, 0)
@@ -671,6 +668,16 @@ func (s *eventScanner) drainLargeTxnInserts(
 	session *session,
 	state *largeTxnScanState,
 ) (bool, error) {
+	drainedInsertCount := 0
+	returnWithError := func(scanErr error) (bool, error) {
+		if rollbackErr := state.rollbackDrain(); rollbackErr != nil {
+			log.Warn("reset large transaction spill reader failed",
+				zap.Stringer("dispatcherID", session.dispatcherStat.id),
+				zap.Error(rollbackErr))
+		}
+		return false, scanErr
+	}
+
 	processor := newDMLProcessor(
 		s.mounter,
 		s.schemaGetter,
@@ -683,7 +690,7 @@ func (s *eventScanner) drainLargeTxnInserts(
 	for {
 		shouldStop, err := s.checkScanConditions(session)
 		if err != nil {
-			return false, err
+			return returnWithError(err)
 		}
 		if shouldStop {
 			return false, nil
@@ -697,18 +704,21 @@ func (s *eventScanner) drainLargeTxnInserts(
 			if errors.Is(err, io.EOF) {
 				if processor.currentTxn != nil {
 					if err := processor.commitTxn(); err != nil {
-						return false, err
+						return returnWithError(err)
 					}
 					if processor.getCurrentBatchDML().DMLCount() != 0 {
 						session.appendEvents([]event.Event{processor.getCurrentBatchDML()})
 					}
 				}
+				state.commitDrainedInserts(drainedInsertCount)
 				session.progress = newTxnScanProgress(state.commitTs, state.startTs)
 				hasFollowingTxn, followingCommitTs := state.snapshotDrainInfo()
 				shouldResolveCommitTs := (!hasFollowingTxn || followingCommitTs > state.commitTs) &&
 					session.dataRange.CommitTsEnd == state.commitTs
 				if err := session.dispatcherStat.cleanupLargeTxnState(); err != nil {
-					return false, err
+					log.Warn("cleanup drained large transaction spill failed",
+						zap.Stringer("dispatcherID", session.dispatcherStat.id),
+						zap.Error(err))
 				}
 				if shouldResolveCommitTs {
 					resolved := event.NewResolvedEvent(state.commitTs, session.dispatcherStat.id, session.dispatcherStat.epoch)
@@ -718,8 +728,9 @@ func (s *eventScanner) drainLargeTxnInserts(
 				}
 				return true, nil
 			}
-			return false, err
+			return returnWithError(err)
 		}
+		drainedInsertCount++
 
 		if processor.currentTxn == nil {
 			if err := processor.startTxn(
@@ -730,18 +741,19 @@ func (s *eventScanner) drainLargeTxnInserts(
 				state.commitTs,
 				true,
 			); err != nil {
-				return false, err
+				return returnWithError(err)
 			}
 		}
 		session.observeRawEntry(entry, nil)
 		if err := processor.appendInsertRow(entry); err != nil {
-			return false, err
+			return returnWithError(err)
 		}
 		if session.exceedLimit(processor.batchDML.GetSize(), processor.batchDML) {
 			if err := processor.commitTxn(); err != nil {
-				return false, err
+				return returnWithError(err)
 			}
 			session.appendEvents([]event.Event{processor.getCurrentBatchDML()})
+			state.commitDrainedInserts(drainedInsertCount)
 			session.progress = newTxnScanProgress(state.commitTs, state.startTs)
 			return true, nil
 		}
@@ -973,12 +985,6 @@ type TxnEvent struct {
 	rawKVBytes               int64
 	largeTxnThresholdInBytes int64
 	shouldSplitTxn           bool
-}
-
-const largeTxnInsertSpillDirName = "eventservice"
-
-func getLargeTxnInsertSpillDir() string {
-	return filepath.Join(config.GetGlobalServerConfig().DataDir, largeTxnInsertSpillDirName)
 }
 
 func newTxnEvent(
@@ -1216,7 +1222,6 @@ func (p *dmlProcessor) appendInsertRow(rawEvent *common.RawKVEntry) error {
 		log.Panic("no current DML event to append to")
 	}
 	rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
-	updateMetricEventServiceSendDMLTypeCount(p.mode, rawEvent.GetType(), false)
 	return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter, p.filterContext)
 }
 

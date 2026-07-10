@@ -41,9 +41,13 @@ type largeTxnScanState struct {
 	hasFollowingTxn   bool
 	followingCommitTs uint64
 
-	spill   *largeTxnInsertSpill
-	reader  *largeTxnInsertSpillReader
-	cleaned bool
+	spill  *largeTxnInsertSpill
+	reader *largeTxnInsertSpillReader
+	// drainedInsertCount is the number of insert rows returned by completed
+	// drain scans. It lets an errored drain reopen the reader and retry only the
+	// rows from the current scan attempt.
+	drainedInsertCount int
+	cleaned            bool
 }
 
 func (a *dispatcherStat) getOrCreateLargeTxnState(
@@ -144,6 +148,13 @@ func (s *largeTxnScanState) nextInsert() (*common.RawKVEntry, error) {
 		if err != nil {
 			return nil, err
 		}
+		for range s.drainedInsertCount {
+			if _, err := reader.Next(); err != nil {
+				_ = reader.Close()
+				return nil, errors.WrapError(
+					errors.ErrSpillFileOp, err, "seek committed spill rows")
+			}
+		}
 		s.reader = reader
 	}
 
@@ -155,6 +166,23 @@ func (s *largeTxnScanState) nextInsert() (*common.RawKVEntry, error) {
 		return nil, err
 	}
 	return entry, nil
+}
+
+func (s *largeTxnScanState) commitDrainedInserts(count int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.drainedInsertCount += count
+}
+
+func (s *largeTxnScanState) rollbackDrain() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reader == nil {
+		return nil
+	}
+	err := s.reader.Close()
+	s.reader = nil
+	return err
 }
 
 func (s *largeTxnScanState) markDrainInserts(hasFollowingTxn bool, followingCommitTs uint64) {

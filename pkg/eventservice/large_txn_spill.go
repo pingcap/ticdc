@@ -15,31 +15,65 @@ package eventservice
 
 import (
 	"io"
+	"os"
+	"path/filepath"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	recordspill "github.com/pingcap/ticdc/pkg/spill"
 )
 
+const (
+	largeTxnInsertSpillDirName = "eventservice"
+	largeTxnInsertSpillPattern = "eventservice-large-txn-insert-*.spill"
+)
+
 // largeTxnInsertSpill stores deferred insert rows for a single large transaction.
 type largeTxnInsertSpill struct {
-	path string
 	file *recordspill.RecordFile
+}
+
+func getLargeTxnInsertSpillDir() string {
+	return filepath.Join(config.GetGlobalServerConfig().DataDir, largeTxnInsertSpillDirName)
+}
+
+func cleanupLargeTxnInsertSpillFiles(dir string) (int, error) {
+	paths, err := filepath.Glob(filepath.Join(dir, largeTxnInsertSpillPattern))
+	if err != nil {
+		return 0, errors.WrapError(errors.ErrSpillFileOp, err, "list large transaction spill files")
+	}
+
+	removed := 0
+	for _, path := range paths {
+		info, err := os.Lstat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return removed, errors.WrapError(errors.ErrSpillFileOp, err, "stat large transaction spill file")
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return removed, errors.WrapError(errors.ErrSpillFileOp, err, "remove large transaction spill file")
+		}
+		removed++
+	}
+	return removed, nil
 }
 
 func newLargeTxnInsertSpill(dir string) (*largeTxnInsertSpill, error) {
 	if dir == "" {
 		return nil, errors.New("large txn spill dir is empty")
 	}
-	file, err := recordspill.NewRecordFile(dir, "eventservice-large-txn-insert-*.spill")
+	file, err := recordspill.NewRecordFile(dir, largeTxnInsertSpillPattern)
 	if err != nil {
 		return nil, err
 	}
 
-	return &largeTxnInsertSpill{
-		path: file.Path(),
-		file: file,
-	}, nil
+	return &largeTxnInsertSpill{file: file}, nil
 }
 
 func (s *largeTxnInsertSpill) Append(entry *common.RawKVEntry) error {

@@ -674,7 +674,7 @@ func mustCreateLargeTxnState(t *testing.T, stat *dispatcherStat, tableID int64) 
 	state, err := stat.getOrCreateLargeTxnState(t.TempDir(), tableID, nil, 90, 100)
 	require.NoError(t, err)
 	require.NoError(t, state.appendInsert(newTestSpillRawKVEntry(1)))
-	return state.spill.path
+	return state.spill.file.Path()
 }
 
 func TestResetDispatcherSendsHandshakeWithoutNextNotify(t *testing.T) {

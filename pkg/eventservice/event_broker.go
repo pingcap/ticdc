@@ -787,7 +787,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			progress.rowLevelScanPosition,
 		)
 	}
-	task.info.GetMode()
 	// Update metrics
 	metricEventBrokerScanTaskCount.Inc()
 }

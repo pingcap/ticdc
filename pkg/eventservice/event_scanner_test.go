@@ -16,6 +16,7 @@ package eventservice
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -30,7 +31,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -38,6 +41,24 @@ import (
 type mockMounter struct {
 	event.Mounter
 	decodeCount atomic.Int64
+}
+
+type failOnceMounter struct {
+	event.Mounter
+	err error
+}
+
+func (m *failOnceMounter) DecodeToChunk(
+	_ *common.RawKVEntry,
+	_ *common.TableInfo,
+	_ *chunk.Chunk,
+) (int, *integrity.Checksum, error) {
+	if m.err != nil {
+		err := m.err
+		m.err = nil
+		return 0, nil, err
+	}
+	return 1, nil, nil
 }
 
 type countingDMLTypeFilter struct {
@@ -73,6 +94,7 @@ func setLargeTxnThresholdForTest(t *testing.T, threshold int64) {
 	original := config.GetGlobalServerConfig().Clone()
 	cfg := original.Clone()
 	cfg.Debug.EventService.LargeTxnThresholdInBytes = threshold
+	cfg.DataDir = t.TempDir()
 	config.StoreGlobalServerConfig(cfg)
 	t.Cleanup(func() {
 		config.StoreGlobalServerConfig(original)
@@ -514,6 +536,7 @@ func TestEventScannerSplitsLargeTxnWithRowLevelProgress(t *testing.T) {
 	resolved, ok := events[0].(event.ResolvedEvent)
 	require.True(t, ok)
 	require.Equal(t, resolvedTs, resolved.ResolvedTs)
+	require.Nil(t, disp.bigTxnMetricState)
 }
 
 func TestEventScannerDoesNotSplitCurrentTxnBelowLargeTxnThreshold(t *testing.T) {
@@ -570,6 +593,8 @@ func TestEventScannerDoesNotSplitCurrentTxnBelowLargeTxnThreshold(t *testing.T) 
 
 func TestEventScannerSpillsSplitUKUpdateInLargeTxn(t *testing.T) {
 	setLargeTxnThresholdForTest(t, 0)
+	insertCount := testutil.ToFloat64(
+		metrics.EventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(0), "insert"))
 
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
@@ -647,6 +672,78 @@ func TestEventScannerSpillsSplitUKUpdateInLargeTxn(t *testing.T) {
 	require.True(t, progress.valid)
 	require.Len(t, events, 1)
 	resolved, ok := events[0].(event.ResolvedEvent)
+	require.True(t, ok)
+	require.Equal(t, resolvedTs, resolved.ResolvedTs)
+	require.Nil(t, disp.getLargeTxnState())
+	require.Equal(t, insertCount, testutil.ToFloat64(
+		metrics.EventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(0), "insert")))
+}
+
+func TestEventScannerFlushesSpilledUKUpdateBeforeSameCommitDDL(t *testing.T) {
+	setLargeTxnThresholdForTest(t, 0)
+
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	ddlEvent := helper.DDL2Event("create table t_uk_same_ddl (id int primary key, a int, b char(50), unique key uk_a(a))")
+	_, updateEvent := helper.DML2UpdateEvent("test", "t_uk_same_ddl",
+		"insert into test.t_uk_same_ddl(id,a,b) values (1, 10, 'old_b')",
+		"update test.t_uk_same_ddl set a = 20 where id = 1")
+	resolvedTs := updateEvent.CRTs
+
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+	mockStore := broker.eventStore.(*mockEventStore)
+	mockSchemaStore := broker.schemaStore.(*mockSchemaStore)
+
+	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.startTs = updateEvent.StartTs
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
+	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+	makeDispatcherReady(disp)
+	require.NoError(t, broker.addDispatcher(disp.info))
+
+	createDDL := *ddlEvent
+	createDDL.FinishedTs = updateEvent.StartTs
+	sameCommitDDL := event.DDLEvent{
+		FinishedTs: updateEvent.CRTs,
+		TableInfo:  ddlEvent.TableInfo,
+	}
+	mockSchemaStore.AppendDDLEvent(disInfo.GetTableSpan().TableID, createDDL, sameCommitDDL)
+	require.NoError(t, mockStore.AppendEvents(disInfo.GetID(), resolvedTs, updateEvent))
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(resolvedTs)
+
+	scanner := newEventScanner(broker.eventStore, broker.schemaStore, event.NewMounter(time.UTC, &integrity.Config{}), 0)
+	sl := scanLimit{maxDMLBytes: 1, isInUnitTest: true}
+
+	dataRange, ok := disp.getDataRange()
+	require.True(t, ok)
+	ddlEvents, err := scanner.fetchDDLEvents(disp, dataRange)
+	require.NoError(t, err)
+	require.Len(t, ddlEvents, 1)
+	require.Equal(t, sameCommitDDL.FinishedTs, ddlEvents[0].GetCommitTs())
+
+	_, events, progress, interrupted, err := scanner.scan(context.Background(), disp, dataRange, sl)
+	require.NoError(t, err)
+	require.False(t, interrupted)
+	require.True(t, progress.valid)
+	require.Empty(t, progress.rowLevelScanPosition)
+	require.Len(t, events, 3)
+
+	batch := events[0].(*event.BatchDMLEvent)
+	require.Equal(t, resolvedTs, batch.GetCommitTs())
+	require.Equal(t, int32(2), batch.Len())
+	deleteRow, ok := batch.DMLEvents[0].GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, common.RowTypeDelete, deleteRow.RowType)
+	insertRow, ok := batch.DMLEvents[0].GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, common.RowTypeInsert, insertRow.RowType)
+
+	require.Equal(t, event.TypeDDLEvent, events[1].GetType())
+	require.Equal(t, sameCommitDDL.FinishedTs, events[1].GetCommitTs())
+	resolved, ok := events[2].(event.ResolvedEvent)
 	require.True(t, ok)
 	require.Equal(t, resolvedTs, resolved.ResolvedTs)
 	require.Nil(t, disp.getLargeTxnState())
@@ -770,6 +867,107 @@ func TestDrainLargeTxnInsertsStopsWhenDispatcherRemoved(t *testing.T) {
 	require.False(t, interrupted)
 	require.Empty(t, sess.events)
 	require.NoError(t, disp.cleanupLargeTxnState())
+}
+
+func TestEventScannerRetriesLargeTxnDrainAfterOpenError(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	ddlEvent := helper.DDL2Event("create table test.t_drain_retry (id int primary key, value varchar(32))")
+
+	info := newMockDispatcherInfoForTest(t)
+	info.span.TableID = ddlEvent.GetTableID()
+	status := newChangefeedStatusForTest(t, info)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	state, err := disp.getOrCreateLargeTxnState(
+		t.TempDir(), info.GetTableSpan().TableID, ddlEvent.TableInfo, 90, 100)
+	require.NoError(t, err)
+	require.NoError(t, state.appendInsert(newTestSpillRawKVEntry(1)))
+	disp.markLargeTxnDrainInserts(90, 100, false, 0)
+
+	spillPath := state.spill.file.Path()
+	backupPath := spillPath + ".backup"
+	require.NoError(t, os.Rename(spillPath, backupPath))
+	t.Cleanup(func() {
+		_ = os.Remove(backupPath)
+	})
+
+	dataRange := common.DataRange{
+		Span:          info.GetTableSpan(),
+		CommitTsStart: 100,
+		CommitTsEnd:   100,
+	}
+	scanner := newEventScanner(
+		&stubEventGetter{}, NewMockSchemaStore(), &mockMounter{}, 0)
+
+	_, events, _, interrupted, err := scanner.scan(
+		context.Background(), disp, dataRange,
+		scanLimit{maxDMLBytes: 100, isInUnitTest: true})
+	require.Error(t, err)
+	require.False(t, interrupted)
+	require.Empty(t, events)
+	require.Same(t, state, disp.getLargeTxnState())
+
+	require.NoError(t, os.Rename(backupPath, spillPath))
+	_, events, progress, interrupted, err := scanner.scan(
+		context.Background(), disp, dataRange,
+		scanLimit{maxDMLBytes: 100, isInUnitTest: true})
+	require.NoError(t, err)
+	require.False(t, interrupted)
+	require.True(t, progress.valid)
+	require.Len(t, events, 2)
+
+	batch := events[0].(*event.BatchDMLEvent)
+	require.Equal(t, int32(1), batch.Len())
+	resolved := events[1].(event.ResolvedEvent)
+	require.Equal(t, uint64(100), resolved.ResolvedTs)
+	require.Nil(t, disp.getLargeTxnState())
+}
+
+func TestEventScannerRetriesLargeTxnDrainAfterDecodeError(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	ddlEvent := helper.DDL2Event("create table test.t_drain_decode_retry (id int primary key, value varchar(32))")
+
+	info := newMockDispatcherInfoForTest(t)
+	info.span.TableID = ddlEvent.GetTableID()
+	status := newChangefeedStatusForTest(t, info)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	state, err := disp.getOrCreateLargeTxnState(
+		t.TempDir(), info.GetTableSpan().TableID, ddlEvent.TableInfo, 90, 100)
+	require.NoError(t, err)
+	require.NoError(t, state.appendInsert(newTestSpillRawKVEntry(1)))
+	require.NoError(t, state.appendInsert(newTestSpillRawKVEntry(2)))
+	disp.markLargeTxnDrainInserts(90, 100, false, 0)
+
+	dataRange := common.DataRange{
+		Span:          info.GetTableSpan(),
+		CommitTsStart: 100,
+		CommitTsEnd:   100,
+	}
+	mounter := &failOnceMounter{err: errors.New("injected decode error")}
+	scanner := newEventScanner(
+		&stubEventGetter{}, NewMockSchemaStore(), mounter, 0)
+
+	_, events, _, interrupted, err := scanner.scan(
+		context.Background(), disp, dataRange,
+		scanLimit{maxDMLBytes: 100, isInUnitTest: true})
+	require.Error(t, err)
+	require.False(t, interrupted)
+	require.Empty(t, events)
+	require.Same(t, state, disp.getLargeTxnState())
+
+	_, events, progress, interrupted, err := scanner.scan(
+		context.Background(), disp, dataRange,
+		scanLimit{maxDMLBytes: 100, isInUnitTest: true})
+	require.NoError(t, err)
+	require.False(t, interrupted)
+	require.True(t, progress.valid)
+	require.Len(t, events, 2)
+
+	batch := events[0].(*event.BatchDMLEvent)
+	require.Equal(t, int32(2), batch.Len())
+	require.Equal(t, uint64(100), events[1].(event.ResolvedEvent).ResolvedTs)
+	require.Nil(t, disp.getLargeTxnState())
 }
 
 // Test the case where some DMLs have commit timestamps newer than the table's delete version
