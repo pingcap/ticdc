@@ -37,6 +37,18 @@ import (
 
 const kafkaSinkTestTopic = "mock_topic"
 
+func TestVerifyRejectsKafkaUnsupportedProtocolBeforeConnecting(t *testing.T) {
+	changefeedID := common.NewChangefeedID4Test("test", "verify")
+	protocol := config.ProtocolCsv.String()
+	sinkConfig := &config.SinkConfig{Protocol: &protocol}
+	sinkURI, err := url.Parse("kafka://127.0.0.1:1/test-topic?protocol=csv&kafka-version=2.4.0")
+	require.NoError(t, err)
+
+	err = Verify(context.Background(), changefeedID, sinkURI, sinkConfig)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "csv")
+}
+
 func newKafkaSinkForTestWithProducers(ctx context.Context,
 	t *testing.T,
 	ctrl *gomock.Controller,
