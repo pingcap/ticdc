@@ -50,13 +50,11 @@ func TestRequestCacheLifecycle(t *testing.T) {
 
 	req, err := cache.pop(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, regionReqStageProcessing, req.stage)
 	require.Equal(t, 1, cache.pendingCount())
 
-	require.True(t, cache.markSent(req))
-	require.Equal(t, regionReqStageSent, req.stage)
-	require.True(t, cache.finishScan(req))
-	require.False(t, cache.finishScan(req))
+	require.True(t, cache.isPending(req))
+	require.True(t, cache.resolve(req))
+	require.False(t, cache.resolve(req))
 	require.Equal(t, 0, cache.pendingCount())
 }
 
@@ -109,7 +107,7 @@ func TestRequestCacheTracksDuplicateRegionsIndependently(t *testing.T) {
 	require.Equal(t, 2, cache.pendingCount())
 }
 
-func TestRequestCacheDrainOnlyUnsentRegions(t *testing.T) {
+func TestRequestCacheDrainRemainingRequests(t *testing.T) {
 	cache := newRequestCache(3)
 	for regionID := uint64(1); regionID <= 3; regionID++ {
 		ok, err := cache.add(t.Context(), createTestRegionInfo(1, regionID), false)
@@ -117,17 +115,15 @@ func TestRequestCacheDrainOnlyUnsentRegions(t *testing.T) {
 		require.True(t, ok)
 	}
 
-	sentReq, err := cache.pop(t.Context())
+	finishedReq, err := cache.pop(t.Context())
 	require.NoError(t, err)
-	require.True(t, cache.markSent(sentReq))
+	require.True(t, cache.remove(finishedReq))
 	processingReq, err := cache.pop(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, regionReqStageProcessing, processingReq.stage)
+	require.NotNil(t, processingReq)
 
-	regions := cache.drainUnsentRegions()
+	regions := cache.drain()
 	require.Len(t, regions, 2)
-	require.Equal(t, 1, cache.pendingCount())
-	require.True(t, cache.abortScan(sentReq))
 	require.Equal(t, 0, cache.pendingCount())
 }
 
@@ -141,12 +137,11 @@ func TestRequestCacheCloseRemovesAllRequests(t *testing.T) {
 
 	req, err := cache.pop(t.Context())
 	require.NoError(t, err)
-	require.True(t, cache.markSent(req))
 	cache.close()
 
 	require.Equal(t, 0, cache.pendingCount())
 	require.Nil(t, cache.tryPop())
-	require.False(t, cache.abortScan(req))
+	require.False(t, cache.remove(req))
 }
 
 func TestRequestCacheConcurrentAdds(t *testing.T) {
@@ -188,7 +183,7 @@ func TestRequestCacheSpaceAvailableWakesAdd(t *testing.T) {
 		resultCh <- addResult{ok: ok, err: err}
 	}()
 	<-started
-	require.True(t, cache.abortScan(firstReq))
+	require.True(t, cache.remove(firstReq))
 
 	select {
 	case result := <-resultCh:
@@ -200,16 +195,15 @@ func TestRequestCacheSpaceAvailableWakesAdd(t *testing.T) {
 	require.Equal(t, uint64(2), cache.tryPop().regionInfo.verID.GetID())
 }
 
-func TestRequestCacheMarkSentRejectsInvalidTransition(t *testing.T) {
+func TestRequestCacheTracksOnlyPendingRequests(t *testing.T) {
 	cache := newRequestCache(1)
 	require.True(t, cache.tryAdd(createTestRegionInfo(1, 1), false))
 	req := cache.tryPop()
 	require.NotNil(t, req)
 
-	require.True(t, cache.markSent(req))
-	require.False(t, cache.markSent(req))
-	require.True(t, cache.abortScan(req))
-	require.False(t, cache.markSent(req))
+	require.True(t, cache.isPending(req))
+	require.True(t, cache.remove(req))
+	require.False(t, cache.isPending(req))
 }
 
 func TestRegionFeedStateCleansRequestOnce(t *testing.T) {
@@ -217,7 +211,6 @@ func TestRegionFeedStateCleansRequestOnce(t *testing.T) {
 	require.True(t, cache.tryAdd(createTestRegionInfo(1, 1), false))
 	req := cache.tryPop()
 	require.NotNil(t, req)
-	require.True(t, cache.markSent(req))
 
 	worker := &regionRequestWorker{requestCache: cache}
 	state := newRegionFeedState(req.regionInfo, uint64(req.regionInfo.subscribedSpan.subID), worker, req)
@@ -239,5 +232,5 @@ func TestRegionFeedStateCleansRequestOnce(t *testing.T) {
 
 	require.Nil(t, state.regionReq.Load())
 	require.Zero(t, cache.pendingCount())
-	require.False(t, cache.abortScan(req))
+	require.False(t, cache.remove(req))
 }

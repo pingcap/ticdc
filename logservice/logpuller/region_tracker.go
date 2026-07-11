@@ -45,13 +45,13 @@ func (t *regionTracker) Get(subscriptionID SubscriptionID, regionID uint64) *reg
 	return nil
 }
 
-// Replace records a region state and returns the state previously tracked by
-// the same subscription and region, if any.
-func (t *regionTracker) Replace(
+// Add records a region state unless the same subscription and region is
+// already tracked.
+func (t *regionTracker) Add(
 	subscriptionID SubscriptionID,
 	regionID uint64,
 	state *regionFeedState,
-) *regionFeedState {
+) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -60,14 +60,16 @@ func (t *regionTracker) Replace(
 		states = make(regionStatesByID)
 		t.statesBySubscription[subscriptionID] = states
 	}
-	oldState := states[regionID]
+	if _, ok := states[regionID]; ok {
+		return false
+	}
 	states[regionID] = state
-	return oldState
+	return true
 }
 
 // RemoveIf removes a region only when it is still tracked by the expected
-// state. It prevents delayed events for an old state from removing its
-// replacement.
+// state. It prevents delayed events for an old state from removing a newer
+// owner.
 func (t *regionTracker) RemoveIf(
 	subscriptionID SubscriptionID,
 	regionID uint64,

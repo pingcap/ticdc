@@ -30,38 +30,26 @@ const (
 	abnormalRequestDurationInSec = 60 * 60 * 2 // 2 hours
 )
 
-type regionReqStage uint8
-
-const (
-	regionReqStageQueued regionReqStage = iota
-	regionReqStageProcessing
-	regionReqStageSent
-)
-
 // regionReq tracks one region request from admission to cleanup.
 type regionReq struct {
 	regionInfo regionInfo
 	createTime time.Time
-
-	// stage is guarded by requestCache.mu.
-	stage regionReqStage
 }
 
 func newRegionReq(region regionInfo) *regionReq {
 	return &regionReq{
 		regionInfo: region,
 		createTime: time.Now(),
-		stage:      regionReqStageQueued,
 	}
 }
 
-// requestCache owns the lifecycle of worker-local region requests.
-// Requests move through queued, processing and sent before explicit cleanup.
+// requestCache owns flow-control slots from enqueue until the initial region
+// scan finishes or the request is aborted.
 type requestCache struct {
 	mu sync.Mutex
 
 	maxPendingCount int
-	// requests is the source of truth for every live request in this worker.
+	// requests is the source of truth for every live request.
 	requests map[*regionReq]struct{}
 	queue    *notifyqueue.Queue[*regionReq]
 
@@ -139,36 +127,21 @@ func (c *requestCache) tryPop() *regionReq {
 		if !ok {
 			return nil
 		}
-		if _, ok := c.requests[req]; !ok {
-			log.Warn("request cache pops a removed request",
-				zap.Uint64("subID", uint64(req.regionInfo.subscribedSpan.subID)),
-				zap.Uint64("regionID", req.regionInfo.verID.GetID()),
-				zap.Uint8("stage", uint8(req.stage)))
-			continue
+		if _, ok := c.requests[req]; ok {
+			return req
 		}
-		if req.stage != regionReqStageQueued {
-			log.Warn("request cache pops a non-queued request",
-				zap.Uint64("subID", uint64(req.regionInfo.subscribedSpan.subID)),
-				zap.Uint64("regionID", req.regionInfo.verID.GetID()),
-				zap.Uint8("stage", uint8(req.stage)))
-			continue
-		}
-		req.stage = regionReqStageProcessing
-		return req
+		c.logRemovedRequest(req)
 	}
 }
 
-func (c *requestCache) markSent(req *regionReq) bool {
+func (c *requestCache) isPending(req *regionReq) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.requests[req]; !ok || req.stage != regionReqStageProcessing {
-		return false
-	}
-	req.stage = regionReqStageSent
-	return true
+	_, ok := c.requests[req]
+	return ok
 }
 
-func (c *requestCache) finishScan(req *regionReq) bool {
+func (c *requestCache) resolve(req *regionReq) bool {
 	if !c.remove(req) {
 		return false
 	}
@@ -189,10 +162,6 @@ func (c *requestCache) finishScan(req *regionReq) bool {
 	return true
 }
 
-func (c *requestCache) abortScan(req *regionReq) bool {
-	return c.remove(req)
-}
-
 func (c *requestCache) remove(req *regionReq) bool {
 	if req == nil {
 		return false
@@ -208,19 +177,15 @@ func (c *requestCache) remove(req *regionReq) bool {
 	return removed
 }
 
-// drainUnsentRegions removes queued and processing requests. Sent requests are
-// owned by regionTracker and are cleaned by their regionFeedState.
-func (c *requestCache) drainUnsentRegions() []regionInfo {
+// drain removes all remaining requests. A worker must stop its tracked region
+// states first, so only requests that were never sent remain here.
+func (c *requestCache) drain() []regionInfo {
 	c.mu.Lock()
 	regions := make([]regionInfo, 0, len(c.requests))
 	for req := range c.requests {
-		if req.stage == regionReqStageSent {
-			continue
-		}
-		if c.removeLocked(req) {
-			regions = append(regions, req.regionInfo)
-		}
+		regions = append(regions, req.regionInfo)
 	}
+	clear(c.requests)
 	c.queue.Drain()
 	c.mu.Unlock()
 
@@ -257,6 +222,12 @@ func (c *requestCache) removeLocked(req *regionReq) bool {
 	}
 	delete(c.requests, req)
 	return true
+}
+
+func (c *requestCache) logRemovedRequest(req *regionReq) {
+	log.Warn("request cache pops a removed request",
+		zap.Uint64("subID", uint64(req.regionInfo.subscribedSpan.subID)),
+		zap.Uint64("regionID", req.regionInfo.verID.GetID()))
 }
 
 func (c *requestCache) ready() <-chan struct{} {

@@ -26,10 +26,10 @@ func TestRegionTrackerOperations(t *testing.T) {
 	state3 := &regionFeedState{}
 
 	require.Nil(t, tracker.Get(1, 1))
-	require.Nil(t, tracker.Replace(1, 1, state1))
+	require.True(t, tracker.Add(1, 1, state1))
 	require.Same(t, state1, tracker.Get(1, 1))
-	require.Nil(t, tracker.Replace(1, 2, state2))
-	require.Nil(t, tracker.Replace(2, 3, state3))
+	require.True(t, tracker.Add(1, 2, state2))
+	require.True(t, tracker.Add(2, 3, state3))
 
 	require.ElementsMatch(t, []*regionFeedState{state1, state2}, tracker.TakeSubscription(1))
 	require.Nil(t, tracker.Get(1, 1))
@@ -44,17 +44,17 @@ func TestRegionTrackerOperations(t *testing.T) {
 	require.Empty(t, tracker.Drain())
 }
 
-func TestRegionTrackerRemoveIfPreservesReplacement(t *testing.T) {
+func TestRegionTrackerAddRejectsDuplicate(t *testing.T) {
 	tracker := newRegionTracker()
 	oldState := &regionFeedState{}
 	newState := &regionFeedState{}
 
-	require.Nil(t, tracker.Replace(1, 1, oldState))
-	require.Same(t, oldState, tracker.Replace(1, 1, newState))
+	require.True(t, tracker.Add(1, 1, oldState))
+	require.False(t, tracker.Add(1, 1, newState))
 
-	require.False(t, tracker.RemoveIf(1, 1, oldState))
-	require.Same(t, newState, tracker.Get(1, 1))
-	require.True(t, tracker.RemoveIf(1, 1, newState))
-	require.Nil(t, tracker.Get(1, 1))
 	require.False(t, tracker.RemoveIf(1, 1, newState))
+	require.Same(t, oldState, tracker.Get(1, 1))
+	require.True(t, tracker.RemoveIf(1, 1, oldState))
+	require.Nil(t, tracker.Get(1, 1))
+	require.False(t, tracker.RemoveIf(1, 1, oldState))
 }
