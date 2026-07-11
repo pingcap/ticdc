@@ -33,9 +33,8 @@ const (
 )
 
 const (
-	highPriorityBase   = 0
-	lowPriorityBase    = 60 * 60 * 24 // 1 day
-	forcedPriorityBase = 60 * 60      // 60 minutes
+	highPriorityBase = 0
+	lowPriorityBase  = 60 * 60 * 24 // 1 day
 )
 
 func (t TaskType) String() string {
@@ -50,6 +49,8 @@ type PriorityTask interface {
 
 	// GetRegionInfo returns the underlying regionInfo
 	GetRegionInfo() regionInfo
+	// GetTaskType returns whether this is a recovery or new-subscription task.
+	GetTaskType() TaskType
 
 	// heap.Item interface methods
 	SetHeapIndex(int)
@@ -108,6 +109,10 @@ func (pt *regionPriorityTask) Priority() int {
 // GetRegionInfo returns the underlying regionInfo
 func (pt *regionPriorityTask) GetRegionInfo() regionInfo {
 	return pt.regionInfo
+}
+
+func (pt *regionPriorityTask) GetTaskType() TaskType {
+	return pt.taskType
 }
 
 // SetHeapIndex sets the heap index for heap.Item interface

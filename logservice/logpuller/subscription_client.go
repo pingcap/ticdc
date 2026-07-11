@@ -212,11 +212,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			pendingRegionReqCount := 0
 			s.stores.Range(func(_, value any) bool {
 				store := value.(*requestedStore)
-				store.requestWorkers.RLock()
-				for _, worker := range store.requestWorkers.s {
-					pendingRegionReqCount += worker.requestCache.pendingCount()
-				}
-				store.requestWorkers.RUnlock()
+				pendingRegionReqCount += store.admission.inflightCount()
 				return true
 			})
 
@@ -357,8 +353,7 @@ func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
 // requestedStore represents a store that has been connected.
 type requestedStore struct {
 	storeAddr string
-	// Use to select a worker to send request.
-	nextWorker atomic.Uint32
+	admission *regionAdmissionController
 
 	requestWorkers struct {
 		sync.RWMutex
@@ -366,19 +361,12 @@ type requestedStore struct {
 	}
 }
 
-func (rs *requestedStore) getRequestWorker() *regionRequestWorker {
-	rs.requestWorkers.RLock()
-	defer rs.requestWorkers.RUnlock()
-
-	index := rs.nextWorker.Add(1) % uint32(len(rs.requestWorkers.s))
-	return rs.requestWorkers.s[index]
-}
-
 // handleRegions receives regionInfo from regionTaskQueue and attach rpcCtx to them,
 // then send them to corresponding requestedStore.
 func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Group) error {
 	cfg := config.GetGlobalServerConfig()
-	pendingRegionRequestQueueSize := cfg.Debug.Puller.PendingRegionRequestQueueSize
+	currentWindow := cfg.Debug.Puller.PendingRegionRequestQueueSize
+	maxWindowMultiplier := cfg.Debug.Puller.RegionRequestMaxWindowMultiplier
 	getStore := func(storeAddr string) *requestedStore {
 		var rs *requestedStore
 		if v, ok := s.stores.Load(storeAddr); ok {
@@ -386,20 +374,15 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			return rs
 		}
 
-		rs = &requestedStore{storeAddr: storeAddr}
-		rs.requestWorkers.s = make([]*regionRequestWorker, 0, s.config.RegionRequestWorkerPerStore)
-
-		perWorkerQueueSize := pendingRegionRequestQueueSize / int(s.config.RegionRequestWorkerPerStore)
-		if perWorkerQueueSize <= 0 {
-			log.Warn("pending region request queue size is smaller than the number of workers, adjust per worker queue size to 1",
-				zap.Int("pendingRegionRequestQueueSize", pendingRegionRequestQueueSize),
-				zap.Uint("regionRequestWorkerPerStore", s.config.RegionRequestWorkerPerStore))
-			perWorkerQueueSize = 1
+		rs = &requestedStore{
+			storeAddr: storeAddr,
+			admission: newRegionAdmissionController(currentWindow, maxWindowMultiplier),
 		}
+		rs.requestWorkers.s = make([]*regionRequestWorker, 0, s.config.RegionRequestWorkerPerStore)
 
 		rs.requestWorkers.Lock()
 		for i := uint(0); i < s.config.RegionRequestWorkerPerStore; i++ {
-			requestWorker := newRegionRequestWorker(s, rs, newRequestCache(perWorkerQueueSize))
+			requestWorker := newRegionRequestWorker(s, rs, rs.admission)
 			rs.requestWorkers.s = append(rs.requestWorkers.s, requestWorker)
 		}
 		rs.requestWorkers.Unlock()
@@ -415,13 +398,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 	defer func() {
 		s.stores.Range(func(_, value any) bool {
 			rs := value.(*requestedStore)
-
-			rs.requestWorkers.RLock()
-			for _, w := range rs.requestWorkers.s {
-				w.requestCache.close()
-			}
-			rs.requestWorkers.RUnlock()
-
+			rs.admission.close()
 			return true
 		})
 	}()
@@ -449,25 +426,11 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		}
 
 		store := getStore(region.rpcCtx.Addr)
-		worker := store.getRequestWorker()
-		force := regionTask.Priority() <= forcedPriorityBase
-
-		ok, err = worker.add(ctx, region, force)
-		if err != nil {
-			log.Warn("subscription client add region request failed",
-				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
-				zap.Uint64("regionID", region.verID.GetID()),
-				zap.Error(err))
-			return err
-		}
-
-		if !ok {
-			s.regionTaskQueue.Push(regionTask)
-			continue
+		if !store.admission.submit(regionTask, region, s.pdClock.CurrentTS()) {
+			return context.Canceled
 		}
 
 		log.Debug("subscription client will request a region",
-			zap.Uint64("workID", worker.workerID),
 			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 			zap.Uint64("regionID", region.verID.GetID()),
 			zap.String("addr", store.storeAddr))

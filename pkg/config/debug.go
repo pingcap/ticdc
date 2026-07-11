@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 // DebugConfig represents config for ticdc unexposed feature configurations
@@ -49,6 +51,7 @@ func (c *DebugConfig) ValidateAndAdjust() error {
 	if err := c.Scheduler.ValidateAndAdjust(); err != nil {
 		return errors.Trace(err)
 	}
+	c.Puller.ValidateAndAdjust()
 
 	return nil
 }
@@ -62,20 +65,39 @@ type PullerConfig struct {
 	// LogRegionDetails determines whether logs Region details or not in puller and kv-client.
 	LogRegionDetails bool `toml:"log-region-details" json:"log_region_details"`
 
-	// PendingRegionRequestQueueSize is the total size of the pending region request queue shared across
-	// all puller workers connecting to a single TiKV store. This size is divided equally among all workers.
-	// For example, if PendingRegionRequestQueueSize is 32 and there are 8 workers connecting to the same store,
-	// each worker's queue size will be 32 / 8 = 4.
+	// PendingRegionRequestQueueSize is the normal initial-scan window shared by
+	// all puller workers connecting to one TiKV store.
 	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending_region_request_queue_size"`
+	// RegionRequestMaxWindowMultiplier controls the maximum window available to
+	// high-priority requests and regions whose scan lag is less than 10 minutes.
+	// The maximum window is PendingRegionRequestQueueSize multiplied by this value.
+	RegionRequestMaxWindowMultiplier int `toml:"region-request-max-window-multiplier" json:"region_request_max_window_multiplier"`
 }
 
 // NewDefaultPullerConfig return the default puller configuration
 func NewDefaultPullerConfig() *PullerConfig {
 	return &PullerConfig{
-		EnableResolvedTsStuckDetection: false,
-		ResolvedTsStuckInterval:        TomlDuration(5 * time.Minute),
-		LogRegionDetails:               false,
-		PendingRegionRequestQueueSize:  32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
+		EnableResolvedTsStuckDetection:   false,
+		ResolvedTsStuckInterval:          TomlDuration(5 * time.Minute),
+		LogRegionDetails:                 false,
+		PendingRegionRequestQueueSize:    32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
+		RegionRequestMaxWindowMultiplier: 4,
+	}
+}
+
+func (c *PullerConfig) ValidateAndAdjust() {
+	defaultCfg := NewDefaultPullerConfig()
+	if c.PendingRegionRequestQueueSize <= 0 {
+		log.Warn("pending region request queue size must be positive, use default value",
+			zap.Int("value", c.PendingRegionRequestQueueSize),
+			zap.Int("default", defaultCfg.PendingRegionRequestQueueSize))
+		c.PendingRegionRequestQueueSize = defaultCfg.PendingRegionRequestQueueSize
+	}
+	if c.RegionRequestMaxWindowMultiplier <= 0 {
+		log.Warn("region request max window multiplier must be positive, use default value",
+			zap.Int("value", c.RegionRequestMaxWindowMultiplier),
+			zap.Int("default", defaultCfg.RegionRequestMaxWindowMultiplier))
+		c.RegionRequestMaxWindowMultiplier = defaultCfg.RegionRequestMaxWindowMultiplier
 	}
 }
 

@@ -92,7 +92,7 @@ type regionRequestWorker struct {
 	client *subscriptionClient
 	store  *requestedStore
 
-	requestCache *requestCache
+	admission    *regionAdmissionController
 	controlQueue *controlQueue
 	tracker      *regionTracker
 }
@@ -100,14 +100,14 @@ type regionRequestWorker struct {
 func newRegionRequestWorker(
 	client *subscriptionClient,
 	store *requestedStore,
-	requestCache *requestCache,
+	admission *regionAdmissionController,
 ) *regionRequestWorker {
 	workerID := workerIDGen.Add(1)
 	return &regionRequestWorker{
 		workerID:     workerID,
 		client:       client,
 		store:        store,
-		requestCache: requestCache,
+		admission:    admission,
 		controlQueue: newControlQueue(),
 		tracker:      newRegionTracker(),
 	}
@@ -128,10 +128,16 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 			regionErr = err
 		}
 		if ctx.Err() != nil {
+			firstReq.abort()
 			return ctx.Err()
 		}
 
+		// Stop sent requests first so their states release the admission leases.
+		// firstReq still owns its lease only if the stream failed before Send.
 		s.failStreamRegions(regionErr)
+		if firstReq.abort() {
+			s.client.onRegionFail(newRegionErrorInfo(firstReq.regionInfo, regionErr))
+		}
 
 		if err := util.Hang(ctx, storeReconnectBackoff); err != nil {
 			return err
@@ -139,17 +145,14 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 	}
 }
 
-// failStreamRegions transfers every request owned by a failed stream to the
-// recovery pipeline. Sent requests go through their state; unsent requests can
-// be reported directly because no state exists for them yet.
+// failStreamRegions transfers every request sent by a failed stream to the
+// recovery pipeline. Requests still waiting in the store admission controller
+// are not owned by this stream.
 func (s *regionRequestWorker) failStreamRegions(err error) {
 	for _, states := range s.tracker.Drain() {
 		for _, state := range states {
 			s.notifyRegionError(state, err)
 		}
-	}
-	for _, region := range s.requestCache.drain() {
-		s.client.onRegionFail(newRegionErrorInfo(region, err))
 	}
 	// The failed stream no longer owns remote registrations.
 	s.controlQueue.drain()
@@ -166,7 +169,7 @@ func (s *regionRequestWorker) notifyRegionError(state *regionFeedState, err erro
 func (s *regionRequestWorker) waitForRegionRequest(ctx context.Context) (*regionReq, error) {
 	// Without a stream there are no remote registrations to deregister.
 	s.controlQueue.drain()
-	req, err := s.requestCache.pop(ctx)
+	req, err := s.admission.pop(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -421,6 +424,9 @@ func (s *regionRequestWorker) drainControlQueue(conn *ConnAndClient) error {
 }
 
 func (s *regionRequestWorker) sendRegionRequest(conn *ConnAndClient, req *regionReq) error {
+	if !req.isActive() {
+		return &storeStreamErr{}
+	}
 	region := req.regionInfo
 	subID := region.subscribedSpan.subID
 	log.Debug("region request worker gets a singleRegionInfo",
@@ -431,21 +437,13 @@ func (s *regionRequestWorker) sendRegionRequest(conn *ConnAndClient, req *region
 		zap.Bool("bdrMode", region.filterLoop))
 
 	if region.subscribedSpan.stopped.Load() {
-		s.requestCache.remove(req)
+		req.abort()
 		s.client.onRegionFail(newRegionErrorInfo(region, &storeStreamErr{}))
 		return nil
 	}
 
-	// The request must still own a cache slot before it becomes visible to the
-	// receiver. Both are published before Send, so a fast response observes a
-	// complete state.
-	if !s.requestCache.isPending(req) {
-		log.Warn("region request transition to sent failed",
-			zap.Uint64("workerID", s.workerID),
-			zap.Uint64("subscriptionID", uint64(subID)),
-			zap.Uint64("regionID", region.verID.GetID()))
-		return &storeStreamErr{}
-	}
+	// Publish the state before Send so a fast response observes its owner and
+	// admission lease.
 	state := newRegionFeedState(region, uint64(subID), s, req)
 	if !s.tracker.Add(subID, region.verID.GetID(), state) {
 		// RangeLock normally prevents duplicate active regions. Keep the existing
@@ -487,12 +485,16 @@ func (s *regionRequestWorker) processRegionSendTask(
 		if err := s.drainControlQueue(conn); err != nil {
 			return err
 		}
-		if regionReq = s.requestCache.tryPop(); regionReq != nil {
+		var closed bool
+		if regionReq, closed = s.admission.tryPop(); regionReq != nil {
 			continue
+		}
+		if closed {
+			return context.Canceled
 		}
 		select {
 		case <-s.controlQueue.ready():
-		case <-s.requestCache.ready():
+		case <-s.admission.ready():
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -511,8 +513,4 @@ func (s *regionRequestWorker) createRegionRequest(region regionInfo) *cdcpb.Chan
 		ExtraOp:      kvrpcpb.ExtraOp_ReadOldValue,
 		FilterLoop:   region.filterLoop,
 	}
-}
-
-func (s *regionRequestWorker) add(ctx context.Context, region regionInfo, force bool) (bool, error) {
-	return s.requestCache.add(ctx, region, force)
 }

@@ -78,8 +78,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 	ds.AddPath(subID, subSpan, dynstream.AreaSettings{})
 
 	worker := &regionRequestWorker{
-		requestCache: &requestCache{},
-		tracker:      newRegionTracker(),
+		tracker: newRegionTracker(),
 	}
 	region := newRegionInfo(
 		tikv.RegionVerID{},
@@ -217,8 +216,7 @@ func TestHandleResolvedTs(t *testing.T) {
 
 	subID1 := SubscriptionID(1)
 	worker := &regionRequestWorker{
-		requestCache: &requestCache{},
-		tracker:      newRegionTracker(),
+		tracker: newRegionTracker(),
 	}
 	state1 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(1, 1, 1)}, uint64(subID1), worker, nil)
 	{

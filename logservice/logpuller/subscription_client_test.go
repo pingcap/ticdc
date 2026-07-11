@@ -104,8 +104,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	}
 
 	worker := &regionRequestWorker{
-		requestCache: &requestCache{},
-		tracker:      newRegionTracker(),
+		tracker: newRegionTracker(),
 	}
 	// Lock another range, no task will be triggered before initialized.
 	res = span.rangeLock.LockRange(context.Background(), []byte{'c'}, []byte{'d'}, 2, 100)
@@ -453,12 +452,13 @@ func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 
 func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 	client := &subscriptionClient{}
+	admission := newRegionAdmissionController(1, 1)
 
 	worker := &regionRequestWorker{
-		requestCache: newRequestCache(1),
+		admission:    admission,
 		controlQueue: newControlQueue(),
 	}
-	store := &requestedStore{storeAddr: "store-1"}
+	store := &requestedStore{storeAddr: "store-1", admission: admission}
 	store.requestWorkers.s = []*regionRequestWorker{worker}
 	client.stores.Store(store.storeAddr, store)
 
@@ -466,9 +466,8 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
 		lockedRangeState: &regionlock.LockedRangeState{},
 	}
-	ok, err := worker.add(t.Context(), dummyRegion, true)
-	require.NoError(t, err)
-	require.True(t, ok)
+	require.True(t, admission.submit(
+		NewRegionPriorityTask(TaskHighPrior, dummyRegion, 1), dummyRegion, 1))
 
 	client.broadcastDeregister(SubscriptionID(1), true)
 	require.Equal(t, 1, worker.controlQueue.len())
@@ -476,7 +475,7 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, SubscriptionID(1), req.subID)
 	require.True(t, req.filterLoop)
-	require.Equal(t, 1, worker.requestCache.pendingCount())
+	require.Equal(t, 1, admission.pendingCount())
 }
 
 func TestSubscriptionWithFailedTiKV(t *testing.T) {

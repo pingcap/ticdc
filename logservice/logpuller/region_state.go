@@ -169,14 +169,14 @@ func (s *regionFeedState) setInitialized() {
 func (s *regionFeedState) finishScan() {
 	request := s.regionReq.Swap(nil)
 	if request != nil {
-		s.worker.requestCache.resolve(request)
+		request.finish()
 	}
 }
 
 func (s *regionFeedState) abortScanIfNeeded() {
 	request := s.regionReq.Swap(nil)
 	if request != nil {
-		s.worker.requestCache.remove(request)
+		request.abort()
 	}
 }
 
