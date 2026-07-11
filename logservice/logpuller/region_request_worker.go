@@ -100,14 +100,15 @@ type regionRequestWorker struct {
 func newRegionRequestWorker(
 	client *subscriptionClient,
 	store *requestedStore,
-	admission *regionAdmissionController,
+	currentWindow int,
+	maxWindowMultiplier int,
 ) *regionRequestWorker {
 	workerID := workerIDGen.Add(1)
 	return &regionRequestWorker{
 		workerID:     workerID,
 		client:       client,
 		store:        store,
-		admission:    admission,
+		admission:    newRegionAdmissionController(currentWindow, maxWindowMultiplier),
 		controlQueue: newControlQueue(),
 		tracker:      newRegionTracker(),
 	}
@@ -138,6 +139,7 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 		if firstReq.abort() {
 			s.client.onRegionFail(newRegionErrorInfo(firstReq.regionInfo, regionErr))
 		}
+		s.failPendingRegions(regionErr)
 
 		if err := util.Hang(ctx, storeReconnectBackoff); err != nil {
 			return err
@@ -146,8 +148,7 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 }
 
 // failStreamRegions transfers every request sent by a failed stream to the
-// recovery pipeline. Requests still waiting in the store admission controller
-// are not owned by this stream.
+// recovery pipeline.
 func (s *regionRequestWorker) failStreamRegions(err error) {
 	for _, states := range s.tracker.Drain() {
 		for _, state := range states {
@@ -156,6 +157,14 @@ func (s *regionRequestWorker) failStreamRegions(err error) {
 	}
 	// The failed stream no longer owns remote registrations.
 	s.controlQueue.drain()
+}
+
+// failPendingRegions transfers requests owned by this worker but not yet sent
+// to the recovery pipeline, so they can be resolved and routed again.
+func (s *regionRequestWorker) failPendingRegions(err error) {
+	for _, task := range s.admission.drainPending() {
+		s.client.onRegionFail(newRegionErrorInfo(task.regionInfo, err))
+	}
 }
 
 func (s *regionRequestWorker) notifyRegionError(state *regionFeedState, err error) {

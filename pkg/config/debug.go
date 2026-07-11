@@ -65,12 +65,13 @@ type PullerConfig struct {
 	// LogRegionDetails determines whether logs Region details or not in puller and kv-client.
 	LogRegionDetails bool `toml:"log-region-details" json:"log_region_details"`
 
-	// PendingRegionRequestQueueSize is the normal initial-scan window shared by
-	// all puller workers connecting to one TiKV store.
+	// PendingRegionRequestQueueSize is the approximate normal initial-scan window
+	// for one TiKV store. It is divided among the store's puller workers.
 	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending_region_request_queue_size"`
 	// RegionRequestMaxWindowMultiplier controls the maximum window available to
-	// high-priority requests and regions whose scan lag is less than 10 minutes.
-	// The maximum window is PendingRegionRequestQueueSize multiplied by this value.
+	// previously initialized regions and regions whose scan lag is less than 30 minutes.
+	// The approximate maximum store window is PendingRegionRequestQueueSize
+	// multiplied by this value.
 	RegionRequestMaxWindowMultiplier int `toml:"region-request-max-window-multiplier" json:"region_request_max_window_multiplier"`
 }
 

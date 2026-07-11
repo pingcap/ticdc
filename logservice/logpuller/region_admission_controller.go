@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,48 +23,15 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/heap"
-	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
 const (
-	fastRegionScanLag            = 10 * time.Minute
 	abnormalRequestDurationInSec = 60 * 60 * 2 // 2 hours
 )
 
-// pendingRegionRequest waits in the store-level admission queue. It does not
-// own an admission slot until it is returned by pop or tryPop.
-type pendingRegionRequest struct {
-	task       PriorityTask
-	regionInfo regionInfo
-	fastScan   bool
-	heapIndex  int
-}
-
-func (r *pendingRegionRequest) SetHeapIndex(index int) {
-	r.heapIndex = index
-}
-
-func (r *pendingRegionRequest) GetHeapIndex() int {
-	return r.heapIndex
-}
-
-func (r *pendingRegionRequest) LessThan(other *pendingRegionRequest) bool {
-	if r.task.GetTaskType() != other.task.GetTaskType() {
-		return r.task.GetTaskType() == TaskHighPrior
-	}
-	if r.canUseMaxWindow() != other.canUseMaxWindow() {
-		return r.canUseMaxWindow()
-	}
-	return r.task.LessThan(other.task)
-}
-
-func (r *pendingRegionRequest) canUseMaxWindow() bool {
-	return r.fastScan || r.task.GetTaskType() == TaskHighPrior
-}
-
 // regionReq is an admission lease for one sent-but-not-initialized region.
-// finish and abort are idempotent and return the lease to the store controller.
+// finish and abort are idempotent and return the lease to its worker controller.
 type regionReq struct {
 	regionInfo regionInfo
 	createTime time.Time
@@ -98,28 +65,41 @@ func (r *regionReq) abort() bool {
 }
 
 func (r *regionReq) isActive() bool {
-	return r != nil && !r.released.Load()
+	return !r.released.Load()
 }
 
 func (r *regionReq) release() bool {
-	if r == nil || !r.released.CompareAndSwap(false, true) {
+	if !r.released.CompareAndSwap(false, true) {
 		return false
 	}
 	r.controller.release()
 	return true
 }
 
-// regionAdmissionController owns the pending queue and initial-scan window for
-// all request workers connected to one TiKV store.
+// regionAdmissionController owns one request worker's pending queue and
+// initial-scan window.
 type regionAdmissionController struct {
+	// mu guards the window state, inflight count, pending queue and closed flag.
 	mu sync.Mutex
 
+	// currentWindow limits ordinary region scans.
 	currentWindow int
-	maxWindow     int
-	inflight      int
-	pending       *heap.Heap[*pendingRegionRequest]
-	notify        chan struct{}
-	closed        bool
+	// maxWindow is the hard limit for previously initialized and low-lag regions.
+	maxWindow int
+	// inflight is the number of admitted regions that have not finished their
+	// initial scan. It is guarded by mu.
+	inflight int
+	// pending keeps requests that have not entered the initial-scan window.
+	// It is guarded by mu.
+	pending *heap.Heap[*regionPriorityTask]
+	// notify wakes workers when a request is submitted or an admission slot is
+	// released. The one-element buffer prevents a wakeup from being lost between
+	// checking the admission condition and waiting on this channel. Notifications
+	// are only signals to recheck state; they do not correspond one-to-one with
+	// pending requests or available slots.
+	notify chan struct{}
+	// closed prevents new submissions and makes waiting workers exit.
+	closed bool
 }
 
 func newRegionAdmissionController(currentWindow, maxWindowMultiplier int) *regionAdmissionController {
@@ -136,40 +116,21 @@ func newRegionAdmissionController(currentWindow, maxWindowMultiplier int) *regio
 	return &regionAdmissionController{
 		currentWindow: currentWindow,
 		maxWindow:     maxWindow,
-		pending:       heap.NewHeap[*pendingRegionRequest](),
+		pending:       heap.NewHeap[*regionPriorityTask](),
 		notify:        make(chan struct{}, 1),
 	}
 }
 
-func (c *regionAdmissionController) submit(
-	task PriorityTask,
-	region regionInfo,
-	currentTs uint64,
-) bool {
-	request := &pendingRegionRequest{
-		task:       task,
-		regionInfo: region,
-		fastScan:   regionScanLag(currentTs, region.resolvedTs()) < fastRegionScanLag,
-	}
-
+func (c *regionAdmissionController) submit(task *regionPriorityTask) bool {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
 		return false
 	}
-	c.pending.AddOrUpdate(request)
+	c.pending.AddOrUpdate(task)
 	c.notifyOneLocked()
 	c.mu.Unlock()
 	return true
-}
-
-func regionScanLag(currentTs, checkpointTs uint64) time.Duration {
-	currentTime := oracle.GetTimeFromTS(currentTs)
-	checkpointTime := oracle.GetTimeFromTS(checkpointTs)
-	if !currentTime.After(checkpointTime) {
-		return 0
-	}
-	return currentTime.Sub(checkpointTime)
 }
 
 func (c *regionAdmissionController) pop(ctx context.Context) (*regionReq, error) {
@@ -213,7 +174,7 @@ func (c *regionAdmissionController) tryPop() (*regionReq, bool) {
 	}, false
 }
 
-func (c *regionAdmissionController) popEligibleLocked() *pendingRegionRequest {
+func (c *regionAdmissionController) popEligibleLocked() *regionPriorityTask {
 	request, ok := c.pending.PeekTop()
 	if !ok {
 		return nil
@@ -233,7 +194,7 @@ func (c *regionAdmissionController) hasEligibleRequestLocked() bool {
 	return c.inflight < c.windowFor(request)
 }
 
-func (c *regionAdmissionController) windowFor(request *pendingRegionRequest) int {
+func (c *regionAdmissionController) windowFor(request *regionPriorityTask) int {
 	if request.canUseMaxWindow() {
 		return c.maxWindow
 	}
@@ -272,6 +233,20 @@ func (c *regionAdmissionController) pendingCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.pending.Len()
+}
+
+func (c *regionAdmissionController) drainPending() []*regionPriorityTask {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	requests := make([]*regionPriorityTask, 0, c.pending.Len())
+	for {
+		request, ok := c.pending.PopTop()
+		if !ok {
+			return requests
+		}
+		requests = append(requests, request)
+	}
 }
 
 func (c *regionAdmissionController) notifyOneLocked() {

@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -52,22 +52,21 @@ func submitRegionForAdmission(
 	t *testing.T,
 	controller *regionAdmissionController,
 	region regionInfo,
-	taskType TaskType,
 	currentTs uint64,
 ) {
 	t.Helper()
-	task := NewRegionPriorityTask(taskType, region, currentTs)
-	require.True(t, controller.submit(task, region, currentTs))
+	task := NewRegionPriorityTask(region, currentTs, region.verID.GetID())
+	require.True(t, controller.submit(task))
 }
 
 func TestRegionAdmissionControllerNormalWindow(t *testing.T) {
 	controller := newRegionAdmissionController(1, 2)
 	currentTs := oracle.GoTimeToTS(time.Now())
-	checkpointTs := oracle.GoTimeToTS(time.Now().Add(-20 * time.Minute))
+	checkpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Hour))
 	region1 := prepareRegionForAdmission(createTestRegionInfo(1, 1), checkpointTs)
 	region2 := prepareRegionForAdmission(createTestRegionInfo(1, 2), checkpointTs)
-	submitRegionForAdmission(t, controller, region1, TaskLowPrior, currentTs)
-	submitRegionForAdmission(t, controller, region2, TaskLowPrior, currentTs)
+	submitRegionForAdmission(t, controller, region1, currentTs)
+	submitRegionForAdmission(t, controller, region2, currentTs)
 
 	req1, err := controller.pop(t.Context())
 	require.NoError(t, err)
@@ -83,24 +82,24 @@ func TestRegionAdmissionControllerNormalWindow(t *testing.T) {
 	require.True(t, req2.abort())
 }
 
-func TestRegionAdmissionControllerFastScanUsesMaxWindow(t *testing.T) {
+func TestRegionAdmissionControllerLowLagUsesMaxWindow(t *testing.T) {
 	controller := newRegionAdmissionController(1, 2)
 	currentTs := oracle.GoTimeToTS(time.Now())
-	slowCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-20 * time.Minute))
-	fastCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Minute))
+	slowCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Hour))
+	lowLagCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Minute))
 
 	submitRegionForAdmission(t, controller,
 		prepareRegionForAdmission(createTestRegionInfo(1, 1), slowCheckpointTs),
-		TaskLowPrior, currentTs)
+		currentTs)
 	req1, err := controller.pop(t.Context())
 	require.NoError(t, err)
 
 	submitRegionForAdmission(t, controller,
 		prepareRegionForAdmission(createTestRegionInfo(1, 2), slowCheckpointTs),
-		TaskLowPrior, currentTs)
+		currentTs)
 	submitRegionForAdmission(t, controller,
-		prepareRegionForAdmission(createTestRegionInfo(1, 3), fastCheckpointTs),
-		TaskLowPrior, currentTs)
+		prepareRegionForAdmission(createTestRegionInfo(1, 3), lowLagCheckpointTs),
+		currentTs)
 
 	req2, err := controller.pop(t.Context())
 	require.NoError(t, err)
@@ -118,24 +117,25 @@ func TestRegionAdmissionControllerFastScanUsesMaxWindow(t *testing.T) {
 	require.True(t, req3.abort())
 }
 
-func TestRegionAdmissionControllerPrioritizesRecovery(t *testing.T) {
+func TestRegionAdmissionControllerPrioritizesInitializedRegion(t *testing.T) {
 	controller := newRegionAdmissionController(1, 2)
 	currentTs := oracle.GoTimeToTS(time.Now())
-	slowCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-20 * time.Minute))
-	fastCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Minute))
+	slowCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Hour))
+	lowLagCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Minute))
 
 	submitRegionForAdmission(t, controller,
 		prepareRegionForAdmission(createTestRegionInfo(1, 1), slowCheckpointTs),
-		TaskLowPrior, currentTs)
+		currentTs)
 	req1, err := controller.pop(t.Context())
 	require.NoError(t, err)
 
 	submitRegionForAdmission(t, controller,
-		prepareRegionForAdmission(createTestRegionInfo(1, 2), fastCheckpointTs),
-		TaskLowPrior, currentTs)
+		prepareRegionForAdmission(createTestRegionInfo(1, 2), lowLagCheckpointTs),
+		currentTs)
+	initializedRegion := prepareRegionForAdmission(createTestRegionInfo(1, 3), slowCheckpointTs)
+	initializedRegion.wasInitialized = true
 	submitRegionForAdmission(t, controller,
-		prepareRegionForAdmission(createTestRegionInfo(1, 3), slowCheckpointTs),
-		TaskHighPrior, currentTs)
+		initializedRegion, currentTs)
 
 	req2, err := controller.pop(t.Context())
 	require.NoError(t, err)
@@ -153,7 +153,7 @@ func TestRegionAdmissionLeaseReleasedOnce(t *testing.T) {
 	controller := newRegionAdmissionController(1, 1)
 	currentTs := oracle.GoTimeToTS(time.Now())
 	region := prepareRegionForAdmission(createTestRegionInfo(1, 1), currentTs)
-	submitRegionForAdmission(t, controller, region, TaskLowPrior, currentTs)
+	submitRegionForAdmission(t, controller, region, currentTs)
 	req, err := controller.pop(t.Context())
 	require.NoError(t, err)
 
@@ -189,8 +189,20 @@ func TestRegionAdmissionControllerClose(t *testing.T) {
 	controller := newRegionAdmissionController(1, 1)
 	controller.close()
 	region := prepareRegionForAdmission(createTestRegionInfo(1, 1), 1)
-	require.False(t, controller.submit(NewRegionPriorityTask(TaskLowPrior, region, 1), region, 1))
+	require.False(t, controller.submit(NewRegionPriorityTask(region, 1, 1)))
 
 	_, err := controller.pop(context.Background())
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestRegionAdmissionControllerDrainPending(t *testing.T) {
+	controller := newRegionAdmissionController(1, 1)
+	region1 := prepareRegionForAdmission(createTestRegionInfo(1, 1), 1)
+	region2 := prepareRegionForAdmission(createTestRegionInfo(1, 2), 1)
+	submitRegionForAdmission(t, controller, region1, 1)
+	submitRegionForAdmission(t, controller, region2, 1)
+
+	pending := controller.drainPending()
+	require.Len(t, pending, 2)
+	require.Zero(t, controller.pendingCount())
 }

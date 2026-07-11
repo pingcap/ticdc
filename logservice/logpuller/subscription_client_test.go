@@ -423,7 +423,7 @@ func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 	sink.cond = sync.NewCond(&sink.mu)
 	client := &subscriptionClient{
 		eventSink:       sink,
-		regionTaskQueue: priorityqueue.New[PriorityTask](),
+		regionTaskQueue: priorityqueue.New[*regionPriorityTask](),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 
@@ -458,7 +458,7 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 		admission:    admission,
 		controlQueue: newControlQueue(),
 	}
-	store := &requestedStore{storeAddr: "store-1", admission: admission}
+	store := &requestedStore{storeAddr: "store-1"}
 	store.requestWorkers.s = []*regionRequestWorker{worker}
 	client.stores.Store(store.storeAddr, store)
 
@@ -466,8 +466,7 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
 		lockedRangeState: &regionlock.LockedRangeState{},
 	}
-	require.True(t, admission.submit(
-		NewRegionPriorityTask(TaskHighPrior, dummyRegion, 1), dummyRegion, 1))
+	require.True(t, admission.submit(NewRegionPriorityTask(dummyRegion, 1, 1)))
 
 	client.broadcastDeregister(SubscriptionID(1), true)
 	require.Equal(t, 1, worker.controlQueue.len())
@@ -476,6 +475,25 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 	require.Equal(t, SubscriptionID(1), req.subID)
 	require.True(t, req.filterLoop)
 	require.Equal(t, 1, admission.pendingCount())
+}
+
+func TestRequestedStoreDistributesRegionsAcrossWorkerBuffers(t *testing.T) {
+	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
+	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
+	store := &requestedStore{storeAddr: "store-1"}
+	store.requestWorkers.s = []*regionRequestWorker{worker1, worker2}
+
+	for i := uint64(1); i <= 4; i++ {
+		region := regionInfo{
+			verID:            tikv.NewRegionVerID(i, 1, 1),
+			subscribedSpan:   &subscribedSpan{subID: 1},
+			lockedRangeState: &regionlock.LockedRangeState{},
+		}
+		require.True(t, store.submit(NewRegionPriorityTask(region, 1, i)))
+	}
+
+	require.Equal(t, 2, worker1.admission.pendingCount())
+	require.Equal(t, 2, worker2.admission.pendingCount())
 }
 
 func TestSubscriptionWithFailedTiKV(t *testing.T) {

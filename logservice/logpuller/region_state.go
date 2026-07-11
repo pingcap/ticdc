@@ -44,6 +44,9 @@ type regionInfo struct {
 	subscribedSpan *subscribedSpan
 	// The state of the locked range of the region.
 	lockedRangeState *regionlock.LockedRangeState
+	// wasInitialized preserves scheduling priority while a failed region is
+	// unlocked, resolved again, and subscribed with a new locked range state.
+	wasInitialized bool
 	// Whether to filter out the value write by cdc itself.
 	// It should be `true` in BDR mode
 	filterLoop bool
@@ -75,6 +78,9 @@ type regionErrorInfo struct {
 }
 
 func newRegionErrorInfo(info regionInfo, err error) regionErrorInfo {
+	if info.lockedRangeState != nil && info.lockedRangeState.Initialized.Load() {
+		info.wasInitialized = true
+	}
 	return regionErrorInfo{
 		regionInfo: info,
 		err:        err,

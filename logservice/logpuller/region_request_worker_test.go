@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/prometheus/client_golang/prometheus"
@@ -72,7 +73,7 @@ func admitRegionRequest(
 ) *regionReq {
 	t.Helper()
 	currentTs := oracle.GoTimeToTS(time.Now())
-	submitRegionForAdmission(t, controller, region, TaskLowPrior, currentTs)
+	submitRegionForAdmission(t, controller, region, currentTs)
 	req, err := controller.pop(t.Context())
 	require.NoError(t, err)
 	return req
@@ -264,7 +265,7 @@ func TestWaitForRegionRequestDrainsIdleControlQueue(t *testing.T) {
 	}
 
 	region := prepareRegionForAdmission(createTestRegionInfo(1, 1), 1)
-	submitRegionForAdmission(t, admission, region, TaskLowPrior, 1)
+	submitRegionForAdmission(t, admission, region, 1)
 
 	select {
 	case result := <-resultCh:
@@ -362,6 +363,52 @@ func TestFailStreamRegionsReleasesSentAdmission(t *testing.T) {
 	require.Zero(t, admission.inflightCount())
 	require.False(t, req.abort())
 	require.Equal(t, 1, ds.pushCount)
+}
+
+func TestFailPendingRegionsReschedulesWorkerBuffer(t *testing.T) {
+	rawSpan := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+	}
+	span := &subscribedSpan{
+		subID:     1,
+		span:      rawSpan,
+		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
+	}
+	lock1 := span.rangeLock.LockRange(t.Context(), []byte("a"), []byte("m"), 1, 1)
+	lock2 := span.rangeLock.LockRange(t.Context(), []byte("m"), []byte("z"), 2, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, lock1.Status)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, lock2.Status)
+
+	admission := newRegionAdmissionController(1, 1)
+	client := &subscriptionClient{}
+	client.failureHandler = newRegionFailureHandler(client)
+	worker := &regionRequestWorker{client: client, admission: admission}
+	regions := []regionInfo{
+		{
+			verID: tikv.NewRegionVerID(1, 1, 1),
+			span: heartbeatpb.TableSpan{
+				TableID: 1, StartKey: []byte("a"), EndKey: []byte("m"),
+			},
+			subscribedSpan: span, lockedRangeState: lock1.LockedRangeState,
+		},
+		{
+			verID: tikv.NewRegionVerID(2, 1, 1),
+			span: heartbeatpb.TableSpan{
+				TableID: 1, StartKey: []byte("m"), EndKey: []byte("z"),
+			},
+			subscribedSpan: span, lockedRangeState: lock2.LockedRangeState,
+		},
+	}
+	for i, region := range regions {
+		require.True(t, admission.submit(NewRegionPriorityTask(region, 1, uint64(i+1))))
+	}
+
+	worker.failPendingRegions(&storeStreamErr{})
+
+	require.Zero(t, admission.pendingCount())
+	require.Len(t, client.failureHandler.cache.cache, 2)
 }
 
 func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
