@@ -228,6 +228,38 @@ func TestDoScanReleasesChangefeedQuotaOnDispatcherQuotaFailure(t *testing.T) {
 	require.Equal(t, uint64(minScanLimitInBytes*2), changefeedQuota.Load())
 }
 
+func TestDoScanReleasesChangefeedQuotaOnScanError(t *testing.T) {
+	broker, eventStore, schemaStore, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	require.NoError(t, broker.addDispatcher(info))
+
+	disp := broker.getDispatcher(info.GetID()).Load()
+	require.NotNil(t, disp)
+	disp.receivedResolvedTs.Store(102)
+	disp.eventStoreCommitTs.Store(101)
+	disp.availableMemoryQuota.Store(minScanLimitInBytes * 2)
+
+	status := broker.getOrSetChangefeedStatus(info)
+	serverID := node.ID(info.GetServerID())
+	changefeedQuota := atomic.NewUint64(minScanLimitInBytes * 2)
+	status.availableMemoryQuota.Store(serverID, changefeedQuota)
+
+	schemaStore.getTableInfoError = errors.New("mock get table info error")
+	require.NoError(t, eventStore.AppendEvents(info.GetID(), 102, &common.RawKVEntry{
+		StartTs: 101,
+		CRTs:    101,
+		Key:     []byte("key"),
+		Value:   []byte("value"),
+	}))
+
+	broker.doScan(context.Background(), disp)
+
+	require.Equal(t, uint64(minScanLimitInBytes*2), changefeedQuota.Load())
+}
+
 func TestTableTriggerDispatcherMetricCount(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
