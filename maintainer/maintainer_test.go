@@ -738,6 +738,25 @@ func TestMaintainerCalCheckpointTsSkipsInvalidGlobalCheckpoint(t *testing.T) {
 	wg.Wait()
 }
 
+func TestMaintainerCheckpointUpdateNotification(t *testing.T) {
+	original := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(original)
+	})
+
+	m := &Maintainer{checkpointUpdateCh: make(chan struct{}, 1)}
+	cfg := original.Clone()
+	config.StoreGlobalServerConfig(cfg)
+	m.notifyCheckpointUpdate()
+	require.Empty(t, m.checkpointUpdateCh)
+
+	cfg.PerformanceMode = config.PerformanceModeLowLatency
+	config.StoreGlobalServerConfig(cfg)
+	m.notifyCheckpointUpdate()
+	m.notifyCheckpointUpdate()
+	require.Len(t, m.checkpointUpdateCh, 1)
+}
+
 func TestMaintainerHandleRedoMetaTsMessageUsesRedoCheckpointForRedoController(t *testing.T) {
 	m, selfNodeID := newMaintainerForRedoCheckpointCalculationTest(t)
 	m.initialized.Store(true)
