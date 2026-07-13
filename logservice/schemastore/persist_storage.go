@@ -234,7 +234,8 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) 
 		zap.Uint64("snapTs", gcTs))
 
 	var err error
-	if p.databaseMap, p.tableMap, p.partitionMap, err = persistSchemaSnapshot(p.db, p.kvStorage, gcTs, true); err != nil {
+	if p.databaseMap, p.tableMap, p.partitionMap, err = persistSchemaSnapshotWithEncryption(
+		p.db, p.kvStorage, gcTs, true, p.encryptionManager, p.keyspaceID); err != nil {
 		// TODO: retry
 		log.Fatal("fail to initialize from kv snapshot", zap.Error(err))
 	}
@@ -259,11 +260,13 @@ func (p *persistentStorage) initializeFromDisk() {
 	defer storageSnap.Close()
 
 	var err error
-	if p.databaseMap, err = loadDatabasesInKVSnap(storageSnap, p.gcTs); err != nil {
+	if p.databaseMap, err = loadDatabasesInKVSnapWithEncryption(
+		storageSnap, p.gcTs, p.encryptionManager, p.keyspaceID); err != nil {
 		log.Fatal("load database info from disk failed")
 	}
 
-	if p.tableMap, p.partitionMap, err = loadTablesInKVSnap(storageSnap, p.gcTs, p.databaseMap); err != nil {
+	if p.tableMap, p.partitionMap, err = loadTablesInKVSnapWithEncryption(
+		storageSnap, p.gcTs, p.databaseMap, p.encryptionManager, p.keyspaceID); err != nil {
 		log.Fatal("load tables in kv snapshot failed")
 	}
 
@@ -607,7 +610,8 @@ func (p *persistentStorage) doGc(gcTs uint64) {
 	}
 
 	start := time.Now()
-	_, _, _, err := persistSchemaSnapshot(p.db, p.kvStorage, gcTs, false)
+	_, _, _, err := persistSchemaSnapshotWithEncryption(
+		p.db, p.kvStorage, gcTs, false, p.encryptionManager, p.keyspaceID)
 	if err != nil {
 		log.Warn("fail to write kv snapshot during gc",
 			zap.Uint64("gcTs", gcTs), zap.Error(err))

@@ -29,13 +29,14 @@ import (
 )
 
 type flakyEncryptionManagerForTest struct {
-	failTimes int
-	calls     int
+	failTimes  int
+	failOnCall int
+	calls      int
 }
 
 func (m *flakyEncryptionManagerForTest) EncryptData(ctx context.Context, keyspaceID uint32, data []byte) ([]byte, error) {
 	m.calls++
-	if m.calls <= m.failTimes {
+	if m.calls <= m.failTimes || m.calls == m.failOnCall {
 		return nil, errors.New("inject encryption failure")
 	}
 	return data, nil
@@ -203,6 +204,45 @@ func TestTryUpdateResolvedTsRetryAfterDDLHandleFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tables, 1)
 	require.Equal(t, "t1", tables[0].SchemaTableName.TableName)
+}
+
+func TestTryUpdateResolvedTsDoesNotAdvancePastFailedDDLAtSameCommitTs(t *testing.T) {
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	pstorage := newPersistentStorageForTest(t.TempDir(), nil)
+	defer func() {
+		require.NoError(t, pstorage.close())
+	}()
+	pstorage.encryptionManager = &flakyEncryptionManagerForTest{failOnCall: 2}
+
+	store := &keyspaceSchemaStore{
+		pdClock:       mockPDClock,
+		unsortedCache: newDDLCache(),
+		dataStorage:   pstorage,
+		notifyCh:      make(chan any, 1),
+	}
+	store.resolvedTs.Store(pstorage.gcTs)
+	store.pendingResolvedTs.Store(pstorage.gcTs)
+
+	const commitTs = uint64(1010)
+	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
+	createSchema.BinlogInfo.SchemaVersion = 1
+	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
+	createTable.BinlogInfo.SchemaVersion = 2
+	store.writeDDLEvent(DDLJobWithCommitTs{Job: createSchema, CommitTs: commitTs})
+	store.writeDDLEvent(DDLJobWithCommitTs{Job: createTable, CommitTs: commitTs})
+	store.advancePendingResolvedTs(commitTs)
+
+	store.tryUpdateResolvedTs()
+	require.Equal(t, int64(1), store.schemaVersion)
+	require.Equal(t, uint64(1000), store.finishedDDLTs)
+	require.Less(t, store.resolvedTs.Load(), commitTs)
+
+	store.tryUpdateResolvedTs()
+	require.Equal(t, int64(2), store.schemaVersion)
+	require.Equal(t, uint64(1010), store.finishedDDLTs)
+	require.Equal(t, commitTs, store.resolvedTs.Load())
 }
 
 func TestGetAllPhysicalTablesDecryptsEncryptedDDLEvents(t *testing.T) {

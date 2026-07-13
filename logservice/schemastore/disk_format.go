@@ -221,6 +221,16 @@ func loadTablesInKVSnap(
 	gcTs uint64,
 	databaseMap map[int64]*BasicDatabaseInfo,
 ) (map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
+	return loadTablesInKVSnapWithEncryption(snap, gcTs, databaseMap, nil, 0)
+}
+
+func loadTablesInKVSnapWithEncryption(
+	snap *pebble.Snapshot,
+	gcTs uint64,
+	databaseMap map[int64]*BasicDatabaseInfo,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
+) (map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
 	tablesInKVSnap := make(map[int64]*BasicTableInfo)
 	partitionsInKVSnap := make(map[int64]BasicPartitionInfo)
 
@@ -241,8 +251,17 @@ func loadTablesInKVSnap(
 	}
 	defer snapIter.Close()
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
+		value := snapIter.Value()
+		if encMgr != nil {
+			decryptedValue, err := encMgr.DecryptData(context.Background(), keyspaceID, value)
+			if err != nil {
+				log.Fatal("decrypt table info failed", zap.Error(err))
+			}
+			value = decryptedValue
+		}
+
 		var table_info_entry PersistedTableInfoEntry
-		if _, err := table_info_entry.UnmarshalMsg(snapIter.Value()); err != nil {
+		if _, err := table_info_entry.UnmarshalMsg(value); err != nil {
 			log.Fatal("unmarshal table info entry failed", zap.Error(err))
 		}
 
@@ -279,6 +298,16 @@ func loadFullTablesInKVSnap(
 	gcTs uint64,
 	databaseMap map[int64]*BasicDatabaseInfo,
 ) (map[int64]*model.TableInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
+	return loadFullTablesInKVSnapWithEncryption(snap, gcTs, databaseMap, nil, 0)
+}
+
+func loadFullTablesInKVSnapWithEncryption(
+	snap *pebble.Snapshot,
+	gcTs uint64,
+	databaseMap map[int64]*BasicDatabaseInfo,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
+) (map[int64]*model.TableInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
 	tableInfosInKVSnap := make(map[int64]*model.TableInfo)
 	tablesInKVSnap := make(map[int64]*BasicTableInfo)
 	partitionsInKVSnap := make(map[int64]BasicPartitionInfo)
@@ -300,8 +329,17 @@ func loadFullTablesInKVSnap(
 	}
 	defer snapIter.Close()
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
+		value := snapIter.Value()
+		if encMgr != nil {
+			decryptedValue, err := encMgr.DecryptData(context.Background(), keyspaceID, value)
+			if err != nil {
+				log.Fatal("decrypt table info failed", zap.Error(err))
+			}
+			value = decryptedValue
+		}
+
 		var table_info_entry PersistedTableInfoEntry
-		if _, err := table_info_entry.UnmarshalMsg(snapIter.Value()); err != nil {
+		if _, err := table_info_entry.UnmarshalMsg(value); err != nil {
 			log.Fatal("unmarshal table info entry failed", zap.Error(err))
 		}
 
@@ -692,6 +730,17 @@ func persistSchemaSnapshot(
 	snapTs uint64,
 	collectMetaInfo bool,
 ) (map[int64]*BasicDatabaseInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
+	return persistSchemaSnapshotWithEncryption(db, tiStore, snapTs, collectMetaInfo, nil, 0)
+}
+
+func persistSchemaSnapshotWithEncryption(
+	db *pebble.DB,
+	tiStore kv.Storage,
+	snapTs uint64,
+	collectMetaInfo bool,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
+) (map[int64]*BasicDatabaseInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
 	for {
 		meta := getSnapshotMeta(tiStore, snapTs)
 		start := time.Now()
@@ -719,7 +768,7 @@ func persistSchemaSnapshot(
 				continue
 			}
 			batch := db.NewBatch()
-			addSchemaInfoToBatch(batch, snapTs, dbInfo)
+			addSchemaInfoToBatchWithEncryption(batch, snapTs, dbInfo, encMgr, keyspaceID)
 			for {
 				rawTables, err := meta.GetMetasByDBID(dbInfo.ID)
 				if err == nil {
@@ -731,7 +780,8 @@ func persistSchemaSnapshot(
 						if !isTableRawKey(rawTable.Field) {
 							continue
 						}
-						tableID, tableName, partitionIDs := addTableInfoToBatch(batch, snapTs, dbInfo, rawTable.Value)
+						tableID, tableName, partitionIDs := addTableInfoToBatchWithEncryption(
+							batch, snapTs, dbInfo, rawTable.Value, encMgr, keyspaceID)
 						if collectMetaInfo {
 							tableMap[tableID] = &BasicTableInfo{
 								SchemaID: dbInfo.ID,
@@ -844,12 +894,13 @@ func loadAllPhysicalTablesAtTs(
 	keyspaceID uint32,
 ) ([]commonEvent.Table, error) {
 	// TODO: respect tableFilter(filter table in kv snap is easy, filter ddl jobs need more attention)
-	databaseMap, err := loadDatabasesInKVSnap(storageSnap, gcTs)
+	databaseMap, err := loadDatabasesInKVSnapWithEncryption(storageSnap, gcTs, encMgr, keyspaceID)
 	if err != nil {
 		return nil, err
 	}
 
-	tableInfoMap, tableMap, partitionMap, err := loadFullTablesInKVSnap(storageSnap, gcTs, databaseMap)
+	tableInfoMap, tableMap, partitionMap, err := loadFullTablesInKVSnapWithEncryption(
+		storageSnap, gcTs, databaseMap, encMgr, keyspaceID)
 	if err != nil {
 		return nil, err
 	}

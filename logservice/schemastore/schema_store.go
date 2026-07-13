@@ -117,6 +117,15 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 	}
 	resolvedEvents := s.unsortedCache.fetchSortedDDLEventBeforeTS(pendingTs)
 	newResolvedTs := s.resolvedTs.Load()
+	advanceResolvedTsAfterGroup := func(idx int) {
+		commitTs := resolvedEvents[idx].CommitTs
+		if idx+1 < len(resolvedEvents) && resolvedEvents[idx+1].CommitTs == commitTs {
+			return
+		}
+		if commitTs > newResolvedTs {
+			newResolvedTs = commitTs
+		}
+	}
 	applyFailed := false
 	for idx, event := range resolvedEvents {
 		if event.Job.BinlogInfo.SchemaVersion == 0 /* means the ddl is ignored in upstream */ {
@@ -128,6 +137,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 				zap.Uint64("jobCommitTs", event.CommitTs),
 				zap.Any("storeSchemaVersion", s.schemaVersion),
 				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
+			advanceResolvedTsAfterGroup(idx)
 			continue
 		}
 		if event.Job.BinlogInfo.FinishedTS <= s.finishedDDLTs {
@@ -139,6 +149,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 				zap.Uint64("jobCommitTs", event.CommitTs),
 				zap.Any("storeSchemaVersion", s.schemaVersion),
 				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
+			advanceResolvedTsAfterGroup(idx)
 			continue
 		}
 		log.Info("handle a ddl job",
@@ -179,9 +190,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 		// Update dedup watermark only after DDL is persisted successfully.
 		s.schemaVersion = event.Job.BinlogInfo.SchemaVersion
 		s.finishedDDLTs = event.Job.BinlogInfo.FinishedTS
-		if event.CommitTs > newResolvedTs {
-			newResolvedTs = event.CommitTs
-		}
+		advanceResolvedTsAfterGroup(idx)
 	}
 	if !applyFailed {
 		// When register a new table, it will load all ddl jobs from disk for the table,
