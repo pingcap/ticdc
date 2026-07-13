@@ -24,8 +24,15 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"go.uber.org/zap"
+)
+
+const (
+	defaultHeartbeatInterval     = 200 * time.Millisecond
+	lowLatencyHeartbeatInterval  = 50 * time.Millisecond
+	defaultHeartbeatInitialDelay = time.Second
 )
 
 // HeartbeatTask is a perioic task to collect the heartbeat status from event dispatcher manager and push to heartbeatRequestQueue
@@ -42,7 +49,7 @@ func newHeartBeatTask(manager *DispatcherManager) *HeartBeatTask {
 		manager:    manager,
 		statusTick: 0,
 	}
-	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(time.Second*1))
+	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(heartbeatInitialDelay()))
 	return t
 }
 
@@ -50,14 +57,27 @@ func (t *HeartBeatTask) Execute() time.Time {
 	if t.manager.closed.Load() {
 		return time.Time{}
 	}
-	executeInterval := time.Millisecond * 200
-	// 10s / 200ms = 50
+	executeInterval := heartbeatInterval()
 	completeStatusInterval := int(time.Second * 10 / executeInterval)
 	t.statusTick++
 	needCompleteStatus := (t.statusTick)%completeStatusInterval == 0
 	message := t.manager.aggregateDispatcherHeartbeats(needCompleteStatus)
 	t.manager.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: t.manager.GetMaintainerID(), Request: message})
 	return time.Now().Add(executeInterval)
+}
+
+func heartbeatInterval() time.Duration {
+	if config.GetGlobalServerConfig().IsLowLatencyMode() {
+		return lowLatencyHeartbeatInterval
+	}
+	return defaultHeartbeatInterval
+}
+
+func heartbeatInitialDelay() time.Duration {
+	if config.GetGlobalServerConfig().IsLowLatencyMode() {
+		return 0
+	}
+	return defaultHeartbeatInitialDelay
 }
 
 func (t *HeartBeatTask) Cancel() {
