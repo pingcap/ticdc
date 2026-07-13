@@ -29,7 +29,7 @@ import (
 )
 
 func newLogCoordinatorForTest() *logCoordinator {
-	c := &logCoordinator{}
+	c := &logCoordinator{pdClock: pdutil.NewClock4Test()}
 	c.eventStoreStates.m = make(map[node.ID]*logservicepb.EventStoreState)
 	c.nodes.m = make(map[node.ID]*node.Info)
 	c.changefeedStates.m = make(map[common.GID]*changefeedState)
@@ -259,6 +259,7 @@ func TestUpdateChangefeedStates(t *testing.T) {
 	require.Equal(t, cfID1, cf1State.cfID)
 	require.Len(t, cf1State.nodeStates, 1)
 	require.Equal(t, uint64(100), cf1State.nodeStates[nodeID1])
+	require.Equal(t, uint64(100), cf1State.minLogServiceResolvedTs)
 	require.NotNil(t, cf1State.resolvedTsGauge)
 	require.NotNil(t, cf1State.resolvedTsLagGauge)
 
@@ -268,6 +269,7 @@ func TestUpdateChangefeedStates(t *testing.T) {
 	require.Equal(t, cfID2, cf2State.cfID)
 	require.Len(t, cf2State.nodeStates, 1)
 	require.Equal(t, uint64(110), cf2State.nodeStates[nodeID1])
+	require.Equal(t, uint64(110), cf2State.minLogServiceResolvedTs)
 
 	// 2. Update from node-2 for cf1
 	states2 := &logservicepb.ChangefeedStates{
@@ -283,6 +285,7 @@ func TestUpdateChangefeedStates(t *testing.T) {
 	require.Len(t, cf1State.nodeStates, 2)
 	require.Equal(t, uint64(100), cf1State.nodeStates[nodeID1])
 	require.Equal(t, uint64(105), cf1State.nodeStates[nodeID2])
+	require.Equal(t, uint64(100), cf1State.minLogServiceResolvedTs)
 
 	// cf2 state should not change
 	cf2State, ok = c.changefeedStates.m[cfID2.ID()]
@@ -304,6 +307,7 @@ func TestUpdateChangefeedStates(t *testing.T) {
 	require.Len(t, cf1State.nodeStates, 2)
 	require.Equal(t, uint64(120), cf1State.nodeStates[nodeID1])
 	require.Equal(t, uint64(105), cf1State.nodeStates[nodeID2])
+	require.Equal(t, uint64(105), cf1State.minLogServiceResolvedTs)
 
 	// Check cf2 is removed from node-1, and since it's the only node for cf2, cf2 should be removed entirely.
 	_, ok = c.changefeedStates.m[cfID2.ID()]
@@ -320,8 +324,97 @@ func TestUpdateChangefeedStates(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, cf1State.nodeStates, 1)
 	require.Equal(t, uint64(120), cf1State.nodeStates[nodeID1])
+	require.Equal(t, uint64(105), cf1State.minLogServiceResolvedTs)
 	_, ok = cf1State.nodeStates[nodeID2]
 	require.False(t, ok)
+}
+
+func TestUpdateChangefeedStatesRefreshesMetricsImmediately(t *testing.T) {
+	c := newLogCoordinatorForTest()
+	mockPDClock := c.pdClock.(*pdutil.Clock4Test)
+	pdTime := time.Now().Truncate(time.Millisecond)
+	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime))
+
+	cfID := common.NewChangefeedID4Test("default", "immediate-metrics")
+	resolvedTs := oracle.GoTimeToTS(pdTime.Add(-500 * time.Millisecond))
+	c.updateChangefeedStates(node.ID("node-1"), &logservicepb.ChangefeedStates{
+		States: []*logservicepb.ChangefeedStateEntry{{
+			ChangefeedID: cfID.ToPB(),
+			ResolvedTs:   resolvedTs,
+		}},
+	})
+
+	state := c.changefeedStates.m[cfID.ID()]
+	require.Equal(t, resolvedTs, state.minLogServiceResolvedTs)
+	require.Equal(t, float64(oracle.ExtractPhysical(resolvedTs)), testutil.ToFloat64(state.resolvedTsGauge))
+	require.InDelta(t, 0.5, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
+
+	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime.Add(time.Second)))
+	c.reportChangefeedMetrics()
+	require.InDelta(t, 0.5, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
+
+	newerResolvedTs := oracle.GoTimeToTS(pdTime.Add(-100 * time.Millisecond))
+	c.updateChangefeedStates(node.ID("node-2"), &logservicepb.ChangefeedStates{
+		States: []*logservicepb.ChangefeedStateEntry{{
+			ChangefeedID: cfID.ToPB(),
+			ResolvedTs:   newerResolvedTs,
+		}},
+	})
+	require.Equal(t, resolvedTs, state.minLogServiceResolvedTs)
+	require.InDelta(t, 0.5, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
+
+	c.reportChangefeedMetrics()
+	require.InDelta(t, 1.5, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
+}
+
+func TestUpdateChangefeedStatesWaitsForCompleteReportingRound(t *testing.T) {
+	c := newLogCoordinatorForTest()
+	mockPDClock := c.pdClock.(*pdutil.Clock4Test)
+	pdTime := time.Now().Truncate(time.Millisecond)
+	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime))
+
+	cfID := common.NewChangefeedID4Test("default", "complete-reporting-round")
+	oldResolvedTs := oracle.GoTimeToTS(pdTime.Add(-900 * time.Millisecond))
+	state := &changefeedState{
+		cfID: cfID,
+		nodeStates: map[node.ID]uint64{
+			"node-1": oldResolvedTs,
+			"node-2": oldResolvedTs,
+			"node-3": oldResolvedTs,
+		},
+		nodesReportedSinceLastUpdate: make(map[node.ID]struct{}),
+		nodeReportPhyTs:              make(map[node.ID]int64),
+		minLogServiceResolvedTs:      oldResolvedTs,
+		metricsInitialized:           true,
+		resolvedTsGauge:              prometheus.NewGauge(prometheus.GaugeOpts{}),
+		resolvedTsLagGauge:           prometheus.NewGauge(prometheus.GaugeOpts{}),
+	}
+	state.resolvedTsGauge.Set(float64(oracle.ExtractPhysical(oldResolvedTs)))
+	state.resolvedTsLagGauge.Set(0.9)
+	c.changefeedStates.m[cfID.ID()] = state
+
+	report := func(nodeID node.ID, reportTime time.Time) uint64 {
+		mockPDClock.SetTS(oracle.GoTimeToTS(reportTime))
+		resolvedTs := oracle.GoTimeToTS(reportTime.Add(-200 * time.Millisecond))
+		c.updateChangefeedStates(nodeID, &logservicepb.ChangefeedStates{
+			States: []*logservicepb.ChangefeedStateEntry{{
+				ChangefeedID: cfID.ToPB(),
+				ResolvedTs:   resolvedTs,
+			}},
+		})
+		return resolvedTs
+	}
+
+	newResolvedTs := report("node-1", pdTime)
+	report("node-1", pdTime)
+	report("node-2", pdTime.Add(300*time.Millisecond))
+	require.Equal(t, oldResolvedTs, state.minLogServiceResolvedTs)
+	require.InDelta(t, 0.9, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
+
+	report("node-3", pdTime.Add(600*time.Millisecond))
+	require.Equal(t, newResolvedTs, state.minLogServiceResolvedTs)
+	require.InDelta(t, 0.2, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
+	require.Empty(t, state.nodesReportedSinceLastUpdate)
 }
 
 func TestReportMetricsForAffectedChangefeeds(t *testing.T) {
