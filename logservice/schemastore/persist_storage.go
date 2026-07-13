@@ -545,7 +545,9 @@ func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableIn
 	allDDLFinishedTs = append(allDDLFinishedTs, p.tablesDDLHistory[tableID]...)
 	p.mu.RUnlock()
 
-	if err := addTableInfoFromKVSnap(store, kvSnapVersion, storageSnap); err != nil {
+	if err := addTableInfoFromKVSnap(
+		store, kvSnapVersion, storageSnap, p.encryptionManager, p.keyspaceID,
+	); err != nil {
 		return err
 	}
 
@@ -561,8 +563,12 @@ func addTableInfoFromKVSnap(
 	store *versionedTableInfoStore,
 	kvSnapVersion uint64,
 	snap *pebble.Snapshot,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
 ) error {
-	tableInfo := readTableInfoInKVSnap(snap, store.getTableID(), kvSnapVersion)
+	tableInfo := readTableInfoInKVSnapWithEncryption(
+		snap, store.getTableID(), kvSnapVersion, encMgr, keyspaceID,
+	)
 	if tableInfo != nil {
 		store.addInitialTableInfo(tableInfo, kvSnapVersion)
 	}

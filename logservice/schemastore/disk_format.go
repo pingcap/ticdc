@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"io"
 	"math"
 	"strings"
 	"time"
@@ -47,13 +48,92 @@ import (
 //     the valid data keys on disk includes snapshot data at `snapshot_ts`
 //     and ddl jobs in the range (snapshot_ts, max_finished_ddl_ts]
 //     and we will pull ddl job from `resolved_ts` at restart if the current gc ts is smaller than resolved_ts.
+//
+// Persisted schema and DDL keys append an 8-byte mask. Bit 0 marks that the
+// value passed through the encryption layer; other bits are reserved. Readers
+// also accept legacy keys without the mask.
 
 const (
 	snapshotSchemaKeyPrefix    = "ss_"
 	snapshotTableKeyPrefix     = "st_"
 	snapshotPartitionKeyPrefix = "sp_"
 	ddlKeyPrefix               = "ds_"
+
+	schemaStoreKeyMaskLen = 8
 )
+
+const (
+	// encryptionLayerKeyMask indicates that the value passed through the encryption layer.
+	// Other mask bits are reserved.
+	encryptionLayerKeyMask uint64 = 1 << iota
+)
+
+func keyWithMask(key []byte, mask uint64) []byte {
+	result := make([]byte, len(key)+schemaStoreKeyMaskLen)
+	copy(result, key)
+	binary.BigEndian.PutUint64(result[len(key):], mask)
+	return result
+}
+
+// keyWithEncryptionLayer marks that the value stored under key passed through
+// the encryption layer. The marker is persisted in the key so readers do not
+// infer the value format from whether an encryption manager is configured.
+func keyWithEncryptionLayer(key []byte) []byte {
+	return keyWithMask(key, encryptionLayerKeyMask)
+}
+
+func keyUsesEncryptionLayer(key []byte) bool {
+	var plainKeyLen int
+	switch {
+	case bytes.HasPrefix(key, []byte(snapshotSchemaKeyPrefix)):
+		plainKeyLen = len(snapshotSchemaKeyPrefix) + 8 + 8
+	case bytes.HasPrefix(key, []byte(snapshotTableKeyPrefix)):
+		plainKeyLen = len(snapshotTableKeyPrefix) + 8 + 8
+	case bytes.HasPrefix(key, []byte(ddlKeyPrefix)):
+		plainKeyLen = len(ddlKeyPrefix) + 8
+	default:
+		return false
+	}
+	return len(key) == plainKeyLen+schemaStoreKeyMaskLen &&
+		binary.BigEndian.Uint64(key[plainKeyLen:])&encryptionLayerKeyMask != 0
+}
+
+func decryptValueIfNeeded(
+	key []byte,
+	value []byte,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
+) ([]byte, error) {
+	if !keyUsesEncryptionLayer(key) {
+		return value, nil
+	}
+	if encMgr == nil {
+		log.Panic("encountered encryption-layer value but no encryption manager is configured",
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.Binary("key", append([]byte(nil), key...)))
+	}
+	return encMgr.DecryptData(context.Background(), keyspaceID, value)
+}
+
+func getValueWithMaskKey(
+	snap *pebble.Snapshot,
+	plainKey []byte,
+) (value []byte, closer io.Closer, key []byte, err error) {
+	encryptionLayerKey := keyWithEncryptionLayer(plainKey)
+	value, closer, err = snap.Get(encryptionLayerKey)
+	if err != pebble.ErrNotFound {
+		return value, closer, encryptionLayerKey, err
+	}
+
+	unencryptedKey := keyWithMask(plainKey, 0)
+	value, closer, err = snap.Get(unencryptedKey)
+	if err != pebble.ErrNotFound {
+		return value, closer, unencryptedKey, err
+	}
+
+	value, closer, err = snap.Get(plainKey)
+	return value, closer, plainKey, err
+}
 
 func gcTsKey() []byte {
 	return []byte("gc")
@@ -192,13 +272,9 @@ func loadDatabasesInKVSnapWithEncryption(snap *pebble.Snapshot, gcTs uint64, enc
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
 		value := snapIter.Value()
 
-		// Decrypt if encryption is enabled
-		if encMgr != nil {
-			decryptedValue, err := encMgr.DecryptData(context.Background(), keyspaceID, value)
-			if err != nil {
-				log.Fatal("decrypt db info failed", zap.Error(err))
-			}
-			value = decryptedValue
+		value, err = decryptValueIfNeeded(snapIter.Key(), value, encMgr, keyspaceID)
+		if err != nil {
+			log.Fatal("decrypt db info failed", zap.Error(err))
 		}
 
 		var dbInfo model.DBInfo
@@ -252,12 +328,9 @@ func loadTablesInKVSnapWithEncryption(
 	defer snapIter.Close()
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
 		value := snapIter.Value()
-		if encMgr != nil {
-			decryptedValue, err := encMgr.DecryptData(context.Background(), keyspaceID, value)
-			if err != nil {
-				log.Fatal("decrypt table info failed", zap.Error(err))
-			}
-			value = decryptedValue
+		value, err = decryptValueIfNeeded(snapIter.Key(), value, encMgr, keyspaceID)
+		if err != nil {
+			log.Fatal("decrypt table info failed", zap.Error(err))
 		}
 
 		var table_info_entry PersistedTableInfoEntry
@@ -330,12 +403,9 @@ func loadFullTablesInKVSnapWithEncryption(
 	defer snapIter.Close()
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
 		value := snapIter.Value()
-		if encMgr != nil {
-			decryptedValue, err := encMgr.DecryptData(context.Background(), keyspaceID, value)
-			if err != nil {
-				log.Fatal("decrypt table info failed", zap.Error(err))
-			}
-			value = decryptedValue
+		value, err = decryptValueIfNeeded(snapIter.Key(), value, encMgr, keyspaceID)
+		if err != nil {
+			log.Fatal("decrypt table info failed", zap.Error(err))
 		}
 
 		var table_info_entry PersistedTableInfoEntry
@@ -405,15 +475,12 @@ func loadAndApplyDDLHistory(
 	defer snapIter.Close()
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
 		ddlValue := snapIter.Value()
-		if encMgr != nil {
-			decryptedValue, err := encMgr.DecryptData(context.Background(), keyspaceID, ddlValue)
-			if err != nil {
-				log.Fatal("decrypt ddl job failed when loading ddl history",
-					zap.Uint32("keyspaceID", keyspaceID),
-					zap.Binary("ddlKey", append([]byte(nil), snapIter.Key()...)),
-					zap.Error(err))
-			}
-			ddlValue = decryptedValue
+		ddlValue, err = decryptValueIfNeeded(snapIter.Key(), ddlValue, encMgr, keyspaceID)
+		if err != nil {
+			log.Fatal("decrypt ddl job failed when loading ddl history",
+				zap.Uint32("keyspaceID", keyspaceID),
+				zap.Binary("ddlKey", append([]byte(nil), snapIter.Key()...)),
+				zap.Error(err))
 		}
 		ddlEvent := unmarshalPersistedDDLEvent(ddlValue)
 		// Note: no need to skip ddl here
@@ -466,12 +533,22 @@ func tryReadLogicalTableID(snap *pebble.Snapshot, tableID int64, version uint64)
 }
 
 func readTableInfoInKVSnap(snap *pebble.Snapshot, tableID int64, version uint64) *common.TableInfo {
+	return readTableInfoInKVSnapWithEncryption(snap, tableID, version, nil, 0)
+}
+
+func readTableInfoInKVSnapWithEncryption(
+	snap *pebble.Snapshot,
+	tableID int64,
+	version uint64,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
+) *common.TableInfo {
 	readRawTableInfo := func(targetTableID int64) (string, *model.TableInfo) {
-		targetKey, err := tableInfoKey(version, targetTableID)
+		plainKey, err := tableInfoKey(version, targetTableID)
 		if err != nil {
 			log.Fatal("generate table info failed", zap.Error(err))
 		}
-		value, closer, err := snap.Get(targetKey)
+		value, closer, targetKey, err := getValueWithMaskKey(snap, plainKey)
 		if err == pebble.ErrNotFound {
 			return "", nil
 		}
@@ -479,6 +556,10 @@ func readTableInfoInKVSnap(snap *pebble.Snapshot, tableID int64, version uint64)
 			log.Fatal("get table info failed", zap.Error(err))
 		}
 		defer closer.Close()
+		value, err = decryptValueIfNeeded(targetKey, value, encMgr, keyspaceID)
+		if err != nil {
+			log.Fatal("decrypt table info failed", zap.Error(err))
+		}
 
 		var table_info_entry PersistedTableInfoEntry
 		if _, err := table_info_entry.UnmarshalMsg(value); err != nil {
@@ -545,13 +626,14 @@ func readPersistedDDLEvent(snap *pebble.Snapshot, version uint64) PersistedDDLEv
 	return readPersistedDDLEventWithEncryption(snap, version, nil, 0)
 }
 
-// readPersistedDDLEventWithEncryption reads and decrypts DDL event if encryption is enabled
+// readPersistedDDLEventWithEncryption reads a DDL event and decrypts it when
+// its persisted key says the value passed through the encryption layer.
 func readPersistedDDLEventWithEncryption(snap *pebble.Snapshot, version uint64, encMgr encryption.EncryptionManager, keyspaceID uint32) PersistedDDLEvent {
-	ddlKey, err := ddlJobKey(version)
+	plainKey, err := ddlJobKey(version)
 	if err != nil {
 		log.Fatal("generate ddl job key failed", zap.Error(err))
 	}
-	ddlValue, closer, err := snap.Get(ddlKey)
+	ddlValue, closer, ddlKey, err := getValueWithMaskKey(snap, plainKey)
 	if err != nil {
 		log.Fatal("get ddl job failed",
 			zap.Uint64("version", version),
@@ -559,16 +641,12 @@ func readPersistedDDLEventWithEncryption(snap *pebble.Snapshot, version uint64, 
 	}
 	defer closer.Close()
 
-	// Decrypt if encryption is enabled
-	if encMgr != nil {
-		decryptedValue, err := encMgr.DecryptData(context.Background(), keyspaceID, ddlValue)
-		if err != nil {
-			log.Fatal("decrypt ddl event failed",
-				zap.Uint64("version", version),
-				zap.Uint32("keyspaceID", keyspaceID),
-				zap.Error(err))
-		}
-		ddlValue = decryptedValue
+	ddlValue, err = decryptValueIfNeeded(ddlKey, ddlValue, encMgr, keyspaceID)
+	if err != nil {
+		log.Fatal("decrypt ddl event failed",
+			zap.Uint64("version", version),
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.Error(err))
 	}
 
 	return unmarshalPersistedDDLEvent(ddlValue)
@@ -609,6 +687,7 @@ func writePersistedDDLEventWithEncryption(db *pebble.DB, ddlEvent *PersistedDDLE
 		return err
 	}
 
+	keyMask := uint64(0)
 	// Encrypt if encryption is enabled
 	if encMgr != nil {
 		encryptedValue, err := encMgr.EncryptData(context.Background(), keyspaceID, ddlValue)
@@ -616,8 +695,10 @@ func writePersistedDDLEventWithEncryption(db *pebble.DB, ddlEvent *PersistedDDLE
 			return errors.Trace(err)
 		}
 		ddlValue = encryptedValue
+		keyMask |= encryptionLayerKeyMask
 	}
 
+	ddlKey = keyWithMask(ddlKey, keyMask)
 	batch.Set(ddlKey, ddlValue, pebble.NoSync)
 	return batch.Commit(pebble.NoSync)
 }
@@ -643,6 +724,7 @@ func addSchemaInfoToBatchWithEncryption(batch *pebble.Batch, ts uint64, info *mo
 		log.Fatal("marshal schema info failed", zap.Error(err))
 	}
 
+	keyMask := uint64(0)
 	// Encrypt if encryption is enabled
 	if encMgr != nil {
 		encryptedValue, err := encMgr.EncryptData(context.Background(), keyspaceID, schemaValue)
@@ -650,8 +732,10 @@ func addSchemaInfoToBatchWithEncryption(batch *pebble.Batch, ts uint64, info *mo
 			log.Fatal("encrypt schema info failed", zap.Error(err))
 		}
 		schemaValue = encryptedValue
+		keyMask |= encryptionLayerKeyMask
 	}
 
+	schemaKey = keyWithMask(schemaKey, keyMask)
 	batch.Set(schemaKey, schemaValue, pebble.NoSync)
 }
 
@@ -692,6 +776,7 @@ func addTableInfoToBatchWithEncryption(
 		log.Fatal("marshal table info entry failed", zap.Error(err))
 	}
 
+	keyMask := uint64(0)
 	// Encrypt if encryption is enabled
 	if encMgr != nil {
 		encryptedValue, err := encMgr.EncryptData(context.Background(), keyspaceID, tableInfoEntryValue)
@@ -699,8 +784,10 @@ func addTableInfoToBatchWithEncryption(
 			log.Fatal("encrypt table info entry failed", zap.Error(err))
 		}
 		tableInfoEntryValue = encryptedValue
+		keyMask |= encryptionLayerKeyMask
 	}
 
+	tableKey = keyWithMask(tableKey, keyMask)
 	batch.Set(tableKey, tableInfoEntryValue, pebble.NoSync)
 
 	// write partition info to batch if the table is a partition table
@@ -928,15 +1015,12 @@ func loadAllPhysicalTablesAtTs(
 	defer snapIter.Close()
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
 		ddlValue := snapIter.Value()
-		if encMgr != nil {
-			decryptedValue, err := encMgr.DecryptData(context.Background(), keyspaceID, ddlValue)
-			if err != nil {
-				log.Fatal("decrypt ddl job failed when loading all physical tables",
-					zap.Uint32("keyspaceID", keyspaceID),
-					zap.Binary("ddlKey", append([]byte(nil), snapIter.Key()...)),
-					zap.Error(err))
-			}
-			ddlValue = decryptedValue
+		ddlValue, err = decryptValueIfNeeded(snapIter.Key(), ddlValue, encMgr, keyspaceID)
+		if err != nil {
+			log.Fatal("decrypt ddl job failed when loading all physical tables",
+				zap.Uint32("keyspaceID", keyspaceID),
+				zap.Binary("ddlKey", append([]byte(nil), snapIter.Key()...)),
+				zap.Error(err))
 		}
 		ddlEvent := unmarshalPersistedDDLEvent(ddlValue)
 		handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
