@@ -28,6 +28,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	defaultManagerHeartbeatInterval    = 200 * time.Millisecond
+	lowLatencyManagerHeartbeatInterval = 50 * time.Millisecond
+)
+
 // Manager is the manager of all changefeed maintainer in a ticdc server, each ticdc server will
 // start a Manager when the ticdc server is startup. It responsible for:
 // 1. Handle bootstrap command from coordinator and report all changefeed maintainer status.
@@ -125,7 +130,7 @@ func (m *Manager) Name() string {
 }
 
 func (m *Manager) Run(ctx context.Context) error {
-	ticker := time.NewTicker(time.Millisecond * 200)
+	ticker := time.NewTicker(managerHeartbeatInterval())
 	defer ticker.Stop()
 	for {
 		select {
@@ -139,6 +144,13 @@ func (m *Manager) Run(ctx context.Context) error {
 			m.cleanupRemovedMaintainers()
 		}
 	}
+}
+
+func managerHeartbeatInterval() time.Duration {
+	if config.GetGlobalServerConfig().IsLowLatencyMode() {
+		return lowLatencyManagerHeartbeatInterval
+	}
+	return defaultManagerHeartbeatInterval
 }
 
 func (m *Manager) newCoordinatorTopicMessage(msg messaging.IOTypeT) *messaging.TargetMessage {

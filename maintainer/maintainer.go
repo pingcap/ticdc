@@ -723,7 +723,10 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 		newWatermark, canUpdate := m.calculateNewCheckpointTs()
 		if canUpdate {
 			m.controller.spanController.AdvanceMaintainerCommittedCheckpointTs(newWatermark.CheckpointTs)
-			m.setWatermark(*newWatermark)
+			watermarkChanged := m.setWatermark(*newWatermark)
+			if watermarkChanged && config.GetGlobalServerConfig().IsLowLatencyMode() && m.statusChanged != nil {
+				m.statusChanged.Store(true)
+			}
 			m.updateMetrics()
 		}
 	}
@@ -1406,13 +1409,17 @@ func (m *Maintainer) getWatermark() heartbeatpb.Watermark {
 	return res
 }
 
-func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
+func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) bool {
 	m.watermark.mu.Lock()
 	defer m.watermark.mu.Unlock()
-	if newWatermark.CheckpointTs != math.MaxUint64 {
+	changed := false
+	if newWatermark.CheckpointTs != math.MaxUint64 && newWatermark.CheckpointTs != m.watermark.CheckpointTs {
 		m.watermark.CheckpointTs = newWatermark.CheckpointTs
+		changed = true
 	}
-	if newWatermark.ResolvedTs != math.MaxUint64 {
+	if newWatermark.ResolvedTs != math.MaxUint64 && newWatermark.ResolvedTs != m.watermark.ResolvedTs {
 		m.watermark.ResolvedTs = newWatermark.ResolvedTs
+		changed = true
 	}
+	return changed
 }

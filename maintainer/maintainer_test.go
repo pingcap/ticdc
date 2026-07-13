@@ -757,6 +757,29 @@ func TestMaintainerCheckpointUpdateNotification(t *testing.T) {
 	require.Len(t, m.checkpointUpdateCh, 1)
 }
 
+func TestManagerHeartbeatInterval(t *testing.T) {
+	original := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(original)
+	})
+
+	cfg := original.Clone()
+	config.StoreGlobalServerConfig(cfg)
+	require.Equal(t, defaultManagerHeartbeatInterval, managerHeartbeatInterval())
+
+	cfg.PerformanceMode = config.PerformanceModeLowLatency
+	config.StoreGlobalServerConfig(cfg)
+	require.Equal(t, lowLatencyManagerHeartbeatInterval, managerHeartbeatInterval())
+}
+
+func TestMaintainerSetWatermarkReportsChanges(t *testing.T) {
+	m := &Maintainer{}
+	m.watermark.Watermark = &heartbeatpb.Watermark{CheckpointTs: 1, ResolvedTs: 1}
+	require.False(t, m.setWatermark(heartbeatpb.Watermark{CheckpointTs: 1, ResolvedTs: 1}))
+	require.True(t, m.setWatermark(heartbeatpb.Watermark{CheckpointTs: 2, ResolvedTs: 1}))
+	require.True(t, m.setWatermark(heartbeatpb.Watermark{CheckpointTs: 2, ResolvedTs: 3}))
+}
+
 func TestMaintainerHandleRedoMetaTsMessageUsesRedoCheckpointForRedoController(t *testing.T) {
 	m, selfNodeID := newMaintainerForRedoCheckpointCalculationTest(t)
 	m.initialized.Store(true)
