@@ -152,6 +152,7 @@ func TestIgnoreDDLByCommitTs(t *testing.T) {
 	require.Contains(t, tableNames, "t3")
 	require.NotContains(t, tableNames, "t2")
 }
+
 func TestTryUpdateResolvedTsRetryAfterDDLHandleFailure(t *testing.T) {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
