@@ -19,7 +19,6 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/spanz"
@@ -134,28 +133,10 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			handleEventEntries(span, event.mustFirstState(), event.entries)
 		} else if event.resolvedTs != 0 {
 			hasResolved = true
-			if span.advanceInterval == 0 {
-				updatedStates := make([]*regionlock.LockedRangeState, 0, len(event.states))
-				regionID := uint64(0)
-				for _, state := range event.states {
-					if updateRegionResolvedTs(state, event.resolvedTs) {
-						updatedStates = append(updatedStates, state.region.lockedRangeState)
-						regionID = state.getRegionID()
-					}
-				}
-				if len(updatedStates) > 0 {
-					ts := span.rangeLock.UpdateLockedRangeStateHeapBatch(updatedStates)
-					resolvedTs := advanceSpanResolvedTs(span, regionID, ts)
-					if resolvedTs > newResolvedTs {
-						newResolvedTs = resolvedTs
-					}
-				}
-			} else {
-				for _, state := range event.states {
-					resolvedTs := handleResolvedTs(span, state, event.resolvedTs)
-					if resolvedTs > newResolvedTs {
-						newResolvedTs = resolvedTs
-					}
+			for _, state := range event.states {
+				resolvedTs := handleResolvedTs(span, state, event.resolvedTs)
+				if resolvedTs > newResolvedTs {
+					newResolvedTs = resolvedTs
 				}
 			}
 		} else {
@@ -377,17 +358,30 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 }
 
 func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs uint64) uint64 {
-	if !updateRegionResolvedTs(state, resolvedTs) {
+	if state.isStale() || !state.isInitialized() {
+		return 0
+	}
+	state.matcher.tryCleanUnmatchedValue()
+	regionID := state.getRegionID()
+	lastResolvedTs := state.getLastResolvedTs()
+	if resolvedTs < lastResolvedTs {
+		log.Debug("The resolvedTs is fallen back in subscription client",
+			zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
+			zap.Uint64("regionID", regionID),
+			zap.Uint64("resolvedTs", resolvedTs),
+			zap.Uint64("lastResolvedTs", lastResolvedTs))
 		return 0
 	}
 
-	regionID := state.getRegionID()
+	state.updateResolvedTs(resolvedTs)
+
 	ts := uint64(0)
 	shouldAdvance := false
 	// advanceInterval defaults to 100ms; setting it to 0 means resolving the timestamp as soon as possible.
 	// Note: If a single span contains an extremely large number of regions (e.g., 500k), advanceInterval = 0 may cause performance issues.
 	if span.advanceInterval == 0 {
-		ts = span.rangeLock.UpdateLockedRangeStateHeapBatch([]*regionlock.LockedRangeState{state.region.lockedRangeState})
+		span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
+		ts = span.rangeLock.GetHeapMinTs()
 		shouldAdvance = true
 	} else {
 		now := time.Now().UnixMilli()
@@ -432,5 +426,6 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 			return ts
 		}
 	}
+
 	return 0
 }
