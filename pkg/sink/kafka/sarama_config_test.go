@@ -22,6 +22,7 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/gin-gonic/gin/binding"
 	"github.com/pingcap/errors"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
@@ -54,6 +55,9 @@ func TestNewSaramaConfig(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, cc.expected, cfg.Producer.Compression)
 	}
+	cfg, err := newSaramaConfig(ctx, options)
+	require.NoError(t, err)
+	require.Equal(t, defaultMaxRetry, cfg.Producer.Retry.Max)
 
 	options.EnableTLS = true
 	options.Credential = &security.Credential{
@@ -73,12 +77,66 @@ func TestNewSaramaConfig(t *testing.T) {
 		SASLMechanism: sarama.SASLTypeSCRAMSHA256,
 	}
 
-	cfg, err := newSaramaConfig(ctx, saslOptions)
+	cfg, err = newSaramaConfig(ctx, saslOptions)
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 	require.Equal(t, "user", cfg.Net.SASL.User)
 	require.Equal(t, "password", cfg.Net.SASL.Password)
 	require.Equal(t, sarama.SASLMechanism("SCRAM-SHA-256"), cfg.Net.SASL.Mechanism)
+}
+
+func TestNewSaramaConfigMaxRetryFromSinkURI(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		sinkURI  string
+		expected int
+	}{
+		{
+			name:     "default max retry",
+			sinkURI:  "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&kafka-client-id=unit-test",
+			expected: defaultMaxRetry,
+		},
+		{
+			name: "set max retry",
+			sinkURI: "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0" +
+				"&kafka-client-id=unit-test&max-retry=7",
+			expected: 7,
+		},
+		{
+			name: "zero max retry",
+			sinkURI: "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0" +
+				"&kafka-client-id=unit-test&max-retry=0",
+			expected: 0,
+		},
+		{
+			name: "negative max retry",
+			sinkURI: "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0" +
+				"&kafka-client-id=unit-test&max-retry=-1",
+			expected: defaultMaxRetry,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			options := NewOptions()
+			sinkURI, err := url.Parse(test.sinkURI)
+			require.NoError(t, err)
+			err = options.Apply(
+				commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"),
+				sinkURI,
+				config.GetDefaultReplicaConfig().Sink,
+			)
+			require.NoError(t, err)
+
+			cfg, err := newSaramaConfig(context.Background(), options)
+			require.NoError(t, err)
+			require.Equal(t, test.expected, cfg.Producer.Retry.Max)
+		})
+	}
 }
 
 func TestApplySASL(t *testing.T) {
@@ -257,7 +315,6 @@ func TestApplySASL(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			options := NewOptions()
@@ -328,7 +385,6 @@ func TestApplyTLS(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			options := NewOptions()

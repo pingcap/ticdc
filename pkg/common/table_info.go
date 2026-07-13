@@ -58,7 +58,7 @@ func UnquoteName(name string) string {
 
 // EscapeName replaces all "`" in name with double "`"
 func EscapeName(name string) string {
-	return strings.Replace(name, "`", "``", -1)
+	return strings.ReplaceAll(name, "`", "``")
 }
 
 const (
@@ -116,8 +116,29 @@ type TableInfo struct {
 	} `json:"-"`
 }
 
-func (ti *TableInfo) InitPrivateFields() {
+func (ti *TableInfo) String() string {
 	if ti == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf(
+		"TableInfo{schema:%s, table:%s, tableID:%d, isPartition:%t, targetSchema:%s, targetTable:%s, charset:%s, collate:%s, hasPKOrNotNullUK:%t, activeActiveTable:%t, softDeleteTable:%t, updateTS:%d}",
+		ti.TableName.Schema,
+		ti.TableName.Table,
+		ti.TableName.TableID,
+		ti.TableName.IsPartition,
+		ti.TableName.GetTargetSchema(),
+		ti.TableName.GetTargetTable(),
+		ti.Charset,
+		ti.Collate,
+		ti.HasPKOrNotNullUK,
+		ti.ActiveActiveTable,
+		ti.SoftDeleteTable,
+		ti.UpdateTS,
+	)
+}
+
+func (ti *TableInfo) initPreSQLs() {
+	if ti == nil || ti.columnSchema == nil {
 		return
 	}
 
@@ -142,10 +163,10 @@ func (ti *TableInfo) InitPrivateFields() {
 
 // CloneWithRouting creates a shallow copy of TableInfo with routing applied.
 // The new TableInfo shares the same columnSchema, View, Sequence pointers
-// but has its own TableName (with TargetSchema/TargetTable set) and uninitialized preSQLs.
+// but has its own TableName (with TargetSchema/TargetTable set) and preSQLs.
 // This is safe because:
 // - columnSchema, View, Sequence are read-only after creation
-// - preSQLs will be initialized later via InitPrivateFields() using the new TableName
+// - preSQLs will be initialized lazily using the new TableName
 // - TableName is a value type that gets copied
 func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableInfo {
 	if ti == nil {
@@ -289,6 +310,7 @@ func (ti *TableInfo) GetUpdateTS() uint64 {
 }
 
 func (ti *TableInfo) GetPreInsertSQL() string {
+	ti.initPreSQLs()
 	if ti.preSQLs.m[preSQLInsert] == "" {
 		log.Panic("preSQLs[preSQLInsert] is not initialized")
 	}
@@ -296,6 +318,7 @@ func (ti *TableInfo) GetPreInsertSQL() string {
 }
 
 func (ti *TableInfo) GetPreReplaceSQL() string {
+	ti.initPreSQLs()
 	if ti.preSQLs.m[preSQLReplace] == "" {
 		log.Panic("preSQLs[preSQLReplace] is not initialized")
 	}
@@ -303,6 +326,7 @@ func (ti *TableInfo) GetPreReplaceSQL() string {
 }
 
 func (ti *TableInfo) GetPreUpdateSQL() string {
+	ti.initPreSQLs()
 	if ti.preSQLs.m[preSQLUpdate] == "" {
 		log.Panic("preSQLs[preSQLUpdate] is not initialized")
 	}
@@ -698,7 +722,5 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
 	cs := NewColumnSchema4Decoder(tableInfo)
-	result := newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
-	result.InitPrivateFields()
-	return result
+	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
 }

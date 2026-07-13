@@ -36,6 +36,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/encryption"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -51,6 +52,9 @@ import (
 var (
 	kvEventCount        = metrics.EventStoreReceivedEventCount.WithLabelValues("kv")
 	resolvedEventCount  = metrics.EventStoreReceivedEventCount.WithLabelValues("resolved")
+	insertKVEntryCount  = metrics.EventStoreKVEntryCount.WithLabelValues("insert")
+	updateKVEntryCount  = metrics.EventStoreKVEntryCount.WithLabelValues("update")
+	deleteKVEntryCount  = metrics.EventStoreKVEntryCount.WithLabelValues("delete")
 	scannedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("scanned")
 	skippedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("skipped")
 )
@@ -118,7 +122,7 @@ type dispatcherStat struct {
 
 	resolvedTs atomic.Uint64
 	// the max ts of events which is not needed by this dispatcher
-	checkpointTs uint64
+	checkpointTs atomic.Uint64
 	// keyspaceID for encryption (0 means default/classic)
 	keyspaceID uint32
 	// the difference between `subStat`, `pendingSubStat` and `removingSubStat`:
@@ -456,7 +460,7 @@ func (e *eventStore) Close(_ context.Context) error {
 }
 
 func (e *eventStore) RegisterDispatcher(
-	changefeedID common.ChangeFeedID,
+	_ common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	dispatcherSpan *heartbeatpb.TableSpan,
 	startTs uint64,
@@ -509,9 +513,9 @@ func (e *eventStore) RegisterDispatcher(
 	stat := &dispatcherStat{
 		dispatcherID: dispatcherID,
 		tableSpan:    dispatcherSpan,
-		checkpointTs: startTs,
 		keyspaceID:   dispatcherSpan.KeyspaceID,
 	}
+	stat.checkpointTs.Store(startTs)
 	stat.resolvedTs.Store(startTs)
 
 	wrappedNotifier := func(resolvedTs uint64, latestCommitTs uint64) {
@@ -723,7 +727,9 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	if !ok {
 		return
 	}
-	dispatcherStat.checkpointTs = checkpointTs
+	if !util.CompareAndIncrease(&dispatcherStat.checkpointTs, checkpointTs) {
+		return
+	}
 
 	updateSubStatCheckpoint := func(subStat *subscriptionStat) {
 		if subStat == nil {
@@ -743,8 +749,9 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 				continue
 			}
 
-			if newCheckpointTs == 0 || dispatcherStat.checkpointTs < newCheckpointTs {
-				newCheckpointTs = dispatcherStat.checkpointTs
+			dispatcherCheckpointTs := dispatcherStat.checkpointTs.Load()
+			if newCheckpointTs == 0 || dispatcherCheckpointTs < newCheckpointTs {
+				newCheckpointTs = dispatcherCheckpointTs
 			}
 		}
 
@@ -757,21 +764,21 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		if newCheckpointTs == 0 {
 			return
 		}
-		oldCheckpointTs := subStat.checkpointTs.Load()
-		if newCheckpointTs == oldCheckpointTs {
-			return
-		}
-		if newCheckpointTs < oldCheckpointTs {
-			log.Panic("should not happen",
-				zap.Uint64("newCheckpointTs", newCheckpointTs),
-				zap.Uint64("oldCheckpointTs", oldCheckpointTs))
-		}
-		// If there is no dml event after old checkpoint ts, then there is no data to be deleted.
-		// So we can skip adding gc item.
-		lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load()
-		if lastReceiveDMLTime > 0 {
-			oldCheckpointPhysicalTime := oracle.GetTimeFromTS(oldCheckpointTs)
-			if lastReceiveDMLTime >= oldCheckpointPhysicalTime.UnixMilli() {
+		for {
+			oldCheckpointTs := subStat.checkpointTs.Load()
+			if newCheckpointTs == oldCheckpointTs {
+				return
+			}
+			if newCheckpointTs < oldCheckpointTs {
+				return
+			}
+			if !subStat.checkpointTs.CompareAndSwap(oldCheckpointTs, newCheckpointTs) {
+				continue
+			}
+			// If there is no dml event after old checkpoint ts, then there is no data to be deleted.
+			// So we can skip adding gc item.
+			maxEventCommitTs := subStat.maxEventCommitTs.Load()
+			if maxEventCommitTs != 0 && maxEventCommitTs >= oldCheckpointTs {
 				e.gcManager.addGCItem(
 					subStat.dbIndex,
 					uint64(subStat.subID),
@@ -780,21 +787,21 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 					newCheckpointTs,
 				)
 			}
-		}
-		e.subscriptionChangeCh.In() <- SubscriptionChange{
-			ChangeType:   SubscriptionChangeTypeUpdate,
-			SubID:        uint64(subStat.subID),
-			Span:         subStat.tableSpan,
-			CheckpointTs: newCheckpointTs,
-			ResolvedTs:   subStat.resolvedTs.Load(),
-		}
-		subStat.checkpointTs.Store(newCheckpointTs)
-		if log.GetLevel() <= zap.DebugLevel {
-			log.Debug("update checkpoint ts",
-				zap.Any("dispatcherID", dispatcherID),
-				zap.Uint64("subscriptionID", uint64(subStat.subID)),
-				zap.Uint64("newCheckpointTs", newCheckpointTs),
-				zap.Uint64("oldCheckpointTs", oldCheckpointTs))
+			e.subscriptionChangeCh.In() <- SubscriptionChange{
+				ChangeType:   SubscriptionChangeTypeUpdate,
+				SubID:        uint64(subStat.subID),
+				Span:         subStat.tableSpan,
+				CheckpointTs: newCheckpointTs,
+				ResolvedTs:   subStat.resolvedTs.Load(),
+			}
+			if logger.IsDebugEnabled() {
+				log.Debug("update checkpoint ts",
+					zap.Stringer("dispatcherID", dispatcherID),
+					zap.Uint64("subscriptionID", uint64(subStat.subID)),
+					zap.Uint64("newCheckpointTs", newCheckpointTs),
+					zap.Uint64("oldCheckpointTs", oldCheckpointTs))
+			}
+			return
 		}
 	}
 	updateSubStatCheckpoint(dispatcherStat.subStat)
@@ -956,10 +963,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 
 	decoder := e.decoderPool.Get().(*zstd.Decoder)
 
-	needCheckSpan := true
-	if stat.tableSpan.Equal(subStat.tableSpan) {
-		needCheckSpan = false
-	}
+	needCheckSpan := !stat.tableSpan.Equal(subStat.tableSpan)
 
 	return &eventStoreIter{
 		tableSpan:         stat.tableSpan,
@@ -1354,6 +1358,9 @@ func (e *eventStore) writeEvents(
 	batch := db.NewBatch()
 	defer batch.Close()
 	kvCount := 0
+	insertCount := 0
+	updateCount := 0
+	deleteCount := 0
 	var totalValueBytesBefore int64
 	var totalValueBytesAfter int64
 	var dstBuf []byte
@@ -1368,6 +1375,14 @@ func (e *eventStore) writeEvents(
 		kvCount += len(event.kvs)
 		for i := range event.kvs {
 			kv := &event.kvs[i]
+			switch {
+			case kv.IsInsert():
+				insertCount++
+			case kv.IsUpdate():
+				updateCount++
+			case kv.IsDelete():
+				deleteCount++
+			}
 			if kv.CRTs <= event.currentResolvedTs {
 				log.Warn("event store received kv with commitTs less than resolvedTs",
 					zap.Uint64("commitTs", kv.CRTs),
@@ -1455,6 +1470,9 @@ func (e *eventStore) writeEvents(
 		*rawValueBuf = rawBuf
 	}
 	kvEventCount.Add(float64(kvCount))
+	insertKVEntryCount.Add(float64(insertCount))
+	updateKVEntryCount.Add(float64(updateCount))
+	deleteKVEntryCount.Add(float64(deleteCount))
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
 	metrics.EventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
 	metrics.EventStoreWriteBytes.Add(float64(batch.Len()))
@@ -1591,7 +1609,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		}
 		comparableKey := common.ToComparableKey(rawKV.Key)
 		if bytes.Compare(comparableKey, iter.tableSpan.StartKey) >= 0 &&
-			bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
+			bytes.Compare(comparableKey, iter.tableSpan.EndKey) < 0 {
 			break
 		}
 		log.Debug("event store iter skip kv not in table span",
@@ -1605,14 +1623,12 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		skippedBytesMetrics.Add(float64(len(value)))
 		iter.innerIter.Next()
 	}
-	isNewTxn := false
+	isNewTxn := iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs)
 	// 2 PC transactions have different startTs and commitTs.
 	// async-commit transactions have different startTs and may have the same commitTs.
 	// at the moment, use commit-ts determine whether it is a new transaction, even though multiple
 	// different transactions may be grouped together, to satisfy the resolved-ts semantics.
-	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
-		isNewTxn = true
-	}
+
 	iter.prevCommitTs = rawKV.CRTs
 	iter.prevStartTs = rawKV.StartTs
 	iter.rowCount++
@@ -1735,17 +1751,18 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					log.Warn("cannot find subscription state", zap.Uint64("subscriptionID", change.SubID))
 					continue
 				}
-				if change.CheckpointTs < tableState.Subscriptions[targetIndex].CheckpointTs ||
-					change.ResolvedTs < tableState.Subscriptions[targetIndex].ResolvedTs {
-					log.Panic("should not happen",
+				subState := tableState.Subscriptions[targetIndex]
+				if change.CheckpointTs < subState.CheckpointTs || change.ResolvedTs < subState.ResolvedTs {
+					log.Warn("ignore stale subscription state update",
 						zap.Uint64("subscriptionID", change.SubID),
-						zap.Uint64("oldCheckpointTs", tableState.Subscriptions[targetIndex].CheckpointTs),
-						zap.Uint64("oldResolvedTs", tableState.Subscriptions[targetIndex].ResolvedTs),
+						zap.Uint64("oldCheckpointTs", subState.CheckpointTs),
+						zap.Uint64("oldResolvedTs", subState.ResolvedTs),
 						zap.Uint64("newCheckpointTs", change.CheckpointTs),
 						zap.Uint64("newResolvedTs", change.ResolvedTs))
+					continue
 				}
-				tableState.Subscriptions[targetIndex].CheckpointTs = change.CheckpointTs
-				tableState.Subscriptions[targetIndex].ResolvedTs = change.ResolvedTs
+				subState.CheckpointTs = change.CheckpointTs
+				subState.ResolvedTs = change.ResolvedTs
 			default:
 				log.Panic("invalid subscription change type", zap.Int("changeType", int(change.ChangeType)))
 			}

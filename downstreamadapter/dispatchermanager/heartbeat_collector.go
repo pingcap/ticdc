@@ -248,6 +248,7 @@ func (c *HeartBeatCollector) sendBlockStatusMessages(ctx context.Context) error 
 					messaging.MaintainerManagerTopic,
 					blockStatusRequestWithTargetID.Request,
 				))
+			c.blockStatusReqQueue.OnSendComplete(blockStatusRequestWithTargetID)
 			if err != nil {
 				log.Error("failed to send block status request message", zap.Error(err))
 			}
@@ -262,12 +263,12 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 		heartbeatResponse := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 		c.heartBeatResponseDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(heartbeatResponse.ChangefeedID),
-			NewHeartBeatResponse(heartbeatResponse))
+			NewHeartBeatResponse(msg.From, heartbeatResponse))
 	case messaging.TypeScheduleDispatcherRequest:
 		schedulerDispatcherRequest := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 		c.schedulerDispatcherRequestDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(schedulerDispatcherRequest.ChangefeedID),
-			NewSchedulerDispatcherRequest(schedulerDispatcherRequest))
+			NewSchedulerDispatcherRequest(msg.From, schedulerDispatcherRequest))
 		// TODO: check metrics
 		metrics.HandleDispatcherRequsetCounter.WithLabelValues("default", schedulerDispatcherRequest.ChangefeedID.Name, "receive").Inc()
 	case messaging.TypeCheckpointTsMessage:
@@ -279,17 +280,17 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 		redoMessage := msg.Message[0].(*heartbeatpb.RedoResolvedTsForwardMessage)
 		c.redoResolvedTsForwardMessageDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(redoMessage.ChangefeedID),
-			NewRedoResolvedTsForwardMessage(redoMessage))
+			NewRedoResolvedTsForwardMessage(msg.From, redoMessage))
 	case messaging.TypeRedoMetaMessage:
 		redoMessage := msg.Message[0].(*heartbeatpb.RedoMetaMessage)
 		c.redoMetaMessageDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(redoMessage.ChangefeedID),
-			NewRedoMetaMessage(redoMessage))
+			NewRedoMetaMessage(msg.From, redoMessage))
 	case messaging.TypeMergeDispatcherRequest:
 		mergeDispatcherRequest := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
 		c.mergeDispatcherRequestDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(mergeDispatcherRequest.ChangefeedID),
-			NewMergeDispatcherRequest(mergeDispatcherRequest))
+			NewMergeDispatcherRequest(msg.From, mergeDispatcherRequest))
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.String("type", msg.Type.String()),

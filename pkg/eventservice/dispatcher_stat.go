@@ -327,14 +327,6 @@ func (w *wrapEvent) reset() {
 	wrapEventPool.Put(w)
 }
 
-func (w *wrapEvent) getDispatcherID() common.DispatcherID {
-	e, ok := w.e.(pevent.Event)
-	if !ok {
-		log.Panic("cast event failed", zap.Any("event", w.e))
-	}
-	return e.GetDispatcherID()
-}
-
 func newWrapHandshakeEvent(serverID node.ID, e pevent.HandshakeEvent) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID
@@ -430,22 +422,43 @@ type changefeedStatus struct {
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
 	minSentTs            atomic.Uint64
 	scanInterval         atomic.Int64
+	reportBandState      atomic.Int32
+	fastBandState        atomic.Int32
+	slowBandState        atomic.Int32
 
-	lastAdjustTime      atomic.Time
-	lastTrendAdjustTime atomic.Time
-	usageWindow         *memoryUsageWindow
-	syncPointInterval   time.Duration
+	scanWindowController *adaptiveScanWindowController
+	syncPointInterval    time.Duration
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
+	return newChangefeedStatusWithScanWindow(
+		changefeedID,
+		syncPointInterval,
+		isScanWindowEnabled(),
+	)
+}
+
+func isScanWindowEnabled() bool {
+	cfg := config.GetGlobalServerConfig()
+	if cfg == nil || cfg.Debug == nil || cfg.Debug.EventService == nil {
+		return true
+	}
+	return cfg.Debug.EventService.EnableScanWindow
+}
+
+func newChangefeedStatusWithScanWindow(
+	changefeedID common.ChangeFeedID,
+	syncPointInterval time.Duration,
+	enableScanWindow bool,
+) *changefeedStatus {
 	status := &changefeedStatus{
 		changefeedID:      changefeedID,
-		usageWindow:       newMemoryUsageWindow(memoryUsageWindowDuration),
 		syncPointInterval: syncPointInterval,
 	}
+	if enableScanWindow {
+		status.scanWindowController = newAdaptiveScanWindowController(time.Now())
+	}
 	status.scanInterval.Store(int64(defaultScanInterval))
-	status.lastAdjustTime.Store(time.Now())
-	status.lastTrendAdjustTime.Store(time.Now())
 
 	return status
 }

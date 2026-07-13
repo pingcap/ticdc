@@ -22,7 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,7 +61,7 @@ func newTestWriterConfig(
 	return cfg
 }
 
-func newTestLocalExternalStorage(t *testing.T, dir string) storage.ExternalStorage {
+func newTestLocalExternalStorage(t *testing.T, dir string) storeapi.Storage {
 	extStorage, _, err := util.GetTestExtStorage(context.Background(), dir)
 	require.NoError(t, err)
 	return extStorage

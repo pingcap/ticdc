@@ -73,7 +73,7 @@ func TestDrainSchedulerCreatesMoveOperators(t *testing.T) {
 	db.AddReplicatingMaintainer(changefeed.NewChangefeed(loadInfo2.ChangefeedID, &loadInfo2, 1, false), destHot)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 
 	s := NewDrainScheduler("test", 10, oc, db, drainController)
 	_ = s.Execute()
@@ -123,7 +123,7 @@ func TestDrainSchedulerSkipsChangefeedWithInflightOperator(t *testing.T) {
 	db.AddReplicatingMaintainer(cf2, origin)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 
 	require.True(t, oc.AddOperator(operator.NewMoveMaintainerOperator(db, cf1, origin, dest)))
 	require.Equal(t, 1, oc.OperatorSize())
@@ -161,7 +161,7 @@ func TestDrainSchedulerIgnoresUnrelatedOperatorCapacity(t *testing.T) {
 	otherCF := db.GetByID(otherID)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 	require.True(t, oc.AddOperator(operator.NewMoveMaintainerOperator(db, otherCF, other, dest)))
 
 	s := NewDrainScheduler("test", 1, oc, db, drainController)
@@ -200,7 +200,7 @@ func TestDrainSchedulerRotatesAcrossDrainingNodes(t *testing.T) {
 	cfB := addReplicatingMaintainer(t, db, "cf-b", originB)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 	s := NewDrainScheduler("test", 1, oc, db, drainController)
 
 	_ = s.Execute()
@@ -216,4 +216,78 @@ func TestDrainSchedulerRotatesAcrossDrainingNodes(t *testing.T) {
 	_ = s.Execute()
 
 	require.NotNil(t, oc.GetOperator(cfB))
+}
+
+func TestDrainSchedulerRequiresTargetAckBeforeUsingDestination(t *testing.T) {
+	setupCoordinatorSchedulerTestServices()
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+
+	origin := node.ID("origin")
+	destPending := node.ID("dest-pending")
+	destAcked := node.ID("dest-acked")
+	nodeManager.GetAliveNodes()[origin] = &node.Info{ID: origin}
+	nodeManager.GetAliveNodes()[destPending] = &node.Info{ID: destPending}
+	nodeManager.GetAliveNodes()[destAcked] = &node.Info{ID: destAcked}
+
+	drainController := drain.NewController(mc)
+	epoch := uint64(7)
+	drainController.StartDrainTargetSchedulerGate(origin, epoch)
+	drainController.ObserveHeartbeat(origin, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		NodeEpoch: 1,
+	})
+	drainController.ObserveHeartbeat(destPending, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+	drainController.ObserveHeartbeat(destAcked, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: origin.String(),
+		DispatcherDrainTargetEpoch:  epoch,
+	})
+
+	db := changefeed.NewChangefeedDB(1)
+	cfID := addReplicatingMaintainer(t, db, "cf-drain", origin)
+
+	selfNode := &node.Info{ID: node.ID("coordinator")}
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
+
+	s := NewDrainScheduler("test", 10, oc, db, drainController)
+	_ = s.Execute()
+
+	op := oc.GetOperator(cfID)
+	require.NotNil(t, op)
+	require.ElementsMatch(t, []node.ID{origin, destAcked}, op.AffectedNodes())
+}
+
+func TestDrainSchedulerSkipsWhenSchedulingFrozen(t *testing.T) {
+	setupCoordinatorSchedulerTestServices()
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+
+	origin := node.ID("origin")
+	dest := node.ID("dest")
+	nodeManager.GetAliveNodes()[origin] = &node.Info{ID: origin}
+	nodeManager.GetAliveNodes()[dest] = &node.Info{ID: dest}
+
+	drainController := drain.NewController(mc)
+	drainController.SetSchedulingFrozen(true)
+	drainController.ObserveHeartbeat(origin, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		NodeEpoch: 1,
+	})
+
+	db := changefeed.NewChangefeedDB(1)
+	cfID := addReplicatingMaintainer(t, db, "cf-frozen-drain", origin)
+
+	selfNode := &node.Info{ID: node.ID("coordinator")}
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
+
+	s := NewDrainScheduler("test", 10, oc, db, drainController)
+	_ = s.Execute()
+
+	require.Nil(t, oc.GetOperator(cfID))
+	require.Equal(t, 0, oc.OperatorSize())
 }

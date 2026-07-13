@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/pingcap/ticdc/utils/priorityqueue"
 	"github.com/pingcap/tidb/pkg/store/mockstore/mockcopr"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -65,10 +66,21 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	}
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, false)
-	client.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
-	client.totalSpans.spanMap[SubscriptionID(1)] = span
 	client.pdClock = pdutil.NewClock4Test()
+	client.spanRegistry = newSpanRegistry(nil, client.pdClock)
+	span := newSubscribedSpan(
+		client.ctx,
+		client.resolveLockRateLimiter,
+		client.resolveLockTaskCh,
+		SubscriptionID(1),
+		rawSpan,
+		100,
+		consumeKVEvents,
+		advanceResolvedTs,
+		0,
+		false,
+	)
+	client.spanRegistry.Add(span)
 
 	// Lock a range, and then ResolveLock will trigger a task for it.
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
@@ -135,12 +147,12 @@ func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
 
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	span1 := client.newSubscribedSpan(SubscriptionID(1), heartbeatpb.TableSpan{
+	span1 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(1), heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
 	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
-	span2 := client.newSubscribedSpan(SubscriptionID(2), heartbeatpb.TableSpan{
+	span2 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(2), heartbeatpb.TableSpan{
 		TableID:  2,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
@@ -243,7 +255,18 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 	}
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	span := newSubscribedSpan(
+		client.ctx,
+		client.resolveLockRateLimiter,
+		client.resolveLockTaskCh,
+		SubscriptionID(1),
+		rawSpan,
+		100,
+		consumeKVEvents,
+		advanceResolvedTs,
+		0,
+		false,
+	)
 
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
@@ -278,7 +301,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh: make(chan resolveLockTask, 1),
-		regionTaskQueue:   NewPriorityQueue(),
+		regionTaskQueue:   priorityqueue.New[PriorityTask](),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
@@ -291,7 +314,18 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	}
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, true)
+	span := newSubscribedSpan(
+		client.ctx,
+		client.resolveLockRateLimiter,
+		client.resolveLockTaskCh,
+		SubscriptionID(1),
+		rawSpan,
+		100,
+		consumeKVEvents,
+		advanceResolvedTs,
+		0,
+		true,
+	)
 
 	res := span.rangeLock.LockRange(context.Background(), rawSpan.StartKey, rawSpan.EndKey, 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
@@ -309,9 +343,10 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 
 func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	client := &subscriptionClient{
-		errCache: newErrCache(),
-		ds:       &mockDynamicStream{},
+		eventSink: &regionEventSink{ds: &mockDynamicStream{}},
 	}
+	client.spanRegistry = newSpanRegistry(nil, nil)
+	client.failureHandler = newRegionFailureHandler(client)
 	rawSpan := heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte("a"),
@@ -322,7 +357,7 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 		span:      rawSpan,
 		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
 	}
-	client.totalSpans.spanMap = map[SubscriptionID]*subscribedSpan{span.subID: span}
+	client.spanRegistry.Add(span)
 
 	res1 := span.rangeLock.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res1.Status)
@@ -337,7 +372,7 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 		lockedRangeState: res1.LockedRangeState,
 	}, &requestCancelledErr{}))
 
-	require.Len(t, client.errCache.cache, 1)
+	require.Len(t, client.failureHandler.cache.cache, 1)
 	require.Len(t, span.rangeLock.IterAll(nil).UnLockedRanges, 1)
 
 	client.onRegionFail(newRegionErrorInfo(regionInfo{
@@ -347,8 +382,8 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 		lockedRangeState: res2.LockedRangeState,
 	}, &requestCancelledErr{}))
 
-	require.Len(t, client.errCache.cache, 1)
-	require.NotContains(t, client.totalSpans.spanMap, span.subID)
+	require.Len(t, client.failureHandler.cache.cache, 1)
+	require.Nil(t, client.spanRegistry.Get(span.subID))
 }
 
 type mockDynamicStream struct{}
@@ -382,14 +417,18 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 }
 
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
+	sink := &regionEventSink{
+		ctx: context.Background(),
+		ds:  &mockDynamicStream{},
+	}
+	sink.cond = sync.NewCond(&sink.mu)
 	client := &subscriptionClient{
-		ds:              &mockDynamicStream{},
-		regionTaskQueue: NewPriorityQueue(),
+		eventSink:       sink,
+		regionTaskQueue: priorityqueue.New[PriorityTask](),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
-	client.cond = sync.NewCond(&client.mu)
 
-	client.paused.Store(true)
+	sink.paused.Store(true)
 
 	done := make(chan struct{})
 	go func() {
@@ -692,4 +731,94 @@ func TestErrCacheDispatchBatch(t *testing.T) {
 			require.Len(t, errCache.errCh, tc.expectedErrCh)
 		})
 	}
+}
+
+func TestGetResolvedTargetTs(t *testing.T) {
+	client := &subscriptionClient{
+		resolveLockTaskCh:      make(chan resolveLockTask, 10),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
+	}
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
+	advanceResolvedTs := func(ts uint64) {}
+
+	span := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(1), heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte{'a'},
+		EndKey:   []byte{'z'},
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	span.initialized.Store(true)
+
+	// Replicate the getResolvedTargetTs closure from runResolveLockChecker
+	getResolvedTargetTs := func(subSpan *subscribedSpan, currentTime time.Time, currentTs uint64) uint64 {
+		resolvedTsUpdated := time.Unix(subSpan.resolvedTsUpdated.Load(), 0)
+		if !subSpan.initialized.Load() || time.Since(resolvedTsUpdated) < resolveLockFence {
+			return 0
+		}
+		resolvedTs := subSpan.resolvedTs.Load()
+		resolvedTime := oracle.GetTimeFromTS(resolvedTs)
+		if currentTime.Sub(resolvedTime) < resolveLockFence {
+			return 0
+		}
+		return min(currentTs, oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence)))
+	}
+
+	// Simulate clock skew: local pdClock is 30s ahead of PD.
+	// In the real scenario:
+	//   - currentTs comes from pd.GetTS (PD time)
+	//   - currentTime comes from pdClock.CurrentTime() (local clock, could be ahead)
+	//   - resolvedTs is a TiKV/PD timestamp
+	pdNow := time.Now()
+	localClockNow := pdNow.Add(30 * time.Second) // local clock 30s ahead
+	currentTs := oracle.GoTimeToTS(pdNow)
+
+	// resolvedTime is 2 seconds ago in PD time, so:
+	//   resolvedTime + resolveLockFence = pdNow - 2s + 4s = pdNow + 2s > pdNow
+	//   => oracle.GoTimeToTS(resolvedTime + resolveLockFence) > currentTs
+	// But currentTime (local) - resolvedTime = 32s > 4s (resolveLockFence), so the check passes
+	resolvedTime := pdNow.Add(-2 * time.Second)
+	resolvedTs := oracle.GoTimeToTS(resolvedTime)
+	span.resolvedTs.Store(resolvedTs)
+	span.resolvedTsUpdated.Store(pdNow.Add(-10 * time.Second).Unix())
+
+	// Verify the setup: resolvedTime + resolveLockFence should exceed currentTs
+	tsIfUncapped := oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence))
+	require.True(t, tsIfUncapped > currentTs,
+		"setup: resolvedTime+resolveLockFence TS (%d) should exceed currentTs (%d)", tsIfUncapped, currentTs)
+
+	// With the fix (min), targetTs should be capped at currentTs
+	targetTs := getResolvedTargetTs(span, localClockNow, currentTs)
+	require.Equal(t, currentTs, targetTs,
+		"targetTs should be capped at currentTs when resolvedTime+resolveLockFence exceeds it")
+
+	// Test case 2: resolvedTime + resolveLockFence is in the past (< currentTs)
+	// resolvedTime = 20s ago, +4s = 16s ago < pdNow, so tsIfUncapped < currentTs
+	resolvedTime2 := pdNow.Add(-20 * time.Second)
+	span.resolvedTs.Store(oracle.GoTimeToTS(resolvedTime2))
+	tsIfUncapped2 := oracle.GoTimeToTS(resolvedTime2.Add(resolveLockFence))
+	require.True(t, tsIfUncapped2 < currentTs,
+		"setup: resolvedTime+resolveLockFence TS (%d) should be less than currentTs (%d)", tsIfUncapped2, currentTs)
+
+	targetTs2 := getResolvedTargetTs(span, localClockNow, currentTs)
+	require.Equal(t, tsIfUncapped2, targetTs2,
+		"targetTs should be resolvedTime+resolveLockFence when it's less than currentTs")
+
+	// Test case 3: span not initialized
+	span.initialized.Store(false)
+	targetTs3 := getResolvedTargetTs(span, localClockNow, currentTs)
+	require.Equal(t, uint64(0), targetTs3, "targetTs should be 0 when span is not initialized")
+
+	// Test case 4: resolvedTsUpdated is recent (within resolveLockFence)
+	span.initialized.Store(true)
+	span.resolvedTsUpdated.Store(time.Now().Unix())
+	targetTs4 := getResolvedTargetTs(span, localClockNow, currentTs)
+	require.Equal(t, uint64(0), targetTs4, "targetTs should be 0 when resolvedTsUpdated is recent")
+
+	// Test case 5: currentTime - resolvedTime < resolveLockFence (should return 0)
+	span.resolvedTsUpdated.Store(pdNow.Add(-10 * time.Second).Unix())
+	recentResolvedTime := localClockNow.Add(-2 * time.Second) // 2s ago in local time
+	span.resolvedTs.Store(oracle.GoTimeToTS(recentResolvedTime))
+	targetTs5 := getResolvedTargetTs(span, localClockNow, currentTs)
+	require.Equal(t, uint64(0), targetTs5,
+		"targetTs should be 0 when currentTime - resolvedTime < resolveLockFence")
 }

@@ -47,7 +47,10 @@ type SchemaStore interface {
 
 	UnregisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64) error
 
-	// GetTableInfo return table info with the largest version <= ts
+	// GetTableInfo returns full table schema with the largest version <= ts.
+	// It is for already admitted table dispatchers: the table must have been
+	// registered through RegisterTable so schema store keeps its versioned table
+	// info cache.
 	GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 
 	// TODO: how to respect tableFilter
@@ -624,6 +627,21 @@ func (s *schemaStore) acquireInitialGCSafePoint(
 	gcKeeper *schemaStoreGCKeeper,
 ) (uint64, error) {
 	for {
+		// A previous CDC process with the same advertise address can leave its
+		// schema-store GC service behind after a crash or kill. Remove it before
+		// reading the lower bound, otherwise initialization can keep advancing its
+		// own stale service by one ts and fail the start-ts safety check forever.
+		if err := gcKeeper.close(ctx); err != nil {
+			log.Warn("cleanup stale schema store gc keeper failed, will retry in 1s",
+				zap.Any("keyspace", keyspaceMeta), zap.Error(err))
+			select {
+			case <-ctx.Done():
+				return 0, errors.Trace(err)
+			case <-time.After(time.Second):
+			}
+			continue
+		}
+
 		// Read the current lower bound first, then install a dedicated GC barrier
 		// for this schema store instance before any snapshot or incremental pull starts.
 		gcSafePoint, err := gc.UnifyGetServiceGCSafepoint(ctx, s.pdCli, keyspaceMeta.ID, defaultSchemaStoreGcServiceID)

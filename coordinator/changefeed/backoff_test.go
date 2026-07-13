@@ -147,10 +147,14 @@ func TestTableRoutingErrorsFastFail(t *testing.T) {
 			code:    string(errors.ErrTableRoutingFailed.RFCCode()),
 			message: "table routing failed",
 		},
+		{
+			name:    "table route conflict",
+			code:    string(errors.ErrTableRouteConflict.RFCCode()),
+			message: "table route conflict",
+		},
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), time.Minute*30, 1)
 			require.True(t, backoff.ShouldRun())
@@ -172,6 +176,36 @@ func TestTableRoutingErrorsFastFail(t *testing.T) {
 			require.False(t, backoff.retrying.Load())
 		})
 	}
+}
+
+func TestFastFailErrorWinsOverCheckpointProgress(t *testing.T) {
+	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), time.Minute*30, 1)
+	require.True(t, backoff.ShouldRun())
+
+	changed, state, err := backoff.CheckStatus(&heartbeatpb.MaintainerStatus{
+		CheckpointTs: 2,
+		Err: []*heartbeatpb.RunningError{
+			{
+				Code:    string(errors.ErrTableRouteConflict.RFCCode()),
+				Message: "table route conflict",
+			},
+		},
+	})
+
+	require.True(t, changed)
+	require.Equal(t, config.StateFailed, state)
+	require.NotNil(t, err)
+	require.Equal(t, uint64(2), backoff.checkpointTs)
+	require.False(t, backoff.ShouldRun())
+	require.False(t, backoff.retrying.Load())
+
+	changed, state, err = backoff.CheckStatus(&heartbeatpb.MaintainerStatus{
+		CheckpointTs: 3,
+	})
+	require.False(t, changed)
+	require.Equal(t, config.StateFailed, state)
+	require.Nil(t, err)
+	require.Equal(t, uint64(2), backoff.checkpointTs)
 }
 
 func TestFailedWhenRetry(t *testing.T) {

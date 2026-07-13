@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -906,6 +907,65 @@ func TestEventStoreUpdateCheckpointTs(t *testing.T) {
 	}
 }
 
+func TestEventStoreUpdateCheckpointTsConcurrentStaleUpdates(t *testing.T) {
+	restoreCfg := setDataSharingForTest(t, true)
+	defer restoreCfg()
+
+	_, store := newEventStoreForTest(t.TempDir())
+	es := store.(*eventStore)
+	defer func() {
+		require.NoError(t, es.Close(context.Background()))
+	}()
+
+	dispatcherID1 := common.NewDispatcherID()
+	dispatcherID2 := common.NewDispatcherID()
+	tableID := int64(1)
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	span := &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: []byte("a"),
+		EndKey:   []byte("h"),
+	}
+
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(uint64, uint64) {}, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(uint64, uint64) {}, false, false))
+
+	es.dispatcherMeta.RLock()
+	stat1 := es.dispatcherMeta.dispatcherStats[dispatcherID1]
+	stat2 := es.dispatcherMeta.dispatcherStats[dispatcherID2]
+	require.NotNil(t, stat1)
+	require.NotNil(t, stat2)
+	subStat := stat1.subStat
+	require.NotNil(t, subStat)
+	require.True(t, subStat == stat2.subStat)
+	es.dispatcherMeta.RUnlock()
+
+	store.UpdateDispatcherCheckpointTs(dispatcherID1, 900)
+	store.UpdateDispatcherCheckpointTs(dispatcherID2, 900)
+	require.Equal(t, uint64(100), subStat.checkpointTs.Load())
+
+	const staleUpdateCount = 64
+	startCh := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(staleUpdateCount)
+	for i := range staleUpdateCount {
+		staleCheckpointTs := uint64(150 + i)
+		go func(checkpointTs uint64) {
+			defer wg.Done()
+			<-startCh
+			store.UpdateDispatcherCheckpointTs(dispatcherID1, checkpointTs)
+		}(staleCheckpointTs)
+	}
+	close(startCh)
+	wg.Wait()
+
+	require.Equal(t, uint64(900), stat1.checkpointTs.Load())
+
+	subStat.resolvedTs.Store(900)
+	store.UpdateDispatcherCheckpointTs(dispatcherID2, 900)
+	require.Equal(t, uint64(900), subStat.checkpointTs.Load())
+}
+
 func TestEventStoreSwitchSubStat(t *testing.T) {
 	restoreCfg := setDataSharingForTest(t, true)
 	defer restoreCfg()
@@ -1362,6 +1422,43 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	require.Equal(t, int64(len(expectedValues)), rowCount)
 }
 
+func TestEventStoreKVEntryCount(t *testing.T) {
+	dir := t.TempDir()
+	_, storeInt := newEventStoreForTest(dir)
+	store := storeInt.(*eventStore)
+	defer store.Close(context.Background())
+
+	events := []eventWithCallback{{
+		subID:   1,
+		tableID: 1,
+		kvs: []common.RawKVEntry{
+			{OpType: common.OpTypePut, StartTs: 1, CRTs: 2, Key: []byte("insert"), Value: []byte("new")},
+			{OpType: common.OpTypePut, StartTs: 3, CRTs: 4, Key: []byte("update"), Value: []byte("new"), OldValue: []byte("old")},
+			{OpType: common.OpTypeDelete, StartTs: 5, CRTs: 6, Key: []byte("delete"), OldValue: []byte("old")},
+		},
+		callback: func() {},
+	}}
+
+	entryMetrics := []prometheus.Counter{
+		metrics.EventStoreKVEntryCount.WithLabelValues("insert"),
+		metrics.EventStoreKVEntryCount.WithLabelValues("update"),
+		metrics.EventStoreKVEntryCount.WithLabelValues("delete"),
+	}
+	before := make([]float64, len(entryMetrics))
+	for i, metric := range entryMetrics {
+		before[i] = testutil.ToFloat64(metric)
+	}
+
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+	require.NoError(t, store.writeEvents(store.dbs[0], events, encoder, nil, nil))
+
+	for i, metric := range entryMetrics {
+		require.Equal(t, before[i]+1, testutil.ToFloat64(metric))
+	}
+}
+
 func TestEventStoreIterReadsLegacyCompressedValuesWithEncryptionManager(t *testing.T) {
 	restoreCfg := setZstdCompressionForTest(t, true)
 	defer restoreCfg()
@@ -1583,8 +1680,8 @@ func TestEventStoreIter_NextWithFiltering(t *testing.T) {
 	var tableID int64 = 42
 	iteratorSpan := &heartbeatpb.TableSpan{
 		TableID:  tableID,
-		StartKey: []byte("keyB"),
-		EndKey:   []byte("keyD"),
+		StartKey: common.ToComparableKey([]byte("keyB")),
+		EndKey:   common.ToComparableKey([]byte("keyD")),
 	}
 
 	// This test now focuses on a single, more comprehensive scenario.

@@ -1,0 +1,11 @@
+case-sensitive = true
+
+[mounter]
+  worker-num = 8
+
+[filter]
+  rules = ["test_db.*", "db_alpha.*", "db_bravo.*", "db_charlie.*"]
+
+[scheduler]
+  enable-table-across-nodes = true
+  region-threshold = 1000

@@ -15,6 +15,7 @@ package maintainer
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -29,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -57,8 +59,9 @@ type Controller struct {
 
 	splitter *split.Splitter
 
-	replicaConfig *config.ReplicaConfig
-	changefeedID  common.ChangeFeedID
+	replicaConfig   *config.ReplicaConfig
+	changefeedID    common.ChangeFeedID
+	maintainerEpoch atomic.Uint64
 
 	taskPool threadpool.ThreadPool
 
@@ -76,6 +79,11 @@ type Controller struct {
 	// maintainer and is shared by drain-aware schedulers so each tick reads a
 	// consistent host/target snapshot.
 	drainState *mscheduler.DrainState
+
+	// routeAdmin is initialized during bootstrap and shared with Barrier for
+	// route admission checks during DDL coordination.
+	routeAdmin  *routing.Admin
+	reportError func(error)
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -88,6 +96,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	keyspaceMeta common.KeyspaceMeta,
 	enableRedo bool,
 	balanceMoveBatchSize int,
+	maintainerEpoch uint64,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
@@ -154,11 +163,37 @@ func NewController(changefeedID common.ChangeFeedID,
 		controller.drainState,
 		balanceMoveBatchSize,
 	)
+	controller.SetMaintainerEpoch(maintainerEpoch)
 	return controller
 }
 
-// HandleStatus handle the status report from the node
+func (c *Controller) SetErrorReporter(reportError func(error)) {
+	c.reportError = reportError
+	if c.routeAdmin != nil {
+		c.routeAdmin.SetErrorReporter(reportError)
+	}
+}
+
+// SetMaintainerEpoch propagates the changefeed epoch used to fence
+// dispatcher-manager control requests from stale maintainers.
+func (c *Controller) SetMaintainerEpoch(maintainerEpoch uint64) {
+	c.maintainerEpoch.Store(maintainerEpoch)
+	c.operatorController.SetMaintainerEpoch(maintainerEpoch)
+	if c.redoOperatorController != nil {
+		c.redoOperatorController.SetMaintainerEpoch(maintainerEpoch)
+	}
+}
+
+func (c *Controller) currentMaintainerEpoch() uint64 {
+	return c.maintainerEpoch.Load()
+}
+
+// HandleStatus handle the status report from the node.
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
+	c.handleStatus(from, statusList, true)
+}
+
+func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus, allowSelfHealing bool) {
 	// HandleStatus reconciles runtime dispatcher reports with maintainer-side state.
 	//
 	// In the steady state, spanController (desired tasks), operatorController (in-flight scheduling),
@@ -170,6 +205,10 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 	// The rules below make the system converge:
 	//   1) Orphan Working dispatcher without an operator => actively remove it to avoid leaks.
 	//   2) Non-working dispatcher without an operator => mark the span absent so scheduler can recreate it.
+	//
+	// During maintainer removal we still need status bookkeeping so close/remove can observe terminal
+	// states, but we must disable the self-healing branches. Otherwise a late Stopped/Working heartbeat
+	// can recreate dispatchers for a changefeed that is already shutting down.
 	for _, status := range statusList {
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 		operatorController := c.getOperatorController(status.Mode)
@@ -178,6 +217,9 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 		operatorController.UpdateOperatorStatus(dispatcherID, from, status)
 		stm := spanController.GetTaskByID(dispatcherID)
 		if stm == nil {
+			if !allowSelfHealing {
+				continue
+			}
 			// If maintainer doesn't know this dispatcherID, most statuses are late/outdated and can be ignored.
 			// We only need to act when the runtime says the dispatcher is Working, because that implies there's
 			// still an active dispatcher consuming resources and potentially producing output.
@@ -193,7 +235,16 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 					zap.Any("status", status),
 					zap.String("dispatcherID", dispatcherID.String()))
 				// If the span is not found but status is Working, we need to remove it from dispatcher.
-				_ = c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID, nil, status.Mode, heartbeatpb.OperatorType_O_Remove))
+				msg := replica.NewRemoveDispatcherMessage(
+					from,
+					c.changefeedID,
+					status.ID,
+					nil,
+					status.Mode,
+					heartbeatpb.OperatorType_O_Remove,
+					c.currentMaintainerEpoch(),
+				)
+				_ = c.messageCenter.SendCommand(msg)
 			}
 			continue
 		}
@@ -207,6 +258,10 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 			continue
 		}
 		spanController.UpdateStatus(stm, status)
+
+		if !allowSelfHealing {
+			continue
+		}
 
 		// Fallback: dispatcher becomes non-working without an operator.
 		//
@@ -273,6 +328,15 @@ func (c *Controller) RemoveNode(id node.ID) {
 		c.redoOperatorController.OnNodeRemoved(id)
 	}
 	c.operatorController.OnNodeRemoved(id)
+}
+
+// EnterRemovingMode freezes normal scheduling on the old maintainer while keeping the
+// DDL trigger dispatcher close path alive.
+func (c *Controller) EnterRemovingMode(allowedDispatcherIDs ...common.DispatcherID) {
+	c.operatorController.QuiesceExcept(allowedDispatcherIDs...)
+	if c.redoOperatorController != nil {
+		c.redoOperatorController.QuiesceExcept(allowedDispatcherIDs...)
+	}
 }
 
 func (c *Controller) GetMinRedoCheckpointTs(minCheckpointTs uint64) uint64 {

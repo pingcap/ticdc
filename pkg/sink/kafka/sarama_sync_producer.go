@@ -101,16 +101,6 @@ func (p *saramaSyncProducer) SendMessages(topic string, partitionNum int32, mess
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 
-func (p *saramaSyncProducer) Heartbeat() {
-	if p.closed.Load() {
-		return
-	}
-	brokers := p.client.Brokers()
-	for _, b := range brokers {
-		_, _ = b.ApiVersions(&sarama.ApiVersionsRequest{})
-	}
-}
-
 func (p *saramaSyncProducer) Close() {
 	if p.closed.Load() {
 		log.Warn("kafka DDL producer already closed",

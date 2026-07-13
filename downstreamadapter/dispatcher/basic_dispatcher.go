@@ -21,7 +21,6 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -29,6 +28,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/logger"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/atomic"
@@ -57,6 +58,7 @@ type DispatcherService interface {
 	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 	IsOutputRawChangeEvent() bool
+	EnableIgnoreUpdateOnlyColumns() bool
 }
 
 // Dispatcher defines the interface for event dispatchers that are responsible for receiving events
@@ -79,7 +81,6 @@ type Dispatcher interface {
 	GetHeartBeatInfo(h *HeartBeatInfo)
 	GetComponentStatus() heartbeatpb.ComponentState
 	GetBlockEventStatus() *heartbeatpb.State
-	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
 	GetEventSizePerSecond() float32
 	IsTableTriggerDispatcher() bool
 	DealWithBlockEvent(event commonEvent.BlockEvent)
@@ -184,6 +185,14 @@ type BasicDispatcher struct {
 	// tableProgress is used to calculate the checkpointTs of the dispatcher
 	tableProgress *TableProgress
 
+	// addTableCheckpointBlocker caps the table-trigger checkpoint after an
+	// add-table DDL is flushed locally and before maintainer ACK confirms that
+	// the new table has joined checkpoint calculation. This remains outside
+	// TableProgress because it is driven by maintainer ACKs rather than sink
+	// flush progress. It is nil for ordinary table/span dispatchers to keep
+	// checkpoint reads allocation and lock free.
+	addTableCheckpointBlocker *checkpointBlocker
+
 	// resendTaskMap is store all the resend task of ddl/sync point event current.
 	// When we meet a block event that need to report to maintainer, we will create a resend task and store it in the map(avoid message lost)
 	// When we receive the ack from maintainer, we will cancel the resend task.
@@ -268,6 +277,9 @@ func NewBasicDispatcher(
 		creationPDTs:             currentPDTs,
 		mode:                     mode,
 		BootstrapState:           BootstrapFinished,
+	}
+	if dispatcher.IsTableTriggerDispatcher() {
+		dispatcher.addTableCheckpointBlocker = newCheckpointBlocker()
 	}
 	dispatcher.resolvedTs.Store(startTs)
 
@@ -355,7 +367,7 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 		// If NotSync is true, it means the DDL should not be sent to downstream.
 		// So we just call PassBlockEventToSink to update the table progress and call the postFlush func.
 		if ddl.NotSync {
-			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl))
+			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.String("ddl", ddl.GetDDLQuery()))
 			d.PassBlockEventToSink(event)
 			return nil
 		}
@@ -490,9 +502,9 @@ func (d *BasicDispatcher) isFirstEvent(event commonEvent.Event) bool {
 }
 
 func (d *BasicDispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
-	h.Watermark.CheckpointTs = d.GetCheckpointTs()
-	h.Watermark.ResolvedTs = d.GetResolvedTs()
-	h.Watermark.LastSyncedTs = d.GetLastSyncedTs()
+	h.CheckpointTs = d.GetCheckpointTs()
+	h.ResolvedTs = d.GetResolvedTs()
+	h.LastSyncedTs = d.GetLastSyncedTs()
 	h.Id = d.GetId()
 	h.ComponentStatus = d.GetComponentStatus()
 	h.IsRemoving = d.GetRemovingStatus()
@@ -511,11 +523,13 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 	if checkpointTs == 0 {
 		// This means the dispatcher has never send events to the sink,
 		// so we use resolvedTs as checkpointTs
-		return d.GetResolvedTs()
+		checkpointTs = d.GetResolvedTs()
+	} else if isEmpty {
+		checkpointTs = max(checkpointTs, d.GetResolvedTs())
 	}
 
-	if isEmpty {
-		return max(checkpointTs, d.GetResolvedTs())
+	if d.addTableCheckpointBlocker != nil {
+		return d.addTableCheckpointBlocker.capCheckpointTs(checkpointTs)
 	}
 	return checkpointTs
 }
@@ -591,7 +605,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		if log.GetLevel() == zapcore.DebugLevel {
 			log.Debug("dispatcher receive all event",
 				zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode),
-				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
+				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.GetType())),
 				zap.Any("event", dispatcherEvent.Event))
 		}
 
@@ -697,7 +711,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				cost := time.Since(now)
 				d.sharedInfo.metricHandleDDLHis.Observe(cost.Seconds())
 				log.Debug("dispatcher handle ddl event finish",
-					zap.Duration("cost", cost), zap.Any("ddl", ddl))
+					zap.Duration("cost", cost), zap.String("query", ddl.Query))
 			})
 			d.DealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
@@ -762,7 +776,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // and return await=true.
 // The status path will be waked up after the action finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
-	if log.GetLevel() <= zapcore.DebugLevel {
+	if logger.IsDebugEnabled() {
 		log.Debug("dispatcher handle dispatcher status",
 			zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)),
 			zap.Stringer("dispatcher", d.id),
@@ -866,16 +880,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		}
 
 		// Step4: whether the outdate message or not, we need to return message show we have finished the event.
-		d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
-			ID: d.id.ToPB(),
-			State: &heartbeatpb.State{
-				IsBlocked:   true,
-				BlockTs:     action.CommitTs,
-				IsSyncPoint: action.IsSyncPoint,
-				Stage:       heartbeatpb.BlockStage_DONE,
-			},
-			Mode: d.GetMode(),
-		}
+		d.offerDoneBlockStatus(action.CommitTs, action.IsSyncPoint)
 	}
 	return false
 }
@@ -911,17 +916,80 @@ func (d *BasicDispatcher) reportBlockedEventDone(
 	actionCommitTs uint64,
 	actionIsSyncPoint bool,
 ) {
-	d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
-		ID: d.id.ToPB(),
-		State: &heartbeatpb.State{
-			IsBlocked:   true,
-			BlockTs:     actionCommitTs,
-			IsSyncPoint: actionIsSyncPoint,
-			Stage:       heartbeatpb.BlockStage_DONE,
-		},
-		Mode: d.GetMode(),
-	}
+	d.offerDoneBlockStatus(actionCommitTs, actionIsSyncPoint)
 	GetDispatcherStatusDynamicStream().Wake(d.id)
+}
+
+// cloneInfluencedTablesPB breaks the alias between the source event and the
+// protobuf reused by resend tasks.
+func cloneInfluencedTablesPB(
+	influencedTables *commonEvent.InfluencedTables,
+) *heartbeatpb.InfluencedTables {
+	status := influencedTables.ToPB()
+	if status != nil && status.TableIDs != nil {
+		status.TableIDs = append([]int64(nil), status.TableIDs...)
+	}
+	return status
+}
+
+// routeTableAdmissionsForBlockState attaches name-level table route transitions
+// to a block state so maintainer routeAdmin can update its route registry.
+//
+// Only the table trigger dispatcher reports these admissions, because DDLs
+// with TableNameChange (populated by the event builder for RENAME TABLE,
+// DROP TABLE, etc.) are written to the table-trigger DDL history.
+// TableNameChange carries the AddName / DropName / DropDatabaseName that
+// describe the upstream name lifecycle change.
+func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.BlockEvent) []*heartbeatpb.RouteTableAdmission {
+	router := d.sharedInfo.GetRouter()
+	if !router.HasTableRoute() {
+		return nil
+	}
+
+	if !d.IsTableTriggerDispatcher() {
+		return nil
+	}
+	ddlEvent, ok := event.(*commonEvent.DDLEvent)
+	if !ok {
+		return nil
+	}
+	nameChange := ddlEvent.TableNameChange
+	if nameChange == nil {
+		return nil
+	}
+
+	capacity := len(nameChange.AddName) + len(nameChange.DropName) + 1
+	admissions := make([]*heartbeatpb.RouteTableAdmission, 0, capacity)
+	if nameChange.DropDatabaseName != "" {
+		admissions = append(admissions, &heartbeatpb.RouteTableAdmission{
+			SourceSchemaName: nameChange.DropDatabaseName,
+			Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE_SCHEMA,
+		})
+	}
+	for _, name := range nameChange.DropName {
+		admissions = append(admissions, &heartbeatpb.RouteTableAdmission{
+			SourceSchemaName: name.SchemaName,
+			SourceTableName:  name.TableName,
+			Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
+		})
+	}
+	for _, name := range nameChange.AddName {
+		binding := router.RouteTable(name.SchemaName, name.TableName)
+		if binding.Source.Schema == "" || binding.Source.Table == "" {
+			return nil
+		}
+		admissions = append(admissions, &heartbeatpb.RouteTableAdmission{
+			SourceSchemaName: binding.Source.Schema,
+			SourceTableName:  binding.Source.Table,
+			TargetSchemaName: binding.Target.Schema,
+			TargetTableName:  binding.Target.Table,
+			Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
+		})
+	}
+	if len(admissions) == 0 {
+		return nil
+	}
+	return admissions
 }
 
 // shouldBlock check whether the event should be blocked(to wait maintainer response)
@@ -932,19 +1000,17 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
 		ddlEvent := event.(*commonEvent.DDLEvent)
-		if ddlEvent.BlockedTables == nil {
+		blockTables := ddlEvent.GetBlockedTables()
+		if blockTables == nil {
 			return false
 		}
-		switch ddlEvent.GetBlockedTables().InfluenceType {
+		switch blockTables.InfluenceType {
 		case commonEvent.InfluenceTypeNormal:
-			if len(ddlEvent.GetBlockedTables().TableIDs) > 1 {
-				return true
-			}
 			if !d.isCompleteTable {
 				// if the table is split, even the blockTable only itself, it should block
 				return true
 			}
-			return false
+			return len(blockTables.TableIDs) > 1
 		case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
 			return true
 		}
@@ -971,6 +1037,22 @@ func (d *BasicDispatcher) shouldHoldBlockEvent(event commonEvent.BlockEvent) boo
 		blockedTables.InfluenceType != commonEvent.InfluenceTypeNormal
 }
 
+func hasTableScheduleChanges(
+	needAddedTables []commonEvent.Table,
+	needDroppedTables *commonEvent.InfluencedTables,
+) bool {
+	if len(needAddedTables) > 0 {
+		return true
+	}
+	if needDroppedTables == nil {
+		return false
+	}
+	// Normal drop-table payloads must name at least one table. DB/All payloads
+	// carry their scope outside TableIDs, so a non-nil value is meaningful there.
+	return needDroppedTables.InfluenceType != commonEvent.InfluenceTypeNormal ||
+		len(needDroppedTables.TableIDs) > 0
+}
+
 // DealWithBlockEvent handles DDL and sync-point events.
 //
 // The event goes through one of three paths:
@@ -994,16 +1076,48 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		d.holdBlockEvent(event)
 		return
 	}
+	// Non-blocking DDLs are not coordinated through barrier WRITE/PASS, so
+	// they keep the original DDL fast path and write downstream before the
+	// maintainer sees this status. Table Route functionality does not change
+	// this behavior; route admission conflicts reported here stop maintainer-side
+	// route registry updates and scheduling new dispatchers to prevent dispatchers
+	// from different logical tables writing to the same downstream table.
+	//
+	// NeedAddedTables/NeedDroppedTables covers physical table dispatcher
+	// scheduling. routeAdmissions covers name-only route ownership changes,
+	// for example RENAME TABLE where the table ID stays alive but the upstream
+	// source name owning a routed target must be released/admitted in routeAdmin.
+	var routeAdmissions []*heartbeatpb.RouteTableAdmission
+	if !shouldBlock {
+		routeAdmissions = d.routeTableAdmissionsForBlockState(event)
+	}
+	needAddedTables := event.GetNeedAddedTables()
+	needDroppedTables := event.GetNeedDroppedTables()
+	hasNeedAddedTables := len(needAddedTables) > 0
+	hasScheduleTableChanges := hasTableScheduleChanges(needAddedTables, needDroppedTables)
+	needsScheduleStatus := !shouldBlock && (hasScheduleTableChanges || len(routeAdmissions) > 0)
+	needsMaintainerACK := !shouldBlock && d.IsTableTriggerDispatcher() &&
+		needsScheduleStatus
+	needsAddTableCheckpointBlocker := !shouldBlock && d.IsTableTriggerDispatcher() && hasNeedAddedTables
+	identifier := BlockEventIdentifier{
+		CommitTs:    event.GetCommitTs(),
+		IsSyncPoint: false,
+	}
+	if needsMaintainerACK {
+		// Register maintainer-visible DDLs before submitting downstream IO so
+		// following DB/All DDLs cannot pass this pending schedule update.
+		d.pendingACKCount.Add(1)
+	}
+	if needsAddTableCheckpointBlocker {
+		// The blocker covers the window after this add-table DDL is flushed locally
+		// but before the maintainer ACK confirms that the new table dispatcher has
+		// joined checkpoint calculation. Install it before submitting async IO because
+		// the write can be delayed while heartbeat reporting continues.
+		d.addTableCheckpointBlocker.add(identifier)
+	}
 	// Writing a block event may involve downstream IO (e.g. executing DDL), so it must not block
 	// the dynamic stream goroutine.
 	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-		noNeedAddAndDrop := event.GetNeedAddedTables() == nil && event.GetNeedDroppedTables() == nil
-		needsScheduleACKTracking := !shouldBlock && d.IsTableTriggerDispatcher() && !noNeedAddAndDrop
-		if needsScheduleACKTracking {
-			// If this is a table trigger dispatcher, and the DDL leads to add/drop tables,
-			// we track it as a pending schedule-related event until the maintainer ACKs it.
-			d.pendingACKCount.Add(1)
-		}
 		if shouldBlock {
 			failpoint.Inject("BlockOrWaitBeforeFlush", nil)
 		}
@@ -1011,7 +1125,10 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		// For storage sink this waits all previous enqueued DML events flushed.
 		// For non-storage sinks it is usually a no-op.
 		if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
-			if needsScheduleACKTracking {
+			if needsAddTableCheckpointBlocker {
+				d.addTableCheckpointBlocker.remove(identifier)
+			}
+			if needsMaintainerACK {
 				d.pendingACKCount.Add(-1)
 			}
 			d.HandleError(err)
@@ -1024,55 +1141,34 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		}
 		err := d.AddBlockEventToSink(event)
 		if err != nil {
-			if needsScheduleACKTracking {
+			if needsAddTableCheckpointBlocker {
+				d.addTableCheckpointBlocker.remove(identifier)
+			}
+			if needsMaintainerACK {
 				d.pendingACKCount.Add(-1)
 			}
 			d.HandleError(err)
 			return
 		}
-		if noNeedAddAndDrop {
+		if !needsScheduleStatus {
 			return
 		}
 
-		message := &heartbeatpb.TableSpanBlockStatus{
+		// This protobuf may be resent for a long time, so every slice-backed field
+		// must be detached from the mutable source event before we enqueue it.
+		status := &heartbeatpb.TableSpanBlockStatus{
 			ID: d.id.ToPB(),
 			State: &heartbeatpb.State{
-				IsBlocked:         false,
-				BlockTs:           event.GetCommitTs(),
-				NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
-				NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-				IsSyncPoint:       false, // sync point event must should block
-				Stage:             heartbeatpb.BlockStage_NONE,
+				BlockTs:              event.GetCommitTs(),
+				NeedDroppedTables:    cloneInfluencedTablesPB(needDroppedTables),
+				NeedAddedTables:      commonEvent.ToTablesPB(needAddedTables),
+				RouteTableAdmissions: routeAdmissions,
+				Stage:                heartbeatpb.BlockStage_NONE,
 			},
 			Mode: d.GetMode(),
 		}
-		identifier := BlockEventIdentifier{
-			CommitTs:    event.GetCommitTs(),
-			IsSyncPoint: false,
-		}
-
-		if event.GetNeedAddedTables() != nil {
-			// When the ddl need add tables, we need the maintainer to block the forwarding of checkpointTs
-			// Because the new add table should join the calculation of checkpointTs
-			// So the forwarding of checkpointTs should be blocked until the new dispatcher is created.
-			// While there is a time gap between dispatcher send the block status and
-			// maintainer begin to create dispatcher(and block the forwaring checkpoint)
-			// in order to avoid the checkpointTs forward unexceptedly,
-			// we need to block the checkpoint forwarding in this dispatcher until receive the ack from maintainer.
-			//
-			//     |----> block checkpointTs forwaring of this dispatcher ------>|-----> forwarding checkpointTs normally
-			//     |        send block stauts                 send ack           |
-			// dispatcher -------------------> maintainer ----------------> dispatcher
-			//                                     |
-			//                                     |----------> Block CheckpointTs Forwarding and create new dispatcher
-			// Thus, we add the event to tableProgress again, and call event postFunc when the ack is received from maintainer.
-			event.ClearPostFlushFunc()
-			d.tableProgress.Add(event)
-			d.resendTaskMap.Set(identifier, newResendTask(message, d, event.PostFlush))
-		} else {
-			d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-		}
-		d.sharedInfo.blockStatusesChan <- message
+		d.resendTaskMap.Set(identifier, newResendTask(d, status, nil))
+		d.offerBlockStatus(status)
 	})
 
 	// dealing with events which update schema ids
@@ -1110,6 +1206,9 @@ func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 		return
 	}
 
+	if d.addTableCheckpointBlocker != nil {
+		d.addTableCheckpointBlocker.remove(identifier)
+	}
 	task.Cancel()
 	d.resendTaskMap.Delete(identifier)
 
@@ -1177,26 +1276,29 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 		d.pendingACKCount.Add(1)
 	}
 	d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
-	message := &heartbeatpb.TableSpanBlockStatus{
-		ID: d.id.ToPB(),
-		State: &heartbeatpb.State{
-			IsBlocked:         true,
-			BlockTs:           event.GetCommitTs(),
-			BlockTables:       event.GetBlockedTables().ToPB(),
-			NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
-			NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-			UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
-			IsSyncPoint:       event.GetType() == commonEvent.TypeSyncPointEvent,
-			Stage:             heartbeatpb.BlockStage_WAITING,
-		},
-		Mode: d.GetMode(),
-	}
 	identifier := BlockEventIdentifier{
 		CommitTs:    event.GetCommitTs(),
 		IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
 	}
-	d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-	d.sharedInfo.blockStatusesChan <- message
+	// WAITING retries reuse this protobuf object, so clone mutable metadata once
+	// here and keep resend on the same immutable payload.
+	status := &heartbeatpb.TableSpanBlockStatus{
+		ID: d.id.ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked:            true,
+			BlockTs:              event.GetCommitTs(),
+			BlockTables:          cloneInfluencedTablesPB(event.GetBlockedTables()),
+			NeedDroppedTables:    cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
+			NeedAddedTables:      commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+			RouteTableAdmissions: d.routeTableAdmissionsForBlockState(event),
+			UpdatedSchemas:       commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
+			IsSyncPoint:          event.GetType() == commonEvent.TypeSyncPointEvent,
+			Stage:                heartbeatpb.BlockStage_WAITING,
+		},
+		Mode: d.GetMode(),
+	}
+	d.resendTaskMap.Set(identifier, newResendTask(d, status, nil))
+	d.offerBlockStatus(status)
 }
 
 func (d *BasicDispatcher) flushBlockedEventAndReportToMaintainer(event commonEvent.BlockEvent) {
@@ -1213,9 +1315,11 @@ func (d *BasicDispatcher) flushBlockedEventAndReportToMaintainer(event commonEve
 
 // GetBlockEventStatus returns the current in-flight *blocking* barrier state for bootstrap.
 //
-// We only report statuses for events that actually block the event stream (multi-table DDLs, split-span DDLs,
-// and syncpoints). Non-blocking DDLs that only add/drop tables are reported separately and can be recovered by
-// the maintainer from the table trigger dispatcher's startTs, so they don't need to be restored here.
+// We only report statuses for events that actually block the event stream
+// (multi-table DDLs, split-span DDLs, and syncpoints). Non-blocking DDLs report
+// maintainer-side metadata updates through a separate ACK path; after maintainer
+// failover, those updates are reconstructed from the table trigger dispatcher's
+// startTs and the current route snapshot rather than from bootstrap block state.
 func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 	pendingEvent, blockStage := d.blockEventStatus.getEventAndStage()
 
@@ -1224,22 +1328,16 @@ func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 		return nil
 	}
 
-	// we only need to report the block status of these block ddls when maintainer is restarted.
-	// For the non-block but with needDroppedTables and needAddTables ddls,
-	// we don't need to report it when maintainer is restarted, because:
-	// 1. the ddl not block other dispatchers
-	// 2. maintainer can get current available tables based on table trigger event dispatcher's startTs,
-	//    so don't need to do extra add and drop actions.
-
 	return &heartbeatpb.State{
-		IsBlocked:         true,
-		BlockTs:           pendingEvent.GetCommitTs(),
-		BlockTables:       pendingEvent.GetBlockedTables().ToPB(),
-		NeedDroppedTables: pendingEvent.GetNeedDroppedTables().ToPB(),
-		NeedAddedTables:   commonEvent.ToTablesPB(pendingEvent.GetNeedAddedTables()),
-		UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(pendingEvent.GetUpdatedSchemas()), // only exists for rename table and rename tables
-		IsSyncPoint:       pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,         // sync point event must should block
-		Stage:             blockStage,
+		IsBlocked:            true,
+		BlockTs:              pendingEvent.GetCommitTs(),
+		BlockTables:          pendingEvent.GetBlockedTables().ToPB(),
+		NeedDroppedTables:    pendingEvent.GetNeedDroppedTables().ToPB(),
+		NeedAddedTables:      commonEvent.ToTablesPB(pendingEvent.GetNeedAddedTables()),
+		RouteTableAdmissions: d.routeTableAdmissionsForBlockState(pendingEvent),
+		UpdatedSchemas:       commonEvent.ToSchemaIDChangePB(pendingEvent.GetUpdatedSchemas()),
+		IsSyncPoint:          pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,
+		Stage:                blockStage,
 	}
 }
 
@@ -1254,9 +1352,10 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	failpoint.Inject("NotReadyToCloseDispatcher", func() {
 		failpoint.Return(w, false)
 	})
+	addTableCheckpointBlockerEmpty := d.addTableCheckpointBlocker == nil || d.addTableCheckpointBlocker.empty()
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
-	if !d.sink.IsNormal() || (d.tableProgress.Empty() && !d.duringHandleEvents.Load()) {
+	if !d.sink.IsNormal() || (d.tableProgress.Empty() && addTableCheckpointBlockerEmpty && !d.duringHandleEvents.Load()) {
 		w.CheckpointTs = d.GetCheckpointTs()
 		w.ResolvedTs = d.GetResolvedTs()
 
@@ -1273,12 +1372,17 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		)
 		return w, true
 	}
+	addTableCheckpointBlockerLen := 0
+	if d.addTableCheckpointBlocker != nil {
+		addTableCheckpointBlockerLen = d.addTableCheckpointBlocker.len()
+	}
 	log.Info("dispatcher is not ready to close",
 		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("mode", d.mode),
 		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
 		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
+		zap.Int("addTableCheckpointBlockerLen", addTableCheckpointBlockerLen),
 		zap.Int("tableProgressLen", d.tableProgress.Len()),
 		zap.Uint64("tableProgressMaxCommitTs", d.tableProgress.MaxCommitTs())) // check whether continue receive new events.
 	return w, false

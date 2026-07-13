@@ -135,13 +135,23 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 		delete(db.changefeeds, cfID)
 		delete(db.changefeedDisplayNames, cf.ID.DisplayName)
 		delete(db.stopped, cfID)
+
+		info := cf.GetInfo()
+		if info != nil {
+			downstreamType := metrics.DownstreamTypeFromSinkURI(info.SinkURI)
+			metrics.ChangefeedDownstreamInfoGauge.DeleteLabelValues(
+				cfID.Keyspace(),
+				cfID.Name(),
+				downstreamType,
+			)
+		}
 	} else {
 		log.Info("stop changefeed", zap.String("changefeed", cfID.String()))
 		db.stopped[cfID] = cf
 	}
 
 	metrics.ChangefeedStatusGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
-	metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
+	metrics.DeleteChangefeedCheckpointMetrics(cfID.Keyspace(), cfID.Name())
 
 	return nodeID
 }

@@ -144,7 +144,8 @@ type SinkConfig struct {
 	DispatchRules []*DispatchRule `toml:"dispatchers" json:"dispatchers,omitempty"`
 
 	ColumnSelectors []*ColumnSelector `toml:"column-selectors" json:"column-selectors,omitempty"`
-	// SchemaRegistry is only available when the downstream is MQ using avro protocol.
+	// SchemaRegistry is only available when the downstream is MQ using avro protocol
+	// or debezium protocol with Confluent Avro encoding.
 	SchemaRegistry *string `toml:"schema-registry" json:"schema-registry,omitempty"`
 	// EncoderConcurrency is only available when the downstream is MQ.
 	EncoderConcurrency *int `toml:"encoder-concurrency" json:"encoder-concurrency,omitempty"`
@@ -248,6 +249,22 @@ func (s *SinkConfig) ShouldSendAllBootstrapAtStart() bool {
 	should := s.ShouldSendBootstrapMsg() && util.GetOrZero(s.SendAllBootstrapAtStart)
 	log.Info("should send all bootstrap at start", zap.Bool("should", should))
 	return should
+}
+
+// TableRouteEnabled return true if there is at least one rule enabled.
+func (s *SinkConfig) TableRouteEnabled() bool {
+	if s == nil {
+		return false
+	}
+	for _, rule := range s.DispatchRules {
+		if rule == nil {
+			continue
+		}
+		if rule.TargetSchema != "" || rule.TargetTable != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // CSVConfig defines a series of configuration items for csv codec.
@@ -949,7 +966,7 @@ func (s *SinkConfig) ValidateProtocol(scheme string) error {
 		if s.OpenProtocol != nil {
 			outputOldValue = s.OpenProtocol.OutputOldValue
 		}
-	case ProtocolDebezium:
+	case ProtocolDebezium, ProtocolDebeziumAvro:
 		if s.Debezium != nil {
 			outputOldValue = s.Debezium.OutputOldValue
 		}
@@ -1023,7 +1040,7 @@ func (s *SinkConfig) applyParameterBySinkURI(sinkURI *url.URL) error {
 		getErrMsg := func(cfgIn map[string]string) string {
 			var errMsg strings.Builder
 			for k, v := range cfgIn {
-				errMsg.WriteString(fmt.Sprintf("%s=%s, ", k, v))
+				fmt.Fprintf(&errMsg, "%s=%s, ", k, v)
 			}
 			return errMsg.String()[0 : errMsg.Len()-2]
 		}
