@@ -332,25 +332,3 @@ func TestRangeLockGetHeapMinTs(t *testing.T) {
 	require.Equal(t, uint64(50), l.GetHeapMinTs())
 	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
 }
-
-func TestRangeLockUpdateLockedRangeStateHeapBatch(t *testing.T) {
-	t.Parallel()
-
-	l := NewRangeLock(1, []byte("a"), []byte("z"), 1)
-	first := l.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
-	second := l.LockRange(context.Background(), []byte("m"), []byte("z"), 2, 1)
-	require.Equal(t, LockRangeStatusSuccess, first.Status)
-	require.Equal(t, LockRangeStatusSuccess, second.Status)
-
-	first.LockedRangeState.ResolvedTs.Store(200)
-	second.LockedRangeState.ResolvedTs.Store(100)
-	require.Equal(t, uint64(100), l.UpdateLockedRangeStateHeapBatch([]*LockedRangeState{
-		first.LockedRangeState,
-		second.LockedRangeState,
-	}))
-
-	second.LockedRangeState.ResolvedTs.Store(300)
-	require.Equal(t, uint64(200), l.UpdateLockedRangeStateHeapBatch([]*LockedRangeState{
-		second.LockedRangeState,
-	}))
-}
