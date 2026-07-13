@@ -420,11 +420,25 @@ func (l *RangeLock) UpdateLockedRangeStateHeap(lockedRangeState *LockedRangeStat
 	l.lockedRangeStateHeap.AddOrUpdate(lockedRangeState)
 }
 
+// UpdateLockedRangeStateHeapBatch updates multiple locked ranges and returns the minimum resolvedTs.
+func (l *RangeLock) UpdateLockedRangeStateHeapBatch(lockedRangeStates []*LockedRangeState) uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	for _, lockedRangeState := range lockedRangeStates {
+		l.lockedRangeStateHeap.AddOrUpdate(lockedRangeState)
+	}
+	return l.getHeapMinTs()
+}
+
 // GetHeapMinTs returns the minimum ResolvedTs from the heap.
 func (l *RangeLock) GetHeapMinTs() uint64 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+	return l.getHeapMinTs()
+}
 
+func (l *RangeLock) getHeapMinTs() uint64 {
 	minTs := uint64(math.MaxUint64)
 	if minEntry, ok := l.lockedRangeStateHeap.PeekTop(); ok {
 		minTs = minEntry.ResolvedTs.Load()
