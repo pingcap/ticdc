@@ -55,11 +55,18 @@ type requestAndTarget struct {
 type changefeedState struct {
 	cfID       common.ChangeFeedID
 	nodeStates map[node.ID]uint64
+	// nodesReportedSinceLastUpdate tracks a complete reporting round. Publishing
+	// the global minimum only after every current node has reported avoids
+	// exposing intermediate minima from staggered node reports.
+	nodesReportedSinceLastUpdate map[node.ID]struct{}
+	nodeReportPhyTs              map[node.ID]int64
 
 	// equal to min puller resolved ts
-	minLogServiceResolvedTs uint64
-	resolvedTsGauge         prometheus.Gauge
-	resolvedTsLagGauge      prometheus.Gauge
+	minLogServiceResolvedTs     uint64
+	metricsInitialized          bool
+	metricsUpdatedSinceLastTick bool
+	resolvedTsGauge             prometheus.Gauge
+	resolvedTsLagGauge          prometheus.Gauge
 }
 
 type logCoordinator struct {
@@ -207,6 +214,8 @@ func (c *logCoordinator) handleNodeChange(allNodes map[node.ID]*node.Info) {
 			c.changefeedStates.Lock()
 			for _, state := range c.changefeedStates.m {
 				delete(state.nodeStates, id)
+				delete(state.nodesReportedSinceLastUpdate, id)
+				delete(state.nodeReportPhyTs, id)
 			}
 			c.changefeedStates.Unlock()
 		}
@@ -229,9 +238,11 @@ func (c *logCoordinator) updateEventStoreState(nodeID node.ID, newState *logserv
 func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservicepb.ChangefeedStates) {
 	c.changefeedStates.Lock()
 	defer c.changefeedStates.Unlock()
+	pdPhyTs := oracle.GetPhysical(c.pdClock.CurrentTime())
 
 	// Create a set of incoming changefeed GIDs for efficient lookup.
 	incomingGIDs := make(map[common.GID]struct{})
+	affectedGIDs := make(map[common.GID]struct{})
 	for _, state := range states.States {
 		cfID := common.NewChangefeedIDFromPB(state.GetChangefeedID())
 		incomingGIDs[cfID.ID()] = struct{}{}
@@ -244,6 +255,9 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 			// ...but is no longer in the incoming message, it means the changefeed was removed from this node.
 			if _, incoming := incomingGIDs[gid]; !incoming {
 				delete(state.nodeStates, from)
+				delete(state.nodesReportedSinceLastUpdate, from)
+				delete(state.nodeReportPhyTs, from)
+				affectedGIDs[gid] = struct{}{}
 				log.Info("changefeed removed from node",
 					zap.Stringer("changefeedID", state.cfID),
 					zap.String("nodeID", string(from)),
@@ -274,13 +288,34 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 				zap.Uint64("changefeedGIDHigh", gid.High))
 			// Initialize metrics for the new changefeed.
 			c.changefeedStates.m[gid] = &changefeedState{
-				cfID:               cfID,
-				nodeStates:         make(map[node.ID]uint64),
-				resolvedTsGauge:    metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
-				resolvedTsLagGauge: metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+				cfID:                         cfID,
+				nodeStates:                   make(map[node.ID]uint64),
+				nodesReportedSinceLastUpdate: make(map[node.ID]struct{}),
+				nodeReportPhyTs:              make(map[node.ID]int64),
+				resolvedTsGauge:              metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+				resolvedTsLagGauge:           metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
 			}
 		}
-		c.changefeedStates.m[gid].nodeStates[from] = state.GetResolvedTs()
+		changefeedState := c.changefeedStates.m[gid]
+		changefeedState.nodeStates[from] = state.GetResolvedTs()
+		changefeedState.nodesReportedSinceLastUpdate[from] = struct{}{}
+		changefeedState.nodeReportPhyTs[from] = pdPhyTs
+		affectedGIDs[gid] = struct{}{}
+	}
+
+	if len(affectedGIDs) > 0 {
+		for gid := range affectedGIDs {
+			if state, ok := c.changefeedStates.m[gid]; ok {
+				if len(state.nodeStates) == 0 ||
+					len(state.nodesReportedSinceLastUpdate) != len(state.nodeStates) {
+					continue
+				}
+				if c.updateChangefeedMetrics(state, pdPhyTs, false) {
+					state.metricsUpdatedSinceLastTick = true
+				}
+				clear(state.nodesReportedSinceLastUpdate)
+			}
+		}
 	}
 }
 
@@ -292,29 +327,50 @@ func (c *logCoordinator) reportChangefeedMetrics() {
 	defer c.changefeedStates.Unlock()
 
 	for _, state := range c.changefeedStates.m {
-		if len(state.nodeStates) == 0 {
+		if state.metricsUpdatedSinceLastTick {
+			state.metricsUpdatedSinceLastTick = false
 			continue
 		}
-
-		minResolvedTs := uint64(math.MaxUint64)
-		for _, resolvedTs := range state.nodeStates {
-			if resolvedTs < minResolvedTs {
-				minResolvedTs = resolvedTs
-			}
-		}
-
-		if minResolvedTs == math.MaxUint64 {
-			log.Warn("minResolvedTs is MaxUint64, this should not happen",
-				zap.Stringer("changefeedID", state.cfID))
-			continue
-		}
-
-		phyResolvedTs := oracle.ExtractPhysical(minResolvedTs)
-		state.minLogServiceResolvedTs = minResolvedTs
-		state.resolvedTsGauge.Set(float64(phyResolvedTs))
-		lag := float64(pdPhyTs-phyResolvedTs) / 1e3
-		state.resolvedTsLagGauge.Set(lag)
+		c.updateChangefeedMetrics(state, pdPhyTs, true)
 	}
+}
+
+func (c *logCoordinator) updateChangefeedMetrics(state *changefeedState, pdPhyTs int64, force bool) bool {
+	if len(state.nodeStates) == 0 {
+		return false
+	}
+
+	minResolvedTs := uint64(math.MaxUint64)
+	minResolvedTsNode := node.ID("")
+	for nodeID, resolvedTs := range state.nodeStates {
+		if resolvedTs < minResolvedTs {
+			minResolvedTs = resolvedTs
+			minResolvedTsNode = nodeID
+		}
+	}
+
+	if minResolvedTs == math.MaxUint64 {
+		log.Warn("minResolvedTs is MaxUint64, this should not happen",
+			zap.Stringer("changefeedID", state.cfID))
+		return false
+	}
+	if !force && state.metricsInitialized && minResolvedTs == state.minLogServiceResolvedTs {
+		return false
+	}
+
+	phyResolvedTs := oracle.ExtractPhysical(minResolvedTs)
+	state.minLogServiceResolvedTs = minResolvedTs
+	state.metricsInitialized = true
+	state.resolvedTsGauge.Set(float64(phyResolvedTs))
+	lagReferencePhyTs := pdPhyTs
+	if !force {
+		if reportPhyTs, ok := state.nodeReportPhyTs[minResolvedTsNode]; ok {
+			lagReferencePhyTs = reportPhyTs
+		}
+	}
+	lag := float64(lagReferencePhyTs-phyResolvedTs) / 1e3
+	state.resolvedTsLagGauge.Set(lag)
+	return true
 }
 
 func (c *logCoordinator) getMinLogServiceResolvedTs(cfID common.ChangeFeedID) uint64 {
