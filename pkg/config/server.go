@@ -56,6 +56,9 @@ const (
 	// DefaultBasicEventHandlerConcurrency is used to calculate the number of workers for
 	// eventService and eventCollector.
 	DefaultBasicEventHandlerConcurrency = 32
+
+	PerformanceModeThroughput = "throughput"
+	PerformanceModeLowLatency = "low-latency"
 )
 
 var (
@@ -88,11 +91,12 @@ type LogConfig struct {
 }
 
 var defaultServerConfig = &ServerConfig{
-	Newarch:       false,
-	Addr:          "127.0.0.1:8300",
-	AdvertiseAddr: "",
-	LogFile:       "",
-	LogLevel:      "info",
+	Newarch:         false,
+	PerformanceMode: PerformanceModeThroughput,
+	Addr:            "127.0.0.1:8300",
+	AdvertiseAddr:   "",
+	LogFile:         "",
+	LogLevel:        "info",
 	Log: &LogConfig{
 		File: &LogFileConfig{
 			MaxSize:    300,
@@ -138,9 +142,10 @@ var defaultServerConfig = &ServerConfig{
 
 // ServerConfig represents a config for server
 type ServerConfig struct {
-	Newarch       bool   `toml:"newarch" json:"newarch"`
-	Addr          string `toml:"addr" json:"addr"`
-	AdvertiseAddr string `toml:"advertise-addr" json:"advertise-addr"`
+	Newarch         bool   `toml:"newarch" json:"newarch"`
+	PerformanceMode string `toml:"performance-mode" json:"performance-mode"`
+	Addr            string `toml:"addr" json:"addr"`
+	AdvertiseAddr   string `toml:"advertise-addr" json:"advertise-addr"`
 
 	LogFile  string     `toml:"log-file" json:"log-file"`
 	LogLevel string     `toml:"log-level" json:"log-level"`
@@ -241,6 +246,13 @@ func (c *ServerConfig) ValidateAndAdjust() error {
 	if c.GcTTL == 0 {
 		return cerror.ErrInvalidServerOption.GenWithStack("empty GC TTL is not allowed")
 	}
+	if c.PerformanceMode == "" {
+		c.PerformanceMode = PerformanceModeThroughput
+	}
+	if c.PerformanceMode != PerformanceModeThroughput && c.PerformanceMode != PerformanceModeLowLatency {
+		return cerror.ErrInvalidServerOption.GenWithStackByArgs(
+			fmt.Sprintf("unknown performance mode: %s", c.PerformanceMode))
+	}
 	// 5s is minimum lease ttl in etcd(PD)
 	if c.CaptureSessionTTL < 5 {
 		log.Warn("capture session ttl too small, set to default value 10s")
@@ -299,6 +311,10 @@ func (c *ServerConfig) ValidateAndAdjust() error {
 		return errors.Trace(err)
 	}
 	return nil
+}
+
+func (c *ServerConfig) IsLowLatencyMode() bool {
+	return c.PerformanceMode == PerformanceModeLowLatency
 }
 
 // GetDefaultServerConfig returns the default server config
