@@ -14,100 +14,60 @@
 package logpuller
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/tikv/client-go/v2/oracle"
 )
 
-// TaskType represents the type of region task
-type TaskType int
-
 const (
-	// TaskHighPrior represents region error or region change
-	// This type has the highest priority
-	TaskHighPrior TaskType = iota
-	// TaskLowPrior represents new subscription
-	// This type has the lowest priority
-	TaskLowPrior
+	lowLagRegionThreshold = 30 * time.Minute
 )
 
+type regionTaskPriority int
+
 const (
-	highPriorityBase   = 0
-	lowPriorityBase    = 60 * 60 * 24 // 1 day
-	forcedPriorityBase = 60 * 60      // 60 minutes
+	initializedRegionPriority regionTaskPriority = iota
+	lowLagRegionPriority
+	normalRegionPriority
 )
 
-func (t TaskType) String() string {
-	return fmt.Sprintf("%d", t)
-}
-
-// PriorityTask is the interface for priority-based tasks
-// It implements heap.Item interface
-type PriorityTask interface {
-	// Priority returns the priority value, lower value means higher priority
-	Priority() int
-
-	// GetRegionInfo returns the underlying regionInfo
-	GetRegionInfo() regionInfo
-
-	// heap.Item interface methods
-	SetHeapIndex(int)
-	GetHeapIndex() int
-	LessThan(PriorityTask) bool
-}
-
-// regionPriorityTask implements PriorityTask interface
 type regionPriorityTask struct {
-	taskType   TaskType
-	createTime time.Time
 	regionInfo regionInfo
+	sequence   uint64
 	heapIndex  int // for heap.Item interface
-	currentTs  uint64
+	priority   regionTaskPriority
 }
 
 // NewRegionPriorityTask creates a new priority task for region
-func NewRegionPriorityTask(taskType TaskType, regionInfo regionInfo, currentTs uint64) PriorityTask {
-	return &regionPriorityTask{
-		taskType:   taskType,
-		createTime: time.Now(),
-		regionInfo: regionInfo,
-		heapIndex:  0, // 0 means not in heap
-		currentTs:  currentTs,
+func NewRegionPriorityTask(regionInfo regionInfo, currentTs, sequence uint64) *regionPriorityTask {
+	task := &regionPriorityTask{
+		sequence:  sequence,
+		heapIndex: 0, // 0 means not in heap
 	}
+	task.updateRegion(regionInfo, currentTs)
+	return task
 }
 
-// Priority calculates the priority based on task type and wait time
-// Lower value means higher priority
-func (pt *regionPriorityTask) Priority() int {
-	// Base priority based on task type
-	basePriority := 0
-	switch pt.taskType {
-	case TaskHighPrior:
-		basePriority = highPriorityBase // Highest priority
-	case TaskLowPrior:
-		basePriority = lowPriorityBase // Lowest priority
+// updateRegion refreshes both the request data and its priority before the task
+// enters another scheduling stage.
+func (pt *regionPriorityTask) updateRegion(regionInfo regionInfo, currentTs uint64) {
+	priority := normalRegionPriority
+	if regionInfo.wasInitialized {
+		priority = initializedRegionPriority
+	} else if regionScanLag(currentTs, regionInfo.resolvedTs()) < lowLagRegionThreshold {
+		priority = lowLagRegionPriority
 	}
-
-	// Add time-based priority bonus
-	// Wait time in seconds, longer wait time means higher priority (lower value)
-	waitTime := time.Since(pt.createTime)
-	timeBonus := int(waitTime.Seconds())
-
-	// ResolvedTsLag in seconds, longer lag means lower priority (higher value)
-	resolvedTsLag := oracle.GetTimeFromTS(pt.currentTs).Sub(oracle.GetTimeFromTS(pt.regionInfo.subscribedSpan.resolvedTs.Load()))
-	resolvedTsLagPenalty := int(resolvedTsLag.Seconds())
-
-	priority := basePriority - timeBonus + resolvedTsLagPenalty
-	if priority < 0 {
-		priority = 0
-	}
-	return priority
+	pt.regionInfo = regionInfo
+	pt.priority = priority
 }
 
 // GetRegionInfo returns the underlying regionInfo
 func (pt *regionPriorityTask) GetRegionInfo() regionInfo {
 	return pt.regionInfo
+}
+
+func (pt *regionPriorityTask) canUseMaxWindow() bool {
+	return pt.priority != normalRegionPriority
 }
 
 // SetHeapIndex sets the heap index for heap.Item interface
@@ -120,8 +80,20 @@ func (pt *regionPriorityTask) GetHeapIndex() int {
 	return pt.heapIndex
 }
 
-// LessThan implements heap.Item interface
-// Returns true if this task has higher priority (lower priority value) than the other task
-func (pt *regionPriorityTask) LessThan(other PriorityTask) bool {
-	return pt.Priority() < other.Priority()
+// LessThan implements heap.Item interface. Tasks in the same priority class are
+// processed in submission order.
+func (pt *regionPriorityTask) LessThan(other *regionPriorityTask) bool {
+	if pt.priority != other.priority {
+		return pt.priority < other.priority
+	}
+	return pt.sequence < other.sequence
+}
+
+func regionScanLag(currentTs, checkpointTs uint64) time.Duration {
+	currentTime := oracle.GetTimeFromTS(currentTs)
+	checkpointTime := oracle.GetTimeFromTS(checkpointTs)
+	if !currentTime.After(checkpointTime) {
+		return 0
+	}
+	return currentTime.Sub(checkpointTime)
 }

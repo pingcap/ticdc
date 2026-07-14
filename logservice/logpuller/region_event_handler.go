@@ -255,7 +255,7 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState) {
 			zap.Error(err))
 	}
 	if stepsToRemoved {
-		worker.takeRegionState(SubscriptionID(state.requestID), state.getRegionID())
+		worker.tracker.RemoveIf(SubscriptionID(state.requestID), state.getRegionID(), state)
 		h.failureHandler.Report(newRegionErrorInfo(state.getRegionInfo(), err))
 	}
 }
