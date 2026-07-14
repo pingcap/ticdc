@@ -44,9 +44,8 @@ const (
 	resolvedTsCacheSize = 512
 	basicChannelSize    = 2048
 
-	defaultMaxBatchSize               = 128
-	defaultFlushResolvedTsInterval    = 25 * time.Millisecond
-	lowLatencyFlushResolvedTsInterval = 5 * time.Millisecond
+	defaultMaxBatchSize            = 128
+	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
 	defaultReportDispatcherStatToStoreInterval = time.Second * 10
 
@@ -797,7 +796,7 @@ func releaseQuota(quota *atomic.Uint64, nBytes uint64) {
 }
 
 func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int, topic string) error {
-	ticker := time.NewTicker(flushResolvedTsInterval())
+	ticker := time.NewTicker(defaultFlushResolvedTsInterval)
 	defer ticker.Stop()
 
 	resolvedTsCacheMap := make(map[node.ID]*resolvedTsCache)
@@ -846,13 +845,6 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int,
 			}
 		}
 	}
-}
-
-func flushResolvedTsInterval() time.Duration {
-	if config.GetGlobalServerConfig().IsLowLatencyMode() {
-		return lowLatencyFlushResolvedTsInterval
-	}
-	return defaultFlushResolvedTsInterval
 }
 
 func (c *eventBroker) handleResolvedTs(ctx context.Context, cacheMap map[node.ID]*resolvedTsCache, m *wrapEvent, workerIndex int, topic string) {

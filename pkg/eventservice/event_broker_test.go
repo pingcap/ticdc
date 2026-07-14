@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -41,21 +40,6 @@ import (
 )
 
 const testTableTriggerKeyspaceID uint32 = 1
-
-func TestFlushResolvedTsIntervalByPerformanceMode(t *testing.T) {
-	original := config.GetGlobalServerConfig()
-	t.Cleanup(func() {
-		config.StoreGlobalServerConfig(original)
-	})
-
-	cfg := original.Clone()
-	config.StoreGlobalServerConfig(cfg)
-	require.Equal(t, defaultFlushResolvedTsInterval, flushResolvedTsInterval())
-
-	cfg.PerformanceMode = config.PerformanceModeLowLatency
-	config.StoreGlobalServerConfig(cfg)
-	require.Equal(t, lowLatencyFlushResolvedTsInterval, flushResolvedTsInterval())
-}
 
 func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore, chan *messaging.TargetMessage) {
 	mockPDClock := pdutil.NewClock4Test()
