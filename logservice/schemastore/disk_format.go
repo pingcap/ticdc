@@ -121,13 +121,13 @@ func getValueWithMaskKey(
 ) (value []byte, closer io.Closer, key []byte, err error) {
 	encryptionLayerKey := keyWithEncryptionLayer(plainKey)
 	value, closer, err = snap.Get(encryptionLayerKey)
-	if err != pebble.ErrNotFound {
+	if !errors.Is(err, pebble.ErrNotFound) {
 		return value, closer, encryptionLayerKey, err
 	}
 
 	unencryptedKey := keyWithMask(plainKey, 0)
 	value, closer, err = snap.Get(unencryptedKey)
-	if err != pebble.ErrNotFound {
+	if !errors.Is(err, pebble.ErrNotFound) {
 		return value, closer, unencryptedKey, err
 	}
 

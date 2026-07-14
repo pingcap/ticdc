@@ -15,7 +15,6 @@ package schemastore
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -37,7 +36,7 @@ type flakyEncryptionManagerForTest struct {
 func (m *flakyEncryptionManagerForTest) EncryptData(ctx context.Context, keyspaceID uint32, data []byte) ([]byte, error) {
 	m.calls++
 	if m.calls <= m.failTimes || m.calls == m.failOnCall {
-		return nil, errors.New("inject encryption failure")
+		return nil, cerror.New("inject encryption failure")
 	}
 	return data, nil
 }
@@ -59,10 +58,10 @@ func (m *prefixEncryptionManagerForTest) EncryptData(ctx context.Context, keyspa
 
 func (m *prefixEncryptionManagerForTest) DecryptData(ctx context.Context, keyspaceID uint32, encryptedData []byte) ([]byte, error) {
 	if len(encryptedData) < len(encryptedPrefixForTest) {
-		return nil, errors.New("encrypted data too short")
+		return nil, cerror.New("encrypted data too short")
 	}
 	if string(encryptedData[:len(encryptedPrefixForTest)]) != string(encryptedPrefixForTest) {
-		return nil, errors.New("invalid encrypted prefix")
+		return nil, cerror.New("invalid encrypted prefix")
 	}
 	plaintext := make([]byte, len(encryptedData)-len(encryptedPrefixForTest))
 	copy(plaintext, encryptedData[len(encryptedPrefixForTest):])
@@ -204,7 +203,7 @@ func TestTryUpdateResolvedTsRetryAfterDDLHandleFailure(t *testing.T) {
 	tables, err := pstorage.getAllPhysicalTables(1010, nil)
 	require.NoError(t, err)
 	require.Len(t, tables, 1)
-	require.Equal(t, "t1", tables[0].SchemaTableName.TableName)
+	require.Equal(t, "t1", tables[0].TableName)
 }
 
 func TestTryUpdateResolvedTsDoesNotAdvancePastFailedDDLAtSameCommitTs(t *testing.T) {
@@ -270,7 +269,7 @@ func TestGetAllPhysicalTablesDecryptsEncryptedDDLEvents(t *testing.T) {
 	require.Len(t, tables, 1)
 	require.Equal(t, int64(200), tables[0].TableID)
 	require.Equal(t, int64(100), tables[0].SchemaID)
-	require.Equal(t, "t1", tables[0].SchemaTableName.TableName)
+	require.Equal(t, "t1", tables[0].TableName)
 }
 
 func TestRegisterTableDecryptsEncryptedDDLEvents(t *testing.T) {
