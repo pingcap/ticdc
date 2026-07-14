@@ -17,9 +17,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
 )
@@ -74,7 +74,7 @@ func TestCreateTopic(t *testing.T) {
 			func(detail *kafka.TopicDetail, validateOnly bool) error {
 				gotFailedTopicDetail = detail
 				gotFailedTopicValidateOnly = validateOnly
-				return sarama.ErrInvalidReplicationFactor
+				return errors.New("invalid replication factor")
 			}),
 	)
 
@@ -121,7 +121,7 @@ func TestCreateTopic(t *testing.T) {
 	_, err = manager.CreateTopicAndWaitUntilVisible(ctx, topic)
 	require.Regexp(
 		t,
-		"kafka create topic failed: kafka server: Replication-factor is invalid",
+		"kafka create topic failed: invalid replication factor",
 		err,
 	)
 	require.NotNil(t, gotFailedTopicDetail)
@@ -155,9 +155,9 @@ func TestCreateTopicWaitsUntilVisible(t *testing.T) {
 				return nil
 			}),
 		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
-			nil, sarama.ErrUnknownTopicOrPartition),
+			nil, errors.New("unknown topic or partition")),
 		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
-			nil, sarama.ErrUnknownTopicOrPartition),
+			nil, errors.New("unknown topic or partition")),
 		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
 			map[string]kafka.TopicDetail{
 				topic: {

@@ -42,9 +42,8 @@ const (
 type sink struct {
 	changefeedID commonType.ChangeFeedID
 
-	dmlProducer      kafka.AsyncProducer
-	ddlProducer      kafka.SyncProducer
-	metricsCollector kafka.MetricsCollector
+	dmlProducer kafka.AsyncProducer
+	ddlProducer kafka.SyncProducer
 
 	comp       components
 	statistics *metrics.Statistics
@@ -117,10 +116,9 @@ func newWithComponents(
 		return nil, err
 	}
 	return &sink{
-		changefeedID:     changefeedID,
-		dmlProducer:      asyncProducer,
-		ddlProducer:      syncProducer,
-		metricsCollector: comp.factory.MetricsCollector(comp.adminClient),
+		changefeedID: changefeedID,
+		dmlProducer:  asyncProducer,
+		ddlProducer:  syncProducer,
 
 		partitionRule: helper.GetDDLDispatchRule(protocol),
 		protocol:      protocol,
@@ -147,11 +145,8 @@ func (s *sink) Run(ctx context.Context) error {
 	g.Go(func() error {
 		return s.sendDMLEvent(ctx)
 	})
-	g.Go(func() error {
-		s.metricsCollector.Run(ctx)
-		return nil
-	})
 	err := g.Wait()
+	kafka.CleanupMetrics(s.changefeedID)
 	s.isNormal.Store(false)
 	return errors.Trace(err)
 }

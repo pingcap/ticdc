@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package security
+package kafka
 
 import (
 	"testing"
@@ -70,7 +70,7 @@ func TestSASLMechanismFromString(t *testing.T) {
 			expectedMechanism: "GSSAPI",
 		},
 		{
-			name:              "upper case GSSAPI mechanism",
+			name:              "upper case gssapi mechanism",
 			s:                 "GSSAPI",
 			expectedMechanism: "GSSAPI",
 		},
@@ -78,7 +78,7 @@ func TestSASLMechanismFromString(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			mechanism, err := SASLMechanismFromString(test.s)
+			mechanism, err := saslMechanismFromString(test.s)
 			if test.expectErr != "" {
 				require.Error(t, err)
 				require.Regexp(t, test.expectErr, err.Error())
@@ -131,7 +131,7 @@ func TestAuthTypeFromString(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			authType, err := AuthTypeFromString(test.s)
+			authType, err := gssapiAuthTypeFromString(test.s)
 			if test.expectErr != "" {
 				require.Error(t, err)
 				require.Regexp(t, test.expectErr, err.Error())

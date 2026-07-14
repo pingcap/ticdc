@@ -49,11 +49,10 @@ func (c components) close() {
 	}
 }
 
-func newKafkaSinkComponentWithFactory(ctx context.Context,
+func newKafkaSinkComponent(ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
-	factoryCreator kafka.FactoryCreator,
 ) (components, config.Protocol, error) {
 	kafkaComponent := components{}
 	protocol, err := helper.GetProtocol(utils.GetOrZero(sinkConfig.Protocol))
@@ -72,7 +71,7 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 	}
 	options.Topic = topic
 
-	kafkaComponent.factory, err = factoryCreator(ctx, options, changefeedID)
+	kafkaComponent.factory, err = kafka.NewFactory(ctx, options, changefeedID)
 	if err != nil {
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -128,13 +127,4 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 	return kafkaComponent, protocol, nil
-}
-
-func newKafkaSinkComponent(
-	ctx context.Context,
-	changefeedID commonType.ChangeFeedID,
-	sinkURI *url.URL,
-	sinkConfig *config.SinkConfig,
-) (components, config.Protocol, error) {
-	return newKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, kafka.NewSaramaFactory)
 }

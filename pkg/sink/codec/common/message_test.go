@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,18 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kafka
+package common
 
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/leakutil"
-	"go.uber.org/goleak"
+	"github.com/stretchr/testify/require"
 )
 
-func TestMain(m *testing.M) {
-	leakutil.SetUpLeakTest(
-		m,
-		goleak.IgnoreAnyFunction("github.com/godbus/dbus.(*Conn).inWorker"),
-	)
+func TestMessageLengthIsPayloadSize(t *testing.T) {
+	message := &Message{
+		Key:   []byte("key"),
+		Value: []byte("value"),
+	}
+
+	require.Equal(t, len(message.Key)+len(message.Value), message.Length())
 }

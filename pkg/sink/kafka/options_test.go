@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/golang/mock/gomock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -133,11 +132,11 @@ func (f *kafkaAdminFixture) getTopicConfig(topicName string, configName string) 
 
 func (f *kafkaAdminFixture) createTopic(detail *TopicDetail, _ bool) error {
 	if detail.ReplicationFactor > mockClusterReplicationFactor {
-		return sarama.ErrInvalidReplicationFactor
+		return errors.New("invalid replication factor")
 	}
 	if _, ok := f.brokerConfig[MinInsyncReplicasConfigName]; !ok &&
 		detail.ReplicationFactor != mockClusterReplicationFactor {
-		return sarama.ErrPolicyViolation
+		return errors.New("policy violation")
 	}
 	f.topics[detail.Name] = *detail
 	return nil
@@ -159,7 +158,6 @@ func (f *kafkaAdminFixture) setMessageMaxBytes(brokerValue, topicValue string) {
 }
 
 func expectedAdjustedMaxMessageBytes(configuredMaxMessageBytes, sourceMaxMessageBytes int) int {
-	sourceMaxMessageBytes -= maxMessageBytesOverhead
 	if configuredMaxMessageBytes < sourceMaxMessageBytes {
 		return configuredMaxMessageBytes
 	}
@@ -381,7 +379,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 			},
 		},
 		{
-			name: "uses broker limit when configured value is within overhead",
+			name: "keeps configured value below broker limit by one byte",
 			configuredMaxMessageBytes: func(f *kafkaAdminFixture) int {
 				return f.brokerMessageMaxBytes() - 1
 			},
@@ -415,16 +413,14 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 				options.MaxMessageBytes,
 				adminFixture.brokerMessageMaxBytes(),
 			)
+			expectedProducerBatchMaxBytes := adminFixture.brokerMessageMaxBytes()
 
 			ctx := context.Background()
 			err = adjustOptions(ctx, adminClient, options, topicName)
 			require.NoError(t, err)
 
-			saramaConfig, err := newSaramaConfig(ctx, options)
-			require.NoError(t, err)
-
 			require.Equal(t, expectedMaxMessageBytes, options.MaxMessageBytes)
-			require.Equal(t, expectedMaxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
+			require.Equal(t, expectedProducerBatchMaxBytes, options.ProducerBatchMaxBytes)
 		})
 	}
 }
@@ -462,7 +458,7 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 		Name:              topicName,
 		ReplicationFactor: 1,
 	}, false)
-	require.ErrorIs(t, err, sarama.ErrPolicyViolation)
+	require.ErrorContains(t, err, "policy violation")
 
 	// Report an error if the replication-factor is less than min.insync.replicas
 	// when the topic does exist.
@@ -506,15 +502,6 @@ func TestSkipAdjustConfigMinInsyncReplicasWhenRequiredAcksIsNotWailAll(t *testin
 	require.Nil(t, err, "Should not report an error when `required-acks` is not `all`")
 }
 
-func TestCreateProducerFailed(t *testing.T) {
-	options := NewOptions()
-	options.Version = "invalid"
-	options.IsAssignedVersion = true
-	saramaConfig, err := newSaramaConfig(context.Background(), options)
-	require.Regexp(t, "invalid version.*", errors.Cause(err))
-	require.Nil(t, saramaConfig)
-}
-
 func TestConfigurationCombinations(t *testing.T) {
 	combinations := []struct {
 		name                  string
@@ -552,6 +539,13 @@ func TestConfigurationCombinations(t *testing.T) {
 			mockTopicMessageMaxBytes,
 		},
 		{
+			"new topic claim check threshold below broker",
+			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
+			[]any{"not-created-topic", "800"},
+			mockBrokerMessageMaxBytes,
+			mockTopicMessageMaxBytes,
+		},
+		{
 			"new topic user below default below broker",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
 			[]any{"not-created-topic", strconv.Itoa(config.DefaultMaxMessageBytes - 1)},
@@ -559,7 +553,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			mockTopicMessageMaxBytes,
 		},
 		{
-			"new topic broker overhead below user",
+			"new topic broker below user",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
 			[]any{"not-created-topic", strconv.Itoa(1024*1024 + 1)},
 			mockBrokerMessageMaxBytes,
@@ -615,6 +609,13 @@ func TestConfigurationCombinations(t *testing.T) {
 			mockTopicMessageMaxBytes,
 		},
 		{
+			"existing topic claim check threshold below topic",
+			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
+			[]any{defaultMockTopicName, "800"},
+			mockBrokerMessageMaxBytes,
+			mockTopicMessageMaxBytes,
+		},
+		{
 			"existing topic user below default below topic",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
 			[]any{
@@ -625,7 +626,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
 		},
 		{
-			"existing topic topic overhead below user",
+			"existing topic topic below user",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
 			[]any{defaultMockTopicName, strconv.Itoa(1024*1024 + 1)},
 			mockBrokerMessageMaxBytes,
@@ -691,10 +692,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			err = adjustOptions(ctx, adminClient, options, topic)
 			require.Nil(t, err)
 			require.Equal(t, expectedMaxMessageBytes, options.MaxMessageBytes)
-
-			saramaConfig, err := newSaramaConfig(ctx, options)
-			require.Nil(t, err)
-			require.Equal(t, expectedMaxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
+			require.Equal(t, sourceMaxMessageBytes, options.ProducerBatchMaxBytes)
 
 			encoderConfig := common.NewConfig(config.ProtocolOpen)
 			err = encoderConfig.Apply(sinkURI, &config.SinkConfig{
@@ -708,7 +706,6 @@ func TestConfigurationCombinations(t *testing.T) {
 			err = encoderConfig.Validate()
 			require.Nil(t, err)
 
-			// producer's `MaxMessageBytes` = encoder's `MaxMessageBytes`.
 			require.Equal(t, expectedMaxMessageBytes, encoderConfig.MaxMessageBytes)
 
 			adminClient.Close()
@@ -760,16 +757,16 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, time.Minute+time.Second, c.DialTimeout)
 	require.Equal(t, 2*time.Minute+time.Second, c.WriteTimeout)
 	require.Equal(t, 1, int(c.RequiredAcks))
-	require.Equal(t, "abc", c.SASL.SASLUser)
-	require.Equal(t, "123", c.SASL.SASLPassword)
-	require.Equal(t, "plain", strings.ToLower(string(c.SASL.SASLMechanism)))
-	require.Equal(t, 2, int(c.SASL.GSSAPI.AuthType))
-	require.Equal(t, "SASLGssAPIKeytabPath", c.SASL.GSSAPI.KeyTabPath)
-	require.Equal(t, "service", c.SASL.GSSAPI.ServiceName)
-	require.Equal(t, "user", c.SASL.GSSAPI.Username)
-	require.Equal(t, "pass", c.SASL.GSSAPI.Password)
-	require.Equal(t, "realm", c.SASL.GSSAPI.Realm)
-	require.Equal(t, true, c.SASL.GSSAPI.DisablePAFXFAST)
+	require.Equal(t, "abc", c.sasl.user)
+	require.Equal(t, "123", c.sasl.password)
+	require.Equal(t, "plain", strings.ToLower(string(c.sasl.mechanism)))
+	require.Equal(t, 2, int(c.sasl.gssapi.authType))
+	require.Equal(t, "SASLGssAPIKeytabPath", c.sasl.gssapi.keyTabPath)
+	require.Equal(t, "service", c.sasl.gssapi.serviceName)
+	require.Equal(t, "user", c.sasl.gssapi.username)
+	require.Equal(t, "pass", c.sasl.gssapi.password)
+	require.Equal(t, "realm", c.sasl.gssapi.realm)
+	require.Equal(t, true, c.sasl.gssapi.disablePAFXFAST)
 	require.Equal(t, true, c.EnableTLS)
 	require.Equal(t, "ca.pem", c.Credential.CAPath)
 	require.Equal(t, "cert.pem", c.Credential.CertPath)
@@ -841,16 +838,16 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, time.Minute+time.Second, c.DialTimeout)
 	require.Equal(t, 2*time.Minute+time.Second, c.WriteTimeout)
 	require.Equal(t, 1, int(c.RequiredAcks))
-	require.Equal(t, "abc", c.SASL.SASLUser)
-	require.Equal(t, "123", c.SASL.SASLPassword)
-	require.Equal(t, "plain", strings.ToLower(string(c.SASL.SASLMechanism)))
-	require.Equal(t, 2, int(c.SASL.GSSAPI.AuthType))
-	require.Equal(t, "SASLGssAPIKeytabPath", c.SASL.GSSAPI.KeyTabPath)
-	require.Equal(t, "service", c.SASL.GSSAPI.ServiceName)
-	require.Equal(t, "user", c.SASL.GSSAPI.Username)
-	require.Equal(t, "pass", c.SASL.GSSAPI.Password)
-	require.Equal(t, "realm", c.SASL.GSSAPI.Realm)
-	require.Equal(t, true, c.SASL.GSSAPI.DisablePAFXFAST)
+	require.Equal(t, "abc", c.sasl.user)
+	require.Equal(t, "123", c.sasl.password)
+	require.Equal(t, "plain", strings.ToLower(string(c.sasl.mechanism)))
+	require.Equal(t, 2, int(c.sasl.gssapi.authType))
+	require.Equal(t, "SASLGssAPIKeytabPath", c.sasl.gssapi.keyTabPath)
+	require.Equal(t, "service", c.sasl.gssapi.serviceName)
+	require.Equal(t, "user", c.sasl.gssapi.username)
+	require.Equal(t, "pass", c.sasl.gssapi.password)
+	require.Equal(t, "realm", c.sasl.gssapi.realm)
+	require.Equal(t, true, c.sasl.gssapi.disablePAFXFAST)
 	require.Equal(t, true, c.EnableTLS)
 	require.Equal(t, "ca.pem", c.Credential.CAPath)
 	require.Equal(t, "cert.pem", c.Credential.CertPath)

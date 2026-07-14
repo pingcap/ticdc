@@ -40,13 +40,6 @@ const (
 	defaultPartitionNum = 3
 	// defaultMaxRetry is the default retry budget for Kafka producers.
 	defaultMaxRetry = 5
-
-	// the `max-message-bytes` is set equal to topic's `max.message.bytes`, and is used to check
-	// whether the message is larger than the max size limit. It's found some message pass the message
-	// size limit check at the client side and failed at the broker side since message enlarged during
-	// the network transmission. so we set the `max-message-bytes` to a smaller value to avoid this problem.
-	// maxMessageBytesOverhead is used to reduce the `max-message-bytes`.
-	maxMessageBytesOverhead = 128
 )
 
 const (
@@ -73,7 +66,7 @@ const (
 	SASLTypeSCRAMSHA256 = "SCRAM-SHA-256"
 	// SASLTypeSCRAMSHA512 represents the SCRAM-SHA-512 mechanism.
 	SASLTypeSCRAMSHA512 = "SCRAM-SHA-512"
-	// SASLTypeGSSAPI represents the gssapi mechanism.
+	// SASLTypeGSSAPI represents the GSSAPI mechanism.
 	SASLTypeGSSAPI = "GSSAPI"
 	// SASLTypeOAuth represents the SASL/OAUTHBEARER mechanism (Kafka 2.0.0+)
 	SASLTypeOAuth = "OAUTHBEARER"
@@ -156,11 +149,15 @@ type options struct {
 	Version           string
 	IsAssignedVersion bool
 	RequestVersion    int16
-	MaxMessageBytes   int
-	MaxRetry          int
-	Compression       string
-	ClientID          string
-	RequiredAcks      RequiredAcks
+	// MaxMessageBytes is the TiCDC encoder payload limit used by batching and
+	// large-message handling.
+	MaxMessageBytes int
+	// ProducerBatchMaxBytes is the Kafka record batch limit used by franz-go.
+	ProducerBatchMaxBytes int
+	MaxRetry              int
+	Compression           string
+	ClientID              string
+	RequiredAcks          RequiredAcks
 	// Only for test. User can not set this value.
 	// The current prod default value is 0.
 	MaxMessages int
@@ -169,7 +166,7 @@ type options struct {
 	EnableTLS          bool
 	Credential         *security.Credential
 	InsecureSkipVerify bool
-	SASL               *security.SASL
+	sasl               *saslConfig
 
 	// Timeout for network configurations, default to `10s`
 	DialTimeout  time.Duration
@@ -180,20 +177,20 @@ type options struct {
 // NewOptions returns a default Kafka configuration
 func NewOptions() *options {
 	return &options{
-		Version: "2.4.0",
-		// MaxMessageBytes will be used to initialize producer
-		MaxMessageBytes:    config.DefaultMaxMessageBytes,
-		MaxRetry:           defaultMaxRetry,
-		ReplicationFactor:  1,
-		Compression:        "none",
-		RequiredAcks:       WaitForAll,
-		Credential:         &security.Credential{},
-		InsecureSkipVerify: false,
-		SASL:               &security.SASL{},
-		AutoCreate:         true,
-		DialTimeout:        10 * time.Second,
-		WriteTimeout:       10 * time.Second,
-		ReadTimeout:        10 * time.Second,
+		Version:               "2.4.0",
+		MaxMessageBytes:       config.DefaultMaxMessageBytes,
+		ProducerBatchMaxBytes: config.DefaultMaxMessageBytes,
+		MaxRetry:              defaultMaxRetry,
+		ReplicationFactor:     1,
+		Compression:           "none",
+		RequiredAcks:          WaitForAll,
+		Credential:            &security.Credential{},
+		InsecureSkipVerify:    false,
+		sasl:                  &saslConfig{},
+		AutoCreate:            true,
+		DialTimeout:           10 * time.Second,
+		WriteTimeout:          10 * time.Second,
+		ReadTimeout:           10 * time.Second,
 	}
 }
 
@@ -421,56 +418,56 @@ func (o *options) applyTLS(params *urlConfig) error {
 
 func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConfig) error {
 	if urlParameter.SASLUser != nil && *urlParameter.SASLUser != "" {
-		o.SASL.SASLUser = *urlParameter.SASLUser
+		o.sasl.user = *urlParameter.SASLUser
 	}
 
 	if urlParameter.SASLPassword != nil && *urlParameter.SASLPassword != "" {
-		o.SASL.SASLPassword = *urlParameter.SASLPassword
+		o.sasl.password = *urlParameter.SASLPassword
 	}
 
 	if urlParameter.SASLMechanism != nil && *urlParameter.SASLMechanism != "" {
-		mechanism, err := security.SASLMechanismFromString(*urlParameter.SASLMechanism)
+		mechanism, err := saslMechanismFromString(*urlParameter.SASLMechanism)
 		if err != nil {
 			return cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
 		}
-		o.SASL.SASLMechanism = mechanism
+		o.sasl.mechanism = mechanism
 	}
 
 	if urlParameter.SASLGssAPIAuthType != nil && *urlParameter.SASLGssAPIAuthType != "" {
-		authType, err := security.AuthTypeFromString(*urlParameter.SASLGssAPIAuthType)
+		authType, err := gssapiAuthTypeFromString(*urlParameter.SASLGssAPIAuthType)
 		if err != nil {
 			return cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
 		}
-		o.SASL.GSSAPI.AuthType = authType
+		o.sasl.gssapi.authType = authType
 	}
 
 	if urlParameter.SASLGssAPIKeytabPath != nil && *urlParameter.SASLGssAPIKeytabPath != "" {
-		o.SASL.GSSAPI.KeyTabPath = *urlParameter.SASLGssAPIKeytabPath
+		o.sasl.gssapi.keyTabPath = *urlParameter.SASLGssAPIKeytabPath
 	}
 
 	if urlParameter.SASLGssAPIKerberosConfigPath != nil &&
 		*urlParameter.SASLGssAPIKerberosConfigPath != "" {
-		o.SASL.GSSAPI.KerberosConfigPath = *urlParameter.SASLGssAPIKerberosConfigPath
+		o.sasl.gssapi.kerberosConfigPath = *urlParameter.SASLGssAPIKerberosConfigPath
 	}
 
 	if urlParameter.SASLGssAPIServiceName != nil && *urlParameter.SASLGssAPIServiceName != "" {
-		o.SASL.GSSAPI.ServiceName = *urlParameter.SASLGssAPIServiceName
+		o.sasl.gssapi.serviceName = *urlParameter.SASLGssAPIServiceName
 	}
 
 	if urlParameter.SASLGssAPIUser != nil && *urlParameter.SASLGssAPIUser != "" {
-		o.SASL.GSSAPI.Username = *urlParameter.SASLGssAPIUser
+		o.sasl.gssapi.username = *urlParameter.SASLGssAPIUser
 	}
 
 	if urlParameter.SASLGssAPIPassword != nil && *urlParameter.SASLGssAPIPassword != "" {
-		o.SASL.GSSAPI.Password = *urlParameter.SASLGssAPIPassword
+		o.sasl.gssapi.password = *urlParameter.SASLGssAPIPassword
 	}
 
 	if urlParameter.SASLGssAPIRealm != nil && *urlParameter.SASLGssAPIRealm != "" {
-		o.SASL.GSSAPI.Realm = *urlParameter.SASLGssAPIRealm
+		o.sasl.gssapi.realm = *urlParameter.SASLGssAPIRealm
 	}
 
 	if urlParameter.SASLGssAPIDisablePafxfast != nil {
-		o.SASL.GSSAPI.DisablePAFXFAST = *urlParameter.SASLGssAPIDisablePafxfast
+		o.sasl.gssapi.disablePAFXFAST = *urlParameter.SASLGssAPIDisablePafxfast
 	}
 
 	if sinkConfig != nil && sinkConfig.KafkaConfig != nil {
@@ -479,7 +476,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			if clientID == "" {
 				return cerror.ErrKafkaInvalidConfig.GenWithStack("OAuth2 client ID cannot be empty")
 			}
-			o.SASL.OAuth2.ClientID = clientID
+			o.sasl.oauth2.clientID = clientID
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthClientSecret != nil {
@@ -496,7 +493,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 				return cerror.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 client secret is not base64 encoded")
 			}
-			o.SASL.OAuth2.ClientSecret = string(decodedClientSecret)
+			o.sasl.oauth2.clientSecret = string(decodedClientSecret)
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthTokenURL != nil {
@@ -505,32 +502,34 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 				return cerror.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 token URL cannot be empty")
 			}
-			o.SASL.OAuth2.TokenURL = tokenURL
+			o.sasl.oauth2.tokenURL = tokenURL
 		}
 
-		if o.SASL.OAuth2.IsEnable() {
-			if o.SASL.SASLMechanism != security.OAuthMechanism {
+		if o.sasl.oauth2.clientID != "" ||
+			o.sasl.oauth2.clientSecret != "" ||
+			o.sasl.oauth2.tokenURL != "" {
+			if o.sasl.mechanism != oauthMechanism {
 				return cerror.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 is only supported with SASL mechanism type OAUTHBEARER, but got %s",
-					o.SASL.SASLMechanism)
+					o.sasl.mechanism)
 			}
 
-			if err := o.SASL.OAuth2.Validate(); err != nil {
+			if err := o.sasl.oauth2.validate(); err != nil {
 				return cerror.ErrKafkaInvalidConfig.Wrap(err)
 			}
-			o.SASL.OAuth2.SetDefault()
+			o.sasl.oauth2.grantType = "client_credentials"
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthScopes != nil {
-			o.SASL.OAuth2.Scopes = sinkConfig.KafkaConfig.SASLOAuthScopes
+			o.sasl.oauth2.scopes = sinkConfig.KafkaConfig.SASLOAuthScopes
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthGrantType != nil {
-			o.SASL.OAuth2.GrantType = *sinkConfig.KafkaConfig.SASLOAuthGrantType
+			o.sasl.oauth2.grantType = *sinkConfig.KafkaConfig.SASLOAuthGrantType
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthAudience != nil {
-			o.SASL.OAuth2.Audience = *sinkConfig.KafkaConfig.SASLOAuthAudience
+			o.sasl.oauth2.audience = *sinkConfig.KafkaConfig.SASLOAuthAudience
 		}
 	}
 
@@ -575,7 +574,7 @@ func NewKafkaClientID(captureAddr string,
 	return
 }
 
-// adjustOptions adjust the `options` and `sarama.Config` by condition.
+// adjustOptions adjusts Kafka sink options by broker and topic metadata.
 func adjustOptions(
 	ctx context.Context,
 	admin ClusterAdminClient,
@@ -601,7 +600,7 @@ func adjustOptions(
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
 	if exists {
-		// make sure that producer's `MaxMessageBytes` smaller than topic's `max.message.bytes`
+		// Make sure the encoder does not generate messages larger than topic's `max.message.bytes`.
 		topicMaxMessageBytesStr, err := getTopicConfig(
 			ctx, admin, info.Name,
 			TopicMaxMessageBytesConfigName,
@@ -617,19 +616,14 @@ func adjustOptions(
 				return errors.Trace(err)
 			}
 		}
+		options.ProducerBatchMaxBytes = topicMaxMessageBytes
 
-		maxMessageBytes := topicMaxMessageBytes - maxMessageBytesOverhead
-		if topicMaxMessageBytes <= options.MaxMessageBytes {
+		if topicMaxMessageBytes < options.MaxMessageBytes {
 			log.Warn("topic's `max.message.bytes` less than the `max-message-bytes`,"+
-				"use topic's `max.message.bytes` to initialize the Kafka producer",
+				"use topic's `max.message.bytes` as max-message-bytes",
 				zap.Int("max.message.bytes", topicMaxMessageBytes),
-				zap.Int("max-message-bytes", options.MaxMessageBytes),
-				zap.Int("real-max-message-bytes", maxMessageBytes))
-			options.MaxMessageBytes = maxMessageBytes
-		} else {
-			if maxMessageBytes < options.MaxMessageBytes {
-				options.MaxMessageBytes = maxMessageBytes
-			}
+				zap.Int("max-message-bytes", options.MaxMessageBytes))
+			options.MaxMessageBytes = topicMaxMessageBytes
 		}
 
 		// no need to create the topic,
@@ -660,20 +654,15 @@ func adjustOptions(
 
 	// when create the topic, `max.message.bytes` is decided by the broker,
 	// it would use broker's `message.max.bytes` to set topic's `max.message.bytes`.
-	// TiCDC need to make sure that the producer's `MaxMessageBytes` won't larger than
+	options.ProducerBatchMaxBytes = brokerMessageMaxBytes
+	// TiCDC needs to make sure the encoder does not generate messages larger than
 	// broker's `message.max.bytes`.
-	maxMessageBytes := brokerMessageMaxBytes - maxMessageBytesOverhead
-	if brokerMessageMaxBytes <= options.MaxMessageBytes {
+	if brokerMessageMaxBytes < options.MaxMessageBytes {
 		log.Warn("broker's `message.max.bytes` less than the `max-message-bytes`,"+
-			"use broker's `message.max.bytes` to initialize the Kafka producer",
+			"use broker's `message.max.bytes` as max-message-bytes",
 			zap.Int("message.max.bytes", brokerMessageMaxBytes),
-			zap.Int("max-message-bytes", options.MaxMessageBytes),
-			zap.Int("real-max-message-bytes", maxMessageBytes))
-		options.MaxMessageBytes = maxMessageBytes
-	} else {
-		if maxMessageBytes < options.MaxMessageBytes {
-			options.MaxMessageBytes = maxMessageBytes
-		}
+			zap.Int("max-message-bytes", options.MaxMessageBytes))
+		options.MaxMessageBytes = brokerMessageMaxBytes
 	}
 
 	// topic not exists yet, and user does not specify the `partition-num` in the sink uri.
