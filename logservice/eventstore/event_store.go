@@ -78,7 +78,9 @@ type Subscriber struct {
 type EventStore interface {
 	common.SubModule
 
+	// Note: changefeedID is just a tag for dispatcher, avoid abuse it
 	RegisterDispatcher(
+		changefeedID common.ChangeFeedID,
 		dispatcherID common.DispatcherID,
 		span *heartbeatpb.TableSpan,
 		startTS uint64,
@@ -458,6 +460,7 @@ func (e *eventStore) Close(_ context.Context) error {
 }
 
 func (e *eventStore) RegisterDispatcher(
+	_ common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	dispatcherSpan *heartbeatpb.TableSpan,
 	startTs uint64,
