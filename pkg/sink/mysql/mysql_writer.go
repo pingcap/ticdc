@@ -21,6 +21,7 @@ import (
 	"time"
 
 	lru "github.com/hashicorp/golang-lru"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -249,6 +250,7 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 	}
 
 	for _, event := range events {
+		failpoint.Inject("MySQLSinkDelayDMLPostFlush", nil)
 		event.PostFlush()
 	}
 

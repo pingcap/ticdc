@@ -65,8 +65,9 @@ type Node struct {
 	// Following fields are protected by `mu`.
 	mu sync.Mutex
 
-	assignedTo cacheID
-	removed    bool
+	assignedTo           cacheID
+	removed              bool
+	resolveByRemovalOnly bool
 
 	// dependers is an ordered set for all nodes that
 	// conflict with the current node.
@@ -99,7 +100,7 @@ func (n *Node) dependOn(dependencyNodes map[int64]*Node) {
 		target.mu.Lock()
 		defer target.mu.Unlock()
 
-		if target.assignedTo != unassigned {
+		if target.assignedTo != unassigned && !n.resolveByRemovalOnly && !target.resolveByRemovalOnly {
 			// The target has already been assigned to a cache.
 			// In this case, record the cache ID in `resolvedList`, and this node
 			// probably can be sent to the same cache and executed sequentially.
@@ -170,9 +171,11 @@ func (n *Node) tryAssignTo(cacheID int64) bool {
 	if n.dependers != nil {
 		// `mu` must be holded during accessing dependers.
 		n.dependers.Ascend(func(node *Node) bool {
-			resolvedDependencies := atomic.AddInt32(&node.resolvedDependencies, 1)
-			atomic.StoreInt64(&node.resolvedList[resolvedDependencies-1], n.assignedTo)
-			node.OnNotified(node.maybeResolve)
+			if !n.resolveByRemovalOnly {
+				resolvedDependencies := atomic.AddInt32(&node.resolvedDependencies, 1)
+				atomic.StoreInt64(&node.resolvedList[resolvedDependencies-1], n.assignedTo)
+				node.OnNotified(node.maybeResolve)
+			}
 			return true
 		})
 	}
@@ -213,6 +216,10 @@ func (n *Node) tryResolve() (int64, bool) {
 	if removedDependencies == n.totalDependencies {
 		// All dependcies are removed, so assign the node to any cache is fine.
 		return assignedToAny, true
+	}
+
+	if n.resolveByRemovalOnly {
+		return unassigned, false
 	}
 
 	resolvedDependencies := atomic.LoadInt32(&n.resolvedDependencies)

@@ -67,8 +67,17 @@ func (s *Slots) AllocNode(hashes map[uint64]struct{}) *Node {
 
 // Add adds an elem to the slots and calls DependOn for elem.
 func (s *Slots) Add(elem *Node) {
+	s.AddWithDependencies(elem, nil)
+}
+
+// AddWithDependencies adds elem to the slots and makes it also depend on extra
+// nodes that are outside normal conflict-key detection, such as barrier fences.
+func (s *Slots) AddWithDependencies(elem *Node, extraDependencies map[int64]*Node) {
 	hashes := elem.sortedKeysHash
 	dependencyNodes := make(map[int64]*Node, len(hashes))
+	for id, node := range extraDependencies {
+		dependencyNodes[id] = node
+	}
 
 	var lastSlot uint64 = math.MaxUint64
 	for _, hash := range hashes {
@@ -108,6 +117,26 @@ func (s *Slots) Add(elem *Node) {
 			lastSlot = slotIdx
 		}
 	}
+}
+
+// SnapshotTailNodes returns the unique current slot tail nodes. It is used only
+// by rare barrier broadcasts and intentionally scans all slots outside the DML
+// hot path.
+func (s *Slots) SnapshotTailNodes() []*Node {
+	nodes := make(map[int64]*Node)
+	for i := range s.slots {
+		s.slots[i].mu.Lock()
+		for _, node := range s.slots[i].nodes {
+			nodes[node.nodeID()] = node
+		}
+		s.slots[i].mu.Unlock()
+	}
+
+	result := make([]*Node, 0, len(nodes))
+	for _, node := range nodes {
+		result = append(result, node)
+	}
+	return result
 }
 
 // Remove removes an element from the Slots.
