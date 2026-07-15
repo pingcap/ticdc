@@ -150,7 +150,6 @@ func (span *subscribedSpan) clearKVEventsCache() {
 func (span *subscribedSpan) markRegionInitialized(state *regionFeedState) bool {
 	regionID := state.region.verID.GetID()
 	spanFullyInitialized := span.rangeLock.MarkInitialized(regionID, state.region.lockedRangeState)
-	state.worker.requestCache.resolve(span.subID, regionID)
 	return spanFullyInitialized && span.initialized.CompareAndSwap(false, true)
 }
 
