@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	pbank3 "workload/schema/bank3"
 )
 
 // WorkloadConfig saves all the configurations for the workload.
@@ -66,6 +68,9 @@ type WorkloadConfig struct {
 
 	// Partition related
 	Partitioned bool
+	// UniformWrite evenly distributes bank3 inserts across tables and record keys.
+	UniformWrite        bool
+	UniformPayloadBytes int
 
 	// Log related
 	LogFile  string
@@ -118,7 +123,8 @@ func NewWorkloadConfig() *WorkloadConfig {
 		RangeNum: 5,
 
 		// Partition related
-		Partitioned: true,
+		Partitioned:  true,
+		UniformWrite: false,
 
 		// Log related
 		LogFile:  "workload.log",
@@ -163,6 +169,8 @@ func (c *WorkloadConfig) ParseFlags() error {
 	// Partition related
 	flag.BoolVar(&c.Partitioned, "partitioned", c.Partitioned, "whether to create tables as partitioned tables when the workload supports it")
 	flag.BoolVar(&c.Partitioned, "bank3-partitioned", c.Partitioned, "deprecated: use -partitioned")
+	flag.BoolVar(&c.UniformWrite, "uniform-write", c.UniformWrite, "evenly distribute bank3 inserts across tables and index-free clustered primary-key ranges")
+	flag.IntVar(&c.UniformPayloadBytes, "uniform-payload-bytes", c.UniformPayloadBytes, "fixed payload bytes per row in bank3 uniform-write mode")
 
 	flag.Parse()
 
@@ -182,6 +190,9 @@ func (c *WorkloadConfig) ParseFlags() error {
 	}
 	if c.OnlyDML && c.Action == "ddl" {
 		return fmt.Errorf("only-dml cannot be used with -action=ddl")
+	}
+	if err := c.validateUniformWrite(); err != nil {
+		return err
 	}
 
 	// Convenience mode:
@@ -204,6 +215,22 @@ func (c *WorkloadConfig) ParseFlags() error {
 		}
 	}
 
+	return nil
+}
+
+func (c *WorkloadConfig) validateUniformWrite() error {
+	if c.UniformPayloadBytes < 0 || c.UniformPayloadBytes > pbank3.MaxUniformPayloadBytes {
+		return fmt.Errorf("uniform-payload-bytes must be between 0 and %d", pbank3.MaxUniformPayloadBytes)
+	}
+	if c.UniformPayloadBytes > 0 && !c.UniformWrite {
+		return fmt.Errorf("uniform-payload-bytes requires -uniform-write")
+	}
+	if c.UniformWrite && c.WorkloadType != bank3 {
+		return fmt.Errorf("uniform-write is only supported by the bank3 workload")
+	}
+	if c.UniformWrite && c.Partitioned {
+		return fmt.Errorf("uniform-write requires -partitioned=false")
+	}
 	return nil
 }
 

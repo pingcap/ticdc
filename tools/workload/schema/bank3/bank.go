@@ -17,8 +17,25 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand"
+	"strings"
 
 	"workload/schema"
+)
+
+const (
+	// MaxUniformPayloadBytes is the largest fixed payload supported by uniform-write mode.
+	MaxUniformPayloadBytes = 4096
+
+	autoIncrementColumn = "auto_id bigint(20) NOT NULL AUTO_INCREMENT"
+	randomKeyColumn     = "auto_id bigint(20) NOT NULL"
+	defaultKeys         = `KEY idx1 (col14),
+  KEY idx2 (col27,col24,col22),
+  KEY idx3 (col3,col24,col4),
+  KEY idx4 (col21,col23),
+  KEY idx5 (col15),
+  PRIMARY KEY (auto_id,col3,col4) /*T![clustered_index] NONCLUSTERED */,
+  KEY idx6 (col3)`
+	uniformKey = "PRIMARY KEY (auto_id) /*T![clustered_index] CLUSTERED */"
 )
 
 const createBankTableBase = `
@@ -53,14 +70,8 @@ create table if not exists bank_%d (
   col28 decimal(3,0) DEFAULT NULL,
   col29 decimal(3,0) DEFAULT NULL,
   col30 decimal(3,0) DEFAULT NULL,
-  auto_id bigint(20) NOT NULL AUTO_INCREMENT,
-  KEY idx1 (col14),
-  KEY idx2 (col27,col24,col22),
-  KEY idx3 (col3,col24,col4),
-  KEY idx4 (col21,col23),
-  KEY idx5 (col15),
-  PRIMARY KEY (auto_id,col3,col4) /*T![clustered_index] NONCLUSTERED */,
-  KEY idx6 (col3)
+  %s%s,
+  %s
 ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
 `
 
@@ -137,15 +148,35 @@ const createBankTablePartition = `PARTITION BY RANGE COLUMNS(col4)
 `
 
 type BankWorkload struct {
-	isPartitioned bool
+	isPartitioned  bool
+	uniformWrite   bool
+	uniformPayload string
 }
 
-func NewBankWorkload(isPartitioned bool) schema.Workload {
-	return &BankWorkload{isPartitioned: isPartitioned}
+func NewBankWorkload(isPartitioned, uniformWrite bool, uniformPayloadBytes int) schema.Workload {
+	uniformPayload := ""
+	if uniformWrite && uniformPayloadBytes > 0 {
+		uniformPayload = strings.Repeat("x", uniformPayloadBytes)
+	}
+	return &BankWorkload{
+		isPartitioned:  isPartitioned,
+		uniformWrite:   uniformWrite,
+		uniformPayload: uniformPayload,
+	}
 }
 
 func (c *BankWorkload) BuildCreateTableStatement(n int) string {
-	createSQL := fmt.Sprintf(createBankTableBase, n)
+	autoIDColumn := autoIncrementColumn
+	keys := defaultKeys
+	if c.uniformWrite {
+		autoIDColumn = randomKeyColumn
+		keys = uniformKey
+	}
+	payloadColumn := ""
+	if c.uniformPayload != "" {
+		payloadColumn = fmt.Sprintf("payload VARBINARY(%d) DEFAULT NULL,\n  ", MaxUniformPayloadBytes)
+	}
+	createSQL := fmt.Sprintf(createBankTableBase, n, payloadColumn, autoIDColumn, keys)
 	if c.isPartitioned {
 		return createSQL + createBankTablePartition + ";"
 	}
@@ -159,9 +190,17 @@ func (c *BankWorkload) BuildInsertSql(tableN int, batchSize int) string {
 
 	tableName := getBankTableName(tableN)
 	var buf bytes.Buffer
+	columns := "col1,col2,col3,col4,col5,col6,col7,col8,col9,col10,col11,col12,col13,col14,col15,col16,col17,col18,col19,col20,col21,col22,col23,col24,col25,col26,col27,col28,col29,col30"
+	if c.uniformWrite {
+		columns = "auto_id," + columns
+	}
+	if c.uniformPayload != "" {
+		columns += ",payload"
+	}
 	buf.WriteString(fmt.Sprintf(
-		"insert into %s (col1,col2,col3,col4,col5,col6,col7,col8,col9,col10,col11,col12,col13,col14,col15,col16,col17,col18,col19,col20,col21,col22,col23,col24,col25,col26,col27,col28,col29,col30) values",
+		"insert into %s (%s) values",
 		tableName,
+		columns,
 	))
 
 	for i := 0; i < batchSize; i++ {
@@ -170,6 +209,11 @@ func (c *BankWorkload) BuildInsertSql(tableN int, batchSize int) string {
 		}
 
 		n := rand.Int63()
+		if c.uniformWrite {
+			buf.WriteString(fmt.Sprintf("(%d,", n))
+		} else {
+			buf.WriteString("(")
+		}
 		col1Value := "A01"
 		col2Value := "B2"
 		col3Value := fmt.Sprintf("acct-%d", n)
@@ -203,7 +247,7 @@ func (c *BankWorkload) BuildInsertSql(tableN int, batchSize int) string {
 		col30Value := rand.Intn(1000)
 
 		buf.WriteString(fmt.Sprintf(
-			"('%s','%s','%s','%s','%s','%s','%s','%s','%s',%d,%d,'%s',%d,'%s','%s','%s','%s','%s','%s','%s','%s','%s',%d,'%s','%s','%s','%s',%d,%d,%d)",
+			"'%s','%s','%s','%s','%s','%s','%s','%s','%s',%d,%d,'%s',%d,'%s','%s','%s','%s','%s','%s','%s','%s','%s',%d,'%s','%s','%s','%s',%d,%d,%d",
 			col1Value,
 			col2Value,
 			col3Value,
@@ -235,6 +279,10 @@ func (c *BankWorkload) BuildInsertSql(tableN int, batchSize int) string {
 			col29Value,
 			col30Value,
 		))
+		if c.uniformPayload != "" {
+			buf.WriteString(",'" + c.uniformPayload + "'")
+		}
+		buf.WriteString(")")
 	}
 	return buf.String()
 }
