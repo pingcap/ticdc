@@ -191,6 +191,101 @@ func TestOnNotify(t *testing.T) {
 	log.Info("Pass case 6")
 }
 
+func TestLowLatencySchemaResolvedTsRetry(t *testing.T) {
+	newDispatcher := func(t *testing.T, broker *eventBroker) *dispatcherStat {
+		info := newMockDispatcherInfoForTest(t)
+		info.epoch = 1
+		info.startTs = 100
+		status := broker.getOrSetChangefeedStatus(info)
+		dispatcher := newDispatcherStat(info, 1, 1, nil, status)
+		dispatcher.setHandshaked()
+		return dispatcher
+	}
+
+	t.Run("disabled in throughput mode", func(t *testing.T) {
+		broker, _, schemaStore, _ := newEventBrokerForTest()
+		broker.close()
+		broker.enableSchemaResolvedTsRetry = false
+		dispatcher := newDispatcher(t, broker)
+
+		schemaStore.resolvedTs = 100
+		schemaStore.maxDDLCommitTs = 0
+		dispatcher.receivedResolvedTs.Store(200)
+
+		needScan, _ := broker.getScanTaskDataRange(dispatcher)
+		require.False(t, needScan)
+		_, ok := broker.schemaResolvedTsRetryTasks.Load(dispatcher)
+		require.False(t, ok)
+	})
+
+	t.Run("coalesces and advances after schema store catches up", func(t *testing.T) {
+		broker, _, schemaStore, _ := newEventBrokerForTest()
+		broker.close()
+		broker.enableSchemaResolvedTsRetry = true
+		dispatcher := newDispatcher(t, broker)
+
+		schemaStore.resolvedTs = 100
+		schemaStore.maxDDLCommitTs = 0
+		dispatcher.receivedResolvedTs.Store(200)
+		needScan, _ := broker.getScanTaskDataRange(dispatcher)
+		require.False(t, needScan)
+
+		dispatcher.receivedResolvedTs.Store(300)
+		needScan, _ = broker.getScanTaskDataRange(dispatcher)
+		require.False(t, needScan)
+		value, ok := broker.schemaResolvedTsRetryTasks.Load(dispatcher)
+		require.True(t, ok)
+		require.Equal(t, schemaResolvedTsRetryState{resolvedTs: 300}, value)
+
+		schemaStore.resolvedTs = 300
+		broker.retrySchemaResolvedTsTasks()
+
+		require.Equal(t, uint64(300), dispatcher.sentResolvedTs.Load())
+		_, ok = broker.schemaResolvedTsRetryTasks.Load(dispatcher)
+		require.False(t, ok)
+		resolvedEvent := <-broker.messageCh[dispatcher.messageWorkerIndex]
+		require.Equal(t, event.TypeResolvedEvent, resolvedEvent.msgType)
+		require.Equal(t, uint64(300), resolvedEvent.resolvedTsEvent.GetCommitTs())
+	})
+
+	t.Run("bounds retries and removes stale dispatcher", func(t *testing.T) {
+		broker, _, schemaStore, _ := newEventBrokerForTest()
+		broker.close()
+		broker.enableSchemaResolvedTsRetry = true
+		dispatcher := newDispatcher(t, broker)
+
+		schemaStore.resolvedTs = 100
+		schemaStore.maxDDLCommitTs = 0
+		dispatcher.receivedResolvedTs.Store(200)
+		needScan, _ := broker.getScanTaskDataRange(dispatcher)
+		require.False(t, needScan)
+
+		dispatcher.isTaskScanning.Store(true)
+		broker.retrySchemaResolvedTsTasks()
+		value, ok := broker.schemaResolvedTsRetryTasks.Load(dispatcher)
+		require.True(t, ok)
+		require.Equal(t, schemaResolvedTsRetryState{resolvedTs: 200}, value)
+		dispatcher.isTaskScanning.Store(false)
+
+		broker.retrySchemaResolvedTsTasks()
+		value, ok = broker.schemaResolvedTsRetryTasks.Load(dispatcher)
+		require.True(t, ok)
+		require.Equal(t, schemaResolvedTsRetryState{resolvedTs: 200, retries: 1}, value)
+		broker.retrySchemaResolvedTsTasks()
+		_, ok = broker.schemaResolvedTsRetryTasks.Load(dispatcher)
+		require.False(t, ok)
+		require.Equal(t, uint64(100), dispatcher.sentResolvedTs.Load())
+
+		dispatcher.receivedResolvedTs.Store(300)
+		needScan, _ = broker.getScanTaskDataRange(dispatcher)
+		require.False(t, needScan)
+		dispatcher.isRemoved.Store(true)
+		broker.retrySchemaResolvedTsTasks()
+		_, ok = broker.schemaResolvedTsRetryTasks.Load(dispatcher)
+		require.False(t, ok)
+	})
+}
+
 func TestAddDispatcherUnregisterOnSchemaStoreError(t *testing.T) {
 	broker, es, ss, _ := newEventBrokerForTest()
 	defer broker.close()

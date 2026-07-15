@@ -53,7 +53,17 @@ const (
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
 	defaultSendResolvedTsInterval           = time.Second * 2
 	defaultRefreshMinSentResolvedTsInterval = time.Second * 1
+
+	// SchemaStore advancement does not notify EventBroker. In low-latency mode,
+	// retry a capped dispatcher briefly before falling back to its next EventStore notification.
+	lowLatencySchemaResolvedTsRetryInterval = 50 * time.Millisecond
+	lowLatencySchemaResolvedTsMaxRetries    = 2
 )
+
+type schemaResolvedTsRetryState struct {
+	resolvedTs uint64
+	retries    int
+}
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
 // Every TiDB cluster has a eventBroker.
@@ -96,6 +106,9 @@ type eventBroker struct {
 
 	scanRateLimiter  *rate.Limiter
 	scanLimitInBytes uint64
+
+	enableSchemaResolvedTsRetry bool
+	schemaResolvedTsRetryTasks  sync.Map // *dispatcherStat -> schemaResolvedTsRetryState
 }
 
 func newEventBroker(
@@ -127,23 +140,24 @@ func newEventBroker(
 	// For now, since there is only one upstream, using the default pdClock is sufficient.
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	c := &eventBroker{
-		tidbClusterID:           id,
-		eventStore:              eventStore,
-		pdClock:                 pdClock,
-		mounter:                 event.NewMounter(tz, integrity),
-		timezone:                tz.String(),
-		schemaStore:             schemaStore,
-		changefeedMap:           sync.Map{},
-		dispatchers:             sync.Map{},
-		tableTriggerDispatchers: sync.Map{},
-		msgSender:               mc,
-		taskChan:                make([]chan scanTask, scanWorkerCount),
-		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
-		redoMessageCh:           make([]chan *wrapEvent, sendMessageWorkerCount),
-		cancel:                  cancel,
-		g:                       g,
-		scanRateLimiter:         rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
-		scanLimitInBytes:        uint64(scanLimitInBytes),
+		tidbClusterID:               id,
+		eventStore:                  eventStore,
+		pdClock:                     pdClock,
+		mounter:                     event.NewMounter(tz, integrity),
+		timezone:                    tz.String(),
+		schemaStore:                 schemaStore,
+		changefeedMap:               sync.Map{},
+		dispatchers:                 sync.Map{},
+		tableTriggerDispatchers:     sync.Map{},
+		msgSender:                   mc,
+		taskChan:                    make([]chan scanTask, scanWorkerCount),
+		messageCh:                   make([]chan *wrapEvent, sendMessageWorkerCount),
+		redoMessageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
+		cancel:                      cancel,
+		g:                           g,
+		scanRateLimiter:             rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
+		scanLimitInBytes:            uint64(scanLimitInBytes),
+		enableSchemaResolvedTsRetry: config.GetGlobalServerConfig().IsLowLatencyMode(),
 	}
 
 	// Initialize metrics collector
@@ -187,6 +201,12 @@ func newEventBroker(
 	g.Go(func() error {
 		return c.refreshMinSentResolvedTs(ctx)
 	})
+
+	if c.enableSchemaResolvedTsRetry {
+		g.Go(func() error {
+			return c.runSchemaResolvedTsRetry(ctx)
+		})
+	}
 
 	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
 	return c
@@ -481,6 +501,9 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	}
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
+		if ddlState.ResolvedTs <= dataRange.CommitTsStart {
+			c.addSchemaResolvedTsRetryTask(task)
+		}
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		// Scan range can become empty after applying capping (for example, scan window).
 		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
@@ -504,6 +527,78 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		return false, common.DataRange{}
 	}
 	return true, dataRange
+}
+
+func (c *eventBroker) addSchemaResolvedTsRetryTask(task scanTask) {
+	if !c.enableSchemaResolvedTsRetry || task.isRemoved.Load() {
+		return
+	}
+
+	resolvedTs := task.receivedResolvedTs.Load()
+	if resolvedTs <= task.sentResolvedTs.Load() {
+		return
+	}
+
+	newState := schemaResolvedTsRetryState{resolvedTs: resolvedTs}
+	for {
+		value, loaded := c.schemaResolvedTsRetryTasks.LoadOrStore(task, newState)
+		if !loaded {
+			return
+		}
+
+		state := value.(schemaResolvedTsRetryState)
+		if state.resolvedTs >= resolvedTs {
+			return
+		}
+		if c.schemaResolvedTsRetryTasks.CompareAndSwap(task, state, newState) {
+			return
+		}
+	}
+}
+
+func (c *eventBroker) runSchemaResolvedTsRetry(ctx context.Context) error {
+	ticker := time.NewTicker(lowLatencySchemaResolvedTsRetryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.retrySchemaResolvedTsTasks()
+		}
+	}
+}
+
+func (c *eventBroker) retrySchemaResolvedTsTasks() {
+	c.schemaResolvedTsRetryTasks.Range(func(key, value interface{}) bool {
+		task := key.(*dispatcherStat)
+		state := value.(schemaResolvedTsRetryState)
+
+		if task.isRemoved.Load() || task.sentResolvedTs.Load() >= state.resolvedTs {
+			c.schemaResolvedTsRetryTasks.CompareAndDelete(task, state)
+			return true
+		}
+		if task.isTaskScanning.Load() {
+			return true
+		}
+
+		if c.scanReady(task) {
+			c.pushTask(task, false)
+		}
+		if task.sentResolvedTs.Load() >= state.resolvedTs {
+			c.schemaResolvedTsRetryTasks.CompareAndDelete(task, state)
+			return true
+		}
+
+		state.retries++
+		if state.retries >= lowLatencySchemaResolvedTsMaxRetries {
+			c.schemaResolvedTsRetryTasks.CompareAndDelete(task, value)
+		} else {
+			c.schemaResolvedTsRetryTasks.CompareAndSwap(task, value, state)
+		}
+		return true
+	})
 }
 
 // scanReady checks if the dispatcher needs to scan the event store/schema store.
