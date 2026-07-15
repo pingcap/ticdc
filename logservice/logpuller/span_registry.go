@@ -149,6 +149,7 @@ func (span *subscribedSpan) clearKVEventsCache() {
 }
 
 func (span *subscribedSpan) markRegionInitialized(state *regionFeedState) {
+	state.setInitialized()
 	if span.initialized.Load() {
 		return
 	}
