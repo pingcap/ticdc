@@ -388,12 +388,13 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	require.Nil(t, client.spanRegistry.Get(span.subID))
 }
 
-func TestBusyRetryPreservesScanPriority(t *testing.T) {
+func TestRegionRetryScanPriority(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		priority cdcpb.ScanPriority
-		cdcErr   *cdcpb.Error
-		expected TaskType
+		name         string
+		priority     cdcpb.ScanPriority
+		cdcErr       *cdcpb.Error
+		everCaughtUp bool
+		expected     TaskType
 	}{
 		{
 			name:     "server is busy high",
@@ -406,6 +407,13 @@ func TestBusyRetryPreservesScanPriority(t *testing.T) {
 			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 			cdcErr:   &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
 			expected: TaskLowPrior,
+		},
+		{
+			name:         "server is busy low after catch up",
+			priority:     cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			cdcErr:       &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
+			everCaughtUp: true,
+			expected:     TaskHighPrior,
 		},
 		{
 			name:     "congested high",
@@ -439,6 +447,7 @@ func TestBusyRetryPreservesScanPriority(t *testing.T) {
 			client.pdClock = pdutil.NewClock4Test()
 			client.failureHandler = newRegionFailureHandler(client)
 			_, span := newScanPriorityTestSpan()
+			span.everCaughtUp.Store(tc.everCaughtUp)
 			region := newScanPriorityTestRegion(span)
 			region.scanPriority = tc.priority
 
@@ -450,7 +459,7 @@ func TestBusyRetryPreservesScanPriority(t *testing.T) {
 			task, err := client.regionTaskQueue.Pop(ctx)
 			require.NoError(t, err)
 			require.Equal(t, tc.expected, task.(*regionPriorityTask).taskType)
-			require.Equal(t, tc.priority, task.GetRegionInfo().scanPriority)
+			require.Equal(t, tc.expected.scanPriority(), task.GetRegionInfo().scanPriority)
 		})
 	}
 }
@@ -553,8 +562,7 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 }
 
 func TestInitialScanTaskPriority(t *testing.T) {
-	restore := setInitialScanLowPriorityThresholdForTest(t, 30*time.Minute)
-	defer restore()
+	setInitialScanLowPriorityThresholdForTest(t, 30*time.Minute)
 
 	currentTime := time.Date(2026, time.June, 27, 12, 0, 0, 0, time.UTC)
 	pdClock := pdutil.NewClock4Test()
@@ -601,8 +609,7 @@ func TestInitialScanTaskPriority(t *testing.T) {
 }
 
 func TestSubscribeUsesInitialScanTaskPriority(t *testing.T) {
-	restore := setInitialScanLowPriorityThresholdForTest(t, 30*time.Minute)
-	defer restore()
+	setInitialScanLowPriorityThresholdForTest(t, 30*time.Minute)
 
 	ctx := t.Context()
 
@@ -650,66 +657,23 @@ func TestSubscribeUsesInitialScanTaskPriority(t *testing.T) {
 	require.Equal(t, TaskLowPrior, (<-client.rangeTaskCh).priority)
 }
 
-func TestRealtimeScanPriorityEnabledAfterSubscriptionCatchesUp(t *testing.T) {
-	restore := setInitialScanLowPriorityThresholdForTest(t, 30*time.Minute)
-	defer restore()
+func TestSubscribedSpanMarksCaughtUp(t *testing.T) {
+	setInitialScanLowPriorityThresholdForTest(t, 30*time.Minute)
 
 	currentTime := time.Date(2026, time.June, 27, 12, 0, 0, 0, time.UTC)
 	pdClock := pdutil.NewClock4Test()
 	pdClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(currentTime))
-
 	_, span := newScanPriorityTestSpan()
 
-	span.maybeMarkCaughtUp(pdClock, oracle.GoTimeToTS(currentTime.Add(-31*time.Minute)))
+	oldResolvedTs := oracle.GoTimeToTS(currentTime.Add(-31 * time.Minute))
+	span.maybeMarkCaughtUp(pdClock, oldResolvedTs)
 	require.False(t, span.everCaughtUp.Load())
 
 	span.maybeMarkCaughtUp(pdClock, oracle.GoTimeToTS(currentTime.Add(-time.Minute)))
 	require.True(t, span.everCaughtUp.Load())
-	require.Equal(t, TaskHighPrior, span.effectiveScanTaskPriority(TaskLowPrior))
-}
 
-func TestRealtimeScanPriorityUpgradesRegionRetry(t *testing.T) {
-	client := &subscriptionClient{
-		regionTaskQueue: priorityqueue.New[PriorityTask](),
-	}
-	client.pdClock = pdutil.NewClock4Test()
-	client.failureHandler = newRegionFailureHandler(client)
-	_, span := newScanPriorityTestSpan()
-	span.everCaughtUp.Store(true)
-	region := newScanPriorityTestRegion(span)
-	region.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_LOW
-
-	err := client.failureHandler.handleError(context.Background(), newRegionErrorInfo(region, &eventError{err: &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}}))
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	task, err := client.regionTaskQueue.Pop(ctx)
-	require.NoError(t, err)
-	require.Equal(t, TaskHighPrior, task.(*regionPriorityTask).taskType)
-	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH, task.GetRegionInfo().scanPriority)
-}
-
-func TestRealtimeScanPriorityUpgradesRangeRetry(t *testing.T) {
-	client := &subscriptionClient{
-		rangeTaskCh: make(chan rangeTask, 1),
-	}
-	client.failureHandler = newRegionFailureHandler(client)
-	rawSpan, span := newScanPriorityTestSpan()
-	span.everCaughtUp.Store(true)
-	region := newScanPriorityTestRegion(span)
-	region.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_LOW
-
-	err := client.failureHandler.handleError(context.Background(), newRegionErrorInfo(region, &eventError{err: &cdcpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}}))
-	require.NoError(t, err)
-
-	select {
-	case task := <-client.rangeTaskCh:
-		require.Equal(t, TaskHighPrior, task.priority)
-		require.Equal(t, rawSpan, task.span)
-	case <-time.After(time.Second):
-		require.Fail(t, "expected range retry task")
-	}
+	span.maybeMarkCaughtUp(pdClock, oldResolvedTs)
+	require.True(t, span.everCaughtUp.Load())
 }
 
 func newScanPriorityTestSpan() (heartbeatpb.TableSpan, *subscribedSpan) {
@@ -730,15 +694,15 @@ func newScanPriorityTestRegion(span *subscribedSpan) regionInfo {
 	return newRegionInfo(tikv.NewRegionVerID(1, 1, 1), span.span, nil, span, false)
 }
 
-func setInitialScanLowPriorityThresholdForTest(t *testing.T, threshold time.Duration) func() {
+func setInitialScanLowPriorityThresholdForTest(t *testing.T, threshold time.Duration) {
 	t.Helper()
 	oldConfig := config.GetGlobalServerConfig()
 	testConfig := oldConfig.Clone()
 	testConfig.Debug.Puller.OldStartTsScanLowPriorityThreshold = config.TomlDuration(threshold)
 	config.StoreGlobalServerConfig(testConfig)
-	return func() {
+	t.Cleanup(func() {
 		config.StoreGlobalServerConfig(oldConfig)
-	}
+	})
 }
 
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {

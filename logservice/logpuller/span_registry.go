@@ -71,9 +71,8 @@ type subscribedSpan struct {
 	initialized       atomic.Bool
 	resolvedTsUpdated atomic.Int64
 	resolvedTs        atomic.Uint64
-	// everCaughtUp is sticky after this subscription catches up for the first time,
-	// so later recovery scans can protect realtime changefeeds
-	// even if historical catch-up scans temporarily push their lag up again.
+	// everCaughtUp remains true once the subscription catches up, so recovery scans
+	// stay high priority even if a later failure temporarily increases the lag.
 	everCaughtUp atomic.Bool
 }
 

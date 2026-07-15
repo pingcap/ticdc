@@ -692,7 +692,6 @@ func (s *subscriptionClient) scheduleRangeRequest(
 	filterLoop bool,
 	priority TaskType,
 ) {
-	priority = subscribedSpan.effectiveScanTaskPriority(priority)
 	select {
 	case <-ctx.Done():
 	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: subscribedSpan, filterLoop: filterLoop, priority: priority}:
