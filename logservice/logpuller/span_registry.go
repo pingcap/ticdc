@@ -68,7 +68,7 @@ type subscribedSpan struct {
 
 	lastAdvanceTime atomic.Int64
 
-	// initialized is true after the span-level resolved ts has been advanced at least once.
+	// initialized is true after every range in the span has completed its initial scan once.
 	initialized       atomic.Bool
 	resolvedTsUpdated atomic.Int64
 	resolvedTs        atomic.Uint64
@@ -145,6 +145,13 @@ func (span *subscribedSpan) clearKVEventsCache() {
 	} else {
 		span.kvEventsCache = span.kvEventsCache[:0]
 	}
+}
+
+func (span *subscribedSpan) markRegionInitialized(state *regionFeedState) bool {
+	regionID := state.region.verID.GetID()
+	spanFullyInitialized := span.rangeLock.MarkInitialized(regionID, state.region.lockedRangeState)
+	state.worker.requestCache.resolve(span.subID, regionID)
+	return spanFullyInitialized && span.initialized.CompareAndSwap(false, true)
 }
 
 func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {

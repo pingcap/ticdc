@@ -27,6 +27,8 @@ type rangeTsMap struct {
 	m     *btree.BTreeG[rangeTsEntry]
 	start []byte
 	end   []byte
+	// setRangeCount is the number of ranges currently stored as unlocked.
+	setRangeCount int
 }
 
 // newRangeTsMap creates a RangeTsMap.
@@ -42,9 +44,10 @@ func newRangeTsMap(startKey, endKey []byte, startTs uint64) *rangeTsMap {
 
 func (m *rangeTsMap) clone() (res *rangeTsMap) {
 	res = &rangeTsMap{
-		m:     btree.NewG(16, rangeTsEntryLess),
-		start: m.start,
-		end:   m.end,
+		m:             btree.NewG(16, rangeTsEntryLess),
+		start:         m.start,
+		end:           m.end,
+		setRangeCount: m.setRangeCount,
 	}
 	m.m.Ascend(func(i rangeTsEntry) bool {
 		res.m.ReplaceOrInsert(i)
@@ -76,7 +79,7 @@ func (m *rangeTsMap) set(startKey, endKey []byte, ts uint64) {
 				log.Panic("rangeTsMap double set")
 			}
 			endKeyOverlapped.startKey = endKey
-			m.m.ReplaceOrInsert(endKeyOverlapped)
+			m.replaceOrInsert(endKeyOverlapped)
 		}
 	}
 
@@ -104,10 +107,10 @@ func (m *rangeTsMap) set(startKey, endKey []byte, ts uint64) {
 		return true
 	})
 	for _, e := range entriesToDelete {
-		m.m.Delete(e)
+		m.delete(e)
 	}
 
-	m.m.ReplaceOrInsert(rangeTsEntry{startKey: startKey, ts: ts, isSet: true})
+	m.replaceOrInsert(rangeTsEntry{startKey: startKey, ts: ts, isSet: true})
 }
 
 // RangeLock uses rangeTsMap to store unsubscribed regions.
@@ -134,10 +137,10 @@ func (m *rangeTsMap) unset(startKey, endKey []byte) {
 					log.Panic("rangeTsMap double unset")
 				}
 				endKeyOverlapped.startKey = endKey
-				m.m.ReplaceOrInsert(endKeyOverlapped)
+				m.replaceOrInsert(endKeyOverlapped)
 			}
 		} else if !neighbor.isSet {
-			m.m.Delete(neighbor)
+			m.delete(neighbor)
 		}
 	}
 
@@ -163,12 +166,33 @@ func (m *rangeTsMap) unset(startKey, endKey []byte) {
 		return true
 	})
 	for _, e := range entriesToDelete {
-		m.m.Delete(e)
+		m.delete(e)
 	}
 
 	if shouldInsert {
-		m.m.ReplaceOrInsert(rangeTsEntry{startKey: startKey, isSet: false})
+		m.replaceOrInsert(rangeTsEntry{startKey: startKey, isSet: false})
 	}
+}
+
+func (m *rangeTsMap) replaceOrInsert(entry rangeTsEntry) {
+	old, replaced := m.m.ReplaceOrInsert(entry)
+	if replaced && old.isSet {
+		m.setRangeCount--
+	}
+	if entry.isSet {
+		m.setRangeCount++
+	}
+}
+
+func (m *rangeTsMap) delete(entry rangeTsEntry) {
+	deleted, ok := m.m.Delete(entry)
+	if ok && deleted.isSet {
+		m.setRangeCount--
+	}
+}
+
+func (m *rangeTsMap) hasSetRange() bool {
+	return m.setRangeCount > 0
 }
 
 func (m *rangeTsMap) getMinTsInRange(startKey, endKey []byte) uint64 {
