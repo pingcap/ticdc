@@ -31,8 +31,34 @@ func initializedRangeLess(lhs, rhs initializedRange) bool {
 	return common.StartCompare(lhs.startKey, rhs.startKey) < 0
 }
 
-// spanInitializationTracker records the ranges that have received an
-// INITIALIZED event. The recorded coverage is monotonic and is never removed.
+// spanInitializationTracker records the union of ranges that have received an
+// INITIALIZED event. The coverage is monotonic: a duplicate or stale event may
+// add coverage, but a retry or a region split never removes coverage. This is
+// intentional because subscribedSpan.initialized only means that every key in
+// the span has completed an initial scan at least once.
+//
+// ranges contains disjoint and non-adjacent intervals ordered by start key. To
+// add an interval, the tracker clamps it to the subscribed span, merges it with
+// a connected predecessor and all connected successors, then inserts the
+// merged interval. The span is complete exactly when the merged interval
+// covers totalSpan. Once complete, the tree is released because the state can
+// never become incomplete again.
+//
+// An insertion costs O((K+1)log N), where K is the number of intervals merged
+// by this insertion. Since every merged interval is deleted, the total number
+// of merges is amortized across all INITIALIZED events. The worst-case memory
+// usage is O(N) for N disjoint initialized ranges.
+//
+// This uses google/btree directly instead of spanz.BtreeMap because BtreeMap
+// does not expose predecessor lookup or merging. Calling BtreeMap.FindHoles
+// after every event would scan all recorded ranges and can become O(N^2).
+// regionlock.rangeTsMap is also not reusable here: it models timestamp-bearing
+// set/unset ranges and deliberately rejects duplicate operations, while this
+// tracker needs idempotent, monotonic union semantics.
+// maintainer/range_checker.SpanCoverageChecker has similar semantics, but it is
+// owned by another runtime component and IsFullyCovered scans the tree. Using
+// it here would create a logservice-to-maintainer dependency and make checking
+// completion after every INITIALIZED event O(N^2) in the worst case.
 type spanInitializationTracker struct {
 	mu        sync.Mutex
 	ranges    *btree.BTreeG[initializedRange]
@@ -63,6 +89,8 @@ func (t *spanInitializationTracker) add(
 	pivot := initializedRange{startKey: initialized.startKey}
 	toDelete := make([]initializedRange, 0, 2)
 
+	// Only the closest predecessor can overlap or touch initialized because the
+	// intervals already stored in the tree are disjoint and non-adjacent.
 	var predecessor initializedRange
 	hasPredecessor := false
 	t.ranges.DescendLessOrEqual(pivot, func(item initializedRange) bool {
@@ -78,6 +106,8 @@ func (t *spanInitializationTracker) add(
 		toDelete = append(toDelete, predecessor)
 	}
 
+	// Merge consecutive successors until the first gap. Once a gap is found,
+	// later intervals cannot be connected because the tree is start-key ordered.
 	t.ranges.AscendGreaterOrEqual(pivot, func(item initializedRange) bool {
 		if hasPredecessor && common.StartCompare(item.startKey, predecessor.startKey) == 0 {
 			return true
@@ -97,6 +127,8 @@ func (t *spanInitializationTracker) add(
 	}
 	t.ranges.ReplaceOrInsert(merged)
 
+	// All recorded intervals are clamped to totalSpan. Therefore one interval
+	// with both boundaries equal to totalSpan proves complete coverage.
 	if common.StartCompare(merged.startKey, totalSpan.StartKey) == 0 &&
 		common.EndCompare(merged.endKey, totalSpan.EndKey) == 0 {
 		t.completed = true
