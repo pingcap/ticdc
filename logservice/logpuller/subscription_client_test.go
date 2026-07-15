@@ -658,22 +658,15 @@ func TestRealtimeScanPriorityEnabledAfterSubscriptionCatchesUp(t *testing.T) {
 	currentTime := time.Date(2026, time.June, 27, 12, 0, 0, 0, time.UTC)
 	pdClock := pdutil.NewClock4Test()
 	pdClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(currentTime))
-	client := &subscriptionClient{
-		pdClock: pdClock,
-	}
 
 	_, span := newScanPriorityTestSpan()
 
-	client.maybeEnableRealtimeScanPriority(span, oracle.GoTimeToTS(currentTime.Add(-time.Minute)))
-	require.False(t, span.realtimeScanPriority.Load())
+	span.maybeMarkCaughtUp(pdClock, oracle.GoTimeToTS(currentTime.Add(-31*time.Minute)))
+	require.False(t, span.everCaughtUp.Load())
 
-	span.initialized.Store(true)
-	client.maybeEnableRealtimeScanPriority(span, oracle.GoTimeToTS(currentTime.Add(-31*time.Minute)))
-	require.False(t, span.realtimeScanPriority.Load())
-
-	client.maybeEnableRealtimeScanPriority(span, oracle.GoTimeToTS(currentTime.Add(-time.Minute)))
-	require.True(t, span.realtimeScanPriority.Load())
-	require.Equal(t, TaskHighPrior, client.effectiveScanTaskPriority(span, TaskLowPrior))
+	span.maybeMarkCaughtUp(pdClock, oracle.GoTimeToTS(currentTime.Add(-time.Minute)))
+	require.True(t, span.everCaughtUp.Load())
+	require.Equal(t, TaskHighPrior, span.effectiveScanTaskPriority(TaskLowPrior))
 }
 
 func TestRealtimeScanPriorityUpgradesRegionRetry(t *testing.T) {
@@ -683,7 +676,7 @@ func TestRealtimeScanPriorityUpgradesRegionRetry(t *testing.T) {
 	client.pdClock = pdutil.NewClock4Test()
 	client.failureHandler = newRegionFailureHandler(client)
 	_, span := newScanPriorityTestSpan()
-	span.realtimeScanPriority.Store(true)
+	span.everCaughtUp.Store(true)
 	region := newScanPriorityTestRegion(span)
 	region.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_LOW
 
@@ -704,7 +697,7 @@ func TestRealtimeScanPriorityUpgradesRangeRetry(t *testing.T) {
 	}
 	client.failureHandler = newRegionFailureHandler(client)
 	rawSpan, span := newScanPriorityTestSpan()
-	span.realtimeScanPriority.Store(true)
+	span.everCaughtUp.Store(true)
 	region := newScanPriorityTestRegion(span)
 	region.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_LOW
 

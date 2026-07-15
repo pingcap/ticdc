@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
@@ -89,6 +90,7 @@ func (event regionEvent) mustFirstState() *regionFeedState {
 type regionEventHandler struct {
 	eventSink      *regionEventSink
 	failureHandler *regionFailureHandler
+	pdClock        pdutil.Clock
 }
 
 func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {
@@ -143,8 +145,8 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
 		}
 	}
-	if newResolvedTs > 0 && h.failureHandler != nil && h.failureHandler.client != nil {
-		h.failureHandler.client.maybeEnableRealtimeScanPriority(span, newResolvedTs)
+	if newResolvedTs > 0 {
+		span.maybeMarkCaughtUp(h.pdClock, newResolvedTs)
 	}
 	tryAdvanceResolvedTs := func() {
 		if newResolvedTs != 0 {

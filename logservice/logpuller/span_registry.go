@@ -71,10 +71,10 @@ type subscribedSpan struct {
 	initialized       atomic.Bool
 	resolvedTsUpdated atomic.Int64
 	resolvedTs        atomic.Uint64
-	// realtimeScanPriority is set after this subscription catches up once.
-	// It is sticky so later recovery scans can protect realtime changefeeds
+	// everCaughtUp is sticky after this subscription catches up for the first time,
+	// so later recovery scans can protect realtime changefeeds
 	// even if historical catch-up scans temporarily push their lag up again.
-	realtimeScanPriority atomic.Bool
+	everCaughtUp atomic.Bool
 }
 
 // spanRegistry tracks subscribed spans and owns span-level background maintenance.
@@ -140,6 +140,24 @@ func newSubscribedSpan(
 		}
 	}
 	return rt
+}
+
+func (span *subscribedSpan) maybeMarkCaughtUp(pdClock pdutil.Clock, resolvedTs uint64) {
+	if span.everCaughtUp.Load() || !isTsCloseToCurrent(pdClock, resolvedTs) {
+		return
+	}
+	if span.everCaughtUp.CompareAndSwap(false, true) {
+		log.Info("subscription catches up for the first time",
+			zap.Uint64("subscriptionID", uint64(span.subID)),
+			zap.Uint64("resolvedTs", resolvedTs))
+	}
+}
+
+func (span *subscribedSpan) effectiveScanTaskPriority(priority TaskType) TaskType {
+	if priority == TaskHighPrior || span.everCaughtUp.Load() {
+		return TaskHighPrior
+	}
+	return priority
 }
 
 func (span *subscribedSpan) clearKVEventsCache() {

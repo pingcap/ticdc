@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
@@ -206,7 +207,9 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 func TestHandleResolvedTs(t *testing.T) {
 	// initialize
 	option := dynstream.NewOption()
-	ds := dynstream.NewParallelDynamicStream("test", &regionEventHandler{}, option)
+	pdClock := pdutil.NewClock4Test()
+	pdClock.(*pdutil.Clock4Test).SetTS(10)
+	ds := dynstream.NewParallelDynamicStream("test", &regionEventHandler{pdClock: pdClock}, option)
 	ds.Start()
 
 	consumeKVEvents := func(events []common.RawKVEntry, _ func()) bool { return false } // not used
@@ -221,13 +224,14 @@ func TestHandleResolvedTs(t *testing.T) {
 	}
 	state1 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(1, 1, 1)}, uint64(subID1), worker)
 	state1.start()
+	var subSpan1 *subscribedSpan
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
 			StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
 			EndKey:   common.ToComparableKey(common.UpperBoundKey),
 		}
-		subSpan := &subscribedSpan{
+		subSpan1 = &subscribedSpan{
 			subID:             subID1,
 			span:              heartbeatpb.TableSpan{},
 			rangeLock:         regionlock.NewRangeLock(uint64(subID1), span.StartKey, span.EndKey, 1),
@@ -235,8 +239,8 @@ func TestHandleResolvedTs(t *testing.T) {
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
 		}
-		ds.AddPath(subID1, subSpan, dynstream.AreaSettings{})
-		state1.region.subscribedSpan = subSpan
+		ds.AddPath(subID1, subSpan1, dynstream.AreaSettings{})
+		state1.region.subscribedSpan = subSpan1
 		state1.region.lockedRangeState = &regionlock.LockedRangeState{}
 		state1.setInitialized()
 		state1.updateResolvedTs(9)
@@ -330,6 +334,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	require.Equal(t, uint64(10), state1.getLastResolvedTs())
 	require.Equal(t, uint64(11), state2.getLastResolvedTs())
 	require.Equal(t, uint64(8), state3.getLastResolvedTs())
+	require.True(t, subSpan1.everCaughtUp.Load())
 }
 
 func TestHandleResolvedTsThrottled(t *testing.T) {

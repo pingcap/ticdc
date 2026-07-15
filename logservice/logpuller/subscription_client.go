@@ -182,7 +182,7 @@ func NewSubscriptionClient(
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	subClient.failureHandler = newRegionFailureHandler(subClient)
-	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient.failureHandler)
+	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient.failureHandler, subClient.pdClock)
 	subClient.spanRegistry = newSpanRegistry(subClient.pd, subClient.pdClock)
 
 	subClient.initMetrics()
@@ -278,47 +278,18 @@ func (s *subscriptionClient) Subscribe(
 }
 
 func (s *subscriptionClient) initialScanTaskPriority(startTs uint64) TaskType {
-	if s.isTsCloseToCurrent(startTs) {
+	if isTsCloseToCurrent(s.pdClock, startTs) {
 		return TaskHighPrior
 	}
 	return TaskLowPrior
 }
 
-func (s *subscriptionClient) oldStartTsScanLowPriorityThreshold() time.Duration {
-	threshold := time.Duration(config.GetGlobalServerConfig().Debug.Puller.OldStartTsScanLowPriorityThreshold)
-	if threshold > 0 {
-		return threshold
-	}
-	return config.DefaultOldStartTsScanLowPriorityThreshold
-}
-
-func (s *subscriptionClient) isTsCloseToCurrent(ts uint64) bool {
+func isTsCloseToCurrent(pdClock pdutil.Clock, ts uint64) bool {
 	if ts == 0 {
 		return false
 	}
-	return s.pdClock.CurrentTime().Sub(oracle.GetTimeFromTS(ts)) <= s.oldStartTsScanLowPriorityThreshold()
-}
-
-func (s *subscriptionClient) maybeEnableRealtimeScanPriority(span *subscribedSpan, resolvedTs uint64) {
-	if span == nil || !span.initialized.Load() || span.realtimeScanPriority.Load() {
-		return
-	}
-	if !s.isTsCloseToCurrent(resolvedTs) {
-		return
-	}
-	if span.realtimeScanPriority.CompareAndSwap(false, true) {
-		log.Info("subscription client enables realtime scan priority",
-			zap.Uint64("subscriptionID", uint64(span.subID)),
-			zap.Uint64("resolvedTs", resolvedTs),
-			zap.Duration("threshold", s.oldStartTsScanLowPriorityThreshold()))
-	}
-}
-
-func (s *subscriptionClient) effectiveScanTaskPriority(subscribedSpan *subscribedSpan, priority TaskType) TaskType {
-	if subscribedSpan != nil && subscribedSpan.realtimeScanPriority.Load() {
-		return TaskHighPrior
-	}
-	return priority
+	threshold := time.Duration(config.GetGlobalServerConfig().Debug.Puller.OldStartTsScanLowPriorityThreshold)
+	return pdClock.CurrentTime().Sub(oracle.GetTimeFromTS(ts)) <= threshold
 }
 
 // Unsubscribe the given table span. All covered regions will be deregistered asynchronously.
@@ -681,7 +652,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 // scheduleRegionRequest locks the region's range and send the region to regionTaskQueue,
 // which will be handled by handleRegions.
 func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region regionInfo, priority TaskType) {
-	priority = s.effectiveScanTaskPriority(region.subscribedSpan, priority)
+	priority = region.subscribedSpan.effectiveScanTaskPriority(priority)
 	region.scanPriority = priority.scanPriority()
 	lockRangeResult := region.subscribedSpan.rangeLock.LockRange(
 		ctx, region.span.StartKey, region.span.EndKey, region.verID.GetID(), region.verID.GetVer())
@@ -721,7 +692,7 @@ func (s *subscriptionClient) scheduleRangeRequest(
 	filterLoop bool,
 	priority TaskType,
 ) {
-	priority = s.effectiveScanTaskPriority(subscribedSpan, priority)
+	priority = subscribedSpan.effectiveScanTaskPriority(priority)
 	select {
 	case <-ctx.Done():
 	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: subscribedSpan, filterLoop: filterLoop, priority: priority}:
