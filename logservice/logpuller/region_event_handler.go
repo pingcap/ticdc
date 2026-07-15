@@ -262,7 +262,6 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState) {
 
 func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *cdcpb.Event_Entries_) {
 	regionID, _, _ := state.getRegionMeta()
-	spanInitialized := false
 	assembleRowEvent := func(regionID uint64, entry *cdcpb.Event_Row) common.RawKVEntry {
 		var opType common.OpType
 		switch entry.GetOpType() {
@@ -288,7 +287,10 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
 			if span.markRegionInitialized(state) {
-				spanInitialized = true
+				log.Info("span is initialized",
+					zap.Uint64("subscriptionID", uint64(span.subID)),
+					zap.Uint64("regionID", regionID),
+					zap.Uint64("resolvedTs", span.resolvedTs.Load()))
 			}
 			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
@@ -357,13 +359,6 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			}
 			state.matcher.rollbackRow(entry)
 		}
-	}
-
-	if spanInitialized {
-		log.Info("subscription client is initialized",
-			zap.Uint64("subscriptionID", uint64(span.subID)),
-			zap.Uint64("regionID", regionID),
-			zap.Uint64("resolvedTs", span.resolvedTs.Load()))
 	}
 }
 

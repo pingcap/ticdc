@@ -353,8 +353,8 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 	res2 := l.LockRange(ctx, []byte("m"), []byte("z"), 2, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res2.Status)
 
-	res1.LockedRangeState.Initialized.Store(true)
-	res2.LockedRangeState.Initialized.Store(true)
+	l.MarkInitialized(1, res1.LockedRangeState)
+	l.MarkInitialized(2, res2.LockedRangeState)
 
 	// Make the heap order deterministic, then update ResolvedTs without updating the heap to simulate a stale heap.
 	res1.LockedRangeState.ResolvedTs.Store(1)
