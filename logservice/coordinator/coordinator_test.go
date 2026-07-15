@@ -393,9 +393,9 @@ func TestUpdateChangefeedStatesWaitsForCompleteReportingRound(t *testing.T) {
 	state.resolvedTsLagGauge.Set(0.9)
 	c.changefeedStates.m[cfID.ID()] = state
 
-	report := func(nodeID node.ID, reportTime time.Time) uint64 {
+	report := func(nodeID node.ID, reportTime time.Time, lag time.Duration) uint64 {
 		mockPDClock.SetTS(oracle.GoTimeToTS(reportTime))
-		resolvedTs := oracle.GoTimeToTS(reportTime.Add(-200 * time.Millisecond))
+		resolvedTs := oracle.GoTimeToTS(reportTime.Add(-lag))
 		c.updateChangefeedStates(nodeID, &logservicepb.ChangefeedStates{
 			States: []*logservicepb.ChangefeedStateEntry{{
 				ChangefeedID: cfID.ToPB(),
@@ -405,15 +405,15 @@ func TestUpdateChangefeedStatesWaitsForCompleteReportingRound(t *testing.T) {
 		return resolvedTs
 	}
 
-	newResolvedTs := report("node-1", pdTime)
-	report("node-1", pdTime)
-	report("node-2", pdTime.Add(300*time.Millisecond))
+	newResolvedTs := report("node-1", pdTime, 50*time.Millisecond)
+	report("node-1", pdTime, 50*time.Millisecond)
+	report("node-2", pdTime.Add(300*time.Millisecond), 180*time.Millisecond)
 	require.Equal(t, oldResolvedTs, state.minLogServiceResolvedTs)
 	require.InDelta(t, 0.9, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
 
-	report("node-3", pdTime.Add(600*time.Millisecond))
+	report("node-3", pdTime.Add(600*time.Millisecond), 120*time.Millisecond)
 	require.Equal(t, newResolvedTs, state.minLogServiceResolvedTs)
-	require.InDelta(t, 0.2, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
+	require.InDelta(t, 0.18, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
 	require.Empty(t, state.nodesReportedSinceLastUpdate)
 }
 

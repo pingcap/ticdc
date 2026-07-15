@@ -341,11 +341,20 @@ func (c *logCoordinator) updateChangefeedMetrics(state *changefeedState, pdPhyTs
 	}
 
 	minResolvedTs := uint64(math.MaxUint64)
-	minResolvedTsNode := node.ID("")
+	var maxNodeLag float64
+	hasNodeLag := false
 	for nodeID, resolvedTs := range state.nodeStates {
 		if resolvedTs < minResolvedTs {
 			minResolvedTs = resolvedTs
-			minResolvedTsNode = nodeID
+		}
+		if !force {
+			if reportPhyTs, ok := state.nodeReportPhyTs[nodeID]; ok {
+				nodeLag := float64(reportPhyTs-oracle.ExtractPhysical(resolvedTs)) / 1e3
+				if !hasNodeLag || nodeLag > maxNodeLag {
+					maxNodeLag = nodeLag
+					hasNodeLag = true
+				}
+			}
 		}
 	}
 
@@ -362,13 +371,10 @@ func (c *logCoordinator) updateChangefeedMetrics(state *changefeedState, pdPhyTs
 	state.minLogServiceResolvedTs = minResolvedTs
 	state.metricsInitialized = true
 	state.resolvedTsGauge.Set(float64(phyResolvedTs))
-	lagReferencePhyTs := pdPhyTs
-	if !force {
-		if reportPhyTs, ok := state.nodeReportPhyTs[minResolvedTsNode]; ok {
-			lagReferencePhyTs = reportPhyTs
-		}
+	lag := float64(pdPhyTs-phyResolvedTs) / 1e3
+	if !force && hasNodeLag {
+		lag = maxNodeLag
 	}
-	lag := float64(lagReferencePhyTs-phyResolvedTs) / 1e3
 	state.resolvedTsLagGauge.Set(lag)
 	return true
 }
