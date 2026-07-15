@@ -672,7 +672,7 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 		targetTs := task.targetTs
 		key := resolveLockKey{keyspaceID: keyspaceID, regionID: regionID}
 
-		if !state.IsInitialized() || state.ResolvedTs.Load() >= targetTs {
+		if !state.Initialized.Load() || state.ResolvedTs.Load() >= targetTs {
 			s.resolveLockRateLimiter.cancel(key)
 			return
 		}

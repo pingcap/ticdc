@@ -65,15 +65,13 @@ type LockRangeResult struct {
 // LockedRangeState is used to access the real-time state changes of a locked range.
 type LockedRangeState struct {
 	ResolvedTs  atomic.Uint64
-	initialized atomic.Bool
+	Initialized atomic.Bool
 	Created     time.Time
 	// heapIndex is used to maintain a min heap of LockedRangeState based on ResolvedTs.
 	heapIndex int
 }
 
 func (m *LockedRangeState) SetHeapIndex(index int) { m.heapIndex = index }
-
-func (m *LockedRangeState) IsInitialized() bool { return m.initialized.Load() }
 
 func (m *LockedRangeState) GetHeapIndex() int { return m.heapIndex }
 
@@ -133,9 +131,7 @@ type RangeLock struct {
 	regionIDToLockedRanges map[uint64]*rangeLockEntry
 	// lockedRangeStateHeap is a min heap of all LockedRangeState based on ResolvedTs
 	lockedRangeStateHeap *heap.Heap[*LockedRangeState]
-	// uninitializedLockedRangeCount is the number of locked ranges that have not completed their initial scan.
-	uninitializedLockedRangeCount int
-	stopped                       bool
+	stopped              bool
 }
 
 // NewRangeLock creates a new RangeLock.
@@ -234,10 +230,6 @@ func (l *RangeLock) UnlockRange(
 	if entry, ok = l.lockedRanges.Delete(entry); !ok {
 		panic("unreachable")
 	}
-	if !entry.lockedRangeState.IsInitialized() {
-		l.uninitializedLockedRangeCount--
-	}
-
 	// Remove the entry from the heap
 	if ok = l.lockedRangeStateHeap.Remove(&entry.lockedRangeState); !ok {
 		panic("unreachable")
@@ -264,22 +256,6 @@ func (l *RangeLock) Len() int {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.lockedRanges.Len()
-}
-
-// MarkInitialized marks a locked range as having completed its initial scan.
-// It returns true when all ranges in the RangeLock are locked and initialized.
-func (l *RangeLock) MarkInitialized(regionID uint64, state *LockedRangeState) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	entry, ok := l.regionIDToLockedRanges[regionID]
-	if !ok || &entry.lockedRangeState != state {
-		return false
-	}
-	if state.initialized.CompareAndSwap(false, true) {
-		l.uninitializedLockedRangeCount--
-	}
-	return l.uninitializedLockedRangeCount == 0 && !l.unlockedRanges.hasSetRange()
 }
 
 // ResolvedTs calculates and returns the minimum resolvedTs
@@ -357,13 +333,13 @@ func (l *RangeLock) IterAll(
 		if resolvedTs > r.FastestRegion.ResolvedTs {
 			r.FastestRegion.RegionID = item.regionID
 			r.FastestRegion.ResolvedTs = resolvedTs
-			r.FastestRegion.Initialized = item.lockedRangeState.IsInitialized()
+			r.FastestRegion.Initialized = item.lockedRangeState.Initialized.Load()
 			r.FastestRegion.Created = item.lockedRangeState.Created
 		}
 		if resolvedTs < r.SlowestRegion.ResolvedTs {
 			r.SlowestRegion.RegionID = item.regionID
 			r.SlowestRegion.ResolvedTs = resolvedTs
-			r.SlowestRegion.Initialized = item.lockedRangeState.IsInitialized()
+			r.SlowestRegion.Initialized = item.lockedRangeState.Initialized.Load()
 			r.SlowestRegion.Created = item.lockedRangeState.Created
 		}
 		lastEnd = item.endKey
@@ -490,8 +466,6 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		l.lockedRanges.ReplaceOrInsert(newEntry)
 		l.regionIDToLockedRanges[regionID] = newEntry
 		l.lockedRangeStateHeap.AddOrUpdate(&newEntry.lockedRangeState)
-		l.uninitializedLockedRangeCount++
-
 		l.unlockedRanges.unset(startKey, endKey)
 		log.Debug("range locked",
 			zap.Uint64("lockID", l.id),

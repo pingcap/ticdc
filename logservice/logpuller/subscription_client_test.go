@@ -85,7 +85,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	// Lock a range, and then ResolveLock will trigger a task for it.
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-	span.rangeLock.MarkInitialized(1, res.LockedRangeState)
+	res.LockedRangeState.Initialized.Store(true)
 	span.resolveStaleLocks(200)
 	select {
 	case task := <-client.resolveLockTaskCh:
@@ -164,10 +164,10 @@ func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
 
 	res := span1.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-	span1.rangeLock.MarkInitialized(1, res.LockedRangeState)
+	res.LockedRangeState.Initialized.Store(true)
 	res = span2.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-	span2.rangeLock.MarkInitialized(1, res.LockedRangeState)
+	res.LockedRangeState.Initialized.Store(true)
 
 	span1.resolveStaleLocks(200)
 	select {
@@ -205,7 +205,7 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 	lockResult := rangeLock.LockRange(context.Background(), []byte{'a'}, []byte{'b'}, 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, lockResult.Status)
 	state := lockResult.LockedRangeState
-	rangeLock.MarkInitialized(1, state)
+	state.Initialized.Store(true)
 	state.ResolvedTs.Store(100)
 
 	successBefore := testutil.ToFloat64(
@@ -277,7 +277,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-	span.rangeLock.MarkInitialized(1, res.LockedRangeState)
+	res.LockedRangeState.Initialized.Store(true)
 
 	// Fill the channel to simulate the resolver goroutine being blocked.
 	client.resolveLockTaskCh <- resolveLockTask{}

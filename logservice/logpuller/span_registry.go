@@ -69,9 +69,10 @@ type subscribedSpan struct {
 	lastAdvanceTime atomic.Int64
 
 	// initialized is true after every range in the span has completed its initial scan once.
-	initialized       atomic.Bool
-	resolvedTsUpdated atomic.Int64
-	resolvedTs        atomic.Uint64
+	initialized           atomic.Bool
+	initializationTracker spanInitializationTracker
+	resolvedTsUpdated     atomic.Int64
+	resolvedTs            atomic.Uint64
 }
 
 // spanRegistry tracks subscribed spans and owns span-level background maintenance.
@@ -114,7 +115,7 @@ func newSubscribedSpan(
 
 	rt.tryResolveLock = func(regionID uint64, state *regionlock.LockedRangeState) {
 		targetTs := rt.staleLocksTargetTs.Load()
-		if !state.IsInitialized() || state.ResolvedTs.Load() >= targetTs {
+		if !state.Initialized.Load() || state.ResolvedTs.Load() >= targetTs {
 			return
 		}
 		key := resolveLockKey{keyspaceID: span.KeyspaceID, regionID: regionID}
@@ -148,8 +149,12 @@ func (span *subscribedSpan) clearKVEventsCache() {
 }
 
 func (span *subscribedSpan) markRegionInitialized(state *regionFeedState) {
+	state.setInitialized()
+	if span.initialized.Load() {
+		return
+	}
 	regionID := state.region.verID.GetID()
-	spanFullyInitialized := span.rangeLock.MarkInitialized(regionID, state.region.lockedRangeState)
+	spanFullyInitialized := span.initializationTracker.add(span.span, state.region.span)
 	if spanFullyInitialized && span.initialized.CompareAndSwap(false, true) {
 		log.Info("span is initialized",
 			zap.Uint64("subscriptionID", uint64(span.subID)),

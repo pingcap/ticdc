@@ -241,7 +241,7 @@ func (c *requestCache) clearStaleRequest() {
 		for regionID, regionReq := range regionReqs {
 			if regionReq.regionInfo.isStopped() ||
 				regionReq.regionInfo.subscribedSpan.stopped.Load() ||
-				regionReq.regionInfo.lockedRangeState.IsInitialized() ||
+				regionReq.regionInfo.lockedRangeState.Initialized.Load() ||
 				regionReq.isStale() {
 				c.markDone()
 				log.Warn("region worker delete stale region request",
