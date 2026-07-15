@@ -182,6 +182,7 @@ func TestRangeTsMapSetUnset(t *testing.T) {
 
 	m := newRangeTsMap([]byte("a"), []byte("z"), 100)
 	require.Equal(t, 1, m.m.Len())
+	require.True(t, m.hasSetRange())
 	require.Equal(t, uint64(100), m.getMinTsInRange([]byte("a"), []byte("z")))
 
 	// Double set, should panic.
@@ -202,6 +203,7 @@ func TestRangeTsMapSetUnset(t *testing.T) {
 	m.unset([]byte("a"), []byte("m"))
 	m.unset([]byte("x"), []byte("z"))
 	require.Equal(t, 1, m.m.Len())
+	require.False(t, m.hasSetRange())
 	require.Panics(t, func() { m.clone().getMinTsInRange([]byte("a"), []byte("z")) })
 }
 
@@ -251,6 +253,29 @@ func TestCalculateMinResolvedTs(t *testing.T) {
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
 	res.LockedRangeState.ResolvedTs.Store(103)
 	require.Equal(t, uint64(101), l.ResolvedTs())
+}
+
+func TestRangeLockMarkInitialized(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	l := NewRangeLock(1, []byte("a"), []byte("z"), 100)
+
+	first := l.LockRange(ctx, []byte("a"), []byte("m"), 1, 1)
+	require.Equal(t, LockRangeStatusSuccess, first.Status)
+	require.False(t, l.MarkInitialized(1, first.LockedRangeState))
+
+	second := l.LockRange(ctx, []byte("m"), []byte("z"), 2, 1)
+	require.Equal(t, LockRangeStatusSuccess, second.Status)
+	l.UnlockRange([]byte("m"), []byte("z"), 2, 1)
+	retrySecond := l.LockRange(ctx, []byte("m"), []byte("z"), 3, 1)
+	require.Equal(t, LockRangeStatusSuccess, retrySecond.Status)
+	require.True(t, l.MarkInitialized(3, retrySecond.LockedRangeState))
+
+	l.UnlockRange([]byte("a"), []byte("m"), 1, 1)
+	third := l.LockRange(ctx, []byte("a"), []byte("m"), 4, 1)
+	require.Equal(t, LockRangeStatusSuccess, third.Status)
+	require.True(t, l.MarkInitialized(4, third.LockedRangeState))
 }
 
 func Benchmark100KRegions(b *testing.B) {
