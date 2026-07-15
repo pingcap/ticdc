@@ -157,7 +157,7 @@ func (s *regionFeedState) takeError() (err error) {
 }
 
 func (s *regionFeedState) isInitialized() bool {
-	return s.region.lockedRangeState.Initialized.Load()
+	return s.region.lockedRangeState.IsInitialized()
 }
 
 func (s *regionFeedState) getRegionID() uint64 {

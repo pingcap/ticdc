@@ -114,7 +114,7 @@ func newSubscribedSpan(
 
 	rt.tryResolveLock = func(regionID uint64, state *regionlock.LockedRangeState) {
 		targetTs := rt.staleLocksTargetTs.Load()
-		if !state.Initialized.Load() || state.ResolvedTs.Load() >= targetTs {
+		if !state.IsInitialized() || state.ResolvedTs.Load() >= targetTs {
 			return
 		}
 		key := resolveLockKey{keyspaceID: span.KeyspaceID, regionID: regionID}

@@ -85,7 +85,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	// Lock a range, and then ResolveLock will trigger a task for it.
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-	res.LockedRangeState.Initialized.Store(true)
+	span.rangeLock.MarkInitialized(1, res.LockedRangeState)
 	span.resolveStaleLocks(200)
 	select {
 	case task := <-client.resolveLockTaskCh:
@@ -164,10 +164,10 @@ func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
 
 	res := span1.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-	res.LockedRangeState.Initialized.Store(true)
+	span1.rangeLock.MarkInitialized(1, res.LockedRangeState)
 	res = span2.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-	res.LockedRangeState.Initialized.Store(true)
+	span2.rangeLock.MarkInitialized(1, res.LockedRangeState)
 
 	span1.resolveStaleLocks(200)
 	select {
@@ -201,8 +201,11 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 		errCh <- client.handleResolveLockTasks(ctx)
 	}()
 
-	state := &regionlock.LockedRangeState{}
-	state.Initialized.Store(true)
+	rangeLock := regionlock.NewRangeLock(1, []byte{'a'}, []byte{'b'}, 100)
+	lockResult := rangeLock.LockRange(context.Background(), []byte{'a'}, []byte{'b'}, 1, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, lockResult.Status)
+	state := lockResult.LockedRangeState
+	rangeLock.MarkInitialized(1, state)
 	state.ResolvedTs.Store(100)
 
 	successBefore := testutil.ToFloat64(
@@ -274,7 +277,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-	res.LockedRangeState.Initialized.Store(true)
+	span.rangeLock.MarkInitialized(1, res.LockedRangeState)
 
 	// Fill the channel to simulate the resolver goroutine being blocked.
 	client.resolveLockTaskCh <- resolveLockTask{}
