@@ -193,7 +193,7 @@ func newDispatchResolvedTsTestWorker(regionCount int) (*regionRequestWorker, *mo
 			metrics: sharedClientMetrics{
 				batchResolvedSize: prometheus.ObserverFunc(func(float64) {}),
 			},
-			eventSink: &regionEventSink{ds: ds},
+			eventSink: newTestRegionEventSink(ds),
 		},
 	}
 	worker.requestedRegions.subscriptions = map[SubscriptionID]regionFeedStates{

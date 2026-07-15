@@ -182,7 +182,7 @@ func NewSubscriptionClient(
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	subClient.failureHandler = newRegionFailureHandler(subClient)
-	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient.failureHandler, subClient.pdClock)
+	subClient.eventSink = newRegionEventSink(subClient.failureHandler, subClient.pdClock)
 	subClient.spanRegistry = newSpanRegistry(subClient.pd, subClient.pdClock)
 
 	subClient.initMetrics()
