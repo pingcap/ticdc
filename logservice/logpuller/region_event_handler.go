@@ -146,6 +146,11 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	tryAdvanceResolvedTs := func() {
 		if newResolvedTs != 0 {
 			span.advanceResolvedTs(newResolvedTs)
+			if span.initialized.CompareAndSwap(false, true) {
+				log.Info("subscription client is initialized",
+					zap.Uint64("subscriptionID", uint64(span.subID)),
+					zap.Uint64("resolvedTs", newResolvedTs))
+			}
 		}
 	}
 	if len(span.kvEventsCache) > 0 {
@@ -393,12 +398,6 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	}
 
 	if shouldAdvance {
-		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
-			log.Info("subscription client is initialized",
-				zap.Uint64("subscriptionID", uint64(span.subID)),
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("resolvedTs", ts))
-		}
 		lastResolvedTs := span.resolvedTs.Load()
 		nextResolvedPhyTs := oracle.ExtractPhysical(ts)
 		// Generally, we don't want to send duplicate resolved ts,

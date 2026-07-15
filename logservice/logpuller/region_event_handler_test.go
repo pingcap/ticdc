@@ -374,3 +374,45 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 
 	require.Equal(t, uint64(200), handleResolvedTs(span, state, 300))
 }
+
+func TestSpanInitializedAfterResolvedTsAdvanced(t *testing.T) {
+	ctx := context.Background()
+	rangeLock := regionlock.NewRangeLock(1, []byte("a"), []byte("z"), 100)
+	lockResult := rangeLock.LockRange(ctx, []byte("a"), []byte("z"), 1, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, lockResult.Status)
+	lockResult.LockedRangeState.Initialized.Store(true)
+
+	advancedTs := uint64(0)
+	span := &subscribedSpan{
+		subID:           SubscriptionID(1),
+		startTs:         100,
+		rangeLock:       rangeLock,
+		advanceInterval: 0,
+	}
+	span.resolvedTs.Store(span.startTs)
+	span.advanceResolvedTs = func(ts uint64) {
+		require.False(t, span.initialized.Load())
+		advancedTs = ts
+	}
+
+	state := newRegionFeedState(
+		regionInfo{
+			verID:            tikv.NewRegionVerID(1, 1, 1),
+			subscribedSpan:   span,
+			lockedRangeState: lockResult.LockedRangeState,
+		},
+		1,
+		nil,
+	)
+	state.start()
+
+	handler := &regionEventHandler{}
+	await := handler.Handle(span, regionEvent{
+		states:     []*regionFeedState{state},
+		resolvedTs: 101,
+	})
+
+	require.False(t, await)
+	require.Equal(t, uint64(101), advancedTs)
+	require.True(t, span.initialized.Load())
+}

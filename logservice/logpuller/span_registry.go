@@ -68,6 +68,7 @@ type subscribedSpan struct {
 
 	lastAdvanceTime atomic.Int64
 
+	// initialized is true after the span-level resolved ts has been advanced at least once.
 	initialized       atomic.Bool
 	resolvedTsUpdated atomic.Int64
 	resolvedTs        atomic.Uint64
