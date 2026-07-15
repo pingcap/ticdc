@@ -403,7 +403,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 		if ts > lastResolvedTs ||
 			(span.initialized.Load() && ts == lastResolvedTs && lastResolvedTs == span.startTs) {
 			if lastResolvedTs == span.startTs && ts > span.startTs && !span.initialized.Load() {
-				log.Warn("resolved ts advances before span is initialized",
+				log.Warn("should not happen: resolved ts advances before span is initialized",
 					zap.Uint64("subscriptionID", uint64(span.subID)),
 					zap.Int64("tableID", span.span.TableID),
 					zap.Uint64("regionID", regionID),
