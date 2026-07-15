@@ -147,10 +147,15 @@ func (span *subscribedSpan) clearKVEventsCache() {
 	}
 }
 
-func (span *subscribedSpan) markRegionInitialized(state *regionFeedState) bool {
+func (span *subscribedSpan) markRegionInitialized(state *regionFeedState) {
 	regionID := state.region.verID.GetID()
 	spanFullyInitialized := span.rangeLock.MarkInitialized(regionID, state.region.lockedRangeState)
-	return spanFullyInitialized && span.initialized.CompareAndSwap(false, true)
+	if spanFullyInitialized && span.initialized.CompareAndSwap(false, true) {
+		log.Info("span is initialized",
+			zap.Uint64("subscriptionID", uint64(span.subID)),
+			zap.Uint64("regionID", regionID),
+			zap.Uint64("resolvedTs", span.resolvedTs.Load()))
+	}
 }
 
 func (span *subscribedSpan) tryUpdateResolvedTs(
