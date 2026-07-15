@@ -286,7 +286,6 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 	for _, entry := range entries.Entries.GetEntries() {
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
-			state.setInitialized()
 			span.markRegionInitialized(state)
 			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
