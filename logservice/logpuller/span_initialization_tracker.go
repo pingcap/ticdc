@@ -48,17 +48,6 @@ func initializedRangeLess(lhs, rhs initializedRange) bool {
 // by this insertion. Since every merged interval is deleted, the total number
 // of merges is amortized across all INITIALIZED events. The worst-case memory
 // usage is O(N) for N disjoint initialized ranges.
-//
-// This uses google/btree directly instead of spanz.BtreeMap because BtreeMap
-// does not expose predecessor lookup or merging. Calling BtreeMap.FindHoles
-// after every event would scan all recorded ranges and can become O(N^2).
-// regionlock.rangeTsMap is also not reusable here: it models timestamp-bearing
-// set/unset ranges and deliberately rejects duplicate operations, while this
-// tracker needs idempotent, monotonic union semantics.
-// maintainer/range_checker.SpanCoverageChecker has similar semantics, but it is
-// owned by another runtime component and IsFullyCovered scans the tree. Using
-// it here would create a logservice-to-maintainer dependency and make checking
-// completion after every INITIALIZED event O(N^2) in the worst case.
 type spanInitializationTracker struct {
 	mu        sync.Mutex
 	ranges    *btree.BTreeG[initializedRange]
@@ -77,7 +66,7 @@ func (t *spanInitializationTracker) add(
 		return false
 	}
 
-	initialized, ok := intersectInitializedRange(totalSpan, initializedSpan)
+	merged, ok := intersectInitializedRange(totalSpan, initializedSpan)
 	if !ok {
 		return false
 	}
@@ -85,8 +74,7 @@ func (t *spanInitializationTracker) add(
 		t.ranges = btree.NewG(16, initializedRangeLess)
 	}
 
-	merged := initialized
-	pivot := initializedRange{startKey: initialized.startKey}
+	pivot := initializedRange{startKey: merged.startKey}
 	toDelete := make([]initializedRange, 0, 2)
 
 	// Only the closest predecessor can overlap or touch initialized because the

@@ -441,7 +441,9 @@ func TestSpanInitializedAfterAllRangesInitialized(t *testing.T) {
 
 	require.False(t, handler.Handle(span, initializedEvent(firstState)))
 	require.False(t, span.initialized.Load())
+	require.Equal(t, uint64(0), handleResolvedTs(span, firstState, span.startTs))
 
 	require.False(t, handler.Handle(span, initializedEvent(secondState)))
 	require.True(t, span.initialized.Load())
+	require.Equal(t, span.startTs, handleResolvedTs(span, secondState, span.startTs))
 }
