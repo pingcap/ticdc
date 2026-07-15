@@ -154,6 +154,52 @@ func (span *subscribedSpan) markRegionInitialized(state *regionFeedState) bool {
 	return spanFullyInitialized && span.initialized.CompareAndSwap(false, true)
 }
 
+func (span *subscribedSpan) tryUpdateResolvedTs(
+	regionID uint64, state *regionlock.LockedRangeState,
+) uint64 {
+	var ts uint64
+	// advanceInterval defaults to 100ms; setting it to 0 means resolving the timestamp as soon as possible.
+	// Note: If a single span contains an extremely large number of regions (e.g., 500k), advanceInterval = 0 may cause performance issues.
+	if span.advanceInterval == 0 {
+		span.rangeLock.UpdateLockedRangeStateHeap(state)
+		ts = span.rangeLock.GetHeapMinTs()
+	} else {
+		now := time.Now().UnixMilli()
+		lastAdvance := span.lastAdvanceTime.Load()
+		if now-lastAdvance < span.advanceInterval || !span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
+			return 0
+		}
+		ts = span.rangeLock.ResolvedTs()
+	}
+
+	lastResolvedTs := span.resolvedTs.Load()
+	// Generally, we don't want to send duplicate resolved ts,
+	// so we check whether `ts` is larger than `lastResolvedTs` before send it.
+	// but when `ts` == `lastResolvedTs` == `span.startTs`,
+	// the span may just be initialized and have not receive any resolved ts before,
+	// so we also send ts in this case for quick notification to downstream.
+	if ts <= lastResolvedTs && !(ts == lastResolvedTs && lastResolvedTs == span.startTs) {
+		return 0
+	}
+
+	resolvedPhyTs := oracle.ExtractPhysical(lastResolvedTs)
+	nextResolvedPhyTs := oracle.ExtractPhysical(ts)
+	decreaseLag := float64(nextResolvedPhyTs-resolvedPhyTs) / 1e3
+	const largeResolvedTsAdvanceStepInSecs = 30
+	if decreaseLag > largeResolvedTsAdvanceStepInSecs {
+		log.Warn("resolved ts advance step is too large",
+			zap.Uint64("subID", uint64(span.subID)),
+			zap.Int64("tableID", span.span.TableID),
+			zap.Uint64("regionID", regionID),
+			zap.Uint64("resolvedTs", ts),
+			zap.Uint64("lastResolvedTs", lastResolvedTs),
+			zap.Float64("decreaseLag(s)", decreaseLag))
+	}
+	span.resolvedTs.Store(ts)
+	span.resolvedTsUpdated.Store(time.Now().Unix())
+	return ts
+}
+
 func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	util.MustCompareAndMonotonicIncrease(&span.staleLocksTargetTs, targetTs)
 	res := span.rangeLock.IterAll(span.tryResolveLock)
