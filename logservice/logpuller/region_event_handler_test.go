@@ -245,7 +245,7 @@ func TestHandleResolvedTs(t *testing.T) {
 			context.Background(), span.StartKey, span.EndKey, 1, 1)
 		require.Equal(t, regionlock.LockRangeStatusSuccess, lockResult.Status)
 		state1.region.lockedRangeState = lockResult.LockedRangeState
-		subSpan.markRegionInitialized(state1)
+		state1.setInitialized()
 		state1.updateResolvedTs(9)
 	}
 
@@ -272,7 +272,7 @@ func TestHandleResolvedTs(t *testing.T) {
 			context.Background(), span.StartKey, span.EndKey, 2, 2)
 		require.Equal(t, regionlock.LockRangeStatusSuccess, lockResult.Status)
 		state2.region.lockedRangeState = lockResult.LockedRangeState
-		subSpan.markRegionInitialized(state2)
+		state2.setInitialized()
 		state2.updateResolvedTs(11)
 	}
 

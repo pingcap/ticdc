@@ -162,6 +162,7 @@ func (s *regionFeedState) isInitialized() bool {
 
 func (s *regionFeedState) setInitialized() {
 	s.region.lockedRangeState.Initialized.Store(true)
+	s.worker.requestCache.resolve(s.region.subscribedSpan.subID, s.region.verID.GetID())
 }
 
 func (s *regionFeedState) getRegionID() uint64 {

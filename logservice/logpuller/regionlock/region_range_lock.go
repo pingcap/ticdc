@@ -230,6 +230,7 @@ func (l *RangeLock) UnlockRange(
 	if entry, ok = l.lockedRanges.Delete(entry); !ok {
 		panic("unreachable")
 	}
+
 	// Remove the entry from the heap
 	if ok = l.lockedRangeStateHeap.Remove(&entry.lockedRangeState); !ok {
 		panic("unreachable")
@@ -466,6 +467,7 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		l.lockedRanges.ReplaceOrInsert(newEntry)
 		l.regionIDToLockedRanges[regionID] = newEntry
 		l.lockedRangeStateHeap.AddOrUpdate(&newEntry.lockedRangeState)
+
 		l.unlockedRanges.unset(startKey, endKey)
 		log.Debug("range locked",
 			zap.Uint64("lockID", l.id),

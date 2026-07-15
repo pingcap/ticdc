@@ -122,7 +122,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	}
 
 	// Task will be triggered after initialized.
-	span.markRegionInitialized(state)
+	state.setInitialized()
 	span.resolveStaleLocks(200)
 	select {
 	case task := <-client.resolveLockTaskCh:
