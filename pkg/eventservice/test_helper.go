@@ -17,6 +17,7 @@ import (
 	"context"
 	"math"
 	"sort"
+	"sync"
 
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -35,19 +36,25 @@ type mockSchemaStore struct {
 	TableInfo map[common.TableID]*mockVersionTableInfo
 	Tables    []commonEvent.Table
 
-	resolvedTs     uint64
-	maxDDLCommitTs uint64
+	resolvedTs      uint64
+	maxDDLCommitTs  uint64
+	getDDLStateHook func()
 
 	registerTableError error
 	getTableInfoError  error
+
+	resolvedTsNotifierMu sync.Mutex
+	resolvedTsNotifierID uint64
+	resolvedTsNotifiers  map[uint64]schemastore.ResolvedTsNotifier
 }
 
 func NewMockSchemaStore() *mockSchemaStore {
 	return &mockSchemaStore{
-		DDLEvents:      make(map[common.TableID][]commonEvent.DDLEvent),
-		TableInfo:      make(map[common.TableID]*mockVersionTableInfo),
-		resolvedTs:     math.MaxUint64,
-		maxDDLCommitTs: math.MaxUint64,
+		DDLEvents:           make(map[common.TableID][]commonEvent.DDLEvent),
+		TableInfo:           make(map[common.TableID]*mockVersionTableInfo),
+		resolvedTs:          math.MaxUint64,
+		maxDDLCommitTs:      math.MaxUint64,
+		resolvedTsNotifiers: make(map[uint64]schemastore.ResolvedTsNotifier),
 	}
 }
 
@@ -116,10 +123,14 @@ func (m *mockSchemaStore) GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta,
 }
 
 func (m *mockSchemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (schemastore.DDLEventState, error) {
-	return schemastore.DDLEventState{
+	state := schemastore.DDLEventState{
 		ResolvedTs:       m.resolvedTs,
 		MaxEventCommitTs: m.maxDDLCommitTs,
-	}, nil
+	}
+	if m.getDDLStateHook != nil {
+		m.getDDLStateHook()
+	}
+	return state, nil
 }
 
 func (m *mockSchemaStore) RegisterTable(
@@ -158,6 +169,20 @@ func (m *mockSchemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.Keyspac
 
 func (m *mockSchemaStore) RegisterKeyspace(ctx context.Context, keyspaceMeta common.KeyspaceMeta) error {
 	return nil
+}
+
+func (m *mockSchemaStore) RegisterResolvedTsNotifier(notifier schemastore.ResolvedTsNotifier) func() {
+	m.resolvedTsNotifierMu.Lock()
+	m.resolvedTsNotifierID++
+	id := m.resolvedTsNotifierID
+	m.resolvedTsNotifiers[id] = notifier
+	m.resolvedTsNotifierMu.Unlock()
+
+	return func() {
+		m.resolvedTsNotifierMu.Lock()
+		delete(m.resolvedTsNotifiers, id)
+		m.resolvedTsNotifierMu.Unlock()
+	}
 }
 
 func (m *mockSchemaStore) GetKVStorage(keyspaceID uint32) (kv.Storage, error) {

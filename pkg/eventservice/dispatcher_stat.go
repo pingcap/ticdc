@@ -39,6 +39,24 @@ const (
 	updateScanLimitInterval = time.Second * 10
 )
 
+type dispatcherScanState uint8
+
+const (
+	dispatcherScanIdle dispatcherScanState = iota
+	dispatcherScanQueued
+	dispatcherScanRunning
+	dispatcherScanSchemaBlocked
+	dispatcherScanRemoved
+)
+
+type dispatcherScanFinishAction uint8
+
+const (
+	dispatcherScanFinished dispatcherScanFinishAction = iota
+	dispatcherScanRequeue
+	dispatcherScanParked
+)
+
 // Store the progress of the dispatcher, and the incremental events stats.
 // Those information will be used to decide when will the worker start to handle the push task of this dispatcher.
 type dispatcherStat struct {
@@ -125,10 +143,10 @@ type dispatcherStat struct {
 	lastReceivedHeartbeatTime atomic.Int64
 
 	// Scan task related
-	// taskScanning is used to indicate whether the scan task is running.
-	// If so, we should wait until it is done before we send next resolvedTs event of
-	// this dispatcher.
-	isTaskScanning atomic.Bool
+	scanMu               sync.Mutex
+	scanState            dispatcherScanState
+	scanPending          bool
+	schemaBlockedUntilTs uint64
 }
 
 func newDispatcherStat(
@@ -194,6 +212,131 @@ func (a *dispatcherStat) copyStatistics(src *dispatcherStat) {
 
 	a.lastReceivedResolvedTsTime.Store(src.lastReceivedResolvedTsTime.Load())
 	a.lastSentResolvedTsTime.Store(src.lastSentResolvedTsTime.Load())
+}
+
+// requestScan coalesces a normal scan request and returns whether one task
+// should be enqueued. A schema-blocked dispatcher is woken only by SchemaStore.
+func (a *dispatcherStat) requestScan() bool {
+	if a.isRemoved.Load() {
+		return false
+	}
+
+	a.scanMu.Lock()
+	defer a.scanMu.Unlock()
+	if a.isRemoved.Load() || a.scanState == dispatcherScanRemoved {
+		return false
+	}
+
+	switch a.scanState {
+	case dispatcherScanIdle:
+		a.scanState = dispatcherScanQueued
+		return true
+	case dispatcherScanRunning:
+		a.scanPending = true
+	}
+	return false
+}
+
+// requestSchemaScan wakes a dispatcher only after the applied SchemaStore
+// frontier crosses the range boundary that parked it. The second result tells
+// the caller whether the dispatcher remains schema-blocked.
+func (a *dispatcherStat) requestSchemaScan(resolvedTs uint64) (enqueue bool, blocked bool) {
+	if a.isRemoved.Load() {
+		return false, false
+	}
+
+	a.scanMu.Lock()
+	defer a.scanMu.Unlock()
+	if a.isRemoved.Load() || a.scanState == dispatcherScanRemoved {
+		return false, false
+	}
+
+	switch a.scanState {
+	case dispatcherScanRunning:
+		a.scanPending = true
+		return false, false
+	case dispatcherScanSchemaBlocked:
+		if resolvedTs <= a.schemaBlockedUntilTs {
+			return false, true
+		}
+		a.scanState = dispatcherScanQueued
+		a.schemaBlockedUntilTs = 0
+		return true, false
+	default:
+		return false, false
+	}
+}
+
+func (a *dispatcherStat) resumeSchemaScan() bool {
+	a.scanMu.Lock()
+	defer a.scanMu.Unlock()
+	if a.isRemoved.Load() || a.scanState != dispatcherScanSchemaBlocked {
+		return false
+	}
+	a.scanState = dispatcherScanQueued
+	a.schemaBlockedUntilTs = 0
+	return true
+}
+
+func (a *dispatcherStat) beginScan() bool {
+	a.scanMu.Lock()
+	defer a.scanMu.Unlock()
+	if a.isRemoved.Load() || a.scanState != dispatcherScanQueued {
+		return false
+	}
+	a.scanState = dispatcherScanRunning
+	return true
+}
+
+func (a *dispatcherStat) cancelQueuedScan() {
+	a.scanMu.Lock()
+	defer a.scanMu.Unlock()
+	if a.scanState == dispatcherScanQueued {
+		a.scanState = dispatcherScanIdle
+	}
+}
+
+func (a *dispatcherStat) finishScan(interrupted bool, blockOnSchema bool, blockedUntilTs uint64) dispatcherScanFinishAction {
+	a.scanMu.Lock()
+	defer a.scanMu.Unlock()
+	if a.isRemoved.Load() || a.scanState == dispatcherScanRemoved {
+		a.scanState = dispatcherScanRemoved
+		a.scanPending = false
+		return dispatcherScanFinished
+	}
+	if a.scanState != dispatcherScanRunning {
+		return dispatcherScanFinished
+	}
+
+	if interrupted || a.scanPending {
+		a.scanState = dispatcherScanQueued
+		a.scanPending = false
+		return dispatcherScanRequeue
+	}
+	if blockOnSchema {
+		a.scanState = dispatcherScanSchemaBlocked
+		a.schemaBlockedUntilTs = blockedUntilTs
+		return dispatcherScanParked
+	}
+
+	a.scanState = dispatcherScanIdle
+	a.schemaBlockedUntilTs = 0
+	return dispatcherScanFinished
+}
+
+func (a *dispatcherStat) markRemoved() {
+	a.isRemoved.Store(true)
+	a.scanMu.Lock()
+	a.scanState = dispatcherScanRemoved
+	a.scanPending = false
+	a.schemaBlockedUntilTs = 0
+	a.scanMu.Unlock()
+}
+
+func (a *dispatcherStat) isScanBusy() bool {
+	a.scanMu.Lock()
+	defer a.scanMu.Unlock()
+	return a.scanState == dispatcherScanQueued || a.scanState == dispatcherScanRunning
 }
 
 func (a *dispatcherStat) isHandshaked() bool {

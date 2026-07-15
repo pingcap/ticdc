@@ -271,6 +271,12 @@ func (s *bootstrapSchemaStoreForTest) RegisterKeyspace(
 	return nil
 }
 
+func (s *bootstrapSchemaStoreForTest) RegisterResolvedTsNotifier(
+	notifier schemastore.ResolvedTsNotifier,
+) func() {
+	return func() {}
+}
+
 func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
 	manager := createTestManager(t)
 
