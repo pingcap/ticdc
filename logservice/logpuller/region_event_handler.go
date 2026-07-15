@@ -291,6 +291,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("regionID", regionID),
 					zap.Uint64("resolvedTs", span.resolvedTs.Load()))
 			}
+			state.worker.requestCache.resolve(span.subID, regionID)
 			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
