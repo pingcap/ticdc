@@ -353,8 +353,8 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 	res2 := l.LockRange(ctx, []byte("m"), []byte("z"), 2, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res2.Status)
 
-	l.MarkInitialized(1, res1.LockedRangeState)
-	l.MarkInitialized(2, res2.LockedRangeState)
+	res1.LockedRangeState.Initialized.Store(true)
+	res2.LockedRangeState.Initialized.Store(true)
 
 	// Make the heap order deterministic, then update ResolvedTs without updating the heap to simulate a stale heap.
 	res1.LockedRangeState.ResolvedTs.Store(1)
@@ -388,7 +388,7 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 	require.Equal(t, uint64(200), handleResolvedTs(span, state, 300))
 }
 
-func TestSpanInitializedAfterAllRegionsInitialized(t *testing.T) {
+func TestSpanInitializedAfterAllRangesInitialized(t *testing.T) {
 	ctx := context.Background()
 	rangeLock := regionlock.NewRangeLock(1, []byte("a"), []byte("z"), 100)
 	firstLock := rangeLock.LockRange(ctx, []byte("a"), []byte("m"), 1, 1)
@@ -399,14 +399,19 @@ func TestSpanInitializedAfterAllRegionsInitialized(t *testing.T) {
 	span := &subscribedSpan{
 		subID:     SubscriptionID(1),
 		startTs:   100,
+		span:      heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("z")},
 		rangeLock: rangeLock,
 	}
 	span.resolvedTs.Store(span.startTs)
 	worker := &regionRequestWorker{requestCache: newRequestCache(2)}
-	newState := func(regionID uint64, lockedRangeState *regionlock.LockedRangeState) *regionFeedState {
+	newState := func(
+		regionID uint64, regionSpan heartbeatpb.TableSpan,
+		lockedRangeState *regionlock.LockedRangeState,
+	) *regionFeedState {
 		state := newRegionFeedState(
 			regionInfo{
 				verID:            tikv.NewRegionVerID(regionID, 1, 1),
+				span:             regionSpan,
 				rpcCtx:           &tikv.RPCContext{},
 				subscribedSpan:   span,
 				lockedRangeState: lockedRangeState,
@@ -417,8 +422,12 @@ func TestSpanInitializedAfterAllRegionsInitialized(t *testing.T) {
 		state.start()
 		return state
 	}
-	firstState := newState(1, firstLock.LockedRangeState)
-	secondState := newState(2, secondLock.LockedRangeState)
+	firstState := newState(1,
+		heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("m")},
+		firstLock.LockedRangeState)
+	secondState := newState(2,
+		heartbeatpb.TableSpan{StartKey: []byte("m"), EndKey: []byte("z")},
+		secondLock.LockedRangeState)
 
 	handler := &regionEventHandler{}
 	initializedEvent := func(state *regionFeedState) regionEvent {
