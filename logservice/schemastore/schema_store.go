@@ -105,6 +105,7 @@ const schemaStoreGCDeleteTimeout = 10 * time.Second
 
 func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 	pendingTs := s.pendingResolvedTs.Load()
+	resolvedTs := s.resolvedTs.Load()
 	defer func() {
 		pdPhyTs := oracle.GetPhysical(s.pdClock.CurrentTime())
 		resolvedPhyTs := oracle.ExtractPhysical(pendingTs)
@@ -112,11 +113,11 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 		metrics.SchemaStoreResolvedTsLagGauge.Set(resolvedLag)
 	}()
 
-	if pendingTs <= s.resolvedTs.Load() {
+	if pendingTs <= resolvedTs {
 		return
 	}
 	resolvedEvents := s.unsortedCache.fetchSortedDDLEventBeforeTS(pendingTs)
-	for _, event := range resolvedEvents {
+	for idx, event := range resolvedEvents {
 		if event.Job.BinlogInfo.SchemaVersion == 0 /* means the ddl is ignored in upstream */ {
 			log.Info("skip ddl job with empty SchemaVersion",
 				zap.Any("type", event.Job.Type),
@@ -151,12 +152,43 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 			zap.Any("storeSchemaVersion", s.schemaVersion),
 			zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
 
-		// need to update the following two members for every event to filter out later duplicate events
+		err := s.dataStorage.handleDDLJob(event.Job)
+		if err != nil {
+			// Keep failed and later events for retry. They are removed from cache when fetched.
+			for _, pendingEvent := range resolvedEvents[idx:] {
+				s.unsortedCache.addDDLEvent(pendingEvent)
+			}
+			pendingTs = resolvedTs
+			// A resolved ts cannot split events with the same commit ts.
+			lastHandledEventIdx := idx - 1
+			for lastHandledEventIdx >= 0 &&
+				resolvedEvents[lastHandledEventIdx].CommitTs == event.CommitTs {
+				lastHandledEventIdx--
+			}
+			if lastHandledEventIdx >= 0 && resolvedEvents[lastHandledEventIdx].CommitTs > pendingTs {
+				pendingTs = resolvedEvents[lastHandledEventIdx].CommitTs
+			}
+			log.Error("handle ddl job failed, retry later",
+				zap.Int64("schemaID", event.Job.SchemaID),
+				zap.String("schemaName", event.Job.SchemaName),
+				zap.Int64("tableID", event.Job.TableID),
+				zap.String("tableName", event.Job.TableName),
+				zap.Any("type", event.Job.Type),
+				zap.String("DDL", event.Job.Query),
+				zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
+				zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
+				zap.Uint64("jobCommitTs", event.CommitTs),
+				zap.Any("storeSchemaVersion", s.schemaVersion),
+				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs),
+				zap.Error(err))
+			break
+		}
+
+		// Update dedup watermark only after DDL is persisted successfully.
 		s.schemaVersion = event.Job.BinlogInfo.SchemaVersion
 		s.finishedDDLTs = event.Job.BinlogInfo.FinishedTS
-
-		s.dataStorage.handleDDLJob(event.Job)
 	}
+
 	// When register a new table, it will load all ddl jobs from disk for the table,
 	// so we can only update resolved ts after all ddl jobs are written to disk
 	// Can we optimize it to update resolved ts more eagerly?
