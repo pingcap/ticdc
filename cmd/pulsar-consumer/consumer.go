@@ -41,7 +41,6 @@ func newConsumer(ctx context.Context, option *option) *consumer {
 		pulsarURL = "pulsar" + "://" + strings.Join(option.address, ",")
 	}
 	topicName := option.topic
-	subscriptionName := "pulsar-test-subscription"
 
 	clientOption := pulsar.ClientOptions{
 		URL:    pulsarURL,
@@ -82,7 +81,7 @@ func newConsumer(ctx context.Context, option *option) *consumer {
 
 	consumerConfig := pulsar.ConsumerOptions{
 		Topic:                       topicName,
-		SubscriptionName:            subscriptionName,
+		SubscriptionName:            option.subscriptionName,
 		Type:                        pulsar.Exclusive,
 		SubscriptionInitialPosition: pulsar.SubscriptionPositionEarliest,
 	}
@@ -115,7 +114,7 @@ func (c *consumer) readMessage(ctx context.Context) error {
 			if !needCommit {
 				continue
 			}
-			err := c.pulsarConsumer.AckID(consumerMsg.Message.ID())
+			err := c.pulsarConsumer.AckID(consumerMsg.ID())
 			if err != nil {
 				log.Panic("Error ack message", zap.Error(err))
 			}

@@ -279,16 +279,19 @@ func (b *BatchDMLEvent) encodeV1() ([]byte, error) {
 // AssembleRows assembles the Rows from the RawRows.
 // It also sets the TableInfo and clears the RawRows.
 func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
-	defer func() {
-		b.TableInfo.InitPrivateFields()
-	}()
-	// rows is already set, no need to assemble again
-	// When the event is passed from the same node, the Rows is already set.
-	if b.Rows != nil {
-		return
-	}
 	if tableInfo == nil {
 		log.Panic("DMLEvent: TableInfo is nil")
+	}
+
+	// For local events (same node), rows are already set.
+	if b.Rows != nil {
+		if !tableInfo.TableName.IsRouted() {
+			return
+		}
+		b.TableInfo = tableInfo
+		for _, dml := range b.DMLEvents {
+			dml.TableInfo = tableInfo
+		}
 		return
 	}
 
@@ -297,10 +300,16 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 		return
 	}
 
-	if b.TableInfo != nil && b.TableInfo.GetUpdateTS() != tableInfo.GetUpdateTS() {
-		log.Panic("DMLEvent: TableInfoVersion mismatch", zap.Uint64("dmlEventTableInfoVersion", b.TableInfo.GetUpdateTS()), zap.Uint64("tableInfoVersion", tableInfo.GetUpdateTS()))
-		return
+	if b.TableInfo != nil {
+		originVersion := b.TableInfo.GetUpdateTS()
+		version := tableInfo.GetUpdateTS()
+		if originVersion != version {
+			log.Panic("table version mismatch when decode remote raw rows",
+				zap.Uint64("originTableVersion", originVersion),
+				zap.Uint64("tableVersion", version))
+		}
 	}
+
 	decoder := chunk.NewCodec(tableInfo.GetFieldSlice())
 	b.Rows, _ = decoder.Decode(b.RawRows)
 	b.TableInfo = tableInfo
@@ -537,6 +546,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		chk *chunk.Chunk,
 	) (int, *integrity.Checksum, error),
 	filter filter.Filter,
+	filterContext filter.DMLFilterContext,
 ) error {
 	// Some transactions could generate empty row change event, such as
 	// begin; insert into t (id) values (1); delete from t where id=1; commit;
@@ -592,7 +602,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 
 	if filter != nil {
 		start := time.Now()
-		skip, err := filter.ShouldIgnoreDML(rowType, preRow, row, t.TableInfo, raw.StartTs)
+		skip, err := filter.ShouldIgnoreDML(rowType, preRow, row, t.TableInfo, raw.StartTs, filterContext)
 		DMLIgnoreComputeDuration.Observe(time.Since(start).Seconds())
 		if err != nil {
 			return errors.Trace(err)
@@ -610,7 +620,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 			copy(keyCopy, raw.Key)
 			t.RowKeys = append(t.RowKeys, keyCopy)
 		}
-		t.Length += 1
+		t.Length++
 		t.ApproximateSize += raw.GetSize()
 		if checksum != nil {
 			t.Checksum = append(t.Checksum, checksum)

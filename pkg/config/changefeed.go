@@ -110,6 +110,16 @@ func (s FeedState) IsRunning() bool {
 	return s == StateNormal || s == StateWarning
 }
 
+// IsResumable returns true if the feedState can be resumed to StateNormal.
+func (s FeedState) IsResumable() bool {
+	switch s {
+	case StateFailed, StateStopped, StateFinished:
+		return true
+	default:
+		return false
+	}
+}
+
 // RunningError represents some running error from cdc components, such as processor.
 type RunningError struct {
 	Time    time.Time `json:"time"`
@@ -188,9 +198,11 @@ type ChangefeedConfig struct {
 	TimeZone      string `json:"timezone" default:"system"`
 	CaseSensitive bool   `json:"case_sensitive" default:"false"`
 	// if true, force to replicate some ineligible tables
-	ForceReplicate bool          `json:"force_replicate" default:"false"`
-	Filter         *FilterConfig `toml:"filter" json:"filter"`
-	MemoryQuota    uint64        `toml:"memory-quota" json:"memory-quota"`
+	ForceReplicate           bool          `json:"force_replicate" default:"false"`
+	Filter                   *FilterConfig `toml:"filter" json:"filter"`
+	MemoryQuota              uint64        `toml:"memory-quota" json:"memory-quota"`
+	EventCollectorBatchCount *int          `json:"event_collector_batch_count"`
+	EventCollectorBatchBytes *int          `json:"event_collector_batch_bytes"`
 	// sync point related
 	// TODO: Is syncPointRetention|default can be removed?
 	EnableSyncPoint       bool          `json:"enable_sync_point" default:"false"`
@@ -278,6 +290,8 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		SyncPointRetention:            util.GetOrZero(info.Config.SyncPointRetention),
 		EnableSplittableCheck:         util.GetOrZero(info.Config.Scheduler.EnableSplittableCheck),
 		MemoryQuota:                   util.GetOrZero(info.Config.MemoryQuota),
+		EventCollectorBatchCount:      info.Config.EventCollectorBatchCount,
+		EventCollectorBatchBytes:      info.Config.EventCollectorBatchBytes,
 		Epoch:                         info.Epoch,
 		BDRMode:                       util.GetOrZero(info.Config.BDRMode),
 		EnableActiveActive:            util.GetOrZero(info.Config.EnableActiveActive),
@@ -477,8 +491,9 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 		info.rmMQOnlyFields()
 	} else {
 		// remove schema registry for MQ downstream with
-		// protocol other than avro
-		if util.GetOrZero(info.Config.Sink.Protocol) != ProtocolAvro.String() {
+		// protocol other than avro or debezium-avro
+		protocol := util.GetOrZero(info.Config.Sink.Protocol)
+		if protocol != ProtocolAvro.String() && protocol != ProtocolDebeziumAvro.String() {
 			info.Config.Sink.SchemaRegistry = nil
 		}
 	}
@@ -497,10 +512,18 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 }
 
 func (info *ChangeFeedInfo) rmMQOnlyFields() {
-	log.Info("since the downstream is not a MQ, remove MQ only fields",
-		zap.String("keyspace", info.ChangefeedID.Keyspace()),
-		zap.String("changefeed", info.ChangefeedID.Name()))
-	info.Config.Sink.DispatchRules = nil
+	// Don't nil out DispatchRules entirely - it may contain routing rules (TargetSchema/TargetTable)
+	// Remove only MQ-specific fields from each rule.
+	for _, rule := range info.Config.Sink.DispatchRules {
+		if rule == nil {
+			continue
+		}
+		rule.DispatcherRule = ""
+		rule.PartitionRule = ""
+		rule.IndexName = ""
+		rule.Columns = nil
+		rule.TopicRule = ""
+	}
 	info.Config.Sink.SchemaRegistry = nil
 	info.Config.Sink.EncoderConcurrency = nil
 	info.Config.Sink.OnlyOutputUpdatedColumns = nil

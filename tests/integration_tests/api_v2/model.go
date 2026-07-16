@@ -17,7 +17,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 const timeFormat = `"2006-01-02 15:04:05.000"`
@@ -203,10 +203,11 @@ type EventFilterRule struct {
 	// regular expression
 	IgnoreSQL []string `toml:"ignore_sql" json:"ignore_sql"`
 	// sql expression
-	IgnoreInsertValueExpr    string `json:"ignore_insert_value_expr"`
-	IgnoreUpdateNewValueExpr string `json:"ignore_update_new_value_expr"`
-	IgnoreUpdateOldValueExpr string `json:"ignore_update_old_value_expr"`
-	IgnoreDeleteValueExpr    string `json:"ignore_delete_value_expr"`
+	IgnoreInsertValueExpr    string   `json:"ignore_insert_value_expr"`
+	IgnoreUpdateNewValueExpr string   `json:"ignore_update_new_value_expr"`
+	IgnoreUpdateOldValueExpr string   `json:"ignore_update_old_value_expr"`
+	IgnoreDeleteValueExpr    string   `json:"ignore_delete_value_expr"`
+	IgnoreUpdateOnlyColumns  []string `json:"ignore_update_only_columns,omitempty"`
 }
 
 // Table represents a qualified table name.
@@ -256,6 +257,8 @@ type DispatchRule struct {
 	TopicRule     string   `json:"topic"`
 	IndexName     string   `json:"index,omitempty"`
 	Columns       []string `json:"columns,omitempty"`
+	TargetSchema  string   `json:"target-schema,omitempty"`
+	TargetTable   string   `json:"target-table,omitempty"`
 }
 
 // ColumnSelector represents a column selector for a table.

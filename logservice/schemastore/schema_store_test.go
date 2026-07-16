@@ -15,27 +15,28 @@ package schemastore
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/pingcap/log"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
 type flakyEncryptionManagerForTest struct {
-	failTimes int
-	calls     int
+	failTimes  int
+	failOnCall int
+	calls      int
 }
 
 func (m *flakyEncryptionManagerForTest) EncryptData(ctx context.Context, keyspaceID uint32, data []byte) ([]byte, error) {
 	m.calls++
-	if m.calls <= m.failTimes {
-		return nil, errors.New("inject encryption failure")
+	if m.calls <= m.failTimes || m.calls == m.failOnCall {
+		return nil, cerror.New("inject encryption failure")
 	}
 	return data, nil
 }
@@ -57,10 +58,10 @@ func (m *prefixEncryptionManagerForTest) EncryptData(ctx context.Context, keyspa
 
 func (m *prefixEncryptionManagerForTest) DecryptData(ctx context.Context, keyspaceID uint32, encryptedData []byte) ([]byte, error) {
 	if len(encryptedData) < len(encryptedPrefixForTest) {
-		return nil, errors.New("encrypted data too short")
+		return nil, cerror.New("encrypted data too short")
 	}
 	if string(encryptedData[:len(encryptedPrefixForTest)]) != string(encryptedPrefixForTest) {
-		return nil, errors.New("invalid encrypted prefix")
+		return nil, cerror.New("invalid encrypted prefix")
 	}
 	plaintext := make([]byte, len(encryptedData)-len(encryptedPrefixForTest))
 	copy(plaintext, encryptedData[len(encryptedPrefixForTest):])
@@ -143,8 +144,8 @@ func TestIgnoreDDLByCommitTs(t *testing.T) {
 	require.Len(t, tables, 2)
 	tableNames := make(map[string]struct{})
 	for _, tbl := range tables {
-		log.Info("found table", zap.String("name", tbl.SchemaTableName.TableName))
-		tableNames[tbl.SchemaTableName.TableName] = struct{}{}
+		log.Info("found table", zap.String("name", tbl.TableName))
+		tableNames[tbl.TableName] = struct{}{}
 	}
 	require.Contains(t, tableNames, "t1")
 	require.Contains(t, tableNames, "t3")
@@ -202,7 +203,46 @@ func TestTryUpdateResolvedTsRetryAfterDDLHandleFailure(t *testing.T) {
 	tables, err := pstorage.getAllPhysicalTables(1010, nil)
 	require.NoError(t, err)
 	require.Len(t, tables, 1)
-	require.Equal(t, "t1", tables[0].SchemaTableName.TableName)
+	require.Equal(t, "t1", tables[0].TableName)
+}
+
+func TestTryUpdateResolvedTsDoesNotAdvancePastFailedDDLAtSameCommitTs(t *testing.T) {
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	pstorage := newPersistentStorageForTest(t.TempDir(), nil)
+	defer func() {
+		require.NoError(t, pstorage.close())
+	}()
+	pstorage.encryptionManager = &flakyEncryptionManagerForTest{failOnCall: 2}
+
+	store := &keyspaceSchemaStore{
+		pdClock:       mockPDClock,
+		unsortedCache: newDDLCache(),
+		dataStorage:   pstorage,
+		notifyCh:      make(chan any, 1),
+	}
+	store.resolvedTs.Store(pstorage.gcTs)
+	store.pendingResolvedTs.Store(pstorage.gcTs)
+
+	const commitTs = uint64(1010)
+	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
+	createSchema.BinlogInfo.SchemaVersion = 1
+	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
+	createTable.BinlogInfo.SchemaVersion = 2
+	store.writeDDLEvent(DDLJobWithCommitTs{Job: createSchema, CommitTs: commitTs})
+	store.writeDDLEvent(DDLJobWithCommitTs{Job: createTable, CommitTs: commitTs})
+	store.advancePendingResolvedTs(commitTs)
+
+	store.tryUpdateResolvedTs()
+	require.Equal(t, int64(1), store.schemaVersion)
+	require.Equal(t, uint64(1000), store.finishedDDLTs)
+	require.Less(t, store.resolvedTs.Load(), commitTs)
+
+	store.tryUpdateResolvedTs()
+	require.Equal(t, int64(2), store.schemaVersion)
+	require.Equal(t, uint64(1010), store.finishedDDLTs)
+	require.Equal(t, commitTs, store.resolvedTs.Load())
 }
 
 func TestGetAllPhysicalTablesDecryptsEncryptedDDLEvents(t *testing.T) {
@@ -229,7 +269,7 @@ func TestGetAllPhysicalTablesDecryptsEncryptedDDLEvents(t *testing.T) {
 	require.Len(t, tables, 1)
 	require.Equal(t, int64(200), tables[0].TableID)
 	require.Equal(t, int64(100), tables[0].SchemaID)
-	require.Equal(t, "t1", tables[0].SchemaTableName.TableName)
+	require.Equal(t, "t1", tables[0].TableName)
 }
 
 func TestRegisterTableDecryptsEncryptedDDLEvents(t *testing.T) {
@@ -257,4 +297,23 @@ func TestRegisterTableDecryptsEncryptedDDLEvents(t *testing.T) {
 	tableInfo, err := pstorage.getTableInfo(200, 1010)
 	require.NoError(t, err)
 	require.NotNil(t, tableInfo)
+}
+
+func TestGetAllPhysicalTablesReturnsSnapshotLostByGCError(t *testing.T) {
+	dir := t.TempDir()
+	pstorage := newPersistentStorageForTest(dir, nil)
+	defer func() {
+		err := pstorage.close()
+		require.NoError(t, err)
+	}()
+
+	pstorage.mu.Lock()
+	pstorage.gcTs = 100
+	pstorage.mu.Unlock()
+
+	_, err := pstorage.getAllPhysicalTables(99, nil)
+	require.Error(t, err)
+	require.True(t, cerror.ErrSnapshotLostByGC.Equal(err))
+	require.Contains(t, err.Error(), "checkpoint-ts 99 is earlier than or equal to GC safepoint at 100")
+	require.NotContains(t, err.Error(), "%!d")
 }

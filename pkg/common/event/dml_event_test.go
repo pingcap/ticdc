@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -53,19 +54,19 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 		err := e.AppendRow(&common.RawKVEntry{
 			OpType: common.OpTypePut,
 			Value:  []byte("value1"),
-		}, mockDecodeRawKVToChunk, nil)
+		}, mockDecodeRawKVToChunk, nil, filter.DMLFilterContext{})
 		require.Nil(t, err)
 		// update
 		err = e.AppendRow(&common.RawKVEntry{
 			OpType:   common.OpTypePut,
 			Value:    []byte("value1"),
 			OldValue: []byte("old_value1"),
-		}, mockDecodeRawKVToChunk, nil)
+		}, mockDecodeRawKVToChunk, nil, filter.DMLFilterContext{})
 		require.Nil(t, err)
 		// delete
 		err = e.AppendRow(&common.RawKVEntry{
 			OpType: common.OpTypeDelete,
-		}, mockDecodeRawKVToChunk, nil)
+		}, mockDecodeRawKVToChunk, nil, filter.DMLFilterContext{})
 		require.Nil(t, err)
 	}
 	// TableInfo is not encoded, for test comparison purpose, set it to nil.
@@ -148,6 +149,104 @@ func TestBatchDMLEvent(t *testing.T) {
 	data, err = batchDMLEvent.Marshal()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported BatchDMLEvent version")
+}
+
+func TestBatchDMLEventAssembleRowsRebindsRoutedTableInfoForLocalRows(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.tk.MustExec("use test")
+	helper.DDL2Job(createTableSQL)
+
+	dmlEvent := helper.DML2Event("test", "t", insertDataSQL)
+	require.NotNil(t, dmlEvent)
+
+	originTableInfo := dmlEvent.TableInfo
+	routedTableInfo := originTableInfo.CloneWithRouting("target_schema", "target_table")
+	require.NotNil(t, routedTableInfo)
+
+	batchDMLEvent := &BatchDMLEvent{
+		Version:       BatchDMLEventVersion1,
+		DMLEventCount: 1,
+		DMLEvents:     []*DMLEvent{dmlEvent},
+		Rows:          dmlEvent.Rows,
+		TableInfo:     originTableInfo,
+	}
+
+	batchDMLEvent.AssembleRows(routedTableInfo)
+
+	require.Same(t, dmlEvent.Rows, batchDMLEvent.Rows)
+	require.Same(t, routedTableInfo, batchDMLEvent.TableInfo)
+	require.Same(t, routedTableInfo, batchDMLEvent.DMLEvents[0].TableInfo)
+	require.Equal(t, "target_schema", batchDMLEvent.TableInfo.GetTargetSchemaName())
+	require.Equal(t, "target_table", batchDMLEvent.TableInfo.GetTargetTableName())
+	require.Contains(t, batchDMLEvent.TableInfo.GetPreInsertSQL(), common.QuoteSchema("target_schema", "target_table"))
+}
+
+func TestBatchDMLEventAssembleRowsKeepsOriginalTableInfoForLocalRowsWithoutRouting(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.tk.MustExec("use test")
+	helper.DDL2Job(createTableSQL)
+
+	dmlEvent := helper.DML2Event("test", "t", insertDataSQL)
+	require.NotNil(t, dmlEvent)
+
+	originTableInfo := dmlEvent.TableInfo
+	notRoutedTableInfo := originTableInfo.CloneWithRouting("", "")
+	require.NotNil(t, notRoutedTableInfo)
+	require.False(t, notRoutedTableInfo.TableName.IsRouted())
+	notRoutedTableInfo.UpdateTS++
+
+	batchDMLEvent := &BatchDMLEvent{
+		Version:       BatchDMLEventVersion1,
+		DMLEventCount: 1,
+		DMLEvents:     []*DMLEvent{dmlEvent},
+		Rows:          dmlEvent.Rows,
+		TableInfo:     originTableInfo,
+	}
+
+	batchDMLEvent.AssembleRows(notRoutedTableInfo)
+
+	require.Same(t, dmlEvent.Rows, batchDMLEvent.Rows)
+	require.Same(t, originTableInfo, batchDMLEvent.TableInfo)
+	require.Same(t, originTableInfo, batchDMLEvent.DMLEvents[0].TableInfo)
+	require.Equal(t, "test", batchDMLEvent.TableInfo.GetTargetSchemaName())
+	require.Equal(t, "t", batchDMLEvent.TableInfo.GetTargetTableName())
+}
+
+func TestBatchDMLEventAssembleRowsDecodesRemoteRawRows(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.tk.MustExec("use test")
+	helper.DDL2Job(createTableSQL)
+
+	dmlEvent := helper.DML2Event("test", "t", insertDataSQL)
+	require.NotNil(t, dmlEvent)
+
+	batchDMLEvent := &BatchDMLEvent{
+		Version:       BatchDMLEventVersion1,
+		DMLEventCount: 1,
+		DMLEvents:     []*DMLEvent{dmlEvent},
+		Rows:          dmlEvent.Rows,
+		TableInfo:     dmlEvent.TableInfo,
+	}
+	data, err := batchDMLEvent.Marshal()
+	require.NoError(t, err)
+
+	reverseEvents := &BatchDMLEvent{}
+	err = reverseEvents.Unmarshal(data)
+	require.NoError(t, err)
+	require.Nil(t, reverseEvents.Rows)
+	require.NotEmpty(t, reverseEvents.RawRows)
+
+	reverseEvents.AssembleRows(batchDMLEvent.TableInfo)
+
+	require.Nil(t, reverseEvents.RawRows)
+	require.Same(t, batchDMLEvent.TableInfo, reverseEvents.TableInfo)
+	require.Equal(t, batchDMLEvent.Rows.ToString(batchDMLEvent.TableInfo.GetFieldSlice()), reverseEvents.Rows.ToString(batchDMLEvent.TableInfo.GetFieldSlice()))
 }
 
 func TestEncodeAnddecodeV1(t *testing.T) {

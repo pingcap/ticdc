@@ -31,7 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
+	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
 	"github.com/stretchr/testify/require"
 	"github.com/uber-go/atomic"
 	"go.uber.org/mock/gomock"
@@ -240,7 +240,7 @@ func TestNewWriter(t *testing.T) {
 	require.False(t, w.IsRunning())
 
 	controller := gomock.NewController(t)
-	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage := mockobjstore.NewMockStorage(controller)
 
 	changefeed := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 		Keyspace: "abcd",
@@ -258,6 +258,7 @@ func TestNewWriter(t *testing.T) {
 		expectedLogFileName(ddlWriterCfg, redo.RedoDDLLogFileType, 0, "const-uuid"),
 		gomock.Any(),
 	).Return(nil).Times(1)
+	mockStorage.EXPECT().Close().Times(1)
 	w = &Writer{
 		logType:   redo.RedoDDLLogFileType,
 		cfg:       ddlWriterCfg,
@@ -307,7 +308,7 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 	t.Parallel()
 
 	controller := gomock.NewController(t)
-	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage := mockobjstore.NewMockStorage(controller)
 
 	dir := t.TempDir()
 	uuidGen := uuid.NewMock()
@@ -337,6 +338,7 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 		expectedLogFileName(rowWriterCfg, redo.RedoRowLogFileType, 100, "uuid-2"),
 		gomock.Any(),
 	).Return(nil).Times(1)
+	mockStorage.EXPECT().Close().Times(1)
 	w := &Writer{
 		logType:   redo.RedoRowLogFileType,
 		cfg:       rowWriterCfg,
@@ -373,7 +375,7 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 	t.Parallel()
 
 	controller := gomock.NewController(t)
-	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage := mockobjstore.NewMockStorage(controller)
 
 	dir := t.TempDir()
 	uuidGen := uuid.NewMock()
@@ -404,6 +406,7 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 		expectedLogFileName(ddlWriterCfg, redo.RedoDDLLogFileType, 100, "uuid-4"),
 		gomock.Any(),
 	).Return(nil).Times(1)
+	mockStorage.EXPECT().Close().Times(1)
 	w := &Writer{
 		logType:   redo.RedoDDLLogFileType,
 		cfg:       ddlWriterCfg,

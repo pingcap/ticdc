@@ -37,6 +37,10 @@ func (noopGCManager) TryUpdateServiceGCSafepoint(ctx context.Context, checkpoint
 	return nil
 }
 
+func (noopGCManager) TryDeleteServiceGCSafepoint(ctx context.Context) error {
+	return nil
+}
+
 func (noopGCManager) CheckStaleCheckpointTs(keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
 	return nil
 }
@@ -73,6 +77,28 @@ func (c *blockingPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesCli
 	return &blockingGCStatesClient{parent: c}
 }
 
+func (c *blockingPdClient) GetMinServiceSafePointV2(ctx context.Context, keyspaceID uint32) (uint64, error) {
+	return 0, nil
+}
+
+func (c *blockingPdClient) SetServiceSafePointV2(
+	ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64,
+) (uint64, error) {
+	return safePoint, nil
+}
+
+func (c *blockingPdClient) DeleteServiceSafePointV2(
+	ctx context.Context, keyspaceID uint32, serviceID string,
+) (uint64, error) {
+	c.markStarted()
+	select {
+	case <-c.releaseUndo:
+		return 0, nil
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
 type blockingGCStatesClient struct {
 	parent *blockingPdClient
 }
@@ -93,8 +119,26 @@ func (c *blockingGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID 
 	}
 }
 
-func (c *blockingGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+func (c *blockingGCStatesClient) GetGCState(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
 	return pdgc.GCState{}, nil
+}
+
+func (c *blockingGCStatesClient) SetGlobalGCBarrier(
+	ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return pdgc.NewGlobalGCBarrierInfo(barrierID, barrierTS, ttl, time.Now()), nil
+}
+
+func (c *blockingGCStatesClient) DeleteGlobalGCBarrier(
+	ctx context.Context, barrierID string,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return nil, nil
+}
+
+func (c *blockingGCStatesClient) GetAllKeyspacesGCStates(
+	ctx context.Context, opts ...pdgc.GCStatesAPIOption,
+) (pdgc.ClusterGCStates, error) {
+	return pdgc.NewClusterGCStatesWithoutGlobalGCBarriers(map[uint32]pdgc.GCState{}), nil
 }
 
 func TestTryClearEnsureGCSafepointDoesNotBlockChangefeedChanges(t *testing.T) {

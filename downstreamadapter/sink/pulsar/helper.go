@@ -75,9 +75,13 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
 	factoryCreator pulsar.FactoryCreator,
-) (component, config.Protocol, error) {
-	pulsarComponent := component{}
-	protocol, err := helper.GetProtocol(putil.GetOrZero(sinkConfig.Protocol))
+) (pulsarComponent component, protocol config.Protocol, err error) {
+	defer func() {
+		if err != nil {
+			pulsarComponent.close()
+		}
+	}()
+	protocol, err = helper.GetProtocol(putil.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return pulsarComponent, config.ProtocolUnknown, errors.Trace(err)
 	}
@@ -102,7 +106,7 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.topicManager, err = topicmanager.GetPulsarTopicManagerAndTryCreateTopic(ctx, pulsarComponent.config, topic, pulsarComponent.client)
+	pulsarComponent.topicManager, err = topicmanager.GetPulsarTopicManagerAndTryCreateTopic(ctx, pulsarComponent.config, pulsarComponent.client)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}

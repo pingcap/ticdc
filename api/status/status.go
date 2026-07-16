@@ -87,7 +87,7 @@ func (h *statusAPI) handleDebugInfo(w http.ResponseWriter, req *http.Request) {
 	h.writeEtcdInfo(ctx, h.server.GetEtcdClient(), w)
 }
 
-func (h *statusAPI) handleStatus(w http.ResponseWriter, req *http.Request) {
+func (h *statusAPI) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	st := status{
 		Version: version.ReleaseVersion,
 		GitHash: version.GitHash,

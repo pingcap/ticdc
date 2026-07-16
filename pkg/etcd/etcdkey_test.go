@@ -149,6 +149,9 @@ func TestEtcdKeyParseError(t *testing.T) {
 	}, {
 		key:   "/tidb/cdc/default/default/abcd",
 		error: true,
+	}, {
+		key:   "/tidb/cdc/default-index/default/changefeed/info/changefeed-1",
+		error: true,
 	}}
 	for _, tc := range testCases {
 		k := new(CDCKey)

@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,10 +16,10 @@ package encryption
 import (
 	"bytes"
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,11 +44,11 @@ func (m *mockMetaManager) GetDataKey(ctx context.Context, keyspaceID uint32, dat
 		if m.currentKeyID == dataKeyID && len(m.currentKey) > 0 {
 			return m.currentKey, nil
 		}
-		return nil, errors.New("data key not found")
+		return nil, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("data key not found")
 	}
 	key, ok := m.dataKeys[dataKeyID]
 	if !ok {
-		return nil, errors.New("data key not found")
+		return nil, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("data key not found")
 	}
 	return key, nil
 }
@@ -60,7 +60,7 @@ func setAllowDegradeOnError(t *testing.T, allow bool) func() {
 	t.Helper()
 	original := config.GetGlobalServerConfig().Clone()
 	updated := original.Clone()
-	updated.Debug.Encryption.AllowDegradeOnError = allow
+	updated.Encryption.AllowDegradeOnError = allow
 	config.StoreGlobalServerConfig(updated)
 	return func() {
 		config.StoreGlobalServerConfig(original)
@@ -72,14 +72,18 @@ func TestEncryptDataAllowDegradeOnError(t *testing.T) {
 	defer restore()
 
 	meta := &mockMetaManager{
-		currentKeyErr: errors.New("boom"),
+		currentKeyErr: cerrors.ErrEncryptionFailed.GenWithStackByArgs("boom"),
 	}
 	manager := NewEncryptionManager(meta)
 	input := []byte("payload")
 
 	output, err := manager.EncryptData(context.Background(), 1, input)
 	require.NoError(t, err)
-	require.Equal(t, input, output)
+	require.Equal(t, EncodeUnencryptedData(input), output)
+
+	decrypted, err := manager.DecryptData(context.Background(), 1, output)
+	require.NoError(t, err)
+	require.Equal(t, input, decrypted)
 }
 
 func TestEncryptDataDisallowDegradeOnError(t *testing.T) {
@@ -87,7 +91,7 @@ func TestEncryptDataDisallowDegradeOnError(t *testing.T) {
 	defer restore()
 
 	meta := &mockMetaManager{
-		currentKeyErr: errors.New("boom"),
+		currentKeyErr: cerrors.ErrEncryptionFailed.GenWithStackByArgs("boom"),
 	}
 	manager := NewEncryptionManager(meta)
 	_, err := manager.EncryptData(context.Background(), 1, []byte("payload"))
@@ -104,7 +108,11 @@ func TestEncryptDataDisabledSkipsEncryption(t *testing.T) {
 
 	output, err := manager.EncryptData(context.Background(), 1, input)
 	require.NoError(t, err)
-	require.Equal(t, input, output)
+	require.Equal(t, EncodeUnencryptedData(input), output)
+
+	decrypted, err := manager.DecryptData(context.Background(), 1, output)
+	require.NoError(t, err)
+	require.Equal(t, input, decrypted)
 }
 
 func TestEncryptDecryptRoundTrip(t *testing.T) {
@@ -138,7 +146,7 @@ func TestEncryptDecryptRoundTripWithAES128Key(t *testing.T) {
 	meta := &mockMetaManager{
 		currentKey:   key,
 		currentKeyID: "K02",
-		version:      0x01,
+		version:      0x7F,
 	}
 	manager := NewEncryptionManager(meta)
 
@@ -151,4 +159,28 @@ func TestEncryptDecryptRoundTripWithAES128Key(t *testing.T) {
 	decrypted, err := manager.DecryptData(context.Background(), 1, encrypted)
 	require.NoError(t, err)
 	require.Equal(t, input, decrypted)
+}
+
+func TestDecryptDataRejectsValueWithoutEncryptionLayerHeader(t *testing.T) {
+	manager := NewEncryptionManager(&mockMetaManager{})
+
+	_, err := manager.DecryptData(context.Background(), 1, []byte("abc"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decryption failed")
+}
+
+func TestDecryptDataRejectsInvalidUnencryptedHeader(t *testing.T) {
+	manager := NewEncryptionManager(&mockMetaManager{})
+
+	_, err := manager.DecryptData(context.Background(), 1, []byte{0x00, 0x01, 0x02, 0x03, 'x'})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decryption failed")
+}
+
+func TestDecryptDataRejectsInvalidEncryptedHeader(t *testing.T) {
+	manager := NewEncryptionManager(&mockMetaManager{})
+
+	_, err := manager.DecryptData(context.Background(), 1, []byte{0x01, 0x00, 0x00, 0x00, 'x'})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decryption failed")
 }

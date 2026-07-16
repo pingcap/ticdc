@@ -52,10 +52,11 @@ const (
 
 // MoveDispatcherOperator is an operator to move a table span to the destination dispatcher
 type MoveDispatcherOperator struct {
-	replicaSet     *replica.SpanReplication
-	spanController *span.Controller
-	origin         node.ID
-	dest           node.ID
+	replicaSet      *replica.SpanReplication
+	spanController  *span.Controller
+	origin          node.ID
+	dest            node.ID
+	maintainerEpoch uint64
 
 	// State transitions:
 	//   removeOrigin --(origin stopped)-> addDest --(dest working)-> doneSuccess
@@ -97,13 +98,20 @@ func (m *MoveDispatcherOperator) finishAsAbsent() {
 	m.state = moveStateDoneNoPostFinish
 }
 
-func NewMoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication, origin, dest node.ID) *MoveDispatcherOperator {
+func NewMoveDispatcherOperator(
+	spanController *span.Controller,
+	replicaSet *replica.SpanReplication,
+	origin node.ID,
+	dest node.ID,
+	maintainerEpoch uint64,
+) *MoveDispatcherOperator {
 	return &MoveDispatcherOperator{
-		replicaSet:     replicaSet,
-		origin:         origin,
-		dest:           dest,
-		spanController: spanController,
-		sendThrottler:  newSendThrottler(),
+		replicaSet:      replicaSet,
+		origin:          origin,
+		dest:            dest,
+		spanController:  spanController,
+		maintainerEpoch: maintainerEpoch,
+		sendThrottler:   newSendThrottler(),
 	}
 }
 
@@ -152,9 +160,9 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 
 	switch m.state {
 	case moveStateAddDest:
-		return m.replicaSet.NewAddDispatcherMessage(m.dest, heartbeatpb.OperatorType_O_Move)
+		return m.replicaSet.NewAddDispatcherMessage(m.dest, heartbeatpb.OperatorType_O_Move, m.maintainerEpoch)
 	case moveStateRemoveOrigin, moveStateAbortRemoveOrigin:
-		return m.replicaSet.NewRemoveDispatcherMessage(m.origin, heartbeatpb.OperatorType_O_Move)
+		return m.replicaSet.NewRemoveDispatcherMessage(m.origin, heartbeatpb.OperatorType_O_Move, m.maintainerEpoch)
 	default:
 		return nil
 	}
@@ -213,6 +221,11 @@ func (m *MoveDispatcherOperator) OnNodeRemove(n node.ID) {
 // AffectedNodes returns the nodes affected by the operator
 func (m *MoveDispatcherOperator) AffectedNodes() []node.ID {
 	return []node.ID{m.origin, m.dest}
+}
+
+// OriginNode returns the source node of the move.
+func (m *MoveDispatcherOperator) OriginNode() node.ID {
+	return m.origin
 }
 
 func (m *MoveDispatcherOperator) ID() common.DispatcherID {

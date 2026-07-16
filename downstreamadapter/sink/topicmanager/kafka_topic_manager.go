@@ -19,10 +19,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"go.uber.org/zap"
@@ -46,9 +45,6 @@ type kafkaTopicManager struct {
 	cfg   *kafka.AutoCreateTopicConfig
 
 	topics sync.Map
-
-	metaRefreshTicker *time.Ticker
-
 	// cancel is used to cancel the background goroutine.
 	cancel context.CancelFunc
 }
@@ -66,7 +62,7 @@ func GetTopicManagerAndTryCreateTopic(
 	)
 
 	if _, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic); err != nil {
-		return nil, cerror.WrapError(cerror.ErrKafkaCreateTopic, err)
+		return nil, errors.WrapError(errors.ErrKafkaCreateTopic, err)
 	}
 
 	return topicManager, nil
@@ -81,11 +77,10 @@ func newKafkaTopicManager(
 	cfg *kafka.AutoCreateTopicConfig,
 ) *kafkaTopicManager {
 	mgr := &kafkaTopicManager{
-		defaultTopic:      defaultTopic,
-		changefeedID:      changefeedID,
-		admin:             admin,
-		cfg:               cfg,
-		metaRefreshTicker: time.NewTicker(metaRefreshInterval),
+		defaultTopic: defaultTopic,
+		changefeedID: changefeedID,
+		admin:        admin,
+		cfg:          cfg,
 	}
 
 	ctx, mgr.cancel = context.WithCancel(ctx)
@@ -115,7 +110,7 @@ func (m *kafkaTopicManager) GetPartitionNum(
 }
 
 func (m *kafkaTopicManager) backgroundRefreshMeta(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(metaRefreshInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -126,11 +121,9 @@ func (m *kafkaTopicManager) backgroundRefreshMeta(ctx context.Context) {
 			)
 			return
 		case <-ticker.C:
-			m.admin.Heartbeat()
-		case <-m.metaRefreshTicker.C:
 			// We ignore the error here, because the error may be caused by the
 			// network problem, and we can try to get the metadata next time.
-			topicPartitionNums, _ := m.fetchAllTopicsPartitionsNum(ctx)
+			topicPartitionNums, _ := m.fetchAllTopicsPartitionsNum()
 			for topic, partitionNum := range topicPartitionNums {
 				m.tryUpdatePartitionsAndLogging(topic, partitionNum)
 			}
@@ -169,11 +162,9 @@ func (m *kafkaTopicManager) tryUpdatePartitionsAndLogging(topic string, partitio
 // The error returned by this method could be a transient error that is fixable by the underlying logic.
 // When handling this error, please be cautious.
 // If you simply throw the error to the caller, it may impact the robustness of your program.
-func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum(
-	ctx context.Context,
-) (map[string]int32, error) {
+func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum() (map[string]int32, error) {
 	var topics []string
-	m.topics.Range(func(key, value any) bool {
+	m.topics.Range(func(key, _ any) bool {
 		topics = append(topics, key.(string))
 		return true
 	})
@@ -244,11 +235,11 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 // createTopic creates a topic with the given name
 // and returns the number of partitions.
 func (m *kafkaTopicManager) createTopic(
-	ctx context.Context,
+	_ context.Context,
 	topicName string,
 ) (int32, error) {
 	if !m.cfg.AutoCreate {
-		return 0, cerror.ErrKafkaInvalidConfig.GenWithStack(
+		return 0, errors.ErrKafkaInvalidConfig.GenWithStack(
 			fmt.Sprintf("`auto-create-topic` is false, "+
 				"and %s not found", topicName))
 	}
@@ -270,7 +261,7 @@ func (m *kafkaTopicManager) createTopic(
 			zap.Error(err),
 			zap.Duration("duration", time.Since(start)),
 		)
-		return 0, cerror.WrapError(cerror.ErrKafkaCreateTopic, err)
+		return 0, errors.WrapError(errors.ErrKafkaCreateTopic, err)
 	}
 
 	log.Info(

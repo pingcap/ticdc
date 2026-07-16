@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -27,7 +26,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const timeFormat = `"2006-01-02 15:04:05.000"`
+const (
+	timeFormat     = `"2006-01-02 15:04:05.000"`
+	textTimeFormat = "2006-01-02 15:04:05.000"
+)
 
 // JSONTime used to wrap time into json format
 type JSONTime time.Time
@@ -50,6 +52,22 @@ func (t *JSONTime) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalText implements encoding.TextMarshaler so that TOML (and other text
+// encoders) serialize JSONTime as a string value instead of a table/struct.
+func (t JSONTime) MarshalText() ([]byte, error) {
+	return []byte(time.Time(t).Format(textTimeFormat)), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler for round-trip support.
+func (t *JSONTime) UnmarshalText(data []byte) error {
+	tm, err := time.Parse(textTimeFormat, string(data))
+	if err != nil {
+		return err
+	}
+	*t = JSONTime(tm)
+	return nil
+}
+
 // HTTPError of cdc http api
 type HTTPError struct {
 	Error string `json:"error_msg"`
@@ -68,7 +86,8 @@ func NewHTTPError(err error) HTTPError {
 // httpBadRequestError is some errors that will cause a BadRequestError in http handler
 var httpBadRequestError = []*errors.Error{
 	cerror.ErrAPIInvalidParam, cerror.ErrSinkURIInvalid, cerror.ErrStartTsBeforeGC,
-	cerror.ErrChangeFeedNotExists, cerror.ErrTargetTsBeforeStartTs, cerror.ErrTableIneligible,
+	cerror.ErrChangeFeedNotExists, cerror.ErrChangeFeedAlreadyExists,
+	cerror.ErrTargetTsBeforeStartTs, cerror.ErrTableIneligible,
 	cerror.ErrFilterRuleInvalid, cerror.ErrChangefeedUpdateRefused, cerror.ErrMySQLConnectionError,
 	cerror.ErrMySQLInvalidConfig, cerror.ErrCaptureNotExist, cerror.ErrSchedulerRequestFailed,
 	cerror.ErrActiveActiveTSOIndexIncompatible,
@@ -142,37 +161,5 @@ func WriteData(w http.ResponseWriter, data interface{}) {
 	_, err = w.Write(js)
 	if err != nil {
 		log.Error("fail to write data", zap.Error(err))
-	}
-}
-
-// Liveness can only be changed from alive to stopping, and no way back.
-type Liveness int32
-
-const (
-	// LivenessCaptureAlive means the capture is alive, and ready to serve.
-	LivenessCaptureAlive Liveness = 0
-	// LivenessCaptureStopping means the capture is in the process of graceful shutdown.
-	LivenessCaptureStopping Liveness = 1
-)
-
-// Store the given liveness. Returns true if it success.
-func (l *Liveness) Store(v Liveness) bool {
-	return atomic.CompareAndSwapInt32(
-		(*int32)(l), int32(LivenessCaptureAlive), int32(v))
-}
-
-// Load the liveness.
-func (l *Liveness) Load() Liveness {
-	return Liveness(atomic.LoadInt32((*int32)(l)))
-}
-
-func (l *Liveness) String() string {
-	switch *l {
-	case LivenessCaptureAlive:
-		return "Alive"
-	case LivenessCaptureStopping:
-		return "Stopping"
-	default:
-		return "unknown"
 	}
 }

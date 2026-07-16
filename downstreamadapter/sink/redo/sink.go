@@ -38,10 +38,11 @@ import (
 type Sink struct {
 	ctx          context.Context
 	changefeedID common.ChangeFeedID
-	ddlWriter    writer.RedoLogWriter
-	dmlWriter    writer.RedoLogWriter
+	ddlWriter    writer.RedoDDLWriter
+	dmlWriter    writer.RedoDMLWriter
 
-	logBuffer *chann.UnlimitedChannel[writer.RedoEvent, any]
+	logBuffer         *chann.UnlimitedChannel[*commonEvent.RedoRowEvent, any]
+	maxLogSizeInBytes int
 
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal *atomic.Bool
@@ -67,31 +68,42 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 		return nil, err
 	}
 	s := &Sink{
-		ctx:          ctx,
-		changefeedID: changefeedID,
-		logBuffer:    chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
-		isNormal:     atomic.NewBool(true),
-		isClosed:     atomic.NewBool(false),
+		ctx:               ctx,
+		changefeedID:      changefeedID,
+		logBuffer:         chann.NewUnlimitedChannelDefault[*commonEvent.RedoRowEvent](),
+		maxLogSizeInBytes: int(config.MaxLogSizeInBytes()),
+		isNormal:          atomic.NewBool(true),
+		isClosed:          atomic.NewBool(false),
 	}
 
 	var (
 		start     = time.Now()
-		ddlWriter writer.RedoLogWriter
-		dmlWriter writer.RedoLogWriter
+		ddlWriter writer.RedoDDLWriter
+		dmlWriter writer.RedoDMLWriter
 	)
 	defer func() {
 		if err == nil {
 			return
 		}
 		if ddlWriter != nil {
-			ddlWriter.Close()
+			if closeErr := ddlWriter.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
+				log.Warn("redo: failed to close ddl writer after create failure",
+					zap.String("keyspace", changefeedID.Keyspace()),
+					zap.String("changefeed", changefeedID.Name()),
+					zap.Error(closeErr))
+			}
 		}
 		if dmlWriter != nil {
-			dmlWriter.Close()
+			if closeErr := dmlWriter.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
+				log.Warn("redo: failed to close dml writer after create failure",
+					zap.String("keyspace", changefeedID.Keyspace()),
+					zap.String("changefeed", changefeedID.Name()),
+					zap.Error(closeErr))
+			}
 		}
 	}()
 
-	ddlWriter, err = factory.NewRedoLogWriter(ctx, config, redo.RedoDDLLogFileType)
+	ddlWriter, err = factory.NewRedoDDLWriter(ctx, config)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", changefeedID.Keyspace()),
@@ -100,7 +112,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			zap.Error(err))
 		return nil, err
 	}
-	dmlWriter, err = factory.NewRedoLogWriter(ctx, config, redo.RedoRowLogFileType)
+	dmlWriter, err = factory.NewRedoDMLWriter(ctx, config)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", changefeedID.Keyspace()),
@@ -137,7 +149,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
 		start := time.Now()
-		err := s.ddlWriter.WriteEvents(s.ctx, e)
+		err := s.ddlWriter.WriteDDLEvent(s.ctx, e)
 		if err != nil {
 			s.isNormal.Store(false)
 			return err
@@ -147,7 +159,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		}
 		log.Info("redo sink send DDL event",
 			zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
-			zap.Any("event", e.GetDDLQuery()), zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()),
+			zap.String("query", e.GetDDLQuery()), zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
 			zap.String("schema", e.GetSchemaName()), zap.String("table", e.GetTableName()), zap.Int64("tableID", e.GetTableID()))
 	}
 	return nil
@@ -155,9 +167,14 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	rowsCount := event.Len()
-	events := make([]writer.RedoEvent, 0, rowsCount)
+	events := make([]*commonEvent.RedoRowEvent, 0, rowsCount)
 	rowCallback := helper.NewTxnPostFlushRowCallback(event, uint64(rowsCount))
 
+	var (
+		startTs         = event.GetStartTs()
+		commitTs        = event.GetCommitTs()
+		physicalTableID = event.GetTableID()
+	)
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
@@ -165,10 +182,10 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 			break
 		}
 		events = append(events, &commonEvent.RedoRowEvent{
-			StartTs:         event.StartTs,
-			CommitTs:        event.CommitTs,
+			StartTs:         startTs,
+			CommitTs:        commitTs,
 			Event:           row,
-			PhysicalTableID: event.PhysicalTableID,
+			PhysicalTableID: physicalTableID,
 			TableInfo:       event.TableInfo,
 			Callback:        rowCallback,
 		})
@@ -188,14 +205,14 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *Sink) Close(_ bool) {
+func (s *Sink) Close() {
 	if !s.isClosed.CompareAndSwap(false, true) {
 		return
 	}
 	start := time.Now()
 	s.logBuffer.Close()
 	if s.ddlWriter != nil {
-		if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
+		if err := s.ddlWriter.Close(); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("redo sink fails to close ddl writer",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()),
@@ -203,7 +220,7 @@ func (s *Sink) Close(_ bool) {
 		}
 	}
 	if s.dmlWriter != nil {
-		if err := s.dmlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
+		if err := s.dmlWriter.Close(); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("redo sink fails to close dml writer",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()),
@@ -220,7 +237,7 @@ func (s *Sink) Close(_ bool) {
 }
 
 func (s *Sink) sendMessages(ctx context.Context) error {
-	buffer := make([]writer.RedoEvent, 0, redo.DefaultFlushBatchSize)
+	buffer := make([]*commonEvent.RedoRowEvent, 0, redo.DefaultFlushBatchSize)
 	for {
 		select {
 		case <-ctx.Done():
@@ -237,7 +254,7 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 		buffer = events[:0]
 
 		start := time.Now()
-		err := s.dmlWriter.WriteEvents(ctx, events...)
+		err := s.dmlWriter.AddDMLEvents(ctx, events...)
 		if err != nil {
 			return err
 		}
@@ -248,3 +265,11 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 }
 
 func (s *Sink) AddCheckpointTs(_ uint64) {}
+
+func (s *Sink) BatchCount() int {
+	return 4096
+}
+
+func (s *Sink) BatchBytes() int {
+	return s.maxLogSizeInBytes
+}

@@ -14,9 +14,15 @@
 package server
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/config"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,6 +57,25 @@ func TestBuildTiFlowServerOptionsPropagatesTLSFlags(t *testing.T) {
 	require.Equal(t, []string{"cn1", "cn2"}, oldOptions.ServerConfig.Security.CertAllowedCN)
 
 	require.Equal(t, strings.Join(o.pdEndpoints, ","), oldOptions.ServerPdAddr)
+}
+
+func TestCompleteLoadsEnableLegacySafePointFromConfig(t *testing.T) {
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
+
+	configPath := filepath.Join(t.TempDir(), "server.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("enable-legacy-safepoint = true\n"), 0o644))
+
+	o := newOptions()
+	cmd := &cobra.Command{}
+	o.addFlags(cmd)
+	require.NoError(t, cmd.Flags().Set("config", configPath))
+
+	require.NoError(t, o.complete(cmd))
+	require.True(t, o.serverConfig.EnableLegacySafePoint)
+	require.True(t, config.GetGlobalServerConfig().EnableLegacySafePoint)
 }
 
 func TestGetCredential(t *testing.T) {
@@ -117,4 +142,59 @@ func TestNewOptionsDefaultSecurity(t *testing.T) {
 	require.Empty(t, o.serverConfig.Security.CAPath)
 	require.Empty(t, o.serverConfig.Security.CertPath)
 	require.Empty(t, o.serverConfig.Security.KeyPath)
+}
+
+func TestIsNormalServerShutdown(t *testing.T) {
+	testCases := []struct {
+		name      string
+		err       error
+		cancelCtx bool
+		expected  bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: true,
+		},
+		{
+			name:      "context canceled by shutdown",
+			err:       context.Canceled,
+			cancelCtx: true,
+			expected:  true,
+		},
+		{
+			name:      "wrapped context canceled by shutdown",
+			err:       cerror.Trace(context.Canceled),
+			cancelCtx: true,
+			expected:  true,
+		},
+		{
+			name:     "context canceled without shutdown",
+			err:      context.Canceled,
+			expected: false,
+		},
+		{
+			name:     "wrapped context canceled without shutdown",
+			err:      cerror.Trace(context.Canceled),
+			expected: false,
+		},
+		{
+			name:     "other error",
+			err:      cerror.New("boom"),
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			if tc.cancelCtx {
+				cancel()
+			} else {
+				defer cancel()
+			}
+
+			require.Equal(t, tc.expected, isNormalServerShutdown(tc.err, ctx))
+		})
+	}
 }

@@ -25,16 +25,21 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
+
+const testTableTriggerKeyspaceID uint32 = 1
 
 func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore, chan *messaging.TargetMessage) {
 	mockPDClock := pdutil.NewClock4Test()
@@ -65,7 +70,7 @@ func TestCheckNeedScan(t *testing.T) {
 	broker.close()
 
 	disInfo := newMockDispatcherInfoForTest(t)
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
 
 	info := newMockDispatcherInfoForTest(t)
 	info.startTs = 100
@@ -100,6 +105,20 @@ func TestCheckNeedScan(t *testing.T) {
 	e = <-broker.messageCh[0]
 	require.Equal(t, event.TypeHandshakeEvent, e.msgType)
 	log.Info("Pass case 3")
+}
+
+func TestGetOrSetChangefeedStatusInitializesFilter(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+
+	status := broker.getOrSetChangefeedStatus(info)
+	require.NotNil(t, status.filter)
+
+	reused := broker.getOrSetChangefeedStatus(info)
+	require.Same(t, status, reused)
+	require.Same(t, status.filter, reused.filter)
 }
 
 func TestOnNotify(t *testing.T) {
@@ -155,7 +174,7 @@ func TestOnNotify(t *testing.T) {
 	}
 
 	// Case 4: Do scan, it will update the sentResolvedTs.
-	status := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
+	status := broker.getOrSetChangefeedStatus(disInfo)
 	status.availableMemoryQuota.Store(node.ID(task.info.GetServerID()), atomic.NewUint64(broker.scanLimitInBytes))
 
 	broker.doScan(context.TODO(), task)
@@ -187,6 +206,75 @@ func TestAddDispatcherUnregisterOnSchemaStoreError(t *testing.T) {
 	require.Equal(t, uint64(1), es.unregisterCount.Load())
 }
 
+func TestDoScanReleasesChangefeedQuotaOnDispatcherQuotaFailure(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	status := broker.getOrSetChangefeedStatus(info)
+
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	disp.receivedResolvedTs.Store(102)
+	disp.eventStoreCommitTs.Store(101)
+	disp.availableMemoryQuota.Store(minScanLimitInBytes - 1)
+
+	serverID := node.ID(info.GetServerID())
+	changefeedQuota := atomic.NewUint64(minScanLimitInBytes * 2)
+	status.availableMemoryQuota.Store(serverID, changefeedQuota)
+
+	broker.doScan(context.Background(), disp)
+
+	require.Equal(t, uint64(minScanLimitInBytes*2), changefeedQuota.Load())
+}
+
+func TestDoScanReleasesChangefeedQuotaOnScanError(t *testing.T) {
+	broker, eventStore, schemaStore, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	require.NoError(t, broker.addDispatcher(info))
+
+	disp := broker.getDispatcher(info.GetID()).Load()
+	require.NotNil(t, disp)
+	disp.receivedResolvedTs.Store(102)
+	disp.eventStoreCommitTs.Store(101)
+	disp.availableMemoryQuota.Store(minScanLimitInBytes * 2)
+
+	status := broker.getOrSetChangefeedStatus(info)
+	serverID := node.ID(info.GetServerID())
+	changefeedQuota := atomic.NewUint64(minScanLimitInBytes * 2)
+	status.availableMemoryQuota.Store(serverID, changefeedQuota)
+
+	schemaStore.getTableInfoError = errors.New("mock get table info error")
+	require.NoError(t, eventStore.AppendEvents(info.GetID(), 102, &common.RawKVEntry{
+		StartTs: 101,
+		CRTs:    101,
+		Key:     []byte("key"),
+		Value:   []byte("value"),
+	}))
+
+	broker.doScan(context.Background(), disp)
+
+	require.Equal(t, uint64(minScanLimitInBytes*2), changefeedQuota.Load())
+}
+
+func TestTableTriggerDispatcherMetricCount(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), common.DDLSpanTableID, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	info.span = common.KeyspaceDDLSpan(testTableTriggerKeyspaceID)
+
+	baseline := testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1"))
+	require.NoError(t, broker.addDispatcher(info))
+	require.InDelta(t, baseline+1, testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
+
+	broker.removeDispatcher(info)
+	require.InDelta(t, baseline, testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
+}
+
 func TestScanRangeCappedByScanWindow(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
@@ -194,7 +282,7 @@ func TestScanRangeCappedByScanWindow(t *testing.T) {
 
 	info := newMockDispatcherInfoForTest(t)
 	info.epoch = 1
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
 
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 	disp.seq.Store(1)
@@ -222,7 +310,7 @@ func TestGetScanTaskDataRangeEmptyAfterCappingDoesNotResetScanRange(t *testing.T
 
 	info := newMockDispatcherInfoForTest(t)
 	info.epoch = 1
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
 
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 	disp.seq.Store(1)
@@ -254,7 +342,7 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow
 
 	info := newMockDispatcherInfoForTest(t)
 	info.epoch = 1
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
 
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 	disp.seq.Store(1)
@@ -283,13 +371,52 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow
 	require.Equal(t, oracle.GoTimeToTS(oracle.GetTimeFromTS(commitStart).Add(defaultScanInterval)), dataRange.CommitTsEnd)
 }
 
+func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingSyncPointCrossesSyncPoint(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	baseTime := time.Now()
+	baseTs := oracle.GoTimeToTS(baseTime)
+	commitStart := oracle.GoTimeToTS(baseTime.Add(20 * time.Second))
+	nextSyncPointTs := oracle.GoTimeToTS(baseTime.Add(23 * time.Second))
+	resolvedTs := oracle.GoTimeToTS(baseTime.Add(40 * time.Second))
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.nextSyncPoint = nextSyncPointTs
+	info.syncPointInterval = 10 * time.Second
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+
+	disp.sentResolvedTs.Store(baseTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(commitStart)
+	disp.lastScannedCommitTs.Store(commitStart)
+	disp.lastScannedStartTs.Store(commitStart - 1)
+
+	changefeedStatus.minSentTs.Store(baseTs)
+	changefeedStatus.scanInterval.Store(int64(time.Second))
+
+	ss.resolvedTs = resolvedTs
+	ss.maxDDLCommitTs = 0
+
+	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, needScan)
+	require.Equal(t, commitStart, dataRange.CommitTsStart)
+	require.Equal(t, nextSyncPointTs+1, dataRange.CommitTsEnd)
+}
+
 func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t *testing.T) {
 	broker, _, ss, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
 	broker.close()
 
 	changefeedID := common.NewChangefeedID4Test("default", "test")
-	changefeedStatus := broker.getOrSetChangefeedStatus(changefeedID, 0)
+	changefeedStatus := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, 0)
 	changefeedStatus.scanInterval.Store(int64(1 * time.Second))
 
 	baseTime := time.Now()
@@ -302,6 +429,7 @@ func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t 
 	newDispatcher := func(tableID int64, sentTs uint64) *dispatcherStat {
 		info := newMockDispatcherInfo(t, ts100, common.NewDispatcherID(), tableID, eventpb.ActionType_ACTION_TYPE_REGISTER)
 		info.epoch = 1
+		mustInitChangefeedStatusFilter(t, changefeedStatus, info, broker.timezone)
 		disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 		disp.seq.Store(1)
 		disp.sentResolvedTs.Store(sentTs)
@@ -347,29 +475,12 @@ func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t 
 	require.Equal(t, ts103, dataRange.CommitTsEnd)
 }
 
-func TestHandleCongestionControlV2AdjustsScanInterval(t *testing.T) {
+func TestHandleCongestionControlV2DoesNotResetScanIntervalOnMemoryRelease(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
 
 	changefeedID := common.NewChangefeedID4Test("default", "test")
-	status := broker.getOrSetChangefeedStatus(changefeedID, time.Second*10)
-
-	status.scanInterval.Store(int64(40 * time.Second))
-	status.lastAdjustTime.Store(time.Now())
-
-	control := event.NewCongestionControlWithVersion(event.CongestionControlVersion2)
-	control.AddAvailableMemoryWithDispatchersAndUsage(changefeedID.ID(), 0, 1, nil)
-	broker.handleCongestionControl(node.ID("event-collector-1"), control)
-
-	require.Equal(t, int64(10*time.Second), status.scanInterval.Load())
-}
-
-func TestHandleCongestionControlV2ResetsScanIntervalOnMemoryRelease(t *testing.T) {
-	broker, _, _, _ := newEventBrokerForTest()
-	defer broker.close()
-
-	changefeedID := common.NewChangefeedID4Test("default", "test")
-	status := broker.getOrSetChangefeedStatus(changefeedID, time.Second*10)
+	status := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, time.Second*10)
 
 	status.scanInterval.Store(int64(40 * time.Second))
 
@@ -377,7 +488,7 @@ func TestHandleCongestionControlV2ResetsScanIntervalOnMemoryRelease(t *testing.T
 	control.AddAvailableMemoryWithDispatchersAndUsageAndReleaseCount(changefeedID.ID(), 0, 0.5, nil, 1)
 	broker.handleCongestionControl(node.ID("event-collector-1"), control)
 
-	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
+	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
 }
 
 func TestHandleCongestionControlV1DoesNotAdjustScanInterval(t *testing.T) {
@@ -385,10 +496,9 @@ func TestHandleCongestionControlV1DoesNotAdjustScanInterval(t *testing.T) {
 	defer broker.close()
 
 	changefeedID := common.NewChangefeedID4Test("default", "test")
-	status := broker.getOrSetChangefeedStatus(changefeedID, time.Second*10)
+	status := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, time.Second*10)
 
 	status.scanInterval.Store(int64(40 * time.Second))
-	status.lastAdjustTime.Store(time.Now())
 
 	control := event.NewCongestionControl()
 	control.AddAvailableMemoryWithDispatchers(changefeedID.ID(), 0, nil)
@@ -464,6 +574,37 @@ func TestCURDDispatcher(t *testing.T) {
 	require.False(t, ok, "changefeedStatus should be removed after the last dispatcher is removed")
 }
 
+func TestRemoveDispatcherCleansUpSharedFilter(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	dispInfo.changefeedID = common.NewChangefeedID4Test("default", t.Name())
+	filterStorage := filter.GetSharedFilterStorage()
+	filterStorage.RemoveFilter(dispInfo.GetChangefeedID())
+	t.Cleanup(func() {
+		filterStorage.RemoveFilter(dispInfo.GetChangefeedID())
+	})
+
+	err := broker.addDispatcher(dispInfo)
+	require.NoError(t, err)
+
+	dispPtr := broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, dispPtr)
+	disp := dispPtr.Load()
+	require.NotNil(t, disp)
+	require.NotNil(t, disp.filter)
+
+	broker.removeDispatcher(dispInfo)
+
+	_, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.False(t, ok, "changefeedStatus should be removed after the last dispatcher is removed")
+
+	recreated, err := filterStorage.GetOrSetFilter(dispInfo.GetChangefeedID(), dispInfo.GetFilterConfig(), broker.timezone)
+	require.NoError(t, err)
+	require.NotSame(t, disp.filter, recreated)
+}
+
 func TestResetDispatcher(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
@@ -511,6 +652,68 @@ func TestResetDispatcher(t *testing.T) {
 	require.Equal(t, uint64(1), newStat.epoch)
 	require.Equal(t, uint64(500), newStat.startTs)
 	require.Equal(t, dispInfo.GetID(), newStat.id)
+}
+
+func TestResetDispatcherSendsHandshakeWithoutNextNotify(t *testing.T) {
+	broker, _, schemaStore, _ := newEventBrokerForTest()
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	require.NoError(t, broker.addDispatcher(dispInfo))
+	broker.close()
+
+	dispPtr := broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, dispPtr)
+	oldStat := dispPtr.Load()
+	oldStat.receivedResolvedTs.Store(500)
+	oldStat.hasReceivedFirstResolvedTs.Store(true)
+	schemaStore.resolvedTs = 500
+	schemaStore.maxDDLCommitTs = 0
+
+	resetInfo := newMockDispatcherInfo(t, dispInfo.GetStartTs(), dispInfo.GetID(), dispInfo.GetTableSpan().TableID, eventpb.ActionType_ACTION_TYPE_RESET)
+	resetInfo.epoch = oldStat.epoch + 1
+	require.NoError(t, broker.resetDispatcher(resetInfo))
+
+	newStat := dispPtr.Load()
+	require.NotSame(t, oldStat, newStat)
+	require.Equal(t, uint64(1), newStat.seq.Load())
+
+	handshake := <-broker.messageCh[newStat.messageWorkerIndex]
+	require.Equal(t, event.TypeHandshakeEvent, handshake.msgType)
+	require.Equal(t, resetInfo.GetEpoch(), handshake.e.(*event.HandshakeEvent).GetEpoch())
+
+	resolved := <-broker.messageCh[newStat.messageWorkerIndex]
+	require.Equal(t, event.TypeResolvedEvent, resolved.msgType)
+	require.Equal(t, uint64(500), resolved.resolvedTsEvent.GetCommitTs())
+}
+
+func TestResetTableTriggerDispatcherDoesNotUseNormalScan(t *testing.T) {
+	broker, _, schemaStore, _ := newEventBrokerForTest()
+
+	dispInfo := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), common.DDLSpanTableID, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	dispInfo.span = common.KeyspaceDDLSpan(testTableTriggerKeyspaceID)
+	require.NoError(t, broker.addDispatcher(dispInfo))
+	broker.close()
+
+	dispPtr := broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, dispPtr)
+	oldStat := dispPtr.Load()
+	oldStat.receivedResolvedTs.Store(500)
+	oldStat.hasReceivedFirstResolvedTs.Store(true)
+	schemaStore.resolvedTs = 500
+	schemaStore.maxDDLCommitTs = 0
+
+	resetInfo := newMockDispatcherInfo(t, 100, dispInfo.GetID(), common.DDLSpanTableID, eventpb.ActionType_ACTION_TYPE_RESET)
+	resetInfo.span = common.KeyspaceDDLSpan(testTableTriggerKeyspaceID)
+	resetInfo.epoch = oldStat.epoch + 1
+	require.NoError(t, broker.resetDispatcher(resetInfo))
+
+	newStat := dispPtr.Load()
+	require.NotSame(t, oldStat, newStat)
+	require.Equal(t, uint64(0), newStat.seq.Load())
+	require.Equal(t, uint64(100), newStat.sentResolvedTs.Load())
+	require.Equal(t, uint64(100), newStat.lastScannedCommitTs.Load())
+	require.False(t, newStat.isTaskScanning.Load())
+	require.Empty(t, broker.messageCh[newStat.messageWorkerIndex])
 }
 
 func TestResetDispatcherConcurrently(t *testing.T) {
@@ -602,7 +805,7 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 			Version:         event.DispatcherHeartbeatVersion1,
 			ClusterID:       0,
 			DispatcherCount: 1,
-			DispatcherProgresses: []event.DispatcherProgress{
+			DispatcherProgressesLegacy: []event.DispatcherProgressLegacy{
 				{
 					DispatcherID: dispInfo.GetID(),
 					CheckpointTs: 100,
@@ -634,7 +837,7 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 			Version:         event.DispatcherHeartbeatVersion1,
 			ClusterID:       0,
 			DispatcherCount: 1,
-			DispatcherProgresses: []event.DispatcherProgress{
+			DispatcherProgressesLegacy: []event.DispatcherProgressLegacy{
 				{
 					DispatcherID: dispInfo.GetID(), // Same dispatcher ID but it's removed
 					CheckpointTs: 200,
@@ -671,6 +874,92 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 	}
 }
 
+func TestHandleDispatcherHeartbeatEpochFilter(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(dispInfo)
+	require.NoError(t, err)
+
+	dispatcher := broker.getDispatcher(dispInfo.GetID()).Load()
+	require.NotNil(t, dispatcher)
+	dispatcher.epoch = 3
+	dispatcher.checkpointTs.Store(100)
+	dispatcher.lastReceivedHeartbeatTime.Store(0)
+
+	staleHeartbeat := &DispatcherHeartBeatWithServerID{
+		serverID: "test-server-1",
+		heartbeat: &event.DispatcherHeartbeat{
+			Version:         event.DispatcherHeartbeatVersion2,
+			ClusterID:       0,
+			DispatcherCount: 1,
+			DispatcherProgresses: []event.DispatcherProgress{{
+				Version:      event.DispatcherProgressVersion1,
+				DispatcherID: dispInfo.GetID(),
+				CheckpointTs: 200,
+				Epoch:        2,
+			}},
+		},
+	}
+	broker.handleDispatcherHeartbeat(staleHeartbeat)
+	require.Equal(t, uint64(100), dispatcher.checkpointTs.Load())
+	require.Equal(t, int64(0), dispatcher.lastReceivedHeartbeatTime.Load())
+
+	futureHeartbeat := &DispatcherHeartBeatWithServerID{
+		serverID: "test-server-1",
+		heartbeat: &event.DispatcherHeartbeat{
+			Version:         event.DispatcherHeartbeatVersion2,
+			ClusterID:       0,
+			DispatcherCount: 1,
+			DispatcherProgresses: []event.DispatcherProgress{{
+				Version:      event.DispatcherProgressVersion1,
+				DispatcherID: dispInfo.GetID(),
+				CheckpointTs: 220,
+				Epoch:        4,
+			}},
+		},
+	}
+	broker.handleDispatcherHeartbeat(futureHeartbeat)
+	require.Equal(t, uint64(100), dispatcher.checkpointTs.Load())
+	require.Equal(t, int64(0), dispatcher.lastReceivedHeartbeatTime.Load())
+
+	v1Heartbeat := &DispatcherHeartBeatWithServerID{
+		serverID: "test-server-1",
+		heartbeat: &event.DispatcherHeartbeat{
+			Version:         event.DispatcherHeartbeatVersion1,
+			ClusterID:       0,
+			DispatcherCount: 1,
+			DispatcherProgressesLegacy: []event.DispatcherProgressLegacy{{
+				DispatcherID: dispInfo.GetID(),
+				CheckpointTs: 180,
+			}},
+		},
+	}
+	broker.handleDispatcherHeartbeat(v1Heartbeat)
+	require.Equal(t, uint64(180), dispatcher.checkpointTs.Load())
+	require.Greater(t, dispatcher.lastReceivedHeartbeatTime.Load(), int64(0))
+
+	dispatcher.lastReceivedHeartbeatTime.Store(0)
+	currentHeartbeat := &DispatcherHeartBeatWithServerID{
+		serverID: "test-server-1",
+		heartbeat: &event.DispatcherHeartbeat{
+			Version:         event.DispatcherHeartbeatVersion2,
+			ClusterID:       0,
+			DispatcherCount: 1,
+			DispatcherProgresses: []event.DispatcherProgress{{
+				Version:      event.DispatcherProgressVersion1,
+				DispatcherID: dispInfo.GetID(),
+				CheckpointTs: 220,
+				Epoch:        3,
+			}},
+		},
+	}
+	broker.handleDispatcherHeartbeat(currentHeartbeat)
+	require.Equal(t, uint64(220), dispatcher.checkpointTs.Load())
+	require.Greater(t, dispatcher.lastReceivedHeartbeatTime.Load(), int64(0))
+}
+
 // TestSendHandshakeIfNeedConcurrency tests the concurrent safety of sendHandshakeIfNeed method
 func TestSendHandshakeIfNeedConcurrency(t *testing.T) {
 	broker, _, _, outputCh := newEventBrokerForTest()
@@ -678,7 +967,7 @@ func TestSendHandshakeIfNeedConcurrency(t *testing.T) {
 
 	// Create a mock dispatcher info
 	dispInfo := newMockDispatcherInfoForTest(t)
-	changefeedStatus := broker.getOrSetChangefeedStatus(dispInfo.GetChangefeedID(), dispInfo.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(dispInfo)
 
 	// Test 1: Sequential calls should only send one handshake
 	t.Run("Sequential calls", func(t *testing.T) {
@@ -782,6 +1071,42 @@ func TestSendHandshakeIfNeedConcurrency(t *testing.T) {
 		require.Equal(t, 1, handshakeCount, "Expected exactly 1 handshake event")
 		require.True(t, disp.isHandshaked(), "Dispatcher should be marked as handshaked")
 	})
+}
+
+func TestSendHandshakeUsesStartTs(t *testing.T) {
+	broker, _, _, outputCh := newEventBrokerForTest()
+	defer broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.startTs = 100
+	info.epoch = 1
+
+	initialTableInfo := &common.TableInfo{
+		TableName: common.TableName{Schema: "test", Table: "t1", TableID: info.GetTableSpan().GetTableID()},
+		UpdateTS:  100,
+	}
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, initialTableInfo, changefeedStatus)
+	disp.checkpointTs.Store(200)
+
+	broker.sendHandshakeIfNeed(disp)
+
+	select {
+	case msg := <-outputCh:
+		require.Len(t, msg.Message, 1)
+		handshake, ok := msg.Message[0].(*event.HandshakeEvent)
+		require.True(t, ok)
+		require.Equal(t, uint64(100), handshake.ResolvedTs)
+		require.NotNil(t, handshake.TableInfo)
+		require.Equal(t, uint64(100), handshake.TableInfo.GetUpdateTS())
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "expected handshake event")
+	}
+
+	require.Equal(t, uint64(100), disp.sentResolvedTs.Load())
+	require.Equal(t, uint64(100), disp.lastScannedCommitTs.Load())
+	require.Equal(t, uint64(0), disp.lastScannedStartTs.Load())
 }
 
 func TestAddDispatcherFailure(t *testing.T) {

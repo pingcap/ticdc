@@ -83,7 +83,9 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 				"Partition", "Compression", "View", "Sequence", "Lock", "Version", "TiFlashReplica", "IsColumnar",
 				"TempTableType", "TableCacheStatusType", "PlacementPolicyRef", "StatsOptions",
 				"ExchangePartitionInfo", "TTLInfo", "IsActiveActive", "SoftdeleteInfo", "Affinity",
-				"Revision", "DBID", "Mode",
+				"Revision", "DBID",
+				// These table-level storage settings do not affect the shared column schema.
+				"EngineAttribute", "StorageClassTier", "StorageClassTransitions", "Mode",
 			},
 		},
 		{
@@ -128,7 +130,6 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 	moduleCache := make(map[string]*moduleInfo)
 	packageCache := make(map[packageKey]map[string][]string)
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			mod, ok := moduleCache[tc.modulePath]
 			if !ok {

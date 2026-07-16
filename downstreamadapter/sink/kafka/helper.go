@@ -77,8 +77,9 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
 	kafkaComponent.eventRouter, err = eventrouter.NewEventRouter(
-		sinkConfig, topic, false, protocol == config.ProtocolAvro)
+		sinkConfig, topic, false, isAvroLike)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
@@ -136,13 +137,4 @@ func newKafkaSinkComponent(
 	sinkConfig *config.SinkConfig,
 ) (components, config.Protocol, error) {
 	return newKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, kafka.NewSaramaFactory)
-}
-
-func newKafkaSinkComponentForTest(
-	ctx context.Context,
-	changefeedID commonType.ChangeFeedID,
-	sinkURI *url.URL,
-	sinkConfig *config.SinkConfig,
-) (components, config.Protocol, error) {
-	return newKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, kafka.NewMockFactory)
 }

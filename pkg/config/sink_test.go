@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -291,6 +292,124 @@ func TestCheckCompatibilityWithSinkURI(t *testing.T) {
 		}
 		require.Equal(t, tc.expectedProtocol, tc.newSinkConfig.Protocol)
 		require.Equal(t, tc.expectedTxnAtomicity, tc.newSinkConfig.TxnAtomicity)
+	}
+}
+
+func TestValidateTableRoute(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		cfg     *SinkConfig
+		wantErr string
+	}{
+		{
+			name: "valid routing rule",
+			cfg: &SinkConfig{
+				DispatchRules: []*DispatchRule{
+					{
+						Matcher:      []string{"db1.*"},
+						TargetSchema: "archive",
+						TargetTable:  "{table}_bak",
+					},
+				},
+			},
+		},
+		{
+			name: "invalid target schema expression",
+			cfg: &SinkConfig{
+				DispatchRules: []*DispatchRule{
+					{
+						Matcher:      []string{"db1.*"},
+						TargetSchema: "{bad}",
+						TargetTable:  "{table}_bak",
+					},
+				},
+			},
+			wantErr: "target-schema",
+		},
+		{
+			name: "mq dispatch rule ignored",
+			cfg: &SinkConfig{
+				DispatchRules: []*DispatchRule{
+					{
+						Matcher:       []string{"db1.*"},
+						PartitionRule: "columns",
+						Columns:       []string{"id"},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.validateTableRoute()
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateRoutingExpression(t *testing.T) {
+	t.Parallel()
+
+	validExpressions := []string{
+		"",
+		"archive",
+		"orders_bak",
+		"archive_v2",
+		"db-01.table_02",
+		"{schema}",
+		"{table}",
+		"{schema}_{table}",
+		"{table}_bak",
+		"bak_{table}_v2",
+		"{schema}_backup",
+		"archive_{schema}_{table}_v2",
+		"prefix_{schema}_middle_{table}_suffix",
+		"{schema}_{schema}_{table}",
+	}
+
+	for _, expr := range validExpressions {
+		name := expr
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			require.NoError(t, validateRoutingExpression("target-table", expr))
+		})
+	}
+}
+
+func TestValidateRoutingExpressionRejectsInvalidExpressions(t *testing.T) {
+	t.Parallel()
+
+	invalidExpressions := []string{
+		"{invalid}",
+		"{Schema}",
+		"{TABLE}",
+		"{schema",
+		"schema}",
+		"{table",
+		"{",
+		"}",
+		"{{schema}}",
+		"{schema}{bad}",
+		"prefix_{schema}_{bad}",
+	}
+
+	for _, expr := range invalidExpressions {
+		t.Run(expr, func(t *testing.T) {
+			err := validateRoutingExpression("target-table", expr)
+			require.Error(t, err)
+			code, ok := errors.RFCCode(err)
+			require.True(t, ok)
+			require.Equal(t, errors.ErrInvalidTableRoutingRule.RFCCode(), code)
+		})
 	}
 }
 

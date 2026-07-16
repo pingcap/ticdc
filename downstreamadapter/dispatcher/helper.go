@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"container/list"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -81,6 +82,80 @@ type BlockEventIdentifier struct {
 	IsSyncPoint bool
 }
 
+// checkpointBlocker is a dispatcher-level checkpoint gate independent from
+// TableProgress, which only tracks sink flush progress. Block events for one
+// dispatcher arrive in commit-ts order, so the queue front is the smallest
+// pending commitTs. The map gives O(1) removal when ACKs arrive out of order.
+type checkpointBlocker struct {
+	mutex       sync.Mutex
+	pending     map[BlockEventIdentifier]*list.Element
+	queue       *list.List
+	minCommitTs atomic.Uint64
+}
+
+func newCheckpointBlocker() *checkpointBlocker {
+	return &checkpointBlocker{
+		pending: make(map[BlockEventIdentifier]*list.Element),
+		queue:   list.New(),
+	}
+}
+
+func (b *checkpointBlocker) add(identifier BlockEventIdentifier) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	if _, ok := b.pending[identifier]; ok {
+		return
+	}
+	if len(b.pending) == 0 {
+		// Checkpoint readers only look at minCommitTs, so publish the cap
+		// before returning the newly pending blocker to the caller.
+		b.minCommitTs.Store(identifier.CommitTs)
+	}
+	b.pending[identifier] = b.queue.PushBack(identifier)
+}
+
+func (b *checkpointBlocker) remove(identifier BlockEventIdentifier) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	elem, ok := b.pending[identifier]
+	if !ok {
+		return
+	}
+	delete(b.pending, identifier)
+	wasMin := b.queue.Front() == elem
+	b.queue.Remove(elem)
+	if wasMin {
+		b.storeMinCommitTsLocked()
+	}
+}
+
+func (b *checkpointBlocker) empty() bool {
+	return b.minCommitTs.Load() == 0
+}
+
+func (b *checkpointBlocker) len() int {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	return len(b.pending)
+}
+
+func (b *checkpointBlocker) capCheckpointTs(checkpointTs uint64) uint64 {
+	minCommitTs := b.minCommitTs.Load()
+	if minCommitTs == 0 {
+		return checkpointTs
+	}
+	return min(checkpointTs, minCommitTs-1)
+}
+
+func (b *checkpointBlocker) storeMinCommitTsLocked() {
+	front := b.queue.Front()
+	if front == nil {
+		b.minCommitTs.Store(0)
+		return
+	}
+	b.minCommitTs.Store(front.Value.(BlockEventIdentifier).CommitTs)
+}
+
 type BlockEventStatus struct {
 	mutex             sync.Mutex
 	blockPendingEvent commonEvent.BlockEvent
@@ -140,6 +215,23 @@ func (b *BlockEventStatus) actionMatchs(action *heartbeatpb.DispatcherAction) bo
 	}
 
 	return b.blockCommitTs == action.CommitTs
+}
+
+// ignoredStatusMatches checks whether the ignored status is for the current pending ddl/sync point event.
+func (b *BlockEventStatus) ignoredStatusMatches(ignored *heartbeatpb.IgnoredBlockStatus) bool {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	if b.blockPendingEvent == nil {
+		return false
+	}
+
+	if b.blockStage != heartbeatpb.BlockStage_WAITING {
+		return false
+	}
+
+	pendingIsSyncPoint := b.blockPendingEvent.GetType() == commonEvent.TypeSyncPointEvent
+	return b.blockCommitTs == ignored.CommitTs && pendingIsSyncPoint == ignored.IsSyncPoint
 }
 
 func (b *BlockEventStatus) getEventCommitTs() (uint64, bool) {
@@ -244,11 +336,18 @@ type HeartBeatInfo struct {
 	IsRemoving      bool
 }
 
-// ResendTask is responsible for periodically resending the TableSpanBlockStatus message to the maintainer.
+// blockStatusOfferer is the minimal dispatcher surface needed by resend tasks.
+// Keeping it narrow avoids reintroducing a broader unified block-status API.
+type blockStatusOfferer interface {
+	GetId() common.DispatcherID
+	offerBlockStatus(status *heartbeatpb.TableSpanBlockStatus)
+}
+
+// ResendTask is responsible for periodically resending the block status to the maintainer.
 // The task will be cancelled when the dispatcher receives the ACK message from the maintainer.
 type ResendTask struct {
+	dispatcher   blockStatusOfferer
 	message      *heartbeatpb.TableSpanBlockStatus
-	dispatcher   Dispatcher
 	callback     func() // function need to be called when the task is cancelled
 	taskHandle   *threadpool.TaskHandle
 	executeCount uint64
@@ -256,31 +355,35 @@ type ResendTask struct {
 
 const resendTimeInterval = 5 * time.Second
 
-func newResendTask(message *heartbeatpb.TableSpanBlockStatus, dispatcher Dispatcher, callback func()) *ResendTask {
+// newResendTask registers a periodic resend immediately so the first retry is
+// scheduled with the same immutable protobuf object the initial send used.
+func newResendTask(dispatcher blockStatusOfferer, message *heartbeatpb.TableSpanBlockStatus, callback func()) *ResendTask {
 	taskScheduler := GetDispatcherTaskScheduler()
 	t := &ResendTask{
-		message:    message,
 		dispatcher: dispatcher,
+		message:    message,
 		callback:   callback,
 	}
 	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(resendTimeInterval))
 	return t
 }
 
+// Execute resends the original protobuf object without rebuilding payload so
+// WAITING/NONE retries stay allocation-light and byte-for-byte consistent.
 func (t *ResendTask) Execute() time.Time {
-	log.Debug("resend task", zap.Any("message", t.message), zap.Any("dispatcherID", t.dispatcher.GetId()))
-	t.dispatcher.GetBlockStatusesChan() <- t.message
+	log.Debug("resend task", zap.Any("dispatcherID", t.dispatcher.GetId()))
+	t.dispatcher.offerBlockStatus(t.message)
 
 	executeCount := atomic.AddUint64(&t.executeCount, 1)
 	if executeCount%10 == 0 {
 		log.Info("resend task periodic resend",
 			zap.Any("dispatcherID", t.dispatcher.GetId()),
-			zap.Any("message", t.message),
 			zap.Uint64("executeCount", executeCount))
 	}
 	return time.Now().Add(resendTimeInterval)
 }
 
+// Cancel stops future retries and runs the optional completion callback once.
 func (t *ResendTask) Cancel() {
 	if t.callback != nil {
 		t.callback()

@@ -80,19 +80,39 @@ func New(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	return newWithComponents(ctx, changefeedID, protocol, comp)
+}
+
+func newWithComponents(
+	ctx context.Context,
+	changefeedID commonType.ChangeFeedID,
+	protocol config.Protocol,
+	comp components,
+) (*sink, error) {
+	var (
+		err           error
+		asyncProducer kafka.AsyncProducer
+		syncProducer  kafka.SyncProducer
+	)
 	defer func() {
 		if err != nil {
+			if syncProducer != nil {
+				syncProducer.Close()
+			}
+			if asyncProducer != nil {
+				asyncProducer.Close()
+			}
 			comp.close()
 		}
 	}()
 
 	statistics := metrics.NewStatistics(changefeedID, "sink")
-	asyncProducer, err := comp.factory.AsyncProducer(ctx)
+	asyncProducer, err = comp.factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	syncProducer, err := comp.factory.SyncProducer(ctx)
+	syncProducer, err = comp.factory.SyncProducer(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -355,17 +375,12 @@ func (s *sink) sendMessages(ctx context.Context) error {
 	metricSendMessageDuration := metrics.WorkerSendMessageDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 	defer metrics.WorkerSendMessageDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
 	var err error
 	outCh := s.comp.encoderGroup.Output()
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case <-ticker.C:
-			s.dmlProducer.Heartbeat()
 		case future, ok := <-outCh:
 			if !ok {
 				log.Info("kafka sink encoder's output channel closed",
@@ -463,9 +478,6 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 	}()
 
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
 	var (
 		msg          *common.Message
 		partitionNum int32
@@ -475,8 +487,6 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case <-ticker.C:
-			s.ddlProducer.Heartbeat()
 		case ts, ok := <-s.checkpointChan:
 			if !ok {
 				log.Warn("kafka sink checkpoint channel closed",
@@ -543,9 +553,17 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 	return s.tableSchemaStore.GetAllTableNames(ts, true)
 }
 
-func (s *sink) Close(_ bool) {
+func (s *sink) Close() {
 	s.ddlProducer.Close()
 	s.dmlProducer.Close()
 	s.comp.close()
 	s.statistics.Close()
+}
+
+func (s *sink) BatchCount() int {
+	return 4096
+}
+
+func (s *sink) BatchBytes() int {
+	return 0
 }

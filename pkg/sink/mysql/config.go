@@ -25,12 +25,11 @@ import (
 
 	dmysql "github.com/go-sql-driver/mysql"
 	lru "github.com/hashicorp/golang-lru"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -92,6 +91,9 @@ const (
 	defaultEnableDDLTs = true
 
 	slowQuery = 5 * time.Second
+
+	dmlDBPrepareExtraConns = 1
+	defaultControlDBConns  = 4
 )
 
 type Config struct {
@@ -229,12 +231,12 @@ func (c *Config) Apply(
 ) (err error) {
 	if sinkURI == nil {
 		log.Error("empty SinkURI")
-		return cerror.ErrMySQLInvalidConfig.GenWithStack("fail to open MySQL sink, empty SinkURI")
+		return errors.ErrMySQLInvalidConfig.GenWithStack("fail to open MySQL sink, empty SinkURI")
 	}
 	c.sinkURI = sinkURI
 	scheme := strings.ToLower(sinkURI.Scheme)
 	if !config.IsMySQLCompatibleScheme(scheme) {
-		return cerror.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
+		return errors.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
 	}
 
 	if cfg != nil {
@@ -314,51 +316,76 @@ func (c *Config) Apply(
 func NewMysqlConfigAndDB(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig,
 ) (*Config, *sql.DB, error) {
+	cfg, db, _, err := newMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
+	return cfg, db, err
+}
+
+// NewMysqlConfigAndDBs creates the effective MySQL sink config and independent
+// database pools for DML and control-plane work. The DML pool follows the worker
+// based sizing, while the control pool remains small and independent so DDL,
+// DDL-ts, syncpoint, and progress metadata operations cannot be starved by
+// long-lived DML sessions.
+func NewMysqlConfigAndDBs(
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig,
+) (*Config, *sql.DB, *sql.DB, error) {
+	cfg, dmlDB, dsnStr, err := newMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	controlDB, err := CreateMysqlDBConn(dsnStr)
+	if err != nil {
+		if closeErr := dmlDB.Close(); closeErr != nil {
+			log.Warn("close mysql dml db after control db creation failed",
+				zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
+		}
+		return nil, nil, nil, err
+	}
+	configureControlDBConn(controlDB)
+	return cfg, dmlDB, controlDB, nil
+}
+
+func newMysqlConfigAndDB(
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig,
+) (cfg *Config, db *sql.DB, dsnStr string, err error) {
 	log.Info("create db connection", zap.String("sinkURI", sinkURI.String()))
 	// create db connection
-	cfg := New()
-	err := cfg.Apply(sinkURI, changefeedID, config)
+	cfg = New()
+	err = cfg.Apply(sinkURI, changefeedID, config)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	cfg.EnableActiveActive = config.EnableActiveActive
 	cfg.ActiveActiveSyncStatsInterval = config.ActiveActiveSyncStatsInterval
 
-	dsnStr, err := GenerateDSN(ctx, cfg)
+	dsnStr, err = GenerateDSN(ctx, cfg)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 
-	db, err := CreateMysqlDBConn(dsnStr)
+	db, err = CreateMysqlDBConn(dsnStr)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		if closeErr := db.Close(); closeErr != nil {
+			log.Warn("close mysql db after config creation failed",
+				zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
+		}
+	}()
 
 	cfg.ServerInfo = getTiDBVersion(db)
 	cfg.HasVectorType = shouldFormatVectorType(cfg)
 
-	// By default, cache-prep-stmts=true, an LRU cache is used for prepared statements,
-	// two connections are required to process a transaction.
-	// The first connection is held in the tx variable, which is used to manage the transaction.
-	// The second connection is requested through a call to s.db.Prepare
-	// in case of a cache miss for the statement query.
-	// The connection pool for CDC is configured with a static size, equal to the number of workers.
-	// CDC may hang at the "Get Connection" call is due to the limited size of the connection pool.
-	// When the connection pool is small,
-	// the chance of all connections being active at the same time increases,
-	// leading to exhaustion of available connections and a hang at the "Get Connection" call.
-	// This issue is less likely to occur when the connection pool is larger,
-	// as there are more connections available for use.
-	// Adding extra connections to the pool helps avoid connection exhaustion.
-	// Each DML writer may hold a dedicated session for a while, and additional
-	// connections are also needed for multiple DDL/progress writers and stmt cache misses.
-	extraConn := 10
-	db.SetMaxIdleConns(cfg.WorkerCount + extraConn)
-	db.SetMaxOpenConns(cfg.WorkerCount + extraConn)
-	failpoint.Inject("MySQLSinkForceSingleConnection", func() {
-		db.SetMaxIdleConns(1)
-		db.SetMaxOpenConns(1)
-	})
+	// By default, cache-prep-stmts=true and DML prepared statements are cached
+	// in an LRU. A DML transaction can need one connection for the transaction
+	// itself and another connection for Prepare on a statement cache miss.
+	// Size the DML pool by worker count plus a small margin so long-lived DML
+	// sessions and prepare misses do not exhaust the pool.
+	configureDMLDBConn(db, cfg)
 
 	// Inherit the default value of the prepared statement cache from the SinkURI Options
 	cachePrepStmts := cfg.CachePrepStmts
@@ -366,7 +393,7 @@ func NewMysqlConfigAndDB(
 		// query the size of the prepared statement cache on serverside
 		maxPreparedStmtCount, err := queryMaxPreparedStmtCount(ctx, db)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, "", err
 		}
 		if maxPreparedStmtCount == -1 {
 			// NOTE: seems TiDB doesn't follow MySQL's specification.
@@ -385,10 +412,12 @@ func NewMysqlConfigAndDB(
 	if cachePrepStmts {
 		cfg.stmtCache, err = lru.NewWithEvict(prepStmtCacheSize, func(key, value interface{}) {
 			stmt := value.(*sql.Stmt)
-			stmt.Close()
+			if err := stmt.Close(); err != nil {
+				log.Warn("failed to close cached prepared statement", zap.Error(err))
+			}
 		})
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, "", err
 		}
 	}
 
@@ -401,18 +430,38 @@ func NewMysqlConfigAndDB(
 			zap.Error(err))
 		cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
 	}
-	return cfg, db, nil
+	return cfg, db, dsnStr, nil
+}
+
+func configureDMLDBConn(db *sql.DB, cfg *Config) {
+	// Keep one spare DML connection so db.Prepare on a statement-cache miss
+	// cannot wait behind all writer-owned transaction sessions. Control-plane
+	// work uses a separate pool.
+	db.SetMaxIdleConns(cfg.WorkerCount + dmlDBPrepareExtraConns)
+	db.SetMaxOpenConns(cfg.WorkerCount + dmlDBPrepareExtraConns)
+}
+
+func configureControlDBConn(db *sql.DB) {
+	db.SetMaxIdleConns(defaultControlDBConns)
+	db.SetMaxOpenConns(defaultControlDBConns)
+	// DDL timestamp tests rely on this failpoint forcing the DDL writer to reuse
+	// one downstream session so session-variable leakage is deterministic. Keep
+	// it scoped to the control pool so DML writers can still flush before DDLs.
+	failpoint.Inject("MySQLSinkForceSingleConnection", func() {
+		db.SetMaxIdleConns(1)
+		db.SetMaxOpenConns(1)
+	})
 }
 
 // IsSinkSafeMode returns whether the sink is in safe mode.
 func IsSinkSafeMode(sinkURI *url.URL, replicaConfig *config.ReplicaConfig) (bool, error) {
 	if sinkURI == nil {
-		return false, cerror.ErrMySQLInvalidConfig.GenWithStack("fail to open MySQL sink, empty SinkURI")
+		return false, errors.ErrMySQLInvalidConfig.GenWithStack("fail to open MySQL sink, empty SinkURI")
 	}
 
 	scheme := strings.ToLower(sinkURI.Scheme)
 	if !config.IsMySQLCompatibleScheme(scheme) {
-		return false, cerror.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
+		return false, errors.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
 	}
 	query := sinkURI.Query()
 	var safeMode bool
@@ -430,10 +479,10 @@ func getWorkerCount(values url.Values, workerCount *int, workerCountSpecified *b
 
 	c, err := strconv.Atoi(s)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	if c <= 0 {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig,
+		return errors.WrapError(errors.ErrMySQLInvalidConfig,
 			fmt.Errorf("invalid worker-count %d, which must be greater than 0", c))
 	}
 	if c > maxWorkerCount {
@@ -455,10 +504,10 @@ func getMaxTxnRow(values url.Values, maxTxnRow *int) error {
 
 	c, err := strconv.Atoi(s)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	if c <= 0 {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig,
+		return errors.WrapError(errors.ErrMySQLInvalidConfig,
 			fmt.Errorf("invalid max-txn-row %d, which must be greater than 0", c))
 	}
 	if c > maxMaxTxnRow {
@@ -478,10 +527,10 @@ func getMaxMultiUpdateRowCount(values url.Values, maxMultiUpdateRow *int) error 
 
 	c, err := strconv.Atoi(s)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	if c <= 0 {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig,
+		return errors.WrapError(errors.ErrMySQLInvalidConfig,
 			fmt.Errorf("invalid max-multi-update-row %d, which must be greater than 0", c))
 	}
 	if c > maxMaxMultiUpdateRowCount {
@@ -501,10 +550,10 @@ func getMaxMultiUpdateRowSize(values url.Values, maxMultiUpdateRowSize *int) err
 
 	c, err := strconv.Atoi(s)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	if c < 0 {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig,
+		return errors.WrapError(errors.ErrMySQLInvalidConfig,
 			fmt.Errorf("invalid max-multi-update-row-size %d, "+
 				"which must be greater than or equal to 0", c))
 	}
@@ -563,7 +612,7 @@ func (c *Config) getSSLCA(values url.Values, changefeedID common.ChangeFeedID, t
 	name := fmt.Sprintf("cdc_mysql_tls%s_%s", changefeedID.Keyspace(), changefeedID.ID())
 	err = dmysql.RegisterTLSConfig(name, tlsCfg)
 	if err != nil {
-		return cerror.ErrMySQLConnectionError.Wrap(err).GenWithStack("fail to open MySQL connection")
+		return errors.ErrMySQLConnectionError.Wrap(err).GenWithStack("fail to open MySQL connection")
 	}
 	*tls = "?tls=" + name
 	return nil
@@ -590,13 +639,13 @@ func getTimezone(serverTimezone string, values url.Values, timezone *string) err
 
 	changefeedTimezone, err := util.GetTimezone(s)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	*timezone = fmt.Sprintf(`"%s"`, changefeedTimezone.String())
 	// We need to check whether the timezone of the TiCDC server and the sink-uri are consistent.
 	// If they are inconsistent, it may cause the data to be inconsistent.
 	if changefeedTimezone.String() != serverTimezone {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, errors.Errorf(
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, errors.Errorf(
 			"the timezone of the TiCDC server and the sink-uri are inconsistent. "+
 				"TiCDC server timezone: %s, sink-uri timezone: %s. "+
 				"Please make sure that the timezone of the TiCDC server, "+
@@ -614,7 +663,7 @@ func getDuration(values url.Values, key string, target *string) error {
 	}
 	_, err := time.ParseDuration(s)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	*target = s
 	return nil
@@ -653,7 +702,7 @@ func getBool(values url.Values, key string, target *bool) error {
 	if len(s) > 0 {
 		enable, err := strconv.ParseBool(s)
 		if err != nil {
-			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+			return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 		}
 		*target = enable
 	}

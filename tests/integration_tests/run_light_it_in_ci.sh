@@ -38,17 +38,17 @@ mysql_groups=(
 	# G02
 	'new_ci_collation safe_mode savepoint fail_over_ddl_C unsplittable_tables'
 	# G03
-	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
+	'capture_suicide_while_balance_table capture_local_fence_on_session_done kv_client_stream_reconnect ddl_default_current_timestamp fail_over_ddl_D'
 	# G04
 	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
 	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
 	# G06
-	'http_api http_api_compatibility http_api_tls http_api_tls_old_arch fail_over_ddl_G synced_status same_upstream_downstream'
+	'http_api http_api_compatibility http_api_tls_old_arch fail_over_ddl_G synced_status same_upstream_downstream'
 	# G07
-	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config synced_status_with_redo'
+	'fail_over_ddl_H changefeed_update_config synced_status_with_redo redo_apply_table_route'
 	# G08
-	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
+	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I table_route'
 	# G09
 	'sequence cdc_server_tips ddl_sequence server_config_compatibility log_redaction fail_over_ddl_J'
 	# G10
@@ -59,11 +59,11 @@ mysql_groups=(
 	# ds_memory_control
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
+	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator cli_missing_keyspace_error changefeed_query_toml_api'
 	# G14
 	'batch_add_table batch_update_to_no_batch fail_over_ddl_O update_changefeed_check_config pause_changefeed_with_long_time_ddl'
 	# G15
-	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check old_arch_compatibility'
+	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check old_arch_compatibility bootstrap_retry_after_error'
 )
 
 # Resource allocation for kafka light integration tests in CI pipelines:
@@ -83,23 +83,23 @@ kafka_groups=(
 	# G05
 	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
 	# G06
-	'multi_topics mq_sink_dispatcher fail_over_ddl_G'
+	'debezium_avro multi_topics mq_sink_dispatcher fail_over_ddl_G'
 	# G07
 	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08
-	'capture_session_done_during_task fail_over_ddl_I'
+	'capture_session_done_during_task fail_over_ddl_I table_route'
 	# G09
 	'cdc_server_tips ddl_sequence log_redaction fail_over_ddl_J'
 	# G10
-	'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
+	'changefeed_error batch_add_table fail_over_ddl_K'
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
+	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
-	'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O update_changefeed_check_config'
+	'kafka_simple_basic avro_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'kafka_simple_basic_avro split_region autorandom gc_safepoint kafka_log_info'
 )
@@ -135,9 +135,9 @@ pulsar_groups=(
 	# G12
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
+	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
-	'avro_basic debezium_basic fail_over_ddl_O update_changefeed_check_config'
+	'avro_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'split_region autorandom gc_safepoint'
 )
@@ -173,9 +173,9 @@ storage_groups=(
 	# G12
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
+	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
-	'csv_storage_partition_table csv_storage_multi_tables_ddl fail_over_ddl_O update_changefeed_check_config'
+	'csv_storage_partition_table csv_storage_multi_tables_ddl table_route fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'split_region autorandom gc_safepoint'
 )

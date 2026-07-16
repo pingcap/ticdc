@@ -123,7 +123,7 @@ func (o *options) run(cmd *cobra.Command) error {
 	logger.StartLogFileMonitor(ctx, loggerConfig.File, 30*time.Second)
 
 	version.LogVersionInfo("Change Data Capture (CDC)")
-	metrics.BuildInfo.WithLabelValues(version.ReleaseVersion, version.GitHash, version.BuildTS, kerneltype.Name()).Set(1)
+	metrics.BuildInfo.WithLabelValues(version.ReleaseVersion, version.GitHash, version.BuildTS, kerneltype.Name(), "newarch").Set(1)
 	log.Info("The TiCDC release version", zap.String("ReleaseVersion", version.ReleaseVersion))
 
 	util.LogHTTPProxies()
@@ -147,7 +147,8 @@ func (o *options) run(cmd *cobra.Command) error {
 	util.InitSignalHandling(shutdown, cancel)
 
 	err = svr.Run(ctx)
-	if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
+	isNormalExit := isNormalServerShutdown(err, ctx)
+	if !isNormalExit {
 		log.Error("cdc server exits with error", zap.Error(err))
 	} else {
 		log.Info("cdc server exits normally")
@@ -157,15 +158,31 @@ func (o *options) run(cmd *cobra.Command) error {
 	ticker := time.NewTicker(server.GracefulShutdownTimeout)
 	defer ticker.Stop()
 	go func() {
-		svr.Close(ctx)
+		svr.Close()
 		close(ch)
 	}()
 	select {
 	case <-ch:
 	case <-ticker.C:
 		log.Warn("graceful shutdown timeout, exit server")
+		if isNormalExit {
+			return errors.New("graceful shutdown timeout")
+		}
+	}
+	if isNormalExit {
+		return nil
 	}
 	return err
+}
+
+func isNormalServerShutdown(err error, ctx context.Context) bool {
+	if err == nil {
+		return true
+	}
+	// Treat cancellation as a normal exit only when the top-level context was
+	// explicitly canceled by shutdown/signal. This avoids masking internal module
+	// failures that also surface as context.Canceled via errgroup cancellation.
+	return errors.Is(err, context.Canceled) && ctx.Err() == context.Canceled
 }
 
 // complete adapts from the command line args and config file to the data required.

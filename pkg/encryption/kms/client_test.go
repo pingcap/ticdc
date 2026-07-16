@@ -17,8 +17,12 @@ import (
 	"context"
 	"testing"
 
+	plog "github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type fakeDecryptor struct {
@@ -203,4 +207,42 @@ func TestNewClientValidatesGCPCredentialsExclusive(t *testing.T) {
 		},
 	})
 	require.Error(t, err)
+}
+
+func TestGetAWSDecryptorNilFactoryLogsWarn(t *testing.T) {
+	core, observedLogs := observer.New(zapcore.DebugLevel)
+	restore := plog.ReplaceGlobals(zap.New(core), nil)
+	defer restore()
+
+	c := &client{
+		awsClients: make(map[awsClientKey]awsDecryptor),
+	}
+
+	_, err := c.getAWSDecryptor(context.Background(), awsClientConfig{})
+	require.Error(t, err)
+
+	entries := observedLogs.FilterMessage("aws kms decryptor factory is nil").AllUntimed()
+	require.NotEmpty(t, entries)
+	for _, entry := range entries {
+		require.Equal(t, zapcore.WarnLevel, entry.Level)
+	}
+}
+
+func TestGetGCPDecryptorNilFactoryLogsWarn(t *testing.T) {
+	core, observedLogs := observer.New(zapcore.DebugLevel)
+	restore := plog.ReplaceGlobals(zap.New(core), nil)
+	defer restore()
+
+	c := &client{
+		gcpClients: make(map[gcpClientKey]gcpDecryptor),
+	}
+
+	_, err := c.getGCPDecryptor(context.Background(), gcpClientConfig{})
+	require.Error(t, err)
+
+	entries := observedLogs.FilterMessage("gcp kms decryptor factory is nil").AllUntimed()
+	require.NotEmpty(t, entries)
+	for _, entry := range entries {
+		require.Equal(t, zapcore.WarnLevel, entry.Level)
+	}
 }

@@ -88,7 +88,7 @@ func newDMLProducers(
 		producerCacheSize = int(*comp.config.PulsarProducerCacheSize)
 	}
 
-	producers, err := lru.NewWithEvict(producerCacheSize, func(key interface{}, value interface{}) {
+	producers, err := lru.NewWithEvict(producerCacheSize, func(_ interface{}, value interface{}) {
 		// this is call when lru Remove producer or auto remove producer
 		pulsarProducer, ok := value.(pulsarClient.Producer)
 		if ok && pulsarProducer != nil {
@@ -161,7 +161,7 @@ func (p *dmlProducers) asyncSendMessage(
 	// if for stress test record , add count to message callback function
 
 	producer.SendAsync(ctx, data,
-		func(id pulsarClient.MessageID, m *pulsarClient.ProducerMessage, err error) {
+		func(_ pulsarClient.MessageID, m *pulsarClient.ProducerMessage, err error) {
 			// fail
 			if err != nil {
 				e := errors.WrapError(errors.ErrPulsarAsyncSendMessage, err)
@@ -195,6 +195,9 @@ func (p *dmlProducers) asyncSendMessage(
 }
 
 func (p *dmlProducers) close() { // We have to hold the lock to synchronize closing with writing.
+	if p == nil {
+		return
+	}
 	p.closedMu.Lock()
 	defer p.closedMu.Unlock()
 	// If the producer has already been closed, we should skip this close operation.

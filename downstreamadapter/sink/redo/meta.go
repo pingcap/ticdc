@@ -29,7 +29,8 @@ import (
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
@@ -49,7 +50,7 @@ type RedoMeta struct {
 
 	// This fields are used to process meta files and perform
 	// garbage collection of logs.
-	extStorage    storage.ExternalStorage
+	extStorage    storeapi.Storage
 	uuidGenerator uuid.Generator
 	preMetaFile   string
 
@@ -100,8 +101,8 @@ func (m *RedoMeta) Running() bool {
 	return m.running.Load()
 }
 
-func (m *RedoMeta) PreStart(ctx context.Context) error {
-	uri, err := storage.ParseRawURL(util.GetOrZero(m.cfg.Storage))
+func (m *RedoMeta) PreStart(ctx context.Context) (err error) {
+	uri, err := objstore.ParseRawURL(util.GetOrZero(m.cfg.Storage))
 	if err != nil {
 		return err
 	}
@@ -109,7 +110,7 @@ func (m *RedoMeta) PreStart(ctx context.Context) error {
 	redo.FixLocalScheme(uri)
 	// blackhole scheme is converted to "noop" scheme here, so we can use blackhole for testing
 	if redo.IsBlackholeStorage(uri.Scheme) {
-		uri, _ = storage.ParseRawURL("noop://")
+		uri, _ = objstore.ParseRawURL("noop://")
 	}
 
 	extStorage, err := redo.InitExternalStorage(ctx, *uri)
@@ -117,6 +118,11 @@ func (m *RedoMeta) PreStart(ctx context.Context) error {
 		return err
 	}
 	m.extStorage = extStorage
+	defer func() {
+		if err != nil {
+			m.closeExtStorage()
+		}
+	}()
 
 	m.metricFlushLogDuration = metrics.RedoFlushLogDurationHistogram.
 		WithLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
@@ -142,6 +148,10 @@ func (m *RedoMeta) PreStart(ctx context.Context) error {
 
 // Run runs bgFlushMeta and bgGC.
 func (m *RedoMeta) Run(ctx context.Context) error {
+	defer func() {
+		m.running.Store(false)
+		m.closeExtStorage()
+	}()
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
 		return m.bgFlushMeta(egCtx)
@@ -322,7 +332,7 @@ func (m *RedoMeta) deleteAllLogs(ctx context.Context) error {
 	// otherwise it should have already meet panic during changefeed running time.
 	// the extStorage may be nil in the unit test, so just set the external storage to make unit test happy.
 	if m.extStorage == nil {
-		uri, err := storage.ParseRawURL(util.GetOrZero(m.cfg.Storage))
+		uri, err := objstore.ParseRawURL(util.GetOrZero(m.cfg.Storage))
 		redo.FixLocalScheme(uri)
 		if err != nil {
 			return err
@@ -331,6 +341,7 @@ func (m *RedoMeta) deleteAllLogs(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		defer m.closeExtStorage()
 	}
 	// Write deleted mark before clean any files.
 	deleteMarker := getDeletedChangefeedMarker(m.changeFeedID)
@@ -387,11 +398,9 @@ func (m *RedoMeta) prepareForFlushMeta() (bool, misc.LogMeta) {
 	unflushed.CheckpointTs = m.metaCheckpointTs.getUnflushed()
 	unflushed.ResolvedTs = m.metaResolvedTs.getUnflushed()
 
-	hasChange := false
-	if flushed.CheckpointTs < unflushed.CheckpointTs ||
-		flushed.ResolvedTs < unflushed.ResolvedTs {
-		hasChange = true
-	}
+	hasChange := flushed.CheckpointTs < unflushed.CheckpointTs ||
+		flushed.ResolvedTs < unflushed.ResolvedTs
+
 	return hasChange, unflushed
 }
 
@@ -449,9 +458,22 @@ func (m *RedoMeta) CleanupMetrics() {
 		DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
 }
 
+func (m *RedoMeta) closeExtStorage() {
+	if m.extStorage == nil {
+		return
+	}
+	m.extStorage.Close()
+	m.extStorage = nil
+}
+
 // Cleanup removes all redo logs of this manager, it is called when changefeed is removed
 // only owner should call this method.
 func (m *RedoMeta) Cleanup(ctx context.Context) error {
+	defer func() {
+		if !m.running.Load() {
+			m.closeExtStorage()
+		}
+	}()
 	return m.deleteAllLogs(ctx)
 }
 

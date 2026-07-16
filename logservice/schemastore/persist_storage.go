@@ -150,7 +150,7 @@ func newPersistentStorage(
 	gcSafePoint uint64,
 ) (*persistentStorage, error) {
 	// Try to get encryption manager from appcontext (optional)
-	encMgr, _ := appcontext.TryGetService[encryption.EncryptionManager]("EncryptionManager")
+	encMgr, _ := appcontext.TryGetService[encryption.EncryptionManager](appcontext.EncryptionManager)
 
 	dataStorage := &persistentStorage{
 		rootDir:                root,
@@ -197,6 +197,7 @@ func (p *persistentStorage) initialize(gcSafePoint uint64) error {
 			isDataReusable = false
 		}
 		if gcSafePoint < gcTs {
+			_ = db.Close()
 			return errors.New(fmt.Sprintf("gc safe point %d is smaller than gcTs %d on disk", gcSafePoint, gcTs))
 		}
 		upperBound, err := readUpperBoundMeta(db)
@@ -233,7 +234,8 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) 
 		zap.Uint64("snapTs", gcTs))
 
 	var err error
-	if p.databaseMap, p.tableMap, p.partitionMap, err = persistSchemaSnapshot(p.db, p.kvStorage, gcTs, true); err != nil {
+	if p.databaseMap, p.tableMap, p.partitionMap, err = persistSchemaSnapshotWithEncryption(
+		p.db, p.kvStorage, gcTs, true, p.encryptionManager, p.keyspaceID); err != nil {
 		// TODO: retry
 		log.Fatal("fail to initialize from kv snapshot", zap.Error(err))
 	}
@@ -258,11 +260,13 @@ func (p *persistentStorage) initializeFromDisk() {
 	defer storageSnap.Close()
 
 	var err error
-	if p.databaseMap, err = loadDatabasesInKVSnap(storageSnap, p.gcTs); err != nil {
+	if p.databaseMap, err = loadDatabasesInKVSnapWithEncryption(
+		storageSnap, p.gcTs, p.encryptionManager, p.keyspaceID); err != nil {
 		log.Fatal("load database info from disk failed")
 	}
 
-	if p.tableMap, p.partitionMap, err = loadTablesInKVSnap(storageSnap, p.gcTs, p.databaseMap); err != nil {
+	if p.tableMap, p.partitionMap, err = loadTablesInKVSnapWithEncryption(
+		storageSnap, p.gcTs, p.databaseMap, p.encryptionManager, p.keyspaceID); err != nil {
 		log.Fatal("load tables in kv snapshot failed")
 	}
 
@@ -304,7 +308,7 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 	})
 	if snapTs < p.gcTs {
 		p.mu.Unlock()
-		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs("snapTs %d is smaller than gcTs %d", snapTs, p.gcTs)
+		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs(snapTs, p.gcTs)
 	}
 
 	gcTs := p.gcTs
@@ -371,7 +375,6 @@ func (p *persistentStorage) getTableInfo(tableID int64, ts uint64) (*common.Tabl
 }
 
 func (p *persistentStorage) forceGetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error) {
-	log.Info("forceGetTableInfo", zap.Int64("tableID", tableID), zap.Uint64("ts", ts))
 	p.mu.RLock()
 	// if there is already a store, it must contain all table info on disk, so we can use it directly
 	if store, ok := p.tableInfoStoreMap[tableID]; ok {
@@ -381,7 +384,9 @@ func (p *persistentStorage) forceGetTableInfo(tableID int64, ts uint64) (*common
 	p.mu.RUnlock()
 	// build a temp store to get table info
 	store := newEmptyVersionedTableInfoStore(tableID)
-	p.buildVersionedTableInfoStore(store)
+	if err := p.buildVersionedTableInfoStore(store); err != nil {
+		return nil, err
+	}
 	return store.getTableInfo(ts)
 }
 
@@ -540,7 +545,9 @@ func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableIn
 	allDDLFinishedTs = append(allDDLFinishedTs, p.tablesDDLHistory[tableID]...)
 	p.mu.RUnlock()
 
-	if err := addTableInfoFromKVSnap(store, kvSnapVersion, storageSnap); err != nil {
+	if err := addTableInfoFromKVSnap(
+		store, kvSnapVersion, storageSnap, p.encryptionManager, p.keyspaceID,
+	); err != nil {
 		return err
 	}
 
@@ -556,8 +563,12 @@ func addTableInfoFromKVSnap(
 	store *versionedTableInfoStore,
 	kvSnapVersion uint64,
 	snap *pebble.Snapshot,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
 ) error {
-	tableInfo := readTableInfoInKVSnap(snap, store.getTableID(), kvSnapVersion)
+	tableInfo := readTableInfoInKVSnapWithEncryption(
+		snap, store.getTableID(), kvSnapVersion, encMgr, keyspaceID,
+	)
 	if tableInfo != nil {
 		store.addInitialTableInfo(tableInfo, kvSnapVersion)
 	}
@@ -605,7 +616,8 @@ func (p *persistentStorage) doGc(gcTs uint64) {
 	}
 
 	start := time.Now()
-	_, _, _, err := persistSchemaSnapshot(p.db, p.kvStorage, gcTs, false)
+	_, _, _, err := persistSchemaSnapshotWithEncryption(
+		p.db, p.kvStorage, gcTs, false, p.encryptionManager, p.keyspaceID)
 	if err != nil {
 		log.Warn("fail to write kv snapshot during gc",
 			zap.Uint64("gcTs", gcTs), zap.Error(err))

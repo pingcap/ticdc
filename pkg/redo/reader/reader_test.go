@@ -33,8 +33,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer/file"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -56,7 +59,8 @@ func genLogFile(
 		return fileName
 	}))
 	require.Nil(t, err)
-	if logType == redo.RedoRowLogFileType {
+	switch logType {
+	case redo.RedoRowLogFileType:
 		// generate unsorted logs
 		for ts := maxCommitTs; ts >= minCommitTs; ts-- {
 			event := &pevent.RedoRowEvent{
@@ -71,7 +75,7 @@ func genLogFile(
 			_, err = w.Write(rawData)
 			require.Nil(t, err)
 		}
-	} else if logType == redo.RedoDDLLogFileType {
+	case redo.RedoDDLLogFileType:
 		event := &pevent.DDLEvent{
 			FinishedTs: maxCommitTs,
 			TableInfo:  &common.TableInfo{},
@@ -250,6 +254,43 @@ func TestNewLogReaderAndReadMeta(t *testing.T) {
 			require.Equal(t, tt.wantResolvedTs, rts, tt.name)
 		}
 	}
+}
+
+func TestInitMetaClosesExternalStorage(t *testing.T) {
+	controller := gomock.NewController(t)
+	mockStorage := mockobjstore.NewMockStorage(controller)
+	meta := misc.NewMeta(11, 22)
+	data, err := meta.MarshalMsg(nil)
+	require.NoError(t, err)
+
+	metaPath := fmt.Sprintf(redo.RedoMetaFileFormat, "capture", "default", "changefeed", redo.RedoMetaFileType, "uuid", redo.MetaEXT)
+	mockStorage.EXPECT().WalkDir(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, opt *storeapi.WalkOption, fn func(string, int64) error) error {
+			return fn(metaPath, int64(len(data)))
+		})
+	mockStorage.EXPECT().ReadFile(gomock.Any(), metaPath).Return(data, nil)
+	mockStorage.EXPECT().Close().Times(1)
+
+	oldInitExternalStorage := redo.InitExternalStorage
+	defer func() {
+		redo.InitExternalStorage = oldInitExternalStorage
+	}()
+	uri, err := url.Parse("file:///tmp/redo-test")
+	require.NoError(t, err)
+	redo.InitExternalStorage = func(context.Context, url.URL) (storeapi.Storage, error) {
+		return mockStorage, nil
+	}
+
+	reader := &LogReader{
+		cfg: &LogReaderConfig{
+			Dir:                t.TempDir(),
+			URI:                *uri,
+			UseExternalStorage: true,
+		},
+	}
+	require.NoError(t, reader.initMeta(context.Background()))
+	require.Equal(t, uint64(11), reader.meta.CheckpointTs)
+	require.Equal(t, uint64(22), reader.meta.ResolvedTs)
 }
 
 func genMetaFile(t *testing.T, dir string, meta *misc.LogMeta) {

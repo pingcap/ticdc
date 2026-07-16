@@ -99,6 +99,19 @@ func (rac *RedoApplierConfig) toLogReaderConfig() (string, *reader.LogReaderConf
 	return uri.Scheme, cfg, nil
 }
 
+func getRedoApplyTimezone(sinkURI *url.URL) (string, error) {
+	timezone := sinkURI.Query().Get("time-zone")
+	if timezone == "" {
+		timezone = config.GetGlobalServerConfig().TZ
+	}
+
+	tz, err := util.GetTimezone(timezone)
+	if err != nil {
+		return "", errors.WrapError(errors.ErrMySQLInvalidConfig, err)
+	}
+	return tz.String(), nil
+}
+
 func (ra *RedoApplier) getBlockTableIDs(blockTables *commonEvent.InfluencedTables) map[int64]struct{} {
 	tableIDs := make(map[int64]struct{})
 	if blockTables == nil {
@@ -184,10 +197,7 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for {
-		if row == nil && ddl == nil {
-			break
-		}
+	for row != nil || ddl != nil {
 		if shouldApplyDDL(row, ddl) {
 			if err := ra.applyDDL(ctx, ddl, checkpointTs); err != nil {
 				return err
@@ -280,12 +290,14 @@ func (ra *RedoApplier) applyDDL(
 				timodel.ActionAlterTablePartitionPlacement, timodel.ActionRecoverSchema:
 				tableDDLTs = ra.getTableDDLTs(commonType.DDLSpanTableID)
 			default:
-				log.Warn("ignore unsupport DDL", zap.Any("ddl", ddl), zap.Any("type", ddl.Type))
+				log.Warn("ignore unsupport DDL", zap.String("ddl", ddl.DDL.Query))
 				return true
 			}
 		}
 		if tableDDLTs.ts >= int64(ddl.DDL.CommitTs) {
-			log.Warn("ignore DDL which commit ts is less than current ts", zap.Any("ddl", ddl), zap.Any("startTs", tableDDLTs.ts))
+			log.Warn("ignore DDL which commit ts is less than current ts",
+				zap.Uint64("commitTs", ddl.DDL.CommitTs), zap.Int64("startTs", tableDDLTs.ts),
+				zap.String("ddl", ddl.DDL.Query))
 			// Ignore the previous dml events, because the drop ddl has replicated the downstream
 			// DML + Drop Table: If the drop table ddl is ignored and the previous dmls should be replicated the downstream in the past.
 			if ddl.DDL.NeedDroppedTables != nil {
@@ -310,7 +322,7 @@ func (ra *RedoApplier) applyDDL(
 		// compatible with old arch
 		if ra.needRecoveryInfo && ddl.DDL.CommitTs == checkpointTs {
 			if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
-				log.Error("ignore unsupported DDL", zap.Any("ddl", ddl))
+				log.Warn("ignore unsupported DDL", zap.String("ddl", ddl.DDL.Query))
 				return true
 			}
 		}
@@ -319,7 +331,7 @@ func (ra *RedoApplier) applyDDL(
 	if shouldSkip() {
 		return nil
 	}
-	log.Warn("apply DDL", zap.Any("ddl", ddl))
+	log.Warn("apply DDL", zap.String("ddl", ddl.DDL.Query))
 	// Wait block tables to flush data before applying DDL.
 	tableIDs := ra.getBlockTableIDs(ddl.DDL.BlockedTables)
 	for tableID := range tableIDs {
@@ -459,8 +471,15 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 		log.Warn("The redo log version is different the current version, enable-ddl-ts will be set to false", zap.Any("logVersion", ra.rd.GetVersion()), zap.Any("currentVersion", misc.Version))
 	}
 	sinkURI.RawQuery = query.Encode()
+	timezone, err := getRedoApplyTimezone(sinkURI)
+	if err != nil {
+		return err
+	}
 	replicaConfig := &config.ChangefeedConfig{
-		SinkURI:    sinkURI.String(),
+		SinkURI: sinkURI.String(),
+		// Redo apply runs without a CDC server instance, so resolve the default
+		// server timezone for the same sink URI validation as normal changefeeds.
+		TimeZone:   timezone,
 		SinkConfig: &config.SinkConfig{},
 	}
 	if ra.mysqlSink == nil {
@@ -478,7 +497,7 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	ra.updateSplitter = newUpdateEventSplitter(ra.rd, ra.cfg.Dir)
 
 	eg.Go(func() error {
-		defer ra.mysqlSink.Close(false)
+		defer ra.mysqlSink.Close()
 		return ra.consumeLogs(egCtx)
 	})
 

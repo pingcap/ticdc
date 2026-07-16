@@ -19,6 +19,7 @@ package gc
 import (
 	"context"
 	stderrors "errors"
+	"math"
 	"testing"
 	"time"
 
@@ -95,4 +96,34 @@ func TestTryUpdateServiceGCSafepointDoesNotReturnSnapshotLost(t *testing.T) {
 	errCode, ok := cerrors.RFCCode(err)
 	require.True(t, ok)
 	require.Equal(t, cerrors.ErrSnapshotLostByGC.RFCCode(), errCode)
+}
+
+func TestTryDeleteServiceGCSafepointClearsCachedState(t *testing.T) {
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+
+	updateCalls := 0
+	var deletedTTL int64
+	var deletedSafePoint uint64
+	pdClient := &MockPDClient{
+		UpdateServiceGCSafePointFunc: func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+			updateCalls++
+			deletedTTL = ttl
+			deletedSafePoint = safePoint
+			return safePoint, nil
+		},
+	}
+
+	m := NewManager("test-service", pdClient).(*gcManager)
+	m.lastSafePointTs.Store(123)
+	m.isTiCDCBlockGC.Store(true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	require.NoError(t, m.TryDeleteServiceGCSafepoint(ctx))
+	require.Equal(t, 1, updateCalls)
+	require.Equal(t, int64(0), deletedTTL)
+	require.Equal(t, uint64(math.MaxUint64), deletedSafePoint)
+	require.Zero(t, m.lastSafePointTs.Load())
+	require.False(t, m.isTiCDCBlockGC.Load())
 }

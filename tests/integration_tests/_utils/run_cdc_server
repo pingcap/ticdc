@@ -3,7 +3,7 @@
 # --workdir: work directory
 # --tlsdir: work directory
 # --cert-allowed-cn: cert allowed cn
-# --binary: path to cdc test binary
+# --binary: path to cdc binary (cdc.test is preferred for integration coverage)
 # --logsuffix: log suffix
 # --addr: address
 # --pd: pd address
@@ -162,9 +162,31 @@ EOF
 	fi
 fi
 
+if [ "${LEGACY_SAFEPOINT:-0}" = "1" ]; then
+	legacy_safepoint_config_file="${workdir}/cdc_legacy_safepoint.toml"
+	merged_config_file="${workdir}/cdc_legacy_safepoint${logsuffix}_server.toml"
+	if [ -f "$legacy_safepoint_config_file" ]; then
+		cat "$legacy_safepoint_config_file" >"$merged_config_file"
+	else
+		cat >"$merged_config_file" <<EOF
+enable-legacy-safepoint = true
+EOF
+	fi
+
+	if [ -n "$config_path" ]; then
+		existing_config=$(echo "$config_path" | sed 's/--config //')
+		sed '/^[[:space:]]*enable-legacy-safepoint[[:space:]]*=/d' "$existing_config" >>"$merged_config_file"
+	fi
+	config_path="--config $merged_config_file"
+fi
+
 echo "[$(date)] <<<<<< START cdc server in $TEST_NAME case >>>>>>"
 cd $workdir
 pid=$$
+coverprofile_arg=
+if [[ $(basename "$binary") == "cdc.test" ]]; then
+	coverprofile_arg="-test.coverprofile=$OUT_DIR/cov.$TEST_NAME.$pid.out"
+fi
 # Uncomment to turn on grpc versbose log.
 # GRPC_GO_LOG_VERBOSITY_LEVEL=99 GRPC_GO_LOG_SEVERITY_LEVEL=debug \
 
@@ -172,7 +194,7 @@ set -x
 
 if [[ "$restart" == "true" ]]; then
 	while true; do
-		GO_FAILPOINTS=$failpoint $binary -test.coverprofile="$OUT_DIR/cov.$TEST_NAME.$pid.out" server $newarch \
+		GO_FAILPOINTS=$failpoint $binary $coverprofile_arg server $newarch \
 			--log-file $workdir/cdc$logsuffix.log \
 			--log-level $log_level \
 			--data-dir "$data_dir" \
@@ -188,7 +210,7 @@ if [[ "$restart" == "true" ]]; then
 		sleep 1
 	done &
 else
-	GO_FAILPOINTS=$failpoint $binary -test.coverprofile="$OUT_DIR/cov.$TEST_NAME.$pid.out" server \
+	GO_FAILPOINTS=$failpoint $binary $coverprofile_arg server \
 		--log-file $workdir/cdc$logsuffix.log \
 		--log-level $log_level \
 		--data-dir "$data_dir" \

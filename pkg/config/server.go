@@ -104,6 +104,9 @@ var defaultServerConfig = &ServerConfig{
 	DataDir: "",
 	GcTTL:   24 * 60 * 60, // 24H
 	TZ:      "System",
+	// Disabled by default. When enabled in next-gen mode, TiCDC uses
+	// service safepoint v2 instead of GC barriers.
+	EnableLegacySafePoint: false,
 	// The default election-timeout in PD is 3s and minimum session TTL is 5s,
 	// which is calculated by `math.Ceil(3 * election-timeout / 2)`, we choose
 	// default capture session ttl to 10s to increase robust to PD jitter,
@@ -115,8 +118,9 @@ var defaultServerConfig = &ServerConfig{
 		SortDir:       DefaultSortDir,
 		CacheSizeInMB: 128, // By default, use 128M memory as sorter cache.
 	},
-	Security: &security.Credential{},
-	KVClient: NewDefaultKVClientConfig(),
+	Security:   &security.Credential{},
+	KVClient:   NewDefaultKVClientConfig(),
+	Encryption: NewDefaultEncryptionConfig(),
 	Debug: &DebugConfig{
 		DB:       NewDefaultDBConfig(),
 		Messages: defaultMessageConfig.Clone(),
@@ -126,7 +130,6 @@ var defaultServerConfig = &ServerConfig{
 		EventStore:   NewDefaultEventStoreConfig(),
 		SchemaStore:  NewDefaultSchemaStoreConfig(),
 		EventService: NewDefaultEventServiceConfig(),
-		Encryption:   NewDefaultEncryptionConfig(),
 	},
 	ClusterID:              "default",
 	GcTunerMemoryThreshold: DisableMemoryLimit,
@@ -148,16 +151,19 @@ type ServerConfig struct {
 	GcTTL int64  `toml:"gc-ttl" json:"gc-ttl"`
 	TZ    string `toml:"tz" json:"tz"`
 
+	EnableLegacySafePoint bool `toml:"enable-legacy-safepoint" json:"enable-legacy-safepoint"`
+
 	CaptureSessionTTL int `toml:"capture-session-ttl" json:"capture-session-ttl"`
 
 	OwnerFlushInterval     TomlDuration `toml:"owner-flush-interval" json:"owner-flush-interval"`
 	ProcessorFlushInterval TomlDuration `toml:"processor-flush-interval" json:"processor-flush-interval"`
 
-	Sorter    *SorterConfig        `toml:"sorter" json:"sorter"`
-	Security  *security.Credential `toml:"security" json:"security"`
-	KVClient  *KVClientConfig      `toml:"kv-client" json:"kv-client"`
-	Debug     *DebugConfig         `toml:"debug" json:"debug"`
-	ClusterID string               `toml:"cluster-id" json:"cluster-id"`
+	Sorter     *SorterConfig        `toml:"sorter" json:"sorter"`
+	Security   *security.Credential `toml:"security" json:"security"`
+	KVClient   *KVClientConfig      `toml:"kv-client" json:"kv-client"`
+	Encryption *EncryptionConfig    `toml:"encryption" json:"encryption"`
+	Debug      *DebugConfig         `toml:"debug" json:"debug"`
+	ClusterID  string               `toml:"cluster-id" json:"cluster-id"`
 	// Deprecated: we don't use this field anymore.
 	GcTunerMemoryThreshold uint64  `toml:"gc-tuner-memory-threshold" json:"gc-tuner-memory-threshold"`
 	MemoryLimitPercentage  float64 `toml:"memory-limit-percentage" json:"memory-limit-percentage"`
@@ -280,6 +286,10 @@ func (c *ServerConfig) ValidateAndAdjust() error {
 	}
 	if err = c.KVClient.ValidateAndAdjust(); err != nil {
 		return errors.Trace(err)
+	}
+
+	if c.Encryption == nil {
+		c.Encryption = defaultCfg.Encryption
 	}
 
 	if c.Debug == nil {

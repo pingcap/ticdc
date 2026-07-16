@@ -22,11 +22,11 @@ import (
 	"github.com/pingcap/ticdc/coordinator"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	logcoordinator "github.com/pingcap/ticdc/logservice/coordinator"
-	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.etcd.io/etcd/server/v3/mvcc"
 	"go.uber.org/zap"
@@ -38,19 +38,25 @@ type elector struct {
 	// election used for coordinator
 	election *concurrency.Election
 	// election used for log coordinator
-	logElection *concurrency.Election
-	svr         *server
+	logElection                     *concurrency.Election
+	coordinatorMaxTaskConcurrency   int
+	coordinatorCheckBalanceInterval time.Duration
+	svr                             *server
 }
 
-func NewElector(server *server) common.SubModule {
+// NewElector creates the coordinator elector with scheduler settings captured from server startup config.
+func NewElector(server *server, schedulerCfg *config.SchedulerConfig) common.SubModule {
 	election := concurrency.NewElection(server.session,
 		etcd.CaptureOwnerKey(server.EtcdClient.GetClusterID()))
 	logElection := concurrency.NewElection(server.session,
 		etcd.LogCoordinatorKey(server.EtcdClient.GetClusterID()))
+	maxTaskConcurrency, checkBalanceInterval := coordinatorSchedulerSettings(schedulerCfg)
 	return &elector{
-		election:    election,
-		logElection: logElection,
-		svr:         server,
+		election:                        election,
+		logElection:                     logElection,
+		coordinatorMaxTaskConcurrency:   maxTaskConcurrency,
+		coordinatorCheckBalanceInterval: checkBalanceInterval,
+		svr:                             server,
 	}
 }
 
@@ -83,8 +89,11 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 		// Before campaign check liveness
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
-			log.Info("do not campaign coordinator, liveness is stopping", zap.String("nodeID", nodeID))
+		currentLiveness := e.svr.liveness.Load()
+		if currentLiveness != liveness.CaptureAlive {
+			log.Info("do not campaign coordinator because node is not alive",
+				zap.String("nodeID", nodeID),
+				zap.String("liveness", currentLiveness.String()))
 			return nil
 		}
 		log.Info("start to campaign coordinator", zap.String("nodeID", nodeID))
@@ -109,13 +118,16 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			return errors.ErrCaptureSuicide.GenWithStackByArgs()
 		}
 		// After campaign check liveness again.
-		// It is possible it becomes the coordinator right after receiving SIGTERM.
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
-			// If the server is stopping, resign actively.
-			log.Info("resign coordinator actively, liveness is stopping")
+		// It is possible it becomes the coordinator right after receiving SIGTERM,
+		// or after entering the draining phase.
+		if currentLiveness := e.svr.liveness.Load(); currentLiveness != liveness.CaptureAlive {
+			// If the server is not alive, resign actively.
+			log.Info("resign coordinator actively, node is not alive",
+				zap.String("nodeID", nodeID),
+				zap.String("liveness", currentLiveness.String()))
 			if resignErr := e.resign(ctx); resignErr != nil {
 				log.Warn("resign coordinator actively failed", zap.String("nodeID", nodeID), zap.Error(resignErr))
-				return errors.Trace(err)
+				return errors.Trace(resignErr)
 			}
 			return nil
 		}
@@ -134,8 +146,8 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			changefeed.NewEtcdBackend(e.svr.EtcdClient),
 			e.svr.EtcdClient.GetGCServiceID(),
 			coordinatorVersion,
-			10000,
-			time.Minute,
+			e.coordinatorMaxTaskConcurrency,
+			e.coordinatorCheckBalanceInterval,
 		)
 		e.svr.setCoordinator(co)
 		err = co.Run(ctx)
@@ -185,6 +197,10 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 	}
 }
 
+func coordinatorSchedulerSettings(schedulerCfg *config.SchedulerConfig) (int, time.Duration) {
+	return schedulerCfg.MaxTaskConcurrency, time.Duration(schedulerCfg.CheckBalanceInterval)
+}
+
 func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 	// Limit the frequency of elections to avoid putting too much pressure on the etcd server
 	rl := rate.NewLimiter(rate.Every(time.Second), 1 /* burst */)
@@ -203,8 +219,11 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 		// Before campaign check liveness
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
-			log.Info("do not campaign log coordinator, liveness is stopping", zap.String("nodeID", nodeID))
+		currentLiveness := e.svr.liveness.Load()
+		if currentLiveness != liveness.CaptureAlive {
+			log.Info("do not campaign log coordinator because node is not alive",
+				zap.String("nodeID", nodeID),
+				zap.String("liveness", currentLiveness.String()))
 			return nil
 		}
 		// Campaign to be the log coordinator, it blocks until it been elected.
@@ -223,10 +242,13 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			return errors.ErrCaptureSuicide.GenWithStackByArgs()
 		}
 		// After campaign check liveness again.
-		// It is possible it becomes the coordinator right after receiving SIGTERM.
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
-			// If the server is stopping, resign actively.
-			log.Info("resign log coordinator actively, liveness is stopping")
+		// It is possible it becomes the coordinator right after receiving SIGTERM,
+		// or after entering the draining phase.
+		if currentLiveness := e.svr.liveness.Load(); currentLiveness != liveness.CaptureAlive {
+			// If the server is not alive, resign actively.
+			log.Info("resign log coordinator actively, node is not alive",
+				zap.String("nodeID", nodeID),
+				zap.String("liveness", currentLiveness.String()))
 			if resignErr := e.resignLogCoordinator(); resignErr != nil {
 				log.Warn("resign log coordinator actively failed",
 					zap.String("nodeID", nodeID), zap.Error(resignErr))

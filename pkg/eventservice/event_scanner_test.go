@@ -21,9 +21,13 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
+	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -32,6 +36,32 @@ import (
 
 type mockMounter struct {
 	event.Mounter
+	decodeCount atomic.Int64
+}
+
+type countingDMLTypeFilter struct {
+	filter.Filter
+	dmlTypeCallCount atomic.Int64
+}
+
+func (f *countingDMLTypeFilter) ShouldIgnoreDMLByEventType(
+	dmlType common.RowType,
+	tableInfo *common.TableInfo,
+	startTs uint64,
+) (bool, error) {
+	f.dmlTypeCallCount.Inc()
+	return f.Filter.ShouldIgnoreDMLByEventType(dmlType, tableInfo, startTs)
+}
+
+type stubEventGetter struct {
+	iter eventstore.EventIterator
+	err  error
+}
+
+func (g *stubEventGetter) GetIterator(
+	dispatcherID common.DispatcherID, dataRange common.DataRange,
+) (eventstore.EventIterator, error) {
+	return g.iter, g.err
 }
 
 func makeDispatcherReady(disp *dispatcherStat) {
@@ -39,11 +69,49 @@ func makeDispatcherReady(disp *dispatcherStat) {
 }
 
 func (m *mockMounter) DecodeToChunk(rawKV *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error) {
+	m.decodeCount.Inc()
 	if rawKV.IsUpdate() {
 		return 2, nil, nil
 	} else {
 		return 1, nil, nil
 	}
+}
+
+func TestEventScannerReturnsIteratorErrors(t *testing.T) {
+	disInfo := newMockDispatcherInfoForTest(t)
+	changefeedStatus := newChangefeedStatus(disInfo.GetChangefeedID(), 0)
+	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+	makeDispatcherReady(disp)
+
+	dataRange := common.DataRange{
+		Span:          disInfo.GetTableSpan(),
+		CommitTsStart: disInfo.GetStartTs(),
+		CommitTsEnd:   disInfo.GetStartTs() + 1,
+	}
+
+	getIterErr := errors.New("get iterator failed")
+	scanner := newEventScanner(
+		&stubEventGetter{err: getIterErr},
+		NewMockSchemaStore(),
+		&mockMounter{},
+		0,
+	)
+	_, events, interrupted, err := scanner.scan(context.Background(), disp, dataRange, scanLimit{})
+	require.ErrorIs(t, err, getIterErr)
+	require.Nil(t, events)
+	require.False(t, interrupted)
+
+	closeErr := errors.New("close iterator failed")
+	scanner = newEventScanner(
+		&stubEventGetter{iter: &mockEventIterator{closeErr: closeErr}},
+		NewMockSchemaStore(),
+		&mockMounter{},
+		0,
+	)
+	_, events, interrupted, err = scanner.scan(context.Background(), disp, dataRange, scanLimit{})
+	require.ErrorIs(t, err, closeErr)
+	require.Nil(t, events)
+	require.False(t, interrupted)
 }
 
 func TestEventScanner(t *testing.T) {
@@ -61,7 +129,7 @@ func TestEventScanner(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
@@ -371,7 +439,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
@@ -400,6 +468,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	dml0 := kvEvents[0]
 	dml1 := kvEvents[1]
 	dml2 := kvEvents[2]
+	dml3 := kvEvents[3]
 	mockSchemaStore.DeleteTable(tableID, dml2.CRTs)
 	disp.receivedResolvedTs.Store(resolvedTs)
 	ok, dataRange := broker.getScanTaskDataRange(disp)
@@ -431,10 +500,12 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	require.Equal(t, batchDML1.DMLEvents[0].GetCommitTs(), dml1.CRTs)
 	require.Equal(t, batchDML1.DMLEvents[1].GetCommitTs(), dml2.CRTs)
 
-	// resolvedTs
+	// resolvedTs skips the first raw event after the table is deleted, so the
+	// next scan range will not keep seeing the same deleted-table event.
 	e = events[3]
 	require.Equal(t, e.GetType(), event.TypeResolvedEvent)
-	require.Equal(t, dml2.CRTs, e.GetCommitTs())
+	require.Equal(t, dml3.CRTs, e.GetCommitTs())
+	require.Greater(t, e.GetCommitTs(), dml2.CRTs)
 }
 
 // TestEventScannerWithDDL tests cases where scanning is interrupted at DDL events
@@ -449,7 +520,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
@@ -696,7 +767,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 0: create a new DML processor
 	t.Run("CreateNewDMLProcessor", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		require.NotNil(t, processor)
 		require.NotNil(t, processor.batchDML)
 		require.Nil(t, processor.currentTxn)
@@ -705,7 +776,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 1: commitTxn with no current DML, happens when the iter is nil.
 	t.Run("CommitTxnWithNoCurrentDML", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		err := processor.commitTxn()
 		require.NoError(t, err)
 		require.Nil(t, processor.currentTxn)
@@ -715,7 +786,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 1: start the first transaction
 	t.Run("FirstTransactionWithoutCache", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		rawEvent := kvEvents[0]
 
 		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs, rawEvent.CRTs, false)
@@ -737,7 +808,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 2: Process new transaction when there are cached insert rows
 	t.Run("NewTransactionWithInsertCache", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		// Setup first transaction
 		firstEvent := kvEvents[0]
@@ -790,7 +861,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 3: Multiple consecutive transactions
 	t.Run("ConsecutiveTransactions", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		// Process multiple transactions
 		for i, item := range kvEvents {
@@ -823,7 +894,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 5: Process transaction with empty insert cache followed by one with cache
 	t.Run("EmptyThenNonEmptyCache", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		// First transaction - no cache
 		firstEvent := kvEvents[0]
@@ -865,7 +936,7 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test 6: First event is update that changes UK
 	t.Run("UpdateThatChangesUK", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		helper.Tk().MustExec("use test")
 		ddlEvent := helper.DDL2Event("create table t2 (id int primary key, a int(50), b char(50), unique key uk_a(a))")
@@ -914,13 +985,13 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
 
 	// Create a mock mounter and schema getter
-	mockMounter := &mockMounter{}
+	testMounter := &mockMounter{}
 	mockSchemaGetter := NewMockSchemaStore()
 	mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 
 	// Test case 1: appendRow before txn started, illegal usage.
 	t.Run("NoCurrentDMLEvent", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		rawEvent := kvEvents[0]
 
 		require.Panics(t, func() {
@@ -930,7 +1001,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 2: appendRow for insert operation (non-update)
 	t.Run("AppendInsertRow", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		firstEvent := kvEvents[0]
 		processor.startTxn(dispatcherID, tableID, tableInfo, firstEvent.StartTs, firstEvent.CRTs, false)
@@ -948,7 +1019,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 3: appendRow for delete operation (non-update)
 	t.Run("AppendDeleteRow", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		rawEvent := kvEvents[0]
 		deleteRow := insertToDeleteRow(rawEvent)
@@ -965,9 +1036,75 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 		require.Empty(t, processor.insertRowCache)
 	})
 
+	t.Run("IgnoreDeleteByEventTypeSkipsDecode", func(t *testing.T) {
+		mounter := &mockMounter{}
+		changefeedFilter, err := filter.NewFilter(&config.FilterConfig{
+			Rules: []string{"test.*"},
+			EventFilters: []*config.EventFilterRule{
+				{
+					Matcher:     []string{"test.t"},
+					IgnoreEvent: []bf.EventType{bf.DeleteEvent},
+				},
+			},
+		}, "UTC", false, false)
+		require.NoError(t, err)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode, false)
+
+		rawEvent := kvEvents[0]
+		deleteRow := insertToDeleteRow(rawEvent)
+
+		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs, rawEvent.CRTs, false)
+		err = processor.appendRow(deleteRow)
+		require.NoError(t, err)
+
+		require.Equal(t, int64(0), mounter.decodeCount.Load())
+		require.Equal(t, int32(0), processor.batchDML.Len())
+		require.Empty(t, processor.insertRowCache)
+	})
+
+	t.Run("IgnoreDeleteByEventTypeCachedWithinTxn", func(t *testing.T) {
+		mounter := &mockMounter{}
+		changefeedFilter, err := filter.NewFilter(&config.FilterConfig{
+			Rules: []string{"test.*"},
+			EventFilters: []*config.EventFilterRule{
+				{
+					Matcher:     []string{"test.t"},
+					IgnoreEvent: []bf.EventType{bf.DeleteEvent},
+				},
+			},
+		}, "UTC", false, false)
+		require.NoError(t, err)
+		countingFilter := &countingDMLTypeFilter{Filter: changefeedFilter}
+		processor := newDMLProcessor(mounter, mockSchemaGetter, countingFilter, false, common.DefaultMode, false)
+
+		rawEvent := kvEvents[0]
+		deleteRow := insertToDeleteRow(rawEvent)
+
+		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs, rawEvent.CRTs, false)
+		for range 3 {
+			err = processor.appendRow(deleteRow)
+			require.NoError(t, err)
+		}
+		require.Equal(t, int64(1), countingFilter.dmlTypeCallCount.Load())
+		require.Equal(t, int64(0), mounter.decodeCount.Load())
+
+		err = processor.commitTxn()
+		require.NoError(t, err)
+
+		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs+1, rawEvent.CRTs+1, false)
+		nextTxnDeleteRow := insertToDeleteRow(kvEvents[1])
+		nextTxnDeleteRow.StartTs = rawEvent.StartTs + 1
+		nextTxnDeleteRow.CRTs = rawEvent.CRTs + 1
+		err = processor.appendRow(nextTxnDeleteRow)
+		require.NoError(t, err)
+
+		require.Equal(t, int64(2), countingFilter.dmlTypeCallCount.Load())
+		require.Equal(t, int64(0), mounter.decodeCount.Load())
+	})
+
 	// Test case 4: appendRow for update operation without unique key change
 	t.Run("AppendUpdateRowWithoutUKChange", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		// Create a current DML event first
 		rawEvent := kvEvents[0]
@@ -991,7 +1128,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 5: appendRow for update operation with unique key change (split update)
 	t.Run("AppendUpdateRowWithUKChange", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		// Create a current DML event first
 		rawEvent := kvEvents[0]
@@ -1019,7 +1156,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 6: Test multiple appendRow calls
 	t.Run("MultipleAppendRows", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(testMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		// Create a current DML event first
 		rawEvent := kvEvents[0]
@@ -1051,7 +1188,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 
 	// Test case 7: appendRow for update operation with unique key change and outputRawChangeEvent is true (do not split update)
 	t.Run("AppendUpdateRowWithUKChangeAndOutputRawChangeEvent", func(t *testing.T) {
-		processor := newDMLProcessor(event.NewMounter(time.UTC, &integrity.Config{}), mockSchemaGetter, nil, true, common.DefaultMode)
+		processor := newDMLProcessor(event.NewMounter(time.UTC, &integrity.Config{}), mockSchemaGetter, nil, true, common.DefaultMode, false)
 		// Generate a real update event that changes unique key using helper
 		// This updates the unique key column 'a' from 'a1' to 'a1_new'
 		insertSQL, updateSQL := "insert into test.t(id,a,b) values (7, 'a7', 'b7')", "update test.t set a = 'a7_updated' where id = 7"
@@ -1067,6 +1204,121 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 		nextRow, ok := processor.batchDML.DMLEvents[0].GetNextRow()
 		require.True(t, ok)
 		require.Equal(t, common.RowTypeUpdate, nextRow.RowType)
+	})
+
+	t.Run("IgnoreUpdateByEventTypeSkipsDecode", func(t *testing.T) {
+		mounter := &mockMounter{}
+		changefeedFilter, err := filter.NewFilter(&config.FilterConfig{
+			Rules: []string{"test.*"},
+			EventFilters: []*config.EventFilterRule{
+				{
+					Matcher:     []string{"test.t"},
+					IgnoreEvent: []bf.EventType{bf.UpdateEvent},
+				},
+			},
+		}, "UTC", false, false)
+		require.NoError(t, err)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode, false)
+
+		insertSQL := "insert into test.t(id,a,b) values (103, 'a103', 'b103')"
+		updateSQL := "update test.t set b = 'b103_updated' where id = 103"
+		_, updateEvent := helper.DML2UpdateEvent("test", "t", insertSQL, updateSQL)
+
+		processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, false)
+		err = processor.appendRow(updateEvent)
+		require.NoError(t, err)
+
+		require.Equal(t, int64(0), mounter.decodeCount.Load())
+		require.Equal(t, int32(0), processor.batchDML.Len())
+		require.Empty(t, processor.insertRowCache)
+	})
+
+	t.Run("IgnoreUpdateByEventTypeSkipsSplitCheck", func(t *testing.T) {
+		mounter := &mockMounter{}
+		changefeedFilter, err := filter.NewFilter(&config.FilterConfig{
+			Rules: []string{"test.*"},
+			EventFilters: []*config.EventFilterRule{
+				{
+					Matcher:     []string{"test.t"},
+					IgnoreEvent: []bf.EventType{bf.UpdateEvent},
+				},
+			},
+		}, "UTC", false, false)
+		require.NoError(t, err)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode, false)
+
+		insertSQL := "insert into test.t(id,a,b) values (104, 'a104', 'b104')"
+		updateSQL := "update test.t set a = 'a104_updated' where id = 104"
+		_, updateEvent := helper.DML2UpdateEvent("test", "t", insertSQL, updateSQL)
+
+		processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, false)
+		err = processor.appendRow(updateEvent)
+		require.NoError(t, err)
+
+		require.Equal(t, int64(0), mounter.decodeCount.Load())
+		require.Equal(t, int32(0), processor.batchDML.Len())
+		require.Empty(t, processor.insertRowCache)
+	})
+
+	t.Run("SplitUpdateSkipsIgnoredDeleteBeforeDecode", func(t *testing.T) {
+		mounter := &mockMounter{}
+		changefeedFilter, err := filter.NewFilter(&config.FilterConfig{
+			Rules: []string{"test.*"},
+			EventFilters: []*config.EventFilterRule{
+				{
+					Matcher:     []string{"test.t"},
+					IgnoreEvent: []bf.EventType{bf.DeleteEvent},
+				},
+			},
+		}, "UTC", false, false)
+		require.NoError(t, err)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode, false)
+
+		insertSQL := "insert into test.t(id,a,b) values (105, 'a105', 'b105')"
+		updateSQL := "update test.t set a = 'a105_updated' where id = 105"
+		_, updateEvent := helper.DML2UpdateEvent("test", "t", insertSQL, updateSQL)
+
+		processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, false)
+		err = processor.appendRow(updateEvent)
+		require.NoError(t, err)
+		require.Len(t, processor.insertRowCache, 1)
+
+		err = processor.commitTxn()
+		require.NoError(t, err)
+
+		require.Equal(t, int64(1), mounter.decodeCount.Load())
+		require.Equal(t, int32(1), processor.batchDML.Len())
+		require.Empty(t, processor.insertRowCache)
+	})
+
+	t.Run("SplitUpdateSkipsIgnoredInsertBeforeDecode", func(t *testing.T) {
+		mounter := &mockMounter{}
+		changefeedFilter, err := filter.NewFilter(&config.FilterConfig{
+			Rules: []string{"test.*"},
+			EventFilters: []*config.EventFilterRule{
+				{
+					Matcher:     []string{"test.t"},
+					IgnoreEvent: []bf.EventType{bf.InsertEvent},
+				},
+			},
+		}, "UTC", false, false)
+		require.NoError(t, err)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, changefeedFilter, false, common.DefaultMode, false)
+
+		insertSQL := "insert into test.t(id,a,b) values (106, 'a106', 'b106')"
+		updateSQL := "update test.t set a = 'a106_updated' where id = 106"
+		_, updateEvent := helper.DML2UpdateEvent("test", "t", insertSQL, updateSQL)
+
+		processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, false)
+		err = processor.appendRow(updateEvent)
+		require.NoError(t, err)
+		require.Empty(t, processor.insertRowCache)
+
+		err = processor.commitTxn()
+		require.NoError(t, err)
+
+		require.Equal(t, int64(1), mounter.decodeCount.Load())
+		require.Equal(t, int32(1), processor.batchDML.Len())
 	})
 }
 
@@ -1236,7 +1488,7 @@ func TestEventMerger(t *testing.T) {
 		mockSchemaGetter := NewMockSchemaStore()
 		mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 
-		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter, nil, false, common.DefaultMode, false)
 		processor.startTxn(dispatcherID, tableID, ddlEvent.TableInfo, kvEvents[0].StartTs, kvEvents[0].CRTs, false)
 
 		err := processor.appendRow(kvEvents[0])
@@ -1268,7 +1520,7 @@ func TestEventMerger(t *testing.T) {
 		tableID := ddlEvent.GetTableID()
 		mockSchemaGetter := NewMockSchemaStore()
 		mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
-		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		processor.startTxn(dispatcherID, tableID, ddlEvent.TableInfo, kvEvents[0].StartTs, kvEvents[0].CRTs, false)
 
@@ -1320,7 +1572,7 @@ func TestEventMerger(t *testing.T) {
 
 		tableID := ddlEvent1.GetTableID()
 		tableInfo := ddlEvent1.TableInfo
-		processor := newDMLProcessor(mounter, mockSchemaGetter, nil, false, common.DefaultMode)
+		processor := newDMLProcessor(mounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
 
 		processor.startTxn(dispatcherID, tableID, tableInfo, kvEvents1[0].StartTs, kvEvents1[0].CRTs, false)
 
@@ -1518,6 +1770,66 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	require.True(t, sess.scannedBytes > 0) // Some bytes were processed
 }
 
+func TestScanAndMergeEventsSkipsDeletedTableTxn(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	ddlEvent, kvEvents := genEvents(helper,
+		`create table test.t_deleted(id int primary key, c char(50))`,
+		`insert into test.t_deleted(id,c) values (1, "c1")`)
+	require.Len(t, kvEvents, 1)
+	rawEvent := kvEvents[0]
+	tableID := ddlEvent.GetTableID()
+
+	schemaStore := &schemaStoreWithErr{
+		mockSchemaStore:   NewMockSchemaStore(),
+		getTableInfoError: &schemastore.TableDeletedError{},
+	}
+	scanner := &eventScanner{
+		mounter:      &mockMounter{},
+		schemaGetter: schemaStore,
+	}
+
+	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.span.TableID = tableID
+	dispatcherID := common.NewDispatcherID()
+	disp := &dispatcherStat{
+		info:      disInfo,
+		id:        dispatcherID,
+		isRemoved: atomic.Bool{},
+	}
+
+	dataRange := common.DataRange{
+		Span: &heartbeatpb.TableSpan{
+			TableID: tableID,
+		},
+		CommitTsStart: rawEvent.CRTs - 1,
+		CommitTsEnd:   rawEvent.CRTs + 100,
+	}
+	sess := &session{
+		ctx:            context.Background(),
+		dispatcherStat: disp,
+		dataRange:      dataRange,
+		startTime:      time.Now(),
+		events:         make([]event.Event, 0),
+	}
+	merger := newEventMerger(nil)
+
+	isInterrupted, err := scanner.scanAndMergeEvents(sess, merger, &mockEventIterator{
+		events: []*common.RawKVEntry{rawEvent},
+	})
+	require.NoError(t, err)
+	require.False(t, isInterrupted)
+	require.Zero(t, sess.dmlCount)
+	require.Len(t, sess.events, 1)
+
+	resolvedEvent, ok := sess.events[0].(event.ResolvedEvent)
+	require.True(t, ok)
+	require.Equal(t, dispatcherID, resolvedEvent.DispatcherID)
+	require.Equal(t, rawEvent.CRTs, resolvedEvent.ResolvedTs)
+	require.Greater(t, resolvedEvent.ResolvedTs, dataRange.CommitTsStart)
+}
+
 type schemaStoreWithErr struct {
 	*mockSchemaStore
 	getTableInfoError error
@@ -1537,7 +1849,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
 	tableID := disInfo.GetTableSpan().TableID
 
 	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
@@ -1753,7 +2065,7 @@ func TestTxnEventSplit(t *testing.T) {
 
 		// Append 4 rows
 		for _, rawEvent := range kvEvents {
-			err := txn.AppendRow(rawEvent, mockMounter.DecodeToChunk, nil)
+			err := txn.AppendRow(rawEvent, mockMounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 			require.NoError(t, err)
 		}
 
@@ -1777,7 +2089,7 @@ func TestTxnEventSplit(t *testing.T) {
 
 		// Append 4 rows
 		for _, rawEvent := range kvEvents {
-			err := txn.AppendRow(rawEvent, mockMounter.DecodeToChunk, nil)
+			err := txn.AppendRow(rawEvent, mockMounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 			require.NoError(t, err)
 		}
 

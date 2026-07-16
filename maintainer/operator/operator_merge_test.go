@@ -14,7 +14,10 @@
 package operator
 
 import (
+	"fmt"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -98,6 +101,43 @@ func setupMergeTestEnvironmentWithCheckpointTs(
 	return spanController, toMergedReplicaSets, occupyOperators, nodeA
 }
 
+func setupLargeMergeTestEnvironment(
+	t *testing.T,
+	spanCount int,
+) (*span.Controller, []*replica.SpanReplication, []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], node.ID) {
+	spanController, changefeedID, _, nodeA, _ := setupTestEnvironment(t)
+
+	toMergedReplicaSets := make([]*replica.SpanReplication, 0, spanCount)
+	occupyOperators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, spanCount)
+	for index := 0; index < spanCount; index++ {
+		dispatcherID := common.NewDispatcherID()
+		tableSpan := &heartbeatpb.TableSpan{
+			TableID:  100,
+			StartKey: []byte(fmt.Sprintf("%08d", index)),
+			EndKey:   []byte(fmt.Sprintf("%08d", index+1)),
+		}
+		status := &heartbeatpb.TableSpanStatus{
+			ID:              dispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    uint64(1000 + index),
+		}
+		replicaSet := replica.NewWorkingSpanReplication(
+			changefeedID,
+			dispatcherID,
+			1,
+			tableSpan,
+			status,
+			nodeA,
+			false,
+		)
+		spanController.AddReplicatingSpan(replicaSet)
+		toMergedReplicaSets = append(toMergedReplicaSets, replicaSet)
+		occupyOperators = append(occupyOperators, NewOccupyDispatcherOperator(spanController, replicaSet))
+	}
+
+	return spanController, toMergedReplicaSets, occupyOperators, nodeA
+}
+
 // TestMergeOperator_NodeRemovedBeforeWorking tests the scenario where:
 // 1. A merge operation is initiated to merge multiple spans on node A
 // 2. Before the new merged dispatcher reports working status, node A is removed
@@ -107,7 +147,7 @@ func setupMergeTestEnvironmentWithCheckpointTs(
 func TestMergeOperator_NodeRemovedBeforeWorking(t *testing.T) {
 	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupMergeTestEnvironment(t)
 
-	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators)
+	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -148,7 +188,7 @@ func TestMergeOperator_NodeRemovedBeforeWorking(t *testing.T) {
 func TestMergeOperator_TaskRemovedByDDLBeforeWorking(t *testing.T) {
 	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupMergeTestEnvironment(t)
 
-	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators)
+	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -178,7 +218,7 @@ func TestMergeOperator_TaskRemovedByDDLBeforeWorking(t *testing.T) {
 func TestMergeOperator_NewReplicaSetCheckpointTsUsesMinOfMergedReplicas(t *testing.T) {
 	spanController, toMergedReplicaSets, occupyOperators, _ := setupMergeTestEnvironmentWithCheckpointTs(t, 1500, 1000)
 
-	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators)
+	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)
 	require.NotNil(t, op)
 	// The merged replica should inherit a safe checkpointTs to avoid regressing global checkpoint.
 	require.Equal(t, uint64(1000), op.newReplicaSet.GetStatus().GetCheckpointTs())
@@ -191,7 +231,7 @@ func TestMergeOperator_NewReplicaSetCheckpointTsUsesMinOfMergedReplicas(t *testi
 func TestMergeOperator_SuccessfulMerge(t *testing.T) {
 	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupMergeTestEnvironment(t)
 
-	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators)
+	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -219,6 +259,51 @@ func TestMergeOperator_SuccessfulMerge(t *testing.T) {
 	}
 }
 
+func TestMergeOperator_PostFinishReleasesOccupyAfterRemovingOldReplicas(t *testing.T) {
+	previousMaxProcs := runtime.GOMAXPROCS(2)
+	t.Cleanup(func() {
+		runtime.GOMAXPROCS(previousMaxProcs)
+	})
+
+	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupLargeMergeTestEnvironment(t, 4096)
+
+	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)
+	require.NotNil(t, op)
+
+	op.Start()
+	op.Check(nodeA, &heartbeatpb.TableSpanStatus{
+		ID:              op.ID().ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    5000,
+	})
+	require.True(t, op.IsFinished())
+
+	lastReplicaID := toMergedReplicaSets[len(toMergedReplicaSets)-1].ID
+	windowObservedCh := make(chan bool, 1)
+	observerReadyCh := make(chan struct{})
+	go func() {
+		close(observerReadyCh)
+		for !occupyOperators[0].IsFinished() {
+			runtime.Gosched()
+		}
+		windowObservedCh <- spanController.GetTaskByID(lastReplicaID) != nil
+	}()
+	<-observerReadyCh
+
+	op.PostFinish()
+
+	select {
+	case observedOldReplica := <-windowObservedCh:
+		require.False(t, observedOldReplica)
+	case <-time.After(5 * time.Second):
+		t.Fatal("observer did not observe occupy operator completion")
+	}
+	require.Nil(t, spanController.GetTaskByID(lastReplicaID))
+	for _, occupyOp := range occupyOperators {
+		require.True(t, occupyOp.IsFinished())
+	}
+}
+
 // TestMergeOperator_NodeRemovedAfterWorking tests the scenario where:
 // 1. A merge operation is initiated and the merged dispatcher reports working status
 // 2. Then the origin node is removed before PostFinish runs
@@ -226,7 +311,7 @@ func TestMergeOperator_SuccessfulMerge(t *testing.T) {
 func TestMergeOperator_NodeRemovedAfterWorking(t *testing.T) {
 	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupMergeTestEnvironment(t)
 
-	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators)
+	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -263,7 +348,7 @@ func TestMergeOperator_NodeRemovedAfterWorking(t *testing.T) {
 func TestMergeOperator_TaskRemovedByDDLAfterWorking(t *testing.T) {
 	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupMergeTestEnvironment(t)
 
-	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators)
+	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)
 	require.NotNil(t, op)
 
 	op.Start()

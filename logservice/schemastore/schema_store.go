@@ -47,7 +47,10 @@ type SchemaStore interface {
 
 	UnregisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64) error
 
-	// GetTableInfo return table info with the largest version <= ts
+	// GetTableInfo returns full table schema with the largest version <= ts.
+	// It is for already admitted table dispatchers: the table must have been
+	// registered through RegisterTable so schema store keeps its versioned table
+	// info cache.
 	GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 
 	// TODO: how to respect tableFilter
@@ -102,6 +105,7 @@ const schemaStoreGCDeleteTimeout = 10 * time.Second
 
 func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 	pendingTs := s.pendingResolvedTs.Load()
+	resolvedTs := s.resolvedTs.Load()
 	defer func() {
 		pdPhyTs := oracle.GetPhysical(s.pdClock.CurrentTime())
 		resolvedPhyTs := oracle.ExtractPhysical(pendingTs)
@@ -109,12 +113,10 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 		metrics.SchemaStoreResolvedTsLagGauge.Set(resolvedLag)
 	}()
 
-	if pendingTs <= s.resolvedTs.Load() {
+	if pendingTs <= resolvedTs {
 		return
 	}
 	resolvedEvents := s.unsortedCache.fetchSortedDDLEventBeforeTS(pendingTs)
-	newResolvedTs := s.resolvedTs.Load()
-	applyFailed := false
 	for idx, event := range resolvedEvents {
 		if event.Job.BinlogInfo.SchemaVersion == 0 /* means the ddl is ignored in upstream */ {
 			log.Info("skip ddl job with empty SchemaVersion",
@@ -152,10 +154,19 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 
 		err := s.dataStorage.handleDDLJob(event.Job)
 		if err != nil {
-			applyFailed = true
 			// Keep failed and later events for retry. They are removed from cache when fetched.
 			for _, pendingEvent := range resolvedEvents[idx:] {
 				s.unsortedCache.addDDLEvent(pendingEvent)
+			}
+			pendingTs = resolvedTs
+			// A resolved ts cannot split events with the same commit ts.
+			lastHandledEventIdx := idx - 1
+			for lastHandledEventIdx >= 0 &&
+				resolvedEvents[lastHandledEventIdx].CommitTs == event.CommitTs {
+				lastHandledEventIdx--
+			}
+			if lastHandledEventIdx >= 0 && resolvedEvents[lastHandledEventIdx].CommitTs > pendingTs {
+				pendingTs = resolvedEvents[lastHandledEventIdx].CommitTs
 			}
 			log.Error("handle ddl job failed, retry later",
 				zap.Int64("schemaID", event.Job.SchemaID),
@@ -176,22 +187,16 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 		// Update dedup watermark only after DDL is persisted successfully.
 		s.schemaVersion = event.Job.BinlogInfo.SchemaVersion
 		s.finishedDDLTs = event.Job.BinlogInfo.FinishedTS
-		if event.CommitTs > newResolvedTs {
-			newResolvedTs = event.CommitTs
-		}
-	}
-	if !applyFailed {
-		// When register a new table, it will load all ddl jobs from disk for the table,
-		// so we can only update resolved ts after all ddl jobs are written to disk
-		// Can we optimize it to update resolved ts more eagerly?
-		newResolvedTs = pendingTs
 	}
 
-	s.resolvedTs.Store(newResolvedTs)
+	// When register a new table, it will load all ddl jobs from disk for the table,
+	// so we can only update resolved ts after all ddl jobs are written to disk
+	// Can we optimize it to update resolved ts more eagerly?
+	s.resolvedTs.Store(pendingTs)
 	s.dataStorage.updateUpperBound(UpperBoundMeta{
 		FinishedDDLTs: s.finishedDDLTs,
 		SchemaVersion: s.schemaVersion,
-		ResolvedTs:    newResolvedTs,
+		ResolvedTs:    pendingTs,
 	})
 }
 
@@ -624,6 +629,21 @@ func (s *schemaStore) acquireInitialGCSafePoint(
 	gcKeeper *schemaStoreGCKeeper,
 ) (uint64, error) {
 	for {
+		// A previous CDC process with the same advertise address can leave its
+		// schema-store GC service behind after a crash or kill. Remove it before
+		// reading the lower bound, otherwise initialization can keep advancing its
+		// own stale service by one ts and fail the start-ts safety check forever.
+		if err := gcKeeper.close(ctx); err != nil {
+			log.Warn("cleanup stale schema store gc keeper failed, will retry in 1s",
+				zap.Any("keyspace", keyspaceMeta), zap.Error(err))
+			select {
+			case <-ctx.Done():
+				return 0, errors.Trace(err)
+			case <-time.After(time.Second):
+			}
+			continue
+		}
+
 		// Read the current lower bound first, then install a dedicated GC barrier
 		// for this schema store instance before any snapshot or incremental pull starts.
 		gcSafePoint, err := gc.UnifyGetServiceGCSafepoint(ctx, s.pdCli, keyspaceMeta.ID, defaultSchemaStoreGcServiceID)

@@ -34,7 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/uber-go/atomic"
 	pioutil "go.etcd.io/etcd/pkg/v3/ioutil"
@@ -116,7 +116,7 @@ type Writer struct {
 	ongoingFilePath string
 	bw              *pioutil.PageWriter
 	uint64buf       []byte
-	storage         storage.ExternalStorage
+	storage         storeapi.Storage
 	sync.RWMutex
 	uuidGenerator uuid.Generator
 	allocator     *fsutil.FileAllocator
@@ -130,7 +130,7 @@ type Writer struct {
 func newWriter(
 	cfg fileWriterConfig,
 	logType string,
-	extStorage storage.ExternalStorage,
+	extStorage storeapi.Storage,
 	opts ...writer.Option,
 ) (*Writer, error) {
 	op := &writer.LogWriterOptions{}
@@ -180,10 +180,9 @@ func newWriter(
 // NewFileWriter returns a file rotated writer for the normal redo writer path.
 func NewFileWriter(
 	ctx context.Context, cfg *writer.Config, logType string, opts ...writer.Option,
-) (*Writer, error) {
-	var extStorage storage.ExternalStorage
+) (w *Writer, err error) {
+	var extStorage storeapi.Storage
 	if cfg.UseExternalStorage() {
-		var err error
 		extStorage, err = redo.InitExternalStorage(ctx, *cfg.URI())
 		if err != nil {
 			return nil, err
@@ -285,6 +284,12 @@ func (w *Writer) Close() error {
 	defer w.Unlock()
 	// always set to false when closed, since if having err may not get fixed just by retry
 	defer w.running.Store(false)
+	defer func() {
+		if w.storage != nil {
+			w.storage.Close()
+			w.storage = nil
+		}
+	}()
 
 	if w.allocator != nil {
 		w.allocator.Close()
@@ -560,7 +565,7 @@ func (w *Writer) flushAndRotateFile() error {
 	// which could cause considerable network bandwidth waste.
 	err = w.rotate()
 	if err != nil {
-		return nil
+		return err
 	}
 	w.metricFlushAllDuration.Observe(time.Since(start).Seconds())
 

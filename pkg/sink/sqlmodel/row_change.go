@@ -106,7 +106,9 @@ func NewRowChange(
 		sourceTableInfo: sourceTableInfo,
 	}
 
-	colCount := ret.ColumnCount()
+	// The values should contain expression indexes,
+	// because whereColumnsAndValues relies on the order of values to match the columns
+	colCount := len(sourceTableInfo.GetColumns())
 	if preValues != nil && len(preValues) != colCount {
 		log.Panic("preValues length not equal to sourceTableInfo columns",
 			zap.Int("preValues", len(preValues)),
@@ -171,20 +173,7 @@ func (r *RowChange) String() string {
 
 // TargetTableID returns a ID string for target table.
 func (r *RowChange) TargetTableID() string {
-	return r.targetTable.QuoteString()
-}
-
-// ColumnCount returns the number of columns of this RowChange.
-// TiDB TableInfo contains some internal columns like expression index, they
-// are not included in this count.
-func (r *RowChange) ColumnCount() int {
-	c := 0
-	for _, col := range r.sourceTableInfo.GetColumns() {
-		if !col.Hidden {
-			c++
-		}
-	}
-	return c
+	return r.targetTable.QuoteTargetString()
 }
 
 // SourceTableInfo returns the TableInfo of source table.
@@ -239,10 +228,11 @@ func (r *RowChange) whereColumnsAndValues() ([]string, []interface{}) {
 	}
 
 	failpoint.Inject("DownstreamTrackerWhereCheck", func() {
-		if r.tp == RowChangeUpdate {
+		switch r.tp {
+		case RowChangeUpdate:
 			log.Info("UpdateWhereColumnsCheck",
 				zap.String("Columns", fmt.Sprintf("%v", columnNames)))
-		} else if r.tp == RowChangeDelete {
+		case RowChangeDelete:
 			log.Info("DeleteWhereColumnsCheck",
 				zap.String("Columns", fmt.Sprintf("%v", columnNames)))
 		}
@@ -284,7 +274,7 @@ func (r *RowChange) genDeleteSQL() (string, []interface{}) {
 	var buf strings.Builder
 	buf.Grow(1024)
 	buf.WriteString("DELETE FROM ")
-	buf.WriteString(r.targetTable.QuoteString())
+	buf.WriteString(r.targetTable.QuoteTargetString())
 	buf.WriteString(" WHERE ")
 	whereArgs := r.genWhere(&buf)
 	buf.WriteString(" LIMIT 1")
@@ -303,7 +293,7 @@ func (r *RowChange) genUpdateSQL() (string, []interface{}) {
 	var buf strings.Builder
 	buf.Grow(2048)
 	buf.WriteString("UPDATE ")
-	buf.WriteString(r.targetTable.QuoteString())
+	buf.WriteString(r.targetTable.QuoteTargetString())
 	buf.WriteString(" SET ")
 
 	// Build target generated columns lower names set to accelerate following check
