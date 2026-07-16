@@ -68,9 +68,11 @@ type subscribedSpan struct {
 
 	lastAdvanceTime atomic.Int64
 
-	initialized       atomic.Bool
-	resolvedTsUpdated atomic.Int64
-	resolvedTs        atomic.Uint64
+	// initialized is true after every range in the span has completed its initial scan once.
+	initialized           atomic.Bool
+	initializationTracker spanInitializationTracker
+	resolvedTsUpdated     atomic.Int64
+	resolvedTs            atomic.Uint64
 	// everCaughtUp remains true once the subscription catches up, so recovery scans
 	// stay high priority even if a later failure temporarily increases the lag.
 	everCaughtUp atomic.Bool
@@ -164,6 +166,21 @@ func (span *subscribedSpan) clearKVEventsCache() {
 		span.kvEventsCache = nil
 	} else {
 		span.kvEventsCache = span.kvEventsCache[:0]
+	}
+}
+
+func (span *subscribedSpan) markRegionInitialized(state *regionFeedState) {
+	state.setInitialized()
+	if span.initialized.Load() {
+		return
+	}
+	regionID := state.region.verID.GetID()
+	spanFullyInitialized := span.initializationTracker.add(span.span, state.region.span)
+	if spanFullyInitialized && span.initialized.CompareAndSwap(false, true) {
+		log.Info("span is initialized",
+			zap.Uint64("subscriptionID", uint64(span.subID)),
+			zap.Uint64("regionID", regionID),
+			zap.Uint64("resolvedTs", span.resolvedTs.Load()))
 	}
 }
 

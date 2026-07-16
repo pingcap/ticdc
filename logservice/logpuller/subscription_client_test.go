@@ -111,7 +111,11 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	// Lock another range, no task will be triggered before initialized.
 	res = span.rangeLock.LockRange(context.Background(), []byte{'c'}, []byte{'d'}, 2, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-	state := newRegionFeedState(regionInfo{lockedRangeState: res.LockedRangeState, subscribedSpan: span}, 1, worker)
+	state := newRegionFeedState(regionInfo{
+		verID:            tikv.NewRegionVerID(2, 1, 1),
+		lockedRangeState: res.LockedRangeState,
+		subscribedSpan:   span,
+	}, 1, worker)
 	span.resolveStaleLocks(200)
 	select {
 	case <-client.resolveLockTaskCh:
@@ -199,7 +203,10 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 		errCh <- client.handleResolveLockTasks(ctx)
 	}()
 
-	state := &regionlock.LockedRangeState{}
+	rangeLock := regionlock.NewRangeLock(1, []byte{'a'}, []byte{'b'}, 100)
+	lockResult := rangeLock.LockRange(context.Background(), []byte{'a'}, []byte{'b'}, 1, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, lockResult.Status)
+	state := lockResult.LockedRangeState
 	state.Initialized.Store(true)
 	state.ResolvedTs.Store(100)
 
