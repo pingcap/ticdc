@@ -1421,8 +1421,7 @@ func (c *Controller) restoreCurrentMergeOperators(
 				}
 			}
 
-			conflictingDispatcherID, conflictingOperatorType, hasConflict :=
-				findBootstrapMergeOperatorConflict(operatorController, sourceReplicaSets, mergedDispatcherID)
+			conflictingDispatcherID, conflictingOperatorType, hasConflict := findBootstrapMergeOperatorConflict(operatorController, sourceReplicaSets, mergedDispatcherID)
 			if hasConflict {
 				// Regular create/remove recovery has higher priority than a merge journal because it
 				// represents a later concrete action for the same dispatcher. Treat the merge record
