@@ -60,8 +60,6 @@ type HeartBeatCollector struct {
 	mergeDispatcherRequestDynamicStream       dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *DispatcherManager, *MergeDispatcherRequestHandler]
 	mc                                        messaging.MessageCenter
 
-	dispatcherManagers sync.Map // map[common.GID]*DispatcherManager
-
 	wg       sync.WaitGroup
 	cancel   context.CancelFunc
 	isClosed atomic.Bool
@@ -130,7 +128,6 @@ func (c *HeartBeatCollector) RegisterDispatcherManager(m *DispatcherManager) err
 	if err != nil {
 		return errors.Trace(err)
 	}
-	c.dispatcherManagers.Store(m.changefeedID.Id, m)
 	return nil
 }
 
@@ -173,7 +170,6 @@ func (c *HeartBeatCollector) RemoveDispatcherManager(id common.ChangeFeedID) err
 	if err != nil {
 		return errors.Trace(err)
 	}
-	c.dispatcherManagers.Delete(id.Id)
 	return nil
 }
 

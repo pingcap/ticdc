@@ -14,6 +14,7 @@
 package dispatchermanager
 
 import (
+	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -33,7 +34,7 @@ func (e *DispatcherManager) TrackMergeOperator(req *heartbeatpb.MergeDispatcherR
 			zap.Int64("mode", req.Mode))
 		return
 	}
-	e.mergeOperatorMap.Store(mergedID.String(), cloneMergeDispatcherRequest(req))
+	e.mergeOperatorMap.Store(mergedID.String(), proto.Clone(req).(*heartbeatpb.MergeDispatcherRequest))
 }
 
 // RemoveMergeOperator drops a persisted merge request that no longer needs bootstrap recovery.
@@ -142,37 +143,8 @@ func (e *DispatcherManager) GetMergeOperators() []*heartbeatpb.MergeDispatcherRe
 		if !ok || req == nil {
 			return true
 		}
-		operators = append(operators, cloneMergeDispatcherRequest(req))
+		operators = append(operators, proto.Clone(req).(*heartbeatpb.MergeDispatcherRequest))
 		return true
 	})
 	return operators
-}
-
-func cloneMergeDispatcherRequest(req *heartbeatpb.MergeDispatcherRequest) *heartbeatpb.MergeDispatcherRequest {
-	if req == nil {
-		return nil
-	}
-	clone := &heartbeatpb.MergeDispatcherRequest{
-		Mode:            req.Mode,
-		MaintainerEpoch: req.MaintainerEpoch,
-	}
-	if req.ChangefeedID != nil {
-		id := *req.ChangefeedID
-		clone.ChangefeedID = &id
-	}
-	if req.MergedDispatcherID != nil {
-		mergedID := *req.MergedDispatcherID
-		clone.MergedDispatcherID = &mergedID
-	}
-	if len(req.DispatcherIDs) > 0 {
-		clone.DispatcherIDs = make([]*heartbeatpb.DispatcherID, 0, len(req.DispatcherIDs))
-		for _, dispatcherID := range req.DispatcherIDs {
-			if dispatcherID == nil {
-				continue
-			}
-			id := *dispatcherID
-			clone.DispatcherIDs = append(clone.DispatcherIDs, &id)
-		}
-	}
-	return clone
 }

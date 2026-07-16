@@ -1076,7 +1076,6 @@ func TestMergeDispatcherRequestRecvDoesNotTrackStaleMaintainerEpoch(t *testing.T
 	}
 	defer collector.mergeDispatcherRequestDynamicStream.Close()
 	require.NoError(t, collector.mergeDispatcherRequestDynamicStream.AddPath(manager.changefeedID.Id, manager))
-	collector.dispatcherManagers.Store(manager.changefeedID.Id, manager)
 
 	mergeReq := &heartbeatpb.MergeDispatcherRequest{
 		ChangefeedID: manager.changefeedID.ToPB(),
@@ -1099,15 +1098,16 @@ func TestMergeDispatcherRequestRecvDoesNotTrackStaleMaintainerEpoch(t *testing.T
 	require.Empty(t, manager.GetMergeOperators())
 }
 
-func TestTrackMergeOperatorPreservesMaintainerEpoch(t *testing.T) {
-	// Scenario: bootstrap later reads a cloned in-flight merge request from the journal.
-	// Steps: track a strict-epoch request, fetch it back, and verify the cloned request
-	// still carries the epoch needed by downstream admission checks.
+// TestTrackMergeOperatorClonesRequest verifies that the merge journal owns its request data.
+// It mutates the original request and one returned snapshot, then confirms later reads retain
+// the tracked epoch and nested dispatcher IDs.
+func TestTrackMergeOperatorClonesRequest(t *testing.T) {
 	manager := createTestManager(t)
+	sourceDispatcherID := common.NewDispatcherID()
 	mergeReq := &heartbeatpb.MergeDispatcherRequest{
 		ChangefeedID: manager.changefeedID.ToPB(),
 		DispatcherIDs: []*heartbeatpb.DispatcherID{
-			common.NewDispatcherID().ToPB(),
+			sourceDispatcherID.ToPB(),
 			common.NewDispatcherID().ToPB(),
 		},
 		MergedDispatcherID: common.NewDispatcherID().ToPB(),
@@ -1116,10 +1116,20 @@ func TestTrackMergeOperatorPreservesMaintainerEpoch(t *testing.T) {
 	}
 
 	manager.TrackMergeOperator(mergeReq)
+	mergeReq.MaintainerEpoch = 8
+	mergeReq.DispatcherIDs[0].Low ^= 1
 
 	operators := manager.GetMergeOperators()
 	require.Len(t, operators, 1)
 	require.Equal(t, uint64(7), operators[0].MaintainerEpoch)
+	require.Equal(t, sourceDispatcherID.ToPB(), operators[0].DispatcherIDs[0])
+
+	operators[0].MaintainerEpoch = 9
+	operators[0].DispatcherIDs[0].Low ^= 1
+	operators = manager.GetMergeOperators()
+	require.Len(t, operators, 1)
+	require.Equal(t, uint64(7), operators[0].MaintainerEpoch)
+	require.Equal(t, sourceDispatcherID.ToPB(), operators[0].DispatcherIDs[0])
 }
 
 // TestTrackMergeOperatorRejectsZeroMergedDispatcherID covers a malformed merge request.

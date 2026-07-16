@@ -1561,8 +1561,7 @@ func (c *Controller) restoreCurrentMergeOperators(
 				continue
 			}
 
-			mergeOp := operatorController.AddRestoredMergeOperator(sourceReplicaSets, mergedReplicaSet)
-			if mergeOp == nil {
+			if operatorController.AddRestoredMergeOperator(sourceReplicaSets, mergedReplicaSet) == nil {
 				log.Warn("skip stale merge operator that cannot be restored",
 					zap.String("nodeID", nodeID.String()),
 					zap.String("changefeed", resp.ChangefeedID.String()),
@@ -1577,7 +1576,6 @@ func (c *Controller) restoreCurrentMergeOperators(
 				continue
 			}
 			spanController.MarkSpanScheduling(mergedReplicaSet)
-			mergeOp.Start()
 		}
 	}
 	return nil
