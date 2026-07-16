@@ -32,7 +32,7 @@ func NewStatistics(
 	statistics := &Statistics{
 		sinkType:        sinkType,
 		changefeedID:    changefeed,
-		keyspaceID:      formatKeyspaceID(keyspaceID),
+		keyspaceID:      FormatKeyspaceID(keyspaceID),
 		ddlTypes:        sync.Map{},
 		rowsAffectedMap: sync.Map{},
 	}

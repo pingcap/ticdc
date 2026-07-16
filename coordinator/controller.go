@@ -16,7 +16,6 @@ package coordinator
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 
@@ -268,7 +267,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				metrics.ChangefeedStatusGauge.WithLabelValues(
 					keyspace,
 					name,
-					strconv.FormatUint(uint64(info.KeyspaceID), 10),
+					metrics.FormatKeyspaceID(info.KeyspaceID),
 				).Set(float64(info.State.ToInt()))
 
 				if !updateChangefeedCheckpointMetrics(
@@ -348,7 +347,7 @@ func updateChangefeedCheckpointMetrics(
 	metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(
 		keyspace,
 		name,
-		strconv.FormatUint(uint64(keyspaceID), 10),
+		metrics.FormatKeyspaceID(keyspaceID),
 	).Set(lag)
 	return true
 }

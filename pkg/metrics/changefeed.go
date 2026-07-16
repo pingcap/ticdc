@@ -143,10 +143,11 @@ var (
 
 func DeleteChangefeedCheckpointMetrics(keyspace, changefeed string, keyspaceID uint32) {
 	ChangefeedCheckpointTsGauge.DeleteLabelValues(keyspace, changefeed)
-	ChangefeedCheckpointTsLagGauge.DeleteLabelValues(keyspace, changefeed, formatKeyspaceID(keyspaceID))
+	ChangefeedCheckpointTsLagGauge.DeleteLabelValues(keyspace, changefeed, FormatKeyspaceID(keyspaceID))
 }
 
-func formatKeyspaceID(keyspaceID uint32) string {
+// FormatKeyspaceID formats a keyspace ID as a metric label value.
+func FormatKeyspaceID(keyspaceID uint32) string {
 	return strconv.FormatUint(uint64(keyspaceID), 10)
 }
 

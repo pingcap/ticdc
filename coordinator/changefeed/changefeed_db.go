@@ -16,7 +16,6 @@ package changefeed
 import (
 	"fmt"
 	"math"
-	"strconv"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -158,7 +157,7 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 	metrics.ChangefeedStatusGauge.DeleteLabelValues(
 		cfID.Keyspace(),
 		cfID.Name(),
-		strconv.FormatUint(uint64(keyspaceID), 10),
+		metrics.FormatKeyspaceID(keyspaceID),
 	)
 	metrics.DeleteChangefeedCheckpointMetrics(cfID.Keyspace(), cfID.Name(), keyspaceID)
 
