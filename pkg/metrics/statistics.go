@@ -26,11 +26,13 @@ import (
 // NewStatistics creates a statistics
 func NewStatistics(
 	changefeed common.ChangeFeedID,
+	keyspaceID uint32,
 	sinkType string,
 ) *Statistics {
 	statistics := &Statistics{
 		sinkType:        sinkType,
 		changefeedID:    changefeed,
+		keyspaceID:      formatKeyspaceID(keyspaceID),
 		ddlTypes:        sync.Map{},
 		rowsAffectedMap: sync.Map{},
 	}
@@ -39,7 +41,7 @@ func NewStatistics(
 	changefeedID := changefeed.Name()
 	statistics.metricExecDDLHis = ExecDDLHistogram.WithLabelValues(keyspace, changefeedID)
 	statistics.metricExecDDLRunningCnt = ExecDDLRunningGauge.WithLabelValues(keyspace, changefeedID)
-	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
+	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(keyspace, changefeedID, sinkType, statistics.keyspaceID)
 	statistics.metricExecBatchBytesHis = ExecBatchWriteBytesHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricTotalWriteBytesCnt = TotalWriteBytesCounter.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricExecErrCntForDDL = ExecutionErrorCounter.WithLabelValues(keyspace, changefeedID, "ddl")
@@ -54,6 +56,7 @@ func NewStatistics(
 type Statistics struct {
 	sinkType        string
 	changefeedID    common.ChangeFeedID
+	keyspaceID      string
 	ddlTypes        sync.Map
 	rowsAffectedMap sync.Map
 
@@ -142,7 +145,7 @@ func (b *Statistics) Close() {
 	keyspace := b.changefeedID.Keyspace()
 	changefeedID := b.changefeedID.Name()
 	ExecDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
-	ExecBatchHistogram.DeleteLabelValues(keyspace, changefeedID, b.sinkType)
+	ExecBatchHistogram.DeleteLabelValues(keyspace, changefeedID, b.sinkType, b.keyspaceID)
 	ExecBatchWriteBytesHistogram.DeleteLabelValues(keyspace, changefeedID, b.sinkType)
 	EventSizeHistogram.DeleteLabelValues(keyspace, changefeedID)
 	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "ddl")
