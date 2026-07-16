@@ -109,7 +109,11 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	// Lock another range, no task will be triggered before initialized.
 	res = span.rangeLock.LockRange(context.Background(), []byte{'c'}, []byte{'d'}, 2, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-	state := newRegionFeedState(regionInfo{lockedRangeState: res.LockedRangeState, subscribedSpan: span}, 1, worker)
+	state := newRegionFeedState(regionInfo{
+		verID:            tikv.NewRegionVerID(2, 1, 1),
+		lockedRangeState: res.LockedRangeState,
+		subscribedSpan:   span,
+	}, 1, worker)
 	span.resolveStaleLocks(200)
 	select {
 	case <-client.resolveLockTaskCh:
@@ -197,7 +201,10 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 		errCh <- client.handleResolveLockTasks(ctx)
 	}()
 
-	state := &regionlock.LockedRangeState{}
+	rangeLock := regionlock.NewRangeLock(1, []byte{'a'}, []byte{'b'}, 100)
+	lockResult := rangeLock.LockRange(context.Background(), []byte{'a'}, []byte{'b'}, 1, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, lockResult.Status)
+	state := lockResult.LockedRangeState
 	state.Initialized.Store(true)
 	state.ResolvedTs.Store(100)
 
@@ -343,7 +350,7 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 
 func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	client := &subscriptionClient{
-		eventSink: &regionEventSink{ds: &mockDynamicStream{}},
+		eventSink: newTestRegionEventSink(&mockDynamicStream{}),
 	}
 	client.spanRegistry = newSpanRegistry(nil, nil)
 	client.failureHandler = newRegionFailureHandler(client)
@@ -417,11 +424,7 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 }
 
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
-	sink := &regionEventSink{
-		ctx: context.Background(),
-		ds:  &mockDynamicStream{},
-	}
-	sink.cond = sync.NewCond(&sink.mu)
+	sink := newTestRegionEventSink(&mockDynamicStream{})
 	client := &subscriptionClient{
 		eventSink:       sink,
 		regionTaskQueue: priorityqueue.New[PriorityTask](),
@@ -586,150 +589,6 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 		require.Equal(t, targetTs, resolvedTs)
 	case <-time.After(30 * time.Second):
 		require.True(t, false, "reconnection not succeed in 5 second")
-	}
-}
-
-// TestErrCacheDispatchWithFullChannelAndCanceledContext tests that when errCh is full
-// and context is canceled, the dispatch method doesn't get stuck.
-func TestErrCacheDispatchWithFullChannelAndCanceledContext(t *testing.T) {
-	// Create errCache with a small errCh to easily fill it up
-	errCache := &errCache{
-		cache:  make([]regionErrorInfo, 0, 10),
-		errCh:  make(chan regionErrorInfo, 2), // Small buffer to easily fill
-		notify: make(chan struct{}, 10),
-	}
-
-	// Create a mock regionErrorInfo
-	mockErrInfo := regionErrorInfo{
-		regionInfo: regionInfo{
-			verID: tikv.NewRegionVerID(1, 1, 1),
-			span:  heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("b")},
-		},
-		err: errors.New("test error"),
-	}
-
-	// Fill up the errCh channel to make it full
-	errCache.errCh <- mockErrInfo
-	errCache.errCh <- mockErrInfo
-
-	// Add some errors to the cache
-	for i := 0; i < 5; i++ {
-		errCache.add(mockErrInfo)
-	}
-
-	// Create a context that will be canceled
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Channel to signal when dispatch returns
-	dispatchDone := make(chan error, 1)
-
-	// Start dispatch in a goroutine
-	go func() {
-		err := errCache.dispatch(ctx)
-		dispatchDone <- err
-	}()
-
-	// Give dispatch some time to start and potentially get stuck
-	time.Sleep(50 * time.Millisecond)
-
-	// Cancel the context
-	cancel()
-
-	// Wait for dispatch to return with a timeout
-	select {
-	case err := <-dispatchDone:
-		// Verify that dispatch returned with context.Canceled error
-		require.Equal(t, context.Canceled, err)
-	case <-time.After(5 * time.Second):
-		// If we timeout here, it means dispatch is stuck
-		t.Fatal("dispatch method is stuck and didn't return after context cancellation")
-	}
-}
-
-func TestErrCacheDispatchBatch(t *testing.T) {
-	mockErrInfo := regionErrorInfo{
-		regionInfo: regionInfo{
-			verID: tikv.NewRegionVerID(1, 1, 1),
-			span:  heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("b")},
-		},
-		err: errors.New("test error"),
-	}
-
-	tests := []struct {
-		name          string
-		cacheLen      int
-		limit         int
-		expectedN     int
-		expectedCache int
-		expectedErrCh int
-	}{
-		{
-			name:          "dispatch all when limit equals cache length",
-			cacheLen:      5,
-			limit:         5,
-			expectedN:     5,
-			expectedCache: 0,
-			expectedErrCh: 5,
-		},
-		{
-			name:          "keep remaining cache when limit is smaller",
-			cacheLen:      5,
-			limit:         2,
-			expectedN:     2,
-			expectedCache: 3,
-			expectedErrCh: 2,
-		},
-		{
-			name:          "dispatch all when limit is larger",
-			cacheLen:      5,
-			limit:         10,
-			expectedN:     5,
-			expectedCache: 0,
-			expectedErrCh: 5,
-		},
-		{
-			name:          "dispatch all when limit is zero",
-			cacheLen:      5,
-			limit:         0,
-			expectedN:     5,
-			expectedCache: 0,
-			expectedErrCh: 5,
-		},
-		{
-			name:          "dispatch all when limit is negative",
-			cacheLen:      5,
-			limit:         -1,
-			expectedN:     5,
-			expectedCache: 0,
-			expectedErrCh: 5,
-		},
-		{
-			name:          "empty cache",
-			cacheLen:      0,
-			limit:         5,
-			expectedN:     0,
-			expectedCache: 0,
-			expectedErrCh: 0,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			errCache := &errCache{
-				cache:  make([]regionErrorInfo, 0, 10),
-				errCh:  make(chan regionErrorInfo, 10),
-				notify: make(chan struct{}, 1),
-			}
-			for i := 0; i < tc.cacheLen; i++ {
-				errCache.add(mockErrInfo)
-			}
-
-			n, err := errCache.dispatchBatch(context.Background(), tc.limit)
-			require.NoError(t, err)
-			require.Equal(t, tc.expectedN, n)
-			require.Len(t, errCache.cache, tc.expectedCache)
-			require.Len(t, errCache.errCh, tc.expectedErrCh)
-		})
 	}
 }
 
