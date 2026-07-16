@@ -266,15 +266,13 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 
 				metrics.ChangefeedStatusGauge.WithLabelValues(keyspace, name).Set(float64(info.State.ToInt()))
 
-				if !updateChangefeedCheckpointMetrics(
+				updateChangefeedCheckpointMetrics(
 					keyspace,
 					name,
 					info.State,
 					cf.GetLastSavedCheckPointTs(),
 					c.pdClock.CurrentTime(),
-				) {
-					return
-				}
+				)
 
 				// sync changefeed error metrics
 				currentChangefeeds[cf.ID] = struct{}{}
@@ -327,11 +325,11 @@ func updateChangefeedCheckpointMetrics(
 	state config.FeedState,
 	checkpointTs uint64,
 	pdTime time.Time,
-) bool {
+) {
 	switch state {
-	case config.StateStopped, config.StateFinished, config.StateRemoved:
+	case config.StateFailed, config.StateStopped, config.StateFinished, config.StateRemoved:
 		metrics.DeleteChangefeedCheckpointMetrics(keyspace, name)
-		return false
+		return
 	}
 
 	pdPhysicalTime := oracle.GetPhysical(pdTime)
@@ -339,7 +337,6 @@ func updateChangefeedCheckpointMetrics(
 	lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
 	metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
 	metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
-	return true
 }
 
 // HandleEvent implements the event-driven process mode
