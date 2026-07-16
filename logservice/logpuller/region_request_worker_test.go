@@ -74,7 +74,7 @@ func admitRegionRequest(
 	t.Helper()
 	currentTs := oracle.GoTimeToTS(time.Now())
 	submitRegionForAdmission(t, controller, region, currentTs)
-	req, err := controller.pop(t.Context())
+	req, err := controller.pop(t.Context(), nil)
 	require.NoError(t, err)
 	return req
 }
@@ -101,7 +101,7 @@ func TestRegionRequestWorkerIgnoresDuplicateActiveRegion(t *testing.T) {
 	}, req2)
 	require.NoError(t, err)
 
-	require.Equal(t, 1, admission.inflightCount())
+	require.Equal(t, 1, admission.stats().inflight)
 	require.Same(t, state1, worker.tracker.Get(region.subscribedSpan.subID, region.verID.GetID()))
 	require.False(t, state1.isStale())
 	select {
@@ -339,7 +339,7 @@ func TestStoppedStateRemovesSentRequest(t *testing.T) {
 	state.markStopped(errors.New("send request to store error"))
 	worker.tracker.RemoveIf(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID(), state)
 
-	require.Equal(t, 0, admission.inflightCount())
+	require.Equal(t, 0, admission.stats().inflight)
 }
 
 func TestFailStreamRegionsReleasesSentAdmission(t *testing.T) {
@@ -360,7 +360,7 @@ func TestFailStreamRegionsReleasesSentAdmission(t *testing.T) {
 
 	worker.failStreamRegions(&storeStreamErr{})
 
-	require.Zero(t, admission.inflightCount())
+	require.Zero(t, admission.stats().inflight)
 	require.False(t, req.abort())
 	require.Equal(t, 1, ds.pushCount)
 }
@@ -407,7 +407,7 @@ func TestFailPendingRegionsReschedulesWorkerBuffer(t *testing.T) {
 
 	worker.failPendingRegions(&storeStreamErr{})
 
-	require.Zero(t, admission.pendingCount())
+	require.Zero(t, admission.stats().pending)
 	require.Len(t, client.failureHandler.cache.cache, 2)
 }
 
@@ -424,7 +424,7 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
 
 	req := admitRegionRequest(t, admission, region)
-	require.Equal(t, 1, admission.inflightCount())
+	require.Equal(t, 1, admission.stats().inflight)
 
 	sendErr := errors.New("send failed")
 	conn := &ConnAndClient{
@@ -434,7 +434,7 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 
 	err := worker.processRegionSendTask(t.Context(), conn, req)
 	require.ErrorIs(t, err, sendErr)
-	require.Equal(t, 0, admission.inflightCount())
+	require.Equal(t, 0, admission.stats().inflight)
 	state := worker.tracker.Get(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
 	require.NotNil(t, state)
 	require.True(t, state.isStale())
@@ -506,7 +506,7 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 			err := worker.processRegionSendTask(t.Context(), conn, req)
 			var streamErr *storeStreamErr
 			require.ErrorAs(t, err, &streamErr)
-			require.Equal(t, 0, admission.inflightCount())
+			require.Equal(t, 0, admission.stats().inflight)
 
 			state := worker.tracker.Get(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
 			require.NotNil(t, state)

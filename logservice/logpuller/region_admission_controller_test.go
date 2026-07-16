@@ -68,15 +68,17 @@ func TestRegionAdmissionControllerNormalWindow(t *testing.T) {
 	submitRegionForAdmission(t, controller, region1, currentTs)
 	submitRegionForAdmission(t, controller, region2, currentTs)
 
-	req1, err := controller.pop(t.Context())
+	req1, err := controller.pop(t.Context(), nil)
 	require.NoError(t, err)
-	require.Equal(t, 1, controller.inflightCount())
-	req2, closed := controller.tryPop()
+	require.Equal(t, 1, controller.stats().inflight)
+	interrupt := make(chan struct{})
+	close(interrupt)
+	req2, err := controller.pop(t.Context(), interrupt)
 	require.Nil(t, req2)
-	require.False(t, closed)
+	require.NoError(t, err)
 
 	require.True(t, req1.abort())
-	req2, err = controller.pop(t.Context())
+	req2, err = controller.pop(t.Context(), nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), req2.regionInfo.verID.GetID())
 	require.True(t, req2.abort())
@@ -91,7 +93,7 @@ func TestRegionAdmissionControllerLowLagUsesMaxWindow(t *testing.T) {
 	submitRegionForAdmission(t, controller,
 		prepareRegionForAdmission(createTestRegionInfo(1, 1), slowCheckpointTs),
 		currentTs)
-	req1, err := controller.pop(t.Context())
+	req1, err := controller.pop(t.Context(), nil)
 	require.NoError(t, err)
 
 	submitRegionForAdmission(t, controller,
@@ -101,17 +103,19 @@ func TestRegionAdmissionControllerLowLagUsesMaxWindow(t *testing.T) {
 		prepareRegionForAdmission(createTestRegionInfo(1, 3), lowLagCheckpointTs),
 		currentTs)
 
-	req2, err := controller.pop(t.Context())
+	req2, err := controller.pop(t.Context(), nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), req2.regionInfo.verID.GetID())
-	req3, closed := controller.tryPop()
+	interrupt := make(chan struct{})
+	close(interrupt)
+	req3, err := controller.pop(t.Context(), interrupt)
 	require.Nil(t, req3)
-	require.False(t, closed)
-	require.Equal(t, 2, controller.inflightCount())
+	require.NoError(t, err)
+	require.Equal(t, 2, controller.stats().inflight)
 
 	require.True(t, req1.abort())
 	require.True(t, req2.abort())
-	req3, err = controller.pop(t.Context())
+	req3, err = controller.pop(t.Context(), nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), req3.regionInfo.verID.GetID())
 	require.True(t, req3.abort())
@@ -126,7 +130,7 @@ func TestRegionAdmissionControllerPrioritizesInitializedRegion(t *testing.T) {
 	submitRegionForAdmission(t, controller,
 		prepareRegionForAdmission(createTestRegionInfo(1, 1), slowCheckpointTs),
 		currentTs)
-	req1, err := controller.pop(t.Context())
+	req1, err := controller.pop(t.Context(), nil)
 	require.NoError(t, err)
 
 	submitRegionForAdmission(t, controller,
@@ -137,13 +141,13 @@ func TestRegionAdmissionControllerPrioritizesInitializedRegion(t *testing.T) {
 	submitRegionForAdmission(t, controller,
 		initializedRegion, currentTs)
 
-	req2, err := controller.pop(t.Context())
+	req2, err := controller.pop(t.Context(), nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), req2.regionInfo.verID.GetID())
 
 	require.True(t, req1.abort())
 	require.True(t, req2.abort())
-	req3, err := controller.pop(t.Context())
+	req3, err := controller.pop(t.Context(), nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), req3.regionInfo.verID.GetID())
 	require.True(t, req3.abort())
@@ -154,7 +158,7 @@ func TestRegionAdmissionLeaseReleasedOnce(t *testing.T) {
 	currentTs := oracle.GoTimeToTS(time.Now())
 	region := prepareRegionForAdmission(createTestRegionInfo(1, 1), currentTs)
 	submitRegionForAdmission(t, controller, region, currentTs)
-	req, err := controller.pop(t.Context())
+	req, err := controller.pop(t.Context(), nil)
 	require.NoError(t, err)
 
 	start := make(chan struct{})
@@ -182,7 +186,7 @@ func TestRegionAdmissionLeaseReleasedOnce(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, successes)
-	require.Zero(t, controller.inflightCount())
+	require.Zero(t, controller.stats().inflight)
 }
 
 func TestRegionAdmissionControllerClose(t *testing.T) {
@@ -191,7 +195,7 @@ func TestRegionAdmissionControllerClose(t *testing.T) {
 	region := prepareRegionForAdmission(createTestRegionInfo(1, 1), 1)
 	require.False(t, controller.submit(NewRegionPriorityTask(region, 1, 1)))
 
-	_, err := controller.pop(context.Background())
+	_, err := controller.pop(context.Background(), nil)
 	require.ErrorIs(t, err, context.Canceled)
 }
 
@@ -202,7 +206,7 @@ func TestRegionAdmissionControllerDrainPending(t *testing.T) {
 	submitRegionForAdmission(t, controller, region1, 1)
 	submitRegionForAdmission(t, controller, region2, 1)
 
-	pending := controller.drainPending()
+	pending := controller.drain()
 	require.Len(t, pending, 2)
-	require.Zero(t, controller.pendingCount())
+	require.Zero(t, controller.stats().pending)
 }

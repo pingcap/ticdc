@@ -389,7 +389,7 @@ func (s *requestedStore) inflightCount() int {
 	defer s.requestWorkers.RUnlock()
 	count := 0
 	for _, worker := range s.requestWorkers.s {
-		count += worker.admission.inflightCount()
+		count += worker.admission.stats().inflight
 	}
 	return count
 }

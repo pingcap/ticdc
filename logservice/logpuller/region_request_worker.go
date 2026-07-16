@@ -162,7 +162,7 @@ func (s *regionRequestWorker) failStreamRegions(err error) {
 // failPendingRegions transfers requests owned by this worker but not yet sent
 // to the recovery pipeline, so they can be resolved and routed again.
 func (s *regionRequestWorker) failPendingRegions(err error) {
-	for _, task := range s.admission.drainPending() {
+	for _, task := range s.admission.drain() {
 		s.client.onRegionFail(newRegionErrorInfo(task.regionInfo, err))
 	}
 }
@@ -178,7 +178,7 @@ func (s *regionRequestWorker) notifyRegionError(state *regionFeedState, err erro
 func (s *regionRequestWorker) waitForRegionRequest(ctx context.Context) (*regionReq, error) {
 	// Without a stream there are no remote registrations to deregister.
 	s.controlQueue.drain()
-	req, err := s.admission.pop(ctx)
+	req, err := s.admission.pop(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -494,18 +494,10 @@ func (s *regionRequestWorker) processRegionSendTask(
 		if err := s.drainControlQueue(conn); err != nil {
 			return err
 		}
-		var closed bool
-		if regionReq, closed = s.admission.tryPop(); regionReq != nil {
-			continue
-		}
-		if closed {
-			return context.Canceled
-		}
-		select {
-		case <-s.controlQueue.ready():
-		case <-s.admission.ready():
-		case <-ctx.Done():
-			return ctx.Err()
+		var err error
+		regionReq, err = s.admission.pop(ctx, s.controlQueue.ready())
+		if err != nil {
+			return err
 		}
 	}
 }

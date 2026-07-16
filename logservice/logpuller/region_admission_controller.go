@@ -50,7 +50,7 @@ func (r *regionReq) finish() bool {
 			zap.Uint64("subID", uint64(r.regionInfo.subscribedSpan.subID)),
 			zap.Uint64("regionID", r.regionInfo.verID.GetID()),
 			zap.Float64("cost", cost),
-			zap.Int("inflightCount", r.controller.inflightCount()))
+			zap.Int("inflightCount", r.controller.stats().inflight))
 		metrics.RegionRequestFinishScanDuration.Observe(cost)
 		return true
 	}
@@ -102,6 +102,11 @@ type regionAdmissionController struct {
 	closed bool
 }
 
+type regionAdmissionStats struct {
+	pending  int
+	inflight int
+}
+
 func newRegionAdmissionController(currentWindow, maxWindowMultiplier int) *regionAdmissionController {
 	if currentWindow <= 0 {
 		currentWindow = 1
@@ -133,45 +138,38 @@ func (c *regionAdmissionController) submit(task *regionPriorityTask) bool {
 	return true
 }
 
-func (c *regionAdmissionController) pop(ctx context.Context) (*regionReq, error) {
+// pop waits for an eligible request. If interrupt is signaled first, it returns
+// nil without an error so the worker can handle its control queue.
+func (c *regionAdmissionController) pop(
+	ctx context.Context,
+	interrupt <-chan struct{},
+) (*regionReq, error) {
 	for {
-		request, closed := c.tryPop()
-		if request != nil {
-			return request, nil
-		}
-		if closed {
+		c.mu.Lock()
+		if c.closed {
+			c.mu.Unlock()
 			return nil, context.Canceled
 		}
+		request := c.popEligibleLocked()
+		if request != nil {
+			c.inflight++
+			c.mu.Unlock()
+			return &regionReq{
+				regionInfo: request.regionInfo,
+				createTime: time.Now(),
+				controller: c,
+			}, nil
+		}
+		c.mu.Unlock()
 
 		select {
 		case <-c.notify:
+		case <-interrupt:
+			return nil, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 	}
-}
-
-// tryPop returns whether the controller has been closed as its second result.
-func (c *regionAdmissionController) tryPop() (*regionReq, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.closed {
-		return nil, true
-	}
-	request := c.popEligibleLocked()
-	if request == nil {
-		return nil, false
-	}
-	c.inflight++
-	if c.hasEligibleRequestLocked() {
-		c.notifyOneLocked()
-	}
-	return &regionReq{
-		regionInfo: request.regionInfo,
-		createTime: time.Now(),
-		controller: c,
-	}, false
 }
 
 func (c *regionAdmissionController) popEligibleLocked() *regionPriorityTask {
@@ -184,14 +182,6 @@ func (c *regionAdmissionController) popEligibleLocked() *regionPriorityTask {
 	}
 	request, _ = c.pending.PopTop()
 	return request
-}
-
-func (c *regionAdmissionController) hasEligibleRequestLocked() bool {
-	request, ok := c.pending.PeekTop()
-	if !ok {
-		return false
-	}
-	return c.inflight < c.windowFor(request)
 }
 
 func (c *regionAdmissionController) windowFor(request *regionPriorityTask) int {
@@ -219,23 +209,16 @@ func (c *regionAdmissionController) close() {
 	c.mu.Unlock()
 }
 
-func (c *regionAdmissionController) ready() <-chan struct{} {
-	return c.notify
-}
-
-func (c *regionAdmissionController) inflightCount() int {
+func (c *regionAdmissionController) stats() regionAdmissionStats {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.inflight
+	return regionAdmissionStats{
+		pending:  c.pending.Len(),
+		inflight: c.inflight,
+	}
 }
 
-func (c *regionAdmissionController) pendingCount() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.pending.Len()
-}
-
-func (c *regionAdmissionController) drainPending() []*regionPriorityTask {
+func (c *regionAdmissionController) drain() []*regionPriorityTask {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

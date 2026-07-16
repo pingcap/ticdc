@@ -474,7 +474,7 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, SubscriptionID(1), req.subID)
 	require.True(t, req.filterLoop)
-	require.Equal(t, 1, admission.pendingCount())
+	require.Equal(t, 1, admission.stats().pending)
 }
 
 func TestRequestedStoreDistributesRegionsAcrossWorkerBuffers(t *testing.T) {
@@ -492,8 +492,8 @@ func TestRequestedStoreDistributesRegionsAcrossWorkerBuffers(t *testing.T) {
 		require.True(t, store.submit(NewRegionPriorityTask(region, 1, i)))
 	}
 
-	require.Equal(t, 2, worker1.admission.pendingCount())
-	require.Equal(t, 2, worker2.admission.pendingCount())
+	require.Equal(t, 2, worker1.admission.stats().pending)
+	require.Equal(t, 2, worker2.admission.stats().pending)
 }
 
 func TestSubscriptionWithFailedTiKV(t *testing.T) {
