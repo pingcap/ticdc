@@ -105,6 +105,7 @@ const schemaStoreGCDeleteTimeout = 10 * time.Second
 
 func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 	pendingTs := s.pendingResolvedTs.Load()
+	resolvedTs := s.resolvedTs.Load()
 	defer func() {
 		pdPhyTs := oracle.GetPhysical(s.pdClock.CurrentTime())
 		resolvedPhyTs := oracle.ExtractPhysical(pendingTs)
@@ -112,21 +113,10 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 		metrics.SchemaStoreResolvedTsLagGauge.Set(resolvedLag)
 	}()
 
-	if pendingTs <= s.resolvedTs.Load() {
+	if pendingTs <= resolvedTs {
 		return
 	}
 	resolvedEvents := s.unsortedCache.fetchSortedDDLEventBeforeTS(pendingTs)
-	newResolvedTs := s.resolvedTs.Load()
-	advanceResolvedTsAfterGroup := func(idx int) {
-		commitTs := resolvedEvents[idx].CommitTs
-		if idx+1 < len(resolvedEvents) && resolvedEvents[idx+1].CommitTs == commitTs {
-			return
-		}
-		if commitTs > newResolvedTs {
-			newResolvedTs = commitTs
-		}
-	}
-	applyFailed := false
 	for idx, event := range resolvedEvents {
 		if event.Job.BinlogInfo.SchemaVersion == 0 /* means the ddl is ignored in upstream */ {
 			log.Info("skip ddl job with empty SchemaVersion",
@@ -137,7 +127,6 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 				zap.Uint64("jobCommitTs", event.CommitTs),
 				zap.Any("storeSchemaVersion", s.schemaVersion),
 				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
-			advanceResolvedTsAfterGroup(idx)
 			continue
 		}
 		if event.Job.BinlogInfo.FinishedTS <= s.finishedDDLTs {
@@ -149,7 +138,6 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 				zap.Uint64("jobCommitTs", event.CommitTs),
 				zap.Any("storeSchemaVersion", s.schemaVersion),
 				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
-			advanceResolvedTsAfterGroup(idx)
 			continue
 		}
 		log.Info("handle a ddl job",
@@ -166,10 +154,19 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 
 		err := s.dataStorage.handleDDLJob(event.Job)
 		if err != nil {
-			applyFailed = true
 			// Keep failed and later events for retry. They are removed from cache when fetched.
 			for _, pendingEvent := range resolvedEvents[idx:] {
 				s.unsortedCache.addDDLEvent(pendingEvent)
+			}
+			pendingTs = resolvedTs
+			// A resolved ts cannot split events with the same commit ts.
+			lastHandledEventIdx := idx - 1
+			for lastHandledEventIdx >= 0 &&
+				resolvedEvents[lastHandledEventIdx].CommitTs == event.CommitTs {
+				lastHandledEventIdx--
+			}
+			if lastHandledEventIdx >= 0 && resolvedEvents[lastHandledEventIdx].CommitTs > pendingTs {
+				pendingTs = resolvedEvents[lastHandledEventIdx].CommitTs
 			}
 			log.Error("handle ddl job failed, retry later",
 				zap.Int64("schemaID", event.Job.SchemaID),
@@ -190,20 +187,16 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 		// Update dedup watermark only after DDL is persisted successfully.
 		s.schemaVersion = event.Job.BinlogInfo.SchemaVersion
 		s.finishedDDLTs = event.Job.BinlogInfo.FinishedTS
-		advanceResolvedTsAfterGroup(idx)
-	}
-	if !applyFailed {
-		// When register a new table, it will load all ddl jobs from disk for the table,
-		// so we can only update resolved ts after all ddl jobs are written to disk
-		// Can we optimize it to update resolved ts more eagerly?
-		newResolvedTs = pendingTs
 	}
 
-	s.resolvedTs.Store(newResolvedTs)
+	// When register a new table, it will load all ddl jobs from disk for the table,
+	// so we can only update resolved ts after all ddl jobs are written to disk
+	// Can we optimize it to update resolved ts more eagerly?
+	s.resolvedTs.Store(pendingTs)
 	s.dataStorage.updateUpperBound(UpperBoundMeta{
 		FinishedDDLTs: s.finishedDDLTs,
 		SchemaVersion: s.schemaVersion,
-		ResolvedTs:    newResolvedTs,
+		ResolvedTs:    pendingTs,
 	})
 }
 
