@@ -584,6 +584,7 @@ func TestRunStreamFailureReportsPendingRegionsToFailureHandler(t *testing.T) {
 	pdClient := newFailureRecoveryTestPDClient(t)
 	defer pdClient.Close()
 
+<<<<<<< HEAD
 	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, nil, nil)
 	worker := &regionRequestWorker{
 		upstream:       &upstreamHandle{pd: pdClient, credential: &security.Credential{}},
@@ -593,6 +594,29 @@ func TestRunStreamFailureReportsPendingRegionsToFailureHandler(t *testing.T) {
 		controlQueue:   newControlQueue(),
 		tracker:        newRegionTracker(),
 		storeAddr:      "127.0.0.1:1",
+=======
+	admission := newRegionAdmissionController(1, 1)
+	failureHandler := &regionFailureHandler{cache: newErrCache()}
+	worker := &regionRequestWorker{failureHandler: failureHandler, admission: admission}
+	regions := []regionInfo{
+		{
+			verID: tikv.NewRegionVerID(1, 1, 1),
+			span: heartbeatpb.TableSpan{
+				TableID: 1, StartKey: []byte("a"), EndKey: []byte("m"),
+			},
+			subscribedSpan: span, lockedRangeState: lock1.LockedRangeState,
+		},
+		{
+			verID: tikv.NewRegionVerID(2, 1, 1),
+			span: heartbeatpb.TableSpan{
+				TableID: 1, StartKey: []byte("m"), EndKey: []byte("z"),
+			},
+			subscribedSpan: span, lockedRangeState: lock2.LockedRangeState,
+		},
+	}
+	for i, region := range regions {
+		require.True(t, admission.submit(newRegionPriorityTask(region, 1, uint64(i+1))))
+>>>>>>> 9903a1be7 (refactor)
 	}
 
 	firstRegion := createFailureRecoveryTestRegion(t, 1, 1)

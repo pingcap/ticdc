@@ -32,6 +32,7 @@ type regionPriorityTask struct {
 	heapIndex  int // for heap.Item interface
 }
 
+<<<<<<< HEAD
 // newRegionPriorityTask creates a new priority task for region.
 func newRegionPriorityTask(regionInfo regionInfo, sequence uint64) *regionPriorityTask {
 	regionInfo.scanPriority = normalizeScanPriority(regionInfo.scanPriority)
@@ -39,11 +40,31 @@ func newRegionPriorityTask(regionInfo regionInfo, sequence uint64) *regionPriori
 		regionInfo: regionInfo,
 		sequence:   sequence,
 		heapIndex:  0, // 0 means not in heap
+=======
+func newRegionPriorityTask(regionInfo regionInfo, currentTs, sequence uint64) *regionPriorityTask {
+	task := &regionPriorityTask{
+		sequence:  sequence,
+		heapIndex: 0, // 0 means not in heap
+>>>>>>> 9903a1be7 (refactor)
 	}
 }
 
+<<<<<<< HEAD
 func (pt *regionPriorityTask) priority() cdcpb.ScanPriority {
 	return normalizeScanPriority(pt.regionInfo.scanPriority)
+=======
+// updateRegion refreshes both the request data and its priority before the task
+// enters another scheduling stage.
+func (pt *regionPriorityTask) updateRegion(regionInfo regionInfo, currentTs uint64) {
+	priority := normalRegionPriority
+	if regionInfo.wasInitialized {
+		priority = initializedRegionPriority
+	} else if regionScanLag(currentTs, regionInfo.resolvedTs()) < lowLagRegionThreshold {
+		priority = lowLagRegionPriority
+	}
+	pt.regionInfo = regionInfo
+	pt.priority = priority
+>>>>>>> 9903a1be7 (refactor)
 }
 
 func (pt *regionPriorityTask) canUseMaxWindow() bool {

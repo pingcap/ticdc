@@ -89,8 +89,12 @@ type resolveLockTask struct {
 type rangeTask struct {
 	span           heartbeatpb.TableSpan
 	subscribedSpan *subscribedSpan
+<<<<<<< HEAD
 	filterLoop     bool
 	priority       cdcpb.ScanPriority
+=======
+	wasInitialized bool
+>>>>>>> 9903a1be7 (refactor)
 }
 
 // upstreamHandle contains the stable TiKV and PD dependencies shared by the
@@ -286,12 +290,16 @@ func (s *subscriptionClient) Subscribe(
 	select {
 	case <-s.ctx.Done():
 		log.Warn("subscribes span failed, the subscription client has closed")
+<<<<<<< HEAD
 	case s.rangeTaskCh <- rangeTask{
 		span:           span,
 		subscribedSpan: rt,
 		filterLoop:     rt.filterLoop,
 		priority:       cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 	}:
+=======
+	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt}:
+>>>>>>> 9903a1be7 (refactor)
 		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
 			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
@@ -325,9 +333,12 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 <<<<<<< HEAD
 	g.Go(func() error { return s.regionScheduler.Run(ctx, g) })
 	g.Go(func() error { return s.eventSink.Run(ctx) })
+<<<<<<< HEAD
 =======
 	g.Go(func() error { return s.regionScheduler.run(ctx, g) })
 >>>>>>> 23171df8f (logpuller: extract region request scheduler from subscription client)
+=======
+>>>>>>> 9903a1be7 (refactor)
 	g.Go(func() error { return s.failureHandler.Run(ctx) })
 	g.Go(func() error { return s.spanRegistry.Run(ctx) })
 	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
@@ -477,8 +488,13 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			}
 
 			verID := tikv.NewRegionVerID(regionMeta.Id, regionMeta.RegionEpoch.ConfVer, regionMeta.RegionEpoch.Version)
+<<<<<<< HEAD
 			regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan, task.filterLoop)
 			regionInfo.scanPriority = normalizeScanPriority(task.priority)
+=======
+			regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan)
+			regionInfo.wasInitialized = task.wasInitialized
+>>>>>>> 9903a1be7 (refactor)
 
 			// Schedule a region request to subscribe the region.
 			s.scheduleRegionRequest(ctx, regionInfo)
@@ -525,8 +541,12 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 			s.scheduleRangeRequest(ctx, rangeTask{
 				span:           r,
 				subscribedSpan: region.subscribedSpan,
+<<<<<<< HEAD
 				filterLoop:     region.filterLoop,
 				priority:       region.scanPriority,
+=======
+				wasInitialized: region.wasInitialized,
+>>>>>>> 9903a1be7 (refactor)
 			})
 		}
 	default:
