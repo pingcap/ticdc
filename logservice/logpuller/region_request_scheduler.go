@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/priorityqueue"
 	kvclientv2 "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
@@ -31,8 +32,8 @@ import (
 
 const regionRequestWorkerPerStore = 8
 
-// regionRequestScheduler routes locked Region requests through the global
-// priority queue to a worker connected to the Region's TiKV store. Range
+// regionRequestScheduler routes locked region requests through the global
+// priority queue to a worker connected to the region's TiKV store. Range
 // resolution and retry policy remain owned by subscriptionClient and
 // regionFailureHandler respectively.
 type regionRequestScheduler struct {
@@ -40,12 +41,12 @@ type regionRequestScheduler struct {
 	eventSink      *regionEventSink
 	failureHandler *regionFailureHandler
 
-	// taskQueue orders all Regions before they are assigned to a TiKV store.
+	// taskQueue orders all regions before they are assigned to a TiKV store.
 	taskQueue *priorityqueue.PriorityQueue[*regionPriorityTask]
-	// sequence is the FIFO tie-breaker for Regions in the same priority class.
+	// sequence is the FIFO tie-breaker for regions in the same priority class.
 	sequence atomic.Uint64
 	// stores maps TiKV addresses to regionRequestStore. Stores are created only
-	// by run, but are also read by metrics and deregistration goroutines.
+	// by Run, but are also read by metrics and deregistration goroutines.
 	stores sync.Map
 
 	// workerCount is the configured number of request workers per store.
@@ -75,12 +76,12 @@ func newRegionRequestScheduler(
 	}
 }
 
-func (s *regionRequestScheduler) submit(region regionInfo) {
+func (s *regionRequestScheduler) Submit(region regionInfo) {
 	s.taskQueue.Push(NewRegionPriorityTask(
 		region, s.upstream.pdClock.CurrentTS(), s.sequence.Add(1)))
 }
 
-func (s *regionRequestScheduler) run(ctx context.Context, workerGroup *errgroup.Group) error {
+func (s *regionRequestScheduler) Run(ctx context.Context, workerGroup *errgroup.Group) error {
 	defer s.closeStores()
 	for {
 		select {
@@ -156,7 +157,7 @@ func (s *regionRequestScheduler) getOrCreateStore(
 	return store
 }
 
-func (s *regionRequestScheduler) broadcastDeregister(
+func (s *regionRequestScheduler) BroadcastDeregister(
 	subID SubscriptionID,
 	filterLoop bool,
 ) {
@@ -175,7 +176,12 @@ func (s *regionRequestScheduler) inflightCount() int {
 	return count
 }
 
-func (s *regionRequestScheduler) close() {
+func (s *regionRequestScheduler) UpdateMetrics() {
+	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("inflight").
+		Set(float64(s.inflightCount()))
+}
+
+func (s *regionRequestScheduler) Close() {
 	s.taskQueue.Close()
 }
 
