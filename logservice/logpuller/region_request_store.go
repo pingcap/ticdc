@@ -21,7 +21,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// regionRequestStore owns the Region request workers connected to one TiKV
+// regionRequestStore owns the region request workers connected to one TiKV
 // store. The worker slice is complete before the store is published and is
 // immutable afterwards, so task submission only needs an atomic round-robin counter.
 type regionRequestStore struct {
@@ -57,9 +57,6 @@ func (s *regionRequestStore) startWorkers(ctx context.Context, workerGroup *errg
 }
 
 func (s *regionRequestStore) submit(task *regionPriorityTask) bool {
-	if len(s.workers) == 0 {
-		return false
-	}
 	index := (s.nextWorker.Add(1) - 1) % uint64(len(s.workers))
 	return s.workers[index].admission.submit(task)
 }

@@ -78,7 +78,7 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
 			Name:      "requested_region_count",
-			Help:      "The number of Region requests by state.",
+			Help:      "The number of region requests by state.",
 		}, []string{"state"})
 	RegionRequestFinishScanDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{

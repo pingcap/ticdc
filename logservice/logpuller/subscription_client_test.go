@@ -467,7 +467,7 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 	}
 	require.True(t, admission.submit(NewRegionPriorityTask(dummyRegion, 1, 1)))
 
-	scheduler.broadcastDeregister(SubscriptionID(1), true)
+	scheduler.BroadcastDeregister(SubscriptionID(1), true)
 	require.Equal(t, 1, worker.controlQueue.len())
 	req, ok := worker.controlQueue.tryPop()
 	require.True(t, ok)

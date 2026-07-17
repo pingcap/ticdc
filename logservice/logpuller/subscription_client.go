@@ -94,7 +94,7 @@ type upstreamHandle struct {
 	clusterID   uint64
 }
 
-// initialize loads the cluster metadata needed by Region request workers. It
+// initialize loads the cluster metadata needed by region request workers. It
 // must run before the scheduler starts any workers.
 func (u *upstreamHandle) initialize(ctx context.Context) {
 	u.clusterID = u.pd.GetClusterID(ctx)
@@ -133,7 +133,7 @@ type subscriptionClient struct {
 	eventSink *regionEventSink
 	// spanRegistry tracks subscribed spans and owns span-level background tasks.
 	spanRegistry *spanRegistry
-	// regionScheduler assigns locked Region requests to per-store workers.
+	// regionScheduler assigns locked region requests to per-store workers.
 	regionScheduler *regionRequestScheduler
 
 	// rangeTaskCh is used to receive range tasks.
@@ -198,9 +198,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			inflightRegionRequestCount := s.regionScheduler.inflightCount()
-
-			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("inflight").Set(float64(inflightRegionRequestCount))
+			s.regionScheduler.UpdateMetrics()
 			s.eventSink.UpdateMetrics()
 			s.spanRegistry.UpdateMetrics()
 		}
@@ -268,11 +266,6 @@ func (s *subscriptionClient) Unsubscribe(subID SubscriptionID) {
 }
 
 func (s *subscriptionClient) Run(ctx context.Context) error {
-	// s.consume = consume
-	if s.upstream == nil || s.upstream.pd == nil {
-		log.Warn("subscription client should be in test mode, skip run")
-		return nil
-	}
 	s.upstream.initialize(ctx)
 
 	g, ctx := errgroup.WithContext(ctx)
@@ -280,7 +273,7 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 	g.Go(func() error { return s.updateMetrics(ctx) })
 	g.Go(func() error { return s.eventSink.Run(ctx) })
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
-	g.Go(func() error { return s.regionScheduler.run(ctx, g) })
+	g.Go(func() error { return s.regionScheduler.Run(ctx, g) })
 	g.Go(func() error { return s.failureHandler.Run(ctx) })
 	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
 	g.Go(func() error { return s.spanRegistry.Run(ctx) })
@@ -294,7 +287,7 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 func (s *subscriptionClient) Close(ctx context.Context) error {
 	s.cancel()
 	s.eventSink.Close()
-	s.regionScheduler.close()
+	s.regionScheduler.Close()
 	return nil
 }
 
@@ -305,7 +298,7 @@ func (s *subscriptionClient) setTableStopped(rt *subscribedSpan) {
 	// Set stopped to true so we can stop handling region events from the table,
 	// then notify every existing worker to deregister the subscription.
 	if rt.stopped.CompareAndSwap(false, true) {
-		s.regionScheduler.broadcastDeregister(rt.subID, rt.filterLoop)
+		s.regionScheduler.BroadcastDeregister(rt.subID, rt.filterLoop)
 		if rt.rangeLock.Stop() {
 			s.onTableDrained(rt)
 		}
@@ -429,7 +422,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 	}
 }
 
-// scheduleRegionRequest locks the Region's range before submitting it to the
+// scheduleRegionRequest locks the region's range before submitting it to the
 // request scheduler.
 func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region regionInfo) {
 	if region.lockedRangeState != nil && region.lockedRangeState.Initialized.Load() {
@@ -445,7 +438,7 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 	switch lockRangeResult.Status {
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
-		s.regionScheduler.submit(region)
+		s.regionScheduler.Submit(region)
 	case regionlock.LockRangeStatusStale:
 		for _, r := range lockRangeResult.RetryRanges {
 			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop, region.wasInitialized)
