@@ -21,16 +21,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// requestedStore owns the request workers connected to one TiKV store. The
-// worker slice is complete before the store is published and is immutable
+// storeRequestWorkerPool owns the request workers connected to one TiKV store.
+// The worker slice is complete before the pool is published and is immutable
 // afterwards, so task submission only needs an atomic round-robin counter.
-type requestedStore struct {
+type storeRequestWorkerPool struct {
 	storeAddr  string
 	workers    []*regionRequestWorker
 	nextWorker atomic.Uint64
 }
 
-func newRequestedStore(
+func newStoreRequestWorkerPool(
 	upstream *upstreamHandle,
 	eventSink *regionEventSink,
 	failureHandler *regionFailureHandler,
@@ -38,25 +38,25 @@ func newRequestedStore(
 	workerCount int,
 	workerWindow int,
 	maxWindowMultiplier int,
-) *requestedStore {
-	store := &requestedStore{
+) *storeRequestWorkerPool {
+	workerPool := &storeRequestWorkerPool{
 		storeAddr: storeAddr,
 		workers:   make([]*regionRequestWorker, 0, workerCount),
 	}
 	for i := 0; i < workerCount; i++ {
-		store.workers = append(store.workers, newRegionRequestWorker(
-			upstream, eventSink, failureHandler, store, workerWindow, maxWindowMultiplier))
+		workerPool.workers = append(workerPool.workers, newRegionRequestWorker(
+			upstream, eventSink, failureHandler, storeAddr, workerWindow, maxWindowMultiplier))
 	}
-	return store
+	return workerPool
 }
 
-func (s *requestedStore) run(ctx context.Context, group *errgroup.Group) {
+func (s *storeRequestWorkerPool) startWorkers(ctx context.Context, workerGroup *errgroup.Group) {
 	for _, worker := range s.workers {
-		group.Go(func() error { return worker.Run(ctx) })
+		workerGroup.Go(func() error { return worker.Run(ctx) })
 	}
 }
 
-func (s *requestedStore) submit(task *regionPriorityTask) bool {
+func (s *storeRequestWorkerPool) submit(task *regionPriorityTask) bool {
 	if len(s.workers) == 0 {
 		return false
 	}
@@ -64,19 +64,19 @@ func (s *requestedStore) submit(task *regionPriorityTask) bool {
 	return s.workers[index].admission.submit(task)
 }
 
-func (s *requestedStore) broadcastDeregister(subID SubscriptionID, filterLoop bool) {
+func (s *storeRequestWorkerPool) broadcastDeregister(subID SubscriptionID, filterLoop bool) {
 	for _, worker := range s.workers {
 		worker.controlQueue.push(deregisterRequest{subID: subID, filterLoop: filterLoop})
 	}
 }
 
-func (s *requestedStore) close() {
+func (s *storeRequestWorkerPool) close() {
 	for _, worker := range s.workers {
 		worker.admission.close()
 	}
 }
 
-func (s *requestedStore) inflightCount() int {
+func (s *storeRequestWorkerPool) inflightCount() int {
 	count := 0
 	for _, worker := range s.workers {
 		count += worker.admission.stats().inflight
