@@ -22,7 +22,6 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
-	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -38,7 +37,6 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
-	"golang.org/x/sync/errgroup"
 )
 
 type mockLockResolver struct {
@@ -81,8 +79,6 @@ func TestGenerateResolveLockTask(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		false,
-		pdutil.NewClock4Test(),
-		30*time.Minute,
 	)
 	client.spanRegistry.Add(span)
 
@@ -155,12 +151,12 @@ func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
-	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdutil.NewClock4Test(), 30*time.Minute)
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
 	span2 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(2), heartbeatpb.TableSpan{
 		TableID:  2,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
-	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdutil.NewClock4Test(), 30*time.Minute)
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
 
 	res := span1.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
@@ -186,7 +182,7 @@ func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
 }
 
 func TestHandleResolveLockTasksMetrics(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	resolver := &mockLockResolver{}
@@ -201,10 +197,7 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 		errCh <- client.handleResolveLockTasks(ctx)
 	}()
 
-	rangeLock := regionlock.NewRangeLock(1, []byte{'a'}, []byte{'b'}, 100)
-	lockResult := rangeLock.LockRange(context.Background(), []byte{'a'}, []byte{'b'}, 1, 1)
-	require.Equal(t, regionlock.LockRangeStatusSuccess, lockResult.Status)
-	state := lockResult.LockedRangeState
+	state := &regionlock.LockedRangeState{}
 	state.Initialized.Store(true)
 	state.ResolvedTs.Store(100)
 
@@ -273,8 +266,6 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		false,
-		pdutil.NewClock4Test(),
-		30*time.Minute,
 	)
 
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
@@ -332,16 +323,14 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		true,
-		pdutil.NewClock4Test(),
-		30*time.Minute,
 	)
 
 	res := span.rangeLock.LockRange(context.Background(), rawSpan.StartKey, rawSpan.EndKey, 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
 	worker := &regionRequestWorker{controlQueue: newControlQueue()}
-	store := &requestedStore{storeAddr: "store-1"}
-	store.requestWorkers.s = []*regionRequestWorker{worker}
-	client.stores.Store(store.storeAddr, store)
+	store := &requestedStore{storeAddr: "store-1", workers: []*regionRequestWorker{worker}}
+	client.regionScheduler = &regionRequestScheduler{client: client}
+	client.regionScheduler.stores.Store(store.storeAddr, store)
 
 	client.setTableStopped(span)
 
@@ -353,7 +342,7 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 
 func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	client := &subscriptionClient{
-		eventSink: newTestRegionEventSink(&mockDynamicStream{}),
+		eventSink: &regionEventSink{ds: &mockDynamicStream{}},
 	}
 	client.spanRegistry = newSpanRegistry(nil, nil)
 	client.failureHandler = newRegionFailureHandler(client)
@@ -396,313 +385,6 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	require.Nil(t, client.spanRegistry.Get(span.subID))
 }
 
-func TestHandleRegionsSkipsStoppedSubscriptionBeforeCreatingStore(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	_, cluster, pdClient, _ := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
-	pdClient = &mockPDClient{Client: pdClient, versionGen: defaultVersionGen}
-	defer pdClient.Close()
-
-	const storeAddr = "store-1"
-	cluster.AddStore(1, storeAddr)
-	cluster.Bootstrap(11, []uint64{1}, []uint64{2}, 2)
-
-	regionCache := tikv.NewRegionCache(pdClient)
-	defer regionCache.Close()
-
-	bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-	location, err := regionCache.LocateKey(bo, []byte("a"))
-	require.NoError(t, err)
-
-	rawSpan := heartbeatpb.TableSpan{
-		TableID:  1,
-		StartKey: []byte("a"),
-		EndKey:   []byte("b"),
-	}
-	span := &subscribedSpan{
-		subID:     SubscriptionID(1),
-		span:      rawSpan,
-		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
-	}
-
-	lockRes := span.rangeLock.LockRange(
-		context.Background(), rawSpan.StartKey, rawSpan.EndKey, location.Region.GetID(), location.Region.GetVer())
-	require.Equal(t, regionlock.LockRangeStatusSuccess, lockRes.Status)
-
-	client := &subscriptionClient{
-		ctx:             ctx,
-		config:          &SubscriptionClientConfig{RegionRequestWorkerPerStore: 1},
-		pd:              pdClient,
-		pdClock:         pdutil.NewClock4Test(),
-		regionCache:     regionCache,
-		credential:      &security.Credential{},
-		eventSink:       newTestRegionEventSink(&mockDynamicStream{}),
-		spanRegistry:    newSpanRegistry(nil, nil),
-		regionTaskQueue: priorityqueue.New[*regionPriorityTask](),
-	}
-	client.failureHandler = newRegionFailureHandler(client)
-	client.spanRegistry.Add(span)
-
-	region := newRegionInfo(location.Region, rawSpan, nil, span, false)
-	region.lockedRangeState = lockRes.LockedRangeState
-	client.regionTaskQueue.Push(newRegionPriorityTask(region, 1))
-	client.setTableStopped(span)
-
-	var eg errgroup.Group
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- client.handleRegions(ctx, &eg)
-	}()
-
-	require.Eventually(t, func() bool {
-		return client.spanRegistry.Get(span.subID) == nil
-	}, time.Second, 20*time.Millisecond)
-
-	_, ok := client.stores.Load(storeAddr)
-	require.False(t, ok)
-
-	cancel()
-	err = <-errCh
-	require.ErrorIs(t, err, context.Canceled)
-}
-
-func TestHandleRegionsReschedulesRegionWhenStoreSubmitFails(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	_, cluster, pdClient, _ := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
-	pdClient = &mockPDClient{Client: pdClient, versionGen: defaultVersionGen}
-	defer pdClient.Close()
-
-	const storeAddr = "store-1"
-	cluster.AddStore(1, storeAddr)
-	cluster.Bootstrap(11, []uint64{1}, []uint64{2}, 2)
-
-	regionCache := tikv.NewRegionCache(pdClient)
-	defer regionCache.Close()
-
-	bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-	location, err := regionCache.LocateKey(bo, []byte("a"))
-	require.NoError(t, err)
-
-	rawSpan := heartbeatpb.TableSpan{
-		TableID:  1,
-		StartKey: []byte("a"),
-		EndKey:   []byte("b"),
-	}
-	span := &subscribedSpan{
-		subID:          SubscriptionID(1),
-		span:           rawSpan,
-		rangeLock:      regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
-		priorityPolicy: newTestScanPriorityPolicy(),
-	}
-	lockRes := span.rangeLock.LockRange(
-		context.Background(), rawSpan.StartKey, rawSpan.EndKey, location.Region.GetID(), location.Region.GetVer())
-	require.Equal(t, regionlock.LockRangeStatusSuccess, lockRes.Status)
-
-	admission := newRegionAdmissionController(1, 1)
-	admission.close()
-	store := &requestedStore{storeAddr: storeAddr}
-	store.requestWorkers.s = []*regionRequestWorker{{admission: admission}}
-
-	client := &subscriptionClient{
-		ctx:             ctx,
-		config:          &SubscriptionClientConfig{RegionRequestWorkerPerStore: 1},
-		pd:              pdClient,
-		pdClock:         pdutil.NewClock4Test(),
-		regionCache:     regionCache,
-		credential:      &security.Credential{},
-		eventSink:       newTestRegionEventSink(&mockDynamicStream{}),
-		spanRegistry:    newSpanRegistry(nil, nil),
-		regionTaskQueue: priorityqueue.New[*regionPriorityTask](),
-	}
-	client.failureHandler = newRegionFailureHandler(client)
-	client.stores.Store(storeAddr, store)
-
-	region := newRegionInfo(location.Region, rawSpan, nil, span, false)
-	region.lockedRangeState = lockRes.LockedRangeState
-	client.regionTaskQueue.Push(newRegionPriorityTask(region, 1))
-
-	var eg errgroup.Group
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- client.handleRegions(ctx, &eg)
-	}()
-
-	require.Eventually(t, func() bool {
-		client.failureHandler.cache.Lock()
-		defer client.failureHandler.cache.Unlock()
-		return len(client.failureHandler.cache.cache) == 1
-	}, time.Second, 20*time.Millisecond)
-
-	select {
-	case err := <-errCh:
-		t.Fatalf("handleRegions exited unexpectedly: %v", err)
-	default:
-	}
-
-	cancel()
-	err = <-errCh
-	require.ErrorIs(t, err, context.Canceled)
-
-	batch := client.failureHandler.cache.popBatch(1)
-	require.Len(t, batch, 1)
-	require.IsType(t, &storeStreamErr{}, batch[0].err)
-	require.NoError(t, client.failureHandler.handleError(context.Background(), batch[0]))
-
-	popCtx, popCancel := context.WithTimeout(context.Background(), time.Second)
-	defer popCancel()
-	retriedTask, err := client.regionTaskQueue.Pop(popCtx)
-	require.NoError(t, err)
-	require.Equal(t, region.verID, retriedTask.regionInfo.verID)
-	require.Equal(t, rawSpan, retriedTask.regionInfo.span)
-}
-
-func TestRegionRetryScanPriority(t *testing.T) {
-	for _, tc := range []struct {
-		name         string
-		priority     cdcpb.ScanPriority
-		cdcErr       *cdcpb.Error
-		everCaughtUp bool
-		expected     cdcpb.ScanPriority
-	}{
-		{
-			name:     "server is busy high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-			cdcErr:   &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-		},
-		{
-			name:     "server is busy low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-			cdcErr:   &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-		},
-		{
-			name:         "server is busy low after catch up",
-			priority:     cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-			cdcErr:       &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
-			everCaughtUp: true,
-			expected:     cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-		},
-		{
-			name:     "congested high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-			cdcErr:   &cdcpb.Error{Congested: &cdcpb.Congested{}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-		},
-		{
-			name:     "congested low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-			cdcErr:   &cdcpb.Error{Congested: &cdcpb.Congested{}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-		},
-		{
-			name:     "unknown retry high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-			cdcErr:   &cdcpb.Error{},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-		},
-		{
-			name:     "unknown retry low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-			cdcErr:   &cdcpb.Error{},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			client := &subscriptionClient{
-				regionTaskQueue: priorityqueue.New[*regionPriorityTask](),
-			}
-			client.pdClock = pdutil.NewClock4Test()
-			client.pdClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(time.Now()))
-			client.failureHandler = newRegionFailureHandler(client)
-			_, span := newScanPriorityTestSpan()
-			span.priorityPolicy.everCaughtUp.Store(tc.everCaughtUp)
-			region := newScanPriorityTestRegion(span)
-			region.scanPriority = tc.priority
-
-			err := client.failureHandler.handleError(context.Background(), newRegionErrorInfo(region, &eventError{err: tc.cdcErr}))
-			require.NoError(t, err)
-
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			task, err := client.regionTaskQueue.Pop(ctx)
-			require.NoError(t, err)
-			require.Equal(t, tc.expected, task.priority())
-			require.Equal(t, tc.expected, task.regionInfo.scanPriority)
-		})
-	}
-}
-
-func TestRangeRetryPreservesScanPriority(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		priority cdcpb.ScanPriority
-		err      error
-		expected cdcpb.ScanPriority
-	}{
-		{
-			name:     "epoch not match high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-			err:      &eventError{err: &cdcpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-		},
-		{
-			name:     "epoch not match low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-			err:      &eventError{err: &cdcpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-		},
-		{
-			name:     "region not found high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-			err:      &eventError{err: &cdcpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-		},
-		{
-			name:     "region not found low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-			err:      &eventError{err: &cdcpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-		},
-		{
-			name:     "rpc context unavailable high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-			err:      &rpcCtxUnavailableErr{verID: tikv.NewRegionVerID(1, 1, 1)},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-		},
-		{
-			name:     "rpc context unavailable low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-			err:      &rpcCtxUnavailableErr{verID: tikv.NewRegionVerID(1, 1, 1)},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			client := &subscriptionClient{
-				rangeTaskCh: make(chan rangeTask, 1),
-			}
-			client.failureHandler = newRegionFailureHandler(client)
-			rawSpan, span := newScanPriorityTestSpan()
-			region := newScanPriorityTestRegion(span)
-			region.scanPriority = tc.priority
-
-			err := client.failureHandler.handleError(context.Background(), newRegionErrorInfo(region, tc.err))
-			require.NoError(t, err)
-
-			select {
-			case task := <-client.rangeTaskCh:
-				require.Equal(t, tc.expected, task.priority)
-				require.Equal(t, rawSpan, task.span)
-			case <-time.After(time.Second):
-				require.Fail(t, "expected range retry task")
-			}
-		})
-	}
-}
-
 type mockDynamicStream struct{}
 
 func (s *mockDynamicStream) Start() {}
@@ -733,34 +415,16 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 	return dynstream.Metrics[int, SubscriptionID]{}
 }
 
-func newScanPriorityTestSpan() (heartbeatpb.TableSpan, *subscribedSpan) {
-	rawSpan := heartbeatpb.TableSpan{
-		TableID:  1,
-		StartKey: []byte("a"),
-		EndKey:   []byte("z"),
-	}
-	span := &subscribedSpan{
-		subID:          SubscriptionID(1),
-		span:           rawSpan,
-		rangeLock:      regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
-		priorityPolicy: newTestScanPriorityPolicy(),
-	}
-	return rawSpan, span
-}
-
-func newScanPriorityTestRegion(span *subscribedSpan) regionInfo {
-	return newRegionInfo(tikv.NewRegionVerID(1, 1, 1), span.span, nil, span, false)
-}
-
-func newTestScanPriorityPolicy() scanPriorityPolicy {
-	return newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute)
-}
-
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
-	sink := newTestRegionEventSink(&mockDynamicStream{})
-	client := &subscriptionClient{
-		eventSink:       sink,
-		regionTaskQueue: priorityqueue.New[*regionPriorityTask](),
+	sink := &regionEventSink{
+		ctx: context.Background(),
+		ds:  &mockDynamicStream{},
+	}
+	sink.cond = sync.NewCond(&sink.mu)
+	client := &subscriptionClient{eventSink: sink}
+	client.regionScheduler = &regionRequestScheduler{
+		client:    client,
+		taskQueue: priorityqueue.New[*regionPriorityTask](),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 
@@ -789,23 +453,23 @@ func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 
 func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 	client := &subscriptionClient{}
+	scheduler := &regionRequestScheduler{client: client}
 	admission := newRegionAdmissionController(1, 1)
 
 	worker := &regionRequestWorker{
 		admission:    admission,
 		controlQueue: newControlQueue(),
 	}
-	store := &requestedStore{storeAddr: "store-1"}
-	store.requestWorkers.s = []*regionRequestWorker{worker}
-	client.stores.Store(store.storeAddr, store)
+	store := &requestedStore{storeAddr: "store-1", workers: []*regionRequestWorker{worker}}
+	scheduler.stores.Store(store.storeAddr, store)
 
 	dummyRegion := regionInfo{
 		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
 		lockedRangeState: &regionlock.LockedRangeState{},
 	}
-	require.True(t, admission.submit(newRegionPriorityTask(dummyRegion, 1)))
+	require.True(t, admission.submit(NewRegionPriorityTask(dummyRegion, 1, 1)))
 
-	client.broadcastDeregister(SubscriptionID(1), true)
+	scheduler.broadcastDeregister(SubscriptionID(1), true)
 	require.Equal(t, 1, worker.controlQueue.len())
 	req, ok := worker.controlQueue.tryPop()
 	require.True(t, ok)
@@ -817,8 +481,10 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 func TestRequestedStoreDistributesRegionsAcrossWorkerBuffers(t *testing.T) {
 	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
 	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
-	store := &requestedStore{storeAddr: "store-1"}
-	store.requestWorkers.s = []*regionRequestWorker{worker1, worker2}
+	store := &requestedStore{
+		storeAddr: "store-1",
+		workers:   []*regionRequestWorker{worker1, worker2},
+	}
 
 	for i := uint64(1); i <= 4; i++ {
 		region := regionInfo{
@@ -826,43 +492,11 @@ func TestRequestedStoreDistributesRegionsAcrossWorkerBuffers(t *testing.T) {
 			subscribedSpan:   &subscribedSpan{subID: 1},
 			lockedRangeState: &regionlock.LockedRangeState{},
 		}
-		require.True(t, store.submit(newRegionPriorityTask(region, i)))
+		require.True(t, store.submit(NewRegionPriorityTask(region, 1, i)))
 	}
 
 	require.Equal(t, 2, worker1.admission.stats().pending)
 	require.Equal(t, 2, worker2.admission.stats().pending)
-}
-
-func TestRequestedStoreRequestedRegionCountIncludesPendingAndInflight(t *testing.T) {
-	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
-	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
-	store := &requestedStore{storeAddr: "store-1"}
-	store.requestWorkers.s = []*regionRequestWorker{worker1, worker2}
-
-	region1 := regionInfo{
-		verID:            tikv.NewRegionVerID(1, 1, 1),
-		subscribedSpan:   &subscribedSpan{subID: 1},
-		lockedRangeState: &regionlock.LockedRangeState{},
-	}
-	region2 := regionInfo{
-		verID:            tikv.NewRegionVerID(2, 1, 1),
-		subscribedSpan:   &subscribedSpan{subID: 1},
-		lockedRangeState: &regionlock.LockedRangeState{},
-	}
-	region3 := regionInfo{
-		verID:            tikv.NewRegionVerID(3, 1, 1),
-		subscribedSpan:   &subscribedSpan{subID: 1},
-		lockedRangeState: &regionlock.LockedRangeState{},
-	}
-
-	require.True(t, worker1.admission.submit(newRegionPriorityTask(region1, 1)))
-	req, err := worker1.admission.pop(t.Context(), nil)
-	require.NoError(t, err)
-	require.True(t, worker2.admission.submit(newRegionPriorityTask(region2, 2)))
-	require.True(t, worker2.admission.submit(newRegionPriorityTask(region3, 3)))
-
-	require.Equal(t, 3, store.requestedRegionCount())
-	require.True(t, req.abort())
 }
 
 func TestSubscriptionWithFailedTiKV(t *testing.T) {
@@ -968,6 +602,150 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	}
 }
 
+// TestErrCacheDispatchWithFullChannelAndCanceledContext tests that when errCh is full
+// and context is canceled, the dispatch method doesn't get stuck.
+func TestErrCacheDispatchWithFullChannelAndCanceledContext(t *testing.T) {
+	// Create errCache with a small errCh to easily fill it up
+	errCache := &errCache{
+		cache:  make([]regionErrorInfo, 0, 10),
+		errCh:  make(chan regionErrorInfo, 2), // Small buffer to easily fill
+		notify: make(chan struct{}, 10),
+	}
+
+	// Create a mock regionErrorInfo
+	mockErrInfo := regionErrorInfo{
+		regionInfo: regionInfo{
+			verID: tikv.NewRegionVerID(1, 1, 1),
+			span:  heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("b")},
+		},
+		err: errors.New("test error"),
+	}
+
+	// Fill up the errCh channel to make it full
+	errCache.errCh <- mockErrInfo
+	errCache.errCh <- mockErrInfo
+
+	// Add some errors to the cache
+	for i := 0; i < 5; i++ {
+		errCache.add(mockErrInfo)
+	}
+
+	// Create a context that will be canceled
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Channel to signal when dispatch returns
+	dispatchDone := make(chan error, 1)
+
+	// Start dispatch in a goroutine
+	go func() {
+		err := errCache.dispatch(ctx)
+		dispatchDone <- err
+	}()
+
+	// Give dispatch some time to start and potentially get stuck
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel the context
+	cancel()
+
+	// Wait for dispatch to return with a timeout
+	select {
+	case err := <-dispatchDone:
+		// Verify that dispatch returned with context.Canceled error
+		require.Equal(t, context.Canceled, err)
+	case <-time.After(5 * time.Second):
+		// If we timeout here, it means dispatch is stuck
+		t.Fatal("dispatch method is stuck and didn't return after context cancellation")
+	}
+}
+
+func TestErrCacheDispatchBatch(t *testing.T) {
+	mockErrInfo := regionErrorInfo{
+		regionInfo: regionInfo{
+			verID: tikv.NewRegionVerID(1, 1, 1),
+			span:  heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("b")},
+		},
+		err: errors.New("test error"),
+	}
+
+	tests := []struct {
+		name          string
+		cacheLen      int
+		limit         int
+		expectedN     int
+		expectedCache int
+		expectedErrCh int
+	}{
+		{
+			name:          "dispatch all when limit equals cache length",
+			cacheLen:      5,
+			limit:         5,
+			expectedN:     5,
+			expectedCache: 0,
+			expectedErrCh: 5,
+		},
+		{
+			name:          "keep remaining cache when limit is smaller",
+			cacheLen:      5,
+			limit:         2,
+			expectedN:     2,
+			expectedCache: 3,
+			expectedErrCh: 2,
+		},
+		{
+			name:          "dispatch all when limit is larger",
+			cacheLen:      5,
+			limit:         10,
+			expectedN:     5,
+			expectedCache: 0,
+			expectedErrCh: 5,
+		},
+		{
+			name:          "dispatch all when limit is zero",
+			cacheLen:      5,
+			limit:         0,
+			expectedN:     5,
+			expectedCache: 0,
+			expectedErrCh: 5,
+		},
+		{
+			name:          "dispatch all when limit is negative",
+			cacheLen:      5,
+			limit:         -1,
+			expectedN:     5,
+			expectedCache: 0,
+			expectedErrCh: 5,
+		},
+		{
+			name:          "empty cache",
+			cacheLen:      0,
+			limit:         5,
+			expectedN:     0,
+			expectedCache: 0,
+			expectedErrCh: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			errCache := &errCache{
+				cache:  make([]regionErrorInfo, 0, 10),
+				errCh:  make(chan regionErrorInfo, 10),
+				notify: make(chan struct{}, 1),
+			}
+			for i := 0; i < tc.cacheLen; i++ {
+				errCache.add(mockErrInfo)
+			}
+
+			n, err := errCache.dispatchBatch(context.Background(), tc.limit)
+			require.NoError(t, err)
+			require.Equal(t, tc.expectedN, n)
+			require.Len(t, errCache.cache, tc.expectedCache)
+			require.Len(t, errCache.errCh, tc.expectedErrCh)
+		})
+	}
+}
+
 func TestGetResolvedTargetTs(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh:      make(chan resolveLockTask, 10),
@@ -981,7 +759,7 @@ func TestGetResolvedTargetTs(t *testing.T) {
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
-	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdutil.NewClock4Test(), 30*time.Minute)
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
 	span.initialized.Store(true)
 
 	// Replicate the getResolvedTargetTs closure from runResolveLockChecker
