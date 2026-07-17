@@ -80,7 +80,6 @@ type resolveLockTask struct {
 type rangeTask struct {
 	span           heartbeatpb.TableSpan
 	subscribedSpan *subscribedSpan
-	filterLoop     bool
 	wasInitialized bool
 }
 
@@ -242,7 +241,7 @@ func (s *subscriptionClient) Subscribe(
 	select {
 	case <-s.ctx.Done():
 		log.Warn("subscribes span failed, the subscription client has closed")
-	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: rt.filterLoop}:
+	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt}:
 		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
 			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
@@ -270,13 +269,15 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	g.Go(func() error { return s.updateMetrics(ctx) })
-	g.Go(func() error { return s.eventSink.Run(ctx) })
+	// The goroutines are listed by data flow; errgroup does not guarantee their
+	// actual startup order.
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.regionScheduler.Run(ctx, g) })
+	g.Go(func() error { return s.eventSink.Run(ctx) })
 	g.Go(func() error { return s.failureHandler.Run(ctx) })
-	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
 	g.Go(func() error { return s.spanRegistry.Run(ctx) })
+	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
+	g.Go(func() error { return s.updateMetrics(ctx) })
 
 	log.Info("subscription client starts")
 	defer log.Info("subscription client exits")
@@ -328,7 +329,7 @@ func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
 			return ctx.Err()
 		case task := <-s.rangeTaskCh:
 			g.Go(func() error {
-				return s.divideSpanAndScheduleRegionRequests(ctx, task.span, task.subscribedSpan, task.filterLoop, task.wasInitialized)
+				return s.divideSpanAndScheduleRegionRequests(ctx, task)
 			})
 		}
 	}
@@ -341,11 +342,11 @@ func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
 // 3. Schedule a region request to subscribe the region.
 func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 	ctx context.Context,
-	span heartbeatpb.TableSpan,
-	subscribedSpan *subscribedSpan,
-	filterLoop bool,
-	wasInitialized bool,
+	task rangeTask,
 ) error {
+	span := task.span
+	subscribedSpan := task.subscribedSpan
+
 	// Limit the number of regions loaded at a time to make the load more stable.
 	limit := 1024
 	nextSpan := span
@@ -406,8 +407,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			}
 
 			verID := tikv.NewRegionVerID(regionMeta.Id, regionMeta.RegionEpoch.ConfVer, regionMeta.RegionEpoch.Version)
-			regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan, filterLoop)
-			regionInfo.wasInitialized = wasInitialized
+			regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan)
+			regionInfo.wasInitialized = task.wasInitialized
 
 			// Schedule a region request to subscribe the region.
 			s.scheduleRegionRequest(ctx, regionInfo)
@@ -441,7 +442,11 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 		s.regionScheduler.Submit(region)
 	case regionlock.LockRangeStatusStale:
 		for _, r := range lockRangeResult.RetryRanges {
-			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop, region.wasInitialized)
+			s.scheduleRangeRequest(ctx, rangeTask{
+				span:           r,
+				subscribedSpan: region.subscribedSpan,
+				wasInitialized: region.wasInitialized,
+			})
 		}
 	default:
 		return
@@ -449,17 +454,12 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 }
 
 func (s *subscriptionClient) scheduleRangeRequest(
-	ctx context.Context, span heartbeatpb.TableSpan,
-	subscribedSpan *subscribedSpan,
-	filterLoop bool,
-	wasInitialized bool,
+	ctx context.Context,
+	task rangeTask,
 ) {
 	select {
 	case <-ctx.Done():
-	case s.rangeTaskCh <- rangeTask{
-		span: span, subscribedSpan: subscribedSpan,
-		filterLoop: filterLoop, wasInitialized: wasInitialized,
-	}:
+	case s.rangeTaskCh <- task:
 	}
 }
 

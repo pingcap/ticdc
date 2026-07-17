@@ -77,7 +77,7 @@ func newRegionRequestScheduler(
 }
 
 func (s *regionRequestScheduler) Submit(region regionInfo) {
-	s.taskQueue.Push(NewRegionPriorityTask(
+	s.taskQueue.Push(newRegionPriorityTask(
 		region, s.upstream.pdClock.CurrentTS(), s.sequence.Add(1)))
 }
 
@@ -98,7 +98,7 @@ func (s *regionRequestScheduler) Run(ctx context.Context, workerGroup *errgroup.
 			return err
 		}
 
-		region, err := s.attachRPCContext(ctx, task.GetRegionInfo())
+		region, err := s.attachRPCContext(ctx, task.regionInfo)
 		if err != nil {
 			s.failureHandler.Report(newRegionErrorInfo(region, err))
 			continue

@@ -87,7 +87,6 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 		span,
 		&tikv.RPCContext{},
 		subSpan,
-		false,
 	)
 	lockResult := subSpan.rangeLock.LockRange(
 		context.Background(), span.StartKey, span.EndKey, 1, 1)
