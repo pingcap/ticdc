@@ -95,7 +95,7 @@ type regionRequestWorker struct {
 	upstream       *upstreamHandle
 	eventSink      *regionEventSink
 	failureHandler *regionFailureHandler
-	store          *requestedStore
+	storeAddr      string
 
 	admission    *regionAdmissionController
 	controlQueue *controlQueue
@@ -106,7 +106,7 @@ func newRegionRequestWorker(
 	upstream *upstreamHandle,
 	eventSink *regionEventSink,
 	failureHandler *regionFailureHandler,
-	store *requestedStore,
+	storeAddr string,
 	currentWindow int,
 	maxWindowMultiplier int,
 ) *regionRequestWorker {
@@ -116,7 +116,7 @@ func newRegionRequestWorker(
 		upstream:       upstream,
 		eventSink:      eventSink,
 		failureHandler: failureHandler,
-		store:          store,
+		storeAddr:      storeAddr,
 		admission:      newRegionAdmissionController(currentWindow, maxWindowMultiplier),
 		controlQueue:   newControlQueue(),
 		tracker:        newRegionTracker(),
@@ -207,7 +207,7 @@ func (s *regionRequestWorker) checkStoreVersion(ctx context.Context) error {
 	}
 	log.Error("event feed check store version fails",
 		zap.Uint64("workerID", s.workerID),
-		zap.String("addr", s.store.storeAddr),
+		zap.String("addr", s.storeAddr),
 		zap.Error(err))
 	if cerror.Is(err, cerror.ErrGetAllStoresFailed) {
 		return &getStoreErr{}
@@ -218,20 +218,20 @@ func (s *regionRequestWorker) checkStoreVersion(ctx context.Context) error {
 func (s *regionRequestWorker) runStream(ctx context.Context, firstReq *regionReq) (err error) {
 	log.Info("region request worker going to create grpc stream",
 		zap.Uint64("workerID", s.workerID),
-		zap.String("addr", s.store.storeAddr))
+		zap.String("addr", s.storeAddr))
 	defer func() {
 		log.Info("region request worker exits",
 			zap.Uint64("workerID", s.workerID),
-			zap.String("addr", s.store.storeAddr),
+			zap.String("addr", s.storeAddr),
 			zap.Error(err))
 	}()
 
 	g, gctx := errgroup.WithContext(ctx)
-	conn, err := Connect(gctx, s.upstream.credential, s.store.storeAddr)
+	conn, err := Connect(gctx, s.upstream.credential, s.storeAddr)
 	if err != nil {
 		log.Warn("region request worker create grpc stream failed",
 			zap.Uint64("workerID", s.workerID),
-			zap.String("addr", s.store.storeAddr),
+			zap.String("addr", s.storeAddr),
 			zap.Error(err))
 		if conn != nil && conn.Conn != nil {
 			_ = conn.Conn.Close()
@@ -279,7 +279,7 @@ func (s *regionRequestWorker) receiveAndDispatchChangeEvents(conn *ConnAndClient
 		if err != nil {
 			log.Info("region request worker receive from grpc stream failed",
 				zap.Uint64("workerID", s.workerID),
-				zap.String("addr", s.store.storeAddr),
+				zap.String("addr", s.storeAddr),
 				zap.String("code", grpcstatus.Code(err).String()),
 				zap.Error(err))
 			return normalizeStreamError(err)
@@ -401,7 +401,7 @@ func (s *regionRequestWorker) sendChangeDataRequest(
 			zap.Uint64("workerID", s.workerID),
 			zap.Uint64("subscriptionID", req.RequestId),
 			zap.Uint64("regionID", req.RegionId),
-			zap.String("addr", s.store.storeAddr),
+			zap.String("addr", s.storeAddr),
 			zap.Error(err))
 		return normalizeStreamError(err)
 	}
@@ -451,7 +451,7 @@ func (s *regionRequestWorker) sendRegionRequest(conn *ConnAndClient, req *region
 		zap.Uint64("workerID", s.workerID),
 		zap.Uint64("subscriptionID", uint64(subID)),
 		zap.Uint64("regionID", region.verID.GetID()),
-		zap.String("addr", s.store.storeAddr),
+		zap.String("addr", s.storeAddr),
 		zap.Bool("bdrMode", region.filterLoop))
 
 	if region.subscribedSpan.stopped.Load() {

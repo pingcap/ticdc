@@ -29,6 +29,8 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const regionRequestWorkerPerStore = 8
+
 // regionRequestScheduler routes locked Region requests through the global
 // priority queue to a worker connected to the Region's TiKV store. Range
 // resolution and retry policy remain owned by subscriptionClient and
@@ -42,9 +44,9 @@ type regionRequestScheduler struct {
 	taskQueue *priorityqueue.PriorityQueue[*regionPriorityTask]
 	// sequence is the FIFO tie-breaker for Regions in the same priority class.
 	sequence atomic.Uint64
-	// stores maps TiKV addresses to requestedStore. Stores are created only by
-	// run, but are also read by metrics and deregistration goroutines.
-	stores sync.Map
+	// workerPools maps TiKV addresses to storeRequestWorkerPool. Pools are
+	// created only by run, but are also read by metrics and deregistration goroutines.
+	workerPools sync.Map
 
 	// workerCount is the configured number of request workers per store.
 	workerCount int
@@ -55,16 +57,12 @@ type regionRequestScheduler struct {
 }
 
 func newRegionRequestScheduler(
-	clientConfig *SubscriptionClientConfig,
 	upstream *upstreamHandle,
 	eventSink *regionEventSink,
 	failureHandler *regionFailureHandler,
 ) *regionRequestScheduler {
 	pullerConfig := config.GetGlobalServerConfig().Debug.Puller
-	workerCount := int(clientConfig.RegionRequestWorkerPerStore)
-	if workerCount <= 0 {
-		workerCount = 1
-	}
+	workerCount := regionRequestWorkerPerStore
 	workerWindow := (pullerConfig.PendingRegionRequestQueueSize + workerCount - 1) / workerCount
 	return &regionRequestScheduler{
 		upstream:            upstream,
@@ -82,8 +80,8 @@ func (s *regionRequestScheduler) submit(region regionInfo) {
 		region, s.upstream.pdClock.CurrentTS(), s.sequence.Add(1)))
 }
 
-func (s *regionRequestScheduler) run(ctx context.Context, group *errgroup.Group) error {
-	defer s.closeStores()
+func (s *regionRequestScheduler) run(ctx context.Context, workerGroup *errgroup.Group) error {
+	defer s.closeWorkerPools()
 	for {
 		select {
 		case <-ctx.Done():
@@ -99,55 +97,50 @@ func (s *regionRequestScheduler) run(ctx context.Context, group *errgroup.Group)
 			return err
 		}
 
-		region, ok := s.attachRPCContext(ctx, task.GetRegionInfo())
-		if !ok {
+		region, err := s.attachRPCContext(ctx, task.GetRegionInfo())
+		if err != nil {
+			s.failureHandler.Report(newRegionErrorInfo(region, err))
 			continue
 		}
 
-		store := s.getOrCreateStore(ctx, group, region.rpcCtx.Addr)
+		workerPool := s.getOrCreateWorkerPool(ctx, workerGroup, region.rpcCtx.Addr)
 		task.updateRegion(region, s.upstream.pdClock.CurrentTS())
-		if !store.submit(task) {
+		if !workerPool.submit(task) {
 			return context.Canceled
 		}
-
-		log.Debug("subscription client will request a region",
-			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
-			zap.Uint64("regionID", region.verID.GetID()),
-			zap.String("addr", store.storeAddr))
 	}
 }
 
 func (s *regionRequestScheduler) attachRPCContext(
 	ctx context.Context,
 	region regionInfo,
-) (regionInfo, bool) {
+) (regionInfo, error) {
 	bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 	rpcCtx, err := s.upstream.regionCache.GetTiKVRPCContext(
 		bo, region.verID, kvclientv2.ReplicaReadLeader, 0)
 	if rpcCtx != nil {
 		region.rpcCtx = rpcCtx
-		return region, true
+		return region, nil
 	}
 	if err != nil {
-		log.Debug("subscription client get rpc context fail",
+		log.Debug("region request scheduler failed to get RPC context",
 			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 			zap.Uint64("regionID", region.verID.GetID()),
 			zap.Error(err))
 	}
-	s.failureHandler.Report(newRegionErrorInfo(region, &rpcCtxUnavailableErr{verID: region.verID}))
-	return region, false
+	return region, &rpcCtxUnavailableErr{verID: region.verID}
 }
 
-func (s *regionRequestScheduler) getOrCreateStore(
+func (s *regionRequestScheduler) getOrCreateWorkerPool(
 	ctx context.Context,
-	group *errgroup.Group,
+	workerGroup *errgroup.Group,
 	storeAddr string,
-) *requestedStore {
-	if value, ok := s.stores.Load(storeAddr); ok {
-		return value.(*requestedStore)
+) *storeRequestWorkerPool {
+	if value, ok := s.workerPools.Load(storeAddr); ok {
+		return value.(*storeRequestWorkerPool)
 	}
 
-	store := newRequestedStore(
+	workerPool := newStoreRequestWorkerPool(
 		s.upstream,
 		s.eventSink,
 		s.failureHandler,
@@ -156,27 +149,27 @@ func (s *regionRequestScheduler) getOrCreateStore(
 		s.workerWindow,
 		s.maxWindowMultiplier,
 	)
-	// run is the only writer. Publish the store after its immutable worker list
-	// is complete, then start its workers.
-	s.stores.Store(storeAddr, store)
-	store.run(ctx, group)
-	return store
+	// The scheduler run loop is the only writer. Publish the pool after its
+	// immutable worker list is complete, then start its workers.
+	s.workerPools.Store(storeAddr, workerPool)
+	workerPool.startWorkers(ctx, workerGroup)
+	return workerPool
 }
 
 func (s *regionRequestScheduler) broadcastDeregister(
 	subID SubscriptionID,
 	filterLoop bool,
 ) {
-	s.stores.Range(func(_, value any) bool {
-		value.(*requestedStore).broadcastDeregister(subID, filterLoop)
+	s.workerPools.Range(func(_, value any) bool {
+		value.(*storeRequestWorkerPool).broadcastDeregister(subID, filterLoop)
 		return true
 	})
 }
 
 func (s *regionRequestScheduler) inflightCount() int {
 	count := 0
-	s.stores.Range(func(_, value any) bool {
-		count += value.(*requestedStore).inflightCount()
+	s.workerPools.Range(func(_, value any) bool {
+		count += value.(*storeRequestWorkerPool).inflightCount()
 		return true
 	})
 	return count
@@ -186,9 +179,9 @@ func (s *regionRequestScheduler) close() {
 	s.taskQueue.Close()
 }
 
-func (s *regionRequestScheduler) closeStores() {
-	s.stores.Range(func(_, value any) bool {
-		value.(*requestedStore).close()
+func (s *regionRequestScheduler) closeWorkerPools() {
+	s.workerPools.Range(func(_, value any) bool {
+		value.(*storeRequestWorkerPool).close()
 		return true
 	})
 }

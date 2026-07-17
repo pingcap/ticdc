@@ -328,9 +328,9 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	res := span.rangeLock.LockRange(context.Background(), rawSpan.StartKey, rawSpan.EndKey, 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
 	worker := &regionRequestWorker{controlQueue: newControlQueue()}
-	store := &requestedStore{storeAddr: "store-1", workers: []*regionRequestWorker{worker}}
+	workerPool := &storeRequestWorkerPool{storeAddr: "store-1", workers: []*regionRequestWorker{worker}}
 	client.regionScheduler = &regionRequestScheduler{}
-	client.regionScheduler.stores.Store(store.storeAddr, store)
+	client.regionScheduler.workerPools.Store(workerPool.storeAddr, workerPool)
 
 	client.setTableStopped(span)
 
@@ -458,8 +458,8 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 		admission:    admission,
 		controlQueue: newControlQueue(),
 	}
-	store := &requestedStore{storeAddr: "store-1", workers: []*regionRequestWorker{worker}}
-	scheduler.stores.Store(store.storeAddr, store)
+	workerPool := &storeRequestWorkerPool{storeAddr: "store-1", workers: []*regionRequestWorker{worker}}
+	scheduler.workerPools.Store(workerPool.storeAddr, workerPool)
 
 	dummyRegion := regionInfo{
 		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
@@ -476,10 +476,10 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 	require.Equal(t, 1, admission.stats().pending)
 }
 
-func TestRequestedStoreDistributesRegionsAcrossWorkerBuffers(t *testing.T) {
+func TestStoreRequestWorkerPoolDistributesRegionsAcrossWorkers(t *testing.T) {
 	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
 	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
-	store := &requestedStore{
+	workerPool := &storeRequestWorkerPool{
 		storeAddr: "store-1",
 		workers:   []*regionRequestWorker{worker1, worker2},
 	}
@@ -490,7 +490,7 @@ func TestRequestedStoreDistributesRegionsAcrossWorkerBuffers(t *testing.T) {
 			subscribedSpan:   &subscribedSpan{subID: 1},
 			lockedRangeState: &regionlock.LockedRangeState{},
 		}
-		require.True(t, store.submit(NewRegionPriorityTask(region, 1, i)))
+		require.True(t, workerPool.submit(NewRegionPriorityTask(region, 1, i)))
 	}
 
 	require.Equal(t, 2, worker1.admission.stats().pending)
@@ -526,11 +526,7 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	// bootstrap cluster with a region which leader is in invalid store.
 	cluster.Bootstrap(11, []uint64{1, 2, 3}, []uint64{4, 5, 6}, 6)
 
-	clientConfig := &SubscriptionClientConfig{
-		RegionRequestWorkerPerStore: 2,
-	}
 	client := NewSubscriptionClient(
-		clientConfig,
 		pdClient,
 		nil, // we don't need it in this unittest, so we can pass nil
 		&security.Credential{},

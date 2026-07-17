@@ -82,7 +82,7 @@ func TestRegionRequestWorkerIgnoresDuplicateActiveRegion(t *testing.T) {
 	admission := newRegionAdmissionController(10, 1)
 	worker := &regionRequestWorker{
 		admission: admission,
-		store:     &requestedStore{storeAddr: "store-1"},
+		storeAddr: "store-1",
 		upstream:  &upstreamHandle{},
 		tracker:   newRegionTracker(),
 	}
@@ -407,7 +407,7 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	worker := &regionRequestWorker{
 		admission:    admission,
 		controlQueue: newControlQueue(),
-		store:        &requestedStore{storeAddr: "store-1"},
+		storeAddr:    "store-1",
 		upstream:     &upstreamHandle{},
 		tracker:      newRegionTracker(),
 	}
@@ -438,7 +438,7 @@ func TestProcessRegionSendTaskDoesNotSendRemovedRequest(t *testing.T) {
 	worker := &regionRequestWorker{
 		admission:    admission,
 		controlQueue: newControlQueue(),
-		store:        &requestedStore{storeAddr: "store-1"},
+		storeAddr:    "store-1",
 		upstream:     &upstreamHandle{},
 		tracker:      newRegionTracker(),
 	}
@@ -481,7 +481,7 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 			worker := &regionRequestWorker{
 				admission:    admission,
 				controlQueue: newControlQueue(),
-				store:        &requestedStore{storeAddr: "store-1"},
+				storeAddr:    "store-1",
 				upstream:     &upstreamHandle{},
 				tracker:      newRegionTracker(),
 			}
@@ -514,7 +514,7 @@ func TestProcessRegionSendTaskHandlesDeregisterFromControlQueue(t *testing.T) {
 	worker := &regionRequestWorker{
 		admission:    newRegionAdmissionController(1, 1),
 		controlQueue: newControlQueue(),
-		store:        &requestedStore{storeAddr: "store-1"},
+		storeAddr:    "store-1",
 		upstream:     &upstreamHandle{clusterID: 42},
 		eventSink:    &regionEventSink{ds: ds},
 		tracker:      newRegionTracker(),
@@ -562,9 +562,7 @@ func TestReceiveAndDispatchChangeEventsEOFIsRetriable(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			worker := &regionRequestWorker{
-				store: &requestedStore{storeAddr: "store-1"},
-			}
+			worker := &regionRequestWorker{storeAddr: "store-1"}
 			conn := &ConnAndClient{
 				Client: &mockEventFeedV2Client{recvErr: tc.recvErr},
 				Conn:   &grpc.ClientConn{},
