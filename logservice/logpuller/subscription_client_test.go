@@ -328,9 +328,9 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	res := span.rangeLock.LockRange(context.Background(), rawSpan.StartKey, rawSpan.EndKey, 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
 	worker := &regionRequestWorker{controlQueue: newControlQueue()}
-	workerPool := &storeRequestWorkerPool{storeAddr: "store-1", workers: []*regionRequestWorker{worker}}
+	store := &regionRequestStore{storeAddr: "store-1", workers: []*regionRequestWorker{worker}}
 	client.regionScheduler = &regionRequestScheduler{}
-	client.regionScheduler.workerPools.Store(workerPool.storeAddr, workerPool)
+	client.regionScheduler.stores.Store(store.storeAddr, store)
 
 	client.setTableStopped(span)
 
@@ -458,8 +458,8 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 		admission:    admission,
 		controlQueue: newControlQueue(),
 	}
-	workerPool := &storeRequestWorkerPool{storeAddr: "store-1", workers: []*regionRequestWorker{worker}}
-	scheduler.workerPools.Store(workerPool.storeAddr, workerPool)
+	store := &regionRequestStore{storeAddr: "store-1", workers: []*regionRequestWorker{worker}}
+	scheduler.stores.Store(store.storeAddr, store)
 
 	dummyRegion := regionInfo{
 		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
@@ -476,10 +476,10 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 	require.Equal(t, 1, admission.stats().pending)
 }
 
-func TestStoreRequestWorkerPoolDistributesRegionsAcrossWorkers(t *testing.T) {
+func TestRegionRequestStoreDistributesRegionsAcrossWorkers(t *testing.T) {
 	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
 	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
-	workerPool := &storeRequestWorkerPool{
+	store := &regionRequestStore{
 		storeAddr: "store-1",
 		workers:   []*regionRequestWorker{worker1, worker2},
 	}
@@ -490,7 +490,7 @@ func TestStoreRequestWorkerPoolDistributesRegionsAcrossWorkers(t *testing.T) {
 			subscribedSpan:   &subscribedSpan{subID: 1},
 			lockedRangeState: &regionlock.LockedRangeState{},
 		}
-		require.True(t, workerPool.submit(NewRegionPriorityTask(region, 1, i)))
+		require.True(t, store.submit(NewRegionPriorityTask(region, 1, i)))
 	}
 
 	require.Equal(t, 2, worker1.admission.stats().pending)

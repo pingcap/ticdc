@@ -44,9 +44,9 @@ type regionRequestScheduler struct {
 	taskQueue *priorityqueue.PriorityQueue[*regionPriorityTask]
 	// sequence is the FIFO tie-breaker for Regions in the same priority class.
 	sequence atomic.Uint64
-	// workerPools maps TiKV addresses to storeRequestWorkerPool. Pools are
-	// created only by run, but are also read by metrics and deregistration goroutines.
-	workerPools sync.Map
+	// stores maps TiKV addresses to regionRequestStore. Stores are created only
+	// by run, but are also read by metrics and deregistration goroutines.
+	stores sync.Map
 
 	// workerCount is the configured number of request workers per store.
 	workerCount int
@@ -81,7 +81,7 @@ func (s *regionRequestScheduler) submit(region regionInfo) {
 }
 
 func (s *regionRequestScheduler) run(ctx context.Context, workerGroup *errgroup.Group) error {
-	defer s.closeWorkerPools()
+	defer s.closeStores()
 	for {
 		select {
 		case <-ctx.Done():
@@ -103,9 +103,9 @@ func (s *regionRequestScheduler) run(ctx context.Context, workerGroup *errgroup.
 			continue
 		}
 
-		workerPool := s.getOrCreateWorkerPool(ctx, workerGroup, region.rpcCtx.Addr)
+		store := s.getOrCreateStore(ctx, workerGroup, region.rpcCtx.Addr)
 		task.updateRegion(region, s.upstream.pdClock.CurrentTS())
-		if !workerPool.submit(task) {
+		if !store.submit(task) {
 			return context.Canceled
 		}
 	}
@@ -131,16 +131,16 @@ func (s *regionRequestScheduler) attachRPCContext(
 	return region, &rpcCtxUnavailableErr{verID: region.verID}
 }
 
-func (s *regionRequestScheduler) getOrCreateWorkerPool(
+func (s *regionRequestScheduler) getOrCreateStore(
 	ctx context.Context,
 	workerGroup *errgroup.Group,
 	storeAddr string,
-) *storeRequestWorkerPool {
-	if value, ok := s.workerPools.Load(storeAddr); ok {
-		return value.(*storeRequestWorkerPool)
+) *regionRequestStore {
+	if value, ok := s.stores.Load(storeAddr); ok {
+		return value.(*regionRequestStore)
 	}
 
-	workerPool := newStoreRequestWorkerPool(
+	store := newRegionRequestStore(
 		s.upstream,
 		s.eventSink,
 		s.failureHandler,
@@ -149,27 +149,27 @@ func (s *regionRequestScheduler) getOrCreateWorkerPool(
 		s.workerWindow,
 		s.maxWindowMultiplier,
 	)
-	// The scheduler run loop is the only writer. Publish the pool after its
+	// The scheduler run loop is the only writer. Publish the store after its
 	// immutable worker list is complete, then start its workers.
-	s.workerPools.Store(storeAddr, workerPool)
-	workerPool.startWorkers(ctx, workerGroup)
-	return workerPool
+	s.stores.Store(storeAddr, store)
+	store.startWorkers(ctx, workerGroup)
+	return store
 }
 
 func (s *regionRequestScheduler) broadcastDeregister(
 	subID SubscriptionID,
 	filterLoop bool,
 ) {
-	s.workerPools.Range(func(_, value any) bool {
-		value.(*storeRequestWorkerPool).broadcastDeregister(subID, filterLoop)
+	s.stores.Range(func(_, value any) bool {
+		value.(*regionRequestStore).broadcastDeregister(subID, filterLoop)
 		return true
 	})
 }
 
 func (s *regionRequestScheduler) inflightCount() int {
 	count := 0
-	s.workerPools.Range(func(_, value any) bool {
-		count += value.(*storeRequestWorkerPool).inflightCount()
+	s.stores.Range(func(_, value any) bool {
+		count += value.(*regionRequestStore).inflightCount()
 		return true
 	})
 	return count
@@ -179,9 +179,9 @@ func (s *regionRequestScheduler) close() {
 	s.taskQueue.Close()
 }
 
-func (s *regionRequestScheduler) closeWorkerPools() {
-	s.workerPools.Range(func(_, value any) bool {
-		value.(*storeRequestWorkerPool).close()
+func (s *regionRequestScheduler) closeStores() {
+	s.stores.Range(func(_, value any) bool {
+		value.(*regionRequestStore).close()
 		return true
 	})
 }
