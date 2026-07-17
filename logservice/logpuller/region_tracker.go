@@ -112,7 +112,6 @@ func (t *regionTracker) Drain() []*regionFeedState {
 	t.statesBySubscription = make(map[SubscriptionID]regionStatesByID)
 	t.mu.Unlock()
 
-<<<<<<< HEAD
 	totalStates := 0
 	for _, states := range statesBySubscription {
 		totalStates += len(states)
@@ -120,17 +119,6 @@ func (t *regionTracker) Drain() []*regionFeedState {
 	drainedStates := make([]*regionFeedState, 0, totalStates)
 	for _, states := range statesBySubscription {
 		drainedStates = append(drainedStates, slices.Collect(maps.Values(states))...)
-=======
-	stateCount := 0
-	for _, states := range statesBySubscription {
-		stateCount += len(states)
-	}
-	drainedStates := make([]*regionFeedState, 0, stateCount)
-	for _, states := range statesBySubscription {
-		for _, state := range states {
-			drainedStates = append(drainedStates, state)
-		}
->>>>>>> 9903a1be7 (refactor)
 	}
 	return drainedStates
 }

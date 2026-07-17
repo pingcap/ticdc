@@ -29,7 +29,8 @@ import (
 )
 
 var (
-	metricsEventCount = metrics.PullerEventCounter.WithLabelValues("event")
+	metricsResolvedTsCount = metrics.PullerEventCounter.WithLabelValues("resolved_ts")
+	metricsEventCount      = metrics.PullerEventCounter.WithLabelValues("event")
 
 	metricRegionEventHandleDurationEntries  = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("entries")
 	metricRegionEventHandleDurationResolved = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("resolved")
@@ -53,8 +54,18 @@ type regionEvent struct {
 	// Resolved-ts events: `resolvedTs` is set and `states` contains all related regions.
 	states []*regionFeedState
 
-	entries    *cdcpb.Event_Entries_
-	resolvedTs uint64
+	entries     *cdcpb.Event_Entries_
+	resolvedTs  uint64
+	memoryQuota *memoryQuotaLease
+}
+
+func (event *regionEvent) needMemoryQuota() bool {
+	return event.entries != nil
+}
+
+func (event *regionEvent) releaseMemoryQuota() {
+	event.memoryQuota.Release()
+	event.memoryQuota = nil
 }
 
 func (event *regionEvent) getSize() int {
@@ -121,7 +132,12 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	}
 
 	newResolvedTs := uint64(0)
+	wasInitialized := span.initialized.Load()
+	quotaLeases := make([]*memoryQuotaLease, 0, len(events))
 	for _, event := range events {
+		if event.memoryQuota != nil {
+			quotaLeases = append(quotaLeases, event.memoryQuota)
+		}
 		if len(event.states) == 1 && event.states[0].isStale() {
 			hasError = true
 			h.handleRegionError(event.states[0])
@@ -142,14 +158,24 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
 		}
 	}
+	if !wasInitialized && span.initialized.Load() &&
+		h.eventSink != nil && h.eventSink.memoryQuota != nil {
+		h.eventSink.memoryQuota.markSubscriptionInitialized()
+	}
 	tryAdvanceResolvedTs := func() {
 		if newResolvedTs != 0 {
 			span.advanceResolvedTs(newResolvedTs)
 		}
 	}
+	releaseMemoryQuota := func() {
+		for _, lease := range quotaLeases {
+			lease.Release()
+		}
+	}
 	if len(span.kvEventsCache) > 0 {
 		metricsEventCount.Add(float64(len(span.kvEventsCache)))
 		await := span.consumeKVEvents(span.kvEventsCache, func() {
+			defer releaseMemoryQuota()
 			start := time.Now()
 			span.clearKVEventsCache()
 			metricConsumeKVEventsCallbackDurationClearCache.Observe(time.Since(start).Seconds())
@@ -166,10 +192,12 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		if !await {
 			span.clearKVEventsCache()
 			tryAdvanceResolvedTs()
+			releaseMemoryQuota()
 		}
 		return await
 	} else {
 		tryAdvanceResolvedTs()
+		releaseMemoryQuota()
 	}
 	return false
 }
@@ -226,6 +254,7 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 }
 
 func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
+	event.releaseMemoryQuota()
 	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
 	state := event.mustFirstState()
 	fields := []zap.Field{
@@ -285,7 +314,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 	for _, entry := range entries.Entries.GetEntries() {
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
-			span.markRegionInitialized(state)
+			state.setInitialized()
 			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
@@ -392,6 +421,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	}
 
 	if shouldAdvance {
+		span.tryMarkInitialized(regionID, ts)
 		lastResolvedTs := span.resolvedTs.Load()
 		nextResolvedPhyTs := oracle.ExtractPhysical(ts)
 		// Generally, we don't want to send duplicate resolved ts,
@@ -399,16 +429,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 		// but when `ts` == `lastResolvedTs` == `span.startTs`,
 		// the span may just be initialized and have not receive any resolved ts before,
 		// so we also send ts in this case for quick notification to downstream.
-		if ts > lastResolvedTs ||
-			(span.initialized.Load() && ts == lastResolvedTs && lastResolvedTs == span.startTs) {
-			if lastResolvedTs == span.startTs && ts > span.startTs && !span.initialized.Load() {
-				log.Warn("should not happen: resolved ts advances before span is initialized",
-					zap.Uint64("subscriptionID", uint64(span.subID)),
-					zap.Int64("tableID", span.span.TableID),
-					zap.Uint64("regionID", regionID),
-					zap.Uint64("startTs", span.startTs),
-					zap.Uint64("resolvedTs", ts))
-			}
+		if ts > lastResolvedTs || (ts == lastResolvedTs && lastResolvedTs == span.startTs) {
 			resolvedPhyTs := oracle.ExtractPhysical(lastResolvedTs)
 			decreaseLag := float64(nextResolvedPhyTs-resolvedPhyTs) / 1e3
 			const largeResolvedTsAdvanceStepInSecs = 30
@@ -421,7 +442,8 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 					zap.Uint64("lastResolvedTs", lastResolvedTs),
 					zap.Float64("decreaseLag(s)", decreaseLag))
 			}
-			span.recordResolvedTs(ts)
+			span.resolvedTs.Store(ts)
+			span.resolvedTsUpdated.Store(time.Now().Unix())
 			return ts
 		}
 	}

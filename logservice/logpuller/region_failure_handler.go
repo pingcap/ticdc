@@ -64,14 +64,6 @@ func newRegionFailureHandler(
 	}
 }
 
-func (r *regionFailureHandler) retryRange(ctx context.Context, errInfo regionErrorInfo) {
-	r.scheduleRangeRequest(ctx, rangeTask{
-		span:           errInfo.span,
-		subscribedSpan: errInfo.subscribedSpan,
-		wasInitialized: errInfo.wasInitialized,
-	})
-}
-
 // Report admits a region failure into the recovery pipeline. It releases the
 // corresponding range lock before enqueueing the failure so new range tasks are
 // not blocked by stale region ownership.
@@ -167,20 +159,12 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
-<<<<<<< HEAD
 			rescheduleRange()
-=======
-			r.retryRange(ctx, errInfo)
->>>>>>> 9903a1be7 (refactor)
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
-<<<<<<< HEAD
 			rescheduleRange()
-=======
-			r.retryRange(ctx, errInfo)
->>>>>>> 9903a1be7 (refactor)
 			return nil
 		}
 		if innerErr.GetCongested() != nil {
@@ -213,22 +197,14 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		return nil
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
-<<<<<<< HEAD
 		rescheduleRange()
-=======
-		r.retryRange(ctx, errInfo)
->>>>>>> 9903a1be7 (refactor)
 		return nil
 	case *getStoreErr:
 		metricGetStoreErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		// cannot get the store the region belongs to, so we need to reload the region.
 		r.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
-<<<<<<< HEAD
 		rescheduleRange()
-=======
-		r.retryRange(ctx, errInfo)
->>>>>>> 9903a1be7 (refactor)
 		return nil
 	case *storeStreamErr:
 		metricStoreSendRequestErr.Inc()

@@ -36,6 +36,7 @@ type regionReq struct {
 	regionInfo regionInfo
 	createTime time.Time
 	controller *regionAdmissionController
+	scanQuota  *memoryQuotaLease
 	released   atomic.Bool
 }
 
@@ -72,6 +73,7 @@ func (r *regionReq) release() bool {
 	if !r.released.CompareAndSwap(false, true) {
 		return false
 	}
+	r.scanQuota.Release()
 	r.controller.release()
 	return true
 }
@@ -96,6 +98,11 @@ type regionAdmissionController struct {
 		// closed prevents new submissions and makes waiting workers exit.
 		closed bool
 	}
+
+	// memoryQuota gates initial scans using the log puller's global memory
+	// pressure. currentTs is sampled when a request is admitted.
+	memoryQuota *memoryQuotaController
+	currentTs   func() uint64
 	// notify wakes workers when a request is submitted or an admission slot is
 	// released. The one-element buffer prevents a wakeup from being lost between
 	// checking the admission condition and waiting on this channel. Notifications
@@ -109,7 +116,12 @@ type regionAdmissionStats struct {
 	inflight int
 }
 
-func newRegionAdmissionController(currentWindow, maxWindowMultiplier int) *regionAdmissionController {
+func newRegionAdmissionController(
+	currentWindow int,
+	maxWindowMultiplier int,
+	memoryQuota *memoryQuotaController,
+	currentTs func() uint64,
+) *regionAdmissionController {
 	if currentWindow <= 0 {
 		currentWindow = 1
 	}
@@ -123,6 +135,8 @@ func newRegionAdmissionController(currentWindow, maxWindowMultiplier int) *regio
 	controller := &regionAdmissionController{
 		currentWindow: currentWindow,
 		maxWindow:     maxWindow,
+		memoryQuota:   memoryQuota,
+		currentTs:     currentTs,
 		notify:        make(chan struct{}, 1),
 	}
 	controller.state.pending = heap.NewHeap[*regionPriorityTask]()
@@ -153,7 +167,7 @@ func (c *regionAdmissionController) pop(
 			c.state.Unlock()
 			return nil, context.Canceled
 		}
-		request := c.popEligibleLocked()
+		request, scanQuota := c.popEligibleLocked()
 		if request != nil {
 			c.state.inflight++
 			c.state.Unlock()
@@ -161,6 +175,7 @@ func (c *regionAdmissionController) pop(
 				regionInfo: request.regionInfo,
 				createTime: time.Now(),
 				controller: c,
+				scanQuota:  scanQuota,
 			}, nil
 		}
 		c.state.Unlock()
@@ -175,16 +190,32 @@ func (c *regionAdmissionController) pop(
 	}
 }
 
-func (c *regionAdmissionController) popEligibleLocked() *regionPriorityTask {
+func (c *regionAdmissionController) popEligibleLocked() (
+	*regionPriorityTask,
+	*memoryQuotaLease,
+) {
 	request, ok := c.state.pending.PeekTop()
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	if c.state.inflight >= c.windowFor(request) {
-		return nil
+		return nil, nil
+	}
+
+	var scanQuota *memoryQuotaLease
+	if c.memoryQuota != nil {
+		currentTs := uint64(0)
+		if c.currentTs != nil {
+			currentTs = c.currentTs()
+		}
+		var admitted bool
+		scanQuota, admitted = c.memoryQuota.acquireScan(request.regionInfo, currentTs)
+		if !admitted {
+			return nil, nil
+		}
 	}
 	request, _ = c.state.pending.PopTop()
-	return request
+	return request, scanQuota
 }
 
 func (c *regionAdmissionController) windowFor(request *regionPriorityTask) int {
@@ -200,6 +231,12 @@ func (c *regionAdmissionController) release() {
 		c.state.inflight--
 		c.notifyOneLocked()
 	}
+	c.state.Unlock()
+}
+
+func (c *regionAdmissionController) notifyAvailable() {
+	c.state.Lock()
+	c.notifyOneLocked()
 	c.state.Unlock()
 }
 

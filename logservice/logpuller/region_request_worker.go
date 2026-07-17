@@ -112,6 +112,7 @@ func newRegionRequestWorker(
 	storeAddr string,
 	currentWindow int,
 	maxWindowMultiplier int,
+	memoryQuota *memoryQuotaController,
 ) *regionRequestWorker {
 	workerID := workerIDGen.Add(1)
 	return &regionRequestWorker{
@@ -120,9 +121,14 @@ func newRegionRequestWorker(
 		eventSink:      eventSink,
 		failureHandler: failureHandler,
 		storeAddr:      storeAddr,
-		admission:      newRegionAdmissionController(currentWindow, maxWindowMultiplier),
-		controlQueue:   newControlQueue(),
-		tracker:        newRegionTracker(),
+		admission: newRegionAdmissionController(
+			currentWindow,
+			maxWindowMultiplier,
+			memoryQuota,
+			upstream.pdClock.CurrentTS,
+		),
+		controlQueue: newControlQueue(),
+		tracker:      newRegionTracker(),
 	}
 }
 
@@ -174,35 +180,6 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 	}
 }
 
-<<<<<<< HEAD
-=======
-// failStreamRegions transfers every request sent by a failed stream to the
-// recovery pipeline.
-func (s *regionRequestWorker) failStreamRegions(err error) {
-	for _, state := range s.tracker.Drain() {
-		s.notifyRegionError(state, err)
-	}
-	// The failed stream no longer owns remote registrations.
-	s.controlQueue.drain()
-}
-
-// failPendingRegions transfers requests owned by this worker but not yet sent
-// to the recovery pipeline, so they can be resolved and routed again.
-func (s *regionRequestWorker) failPendingRegions(err error) {
-	for _, task := range s.admission.drain() {
-		s.failureHandler.Report(newRegionErrorInfo(task.regionInfo, err))
-	}
-}
-
-func (s *regionRequestWorker) notifyRegionError(state *regionFeedState, err error) {
-	state.markStopped(err)
-	s.eventSink.Push(
-		SubscriptionID(state.requestID),
-		regionEvent{states: []*regionFeedState{state}},
-	)
-}
-
->>>>>>> 9903a1be7 (refactor)
 func (s *regionRequestWorker) waitForRegionRequest(ctx context.Context) (*regionReq, error) {
 	// Without a stream there are no remote registrations to deregister.
 	s.controlQueue.drain()
