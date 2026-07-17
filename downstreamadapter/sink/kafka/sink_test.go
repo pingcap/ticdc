@@ -138,7 +138,7 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 		}
 	}()
 
-	s, err := newWithComponents(ctx, changefeedID, protocol, comp)
+	s, err := newWithComponents(ctx, changefeedID, common.DefaultKeyspaceID, protocol, comp)
 	if err != nil {
 		return nil, err
 	}
