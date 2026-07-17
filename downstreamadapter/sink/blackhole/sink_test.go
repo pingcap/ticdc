@@ -67,8 +67,13 @@ func newInsertEventForTest(t *testing.T) *commonEvent.DMLEvent {
 }
 
 // Test callback and tableProgress works as expected after AddDMLEvent
+<<<<<<< HEAD
 func TestBlackHoleSinkFlushEvents(t *testing.T) {
 	sink, err := New(commonType.NewChangefeedID(commonType.DefaultKeyspaceName))
+=======
+func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
+	sink, err := New(common.NewChangefeedID(common.DefaultKeyspaceName), common.DefaultKeyspaceID)
+>>>>>>> 5d55dc62e (metrics: add keyspace ID label to changefeed metrics (#5662))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go sink.Run(ctx)
@@ -127,7 +132,11 @@ func TestBlackHoleSinkFlushEvents(t *testing.T) {
 }
 
 func TestBlackHoleSinkBatchConfig(t *testing.T) {
+<<<<<<< HEAD
 	sink, err := New(commonType.NewChangefeedID(commonType.DefaultKeyspaceName))
+=======
+	sink, err := New(common.NewChangefeedID(common.DefaultKeyspaceName), common.DefaultKeyspaceID)
+>>>>>>> 5d55dc62e (metrics: add keyspace ID label to changefeed metrics (#5662))
 	require.NoError(t, err)
 	require.Equal(t, 4096, sink.BatchCount())
 	require.Zero(t, sink.BatchBytes())

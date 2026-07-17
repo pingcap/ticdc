@@ -50,8 +50,14 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	cfg.BatchDMLEnable = true
 	cfg.EnableDDLTs = defaultEnableDDLTs
 	changefeedID := common.NewChangefeedID4Test("test", "test")
+<<<<<<< HEAD
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
+=======
+	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	t.Cleanup(writer.Close)
+>>>>>>> 5d55dc62e (metrics: add keyspace ID label to changefeed metrics (#5662))
 	// assign a no-op stmt cache to bypass actual DB operations in unit tests
 	cache, err := lru.New(prepStmtCacheSize)
 	require.NoError(t, err)
@@ -72,8 +78,20 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 	cfg.ServerInfo = version.ParseServerInfo(defaultRunningAddIndexNewSQLVersion)
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
+<<<<<<< HEAD
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
+=======
+	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	t.Cleanup(writer.Close)
+
+	if kerneltype.IsNextGen() {
+		ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
+			conf.Instance.TiDBServiceScope = handle.NextGenTargetScope
+		})
+	}
+>>>>>>> 5d55dc62e (metrics: add keyspace ID label to changefeed metrics (#5662))
 
 	return writer, db, mock
 }

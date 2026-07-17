@@ -483,7 +483,11 @@ func TestApply(t *testing.T) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	require.NoError(t, err)
 	mysqlCfg.Apply(sinkURI, cfg.ChangefeedID, cfg)
+<<<<<<< HEAD
 	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false)
+=======
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false, false, 1*time.Second, common.DefaultKeyspaceID)
+>>>>>>> 5d55dc62e (metrics: add keyspace ID label to changefeed metrics (#5662))
 	ap.needRecoveryInfo = false
 	err = ap.Apply(ctx)
 	require.Nil(t, err)
@@ -691,7 +695,11 @@ func TestApplyBigTxn(t *testing.T) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	require.NoError(t, err)
 	mysqlCfg.Apply(sinkURI, cfg.ChangefeedID, cfg)
+<<<<<<< HEAD
 	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false)
+=======
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false, false, 1*time.Second, common.DefaultKeyspaceID)
+>>>>>>> 5d55dc62e (metrics: add keyspace ID label to changefeed metrics (#5662))
 	ap.needRecoveryInfo = false
 	err = ap.Apply(ctx)
 	require.Nil(t, err)

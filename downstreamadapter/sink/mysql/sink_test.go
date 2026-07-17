@@ -40,7 +40,11 @@ func getMysqlSink() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
+<<<<<<< HEAD
 	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false)
+=======
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute, common.DefaultKeyspaceID)
+>>>>>>> 5d55dc62e (metrics: add keyspace ID label to changefeed metrics (#5662))
 	return ctx, sink, mock
 }
 
@@ -56,7 +60,11 @@ func getMysqlSinkWithDDLTs() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.CachePrepStmts = false
 	cfg.EnableDDLTs = true // Enable DDL-ts feature for testing
 
+<<<<<<< HEAD
 	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false)
+=======
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute, common.DefaultKeyspaceID)
+>>>>>>> 5d55dc62e (metrics: add keyspace ID label to changefeed metrics (#5662))
 	return ctx, sink, mock
 }
 
@@ -76,7 +84,11 @@ func getMysqlSinkWithSeparateDBs(t *testing.T) (context.Context, *Sink, sqlmock.
 	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
+<<<<<<< HEAD
 	sink := newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, false)
+=======
+	sink := newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, false, false, time.Minute, common.DefaultKeyspaceID)
+>>>>>>> 5d55dc62e (metrics: add keyspace ID label to changefeed metrics (#5662))
 	return ctx, sink, dmlMock, controlMock
 }
 

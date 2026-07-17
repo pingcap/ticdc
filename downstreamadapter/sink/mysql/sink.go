@@ -87,6 +87,7 @@ func New(
 	changefeedID common.ChangeFeedID,
 	config *config.ChangefeedConfig,
 	sinkURI *url.URL,
+	keyspaceID uint32,
 ) (*Sink, error) {
 	cfg, dmlDB, controlDB, err := mysql.NewMysqlConfigAndDBs(ctx, changefeedID, sinkURI, config)
 	if err != nil {
@@ -104,7 +105,11 @@ func New(
 		metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
 	}
 
+<<<<<<< HEAD
 	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, config.BDRMode), nil
+=======
+	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval, keyspaceID), nil
+>>>>>>> 5d55dc62e (metrics: add keyspace ID label to changefeed metrics (#5662))
 }
 
 func NewMySQLSink(
@@ -113,8 +118,16 @@ func NewMySQLSink(
 	cfg *mysql.Config,
 	db *sql.DB,
 	bdrMode bool,
+<<<<<<< HEAD
 ) *Sink {
 	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, db, db, bdrMode)
+=======
+	enableActiveActive bool,
+	progressInterval time.Duration,
+	keyspaceID uint32,
+) *Sink {
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, db, db, bdrMode, enableActiveActive, progressInterval, keyspaceID)
+>>>>>>> 5d55dc62e (metrics: add keyspace ID label to changefeed metrics (#5662))
 }
 
 // newMySQLSinkWithControlDB creates a MySQL sink with separate pools for DML and
@@ -127,8 +140,48 @@ func newMySQLSinkWithControlDB(
 	dmlDB *sql.DB,
 	controlDB *sql.DB,
 	bdrMode bool,
+<<<<<<< HEAD
 ) *Sink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
+=======
+	enableActiveActive bool,
+	progressInterval time.Duration,
+	keyspaceID uint32,
+) *Sink {
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, bdrMode, enableActiveActive, progressInterval, keyspaceID)
+}
+
+func newMySQLSinkWithDBs(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	cfg *mysql.Config,
+	dmlDB *sql.DB,
+	controlDB *sql.DB,
+	bdrMode bool,
+	enableActiveActive bool,
+	progressInterval time.Duration,
+	keyspaceID uint32,
+) *Sink {
+	stat := metrics.NewStatistics(changefeedID, keyspaceID, "TxnSink")
+
+	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
+	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {
+		supported, err := mysql.CheckActiveActiveSyncStatsSupported(ctx, dmlDB)
+		if err != nil {
+			log.Info("failed to check tidb_cdc_active_active_sync_stats support, disable metric collection",
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.Stringer("changefeed", changefeedID),
+				zap.Error(err))
+		} else if supported {
+			activeActiveSyncStatsCollector = mysql.NewActiveActiveSyncStatsCollector(changefeedID)
+		} else {
+			log.Info("downstream does not support tidb_cdc_active_active_sync_stats, disable metric collection",
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.Stringer("changefeed", changefeedID))
+		}
+	}
+
+>>>>>>> 5d55dc62e (metrics: add keyspace ID label to changefeed metrics (#5662))
 	result := &Sink{
 		changefeedID: changefeedID,
 		dmlDB:        dmlDB,

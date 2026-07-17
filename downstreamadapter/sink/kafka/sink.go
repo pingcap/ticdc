@@ -138,18 +138,27 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 }
 
 func New(
+<<<<<<< HEAD
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+=======
+	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, keyspaceID uint32,
+>>>>>>> 5d55dc62e (metrics: add keyspace ID label to changefeed metrics (#5662))
 ) (*sink, error) {
 	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, err
 	}
-	return newWithComponents(ctx, changefeedID, protocol, comp)
+	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp)
 }
 
 func newWithComponents(
 	ctx context.Context,
+<<<<<<< HEAD
 	changefeedID common.ChangeFeedID,
+=======
+	changefeedID commonType.ChangeFeedID,
+	keyspaceID uint32,
+>>>>>>> 5d55dc62e (metrics: add keyspace ID label to changefeed metrics (#5662))
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
@@ -173,6 +182,10 @@ func newWithComponents(
 		statistics.Close()
 	}()
 
+<<<<<<< HEAD
+=======
+	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "sink")
+>>>>>>> 5d55dc62e (metrics: add keyspace ID label to changefeed metrics (#5662))
 	asyncProducer, err = comp.factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, err
