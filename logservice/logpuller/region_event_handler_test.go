@@ -380,6 +380,7 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 		subID:           SubscriptionID(1),
 		rangeLock:       l,
 		advanceInterval: 100,
+		priorityPolicy:  newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute),
 	}
 	span.lastAdvanceTime.Store(0)
 	state := newRegionFeedState(
@@ -405,10 +406,11 @@ func TestSpanInitializedAfterAllRangesInitialized(t *testing.T) {
 	require.Equal(t, regionlock.LockRangeStatusSuccess, secondLock.Status)
 
 	span := &subscribedSpan{
-		subID:     SubscriptionID(1),
-		startTs:   100,
-		span:      heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("z")},
-		rangeLock: rangeLock,
+		subID:          SubscriptionID(1),
+		startTs:        100,
+		span:           heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("z")},
+		rangeLock:      rangeLock,
+		priorityPolicy: newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute),
 	}
 	span.resolvedTs.Store(span.startTs)
 	worker := &regionRequestWorker{requestCache: newRequestCache(2)}

@@ -147,7 +147,10 @@ func newSubscribedSpan(
 	return rt
 }
 
-func (span *subscribedSpan) observeResolvedTs(resolvedTs uint64) {
+// recordResolvedTs updates span progress and its priority policy together.
+func (span *subscribedSpan) recordResolvedTs(resolvedTs uint64) {
+	span.resolvedTs.Store(resolvedTs)
+	span.resolvedTsUpdated.Store(time.Now().Unix())
 	if span.priorityPolicy.observeSpanResolved(resolvedTs) {
 		log.Info("subscription catches up for the first time",
 			zap.Uint64("subscriptionID", uint64(span.subID)),

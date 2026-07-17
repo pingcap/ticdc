@@ -143,9 +143,6 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
 		}
 	}
-	if newResolvedTs > 0 {
-		span.observeResolvedTs(newResolvedTs)
-	}
 	tryAdvanceResolvedTs := func() {
 		if newResolvedTs != 0 {
 			span.advanceResolvedTs(newResolvedTs)
@@ -425,8 +422,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 					zap.Uint64("lastResolvedTs", lastResolvedTs),
 					zap.Float64("decreaseLag(s)", decreaseLag))
 			}
-			span.resolvedTs.Store(ts)
-			span.resolvedTsUpdated.Store(time.Now().Unix())
+			span.recordResolvedTs(ts)
 			return ts
 		}
 	}
