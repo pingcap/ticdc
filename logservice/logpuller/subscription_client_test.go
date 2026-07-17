@@ -328,9 +328,9 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	res := span.rangeLock.LockRange(context.Background(), rawSpan.StartKey, rawSpan.EndKey, 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
 	worker := &regionRequestWorker{controlQueue: newControlQueue()}
-	store := &requestedStore{storeAddr: "store-1"}
-	store.requestWorkers.s = []*regionRequestWorker{worker}
-	client.stores.Store(store.storeAddr, store)
+	store := &requestedStore{storeAddr: "store-1", workers: []*regionRequestWorker{worker}}
+	client.regionScheduler = &regionRequestScheduler{client: client}
+	client.regionScheduler.stores.Store(store.storeAddr, store)
 
 	client.setTableStopped(span)
 
@@ -421,9 +421,10 @@ func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 		ds:  &mockDynamicStream{},
 	}
 	sink.cond = sync.NewCond(&sink.mu)
-	client := &subscriptionClient{
-		eventSink:       sink,
-		regionTaskQueue: priorityqueue.New[*regionPriorityTask](),
+	client := &subscriptionClient{eventSink: sink}
+	client.regionScheduler = &regionRequestScheduler{
+		client:    client,
+		taskQueue: priorityqueue.New[*regionPriorityTask](),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 
@@ -452,15 +453,15 @@ func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 
 func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 	client := &subscriptionClient{}
+	scheduler := &regionRequestScheduler{client: client}
 	admission := newRegionAdmissionController(1, 1)
 
 	worker := &regionRequestWorker{
 		admission:    admission,
 		controlQueue: newControlQueue(),
 	}
-	store := &requestedStore{storeAddr: "store-1"}
-	store.requestWorkers.s = []*regionRequestWorker{worker}
-	client.stores.Store(store.storeAddr, store)
+	store := &requestedStore{storeAddr: "store-1", workers: []*regionRequestWorker{worker}}
+	scheduler.stores.Store(store.storeAddr, store)
 
 	dummyRegion := regionInfo{
 		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
@@ -468,7 +469,7 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 	}
 	require.True(t, admission.submit(NewRegionPriorityTask(dummyRegion, 1, 1)))
 
-	client.broadcastDeregister(SubscriptionID(1), true)
+	scheduler.broadcastDeregister(SubscriptionID(1), true)
 	require.Equal(t, 1, worker.controlQueue.len())
 	req, ok := worker.controlQueue.tryPop()
 	require.True(t, ok)
@@ -480,8 +481,10 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 func TestRequestedStoreDistributesRegionsAcrossWorkerBuffers(t *testing.T) {
 	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
 	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
-	store := &requestedStore{storeAddr: "store-1"}
-	store.requestWorkers.s = []*regionRequestWorker{worker1, worker2}
+	store := &requestedStore{
+		storeAddr: "store-1",
+		workers:   []*regionRequestWorker{worker1, worker2},
+	}
 
 	for i := uint64(1); i <= 4; i++ {
 		region := regionInfo{
