@@ -161,11 +161,10 @@ func TestMemoryQuotaBlockedEventStopsWhenSubscriptionIsRemoved(t *testing.T) {
 
 func TestMemoryQuotaBlockedEventResumesAfterRelease(t *testing.T) {
 	quota := newMemoryQuotaController(100, 10)
-	quota.hardLimitRatio = 1
 	span := newTestQuotaSpan(1)
 	quota.addSubscription(span)
 
-	lease := quota.trackEvent(context.Background(), span, 100)
+	lease := quota.trackEvent(context.Background(), span, 200)
 	require.NotNil(t, lease)
 	acquired := make(chan *memoryQuotaLease, 1)
 	go func() {

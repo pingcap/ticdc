@@ -29,7 +29,7 @@ const (
 	defaultResumeWarmingRatio = 0.05
 	defaultFreezeAllRatio     = 0.8
 	defaultResumeAllRatio     = 0.6
-	defaultHardLimitRatio     = 5.0
+	defaultHardLimitRatio     = 2.0
 
 	defaultScanBaseSize     uint64 = 8 * 1024 * 1024
 	defaultScanLagUnit             = 10 * time.Minute
