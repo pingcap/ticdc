@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/tikv/client-go/v2/tikv"
@@ -47,14 +46,14 @@ type regionFailureHandler struct {
 
 	onTableDrained        func(*subscribedSpan)
 	scheduleRegionRequest func(context.Context, regionInfo)
-	scheduleRangeRequest  func(context.Context, heartbeatpb.TableSpan, *subscribedSpan, bool, bool)
+	scheduleRangeRequest  func(context.Context, rangeTask)
 }
 
 func newRegionFailureHandler(
 	regionCache *tikv.RegionCache,
 	onTableDrained func(*subscribedSpan),
 	scheduleRegionRequest func(context.Context, regionInfo),
-	scheduleRangeRequest func(context.Context, heartbeatpb.TableSpan, *subscribedSpan, bool, bool),
+	scheduleRangeRequest func(context.Context, rangeTask),
 ) *regionFailureHandler {
 	return &regionFailureHandler{
 		cache:                 newErrCache(),
@@ -63,6 +62,14 @@ func newRegionFailureHandler(
 		scheduleRegionRequest: scheduleRegionRequest,
 		scheduleRangeRequest:  scheduleRangeRequest,
 	}
+}
+
+func (r *regionFailureHandler) retryRange(ctx context.Context, errInfo regionErrorInfo) {
+	r.scheduleRangeRequest(ctx, rangeTask{
+		span:           errInfo.span,
+		subscribedSpan: errInfo.subscribedSpan,
+		wasInitialized: errInfo.wasInitialized,
+	})
 }
 
 // Report admits a region failure into the recovery pipeline. It releases the
@@ -118,12 +125,12 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
-			r.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized)
+			r.retryRange(ctx, errInfo)
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
-			r.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized)
+			r.retryRange(ctx, errInfo)
 			return nil
 		}
 		if innerErr.GetCongested() != nil {
@@ -156,14 +163,14 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		return nil
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
-		r.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized)
+		r.retryRange(ctx, errInfo)
 		return nil
 	case *getStoreErr:
 		metricGetStoreErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		// cannot get the store the region belongs to, so we need to reload the region.
 		r.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
-		r.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized)
+		r.retryRange(ctx, errInfo)
 		return nil
 	case *storeStreamErr:
 		metricStoreSendRequestErr.Inc()

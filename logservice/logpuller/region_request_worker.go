@@ -159,10 +159,8 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 // failStreamRegions transfers every request sent by a failed stream to the
 // recovery pipeline.
 func (s *regionRequestWorker) failStreamRegions(err error) {
-	for _, states := range s.tracker.Drain() {
-		for _, state := range states {
-			s.notifyRegionError(state, err)
-		}
+	for _, state := range s.tracker.Drain() {
+		s.notifyRegionError(state, err)
 	}
 	// The failed stream no longer owns remote registrations.
 	s.controlQueue.drain()

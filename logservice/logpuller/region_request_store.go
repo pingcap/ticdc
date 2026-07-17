@@ -25,7 +25,6 @@ import (
 // store. The worker slice is complete before the store is published and is
 // immutable afterwards, so task submission only needs an atomic round-robin counter.
 type regionRequestStore struct {
-	storeAddr  string
 	workers    []*regionRequestWorker
 	nextWorker atomic.Uint64
 }
@@ -40,8 +39,7 @@ func newRegionRequestStore(
 	maxWindowMultiplier int,
 ) *regionRequestStore {
 	store := &regionRequestStore{
-		storeAddr: storeAddr,
-		workers:   make([]*regionRequestWorker, 0, workerCount),
+		workers: make([]*regionRequestWorker, 0, workerCount),
 	}
 	for i := 0; i < workerCount; i++ {
 		store.workers = append(store.workers, newRegionRequestWorker(
