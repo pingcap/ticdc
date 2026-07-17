@@ -198,17 +198,10 @@ func (c *regionAdmissionController) popEligibleLocked() (
 		return nil, nil
 	}
 
-	var scanQuota *memoryQuotaLease
-	if c.memoryQuota != nil {
-		currentTs := uint64(0)
-		if c.currentTs != nil {
-			currentTs = c.currentTs()
-		}
-		var admitted bool
-		scanQuota, admitted = c.memoryQuota.acquireScan(request.regionInfo, currentTs)
-		if !admitted {
-			return nil, nil
-		}
+	scanQuota, admitted := c.memoryQuota.acquireScan(
+		request.regionInfo, c.currentTs())
+	if !admitted {
+		return nil, nil
 	}
 	request, _ = c.pending.PopTop()
 	return request, scanQuota

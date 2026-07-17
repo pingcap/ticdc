@@ -58,8 +58,20 @@ func submitRegionForAdmission(
 	require.True(t, controller.submit(task))
 }
 
+func newTestRegionAdmissionController(
+	currentWindow int,
+	maxWindowMultiplier int,
+) *regionAdmissionController {
+	return newRegionAdmissionController(
+		currentWindow,
+		maxWindowMultiplier,
+		newMemoryQuotaController(0, 0),
+		func() uint64 { return 0 },
+	)
+}
+
 func TestRegionAdmissionControllerNormalWindow(t *testing.T) {
-	controller := newRegionAdmissionController(1, 2, nil, nil)
+	controller := newTestRegionAdmissionController(1, 2)
 	currentTs := oracle.GoTimeToTS(time.Now())
 	checkpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Hour))
 	region1 := prepareRegionForAdmission(createTestRegionInfo(1, 1), checkpointTs)
@@ -84,7 +96,7 @@ func TestRegionAdmissionControllerNormalWindow(t *testing.T) {
 }
 
 func TestRegionAdmissionControllerLowLagUsesMaxWindow(t *testing.T) {
-	controller := newRegionAdmissionController(1, 2, nil, nil)
+	controller := newTestRegionAdmissionController(1, 2)
 	currentTs := oracle.GoTimeToTS(time.Now())
 	slowCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Hour))
 	lowLagCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Minute))
@@ -121,7 +133,7 @@ func TestRegionAdmissionControllerLowLagUsesMaxWindow(t *testing.T) {
 }
 
 func TestRegionAdmissionControllerPrioritizesInitializedRegion(t *testing.T) {
-	controller := newRegionAdmissionController(1, 2, nil, nil)
+	controller := newTestRegionAdmissionController(1, 2)
 	currentTs := oracle.GoTimeToTS(time.Now())
 	slowCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Hour))
 	lowLagCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Minute))
@@ -153,7 +165,7 @@ func TestRegionAdmissionControllerPrioritizesInitializedRegion(t *testing.T) {
 }
 
 func TestRegionAdmissionLeaseReleasedOnce(t *testing.T) {
-	controller := newRegionAdmissionController(1, 1, nil, nil)
+	controller := newTestRegionAdmissionController(1, 1)
 	currentTs := oracle.GoTimeToTS(time.Now())
 	region := prepareRegionForAdmission(createTestRegionInfo(1, 1), currentTs)
 	submitRegionForAdmission(t, controller, region, currentTs)
@@ -189,7 +201,7 @@ func TestRegionAdmissionLeaseReleasedOnce(t *testing.T) {
 }
 
 func TestRegionAdmissionControllerClose(t *testing.T) {
-	controller := newRegionAdmissionController(1, 1, nil, nil)
+	controller := newTestRegionAdmissionController(1, 1)
 	controller.close()
 	region := prepareRegionForAdmission(createTestRegionInfo(1, 1), 1)
 	require.False(t, controller.submit(newRegionPriorityTask(region, 1, 1)))
@@ -199,7 +211,7 @@ func TestRegionAdmissionControllerClose(t *testing.T) {
 }
 
 func TestRegionAdmissionControllerDrainPending(t *testing.T) {
-	controller := newRegionAdmissionController(1, 1, nil, nil)
+	controller := newTestRegionAdmissionController(1, 1)
 	region1 := prepareRegionForAdmission(createTestRegionInfo(1, 1), 1)
 	region2 := prepareRegionForAdmission(createTestRegionInfo(1, 2), 1)
 	submitRegionForAdmission(t, controller, region1, 1)

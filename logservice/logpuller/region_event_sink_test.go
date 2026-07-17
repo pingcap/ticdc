@@ -81,8 +81,9 @@ func TestRegionEventSinkRunPausesAndResumesPush(t *testing.T) {
 
 	ds := newMockRegionEventSinkStream()
 	sink := &regionEventSink{
-		ctx: ctx,
-		ds:  ds,
+		ctx:         ctx,
+		ds:          ds,
+		memoryQuota: newMemoryQuotaController(0, 0),
 	}
 	sink.cond = sync.NewCond(&sink.mu)
 
@@ -135,49 +136,6 @@ func TestRegionEventSinkRunPausesAndResumesPush(t *testing.T) {
 }
 
 func TestRegionEventSinkUpdateMetrics(t *testing.T) {
-	t.Run("without quota only updates queue gauges", func(t *testing.T) {
-		ds := newMockRegionEventSinkStream()
-		ds.metrics = dynstream.Metrics[int, SubscriptionID]{
-			EventChanSize:   11,
-			PendingQueueLen: 22,
-		}
-
-		metrics.DynamicStreamMemoryUsage.WithLabelValues(
-			"log-puller",
-			"max",
-			"default",
-			"default",
-		).Set(123)
-		metrics.DynamicStreamMemoryUsage.WithLabelValues(
-			"log-puller",
-			"used",
-			"default",
-			"default",
-		).Set(456)
-
-		sink := &regionEventSink{
-			ctx: context.Background(),
-			ds:  ds,
-		}
-		sink.cond = sync.NewCond(&sink.mu)
-		sink.UpdateMetrics()
-
-		require.Equal(t, float64(11), testutil.ToFloat64(metricSubscriptionClientDSChannelSize))
-		require.Equal(t, float64(22), testutil.ToFloat64(metricSubscriptionClientDSPendingQueueLen))
-		require.Equal(t, float64(123), testutil.ToFloat64(metrics.DynamicStreamMemoryUsage.WithLabelValues(
-			"log-puller",
-			"max",
-			"default",
-			"default",
-		)))
-		require.Equal(t, float64(456), testutil.ToFloat64(metrics.DynamicStreamMemoryUsage.WithLabelValues(
-			"log-puller",
-			"used",
-			"default",
-			"default",
-		)))
-	})
-
 	t.Run("quota updates memory gauges", func(t *testing.T) {
 		ds := newMockRegionEventSinkStream()
 		ds.metrics = dynstream.Metrics[int, SubscriptionID]{

@@ -78,7 +78,7 @@ func (s *regionEventSink) Wake(subID SubscriptionID) {
 }
 
 func (s *regionEventSink) Push(subID SubscriptionID, event regionEvent) {
-	if event.needMemoryQuota() && s.memoryQuota != nil {
+	if event.needMemoryQuota() {
 		span := event.mustFirstState().region.subscribedSpan
 		event.memoryQuota = s.memoryQuota.trackEvent(s.ctx, span, uint64(event.getSize()))
 		if event.memoryQuota == nil {
@@ -137,10 +137,6 @@ func (s *regionEventSink) UpdateMetrics() {
 	metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 	metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
 
-	if s.memoryQuota == nil {
-		return
-	}
-
 	used, capacity, _ := s.memoryQuota.snapshot()
 	scanUsed, warmingScanUsed, warmingScanBudget, scanEstimate, hardLimit :=
 		s.memoryQuota.scanSnapshot()
@@ -166,9 +162,7 @@ func (s *regionEventSink) UpdateMetrics() {
 }
 
 func (s *regionEventSink) Close() {
-	if s.memoryQuota != nil {
-		s.memoryQuota.wakeAll()
-	}
+	s.memoryQuota.wakeAll()
 	s.mu.Lock()
 	s.paused.Store(false)
 	s.cond.Broadcast()

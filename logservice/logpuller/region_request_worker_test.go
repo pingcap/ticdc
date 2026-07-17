@@ -79,7 +79,7 @@ func admitRegionRequest(
 }
 
 func TestRegionRequestWorkerIgnoresDuplicateActiveRegion(t *testing.T) {
-	admission := newRegionAdmissionController(10, 1, nil, nil)
+	admission := newTestRegionAdmissionController(10, 1)
 	worker := &regionRequestWorker{
 		admission: admission,
 		storeAddr: "store-1",
@@ -238,7 +238,7 @@ func benchmarkDispatchResolvedTsEvent(b *testing.B, regionCount int, useLegacy b
 }
 
 func TestWaitForRegionRequestDrainsIdleControlQueue(t *testing.T) {
-	admission := newRegionAdmissionController(1, 1, nil, nil)
+	admission := newTestRegionAdmissionController(1, 1)
 	worker := &regionRequestWorker{
 		admission:    admission,
 		controlQueue: newControlQueue(),
@@ -320,7 +320,7 @@ func BenchmarkDispatchResolvedTsEventSmallBatchCurrent(b *testing.B) {
 }
 
 func TestStoppedStateRemovesSentRequest(t *testing.T) {
-	admission := newRegionAdmissionController(10, 1, nil, nil)
+	admission := newTestRegionAdmissionController(10, 1)
 	worker := &regionRequestWorker{
 		admission: admission,
 		tracker:   newRegionTracker(),
@@ -337,7 +337,7 @@ func TestStoppedStateRemovesSentRequest(t *testing.T) {
 }
 
 func TestFailStreamRegionsReleasesSentAdmission(t *testing.T) {
-	admission := newRegionAdmissionController(1, 1, nil, nil)
+	admission := newTestRegionAdmissionController(1, 1)
 	ds := &mockRegionEventDynamicStream{}
 	worker := &regionRequestWorker{
 		admission:    admission,
@@ -373,7 +373,7 @@ func TestFailPendingRegionsReschedulesWorkerBuffer(t *testing.T) {
 	require.Equal(t, regionlock.LockRangeStatusSuccess, lock1.Status)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, lock2.Status)
 
-	admission := newRegionAdmissionController(1, 1, nil, nil)
+	admission := newTestRegionAdmissionController(1, 1)
 	failureHandler := &regionFailureHandler{cache: newErrCache()}
 	worker := &regionRequestWorker{failureHandler: failureHandler, admission: admission}
 	regions := []regionInfo{
@@ -403,7 +403,7 @@ func TestFailPendingRegionsReschedulesWorkerBuffer(t *testing.T) {
 }
 
 func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
-	admission := newRegionAdmissionController(10, 1, nil, nil)
+	admission := newTestRegionAdmissionController(10, 1)
 	worker := &regionRequestWorker{
 		admission:    admission,
 		controlQueue: newControlQueue(),
@@ -434,7 +434,7 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 }
 
 func TestProcessRegionSendTaskDoesNotSendRemovedRequest(t *testing.T) {
-	admission := newRegionAdmissionController(1, 1, nil, nil)
+	admission := newTestRegionAdmissionController(1, 1)
 	worker := &regionRequestWorker{
 		admission:    admission,
 		controlQueue: newControlQueue(),
@@ -477,7 +477,7 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			admission := newRegionAdmissionController(10, 1, nil, nil)
+			admission := newTestRegionAdmissionController(10, 1)
 			worker := &regionRequestWorker{
 				admission:    admission,
 				controlQueue: newControlQueue(),
@@ -512,7 +512,7 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 func TestProcessRegionSendTaskHandlesDeregisterFromControlQueue(t *testing.T) {
 	ds := &mockRegionEventDynamicStream{}
 	worker := &regionRequestWorker{
-		admission:    newRegionAdmissionController(1, 1, nil, nil),
+		admission:    newTestRegionAdmissionController(1, 1),
 		controlQueue: newControlQueue(),
 		storeAddr:    "store-1",
 		upstream:     &upstreamHandle{clusterID: 42},

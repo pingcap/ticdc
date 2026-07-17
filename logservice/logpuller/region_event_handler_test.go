@@ -48,7 +48,10 @@ import (
 func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 	// initialize
 	option := dynstream.NewOption()
-	ds := dynstream.NewParallelDynamicStream("test", &regionEventHandler{}, option)
+	handler := &regionEventHandler{eventSink: &regionEventSink{
+		memoryQuota: newMemoryQuotaController(0, 0),
+	}}
+	ds := dynstream.NewParallelDynamicStream("test", handler, option)
 	ds.Start()
 
 	span := heartbeatpb.TableSpan{
@@ -104,8 +107,9 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			},
 		}
 		regionEvent := regionEvent{
-			states:  []*regionFeedState{state},
-			entries: events,
+			states:      []*regionFeedState{state},
+			entries:     events,
+			memoryQuota: newMemoryQuotaLease(func() {}),
 		}
 		ds.Push(subID, regionEvent)
 	}
@@ -124,8 +128,9 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			},
 		}
 		regionEvent := regionEvent{
-			states:  []*regionFeedState{state},
-			entries: events,
+			states:      []*regionFeedState{state},
+			entries:     events,
+			memoryQuota: newMemoryQuotaLease(func() {}),
 		}
 		ds.Push(subID, regionEvent)
 	}
@@ -154,8 +159,9 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			},
 		}
 		regionEvent := regionEvent{
-			states:  []*regionFeedState{state},
-			entries: events,
+			states:      []*regionFeedState{state},
+			entries:     events,
+			memoryQuota: newMemoryQuotaLease(func() {}),
 		}
 		ds.Push(subID, regionEvent)
 	}
@@ -181,8 +187,9 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			},
 		}
 		regionEvent := regionEvent{
-			states:  []*regionFeedState{state},
-			entries: events,
+			states:      []*regionFeedState{state},
+			entries:     events,
+			memoryQuota: newMemoryQuotaLease(func() {}),
 		}
 		ds.Push(subID, regionEvent)
 	}
@@ -204,7 +211,10 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 func TestHandleResolvedTs(t *testing.T) {
 	// initialize
 	option := dynstream.NewOption()
-	ds := dynstream.NewParallelDynamicStream("test", &regionEventHandler{}, option)
+	handler := &regionEventHandler{eventSink: &regionEventSink{
+		memoryQuota: newMemoryQuotaController(0, 0),
+	}}
+	ds := dynstream.NewParallelDynamicStream("test", handler, option)
 	ds.Start()
 
 	consumeKVEvents := func(events []common.RawKVEntry, _ func()) bool { return false } // not used

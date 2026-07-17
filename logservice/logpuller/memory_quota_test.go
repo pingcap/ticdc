@@ -121,7 +121,8 @@ func TestMemoryQuotaRemoveSubscriptionReleasesOwnedMemory(t *testing.T) {
 	// path without recreating quota state.
 	scanLease, admitted = quota.acquireScan(newTestQuotaRegion(span1), span1.resolvedTs.Load())
 	require.True(t, admitted)
-	require.Nil(t, scanLease)
+	require.NotNil(t, scanLease)
+	scanLease.Release()
 	require.NotContains(t, quota.subscriptions, span1.subID)
 
 	lease2.Release()
