@@ -1,0 +1,29 @@
+# diff Configuration.
+
+check-thread-count = 4
+
+export-fix-sql = true
+
+check-struct-only = false
+
+[task]
+    output-dir = "/tmp/tidb_cdc_test/cmek_keyspace/sync_diff/output"
+
+    source-instances = ["mysql1"]
+
+    target-instance = "tidb0"
+
+    target-check-tables = ["cmek_valid.t"]
+
+[data-sources]
+[data-sources.mysql1]
+    host = "127.0.0.1"
+    port = 14001
+    user = "root"
+    password = ""
+
+[data-sources.tidb0]
+    host = "127.0.0.1"
+    port = 14002
+    user = "root"
+    password = ""
