@@ -64,14 +64,14 @@ func (event *regionEvent) needMemoryQuota() bool {
 }
 
 func (event *regionEvent) releaseMemoryQuota() {
+	if event.memoryQuota == nil {
+		return
+	}
 	event.memoryQuota.Release()
 	event.memoryQuota = nil
 }
 
 func (event *regionEvent) getSize() int {
-	if event == nil {
-		return 0
-	}
 	size := int(unsafe.Sizeof(*event))
 	if event.entries != nil {
 		size += int(unsafe.Sizeof(*event.entries))
@@ -135,7 +135,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	wasInitialized := span.initialized.Load()
 	quotaLeases := make([]*memoryQuotaLease, 0, len(events))
 	for _, event := range events {
-		if event.memoryQuota != nil {
+		if event.needMemoryQuota() {
 			quotaLeases = append(quotaLeases, event.memoryQuota)
 		}
 		if len(event.states) == 1 && event.states[0].isStale() {
@@ -158,8 +158,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
 		}
 	}
-	if !wasInitialized && span.initialized.Load() &&
-		h.eventSink != nil && h.eventSink.memoryQuota != nil {
+	if !wasInitialized && span.initialized.Load() {
 		h.eventSink.memoryQuota.markSubscriptionInitialized()
 	}
 	tryAdvanceResolvedTs := func() {
