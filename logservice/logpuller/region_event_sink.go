@@ -28,14 +28,20 @@ import (
 type regionEventSink struct {
 	ctx context.Context
 	ds  dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
+
+	memoryQuota *memoryQuotaController
 	// the following three fields are used to manage feedback from ds and notify other goroutines
 	mu     sync.Mutex
 	cond   *sync.Cond
 	paused atomic.Bool
 }
 
-func newRegionEventSink(ctx context.Context, failureHandler *regionFailureHandler) *regionEventSink {
-	sink := &regionEventSink{ctx: ctx}
+func newRegionEventSink(
+	ctx context.Context,
+	failureHandler *regionFailureHandler,
+	memoryQuota *memoryQuotaController,
+) *regionEventSink {
+	sink := &regionEventSink{ctx: ctx, memoryQuota: memoryQuota}
 
 	option := dynstream.NewOption()
 	// Note: it is max batch size of the kv sent from tikv(not committed rows)
@@ -43,7 +49,7 @@ func newRegionEventSink(ctx context.Context, failureHandler *regionFailureHandle
 	// TODO: Set `UseBuffer` to true until we refactor the `regionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
 	// 	ds.handleLoop fetch events from `ch` -> regionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
 	option.UseBuffer = true
-	option.EnableMemoryControl = true
+	option.EnableMemoryControl = false
 	ds := dynstream.NewParallelDynamicStream(
 		"log-puller",
 		&regionEventHandler{eventSink: sink, failureHandler: failureHandler},
@@ -56,8 +62,7 @@ func newRegionEventSink(ctx context.Context, failureHandler *regionFailureHandle
 }
 
 func (s *regionEventSink) AddPath(rt *subscribedSpan) {
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
-	if err := s.ds.AddPath(rt.subID, rt, areaSetting); err != nil {
+	if err := s.ds.AddPath(rt.subID, rt); err != nil {
 		log.Warn("subscription client add path failed",
 			zap.Uint64("subscriptionID", uint64(rt.subID)),
 			zap.Error(err))
@@ -73,6 +78,13 @@ func (s *regionEventSink) Wake(subID SubscriptionID) {
 }
 
 func (s *regionEventSink) Push(subID SubscriptionID, event regionEvent) {
+	if event.needMemoryQuota() && s.memoryQuota != nil {
+		span := event.mustFirstState().region.subscribedSpan
+		event.memoryQuota = s.memoryQuota.trackEvent(s.ctx, span, uint64(event.getSize()))
+		if event.memoryQuota == nil {
+			return
+		}
+	}
 	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)
@@ -85,6 +97,7 @@ func (s *regionEventSink) Push(subID SubscriptionID, event regionEvent) {
 		select {
 		case <-s.ctx.Done():
 			s.mu.Unlock()
+			event.releaseMemoryQuota()
 			return
 		default:
 			s.cond.Wait()
@@ -124,30 +137,38 @@ func (s *regionEventSink) UpdateMetrics() {
 	metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 	metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
 
-	if len(dsMetrics.MemoryControl.AreaMemoryMetrics) == 0 {
-		return
-	}
-	if len(dsMetrics.MemoryControl.AreaMemoryMetrics) != 1 {
-		log.Warn("subscription client should have exactly one area")
+	if s.memoryQuota == nil {
 		return
 	}
 
-	areaMetric := dsMetrics.MemoryControl.AreaMemoryMetrics[0]
+	used, capacity, _ := s.memoryQuota.snapshot()
+	scanUsed, warmingScanUsed, warmingScanBudget, scanEstimate, hardLimit :=
+		s.memoryQuota.scanSnapshot()
+	metrics.LogPullerMemoryQuota.WithLabelValues("max").Set(float64(capacity))
+	metrics.LogPullerMemoryQuota.WithLabelValues("used").Set(float64(used))
+	metrics.LogPullerMemoryQuota.WithLabelValues("scan_used").Set(float64(scanUsed))
+	metrics.LogPullerMemoryQuota.WithLabelValues("warming_scan_used").Set(float64(warmingScanUsed))
+	metrics.LogPullerMemoryQuota.WithLabelValues("warming_scan_budget").Set(float64(warmingScanBudget))
+	metrics.LogPullerMemoryQuota.WithLabelValues("scan_estimate").Set(float64(scanEstimate))
+	metrics.LogPullerMemoryQuota.WithLabelValues("hard_limit").Set(float64(hardLimit))
 	metrics.DynamicStreamMemoryUsage.WithLabelValues(
 		"log-puller",
 		"max",
 		"default",
 		"default",
-	).Set(float64(areaMetric.MaxMemory()))
+	).Set(float64(capacity))
 	metrics.DynamicStreamMemoryUsage.WithLabelValues(
 		"log-puller",
 		"used",
 		"default",
 		"default",
-	).Set(float64(areaMetric.MemoryUsage()))
+	).Set(float64(used))
 }
 
 func (s *regionEventSink) Close() {
+	if s.memoryQuota != nil {
+		s.memoryQuota.wakeAll()
+	}
 	s.mu.Lock()
 	s.paused.Store(false)
 	s.cond.Broadcast()

@@ -342,8 +342,10 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 }
 
 func TestRegionFailureHandlerQueuesCanceledError(t *testing.T) {
+	quota := newMemoryQuotaController(0, 0)
 	client := &subscriptionClient{
-		eventSink: &regionEventSink{ds: &mockDynamicStream{}},
+		eventSink:   &regionEventSink{ds: &mockDynamicStream{}},
+		memoryQuota: quota,
 	}
 	client.spanRegistry = newSpanRegistry(nil, nil)
 	client.failureHandler = newRegionFailureHandler(nil, client.onTableDrained, nil, nil)
@@ -358,6 +360,7 @@ func TestRegionFailureHandlerQueuesCanceledError(t *testing.T) {
 		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
 	}
 	client.spanRegistry.Add(span)
+	quota.addSubscription(span)
 
 	res1 := span.rangeLock.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res1.Status)
@@ -453,7 +456,7 @@ func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 
 func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 	scheduler := &regionRequestScheduler{}
-	admission := newRegionAdmissionController(1, 1)
+	admission := newRegionAdmissionController(1, 1, nil, nil)
 
 	const storeAddr = "store-1"
 	worker := &regionRequestWorker{
@@ -480,8 +483,8 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 }
 
 func TestRegionRequestStoreDistributesRegionsAcrossWorkers(t *testing.T) {
-	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
-	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
+	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1, nil, nil)}
+	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1, nil, nil)}
 	store := &regionRequestStore{
 		workers: []*regionRequestWorker{worker1, worker2},
 	}

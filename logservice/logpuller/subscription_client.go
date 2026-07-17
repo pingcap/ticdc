@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/txnutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -134,6 +135,8 @@ type subscriptionClient struct {
 	spanRegistry *spanRegistry
 	// regionScheduler assigns locked region requests to per-store workers.
 	regionScheduler *regionRequestScheduler
+	// memoryQuota owns event-memory accounting and initial-scan admission.
+	memoryQuota *memoryQuotaController
 
 	// rangeTaskCh is used to receive range tasks.
 	// The tasks will be handled in `handleRangeTask` goroutine.
@@ -164,19 +167,25 @@ func NewSubscriptionClient(
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
+	pullerConfig := config.GetGlobalServerConfig().Debug.Puller
+	subClient.memoryQuota = newMemoryQuotaController(
+		pullerConfig.MemoryQuota, pullerConfig.ScanBaseSize)
 	subClient.failureHandler = newRegionFailureHandler(
 		subClient.upstream.regionCache,
 		subClient.onTableDrained,
 		subClient.scheduleRegionRequest,
 		subClient.scheduleRangeRequest,
 	)
-	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient.failureHandler)
+	subClient.eventSink = newRegionEventSink(
+		subClient.ctx, subClient.failureHandler, subClient.memoryQuota)
 	subClient.spanRegistry = newSpanRegistry(subClient.upstream.pd, subClient.upstream.pdClock)
 	subClient.regionScheduler = newRegionRequestScheduler(
 		subClient.upstream,
 		subClient.eventSink,
 		subClient.failureHandler,
+		subClient.memoryQuota,
 	)
+	subClient.memoryQuota.setOnAvailable(subClient.regionScheduler.notifyAvailable)
 	return subClient
 }
 
@@ -236,6 +245,7 @@ func (s *subscriptionClient) Subscribe(
 		bdrMode,
 	)
 	s.spanRegistry.Add(rt)
+	s.memoryQuota.addSubscription(rt)
 	s.eventSink.AddPath(rt)
 
 	select {
@@ -316,6 +326,7 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 			zap.Uint64("subscriptionID", uint64(rt.subID)),
 			zap.Error(err))
 	}
+	s.memoryQuota.removeSubscription(rt)
 	s.spanRegistry.Remove(rt.subID)
 }
 

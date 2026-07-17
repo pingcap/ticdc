@@ -64,6 +64,13 @@ var (
 			Name:      "resolved_ts_lag",
 			Help:      "The lag of resolved ts",
 		})
+	LogPullerMemoryQuota = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota",
+			Help:      "The log puller local memory quota usage.",
+		}, []string{"type"})
 
 	SubscriptionClientResolvedTsLagGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
@@ -164,6 +171,7 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(LogPullerPrewriteCacheRowNum)
 	registry.MustRegister(LogPullerMatcherCount)
 	registry.MustRegister(LogPullerResolvedTsLag)
+	registry.MustRegister(LogPullerMemoryQuota)
 	registry.MustRegister(SubscriptionClientRequestedRegionCount)
 	registry.MustRegister(SubscriptionClientAddRegionRequestDuration)
 	registry.MustRegister(RegionRequestFinishScanDuration)
