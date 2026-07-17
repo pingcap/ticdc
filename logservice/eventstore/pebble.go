@@ -42,7 +42,7 @@ func newPebbleOptions(dbNum int) *pebble.Options {
 
 		MaxOpenFiles: maxOpenFilesPerDB,
 
-		MaxConcurrentCompactions: func() int { return 6 },
+		MaxConcurrentCompactions: func() int { return 2 },
 
 		// Decrease compaction frequency
 		L0CompactionThreshold:     20,

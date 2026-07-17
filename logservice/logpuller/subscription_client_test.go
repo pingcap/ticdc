@@ -334,24 +334,11 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 
 	res := span.rangeLock.LockRange(context.Background(), rawSpan.StartKey, rawSpan.EndKey, 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 9903a1be7 (refactor)
 	const storeAddr = "store-1"
 	worker := &regionRequestWorker{storeAddr: storeAddr, controlQueue: newControlQueue()}
 	store := &regionRequestStore{workers: []*regionRequestWorker{worker}}
 	client.regionScheduler = &regionRequestScheduler{}
 	client.regionScheduler.stores.Store(storeAddr, store)
-<<<<<<< HEAD
-=======
-	worker := &regionRequestWorker{controlQueue: newControlQueue()}
-	store := &requestedStore{storeAddr: "store-1", workers: []*regionRequestWorker{worker}}
-	client.regionScheduler = &regionRequestScheduler{client: client}
-	client.regionScheduler.stores.Store(store.storeAddr, store)
->>>>>>> 23171df8f (logpuller: extract region request scheduler from subscription client)
-=======
->>>>>>> 9903a1be7 (refactor)
 
 	client.setTableStopped(span)
 
@@ -443,10 +430,6 @@ func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 	sink.cond = sync.NewCond(&sink.mu)
 	client := &subscriptionClient{eventSink: sink}
 	client.regionScheduler = &regionRequestScheduler{
-<<<<<<< HEAD
-=======
-		client:    client,
->>>>>>> 23171df8f (logpuller: extract region request scheduler from subscription client)
 		taskQueue: priorityqueue.New[*regionPriorityTask](),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
@@ -474,69 +457,6 @@ func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
-=======
-func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
-	client := &subscriptionClient{}
-	scheduler := &regionRequestScheduler{client: client}
-	admission := newRegionAdmissionController(1, 1)
-
-	const storeAddr = "store-1"
-	worker := &regionRequestWorker{
-		storeAddr:    storeAddr,
-		admission:    admission,
-		controlQueue: newControlQueue(),
-	}
-<<<<<<< HEAD
-	store := &requestedStore{storeAddr: "store-1", workers: []*regionRequestWorker{worker}}
-	scheduler.stores.Store(store.storeAddr, store)
-=======
-	store := &regionRequestStore{workers: []*regionRequestWorker{worker}}
-	scheduler.stores.Store(storeAddr, store)
->>>>>>> 9903a1be7 (refactor)
-
-	dummyRegion := regionInfo{
-		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
-		lockedRangeState: &regionlock.LockedRangeState{},
-	}
-	require.True(t, admission.submit(newRegionPriorityTask(dummyRegion, 1, 1)))
-
-	scheduler.broadcastDeregister(SubscriptionID(1), true)
-	require.Equal(t, 1, worker.controlQueue.len())
-	req, ok := worker.controlQueue.tryPop()
-	require.True(t, ok)
-	require.Equal(t, SubscriptionID(1), req.subID)
-	require.True(t, req.filterLoop)
-	require.Equal(t, 1, admission.stats().pending)
-}
-
-func TestRequestedStoreDistributesRegionsAcrossWorkerBuffers(t *testing.T) {
-	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
-	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
-<<<<<<< HEAD
-	store := &requestedStore{
-		storeAddr: "store-1",
-		workers:   []*regionRequestWorker{worker1, worker2},
-=======
-	store := &regionRequestStore{
-		workers: []*regionRequestWorker{worker1, worker2},
->>>>>>> 9903a1be7 (refactor)
-	}
-
-	for i := uint64(1); i <= 4; i++ {
-		region := regionInfo{
-			verID:            tikv.NewRegionVerID(i, 1, 1),
-			subscribedSpan:   &subscribedSpan{subID: 1},
-			lockedRangeState: &regionlock.LockedRangeState{},
-		}
-		require.True(t, store.submit(newRegionPriorityTask(region, 1, i)))
-	}
-
-	require.Equal(t, 2, worker1.admission.stats().pending)
-	require.Equal(t, 2, worker2.admission.stats().pending)
-}
-
->>>>>>> 23171df8f (logpuller: extract region request scheduler from subscription client)
 func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	mockPDClock := pdutil.NewClock4Test()

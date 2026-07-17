@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -30,6 +31,7 @@ type mockRegionEventSinkStream struct {
 	feedbackCh chan dynstream.Feedback[int, SubscriptionID, *subscribedSpan]
 	pushCount  atomic.Int32
 	pushCh     chan struct{}
+	eventCh    chan regionEvent
 	metrics    dynstream.Metrics[int, SubscriptionID]
 }
 
@@ -37,6 +39,7 @@ func newMockRegionEventSinkStream() *mockRegionEventSinkStream {
 	return &mockRegionEventSinkStream{
 		feedbackCh: make(chan dynstream.Feedback[int, SubscriptionID, *subscribedSpan], 2),
 		pushCh:     make(chan struct{}, 1),
+		eventCh:    make(chan regionEvent, 1),
 	}
 }
 
@@ -44,9 +47,10 @@ func (s *mockRegionEventSinkStream) Start() {}
 
 func (s *mockRegionEventSinkStream) Close() {}
 
-func (s *mockRegionEventSinkStream) Push(_ SubscriptionID, _ regionEvent) {
+func (s *mockRegionEventSinkStream) Push(_ SubscriptionID, event regionEvent) {
 	s.pushCount.Add(1)
 	s.pushCh <- struct{}{}
+	s.eventCh <- event
 }
 
 func (s *mockRegionEventSinkStream) Wake(_ SubscriptionID) {}
@@ -71,20 +75,16 @@ func (s *mockRegionEventSinkStream) GetMetrics() dynstream.Metrics[int, Subscrip
 	return s.metrics
 }
 
-func newTestRegionEventSink(
-	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler],
-) *regionEventSink {
-	sink := &regionEventSink{ds: ds}
-	sink.cond = sync.NewCond(&sink.mu)
-	return sink
-}
-
 func TestRegionEventSinkRunPausesAndResumesPush(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	ds := newMockRegionEventSinkStream()
-	sink := newTestRegionEventSink(ds)
+	sink := &regionEventSink{
+		ctx: ctx,
+		ds:  ds,
+	}
+	sink.cond = sync.NewCond(&sink.mu)
 
 	runErrCh := make(chan error, 1)
 	go func() {
@@ -135,7 +135,7 @@ func TestRegionEventSinkRunPausesAndResumesPush(t *testing.T) {
 }
 
 func TestRegionEventSinkUpdateMetrics(t *testing.T) {
-	t.Run("empty area metrics returns after queue gauges", func(t *testing.T) {
+	t.Run("without quota only updates queue gauges", func(t *testing.T) {
 		ds := newMockRegionEventSinkStream()
 		ds.metrics = dynstream.Metrics[int, SubscriptionID]{
 			EventChanSize:   11,
@@ -156,8 +156,10 @@ func TestRegionEventSinkUpdateMetrics(t *testing.T) {
 		).Set(456)
 
 		sink := &regionEventSink{
-			ds: ds,
+			ctx: context.Background(),
+			ds:  ds,
 		}
+		sink.cond = sync.NewCond(&sink.mu)
 		sink.UpdateMetrics()
 
 		require.Equal(t, float64(11), testutil.ToFloat64(metricSubscriptionClientDSChannelSize))
@@ -176,25 +178,25 @@ func TestRegionEventSinkUpdateMetrics(t *testing.T) {
 		)))
 	})
 
-	t.Run("single area metrics updates memory gauges", func(t *testing.T) {
+	t.Run("quota updates memory gauges", func(t *testing.T) {
 		ds := newMockRegionEventSinkStream()
 		ds.metrics = dynstream.Metrics[int, SubscriptionID]{
 			EventChanSize:   33,
 			PendingQueueLen: 44,
-			MemoryControl: dynstream.MemoryMetric[int, SubscriptionID]{
-				AreaMemoryMetrics: []dynstream.AreaMemoryMetric[int, SubscriptionID]{
-					{
-						UsedMemoryValue:    55,
-						MaxMemoryValue:     66,
-						PathMaxMemoryValue: 66,
-					},
-				},
-			},
 		}
+		quota := newMemoryQuotaController(66, 8)
+		span := newTestQuotaSpan(1)
+		quota.addSubscription(span)
+		lease := quota.trackEvent(context.Background(), span, 55)
+		require.NotNil(t, lease)
+		t.Cleanup(lease.Release)
 
 		sink := &regionEventSink{
-			ds: ds,
+			ctx:         context.Background(),
+			ds:          ds,
+			memoryQuota: quota,
 		}
+		sink.cond = sync.NewCond(&sink.mu)
 		sink.UpdateMetrics()
 
 		require.Equal(t, float64(33), testutil.ToFloat64(metricSubscriptionClientDSChannelSize))
@@ -211,51 +213,41 @@ func TestRegionEventSinkUpdateMetrics(t *testing.T) {
 			"default",
 			"default",
 		)))
+		require.Equal(t, float64(66), testutil.ToFloat64(
+			metrics.LogPullerMemoryQuota.WithLabelValues("max")))
+		require.Equal(t, float64(55), testutil.ToFloat64(
+			metrics.LogPullerMemoryQuota.WithLabelValues("used")))
 	})
 }
 
-func TestRegionEventSinkRunCancelUnblocksPush(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-
+func TestRegionEventSinkTracksEntriesUntilDrop(t *testing.T) {
+	quota := newMemoryQuotaController(1024, 8)
+	span := newTestQuotaSpan(1)
+	quota.addSubscription(span)
+	state := &regionFeedState{
+		region: regionInfo{subscribedSpan: span},
+		worker: &regionRequestWorker{},
+	}
 	ds := newMockRegionEventSinkStream()
-	sink := newTestRegionEventSink(ds)
-
-	runErrCh := make(chan error, 1)
-	go func() {
-		runErrCh <- sink.Run(ctx)
-	}()
-
-	ds.feedbackCh <- dynstream.Feedback[int, SubscriptionID, *subscribedSpan]{
-		FeedbackType: dynstream.PauseArea,
+	sink := &regionEventSink{
+		ctx:         context.Background(),
+		ds:          ds,
+		memoryQuota: quota,
 	}
-	require.Eventually(t, sink.paused.Load, time.Second, 10*time.Millisecond)
+	sink.cond = sync.NewCond(&sink.mu)
 
-	pushDone := make(chan struct{})
-	go func() {
-		sink.Push(SubscriptionID(1), regionEvent{resolvedTs: 100})
-		close(pushDone)
-	}()
+	sink.Push(span.subID, regionEvent{
+		states: []*regionFeedState{state},
+		entries: &cdcpb.Event_Entries_{Entries: &cdcpb.Event_Entries{
+			Entries: []*cdcpb.Event_Row{{Key: []byte("key"), Value: []byte("value")}},
+		}},
+	})
+	pushed := <-ds.eventCh
+	require.NotNil(t, pushed.memoryQuota)
+	used, _, _ := quota.snapshot()
+	require.NotZero(t, used)
 
-	select {
-	case <-pushDone:
-		t.Fatal("Push should block while the sink is paused")
-	case <-time.After(100 * time.Millisecond):
-	}
-	require.Equal(t, int32(0), ds.pushCount.Load())
-
-	cancel()
-
-	select {
-	case <-pushDone:
-	case <-time.After(time.Second):
-		t.Fatal("Push should be unblocked by Run context cancellation")
-	}
-	require.Equal(t, int32(0), ds.pushCount.Load())
-
-	select {
-	case err := <-runErrCh:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		t.Fatal("Run should exit after context cancellation")
-	}
+	(&regionEventHandler{}).OnDrop(pushed)
+	used, _, _ = quota.snapshot()
+	require.Zero(t, used)
 }

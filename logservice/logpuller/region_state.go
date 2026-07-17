@@ -58,18 +58,15 @@ func newRegionInfo(
 	span heartbeatpb.TableSpan,
 	rpcCtx *tikv.RPCContext,
 	subscribedSpan *subscribedSpan,
+	filterLoop bool,
 ) regionInfo {
 	return regionInfo{
 		verID:          verID,
 		span:           span,
 		rpcCtx:         rpcCtx,
 		subscribedSpan: subscribedSpan,
-<<<<<<< HEAD
 		filterLoop:     filterLoop,
 		scanPriority:   cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-=======
-		filterLoop:     subscribedSpan.filterLoop,
->>>>>>> 9903a1be7 (refactor)
 	}
 }
 

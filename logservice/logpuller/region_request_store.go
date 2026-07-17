@@ -37,13 +37,21 @@ func newRegionRequestStore(
 	workerCount int,
 	workerWindow int,
 	maxWindowMultiplier int,
+	memoryQuota *memoryQuotaController,
 ) *regionRequestStore {
 	store := &regionRequestStore{
 		workers: make([]*regionRequestWorker, 0, workerCount),
 	}
 	for i := 0; i < workerCount; i++ {
 		store.workers = append(store.workers, newRegionRequestWorker(
-			upstream, eventSink, failureHandler, storeAddr, workerWindow, maxWindowMultiplier))
+			upstream,
+			eventSink,
+			failureHandler,
+			storeAddr,
+			workerWindow,
+			maxWindowMultiplier,
+			memoryQuota,
+		))
 	}
 	return store
 }
@@ -77,4 +85,10 @@ func (s *regionRequestStore) inflightCount() int {
 		count += worker.admission.stats().inflight
 	}
 	return count
+}
+
+func (s *regionRequestStore) notifyAvailable() {
+	for _, worker := range s.workers {
+		worker.admission.notifyAvailable()
+	}
 }
