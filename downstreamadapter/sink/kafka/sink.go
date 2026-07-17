@@ -138,22 +138,23 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 }
 
 func New(
-	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, keyspaceID uint32,
 ) (*sink, error) {
 	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, err
 	}
-	return newWithComponents(ctx, changefeedID, protocol, comp)
+	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp)
 }
 
 func newWithComponents(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
+	keyspaceID uint32,
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
-	statistics := metrics.NewStatistics(changefeedID, "sink")
+	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "sink")
 	var (
 		err           error
 		asyncProducer kafka.AsyncProducer

@@ -291,7 +291,7 @@ func NewDispatcherManager(
 		}
 	}
 
-	createdSink, err := sink.New(ctx, manager.config, manager.changefeedID)
+	createdSink, err := sink.New(ctx, manager.config, manager.changefeedID, manager.keyspaceID)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
