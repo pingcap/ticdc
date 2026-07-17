@@ -19,10 +19,12 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -40,14 +42,26 @@ var (
 
 // regionFailureHandler handles failed regions and owns retry and reschedule decisions.
 type regionFailureHandler struct {
-	cache  *errCache
-	client *subscriptionClient
+	cache       *errCache
+	regionCache *tikv.RegionCache
+
+	onTableDrained        func(*subscribedSpan)
+	scheduleRegionRequest func(context.Context, regionInfo)
+	scheduleRangeRequest  func(context.Context, heartbeatpb.TableSpan, *subscribedSpan, bool, bool)
 }
 
-func newRegionFailureHandler(client *subscriptionClient) *regionFailureHandler {
+func newRegionFailureHandler(
+	regionCache *tikv.RegionCache,
+	onTableDrained func(*subscribedSpan),
+	scheduleRegionRequest func(context.Context, regionInfo),
+	scheduleRangeRequest func(context.Context, heartbeatpb.TableSpan, *subscribedSpan, bool, bool),
+) *regionFailureHandler {
 	return &regionFailureHandler{
-		cache:  newErrCache(),
-		client: client,
+		cache:                 newErrCache(),
+		regionCache:           regionCache,
+		onTableDrained:        onTableDrained,
+		scheduleRegionRequest: scheduleRegionRequest,
+		scheduleRangeRequest:  scheduleRangeRequest,
 	}
 }
 
@@ -58,56 +72,33 @@ func (r *regionFailureHandler) Report(errInfo regionErrorInfo) {
 	if errInfo.subscribedSpan.rangeLock.UnlockRange(
 		errInfo.span.StartKey, errInfo.span.EndKey,
 		errInfo.verID.GetID(), errInfo.verID.GetVer(), errInfo.resolvedTs()) {
-		r.client.onTableDrained(errInfo.subscribedSpan)
+		r.onTableDrained(errInfo.subscribedSpan)
 		return
 	}
 	r.cache.add(errInfo)
 }
 
 func (r *regionFailureHandler) Run(ctx context.Context) error {
-	handleCachedErrors := func() error {
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error { return r.cache.dispatch(ctx) })
+	g.Go(func() error {
 		for {
-			batch := r.cache.popBatch(errCacheBatchSize)
-			for _, errInfo := range batch {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-				}
+			select {
+			case <-ctx.Done():
+				log.Info("subscription client handle errors and exit")
+				return ctx.Err()
+			case errInfo := <-r.cache.errCh:
 				if err := r.handleError(ctx, errInfo); err != nil {
 					return err
 				}
 			}
-			if len(batch) < errCacheBatchSize {
-				return nil
-			}
 		}
-	}
-
-	// r.cache.ready() should handle failures promptly in normal flow. The ticker is only a
-	// fallback scan and is not expected to be needed in practice.
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			log.Info("subscription client handle errors and exit")
-			return ctx.Err()
-		case <-ticker.C:
-			if err := handleCachedErrors(); err != nil {
-				return err
-			}
-		case <-r.cache.ready():
-			if err := handleCachedErrors(); err != nil {
-				return err
-			}
-		}
-	}
+	})
+	return g.Wait()
 }
 
 func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
-	retryPriority := normalizeScanPriority(errInfo.scanPriority)
 	//nolint:errorlint // converting large type switch to errors.As is a significant refactor
 	if _, requestCancelled := err.(*requestCancelledErr); !requestCancelled {
 		log.Debug("cdc region error",
@@ -122,30 +113,28 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		innerErr := eerr.err
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
 			metricFeedNotLeaderCounter.Inc()
-			r.client.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
-			r.client.scheduleRegionRequest(ctx, errInfo.regionInfo, retryPriority)
+			r.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
+			r.scheduleRegionRequest(ctx, errInfo.regionInfo)
 			return nil
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
-			r.client.scheduleRangeRequest(
-				ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
+			r.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized)
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
-			r.client.scheduleRangeRequest(
-				ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
+			r.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized)
 			return nil
 		}
 		if innerErr.GetCongested() != nil {
 			metricKvCongestedCounter.Inc()
-			r.client.scheduleRegionRequest(ctx, errInfo.regionInfo, retryPriority)
+			r.scheduleRegionRequest(ctx, errInfo.regionInfo)
 			return nil
 		}
 		if innerErr.GetServerIsBusy() != nil {
 			metricKvIsBusyCounter.Inc()
-			r.client.scheduleRegionRequest(ctx, errInfo.regionInfo, retryPriority)
+			r.scheduleRegionRequest(ctx, errInfo.regionInfo)
 			return nil
 		}
 		if duplicated := innerErr.GetDuplicateRequest(); duplicated != nil {
@@ -164,26 +153,24 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 			zap.Stringer("error", innerErr))
 		metricFeedUnknownErrorCounter.Inc()
-		r.client.scheduleRegionRequest(ctx, errInfo.regionInfo, retryPriority)
+		r.scheduleRegionRequest(ctx, errInfo.regionInfo)
 		return nil
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
-		r.client.scheduleRangeRequest(
-			ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
+		r.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized)
 		return nil
 	case *getStoreErr:
 		metricGetStoreErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		// cannot get the store the region belongs to, so we need to reload the region.
-		r.client.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
-		r.client.scheduleRangeRequest(
-			ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
+		r.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
+		r.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized)
 		return nil
 	case *storeStreamErr:
 		metricStoreSendRequestErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-		r.client.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
-		r.client.scheduleRegionRequest(ctx, errInfo.regionInfo, retryPriority)
+		r.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
+		r.scheduleRegionRequest(ctx, errInfo.regionInfo)
 		return nil
 	case *requestCancelledErr:
 		// the corresponding subscription has been unsubscribed, just ignore.
@@ -200,15 +187,17 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 type errCache struct {
 	sync.Mutex
 	cache  []regionErrorInfo
+	errCh  chan regionErrorInfo
 	notify chan struct{}
 }
 
-const errCacheBatchSize = 1024
+const errCacheDispatchBatchSize = 1024
 
 func newErrCache() *errCache {
 	return &errCache{
 		cache:  make([]regionErrorInfo, 0, 1024),
-		notify: make(chan struct{}, 1),
+		errCh:  make(chan regionErrorInfo, 4096),
+		notify: make(chan struct{}, 1024),
 	}
 }
 
@@ -242,6 +231,45 @@ func (e *errCache) popBatch(limit int) []regionErrorInfo {
 	return batch
 }
 
-func (e *errCache) ready() <-chan struct{} {
-	return e.notify
+func (e *errCache) dispatchBatch(ctx context.Context, limit int) (int, error) {
+	batch := e.popBatch(limit)
+	for _, errInfo := range batch {
+		select {
+		case <-ctx.Done():
+			log.Info("subscription client dispatch err cache done")
+			return 0, ctx.Err()
+		case e.errCh <- errInfo:
+		}
+	}
+	return len(batch), nil
+}
+
+func (e *errCache) dispatch(ctx context.Context) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	sendToErrCh := func() error {
+		for {
+			n, err := e.dispatchBatch(ctx, errCacheDispatchBatchSize)
+			if err != nil {
+				return err
+			}
+			if n < errCacheDispatchBatchSize {
+				return nil
+			}
+		}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := sendToErrCh(); err != nil {
+				return err
+			}
+		case <-e.notify:
+			if err := sendToErrCh(); err != nil {
+				return err
+			}
+		}
+	}
 }

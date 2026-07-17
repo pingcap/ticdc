@@ -116,7 +116,7 @@ func TestRunStreamCancelsBlockingReceiveWhenSenderExits(t *testing.T) {
 		admission:    admission,
 		controlQueue: newControlQueue(),
 		store:        &requestedStore{storeAddr: storeAddr},
-		client: &subscriptionClient{
+		upstream: &upstreamHandle{
 			pd:         &mockPDClient{Client: pdClient, versionGen: defaultVersionGen},
 			credential: &security.Credential{},
 		},
@@ -146,48 +146,12 @@ func TestRunStreamCancelsBlockingReceiveWhenSenderExits(t *testing.T) {
 	}
 }
 
-func TestCreateRegionRequestScanPriority(t *testing.T) {
-	worker := &regionRequestWorker{
-		client: &subscriptionClient{clusterID: 1},
-	}
-
-	for _, tc := range []struct {
-		name     string
-		priority cdcpb.ScanPriority
-		expected cdcpb.ScanPriority
-	}{
-		{
-			name:     "high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-		},
-		{
-			name:     "low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-		},
-		{
-			name:     "unknown defaults to low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_UNKNOWN,
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
-			region.scanPriority = tc.priority
-
-			req := createRegionRequest(worker.client.clusterID, region)
-			require.Equal(t, tc.expected, req.GetScanPriority())
-		})
-	}
-}
-
 func TestRegionRequestWorkerIgnoresDuplicateActiveRegion(t *testing.T) {
 	admission := newRegionAdmissionController(10, 1)
 	worker := &regionRequestWorker{
 		admission: admission,
 		store:     &requestedStore{storeAddr: "store-1"},
-		client:    &subscriptionClient{},
+		upstream:  &upstreamHandle{},
 		tracker:   newRegionTracker(),
 	}
 	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
@@ -277,10 +241,8 @@ func (m *mockRegionEventDynamicStream) GetMetrics() dynstream.Metrics[int, Subsc
 func newDispatchResolvedTsTestWorker(regionCount int) (*regionRequestWorker, *mockRegionEventDynamicStream, *cdcpb.ResolvedTs) {
 	ds := &mockRegionEventDynamicStream{}
 	worker := &regionRequestWorker{
-		client: &subscriptionClient{
-			eventSink: newTestRegionEventSink(ds),
-		},
-		tracker: newRegionTracker(),
+		eventSink: &regionEventSink{ds: ds},
+		tracker:   newRegionTracker(),
 	}
 	regions := make([]uint64, regionCount)
 	for i := 0; i < regionCount; i++ {
@@ -307,7 +269,7 @@ func dispatchResolvedTsEventLegacyForBenchmark(s *regionRequestWorker, resolvedT
 			return
 		}
 		states := resolvedStates
-		s.client.pushRegionEventToDS(subscriptionID, regionEvent{
+		s.eventSink.Push(subscriptionID, regionEvent{
 			resolvedTs: resolvedTsEvent.Ts,
 			states:     states,
 		})
@@ -327,7 +289,7 @@ func dispatchResolvedTsEventLegacyForBenchmark(s *regionRequestWorker, resolvedT
 func benchmarkDispatchResolvedTsEvent(b *testing.B, regionCount int, useLegacy bool) {
 	worker, _, event := newDispatchResolvedTsTestWorker(regionCount)
 	ds := &countingRegionEventDynamicStream{}
-	worker.client.eventSink.ds = ds
+	worker.eventSink.ds = ds
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -442,37 +404,28 @@ func TestStoppedStateRemovesSentRequest(t *testing.T) {
 	require.Equal(t, 0, admission.stats().inflight)
 }
 
-func TestStreamRecoveryReleasesSentAdmission(t *testing.T) {
+func TestFailStreamRegionsReleasesSentAdmission(t *testing.T) {
 	admission := newRegionAdmissionController(1, 1)
 	ds := &mockRegionEventDynamicStream{}
 	worker := &regionRequestWorker{
 		admission:    admission,
 		controlQueue: newControlQueue(),
-		client: &subscriptionClient{
-			eventSink: &regionEventSink{ds: ds},
-		},
-		tracker: newRegionTracker(),
+		eventSink:    &regionEventSink{ds: ds},
+		tracker:      newRegionTracker(),
 	}
 	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
 	req := admitRegionRequest(t, admission, region)
 	state := newRegionFeedState(region, uint64(region.subscribedSpan.subID), worker, req)
 	require.True(t, worker.tracker.Add(region.subscribedSpan.subID, region.verID.GetID(), state))
 
-	for _, state := range worker.tracker.Drain() {
-		state.markStopped(&storeStreamErr{})
-		worker.client.eventSink.Push(
-			SubscriptionID(state.requestID),
-			regionEvent{states: []*regionFeedState{state}},
-		)
-	}
-	worker.controlQueue.drain()
+	worker.failStreamRegions(&storeStreamErr{})
 
 	require.Zero(t, admission.stats().inflight)
 	require.False(t, req.abort())
 	require.Equal(t, 1, ds.pushCount)
 }
 
-func TestStreamRecoveryReschedulesWorkerBuffer(t *testing.T) {
+func TestFailPendingRegionsReschedulesWorkerBuffer(t *testing.T) {
 	rawSpan := heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte("a"),
@@ -489,9 +442,8 @@ func TestStreamRecoveryReschedulesWorkerBuffer(t *testing.T) {
 	require.Equal(t, regionlock.LockRangeStatusSuccess, lock2.Status)
 
 	admission := newRegionAdmissionController(1, 1)
-	client := &subscriptionClient{}
-	client.failureHandler = newRegionFailureHandler(client)
-	worker := &regionRequestWorker{client: client, admission: admission}
+	failureHandler := &regionFailureHandler{cache: newErrCache()}
+	worker := &regionRequestWorker{failureHandler: failureHandler, admission: admission}
 	regions := []regionInfo{
 		{
 			verID: tikv.NewRegionVerID(1, 1, 1),
@@ -509,15 +461,13 @@ func TestStreamRecoveryReschedulesWorkerBuffer(t *testing.T) {
 		},
 	}
 	for i, region := range regions {
-		require.True(t, admission.submit(newRegionPriorityTask(region, uint64(i+1))))
+		require.True(t, admission.submit(NewRegionPriorityTask(region, 1, uint64(i+1))))
 	}
 
-	for _, task := range worker.admission.drain() {
-		worker.client.onRegionFail(newRegionErrorInfo(task.regionInfo, &storeStreamErr{}))
-	}
+	worker.failPendingRegions(&storeStreamErr{})
 
 	require.Zero(t, admission.stats().pending)
-	require.Len(t, client.failureHandler.cache.cache, 2)
+	require.Len(t, failureHandler.cache.cache, 2)
 }
 
 func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
@@ -526,7 +476,7 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 		admission:    admission,
 		controlQueue: newControlQueue(),
 		store:        &requestedStore{storeAddr: "store-1"},
-		client:       &subscriptionClient{},
+		upstream:     &upstreamHandle{},
 		tracker:      newRegionTracker(),
 	}
 
@@ -551,37 +501,31 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	require.ErrorAs(t, state.takeError(), &streamErr)
 }
 
-func TestProcessRegionSendTaskSkipsRemovedRequest(t *testing.T) {
+func TestProcessRegionSendTaskDoesNotSendRemovedRequest(t *testing.T) {
 	admission := newRegionAdmissionController(1, 1)
 	worker := &regionRequestWorker{
 		admission:    admission,
 		controlQueue: newControlQueue(),
 		store:        &requestedStore{storeAddr: "store-1"},
-		client:       &subscriptionClient{},
+		upstream:     &upstreamHandle{},
 		tracker:      newRegionTracker(),
 	}
-	firstRegion := prepareRegionForSendTest(createTestRegionInfo(1, 1))
-	firstReq := admitRegionRequest(t, admission, firstRegion)
-	require.True(t, firstReq.abort())
+	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
+	req := admitRegionRequest(t, admission, region)
+	require.True(t, req.abort())
 
-	secondRegion := prepareRegionForSendTest(createTestRegionInfo(1, 2))
-	require.True(t, admission.submit(newRegionPriorityTask(secondRegion, 2)))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	sendCh := make(chan *cdcpb.ChangeDataRequest, 1)
-	done := make(chan error, 1)
-	go func() {
-		done <- worker.processRegionSendTask(ctx, &ConnAndClient{
-			Client: &mockEventFeedV2Client{sendCh: sendCh},
-			Conn:   &grpc.ClientConn{},
-		}, firstReq)
-	}()
-
-	sentReq := <-sendCh
-	require.Equal(t, secondRegion.verID.GetID(), sentReq.RegionId)
-	cancel()
-	require.ErrorIs(t, <-done, context.Canceled)
+	err := worker.processRegionSendTask(t.Context(), &ConnAndClient{
+		Client: &mockEventFeedV2Client{sendCh: sendCh},
+		Conn:   &grpc.ClientConn{},
+	}, req)
+	var streamErr *storeStreamErr
+	require.ErrorAs(t, err, &streamErr)
+	select {
+	case sentReq := <-sendCh:
+		t.Fatalf("removed request was sent: %+v", sentReq)
+	default:
+	}
 }
 
 func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
@@ -606,7 +550,7 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 				admission:    admission,
 				controlQueue: newControlQueue(),
 				store:        &requestedStore{storeAddr: "store-1"},
-				client:       &subscriptionClient{},
+				upstream:     &upstreamHandle{},
 				tracker:      newRegionTracker(),
 			}
 			region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
@@ -639,10 +583,9 @@ func TestProcessRegionSendTaskHandlesDeregisterFromControlQueue(t *testing.T) {
 		admission:    newRegionAdmissionController(1, 1),
 		controlQueue: newControlQueue(),
 		store:        &requestedStore{storeAddr: "store-1"},
-		client: &subscriptionClient{
-			eventSink: &regionEventSink{ds: ds},
-		},
-		tracker: newRegionTracker(),
+		upstream:     &upstreamHandle{clusterID: 42},
+		eventSink:    &regionEventSink{ds: ds},
+		tracker:      newRegionTracker(),
 	}
 	state := &regionFeedState{worker: worker}
 	require.True(t, worker.tracker.Add(1, 1, state))
@@ -659,6 +602,7 @@ func TestProcessRegionSendTaskHandlesDeregisterFromControlQueue(t *testing.T) {
 	}()
 
 	req := <-sendCh
+	require.Equal(t, uint64(42), req.Header.ClusterId)
 	require.Equal(t, uint64(1), req.RequestId)
 	require.True(t, req.FilterLoop)
 	require.NotNil(t, req.GetDeregister())

@@ -34,7 +34,9 @@ import (
 // resolution and retry policy remain owned by subscriptionClient and
 // regionFailureHandler respectively.
 type regionRequestScheduler struct {
-	client *subscriptionClient
+	upstream       *upstreamHandle
+	eventSink      *regionEventSink
+	failureHandler *regionFailureHandler
 
 	// taskQueue orders all Regions before they are assigned to a TiKV store.
 	taskQueue *priorityqueue.PriorityQueue[*regionPriorityTask]
@@ -52,15 +54,22 @@ type regionRequestScheduler struct {
 	maxWindowMultiplier int
 }
 
-func newRegionRequestScheduler(client *subscriptionClient) *regionRequestScheduler {
+func newRegionRequestScheduler(
+	clientConfig *SubscriptionClientConfig,
+	upstream *upstreamHandle,
+	eventSink *regionEventSink,
+	failureHandler *regionFailureHandler,
+) *regionRequestScheduler {
 	pullerConfig := config.GetGlobalServerConfig().Debug.Puller
-	workerCount := int(client.config.RegionRequestWorkerPerStore)
+	workerCount := int(clientConfig.RegionRequestWorkerPerStore)
 	if workerCount <= 0 {
 		workerCount = 1
 	}
 	workerWindow := (pullerConfig.PendingRegionRequestQueueSize + workerCount - 1) / workerCount
 	return &regionRequestScheduler{
-		client:              client,
+		upstream:            upstream,
+		eventSink:           eventSink,
+		failureHandler:      failureHandler,
 		taskQueue:           priorityqueue.New[*regionPriorityTask](),
 		workerCount:         workerCount,
 		workerWindow:        workerWindow,
@@ -70,7 +79,7 @@ func newRegionRequestScheduler(client *subscriptionClient) *regionRequestSchedul
 
 func (s *regionRequestScheduler) submit(region regionInfo) {
 	s.taskQueue.Push(NewRegionPriorityTask(
-		region, s.client.pdClock.CurrentTS(), s.sequence.Add(1)))
+		region, s.upstream.pdClock.CurrentTS(), s.sequence.Add(1)))
 }
 
 func (s *regionRequestScheduler) run(ctx context.Context, group *errgroup.Group) error {
@@ -96,7 +105,7 @@ func (s *regionRequestScheduler) run(ctx context.Context, group *errgroup.Group)
 		}
 
 		store := s.getOrCreateStore(ctx, group, region.rpcCtx.Addr)
-		task.updateRegion(region, s.client.pdClock.CurrentTS())
+		task.updateRegion(region, s.upstream.pdClock.CurrentTS())
 		if !store.submit(task) {
 			return context.Canceled
 		}
@@ -113,7 +122,7 @@ func (s *regionRequestScheduler) attachRPCContext(
 	region regionInfo,
 ) (regionInfo, bool) {
 	bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-	rpcCtx, err := s.client.regionCache.GetTiKVRPCContext(
+	rpcCtx, err := s.upstream.regionCache.GetTiKVRPCContext(
 		bo, region.verID, kvclientv2.ReplicaReadLeader, 0)
 	if rpcCtx != nil {
 		region.rpcCtx = rpcCtx
@@ -125,7 +134,7 @@ func (s *regionRequestScheduler) attachRPCContext(
 			zap.Uint64("regionID", region.verID.GetID()),
 			zap.Error(err))
 	}
-	s.client.onRegionFail(newRegionErrorInfo(region, &rpcCtxUnavailableErr{verID: region.verID}))
+	s.failureHandler.Report(newRegionErrorInfo(region, &rpcCtxUnavailableErr{verID: region.verID}))
 	return region, false
 }
 
@@ -139,7 +148,14 @@ func (s *regionRequestScheduler) getOrCreateStore(
 	}
 
 	store := newRequestedStore(
-		s.client, storeAddr, s.workerCount, s.workerWindow, s.maxWindowMultiplier)
+		s.upstream,
+		s.eventSink,
+		s.failureHandler,
+		storeAddr,
+		s.workerCount,
+		s.workerWindow,
+		s.maxWindowMultiplier,
+	)
 	// run is the only writer. Publish the store after its immutable worker list
 	// is complete, then start its workers.
 	s.stores.Store(storeAddr, store)

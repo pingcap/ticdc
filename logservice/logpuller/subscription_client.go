@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -90,8 +89,21 @@ type SubscriptionClientConfig struct {
 	RegionRequestWorkerPerStore uint
 }
 
-type sharedClientMetrics struct {
-	batchResolvedSize prometheus.Observer
+// upstreamHandle contains the stable TiKV and PD dependencies shared by the
+// region request pipeline. Runtime components keep their own event and error
+// dependencies instead of using this as a general service container.
+type upstreamHandle struct {
+	pd          pd.Client
+	regionCache *tikv.RegionCache
+	pdClock     pdutil.Clock
+	credential  *security.Credential
+	clusterID   uint64
+}
+
+// initialize loads the cluster metadata needed by Region request workers. It
+// must run before the scheduler starts any workers.
+func (u *upstreamHandle) initialize(ctx context.Context) {
+	u.clusterID = u.pd.GetClusterID(ctx)
 }
 
 // subscriptionClient is used to subscribe events of table ranges from TiKV.
@@ -115,19 +127,12 @@ type SubscriptionClient interface {
 }
 
 type subscriptionClient struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	config    *SubscriptionClientConfig
-	metrics   sharedClientMetrics
-	clusterID uint64
+	ctx      context.Context
+	cancel   context.CancelFunc
+	config   *SubscriptionClientConfig
+	upstream *upstreamHandle
 
-	pd           pd.Client
-	regionCache  *tikv.RegionCache
-	pdClock      pdutil.Clock
 	lockResolver txnutil.LockResolver
-
-	// the credential to connect tikv
-	credential *security.Credential
 
 	// failureHandler handles failed regions and owns reschedule/retry decisions.
 	failureHandler *regionFailureHandler
@@ -156,25 +161,33 @@ func NewSubscriptionClient(
 ) SubscriptionClient {
 	subClient := &subscriptionClient{
 		config: config,
-
-		pd:           pd,
-		regionCache:  appcontext.GetService[*tikv.RegionCache](appcontext.RegionCache),
-		pdClock:      appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		upstream: &upstreamHandle{
+			pd:          pd,
+			regionCache: appcontext.GetService[*tikv.RegionCache](appcontext.RegionCache),
+			pdClock:     appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+			credential:  credential,
+		},
 		lockResolver: lockResolver,
-
-		credential: credential,
 
 		rangeTaskCh:            make(chan rangeTask, 1024),
 		resolveLockTaskCh:      make(chan resolveLockTask, 1024),
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
-	subClient.failureHandler = newRegionFailureHandler(subClient)
+	subClient.failureHandler = newRegionFailureHandler(
+		subClient.upstream.regionCache,
+		subClient.onTableDrained,
+		subClient.scheduleRegionRequest,
+		subClient.scheduleRangeRequest,
+	)
 	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient.failureHandler)
-	subClient.spanRegistry = newSpanRegistry(subClient.pd, subClient.pdClock)
-	subClient.regionScheduler = newRegionRequestScheduler(subClient)
-
-	subClient.initMetrics()
+	subClient.spanRegistry = newSpanRegistry(subClient.upstream.pd, subClient.upstream.pdClock)
+	subClient.regionScheduler = newRegionRequestScheduler(
+		subClient.config,
+		subClient.upstream,
+		subClient.eventSink,
+		subClient.failureHandler,
+	)
 	return subClient
 }
 
@@ -185,11 +198,6 @@ func (s *subscriptionClient) Name() string {
 // AllocsubscriptionID gets an ID can be used in `Subscribe`.
 func (s *subscriptionClient) AllocSubscriptionID() SubscriptionID {
 	return SubscriptionID(subscriptionIDGen.Add(1))
-}
-
-func (s *subscriptionClient) initMetrics() {
-	// TODO: fix metrics
-	s.metrics.batchResolvedSize = metrics.BatchResolvedEventSize.WithLabelValues("event-store")
 }
 
 func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
@@ -269,17 +277,13 @@ func (s *subscriptionClient) Unsubscribe(subID SubscriptionID) {
 		zap.Bool("exists", rt != nil))
 }
 
-func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
-	s.eventSink.Push(subID, event)
-}
-
 func (s *subscriptionClient) Run(ctx context.Context) error {
 	// s.consume = consume
-	if s.pd == nil {
+	if s.upstream == nil || s.upstream.pd == nil {
 		log.Warn("subscription client should be in test mode, skip run")
 		return nil
 	}
-	s.clusterID = s.pd.GetClusterID(ctx)
+	s.upstream.initialize(ctx)
 
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -331,11 +335,6 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 	s.spanRegistry.Remove(rt.subID)
 }
 
-// Note: don't block the caller, otherwise there may be deadlock
-func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
-	s.failureHandler.Report(errInfo)
-}
-
 func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	// Limit the concurrent number of goroutines to convert range tasks to region tasks.
@@ -380,7 +379,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			zap.Any("span", common.FormatTableSpan(&nextSpan)))
 
 		backoff := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-		regions, err := s.regionCache.BatchLoadRegionsWithKeyRange(backoff, nextSpan.StartKey, nextSpan.EndKey, limit)
+		regions, err := s.upstream.regionCache.BatchLoadRegionsWithKeyRange(
+			backoff, nextSpan.StartKey, nextSpan.EndKey, limit)
 		if err != nil {
 			log.Warn("subscription client load regions failed",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
