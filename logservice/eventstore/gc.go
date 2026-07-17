@@ -15,13 +15,13 @@ package eventstore
 
 import (
 	"context"
-	"sort"
 	"sync"
 	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -40,6 +40,15 @@ type gcRangeItem struct {
 	endTs   uint64
 }
 
+// pendingDeleteRange tracks a coarse delete range for one (dbIndex, uniqueKeyID, tableID).
+// It is intentionally widened to [minStartTs, maxEndTs] across multiple checkpoint
+// updates. Event store retention is checkpoint-based, so deleting gaps inside the
+// widened range is safe and avoids issuing a large number of small DeleteRange calls.
+type pendingDeleteRange struct {
+	item             gcRangeItem
+	firstEnqueueTime time.Time
+}
+
 type compactItemKey struct {
 	dbIndex     int
 	uniqueKeyID uint64
@@ -54,12 +63,23 @@ type compactState struct {
 type gcManager struct {
 	mu            sync.Mutex
 	dbs           []*pebble.DB
-	ranges        []gcRangeItem
+	deleteRanges  map[compactItemKey]*pendingDeleteRange
 	compactRanges map[compactItemKey]*compactState
 
 	deleteDataRange  deleteDataRangeFunc
 	compactDataRange compactDataRangeFunc
 }
+
+const (
+	// Avoid issuing a Pebble DeleteRange for every tiny checkpoint movement. Small
+	// delete ranges accumulate a large number of tombstones and make iterator
+	// initialization expensive for scan-heavy workloads.
+	minDeleteRangeInterval = 5 * time.Minute
+	// Low-traffic subscriptions may not accumulate enough ts span to hit
+	// minDeleteRangeInterval quickly. Flush them eventually to avoid retaining old
+	// data forever.
+	maxPendingDeleteRangeDelay = 30 * time.Minute
+)
 
 func newGCManager(
 	dbs []*pebble.DB,
@@ -68,31 +88,97 @@ func newGCManager(
 ) *gcManager {
 	return &gcManager{
 		dbs:              dbs,
+		deleteRanges:     make(map[compactItemKey]*pendingDeleteRange),
 		compactRanges:    make(map[compactItemKey]*compactState),
 		deleteDataRange:  deleteDataRange,
 		compactDataRange: compactDataRange,
 	}
 }
 
-// add an item to delete the data in range (startTS, endTS] for `tableID` with `uniqueID`.
+// addGCItem records a coarse pending delete range for one subscription/table.
+// The range is widened to [minStartTs, maxEndTs] instead of tracking exact disjoint
+// intervals. Once checkpoint advances, any data below the newest endTs is safe to
+// delete, and deleting empty gaps is harmless for event store.
 func (d *gcManager) addGCItem(dbIndex int, uniqueKeyID uint64, tableID int64, startTS uint64, endTS uint64) {
+	if endTS <= startTS {
+		return
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.ranges = append(d.ranges, gcRangeItem{
+
+	key := compactItemKey{
 		dbIndex:     dbIndex,
 		uniqueKeyID: uniqueKeyID,
 		tableID:     tableID,
-		startTs:     startTS,
-		endTs:       endTS,
-	})
+	}
+	pending, ok := d.deleteRanges[key]
+	if !ok {
+		d.deleteRanges[key] = &pendingDeleteRange{
+			item: gcRangeItem{
+				dbIndex:     dbIndex,
+				uniqueKeyID: uniqueKeyID,
+				tableID:     tableID,
+				startTs:     startTS,
+				endTs:       endTS,
+			},
+			firstEnqueueTime: time.Now(),
+		}
+		return
+	}
+
+	if startTS < pending.item.startTs {
+		pending.item.startTs = startTS
+	}
+	if endTS > pending.item.endTs {
+		pending.item.endTs = endTS
+	}
 }
 
 func (d *gcManager) fetchAllGCItems() []gcRangeItem {
+	return d.fetchGCItems(time.Now(), minDeleteRangeInterval, maxPendingDeleteRangeDelay)
+}
+
+func (d *gcManager) fetchGCItems(now time.Time, minRangeInterval, maxDelay time.Duration) []gcRangeItem {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	ranges := d.ranges
-	d.ranges = nil
+
+	var ranges []gcRangeItem
+	for key, pending := range d.deleteRanges {
+		if !shouldFlushDeleteRange(pending, now, minRangeInterval, maxDelay) {
+			continue
+		}
+		ranges = append(ranges, pending.item)
+		delete(d.deleteRanges, key)
+	}
 	return ranges
+}
+
+func (d *gcManager) pendingDeleteRangeCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.deleteRanges)
+}
+
+func shouldFlushDeleteRange(pending *pendingDeleteRange, now time.Time, minRangeInterval, maxDelay time.Duration) bool {
+	// addGCItem only records valid ranges, so this should not happen in normal flow.
+	// Keep the guard as a defensive check against unexpected state or future refactors.
+	if pending == nil || pending.item.endTs <= pending.item.startTs {
+		return false
+	}
+	if maxDelay > 0 && now.Sub(pending.firstEnqueueTime) >= maxDelay {
+		return true
+	}
+	if minRangeInterval <= 0 {
+		return true
+	}
+
+	startPhysical := oracle.ExtractPhysical(pending.item.startTs)
+	endPhysical := oracle.ExtractPhysical(pending.item.endTs)
+	if endPhysical <= startPhysical {
+		return false
+	}
+	return time.Duration(endPhysical-startPhysical)*time.Millisecond >= minRangeInterval
 }
 
 func (d *gcManager) run(ctx context.Context) error {
@@ -127,6 +213,7 @@ func (d *gcManager) run(ctx context.Context) error {
 				zap.Duration("interval", now.Sub(windowStart)),
 				zap.Int("batchCount", windowBatchCount),
 				zap.Int("deletedRangeCount", windowRangeCount),
+				zap.Int("pendingRangeCount", d.pendingDeleteRangeCount()),
 				zap.Float64("avgRangesPerBatch", avgRangesPerBatch),
 				zap.Duration("avgBatchDuration", avgBatchDuration),
 				zap.Duration("maxBatchDuration", windowMaxBatchDuration))
@@ -153,14 +240,6 @@ func (d *gcManager) run(ctx context.Context) error {
 				}
 
 				metrics.EventStoreDeleteRangeFetchedCount.Add(float64(len(ranges)))
-
-				originalRangeCount := len(ranges)
-				ranges, mergedCount := mergeDeleteRanges(ranges)
-				if mergedCount > 0 {
-					log.Debug("gc manager coalesced delete ranges",
-						zap.Int("fetchedRangeCount", originalRangeCount),
-						zap.Int("deleteOpCount", len(ranges)))
-				}
 
 				startTime := time.Now()
 				d.doGCJob(ranges)
@@ -215,65 +294,6 @@ func (d *gcManager) doGCJob(ranges []gcRangeItem) {
 			log.Warn("gc manager failed to delete data range", zap.Error(err))
 		}
 	}
-}
-
-// mergeDeleteRanges merges delete ranges for the same (dbIndex, uniqueKeyID, tableID) when they are
-// contiguous or overlapping. It is used as a best-effort mitigation for rare cases where the delete
-// goroutine is blocked for a long time and ranges accumulate.
-func mergeDeleteRanges(ranges []gcRangeItem) ([]gcRangeItem, int) {
-	if len(ranges) < 2 {
-		return ranges, 0
-	}
-
-	// Common case: at most one range per (dbIndex, uniqueKeyID, tableID), so no merge.
-	seen := make(map[compactItemKey]struct{}, len(ranges))
-	hasDuplicateKey := false
-	for _, r := range ranges {
-		key := compactItemKey{dbIndex: r.dbIndex, uniqueKeyID: r.uniqueKeyID, tableID: r.tableID}
-		if _, ok := seen[key]; ok {
-			hasDuplicateKey = true
-			break
-		}
-		seen[key] = struct{}{}
-	}
-	if !hasDuplicateKey {
-		return ranges, 0
-	}
-
-	sort.Slice(ranges, func(i, j int) bool {
-		if ranges[i].dbIndex != ranges[j].dbIndex {
-			return ranges[i].dbIndex < ranges[j].dbIndex
-		}
-		if ranges[i].uniqueKeyID != ranges[j].uniqueKeyID {
-			return ranges[i].uniqueKeyID < ranges[j].uniqueKeyID
-		}
-		if ranges[i].tableID != ranges[j].tableID {
-			return ranges[i].tableID < ranges[j].tableID
-		}
-		if ranges[i].startTs != ranges[j].startTs {
-			return ranges[i].startTs < ranges[j].startTs
-		}
-		return ranges[i].endTs < ranges[j].endTs
-	})
-
-	originalCount := len(ranges)
-	out := ranges[:0]
-	cur := ranges[0]
-
-	for _, r := range ranges[1:] {
-		sameRangeKey := cur.dbIndex == r.dbIndex && cur.uniqueKeyID == r.uniqueKeyID && cur.tableID == r.tableID
-		contiguousOrOverlapping := r.startTs <= cur.endTs
-		if sameRangeKey && contiguousOrOverlapping {
-			if r.endTs > cur.endTs {
-				cur.endTs = r.endTs
-			}
-			continue
-		}
-		out = append(out, cur)
-		cur = r
-	}
-	out = append(out, cur)
-	return out, originalCount - len(out)
 }
 
 func (d *gcManager) updateCompactRanges(ranges []gcRangeItem) {
