@@ -213,7 +213,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	option := dynstream.NewOption()
 	pdClock := pdutil.NewClock4Test()
 	pdClock.(*pdutil.Clock4Test).SetTS(10)
-	ds := dynstream.NewParallelDynamicStream("test", &regionEventHandler{pdClock: pdClock}, option)
+	ds := dynstream.NewParallelDynamicStream("test", &regionEventHandler{}, option)
 	ds.Start()
 
 	consumeKVEvents := func(events []common.RawKVEntry, _ func()) bool { return false } // not used
@@ -242,6 +242,7 @@ func TestHandleResolvedTs(t *testing.T) {
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
+			priorityPolicy:    newScanPriorityPolicy(pdClock, 30*time.Minute),
 		}
 		ds.AddPath(subID1, subSpan1, dynstream.AreaSettings{})
 		state1.region.subscribedSpan = subSpan1
@@ -269,6 +270,7 @@ func TestHandleResolvedTs(t *testing.T) {
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
+			priorityPolicy:    newScanPriorityPolicy(pdClock, 30*time.Minute),
 		}
 		ds.AddPath(subID2, subSpan, dynstream.AreaSettings{})
 		state2.region.subscribedSpan = subSpan
@@ -296,6 +298,7 @@ func TestHandleResolvedTs(t *testing.T) {
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
+			priorityPolicy:    newScanPriorityPolicy(pdClock, 30*time.Minute),
 		}
 		ds.AddPath(subID3, subSpan, dynstream.AreaSettings{})
 		state3.region.subscribedSpan = subSpan
@@ -347,7 +350,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	require.Equal(t, uint64(10), state1.getLastResolvedTs())
 	require.Equal(t, uint64(11), state2.getLastResolvedTs())
 	require.Equal(t, uint64(8), state3.getLastResolvedTs())
-	require.True(t, subSpan1.everCaughtUp.Load())
+	require.True(t, subSpan1.priorityPolicy.everCaughtUp.Load())
 }
 
 func TestHandleResolvedTsThrottled(t *testing.T) {

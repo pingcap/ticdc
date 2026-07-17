@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	// DefaultOldStartTsScanLowPriorityThreshold is the default age threshold for
-	// classifying initial scan tasks as low priority.
+	// DefaultOldStartTsScanLowPriorityThreshold is the default lag threshold for
+	// classifying scan tasks as low priority.
 	DefaultOldStartTsScanLowPriorityThreshold = 30 * time.Minute
 )
 
@@ -74,8 +74,9 @@ type PullerConfig struct {
 	// For example, if PendingRegionRequestQueueSize is 32 and there are 8 workers connecting to the same store,
 	// each worker's queue size will be 32 / 8 = 4.
 	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending_region_request_queue_size"`
-	// OldStartTsScanLowPriorityThreshold is the startTs age threshold for initial scans.
-	// Initial scans older than this threshold are scheduled as low priority.
+	// OldStartTsScanLowPriorityThreshold is the lag threshold for scan priority.
+	// Scans within this threshold are scheduled as high priority. Older scans
+	// remain low priority until their span catches up once.
 	OldStartTsScanLowPriorityThreshold TomlDuration `toml:"old-start-ts-scan-low-priority-threshold" json:"old_start_ts_scan_low_priority_threshold"`
 }
 

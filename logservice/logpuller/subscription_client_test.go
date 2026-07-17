@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -81,6 +80,8 @@ func TestGenerateResolveLockTask(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		false,
+		pdutil.NewClock4Test(),
+		30*time.Minute,
 	)
 	client.spanRegistry.Add(span)
 
@@ -157,12 +158,12 @@ func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
-	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdutil.NewClock4Test(), 30*time.Minute)
 	span2 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(2), heartbeatpb.TableSpan{
 		TableID:  2,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
-	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdutil.NewClock4Test(), 30*time.Minute)
 
 	res := span1.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
@@ -275,6 +276,8 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		false,
+		pdutil.NewClock4Test(),
+		30*time.Minute,
 	)
 
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
@@ -334,6 +337,8 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		true,
+		pdutil.NewClock4Test(),
+		30*time.Minute,
 	)
 
 	res := span.rangeLock.LockRange(context.Background(), rawSpan.StartKey, rawSpan.EndKey, 1, 1)
@@ -452,9 +457,10 @@ func TestRegionRetryScanPriority(t *testing.T) {
 				regionTaskQueue: priorityqueue.New[PriorityTask](),
 			}
 			client.pdClock = pdutil.NewClock4Test()
+			client.pdClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(time.Now()))
 			client.failureHandler = newRegionFailureHandler(client)
 			_, span := newScanPriorityTestSpan()
-			span.everCaughtUp.Store(tc.everCaughtUp)
+			span.priorityPolicy.everCaughtUp.Store(tc.everCaughtUp)
 			region := newScanPriorityTestRegion(span)
 			region.scanPriority = tc.priority
 
@@ -568,121 +574,6 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 	return dynstream.Metrics[int, SubscriptionID]{}
 }
 
-func TestInitialScanTaskPriority(t *testing.T) {
-	setInitialScanLowPriorityThresholdForTest(t, 30*time.Minute)
-
-	currentTime := time.Date(2026, time.June, 27, 12, 0, 0, 0, time.UTC)
-	pdClock := pdutil.NewClock4Test()
-	pdClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(currentTime))
-	client := &subscriptionClient{
-		pdClock: pdClock,
-	}
-
-	for _, tc := range []struct {
-		name     string
-		startTs  uint64
-		expected TaskType
-	}{
-		{
-			name:     "zero start ts",
-			startTs:  0,
-			expected: TaskLowPrior,
-		},
-		{
-			name:     "recent start ts",
-			startTs:  oracle.GoTimeToTS(currentTime.Add(-29 * time.Minute)),
-			expected: TaskHighPrior,
-		},
-		{
-			name:     "threshold boundary",
-			startTs:  oracle.GoTimeToTS(currentTime.Add(-30 * time.Minute)),
-			expected: TaskHighPrior,
-		},
-		{
-			name:     "old start ts",
-			startTs:  oracle.GoTimeToTS(currentTime.Add(-31 * time.Minute)),
-			expected: TaskLowPrior,
-		},
-		{
-			name:     "future start ts",
-			startTs:  oracle.GoTimeToTS(currentTime.Add(time.Minute)),
-			expected: TaskHighPrior,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.expected, client.initialScanTaskPriority(tc.startTs))
-		})
-	}
-}
-
-func TestSubscribeUsesInitialScanTaskPriority(t *testing.T) {
-	setInitialScanLowPriorityThresholdForTest(t, 30*time.Minute)
-
-	ctx := t.Context()
-
-	currentTime := time.Date(2026, time.June, 27, 12, 0, 0, 0, time.UTC)
-	pdClock := pdutil.NewClock4Test()
-	pdClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(currentTime))
-	sink := &regionEventSink{
-		ds: &mockDynamicStream{},
-	}
-	sink.cond = sync.NewCond(&sink.mu)
-	client := &subscriptionClient{
-		ctx:                    ctx,
-		eventSink:              sink,
-		rangeTaskCh:            make(chan rangeTask, 2),
-		pdClock:                pdClock,
-		resolveLockTaskCh:      make(chan resolveLockTask, 1),
-		resolveLockRateLimiter: newResolveLockRateLimiter(),
-	}
-	client.spanRegistry = newSpanRegistry(nil, pdClock)
-
-	span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
-	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
-	advanceResolvedTs := func(uint64) {}
-
-	client.Subscribe(
-		SubscriptionID(1),
-		span,
-		oracle.GoTimeToTS(currentTime.Add(-time.Minute)),
-		consumeKVEvents,
-		advanceResolvedTs,
-		0,
-		false,
-	)
-	client.Subscribe(
-		SubscriptionID(2),
-		span,
-		oracle.GoTimeToTS(currentTime.Add(-31*time.Minute)),
-		consumeKVEvents,
-		advanceResolvedTs,
-		0,
-		false,
-	)
-
-	require.Equal(t, TaskHighPrior, (<-client.rangeTaskCh).priority)
-	require.Equal(t, TaskLowPrior, (<-client.rangeTaskCh).priority)
-}
-
-func TestSubscribedSpanMarksCaughtUp(t *testing.T) {
-	setInitialScanLowPriorityThresholdForTest(t, 30*time.Minute)
-
-	currentTime := time.Date(2026, time.June, 27, 12, 0, 0, 0, time.UTC)
-	pdClock := pdutil.NewClock4Test()
-	pdClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(currentTime))
-	_, span := newScanPriorityTestSpan()
-
-	oldResolvedTs := oracle.GoTimeToTS(currentTime.Add(-31 * time.Minute))
-	span.maybeMarkCaughtUp(pdClock, oldResolvedTs)
-	require.False(t, span.everCaughtUp.Load())
-
-	span.maybeMarkCaughtUp(pdClock, oracle.GoTimeToTS(currentTime.Add(-time.Minute)))
-	require.True(t, span.everCaughtUp.Load())
-
-	span.maybeMarkCaughtUp(pdClock, oldResolvedTs)
-	require.True(t, span.everCaughtUp.Load())
-}
-
 func newScanPriorityTestSpan() (heartbeatpb.TableSpan, *subscribedSpan) {
 	rawSpan := heartbeatpb.TableSpan{
 		TableID:  1,
@@ -690,9 +581,10 @@ func newScanPriorityTestSpan() (heartbeatpb.TableSpan, *subscribedSpan) {
 		EndKey:   []byte("z"),
 	}
 	span := &subscribedSpan{
-		subID:     SubscriptionID(1),
-		span:      rawSpan,
-		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
+		subID:          SubscriptionID(1),
+		span:           rawSpan,
+		rangeLock:      regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
+		priorityPolicy: newTestScanPriorityPolicy(),
 	}
 	return rawSpan, span
 }
@@ -701,15 +593,8 @@ func newScanPriorityTestRegion(span *subscribedSpan) regionInfo {
 	return newRegionInfo(tikv.NewRegionVerID(1, 1, 1), span.span, nil, span, false)
 }
 
-func setInitialScanLowPriorityThresholdForTest(t *testing.T, threshold time.Duration) {
-	t.Helper()
-	oldConfig := config.GetGlobalServerConfig()
-	testConfig := oldConfig.Clone()
-	testConfig.Debug.Puller.OldStartTsScanLowPriorityThreshold = config.TomlDuration(threshold)
-	config.StoreGlobalServerConfig(testConfig)
-	t.Cleanup(func() {
-		config.StoreGlobalServerConfig(oldConfig)
-	})
+func newTestScanPriorityPolicy() scanPriorityPolicy {
+	return newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute)
 }
 
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
@@ -894,7 +779,7 @@ func TestGetResolvedTargetTs(t *testing.T) {
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
-	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdutil.NewClock4Test(), 30*time.Minute)
 	span.initialized.Store(true)
 
 	// Replicate the getResolvedTargetTs closure from runResolveLockChecker

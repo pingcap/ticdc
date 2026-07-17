@@ -20,7 +20,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"go.uber.org/zap"
 )
@@ -39,7 +38,7 @@ type regionEventSink struct {
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
 }
 
-func newRegionEventSink(failureHandler *regionFailureHandler, pdClock pdutil.Clock) *regionEventSink {
+func newRegionEventSink(failureHandler *regionFailureHandler) *regionEventSink {
 	sink := &regionEventSink{}
 	sink.cond = sync.NewCond(&sink.mu)
 
@@ -52,7 +51,7 @@ func newRegionEventSink(failureHandler *regionFailureHandler, pdClock pdutil.Clo
 	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
 		"log-puller",
-		&regionEventHandler{eventSink: sink, failureHandler: failureHandler, pdClock: pdClock},
+		&regionEventHandler{eventSink: sink, failureHandler: failureHandler},
 		option,
 	)
 	ds.Start()
