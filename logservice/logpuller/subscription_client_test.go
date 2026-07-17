@@ -66,8 +66,8 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	}
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	client.pdClock = pdutil.NewClock4Test()
-	client.spanRegistry = newSpanRegistry(nil, client.pdClock)
+	client.upstream = &upstreamHandle{pdClock: pdutil.NewClock4Test()}
+	client.spanRegistry = newSpanRegistry(nil, client.upstream.pdClock)
 	span := newSubscribedSpan(
 		client.ctx,
 		client.resolveLockRateLimiter,
@@ -329,7 +329,7 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
 	worker := &regionRequestWorker{controlQueue: newControlQueue()}
 	store := &requestedStore{storeAddr: "store-1", workers: []*regionRequestWorker{worker}}
-	client.regionScheduler = &regionRequestScheduler{client: client}
+	client.regionScheduler = &regionRequestScheduler{}
 	client.regionScheduler.stores.Store(store.storeAddr, store)
 
 	client.setTableStopped(span)
@@ -340,12 +340,12 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	require.True(t, req.filterLoop)
 }
 
-func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
+func TestRegionFailureHandlerQueuesCanceledError(t *testing.T) {
 	client := &subscriptionClient{
 		eventSink: &regionEventSink{ds: &mockDynamicStream{}},
 	}
 	client.spanRegistry = newSpanRegistry(nil, nil)
-	client.failureHandler = newRegionFailureHandler(client)
+	client.failureHandler = newRegionFailureHandler(nil, client.onTableDrained, nil, nil)
 	rawSpan := heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte("a"),
@@ -364,7 +364,7 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res2.Status)
 	require.False(t, span.rangeLock.Stop())
 
-	client.onRegionFail(newRegionErrorInfo(regionInfo{
+	client.failureHandler.Report(newRegionErrorInfo(regionInfo{
 		verID:            tikv.NewRegionVerID(1, 1, 1),
 		span:             heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("m")},
 		subscribedSpan:   span,
@@ -374,7 +374,7 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	require.Len(t, client.failureHandler.cache.cache, 1)
 	require.Len(t, span.rangeLock.IterAll(nil).UnLockedRanges, 1)
 
-	client.onRegionFail(newRegionErrorInfo(regionInfo{
+	client.failureHandler.Report(newRegionErrorInfo(regionInfo{
 		verID:            tikv.NewRegionVerID(2, 1, 1),
 		span:             heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("m"), EndKey: []byte("z")},
 		subscribedSpan:   span,
@@ -415,7 +415,7 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 	return dynstream.Metrics[int, SubscriptionID]{}
 }
 
-func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
+func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 	sink := &regionEventSink{
 		ctx: context.Background(),
 		ds:  &mockDynamicStream{},
@@ -423,7 +423,6 @@ func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 	sink.cond = sync.NewCond(&sink.mu)
 	client := &subscriptionClient{eventSink: sink}
 	client.regionScheduler = &regionRequestScheduler{
-		client:    client,
 		taskQueue: priorityqueue.New[*regionPriorityTask](),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
@@ -432,7 +431,7 @@ func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		client.pushRegionEventToDS(SubscriptionID(1), regionEvent{})
+		sink.Push(SubscriptionID(1), regionEvent{})
 		close(done)
 	}()
 
@@ -452,8 +451,7 @@ func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 }
 
 func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
-	client := &subscriptionClient{}
-	scheduler := &regionRequestScheduler{client: client}
+	scheduler := &regionRequestScheduler{}
 	admission := newRegionAdmissionController(1, 1)
 
 	worker := &regionRequestWorker{

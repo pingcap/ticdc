@@ -31,7 +31,9 @@ type requestedStore struct {
 }
 
 func newRequestedStore(
-	client *subscriptionClient,
+	upstream *upstreamHandle,
+	eventSink *regionEventSink,
+	failureHandler *regionFailureHandler,
 	storeAddr string,
 	workerCount int,
 	workerWindow int,
@@ -43,7 +45,7 @@ func newRequestedStore(
 	}
 	for i := 0; i < workerCount; i++ {
 		store.workers = append(store.workers, newRegionRequestWorker(
-			client, store, workerWindow, maxWindowMultiplier))
+			upstream, eventSink, failureHandler, store, workerWindow, maxWindowMultiplier))
 	}
 	return store
 }

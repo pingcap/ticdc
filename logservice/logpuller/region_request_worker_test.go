@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/utils/dynstream"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -84,7 +83,7 @@ func TestRegionRequestWorkerIgnoresDuplicateActiveRegion(t *testing.T) {
 	worker := &regionRequestWorker{
 		admission: admission,
 		store:     &requestedStore{storeAddr: "store-1"},
-		client:    &subscriptionClient{},
+		upstream:  &upstreamHandle{},
 		tracker:   newRegionTracker(),
 	}
 	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
@@ -174,13 +173,8 @@ func (m *mockRegionEventDynamicStream) GetMetrics() dynstream.Metrics[int, Subsc
 func newDispatchResolvedTsTestWorker(regionCount int) (*regionRequestWorker, *mockRegionEventDynamicStream, *cdcpb.ResolvedTs) {
 	ds := &mockRegionEventDynamicStream{}
 	worker := &regionRequestWorker{
-		client: &subscriptionClient{
-			metrics: sharedClientMetrics{
-				batchResolvedSize: prometheus.ObserverFunc(func(float64) {}),
-			},
-			eventSink: &regionEventSink{ds: ds},
-		},
-		tracker: newRegionTracker(),
+		eventSink: &regionEventSink{ds: ds},
+		tracker:   newRegionTracker(),
 	}
 	regions := make([]uint64, regionCount)
 	for i := 0; i < regionCount; i++ {
@@ -207,7 +201,7 @@ func dispatchResolvedTsEventLegacyForBenchmark(s *regionRequestWorker, resolvedT
 			return
 		}
 		states := resolvedStates
-		s.client.pushRegionEventToDS(subscriptionID, regionEvent{
+		s.eventSink.Push(subscriptionID, regionEvent{
 			resolvedTs: resolvedTsEvent.Ts,
 			states:     states,
 		})
@@ -227,7 +221,7 @@ func dispatchResolvedTsEventLegacyForBenchmark(s *regionRequestWorker, resolvedT
 func benchmarkDispatchResolvedTsEvent(b *testing.B, regionCount int, useLegacy bool) {
 	worker, _, event := newDispatchResolvedTsTestWorker(regionCount)
 	ds := &countingRegionEventDynamicStream{}
-	worker.client.eventSink.ds = ds
+	worker.eventSink.ds = ds
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -348,10 +342,8 @@ func TestFailStreamRegionsReleasesSentAdmission(t *testing.T) {
 	worker := &regionRequestWorker{
 		admission:    admission,
 		controlQueue: newControlQueue(),
-		client: &subscriptionClient{
-			eventSink: &regionEventSink{ds: ds},
-		},
-		tracker: newRegionTracker(),
+		eventSink:    &regionEventSink{ds: ds},
+		tracker:      newRegionTracker(),
 	}
 	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
 	req := admitRegionRequest(t, admission, region)
@@ -382,9 +374,8 @@ func TestFailPendingRegionsReschedulesWorkerBuffer(t *testing.T) {
 	require.Equal(t, regionlock.LockRangeStatusSuccess, lock2.Status)
 
 	admission := newRegionAdmissionController(1, 1)
-	client := &subscriptionClient{}
-	client.failureHandler = newRegionFailureHandler(client)
-	worker := &regionRequestWorker{client: client, admission: admission}
+	failureHandler := &regionFailureHandler{cache: newErrCache()}
+	worker := &regionRequestWorker{failureHandler: failureHandler, admission: admission}
 	regions := []regionInfo{
 		{
 			verID: tikv.NewRegionVerID(1, 1, 1),
@@ -408,7 +399,7 @@ func TestFailPendingRegionsReschedulesWorkerBuffer(t *testing.T) {
 	worker.failPendingRegions(&storeStreamErr{})
 
 	require.Zero(t, admission.stats().pending)
-	require.Len(t, client.failureHandler.cache.cache, 2)
+	require.Len(t, failureHandler.cache.cache, 2)
 }
 
 func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
@@ -417,7 +408,7 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 		admission:    admission,
 		controlQueue: newControlQueue(),
 		store:        &requestedStore{storeAddr: "store-1"},
-		client:       &subscriptionClient{},
+		upstream:     &upstreamHandle{},
 		tracker:      newRegionTracker(),
 	}
 
@@ -448,7 +439,7 @@ func TestProcessRegionSendTaskDoesNotSendRemovedRequest(t *testing.T) {
 		admission:    admission,
 		controlQueue: newControlQueue(),
 		store:        &requestedStore{storeAddr: "store-1"},
-		client:       &subscriptionClient{},
+		upstream:     &upstreamHandle{},
 		tracker:      newRegionTracker(),
 	}
 	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
@@ -491,7 +482,7 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 				admission:    admission,
 				controlQueue: newControlQueue(),
 				store:        &requestedStore{storeAddr: "store-1"},
-				client:       &subscriptionClient{},
+				upstream:     &upstreamHandle{},
 				tracker:      newRegionTracker(),
 			}
 			region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
@@ -524,10 +515,9 @@ func TestProcessRegionSendTaskHandlesDeregisterFromControlQueue(t *testing.T) {
 		admission:    newRegionAdmissionController(1, 1),
 		controlQueue: newControlQueue(),
 		store:        &requestedStore{storeAddr: "store-1"},
-		client: &subscriptionClient{
-			eventSink: &regionEventSink{ds: ds},
-		},
-		tracker: newRegionTracker(),
+		upstream:     &upstreamHandle{clusterID: 42},
+		eventSink:    &regionEventSink{ds: ds},
+		tracker:      newRegionTracker(),
 	}
 	state := &regionFeedState{worker: worker}
 	require.True(t, worker.tracker.Add(1, 1, state))
@@ -544,6 +534,7 @@ func TestProcessRegionSendTaskHandlesDeregisterFromControlQueue(t *testing.T) {
 	}()
 
 	req := <-sendCh
+	require.Equal(t, uint64(42), req.Header.ClusterId)
 	require.Equal(t, uint64(1), req.RequestId)
 	require.True(t, req.FilterLoop)
 	require.NotNil(t, req.GetDeregister())

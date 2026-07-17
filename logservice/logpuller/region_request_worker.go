@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/ticdc/utils/notifyqueue"
@@ -37,6 +38,8 @@ const storeReconnectBackoff = time.Second
 
 // To generate a workerID in `newRegionRequestWorker`.
 var workerIDGen atomic.Uint64
+
+var metricBatchResolvedSize = metrics.BatchResolvedEventSize.WithLabelValues("event-store")
 
 type deregisterRequest struct {
 	subID      SubscriptionID
@@ -89,8 +92,10 @@ func (q *controlQueue) ready() <-chan struct{} {
 type regionRequestWorker struct {
 	workerID uint64
 
-	client *subscriptionClient
-	store  *requestedStore
+	upstream       *upstreamHandle
+	eventSink      *regionEventSink
+	failureHandler *regionFailureHandler
+	store          *requestedStore
 
 	admission    *regionAdmissionController
 	controlQueue *controlQueue
@@ -98,19 +103,23 @@ type regionRequestWorker struct {
 }
 
 func newRegionRequestWorker(
-	client *subscriptionClient,
+	upstream *upstreamHandle,
+	eventSink *regionEventSink,
+	failureHandler *regionFailureHandler,
 	store *requestedStore,
 	currentWindow int,
 	maxWindowMultiplier int,
 ) *regionRequestWorker {
 	workerID := workerIDGen.Add(1)
 	return &regionRequestWorker{
-		workerID:     workerID,
-		client:       client,
-		store:        store,
-		admission:    newRegionAdmissionController(currentWindow, maxWindowMultiplier),
-		controlQueue: newControlQueue(),
-		tracker:      newRegionTracker(),
+		workerID:       workerID,
+		upstream:       upstream,
+		eventSink:      eventSink,
+		failureHandler: failureHandler,
+		store:          store,
+		admission:      newRegionAdmissionController(currentWindow, maxWindowMultiplier),
+		controlQueue:   newControlQueue(),
+		tracker:        newRegionTracker(),
 	}
 }
 
@@ -137,7 +146,7 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 		// firstReq still owns its lease only if the stream failed before Send.
 		s.failStreamRegions(regionErr)
 		if firstReq.abort() {
-			s.client.onRegionFail(newRegionErrorInfo(firstReq.regionInfo, regionErr))
+			s.failureHandler.Report(newRegionErrorInfo(firstReq.regionInfo, regionErr))
 		}
 		s.failPendingRegions(regionErr)
 
@@ -163,13 +172,13 @@ func (s *regionRequestWorker) failStreamRegions(err error) {
 // to the recovery pipeline, so they can be resolved and routed again.
 func (s *regionRequestWorker) failPendingRegions(err error) {
 	for _, task := range s.admission.drain() {
-		s.client.onRegionFail(newRegionErrorInfo(task.regionInfo, err))
+		s.failureHandler.Report(newRegionErrorInfo(task.regionInfo, err))
 	}
 }
 
 func (s *regionRequestWorker) notifyRegionError(state *regionFeedState, err error) {
 	state.markStopped(err)
-	s.client.eventSink.Push(
+	s.eventSink.Push(
 		SubscriptionID(state.requestID),
 		regionEvent{states: []*regionFeedState{state}},
 	)
@@ -189,7 +198,7 @@ func (s *regionRequestWorker) waitForRegionRequest(ctx context.Context) (*region
 }
 
 func (s *regionRequestWorker) checkStoreVersion(ctx context.Context) error {
-	err := version.CheckStoreVersion(ctx, s.client.pd)
+	err := version.CheckStoreVersion(ctx, s.upstream.pd)
 	if err == nil {
 		return nil
 	}
@@ -218,7 +227,7 @@ func (s *regionRequestWorker) runStream(ctx context.Context, firstReq *regionReq
 	}()
 
 	g, gctx := errgroup.WithContext(ctx)
-	conn, err := Connect(gctx, s.client.credential, s.store.storeAddr)
+	conn, err := Connect(gctx, s.upstream.credential, s.store.storeAddr)
 	if err != nil {
 		log.Warn("region request worker create grpc stream failed",
 			zap.Uint64("workerID", s.workerID),
@@ -318,7 +327,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.client.eventSink.Push(subscriptionID, regionEvent)
+			s.eventSink.Push(subscriptionID, regionEvent)
 			continue
 		}
 
@@ -340,7 +349,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.ResolvedTs) {
 	subscriptionID := SubscriptionID(resolvedTsEvent.RequestId)
 	metricsResolvedTsCount.Add(float64(len(resolvedTsEvent.Regions)))
-	s.client.metrics.batchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
+	metricBatchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
 	if resolvedTsEvent.Ts == 0 {
 		log.Warn("region request worker receives a resolved ts event with zero value, ignore it",
 			zap.Uint64("workerID", s.workerID),
@@ -356,7 +365,7 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 		if len(resolvedStates) == 0 {
 			return
 		}
-		s.client.eventSink.Push(subscriptionID, regionEvent{
+		s.eventSink.Push(subscriptionID, regionEvent{
 			resolvedTs: resolvedTsEvent.Ts,
 			states:     resolvedStates,
 		})
@@ -404,7 +413,7 @@ func (s *regionRequestWorker) sendDeregisterRequest(
 	req deregisterRequest,
 ) error {
 	changeDataReq := &cdcpb.ChangeDataRequest{
-		Header:    &cdcpb.Header{ClusterId: s.client.clusterID, TicdcVersion: version.ReleaseSemver()},
+		Header:    &cdcpb.Header{ClusterId: s.upstream.clusterID, TicdcVersion: version.ReleaseSemver()},
 		RequestId: uint64(req.subID),
 		Request: &cdcpb.ChangeDataRequest_Deregister_{
 			Deregister: &cdcpb.ChangeDataRequest_Deregister{},
@@ -447,7 +456,7 @@ func (s *regionRequestWorker) sendRegionRequest(conn *ConnAndClient, req *region
 
 	if region.subscribedSpan.stopped.Load() {
 		req.abort()
-		s.client.onRegionFail(newRegionErrorInfo(region, &storeStreamErr{}))
+		s.failureHandler.Report(newRegionErrorInfo(region, &storeStreamErr{}))
 		return nil
 	}
 
@@ -504,7 +513,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 
 func (s *regionRequestWorker) createRegionRequest(region regionInfo) *cdcpb.ChangeDataRequest {
 	return &cdcpb.ChangeDataRequest{
-		Header:       &cdcpb.Header{ClusterId: s.client.clusterID, TicdcVersion: version.ReleaseSemver()},
+		Header:       &cdcpb.Header{ClusterId: s.upstream.clusterID, TicdcVersion: version.ReleaseSemver()},
 		RegionId:     region.verID.GetID(),
 		RequestId:    uint64(region.subscribedSpan.subID),
 		RegionEpoch:  region.rpcCtx.Meta.RegionEpoch,
