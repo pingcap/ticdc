@@ -140,8 +140,18 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 		db.stopped[cfID] = cf
 	}
 
-	metrics.ChangefeedStatusGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
-	metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
+	keyspaceID := common.DefaultKeyspaceID
+	if cf.info != nil {
+		if info := cf.GetInfo(); info != nil {
+			keyspaceID = info.KeyspaceID
+		}
+	}
+	metrics.ChangefeedStatusGauge.DeleteLabelValues(
+		cfID.Keyspace(),
+		cfID.Name(),
+		metrics.FormatKeyspaceID(keyspaceID),
+	)
+	metrics.DeleteChangefeedCheckpointMetrics(cfID.Keyspace(), cfID.Name(), keyspaceID)
 
 	return nodeID
 }
