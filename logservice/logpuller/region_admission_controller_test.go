@@ -39,7 +39,6 @@ func createTestRegionInfo(subID SubscriptionID, regionID uint64) regionInfo {
 		span,
 		nil,
 		&subscribedSpan{subID: subID, startTs: 100, span: span},
-		false,
 	)
 }
 
@@ -56,7 +55,11 @@ func submitRegionForAdmission(
 	currentTs uint64,
 ) {
 	t.Helper()
+<<<<<<< HEAD
 	task := newRegionPriorityTask(region, region.verID.GetID())
+=======
+	task := newRegionPriorityTask(region, currentTs, region.verID.GetID())
+>>>>>>> 9903a1be7 (refactor)
 	require.True(t, controller.submit(task))
 }
 
@@ -191,7 +194,11 @@ func TestRegionAdmissionControllerClose(t *testing.T) {
 	controller := newRegionAdmissionController(1, 1)
 	controller.close()
 	region := prepareRegionForAdmission(createTestRegionInfo(1, 1), 1)
+<<<<<<< HEAD
 	require.False(t, controller.submit(newRegionPriorityTask(region, 1)))
+=======
+	require.False(t, controller.submit(newRegionPriorityTask(region, 1, 1)))
+>>>>>>> 9903a1be7 (refactor)
 
 	_, err := controller.pop(context.Background(), nil)
 	require.ErrorIs(t, err, context.Canceled)

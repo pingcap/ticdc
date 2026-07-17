@@ -116,6 +116,7 @@ func newRegionRequestScheduler(client *subscriptionClient) *regionRequestSchedul
 
 <<<<<<< HEAD
 func (s *regionRequestScheduler) Submit(region regionInfo) {
+<<<<<<< HEAD
 	if log.GetLevel() <= zapcore.DebugLevel {
 		log.Debug("cdc region scan task enqueued",
 			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
@@ -129,6 +130,10 @@ func (s *regionRequestScheduler) Submit(region regionInfo) {
 			zap.String("span", common.FormatTableSpan(&region.span)))
 	}
 	s.taskQueue.Push(newRegionPriorityTask(region, s.sequence.Add(1)))
+=======
+	s.taskQueue.Push(newRegionPriorityTask(
+		region, s.upstream.pdClock.CurrentTS(), s.sequence.Add(1)))
+>>>>>>> 9903a1be7 (refactor)
 }
 
 func (s *regionRequestScheduler) Run(ctx context.Context, workerGroup *errgroup.Group) error {
@@ -164,6 +169,9 @@ func (s *regionRequestScheduler) run(ctx context.Context, group *errgroup.Group)
 		}
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 9903a1be7 (refactor)
 		region, err := s.attachRPCContext(ctx, task.regionInfo)
 		if err != nil {
 			s.failureHandler.Report(newRegionErrorInfo(region, err))
