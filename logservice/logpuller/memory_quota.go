@@ -23,18 +23,44 @@ import (
 )
 
 const (
+	// defaultLogPullerMemoryQuota is the soft memory capacity shared by event
+	// accounting and initial-scan admission.
 	defaultLogPullerMemoryQuota uint64 = 1024 * 1024 * 1024
 
-	defaultPauseWarmingRatio  = 0.15
-	defaultResumeWarmingRatio = 0.05
-	defaultFreezeAllRatio     = 0.8
-	defaultResumeAllRatio     = 0.6
-	defaultHardLimitRatio     = 2.0
+	// Admission ratios compare max(accounted event memory, estimated scan
+	// memory) with the soft capacity.
 
-	defaultScanBaseSize     uint64 = 8 * 1024 * 1024
-	defaultScanLagUnit             = 10 * time.Minute
-	defaultScanLagWeight           = 0.22
-	defaultMaxScanLagFactor        = 16
+	// defaultPauseWarmingRatio pauses new high-lag scans when memory pressure
+	// reaches 15% of the soft capacity.
+	defaultPauseWarmingRatio = 0.15
+
+	// defaultResumeWarmingRatio resumes high-lag scans after memory pressure
+	// falls to 5% of the soft capacity.
+	defaultResumeWarmingRatio = 0.05
+
+	// defaultFreezeAllRatio pauses every new scan when memory pressure reaches
+	// 80% of the soft capacity.
+	defaultFreezeAllRatio = 0.8
+
+	// defaultResumeAllRatio allows new scans again after memory pressure falls
+	// to 60% of the soft capacity.
+	defaultResumeAllRatio = 0.6
+
+	// defaultHardLimitRatio blocks receiving more events when accounted event
+	// memory reaches twice the soft capacity.
+	defaultHardLimitRatio = 2.0
+
+	// defaultScanBaseSize is the minimum memory estimate for one admitted scan.
+	defaultScanBaseSize uint64 = 8 * 1024 * 1024
+
+	// defaultScanLagUnit is the lag unit used by the logarithmic scan estimate.
+	defaultScanLagUnit = 10 * time.Minute
+
+	// defaultScanLagWeight controls how quickly the scan estimate grows with lag.
+	defaultScanLagWeight = 0.22
+
+	// defaultMaxScanLagFactor caps one scan estimate at this multiple of the base.
+	defaultMaxScanLagFactor = 16
 )
 
 type admissionLevel uint8
@@ -50,15 +76,12 @@ type memoryQuotaLease struct {
 	release func()
 }
 
+func newMemoryQuotaLease(release func()) *memoryQuotaLease {
+	return &memoryQuotaLease{release: release}
+}
+
 func (l *memoryQuotaLease) Release() {
-	if l == nil {
-		return
-	}
-	l.once.Do(func() {
-		if l.release != nil {
-			l.release()
-		}
-	})
+	l.once.Do(l.release)
 }
 
 type subscriptionQuotaState struct {
@@ -123,6 +146,7 @@ func newMemoryQuotaController(capacity, scanBaseSize uint64) *memoryQuotaControl
 		subscriptions:      make(map[SubscriptionID]*subscriptionQuotaState),
 	}
 	c.cond = sync.NewCond(&c.mu)
+	c.onAvailable.Store(func() {})
 	return c
 }
 
@@ -131,9 +155,7 @@ func (c *memoryQuotaController) setOnAvailable(fn func()) {
 }
 
 func (c *memoryQuotaController) notifyAvailable() {
-	if fn, ok := c.onAvailable.Load().(func()); ok && fn != nil {
-		fn()
-	}
+	c.onAvailable.Load().(func())()
 }
 
 func (c *memoryQuotaController) wakeAll() {
@@ -162,19 +184,12 @@ func (c *memoryQuotaController) scanSnapshot() (
 }
 
 func (c *memoryQuotaController) addSubscription(span *subscribedSpan) {
-	if span == nil {
-		return
-	}
 	c.mu.Lock()
 	c.subscriptions[span.subID] = newSubscriptionQuotaState()
 	c.mu.Unlock()
 }
 
 func (c *memoryQuotaController) removeSubscription(span *subscribedSpan) {
-	if span == nil {
-		return
-	}
-
 	c.mu.Lock()
 	state, ok := c.subscriptions[span.subID]
 	if !ok {
@@ -210,17 +225,13 @@ func (c *memoryQuotaController) acquireScan(
 	currentTs uint64,
 ) (*memoryQuotaLease, bool) {
 	span := region.subscribedSpan
-	if span == nil {
-		return nil, true
-	}
-
 	c.mu.Lock()
 	state, ok := c.subscriptions[span.subID]
 	if !ok {
 		// The subscription has already been removed. Let the request continue to
 		// the worker, where the normal stopped-subscription path will discard it.
 		c.mu.Unlock()
-		return nil, true
+		return newMemoryQuotaLease(func() {}), true
 	}
 	c.refreshLevelLocked()
 	if c.level == admissionFreezeAllNewScans {
@@ -268,10 +279,6 @@ func (c *memoryQuotaController) trackEvent(
 	span *subscribedSpan,
 	bytes uint64,
 ) *memoryQuotaLease {
-	if span == nil || bytes == 0 {
-		return nil
-	}
-
 	c.mu.Lock()
 	if ctx.Err() != nil {
 		c.mu.Unlock()
@@ -347,7 +354,7 @@ func scanLagFactor(startTs, currentTs uint64) float64 {
 
 func isWarmingScan(region regionInfo, currentTs uint64) bool {
 	span := region.subscribedSpan
-	if span == nil || span.initialized.Load() {
+	if span.initialized.Load() {
 		return false
 	}
 	return regionScanLag(currentTs, region.resolvedTs()) >= lowLagRegionThreshold
