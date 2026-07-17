@@ -38,8 +38,7 @@ type regionPriorityTask struct {
 	priority   regionTaskPriority
 }
 
-// NewRegionPriorityTask creates a new priority task for region
-func NewRegionPriorityTask(regionInfo regionInfo, currentTs, sequence uint64) *regionPriorityTask {
+func newRegionPriorityTask(regionInfo regionInfo, currentTs, sequence uint64) *regionPriorityTask {
 	task := &regionPriorityTask{
 		sequence:  sequence,
 		heapIndex: 0, // 0 means not in heap
@@ -59,11 +58,6 @@ func (pt *regionPriorityTask) updateRegion(regionInfo regionInfo, currentTs uint
 	}
 	pt.regionInfo = regionInfo
 	pt.priority = priority
-}
-
-// GetRegionInfo returns the underlying regionInfo
-func (pt *regionPriorityTask) GetRegionInfo() regionInfo {
-	return pt.regionInfo
 }
 
 func (pt *regionPriorityTask) canUseMaxWindow() bool {

@@ -105,16 +105,22 @@ func (t *regionTracker) TakeSubscription(subscriptionID SubscriptionID) []*regio
 	return slices.Collect(maps.Values(states))
 }
 
-// Drain removes and returns all tracked states grouped by subscription.
-func (t *regionTracker) Drain() map[SubscriptionID][]*regionFeedState {
+// Drain removes and returns all tracked states.
+func (t *regionTracker) Drain() []*regionFeedState {
 	t.mu.Lock()
 	statesBySubscription := t.statesBySubscription
 	t.statesBySubscription = make(map[SubscriptionID]regionStatesByID)
 	t.mu.Unlock()
 
-	drainedStates := make(map[SubscriptionID][]*regionFeedState, len(statesBySubscription))
-	for subID, states := range statesBySubscription {
-		drainedStates[subID] = slices.Collect(maps.Values(states))
+	stateCount := 0
+	for _, states := range statesBySubscription {
+		stateCount += len(states)
+	}
+	drainedStates := make([]*regionFeedState, 0, stateCount)
+	for _, states := range statesBySubscription {
+		for _, state := range states {
+			drainedStates = append(drainedStates, state)
+		}
 	}
 	return drainedStates
 }

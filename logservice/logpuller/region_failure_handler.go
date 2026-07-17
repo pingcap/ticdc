@@ -41,15 +41,35 @@ var (
 
 // regionFailureHandler handles failed regions and owns retry and reschedule decisions.
 type regionFailureHandler struct {
-	cache  *errCache
-	client *subscriptionClient
+	cache       *errCache
+	regionCache *tikv.RegionCache
+
+	onTableDrained        func(*subscribedSpan)
+	scheduleRegionRequest func(context.Context, regionInfo)
+	scheduleRangeRequest  func(context.Context, rangeTask)
 }
 
-func newRegionFailureHandler(client *subscriptionClient) *regionFailureHandler {
+func newRegionFailureHandler(
+	regionCache *tikv.RegionCache,
+	onTableDrained func(*subscribedSpan),
+	scheduleRegionRequest func(context.Context, regionInfo),
+	scheduleRangeRequest func(context.Context, rangeTask),
+) *regionFailureHandler {
 	return &regionFailureHandler{
-		cache:  newErrCache(),
-		client: client,
+		cache:                 newErrCache(),
+		regionCache:           regionCache,
+		onTableDrained:        onTableDrained,
+		scheduleRegionRequest: scheduleRegionRequest,
+		scheduleRangeRequest:  scheduleRangeRequest,
 	}
+}
+
+func (r *regionFailureHandler) retryRange(ctx context.Context, errInfo regionErrorInfo) {
+	r.scheduleRangeRequest(ctx, rangeTask{
+		span:           errInfo.span,
+		subscribedSpan: errInfo.subscribedSpan,
+		wasInitialized: errInfo.wasInitialized,
+	})
 }
 
 // Report admits a region failure into the recovery pipeline. It releases the
@@ -59,7 +79,7 @@ func (r *regionFailureHandler) Report(errInfo regionErrorInfo) {
 	if errInfo.subscribedSpan.rangeLock.UnlockRange(
 		errInfo.span.StartKey, errInfo.span.EndKey,
 		errInfo.verID.GetID(), errInfo.verID.GetVer(), errInfo.resolvedTs()) {
-		r.client.onTableDrained(errInfo.subscribedSpan)
+		r.onTableDrained(errInfo.subscribedSpan)
 		return
 	}
 	r.cache.add(errInfo)
@@ -72,7 +92,6 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 		for {
 			select {
 			case <-ctx.Done():
-				log.Info("subscription client handle errors and exit")
 				return ctx.Err()
 			case errInfo := <-r.cache.errCh:
 				if err := r.handleError(ctx, errInfo); err != nil {
@@ -100,28 +119,28 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		innerErr := eerr.err
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
 			metricFeedNotLeaderCounter.Inc()
-			r.client.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
-			r.client.scheduleRegionRequest(ctx, errInfo.regionInfo)
+			r.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
+			r.scheduleRegionRequest(ctx, errInfo.regionInfo)
 			return nil
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
-			r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized)
+			r.retryRange(ctx, errInfo)
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
-			r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized)
+			r.retryRange(ctx, errInfo)
 			return nil
 		}
 		if innerErr.GetCongested() != nil {
 			metricKvCongestedCounter.Inc()
-			r.client.scheduleRegionRequest(ctx, errInfo.regionInfo)
+			r.scheduleRegionRequest(ctx, errInfo.regionInfo)
 			return nil
 		}
 		if innerErr.GetServerIsBusy() != nil {
 			metricKvIsBusyCounter.Inc()
-			r.client.scheduleRegionRequest(ctx, errInfo.regionInfo)
+			r.scheduleRegionRequest(ctx, errInfo.regionInfo)
 			return nil
 		}
 		if duplicated := innerErr.GetDuplicateRequest(); duplicated != nil {
@@ -140,31 +159,31 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 			zap.Stringer("error", innerErr))
 		metricFeedUnknownErrorCounter.Inc()
-		r.client.scheduleRegionRequest(ctx, errInfo.regionInfo)
+		r.scheduleRegionRequest(ctx, errInfo.regionInfo)
 		return nil
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
-		r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized)
+		r.retryRange(ctx, errInfo)
 		return nil
 	case *getStoreErr:
 		metricGetStoreErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		// cannot get the store the region belongs to, so we need to reload the region.
-		r.client.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
-		r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized)
+		r.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
+		r.retryRange(ctx, errInfo)
 		return nil
 	case *storeStreamErr:
 		metricStoreSendRequestErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-		r.client.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
-		r.client.scheduleRegionRequest(ctx, errInfo.regionInfo)
+		r.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
+		r.scheduleRegionRequest(ctx, errInfo.regionInfo)
 		return nil
 	case *requestCancelledErr:
 		// the corresponding subscription has been unsubscribed, just ignore.
 		return nil
 	default:
 		// TODO(qupeng): for some errors it's better to just deregister the region from TiKVs.
-		log.Warn("subscription client meets an internal error, fail the changefeed",
+		log.Warn("region failure cannot be recovered, fail the changefeed",
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 			zap.Error(err))
 		return err
@@ -223,7 +242,6 @@ func (e *errCache) dispatchBatch(ctx context.Context, limit int) (int, error) {
 	for _, errInfo := range batch {
 		select {
 		case <-ctx.Done():
-			log.Info("subscription client dispatch err cache done")
 			return 0, ctx.Err()
 		case e.errCh <- errInfo:
 		}

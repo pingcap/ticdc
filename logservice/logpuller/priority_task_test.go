@@ -48,15 +48,15 @@ func TestRegionPriorityTaskQueueOrder(t *testing.T) {
 	currentTime := time.Now()
 	currentTs := oracle.GoTimeToTS(currentTime)
 
-	normalTask := NewRegionPriorityTask(
+	normalTask := newRegionPriorityTask(
 		newPriorityTestRegion(1, oracle.GoTimeToTS(currentTime.Add(-time.Hour)), false),
 		currentTs, 3,
 	)
-	lowLagTask := NewRegionPriorityTask(
+	lowLagTask := newRegionPriorityTask(
 		newPriorityTestRegion(2, oracle.GoTimeToTS(currentTime.Add(-10*time.Minute)), false),
 		currentTs, 2,
 	)
-	initializedTask := NewRegionPriorityTask(
+	initializedTask := newRegionPriorityTask(
 		newPriorityTestRegion(3, oracle.GoTimeToTS(currentTime.Add(-time.Hour)), true),
 		currentTs, 1,
 	)
@@ -78,8 +78,8 @@ func TestRegionPriorityTaskFIFOWithinPriority(t *testing.T) {
 	currentTs := oracle.GoTimeToTS(currentTime)
 	checkpointTs := oracle.GoTimeToTS(currentTime.Add(-time.Hour))
 
-	first := NewRegionPriorityTask(newPriorityTestRegion(1, checkpointTs, false), currentTs, 1)
-	second := NewRegionPriorityTask(newPriorityTestRegion(2, checkpointTs, false), currentTs, 2)
+	first := newRegionPriorityTask(newPriorityTestRegion(1, checkpointTs, false), currentTs, 1)
+	second := newRegionPriorityTask(newPriorityTestRegion(2, checkpointTs, false), currentTs, 2)
 
 	require.True(t, queue.Push(second))
 	require.True(t, queue.Push(first))
@@ -96,17 +96,17 @@ func TestRegionPriorityTaskLowLagBoundary(t *testing.T) {
 	currentTime := time.Now()
 	currentTs := oracle.GoTimeToTS(currentTime)
 
-	belowThreshold := NewRegionPriorityTask(newPriorityTestRegion(
+	belowThreshold := newRegionPriorityTask(newPriorityTestRegion(
 		1,
 		oracle.GoTimeToTS(currentTime.Add(-lowLagRegionThreshold+time.Millisecond)),
 		false,
 	), currentTs, 1)
-	atThreshold := NewRegionPriorityTask(newPriorityTestRegion(
+	atThreshold := newRegionPriorityTask(newPriorityTestRegion(
 		2,
 		oracle.GoTimeToTS(currentTime.Add(-lowLagRegionThreshold)),
 		false,
 	), currentTs, 2)
-	futureCheckpoint := NewRegionPriorityTask(newPriorityTestRegion(
+	futureCheckpoint := newRegionPriorityTask(newPriorityTestRegion(
 		3,
 		oracle.GoTimeToTS(currentTime.Add(time.Second)),
 		false,
@@ -121,7 +121,7 @@ func TestRegionPriorityTaskRefreshesPriorityBetweenStages(t *testing.T) {
 	checkpointTime := time.Now()
 	checkpointTs := oracle.GoTimeToTS(checkpointTime)
 	region := newPriorityTestRegion(1, checkpointTs, false)
-	task := NewRegionPriorityTask(region, oracle.GoTimeToTS(checkpointTime.Add(time.Minute)), 1)
+	task := newRegionPriorityTask(region, oracle.GoTimeToTS(checkpointTime.Add(time.Minute)), 1)
 	require.Equal(t, lowLagRegionPriority, task.priority)
 
 	task.updateRegion(region, oracle.GoTimeToTS(checkpointTime.Add(time.Hour)))
