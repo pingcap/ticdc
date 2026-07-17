@@ -85,7 +85,6 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 		for {
 			select {
 			case <-ctx.Done():
-				log.Info("subscription client handle errors and exit")
 				return ctx.Err()
 			case errInfo := <-r.cache.errCh:
 				if err := r.handleError(ctx, errInfo); err != nil {
@@ -177,7 +176,7 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		return nil
 	default:
 		// TODO(qupeng): for some errors it's better to just deregister the region from TiKVs.
-		log.Warn("subscription client meets an internal error, fail the changefeed",
+		log.Warn("region failure cannot be recovered, fail the changefeed",
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 			zap.Error(err))
 		return err
@@ -236,7 +235,6 @@ func (e *errCache) dispatchBatch(ctx context.Context, limit int) (int, error) {
 	for _, errInfo := range batch {
 		select {
 		case <-ctx.Done():
-			log.Info("subscription client dispatch err cache done")
 			return 0, ctx.Err()
 		case e.errCh <- errInfo:
 		}

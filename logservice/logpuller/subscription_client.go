@@ -84,14 +84,8 @@ type rangeTask struct {
 	wasInitialized bool
 }
 
-type SubscriptionClientConfig struct {
-	// The number of region request workers to send region task for every tikv store
-	RegionRequestWorkerPerStore uint
-}
-
 // upstreamHandle contains the stable TiKV and PD dependencies shared by the
-// region request pipeline. Runtime components keep their own event and error
-// dependencies instead of using this as a general service container.
+// region request pipeline.
 type upstreamHandle struct {
 	pd          pd.Client
 	regionCache *tikv.RegionCache
@@ -129,7 +123,6 @@ type SubscriptionClient interface {
 type subscriptionClient struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
-	config   *SubscriptionClientConfig
 	upstream *upstreamHandle
 
 	lockResolver txnutil.LockResolver
@@ -154,13 +147,11 @@ type subscriptionClient struct {
 
 // NewSubscriptionClient creates a client.
 func NewSubscriptionClient(
-	config *SubscriptionClientConfig,
 	pd pd.Client,
 	lockResolver txnutil.LockResolver,
 	credential *security.Credential,
 ) SubscriptionClient {
 	subClient := &subscriptionClient{
-		config: config,
 		upstream: &upstreamHandle{
 			pd:          pd,
 			regionCache: appcontext.GetService[*tikv.RegionCache](appcontext.RegionCache),
@@ -183,7 +174,6 @@ func NewSubscriptionClient(
 	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient.failureHandler)
 	subClient.spanRegistry = newSpanRegistry(subClient.upstream.pd, subClient.upstream.pdClock)
 	subClient.regionScheduler = newRegionRequestScheduler(
-		subClient.config,
 		subClient.upstream,
 		subClient.eventSink,
 		subClient.failureHandler,
@@ -208,9 +198,9 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			pendingRegionReqCount := s.regionScheduler.inflightCount()
+			inflightRegionRequestCount := s.regionScheduler.inflightCount()
 
-			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(float64(pendingRegionReqCount))
+			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("inflight").Set(float64(inflightRegionRequestCount))
 			s.eventSink.UpdateMetrics()
 			s.spanRegistry.UpdateMetrics()
 		}
