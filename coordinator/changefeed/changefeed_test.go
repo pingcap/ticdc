@@ -243,7 +243,14 @@ func TestChangefeedGetStatusForResume(t *testing.T) {
 
 func TestChangefeed_GetKeyspaceID(t *testing.T) {
 	var c1 *Changefeed
-	require.Equal(t, uint32(0), c1.GetKeyspaceID())
+	require.Equal(t, common.DefaultKeyspaceID, c1.GetKeyspaceID())
+
+	c2 := &Changefeed{}
+	require.Equal(t, common.DefaultKeyspaceID, c2.GetKeyspaceID())
+
+	var nilInfo *config.ChangeFeedInfo
+	c3 := &Changefeed{info: atomic.NewPointer(nilInfo)}
+	require.Equal(t, common.DefaultKeyspaceID, c3.GetKeyspaceID())
 
 	cfID := common.ChangeFeedID{
 		Id: common.GID{
@@ -260,9 +267,9 @@ func TestChangefeed_GetKeyspaceID(t *testing.T) {
 		ChangefeedID: cfID,
 		KeyspaceID:   1,
 	}
-	c2 := &Changefeed{
+	c4 := &Changefeed{
 		ID:   cfID,
 		info: atomic.NewPointer(info),
 	}
-	require.Equal(t, uint32(1), c2.GetKeyspaceID())
+	require.Equal(t, uint32(1), c4.GetKeyspaceID())
 }

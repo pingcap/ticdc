@@ -74,7 +74,7 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 }
 
 func New(
-	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, keyspaceID uint32,
 ) (*sink, error) {
 	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
@@ -86,7 +86,7 @@ func New(
 		}
 	}()
 
-	statistics := metrics.NewStatistics(changefeedID, "sink")
+	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "sink")
 	asyncProducer, err := comp.factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, err

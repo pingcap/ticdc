@@ -127,10 +127,14 @@ func (c *Changefeed) GetID() common.ChangeFeedID {
 }
 
 func (c *Changefeed) GetKeyspaceID() uint32 {
-	if c == nil {
-		return 0
+	if c == nil || c.info == nil {
+		return common.DefaultKeyspaceID
 	}
-	return c.GetInfo().KeyspaceID
+	info := c.GetInfo()
+	if info == nil {
+		return common.DefaultKeyspaceID
+	}
+	return info.KeyspaceID
 }
 
 func (c *Changefeed) GetGroupID() replica.GroupID {

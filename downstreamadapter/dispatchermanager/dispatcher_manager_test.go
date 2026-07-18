@@ -366,6 +366,7 @@ func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t
 		false,
 		false,
 		time.Minute,
+		common.DefaultKeyspaceID,
 	)
 	manager := &DispatcherManager{
 		changefeedID: changefeedID,
