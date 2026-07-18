@@ -140,12 +140,7 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 		db.stopped[cfID] = cf
 	}
 
-	keyspaceID := common.DefaultKeyspaceID
-	if cf.info != nil {
-		if info := cf.GetInfo(); info != nil {
-			keyspaceID = info.KeyspaceID
-		}
-	}
+	keyspaceID := cf.GetKeyspaceID()
 	metrics.ChangefeedStatusGauge.DeleteLabelValues(
 		cfID.Keyspace(),
 		cfID.Name(),
