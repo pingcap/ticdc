@@ -185,7 +185,6 @@ func NewSubscriptionClient(
 		subClient.failureHandler,
 		subClient.memoryQuota,
 	)
-	subClient.memoryQuota.setOnAvailable(subClient.regionScheduler.notifyAvailable)
 	return subClient
 }
 
@@ -245,7 +244,6 @@ func (s *subscriptionClient) Subscribe(
 		bdrMode,
 	)
 	s.spanRegistry.Add(rt)
-	s.memoryQuota.addSubscription(rt)
 	s.eventSink.AddPath(rt)
 
 	select {
@@ -283,7 +281,6 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 	// actual startup order.
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.regionScheduler.Run(ctx, g) })
-	g.Go(func() error { return s.eventSink.Run(ctx) })
 	g.Go(func() error { return s.failureHandler.Run(ctx) })
 	g.Go(func() error { return s.spanRegistry.Run(ctx) })
 	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
@@ -309,6 +306,8 @@ func (s *subscriptionClient) setTableStopped(rt *subscribedSpan) {
 	// Set stopped to true so we can stop handling region events from the table,
 	// then notify every existing worker to deregister the subscription.
 	if rt.stopped.CompareAndSwap(false, true) {
+		// Wake event receivers and scan admission so they can observe stopped.
+		s.memoryQuota.wakeAll()
 		s.regionScheduler.BroadcastDeregister(rt.subID, rt.filterLoop)
 		if rt.rangeLock.Stop() {
 			s.onTableDrained(rt)
@@ -326,7 +325,6 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 			zap.Uint64("subscriptionID", uint64(rt.subID)),
 			zap.Error(err))
 	}
-	s.memoryQuota.removeSubscription(rt)
 	s.spanRegistry.Remove(rt.subID)
 }
 

@@ -185,13 +185,6 @@ func (s *regionRequestScheduler) UpdateMetrics() {
 		Set(float64(s.inflightCount()))
 }
 
-func (s *regionRequestScheduler) notifyAvailable() {
-	s.stores.Range(func(_, value any) bool {
-		value.(*regionRequestStore).notifyAvailable()
-		return true
-	})
-}
-
 func (s *regionRequestScheduler) Close() {
 	s.taskQueue.Close()
 }

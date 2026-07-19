@@ -107,9 +107,8 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			},
 		}
 		regionEvent := regionEvent{
-			states:      []*regionFeedState{state},
-			entries:     events,
-			memoryQuota: newMemoryQuotaLease(func() {}),
+			states:  []*regionFeedState{state},
+			entries: events,
 		}
 		ds.Push(subID, regionEvent)
 	}
@@ -128,9 +127,8 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			},
 		}
 		regionEvent := regionEvent{
-			states:      []*regionFeedState{state},
-			entries:     events,
-			memoryQuota: newMemoryQuotaLease(func() {}),
+			states:  []*regionFeedState{state},
+			entries: events,
 		}
 		ds.Push(subID, regionEvent)
 	}
@@ -159,9 +157,8 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			},
 		}
 		regionEvent := regionEvent{
-			states:      []*regionFeedState{state},
-			entries:     events,
-			memoryQuota: newMemoryQuotaLease(func() {}),
+			states:  []*regionFeedState{state},
+			entries: events,
 		}
 		ds.Push(subID, regionEvent)
 	}
@@ -187,9 +184,8 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			},
 		}
 		regionEvent := regionEvent{
-			states:      []*regionFeedState{state},
-			entries:     events,
-			memoryQuota: newMemoryQuotaLease(func() {}),
+			states:  []*regionFeedState{state},
+			entries: events,
 		}
 		ds.Push(subID, regionEvent)
 	}
@@ -384,7 +380,6 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 func TestHandleEntriesReleasesMemoryAfterDownstreamCallback(t *testing.T) {
 	quota := newMemoryQuotaController(1024, 8)
 	span := newTestQuotaSpan(1)
-	quota.addSubscription(span)
 	callbackCh := make(chan func(), 1)
 	span.consumeKVEvents = func(_ []common.RawKVEntry, callback func()) bool {
 		callbackCh <- callback
@@ -402,8 +397,7 @@ func TestHandleEntriesReleasesMemoryAfterDownstreamCallback(t *testing.T) {
 			lockedRangeState: lockedState,
 		},
 	}
-	lease := quota.trackEvent(context.Background(), span, 10)
-	require.NotNil(t, lease)
+	require.True(t, quota.acquireEvent(context.Background(), span, 10))
 	handler := &regionEventHandler{eventSink: &regionEventSink{
 		ds:          newMockRegionEventSinkStream(),
 		memoryQuota: quota,
@@ -411,7 +405,7 @@ func TestHandleEntriesReleasesMemoryAfterDownstreamCallback(t *testing.T) {
 
 	await := handler.Handle(span, regionEvent{
 		states:      []*regionFeedState{state},
-		memoryQuota: lease,
+		memoryBytes: 10,
 		entries: &cdcpb.Event_Entries_{Entries: &cdcpb.Event_Entries{
 			Entries: []*cdcpb.Event_Row{{
 				Type:     cdcpb.Event_COMMITTED,
@@ -441,13 +435,9 @@ func TestTryMarkSpanInitializedByResolvedTs(t *testing.T) {
 
 func TestSpanInitializationNotifiesMemoryAdmission(t *testing.T) {
 	quota := newMemoryQuotaController(1024, 8)
-	notified := make(chan struct{}, 1)
-	quota.setOnAvailable(func() {
-		select {
-		case notified <- struct{}{}:
-		default:
-		}
-	})
+	quota.scanMu.Lock()
+	notified := quota.scanReady
+	quota.scanMu.Unlock()
 
 	const startTs = 100
 	rangeLock := regionlock.NewRangeLock(1, []byte("a"), []byte("z"), startTs)
@@ -463,7 +453,6 @@ func TestSpanInitializationNotifiesMemoryAdmission(t *testing.T) {
 		advanceResolvedTs: func(uint64) {},
 	}
 	span.resolvedTs.Store(startTs)
-	quota.addSubscription(span)
 	state := newRegionFeedState(regionInfo{
 		verID:            tikv.NewRegionVerID(1, 1, 1),
 		subscribedSpan:   span,

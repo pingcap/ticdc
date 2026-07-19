@@ -54,21 +54,15 @@ type regionEvent struct {
 	// Resolved-ts events: `resolvedTs` is set and `states` contains all related regions.
 	states []*regionFeedState
 
-	entries     *cdcpb.Event_Entries_
-	resolvedTs  uint64
-	memoryQuota *memoryQuotaLease
+	entries    *cdcpb.Event_Entries_
+	resolvedTs uint64
+	// memoryBytes is released when this event is dropped or after downstream
+	// finishes consuming the entries derived from it.
+	memoryBytes uint64
 }
 
-func (event *regionEvent) needMemoryQuota() bool {
+func (event *regionEvent) needsMemoryAccounting() bool {
 	return event.entries != nil
-}
-
-func (event *regionEvent) releaseMemoryQuota() {
-	if event.memoryQuota == nil {
-		return
-	}
-	event.memoryQuota.Release()
-	event.memoryQuota = nil
 }
 
 func (event *regionEvent) getSize() int {
@@ -133,11 +127,9 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 
 	newResolvedTs := uint64(0)
 	wasInitialized := span.initialized.Load()
-	quotaLeases := make([]*memoryQuotaLease, 0, len(events))
+	memoryBytes := uint64(0)
 	for _, event := range events {
-		if event.needMemoryQuota() {
-			quotaLeases = append(quotaLeases, event.memoryQuota)
-		}
+		memoryBytes += event.memoryBytes
 		if len(event.states) == 1 && event.states[0].isStale() {
 			hasError = true
 			h.handleRegionError(event.states[0])
@@ -159,7 +151,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		}
 	}
 	if !wasInitialized && span.initialized.Load() {
-		h.eventSink.memoryQuota.markSubscriptionInitialized()
+		h.eventSink.memoryQuota.notifyScanAdmission()
 	}
 	tryAdvanceResolvedTs := func() {
 		if newResolvedTs != 0 {
@@ -167,9 +159,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		}
 	}
 	releaseMemoryQuota := func() {
-		for _, lease := range quotaLeases {
-			lease.Release()
-		}
+		h.eventSink.memoryQuota.releaseEvent(memoryBytes)
 	}
 	if len(span.kvEventsCache) > 0 {
 		metricsEventCount.Add(float64(len(span.kvEventsCache)))
@@ -253,7 +243,7 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 }
 
 func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
-	event.releaseMemoryQuota()
+	h.eventSink.memoryQuota.releaseEvent(event.memoryBytes)
 	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
 	state := event.mustFirstState()
 	fields := []zap.Field{
