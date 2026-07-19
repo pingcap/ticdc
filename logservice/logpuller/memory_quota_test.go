@@ -52,95 +52,80 @@ func TestMemoryQuotaAdmissionLevels(t *testing.T) {
 	initializedSpan.initialized.Store(true)
 	warmingTs := setTestQuotaSpanLag(warmingSpan, lowLagRegionThreshold+time.Minute)
 	initializedTs := setTestQuotaSpanLag(initializedSpan, lowLagRegionThreshold+time.Minute)
-	quota.addSubscription(warmingSpan)
-	quota.addSubscription(initializedSpan)
 
-	lowLease := quota.trackEvent(context.Background(), initializedSpan, 5)
-	pauseLease := quota.trackEvent(context.Background(), initializedSpan, 10)
-	require.NotNil(t, lowLease)
-	require.NotNil(t, pauseLease)
-	scanLease, admitted := quota.acquireScan(newTestQuotaRegion(warmingSpan), warmingTs)
+	require.True(t, quota.acquireEvent(context.Background(), initializedSpan, 5))
+	require.True(t, quota.acquireEvent(context.Background(), initializedSpan, 10))
+	_, _, admitted := quota.acquireScan(newTestQuotaRegion(warmingSpan), warmingTs)
 	require.False(t, admitted)
-	require.Nil(t, scanLease)
 
-	scanLease, admitted = quota.acquireScan(
+	scanBytes, _, admitted := quota.acquireScan(
 		newTestQuotaRegion(initializedSpan), initializedTs)
 	require.True(t, admitted)
-	scanLease.Release()
+	quota.releaseScan(scanBytes)
 
-	middleLease := quota.trackEvent(context.Background(), initializedSpan, 45)
-	freezeLease := quota.trackEvent(context.Background(), initializedSpan, 20)
-	require.NotNil(t, middleLease)
-	require.NotNil(t, freezeLease)
-	scanLease, admitted = quota.acquireScan(
+	require.True(t, quota.acquireEvent(context.Background(), initializedSpan, 45))
+	require.True(t, quota.acquireEvent(context.Background(), initializedSpan, 20))
+	_, _, admitted = quota.acquireScan(
 		newTestQuotaRegion(initializedSpan), initializedTs)
 	require.False(t, admitted)
-	require.Nil(t, scanLease)
 
-	freezeLease.Release()
+	quota.releaseEvent(20)
 	_, _, level := quota.snapshot()
 	require.Equal(t, admissionPauseWarming, level)
-	middleLease.Release()
+	quota.releaseEvent(45)
 	_, _, level = quota.snapshot()
 	require.Equal(t, admissionPauseWarming, level)
-	pauseLease.Release()
+	quota.releaseEvent(10)
 	_, _, level = quota.snapshot()
 	require.Equal(t, admissionNormal, level)
-	lowLease.Release()
+	quota.releaseEvent(5)
 }
 
-func TestMemoryQuotaRemoveSubscriptionReleasesOwnedMemory(t *testing.T) {
+func TestMemoryQuotaSpanStopKeepsOwnedMemoryUntilRelease(t *testing.T) {
 	quota := newMemoryQuotaController(100, 10)
 	span1 := newTestQuotaSpan(1)
 	span2 := newTestQuotaSpan(2)
-	quota.addSubscription(span1)
-	quota.addSubscription(span2)
 
-	lease1 := quota.trackEvent(context.Background(), span1, 30)
-	lease2 := quota.trackEvent(context.Background(), span2, 40)
-	require.NotNil(t, lease1)
-	require.NotNil(t, lease2)
-	scanLease, admitted := quota.acquireScan(newTestQuotaRegion(span1), span1.resolvedTs.Load())
+	require.True(t, quota.acquireEvent(context.Background(), span1, 30))
+	require.True(t, quota.acquireEvent(context.Background(), span2, 40))
+	scanBytes, _, admitted := quota.acquireScan(
+		newTestQuotaRegion(span1), span1.resolvedTs.Load())
 	require.True(t, admitted)
-	require.NotNil(t, scanLease)
+	require.NotZero(t, scanBytes)
 
-	quota.removeSubscription(span1)
+	span1.stopped.Store(true)
+	quota.wakeAll()
 	used, _, _ := quota.snapshot()
-	require.Equal(t, uint64(40), used)
-	scanUsed, _, _, _, _ := quota.scanSnapshot()
-	require.Zero(t, scanUsed)
-	require.NotContains(t, quota.subscriptions, span1.subID)
-	quota.removeSubscription(span1)
+	require.Equal(t, uint64(70), used)
+	scanUsed, _, _ := quota.scanSnapshot()
+	require.Equal(t, scanBytes, scanUsed)
 
-	lease1.Release()
-	scanLease.Release()
+	quota.releaseEvent(30)
+	quota.releaseScan(scanBytes)
 	used, _, _ = quota.snapshot()
 	require.Equal(t, uint64(40), used)
 
-	// Late region tasks are allowed to reach the stopped-subscription cleanup
-	// path without recreating quota state.
-	scanLease, admitted = quota.acquireScan(newTestQuotaRegion(span1), span1.resolvedTs.Load())
+	// Late tasks reach the stopped-subscription cleanup path without consuming
+	// scan quota.
+	scanBytes, _, admitted = quota.acquireScan(
+		newTestQuotaRegion(span1), span1.resolvedTs.Load())
 	require.True(t, admitted)
-	require.NotNil(t, scanLease)
-	scanLease.Release()
-	require.NotContains(t, quota.subscriptions, span1.subID)
+	require.Zero(t, scanBytes)
 
-	lease2.Release()
+	quota.releaseEvent(40)
 	used, _, _ = quota.snapshot()
 	require.Zero(t, used)
 }
 
-func TestMemoryQuotaBlockedEventStopsWhenSubscriptionIsRemoved(t *testing.T) {
+func TestMemoryQuotaBlockedEventStopsWhenSpanStops(t *testing.T) {
 	quota := newMemoryQuotaController(100, 10)
-	quota.hardLimitRatio = 1
+	quota.hardLimit = 100
 	span := newTestQuotaSpan(1)
-	quota.addSubscription(span)
 
-	lease := quota.trackEvent(context.Background(), span, 100)
-	require.NotNil(t, lease)
-	acquired := make(chan *memoryQuotaLease, 1)
+	require.True(t, quota.acquireEvent(context.Background(), span, 100))
+	acquired := make(chan bool, 1)
 	go func() {
-		acquired <- quota.trackEvent(context.Background(), span, 1)
+		acquired <- quota.acquireEvent(context.Background(), span, 1)
 	}()
 
 	select {
@@ -149,27 +134,25 @@ func TestMemoryQuotaBlockedEventStopsWhenSubscriptionIsRemoved(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	quota.removeSubscription(span)
+	span.stopped.Store(true)
+	quota.wakeAll()
 	select {
-	case blockedLease := <-acquired:
-		require.Nil(t, blockedLease)
+	case ok := <-acquired:
+		require.False(t, ok)
 	case <-time.After(time.Second):
-		t.Fatal("removing the subscription did not wake the blocked event")
+		t.Fatal("stopping the subscription did not wake the blocked event")
 	}
-	require.NotContains(t, quota.subscriptions, span.subID)
-	lease.Release()
+	quota.releaseEvent(100)
 }
 
 func TestMemoryQuotaBlockedEventResumesAfterRelease(t *testing.T) {
 	quota := newMemoryQuotaController(100, 10)
 	span := newTestQuotaSpan(1)
-	quota.addSubscription(span)
 
-	lease := quota.trackEvent(context.Background(), span, 200)
-	require.NotNil(t, lease)
-	acquired := make(chan *memoryQuotaLease, 1)
+	require.True(t, quota.acquireEvent(context.Background(), span, 200))
+	acquired := make(chan bool, 1)
 	go func() {
-		acquired <- quota.trackEvent(context.Background(), span, 1)
+		acquired <- quota.acquireEvent(context.Background(), span, 1)
 	}()
 
 	select {
@@ -178,89 +161,127 @@ func TestMemoryQuotaBlockedEventResumesAfterRelease(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	lease.Release()
+	quota.releaseEvent(200)
 	select {
-	case nextLease := <-acquired:
-		require.NotNil(t, nextLease)
-		nextLease.Release()
+	case ok := <-acquired:
+		require.True(t, ok)
+		quota.releaseEvent(1)
 	case <-time.After(time.Second):
 		t.Fatal("event memory did not resume after memory was released")
 	}
 }
 
-func TestMemoryQuotaWarmingScanBudget(t *testing.T) {
-	quota := newMemoryQuotaController(200, 10)
+func TestMemoryQuotaBlockedEventStopsOnContextCancellation(t *testing.T) {
+	quota := newMemoryQuotaController(100, 10)
+	quota.hardLimit = 100
+	span := newTestQuotaSpan(1)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	require.True(t, quota.acquireEvent(context.Background(), span, 100))
+	acquired := make(chan bool, 1)
+	go func() {
+		acquired <- quota.acquireEvent(ctx, span, 1)
+	}()
+	require.Eventually(t, func() bool {
+		return quota.eventNotifier.waiters.Load() == 1
+	}, time.Second, time.Millisecond)
+
+	// Cancellation must stop the waiter without a memory release or an explicit
+	// quota notification.
+	cancel()
+	select {
+	case ok := <-acquired:
+		require.False(t, ok)
+	case <-time.After(time.Second):
+		t.Fatal("context cancellation did not stop the blocked event")
+	}
+	quota.releaseEvent(100)
+}
+
+func TestMemoryQuotaConcurrentWaitersDoNotLoseWakeups(t *testing.T) {
+	const waiterCount = 32
+	quota := newMemoryQuotaController(100, 10)
+	quota.hardLimit = 1
+	span := newTestQuotaSpan(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Hold the only available byte until every goroutine is waiting. Releasing
+	// it wakes all waiters; each successful waiter then releases it for the next.
+	require.True(t, quota.acquireEvent(ctx, span, 1))
+	results := make(chan bool, waiterCount)
+	for range waiterCount {
+		go func() {
+			acquired := quota.acquireEvent(ctx, span, 1)
+			if acquired {
+				quota.releaseEvent(1)
+			}
+			results <- acquired
+		}()
+	}
+	require.Eventually(t, func() bool {
+		return quota.eventNotifier.waiters.Load() == waiterCount
+	}, time.Second, time.Millisecond)
+
+	quota.releaseEvent(1)
+	for range waiterCount {
+		select {
+		case acquired := <-results:
+			require.True(t, acquired)
+		case <-ctx.Done():
+			t.Fatal("event waiter did not make progress")
+		}
+	}
+	used, _, _ := quota.snapshot()
+	require.Zero(t, used)
+}
+
+func TestMemoryQuotaWarmingScanUsesCurrentPressure(t *testing.T) {
+	quota := newMemoryQuotaController(100, 20)
 	span := newTestQuotaSpan(1)
 	currentTs := setTestQuotaSpanLag(span, lowLagRegionThreshold+time.Minute)
-	quota.addSubscription(span)
 	region := newTestQuotaRegion(span)
 
-	lease1, admitted := quota.acquireScan(region, currentTs)
+	bytes1, _, admitted := quota.acquireScan(region, currentTs)
 	require.True(t, admitted)
-	lease2, admitted := quota.acquireScan(region, currentTs)
-	require.True(t, admitted)
+	require.NotZero(t, bytes1)
+	scanUsed, _, _ := quota.scanSnapshot()
+	require.Greater(t, scanUsed, quota.pauseWarmingLimit)
 
-	lease3, admitted := quota.acquireScan(region, currentTs)
+	_, _, admitted = quota.acquireScan(region, currentTs)
 	require.False(t, admitted)
-	require.Nil(t, lease3)
 
-	lease1.Release()
-	lease3, admitted = quota.acquireScan(region, currentTs)
+	quota.releaseScan(bytes1)
+	bytes2, _, admitted := quota.acquireScan(region, currentTs)
 	require.True(t, admitted)
-	lease2.Release()
-	lease3.Release()
+	quota.releaseScan(bytes2)
 }
 
 func TestMemoryQuotaLowLagScanBypassesWarmingGate(t *testing.T) {
 	quota := newMemoryQuotaController(100, 10)
 	span := newTestQuotaSpan(1)
 	currentTs := setTestQuotaSpanLag(span, lowLagRegionThreshold-time.Second)
-	quota.addSubscription(span)
 
-	pressureLease := quota.trackEvent(context.Background(), span, 20)
-	require.NotNil(t, pressureLease)
-	scanLease, admitted := quota.acquireScan(newTestQuotaRegion(span), currentTs)
+	require.True(t, quota.acquireEvent(context.Background(), span, 20))
+	scanBytes, _, admitted := quota.acquireScan(newTestQuotaRegion(span), currentTs)
 	require.True(t, admitted)
-	require.NotNil(t, scanLease)
-	_, warmingScanUsed, _, _, _ := quota.scanSnapshot()
-	require.Zero(t, warmingScanUsed)
+	require.NotZero(t, scanBytes)
+	scanUsed, _, _ := quota.scanSnapshot()
+	require.NotZero(t, scanUsed)
 
-	scanLease.Release()
-	pressureLease.Release()
+	quota.releaseScan(scanBytes)
+	quota.releaseEvent(20)
 }
 
-func TestMemoryQuotaRemovalNotifiesAdmissionWithoutLeases(t *testing.T) {
-	quota := newMemoryQuotaController(100, 10)
-	span := newTestQuotaSpan(1)
-	quota.addSubscription(span)
-
-	notified := make(chan struct{}, 1)
-	quota.setOnAvailable(func() {
-		select {
-		case notified <- struct{}{}:
-		default:
-		}
-	})
-	quota.removeSubscription(span)
-	select {
-	case <-notified:
-	case <-time.After(time.Second):
-		t.Fatal("subscription removal did not notify admission")
-	}
-}
-
-func TestAdmissionWaitsForMemoryAndReleasesScanLease(t *testing.T) {
+func TestAdmissionWaitsForMemoryAndReleasesScanMemory(t *testing.T) {
 	quota := newMemoryQuotaController(100, 10)
 	span := newTestQuotaSpan(1)
 	currentTs := setTestQuotaSpanLag(span, lowLagRegionThreshold+time.Minute)
-	quota.addSubscription(span)
 	controller := newRegionAdmissionController(1, 1, quota, func() uint64 {
 		return currentTs
 	})
-	quota.setOnAvailable(controller.notifyAvailable)
 
-	pressureLease := quota.trackEvent(context.Background(), span, 20)
-	require.NotNil(t, pressureLease)
+	require.True(t, quota.acquireEvent(context.Background(), span, 20))
 	region := newTestQuotaRegion(span)
 	require.True(t, controller.submit(newRegionPriorityTask(region, currentTs, 1)))
 
@@ -279,7 +300,7 @@ func TestAdmissionWaitsForMemoryAndReleasesScanLease(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	pressureLease.Release()
+	quota.releaseEvent(20)
 	var resultValue popResult
 	select {
 	case resultValue = <-result:
@@ -288,9 +309,63 @@ func TestAdmissionWaitsForMemoryAndReleasesScanLease(t *testing.T) {
 	}
 	require.NoError(t, resultValue.err)
 	req := resultValue.req
-	scanUsed, _, _, _, _ := quota.scanSnapshot()
+	scanUsed, _, _ := quota.scanSnapshot()
 	require.NotZero(t, scanUsed)
 	require.True(t, req.abort())
-	scanUsed, _, _, _, _ = quota.scanSnapshot()
+	scanUsed, _, _ = quota.scanSnapshot()
 	require.Zero(t, scanUsed)
+}
+
+func TestAdmissionWakesWhenBlockedSpanStops(t *testing.T) {
+	quota := newMemoryQuotaController(100, 10)
+	span := newTestQuotaSpan(1)
+	currentTs := setTestQuotaSpanLag(span, lowLagRegionThreshold+time.Minute)
+	controller := newRegionAdmissionController(1, 1, quota, func() uint64 {
+		return currentTs
+	})
+
+	require.True(t, quota.acquireEvent(context.Background(), span, 20))
+	require.True(t, controller.submit(newRegionPriorityTask(
+		newTestQuotaRegion(span), currentTs, 1)))
+
+	type popResult struct {
+		req *regionReq
+		err error
+	}
+	result := make(chan popResult, 1)
+	go func() {
+		req, err := controller.pop(context.Background(), nil)
+		result <- popResult{req: req, err: err}
+	}()
+	select {
+	case <-result:
+		t.Fatal("warming scan should wait while memory is under pressure")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	span.stopped.Store(true)
+	quota.wakeAll()
+	select {
+	case result := <-result:
+		require.NoError(t, result.err)
+		require.Zero(t, result.req.scanBytes)
+		require.True(t, result.req.abort())
+	case <-time.After(time.Second):
+		t.Fatal("stopping the span did not wake scan admission")
+	}
+	quota.releaseEvent(20)
+}
+
+func BenchmarkMemoryQuotaEventAccounting(b *testing.B) {
+	quota := newMemoryQuotaController(defaultLogPullerMemoryQuota, defaultScanBaseSize)
+	span := newTestQuotaSpan(1)
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if !quota.acquireEvent(ctx, span, 1) {
+			b.Fatal("failed to acquire event memory")
+		}
+		quota.releaseEvent(1)
+	}
 }

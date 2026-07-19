@@ -87,9 +87,3 @@ func (s *regionRequestStore) requestedRegionCount() int {
 	}
 	return count
 }
-
-func (s *regionRequestStore) notifyAvailable() {
-	for _, worker := range s.workers {
-		worker.admission.notifyAvailable()
-	}
-}

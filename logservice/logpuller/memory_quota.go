@@ -71,29 +71,68 @@ const (
 	admissionFreezeAllNewScans
 )
 
-type memoryQuotaLease struct {
-	once    sync.Once
-	release func()
+// eventMemoryNotifier wakes event receivers that are waiting for memory. Each
+// notification closes the current ready channel to wake all current waiters,
+// then creates a new channel for future waiters.
+//
+// To avoid missing a notification, a receiver waits in this order:
+//
+//  1. Register the waiter.
+//  2. Read the current ready channel under mu.
+//  3. Recheck memory and the span state before blocking on that channel.
+//
+// If a notification happens just before registration, the final recheck sees
+// the released memory or stopped span, so the receiver does not block.
+type eventMemoryNotifier struct {
+	mu      sync.Mutex
+	ready   chan struct{}
+	waiters atomic.Int64
 }
 
-func newMemoryQuotaLease(release func()) *memoryQuotaLease {
-	return &memoryQuotaLease{release: release}
+func newEventMemoryNotifier() *eventMemoryNotifier {
+	return &eventMemoryNotifier{ready: make(chan struct{})}
 }
 
-func (l *memoryQuotaLease) Release() {
-	l.once.Do(l.release)
-}
+func (n *eventMemoryNotifier) wait(
+	ctx context.Context,
+	span *subscribedSpan,
+	tryAcquire func() bool,
+) bool {
+	n.waiters.Add(1)
+	defer n.waiters.Add(-1)
+	for {
+		n.mu.Lock()
+		ready := n.ready
+		n.mu.Unlock()
 
-type subscriptionQuotaState struct {
-	eventLeases map[*memoryQuotaLease]struct{}
-	scanLeases  map[*memoryQuotaLease]struct{}
-}
-
-func newSubscriptionQuotaState() *subscriptionQuotaState {
-	return &subscriptionQuotaState{
-		eventLeases: make(map[*memoryQuotaLease]struct{}),
-		scanLeases:  make(map[*memoryQuotaLease]struct{}),
+		// This check must stay after waiter registration and loading ready. It
+		// closes both windows in which notify could otherwise be lost.
+		if tryAcquire() {
+			return true
+		}
+		if span.stopped.Load() {
+			return false
+		}
+		select {
+		case <-ready:
+		case <-ctx.Done():
+			return false
+		}
 	}
+}
+
+func (n *eventMemoryNotifier) notify() {
+	// waiters is only a fast-path hint. A waiter that registers after this load
+	// rechecks memory and the span state before blocking, so observing a stale
+	// zero cannot lose a wakeup. Observing a stale nonzero only causes a harmless
+	// extra broadcast.
+	if n.waiters.Load() == 0 {
+		return
+	}
+	n.mu.Lock()
+	close(n.ready)
+	n.ready = make(chan struct{})
+	n.mu.Unlock()
 }
 
 // memoryQuotaController tracks event memory retained by downstream callbacks
@@ -102,29 +141,34 @@ func newSubscriptionQuotaState() *subscriptionQuotaState {
 // admission first pauses uninitialized high-lag spans and freezes all new scans
 // only under heavier pressure; both transitions use hysteresis when resuming.
 type memoryQuotaController struct {
-	mu   sync.Mutex
-	cond *sync.Cond
-
 	capacity uint64
 	// used tracks event bytes retained until downstream finishes consuming them.
-	used uint64
+	// Event accounting is on the receive hot path, so acquiring and releasing
+	// memory only use atomic operations while usage is below the hard limit.
+	used atomic.Uint64
 
+	// eventNotifier owns the wait protocol used after the hard limit is reached.
+	eventNotifier *eventMemoryNotifier
+
+	// scanMu guards scan admission state and scanReady. Scan admission happens
+	// once per region rather than once per event batch, so it is intentionally
+	// kept simple instead of adding atomics to every field.
+	scanMu sync.Mutex
 	// scanUsed tracks the estimated memory of all admitted initial scans.
-	// warmingScanUsed is the subset used by uninitialized, high-lag spans.
-	scanUsed        uint64
-	warmingScanUsed uint64
-	level           admissionLevel
+	scanUsed uint64
+	level    admissionLevel
+	// scanReady is replaced and closed when a memory transition can make a
+	// rejected scan eligible. Workers wait on this channel directly, avoiding a
+	// synchronous broadcast to every store and request worker.
+	scanReady chan struct{}
 
-	pauseWarmingRatio  float64
-	resumeWarmingRatio float64
-	freezeAllRatio     float64
-	resumeAllRatio     float64
-	hardLimitRatio     float64
+	pauseWarmingLimit  uint64
+	resumeWarmingLimit uint64
+	freezeAllLimit     uint64
+	resumeAllLimit     uint64
+	hardLimit          uint64
 
 	scanEstimate uint64
-
-	subscriptions map[SubscriptionID]*subscriptionQuotaState
-	onAvailable   atomic.Value // func()
 }
 
 func newMemoryQuotaController(capacity, scanBaseSize uint64) *memoryQuotaController {
@@ -137,191 +181,150 @@ func newMemoryQuotaController(capacity, scanBaseSize uint64) *memoryQuotaControl
 	c := &memoryQuotaController{
 		capacity:           capacity,
 		level:              admissionNormal,
-		pauseWarmingRatio:  defaultPauseWarmingRatio,
-		resumeWarmingRatio: defaultResumeWarmingRatio,
-		freezeAllRatio:     defaultFreezeAllRatio,
-		resumeAllRatio:     defaultResumeAllRatio,
-		hardLimitRatio:     defaultHardLimitRatio,
+		pauseWarmingLimit:  uint64(math.Ceil(float64(capacity) * defaultPauseWarmingRatio)),
+		resumeWarmingLimit: uint64(float64(capacity) * defaultResumeWarmingRatio),
+		freezeAllLimit:     uint64(math.Ceil(float64(capacity) * defaultFreezeAllRatio)),
+		resumeAllLimit:     uint64(float64(capacity) * defaultResumeAllRatio),
+		hardLimit:          uint64(float64(capacity) * defaultHardLimitRatio),
 		scanEstimate:       scanBaseSize,
-		subscriptions:      make(map[SubscriptionID]*subscriptionQuotaState),
+		eventNotifier:      newEventMemoryNotifier(),
+		scanReady:          make(chan struct{}),
 	}
-	c.cond = sync.NewCond(&c.mu)
-	c.onAvailable.Store(func() {})
 	return c
 }
 
-func (c *memoryQuotaController) setOnAvailable(fn func()) {
-	c.onAvailable.Store(fn)
-}
-
-func (c *memoryQuotaController) notifyAvailable() {
-	c.onAvailable.Load().(func())()
-}
-
 func (c *memoryQuotaController) wakeAll() {
-	c.mu.Lock()
-	c.cond.Broadcast()
-	c.mu.Unlock()
+	c.eventNotifier.notify()
+	c.notifyScanAdmission()
 }
 
 func (c *memoryQuotaController) snapshot() (used, capacity uint64, level admissionLevel) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.used, c.capacity, c.level
+	c.scanMu.Lock()
+	defer c.scanMu.Unlock()
+	return c.used.Load(), c.capacity, c.level
 }
 
 func (c *memoryQuotaController) scanSnapshot() (
 	scanUsed uint64,
-	warmingScanUsed uint64,
-	warmingScanBudget uint64,
 	scanEstimate uint64,
 	hardLimit uint64,
 ) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.scanUsed, c.warmingScanUsed, c.warmingScanBudgetLocked(),
-		c.scanEstimate, c.hardLimitLocked()
-}
-
-func (c *memoryQuotaController) addSubscription(span *subscribedSpan) {
-	c.mu.Lock()
-	c.subscriptions[span.subID] = newSubscriptionQuotaState()
-	c.mu.Unlock()
-}
-
-func (c *memoryQuotaController) removeSubscription(span *subscribedSpan) {
-	c.mu.Lock()
-	state, ok := c.subscriptions[span.subID]
-	if !ok {
-		c.mu.Unlock()
-		return
-	}
-	delete(c.subscriptions, span.subID)
-	leases := make([]*memoryQuotaLease, 0, len(state.eventLeases)+len(state.scanLeases))
-	for lease := range state.eventLeases {
-		leases = append(leases, lease)
-	}
-	for lease := range state.scanLeases {
-		leases = append(leases, lease)
-	}
-	// Wake event receivers so they can observe that the subscription was removed.
-	c.cond.Broadcast()
-	c.mu.Unlock()
-
-	for _, lease := range leases {
-		lease.Release()
-	}
-	// Removing a subscription can make a pending request eligible even when the
-	// subscription itself did not own any lease.
-	c.notifyAvailable()
-}
-
-func (c *memoryQuotaController) markSubscriptionInitialized() {
-	c.notifyAvailable()
+	c.scanMu.Lock()
+	defer c.scanMu.Unlock()
+	return c.scanUsed, c.scanEstimate, c.hardLimit
 }
 
 func (c *memoryQuotaController) acquireScan(
 	region regionInfo,
 	currentTs uint64,
-) (*memoryQuotaLease, bool) {
+) (bytes uint64, retry <-chan struct{}, admitted bool) {
 	span := region.subscribedSpan
-	c.mu.Lock()
-	state, ok := c.subscriptions[span.subID]
-	if !ok {
-		// The subscription has already been removed. Let the request continue to
-		// the worker, where the normal stopped-subscription path will discard it.
-		c.mu.Unlock()
-		return newMemoryQuotaLease(func() {}), true
+	if span.stopped.Load() {
+		// Let stale tasks reach the worker's stopped-subscription cleanup path
+		// without consuming scan quota.
+		return 0, nil, true
 	}
+
+	c.scanMu.Lock()
+	defer c.scanMu.Unlock()
 	c.refreshLevelLocked()
 	if c.level == admissionFreezeAllNewScans {
-		c.mu.Unlock()
-		return nil, false
+		return 0, c.scanReady, false
 	}
 
-	bytes := c.estimateScanSizeLocked(region, currentTs)
 	warming := isWarmingScan(region, currentTs)
-	if c.isWarmingScanBlockedLocked(warming, bytes) {
-		c.mu.Unlock()
-		return nil, false
+	// Admission is based on the pressure before accounting this scan. This lets
+	// one scan make progress even when its estimate alone exceeds the threshold.
+	if warming && c.level == admissionPauseWarming {
+		return 0, c.scanReady, false
 	}
-
-	lease := &memoryQuotaLease{}
-	lease.release = func() {
-		c.mu.Lock()
-		previousLevel := c.level
-		c.scanUsed = subtractFloor(c.scanUsed, bytes)
-		if warming {
-			c.warmingScanUsed = subtractFloor(c.warmingScanUsed, bytes)
-		}
-		delete(state.scanLeases, lease)
-		c.refreshLevelLocked()
-		shouldNotifyAdmission := c.level < previousLevel ||
-			(warming && c.level == admissionNormal)
-		c.mu.Unlock()
-
-		if shouldNotifyAdmission {
-			c.notifyAvailable()
-		}
-	}
+	bytes = c.estimateScanSizeLocked(region, currentTs)
 	c.scanUsed += bytes
-	if warming {
-		c.warmingScanUsed += bytes
-	}
-	state.scanLeases[lease] = struct{}{}
 	c.refreshLevelLocked()
-	c.mu.Unlock()
-	return lease, true
+	return bytes, nil, true
 }
 
-func (c *memoryQuotaController) trackEvent(
+func (c *memoryQuotaController) releaseScan(bytes uint64) {
+	if bytes == 0 {
+		return
+	}
+	c.scanMu.Lock()
+	previousLevel := c.level
+	c.scanUsed = subtractFloor(c.scanUsed, bytes)
+	c.refreshLevelLocked()
+	if c.level < previousLevel {
+		c.notifyScanAdmissionLocked()
+	}
+	c.scanMu.Unlock()
+}
+
+// acquireEvent accounts one event batch. Below the hard limit its hot path is
+// a context check and an atomic compare-and-swap; it does not allocate or take
+// a mutex.
+func (c *memoryQuotaController) acquireEvent(
 	ctx context.Context,
 	span *subscribedSpan,
 	bytes uint64,
-) *memoryQuotaLease {
-	c.mu.Lock()
+) bool {
 	if ctx.Err() != nil {
-		c.mu.Unlock()
-		return nil
+		return false
 	}
-	state := c.subscriptions[span.subID]
-	if state == nil {
-		c.mu.Unlock()
-		return nil
+	if c.tryAcquireEvent(bytes) {
+		return true
 	}
 
-	for c.used > 0 && wouldExceed(c.used, bytes, c.hardLimitLocked()) {
-		c.cond.Wait()
-		if ctx.Err() != nil {
-			c.mu.Unlock()
-			return nil
+	return c.eventNotifier.wait(ctx, span, func() bool {
+		return c.tryAcquireEvent(bytes)
+	})
+}
+
+func (c *memoryQuotaController) tryAcquireEvent(bytes uint64) bool {
+	for {
+		used := c.used.Load()
+		if used > 0 && wouldExceed(used, bytes, c.hardLimit) {
+			return false
 		}
-		if c.subscriptions[span.subID] != state {
-			c.mu.Unlock()
-			return nil
+		if bytes > math.MaxUint64-used {
+			return false
+		}
+		if c.used.CompareAndSwap(used, used+bytes) {
+			return true
 		}
 	}
+}
 
-	c.used += bytes
+func (c *memoryQuotaController) releaseEvent(bytes uint64) {
+	if bytes == 0 {
+		return
+	}
+	used := c.used.Add(^(bytes - 1))
+	previousUsed := used + bytes
+	if crossesDown(previousUsed, used, c.resumeWarmingLimit) ||
+		crossesDown(previousUsed, used, c.resumeAllLimit) {
+		c.refreshAdmissionAndNotify()
+	}
+	c.eventNotifier.notify()
+}
+
+func (c *memoryQuotaController) notifyScanAdmission() {
+	c.scanMu.Lock()
+	c.notifyScanAdmissionLocked()
+	c.scanMu.Unlock()
+}
+
+func (c *memoryQuotaController) notifyScanAdmissionLocked() {
+	close(c.scanReady)
+	c.scanReady = make(chan struct{})
+}
+
+func (c *memoryQuotaController) refreshAdmissionAndNotify() {
+	c.scanMu.Lock()
+	previousLevel := c.level
 	c.refreshLevelLocked()
-	lease := &memoryQuotaLease{}
-	lease.release = func() {
-		c.mu.Lock()
-		previousLevel := c.level
-		c.used = subtractFloor(c.used, bytes)
-		delete(state.eventLeases, lease)
-		c.refreshLevelLocked()
-		shouldNotifyAdmission := c.level < previousLevel
-		c.cond.Broadcast()
-		c.mu.Unlock()
-
-		if shouldNotifyAdmission {
-			c.notifyAvailable()
-		}
+	if c.level < previousLevel {
+		c.notifyScanAdmissionLocked()
 	}
-	state.eventLeases[lease] = struct{}{}
-	c.mu.Unlock()
-	return lease
+	c.scanMu.Unlock()
 }
 
 func (c *memoryQuotaController) estimateScanSizeLocked(region regionInfo, currentTs uint64) uint64 {
@@ -360,34 +363,14 @@ func isWarmingScan(region regionInfo, currentTs uint64) bool {
 	return regionScanLag(currentTs, region.resolvedTs()) >= lowLagRegionThreshold
 }
 
-func (c *memoryQuotaController) isWarmingScanBlockedLocked(warming bool, bytes uint64) bool {
-	if !warming {
-		return false
-	}
-	if c.level == admissionPauseWarming {
-		return true
-	}
-	return wouldExceed(c.warmingScanUsed, bytes, c.warmingScanBudgetLocked())
-}
-
-func (c *memoryQuotaController) warmingScanBudgetLocked() uint64 {
-	budget := uint64(float64(c.capacity) * c.pauseWarmingRatio)
-	return max(budget, c.scanEstimate)
-}
-
-func (c *memoryQuotaController) hardLimitLocked() uint64 {
-	return uint64(float64(c.capacity) * c.hardLimitRatio)
-}
-
 func (c *memoryQuotaController) refreshLevelLocked() {
 	// scanUsed predicts the event memory an initial scan may produce, so adding
 	// it to actual event bytes would count the same pressure twice.
-	pressure := max(c.used, c.scanUsed)
-	usage := float64(pressure) / float64(c.capacity)
+	pressure := max(c.used.Load(), c.scanUsed)
 	switch c.level {
 	case admissionFreezeAllNewScans:
-		if usage <= c.resumeAllRatio {
-			if usage >= c.pauseWarmingRatio {
+		if pressure <= c.resumeAllLimit {
+			if pressure >= c.pauseWarmingLimit {
 				c.level = admissionPauseWarming
 			} else {
 				c.level = admissionNormal
@@ -395,16 +378,16 @@ func (c *memoryQuotaController) refreshLevelLocked() {
 		}
 	case admissionPauseWarming:
 		switch {
-		case usage >= c.freezeAllRatio:
+		case pressure >= c.freezeAllLimit:
 			c.level = admissionFreezeAllNewScans
-		case usage <= c.resumeWarmingRatio:
+		case pressure <= c.resumeWarmingLimit:
 			c.level = admissionNormal
 		}
 	default:
 		switch {
-		case usage >= c.freezeAllRatio:
+		case pressure >= c.freezeAllLimit:
 			c.level = admissionFreezeAllNewScans
-		case usage >= c.pauseWarmingRatio:
+		case pressure >= c.pauseWarmingLimit:
 			c.level = admissionPauseWarming
 		}
 	}
@@ -412,6 +395,10 @@ func (c *memoryQuotaController) refreshLevelLocked() {
 
 func wouldExceed(used, bytes, limit uint64) bool {
 	return bytes > limit || used > limit-bytes
+}
+
+func crossesDown(previous, current, threshold uint64) bool {
+	return previous > threshold && current <= threshold
 }
 
 func subtractFloor(value, delta uint64) uint64 {
