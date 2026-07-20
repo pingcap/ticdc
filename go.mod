@@ -92,12 +92,7 @@ require (
 	golang.org/x/term v0.43.0
 	golang.org/x/text v0.37.0
 	golang.org/x/time v0.14.0
-<<<<<<< HEAD
-	google.golang.org/grpc v1.77.0
-=======
-	google.golang.org/api v0.230.0
 	google.golang.org/grpc v1.79.3
->>>>>>> 848d134cb (*: Fix the security vulnerabilities of third package (#5306))
 	google.golang.org/protobuf v1.36.10
 )
 
