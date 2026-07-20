@@ -45,7 +45,7 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 		Type:          DMLTypeInsert,
 		CommitTs:      commitTs,
 		SchemaVersion: schemaVersion,
-		Data:          map[string]interface{}{"id": int64(1)},
+		Data:          map[string]any{"id": int64(1)},
 	}
 
 	require.Nil(t, decoder.NextDMLMessage())
