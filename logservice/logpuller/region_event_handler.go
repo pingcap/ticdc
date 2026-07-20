@@ -151,7 +151,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		}
 	}
 	if !wasInitialized && span.initialized.Load() {
-		h.eventSink.memoryQuota.notifyScanAdmission()
+		h.eventSink.memoryQuota.NotifyScanAdmission()
 	}
 	tryAdvanceResolvedTs := func() {
 		if newResolvedTs != 0 {
@@ -159,7 +159,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		}
 	}
 	releaseMemoryQuota := func() {
-		h.eventSink.memoryQuota.releaseEvent(memoryBytes)
+		h.eventSink.memoryQuota.ReleaseEvent(memoryBytes)
 	}
 	if len(span.kvEventsCache) > 0 {
 		metricsEventCount.Add(float64(len(span.kvEventsCache)))
@@ -243,7 +243,7 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 }
 
 func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
-	h.eventSink.memoryQuota.releaseEvent(event.memoryBytes)
+	h.eventSink.memoryQuota.ReleaseEvent(event.memoryBytes)
 	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
 	state := event.mustFirstState()
 	fields := []zap.Field{

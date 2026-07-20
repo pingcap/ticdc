@@ -207,6 +207,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 		case <-ticker.C:
 			s.regionScheduler.UpdateMetrics()
 			s.eventSink.UpdateMetrics()
+			s.memoryQuota.UpdateMetrics()
 			s.spanRegistry.UpdateMetrics()
 		}
 	}
@@ -307,7 +308,7 @@ func (s *subscriptionClient) setTableStopped(rt *subscribedSpan) {
 	// then notify every existing worker to deregister the subscription.
 	if rt.stopped.CompareAndSwap(false, true) {
 		// Wake event receivers and scan admission so they can observe stopped.
-		s.memoryQuota.wakeAll()
+		s.memoryQuota.WakeAll()
 		s.regionScheduler.BroadcastDeregister(rt.subID, rt.filterLoop)
 		if rt.rangeLock.Stop() {
 			s.onTableDrained(rt)

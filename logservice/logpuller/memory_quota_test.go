@@ -20,9 +20,27 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 )
+
+type memoryQuotaTestState struct {
+	used     uint64
+	scanUsed uint64
+	level    admissionLevel
+}
+
+func getMemoryQuotaTestState(quota *memoryQuotaController) memoryQuotaTestState {
+	quota.scanMu.Lock()
+	defer quota.scanMu.Unlock()
+	return memoryQuotaTestState{
+		used:     quota.used.Load(),
+		scanUsed: quota.scanUsed,
+		level:    quota.level,
+	}
+}
 
 func newTestQuotaSpan(subID SubscriptionID) *subscribedSpan {
 	span := &subscribedSpan{subID: subID}
@@ -45,6 +63,37 @@ func setTestQuotaSpanLag(span *subscribedSpan, lag time.Duration) uint64 {
 	return oracle.GoTimeToTS(now)
 }
 
+func TestMemoryQuotaUpdateMetrics(t *testing.T) {
+	quota := newMemoryQuotaController(66, 8)
+	span := newTestQuotaSpan(1)
+	require.True(t, quota.AcquireEvent(context.Background(), span, 55))
+	t.Cleanup(func() { quota.ReleaseEvent(55) })
+
+	quota.scanMu.Lock()
+	quota.scanUsed = 7
+	quota.level = admissionFreezeAllNewScans
+	quota.scanMu.Unlock()
+	quota.eventNotifier.waiters.Store(2)
+	t.Cleanup(func() { quota.eventNotifier.waiters.Store(0) })
+
+	quota.UpdateMetrics()
+
+	require.Equal(t, float64(66), testutil.ToFloat64(
+		metrics.LogPullerMemoryQuota.WithLabelValues("max")))
+	require.Equal(t, float64(55), testutil.ToFloat64(
+		metrics.LogPullerMemoryQuota.WithLabelValues("used")))
+	require.Equal(t, float64(7), testutil.ToFloat64(
+		metrics.LogPullerMemoryQuota.WithLabelValues("scan_used")))
+	require.Equal(t, float64(8), testutil.ToFloat64(
+		metrics.LogPullerMemoryQuota.WithLabelValues("scan_estimate")))
+	require.Equal(t, float64(132), testutil.ToFloat64(
+		metrics.LogPullerMemoryQuota.WithLabelValues("hard_limit")))
+	require.Equal(t, float64(admissionFreezeAllNewScans),
+		testutil.ToFloat64(metrics.LogPullerMemoryQuotaAdmissionLevel))
+	require.Equal(t, float64(2),
+		testutil.ToFloat64(metrics.LogPullerMemoryQuotaEventWaiterCount))
+}
+
 func TestMemoryQuotaAdmissionLevels(t *testing.T) {
 	quota := newMemoryQuotaController(100, 10)
 	warmingSpan := newTestQuotaSpan(1)
@@ -53,32 +102,32 @@ func TestMemoryQuotaAdmissionLevels(t *testing.T) {
 	warmingTs := setTestQuotaSpanLag(warmingSpan, lowLagRegionThreshold+time.Minute)
 	initializedTs := setTestQuotaSpanLag(initializedSpan, lowLagRegionThreshold+time.Minute)
 
-	require.True(t, quota.acquireEvent(context.Background(), initializedSpan, 5))
-	require.True(t, quota.acquireEvent(context.Background(), initializedSpan, 10))
-	_, _, admitted := quota.acquireScan(newTestQuotaRegion(warmingSpan), warmingTs)
+	require.True(t, quota.AcquireEvent(context.Background(), initializedSpan, 5))
+	require.True(t, quota.AcquireEvent(context.Background(), initializedSpan, 10))
+	_, _, admitted := quota.AcquireScan(newTestQuotaRegion(warmingSpan), warmingTs)
 	require.False(t, admitted)
 
-	scanBytes, _, admitted := quota.acquireScan(
+	scanBytes, _, admitted := quota.AcquireScan(
 		newTestQuotaRegion(initializedSpan), initializedTs)
 	require.True(t, admitted)
-	quota.releaseScan(scanBytes)
+	quota.ReleaseScan(scanBytes)
 
-	require.True(t, quota.acquireEvent(context.Background(), initializedSpan, 45))
-	require.True(t, quota.acquireEvent(context.Background(), initializedSpan, 20))
-	_, _, admitted = quota.acquireScan(
+	require.True(t, quota.AcquireEvent(context.Background(), initializedSpan, 45))
+	require.True(t, quota.AcquireEvent(context.Background(), initializedSpan, 20))
+	_, _, admitted = quota.AcquireScan(
 		newTestQuotaRegion(initializedSpan), initializedTs)
 	require.False(t, admitted)
 
-	quota.releaseEvent(20)
-	_, _, level := quota.snapshot()
-	require.Equal(t, admissionPauseWarming, level)
-	quota.releaseEvent(45)
-	_, _, level = quota.snapshot()
-	require.Equal(t, admissionPauseWarming, level)
-	quota.releaseEvent(10)
-	_, _, level = quota.snapshot()
-	require.Equal(t, admissionNormal, level)
-	quota.releaseEvent(5)
+	quota.ReleaseEvent(20)
+	state := getMemoryQuotaTestState(quota)
+	require.Equal(t, admissionPauseWarming, state.level)
+	quota.ReleaseEvent(45)
+	state = getMemoryQuotaTestState(quota)
+	require.Equal(t, admissionPauseWarming, state.level)
+	quota.ReleaseEvent(10)
+	state = getMemoryQuotaTestState(quota)
+	require.Equal(t, admissionNormal, state.level)
+	quota.ReleaseEvent(5)
 }
 
 func TestMemoryQuotaSpanStopKeepsOwnedMemoryUntilRelease(t *testing.T) {
@@ -86,35 +135,34 @@ func TestMemoryQuotaSpanStopKeepsOwnedMemoryUntilRelease(t *testing.T) {
 	span1 := newTestQuotaSpan(1)
 	span2 := newTestQuotaSpan(2)
 
-	require.True(t, quota.acquireEvent(context.Background(), span1, 30))
-	require.True(t, quota.acquireEvent(context.Background(), span2, 40))
-	scanBytes, _, admitted := quota.acquireScan(
+	require.True(t, quota.AcquireEvent(context.Background(), span1, 30))
+	require.True(t, quota.AcquireEvent(context.Background(), span2, 40))
+	scanBytes, _, admitted := quota.AcquireScan(
 		newTestQuotaRegion(span1), span1.resolvedTs.Load())
 	require.True(t, admitted)
 	require.NotZero(t, scanBytes)
 
 	span1.stopped.Store(true)
-	quota.wakeAll()
-	used, _, _ := quota.snapshot()
-	require.Equal(t, uint64(70), used)
-	scanUsed, _, _ := quota.scanSnapshot()
-	require.Equal(t, scanBytes, scanUsed)
+	quota.WakeAll()
+	state := getMemoryQuotaTestState(quota)
+	require.Equal(t, uint64(70), state.used)
+	require.Equal(t, scanBytes, state.scanUsed)
 
-	quota.releaseEvent(30)
-	quota.releaseScan(scanBytes)
-	used, _, _ = quota.snapshot()
-	require.Equal(t, uint64(40), used)
+	quota.ReleaseEvent(30)
+	quota.ReleaseScan(scanBytes)
+	state = getMemoryQuotaTestState(quota)
+	require.Equal(t, uint64(40), state.used)
 
 	// Late tasks reach the stopped-subscription cleanup path without consuming
 	// scan quota.
-	scanBytes, _, admitted = quota.acquireScan(
+	scanBytes, _, admitted = quota.AcquireScan(
 		newTestQuotaRegion(span1), span1.resolvedTs.Load())
 	require.True(t, admitted)
 	require.Zero(t, scanBytes)
 
-	quota.releaseEvent(40)
-	used, _, _ = quota.snapshot()
-	require.Zero(t, used)
+	quota.ReleaseEvent(40)
+	state = getMemoryQuotaTestState(quota)
+	require.Zero(t, state.used)
 }
 
 func TestMemoryQuotaBlockedEventStopsWhenSpanStops(t *testing.T) {
@@ -122,10 +170,10 @@ func TestMemoryQuotaBlockedEventStopsWhenSpanStops(t *testing.T) {
 	quota.hardLimit = 100
 	span := newTestQuotaSpan(1)
 
-	require.True(t, quota.acquireEvent(context.Background(), span, 100))
+	require.True(t, quota.AcquireEvent(context.Background(), span, 100))
 	acquired := make(chan bool, 1)
 	go func() {
-		acquired <- quota.acquireEvent(context.Background(), span, 1)
+		acquired <- quota.AcquireEvent(context.Background(), span, 1)
 	}()
 
 	select {
@@ -135,24 +183,24 @@ func TestMemoryQuotaBlockedEventStopsWhenSpanStops(t *testing.T) {
 	}
 
 	span.stopped.Store(true)
-	quota.wakeAll()
+	quota.WakeAll()
 	select {
 	case ok := <-acquired:
 		require.False(t, ok)
 	case <-time.After(time.Second):
 		t.Fatal("stopping the subscription did not wake the blocked event")
 	}
-	quota.releaseEvent(100)
+	quota.ReleaseEvent(100)
 }
 
 func TestMemoryQuotaBlockedEventResumesAfterRelease(t *testing.T) {
 	quota := newMemoryQuotaController(100, 10)
 	span := newTestQuotaSpan(1)
 
-	require.True(t, quota.acquireEvent(context.Background(), span, 200))
+	require.True(t, quota.AcquireEvent(context.Background(), span, 200))
 	acquired := make(chan bool, 1)
 	go func() {
-		acquired <- quota.acquireEvent(context.Background(), span, 1)
+		acquired <- quota.AcquireEvent(context.Background(), span, 1)
 	}()
 
 	select {
@@ -161,11 +209,11 @@ func TestMemoryQuotaBlockedEventResumesAfterRelease(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	quota.releaseEvent(200)
+	quota.ReleaseEvent(200)
 	select {
 	case ok := <-acquired:
 		require.True(t, ok)
-		quota.releaseEvent(1)
+		quota.ReleaseEvent(1)
 	case <-time.After(time.Second):
 		t.Fatal("event memory did not resume after memory was released")
 	}
@@ -177,10 +225,10 @@ func TestMemoryQuotaBlockedEventStopsOnContextCancellation(t *testing.T) {
 	span := newTestQuotaSpan(1)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	require.True(t, quota.acquireEvent(context.Background(), span, 100))
+	require.True(t, quota.AcquireEvent(context.Background(), span, 100))
 	acquired := make(chan bool, 1)
 	go func() {
-		acquired <- quota.acquireEvent(ctx, span, 1)
+		acquired <- quota.AcquireEvent(ctx, span, 1)
 	}()
 	require.Eventually(t, func() bool {
 		return quota.eventNotifier.waiters.Load() == 1
@@ -195,7 +243,7 @@ func TestMemoryQuotaBlockedEventStopsOnContextCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("context cancellation did not stop the blocked event")
 	}
-	quota.releaseEvent(100)
+	quota.ReleaseEvent(100)
 }
 
 func TestMemoryQuotaConcurrentWaitersDoNotLoseWakeups(t *testing.T) {
@@ -208,13 +256,13 @@ func TestMemoryQuotaConcurrentWaitersDoNotLoseWakeups(t *testing.T) {
 
 	// Hold the only available byte until every goroutine is waiting. Releasing
 	// it wakes all waiters; each successful waiter then releases it for the next.
-	require.True(t, quota.acquireEvent(ctx, span, 1))
+	require.True(t, quota.AcquireEvent(ctx, span, 1))
 	results := make(chan bool, waiterCount)
 	for range waiterCount {
 		go func() {
-			acquired := quota.acquireEvent(ctx, span, 1)
+			acquired := quota.AcquireEvent(ctx, span, 1)
 			if acquired {
-				quota.releaseEvent(1)
+				quota.ReleaseEvent(1)
 			}
 			results <- acquired
 		}()
@@ -223,7 +271,7 @@ func TestMemoryQuotaConcurrentWaitersDoNotLoseWakeups(t *testing.T) {
 		return quota.eventNotifier.waiters.Load() == waiterCount
 	}, time.Second, time.Millisecond)
 
-	quota.releaseEvent(1)
+	quota.ReleaseEvent(1)
 	for range waiterCount {
 		select {
 		case acquired := <-results:
@@ -232,8 +280,8 @@ func TestMemoryQuotaConcurrentWaitersDoNotLoseWakeups(t *testing.T) {
 			t.Fatal("event waiter did not make progress")
 		}
 	}
-	used, _, _ := quota.snapshot()
-	require.Zero(t, used)
+	state := getMemoryQuotaTestState(quota)
+	require.Zero(t, state.used)
 }
 
 func TestMemoryQuotaWarmingScanUsesCurrentPressure(t *testing.T) {
@@ -242,19 +290,19 @@ func TestMemoryQuotaWarmingScanUsesCurrentPressure(t *testing.T) {
 	currentTs := setTestQuotaSpanLag(span, lowLagRegionThreshold+time.Minute)
 	region := newTestQuotaRegion(span)
 
-	bytes1, _, admitted := quota.acquireScan(region, currentTs)
+	bytes1, _, admitted := quota.AcquireScan(region, currentTs)
 	require.True(t, admitted)
 	require.NotZero(t, bytes1)
-	scanUsed, _, _ := quota.scanSnapshot()
-	require.Greater(t, scanUsed, quota.pauseWarmingLimit)
+	state := getMemoryQuotaTestState(quota)
+	require.Greater(t, state.scanUsed, quota.pauseWarmingLimit)
 
-	_, _, admitted = quota.acquireScan(region, currentTs)
+	_, _, admitted = quota.AcquireScan(region, currentTs)
 	require.False(t, admitted)
 
-	quota.releaseScan(bytes1)
-	bytes2, _, admitted := quota.acquireScan(region, currentTs)
+	quota.ReleaseScan(bytes1)
+	bytes2, _, admitted := quota.AcquireScan(region, currentTs)
 	require.True(t, admitted)
-	quota.releaseScan(bytes2)
+	quota.ReleaseScan(bytes2)
 }
 
 func TestMemoryQuotaLowLagScanBypassesWarmingGate(t *testing.T) {
@@ -262,15 +310,15 @@ func TestMemoryQuotaLowLagScanBypassesWarmingGate(t *testing.T) {
 	span := newTestQuotaSpan(1)
 	currentTs := setTestQuotaSpanLag(span, lowLagRegionThreshold-time.Second)
 
-	require.True(t, quota.acquireEvent(context.Background(), span, 20))
-	scanBytes, _, admitted := quota.acquireScan(newTestQuotaRegion(span), currentTs)
+	require.True(t, quota.AcquireEvent(context.Background(), span, 20))
+	scanBytes, _, admitted := quota.AcquireScan(newTestQuotaRegion(span), currentTs)
 	require.True(t, admitted)
 	require.NotZero(t, scanBytes)
-	scanUsed, _, _ := quota.scanSnapshot()
-	require.NotZero(t, scanUsed)
+	state := getMemoryQuotaTestState(quota)
+	require.NotZero(t, state.scanUsed)
 
-	quota.releaseScan(scanBytes)
-	quota.releaseEvent(20)
+	quota.ReleaseScan(scanBytes)
+	quota.ReleaseEvent(20)
 }
 
 func TestAdmissionWaitsForMemoryAndReleasesScanMemory(t *testing.T) {
@@ -281,7 +329,7 @@ func TestAdmissionWaitsForMemoryAndReleasesScanMemory(t *testing.T) {
 		return currentTs
 	})
 
-	require.True(t, quota.acquireEvent(context.Background(), span, 20))
+	require.True(t, quota.AcquireEvent(context.Background(), span, 20))
 	region := newTestQuotaRegion(span)
 	require.True(t, controller.submit(newRegionPriorityTask(region, currentTs, 1)))
 
@@ -300,7 +348,7 @@ func TestAdmissionWaitsForMemoryAndReleasesScanMemory(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	quota.releaseEvent(20)
+	quota.ReleaseEvent(20)
 	var resultValue popResult
 	select {
 	case resultValue = <-result:
@@ -309,11 +357,11 @@ func TestAdmissionWaitsForMemoryAndReleasesScanMemory(t *testing.T) {
 	}
 	require.NoError(t, resultValue.err)
 	req := resultValue.req
-	scanUsed, _, _ := quota.scanSnapshot()
-	require.NotZero(t, scanUsed)
+	state := getMemoryQuotaTestState(quota)
+	require.NotZero(t, state.scanUsed)
 	require.True(t, req.abort())
-	scanUsed, _, _ = quota.scanSnapshot()
-	require.Zero(t, scanUsed)
+	state = getMemoryQuotaTestState(quota)
+	require.Zero(t, state.scanUsed)
 }
 
 func TestAdmissionWakesWhenBlockedSpanStops(t *testing.T) {
@@ -324,7 +372,7 @@ func TestAdmissionWakesWhenBlockedSpanStops(t *testing.T) {
 		return currentTs
 	})
 
-	require.True(t, quota.acquireEvent(context.Background(), span, 20))
+	require.True(t, quota.AcquireEvent(context.Background(), span, 20))
 	require.True(t, controller.submit(newRegionPriorityTask(
 		newTestQuotaRegion(span), currentTs, 1)))
 
@@ -344,7 +392,7 @@ func TestAdmissionWakesWhenBlockedSpanStops(t *testing.T) {
 	}
 
 	span.stopped.Store(true)
-	quota.wakeAll()
+	quota.WakeAll()
 	select {
 	case result := <-result:
 		require.NoError(t, result.err)
@@ -353,7 +401,7 @@ func TestAdmissionWakesWhenBlockedSpanStops(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("stopping the span did not wake scan admission")
 	}
-	quota.releaseEvent(20)
+	quota.ReleaseEvent(20)
 }
 
 func BenchmarkMemoryQuotaEventAccounting(b *testing.B) {
@@ -363,9 +411,9 @@ func BenchmarkMemoryQuotaEventAccounting(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		if !quota.acquireEvent(ctx, span, 1) {
+		if !quota.AcquireEvent(ctx, span, 1) {
 			b.Fatal("failed to acquire event memory")
 		}
-		quota.releaseEvent(1)
+		quota.ReleaseEvent(1)
 	}
 }

@@ -20,6 +20,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/pingcap/ticdc/pkg/metrics"
 )
 
 const (
@@ -193,28 +195,14 @@ func newMemoryQuotaController(capacity, scanBaseSize uint64) *memoryQuotaControl
 	return c
 }
 
-func (c *memoryQuotaController) wakeAll() {
+// WakeAll wakes quota waiters so they can observe cancellation or a stopped span.
+func (c *memoryQuotaController) WakeAll() {
 	c.eventNotifier.notify()
-	c.notifyScanAdmission()
+	c.NotifyScanAdmission()
 }
 
-func (c *memoryQuotaController) snapshot() (used, capacity uint64, level admissionLevel) {
-	c.scanMu.Lock()
-	defer c.scanMu.Unlock()
-	return c.used.Load(), c.capacity, c.level
-}
-
-func (c *memoryQuotaController) scanSnapshot() (
-	scanUsed uint64,
-	scanEstimate uint64,
-	hardLimit uint64,
-) {
-	c.scanMu.Lock()
-	defer c.scanMu.Unlock()
-	return c.scanUsed, c.scanEstimate, c.hardLimit
-}
-
-func (c *memoryQuotaController) acquireScan(
+// AcquireScan admits one region scan and returns its memory estimate.
+func (c *memoryQuotaController) AcquireScan(
 	region regionInfo,
 	currentTs uint64,
 ) (bytes uint64, retry <-chan struct{}, admitted bool) {
@@ -244,7 +232,8 @@ func (c *memoryQuotaController) acquireScan(
 	return bytes, nil, true
 }
 
-func (c *memoryQuotaController) releaseScan(bytes uint64) {
+// ReleaseScan releases the estimate owned by an admitted region scan.
+func (c *memoryQuotaController) ReleaseScan(bytes uint64) {
 	if bytes == 0 {
 		return
 	}
@@ -258,10 +247,10 @@ func (c *memoryQuotaController) releaseScan(bytes uint64) {
 	c.scanMu.Unlock()
 }
 
-// acquireEvent accounts one event batch. Below the hard limit its hot path is
+// AcquireEvent accounts one event batch. Below the hard limit its hot path is
 // a context check and an atomic compare-and-swap; it does not allocate or take
 // a mutex.
-func (c *memoryQuotaController) acquireEvent(
+func (c *memoryQuotaController) AcquireEvent(
 	ctx context.Context,
 	span *subscribedSpan,
 	bytes uint64,
@@ -273,9 +262,12 @@ func (c *memoryQuotaController) acquireEvent(
 		return true
 	}
 
-	return c.eventNotifier.wait(ctx, span, func() bool {
+	start := time.Now()
+	acquired := c.eventNotifier.wait(ctx, span, func() bool {
 		return c.tryAcquireEvent(bytes)
 	})
+	metrics.LogPullerMemoryQuotaEventWaitDuration.Observe(time.Since(start).Seconds())
+	return acquired
 }
 
 func (c *memoryQuotaController) tryAcquireEvent(bytes uint64) bool {
@@ -293,7 +285,8 @@ func (c *memoryQuotaController) tryAcquireEvent(bytes uint64) bool {
 	}
 }
 
-func (c *memoryQuotaController) releaseEvent(bytes uint64) {
+// ReleaseEvent releases event memory after downstream has consumed the event.
+func (c *memoryQuotaController) ReleaseEvent(bytes uint64) {
 	if bytes == 0 {
 		return
 	}
@@ -306,10 +299,30 @@ func (c *memoryQuotaController) releaseEvent(bytes uint64) {
 	c.eventNotifier.notify()
 }
 
-func (c *memoryQuotaController) notifyScanAdmission() {
+// NotifyScanAdmission wakes workers so they can recheck span state and admission.
+func (c *memoryQuotaController) NotifyScanAdmission() {
 	c.scanMu.Lock()
 	c.notifyScanAdmissionLocked()
 	c.scanMu.Unlock()
+}
+
+// UpdateMetrics reports the current event-memory and scan-admission state.
+func (c *memoryQuotaController) UpdateMetrics() {
+	c.scanMu.Lock()
+	used := c.used.Load()
+	scanUsed := c.scanUsed
+	level := c.level
+	scanEstimate := c.scanEstimate
+	c.scanMu.Unlock()
+
+	metrics.LogPullerMemoryQuota.WithLabelValues("max").Set(float64(c.capacity))
+	metrics.LogPullerMemoryQuota.WithLabelValues("used").Set(float64(used))
+	metrics.LogPullerMemoryQuota.WithLabelValues("scan_used").Set(float64(scanUsed))
+	metrics.LogPullerMemoryQuota.WithLabelValues("scan_estimate").Set(float64(scanEstimate))
+	metrics.LogPullerMemoryQuota.WithLabelValues("hard_limit").Set(float64(c.hardLimit))
+	metrics.LogPullerMemoryQuotaAdmissionLevel.Set(float64(level))
+	metrics.LogPullerMemoryQuotaEventWaiterCount.Set(
+		float64(c.eventNotifier.waiters.Load()))
 }
 
 func (c *memoryQuotaController) notifyScanAdmissionLocked() {

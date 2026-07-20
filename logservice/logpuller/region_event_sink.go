@@ -17,7 +17,6 @@ import (
 	"context"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"go.uber.org/zap"
 )
@@ -73,7 +72,7 @@ func (s *regionEventSink) Push(subID SubscriptionID, event regionEvent) {
 	if event.needsMemoryAccounting() {
 		span := event.mustFirstState().region.subscribedSpan
 		event.memoryBytes = uint64(event.getSize())
-		if !s.memoryQuota.acquireEvent(s.ctx, span, event.memoryBytes) {
+		if !s.memoryQuota.AcquireEvent(s.ctx, span, event.memoryBytes) {
 			return
 		}
 	}
@@ -84,17 +83,9 @@ func (s *regionEventSink) UpdateMetrics() {
 	dsMetrics := s.ds.GetMetrics()
 	metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 	metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
-
-	used, capacity, _ := s.memoryQuota.snapshot()
-	scanUsed, scanEstimate, hardLimit := s.memoryQuota.scanSnapshot()
-	metrics.LogPullerMemoryQuota.WithLabelValues("max").Set(float64(capacity))
-	metrics.LogPullerMemoryQuota.WithLabelValues("used").Set(float64(used))
-	metrics.LogPullerMemoryQuota.WithLabelValues("scan_used").Set(float64(scanUsed))
-	metrics.LogPullerMemoryQuota.WithLabelValues("scan_estimate").Set(float64(scanEstimate))
-	metrics.LogPullerMemoryQuota.WithLabelValues("hard_limit").Set(float64(hardLimit))
 }
 
 func (s *regionEventSink) Close() {
-	s.memoryQuota.wakeAll()
+	s.memoryQuota.WakeAll()
 	s.ds.Close()
 }
