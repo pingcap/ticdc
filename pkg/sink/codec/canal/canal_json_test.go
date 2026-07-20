@@ -1139,7 +1139,7 @@ func TestDecoderTableInfoCacheUsesDDLCommitTsAcrossColumnChanges(t *testing.T) {
 	require.NoError(t, err)
 
 	buildRowMessage := func(commitTs uint64, mysqlTypes map[string]string) *canalJSONMessageWithTiDBExtension {
-		data := map[string]interface{}{
+		data := map[string]any{
 			"data": "insert_1",
 			"id":   "525",
 		}
@@ -1159,7 +1159,7 @@ func TestDecoderTableInfoCacheUsesDDLCommitTsAcrossColumnChanges(t *testing.T) {
 					"new_col": 4,
 				},
 				MySQLType: mysqlTypes,
-				Data:      []map[string]interface{}{data},
+				Data:      []map[string]any{data},
 			},
 			Extensions: &tidbExtension{CommitTs: commitTs},
 		}

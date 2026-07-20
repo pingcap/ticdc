@@ -177,7 +177,7 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	})
 }
 
-func rowTypeFromPayload(valuePayload map[string]interface{}) commonType.RowType {
+func rowTypeFromPayload(valuePayload map[string]any) commonType.RowType {
 	op, ok := valuePayload["op"]
 	if !ok {
 		log.Panic("DML message op not found")
