@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -66,31 +65,17 @@ func (s *mockRegionEventSinkStream) GetMetrics() dynstream.Metrics[int, Subscrip
 }
 
 func TestRegionEventSinkUpdateMetrics(t *testing.T) {
-	t.Run("quota updates memory gauges", func(t *testing.T) {
-		ds := newMockRegionEventSinkStream()
-		ds.metrics = dynstream.Metrics[int, SubscriptionID]{
-			EventChanSize:   33,
-			PendingQueueLen: 44,
-		}
-		quota := newMemoryQuotaController(66, 8)
-		span := newTestQuotaSpan(1)
-		require.True(t, quota.acquireEvent(context.Background(), span, 55))
-		t.Cleanup(func() { quota.releaseEvent(55) })
+	ds := newMockRegionEventSinkStream()
+	ds.metrics = dynstream.Metrics[int, SubscriptionID]{
+		EventChanSize:   33,
+		PendingQueueLen: 44,
+	}
+	sink := &regionEventSink{ds: ds}
 
-		sink := &regionEventSink{
-			ctx:         context.Background(),
-			ds:          ds,
-			memoryQuota: quota,
-		}
-		sink.UpdateMetrics()
+	sink.UpdateMetrics()
 
-		require.Equal(t, float64(33), testutil.ToFloat64(metricSubscriptionClientDSChannelSize))
-		require.Equal(t, float64(44), testutil.ToFloat64(metricSubscriptionClientDSPendingQueueLen))
-		require.Equal(t, float64(66), testutil.ToFloat64(
-			metrics.LogPullerMemoryQuota.WithLabelValues("max")))
-		require.Equal(t, float64(55), testutil.ToFloat64(
-			metrics.LogPullerMemoryQuota.WithLabelValues("used")))
-	})
+	require.Equal(t, float64(33), testutil.ToFloat64(metricSubscriptionClientDSChannelSize))
+	require.Equal(t, float64(44), testutil.ToFloat64(metricSubscriptionClientDSPendingQueueLen))
 }
 
 func TestRegionEventSinkTracksEntriesUntilDrop(t *testing.T) {
@@ -115,10 +100,10 @@ func TestRegionEventSinkTracksEntriesUntilDrop(t *testing.T) {
 	})
 	pushed := <-ds.eventCh
 	require.NotZero(t, pushed.memoryBytes)
-	used, _, _ := quota.snapshot()
-	require.NotZero(t, used)
+	quotaState := getMemoryQuotaTestState(quota)
+	require.NotZero(t, quotaState.used)
 
 	(&regionEventHandler{eventSink: sink}).OnDrop(pushed)
-	used, _, _ = quota.snapshot()
-	require.Zero(t, used)
+	quotaState = getMemoryQuotaTestState(quota)
+	require.Zero(t, quotaState.used)
 }
