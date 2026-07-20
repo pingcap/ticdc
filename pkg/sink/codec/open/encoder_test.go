@@ -1288,8 +1288,6 @@ func TestGenerateColumn(t *testing.T) {
 	messageType, hasNext = dec.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, messageType, common.MessageTypeRow)
-
-	decoded = dec.NextDMLMessage().ToDMLEvent()
 }
 
 // Including insert / update / delete
