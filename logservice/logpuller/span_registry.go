@@ -73,6 +73,7 @@ type subscribedSpan struct {
 	initializationTracker spanInitializationTracker
 	resolvedTsUpdated     atomic.Int64
 	resolvedTs            atomic.Uint64
+	priorityPolicy        scanPriorityPolicy
 }
 
 // spanRegistry tracks subscribed spans and owns span-level background maintenance.
@@ -95,6 +96,8 @@ func newSubscribedSpan(
 	advanceResolvedTs func(ts uint64),
 	advanceInterval int64,
 	filterLoop bool,
+	pdClock pdutil.Clock,
+	priorityLagThreshold time.Duration,
 ) *subscribedSpan {
 	rangeLock := regionlock.NewRangeLock(uint64(subID), span.StartKey, span.EndKey, startTs)
 
@@ -108,6 +111,10 @@ func newSubscribedSpan(
 		consumeKVEvents:   consumeKVEvents,
 		advanceResolvedTs: advanceResolvedTs,
 		advanceInterval:   advanceInterval,
+		priorityPolicy: scanPriorityPolicy{
+			pdClock:      pdClock,
+			lagThreshold: priorityLagThreshold,
+		},
 	}
 	rt.initialized.Store(false)
 	rt.resolvedTsUpdated.Store(time.Now().Unix())
@@ -138,6 +145,18 @@ func newSubscribedSpan(
 		}
 	}
 	return rt
+}
+
+// recordResolvedTs updates span progress and its priority policy together.
+func (span *subscribedSpan) recordResolvedTs(resolvedTs uint64) {
+	span.resolvedTs.Store(resolvedTs)
+	span.resolvedTsUpdated.Store(time.Now().Unix())
+	if span.priorityPolicy.observeSpanResolved(resolvedTs) {
+		log.Info("subscription catches up for the first time",
+			zap.Uint64("subscriptionID", uint64(span.subID)),
+			zap.Uint64("resolvedTs", resolvedTs),
+			zap.Duration("threshold", span.priorityPolicy.lagThreshold))
+	}
 }
 
 func (span *subscribedSpan) clearKVEventsCache() {

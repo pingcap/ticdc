@@ -422,8 +422,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 					zap.Uint64("lastResolvedTs", lastResolvedTs),
 					zap.Float64("decreaseLag(s)", decreaseLag))
 			}
-			span.resolvedTs.Store(ts)
-			span.resolvedTsUpdated.Store(time.Now().Unix())
+			span.recordResolvedTs(ts)
 			return ts
 		}
 	}
