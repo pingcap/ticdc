@@ -73,7 +73,7 @@ func (r *regionReq) release() bool {
 	if !r.released.CompareAndSwap(false, true) {
 		return false
 	}
-	r.controller.memoryQuota.releaseScan(r.scanBytes)
+	r.controller.memoryQuota.ReleaseScan(r.scanBytes)
 	r.controller.release()
 	return true
 }
@@ -200,7 +200,7 @@ func (c *regionAdmissionController) popEligibleLocked() (
 		return nil, 0, nil
 	}
 
-	scanBytes, memoryReady, admitted := c.memoryQuota.acquireScan(
+	scanBytes, memoryReady, admitted := c.memoryQuota.AcquireScan(
 		request.regionInfo, c.currentTs())
 	if !admitted {
 		return nil, 0, memoryReady

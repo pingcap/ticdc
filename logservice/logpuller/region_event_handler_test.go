@@ -397,7 +397,7 @@ func TestHandleEntriesReleasesMemoryAfterDownstreamCallback(t *testing.T) {
 			lockedRangeState: lockedState,
 		},
 	}
-	require.True(t, quota.acquireEvent(context.Background(), span, 10))
+	require.True(t, quota.AcquireEvent(context.Background(), span, 10))
 	handler := &regionEventHandler{eventSink: &regionEventSink{
 		ds:          newMockRegionEventSinkStream(),
 		memoryQuota: quota,
@@ -415,13 +415,13 @@ func TestHandleEntriesReleasesMemoryAfterDownstreamCallback(t *testing.T) {
 		}},
 	})
 	require.True(t, await)
-	used, _, _ := quota.snapshot()
-	require.Equal(t, uint64(10), used)
+	quotaState := getMemoryQuotaTestState(quota)
+	require.Equal(t, uint64(10), quotaState.used)
 
 	callback := <-callbackCh
 	callback()
-	used, _, _ = quota.snapshot()
-	require.Zero(t, used)
+	quotaState = getMemoryQuotaTestState(quota)
+	require.Zero(t, quotaState.used)
 }
 
 func TestTryMarkSpanInitializedByResolvedTs(t *testing.T) {
