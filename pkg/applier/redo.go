@@ -483,7 +483,13 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 		SinkConfig: &config.SinkConfig{},
 	}
 	if ra.mysqlSink == nil {
-		ra.mysqlSink, err = mysql.New(egCtx, ra.rd.GetChangefeedID(), replicaConfig, sinkURI)
+		ra.mysqlSink, err = mysql.New(
+			egCtx,
+			ra.rd.GetChangefeedID(),
+			replicaConfig,
+			sinkURI,
+			commonType.DefaultKeyspaceID,
+		)
 		if err != nil {
 			return err
 		}

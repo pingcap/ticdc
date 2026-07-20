@@ -148,7 +148,12 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		SinkURI:    downstreamURIStr,
 		SinkConfig: replicaConfig.Sink,
 	}
-	sink, err := sink.New(stdCtx, cfg, commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspaceName))
+	sink, err := sink.New(
+		stdCtx,
+		cfg,
+		commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspaceName),
+		commonType.DefaultKeyspaceID,
+	)
 	if err != nil {
 		log.Error("failed to create sink", zap.Error(err))
 		return nil, err
