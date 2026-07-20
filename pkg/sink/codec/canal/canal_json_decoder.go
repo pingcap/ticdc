@@ -623,7 +623,8 @@ func (d *decoder) getDDLCommitTsLocked(schema, table string, commitTs uint64) ui
 
 	commitTsList := d.ddlCommitTs[tableNameKey{schema: schema, table: table}]
 	i := sort.Search(len(commitTsList), func(i int) bool {
-		return commitTsList[i] > commitTs
+		// DMLs with the same commit-ts as a DDL are flushed before that DDL.
+		return commitTsList[i] >= commitTs
 	})
 	if i == 0 {
 		return 0

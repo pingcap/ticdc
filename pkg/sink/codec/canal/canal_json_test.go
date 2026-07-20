@@ -1231,28 +1231,44 @@ func TestDecoderTableInfoCacheUsesDDLCommitTsBoundary(t *testing.T) {
 		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
 		ddlCommitTs:    make(map[tableNameKey][]uint64),
 	}
-	buildMessage := func(commitTs uint64) *canalJSONMessageWithTiDBExtension {
+	buildMessage := func(commitTs uint64, mysqlTypes map[string]string) *canalJSONMessageWithTiDBExtension {
 		return &canalJSONMessageWithTiDBExtension{
 			JSONMessage: &JSONMessage{
-				Schema:  "test",
-				Table:   "table_5",
-				PKNames: []string{"id"},
-				MySQLType: map[string]string{
-					"data": "varchar(255)",
-					"id":   "int",
-				},
+				Schema:    "test",
+				Table:     "table_5",
+				PKNames:   []string{"id"},
+				MySQLType: mysqlTypes,
 			},
 			Extensions: &tidbExtension{CommitTs: commitTs},
 		}
 	}
+	columnNames := func(tableInfo *commonType.TableInfo) []string {
+		columns := tableInfo.GetColumns()
+		result := make([]string, 0, len(columns))
+		for _, column := range columns {
+			result = append(result, column.Name.O)
+		}
+		return result
+	}
+	beforeDropSchema := map[string]string{
+		"data":    "varchar(255)",
+		"id":      "int",
+		"new_col": "int",
+	}
+	afterDropSchema := map[string]string{
+		"data": "varchar(255)",
+		"id":   "int",
+	}
 
-	beforeDDL := dec.queryTableInfo(buildMessage(100))
 	dec.addDDLCommitTs("test", "table_5", 200)
-	afterDDL := dec.queryTableInfo(buildMessage(300))
-	lateBeforeDDL := dec.queryTableInfo(buildMessage(100))
+	sameTsAsDDL := dec.queryTableInfo(buildMessage(200, beforeDropSchema))
+	afterDDL := dec.queryTableInfo(buildMessage(300, afterDropSchema))
+	lateSameTsAsDDL := dec.queryTableInfo(buildMessage(200, beforeDropSchema))
 
-	require.NotSame(t, beforeDDL, afterDDL)
-	require.Same(t, beforeDDL, lateBeforeDDL)
+	require.Equal(t, []string{"data", "id", "new_col"}, columnNames(sameTsAsDDL))
+	require.Equal(t, []string{"data", "id"}, columnNames(afterDDL))
+	require.NotSame(t, sameTsAsDDL, afterDDL)
+	require.Same(t, sameTsAsDDL, lateSameTsAsDDL)
 	require.Equal(t, []uint64{200}, dec.ddlCommitTs[tableNameKey{schema: "test", table: "table_5"}])
 }
 
