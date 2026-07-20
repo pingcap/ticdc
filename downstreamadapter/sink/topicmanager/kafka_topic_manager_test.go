@@ -100,6 +100,8 @@ func TestCreateTopic(t *testing.T) {
 			}, nil),
 		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, true).Return(
 			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).Return(
+			map[string]kafka.TopicDetail{}, nil),
 		adminClient.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
 			func(detail *kafka.TopicDetail, validateOnly bool) error {
 				gotNewTopicDetail = detail
@@ -115,7 +117,11 @@ func TestCreateTopic(t *testing.T) {
 			}, nil),
 		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic2"}, true).Return(
 			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic2"}, false).Return(
+			map[string]kafka.TopicDetail{}, nil),
 		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic-failed"}, true).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic-failed"}, false).Return(
 			map[string]kafka.TopicDetail{}, nil),
 		adminClient.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
 			func(detail *kafka.TopicDetail, validateOnly bool) error {
@@ -191,6 +197,8 @@ func TestCreateTopicWaitsUntilVisible(t *testing.T) {
 	gomock.InOrder(
 		adminClient.EXPECT().GetTopicsMeta([]string{topic}, true).Return(
 			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
+			map[string]kafka.TopicDetail{}, nil),
 		adminClient.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
 			func(detail *kafka.TopicDetail, validateOnly bool) error {
 				require.Equal(t, &kafka.TopicDetail{
@@ -231,7 +239,6 @@ func TestCreateTopicWithTopicDescribeDenied(t *testing.T) {
 	adminClient := &mockAdminClientWithDeniedDescribe{
 		MockClusterAdminClient: kafka.NewMockClusterAdminClient(ctrl),
 	}
-	defer adminClient.Close()
 	cfg := &kafka.AutoCreateTopicConfig{
 		AutoCreate:        true,
 		PartitionNum:      2,
@@ -258,10 +265,9 @@ func TestCreateTopicWithCreateDenied(t *testing.T) {
 	t.Parallel()
 
 	ctrl := gomock.NewController(t)
-	adminClient := &mockAdminClientWithDeniedDescribe{
+	adminClient := &mockAdminClientWithDeniedCreate{
 		MockClusterAdminClient: kafka.NewMockClusterAdminClient(ctrl),
 	}
-	defer adminClient.Close()
 	cfg := &kafka.AutoCreateTopicConfig{
 		AutoCreate:        true,
 		PartitionNum:      2,
