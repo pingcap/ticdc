@@ -33,7 +33,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/ticdc/utils/priorityqueue"
 	"github.com/prometheus/client_golang/prometheus"
 	kvclientv2 "github.com/tikv/client-go/v2/kv"
@@ -41,6 +40,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -60,18 +60,8 @@ const (
 )
 
 var (
-	metricFeedNotLeaderCounter        = metrics.EventFeedErrorCounter.WithLabelValues("NotLeader")
-	metricFeedEpochNotMatchCounter    = metrics.EventFeedErrorCounter.WithLabelValues("EpochNotMatch")
-	metricFeedRegionNotFoundCounter   = metrics.EventFeedErrorCounter.WithLabelValues("RegionNotFound")
-	metricFeedDuplicateRequestCounter = metrics.EventFeedErrorCounter.WithLabelValues("DuplicateRequest")
-	metricFeedUnknownErrorCounter     = metrics.EventFeedErrorCounter.WithLabelValues("Unknown")
-	metricFeedRPCCtxUnavailable       = metrics.EventFeedErrorCounter.WithLabelValues("RPCCtxUnavailable")
-	metricGetStoreErr                 = metrics.EventFeedErrorCounter.WithLabelValues("GetStoreErr")
-	metricStoreSendRequestErr         = metrics.EventFeedErrorCounter.WithLabelValues("SendRequestToStore")
-	metricKvIsBusyCounter             = metrics.EventFeedErrorCounter.WithLabelValues("KvIsBusy")
-	metricKvCongestedCounter          = metrics.EventFeedErrorCounter.WithLabelValues("KvCongested")
-	metricResolveLockSuccessCounter   = metrics.SubscriptionClientResolveLockCounter.WithLabelValues("success")
-	metricResolveLockFailureCounter   = metrics.SubscriptionClientResolveLockCounter.WithLabelValues("failure")
+	metricResolveLockSuccessCounter = metrics.SubscriptionClientResolveLockCounter.WithLabelValues("success")
+	metricResolveLockFailureCounter = metrics.SubscriptionClientResolveLockCounter.WithLabelValues("failure")
 
 	metricSubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store")
 	metricSubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store")
@@ -100,55 +90,6 @@ type rangeTask struct {
 	subscribedSpan *subscribedSpan
 	filterLoop     bool
 	priority       TaskType
-}
-
-const kvEventsCacheMaxSize = 32
-
-// subscribedSpan represents a span to subscribe.
-// It contains a sub span of a table(or the total span of a table),
-// the startTs of the table, and the output event channel.
-type subscribedSpan struct {
-	subID   SubscriptionID
-	startTs uint64
-	// Whether to filter out the value written by TiCDC itself.
-	// It should be `true` in BDR mode.
-	filterLoop bool
-
-	// The target span
-	span heartbeatpb.TableSpan
-	// The range lock of the span,
-	// it is used to prevent duplicate requests to the same region range,
-	// and it also used to calculate this table's resolvedTs.
-	rangeLock *regionlock.RangeLock
-
-	consumeKVEvents func(events []common.RawKVEntry, wakeCallback func()) bool
-
-	advanceResolvedTs func(ts uint64)
-
-	advanceInterval int64
-
-	kvEventsCache []common.RawKVEntry
-
-	// To handle span removing.
-	stopped atomic.Bool
-
-	// To handle stale lock resolvings.
-	tryResolveLock     func(regionID uint64, state *regionlock.LockedRangeState)
-	staleLocksTargetTs atomic.Uint64
-
-	lastAdvanceTime atomic.Int64
-
-	initialized       atomic.Bool
-	resolvedTsUpdated atomic.Int64
-	resolvedTs        atomic.Uint64
-}
-
-func (span *subscribedSpan) clearKVEventsCache() {
-	if cap(span.kvEventsCache) > kvEventsCacheMaxSize {
-		span.kvEventsCache = nil
-	} else {
-		span.kvEventsCache = span.kvEventsCache[:0]
-	}
 }
 
 type SubscriptionClientConfig struct {
@@ -194,19 +135,15 @@ type subscriptionClient struct {
 
 	stores sync.Map
 
-	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
-	// the following three fields are used to manage feedback from ds and notify other goroutines
-	mu     sync.Mutex
-	cond   *sync.Cond
-	paused atomic.Bool
-
 	// the credential to connect tikv
 	credential *security.Credential
 
-	totalSpans struct {
-		sync.RWMutex
-		spanMap map[SubscriptionID]*subscribedSpan
-	}
+	// failureHandler handles failed regions and owns reschedule/retry decisions.
+	failureHandler *regionFailureHandler
+	// eventSink delivers region events and owns dynstream interaction.
+	eventSink *regionEventSink
+	// spanRegistry tracks subscribed spans and owns span-level background tasks.
+	spanRegistry *spanRegistry
 
 	// rangeTaskCh is used to receive range tasks.
 	// The tasks will be handled in `handleRangeTask` goroutine.
@@ -218,9 +155,6 @@ type subscriptionClient struct {
 	// The tasks will be handled in `handleResolveLockTasks` goroutine.
 	resolveLockTaskCh      chan resolveLockTask
 	resolveLockRateLimiter *resolveLockRateLimiter
-	// errCh is used to receive region errors.
-	// The errors will be handled in `handleErrors` goroutine.
-	errCache *errCache
 }
 
 // NewSubscriptionClient creates a client.
@@ -245,26 +179,11 @@ func NewSubscriptionClient(
 		regionTaskQueue:        priorityqueue.New[PriorityTask](),
 		resolveLockTaskCh:      make(chan resolveLockTask, 1024),
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
-		errCache:               newErrCache(),
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
-	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
-
-	option := dynstream.NewOption()
-	// Note: it is max batch size of the kv sent from tikv(not committed rows)
-	option.BatchCount = 1024
-	// TODO: Set `UseBuffer` to true until we refactor the `regionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
-	// 	ds.handleLoop fetch events from `ch` -> regionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
-	option.UseBuffer = true
-	option.EnableMemoryControl = true
-	ds := dynstream.NewParallelDynamicStream(
-		"log-puller",
-		&regionEventHandler{subClient: subClient},
-		option,
-	)
-	ds.Start()
-	subClient.ds = ds
-	subClient.cond = sync.NewCond(&subClient.mu)
+	subClient.failureHandler = newRegionFailureHandler(subClient)
+	subClient.eventSink = newRegionEventSink(subClient.failureHandler)
+	subClient.spanRegistry = newSpanRegistry(subClient.pd, subClient.pdClock)
 
 	subClient.initMetrics()
 	return subClient
@@ -292,32 +211,6 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			resolvedTsLag := s.GetResolvedTsLag()
-			if resolvedTsLag > 0 {
-				metrics.LogPullerResolvedTsLag.Set(resolvedTsLag)
-			}
-			dsMetrics := s.ds.GetMetrics()
-			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
-			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
-			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 1 {
-				log.Panic("subscription client should have only one area")
-			}
-			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 0 {
-				areaMetric := dsMetrics.MemoryControl.AreaMemoryMetrics[0]
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"log-puller",
-					"max",
-					"default",
-					"default",
-				).Set(float64(areaMetric.MaxMemory()))
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"log-puller",
-					"used",
-					"default",
-					"default",
-				).Set(float64(areaMetric.MemoryUsage()))
-			}
-
 			pendingRegionReqCount := 0
 			s.stores.Range(func(_, value any) bool {
 				store := value.(*requestedStore)
@@ -331,21 +224,15 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			})
 
 			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(float64(pendingRegionReqCount))
-
-			count := 0
-			s.totalSpans.RLock()
-			for _, rt := range s.totalSpans.spanMap {
-				count += rt.rangeLock.Len()
-			}
-			s.totalSpans.RUnlock()
-			metrics.SubscriptionClientSubscribedRegionCount.Set(float64(count))
+			s.eventSink.UpdateMetrics()
+			s.spanRegistry.UpdateMetrics()
 		}
 	}
 }
 
 // Subscribe the given table span.
 // NOTE: `span.TableID` must be set correctly.
-// It new a subscribedSpan and store it in `s.totalSpans`,
+// It new a subscribedSpan and store it in `s.spanRegistry`,
 // and send a rangeTask to `s.rangeTaskCh`.
 // The rangeTask will be handled in `handleRangeTasks` goroutine.
 func (s *subscriptionClient) Subscribe(
@@ -362,19 +249,29 @@ func (s *subscriptionClient) Subscribe(
 		return
 	}
 
-	rt := s.newSubscribedSpan(subID, span, startTs, consumeKVEvents, advanceResolvedTs, advanceInterval, bdrMode)
-	s.totalSpans.Lock()
-	s.totalSpans.spanMap[subID] = rt
-	s.totalSpans.Unlock()
-
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
-	s.ds.AddPath(rt.subID, rt, areaSetting)
+	rt := newSubscribedSpan(
+		s.ctx,
+		s.resolveLockRateLimiter,
+		s.resolveLockTaskCh,
+		subID,
+		span,
+		startTs,
+		consumeKVEvents,
+		advanceResolvedTs,
+		advanceInterval,
+		bdrMode,
+		s.pdClock,
+		time.Duration(config.GetGlobalServerConfig().Debug.Puller.OldStartTsScanLowPriorityThreshold),
+	)
+	s.spanRegistry.Add(rt)
+	s.eventSink.AddPath(rt)
 
 	select {
 	case <-s.ctx.Done():
 		log.Warn("subscribes span failed, the subscription client has closed")
 	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: rt.filterLoop, priority: TaskLowPrior}:
-		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
+		log.Info("subscribes span done",
+			zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
 			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
 	}
@@ -383,10 +280,8 @@ func (s *subscriptionClient) Subscribe(
 // Unsubscribe the given table span. All covered regions will be deregistered asynchronously.
 // NOTE: `span.TableID` must be set correctly.
 func (s *subscriptionClient) Unsubscribe(subID SubscriptionID) {
-	// NOTE: `subID` is cleared from `s.totalSpans` in `onTableDrained`.
-	s.totalSpans.Lock()
-	rt := s.totalSpans.spanMap[subID]
-	s.totalSpans.Unlock()
+	// NOTE: `subID` is cleared from `s.spanRegistry` in `onTableDrained`.
+	rt := s.spanRegistry.Get(subID)
 	if rt == nil {
 		log.Warn("unknown subscription", zap.Uint64("subscriptionID", uint64(subID)))
 		return
@@ -398,54 +293,8 @@ func (s *subscriptionClient) Unsubscribe(subID SubscriptionID) {
 		zap.Bool("exists", rt != nil))
 }
 
-func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
-	s.ds.Wake(subID)
-}
-
 func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
-	// fast path
-	if !s.paused.Load() {
-		s.ds.Push(subID, event)
-		return
-	}
-	// slow path: wait until paused is false
-	s.mu.Lock()
-	for s.paused.Load() {
-		select {
-		case <-s.ctx.Done():
-			s.mu.Unlock()
-			return
-		default:
-			s.cond.Wait()
-		}
-	}
-	s.mu.Unlock()
-	s.ds.Push(subID, event)
-}
-
-func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case feedback := <-s.ds.Feedback():
-			switch feedback.FeedbackType {
-			case dynstream.PauseArea:
-				s.mu.Lock()
-				s.paused.Store(true)
-				s.mu.Unlock()
-				log.Info("subscription client pause push region event")
-			case dynstream.ResumeArea:
-				s.mu.Lock()
-				s.paused.Store(false)
-				s.cond.Broadcast()
-				s.mu.Unlock()
-				log.Info("subscription client resume push region event")
-			case dynstream.ReleasePath, dynstream.ResumePath:
-				// Ignore it, because it is no need to pause and resume a path in puller.
-			}
-		}
-	}
+	s.eventSink.Push(subID, event)
 }
 
 func (s *subscriptionClient) Run(ctx context.Context) error {
@@ -459,14 +308,12 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error { return s.updateMetrics(ctx) })
-	g.Go(func() error { return s.handleDSFeedBack(ctx) })
+	g.Go(func() error { return s.eventSink.Run(ctx) })
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.handleRegions(ctx, g) })
-	g.Go(func() error { return s.handleErrors(ctx) })
-	g.Go(func() error { return s.runResolveLockChecker(ctx) })
+	g.Go(func() error { return s.failureHandler.Run(ctx) })
 	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
-	g.Go(func() error { return s.logSlowRegions(ctx) })
-	g.Go(func() error { return s.errCache.dispatch(ctx) })
+	g.Go(func() error { return s.spanRegistry.Run(ctx) })
 
 	log.Info("subscription client starts")
 	defer log.Info("subscription client exits")
@@ -476,11 +323,7 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 // Close closes the client. Must be called after `Run` returns.
 func (s *subscriptionClient) Close(ctx context.Context) error {
 	s.cancel()
-	s.mu.Lock()
-	s.paused.Store(false)
-	s.cond.Broadcast()
-	s.mu.Unlock()
-	s.ds.Close()
+	s.eventSink.Close()
 	s.regionTaskQueue.Close()
 	return nil
 }
@@ -504,27 +347,18 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 	log.Info("subscription client stop span is finished",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
-	err := s.ds.RemovePath(rt.subID)
+	err := s.eventSink.RemovePath(rt.subID)
 	if err != nil {
 		log.Warn("subscription client remove path failed",
 			zap.Uint64("subscriptionID", uint64(rt.subID)),
 			zap.Error(err))
 	}
-	s.totalSpans.Lock()
-	defer s.totalSpans.Unlock()
-	delete(s.totalSpans.spanMap, rt.subID)
+	s.spanRegistry.Remove(rt.subID)
 }
 
 // Note: don't block the caller, otherwise there may be deadlock
 func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
-	// unlock the range early to prevent blocking the range.
-	if errInfo.subscribedSpan.rangeLock.UnlockRange(
-		errInfo.span.StartKey, errInfo.span.EndKey,
-		errInfo.verID.GetID(), errInfo.verID.GetVer(), errInfo.resolvedTs()) {
-		s.onTableDrained(errInfo.subscribedSpan)
-		return
-	}
-	s.errCache.add(errInfo)
+	s.failureHandler.Report(errInfo)
 }
 
 // requestedStore represents a store that has been connected.
@@ -802,7 +636,11 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 
 // scheduleRegionRequest locks the region's range and send the region to regionTaskQueue,
 // which will be handled by handleRegions.
-func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region regionInfo, priority TaskType) {
+func (s *subscriptionClient) scheduleRegionRequest(
+	ctx context.Context,
+	region regionInfo,
+	inheritedPriority TaskType,
+) {
 	lockRangeResult := region.subscribedSpan.rangeLock.LockRange(
 		ctx, region.span.StartKey, region.span.EndKey, region.verID.GetID(), region.verID.GetVer())
 
@@ -813,10 +651,29 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 	switch lockRangeResult.Status {
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
-		s.regionTaskQueue.Push(NewRegionPriorityTask(priority, region, s.pdClock.CurrentTS()))
+		currentTs := s.pdClock.CurrentTS()
+		priority := region.subscribedSpan.priorityPolicy.resolve(
+			inheritedPriority,
+			region.resolvedTs(),
+			oracle.GetTimeFromTS(currentTs),
+		)
+		region.scanPriority = priority.scanPriority()
+		s.regionTaskQueue.Push(NewRegionPriorityTask(priority, region, currentTs))
+		if log.GetLevel() <= zapcore.DebugLevel {
+			log.Debug("cdc region scan task enqueued",
+				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
+				zap.Int64("tableID", region.subscribedSpan.span.TableID),
+				zap.Uint64("startTs", region.subscribedSpan.startTs),
+				zap.Uint64("regionID", region.verID.GetID()),
+				zap.Uint64("regionEpochVersion", region.verID.GetVer()),
+				zap.Uint64("regionEpochConfVer", region.verID.GetConfVer()),
+				zap.String("priority", priority.String()),
+				zap.String("scanPriority", region.scanPriority.String()),
+				zap.String("span", common.FormatTableSpan(&region.span)))
+		}
 	case regionlock.LockRangeStatusStale:
 		for _, r := range lockRangeResult.RetryRanges {
-			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop, priority)
+			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop, inheritedPriority)
 		}
 	default:
 		return
@@ -827,172 +684,16 @@ func (s *subscriptionClient) scheduleRangeRequest(
 	ctx context.Context, span heartbeatpb.TableSpan,
 	subscribedSpan *subscribedSpan,
 	filterLoop bool,
-	priority TaskType,
+	inheritedPriority TaskType,
 ) {
 	select {
 	case <-ctx.Done():
-	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: subscribedSpan, filterLoop: filterLoop, priority: priority}:
-	}
-}
-
-func (s *subscriptionClient) handleErrors(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			log.Info("subscription client handle errors and exit")
-			return ctx.Err()
-		case errInfo := <-s.errCache.errCh:
-			if err := s.doHandleError(ctx, errInfo); err != nil {
-				return err
-			}
-		}
-	}
-}
-
-func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
-	err := errors.Cause(errInfo.err)
-	if _, requestCancelled := err.(*requestCancelledErr); !requestCancelled {
-		log.Debug("cdc region error",
-			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
-			zap.Uint64("regionID", errInfo.verID.GetID()),
-			zap.Error(err))
-	}
-
-	//nolint:errorlint // converting large type switch to errors.As is a significant refactor
-	switch eerr := err.(type) {
-	case *eventError:
-		innerErr := eerr.err
-		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
-			metricFeedNotLeaderCounter.Inc()
-			s.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
-			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
-			return nil
-		}
-		if innerErr.GetEpochNotMatch() != nil {
-			metricFeedEpochNotMatchCounter.Inc()
-			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
-			return nil
-		}
-		if innerErr.GetRegionNotFound() != nil {
-			metricFeedRegionNotFoundCounter.Inc()
-			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
-			return nil
-		}
-		if innerErr.GetCongested() != nil {
-			metricKvCongestedCounter.Inc()
-			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
-			return nil
-		}
-		if innerErr.GetServerIsBusy() != nil {
-			metricKvIsBusyCounter.Inc()
-			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
-			return nil
-		}
-		if duplicated := innerErr.GetDuplicateRequest(); duplicated != nil {
-			// TODO(qupeng): It's better to add a new machanism to deregister one region.
-			metricFeedDuplicateRequestCounter.Inc()
-			return errors.New("duplicate request")
-		}
-		if compatibility := innerErr.GetCompatibility(); compatibility != nil {
-			return errors.ErrVersionIncompatible.GenWithStackByArgs(compatibility)
-		}
-		if mismatch := innerErr.GetClusterIdMismatch(); mismatch != nil {
-			return errors.ErrClusterIDMismatch.GenWithStackByArgs(mismatch.Current, mismatch.Request)
-		}
-
-		log.Warn("empty or unknown cdc error",
-			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
-			zap.Stringer("error", innerErr))
-		metricFeedUnknownErrorCounter.Inc()
-		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
-		return nil
-	case *rpcCtxUnavailableErr:
-		metricFeedRPCCtxUnavailable.Inc()
-		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
-		return nil
-	case *getStoreErr:
-		metricGetStoreErr.Inc()
-		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-		// cannot get the store the region belongs to, so we need to reload the region.
-		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
-		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
-		return nil
-	case *storeStreamErr:
-		metricStoreSendRequestErr.Inc()
-		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
-		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
-		return nil
-	case *requestCancelledErr:
-		// the corresponding subscription has been unsubscribed, just ignore.
-		return nil
-	default:
-		// TODO(qupeng): for some errors it's better to just deregister the region from TiKVs.
-		log.Warn("subscription client meets an internal error, fail the changefeed",
-			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
-			zap.Error(err))
-		return err
-	}
-}
-
-type subscriptionAndTargetTs struct {
-	subSpan  *subscribedSpan
-	targetTs uint64
-}
-
-func (s *subscriptionClient) runResolveLockChecker(ctx context.Context) error {
-	resolveLockTicker := time.NewTicker(resolveLockTickInterval)
-	defer resolveLockTicker.Stop()
-	maxCacheSize := 1024
-	subSpanAndTsCache := make([]subscriptionAndTargetTs, 0, maxCacheSize)
-	// getResolvedTargetTs returns the targetTs to resolve stale locks. 0 means no need to resolve.
-	getResolvedTargetTs := func(subSpan *subscribedSpan, currentTime time.Time, currentTs uint64) uint64 {
-		resolvedTsUpdated := time.Unix(subSpan.resolvedTsUpdated.Load(), 0)
-		if !subSpan.initialized.Load() || time.Since(resolvedTsUpdated) < resolveLockFence {
-			return 0
-		}
-		resolvedTs := subSpan.resolvedTs.Load()
-		resolvedTime := oracle.GetTimeFromTS(resolvedTs)
-		if currentTime.Sub(resolvedTime) < resolveLockFence {
-			return 0
-		}
-		return min(currentTs, oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence)))
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-resolveLockTicker.C:
-		}
-
-		physical, logic, err := s.pd.GetTS(ctx)
-		if err != nil {
-			log.Warn("get ts from pd failed", zap.Error(err))
-			continue
-		}
-		currentTs := oracle.ComposeTS(physical, logic)
-		currentTime := s.pdClock.CurrentTime()
-		s.totalSpans.Lock()
-		for _, subSpan := range s.totalSpans.spanMap {
-			if subSpan != nil {
-				targetTs := getResolvedTargetTs(subSpan, currentTime, currentTs)
-				if targetTs > 0 {
-					subSpanAndTsCache = append(subSpanAndTsCache, subscriptionAndTargetTs{
-						subSpan:  subSpan,
-						targetTs: targetTs,
-					})
-				}
-			}
-		}
-		s.totalSpans.Unlock()
-		for _, subSpanAndTs := range subSpanAndTsCache {
-			subSpanAndTs.subSpan.resolveStaleLocks(subSpanAndTs.targetTs)
-		}
-		subSpanAndTsCache = subSpanAndTsCache[:0]
-		if cap(subSpanAndTsCache) > maxCacheSize {
-			subSpanAndTsCache = make([]subscriptionAndTargetTs, 0, maxCacheSize)
-		}
+	case s.rangeTaskCh <- rangeTask{
+		span:           span,
+		subscribedSpan: subscribedSpan,
+		filterLoop:     filterLoop,
+		priority:       inheritedPriority,
+	}:
 	}
 }
 
@@ -1030,218 +731,6 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 			return ctx.Err()
 		case task := <-s.resolveLockTaskCh:
 			doResolve(task)
-		}
-	}
-}
-
-func (s *subscriptionClient) logSlowRegions(ctx context.Context) error {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-
-		currTime := s.pdClock.CurrentTime()
-		s.totalSpans.RLock()
-		slowInitializeRegion := 0
-		for subscriptionID, rt := range s.totalSpans.spanMap {
-			attr := rt.rangeLock.IterAll(nil)
-			ckptTime := oracle.GetTimeFromTS(attr.SlowestRegion.ResolvedTs)
-			if attr.SlowestRegion.Initialized {
-				if currTime.Sub(ckptTime) > 6*resolveLockMinInterval {
-					log.Info("subscription client finds a initialized slow region",
-						zap.Uint64("subscriptionID", uint64(subscriptionID)),
-						zap.Any("slowRegion", attr.SlowestRegion))
-				}
-			} else if currTime.Sub(attr.SlowestRegion.Created) > 10*time.Minute {
-				slowInitializeRegion++
-				log.Info("subscription client initializes a region too slow",
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("slowRegion", attr.SlowestRegion))
-			} else if currTime.Sub(ckptTime) > 10*time.Minute {
-				log.Info("subscription client finds a uninitialized slow region",
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("slowRegion", attr.SlowestRegion))
-			}
-			if len(attr.UnLockedRanges) > 0 {
-				log.Info("subscription client holes exist",
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("holes", attr.UnLockedRanges))
-			}
-		}
-		s.totalSpans.RUnlock()
-	}
-}
-
-func (s *subscriptionClient) newSubscribedSpan(
-	subID SubscriptionID,
-	span heartbeatpb.TableSpan,
-	startTs uint64,
-	consumeKVEvents func(raw []common.RawKVEntry, wakeCallback func()) bool,
-	advanceResolvedTs func(ts uint64),
-	advanceInterval int64,
-	filterLoop bool,
-) *subscribedSpan {
-	rangeLock := regionlock.NewRangeLock(uint64(subID), span.StartKey, span.EndKey, startTs)
-
-	rt := &subscribedSpan{
-		subID:      subID,
-		span:       span,
-		startTs:    startTs,
-		filterLoop: filterLoop,
-		rangeLock:  rangeLock,
-
-		consumeKVEvents:   consumeKVEvents,
-		advanceResolvedTs: advanceResolvedTs,
-		advanceInterval:   advanceInterval,
-	}
-	rt.initialized.Store(false)
-	rt.resolvedTsUpdated.Store(time.Now().Unix())
-	rt.resolvedTs.Store(startTs)
-
-	rt.tryResolveLock = func(regionID uint64, state *regionlock.LockedRangeState) {
-		targetTs := rt.staleLocksTargetTs.Load()
-		if !state.Initialized.Load() || state.ResolvedTs.Load() >= targetTs {
-			return
-		}
-		key := resolveLockKey{keyspaceID: span.KeyspaceID, regionID: regionID}
-		if !s.resolveLockRateLimiter.trySchedule(key, time.Now()) {
-			return
-		}
-		select {
-		case <-s.ctx.Done():
-			s.resolveLockRateLimiter.cancel(key)
-		case s.resolveLockTaskCh <- resolveLockTask{
-			keyspaceID: span.KeyspaceID,
-			regionID:   regionID,
-			targetTs:   targetTs,
-			state:      state,
-		}:
-		// it is ok to ignore resolve lock task when the channel is full
-		default:
-			s.resolveLockRateLimiter.cancel(key)
-			metrics.SubscriptionClientResolveLockTaskDropCounter.Inc()
-		}
-	}
-	return rt
-}
-
-func (s *subscriptionClient) GetResolvedTsLag() float64 {
-	pullerMinResolvedTs := uint64(0)
-	s.totalSpans.RLock()
-	for _, rt := range s.totalSpans.spanMap {
-		resolvedTs := rt.resolvedTs.Load()
-		if pullerMinResolvedTs == 0 || resolvedTs < pullerMinResolvedTs {
-			pullerMinResolvedTs = resolvedTs
-		}
-	}
-	s.totalSpans.RUnlock()
-	if pullerMinResolvedTs == 0 {
-		return 0
-	}
-	pdTime := s.pdClock.CurrentTime()
-	phyResolvedTs := oracle.ExtractPhysical(pullerMinResolvedTs)
-	lag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
-	return lag
-}
-
-func (r *subscribedSpan) resolveStaleLocks(targetTs uint64) {
-	util.MustCompareAndMonotonicIncrease(&r.staleLocksTargetTs, targetTs)
-	res := r.rangeLock.IterAll(r.tryResolveLock)
-	log.Debug("subscription client finds slow locked ranges",
-		zap.Uint64("subscriptionID", uint64(r.subID)),
-		zap.Any("ranges", res))
-}
-
-type errCache struct {
-	sync.Mutex
-	cache  []regionErrorInfo
-	errCh  chan regionErrorInfo
-	notify chan struct{}
-}
-
-const errCacheDispatchBatchSize = 1024
-
-func newErrCache() *errCache {
-	return &errCache{
-		cache:  make([]regionErrorInfo, 0, 1024),
-		errCh:  make(chan regionErrorInfo, 4096),
-		notify: make(chan struct{}, 1024),
-	}
-}
-
-func (e *errCache) add(errInfo regionErrorInfo) {
-	e.Lock()
-	defer e.Unlock()
-	e.cache = append(e.cache, errInfo)
-	select {
-	case e.notify <- struct{}{}:
-	default:
-	}
-}
-
-func (e *errCache) popBatch(limit int) []regionErrorInfo {
-	e.Lock()
-	defer e.Unlock()
-	if len(e.cache) == 0 {
-		return nil
-	}
-	if limit <= 0 || limit > len(e.cache) {
-		limit = len(e.cache)
-	}
-	batch := make([]regionErrorInfo, limit)
-	copy(batch, e.cache[:limit])
-	clear(e.cache[:limit])
-	if limit == len(e.cache) {
-		e.cache = e.cache[:0]
-	} else {
-		e.cache = e.cache[limit:]
-	}
-	return batch
-}
-
-func (e *errCache) dispatchBatch(ctx context.Context, limit int) (int, error) {
-	batch := e.popBatch(limit)
-	for _, errInfo := range batch {
-		select {
-		case <-ctx.Done():
-			log.Info("subscription client dispatch err cache done")
-			return 0, ctx.Err()
-		case e.errCh <- errInfo:
-		}
-	}
-	return len(batch), nil
-}
-
-func (e *errCache) dispatch(ctx context.Context) error {
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	sendToErrCh := func() error {
-		for {
-			n, err := e.dispatchBatch(ctx, errCacheDispatchBatchSize)
-			if err != nil {
-				return err
-			}
-			if n < errCacheDispatchBatchSize {
-				return nil
-			}
-		}
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if err := sendToErrCh(); err != nil {
-				return err
-			}
-		case <-e.notify:
-			if err := sendToErrCh(); err != nil {
-				return err
-			}
 		}
 	}
 }

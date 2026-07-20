@@ -28,7 +28,7 @@ var (
 			Name:      "batch_row_count",
 			Help:      "Row count number for a given batch.",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 18),
-		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
+		}, []string{getKeyspaceLabel(), "changefeed", "type", "keyspace_id"}) // type is for `sinkType`
 
 	// ExecBatchWriteBytesHistogram records bytes written for each batch.
 	ExecBatchWriteBytesHistogram = prometheus.NewHistogramVec(
