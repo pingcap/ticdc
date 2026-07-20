@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/avro"
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -60,7 +59,7 @@ func NewEventDecoder(
 	case config.ProtocolAvro:
 		schemaM, err := avro.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
 		if err != nil {
-			return nil, cerror.Trace(err)
+			return nil, errors.Trace(err)
 		}
 		return avro.NewDecoder(codecConfig, idx, schemaM, topic, upstreamTiDB), nil
 	case config.ProtocolSimple:

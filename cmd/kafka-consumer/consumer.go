@@ -51,7 +51,25 @@ func getPartitionNum(o *option) (int32, error) {
 				timeout += 100
 				continue
 			}
+<<<<<<< HEAD
 			return 0, errors.Trace(err)
+=======
+
+			topicDetail, ok := resp.Topics[topic]
+			if ok && topicDetail.Error.Code() == kafka.ErrNoError {
+				numPartitions := int32(len(topicDetail.Partitions))
+				log.Info("get partition number of topic",
+					zap.String("topic", topic),
+					zap.Int32("partitionNum", numPartitions))
+				if numPartitions > maxPartitionNum {
+					maxPartitionNum = numPartitions
+				}
+				found = true
+				break
+			}
+			log.Info("retry get partition number", zap.String("topic", topic))
+			time.Sleep(1 * time.Second)
+>>>>>>> 2667ed8c2 (kafka: make the verify lightweight (#5617))
 		}
 		if topicDetail, ok := resp.Topics[o.topic]; ok {
 			numPartitions := int32(len(topicDetail.Partitions))
