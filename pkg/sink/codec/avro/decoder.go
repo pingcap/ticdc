@@ -131,11 +131,6 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	})
 }
 
-func (d *decoder) nextDMLEvent() *commonEvent.DMLEvent {
-	keyMap, valueMap, valueSchema, isDelete, deleteCommitTs := d.decodeDMLPayload()
-	return d.assembleDMLEventFromDecoded(keyMap, valueMap, valueSchema, isDelete, deleteCommitTs)
-}
-
 func (d *decoder) decodeDMLPayload() (
 	keyMap map[string]interface{},
 	valueMap map[string]interface{},

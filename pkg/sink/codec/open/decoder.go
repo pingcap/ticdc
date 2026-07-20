@@ -212,17 +212,6 @@ func (b *decoder) NextDMLMessage() *common.DMLMessage {
 	})
 }
 
-func (b *decoder) nextDMLEvent() *commonEvent.DMLEvent {
-	if b.nextKey.Type != common.MessageTypeRow {
-		log.Panic("message type is not row", zap.Any("messageType", b.nextKey.Type))
-	}
-
-	key := b.nextKey
-	value := b.nextDMLValue()
-	b.nextKey = nil
-	return b.decodeDMLMessage(key, value)
-}
-
 func (b *decoder) nextDMLValue() []byte {
 	valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
 	value := b.valueBytes[8 : valueLen+8]

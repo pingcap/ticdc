@@ -24,7 +24,9 @@ type DMLMessage struct {
 	Table   string
 	RowType commonType.RowType
 
-	commitTs   uint64
+	commitTs uint64
+	// toDMLEvent may be called after the decoder has consumed later messages.
+	// It must only use data captured by this DMLMessage and must not depend on decoder cursor state.
 	toDMLEvent func() *commonEvent.DMLEvent
 }
 

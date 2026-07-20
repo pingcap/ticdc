@@ -125,24 +125,11 @@ func (d *txnDecoder) NextDMLMessage() *common.DMLMessage {
 	}
 
 	return common.NewDMLMessage(tableID, schemaName, tableName, msg.getCommitTs(), rowType, func() *commonEvent.DMLEvent {
-		d.msg = msg
-		return d.nextDMLEvent()
+		return d.canalJSONMessage2RowChange(msg)
 	})
 }
 
-func (d *txnDecoder) nextDMLEvent() *commonEvent.DMLEvent {
-	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
-		log.Panic("message type is not row changed",
-			zap.Any("messageType", d.msg.messageType()), zap.Any("msg", d.msg))
-	}
-	result := d.canalJSONMessage2RowChange()
-	d.msg = nil
-	return result
-}
-
-func (d *txnDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
-	msg := d.msg
-
+func (d *txnDecoder) canalJSONMessage2RowChange(msg canalJSONMessageInterface) *commonEvent.DMLEvent {
 	tableInfo := newTableInfo(msg)
 	result := new(commonEvent.DMLEvent)
 	result.Length++                    // todo: set this field correctly

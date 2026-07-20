@@ -350,12 +350,12 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		ddl := progress.decoder.NextDDLEvent()
 
 		if dec, ok := progress.decoder.(*simple.Decoder); ok {
-			cachedEvents := dec.GetCachedEvents()
-			for _, row := range cachedEvents {
+			cachedMessages := dec.GetCachedMessages()
+			for _, dmlMessage := range cachedMessages {
 				log.Info("simple protocol cached event resolved, append to the group",
-					zap.Int64("tableID", row.GetTableID()), zap.Uint64("commitTs", row.CommitTs),
+					zap.Int64("tableID", dmlMessage.TableID), zap.Uint64("commitTs", dmlMessage.GetCommitTs()),
 					zap.Int32("partition", partition), zap.Any("offset", offset))
-				w.appendMessage2Group(common.NewDMLMessageFromEvent(row), progress, offset)
+				w.appendMessage2Group(dmlMessage, progress, offset)
 			}
 		}
 
@@ -655,7 +655,7 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", message.RowType),
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
-			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", false))
+			zap.Any("protocol", w.protocol))
 	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro,
 		config.ProtocolDebezium, config.ProtocolDebeziumAvro:
 		// for partition table, these protocols cannot assign physical table id to each dml message,
@@ -676,7 +676,7 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", message.RowType),
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
-			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", false))
+			zap.Any("protocol", w.protocol))
 	default:
 		log.Panic("unknown protocol", zap.Any("protocol", w.protocol))
 	}

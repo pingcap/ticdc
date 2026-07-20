@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -98,6 +99,7 @@ type decoder struct {
 
 	storage        storeapi.Storage
 	upstreamTiDB   *sql.DB
+	tableInfoMu    sync.RWMutex
 	tableInfoCache map[tableKey]*commonType.TableInfo
 	ddlCommitTs    map[tableNameKey][]uint64
 }
@@ -433,14 +435,15 @@ func (d *decoder) NextResolvedEvent() uint64 {
 }
 
 func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {
+	result := make(map[string]any, len(data))
 	for _, col := range columns {
 		raw, ok := data[col.Name.O]
 		if !ok {
 			continue
 		}
-		data[col.Name.O] = formatValue(raw, col.FieldType)
+		result[col.Name.O] = formatValue(raw, col.FieldType)
 	}
-	return data
+	return result
 }
 
 func formatValue(value any, ft types.FieldType) any {
@@ -569,10 +572,13 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 
+	d.tableInfoMu.Lock()
+	defer d.tableInfoMu.Unlock()
+
 	cacheKey := tableKey{
 		schema:      schemaName,
 		table:       tableName,
-		ddlCommitTs: d.getDDLCommitTs(schemaName, tableName, msg.getCommitTs()),
+		ddlCommitTs: d.getDDLCommitTsLocked(schemaName, tableName, msg.getCommitTs()),
 	}
 	tableInfo, ok := d.tableInfoCache[cacheKey]
 	if !ok {
@@ -596,6 +602,9 @@ func (d *decoder) addDDLCommitTs(schema, table string, commitTs uint64) {
 		return
 	}
 
+	d.tableInfoMu.Lock()
+	defer d.tableInfoMu.Unlock()
+
 	key := tableNameKey{schema: schema, table: table}
 	commitTsList := d.ddlCommitTs[key]
 	i := sort.Search(len(commitTsList), func(i int) bool {
@@ -607,7 +616,7 @@ func (d *decoder) addDDLCommitTs(schema, table string, commitTs uint64) {
 	d.ddlCommitTs[key] = slices.Insert(commitTsList, i, commitTs)
 }
 
-func (d *decoder) getDDLCommitTs(schema, table string, commitTs uint64) uint64 {
+func (d *decoder) getDDLCommitTsLocked(schema, table string, commitTs uint64) uint64 {
 	if commitTs == 0 {
 		return 0
 	}

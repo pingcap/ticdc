@@ -1273,8 +1273,8 @@ func TestE2EPartitionTableDMLBeforeDDL(t *testing.T) {
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, tp)
 
-			decodedEvent := dec.NextDMLMessage().ToDMLEvent()
-			require.Nil(t, decodedEvent)
+			decodedMessage := dec.NextDMLMessage()
+			require.Nil(t, decodedMessage)
 
 			e.Rewind()
 		}
@@ -1290,8 +1290,9 @@ func TestE2EPartitionTableDMLBeforeDDL(t *testing.T) {
 		decodedDDL := dec.NextDDLEvent()
 		require.NotNil(t, decodedDDL)
 
-		cachedEvents := dec.(*Decoder).GetCachedEvents()
-		for idx, decodedRow := range cachedEvents {
+		cachedMessages := dec.(*Decoder).GetCachedMessages()
+		for idx, message := range cachedMessages {
+			decodedRow := message.ToDMLEvent()
 			require.NotNil(t, decodedRow)
 			require.NotNil(t, decodedRow.TableInfo)
 			require.Equal(t, decodedRow.GetTableID(), events[idx].GetTableID())
@@ -1339,8 +1340,8 @@ func TestEncodeDMLBeforeDDL(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decodedRow := dec.NextDMLMessage().ToDMLEvent()
-	require.Nil(t, decodedRow)
+	decodedMessage := dec.NextDMLMessage()
+	require.Nil(t, decodedMessage)
 
 	m, err := enc.EncodeDDLEvent(ddlEvent)
 	require.NoError(t, err)
@@ -1354,8 +1355,9 @@ func TestEncodeDMLBeforeDDL(t *testing.T) {
 	ddlEvent = dec.NextDDLEvent()
 	require.NotNil(t, ddlEvent)
 
-	cachedEvents := dec.GetCachedEvents()
-	for _, decodedRow = range cachedEvents {
+	cachedMessages := dec.GetCachedMessages()
+	for _, message := range cachedMessages {
+		decodedRow := message.ToDMLEvent()
 		require.NotNil(t, decodedRow)
 		require.NotNil(t, decodedRow.TableInfo)
 		require.Equal(t, decodedRow.TableInfo.TableName.TableID, ddlEvent.TableInfo.TableName.TableID)
@@ -1725,8 +1727,8 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 				require.Equal(t, common.MessageTypeRow, messageType)
 				require.True(t, dec.msg.HandleKeyOnly)
 
-				decodedRow := dec.NextDMLMessage().ToDMLEvent()
-				require.Nil(t, decodedRow)
+				decodedMessage := dec.NextDMLMessage()
+				require.Nil(t, decodedMessage)
 			}
 
 			enc.(*Encoder).config.MaxMessageBytes = config.DefaultMaxMessageBytes
@@ -1760,8 +1762,9 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 			}
 			_ = dec.NextDDLEvent()
 
-			decodedRows := dec.GetCachedEvents()
-			for idx, decodedRow := range decodedRows {
+			decodedMessages := dec.GetCachedMessages()
+			for idx, message := range decodedMessages {
+				decodedRow := message.ToDMLEvent()
 				event := events[idx]
 
 				require.Equal(t, decodedRow.CommitTs, event.CommitTs)

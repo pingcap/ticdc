@@ -163,27 +163,22 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	}
 
 	keyPayload := d.keyPayload
-	keySchema := d.keySchema
 	valuePayload := d.valuePayload
 	valueSchema := d.valueSchema
-	commitTs := d.getCommitTs()
-	schemaName := d.getSchemaName()
-	tableName := d.getTableName()
-	rowType := d.rowType()
+	commitTs := getCommitTsFromPayload(valuePayload)
+	schemaName := getSchemaNameFromPayload(valuePayload)
+	tableName := getTableNameFromPayload(valuePayload)
+	rowType := rowTypeFromPayload(valuePayload)
 	tableID := tableIDAllocator.Allocate(schemaName, tableName)
 	d.clear()
 
 	return common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
-		d.keyPayload = keyPayload
-		d.keySchema = keySchema
-		d.valuePayload = valuePayload
-		d.valueSchema = valueSchema
-		return d.nextDMLEvent()
+		return d.assembleDMLEventFromPayload(keyPayload, valuePayload, valueSchema)
 	})
 }
 
-func (d *decoder) rowType() commonType.RowType {
-	op, ok := d.valuePayload["op"]
+func rowTypeFromPayload(valuePayload map[string]interface{}) commonType.RowType {
+	op, ok := valuePayload["op"]
 	if !ok {
 		log.Panic("DML message op not found")
 	}
@@ -200,19 +195,13 @@ func (d *decoder) rowType() commonType.RowType {
 	return commonType.RowTypeInsert
 }
 
-func (d *decoder) nextDMLEvent() *commonEvent.DMLEvent {
-	if len(d.valuePayload) == 0 {
-		log.Panic("next DML event failed, since value payload is empty")
-	}
-	if d.config.DebeziumDisableSchema {
-		log.Panic("next DML event failed, since DebeziumDisableSchema is true")
-	}
-	if !d.config.EnableTiDBExtension {
-		log.Panic("next DML event failed, since EnableTiDBExtension is false")
-	}
-	defer d.clear()
-	tableInfo := d.queryTableInfo()
-	commitTs := d.getCommitTs()
+func (d *decoder) assembleDMLEventFromPayload(
+	keyPayload map[string]interface{},
+	valuePayload map[string]interface{},
+	valueSchema map[string]interface{},
+) *commonEvent.DMLEvent {
+	tableInfo := queryTableInfoFromPayload(keyPayload, valuePayload, valueSchema)
+	commitTs := getCommitTsFromPayload(valuePayload)
 	event := &commonEvent.DMLEvent{
 		Rows:            chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity),
 		StartTs:         commitTs,
@@ -225,12 +214,12 @@ func (d *decoder) nextDMLEvent() *commonEvent.DMLEvent {
 		event.Rows.Destroy(chunk.InitialCapacity, tableInfo.GetFieldSlice())
 	})
 	columns := tableInfo.GetColumns()
-	before, ok1 := d.valuePayload["before"].(map[string]interface{})
+	before, ok1 := valuePayload["before"].(map[string]interface{})
 	if ok1 {
 		data := assembleColumnData(before, columns, d.config.TimeZone)
 		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
-	after, ok2 := d.valuePayload["after"].(map[string]interface{})
+	after, ok2 := valuePayload["after"].(map[string]interface{})
 	if ok2 {
 		data := assembleColumnData(after, columns, d.config.TimeZone)
 		common.AppendRow2Chunk(data, columns, event.Rows)
@@ -249,7 +238,11 @@ func (d *decoder) nextDMLEvent() *commonEvent.DMLEvent {
 }
 
 func (d *decoder) getCommitTs() uint64 {
-	source := d.valuePayload["source"].(map[string]interface{})
+	return getCommitTsFromPayload(d.valuePayload)
+}
+
+func getCommitTsFromPayload(valuePayload map[string]interface{}) uint64 {
+	source := valuePayload["source"].(map[string]interface{})
 	commitTs, err := source["commit_ts"].(json.Number).Int64()
 	if err != nil {
 		log.Error("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(source)))
@@ -258,15 +251,21 @@ func (d *decoder) getCommitTs() uint64 {
 }
 
 func (d *decoder) getSchemaName() string {
-	source := d.valuePayload["source"].(map[string]interface{})
-	schemaName := source["db"].(string)
-	return schemaName
+	return getSchemaNameFromPayload(d.valuePayload)
+}
+
+func getSchemaNameFromPayload(valuePayload map[string]interface{}) string {
+	source := valuePayload["source"].(map[string]interface{})
+	return source["db"].(string)
 }
 
 func (d *decoder) getTableName() string {
-	source := d.valuePayload["source"].(map[string]interface{})
-	tableName := source["table"].(string)
-	return tableName
+	return getTableNameFromPayload(d.valuePayload)
+}
+
+func getTableNameFromPayload(valuePayload map[string]interface{}) string {
+	source := valuePayload["source"].(map[string]interface{})
+	return source["table"].(string)
 }
 
 func (d *decoder) clear() {
@@ -276,19 +275,22 @@ func (d *decoder) clear() {
 	d.valueSchema = nil
 }
 
-func (d *decoder) queryTableInfo() *commonType.TableInfo {
-	schemaName := d.getSchemaName()
-	tableName := d.getTableName()
-
+func queryTableInfoFromPayload(
+	keyPayload map[string]interface{},
+	valuePayload map[string]interface{},
+	valueSchema map[string]interface{},
+) *commonType.TableInfo {
+	schemaName := getSchemaNameFromPayload(valuePayload)
+	tableName := getTableNameFromPayload(valuePayload)
 	tidbTableInfo := new(timodel.TableInfo)
 	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
 	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
 
-	fields := d.valueSchema["fields"].([]interface{})
+	fields := valueSchema["fields"].([]interface{})
 	after := fields[1].(map[string]interface{})
 	columnsField := after["fields"].([]interface{})
-	indexColumns := make([]*timodel.IndexColumn, 0, len(d.keyPayload))
+	indexColumns := make([]*timodel.IndexColumn, 0, len(keyPayload))
 	for idx, column := range columnsField {
 		col := column.(map[string]interface{})
 		colName := col["field"].(string)
@@ -306,7 +308,7 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 				fieldType.SetDecimal(6)
 			}
 		}
-		if _, ok := d.keyPayload[colName]; ok {
+		if _, ok := keyPayload[colName]; ok {
 			indexColumns = append(indexColumns, &timodel.IndexColumn{
 				Name:   ast.NewCIStr(colName),
 				Offset: idx,
