@@ -101,12 +101,6 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 		return errors.Trace(err)
 	}
 
-	encoder, err := codec.NewEventEncoder(ctx, encoderConfig)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	encoder.Clean()
-
 	factory, err := kafka.NewSaramaFactory(ctx, options, changefeedID)
 	if err != nil {
 		return errors.WrapError(errors.ErrKafkaNewProducer, err)
@@ -140,6 +134,13 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 	if err != nil {
 		return errors.WrapError(errors.ErrKafkaCreateTopic, err)
 	}
+
+	encoder, err := codec.NewEventEncoder(ctx, encoderConfig)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	encoder.Clean()
+
 	return nil
 }
 
