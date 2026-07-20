@@ -36,6 +36,7 @@ type regionReq struct {
 	regionInfo regionInfo
 	createTime time.Time
 	controller *regionAdmissionController
+	scanBytes  uint64
 	released   atomic.Bool
 }
 
@@ -72,6 +73,7 @@ func (r *regionReq) release() bool {
 	if !r.released.CompareAndSwap(false, true) {
 		return false
 	}
+	r.controller.memoryQuota.ReleaseScan(r.scanBytes)
 	r.controller.release()
 	return true
 }
@@ -92,6 +94,10 @@ type regionAdmissionController struct {
 	// pending keeps requests that have not entered the initial-scan window.
 	// It is guarded by mu.
 	pending *heap.Heap[*regionPriorityTask]
+	// memoryQuota gates initial scans using the log puller's global memory
+	// pressure. currentTs is sampled when a request is admitted.
+	memoryQuota *memoryQuotaController
+	currentTs   func() uint64
 	// notify wakes workers when a request is submitted or an admission slot is
 	// released. The one-element buffer prevents a wakeup from being lost between
 	// checking the admission condition and waiting on this channel. Notifications
@@ -107,7 +113,12 @@ type regionAdmissionStats struct {
 	inflight int
 }
 
-func newRegionAdmissionController(currentWindow, maxWindowMultiplier int) *regionAdmissionController {
+func newRegionAdmissionController(
+	currentWindow int,
+	maxWindowMultiplier int,
+	memoryQuota *memoryQuotaController,
+	currentTs func() uint64,
+) *regionAdmissionController {
 	if currentWindow <= 0 {
 		currentWindow = 1
 	}
@@ -122,6 +133,8 @@ func newRegionAdmissionController(currentWindow, maxWindowMultiplier int) *regio
 		currentWindow: currentWindow,
 		maxWindow:     maxWindow,
 		pending:       heap.NewHeap[*regionPriorityTask](),
+		memoryQuota:   memoryQuota,
+		currentTs:     currentTs,
 		notify:        make(chan struct{}, 1),
 	}
 }
@@ -138,11 +151,11 @@ func (c *regionAdmissionController) submit(task *regionPriorityTask) bool {
 	return true
 }
 
-// pop waits for an eligible request. If interrupt is signaled first, it returns
-// nil without an error so the worker can handle its control queue.
+// pop waits for an eligible request. If controlReady is signaled first, it
+// returns nil without an error so the worker can handle its control queue.
 func (c *regionAdmissionController) pop(
 	ctx context.Context,
-	interrupt <-chan struct{},
+	controlReady <-chan struct{},
 ) (*regionReq, error) {
 	for {
 		c.mu.Lock()
@@ -150,7 +163,7 @@ func (c *regionAdmissionController) pop(
 			c.mu.Unlock()
 			return nil, context.Canceled
 		}
-		request := c.popEligibleLocked()
+		request, scanBytes, memoryReady := c.popEligibleLocked()
 		if request != nil {
 			c.inflight++
 			c.mu.Unlock()
@@ -158,13 +171,15 @@ func (c *regionAdmissionController) pop(
 				regionInfo: request.regionInfo,
 				createTime: time.Now(),
 				controller: c,
+				scanBytes:  scanBytes,
 			}, nil
 		}
 		c.mu.Unlock()
 
 		select {
 		case <-c.notify:
-		case <-interrupt:
+		case <-memoryReady:
+		case <-controlReady:
 			return nil, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -172,16 +187,26 @@ func (c *regionAdmissionController) pop(
 	}
 }
 
-func (c *regionAdmissionController) popEligibleLocked() *regionPriorityTask {
+func (c *regionAdmissionController) popEligibleLocked() (
+	*regionPriorityTask,
+	uint64,
+	<-chan struct{},
+) {
 	request, ok := c.pending.PeekTop()
 	if !ok {
-		return nil
+		return nil, 0, nil
 	}
 	if c.inflight >= c.windowFor(request) {
-		return nil
+		return nil, 0, nil
+	}
+
+	scanBytes, memoryReady, admitted := c.memoryQuota.AcquireScan(
+		request.regionInfo, c.currentTs())
+	if !admitted {
+		return nil, 0, memoryReady
 	}
 	request, _ = c.pending.PopTop()
-	return request
+	return request, scanBytes, nil
 }
 
 func (c *regionAdmissionController) windowFor(request *regionPriorityTask) int {

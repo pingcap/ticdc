@@ -64,6 +64,35 @@ var (
 			Name:      "resolved_ts_lag",
 			Help:      "The lag of resolved ts",
 		})
+	LogPullerMemoryQuota = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota",
+			Help:      "The log puller local memory quota usage.",
+		}, []string{"type"})
+	LogPullerMemoryQuotaAdmissionLevel = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota_admission_level",
+			Help:      "The log puller scan admission level: 0 normal, 1 pause warming scans, 2 pause all scans.",
+		})
+	LogPullerMemoryQuotaEventWaiterCount = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota_event_waiter_count",
+			Help:      "The number of event receivers waiting at the log puller memory hard limit.",
+		})
+	LogPullerMemoryQuotaEventWaitDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota_event_wait_duration",
+			Help:      "The duration in seconds that an event receiver waits at the log puller memory hard limit.",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 24),
+		})
 
 	SubscriptionClientResolvedTsLagGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
@@ -164,6 +193,10 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(LogPullerPrewriteCacheRowNum)
 	registry.MustRegister(LogPullerMatcherCount)
 	registry.MustRegister(LogPullerResolvedTsLag)
+	registry.MustRegister(LogPullerMemoryQuota)
+	registry.MustRegister(LogPullerMemoryQuotaAdmissionLevel)
+	registry.MustRegister(LogPullerMemoryQuotaEventWaiterCount)
+	registry.MustRegister(LogPullerMemoryQuotaEventWaitDuration)
 	registry.MustRegister(SubscriptionClientRequestedRegionCount)
 	registry.MustRegister(SubscriptionClientAddRegionRequestDuration)
 	registry.MustRegister(RegionRequestFinishScanDuration)

@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/utils/dynstream"
-	"github.com/pingcap/ticdc/utils/priorityqueue"
 	"github.com/pingcap/tidb/pkg/store/mockstore/mockcopr"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -301,6 +300,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh: make(chan resolveLockTask, 1),
+		memoryQuota:       newMemoryQuotaController(0, 0),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
@@ -342,8 +342,10 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 }
 
 func TestRegionFailureHandlerQueuesCanceledError(t *testing.T) {
+	quota := newMemoryQuotaController(0, 0)
 	client := &subscriptionClient{
-		eventSink: &regionEventSink{ds: &mockDynamicStream{}},
+		eventSink:   &regionEventSink{ds: &mockDynamicStream{}, memoryQuota: quota},
+		memoryQuota: quota,
 	}
 	client.spanRegistry = newSpanRegistry(nil, nil)
 	client.failureHandler = newRegionFailureHandler(nil, client.onTableDrained, nil, nil)
@@ -416,44 +418,9 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 	return dynstream.Metrics[int, SubscriptionID]{}
 }
 
-func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
-	sink := &regionEventSink{
-		ctx: context.Background(),
-		ds:  &mockDynamicStream{},
-	}
-	sink.cond = sync.NewCond(&sink.mu)
-	client := &subscriptionClient{eventSink: sink}
-	client.regionScheduler = &regionRequestScheduler{
-		taskQueue: priorityqueue.New[*regionPriorityTask](),
-	}
-	client.ctx, client.cancel = context.WithCancel(context.Background())
-
-	sink.paused.Store(true)
-
-	done := make(chan struct{})
-	go func() {
-		sink.Push(SubscriptionID(1), regionEvent{})
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		t.Fatal("pushRegionEventToDS should block when paused")
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	require.NoError(t, client.Close(context.Background()))
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("pushRegionEventToDS should be unblocked by Close")
-	}
-}
-
 func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 	scheduler := &regionRequestScheduler{}
-	admission := newRegionAdmissionController(1, 1)
+	admission := newTestRegionAdmissionController(1, 1)
 
 	const storeAddr = "store-1"
 	worker := &regionRequestWorker{
@@ -480,8 +447,8 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 }
 
 func TestRegionRequestStoreDistributesRegionsAcrossWorkers(t *testing.T) {
-	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
-	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
+	worker1 := &regionRequestWorker{admission: newTestRegionAdmissionController(1, 1)}
+	worker2 := &regionRequestWorker{admission: newTestRegionAdmissionController(1, 1)}
 	store := &regionRequestStore{
 		workers: []*regionRequestWorker{worker1, worker2},
 	}

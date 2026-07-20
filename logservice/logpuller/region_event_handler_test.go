@@ -48,7 +48,10 @@ import (
 func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 	// initialize
 	option := dynstream.NewOption()
-	ds := dynstream.NewParallelDynamicStream("test", &regionEventHandler{}, option)
+	handler := &regionEventHandler{eventSink: &regionEventSink{
+		memoryQuota: newMemoryQuotaController(0, 0),
+	}}
+	ds := dynstream.NewParallelDynamicStream("test", handler, option)
 	ds.Start()
 
 	span := heartbeatpb.TableSpan{
@@ -204,7 +207,10 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 func TestHandleResolvedTs(t *testing.T) {
 	// initialize
 	option := dynstream.NewOption()
-	ds := dynstream.NewParallelDynamicStream("test", &regionEventHandler{}, option)
+	handler := &regionEventHandler{eventSink: &regionEventSink{
+		memoryQuota: newMemoryQuotaController(0, 0),
+	}}
+	ds := dynstream.NewParallelDynamicStream("test", handler, option)
 	ds.Start()
 
 	consumeKVEvents := func(events []common.RawKVEntry, _ func()) bool { return false } // not used
@@ -369,4 +375,99 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 	)
 
 	require.Equal(t, uint64(200), handleResolvedTs(span, state, 300))
+}
+
+func TestHandleEntriesReleasesMemoryAfterDownstreamCallback(t *testing.T) {
+	quota := newMemoryQuotaController(1024, 8)
+	span := newTestQuotaSpan(1)
+	callbackCh := make(chan func(), 1)
+	span.consumeKVEvents = func(_ []common.RawKVEntry, callback func()) bool {
+		callbackCh <- callback
+		return true
+	}
+	span.advanceResolvedTs = func(uint64) {}
+
+	lockedState := &regionlock.LockedRangeState{}
+	lockedState.ResolvedTs.Store(100)
+	state := &regionFeedState{
+		region: regionInfo{
+			verID:            tikv.NewRegionVerID(1, 1, 1),
+			rpcCtx:           &tikv.RPCContext{},
+			subscribedSpan:   span,
+			lockedRangeState: lockedState,
+		},
+	}
+	require.True(t, quota.AcquireEvent(context.Background(), span, 10))
+	handler := &regionEventHandler{eventSink: &regionEventSink{
+		ds:          newMockRegionEventSinkStream(),
+		memoryQuota: quota,
+	}}
+
+	await := handler.Handle(span, regionEvent{
+		states:      []*regionFeedState{state},
+		memoryBytes: 10,
+		entries: &cdcpb.Event_Entries_{Entries: &cdcpb.Event_Entries{
+			Entries: []*cdcpb.Event_Row{{
+				Type:     cdcpb.Event_COMMITTED,
+				OpType:   cdcpb.Event_Row_PUT,
+				CommitTs: 101,
+			}},
+		}},
+	})
+	require.True(t, await)
+	quotaState := getMemoryQuotaTestState(quota)
+	require.Equal(t, uint64(10), quotaState.used)
+
+	callback := <-callbackCh
+	callback()
+	quotaState = getMemoryQuotaTestState(quota)
+	require.Zero(t, quotaState.used)
+}
+
+func TestTryMarkSpanInitializedByResolvedTs(t *testing.T) {
+	span := &subscribedSpan{subID: 1, startTs: 100}
+	require.False(t, span.tryMarkInitialized(1, 100))
+	require.False(t, span.initialized.Load())
+	require.True(t, span.tryMarkInitialized(1, 101))
+	require.True(t, span.initialized.Load())
+	require.False(t, span.tryMarkInitialized(1, 102))
+}
+
+func TestSpanInitializationNotifiesMemoryAdmission(t *testing.T) {
+	quota := newMemoryQuotaController(1024, 8)
+	quota.scanMu.Lock()
+	notified := quota.scanReady
+	quota.scanMu.Unlock()
+
+	const startTs = 100
+	rangeLock := regionlock.NewRangeLock(1, []byte("a"), []byte("z"), startTs)
+	lockResult := rangeLock.LockRange(t.Context(), []byte("a"), []byte("z"), 1, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, lockResult.Status)
+	lockResult.LockedRangeState.Initialized.Store(true)
+
+	span := &subscribedSpan{
+		subID:             1,
+		startTs:           startTs,
+		rangeLock:         rangeLock,
+		consumeKVEvents:   func([]common.RawKVEntry, func()) bool { return false },
+		advanceResolvedTs: func(uint64) {},
+	}
+	span.resolvedTs.Store(startTs)
+	state := newRegionFeedState(regionInfo{
+		verID:            tikv.NewRegionVerID(1, 1, 1),
+		subscribedSpan:   span,
+		lockedRangeState: lockResult.LockedRangeState,
+	}, uint64(span.subID), &regionRequestWorker{}, nil)
+	handler := &regionEventHandler{eventSink: &regionEventSink{memoryQuota: quota}}
+
+	require.False(t, handler.Handle(span, regionEvent{
+		states:     []*regionFeedState{state},
+		resolvedTs: startTs + 1,
+	}))
+	require.True(t, span.initialized.Load())
+	select {
+	case <-notified:
+	case <-time.After(time.Second):
+		t.Fatal("span initialization did not notify memory admission")
+	}
 }

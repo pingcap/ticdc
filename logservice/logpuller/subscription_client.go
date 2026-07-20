@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/txnutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -134,6 +135,8 @@ type subscriptionClient struct {
 	spanRegistry *spanRegistry
 	// regionScheduler assigns locked region requests to per-store workers.
 	regionScheduler *regionRequestScheduler
+	// memoryQuota owns event-memory accounting and initial-scan admission.
+	memoryQuota *memoryQuotaController
 
 	// rangeTaskCh is used to receive range tasks.
 	// The tasks will be handled in `handleRangeTask` goroutine.
@@ -164,18 +167,23 @@ func NewSubscriptionClient(
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
+	pullerConfig := config.GetGlobalServerConfig().Debug.Puller
+	subClient.memoryQuota = newMemoryQuotaController(
+		pullerConfig.MemoryQuota, pullerConfig.ScanBaseSize)
 	subClient.failureHandler = newRegionFailureHandler(
 		subClient.upstream.regionCache,
 		subClient.onTableDrained,
 		subClient.scheduleRegionRequest,
 		subClient.scheduleRangeRequest,
 	)
-	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient.failureHandler)
+	subClient.eventSink = newRegionEventSink(
+		subClient.ctx, subClient.failureHandler, subClient.memoryQuota)
 	subClient.spanRegistry = newSpanRegistry(subClient.upstream.pd, subClient.upstream.pdClock)
 	subClient.regionScheduler = newRegionRequestScheduler(
 		subClient.upstream,
 		subClient.eventSink,
 		subClient.failureHandler,
+		subClient.memoryQuota,
 	)
 	return subClient
 }
@@ -199,6 +207,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 		case <-ticker.C:
 			s.regionScheduler.UpdateMetrics()
 			s.eventSink.UpdateMetrics()
+			s.memoryQuota.UpdateMetrics()
 			s.spanRegistry.UpdateMetrics()
 		}
 	}
@@ -273,7 +282,6 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 	// actual startup order.
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.regionScheduler.Run(ctx, g) })
-	g.Go(func() error { return s.eventSink.Run(ctx) })
 	g.Go(func() error { return s.failureHandler.Run(ctx) })
 	g.Go(func() error { return s.spanRegistry.Run(ctx) })
 	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
@@ -299,6 +307,8 @@ func (s *subscriptionClient) setTableStopped(rt *subscribedSpan) {
 	// Set stopped to true so we can stop handling region events from the table,
 	// then notify every existing worker to deregister the subscription.
 	if rt.stopped.CompareAndSwap(false, true) {
+		// Wake event receivers and scan admission so they can observe stopped.
+		s.memoryQuota.WakeAll()
 		s.regionScheduler.BroadcastDeregister(rt.subID, rt.filterLoop)
 		if rt.rangeLock.Stop() {
 			s.onTableDrained(rt)

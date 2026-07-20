@@ -21,6 +21,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	defaultLogPullerMemoryQuota  uint64 = 1024 * 1024 * 1024
+	defaultLogPullerScanBaseSize uint64 = 8 * 1024 * 1024
+)
+
 // DebugConfig represents config for ticdc unexposed feature configurations
 type DebugConfig struct {
 	DB *DBConfig `toml:"db" json:"db"`
@@ -73,6 +78,10 @@ type PullerConfig struct {
 	// The approximate maximum store window is PendingRegionRequestQueueSize
 	// multiplied by this value.
 	RegionRequestMaxWindowMultiplier int `toml:"region-request-max-window-multiplier" json:"region_request_max_window_multiplier"`
+	// MemoryQuota is the log puller's local soft memory limit in bytes.
+	MemoryQuota uint64 `toml:"memory-quota" json:"memory_quota"`
+	// ScanBaseSize is the base memory estimate for one admitted initial scan.
+	ScanBaseSize uint64 `toml:"scan-base-size" json:"scan_base_size"`
 }
 
 // NewDefaultPullerConfig return the default puller configuration
@@ -83,6 +92,8 @@ func NewDefaultPullerConfig() *PullerConfig {
 		LogRegionDetails:                 false,
 		PendingRegionRequestQueueSize:    32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
 		RegionRequestMaxWindowMultiplier: 4,
+		MemoryQuota:                      defaultLogPullerMemoryQuota,
+		ScanBaseSize:                     defaultLogPullerScanBaseSize,
 	}
 }
 
@@ -99,6 +110,16 @@ func (c *PullerConfig) ValidateAndAdjust() {
 			zap.Int("value", c.RegionRequestMaxWindowMultiplier),
 			zap.Int("default", defaultCfg.RegionRequestMaxWindowMultiplier))
 		c.RegionRequestMaxWindowMultiplier = defaultCfg.RegionRequestMaxWindowMultiplier
+	}
+	if c.MemoryQuota == 0 {
+		log.Warn("log puller memory quota must be positive, use default value",
+			zap.Uint64("default", defaultCfg.MemoryQuota))
+		c.MemoryQuota = defaultCfg.MemoryQuota
+	}
+	if c.ScanBaseSize == 0 {
+		log.Warn("log puller scan base size must be positive, use default value",
+			zap.Uint64("default", defaultCfg.ScanBaseSize))
+		c.ScanBaseSize = defaultCfg.ScanBaseSize
 	}
 }
 
