@@ -48,10 +48,10 @@ type decoder struct {
 
 	upstreamTiDB *sql.DB
 
-	keyPayload   map[string]interface{}
-	keySchema    map[string]interface{}
-	valuePayload map[string]interface{}
-	valueSchema  map[string]interface{}
+	keyPayload   map[string]any
+	keySchema    map[string]any
+	valuePayload map[string]any
+	valueSchema  map[string]any
 }
 
 // NewDecoder return an debezium decoder
@@ -196,9 +196,9 @@ func rowTypeFromPayload(valuePayload map[string]any) commonType.RowType {
 }
 
 func (d *decoder) assembleDMLEventFromPayload(
-	keyPayload map[string]interface{},
-	valuePayload map[string]interface{},
-	valueSchema map[string]interface{},
+	keyPayload map[string]any,
+	valuePayload map[string]any,
+	valueSchema map[string]any,
 ) *commonEvent.DMLEvent {
 	tableInfo := queryTableInfoFromPayload(keyPayload, valuePayload, valueSchema)
 	commitTs := getCommitTsFromPayload(valuePayload)
@@ -214,12 +214,12 @@ func (d *decoder) assembleDMLEventFromPayload(
 		event.Rows.Destroy(chunk.InitialCapacity, tableInfo.GetFieldSlice())
 	})
 	columns := tableInfo.GetColumns()
-	before, ok1 := valuePayload["before"].(map[string]interface{})
+	before, ok1 := valuePayload["before"].(map[string]any)
 	if ok1 {
 		data := assembleColumnData(before, columns, d.config.TimeZone)
 		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
-	after, ok2 := valuePayload["after"].(map[string]interface{})
+	after, ok2 := valuePayload["after"].(map[string]any)
 	if ok2 {
 		data := assembleColumnData(after, columns, d.config.TimeZone)
 		common.AppendRow2Chunk(data, columns, event.Rows)
@@ -241,8 +241,8 @@ func (d *decoder) getCommitTs() uint64 {
 	return getCommitTsFromPayload(d.valuePayload)
 }
 
-func getCommitTsFromPayload(valuePayload map[string]interface{}) uint64 {
-	source := valuePayload["source"].(map[string]interface{})
+func getCommitTsFromPayload(valuePayload map[string]any) uint64 {
+	source := valuePayload["source"].(map[string]any)
 	commitTs, err := source["commit_ts"].(json.Number).Int64()
 	if err != nil {
 		log.Error("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(source)))
@@ -254,8 +254,8 @@ func (d *decoder) getSchemaName() string {
 	return getSchemaNameFromPayload(d.valuePayload)
 }
 
-func getSchemaNameFromPayload(valuePayload map[string]interface{}) string {
-	source := valuePayload["source"].(map[string]interface{})
+func getSchemaNameFromPayload(valuePayload map[string]any) string {
+	source := valuePayload["source"].(map[string]any)
 	return source["db"].(string)
 }
 
@@ -263,8 +263,8 @@ func (d *decoder) getTableName() string {
 	return getTableNameFromPayload(d.valuePayload)
 }
 
-func getTableNameFromPayload(valuePayload map[string]interface{}) string {
-	source := valuePayload["source"].(map[string]interface{})
+func getTableNameFromPayload(valuePayload map[string]any) string {
+	source := valuePayload["source"].(map[string]any)
 	return source["table"].(string)
 }
 
@@ -276,9 +276,9 @@ func (d *decoder) clear() {
 }
 
 func queryTableInfoFromPayload(
-	keyPayload map[string]interface{},
-	valuePayload map[string]interface{},
-	valueSchema map[string]interface{},
+	keyPayload map[string]any,
+	valuePayload map[string]any,
+	valueSchema map[string]any,
 ) *commonType.TableInfo {
 	schemaName := getSchemaNameFromPayload(valuePayload)
 	tableName := getTableNameFromPayload(valuePayload)
@@ -287,19 +287,19 @@ func queryTableInfoFromPayload(
 	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
 
-	fields := valueSchema["fields"].([]interface{})
-	after := fields[1].(map[string]interface{})
-	columnsField := after["fields"].([]interface{})
+	fields := valueSchema["fields"].([]any)
+	after := fields[1].(map[string]any)
+	columnsField := after["fields"].([]any)
 	indexColumns := make([]*timodel.IndexColumn, 0, len(keyPayload))
 	for idx, column := range columnsField {
-		col := column.(map[string]interface{})
+		col := column.(map[string]any)
 		colName := col["field"].(string)
 		tidbType := col["tidb_type"].(string)
 		optional := col["optional"].(bool)
 		fieldType := parseTiDBType(tidbType, optional)
 		switch fieldType.GetType() {
 		case mysql.TypeEnum, mysql.TypeSet:
-			parameters := col["parameters"].(map[string]interface{})
+			parameters := col["parameters"].(map[string]any)
 			allowed := parameters["allowed"].(string)
 			fieldType.SetElems(strings.Split(allowed, ","))
 		case mysql.TypeDatetime:
@@ -333,8 +333,8 @@ func queryTableInfoFromPayload(
 	return result
 }
 
-func assembleColumnData(data map[string]interface{}, columns []*timodel.ColumnInfo, timeZone *time.Location) map[string]interface{} {
-	result := make(map[string]interface{}, 0)
+func assembleColumnData(data map[string]any, columns []*timodel.ColumnInfo, timeZone *time.Location) map[string]any {
+	result := make(map[string]any, 0)
 	for _, col := range columns {
 		val, ok := data[col.Name.O]
 		if !ok {
@@ -345,7 +345,7 @@ func assembleColumnData(data map[string]interface{}, columns []*timodel.ColumnIn
 	return result
 }
 
-func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo, timeZone *time.Location) interface{} {
+func decodeColumn(value any, colInfo *timodel.ColumnInfo, timeZone *time.Location) any {
 	if value == nil {
 		return value
 	}
@@ -513,18 +513,18 @@ func parseTiDBType(tidbType string, optional bool) *ptypes.FieldType {
 	return ft
 }
 
-func decodeRawBytes(data []byte) (map[string]interface{}, map[string]interface{}, error) {
-	var v map[string]interface{}
+func decodeRawBytes(data []byte) (map[string]any, map[string]any, error) {
+	var v map[string]any
 	d := json.NewDecoder(bytes.NewBuffer(data))
 	d.UseNumber()
 	if err := d.Decode(&v); err != nil {
 		return nil, nil, errors.Trace(err)
 	}
-	payload, ok := v["payload"].(map[string]interface{})
+	payload, ok := v["payload"].(map[string]any)
 	if !ok {
 		return nil, nil, fmt.Errorf("decode payload failed, data: %+v", v)
 	}
-	schema, ok := v["schema"].(map[string]interface{})
+	schema, ok := v["schema"].(map[string]any)
 	if !ok {
 		return nil, nil, fmt.Errorf("decode payload failed, data: %+v", v)
 	}
