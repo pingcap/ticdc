@@ -26,6 +26,53 @@ import (
 
 const kafkaTopicManagerTestTopic = "mock_topic"
 
+type mockAdminClientWithDeniedDescribe struct {
+	*kafka.MockClusterAdminClient
+	createTopicCalled bool
+	describeCount     int
+}
+
+func (m *mockAdminClientWithDeniedDescribe) GetTopicsMeta(
+	topics []string,
+	ignoreTopicError bool,
+) (map[string]kafka.TopicDetail, error) {
+	m.describeCount++
+	if ignoreTopicError {
+		return map[string]kafka.TopicDetail{}, nil
+	}
+	return nil, sarama.ErrTopicAuthorizationFailed
+}
+
+func (m *mockAdminClientWithDeniedDescribe) CreateTopic(
+	detail *kafka.TopicDetail,
+	validateOnly bool,
+) error {
+	m.createTopicCalled = true
+	return nil
+}
+
+type mockAdminClientWithDeniedCreate struct {
+	*kafka.MockClusterAdminClient
+	createTopicCalled bool
+	describeCount     int
+}
+
+func (m *mockAdminClientWithDeniedCreate) GetTopicsMeta(
+	topics []string,
+	ignoreTopicError bool,
+) (map[string]kafka.TopicDetail, error) {
+	m.describeCount++
+	return map[string]kafka.TopicDetail{}, nil
+}
+
+func (m *mockAdminClientWithDeniedCreate) CreateTopic(
+	detail *kafka.TopicDetail,
+	validateOnly bool,
+) error {
+	m.createTopicCalled = true
+	return sarama.ErrClusterAuthorizationFailed
+}
+
 func TestCreateTopic(t *testing.T) {
 	t.Parallel()
 
@@ -175,4 +222,64 @@ func TestCreateTopicWaitsUntilVisible(t *testing.T) {
 	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, topic)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
+}
+
+func TestCreateTopicWithTopicDescribeDenied(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	adminClient := &mockAdminClientWithDeniedDescribe{
+		MockClusterAdminClient: kafka.NewMockClusterAdminClient(ctrl),
+	}
+	defer adminClient.Close()
+	cfg := &kafka.AutoCreateTopicConfig{
+		AutoCreate:        true,
+		PartitionNum:      2,
+		ReplicationFactor: 1,
+	}
+
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	ctx := context.Background()
+	manager := newKafkaTopicManager(ctx, "precreated-topic", changefeedID, adminClient, cfg)
+	defer manager.Close()
+
+	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, "precreated-topic")
+	require.NoError(t, err)
+	require.Equal(t, int32(2), partitionNum)
+	require.False(t, adminClient.createTopicCalled)
+	require.Equal(t, 2, adminClient.describeCount)
+
+	partitions, ok := manager.topics.Load("precreated-topic")
+	require.True(t, ok)
+	require.Equal(t, int32(2), partitions)
+}
+
+func TestCreateTopicWithCreateDenied(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	adminClient := &mockAdminClientWithDeniedDescribe{
+		MockClusterAdminClient: kafka.NewMockClusterAdminClient(ctrl),
+	}
+	defer adminClient.Close()
+	cfg := &kafka.AutoCreateTopicConfig{
+		AutoCreate:        true,
+		PartitionNum:      2,
+		ReplicationFactor: 1,
+	}
+
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	ctx := context.Background()
+	manager := newKafkaTopicManager(ctx, "precreated-topic", changefeedID, adminClient, cfg)
+	defer manager.Close()
+
+	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, "precreated-topic")
+	require.NoError(t, err)
+	require.Equal(t, int32(2), partitionNum)
+	require.True(t, adminClient.createTopicCalled)
+	require.Equal(t, 2, adminClient.describeCount)
+
+	partitions, ok := manager.topics.Load("precreated-topic")
+	require.True(t, ok)
+	require.Equal(t, int32(2), partitions)
 }
