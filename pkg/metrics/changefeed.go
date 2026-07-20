@@ -14,6 +14,8 @@
 package metrics
 
 import (
+	"strconv"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -71,7 +73,7 @@ var (
 			Subsystem: "owner",
 			Name:      "status",
 			Help:      "The status of changefeeds",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed", "keyspace_id"})
 
 	// ChangefeedErrorInfoGauge records the current warning or failed reason and its occurrence time
 	// for each changefeed.
@@ -99,7 +101,7 @@ var (
 			Subsystem: "owner",
 			Name:      "checkpoint_ts_lag",
 			Help:      "changefeed checkpoint ts lag in changefeeds in seconds",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed", "keyspace_id"})
 
 	// it's a metrics used in a large number of tcms, we should always keep this metrics
 	ChangefeedCheckpointTsGauge = prometheus.NewGaugeVec(
@@ -139,9 +141,14 @@ var (
 		}, []string{getKeyspaceLabel(), "changefeed"})
 )
 
-func DeleteChangefeedCheckpointMetrics(keyspace, changefeed string) {
+func DeleteChangefeedCheckpointMetrics(keyspace, changefeed string, keyspaceID uint32) {
 	ChangefeedCheckpointTsGauge.DeleteLabelValues(keyspace, changefeed)
-	ChangefeedCheckpointTsLagGauge.DeleteLabelValues(keyspace, changefeed)
+	ChangefeedCheckpointTsLagGauge.DeleteLabelValues(keyspace, changefeed, FormatKeyspaceID(keyspaceID))
+}
+
+// FormatKeyspaceID formats a keyspace ID as a metric label value.
+func FormatKeyspaceID(keyspaceID uint32) string {
+	return strconv.FormatUint(uint64(keyspaceID), 10)
 }
 
 func ResetOwnerChangefeedMetrics() {

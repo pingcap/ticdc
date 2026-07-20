@@ -52,7 +52,7 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.26
 	github.com/pingcap/errors v0.11.5-0.20260508054701-306e305bcf41
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-	github.com/pingcap/kvproto v0.0.0-20260601035955-b2b3bb492278
+	github.com/pingcap/kvproto v0.0.0-20260716092138-22607720b19a
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9
 	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5
 	github.com/pingcap/tidb v1.1.0-beta.0.20260604031706-f9faeaf4828f
