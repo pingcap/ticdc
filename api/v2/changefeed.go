@@ -1679,25 +1679,8 @@ func getVerifiedTables(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if !config.IsMQScheme(scheme) {
-		return ineligibleTables, eligibleTables, allTables, nil
-	}
 
-	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	err = eventRouter.VerifyTables(tableInfos)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	selectors, err := columnselector.New(replicaConfig.Sink)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	err = selectors.VerifyTables(tableInfos, eventRouter)
-	if err != nil {
+	if err := verifyTable4MQ(replicaConfig, scheme, topic, protocol, tableInfos); err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -1706,6 +1689,33 @@ func getVerifiedTables(
 	}
 
 	return ineligibleTables, eligibleTables, allTables, nil
+}
+
+func verifyTable4MQ(
+	replicaConfig *config.ReplicaConfig,
+	scheme string,
+	topic string,
+	protocol config.Protocol,
+	tableInfos []*common.TableInfo,
+) error {
+	if !config.IsMQScheme(scheme) {
+		return nil
+	}
+
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), isAvroLike)
+	if err != nil {
+		return err
+	}
+	if err = eventRouter.VerifyTables(tableInfos); err != nil {
+		return err
+	}
+
+	selectors, err := columnselector.New(replicaConfig.Sink)
+	if err != nil {
+		return err
+	}
+	return selectors.VerifyTables(tableInfos, eventRouter)
 }
 
 func GetKeyspaceValueWithDefault(c *gin.Context) string {

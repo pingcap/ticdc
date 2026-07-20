@@ -58,6 +58,7 @@ type Sink struct {
 
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal   *atomic.Bool
+	cfg        *mysql.Config
 	maxTxnRows int
 	bdrMode    bool
 	// enableActiveActive enables active-active replication behaviors in the MySQL-class sink.
@@ -90,12 +91,13 @@ func New(
 	changefeedID common.ChangeFeedID,
 	config *config.ChangefeedConfig,
 	sinkURI *url.URL,
+	keyspaceID uint32,
 ) (*Sink, error) {
 	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
 	}
-	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
+	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval, keyspaceID), nil
 }
 
 func NewMySQLSink(
@@ -106,8 +108,9 @@ func NewMySQLSink(
 	bdrMode bool,
 	enableActiveActive bool,
 	progressInterval time.Duration,
+	keyspaceID uint32,
 ) *Sink {
-	stat := metrics.NewStatistics(changefeedID, "TxnSink")
+	stat := metrics.NewStatistics(changefeedID, keyspaceID, "TxnSink")
 
 	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {
@@ -128,6 +131,7 @@ func NewMySQLSink(
 
 	result := &Sink{
 		changefeedID: changefeedID,
+		cfg:          cfg,
 		db:           db,
 		dmlWriter:    make([]*mysql.Writer, cfg.WorkerCount),
 		statistics:   stat,
@@ -411,4 +415,32 @@ func (s *Sink) Close(removeChangefeed bool) {
 		s.activeActiveSyncStatsCollector.Close()
 	}
 	s.statistics.Close()
+}
+
+// CleanupRemovedChangefeed removes ddl_ts state for a deleted changefeed.
+// It uses a short-lived DB connection so cleanup can run after the normal close
+// path has already closed the long-lived DB connection.
+func (s *Sink) CleanupRemovedChangefeed() error {
+	if !s.cfg.EnableDDLTs {
+		return nil
+	}
+
+	dsnStr, err := mysql.GenerateDSN(context.Background(), s.cfg)
+	if err != nil {
+		return err
+	}
+	db, err := mysql.CreateMysqlDBConn(dsnStr)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			log.Warn("close mysql cleanup db meet error",
+				zap.Any("changefeed", s.changefeedID.String()), zap.Error(closeErr))
+		}
+	}()
+
+	cleanupWriter := mysql.NewWriter(context.Background(), -1, db, s.cfg, s.changefeedID, nil, nil)
+	defer cleanupWriter.Close()
+	return cleanupWriter.RemoveDDLTsItem()
 }

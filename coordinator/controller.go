@@ -204,7 +204,11 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				info := cf.GetInfo()
 				keyspace := info.ChangefeedID.Keyspace()
 				name := info.ChangefeedID.Name()
-				metrics.ChangefeedStatusGauge.WithLabelValues(keyspace, name).Set(float64(info.State.ToInt()))
+				metrics.ChangefeedStatusGauge.WithLabelValues(
+					keyspace,
+					name,
+					metrics.FormatKeyspaceID(info.KeyspaceID),
+				).Set(float64(info.State.ToInt()))
 
 				// don't update checkpoint ts and checkpoint ts lag for stopped changefeed
 				if info.State == config.StateStopped {
@@ -215,7 +219,11 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				phyCkpTs := oracle.ExtractPhysical(cf.GetLastSavedCheckPointTs())
 				lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
 				metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
-				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
+				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(
+					keyspace,
+					name,
+					metrics.FormatKeyspaceID(info.KeyspaceID),
+				).Set(lag)
 
 				// sync changefeed error metrics
 				currentChangefeeds[cf.ID] = struct{}{}

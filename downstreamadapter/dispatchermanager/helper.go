@@ -408,40 +408,57 @@ func createDispatcherByInfo(
 	if len(redoInfos) > 0 {
 		err := dispatcherManager.newRedoDispatchers(redoInfos, false)
 		if err != nil {
+			if IsWritePathClosedError(err) {
+				log.Info("dispatcher manager write path closed, keep add operators for redo dispatchers",
+					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+					zap.Int("count", len(redoInfos)),
+					zap.Error(err),
+				)
+				return
+			}
 			dispatcherManager.handleError(context.Background(), err)
 		}
-		for _, info := range redoInfos {
-			// Create requests are stored in currentOperatorMap before creation and should be deleted once the dispatcher is created.
-			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
-				req := v.(SchedulerDispatcherRequest)
-				if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
-					log.Debug("delete current working add operator for redo dispatcher",
-						zap.String("changefeedID", dispatcherManager.changefeedID.String()),
-						zap.String("dispatcherID", info.Id.String()),
-						zap.Any("operator", req),
-					)
-					dispatcherManager.currentOperatorMap.Delete(info.Id)
-				}
-			}
-		}
+		deleteCreatedOperators(dispatcherManager, redoInfos, dispatcherManager.redoDispatcherMap, "redo dispatcher")
 	}
 	if len(infos) > 0 {
 		err := dispatcherManager.newEventDispatchers(infos, false)
 		if err != nil {
+			if IsWritePathClosedError(err) {
+				log.Info("dispatcher manager write path closed, keep add operators",
+					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+					zap.Int("count", len(infos)),
+					zap.Error(err),
+				)
+				return
+			}
 			dispatcherManager.handleError(context.Background(), err)
 		}
-		for _, info := range infos {
-			// Create requests are stored in currentOperatorMap before creation and should be deleted once the dispatcher is created.
-			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
-				req := v.(SchedulerDispatcherRequest)
-				if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
-					log.Debug("delete current working add operator",
-						zap.String("changefeedID", dispatcherManager.changefeedID.String()),
-						zap.String("dispatcherID", info.Id.String()),
-						zap.Any("operator", req),
-					)
-					dispatcherManager.currentOperatorMap.Delete(info.Id)
-				}
+		deleteCreatedOperators(dispatcherManager, infos, dispatcherManager.dispatcherMap, "dispatcher")
+	}
+}
+
+func deleteCreatedOperators[T dispatcher.Dispatcher](
+	dispatcherManager *DispatcherManager,
+	infos map[common.DispatcherID]dispatcherCreateInfo,
+	dispatcherMap *DispatcherMap[T],
+	dispatcherKind string,
+) {
+	for _, info := range infos {
+		if _, exists := dispatcherMap.Get(info.Id); !exists {
+			continue
+		}
+		// Create requests are stored in currentOperatorMap before creation and
+		// should be deleted only after the dispatcher is actually created.
+		if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
+			req := v.(SchedulerDispatcherRequest)
+			if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
+				log.Debug("delete current working add operator",
+					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+					zap.String("dispatcherID", info.Id.String()),
+					zap.String("dispatcherKind", dispatcherKind),
+					zap.Any("operator", req),
+				)
+				dispatcherManager.currentOperatorMap.Delete(info.Id)
 			}
 		}
 	}
@@ -602,7 +619,7 @@ func (h *CheckpointTsMessageHandler) Handle(dispatcherManager *DispatcherManager
 	}
 	if dispatcherManager.GetTableTriggerEventDispatcher() != nil {
 		checkpointTsMessage := messages[0]
-		dispatcherManager.sink.AddCheckpointTs(checkpointTsMessage.CheckpointTs)
+		dispatcherManager.addCheckpointTs(checkpointTsMessage.CheckpointTs)
 	}
 	return false
 }

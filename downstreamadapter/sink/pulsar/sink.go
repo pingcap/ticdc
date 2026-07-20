@@ -77,7 +77,7 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 }
 
 func New(
-	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, keyspaceID uint32,
 ) (*sink, error) {
 	comp, protocol, err := newPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
@@ -86,6 +86,7 @@ func New(
 	return newWithComponent(
 		ctx,
 		changefeedID,
+		keyspaceID,
 		sinkConfig,
 		comp,
 		protocol,
@@ -121,6 +122,7 @@ func newPulsarDDLProducer(
 func newWithComponent(
 	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
+	keyspaceID uint32,
 	sinkConfig *config.SinkConfig,
 	comp component,
 	protocol config.Protocol,
@@ -148,13 +150,13 @@ func newWithComponent(
 	}()
 
 	failpointCh := make(chan error, 1)
-	statistics = metrics.NewStatistics(changefeedID, "pulsar")
+	statistics = metrics.NewStatistics(changefeedID, keyspaceID, "pulsar")
 	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
 	if err != nil {
 		return nil, err
 	}
 
-	ddlProducer, err = newDDLProducers(changefeedID, comp, sinkConfig)
+	ddlProducer, err = newDDLProducer(changefeedID, comp, sinkConfig)
 	if err != nil {
 		return nil, err
 	}

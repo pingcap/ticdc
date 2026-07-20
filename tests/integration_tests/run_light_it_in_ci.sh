@@ -38,7 +38,7 @@ mysql_groups=(
 	# G02
 	'new_ci_collation safe_mode savepoint fail_over_ddl_C unsplittable_tables'
 	# G03
-	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
+	'capture_suicide_while_balance_table capture_local_fence_on_session_done kv_client_stream_reconnect fail_over_ddl_D'
 	# G04
 	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
@@ -85,7 +85,7 @@ kafka_groups=(
 	# G05
 	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
 	# G06
-	'multi_topics mq_sink_dispatcher fail_over_ddl_G'
+	'debezium_avro multi_topics mq_sink_dispatcher fail_over_ddl_G'
 	# G07
 	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08
