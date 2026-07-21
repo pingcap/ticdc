@@ -670,7 +670,7 @@ func (t *DMLEvent) PostFlush() {
 // This stage does not mean data is already written to downstream. The method is
 // idempotent and guarantees enqueue callbacks run at most once.
 func (t *DMLEvent) PostEnqueue() {
-	if !t.postEnqueueCalled.CAS(false, true) {
+	if !t.postEnqueueCalled.CompareAndSwap(false, true) {
 		return
 	}
 	for _, f := range t.PostTxnEnqueued {
@@ -691,7 +691,7 @@ func (t *DMLEvent) DetachPostCallbacks() (postEnqueue func(), postFlush func()) 
 	var postEnqueueCalled atomic.Bool
 	postEnqueueCalled.Store(t.postEnqueueCalled.Load())
 	postEnqueue = func() {
-		if !postEnqueueCalled.CAS(false, true) {
+		if !postEnqueueCalled.CompareAndSwap(false, true) {
 			return
 		}
 		for _, f := range postTxnEnqueued {

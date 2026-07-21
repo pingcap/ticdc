@@ -14,6 +14,8 @@
 package columnselector
 
 import (
+	"slices"
+
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -136,12 +138,10 @@ func (c *ColumnSelectors) VerifyTables(
 					partitionDispatcher := eventRouter.GetPartitionGenerator(table.TableName.Schema, table.TableName.Table)
 					switch v := partitionDispatcher.(type) {
 					case *partition.ColumnsPartitionGenerator:
-						for _, col := range v.Columns {
-							if col == columnInfo.Name.O {
-								return errors.ErrColumnSelectorFailed.GenWithStack(
-									"the filtered out column is used in the column dispatcher, "+
-										"table: %v, column: %s", table.TableName, columnInfo.Name)
-							}
+						if slices.Contains(v.Columns, columnInfo.Name.O) {
+							return errors.ErrColumnSelectorFailed.GenWithStack(
+								"the filtered out column is used in the column dispatcher, "+
+									"table: %v, column: %s", table.TableName, columnInfo.Name)
 						}
 					default:
 					}
