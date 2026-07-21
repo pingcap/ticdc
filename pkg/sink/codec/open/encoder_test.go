@@ -778,7 +778,9 @@ func TestEncoderMultipleMessage(t *testing.T) {
 		`insert into test.t values (3, 333)`)
 
 	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(400)
+	codecConfig := common.NewConfig(config.ProtocolOpen).
+		WithMaxMessageBytes(1000).
+		WithMaxBatchedBytes(400)
 	encoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
@@ -808,11 +810,13 @@ func TestEncoderMultipleMessage(t *testing.T) {
 	require.Equal(t, 2, len(messages))
 	require.Equal(t, 2, messages[0].GetRowsCount())
 	require.Equal(t, 1, messages[1].GetRowsCount())
+	require.LessOrEqual(t, messages[0].Length(), codecConfig.MaxBatchedBytes)
+	require.LessOrEqual(t, messages[1].Length(), codecConfig.MaxBatchedBytes)
+	require.Equal(t, 0, count)
 
-	for _, message := range messages {
-		message.Callback()
-	}
-
+	messages[0].Callback()
+	require.Equal(t, 2, count)
+	messages[1].Callback()
 	require.Equal(t, 3, count)
 
 	decoder, err := NewDecoder(ctx, 0, codecConfig, nil)
@@ -919,6 +923,8 @@ func TestMessageLargerThanBatchLimit(t *testing.T) {
 	messages := encoder.Build()
 	require.Len(t, messages, 1)
 	require.Equal(t, 1, messages[0].GetRowsCount())
+	require.Greater(t, messages[0].Length(), codecConfig.MaxBatchedBytes)
+	require.LessOrEqual(t, messages[0].Length(), codecConfig.MaxMessageBytes)
 	require.Equal(t, 0, count)
 
 	messages[0].Callback()
