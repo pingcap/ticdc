@@ -22,6 +22,58 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+<<<<<<< HEAD
+=======
+const kafkaTopicManagerTestTopic = "mock_topic"
+
+type mockAdminClientWithDeniedDescribe struct {
+	*kafka.MockClusterAdminClient
+	createTopicCalled bool
+	describeCount     int
+}
+
+func (m *mockAdminClientWithDeniedDescribe) GetTopicsMeta(
+	topics []string,
+	ignoreTopicError bool,
+) (map[string]kafka.TopicDetail, error) {
+	m.describeCount++
+	if ignoreTopicError {
+		return map[string]kafka.TopicDetail{}, nil
+	}
+	return nil, sarama.ErrTopicAuthorizationFailed
+}
+
+func (m *mockAdminClientWithDeniedDescribe) CreateTopic(
+	detail *kafka.TopicDetail,
+	validateOnly bool,
+) error {
+	m.createTopicCalled = true
+	return nil
+}
+
+type mockAdminClientWithDeniedCreate struct {
+	*kafka.MockClusterAdminClient
+	createTopicCalled bool
+	describeCount     int
+}
+
+func (m *mockAdminClientWithDeniedCreate) GetTopicsMeta(
+	topics []string,
+	ignoreTopicError bool,
+) (map[string]kafka.TopicDetail, error) {
+	m.describeCount++
+	return map[string]kafka.TopicDetail{}, nil
+}
+
+func (m *mockAdminClientWithDeniedCreate) CreateTopic(
+	detail *kafka.TopicDetail,
+	validateOnly bool,
+) error {
+	m.createTopicCalled = true
+	return sarama.ErrClusterAuthorizationFailed
+}
+
+>>>>>>> 86f31cf6b (kafka: avoid create changefeed failures if can't get a topic from broker (#5696))
 func TestCreateTopic(t *testing.T) {
 	t.Parallel()
 
@@ -35,7 +87,56 @@ func TestCreateTopic(t *testing.T) {
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	ctx := context.Background()
+<<<<<<< HEAD
 	manager := newKafkaTopicManager(ctx, kafka.DefaultMockTopicName, changefeedID, adminClient, cfg)
+=======
+	var gotNewTopicDetail *kafka.TopicDetail
+	var gotNewTopicValidateOnly bool
+	var gotFailedTopicDetail *kafka.TopicDetail
+	var gotFailedTopicValidateOnly bool
+	gomock.InOrder(
+		adminClient.EXPECT().GetTopicsMeta([]string{kafkaTopicManagerTestTopic}, true).Return(
+			map[string]kafka.TopicDetail{
+				kafkaTopicManagerTestTopic: {
+					Name:          kafkaTopicManagerTestTopic,
+					NumPartitions: 2,
+				},
+			}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, true).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
+			func(detail *kafka.TopicDetail, validateOnly bool) error {
+				gotNewTopicDetail = detail
+				gotNewTopicValidateOnly = validateOnly
+				return nil
+			}),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).Return(
+			map[string]kafka.TopicDetail{
+				"new-topic": {
+					Name:          "new-topic",
+					NumPartitions: 2,
+				},
+			}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic2"}, true).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic2"}, false).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic-failed"}, true).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic-failed"}, false).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
+			func(detail *kafka.TopicDetail, validateOnly bool) error {
+				gotFailedTopicDetail = detail
+				gotFailedTopicValidateOnly = validateOnly
+				return sarama.ErrInvalidReplicationFactor
+			}),
+	)
+
+	manager := newKafkaTopicManager(ctx, kafkaTopicManagerTestTopic, changefeedID, adminClient, cfg)
+>>>>>>> 86f31cf6b (kafka: avoid create changefeed failures if can't get a topic from broker (#5696))
 	defer manager.Close()
 	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, kafka.DefaultMockTopicName)
 	require.NoError(t, err)
@@ -88,7 +189,40 @@ func TestCreateTopicWithDelay(t *testing.T) {
 		ReplicationFactor: 1,
 	}
 
+<<<<<<< HEAD
 	topic := "new_topic"
+=======
+	topic := "delayed-topic"
+	gomock.InOrder(
+		adminClient.EXPECT().GetTopicsMeta([]string{topic}, true).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
+			func(detail *kafka.TopicDetail, validateOnly bool) error {
+				require.Equal(t, &kafka.TopicDetail{
+					Name:              topic,
+					NumPartitions:     2,
+					ReplicationFactor: 1,
+				}, detail)
+				require.False(t, validateOnly)
+				return nil
+			}),
+		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
+			nil, sarama.ErrUnknownTopicOrPartition),
+		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
+			nil, sarama.ErrUnknownTopicOrPartition),
+		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
+			map[string]kafka.TopicDetail{
+				topic: {
+					Name:          topic,
+					NumPartitions: 2,
+				},
+			}, nil),
+	)
+
+	ctx := context.Background()
+>>>>>>> 86f31cf6b (kafka: avoid create changefeed failures if can't get a topic from broker (#5696))
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	ctx := context.Background()
 	manager := newKafkaTopicManager(ctx, topic, changefeedID, adminClient, cfg)
@@ -100,4 +234,62 @@ func TestCreateTopicWithDelay(t *testing.T) {
 	err = manager.waitUntilTopicVisible(ctx, topic)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
+}
+
+func TestCreateTopicWithTopicDescribeDenied(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	adminClient := &mockAdminClientWithDeniedDescribe{
+		MockClusterAdminClient: kafka.NewMockClusterAdminClient(ctrl),
+	}
+	cfg := &kafka.AutoCreateTopicConfig{
+		AutoCreate:        true,
+		PartitionNum:      2,
+		ReplicationFactor: 1,
+	}
+
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	ctx := context.Background()
+	manager := newKafkaTopicManager(ctx, "precreated-topic", changefeedID, adminClient, cfg)
+	defer manager.Close()
+
+	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, "precreated-topic")
+	require.NoError(t, err)
+	require.Equal(t, int32(2), partitionNum)
+	require.False(t, adminClient.createTopicCalled)
+	require.Equal(t, 2, adminClient.describeCount)
+
+	partitions, ok := manager.topics.Load("precreated-topic")
+	require.True(t, ok)
+	require.Equal(t, int32(2), partitions)
+}
+
+func TestCreateTopicWithCreateDenied(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	adminClient := &mockAdminClientWithDeniedCreate{
+		MockClusterAdminClient: kafka.NewMockClusterAdminClient(ctrl),
+	}
+	cfg := &kafka.AutoCreateTopicConfig{
+		AutoCreate:        true,
+		PartitionNum:      2,
+		ReplicationFactor: 1,
+	}
+
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	ctx := context.Background()
+	manager := newKafkaTopicManager(ctx, "precreated-topic", changefeedID, adminClient, cfg)
+	defer manager.Close()
+
+	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, "precreated-topic")
+	require.NoError(t, err)
+	require.Equal(t, int32(2), partitionNum)
+	require.True(t, adminClient.createTopicCalled)
+	require.Equal(t, 2, adminClient.describeCount)
+
+	partitions, ok := manager.topics.Load("precreated-topic")
+	require.True(t, ok)
+	require.Equal(t, int32(2), partitions)
 }
