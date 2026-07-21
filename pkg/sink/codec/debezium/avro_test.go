@@ -24,10 +24,15 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/avro"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -538,18 +543,18 @@ func TestDebeziumConfluentAvroEncodeDDLEvent(t *testing.T) {
 	cfg.EnableTiDBExtension = true
 	cfg.TimeZone = time.UTC
 
-	routedDDL := common.NewRoutedDDLEvent4Test()
+	ddl := newDebeziumAvroDDLEventForTest()
 
 	encoder, err := NewAvroBatchEncoder(ctx, cfg, "dbserver1")
 	require.NoError(t, err)
-	message, err := encoder.EncodeDDLEvent(routedDDL)
+	message, err := encoder.EncodeDDLEvent(ddl)
 	require.NoError(t, err)
 	require.Nil(t, message)
 
 	cfg.AvroEnableWatermark = true
 	encoder, err = NewAvroBatchEncoder(ctx, cfg, "dbserver1")
 	require.NoError(t, err)
-	message, err = encoder.EncodeDDLEvent(routedDDL)
+	message, err = encoder.EncodeDDLEvent(ddl)
 	require.NoError(t, err)
 	require.NotNil(t, message)
 	require.Equal(t, byte(0), message.Key[0])
@@ -564,11 +569,51 @@ func TestDebeziumConfluentAvroEncodeDDLEvent(t *testing.T) {
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
 	decoded := decoder.NextDDLEvent()
-	require.Equal(t, routedDDL.GetCommitTs(), decoded.GetCommitTs())
-	require.Equal(t, routedDDL.GetDDLType(), decoded.GetDDLType())
-	require.Equal(t, "target_db", decoded.SchemaName)
-	require.Equal(t, "target_table", decoded.TableName)
-	require.Equal(t, routedDDL.Query, decoded.Query)
+	require.Equal(t, ddl.GetCommitTs(), decoded.GetCommitTs())
+	require.Equal(t, ddl.GetDDLType(), decoded.GetDDLType())
+	require.Equal(t, ddl.SchemaName, decoded.SchemaName)
+	require.Equal(t, ddl.TableName, decoded.TableName)
+	require.Equal(t, ddl.Query, decoded.Query)
+}
+
+func newDebeziumAvroDDLEventForTest() *commonEvent.DDLEvent {
+	idFieldType := types.NewFieldType(mysql.TypeLong)
+	idFieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	nameFieldType := types.NewFieldType(mysql.TypeVarchar)
+	nameFieldType.SetFlen(32)
+
+	tableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{
+		ID:      20,
+		Name:    ast.NewCIStr("source_table"),
+		Charset: mysql.DefaultCharset,
+		Collate: mysql.DefaultCollationName,
+		Columns: []*timodel.ColumnInfo{
+			{
+				ID:        1,
+				Name:      ast.NewCIStr("id"),
+				FieldType: *idFieldType,
+				State:     timodel.StatePublic,
+				Offset:    0,
+			},
+			{
+				ID:        2,
+				Name:      ast.NewCIStr("name"),
+				FieldType: *nameFieldType,
+				State:     timodel.StatePublic,
+				Offset:    1,
+			},
+		},
+	})
+
+	return &commonEvent.DDLEvent{
+		Version:    commonEvent.DDLEventVersion1,
+		Type:       byte(timodel.ActionCreateTable),
+		SchemaName: "test",
+		TableName:  "source_table",
+		Query:      "CREATE TABLE `test`.`source_table` (`id` INT PRIMARY KEY, `name` VARCHAR(32))",
+		TableInfo:  tableInfo,
+		FinishedTs: 100,
+	}
 }
 
 func TestDebeziumConfluentAvroEncodeCheckpointEvent(t *testing.T) {

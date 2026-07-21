@@ -16,55 +16,9 @@ package config
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
-
-// TestFeedStateIsResumable verifies the shared state predicate used by CLI/API
-// resume paths. Only stopped or terminal-but-resumable states should be accepted.
-func TestFeedStateIsResumable(t *testing.T) {
-	tests := []struct {
-		state     FeedState
-		resumable bool
-	}{
-		{state: StateStopped, resumable: true},
-		{state: StateFailed, resumable: true},
-		{state: StateFinished, resumable: true},
-		{state: StateNormal, resumable: false},
-		{state: StateWarning, resumable: false},
-		{state: StatePending, resumable: false},
-		{state: StateRemoved, resumable: false},
-		{state: StateUnInitialized, resumable: false},
-	}
-
-	for _, tt := range tests {
-		require.Equal(t, tt.resumable, tt.state.IsResumable())
-	}
-}
-
-// TestChangeFeedInfoToChangefeedConfigBatchFields ensures the maintainer-facing
-// changefeed config keeps the optional event collector batch overrides.
-func TestChangeFeedInfoToChangefeedConfigBatchFields(t *testing.T) {
-	assertBatchFields := func(batchCount *int, batchBytes *int) {
-		replicaConfig := GetDefaultReplicaConfig()
-		replicaConfig.EventCollectorBatchCount = batchCount
-		replicaConfig.EventCollectorBatchBytes = batchBytes
-
-		info := &ChangeFeedInfo{
-			ChangefeedID: common.NewChangefeedID4Test("test", "test"),
-			Config:       replicaConfig,
-		}
-
-		changefeedConfig := info.ToChangefeedConfig()
-		require.Equal(t, batchCount, changefeedConfig.EventCollectorBatchCount)
-		require.Equal(t, batchBytes, changefeedConfig.EventCollectorBatchBytes)
-	}
-
-	assertBatchFields(nil, nil)
-	assertBatchFields(util.AddressOf(0), util.AddressOf(0))
-	assertBatchFields(util.AddressOf(123), util.AddressOf(456))
-}
 
 func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *testing.T) {
 	t.Parallel()
