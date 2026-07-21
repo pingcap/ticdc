@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
@@ -84,7 +85,7 @@ func TestIntegerContentCompatible(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decodedInsert := decoder.NextDMLEvent()
+	decodedInsert := decoder.NextDMLMessage().ToDMLEvent()
 	require.NotNil(t, decodedInsert)
 }
 
@@ -169,7 +170,7 @@ func TestIntegerTypes(t *testing.T) {
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
-			decoded := decoder.NextDMLEvent()
+			decoded := decoder.NextDMLMessage().ToDMLEvent()
 			if enableTiDBExtension {
 				require.Equal(t, event.CommitTs, decoded.GetCommitTs())
 			}
@@ -230,7 +231,7 @@ func TestFloatTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -279,7 +280,7 @@ func TestTimeTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -329,7 +330,7 @@ func TestStringTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -379,7 +380,7 @@ func TestBlobTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -429,7 +430,7 @@ func TestTextTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -488,7 +489,7 @@ func TestOtherTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -546,7 +547,7 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -605,7 +606,7 @@ func TestDMLMultiplePK(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -790,7 +791,7 @@ func TestLargeMessageClaimCheck(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decodedInsert := dec.NextDMLEvent()
+	decodedInsert := dec.NextDMLMessage().ToDMLEvent()
 	require.NotNil(t, decodedInsert)
 
 	change, ok := decodedInsert.GetNextRow()
@@ -881,7 +882,7 @@ func TestMessageLargeHandleKeyOnly(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -972,7 +973,7 @@ func TestDMLTypeEvent(t *testing.T) {
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, messageType)
 
-		decoded := decoder.NextDMLEvent()
+		decoded := decoder.NextDMLMessage().ToDMLEvent()
 		change, ok := decoded.GetNextRow()
 		require.True(t, ok)
 
@@ -998,7 +999,7 @@ func TestDMLTypeEvent(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded := decoder.NextDMLEvent()
+	decoded := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := decoded.GetNextRow()
 	require.True(t, ok)
 
@@ -1092,7 +1093,7 @@ func TestDDLSequence(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decodedInsert := dec.NextDMLEvent()
+	decodedInsert := dec.NextDMLMessage().ToDMLEvent()
 	require.NotZero(t, decodedInsert.GetTableID())
 
 	addColumn := helper.DDL2Event(`alter table t add column c int`)
@@ -1127,6 +1128,148 @@ func TestDDLSequence(t *testing.T) {
 	require.Equal(t, dropTable.Query, obtained.Query)
 	require.Equal(t, dropTable.Type, obtained.Type)
 	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
+}
+
+func TestDecoderTableInfoCacheUsesDDLCommitTsAcrossColumnChanges(t *testing.T) {
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+	codecConfig.EnableTiDBExtension = true
+
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	buildRowMessage := func(commitTs uint64, mysqlTypes map[string]string) *canalJSONMessageWithTiDBExtension {
+		data := map[string]any{
+			"data": "insert_1",
+			"id":   "525",
+		}
+		if _, ok := mysqlTypes["new_col"]; ok {
+			data["new_col"] = nil
+		}
+		return &canalJSONMessageWithTiDBExtension{
+			JSONMessage: &JSONMessage{
+				Schema:    "test",
+				Table:     "table_5",
+				PKNames:   []string{"id"},
+				IsDDL:     false,
+				EventType: "INSERT",
+				SQLType: map[string]int32{
+					"data":    12,
+					"id":      4,
+					"new_col": 4,
+				},
+				MySQLType: mysqlTypes,
+				Data:      []map[string]any{data},
+			},
+			Extensions: &tidbExtension{CommitTs: commitTs},
+		}
+	}
+
+	decodeRow := func(message *canalJSONMessageWithTiDBExtension) *commonEvent.DMLEvent {
+		payload, err := json.Marshal(message)
+		require.NoError(t, err)
+		decoder.AddKeyValue(nil, payload)
+		messageType, hasNext := decoder.HasNext()
+		require.True(t, hasNext)
+		require.Equal(t, common.MessageTypeRow, messageType)
+		return decoder.NextDMLMessage().ToDMLEvent()
+	}
+
+	columnNames := func(event *commonEvent.DMLEvent) []string {
+		columns := event.TableInfo.GetColumns()
+		result := make([]string, 0, len(columns))
+		for _, column := range columns {
+			result = append(result, column.Name.O)
+		}
+		return result
+	}
+
+	oldSchema := map[string]string{
+		"data": "varchar(255)",
+		"id":   "int",
+	}
+	newSchema := map[string]string{
+		"data":    "varchar(255)",
+		"id":      "int",
+		"new_col": "int",
+	}
+
+	oldEvent := decodeRow(buildRowMessage(100, oldSchema))
+	require.Equal(t, []string{"data", "id"}, columnNames(oldEvent))
+
+	ddlMessage := &canalJSONMessageWithTiDBExtension{
+		JSONMessage: &JSONMessage{
+			Schema:    "test",
+			Table:     "table_5",
+			IsDDL:     true,
+			EventType: "ALTER",
+			Query:     "ALTER TABLE `test`.`table_5` ADD COLUMN `new_col` INT",
+		},
+		Extensions: &tidbExtension{CommitTs: 200},
+	}
+	payload, err := json.Marshal(ddlMessage)
+	require.NoError(t, err)
+	decoder.AddKeyValue(nil, payload)
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+	ddl := decoder.NextDDLEvent()
+	require.Equal(t, oldEvent.GetTableID(), ddl.GetBlockedTables().TableIDs[0])
+
+	newEvent := decodeRow(buildRowMessage(300, newSchema))
+	require.Equal(t, []string{"data", "id", "new_col"}, columnNames(newEvent))
+
+	lateOldEvent := decodeRow(buildRowMessage(100, oldSchema))
+	require.Equal(t, []string{"data", "id"}, columnNames(lateOldEvent))
+	require.Equal(t, oldEvent.GetTableID(), lateOldEvent.GetTableID())
+	require.Equal(t, oldEvent.GetTableID(), newEvent.GetTableID())
+}
+
+func TestDecoderTableInfoCacheUsesDDLCommitTsBoundary(t *testing.T) {
+	tableIDAllocator.Clean()
+	dec := &decoder{
+		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
+		ddlCommitTs:    make(map[tableNameKey][]uint64),
+	}
+	buildMessage := func(commitTs uint64, mysqlTypes map[string]string) *canalJSONMessageWithTiDBExtension {
+		return &canalJSONMessageWithTiDBExtension{
+			JSONMessage: &JSONMessage{
+				Schema:    "test",
+				Table:     "table_5",
+				PKNames:   []string{"id"},
+				MySQLType: mysqlTypes,
+			},
+			Extensions: &tidbExtension{CommitTs: commitTs},
+		}
+	}
+	columnNames := func(tableInfo *commonType.TableInfo) []string {
+		columns := tableInfo.GetColumns()
+		result := make([]string, 0, len(columns))
+		for _, column := range columns {
+			result = append(result, column.Name.O)
+		}
+		return result
+	}
+	beforeDropSchema := map[string]string{
+		"data":    "varchar(255)",
+		"id":      "int",
+		"new_col": "int",
+	}
+	afterDropSchema := map[string]string{
+		"data": "varchar(255)",
+		"id":   "int",
+	}
+
+	dec.addDDLCommitTs("test", "table_5", 200)
+	sameTsAsDDL := dec.queryTableInfo(buildMessage(200, beforeDropSchema))
+	afterDDL := dec.queryTableInfo(buildMessage(300, afterDropSchema))
+	lateSameTsAsDDL := dec.queryTableInfo(buildMessage(200, beforeDropSchema))
+
+	require.Equal(t, []string{"data", "id", "new_col"}, columnNames(sameTsAsDDL))
+	require.Equal(t, []string{"data", "id"}, columnNames(afterDDL))
+	require.NotSame(t, sameTsAsDDL, afterDDL)
+	require.Same(t, sameTsAsDDL, lateSameTsAsDDL)
+	require.Equal(t, []uint64{200}, dec.ddlCommitTs[tableNameKey{schema: "test", table: "table_5"}])
 }
 
 func TestCreateTableDDL(t *testing.T) {

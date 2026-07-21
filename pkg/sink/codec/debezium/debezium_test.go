@@ -120,7 +120,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded := decoder.NextDMLEvent()
+	decoded := decoder.NextDMLMessage().ToDMLEvent()
 	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
 	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
 

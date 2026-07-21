@@ -59,7 +59,7 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	require.NoError(t, err)
 
 	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
-	statistics := metrics.NewStatistics(changefeedID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage,
 		cfg, ".json", statistics, spoolBuffer)
@@ -479,7 +479,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool-pending")
-	statistics := metrics.NewStatistics(changefeedID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
@@ -648,7 +648,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-error-metric")
-	statistics := metrics.NewStatistics(changefeedID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
@@ -714,7 +714,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-close-error")
-	statistics := metrics.NewStatistics(changefeedID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
