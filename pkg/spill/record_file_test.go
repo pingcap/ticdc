@@ -85,3 +85,34 @@ func TestRecordFileCreatesDirAndCleansUp(t *testing.T) {
 	_, err = os.Stat(path)
 	require.True(t, os.IsNotExist(err))
 }
+
+func TestRecordFileCleanupRetriesRemoveFailure(t *testing.T) {
+	store, err := NewRecordFile(t.TempDir(), "test-*.spill")
+	require.NoError(t, err)
+	path := store.Path()
+
+	require.NoError(t, store.Close())
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.Mkdir(path, 0o700))
+	childPath := filepath.Join(path, "child")
+	require.NoError(t, os.WriteFile(childPath, []byte("keep directory non-empty"), 0o600))
+
+	require.Error(t, store.Cleanup())
+	require.False(t, store.cleaned)
+	require.NoError(t, os.Remove(childPath))
+	require.NoError(t, store.Cleanup())
+	require.True(t, store.cleaned)
+	require.NoFileExists(t, path)
+}
+
+func TestRecordFileCleanupUnlinksAfterCloseError(t *testing.T) {
+	store, err := NewRecordFile(t.TempDir(), "test-*.spill")
+	require.NoError(t, err)
+	path := store.Path()
+
+	require.NoError(t, store.file.Close())
+	require.Error(t, store.Cleanup())
+	require.True(t, store.cleaned)
+	require.NoFileExists(t, path)
+	require.NoError(t, store.Cleanup())
+}

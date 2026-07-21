@@ -153,6 +153,7 @@ func (s *eventScanner) scan(
 		dispatcherStat.info.IsOutputRawChangeEvent(),
 		s.mode,
 		dispatcherStat.info.EnableIgnoreUpdateOnlyColumns())
+	scanCtx.processor.ctx = ctx
 	scanCtx.processor.dispatcherStat = dispatcherStat
 
 	iter, err := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), request)
@@ -797,6 +798,9 @@ const dmlTypeFilterCacheSize = int(common.RowTypeUpdate) + 1
 
 // dmlProcessor handles DML event processing and batching
 type dmlProcessor struct {
+	// ctx belongs to the current scan attempt. Large-transaction spill I/O uses
+	// it so external encryption key lookups stop when the scan is canceled.
+	ctx          context.Context
 	mounter      event.Mounter
 	schemaGetter schemaGetter
 
@@ -837,6 +841,7 @@ func newDMLProcessor(
 		filterContext.EnableIgnoreUpdateOnlyColumns = true
 	}
 	return &dmlProcessor{
+		ctx:                  context.Background(),
 		mounter:              mounter,
 		schemaGetter:         schemaGetter,
 		filter:               dmlFilter,
@@ -990,7 +995,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 			if err != nil {
 				return err
 			}
-			if err := state.appendInsert(insertRow); err != nil {
+			if err := state.appendInsert(p.ctx, insertRow); err != nil {
 				return err
 			}
 		} else {

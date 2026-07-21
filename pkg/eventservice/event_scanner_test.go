@@ -852,7 +852,7 @@ func TestDrainLargeTxnInsertsStopsWhenDispatcherRemoved(t *testing.T) {
 	disp := newDispatcherStat(info, 1, 1, nil, status)
 	state, err := disp.getOrCreateLargeTxnState(t.TempDir(), info.GetTableSpan().TableID, nil, 90, 100)
 	require.NoError(t, err)
-	require.NoError(t, state.appendInsert(newTestSpillRawKVEntry(1)))
+	require.NoError(t, state.appendInsert(context.Background(), newTestSpillRawKVEntry(1)))
 	disp.markLargeTxnDrainInserts(90, 100, false, 0)
 	disp.isRemoved.Store(true)
 
@@ -873,6 +873,30 @@ func TestDrainLargeTxnInsertsStopsWhenDispatcherRemoved(t *testing.T) {
 	require.NoError(t, disp.cleanupLargeTxnState())
 }
 
+func TestDispatcherLargeTxnCleanupRetriesRemoveFailure(t *testing.T) {
+	info := newMockDispatcherInfoForTest(t)
+	status := newChangefeedStatusForTest(t, info)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	state, err := disp.getOrCreateLargeTxnState(
+		t.TempDir(), info.GetTableSpan().TableID, nil, 90, 100)
+	require.NoError(t, err)
+	require.NoError(t, state.appendInsert(context.Background(), newTestSpillRawKVEntry(1)))
+
+	spillPath := state.spill.file.Path()
+	require.NoError(t, os.Remove(spillPath))
+	require.NoError(t, os.Mkdir(spillPath, 0o700))
+	childPath := filepath.Join(spillPath, "child")
+	require.NoError(t, os.WriteFile(childPath, []byte("keep directory non-empty"), 0o600))
+
+	require.Error(t, disp.cleanupLargeTxnState())
+	require.Same(t, state, disp.getLargeTxnState())
+	require.False(t, state.cleaned)
+	require.NoError(t, os.Remove(childPath))
+	require.NoError(t, disp.cleanupLargeTxnState())
+	require.Nil(t, disp.getLargeTxnState())
+	require.NoFileExists(t, spillPath)
+}
+
 func TestEventScannerRetriesLargeTxnDrainAfterOpenError(t *testing.T) {
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
@@ -885,7 +909,7 @@ func TestEventScannerRetriesLargeTxnDrainAfterOpenError(t *testing.T) {
 	state, err := disp.getOrCreateLargeTxnState(
 		t.TempDir(), info.GetTableSpan().TableID, ddlEvent.TableInfo, 90, 100)
 	require.NoError(t, err)
-	require.NoError(t, state.appendInsert(newTestSpillRawKVEntry(1)))
+	require.NoError(t, state.appendInsert(context.Background(), newTestSpillRawKVEntry(1)))
 	disp.markLargeTxnDrainInserts(90, 100, false, 0)
 
 	spillPath := state.spill.file.Path()
@@ -941,8 +965,8 @@ func TestEventScannerRetriesLargeTxnDrainAfterDecodeError(t *testing.T) {
 	state, err := disp.getOrCreateLargeTxnState(
 		t.TempDir(), info.GetTableSpan().TableID, ddlEvent.TableInfo, 90, 100)
 	require.NoError(t, err)
-	require.NoError(t, state.appendInsert(newTestSpillRawKVEntry(1)))
-	require.NoError(t, state.appendInsert(newTestSpillRawKVEntry(2)))
+	require.NoError(t, state.appendInsert(context.Background(), newTestSpillRawKVEntry(1)))
+	require.NoError(t, state.appendInsert(context.Background(), newTestSpillRawKVEntry(2)))
 	disp.markLargeTxnDrainInserts(90, 100, false, 0)
 
 	dataRange := eventstore.ScanRequest{
@@ -1577,11 +1601,11 @@ func TestDMLProcessor(t *testing.T) {
 		require.Empty(t, processor.insertRowCache)
 		state := disp.getLargeTxnState()
 		require.NotNil(t, state)
-		insertRow, err := state.nextInsert()
+		insertRow, err := state.nextInsert(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, common.OpTypePut, insertRow.OpType)
 		require.False(t, insertRow.IsUpdate())
-		insertRow, err = state.nextInsert()
+		insertRow, err = state.nextInsert(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, common.OpTypePut, insertRow.OpType)
 		require.False(t, insertRow.IsUpdate())
@@ -1615,7 +1639,7 @@ func TestDMLProcessor(t *testing.T) {
 		require.NoError(t, processor.appendRow(updateEvent))
 
 		require.Empty(t, processor.insertRowCache)
-		insertRow, err := state.nextInsert()
+		insertRow, err := state.nextInsert(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, common.OpTypePut, insertRow.OpType)
 		require.False(t, insertRow.IsUpdate())

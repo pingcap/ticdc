@@ -14,6 +14,7 @@
 package eventservice
 
 import (
+	"context"
 	"io"
 	"sync"
 
@@ -120,16 +121,24 @@ func (a *dispatcherStat) markLargeTxnDrainInserts(
 func (a *dispatcherStat) cleanupLargeTxnState() error {
 	a.largeTxnStateMu.Lock()
 	state := a.largeTxnState
-	a.largeTxnState = nil
 	a.largeTxnStateMu.Unlock()
 
 	if state == nil {
 		return nil
 	}
-	return state.cleanup()
+	if err := state.cleanup(); err != nil {
+		return err
+	}
+
+	a.largeTxnStateMu.Lock()
+	if a.largeTxnState == state {
+		a.largeTxnState = nil
+	}
+	a.largeTxnStateMu.Unlock()
+	return nil
 }
 
-func (s *largeTxnScanState) appendInsert(entry *common.RawKVEntry) error {
+func (s *largeTxnScanState) appendInsert(ctx context.Context, entry *common.RawKVEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cleaned {
@@ -138,10 +147,10 @@ func (s *largeTxnScanState) appendInsert(entry *common.RawKVEntry) error {
 	if s.phase != largeTxnScanPhaseOriginal {
 		return errors.New("large txn spill is no longer accepting original txn rows")
 	}
-	return s.spill.Append(entry)
+	return s.spill.Append(ctx, entry)
 }
 
-func (s *largeTxnScanState) nextInsert() (*common.RawKVEntry, error) {
+func (s *largeTxnScanState) nextInsert(ctx context.Context) (*common.RawKVEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cleaned {
@@ -153,7 +162,7 @@ func (s *largeTxnScanState) nextInsert() (*common.RawKVEntry, error) {
 			return nil, err
 		}
 		for range s.drainedInsertCount {
-			if _, err := reader.Next(); err != nil {
+			if _, err := reader.Next(ctx); err != nil {
 				_ = reader.Close()
 				return nil, errors.WrapError(
 					errors.ErrSpillFileOp, err, "seek committed spill rows")
@@ -162,7 +171,7 @@ func (s *largeTxnScanState) nextInsert() (*common.RawKVEntry, error) {
 		s.reader = reader
 	}
 
-	entry, err := s.reader.Next()
+	entry, err := s.reader.Next(ctx)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, io.EOF
@@ -218,15 +227,15 @@ func (s *largeTxnScanState) cleanup() error {
 	if s.cleaned {
 		return nil
 	}
-	s.cleaned = true
 	var closeErr error
 	if s.reader != nil {
 		closeErr = s.reader.Close()
 		s.reader = nil
 	}
 	cleanupErr := s.spill.Cleanup()
-	if closeErr != nil {
-		return closeErr
+	if cleanupErr != nil {
+		return cleanupErr
 	}
-	return cleanupErr
+	s.cleaned = true
+	return closeErr
 }

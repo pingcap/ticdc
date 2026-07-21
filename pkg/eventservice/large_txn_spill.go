@@ -94,7 +94,7 @@ func newLargeTxnInsertSpillWithEncryption(
 	}, nil
 }
 
-func (s *largeTxnInsertSpill) Append(entry *common.RawKVEntry) error {
+func (s *largeTxnInsertSpill) Append(ctx context.Context, entry *common.RawKVEntry) error {
 	if entry == nil {
 		return errors.ErrSpillFileOp.GenWithStackByArgs("cannot append nil RawKVEntry")
 	}
@@ -102,7 +102,7 @@ func (s *largeTxnInsertSpill) Append(entry *common.RawKVEntry) error {
 	data := entry.Encode()
 	var err error
 	if s.encryptionManager != nil {
-		data, err = s.encryptionManager.EncryptData(context.Background(), s.keyspaceID, data)
+		data, err = s.encryptionManager.EncryptData(ctx, s.keyspaceID, data)
 		if err != nil {
 			return err
 		}
@@ -147,7 +147,7 @@ type largeTxnInsertSpillReader struct {
 	encryptionManager encryption.EncryptionManager
 }
 
-func (r *largeTxnInsertSpillReader) Next() (*common.RawKVEntry, error) {
+func (r *largeTxnInsertSpillReader) Next(ctx context.Context) (*common.RawKVEntry, error) {
 	data, err := r.reader.Next()
 	if err != nil {
 		if errors.Is(err, io.EOF) {
@@ -156,7 +156,7 @@ func (r *largeTxnInsertSpillReader) Next() (*common.RawKVEntry, error) {
 		return nil, err
 	}
 	if r.encryptionManager != nil {
-		data, err = r.encryptionManager.DecryptData(context.Background(), r.keyspaceID, data)
+		data, err = r.encryptionManager.DecryptData(ctx, r.keyspaceID, data)
 		if err != nil {
 			return nil, err
 		}

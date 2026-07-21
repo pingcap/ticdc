@@ -177,22 +177,21 @@ func (s *RecordFile) Cleanup() error {
 	if s == nil {
 		return nil
 	}
-	if err := s.Close(); err != nil {
-		return err
-	}
+	closeErr := s.Close()
 	if s.cleaned {
-		return nil
+		return closeErr
 	}
-	s.cleaned = true
 	if s.path == "" {
-		return nil
+		s.cleaned = true
+		return closeErr
 	}
 
 	err := os.Remove(s.path)
 	if err != nil && !os.IsNotExist(err) {
 		return errors.WrapError(errors.ErrSpillFileOp, err, "remove spill file")
 	}
-	return nil
+	s.cleaned = true
+	return closeErr
 }
 
 // Reader reads records sequentially from a RecordFile.

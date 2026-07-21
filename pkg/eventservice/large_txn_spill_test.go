@@ -40,7 +40,7 @@ func TestLargeTxnInsertSpillReadOrder(t *testing.T) {
 		newTestSpillRawKVEntry(3),
 	}
 	for _, entry := range entries {
-		require.NoError(t, spill.Append(entry))
+		require.NoError(t, spill.Append(context.Background(), entry))
 	}
 
 	reader, err := spill.NewReader()
@@ -50,11 +50,11 @@ func TestLargeTxnInsertSpillReadOrder(t *testing.T) {
 	}()
 
 	for _, expected := range entries {
-		actual, err := reader.Next()
+		actual, err := reader.Next(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, expected, actual)
 	}
-	actual, err := reader.Next()
+	actual, err := reader.Next(context.Background())
 	require.ErrorIs(t, err, io.EOF)
 	require.Nil(t, actual)
 }
@@ -75,7 +75,7 @@ func TestLargeTxnInsertSpillCreatesDir(t *testing.T) {
 func TestLargeTxnInsertSpillCleanup(t *testing.T) {
 	spill, err := newLargeTxnInsertSpill(t.TempDir(), 0)
 	require.NoError(t, err)
-	require.NoError(t, spill.Append(newTestSpillRawKVEntry(1)))
+	require.NoError(t, spill.Append(context.Background(), newTestSpillRawKVEntry(1)))
 
 	path := spill.file.Path()
 	require.NoError(t, spill.Cleanup())
@@ -102,7 +102,7 @@ func TestLargeTxnInsertSpillEmpty(t *testing.T) {
 		require.NoError(t, reader.Close())
 	}()
 
-	entry, err := reader.Next()
+	entry, err := reader.Next(context.Background())
 	require.ErrorIs(t, err, io.EOF)
 	require.Nil(t, entry)
 }
@@ -117,7 +117,7 @@ func TestLargeTxnInsertSpillValidationErrors(t *testing.T) {
 	defer func() {
 		require.NoError(t, spill.Cleanup())
 	}()
-	require.True(t, errors.ErrSpillFileOp.Equal(spill.Append(nil)))
+	require.True(t, errors.ErrSpillFileOp.Equal(spill.Append(context.Background(), nil)))
 }
 
 func TestCleanupLargeTxnInsertSpillFiles(t *testing.T) {
@@ -144,6 +144,26 @@ func TestCleanupLargeTxnInsertSpillFiles(t *testing.T) {
 type xorEncryptionManager struct {
 	encryptKeyspaceID uint32
 	decryptKeyspaceID uint32
+}
+
+type cancelAwareEncryptionManager struct{}
+
+func (*cancelAwareEncryptionManager) EncryptData(
+	ctx context.Context, _ uint32, data []byte,
+) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func (*cancelAwareEncryptionManager) DecryptData(
+	ctx context.Context, _ uint32, data []byte,
+) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func (m *xorEncryptionManager) EncryptData(
@@ -179,7 +199,7 @@ func TestLargeTxnInsertSpillUsesEncryptionManager(t *testing.T) {
 
 	entry := newTestSpillRawKVEntry(1)
 	encoded := entry.Encode()
-	require.NoError(t, spill.Append(entry))
+	require.NoError(t, spill.Append(context.Background(), entry))
 
 	onDisk, err := os.ReadFile(spill.file.Path())
 	require.NoError(t, err)
@@ -188,11 +208,29 @@ func TestLargeTxnInsertSpillUsesEncryptionManager(t *testing.T) {
 
 	reader, err := spill.NewReader()
 	require.NoError(t, err)
-	decoded, err := reader.Next()
+	decoded, err := reader.Next(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, entry, decoded)
 	require.Equal(t, keyspaceID, manager.decryptKeyspaceID)
 	require.NoError(t, reader.Close())
+}
+
+func TestLargeTxnStateUsesOperationContext(t *testing.T) {
+	spill, err := newLargeTxnInsertSpillWithEncryption(
+		t.TempDir(), 42, &cancelAwareEncryptionManager{})
+	require.NoError(t, err)
+	state := &largeTxnScanState{spill: spill}
+	t.Cleanup(func() {
+		require.NoError(t, state.cleanup())
+	})
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, state.appendInsert(canceledCtx, newTestSpillRawKVEntry(1)), context.Canceled)
+
+	require.NoError(t, state.appendInsert(context.Background(), newTestSpillRawKVEntry(2)))
+	_, err = state.nextInsert(canceledCtx)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func newTestSpillRawKVEntry(index int) *common.RawKVEntry {

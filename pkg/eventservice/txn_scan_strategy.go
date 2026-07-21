@@ -306,6 +306,7 @@ func drainLargeTxnInserts(
 		session.dispatcherStat.info.IsOutputRawChangeEvent(),
 		ctx.scanner.mode,
 		session.dispatcherStat.info.EnableIgnoreUpdateOnlyColumns())
+	processor.ctx = session.ctx
 	processor.dispatcherStat = session.dispatcherStat
 
 	for {
@@ -317,7 +318,7 @@ func drainLargeTxnInserts(
 			return false, nil
 		}
 
-		entry, err := state.nextInsert()
+		entry, err := state.nextInsert(session.ctx)
 		if err != nil {
 			if session.dispatcherStat.isRemoved.Load() {
 				return false, nil
@@ -394,7 +395,7 @@ func (p *dmlProcessor) spillCachedInsertRows() error {
 		return err
 	}
 	for _, insertRow := range p.insertRowCache {
-		if err := state.appendInsert(insertRow); err != nil {
+		if err := state.appendInsert(p.ctx, insertRow); err != nil {
 			return err
 		}
 	}
@@ -437,7 +438,7 @@ func (p *dmlProcessor) flushSpilledInsertsIntoCurrentTxn() error {
 		return nil
 	}
 	for {
-		insertRow, err := state.nextInsert()
+		insertRow, err := state.nextInsert(p.ctx)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return p.dispatcherStat.cleanupLargeTxnState()
