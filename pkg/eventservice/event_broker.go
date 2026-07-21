@@ -53,7 +53,13 @@ const (
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
 	defaultSendResolvedTsInterval           = time.Second * 2
 	defaultRefreshMinSentResolvedTsInterval = time.Second * 1
+	defaultScanSchemaBlockedInterval        = time.Millisecond * 50
 )
+
+type schemaBlockedDispatcherBucket struct {
+	dispatchers sync.Map // *dispatcherStat -> struct{}
+	dirty       atomic.Bool
+}
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
 // Every TiDB cluster has a eventBroker.
@@ -96,6 +102,9 @@ type eventBroker struct {
 
 	scanRateLimiter  *rate.Limiter
 	scanLimitInBytes uint64
+
+	lowLatencyMode          bool
+	schemaBlockedByKeyspace sync.Map // common.KeyspaceMeta -> *schemaBlockedDispatcherBucket
 }
 
 func newEventBroker(
@@ -144,6 +153,7 @@ func newEventBroker(
 		g:                       g,
 		scanRateLimiter:         rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
 		scanLimitInBytes:        uint64(scanLimitInBytes),
+		lowLatencyMode:          config.GetGlobalServerConfig().IsLowLatencyMode(),
 	}
 
 	// Initialize metrics collector
@@ -187,6 +197,12 @@ func newEventBroker(
 	g.Go(func() error {
 		return c.refreshMinSentResolvedTs(ctx)
 	})
+
+	if c.lowLatencyMode {
+		g.Go(func() error {
+			return c.runScanSchemaBlockedDispatchers(ctx)
+		})
+	}
 
 	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
 	return c
@@ -403,17 +419,29 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 	}
 }
 
-// getScanTaskDataRange determines the valid data range for scanning a given task.
-// It checks various conditions (dispatcher status, DDL state, max commit ts of dml event)
-// to decide whether scanning is needed and returns the appropriate time range.
-// If no valid range is found, it returns an empty DataRange.
+type scanTaskRangeResult struct {
+	needScan             bool
+	dataRange            common.DataRange
+	schemaBlocked        bool
+	schemaBlockedUntilTs uint64
+}
+
 func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRange) {
+	result := c.getScanTaskRange(task)
+	return result.needScan, result.dataRange
+}
+
+// getScanTaskRange determines the valid data range for scanning a given task.
+// It also reports when the applied SchemaStore frontier is the effective range
+// cap, so low-latency mode can retry the dispatcher after that frontier advances.
+func (c *eventBroker) getScanTaskRange(task scanTask) scanTaskRangeResult {
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
 	if !needScan {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
-		return false, common.DataRange{}
+		return scanTaskRangeResult{}
 	}
+	receivedResolvedTs := dataRange.CommitTsEnd
 
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   task.info.GetTableSpan().KeyspaceID,
@@ -424,7 +452,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	ddlState, err := c.schemaStore.GetTableDDLEventState(keyspaceMeta, task.info.GetTableSpan().TableID)
 	if err != nil {
 		log.Error("GetTableDDLEventState failed", zap.Uint32("keyspaceID", task.info.GetTableSpan().KeyspaceID), zap.Int64("tableID", task.info.GetTableSpan().TableID), zap.Error(err))
-		return false, common.DataRange{}
+		return scanTaskRangeResult{}
 	}
 	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
 	commitTsEndBeforeWindow := dataRange.CommitTsEnd
@@ -486,7 +514,17 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
 		// but do not advance the watermark here.
 		c.sendSignalResolvedTs(task)
-		return false, common.DataRange{}
+		result := scanTaskRangeResult{}
+		if ddlState.ResolvedTs <= dataRange.CommitTsStart && ddlState.ResolvedTs < receivedResolvedTs {
+			result.schemaBlocked = true
+			result.schemaBlockedUntilTs = dataRange.CommitTsStart
+		}
+		return result
+	}
+
+	result := scanTaskRangeResult{
+		schemaBlocked:        ddlState.ResolvedTs < receivedResolvedTs && dataRange.CommitTsEnd == ddlState.ResolvedTs,
+		schemaBlockedUntilTs: ddlState.ResolvedTs,
 	}
 
 	// 3. Check whether there is any events in the data range
@@ -501,9 +539,11 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
 		c.sendResolvedTs(task, dataRange.CommitTsEnd)
-		return false, common.DataRange{}
+		return result
 	}
-	return true, dataRange
+	result.needScan = true
+	result.dataRange = dataRange
+	return result
 }
 
 func (c *eventBroker) checkAndSendReady(task scanTask) bool {
@@ -599,8 +639,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	var interrupted bool
+	var schemaBlocked bool
+	var schemaBlockedUntilTs uint64
 	defer func() {
-		c.finishScan(task, interrupted)
+		c.finishScan(task, interrupted, schemaBlocked, schemaBlockedUntilTs)
 	}()
 
 	var (
@@ -626,10 +668,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	needScan, dataRange := c.getScanTaskDataRange(task)
-	if !needScan {
+	rangeResult := c.getScanTaskRange(task)
+	if !rangeResult.needScan {
+		schemaBlocked = rangeResult.schemaBlocked
+		schemaBlockedUntilTs = rangeResult.schemaBlockedUntilTs
 		return
 	}
+	dataRange := rangeResult.dataRange
 
 	// TODO: Currently, this rate limit does not take into account the priority of each task, which may lead to situations where certain tasks are starved and cannot be scheduled for a long time.
 	// For example, there are 10 dispatchers in the incremental scanning phase, with a large amount of traffic and a continuous stream of tasks, which occupy all the rate limits.
@@ -748,6 +793,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			log.Panic("unknown event type", zap.Any("event", e))
 		}
 	}
+	schemaBlocked = rangeResult.schemaBlocked
+	schemaBlockedUntilTs = rangeResult.schemaBlockedUntilTs
 	task.info.GetMode()
 	// Update metrics
 	metricEventBrokerScanTaskCount.Inc()
@@ -975,11 +1022,14 @@ func (c *eventBroker) tryEnqueueScanLocked(d *dispatcherStat, fallback dispatche
 func (c *eventBroker) finishScan(
 	d *dispatcherStat,
 	interrupted bool,
+	schemaBlocked bool,
+	schemaBlockedUntilTs uint64,
 ) {
 	d.scanMu.Lock()
 	defer d.scanMu.Unlock()
 	if d.isRemoved.Load() || d.scanState == dispatcherScanRemoved {
 		d.scanState = dispatcherScanRemoved
+		d.schemaBlockedUntilTs = 0
 		return
 	}
 	if d.scanState != dispatcherScanRunning {
@@ -987,11 +1037,121 @@ func (c *eventBroker) finishScan(
 	}
 
 	if interrupted {
+		d.schemaBlockedUntilTs = 0
 		c.tryEnqueueScanLocked(d, dispatcherScanIdle)
+		return
+	}
+	if c.lowLatencyMode && schemaBlocked {
+		d.scanState = dispatcherScanSchemaBlocked
+		d.schemaBlockedUntilTs = schemaBlockedUntilTs
+		bucket := c.getSchemaBlockedDispatcherBucket(d)
+		bucket.dispatchers.Store(d, struct{}{})
+		bucket.dirty.Store(true)
 		return
 	}
 
 	d.scanState = dispatcherScanIdle
+	d.schemaBlockedUntilTs = 0
+}
+
+func (c *eventBroker) getSchemaBlockedDispatcherBucket(d *dispatcherStat) *schemaBlockedDispatcherBucket {
+	keyspaceMeta := common.KeyspaceMeta{
+		ID:   d.info.GetTableSpan().KeyspaceID,
+		Name: d.changefeedStat.changefeedID.Keyspace(),
+	}
+	value, _ := c.schemaBlockedByKeyspace.LoadOrStore(keyspaceMeta, &schemaBlockedDispatcherBucket{})
+	return value.(*schemaBlockedDispatcherBucket)
+}
+
+func (c *eventBroker) removeSchemaBlockedDispatcher(d *dispatcherStat) {
+	keyspaceMeta := common.KeyspaceMeta{
+		ID:   d.info.GetTableSpan().KeyspaceID,
+		Name: d.changefeedStat.changefeedID.Keyspace(),
+	}
+	if value, ok := c.schemaBlockedByKeyspace.Load(keyspaceMeta); ok {
+		value.(*schemaBlockedDispatcherBucket).dispatchers.Delete(d)
+	}
+}
+
+func (c *eventBroker) runScanSchemaBlockedDispatchers(ctx context.Context) error {
+	ticker := time.NewTicker(defaultScanSchemaBlockedInterval)
+	defer ticker.Stop()
+	lastSchemaResolvedTs := make(map[common.KeyspaceMeta]uint64)
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.scanSchemaBlockedDispatchers(lastSchemaResolvedTs)
+		}
+	}
+}
+
+func (c *eventBroker) scanSchemaBlockedDispatchers(lastSchemaResolvedTs map[common.KeyspaceMeta]uint64) {
+	c.schemaBlockedByKeyspace.Range(func(key, value any) bool {
+		keyspaceMeta := key.(common.KeyspaceMeta)
+		bucket := value.(*schemaBlockedDispatcherBucket)
+		d := firstSchemaBlockedDispatcher(bucket)
+		if d == nil {
+			return true
+		}
+
+		ddlState, err := c.schemaStore.GetTableDDLEventState(keyspaceMeta, d.info.GetTableSpan().TableID)
+		if err != nil {
+			bucket.dirty.Store(true)
+			return true
+		}
+		dirty := bucket.dirty.Swap(false)
+		lastResolvedTs := lastSchemaResolvedTs[keyspaceMeta]
+		if !dirty && ddlState.ResolvedTs <= lastResolvedTs {
+			return true
+		}
+		if ddlState.ResolvedTs > lastResolvedTs {
+			lastSchemaResolvedTs[keyspaceMeta] = ddlState.ResolvedTs
+		}
+
+		retry := false
+		bucket.dispatchers.Range(func(key, _ any) bool {
+			d := key.(*dispatcherStat)
+			d.scanMu.Lock()
+			defer d.scanMu.Unlock()
+			if d.isRemoved.Load() || d.scanState != dispatcherScanSchemaBlocked {
+				bucket.dispatchers.Delete(d)
+				return true
+			}
+			if ddlState.ResolvedTs <= d.schemaBlockedUntilTs {
+				return true
+			}
+			if c.tryEnqueueScanLocked(d, dispatcherScanSchemaBlocked) {
+				d.schemaBlockedUntilTs = 0
+				bucket.dispatchers.Delete(d)
+			} else {
+				retry = true
+			}
+			return true
+		})
+		if retry {
+			bucket.dirty.Store(true)
+		}
+		return true
+	})
+}
+
+func firstSchemaBlockedDispatcher(bucket *schemaBlockedDispatcherBucket) *dispatcherStat {
+	var result *dispatcherStat
+	bucket.dispatchers.Range(func(key, _ any) bool {
+		d := key.(*dispatcherStat)
+		d.scanMu.Lock()
+		valid := !d.isRemoved.Load() && d.scanState == dispatcherScanSchemaBlocked
+		d.scanMu.Unlock()
+		if !valid {
+			bucket.dispatchers.Delete(d)
+			return true
+		}
+		result = d
+		return false
+	})
+	return result
 }
 
 func (c *eventBroker) getDispatcher(id common.DispatcherID) *atomic.Pointer[dispatcherStat] {
@@ -1112,6 +1272,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
 	stat.markRemoved()
+	c.removeSchemaBlockedDispatcher(stat)
 
 	if isTableTriggerDispatcher {
 		c.tableTriggerDispatchers.Delete(id)
@@ -1185,6 +1346,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	// No need to worry that the old dispatcher is still scanning,
 	// because its data will be filtered by event collector because of stale epoch.
 	oldStat.markRemoved()
+	c.removeSchemaBlockedDispatcher(oldStat)
 
 	// Create a new dispatcherStat and replace the old one.
 	// The new dispatcherStat will be used for all future operations.
@@ -1235,6 +1397,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			return nil
 		}
 		oldStat.markRemoved()
+		c.removeSchemaBlockedDispatcher(oldStat)
 	}
 
 	log.Info("reset dispatcher",

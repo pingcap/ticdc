@@ -45,6 +45,7 @@ const (
 	dispatcherScanIdle dispatcherScanState = iota
 	dispatcherScanQueued
 	dispatcherScanRunning
+	dispatcherScanSchemaBlocked
 	dispatcherScanRemoved
 )
 
@@ -133,9 +134,10 @@ type dispatcherStat struct {
 	// lastReceivedHeartbeatTime is the time when the dispatcher last received the heartbeat from the event service.
 	lastReceivedHeartbeatTime atomic.Int64
 
-	// Scan task related. scanMu protects scanState.
-	scanMu    sync.Mutex
-	scanState dispatcherScanState
+	// Scan task related. scanMu protects scanState and schemaBlockedUntilTs.
+	scanMu               sync.Mutex
+	scanState            dispatcherScanState
+	schemaBlockedUntilTs uint64
 }
 
 func newDispatcherStat(
@@ -217,6 +219,7 @@ func (a *dispatcherStat) markRemoved() {
 	a.isRemoved.Store(true)
 	a.scanMu.Lock()
 	a.scanState = dispatcherScanRemoved
+	a.schemaBlockedUntilTs = 0
 	a.scanMu.Unlock()
 }
 
