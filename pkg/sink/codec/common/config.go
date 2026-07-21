@@ -117,8 +117,9 @@ func NewConfig(protocol config.Protocol) *Config {
 	return &Config{
 		Protocol: protocol,
 
-		MaxMessageBytes: config.DefaultMaxMessageBytes,
-		MaxBatchSize:    defaultMaxBatchSize,
+		MaxMessageBytes:      config.DefaultMaxMessageBytes,
+		MaxBatchMessageBytes: config.DefaultMaxMessageBytes,
+		MaxBatchSize:         defaultMaxBatchSize,
 
 		EnableTiDBExtension: false,
 		EnableRowChecksum:   false,
@@ -197,7 +198,7 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	var err error
 	urlParameter := &urlConfig{}
 	if err = binding.Query.Bind(req, urlParameter); err != nil {
-		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
 	if urlParameter, err = mergeConfig(sinkConfig, urlParameter); err != nil {
 		return err
@@ -350,18 +351,15 @@ func (c *Config) WithMaxMessageBytes(bytes int) *Config {
 	return c
 }
 
-// WithMaxBatchMessageBytes sets the batch splitting threshold.
+// WithMaxBatchMessageBytes sets the maximum batched message bytes.
 func (c *Config) WithMaxBatchMessageBytes(bytes int) *Config {
 	c.MaxBatchMessageBytes = bytes
 	return c
 }
 
-// BatchMaxMessageBytes returns the batch splitting threshold.
+// BatchMaxMessageBytes returns the maximum batched message bytes.
 func (c *Config) BatchMaxMessageBytes() int {
-	if c.MaxBatchMessageBytes > 0 {
-		return c.MaxBatchMessageBytes
-	}
-	return c.MaxMessageBytes
+	return c.MaxBatchMessageBytes
 }
 
 // WithChangefeedID set the `changefeedID`

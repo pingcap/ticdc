@@ -152,7 +152,6 @@ type options struct {
 	// MaxMessageBytes controls the byte size limit of the producer.
 	MaxMessageBytes int
 	// MaxBatchedBytes controls the byte size limit when batching messages.
-	// this is not exposed, and is inferred from the `MaxMessageBytes` and kafka related configurations in the `adjustOption`.
 	MaxBatchedBytes int
 
 	MaxRetry     int
@@ -193,11 +192,12 @@ func NewOptions() *options {
 }
 
 // setPartitionNum set the partition-num by the topic's partition count.
-func (o *options) setPartitionNum(realPartitionCount int32) error {
+func (o *options) setPartitionNum(changefeedID common.ChangeFeedID, realPartitionCount int32) error {
 	// user does not specify the `partition-num` in the sink-uri
 	if o.PartitionNum == 0 {
 		o.PartitionNum = realPartitionCount
 		log.Info("partitionNum is not set, set by topic's partition-num",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
 			zap.Int32("partitionNum", realPartitionCount))
 		return nil
 	}
@@ -205,8 +205,8 @@ func (o *options) setPartitionNum(realPartitionCount int32) error {
 	if o.PartitionNum < realPartitionCount {
 		log.Warn("number of partition specified in sink-uri is less than that of the actual topic. "+
 			"Some partitions will not have messages dispatched to",
-			zap.Int32("sinkUriPartitions", o.PartitionNum),
-			zap.Int32("topicPartitions", realPartitionCount))
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
+			zap.Int32("sinkUriPartitions", o.PartitionNum), zap.Int32("topicPartitions", realPartitionCount))
 		return nil
 	}
 
@@ -576,6 +576,7 @@ func NewKafkaClientID(captureAddr string,
 // from the topic or broker configuration.
 func adjustOptions(
 	ctx context.Context,
+	changefeedID common.ChangeFeedID,
 	admin ClusterAdminClient,
 	options *options,
 	topic string,
@@ -588,31 +589,31 @@ func adjustOptions(
 	if err = validateRequiredAcks(ctx, admin, topics, topic, options); err != nil {
 		return errors.Trace(err)
 	}
-	return adjustTopicOptions(ctx, admin, options, topic, topics)
+	return adjustTopicOptions(ctx, changefeedID, admin, options, topic, topics)
 }
 
 func adjustTopicOptions(
 	ctx context.Context,
+	changefeedID common.ChangeFeedID,
 	admin ClusterAdminClient,
 	options *options,
 	topic string,
 	topics map[string]TopicDetail,
 ) error {
-	batchMaxBytes := options.MaxMessageBytes
 	info, exists := topics[topic]
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
 	var err error
 	if exists {
-		err = adjustExistingTopicOption(ctx, admin, options, topic, info)
+		err = adjustExistingTopicOption(ctx, changefeedID, admin, options, topic, info)
 	} else {
-		err = adjustNewTopicOptions(admin, options, topic)
+		adjustNewTopicOptions(admin, changefeedID, options, topic)
 	}
 	if err != nil {
 		return err
 	}
 
-	options.MaxBatchedBytes = min(batchMaxBytes, options.MaxMessageBytes)
+	options.MaxBatchedBytes = min(options.MaxBatchedBytes, options.MaxMessageBytes)
 	return nil
 }
 
@@ -634,26 +635,30 @@ func validateRequiredAcks(
 
 func adjustExistingTopicOption(
 	ctx context.Context,
+	changefeedID common.ChangeFeedID,
 	admin ClusterAdminClient,
 	options *options,
 	topic string,
 	info TopicDetail,
 ) error {
-	topicMaxMessageBytes, err := getTopicMaxMessageBytes(
-		ctx, admin, info.Name, options.MaxMessageBytes)
+	maxMessageBytes, err := getTopicMaxMessageBytes(ctx, admin, info.Name)
 	if err != nil {
-		return err
+		log.Warn("`max.message.bytes` not found from topic's configuration, use the option `MaxMessageBytes` as default",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
+			zap.Int("maxMessageBytes", options.MaxMessageBytes), zap.Error(err))
+		maxMessageBytes = options.MaxMessageBytes
 	}
-	options.MaxMessageBytes = topicMaxMessageBytes
+	options.MaxMessageBytes = maxMessageBytes
 
 	// no need to create the topic,
 	// but we would have to log user if they found enter wrong topic name later
 	if options.AutoCreate {
 		log.Warn("topic already exist, TiCDC will not create the topic",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
 			zap.String("topic", topic), zap.Any("detail", info))
 	}
 
-	if err = options.setPartitionNum(info.NumPartitions); err != nil {
+	if err = options.setPartitionNum(changefeedID, info.NumPartitions); err != nil {
 		return errors.Trace(err)
 	}
 	return nil
@@ -661,31 +666,34 @@ func adjustExistingTopicOption(
 
 func adjustNewTopicOptions(
 	admin ClusterAdminClient,
+	changefeedID common.ChangeFeedID,
 	options *options,
 	topic string,
-) error {
+) {
 	// when create the topic, `max.message.bytes` is decided by the broker,
 	// it would use broker's `message.max.bytes` to set topic's `max.message.bytes`.
-	brokerMessageMaxBytes, err := getBrokerMaxMessageBytes(admin, options.MaxMessageBytes)
+	messageMaxBytes, err := getBrokerMaxMessageBytes(admin)
 	if err != nil {
-		return err
+		log.Warn("`message.max.bytes` not found from broker's configuration, use the option `MaxMessageBytes` as default",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
+			zap.Int("maxMessageBytes", options.MaxMessageBytes), zap.Error(err))
+		messageMaxBytes = options.MaxMessageBytes
 	}
-	options.MaxMessageBytes = brokerMessageMaxBytes
+	options.MaxMessageBytes = messageMaxBytes
 
 	// topic not exists yet, and user does not specify the `partition-num` in the sink uri.
 	if options.PartitionNum == 0 {
 		options.PartitionNum = defaultPartitionNum
 		log.Warn("partition-num is not set, use the default partition count",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
 			zap.String("topic", topic), zap.Int32("partitions", options.PartitionNum))
 	}
-	return nil
 }
 
 func getTopicMaxMessageBytes(
 	ctx context.Context,
 	admin ClusterAdminClient,
 	topic string,
-	defaultMaxMessageBytes int,
 ) (int, error) {
 	maxMessageBytesStr, err := getTopicConfig(
 		ctx, admin, topic,
@@ -693,8 +701,7 @@ func getTopicMaxMessageBytes(
 		BrokerMessageMaxBytesConfigName,
 	)
 	if err != nil {
-		log.Warn("TiCDC cannot find `max.message.bytes` from topic's configuration, use the option `MaxMessageBytes` as default")
-		return defaultMaxMessageBytes, nil
+		return 0, errors.Trace(err)
 	}
 	maxMessageBytes, err := strconv.Atoi(maxMessageBytesStr)
 	if err != nil {
@@ -703,14 +710,10 @@ func getTopicMaxMessageBytes(
 	return maxMessageBytes, nil
 }
 
-func getBrokerMaxMessageBytes(
-	admin ClusterAdminClient,
-	defaultMaxMessageBytes int,
-) (int, error) {
+func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, error) {
 	maxMessageBytesStr, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
 	if err != nil {
-		log.Warn("TiCDC cannot find `message.max.bytes` from broker's configuration, use the option `MaxMessageBytes` as default")
-		return defaultMaxMessageBytes, nil
+		return 0, errors.Trace(err)
 	}
 	maxMessageBytes, err := strconv.Atoi(maxMessageBytesStr)
 	if err != nil {

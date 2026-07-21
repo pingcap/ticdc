@@ -288,17 +288,18 @@ func TestCompleteOptions(t *testing.T) {
 
 func TestSetPartitionNum(t *testing.T) {
 	options := NewOptions()
-	err := options.setPartitionNum(2)
+	changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
+	err := options.setPartitionNum(changefeedID, 2)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), options.PartitionNum)
 
 	options.PartitionNum = 1
-	err = options.setPartitionNum(2)
+	err = options.setPartitionNum(changefeedID, 2)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), options.PartitionNum)
 
 	options.PartitionNum = 3
-	err = options.setPartitionNum(2)
+	err = options.setPartitionNum(changefeedID, 2)
 	require.True(t, errors.ErrKafkaInvalidPartitionNum.Equal(err))
 }
 
@@ -392,7 +393,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 	}
 
 	topicName := "test-topic"
-
+	changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			adminFixture := newKafkaAdminFixture(t)
@@ -413,7 +414,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 				adminFixture.brokerMessageMaxBytes())
 
 			ctx := context.Background()
-			err = adjustOptions(ctx, adminClient, options, topicName)
+			err = adjustOptions(ctx, changefeedID, adminClient, options, topicName)
 			require.NoError(t, err)
 
 			saramaConfig, err := newSaramaConfig(ctx, options)
@@ -441,10 +442,12 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 	// Report an error if the replication-factor is less than min.insync.replicas
 	// when the topic does not exist.
 	adminFixture.setMinInsyncReplicas("2")
+	changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
 
 	ctx := context.Background()
 	err := adjustOptions(
 		ctx,
+		changefeedID,
 		adminClient,
 		options,
 		"create-new-fail-invalid-min-insync-replicas",
@@ -458,7 +461,7 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 	// topic not exist, and `min.insync.replicas` not found in broker's configuration
 	adminFixture.dropBrokerConfig(MinInsyncReplicasConfigName)
 	topicName := "no-topic-no-min-insync-replicas"
-	err = adjustOptions(ctx, adminClient, options, "no-topic-no-min-insync-replicas")
+	err = adjustOptions(ctx, changefeedID, adminClient, options, "no-topic-no-min-insync-replicas")
 	require.Nil(t, err)
 	err = adminClient.CreateTopic(&TopicDetail{
 		Name:              topicName,
@@ -477,12 +480,12 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 		NumPartitions:     3,
 	}, false)
 	require.Nil(t, err)
-	err = adjustOptions(ctx, adminClient, options, topicName)
+	err = adjustOptions(ctx, changefeedID, adminClient, options, topicName)
 	require.Nil(t, err)
 
 	// topic found, and have `min.insync.replicas`, but set to 2, larger than `replication-factor`.
 	adminFixture.setMinInsyncReplicas("2")
-	err = adjustOptions(ctx, adminClient, options, defaultMockTopicName)
+	err = adjustOptions(ctx, changefeedID, adminClient, options, defaultMockTopicName)
 	require.Regexp(t,
 		".*`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of topic.*",
 		errors.Cause(err),
@@ -497,10 +500,13 @@ func TestSkipAdjustConfigMinInsyncReplicasWhenRequiredAcksIsNotWailAll(t *testin
 	options.BrokerEndpoints = []string{"127.0.0.1:9092"}
 	options.RequiredAcks = WaitForLocal
 
+	changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
+
 	// Do not report an error if the replication-factor is less than min.insync.replicas(1<2).
 	adminFixture.setMinInsyncReplicas("2")
 	err := adjustOptions(
 		context.Background(),
+		changefeedID,
 		adminClient,
 		options,
 		"skip-check-min-insync-replicas",
@@ -698,7 +704,8 @@ func TestConfigurationCombinations(t *testing.T) {
 			}
 			expectedProducerLimit := expectedAdjustedMaxMessageBytes(sourceMaxMessageBytes)
 
-			err = adjustOptions(ctx, adminClient, options, topic)
+			changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
+			err = adjustOptions(ctx, changefeedID, adminClient, options, topic)
 			require.Nil(t, err)
 			require.Equal(t, expectedProducerLimit, options.MaxMessageBytes)
 			require.Equal(
