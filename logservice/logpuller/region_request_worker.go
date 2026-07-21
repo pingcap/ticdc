@@ -448,6 +448,7 @@ func (s *regionRequestWorker) createRegionRequest(region regionInfo) *cdcpb.Chan
 		EndKey:       region.span.EndKey,
 		ExtraOp:      kvrpcpb.ExtraOp_ReadOldValue,
 		FilterLoop:   region.filterLoop,
+		ScanPriority: normalizeScanPriority(region.scanPriority),
 	}
 }
 

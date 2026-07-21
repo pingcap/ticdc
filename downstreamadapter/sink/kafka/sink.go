@@ -19,12 +19,15 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -68,24 +71,93 @@ func (s *sink) SinkType() commonType.SinkType {
 }
 
 func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
-	comp, _, err := newKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig)
-	defer comp.close()
-	return err
+	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	topic, err := helper.GetTopic(uri)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	options := kafka.NewOptions()
+	if err = options.Apply(changefeedID, uri, sinkConfig); err != nil {
+		return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+	}
+	options.Topic = topic
+
+	encoderConfig, err := helper.GetEncoderConfig(changefeedID, uri, protocol, sinkConfig, options.MaxMessageBytes)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
+		return errors.Trace(err)
+	}
+
+	if _, err = columnselector.New(sinkConfig); err != nil {
+		return errors.Trace(err)
+	}
+
+	factory, err := kafka.NewSaramaFactory(ctx, options, changefeedID)
+	if err != nil {
+		return errors.WrapError(errors.ErrKafkaNewProducer, err)
+	}
+
+	adminClient, err := factory.AdminClient(ctx)
+	if err != nil {
+		return errors.WrapError(errors.ErrKafkaNewProducer, err)
+	}
+	defer adminClient.Close()
+
+	topics, err := adminClient.GetTopicsMeta([]string{topic}, false)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if _, exists := topics[topic]; exists {
+		return nil
+	}
+
+	topicConfig := options.DeriveTopicConfig()
+	if !topicConfig.AutoCreate {
+		return errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topic)
+	}
+
+	// the topic is not created, only validate.
+	err = adminClient.CreateTopic(&kafka.TopicDetail{
+		Name:              topic,
+		NumPartitions:     topicConfig.PartitionNum,
+		ReplicationFactor: topicConfig.ReplicationFactor,
+	}, true)
+	if err != nil {
+		return errors.WrapError(errors.ErrKafkaCreateTopic, err)
+	}
+
+	encoder, err := codec.NewEventEncoder(ctx, encoderConfig)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	encoder.Clean()
+
+	return nil
 }
 
 func New(
-	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, keyspaceID uint32,
 ) (*sink, error) {
 	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	return newWithComponents(ctx, changefeedID, protocol, comp)
+	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp)
 }
 
 func newWithComponents(
 	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
+	keyspaceID uint32,
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
@@ -106,7 +178,7 @@ func newWithComponents(
 		}
 	}()
 
-	statistics := metrics.NewStatistics(changefeedID, "sink")
+	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "sink")
 	asyncProducer, err = comp.factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, err

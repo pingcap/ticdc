@@ -180,6 +180,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 	case messaging.TypeDispatcherHeartbeat:
 		if len(msg.Message) != 1 {
 			log.Warn("invalid dispatcher heartbeat, ignore it", zap.Any("msg", msg))
+			return nil
 		}
 		heartbeat := msg.Message[0].(*event.DispatcherHeartbeat)
 		select {
@@ -193,6 +194,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 	case messaging.TypeCongestionControl:
 		if len(msg.Message) != 1 {
 			log.Warn("invalid control message, ignore it", zap.Any("msg", msg))
+			return nil
 		}
 		m := msg.Message[0].(*event.CongestionControl)
 		s.handleCongestionControl(msg.From, m)

@@ -192,16 +192,61 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return result
 }
 
-// NextDMLEvent implements the Decoder interface
-func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
+// NextDMLMessage implements the Decoder interface
+func (b *decoder) NextDMLMessage() *common.DMLMessage {
 	if b.nextKey.Type != common.MessageTypeRow {
 		log.Panic("message type is not row", zap.Any("messageType", b.nextKey.Type))
 	}
 
+	key := *b.nextKey
+	value := b.nextDMLValue()
+	b.nextKey = nil
+
+	rowType := commonType.RowTypeInsert
+	if key.ClaimCheckLocation == "" {
+		rowType = b.rowTypeFromDMLValue(value)
+	}
+	tableID := tableIDAllocator.Allocate(key.Schema, key.Table)
+	return common.NewDMLMessage(tableID, key.Schema, key.Table, key.Ts, rowType, func() *commonEvent.DMLEvent {
+		return b.decodeDMLMessage(&key, value)
+	})
+}
+
+func (b *decoder) nextDMLValue() []byte {
 	valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
 	value := b.valueBytes[8 : valueLen+8]
 	b.valueBytes = b.valueBytes[valueLen+8:]
+	return append([]byte(nil), value...)
+}
 
+func (b *decoder) rowTypeFromDMLValue(value []byte) commonType.RowType {
+	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
+	if err != nil {
+		log.Panic("decompress failed",
+			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", util.RedactAny(value)), zap.Error(err))
+	}
+
+	nextRow := new(messageRow)
+	nextRow.decode(value)
+	return rowTypeFromMessageRow(nextRow)
+}
+
+func rowTypeFromMessageRow(row *messageRow) commonType.RowType {
+	if len(row.Delete) != 0 {
+		return commonType.RowTypeDelete
+	}
+	if len(row.Update) != 0 && len(row.PreColumns) != 0 {
+		return commonType.RowTypeUpdate
+	}
+	if len(row.Update) != 0 {
+		return commonType.RowTypeInsert
+	}
+	log.Panic("unknown event type")
+	return commonType.RowTypeInsert
+}
+
+func (b *decoder) decodeDMLMessage(key *messageKey, value []byte) *commonEvent.DMLEvent {
 	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
 		log.Panic("decompress failed",
@@ -214,15 +259,15 @@ func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 
 	ctx := context.Background()
 	// claim-check message found
-	if b.nextKey.ClaimCheckLocation != "" {
-		return b.assembleEventFromClaimCheckStorage(ctx)
+	if key.ClaimCheckLocation != "" {
+		return b.assembleEventFromClaimCheckStorage(ctx, key)
 	}
 
-	if b.nextKey.OnlyHandleKey && b.upstreamTiDB != nil {
-		return b.assembleHandleKeyOnlyDMLEvent(ctx, nextRow)
+	if key.OnlyHandleKey && b.upstreamTiDB != nil {
+		return b.assembleHandleKeyOnlyDMLEvent(ctx, key, nextRow)
 	}
 
-	return b.assembleDMLEvent(nextRow)
+	return b.assembleDMLEvent(key, nextRow)
 }
 
 func buildColumns(
@@ -259,8 +304,7 @@ func buildColumns(
 	return columns
 }
 
-func (b *decoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, row *messageRow) *commonEvent.DMLEvent {
-	key := b.nextKey
+func (b *decoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, key *messageKey, row *messageRow) *commonEvent.DMLEvent {
 	var (
 		schema   = key.Schema
 		table    = key.Table
@@ -290,13 +334,12 @@ func (b *decoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, row *messag
 	} else {
 		log.Panic("unknown event type")
 	}
-	b.nextKey.OnlyHandleKey = false
-	return b.assembleDMLEvent(row)
+	key.OnlyHandleKey = false
+	return b.assembleDMLEvent(key, row)
 }
 
-func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commonEvent.DMLEvent {
-	_, claimCheckFileName := filepath.Split(b.nextKey.ClaimCheckLocation)
-	b.nextKey = nil
+func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context, key *messageKey) *commonEvent.DMLEvent {
+	_, claimCheckFileName := filepath.Split(key.ClaimCheckLocation)
 	data, err := b.storage.ReadFile(ctx, claimCheckFileName)
 	if err != nil {
 		log.Panic("read claim check file failed", zap.String("fileName", claimCheckFileName), zap.Error(err))
@@ -311,11 +354,11 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commo
 		log.Panic("the batch version is not supported", zap.Uint64("version", version))
 	}
 
-	key := claimCheckM.Key[8:]
-	keyLen := binary.BigEndian.Uint64(key[:8])
-	key = key[8 : keyLen+8]
+	encodedKey := claimCheckM.Key[8:]
+	keyLen := binary.BigEndian.Uint64(encodedKey[:8])
+	encodedKey = encodedKey[8 : keyLen+8]
 	msgKey := new(messageKey)
-	msgKey.Decode(key)
+	msgKey.Decode(encodedKey)
 
 	valueLen := binary.BigEndian.Uint64(claimCheckM.Value[:8])
 	value := claimCheckM.Value[8 : valueLen+8]
@@ -329,8 +372,7 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commo
 	rowMsg := new(messageRow)
 	rowMsg.decode(value)
 
-	b.nextKey = msgKey
-	return b.assembleDMLEvent(rowMsg)
+	return b.assembleDMLEvent(msgKey, rowMsg)
 }
 
 func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
@@ -490,10 +532,7 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 	return indices
 }
 
-func (b *decoder) assembleDMLEvent(value *messageRow) *commonEvent.DMLEvent {
-	key := b.nextKey
-	b.nextKey = nil
-
+func (b *decoder) assembleDMLEvent(key *messageKey, value *messageRow) *commonEvent.DMLEvent {
 	tableInfo := b.queryTableInfo(key, value)
 	result := new(commonEvent.DMLEvent)
 	result.TableInfo = tableInfo

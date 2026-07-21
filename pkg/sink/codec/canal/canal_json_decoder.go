@@ -22,8 +22,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -44,6 +46,12 @@ import (
 )
 
 type tableKey struct {
+	schema      string
+	table       string
+	ddlCommitTs uint64
+}
+
+type tableNameKey struct {
 	schema string
 	table  string
 }
@@ -91,7 +99,9 @@ type decoder struct {
 
 	storage        storeapi.Storage
 	upstreamTiDB   *sql.DB
+	tableInfoMu    sync.RWMutex
 	tableInfoCache map[tableKey]*commonType.TableInfo
+	ddlCommitTs    map[tableNameKey][]uint64
 }
 
 var tableIDAllocator = common.NewTableIDAllocator()
@@ -125,6 +135,7 @@ func NewDecoder(
 		storage:        externalStorage,
 		upstreamTiDB:   db,
 		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
+		ddlCommitTs:    make(map[tableNameKey][]uint64),
 	}, nil
 }
 
@@ -194,8 +205,7 @@ func (d *decoder) assembleClaimCheckDMLEvent(
 		log.Panic("unmarshal claim check message failed", zap.Any("value", util.RedactAny(value)), zap.Error(err))
 	}
 
-	d.msg = message
-	return d.NextDMLEvent()
+	return d.decodeDMLMessage(message)
 }
 
 func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string) {
@@ -292,19 +302,46 @@ func (d *decoder) assembleHandleKeyOnlyDMLEvent(
 		result.Data = []map[string]interface{}{data}
 	}
 
-	d.msg = result
-	return d.NextDMLEvent()
+	return d.decodeDMLMessage(result)
 }
 
-// NextDMLEvent implements the Decoder interface
+// NextDMLMessage implements the Decoder interface
 // `HasNext` should be called before this.
-func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
+func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
+		messageType := common.MessageTypeUnknown
+		if d.msg != nil {
+			messageType = d.msg.messageType()
+		}
 		log.Panic("message type is not row changed",
-			zap.Any("messageType", d.msg.messageType()), zap.Any("msg", d.msg))
+			zap.Any("messageType", messageType), zap.Any("msg", d.msg))
 	}
 
-	message, withExtension := d.msg.(*canalJSONMessageWithTiDBExtension)
+	msg := d.msg
+	schemaName := *msg.getSchema()
+	tableName := *msg.getTable()
+	tableID := tableIDAllocator.Allocate(schemaName, tableName)
+	tableIDAllocator.AddBlockTableID(schemaName, tableName, tableID)
+
+	var rowType commonType.RowType
+	switch msg.eventType() {
+	case canal.EventType_DELETE:
+		rowType = commonType.RowTypeDelete
+	case canal.EventType_INSERT:
+		rowType = commonType.RowTypeInsert
+	case canal.EventType_UPDATE:
+		rowType = commonType.RowTypeUpdate
+	default:
+		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
+	}
+
+	return common.NewDMLMessage(tableID, schemaName, tableName, msg.getCommitTs(), rowType, func() *commonEvent.DMLEvent {
+		return d.decodeDMLMessage(msg)
+	})
+}
+
+func (d *decoder) decodeDMLMessage(msg canalJSONMessageInterface) *commonEvent.DMLEvent {
+	message, withExtension := msg.(*canalJSONMessageWithTiDBExtension)
 	if withExtension {
 		ctx := context.Background()
 		if message.Extensions.OnlyHandleKey && d.upstreamTiDB != nil {
@@ -314,11 +351,10 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 			return d.assembleClaimCheckDMLEvent(ctx, message.Extensions.ClaimCheckLocation)
 		}
 	}
-	return d.canalJSONMessage2DMLEvent()
+	return d.canalJSONMessage2DMLEvent(msg)
 }
 
-func (d *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
-	msg := d.msg
+func (d *decoder) canalJSONMessage2DMLEvent(msg canalJSONMessageInterface) *commonEvent.DMLEvent {
 	tableInfo := d.queryTableInfo(msg)
 
 	result := new(commonEvent.DMLEvent)
@@ -378,9 +414,8 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
 
 	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
-	// if receive a table level DDL, just remove the table info to trigger create a new one.
-	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
-	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
+	d.addDDLCommitTs(result.SchemaName, result.TableName, result.GetCommitTs())
+	d.addDDLCommitTs(result.ExtraSchemaName, result.ExtraTableName, result.GetCommitTs())
 	return result
 }
 
@@ -400,14 +435,15 @@ func (d *decoder) NextResolvedEvent() uint64 {
 }
 
 func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {
+	result := make(map[string]any, len(data))
 	for _, col := range columns {
 		raw, ok := data[col.Name.O]
 		if !ok {
 			continue
 		}
-		data[col.Name.O] = formatValue(raw, col.FieldType)
+		result[col.Name.O] = formatValue(raw, col.FieldType)
 	}
-	return data
+	return result
 }
 
 func formatValue(value any, ft types.FieldType) any {
@@ -536,9 +572,13 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 
+	d.tableInfoMu.Lock()
+	defer d.tableInfoMu.Unlock()
+
 	cacheKey := tableKey{
-		schema: schemaName,
-		table:  tableName,
+		schema:      schemaName,
+		table:       tableName,
+		ddlCommitTs: d.getDDLCommitTsLocked(schemaName, tableName, msg.getCommitTs()),
 	}
 	tableInfo, ok := d.tableInfoCache[cacheKey]
 	if !ok {
@@ -555,6 +595,41 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 		d.tableInfoCache[cacheKey] = tableInfo
 	}
 	return tableInfo
+}
+
+func (d *decoder) addDDLCommitTs(schema, table string, commitTs uint64) {
+	if schema == "" || table == "" || commitTs == 0 {
+		return
+	}
+
+	d.tableInfoMu.Lock()
+	defer d.tableInfoMu.Unlock()
+
+	key := tableNameKey{schema: schema, table: table}
+	commitTsList := d.ddlCommitTs[key]
+	i := sort.Search(len(commitTsList), func(i int) bool {
+		return commitTsList[i] >= commitTs
+	})
+	if i < len(commitTsList) && commitTsList[i] == commitTs {
+		return
+	}
+	d.ddlCommitTs[key] = slices.Insert(commitTsList, i, commitTs)
+}
+
+func (d *decoder) getDDLCommitTsLocked(schema, table string, commitTs uint64) uint64 {
+	if commitTs == 0 {
+		return 0
+	}
+
+	commitTsList := d.ddlCommitTs[tableNameKey{schema: schema, table: table}]
+	i := sort.Search(len(commitTsList), func(i int) bool {
+		// DMLs with the same commit-ts as a DDL are flushed before that DDL.
+		return commitTsList[i] >= commitTs
+	})
+	if i == 0 {
+		return 0
+	}
+	return commitTsList[i-1]
 }
 
 func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {

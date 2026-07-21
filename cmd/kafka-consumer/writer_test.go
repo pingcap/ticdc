@@ -311,12 +311,12 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	}
 
 	progress := w.progresses[0]
-	w.appendRow2Group(newDMLEvent(200), progress, kafka.Offset(10))
-	w.appendRow2Group(newDMLEvent(100), progress, kafka.Offset(11))
+	w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(200)), progress, kafka.Offset(10))
+	w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(100)), progress, kafka.Offset(11))
 
 	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
 	require.Len(t, resolved, 1)
-	require.Equal(t, uint64(100), resolved[0].CommitTs)
+	require.Equal(t, uint64(100), resolved[0].GetCommitTs())
 }
 
 func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
@@ -359,12 +359,12 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 			}
 
 			progress := w.progresses[0]
-			w.appendRow2Group(newDMLEvent(200), progress, kafka.Offset(10))
-			w.appendRow2Group(newDMLEvent(100), progress, kafka.Offset(11))
+			w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(200)), progress, kafka.Offset(10))
+			w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(100)), progress, kafka.Offset(11))
 
 			resolved := progress.eventsGroup[1].ResolveInto(150, nil)
 			require.Len(t, resolved, 1)
-			require.Equal(t, uint64(100), resolved[0].CommitTs)
+			require.Equal(t, uint64(100), resolved[0].GetCommitTs())
 		})
 	}
 }
