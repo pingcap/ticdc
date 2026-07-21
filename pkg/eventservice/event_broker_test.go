@@ -23,6 +23,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
+	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -333,6 +334,38 @@ func TestGetScanTaskDataRangeEmptyAfterCappingDoesNotResetScanRange(t *testing.T
 	require.False(t, needScan)
 	require.Equal(t, commitStart, disp.loadScanProgress().txnCommitTs)
 	require.Equal(t, lastStartTs, disp.loadScanProgress().txnStartTs)
+}
+
+func TestGetScanTaskRequestKeepsRowCursorInsideShrunkWindow(t *testing.T) {
+	broker, _, schemaStore, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all messages in the test.
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+
+	baseTime := time.Now()
+	baseTs := oracle.GoTimeToTS(baseTime)
+	cursorCommitTs := oracle.GoTimeToTS(baseTime.Add(20 * time.Second))
+	resolvedTs := oracle.GoTimeToTS(baseTime.Add(40 * time.Second))
+	position := eventstore.ScanPosition("row-cursor")
+
+	disp.sentResolvedTs.Store(baseTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(cursorCommitTs)
+	disp.updateScanRangeWithPosition(cursorCommitTs, cursorCommitTs-1, position)
+	changefeedStatus.minSentTs.Store(baseTs)
+	changefeedStatus.scanInterval.Store(int64(defaultScanInterval))
+	schemaStore.resolvedTs = resolvedTs
+
+	needScan, request := broker.getScanTaskRequest(disp)
+	require.True(t, needScan)
+	require.Equal(t, cursorCommitTs, request.Range.CommitTsStart)
+	require.Equal(t, cursorCommitTs, request.Range.CommitTsEnd)
+	require.Equal(t, position, request.Cursor.Position)
 }
 
 func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow(t *testing.T) {

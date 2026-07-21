@@ -482,6 +482,15 @@ func (c *eventBroker) getScanTaskRequest(task scanTask) (bool, eventstore.ScanRe
 		}
 	}
 
+	// A row cursor resumes inside the transaction at CommitTsStart. The adaptive
+	// window may shrink after that cursor was published, but it must not move the
+	// effective upper bound behind the cursor's commit ts.
+	if len(request.Cursor.Position) != 0 &&
+		dataRange.CommitTsEnd < dataRange.CommitTsStart &&
+		commitTsEndBeforeWindow >= dataRange.CommitTsStart {
+		dataRange.CommitTsEnd = dataRange.CommitTsStart
+	}
+
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
 		hasSameCommitTxnResume := request.Cursor.TxnStartTs != 0 &&
 			dataRange.CommitTsEnd == dataRange.CommitTsStart
