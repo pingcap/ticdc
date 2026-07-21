@@ -158,7 +158,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			messages := g.ResolveInto(commitTs, nil)
 			events := make([]*commonEvent.DMLEvent, 0, len(messages))
 			for _, message := range messages {
-				events = util.AppendOrMergeDMLEvent(events, w.assembleDMLEvent(progress, message))
+				events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
 			}
 			resolvedEvents = append(resolvedEvents, events...)
 		}
@@ -270,7 +270,7 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 			messages := group.ResolveInto(watermark, nil)
 			events := make([]*commonEvent.DMLEvent, 0, len(messages))
 			for _, message := range messages {
-				events = util.AppendOrMergeDMLEvent(events, w.assembleDMLEvent(p, message))
+				events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
 			}
 			resolvedEvents = append(resolvedEvents, events...)
 		}
@@ -305,24 +305,6 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 		}
 	}
-}
-
-func (w *writer) assembleDMLEvent(progress *partitionProgress, message *common.DMLMessage) *commonEvent.DMLEvent {
-	row := message.ToDMLEvent()
-	if row == nil {
-		log.Panic("DML event is nil, it's not expected",
-			zap.Int32("partition", progress.partition), zap.Int64("tableID", message.TableID),
-			zap.Uint64("commitTs", message.GetCommitTs()))
-	}
-	if row.GetTableID() != message.TableID || row.GetCommitTs() != message.GetCommitTs() ||
-		len(row.RowTypes) == 0 || row.RowTypes[0] != message.RowType {
-		log.Panic("decoded DML event metadata mismatch",
-			zap.Int32("partition", progress.partition),
-			zap.Int64("pendingTableID", message.TableID), zap.Int64("decodedTableID", row.GetTableID()),
-			zap.Uint64("pendingCommitTs", message.GetCommitTs()), zap.Uint64("decodedCommitTs", row.GetCommitTs()),
-			zap.Stringer("pendingEventType", message.RowType), zap.Any("decodedEventTypes", row.RowTypes))
-	}
-	return row
 }
 
 // WriteMessage is to decode pulsar message to event.
