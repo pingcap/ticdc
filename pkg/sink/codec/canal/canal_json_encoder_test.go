@@ -668,7 +668,7 @@ func TestMaxMessageBytes(t *testing.T) {
 
 	codecConfig = common.NewConfig(config.ProtocolCanalJSON).
 		WithMaxMessageBytes(maxMessageBytes).
-		WithMaxBatchMessageBytes(100)
+		WithMaxBatchedBytes(100)
 
 	encIface, err = NewJSONRowEventEncoder(ctx, codecConfig)
 	require.NoError(t, err)

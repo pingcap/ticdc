@@ -43,10 +43,10 @@ type Config struct {
 
 	// MaxMessageBytes is the final encoded message size limit.
 	MaxMessageBytes int
-	// MaxBatchMessageBytes controls batch splitting.
+	// MaxBatchedBytes controls batch splitting.
 	// If it is not set, codecs use MaxMessageBytes to keep the old behavior.
-	MaxBatchMessageBytes int
-	MaxBatchSize         int
+	MaxBatchedBytes int
+	MaxBatchSize    int
 
 	// DeleteOnlyHandleKeyColumns is true, for the delete event only output the handle key columns.
 	DeleteOnlyHandleKeyColumns bool
@@ -117,9 +117,9 @@ func NewConfig(protocol config.Protocol) *Config {
 	return &Config{
 		Protocol: protocol,
 
-		MaxMessageBytes:      config.DefaultMaxMessageBytes,
-		MaxBatchMessageBytes: config.DefaultMaxMessageBytes,
-		MaxBatchSize:         defaultMaxBatchSize,
+		MaxMessageBytes: config.DefaultMaxMessageBytes,
+		MaxBatchedBytes: config.DefaultMaxMessageBytes,
+		MaxBatchSize:    defaultMaxBatchSize,
 
 		EnableTiDBExtension: false,
 		EnableRowChecksum:   false,
@@ -351,15 +351,10 @@ func (c *Config) WithMaxMessageBytes(bytes int) *Config {
 	return c
 }
 
-// WithMaxBatchMessageBytes sets the maximum batched message bytes.
-func (c *Config) WithMaxBatchMessageBytes(bytes int) *Config {
-	c.MaxBatchMessageBytes = bytes
+// WithMaxBatchedBytes sets the maximum batched message bytes.
+func (c *Config) WithMaxBatchedBytes(bytes int) *Config {
+	c.MaxBatchedBytes = bytes
 	return c
-}
-
-// BatchMaxMessageBytes returns the maximum batched message bytes.
-func (c *Config) BatchMaxMessageBytes() int {
-	return c.MaxBatchMessageBytes
 }
 
 // WithChangefeedID set the `changefeedID`
@@ -476,16 +471,16 @@ func (c *Config) Validate() error {
 			errors.Errorf("invalid max-message-bytes %d", c.MaxMessageBytes),
 		)
 	}
-	if c.MaxBatchMessageBytes < 0 {
+	if c.MaxBatchedBytes < 0 {
 		return errors.ErrCodecInvalidConfig.Wrap(
-			errors.Errorf("invalid max-batch-message-bytes %d", c.MaxBatchMessageBytes),
+			errors.Errorf("invalid max-batch-message-bytes %d", c.MaxBatchedBytes),
 		)
 	}
-	if c.MaxBatchMessageBytes > c.MaxMessageBytes {
+	if c.MaxBatchedBytes > c.MaxMessageBytes {
 		return errors.ErrCodecInvalidConfig.Wrap(
 			errors.Errorf(
 				"max-batch-message-bytes %d cannot be greater than max-message-bytes %d",
-				c.MaxBatchMessageBytes,
+				c.MaxBatchedBytes,
 				c.MaxMessageBytes,
 			),
 		)

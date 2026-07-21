@@ -173,7 +173,7 @@ func (d *batchEncoder) pushMessage(key, value []byte, callback func()) {
 	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
 	binary.BigEndian.PutUint64(valueLenByte[:], uint64(len(value)))
 
-	if len(d.messages) == 0 || d.messages[len(d.messages)-1].Length()+length > d.config.BatchMaxMessageBytes() || d.messages[len(d.messages)-1].GetRowsCount() >= d.config.MaxBatchSize {
+	if len(d.messages) == 0 || d.messages[len(d.messages)-1].Length()+length > d.config.MaxBatchedBytes() || d.messages[len(d.messages)-1].GetRowsCount() >= d.config.MaxBatchSize {
 		d.finalizeCallback()
 		// create a new message
 		versionHead := make([]byte, 8)

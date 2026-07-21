@@ -25,7 +25,7 @@ import (
 func TestValidateMaxBatchMessageBytes(t *testing.T) {
 	cfg := NewConfig(config.ProtocolOpen)
 	cfg.MaxMessageBytes = 100
-	cfg.MaxBatchMessageBytes = 101
+	cfg.MaxBatchedBytes = 101
 
 	err := cfg.Validate()
 	require.Error(t, err)

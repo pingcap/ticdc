@@ -1597,7 +1597,7 @@ func TestDMLLargerThanBatchLimit(t *testing.T) {
 
 	codecConfig := common.NewConfig(config.ProtocolSimple)
 	codecConfig.MaxMessageBytes = config.DefaultMaxMessageBytes
-	codecConfig.MaxBatchMessageBytes = 50
+	codecConfig.MaxBatchedBytes = 50
 
 	enc, err := NewEncoder(context.Background(), codecConfig)
 	require.NoError(t, err)
@@ -1607,7 +1607,7 @@ func TestDMLLargerThanBatchLimit(t *testing.T) {
 
 	messages := enc.Build()
 	require.Len(t, messages, 1)
-	require.Greater(t, messages[0].Length(), codecConfig.MaxBatchMessageBytes)
+	require.Greater(t, messages[0].Length(), codecConfig.MaxBatchedBytes)
 	require.LessOrEqual(t, messages[0].Length(), codecConfig.MaxMessageBytes)
 	require.Equal(t, 1, messages[0].GetRowsCount())
 }

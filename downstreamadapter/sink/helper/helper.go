@@ -51,7 +51,7 @@ func GetEncoderConfig(
 	protocol config.Protocol,
 	sinkConfig *config.SinkConfig,
 	maxMessageBytes int,
-	batchMaxMessageBytes int,
+	maxBatchedBytes int,
 ) (*common.Config, error) {
 	encoderConfig := common.NewConfig(protocol)
 	if err := encoderConfig.Apply(sinkURI, sinkConfig); err != nil {
@@ -59,7 +59,7 @@ func GetEncoderConfig(
 	}
 	encoderConfig = encoderConfig.
 		WithMaxMessageBytes(maxMessageBytes).
-		WithMaxBatchMessageBytes(batchMaxMessageBytes).
+		WithMaxBatchedBytes(maxBatchedBytes).
 		WithChangefeedID(changefeedID)
 
 	tz, err := util.GetTimezone(config.GetGlobalServerConfig().TZ)

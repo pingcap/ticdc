@@ -727,7 +727,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			require.Nil(t, err)
 			encoderConfig.
 				WithMaxMessageBytes(options.MaxMessageBytes).
-				WithMaxBatchMessageBytes(options.MaxBatchedBytes)
+				WithMaxBatchedBytes(options.MaxBatchedBytes)
 
 			err = encoderConfig.Validate()
 			require.Nil(t, err)
@@ -736,7 +736,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			require.Equal(
 				t,
 				min(configuredMaxMessageBytes, expectedProducerLimit),
-				encoderConfig.BatchMaxMessageBytes(),
+				encoderConfig.MaxBatchedBytes(),
 			)
 
 			adminClient.Close()

@@ -189,7 +189,7 @@ func TestFloatTypes(t *testing.T) {
 	helper.Tk().MustExec("use test")
 	job := helper.DDL2Job(`create table test.t(
     	id int primary key auto_increment,
-	    a float, b float(10, 3), c float(10), 
+	    a float, b float(10, 3), c float(10),
 	    d double, e double(20, 3))`)
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d,e) values (1.23, 4.56, 7.89, 10.11, 12.13)`)
@@ -533,17 +533,17 @@ func TestOtherTypes(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 	job := helper.DDL2Job(`create table test.t(
-    	id int primary key auto_increment, 
+    	id int primary key auto_increment,
     	a bool, b bool, c year,
-		d bit(10), e json, 
-		f decimal(10,2), 
+		d bit(10), e json,
+		f decimal(10,2),
 		g enum('a','b','c'), h set('a','b','c'))`)
 	tableInfo := helper.GetTableInfo(job)
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a, b, c, d, e, f, g, h) values (
-   		true, false, 2000, 
-	    0b0101010101, '{"key1": "value1"}', 
-	    153.123, 
+   		true, false, 2000,
+	    0b0101010101, '{"key1": "value1"}',
+	    153.123,
 	    'a', 'a,b')`)
 
 	require.NotNil(t, dmlEvent)
@@ -889,7 +889,7 @@ func TestMessageLargerThanBatchLimit(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen).
 		WithMaxMessageBytes(400).
-		WithMaxBatchMessageBytes(100)
+		WithMaxBatchedBytes(100)
 	encoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
