@@ -91,7 +91,7 @@ func newKafkaSinkComponent(
 
 	encoderConfig, err := helper.GetEncoderConfig(
 		changefeedID, sinkURI, protocol, sinkConfig,
-		options.MaxMessageBytes, options.BatchMaxMessageBytes,
+		options.MaxMessageBytes, options.MaxBatchedBytes,
 	)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)

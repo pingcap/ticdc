@@ -189,7 +189,7 @@ func TestCompleteOptions(t *testing.T) {
 	require.Equal(t, int16(3), options.ReplicationFactor)
 	require.Equal(t, "2.6.0", options.Version)
 	require.Equal(t, 4096, options.MaxMessageBytes)
-	require.Equal(t, 4096, options.BatchMaxMessageBytes)
+	require.Equal(t, 4096, options.MaxBatchedBytes)
 	require.Equal(t, WaitForLocal, options.RequiredAcks)
 	require.Equal(t, defaultMaxRetry, options.MaxRetry)
 
@@ -424,7 +424,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 			require.Equal(
 				t,
 				min(configuredMaxMessageBytes, expectedProducerLimit),
-				options.BatchMaxMessageBytes,
+				options.MaxBatchedBytes,
 			)
 			require.Equal(t, expectedProducerLimit, saramaConfig.Producer.MaxMessageBytes)
 		})
@@ -704,7 +704,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			require.Equal(
 				t,
 				min(configuredMaxMessageBytes, expectedProducerLimit),
-				options.BatchMaxMessageBytes,
+				options.MaxBatchedBytes,
 			)
 
 			saramaConfig, err := newSaramaConfig(ctx, options)
@@ -720,7 +720,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			require.Nil(t, err)
 			encoderConfig.
 				WithMaxMessageBytes(options.MaxMessageBytes).
-				WithMaxBatchMessageBytes(options.BatchMaxMessageBytes)
+				WithMaxBatchMessageBytes(options.MaxBatchedBytes)
 
 			err = encoderConfig.Validate()
 			require.Nil(t, err)
@@ -775,7 +775,7 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, int16(5), c.ReplicationFactor)
 	require.Equal(t, "3.1.2", c.Version)
 	require.Equal(t, 1024*1024, c.MaxMessageBytes)
-	require.Equal(t, 1024*1024, c.BatchMaxMessageBytes)
+	require.Equal(t, 1024*1024, c.MaxBatchedBytes)
 	require.Equal(t, "gzip", c.Compression)
 	require.Equal(t, "test-id", c.ClientID)
 	require.Equal(t, true, c.AutoCreate)
@@ -857,7 +857,7 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, int16(5), c.ReplicationFactor)
 	require.Equal(t, "3.1.2", c.Version)
 	require.Equal(t, 1024*1024, c.MaxMessageBytes)
-	require.Equal(t, 1024*1024, c.BatchMaxMessageBytes)
+	require.Equal(t, 1024*1024, c.MaxBatchedBytes)
 	require.Equal(t, "gzip", c.Compression)
 	require.Equal(t, "test-id", c.ClientID)
 	require.Equal(t, true, c.AutoCreate)

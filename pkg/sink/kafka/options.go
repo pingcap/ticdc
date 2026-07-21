@@ -151,9 +151,9 @@ type options struct {
 
 	// MaxMessageBytes controls the byte size limit of the producer.
 	MaxMessageBytes int
-	// BatchMaxMessageBytes controls the byte size limit when batching messages.
+	// MaxBatchedBytes controls the byte size limit when batching messages.
 	// this is not exposed, and is inferred from the `MaxMessageBytes` and kafka related configurations in the `adjustOption`.
-	BatchMaxMessageBytes int
+	MaxBatchedBytes int
 
 	MaxRetry     int
 	Compression  string
@@ -175,20 +175,20 @@ type options struct {
 // NewOptions returns a default Kafka configuration
 func NewOptions() *options {
 	return &options{
-		Version:              "2.4.0",
-		MaxMessageBytes:      config.DefaultMaxMessageBytes,
-		BatchMaxMessageBytes: config.DefaultMaxMessageBytes,
-		MaxRetry:             defaultMaxRetry,
-		ReplicationFactor:    1,
-		Compression:          "none",
-		RequiredAcks:         WaitForAll,
-		Credential:           &security.Credential{},
-		InsecureSkipVerify:   false,
-		SASL:                 &security.SASL{},
-		AutoCreate:           true,
-		DialTimeout:          10 * time.Second,
-		WriteTimeout:         10 * time.Second,
-		ReadTimeout:          10 * time.Second,
+		Version:            "2.4.0",
+		MaxMessageBytes:    config.DefaultMaxMessageBytes,
+		MaxBatchedBytes:    config.DefaultMaxMessageBytes,
+		MaxRetry:           defaultMaxRetry,
+		ReplicationFactor:  1,
+		Compression:        "none",
+		RequiredAcks:       WaitForAll,
+		Credential:         &security.Credential{},
+		InsecureSkipVerify: false,
+		SASL:               &security.SASL{},
+		AutoCreate:         true,
+		DialTimeout:        10 * time.Second,
+		WriteTimeout:       10 * time.Second,
+		ReadTimeout:        10 * time.Second,
 	}
 }
 
@@ -255,7 +255,7 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	if urlParameter.MaxMessageBytes != nil {
 		o.MaxMessageBytes = *urlParameter.MaxMessageBytes
 	}
-	o.BatchMaxMessageBytes = o.MaxMessageBytes
+	o.MaxBatchedBytes = o.MaxMessageBytes
 
 	if urlParameter.MaxRetry != nil && *urlParameter.MaxRetry >= 0 {
 		o.MaxRetry = *urlParameter.MaxRetry
@@ -612,7 +612,7 @@ func adjustTopicOptions(
 		return err
 	}
 
-	options.BatchMaxMessageBytes = min(batchMaxBytes, options.MaxMessageBytes)
+	options.MaxBatchedBytes = min(batchMaxBytes, options.MaxMessageBytes)
 	return nil
 }
 
