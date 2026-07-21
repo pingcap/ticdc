@@ -113,8 +113,7 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 		zap.Int("maxMessageBytes", e.config.MaxMessageBytes),
 		zap.Int("length", result.Length()),
 		zap.Any("table", event.TableInfo.TableName))
-	return errors.ErrMessageTooLarge.GenWithStackByArgs(
-		event.TableInfo.GetTargetTableName(), result.Length(), e.config.MaxMessageBytes)
+	return errors.ErrMessageTooLarge.GenWithStackByArgs(event.TableInfo.GetTargetTableName(), result.Length(), e.config.MaxMessageBytes)
 }
 
 // Build implement the RowEventEncoder interface
@@ -136,15 +135,7 @@ func (e *Encoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
 
 	value, err = common.Compress(e.config.ChangefeedID,
 		e.config.LargeMessageHandle.LargeMessageHandleCompression, value)
-	if err != nil {
-		return nil, err
-	}
-	result := common.NewMsg(nil, value)
-	if result.Length() > e.config.MaxMessageBytes {
-		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(
-			"checkpoint", result.Length(), e.config.MaxMessageBytes)
-	}
-	return result, nil
+	return common.NewMsg(nil, value), err
 }
 
 // EncodeDDLEvent implement the DDLEventBatchEncoder interface
@@ -166,8 +157,7 @@ func (e *Encoder) EncodeDDLEvent(event *commonEvent.DDLEvent) (*common.Message, 
 			zap.Int("maxMessageBytes", e.config.MaxMessageBytes),
 			zap.Int("length", result.Length()),
 			zap.String("table", event.GetTargetTableName()))
-		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(
-			event.GetTargetTableName(), result.Length(), e.config.MaxMessageBytes)
+		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(event.GetTargetTableName(), result.Length(), e.config.MaxMessageBytes)
 	}
 	return result, nil
 }

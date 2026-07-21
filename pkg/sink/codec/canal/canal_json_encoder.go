@@ -441,12 +441,7 @@ func (c *JSONRowEventEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message,
 		return nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
 
-	message := common.NewMsg(nil, value)
-	if message.Length() > c.config.MaxMessageBytes {
-		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(
-			"checkpoint", message.Length(), c.config.MaxMessageBytes)
-	}
-	return message, nil
+	return common.NewMsg(nil, value), nil
 }
 
 // AppendRowChangedEvent implements the interface EventJSONBatchEncoder
@@ -584,12 +579,7 @@ func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.M
 		return nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
 
-	result := common.NewMsg(nil, value)
-	if result.Length() > c.config.MaxMessageBytes {
-		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(
-			e.GetTargetTableName(), result.Length(), c.config.MaxMessageBytes)
-	}
-	return result, nil
+	return common.NewMsg(nil, value), nil
 }
 
 func (c *JSONRowEventEncoder) Clean() {

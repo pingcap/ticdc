@@ -243,12 +243,7 @@ func (d *batchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 		return nil, errors.Trace(err)
 	}
 
-	message := common.NewMsg(key, value)
-	if message.Length() > d.config.MaxMessageBytes {
-		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(
-			e.GetTargetTableName(), message.Length(), d.config.MaxMessageBytes)
-	}
-	return message, nil
+	return common.NewMsg(key, value), nil
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
@@ -283,10 +278,5 @@ func (d *batchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error)
 
 	key = keyOutput.Bytes()
 	value := valueOutput.Bytes()
-	message := common.NewMsg(key, value)
-	if message.Length() > d.config.MaxMessageBytes {
-		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(
-			"checkpoint", message.Length(), d.config.MaxMessageBytes)
-	}
-	return message, nil
+	return common.NewMsg(key, value), nil
 }
