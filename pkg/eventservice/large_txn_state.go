@@ -70,7 +70,11 @@ func (a *dispatcherStat) getOrCreateLargeTxnState(
 		return state, nil
 	}
 
-	spill, err := newLargeTxnInsertSpill(spillDir)
+	var keyspaceID uint32
+	if a.info != nil {
+		keyspaceID = a.info.GetTableSpan().KeyspaceID
+	}
+	spill, err := newLargeTxnInsertSpill(spillDir, keyspaceID)
 	if err != nil {
 		return nil, err
 	}

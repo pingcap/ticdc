@@ -14,6 +14,8 @@
 package eventservice
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -26,7 +28,7 @@ import (
 )
 
 func TestLargeTxnInsertSpillReadOrder(t *testing.T) {
-	spill, err := newLargeTxnInsertSpill(t.TempDir())
+	spill, err := newLargeTxnInsertSpill(t.TempDir(), 0)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, spill.Cleanup())
@@ -60,7 +62,7 @@ func TestLargeTxnInsertSpillReadOrder(t *testing.T) {
 func TestLargeTxnInsertSpillCreatesDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "data-dir", largeTxnInsertSpillDirName)
 
-	spill, err := newLargeTxnInsertSpill(dir)
+	spill, err := newLargeTxnInsertSpill(dir, 0)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, spill.Cleanup())
@@ -71,7 +73,7 @@ func TestLargeTxnInsertSpillCreatesDir(t *testing.T) {
 }
 
 func TestLargeTxnInsertSpillCleanup(t *testing.T) {
-	spill, err := newLargeTxnInsertSpill(t.TempDir())
+	spill, err := newLargeTxnInsertSpill(t.TempDir(), 0)
 	require.NoError(t, err)
 	require.NoError(t, spill.Append(newTestSpillRawKVEntry(1)))
 
@@ -88,7 +90,7 @@ func TestLargeTxnInsertSpillCleanup(t *testing.T) {
 }
 
 func TestLargeTxnInsertSpillEmpty(t *testing.T) {
-	spill, err := newLargeTxnInsertSpill(t.TempDir())
+	spill, err := newLargeTxnInsertSpill(t.TempDir(), 0)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, spill.Cleanup())
@@ -106,11 +108,11 @@ func TestLargeTxnInsertSpillEmpty(t *testing.T) {
 }
 
 func TestLargeTxnInsertSpillValidationErrors(t *testing.T) {
-	spill, err := newLargeTxnInsertSpill("")
+	spill, err := newLargeTxnInsertSpill("", 0)
 	require.True(t, errors.ErrSpillFileOp.Equal(err))
 	require.Nil(t, spill)
 
-	spill, err = newLargeTxnInsertSpill(t.TempDir())
+	spill, err = newLargeTxnInsertSpill(t.TempDir(), 0)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, spill.Cleanup())
@@ -137,6 +139,60 @@ func TestCleanupLargeTxnInsertSpillFiles(t *testing.T) {
 		require.NoFileExists(t, path)
 	}
 	require.FileExists(t, keepPath)
+}
+
+type xorEncryptionManager struct {
+	encryptKeyspaceID uint32
+	decryptKeyspaceID uint32
+}
+
+func (m *xorEncryptionManager) EncryptData(
+	ctx context.Context, keyspaceID uint32, data []byte,
+) ([]byte, error) {
+	m.encryptKeyspaceID = keyspaceID
+	return xorBytes(data), nil
+}
+
+func (m *xorEncryptionManager) DecryptData(
+	ctx context.Context, keyspaceID uint32, data []byte,
+) ([]byte, error) {
+	m.decryptKeyspaceID = keyspaceID
+	return xorBytes(data), nil
+}
+
+func xorBytes(data []byte) []byte {
+	result := make([]byte, len(data))
+	for i := range data {
+		result[i] = data[i] ^ 0xff
+	}
+	return result
+}
+
+func TestLargeTxnInsertSpillUsesEncryptionManager(t *testing.T) {
+	const keyspaceID uint32 = 42
+	manager := &xorEncryptionManager{}
+	spill, err := newLargeTxnInsertSpillWithEncryption(t.TempDir(), keyspaceID, manager)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, spill.Cleanup())
+	})
+
+	entry := newTestSpillRawKVEntry(1)
+	encoded := entry.Encode()
+	require.NoError(t, spill.Append(entry))
+
+	onDisk, err := os.ReadFile(spill.file.Path())
+	require.NoError(t, err)
+	require.False(t, bytes.Contains(onDisk, encoded))
+	require.Equal(t, keyspaceID, manager.encryptKeyspaceID)
+
+	reader, err := spill.NewReader()
+	require.NoError(t, err)
+	decoded, err := reader.Next()
+	require.NoError(t, err)
+	require.Equal(t, entry, decoded)
+	require.Equal(t, keyspaceID, manager.decryptKeyspaceID)
+	require.NoError(t, reader.Close())
 }
 
 func newTestSpillRawKVEntry(index int) *common.RawKVEntry {

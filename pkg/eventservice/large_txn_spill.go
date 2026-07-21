@@ -14,12 +14,15 @@
 package eventservice
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/encryption"
 	"github.com/pingcap/ticdc/pkg/errors"
 	recordspill "github.com/pingcap/ticdc/pkg/spill"
 )
@@ -31,7 +34,9 @@ const (
 
 // largeTxnInsertSpill stores deferred insert rows for a single large transaction.
 type largeTxnInsertSpill struct {
-	file *recordspill.RecordFile
+	file              *recordspill.RecordFile
+	keyspaceID        uint32
+	encryptionManager encryption.EncryptionManager
 }
 
 func getLargeTxnInsertSpillDir() string {
@@ -64,7 +69,16 @@ func cleanupLargeTxnInsertSpillFiles(dir string) (int, error) {
 	return removed, nil
 }
 
-func newLargeTxnInsertSpill(dir string) (*largeTxnInsertSpill, error) {
+func newLargeTxnInsertSpill(dir string, keyspaceID uint32) (*largeTxnInsertSpill, error) {
+	encryptionManager, _ := appcontext.TryGetService[encryption.EncryptionManager](appcontext.EncryptionManager)
+	return newLargeTxnInsertSpillWithEncryption(dir, keyspaceID, encryptionManager)
+}
+
+func newLargeTxnInsertSpillWithEncryption(
+	dir string,
+	keyspaceID uint32,
+	encryptionManager encryption.EncryptionManager,
+) (*largeTxnInsertSpill, error) {
 	if dir == "" {
 		return nil, errors.ErrSpillFileOp.GenWithStackByArgs("empty large transaction spill directory")
 	}
@@ -73,7 +87,11 @@ func newLargeTxnInsertSpill(dir string) (*largeTxnInsertSpill, error) {
 		return nil, err
 	}
 
-	return &largeTxnInsertSpill{file: file}, nil
+	return &largeTxnInsertSpill{
+		file:              file,
+		keyspaceID:        keyspaceID,
+		encryptionManager: encryptionManager,
+	}, nil
 }
 
 func (s *largeTxnInsertSpill) Append(entry *common.RawKVEntry) error {
@@ -81,7 +99,15 @@ func (s *largeTxnInsertSpill) Append(entry *common.RawKVEntry) error {
 		return errors.ErrSpillFileOp.GenWithStackByArgs("cannot append nil RawKVEntry")
 	}
 
-	_, err := s.file.Append(entry.Encode())
+	data := entry.Encode()
+	var err error
+	if s.encryptionManager != nil {
+		data, err = s.encryptionManager.EncryptData(context.Background(), s.keyspaceID, data)
+		if err != nil {
+			return err
+		}
+	}
+	_, err = s.file.Append(data)
 	return err
 }
 
@@ -94,7 +120,11 @@ func (s *largeTxnInsertSpill) NewReader() (*largeTxnInsertSpillReader, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &largeTxnInsertSpillReader{reader: reader}, nil
+	return &largeTxnInsertSpillReader{
+		reader:            reader,
+		keyspaceID:        s.keyspaceID,
+		encryptionManager: s.encryptionManager,
+	}, nil
 }
 
 func (s *largeTxnInsertSpill) Close() error {
@@ -112,7 +142,9 @@ func (s *largeTxnInsertSpill) Cleanup() error {
 }
 
 type largeTxnInsertSpillReader struct {
-	reader *recordspill.Reader
+	reader            *recordspill.Reader
+	keyspaceID        uint32
+	encryptionManager encryption.EncryptionManager
 }
 
 func (r *largeTxnInsertSpillReader) Next() (*common.RawKVEntry, error) {
@@ -122,6 +154,12 @@ func (r *largeTxnInsertSpillReader) Next() (*common.RawKVEntry, error) {
 			return nil, io.EOF
 		}
 		return nil, err
+	}
+	if r.encryptionManager != nil {
+		data, err = r.encryptionManager.DecryptData(context.Background(), r.keyspaceID, data)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	entry := &common.RawKVEntry{}
