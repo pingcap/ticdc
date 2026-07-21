@@ -18,9 +18,21 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
+
+func TestApplyReturnsSinkInvalidConfigForQueryBindingError(t *testing.T) {
+	cfg := NewConfig(config.ProtocolOpen)
+	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?max-batch-size=invalid")
+	require.NoError(t, err)
+
+	err = cfg.Apply(sinkURI, config.GetDefaultReplicaConfig().Sink)
+	errCode, ok := errors.RFCCode(err)
+	require.True(t, ok, err)
+	require.Equal(t, errors.ErrSinkInvalidConfig.RFCCode(), errCode)
+}
 
 func TestValidateMaxBatchMessageBytes(t *testing.T) {
 	cfg := NewConfig(config.ProtocolOpen)
