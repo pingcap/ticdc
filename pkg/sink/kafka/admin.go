@@ -153,6 +153,12 @@ func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool
 	return result, nil
 }
 
+// IsAdminAuthorizationFailed checks whether err is an authorization failure from Kafka admin APIs.
+func IsAdminAuthorizationFailed(err error) bool {
+	return errors.Is(err, sarama.ErrTopicAuthorizationFailed) ||
+		errors.Is(err, sarama.ErrClusterAuthorizationFailed)
+}
+
 func (a *saramaAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
 	result := make(map[string]int32, len(topics))
 	for _, topic := range topics {

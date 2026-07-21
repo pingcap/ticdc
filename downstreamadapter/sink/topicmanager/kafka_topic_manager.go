@@ -287,19 +287,29 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	// which means we should create the topic later.
 	topicDetails, err := m.admin.GetTopicsMeta([]string{topicName}, true)
 	if err != nil {
+		if kafka.IsAdminAuthorizationFailed(err) {
+			return m.useConfiguredPartitionNum(topicName, err), nil
+		}
 		return 0, errors.Trace(err)
 	}
-	if detail, ok := topicDetails[topicName]; ok {
-		numPartition := detail.NumPartitions
-		if topicName == m.defaultTopic {
-			numPartition = m.cfg.PartitionNum
+	if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
+		return numPartition, nil
+	}
+
+	topicDetails, err = m.admin.GetTopicsMeta([]string{topicName}, false)
+	if err != nil {
+		if kafka.IsAdminAuthorizationFailed(err) {
+			return m.useConfiguredPartitionNum(topicName, err), nil
 		}
-		m.tryUpdatePartitionsAndLogging(topicName, numPartition)
+	} else if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
 		return numPartition, nil
 	}
 
 	partitionNum, err := m.createTopic(ctx, topicName)
 	if err != nil {
+		if kafka.IsAdminAuthorizationFailed(err) {
+			return m.useConfiguredPartitionNum(topicName, err), nil
+		}
 		return 0, errors.Trace(err)
 	}
 
@@ -309,6 +319,32 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	}
 
 	return partitionNum, nil
+}
+
+func (m *kafkaTopicManager) tryStoreTopicMeta(
+	topicName string, topicDetails map[string]kafka.TopicDetail,
+) (int32, bool) {
+	detail, ok := topicDetails[topicName]
+	if !ok {
+		return 0, false
+	}
+	numPartition := detail.NumPartitions
+	if topicName == m.defaultTopic {
+		numPartition = m.cfg.PartitionNum
+	}
+	m.tryUpdatePartitionsAndLogging(topicName, numPartition)
+	return numPartition, true
+}
+
+func (m *kafkaTopicManager) useConfiguredPartitionNum(topicName string, cause error) int32 {
+	log.Warn("skip Kafka topic creation because topic authorization failed",
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeed", m.changefeedID.Name()),
+		zap.String("topic", topicName),
+		zap.Int32("partitionNumber", m.cfg.PartitionNum),
+		zap.Error(cause))
+	m.tryUpdatePartitionsAndLogging(topicName, m.cfg.PartitionNum)
+	return m.cfg.PartitionNum
 }
 
 // Close exits the background goroutine.
