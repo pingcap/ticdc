@@ -70,7 +70,7 @@ func newTxnScanStrategy(shouldSplitTxn bool) txnScanStrategy {
 type atomicTxnScanStrategy struct{}
 
 func (atomicTxnScanStrategy) resumePending(
-	ctx *txnScanContext,
+	_ *txnScanContext,
 ) (bool, bool, error) {
 	return false, false, nil
 }
@@ -102,9 +102,9 @@ func (atomicTxnScanStrategy) finishTxn(
 }
 
 func (atomicTxnScanStrategy) afterAppend(
-	ctx *txnScanContext,
-	rawEvent *common.RawKVEntry,
-	position eventstore.ScanPosition,
+	_ *txnScanContext,
+	_ *common.RawKVEntry,
+	_ eventstore.ScanPosition,
 ) (bool, error) {
 	return false, nil
 }
