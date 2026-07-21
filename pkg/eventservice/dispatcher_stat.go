@@ -39,6 +39,15 @@ const (
 	updateScanLimitInterval = time.Second * 10
 )
 
+type dispatcherScanState uint8
+
+const (
+	dispatcherScanIdle dispatcherScanState = iota
+	dispatcherScanQueued
+	dispatcherScanRunning
+	dispatcherScanRemoved
+)
+
 // Store the progress of the dispatcher, and the incremental events stats.
 // Those information will be used to decide when will the worker start to handle the push task of this dispatcher.
 type dispatcherStat struct {
@@ -124,11 +133,9 @@ type dispatcherStat struct {
 	// lastReceivedHeartbeatTime is the time when the dispatcher last received the heartbeat from the event service.
 	lastReceivedHeartbeatTime atomic.Int64
 
-	// Scan task related
-	// taskScanning is used to indicate whether the scan task is running.
-	// If so, we should wait until it is done before we send next resolvedTs event of
-	// this dispatcher.
-	isTaskScanning atomic.Bool
+	// Scan task related. scanMu protects scanState.
+	scanMu    sync.Mutex
+	scanState dispatcherScanState
 }
 
 func newDispatcherStat(
@@ -194,6 +201,29 @@ func (a *dispatcherStat) copyStatistics(src *dispatcherStat) {
 
 	a.lastReceivedResolvedTsTime.Store(src.lastReceivedResolvedTsTime.Load())
 	a.lastSentResolvedTsTime.Store(src.lastSentResolvedTsTime.Load())
+}
+
+func (a *dispatcherStat) beginScan() bool {
+	a.scanMu.Lock()
+	defer a.scanMu.Unlock()
+	if a.isRemoved.Load() || a.scanState != dispatcherScanQueued {
+		return false
+	}
+	a.scanState = dispatcherScanRunning
+	return true
+}
+
+func (a *dispatcherStat) markRemoved() {
+	a.isRemoved.Store(true)
+	a.scanMu.Lock()
+	a.scanState = dispatcherScanRemoved
+	a.scanMu.Unlock()
+}
+
+func (a *dispatcherStat) isScanBusy() bool {
+	a.scanMu.Lock()
+	defer a.scanMu.Unlock()
+	return a.scanState == dispatcherScanQueued || a.scanState == dispatcherScanRunning
 }
 
 func (a *dispatcherStat) isHandshaked() bool {

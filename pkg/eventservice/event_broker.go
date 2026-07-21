@@ -506,37 +506,6 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	return true, dataRange
 }
 
-// scanReady checks if the dispatcher needs to scan the event store/schema store.
-// If the dispatcher needs to scan the event store/schema store, it returns true.
-// If the dispatcher does not need to scan the event store, it send the watermark to the dispatcher.
-//
-// Note: A true return value only indicates potential scanning need,
-// final determination occurs when the scanTask is actully processed.
-func (c *eventBroker) scanReady(task scanTask) bool {
-	span := task.info.GetTableSpan()
-	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
-		return false
-	}
-
-	if task.isRemoved.Load() {
-		return false
-	}
-
-	if task.isTaskScanning.Load() {
-		return false
-	}
-
-	// If the dispatcher is not ready, we don't need do the scan.
-	if !c.checkAndSendReady(task) {
-		return false
-	}
-
-	c.sendHandshakeIfNeed(task)
-
-	ok, _ := c.getScanTaskDataRange(task)
-	return ok
-}
-
 func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	// only dispatcher with epoch 0 need send ready event.
 	if task.epoch == 0 {
@@ -625,12 +594,13 @@ func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
 }
 
 func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
+	if !task.beginScan() {
+		return
+	}
+
 	var interrupted bool
 	defer func() {
-		task.isTaskScanning.Store(false)
-		if interrupted {
-			c.pushTask(task, false)
-		}
+		c.finishScan(task, interrupted)
 	}()
 
 	var (
@@ -640,6 +610,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	if task.isRemoved.Load() {
 		return
 	}
+	if !c.checkAndSendReady(task) {
+		return
+	}
+	c.sendHandshakeIfNeed(task)
 
 	// If the target is not ready to send, we don't need to scan the event store.
 	// To avoid the useless scan task.
@@ -966,32 +940,58 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, commitTs ui
 		d.lastReceivedResolvedTsTime.Store(time.Now())
 		updateMetricEventStoreOutputResolved(d.info.GetMode())
 		d.onLatestCommitTs(commitTs)
-		if c.scanReady(d) {
-			c.pushTask(d, true)
-		}
+		c.requestScan(d)
 	}
 }
 
-func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
-	if d.isRemoved.Load() {
+func (c *eventBroker) requestScan(d *dispatcherStat) {
+	span := d.info.GetTableSpan()
+	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		return
 	}
 
-	// make sure only one scan task can run at the same time.
-	if !d.isTaskScanning.CompareAndSwap(false, true) {
+	d.scanMu.Lock()
+	defer d.scanMu.Unlock()
+	if d.isRemoved.Load() || d.scanState == dispatcherScanRemoved {
+		d.scanState = dispatcherScanRemoved
+		return
+	}
+	if d.scanState == dispatcherScanIdle {
+		c.tryEnqueueScanLocked(d, dispatcherScanIdle)
+	}
+}
+
+func (c *eventBroker) tryEnqueueScanLocked(d *dispatcherStat, fallback dispatcherScanState) bool {
+	d.scanState = dispatcherScanQueued
+	select {
+	case c.taskChan[d.scanWorkerIndex] <- d:
+		return true
+	default:
+		d.scanState = fallback
+		return false
+	}
+}
+
+func (c *eventBroker) finishScan(
+	d *dispatcherStat,
+	interrupted bool,
+) {
+	d.scanMu.Lock()
+	defer d.scanMu.Unlock()
+	if d.isRemoved.Load() || d.scanState == dispatcherScanRemoved {
+		d.scanState = dispatcherScanRemoved
+		return
+	}
+	if d.scanState != dispatcherScanRunning {
 		return
 	}
 
-	if force {
-		c.taskChan[d.scanWorkerIndex] <- d
-	} else {
-		timer := time.NewTimer(time.Millisecond * 10)
-		select {
-		case c.taskChan[d.scanWorkerIndex] <- d:
-		case <-timer.C:
-			d.isTaskScanning.Store(false)
-		}
+	if interrupted {
+		c.tryEnqueueScanLocked(d, dispatcherScanIdle)
+		return
 	}
+
+	d.scanState = dispatcherScanIdle
 }
 
 func (c *eventBroker) getDispatcher(id common.DispatcherID) *atomic.Pointer[dispatcherStat] {
@@ -1074,7 +1074,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Error(err),
 		)
 		// Mark removed to avoid processing notifications before unregister completes.
-		dispatcher.isRemoved.Store(true)
+		dispatcher.markRemoved()
 		c.eventStore.UnregisterDispatcher(changefeedID, id)
 		status.removeDispatcher(id)
 		if status.isEmpty() {
@@ -1111,7 +1111,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
-	stat.isRemoved.Store(true)
+	stat.markRemoved()
 
 	if isTableTriggerDispatcher {
 		c.tableTriggerDispatchers.Delete(id)
@@ -1184,7 +1184,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	// Mark the old dispatcher as removed.
 	// No need to worry that the old dispatcher is still scanning,
 	// because its data will be filtered by event collector because of stale epoch.
-	oldStat.isRemoved.Store(true)
+	oldStat.markRemoved()
 
 	// Create a new dispatcherStat and replace the old one.
 	// The new dispatcherStat will be used for all future operations.
@@ -1234,7 +1234,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		if oldStat.epoch >= dispatcherInfo.GetEpoch() {
 			return nil
 		}
-		oldStat.isRemoved.Store(true)
+		oldStat.markRemoved()
 	}
 
 	log.Info("reset dispatcher",
@@ -1246,9 +1246,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		zap.Uint64("newEpoch", newStat.epoch),
 		zap.Duration("resetTime", time.Since(start)))
 
-	if c.scanReady(newStat) {
-		c.pushTask(newStat, false)
-	}
+	c.requestScan(newStat)
 
 	return nil
 }
