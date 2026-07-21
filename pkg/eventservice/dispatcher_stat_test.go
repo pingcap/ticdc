@@ -14,8 +14,6 @@
 package eventservice
 
 import (
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,49 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 )
-
-func TestDispatcherScanState(t *testing.T) {
-	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	status := newChangefeedStatusForTest(t, info)
-	stat := newDispatcherStat(info, 1, 1, nil, status)
-
-	const requestCount = 32
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	var enqueueCount atomic.Int64
-	for range requestCount {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			if stat.requestScan() {
-				enqueueCount.Add(1)
-			}
-		}()
-	}
-	close(start)
-	wg.Wait()
-	require.Equal(t, int64(1), enqueueCount.Load())
-	require.True(t, stat.beginScan())
-
-	require.False(t, stat.requestScan())
-	require.Equal(t, dispatcherScanRequeue, stat.finishScan(false, true, 0))
-	require.True(t, stat.beginScan())
-	require.Equal(t, dispatcherScanParked, stat.finishScan(false, true, 100))
-
-	require.False(t, stat.requestScan())
-	enqueue, blocked := stat.requestSchemaScan(100)
-	require.False(t, enqueue)
-	require.True(t, blocked)
-	enqueue, blocked = stat.requestSchemaScan(101)
-	require.True(t, enqueue)
-	require.False(t, blocked)
-	require.True(t, stat.beginScan())
-
-	stat.markRemoved()
-	require.Equal(t, dispatcherScanFinished, stat.finishScan(false, true, 0))
-	require.False(t, stat.requestScan())
-}
 
 func TestNewDispatcherStat(t *testing.T) {
 	t.Parallel()

@@ -65,14 +65,7 @@ type SchemaStore interface {
 
 	// RegisterKeyspace register a keyspace to fetch table ddl
 	RegisterKeyspace(ctx context.Context, keyspaceMeta common.KeyspaceMeta) error
-
-	// RegisterResolvedTsNotifier registers a notifier for applied schema resolved
-	// ts advancement. The notifier is called inline and must not block. The
-	// returned function unregisters it.
-	RegisterResolvedTsNotifier(notifier ResolvedTsNotifier) func()
 }
-
-type ResolvedTsNotifier func(keyspaceID uint32, resolvedTs uint64)
 
 type DDLEventState struct {
 	ResolvedTs       uint64
@@ -98,8 +91,6 @@ type keyspaceSchemaStore struct {
 	// resolvedTs is the largest resolvedTs of all applied ddl events
 	// Invariant: resolvedTs >= pendingResolvedTs
 	resolvedTs atomic.Uint64
-
-	resolvedTsUpdated func(resolvedTs uint64)
 
 	// the following two fields are used to filter out duplicate ddl events
 	// they will just be updated and read by a single goroutine, so no lock is needed
@@ -207,9 +198,6 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 		SchemaVersion: s.schemaVersion,
 		ResolvedTs:    pendingTs,
 	})
-	if s.resolvedTsUpdated != nil {
-		s.resolvedTsUpdated(pendingTs)
-	}
 }
 
 // TODO tenfyzhong 2025-09-13 13:40:26 use a chan to decoupling
@@ -287,10 +275,6 @@ type schemaStore struct {
 	// The key is keyspaceID
 	keyspaceSchemaStoreMap map[uint32]*keyspaceSchemaStore
 	keyspaceLocker         sync.RWMutex
-
-	resolvedTsNotifierMu sync.RWMutex
-	resolvedTsNotifierID uint64
-	resolvedTsNotifiers  map[uint64]ResolvedTsNotifier
 }
 
 func New(root string, pdCli pd.Client) SchemaStore {
@@ -299,42 +283,8 @@ func New(root string, pdCli pd.Client) SchemaStore {
 		pdCli:                  pdCli,
 		root:                   root,
 		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore),
-		resolvedTsNotifiers:    make(map[uint64]ResolvedTsNotifier),
 	}
 	return s
-}
-
-func (s *schemaStore) RegisterResolvedTsNotifier(notifier ResolvedTsNotifier) func() {
-	s.resolvedTsNotifierMu.Lock()
-	s.resolvedTsNotifierID++
-	id := s.resolvedTsNotifierID
-	if s.resolvedTsNotifiers == nil {
-		s.resolvedTsNotifiers = make(map[uint64]ResolvedTsNotifier)
-	}
-	s.resolvedTsNotifiers[id] = notifier
-	s.resolvedTsNotifierMu.Unlock()
-
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			s.resolvedTsNotifierMu.Lock()
-			delete(s.resolvedTsNotifiers, id)
-			s.resolvedTsNotifierMu.Unlock()
-		})
-	}
-}
-
-func (s *schemaStore) notifyResolvedTs(keyspaceID uint32, resolvedTs uint64) {
-	s.resolvedTsNotifierMu.RLock()
-	notifiers := make([]ResolvedTsNotifier, 0, len(s.resolvedTsNotifiers))
-	for _, notifier := range s.resolvedTsNotifiers {
-		notifiers = append(notifiers, notifier)
-	}
-	s.resolvedTsNotifierMu.RUnlock()
-
-	for _, notifier := range notifiers {
-		notifier(keyspaceID, resolvedTs)
-	}
 }
 
 func (s *schemaStore) Name() string {
@@ -609,9 +559,6 @@ func (s *schemaStore) RegisterKeyspace(
 		unsortedCache: newDDLCache(),
 		dataStorage:   storage,
 		notifyCh:      make(chan any, 4),
-		resolvedTsUpdated: func(resolvedTs uint64) {
-			s.notifyResolvedTs(keyspaceMeta.ID, resolvedTs)
-		},
 	}
 
 	upperBound := store.dataStorage.getUpperBound()

@@ -68,47 +68,6 @@ func (m *prefixEncryptionManagerForTest) DecryptData(ctx context.Context, keyspa
 	return plaintext, nil
 }
 
-func TestAppliedResolvedTsNotifier(t *testing.T) {
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-
-	pstorage := newPersistentStorageForTest(t.TempDir(), nil)
-	defer func() {
-		require.NoError(t, pstorage.close())
-	}()
-
-	schemaStore := &schemaStore{}
-	notified := make(chan uint64, 1)
-	unregister := schemaStore.RegisterResolvedTsNotifier(func(keyspaceID uint32, resolvedTs uint64) {
-		require.Equal(t, uint32(1), keyspaceID)
-		notified <- resolvedTs
-	})
-
-	store := &keyspaceSchemaStore{
-		pdClock:       mockPDClock,
-		unsortedCache: newDDLCache(),
-		dataStorage:   pstorage,
-		resolvedTsUpdated: func(resolvedTs uint64) {
-			schemaStore.notifyResolvedTs(1, resolvedTs)
-		},
-	}
-	store.resolvedTs.Store(pstorage.gcTs)
-	store.pendingResolvedTs.Store(pstorage.gcTs + 10)
-	store.tryUpdateResolvedTs()
-
-	require.Equal(t, pstorage.gcTs+10, <-notified)
-	require.Equal(t, pstorage.gcTs+10, pstorage.getUpperBound().ResolvedTs)
-
-	unregister()
-	store.pendingResolvedTs.Store(pstorage.gcTs + 20)
-	store.tryUpdateResolvedTs()
-	select {
-	case resolvedTs := <-notified:
-		require.Failf(t, "unexpected notification", "resolvedTs: %d", resolvedTs)
-	default:
-	}
-}
-
 func TestIgnoreDDLByCommitTs(t *testing.T) {
 	// 1. Setup a mock SchemaStore.
 	// We don't need a real puller or kv storage for this test.
