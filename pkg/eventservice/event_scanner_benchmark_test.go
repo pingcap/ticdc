@@ -48,7 +48,7 @@ type benchmarkEventGetter struct {
 
 func (g *benchmarkEventGetter) GetIterator(
 	common.DispatcherID,
-	common.DataRange,
+	eventstore.ScanRequest,
 ) (eventstore.EventIterator, error) {
 	return &singleTxnIterator{
 		raw:  g.raw,
@@ -204,10 +204,12 @@ func BenchmarkEventScannerIgnoreDelete(b *testing.B) {
 			event.NewMounter(time.UTC, &integrity.Config{}),
 			common.DefaultMode,
 		)
-		dataRange := common.DataRange{
-			Span:          disInfo.GetTableSpan(),
-			CommitTsStart: ddlEvent.FinishedTs,
-			CommitTsEnd:   deleteRow.CRTs + 1,
+		dataRange := eventstore.ScanRequest{
+			Range: common.DataRange{
+				Span:          disInfo.GetTableSpan(),
+				CommitTsStart: ddlEvent.FinishedTs,
+				CommitTsEnd:   deleteRow.CRTs + 1,
+			},
 		}
 		limit := scanLimit{maxDMLBytes: 1 << 60}
 

@@ -138,8 +138,8 @@ func TestOnNotify(t *testing.T) {
 
 	err = broker.resetDispatcher(disInfo)
 	require.Nil(t, err)
-	require.Equal(t, disp.lastScannedCommitTs.Load(), uint64(100))
-	require.Equal(t, disp.lastScannedStartTs.Load(), uint64(0))
+	require.Equal(t, disp.loadScanProgress().txnCommitTs, uint64(100))
+	require.Equal(t, disp.loadScanProgress().txnStartTs, uint64(0))
 
 	disp.setHandshaked()
 
@@ -228,9 +228,9 @@ func TestScanRangeCappedByScanWindow(t *testing.T) {
 	disp.eventStoreCommitTs.Store(oracle.GoTimeToTS(baseTime.Add(15 * time.Second)))
 	changefeedStatus.refreshMinSentResolvedTs()
 
-	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	needScan, dataRange := broker.getScanTaskRequest(disp)
 	require.True(t, needScan)
-	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), dataRange.CommitTsEnd)
+	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), dataRange.Range.CommitTsEnd)
 }
 
 func TestGetScanTaskDataRangeEmptyAfterCappingDoesNotResetScanRange(t *testing.T) {
@@ -253,16 +253,15 @@ func TestGetScanTaskDataRangeEmptyAfterCappingDoesNotResetScanRange(t *testing.T
 	disp.sentResolvedTs.Store(baseTs)
 	disp.receivedResolvedTs.Store(oracle.GoTimeToTS(baseTime.Add(40 * time.Second)))
 	disp.eventStoreCommitTs.Store(commitStart)
-	disp.lastScannedCommitTs.Store(commitStart)
-	disp.lastScannedStartTs.Store(lastStartTs)
+	disp.updateScanRange(commitStart, lastStartTs)
 
 	changefeedStatus.minSentTs.Store(baseTs)
 	changefeedStatus.scanInterval.Store(int64(defaultScanInterval))
 
-	needScan, _ := broker.getScanTaskDataRange(disp)
+	needScan, _ := broker.getScanTaskRequest(disp)
 	require.False(t, needScan)
-	require.Equal(t, commitStart, disp.lastScannedCommitTs.Load())
-	require.Equal(t, lastStartTs, disp.lastScannedStartTs.Load())
+	require.Equal(t, commitStart, disp.loadScanProgress().txnCommitTs)
+	require.Equal(t, lastStartTs, disp.loadScanProgress().txnStartTs)
 }
 
 func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow(t *testing.T) {
@@ -286,8 +285,7 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow
 	disp.sentResolvedTs.Store(baseTs)
 	disp.receivedResolvedTs.Store(resolvedTs)
 	disp.eventStoreCommitTs.Store(commitStart)
-	disp.lastScannedCommitTs.Store(commitStart)
-	disp.lastScannedStartTs.Store(commitStart - 1)
+	disp.updateScanRange(commitStart, commitStart-1)
 
 	changefeedStatus.minSentTs.Store(baseTs)
 	changefeedStatus.scanInterval.Store(int64(defaultScanInterval))
@@ -295,10 +293,10 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow
 	ss.resolvedTs = resolvedTs
 	ss.maxDDLCommitTs = ddlCommitTs
 
-	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	needScan, dataRange := broker.getScanTaskRequest(disp)
 	require.True(t, needScan)
-	require.Equal(t, commitStart, dataRange.CommitTsStart)
-	require.Equal(t, oracle.GoTimeToTS(oracle.GetTimeFromTS(commitStart).Add(defaultScanInterval)), dataRange.CommitTsEnd)
+	require.Equal(t, commitStart, dataRange.Range.CommitTsStart)
+	require.Equal(t, oracle.GoTimeToTS(oracle.GetTimeFromTS(commitStart).Add(defaultScanInterval)), dataRange.Range.CommitTsEnd)
 }
 
 func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingSyncPointCrossesSyncPoint(t *testing.T) {
@@ -325,8 +323,7 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingSyncPointCrossesSyncPoi
 	disp.sentResolvedTs.Store(baseTs)
 	disp.receivedResolvedTs.Store(resolvedTs)
 	disp.eventStoreCommitTs.Store(commitStart)
-	disp.lastScannedCommitTs.Store(commitStart)
-	disp.lastScannedStartTs.Store(commitStart - 1)
+	disp.updateScanRange(commitStart, commitStart-1)
 
 	changefeedStatus.minSentTs.Store(baseTs)
 	changefeedStatus.scanInterval.Store(int64(time.Second))
@@ -334,10 +331,10 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingSyncPointCrossesSyncPoi
 	ss.resolvedTs = resolvedTs
 	ss.maxDDLCommitTs = 0
 
-	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	needScan, dataRange := broker.getScanTaskRequest(disp)
 	require.True(t, needScan)
-	require.Equal(t, commitStart, dataRange.CommitTsStart)
-	require.Equal(t, nextSyncPointTs+1, dataRange.CommitTsEnd)
+	require.Equal(t, commitStart, dataRange.Range.CommitTsStart)
+	require.Equal(t, nextSyncPointTs+1, dataRange.Range.CommitTsEnd)
 }
 
 func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t *testing.T) {
@@ -383,26 +380,24 @@ func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t 
 
 	d1.receivedResolvedTs.Store(ts110)
 	d1.eventStoreCommitTs.Store(ts103)
-	d1.lastScannedCommitTs.Store(ts101)
-	d1.lastScannedStartTs.Store(ts101 - 1)
+	d1.updateScanRange(ts101, ts101-1)
 
 	ss.resolvedTs = ts110
 	ss.maxDDLCommitTs = ts103
 
 	// Round 1: global cap makes range empty (end=ts101), fallback should locally move it to ts102.
-	needScan, dataRange := broker.getScanTaskDataRange(d1)
+	needScan, dataRange := broker.getScanTaskRequest(d1)
 	require.True(t, needScan)
-	require.Equal(t, ts101, dataRange.CommitTsStart)
-	require.Equal(t, ts102, dataRange.CommitTsEnd)
+	require.Equal(t, ts101, dataRange.Range.CommitTsStart)
+	require.Equal(t, ts102, dataRange.Range.CommitTsEnd)
 
 	// Round 2: still globally capped by ts100, but fallback should continue moving to ts103,
 	// which allows this dispatcher to eventually reach the pending truncate ddl barrier.
-	d1.lastScannedCommitTs.Store(ts102)
-	d1.lastScannedStartTs.Store(0)
-	needScan, dataRange = broker.getScanTaskDataRange(d1)
+	d1.updateScanRange(ts102, 0)
+	needScan, dataRange = broker.getScanTaskRequest(d1)
 	require.True(t, needScan)
-	require.Equal(t, ts102, dataRange.CommitTsStart)
-	require.Equal(t, ts103, dataRange.CommitTsEnd)
+	require.Equal(t, ts102, dataRange.Range.CommitTsStart)
+	require.Equal(t, ts103, dataRange.Range.CommitTsEnd)
 }
 
 func TestHandleCongestionControlV2DoesNotResetScanIntervalOnMemoryRelease(t *testing.T) {
@@ -499,9 +494,9 @@ func TestDoScanKeepsRowLevelProgressAfterSendingFragment(t *testing.T) {
 
 	broker.doScan(context.Background(), disp)
 
-	require.Equal(t, resolvedTs, disp.lastScannedCommitTs.Load())
-	require.Equal(t, kvEvents[0].StartTs, disp.lastScannedStartTs.Load())
-	require.NotEmpty(t, disp.getLastScannedPosition())
+	require.Equal(t, resolvedTs, disp.loadScanProgress().txnCommitTs)
+	require.Equal(t, kvEvents[0].StartTs, disp.loadScanProgress().txnStartTs)
+	require.NotEmpty(t, disp.loadScanProgress().rowLevelScanPosition)
 	require.True(t, disp.isTaskScanning.Load())
 }
 
@@ -734,7 +729,7 @@ func TestResetTableTriggerDispatcherDoesNotUseNormalScan(t *testing.T) {
 	require.NotSame(t, oldStat, newStat)
 	require.Equal(t, uint64(0), newStat.seq.Load())
 	require.Equal(t, uint64(100), newStat.sentResolvedTs.Load())
-	require.Equal(t, uint64(100), newStat.lastScannedCommitTs.Load())
+	require.Equal(t, uint64(100), newStat.loadScanProgress().txnCommitTs)
 	require.False(t, newStat.isTaskScanning.Load())
 	require.Empty(t, broker.messageCh[newStat.messageWorkerIndex])
 }
@@ -1128,8 +1123,8 @@ func TestSendHandshakeUsesStartTs(t *testing.T) {
 	}
 
 	require.Equal(t, uint64(100), disp.sentResolvedTs.Load())
-	require.Equal(t, uint64(100), disp.lastScannedCommitTs.Load())
-	require.Equal(t, uint64(0), disp.lastScannedStartTs.Load())
+	require.Equal(t, uint64(100), disp.loadScanProgress().txnCommitTs)
+	require.Equal(t, uint64(0), disp.loadScanProgress().txnStartTs)
 }
 
 func TestAddDispatcherFailure(t *testing.T) {

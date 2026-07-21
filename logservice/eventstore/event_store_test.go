@@ -156,7 +156,7 @@ func requireEventIterator(
 	t testing.TB, store EventStore, dispatcherID common.DispatcherID, dataRange common.DataRange,
 ) EventIterator {
 	t.Helper()
-	iter, err := store.GetIterator(dispatcherID, dataRange)
+	iter, err := store.GetIterator(dispatcherID, ScanRequest{Range: dataRange})
 	require.NoError(t, err)
 	return iter
 }
@@ -307,7 +307,7 @@ func TestEventStoreUsesKeyspaceIDForEncryption(t *testing.T) {
 		CommitTsStart: 0,
 		CommitTsEnd:   largeKV.CRTs,
 	}
-	iter, err := es.GetIterator(dispatcherID, dataRange)
+	iter, err := es.GetIterator(dispatcherID, ScanRequest{Range: dataRange})
 	require.NoError(t, err)
 	require.NotNil(t, iter)
 
@@ -394,10 +394,12 @@ func TestEventStoreHandlesUnencryptedValuesFromEncryptionLayer(t *testing.T) {
 	require.NoError(t, err)
 
 	subStat.resolvedTs.Store(largeKV.CRTs)
-	iter, err := es.GetIterator(dispatcherID, common.DataRange{
-		Span:          span,
-		CommitTsStart: 0,
-		CommitTsEnd:   largeKV.CRTs,
+	iter, err := es.GetIterator(dispatcherID, ScanRequest{
+		Range: common.DataRange{
+			Span:          span,
+			CommitTsStart: 0,
+			CommitTsEnd:   largeKV.CRTs,
+		},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, iter)
@@ -730,10 +732,12 @@ func TestGetIteratorPanicWhenStartLessThanCheckpoint(t *testing.T) {
 	store.UpdateDispatcherCheckpointTs(dispatcherID, 120)
 
 	require.Panics(t, func() {
-		_, _ = store.GetIterator(dispatcherID, common.DataRange{
-			Span:          span,
-			CommitTsStart: 110,
-			CommitTsEnd:   150,
+		_, _ = store.GetIterator(dispatcherID, ScanRequest{
+			Range: common.DataRange{
+				Span:          span,
+				CommitTsStart: 110,
+				CommitTsEnd:   150,
+			},
 		})
 	})
 }
@@ -984,14 +988,16 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 		subStat.resolvedTs.Store(ts)
 	}
 	getIterator := func() {
-		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
-			Span: &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: []byte("b"),
-				EndKey:   []byte("h"),
+		iter, err := store.GetIterator(dispatcherID2, ScanRequest{
+			Range: common.DataRange{
+				Span: &heartbeatpb.TableSpan{
+					TableID:  tableID,
+					StartKey: []byte("b"),
+					EndKey:   []byte("h"),
+				},
+				CommitTsStart: 100,
+				CommitTsEnd:   150,
 			},
-			CommitTsStart: 100,
-			CommitTsEnd:   150,
 		})
 		require.NoError(t, err)
 		if iter != nil {
@@ -1065,14 +1071,16 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	// case 3: subStat 1 advance quicker than subStat 2, dispatcher 2 can still read data from subStat 1
 	updateSubStatResolvedTs(1, 220)
 	{
-		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
-			Span: &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: []byte("b"),
-				EndKey:   []byte("h"),
+		iter, err := store.GetIterator(dispatcherID2, ScanRequest{
+			Range: common.DataRange{
+				Span: &heartbeatpb.TableSpan{
+					TableID:  tableID,
+					StartKey: []byte("b"),
+					EndKey:   []byte("h"),
+				},
+				CommitTsStart: 100,
+				CommitTsEnd:   220,
 			},
-			CommitTsStart: 100,
-			CommitTsEnd:   220,
 		})
 		require.NoError(t, err)
 		if iter != nil {
@@ -1102,14 +1110,16 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	// dispatcher 2 read data from subStat 2 and totally remove itself from the subsriber list of subStat 1
 	updateSubStatResolvedTs(2, 220)
 	{
-		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
-			Span: &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: []byte("b"),
-				EndKey:   []byte("h"),
+		iter, err := store.GetIterator(dispatcherID2, ScanRequest{
+			Range: common.DataRange{
+				Span: &heartbeatpb.TableSpan{
+					TableID:  tableID,
+					StartKey: []byte("b"),
+					EndKey:   []byte("h"),
+				},
+				CommitTsStart: 100,
+				CommitTsEnd:   220,
 			},
-			CommitTsStart: 100,
-			CommitTsEnd:   220,
 		})
 		require.NoError(t, err)
 		if iter != nil {
@@ -1193,10 +1203,10 @@ func TestEventStoreRowLevelScanPositionSurvivesSubStatSwitch(t *testing.T) {
 
 	type scannedEvent struct {
 		key      string
-		position common.ScanPosition
+		position ScanPosition
 	}
-	collectEvents := func(dataRange common.DataRange) []scannedEvent {
-		iter, err := store.GetIterator(dispatcherID2, dataRange)
+	collectEvents := func(request ScanRequest) []scannedEvent {
+		iter, err := store.GetIterator(dispatcherID2, request)
 		require.NoError(t, err)
 		require.NotNil(t, iter)
 		positionIter, ok := iter.(EventIteratorWithScanPosition)
@@ -1221,10 +1231,12 @@ func TestEventStoreRowLevelScanPositionSurvivesSubStatSwitch(t *testing.T) {
 	}
 
 	oldSubStat.resolvedTs.Store(nextCommitTs)
-	firstScanEvents := collectEvents(common.DataRange{
-		Span:          dispatcherSpan,
-		CommitTsStart: txnCommitTs - 1,
-		CommitTsEnd:   nextCommitTs,
+	firstScanEvents := collectEvents(ScanRequest{
+		Range: common.DataRange{
+			Span:          dispatcherSpan,
+			CommitTsStart: txnCommitTs - 1,
+			CommitTsEnd:   nextCommitTs,
+		},
 	})
 	require.Len(t, firstScanEvents, 3)
 	require.Equal(t, []string{"c-row-1", "c-row-2", "c-next-row"}, []string{
@@ -1236,11 +1248,13 @@ func TestEventStoreRowLevelScanPositionSurvivesSubStatSwitch(t *testing.T) {
 	require.Equal(t, newSubStat.subID, dispatcherStat.pendingSubStat.subID)
 
 	newSubStat.resolvedTs.Store(nextCommitTs)
-	resumedEvents := collectEvents(common.DataRange{
-		Span:                 dispatcherSpan,
-		CommitTsStart:        txnCommitTs,
-		CommitTsEnd:          nextCommitTs,
-		RowLevelScanPosition: firstScanEvents[0].position,
+	resumedEvents := collectEvents(ScanRequest{
+		Range: common.DataRange{
+			Span:          dispatcherSpan,
+			CommitTsStart: txnCommitTs,
+			CommitTsEnd:   nextCommitTs,
+		},
+		Cursor: ScanCursor{Position: firstScanEvents[0].position},
 	})
 	require.Len(t, resumedEvents, 2)
 	require.Equal(t, []string{"c-row-2", "c-next-row"}, []string{
@@ -1774,10 +1788,10 @@ func TestEventStoreResumeTokenSupportsRowLevelResume(t *testing.T) {
 
 	type scannedEvent struct {
 		key      string
-		position common.ScanPosition
+		position ScanPosition
 	}
-	collectEvents := func(dataRange common.DataRange) []scannedEvent {
-		iter, err := store.GetIterator(dispatcherID, dataRange)
+	collectEvents := func(request ScanRequest) []scannedEvent {
+		iter, err := store.GetIterator(dispatcherID, request)
 		require.NoError(t, err)
 		if iter == nil {
 			return nil
@@ -1803,10 +1817,12 @@ func TestEventStoreResumeTokenSupportsRowLevelResume(t *testing.T) {
 		return events
 	}
 
-	fullRange := common.DataRange{
-		Span:          span,
-		CommitTsStart: txnCommitTs - 1,
-		CommitTsEnd:   nextCommitTs,
+	fullRange := ScanRequest{
+		Range: common.DataRange{
+			Span:          span,
+			CommitTsStart: txnCommitTs - 1,
+			CommitTsEnd:   nextCommitTs,
+		},
 	}
 	fullEvents := collectEvents(fullRange)
 	require.Len(t, fullEvents, 3)
@@ -1816,24 +1832,28 @@ func TestEventStoreResumeTokenSupportsRowLevelResume(t *testing.T) {
 		fullEvents[2].key,
 	})
 
-	resumeAfterTxnStart := common.DataRange{
-		Span:                  span,
-		CommitTsStart:         txnCommitTs,
-		CommitTsEnd:           nextCommitTs,
-		LastScannedTxnStartTs: txnStartTs,
+	resumeAfterTxnStart := ScanRequest{
+		Range: common.DataRange{
+			Span:          span,
+			CommitTsStart: txnCommitTs,
+			CommitTsEnd:   nextCommitTs,
+		},
+		Cursor: ScanCursor{TxnStartTs: txnStartTs},
 	}
-	// LastScannedTxnStartTs can resume after a txn start-ts, but it cannot
+	// Cursor.TxnStartTs can resume after a txn start-ts, but it cannot
 	// identify a specific row inside the same txn. Once set to txnStartTs, all
 	// rows in that txn are skipped, including row-2.
 	txnLevelEvents := collectEvents(resumeAfterTxnStart)
 	require.Len(t, txnLevelEvents, 1)
 	require.Equal(t, []string{"next-row"}, []string{txnLevelEvents[0].key})
 
-	resumeAfterRow1 := common.DataRange{
-		Span:                 span,
-		CommitTsStart:        txnCommitTs,
-		CommitTsEnd:          nextCommitTs,
-		RowLevelScanPosition: fullEvents[0].position,
+	resumeAfterRow1 := ScanRequest{
+		Range: common.DataRange{
+			Span:          span,
+			CommitTsStart: txnCommitTs,
+			CommitTsEnd:   nextCommitTs,
+		},
+		Cursor: ScanCursor{Position: fullEvents[0].position},
 	}
 	rowLevelEvents := collectEvents(resumeAfterRow1)
 	require.Len(t, rowLevelEvents, 2)

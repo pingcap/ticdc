@@ -93,13 +93,13 @@ func encodeScanLowerBound(uniqueID uint64, tableID int64, txnCommitTs uint64, tx
 	return buf
 }
 
-func encodeRowLevelScanPosition(key []byte) common.ScanPosition {
-	position := make(common.ScanPosition, len(key)-encodedKeyTxnCommitTsOffset)
+func encodeRowLevelScanPosition(key []byte) ScanPosition {
+	position := make(ScanPosition, len(key)-encodedKeyTxnCommitTsOffset)
 	copy(position, key[encodedKeyTxnCommitTsOffset:])
 	return position
 }
 
-func encodeRowLevelScanPositionLowerBound(uniqueID uint64, tableID int64, position common.ScanPosition) []byte {
+func encodeRowLevelScanPositionLowerBound(uniqueID uint64, tableID int64, position ScanPosition) []byte {
 	buf := make([]byte, encodedKeyTxnCommitTsOffset, encodedKeyTxnCommitTsOffset+len(position)+1)
 	binary.BigEndian.PutUint64(buf[encodedKeyUniqueIDOffset:encodedKeyUniqueIDOffset+encodedKeyUniqueIDLen], uniqueID)
 	binary.BigEndian.PutUint64(buf[encodedKeyTableIDOffset:encodedKeyTableIDOffset+encodedKeyTableIDLen], uint64(tableID))

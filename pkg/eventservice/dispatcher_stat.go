@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -104,11 +105,9 @@ type dispatcherStat struct {
 	// Note: Please don't changed this value directly, use updateSentResolvedTs instead.
 	sentResolvedTs atomic.Uint64
 
-	// The last scanned DML event start-ts.
-	// These two values are used to construct the scan range for the next scan task.
-	lastScannedCommitTs atomic.Uint64
-	lastScannedStartTs  atomic.Uint64
-	lastScannedPosition atomic.Value
+	// lastScanProgress is published as one immutable value so the next scan
+	// cannot observe a cursor assembled from different scan results.
+	lastScanProgress atomic.Pointer[scanProgress]
 
 	largeTxnStateMu sync.Mutex
 	largeTxnState   *largeTxnScanState
@@ -174,8 +173,7 @@ func newDispatcherStat(
 
 	dispStat.sentResolvedTs.Store(startTs)
 
-	dispStat.lastScannedCommitTs.Store(startTs)
-	dispStat.lastScannedStartTs.Store(0)
+	dispStat.storeScanProgress(newTxnScanProgress(startTs, 0))
 	dispStat.lastReadySendTime.Store(0)
 	dispStat.readyInterval.Store(1)
 	dispStat.resetScanLimit()
@@ -224,32 +222,24 @@ func (a *dispatcherStat) updateScanRange(txnCommitTs, txnStartTs uint64) {
 func (a *dispatcherStat) updateScanRangeWithPosition(
 	txnCommitTs uint64,
 	txnStartTs uint64,
-	position common.ScanPosition,
+	position eventstore.ScanPosition,
 ) {
-	a.lastScannedCommitTs.Store(txnCommitTs)
-	a.lastScannedStartTs.Store(txnStartTs)
-	a.storeLastScannedPosition(position)
+	a.storeScanProgress(newRowLevelScanProgress(txnCommitTs, txnStartTs, position))
 }
 
-func (a *dispatcherStat) storeLastScannedPosition(position common.ScanPosition) {
-	if len(position) == 0 {
-		a.lastScannedPosition.Store(common.ScanPosition{})
-		return
-	}
-	// ScanPosition is produced as an immutable snapshot by the scanner path.
-	a.lastScannedPosition.Store(position)
+func (a *dispatcherStat) storeScanProgress(progress scanProgress) {
+	progress.rowLevelScanPosition = cloneScanPosition(progress.rowLevelScanPosition)
+	a.lastScanProgress.Store(&progress)
 }
 
-func (a *dispatcherStat) getLastScannedPosition() common.ScanPosition {
-	value := a.lastScannedPosition.Load()
-	if value == nil {
-		return nil
+func (a *dispatcherStat) loadScanProgress() scanProgress {
+	progress := a.lastScanProgress.Load()
+	if progress == nil {
+		return scanProgress{}
 	}
-	position := value.(common.ScanPosition)
-	if len(position) == 0 {
-		return nil
-	}
-	return position
+	result := *progress
+	result.rowLevelScanPosition = cloneScanPosition(result.rowLevelScanPosition)
+	return result
 }
 
 type bigTxnMetricState struct {
@@ -340,30 +330,35 @@ func (a *dispatcherStat) onLatestCommitTs(latestCommitTs uint64) bool {
 	return util.CompareAndMonotonicIncrease(&a.eventStoreCommitTs, latestCommitTs)
 }
 
-// getDataRange returns the data range that the dispatcher needs to scan.
-func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
-	lastTxnCommitTs := a.lastScannedCommitTs.Load()
-	lastTxnStartTs := a.lastScannedStartTs.Load()
-	lastPosition := a.getLastScannedPosition()
+// getScanRequest returns the range and cursor that the dispatcher needs to scan.
+func (a *dispatcherStat) getScanRequest() (eventstore.ScanRequest, bool) {
+	progress := a.loadScanProgress()
+	lastTxnCommitTs := progress.txnCommitTs
+	lastTxnStartTs := progress.txnStartTs
+	lastPosition := progress.rowLevelScanPosition
 	hasPendingLargeTxn := a.hasPendingLargeTxnState()
 
 	// the data not received by the event store yet, so just skip it.
 	resolvedTs := a.receivedResolvedTs.Load()
 	if lastTxnCommitTs > resolvedTs {
-		return common.DataRange{}, false
+		return eventstore.ScanRequest{}, false
 	}
 	if lastTxnCommitTs == resolvedTs && lastTxnStartTs == 0 &&
 		len(lastPosition) == 0 && !hasPendingLargeTxn {
-		return common.DataRange{}, false
+		return eventstore.ScanRequest{}, false
 	}
-	// Range: (CommitTsStart-lastScannedStartTs, CommitTsEnd],
-	// since the CommitTsStart(and the data before startTs) is already sent to the dispatcher.
-	r := common.DataRange{
-		Span:                  a.info.GetTableSpan(),
-		CommitTsStart:         lastTxnCommitTs,
-		CommitTsEnd:           resolvedTs,
-		RowLevelScanPosition:  lastPosition,
-		LastScannedTxnStartTs: lastTxnStartTs,
+	// Range is (CommitTsStart, CommitTsEnd], with Cursor identifying any
+	// unfinished transaction or row at CommitTsStart.
+	r := eventstore.ScanRequest{
+		Range: common.DataRange{
+			Span:          a.info.GetTableSpan(),
+			CommitTsStart: lastTxnCommitTs,
+			CommitTsEnd:   resolvedTs,
+		},
+		Cursor: eventstore.ScanCursor{
+			TxnStartTs: lastTxnStartTs,
+			Position:   lastPosition,
+		},
 	}
 	return r, true
 }

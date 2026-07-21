@@ -15,7 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"io"
 	"time"
 
 	"github.com/pingcap/log"
@@ -35,7 +34,7 @@ import (
 // eventGetter is the interface for getting iterator of events
 // The implementation of eventGetter is eventstore.EventStore
 type eventGetter interface {
-	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (eventstore.EventIterator, error)
+	GetIterator(dispatcherID common.DispatcherID, request eventstore.ScanRequest) (eventstore.EventIterator, error)
 }
 
 // schemaGetter is the interface for getting schema info and ddl events
@@ -62,30 +61,6 @@ type eventScanner struct {
 	schemaGetter schemaGetter
 	mounter      event.Mounter
 	mode         int64
-}
-
-type scanProgress struct {
-	valid                bool
-	txnCommitTs          uint64
-	txnStartTs           uint64
-	rowLevelScanPosition common.ScanPosition
-}
-
-func newTxnScanProgress(commitTs uint64, startTs uint64) scanProgress {
-	return scanProgress{
-		valid:       true,
-		txnCommitTs: commitTs,
-		txnStartTs:  startTs,
-	}
-}
-
-func newRowLevelScanProgress(commitTs uint64, startTs uint64, position common.ScanPosition) scanProgress {
-	progress := newTxnScanProgress(commitTs, startTs)
-	if len(position) > 0 {
-		progress.rowLevelScanPosition = make(common.ScanPosition, len(position))
-		copy(progress.rowLevelScanPosition, position)
-	}
-	return progress
 }
 
 // newEventScanner creates a new EventScanner
@@ -144,16 +119,21 @@ func newEventScanner(
 func (s *eventScanner) scan(
 	ctx context.Context,
 	dispatcherStat *dispatcherStat,
-	dataRange common.DataRange,
+	request eventstore.ScanRequest,
 	limit scanLimit,
 ) (int64, []event.Event, scanProgress, bool, error) {
+	dataRange := request.Range
 	// Initialize scan session
 	sess := newSession(ctx, dispatcherStat, dataRange, limit)
 	defer sess.recordMetrics()
+	strategy := newTxnScanStrategy(dispatcherStat.txnAtomicity.ShouldSplitTxn())
+	scanCtx := &txnScanContext{
+		scanner: s,
+		session: sess,
+	}
 
-	if state := dispatcherStat.getLargeTxnState(); state != nil &&
-		state.getPhase() == largeTxnScanPhaseDrainInserts {
-		interrupted, err := s.drainLargeTxnInserts(sess, state)
+	handled, interrupted, err := strategy.resumePending(scanCtx)
+	if handled {
 		return sess.eventBytes, sess.events, sess.progress, interrupted, err
 	}
 
@@ -165,28 +145,31 @@ func (s *eventScanner) scan(
 	}
 	metrics.EventServiceGetDDLEventDuration.Observe(time.Since(start).Seconds())
 
-	iter, err := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), dataRange)
+	scanCtx.merger = newEventMerger(events)
+	scanCtx.processor = newDMLProcessor(
+		s.mounter,
+		s.schemaGetter,
+		dispatcherStat.filter,
+		dispatcherStat.info.IsOutputRawChangeEvent(),
+		s.mode,
+		dispatcherStat.info.EnableIgnoreUpdateOnlyColumns())
+	scanCtx.processor.dispatcherStat = dispatcherStat
+
+	iter, err := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), request)
 	if err != nil {
 		return 0, nil, scanProgress{}, false, err
 	}
 	if iter == nil {
-		dispatcherStat.finishPendingBigTxnMetric()
-		if state := dispatcherStat.getLargeTxnState(); state != nil &&
-			state.getPhase() == largeTxnScanPhaseOriginal {
-			dispatcherStat.markLargeTxnDrainInserts(state.startTs, state.commitTs, false, 0)
-			sess.progress = newTxnScanProgress(state.commitTs, state.startTs)
-			return 0, sess.events, sess.progress, true, nil
+		interrupted, err := strategy.finishTxn(scanCtx, nextTxnMeta{})
+		if err != nil || interrupted {
+			return 0, sess.events, sess.progress, interrupted, err
 		}
-		resolved := event.NewResolvedEvent(dataRange.CommitTsEnd, dispatcherStat.id, dispatcherStat.epoch)
-		events = append(events, resolved)
-		sess.appendEvents(events)
-		sess.progress = newTxnScanProgress(dataRange.CommitTsEnd, 0)
-		return 0, sess.events, sess.progress, false, nil
+		err = finalizeScan(scanCtx.merger, scanCtx.processor, sess, dataRange.CommitTsEnd)
+		return 0, sess.events, sess.progress, false, err
 	}
 
 	// Execute event scanning and merging
-	merger := newEventMerger(events)
-	interrupted, scanErr := s.scanAndMergeEvents(sess, merger, iter)
+	interrupted, scanErr := s.scanAndMergeEvents(scanCtx, strategy, iter)
 	closeErr := s.closeIterator(iter)
 	if scanErr != nil {
 		if closeErr != nil {
@@ -246,20 +229,15 @@ func (s *eventScanner) closeIterator(iter eventstore.EventIterator) error {
 
 // scanAndMergeEvents performs the main scanning and merging logic
 func (s *eventScanner) scanAndMergeEvents(
-	session *session,
-	merger *eventMerger,
+	scanCtx *txnScanContext,
+	strategy txnScanStrategy,
 	iter eventstore.EventIterator,
 ) (bool, error) {
+	session := scanCtx.session
+	merger := scanCtx.merger
+	processor := scanCtx.processor
 	tableID := session.dataRange.Span.TableID
 	dispatcher := session.dispatcherStat
-	processor := newDMLProcessor(
-		s.mounter,
-		s.schemaGetter,
-		dispatcher.filter,
-		dispatcher.info.IsOutputRawChangeEvent(),
-		s.mode,
-		dispatcher.info.EnableIgnoreUpdateOnlyColumns())
-	processor.dispatcherStat = dispatcher
 
 	for {
 		shouldStop, err := s.checkScanConditions(session)
@@ -272,22 +250,7 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		rawEvent, position, isNewTxn := nextEventWithScanPosition(iter)
 		if rawEvent == nil {
-			if state := dispatcher.getLargeTxnState(); processor.currentTxn == nil &&
-				state != nil &&
-				state.getPhase() == largeTxnScanPhaseOriginal {
-				dispatcher.finishPendingBigTxnMetric()
-				dispatcher.markLargeTxnDrainInserts(state.startTs, state.commitTs, false, 0)
-				session.progress = newTxnScanProgress(state.commitTs, state.startTs)
-				return true, nil
-			}
-			interrupted, err := s.finishCurrentTxn(
-				session,
-				merger,
-				processor,
-				0,
-				0,
-				false,
-			)
+			interrupted, err := strategy.finishTxn(scanCtx, nextTxnMeta{})
 			if err != nil || interrupted {
 				return interrupted, err
 			}
@@ -296,14 +259,14 @@ func (s *eventScanner) scanAndMergeEvents(
 		}
 		dispatcher.finishPendingBigTxnMetricBefore(rawEvent.StartTs, rawEvent.CRTs)
 
-		if state := dispatcher.getLargeTxnState(); processor.currentTxn == nil &&
-			state != nil &&
-			state.getPhase() == largeTxnScanPhaseOriginal &&
-			(rawEvent.StartTs != state.startTs || rawEvent.CRTs != state.commitTs) {
-			dispatcher.finishPendingBigTxnMetric()
-			dispatcher.markLargeTxnDrainInserts(state.startTs, state.commitTs, true, rawEvent.CRTs)
-			session.progress = newTxnScanProgress(state.commitTs, state.startTs)
-			return true, nil
+		if processor.currentTxn == nil {
+			interrupted, err := strategy.finishTxn(scanCtx, nextTxnMeta{
+				startTs:  rawEvent.StartTs,
+				commitTs: rawEvent.CRTs,
+			})
+			if err != nil || interrupted {
+				return interrupted, err
+			}
 		}
 
 		if isNewTxn {
@@ -311,14 +274,12 @@ func (s *eventScanner) scanAndMergeEvents(
 			if err != nil {
 				return false, err
 			}
-			interrupted, err := s.finishCurrentTxn(
-				session,
-				merger,
-				processor,
-				rawEvent.CRTs,
-				getTableInfoUpdateTs(tableInfo),
-				tableInfo == nil,
-			)
+			interrupted, err := strategy.finishTxn(scanCtx, nextTxnMeta{
+				startTs:           rawEvent.StartTs,
+				commitTs:          rawEvent.CRTs,
+				tableInfoUpdateTs: getTableInfoUpdateTs(tableInfo),
+				tableDeleted:      tableInfo == nil,
+			})
 			if err != nil || interrupted {
 				return interrupted, err
 			}
@@ -336,7 +297,7 @@ func (s *eventScanner) scanAndMergeEvents(
 				return true, nil
 			}
 
-			err = s.startTxn(session, processor, rawEvent.StartTs, rawEvent.CRTs, tableInfo, tableID)
+			err = strategy.startTxn(scanCtx, rawEvent.StartTs, rawEvent.CRTs, tableInfo, tableID)
 			if err != nil {
 				return false, err
 			}
@@ -352,16 +313,16 @@ func (s *eventScanner) scanAndMergeEvents(
 				zap.Int64("mode", s.mode))
 			return false, err
 		}
-		if s.canInterruptCurrentTxn(session, merger, processor, rawEvent, position) {
-			interruptCurrentTxn(session, merger, processor, rawEvent.CRTs, rawEvent.StartTs, position)
-			return true, nil
+		interrupted, err := strategy.afterAppend(scanCtx, rawEvent, position)
+		if err != nil || interrupted {
+			return interrupted, err
 		}
 	}
 }
 
 func nextEventWithScanPosition(
 	iter eventstore.EventIterator,
-) (*common.RawKVEntry, common.ScanPosition, bool) {
+) (*common.RawKVEntry, eventstore.ScanPosition, bool) {
 	if positionIter, ok := iter.(eventstore.EventIteratorWithScanPosition); ok {
 		return positionIter.NextWithScanPosition()
 	}
@@ -416,22 +377,6 @@ func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int6
 	return nil, err
 }
 
-func (s *eventScanner) startTxn(
-	session *session,
-	processor *dmlProcessor,
-	startTs, commitTs uint64,
-	tableInfo *common.TableInfo,
-	tableID int64,
-) error {
-	shouldSplitTxn := session.dispatcherStat.txnAtomicity.ShouldSplitTxn()
-	err := processor.startTxn(session.dispatcherStat.id, tableID, tableInfo, startTs, commitTs, shouldSplitTxn)
-	if err != nil {
-		return err
-	}
-	session.dmlCount++
-	return nil
-}
-
 func (s *eventScanner) commitTxn(
 	session *session,
 	merger *eventMerger,
@@ -476,77 +421,6 @@ func (s *eventScanner) commitTxn(
 		processor.resetBatchDML()
 	}
 	return nil
-}
-
-func (s *eventScanner) finishCurrentTxn(
-	session *session,
-	merger *eventMerger,
-	processor *dmlProcessor,
-	nextCommitTs uint64,
-	nextTableInfoUpdateTs uint64,
-	nextTableDeleted bool,
-) (bool, error) {
-	if processor.currentTxn == nil {
-		return false, nil
-	}
-	currentStartTs := processor.currentTxn.CurrentDMLEvent.GetStartTs()
-	currentCommitTs := processor.currentTxn.CurrentDMLEvent.GetCommitTs()
-
-	if processor.hasSpilledInsertsForCurrentTxn() && merger.hasDDLAtCommitTs(currentCommitTs) {
-		if err := processor.flushCachedInsertRows(); err != nil {
-			return false, err
-		}
-		if err := processor.flushSpilledInsertsIntoCurrentTxn(); err != nil {
-			return false, err
-		}
-	}
-
-	if err := s.commitTxn(session, merger, processor, nextCommitTs, nextTableInfoUpdateTs); err != nil {
-		return false, err
-	}
-	if !processor.hasLargeTxnState(currentStartTs, currentCommitTs) {
-		return false, nil
-	}
-
-	events := merger.mergeWithPrecedingDDLs(processor.getCurrentBatchDML())
-	session.appendEvents(events)
-	processor.resetBatchDML()
-
-	hasFollowingTxn := nextCommitTs != 0 && !nextTableDeleted
-	session.dispatcherStat.markLargeTxnDrainInserts(
-		currentStartTs,
-		currentCommitTs,
-		hasFollowingTxn,
-		nextCommitTs,
-	)
-	if len(session.lastRowPosition) > 0 {
-		session.progress = newRowLevelScanProgress(currentCommitTs, currentStartTs, session.lastRowPosition)
-	} else {
-		session.progress = newTxnScanProgress(currentCommitTs, currentStartTs)
-	}
-	return true, nil
-}
-
-func (s *eventScanner) canInterruptCurrentTxn(
-	session *session,
-	merger *eventMerger,
-	processor *dmlProcessor,
-	rawEvent *common.RawKVEntry,
-	position common.ScanPosition,
-) bool {
-	if len(position) == 0 || !session.dispatcherStat.txnAtomicity.ShouldSplitTxn() {
-		return false
-	}
-	if len(processor.insertRowCache) > 0 {
-		return false
-	}
-	if processor.currentTxn == nil || !processor.currentTxn.exceedsLargeTxnThreshold() {
-		return false
-	}
-	if !merger.canInterrupt(rawEvent.CRTs, processor.batchDML) {
-		return false
-	}
-	return true
 }
 
 // finalizeScan finalizes the scan when all events have been processed
@@ -636,130 +510,6 @@ func interruptScan(
 	session.appendEvents(events)
 }
 
-func interruptCurrentTxn(
-	session *session,
-	merger *eventMerger,
-	processor *dmlProcessor,
-	commitTs uint64,
-	startTs uint64,
-	position common.ScanPosition,
-) {
-	if processor.currentTxn != nil {
-		currentTxn := processor.currentTxn
-		currentDML := currentTxn.CurrentDMLEvent
-		session.dispatcherStat.addBigTxnMetricFragment(
-			currentDML.GetStartTs(),
-			currentDML.GetCommitTs(),
-			currentTxn.rawKVBytes,
-			currentTxn.largeTxnThresholdInBytes)
-	}
-	events := merger.mergeWithPrecedingDDLs(processor.getCurrentBatchDML())
-	session.appendEvents(events)
-	session.progress = newRowLevelScanProgress(commitTs, startTs, position)
-	log.Debug("scan interrupted inside a large txn",
-		zap.Stringer("dispatcherID", session.dispatcherStat.id),
-		zap.Uint64("startTs", startTs),
-		zap.Uint64("commitTs", commitTs),
-		zap.Int("scannedEntryCount", session.scannedEntryCount),
-		zap.Duration("duration", time.Since(session.startTime)))
-}
-
-func (s *eventScanner) drainLargeTxnInserts(
-	session *session,
-	state *largeTxnScanState,
-) (bool, error) {
-	drainedInsertCount := 0
-	returnWithError := func(scanErr error) (bool, error) {
-		if rollbackErr := state.rollbackDrain(); rollbackErr != nil {
-			log.Warn("reset large transaction spill reader failed",
-				zap.Stringer("dispatcherID", session.dispatcherStat.id),
-				zap.Error(rollbackErr))
-		}
-		return false, scanErr
-	}
-
-	processor := newDMLProcessor(
-		s.mounter,
-		s.schemaGetter,
-		session.dispatcherStat.filter,
-		session.dispatcherStat.info.IsOutputRawChangeEvent(),
-		s.mode,
-		session.dispatcherStat.info.EnableIgnoreUpdateOnlyColumns())
-	processor.dispatcherStat = session.dispatcherStat
-
-	for {
-		shouldStop, err := s.checkScanConditions(session)
-		if err != nil {
-			return returnWithError(err)
-		}
-		if shouldStop {
-			return false, nil
-		}
-
-		entry, err := state.nextInsert()
-		if err != nil {
-			if session.dispatcherStat.isRemoved.Load() {
-				return false, nil
-			}
-			if errors.Is(err, io.EOF) {
-				if processor.currentTxn != nil {
-					if err := processor.commitTxn(); err != nil {
-						return returnWithError(err)
-					}
-					if processor.getCurrentBatchDML().DMLCount() != 0 {
-						session.appendEvents([]event.Event{processor.getCurrentBatchDML()})
-					}
-				}
-				state.commitDrainedInserts(drainedInsertCount)
-				session.progress = newTxnScanProgress(state.commitTs, state.startTs)
-				hasFollowingTxn, followingCommitTs := state.snapshotDrainInfo()
-				shouldResolveCommitTs := (!hasFollowingTxn || followingCommitTs > state.commitTs) &&
-					session.dataRange.CommitTsEnd == state.commitTs
-				if err := session.dispatcherStat.cleanupLargeTxnState(); err != nil {
-					log.Warn("cleanup drained large transaction spill failed",
-						zap.Stringer("dispatcherID", session.dispatcherStat.id),
-						zap.Error(err))
-				}
-				if shouldResolveCommitTs {
-					resolved := event.NewResolvedEvent(state.commitTs, session.dispatcherStat.id, session.dispatcherStat.epoch)
-					session.appendEvents([]event.Event{resolved})
-					session.progress = newTxnScanProgress(state.commitTs, 0)
-					return false, nil
-				}
-				return true, nil
-			}
-			return returnWithError(err)
-		}
-		drainedInsertCount++
-
-		if processor.currentTxn == nil {
-			if err := processor.startTxn(
-				session.dispatcherStat.id,
-				state.tableID,
-				state.tableInfo,
-				state.startTs,
-				state.commitTs,
-				true,
-			); err != nil {
-				return returnWithError(err)
-			}
-		}
-		session.observeRawEntry(entry, nil)
-		if err := processor.appendInsertRow(entry); err != nil {
-			return returnWithError(err)
-		}
-		if session.exceedLimit(processor.batchDML.GetSize(), processor.batchDML) {
-			if err := processor.commitTxn(); err != nil {
-				return returnWithError(err)
-			}
-			session.appendEvents([]event.Event{processor.getCurrentBatchDML()})
-			state.commitDrainedInserts(drainedInsertCount)
-			session.progress = newTxnScanProgress(state.commitTs, state.startTs)
-			return true, nil
-		}
-	}
-}
-
 // session manages the state and context of a scan operation
 type session struct {
 	ctx            context.Context
@@ -772,7 +522,7 @@ type session struct {
 
 	scannedBytes      int64
 	scannedEntryCount int
-	lastRowPosition   common.ScanPosition
+	lastRowPosition   eventstore.ScanPosition
 	// dmlCount is the count of transactions.
 	dmlCount int
 
@@ -800,14 +550,14 @@ func newSession(
 }
 
 // observeRawEntry adds to the total bytes scanned
-func (s *session) observeRawEntry(entry *common.RawKVEntry, position common.ScanPosition) {
+func (s *session) observeRawEntry(entry *common.RawKVEntry, position eventstore.ScanPosition) {
 	s.scannedBytes += entry.GetSize()
 	s.scannedEntryCount++
 	if len(position) == 0 {
 		s.lastRowPosition = nil
 		return
 	}
-	s.lastRowPosition = make(common.ScanPosition, len(position))
+	s.lastRowPosition = make(eventstore.ScanPosition, len(position))
 	copy(s.lastRowPosition, position)
 }
 
@@ -1136,85 +886,6 @@ func (p *dmlProcessor) flushCachedInsertRows() error {
 	}
 	p.insertRowCache = make([]*common.RawKVEntry, 0)
 	return nil
-}
-
-func (p *dmlProcessor) spillCachedInsertRows() error {
-	if len(p.insertRowCache) == 0 {
-		return nil
-	}
-	state, err := p.getOrCreateLargeTxnState()
-	if err != nil {
-		return err
-	}
-	for _, insertRow := range p.insertRowCache {
-		if err := state.appendInsert(insertRow); err != nil {
-			return err
-		}
-	}
-	p.insertRowCache = make([]*common.RawKVEntry, 0)
-	return nil
-}
-
-func (p *dmlProcessor) shouldSpillSplitUpdateInsert() bool {
-	if p.currentTxn == nil {
-		return false
-	}
-	return p.currentTxn.exceedsLargeTxnThreshold() || p.hasSpilledInsertsForCurrentTxn()
-}
-
-func (p *dmlProcessor) hasSpilledInsertsForCurrentTxn() bool {
-	if p.currentTxn == nil || p.dispatcherStat == nil {
-		return false
-	}
-	current := p.currentTxn.CurrentDMLEvent
-	return p.hasLargeTxnState(current.GetStartTs(), current.GetCommitTs())
-}
-
-func (p *dmlProcessor) hasLargeTxnState(startTs uint64, commitTs uint64) bool {
-	if p.dispatcherStat == nil {
-		return false
-	}
-	state := p.dispatcherStat.getLargeTxnState()
-	return state != nil &&
-		state.startTs == startTs &&
-		state.commitTs == commitTs &&
-		state.getPhase() == largeTxnScanPhaseOriginal
-}
-
-func (p *dmlProcessor) flushSpilledInsertsIntoCurrentTxn() error {
-	if p.currentTxn == nil || p.dispatcherStat == nil {
-		return nil
-	}
-	state := p.dispatcherStat.getLargeTxnState()
-	if state == nil || state.getPhase() != largeTxnScanPhaseOriginal {
-		return nil
-	}
-	for {
-		insertRow, err := state.nextInsert()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return p.dispatcherStat.cleanupLargeTxnState()
-			}
-			return err
-		}
-		if err := p.appendInsertRow(insertRow); err != nil {
-			return err
-		}
-	}
-}
-
-func (p *dmlProcessor) getOrCreateLargeTxnState() (*largeTxnScanState, error) {
-	if p.dispatcherStat == nil {
-		return nil, errors.New("dispatcher stat is required for large txn update spill")
-	}
-	currentDML := p.currentTxn.CurrentDMLEvent
-	return p.dispatcherStat.getOrCreateLargeTxnState(
-		p.spillDir,
-		currentDML.GetTableID(),
-		currentDML.TableInfo,
-		currentDML.GetStartTs(),
-		currentDML.GetCommitTs(),
-	)
 }
 
 func (p *dmlProcessor) appendInsertRow(rawEvent *common.RawKVEntry) error {

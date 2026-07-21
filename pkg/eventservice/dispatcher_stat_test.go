@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
+	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -139,7 +140,7 @@ func readBigTxnCountMetric(t *testing.T) float64 {
 	return counter.GetValue()
 }
 
-func TestDispatcherStatGetDataRange(t *testing.T) {
+func TestDispatcherStatGetScanRequest(t *testing.T) {
 	t.Parallel()
 
 	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
@@ -149,48 +150,73 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 
 	// case 1: get range after resolved ts update
 	stat.onResolvedTs(200)
-	r, ok := stat.getDataRange()
+	r, ok := stat.getScanRequest()
 	require.True(t, ok)
-	require.Equal(t, uint64(100), r.CommitTsStart)
-	require.Equal(t, uint64(0), r.LastScannedTxnStartTs)
-	require.Equal(t, uint64(200), r.CommitTsEnd)
-	require.Equal(t, info.GetTableSpan(), r.Span)
+	require.Equal(t, uint64(100), r.Range.CommitTsStart)
+	require.Equal(t, uint64(0), r.Cursor.TxnStartTs)
+	require.Equal(t, uint64(200), r.Range.CommitTsEnd)
+	require.Equal(t, info.GetTableSpan(), r.Range.Span)
 
 	// case 2: get range after scan range update
 	stat.updateScanRange(130, 120)
-	r, ok = stat.getDataRange()
+	r, ok = stat.getScanRequest()
 	require.True(t, ok)
-	require.Equal(t, uint64(130), r.CommitTsStart)
-	require.Equal(t, uint64(120), r.LastScannedTxnStartTs)
-	require.Equal(t, uint64(200), r.CommitTsEnd)
-	require.Equal(t, info.GetTableSpan(), r.Span)
+	require.Equal(t, uint64(130), r.Range.CommitTsStart)
+	require.Equal(t, uint64(120), r.Cursor.TxnStartTs)
+	require.Equal(t, uint64(200), r.Range.CommitTsEnd)
+	require.Equal(t, info.GetTableSpan(), r.Range.Span)
 
 	// case 3: get range after sent resolved ts update
 	stat.updateSentResolvedTs(200)
-	r, ok = stat.getDataRange()
+	r, ok = stat.getScanRequest()
 	require.False(t, ok)
 
 	// case 4: same commit-ts may still have later transactions when the
 	// transaction-level resume start-ts is set.
 	stat.updateScanRange(200, 150)
-	r, ok = stat.getDataRange()
+	r, ok = stat.getScanRequest()
 	require.True(t, ok)
-	require.Equal(t, uint64(200), r.CommitTsStart)
-	require.Equal(t, uint64(150), r.LastScannedTxnStartTs)
-	require.Equal(t, uint64(200), r.CommitTsEnd)
+	require.Equal(t, uint64(200), r.Range.CommitTsStart)
+	require.Equal(t, uint64(150), r.Cursor.TxnStartTs)
+	require.Equal(t, uint64(200), r.Range.CommitTsEnd)
 
 	// case 5: get range after resolved ts update again
 	stat.onResolvedTs(300)
-	r, ok = stat.getDataRange()
+	r, ok = stat.getScanRequest()
 	require.True(t, ok)
-	require.Equal(t, uint64(200), r.CommitTsStart)
-	require.Equal(t, uint64(150), r.LastScannedTxnStartTs)
-	require.Equal(t, uint64(300), r.CommitTsEnd)
-	require.Equal(t, info.GetTableSpan(), r.Span)
+	require.Equal(t, uint64(200), r.Range.CommitTsStart)
+	require.Equal(t, uint64(150), r.Cursor.TxnStartTs)
+	require.Equal(t, uint64(300), r.Range.CommitTsEnd)
+	require.Equal(t, info.GetTableSpan(), r.Range.Span)
 
 	stat.updateSentResolvedTs(300)
-	r, ok = stat.getDataRange()
+	r, ok = stat.getScanRequest()
 	require.False(t, ok)
+}
+
+func TestDispatcherStatScanProgressSnapshotIsImmutable(t *testing.T) {
+	t.Parallel()
+
+	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	status := newChangefeedStatusForTest(t, info)
+	stat := newDispatcherStat(info, 1, 1, nil, status)
+	stat.onResolvedTs(200)
+
+	position := eventstore.ScanPosition("position")
+	stat.updateScanRangeWithPosition(150, 120, position)
+	position[0] = 'X'
+
+	progress := stat.loadScanProgress()
+	require.Equal(t, eventstore.ScanPosition("position"), progress.rowLevelScanPosition)
+	progress.rowLevelScanPosition[0] = 'Y'
+
+	progress = stat.loadScanProgress()
+	require.Equal(t, eventstore.ScanPosition("position"), progress.rowLevelScanPosition)
+	request, ok := stat.getScanRequest()
+	require.True(t, ok)
+	require.Equal(t, uint64(150), request.Range.CommitTsStart)
+	require.Equal(t, uint64(120), request.Cursor.TxnStartTs)
+	require.Equal(t, eventstore.ScanPosition("position"), request.Cursor.Position)
 }
 
 func TestDispatcherStatUpdateWatermark(t *testing.T) {

@@ -93,8 +93,8 @@ type EventStore interface {
 
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
 
-	// GetIterator returns an iterator which scans data in ts range (dataRange.CommitTsStart, dataRange.CommitTsEnd].
-	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (EventIterator, error)
+	// GetIterator returns an iterator for the requested range and resume cursor.
+	GetIterator(dispatcherID common.DispatcherID, request ScanRequest) (EventIterator, error)
 
 	GetLogCoordinatorNodeID() node.ID
 }
@@ -120,7 +120,7 @@ type EventIteratorWithScanPosition interface {
 
 	// NextWithScanPosition returns the next event, the opaque position of the
 	// returned event, and whether this event is from a new txn.
-	NextWithScanPosition() (*common.RawKVEntry, common.ScanPosition, bool)
+	NextWithScanPosition() (*common.RawKVEntry, ScanPosition, bool)
 }
 
 type dispatcherStat struct {
@@ -817,10 +817,11 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	updateSubStatCheckpoint(dispatcherStat.removingSubStat)
 }
 
-func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (EventIterator, error) {
+func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, request ScanRequest) (EventIterator, error) {
 	if e.closed.Load() {
 		return nil, nil
 	}
+	dataRange := request.Range
 
 	e.dispatcherMeta.RLock()
 	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
@@ -838,7 +839,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 					zap.Int64("tableID", dataRange.Span.GetTableID()),
 					zap.Uint64("commitTsStart", dataRange.CommitTsStart),
 					zap.Uint64("commitTsEnd", dataRange.CommitTsEnd),
-					zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs))
+					zap.Uint64("lastScannedTxnStartTs", request.Cursor.TxnStartTs))
 			}
 			return nil
 		}
@@ -849,7 +850,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 				zap.Int64("tableID", dataRange.Span.GetTableID()),
 				zap.Uint64("commitTsStart", dataRange.CommitTsStart),
 				zap.Uint64("commitTsEnd", dataRange.CommitTsEnd),
-				zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs),
+				zap.Uint64("lastScannedTxnStartTs", request.Cursor.TxnStartTs),
 				zap.Uint64("subStatCheckpointTs", checkpointTs),
 				zap.Uint64("subStatResolvedTs", subStat.resolvedTs.Load()))
 		}
@@ -860,7 +861,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 					zap.Int64("tableID", dataRange.Span.GetTableID()),
 					zap.Uint64("commitTsStart", dataRange.CommitTsStart),
 					zap.Uint64("commitTsEnd", dataRange.CommitTsEnd),
-					zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs),
+					zap.Uint64("lastScannedTxnStartTs", request.Cursor.TxnStartTs),
 					zap.Uint64("subStatCheckpointTs", checkpointTs),
 					zap.Uint64("subStatResolvedTs", subStat.resolvedTs.Load()))
 			}
@@ -917,38 +918,38 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		e.dispatcherMeta.Unlock()
 	}
 
-	// dataRange fields:
-	// CommitTsStart and CommitTsEnd define the commit-ts scan window.
-	// LastScannedTxnStartTs records how far the previous scan progressed inside
+	// request fields:
+	// Range defines the commit-ts scan window. Cursor.TxnStartTs records how far
+	// the previous scan progressed inside
 	// CommitTsStart. It is zero if there is no unfinished scan at CommitTsStart.
 	//
 	// Iterator key bounds:
 	// Pebble uses [LowerBound, UpperBound), so end is always encoded as
 	// CommitTsEnd+1.
 	//
-	// If RowLevelScanPosition is present, continue scanning from the next
+	// If Cursor.Position is present, continue scanning from the next
 	// eventstore key after that opaque position.
 	//
-	// If LastScannedTxnStartTs is zero, scan commit ts in
+	// If Cursor.TxnStartTs is zero, scan commit ts in
 	// (CommitTsStart, CommitTsEnd], and use CommitTsStart+1 as LowerBound.
 	//
-	// If LastScannedTxnStartTs is non-zero, continue scanning commit ts
-	// CommitTsStart with start ts greater than LastScannedTxnStartTs, then scan
+	// If Cursor.TxnStartTs is non-zero, continue scanning commit ts
+	// CommitTsStart with start ts greater than Cursor.TxnStartTs, then scan
 	// later commit ts up to CommitTsEnd.
 	//
 	var start []byte
-	if len(dataRange.RowLevelScanPosition) != 0 {
+	if len(request.Cursor.Position) != 0 {
 		start = encodeRowLevelScanPositionLowerBound(
 			uint64(subStat.subID),
 			stat.tableSpan.TableID,
-			dataRange.RowLevelScanPosition,
+			request.Cursor.Position,
 		)
-	} else if dataRange.LastScannedTxnStartTs != 0 {
+	} else if request.Cursor.TxnStartTs != 0 {
 		start = encodeScanLowerBound(
 			uint64(subStat.subID),
 			stat.tableSpan.TableID,
 			dataRange.CommitTsStart,
-			dataRange.LastScannedTxnStartTs+1,
+			request.Cursor.TxnStartTs+1,
 		)
 	} else {
 		start = encodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
@@ -1584,9 +1585,9 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 	return rawKV, isNewTxn
 }
 
-func (iter *eventStoreIter) NextWithScanPosition() (*common.RawKVEntry, common.ScanPosition, bool) {
+func (iter *eventStoreIter) NextWithScanPosition() (*common.RawKVEntry, ScanPosition, bool) {
 	rawKV := &common.RawKVEntry{}
-	var scanPosition common.ScanPosition
+	var scanPosition ScanPosition
 	for {
 		if !iter.innerIter.Valid() {
 			return nil, nil, false

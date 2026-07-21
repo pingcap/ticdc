@@ -277,8 +277,9 @@ func (m *mockEventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, 
 }
 
 func (m *mockEventStore) GetIterator(
-	dispatcherID common.DispatcherID, dataRange common.DataRange,
+	dispatcherID common.DispatcherID, request eventstore.ScanRequest,
 ) (eventstore.EventIterator, error) {
+	dataRange := request.Range
 	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if !ok {
 		log.Panic("dispatcher not found", zap.Stringer("dispatcherID", dispatcherID))
@@ -293,21 +294,21 @@ func (m *mockEventStore) GetIterator(
 	events := spanStats.getAllEvents()
 
 	entries := make([]*common.RawKVEntry, 0)
-	positions := make([]common.ScanPosition, 0)
-	rowLevelStart := decodeMockScanPosition(dataRange.RowLevelScanPosition)
+	positions := make([]eventstore.ScanPosition, 0)
+	rowLevelStart := decodeMockScanPosition(request.Cursor.Position)
 	for i, e := range events {
 		if rowLevelStart >= 0 && i <= rowLevelStart {
 			continue
 		}
-		if len(dataRange.RowLevelScanPosition) != 0 {
+		if len(request.Cursor.Position) != 0 {
 			if e.CRTs >= dataRange.CommitTsStart && e.CRTs <= dataRange.CommitTsEnd {
 				entries = append(entries, e)
 				positions = append(positions, encodeMockScanPosition(i))
 			}
 			continue
 		}
-		if dataRange.LastScannedTxnStartTs != 0 {
-			if e.CRTs == dataRange.CommitTsStart && e.StartTs <= dataRange.LastScannedTxnStartTs {
+		if request.Cursor.TxnStartTs != 0 {
+			if e.CRTs == dataRange.CommitTsStart && e.StartTs <= request.Cursor.TxnStartTs {
 				continue
 			}
 			if e.CRTs >= dataRange.CommitTsStart && e.CRTs <= dataRange.CommitTsEnd {
@@ -358,7 +359,7 @@ func (m *mockEventStore) RegisterDispatcher(
 
 type mockEventIterator struct {
 	events       []*common.RawKVEntry
-	positions    []common.ScanPosition
+	positions    []eventstore.ScanPosition
 	prevStartTS  uint64
 	prevCommitTS uint64
 	rowCount     int
@@ -370,14 +371,14 @@ func (iter *mockEventIterator) Next() (*common.RawKVEntry, bool) {
 	return row, isNewTxn
 }
 
-func (iter *mockEventIterator) NextWithScanPosition() (*common.RawKVEntry, common.ScanPosition, bool) {
+func (iter *mockEventIterator) NextWithScanPosition() (*common.RawKVEntry, eventstore.ScanPosition, bool) {
 	if len(iter.events) == 0 {
 		return nil, nil, false
 	}
 
 	row := iter.events[0]
 	iter.events = iter.events[1:]
-	var position common.ScanPosition
+	var position eventstore.ScanPosition
 	if len(iter.positions) > 0 {
 		position = iter.positions[0]
 		iter.positions = iter.positions[1:]
@@ -396,15 +397,15 @@ func (m *mockEventIterator) Close() (int64, error) {
 	return int64(m.rowCount), m.closeErr
 }
 
-func encodeMockScanPosition(index int) common.ScanPosition {
+func encodeMockScanPosition(index int) eventstore.ScanPosition {
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], uint64(index))
-	position := make(common.ScanPosition, len(buf))
+	position := make(eventstore.ScanPosition, len(buf))
 	copy(position, buf[:])
 	return position
 }
 
-func decodeMockScanPosition(position common.ScanPosition) int {
+func decodeMockScanPosition(position eventstore.ScanPosition) int {
 	if len(position) == 0 {
 		return -1
 	}

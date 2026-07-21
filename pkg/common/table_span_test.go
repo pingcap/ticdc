@@ -74,13 +74,10 @@ func TestDataRangeEqual(t *testing.T) {
 	dataRange2 := NewDataRange(1, span2, 10, 20)
 	dataRange3 := NewDataRange(1, span1, 15, 25)
 	dataRange4 := NewDataRange(2, span3, 10, 20)
-	dataRange5 := NewDataRange(1, span2, 10, 20)
-	dataRange5.LastScannedTxnStartTs = 9
 
 	require.True(t, dataRange1.Equal(dataRange2))
 	require.False(t, dataRange1.Equal(dataRange3))
 	require.False(t, dataRange1.Equal(dataRange4))
-	require.False(t, dataRange1.Equal(dataRange5))
 }
 
 func TestTableSpanLess(t *testing.T) {

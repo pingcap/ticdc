@@ -279,8 +279,9 @@ func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
 
 func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {
 	// Can't send resolvedTs if there was a interrupted scan task happened before.
-	// d.lastScannedStartTs.Load() != 0 indicates that there was a interrupted scan task happened before.
-	if time.Since(d.lastSentResolvedTsTime.Load()) < defaultSendResolvedTsInterval || d.lastScannedStartTs.Load() != 0 {
+	// A non-zero scan-progress start-ts indicates that there was an interrupted scan task before.
+	if time.Since(d.lastSentResolvedTsTime.Load()) < defaultSendResolvedTsInterval ||
+		d.loadScanProgress().txnStartTs != 0 {
 		return
 	}
 	watermark := d.sentResolvedTs.Load()
@@ -403,17 +404,18 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 	}
 }
 
-// getScanTaskDataRange determines the valid data range for scanning a given task.
+// getScanTaskRequest determines the valid range and resume cursor for a scan task.
 // It checks various conditions (dispatcher status, DDL state, max commit ts of dml event)
 // to decide whether scanning is needed and returns the appropriate time range.
-// If no valid range is found, it returns an empty DataRange.
-func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRange) {
-	// 1. Get the data range of the dispatcher.
-	dataRange, needScan := task.getDataRange()
+// If no valid range is found, it returns an empty ScanRequest.
+func (c *eventBroker) getScanTaskRequest(task scanTask) (bool, eventstore.ScanRequest) {
+	// 1. Get the range and resume cursor of the dispatcher.
+	request, needScan := task.getScanRequest()
 	if !needScan {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
-		return false, common.DataRange{}
+		return false, eventstore.ScanRequest{}
 	}
+	dataRange := &request.Range
 
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   task.info.GetTableSpan().KeyspaceID,
@@ -424,7 +426,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	ddlState, err := c.schemaStore.GetTableDDLEventState(keyspaceMeta, task.info.GetTableSpan().TableID)
 	if err != nil {
 		log.Error("GetTableDDLEventState failed", zap.Uint32("keyspaceID", task.info.GetTableSpan().KeyspaceID), zap.Int64("tableID", task.info.GetTableSpan().TableID), zap.Error(err))
-		return false, common.DataRange{}
+		return false, eventstore.ScanRequest{}
 	}
 	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
 	commitTsEndBeforeWindow := dataRange.CommitTsEnd
@@ -481,23 +483,24 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	}
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
-		hasSameCommitTxnResume := dataRange.LastScannedTxnStartTs != 0 &&
+		hasSameCommitTxnResume := request.Cursor.TxnStartTs != 0 &&
 			dataRange.CommitTsEnd == dataRange.CommitTsStart
-		if len(dataRange.RowLevelScanPosition) != 0 ||
+		if len(request.Cursor.Position) != 0 ||
 			hasSameCommitTxnResume ||
 			task.hasPendingLargeTxnState() {
-			return true, dataRange
+			return true, request
 		}
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		// Scan range can become empty after applying capping (for example, scan window).
 		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
 		// but do not advance the watermark here.
 		c.sendSignalResolvedTs(task)
-		return false, common.DataRange{}
+		return false, eventstore.ScanRequest{}
 	}
 
 	// 3. Check whether there is any events in the data range
-	// Note: target range is (dataRange.CommitTsStart-dataRange.LastScannedTxnStartTs, dataRange.CommitTsEnd]
+	// Note: target range resumes after request.Cursor inside
+	// (dataRange.CommitTsStart, dataRange.CommitTsEnd].
 	// when `dataRange.CommitTsStart` equals `task.eventStoreCommitTs.Load()`,
 	// it is difficult to determine whether any txn events with a commitTs of `dataRange.CommitTsStart` remain unscanned.
 	// because multiple transactions may have the same commit ts.
@@ -508,9 +511,9 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
 		c.sendResolvedTs(task, dataRange.CommitTsEnd)
-		return false, common.DataRange{}
+		return false, eventstore.ScanRequest{}
 	}
-	return true, dataRange
+	return true, request
 }
 
 // scanReady checks if the dispatcher needs to scan the event store/schema store.
@@ -540,7 +543,7 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 
 	c.sendHandshakeIfNeed(task)
 
-	ok, _ := c.getScanTaskDataRange(task)
+	ok, _ := c.getScanTaskRequest(task)
 	return ok
 }
 
@@ -659,7 +662,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	needScan, dataRange := c.getScanTaskDataRange(task)
+	needScan, request := c.getScanTaskRequest(task)
 	if !needScan {
 		return
 	}
@@ -720,7 +723,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
-	scannedBytes, events, progress, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
+	scannedBytes, events, progress, interrupted, err := scanner.scan(ctx, task, request, sl)
 	if scannedBytes < 0 {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
 	} else if scannedBytes >= 0 && scannedBytes < sl.maxDMLBytes {
@@ -735,7 +738,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		log.Error("scan events failed",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
-			zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
+			zap.Any("scanRequest", request), zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
