@@ -101,6 +101,61 @@ func (s *debeziumSuite) requireDebeziumJSONEq(dbzOutput []byte, tiCDCOutput []by
 	}
 }
 
+<<<<<<< HEAD
+=======
+func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
+	cfg := common.NewConfig(config.ProtocolDebezium)
+	cfg.EnableTiDBExtension = true
+	cfg.TimeZone = time.UTC
+
+	encoder := NewBatchEncoder(cfg, "dbserver1")
+	rowEvent := common.NewRoutedRowEvent4Test()
+	require.NoError(t, encoder.AppendRowChangedEvent(context.Background(), "", rowEvent))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	decoder := NewDecoder(cfg, 0, nil)
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decoded := decoder.NextDMLMessage().ToDMLEvent()
+	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
+	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
+
+	change, ok := decoded.GetNextRow()
+	require.True(t, ok)
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, decoded.TableInfo)
+}
+
+func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
+	cfg := common.NewConfig(config.ProtocolDebezium)
+	cfg.EnableTiDBExtension = true
+	cfg.TimeZone = time.UTC
+
+	encoder := NewBatchEncoder(cfg, "dbserver1")
+	routedDDL := common.NewRoutedDDLEvent4Test()
+	message, err := encoder.EncodeDDLEvent(routedDDL)
+	require.NoError(t, err)
+	require.NotNil(t, message)
+
+	decoder := NewDecoder(cfg, 0, nil)
+	decoder.AddKeyValue(message.Key, message.Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	decoded := decoder.NextDDLEvent()
+	require.Equal(t, "target_db", decoded.SchemaName)
+	require.Equal(t, "target_table", decoded.TableName)
+	require.Equal(t, routedDDL.Query, decoded.Query)
+}
+
+>>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 func TestDebeziumSuiteEnableSchema(t *testing.T) {
 	suite.Run(t, &debeziumSuite{
 		disableSchema: false,
