@@ -37,6 +37,19 @@ import (
 
 const kafkaSinkTestTopic = "mock_topic"
 
+func TestVerifyValidatesEncoderConfigBeforeKafkaConnection(t *testing.T) {
+	openProtocol := config.ProtocolOpen.String()
+	sinkConfig := &config.SinkConfig{Protocol: &openProtocol}
+	sinkURI, err := url.Parse("kafka://127.0.0.1:1/" + kafkaSinkTestTopic + "?max-batch-size=0")
+	require.NoError(t, err)
+
+	changefeedID := common.NewChangefeedID4Test("test", "verify-existing-topic")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err = Verify(ctx, changefeedID, sinkURI, sinkConfig)
+	require.ErrorContains(t, err, "invalid max-batch-size 0")
+}
+
 func newKafkaSinkForTestWithProducers(ctx context.Context,
 	t *testing.T,
 	ctrl *gomock.Controller,

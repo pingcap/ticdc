@@ -736,7 +736,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			require.Equal(
 				t,
 				min(configuredMaxMessageBytes, expectedProducerLimit),
-				encoderConfig.MaxBatchedBytes(),
+				encoderConfig.MaxBatchedBytes,
 			)
 
 			adminClient.Close()

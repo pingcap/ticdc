@@ -533,7 +533,7 @@ func TestOtherTypes(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 	job := helper.DDL2Job(`create table test.t(
-    	id int primary key auto_increment,
+		id int primary key auto_increment,
     	a bool, b bool, c year,
 		d bit(10), e json,
 		f decimal(10,2),
@@ -541,7 +541,7 @@ func TestOtherTypes(t *testing.T) {
 	tableInfo := helper.GetTableInfo(job)
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a, b, c, d, e, f, g, h) values (
-   		true, false, 2000,
+		true, false, 2000,
 	    0b0101010101, '{"key1": "value1"}',
 	    153.123,
 	    'a', 'a,b')`)
