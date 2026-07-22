@@ -406,10 +406,18 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 			err := adminClient.CreateTopic(detail, false)
 			require.NoError(t, err)
 
-			options := NewOptions()
-			options.BrokerEndpoints = []string{"127.0.0.1:9092"}
 			configuredMaxMessageBytes := test.configuredMaxMessageBytes(adminFixture)
-			options.MaxMessageBytes = configuredMaxMessageBytes
+			sinkURI, err := url.Parse(fmt.Sprintf(
+				"kafka://127.0.0.1:9092/%s?max-message-bytes=%d",
+				topicName, configuredMaxMessageBytes,
+			))
+			require.NoError(t, err)
+
+			options := NewOptions()
+			err = options.Apply(changefeedID, sinkURI, config.GetDefaultReplicaConfig().Sink)
+			require.NoError(t, err)
+			require.Equal(t, configuredMaxMessageBytes, options.MaxMessageBytes)
+			require.Equal(t, configuredMaxMessageBytes, options.MaxBatchedBytes)
 			expectedProducerLimit := expectedAdjustedMaxMessageBytes(
 				adminFixture.brokerMessageMaxBytes())
 
