@@ -537,7 +537,7 @@ func TestEventScannerSplitsLargeTxnWithRowLevelProgress(t *testing.T) {
 	resolved, ok := events[0].(event.ResolvedEvent)
 	require.True(t, ok)
 	require.Equal(t, resolvedTs, resolved.ResolvedTs)
-	require.Nil(t, disp.bigTxnMetricState)
+	require.Nil(t, disp.bigTxnMetrics.pending)
 }
 
 func TestEventScannerDoesNotSplitCurrentTxnBelowLargeTxnThreshold(t *testing.T) {

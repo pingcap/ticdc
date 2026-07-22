@@ -22,8 +22,6 @@ import (
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/metrics"
-	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 )
@@ -78,66 +76,6 @@ func TestDispatcherStatResolvedTs(t *testing.T) {
 	// Test same ts update
 	updated = stat.onResolvedTs(150)
 	require.False(t, updated)
-}
-
-func TestDispatcherStatBigTxnMetricsCountSplitTxnOnce(t *testing.T) {
-	beforeHistogramCount, beforeHistogramSum := readBigTxnSizeMetric(t)
-	beforeCounter := readBigTxnCountMetric(t)
-
-	stat := &dispatcherStat{}
-	stat.addBigTxnMetricFragment(100, 200, 70, 50)
-
-	histogramCount, histogramSum := readBigTxnSizeMetric(t)
-	require.Equal(t, beforeHistogramCount, histogramCount)
-	require.Equal(t, beforeHistogramSum, histogramSum)
-	require.Equal(t, beforeCounter, readBigTxnCountMetric(t))
-
-	stat.finishBigTxnMetric(100, 200, 30, 50)
-
-	histogramCount, histogramSum = readBigTxnSizeMetric(t)
-	require.Equal(t, beforeHistogramCount+1, histogramCount)
-	require.Equal(t, beforeHistogramSum+100, histogramSum)
-	require.Equal(t, beforeCounter+1, readBigTxnCountMetric(t))
-}
-
-func TestDispatcherStatBigTxnMetricsFlushPreviousTxn(t *testing.T) {
-	beforeHistogramCount, beforeHistogramSum := readBigTxnSizeMetric(t)
-	beforeCounter := readBigTxnCountMetric(t)
-
-	stat := &dispatcherStat{}
-	stat.addBigTxnMetricFragment(100, 200, 70, 50)
-	stat.addBigTxnMetricFragment(101, 201, 80, 50)
-
-	histogramCount, histogramSum := readBigTxnSizeMetric(t)
-	require.Equal(t, beforeHistogramCount+1, histogramCount)
-	require.Equal(t, beforeHistogramSum+70, histogramSum)
-	require.Equal(t, beforeCounter+1, readBigTxnCountMetric(t))
-	require.Equal(t, &bigTxnMetricState{
-		startTs:                  101,
-		commitTs:                 201,
-		rawKVBytes:               80,
-		largeTxnThresholdInBytes: 50,
-	}, stat.bigTxnMetricState)
-}
-
-func readBigTxnSizeMetric(t *testing.T) (uint64, float64) {
-	t.Helper()
-
-	metric := &dto.Metric{}
-	require.NoError(t, metrics.EventServiceBigTxnSize.Write(metric))
-	histogram := metric.GetHistogram()
-	require.NotNil(t, histogram)
-	return histogram.GetSampleCount(), histogram.GetSampleSum()
-}
-
-func readBigTxnCountMetric(t *testing.T) float64 {
-	t.Helper()
-
-	metric := &dto.Metric{}
-	require.NoError(t, metrics.EventServiceBigTxnCount.Write(metric))
-	counter := metric.GetCounter()
-	require.NotNil(t, counter)
-	return counter.GetValue()
 }
 
 func TestDispatcherStatGetScanRequest(t *testing.T) {

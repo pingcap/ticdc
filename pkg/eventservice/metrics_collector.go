@@ -106,14 +106,6 @@ func updateMetricEventServiceSendDMLTypeCount(mode int64, rawType string, update
 	metrics.EventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(mode), rawType).Inc()
 }
 
-func updateMetricEventServiceBigTxn(rawKVBytes int64) {
-	if rawKVBytes <= 0 {
-		return
-	}
-	metrics.EventServiceBigTxnSize.Observe(float64(rawKVBytes))
-	metrics.EventServiceBigTxnCount.Inc()
-}
-
 // dispatcherHeapItem wraps dispatcherStat to implement heap.Item interface.
 // The heap maintains the slowest dispatchers by checkpointTs.
 // The heap top is the fastest (largest checkpointTs) among the slowest ones.

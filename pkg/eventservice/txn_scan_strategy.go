@@ -152,7 +152,7 @@ func finishPendingSplitTxn(session *session, next nextTxnMeta) bool {
 		return false
 	}
 
-	dispatcher.finishPendingBigTxnMetric()
+	dispatcher.bigTxnMetrics.flush()
 	dispatcher.markLargeTxnDrainInserts(state.startTs, state.commitTs, next.commitTs != 0, next.commitTs)
 	session.progress = newTxnScanProgress(state.commitTs, state.startTs)
 	return true
@@ -267,7 +267,7 @@ func interruptCurrentTxn(
 	if processor.currentTxn != nil {
 		currentTxn := processor.currentTxn
 		currentDML := currentTxn.CurrentDMLEvent
-		ctx.session.dispatcherStat.addBigTxnMetricFragment(
+		ctx.session.dispatcherStat.bigTxnMetrics.addFragment(
 			currentDML.GetStartTs(),
 			currentDML.GetCommitTs(),
 			currentTxn.rawKVBytes,

@@ -106,15 +106,18 @@ type dispatcherStat struct {
 	// Note: Please don't changed this value directly, use updateSentResolvedTs instead.
 	sentResolvedTs atomic.Uint64
 
-	// lastScanProgress is published as one immutable value so the next scan
-	// cannot observe a cursor assembled from different scan results.
+	// lastScanProgress is the resume point produced by the previous scan. It keeps
+	// the transaction cursor and optional row-level cursor in one immutable snapshot,
+	// so the next scan cannot combine fields from different scan attempts and resume
+	// from an invalid position.
 	lastScanProgress atomic.Pointer[scanProgress]
 
 	largeTxnStateMu sync.Mutex
 	largeTxnState   *largeTxnScanState
 
-	// bigTxnMetricState is updated only by the serialized scan task of this dispatcher.
-	bigTxnMetricState *bigTxnMetricState
+	// bigTxnMetrics aggregates one sample per logical transaction across row-level
+	// scan interruptions. It is updated only by this dispatcher's serialized scan task.
+	bigTxnMetrics bigTxnMetricTracker
 
 	// isRemoved is used to indicate whether the dispatcher is removed.
 	// it is set to true in the following two cases:
@@ -137,6 +140,10 @@ type dispatcherStat struct {
 	// this dispatcher.
 	isTaskScanning atomic.Bool
 
+	// activeScanMu protects activeScan and serializes scan registration with
+	// markRemoved. activeScan lets reset/remove cancel the in-flight scan before
+	// cleaning up its large-transaction state, including interrupting TiKV/KMS
+	// calls made by spill encryption.
 	activeScanMu sync.Mutex
 	activeScan   *activeDispatcherScan
 }
@@ -280,74 +287,6 @@ func (a *dispatcherStat) loadScanProgress() scanProgress {
 	result := *progress
 	result.rowLevelScanPosition = cloneScanPosition(result.rowLevelScanPosition)
 	return result
-}
-
-type bigTxnMetricState struct {
-	startTs                  uint64
-	commitTs                 uint64
-	rawKVBytes               int64
-	largeTxnThresholdInBytes int64
-}
-
-func (a *dispatcherStat) addBigTxnMetricFragment(
-	startTs uint64,
-	commitTs uint64,
-	rawKVBytes int64,
-	largeTxnThresholdInBytes int64,
-) {
-	if rawKVBytes <= largeTxnThresholdInBytes {
-		return
-	}
-	if a.bigTxnMetricState == nil ||
-		a.bigTxnMetricState.startTs != startTs ||
-		a.bigTxnMetricState.commitTs != commitTs {
-		a.finishPendingBigTxnMetricBefore(startTs, commitTs)
-		a.bigTxnMetricState = &bigTxnMetricState{
-			startTs:                  startTs,
-			commitTs:                 commitTs,
-			largeTxnThresholdInBytes: largeTxnThresholdInBytes,
-		}
-	}
-	a.bigTxnMetricState.rawKVBytes += rawKVBytes
-}
-
-func (a *dispatcherStat) finishBigTxnMetric(
-	startTs uint64,
-	commitTs uint64,
-	rawKVBytes int64,
-	largeTxnThresholdInBytes int64,
-) {
-	totalRawKVBytes := rawKVBytes
-	if a.bigTxnMetricState != nil {
-		if a.bigTxnMetricState.startTs == startTs && a.bigTxnMetricState.commitTs == commitTs {
-			totalRawKVBytes += a.bigTxnMetricState.rawKVBytes
-		} else if a.bigTxnMetricState.rawKVBytes > a.bigTxnMetricState.largeTxnThresholdInBytes {
-			updateMetricEventServiceBigTxn(a.bigTxnMetricState.rawKVBytes)
-		}
-		a.bigTxnMetricState = nil
-	}
-	if totalRawKVBytes > largeTxnThresholdInBytes {
-		updateMetricEventServiceBigTxn(totalRawKVBytes)
-	}
-}
-
-func (a *dispatcherStat) finishPendingBigTxnMetric() {
-	if a.bigTxnMetricState == nil {
-		return
-	}
-	state := a.bigTxnMetricState
-	a.bigTxnMetricState = nil
-	if state.rawKVBytes > state.largeTxnThresholdInBytes {
-		updateMetricEventServiceBigTxn(state.rawKVBytes)
-	}
-}
-
-func (a *dispatcherStat) finishPendingBigTxnMetricBefore(startTs uint64, commitTs uint64) {
-	if a.bigTxnMetricState == nil ||
-		(a.bigTxnMetricState.startTs == startTs && a.bigTxnMetricState.commitTs == commitTs) {
-		return
-	}
-	a.finishPendingBigTxnMetric()
 }
 
 // onResolvedTs try to update the resolved ts of the dispatcher.

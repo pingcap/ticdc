@@ -258,7 +258,7 @@ func (s *eventScanner) scanAndMergeEvents(
 			err = finalizeScan(merger, processor, session, session.dataRange.CommitTsEnd)
 			return false, err
 		}
-		dispatcher.finishPendingBigTxnMetricBefore(rawEvent.StartTs, rawEvent.CRTs)
+		dispatcher.bigTxnMetrics.flushBefore(rawEvent.StartTs, rawEvent.CRTs)
 
 		if processor.currentTxn == nil {
 			interrupted, err := strategy.finishTxn(scanCtx, nextTxnMeta{
@@ -403,7 +403,8 @@ func (s *eventScanner) commitTxn(
 		return err
 	}
 	if hasCurrentTxn {
-		session.dispatcherStat.finishBigTxnMetric(startTs, commitTs, rawKVBytes, largeTxnThresholdInBytes)
+		session.dispatcherStat.bigTxnMetrics.finishTxn(
+			startTs, commitTs, rawKVBytes, largeTxnThresholdInBytes)
 	}
 	currentBatchDML := processor.getCurrentBatchDML()
 
@@ -452,9 +453,10 @@ func finalizeScan(
 		return err
 	}
 	if hasCurrentTxn {
-		sess.dispatcherStat.finishBigTxnMetric(startTs, commitTs, rawKVBytes, largeTxnThresholdInBytes)
+		sess.dispatcherStat.bigTxnMetrics.finishTxn(
+			startTs, commitTs, rawKVBytes, largeTxnThresholdInBytes)
 	} else {
-		sess.dispatcherStat.finishPendingBigTxnMetric()
+		sess.dispatcherStat.bigTxnMetrics.flush()
 	}
 
 	resolvedBatch := processor.getCurrentBatchDML()
