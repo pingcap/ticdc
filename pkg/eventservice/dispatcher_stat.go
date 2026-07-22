@@ -45,6 +45,7 @@ const (
 	dispatcherScanIdle dispatcherScanState = iota
 	dispatcherScanQueued
 	dispatcherScanRunning
+	dispatcherScanRunningPending
 	dispatcherScanSchemaBlocked
 	dispatcherScanRemoved
 )
@@ -226,7 +227,9 @@ func (a *dispatcherStat) markRemoved() {
 func (a *dispatcherStat) isScanBusy() bool {
 	a.scanMu.Lock()
 	defer a.scanMu.Unlock()
-	return a.scanState == dispatcherScanQueued || a.scanState == dispatcherScanRunning
+	return a.scanState == dispatcherScanQueued ||
+		a.scanState == dispatcherScanRunning ||
+		a.scanState == dispatcherScanRunningPending
 }
 
 func (a *dispatcherStat) isHandshaked() bool {

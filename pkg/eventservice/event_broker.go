@@ -1005,6 +1005,8 @@ func (c *eventBroker) requestScan(d *dispatcherStat) {
 	}
 	if d.scanState == dispatcherScanIdle {
 		c.tryEnqueueScanLocked(d, dispatcherScanIdle)
+	} else if d.scanState == dispatcherScanRunning {
+		d.scanState = dispatcherScanRunningPending
 	}
 }
 
@@ -1032,7 +1034,7 @@ func (c *eventBroker) finishScan(
 		d.schemaBlockedUntilTs = 0
 		return
 	}
-	if d.scanState != dispatcherScanRunning {
+	if d.scanState != dispatcherScanRunning && d.scanState != dispatcherScanRunningPending {
 		return
 	}
 
@@ -1047,6 +1049,11 @@ func (c *eventBroker) finishScan(
 		bucket := c.getSchemaBlockedDispatcherBucket(d)
 		bucket.dispatchers.Store(d, struct{}{})
 		bucket.dirty.Store(true)
+		return
+	}
+	if d.scanState == dispatcherScanRunningPending {
+		d.schemaBlockedUntilTs = 0
+		c.tryEnqueueScanLocked(d, dispatcherScanIdle)
 		return
 	}
 

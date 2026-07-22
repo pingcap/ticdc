@@ -151,7 +151,7 @@ func TestOnNotify(t *testing.T) {
 	require.Equal(t, uint64(104), disp.sentResolvedTs.Load())
 }
 
-func TestScanRequestWhileRunningIsDropped(t *testing.T) {
+func TestScanRequestWhileRunningSchedulesContinuation(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()
 
@@ -166,14 +166,73 @@ func TestScanRequestWhileRunningIsDropped(t *testing.T) {
 	require.True(t, task.beginScan())
 
 	broker.onNotify(disp, 200, 0)
-	require.Equal(t, uint64(200), disp.receivedResolvedTs.Load())
+	broker.onNotify(disp, 201, 0)
+	require.Equal(t, uint64(201), disp.receivedResolvedTs.Load())
 	require.Empty(t, broker.taskChan[0])
+	disp.scanMu.Lock()
+	require.Equal(t, dispatcherScanRunningPending, disp.scanState)
+	disp.scanMu.Unlock()
 
 	broker.finishScan(disp, false, false, 0)
-	require.False(t, disp.isScanBusy())
-
-	broker.onNotify(disp, 201, 0)
+	require.True(t, disp.isScanBusy())
 	require.Len(t, broker.taskChan[0], 1)
+
+	task = <-broker.taskChan[0]
+	require.True(t, task.beginScan())
+	broker.finishScan(disp, false, false, 0)
+	require.False(t, disp.isScanBusy())
+}
+
+func TestScanContinuationQueueFullRestoresIdle(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	queue := make(chan scanTask, 1)
+	broker.taskChan[0] = queue
+	info := newMockDispatcherInfoForTest(t)
+	status := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+
+	broker.requestScan(disp)
+	task := <-queue
+	require.True(t, task.beginScan())
+	broker.onNotify(disp, 200, 0)
+	queue <- nil
+
+	broker.finishScan(disp, false, false, 0)
+	disp.scanMu.Lock()
+	require.Equal(t, dispatcherScanIdle, disp.scanState)
+	disp.scanMu.Unlock()
+	require.Len(t, queue, 1)
+}
+
+func TestRunningNotifyParksAtSchemaBlock(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+	broker.lowLatencyMode = true
+
+	info := newMockDispatcherInfoForTest(t)
+	status := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	disp.scanState = dispatcherScanRunning
+
+	broker.onNotify(disp, 200, 0)
+	broker.finishScan(disp, false, true, 100)
+
+	disp.scanMu.Lock()
+	require.Equal(t, dispatcherScanSchemaBlocked, disp.scanState)
+	require.Equal(t, uint64(100), disp.schemaBlockedUntilTs)
+	disp.scanMu.Unlock()
+	require.Empty(t, broker.taskChan[0])
+
+	keyspaceMeta := common.KeyspaceMeta{
+		ID:   info.GetTableSpan().KeyspaceID,
+		Name: info.GetChangefeedID().Keyspace(),
+	}
+	value, ok := broker.schemaBlockedByKeyspace.Load(keyspaceMeta)
+	require.True(t, ok)
+	_, ok = value.(*schemaBlockedDispatcherBucket).dispatchers.Load(disp)
+	require.True(t, ok)
 }
 
 func TestScanRequestQueueFullRestoresIdle(t *testing.T) {
