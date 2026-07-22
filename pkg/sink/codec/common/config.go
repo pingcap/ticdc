@@ -41,9 +41,7 @@ type Config struct {
 
 	Protocol config.Protocol
 
-	// MaxMessageBytes is the encoded message size limit.
 	MaxMessageBytes int
-	// MaxBatchedBytes controls batched message size limit.
 	MaxBatchedBytes int
 	MaxBatchSize    int
 
@@ -466,29 +464,17 @@ func (c *Config) Validate() error {
 	}
 
 	if c.MaxMessageBytes <= 0 {
-		return errors.ErrCodecInvalidConfig.Wrap(
-			errors.Errorf("invalid max-message-bytes %d", c.MaxMessageBytes),
-		)
+		return errors.ErrCodecInvalidConfig.GenWithStack("invalid max-message-bytes %d", c.MaxMessageBytes)
 	}
 	if c.MaxBatchedBytes < 0 {
-		return errors.ErrCodecInvalidConfig.Wrap(
-			errors.Errorf("invalid max-batch-message-bytes %d", c.MaxBatchedBytes),
-		)
+		return errors.ErrCodecInvalidConfig.GenWithStack("invalid max-batch-message-bytes %d", c.MaxBatchedBytes)
 	}
 	if c.MaxBatchedBytes > c.MaxMessageBytes {
-		return errors.ErrCodecInvalidConfig.Wrap(
-			errors.Errorf(
-				"max-batch-message-bytes %d cannot be greater than max-message-bytes %d",
-				c.MaxBatchedBytes,
-				c.MaxMessageBytes,
-			),
-		)
+		return errors.ErrCodecInvalidConfig.GenWithStack("max-batch-message-bytes %d cannot be greater than max-message-bytes %d", c.MaxBatchedBytes, c.MaxMessageBytes)
 	}
 
 	if c.MaxBatchSize <= 0 {
-		return errors.ErrCodecInvalidConfig.Wrap(
-			errors.Errorf("invalid max-batch-size %d", c.MaxBatchSize),
-		)
+		return errors.ErrCodecInvalidConfig.GenWithStack("invalid max-batch-size %d", c.MaxBatchSize)
 	}
 
 	if c.LargeMessageHandle != nil {

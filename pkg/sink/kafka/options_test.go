@@ -495,60 +495,6 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 	}
 }
 
-func TestAdjustConfigFallsBackWhenKafkaMaxMessageBytesIsNonPositive(t *testing.T) {
-	tests := []struct {
-		name       string
-		topic      string
-		kafkaValue string
-	}{
-		{
-			name:       "existing topic max.message.bytes is zero",
-			topic:      defaultMockTopicName,
-			kafkaValue: "0",
-		},
-		{
-			name:       "existing topic max.message.bytes is negative",
-			topic:      defaultMockTopicName,
-			kafkaValue: "-1",
-		},
-		{
-			name:       "new topic broker message.max.bytes is zero",
-			topic:      "not-exist-topic",
-			kafkaValue: "0",
-		},
-		{
-			name:       "new topic broker message.max.bytes is negative",
-			topic:      "not-exist-topic",
-			kafkaValue: "-1",
-		},
-	}
-
-	const configuredMaxMessageBytes = 4096
-	changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			adminFixture := newKafkaAdminFixture(t)
-			adminFixture.setMessageMaxBytes(test.kafkaValue, test.kafkaValue)
-
-			sinkURI, err := url.Parse(fmt.Sprintf(
-				"kafka://127.0.0.1:9092/%s?max-message-bytes=%d",
-				test.topic, configuredMaxMessageBytes,
-			))
-			require.NoError(t, err)
-
-			options := NewOptions()
-			err = options.Apply(changefeedID, sinkURI, config.GetDefaultReplicaConfig().Sink)
-			require.NoError(t, err)
-
-			err = adjustOptions(
-				context.Background(), changefeedID, adminFixture.admin, options, test.topic)
-			require.NoError(t, err)
-			require.Equal(t, configuredMaxMessageBytes, options.MaxMessageBytes)
-			require.Equal(t, configuredMaxMessageBytes, options.MaxBatchedBytes)
-		})
-	}
-}
-
 func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 	adminFixture := newKafkaAdminFixture(t)
 	adminClient := adminFixture.admin

@@ -38,7 +38,7 @@ var (
 )
 
 // batchEncoder for open protocol will batch multiple row changed events into a single message.
-// One message can contain at most MaxBatchSize events, and the total size of the message cannot exceed BatchMaxMessageBytes.
+// One message can contain at most MaxBatchSize events, and the total size of the message cannot exceed MaxBatchedBytes.
 type batchEncoder struct {
 	messages []*common.Message
 	// buff the callback of the latest message

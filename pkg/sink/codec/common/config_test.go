@@ -35,17 +35,54 @@ func TestApplyReturnsSinkInvalidConfigForQueryBindingError(t *testing.T) {
 }
 
 func TestValidateMaxBatchMessageBytes(t *testing.T) {
-	cfg := NewConfig(config.ProtocolOpen)
-	cfg.MaxMessageBytes = 100
-	cfg.MaxBatchedBytes = 101
+	tests := []struct {
+		name     string
+		adjust   func(*Config)
+		expected string
+	}{
+		{
+			name: "non-positive max message bytes",
+			adjust: func(cfg *Config) {
+				cfg.MaxMessageBytes = 0
+			},
+			expected: "invalid max-message-bytes 0",
+		},
+		{
+			name: "negative max batched bytes",
+			adjust: func(cfg *Config) {
+				cfg.MaxBatchedBytes = -1
+			},
+			expected: "invalid max-batch-message-bytes -1",
+		},
+		{
+			name: "max batched bytes exceeds max message bytes",
+			adjust: func(cfg *Config) {
+				cfg.MaxMessageBytes = 100
+				cfg.MaxBatchedBytes = 101
+			},
+			expected: "max-batch-message-bytes 101 cannot be greater than max-message-bytes 100",
+		},
+		{
+			name: "non-positive max batch size",
+			adjust: func(cfg *Config) {
+				cfg.MaxBatchSize = 0
+			},
+			expected: "invalid max-batch-size 0",
+		},
+	}
 
-	err := cfg.Validate()
-	require.Error(t, err)
-	require.ErrorContains(
-		t,
-		err,
-		"max-batch-message-bytes 101 cannot be greater than max-message-bytes 100",
-	)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := NewConfig(config.ProtocolOpen)
+			test.adjust(cfg)
+
+			err := cfg.Validate()
+			require.ErrorContains(t, err, test.expected)
+			errCode, ok := errors.RFCCode(err)
+			require.True(t, ok, err)
+			require.Equal(t, errors.ErrCodecInvalidConfig.RFCCode(), errCode)
+		})
+	}
 }
 
 func TestDebeziumAvroSchemaRegistryConfig(t *testing.T) {
