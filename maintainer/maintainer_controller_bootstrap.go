@@ -1139,14 +1139,15 @@ func (c *Controller) restoreCurrentWorkingRemoveAction(
 		replicaSet.SetNodeID(nodeID)
 	}
 
-	if err := c.handleCurrentWorkingRemove(req, spanController, replicaSet, nodeID, resp); err != nil {
+	_, tableExists := tableSplitMap[span.TableID]
+	if err := c.handleCurrentWorkingRemove(req, spanController, replicaSet, nodeID, resp, tableExists); err != nil {
 		return err
 	}
 
 	// If the table is already dropped (not present in schema store at startTs), keep the remove operator so the
 	// runtime dispatcher can be cleaned up, but remove the task to avoid rescheduling a table that no longer exists.
 	if req.OperatorType == heartbeatpb.OperatorType_O_Remove {
-		if _, ok := tableSplitMap[span.TableID]; !ok {
+		if !tableExists {
 			spanController.RemoveReplicatingSpan(replicaSet)
 		}
 	}
@@ -1203,6 +1204,7 @@ func (c *Controller) handleCurrentWorkingRemove(
 	replicaSet *replica.SpanReplication,
 	node node.ID,
 	resp *heartbeatpb.MaintainerBootstrapResponse,
+	tableExists bool,
 ) error {
 	operatorController := c.getOperatorController(req.Config.Mode)
 	// handleCurrentWorkingRemove translates a bootstrap Remove request back into a maintainer-side operator.
@@ -1216,12 +1218,22 @@ func (c *Controller) handleCurrentWorkingRemove(
 	switch req.OperatorType {
 	// 1. If the original operator is remove, just finish it directly by adding a new remove operator.
 	case heartbeatpb.OperatorType_O_Remove:
+		var postFinish func()
+		if tableExists {
+			// The reported dispatcher is temporary coverage while its restored remove is active. A terminal
+			// status is consumed by this operator, so its finalizer must remove that stale coverage and create
+			// absent replicas for only the ranges that are no longer covered by other bootstrap spans.
+			postFinish = func() {
+				spanController.RemoveReplicatingSpan(replicaSet)
+				c.repairBootstrapTableCoverage(replicaSet)
+			}
+		}
 		op := operator.NewRemoveDispatcherOperator(
 			spanController,
 			replicaSet,
 			heartbeatpb.OperatorType_O_Remove,
 			operatorController.MaintainerEpoch(),
-			nil,
+			postFinish,
 		)
 		if ok := operatorController.AddOperator(op); !ok {
 			log.Error("add operator failed when dealing current working operators in bootstrap, should not happen",

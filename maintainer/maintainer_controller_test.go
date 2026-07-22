@@ -1614,6 +1614,117 @@ func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
 	}
 }
 
+// TestFinishBootstrapRepairsCoverageAfterRestoredStandaloneRemove covers failover after an
+// orphan Working dispatcher has already been journaled under a standalone remove request. The
+// test restores that request alongside adjacent live coverage, reports one terminal status, and
+// finalizes the operator. The removed range must become an exact absent span that the basic
+// scheduler can schedule again, while the adjacent dispatcher remains untouched.
+func TestFinishBootstrapRepairsCoverageAfterRestoredStandaloneRemove(t *testing.T) {
+	env := newMergeBootstrapTestEnv(t)
+	responses := env.bootstrapResponses(
+		nil,
+		env.bootstrapSpan(env.sourceDispatcherID1, env.sourceSpan1, heartbeatpb.ComponentState_Working),
+		env.bootstrapSpan(env.sourceDispatcherID2, env.sourceSpan2, heartbeatpb.ComponentState_Working),
+	)
+	responses[env.nodeID].Operators = []*heartbeatpb.ScheduleDispatcherRequest{
+		env.standaloneRemoveRequest(env.sourceDispatcherID1, env.sourceSpan1),
+	}
+
+	_, err := env.controller.FinishBootstrap(responses, false)
+	require.NoError(t, err)
+	require.Equal(t, 2, env.controller.spanController.GetReplicatingSize())
+	require.Zero(t, env.controller.spanController.GetAbsentSize())
+
+	restoredRemove := env.controller.operatorController.GetOperator(env.sourceDispatcherID1)
+	require.NotNil(t, restoredRemove)
+	require.Equal(t, "remove", restoredRemove.Type())
+
+	// A single terminal status finishes the restored operator. The same HandleStatus call still
+	// sees the operator, so coverage repair must happen when the controller finalizes it.
+	env.controller.HandleStatus(env.nodeID, []*heartbeatpb.TableSpanStatus{
+		{
+			ID:              env.sourceDispatcherID1.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Stopped,
+			CheckpointTs:    10,
+			Mode:            common.DefaultMode,
+		},
+	})
+	require.True(t, restoredRemove.IsFinished())
+	require.NotNil(t, env.controller.operatorController.GetOperator(env.sourceDispatcherID1))
+	require.Zero(t, env.controller.spanController.GetAbsentSize())
+
+	env.controller.operatorController.Execute()
+
+	require.Nil(t, env.controller.operatorController.GetOperator(env.sourceDispatcherID1))
+	require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
+	require.NotNil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID2))
+	require.Equal(t, 1, env.controller.spanController.GetReplicatingSize())
+	require.Equal(t, 1, env.controller.spanController.GetAbsentSize())
+
+	var repairedSpan *replica.SpanReplication
+	for _, task := range env.controller.spanController.GetTasksByTableID(env.sourceSpan1.TableID) {
+		if task.ID != env.sourceDispatcherID2 {
+			repairedSpan = task
+			break
+		}
+	}
+	require.NotNil(t, repairedSpan)
+	require.Equal(t, env.sourceSpan1.StartKey, repairedSpan.Span.StartKey)
+	require.Equal(t, env.sourceSpan1.EndKey, repairedSpan.Span.EndKey)
+
+	env.controller.schedulerController.GetScheduler(scheduler.BasicScheduler).Execute()
+	require.Zero(t, env.controller.spanController.GetAbsentSize())
+	require.Equal(t, 1, env.controller.spanController.GetSchedulingSize())
+	addOp := env.controller.operatorController.GetOperator(repairedSpan.ID)
+	require.NotNil(t, addOp)
+	require.Equal(t, "add", addOp.Type())
+}
+
+// TestFinishBootstrapDoesNotRepairDroppedTableAfterRestoredStandaloneRemove covers the same
+// restored remove lifecycle after the table has disappeared from the schema snapshot. The test
+// reports the stale runtime dispatcher and its remove journal, finishes that operator with one
+// terminal status, and verifies finalization never recreates desired state for the dropped table.
+func TestFinishBootstrapDoesNotRepairDroppedTableAfterRestoredStandaloneRemove(t *testing.T) {
+	env := newMergeBootstrapTestEnv(t)
+	schemaStore := eventservice.NewMockSchemaStore()
+	schemaStore.SetTables(nil)
+	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+
+	responses := env.bootstrapResponses(
+		nil,
+		env.bootstrapSpan(env.sourceDispatcherID1, env.sourceSpan1, heartbeatpb.ComponentState_Working),
+	)
+	responses[env.nodeID].Operators = []*heartbeatpb.ScheduleDispatcherRequest{
+		env.standaloneRemoveRequest(env.sourceDispatcherID1, env.sourceSpan1),
+	}
+
+	_, err := env.controller.FinishBootstrap(responses, false)
+	require.NoError(t, err)
+	require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
+	require.Zero(t, env.controller.spanController.GetReplicatingSize())
+	require.Zero(t, env.controller.spanController.GetAbsentSize())
+
+	restoredRemove := env.controller.operatorController.GetOperator(env.sourceDispatcherID1)
+	require.NotNil(t, restoredRemove)
+	env.controller.HandleStatus(env.nodeID, []*heartbeatpb.TableSpanStatus{
+		{
+			ID:              env.sourceDispatcherID1.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Removed,
+			CheckpointTs:    10,
+			Mode:            common.DefaultMode,
+		},
+	})
+	require.True(t, restoredRemove.IsFinished())
+
+	env.controller.operatorController.Execute()
+
+	require.Nil(t, env.controller.operatorController.GetOperator(env.sourceDispatcherID1))
+	require.Empty(t, env.controller.spanController.GetTasksByTableID(env.sourceSpan1.TableID))
+	require.Zero(t, env.controller.spanController.GetReplicatingSize())
+	require.Zero(t, env.controller.spanController.GetSchedulingSize())
+	require.Zero(t, env.controller.spanController.GetAbsentSize())
+}
+
 // TestFinishBootstrapRestoresInFlightMergeWithoutDuplicateCoverage covers maintainer failover in
 // the middle of a merge. The bootstrap snapshot contains two source spans in WaitingMerge and the
 // overlapping merged target span in Preparing. FinishBootstrap must not panic in findHoles or
@@ -2007,6 +2118,25 @@ func (env *mergeBootstrapTestEnv) mergeRequest() *heartbeatpb.MergeDispatcherReq
 		},
 		MergedDispatcherID: env.mergedDispatcherID.ToPB(),
 		Mode:               common.DefaultMode,
+	}
+}
+
+// standaloneRemoveRequest builds the canonical remove journal used by bootstrap recovery tests.
+func (env *mergeBootstrapTestEnv) standaloneRemoveRequest(
+	dispatcherID common.DispatcherID,
+	span *heartbeatpb.TableSpan,
+) *heartbeatpb.ScheduleDispatcherRequest {
+	return &heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: env.cfID.ToPB(),
+		Config: &heartbeatpb.DispatcherConfig{
+			DispatcherID: dispatcherID.ToPB(),
+			SchemaID:     1,
+			Span:         span,
+			StartTs:      10,
+			Mode:         common.DefaultMode,
+		},
+		ScheduleAction: heartbeatpb.ScheduleAction_Remove,
+		OperatorType:   heartbeatpb.OperatorType_O_Remove,
 	}
 }
 
