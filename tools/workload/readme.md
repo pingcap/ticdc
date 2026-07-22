@@ -203,5 +203,3 @@ Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_sec
 - `wide_table_with_json` always generates JSON-like payload data.
 - For workloads that support partitioned tables (e.g. bank3), set `-partitioned=false` to create non-partitioned tables.
 - `-bank3-partitioned` is deprecated; use `-partitioned`.
-- For non-partitioned bank3 tables, use `-uniform-write` to distribute inserts round-robin across tables and uniformly across random clustered primary-key ranges. This mode omits secondary indexes so constant indexed values cannot create write-hot regions.
-- Use `-uniform-payload-bytes` with `-uniform-write` to add a fixed 0-4096 byte payload per row when calibrating byte throughput. Its default value is 0, which leaves the existing schema and inserts unchanged.

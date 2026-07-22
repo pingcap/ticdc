@@ -70,8 +70,6 @@ type WorkloadApp struct {
 	DBManager *DBManager
 	Workload  schema.Workload
 	Stats     *WorkloadStats
-
-	nextInsertTable atomic.Uint64
 }
 
 const (
@@ -141,7 +139,7 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 	case bank2:
 		workload = pbank2.NewBank2Workload()
 	case bank3:
-		workload = pbank3.NewBankWorkload(app.Config.Partitioned, app.Config.UniformWrite, app.Config.UniformPayloadBytes)
+		workload = pbank3.NewBankWorkload(app.Config.Partitioned)
 	case bankUpdate:
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
 	case dc:
@@ -350,7 +348,7 @@ func (app *WorkloadApp) isConnectionError(err error) bool {
 }
 
 func (app *WorkloadApp) doInsertOnce(conn *sql.Conn) (uint64, error) {
-	tableIndex := app.nextInsertTableIndex()
+	tableIndex := rand.Intn(app.Config.TableCount) + app.Config.TableStartIndex
 	var (
 		res sql.Result
 		err error
@@ -390,14 +388,6 @@ func (app *WorkloadApp) doInsertOnce(conn *sql.Conn) (uint64, error) {
 	}
 
 	return uint64(cnt), nil
-}
-
-func (app *WorkloadApp) nextInsertTableIndex() int {
-	if app.Config.UniformWrite {
-		next := app.nextInsertTable.Add(1) - 1
-		return int(next%uint64(app.Config.TableCount)) + app.Config.TableStartIndex
-	}
-	return rand.Intn(app.Config.TableCount) + app.Config.TableStartIndex
 }
 
 // execute executes a SQL statement
