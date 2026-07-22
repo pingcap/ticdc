@@ -253,6 +253,9 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	}
 
 	if urlParameter.MaxMessageBytes != nil {
+		if *urlParameter.MaxMessageBytes <= 0 {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("invalid max-message-bytes %d", *urlParameter.MaxMessageBytes)
+		}
 		o.MaxMessageBytes = *urlParameter.MaxMessageBytes
 	}
 	o.MaxBatchedBytes = o.MaxMessageBytes
@@ -695,7 +698,7 @@ func getTopicMaxMessageBytes(
 	admin ClusterAdminClient,
 	topic string,
 ) (int, error) {
-	maxMessageBytesStr, err := getTopicConfig(
+	raw, err := getTopicConfig(
 		ctx, admin, topic,
 		TopicMaxMessageBytesConfigName,
 		BrokerMessageMaxBytesConfigName,
@@ -703,7 +706,7 @@ func getTopicMaxMessageBytes(
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
-	maxMessageBytes, err := strconv.Atoi(maxMessageBytesStr)
+	maxMessageBytes, err := strconv.Atoi(raw)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
@@ -711,15 +714,15 @@ func getTopicMaxMessageBytes(
 }
 
 func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, error) {
-	maxMessageBytesStr, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
+	raw, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
-	maxMessageBytes, err := strconv.Atoi(maxMessageBytesStr)
+	messageMaxBytes, err := strconv.Atoi(raw)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
-	return maxMessageBytes, nil
+	return messageMaxBytes, nil
 }
 
 func validateMinInsyncReplicas(

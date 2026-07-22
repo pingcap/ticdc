@@ -468,7 +468,16 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 
 	targetTable := e.TableInfo.GetTargetTableName()
 	originLength := m.Length()
-	if m.Length() > c.config.MaxMessageBytes && !c.config.LargeMessageHandle.Disabled() {
+	if m.Length() > c.config.MaxMessageBytes {
+		// for single message that is longer than max-message-bytes, do not send it.
+		if c.config.LargeMessageHandle.Disabled() {
+			log.Error("Single message is too large for canal-json",
+				zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
+				zap.Int("length", originLength),
+				zap.Any("table", e.TableInfo.TableName))
+			return errors.ErrMessageTooLarge.GenWithStackByArgs(targetTable, originLength, c.config.MaxMessageBytes)
+		}
+
 		if c.config.LargeMessageHandle.HandleKeyOnly() {
 			value, err = newJSONMessageForDML(e, c.config, true, "")
 			if err != nil {
@@ -509,14 +518,6 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 				return err
 			}
 		}
-	}
-
-	if m.Length() > c.config.MaxMessageBytes {
-		log.Error("Single message is too large for canal-json",
-			zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
-			zap.Int("length", m.Length()),
-			zap.Any("table", e.TableInfo.TableName))
-		return errors.ErrMessageTooLarge.GenWithStackByArgs(targetTable, m.Length(), c.config.MaxMessageBytes)
 	}
 
 	c.messages = append(c.messages, m)

@@ -41,10 +41,9 @@ type Config struct {
 
 	Protocol config.Protocol
 
-	// MaxMessageBytes is the final encoded message size limit.
+	// MaxMessageBytes is the encoded message size limit.
 	MaxMessageBytes int
-	// MaxBatchedBytes controls batch splitting.
-	// If it is not set, codecs use MaxMessageBytes to keep the old behavior.
+	// MaxBatchedBytes controls batched message size limit.
 	MaxBatchedBytes int
 	MaxBatchSize    int
 

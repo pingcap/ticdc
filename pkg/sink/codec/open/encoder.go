@@ -95,7 +95,17 @@ func (d *batchEncoder) AppendRowChangedEvent(
 		return errors.Trace(err)
 	}
 
-	if length > d.config.MaxMessageBytes && !d.config.LargeMessageHandle.Disabled() {
+	if length > d.config.MaxMessageBytes {
+		// message len is larger than max-message-bytes
+		if d.config.LargeMessageHandle.Disabled() {
+			log.Warn("Single message is too large for open-protocol",
+				zap.Int("maxMessageBytes", d.config.MaxMessageBytes),
+				zap.Int("length", length),
+				zap.Any("table", e.TableInfo.TableName),
+				zap.Any("key", key))
+			return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), length, d.config.MaxMessageBytes)
+		}
+
 		if d.config.LargeMessageHandle.EnableClaimCheck() {
 			// send the large message to the external storage first, then
 			// create a new message contains the reference of the large message.
@@ -137,15 +147,6 @@ func (d *batchEncoder) AppendRowChangedEvent(
 				return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), length, d.config.MaxMessageBytes)
 			}
 		}
-	}
-
-	if length > d.config.MaxMessageBytes {
-		log.Warn("Single message is too large for open-protocol",
-			zap.Int("maxMessageBytes", d.config.MaxMessageBytes),
-			zap.Int("length", length),
-			zap.Any("table", e.TableInfo.TableName),
-			zap.Any("key", key))
-		return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), length, d.config.MaxMessageBytes)
 	}
 
 	d.pushMessage(key, value, e.Callback)
