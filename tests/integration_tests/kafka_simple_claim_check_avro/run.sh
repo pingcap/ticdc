@@ -24,6 +24,8 @@ function run() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	TOPIC_NAME="kafka-simple-claim-check-avro-$RANDOM"
+	CLAIM_CHECK_DIR="/tmp/kafka-simple-avro-claim-check"
+	rm -rf "$CLAIM_CHECK_DIR"
 
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
@@ -37,6 +39,7 @@ function run() {
 
 	cdc_cli_changefeed pause -c ${changefeed_id}
 
+	kafka_topic --topic "$TOPIC_NAME" --max-message-bytes 2048 --alter
 	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=simple&encoding-format=avro&max-message-bytes=2048"
 	cdc_cli_changefeed update -c ${changefeed_id} --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml" --no-confirm
 	cdc_cli_changefeed resume -c ${changefeed_id}
@@ -48,6 +51,10 @@ function run() {
 	# sync_diff can't check non-exist table, so we check expected tables are created in downstream first
 	check_table_exists test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 200
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	if ! find "$CLAIM_CHECK_DIR" -type f -print -quit | grep -q .; then
+		echo "claim-check did not write any file to $CLAIM_CHECK_DIR"
+		exit 1
+	fi
 
 	cleanup_process $CDC_BINARY
 }

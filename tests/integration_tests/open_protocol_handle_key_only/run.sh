@@ -19,6 +19,7 @@ function run() {
 	start_tidb_cluster --workdir $WORK_DIR
 
 	TOPIC_NAME="open-protocol-handle-key-only-$RANDOM"
+	kafka_topic --topic "$TOPIC_NAME" --max-message-bytes 800
 
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})

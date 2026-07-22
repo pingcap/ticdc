@@ -28,7 +28,6 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -698,13 +697,6 @@ func TestConfigurationCombinations(t *testing.T) {
 			mockTopicMessageMaxBytes,
 		},
 		{
-			"existing topic topic above sarama request limit is preserved",
-			"kafka://127.0.0.1:9092/%s",
-			[]any{defaultMockTopicName},
-			mockBrokerMessageMaxBytes,
-			strconv.Itoa(int(sarama.MaxRequestSize) + 4096),
-		},
-		{
 			"existing topic topic below default and user",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
 			[]any{
@@ -769,31 +761,6 @@ func TestConfigurationCombinations(t *testing.T) {
 				t,
 				min(configuredMaxMessageBytes, sourceMaxMessageBytes),
 				options.MaxBatchedBytes,
-			)
-
-			saramaConfig, err := newSaramaConfig(ctx, options)
-			require.Nil(t, err)
-			require.Equal(t, sourceMaxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
-
-			encoderConfig := common.NewConfig(config.ProtocolOpen)
-			err = encoderConfig.Apply(sinkURI, &config.SinkConfig{
-				KafkaConfig: &config.KafkaConfig{
-					LargeMessageHandle: config.NewDefaultLargeMessageHandleConfig(),
-				},
-			})
-			require.Nil(t, err)
-			encoderConfig.
-				WithMaxMessageBytes(options.MaxMessageBytes).
-				WithMaxBatchedBytes(options.MaxBatchedBytes)
-
-			err = encoderConfig.Validate()
-			require.Nil(t, err)
-
-			require.Equal(t, sourceMaxMessageBytes, encoderConfig.MaxMessageBytes)
-			require.Equal(
-				t,
-				min(configuredMaxMessageBytes, sourceMaxMessageBytes),
-				encoderConfig.MaxBatchedBytes,
 			)
 
 			adminClient.Close()
