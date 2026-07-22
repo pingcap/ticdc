@@ -26,12 +26,21 @@ func NewMQRowEvents(
 	partitionGenerator partition.Generator,
 	selector commonEvent.Selector,
 ) ([]*commonEvent.MQRowEvent, error) {
-	rowEvents := NewRowEvents(event, selector, NewPostFlushRowCallback(event, uint64(event.Len())))
-	events := make([]*commonEvent.MQRowEvent, 0, len(rowEvents))
+	callback := NewPostFlushRowCallback(event, uint64(event.Len()))
+	events := make([]*commonEvent.MQRowEvent, 0, event.Len())
+	if selector == nil {
+		selector = columnselector.NewDefaultColumnSelector()
+	}
 
-	for _, rowEvent := range rowEvents {
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			event.Rewind()
+			break
+		}
+
 		index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(
-			&rowEvent.Event, partitionNum, event.TableInfo, event.CommitTs)
+			&row, partitionNum, event.TableInfo, event.CommitTs)
 		if err != nil {
 			return nil, err
 		}
@@ -43,7 +52,16 @@ func NewMQRowEvents(
 				PartitionKey:   key,
 				TotalPartition: partitionNum,
 			},
-			RowEvent: *rowEvent,
+			RowEvent: commonEvent.RowEvent{
+				PhysicalTableID: event.PhysicalTableID,
+				TableInfo:       event.TableInfo,
+				StartTs:         event.StartTs,
+				CommitTs:        event.CommitTs,
+				Event:           row,
+				Callback:        callback,
+				ColumnSelector:  selector,
+				Checksum:        row.Checksum,
+			},
 		})
 	}
 	return events, nil
