@@ -38,7 +38,10 @@ import (
 
 // confluent avro wire format, the first byte is always 0
 // https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format
-const magicByte = uint8(0)
+const (
+	magicByte                    = uint8(0)
+	schemaRegistryRequestTimeout = 30 * time.Second
+)
 
 // confluentSchemaManager is used to register Avro Schemas to the confluent Registry server,
 // look up local cache according to the table's name, and fetch from the Registry
@@ -81,6 +84,9 @@ func NewConfluentSchemaManager(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	httpCli.SetTimeout(schemaRegistryRequestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, schemaRegistryRequestTimeout)
+	defer cancel()
 	resp, err := httpCli.Get(ctx, registryURL)
 	if err != nil {
 		log.Error("Test connection to Schema Registry failed",
@@ -422,7 +428,12 @@ func httpRetry(
 
 	expBackoff := backoff.NewExponentialBackOff()
 	expBackoff.MaxInterval = time.Second * 30
+	expBackoff.MaxElapsedTime = schemaRegistryRequestTimeout
 	httpCli, err := httputil.NewClient(credential)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+	}
+	httpCli.SetTimeout(schemaRegistryRequestTimeout)
 
 	if r.Body != nil {
 		data, err = io.ReadAll(r.Body)
@@ -443,9 +454,9 @@ func httpRetry(
 			goto checkCtx
 		}
 
-		// retry 4xx codes like 409 & 422 has no meaning since it's non-recoverable
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 ||
-			(resp.StatusCode >= 400 && resp.StatusCode < 500) {
+		// Return HTTP responses to callers so they can report registry status
+		// codes. Retrying 5xx here can hide downstream failures indefinitely.
+		if resp.StatusCode >= 200 {
 			break
 		}
 		log.Warn("HTTP server returned with error", zap.Int("status", resp.StatusCode))
@@ -455,11 +466,24 @@ func httpRetry(
 	checkCtx:
 		select {
 		case <-ctx.Done():
-			return nil, errors.New("HTTP retry cancelled")
+			return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, ctx.Err())
 		default:
 		}
 
-		time.Sleep(expBackoff.NextBackOff())
+		sleepTime := expBackoff.NextBackOff()
+		if sleepTime == backoff.Stop {
+			if err != nil {
+				return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+			}
+			return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs("HTTP retry stopped")
+		}
+		timer := time.NewTimer(sleepTime)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, ctx.Err())
+		case <-timer.C:
+		}
 	}
 
 	return resp, nil
