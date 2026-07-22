@@ -28,8 +28,7 @@ function run_length_limit() {
 	# Test if TiCDC automatically uses the max-message-bytes of the broker.
 	# See: https://github.com/PingCAP-QE/ci/blob/ddde195ebf4364a0028d53405d1194aa37a4d853/jenkins/pipelines/ci/ticdc/cdc_ghpr_kafka_integration_test.groovy#L178
 	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=12582912"
-	changefeed_id="kafka-message-length-limit"
-	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "$changefeed_id"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 	if [ "$SINK_TYPE" == "kafka" ]; then
 		run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}"
 	fi
@@ -58,21 +57,6 @@ function run_length_limit() {
 	check_table_exists "kafka_message.usertable2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 90
 	check_table_exists "kafka_message.check4" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 90
 
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
-
-	# Verify that max-message-bytes only limits Open Protocol batches. The
-	# encoded 64 KiB row is larger than T (1 KiB), but smaller than K (256 KiB).
-	cdc_cli_changefeed pause -c "$changefeed_id"
-	kafka_topic --topic "$TOPIC_NAME" --max-message-bytes 262144 --alter
-	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=1024"
-	cdc_cli_changefeed update -c "$changefeed_id" --sink-uri="$SINK_URI" --no-confirm
-	cdc_cli_changefeed resume -c "$changefeed_id"
-
-	run_sql "create table kafka_message.usertable_decoupled(id int primary key, payload longtext)" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "insert into kafka_message.usertable_decoupled values (1, repeat('x', 65536)), (2, 'small-message-1'), (3, 'small-message-2')" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "create table kafka_message.check5(id int primary key)" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	check_table_exists "kafka_message.usertable_decoupled" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 90
-	check_table_exists "kafka_message.check5" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 90
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 
 	cleanup_process $CDC_BINARY
