@@ -168,3 +168,52 @@ func TestCSVTxnEventEncoderWithColumnSelector(t *testing.T) {
 	require.NotContains(t, string(messages[0].Key), "col2")
 	require.NotContains(t, string(messages[0].Value), "filtered")
 }
+
+func TestCSVTxnEventEncoderWithColumnSelectorForUpdateAndDelete(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.DDL2Event("create table test.table1(id int primary key, visible varchar(255), secret varchar(255))")
+	updateEvent, _ := helper.DML2UpdateEvent(
+		"test",
+		"table1",
+		`insert into test.table1 values (1, "visible-before", "secret-before")`,
+		`update test.table1 set visible = "visible-after", secret = "secret-after" where id = 1`,
+	)
+	deleteEvent := helper.DML2DeleteEvent(
+		"test",
+		"table1",
+		`insert into test.table1 values (2, "delete-visible", "delete-secret")`,
+		`delete from test.table1 where id = 2`,
+	)
+
+	selectors, err := columnselector.New(&config.SinkConfig{
+		ColumnSelectors: []*config.ColumnSelector{
+			{Matcher: []string{"test.table1"}, Columns: []string{"id", "visible"}},
+		},
+	})
+	require.NoError(t, err)
+
+	cfg := &common.Config{
+		Delimiter:       ",",
+		Quote:           "\"",
+		Terminator:      "\n",
+		NullString:      "\\N",
+		OutputOldValue:  true,
+		IncludeCommitTs: false,
+	}
+	selector := selectors.GetForTableInfo(updateEvent.TableInfo)
+	encoder := NewTxnEventEncoder(cfg)
+	require.NoError(t, appendTxnEventForTest(encoder, updateEvent, selector))
+	require.NoError(t, appendTxnEventForTest(encoder, deleteEvent, selector))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+	value := string(messages[0].Value)
+	require.Contains(t, value, "visible-before")
+	require.Contains(t, value, "visible-after")
+	require.Contains(t, value, "delete-visible")
+	require.NotContains(t, value, "secret-before")
+	require.NotContains(t, value, "secret-after")
+	require.NotContains(t, value, "delete-secret")
+}
