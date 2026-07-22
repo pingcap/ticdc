@@ -14,6 +14,7 @@
 package eventservice
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -135,6 +136,13 @@ type dispatcherStat struct {
 	// If so, we should wait until it is done before we send next resolvedTs event of
 	// this dispatcher.
 	isTaskScanning atomic.Bool
+
+	activeScanMu sync.Mutex
+	activeScan   *activeDispatcherScan
+}
+
+type activeDispatcherScan struct {
+	cancel context.CancelFunc
 }
 
 func newDispatcherStat(
@@ -203,6 +211,38 @@ func (a *dispatcherStat) copyStatistics(src *dispatcherStat) {
 
 func (a *dispatcherStat) isHandshaked() bool {
 	return a.seq.Load() > 0
+}
+
+func (a *dispatcherStat) beginScan(parent context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	activeScan := &activeDispatcherScan{cancel: cancel}
+
+	a.activeScanMu.Lock()
+	if a.isRemoved.Load() {
+		cancel()
+	} else {
+		a.activeScan = activeScan
+	}
+	a.activeScanMu.Unlock()
+
+	return ctx, func() {
+		cancel()
+		a.activeScanMu.Lock()
+		if a.activeScan == activeScan {
+			a.activeScan = nil
+		}
+		a.activeScanMu.Unlock()
+	}
+}
+
+func (a *dispatcherStat) markRemoved() {
+	a.activeScanMu.Lock()
+	a.isRemoved.Store(true)
+	activeScan := a.activeScan
+	a.activeScanMu.Unlock()
+	if activeScan != nil {
+		activeScan.cancel()
+	}
 }
 
 func (a *dispatcherStat) setHandshaked() {

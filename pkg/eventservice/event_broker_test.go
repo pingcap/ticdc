@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -765,6 +766,137 @@ func TestDispatcherLifecycleCleansLargeTxnState(t *testing.T) {
 		_, err := os.Stat(spillPath)
 		require.True(t, os.IsNotExist(err))
 	})
+}
+
+type blockingEncryptionManager struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (m *blockingEncryptionManager) EncryptData(
+	ctx context.Context, _ uint32, _ []byte,
+) ([]byte, error) {
+	m.once.Do(func() {
+		close(m.started)
+	})
+	<-ctx.Done()
+	return nil, context.Cause(ctx)
+}
+
+func (*blockingEncryptionManager) DecryptData(
+	_ context.Context, _ uint32, data []byte,
+) ([]byte, error) {
+	return data, nil
+}
+
+func TestDispatcherLifecycleCancelsActiveScanBeforeCleanup(t *testing.T) {
+	for _, action := range []string{"reset", "remove"} {
+		t.Run(action, func(t *testing.T) {
+			broker, _, _, _ := newEventBrokerForTest()
+			defer broker.close()
+
+			dispInfo := newMockDispatcherInfoForTest(t)
+			require.NoError(t, broker.addDispatcher(dispInfo))
+			stat := broker.getDispatcher(dispInfo.GetID()).Load()
+
+			manager := &blockingEncryptionManager{started: make(chan struct{})}
+			spill, err := newLargeTxnInsertSpillWithEncryption(
+				t.TempDir(), dispInfo.GetTableSpan().KeyspaceID, manager)
+			require.NoError(t, err)
+			state := &largeTxnScanState{
+				startTs:  90,
+				commitTs: 100,
+				tableID:  dispInfo.GetTableSpan().TableID,
+				spill:    spill,
+			}
+			stat.largeTxnStateMu.Lock()
+			stat.largeTxnState = state
+			stat.largeTxnStateMu.Unlock()
+			spillPath := spill.file.Path()
+
+			scanCtx, finishScan := stat.beginScan(context.Background())
+			defer finishScan()
+			appendErrCh := make(chan error, 1)
+			go func() {
+				appendErrCh <- state.appendInsert(scanCtx, newTestSpillRawKVEntry(1))
+			}()
+
+			select {
+			case <-manager.started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("spill encryption did not start")
+			}
+
+			lifecycleErrCh := make(chan error, 1)
+			go func() {
+				if action == "reset" {
+					resetInfo := newMockDispatcherInfo(
+						t, 500, dispInfo.GetID(), dispInfo.GetTableSpan().TableID,
+						eventpb.ActionType_ACTION_TYPE_RESET)
+					resetInfo.epoch = stat.epoch + 1
+					lifecycleErrCh <- broker.resetDispatcher(resetInfo)
+					return
+				}
+				broker.removeDispatcher(dispInfo)
+				lifecycleErrCh <- nil
+			}()
+
+			select {
+			case err := <-lifecycleErrCh:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("dispatcher lifecycle operation did not cancel active scan")
+			}
+			require.ErrorIs(t, <-appendErrCh, context.Canceled)
+			require.Nil(t, stat.getLargeTxnState())
+			require.NoFileExists(t, spillPath)
+		})
+	}
+}
+
+func TestDispatcherLifecycleRetriesFailedLargeTxnCleanup(t *testing.T) {
+	for _, action := range []string{"reset", "remove"} {
+		t.Run(action, func(t *testing.T) {
+			broker, _, _, _ := newEventBrokerForTest()
+			defer broker.close()
+
+			dispInfo := newMockDispatcherInfoForTest(t)
+			require.NoError(t, broker.addDispatcher(dispInfo))
+			stat := broker.getDispatcher(dispInfo.GetID()).Load()
+			spillPath := mustCreateLargeTxnState(
+				t, stat, dispInfo.GetTableSpan().TableID)
+			require.NoError(t, os.Remove(spillPath))
+			require.NoError(t, os.Mkdir(spillPath, 0o700))
+			childPath := filepath.Join(spillPath, "child")
+			require.NoError(t, os.WriteFile(
+				childPath, []byte("keep directory non-empty"), 0o600))
+			t.Cleanup(func() {
+				_ = os.RemoveAll(spillPath)
+			})
+
+			if action == "reset" {
+				resetInfo := newMockDispatcherInfo(
+					t, 500, dispInfo.GetID(), dispInfo.GetTableSpan().TableID,
+					eventpb.ActionType_ACTION_TYPE_RESET)
+				resetInfo.epoch = stat.epoch + 1
+				require.NoError(t, broker.resetDispatcher(resetInfo))
+			} else {
+				broker.removeDispatcher(dispInfo)
+			}
+
+			require.NotNil(t, stat.getLargeTxnState())
+			_, pending := broker.pendingLargeTxnCleanup.Load(stat)
+			require.True(t, pending)
+
+			require.NoError(t, os.Remove(childPath))
+			broker.retryPendingLargeTxnCleanup()
+
+			require.Nil(t, stat.getLargeTxnState())
+			_, pending = broker.pendingLargeTxnCleanup.Load(stat)
+			require.False(t, pending)
+			require.NoFileExists(t, spillPath)
+		})
+	}
 }
 
 func mustCreateLargeTxnState(t *testing.T, stat *dispatcherStat, tableID int64) string {

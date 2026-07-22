@@ -48,6 +48,7 @@ const (
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
 	defaultReportDispatcherStatToStoreInterval = time.Second * 10
+	defaultLargeTxnCleanupRetryInterval        = time.Second * 10
 
 	maxReadyEventIntervalSeconds = 10
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
@@ -78,6 +79,10 @@ type eventBroker struct {
 
 	// dispatcherID -> dispatcherStat map, track all table trigger dispatchers.
 	tableTriggerDispatchers sync.Map
+
+	// dispatcherStat -> struct{}, retains removed/replaced dispatchers whose
+	// large transaction spill cleanup needs another attempt.
+	pendingLargeTxnCleanup sync.Map
 
 	// taskChan is used to send the scan tasks to the scan workers.
 	taskChan []chan scanTask
@@ -186,6 +191,10 @@ func newEventBroker(
 
 	g.Go(func() error {
 		return c.refreshMinSentResolvedTs(ctx)
+	})
+
+	g.Go(func() error {
+		return c.runLargeTxnCleanupWorker(ctx, defaultLargeTxnCleanupRetryInterval)
 	})
 
 	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
@@ -651,6 +660,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			c.pushTask(task, false)
 		}
 	}()
+	scanCtx, finishScan := task.beginScan(ctx)
+	defer finishScan()
 
 	var (
 		remoteID     = node.ID(task.info.GetServerID())
@@ -733,13 +744,16 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
-	scannedBytes, events, progress, interrupted, err := scanner.scan(ctx, task, request, sl)
+	scannedBytes, events, progress, interrupted, err := scanner.scan(scanCtx, task, request, sl)
 	if interrupted {
 		metrics.EventServiceInterruptScanCount.Inc()
 	}
 
 	if err != nil {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
+		if task.isRemoved.Load() {
+			return
+		}
 		log.Error("scan events failed",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
@@ -1099,7 +1113,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Error(err),
 		)
 		// Mark removed to avoid processing notifications before unregister completes.
-		dispatcher.isRemoved.Store(true)
+		dispatcher.markRemoved()
 		c.eventStore.UnregisterDispatcher(changefeedID, id)
 		status.removeDispatcher(id)
 		if status.isEmpty() {
@@ -1136,9 +1150,9 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
-	stat.isRemoved.Store(true)
-	if err := stat.cleanupLargeTxnState(); err != nil {
-		log.Warn("cleanup large txn state failed when removing dispatcher",
+	stat.markRemoved()
+	if err := c.cleanupLargeTxnState(stat); err != nil {
+		log.Warn("cleanup large txn state failed when removing dispatcher, scheduled retry",
 			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
 			zap.Stringer("dispatcherID", id),
 			zap.Error(err))
@@ -1212,12 +1226,11 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		return nil
 	}
 
-	// Mark the old dispatcher as removed.
-	// No need to worry that the old dispatcher is still scanning,
-	// because its data will be filtered by event collector because of stale epoch.
-	oldStat.isRemoved.Store(true)
-	if err := oldStat.cleanupLargeTxnState(); err != nil {
-		log.Warn("cleanup large txn state failed when resetting dispatcher",
+	// Mark the old dispatcher as removed and cancel its scan before cleaning up
+	// resources shared with that scan.
+	oldStat.markRemoved()
+	if err := c.cleanupLargeTxnState(oldStat); err != nil {
+		log.Warn("cleanup large txn state failed when resetting dispatcher, scheduled retry",
 			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Error(err))
@@ -1271,9 +1284,9 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		if oldStat.epoch >= dispatcherInfo.GetEpoch() {
 			return nil
 		}
-		oldStat.isRemoved.Store(true)
-		if err := oldStat.cleanupLargeTxnState(); err != nil {
-			log.Warn("cleanup large txn state failed when retrying dispatcher reset",
+		oldStat.markRemoved()
+		if err := c.cleanupLargeTxnState(oldStat); err != nil {
+			log.Warn("cleanup large txn state failed when retrying dispatcher reset, scheduled retry",
 				zap.Stringer("changefeedID", changefeedID),
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Error(err))
@@ -1294,6 +1307,41 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	}
 
 	return nil
+}
+
+func (c *eventBroker) cleanupLargeTxnState(stat *dispatcherStat) error {
+	err := stat.cleanupLargeTxnState()
+	if err != nil {
+		c.pendingLargeTxnCleanup.Store(stat, struct{}{})
+		return err
+	}
+	c.pendingLargeTxnCleanup.Delete(stat)
+	return nil
+}
+
+func (c *eventBroker) retryPendingLargeTxnCleanup() {
+	c.pendingLargeTxnCleanup.Range(func(key, _ any) bool {
+		stat := key.(*dispatcherStat)
+		if err := stat.cleanupLargeTxnState(); err == nil {
+			c.pendingLargeTxnCleanup.Delete(stat)
+		}
+		return true
+	})
+}
+
+func (c *eventBroker) runLargeTxnCleanupWorker(
+	ctx context.Context, interval time.Duration,
+) error {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.retryPendingLargeTxnCleanup()
+		}
+	}
 }
 
 func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedStatus {
