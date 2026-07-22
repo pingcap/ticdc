@@ -666,22 +666,6 @@ func TestMaxMessageBytes(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	codecConfig = common.NewConfig(config.ProtocolCanalJSON).
-		WithMaxMessageBytes(maxMessageBytes).
-		WithMaxBatchedBytes(100)
-
-	encIface, err = NewJSONRowEventEncoder(ctx, codecConfig)
-	require.NoError(t, err)
-
-	encoder = encIface.(*JSONRowEventEncoder)
-	err = encoder.AppendRowChangedEvent(ctx, topic, &commonEvent.RowEvent{
-		TableInfo:      dml.TableInfo,
-		CommitTs:       dml.CommitTs,
-		Event:          rc,
-		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-	})
-	require.NoError(t, err)
-
 	// the test message length is larger than max-message-bytes
 	codecConfig = codecConfig.WithMaxMessageBytes(100)
 

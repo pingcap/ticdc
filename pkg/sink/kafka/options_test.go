@@ -158,10 +158,6 @@ func (f *kafkaAdminFixture) setMessageMaxBytes(brokerValue, topicValue string) {
 	f.topicConfig[defaultMockTopicName][TopicMaxMessageBytesConfigName] = topicValue
 }
 
-func expectedAdjustedMaxMessageBytes(sourceMaxMessageBytes int) int {
-	return sourceMaxMessageBytes
-}
-
 func (f *kafkaAdminFixture) setMinInsyncReplicas(minInsyncReplicas string) {
 	f.topicConfig[defaultMockTopicName][MinInsyncReplicasConfigName] = minInsyncReplicas
 	f.brokerConfig[MinInsyncReplicasConfigName] = minInsyncReplicas
@@ -473,8 +469,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 			require.NoError(t, err)
 			require.Equal(t, configuredMaxMessageBytes, options.MaxMessageBytes)
 			require.Equal(t, configuredMaxMessageBytes, options.MaxBatchedBytes)
-			expectedProducerLimit := expectedAdjustedMaxMessageBytes(
-				adminFixture.brokerMessageMaxBytes())
+			expectedProducerLimit := adminFixture.brokerMessageMaxBytes()
 
 			ctx := context.Background()
 			err = adjustOptions(ctx, changefeedID, adminClient, options, topicName)
@@ -765,21 +760,20 @@ func TestConfigurationCombinations(t *testing.T) {
 			if _, exists := adminFixture.topics[topic]; exists {
 				sourceMaxMessageBytes = adminFixture.topicMaxMessageBytes(topic)
 			}
-			expectedProducerLimit := expectedAdjustedMaxMessageBytes(sourceMaxMessageBytes)
 
 			changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
 			err = adjustOptions(ctx, changefeedID, adminClient, options, topic)
 			require.Nil(t, err)
-			require.Equal(t, expectedProducerLimit, options.MaxMessageBytes)
+			require.Equal(t, sourceMaxMessageBytes, options.MaxMessageBytes)
 			require.Equal(
 				t,
-				min(configuredMaxMessageBytes, expectedProducerLimit),
+				min(configuredMaxMessageBytes, sourceMaxMessageBytes),
 				options.MaxBatchedBytes,
 			)
 
 			saramaConfig, err := newSaramaConfig(ctx, options)
 			require.Nil(t, err)
-			require.Equal(t, expectedProducerLimit, saramaConfig.Producer.MaxMessageBytes)
+			require.Equal(t, sourceMaxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
 
 			encoderConfig := common.NewConfig(config.ProtocolOpen)
 			err = encoderConfig.Apply(sinkURI, &config.SinkConfig{
@@ -795,10 +789,10 @@ func TestConfigurationCombinations(t *testing.T) {
 			err = encoderConfig.Validate()
 			require.Nil(t, err)
 
-			require.Equal(t, expectedProducerLimit, encoderConfig.MaxMessageBytes)
+			require.Equal(t, sourceMaxMessageBytes, encoderConfig.MaxMessageBytes)
 			require.Equal(
 				t,
-				min(configuredMaxMessageBytes, expectedProducerLimit),
+				min(configuredMaxMessageBytes, sourceMaxMessageBytes),
 				encoderConfig.MaxBatchedBytes,
 			)
 
