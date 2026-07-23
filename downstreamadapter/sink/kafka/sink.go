@@ -87,6 +87,18 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 	}
 	options.Topic = topic
 
+	encoderConfig, err := helper.GetEncoderConfig(
+		commonType.NewChangefeedID(changefeedID.Keyspace()),
+		uri,
+		protocol,
+		sinkConfig,
+		options.MaxMessageBytes,
+		options.MaxBatchedBytes,
+	)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
 	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
 	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
 		return errors.Trace(err)
@@ -101,16 +113,8 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 		return errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 
-	encoderConfig, err := helper.GetEncoderConfig(
-		commonType.NewChangefeedID(changefeedID.Keyspace()),
-		uri,
-		protocol,
-		sinkConfig,
-		options.MaxMessageBytes,
-	)
-	if err != nil {
-		return errors.Trace(err)
-	}
+	encoderConfig.WithMaxMessageBytes(options.MaxMessageBytes).
+		WithMaxBatchedBytes(options.MaxBatchedBytes)
 
 	adminClient, err := factory.AdminClient(ctx)
 	if err != nil {

@@ -41,9 +41,12 @@ type Config struct {
 
 	Protocol config.Protocol
 
-	// control batch behavior, only for `open-protocol` and `craft` at the moment.
 	MaxMessageBytes int
-	MaxBatchSize    int
+
+	// MaxBatchedBytes controls open-protocol encoder's maximum number of bytes for a batched message.
+	MaxBatchedBytes int
+	// MaxBatchedBytes controls open-protocol encoder's maximum number of events for a batched message.
+	MaxBatchSize int
 
 	// DeleteOnlyHandleKeyColumns is true, for the delete event only output the handle key columns.
 	DeleteOnlyHandleKeyColumns bool
@@ -115,6 +118,7 @@ func NewConfig(protocol config.Protocol) *Config {
 		Protocol: protocol,
 
 		MaxMessageBytes: config.DefaultMaxMessageBytes,
+		MaxBatchedBytes: config.DefaultMaxMessageBytes,
 		MaxBatchSize:    defaultMaxBatchSize,
 
 		EnableTiDBExtension: false,
@@ -194,7 +198,7 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	var err error
 	urlParameter := &urlConfig{}
 	if err = binding.Query.Bind(req, urlParameter); err != nil {
-		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrSinkInvalidConfig, err)
 	}
 	if urlParameter, err = mergeConfig(sinkConfig, urlParameter); err != nil {
 		return err
@@ -347,6 +351,12 @@ func (c *Config) WithMaxMessageBytes(bytes int) *Config {
 	return c
 }
 
+// WithMaxBatchedBytes sets the maximum batched message bytes.
+func (c *Config) WithMaxBatchedBytes(bytes int) *Config {
+	c.MaxBatchedBytes = bytes
+	return c
+}
+
 // WithChangefeedID set the `changefeedID`
 func (c *Config) WithChangefeedID(id common.ChangeFeedID) *Config {
 	c.ChangefeedID = id
@@ -457,15 +467,17 @@ func (c *Config) Validate() error {
 	}
 
 	if c.MaxMessageBytes <= 0 {
-		return errors.ErrCodecInvalidConfig.Wrap(
-			errors.Errorf("invalid max-message-bytes %d", c.MaxMessageBytes),
-		)
+		return errors.ErrCodecInvalidConfig.GenWithStack("invalid max-message-bytes %d", c.MaxMessageBytes)
+	}
+	if c.MaxBatchedBytes < 0 {
+		return errors.ErrCodecInvalidConfig.GenWithStack("invalid max-batch-message-bytes %d", c.MaxBatchedBytes)
+	}
+	if c.MaxBatchedBytes > c.MaxMessageBytes {
+		return errors.ErrCodecInvalidConfig.GenWithStack("max-batch-message-bytes %d cannot be greater than max-message-bytes %d", c.MaxBatchedBytes, c.MaxMessageBytes)
 	}
 
 	if c.MaxBatchSize <= 0 {
-		return errors.ErrCodecInvalidConfig.Wrap(
-			errors.Errorf("invalid max-batch-size %d", c.MaxBatchSize),
-		)
+		return errors.ErrCodecInvalidConfig.GenWithStack("invalid max-batch-size %d", c.MaxBatchSize)
 	}
 
 	if c.LargeMessageHandle != nil {
