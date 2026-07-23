@@ -73,29 +73,39 @@ func NewEncoderGroup(
 	if concurrency <= 0 {
 		concurrency = config.DefaultEncoderGroupConcurrency
 	}
-	inputCh := make([]chan *future, concurrency)
-	rowEventEncoders := make([]common.EventEncoder, concurrency)
+	group := &encoderGroup{
+		changefeedID:     changefeedID,
+		rowEventEncoders: make([]common.EventEncoder, concurrency),
+		concurrency:      concurrency,
+		inputCh:          make([]chan *future, concurrency),
+		outputCh:         make(chan *future, defaultInputChanSize*concurrency),
+	}
+	initialized := false
+	defer func() {
+		if !initialized {
+			group.close()
+		}
+	}()
+
 	var err error
 	for i := 0; i < concurrency; i++ {
-		inputCh[i] = make(chan *future, defaultInputChanSize)
-		rowEventEncoders[i], err = NewEventEncoder(ctx, encoderConfig)
+		group.inputCh[i] = make(chan *future, defaultInputChanSize)
+		group.rowEventEncoders[i], err = NewEventEncoder(ctx, encoderConfig)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)
 		}
 	}
-	outCh := make(chan *future, defaultInputChanSize*concurrency)
 
-	var bw *bootstrapWorker
 	if cfg.ShouldSendBootstrapMsg() {
 		encoder, err := NewEventEncoder(ctx, encoderConfig)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)
 		}
-		bw = newBootstrapWorker(
+		group.bootstrapWorker = newBootstrapWorker(
 			changefeedID,
-			outCh,
+			group.outputCh,
 			encoder,
 			util.GetOrZero(cfg.SendBootstrapIntervalInSec),
 			util.GetOrZero(cfg.SendBootstrapInMsgCount),
@@ -104,20 +114,13 @@ func NewEncoderGroup(
 		)
 	}
 
-	return &encoderGroup{
-		changefeedID:     changefeedID,
-		rowEventEncoders: rowEventEncoders,
-		concurrency:      concurrency,
-		inputCh:          inputCh,
-		index:            0,
-		outputCh:         outCh,
-		bootstrapWorker:  bw,
-	}, nil
+	initialized = true
+	return group, nil
 }
 
 func (g *encoderGroup) Run(ctx context.Context) error {
 	defer func() {
-		g.cleanMetrics()
+		g.close()
 		log.Info("encoder group exited",
 			zap.String("keyspace", g.changefeedID.Keyspace()),
 			zap.String("changefeed", g.changefeedID.Name()))
@@ -204,10 +207,12 @@ func (g *encoderGroup) Output() <-chan *future {
 	return g.outputCh
 }
 
-func (g *encoderGroup) cleanMetrics() {
+func (g *encoderGroup) close() {
 	encoderGroupInputChanSizeGauge.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name())
 	for _, encoder := range g.rowEventEncoders {
-		encoder.Clean()
+		if encoder != nil {
+			encoder.Clean()
+		}
 	}
 	common.CleanMetrics(g.changefeedID)
 }

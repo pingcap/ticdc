@@ -41,6 +41,9 @@ type components struct {
 }
 
 func (c components) close() {
+	if c.encoder != nil {
+		c.encoder.Clean()
+	}
 	if c.adminClient != nil {
 		c.adminClient.Close()
 	}
@@ -94,28 +97,20 @@ func newKafkaSinkComponent(
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
-	kafkaComponent.encoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
-	if err != nil {
-		return kafkaComponent, protocol, errors.Trace(err)
-	}
-
 	kafkaComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
+	defer func() {
+		if err != nil {
+			kafkaComponent.close()
+		}
+	}()
 
 	kafkaComponent.adminClient, err = kafkaComponent.factory.AdminClient(ctx)
 	if err != nil {
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
-
-	// We must close adminClient when this func return cause by an error
-	// otherwise the adminClient will never be closed and lead to a goroutine leak.
-	defer func() {
-		if err != nil && kafkaComponent.adminClient != nil {
-			kafkaComponent.adminClient.Close()
-		}
-	}()
 
 	kafkaComponent.topicManager, err = topicmanager.GetTopicManagerAndTryCreateTopic(
 		ctx,
@@ -124,6 +119,11 @@ func newKafkaSinkComponent(
 		options.DeriveTopicConfig(),
 		kafkaComponent.adminClient,
 	)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
+
+	kafkaComponent.encoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}

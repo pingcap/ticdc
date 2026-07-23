@@ -87,11 +87,6 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 	}
 	options.Topic = topic
 
-	encoderConfig, err := helper.GetEncoderConfig(changefeedID, uri, protocol, sinkConfig, options.MaxMessageBytes)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
 	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
 	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
 		return errors.Trace(err)
@@ -106,33 +101,52 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 		return errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 
+	encoderConfig, err := helper.GetEncoderConfig(
+		commonType.NewChangefeedID(changefeedID.Keyspace()),
+		uri,
+		protocol,
+		sinkConfig,
+		options.MaxMessageBytes,
+	)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
 	adminClient, err := factory.AdminClient(ctx)
 	if err != nil {
 		return errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 	defer adminClient.Close()
 
+	return verifyKafkaSink(ctx, adminClient, topic, options.DeriveTopicConfig(), encoderConfig)
+}
+
+func verifyKafkaSink(
+	ctx context.Context,
+	adminClient kafka.ClusterAdminClient,
+	topic string,
+	topicConfig *kafka.AutoCreateTopicConfig,
+	encoderConfig *common.Config,
+) error {
 	topics, err := adminClient.GetTopicsMeta([]string{topic}, false)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	if _, exists := topics[topic]; exists {
-		return nil
-	}
+	if _, exists := topics[topic]; !exists {
+		if !topicConfig.AutoCreate {
+			return errors.ErrKafkaInvalidConfig.GenWithStack(
+				"`auto-create-topic` is false, and %s not found", topic)
+		}
 
-	topicConfig := options.DeriveTopicConfig()
-	if !topicConfig.AutoCreate {
-		return errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topic)
-	}
-
-	// the topic is not created, only validate.
-	err = adminClient.CreateTopic(&kafka.TopicDetail{
-		Name:              topic,
-		NumPartitions:     topicConfig.PartitionNum,
-		ReplicationFactor: topicConfig.ReplicationFactor,
-	}, true)
-	if err != nil {
-		return errors.WrapError(errors.ErrKafkaCreateTopic, err)
+		// The topic is not created, only validate its configuration and permissions.
+		err = adminClient.CreateTopic(&kafka.TopicDetail{
+			Name:              topic,
+			NumPartitions:     topicConfig.PartitionNum,
+			ReplicationFactor: topicConfig.ReplicationFactor,
+		}, true)
+		if err != nil {
+			return errors.WrapError(errors.ErrKafkaCreateTopic, err)
+		}
 	}
 
 	encoder, err := codec.NewEventEncoder(ctx, encoderConfig)
@@ -140,7 +154,6 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 		return errors.Trace(err)
 	}
 	encoder.Clean()
-
 	return nil
 }
 

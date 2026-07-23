@@ -16,6 +16,7 @@ package kafka
 import (
 	"testing"
 
+	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
@@ -61,4 +62,27 @@ func TestAdminClientClose(t *testing.T) {
 			require.NotPanics(t, func() { adminClient.Close() })
 		})
 	}
+}
+
+func TestGetTopicsMetaUsesSmallestReplicationFactor(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	admin := NewMocksaramaClusterAdmin(ctrl)
+	admin.EXPECT().DescribeTopics([]string{"test-topic"}).Return([]*sarama.TopicMetadata{
+		{
+			Name: "test-topic",
+			Err:  sarama.ErrNoError,
+			Partitions: []*sarama.PartitionMetadata{
+				{Replicas: []int32{1, 2, 3}},
+				{Replicas: []int32{1, 2}},
+			},
+		},
+	}, nil)
+
+	client := &saramaAdminClient{
+		changefeed: common.NewChangeFeedIDWithName("test", "default"),
+		admin:      admin,
+	}
+	topics, err := client.GetTopicsMeta([]string{"test-topic"}, false)
+	require.NoError(t, err)
+	require.Equal(t, int16(2), topics["test-topic"].ReplicationFactor)
 }

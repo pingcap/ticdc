@@ -19,7 +19,9 @@ import (
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
 
 func TestClaimCheck(t *testing.T) {
@@ -41,4 +43,16 @@ func TestClaimCheck(t *testing.T) {
 
 	fileName := claimCheck.FileNameWithPrefix("file.json")
 	require.Equal(t, "file:///tmp/abc/file.json", fileName)
+}
+
+func TestClaimCheckCloseClosesStorage(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	storage := mockobjstore.NewMockStorage(ctrl)
+	storage.EXPECT().Close().Times(1)
+	claimCheck := &ClaimCheck{
+		storage:      storage,
+		changefeedID: commonType.NewChangeFeedIDWithName("test", "default"),
+	}
+
+	claimCheck.Close()
 }

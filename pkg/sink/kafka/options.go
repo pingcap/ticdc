@@ -586,18 +586,22 @@ func adjustOptions(
 	if err != nil {
 		return errors.Trace(err)
 	}
+	info, exists := topics[topic]
 
 	// Only check replicationFactor >= minInsyncReplicas when producer's required acks is -1.
 	// If we don't check it, the producer probably can not send message to the topic.
 	// Because it will wait for the ack from all replicas. But we do not have enough replicas.
 	if options.RequiredAcks == WaitForAll {
-		err = validateMinInsyncReplicas(ctx, admin, topics, topic, int(options.ReplicationFactor))
+		replicationFactor := options.ReplicationFactor
+		if exists {
+			replicationFactor = info.ReplicationFactor
+		}
+		err = validateMinInsyncReplicas(ctx, admin, topics, topic, int(replicationFactor))
 		if err != nil {
 			return errors.Trace(err)
 		}
 	}
 
-	info, exists := topics[topic]
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
 	if exists {

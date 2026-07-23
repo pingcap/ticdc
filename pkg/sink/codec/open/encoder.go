@@ -66,7 +66,7 @@ func NewBatchEncoder(ctx context.Context, config *common.Config) (common.EventEn
 
 func (d *batchEncoder) Clean() {
 	if d.claimCheck != nil {
-		d.claimCheck.CleanMetrics()
+		d.claimCheck.Close()
 	}
 }
 

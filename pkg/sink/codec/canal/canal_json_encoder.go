@@ -585,6 +585,6 @@ func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.M
 
 func (c *JSONRowEventEncoder) Clean() {
 	if c.claimCheck != nil {
-		c.claimCheck.CleanMetrics()
+		c.claimCheck.Close()
 	}
 }

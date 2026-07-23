@@ -244,3 +244,30 @@ func TestKafkaSinkBatchConfig(t *testing.T) {
 	require.Equal(t, 4096, sink.BatchCount())
 	require.Zero(t, sink.BatchBytes())
 }
+
+func TestVerifyKafkaSinkRejectsInvalidClaimCheckStorageForExistingTopic(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	adminClient := kafka.NewMockClusterAdminClient(ctrl)
+	adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, false).Return(
+		map[string]kafka.TopicDetail{
+			kafkaSinkTestTopic: {
+				Name:              kafkaSinkTestTopic,
+				NumPartitions:     1,
+				ReplicationFactor: 1,
+			},
+		}, nil)
+
+	encoderConfig := codeccommon.NewConfig(config.ProtocolOpen)
+	encoderConfig.ChangefeedID = common.NewChangefeedID4Test("test", "test")
+	encoderConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionClaimCheck
+	encoderConfig.LargeMessageHandle.ClaimCheckStorageURI = "unsupported:///claim-check"
+
+	err := verifyKafkaSink(
+		context.Background(),
+		adminClient,
+		kafkaSinkTestTopic,
+		&kafka.AutoCreateTopicConfig{AutoCreate: false},
+		encoderConfig,
+	)
+	require.Error(t, err)
+}

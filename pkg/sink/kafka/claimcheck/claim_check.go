@@ -114,6 +114,12 @@ func (c *ClaimCheck) CleanMetrics() {
 	claimCheckSendMessageCount.DeleteLabelValues(c.changefeedID.Keyspace(), c.changefeedID.Name())
 }
 
+// Close releases the external storage and removes the claim-check metrics.
+func (c *ClaimCheck) Close() {
+	c.storage.Close()
+	c.CleanMetrics()
+}
+
 // NewFileName return the file name for the message which is delivered to the external storage system.
 // UUID V4 is used to generate random and unique file names.
 // This should not exceed the S3 object name length limit.
