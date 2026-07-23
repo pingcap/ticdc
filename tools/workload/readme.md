@@ -201,5 +201,35 @@ Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_sec
 - Adjust the thread and batch-size parameters based on your needs.
 - Use `-batch-in-txn` to wrap each batch in a single explicit transaction (BEGIN/COMMIT).
 - `wide_table_with_json` always generates JSON-like payload data.
+- `customer_workload` generates anonymized production-shaped CDC workloads. Use `-customer-model A|B|C|D` and `-target-rows-per-sec` for controlled calibration.
 - For workloads that support partitioned tables (e.g. bank3), set `-partitioned=false` to create non-partitioned tables.
 - `-bank3-partitioned` is deprecated; use `-partitioned`.
+
+### 8. Anonymized Customer CDC Workload
+
+Run anonymized model-A traffic with large payloads:
+
+```bash
+./bin/workload -action write \
+    -database-host 10.2.15.7 \
+    -database-port 4000 \
+    -database-user root \
+    -database-db-name test \
+    -workload-type customer_workload \
+    -customer-model A \
+    -table-count 4 \
+    -thread 8 \
+    -batch-size 16 \
+    -percentage-for-update 0.5 \
+    -percentage-for-delete 0.05 \
+    -customer-keyspace 100000 \
+    -target-rows-per-sec 1000 \
+    -max-runtime 5m
+```
+
+Model meanings:
+
+- `A`: large catalog-like rows and high bytes/s.
+- `B`: event-like rows with high per-capture sink density.
+- `C`: one hot table shape for cross-capture dispatcher tests.
+- `D`: object-like composite keys with update/delete-heavy traffic.

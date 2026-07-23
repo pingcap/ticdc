@@ -24,9 +24,7 @@ import (
 	plog "github.com/pingcap/log"
 	"go.uber.org/zap"
 	"workload/schema"
-	pbank2 "workload/schema/bank2"
 	psysbench "workload/schema/sysbench"
-	pwidetablewithjson "workload/schema/wide_table_with_json"
 )
 
 // updateTask defines a task for updating data
@@ -80,7 +78,7 @@ func (app *WorkloadApp) executeUpdateWorkers(updateConcurrency int, wg *sync.Wai
 
 			plog.Info("start update worker", zap.Int("worker", workerID))
 
-			for {
+			for !app.shouldStop() {
 				flushedRows, err := app.runTransaction(conn, func() (uint64, error) {
 					return app.doUpdateOnce(conn, updateTaskCh)
 				})
@@ -111,6 +109,7 @@ func (app *WorkloadApp) executeUpdateWorkers(updateConcurrency int, wg *sync.Wai
 				if flushedRows != 0 {
 					app.Stats.FlushedRowCount.Add(flushedRows)
 				}
+				app.throttleRows(uint64(max(1, app.Config.BatchSize)))
 			}
 		}(i)
 	}
@@ -118,7 +117,8 @@ func (app *WorkloadApp) executeUpdateWorkers(updateConcurrency int, wg *sync.Wai
 
 // genUpdateTask generates update tasks
 func (app *WorkloadApp) genUpdateTask(output chan updateTask) {
-	for {
+	defer close(output)
+	for !app.shouldStop() {
 		tableIndex := rand.Intn(app.Config.TableCount) + app.Config.TableStartIndex
 		task := updateTask{
 			UpdateOption: schema.UpdateOption{
@@ -127,12 +127,18 @@ func (app *WorkloadApp) genUpdateTask(output chan updateTask) {
 				RangeNum:   app.Config.RangeNum,
 			},
 		}
-		output <- task
+		select {
+		case output <- task:
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 }
 
 func (app *WorkloadApp) doUpdateOnce(conn *sql.Conn, input chan updateTask) (uint64, error) {
-	task := <-input
+	task, ok := <-input
+	if !ok {
+		return 0, nil
+	}
 	return app.processUpdateTask(conn, &task)
 }
 
@@ -159,29 +165,19 @@ func (app *WorkloadApp) processUpdateTask(conn *sql.Conn, task *updateTask) (uin
 // executeUpdate performs the actual update operation based on workload type
 func (app *WorkloadApp) executeUpdate(conn *sql.Conn, task *updateTask) (sql.Result, error) {
 	switch app.Config.WorkloadType {
-	case bank2:
-		return app.executeBank2Update(conn, task)
 	case sysbench:
 		return app.executeSysbenchUpdate(conn, task)
-	case wideTableWithJSON:
-		return app.executeWideTableWithJSONUpdate(conn, task)
 	default:
+		if valueWorkload, ok := app.Workload.(schema.UpdateValuesWorkload); ok {
+			updateSQL, values := valueWorkload.BuildUpdateSqlWithValues(task.UpdateOption)
+			if updateSQL == "" {
+				return nil, nil
+			}
+			task.generatedSQL = updateSQL
+			return app.executeWithValues(conn, updateSQL, task.UpdateOption.TableIndex, values)
+		}
 		return app.executeRegularUpdate(conn, task)
 	}
-}
-
-// executeBank2Update handles updates specific to bank2 workload
-func (app *WorkloadApp) executeBank2Update(conn *sql.Conn, task *updateTask) (sql.Result, error) {
-	task.UpdateOption.Batch = 1
-	updateSQL, values := app.Workload.(*pbank2.Bank2Workload).BuildUpdateSqlWithValues(task.UpdateOption)
-	task.generatedSQL = updateSQL
-	return app.executeWithValues(conn, updateSQL, task.UpdateOption.TableIndex, values)
-}
-
-func (app *WorkloadApp) executeWideTableWithJSONUpdate(conn *sql.Conn, task *updateTask) (sql.Result, error) {
-	updateSQL, values := app.Workload.(*pwidetablewithjson.WideTableWithJSONWorkload).BuildUpdateSqlWithValues(task.UpdateOption)
-	task.generatedSQL = updateSQL
-	return app.executeWithValues(conn, updateSQL, task.UpdateOption.TableIndex, values)
 }
 
 // executeSysbenchUpdate handles updates specific to sysbench workload
