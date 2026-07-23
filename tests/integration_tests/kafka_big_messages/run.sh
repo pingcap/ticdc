@@ -8,7 +8,9 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
-MAX_RETRIES=60
+STATE_WAIT_TIMEOUT_SECONDS=30
+STATE_CHECK_INTERVAL_SECONDS=1
+TABLE_CHECK_RETRIES=15
 BATCH_LIMIT=262144
 SMALL_TOPIC_LIMIT=524288
 LARGE_TOPIC_LIMIT=2097152
@@ -78,10 +80,29 @@ function start_kafka_consumer() {
 
 function stop_kafka_consumer() {
 	if [ "$consumer_pid" != "" ]; then
-		kill "$consumer_pid" 2>/dev/null || true
+		kill -9 "$consumer_pid" 2>/dev/null || true
 		wait "$consumer_pid" 2>/dev/null || true
 		consumer_pid=""
 	fi
+}
+
+function wait_changefeed_state() {
+	local pd_addr=$1
+	local changefeed_id=$2
+	local expected_state=$3
+	local expected_error=$4
+	local deadline=$((SECONDS + STATE_WAIT_TIMEOUT_SECONDS))
+
+	while true; do
+		if check_changefeed_state "$pd_addr" "$changefeed_id" "$expected_state" "$expected_error" ""; then
+			return
+		fi
+		if [ "$SECONDS" -ge "$deadline" ]; then
+			echo "changefeed $changefeed_id did not reach state $expected_state within ${STATE_WAIT_TIMEOUT_SECONDS}s"
+			return 1
+		fi
+		sleep "$STATE_CHECK_INTERVAL_SECONDS"
+	done
 }
 
 function render_diff_config() {
@@ -122,7 +143,7 @@ function run_protocol_case() {
 		cdc_cli_changefeed create --start-ts="$start_ts" --sink-uri="$sink_uri" -c "$changefeed_id"
 	fi
 	start_kafka_consumer "$work_dir" "$sink_uri" "$schema_registry_uri" "$protocol_case"
-	ensure "$MAX_RETRIES" check_changefeed_state "$pd_addr" "$changefeed_id" "normal" "null" ""
+	wait_changefeed_state "$pd_addr" "$changefeed_id" "normal" "null"
 
 	"$GENERATOR_DIR/gen_kafka_big_messages" --row-bytes="$ROW_BYTES" --row-count=1 --database-name="$database_name" --table-name=test --sql-file-path="$sql_file"
 	run_sql_file "$sql_file" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
@@ -130,13 +151,13 @@ function run_protocol_case() {
 
 	# The encoded row is larger than the topic limit, so the changefeed must
 	# enter the retryable warning state with ErrMessageTooLarge.
-	ensure "$MAX_RETRIES" check_changefeed_state "$pd_addr" "$changefeed_id" "warning" "ErrMessageTooLarge" ""
+	wait_changefeed_state "$pd_addr" "$changefeed_id" "warning" "ErrMessageTooLarge"
 
 	# Only increase Kafka's topic limit. TiCDC must recreate the sink, read the
 	# new limit, and resume without updating, pausing, or resuming the changefeed.
 	kafka_topic --topic "$topic_name" --max-message-bytes "$LARGE_TOPIC_LIMIT" --alter
-	ensure "$MAX_RETRIES" check_changefeed_state "$pd_addr" "$changefeed_id" "normal" "null" ""
-	check_table_exists "${database_name}.finish_mark" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 200
+	wait_changefeed_state "$pd_addr" "$changefeed_id" "normal" "null"
+	check_table_exists "${database_name}.finish_mark" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" "$TABLE_CHECK_RETRIES"
 	check_sync_diff "$work_dir" "$diff_config"
 
 	cdc_cli_changefeed remove -c "$changefeed_id"
