@@ -42,8 +42,11 @@ type Config struct {
 	Protocol config.Protocol
 
 	MaxMessageBytes int
+
+	// MaxBatchedBytes controls open-protocol encoder's maximum number of bytes for a batched message.
 	MaxBatchedBytes int
-	MaxBatchSize    int
+	// MaxBatchedBytes controls open-protocol encoder's maximum number of events for a batched message.
+	MaxBatchSize int
 
 	// DeleteOnlyHandleKeyColumns is true, for the delete event only output the handle key columns.
 	DeleteOnlyHandleKeyColumns bool
