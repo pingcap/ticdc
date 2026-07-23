@@ -33,10 +33,11 @@ if [ "${#CDC_ADDRS[@]}" -ne 3 ]; then
 	exit 1
 fi
 # Keep CLI-based helpers (changefeed create/query and move/split/merge operations) pointed at the same
-# first capture when the case overrides the CDC addresses for isolated local reruns.
+# first capture when the case overrides the CDC addresses for isolated local reruns. The retry helpers
+# are separate Bash processes, so export both the server and wrapper functions for them.
 export CDC_HOST=${CDC_ADDRS[0]%:*}
 export CDC_PORT=${CDC_ADDRS[0]#*:}
-CDC_API_SERVER="http://${CDC_ADDRS[0]}"
+export CDC_API_SERVER="http://${CDC_ADDRS[0]}"
 
 function cdc_cli_changefeed() {
 	command cdc_cli_changefeed "$@" --server "$CDC_API_SERVER"
@@ -45,6 +46,8 @@ function cdc_cli_changefeed() {
 function run_cdc_cli() {
 	command run_cdc_cli "$@" --server "$CDC_API_SERVER"
 }
+export -f cdc_cli_changefeed run_cdc_cli
+
 FAILPOINT_NOT_READY_TO_CLOSE_DISPATCHER="github.com/pingcap/ticdc/downstreamadapter/dispatcher/NotReadyToCloseDispatcher"
 FAILPOINT_BLOCK_CREATE_DISPATCHER="github.com/pingcap/ticdc/downstreamadapter/dispatchermanager/BlockCreateDispatcher"
 
