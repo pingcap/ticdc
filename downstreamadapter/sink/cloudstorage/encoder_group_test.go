@@ -230,6 +230,7 @@ func newTestTxnEncoderConfig(t *testing.T) *common.Config {
 		config.ProtocolCsv,
 		replicaConfig.Sink,
 		config.DefaultMaxMessageBytes,
+		config.DefaultMaxMessageBytes,
 	)
 	require.NoError(t, err)
 	return encoderConfig

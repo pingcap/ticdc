@@ -57,7 +57,7 @@ func NewSaramaFactory(
 		admin.Close()
 	}()
 
-	if err = adjustOptions(ctx, admin, o, o.Topic); err != nil {
+	if err = adjustOptions(ctx, changefeedID, admin, o, o.Topic); err != nil {
 		return nil, errors.Trace(err)
 	}
 

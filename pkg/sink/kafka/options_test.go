@@ -27,10 +27,147 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
 
+<<<<<<< HEAD
+=======
+const (
+	defaultMockTopicName = "mock_topic"
+
+	// These values model Kafka admin responses, not TiCDC option defaults.
+	mockClusterReplicationFactor int16 = 3
+	mockBrokerMessageMaxBytes          = "1048588"
+	mockTopicMessageMaxBytes           = "1048588"
+	mockMinInsyncReplicas              = "1"
+)
+
+type kafkaAdminFixture struct {
+	admin        *MockClusterAdminClient
+	topics       map[string]TopicDetail
+	brokerConfig map[string]string
+	topicConfig  map[string]map[string]string
+}
+
+func newKafkaAdminFixture(t *testing.T) *kafkaAdminFixture {
+	t.Helper()
+
+	ctrl := gomock.NewController(t)
+	fixture := &kafkaAdminFixture{
+		admin:  NewMockClusterAdminClient(ctrl),
+		topics: make(map[string]TopicDetail),
+		brokerConfig: map[string]string{
+			BrokerMessageMaxBytesConfigName: mockBrokerMessageMaxBytes,
+			MinInsyncReplicasConfigName:     mockMinInsyncReplicas,
+		},
+		topicConfig: make(map[string]map[string]string),
+	}
+	fixture.addTopic(defaultMockTopicName, defaultPartitionNum)
+	fixture.topicConfig[defaultMockTopicName] = map[string]string{
+		TopicMaxMessageBytesConfigName: mockTopicMessageMaxBytes,
+		MinInsyncReplicasConfigName:    mockMinInsyncReplicas,
+	}
+
+	fixture.admin.EXPECT().Close().AnyTimes()
+	fixture.admin.EXPECT().GetTopicsMeta(gomock.Any(), gomock.Any()).
+		DoAndReturn(fixture.getTopicsMeta).AnyTimes()
+	fixture.admin.EXPECT().GetTopicsPartitionsNum(gomock.Any()).
+		DoAndReturn(fixture.getTopicsPartitionsNum).AnyTimes()
+	fixture.admin.EXPECT().GetBrokerConfig(gomock.Any()).
+		DoAndReturn(fixture.getBrokerConfig).AnyTimes()
+	fixture.admin.EXPECT().GetTopicConfig(gomock.Any(), gomock.Any()).
+		DoAndReturn(fixture.getTopicConfig).AnyTimes()
+	fixture.admin.EXPECT().CreateTopic(gomock.Any(), gomock.Any()).
+		DoAndReturn(fixture.createTopic).AnyTimes()
+
+	return fixture
+}
+
+func (f *kafkaAdminFixture) addTopic(name string, partitionNum int32) {
+	f.topics[name] = TopicDetail{Name: name, NumPartitions: partitionNum}
+}
+
+func (f *kafkaAdminFixture) getTopicsMeta(
+	topics []string, _ bool,
+) (map[string]TopicDetail, error) {
+	result := make(map[string]TopicDetail, len(topics))
+	for _, topic := range topics {
+		if detail, ok := f.topics[topic]; ok {
+			result[topic] = detail
+		}
+	}
+	return result, nil
+}
+
+func (f *kafkaAdminFixture) getTopicsPartitionsNum(
+	topics []string,
+) (map[string]int32, error) {
+	result := make(map[string]int32, len(topics))
+	for _, topic := range topics {
+		if detail, ok := f.topics[topic]; ok {
+			result[topic] = detail.NumPartitions
+		}
+	}
+	return result, nil
+}
+
+func (f *kafkaAdminFixture) getBrokerConfig(configName string) (string, error) {
+	if value, ok := f.brokerConfig[configName]; ok {
+		return value, nil
+	}
+	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
+		"cannot find the `%s` from the broker's configuration", configName)
+}
+
+func (f *kafkaAdminFixture) getTopicConfig(topicName string, configName string) (string, error) {
+	if _, ok := f.topics[topicName]; !ok {
+		return "", errors.ErrKafkaConfigNotFound.GenWithStack(
+			"cannot find the `%s` from the topic's configuration", topicName)
+	}
+	if value, ok := f.topicConfig[topicName][configName]; ok {
+		return value, nil
+	}
+	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
+		"cannot find the `%s` from the topic's configuration", configName)
+}
+
+func (f *kafkaAdminFixture) createTopic(detail *TopicDetail, _ bool) error {
+	if detail.ReplicationFactor > mockClusterReplicationFactor {
+		return sarama.ErrInvalidReplicationFactor
+	}
+	if _, ok := f.brokerConfig[MinInsyncReplicasConfigName]; !ok &&
+		detail.ReplicationFactor != mockClusterReplicationFactor {
+		return sarama.ErrPolicyViolation
+	}
+	f.topics[detail.Name] = *detail
+	return nil
+}
+
+func (f *kafkaAdminFixture) brokerMessageMaxBytes() int {
+	value, _ := strconv.Atoi(f.brokerConfig[BrokerMessageMaxBytesConfigName])
+	return value
+}
+
+func (f *kafkaAdminFixture) topicMaxMessageBytes(topicName string) int {
+	value, _ := strconv.Atoi(f.topicConfig[topicName][TopicMaxMessageBytesConfigName])
+	return value
+}
+
+func (f *kafkaAdminFixture) setMessageMaxBytes(brokerValue, topicValue string) {
+	f.brokerConfig[BrokerMessageMaxBytesConfigName] = brokerValue
+	f.topicConfig[defaultMockTopicName][TopicMaxMessageBytesConfigName] = topicValue
+}
+
+func (f *kafkaAdminFixture) setMinInsyncReplicas(minInsyncReplicas string) {
+	f.topicConfig[defaultMockTopicName][MinInsyncReplicasConfigName] = minInsyncReplicas
+	f.brokerConfig[MinInsyncReplicasConfigName] = minInsyncReplicas
+}
+
+func (f *kafkaAdminFixture) dropBrokerConfig(configName string) {
+	delete(f.brokerConfig, configName)
+}
+
+>>>>>>> d480b05fa (kafka: decouple batch size from Kafka message size limit (#5420))
 func TestCompleteOptions(t *testing.T) {
 	options := NewOptions()
 
@@ -49,6 +186,7 @@ func TestCompleteOptions(t *testing.T) {
 	require.Equal(t, int16(3), options.ReplicationFactor)
 	require.Equal(t, "2.6.0", options.Version)
 	require.Equal(t, 4096, options.MaxMessageBytes)
+	require.Equal(t, 4096, options.MaxBatchedBytes)
 	require.Equal(t, WaitForLocal, options.RequiredAcks)
 	require.Equal(t, defaultMaxRetry, options.MaxRetry)
 
@@ -145,19 +283,75 @@ func TestCompleteOptions(t *testing.T) {
 	require.Equal(t, defaultMaxRetry, options.MaxRetry)
 }
 
+func TestApplyRejectsNonPositiveMaxMessageBytes(t *testing.T) {
+	tests := []struct {
+		name        string
+		uri         string
+		configValue *int
+		expected    int
+	}{
+		{
+			name:     "zero from URI",
+			uri:      "kafka://127.0.0.1:9092/test-topic?max-message-bytes=0",
+			expected: 0,
+		},
+		{
+			name:     "negative from URI",
+			uri:      "kafka://127.0.0.1:9092/test-topic?max-message-bytes=-1",
+			expected: -1,
+		},
+		{
+			name:        "zero from sink config",
+			uri:         "kafka://127.0.0.1:9092/test-topic",
+			configValue: aws.Int(0),
+			expected:    0,
+		},
+		{
+			name:        "negative from sink config",
+			uri:         "kafka://127.0.0.1:9092/test-topic",
+			configValue: aws.Int(-1),
+			expected:    -1,
+		},
+	}
+
+	changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sinkURI, err := url.Parse(test.uri)
+			require.NoError(t, err)
+
+			sinkConfig := config.GetDefaultReplicaConfig().Sink
+			if test.configValue != nil {
+				sinkConfig.KafkaConfig = &config.KafkaConfig{
+					MaxMessageBytes: test.configValue,
+				}
+			}
+
+			options := NewOptions()
+			err = options.Apply(changefeedID, sinkURI, sinkConfig)
+			require.ErrorContains(
+				t, err, fmt.Sprintf("invalid max-message-bytes %d", test.expected))
+			errCode, ok := errors.RFCCode(err)
+			require.True(t, ok)
+			require.Equal(t, errors.ErrKafkaInvalidConfig.RFCCode(), errCode)
+		})
+	}
+}
+
 func TestSetPartitionNum(t *testing.T) {
 	options := NewOptions()
-	err := options.setPartitionNum(2)
+	changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
+	err := options.setPartitionNum(changefeedID, 2)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), options.PartitionNum)
 
 	options.PartitionNum = 1
-	err = options.setPartitionNum(2)
+	err = options.setPartitionNum(changefeedID, 2)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), options.PartitionNum)
 
 	options.PartitionNum = 3
-	err = options.setPartitionNum(2)
+	err = options.setPartitionNum(changefeedID, 2)
 	require.True(t, errors.ErrKafkaInvalidPartitionNum.Equal(err))
 }
 
@@ -225,10 +419,37 @@ func TestTimeout(t *testing.T) {
 	require.Equal(t, 2*time.Minute, options.WriteTimeout)
 }
 
+<<<<<<< HEAD
 func TestAdjustConfigTopicNotExist(t *testing.T) {
 	// When the topic does not exist, use the broker's configuration to create the topic.
 	adminClient := NewClusterAdminClientMockImpl()
 	defer adminClient.Close()
+=======
+func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *testing.T) {
+	tests := []struct {
+		name                      string
+		configuredMaxMessageBytes func(*kafkaAdminFixture) int
+	}{
+		{
+			name: "uses broker limit when configured value is below broker",
+			configuredMaxMessageBytes: func(*kafkaAdminFixture) int {
+				return 1024
+			},
+		},
+		{
+			name: "uses broker limit when configured value is below broker by one byte",
+			configuredMaxMessageBytes: func(f *kafkaAdminFixture) int {
+				return f.brokerMessageMaxBytes() - 1
+			},
+		},
+		{
+			name: "uses broker limit when configured value is above broker",
+			configuredMaxMessageBytes: func(f *kafkaAdminFixture) int {
+				return f.brokerMessageMaxBytes() + 1
+			},
+		},
+	}
+>>>>>>> d480b05fa (kafka: decouple batch size from Kafka message size limit (#5420))
 
 	options := NewOptions()
 	options.BrokerEndpoints = []string{"127.0.0.1:9092"}
@@ -321,9 +542,55 @@ func TestAdjustConfigTopicExist(t *testing.T) {
 	// When the topic exists, but the topic does not have `max.message.bytes`
 	// create a topic without `max.message.bytes`
 	topicName := "test-topic"
+<<<<<<< HEAD
 	detail := &TopicDetail{
 		Name:          topicName,
 		NumPartitions: 3,
+=======
+	changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adminFixture := newKafkaAdminFixture(t)
+			adminClient := adminFixture.admin
+
+			detail := &TopicDetail{
+				Name:          topicName,
+				NumPartitions: 3,
+			}
+			err := adminClient.CreateTopic(detail, false)
+			require.NoError(t, err)
+
+			configuredMaxMessageBytes := test.configuredMaxMessageBytes(adminFixture)
+			sinkURI, err := url.Parse(fmt.Sprintf(
+				"kafka://127.0.0.1:9092/%s?max-message-bytes=%d",
+				topicName, configuredMaxMessageBytes,
+			))
+			require.NoError(t, err)
+
+			options := NewOptions()
+			err = options.Apply(changefeedID, sinkURI, config.GetDefaultReplicaConfig().Sink)
+			require.NoError(t, err)
+			require.Equal(t, configuredMaxMessageBytes, options.MaxMessageBytes)
+			require.Equal(t, configuredMaxMessageBytes, options.MaxBatchedBytes)
+			expectedProducerLimit := adminFixture.brokerMessageMaxBytes()
+
+			ctx := context.Background()
+			err = adjustOptions(ctx, changefeedID, adminClient, options, topicName)
+			require.NoError(t, err)
+
+			saramaConfig, err := newSaramaConfig(ctx, options)
+			require.NoError(t, err)
+
+			require.NotEqual(t, configuredMaxMessageBytes, options.MaxMessageBytes)
+			require.Equal(t, expectedProducerLimit, options.MaxMessageBytes)
+			require.Equal(
+				t,
+				min(configuredMaxMessageBytes, expectedProducerLimit),
+				options.MaxBatchedBytes,
+			)
+			require.Equal(t, expectedProducerLimit, saramaConfig.Producer.MaxMessageBytes)
+		})
+>>>>>>> d480b05fa (kafka: decouple batch size from Kafka message size limit (#5420))
 	}
 	err = adminClient.CreateTopic(detail, false)
 	require.NoError(t, err)
@@ -362,11 +629,17 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 
 	// Report an error if the replication-factor is less than min.insync.replicas
 	// when the topic does not exist.
+<<<<<<< HEAD
 	adminClient.SetMinInsyncReplicas("2")
+=======
+	adminFixture.setMinInsyncReplicas("2")
+	changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
+>>>>>>> d480b05fa (kafka: decouple batch size from Kafka message size limit (#5420))
 
 	ctx := context.Background()
 	err := adjustOptions(
 		ctx,
+		changefeedID,
 		adminClient,
 		options,
 		"create-new-fail-invalid-min-insync-replicas",
@@ -380,7 +653,7 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 	// topic not exist, and `min.insync.replicas` not found in broker's configuration
 	adminClient.DropBrokerConfig(MinInsyncReplicasConfigName)
 	topicName := "no-topic-no-min-insync-replicas"
-	err = adjustOptions(ctx, adminClient, options, "no-topic-no-min-insync-replicas")
+	err = adjustOptions(ctx, changefeedID, adminClient, options, "no-topic-no-min-insync-replicas")
 	require.Nil(t, err)
 	err = adminClient.CreateTopic(&TopicDetail{
 		Name:              topicName,
@@ -399,12 +672,17 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 		NumPartitions:     3,
 	}, false)
 	require.Nil(t, err)
-	err = adjustOptions(ctx, adminClient, options, topicName)
+	err = adjustOptions(ctx, changefeedID, adminClient, options, topicName)
 	require.Nil(t, err)
 
 	// topic found, and have `min.insync.replicas`, but set to 2, larger than `replication-factor`.
+<<<<<<< HEAD
 	adminClient.SetMinInsyncReplicas("2")
 	err = adjustOptions(ctx, adminClient, options, adminClient.GetDefaultMockTopicName())
+=======
+	adminFixture.setMinInsyncReplicas("2")
+	err = adjustOptions(ctx, changefeedID, adminClient, options, defaultMockTopicName)
+>>>>>>> d480b05fa (kafka: decouple batch size from Kafka message size limit (#5420))
 	require.Regexp(t,
 		".*`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of topic.*",
 		errors.Cause(err),
@@ -419,10 +697,13 @@ func TestSkipAdjustConfigMinInsyncReplicasWhenRequiredAcksIsNotWailAll(t *testin
 	options.BrokerEndpoints = []string{"127.0.0.1:9092"}
 	options.RequiredAcks = WaitForLocal
 
+	changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
+
 	// Do not report an error if the replication-factor is less than min.insync.replicas(1<2).
 	adminClient.SetMinInsyncReplicas("2")
 	err := adjustOptions(
 		context.Background(),
+		changefeedID,
 		adminClient,
 		options,
 		"skip-check-min-insync-replicas",
@@ -499,6 +780,10 @@ func TestConfigurationCombinations(t *testing.T) {
 		// topic not created
 		// `message.max.bytes` < user set `max-message-bytes` < default `max-message-bytes`
 		{
+<<<<<<< HEAD
+=======
+			"new topic broker below user",
+>>>>>>> d480b05fa (kafka: decouple batch size from Kafka message size limit (#5420))
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
 			[]interface{}{"not-created-topic", strconv.Itoa(1024*1024 + 1)},
 			BrokerMessageMaxBytes,
@@ -621,6 +906,10 @@ func TestConfigurationCombinations(t *testing.T) {
 		// topic created
 		// default `max-message-bytes` < `max.message.bytes` < user set `max-message-bytes`
 		{
+<<<<<<< HEAD
+=======
+			"existing topic topic below user",
+>>>>>>> d480b05fa (kafka: decouple batch size from Kafka message size limit (#5420))
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
 			[]interface{}{
 				DefaultMockTopicName,
@@ -640,15 +929,24 @@ func TestConfigurationCombinations(t *testing.T) {
 		sinkURI, err := url.Parse(uri)
 		require.Nil(t, err)
 
+<<<<<<< HEAD
 		ctx := context.Background()
 		options := NewOptions()
 		err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 		require.Nil(t, err)
+=======
+			ctx := context.Background()
+			options := NewOptions()
+			err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+			require.Nil(t, err)
+			configuredMaxMessageBytes := options.MaxMessageBytes
+>>>>>>> d480b05fa (kafka: decouple batch size from Kafka message size limit (#5420))
 
 		changefeed := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "changefeed-test")
 		factory, err := NewMockFactory(ctx, options, changefeed)
 		require.NoError(t, err)
 
+<<<<<<< HEAD
 		adminClient, err := factory.AdminClient(ctx)
 		require.NoError(t, err)
 
@@ -663,6 +961,24 @@ func TestConfigurationCombinations(t *testing.T) {
 			KafkaConfig: &config.KafkaConfig{
 				LargeMessageHandle: config.NewDefaultLargeMessageHandleConfig(),
 			},
+=======
+			sourceMaxMessageBytes := adminFixture.brokerMessageMaxBytes()
+			if _, exists := adminFixture.topics[topic]; exists {
+				sourceMaxMessageBytes = adminFixture.topicMaxMessageBytes(topic)
+			}
+
+			changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
+			err = adjustOptions(ctx, changefeedID, adminClient, options, topic)
+			require.Nil(t, err)
+			require.Equal(t, sourceMaxMessageBytes, options.MaxMessageBytes)
+			require.Equal(
+				t,
+				min(configuredMaxMessageBytes, sourceMaxMessageBytes),
+				options.MaxBatchedBytes,
+			)
+
+			adminClient.Close()
+>>>>>>> d480b05fa (kafka: decouple batch size from Kafka message size limit (#5420))
 		})
 		require.Nil(t, err)
 		encoderConfig.WithMaxMessageBytes(options.MaxMessageBytes)
@@ -715,6 +1031,7 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, int16(5), c.ReplicationFactor)
 	require.Equal(t, "3.1.2", c.Version)
 	require.Equal(t, 1024*1024, c.MaxMessageBytes)
+	require.Equal(t, 1024*1024, c.MaxBatchedBytes)
 	require.Equal(t, "gzip", c.Compression)
 	require.Equal(t, "test-id", c.ClientID)
 	require.Equal(t, true, c.AutoCreate)
@@ -796,6 +1113,7 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, int16(5), c.ReplicationFactor)
 	require.Equal(t, "3.1.2", c.Version)
 	require.Equal(t, 1024*1024, c.MaxMessageBytes)
+	require.Equal(t, 1024*1024, c.MaxBatchedBytes)
 	require.Equal(t, "gzip", c.Compression)
 	require.Equal(t, "test-id", c.ClientID)
 	require.Equal(t, true, c.AutoCreate)

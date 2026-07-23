@@ -122,7 +122,10 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, config.DefaultMaxMessageBytes)
+	encoderConfig, err := helper.GetEncoderConfig(
+		changefeedID, sinkURI, protocol, sinkConfig,
+		config.DefaultMaxMessageBytes, config.DefaultMaxMessageBytes,
+	)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
