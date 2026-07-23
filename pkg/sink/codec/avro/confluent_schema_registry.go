@@ -181,7 +181,9 @@ func (m *confluentSchemaManager) Register(
 			zap.ByteString("requestBody", payload),
 			zap.ByteString("responseBody", body),
 		)
-		return id, errors.ErrAvroSchemaAPIError.GenWithStackByArgs()
+		return id, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(
+			"register schema failed with status " + strconv.Itoa(resp.StatusCode),
+		)
 	}
 
 	var jsonResp registerResponse
