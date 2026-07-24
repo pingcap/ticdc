@@ -26,6 +26,20 @@ import (
 	"go.uber.org/zap"
 )
 
+// txnScanContext groups the per-attempt objects needed by transaction strategy
+// hooks. The scanner owns iteration and DDL/DML ordering; a strategy only
+// decides where a transaction may stop and how pending transaction work resumes.
+//
+// For example, transaction (startTs=10, commitTs=100) contains rows r1, r2,
+// and r3. The atomic strategy emits all three rows before it may stop. The split
+// strategy may emit r1, publish progress (100, 10, P1), and resume r2 after
+// EventStore position P1 in the next attempt. If a row is an update that changes
+// a unique key, its delete half stays in the original scan while its insert half
+// is spilled and drained only after all original rows, avoiding a downstream
+// unique-key conflict across fragments.
+//
+// See docs/design/2026-07-22-eventservice-scan-progress-and-txn-strategy.md for
+// the complete cursor and state-transition model.
 type txnScanContext struct {
 	scanner   *eventScanner
 	session   *session
@@ -33,6 +47,10 @@ type txnScanContext struct {
 	processor *dmlProcessor
 }
 
+// nextTxnMeta identifies the next iterator record that the scanner is about to
+// process. A zero commitTs means iterator EOF. Split mode also uses this value
+// when currentTxn is nil to decide whether a transaction retained from a prior
+// row-level interruption has reached the end of its original EventStore rows.
 type nextTxnMeta struct {
 	startTs           uint64
 	commitTs          uint64
@@ -44,7 +62,12 @@ type nextTxnMeta struct {
 // transaction scanning while the event scanner retains the common iterator and
 // DDL/DML merge loop.
 type txnScanStrategy interface {
+	// resumePending runs before DDL lookup and EventStore iterator creation.
+	// handled means the pending-state path consumed this attempt completely;
+	// interrupted asks the broker to schedule another attempt immediately.
 	resumePending(ctx *txnScanContext) (handled bool, interrupted bool, err error)
+	// startTxn creates the mode-specific TxnEvent after common boundary and
+	// schema-version handling has selected the next transaction.
 	startTxn(
 		ctx *txnScanContext,
 		startTs uint64,
@@ -52,7 +75,12 @@ type txnScanStrategy interface {
 		tableInfo *common.TableInfo,
 		tableID int64,
 	) error
+	// finishTxn runs at a transaction boundary or iterator EOF. In split mode it
+	// may also close an original phase retained from a previous scan even when
+	// this attempt has not created currentTxn yet.
 	finishTxn(ctx *txnScanContext, next nextTxnMeta) (interrupted bool, err error)
+	// afterAppend is the only hook that may interrupt inside a transaction. A
+	// non-empty position is the exact cursor after rawEvent.
 	afterAppend(
 		ctx *txnScanContext,
 		rawEvent *common.RawKVEntry,
@@ -60,6 +88,8 @@ type txnScanStrategy interface {
 	) (interrupted bool, err error)
 }
 
+// newTxnScanStrategy selects split behavior only when the dispatcher's
+// transaction atomicity configuration explicitly permits cross-scan fragments.
 func newTxnScanStrategy(shouldSplitTxn bool) txnScanStrategy {
 	if shouldSplitTxn {
 		return splitTxnScanStrategy{}
@@ -67,6 +97,8 @@ func newTxnScanStrategy(shouldSplitTxn bool) txnScanStrategy {
 	return atomicTxnScanStrategy{}
 }
 
+// atomicTxnScanStrategy preserves table-level transaction atomicity by making
+// both pending-resume and per-row interruption no-ops.
 type atomicTxnScanStrategy struct{}
 
 func (atomicTxnScanStrategy) resumePending(
@@ -109,6 +141,8 @@ func (atomicTxnScanStrategy) afterAppend(
 	return false, nil
 }
 
+// splitTxnScanStrategy permits row-level interruption and owns the two-phase
+// original-rows/spilled-inserts lifecycle for large transactions.
 type splitTxnScanStrategy struct{}
 
 func (splitTxnScanStrategy) resumePending(
@@ -142,6 +176,11 @@ func (splitTxnScanStrategy) finishTxn(
 	return finishCurrentSplitTxn(ctx, next)
 }
 
+// finishPendingSplitTxn handles the boundary discovered after row-level resume.
+// If the next row still belongs to the retained (startTs, commitTs), the
+// original phase continues. A different transaction or EOF proves that all
+// original rows were read, so progress becomes (C, S, nil) and the next scan
+// starts draining delayed inserts before it may pass this transaction.
 func finishPendingSplitTxn(session *session, next nextTxnMeta) bool {
 	dispatcher := session.dispatcherStat
 	state := dispatcher.getLargeTxnState()
@@ -170,6 +209,8 @@ func (splitTxnScanStrategy) afterAppend(
 	return true, nil
 }
 
+// startTxn contains setup shared by both strategies; shouldSplitTxn controls
+// whether the resulting TxnEvent may be emitted as cross-scan fragments.
 func startTxn(
 	ctx *txnScanContext,
 	startTs uint64,
@@ -193,6 +234,11 @@ func startTxn(
 	return nil
 }
 
+// finishCurrentSplitTxn commits the current fragment at a transaction boundary.
+// A transaction with spilled inserts moves from the original phase to the drain
+// phase and deliberately keeps progress at (C, S). If a DDL exists at the same
+// commit-ts, the inserts are merged back into the current batch instead so the
+// merger can preserve the required DML(C) -> DDL(C) order.
 func finishCurrentSplitTxn(ctx *txnScanContext, next nextTxnMeta) (bool, error) {
 	processor := ctx.processor
 	currentStartTs := processor.currentTxn.CurrentDMLEvent.GetStartTs()
@@ -243,6 +289,10 @@ func finishCurrentSplitTxn(ctx *txnScanContext, next nextTxnMeta) (bool, error) 
 	return true, nil
 }
 
+// canInterruptCurrentTxn requires an exact EventStore row position, a fragment
+// above the large-transaction threshold, and a DML/DDL merge boundary that is
+// safe to split. Cached UK-update inserts must be spilled first so no insert
+// half is lost when the in-memory processor is discarded after interruption.
 func canInterruptCurrentTxn(
 	ctx *txnScanContext,
 	rawEvent *common.RawKVEntry,
@@ -257,6 +307,10 @@ func canInterruptCurrentTxn(
 	return ctx.merger.canInterrupt(rawEvent.CRTs, ctx.processor.batchDML)
 }
 
+// interruptCurrentTxn emits the current fragment and publishes (C, S, P).
+// That row-level progress must later overwrite the transaction-level progress
+// observed by the broker send path, or EventStore would skip the remainder of
+// this transaction on the next scan.
 func interruptCurrentTxn(
 	ctx *txnScanContext,
 	commitTs uint64,
@@ -284,6 +338,12 @@ func interruptCurrentTxn(
 		zap.Duration("duration", time.Since(ctx.session.startTime)))
 }
 
+// drainLargeTxnInserts serves a pending drain directly from spill storage; it
+// does not create an EventStore iterator. EventStore progress remains (C, S,
+// nil) while state.drainedInsertCount tracks the independent position inside
+// the spill file. On a failed attempt the reader rolls back to the last
+// committed drain count, and on EOF the spill state is cleaned before scanning
+// can move beyond the transaction.
 func drainLargeTxnInserts(
 	ctx *txnScanContext,
 	state *largeTxnScanState,
@@ -324,68 +384,119 @@ func drainLargeTxnInserts(
 				return false, nil
 			}
 			if errors.Is(err, io.EOF) {
-				if processor.currentTxn != nil {
-					if err := processor.commitTxn(); err != nil {
-						return returnWithError(err)
-					}
-					if processor.getCurrentBatchDML().DMLCount() != 0 {
-						session.appendEvents([]event.Event{processor.getCurrentBatchDML()})
-					}
+				interrupted, finishErr := completeLargeTxnInsertDrain(
+					session, state, processor, drainedInsertCount)
+				if finishErr != nil {
+					return returnWithError(finishErr)
 				}
-				state.commitDrainedInserts(drainedInsertCount)
-				session.progress = newTxnScanProgress(state.commitTs, state.startTs)
-				hasFollowingTxn, followingCommitTs := state.snapshotDrainInfo()
-				shouldResolveCommitTs := (!hasFollowingTxn || followingCommitTs > state.commitTs) &&
-					session.dataRange.CommitTsEnd == state.commitTs
-				if err := session.dispatcherStat.cleanupLargeTxnState(); err != nil {
-					log.Warn("cleanup drained large transaction spill failed",
-						zap.Stringer("dispatcherID", session.dispatcherStat.id),
-						zap.Error(err))
-				}
-				if shouldResolveCommitTs {
-					resolved := event.NewResolvedEvent(
-						state.commitTs,
-						session.dispatcherStat.id,
-						session.dispatcherStat.epoch,
-					)
-					session.appendEvents([]event.Event{resolved})
-					session.progress = newTxnScanProgress(state.commitTs, 0)
-					return false, nil
-				}
-				return true, nil
+				return interrupted, nil
 			}
 			return returnWithError(err)
 		}
 		drainedInsertCount++
 
-		if processor.currentTxn == nil {
-			if err := processor.startTxn(
-				session.dispatcherStat.id,
-				state.tableID,
-				state.tableInfo,
-				state.startTs,
-				state.commitTs,
-				true,
-			); err != nil {
-				return returnWithError(err)
-			}
-		}
-		session.observeRawEntry(entry, nil)
-		if err := processor.appendInsertRow(entry); err != nil {
+		if err := appendDrainedInsert(session, state, processor, entry); err != nil {
 			return returnWithError(err)
 		}
-		if session.exceedLimit(processor.batchDML.GetSize(), processor.batchDML) {
-			if err := processor.commitTxn(); err != nil {
-				return returnWithError(err)
-			}
-			session.appendEvents([]event.Event{processor.getCurrentBatchDML()})
-			state.commitDrainedInserts(drainedInsertCount)
-			session.progress = newTxnScanProgress(state.commitTs, state.startTs)
-			return true, nil
+		if !session.exceedLimit(processor.batchDML.GetSize(), processor.batchDML) {
+			continue
 		}
+		if err := flushLargeTxnInsertBatch(
+			session, state, processor, drainedInsertCount); err != nil {
+			return returnWithError(err)
+		}
+		return true, nil
 	}
 }
 
+// appendDrainedInsert lazily recreates the original transaction in the current
+// scan attempt, then appends one insert read from spill storage.
+func appendDrainedInsert(
+	session *session,
+	state *largeTxnScanState,
+	processor *dmlProcessor,
+	entry *common.RawKVEntry,
+) error {
+	if processor.currentTxn == nil {
+		if err := processor.startTxn(
+			session.dispatcherStat.id,
+			state.tableID,
+			state.tableInfo,
+			state.startTs,
+			state.commitTs,
+			true,
+		); err != nil {
+			return err
+		}
+	}
+	session.observeRawEntry(entry, nil)
+	return processor.appendInsertRow(entry)
+}
+
+// flushLargeTxnInsertBatch publishes a size-limited drain fragment and
+// advances the spill retry boundary only after that fragment is complete.
+func flushLargeTxnInsertBatch(
+	session *session,
+	state *largeTxnScanState,
+	processor *dmlProcessor,
+	drainedInsertCount int,
+) error {
+	if err := processor.commitTxn(); err != nil {
+		return err
+	}
+	session.appendEvents([]event.Event{processor.getCurrentBatchDML()})
+	state.commitDrainedInserts(drainedInsertCount)
+	session.progress = newTxnScanProgress(state.commitTs, state.startTs)
+	return nil
+}
+
+// completeLargeTxnInsertDrain handles spill EOF. It returns interrupted=true
+// when normal EventStore/DDL scanning still needs another attempt.
+func completeLargeTxnInsertDrain(
+	session *session,
+	state *largeTxnScanState,
+	processor *dmlProcessor,
+	drainedInsertCount int,
+) (bool, error) {
+	if processor.currentTxn != nil {
+		if err := processor.commitTxn(); err != nil {
+			return false, err
+		}
+		if processor.getCurrentBatchDML().DMLCount() != 0 {
+			session.appendEvents([]event.Event{processor.getCurrentBatchDML()})
+		}
+	}
+
+	state.commitDrainedInserts(drainedInsertCount)
+	session.progress = newTxnScanProgress(state.commitTs, state.startTs)
+
+	hasFollowingTxn, followingCommitTs := state.snapshotDrainInfo()
+	noFollowingTxnAtCommitTs := !hasFollowingTxn || followingCommitTs > state.commitTs
+	rangeEndsAtTxnCommitTs := session.dataRange.CommitTsEnd == state.commitTs
+	shouldResolveCommitTs := noFollowingTxnAtCommitTs && rangeEndsAtTxnCommitTs
+
+	if err := session.dispatcherStat.cleanupLargeTxnState(); err != nil {
+		log.Warn("cleanup drained large transaction spill failed",
+			zap.Stringer("dispatcherID", session.dispatcherStat.id),
+			zap.Error(err))
+	}
+	if !shouldResolveCommitTs {
+		return true, nil
+	}
+
+	resolved := event.NewResolvedEvent(
+		state.commitTs,
+		session.dispatcherStat.id,
+		session.dispatcherStat.epoch,
+	)
+	session.appendEvents([]event.Event{resolved})
+	session.progress = newTxnScanProgress(state.commitTs, 0)
+	return false, nil
+}
+
+// spillCachedInsertRows persists insert halves collected before a split update
+// crossed the large-transaction threshold. They must leave the in-memory cache
+// before a row-level interruption discards the current processor.
 func (p *dmlProcessor) spillCachedInsertRows() error {
 	if len(p.insertRowCache) == 0 {
 		return nil
@@ -403,6 +514,9 @@ func (p *dmlProcessor) spillCachedInsertRows() error {
 	return nil
 }
 
+// shouldSpillSplitUpdateInsert keeps spilling once a transaction has entered
+// the spill lifecycle, even if a later in-memory fragment is below the size
+// threshold.
 func (p *dmlProcessor) shouldSpillSplitUpdateInsert() bool {
 	if p.currentTxn == nil {
 		return false
@@ -410,6 +524,8 @@ func (p *dmlProcessor) shouldSpillSplitUpdateInsert() bool {
 	return p.currentTxn.exceedsLargeTxnThreshold() || p.hasSpilledInsertsForCurrentTxn()
 }
 
+// hasSpilledInsertsForCurrentTxn prevents state from one transaction from being
+// mistaken for pending inserts of another transaction at the same commit-ts.
 func (p *dmlProcessor) hasSpilledInsertsForCurrentTxn() bool {
 	if p.currentTxn == nil || p.dispatcherStat == nil {
 		return false
@@ -429,6 +545,9 @@ func (p *dmlProcessor) hasLargeTxnState(startTs uint64, commitTs uint64) bool {
 		state.getPhase() == largeTxnScanPhaseOriginal
 }
 
+// flushSpilledInsertsIntoCurrentTxn is the same-commit-ts DDL path. It folds
+// delayed inserts back into the current batch instead of entering a separate
+// drain attempt, then removes the exhausted spill state.
 func (p *dmlProcessor) flushSpilledInsertsIntoCurrentTxn() error {
 	if p.currentTxn == nil || p.dispatcherStat == nil {
 		return nil
@@ -451,6 +570,9 @@ func (p *dmlProcessor) flushSpilledInsertsIntoCurrentTxn() error {
 	}
 }
 
+// getOrCreateLargeTxnState returns dispatcher-owned state that survives the
+// current processor and scan attempt. The identity fields prevent fragments
+// from different transactions from sharing one spill lifecycle.
 func (p *dmlProcessor) getOrCreateLargeTxnState() (*largeTxnScanState, error) {
 	if p.dispatcherStat == nil {
 		return nil, errors.New("dispatcher stat is required for large txn update spill")
