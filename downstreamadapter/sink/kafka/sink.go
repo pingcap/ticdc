@@ -102,6 +102,10 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 	}
 	defer claimCheck.Close()
 
+	if _, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck); err != nil {
+		return errors.Trace(err)
+	}
+
 	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
 	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
 		return errors.Trace(err)
@@ -143,11 +147,6 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 	}, true)
 	if err != nil {
 		return errors.WrapError(errors.ErrKafkaCreateTopic, err)
-	}
-
-	_, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck)
-	if err != nil {
-		return errors.Trace(err)
 	}
 	return nil
 }

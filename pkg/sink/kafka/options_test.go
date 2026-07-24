@@ -83,7 +83,11 @@ func newKafkaAdminFixture(t *testing.T) *kafkaAdminFixture {
 }
 
 func (f *kafkaAdminFixture) addTopic(name string, partitionNum int32) {
-	f.topics[name] = TopicDetail{Name: name, NumPartitions: partitionNum}
+	f.topics[name] = TopicDetail{
+		Name:              name,
+		NumPartitions:     partitionNum,
+		ReplicationFactor: mockClusterReplicationFactor,
+	}
 }
 
 func (f *kafkaAdminFixture) getTopicsMeta(
@@ -450,8 +454,9 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 			adminClient := adminFixture.admin
 
 			detail := &TopicDetail{
-				Name:          topicName,
-				NumPartitions: 3,
+				Name:              topicName,
+				NumPartitions:     3,
+				ReplicationFactor: mockClusterReplicationFactor,
 			}
 			err := adminClient.CreateTopic(detail, false)
 			require.NoError(t, err)
@@ -540,8 +545,15 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 	err = adjustOptions(ctx, changefeedID, adminClient, options, topicName)
 	require.Nil(t, err)
 
-	// topic found, and have `min.insync.replicas`, but set to 2, larger than `replication-factor`.
+	// Existing topics use their actual replication factor rather than the option
+	// used only when creating a topic.
 	adminFixture.setMinInsyncReplicas("2")
+	err = adjustOptions(ctx, changefeedID, adminClient, options, defaultMockTopicName)
+	require.NoError(t, err)
+
+	topicDetail := adminFixture.topics[defaultMockTopicName]
+	topicDetail.ReplicationFactor = 1
+	adminFixture.topics[defaultMockTopicName] = topicDetail
 	err = adjustOptions(ctx, changefeedID, adminClient, options, defaultMockTopicName)
 	require.Regexp(t,
 		".*`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of topic.*",

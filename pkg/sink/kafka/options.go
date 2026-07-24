@@ -633,7 +633,11 @@ func validateRequiredAcks(
 	if options.RequiredAcks != WaitForAll {
 		return nil
 	}
-	return validateMinInsyncReplicas(ctx, admin, topics, topic, int(options.ReplicationFactor))
+	replicationFactor := options.ReplicationFactor
+	if info, exists := topics[topic]; exists {
+		replicationFactor = info.ReplicationFactor
+	}
+	return validateMinInsyncReplicas(ctx, admin, topics, topic, int(replicationFactor))
 }
 
 func adjustExistingTopicOption(

@@ -146,11 +146,25 @@ func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool
 			continue
 		}
 		result[meta.Name] = TopicDetail{
-			Name:          meta.Name,
-			NumPartitions: int32(len(meta.Partitions)),
+			Name:              meta.Name,
+			NumPartitions:     int32(len(meta.Partitions)),
+			ReplicationFactor: minReplicationFactor(meta.Partitions),
 		}
 	}
 	return result, nil
+}
+
+func minReplicationFactor(partitions []*sarama.PartitionMetadata) int16 {
+	minReplicas := 0
+	for i, partition := range partitions {
+		if partition == nil {
+			return 0
+		}
+		if i == 0 || len(partition.Replicas) < minReplicas {
+			minReplicas = len(partition.Replicas)
+		}
+	}
+	return int16(minReplicas)
 }
 
 // IsAdminAuthorizationFailed checks whether err is an authorization failure from Kafka admin APIs.
