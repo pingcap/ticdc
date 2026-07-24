@@ -36,6 +36,7 @@ function run() {
 
 	cdc_cli_changefeed pause -c ${changefeed_id}
 
+	kafka_topic --topic "$TOPIC_NAME" --max-message-bytes 650 --alter
 	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=simple&encoding-format=avro&max-message-bytes=650"
 	cdc_cli_changefeed update -c ${changefeed_id} --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml" --no-confirm
 	cdc_cli_changefeed resume -c ${changefeed_id}
