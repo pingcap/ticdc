@@ -31,10 +31,10 @@ type Sink struct {
 	statistics *metrics.Statistics
 }
 
-func New(changefeedID common.ChangeFeedID) (*Sink, error) {
+func New(changefeedID common.ChangeFeedID, keyspaceID uint32) (*Sink, error) {
 	return &Sink{
 		eventCh:    chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
-		statistics: metrics.NewStatistics(changefeedID, "sink"),
+		statistics: metrics.NewStatistics(changefeedID, keyspaceID, "sink"),
 	}, nil
 }
 

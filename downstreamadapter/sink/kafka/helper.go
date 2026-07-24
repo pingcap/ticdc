@@ -49,7 +49,8 @@ func (c components) close() {
 	}
 }
 
-func newKafkaSinkComponent(ctx context.Context,
+func newKafkaSinkComponent(
+	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
@@ -88,7 +89,10 @@ func newKafkaSinkComponent(ctx context.Context,
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
-	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, options.MaxMessageBytes)
+	encoderConfig, err := helper.GetEncoderConfig(
+		changefeedID, sinkURI, protocol, sinkConfig,
+		options.MaxMessageBytes, options.MaxBatchedBytes,
+	)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}

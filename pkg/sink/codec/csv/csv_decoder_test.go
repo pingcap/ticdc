@@ -49,7 +49,7 @@ func TestCSVBatchDecoder(t *testing.T) {
 		tp, hasNext := decoder.HasNext()
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, tp)
-		event := decoder.NextDMLEvent()
+		event := decoder.NextDMLMessage().ToDMLEvent()
 		require.NotNil(t, event)
 	}
 

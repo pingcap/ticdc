@@ -49,7 +49,7 @@ func NewFactory(
 	}
 	defer admin.Close()
 
-	if err := adjustOptions(ctx, admin, o, o.Topic); err != nil {
+	if err := adjustOptions(ctx, changefeedID, admin, o, o.Topic); err != nil {
 		return nil, errors.Trace(err)
 	}
 
@@ -93,7 +93,7 @@ func newClientOption(o *options) *clientOptions {
 		IsAssignedVersion: o.IsAssignedVersion,
 
 		MaxMessageBytes:       o.MaxMessageBytes,
-		ProducerBatchMaxBytes: o.ProducerBatchMaxBytes,
+		ProducerBatchMaxBytes: o.MaxMessageBytes,
 		MaxRetry:              o.MaxRetry,
 		Compression:           o.Compression,
 		RequiredAcks:          int16(o.RequiredAcks),

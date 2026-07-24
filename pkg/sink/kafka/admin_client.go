@@ -179,6 +179,12 @@ func (a *adminClient) GetTopicsMeta(
 	return result, nil
 }
 
+// IsAdminAuthorizationFailed checks whether err is an authorization failure from Kafka admin APIs.
+func IsAdminAuthorizationFailed(err error) bool {
+	return errors.Is(err, kerr.TopicAuthorizationFailed) ||
+		errors.Is(err, kerr.ClusterAuthorizationFailed)
+}
+
 func (a *adminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
 	if len(topics) == 0 {
 		return make(map[string]int32), nil

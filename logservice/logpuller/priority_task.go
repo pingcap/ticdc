@@ -14,9 +14,9 @@
 package logpuller
 
 import (
-	"fmt"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/tikv/client-go/v2/oracle"
 )
 
@@ -39,7 +39,36 @@ const (
 )
 
 func (t TaskType) String() string {
-	return fmt.Sprintf("%d", t)
+	switch t {
+	case TaskHighPrior:
+		return "high"
+	case TaskLowPrior:
+		return "low"
+	default:
+		return "unknown"
+	}
+}
+
+func (t TaskType) scanPriority() cdcpb.ScanPriority {
+	switch t {
+	case TaskHighPrior:
+		return cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
+	case TaskLowPrior:
+		return cdcpb.ScanPriority_SCAN_PRIORITY_LOW
+	default:
+		return cdcpb.ScanPriority_SCAN_PRIORITY_LOW
+	}
+}
+
+func taskTypeFromScanPriority(priority cdcpb.ScanPriority) TaskType {
+	if priority == cdcpb.ScanPriority_SCAN_PRIORITY_HIGH {
+		return TaskHighPrior
+	}
+	return TaskLowPrior
+}
+
+func normalizeScanPriority(priority cdcpb.ScanPriority) cdcpb.ScanPriority {
+	return taskTypeFromScanPriority(priority).scanPriority()
 }
 
 // PriorityTask is the interface for priority-based tasks
