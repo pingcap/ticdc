@@ -212,9 +212,6 @@ func (g *encoderGroup) Output() <-chan *future {
 
 func (g *encoderGroup) cleanMetrics() {
 	encoderGroupInputChanSizeGauge.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name())
-	for _, encoder := range g.rowEventEncoders {
-		encoder.Clean()
-	}
 	common.CleanMetrics(g.changefeedID)
 }
 

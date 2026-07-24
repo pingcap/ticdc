@@ -31,8 +31,6 @@ type EventEncoder interface {
 	AppendRowChangedEvent(context.Context, string, *commonEvent.RowEvent) error
 	// Build builds the batch messages from AppendRowChangedEvent and returns the messages.
 	Build() []*Message
-	// clean the resources
-	Clean()
 }
 
 // TxnEventEncoder is an abstraction for events encoder

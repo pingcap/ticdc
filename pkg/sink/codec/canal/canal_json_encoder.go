@@ -578,9 +578,3 @@ func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.M
 
 	return common.NewMsg(nil, value), nil
 }
-
-func (c *JSONRowEventEncoder) Clean() {
-	if c.claimCheck != nil {
-		c.claimCheck.CleanMetrics()
-	}
-}

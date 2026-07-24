@@ -60,12 +60,6 @@ func NewBatchEncoder(ctx context.Context, config *common.Config, claimCheck *cla
 	}, nil
 }
 
-func (d *batchEncoder) Clean() {
-	if d.claimCheck != nil {
-		d.claimCheck.CleanMetrics()
-	}
-}
-
 func (d *batchEncoder) fetchColumnFlags(e *commonEvent.RowEvent) map[string]uint64 {
 	lock.RLock()
 	result, ok := columnFlagsCache[e.GetTableID()]

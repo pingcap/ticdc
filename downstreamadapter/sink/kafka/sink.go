@@ -138,12 +138,10 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 		return errors.WrapError(errors.ErrKafkaCreateTopic, err)
 	}
 
-	encoder, err := codec.NewEventEncoder(ctx, encoderConfig)
+	_, err = codec.NewEventEncoder(ctx, encoderConfig, nil)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	encoder.Clean()
-
 	return nil
 }
 

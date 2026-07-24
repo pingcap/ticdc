@@ -157,10 +157,3 @@ func (e *Encoder) EncodeDDLEvent(event *commonEvent.DDLEvent) (*common.Message, 
 	}
 	return result, nil
 }
-
-// CleanMetrics implement the RowEventEncoderBuilder interface
-func (e *Encoder) Clean() {
-	if e.claimCheck != nil {
-		e.claimCheck.CleanMetrics()
-	}
-}

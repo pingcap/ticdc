@@ -97,8 +97,10 @@ func (c *ClaimCheck) FileNameWithPrefix(fileName string) string {
 	return strings.TrimSuffix(c.storage.URI(), "/") + "/" + fileName
 }
 
-// CleanMetrics the claim check by clean up the metrics.
-func (c *ClaimCheck) CleanMetrics() {
+func (c *ClaimCheck) Close() {
+	if c.storage != nil {
+		c.storage.Close()
+	}
 	claimCheckSendMessageDuration.DeleteLabelValues(c.changefeedID.Keyspace(), c.changefeedID.Name())
 	claimCheckSendMessageCount.DeleteLabelValues(c.changefeedID.Keyspace(), c.changefeedID.Name())
 }
