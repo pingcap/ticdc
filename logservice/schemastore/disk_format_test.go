@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/pebble"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -279,6 +280,53 @@ func TestPersistSchemaSnapshotEncryptionRoundTrip(t *testing.T) {
 	require.Equal(t, int64(200), tables[0].TableID)
 	require.Equal(t, "test", tables[0].SchemaName)
 	require.Equal(t, "t1", tables[0].TableName)
+}
+
+func TestGetAllPhysicalTablesSkipsViews(t *testing.T) {
+	db, err := pebble.Open(t.TempDir(), &pebble.Options{})
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, db.Close())
+	}()
+
+	const snapshotTs = uint64(100)
+	dbInfo := &model.DBInfo{ID: 100, Name: ast.NewCIStr("test")}
+	tableInfo := newEligibleTableInfoForTest(200, "t1")
+	viewInfo := &model.TableInfo{
+		ID:   201,
+		Name: ast.NewCIStr("v1"),
+		View: &model.ViewInfo{},
+	}
+	batch := db.NewBatch()
+	defer func() {
+		require.NoError(t, batch.Close())
+	}()
+	addSchemaInfoToBatch(batch, snapshotTs, dbInfo)
+	for _, info := range []*model.TableInfo{tableInfo, viewInfo} {
+		value, err := json.Marshal(info)
+		require.NoError(t, err)
+		addTableInfoToBatch(batch, snapshotTs, dbInfo, value)
+	}
+	require.NoError(t, batch.Commit(pebble.NoSync))
+
+	snapshot := db.NewSnapshot()
+	defer func() {
+		require.NoError(t, snapshot.Close())
+	}()
+
+	tables, err := loadAllPhysicalTablesAtTs(snapshot, snapshotTs, snapshotTs, nil, nil, 0)
+	require.NoError(t, err)
+	require.Equal(t, []commonEvent.Table{
+		{
+			SchemaID:  100,
+			TableID:   200,
+			Splitable: true,
+			SchemaTableName: &commonEvent.SchemaTableName{
+				SchemaName: "test",
+				TableName:  "t1",
+			},
+		},
+	}, tables)
 }
 
 type snapshotLostByGCError struct{}
