@@ -89,22 +89,16 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 	options.Topic = topic
 
 	encoderConfig, err := helper.GetEncoderConfig(
-		commonType.NewChangefeedID(changefeedID.Keyspace()),
-		uri,
-		protocol,
-		sinkConfig,
-		options.MaxMessageBytes,
-		options.MaxBatchedBytes,
+		changefeedID, uri, protocol, sinkConfig,
+		options.MaxMessageBytes, options.MaxBatchedBytes,
 	)
 	if err != nil {
 		return errors.Trace(err)
 	}
 
-	claimCheck, err := claimcheck.New(
-		ctx, encoderConfig.LargeMessageHandle, encoderConfig.ChangefeedID,
-	)
+	claimCheck, err := claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	defer claimCheck.Close()
 
@@ -142,11 +136,10 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 
 	topicConfig := options.DeriveTopicConfig()
 	if !topicConfig.AutoCreate {
-		return errors.ErrKafkaInvalidConfig.GenWithStack(
-			"`auto-create-topic` is false, and %s not found", topic)
+		return errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topic)
 	}
 
-	// The topic is not created, only validate its configuration and permissions.
+	// the topic is not created, only validate.
 	err = adminClient.CreateTopic(&kafka.TopicDetail{
 		Name:              topic,
 		NumPartitions:     topicConfig.PartitionNum,

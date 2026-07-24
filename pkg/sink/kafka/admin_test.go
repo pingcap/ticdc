@@ -64,7 +64,7 @@ func TestAdminClientClose(t *testing.T) {
 	}
 }
 
-func TestGetTopicsMetaUsesSmallestReplicationFactor(t *testing.T) {
+func TestTopicReplicationFactor(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	admin := NewMocksaramaClusterAdmin(ctrl)
 	admin.EXPECT().DescribeTopics([]string{"test-topic"}).Return([]*sarama.TopicMetadata{

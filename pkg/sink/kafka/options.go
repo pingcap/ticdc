@@ -588,6 +588,7 @@ func adjustOptions(
 	if err != nil {
 		return errors.Trace(err)
 	}
+
 	if err = validateRequiredAcks(ctx, admin, topics, topic, options); err != nil {
 		return errors.Trace(err)
 	}
