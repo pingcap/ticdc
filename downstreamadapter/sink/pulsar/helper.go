@@ -135,7 +135,7 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
+	pulsarComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig, nil)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}

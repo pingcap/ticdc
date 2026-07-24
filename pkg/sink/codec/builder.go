@@ -31,12 +31,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncoder, error) {
-	claimCheck, err := claimcheck.New(ctx, cfg.LargeMessageHandle, cfg.ChangefeedID)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
+func NewEventEncoder(ctx context.Context, cfg *common.Config, claimCheck *claimcheck.ClaimCheck) (common.EventEncoder, error) {
 	switch cfg.Protocol {
 	case config.ProtocolDefault, config.ProtocolOpen:
 		return open.NewBatchEncoder(ctx, cfg, claimCheck)

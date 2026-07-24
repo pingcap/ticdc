@@ -102,7 +102,7 @@ func newKafkaSinkComponent(
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
-	kafkaComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
+	kafkaComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig, nil)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}

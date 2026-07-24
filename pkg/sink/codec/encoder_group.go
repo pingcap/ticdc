@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -73,12 +74,17 @@ func NewEncoderGroup(
 	if concurrency <= 0 {
 		concurrency = config.DefaultEncoderGroupConcurrency
 	}
+
+	claimCheck, err := claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
 	inputCh := make([]chan *future, concurrency)
 	rowEventEncoders := make([]common.EventEncoder, concurrency)
-	var err error
 	for i := 0; i < concurrency; i++ {
 		inputCh[i] = make(chan *future, defaultInputChanSize)
-		rowEventEncoders[i], err = NewEventEncoder(ctx, encoderConfig)
+		rowEventEncoders[i], err = NewEventEncoder(ctx, encoderConfig, claimCheck)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)
@@ -88,7 +94,7 @@ func NewEncoderGroup(
 
 	var bw *bootstrapWorker
 	if cfg.ShouldSendBootstrapMsg() {
-		encoder, err := NewEventEncoder(ctx, encoderConfig)
+		encoder, err := NewEventEncoder(ctx, encoderConfig, claimCheck)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)

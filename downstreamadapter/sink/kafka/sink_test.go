@@ -121,7 +121,7 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	encoder, err := codec.NewEventEncoder(ctx, encoderConfig)
+	encoder, err := codec.NewEventEncoder(ctx, encoderConfig, nil)
 	if err != nil {
 		return nil, err
 	}
