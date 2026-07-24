@@ -17,10 +17,21 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	sinkhelper "github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
+
+func appendTxnEventForTest(
+	encoder common.TxnEventEncoder,
+	event *commonEvent.DMLEvent,
+	selector commonEvent.Selector,
+) error {
+	return encoder.AppendTxnEvent(sinkhelper.NewRowEvents(event, selector, nil))
+}
 
 func TestCSVBatchCodec(t *testing.T) {
 	s := commonEvent.NewEventTestHelper(t)
@@ -38,7 +49,7 @@ func TestCSVBatchCodec(t *testing.T) {
 			NullString:      "\\N",
 			IncludeCommitTs: true,
 		})
-		err := encoder.AppendTxnEvent(cs)
+		err := appendTxnEventForTest(encoder, cs, nil)
 		require.Nil(t, err)
 		messages := encoder.Build()
 		if cs.Len() == 0 {
@@ -50,7 +61,7 @@ func TestCSVBatchCodec(t *testing.T) {
 	}
 }
 
-func TestCSVAppendRowChangedEventWithCallback(t *testing.T) {
+func TestCSVAppendTxnEventWithCallback(t *testing.T) {
 	encoder := NewTxnEventEncoder(&common.Config{
 		Delimiter:       ",",
 		Quote:           "\"",
@@ -60,30 +71,28 @@ func TestCSVAppendRowChangedEventWithCallback(t *testing.T) {
 	})
 	require.NotNil(t, encoder)
 
-	count := 0
-
 	s := commonEvent.NewEventTestHelper(t)
 	defer s.Close()
 	s.DDL2Job("create table test.table1(col1 int primary key)")
 	txn := s.DML2Event("test", "table1", "insert into test.table1 values (1)")
-	callback := func() {
-		count += 1
-	}
-	txn.AddPostFlushFunc(callback)
+	count := 0
 
-	// Empty build makes sure that the callback build logic not broken.
+	// Empty build makes sure the build path handles an empty encoder.
 	msgs := encoder.Build()
 	require.Len(t, msgs, 0, "no message should be built and no panic")
 
 	// Append the event.
-	err := encoder.AppendTxnEvent(txn)
+	err := encoder.AppendTxnEvent(sinkhelper.NewRowEvents(txn, nil, func() {
+		count++
+	}))
 	require.Nil(t, err)
 	require.Equal(t, 0, count, "nothing should be called")
 
 	msgs = encoder.Build()
 	require.Len(t, msgs, 1, "expected one message")
+	require.NotNil(t, msgs[0].Callback)
 	msgs[0].Callback()
-	require.Equal(t, 1, count, "expected all callbacks to be called")
+	require.Equal(t, 1, count, "expected one callback be called")
 }
 
 func TestCSVBatchCodecWithHeader(t *testing.T) {
@@ -103,7 +112,7 @@ func TestCSVBatchCodecWithHeader(t *testing.T) {
 		CSVOutputFieldHeader: true,
 	}
 	encoder := NewTxnEventEncoder(cfg)
-	err := encoder.AppendTxnEvent(event)
+	err := appendTxnEventForTest(encoder, event, nil)
 	require.Nil(t, err)
 	messages := encoder.Build()
 	require.Len(t, messages, 1)
@@ -113,7 +122,7 @@ func TestCSVBatchCodecWithHeader(t *testing.T) {
 
 	cfg.CSVOutputFieldHeader = false
 	encoder = NewTxnEventEncoder(cfg)
-	err = encoder.AppendTxnEvent(event)
+	err = appendTxnEventForTest(encoder, event, nil)
 	require.Nil(t, err)
 	messages1 := encoder.Build()
 	require.Len(t, messages1, 1)
@@ -123,8 +132,88 @@ func TestCSVBatchCodecWithHeader(t *testing.T) {
 	cfg.CSVOutputFieldHeader = true
 	event.RowTypes = nil
 	encoder = NewTxnEventEncoder(cfg)
-	err = encoder.AppendTxnEvent(event)
+	err = appendTxnEventForTest(encoder, event, nil)
 	require.Nil(t, err)
 	messages = encoder.Build()
 	require.Len(t, messages, 0)
+}
+
+func TestCSVTxnEventEncoderWithColumnSelector(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.DDL2Event("create table test.table1(col1 int primary key, col2 varchar(255))")
+	event := helper.DML2Event("test", "table1", `insert into test.table1 values (1, "filtered")`)
+
+	selectors, err := columnselector.New(&config.SinkConfig{
+		ColumnSelectors: []*config.ColumnSelector{
+			{Matcher: []string{"test.table1"}, Columns: []string{"col1"}},
+		},
+	})
+	require.NoError(t, err)
+
+	cfg := &common.Config{
+		Delimiter:            ",",
+		Quote:                "\"",
+		Terminator:           "\n",
+		NullString:           "\\N",
+		IncludeCommitTs:      true,
+		CSVOutputFieldHeader: true,
+	}
+	encoder := NewTxnEventEncoder(cfg)
+	require.NoError(t, appendTxnEventForTest(encoder, event, selectors.GetForTableInfo(event.TableInfo)))
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+	require.Equal(t, "ticdc-meta$operation,ticdc-meta$table,ticdc-meta$schema,ticdc-meta$commit-ts,col1\n", string(messages[0].Key))
+	require.NotContains(t, string(messages[0].Key), "col2")
+	require.NotContains(t, string(messages[0].Value), "filtered")
+}
+
+func TestCSVTxnEventEncoderWithColumnSelectorForUpdateAndDelete(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.DDL2Event("create table test.table1(id int primary key, visible varchar(255), secret varchar(255))")
+	updateEvent, _ := helper.DML2UpdateEvent(
+		"test",
+		"table1",
+		`insert into test.table1 values (1, "visible-before", "secret-before")`,
+		`update test.table1 set visible = "visible-after", secret = "secret-after" where id = 1`,
+	)
+	deleteEvent := helper.DML2DeleteEvent(
+		"test",
+		"table1",
+		`insert into test.table1 values (2, "delete-visible", "delete-secret")`,
+		`delete from test.table1 where id = 2`,
+	)
+
+	selectors, err := columnselector.New(&config.SinkConfig{
+		ColumnSelectors: []*config.ColumnSelector{
+			{Matcher: []string{"test.table1"}, Columns: []string{"id", "visible"}},
+		},
+	})
+	require.NoError(t, err)
+
+	cfg := &common.Config{
+		Delimiter:       ",",
+		Quote:           "\"",
+		Terminator:      "\n",
+		NullString:      "\\N",
+		OutputOldValue:  true,
+		IncludeCommitTs: false,
+	}
+	selector := selectors.GetForTableInfo(updateEvent.TableInfo)
+	encoder := NewTxnEventEncoder(cfg)
+	require.NoError(t, appendTxnEventForTest(encoder, updateEvent, selector))
+	require.NoError(t, appendTxnEventForTest(encoder, deleteEvent, selector))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+	value := string(messages[0].Value)
+	require.Contains(t, value, "visible-before")
+	require.Contains(t, value, "visible-after")
+	require.Contains(t, value, "delete-visible")
+	require.NotContains(t, value, "secret-before")
+	require.NotContains(t, value, "secret-after")
+	require.NotContains(t, value, "delete-secret")
 }
