@@ -43,12 +43,16 @@ func TestClaimCheck(t *testing.T) {
 	largeHandleConfig.ClaimCheckStorageURI = "file:///tmp/abc/"
 	claimCheck, err = New(ctx, largeHandleConfig, changefeedID)
 	require.NoError(t, err)
+	t.Cleanup(claimCheck.Close)
 
 	fileName := claimCheck.FileNameWithPrefix("file.json")
 	require.Equal(t, "file:///tmp/abc/file.json", fileName)
 }
 
 func TestClaimCheckCloseClosesStorage(t *testing.T) {
+	var nilClaimCheck *ClaimCheck
+	require.NotPanics(t, nilClaimCheck.Close)
+
 	ctrl := gomock.NewController(t)
 	storage := mockobjstore.NewMockStorage(ctrl)
 	storage.EXPECT().Close().Times(1)

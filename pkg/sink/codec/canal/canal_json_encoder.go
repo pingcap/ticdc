@@ -369,33 +369,16 @@ type JSONRowEventEncoder struct {
 	messages []*common.Message
 
 	claimCheck *claimcheck.ClaimCheck
-	cleanup    func()
 	config     *common.Config
 }
 
 // NewJSONRowEventEncoder creates a new JSONRowEventEncoder
-func NewJSONRowEventEncoder(
-	ctx context.Context, config *common.Config, claimChecks ...*claimcheck.ClaimCheck,
-) (common.EventEncoder, error) {
-	var claimCheck *claimcheck.ClaimCheck
-	if len(claimChecks) == 0 {
-		var err error
-		claimCheck, err = claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		claimCheck = claimChecks[0]
-	}
-	encoder := &JSONRowEventEncoder{
+func NewJSONRowEventEncoder(config *common.Config, claimCheck *claimcheck.ClaimCheck) (common.EventEncoder, error) {
+	return &JSONRowEventEncoder{
 		messages:   make([]*common.Message, 0, 1),
 		config:     config,
 		claimCheck: claimCheck,
-	}
-	if len(claimChecks) == 0 && claimCheck != nil {
-		encoder.cleanup = claimCheck.Close
-	}
-	return encoder, nil
+	}, nil
 }
 
 func (c *JSONRowEventEncoder) newJSONMessageForDDL(e *commonEvent.DDLEvent) canalJSONMessageInterface {
@@ -594,10 +577,4 @@ func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.M
 	}
 
 	return common.NewMsg(nil, value), nil
-}
-
-func (c *JSONRowEventEncoder) Clean() {
-	if c.cleanup != nil {
-		c.cleanup()
-	}
 }

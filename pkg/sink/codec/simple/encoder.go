@@ -28,40 +28,20 @@ type Encoder struct {
 	messages   []*common.Message
 	config     *common.Config
 	claimCheck *claimcheck.ClaimCheck
-	cleanup    func()
 	marshaller marshaller
 }
 
-func NewEncoder(
-	ctx context.Context, config *common.Config, claimChecks ...*claimcheck.ClaimCheck,
-) (common.EventEncoder, error) {
-	var claimCheck *claimcheck.ClaimCheck
-	if len(claimChecks) == 0 {
-		var err error
-		claimCheck, err = claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-	} else {
-		claimCheck = claimChecks[0]
-	}
+func NewEncoder(config *common.Config, claimCheck *claimcheck.ClaimCheck) (common.EventEncoder, error) {
 	marshaller, err := newMarshaller(config)
 	if err != nil {
-		if len(claimChecks) == 0 && claimCheck != nil {
-			claimCheck.Close()
-		}
 		return nil, errors.Trace(err)
 	}
-	encoder := &Encoder{
+	return &Encoder{
 		messages:   make([]*common.Message, 0, 1),
 		config:     config,
 		claimCheck: claimCheck,
 		marshaller: marshaller,
-	}
-	if len(claimChecks) == 0 && claimCheck != nil {
-		encoder.cleanup = claimCheck.Close
-	}
-	return encoder, nil
+	}, nil
 }
 
 // AppendRowChangedEvent implement the RowEventEncoder interface
@@ -176,11 +156,4 @@ func (e *Encoder) EncodeDDLEvent(event *commonEvent.DDLEvent) (*common.Message, 
 		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(event.GetTargetTableName(), result.Length(), e.config.MaxMessageBytes)
 	}
 	return result, nil
-}
-
-// CleanMetrics implement the RowEventEncoderBuilder interface
-func (e *Encoder) Clean() {
-	if e.cleanup != nil {
-		e.cleanup()
-	}
 }

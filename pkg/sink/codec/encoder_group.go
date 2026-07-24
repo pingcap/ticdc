@@ -61,7 +61,6 @@ type encoderGroup struct {
 	outputCh chan *future
 
 	bootstrapWorker *bootstrapWorker
-	claimCheck      *claimcheck.ClaimCheck
 }
 
 // NewEncoderGroup creates a new EncoderGroup instance
@@ -69,67 +68,38 @@ func NewEncoderGroup(
 	ctx context.Context,
 	cfg *config.SinkConfig,
 	encoderConfig *common.Config,
-	changefeedID commonType.ChangeFeedID,
-) (*encoderGroup, error) {
-	claimCheck, err := claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	group, err := newEncoderGroup(ctx, cfg, encoderConfig, changefeedID, claimCheck)
-	if err != nil {
-		if claimCheck != nil {
-			claimCheck.Close()
-		}
-		return nil, errors.Trace(err)
-	}
-	group.claimCheck = claimCheck
-	return group, nil
-}
-
-func newEncoderGroup(
-	ctx context.Context,
-	cfg *config.SinkConfig,
-	encoderConfig *common.Config,
-	changefeedID commonType.ChangeFeedID,
 	claimCheck *claimcheck.ClaimCheck,
+	changefeedID commonType.ChangeFeedID,
 ) (*encoderGroup, error) {
 	concurrency := util.GetOrZero(cfg.EncoderConcurrency)
 	if concurrency <= 0 {
 		concurrency = config.DefaultEncoderGroupConcurrency
 	}
-	group := &encoderGroup{
-		changefeedID:     changefeedID,
-		rowEventEncoders: make([]common.EventEncoder, concurrency),
-		concurrency:      concurrency,
-		inputCh:          make([]chan *future, concurrency),
-		outputCh:         make(chan *future, defaultInputChanSize*concurrency),
-	}
-	initialized := false
-	defer func() {
-		if !initialized {
-			group.close()
-		}
-	}()
+
+	inputCh := make([]chan *future, concurrency)
+	rowEventEncoders := make([]common.EventEncoder, concurrency)
 
 	var err error
 	for i := 0; i < concurrency; i++ {
-		group.inputCh[i] = make(chan *future, defaultInputChanSize)
-		group.rowEventEncoders[i], err = newEventEncoder(ctx, encoderConfig, claimCheck)
+		inputCh[i] = make(chan *future, defaultInputChanSize)
+		rowEventEncoders[i], err = NewEventEncoder(ctx, encoderConfig, claimCheck)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)
 		}
 	}
+	outCh := make(chan *future, defaultInputChanSize*concurrency)
 
+	var bw *bootstrapWorker
 	if cfg.ShouldSendBootstrapMsg() {
-		encoder, err := newEventEncoder(ctx, encoderConfig, claimCheck)
+		encoder, err := NewEventEncoder(ctx, encoderConfig, claimCheck)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)
 		}
-		group.bootstrapWorker = newBootstrapWorker(
+		bw = newBootstrapWorker(
 			changefeedID,
-			group.outputCh,
+			outCh,
 			encoder,
 			util.GetOrZero(cfg.SendBootstrapIntervalInSec),
 			util.GetOrZero(cfg.SendBootstrapInMsgCount),
@@ -138,13 +108,20 @@ func newEncoderGroup(
 		)
 	}
 
-	initialized = true
-	return group, nil
+	return &encoderGroup{
+		changefeedID:     changefeedID,
+		rowEventEncoders: rowEventEncoders,
+		concurrency:      concurrency,
+		inputCh:          inputCh,
+		index:            0,
+		outputCh:         outCh,
+		bootstrapWorker:  bw,
+	}, nil
 }
 
 func (g *encoderGroup) Run(ctx context.Context) error {
 	defer func() {
-		g.close()
+		g.cleanMetrics()
 		log.Info("encoder group exited",
 			zap.String("keyspace", g.changefeedID.Keyspace()),
 			zap.String("changefeed", g.changefeedID.Name()))
@@ -231,16 +208,8 @@ func (g *encoderGroup) Output() <-chan *future {
 	return g.outputCh
 }
 
-func (g *encoderGroup) close() {
+func (g *encoderGroup) cleanMetrics() {
 	encoderGroupInputChanSizeGauge.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name())
-	for _, encoder := range g.rowEventEncoders {
-		if encoder != nil {
-			encoder.Clean()
-		}
-	}
-	if g.claimCheck != nil {
-		g.claimCheck.Close()
-	}
 	common.CleanMetrics(g.changefeedID)
 }
 

@@ -49,11 +49,6 @@ func New(ctx context.Context, config *config.LargeMessageHandleConfig, changefee
 		return nil, nil
 	}
 
-	log.Info("claim check enabled, start create the external storage",
-		zap.String("keyspace", changefeedID.Keyspace()),
-		zap.String("changefeed", changefeedID.Name()),
-		zap.String("storageURI", util.MaskSensitiveDataInURI(config.ClaimCheckStorageURI)))
-
 	start := time.Now()
 	externalStorage, err := util.GetExternalStorageWithDefaultTimeout(ctx, config.ClaimCheckStorageURI)
 	if err != nil {
@@ -66,12 +61,6 @@ func New(ctx context.Context, config *config.LargeMessageHandleConfig, changefee
 		return nil, errors.Trace(err)
 	}
 
-	log.Info("claim-check create the external storage success",
-		zap.String("keyspace", changefeedID.Keyspace()),
-		zap.String("changefeed", changefeedID.Name()),
-		zap.String("storageURI", util.MaskSensitiveDataInURI(config.ClaimCheckStorageURI)),
-		zap.Duration("duration", time.Since(start)))
-
 	return &ClaimCheck{
 		changefeedID:              changefeedID,
 		storage:                   externalStorage,
@@ -81,8 +70,7 @@ func New(ctx context.Context, config *config.LargeMessageHandleConfig, changefee
 	}, nil
 }
 
-// WriteMessage writes a message to the claim-check external storage.
-// It may be called concurrently.
+// WriteMessage write message to the claim check external storage.
 func (c *ClaimCheck) WriteMessage(ctx context.Context, key, value []byte, fileName string) (err error) {
 	if !c.rawValue {
 		m := common.ClaimCheckMessage{
@@ -109,16 +97,17 @@ func (c *ClaimCheck) FileNameWithPrefix(fileName string) string {
 	return strings.TrimSuffix(c.storage.URI(), "/") + "/" + fileName
 }
 
-// CleanMetrics the claim check by clean up the metrics.
-func (c *ClaimCheck) CleanMetrics() {
+// Close closes the claim-check storage.
+func (c *ClaimCheck) Close() {
+	if c == nil {
+		return
+	}
+
+	if c.storage != nil {
+		c.storage.Close()
+	}
 	claimCheckSendMessageDuration.DeleteLabelValues(c.changefeedID.Keyspace(), c.changefeedID.Name())
 	claimCheckSendMessageCount.DeleteLabelValues(c.changefeedID.Keyspace(), c.changefeedID.Name())
-}
-
-// Close releases the external storage and removes the claim-check metrics.
-func (c *ClaimCheck) Close() {
-	c.storage.Close()
-	c.CleanMetrics()
 }
 
 // NewFileName return the file name for the message which is delivered to the external storage system.

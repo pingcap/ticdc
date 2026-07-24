@@ -1059,6 +1059,12 @@ func loadAllPhysicalTablesAtTs(
 		if !ok {
 			log.Panic("table info not found", zap.Int64("tableID", tableID))
 		}
+		// Views have no physical KV events. Their DDLs are replicated by the
+		// table-trigger dispatcher, so creating a table dispatcher for a view can
+		// only leave an orphan after the view is dropped.
+		if fullTableInfo.View != nil {
+			continue
+		}
 		if tableFilter != nil {
 			if tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name) {
 				continue

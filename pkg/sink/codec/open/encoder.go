@@ -45,42 +45,19 @@ type batchEncoder struct {
 	callbackBuff []func()
 
 	claimCheck *claimcheck.ClaimCheck
-	cleanup    func()
 
 	config *common.Config
 }
 
 // NewBatchEncoder creates a new batchEncoder.
-func NewBatchEncoder(
-	ctx context.Context, config *common.Config, claimChecks ...*claimcheck.ClaimCheck,
-) (common.EventEncoder, error) {
-	var claimCheck *claimcheck.ClaimCheck
-	if len(claimChecks) == 0 {
-		var err error
-		claimCheck, err = claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-	} else {
-		claimCheck = claimChecks[0]
-	}
+func NewBatchEncoder(config *common.Config, claimCheck *claimcheck.ClaimCheck) (common.EventEncoder, error) {
 	lock.Lock()
 	clear(columnFlagsCache)
 	lock.Unlock()
-	encoder := &batchEncoder{
+	return &batchEncoder{
 		config:     config,
 		claimCheck: claimCheck,
-	}
-	if len(claimChecks) == 0 && claimCheck != nil {
-		encoder.cleanup = claimCheck.Close
-	}
-	return encoder, nil
-}
-
-func (d *batchEncoder) Clean() {
-	if d.cleanup != nil {
-		d.cleanup()
-	}
+	}, nil
 }
 
 func (d *batchEncoder) fetchColumnFlags(e *commonEvent.RowEvent) map[string]uint64 {
