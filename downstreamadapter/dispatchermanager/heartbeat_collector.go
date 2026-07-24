@@ -288,6 +288,8 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 			NewRedoMetaMessage(msg.From, redoMessage))
 	case messaging.TypeMergeDispatcherRequest:
 		mergeDispatcherRequest := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
+		// The handler owns journaling because it first applies the maintainer fence.
+		// Tracking here would let stale requests leak into bootstrap recovery.
 		c.mergeDispatcherRequestDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(mergeDispatcherRequest.ChangefeedID),
 			NewMergeDispatcherRequest(msg.From, mergeDispatcherRequest))

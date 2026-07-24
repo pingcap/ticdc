@@ -576,6 +576,36 @@ func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
 	return true
 }
 
+// addMergeOccupyOperators reserves every source replica or rolls back the partial reservation.
+func (oc *Controller) addMergeOccupyOperators(
+	affectedReplicaSets []*replica.SpanReplication,
+) ([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], bool) {
+	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(affectedReplicaSets))
+	for _, replicaSet := range affectedReplicaSets {
+		occupyOperator := NewOccupyDispatcherOperator(oc.spanController, replicaSet)
+		if oc.AddOperator(occupyOperator) {
+			operators = append(operators, occupyOperator)
+			continue
+		}
+		log.Error("failed to add occupy dispatcher operator",
+			zap.Stringer("changefeedID", oc.changefeedID),
+			zap.Int64("group", replicaSet.GetGroupID()),
+			zap.String("span", common.FormatTableSpan(replicaSet.Span)),
+			zap.String("operator", occupyOperator.String()))
+		oc.cancelMergeOccupyOperators(operators)
+		return nil, false
+	}
+	return operators, true
+}
+
+func (oc *Controller) cancelMergeOccupyOperators(
+	operators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+) {
+	for _, op := range operators {
+		oc.cancelOperator(op.ID())
+	}
+}
+
 // AddMergeOperator creates a merge operator, which merge consecutive replica sets.
 // We need create a mergeOperator for the new replicaset, and create len(affectedReplicaSets) empty operator
 // to occupy these replica set not evolve other scheduling among merging.
@@ -586,23 +616,9 @@ func (oc *Controller) AddMergeOperator(
 		return nil
 	}
 
-	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(affectedReplicaSets))
-	for _, replicaSet := range affectedReplicaSets {
-		operator := NewOccupyDispatcherOperator(oc.spanController, replicaSet)
-		ret := oc.AddOperator(operator)
-		if ret {
-			operators = append(operators, operator)
-		} else {
-			log.Error("failed to add occupy dispatcher operator",
-				zap.Stringer("changefeedID", oc.changefeedID),
-				zap.Int64("group", replicaSet.GetGroupID()),
-				zap.String("span", common.FormatTableSpan(replicaSet.Span)),
-				zap.String("operator", operator.String()))
-			for _, op := range operators {
-				oc.cancelOperator(op.ID())
-			}
-			return nil
-		}
+	operators, ok := oc.addMergeOccupyOperators(affectedReplicaSets)
+	if !ok {
+		return nil
 	}
 
 	mergeOperator := NewMergeDispatcherOperator(oc.spanController, affectedReplicaSets, operators, oc.MaintainerEpoch())
@@ -612,13 +628,52 @@ func (oc *Controller) AddMergeOperator(
 			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.Any("mergeSpans", affectedReplicaSets),
 			zap.String("operator", mergeOperator.String()))
-		for _, op := range operators {
-			oc.cancelOperator(op.ID())
-		}
+		oc.cancelMergeOccupyOperators(operators)
 		oc.spanController.RemoveReplicatingSpan(mergeOperator.newReplicaSet)
 		return nil
 	}
 	log.Info("add merge operator",
+		zap.String("role", oc.role),
+		zap.Stringer("changefeedID", oc.changefeedID),
+		zap.Int("affectedReplicaSets", len(affectedReplicaSets)),
+	)
+	return mergeOperator
+}
+
+// AddRestoredMergeOperator rebuilds a merge operator from bootstrap state after maintainer failover.
+func (oc *Controller) AddRestoredMergeOperator(
+	affectedReplicaSets []*replica.SpanReplication,
+	mergedReplicaSet *replica.SpanReplication,
+) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
+	if mergedReplicaSet == nil {
+		return nil
+	}
+	if !checkMergeOperator(affectedReplicaSets) {
+		return nil
+	}
+
+	operators, ok := oc.addMergeOccupyOperators(affectedReplicaSets)
+	if !ok {
+		return nil
+	}
+
+	mergeOperator := NewRestoredMergeDispatcherOperator(
+		oc.spanController,
+		affectedReplicaSets,
+		mergedReplicaSet,
+		operators,
+		oc.MaintainerEpoch(),
+	)
+	ret := oc.AddOperator(mergeOperator)
+	if !ret {
+		log.Error("failed to add merge dispatcher operator when restoring merge",
+			zap.Stringer("changefeedID", oc.changefeedID),
+			zap.Any("mergeSpans", affectedReplicaSets),
+			zap.String("operator", mergeOperator.String()))
+		oc.cancelMergeOccupyOperators(operators)
+		return nil
+	}
+	log.Info("restore merge operator",
 		zap.String("role", oc.role),
 		zap.Stringer("changefeedID", oc.changefeedID),
 		zap.Int("affectedReplicaSets", len(affectedReplicaSets)),
