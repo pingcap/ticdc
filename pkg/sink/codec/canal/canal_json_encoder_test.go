@@ -48,7 +48,7 @@ func TestDMLE2E(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	for _, enableTiDBExtension := range []bool{false, true} {
 		codecConfig.EnableTiDBExtension = enableTiDBExtension
-		encIface, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+		encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		encoder := encIface.(*JSONRowEventEncoder)
@@ -132,7 +132,7 @@ func TestCanalJSONCompressionE2E(t *testing.T) {
 	codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compression.LZ4
 
 	ctx := context.Background()
-	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	encoder := encIface.(*JSONRowEventEncoder)
 
@@ -209,7 +209,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	encoder := encIface.(*JSONRowEventEncoder)
 
@@ -238,7 +238,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
-	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	encoder := encIface.(*JSONRowEventEncoder)
 
@@ -274,7 +274,7 @@ func TestCanalJSONClaimCheckE2E(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(claimCheck.Close)
 
-		encIface, err := NewJSONRowEventEncoder(ctx, codecConfig, claimCheck)
+		encIface, err := NewJSONRowEventEncoder(codecConfig, claimCheck)
 		require.NoError(t, err)
 		encoder := encIface.(*JSONRowEventEncoder)
 
@@ -319,9 +319,7 @@ func TestNewCanalJSONMessageHandleKeyOnly4LargeMessage(t *testing.T) {
 	codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compression.LZ4
 	codecConfig.MaxMessageBytes = 500
 
-	ctx := context.Background()
-
-	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	encoder := encIface.(*JSONRowEventEncoder)
 
@@ -364,9 +362,8 @@ func TestNewCanalJSONMessageFromDDL(t *testing.T) {
 	defer helper.Close()
 
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
-	ctx := context.Background()
 
-	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	encoder := encIface.(*JSONRowEventEncoder)
 
@@ -386,7 +383,7 @@ func TestNewCanalJSONMessageFromDDL(t *testing.T) {
 	require.Equal(t, "CREATE", msg.EventType)
 
 	codecConfig.EnableTiDBExtension = true
-	encIface, err = NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encIface, err = NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	encoder = encIface.(*JSONRowEventEncoder)
@@ -401,9 +398,8 @@ func TestNewCanalJSONMessageFromDDL(t *testing.T) {
 }
 
 func TestBatching(t *testing.T) {
-	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
-	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	encoder := encIface.(*JSONRowEventEncoder)
 	require.NotNil(t, encoder)
@@ -438,13 +434,12 @@ func TestBatching(t *testing.T) {
 func TestEncodeCheckpointEvent(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
 	var watermark uint64 = 2333
 	for _, enable := range []bool{false, true} {
 		codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 		codecConfig.EnableTiDBExtension = enable
 
-		encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+		encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		msg, err := encoder.EncodeCheckpointEvent(watermark)
@@ -486,9 +481,7 @@ func TestCheckpointEventValueMarshal(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	codecConfig.EnableTiDBExtension = true
 
-	ctx := context.Background()
-
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	var watermark uint64 = 1024
@@ -523,7 +516,7 @@ func TestDDLEventWithExtension(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	codecConfig.EnableTiDBExtension = true
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	require.NotNil(t, encoder)
 
@@ -565,9 +558,8 @@ func TestCanalJSONAppendRowChangedEventWithCallback(t *testing.T) {
 
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	codecConfig.EnableTiDBExtension = true
-	ctx := context.Background()
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	count := 0
@@ -658,7 +650,7 @@ func TestMaxMessageBytes(t *testing.T) {
 	maxMessageBytes := 300
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON).WithMaxMessageBytes(maxMessageBytes)
 
-	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	encoder := encIface.(*JSONRowEventEncoder)
 
@@ -673,7 +665,7 @@ func TestMaxMessageBytes(t *testing.T) {
 	// the test message length is larger than max-message-bytes
 	codecConfig = codecConfig.WithMaxMessageBytes(100)
 
-	encIface, err = NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encIface, err = NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	encoder = encIface.(*JSONRowEventEncoder)
@@ -693,7 +685,7 @@ func TestCanalJSONContentCompatibleE2E(t *testing.T) {
 	codecConfig.ContentCompatible = true
 	codecConfig.OnlyOutputUpdatedColumns = true
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -741,7 +733,7 @@ func TestE2EPartitionTableByHash(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -798,7 +790,7 @@ func TestE2EPartitionTableByRange(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -862,7 +854,7 @@ func TestE2EPartitionTable(t *testing.T) {
 	for _, enableTiDBExtension := range []bool{false, true} {
 		codecConfig.EnableTiDBExtension = enableTiDBExtension
 
-		encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+		encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		decoder, err := NewDecoder(ctx, codecConfig, nil)

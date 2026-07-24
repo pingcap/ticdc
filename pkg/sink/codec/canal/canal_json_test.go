@@ -69,7 +69,7 @@ func TestIntegerContentCompatible(t *testing.T) {
 	codecConfig.ContentCompatible = true
 	codecConfig.OnlyOutputUpdatedColumns = true
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
@@ -153,7 +153,7 @@ func TestIntegerTypes(t *testing.T) {
 	for _, enableTiDBExtension := range []bool{true, false} {
 		for _, event := range []*commonEvent.RowEvent{minValueEvent, maxValueEvent} {
 			codecConfig.EnableTiDBExtension = enableTiDBExtension
-			encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+			encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			err = encoder.AppendRowChangedEvent(ctx, "", event)
@@ -215,7 +215,7 @@ func TestFloatTypes(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -264,7 +264,7 @@ func TestTimeTypes(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -314,7 +314,7 @@ func TestStringTypes(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -364,7 +364,7 @@ func TestBlobTypes(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -414,7 +414,7 @@ func TestTextTypes(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -473,7 +473,7 @@ func TestOtherTypes(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	codecConfig.ContentCompatible = true
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -531,7 +531,7 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -590,7 +590,7 @@ func TestDMLMultiplePK(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	codecConfig.ContentCompatible = true
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -676,7 +676,7 @@ func TestDMLMessageTooLarge(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	codecConfig = codecConfig.WithMaxMessageBytes(300)
 	codecConfig.EnableTiDBExtension = true
-	encoder, err := NewJSONRowEventEncoder(context.Background(), codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	err = encoder.AppendRowChangedEvent(context.Background(), "", rowEvent)
 	require.ErrorIs(t, err, errors.ErrMessageTooLarge)
@@ -777,7 +777,7 @@ func TestLargeMessageClaimCheck(t *testing.T) {
 	claimCheck, err := claimcheck.New(ctx, codecConfig.LargeMessageHandle, codecConfig.ChangefeedID)
 	require.NoError(t, err)
 	t.Cleanup(claimCheck.Close)
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, claimCheck)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, claimCheck)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", insertEvent)
@@ -868,7 +868,7 @@ func TestMessageLargeHandleKeyOnly(t *testing.T) {
 	codecConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
 	codecConfig.EnableTiDBExtension = true
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -954,7 +954,7 @@ func TestDMLTypeEvent(t *testing.T) {
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -986,7 +986,7 @@ func TestDMLTypeEvent(t *testing.T) {
 
 	// update with only updated columns
 	codecConfig.OnlyOutputUpdatedColumns = true
-	encoder, err = NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err = NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", updateEvent)
@@ -1017,7 +1017,7 @@ func TestDDLSequence(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	dec, err := NewDecoder(ctx, codecConfig, nil)
@@ -1289,7 +1289,7 @@ func TestCreateTableDDL(t *testing.T) {
 
 	for _, enableTiDBExtension := range []bool{false, true} {
 		codecConfig.EnableTiDBExtension = enableTiDBExtension
-		encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+		encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		message, err := encoder.EncodeDDLEvent(ddlEvent)
@@ -1320,7 +1320,7 @@ func TestCreateTableDDL(t *testing.T) {
 func TestCheckpointTs(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	watermark := uint64(179394)
@@ -1330,7 +1330,7 @@ func TestCheckpointTs(t *testing.T) {
 
 	// with extension
 	codecConfig.EnableTiDBExtension = true
-	encoder, err = NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err = NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	message, err = encoder.EncodeCheckpointEvent(watermark)
 	require.NoError(t, err)
@@ -1390,7 +1390,7 @@ func TestRowKey(t *testing.T) {
 	codecConfig.OnlyOutputUpdatedColumns = true
 	codecConfig.EnableTiDBExtension = true
 	codecConfig.OutputRowKey = true
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	err = encoder.AppendRowChangedEvent(ctx, "", event)
 	require.NoError(t, err)

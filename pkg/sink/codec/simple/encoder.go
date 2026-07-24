@@ -31,7 +31,7 @@ type Encoder struct {
 	marshaller marshaller
 }
 
-func NewEncoder(ctx context.Context, config *common.Config, claimCheck *claimcheck.ClaimCheck) (common.EventEncoder, error) {
+func NewEncoder(config *common.Config, claimCheck *claimcheck.ClaimCheck) (common.EventEncoder, error) {
 	marshaller, err := newMarshaller(config)
 	if err != nil {
 		return nil, errors.Trace(err)

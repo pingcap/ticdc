@@ -50,7 +50,7 @@ type batchEncoder struct {
 }
 
 // NewBatchEncoder creates a new batchEncoder.
-func NewBatchEncoder(ctx context.Context, config *common.Config, claimCheck *claimcheck.ClaimCheck) (common.EventEncoder, error) {
+func NewBatchEncoder(config *common.Config, claimCheck *claimcheck.ClaimCheck) (common.EventEncoder, error) {
 	lock.Lock()
 	clear(columnFlagsCache)
 	lock.Unlock()

@@ -373,7 +373,7 @@ type JSONRowEventEncoder struct {
 }
 
 // NewJSONRowEventEncoder creates a new JSONRowEventEncoder
-func NewJSONRowEventEncoder(ctx context.Context, config *common.Config, claimCheck *claimcheck.ClaimCheck) (common.EventEncoder, error) {
+func NewJSONRowEventEncoder(config *common.Config, claimCheck *claimcheck.ClaimCheck) (common.EventEncoder, error) {
 	return &JSONRowEventEncoder{
 		messages:   make([]*common.Message, 0, 1),
 		config:     config,
