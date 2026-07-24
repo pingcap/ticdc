@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -60,6 +61,7 @@ type encoderGroup struct {
 	outputCh chan *future
 
 	bootstrapWorker *bootstrapWorker
+	claimCheck      *claimcheck.ClaimCheck
 }
 
 // NewEncoderGroup creates a new EncoderGroup instance
@@ -68,6 +70,28 @@ func NewEncoderGroup(
 	cfg *config.SinkConfig,
 	encoderConfig *common.Config,
 	changefeedID commonType.ChangeFeedID,
+) (*encoderGroup, error) {
+	claimCheck, err := claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	group, err := newEncoderGroup(ctx, cfg, encoderConfig, changefeedID, claimCheck)
+	if err != nil {
+		if claimCheck != nil {
+			claimCheck.Close()
+		}
+		return nil, errors.Trace(err)
+	}
+	group.claimCheck = claimCheck
+	return group, nil
+}
+
+func newEncoderGroup(
+	ctx context.Context,
+	cfg *config.SinkConfig,
+	encoderConfig *common.Config,
+	changefeedID commonType.ChangeFeedID,
+	claimCheck *claimcheck.ClaimCheck,
 ) (*encoderGroup, error) {
 	concurrency := util.GetOrZero(cfg.EncoderConcurrency)
 	if concurrency <= 0 {
@@ -90,7 +114,7 @@ func NewEncoderGroup(
 	var err error
 	for i := 0; i < concurrency; i++ {
 		group.inputCh[i] = make(chan *future, defaultInputChanSize)
-		group.rowEventEncoders[i], err = NewEventEncoder(ctx, encoderConfig)
+		group.rowEventEncoders[i], err = newEventEncoder(ctx, encoderConfig, claimCheck)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)
@@ -98,7 +122,7 @@ func NewEncoderGroup(
 	}
 
 	if cfg.ShouldSendBootstrapMsg() {
-		encoder, err := NewEventEncoder(ctx, encoderConfig)
+		encoder, err := newEventEncoder(ctx, encoderConfig, claimCheck)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)
@@ -213,6 +237,9 @@ func (g *encoderGroup) close() {
 		if encoder != nil {
 			encoder.Clean()
 		}
+	}
+	if g.claimCheck != nil {
+		g.claimCheck.Close()
 	}
 	common.CleanMetrics(g.changefeedID)
 }

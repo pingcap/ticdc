@@ -27,23 +27,30 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/debezium"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"go.uber.org/zap"
 )
 
 func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncoder, error) {
+	return newEventEncoder(ctx, cfg)
+}
+
+func newEventEncoder(
+	ctx context.Context, cfg *common.Config, claimChecks ...*claimcheck.ClaimCheck,
+) (common.EventEncoder, error) {
 	switch cfg.Protocol {
 	case config.ProtocolDefault, config.ProtocolOpen:
-		return open.NewBatchEncoder(ctx, cfg)
+		return open.NewBatchEncoder(ctx, cfg, claimChecks...)
 	case config.ProtocolAvro:
 		return avro.NewAvroEncoder(ctx, cfg)
 	case config.ProtocolCanalJSON:
-		return canal.NewJSONRowEventEncoder(ctx, cfg)
+		return canal.NewJSONRowEventEncoder(ctx, cfg, claimChecks...)
 	case config.ProtocolDebezium:
 		return debezium.NewBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID), nil
 	case config.ProtocolDebeziumAvro:
 		return debezium.NewAvroBatchEncoder(ctx, cfg, config.GetGlobalServerConfig().ClusterID)
 	case config.ProtocolSimple:
-		return simple.NewEncoder(ctx, cfg)
+		return simple.NewEncoder(ctx, cfg, claimChecks...)
 	default:
 		return nil, errors.ErrSinkUnknownProtocol.GenWithStackByArgs(cfg.Protocol)
 	}

@@ -28,24 +28,40 @@ type Encoder struct {
 	messages   []*common.Message
 	config     *common.Config
 	claimCheck *claimcheck.ClaimCheck
+	cleanup    func()
 	marshaller marshaller
 }
 
-func NewEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
-	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
-	if err != nil {
-		return nil, errors.Trace(err)
+func NewEncoder(
+	ctx context.Context, config *common.Config, claimChecks ...*claimcheck.ClaimCheck,
+) (common.EventEncoder, error) {
+	var claimCheck *claimcheck.ClaimCheck
+	if len(claimChecks) == 0 {
+		var err error
+		claimCheck, err = claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+	} else {
+		claimCheck = claimChecks[0]
 	}
 	marshaller, err := newMarshaller(config)
 	if err != nil {
+		if len(claimChecks) == 0 && claimCheck != nil {
+			claimCheck.Close()
+		}
 		return nil, errors.Trace(err)
 	}
-	return &Encoder{
+	encoder := &Encoder{
 		messages:   make([]*common.Message, 0, 1),
 		config:     config,
 		claimCheck: claimCheck,
 		marshaller: marshaller,
-	}, nil
+	}
+	if len(claimChecks) == 0 && claimCheck != nil {
+		encoder.cleanup = claimCheck.Close
+	}
+	return encoder, nil
 }
 
 // AppendRowChangedEvent implement the RowEventEncoder interface
@@ -164,7 +180,7 @@ func (e *Encoder) EncodeDDLEvent(event *commonEvent.DDLEvent) (*common.Message, 
 
 // CleanMetrics implement the RowEventEncoderBuilder interface
 func (e *Encoder) Clean() {
-	if e.claimCheck != nil {
-		e.claimCheck.Close()
+	if e.cleanup != nil {
+		e.cleanup()
 	}
 }

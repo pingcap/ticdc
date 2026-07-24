@@ -81,7 +81,8 @@ func New(ctx context.Context, config *config.LargeMessageHandleConfig, changefee
 	}, nil
 }
 
-// WriteMessage write message to the claim check external storage.
+// WriteMessage writes a message to the claim-check external storage.
+// It may be called concurrently.
 func (c *ClaimCheck) WriteMessage(ctx context.Context, key, value []byte, fileName string) (err error) {
 	if !c.rawValue {
 		m := common.ClaimCheckMessage{
