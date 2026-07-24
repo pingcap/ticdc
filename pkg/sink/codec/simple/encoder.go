@@ -31,11 +31,7 @@ type Encoder struct {
 	marshaller marshaller
 }
 
-func NewEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
-	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
+func NewEncoder(config *common.Config, claimCheck *claimcheck.ClaimCheck) (common.EventEncoder, error) {
 	marshaller, err := newMarshaller(config)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -160,11 +156,4 @@ func (e *Encoder) EncodeDDLEvent(event *commonEvent.DDLEvent) (*common.Message, 
 		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(event.GetTargetTableName(), result.Length(), e.config.MaxMessageBytes)
 	}
 	return result, nil
-}
-
-// CleanMetrics implement the RowEventEncoderBuilder interface
-func (e *Encoder) Clean() {
-	if e.claimCheck != nil {
-		e.claimCheck.CleanMetrics()
-	}
 }

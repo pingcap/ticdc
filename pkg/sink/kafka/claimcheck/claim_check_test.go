@@ -15,11 +15,16 @@ package claimcheck
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/tidb/pkg/objstore"
+	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestClaimCheck(t *testing.T) {
@@ -38,7 +43,54 @@ func TestClaimCheck(t *testing.T) {
 	largeHandleConfig.ClaimCheckStorageURI = "file:///tmp/abc/"
 	claimCheck, err = New(ctx, largeHandleConfig, changefeedID)
 	require.NoError(t, err)
+	t.Cleanup(claimCheck.Close)
 
 	fileName := claimCheck.FileNameWithPrefix("file.json")
 	require.Equal(t, "file:///tmp/abc/file.json", fileName)
+}
+
+func TestClaimCheckCloseClosesStorage(t *testing.T) {
+	var nilClaimCheck *ClaimCheck
+	require.NotPanics(t, nilClaimCheck.Close)
+
+	ctrl := gomock.NewController(t)
+	storage := mockobjstore.NewMockStorage(ctrl)
+	storage.EXPECT().Close().Times(1)
+	claimCheck := &ClaimCheck{
+		storage:      storage,
+		changefeedID: commonType.NewChangeFeedIDWithName("test", "default"),
+	}
+
+	claimCheck.Close()
+}
+
+func TestClaimCheckConcurrentWrites(t *testing.T) {
+	ctx := context.Background()
+	storage := objstore.NewMemStorage()
+	changefeedID := commonType.NewChangeFeedIDWithName("test", "default")
+	claimCheck := &ClaimCheck{
+		storage:                   storage,
+		rawValue:                  true,
+		changefeedID:              changefeedID,
+		metricSendMessageDuration: claimCheckSendMessageDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricSendMessageCount:    claimCheckSendMessageCount.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+	}
+	t.Cleanup(claimCheck.Close)
+
+	const concurrency = 32
+	group := new(errgroup.Group)
+	for i := range concurrency {
+		fileName := fmt.Sprintf("%d.json", i)
+		group.Go(func() error {
+			return claimCheck.WriteMessage(ctx, nil, []byte(fileName), fileName)
+		})
+	}
+	require.NoError(t, group.Wait())
+
+	for i := range concurrency {
+		fileName := fmt.Sprintf("%d.json", i)
+		data, err := storage.ReadFile(ctx, fileName)
+		require.NoError(t, err)
+		require.Equal(t, fileName, string(data))
+	}
 }

@@ -49,11 +49,6 @@ func New(ctx context.Context, config *config.LargeMessageHandleConfig, changefee
 		return nil, nil
 	}
 
-	log.Info("claim check enabled, start create the external storage",
-		zap.String("keyspace", changefeedID.Keyspace()),
-		zap.String("changefeed", changefeedID.Name()),
-		zap.String("storageURI", util.MaskSensitiveDataInURI(config.ClaimCheckStorageURI)))
-
 	start := time.Now()
 	externalStorage, err := util.GetExternalStorageWithDefaultTimeout(ctx, config.ClaimCheckStorageURI)
 	if err != nil {
@@ -65,12 +60,6 @@ func New(ctx context.Context, config *config.LargeMessageHandleConfig, changefee
 			zap.Error(err))
 		return nil, errors.Trace(err)
 	}
-
-	log.Info("claim-check create the external storage success",
-		zap.String("keyspace", changefeedID.Keyspace()),
-		zap.String("changefeed", changefeedID.Name()),
-		zap.String("storageURI", util.MaskSensitiveDataInURI(config.ClaimCheckStorageURI)),
-		zap.Duration("duration", time.Since(start)))
 
 	return &ClaimCheck{
 		changefeedID:              changefeedID,
@@ -108,8 +97,15 @@ func (c *ClaimCheck) FileNameWithPrefix(fileName string) string {
 	return strings.TrimSuffix(c.storage.URI(), "/") + "/" + fileName
 }
 
-// CleanMetrics the claim check by clean up the metrics.
-func (c *ClaimCheck) CleanMetrics() {
+// Close closes the claim-check storage.
+func (c *ClaimCheck) Close() {
+	if c == nil {
+		return
+	}
+
+	if c.storage != nil {
+		c.storage.Close()
+	}
 	claimCheckSendMessageDuration.DeleteLabelValues(c.changefeedID.Keyspace(), c.changefeedID.Name())
 	claimCheckSendMessageCount.DeleteLabelValues(c.changefeedID.Keyspace(), c.changefeedID.Name())
 }
