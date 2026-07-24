@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/tidb/br/pkg/utils"
 )
 
@@ -38,6 +39,7 @@ type components struct {
 	topicManager   topicmanager.TopicManager
 	adminClient    kafka.ClusterAdminClient
 	factory        kafka.Factory
+	claimCheck     *claimcheck.ClaimCheck
 }
 
 func (c components) close() {
@@ -46,6 +48,9 @@ func (c components) close() {
 	}
 	if c.topicManager != nil {
 		c.topicManager.Close()
+	}
+	if c.claimCheck != nil {
+		c.claimCheck.Close()
 	}
 }
 
@@ -97,12 +102,23 @@ func newKafkaSinkComponent(
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
-	kafkaComponent.encoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
+	claimCheck, err := claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
+	defer func() {
+		if err != nil {
+			claimCheck.Close()
+		}
+	}()
+	kafkaComponent.claimCheck = claimCheck
+
+	kafkaComponent.encoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, claimCheck, changefeedID)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
-	kafkaComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig, nil)
+	kafkaComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}

@@ -68,6 +68,7 @@ func NewEncoderGroup(
 	ctx context.Context,
 	cfg *config.SinkConfig,
 	encoderConfig *common.Config,
+	claimCheck *claimcheck.ClaimCheck,
 	changefeedID commonType.ChangeFeedID,
 ) (*encoderGroup, error) {
 	concurrency := util.GetOrZero(cfg.EncoderConcurrency)
@@ -75,13 +76,10 @@ func NewEncoderGroup(
 		concurrency = config.DefaultEncoderGroupConcurrency
 	}
 
-	claimCheck, err := claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
 	inputCh := make([]chan *future, concurrency)
 	rowEventEncoders := make([]common.EventEncoder, concurrency)
+
+	var err error
 	for i := 0; i < concurrency; i++ {
 		inputCh[i] = make(chan *future, defaultInputChanSize)
 		rowEventEncoders[i], err = NewEventEncoder(ctx, encoderConfig, claimCheck)

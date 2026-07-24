@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
@@ -95,6 +96,12 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 		return errors.Trace(err)
 	}
 
+	claimCheck, err := claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
+	if err != nil {
+		return err
+	}
+	defer claimCheck.Close()
+
 	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
 	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
 		return errors.Trace(err)
@@ -138,7 +145,7 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 		return errors.WrapError(errors.ErrKafkaCreateTopic, err)
 	}
 
-	_, err = codec.NewEventEncoder(ctx, encoderConfig, nil)
+	_, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck)
 	if err != nil {
 		return errors.Trace(err)
 	}
