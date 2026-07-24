@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
@@ -68,9 +69,90 @@ func (s *sink) SinkType() commonType.SinkType {
 }
 
 func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
+<<<<<<< HEAD
 	comp, _, err := newKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig)
 	defer comp.close()
 	return err
+=======
+	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	topic, err := helper.GetTopic(uri)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	options := kafka.NewOptions()
+	if err = options.Apply(changefeedID, uri, sinkConfig); err != nil {
+		return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+	}
+	options.Topic = topic
+
+	encoderConfig, err := helper.GetEncoderConfig(
+		changefeedID, uri, protocol, sinkConfig,
+		options.MaxMessageBytes, options.MaxBatchedBytes,
+	)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	claimCheck, err := claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
+	if err != nil {
+		return err
+	}
+	defer claimCheck.Close()
+
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
+		return errors.Trace(err)
+	}
+
+	if _, err = columnselector.New(sinkConfig); err != nil {
+		return errors.Trace(err)
+	}
+
+	factory, err := kafka.NewSaramaFactory(ctx, options, changefeedID)
+	if err != nil {
+		return errors.WrapError(errors.ErrKafkaNewProducer, err)
+	}
+
+	adminClient, err := factory.AdminClient(ctx)
+	if err != nil {
+		return errors.WrapError(errors.ErrKafkaNewProducer, err)
+	}
+	defer adminClient.Close()
+
+	topics, err := adminClient.GetTopicsMeta([]string{topic}, false)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if _, exists := topics[topic]; exists {
+		return nil
+	}
+
+	topicConfig := options.DeriveTopicConfig()
+	if !topicConfig.AutoCreate {
+		return errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topic)
+	}
+
+	// the topic is not created, only validate.
+	err = adminClient.CreateTopic(&kafka.TopicDetail{
+		Name:              topic,
+		NumPartitions:     topicConfig.PartitionNum,
+		ReplicationFactor: topicConfig.ReplicationFactor,
+	}, true)
+	if err != nil {
+		return errors.WrapError(errors.ErrKafkaCreateTopic, err)
+	}
+
+	_, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	return nil
+>>>>>>> bc474b549 (kafka: share one claimcheck instance across encoders (#5718))
 }
 
 func New(
@@ -89,24 +171,30 @@ func newWithComponents(
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
+	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "sink")
 	var (
 		err           error
 		asyncProducer kafka.AsyncProducer
 		syncProducer  kafka.SyncProducer
 	)
 	defer func() {
-		if err != nil {
-			if syncProducer != nil {
-				syncProducer.Close()
-			}
-			if asyncProducer != nil {
-				asyncProducer.Close()
-			}
-			comp.close()
+		if err == nil {
+			return
 		}
+		if syncProducer != nil {
+			syncProducer.Close()
+		}
+		if asyncProducer != nil {
+			asyncProducer.Close()
+		}
+		comp.close()
+		statistics.Close()
 	}()
 
+<<<<<<< HEAD
 	statistics := metrics.NewStatistics(changefeedID, "sink")
+=======
+>>>>>>> bc474b549 (kafka: share one claimcheck instance across encoders (#5718))
 	asyncProducer, err = comp.factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, err

@@ -51,7 +51,82 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 	statistics := metrics.NewStatistics(changefeedID, "sink")
 	comp, protocol, err := newKafkaSinkComponentForTest(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
+<<<<<<< HEAD
 		return nil, errors.Trace(err)
+=======
+		return nil, err
+	}
+	topic, err := helper.GetTopic(sinkURI)
+	if err != nil {
+		return nil, err
+	}
+	options := kafka.NewOptions()
+	if err = options.Apply(changefeedID, sinkURI, sinkConfig); err != nil {
+		return nil, err
+	}
+	options.Topic = topic
+
+	adminClient := kafka.NewMockClusterAdminClient(ctrl)
+	adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, true).Return(
+		map[string]kafka.TopicDetail{
+			kafkaSinkTestTopic: {
+				Name:          kafkaSinkTestTopic,
+				NumPartitions: 1,
+			},
+		}, nil)
+	adminClient.EXPECT().Close().AnyTimes()
+
+	metricsCollector := kafka.NewMockMetricsCollector(ctrl)
+	metricsCollector.EXPECT().Run(gomock.Any()).AnyTimes()
+
+	factory := kafka.NewMockFactory(ctrl)
+	factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
+	factory.EXPECT().SyncProducer(gomock.Any()).Return(syncProducer, nil)
+	factory.EXPECT().MetricsCollector(adminClient).Return(metricsCollector)
+
+	eventRouter, err := eventrouter.NewEventRouter(sinkConfig, topic, false, false)
+	if err != nil {
+		return nil, err
+	}
+	columnSelector, err := columnselector.New(sinkConfig)
+	if err != nil {
+		return nil, err
+	}
+	encoderConfig, err := helper.GetEncoderConfig(
+		changefeedID, sinkURI, protocol, sinkConfig,
+		options.MaxMessageBytes, options.MaxBatchedBytes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	encoderGroup, err := codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, nil, changefeedID)
+	if err != nil {
+		return nil, err
+	}
+	encoder, err := codec.NewEventEncoder(ctx, encoderConfig, nil)
+	if err != nil {
+		return nil, err
+	}
+	topicManager, err := topicmanager.GetTopicManagerAndTryCreateTopic(
+		ctx,
+		changefeedID,
+		topic,
+		options.DeriveTopicConfig(),
+		adminClient,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	comp := components{
+		encoderGroup:   encoderGroup,
+		encoder:        encoder,
+		columnSelector: columnSelector,
+		eventRouter:    eventRouter,
+		topicManager:   topicManager,
+		adminClient:    adminClient,
+		factory:        factory,
+>>>>>>> bc474b549 (kafka: share one claimcheck instance across encoders (#5718))
 	}
 
 	// We must close adminClient when this func return cause by an error
