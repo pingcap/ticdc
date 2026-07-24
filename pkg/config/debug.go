@@ -143,6 +143,10 @@ type EventServiceConfig struct {
 	// DMLEventMaxBytes is the maximum size of a DML event in bytes when split txn is enabled.
 	DMLEventMaxBytes int64 `toml:"dml-event-max-bytes" json:"dml_event_max_bytes"`
 
+	// LargeTxnThresholdInBytes is the raw KV size threshold for row-level large transaction scan interrupt
+	// and split update insert spill.
+	LargeTxnThresholdInBytes int64 `toml:"large-txn-threshold-in-bytes" json:"large_txn_threshold_in_bytes"`
+
 	EnableScanWindow bool `toml:"enable-scan-window" json:"enable_scan_window"`
 
 	// FIXME: For now we found cdc may OOM when there is a large amount of events to be sent to event collector from a remote event service.
@@ -159,6 +163,7 @@ func NewDefaultEventServiceConfig() *EventServiceConfig {
 		ScanLimitInBytes:         1024 * 1024 * 256, // 256MB
 		DMLEventMaxRows:          256,
 		DMLEventMaxBytes:         1024 * 1024 * 1, // 1MB
+		LargeTxnThresholdInBytes: 1024 * 1024 * 1, // 1MB
 		EnableScanWindow:         true,
 		EnableRemoteEventService: true,
 	}

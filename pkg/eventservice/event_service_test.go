@@ -15,7 +15,10 @@ package eventservice
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -58,6 +61,27 @@ func startEventService(
 		}
 	}()
 	return esImpl
+}
+
+func TestNewEventServiceRemovesOrphanedLargeTxnSpillFiles(t *testing.T) {
+	original := config.GetGlobalServerConfig().Clone()
+	cfg := original.Clone()
+	cfg.DataDir = t.TempDir()
+	config.StoreGlobalServerConfig(cfg)
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(original)
+	})
+
+	spillDir := getLargeTxnInsertSpillDir()
+	require.NoError(t, os.MkdirAll(spillDir, 0o700))
+	orphanPath := filepath.Join(spillDir, "eventservice-large-txn-insert-orphan.spill")
+	require.NoError(t, os.WriteFile(orphanPath, []byte("orphan"), 0o600))
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	_ = New(newMockEventStore(100), NewMockSchemaStore())
+
+	require.NoFileExists(t, orphanPath)
 }
 
 func TestEventServiceBasic(t *testing.T) {
@@ -273,8 +297,9 @@ func (m *mockEventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, 
 }
 
 func (m *mockEventStore) GetIterator(
-	dispatcherID common.DispatcherID, dataRange common.DataRange,
+	dispatcherID common.DispatcherID, request eventstore.ScanRequest,
 ) (eventstore.EventIterator, error) {
+	dataRange := request.Range
 	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if !ok {
 		log.Panic("dispatcher not found", zap.Stringer("dispatcherID", dispatcherID))
@@ -289,15 +314,38 @@ func (m *mockEventStore) GetIterator(
 	events := spanStats.getAllEvents()
 
 	entries := make([]*common.RawKVEntry, 0)
-	for _, e := range events {
+	positions := make([]eventstore.ScanPosition, 0)
+	rowLevelStart := decodeMockScanPosition(request.Cursor.Position)
+	for i, e := range events {
+		if rowLevelStart >= 0 && i <= rowLevelStart {
+			continue
+		}
+		if len(request.Cursor.Position) != 0 {
+			if e.CRTs >= dataRange.CommitTsStart && e.CRTs <= dataRange.CommitTsEnd {
+				entries = append(entries, e)
+				positions = append(positions, encodeMockScanPosition(i))
+			}
+			continue
+		}
+		if request.Cursor.TxnStartTs != 0 {
+			if e.CRTs == dataRange.CommitTsStart && e.StartTs <= request.Cursor.TxnStartTs {
+				continue
+			}
+			if e.CRTs >= dataRange.CommitTsStart && e.CRTs <= dataRange.CommitTsEnd {
+				entries = append(entries, e)
+				positions = append(positions, encodeMockScanPosition(i))
+			}
+			continue
+		}
 		if e.CRTs > dataRange.CommitTsStart && e.CRTs <= dataRange.CommitTsEnd {
 			entries = append(entries, e)
+			positions = append(positions, encodeMockScanPosition(i))
 		}
 	}
 
 	var iter eventstore.EventIterator
 	if len(entries) != 0 {
-		iter = &mockEventIterator{events: entries}
+		iter = &mockEventIterator{events: entries, positions: positions}
 	}
 	return iter, nil
 }
@@ -331,6 +379,7 @@ func (m *mockEventStore) RegisterDispatcher(
 
 type mockEventIterator struct {
 	events       []*common.RawKVEntry
+	positions    []eventstore.ScanPosition
 	prevStartTS  uint64
 	prevCommitTS uint64
 	rowCount     int
@@ -338,22 +387,49 @@ type mockEventIterator struct {
 }
 
 func (iter *mockEventIterator) Next() (*common.RawKVEntry, bool) {
+	row, _, isNewTxn := iter.NextWithScanPosition()
+	return row, isNewTxn
+}
+
+func (iter *mockEventIterator) NextWithScanPosition() (*common.RawKVEntry, eventstore.ScanPosition, bool) {
 	if len(iter.events) == 0 {
-		return nil, false
+		return nil, nil, false
 	}
 
 	row := iter.events[0]
 	iter.events = iter.events[1:]
+	var position eventstore.ScanPosition
+	if len(iter.positions) > 0 {
+		position = iter.positions[0]
+		iter.positions = iter.positions[1:]
+	} else {
+		position = encodeMockScanPosition(iter.rowCount)
+	}
 	isNewTxn := iter.prevCommitTS == 0 || row.StartTs != iter.prevStartTS || row.CRTs != iter.prevCommitTS
 
 	iter.prevStartTS = row.StartTs
 	iter.prevCommitTS = row.CRTs
 	iter.rowCount++
-	return row, isNewTxn
+	return row, position, isNewTxn
 }
 
 func (m *mockEventIterator) Close() (int64, error) {
 	return int64(m.rowCount), m.closeErr
+}
+
+func encodeMockScanPosition(index int) eventstore.ScanPosition {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(index))
+	position := make(eventstore.ScanPosition, len(buf))
+	copy(position, buf[:])
+	return position
+}
+
+func decodeMockScanPosition(position eventstore.ScanPosition) int {
+	if len(position) == 0 {
+		return -1
+	}
+	return int(binary.BigEndian.Uint64(position))
 }
 
 var _ schemastore.SchemaStore = &mockSchemaStore{}

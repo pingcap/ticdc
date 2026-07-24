@@ -16,12 +16,15 @@ package eventservice
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
+	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -139,8 +142,8 @@ func TestOnNotify(t *testing.T) {
 
 	err = broker.resetDispatcher(disInfo)
 	require.Nil(t, err)
-	require.Equal(t, disp.lastScannedCommitTs.Load(), uint64(100))
-	require.Equal(t, disp.lastScannedStartTs.Load(), uint64(0))
+	require.Equal(t, disp.loadScanProgress().txnCommitTs, uint64(100))
+	require.Equal(t, disp.loadScanProgress().txnStartTs, uint64(0))
 
 	disp.setHandshaked()
 
@@ -298,9 +301,9 @@ func TestScanRangeCappedByScanWindow(t *testing.T) {
 	disp.eventStoreCommitTs.Store(oracle.GoTimeToTS(baseTime.Add(15 * time.Second)))
 	changefeedStatus.refreshMinSentResolvedTs()
 
-	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	needScan, dataRange := broker.getScanTaskRequest(disp)
 	require.True(t, needScan)
-	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), dataRange.CommitTsEnd)
+	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), dataRange.Range.CommitTsEnd)
 }
 
 func TestGetScanTaskDataRangeEmptyAfterCappingDoesNotResetScanRange(t *testing.T) {
@@ -323,16 +326,47 @@ func TestGetScanTaskDataRangeEmptyAfterCappingDoesNotResetScanRange(t *testing.T
 	disp.sentResolvedTs.Store(baseTs)
 	disp.receivedResolvedTs.Store(oracle.GoTimeToTS(baseTime.Add(40 * time.Second)))
 	disp.eventStoreCommitTs.Store(commitStart)
-	disp.lastScannedCommitTs.Store(commitStart)
-	disp.lastScannedStartTs.Store(lastStartTs)
+	disp.updateScanRange(commitStart, lastStartTs)
 
 	changefeedStatus.minSentTs.Store(baseTs)
 	changefeedStatus.scanInterval.Store(int64(defaultScanInterval))
 
-	needScan, _ := broker.getScanTaskDataRange(disp)
+	needScan, _ := broker.getScanTaskRequest(disp)
 	require.False(t, needScan)
-	require.Equal(t, commitStart, disp.lastScannedCommitTs.Load())
-	require.Equal(t, lastStartTs, disp.lastScannedStartTs.Load())
+	require.Equal(t, commitStart, disp.loadScanProgress().txnCommitTs)
+	require.Equal(t, lastStartTs, disp.loadScanProgress().txnStartTs)
+}
+
+func TestGetScanTaskRequestKeepsRowCursorInsideShrunkWindow(t *testing.T) {
+	broker, _, schemaStore, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all messages in the test.
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+
+	baseTime := time.Now()
+	baseTs := oracle.GoTimeToTS(baseTime)
+	cursorCommitTs := oracle.GoTimeToTS(baseTime.Add(20 * time.Second))
+	resolvedTs := oracle.GoTimeToTS(baseTime.Add(40 * time.Second))
+	position := eventstore.ScanPosition("row-cursor")
+
+	disp.sentResolvedTs.Store(baseTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(cursorCommitTs)
+	disp.updateScanRangeWithPosition(cursorCommitTs, cursorCommitTs-1, position)
+	changefeedStatus.minSentTs.Store(baseTs)
+	changefeedStatus.scanInterval.Store(int64(defaultScanInterval))
+	schemaStore.resolvedTs = resolvedTs
+
+	needScan, request := broker.getScanTaskRequest(disp)
+	require.True(t, needScan)
+	require.Equal(t, cursorCommitTs, request.Range.CommitTsStart)
+	require.Equal(t, cursorCommitTs, request.Range.CommitTsEnd)
+	require.Equal(t, position, request.Cursor.Position)
 }
 
 func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow(t *testing.T) {
@@ -356,8 +390,7 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow
 	disp.sentResolvedTs.Store(baseTs)
 	disp.receivedResolvedTs.Store(resolvedTs)
 	disp.eventStoreCommitTs.Store(commitStart)
-	disp.lastScannedCommitTs.Store(commitStart)
-	disp.lastScannedStartTs.Store(commitStart - 1)
+	disp.updateScanRange(commitStart, commitStart-1)
 
 	changefeedStatus.minSentTs.Store(baseTs)
 	changefeedStatus.scanInterval.Store(int64(defaultScanInterval))
@@ -365,10 +398,10 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow
 	ss.resolvedTs = resolvedTs
 	ss.maxDDLCommitTs = ddlCommitTs
 
-	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	needScan, dataRange := broker.getScanTaskRequest(disp)
 	require.True(t, needScan)
-	require.Equal(t, commitStart, dataRange.CommitTsStart)
-	require.Equal(t, oracle.GoTimeToTS(oracle.GetTimeFromTS(commitStart).Add(defaultScanInterval)), dataRange.CommitTsEnd)
+	require.Equal(t, commitStart, dataRange.Range.CommitTsStart)
+	require.Equal(t, oracle.GoTimeToTS(oracle.GetTimeFromTS(commitStart).Add(defaultScanInterval)), dataRange.Range.CommitTsEnd)
 }
 
 func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingSyncPointCrossesSyncPoint(t *testing.T) {
@@ -395,8 +428,7 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingSyncPointCrossesSyncPoi
 	disp.sentResolvedTs.Store(baseTs)
 	disp.receivedResolvedTs.Store(resolvedTs)
 	disp.eventStoreCommitTs.Store(commitStart)
-	disp.lastScannedCommitTs.Store(commitStart)
-	disp.lastScannedStartTs.Store(commitStart - 1)
+	disp.updateScanRange(commitStart, commitStart-1)
 
 	changefeedStatus.minSentTs.Store(baseTs)
 	changefeedStatus.scanInterval.Store(int64(time.Second))
@@ -404,10 +436,10 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingSyncPointCrossesSyncPoi
 	ss.resolvedTs = resolvedTs
 	ss.maxDDLCommitTs = 0
 
-	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	needScan, dataRange := broker.getScanTaskRequest(disp)
 	require.True(t, needScan)
-	require.Equal(t, commitStart, dataRange.CommitTsStart)
-	require.Equal(t, nextSyncPointTs+1, dataRange.CommitTsEnd)
+	require.Equal(t, commitStart, dataRange.Range.CommitTsStart)
+	require.Equal(t, nextSyncPointTs+1, dataRange.Range.CommitTsEnd)
 }
 
 func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t *testing.T) {
@@ -453,26 +485,24 @@ func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t 
 
 	d1.receivedResolvedTs.Store(ts110)
 	d1.eventStoreCommitTs.Store(ts103)
-	d1.lastScannedCommitTs.Store(ts101)
-	d1.lastScannedStartTs.Store(ts101 - 1)
+	d1.updateScanRange(ts101, ts101-1)
 
 	ss.resolvedTs = ts110
 	ss.maxDDLCommitTs = ts103
 
 	// Round 1: global cap makes range empty (end=ts101), fallback should locally move it to ts102.
-	needScan, dataRange := broker.getScanTaskDataRange(d1)
+	needScan, dataRange := broker.getScanTaskRequest(d1)
 	require.True(t, needScan)
-	require.Equal(t, ts101, dataRange.CommitTsStart)
-	require.Equal(t, ts102, dataRange.CommitTsEnd)
+	require.Equal(t, ts101, dataRange.Range.CommitTsStart)
+	require.Equal(t, ts102, dataRange.Range.CommitTsEnd)
 
 	// Round 2: still globally capped by ts100, but fallback should continue moving to ts103,
 	// which allows this dispatcher to eventually reach the pending truncate ddl barrier.
-	d1.lastScannedCommitTs.Store(ts102)
-	d1.lastScannedStartTs.Store(0)
-	needScan, dataRange = broker.getScanTaskDataRange(d1)
+	d1.updateScanRange(ts102, 0)
+	needScan, dataRange = broker.getScanTaskRequest(d1)
 	require.True(t, needScan)
-	require.Equal(t, ts102, dataRange.CommitTsStart)
-	require.Equal(t, ts103, dataRange.CommitTsEnd)
+	require.Equal(t, ts102, dataRange.Range.CommitTsStart)
+	require.Equal(t, ts103, dataRange.Range.CommitTsEnd)
 }
 
 func TestHandleCongestionControlV2DoesNotResetScanIntervalOnMemoryRelease(t *testing.T) {
@@ -531,6 +561,48 @@ func TestDoScanSkipWhenChangefeedStatusNotFound(t *testing.T) {
 		broker.doScan(context.Background(), task)
 	})
 	require.False(t, disp.isTaskScanning.Load())
+}
+
+func TestDoScanKeepsRowLevelProgressAfterSendingFragment(t *testing.T) {
+	setLargeTxnThresholdForTest(t, 0)
+
+	broker, mockStore, mockSchemaStore, _ := newEventBrokerForTest()
+	broker.close()
+
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t_do_scan_split(id int primary key, c char(50))`, []string{
+		`insert into test.t_do_scan_split(id,c) values (0, "c0")`,
+		`insert into test.t_do_scan_split(id,c) values (1, "c1")`,
+	}...)
+	require.Len(t, kvEvents, 2)
+	kvEvents[1].StartTs = kvEvents[0].StartTs
+	kvEvents[1].CRTs = kvEvents[0].CRTs
+	resolvedTs := kvEvents[0].CRTs
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	dispInfo.startTs = ddlEvent.FinishedTs
+	require.NoError(t, broker.addDispatcher(dispInfo))
+
+	disp := broker.getDispatcher(dispInfo.GetID()).Load()
+	require.NotNil(t, disp)
+	disp.setHandshaked()
+	disp.currentScanLimitInBytes.Store(1)
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(resolvedTs)
+
+	status := broker.getOrSetChangefeedStatus(dispInfo)
+	status.availableMemoryQuota.Store(node.ID(dispInfo.GetServerID()), atomic.NewUint64(broker.scanLimitInBytes))
+
+	mockSchemaStore.AppendDDLEvent(dispInfo.GetTableSpan().TableID, ddlEvent)
+	require.NoError(t, mockStore.AppendEvents(dispInfo.GetID(), resolvedTs, kvEvents...))
+
+	broker.doScan(context.Background(), disp)
+
+	require.Equal(t, resolvedTs, disp.loadScanProgress().txnCommitTs)
+	require.Equal(t, kvEvents[0].StartTs, disp.loadScanProgress().txnStartTs)
+	require.NotEmpty(t, disp.loadScanProgress().rowLevelScanPosition)
+	require.True(t, disp.isTaskScanning.Load())
 }
 
 func TestCURDDispatcher(t *testing.T) {
@@ -654,6 +726,188 @@ func TestResetDispatcher(t *testing.T) {
 	require.Equal(t, dispInfo.GetID(), newStat.id)
 }
 
+func TestDispatcherLifecycleCleansLargeTxnState(t *testing.T) {
+	t.Run("reset", func(t *testing.T) {
+		broker, _, _, _ := newEventBrokerForTest()
+		defer broker.close()
+
+		dispInfo := newMockDispatcherInfoForTest(t)
+		require.NoError(t, broker.addDispatcher(dispInfo))
+
+		dispPtr := broker.getDispatcher(dispInfo.GetID())
+		require.NotNil(t, dispPtr)
+		oldStat := dispPtr.Load()
+		spillPath := mustCreateLargeTxnState(t, oldStat, dispInfo.GetTableSpan().TableID)
+
+		resetInfo := newMockDispatcherInfo(t, 500, dispInfo.GetID(), dispInfo.GetTableSpan().TableID, eventpb.ActionType_ACTION_TYPE_RESET)
+		resetInfo.epoch = oldStat.epoch + 1
+		require.NoError(t, broker.resetDispatcher(resetInfo))
+
+		require.Nil(t, oldStat.getLargeTxnState())
+		_, err := os.Stat(spillPath)
+		require.True(t, os.IsNotExist(err))
+	})
+
+	t.Run("remove", func(t *testing.T) {
+		broker, _, _, _ := newEventBrokerForTest()
+		defer broker.close()
+
+		dispInfo := newMockDispatcherInfoForTest(t)
+		require.NoError(t, broker.addDispatcher(dispInfo))
+
+		dispPtr := broker.getDispatcher(dispInfo.GetID())
+		require.NotNil(t, dispPtr)
+		stat := dispPtr.Load()
+		spillPath := mustCreateLargeTxnState(t, stat, dispInfo.GetTableSpan().TableID)
+
+		broker.removeDispatcher(dispInfo)
+
+		require.Nil(t, stat.getLargeTxnState())
+		_, err := os.Stat(spillPath)
+		require.True(t, os.IsNotExist(err))
+	})
+}
+
+type blockingEncryptionManager struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (m *blockingEncryptionManager) EncryptData(
+	ctx context.Context, _ uint32, _ []byte,
+) ([]byte, error) {
+	m.once.Do(func() {
+		close(m.started)
+	})
+	<-ctx.Done()
+	return nil, context.Cause(ctx)
+}
+
+func (*blockingEncryptionManager) DecryptData(
+	_ context.Context, _ uint32, data []byte,
+) ([]byte, error) {
+	return data, nil
+}
+
+func TestDispatcherLifecycleCancelsActiveScanBeforeCleanup(t *testing.T) {
+	for _, action := range []string{"reset", "remove"} {
+		t.Run(action, func(t *testing.T) {
+			broker, _, _, _ := newEventBrokerForTest()
+			defer broker.close()
+
+			dispInfo := newMockDispatcherInfoForTest(t)
+			require.NoError(t, broker.addDispatcher(dispInfo))
+			stat := broker.getDispatcher(dispInfo.GetID()).Load()
+
+			manager := &blockingEncryptionManager{started: make(chan struct{})}
+			spill, err := newLargeTxnInsertSpillWithEncryption(
+				t.TempDir(), dispInfo.GetTableSpan().KeyspaceID, manager)
+			require.NoError(t, err)
+			state := &largeTxnScanState{
+				startTs:  90,
+				commitTs: 100,
+				tableID:  dispInfo.GetTableSpan().TableID,
+				spill:    spill,
+			}
+			stat.largeTxnStateMu.Lock()
+			stat.largeTxnState = state
+			stat.largeTxnStateMu.Unlock()
+			spillPath := spill.file.Path()
+
+			scanCtx, finishScan := stat.beginScan(context.Background())
+			defer finishScan()
+			appendErrCh := make(chan error, 1)
+			go func() {
+				appendErrCh <- state.appendInsert(scanCtx, newTestSpillRawKVEntry(1))
+			}()
+
+			select {
+			case <-manager.started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("spill encryption did not start")
+			}
+
+			lifecycleErrCh := make(chan error, 1)
+			go func() {
+				if action == "reset" {
+					resetInfo := newMockDispatcherInfo(
+						t, 500, dispInfo.GetID(), dispInfo.GetTableSpan().TableID,
+						eventpb.ActionType_ACTION_TYPE_RESET)
+					resetInfo.epoch = stat.epoch + 1
+					lifecycleErrCh <- broker.resetDispatcher(resetInfo)
+					return
+				}
+				broker.removeDispatcher(dispInfo)
+				lifecycleErrCh <- nil
+			}()
+
+			select {
+			case err := <-lifecycleErrCh:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("dispatcher lifecycle operation did not cancel active scan")
+			}
+			require.ErrorIs(t, <-appendErrCh, context.Canceled)
+			require.Nil(t, stat.getLargeTxnState())
+			require.NoFileExists(t, spillPath)
+		})
+	}
+}
+
+func TestDispatcherLifecycleRetriesFailedLargeTxnCleanup(t *testing.T) {
+	for _, action := range []string{"reset", "remove"} {
+		t.Run(action, func(t *testing.T) {
+			broker, _, _, _ := newEventBrokerForTest()
+			defer broker.close()
+
+			dispInfo := newMockDispatcherInfoForTest(t)
+			require.NoError(t, broker.addDispatcher(dispInfo))
+			stat := broker.getDispatcher(dispInfo.GetID()).Load()
+			spillPath := mustCreateLargeTxnState(
+				t, stat, dispInfo.GetTableSpan().TableID)
+			require.NoError(t, os.Remove(spillPath))
+			require.NoError(t, os.Mkdir(spillPath, 0o700))
+			childPath := filepath.Join(spillPath, "child")
+			require.NoError(t, os.WriteFile(
+				childPath, []byte("keep directory non-empty"), 0o600))
+			t.Cleanup(func() {
+				_ = os.RemoveAll(spillPath)
+			})
+
+			if action == "reset" {
+				resetInfo := newMockDispatcherInfo(
+					t, 500, dispInfo.GetID(), dispInfo.GetTableSpan().TableID,
+					eventpb.ActionType_ACTION_TYPE_RESET)
+				resetInfo.epoch = stat.epoch + 1
+				require.NoError(t, broker.resetDispatcher(resetInfo))
+			} else {
+				broker.removeDispatcher(dispInfo)
+			}
+
+			require.NotNil(t, stat.getLargeTxnState())
+			_, pending := broker.pendingLargeTxnCleanup.Load(stat)
+			require.True(t, pending)
+
+			require.NoError(t, os.Remove(childPath))
+			broker.retryPendingLargeTxnCleanup()
+
+			require.Nil(t, stat.getLargeTxnState())
+			_, pending = broker.pendingLargeTxnCleanup.Load(stat)
+			require.False(t, pending)
+			require.NoFileExists(t, spillPath)
+		})
+	}
+}
+
+func mustCreateLargeTxnState(t *testing.T, stat *dispatcherStat, tableID int64) string {
+	t.Helper()
+
+	state, err := stat.getOrCreateLargeTxnState(t.TempDir(), tableID, nil, 90, 100)
+	require.NoError(t, err)
+	require.NoError(t, state.appendInsert(context.Background(), newTestSpillRawKVEntry(1)))
+	return state.spill.file.Path()
+}
+
 func TestResetDispatcherSendsHandshakeWithoutNextNotify(t *testing.T) {
 	broker, _, schemaStore, _ := newEventBrokerForTest()
 
@@ -711,7 +965,7 @@ func TestResetTableTriggerDispatcherDoesNotUseNormalScan(t *testing.T) {
 	require.NotSame(t, oldStat, newStat)
 	require.Equal(t, uint64(0), newStat.seq.Load())
 	require.Equal(t, uint64(100), newStat.sentResolvedTs.Load())
-	require.Equal(t, uint64(100), newStat.lastScannedCommitTs.Load())
+	require.Equal(t, uint64(100), newStat.loadScanProgress().txnCommitTs)
 	require.False(t, newStat.isTaskScanning.Load())
 	require.Empty(t, broker.messageCh[newStat.messageWorkerIndex])
 }
@@ -1105,8 +1359,8 @@ func TestSendHandshakeUsesStartTs(t *testing.T) {
 	}
 
 	require.Equal(t, uint64(100), disp.sentResolvedTs.Load())
-	require.Equal(t, uint64(100), disp.lastScannedCommitTs.Load())
-	require.Equal(t, uint64(0), disp.lastScannedStartTs.Load())
+	require.Equal(t, uint64(100), disp.loadScanProgress().txnCommitTs)
+	require.Equal(t, uint64(0), disp.loadScanProgress().txnStartTs)
 }
 
 func TestAddDispatcherFailure(t *testing.T) {
