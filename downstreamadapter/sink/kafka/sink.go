@@ -169,24 +169,26 @@ func newWithComponents(
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
+	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "sink")
 	var (
 		err           error
 		asyncProducer kafka.AsyncProducer
 		syncProducer  kafka.SyncProducer
 	)
 	defer func() {
-		if err != nil {
-			if syncProducer != nil {
-				syncProducer.Close()
-			}
-			if asyncProducer != nil {
-				asyncProducer.Close()
-			}
-			comp.close()
+		if err == nil {
+			return
 		}
+		if syncProducer != nil {
+			syncProducer.Close()
+		}
+		if asyncProducer != nil {
+			asyncProducer.Close()
+		}
+		comp.close()
+		statistics.Close()
 	}()
 
-	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "sink")
 	asyncProducer, err = comp.factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, err

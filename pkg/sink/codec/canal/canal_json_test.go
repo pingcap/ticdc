@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
@@ -773,7 +774,10 @@ func TestLargeMessageClaimCheck(t *testing.T) {
 	codecConfig.LargeMessageHandle.LargeMessageHandleCompression = "snappy"
 	codecConfig.LargeMessageHandle.ClaimCheckStorageURI = "file:///tmp/canal-json-claim-check"
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+	claimCheck, err := claimcheck.New(ctx, codecConfig.LargeMessageHandle, codecConfig.ChangefeedID)
+	require.NoError(t, err)
+	t.Cleanup(claimCheck.Close)
+	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig, claimCheck)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", insertEvent)

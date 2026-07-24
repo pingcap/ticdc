@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/stretchr/testify/require"
 )
 
@@ -269,8 +270,11 @@ func TestCanalJSONClaimCheckE2E(t *testing.T) {
 
 	for _, rawValue := range []bool{false, true} {
 		codecConfig.LargeMessageHandle.ClaimCheckRawValue = rawValue
+		claimCheck, err := claimcheck.New(ctx, codecConfig.LargeMessageHandle, codecConfig.ChangefeedID)
+		require.NoError(t, err)
+		t.Cleanup(claimCheck.Close)
 
-		encIface, err := NewJSONRowEventEncoder(ctx, codecConfig, nil)
+		encIface, err := NewJSONRowEventEncoder(ctx, codecConfig, claimCheck)
 		require.NoError(t, err)
 		encoder := encIface.(*JSONRowEventEncoder)
 

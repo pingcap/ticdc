@@ -1595,6 +1595,7 @@ func TestDMLMessageTooLarge(t *testing.T) {
 				codecConfig.LargeMessageHandle.ClaimCheckStorageURI = "file:///tmp/simple-claim-check"
 				claimCheck, err = claimcheck.New(ctx, codecConfig.LargeMessageHandle, changefeedID)
 				require.NoError(t, err)
+				t.Cleanup(claimCheck.Close)
 			}
 			enc, err := NewEncoder(context.Background(), codecConfig, claimCheck)
 			require.NoError(t, err)
@@ -1621,6 +1622,9 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 	codecConfig.LargeMessageHandle.ClaimCheckStorageURI = "file:///tmp/simple-claim-check"
 	for _, rawValue := range []bool{false, true} {
 		codecConfig.LargeMessageHandle.ClaimCheckRawValue = rawValue
+		claimCheck, err := claimcheck.New(ctx, codecConfig.LargeMessageHandle, codecConfig.ChangefeedID)
+		require.NoError(t, err)
+		t.Cleanup(claimCheck.Close)
 		for _, format := range []common.EncodingFormatType{
 			common.EncodingFormatAvro,
 			common.EncodingFormatJSON,
@@ -1634,7 +1638,7 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 				codecConfig.MaxMessageBytes = config.DefaultMaxMessageBytes
 				codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
 
-				enc, err := NewEncoder(ctx, codecConfig, nil)
+				enc, err := NewEncoder(ctx, codecConfig, claimCheck)
 				require.NoError(t, err)
 
 				m, err := enc.EncodeDDLEvent(ddlEvent)

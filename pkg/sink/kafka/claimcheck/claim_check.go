@@ -97,7 +97,12 @@ func (c *ClaimCheck) FileNameWithPrefix(fileName string) string {
 	return strings.TrimSuffix(c.storage.URI(), "/") + "/" + fileName
 }
 
+// Close closes the claim-check storage.
 func (c *ClaimCheck) Close() {
+	if c == nil {
+		return
+	}
+
 	if c.storage != nil {
 		c.storage.Close()
 	}
