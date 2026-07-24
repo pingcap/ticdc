@@ -37,7 +37,7 @@ import (
 
 const kafkaSinkTestTopic = "mock_topic"
 
-func TestVerifyValidatesEncoderConfigBeforeKafkaConnection(t *testing.T) {
+func TestVerifyInvalidEncoderConfig(t *testing.T) {
 	openProtocol := config.ProtocolOpen.String()
 	sinkConfig := &config.SinkConfig{Protocol: &openProtocol}
 	sinkURI, err := url.Parse("kafka://127.0.0.1:1/" + kafkaSinkTestTopic + "?max-batch-size=0")
@@ -48,6 +48,21 @@ func TestVerifyValidatesEncoderConfigBeforeKafkaConnection(t *testing.T) {
 	defer cancel()
 	err = Verify(ctx, changefeedID, sinkURI, sinkConfig)
 	require.ErrorContains(t, err, "invalid max-batch-size 0")
+}
+
+func TestVerifyEncoderInitialization(t *testing.T) {
+	avroProtocol := config.ProtocolAvro.String()
+	schemaRegistry := "http://127.0.0.1:1"
+	sinkConfig := &config.SinkConfig{
+		Protocol:       &avroProtocol,
+		SchemaRegistry: &schemaRegistry,
+	}
+	sinkURI, err := url.Parse("kafka://127.0.0.1:1/" + kafkaSinkTestTopic)
+	require.NoError(t, err)
+
+	changefeedID := common.NewChangefeedID4Test("test", "verify-encoder")
+	err = Verify(context.Background(), changefeedID, sinkURI, sinkConfig)
+	require.ErrorContains(t, err, "ErrAvroSchemaAPIError")
 }
 
 func newKafkaSinkForTestWithProducers(ctx context.Context,
@@ -259,31 +274,4 @@ func TestKafkaSinkBatchConfig(t *testing.T) {
 	sink := &sink{}
 	require.Equal(t, 4096, sink.BatchCount())
 	require.Zero(t, sink.BatchBytes())
-}
-
-func TestVerifyKafkaSinkRejectsInvalidClaimCheckStorageForExistingTopic(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	adminClient := kafka.NewMockClusterAdminClient(ctrl)
-	adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, false).Return(
-		map[string]kafka.TopicDetail{
-			kafkaSinkTestTopic: {
-				Name:              kafkaSinkTestTopic,
-				NumPartitions:     1,
-				ReplicationFactor: 1,
-			},
-		}, nil)
-
-	encoderConfig := codeccommon.NewConfig(config.ProtocolOpen)
-	encoderConfig.ChangefeedID = common.NewChangefeedID4Test("test", "test")
-	encoderConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionClaimCheck
-	encoderConfig.LargeMessageHandle.ClaimCheckStorageURI = "unsupported:///claim-check"
-
-	err := verifyKafkaSink(
-		context.Background(),
-		adminClient,
-		kafkaSinkTestTopic,
-		&kafka.AutoCreateTopicConfig{AutoCreate: false},
-		encoderConfig,
-	)
-	require.Error(t, err)
 }

@@ -100,6 +100,18 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 		return errors.Trace(err)
 	}
 
+	claimCheck, err := claimcheck.New(
+		ctx, encoderConfig.LargeMessageHandle, encoderConfig.ChangefeedID,
+	)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	defer claimCheck.Close()
+
+	if _, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck); err != nil {
+		return errors.Trace(err)
+	}
+
 	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
 	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
 		return errors.Trace(err)
@@ -114,57 +126,34 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 		return errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 
-	encoderConfig.WithMaxMessageBytes(options.MaxMessageBytes).
-		WithMaxBatchedBytes(options.MaxBatchedBytes)
-
 	adminClient, err := factory.AdminClient(ctx)
 	if err != nil {
 		return errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 	defer adminClient.Close()
 
-	return verifyKafkaSink(ctx, adminClient, topic, options.DeriveTopicConfig(), encoderConfig)
-}
-
-func verifyKafkaSink(
-	ctx context.Context,
-	adminClient kafka.ClusterAdminClient,
-	topic string,
-	topicConfig *kafka.AutoCreateTopicConfig,
-	encoderConfig *common.Config,
-) error {
 	topics, err := adminClient.GetTopicsMeta([]string{topic}, false)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	if _, exists := topics[topic]; !exists {
-		if !topicConfig.AutoCreate {
-			return errors.ErrKafkaInvalidConfig.GenWithStack(
-				"`auto-create-topic` is false, and %s not found", topic)
-		}
-
-		// The topic is not created, only validate its configuration and permissions.
-		err = adminClient.CreateTopic(&kafka.TopicDetail{
-			Name:              topic,
-			NumPartitions:     topicConfig.PartitionNum,
-			ReplicationFactor: topicConfig.ReplicationFactor,
-		}, true)
-		if err != nil {
-			return errors.WrapError(errors.ErrKafkaCreateTopic, err)
-		}
+	if _, exists := topics[topic]; exists {
+		return nil
 	}
 
-	claimCheck, err := claimcheck.New(
-		ctx, encoderConfig.LargeMessageHandle, encoderConfig.ChangefeedID,
-	)
-	if err != nil {
-		return errors.Trace(err)
+	topicConfig := options.DeriveTopicConfig()
+	if !topicConfig.AutoCreate {
+		return errors.ErrKafkaInvalidConfig.GenWithStack(
+			"`auto-create-topic` is false, and %s not found", topic)
 	}
-	defer claimCheck.Close()
 
-	_, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck)
+	// The topic is not created, only validate its configuration and permissions.
+	err = adminClient.CreateTopic(&kafka.TopicDetail{
+		Name:              topic,
+		NumPartitions:     topicConfig.PartitionNum,
+		ReplicationFactor: topicConfig.ReplicationFactor,
+	}, true)
 	if err != nil {
-		return errors.Trace(err)
+		return errors.WrapError(errors.ErrKafkaCreateTopic, err)
 	}
 	return nil
 }
