@@ -26,11 +26,10 @@ import (
 
 	"github.com/gin-gonic/gin/binding"
 	"github.com/imdario/mergo"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"go.uber.org/zap"
 )
@@ -40,13 +39,6 @@ const (
 	defaultPartitionNum = 3
 	// defaultMaxRetry is the default retry budget for Kafka producers.
 	defaultMaxRetry = 5
-
-	// the `max-message-bytes` is set equal to topic's `max.message.bytes`, and is used to check
-	// whether the message is larger than the max size limit. It's found some message pass the message
-	// size limit check at the client side and failed at the broker side since message enlarged during
-	// the network transmission. so we set the `max-message-bytes` to a smaller value to avoid this problem.
-	// maxMessageBytesOverhead is used to reduce the `max-message-bytes`.
-	maxMessageBytesOverhead = 128
 )
 
 const (
@@ -108,7 +100,7 @@ func requireAcksFromString(acks int) (RequiredAcks, error) {
 	case int(NoResponse):
 		return NoResponse, nil
 	default:
-		return Unknown, cerror.ErrKafkaInvalidRequiredAcks.GenWithStackByArgs(acks)
+		return Unknown, errors.ErrKafkaInvalidRequiredAcks.GenWithStackByArgs(acks)
 	}
 }
 
@@ -143,7 +135,7 @@ type urlConfig struct {
 	InsecureSkipVerify           *bool   `form:"insecure-skip-verify"`
 }
 
-// options stores user specified configurations
+// options stores Kafka sink configurations
 type options struct {
 	Topic           string
 	BrokerEndpoints []string
@@ -156,14 +148,16 @@ type options struct {
 	Version           string
 	IsAssignedVersion bool
 	RequestVersion    int16
-	MaxMessageBytes   int
-	MaxRetry          int
-	Compression       string
-	ClientID          string
-	RequiredAcks      RequiredAcks
-	// Only for test. User can not set this value.
-	// The current prod default value is 0.
-	MaxMessages int
+
+	// MaxMessageBytes controls the byte size limit of the producer.
+	MaxMessageBytes int
+	// MaxBatchedBytes controls the byte size limit when batching messages.
+	MaxBatchedBytes int
+
+	MaxRetry     int
+	Compression  string
+	ClientID     string
+	RequiredAcks RequiredAcks
 
 	// Credential is used to connect to kafka cluster.
 	EnableTLS          bool
@@ -180,9 +174,9 @@ type options struct {
 // NewOptions returns a default Kafka configuration
 func NewOptions() *options {
 	return &options{
-		Version: "2.4.0",
-		// MaxMessageBytes will be used to initialize producer
+		Version:            "2.4.0",
 		MaxMessageBytes:    config.DefaultMaxMessageBytes,
+		MaxBatchedBytes:    config.DefaultMaxMessageBytes,
 		MaxRetry:           defaultMaxRetry,
 		ReplicationFactor:  1,
 		Compression:        "none",
@@ -198,11 +192,12 @@ func NewOptions() *options {
 }
 
 // setPartitionNum set the partition-num by the topic's partition count.
-func (o *options) setPartitionNum(realPartitionCount int32) error {
+func (o *options) setPartitionNum(changefeedID common.ChangeFeedID, realPartitionCount int32) error {
 	// user does not specify the `partition-num` in the sink-uri
 	if o.PartitionNum == 0 {
 		o.PartitionNum = realPartitionCount
 		log.Info("partitionNum is not set, set by topic's partition-num",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
 			zap.Int32("partitionNum", realPartitionCount))
 		return nil
 	}
@@ -210,8 +205,8 @@ func (o *options) setPartitionNum(realPartitionCount int32) error {
 	if o.PartitionNum < realPartitionCount {
 		log.Warn("number of partition specified in sink-uri is less than that of the actual topic. "+
 			"Some partitions will not have messages dispatched to",
-			zap.Int32("sinkUriPartitions", o.PartitionNum),
-			zap.Int32("topicPartitions", realPartitionCount))
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
+			zap.Int32("sinkUriPartitions", o.PartitionNum), zap.Int32("topicPartitions", realPartitionCount))
 		return nil
 	}
 
@@ -219,7 +214,7 @@ func (o *options) setPartitionNum(realPartitionCount int32) error {
 	// the real partition count, since messages would be dispatched to different
 	// partitions, this could prevent potential correctness problems.
 	if o.PartitionNum > realPartitionCount {
-		return cerror.ErrKafkaInvalidPartitionNum.GenWithStack(
+		return errors.ErrKafkaInvalidPartitionNum.GenWithStack(
 			"the number of partition (%d) specified in sink-uri is more than that of actual topic (%d)",
 			o.PartitionNum, realPartitionCount)
 	}
@@ -236,7 +231,7 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	req := &http.Request{URL: sinkURI}
 	urlParameter := &urlConfig{}
 	if err = binding.Query.Bind(req, urlParameter); err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	if urlParameter, err = mergeConfig(sinkConfig, urlParameter); err != nil {
 		return err
@@ -244,7 +239,7 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	if urlParameter.PartitionNum != nil {
 		o.PartitionNum = *urlParameter.PartitionNum
 		if o.PartitionNum <= 0 {
-			return cerror.ErrKafkaInvalidPartitionNum.GenWithStackByArgs(o.PartitionNum)
+			return errors.ErrKafkaInvalidPartitionNum.GenWithStackByArgs(o.PartitionNum)
 		}
 	}
 
@@ -258,8 +253,12 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	}
 
 	if urlParameter.MaxMessageBytes != nil {
+		if *urlParameter.MaxMessageBytes <= 0 {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("invalid max-message-bytes %d", *urlParameter.MaxMessageBytes)
+		}
 		o.MaxMessageBytes = *urlParameter.MaxMessageBytes
 	}
+	o.MaxBatchedBytes = o.MaxMessageBytes
 
 	if urlParameter.MaxRetry != nil && *urlParameter.MaxRetry >= 0 {
 		o.MaxRetry = *urlParameter.MaxRetry
@@ -387,7 +386,7 @@ func (o *options) applyTLS(params *urlConfig) error {
 
 	if o.Credential != nil && !o.Credential.IsEmpty() &&
 		!o.Credential.IsTLSEnabled() {
-		return cerror.WrapError(cerror.ErrKafkaInvalidConfig,
+		return errors.WrapError(errors.ErrKafkaInvalidConfig,
 			errors.New("ca, cert and key files should all be supplied"))
 	}
 
@@ -401,7 +400,7 @@ func (o *options) applyTLS(params *urlConfig) error {
 		enableTLS := *params.EnableTLS
 
 		if o.Credential != nil && o.Credential.IsTLSEnabled() && !enableTLS {
-			return cerror.WrapError(cerror.ErrKafkaInvalidConfig,
+			return errors.WrapError(errors.ErrKafkaInvalidConfig,
 				errors.New("credential files are supplied, but 'enable-tls' is set to false"))
 		}
 		o.EnableTLS = enableTLS
@@ -431,7 +430,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 	if urlParameter.SASLMechanism != nil && *urlParameter.SASLMechanism != "" {
 		mechanism, err := security.SASLMechanismFromString(*urlParameter.SASLMechanism)
 		if err != nil {
-			return cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
+			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
 		o.SASL.SASLMechanism = mechanism
 	}
@@ -439,7 +438,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 	if urlParameter.SASLGssAPIAuthType != nil && *urlParameter.SASLGssAPIAuthType != "" {
 		authType, err := security.AuthTypeFromString(*urlParameter.SASLGssAPIAuthType)
 		if err != nil {
-			return cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
+			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
 		o.SASL.GSSAPI.AuthType = authType
 	}
@@ -477,7 +476,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 		if sinkConfig.KafkaConfig.SASLOAuthClientID != nil {
 			clientID := *sinkConfig.KafkaConfig.SASLOAuthClientID
 			if clientID == "" {
-				return cerror.ErrKafkaInvalidConfig.GenWithStack("OAuth2 client ID cannot be empty")
+				return errors.ErrKafkaInvalidConfig.GenWithStack("OAuth2 client ID cannot be empty")
 			}
 			o.SASL.OAuth2.ClientID = clientID
 		}
@@ -485,7 +484,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 		if sinkConfig.KafkaConfig.SASLOAuthClientSecret != nil {
 			clientSecret := *sinkConfig.KafkaConfig.SASLOAuthClientSecret
 			if clientSecret == "" {
-				return cerror.ErrKafkaInvalidConfig.GenWithStack(
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 client secret cannot be empty")
 			}
 
@@ -493,7 +492,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			decodedClientSecret, err := base64.StdEncoding.DecodeString(clientSecret)
 			if err != nil {
 				log.Error("OAuth2 client secret is not base64 encoded", zap.Error(err))
-				return cerror.ErrKafkaInvalidConfig.GenWithStack(
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 client secret is not base64 encoded")
 			}
 			o.SASL.OAuth2.ClientSecret = string(decodedClientSecret)
@@ -502,7 +501,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 		if sinkConfig.KafkaConfig.SASLOAuthTokenURL != nil {
 			tokenURL := *sinkConfig.KafkaConfig.SASLOAuthTokenURL
 			if tokenURL == "" {
-				return cerror.ErrKafkaInvalidConfig.GenWithStack(
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 token URL cannot be empty")
 			}
 			o.SASL.OAuth2.TokenURL = tokenURL
@@ -510,13 +509,13 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 
 		if o.SASL.OAuth2.IsEnable() {
 			if o.SASL.SASLMechanism != security.OAuthMechanism {
-				return cerror.ErrKafkaInvalidConfig.GenWithStack(
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 is only supported with SASL mechanism type OAUTHBEARER, but got %s",
 					o.SASL.SASLMechanism)
 			}
 
 			if err := o.SASL.OAuth2.Validate(); err != nil {
-				return cerror.ErrKafkaInvalidConfig.Wrap(err)
+				return errors.ErrKafkaInvalidConfig.Wrap(err)
 			}
 			o.SASL.OAuth2.SetDefault()
 		}
@@ -570,14 +569,17 @@ func NewKafkaClientID(captureAddr string,
 		clientID = commonInvalidChar.ReplaceAllString(clientID, "_")
 	}
 	if !validClientID.MatchString(clientID) {
-		return "", cerror.ErrKafkaInvalidClientID.GenWithStackByArgs(clientID)
+		return "", errors.ErrKafkaInvalidClientID.GenWithStackByArgs(clientID)
 	}
 	return
 }
 
-// adjustOptions adjust the `options` and `sarama.Config` by condition.
+// adjustOptions adjusts options with Kafka runtime metadata.
+// It overwrites MaxMessageBytes with the final producer message limit derived
+// from the topic or broker configuration.
 func adjustOptions(
 	ctx context.Context,
+	changefeedID common.ChangeFeedID,
 	admin ClusterAdminClient,
 	options *options,
 	topic string,
@@ -587,102 +589,140 @@ func adjustOptions(
 		return errors.Trace(err)
 	}
 
-	// Only check replicationFactor >= minInsyncReplicas when producer's required acks is -1.
-	// If we don't check it, the producer probably can not send message to the topic.
-	// Because it will wait for the ack from all replicas. But we do not have enough replicas.
-	if options.RequiredAcks == WaitForAll {
-		err = validateMinInsyncReplicas(ctx, admin, topics, topic, int(options.ReplicationFactor))
-		if err != nil {
-			return errors.Trace(err)
-		}
+	if err = validateRequiredAcks(ctx, admin, topics, topic, options); err != nil {
+		return errors.Trace(err)
 	}
+	return adjustTopicOptions(ctx, changefeedID, admin, options, topic, topics)
+}
 
+func adjustTopicOptions(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	admin ClusterAdminClient,
+	options *options,
+	topic string,
+	topics map[string]TopicDetail,
+) error {
 	info, exists := topics[topic]
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
+	var err error
 	if exists {
-		// make sure that producer's `MaxMessageBytes` smaller than topic's `max.message.bytes`
-		topicMaxMessageBytesStr, err := getTopicConfig(
-			ctx, admin, info.Name,
-			TopicMaxMessageBytesConfigName,
-			BrokerMessageMaxBytesConfigName,
-		)
-		var topicMaxMessageBytes int
-		if err != nil {
-			log.Warn("TiCDC cannot find `max.message.bytes` from topic's configuration, use the option `MaxMessageBytes` as default")
-			topicMaxMessageBytes = options.MaxMessageBytes
-		} else {
-			topicMaxMessageBytes, err = strconv.Atoi(topicMaxMessageBytesStr)
-			if err != nil {
-				return errors.Trace(err)
-			}
-		}
+		err = adjustExistingTopicOption(ctx, changefeedID, admin, options, topic, info)
+	} else {
+		adjustNewTopicOptions(admin, changefeedID, options, topic)
+	}
+	if err != nil {
+		return err
+	}
 
-		maxMessageBytes := topicMaxMessageBytes - maxMessageBytesOverhead
-		if topicMaxMessageBytes <= options.MaxMessageBytes {
-			log.Warn("topic's `max.message.bytes` less than the `max-message-bytes`,"+
-				"use topic's `max.message.bytes` to initialize the Kafka producer",
-				zap.Int("max.message.bytes", topicMaxMessageBytes),
-				zap.Int("max-message-bytes", options.MaxMessageBytes),
-				zap.Int("real-max-message-bytes", maxMessageBytes))
-			options.MaxMessageBytes = maxMessageBytes
-		} else {
-			if maxMessageBytes < options.MaxMessageBytes {
-				options.MaxMessageBytes = maxMessageBytes
-			}
-		}
+	options.MaxBatchedBytes = min(options.MaxBatchedBytes, options.MaxMessageBytes)
+	return nil
+}
 
-		// no need to create the topic,
-		// but we would have to log user if they found enter wrong topic name later
-		if options.AutoCreate {
-			log.Warn("topic already exist, TiCDC will not create the topic",
-				zap.String("topic", topic), zap.Any("detail", info))
-		}
-
-		if err = options.setPartitionNum(info.NumPartitions); err != nil {
-			return errors.Trace(err)
-		}
-
+func validateRequiredAcks(
+	ctx context.Context,
+	admin ClusterAdminClient,
+	topics map[string]TopicDetail,
+	topic string,
+	options *options,
+) error {
+	// Only check replicationFactor >= minInsyncReplicas when producer's required acks is -1.
+	// If we don't check it, the producer probably can not send message to the topic.
+	// Because it will wait for the ack from all replicas. But we do not have enough replicas.
+	if options.RequiredAcks != WaitForAll {
 		return nil
 	}
+	return validateMinInsyncReplicas(ctx, admin, topics, topic, int(options.ReplicationFactor))
+}
 
-	var brokerMessageMaxBytes int
-	brokerMessageMaxBytesStr, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
+func adjustExistingTopicOption(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	admin ClusterAdminClient,
+	options *options,
+	topic string,
+	info TopicDetail,
+) error {
+	maxMessageBytes, err := getTopicMaxMessageBytes(ctx, admin, info.Name)
 	if err != nil {
-		log.Warn("TiCDC cannot find `message.max.bytes` from broker's configuration, use the option `MaxMessageBytes` as default")
-		brokerMessageMaxBytes = options.MaxMessageBytes
-	} else {
-		brokerMessageMaxBytes, err = strconv.Atoi(brokerMessageMaxBytesStr)
-		if err != nil {
-			return errors.Trace(err)
-		}
+		log.Warn("`max.message.bytes` not found from topic's configuration, use the option `MaxMessageBytes` as default",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
+			zap.Int("maxMessageBytes", options.MaxMessageBytes), zap.Error(err))
+		maxMessageBytes = options.MaxMessageBytes
+	}
+	options.MaxMessageBytes = maxMessageBytes
+
+	// no need to create the topic,
+	// but we would have to log user if they found enter wrong topic name later
+	if options.AutoCreate {
+		log.Warn("topic already exist, TiCDC will not create the topic",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
+			zap.String("topic", topic), zap.Any("detail", info))
 	}
 
+	if err = options.setPartitionNum(changefeedID, info.NumPartitions); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
+}
+
+func adjustNewTopicOptions(
+	admin ClusterAdminClient,
+	changefeedID common.ChangeFeedID,
+	options *options,
+	topic string,
+) {
 	// when create the topic, `max.message.bytes` is decided by the broker,
 	// it would use broker's `message.max.bytes` to set topic's `max.message.bytes`.
-	// TiCDC need to make sure that the producer's `MaxMessageBytes` won't larger than
-	// broker's `message.max.bytes`.
-	maxMessageBytes := brokerMessageMaxBytes - maxMessageBytesOverhead
-	if brokerMessageMaxBytes <= options.MaxMessageBytes {
-		log.Warn("broker's `message.max.bytes` less than the `max-message-bytes`,"+
-			"use broker's `message.max.bytes` to initialize the Kafka producer",
-			zap.Int("message.max.bytes", brokerMessageMaxBytes),
-			zap.Int("max-message-bytes", options.MaxMessageBytes),
-			zap.Int("real-max-message-bytes", maxMessageBytes))
-		options.MaxMessageBytes = maxMessageBytes
-	} else {
-		if maxMessageBytes < options.MaxMessageBytes {
-			options.MaxMessageBytes = maxMessageBytes
-		}
+	messageMaxBytes, err := getBrokerMaxMessageBytes(admin)
+	if err != nil {
+		log.Warn("`message.max.bytes` not found from broker's configuration, use the option `MaxMessageBytes` as default",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
+			zap.Int("maxMessageBytes", options.MaxMessageBytes), zap.Error(err))
+		messageMaxBytes = options.MaxMessageBytes
 	}
+	options.MaxMessageBytes = messageMaxBytes
 
 	// topic not exists yet, and user does not specify the `partition-num` in the sink uri.
 	if options.PartitionNum == 0 {
 		options.PartitionNum = defaultPartitionNum
 		log.Warn("partition-num is not set, use the default partition count",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
 			zap.String("topic", topic), zap.Int32("partitions", options.PartitionNum))
 	}
-	return nil
+}
+
+func getTopicMaxMessageBytes(
+	ctx context.Context,
+	admin ClusterAdminClient,
+	topic string,
+) (int, error) {
+	raw, err := getTopicConfig(
+		ctx, admin, topic,
+		TopicMaxMessageBytesConfigName,
+		BrokerMessageMaxBytesConfigName,
+	)
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	maxMessageBytes, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	return maxMessageBytes, nil
+}
+
+func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, error) {
+	raw, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	messageMaxBytes, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	return messageMaxBytes, nil
 }
 
 func validateMinInsyncReplicas(
@@ -716,7 +756,7 @@ func validateMinInsyncReplicas(
 	minInsyncReplicasStr, exists, err := minInsyncReplicasConfigGetter()
 	if err != nil {
 		// 'min.insync.replica' is invisible to us in Confluent Cloud Kafka.
-		if cerror.ErrKafkaConfigNotFound.Equal(err) {
+		if errors.ErrKafkaConfigNotFound.Equal(err) {
 			log.Warn("TiCDC cannot find `min.insync.replicas` from broker's configuration, " +
 				"please make sure that the replication factor is greater than or equal " +
 				"to the minimum number of in-sync replicas" +
@@ -741,7 +781,7 @@ func validateMinInsyncReplicas(
 			MinInsyncReplicasConfigName, configFrom)
 		log.Error(msg, zap.Int("replication-factor", replicationFactor),
 			zap.Int("min.insync.replicas", minInsyncReplicas))
-		return cerror.ErrKafkaInvalidConfig.GenWithStack(
+		return errors.ErrKafkaInvalidConfig.GenWithStack(
 			"TiCDC Kafka sink's `request.required.acks` defaults to -1, "+
 				"TiCDC cannot deliver messages when the `replication-factor` %d "+
 				"is smaller than the `min.insync.replicas` %d of %s",
