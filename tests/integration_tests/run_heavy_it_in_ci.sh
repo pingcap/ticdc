@@ -168,7 +168,7 @@ storage_groups=(
 	# G14
 	'column_selector fail_over_ddl_mix'
 	# G15
-	'random_drop_message'
+	'csv_storage_column_selector random_drop_message'
 )
 
 # Source shared functions and check test coverage
