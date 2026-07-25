@@ -515,16 +515,17 @@ func (c *eventBroker) getScanTaskRange(task scanTask) scanTaskRangeResult {
 		// but do not advance the watermark here.
 		c.sendSignalResolvedTs(task)
 		result := scanTaskRangeResult{}
-		if ddlState.ResolvedTs <= dataRange.CommitTsStart && ddlState.ResolvedTs < receivedResolvedTs {
+		if c.lowLatencyMode && ddlState.ResolvedTs <= dataRange.CommitTsStart && ddlState.ResolvedTs < receivedResolvedTs {
 			result.schemaBlocked = true
 			result.schemaBlockedUntilTs = dataRange.CommitTsStart
 		}
 		return result
 	}
 
-	result := scanTaskRangeResult{
-		schemaBlocked:        ddlState.ResolvedTs < receivedResolvedTs && dataRange.CommitTsEnd == ddlState.ResolvedTs,
-		schemaBlockedUntilTs: ddlState.ResolvedTs,
+	result := scanTaskRangeResult{}
+	if c.lowLatencyMode {
+		result.schemaBlocked = ddlState.ResolvedTs < receivedResolvedTs && dataRange.CommitTsEnd == ddlState.ResolvedTs
+		result.schemaBlockedUntilTs = ddlState.ResolvedTs
 	}
 
 	// 3. Check whether there is any events in the data range
@@ -987,8 +988,78 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, commitTs ui
 		d.lastReceivedResolvedTsTime.Store(time.Now())
 		updateMetricEventStoreOutputResolved(d.info.GetMode())
 		d.onLatestCommitTs(commitTs)
-		c.requestScan(d)
+		c.requestScanFromNotify(d)
 	}
+}
+
+func (c *eventBroker) requestScanFromNotify(d *dispatcherStat) {
+	span := d.info.GetTableSpan()
+	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
+		return
+	}
+
+	d.scanMu.Lock()
+	if d.isRemoved.Load() || d.scanState == dispatcherScanRemoved {
+		d.scanState = dispatcherScanRemoved
+		d.scanMu.Unlock()
+		return
+	}
+	if d.scanState == dispatcherScanIdle {
+		// Claim the dispatcher execution ownership before checking the scan range.
+		// This keeps the no-event fast path out of the scan worker queue while
+		// serializing it with worker scans and low-latency continuations.
+		d.scanState = dispatcherScanRunning
+		d.scanMu.Unlock()
+		c.prepareScanFromNotify(d)
+		return
+	}
+	if c.lowLatencyMode && d.scanState == dispatcherScanRunning {
+		d.scanState = dispatcherScanRunningPending
+	}
+	d.scanMu.Unlock()
+}
+
+func (c *eventBroker) prepareScanFromNotify(d *dispatcherStat) {
+	if d.isRemoved.Load() {
+		c.finishScan(d, false, false, 0)
+		return
+	}
+	if !c.checkAndSendReady(d) {
+		c.finishScan(d, false, false, 0)
+		return
+	}
+	c.sendHandshakeIfNeed(d)
+
+	remoteID := node.ID(d.info.GetServerID())
+	if !c.msgSender.IsReadyToSend(remoteID) {
+		c.finishScan(d, false, false, 0)
+		return
+	}
+
+	rangeResult := c.getScanTaskRange(d)
+	if !rangeResult.needScan {
+		c.finishScan(d, false, rangeResult.schemaBlocked, rangeResult.schemaBlockedUntilTs)
+		return
+	}
+
+	d.scanMu.Lock()
+	if d.isRemoved.Load() || d.scanState == dispatcherScanRemoved {
+		d.scanState = dispatcherScanRemoved
+		d.schemaBlockedUntilTs = 0
+		d.scanMu.Unlock()
+		return
+	}
+	if d.scanState != dispatcherScanRunning && d.scanState != dispatcherScanRunningPending {
+		d.scanMu.Unlock()
+		return
+	}
+	d.scanState = dispatcherScanQueued
+	d.schemaBlockedUntilTs = 0
+	d.scanMu.Unlock()
+
+	// Only the external EventStore notify path may wait for capacity. Scan workers
+	// use requestScan so that they never block on their own queue.
+	c.taskChan[d.scanWorkerIndex] <- d
 }
 
 func (c *eventBroker) requestScan(d *dispatcherStat) {
@@ -1005,7 +1076,7 @@ func (c *eventBroker) requestScan(d *dispatcherStat) {
 	}
 	if d.scanState == dispatcherScanIdle {
 		c.tryEnqueueScanLocked(d, dispatcherScanIdle)
-	} else if d.scanState == dispatcherScanRunning {
+	} else if c.lowLatencyMode && d.scanState == dispatcherScanRunning {
 		d.scanState = dispatcherScanRunningPending
 	}
 }
@@ -1016,6 +1087,7 @@ func (c *eventBroker) tryEnqueueScanLocked(d *dispatcherStat, fallback dispatche
 	case c.taskChan[d.scanWorkerIndex] <- d:
 		return true
 	default:
+		metrics.EventServiceDroppedScanTaskCount.Inc()
 		d.scanState = fallback
 		return false
 	}
