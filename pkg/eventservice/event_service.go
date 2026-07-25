@@ -59,6 +59,7 @@ type DispatcherInfo interface {
 	GetMode() int64
 	GetEpoch() uint64
 	IsOutputRawChangeEvent() bool
+	EnableIgnoreUpdateOnlyColumns() bool
 }
 
 type DispatcherHeartBeatWithServerID struct {

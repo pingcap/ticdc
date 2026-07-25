@@ -546,6 +546,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		chk *chunk.Chunk,
 	) (int, *integrity.Checksum, error),
 	filter filter.Filter,
+	filterContext filter.DMLFilterContext,
 ) error {
 	// Some transactions could generate empty row change event, such as
 	// begin; insert into t (id) values (1); delete from t where id=1; commit;
@@ -601,7 +602,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 
 	if filter != nil {
 		start := time.Now()
-		skip, err := filter.ShouldIgnoreDML(rowType, preRow, row, t.TableInfo, raw.StartTs)
+		skip, err := filter.ShouldIgnoreDML(rowType, preRow, row, t.TableInfo, raw.StartTs, filterContext)
 		DMLIgnoreComputeDuration.Observe(time.Since(start).Seconds())
 		if err != nil {
 			return errors.Trace(err)
