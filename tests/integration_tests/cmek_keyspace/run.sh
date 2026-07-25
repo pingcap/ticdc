@@ -9,12 +9,13 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 MAX_RETRIES=30
-REQUIRE_ENCRYPTED_KEYSPACE_START=${REQUIRE_ENCRYPTED_KEYSPACE_START:-false}
+REQUIRE_ENCRYPTED_KEYSPACE_START=${REQUIRE_ENCRYPTED_KEYSPACE_START:-true}
 SPILL_APPEND_FAILPOINT=github.com/pingcap/ticdc/pkg/eventservice/PauseAfterLargeTxnSpillAppend
 
 LOCAL_KMS_ADDR=127.0.0.1
 LOCAL_KMS_PORT=18080
 LOCAL_KMS_PID=
+LOCAL_KMS_MODULE=github.com/nsmithuk/local-kms@v0.0.0-20230108155039-ce4561e0cb19
 
 UPSTREAM_VALID_KEYSPACE=keyspace-foo
 UPSTREAM_INVALID_KEYSPACE=keyspace-foo-invalid
@@ -50,9 +51,20 @@ function resolve_local_kms_binary() {
 			echo "$gopath/bin/local-kms"
 			return
 		fi
+
+		local install_dir="$WORK_DIR/local-kms-bin"
+		mkdir -p "$install_dir"
+		echo "local-kms is not installed; build ${LOCAL_KMS_MODULE}" >&2
+		if ! GOBIN="$install_dir" go install "$LOCAL_KMS_MODULE"; then
+			echo "failed to build ${LOCAL_KMS_MODULE}" >&2
+			return 1
+		fi
+		echo "$install_dir/local-kms"
+		return
 	fi
 
-	return 0
+	echo "local-kms is not installed and go is unavailable" >&2
+	return 1
 }
 
 function stop_local_kms() {
@@ -65,9 +77,11 @@ function stop_local_kms() {
 function start_local_kms() {
 	local local_kms_binary
 	local kms_data_dir
-	local_kms_binary=$(resolve_local_kms_binary)
+	if ! local_kms_binary=$(resolve_local_kms_binary); then
+		return 1
+	fi
 	if [ -z "${local_kms_binary}" ]; then
-		echo "skip $TEST_NAME: local-kms binary is not found"
+		echo "failed to resolve local-kms binary"
 		return 1
 	fi
 
@@ -405,6 +419,11 @@ function run() {
 	fi
 
 	if ! start_local_kms; then
+		if [ "${REQUIRE_ENCRYPTED_KEYSPACE_START}" = "true" ]; then
+			echo "local-kms startup failed and strict mode is enabled"
+			exit 1
+		fi
+		echo "skip $TEST_NAME: local-kms startup failed in current environment"
 		return
 	fi
 
