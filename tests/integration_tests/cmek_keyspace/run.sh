@@ -427,6 +427,13 @@ function run() {
 		return
 	fi
 
+	# TiKV uses the AWS SDK to access the local KMS endpoint configured on each
+	# encrypted keyspace. Dummy credentials let it sign those local requests;
+	# disabling IMDS prevents a missing credential from stalling on EC2 lookup.
+	export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-test}
+	export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-test}
+	export AWS_EC2_METADATA_DISABLED=${AWS_EC2_METADATA_DISABLED:-true}
+
 	export KEYSPACE_WAIT_REGION_SPLIT=false
 	export KEYSPACE_WAIT_REGION_SPLIT_TIMEOUT=1m
 	export KEYSPACE_CHECK_REGION_SPLIT_INTERVAL=2s
