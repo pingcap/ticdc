@@ -15,11 +15,12 @@ package logpuller
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
+	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -851,7 +852,7 @@ func (s *subscriptionClient) handleErrors(ctx context.Context) error {
 }
 
 func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
-	err := errors.Cause(errInfo.err)
+	err := perrors.Cause(errInfo.err)
 	if _, requestCancelled := err.(*requestCancelledErr); !requestCancelled {
 		log.Debug("cdc region error",
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
@@ -891,7 +892,7 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		if duplicated := innerErr.GetDuplicateRequest(); duplicated != nil {
 			// TODO(qupeng): It's better to add a new machanism to deregister one region.
 			metricFeedDuplicateRequestCounter.Inc()
-			return errors.New("duplicate request")
+			return perrors.New("duplicate request")
 		}
 		if compatibility := innerErr.GetCompatibility(); compatibility != nil {
 			return cerror.ErrVersionIncompatible.GenWithStackByArgs(compatibility)
