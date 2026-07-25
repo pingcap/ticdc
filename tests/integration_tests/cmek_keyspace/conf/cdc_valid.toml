@@ -1,5 +1,8 @@
 newarch = true
 
+[debug.event-service]
+large-txn-threshold-in-bytes = 1048576
+
 [debug.encryption]
 enable-encryption = true
 allow-degrade-on-error = false

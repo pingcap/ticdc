@@ -10,6 +10,7 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 MAX_RETRIES=30
 REQUIRE_ENCRYPTED_KEYSPACE_START=${REQUIRE_ENCRYPTED_KEYSPACE_START:-false}
+SPILL_APPEND_FAILPOINT=github.com/pingcap/ticdc/pkg/eventservice/PauseAfterLargeTxnSpillAppend
 
 LOCAL_KMS_ADDR=127.0.0.1
 LOCAL_KMS_PORT=18080
@@ -281,9 +282,75 @@ function assert_table_not_synced_for_duration() {
 	done
 }
 
+function generate_spill_workload() {
+	local sql_file=$1
+	local rows=2048
+
+	{
+		echo "USE cmek_valid;"
+		echo "CREATE TABLE spill_table (id BIGINT PRIMARY KEY, uk BIGINT NOT NULL, payload LONGTEXT, UNIQUE KEY uk_idx (uk));"
+		echo "BEGIN;"
+		for i in $(seq 1 "$rows"); do
+			echo "INSERT INTO spill_table VALUES ($i, $i, CONCAT('cmek-spill-before-', REPEAT('a', 1024)));"
+		done
+		echo "COMMIT;"
+		echo "BEGIN;"
+		echo "UPDATE spill_table SET uk = uk + 1000000, payload = CONCAT('cmek-spill-after-', REPEAT('b', 1024));"
+		echo "COMMIT;"
+	} >"$sql_file"
+}
+
+function run_spill_workload() {
+	local sql_file=$1
+	local workload_log=$WORK_DIR/spill-workload.log
+
+	if ! mysql -h"127.0.0.1" -P"$UPSTREAM_VALID_TIDB_PORT" -uroot \
+		--default-character-set utf8mb4 <"$sql_file" >"$workload_log" 2>&1; then
+		cat "$workload_log"
+		return 1
+	fi
+}
+
+function assert_spill_file_encrypted() {
+	local spill_dir=$WORK_DIR/cdc_data/eventservice
+	local spill_file=
+	local version=
+	local key_id_1=
+	local key_id_2=
+	local key_id_3=
+	local i=0
+
+	while [ "$i" -lt 60 ]; do
+		spill_file=$(find "$spill_dir" -maxdepth 1 -type f \
+			-name 'eventservice-large-txn-insert-*.spill' -size +11c \
+			-print -quit 2>/dev/null || true)
+		if [ -n "$spill_file" ]; then
+			read -r version key_id_1 key_id_2 key_id_3 < <(
+				od -An -tu1 -j 8 -N 4 "$spill_file"
+			)
+			if [ -n "$key_id_3" ]; then
+				if [ "$version" -eq 0 ] ||
+					{ [ "$key_id_1" -eq 0 ] && [ "$key_id_2" -eq 0 ] && [ "$key_id_3" -eq 0 ]; }; then
+					echo "spill record is not CMEK encrypted: $spill_file"
+					od -An -tx1 -j 8 -N 4 "$spill_file"
+					return 1
+				fi
+				echo "verified encrypted spill record: $spill_file"
+				return 0
+			fi
+		fi
+		i=$((i + 1))
+		sleep 1
+	done
+
+	echo "encrypted large transaction spill file was not observed under $spill_dir"
+	return 1
+}
+
 function run_with_valid_kms() {
 	local sink_uri="mysql://root@127.0.0.1:${DOWNSTREAM_TIDB_PORT}/"
 	local changefeed_id=cmek-valid
+	local spill_workload=$WORK_DIR/cmek-spill-workload.sql
 
 	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --config "$CUR/conf/cdc_valid.toml"
 	run_cdc_cli changefeed -k "$UPSTREAM_VALID_KEYSPACE" create --sink-uri="$sink_uri" -c "$changefeed_id"
@@ -293,7 +360,16 @@ function run_with_valid_kms() {
 	run_sql "INSERT INTO cmek_valid.t VALUES (1, 'apple'), (2, 'banana');" "127.0.0.1" "$UPSTREAM_VALID_TIDB_PORT"
 
 	check_table_exists "cmek_valid.t" "127.0.0.1" "$DOWNSTREAM_TIDB_PORT" 90
+
+	generate_spill_workload "$spill_workload"
+	enable_failpoint --addr "127.0.0.1:8300" --name "$SPILL_APPEND_FAILPOINT" --expr "pause"
+	run_spill_workload "$spill_workload"
+	assert_spill_file_encrypted
+	disable_failpoint --addr "127.0.0.1:8300" --name "$SPILL_APPEND_FAILPOINT"
+
 	check_sync_diff "$WORK_DIR" "$CUR/conf/diff_config.toml" 180
+	check_logs_contains "$WORK_DIR" "scan interrupted inside a large txn"
+	check_logs_contains "$WORK_DIR" "split update event"
 
 	run_cdc_cli changefeed -k "$UPSTREAM_VALID_KEYSPACE" remove -c "$changefeed_id"
 	cleanup_process "$CDC_BINARY"

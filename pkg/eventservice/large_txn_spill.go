@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -107,8 +108,13 @@ func (s *largeTxnInsertSpill) Append(ctx context.Context, entry *common.RawKVEnt
 			return err
 		}
 	}
-	_, err = s.file.Append(data)
-	return err
+	if _, err := s.file.Append(data); err != nil {
+		return err
+	}
+	// Keep the completed record inspectable before drain cleanup in CMEK
+	// integration tests.
+	failpoint.Inject("PauseAfterLargeTxnSpillAppend", nil)
+	return nil
 }
 
 func (s *largeTxnInsertSpill) NewReader() (*largeTxnInsertSpillReader, error) {
