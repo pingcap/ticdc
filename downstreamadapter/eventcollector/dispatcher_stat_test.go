@@ -157,6 +157,7 @@ func (m *mockDispatcher) IsOutputRawChangeEvent() bool {
 func (m *mockDispatcher) EnableIgnoreUpdateOnlyColumns() bool {
 	return m.enableIgnoreUpdateOnlyColumns
 }
+
 func (m *mockDispatcher) GetRouter() routing.Router {
 	return m.router
 }
