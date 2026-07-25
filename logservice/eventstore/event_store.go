@@ -925,7 +925,13 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	// CommitTsStart with start ts greater than LastScannedTxnStartTs, then scan
 	// later commit ts up to CommitTsEnd.
 	//
+	// Table filter bounds:
+	// lowerTs is the commit-ts lower bound for TableFilter. It skips SSTs whose
+	// collected txn commit ts range does not overlap [lowerTs, CommitTsEnd].
+	// Therefore lowerTs is CommitTsStart+1 in the first case, and CommitTsStart
+	// in the second case.
 	var start []byte
+	lowerTs := dataRange.CommitTsStart + 1
 	if dataRange.LastScannedTxnStartTs != 0 {
 		start = encodeScanLowerBound(
 			uint64(subStat.subID),
@@ -933,6 +939,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 			dataRange.CommitTsStart,
 			dataRange.LastScannedTxnStartTs+1,
 		)
+		lowerTs = dataRange.CommitTsStart
 	} else {
 		start = encodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
 	}
@@ -940,6 +947,10 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	iter, err := db.NewIter(&pebble.IterOptions{
 		LowerBound: start,
 		UpperBound: end,
+		TableFilter: newEventStoreSSTFileFilter(
+			lowerTs,
+			dataRange.CommitTsEnd,
+		),
 	})
 	if err != nil {
 		return nil, errors.Trace(err)
