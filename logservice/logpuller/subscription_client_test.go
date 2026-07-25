@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/pingcap/ticdc/utils/priorityqueue"
 	"github.com/pingcap/tidb/pkg/store/mockstore/mockcopr"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -278,7 +279,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh: make(chan resolveLockTask, 1),
-		regionTaskQueue:   NewPriorityQueue(),
+		regionTaskQueue:   priorityqueue.New[PriorityTask](),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
@@ -384,7 +385,7 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 	client := &subscriptionClient{
 		ds:              &mockDynamicStream{},
-		regionTaskQueue: NewPriorityQueue(),
+		regionTaskQueue: priorityqueue.New[PriorityTask](),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	client.cond = sync.NewCond(&client.mu)
