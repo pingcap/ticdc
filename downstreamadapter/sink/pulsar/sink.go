@@ -402,6 +402,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			}
 
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
+<<<<<<< HEAD
 			selector := s.comp.columnSelector.Get(schema, table)
 			rowsCount := uint64(event.Len())
 			events := make([]*commonEvent.MQRowEvent, 0, rowsCount)
@@ -437,6 +438,12 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						Checksum:        row.Checksum,
 					},
 				})
+=======
+			selector := s.comp.columnSelector.GetForTableInfo(event.TableInfo)
+			events, err := helper.NewMQRowEvents(event, topic, partitionNum, partitionGenerator, selector)
+			if err != nil {
+				return errors.Trace(err)
+>>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 			}
 			s.rowChan.Push(events...)
 		}

@@ -159,6 +159,10 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	rowsCount := uint64(event.Len())
 	rowCallback := helper.NewTxnPostFlushRowCallback(event, rowsCount)
 	events := make([]*commonEvent.RedoRowEvent, 0, rowsCount)
+<<<<<<< HEAD
+=======
+	rowCallback := helper.NewPostFlushRowCallback(event, uint64(rowsCount))
+>>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 
 	var (
 		startTs         = event.GetStartTs()
