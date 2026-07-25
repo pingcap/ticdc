@@ -142,10 +142,11 @@ func (s *largeTxnScanState) appendInsert(ctx context.Context, entry *common.RawK
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cleaned {
-		return errors.New("large txn state has been cleaned up")
+		return errors.ErrSpillFileOp.GenWithStackByArgs("large txn state has been cleaned up")
 	}
 	if s.phase != largeTxnScanPhaseOriginal {
-		return errors.New("large txn spill is no longer accepting original txn rows")
+		return errors.ErrSpillFileOp.GenWithStackByArgs(
+			"large txn spill is no longer accepting original txn rows")
 	}
 	return s.spill.Append(ctx, entry)
 }
@@ -154,7 +155,7 @@ func (s *largeTxnScanState) nextInsert(ctx context.Context) (*common.RawKVEntry,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cleaned {
-		return nil, errors.New("large txn state has been cleaned up")
+		return nil, errors.ErrSpillFileOp.GenWithStackByArgs("large txn state has been cleaned up")
 	}
 	if s.reader == nil {
 		reader, err := s.spill.NewReader()

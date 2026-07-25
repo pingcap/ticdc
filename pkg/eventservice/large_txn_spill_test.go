@@ -120,6 +120,22 @@ func TestLargeTxnInsertSpillValidationErrors(t *testing.T) {
 	require.True(t, errors.ErrSpillFileOp.Equal(spill.Append(context.Background(), nil)))
 }
 
+func TestLargeTxnStateValidationErrors(t *testing.T) {
+	cleanedState := &largeTxnScanState{cleaned: true}
+	err := cleanedState.appendInsert(context.Background(), newTestSpillRawKVEntry(1))
+	require.True(t, errors.ErrSpillFileOp.Equal(err))
+	_, err = cleanedState.nextInsert(context.Background())
+	require.True(t, errors.ErrSpillFileOp.Equal(err))
+
+	drainingState := &largeTxnScanState{phase: largeTxnScanPhaseDrainInserts}
+	err = drainingState.appendInsert(context.Background(), newTestSpillRawKVEntry(1))
+	require.True(t, errors.ErrSpillFileOp.Equal(err))
+
+	processor := &dmlProcessor{}
+	_, err = processor.getOrCreateLargeTxnState()
+	require.True(t, errors.ErrSpillFileOp.Equal(err))
+}
+
 func TestCleanupLargeTxnInsertSpillFiles(t *testing.T) {
 	dir := t.TempDir()
 	orphanPaths := []string{

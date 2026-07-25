@@ -575,7 +575,8 @@ func (p *dmlProcessor) flushSpilledInsertsIntoCurrentTxn() error {
 // from different transactions from sharing one spill lifecycle.
 func (p *dmlProcessor) getOrCreateLargeTxnState() (*largeTxnScanState, error) {
 	if p.dispatcherStat == nil {
-		return nil, errors.New("dispatcher stat is required for large txn update spill")
+		return nil, errors.ErrSpillFileOp.GenWithStackByArgs(
+			"dispatcher stat is required for large txn update spill")
 	}
 	currentDML := p.currentTxn.CurrentDMLEvent
 	return p.dispatcherStat.getOrCreateLargeTxnState(
