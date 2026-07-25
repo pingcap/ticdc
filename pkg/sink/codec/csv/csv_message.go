@@ -334,8 +334,13 @@ func fromColValToCsvVal(csvConfig *common.Config, row *chunk.Row, idx int, colIn
 
 // rowChangedEvent2CSVMsg converts a RowChangedEvent to a csv record.
 func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMessage, error) {
+<<<<<<< HEAD
 	var err error
 
+=======
+	tableInfo := e.TableInfo
+	selector := e.ColumnSelector
+>>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 	csvMsg := &csvMessage{
 		config:     csvConfig,
 		tableName:  e.TableInfo.GetTableName(),
@@ -351,14 +356,22 @@ func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMe
 
 	if e.IsDelete() {
 		csvMsg.opType = operationDelete
+<<<<<<< HEAD
 		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), e.TableInfo)
+=======
+		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), tableInfo, selector)
+>>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 		if err != nil {
 			return nil, err
 		}
 	} else if e.IsInsert() {
 		// This is a insert operation.
 		csvMsg.opType = operationInsert
+<<<<<<< HEAD
 		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), e.TableInfo)
+=======
+		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), tableInfo, selector)
+>>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 		if err != nil {
 			return nil, err
 		}
@@ -371,12 +384,20 @@ func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMe
 					fmt.Errorf("the column length of preColumns %d doesn't equal to that of columns %d",
 						e.GetPreRows().Len(), e.GetRows().Len()))
 			}
+<<<<<<< HEAD
 			csvMsg.preColumns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), e.TableInfo)
+=======
+			csvMsg.preColumns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), tableInfo, selector)
+>>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 			if err != nil {
 				return nil, err
 			}
 		}
+<<<<<<< HEAD
 		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), e.TableInfo)
+=======
+		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), tableInfo, selector)
+>>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 		if err != nil {
 			return nil, err
 		}
@@ -384,13 +405,16 @@ func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMe
 	return csvMsg, nil
 }
 
-func rowChangeColumns2CSVColumns(csvConfig *common.Config, row *chunk.Row, tableInfo *commonType.TableInfo) ([]any, error) {
+func rowChangeColumns2CSVColumns(
+	csvConfig *common.Config,
+	row *chunk.Row,
+	tableInfo *commonType.TableInfo,
+	selector event.Selector,
+) ([]any, error) {
 	var csvColumns []any
 
 	for i, col := range tableInfo.GetColumns() {
-		// column could be nil in a condition described in
-		// https://github.com/pingcap/ticdc/issues/6198#issuecomment-1191132951
-		if col == nil || col.IsVirtualGenerated() {
+		if !shouldEncodeColumn(col, selector) {
 			continue
 		}
 
@@ -403,6 +427,15 @@ func rowChangeColumns2CSVColumns(csvConfig *common.Config, row *chunk.Row, table
 	}
 
 	return csvColumns, nil
+}
+
+func shouldEncodeColumn(col *timodel.ColumnInfo, selector event.Selector) bool {
+	// column could be nil in a condition described in
+	// https://github.com/pingcap/ticdc/issues/6198#issuecomment-1191132951
+	if col == nil || col.IsVirtualGenerated() {
+		return false
+	}
+	return selector == nil || selector.Select(col)
 }
 
 // The header should contain the name corresponding to the file record field,

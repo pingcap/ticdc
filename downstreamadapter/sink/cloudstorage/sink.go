@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -87,7 +88,14 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	if err != nil {
 		return err
 	}
+<<<<<<< HEAD
 	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
+=======
+	if _, err = columnselector.New(sinkConfig); err != nil {
+		return err
+	}
+	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt, math.MaxInt)
+>>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 	if err != nil {
 		return err
 	}
@@ -123,6 +131,10 @@ func New(
 	if err != nil {
 		return nil, err
 	}
+	columnSelectors, err := columnselector.New(sinkConfig)
+	if err != nil {
+		return nil, err
+	}
 	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
 	if err != nil {
 		return nil, err
@@ -134,7 +146,7 @@ func New(
 			storage.Close()
 		}
 	}()
-	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics)
+	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics, columnSelectors)
 	if err != nil {
 		return nil, err
 	}

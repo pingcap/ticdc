@@ -17,7 +17,6 @@ import (
 	"bytes"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -33,6 +32,7 @@ type JSONTxnEventEncoder struct {
 	valueBuf   *bytes.Buffer
 	batchSize  int
 	callback   func()
+<<<<<<< HEAD
 
 	// Store some fields of the txn event.
 	txnCommitTs uint64
@@ -40,32 +40,23 @@ type JSONTxnEventEncoder struct {
 	txnTable    *string
 
 	columnSelector commonEvent.Selector
+=======
+>>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 }
 
 // NewJSONTxnEventEncoder creates a new JSONTxnEventEncoder
 func NewJSONTxnEventEncoder(config *common.Config) common.TxnEventEncoder {
 	return &JSONTxnEventEncoder{
-		valueBuf:       &bytes.Buffer{},
-		terminator:     []byte(config.Terminator),
-		columnSelector: columnselector.NewDefaultColumnSelector(),
-		config:         config,
+		valueBuf:   &bytes.Buffer{},
+		terminator: []byte(config.Terminator),
+		config:     config,
 	}
 }
 
 // AppendTxnEvent appends a txn event to the encoder.
-func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error {
-	for {
-		row, ok := event.GetNextRow()
-		if !ok {
-			event.Rewind()
-			break
-		}
-		value, err := newJSONMessageForDML(&commonEvent.RowEvent{
-			TableInfo:      event.TableInfo,
-			CommitTs:       event.CommitTs,
-			Event:          row,
-			ColumnSelector: j.columnSelector,
-		}, j.config, false, "")
+func (j *JSONTxnEventEncoder) AppendTxnEvent(rowEvents []*commonEvent.RowEvent) error {
+	for _, rowEvent := range rowEvents {
+		value, err := newJSONMessageForDML(rowEvent, j.config, false, "")
 		if err != nil {
 			return err
 		}
@@ -75,17 +66,28 @@ func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error 
 			log.Warn("Single message is too large for canal-json",
 				zap.Int("maxMessageBytes", j.config.MaxMessageBytes),
 				zap.Int("length", length),
+<<<<<<< HEAD
 				zap.Any("table", event.TableInfo.TableName))
 			return errors.ErrMessageTooLarge.GenWithStackByArgs(event.TableInfo.GetTableName(), length, j.config.MaxMessageBytes)
+=======
+				zap.Any("table", rowEvent.TableInfo.TableName))
+			return errors.ErrMessageTooLarge.GenWithStackByArgs(rowEvent.TableInfo.GetTargetTableName(), length, j.config.MaxMessageBytes)
+>>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 		}
 		j.valueBuf.Write(value)
 		j.valueBuf.Write(j.terminator)
 		j.batchSize++
 	}
+<<<<<<< HEAD
 	j.callback = event.PostFlush
 	j.txnCommitTs = event.CommitTs
 	j.txnSchema = event.TableInfo.GetSchemaNamePtr()
 	j.txnTable = event.TableInfo.GetTableNamePtr()
+=======
+	if len(rowEvents) > 0 {
+		j.callback = rowEvents[len(rowEvents)-1].Callback
+	}
+>>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 	return nil
 }
 
