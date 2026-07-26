@@ -20,7 +20,6 @@ LOCAL_KMS_MODULE=github.com/nsmithuk/local-kms@v0.0.0-20230108155039-ce4561e0cb1
 UPSTREAM_VALID_KEYSPACE=keyspace-foo
 UPSTREAM_INVALID_KEYSPACE=keyspace-foo-invalid
 DOWNSTREAM_KEYSPACE=keyspace-bar
-INVALID_CMEK_ID=00000000-0000-0000-0000-000000000000
 
 UPSTREAM_VALID_TIDB_PORT=14001
 UPSTREAM_VALID_TIDB_STATUS=15001
@@ -239,11 +238,12 @@ function prepare_keyspaces_and_tidb() {
 	fi
 
 	UPSTREAM_VALID_KEYSPACE_ID=$(create_encrypted_keyspace "$UP_PD_HOST_1" "$UP_PD_PORT_1" "$UPSTREAM_VALID_KEYSPACE" "${upstream_key_id}" "${local_kms_endpoint}")
-	UPSTREAM_INVALID_KEYSPACE_ID=$(create_encrypted_keyspace "$UP_PD_HOST_1" "$UP_PD_PORT_1" "$UPSTREAM_INVALID_KEYSPACE" "${INVALID_CMEK_ID}" "${local_kms_endpoint}")
+	# Keep the negative-case keyspace usable by TiKV. Its KMS failure is
+	# injected only into TiCDC through cdc_invalid.toml.
+	UPSTREAM_INVALID_KEYSPACE_ID=$(create_encrypted_keyspace "$UP_PD_HOST_1" "$UP_PD_PORT_1" "$UPSTREAM_INVALID_KEYSPACE" "${upstream_key_id}" "${local_kms_endpoint}")
 	DOWNSTREAM_KEYSPACE_ID=$(create_encrypted_keyspace "$DOWN_PD_HOST" "$DOWN_PD_PORT" "$DOWNSTREAM_KEYSPACE" "${downstream_key_id}" "${local_kms_endpoint}")
 
-	# TiKV may generate encryption meta lazily after first writes in the keyspace.
-	echo "skip waiting encryption meta before first write: valid_keyspace_id=${UPSTREAM_VALID_KEYSPACE_ID}, invalid_keyspace_id=${UPSTREAM_INVALID_KEYSPACE_ID}"
+	echo "created encrypted keyspaces: valid_keyspace_id=${UPSTREAM_VALID_KEYSPACE_ID}, invalid_keyspace_id=${UPSTREAM_INVALID_KEYSPACE_ID}"
 
 	if ! start_keyspace_tidb \
 		"upstream" \
@@ -403,7 +403,9 @@ function run_with_invalid_kms() {
 	ensure "$MAX_RETRIES" "check_logs_contains \"$WORK_DIR\" \"failed to decrypt master key via KMS|failed to decrypt master key via aws kms\" \"-invalid\""
 	assert_table_not_synced_for_duration "cmek_invalid.t" "127.0.0.1" "$DOWNSTREAM_TIDB_PORT" 30
 
-	run_cdc_cli changefeed -k "$UPSTREAM_INVALID_KEYSPACE" remove -c "$changefeed_id" || true
+	# The invalid KMS is expected to make encryption-dependent API requests fail.
+	# Bound the best-effort cleanup so the test does not wait forever for that API.
+	timeout --kill-after=5s 30s run_cdc_cli changefeed -k "$UPSTREAM_INVALID_KEYSPACE" remove -c "$changefeed_id" || true
 	cleanup_process "$CDC_BINARY"
 }
 
