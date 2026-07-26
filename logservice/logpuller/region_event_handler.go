@@ -286,7 +286,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 	for _, entry := range entries.Entries.GetEntries() {
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
-			state.setInitialized()
+			span.markRegionInitialized(state)
 			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
@@ -393,12 +393,6 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	}
 
 	if shouldAdvance {
-		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
-			log.Info("subscription client is initialized",
-				zap.Uint64("subscriptionID", uint64(span.subID)),
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("resolvedTs", ts))
-		}
 		lastResolvedTs := span.resolvedTs.Load()
 		nextResolvedPhyTs := oracle.ExtractPhysical(ts)
 		// Generally, we don't want to send duplicate resolved ts,
@@ -406,7 +400,16 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 		// but when `ts` == `lastResolvedTs` == `span.startTs`,
 		// the span may just be initialized and have not receive any resolved ts before,
 		// so we also send ts in this case for quick notification to downstream.
-		if ts > lastResolvedTs || (ts == lastResolvedTs && lastResolvedTs == span.startTs) {
+		if ts > lastResolvedTs ||
+			(span.initialized.Load() && ts == lastResolvedTs && lastResolvedTs == span.startTs) {
+			if lastResolvedTs == span.startTs && ts > span.startTs && !span.initialized.Load() {
+				log.Warn("should not happen: resolved ts advances before span is initialized",
+					zap.Uint64("subscriptionID", uint64(span.subID)),
+					zap.Int64("tableID", span.span.TableID),
+					zap.Uint64("regionID", regionID),
+					zap.Uint64("startTs", span.startTs),
+					zap.Uint64("resolvedTs", ts))
+			}
 			resolvedPhyTs := oracle.ExtractPhysical(lastResolvedTs)
 			decreaseLag := float64(nextResolvedPhyTs-resolvedPhyTs) / 1e3
 			const largeResolvedTsAdvanceStepInSecs = 30
