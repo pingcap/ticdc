@@ -61,8 +61,9 @@ type requestCache struct {
 	}
 
 	// pendingCount is a flow control slot counter.
-	// A slot is acquired when a request is successfully enqueued into pendingQueue (see add),
+	// A slot is acquired before publishing a request into pendingQueue (see add),
 	// and is released when the request is finished/removed (resolve/markStopped/markDone/clear).
+	// add releases the slot itself if queue publication fails.
 	// pop and markSent don't change it. If markSent overwrites an existing request for the same region,
 	// it will release a slot for the replaced request to avoid leaking pendingCount.
 	pendingCount atomic.Int64
@@ -92,7 +93,8 @@ func newRequestCache(maxPendingCount int) *requestCache {
 }
 
 // add adds a new region request to the cache
-// It blocks if pendingCount >= maxPendingCount until there's space or ctx is cancelled
+// Normal data requests are limited to maxPendingCount. Forced data requests can
+// use one additional slot, while stop/control requests keep their existing bypass.
 func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (bool, error) {
 	start := time.Now()
 	ticker := time.NewTicker(addReqRetryInterval)
@@ -100,19 +102,23 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (
 	addReqRetryLimit := addReqRetryLimit
 
 	for {
-		current := c.pendingCount.Load()
-		if current < c.maxPendingCount || force {
-			// Try to add the request
+		limit := c.maxPendingCount
+		if force {
+			limit++
+		}
+		if c.tryAcquireSlot(limit, region.isStopped()) {
+			// Try to publish the request after reserving its slot.
 			req := newRegionReq(region)
 			select {
 			case <-ctx.Done():
+				c.markDone()
 				return false, ctx.Err()
 			case c.pendingQueue <- req:
-				c.pendingCount.Inc()
 				cost := time.Since(start)
 				metrics.SubscriptionClientAddRegionRequestDuration.Observe(cost.Seconds())
 				return true, nil
 			case <-ticker.C:
+				c.markDone()
 				addReqRetryLimit--
 				if addReqRetryLimit <= 0 {
 					return false, nil
@@ -133,6 +139,18 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (
 			continue
 		case <-ctx.Done():
 			return false, ctx.Err()
+		}
+	}
+}
+
+func (c *requestCache) tryAcquireSlot(limit int64, bypassLimit bool) bool {
+	for {
+		current := c.pendingCount.Load()
+		if !bypassLimit && current >= limit {
+			return false
+		}
+		if c.pendingCount.CompareAndSwap(current, current+1) {
+			return true
 		}
 	}
 }

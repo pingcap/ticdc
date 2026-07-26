@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -652,13 +653,17 @@ func (s *subscriptionClient) scheduleRegionRequest(
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
 		currentTs := s.pdClock.CurrentTS()
-		priority := region.subscribedSpan.priorityPolicy.resolve(
-			inheritedPriority,
+		remoteBase := inheritedPriority
+		if region.scanPriority == cdcpb.ScanPriority_SCAN_PRIORITY_HIGH {
+			remoteBase = TaskHighPrior
+		}
+		remotePriority := region.subscribedSpan.priorityPolicy.resolve(
+			remoteBase,
 			region.resolvedTs(),
 			oracle.GetTimeFromTS(currentTs),
 		)
-		region.scanPriority = priority.scanPriority()
-		s.regionTaskQueue.Push(NewRegionPriorityTask(priority, region, currentTs))
+		region.scanPriority = remotePriority.scanPriority()
+		s.regionTaskQueue.Push(NewRegionPriorityTask(inheritedPriority, region, currentTs))
 		if log.GetLevel() <= zapcore.DebugLevel {
 			log.Debug("cdc region scan task enqueued",
 				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
@@ -667,7 +672,7 @@ func (s *subscriptionClient) scheduleRegionRequest(
 				zap.Uint64("regionID", region.verID.GetID()),
 				zap.Uint64("regionEpochVersion", region.verID.GetVer()),
 				zap.Uint64("regionEpochConfVer", region.verID.GetConfVer()),
-				zap.String("priority", priority.String()),
+				zap.String("priority", inheritedPriority.String()),
 				zap.String("scanPriority", region.scanPriority.String()),
 				zap.String("span", common.FormatTableSpan(&region.span)))
 		}

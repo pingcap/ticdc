@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
 )
@@ -38,7 +39,9 @@ func createTestRegionInfo(subID SubscriptionID, regionID uint64) regionInfo {
 		span:    span,
 	}
 
-	return newRegionInfo(verID, span, nil, subscribedSpan, false)
+	region := newRegionInfo(verID, span, nil, subscribedSpan, false)
+	region.lockedRangeState = &regionlock.LockedRangeState{}
+	return region
 }
 
 func TestRequestCacheAdd_NormalCase(t *testing.T) {
@@ -77,14 +80,7 @@ func TestRequestCacheAdd_ForceFlag(t *testing.T) {
 	require.False(t, ok)
 	require.NoError(t, err)
 
-	// With force=true, it should still fail because the channel is full
-	// The force flag only bypasses the pendingCount check, not the channel capacity
-	region3 := createTestRegionInfo(1, 3)
-	ok, err = cache.add(ctx, region3, true)
-	require.False(t, ok)
-	require.NoError(t, err)
-
-	// consume the pending queue ann add with force
+	// Move the normal request to sentRequests so the pending queue has room.
 	req, err := cache.pop(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, req)
@@ -93,15 +89,91 @@ func TestRequestCacheAdd_ForceFlag(t *testing.T) {
 	cache.markSent(req)
 	require.Equal(t, 1, cache.getPendingCount())
 
+	// A forced data request can use one extra slot.
+	region3 := createTestRegionInfo(1, 3)
 	ok, err = cache.add(ctx, region3, true)
 	require.True(t, ok)
 	require.NoError(t, err)
-	// It is 2 since region1 is unresolved
 	require.Equal(t, 2, cache.getPendingCount())
 
-	// resolve region1
-	cache.resolve(region1.subscribedSpan.subID, region1.verID.GetID())
+	// No additional forced data request can exceed the N+1 ceiling.
+	req, err = cache.pop(ctx)
+	require.NoError(t, err)
+	cache.markSent(req)
+	region4 := createTestRegionInfo(1, 4)
+	ok, err = cache.add(ctx, region4, true)
+	require.False(t, ok)
+	require.NoError(t, err)
+	require.Equal(t, 2, cache.getPendingCount())
+
+	// Stop/control requests keep their existing bypass and remain accounted.
+	stopRegion := createTestRegionInfo(2, 5)
+	stopRegion.lockedRangeState = nil
+	ok, err = cache.add(ctx, stopRegion, true)
+	require.True(t, ok)
+	require.NoError(t, err)
+	require.Equal(t, 3, cache.getPendingCount())
+
+	stopReq, err := cache.pop(ctx)
+	require.NoError(t, err)
+	cache.markSent(stopReq)
+	cache.markStopped(stopReq.regionInfo.subscribedSpan.subID, stopReq.regionInfo.verID.GetID())
+	require.Equal(t, 2, cache.getPendingCount())
+
+	require.True(t, cache.resolve(region1.subscribedSpan.subID, region1.verID.GetID()))
 	require.Equal(t, 1, cache.getPendingCount())
+	ok, err = cache.add(ctx, region4, true)
+	require.True(t, ok)
+	require.NoError(t, err)
+	require.Equal(t, 2, cache.getPendingCount())
+}
+
+func TestRequestCacheAddRollsBackReservedSlot(t *testing.T) {
+	cache := newRequestCache(1)
+	cache.pendingQueue <- newRegionReq(createTestRegionInfo(1, 1))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ok, err := cache.add(ctx, createTestRegionInfo(1, 2), false)
+	require.False(t, ok)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 0, cache.getPendingCount())
+}
+
+func TestRequestCacheConcurrentForcedAddsStayWithinCeiling(t *testing.T) {
+	const normalLimit = 10
+	cache := newRequestCache(normalLimit)
+	ctx := context.Background()
+
+	for i := range normalLimit {
+		ok, err := cache.add(ctx, createTestRegionInfo(1, uint64(i+1)), false)
+		require.True(t, ok)
+		require.NoError(t, err)
+	}
+	for range normalLimit {
+		req, err := cache.pop(ctx)
+		require.NoError(t, err)
+		cache.markSent(req)
+	}
+
+	const addCount = 20
+	results := make(chan bool, addCount)
+	for i := range addCount {
+		go func(regionID uint64) {
+			ok, err := cache.add(ctx, createTestRegionInfo(1, regionID), true)
+			require.NoError(t, err)
+			results <- ok
+		}(uint64(normalLimit + i + 1))
+	}
+
+	successes := 0
+	for range addCount {
+		if <-results {
+			successes++
+		}
+	}
+	require.Equal(t, 1, successes)
+	require.Equal(t, normalLimit+1, cache.getPendingCount())
 }
 
 func TestRequestCacheAdd_ContextCancellation(t *testing.T) {

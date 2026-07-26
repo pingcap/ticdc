@@ -402,54 +402,62 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 
 func TestRegionRetryScanPriority(t *testing.T) {
 	for _, tc := range []struct {
-		name         string
-		priority     cdcpb.ScanPriority
-		cdcErr       *cdcpb.Error
-		everCaughtUp bool
-		expected     TaskType
+		name           string
+		priority       cdcpb.ScanPriority
+		cdcErr         *cdcpb.Error
+		everCaughtUp   bool
+		expectedLocal  TaskType
+		expectedRemote cdcpb.ScanPriority
 	}{
 		{
-			name:     "server is busy high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-			cdcErr:   &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
-			expected: TaskHighPrior,
+			name:           "server is busy high",
+			priority:       cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			cdcErr:         &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
+			expectedLocal:  TaskLowPrior,
+			expectedRemote: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 		},
 		{
-			name:     "server is busy low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-			cdcErr:   &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
-			expected: TaskLowPrior,
+			name:           "server is busy low",
+			priority:       cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			cdcErr:         &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
+			expectedLocal:  TaskLowPrior,
+			expectedRemote: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 		},
 		{
-			name:         "server is busy low after catch up",
-			priority:     cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-			cdcErr:       &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
-			everCaughtUp: true,
-			expected:     TaskHighPrior,
+			name:           "server is busy low after catch up",
+			priority:       cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			cdcErr:         &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
+			everCaughtUp:   true,
+			expectedLocal:  TaskLowPrior,
+			expectedRemote: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 		},
 		{
-			name:     "congested high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-			cdcErr:   &cdcpb.Error{Congested: &cdcpb.Congested{}},
-			expected: TaskHighPrior,
+			name:           "congested high",
+			priority:       cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			cdcErr:         &cdcpb.Error{Congested: &cdcpb.Congested{}},
+			expectedLocal:  TaskLowPrior,
+			expectedRemote: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 		},
 		{
-			name:     "congested low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-			cdcErr:   &cdcpb.Error{Congested: &cdcpb.Congested{}},
-			expected: TaskLowPrior,
+			name:           "congested low",
+			priority:       cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			cdcErr:         &cdcpb.Error{Congested: &cdcpb.Congested{}},
+			expectedLocal:  TaskLowPrior,
+			expectedRemote: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 		},
 		{
-			name:     "unknown retry high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
-			cdcErr:   &cdcpb.Error{},
-			expected: TaskHighPrior,
+			name:           "unknown retry high",
+			priority:       cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			cdcErr:         &cdcpb.Error{},
+			expectedLocal:  TaskHighPrior,
+			expectedRemote: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 		},
 		{
-			name:     "unknown retry low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-			cdcErr:   &cdcpb.Error{},
-			expected: TaskLowPrior,
+			name:           "unknown retry low",
+			priority:       cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			cdcErr:         &cdcpb.Error{},
+			expectedLocal:  TaskLowPrior,
+			expectedRemote: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -471,8 +479,8 @@ func TestRegionRetryScanPriority(t *testing.T) {
 			defer cancel()
 			task, err := client.regionTaskQueue.Pop(ctx)
 			require.NoError(t, err)
-			require.Equal(t, tc.expected, task.(*regionPriorityTask).taskType)
-			require.Equal(t, tc.expected.scanPriority(), task.GetRegionInfo().scanPriority)
+			require.Equal(t, tc.expectedLocal, task.(*regionPriorityTask).taskType)
+			require.Equal(t, tc.expectedRemote, task.GetRegionInfo().scanPriority)
 		})
 	}
 }

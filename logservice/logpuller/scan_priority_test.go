@@ -141,9 +141,84 @@ func TestScanPriorityUsesRestoredRegionProgress(t *testing.T) {
 	retryRegion := newRegionInfo(tikv.NewRegionVerID(1, 1, 2), rawSpan, nil, span, false)
 	client.scheduleRegionRequest(context.Background(), retryRegion, TaskLowPrior)
 	retryTask := popRegionPriorityTask(t, client.regionTaskQueue)
-	require.Equal(t, TaskHighPrior, retryTask.taskType)
+	require.Equal(t, TaskLowPrior, retryTask.taskType)
 	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH, retryTask.GetRegionInfo().scanPriority)
 	require.False(t, span.priorityPolicy.everCaughtUp.Load())
+}
+
+func TestScheduleRegionRequestSeparatesRemoteAndLocalPriority(t *testing.T) {
+	currentTime := time.Date(2026, time.June, 27, 12, 0, 0, 0, time.UTC)
+	currentTs := oracle.GoTimeToTS(currentTime)
+
+	for _, tc := range []struct {
+		name           string
+		priorRemote    cdcpb.ScanPriority
+		inheritedLocal TaskType
+		startTs        uint64
+		expectedRemote cdcpb.ScanPriority
+		expectedLocal  TaskType
+	}{
+		{
+			name:           "busy retry preserves remote high",
+			priorRemote:    cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			inheritedLocal: TaskLowPrior,
+			startTs:        oracle.GoTimeToTS(currentTime.Add(-time.Hour)),
+			expectedRemote: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			expectedLocal:  TaskLowPrior,
+		},
+		{
+			name:           "repair is high locally and remotely",
+			priorRemote:    cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			inheritedLocal: TaskHighPrior,
+			startTs:        oracle.GoTimeToTS(currentTime.Add(-time.Hour)),
+			expectedRemote: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			expectedLocal:  TaskHighPrior,
+		},
+		{
+			name:           "recent bootstrap is only high remotely",
+			priorRemote:    cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			inheritedLocal: TaskLowPrior,
+			startTs:        oracle.GoTimeToTS(currentTime.Add(-time.Minute)),
+			expectedRemote: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			expectedLocal:  TaskLowPrior,
+		},
+		{
+			name:           "old bootstrap stays low",
+			priorRemote:    cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			inheritedLocal: TaskLowPrior,
+			startTs:        oracle.GoTimeToTS(currentTime.Add(-time.Hour)),
+			expectedRemote: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			expectedLocal:  TaskLowPrior,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pdClock := pdutil.NewClock4Test()
+			pdClock.(*pdutil.Clock4Test).SetTS(currentTs)
+			client := &subscriptionClient{
+				pdClock:         pdClock,
+				regionTaskQueue: priorityqueue.New[PriorityTask](),
+			}
+			rawSpan := heartbeatpb.TableSpan{
+				TableID:  1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("z"),
+			}
+			span := &subscribedSpan{
+				subID:          SubscriptionID(1),
+				span:           rawSpan,
+				startTs:        tc.startTs,
+				rangeLock:      regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, tc.startTs),
+				priorityPolicy: newScanPriorityPolicy(pdClock, 30*time.Minute),
+			}
+			region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), rawSpan, nil, span, false)
+			region.scanPriority = tc.priorRemote
+
+			client.scheduleRegionRequest(context.Background(), region, tc.inheritedLocal)
+			task := popRegionPriorityTask(t, client.regionTaskQueue)
+			require.Equal(t, tc.expectedLocal, task.taskType)
+			require.Equal(t, tc.expectedRemote, task.GetRegionInfo().scanPriority)
+		})
+	}
 }
 
 func popRegionPriorityTask(
