@@ -71,16 +71,20 @@ func (s *mockRegionEventSinkStream) GetMetrics() dynstream.Metrics[int, Subscrip
 	return s.metrics
 }
 
+func newTestRegionEventSink(
+	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler],
+) *regionEventSink {
+	sink := &regionEventSink{ds: ds}
+	sink.cond = sync.NewCond(&sink.mu)
+	return sink
+}
+
 func TestRegionEventSinkRunPausesAndResumesPush(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	ds := newMockRegionEventSinkStream()
-	sink := &regionEventSink{
-		ctx: ctx,
-		ds:  ds,
-	}
-	sink.cond = sync.NewCond(&sink.mu)
+	sink := newTestRegionEventSink(ds)
 
 	runErrCh := make(chan error, 1)
 	go func() {
@@ -152,10 +156,8 @@ func TestRegionEventSinkUpdateMetrics(t *testing.T) {
 		).Set(456)
 
 		sink := &regionEventSink{
-			ctx: context.Background(),
-			ds:  ds,
+			ds: ds,
 		}
-		sink.cond = sync.NewCond(&sink.mu)
 		sink.UpdateMetrics()
 
 		require.Equal(t, float64(11), testutil.ToFloat64(metricSubscriptionClientDSChannelSize))
@@ -191,10 +193,8 @@ func TestRegionEventSinkUpdateMetrics(t *testing.T) {
 		}
 
 		sink := &regionEventSink{
-			ctx: context.Background(),
-			ds:  ds,
+			ds: ds,
 		}
-		sink.cond = sync.NewCond(&sink.mu)
 		sink.UpdateMetrics()
 
 		require.Equal(t, float64(33), testutil.ToFloat64(metricSubscriptionClientDSChannelSize))
@@ -212,4 +212,50 @@ func TestRegionEventSinkUpdateMetrics(t *testing.T) {
 			"default",
 		)))
 	})
+}
+
+func TestRegionEventSinkRunCancelUnblocksPush(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ds := newMockRegionEventSinkStream()
+	sink := newTestRegionEventSink(ds)
+
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- sink.Run(ctx)
+	}()
+
+	ds.feedbackCh <- dynstream.Feedback[int, SubscriptionID, *subscribedSpan]{
+		FeedbackType: dynstream.PauseArea,
+	}
+	require.Eventually(t, sink.paused.Load, time.Second, 10*time.Millisecond)
+
+	pushDone := make(chan struct{})
+	go func() {
+		sink.Push(SubscriptionID(1), regionEvent{resolvedTs: 100})
+		close(pushDone)
+	}()
+
+	select {
+	case <-pushDone:
+		t.Fatal("Push should block while the sink is paused")
+	case <-time.After(100 * time.Millisecond):
+	}
+	require.Equal(t, int32(0), ds.pushCount.Load())
+
+	cancel()
+
+	select {
+	case <-pushDone:
+	case <-time.After(time.Second):
+		t.Fatal("Push should be unblocked by Run context cancellation")
+	}
+	require.Equal(t, int32(0), ds.pushCount.Load())
+
+	select {
+	case err := <-runErrCh:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("Run should exit after context cancellation")
+	}
 }

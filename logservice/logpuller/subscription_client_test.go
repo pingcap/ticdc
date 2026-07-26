@@ -343,7 +343,7 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 
 func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	client := &subscriptionClient{
-		eventSink: &regionEventSink{ds: &mockDynamicStream{}},
+		eventSink: newTestRegionEventSink(&mockDynamicStream{}),
 	}
 	client.spanRegistry = newSpanRegistry(nil, nil)
 	client.failureHandler = newRegionFailureHandler(client)
@@ -417,11 +417,7 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 }
 
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
-	sink := &regionEventSink{
-		ctx: context.Background(),
-		ds:  &mockDynamicStream{},
-	}
-	sink.cond = sync.NewCond(&sink.mu)
+	sink := newTestRegionEventSink(&mockDynamicStream{})
 	client := &subscriptionClient{
 		eventSink:       sink,
 		regionTaskQueue: priorityqueue.New[PriorityTask](),
@@ -588,6 +584,7 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 		require.True(t, false, "reconnection not succeed in 5 second")
 	}
 }
+
 
 func TestGetResolvedTargetTs(t *testing.T) {
 	client := &subscriptionClient{
