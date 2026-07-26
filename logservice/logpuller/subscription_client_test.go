@@ -585,7 +585,6 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	}
 }
 
-
 func TestGetResolvedTargetTs(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh:      make(chan resolveLockTask, 10),
