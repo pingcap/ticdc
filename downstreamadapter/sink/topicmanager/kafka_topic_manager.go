@@ -243,6 +243,9 @@ func (m *kafkaTopicManager) createTopic(
 			fmt.Sprintf("`auto-create-topic` is false, "+
 				"and %s not found", topicName))
 	}
+	if err := m.cfg.ValidateReplicationFactor(m.admin); err != nil {
+		return 0, err
+	}
 
 	start := time.Now()
 	err := m.admin.CreateTopic(&kafka.TopicDetail{

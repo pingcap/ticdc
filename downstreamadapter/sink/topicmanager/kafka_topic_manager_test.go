@@ -82,6 +82,7 @@ func TestCreateTopic(t *testing.T) {
 		AutoCreate:        true,
 		PartitionNum:      2,
 		ReplicationFactor: 1,
+		RequiredAcks:      kafka.WaitForAll,
 	}
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
@@ -137,6 +138,7 @@ func TestCreateTopic(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
 
+	cfg.RequiredAcks = kafka.WaitForLocal
 	partitionNum, err = manager.CreateTopicAndWaitUntilVisible(ctx, "new-topic")
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
@@ -151,7 +153,12 @@ func TestCreateTopic(t *testing.T) {
 	require.Equal(t, int32(2), partitionsNum)
 
 	// Try to create a topic without auto create.
-	cfg.AutoCreate = false
+	cfg = &kafka.AutoCreateTopicConfig{
+		AutoCreate:        false,
+		PartitionNum:      2,
+		ReplicationFactor: 1,
+		RequiredAcks:      kafka.WaitForAll,
+	}
 	manager = newKafkaTopicManager(ctx, "new-topic2", changefeedID, adminClient, cfg)
 	defer manager.Close()
 	_, err = manager.CreateTopicAndWaitUntilVisible(ctx, "new-topic2")
@@ -180,6 +187,39 @@ func TestCreateTopic(t *testing.T) {
 	require.NotNil(t, gotFailedTopicDetail)
 	require.Equal(t, "new-topic-failed", gotFailedTopicDetail.Name)
 	require.False(t, gotFailedTopicValidateOnly)
+}
+
+func TestCreateTopicValidatesReplicationFactor(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	adminClient := kafka.NewMockClusterAdminClient(ctrl)
+	topic := "new-topic"
+	gomock.InOrder(
+		adminClient.EXPECT().GetTopicsMeta([]string{topic}, true).
+			Return(map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).
+			Return(map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetBrokerConfig(kafka.MinInsyncReplicasConfigName).
+			Return("2", nil),
+	)
+
+	manager := newKafkaTopicManager(
+		context.Background(),
+		topic,
+		common.NewChangefeedID4Test("test", "test"),
+		adminClient,
+		&kafka.AutoCreateTopicConfig{
+			AutoCreate:        true,
+			PartitionNum:      2,
+			ReplicationFactor: 1,
+			RequiredAcks:      kafka.WaitForAll,
+		},
+	)
+	defer manager.Close()
+
+	_, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), topic)
+	require.ErrorContains(t, err, "`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of broker")
 }
 
 func TestCreateTopicWaitsUntilVisible(t *testing.T) {

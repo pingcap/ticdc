@@ -205,6 +205,18 @@ func TestCompleteOptions(t *testing.T) {
 	options = NewOptions()
 	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.Regexp(t, ".*invalid syntax.*", errors.Cause(err))
+	for _, replicationFactor := range []string{"0", "-1"} {
+		uri = "kafka://127.0.0.1:9092/abc?replication-factor=" + replicationFactor
+		sinkURI, err = url.Parse(uri)
+		require.NoError(t, err)
+		options = NewOptions()
+		err = options.Apply(
+			commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"),
+			sinkURI,
+			config.GetDefaultReplicaConfig().Sink,
+		)
+		require.ErrorContains(t, err, "invalid replication-factor "+replicationFactor)
+	}
 
 	// Illegal max-message-bytes.
 	uri = "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&max-message-bytes=a"
@@ -471,7 +483,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 			expectedProducerLimit := adminFixture.brokerMessageMaxBytes()
 
 			ctx := context.Background()
-			err = adjustOptions(ctx, changefeedID, adminClient, options, topicName)
+			err = adjustOptions(changefeedID, adminClient, options, topicName)
 			require.NoError(t, err)
 
 			saramaConfig, err := newSaramaConfig(ctx, options)
@@ -489,76 +501,38 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 	}
 }
 
-func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
+func TestValidateReplicationFactor(t *testing.T) {
 	adminFixture := newKafkaAdminFixture(t)
 	adminClient := adminFixture.admin
-
-	options := NewOptions()
-	options.BrokerEndpoints = []string{"127.0.0.1:9092"}
-
-	// Report an error if the replication-factor is less than min.insync.replicas
-	// when the topic does not exist.
 	adminFixture.setMinInsyncReplicas("2")
-	changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
 
-	ctx := context.Background()
-	err := adjustOptions(
-		ctx,
-		changefeedID,
-		adminClient,
-		options,
-		"create-new-fail-invalid-min-insync-replicas",
-	)
-	require.Regexp(
-		t,
-		".*`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of broker.*",
-		errors.Cause(err),
-	)
-
-	// required-acks does not affect validation for a topic to be created.
-	options.RequiredAcks = WaitForLocal
-	err = adjustOptions(
-		ctx,
-		changefeedID,
-		adminClient,
-		options,
-		"create-new-fail-with-local-acks",
-	)
-	require.Regexp(
-		t,
-		".*`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of broker.*",
-		errors.Cause(err),
-	)
-
-	// topic not exist, and `min.insync.replicas` not found in broker's configuration
-	adminFixture.dropBrokerConfig(MinInsyncReplicasConfigName)
-	topicName := "no-topic-no-min-insync-replicas"
-	err = adjustOptions(ctx, changefeedID, adminClient, options, "no-topic-no-min-insync-replicas")
-	require.Nil(t, err)
-	err = adminClient.CreateTopic(&TopicDetail{
-		Name:              topicName,
+	topicConfig := &AutoCreateTopicConfig{
+		AutoCreate:        true,
 		ReplicationFactor: 1,
-	}, false)
-	require.ErrorIs(t, err, sarama.ErrPolicyViolation)
+		RequiredAcks:      WaitForAll,
+	}
+	err := topicConfig.ValidateReplicationFactor(adminClient)
+	require.Regexp(
+		t,
+		".*`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of broker.*",
+		errors.Cause(err),
+	)
 
-	// Report an error if the replication-factor is less than min.insync.replicas
-	// when the topic does exist.
+	localAcksConfig := &AutoCreateTopicConfig{
+		AutoCreate:        true,
+		ReplicationFactor: 1,
+		RequiredAcks:      WaitForLocal,
+	}
+	err = localAcksConfig.ValidateReplicationFactor(adminClient)
+	require.NoError(t, err)
 
-	// topic exist, but `min.insync.replicas` not found in topic and broker configuration
-	topicName = "topic-no-options-entry"
-	err = adminClient.CreateTopic(&TopicDetail{
-		Name:              topicName,
-		ReplicationFactor: 3,
-		NumPartitions:     3,
-	}, false)
-	require.Nil(t, err)
-	err = adjustOptions(ctx, changefeedID, adminClient, options, topicName)
-	require.Nil(t, err)
-
-	// Existing topics are not validated against the replication factor used only
-	// when creating a topic.
-	adminFixture.setMinInsyncReplicas("2")
-	err = adjustOptions(ctx, changefeedID, adminClient, options, defaultMockTopicName)
+	adminFixture.dropBrokerConfig(MinInsyncReplicasConfigName)
+	missingBrokerConfig := &AutoCreateTopicConfig{
+		AutoCreate:        true,
+		ReplicationFactor: 1,
+		RequiredAcks:      WaitForAll,
+	}
+	err = missingBrokerConfig.ValidateReplicationFactor(adminClient)
 	require.NoError(t, err)
 }
 
@@ -729,7 +703,6 @@ func TestConfigurationCombinations(t *testing.T) {
 			sinkURI, err := url.Parse(uri)
 			require.Nil(t, err)
 
-			ctx := context.Background()
 			options := NewOptions()
 			err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 			require.Nil(t, err)
@@ -745,7 +718,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			}
 
 			changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
-			err = adjustOptions(ctx, changefeedID, adminClient, options, topic)
+			err = adjustOptions(changefeedID, adminClient, options, topic)
 			require.Nil(t, err)
 			require.Equal(t, sourceMaxMessageBytes, options.MaxMessageBytes)
 			require.Equal(

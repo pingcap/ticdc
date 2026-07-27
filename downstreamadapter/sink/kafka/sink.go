@@ -131,6 +131,9 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 		if !topicConfig.AutoCreate {
 			return errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topic)
 		}
+		if err = topicConfig.ValidateReplicationFactor(adminClient); err != nil {
+			return err
+		}
 
 		// the topic is not created, only validate.
 		err = adminClient.CreateTopic(&kafka.TopicDetail{
