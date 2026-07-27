@@ -342,7 +342,7 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow
 
 	info := newMockDispatcherInfoForTest(t)
 	info.epoch = 1
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
 
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 	disp.seq.Store(1)
@@ -416,7 +416,7 @@ func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t 
 	broker.close()
 
 	changefeedID := common.NewChangefeedID4Test("default", "test")
-	changefeedStatus := broker.getOrSetChangefeedStatus(changefeedID, 0)
+	changefeedStatus := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, 0)
 	changefeedStatus.scanInterval.Store(int64(1 * time.Second))
 
 	baseTime := time.Now()
@@ -429,6 +429,7 @@ func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t 
 	newDispatcher := func(tableID int64, sentTs uint64) *dispatcherStat {
 		info := newMockDispatcherInfo(t, ts100, common.NewDispatcherID(), tableID, eventpb.ActionType_ACTION_TYPE_REGISTER)
 		info.epoch = 1
+		mustInitChangefeedStatusFilter(t, changefeedStatus, info, broker.timezone)
 		disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 		disp.seq.Store(1)
 		disp.sentResolvedTs.Store(sentTs)
