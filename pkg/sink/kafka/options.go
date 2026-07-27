@@ -589,8 +589,12 @@ func adjustOptions(
 		return errors.Trace(err)
 	}
 
-	if err = validateRequiredAcks(ctx, admin, topics, topic, options); err != nil {
-		return errors.Trace(err)
+	if _, exists := topics[topic]; !exists {
+		if err = validateMinInsyncReplicas(
+			ctx, admin, topics, topic, int(options.ReplicationFactor),
+		); err != nil {
+			return errors.Trace(err)
+		}
 	}
 	return adjustTopicOptions(ctx, changefeedID, admin, options, topic, topics)
 }
@@ -618,26 +622,6 @@ func adjustTopicOptions(
 
 	options.MaxBatchedBytes = min(options.MaxBatchedBytes, options.MaxMessageBytes)
 	return nil
-}
-
-func validateRequiredAcks(
-	ctx context.Context,
-	admin ClusterAdminClient,
-	topics map[string]TopicDetail,
-	topic string,
-	options *options,
-) error {
-	// Only check replicationFactor >= minInsyncReplicas when producer's required acks is -1.
-	// If we don't check it, the producer probably can not send message to the topic.
-	// Because it will wait for the ack from all replicas. But we do not have enough replicas.
-	if options.RequiredAcks != WaitForAll {
-		return nil
-	}
-	replicationFactor := options.ReplicationFactor
-	if info, exists := topics[topic]; exists {
-		replicationFactor = info.ReplicationFactor
-	}
-	return validateMinInsyncReplicas(ctx, admin, topics, topic, int(replicationFactor))
 }
 
 func adjustExistingTopicOption(
