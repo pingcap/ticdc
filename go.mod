@@ -73,7 +73,7 @@ require (
 	github.com/tikv/pd v1.1.0-beta.0.20260604125942-9f1c47b1e851
 	github.com/tikv/pd/client v0.0.0-20260604125942-9f1c47b1e851
 	github.com/tinylib/msgp v1.5.0
-	github.com/twmb/franz-go v1.21.4
+	github.com/twmb/franz-go v1.21.5
 	github.com/twmb/franz-go/pkg/kadm v1.18.0
 	github.com/uber-go/atomic v1.4.0
 	github.com/xdg/scram v1.0.5

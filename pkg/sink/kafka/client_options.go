@@ -52,21 +52,8 @@ type clientOptions struct {
 	InsecureSkipVerify bool
 	sasl               *saslConfig
 
-	DialTimeout  time.Duration
-	WriteTimeout time.Duration
-	ReadTimeout  time.Duration
-}
-
-const (
-	defaultRequestTimeout = 10 * time.Second
-)
-
-func maxTimeoutWithDefault(readTimeout, writeTimeout time.Duration) time.Duration {
-	timeout := max(readTimeout, writeTimeout)
-	if timeout <= 0 {
-		timeout = defaultRequestTimeout
-	}
-	return timeout
+	DialTimeout    time.Duration
+	RequestTimeout time.Duration
 }
 
 func newOptions(
@@ -74,14 +61,12 @@ func newOptions(
 	o *clientOptions,
 	hook kgo.Hook,
 ) ([]kgo.Opt, error) {
-	timeoutOverhead := maxTimeoutWithDefault(o.ReadTimeout, o.WriteTimeout)
-
 	opts := []kgo.Opt{
 		kgo.WithContext(ctx),
 		kgo.SeedBrokers(o.BrokerEndpoints...),
 		kgo.ClientID(o.ClientID),
 		kgo.DialTimeout(o.DialTimeout),
-		kgo.RequestTimeoutOverhead(timeoutOverhead),
+		kgo.RequestTimeoutOverhead(o.RequestTimeout),
 	}
 	if hook != nil {
 		opts = append(opts, kgo.WithHooks(hook))
@@ -208,10 +193,6 @@ func newOauthTokenSource(ctx context.Context, o *clientOptions) (oauth2.TokenSou
 func newProducerOptions(
 	o *clientOptions,
 ) []kgo.Opt {
-	produceTimeout := o.ReadTimeout
-	if produceTimeout < 100*time.Millisecond {
-		produceTimeout = defaultRequestTimeout
-	}
 	producerBatchMaxBytes := o.ProducerBatchMaxBytes
 	if producerBatchMaxBytes <= 0 {
 		producerBatchMaxBytes = o.MaxMessageBytes
@@ -224,7 +205,7 @@ func newProducerOptions(
 		kgo.MaxProduceRequestsInflightPerBroker(1),
 		kgo.RecordRetries(o.MaxRetry),
 		kgo.ProducerBatchMaxBytes(int32(producerBatchMaxBytes)),
-		kgo.ProduceRequestTimeout(produceTimeout),
+		kgo.ProduceRequestTimeout(o.RequestTimeout),
 		kgo.ProducerLinger(0),
 		newCompressionOption(o),
 	}

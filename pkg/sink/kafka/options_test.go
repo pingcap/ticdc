@@ -399,9 +399,9 @@ func TestClientID(t *testing.T) {
 
 func TestTimeout(t *testing.T) {
 	options := NewOptions()
-	require.Equal(t, 10*time.Second, options.DialTimeout)
-	require.Equal(t, 10*time.Second, options.ReadTimeout)
-	require.Equal(t, 10*time.Second, options.WriteTimeout)
+	require.Equal(t, defaultTimeout, options.DialTimeout)
+	require.Equal(t, defaultTimeout, options.ReadTimeout)
+	require.Equal(t, defaultTimeout, options.WriteTimeout)
 
 	uri := "kafka://127.0.0.1:9092/kafka-test?dial-timeout=5s&read-timeout=1000ms" +
 		"&write-timeout=2m"
@@ -414,6 +414,40 @@ func TestTimeout(t *testing.T) {
 	require.Equal(t, 5*time.Second, options.DialTimeout)
 	require.Equal(t, 1000*time.Millisecond, options.ReadTimeout)
 	require.Equal(t, 2*time.Minute, options.WriteTimeout)
+}
+
+func TestTimeoutFallsBackForNonPositiveValues(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name      string
+		parameter string
+		timeout   func(*options) time.Duration
+	}{
+		{name: "dial timeout", parameter: "dial-timeout", timeout: func(o *options) time.Duration { return o.DialTimeout }},
+		{name: "read timeout", parameter: "read-timeout", timeout: func(o *options) time.Duration { return o.ReadTimeout }},
+		{name: "write timeout", parameter: "write-timeout", timeout: func(o *options) time.Duration { return o.WriteTimeout }},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, value := range []string{"0s", "-1s"} {
+				sinkURI, err := url.Parse("kafka://127.0.0.1:9092/kafka-test?" + tc.parameter + "=" + value)
+				require.NoError(t, err)
+
+				o := NewOptions()
+				err = o.Apply(
+					commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"),
+					sinkURI,
+					config.GetDefaultReplicaConfig().Sink,
+				)
+				require.NoError(t, err)
+				require.Equal(t, defaultTimeout, tc.timeout(o))
+			}
+		})
+	}
 }
 
 func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *testing.T) {

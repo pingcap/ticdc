@@ -69,13 +69,11 @@ func newSyncProducer(
 		return nil, errors.Trace(err)
 	}
 
-	timeout := maxTimeoutWithDefault(o.ReadTimeout, 0)
-
 	return &syncProducer{
 		id:      changefeedID,
 		client:  client,
 		closed:  atomic.NewBool(false),
-		timeout: timeout,
+		timeout: o.RequestTimeout,
 	}, nil
 }
 

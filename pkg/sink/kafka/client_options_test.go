@@ -16,7 +16,6 @@ package kafka
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -40,29 +39,6 @@ func TestNewRequiredAcks(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			require.Equal(t, tc.expected, newRequiredAcks(&clientOptions{RequiredAcks: tc.requiredAcks}))
-		})
-	}
-}
-
-func TestMaxTimeoutWithDefault(t *testing.T) {
-	t.Parallel()
-
-	testCases := []struct {
-		name         string
-		readTimeout  time.Duration
-		writeTimeout time.Duration
-		expected     time.Duration
-	}{
-		{name: "read timeout is max", readTimeout: 3 * time.Second, writeTimeout: 2 * time.Second, expected: 3 * time.Second},
-		{name: "write timeout is max", readTimeout: 2 * time.Second, writeTimeout: 4 * time.Second, expected: 4 * time.Second},
-		{name: "both zero use default", readTimeout: 0, writeTimeout: 0, expected: defaultRequestTimeout},
-		{name: "both negative use default", readTimeout: -time.Second, writeTimeout: -2 * time.Second, expected: defaultRequestTimeout},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			require.Equal(t, tc.expected, maxTimeoutWithDefault(tc.readTimeout, tc.writeTimeout))
 		})
 	}
 }
@@ -91,6 +67,7 @@ func TestNewProducerOptionsUsesProducerBatchMaxBytes(t *testing.T) {
 		ProducerBatchMaxBytes: producerBatchMaxBytes,
 		MaxRetry:              defaultMaxRetry,
 		RequiredAcks:          int16(WaitForAll),
+		RequestTimeout:        defaultTimeout,
 	}
 
 	opts, err := newOptions(context.Background(), o, nil)

@@ -51,13 +51,11 @@ func newAdminClient(
 		return nil, errors.Trace(err)
 	}
 
-	timeout := maxTimeoutWithDefault(o.ReadTimeout, o.WriteTimeout)
-
 	return &adminClient{
 		changefeed: changefeedID,
 		client:     client,
 		admin:      kadm.NewClient(client),
-		timeout:    timeout,
+		timeout:    o.RequestTimeout,
 	}, nil
 }
 

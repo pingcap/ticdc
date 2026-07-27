@@ -39,6 +39,8 @@ const (
 	defaultPartitionNum = 3
 	// defaultMaxRetry is the default retry budget for Kafka producers.
 	defaultMaxRetry = 5
+	// defaultTimeout is the default timeout for Kafka connections and requests.
+	defaultTimeout = 10 * time.Second
 )
 
 const (
@@ -185,9 +187,9 @@ func NewOptions() *options {
 		InsecureSkipVerify: false,
 		sasl:               &saslConfig{},
 		AutoCreate:         true,
-		DialTimeout:        10 * time.Second,
-		WriteTimeout:       10 * time.Second,
-		ReadTimeout:        10 * time.Second,
+		DialTimeout:        defaultTimeout,
+		WriteTimeout:       defaultTimeout,
+		ReadTimeout:        defaultTimeout,
 	}
 }
 
@@ -290,6 +292,9 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		if err != nil {
 			return err
 		}
+		if a <= 0 {
+			a = defaultTimeout
+		}
 		o.DialTimeout = a
 	}
 
@@ -298,6 +303,9 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		if err != nil {
 			return err
 		}
+		if a <= 0 {
+			a = defaultTimeout
+		}
 		o.WriteTimeout = a
 	}
 
@@ -305,6 +313,9 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		a, err := time.ParseDuration(*urlParameter.ReadTimeout)
 		if err != nil {
 			return err
+		}
+		if a <= 0 {
+			a = defaultTimeout
 		}
 		o.ReadTimeout = a
 	}

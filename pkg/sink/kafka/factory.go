@@ -103,8 +103,7 @@ func newClientOption(o *options) *clientOptions {
 		InsecureSkipVerify: o.InsecureSkipVerify,
 		sasl:               o.sasl,
 
-		DialTimeout:  o.DialTimeout,
-		WriteTimeout: o.WriteTimeout,
-		ReadTimeout:  o.ReadTimeout,
+		DialTimeout:    o.DialTimeout,
+		RequestTimeout: max(o.ReadTimeout, o.WriteTimeout),
 	}
 }
