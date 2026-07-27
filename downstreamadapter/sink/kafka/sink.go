@@ -143,7 +143,8 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 		}
 	}
 
-	if _, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck); err != nil {
+	_, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck)
+	if err != nil {
 		return errors.Trace(err)
 	}
 	return nil
