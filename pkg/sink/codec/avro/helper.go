@@ -43,6 +43,7 @@ const (
 const (
 	insertOperation = "c"
 	updateOperation = "u"
+	deleteOperation = "d"
 )
 
 const (
@@ -148,6 +149,8 @@ func getOperation(e *commonEvent.RowEvent) string {
 		return insertOperation
 	} else if e.IsUpdate() {
 		return updateOperation
+	} else if e.IsDelete() {
+		return deleteOperation
 	}
 	return ""
 }

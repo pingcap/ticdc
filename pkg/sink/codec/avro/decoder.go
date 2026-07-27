@@ -161,6 +161,12 @@ func (d *decoder) decodeDMLPayload() (
 		if err != nil {
 			log.Panic("decode value failed", zap.Error(err))
 		}
+		if op, ok := valueMap[tidbOp].(string); ok && op == deleteOperation {
+			isDelete = true
+			if commitTs, ok := valueMap[tidbCommitTs].(int64); ok {
+				deleteCommitTs = uint64(commitTs)
+			}
+		}
 	}
 
 	return keyMap, valueMap, valueSchema, isDelete, deleteCommitTs
@@ -181,6 +187,10 @@ func (d *decoder) assembleDMLEventFromDecoded(
 	// Delete event only has Primary Key Columns, but the checksum is calculated based on the whole row columns,
 	// checksum verification cannot be done here, so skip it.
 	if isDelete {
+		if deleteCommitTs != 0 {
+			event.StartTs = deleteCommitTs
+			event.CommitTs = deleteCommitTs
+		}
 		return event
 	}
 
