@@ -194,59 +194,6 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 	// require.Nil(t, decodedRow)
 }
 
-<<<<<<< HEAD
-=======
-func TestEncodeRoutedEventsUsesTargetNames(t *testing.T) {
-	ctx := context.Background()
-	for _, format := range []common.EncodingFormatType{
-		common.EncodingFormatJSON,
-		common.EncodingFormatAvro,
-	} {
-		codecConfig := common.NewConfig(config.ProtocolSimple)
-		codecConfig.EncodingFormat = format
-
-		encIface, err := NewEncoder(ctx, codecConfig)
-		require.NoError(t, err)
-		encoder := encIface.(*Encoder)
-
-		rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
-		require.NoError(t, err)
-		decoder := rowEventDecoder.(*Decoder)
-
-		routedDDL := common.NewRoutedDDLEvent4Test()
-		ddlMessage, err := encoder.EncodeDDLEvent(routedDDL)
-		require.NoError(t, err)
-		decoder.AddKeyValue(ddlMessage.Key, ddlMessage.Value)
-
-		messageType, hasNext := decoder.HasNext()
-		require.True(t, hasNext)
-		require.Equal(t, common.MessageTypeDDL, messageType)
-
-		decodedDDL := decoder.NextDDLEvent()
-		require.Equal(t, "target_db", decodedDDL.SchemaName)
-		require.Equal(t, "target_table", decodedDDL.TableName)
-		require.Equal(t, routedDDL.Query, decodedDDL.Query)
-		require.Equal(t, "target_db", decodedDDL.TableInfo.GetSchemaName())
-		require.Equal(t, "target_table", decodedDDL.TableInfo.GetTableName())
-
-		rowEvent := common.NewRoutedRowEvent4Test()
-		require.NoError(t, encoder.AppendRowChangedEvent(ctx, "", rowEvent))
-
-		messages := encoder.Build()
-		require.Len(t, messages, 1)
-		decoder.AddKeyValue(messages[0].Key, messages[0].Value)
-
-		messageType, hasNext = decoder.HasNext()
-		require.True(t, hasNext)
-		require.Equal(t, common.MessageTypeRow, messageType)
-
-		decodedDML := decoder.NextDMLMessage().ToDMLEvent()
-		require.Equal(t, "target_db", decodedDML.TableInfo.GetSchemaName())
-		require.Equal(t, "target_table", decodedDML.TableInfo.GetTableName())
-	}
-}
-
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 func TestE2EPartitionTable(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()

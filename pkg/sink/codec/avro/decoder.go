@@ -151,11 +151,7 @@ func (d *decoder) decodeDMLPayload() (
 
 	// for the delete event, only have key part, it holds primary key or the unique key columns.
 	// for the insert / update, extract the value part, it holds all columns.
-<<<<<<< HEAD
-	isDelete := len(d.value) == 0
-=======
-	isDelete = len(d.value) == 0 || d.isDeleteValue()
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
+	isDelete = len(d.value) == 0
 	if isDelete {
 		// delete event only have key part, treat it as the value part also.
 		valueMap = keyMap

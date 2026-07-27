@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/linkedin/goavro/v2"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/uuid"
@@ -123,8 +124,6 @@ func TestAvroEncode(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
-=======
 func TestAvroEncodeDeleteEventUsesPreRowForKey(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolAvro)
 	codecConfig.EnableTiDBExtension = true
@@ -179,7 +178,6 @@ func TestAvroEncodeDeleteEventWithWatermarkCarriesCommitTs(t *testing.T) {
 	require.Len(t, messages, 1)
 	require.NotEmpty(t, messages[0].Key)
 	require.NotEmpty(t, messages[0].Value)
-	require.Equal(t, deleteByte, messages[0].Value[0])
 
 	decoder := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil)
 	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
@@ -198,7 +196,6 @@ func TestAvroEncodeDeleteEventWithWatermarkCarriesCommitTs(t *testing.T) {
 	require.False(t, exists)
 }
 
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 func TestAvroEnvelope(t *testing.T) {
 	t.Parallel()
 	cManager := &confluentSchemaManager{}

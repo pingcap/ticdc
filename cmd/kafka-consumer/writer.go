@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -171,30 +172,12 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			if !ok {
 				continue
 			}
-<<<<<<< HEAD
-			before := len(resolvedEvents)
-			resolvedEvents = g.ResolveInto(commitTs, resolvedEvents)
-			resolvedCount := len(resolvedEvents) - before
-			if resolvedCount == 0 {
-				continue
-			}
-
-			resolvedGroups = append(resolvedGroups, struct {
-				group       *util.EventsGroup
-				maxCommitTs uint64
-			}{
-				group:       g,
-				maxCommitTs: resolvedEvents[len(resolvedEvents)-1].GetCommitTs(),
-			})
-			total += resolvedCount
-=======
 			messages := g.ResolveInto(commitTs, nil)
 			events := make([]*event.DMLEvent, 0, len(messages))
 			for _, message := range messages {
 				events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
 			}
 			resolvedEvents = append(resolvedEvents, events...)
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 		}
 	}
 
@@ -312,30 +295,12 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	}, 0)
 	for _, p := range w.progresses {
 		for _, group := range p.eventsGroup {
-<<<<<<< HEAD
-			before := len(resolvedEvents)
-			resolvedEvents = group.ResolveInto(watermark, resolvedEvents)
-			resolvedCount := len(resolvedEvents) - before
-			if resolvedCount == 0 {
-				continue
-			}
-
-			resolvedGroups = append(resolvedGroups, struct {
-				group       *util.EventsGroup
-				maxCommitTs uint64
-			}{
-				group:       group,
-				maxCommitTs: resolvedEvents[len(resolvedEvents)-1].GetCommitTs(),
-			})
-			total += resolvedCount
-=======
 			messages := group.ResolveInto(watermark, nil)
 			events := make([]*event.DMLEvent, 0, len(messages))
 			for _, message := range messages {
 				events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
 			}
 			resolvedEvents = append(resolvedEvents, events...)
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 		}
 	}
 	total := len(resolvedEvents)
@@ -615,10 +580,6 @@ func (w *writer) checkPartition(row *commonEvent.DMLEvent, partition int32, offs
 	}
 }
 
-<<<<<<< HEAD
-func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionProgress, offset kafka.Offset) {
-	w.checkPartition(dml, progress.partition, offset)
-=======
 func (w *writer) messageWithPartitionCheck(message *common.DMLMessage, partition int32, offset kafka.Offset) *common.DMLMessage {
 	return common.NewDMLMessage(message.TableID, message.Schema, message.Table, message.GetCommitTs(), message.RowType, func() *event.DMLEvent {
 		row := message.ToDMLEvent()
@@ -628,7 +589,6 @@ func (w *writer) messageWithPartitionCheck(message *common.DMLMessage, partition
 }
 
 func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *partitionProgress, offset kafka.Offset) {
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 	// if the kafka cluster is normal, this should not hit.
 	// else if the cluster is abnormal, the consumer may consume old message, then cause the watermark fallback.
 	var (
@@ -655,35 +615,15 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 			zap.String("schema", schema), zap.String("table", table), zap.Any("protocol", w.protocol))
 		return
 	}
-<<<<<<< HEAD
-	forceInsert := commitTs < group.HighWatermark || commitTs < progress.watermark || w.enableTableAcrossNodes
-	if forceInsert {
-		log.Warn("DML event commit ts fallback, append with forceInsert",
-=======
 	if commitTs >= group.HighWatermark {
 		message = w.messageWithPartitionCheck(message, progress.partition, offset)
 		group.AppendMessage(message, false)
 		log.Debug("DML event append to the group",
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 			zap.Int32("partition", group.Partition), zap.Any("offset", offset),
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.Uint64("appliedWatermark", group.AppliedWatermark),
 			zap.Uint64("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-<<<<<<< HEAD
-			zap.Stringer("eventType", dml.RowTypes[0]), zap.Any("protocol", w.protocol),
-			zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
-		group.Append(dml, true)
-		return
-	}
-	group.Append(dml, false)
-	log.Info("DML event append to the group",
-		zap.Int32("partition", group.Partition), zap.Any("offset", offset),
-		zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-		zap.Uint64("appliedWatermark", group.AppliedWatermark),
-		zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-		zap.Stringer("eventType", dml.RowTypes[0]))
-=======
 			zap.Stringer("eventType", message.RowType))
 		return
 	}
@@ -735,7 +675,6 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 	default:
 		log.Panic("unknown protocol", zap.Any("protocol", w.protocol))
 	}
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 }
 
 func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
