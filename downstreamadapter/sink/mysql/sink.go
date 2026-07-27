@@ -90,23 +90,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-<<<<<<< HEAD
-	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode), nil
-=======
-
-	// Expose whether the MySQL-compatible downstream is confirmed to be TiDB, so
-	// dashboards can display "tidb" when we can prove it. Otherwise, the
-	// scheme-based label remains "mysql/tidb".
-	keyspace := changefeedID.Keyspace()
-	name := changefeedID.Name()
-	if cfg.IsTiDB {
-		metrics.ChangefeedDownstreamIsTiDBGauge.WithLabelValues(keyspace, name).Set(1)
-	} else {
-		metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
-	}
-
-	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
->>>>>>> 5880b634f (sink/mysql: split DML and control DB pools (#5397))
+	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, config.BDRMode), nil
 }
 
 func NewMySQLSink(
@@ -116,13 +100,12 @@ func NewMySQLSink(
 	db *sql.DB,
 	bdrMode bool,
 ) *Sink {
-	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, db, db, bdrMode, enableActiveActive, progressInterval)
+	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, db, db, bdrMode)
 }
 
 // newMySQLSinkWithControlDB creates a MySQL sink with separate pools for DML and
 // control-plane operations. The control pool is used by DDL, DDL-ts, syncpoint,
-// and active-active progress metadata paths so they do not wait behind long-lived
-// DML sessions.
+// and other metadata paths so they do not wait behind long-lived DML sessions.
 func newMySQLSinkWithControlDB(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
@@ -130,44 +113,8 @@ func newMySQLSinkWithControlDB(
 	dmlDB *sql.DB,
 	controlDB *sql.DB,
 	bdrMode bool,
-	enableActiveActive bool,
-	progressInterval time.Duration,
-) *Sink {
-	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, bdrMode, enableActiveActive, progressInterval)
-}
-
-func newMySQLSinkWithDBs(
-	ctx context.Context,
-	changefeedID common.ChangeFeedID,
-	cfg *mysql.Config,
-	dmlDB *sql.DB,
-	controlDB *sql.DB,
-	bdrMode bool,
-	enableActiveActive bool,
-	progressInterval time.Duration,
 ) *Sink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
-<<<<<<< HEAD
-=======
-
-	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
-	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {
-		supported, err := mysql.CheckActiveActiveSyncStatsSupported(ctx, dmlDB)
-		if err != nil {
-			log.Info("failed to check tidb_cdc_active_active_sync_stats support, disable metric collection",
-				zap.String("keyspace", changefeedID.Keyspace()),
-				zap.Stringer("changefeed", changefeedID),
-				zap.Error(err))
-		} else if supported {
-			activeActiveSyncStatsCollector = mysql.NewActiveActiveSyncStatsCollector(changefeedID)
-		} else {
-			log.Info("downstream does not support tidb_cdc_active_active_sync_stats, disable metric collection",
-				zap.String("keyspace", changefeedID.Keyspace()),
-				zap.Stringer("changefeed", changefeedID))
-		}
-	}
-
->>>>>>> 5880b634f (sink/mysql: split DML and control DB pools (#5397))
 	result := &Sink{
 		changefeedID: changefeedID,
 		dmlDB:        dmlDB,
@@ -187,17 +134,9 @@ func newMySQLSinkWithDBs(
 		bdrMode:    bdrMode,
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
-<<<<<<< HEAD
-		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat)
-=======
-		result.dmlWriter[i] = mysql.NewWriter(ctx, i, dmlDB, cfg, changefeedID, stat, activeActiveSyncStatsCollector)
+		result.dmlWriter[i] = mysql.NewWriter(ctx, i, dmlDB, cfg, changefeedID, stat)
 	}
-	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), controlDB, cfg, changefeedID, stat, nil)
-	if enableActiveActive {
-		result.progressTableWriter = mysql.NewProgressTableWriter(ctx, controlDB, changefeedID, cfg.MaxTxnRow, progressInterval)
->>>>>>> 5880b634f (sink/mysql: split DML and control DB pools (#5397))
-	}
-	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), db, cfg, changefeedID, stat)
+	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), controlDB, cfg, changefeedID, stat)
 	return result
 }
 

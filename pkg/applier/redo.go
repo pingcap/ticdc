@@ -474,11 +474,7 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 		log.Warn("The redo log version is different the current version, enable-ddl-ts will be set to false", zap.Any("logVersion", ra.rd.GetVersion()), zap.Any("currentVersion", misc.Version))
 	}
 	sinkURI.RawQuery = query.Encode()
-<<<<<<< HEAD
 	timezone, err := getRedoApplyTimezone(sinkURI)
-=======
-	serverTimezone, err := util.GetTimezone(config.GetGlobalServerConfig().TZ)
->>>>>>> 5880b634f (sink/mysql: split DML and control DB pools (#5397))
 	if err != nil {
 		return err
 	}
@@ -486,9 +482,6 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 		SinkURI:    sinkURI.String(),
 		TimeZone:   timezone,
 		SinkConfig: &config.SinkConfig{},
-		// Redo apply runs without a CDC server instance, so resolve the default
-		// server timezone for the same sink URI validation as normal changefeeds.
-		TimeZone: serverTimezone.String(),
 	}
 	if ra.mysqlSink == nil {
 		ra.mysqlSink, err = mysql.New(egCtx, ra.rd.GetChangefeedID(), replicaConfig, sinkURI)

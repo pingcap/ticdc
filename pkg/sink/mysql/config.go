@@ -366,34 +366,12 @@ func newMysqlConfigAndDB(
 	cfg.ServerInfo = getTiDBVersion(db)
 	cfg.HasVectorType = shouldFormatVectorType(cfg)
 
-<<<<<<< HEAD
-	// By default, cache-prep-stmts=true, an LRU cache is used for prepared statements,
-	// two connections are required to process a transaction.
-	// The first connection is held in the tx variable, which is used to manage the transaction.
-	// The second connection is requested through a call to s.db.Prepare
-	// in case of a cache miss for the statement query.
-	// The connection pool for CDC is configured with a static size, equal to the number of workers.
-	// CDC may hang at the "Get Connection" call is due to the limited size of the connection pool.
-	// When the connection pool is small,
-	// the chance of all connections being active at the same time increases,
-	// leading to exhaustion of available connections and a hang at the "Get Connection" call.
-	// This issue is less likely to occur when the connection pool is larger,
-	// as there are more connections available for use.
-	// Adding an extra connection to the connection pool solves the connection exhaustion issue.
-	db.SetMaxIdleConns(cfg.WorkerCount + 1)
-	db.SetMaxOpenConns(cfg.WorkerCount + 1)
-	failpoint.Inject("MySQLSinkForceSingleConnection", func() {
-		db.SetMaxIdleConns(1)
-		db.SetMaxOpenConns(1)
-	})
-=======
 	// By default, cache-prep-stmts=true and DML prepared statements are cached
 	// in an LRU. A DML transaction can need one connection for the transaction
 	// itself and another connection for Prepare on a statement cache miss.
 	// Size the DML pool by worker count plus a small margin so long-lived DML
 	// sessions and prepare misses do not exhaust the pool.
 	configureDMLDBConn(db, cfg)
->>>>>>> 5880b634f (sink/mysql: split DML and control DB pools (#5397))
 
 	// Inherit the default value of the prepared statement cache from the SinkURI Options
 	cachePrepStmts := cfg.CachePrepStmts

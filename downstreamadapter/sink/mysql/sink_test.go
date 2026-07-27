@@ -72,10 +72,10 @@ func getMysqlSinkWithSeparateDBs(t *testing.T) (context.Context, *Sink, sqlmock.
 	cfg := mysql.New()
 	cfg.WorkerCount = 1
 	cfg.DMLMaxRetry = 1
-	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	sink := newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, false, false, time.Minute)
+	sink := newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, false)
 	return ctx, sink, dmlMock, controlMock
 }
 
@@ -91,23 +91,6 @@ func MysqlSinkForTestWithMaxTxnRows(maxTxnRows int) (*Sink, sqlmock.Sqlmock) {
 	sink.maxTxnRows = maxTxnRows
 	go sink.Run(ctx)
 	return sink, mock
-}
-
-<<<<<<< HEAD
-=======
-func TestMysqlSinkBatchConfig(t *testing.T) {
-	cfg := mysql.New()
-	cfg.MaxTxnRow = 128
-	cfg.MaxAllowedPacket = 4096
-
-	sink := &Sink{
-		cfg:        cfg,
-		maxTxnRows: cfg.MaxTxnRow,
-		dmlWriter:  make([]*mysql.Writer, 3),
-	}
-
-	require.Equal(t, 384, sink.BatchCount())
-	require.Equal(t, 4096, sink.BatchBytes())
 }
 
 func expectCreateTableDDLFlow(mock sqlmock.Sqlmock) {
@@ -145,7 +128,6 @@ func expectCreateTableDDLFlow(mock sqlmock.Sqlmock) {
 	mock.ExpectCommit()
 }
 
->>>>>>> 5880b634f (sink/mysql: split DML and control DB pools (#5397))
 // Test callback and tableProgress works as expected after AddDMLEvent
 func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
