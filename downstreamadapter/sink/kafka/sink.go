@@ -108,13 +108,13 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 		return errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 
-	adminClient, err := factory.AdminClient(ctx)
+	admin, err := factory.Admin(ctx)
 	if err != nil {
 		return errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
-	defer adminClient.Close()
+	defer admin.Close()
 
-	topics, err := adminClient.GetTopicsMeta([]string{topic}, false)
+	topics, err := admin.GetTopicsMeta([]string{topic}, false)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -128,7 +128,7 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 	}
 
 	// the topic is not created, only validate.
-	err = adminClient.CreateTopic(&kafka.TopicDetail{
+	err = admin.CreateTopic(&kafka.TopicDetail{
 		Name:              topic,
 		NumPartitions:     topicConfig.PartitionNum,
 		ReplicationFactor: topicConfig.ReplicationFactor,

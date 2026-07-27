@@ -19,12 +19,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAdminClientCreateTopicNilDetailReturnsError(t *testing.T) {
+func TestAdminCreateTopicNilDetailReturnsError(t *testing.T) {
 	t.Parallel()
 
-	client := &adminClient{}
+	a := &admin{}
 
-	err := client.CreateTopic(nil, false)
+	err := a.CreateTopic(nil, false)
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "topic detail must not be nil")

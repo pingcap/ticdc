@@ -41,7 +41,7 @@ type kafkaTopicManager struct {
 
 	defaultTopic string
 
-	admin kafka.ClusterAdminClient
+	admin kafka.Admin
 	cfg   *kafka.AutoCreateTopicConfig
 
 	topics sync.Map
@@ -55,10 +55,10 @@ func GetTopicManagerAndTryCreateTopic(
 	changefeedID common.ChangeFeedID,
 	topic string,
 	topicCfg *kafka.AutoCreateTopicConfig,
-	adminClient kafka.ClusterAdminClient,
+	admin kafka.Admin,
 ) (TopicManager, error) {
 	topicManager := newKafkaTopicManager(
-		ctx, topic, changefeedID, adminClient, topicCfg,
+		ctx, topic, changefeedID, admin, topicCfg,
 	)
 
 	if _, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic); err != nil {
@@ -73,7 +73,7 @@ func newKafkaTopicManager(
 	ctx context.Context,
 	defaultTopic string,
 	changefeedID common.ChangeFeedID,
-	admin kafka.ClusterAdminClient,
+	admin kafka.Admin,
 	cfg *kafka.AutoCreateTopicConfig,
 ) *kafkaTopicManager {
 	mgr := &kafkaTopicManager{
@@ -173,7 +173,7 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum() (map[string]int32, err
 	numPartitions, err := m.admin.GetTopicsPartitionsNum(topics)
 	if err != nil {
 		log.Warn(
-			"Kafka admin client describe topics failed",
+			"Kafka admin describe topics failed",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
@@ -197,7 +197,7 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum() (map[string]int32, err
 // can be safely written to. The reason is that it may take several seconds after
 // CreateTopic returns success for all the brokers to become aware that the
 // topics have been created.
-// See https://kafka.apache.org/23/javadoc/org/apache/kafka/clients/admin/AdminClient.html
+// See https://kafka.apache.org/23/javadoc/org/apache/kafka/clients/admin/Admin.html
 func (m *kafkaTopicManager) waitUntilTopicVisible(
 	ctx context.Context,
 	topicName string,
@@ -252,7 +252,7 @@ func (m *kafkaTopicManager) createTopic(
 	}, false)
 	if err != nil {
 		log.Error(
-			"Kafka admin client create the topic failed",
+			"Kafka admin create the topic failed",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("topic", topicName),
@@ -265,7 +265,7 @@ func (m *kafkaTopicManager) createTopic(
 	}
 
 	log.Info(
-		"Kafka admin client create the topic success",
+		"Kafka admin create the topic success",
 		zap.String("keyspace", m.changefeedID.Keyspace()),
 		zap.String("changefeed", m.changefeedID.Name()),
 		zap.String("topic", topicName),

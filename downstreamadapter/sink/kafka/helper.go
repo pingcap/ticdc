@@ -36,13 +36,13 @@ type components struct {
 	columnSelector *columnselector.ColumnSelectors
 	eventRouter    *eventrouter.EventRouter
 	topicManager   topicmanager.TopicManager
-	adminClient    kafka.ClusterAdminClient
+	admin          kafka.Admin
 	factory        kafka.Factory
 }
 
 func (c components) close() {
-	if c.adminClient != nil {
-		c.adminClient.Close()
+	if c.admin != nil {
+		c.admin.Close()
 	}
 	if c.topicManager != nil {
 		c.topicManager.Close()
@@ -107,16 +107,16 @@ func newKafkaSinkComponent(
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
-	kafkaComponent.adminClient, err = kafkaComponent.factory.AdminClient(ctx)
+	kafkaComponent.admin, err = kafkaComponent.factory.Admin(ctx)
 	if err != nil {
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 
-	// We must close adminClient when this func return cause by an error
-	// otherwise the adminClient will never be closed and lead to a goroutine leak.
+	// We must close admin when this func return cause by an error
+	// otherwise the admin will never be closed and lead to a goroutine leak.
 	defer func() {
-		if err != nil && kafkaComponent.adminClient != nil {
-			kafkaComponent.adminClient.Close()
+		if err != nil && kafkaComponent.admin != nil {
+			kafkaComponent.admin.Close()
 		}
 	}()
 
@@ -125,7 +125,7 @@ func newKafkaSinkComponent(
 		changefeedID,
 		topic,
 		options.DeriveTopicConfig(),
-		kafkaComponent.adminClient,
+		kafkaComponent.admin,
 	)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)

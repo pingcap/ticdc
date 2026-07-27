@@ -41,7 +41,7 @@ const (
 )
 
 type kafkaAdminFixture struct {
-	admin        *MockClusterAdminClient
+	admin        *MockAdmin
 	topics       map[string]TopicDetail
 	brokerConfig map[string]string
 	topicConfig  map[string]map[string]string
@@ -52,7 +52,7 @@ func newKafkaAdminFixture(t *testing.T) *kafkaAdminFixture {
 
 	ctrl := gomock.NewController(t)
 	fixture := &kafkaAdminFixture{
-		admin:  NewMockClusterAdminClient(ctrl),
+		admin:  NewMockAdmin(ctrl),
 		topics: make(map[string]TopicDetail),
 		brokerConfig: map[string]string{
 			BrokerMessageMaxBytesConfigName: mockBrokerMessageMaxBytes,
@@ -480,13 +480,13 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			adminFixture := newKafkaAdminFixture(t)
-			adminClient := adminFixture.admin
+			admin := adminFixture.admin
 
 			detail := &TopicDetail{
 				Name:          topicName,
 				NumPartitions: 3,
 			}
-			err := adminClient.CreateTopic(detail, false)
+			err := admin.CreateTopic(detail, false)
 			require.NoError(t, err)
 
 			configuredMaxMessageBytes := test.configuredMaxMessageBytes(adminFixture)
@@ -504,7 +504,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 			expectedProducerLimit := adminFixture.brokerMessageMaxBytes()
 
 			ctx := context.Background()
-			err = adjustOptions(ctx, changefeedID, adminClient, options, topicName)
+			err = adjustOptions(ctx, changefeedID, admin, options, topicName)
 			require.NoError(t, err)
 
 			require.NotEqual(t, configuredMaxMessageBytes, options.MaxMessageBytes)
@@ -521,7 +521,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 
 func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 	adminFixture := newKafkaAdminFixture(t)
-	adminClient := adminFixture.admin
+	admin := adminFixture.admin
 
 	options := NewOptions()
 	options.BrokerEndpoints = []string{"127.0.0.1:9092"}
@@ -535,7 +535,7 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 	err := adjustOptions(
 		ctx,
 		changefeedID,
-		adminClient,
+		admin,
 		options,
 		"create-new-fail-invalid-min-insync-replicas",
 	)
@@ -548,9 +548,9 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 	// topic not exist, and `min.insync.replicas` not found in broker's configuration
 	adminFixture.dropBrokerConfig(MinInsyncReplicasConfigName)
 	topicName := "no-topic-no-min-insync-replicas"
-	err = adjustOptions(ctx, changefeedID, adminClient, options, "no-topic-no-min-insync-replicas")
+	err = adjustOptions(ctx, changefeedID, admin, options, "no-topic-no-min-insync-replicas")
 	require.Nil(t, err)
-	err = adminClient.CreateTopic(&TopicDetail{
+	err = admin.CreateTopic(&TopicDetail{
 		Name:              topicName,
 		ReplicationFactor: 1,
 	}, false)
@@ -561,18 +561,18 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 
 	// topic exist, but `min.insync.replicas` not found in topic and broker configuration
 	topicName = "topic-no-options-entry"
-	err = adminClient.CreateTopic(&TopicDetail{
+	err = admin.CreateTopic(&TopicDetail{
 		Name:              topicName,
 		ReplicationFactor: 3,
 		NumPartitions:     3,
 	}, false)
 	require.Nil(t, err)
-	err = adjustOptions(ctx, changefeedID, adminClient, options, topicName)
+	err = adjustOptions(ctx, changefeedID, admin, options, topicName)
 	require.Nil(t, err)
 
 	// topic found, and have `min.insync.replicas`, but set to 2, larger than `replication-factor`.
 	adminFixture.setMinInsyncReplicas("2")
-	err = adjustOptions(ctx, changefeedID, adminClient, options, defaultMockTopicName)
+	err = adjustOptions(ctx, changefeedID, admin, options, defaultMockTopicName)
 	require.Regexp(t,
 		".*`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of topic.*",
 		errors.Cause(err),
@@ -581,7 +581,7 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 
 func TestSkipAdjustConfigMinInsyncReplicasWhenRequiredAcksIsNotWailAll(t *testing.T) {
 	adminFixture := newKafkaAdminFixture(t)
-	adminClient := adminFixture.admin
+	admin := adminFixture.admin
 
 	options := NewOptions()
 	options.BrokerEndpoints = []string{"127.0.0.1:9092"}
@@ -594,7 +594,7 @@ func TestSkipAdjustConfigMinInsyncReplicasWhenRequiredAcksIsNotWailAll(t *testin
 	err := adjustOptions(
 		context.Background(),
 		changefeedID,
-		adminClient,
+		admin,
 		options,
 		"skip-check-min-insync-replicas",
 	)
@@ -767,7 +767,7 @@ func TestConfigurationCombinations(t *testing.T) {
 		t.Run(a.name, func(t *testing.T) {
 			adminFixture := newKafkaAdminFixture(t)
 			adminFixture.setMessageMaxBytes(a.brokerMessageMaxBytes, a.topicMaxMessageBytes)
-			adminClient := adminFixture.admin
+			admin := adminFixture.admin
 
 			uri := fmt.Sprintf(a.uriTemplate, a.uriParams...)
 			sinkURI, err := url.Parse(uri)
@@ -789,7 +789,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			}
 
 			changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
-			err = adjustOptions(ctx, changefeedID, adminClient, options, topic)
+			err = adjustOptions(ctx, changefeedID, admin, options, topic)
 			require.Nil(t, err)
 			require.Equal(t, sourceMaxMessageBytes, options.MaxMessageBytes)
 			require.Equal(
@@ -799,7 +799,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			)
 			require.Equal(t, sourceMaxMessageBytes, newClientOption(options).ProducerBatchMaxBytes)
 
-			adminClient.Close()
+			admin.Close()
 		})
 	}
 }

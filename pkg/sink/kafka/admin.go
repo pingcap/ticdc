@@ -27,7 +27,36 @@ import (
 	"go.uber.org/zap"
 )
 
-type adminClient struct {
+// TopicDetail represent a topic's detail information.
+type TopicDetail struct {
+	Name              string
+	NumPartitions     int32
+	ReplicationFactor int16
+}
+
+// Admin manages and inspects Kafka topics, brokers, configurations, and ACLs.
+type Admin interface {
+	// GetBrokerConfig return the broker level configuration with the `configName`
+	GetBrokerConfig(configName string) (string, error)
+
+	// GetTopicConfig return the topic level configuration with the `configName`
+	GetTopicConfig(topicName string, configName string) (string, error)
+
+	// GetTopicsMeta return all target topics' metadata
+	// if `ignoreTopicError` is true, ignore the topic error and return the metadata of valid topics
+	GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error)
+
+	// GetTopicsPartitionsNum return the number of partitions of each topic.
+	GetTopicsPartitionsNum(topics []string) (map[string]int32, error)
+
+	// CreateTopic creates a new topic.
+	CreateTopic(detail *TopicDetail, validateOnly bool) error
+
+	// Close shuts down the admin.
+	Close()
+}
+
+type admin struct {
 	changefeed common.ChangeFeedID
 
 	client  *kgo.Client
@@ -35,12 +64,12 @@ type adminClient struct {
 	timeout time.Duration
 }
 
-func newAdminClient(
+func newAdmin(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	o *clientOptions,
 	hook kgo.Hook,
-) (*adminClient, error) {
+) (*admin, error) {
 	opts, err := newOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -51,7 +80,7 @@ func newAdminClient(
 		return nil, errors.Trace(err)
 	}
 
-	return &adminClient{
+	return &admin{
 		changefeed: changefeedID,
 		client:     client,
 		admin:      kadm.NewClient(client),
@@ -59,7 +88,7 @@ func newAdminClient(
 	}, nil
 }
 
-func (a *adminClient) GetBrokerConfig(configName string) (string, error) {
+func (a *admin) GetBrokerConfig(configName string) (string, error) {
 	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
@@ -99,7 +128,7 @@ func (a *adminClient) GetBrokerConfig(configName string) (string, error) {
 		"cannot find the `%s` from the broker's configuration", configName)
 }
 
-func (a *adminClient) GetTopicConfig(topicName string, configName string) (string, error) {
+func (a *admin) GetTopicConfig(topicName string, configName string) (string, error) {
 	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
@@ -135,7 +164,7 @@ func (a *adminClient) GetTopicConfig(topicName string, configName string) (strin
 		"cannot find the `%s` from the topic's configuration", configName)
 }
 
-func (a *adminClient) GetTopicsMeta(
+func (a *admin) GetTopicsMeta(
 	topics []string,
 	ignoreTopicError bool,
 ) (map[string]TopicDetail, error) {
@@ -183,7 +212,7 @@ func IsAdminAuthorizationFailed(err error) bool {
 		errors.Is(err, kerr.ClusterAuthorizationFailed)
 }
 
-func (a *adminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
+func (a *admin) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
 	if len(topics) == 0 {
 		return make(map[string]int32), nil
 	}
@@ -210,7 +239,7 @@ func (a *adminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32,
 	return result, nil
 }
 
-func (a *adminClient) CreateTopic(detail *TopicDetail, validateOnly bool) error {
+func (a *admin) CreateTopic(detail *TopicDetail, validateOnly bool) error {
 	if detail == nil {
 		return errors.ErrKafkaInvalidConfig.GenWithStack("topic detail must not be nil")
 	}
@@ -242,9 +271,7 @@ func (a *adminClient) CreateTopic(detail *TopicDetail, validateOnly bool) error 
 	return errors.Trace(resp.Err)
 }
 
-func (a *adminClient) Heartbeat() {}
-
-func (a *adminClient) Close() {
+func (a *admin) Close() {
 	if a.admin != nil {
 		a.admin.Close()
 	}

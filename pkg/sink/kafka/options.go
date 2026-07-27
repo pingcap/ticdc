@@ -593,7 +593,7 @@ func NewKafkaClientID(captureAddr string,
 func adjustOptions(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
-	admin ClusterAdminClient,
+	admin Admin,
 	options *options,
 	topic string,
 ) error {
@@ -611,7 +611,7 @@ func adjustOptions(
 func adjustTopicOptions(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
-	admin ClusterAdminClient,
+	admin Admin,
 	options *options,
 	topic string,
 	topics map[string]TopicDetail,
@@ -635,7 +635,7 @@ func adjustTopicOptions(
 
 func validateRequiredAcks(
 	ctx context.Context,
-	admin ClusterAdminClient,
+	admin Admin,
 	topics map[string]TopicDetail,
 	topic string,
 	options *options,
@@ -652,7 +652,7 @@ func validateRequiredAcks(
 func adjustExistingTopicOption(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
-	admin ClusterAdminClient,
+	admin Admin,
 	options *options,
 	topic string,
 	info TopicDetail,
@@ -681,7 +681,7 @@ func adjustExistingTopicOption(
 }
 
 func adjustNewTopicOptions(
-	admin ClusterAdminClient,
+	admin Admin,
 	changefeedID common.ChangeFeedID,
 	options *options,
 	topic string,
@@ -708,7 +708,7 @@ func adjustNewTopicOptions(
 
 func getTopicMaxMessageBytes(
 	ctx context.Context,
-	admin ClusterAdminClient,
+	admin Admin,
 	topic string,
 ) (int, error) {
 	raw, err := getTopicConfig(
@@ -726,7 +726,7 @@ func getTopicMaxMessageBytes(
 	return maxMessageBytes, nil
 }
 
-func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, error) {
+func getBrokerMaxMessageBytes(admin Admin) (int, error) {
 	raw, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
 	if err != nil {
 		return 0, errors.Trace(err)
@@ -740,7 +740,7 @@ func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, error) {
 
 func validateMinInsyncReplicas(
 	ctx context.Context,
-	admin ClusterAdminClient,
+	admin Admin,
 	topics map[string]TopicDetail,
 	topic string,
 	replicationFactor int,
@@ -811,7 +811,7 @@ func validateMinInsyncReplicas(
 // NOTICE: The configuration names of topic and broker may be different for the same configuration.
 func getTopicConfig(
 	ctx context.Context,
-	admin ClusterAdminClient,
+	admin Admin,
 	topicName string,
 	topicConfigName string,
 	brokerConfigName string,

@@ -84,15 +84,15 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 	}
 	options.Topic = topic
 
-	adminClient := kafka.NewMockClusterAdminClient(ctrl)
-	adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, true).Return(
+	admin := kafka.NewMockAdmin(ctrl)
+	admin.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, true).Return(
 		map[string]kafka.TopicDetail{
 			kafkaSinkTestTopic: {
 				Name:          kafkaSinkTestTopic,
 				NumPartitions: 1,
 			},
 		}, nil)
-	adminClient.EXPECT().Close().AnyTimes()
+	admin.EXPECT().Close().AnyTimes()
 
 	factory := kafka.NewMockFactory(ctrl)
 	factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
@@ -126,7 +126,7 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 		changefeedID,
 		topic,
 		options.DeriveTopicConfig(),
-		adminClient,
+		admin,
 	)
 	if err != nil {
 		return nil, err
@@ -138,14 +138,14 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 		columnSelector: columnSelector,
 		eventRouter:    eventRouter,
 		topicManager:   topicManager,
-		adminClient:    adminClient,
+		admin:          admin,
 		factory:        factory,
 	}
 
-	// We must close adminClient when this func return cause by an error
-	// otherwise the adminClient will never be closed and lead to a goroutine leak.
+	// We must close admin when this func return cause by an error
+	// otherwise the admin will never be closed and lead to a goroutine leak.
 	defer func() {
-		if err != nil && comp.adminClient != nil {
+		if err != nil && comp.admin != nil {
 			comp.close()
 		}
 	}()

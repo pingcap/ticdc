@@ -22,8 +22,8 @@ import (
 
 // Factory is used to produce all Kafka components.
 type Factory interface {
-	// AdminClient returns a Kafka cluster admin client.
-	AdminClient(ctx context.Context) (ClusterAdminClient, error)
+	// Admin returns a Kafka admin.
+	Admin(ctx context.Context) (Admin, error)
 	// SyncProducer creates a sync producer to write messages to Kafka.
 	SyncProducer(ctx context.Context) (SyncProducer, error)
 	// AsyncProducer creates an async producer to write messages to Kafka.
@@ -43,7 +43,7 @@ func NewFactory(
 	o *options,
 	changefeedID common.ChangeFeedID,
 ) (Factory, error) {
-	admin, err := newAdminClient(ctx, changefeedID, newClientOption(o), nil)
+	admin, err := newAdmin(ctx, changefeedID, newClientOption(o), nil)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -60,8 +60,8 @@ func NewFactory(
 	}, nil
 }
 
-func (f *factory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
-	admin, err := newAdminClient(ctx, f.changefeedID, f.clientOption, f.metricsHook)
+func (f *factory) Admin(ctx context.Context) (Admin, error) {
+	admin, err := newAdmin(ctx, f.changefeedID, f.clientOption, f.metricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
