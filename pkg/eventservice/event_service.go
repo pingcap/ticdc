@@ -85,12 +85,26 @@ type eventService struct {
 
 func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) common.SubModule {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
-	tzName := config.GetGlobalServerConfig().TZ
+	serverConfig := config.GetGlobalServerConfig()
+	tzName := serverConfig.TZ
 	tz, err := util.GetTimezone(tzName)
 	if err != nil {
 		log.Panic("load timezone from server config failed",
 			zap.String("timezone", tzName),
 			zap.Error(err))
+	}
+	if serverConfig.DataDir != "" {
+		spillDir := getLargeTxnInsertSpillDir()
+		removed, err := cleanupLargeTxnInsertSpillFiles(spillDir)
+		if err != nil {
+			log.Warn("cleanup orphaned large transaction spill files failed",
+				zap.String("spillDir", spillDir),
+				zap.Error(err))
+		} else if removed != 0 {
+			log.Info("removed orphaned large transaction spill files",
+				zap.String("spillDir", spillDir),
+				zap.Int("removed", removed))
+		}
 	}
 	es := &eventService{
 		mc:                  mc,

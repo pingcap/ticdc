@@ -13,7 +13,7 @@ check-struct-only = false
 
     target-instance = "tidb0"
 
-    target-check-tables = ["cmek_valid.t"]
+    target-check-tables = ["cmek_valid.t", "cmek_valid.spill_table"]
 
 [data-sources]
 [data-sources.mysql1]

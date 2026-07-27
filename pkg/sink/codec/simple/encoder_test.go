@@ -23,6 +23,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -30,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	mock_simple "github.com/pingcap/ticdc/pkg/sink/codec/simple/mock"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/ticdc/pkg/util"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
@@ -63,7 +65,7 @@ func TestEncodeCheckpoint(t *testing.T) {
 			compression.LZ4,
 		} {
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
-			enc, err := NewEncoder(ctx, codecConfig)
+			enc, err := NewEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			checkpoint := 446266400629063682
@@ -108,7 +110,7 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 		} {
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
 
-			enc, err := NewEncoder(ctx, codecConfig)
+			enc, err := NewEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -158,7 +160,7 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 	// updateEvent.Checksum.Current = 1
 	// updateEvent.Checksum.Previous = 2
 
-	enc, err := NewEncoder(ctx, codecConfig)
+	enc, err := NewEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -203,7 +205,7 @@ func TestEncodeRoutedEventsUsesTargetNames(t *testing.T) {
 		codecConfig := common.NewConfig(config.ProtocolSimple)
 		codecConfig.EncodingFormat = format
 
-		encIface, err := NewEncoder(ctx, codecConfig)
+		encIface, err := NewEncoder(codecConfig, nil)
 		require.NoError(t, err)
 		encoder := encIface.(*Encoder)
 
@@ -279,7 +281,7 @@ func TestE2EPartitionTable(t *testing.T) {
 		common.EncodingFormatAvro,
 	} {
 		codecConfig.EncodingFormat = format
-		enc, err := NewEncoder(ctx, codecConfig)
+		enc, err := NewEncoder(codecConfig, nil)
 		require.NoError(t, err)
 		dec, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
@@ -426,7 +428,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 		} {
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
 
-			enc, err := NewEncoder(ctx, codecConfig)
+			enc, err := NewEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -862,7 +864,7 @@ func TestEncodeDDLEvent(t *testing.T) {
 			insertEvent.Rewind()
 			insertEvent2.Rewind()
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
-			enc, err := NewEncoder(ctx, codecConfig)
+			enc, err := NewEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -1007,7 +1009,7 @@ func TestColumnFlags(t *testing.T) {
 		common.EncodingFormatJSON,
 	} {
 		codecConfig.EncodingFormat = format
-		enc, err := NewEncoder(ctx, codecConfig)
+		enc, err := NewEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		m, err := enc.EncodeDDLEvent(createTableDDLEvent)
@@ -1088,7 +1090,7 @@ func TestEncodeIntegerTypes(t *testing.T) {
 		minValues.Rewind()
 		maxValues.Rewind()
 		codecConfig.EncodingFormat = format
-		enc, err := NewEncoder(ctx, codecConfig)
+		enc, err := NewEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		m, err := enc.EncodeDDLEvent(ddlEvent)
@@ -1167,7 +1169,7 @@ func TestEncoderOtherTypes(t *testing.T) {
 	} {
 		event.Rewind()
 		codecConfig.EncodingFormat = format
-		enc, err := NewEncoder(ctx, codecConfig)
+		enc, err := NewEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		m, err := enc.EncodeDDLEvent(ddlEvent)
@@ -1244,7 +1246,7 @@ func TestE2EPartitionTableDMLBeforeDDL(t *testing.T) {
 		common.EncodingFormatAvro,
 	} {
 		codecConfig.EncodingFormat = format
-		enc, err := NewEncoder(ctx, codecConfig)
+		enc, err := NewEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		dec, err := NewDecoder(ctx, codecConfig, nil)
@@ -1313,7 +1315,7 @@ func TestEncodeDMLBeforeDDL(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolSimple)
 
-	enc, err := NewEncoder(ctx, codecConfig)
+	enc, err := NewEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	row, ok := event.GetNextRow()
@@ -1397,7 +1399,7 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 		} {
 			dmlEvent.Rewind()
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
-			enc, err := NewEncoder(ctx, codecConfig)
+			enc, err := NewEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			m, err := enc.EncodeDDLEvent(ddlEvent)
@@ -1474,7 +1476,7 @@ func TestEncodeLargeEventsNormal(t *testing.T) {
 		} {
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
 
-			enc, err := NewEncoder(ctx, codecConfig)
+			enc, err := NewEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -1556,7 +1558,7 @@ func TestDDLMessageTooLarge(t *testing.T) {
 		common.EncodingFormatJSON,
 	} {
 		codecConfig.EncodingFormat = format
-		enc, err := NewEncoder(context.Background(), codecConfig)
+		enc, err := NewEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		_, err = enc.EncodeDDLEvent(ddlEvent)
@@ -1566,6 +1568,9 @@ func TestDDLMessageTooLarge(t *testing.T) {
 
 func TestDMLMessageTooLarge(t *testing.T) {
 	_, insertEvent, _, _ := common.NewLargeEvent4Test(t)
+
+	ctx := context.Background()
+	changefeedID := commonType.NewChangeFeedIDWithName("test", "")
 
 	codecConfig := common.NewConfig(config.ProtocolSimple)
 	codecConfig.MaxMessageBytes = 50
@@ -1581,11 +1586,18 @@ func TestDMLMessageTooLarge(t *testing.T) {
 			config.LargeMessageHandleOptionHandleKeyOnly,
 			config.LargeMessageHandleOptionClaimCheck,
 		} {
+			var (
+				claimCheck *claimcheck.ClaimCheck
+				err        error
+			)
 			codecConfig.LargeMessageHandle.LargeMessageHandleOption = handle
 			if handle == config.LargeMessageHandleOptionClaimCheck {
 				codecConfig.LargeMessageHandle.ClaimCheckStorageURI = "file:///tmp/simple-claim-check"
+				claimCheck, err = claimcheck.New(ctx, codecConfig.LargeMessageHandle, changefeedID)
+				require.NoError(t, err)
+				t.Cleanup(claimCheck.Close)
 			}
-			enc, err := NewEncoder(context.Background(), codecConfig)
+			enc, err := NewEncoder(codecConfig, claimCheck)
 			require.NoError(t, err)
 
 			err = enc.AppendRowChangedEvent(context.Background(), "", insertEvent)
@@ -1610,6 +1622,9 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 	codecConfig.LargeMessageHandle.ClaimCheckStorageURI = "file:///tmp/simple-claim-check"
 	for _, rawValue := range []bool{false, true} {
 		codecConfig.LargeMessageHandle.ClaimCheckRawValue = rawValue
+		claimCheck, err := claimcheck.New(ctx, codecConfig.LargeMessageHandle, codecConfig.ChangefeedID)
+		require.NoError(t, err)
+		t.Cleanup(claimCheck.Close)
 		for _, format := range []common.EncodingFormatType{
 			common.EncodingFormatAvro,
 			common.EncodingFormatJSON,
@@ -1623,7 +1638,7 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 				codecConfig.MaxMessageBytes = config.DefaultMaxMessageBytes
 				codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
 
-				enc, err := NewEncoder(ctx, codecConfig)
+				enc, err := NewEncoder(codecConfig, claimCheck)
 				require.NoError(t, err)
 
 				m, err := enc.EncodeDDLEvent(ddlEvent)
@@ -1703,7 +1718,7 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 			codecConfig.MaxMessageBytes = config.DefaultMaxMessageBytes
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
 
-			enc, err := NewEncoder(ctx, codecConfig)
+			enc, err := NewEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, db)
@@ -1784,7 +1799,7 @@ func TestMarshallerError(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolSimple)
 
-	enc, err := NewEncoder(ctx, codecConfig)
+	enc, err := NewEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	mockMarshaller := mock_simple.NewMockmarshaller(gomock.NewController(t))

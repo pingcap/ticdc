@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -1275,6 +1276,44 @@ func TestHandleBatchDataEvents(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestInjectResetDispatcherAfterBatchDataEvents(t *testing.T) {
+	failpointName := "github.com/pingcap/ticdc/downstreamadapter/eventcollector/InjectResetDispatcherAfterBatchDataEvents"
+	require.NoError(t, failpoint.Enable(failpointName, `1*return(true)`))
+	defer func() {
+		require.NoError(t, failpoint.Disable(failpointName))
+	}()
+
+	localServerID := node.ID("local-server")
+	dispatcherID := common.NewDispatcherID()
+	mockDisp := newMockDispatcher(dispatcherID, 100)
+	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		return len(events) > 0
+	}
+	collector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, collector, nil)
+	stat.currentEpoch.Store(newDispatcherEpochState(1, 1, stat.target.GetStartTs()))
+	stat.lastEventCommitTs.Store(100)
+	markSessionReceiving(stat.session, localServerID)
+
+	require.True(t, stat.handleBatchDataEvents([]dispatcher.DispatcherEvent{
+		{
+			From: &localServerID,
+			Event: &commonEvent.DMLEvent{
+				Seq:      2,
+				Epoch:    1,
+				CommitTs: 101,
+			},
+		},
+	}))
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, collector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+	require.Equal(t, uint64(2), stat.loadCurrentEpochState().epoch)
+	require.Equal(t, uint64(101), stat.loadCurrentEpochState().maxEventTs.Load())
 }
 
 func TestHandleSingleDataEvents(t *testing.T) {

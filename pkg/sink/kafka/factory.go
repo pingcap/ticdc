@@ -49,7 +49,7 @@ func NewFactory(
 	}
 	defer admin.Close()
 
-	if err := adjustOptions(ctx, changefeedID, admin, o, o.Topic); err != nil {
+	if err := adjustOptions(changefeedID, admin, o, o.Topic); err != nil {
 		return nil, errors.Trace(err)
 	}
 

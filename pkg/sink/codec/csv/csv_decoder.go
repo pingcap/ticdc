@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/tidb/pkg/lightning/mydump"
 	"github.com/pingcap/tidb/pkg/lightning/worker"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -55,6 +56,16 @@ func NewDecoder(ctx context.Context,
 	tableInfo *commonType.TableInfo,
 	value []byte,
 ) (common.Decoder, error) {
+	return NewDecoderWithColumnSelector(ctx, codecConfig, tableInfo, value, nil)
+}
+
+// NewDecoderWithColumnSelector creates a new BatchDecoder with a column selector.
+func NewDecoderWithColumnSelector(ctx context.Context,
+	codecConfig *common.Config,
+	tableInfo *commonType.TableInfo,
+	value []byte,
+	selector commonEvent.Selector,
+) (common.Decoder, error) {
 	var backslashEscape bool
 
 	// if quote is not set in config, we should unespace backslash
@@ -78,6 +89,7 @@ func NewDecoder(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	tableInfo = filterTableInfoByColumnSelector(tableInfo, selector)
 	if codecConfig.CSVOutputFieldHeader {
 		err := csvParser.ReadColumns()
 		if err != nil {
@@ -100,6 +112,79 @@ func NewDecoder(ctx context.Context,
 		msg:         newCSVMessage(codecConfig),
 		parser:      csvParser,
 	}, nil
+}
+
+func filterTableInfoByColumnSelector(
+	tableInfo *commonType.TableInfo,
+	selector commonEvent.Selector,
+) *commonType.TableInfo {
+	if tableInfo == nil || selector == nil {
+		return tableInfo
+	}
+
+	columns := tableInfo.GetColumns()
+	selectedColumns := make([]*model.ColumnInfo, 0, len(columns))
+	selectedColumnOffsets := make(map[int64]int, len(columns))
+	for _, col := range columns {
+		if !shouldEncodeColumn(col, selector) {
+			continue
+		}
+		selectedCol := col.Clone()
+		selectedCol.Offset = len(selectedColumns)
+		selectedColumnOffsets[col.ID] = selectedCol.Offset
+		selectedColumns = append(selectedColumns, selectedCol)
+	}
+	if len(selectedColumns) == len(columns) {
+		return tableInfo
+	}
+
+	tidbTableInfo := tableInfo.ToTiDBTableInfo().Clone()
+	tidbTableInfo.Columns = selectedColumns
+	tidbTableInfo.Indices = filterSelectedIndices(tableInfo.GetIndices(), columns, selectedColumnOffsets)
+	tidbTableInfo.PKIsHandle = tableInfo.PKIsHandle() && hasSelectedPKIsHandleColumn(selectedColumns)
+
+	return commonType.NewTableInfo4Decoder(tableInfo.GetSchemaName(), tidbTableInfo)
+}
+
+func filterSelectedIndices(
+	indices []*model.IndexInfo,
+	columns []*model.ColumnInfo,
+	selectedColumnOffsets map[int64]int,
+) []*model.IndexInfo {
+	selectedIndices := make([]*model.IndexInfo, 0, len(indices))
+	for _, index := range indices {
+		selectedIndex := index.Clone()
+		selectedIndex.Columns = make([]*model.IndexColumn, 0, len(index.Columns))
+		allIndexColumnsSelected := true
+		for _, indexColumn := range index.Columns {
+			if indexColumn.Offset >= len(columns) {
+				allIndexColumnsSelected = false
+				break
+			}
+			selectedOffset, ok := selectedColumnOffsets[columns[indexColumn.Offset].ID]
+			if !ok {
+				allIndexColumnsSelected = false
+				break
+			}
+			selectedIndexColumn := indexColumn.Clone()
+			selectedIndexColumn.Offset = selectedOffset
+			selectedIndexColumn.Name = ast.NewCIStr(columns[indexColumn.Offset].Name.O)
+			selectedIndex.Columns = append(selectedIndex.Columns, selectedIndexColumn)
+		}
+		if allIndexColumnsSelected {
+			selectedIndices = append(selectedIndices, selectedIndex)
+		}
+	}
+	return selectedIndices
+}
+
+func hasSelectedPKIsHandleColumn(columns []*model.ColumnInfo) bool {
+	for _, col := range columns {
+		if mysql.HasPriKeyFlag(col.GetFlag()) {
+			return true
+		}
+	}
+	return false
 }
 
 // AddKeyValue implements the Decoder interface.

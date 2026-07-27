@@ -156,7 +156,7 @@ func requireEventIterator(
 	t testing.TB, store EventStore, dispatcherID common.DispatcherID, dataRange common.DataRange,
 ) EventIterator {
 	t.Helper()
-	iter, err := store.GetIterator(dispatcherID, dataRange)
+	iter, err := store.GetIterator(dispatcherID, ScanRequest{Range: dataRange})
 	require.NoError(t, err)
 	return iter
 }
@@ -307,7 +307,7 @@ func TestEventStoreUsesKeyspaceIDForEncryption(t *testing.T) {
 		CommitTsStart: 0,
 		CommitTsEnd:   largeKV.CRTs,
 	}
-	iter, err := es.GetIterator(dispatcherID, dataRange)
+	iter, err := es.GetIterator(dispatcherID, ScanRequest{Range: dataRange})
 	require.NoError(t, err)
 	require.NotNil(t, iter)
 
@@ -394,10 +394,12 @@ func TestEventStoreHandlesUnencryptedValuesFromEncryptionLayer(t *testing.T) {
 	require.NoError(t, err)
 
 	subStat.resolvedTs.Store(largeKV.CRTs)
-	iter, err := es.GetIterator(dispatcherID, common.DataRange{
-		Span:          span,
-		CommitTsStart: 0,
-		CommitTsEnd:   largeKV.CRTs,
+	iter, err := es.GetIterator(dispatcherID, ScanRequest{
+		Range: common.DataRange{
+			Span:          span,
+			CommitTsStart: 0,
+			CommitTsEnd:   largeKV.CRTs,
+		},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, iter)
@@ -730,10 +732,12 @@ func TestGetIteratorPanicWhenStartLessThanCheckpoint(t *testing.T) {
 	store.UpdateDispatcherCheckpointTs(dispatcherID, 120)
 
 	require.Panics(t, func() {
-		_, _ = store.GetIterator(dispatcherID, common.DataRange{
-			Span:          span,
-			CommitTsStart: 110,
-			CommitTsEnd:   150,
+		_, _ = store.GetIterator(dispatcherID, ScanRequest{
+			Range: common.DataRange{
+				Span:          span,
+				CommitTsStart: 110,
+				CommitTsEnd:   150,
+			},
 		})
 	})
 }
@@ -984,14 +988,16 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 		subStat.resolvedTs.Store(ts)
 	}
 	getIterator := func() {
-		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
-			Span: &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: []byte("b"),
-				EndKey:   []byte("h"),
+		iter, err := store.GetIterator(dispatcherID2, ScanRequest{
+			Range: common.DataRange{
+				Span: &heartbeatpb.TableSpan{
+					TableID:  tableID,
+					StartKey: []byte("b"),
+					EndKey:   []byte("h"),
+				},
+				CommitTsStart: 100,
+				CommitTsEnd:   150,
 			},
-			CommitTsStart: 100,
-			CommitTsEnd:   150,
 		})
 		require.NoError(t, err)
 		if iter != nil {
@@ -1065,14 +1071,16 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	// case 3: subStat 1 advance quicker than subStat 2, dispatcher 2 can still read data from subStat 1
 	updateSubStatResolvedTs(1, 220)
 	{
-		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
-			Span: &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: []byte("b"),
-				EndKey:   []byte("h"),
+		iter, err := store.GetIterator(dispatcherID2, ScanRequest{
+			Range: common.DataRange{
+				Span: &heartbeatpb.TableSpan{
+					TableID:  tableID,
+					StartKey: []byte("b"),
+					EndKey:   []byte("h"),
+				},
+				CommitTsStart: 100,
+				CommitTsEnd:   220,
 			},
-			CommitTsStart: 100,
-			CommitTsEnd:   220,
 		})
 		require.NoError(t, err)
 		if iter != nil {
@@ -1102,14 +1110,16 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	// dispatcher 2 read data from subStat 2 and totally remove itself from the subsriber list of subStat 1
 	updateSubStatResolvedTs(2, 220)
 	{
-		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
-			Span: &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: []byte("b"),
-				EndKey:   []byte("h"),
+		iter, err := store.GetIterator(dispatcherID2, ScanRequest{
+			Range: common.DataRange{
+				Span: &heartbeatpb.TableSpan{
+					TableID:  tableID,
+					StartKey: []byte("b"),
+					EndKey:   []byte("h"),
+				},
+				CommitTsStart: 100,
+				CommitTsEnd:   220,
 			},
-			CommitTsStart: 100,
-			CommitTsEnd:   220,
 		})
 		require.NoError(t, err)
 		if iter != nil {
@@ -1133,6 +1143,127 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 		require.Equal(t, logpuller.SubscriptionID(2), dispatcherStat.subStat.subID)
 		require.Nil(t, dispatcherStat.removingSubStat)
 	}
+}
+
+func TestEventStoreRowLevelScanPositionSurvivesSubStatSwitch(t *testing.T) {
+	restoreCfg := setDataSharingForTest(t, true)
+	defer restoreCfg()
+
+	ctx := context.Background()
+	_, storeInt := newEventStoreForTest(t.TempDir())
+	store := storeInt.(*eventStore)
+	defer store.Close(ctx)
+
+	const (
+		tableID      int64  = 1
+		txnStartTs   uint64 = 120
+		txnCommitTs  uint64 = 200
+		nextStartTs  uint64 = 130
+		nextCommitTs uint64 = 201
+	)
+
+	dispatcherID1 := common.NewDispatcherID()
+	dispatcherID2 := common.NewDispatcherID()
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	fullSpan := &heartbeatpb.TableSpan{TableID: tableID, StartKey: []byte("a"), EndKey: []byte("z")}
+	dispatcherSpan := &heartbeatpb.TableSpan{TableID: tableID, StartKey: []byte("b"), EndKey: []byte("h")}
+
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID1, fullSpan, 100, func(uint64, uint64) {}, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID2, dispatcherSpan, 100, func(uint64, uint64) {}, false, false))
+
+	dispatcherStat := store.dispatcherMeta.dispatcherStats[dispatcherID2]
+	require.NotNil(t, dispatcherStat)
+	oldSubStat := dispatcherStat.subStat
+	newSubStat := dispatcherStat.pendingSubStat
+	require.NotNil(t, oldSubStat)
+	require.NotNil(t, newSubStat)
+	require.NotEqual(t, oldSubStat.subID, newSubStat.subID)
+
+	rows := []common.RawKVEntry{
+		{OpType: common.OpTypePut, StartTs: txnStartTs, CRTs: txnCommitTs, Key: []byte("c-row-1"), Value: []byte("value-1")},
+		{OpType: common.OpTypePut, StartTs: txnStartTs, CRTs: txnCommitTs, Key: []byte("c-row-2"), Value: []byte("value-2")},
+		{OpType: common.OpTypePut, StartTs: nextStartTs, CRTs: nextCommitTs, Key: []byte("c-next-row"), Value: []byte("value-3")},
+	}
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+	var compressionBuf []byte
+	var rawValueBuf []byte
+	writeRows := func(subStat *subscriptionStat) {
+		err := store.writeEvents(store.dbs[subStat.dbIndex], []eventWithCallback{{
+			subID:    subStat.subID,
+			tableID:  tableID,
+			kvs:      rows,
+			callback: func() {},
+		}}, encoder, &compressionBuf, &rawValueBuf)
+		require.NoError(t, err)
+	}
+	writeRows(oldSubStat)
+	writeRows(newSubStat)
+
+	type scannedEvent struct {
+		key      string
+		position ScanPosition
+	}
+	collectEvents := func(request ScanRequest) []scannedEvent {
+		iter, err := store.GetIterator(dispatcherID2, request)
+		require.NoError(t, err)
+		require.NotNil(t, iter)
+		positionIter, ok := iter.(EventIteratorWithScanPosition)
+		require.True(t, ok)
+
+		events := make([]scannedEvent, 0)
+		for {
+			rawKV, position, _ := positionIter.NextWithScanPosition()
+			if rawKV == nil {
+				break
+			}
+			require.NotEmpty(t, position)
+			events = append(events, scannedEvent{
+				key:      string(rawKV.Key),
+				position: position,
+			})
+		}
+		rowCount, err := iter.Close()
+		require.NoError(t, err)
+		require.Equal(t, int64(len(events)), rowCount)
+		return events
+	}
+
+	oldSubStat.resolvedTs.Store(nextCommitTs)
+	firstScanEvents := collectEvents(ScanRequest{
+		Range: common.DataRange{
+			Span:          dispatcherSpan,
+			CommitTsStart: txnCommitTs - 1,
+			CommitTsEnd:   nextCommitTs,
+		},
+	})
+	require.Len(t, firstScanEvents, 3)
+	require.Equal(t, []string{"c-row-1", "c-row-2", "c-next-row"}, []string{
+		firstScanEvents[0].key,
+		firstScanEvents[1].key,
+		firstScanEvents[2].key,
+	})
+	require.Equal(t, oldSubStat.subID, dispatcherStat.subStat.subID)
+	require.Equal(t, newSubStat.subID, dispatcherStat.pendingSubStat.subID)
+
+	newSubStat.resolvedTs.Store(nextCommitTs)
+	resumedEvents := collectEvents(ScanRequest{
+		Range: common.DataRange{
+			Span:          dispatcherSpan,
+			CommitTsStart: txnCommitTs,
+			CommitTsEnd:   nextCommitTs,
+		},
+		Cursor: ScanCursor{Position: firstScanEvents[0].position},
+	})
+	require.Len(t, resumedEvents, 2)
+	require.Equal(t, []string{"c-row-2", "c-next-row"}, []string{
+		resumedEvents[0].key,
+		resumedEvents[1].key,
+	})
+	require.Equal(t, newSubStat.subID, dispatcherStat.subStat.subID)
+	require.Nil(t, dispatcherStat.pendingSubStat)
+	require.Equal(t, oldSubStat.subID, dispatcherStat.removingSubStat.subID)
 }
 
 func TestWriteToEventStore(t *testing.T) {
@@ -1606,6 +1737,130 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestEventStoreResumeTokenSupportsRowLevelResume(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	_, storeInt := newEventStoreForTest(dir)
+	store := storeInt.(*eventStore)
+	defer store.Close(ctx)
+
+	const (
+		tableID      int64  = 1
+		txnStartTs   uint64 = 120
+		txnCommitTs  uint64 = 200
+		nextStartTs  uint64 = 130
+		nextCommitTs uint64 = 201
+	)
+
+	dispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	span := &heartbeatpb.TableSpan{TableID: tableID, StartKey: []byte("a"), EndKey: []byte("z")}
+	ok := store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(watermark, latestCommitTs uint64) {}, false, false)
+	require.True(t, ok)
+
+	dispatcherStat := store.dispatcherMeta.dispatcherStats[dispatcherID]
+	require.NotNil(t, dispatcherStat)
+	subStat := dispatcherStat.subStat
+	require.NotNil(t, subStat)
+
+	events := []eventWithCallback{
+		{
+			subID:   subStat.subID,
+			tableID: tableID,
+			kvs: []common.RawKVEntry{
+				{OpType: common.OpTypePut, StartTs: txnStartTs, CRTs: txnCommitTs, Key: []byte("row-1"), Value: []byte("value-1")},
+				{OpType: common.OpTypePut, StartTs: txnStartTs, CRTs: txnCommitTs, Key: []byte("row-2"), Value: []byte("value-2")},
+				{OpType: common.OpTypePut, StartTs: nextStartTs, CRTs: nextCommitTs, Key: []byte("next-row"), Value: []byte("value-3")},
+			},
+			callback: func() {},
+		},
+	}
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+	var compressionBuf []byte
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[subStat.dbIndex], events, encoder, &compressionBuf, &rawValueBuf)
+	require.NoError(t, err)
+	subStat.resolvedTs.Store(nextCommitTs)
+
+	type scannedEvent struct {
+		key      string
+		position ScanPosition
+	}
+	collectEvents := func(request ScanRequest) []scannedEvent {
+		iter, err := store.GetIterator(dispatcherID, request)
+		require.NoError(t, err)
+		if iter == nil {
+			return nil
+		}
+		positionIter, ok := iter.(EventIteratorWithScanPosition)
+		require.True(t, ok)
+
+		events := make([]scannedEvent, 0)
+		for {
+			rawKV, position, _ := positionIter.NextWithScanPosition()
+			if rawKV == nil {
+				break
+			}
+			require.NotEmpty(t, position)
+			events = append(events, scannedEvent{
+				key:      string(rawKV.Key),
+				position: position,
+			})
+		}
+		rowCount, err := iter.Close()
+		require.NoError(t, err)
+		require.Equal(t, int64(len(events)), rowCount)
+		return events
+	}
+
+	fullRange := ScanRequest{
+		Range: common.DataRange{
+			Span:          span,
+			CommitTsStart: txnCommitTs - 1,
+			CommitTsEnd:   nextCommitTs,
+		},
+	}
+	fullEvents := collectEvents(fullRange)
+	require.Len(t, fullEvents, 3)
+	require.Equal(t, []string{"row-1", "row-2", "next-row"}, []string{
+		fullEvents[0].key,
+		fullEvents[1].key,
+		fullEvents[2].key,
+	})
+
+	resumeAfterTxnStart := ScanRequest{
+		Range: common.DataRange{
+			Span:          span,
+			CommitTsStart: txnCommitTs,
+			CommitTsEnd:   nextCommitTs,
+		},
+		Cursor: ScanCursor{TxnStartTs: txnStartTs},
+	}
+	// Cursor.TxnStartTs can resume after a txn start-ts, but it cannot
+	// identify a specific row inside the same txn. Once set to txnStartTs, all
+	// rows in that txn are skipped, including row-2.
+	txnLevelEvents := collectEvents(resumeAfterTxnStart)
+	require.Len(t, txnLevelEvents, 1)
+	require.Equal(t, []string{"next-row"}, []string{txnLevelEvents[0].key})
+
+	resumeAfterRow1 := ScanRequest{
+		Range: common.DataRange{
+			Span:          span,
+			CommitTsStart: txnCommitTs,
+			CommitTsEnd:   nextCommitTs,
+		},
+		Cursor: ScanCursor{Position: fullEvents[0].position},
+	}
+	rowLevelEvents := collectEvents(resumeAfterRow1)
+	require.Len(t, rowLevelEvents, 2)
+	require.Equal(t, []string{"row-2", "next-row"}, []string{
+		rowLevelEvents[0].key,
+		rowLevelEvents[1].key,
+	})
 }
 
 func TestEventWithCallbackSizerUsesCurrentKVBytes(t *testing.T) {

@@ -14,7 +14,6 @@
 package kafka
 
 import (
-	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -246,6 +245,9 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	}
 
 	if urlParameter.ReplicationFactor != nil {
+		if *urlParameter.ReplicationFactor <= 0 {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("invalid replication-factor %d", *urlParameter.ReplicationFactor)
+		}
 		o.ReplicationFactor = *urlParameter.ReplicationFactor
 	}
 
@@ -549,11 +551,12 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 	return nil
 }
 
-// AutoCreateTopicConfig is used to create topic configuration.
+// AutoCreateTopicConfig contains settings used to create and validate a topic.
 type AutoCreateTopicConfig struct {
 	AutoCreate        bool
 	PartitionNum      int32
 	ReplicationFactor int16
+	RequiredAcks      RequiredAcks
 }
 
 func (o *options) DeriveTopicConfig() *AutoCreateTopicConfig {
@@ -561,7 +564,40 @@ func (o *options) DeriveTopicConfig() *AutoCreateTopicConfig {
 		AutoCreate:        o.AutoCreate,
 		PartitionNum:      o.PartitionNum,
 		ReplicationFactor: o.ReplicationFactor,
+		RequiredAcks:      o.RequiredAcks,
 	}
+}
+
+// ValidateReplicationFactor checks whether a topic created with this config
+// can satisfy the configured acknowledgment requirement.
+func (c *AutoCreateTopicConfig) ValidateReplicationFactor(admin Admin) error {
+	if c.RequiredAcks != WaitForAll {
+		return nil
+	}
+
+	raw, err := admin.GetBrokerConfig(MinInsyncReplicasConfigName)
+	if err != nil {
+		log.Warn("cannot get Kafka broker configuration, assume replication factor is valid",
+			zap.String("configName", MinInsyncReplicasConfigName),
+			zap.Int16("replicationFactor", c.ReplicationFactor),
+			zap.Error(err))
+		return nil
+	}
+	minInsyncReplicas, err := strconv.Atoi(raw)
+	if err != nil {
+		return err
+	}
+
+	if int(c.ReplicationFactor) < minInsyncReplicas {
+		return errors.ErrKafkaInvalidConfig.GenWithStack(
+			"TiCDC Kafka sink's `request.required.acks` defaults to -1, "+
+				"TiCDC cannot deliver messages when the `replication-factor` %d "+
+				"is smaller than the `min.insync.replicas` %d of broker",
+			c.ReplicationFactor, minInsyncReplicas,
+		)
+	}
+
+	return nil
 }
 
 var (
@@ -591,7 +627,6 @@ func NewKafkaClientID(captureAddr string,
 // It overwrites MaxMessageBytes with the final producer message limit derived
 // from the topic or broker configuration.
 func adjustOptions(
-	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	admin Admin,
 	options *options,
@@ -601,27 +636,11 @@ func adjustOptions(
 	if err != nil {
 		return errors.Trace(err)
 	}
-
-	if err = validateRequiredAcks(ctx, admin, topics, topic, options); err != nil {
-		return errors.Trace(err)
-	}
-	return adjustTopicOptions(ctx, changefeedID, admin, options, topic, topics)
-}
-
-func adjustTopicOptions(
-	ctx context.Context,
-	changefeedID common.ChangeFeedID,
-	admin Admin,
-	options *options,
-	topic string,
-	topics map[string]TopicDetail,
-) error {
 	info, exists := topics[topic]
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
-	var err error
 	if exists {
-		err = adjustExistingTopicOption(ctx, changefeedID, admin, options, topic, info)
+		err = adjustExistingTopicOption(changefeedID, admin, options, topic, info)
 	} else {
 		adjustNewTopicOptions(admin, changefeedID, options, topic)
 	}
@@ -633,31 +652,14 @@ func adjustTopicOptions(
 	return nil
 }
 
-func validateRequiredAcks(
-	ctx context.Context,
-	admin Admin,
-	topics map[string]TopicDetail,
-	topic string,
-	options *options,
-) error {
-	// Only check replicationFactor >= minInsyncReplicas when producer's required acks is -1.
-	// If we don't check it, the producer probably can not send message to the topic.
-	// Because it will wait for the ack from all replicas. But we do not have enough replicas.
-	if options.RequiredAcks != WaitForAll {
-		return nil
-	}
-	return validateMinInsyncReplicas(ctx, admin, topics, topic, int(options.ReplicationFactor))
-}
-
 func adjustExistingTopicOption(
-	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	admin Admin,
 	options *options,
 	topic string,
 	info TopicDetail,
 ) error {
-	maxMessageBytes, err := getTopicMaxMessageBytes(ctx, admin, info.Name)
+	maxMessageBytes, err := getTopicMaxMessageBytes(admin, info.Name)
 	if err != nil {
 		log.Warn("`max.message.bytes` not found from topic's configuration, use the option `MaxMessageBytes` as default",
 			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
@@ -707,12 +709,11 @@ func adjustNewTopicOptions(
 }
 
 func getTopicMaxMessageBytes(
-	ctx context.Context,
 	admin Admin,
 	topic string,
 ) (int, error) {
 	raw, err := getTopicConfig(
-		ctx, admin, topic,
+		admin, topic,
 		TopicMaxMessageBytesConfigName,
 		BrokerMessageMaxBytesConfigName,
 	)
@@ -738,79 +739,11 @@ func getBrokerMaxMessageBytes(admin Admin) (int, error) {
 	return messageMaxBytes, nil
 }
 
-func validateMinInsyncReplicas(
-	ctx context.Context,
-	admin Admin,
-	topics map[string]TopicDetail,
-	topic string,
-	replicationFactor int,
-) error {
-	minInsyncReplicasConfigGetter := func() (string, bool, error) {
-		info, exists := topics[topic]
-		if exists {
-			minInsyncReplicasStr, err := getTopicConfig(
-				ctx, admin, info.Name,
-				MinInsyncReplicasConfigName,
-				MinInsyncReplicasConfigName)
-			if err != nil {
-				return "", true, err
-			}
-			return minInsyncReplicasStr, true, nil
-		}
-
-		minInsyncReplicasStr, err := admin.GetBrokerConfig(MinInsyncReplicasConfigName)
-		if err != nil {
-			return "", false, err
-		}
-
-		return minInsyncReplicasStr, false, nil
-	}
-
-	minInsyncReplicasStr, exists, err := minInsyncReplicasConfigGetter()
-	if err != nil {
-		// 'min.insync.replica' is invisible to us in Confluent Cloud Kafka.
-		if errors.ErrKafkaConfigNotFound.Equal(err) {
-			log.Warn("TiCDC cannot find `min.insync.replicas` from broker's configuration, " +
-				"please make sure that the replication factor is greater than or equal " +
-				"to the minimum number of in-sync replicas" +
-				"if you want to use `required-acks` = -1." +
-				"Otherwise, TiCDC will not be able to send messages to the topic.")
-		}
-		log.Warn("TiCDC meets error when get `min.insync.replicas` from broker's configuration, assume the config is valid")
-		return nil
-	}
-	minInsyncReplicas, err := strconv.Atoi(minInsyncReplicasStr)
-	if err != nil {
-		return err
-	}
-
-	configFrom := "topic"
-	if !exists {
-		configFrom = "broker"
-	}
-
-	if replicationFactor < minInsyncReplicas {
-		msg := fmt.Sprintf("`replication-factor` cannot be smaller than the `%s` of %s",
-			MinInsyncReplicasConfigName, configFrom)
-		log.Error(msg, zap.Int("replication-factor", replicationFactor),
-			zap.Int("min.insync.replicas", minInsyncReplicas))
-		return errors.ErrKafkaInvalidConfig.GenWithStack(
-			"TiCDC Kafka sink's `request.required.acks` defaults to -1, "+
-				"TiCDC cannot deliver messages when the `replication-factor` %d "+
-				"is smaller than the `min.insync.replicas` %d of %s",
-			replicationFactor, minInsyncReplicas, configFrom,
-		)
-	}
-
-	return nil
-}
-
 // getTopicConfig gets topic config by name.
 // If the topic does not have this configuration,
 // we will try to get it from the broker's configuration.
 // NOTICE: The configuration names of topic and broker may be different for the same configuration.
 func getTopicConfig(
-	ctx context.Context,
 	admin Admin,
 	topicName string,
 	topicConfigName string,

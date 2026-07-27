@@ -99,12 +99,14 @@ func (c *bufferManager) run(ctx context.Context) error {
 
 func (c *bufferManager) handleDMLTask(ctx context.Context, task *task) error {
 	if len(task.encodedMsgs) == 0 {
-		task.callbacks.postEnqueue()
+		if task.postEnqueue != nil {
+			task.postEnqueue()
+		}
 		return nil
 	}
 
 	for {
-		action, entry, err := c.spool.TryEnqueue(task.encodedMsgs, task.callbacks.postEnqueue)
+		action, entry, err := c.spool.TryEnqueue(task.encodedMsgs, task.postEnqueue)
 		if err != nil {
 			return err
 		}
