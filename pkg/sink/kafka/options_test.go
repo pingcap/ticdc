@@ -69,6 +69,18 @@ func TestCompleteOptions(t *testing.T) {
 	options = NewOptions()
 	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.Regexp(t, ".*invalid syntax.*", errors.Cause(err))
+	for _, replicationFactor := range []string{"0", "-1"} {
+		uri = "kafka://127.0.0.1:9092/abc?replication-factor=" + replicationFactor
+		sinkURI, err = url.Parse(uri)
+		require.NoError(t, err)
+		options = NewOptions()
+		err = options.Apply(
+			commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"),
+			sinkURI,
+			config.GetDefaultReplicaConfig().Sink,
+		)
+		require.ErrorContains(t, err, "invalid replication-factor "+replicationFactor)
+	}
 
 	// Illegal max-message-bytes.
 	uri = "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&max-message-bytes=a"
@@ -321,9 +333,55 @@ func TestAdjustConfigTopicExist(t *testing.T) {
 	// When the topic exists, but the topic does not have `max.message.bytes`
 	// create a topic without `max.message.bytes`
 	topicName := "test-topic"
+<<<<<<< HEAD
 	detail := &TopicDetail{
 		Name:          topicName,
 		NumPartitions: 3,
+=======
+	changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adminFixture := newKafkaAdminFixture(t)
+			adminClient := adminFixture.admin
+
+			detail := &TopicDetail{
+				Name:          topicName,
+				NumPartitions: 3,
+			}
+			err := adminClient.CreateTopic(detail, false)
+			require.NoError(t, err)
+
+			configuredMaxMessageBytes := test.configuredMaxMessageBytes(adminFixture)
+			sinkURI, err := url.Parse(fmt.Sprintf(
+				"kafka://127.0.0.1:9092/%s?max-message-bytes=%d",
+				topicName, configuredMaxMessageBytes,
+			))
+			require.NoError(t, err)
+
+			options := NewOptions()
+			err = options.Apply(changefeedID, sinkURI, config.GetDefaultReplicaConfig().Sink)
+			require.NoError(t, err)
+			require.Equal(t, configuredMaxMessageBytes, options.MaxMessageBytes)
+			require.Equal(t, configuredMaxMessageBytes, options.MaxBatchedBytes)
+			expectedProducerLimit := adminFixture.brokerMessageMaxBytes()
+
+			ctx := context.Background()
+			err = adjustOptions(changefeedID, adminClient, options, topicName)
+			require.NoError(t, err)
+
+			saramaConfig, err := newSaramaConfig(ctx, options)
+			require.NoError(t, err)
+
+			require.NotEqual(t, configuredMaxMessageBytes, options.MaxMessageBytes)
+			require.Equal(t, expectedProducerLimit, options.MaxMessageBytes)
+			require.Equal(
+				t,
+				min(configuredMaxMessageBytes, expectedProducerLimit),
+				options.MaxBatchedBytes,
+			)
+			require.Equal(t, expectedProducerLimit, saramaConfig.Producer.MaxMessageBytes)
+		})
+>>>>>>> 0d4929739 (kafka: verify replication-factor when need to create the topic (#5715))
 	}
 	err = adminClient.CreateTopic(detail, false)
 	require.NoError(t, err)
@@ -353,6 +411,7 @@ func TestAdjustConfigTopicExist(t *testing.T) {
 	require.Equal(t, maxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
 }
 
+<<<<<<< HEAD
 func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 	adminClient := NewClusterAdminClientMockImpl()
 	defer adminClient.Close()
@@ -371,12 +430,26 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 		options,
 		"create-new-fail-invalid-min-insync-replicas",
 	)
+=======
+func TestValidateReplicationFactor(t *testing.T) {
+	adminFixture := newKafkaAdminFixture(t)
+	adminClient := adminFixture.admin
+	adminFixture.setMinInsyncReplicas("2")
+
+	topicConfig := &AutoCreateTopicConfig{
+		AutoCreate:        true,
+		ReplicationFactor: 1,
+		RequiredAcks:      WaitForAll,
+	}
+	err := topicConfig.ValidateReplicationFactor(adminClient)
+>>>>>>> 0d4929739 (kafka: verify replication-factor when need to create the topic (#5715))
 	require.Regexp(
 		t,
 		".*`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of broker.*",
 		errors.Cause(err),
 	)
 
+<<<<<<< HEAD
 	// topic not exist, and `min.insync.replicas` not found in broker's configuration
 	adminClient.DropBrokerConfig(MinInsyncReplicasConfigName)
 	topicName := "no-topic-no-min-insync-replicas"
@@ -384,10 +457,17 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 	require.Nil(t, err)
 	err = adminClient.CreateTopic(&TopicDetail{
 		Name:              topicName,
+=======
+	localAcksConfig := &AutoCreateTopicConfig{
+		AutoCreate:        true,
+>>>>>>> 0d4929739 (kafka: verify replication-factor when need to create the topic (#5715))
 		ReplicationFactor: 1,
-	}, false)
-	require.ErrorIs(t, err, sarama.ErrPolicyViolation)
+		RequiredAcks:      WaitForLocal,
+	}
+	err = localAcksConfig.ValidateReplicationFactor(adminClient)
+	require.NoError(t, err)
 
+<<<<<<< HEAD
 	// Report an error if the replication-factor is less than min.insync.replicas
 	// when the topic does exist.
 
@@ -428,6 +508,16 @@ func TestSkipAdjustConfigMinInsyncReplicasWhenRequiredAcksIsNotWailAll(t *testin
 		"skip-check-min-insync-replicas",
 	)
 	require.Nil(t, err, "Should not report an error when `required-acks` is not `all`")
+=======
+	adminFixture.dropBrokerConfig(MinInsyncReplicasConfigName)
+	missingBrokerConfig := &AutoCreateTopicConfig{
+		AutoCreate:        true,
+		ReplicationFactor: 1,
+		RequiredAcks:      WaitForAll,
+	}
+	err = missingBrokerConfig.ValidateReplicationFactor(adminClient)
+	require.NoError(t, err)
+>>>>>>> 0d4929739 (kafka: verify replication-factor when need to create the topic (#5715))
 }
 
 func TestCreateProducerFailed(t *testing.T) {
@@ -640,10 +730,17 @@ func TestConfigurationCombinations(t *testing.T) {
 		sinkURI, err := url.Parse(uri)
 		require.Nil(t, err)
 
+<<<<<<< HEAD
 		ctx := context.Background()
 		options := NewOptions()
 		err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 		require.Nil(t, err)
+=======
+			options := NewOptions()
+			err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+			require.Nil(t, err)
+			configuredMaxMessageBytes := options.MaxMessageBytes
+>>>>>>> 0d4929739 (kafka: verify replication-factor when need to create the topic (#5715))
 
 		changefeed := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "changefeed-test")
 		factory, err := NewMockFactory(ctx, options, changefeed)
@@ -652,11 +749,23 @@ func TestConfigurationCombinations(t *testing.T) {
 		adminClient, err := factory.AdminClient(ctx)
 		require.NoError(t, err)
 
+<<<<<<< HEAD
 		topic, ok := a.uriParams[0].(string)
 		require.True(t, ok)
 		require.NotEqual(t, "", topic)
 		err = adjustOptions(ctx, adminClient, options, topic)
 		require.Nil(t, err)
+=======
+			changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
+			err = adjustOptions(changefeedID, adminClient, options, topic)
+			require.Nil(t, err)
+			require.Equal(t, sourceMaxMessageBytes, options.MaxMessageBytes)
+			require.Equal(
+				t,
+				min(configuredMaxMessageBytes, sourceMaxMessageBytes),
+				options.MaxBatchedBytes,
+			)
+>>>>>>> 0d4929739 (kafka: verify replication-factor when need to create the topic (#5715))
 
 		encoderConfig := common.NewConfig(config.ProtocolOpen)
 		err = encoderConfig.Apply(sinkURI, &config.SinkConfig{

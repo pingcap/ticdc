@@ -15,7 +15,6 @@ package topicmanager
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -242,9 +241,17 @@ func (m *kafkaTopicManager) createTopic(
 	topicName string,
 ) (int32, error) {
 	if !m.cfg.AutoCreate {
+<<<<<<< HEAD
 		return 0, cerror.ErrKafkaInvalidConfig.GenWithStack(
 			fmt.Sprintf("`auto-create-topic` is false, "+
 				"and %s not found", topicName))
+=======
+		return 0, errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topicName)
+	}
+
+	if err := m.cfg.ValidateReplicationFactor(m.admin); err != nil {
+		return 0, err
+>>>>>>> 0d4929739 (kafka: verify replication-factor when need to create the topic (#5715))
 	}
 
 	start := time.Now()

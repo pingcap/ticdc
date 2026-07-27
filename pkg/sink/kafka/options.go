@@ -14,7 +14,6 @@
 package kafka
 
 import (
-	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -249,6 +248,9 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	}
 
 	if urlParameter.ReplicationFactor != nil {
+		if *urlParameter.ReplicationFactor <= 0 {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("invalid replication-factor %d", *urlParameter.ReplicationFactor)
+		}
 		o.ReplicationFactor = *urlParameter.ReplicationFactor
 	}
 
@@ -537,11 +539,12 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 	return nil
 }
 
-// AutoCreateTopicConfig is used to create topic configuration.
+// AutoCreateTopicConfig contains settings used to create and validate a topic.
 type AutoCreateTopicConfig struct {
 	AutoCreate        bool
 	PartitionNum      int32
 	ReplicationFactor int16
+	RequiredAcks      RequiredAcks
 }
 
 func (o *options) DeriveTopicConfig() *AutoCreateTopicConfig {
@@ -549,7 +552,40 @@ func (o *options) DeriveTopicConfig() *AutoCreateTopicConfig {
 		AutoCreate:        o.AutoCreate,
 		PartitionNum:      o.PartitionNum,
 		ReplicationFactor: o.ReplicationFactor,
+		RequiredAcks:      o.RequiredAcks,
 	}
+}
+
+// ValidateReplicationFactor checks whether a topic created with this config
+// can satisfy the configured acknowledgment requirement.
+func (c *AutoCreateTopicConfig) ValidateReplicationFactor(admin ClusterAdminClient) error {
+	if c.RequiredAcks != WaitForAll {
+		return nil
+	}
+
+	raw, err := admin.GetBrokerConfig(MinInsyncReplicasConfigName)
+	if err != nil {
+		log.Warn("cannot get Kafka broker configuration, assume replication factor is valid",
+			zap.String("configName", MinInsyncReplicasConfigName),
+			zap.Int16("replicationFactor", c.ReplicationFactor),
+			zap.Error(err))
+		return nil
+	}
+	minInsyncReplicas, err := strconv.Atoi(raw)
+	if err != nil {
+		return err
+	}
+
+	if int(c.ReplicationFactor) < minInsyncReplicas {
+		return errors.ErrKafkaInvalidConfig.GenWithStack(
+			"TiCDC Kafka sink's `request.required.acks` defaults to -1, "+
+				"TiCDC cannot deliver messages when the `replication-factor` %d "+
+				"is smaller than the `min.insync.replicas` %d of broker",
+			c.ReplicationFactor, minInsyncReplicas,
+		)
+	}
+
+	return nil
 }
 
 var (
@@ -577,7 +613,11 @@ func NewKafkaClientID(captureAddr string,
 
 // adjustOptions adjust the `options` and `sarama.Config` by condition.
 func adjustOptions(
+<<<<<<< HEAD
 	ctx context.Context,
+=======
+	changefeedID common.ChangeFeedID,
+>>>>>>> 0d4929739 (kafka: verify replication-factor when need to create the topic (#5715))
 	admin ClusterAdminClient,
 	options *options,
 	topic string,
@@ -587,6 +627,7 @@ func adjustOptions(
 		return errors.Trace(err)
 	}
 
+<<<<<<< HEAD
 	// Only check replicationFactor >= minInsyncReplicas when producer's required acks is -1.
 	// If we don't check it, the producer probably can not send message to the topic.
 	// Because it will wait for the ack from all replicas. But we do not have enough replicas.
@@ -597,10 +638,13 @@ func adjustOptions(
 		}
 	}
 
+=======
+>>>>>>> 0d4929739 (kafka: verify replication-factor when need to create the topic (#5715))
 	info, exists := topics[topic]
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
 	if exists {
+<<<<<<< HEAD
 		// make sure that producer's `MaxMessageBytes` smaller than topic's `max.message.bytes`
 		topicMaxMessageBytesStr, err := getTopicConfig(
 			ctx, admin, info.Name,
@@ -649,6 +693,28 @@ func adjustOptions(
 		return errors.Trace(err)
 	}
 	brokerMessageMaxBytes, err := strconv.Atoi(brokerMessageMaxBytesStr)
+=======
+		err = adjustExistingTopicOption(changefeedID, admin, options, topic, info)
+	} else {
+		adjustNewTopicOptions(admin, changefeedID, options, topic)
+	}
+	if err != nil {
+		return err
+	}
+
+	options.MaxBatchedBytes = min(options.MaxBatchedBytes, options.MaxMessageBytes)
+	return nil
+}
+
+func adjustExistingTopicOption(
+	changefeedID common.ChangeFeedID,
+	admin ClusterAdminClient,
+	options *options,
+	topic string,
+	info TopicDetail,
+) error {
+	maxMessageBytes, err := getTopicMaxMessageBytes(admin, info.Name)
+>>>>>>> 0d4929739 (kafka: verify replication-factor when need to create the topic (#5715))
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -677,6 +743,7 @@ func adjustOptions(
 		log.Warn("partition-num is not set, use the default partition count",
 			zap.String("topic", topic), zap.Int32("partitions", options.PartitionNum))
 	}
+<<<<<<< HEAD
 	return nil
 }
 
@@ -747,12 +814,46 @@ func validateMinInsyncReplicas(
 	return nil
 }
 
+=======
+}
+
+func getTopicMaxMessageBytes(
+	admin ClusterAdminClient,
+	topic string,
+) (int, error) {
+	raw, err := getTopicConfig(
+		admin, topic,
+		TopicMaxMessageBytesConfigName,
+		BrokerMessageMaxBytesConfigName,
+	)
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	maxMessageBytes, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	return maxMessageBytes, nil
+}
+
+func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, error) {
+	raw, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	messageMaxBytes, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	return messageMaxBytes, nil
+}
+
+>>>>>>> 0d4929739 (kafka: verify replication-factor when need to create the topic (#5715))
 // getTopicConfig gets topic config by name.
 // If the topic does not have this configuration,
 // we will try to get it from the broker's configuration.
 // NOTICE: The configuration names of topic and broker may be different for the same configuration.
 func getTopicConfig(
-	ctx context.Context,
 	admin ClusterAdminClient,
 	topicName string,
 	topicConfigName string,

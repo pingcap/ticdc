@@ -57,7 +57,11 @@ func NewSaramaFactory(
 		admin.Close()
 	}()
 
+<<<<<<< HEAD
 	if err = adjustOptions(ctx, admin, o, o.Topic); err != nil {
+=======
+	if err = adjustOptions(changefeedID, admin, o, o.Topic); err != nil {
+>>>>>>> 0d4929739 (kafka: verify replication-factor when need to create the topic (#5715))
 		return nil, errors.Trace(err)
 	}
 
