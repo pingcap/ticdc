@@ -88,14 +88,10 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	if err != nil {
 		return err
 	}
-<<<<<<< HEAD
-	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
-=======
 	if _, err = columnselector.New(sinkConfig); err != nil {
 		return err
 	}
-	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt, math.MaxInt)
->>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
+	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
 	if err != nil {
 		return err
 	}

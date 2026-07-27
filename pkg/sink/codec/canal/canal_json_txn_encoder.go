@@ -32,16 +32,6 @@ type JSONTxnEventEncoder struct {
 	valueBuf   *bytes.Buffer
 	batchSize  int
 	callback   func()
-<<<<<<< HEAD
-
-	// Store some fields of the txn event.
-	txnCommitTs uint64
-	txnSchema   *string
-	txnTable    *string
-
-	columnSelector commonEvent.Selector
-=======
->>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 }
 
 // NewJSONTxnEventEncoder creates a new JSONTxnEventEncoder
@@ -66,28 +56,16 @@ func (j *JSONTxnEventEncoder) AppendTxnEvent(rowEvents []*commonEvent.RowEvent) 
 			log.Warn("Single message is too large for canal-json",
 				zap.Int("maxMessageBytes", j.config.MaxMessageBytes),
 				zap.Int("length", length),
-<<<<<<< HEAD
-				zap.Any("table", event.TableInfo.TableName))
-			return errors.ErrMessageTooLarge.GenWithStackByArgs(event.TableInfo.GetTableName(), length, j.config.MaxMessageBytes)
-=======
 				zap.Any("table", rowEvent.TableInfo.TableName))
-			return errors.ErrMessageTooLarge.GenWithStackByArgs(rowEvent.TableInfo.GetTargetTableName(), length, j.config.MaxMessageBytes)
->>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
+			return errors.ErrMessageTooLarge.GenWithStackByArgs(rowEvent.TableInfo.GetTableName(), length, j.config.MaxMessageBytes)
 		}
 		j.valueBuf.Write(value)
 		j.valueBuf.Write(j.terminator)
 		j.batchSize++
 	}
-<<<<<<< HEAD
-	j.callback = event.PostFlush
-	j.txnCommitTs = event.CommitTs
-	j.txnSchema = event.TableInfo.GetSchemaNamePtr()
-	j.txnTable = event.TableInfo.GetTableNamePtr()
-=======
 	if len(rowEvents) > 0 {
 		j.callback = rowEvents[len(rowEvents)-1].Callback
 	}
->>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 	return nil
 }
 
@@ -107,9 +85,6 @@ func (j *JSONTxnEventEncoder) Build() []*common.Message {
 	}
 	j.callback = nil
 	j.batchSize = 0
-	j.txnCommitTs = 0
-	j.txnSchema = nil
-	j.txnTable = nil
 
 	return []*common.Message{ret}
 }

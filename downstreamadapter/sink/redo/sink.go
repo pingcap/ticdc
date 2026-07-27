@@ -155,13 +155,8 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	rowsCount := event.Len()
-<<<<<<< HEAD
 	events := make([]writer.RedoEvent, 0, rowsCount)
-	rowCallback := helper.NewTxnPostFlushRowCallback(event, uint64(rowsCount))
-=======
-	events := make([]*commonEvent.RedoRowEvent, 0, rowsCount)
 	rowCallback := helper.NewPostFlushRowCallback(event, uint64(rowsCount))
->>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 
 	for {
 		row, ok := event.GetNextRow()

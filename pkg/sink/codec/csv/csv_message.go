@@ -334,13 +334,9 @@ func fromColValToCsvVal(csvConfig *common.Config, row *chunk.Row, idx int, colIn
 
 // rowChangedEvent2CSVMsg converts a RowChangedEvent to a csv record.
 func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMessage, error) {
-<<<<<<< HEAD
 	var err error
-
-=======
 	tableInfo := e.TableInfo
 	selector := e.ColumnSelector
->>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 	csvMsg := &csvMessage{
 		config:     csvConfig,
 		tableName:  e.TableInfo.GetTableName(),
@@ -356,22 +352,14 @@ func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMe
 
 	if e.IsDelete() {
 		csvMsg.opType = operationDelete
-<<<<<<< HEAD
-		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), e.TableInfo)
-=======
 		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), tableInfo, selector)
->>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 		if err != nil {
 			return nil, err
 		}
 	} else if e.IsInsert() {
 		// This is a insert operation.
 		csvMsg.opType = operationInsert
-<<<<<<< HEAD
-		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), e.TableInfo)
-=======
 		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), tableInfo, selector)
->>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 		if err != nil {
 			return nil, err
 		}
@@ -384,20 +372,12 @@ func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMe
 					fmt.Errorf("the column length of preColumns %d doesn't equal to that of columns %d",
 						e.GetPreRows().Len(), e.GetRows().Len()))
 			}
-<<<<<<< HEAD
-			csvMsg.preColumns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), e.TableInfo)
-=======
 			csvMsg.preColumns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), tableInfo, selector)
->>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 			if err != nil {
 				return nil, err
 			}
 		}
-<<<<<<< HEAD
-		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), e.TableInfo)
-=======
 		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), tableInfo, selector)
->>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 		if err != nil {
 			return nil, err
 		}
