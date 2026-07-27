@@ -244,8 +244,7 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 
 	if urlParameter.ReplicationFactor != nil {
 		if *urlParameter.ReplicationFactor <= 0 {
-			return errors.ErrKafkaInvalidConfig.GenWithStack(
-				"invalid replication-factor %d", *urlParameter.ReplicationFactor)
+			return errors.ErrKafkaInvalidConfig.GenWithStack("invalid replication-factor %d", *urlParameter.ReplicationFactor)
 		}
 		o.ReplicationFactor = *urlParameter.ReplicationFactor
 	}
