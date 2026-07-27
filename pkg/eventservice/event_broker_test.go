@@ -70,11 +70,7 @@ func TestCheckNeedScan(t *testing.T) {
 	broker.close()
 
 	disInfo := newMockDispatcherInfoForTest(t)
-<<<<<<< HEAD
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
-=======
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 
 	info := newMockDispatcherInfoForTest(t)
 	info.startTs = 100
@@ -178,11 +174,7 @@ func TestOnNotify(t *testing.T) {
 	}
 
 	// Case 4: Do scan, it will update the sentResolvedTs.
-<<<<<<< HEAD
 	status := broker.getOrSetChangefeedStatus(disInfo)
-=======
-	status := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 	status.availableMemoryQuota.Store(node.ID(task.info.GetServerID()), atomic.NewUint64(broker.scanLimitInBytes))
 
 	broker.doScan(context.TODO(), task)
@@ -199,7 +191,6 @@ func TestOnNotify(t *testing.T) {
 	log.Info("Pass case 6")
 }
 
-<<<<<<< HEAD
 func TestAddDispatcherUnregisterOnSchemaStoreError(t *testing.T) {
 	broker, es, ss, _ := newEventBrokerForTest()
 	defer broker.close()
@@ -282,7 +273,8 @@ func TestTableTriggerDispatcherMetricCount(t *testing.T) {
 
 	broker.removeDispatcher(info)
 	require.InDelta(t, baseline, testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
-=======
+}
+
 func TestScanRangeCappedByScanWindow(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
@@ -290,7 +282,7 @@ func TestScanRangeCappedByScanWindow(t *testing.T) {
 
 	info := newMockDispatcherInfoForTest(t)
 	info.epoch = 1
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
 
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 	disp.seq.Store(1)
@@ -318,7 +310,7 @@ func TestGetScanTaskDataRangeEmptyAfterCappingDoesNotResetScanRange(t *testing.T
 
 	info := newMockDispatcherInfoForTest(t)
 	info.epoch = 1
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
 
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 	disp.seq.Store(1)
@@ -348,7 +340,7 @@ func TestHandleCongestionControlV2AdjustsScanInterval(t *testing.T) {
 	defer broker.close()
 
 	changefeedID := common.NewChangefeedID4Test("default", "test")
-	status := broker.getOrSetChangefeedStatus(changefeedID, time.Second*10)
+	status := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, time.Second*10)
 
 	status.scanInterval.Store(int64(40 * time.Second))
 	status.lastAdjustTime.Store(time.Now())
@@ -365,7 +357,7 @@ func TestHandleCongestionControlV2ResetsScanIntervalOnMemoryRelease(t *testing.T
 	defer broker.close()
 
 	changefeedID := common.NewChangefeedID4Test("default", "test")
-	status := broker.getOrSetChangefeedStatus(changefeedID, time.Second*10)
+	status := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, time.Second*10)
 
 	status.scanInterval.Store(int64(40 * time.Second))
 
@@ -381,7 +373,7 @@ func TestHandleCongestionControlV1DoesNotAdjustScanInterval(t *testing.T) {
 	defer broker.close()
 
 	changefeedID := common.NewChangefeedID4Test("default", "test")
-	status := broker.getOrSetChangefeedStatus(changefeedID, time.Second*10)
+	status := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, time.Second*10)
 
 	status.scanInterval.Store(int64(40 * time.Second))
 	status.lastAdjustTime.Store(time.Now())
@@ -391,7 +383,6 @@ func TestHandleCongestionControlV1DoesNotAdjustScanInterval(t *testing.T) {
 	broker.handleCongestionControl(node.ID("event-collector-1"), control)
 
 	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 }
 
 func TestDoScanSkipWhenChangefeedStatusNotFound(t *testing.T) {
@@ -792,11 +783,7 @@ func TestSendHandshakeIfNeedConcurrency(t *testing.T) {
 
 	// Create a mock dispatcher info
 	dispInfo := newMockDispatcherInfoForTest(t)
-<<<<<<< HEAD
 	changefeedStatus := broker.getOrSetChangefeedStatus(dispInfo)
-=======
-	changefeedStatus := broker.getOrSetChangefeedStatus(dispInfo.GetChangefeedID(), dispInfo.GetSyncPointInterval())
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 
 	// Test 1: Sequential calls should only send one handshake
 	t.Run("Sequential calls", func(t *testing.T) {

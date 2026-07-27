@@ -972,11 +972,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
 
-<<<<<<< HEAD
 	status := c.getOrSetChangefeedStatus(info)
-=======
-	status := c.getOrSetChangefeedStatus(changefeedID, info.GetSyncPointInterval())
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
@@ -1020,14 +1016,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		}
 		status.removeDispatcher(id)
 		if status.isEmpty() {
-<<<<<<< HEAD
 			c.removeChangefeedStatus(status)
-=======
-			c.changefeedMap.Delete(changefeedID)
-			metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
-			metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
-			metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 		}
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
 		return nil
@@ -1050,14 +1039,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		c.eventStore.UnregisterDispatcher(changefeedID, id)
 		status.removeDispatcher(id)
 		if status.isEmpty() {
-<<<<<<< HEAD
 			c.removeChangefeedStatus(status)
-=======
-			c.changefeedMap.Delete(changefeedID)
-			metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
-			metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
-			metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 		}
 		return err
 	}
@@ -1106,14 +1088,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
 			zap.Stringer("changefeedID", changefeedID),
 		)
-<<<<<<< HEAD
 		c.removeChangefeedStatus(stat.changefeedStat)
-=======
-		c.changefeedMap.Delete(changefeedID)
-		metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
-		metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
-		metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 	}
 
 	c.eventStore.UnregisterDispatcher(changefeedID, id)
@@ -1143,6 +1118,8 @@ func (c *eventBroker) removeChangefeedStatus(status *changefeedStatus) {
 
 	filter.GetSharedFilterStorage().RemoveFilter(changefeedID)
 	metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
+	metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
+	metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
@@ -1195,11 +1172,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			return err
 		}
 	}
-<<<<<<< HEAD
 	status := c.getOrSetChangefeedStatus(dispatcherInfo)
-=======
-	status := c.getOrSetChangefeedStatus(changefeedID, dispatcherInfo.GetSyncPointInterval())
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
@@ -1239,21 +1212,10 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	return nil
 }
 
-<<<<<<< HEAD
 func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedStatus {
 	changefeedID := info.GetChangefeedID()
 	if stat, ok := c.changefeedMap.Load(changefeedID); ok {
 		return stat.(*changefeedStatus)
-=======
-func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
-	stat, ok := c.changefeedMap.Load(changefeedID)
-	if !ok {
-		stat = newChangefeedStatus(changefeedID, syncPointInterval)
-		log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
-		c.changefeedMap.Store(changefeedID, stat)
-		metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(changefeedID.String()).Set(0)
-		metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeedID.String()).Set(defaultScanInterval.Seconds())
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 	}
 
 	// Filter config is changefeed scoped. In production, a config change must pause the
@@ -1269,28 +1231,24 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID,
 			zap.Error(err))
 	}
 
-	status := newChangefeedStatus(changefeedID)
+	status := newChangefeedStatus(changefeedID, info.GetSyncPointInterval())
 	status.filter = changefeedFilter
 	actual, loaded := c.changefeedMap.LoadOrStore(changefeedID, status)
 	if loaded {
 		return actual.(*changefeedStatus)
 	}
 	log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
+	metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(changefeedID.String()).Set(0)
+	metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeedID.String()).Set(defaultScanInterval.Seconds())
 	return status
 }
 
 func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
 	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
-<<<<<<< HEAD
+	changedChangefeeds := make(map[*changefeedStatus]struct{})
 	now := time.Now().Unix()
 	handleProgress := func(dispatcherID common.DispatcherID, checkpointTs uint64, heartbeatEpoch uint64, checkEpoch bool) {
 		dispatcherPtr := c.getDispatcher(dispatcherID)
-=======
-	changedChangefeeds := make(map[*changefeedStatus]struct{})
-	now := time.Now().Unix()
-	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
-		dispatcherPtr := c.getDispatcher(dp.DispatcherID)
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 		// Can't find the dispatcher, it means the dispatcher is removed.
 		if dispatcherPtr == nil {
 			response, ok := responseMap[heartbeat.serverID]
@@ -1326,7 +1284,7 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		}
 		// Update the last received heartbeat time to the current time.
 		dispatcher.lastReceivedHeartbeatTime.Store(now)
-<<<<<<< HEAD
+		changedChangefeeds[dispatcher.changefeedStat] = struct{}{}
 	}
 	if heartbeat.heartbeat.Version >= event.DispatcherHeartbeatVersion2 {
 		for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
@@ -1336,9 +1294,6 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		for _, dp := range heartbeat.heartbeat.DispatcherProgressesLegacy {
 			handleProgress(dp.DispatcherID, dp.CheckpointTs, 0, false)
 		}
-=======
-		changedChangefeeds[dispatcher.changefeedStat] = struct{}{}
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 	}
 	c.sendDispatcherResponse(responseMap)
 }

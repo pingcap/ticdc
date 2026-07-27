@@ -61,7 +61,7 @@ func (m *mockMounter) DecodeToChunk(rawKV *common.RawKVEntry, tableInfo *common.
 
 func TestEventScannerReturnsIteratorErrors(t *testing.T) {
 	disInfo := newMockDispatcherInfoForTest(t)
-	changefeedStatus := newChangefeedStatus(disInfo.GetChangefeedID())
+	changefeedStatus := newChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
 	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
 	makeDispatcherReady(disp)
 
@@ -111,11 +111,7 @@ func TestEventScanner(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-<<<<<<< HEAD
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
-=======
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
@@ -425,11 +421,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-<<<<<<< HEAD
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
-=======
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
@@ -507,11 +499,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-<<<<<<< HEAD
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
-=======
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
@@ -1599,11 +1587,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-<<<<<<< HEAD
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
-=======
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 	tableID := disInfo.GetTableSpan().TableID
 
 	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)

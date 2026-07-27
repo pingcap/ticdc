@@ -728,13 +728,6 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			}
 
 			// get total available memory directly from AreaMemoryMetric
-<<<<<<< HEAD
-			totalAvailable := uint64(changefeedTotalMemory[changefeedID])
-			congestionControl.AddAvailableMemoryWithDispatchers(
-				changefeedID.ID(),
-				totalAvailable,
-				dispatcherMemory,
-=======
 			totalAvailable, ok := changefeedTotalMemory[changefeedID]
 			if !ok {
 				continue
@@ -745,7 +738,6 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 				changefeedUsageRatio[changefeedID],
 				dispatcherMemory,
 				getAndResetMemoryReleaseCount(changefeedID),
->>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 			)
 		}
 
