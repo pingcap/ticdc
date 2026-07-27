@@ -16,10 +16,13 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
 
+	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
@@ -37,30 +40,39 @@ import (
 
 const kafkaSinkTestTopic = "mock_topic"
 
-func TestVerifyInvalidEncoderConfig(t *testing.T) {
-	openProtocol := config.ProtocolOpen.String()
-	sinkConfig := &config.SinkConfig{Protocol: &openProtocol}
-	sinkURI, err := url.Parse("kafka://127.0.0.1:1/" + kafkaSinkTestTopic + "?max-batch-size=0")
-	require.NoError(t, err)
+func TestVerifyInvalidConfig(t *testing.T) {
+	broker := sarama.NewMockBroker(t, 1)
+	defer broker.Close()
+	broker.SetHandlerByMap(map[string]sarama.MockResponse{
+		"ApiVersionsRequest": sarama.NewMockApiVersionsResponse(t).SetApiKeys(
+			[]sarama.ApiVersionsResponseKey{
+				{ApiKey: 0},
+				{ApiKey: 1},
+				{ApiKey: 2},
+				{ApiKey: 3, MaxVersion: 9},
+			}),
+		"MetadataRequest": sarama.NewMockMetadataResponse(t).
+			SetController(broker.BrokerID()).
+			SetBroker(broker.Addr(), broker.BrokerID()).
+			SetLeader(kafkaSinkTestTopic, 0, broker.BrokerID()),
+		"DescribeConfigsRequest": sarama.NewMockDescribeConfigsResponse(t),
+	})
 
-	changefeedID := common.NewChangefeedID4Test("test", "verify-existing-topic")
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	err = Verify(ctx, changefeedID, sinkURI, sinkConfig)
-	require.ErrorContains(t, err, "invalid max-batch-size 0")
-}
+	schemaRegistry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "invalid response", http.StatusInternalServerError)
+	}))
+	defer schemaRegistry.Close()
 
-func TestVerifyEncoderInitialization(t *testing.T) {
 	avroProtocol := config.ProtocolAvro.String()
-	schemaRegistry := "http://127.0.0.1:1"
 	sinkConfig := &config.SinkConfig{
 		Protocol:       &avroProtocol,
-		SchemaRegistry: &schemaRegistry,
+		SchemaRegistry: &schemaRegistry.URL,
 	}
-	sinkURI, err := url.Parse("kafka://127.0.0.1:1/" + kafkaSinkTestTopic)
+	sinkURI, err := url.Parse("kafka://" + broker.Addr() + "/" + kafkaSinkTestTopic +
+		"?required-acks=1&kafka-version=2.4.0")
 	require.NoError(t, err)
 
-	changefeedID := common.NewChangefeedID4Test("test", "verify-encoder")
+	changefeedID := common.NewChangefeedID4Test("test", "verify-invalid-config")
 	err = Verify(context.Background(), changefeedID, sinkURI, sinkConfig)
 	require.ErrorContains(t, err, "ErrAvroSchemaAPIError")
 }

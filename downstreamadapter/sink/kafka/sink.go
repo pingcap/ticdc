@@ -102,10 +102,6 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 	}
 	defer claimCheck.Close()
 
-	if _, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck); err != nil {
-		return errors.Trace(err)
-	}
-
 	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
 	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
 		return errors.Trace(err)
@@ -130,23 +126,25 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 	if err != nil {
 		return errors.Trace(err)
 	}
-	if _, exists := topics[topic]; exists {
-		return nil
+	if _, exists := topics[topic]; !exists {
+		topicConfig := options.DeriveTopicConfig()
+		if !topicConfig.AutoCreate {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topic)
+		}
+
+		// the topic is not created, only validate.
+		err = adminClient.CreateTopic(&kafka.TopicDetail{
+			Name:              topic,
+			NumPartitions:     topicConfig.PartitionNum,
+			ReplicationFactor: topicConfig.ReplicationFactor,
+		}, true)
+		if err != nil {
+			return errors.WrapError(errors.ErrKafkaCreateTopic, err)
+		}
 	}
 
-	topicConfig := options.DeriveTopicConfig()
-	if !topicConfig.AutoCreate {
-		return errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topic)
-	}
-
-	// the topic is not created, only validate.
-	err = adminClient.CreateTopic(&kafka.TopicDetail{
-		Name:              topic,
-		NumPartitions:     topicConfig.PartitionNum,
-		ReplicationFactor: topicConfig.ReplicationFactor,
-	}, true)
-	if err != nil {
-		return errors.WrapError(errors.ErrKafkaCreateTopic, err)
+	if _, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck); err != nil {
+		return errors.Trace(err)
 	}
 	return nil
 }
