@@ -86,8 +86,12 @@ func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *commonEve
 	if len(index) == 0 {
 		return nil, nil
 	}
+	row := e.GetRows()
+	if e.IsDelete() {
+		row = e.GetPreRows()
+	}
 	keyColumns := &avroEncodeInput{
-		row:            e.GetRows(),
+		row:            row,
 		index:          index,
 		colInfos:       colInfos,
 		columnselector: e.ColumnSelector,
@@ -121,20 +125,31 @@ func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *commonEve
 }
 
 func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *commonEvent.RowEvent) ([]byte, error) {
+	row := e.GetRows()
+	colInfos := e.TableInfo.GetColumns()
+	var index []int
 	if e.IsDelete() {
-		return nil, nil
-	}
-	length := e.GetRows().Len()
-	if length == 0 {
-		return nil, nil
-	}
-	index := make([]int, length)
-	for i := 0; i < length; i++ {
-		index[i] = i
+		if !a.config.EnableTiDBExtension || !a.config.AvroEnableWatermark {
+			return nil, nil
+		}
+		index, colInfos = e.PrimaryKeyColumn()
+		if len(index) == 0 {
+			return nil, nil
+		}
+		row = e.GetPreRows()
+	} else {
+		length := row.Len()
+		if length == 0 {
+			return nil, nil
+		}
+		index = make([]int, length)
+		for i := 0; i < length; i++ {
+			index[i] = i
+		}
 	}
 	input := &avroEncodeInput{
-		row:            e.GetRows(),
-		colInfos:       e.TableInfo.GetColumns(),
+		row:            row,
+		colInfos:       colInfos,
 		index:          index,
 		columnselector: e.ColumnSelector,
 	}

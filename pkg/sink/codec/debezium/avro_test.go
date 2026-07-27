@@ -237,7 +237,7 @@ func TestDebeziumConfluentAvroDecodeRowEvent(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded := decoder.NextDMLEvent()
+	decoded := decoder.NextDMLMessage().ToDMLEvent()
 	require.Equal(t, commitTs, decoded.CommitTs)
 	require.Equal(t, "test", decoded.TableInfo.GetSchemaName())
 	require.Equal(t, "foo", decoded.TableInfo.GetTableName())
@@ -308,7 +308,7 @@ func TestDebeziumConfluentAvroDecodeAccountDMLEvents(t *testing.T) {
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, messageType)
 
-		decoded := decoder.NextDMLEvent()
+		decoded := decoder.NextDMLMessage().ToDMLEvent()
 		require.Equal(t, "test", decoded.TableInfo.GetSchemaName())
 		require.Equal(t, "tp_account", decoded.TableInfo.GetTableName())
 
