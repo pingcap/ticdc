@@ -130,6 +130,7 @@ func downLoadAndSortFiles(ctx context.Context, cfg *readerConfig) ([]io.ReadClos
 	if err != nil {
 		return nil, err
 	}
+	defer extStorage.Close()
 	files, err := selectDownLoadFile(ctx, extStorage, cfg.fileType, cfg.startTs)
 	if err != nil {
 		return nil, err

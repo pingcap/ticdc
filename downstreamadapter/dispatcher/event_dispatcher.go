@@ -133,7 +133,6 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 }
 
 func (d *EventDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
-	// if the commit-ts of last event of dispatcherEvents is greater than redoGlobalTs,
 	// the dispatcherEvents will be cached util the redoGlobalTs is updated.
 	if d.redoEnable && len(dispatcherEvents) > 0 && d.redoGlobalTs.Load() < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
 		d.cache(dispatcherEvents, wakeCallback)
@@ -153,9 +152,10 @@ func (d *EventDispatcher) Remove() {
 	d.removeDispatcher()
 }
 
-// EmitBootstrap emits the table bootstrap event in a blocking way after changefeed started
-// It will return after the bootstrap event is sent.
-func (d *EventDispatcher) EmitBootstrap() bool {
+// EmitBootstrap emits the table bootstrap event in a blocking way after changefeed started.
+// It will return after the bootstrap event is sent, or when shouldStop asks it
+// to stop because the local write path has been fenced.
+func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
 	bootstrap := loadBootstrapState(&d.BootstrapState)
 	switch bootstrap {
 	case BootstrapFinished:
@@ -205,9 +205,15 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 		if table.IsView() {
 			continue
 		}
+		if shouldStop() {
+			return false
+		}
 		ddlEvent := codec.NewBootstrapDDLEvent(table)
 		err := d.sink.WriteBlockEvent(ddlEvent)
 		if err != nil {
+			if shouldStop() {
+				return false
+			}
 			log.Error("send bootstrap message failed",
 				zap.Stringer("changefeed", d.sharedInfo.changefeedID),
 				zap.Int("tables", len(currentTables)),
@@ -216,6 +222,9 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 				zap.Error(err))
 			d.HandleError(errors.ErrExecDDLFailed.GenWithStackByArgs())
 			return true
+		}
+		if shouldStop() {
+			return false
 		}
 	}
 	storeBootstrapState(&d.BootstrapState, BootstrapFinished)

@@ -48,8 +48,6 @@ type SyncProducer interface {
 	// SendMessages will return an error.
 	SendMessages(topic string, partitionNum int32, message *common.Message) error
 
-	Heartbeat()
-
 	// Close shuts down the producer; you must call this function before a producer
 	// object passes out of scope, as it may otherwise leak memory.
 	// You must call this before calling Close on the underlying client.
@@ -68,8 +66,6 @@ type AsyncProducer interface {
 	// AsyncSend is the input channel for the user to write messages to that they
 	// wish to send.
 	AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error
-
-	Heartbeat()
 
 	// AsyncRunCallback process the messages that has sent to kafka,
 	// and run tha attached callback. the caller should call this

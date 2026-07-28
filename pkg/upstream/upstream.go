@@ -35,7 +35,7 @@ import (
 	tikvconfig "github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikv"
 	pdclient "github.com/tikv/pd/client"
-	pdopt "github.com/tikv/pd/client"
+	pdopt "github.com/tikv/pd/client/opt"
 	uatomic "github.com/uber-go/atomic"
 	clientV3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -148,18 +148,17 @@ func isCreateTiStoreRetryable(ctx context.Context, err error) bool {
 }
 
 // init initializes the upstream
-func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error {
+func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) (err error) {
 	ctx, up.cancel = context.WithCancel(ctx)
 	grpcTLSOption, err := up.SecurityConfig.ToGRPCDialOption()
 	if err != nil {
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 	// init the tikv client tls global config
 	initGlobalConfig(up.SecurityConfig)
 	// default upstream always use the pdClient pass from cdc server
 	if !up.isDefaultUpstream {
-		up.PDClient, err = pdopt.NewClientWithContext(
+		up.PDClient, err = pdclient.NewClientWithContext(
 			ctx, up.PdEndpoints, up.SecurityConfig.PDSecurityOption(),
 			// the default `timeout` is 3s, maybe too small if the pd is busy,
 			// set to 10s to avoid frequent timeout.
@@ -177,7 +176,6 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 				}),
 			))
 		if err != nil {
-			up.err.Store(err)
 			return errors.Trace(err)
 		}
 
@@ -191,14 +189,12 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 	if up.ID != 0 && up.ID != clusterID {
 		err := fmt.Errorf("upstream id missmatch expected %d, actual: %d",
 			up.ID, clusterID)
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 	up.ID = clusterID
 
 	up.KVStorage, err = CreateTiStore(ctx, strings.Join(up.PdEndpoints, ","), up.SecurityConfig, "")
 	if err != nil {
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 
@@ -206,7 +202,6 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 
 	up.PDClock, err = pdutil.NewClock(ctx, up.PDClient)
 	if err != nil {
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 
@@ -260,7 +255,9 @@ func initGlobalConfig(secCfg *security.Credential) {
 func (up *Upstream) Close() {
 	up.mu.Lock()
 	defer up.mu.Unlock()
-	up.cancel()
+	if up.cancel != nil {
+		up.cancel()
+	}
 	if atomic.LoadInt32(&up.status) == closed ||
 		atomic.LoadInt32(&up.status) == closing {
 		return

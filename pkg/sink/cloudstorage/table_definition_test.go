@@ -77,6 +77,53 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 	return def, tableInfo
 }
 
+func TestFromDDLEventUsesTargetNames(t *testing.T) {
+	t.Parallel()
+
+	idFieldType := types.NewFieldType(mysql.TypeLong)
+	idFieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	routedTableInfo := common.WrapTableInfo("source_db", &timodel.TableInfo{
+		ID:       20,
+		Name:     parser_model.NewCIStr("source_table"),
+		UpdateTS: 100,
+		Columns: []*timodel.ColumnInfo{
+			{
+				ID:        1,
+				Name:      parser_model.NewCIStr("id"),
+				FieldType: *idFieldType,
+				State:     timodel.StatePublic,
+			},
+		},
+	}).CloneWithRouting("target_db", "target_table")
+	sourceDDL := &commonEvent.DDLEvent{
+		Version:    commonEvent.DDLEventVersion1,
+		Type:       byte(timodel.ActionCreateTable),
+		SchemaName: "source_db",
+		TableName:  "source_table",
+		Query:      "CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)",
+		TableInfo:  routedTableInfo,
+		FinishedTs: 100,
+	}
+
+	routedDDL := commonEvent.NewRoutedDDLEvent(
+		sourceDDL,
+		"CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY)",
+		"target_db",
+		"target_table",
+		"",
+		"",
+		routedTableInfo,
+		nil,
+		nil,
+	)
+
+	var def TableDefinition
+	def.FromDDLEvent(routedDDL, false)
+	require.Equal(t, "target_db", def.Schema)
+	require.Equal(t, "target_table", def.Table)
+	require.Contains(t, def.Query, "`target_db`.`target_table`")
+}
+
 func TestTableCol(t *testing.T) {
 	t.Parallel()
 

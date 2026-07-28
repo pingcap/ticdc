@@ -174,7 +174,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionAddIndex: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForAddIndex,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
@@ -408,7 +408,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForCreateTables,
 	},
 	model.ActionMultiSchemaChange: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForMultiSchemaChange,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
@@ -615,54 +615,23 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 // Value assignment in CREATE VIEW:
 // https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/create_table.go#L1668-L1678
 func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
-	if event.Query == "" || event.TableInfo == nil || event.TableInfo.View == nil || event.TableInfo.View.SelectStmt == "" {
+	if event.TableInfo == nil || event.TableInfo.View == nil {
 		return
 	}
 
-	stmt, err := parser.New().ParseOneStmt(event.Query, "", "")
+	query, err := commonEvent.NormalizeCreateViewQueryWithStoredSelect(
+		event.Query,
+		event.TableInfo.View.SelectStmt,
+		event.SchemaName,
+	)
 	if err != nil {
-		log.Warn("parse create view query failed when normalizing select statement",
-			zap.String("query", event.Query),
-			zap.Error(err))
-		return
-	}
-	createViewStmt, ok := stmt.(*ast.CreateViewStmt)
-	if !ok {
-		return
-	}
-
-	selectStmt, err := parser.New().ParseOneStmt(event.TableInfo.View.SelectStmt, "", "")
-	if err != nil {
-		log.Warn("parse stored create view select statement failed",
-			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
-			zap.String("query", event.Query),
-			zap.Error(err))
-		return
-	}
-	// Keep the original CREATE VIEW text when the stored SELECT only qualifies tables in the view's own schema.
-	if createViewSelectUsesCurrentSchemaOnly(selectStmt, event.SchemaName) {
-		return
-	}
-
-	createViewStmt.Select = selectStmt
-	normalizedQuery, err := restoreDDLStmt(createViewStmt)
-	if err != nil {
-		log.Warn("restore normalized create view query failed",
+		log.Warn("normalize create view query with stored select failed",
 			zap.String("query", event.Query),
 			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
 			zap.Error(err))
 		return
 	}
-	event.Query = normalizedQuery
-}
-
-func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchema string) bool {
-	for _, schema := range extractTableSchemas(selectStmt) {
-		if schema != "" && !strings.EqualFold(schema, currentSchema) {
-			return false
-		}
-	}
-	return true
+	event.Query = query
 }
 
 func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
@@ -807,6 +776,20 @@ func buildPersistedDDLEventForNormalDDLOnSingleTable(args buildPersistedDDLEvent
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = getTableName(args.tableMap, event.TableID)
+	return event
+}
+
+func buildPersistedDDLEventForMultiSchemaChange(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventForNormalDDLOnSingleTable(args)
+	event.IndexIDs = getIndexIDs(args.job)
+	return event
+}
+
+func buildPersistedDDLEventForAddIndex(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
+	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
+	event.TableName = getTableName(args.tableMap, event.TableID)
+	event.IndexIDs = getIndexIDs(args.job)
 	return event
 }
 
@@ -2022,7 +2005,8 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 		TiDBOnly:   tiDBOnly,
 		BDRMode:    rawEvent.BDRRole,
 
-		NotSync: notSync,
+		NotSync:  notSync,
+		IndexIDs: rawEvent.IndexIDs,
 	}, !filtered, nil
 }
 

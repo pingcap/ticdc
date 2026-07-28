@@ -72,7 +72,7 @@ func newDispatcherTestSink(t *testing.T, sinkType common.SinkType) *dispatcherTe
 	}).AnyTimes()
 	testSink.sink.EXPECT().AddCheckpointTs(gomock.Any()).AnyTimes()
 	testSink.sink.EXPECT().SetTableSchemaStore(gomock.Any()).AnyTimes()
-	testSink.sink.EXPECT().Close(gomock.Any()).AnyTimes()
+	testSink.sink.EXPECT().Close().AnyTimes()
 	testSink.sink.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
 	return testSink
 }

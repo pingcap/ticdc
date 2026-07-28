@@ -71,6 +71,10 @@ type Maintainer struct {
 
 	pdClock pdutil.Clock
 	eventCh *chann.DrainableChann[*Event]
+	// blockStatusPending keeps the dedupe window local to the maintainer event
+	// queue so duplicate block-status resends do not pile up while an earlier
+	// equivalent event is still pending or being handled.
+	blockStatusPending blockStatusPendingSet
 
 	mc messaging.MessageCenter
 
@@ -201,7 +205,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
-			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo),
+			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo, conf.BalanceMoveBatchSize),
 		mc:                    mc,
 		removed:               atomic.NewBool(false),
 		nodeManager:           nodeManager,
@@ -231,6 +235,8 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 	}
+	m.controller.SetSelfNodeID(selfNode.ID)
+	m.controller.SetErrorReporter(m.handleError)
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
@@ -308,7 +314,10 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 					zap.Stringer("changefeedID", m.changefeedID),
 					zap.Int("eventType", event.eventType),
 					zap.Duration("duration", duration),
-					zap.Any("Message", event.message),
+					zap.String("from", event.message.From.String()),
+					zap.String("to", event.message.To.String()),
+					zap.String("type", event.message.Type.String()),
+					zap.String("topic", event.message.Topic),
 				)
 			} else {
 				log.Info("maintainer is too slow",
@@ -380,7 +389,46 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		BootstrapDone: m.initialized.Load(),
 		LastSyncedTs:  m.getWatermark().LastSyncedTs,
 	}
+	drainTarget, drainEpoch := m.controller.getDispatcherDrainTarget()
+	if !drainTarget.IsEmpty() && drainEpoch > 0 {
+		// Report drain progress against the controller snapshot that all local
+		// schedulers are using. Coordinator compares this status with its own
+		// drain epoch, so stale or cleared targets naturally stop contributing.
+		// DrainProgress is changefeed-scoped, so aggregate default and redo
+		// dispatchers into one target view instead of reporting mode-specific
+		// counters.
+		dispatcherCount := m.controller.spanController.GetTaskSizeByNodeID(drainTarget)
+		inflightDrainMoveCount := m.controller.operatorController.CountInflightDrainMovesFromNode(drainTarget)
+		if m.enableRedo {
+			dispatcherCount += m.controller.redoSpanController.GetTaskSizeByNodeID(drainTarget)
+			inflightDrainMoveCount += m.controller.redoOperatorController.CountInflightDrainMovesFromNode(drainTarget)
+		}
+		status.DrainProgress = &heartbeatpb.DrainProgress{
+			TargetNodeId:                 drainTarget.String(),
+			TargetEpoch:                  drainEpoch,
+			TargetDispatcherCount:        clampIntToUint32(dispatcherCount),
+			TargetInflightDrainMoveCount: clampIntToUint32(inflightDrainMoveCount),
+		}
+	}
 	return status
+}
+
+// clampIntToUint32 converts local int counters to heartbeat protobuf counters.
+func clampIntToUint32(v int) uint32 {
+	if v <= 0 {
+		return 0
+	}
+	if uint64(v) > uint64(math.MaxUint32) {
+		return math.MaxUint32
+	}
+	return uint32(v)
+}
+
+// SetDispatcherDrainTarget applies the newest drain target to this maintainer
+// and marks its status dirty so coordinator observes the new epoch promptly.
+func (m *Maintainer) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
+	m.controller.SetDispatcherDrainTarget(target, epoch)
+	m.statusChanged.Store(true)
 }
 
 func (m *Maintainer) initialize() error {
@@ -966,6 +1014,7 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 		m.handleError(err)
 		return
 	}
+	m.bootstrapper.ClearBootstrapResponses()
 
 	if postBootstrapRequest == nil {
 		return
@@ -1110,20 +1159,18 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node
 		if targetNodeID == m.selfNode.ID {
-			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
-			if m.enableRedo {
-				msg.TableTriggerRedoDispatcherId = m.redoDDLSpan.ID.ToPB()
-			}
-			msg.IsNewChangefeed = m.newChangefeed
 			log.Info("create table event trigger dispatcher bootstrap message",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.String("nodeAddr", targetAddr),
 				zap.Any("nodeID", targetNodeID),
 				zap.String("dispatcherID", m.ddlSpan.ID.String()),
-				zap.Bool("enableRedo", m.enableRedo),
-				zap.Bool("newChangefeed", m.newChangefeed),
 				zap.Uint64("startTs", m.startCheckpointTs),
 			)
+			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
+			if m.enableRedo {
+				msg.TableTriggerRedoDispatcherId = m.redoDDLSpan.ID.ToPB()
+			}
+			msg.IsNewChangefeed = m.newChangefeed
 		}
 
 		log.Info("maintainer new bootstrap message to dispatcher orchestrator",
@@ -1196,7 +1243,13 @@ func (m *Maintainer) runHandleEvents(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case event := <-m.eventCh.Out():
-			m.HandleEvent(event)
+			if event == nil {
+				continue
+			}
+			func() {
+				defer m.blockStatusPending.release(event.blockStatusReleaseKeys)
+				m.HandleEvent(event)
+			}()
 		case <-ticker.C:
 			m.HandleEvent(&Event{
 				changefeedID: m.changefeedID,
@@ -1209,7 +1262,11 @@ func (m *Maintainer) runHandleEvents(ctx context.Context) {
 // pushEvent is used to push event to maintainer's event channel
 // event will be handled by maintainer's main loop
 func (m *Maintainer) pushEvent(event *Event) {
-	m.eventCh.In() <- event
+	filteredEvent, ok := m.filterBlockStatusEvent(event)
+	if !ok {
+		return
+	}
+	m.eventCh.In() <- filteredEvent
 }
 
 func (m *Maintainer) getWatermark() heartbeatpb.Watermark {

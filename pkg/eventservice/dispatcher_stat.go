@@ -145,7 +145,7 @@ func newDispatcherStat(
 		scanWorkerIndex:    (common.GID)(id).Hash(scanWorkerCount),
 		messageWorkerIndex: (common.GID)(id).Hash(messageWorkerCount),
 		info:               info,
-		filter:             info.GetFilter(),
+		filter:             changefeedStatus.filter,
 		startTs:            info.GetStartTs(),
 		epoch:              info.GetEpoch(),
 		startTableInfo:     startTableInfo,
@@ -423,6 +423,7 @@ func (c *resolvedTsCache) reset() {
 
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
+	filter       filter.Filter
 
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 

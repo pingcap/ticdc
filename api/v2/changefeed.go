@@ -42,14 +42,36 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
-	tidbkv "github.com/pingcap/tidb/pkg/kv"
+	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
+
+// validateChangefeedIDParam extracts and validates the changefeed ID from the
+// URL path parameter. On failure it writes the error to c and returns false.
+func validateChangefeedIDParam(c *gin.Context) (common.ChangeFeedDisplayName, bool) {
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
+	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s, %s",
+			changefeedDisplayName.Name, err.Error()))
+		return common.ChangeFeedDisplayName{}, false
+	}
+	return changefeedDisplayName, true
+}
+
+func maskSinkURIForError(sinkURI string) string {
+	return util.MaskSensitiveDataInURIForError(sinkURI)
+}
+
+func genSinkURIInvalidError(sinkURI string, err error) error {
+	return errors.WrapError(
+		errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err), maskSinkURIForError(sinkURI))
+}
 
 // CreateChangefeed handles create changefeed request,
 // it returns the changefeed's changefeedInfo that it just created
@@ -134,7 +156,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+		_ = c.Error(genSinkURIInvalidError(cfg.SinkURI, err))
 		return
 	}
 
@@ -143,7 +165,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	if config.IsMQScheme(scheme) {
 		topic, err = helper.GetTopic(sinkURIParsed)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfg.SinkURI)))
 			return
 		}
 	}
@@ -220,7 +242,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		cancel()
 	}()
 
-	var kvStorage tidbkv.Storage
+	var kvStorage kv.Storage
 	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	kvStorage, err = keyspaceManager.GetStorage(ctx, keyspaceName)
 	if err != nil {
@@ -248,7 +270,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		allTables        []common.TableName
 	)
 	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
-	ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, changefeedID, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -290,7 +312,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 	err = sink.Verify(ctx, cfConfig, changefeedID)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfg.SinkURI)))
 		return
 	}
 
@@ -430,7 +452,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 	// verify replicaConfig
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+		_ = c.Error(genSinkURIInvalidError(cfg.SinkURI, err))
 		return
 	}
 	err = replicaCfg.ValidateAndAdjust(sinkURIParsed)
@@ -444,7 +466,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 	if config.IsMQScheme(scheme) {
 		topic, err = helper.GetTopic(sinkURIParsed)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfg.SinkURI)))
 			return
 		}
 	}
@@ -457,7 +479,8 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	changefeedID := common.NewChangeFeedIDWithName(cfg.ID, keyspaceName)
+	ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, changefeedID, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -820,27 +843,27 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		)
 		sinkURIParsed, err = url.Parse(cfInfo.SinkURI)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfInfo.SinkURI))
+			_ = c.Error(genSinkURIInvalidError(cfInfo.SinkURI, err))
 			return
 		}
 		scheme := sinkURIParsed.Scheme
 		if config.IsMQScheme(scheme) {
 			topic, err = helper.GetTopic(sinkURIParsed)
 			if err != nil {
-				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfInfo.SinkURI))
+				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfInfo.SinkURI)))
 				return
 			}
 		}
 		protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(cfInfo.Config.Sink.Protocol))
 
-		var kvStorage tidbkv.Storage
+		var kvStorage kv.Storage
 		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 		kvStorage, err = keyspaceManager.GetStorage(ctx, keyspaceName)
 		if err != nil {
 			_ = c.Error(err)
 			return
 		}
-		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, cfInfo.Config, kvStorage, newCheckpointTs, scheme, topic, protocol)
+		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, cfInfo.ChangefeedID, cfInfo.Config, kvStorage, newCheckpointTs, scheme, topic, protocol)
 		if err != nil {
 			_ = c.Error(err)
 			return
@@ -973,7 +996,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		// verify replicaConfig
 		sinkURIParsed, err := url.Parse(oldCfInfo.SinkURI)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
+			_ = c.Error(genSinkURIInvalidError(oldCfInfo.SinkURI, err))
 			return
 		}
 		err = oldCfInfo.Config.ValidateAndAdjust(sinkURIParsed)
@@ -987,7 +1010,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		if config.IsMQScheme(scheme) {
 			topic, err = helper.GetTopic(sinkURIParsed)
 			if err != nil {
-				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
+				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(oldCfInfo.SinkURI)))
 				return
 			}
 		}
@@ -1002,7 +1025,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		}
 
 		// use checkpointTs get snapshot from kv storage
-		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
+		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, oldCfInfo.ChangefeedID, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
 		if err != nil {
 			_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
 			return
@@ -1031,7 +1054,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 
 	err = sink.Verify(ctx, oldCfInfo.ToChangefeedConfig(), oldCfInfo.ChangefeedID)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(oldCfInfo.SinkURI)))
 		return
 	}
 
@@ -1679,46 +1702,30 @@ func (h *OpenAPIV2) synced(c *gin.Context) {
 
 func getVerifiedTables(
 	ctx context.Context,
+	changefeedID common.ChangeFeedID,
 	replicaConfig *config.ReplicaConfig,
-	storage tidbkv.Storage, startTs uint64,
+	storage kv.Storage, startTs uint64,
 	scheme string, topic string, protocol config.Protocol,
 ) ([]common.TableName, []common.TableName, []common.TableName, error) {
 	f, err := filter.NewFilter(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate))
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	tableInfos, ineligibleTables, eligibleTables, allTables, err := schemastore.
-		VerifyTables(f, storage, startTs)
+	tableInfos, ineligibleTables, eligibleTables, allTables, err := schemastore.VerifyTables(f, storage, startTs)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	log.Info("verifyTables completed",
-		zap.Int("tableCount", len(tableInfos)),
-		zap.Uint64("startTs", startTs))
 
 	err = f.Verify(tableInfos)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if !config.IsMQScheme(scheme) {
-		return ineligibleTables, eligibleTables, allTables, nil
-	}
 
-	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	err = eventRouter.VerifyTables(tableInfos)
-	if err != nil {
+	if err := verifyTable4MQ(replicaConfig, scheme, topic, protocol, tableInfos); err != nil {
 		return nil, nil, nil, err
 	}
 
-	selectors, err := columnselector.New(replicaConfig.Sink)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	err = selectors.VerifyTables(tableInfos, eventRouter)
-	if err != nil {
+	if err := verifyRouteConflict(changefeedID, eligibleTables, ineligibleTables, replicaConfig); err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -1727,6 +1734,59 @@ func getVerifiedTables(
 	}
 
 	return ineligibleTables, eligibleTables, allTables, nil
+}
+
+func verifyTable4MQ(
+	replicaConfig *config.ReplicaConfig,
+	scheme string,
+	topic string,
+	protocol config.Protocol,
+	tableInfos []*common.TableInfo,
+) error {
+	if !config.IsMQScheme(scheme) {
+		return nil
+	}
+
+	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
+	if err != nil {
+		return err
+	}
+	if err = eventRouter.VerifyTables(tableInfos); err != nil {
+		return err
+	}
+
+	selectors, err := columnselector.New(replicaConfig.Sink)
+	if err != nil {
+		return err
+	}
+	return selectors.VerifyTables(tableInfos, eventRouter)
+}
+
+func verifyRouteConflict(
+	changefeedID common.ChangeFeedID,
+	eligibleTables []common.TableName,
+	ineligibleTables []common.TableName,
+	replicaCfg *config.ReplicaConfig,
+) error {
+	if len(eligibleTables)+len(ineligibleTables) == 0 || replicaCfg == nil ||
+		replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
+		return nil
+	}
+	if util.GetOrZero(replicaCfg.ForceReplicate) {
+		return routing.ValidateNoStaticRouteConflict(
+			changefeedID,
+			util.GetOrZero(replicaCfg.CaseSensitive),
+			replicaCfg.Sink.DispatchRules,
+			eligibleTables,
+			ineligibleTables,
+		)
+	}
+	return routing.ValidateNoStaticRouteConflict(
+		changefeedID,
+		util.GetOrZero(replicaCfg.CaseSensitive),
+		replicaCfg.Sink.DispatchRules,
+		eligibleTables,
+	)
 }
 
 func GetKeyspaceValueWithDefault(c *gin.Context) string {

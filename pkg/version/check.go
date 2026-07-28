@@ -32,7 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/tidb/pkg/util/engine"
 	pdclient "github.com/tikv/pd/client"
-	pdopt "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/opt"
 	"go.uber.org/zap"
 )
 
@@ -203,7 +203,7 @@ func CheckStoreVersion(ctx context.Context, client pdclient.Client) error {
 	failpoint.Inject("GetStoreFailed", func() {
 		failpoint.Return(cerror.WrapError(cerror.ErrGetAllStoresFailed, fmt.Errorf("unknown store")))
 	})
-	stores, err := client.GetAllStores(ctx, pdopt.WithExcludeTombstone())
+	stores, err := client.GetAllStores(ctx, opt.WithExcludeTombstone())
 	if err != nil {
 		return cerror.WrapError(cerror.ErrGetAllStoresFailed, err)
 	}

@@ -9,12 +9,17 @@ prepare="set global tidb_enable_clustered_index = 'int_only';"
 
 # Check if OUT_DIR contains TEST_NAME, if so, truncate OUT_DIR to the parent directory
 ADJUSTED_OUT_DIR="$OUT_DIR"
-if [ -n "$TEST_NAME" ] && [[ "$OUT_DIR" == *"/$TEST_NAME"* ]]; then
-	ADJUSTED_OUT_DIR="${OUT_DIR%/$TEST_NAME}"
+if [ -n "$TEST_NAME" ]; then
+	case "$OUT_DIR/" in
+	*"/${TEST_NAME}/"*)
+		ADJUSTED_OUT_DIR="${OUT_DIR%%/"${TEST_NAME}"*}"
+		;;
+	esac
 fi
 
 log_file="$ADJUSTED_OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.log"
 remainLogFile="$ADJUSTED_OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.remain.log"
+mkdir -p "$(dirname "$log_file")"
 
 log_with_timestamp() {
 	# Clear the log file at the start of each command

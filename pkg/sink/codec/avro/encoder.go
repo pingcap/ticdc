@@ -93,7 +93,7 @@ func (a *BatchEncoder) AppendRowChangedEvent(
 			zap.Int("maxMessageBytes", a.config.MaxMessageBytes),
 			zap.Int("length", message.Length()),
 			zap.Any("table", e.TableInfo.TableName))
-		return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTableName(), message.Length(), a.config.MaxMessageBytes)
+		return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), message.Length(), a.config.MaxMessageBytes)
 	}
 
 	a.result = append(a.result, message)
@@ -129,8 +129,8 @@ func (a *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 		event := &ddlEvent{
 			Query:    e.Query,
 			Type:     e.GetDDLType(),
-			Schema:   e.GetSchemaName(),
-			Table:    e.GetTableName(),
+			Schema:   e.GetTargetSchemaName(),
+			Table:    e.GetTargetTableName(),
 			CommitTs: e.GetCommitTs(),
 		}
 		data, err := json.Marshal(event)

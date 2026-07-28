@@ -41,7 +41,8 @@ type Sink struct {
 	ddlWriter    writer.RedoDDLWriter
 	dmlWriter    writer.RedoDMLWriter
 
-	logBuffer *chann.UnlimitedChannel[*commonEvent.RedoRowEvent, any]
+	logBuffer         *chann.UnlimitedChannel[*commonEvent.RedoRowEvent, any]
+	maxLogSizeInBytes int
 
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal *atomic.Bool
@@ -67,11 +68,12 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 		return nil, err
 	}
 	s := &Sink{
-		ctx:          ctx,
-		changefeedID: changefeedID,
-		logBuffer:    chann.NewUnlimitedChannelDefault[*commonEvent.RedoRowEvent](),
-		isNormal:     atomic.NewBool(true),
-		isClosed:     atomic.NewBool(false),
+		ctx:               ctx,
+		changefeedID:      changefeedID,
+		logBuffer:         chann.NewUnlimitedChannelDefault[*commonEvent.RedoRowEvent](),
+		maxLogSizeInBytes: int(config.MaxLogSizeInBytes()),
+		isNormal:          atomic.NewBool(true),
+		isClosed:          atomic.NewBool(false),
 	}
 
 	var (
@@ -147,7 +149,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		}
 		log.Info("redo sink send DDL event",
 			zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
-			zap.Any("event", e.GetDDLQuery()), zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()),
+			zap.String("query", e.GetDDLQuery()), zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
 			zap.String("schema", e.GetSchemaName()), zap.String("table", e.GetTableName()), zap.Int64("tableID", e.GetTableID()))
 	}
 	return nil
@@ -158,6 +160,11 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	rowCallback := helper.NewTxnPostFlushRowCallback(event, rowsCount)
 	events := make([]*commonEvent.RedoRowEvent, 0, rowsCount)
 
+	var (
+		startTs         = event.GetStartTs()
+		commitTs        = event.GetCommitTs()
+		physicalTableID = event.GetTableID()
+	)
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
@@ -165,10 +172,10 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 			break
 		}
 		events = append(events, &commonEvent.RedoRowEvent{
-			StartTs:         event.StartTs,
-			CommitTs:        event.CommitTs,
+			StartTs:         startTs,
+			CommitTs:        commitTs,
 			Event:           row,
-			PhysicalTableID: event.PhysicalTableID,
+			PhysicalTableID: physicalTableID,
 			TableInfo:       event.TableInfo,
 			Callback:        rowCallback,
 		})
@@ -188,7 +195,7 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *Sink) Close(_ bool) {
+func (s *Sink) Close() {
 	if !s.isClosed.CompareAndSwap(false, true) {
 		return
 	}
@@ -248,3 +255,11 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 }
 
 func (s *Sink) AddCheckpointTs(_ uint64) {}
+
+func (s *Sink) BatchCount() int {
+	return 4096
+}
+
+func (s *Sink) BatchBytes() int {
+	return s.maxLogSizeInBytes
+}

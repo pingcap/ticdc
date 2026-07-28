@@ -195,6 +195,9 @@ func (p *dmlProducers) asyncSendMessage(
 }
 
 func (p *dmlProducers) close() { // We have to hold the lock to synchronize closing with writing.
+	if p == nil {
+		return
+	}
 	p.closedMu.Lock()
 	defer p.closedMu.Unlock()
 	// If the producer has already been closed, we should skip this close operation.

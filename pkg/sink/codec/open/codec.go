@@ -45,8 +45,8 @@ func encodeRowChangedEvent(
 
 	keyWriter.WriteObject(func() {
 		keyWriter.WriteUint64Field("ts", e.CommitTs)
-		keyWriter.WriteStringField("scm", e.TableInfo.GetSchemaName())
-		keyWriter.WriteStringField("tbl", e.TableInfo.GetTableName())
+		keyWriter.WriteStringField("scm", e.TableInfo.GetTargetSchemaName())
+		keyWriter.WriteStringField("tbl", e.TableInfo.GetTargetTableName())
 		keyWriter.WriteIntField("t", int(common.MessageTypeRow))
 
 		if largeMessageOnlyHandleKeyColumns {
@@ -126,8 +126,8 @@ func encodeDDLEvent(e *commonEvent.DDLEvent, config *common.Config) ([]byte, []b
 
 	keyWriter.WriteObject(func() {
 		keyWriter.WriteUint64Field("ts", e.FinishedTs)
-		keyWriter.WriteStringField("scm", e.SchemaName)
-		keyWriter.WriteStringField("tbl", e.TableName)
+		keyWriter.WriteStringField("scm", e.GetTargetSchemaName())
+		keyWriter.WriteStringField("tbl", e.GetTargetTableName())
 		keyWriter.WriteIntField("t", int(common.MessageTypeDDL))
 	})
 

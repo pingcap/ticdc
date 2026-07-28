@@ -91,18 +91,36 @@ func parseOptions(options []*ast.ColumnOption, c *timodel.ColumnInfo) {
 	}
 }
 
-func parseColumns(sql string, columns []*timodel.ColumnInfo) {
+func parseColumns(sql string, columns []*timodel.ColumnInfo) []*timodel.ColumnInfo {
+	// Clone columns to avoid mutating the originals, which may be shared
+	// with other goroutines via columnSchema (see CloneWithRouting).
+	cloned := make([]*timodel.ColumnInfo, len(columns))
+	for i, col := range columns {
+		c := *col
+		if elems := col.GetElems(); len(elems) > 0 {
+			newElems := make([]string, len(elems))
+			copy(newElems, elems)
+			c.SetElems(newElems)
+		}
+		cloned[i] = &c
+	}
+
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(sql, mysql.DefaultCharset, mysql.DefaultCollationName)
 	if err != nil {
 		log.Error("format query parse one stmt failed", zap.Error(err))
+		return cloned
+	}
+	if stmt == nil {
+		return cloned
 	}
 
-	columnsMap := make(map[parser_model.CIStr]*timodel.ColumnInfo, len(columns))
-	for _, col := range columns {
+	columnsMap := make(map[parser_model.CIStr]*timodel.ColumnInfo, len(cloned))
+	for _, col := range cloned {
 		columnsMap[col.Name] = col
 	}
 	stmt.Accept(&visiter{columnsMap: columnsMap})
+	return cloned
 }
 
 func parseBit(s string, n int) string {
@@ -292,7 +310,7 @@ func getBitFromUint64(n int, v uint64) []byte {
 }
 
 func getDBTableName(e *commonEvent.DDLEvent) (string, string) {
-	return e.SchemaName, e.TableName
+	return e.GetTargetSchemaName(), e.GetTargetTableName()
 }
 
 func getSchemaTopicName(namespace string, schema string, table string) string {

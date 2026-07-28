@@ -297,6 +297,7 @@ func (c *coordinator) handleStateChange(
 		c.controller.updateChangefeedEpoch(ctx, event.changefeedID)
 		c.controller.moveChangefeedToSchedulingQueue(event.changefeedID, false, false)
 	case config.StateFailed, config.StateFinished:
+		failpoint.Inject("BlockBeforeStopChangefeed", func() {})
 		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
 	default:
 	}
@@ -427,6 +428,10 @@ func (c *coordinator) ListChangefeeds(ctx context.Context, keyspace string) ([]*
 
 func (c *coordinator) GetChangefeed(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error) {
 	return c.controller.GetChangefeed(ctx, changefeedDisplayName)
+}
+
+func (c *coordinator) DrainNode(ctx context.Context, target node.ID) (int, error) {
+	return c.controller.DrainNode(ctx, target)
 }
 
 func (c *coordinator) Initialized() bool {

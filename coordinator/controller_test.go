@@ -60,8 +60,10 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 			operatorController: operator.NewOperatorController(
 				self, changefeedDB, backend, 10,
 			),
+			nodeManager:     nodeManager,
 			initialized:     atomic.NewBool(true),
 			drainController: drain.NewController(mc),
+			pdClient:        newDrainTestPDClient(),
 			bootstrapper: bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
 				"test",
 				func(node.ID, string) *messaging.TargetMessage { return nil },
@@ -70,7 +72,24 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 		}, mc.GetMessageChannel(), changefeedDB, target.ID
 	}
 
-	t.Run("send stopping when node is ready", func(t *testing.T) {
+	t.Run("skip stopping before bootstrap completion", func(t *testing.T) {
+		controller, messageCh, _, targetNodeID := newController(t)
+		controller.initialized.Store(false)
+		controller.drainController.ObserveHeartbeat(targetNodeID, &heartbeatpb.NodeHeartbeat{
+			NodeEpoch: 1,
+			Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		})
+
+		controller.onPeriodTask()
+
+		select {
+		case msg := <-messageCh:
+			t.Fatalf("unexpected liveness command sent before bootstrap completion: %v", msg.Type)
+		default:
+		}
+	})
+
+	t.Run("skip stopping without active drain session", func(t *testing.T) {
 		controller, messageCh, _, targetNodeID := newController(t)
 		controller.drainController.ObserveHeartbeat(targetNodeID, &heartbeatpb.NodeHeartbeat{
 			NodeEpoch: 1,
@@ -81,42 +100,160 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 
 		select {
 		case msg := <-messageCh:
-			require.Equal(t, messaging.TypeSetNodeLivenessRequest, msg.Type)
-			require.Equal(t, targetNodeID, msg.To)
-			req := msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
-			require.Equal(t, heartbeatpb.NodeLiveness_STOPPING, req.Target)
-			require.Equal(t, uint64(1), req.NodeEpoch)
+			t.Fatalf("unexpected liveness command sent without active session: %v", msg.Type)
 		default:
-			t.Fatal("expected a stop liveness command")
 		}
 	})
 
-	t.Run("skip stopping when operator is still in flight", func(t *testing.T) {
+	t.Run("skip stopping when active drain session is not ready", func(t *testing.T) {
 		controller, messageCh, changefeedDB, targetNodeID := newController(t)
-		controller.drainController.ObserveHeartbeat(targetNodeID, &heartbeatpb.NodeHeartbeat{
-			NodeEpoch: 1,
-			Liveness:  heartbeatpb.NodeLiveness_DRAINING,
-		})
-
 		cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 		cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 			ChangefeedID: cfID,
 			Config:       config.GetDefaultReplicaConfig(),
 			SinkURI:      "mysql://127.0.0.1:3306",
+			State:        config.StateNormal,
 		}, 1, true)
-		changefeedDB.AddAbsentChangefeed(cf)
-		require.True(t, controller.operatorController.AddOperator(
-			operator.NewAddMaintainerOperator(changefeedDB, cf, targetNodeID),
-		))
+		changefeedDB.AddReplicatingMaintainer(cf, targetNodeID)
+
+		_, err := controller.ensureDispatcherDrainTarget(context.Background(), targetNodeID)
+		require.NoError(t, err)
+
+		controller.drainController.ObserveHeartbeat(targetNodeID, &heartbeatpb.NodeHeartbeat{
+			NodeEpoch: 1,
+			Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		})
+		controller.onPeriodTask()
+
+		for {
+			select {
+			case msg := <-messageCh:
+				if msg.Type == messaging.TypeSetNodeLivenessRequest {
+					t.Fatalf("unexpected liveness command sent before readiness: %v", msg.Type)
+				}
+			default:
+				return
+			}
+		}
+	})
+
+	t.Run("send stopping only for active drain session target", func(t *testing.T) {
+		controller, messageCh, _, targetNodeID := newController(t)
+		_, err := controller.ensureDispatcherDrainTarget(context.Background(), targetNodeID)
+		require.NoError(t, err)
+
+		controller.drainSessionMu.Lock()
+		controller.drainSession.dirty = false
+		controller.drainSession.lastSent = time.Now()
+		controller.drainSessionMu.Unlock()
+
+		controller.drainController.ObserveHeartbeat(targetNodeID, &heartbeatpb.NodeHeartbeat{
+			NodeEpoch: 1,
+			Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		})
 
 		controller.onPeriodTask()
 
-		select {
-		case msg := <-messageCh:
-			t.Fatalf("unexpected liveness command sent: %v", msg.Type)
-		default:
+		foundStop := false
+		for {
+			select {
+			case msg := <-messageCh:
+				if msg.Type != messaging.TypeSetNodeLivenessRequest {
+					continue
+				}
+				require.Equal(t, targetNodeID, msg.To)
+				req := msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
+				if req.Target == heartbeatpb.NodeLiveness_STOPPING {
+					require.Equal(t, uint64(1), req.NodeEpoch)
+					foundStop = true
+				}
+			default:
+				require.True(t, foundStop)
+				return
+			}
 		}
 	})
+}
+
+func TestMaintainerHeartbeatAdmissionRequiresInitializedSender(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	owner := node.ID("owner")
+	late := node.ID("late")
+	nodeManager.GetAliveNodes()[owner] = &node.Info{ID: owner}
+	nodeManager.GetAliveNodes()[late] = &node.Info{ID: late}
+
+	db := changefeed.NewChangefeedDB(1)
+	cfID := common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "blackhole://",
+		State:        config.StateNormal,
+	}, 100, false)
+	db.AddReplicatingMaintainer(cf, late)
+
+	controller := &Controller{
+		initialized:  atomic.NewBool(true),
+		changefeedDB: db,
+		operatorController: operator.NewOperatorController(
+			&node.Info{ID: node.ID("coordinator")},
+			db,
+			nil,
+			10,
+		),
+		bootstrapper: bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
+			"test",
+			func(id node.ID, _ string) *messaging.TargetMessage {
+				return messaging.NewSingleTargetMessage(
+					id,
+					messaging.MaintainerManagerTopic,
+					&heartbeatpb.CoordinatorBootstrapRequest{},
+				)
+			},
+		),
+	}
+
+	controller.bootstrapper.HandleNodesChange(nodeManager.GetAliveNodes())
+	controller.bootstrapper.HandleBootstrapResponse(owner, &heartbeatpb.CoordinatorBootstrapResponse{})
+	require.False(t, controller.bootstrapper.AllNodesReady())
+
+	ignored := &heartbeatpb.MaintainerHeartbeat{
+		Statuses: []*heartbeatpb.MaintainerStatus{{
+			ChangefeedID:  cfID.ToPB(),
+			CheckpointTs:  200,
+			State:         heartbeatpb.ComponentState_Working,
+			BootstrapDone: true,
+		}},
+	}
+	controller.onMessage(context.Background(), &messaging.TargetMessage{
+		From:    late,
+		Topic:   messaging.CoordinatorTopic,
+		Type:    messaging.TypeMaintainerHeartbeatRequest,
+		Message: []messaging.IOTypeT{ignored},
+	})
+	require.Equal(t, uint64(100), cf.GetStatus().CheckpointTs)
+
+	controller.bootstrapper.HandleBootstrapResponse(late, &heartbeatpb.CoordinatorBootstrapResponse{})
+	accepted := &heartbeatpb.MaintainerHeartbeat{
+		Statuses: []*heartbeatpb.MaintainerStatus{{
+			ChangefeedID:  cfID.ToPB(),
+			CheckpointTs:  200,
+			State:         heartbeatpb.ComponentState_Working,
+			BootstrapDone: true,
+		}},
+	}
+	controller.onMessage(context.Background(), &messaging.TargetMessage{
+		From:    late,
+		Topic:   messaging.CoordinatorTopic,
+		Type:    messaging.TypeMaintainerHeartbeatRequest,
+		Message: []messaging.IOTypeT{accepted},
+	})
+	require.Equal(t, uint64(200), cf.GetStatus().CheckpointTs)
 }
 
 func TestResumeChangefeed(t *testing.T) {

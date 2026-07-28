@@ -23,7 +23,9 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/keyspace"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
@@ -44,6 +46,39 @@ func NewLockerResolver() LockResolver {
 
 const scanLockLimit = 1024
 
+var (
+	metricResolveLockFoundCounter      = metrics.SubscriptionClientResolveLockProcessedLockCounter.WithLabelValues("found")
+	metricResolveLockResolvedCounter   = metrics.SubscriptionClientResolveLockProcessedLockCounter.WithLabelValues("resolved")
+	metricScanLockOperationDuration    = metrics.SubscriptionClientResolveLockOperationDuration.WithLabelValues("scan")
+	metricResolveLockOperationDuration = metrics.SubscriptionClientResolveLockOperationDuration.WithLabelValues("resolve")
+)
+
+func resolveScanLockInfos(lockInfos []*kvrpcpb.LockInfo, resolve func([]*txnkv.Lock) (int64, error)) ([]*txnkv.Lock, int64, error) {
+	locks := make([]*txnkv.Lock, 0, len(lockInfos))
+	for _, lockInfo := range lockInfos {
+		sharedLockInfos := lockInfo.GetSharedLockInfos()
+		if len(sharedLockInfos) > 0 {
+			for _, sharedLockInfo := range sharedLockInfos {
+				locks = append(locks, txnkv.NewLock(sharedLockInfo))
+			}
+			continue
+		}
+		locks = append(locks, txnkv.NewLock(lockInfo))
+	}
+	if len(locks) == 0 {
+		return locks, 0, nil
+	}
+	msBeforeTxnExpired, err := resolve(locks)
+	return locks, msBeforeTxnExpired, err
+}
+
+func nextScanLockKey(locEndKey []byte, locks []*txnkv.Lock, msBeforeTxnExpired int64) []byte {
+	if msBeforeTxnExpired > 0 || len(locks) < scanLockLimit {
+		return locEndKey
+	}
+	return locks[len(locks)-1].Key
+}
+
 func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint64, maxVersion uint64) (err error) {
 	var totalLocks []*txnkv.Lock
 
@@ -53,17 +88,20 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		// Only log when there are locks or error to avoid log flooding.
 		if len(totalLocks) != 0 || err != nil {
 			cost := time.Since(start)
+			locks := totalLocks
+			if len(locks) > 5 {
+				locks = locks[:5]
+			}
 			log.Debug("resolve lock finishes",
 				zap.Uint64("regionID", regionID),
 				zap.Int("lockCount", len(totalLocks)),
-				zap.Any("locks", totalLocks),
+				zap.Any("sampleLocks", locks),
 				zap.Uint64("maxVersion", maxVersion),
 				zap.Duration("duration", cost),
 				zap.Error(err))
 		}
 	}()
 
-	// TODO test whether this function will kill active transaction
 	req := tikvrpc.NewRequest(tikvrpc.CmdScanLock, &kvrpcpb.ScanLockRequest{
 		MaxVersion: maxVersion,
 		Limit:      scanLockLimit,
@@ -85,7 +123,7 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 	var loc *tikv.KeyLocation
 	var key []byte
 	var endKey []byte
-	flushRegion := func() error {
+	reloadRegion := func() error {
 		var err error
 		loc, err = kvStorage.GetRegionCache().LocateRegionByID(bo, regionID)
 		if err != nil {
@@ -95,7 +133,7 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		endKey = loc.EndKey
 		return nil
 	}
-	if err = flushRegion(); err != nil {
+	if err = reloadRegion(); err != nil {
 		return errors.Trace(err)
 	}
 	for {
@@ -106,6 +144,7 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		}
 		req.ScanLock().StartKey = key
 		req.ScanLock().EndKey = endKey
+		scanLockStart := time.Now()
 		resp, err := kvStorage.SendReq(bo, req, loc.Region, tikv.ReadTimeoutMedium)
 		if err != nil {
 			return errors.Trace(err)
@@ -119,7 +158,7 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 			if err != nil {
 				return errors.Trace(err)
 			}
-			if err := flushRegion(); err != nil {
+			if err := reloadRegion(); err != nil {
 				return errors.Trace(err)
 			}
 			continue
@@ -131,22 +170,30 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		if locksResp.GetError() != nil {
 			return errors.Errorf("unexpected scanlock error: %s", locksResp)
 		}
+		metricScanLockOperationDuration.Observe(time.Since(scanLockStart).Seconds())
 		locksInfo := locksResp.GetLocks()
-		locks := make([]*txnkv.Lock, len(locksInfo))
-		for i := range locksInfo {
-			locks[i] = txnkv.NewLock(locksInfo[i])
-		}
+		locks, msBeforeTxnExpired, err1 := resolveScanLockInfos(locksInfo, func(locks []*txnkv.Lock) (int64, error) {
+			resolveLockStart := time.Now()
+			msBeforeTxnExpired, err := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
+			if err == nil {
+				metricResolveLockOperationDuration.Observe(time.Since(resolveLockStart).Seconds())
+			}
+			return msBeforeTxnExpired, err
+		})
 		totalLocks = append(totalLocks, locks...)
+		metricResolveLockFoundCounter.Add(float64(len(locks)))
 
-		_, err1 := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
 		if err1 != nil {
 			return errors.Trace(err1)
 		}
-		if len(locks) < scanLockLimit {
-			key = loc.EndKey
-		} else {
-			key = locks[len(locks)-1].Key
+		if len(locks) != 0 {
+			resolvedLockCount := len(locks)
+			if msBeforeTxnExpired > 0 {
+				resolvedLockCount = countExpiredLocks(kvStorage, locks)
+			}
+			metricResolveLockResolvedCounter.Add(float64(resolvedLockCount))
 		}
+		key = nextScanLockKey(loc.EndKey, locks, msBeforeTxnExpired)
 
 		if len(key) == 0 || (len(loc.EndKey) != 0 && bytes.Compare(key, loc.EndKey) >= 0) {
 			break
@@ -154,4 +201,21 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		bo = tikv.NewGcResolveLockMaxBackoffer(ctx)
 	}
 	return nil
+}
+
+func countExpiredLocks(kvStorage tikv.Storage, locks []*txnkv.Lock) int {
+	resolvedLockCount := 0
+	oracleClient := kvStorage.GetOracle()
+	oracleOption := &oracle.Option{TxnScope: oracle.GlobalTxnScope}
+	for _, lock := range locks {
+		msBeforeLockExpired := oracleClient.UntilExpired(
+			lock.TxnID,
+			lock.TTL,
+			oracleOption,
+		)
+		if msBeforeLockExpired <= 0 {
+			resolvedLockCount++
+		}
+	}
+	return resolvedLockCount
 }

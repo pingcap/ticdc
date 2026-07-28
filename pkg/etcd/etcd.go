@@ -181,7 +181,7 @@ func (c *CDCEtcdClientImpl) Close() error {
 
 // ClearAllCDCInfo delete all keys created by CDC
 func (c *CDCEtcdClientImpl) ClearAllCDCInfo(ctx context.Context) error {
-	_, err := c.Client.Delete(ctx, BaseKey(c.ClusterID), clientv3.WithPrefix())
+	_, err := c.Client.Delete(ctx, clusterPrefix(c.ClusterID), clientv3.WithPrefix())
 	return errors.WrapError(errors.ErrPDEtcdAPIError, err)
 }
 
@@ -197,7 +197,8 @@ func (c *CDCEtcdClientImpl) GetEtcdClient() Client {
 
 // GetAllCDCInfo get all keys created by CDC
 func (c *CDCEtcdClientImpl) GetAllCDCInfo(ctx context.Context) ([]*mvccpb.KeyValue, error) {
-	resp, err := c.Client.Get(ctx, BaseKey(c.ClusterID), clientv3.WithPrefix())
+	prefix := clusterPrefix(c.ClusterID)
+	resp, err := c.Client.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrPDEtcdAPIError, err)
 	}
@@ -215,14 +216,14 @@ func (c *CDCEtcdClientImpl) CheckMultipleCDCClusterExist(ctx context.Context) er
 	}
 	for _, kv := range resp.Kvs {
 		key := string(kv.Key)
-		if strings.HasPrefix(key, BaseKey(DefaultCDCClusterID)) ||
-			strings.HasPrefix(key, migrateBackupPrefix) {
+		if hasPathPrefix(key, BaseKey(DefaultCDCClusterID)) ||
+			hasPathPrefix(key, migrateBackupPrefix) {
 			continue
 		}
 		// skip the reserved cluster id
 		isReserved := false
 		for _, reserved := range config.ReservedClusterIDs {
-			if strings.HasPrefix(key, BaseKey(reserved)) {
+			if hasPathPrefix(key, BaseKey(reserved)) {
 				isReserved = true
 				break
 			}
@@ -237,7 +238,7 @@ func (c *CDCEtcdClientImpl) CheckMultipleCDCClusterExist(ctx context.Context) er
 
 // GetChangefeedInfoAndStatus returns kv revision and a map mapping from changefeedID to changefeed info and status
 func (c *CDCEtcdClientImpl) GetChangefeedInfoAndStatus(ctx context.Context) (revision int64, statusMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, infoMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, err error) {
-	allDataPrefix := BaseKey(c.ClusterID)
+	allDataPrefix := clusterPrefix(c.ClusterID)
 	// TODO tenfyzhong 2025-09-30 17:00:57 We should obtain data by page
 	resp, err := c.Client.Get(ctx, allDataPrefix, clientv3.WithPrefix())
 	if err != nil {

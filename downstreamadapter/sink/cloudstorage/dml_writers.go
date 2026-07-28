@@ -21,7 +21,6 @@ import (
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -146,7 +145,7 @@ func (d *dmlWriters) addTasks(ctx context.Context) error {
 
 		task, ok, err := d.msgCh.GetWithContext(ctx)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if !ok {
 			return nil
@@ -158,12 +157,13 @@ func (d *dmlWriters) addTasks(ctx context.Context) error {
 }
 
 func (d *dmlWriters) addDMLEvent(event *commonEvent.DMLEvent) {
+	tableInfo := event.TableInfo
 	table := cloudstorage.VersionedTableName{
 		TableNameWithPhysicTableID: commonType.TableName{
-			Schema:      event.TableInfo.GetSchemaName(),
-			Table:       event.TableInfo.GetTableName(),
+			Schema:      tableInfo.GetTargetSchemaName(),
+			Table:       tableInfo.GetTargetTableName(),
 			TableID:     event.PhysicalTableID,
-			IsPartition: event.TableInfo.IsPartitionTable(),
+			IsPartition: tableInfo.IsPartitionTable(),
 		},
 		TableInfoVersion: event.TableInfoVersion,
 		DispatcherID:     event.GetDispatcherID(),
