@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -889,7 +890,7 @@ func (p *dmlProcessor) shouldIgnoreDMLByEventType(rowType common.RowType, startT
 		startTs,
 	)
 	if err != nil {
-		return false, errors.Trace(err)
+		return false, cerrors.Trace(err)
 	}
 	p.setDMLTypeFilterCache(rowType, ignore)
 	return ignore, nil
