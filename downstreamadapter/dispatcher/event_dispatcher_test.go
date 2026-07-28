@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -31,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
 )
@@ -147,6 +147,21 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		false,
 		&redoTs,
 	)
+}
+
+func TestEnableIgnoreUpdateOnlyColumns(t *testing.T) {
+	require.True(t, newDispatcherForTest(
+		newDispatcherTestSink(t, common.KafkaSinkType).Sink(),
+		&heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{0}, EndKey: []byte{1}},
+	).EnableIgnoreUpdateOnlyColumns())
+	require.False(t, newDispatcherForTest(
+		newDispatcherTestSink(t, common.MysqlSinkType).Sink(),
+		&heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{0}, EndKey: []byte{1}},
+	).EnableIgnoreUpdateOnlyColumns())
+	require.False(t, newDispatcherForTest(
+		newDispatcherTestSink(t, common.PulsarSinkType).Sink(),
+		&heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{0}, EndKey: []byte{1}},
+	).EnableIgnoreUpdateOnlyColumns())
 }
 
 var count atomic.Int32
@@ -1352,6 +1367,7 @@ func TestHoldBlockEventUntilNoResendTasks(t *testing.T) {
 	require.False(t, msg.State.IsBlocked)
 	require.False(t, msg.State.IsSyncPoint)
 	require.Equal(t, uint64(10), msg.State.BlockTs)
+	require.Empty(t, msg.State.RouteTableAdmissions)
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
 
 	// A DB/All block event must be deferred until resendTaskMap becomes empty,

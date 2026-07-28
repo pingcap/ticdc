@@ -261,7 +261,6 @@ func (d *dispatcherStat) shouldForwardEventByCommitTs(event dispatcher.Dispatche
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Any("event", event.Event),
 			zap.Uint64("eventCommitTs", event.GetCommitTs()),
 			zap.Uint64("sentCommitTs", d.lastEventCommitTs.Load()))
 		return false
@@ -350,13 +349,14 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			d.session.resetCurrentEventService()
 			return false
 		}
-		if event.GetType() == commonEvent.TypeResolvedEvent {
+		switch event.GetType() {
+		case commonEvent.TypeResolvedEvent:
 			validEvents = append(validEvents, event)
-		} else if event.GetType() == commonEvent.TypeDMLEvent {
+		case commonEvent.TypeDMLEvent:
 			if d.shouldForwardEventByCommitTs(event) {
 				validEvents = append(validEvents, event)
 			}
-		} else if event.GetType() == commonEvent.TypeBatchDMLEvent {
+		case commonEvent.TypeBatchDMLEvent:
 			tableInfo := d.tableInfo.Load().(*common.TableInfo)
 			if tableInfo == nil {
 				log.Panic("should not happen: table info should be set before batch DML event",
@@ -377,7 +377,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 					validEvents = append(validEvents, dmlEvent)
 				}
 			}
-		} else {
+		default:
 			log.Panic("should not happen: unknown event type in batch data events",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcherID", d.getDispatcherID()),
@@ -411,7 +411,6 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.String("eventType", commonEvent.TypeToString(events[0].GetType())),
-			zap.Any("event", events[0].Event),
 			zap.Uint64("eventEpoch", events[0].GetEpoch()),
 			zap.Uint64("dispatcherEpoch", state.epoch),
 			zap.Stringer("staleEventService", *from),

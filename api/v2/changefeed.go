@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/middleware"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
@@ -43,6 +42,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
@@ -51,6 +51,27 @@ import (
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
+
+// validateChangefeedIDParam extracts and validates the changefeed ID from the
+// URL path parameter. On failure it writes the error to c and returns false.
+func validateChangefeedIDParam(c *gin.Context) (common.ChangeFeedDisplayName, bool) {
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
+	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s, %s",
+			changefeedDisplayName.Name, err.Error()))
+		return common.ChangeFeedDisplayName{}, false
+	}
+	return changefeedDisplayName, true
+}
+
+func maskSinkURIForError(sinkURI string) string {
+	return util.MaskSensitiveDataInURIForError(sinkURI)
+}
+
+func genSinkURIInvalidError(sinkURI string, err error) error {
+	return errors.WrapError(
+		errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err), maskSinkURIForError(sinkURI))
+}
 
 // CreateChangefeed handles create changefeed request,
 // it returns the changefeed's changefeedInfo that it just created
@@ -135,7 +156,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+		_ = c.Error(genSinkURIInvalidError(cfg.SinkURI, err))
 		return
 	}
 
@@ -144,7 +165,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	if config.IsMQScheme(scheme) {
 		topic, err = helper.GetTopic(sinkURIParsed)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfg.SinkURI)))
 			return
 		}
 	}
@@ -291,7 +312,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 	err = sink.Verify(ctx, cfConfig, changefeedID)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfg.SinkURI)))
 		return
 	}
 
@@ -431,7 +452,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 	// verify replicaConfig
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+		_ = c.Error(genSinkURIInvalidError(cfg.SinkURI, err))
 		return
 	}
 	err = replicaCfg.ValidateAndAdjust(sinkURIParsed)
@@ -445,7 +466,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 	if config.IsMQScheme(scheme) {
 		topic, err = helper.GetTopic(sinkURIParsed)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfg.SinkURI)))
 			return
 		}
 	}
@@ -830,14 +851,14 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		)
 		sinkURIParsed, err = url.Parse(cfInfo.SinkURI)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfInfo.SinkURI))
+			_ = c.Error(genSinkURIInvalidError(cfInfo.SinkURI, err))
 			return
 		}
 		scheme := sinkURIParsed.Scheme
 		if config.IsMQScheme(scheme) {
 			topic, err = helper.GetTopic(sinkURIParsed)
 			if err != nil {
-				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfInfo.SinkURI))
+				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfInfo.SinkURI)))
 				return
 			}
 		}
@@ -983,7 +1004,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		// verify replicaConfig
 		sinkURIParsed, err := url.Parse(oldCfInfo.SinkURI)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
+			_ = c.Error(genSinkURIInvalidError(oldCfInfo.SinkURI, err))
 			return
 		}
 		err = oldCfInfo.Config.ValidateAndAdjust(sinkURIParsed)
@@ -997,7 +1018,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		if config.IsMQScheme(scheme) {
 			topic, err = helper.GetTopic(sinkURIParsed)
 			if err != nil {
-				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
+				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(oldCfInfo.SinkURI)))
 				return
 			}
 		}
@@ -1041,7 +1062,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 
 	err = sink.Verify(ctx, oldCfInfo.ToChangefeedConfig(), oldCfInfo.ChangefeedID)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(oldCfInfo.SinkURI)))
 		return
 	}
 

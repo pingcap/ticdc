@@ -356,4 +356,17 @@ func TestCalculateGCSafepoint(t *testing.T) {
 		}, 7, true)
 	db.AddStoppedChangefeed(cf5)
 	require.Equal(t, uint64(7), db.CalculateGlobalGCSafepoint())
+
+	cf6ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf6 := NewChangefeed(cf6ID,
+		&config.ChangeFeedInfo{
+			ChangefeedID: cf6ID,
+			Config:       config.GetDefaultReplicaConfig(),
+			State:        config.StateFailed,
+			Error: &config.RunningError{
+				Code: string(errors.ErrTableRouteConflict.ID()),
+			},
+		}, 6, true)
+	db.AddStoppedChangefeed(cf6)
+	require.Equal(t, uint64(6), db.CalculateGlobalGCSafepoint())
 }

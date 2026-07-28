@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
@@ -135,10 +136,16 @@ func (c *Controller) FinishBootstrap(
 	// Step 4: Handle any remaining working tasks (likely dropped tables)
 	c.handleRemainingWorkingTasks(workingTaskMap, redoWorkingTaskMap)
 
-	// Step 5: Initialize and start sub components
+	// Step 5: Initialize route admission before barrier starts handling bootstrap
+	// block states. The barrier captures the route admin pointer at construction time.
+	admin, err := routing.NewAdmin(c.changefeedID, c.replicaConfig, c.reportError, tables)
+	if err != nil {
+		return nil, err
+	}
+	c.routeAdmin = admin
+
 	c.initializeComponents(allNodesResp)
 
-	// Step 6: Mark the controller as bootstrapped
 	c.bootstrapped = true
 
 	return &heartbeatpb.MaintainerPostBootstrapRequest{
@@ -364,9 +371,9 @@ func (c *Controller) initializeComponents(
 ) {
 	// Initialize barrier
 	if c.enableRedo {
-		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode)
+		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode, nil)
 	}
-	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode)
+	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode, c.routeAdmin)
 
 	// Start scheduler
 	c.taskHandlesMu.Lock()

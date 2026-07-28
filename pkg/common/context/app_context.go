@@ -63,3 +63,13 @@ func GetService[T any](name string) T {
 	v, _ := GetGlobalContext().serviceMap.Load(name)
 	return v.(T)
 }
+
+func TryGetService[T any](name string) (T, bool) {
+	v, ok := GetGlobalContext().serviceMap.Load(name)
+	if !ok {
+		var zero T
+		return zero, false
+	}
+	service, ok := v.(T)
+	return service, ok
+}
