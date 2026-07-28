@@ -51,7 +51,7 @@ func newOptions(
 	if o.IsAssignedVersion {
 		versions := kversion.FromString(o.Version)
 		if versions == nil {
-			return nil, errors.ErrKafkaInvalidVersion.GenWithStack("invalid kafka version %s", o.Version)
+			return nil, errors.ErrKafkaInvalidConfig.GenWithStack("invalid kafka version %s", o.Version)
 		}
 		opts = append(opts, kgo.MaxVersions(versions))
 	}

@@ -16,6 +16,7 @@ package kafka
 import (
 	"context"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pingcap/log"
@@ -37,10 +38,10 @@ type TopicDetail struct {
 // Admin manages and inspects Kafka topics, brokers, configurations, and ACLs.
 type Admin interface {
 	// GetBrokerConfig return the broker level configuration with the `configName`
-	GetBrokerConfig(configName string) (string, error)
+	GetBrokerConfig(configName string) (value string, found bool, err error)
 
 	// GetTopicConfig return the topic level configuration with the `configName`
-	GetTopicConfig(topicName string, configName string) (string, error)
+	GetTopicConfig(topicName string, configName string) (value string, found bool, err error)
 
 	// GetTopicsMeta return all target topics' metadata
 	// if `ignoreTopicError` is true, ignore the topic error and return the metadata of valid topics
@@ -85,35 +86,35 @@ func newAdmin(
 	}, nil
 }
 
-func (a *admin) GetBrokerConfig(configName string) (string, error) {
+func (a *admin) GetBrokerConfig(configName string) (string, bool, error) {
 	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
 	meta, err := a.admin.BrokerMetadata(ctx)
 	if err != nil {
-		return "", errors.Trace(err)
+		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-cluster", "cluster")
 	}
 	if meta.Controller < 0 {
-		return "", errors.ErrKafkaControllerNotAvailable.GenWithStackByArgs()
+		return "", false, errors.ErrKafkaAdminAPI.GenWithStackByArgs("describe-cluster", "cluster")
 	}
 
 	configs, err := a.admin.DescribeBrokerConfigs(ctx, meta.Controller)
 	if err != nil {
-		return "", errors.Trace(err)
+		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", configName)
 	}
 
 	controllerName := strconv.Itoa(int(meta.Controller))
 	resource, err := configs.On(controllerName, nil)
 	if err != nil {
-		return "", errors.Trace(err)
+		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", configName)
 	}
 	if resource.Err != nil {
-		return "", errors.Trace(resource.Err)
+		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, resource.Err, "describe-config", configName)
 	}
 
 	for _, entry := range resource.Configs {
 		if entry.Key == configName {
-			return entry.MaybeValue(), nil
+			return entry.MaybeValue(), true, nil
 		}
 	}
 
@@ -121,25 +122,24 @@ func (a *admin) GetBrokerConfig(configName string) (string, error) {
 		zap.String("keyspace", a.changefeed.Keyspace()),
 		zap.String("changefeed", a.changefeed.Name()),
 		zap.String("configName", configName))
-	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
-		"cannot find the `%s` from the broker's configuration", configName)
+	return "", false, nil
 }
 
-func (a *admin) GetTopicConfig(topicName string, configName string) (string, error) {
+func (a *admin) GetTopicConfig(topicName string, configName string) (string, bool, error) {
 	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
 	configs, err := a.admin.DescribeTopicConfigs(ctx, topicName)
 	if err != nil {
-		return "", errors.Trace(err)
+		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", topicName)
 	}
 
 	resource, err := configs.On(topicName, nil)
 	if err != nil {
-		return "", errors.Trace(err)
+		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", topicName)
 	}
 	if resource.Err != nil {
-		return "", errors.Trace(resource.Err)
+		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, resource.Err, "describe-config", topicName)
 	}
 
 	for _, entry := range resource.Configs {
@@ -149,7 +149,7 @@ func (a *admin) GetTopicConfig(topicName string, configName string) (string, err
 				zap.String("changefeed", a.changefeed.Name()),
 				zap.String("configName", configName),
 				zap.String("configValue", entry.MaybeValue()))
-			return entry.MaybeValue(), nil
+			return entry.MaybeValue(), true, nil
 		}
 	}
 
@@ -157,8 +157,7 @@ func (a *admin) GetTopicConfig(topicName string, configName string) (string, err
 		zap.String("keyspace", a.changefeed.Keyspace()),
 		zap.String("changefeed", a.changefeed.Name()),
 		zap.String("configName", configName))
-	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
-		"cannot find the `%s` from the topic's configuration", configName)
+	return "", false, nil
 }
 
 func (a *admin) GetTopicsMeta(
@@ -174,10 +173,7 @@ func (a *admin) GetTopicsMeta(
 
 	meta, err := a.admin.Metadata(ctx, topics...)
 	if err != nil {
-		if isKafkaAuthorizationFailed(err) {
-			return nil, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err)
-		}
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-topics", strings.Join(topics, ","))
 	}
 
 	return topicDetailsFromMetadata(meta, topics, ignoreTopicError)
@@ -193,7 +189,8 @@ func topicDetailsFromMetadata(
 		detail, ok := meta.Topics[topic]
 		if !ok {
 			if !ignoreTopicError {
-				return nil, errors.ErrKafkaTopicNotFound.GenWithStackByArgs(topic)
+				return nil, errors.WrapError(
+					errors.ErrKafkaAdminAPI, kerr.UnknownTopicOrPartition, "describe-topic", topic)
 			}
 			continue
 		}
@@ -206,21 +203,18 @@ func topicDetailsFromMetadata(
 		}
 		if errors.Is(detail.Err, kerr.UnknownTopicOrPartition) {
 			if !ignoreTopicError {
-				return nil, errors.WrapError(errors.ErrKafkaTopicNotFound, detail.Err, topic)
+				return nil, errors.WrapError(errors.ErrKafkaAdminAPI, detail.Err, "describe-topic", topic)
 			}
 			continue
 		}
-		if isKafkaAuthorizationFailed(detail.Err) {
-			return nil, errors.WrapError(errors.ErrKafkaAuthorizationFailed, detail.Err)
-		}
-		return nil, errors.Trace(detail.Err)
+		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, detail.Err, "describe-topic", topic)
 	}
 	return result, nil
 }
 
 // IsAdminAuthorizationFailed checks whether err is an authorization failure from Kafka admin APIs.
 func IsAdminAuthorizationFailed(err error) bool {
-	return errors.Is(err, errors.ErrKafkaAuthorizationFailed) || isKafkaAuthorizationFailed(err)
+	return isKafkaAuthorizationFailed(err)
 }
 
 func isKafkaAuthorizationFailed(err error) bool {
@@ -240,12 +234,12 @@ func (a *admin) CreateTopic(detail TopicDetail, validateOnly bool) error {
 		responses, err = a.admin.CreateTopics(ctx, detail.NumPartitions, detail.ReplicationFactor, nil, detail.Name)
 	}
 	if err != nil {
-		return errors.Trace(err)
+		return errors.WrapError(errors.ErrKafkaAdminAPI, err, "create-topic", detail.Name)
 	}
 
 	resp, ok := responses[detail.Name]
 	if !ok {
-		return errors.ErrKafkaCreateTopic.GenWithStack("kafka topic create response is missing")
+		return errors.ErrKafkaAdminAPI.GenWithStackByArgs("create-topic", detail.Name)
 	}
 	if resp.Err == nil {
 		return nil
@@ -253,10 +247,10 @@ func (a *admin) CreateTopic(detail TopicDetail, validateOnly bool) error {
 	if errors.Is(resp.Err, kerr.TopicAlreadyExists) {
 		return nil
 	}
-	if isKafkaAuthorizationFailed(resp.Err) {
-		return errors.WrapError(errors.ErrKafkaAuthorizationFailed, resp.Err)
+	if errors.Is(resp.Err, kerr.InvalidReplicationFactor) {
+		return errors.WrapError(errors.ErrKafkaInvalidConfig, resp.Err)
 	}
-	return errors.Trace(resp.Err)
+	return errors.WrapError(errors.ErrKafkaAdminAPI, resp.Err, "create-topic", detail.Name)
 }
 
 func (a *admin) Close() {

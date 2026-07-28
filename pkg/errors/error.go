@@ -127,62 +127,21 @@ var (
 		"kafka send message failed",
 		errors.RFCCodeText("CDC:ErrKafkaSendMessage"),
 	)
-	ErrKafkaProducerClosed = errors.Normalize(
-		"kafka producer closed",
-		errors.RFCCodeText("CDC:ErrKafkaProducerClosed"),
-	)
-	ErrKafkaAsyncSendMessage = errors.Normalize(
-		"kafka async send message failed",
-		errors.RFCCodeText("CDC:ErrKafkaAsyncSendMessage"),
-	)
-	ErrKafkaInvalidPartitionNum = errors.Normalize(
-		"invalid partition num %d",
-		errors.RFCCodeText("CDC:ErrKafkaInvalidPartitionNum"),
-	)
-	ErrKafkaInvalidRequiredAcks = errors.Normalize(
-		"invalid required acks %d, "+
-			"only support these values: 0(NoResponse),1(WaitForLocal) and -1(WaitForAll)",
-		errors.RFCCodeText("CDC:ErrKafkaInvalidRequiredAcks"),
+	ErrKafkaSinkClosed = errors.Normalize(
+		"kafka sink closed",
+		errors.RFCCodeText("CDC:ErrKafkaSinkClosed"),
 	)
 	ErrNewKafkaSink = errors.Normalize(
-		"create kafka sink failed",
+		"new kafka sink",
 		errors.RFCCodeText("CDC:ErrNewKafkaSink"),
-	)
-	ErrKafkaInvalidClientID = errors.Normalize(
-		"invalid kafka client ID '%s'",
-		errors.RFCCodeText("CDC:ErrKafkaInvalidClientID"),
-	)
-	ErrKafkaInvalidVersion = errors.Normalize(
-		"invalid kafka version",
-		errors.RFCCodeText("CDC:ErrKafkaInvalidVersion"),
 	)
 	ErrKafkaInvalidConfig = errors.Normalize(
 		"kafka config invalid",
 		errors.RFCCodeText("CDC:ErrKafkaInvalidConfig"),
 	)
-	ErrKafkaCreateTopic = errors.Normalize(
-		"kafka create topic failed",
-		errors.RFCCodeText("CDC:ErrKafkaCreateTopic"),
-	)
-	ErrKafkaTopicNotFound = errors.Normalize(
-		"kafka topic %s not found",
-		errors.RFCCodeText("CDC:ErrKafkaTopicNotFound"),
-	)
-	ErrKafkaAuthorizationFailed = errors.Normalize(
-		"kafka authorization failed",
-		errors.RFCCodeText("CDC:ErrKafkaAuthorizationFailed"),
-	)
-	ErrKafkaInvalidTopicExpression = errors.Normalize(
-		"invalid topic expression: %s ",
-		errors.RFCCodeText("CDC:ErrKafkaTopicExprInvalid"),
-	)
-	ErrKafkaConfigNotFound = errors.Normalize(
-		"kafka config item not found",
-		errors.RFCCodeText("CDC:ErrKafkaConfigNotFound"),
-	)
-	ErrKafkaControllerNotAvailable = errors.Normalize(
-		"kafka controller is not available",
-		errors.RFCCodeText("CDC:ErrKafkaControllerNotAvailable"),
+	ErrKafkaAdminAPI = errors.Normalize(
+		"kafka admin API %s failed: %s",
+		errors.RFCCodeText("CDC:ErrKafkaAdminAPI"),
 	)
 	ErrPulsarInvalidTopicExpression = errors.Normalize(
 		"invalid topic expression",

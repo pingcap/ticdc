@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 const kafkaTopicManagerTestTopic = "mock_topic"
@@ -37,7 +38,7 @@ func (m *mockAdminWithDeniedDescribe) GetTopicsMeta(
 	ignoreTopicError bool,
 ) (map[string]kafka.TopicDetail, error) {
 	m.describeCount++
-	return nil, errors.ErrKafkaAuthorizationFailed.GenWithStackByArgs()
+	return nil, errors.WrapError(errors.ErrKafkaAdminAPI, kerr.TopicAuthorizationFailed, "describe-topic", topics[0])
 }
 
 func (m *mockAdminWithDeniedDescribe) CreateTopic(
@@ -67,7 +68,7 @@ func (m *mockAdminWithDeniedCreate) CreateTopic(
 	validateOnly bool,
 ) error {
 	m.createTopicCalled = true
-	return errors.ErrKafkaAuthorizationFailed.GenWithStackByArgs()
+	return errors.WrapError(errors.ErrKafkaAdminAPI, kerr.ClusterAuthorizationFailed, "create-topic", detail.Name)
 }
 
 func TestCreateTopic(t *testing.T) {
@@ -119,7 +120,8 @@ func TestCreateTopic(t *testing.T) {
 			func(detail kafka.TopicDetail, validateOnly bool) error {
 				gotFailedTopicDetail = detail
 				gotFailedTopicValidateOnly = validateOnly
-				return errors.New("invalid replication factor")
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
+					"invalid replication factor %d", detail.ReplicationFactor)
 			}),
 	)
 
@@ -170,11 +172,7 @@ func TestCreateTopic(t *testing.T) {
 	manager = newKafkaTopicManager(ctx, topic, changefeedID, admin, cfg)
 	defer manager.Close()
 	_, err = manager.CreateTopicAndWaitUntilVisible(ctx, topic)
-	require.Regexp(
-		t,
-		"kafka create topic failed: invalid replication factor",
-		err,
-	)
+	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 	require.Equal(t, "new-topic-failed", gotFailedTopicDetail.Name)
 	require.False(t, gotFailedTopicValidateOnly)
 }
@@ -189,7 +187,7 @@ func TestCreateTopicValidatesReplicationFactor(t *testing.T) {
 		admin.EXPECT().GetTopicsMeta([]string{topic}, true).
 			Return(map[string]kafka.TopicDetail{}, nil),
 		admin.EXPECT().GetBrokerConfig(kafka.MinInsyncReplicasConfigName).
-			Return("2", nil),
+			Return("2", true, nil),
 	)
 
 	manager := newKafkaTopicManager(
@@ -236,9 +234,9 @@ func TestCreateTopicWaitsUntilVisible(t *testing.T) {
 				return nil
 			}),
 		admin.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
-			nil, errors.ErrKafkaTopicNotFound.GenWithStackByArgs(topic)),
+			nil, errors.WrapError(errors.ErrKafkaAdminAPI, kerr.UnknownTopicOrPartition, "describe-topic", topic)),
 		admin.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
-			nil, errors.ErrKafkaTopicNotFound.GenWithStackByArgs(topic)),
+			nil, errors.WrapError(errors.ErrKafkaAdminAPI, kerr.UnknownTopicOrPartition, "describe-topic", topic)),
 		admin.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
 			map[string]kafka.TopicDetail{
 				topic: {

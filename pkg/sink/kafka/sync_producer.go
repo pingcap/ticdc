@@ -17,7 +17,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -79,7 +78,7 @@ func newSyncProducer(
 
 func (p *syncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
 	if p.closed.Load() {
-		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
+		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 
 	ctx, cancel := context.WithTimeout(p.client.Context(), p.timeout)
@@ -92,25 +91,21 @@ func (p *syncProducer) SendMessage(topic string, partitionNum int32, message *co
 		Value:     message.Value,
 	}
 	err := p.client.ProduceSync(ctx, record).FirstErr()
-
-	failpoint.Inject("KafkaSinkSyncSendMessageError", func() {
-		err = errors.New("kafka sink sync send message injected error")
-	})
-
-	if err != nil {
-		err = AnnotateEventError(
-			p.id.Keyspace(),
-			p.id.Name(),
-			message.LogInfo,
-			err,
-		)
+	if err == nil {
+		return nil
 	}
+	log.Error("send message to kafka failed",
+		zap.String("keyspace", p.id.Keyspace()),
+		zap.String("changefeed", p.id.Name()),
+		zap.String("eventContext", BuildEventLogContext(
+			p.id.Keyspace(), p.id.Name(), message.LogInfo)),
+		zap.Error(err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 
 func (p *syncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
 	if p.closed.Load() {
-		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
+		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 
 	records := make([]*kgo.Record, 0, partitionNum)
@@ -127,19 +122,15 @@ func (p *syncProducer) SendMessages(topic string, partitionNum int32, message *c
 	defer cancel()
 
 	err := p.client.ProduceSync(ctx, records...).FirstErr()
-
-	failpoint.Inject("KafkaSinkSyncSendMessagesError", func() {
-		err = errors.New("kafka sink sync send messages injected error")
-	})
-
-	if err != nil {
-		err = AnnotateEventError(
-			p.id.Keyspace(),
-			p.id.Name(),
-			message.LogInfo,
-			err,
-		)
+	if err == nil {
+		return nil
 	}
+	log.Error("send message to kafka failed",
+		zap.String("keyspace", p.id.Keyspace()),
+		zap.String("changefeed", p.id.Name()),
+		zap.String("eventContext", BuildEventLogContext(
+			p.id.Keyspace(), p.id.Name(), message.LogInfo)),
+		zap.Error(err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 

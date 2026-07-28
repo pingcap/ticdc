@@ -60,12 +60,13 @@ func (mr *MockAdminMockRecorder) CreateTopic(detail, validateOnly interface{}) *
 }
 
 // GetBrokerConfig mocks base method.
-func (m *MockAdmin) GetBrokerConfig(configName string) (string, error) {
+func (m *MockAdmin) GetBrokerConfig(configName string) (string, bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetBrokerConfig", configName)
 	ret0, _ := ret[0].(string)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
 }
 
 // GetBrokerConfig indicates an expected call of GetBrokerConfig.
@@ -75,12 +76,13 @@ func (mr *MockAdminMockRecorder) GetBrokerConfig(configName interface{}) *gomock
 }
 
 // GetTopicConfig mocks base method.
-func (m *MockAdmin) GetTopicConfig(topicName, configName string) (string, error) {
+func (m *MockAdmin) GetTopicConfig(topicName, configName string) (string, bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetTopicConfig", topicName, configName)
 	ret0, _ := ret[0].(string)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
 }
 
 // GetTopicConfig indicates an expected call of GetTopicConfig.

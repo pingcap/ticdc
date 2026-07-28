@@ -26,8 +26,8 @@ func TestSyncProducerClosedReturnsProducerClosed(t *testing.T) {
 	producer := &syncProducer{closed: atomic.NewBool(true)}
 
 	err := producer.SendMessage("topic", 1, &common.Message{})
-	require.ErrorIs(t, err, errors.ErrKafkaProducerClosed)
+	require.ErrorIs(t, err, errors.ErrKafkaSinkClosed)
 
 	err = producer.SendMessages("topic", 1, &common.Message{})
-	require.ErrorIs(t, err, errors.ErrKafkaProducerClosed)
+	require.ErrorIs(t, err, errors.ErrKafkaSinkClosed)
 }

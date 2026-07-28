@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 const (
@@ -94,33 +95,31 @@ func (f *kafkaAdminFixture) getTopicsMeta(
 	return result, nil
 }
 
-func (f *kafkaAdminFixture) getBrokerConfig(configName string) (string, error) {
+func (f *kafkaAdminFixture) getBrokerConfig(configName string) (string, bool, error) {
 	if value, ok := f.brokerConfig[configName]; ok {
-		return value, nil
+		return value, true, nil
 	}
-	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
-		"cannot find the `%s` from the broker's configuration", configName)
+	return "", false, nil
 }
 
-func (f *kafkaAdminFixture) getTopicConfig(topicName string, configName string) (string, error) {
+func (f *kafkaAdminFixture) getTopicConfig(topicName string, configName string) (string, bool, error) {
 	if _, ok := f.topics[topicName]; !ok {
-		return "", errors.ErrKafkaConfigNotFound.GenWithStack(
-			"cannot find the `%s` from the topic's configuration", topicName)
+		return "", false, nil
 	}
 	if value, ok := f.topicConfig[topicName][configName]; ok {
-		return value, nil
+		return value, true, nil
 	}
-	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
-		"cannot find the `%s` from the topic's configuration", configName)
+	return "", false, nil
 }
 
 func (f *kafkaAdminFixture) createTopic(detail TopicDetail, _ bool) error {
 	if detail.ReplicationFactor > mockClusterReplicationFactor {
-		return errors.New("invalid replication factor")
+		return errors.ErrKafkaInvalidConfig.GenWithStack(
+			"invalid replication factor %d", detail.ReplicationFactor)
 	}
 	if _, ok := f.brokerConfig[MinInsyncReplicasConfigName]; !ok &&
 		detail.ReplicationFactor != mockClusterReplicationFactor {
-		return errors.New("policy violation")
+		return errors.WrapError(errors.ErrKafkaAdminAPI, kerr.PolicyViolation, "create-topic", detail.Name)
 	}
 	f.topics[detail.Name] = detail
 	return nil
@@ -248,7 +247,7 @@ func TestCompleteOptions(t *testing.T) {
 	require.NoError(t, err)
 	options = NewOptions()
 	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
-	require.True(t, errors.ErrKafkaInvalidClientID.Equal(err))
+	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 
 	// max-retry accepts non-negative sink-uri values.
 	uri = "kafka://127.0.0.1:9092/abc?max-retry=7"
@@ -346,7 +345,7 @@ func TestSetPartitionNum(t *testing.T) {
 
 	options.PartitionNum = 3
 	err = options.setPartitionNum(changefeedID, 2)
-	require.True(t, errors.ErrKafkaInvalidPartitionNum.Equal(err))
+	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 }
 
 func TestClientID(t *testing.T) {

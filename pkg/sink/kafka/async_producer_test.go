@@ -30,7 +30,7 @@ func TestAsyncSendClosedProducer(t *testing.T) {
 
 	err := producer.AsyncSend(context.Background(), "topic", 0, &codeccommon.Message{})
 
-	require.ErrorIs(t, err, errors.ErrKafkaProducerClosed)
+	require.ErrorIs(t, err, errors.ErrKafkaSinkClosed)
 }
 
 func TestAsyncRunCallbackReturnsQueuedErrorAndCloses(t *testing.T) {

@@ -61,7 +61,7 @@ func GetTopicManagerAndTryCreateTopic(
 	)
 
 	if _, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic); err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaCreateTopic, err)
+		return nil, err
 	}
 
 	return topicManager, nil
@@ -102,7 +102,7 @@ func (m *kafkaTopicManager) GetPartitionNum(
 	// If the topic is not in the metadata, we try to create the topic.
 	partitionNum, err := m.CreateTopicAndWaitUntilVisible(ctx, topic)
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, err
 	}
 
 	return partitionNum, nil
@@ -184,7 +184,7 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum() (map[string]int32, err
 	for _, topic := range topics {
 		detail, ok := topicDetails[topic]
 		if !ok {
-			return nil, errors.ErrKafkaTopicNotFound.GenWithStackByArgs(topic)
+			return nil, errors.ErrKafkaAdminAPI.GenWithStackByArgs("describe-topic", topic)
 		}
 		numPartitions[topic] = detail.NumPartitions
 	}
@@ -226,7 +226,7 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 		}
 		detail, ok := meta[topicName]
 		if !ok {
-			return errors.ErrKafkaTopicNotFound.GenWithStackByArgs(topicName)
+			return errors.ErrKafkaAdminAPI.GenWithStackByArgs("describe-topic", topicName)
 		}
 		log.Info("topic found",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
@@ -274,7 +274,7 @@ func (m *kafkaTopicManager) createTopic(
 			zap.Error(err),
 			zap.Duration("duration", time.Since(start)),
 		)
-		return 0, errors.WrapError(errors.ErrKafkaCreateTopic, err)
+		return 0, err
 	}
 
 	log.Info(
@@ -303,7 +303,7 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 		if kafka.IsAdminAuthorizationFailed(err) {
 			return m.useConfiguredPartitionNum(topicName, err), nil
 		}
-		return 0, errors.Trace(err)
+		return 0, err
 	}
 	if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
 		return numPartition, nil
@@ -314,12 +314,12 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 		if kafka.IsAdminAuthorizationFailed(err) {
 			return m.useConfiguredPartitionNum(topicName, err), nil
 		}
-		return 0, errors.Trace(err)
+		return 0, err
 	}
 
 	err = m.waitUntilTopicVisible(ctx, topicName)
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, err
 	}
 
 	return partitionNum, nil

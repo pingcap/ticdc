@@ -32,6 +32,7 @@ func TestTopicDetailsFromMetadata(t *testing.T) {
 		ignoreTopicError bool
 		expected         map[string]TopicDetail
 		expectedError    error
+		expectedCause    error
 	}{
 		{
 			name: "success",
@@ -55,12 +56,14 @@ func TestTopicDetailsFromMetadata(t *testing.T) {
 			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
 				topic: {Topic: topic, Err: kerr.UnknownTopicOrPartition},
 			}},
-			expectedError: errors.ErrKafkaTopicNotFound,
+			expectedError: errors.ErrKafkaAdminAPI,
+			expectedCause: kerr.UnknownTopicOrPartition,
 		},
 		{
 			name:          "return missing topic",
 			metadata:      kadm.Metadata{Topics: kadm.TopicDetails{}},
-			expectedError: errors.ErrKafkaTopicNotFound,
+			expectedError: errors.ErrKafkaAdminAPI,
+			expectedCause: kerr.UnknownTopicOrPartition,
 		},
 		{
 			name: "do not ignore authorization failure",
@@ -68,7 +71,8 @@ func TestTopicDetailsFromMetadata(t *testing.T) {
 				topic: {Topic: topic, Err: kerr.TopicAuthorizationFailed},
 			}},
 			ignoreTopicError: true,
-			expectedError:    errors.ErrKafkaAuthorizationFailed,
+			expectedError:    errors.ErrKafkaAdminAPI,
+			expectedCause:    kerr.TopicAuthorizationFailed,
 		},
 	}
 
@@ -79,6 +83,9 @@ func TestTopicDetailsFromMetadata(t *testing.T) {
 			actual, err := topicDetailsFromMetadata(tc.metadata, []string{topic}, tc.ignoreTopicError)
 			if tc.expectedError != nil {
 				require.ErrorIs(t, err, tc.expectedError)
+				if tc.expectedCause != nil {
+					require.ErrorIs(t, err, tc.expectedCause)
+				}
 				return
 			}
 			require.NoError(t, err)

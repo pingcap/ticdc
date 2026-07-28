@@ -99,8 +99,23 @@ func TestShouldFailChangefeed(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "ErrKafkaControllerNotAvailable should return false",
-			err:      ErrKafkaControllerNotAvailable.GenWithStackByArgs(),
+			name:     "ErrNewKafkaSink should return false",
+			err:      ErrNewKafkaSink.GenWithStackByArgs(),
+			expected: false,
+		},
+		{
+			name:     "ErrKafkaAdminAPI should return false",
+			err:      ErrKafkaAdminAPI.GenWithStackByArgs("describe-topic", "test-topic"),
+			expected: false,
+		},
+		{
+			name:     "ErrKafkaSendMessage should return false",
+			err:      ErrKafkaSendMessage.GenWithStackByArgs(),
+			expected: false,
+		},
+		{
+			name:     "ErrKafkaSinkClosed should return false",
+			err:      ErrKafkaSinkClosed.GenWithStackByArgs(),
 			expected: false,
 		},
 		{

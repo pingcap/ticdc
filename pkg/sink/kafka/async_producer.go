@@ -17,7 +17,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -98,7 +97,7 @@ func (p *asyncProducer) AsyncSend(
 	message *common.Message,
 ) error {
 	if p.closed.Load() {
-		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
+		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 
 	select {
@@ -106,23 +105,6 @@ func (p *asyncProducer) AsyncSend(
 		return context.Cause(ctx)
 	default:
 	}
-
-	var (
-		keyspace   = p.changefeedID.Keyspace()
-		changefeed = p.changefeedID.Name()
-	)
-
-	failpoint.Inject("KafkaSinkAsyncSendError", func() {
-		log.Info("KafkaSinkAsyncSendError error injected",
-			zap.String("keyspace", keyspace), zap.String("changefeed", changefeed))
-		p.enqueueAsyncSendError(
-			keyspace,
-			changefeed,
-			message.LogInfo,
-			errors.New("kafka sink injected error"),
-		)
-		failpoint.Return(nil)
-	})
 
 	record := &kgo.Record{
 		Topic:     topic,
@@ -135,11 +117,7 @@ func (p *asyncProducer) AsyncSend(
 	logInfo := message.LogInfo
 	promise := func(_ *kgo.Record, err error) {
 		if err != nil {
-			p.enqueueAsyncSendError(
-				keyspace, changefeed,
-				logInfo,
-				err,
-			)
+			p.enqueueAsyncSendError(logInfo, err)
 			return
 		}
 		if callback != nil {
@@ -151,19 +129,17 @@ func (p *asyncProducer) AsyncSend(
 }
 
 func (p *asyncProducer) enqueueAsyncSendError(
-	keyspace string,
-	changefeed string,
 	logInfo *common.MessageLogInfo,
 	err error,
 ) {
-	errWithInfo := AnnotateEventError(
-		keyspace,
-		changefeed,
-		logInfo,
-		err,
-	)
+	log.Error("send message to kafka failed",
+		zap.String("keyspace", p.changefeedID.Keyspace()),
+		zap.String("changefeed", p.changefeedID.Name()),
+		zap.String("eventContext", BuildEventLogContext(
+			p.changefeedID.Keyspace(), p.changefeedID.Name(), logInfo)),
+		zap.Error(err))
 	select {
-	case p.errCh <- errors.WrapError(errors.ErrKafkaAsyncSendMessage, errWithInfo):
+	case p.errCh <- errors.WrapError(errors.ErrKafkaSendMessage, err):
 	// todo: remove this default after support dispatcher recover logic.
 	default:
 	}
