@@ -52,8 +52,6 @@ import (
 	"go.uber.org/zap"
 )
 
-<<<<<<< HEAD
-=======
 // validateChangefeedIDParam extracts and validates the changefeed ID from the
 // URL path parameter. On failure it writes the error to c and returns false.
 func validateChangefeedIDParam(c *gin.Context) (common.ChangeFeedDisplayName, bool) {
@@ -75,7 +73,6 @@ func genSinkURIInvalidError(sinkURI string, err error) error {
 		errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err), maskSinkURIForError(sinkURI))
 }
 
->>>>>>> d38ea0a5d (api,sink: mask sink uri secrets (#5093))
 // CreateChangefeed handles create changefeed request,
 // it returns the changefeed's changefeedInfo that it just created
 // CreateChangefeed creates a changefeed

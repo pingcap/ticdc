@@ -14,7 +14,7 @@
 package v2
 
 import (
-<<<<<<< HEAD
+	"net/url"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -79,12 +79,7 @@ func TestVerifyRouteConflict(t *testing.T) {
 	require.Contains(t, err.Error(), "target `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db2`.`orders`")
-=======
-	"net/url"
-	"testing"
-
-	"github.com/stretchr/testify/require"
-)
+}
 
 func TestMaskSinkURIForError(t *testing.T) {
 	sinkURI := "kafka://127.0.0.1:9092/topic?protocol=canal-json" +
@@ -113,5 +108,4 @@ func mustParseURLError(t *testing.T, rawURL string) error {
 	_, err := url.Parse(rawURL)
 	require.Error(t, err)
 	return err
->>>>>>> d38ea0a5d (api,sink: mask sink uri secrets (#5093))
 }
