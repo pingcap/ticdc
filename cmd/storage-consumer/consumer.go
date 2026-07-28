@@ -302,18 +302,9 @@ func (c *consumer) appendDMLEvents(
 		return errors.Trace(err)
 	}
 	var decoder common.Decoder
-
-	tableInfo, err := tableDetail.ToTableInfo()
-	if err != nil {
-		return errors.Trace(err)
-	}
-
 	switch c.codecCfg.Protocol {
 	case config.ProtocolCsv:
-<<<<<<< HEAD
-		decoder, err = csv.NewDecoder(ctx, c.codecCfg, tableInfo, content)
-=======
-		tableInfo := schemaFile.TableInfo()
+		tableInfo, _ := tableDetail.ToTableInfo()
 		// CSV rows contain selected values without column names, so decode with the same selector.
 		decoder, err = csv.NewDecoderWithColumnSelector(
 			ctx,
@@ -322,7 +313,6 @@ func (c *consumer) appendDMLEvents(
 			content,
 			c.columnSelectors.GetForTableInfo(tableInfo),
 		)
->>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 		if err != nil {
 			return errors.Trace(err)
 		}
