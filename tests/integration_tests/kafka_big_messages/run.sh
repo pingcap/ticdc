@@ -154,6 +154,9 @@ function run_protocol_case() {
 	# Lower the topic limit after the producer has started. The encoder and
 	# producer still accept the message, then Kafka rejects it asynchronously.
 	if [ "$protocol_case" = "async_error" ]; then
+		local ready_database="${database_name}_ready"
+		run_sql "CREATE DATABASE ${ready_database}; CREATE TABLE ${ready_database}.ready(id INT PRIMARY KEY); INSERT INTO ${ready_database}.ready VALUES (1)" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+		ensure "$TABLE_CHECK_RETRIES" "run_sql 'SELECT id FROM ${ready_database}.ready' '$DOWN_TIDB_HOST' '$DOWN_TIDB_PORT' && check_contains 'id: 1'"
 		kafka_topic --topic "$topic_name" --max-message-bytes "$SMALL_TOPIC_LIMIT" --alter
 	fi
 
