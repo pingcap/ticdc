@@ -204,8 +204,6 @@ func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testin
 	require.False(t, ok)
 }
 
-<<<<<<< HEAD
-=======
 func TestPreCheckForSchedulerHandler_MaintainerEpochFence(t *testing.T) {
 	t.Parallel()
 
@@ -434,7 +432,6 @@ func TestRedoResolvedTsForwardMessageHandlerDropsStaleMaintainerEpoch(t *testing
 	require.Equal(t, uint64(120), dispatcherManager.redoGlobalTs.Load())
 }
 
->>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 func TestDispatcherManagerIsRedoReadyRequiresPublication(t *testing.T) {
 	t.Parallel()
 

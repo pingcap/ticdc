@@ -178,15 +178,10 @@ func newTestDispatcherOrchestrator() *DispatcherOrchestrator {
 	// This test only exercises local routing through RecvMaintainerRequest, so it
 	// needs shard state and the dispatcher manager map but not a message center.
 	orchestrator := &DispatcherOrchestrator{
-<<<<<<< HEAD
-		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		shards:             make([]*orchestratorShard, dispatcherOrchestratorShardCount),
-=======
 		dispatcherManagers:             make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
 		initializingDispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
 		closedMaintainerEpochs:         make(map[common.ChangeFeedID]uint64),
 		shards:                         make([]*orchestratorShard, dispatcherOrchestratorShardCount),
->>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 	}
 	for i := range orchestrator.shards {
 		orchestrator.shards[i] = newOrchestratorShard(func(msg *messaging.TargetMessage) {})
@@ -478,8 +473,6 @@ func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, pendingMessageKey{changefeedID: cfID, msgType: messaging.TypeMaintainerCloseRequest}, key)
 }
-<<<<<<< HEAD
-=======
 
 func TestDispatcherOrchestratorLocalFenceDropsNewMessages(t *testing.T) {
 	mc, _, stop := messaging.NewMessageCenterForTest(t)
@@ -799,8 +792,6 @@ func TestValidateBootstrapNilRedoTriggerRejectsExistingRedoTrigger(t *testing.T)
 		dispatcher.NewSchemaIDToDispatchers(),
 		false,
 		false,
-		0,
-		0,
 		nil,
 		nil,
 	)
@@ -1144,4 +1135,3 @@ func newBootstrapResponseTestScheduleRequest(
 		MaintainerEpoch: maintainerEpoch,
 	}
 }
->>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))

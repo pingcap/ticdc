@@ -200,19 +200,9 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			appcontext.GetService[*dispatchermanager.HeartBeatCollector](appcontext.HeartbeatCollector).RemoveDispatcherManager(cfId)
 
 			response := &heartbeatpb.MaintainerBootstrapResponse{
-<<<<<<< HEAD
-				ChangefeedID: req.ChangefeedID,
-				Err: &heartbeatpb.RunningError{
-					Time:    time.Now().String(),
-					Node:    from.String(),
-					Code:    string(errors.ErrorCode(err)),
-					Message: err.Error(),
-				},
-=======
 				ChangefeedID:    req.ChangefeedID,
 				MaintainerEpoch: maintainerEpoch,
 				Err:             newRunningError(from, err),
->>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 			}
 			log.Error("create new dispatcher manager failed",
 				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
@@ -223,42 +213,6 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		m.dispatcherManagers[cfId] = manager
 		m.mutex.Unlock()
 		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
-<<<<<<< HEAD
-	} else {
-		// Check and potentially add a table trigger event dispatcher.
-		// This is necessary during maintainer node migration, as the existing
-		// dispatcher manager on the new node may not have a table trigger
-		// event dispatcher configured yet.
-		if req.TableTriggerEventDispatcherId != nil {
-			tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
-			if tableTriggerDispatcher == nil {
-				err = manager.NewTableTriggerEventDispatcher(
-					req.TableTriggerEventDispatcherId,
-					req.StartTs,
-					false,
-				)
-				if err != nil {
-					log.Error("failed to create new table trigger event dispatcher",
-						zap.Stringer("changefeedID", cfId), zap.Error(err))
-					return m.handleDispatcherError(from, req.ChangefeedID, err)
-				}
-			}
-		}
-		if req.TableTriggerRedoDispatcherId != nil {
-			tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher()
-			if tableTriggerRedoDispatcher == nil {
-				err = manager.NewTableTriggerRedoDispatcher(
-					req.TableTriggerRedoDispatcherId,
-					req.StartTs,
-					false,
-				)
-				if err != nil {
-					log.Error("failed to create new table trigger redo dispatcher",
-						zap.Stringer("changefeedID", cfId), zap.Error(err))
-					return m.handleDispatcherError(from, req.ChangefeedID, err)
-				}
-			}
-=======
 	}
 
 	manager.MaintainerFenceMu.Lock()
@@ -315,7 +269,6 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				from, req.ChangefeedID, maintainerEpoch, cfId,
 				redoTrigger.name, err,
 			)
->>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 		}
 	}
 
@@ -541,10 +494,6 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			zap.Any("changefeedID", cfId.Name()))
 		return nil
 	}
-<<<<<<< HEAD
-	if manager.GetTableTriggerEventDispatcher().GetId() !=
-		common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId) {
-=======
 	manager.MaintainerFenceMu.Lock()
 	if !manager.IsMaintainerRequestAllowed(from, req.MaintainerEpoch) {
 		log.Warn("drop stale maintainer post bootstrap request",
@@ -568,7 +517,6 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	expectedDispatcherID := tableTriggerDispatcher.GetId()
 	actualDispatcherID := common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId)
 	if expectedDispatcherID != actualDispatcherID {
->>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 		log.Error("Receive post bootstrap request but the table trigger event dispatcher id is not match",
 			zap.Any("changefeedID", cfId.Name()),
 			zap.String("expectedDispatcherID", expectedDispatcherID.String()),
@@ -577,36 +525,19 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		err := errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 			GenWithStackByArgs("Receive post bootstrap request but the table trigger event dispatcher id is not match")
 
-<<<<<<< HEAD
-		response := &heartbeatpb.MaintainerPostBootstrapResponse{
-			ChangefeedID: req.ChangefeedID,
-			Err: &heartbeatpb.RunningError{
-				Time:    time.Now().String(),
-				Node:    from.String(),
-				Code:    string(errors.ErrorCode(err)),
-				Message: err.Error(),
-			},
-		}
-
-		return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
-=======
 		manager.MaintainerFenceMu.Unlock()
 		return m.sendPostBootstrapErrorResponse(from, req, err)
->>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 	}
 
 	// init table schema store
 	err := manager.InitalizeTableTriggerEventDispatcher(req.Schemas)
 	if err != nil {
-<<<<<<< HEAD
-=======
 		if dispatchermanager.IsWritePathClosedError(err) {
 			log.Info("dispatcher manager write path closed while initializing table trigger event dispatcher",
 				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 			manager.MaintainerFenceMu.Unlock()
 			return nil
 		}
->>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 		log.Error("failed to initialize table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 		return m.handleDispatcherError(from, req.ChangefeedID, err)
@@ -614,15 +545,12 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	if manager.IsRedoReady() {
 		err := manager.InitalizeTableTriggerRedoDispatcher(req.RedoSchemas)
 		if err != nil {
-<<<<<<< HEAD
-=======
 			if dispatchermanager.IsWritePathClosedError(err) {
 				log.Info("dispatcher manager write path closed while initializing table trigger redo dispatcher",
 					zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 				manager.MaintainerFenceMu.Unlock()
 				return nil
 			}
->>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 			log.Error("failed to initialize table trigger redo dispatcher",
 				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 			return m.handleDispatcherError(from, req.ChangefeedID, err)
@@ -759,19 +687,9 @@ func (m *DispatcherOrchestrator) handleDispatcherError(
 	err error,
 ) error {
 	response := &heartbeatpb.MaintainerBootstrapResponse{
-<<<<<<< HEAD
-		ChangefeedID: changefeedID,
-		Err: &heartbeatpb.RunningError{
-			Time:    time.Now().String(),
-			Node:    from.String(),
-			Code:    string(errors.ErrorCode(err)),
-			Message: err.Error(),
-		},
-=======
 		ChangefeedID:    changefeedID,
 		MaintainerEpoch: maintainerEpoch,
 		Err:             newRunningError(from, err),
->>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 	}
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
@@ -815,9 +733,6 @@ func retrieveOperatorsForBootstrapResponse(
 	manager *dispatchermanager.DispatcherManager,
 	response *heartbeatpb.MaintainerBootstrapResponse,
 ) {
-<<<<<<< HEAD
-	manager.GetCurrentOperatorMap().Range(func(key, value any) bool {
-=======
 	// The caller holds MaintainerFenceMu while building this response, so the
 	// owner snapshot cannot change during the operator-map iteration.
 	currentMaintainer := manager.GetMaintainerID()
@@ -838,7 +753,6 @@ func retrieveOperatorsForBootstrapResponse(
 	}
 
 	manager.GetCurrentOperatorMap().Range(func(_, value any) bool {
->>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 		req := value.(dispatchermanager.SchedulerDispatcherRequest)
 		requestAllowed := dispatchermanager.IsMaintainerRequestAllowedBySnapshot(
 			req.From,

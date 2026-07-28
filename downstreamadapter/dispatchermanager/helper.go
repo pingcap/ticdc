@@ -276,9 +276,6 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 		log.Warn("scheduleDispatcherRequest has no valid operator key, skip")
 		return common.DispatcherID{}, false
 	}
-<<<<<<< HEAD
-
-=======
 	if !isMaintainerControlMessageAllowed(
 		dispatcherManager,
 		"drop stale schedule dispatcher request",
@@ -290,7 +287,6 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 	) {
 		return common.DispatcherID{}, false
 	}
->>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 	isRedo := common.IsRedoMode(req.Config.Mode)
 	if isRedo && !dispatcherManager.IsRedoReady() {
 		return common.DispatcherID{}, false
@@ -566,8 +562,6 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 	return false
 }
 
-<<<<<<< HEAD
-=======
 // isHeartBeatResponseAllowed drops dispatcher heartbeats from stale maintainers
 // before they can update table state or complete scheduler operators.
 func isHeartBeatResponseAllowed(dispatcherManager *DispatcherManager, heartbeatResponse HeartBeatResponse) bool {
@@ -581,7 +575,6 @@ func isHeartBeatResponseAllowed(dispatcherManager *DispatcherManager, heartbeatR
 	)
 }
 
->>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 func (h *HeartBeatResponseHandler) GetSize(event HeartBeatResponse) int   { return 0 }
 func (h *HeartBeatResponseHandler) IsPaused(event HeartBeatResponse) bool { return false }
 func (h *HeartBeatResponseHandler) GetArea(path common.GID, dest *DispatcherManager) int {
@@ -899,8 +892,6 @@ func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherMana
 	}
 
 	mergeDispatcherRequest := reqs[0]
-<<<<<<< HEAD
-=======
 	dispatcherManager.MaintainerFenceMu.Lock()
 	defer dispatcherManager.MaintainerFenceMu.Unlock()
 	if !isMaintainerControlMessageAllowed(
@@ -913,7 +904,6 @@ func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherMana
 	) {
 		return false
 	}
->>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 	dispatcherIDs := make([]common.DispatcherID, 0, len(mergeDispatcherRequest.DispatcherIDs))
 	for _, id := range mergeDispatcherRequest.DispatcherIDs {
 		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherIDFromPB(id))

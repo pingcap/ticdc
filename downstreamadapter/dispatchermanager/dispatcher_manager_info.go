@@ -55,9 +55,6 @@ func (e *DispatcherManager) GetMaintainerID() node.ID {
 func (e *DispatcherManager) SetMaintainerID(maintainerID node.ID) {
 	e.meta.Lock()
 	defer e.meta.Unlock()
-<<<<<<< HEAD
-	e.meta.maintainerID = maintainerID
-=======
 	if !e.canUpdateMaintainerLocked(from, maintainerEpoch) {
 		return false
 	}
@@ -132,7 +129,6 @@ func IsMaintainerRequestAllowedBySnapshot(
 		return currentMaintainerEpoch == 0 && (currentMaintainer == "" || currentMaintainer == from)
 	}
 	return currentMaintainerEpoch == maintainerEpoch && currentMaintainer == from
->>>>>>> c1fd88c93 (downstreamadapter: harden table trigger takeover (#5436))
 }
 
 func (e *DispatcherManager) GetMaintainerEpoch() uint64 {
