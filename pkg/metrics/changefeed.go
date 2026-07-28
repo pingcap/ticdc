@@ -91,6 +91,17 @@ var (
 		}, []string{getKeyspaceLabel(), "changefeed"})
 )
 
+func DeleteChangefeedCheckpointMetrics(keyspace, changefeed string) {
+	ChangefeedCheckpointTsGauge.DeleteLabelValues(keyspace, changefeed)
+	ChangefeedCheckpointTsLagGauge.DeleteLabelValues(keyspace, changefeed)
+}
+
+func ResetOwnerChangefeedMetrics() {
+	ChangefeedStatusGauge.Reset()
+	ChangefeedCheckpointTsGauge.Reset()
+	ChangefeedCheckpointTsLagGauge.Reset()
+}
+
 func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MaintainerCheckpointTsGauge)
 	registry.MustRegister(MaintainerCheckpointTsLagGauge)
