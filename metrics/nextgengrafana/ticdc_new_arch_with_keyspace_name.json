@@ -6313,7 +6313,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_kafka_producer_outgoing_byte_rate{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, broker)",
+              "expr": "sum(rate(ticdc_sink_kafka_producer_outgoing_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance, broker)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -6471,7 +6471,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The request latency in ms for all brokers.\n\nvalue = request latency histogram's mean",
+          "description": "Kafka request end-to-end duration in seconds. Average and p99 are calculated from one-minute histogram rates.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -6519,12 +6519,21 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_kafka_producer_request_latency{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, broker, type)",
+              "expr": "sum(rate(ticdc_sink_kafka_producer_request_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance, broker) / sum(rate(ticdc_sink_kafka_producer_request_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance, broker)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{broker}}-{{type}}",
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{broker}}-avg",
               "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_sink_kafka_producer_request_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (le, keyspace_name, changefeed, instance, broker))",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{broker}}-p99",
+              "refId": "B"
             }
           ],
           "thresholds": [],
@@ -6622,11 +6631,11 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_kafka_producer_request_rate{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, broker)",
+              "expr": "sum(rate(ticdc_sink_kafka_producer_requests_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance, broker, result)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{broker}}",
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{broker}}-{{result}}",
               "refId": "A"
             }
           ],
@@ -6677,7 +6686,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Records count per request send to the kafka\nvalue = one-minute moving average of response receive rate",
+          "description": "Records in each successfully written topic-partition batch. Average and p99 are calculated from one-minute histogram rates.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -6725,19 +6734,28 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_kafka_producer_records_per_request{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, type)",
+              "expr": "sum(rate(ticdc_sink_kafka_producer_records_per_batch_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance) / sum(rate(ticdc_sink_kafka_producer_records_per_batch_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{type}}",
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-avg",
               "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_sink_kafka_producer_records_per_batch_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (le, keyspace_name, changefeed, instance))",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-p99",
+              "refId": "B"
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Kafka Records Per Request",
+          "title": "Kafka Records Per Batch",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -6780,7 +6798,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The compression ratio times 100 of record batches for all topics. Compression ratio = Size of original data / Size of compressed data * 100",
+          "description": "Compression ratio of successfully written batches. Compression ratio = uncompressed byte rate / compressed byte rate * 100.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -6826,11 +6844,11 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_kafka_producer_compression_ratio{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, type)",
+              "expr": "100 * sum(rate(ticdc_sink_kafka_producer_uncompressed_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance) / sum(rate(ticdc_sink_kafka_producer_compressed_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{type}}",
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}",
               "refId": "A"
             }
           ],

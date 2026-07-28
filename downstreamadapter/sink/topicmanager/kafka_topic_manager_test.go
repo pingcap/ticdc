@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
-	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 const kafkaTopicManagerTestTopic = "mock_topic"
@@ -38,14 +37,11 @@ func (m *mockAdminWithDeniedDescribe) GetTopicsMeta(
 	ignoreTopicError bool,
 ) (map[string]kafka.TopicDetail, error) {
 	m.describeCount++
-	if ignoreTopicError {
-		return map[string]kafka.TopicDetail{}, nil
-	}
-	return nil, kerr.TopicAuthorizationFailed
+	return nil, errors.ErrKafkaAuthorizationFailed.GenWithStackByArgs()
 }
 
 func (m *mockAdminWithDeniedDescribe) CreateTopic(
-	detail *kafka.TopicDetail,
+	detail kafka.TopicDetail,
 	validateOnly bool,
 ) error {
 	m.createTopicCalled = true
@@ -67,11 +63,11 @@ func (m *mockAdminWithDeniedCreate) GetTopicsMeta(
 }
 
 func (m *mockAdminWithDeniedCreate) CreateTopic(
-	detail *kafka.TopicDetail,
+	detail kafka.TopicDetail,
 	validateOnly bool,
 ) error {
 	m.createTopicCalled = true
-	return kerr.ClusterAuthorizationFailed
+	return errors.ErrKafkaAuthorizationFailed.GenWithStackByArgs()
 }
 
 func TestCreateTopic(t *testing.T) {
@@ -88,9 +84,9 @@ func TestCreateTopic(t *testing.T) {
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	ctx := context.Background()
-	var gotNewTopicDetail *kafka.TopicDetail
+	var gotNewTopicDetail kafka.TopicDetail
 	var gotNewTopicValidateOnly bool
-	var gotFailedTopicDetail *kafka.TopicDetail
+	var gotFailedTopicDetail kafka.TopicDetail
 	var gotFailedTopicValidateOnly bool
 	gomock.InOrder(
 		admin.EXPECT().GetTopicsMeta([]string{kafkaTopicManagerTestTopic}, true).Return(
@@ -102,10 +98,8 @@ func TestCreateTopic(t *testing.T) {
 			}, nil),
 		admin.EXPECT().GetTopicsMeta([]string{"new-topic"}, true).Return(
 			map[string]kafka.TopicDetail{}, nil),
-		admin.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).Return(
-			map[string]kafka.TopicDetail{}, nil),
 		admin.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
-			func(detail *kafka.TopicDetail, validateOnly bool) error {
+			func(detail kafka.TopicDetail, validateOnly bool) error {
 				gotNewTopicDetail = detail
 				gotNewTopicValidateOnly = validateOnly
 				return nil
@@ -119,14 +113,10 @@ func TestCreateTopic(t *testing.T) {
 			}, nil),
 		admin.EXPECT().GetTopicsMeta([]string{"new-topic2"}, true).Return(
 			map[string]kafka.TopicDetail{}, nil),
-		admin.EXPECT().GetTopicsMeta([]string{"new-topic2"}, false).Return(
-			map[string]kafka.TopicDetail{}, nil),
 		admin.EXPECT().GetTopicsMeta([]string{"new-topic-failed"}, true).Return(
 			map[string]kafka.TopicDetail{}, nil),
-		admin.EXPECT().GetTopicsMeta([]string{"new-topic-failed"}, false).Return(
-			map[string]kafka.TopicDetail{}, nil),
 		admin.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
-			func(detail *kafka.TopicDetail, validateOnly bool) error {
+			func(detail kafka.TopicDetail, validateOnly bool) error {
 				gotFailedTopicDetail = detail
 				gotFailedTopicValidateOnly = validateOnly
 				return errors.New("invalid replication factor")
@@ -143,7 +133,7 @@ func TestCreateTopic(t *testing.T) {
 	partitionNum, err = manager.CreateTopicAndWaitUntilVisible(ctx, "new-topic")
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
-	require.Equal(t, &kafka.TopicDetail{
+	require.Equal(t, kafka.TopicDetail{
 		Name:              "new-topic",
 		NumPartitions:     2,
 		ReplicationFactor: 1,
@@ -185,7 +175,6 @@ func TestCreateTopic(t *testing.T) {
 		"kafka create topic failed: invalid replication factor",
 		err,
 	)
-	require.NotNil(t, gotFailedTopicDetail)
 	require.Equal(t, "new-topic-failed", gotFailedTopicDetail.Name)
 	require.False(t, gotFailedTopicValidateOnly)
 }
@@ -198,8 +187,6 @@ func TestCreateTopicValidatesReplicationFactor(t *testing.T) {
 	topic := "new-topic"
 	gomock.InOrder(
 		admin.EXPECT().GetTopicsMeta([]string{topic}, true).
-			Return(map[string]kafka.TopicDetail{}, nil),
-		admin.EXPECT().GetTopicsMeta([]string{topic}, false).
 			Return(map[string]kafka.TopicDetail{}, nil),
 		admin.EXPECT().GetBrokerConfig(kafka.MinInsyncReplicasConfigName).
 			Return("2", nil),
@@ -238,11 +225,9 @@ func TestCreateTopicWaitsUntilVisible(t *testing.T) {
 	gomock.InOrder(
 		admin.EXPECT().GetTopicsMeta([]string{topic}, true).Return(
 			map[string]kafka.TopicDetail{}, nil),
-		admin.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
-			map[string]kafka.TopicDetail{}, nil),
 		admin.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
-			func(detail *kafka.TopicDetail, validateOnly bool) error {
-				require.Equal(t, &kafka.TopicDetail{
+			func(detail kafka.TopicDetail, validateOnly bool) error {
+				require.Equal(t, kafka.TopicDetail{
 					Name:              topic,
 					NumPartitions:     2,
 					ReplicationFactor: 1,
@@ -251,9 +236,9 @@ func TestCreateTopicWaitsUntilVisible(t *testing.T) {
 				return nil
 			}),
 		admin.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
-			nil, errors.New("unknown topic or partition")),
+			nil, errors.ErrKafkaTopicNotFound.GenWithStackByArgs(topic)),
 		admin.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
-			nil, errors.New("unknown topic or partition")),
+			nil, errors.ErrKafkaTopicNotFound.GenWithStackByArgs(topic)),
 		admin.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
 			map[string]kafka.TopicDetail{
 				topic: {
@@ -295,7 +280,7 @@ func TestCreateTopicWithTopicDescribeDenied(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
 	require.False(t, admin.createTopicCalled)
-	require.Equal(t, 2, admin.describeCount)
+	require.Equal(t, 1, admin.describeCount)
 
 	partitions, ok := manager.topics.Load("precreated-topic")
 	require.True(t, ok)
@@ -324,7 +309,7 @@ func TestCreateTopicWithCreateDenied(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
 	require.True(t, admin.createTopicCalled)
-	require.Equal(t, 2, admin.describeCount)
+	require.Equal(t, 1, admin.describeCount)
 
 	partitions, ok := manager.topics.Load("precreated-topic")
 	require.True(t, ok)

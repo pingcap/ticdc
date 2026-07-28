@@ -15,6 +15,7 @@ package kafka
 
 import (
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -29,33 +30,79 @@ import (
 type metricsHook struct {
 	keyspace   string
 	changefeed string
+
+	brokers sync.Map
+
+	recordsPerBatch        prometheus.Observer
+	uncompressedBytesTotal prometheus.Counter
+	compressedBytesTotal   prometheus.Counter
+}
+
+type brokerMetrics struct {
+	outgoingBytesTotal prometheus.Counter
+	requestsSuccess    prometheus.Counter
+	requestsWriteError prometheus.Counter
+	responsesSuccess   prometheus.Counter
+	responsesReadError prometheus.Counter
+	requestsInFlight   prometheus.Gauge
+	requestDuration    prometheus.Observer
 }
 
 const (
-	metricAvg = "avg"
-	metricP99 = "p99"
+	metricResultSuccess    = "success"
+	metricResultWriteError = "write_error"
+	metricResultReadError  = "read_error"
 )
 
 func newKafkaMetricsHook(changefeedID common.ChangeFeedID) *metricsHook {
+	keyspace := changefeedID.Keyspace()
+	changefeed := changefeedID.Name()
 	return &metricsHook{
-		keyspace:   changefeedID.Keyspace(),
-		changefeed: changefeedID.Name(),
+		keyspace:               keyspace,
+		changefeed:             changefeed,
+		recordsPerBatch:        recordsPerBatch.WithLabelValues(keyspace, changefeed),
+		uncompressedBytesTotal: uncompressedBytesTotal.WithLabelValues(keyspace, changefeed),
+		compressedBytesTotal:   compressedBytesTotal.WithLabelValues(keyspace, changefeed),
 	}
 }
 
-// CleanupMetrics removes Kafka sink metric series for a changefeed when its sink exits.
+func (h *metricsHook) broker(nodeID int32) *brokerMetrics {
+	if cached, ok := h.brokers.Load(nodeID); ok {
+		return cached.(*brokerMetrics)
+	}
+
+	brokerID := strconv.Itoa(int(nodeID))
+	metrics := &brokerMetrics{
+		outgoingBytesTotal: outgoingBytesTotal.WithLabelValues(h.keyspace, h.changefeed, brokerID),
+		requestsSuccess: requestsTotal.WithLabelValues(
+			h.keyspace, h.changefeed, brokerID, metricResultSuccess),
+		requestsWriteError: requestsTotal.WithLabelValues(
+			h.keyspace, h.changefeed, brokerID, metricResultWriteError),
+		responsesSuccess: responsesTotal.WithLabelValues(
+			h.keyspace, h.changefeed, brokerID, metricResultSuccess),
+		responsesReadError: responsesTotal.WithLabelValues(
+			h.keyspace, h.changefeed, brokerID, metricResultReadError),
+		requestsInFlight: requestsInFlightGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID),
+		requestDuration:  requestDuration.WithLabelValues(h.keyspace, h.changefeed, brokerID),
+	}
+	actual, _ := h.brokers.LoadOrStore(nodeID, metrics)
+	return actual.(*brokerMetrics)
+}
+
+// CleanupMetrics removes Kafka sink metric series after all of its clients are closed.
 func CleanupMetrics(changefeedID common.ChangeFeedID) {
 	labels := prometheus.Labels{
 		"namespace":  changefeedID.Keyspace(),
 		"changefeed": changefeedID.Name(),
 	}
-	OutgoingByteRateGauge.DeletePartialMatch(labels)
-	RequestRateGauge.DeletePartialMatch(labels)
-	responseRateGauge.DeletePartialMatch(labels)
+	outgoingBytesTotal.DeletePartialMatch(labels)
+	requestsTotal.DeletePartialMatch(labels)
+	responsesTotal.DeletePartialMatch(labels)
 	requestsInFlightGauge.DeletePartialMatch(labels)
-	RequestLatencyGauge.DeletePartialMatch(labels)
-	compressionRatioGauge.DeletePartialMatch(labels)
-	recordsPerRequestGauge.DeletePartialMatch(labels)
+	requestDuration.DeletePartialMatch(labels)
+	recordsPerBatch.DeletePartialMatch(labels)
+	uncompressedBytesTotal.DeletePartialMatch(labels)
+	compressedBytesTotal.DeletePartialMatch(labels)
 }
 
 func (h *metricsHook) OnBrokerWrite(
@@ -69,14 +116,16 @@ func (h *metricsHook) OnBrokerWrite(
 	if meta.NodeID < 0 {
 		return
 	}
-	brokerID := strconv.Itoa(int(meta.NodeID))
+	metrics := h.broker(meta.NodeID)
 
 	if bytesWritten > 0 {
-		OutgoingByteRateGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(float64(bytesWritten))
+		metrics.outgoingBytesTotal.Add(float64(bytesWritten))
 	}
-	RequestRateGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(1)
-	if err == nil {
-		requestsInFlightGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(1)
+	if err != nil {
+		metrics.requestsWriteError.Inc()
+	} else {
+		metrics.requestsSuccess.Inc()
+		metrics.requestsInFlight.Inc()
 	}
 }
 
@@ -88,18 +137,20 @@ func (h *metricsHook) OnBrokerE2E(
 	if meta.NodeID < 0 {
 		return
 	}
-	brokerID := strconv.Itoa(int(meta.NodeID))
+	metrics := h.broker(meta.NodeID)
 
 	if e2e.WriteErr == nil {
-		requestsInFlightGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(-1)
-	}
-	if e2e.BytesRead > 0 && e2e.ReadErr == nil {
-		responseRateGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID).Add(1)
+		metrics.requestsInFlight.Dec()
+		if e2e.BytesRead > 0 || e2e.ReadErr != nil {
+			if e2e.ReadErr != nil {
+				metrics.responsesReadError.Inc()
+			} else {
+				metrics.responsesSuccess.Inc()
+			}
+		}
 	}
 	if e2e.Err() == nil {
-		latencyMs := float64(e2e.DurationE2E().Microseconds()) / 1000
-		RequestLatencyGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID, metricAvg).Set(latencyMs)
-		RequestLatencyGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID, metricP99).Set(latencyMs)
+		metrics.requestDuration.Observe(e2e.DurationE2E().Seconds())
 	}
 }
 
@@ -110,13 +161,12 @@ func (h *metricsHook) OnProduceBatchWritten(
 	m kgo.ProduceBatchMetrics,
 ) {
 	if m.NumRecords > 0 {
-		records := float64(m.NumRecords)
-		recordsPerRequestGauge.WithLabelValues(h.keyspace, h.changefeed, metricAvg).Set(records)
-		recordsPerRequestGauge.WithLabelValues(h.keyspace, h.changefeed, metricP99).Set(records)
+		h.recordsPerBatch.Observe(float64(m.NumRecords))
 	}
-	if m.UncompressedBytes > 0 && m.CompressedBytes > 0 {
-		ratio := float64(m.UncompressedBytes) / float64(m.CompressedBytes) * 100
-		compressionRatioGauge.WithLabelValues(h.keyspace, h.changefeed, metricAvg).Set(ratio)
-		compressionRatioGauge.WithLabelValues(h.keyspace, h.changefeed, metricP99).Set(ratio)
+	if m.UncompressedBytes > 0 {
+		h.uncompressedBytesTotal.Add(float64(m.UncompressedBytes))
+	}
+	if m.CompressedBytes > 0 {
+		h.compressedBytesTotal.Add(float64(m.CompressedBytes))
 	}
 }

@@ -172,6 +172,10 @@ type options struct {
 	ReadTimeout  time.Duration
 }
 
+func (o *options) requestTimeout() time.Duration {
+	return max(o.ReadTimeout, o.WriteTimeout)
+}
+
 // NewOptions returns a default Kafka configuration
 func NewOptions() *options {
 	return &options{
@@ -290,36 +294,24 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	}
 
 	if urlParameter.DialTimeout != nil && *urlParameter.DialTimeout != "" {
-		a, err := time.ParseDuration(*urlParameter.DialTimeout)
+		o.DialTimeout, err = parseTimeout(*urlParameter.DialTimeout)
 		if err != nil {
 			return err
 		}
-		if a <= 0 {
-			a = defaultTimeout
-		}
-		o.DialTimeout = a
 	}
 
 	if urlParameter.WriteTimeout != nil && *urlParameter.WriteTimeout != "" {
-		a, err := time.ParseDuration(*urlParameter.WriteTimeout)
+		o.WriteTimeout, err = parseTimeout(*urlParameter.WriteTimeout)
 		if err != nil {
 			return err
 		}
-		if a <= 0 {
-			a = defaultTimeout
-		}
-		o.WriteTimeout = a
 	}
 
 	if urlParameter.ReadTimeout != nil && *urlParameter.ReadTimeout != "" {
-		a, err := time.ParseDuration(*urlParameter.ReadTimeout)
+		o.ReadTimeout, err = parseTimeout(*urlParameter.ReadTimeout)
 		if err != nil {
 			return err
 		}
-		if a <= 0 {
-			a = defaultTimeout
-		}
-		o.ReadTimeout = a
 	}
 
 	if urlParameter.RequiredAcks != nil {
@@ -341,6 +333,17 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	}
 
 	return nil
+}
+
+func parseTimeout(value string) (time.Duration, error) {
+	timeout, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, err
+	}
+	if timeout <= 0 {
+		return defaultTimeout, nil
+	}
+	return timeout, nil
 }
 
 func mergeConfig(

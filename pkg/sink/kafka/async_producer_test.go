@@ -16,12 +16,12 @@ package kafka
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/atomic"
 )
 
@@ -47,41 +47,28 @@ func TestAsyncRunCallbackReturnsQueuedErrorAndCloses(t *testing.T) {
 	require.True(t, producer.closed.Load())
 }
 
-func TestAsyncSendLegacyFailpointAnnotatesDMLContext(t *testing.T) {
-	enableLegacyKafkaSinkFailpointForTest(t, kafkaSinkAsyncSendErrorFailpoint)
+func TestCloseDoesNotAcknowledgeBufferedMessage(t *testing.T) {
+	client, err := kgo.NewClient(kgo.SeedBrokers("127.0.0.1:1"))
+	require.NoError(t, err)
 
+	callbackCalled := atomic.NewBool(false)
 	producer := &asyncProducer{
-		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-legacy-failpoint"),
+		client:       client,
+		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-close"),
+		closeStarted: atomic.NewBool(false),
 		closed:       atomic.NewBool(false),
 		errCh:        make(chan error, 1),
 	}
-	message := &codeccommon.Message{
-		Key:   []byte("key"),
-		Value: []byte("value"),
-		LogInfo: &codeccommon.MessageLogInfo{Rows: []codeccommon.RowLogInfo{
-			{
-				Type:     "insert",
-				Database: "db",
-				Table:    "t",
-				StartTs:  1,
-				CommitTs: 2,
-				PrimaryKeys: []codeccommon.ColumnLogInfo{
-					{Name: "id", Value: 1},
-				},
-			},
-		}},
-	}
-
-	err := producer.AsyncSend(context.Background(), "topic", 0, message)
+	err = producer.AsyncSend(context.Background(), "topic", 0, &codeccommon.Message{
+		Callback: func() {
+			callbackCalled.Store(true)
+		},
+	})
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	err = producer.AsyncRunCallback(ctx)
+	producer.Close()
 
-	require.ErrorContains(t, err, "kafka sink injected error")
-	require.ErrorContains(t, err, "keyspace=default")
-	require.ErrorContains(t, err, "changefeed=async-legacy-failpoint")
-	require.ErrorContains(t, err, "eventType=dml")
-	require.ErrorContains(t, err, `"Table":"t"`)
+	require.False(t, callbackCalled.Load())
+	err = producer.AsyncRunCallback(context.Background())
+	require.ErrorIs(t, err, kgo.ErrClientClosed)
 }

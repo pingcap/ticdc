@@ -68,8 +68,6 @@ func newKafkaAdminFixture(t *testing.T) *kafkaAdminFixture {
 	fixture.admin.EXPECT().Close().AnyTimes()
 	fixture.admin.EXPECT().GetTopicsMeta(gomock.Any(), gomock.Any()).
 		DoAndReturn(fixture.getTopicsMeta).AnyTimes()
-	fixture.admin.EXPECT().GetTopicsPartitionsNum(gomock.Any()).
-		DoAndReturn(fixture.getTopicsPartitionsNum).AnyTimes()
 	fixture.admin.EXPECT().GetBrokerConfig(gomock.Any()).
 		DoAndReturn(fixture.getBrokerConfig).AnyTimes()
 	fixture.admin.EXPECT().GetTopicConfig(gomock.Any(), gomock.Any()).
@@ -96,18 +94,6 @@ func (f *kafkaAdminFixture) getTopicsMeta(
 	return result, nil
 }
 
-func (f *kafkaAdminFixture) getTopicsPartitionsNum(
-	topics []string,
-) (map[string]int32, error) {
-	result := make(map[string]int32, len(topics))
-	for _, topic := range topics {
-		if detail, ok := f.topics[topic]; ok {
-			result[topic] = detail.NumPartitions
-		}
-	}
-	return result, nil
-}
-
 func (f *kafkaAdminFixture) getBrokerConfig(configName string) (string, error) {
 	if value, ok := f.brokerConfig[configName]; ok {
 		return value, nil
@@ -128,7 +114,7 @@ func (f *kafkaAdminFixture) getTopicConfig(topicName string, configName string) 
 		"cannot find the `%s` from the topic's configuration", configName)
 }
 
-func (f *kafkaAdminFixture) createTopic(detail *TopicDetail, _ bool) error {
+func (f *kafkaAdminFixture) createTopic(detail TopicDetail, _ bool) error {
 	if detail.ReplicationFactor > mockClusterReplicationFactor {
 		return errors.New("invalid replication factor")
 	}
@@ -136,7 +122,7 @@ func (f *kafkaAdminFixture) createTopic(detail *TopicDetail, _ bool) error {
 		detail.ReplicationFactor != mockClusterReplicationFactor {
 		return errors.New("policy violation")
 	}
-	f.topics[detail.Name] = *detail
+	f.topics[detail.Name] = detail
 	return nil
 }
 
@@ -493,7 +479,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 			adminFixture := newKafkaAdminFixture(t)
 			admin := adminFixture.admin
 
-			detail := &TopicDetail{
+			detail := TopicDetail{
 				Name:          topicName,
 				NumPartitions: 3,
 			}
@@ -524,7 +510,6 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 				min(configuredMaxMessageBytes, expectedProducerLimit),
 				options.MaxBatchedBytes,
 			)
-			require.Equal(t, expectedProducerLimit, newClientOption(options).ProducerBatchMaxBytes)
 		})
 	}
 }
@@ -759,7 +744,6 @@ func TestConfigurationCombinations(t *testing.T) {
 				min(configuredMaxMessageBytes, sourceMaxMessageBytes),
 				options.MaxBatchedBytes,
 			)
-			require.Equal(t, sourceMaxMessageBytes, newClientOption(options).ProducerBatchMaxBytes)
 
 			admin.Close()
 		})

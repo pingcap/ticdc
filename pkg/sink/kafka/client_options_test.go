@@ -26,7 +26,7 @@ func TestNewRequiredAcks(t *testing.T) {
 
 	testCases := []struct {
 		name         string
-		requiredAcks int16
+		requiredAcks RequiredAcks
 		expected     kgo.Acks
 	}{
 		{name: "all", requiredAcks: -1, expected: kgo.AllISRAcks()},
@@ -38,7 +38,7 @@ func TestNewRequiredAcks(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			require.Equal(t, tc.expected, newRequiredAcks(&clientOptions{RequiredAcks: tc.requiredAcks}))
+			require.Equal(t, tc.expected, newRequiredAcks(&options{RequiredAcks: tc.requiredAcks}))
 		})
 	}
 }
@@ -46,9 +46,10 @@ func TestNewRequiredAcks(t *testing.T) {
 func TestNewOptionsRejectsInvalidAssignedVersion(t *testing.T) {
 	t.Parallel()
 
-	opts, err := newOptions(context.Background(), &clientOptions{
+	opts, err := newOptions(context.Background(), &options{
 		Version:           "invalid",
 		IsAssignedVersion: true,
+		sasl:              &saslConfig{},
 	}, nil)
 	require.Nil(t, opts)
 	require.ErrorContains(t, err, "invalid kafka version invalid")
@@ -58,12 +59,14 @@ func TestNewProducerOptionsUsesProducerBatchMaxBytes(t *testing.T) {
 	t.Parallel()
 
 	const producerBatchMaxBytes = 1048588
-	o := &clientOptions{
-		BrokerEndpoints:       []string{"127.0.0.1:9092"},
-		ProducerBatchMaxBytes: producerBatchMaxBytes,
-		MaxRetry:              defaultMaxRetry,
-		RequiredAcks:          int16(WaitForAll),
-		RequestTimeout:        defaultTimeout,
+	o := &options{
+		BrokerEndpoints: []string{"127.0.0.1:9092"},
+		MaxMessageBytes: producerBatchMaxBytes,
+		MaxRetry:        defaultMaxRetry,
+		RequiredAcks:    WaitForAll,
+		ReadTimeout:     defaultTimeout,
+		WriteTimeout:    defaultTimeout,
+		sasl:            &saslConfig{},
 	}
 
 	opts, err := newOptions(context.Background(), o, nil)
@@ -95,7 +98,7 @@ func TestNewCompressionOptionMapsToProducerBatchCompression(t *testing.T) {
 
 			client, err := kgo.NewClient(
 				kgo.SeedBrokers("127.0.0.1:9092"),
-				newCompressionOption(&clientOptions{Compression: tc.compression}),
+				newCompressionOption(&options{Compression: tc.compression}),
 			)
 			require.NoError(t, err)
 			defer client.Close()
@@ -108,7 +111,7 @@ func TestNewCompressionOptionMapsToProducerBatchCompression(t *testing.T) {
 func TestNewOauthTokenSourceRejectsInvalidTokenURL(t *testing.T) {
 	t.Parallel()
 
-	_, err := newOauthTokenSource(context.Background(), &clientOptions{
+	_, err := newOauthTokenSource(context.Background(), &options{
 		sasl: &saslConfig{
 			oauth2: oauth2Config{
 				clientID:     "client-id",

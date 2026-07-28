@@ -29,8 +29,8 @@ import (
 
 // AsyncProducer is the kafka async producer
 type AsyncProducer interface {
-	// Close shuts down the producer asynchronously and releases its Kafka client
-	// resources. It does not wait for buffered messages to be flushed.
+	// Close shuts down the producer and releases its Kafka client resources.
+	// Buffered messages fail instead of being flushed.
 	Close()
 
 	// AsyncSend is the input channel for the user to write messages to that they
@@ -47,15 +47,16 @@ type asyncProducer struct {
 	client       *kgo.Client
 	changefeedID commonType.ChangeFeedID
 
-	closed *atomic.Bool
-	errCh  chan error
+	closeStarted *atomic.Bool
+	closed       *atomic.Bool
+	errCh        chan error
 }
 
 func newAsyncProducer(
 	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
-	o *clientOptions,
-	hook kgo.Hook,
+	o *options,
+	hook *metricsHook,
 ) (*asyncProducer, error) {
 	opts, err := newOptions(ctx, o, hook)
 	if err != nil {
@@ -70,24 +71,24 @@ func newAsyncProducer(
 	return &asyncProducer{
 		client:       client,
 		changefeedID: changefeedID,
+		closeStarted: atomic.NewBool(false),
 		closed:       atomic.NewBool(false),
 		errCh:        make(chan error, 1),
 	}, nil
 }
 
 func (p *asyncProducer) Close() {
-	if !p.closed.CompareAndSwap(false, true) {
+	if !p.closeStarted.CompareAndSwap(false, true) {
 		return
 	}
+	p.closed.Store(true)
 
-	go func() {
-		start := time.Now()
-		p.client.Close()
-		log.Info("Close kafka async producer success",
-			zap.String("keyspace", p.changefeedID.Keyspace()),
-			zap.String("changefeed", p.changefeedID.Name()),
-			zap.Duration("duration", time.Since(start)))
-	}()
+	start := time.Now()
+	p.client.Close()
+	log.Info("Close kafka async producer success",
+		zap.String("keyspace", p.changefeedID.Keyspace()),
+		zap.String("changefeed", p.changefeedID.Name()),
+		zap.Duration("duration", time.Since(start)))
 }
 
 func (p *asyncProducer) AsyncSend(
@@ -110,18 +111,6 @@ func (p *asyncProducer) AsyncSend(
 		keyspace   = p.changefeedID.Keyspace()
 		changefeed = p.changefeedID.Name()
 	)
-
-	if legacyKafkaSinkFailpointEnabled(kafkaSinkAsyncSendErrorFailpoint) {
-		log.Info("KafkaSinkAsyncSendError error injected",
-			zap.String("keyspace", keyspace), zap.String("changefeed", changefeed))
-		p.enqueueAsyncSendError(
-			keyspace,
-			changefeed,
-			message.LogInfo,
-			errors.New("kafka sink injected error"),
-		)
-		return nil
-	}
 
 	failpoint.Inject("KafkaSinkAsyncSendError", func() {
 		log.Info("KafkaSinkAsyncSendError error injected",

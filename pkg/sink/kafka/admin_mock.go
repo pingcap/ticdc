@@ -46,7 +46,7 @@ func (mr *MockAdminMockRecorder) Close() *gomock.Call {
 }
 
 // CreateTopic mocks base method.
-func (m *MockAdmin) CreateTopic(detail *TopicDetail, validateOnly bool) error {
+func (m *MockAdmin) CreateTopic(detail TopicDetail, validateOnly bool) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateTopic", detail, validateOnly)
 	ret0, _ := ret[0].(error)
@@ -102,19 +102,4 @@ func (m *MockAdmin) GetTopicsMeta(topics []string, ignoreTopicError bool) (map[s
 func (mr *MockAdminMockRecorder) GetTopicsMeta(topics, ignoreTopicError interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicsMeta", reflect.TypeOf((*MockAdmin)(nil).GetTopicsMeta), topics, ignoreTopicError)
-}
-
-// GetTopicsPartitionsNum mocks base method.
-func (m *MockAdmin) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetTopicsPartitionsNum", topics)
-	ret0, _ := ret[0].(map[string]int32)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetTopicsPartitionsNum indicates an expected call of GetTopicsPartitionsNum.
-func (mr *MockAdminMockRecorder) GetTopicsPartitionsNum(topics interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicsPartitionsNum", reflect.TypeOf((*MockAdmin)(nil).GetTopicsPartitionsNum), topics)
 }

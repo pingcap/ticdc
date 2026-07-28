@@ -32,9 +32,7 @@ type Factory interface {
 
 type factory struct {
 	changefeedID common.ChangeFeedID
-	clientOption *clientOptions
-
-	metricsHook *metricsHook
+	options      options
 }
 
 // NewFactory constructs a Factory.
@@ -43,7 +41,7 @@ func NewFactory(
 	o *options,
 	changefeedID common.ChangeFeedID,
 ) (Factory, error) {
-	admin, err := newAdmin(ctx, changefeedID, newClientOption(o), nil)
+	admin, err := newAdmin(ctx, changefeedID, o, nil)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
@@ -55,13 +53,12 @@ func NewFactory(
 
 	return &factory{
 		changefeedID: changefeedID,
-		clientOption: newClientOption(o),
-		metricsHook:  newKafkaMetricsHook(changefeedID),
+		options:      *o,
 	}, nil
 }
 
 func (f *factory) Admin(ctx context.Context) (Admin, error) {
-	admin, err := newAdmin(ctx, f.changefeedID, f.clientOption, f.metricsHook)
+	admin, err := newAdmin(ctx, f.changefeedID, &f.options, nil)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
@@ -69,40 +66,21 @@ func (f *factory) Admin(ctx context.Context) (Admin, error) {
 }
 
 func (f *factory) SyncProducer(ctx context.Context) (SyncProducer, error) {
-	producer, err := newSyncProducer(ctx, f.changefeedID, f.clientOption, f.metricsHook)
+	hook := newKafkaMetricsHook(f.changefeedID)
+	producer, err := newSyncProducer(ctx, f.changefeedID, &f.options, hook)
 	if err != nil {
+		CleanupMetrics(f.changefeedID)
 		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 	return producer, nil
 }
 
 func (f *factory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
-	producer, err := newAsyncProducer(ctx, f.changefeedID, f.clientOption, f.metricsHook)
+	hook := newKafkaMetricsHook(f.changefeedID)
+	producer, err := newAsyncProducer(ctx, f.changefeedID, &f.options, hook)
 	if err != nil {
+		CleanupMetrics(f.changefeedID)
 		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 	return producer, nil
-}
-
-func newClientOption(o *options) *clientOptions {
-	return &clientOptions{
-		BrokerEndpoints: o.BrokerEndpoints,
-		ClientID:        o.ClientID,
-
-		Version:           o.Version,
-		IsAssignedVersion: o.IsAssignedVersion,
-
-		ProducerBatchMaxBytes: o.MaxMessageBytes,
-		MaxRetry:              o.MaxRetry,
-		Compression:           o.Compression,
-		RequiredAcks:          int16(o.RequiredAcks),
-
-		EnableTLS:          o.EnableTLS,
-		Credential:         o.Credential,
-		InsecureSkipVerify: o.InsecureSkipVerify,
-		sasl:               o.sasl,
-
-		DialTimeout:    o.DialTimeout,
-		RequestTimeout: max(o.ReadTimeout, o.WriteTimeout),
-	}
 }

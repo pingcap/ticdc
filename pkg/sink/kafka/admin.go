@@ -46,11 +46,8 @@ type Admin interface {
 	// if `ignoreTopicError` is true, ignore the topic error and return the metadata of valid topics
 	GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error)
 
-	// GetTopicsPartitionsNum return the number of partitions of each topic.
-	GetTopicsPartitionsNum(topics []string) (map[string]int32, error)
-
 	// CreateTopic creates a new topic.
-	CreateTopic(detail *TopicDetail, validateOnly bool) error
+	CreateTopic(detail TopicDetail, validateOnly bool) error
 
 	// Close shuts down the admin.
 	Close()
@@ -67,7 +64,7 @@ type admin struct {
 func newAdmin(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
-	o *clientOptions,
+	o *options,
 	hook kgo.Hook,
 ) (*admin, error) {
 	opts, err := newOptions(ctx, o, hook)
@@ -84,7 +81,7 @@ func newAdmin(
 		changefeed: changefeedID,
 		client:     client,
 		admin:      kadm.NewClient(client),
-		timeout:    o.RequestTimeout,
+		timeout:    o.requestTimeout(),
 	}, nil
 }
 
@@ -177,13 +174,27 @@ func (a *admin) GetTopicsMeta(
 
 	meta, err := a.admin.Metadata(ctx, topics...)
 	if err != nil {
+		if isKafkaAuthorizationFailed(err) {
+			return nil, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err)
+		}
 		return nil, errors.Trace(err)
 	}
 
+	return topicDetailsFromMetadata(meta, topics, ignoreTopicError)
+}
+
+func topicDetailsFromMetadata(
+	meta kadm.Metadata,
+	topics []string,
+	ignoreTopicError bool,
+) (map[string]TopicDetail, error) {
 	result := make(map[string]TopicDetail, len(topics))
 	for _, topic := range topics {
 		detail, ok := meta.Topics[topic]
 		if !ok {
+			if !ignoreTopicError {
+				return nil, errors.ErrKafkaTopicNotFound.GenWithStackByArgs(topic)
+			}
 			continue
 		}
 		if detail.Err == nil {
@@ -194,56 +205,30 @@ func (a *admin) GetTopicsMeta(
 			continue
 		}
 		if errors.Is(detail.Err, kerr.UnknownTopicOrPartition) {
+			if !ignoreTopicError {
+				return nil, errors.WrapError(errors.ErrKafkaTopicNotFound, detail.Err, topic)
+			}
 			continue
 		}
-		if !ignoreTopicError {
-			return nil, errors.Trace(detail.Err)
+		if isKafkaAuthorizationFailed(detail.Err) {
+			return nil, errors.WrapError(errors.ErrKafkaAuthorizationFailed, detail.Err)
 		}
-		log.Warn("fetch topic meta failed",
-			zap.String("keyspace", a.changefeed.Keyspace()), zap.String("changefeed", a.changefeed.Name()),
-			zap.String("topic", topic), zap.Error(detail.Err))
+		return nil, errors.Trace(detail.Err)
 	}
 	return result, nil
 }
 
 // IsAdminAuthorizationFailed checks whether err is an authorization failure from Kafka admin APIs.
 func IsAdminAuthorizationFailed(err error) bool {
+	return errors.Is(err, errors.ErrKafkaAuthorizationFailed) || isKafkaAuthorizationFailed(err)
+}
+
+func isKafkaAuthorizationFailed(err error) bool {
 	return errors.Is(err, kerr.TopicAuthorizationFailed) ||
 		errors.Is(err, kerr.ClusterAuthorizationFailed)
 }
 
-func (a *admin) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
-	if len(topics) == 0 {
-		return make(map[string]int32), nil
-	}
-
-	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
-	defer cancel()
-
-	meta, err := a.admin.Metadata(ctx, topics...)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	result := make(map[string]int32, len(topics))
-	for _, topic := range topics {
-		detail, ok := meta.Topics[topic]
-		if !ok {
-			return nil, errors.Trace(kerr.UnknownTopicOrPartition)
-		}
-		if detail.Err != nil {
-			return nil, errors.Trace(detail.Err)
-		}
-		result[topic] = int32(len(detail.Partitions))
-	}
-	return result, nil
-}
-
-func (a *admin) CreateTopic(detail *TopicDetail, validateOnly bool) error {
-	if detail == nil {
-		return errors.ErrKafkaInvalidConfig.GenWithStack("topic detail must not be nil")
-	}
-
+func (a *admin) CreateTopic(detail TopicDetail, validateOnly bool) error {
 	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
@@ -267,6 +252,9 @@ func (a *admin) CreateTopic(detail *TopicDetail, validateOnly bool) error {
 	}
 	if errors.Is(resp.Err, kerr.TopicAlreadyExists) {
 		return nil
+	}
+	if isKafkaAuthorizationFailed(resp.Err) {
+		return errors.WrapError(errors.ErrKafkaAuthorizationFailed, resp.Err)
 	}
 	return errors.Trace(resp.Err)
 }

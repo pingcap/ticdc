@@ -23,42 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewClientOptionMapsRequiredAcks(t *testing.T) {
-	t.Parallel()
-
-	testCases := []struct {
-		name         string
-		requiredAcks RequiredAcks
-	}{
-		{name: "wait for all", requiredAcks: WaitForAll},
-		{name: "wait for local", requiredAcks: WaitForLocal},
-		{name: "no response", requiredAcks: NoResponse},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			options := NewOptions()
-			options.RequiredAcks = tc.requiredAcks
-
-			kafkaOptions := newClientOption(options)
-			require.Equal(t, int16(tc.requiredAcks), kafkaOptions.RequiredAcks)
-		})
-	}
-}
-
-func TestNewClientOptionMapsMaxRetry(t *testing.T) {
-	t.Parallel()
-
-	options := NewOptions()
-	options.MaxRetry = 7
-
-	kafkaOptions := newClientOption(options)
-	require.Equal(t, 7, kafkaOptions.MaxRetry)
-}
-
-func TestNewClientOptionDerivesRequestTimeout(t *testing.T) {
+func TestOptionsDerivesRequestTimeout(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
@@ -89,8 +54,7 @@ func TestNewClientOptionDerivesRequestTimeout(t *testing.T) {
 			o.ReadTimeout = tc.readTimeout
 			o.WriteTimeout = tc.writeTimeout
 
-			clientOption := newClientOption(o)
-			require.Equal(t, tc.expectedRequestTimeout, clientOption.RequestTimeout)
+			require.Equal(t, tc.expectedRequestTimeout, o.requestTimeout())
 		})
 	}
 }
@@ -116,9 +80,10 @@ func TestFactoryComponentCreationReturnsKafkaSinkError(t *testing.T) {
 
 	factory := &factory{
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
-		clientOption: &clientOptions{
+		options: options{
 			Version:           "invalid",
 			IsAssignedVersion: true,
+			sasl:              &saslConfig{},
 		},
 	}
 

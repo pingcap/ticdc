@@ -28,67 +28,69 @@ var (
 			Help: "The current number of in-flight requests" +
 				" awaiting a response for all brokers.",
 		}, []string{"namespace", "changefeed", "broker"})
-	// OutgoingByteRateGauge for outgoing events.
-	// Meter mark for each request's size in bytes.
-	OutgoingByteRateGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
+	outgoingBytesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "kafka_producer_outgoing_byte_rate",
-			Help:      "Bytes/second written off all brokers.",
+			Name:      "kafka_producer_outgoing_bytes_total",
+			Help:      "Total bytes written to Kafka brokers, excluding TLS overhead.",
 		}, []string{"namespace", "changefeed", "broker"})
-	// RequestRateGauge Meter mark by 1 for each request.
-	RequestRateGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
+	requestsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "kafka_producer_request_rate",
-			Help:      "Requests/second sent to all brokers.",
+			Name:      "kafka_producer_requests_total",
+			Help:      "Total Kafka requests by broker and write result.",
+		}, []string{"namespace", "changefeed", "broker", "result"})
+	responsesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "kafka_producer_responses_total",
+			Help:      "Total Kafka responses by broker and read result.",
+		}, []string{"namespace", "changefeed", "broker", "result"})
+	requestDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "kafka_producer_request_duration_seconds",
+			Help:      "Kafka request end-to-end duration in seconds.",
+			Buckets:   prometheus.DefBuckets,
 		}, []string{"namespace", "changefeed", "broker"})
-	// RequestLatencyGauge Histogram update by `requestLatency`.
-	RequestLatencyGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
+	recordsPerBatch = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "kafka_producer_request_latency",
-			Help:      "The request latency for all brokers.",
-		}, []string{"namespace", "changefeed", "broker", "type"})
-	// Histogram update by `compression-ratio`.
-	compressionRatioGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
+			Name:      "kafka_producer_records_per_batch",
+			Help:      "Number of records in each successfully written topic-partition batch.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 15),
+		}, []string{"namespace", "changefeed"})
+	uncompressedBytesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "kafka_producer_compression_ratio",
-			Help:      "The compression ratio times 100 of record batches for all topics.",
-		}, []string{"namespace", "changefeed", "type"})
-	// updated by `records-per-request`.
-	recordsPerRequestGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
+			Name:      "kafka_producer_uncompressed_bytes_total",
+			Help:      "Total serialized record bytes before compression in successfully written batches.",
+		}, []string{"namespace", "changefeed"})
+	compressedBytesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "kafka_producer_records_per_request",
-			Help:      "The number of records per request for all topics.",
-		}, []string{"namespace", "changefeed", "type"})
-
-	// Meter mark by 1 once a response received.
-	responseRateGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "kafka_producer_response_rate",
-			Help:      "Responses/second received from all brokers.",
-		}, []string{"namespace", "changefeed", "broker"})
+			Name:      "kafka_producer_compressed_bytes_total",
+			Help:      "Total serialized record bytes after compression in successfully written batches.",
+		}, []string{"namespace", "changefeed"})
 )
 
 // InitMetrics registers all metrics in this file.
 func InitMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(compressionRatioGauge)
-	registry.MustRegister(recordsPerRequestGauge)
-	registry.MustRegister(OutgoingByteRateGauge)
-	registry.MustRegister(RequestRateGauge)
-	registry.MustRegister(RequestLatencyGauge)
+	registry.MustRegister(outgoingBytesTotal)
+	registry.MustRegister(requestsTotal)
+	registry.MustRegister(responsesTotal)
+	registry.MustRegister(requestDuration)
+	registry.MustRegister(recordsPerBatch)
+	registry.MustRegister(uncompressedBytesTotal)
+	registry.MustRegister(compressedBytesTotal)
 	registry.MustRegister(requestsInFlightGauge)
-	registry.MustRegister(responseRateGauge)
 
 	claimcheck.InitMetrics(registry)
 	codec.InitMetrics(registry)

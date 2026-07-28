@@ -24,8 +24,6 @@ type saslMechanism string
 
 // The mechanisms we currently support.
 const (
-	// unknownMechanism means the SASL mechanism is unknown.
-	unknownMechanism saslMechanism = ""
 	// plainMechanism means the SASL mechanism is plain.
 	plainMechanism saslMechanism = "PLAIN"
 	// scram256Mechanism means the SASL mechanism is SCRAM-SHA-256.
@@ -52,7 +50,7 @@ func saslMechanismFromString(s string) (saslMechanism, error) {
 	case "oauthbearer":
 		return oauthMechanism, nil
 	default:
-		return unknownMechanism, errors.Errorf("unknown %s SASL mechanism", s)
+		return "", errors.Errorf("unknown %s SASL mechanism", s)
 	}
 }
 
@@ -94,8 +92,6 @@ func (o *oauth2Config) validate() error {
 type gssapiAuthType int
 
 const (
-	// unknownAuth means the auth type is unknown.
-	unknownAuth gssapiAuthType = 0
 	// userAuth means the auth type is user.
 	userAuth gssapiAuthType = 1
 	// keyTabAuth means the auth type is keytab.
@@ -110,7 +106,7 @@ func gssapiAuthTypeFromString(s string) (gssapiAuthType, error) {
 	case "keytab":
 		return keyTabAuth, nil
 	default:
-		return unknownAuth, errors.Errorf("unknown %s auth type", s)
+		return 0, errors.Errorf("unknown %s auth type", s)
 	}
 }
 

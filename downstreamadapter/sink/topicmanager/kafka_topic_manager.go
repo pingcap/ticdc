@@ -169,7 +169,7 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum() (map[string]int32, err
 	})
 
 	start := time.Now()
-	numPartitions, err := m.admin.GetTopicsPartitionsNum(topics)
+	topicDetails, err := m.admin.GetTopicsMeta(topics, false)
 	if err != nil {
 		log.Warn(
 			"Kafka admin describe topics failed",
@@ -179,6 +179,14 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum() (map[string]int32, err
 			zap.Error(err),
 		)
 		return nil, err
+	}
+	numPartitions := make(map[string]int32, len(topicDetails))
+	for _, topic := range topics {
+		detail, ok := topicDetails[topic]
+		if !ok {
+			return nil, errors.ErrKafkaTopicNotFound.GenWithStackByArgs(topic)
+		}
+		numPartitions[topic] = detail.NumPartitions
 	}
 
 	// it may happen the following case:
@@ -216,11 +224,15 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 			)
 			return err
 		}
+		detail, ok := meta[topicName]
+		if !ok {
+			return errors.ErrKafkaTopicNotFound.GenWithStackByArgs(topicName)
+		}
 		log.Info("topic found",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("topic", topicName),
-			zap.Int32("partitionNumber", meta[topicName].NumPartitions),
+			zap.Int32("partitionNumber", detail.NumPartitions),
 			zap.Duration("duration", time.Since(start)))
 		return nil
 	}, retry.WithBackoffBaseDelay(500),
@@ -246,7 +258,7 @@ func (m *kafkaTopicManager) createTopic(
 	}
 
 	start := time.Now()
-	err := m.admin.CreateTopic(&kafka.TopicDetail{
+	err := m.admin.CreateTopic(kafka.TopicDetail{
 		Name:              topicName,
 		NumPartitions:     m.cfg.PartitionNum,
 		ReplicationFactor: m.cfg.ReplicationFactor,
@@ -294,15 +306,6 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 		return 0, errors.Trace(err)
 	}
 	if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
-		return numPartition, nil
-	}
-
-	topicDetails, err = m.admin.GetTopicsMeta([]string{topicName}, false)
-	if err != nil {
-		if kafka.IsAdminAuthorizationFailed(err) {
-			return m.useConfiguredPartitionNum(topicName, err), nil
-		}
-	} else if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
 		return numPartition, nil
 	}
 

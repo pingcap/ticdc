@@ -16,16 +16,73 @@ package kafka
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
-func TestAdminCreateTopicNilDetailReturnsError(t *testing.T) {
+func TestTopicDetailsFromMetadata(t *testing.T) {
 	t.Parallel()
 
-	a := &admin{}
+	const topic = "topic"
+	testCases := []struct {
+		name             string
+		metadata         kadm.Metadata
+		ignoreTopicError bool
+		expected         map[string]TopicDetail
+		expectedError    error
+	}{
+		{
+			name: "success",
+			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
+				topic: {Topic: topic, Partitions: kadm.PartitionDetails{0: {}, 1: {}}},
+			}},
+			expected: map[string]TopicDetail{
+				topic: {Name: topic, NumPartitions: 2},
+			},
+		},
+		{
+			name: "ignore unknown topic",
+			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
+				topic: {Topic: topic, Err: kerr.UnknownTopicOrPartition},
+			}},
+			ignoreTopicError: true,
+			expected:         map[string]TopicDetail{},
+		},
+		{
+			name: "return unknown topic",
+			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
+				topic: {Topic: topic, Err: kerr.UnknownTopicOrPartition},
+			}},
+			expectedError: errors.ErrKafkaTopicNotFound,
+		},
+		{
+			name:          "return missing topic",
+			metadata:      kadm.Metadata{Topics: kadm.TopicDetails{}},
+			expectedError: errors.ErrKafkaTopicNotFound,
+		},
+		{
+			name: "do not ignore authorization failure",
+			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
+				topic: {Topic: topic, Err: kerr.TopicAuthorizationFailed},
+			}},
+			ignoreTopicError: true,
+			expectedError:    errors.ErrKafkaAuthorizationFailed,
+		},
+	}
 
-	err := a.CreateTopic(nil, false)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "topic detail must not be nil")
+			actual, err := topicDetailsFromMetadata(tc.metadata, []string{topic}, tc.ignoreTopicError)
+			if tc.expectedError != nil {
+				require.ErrorIs(t, err, tc.expectedError)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, actual)
+		})
+	}
 }

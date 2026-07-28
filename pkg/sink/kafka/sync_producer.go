@@ -55,8 +55,8 @@ type syncProducer struct {
 func newSyncProducer(
 	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
-	o *clientOptions,
-	hook kgo.Hook,
+	o *options,
+	hook *metricsHook,
 ) (*syncProducer, error) {
 	opts, err := newOptions(ctx, o, hook)
 	if err != nil {
@@ -73,7 +73,7 @@ func newSyncProducer(
 		id:      changefeedID,
 		client:  client,
 		closed:  atomic.NewBool(false),
-		timeout: o.RequestTimeout,
+		timeout: o.requestTimeout(),
 	}, nil
 }
 
@@ -92,10 +92,6 @@ func (p *syncProducer) SendMessage(topic string, partitionNum int32, message *co
 		Value:     message.Value,
 	}
 	err := p.client.ProduceSync(ctx, record).FirstErr()
-
-	if legacyKafkaSinkFailpointEnabled(kafkaSinkSyncSendMessageErrorFailpoint) {
-		err = errors.New("kafka sink sync send message injected error")
-	}
 
 	failpoint.Inject("KafkaSinkSyncSendMessageError", func() {
 		err = errors.New("kafka sink sync send message injected error")
@@ -131,10 +127,6 @@ func (p *syncProducer) SendMessages(topic string, partitionNum int32, message *c
 	defer cancel()
 
 	err := p.client.ProduceSync(ctx, records...).FirstErr()
-
-	if legacyKafkaSinkFailpointEnabled(kafkaSinkSyncSendMessagesErrorFailpoint) {
-		err = errors.New("kafka sink sync send messages injected error")
-	}
 
 	failpoint.Inject("KafkaSinkSyncSendMessagesError", func() {
 		err = errors.New("kafka sink sync send messages injected error")

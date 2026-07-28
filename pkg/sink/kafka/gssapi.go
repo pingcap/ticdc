@@ -34,20 +34,9 @@ import (
 )
 
 const (
-	tokIDKrbAPReq  = 256
-	gssAPIGeneric  = 0x60
-	gssAPIInitial  = 1
-	gssAPIVerify   = 2
-	gssAPIFinished = 3
+	tokIDKrbAPReq = 256
+	gssAPIGeneric = 0x60
 )
-
-type kerberosClient interface {
-	Login() error
-	GetServiceTicket(spn string) (messages.Ticket, types.EncryptionKey, error)
-	Domain() string
-	CName() types.PrincipalName
-	Destroy()
-}
 
 type gssapiMechanism struct {
 	config gssapiConfig
@@ -78,77 +67,48 @@ func (m *gssapiMechanism) Authenticate(
 		return nil, nil, errors.Trace(err)
 	}
 
-	session := &gssapiSession{
-		client: client,
-		ticket: ticket,
-		encKey: encKey,
-		step:   gssAPIInitial,
-	}
-	firstMessage, err := session.nextMessage(nil)
+	token, err := newKrb5Token(client.Domain(), client.CName(), ticket, encKey)
 	if err != nil {
 		client.Destroy()
 		return nil, nil, errors.Trace(err)
 	}
-	return session, firstMessage, nil
+	firstMessage, err := appendGSSAPIHeader(token)
+	if err != nil {
+		client.Destroy()
+		return nil, nil, errors.Trace(err)
+	}
+	return &gssapiSession{client: client, encKey: encKey}, firstMessage, nil
 }
 
 type gssapiSession struct {
-	client kerberosClient
-	ticket messages.Ticket
+	client *krb5Client
 	encKey types.EncryptionKey
-	step   int
 }
 
 func (s *gssapiSession) Challenge(challenge []byte) (bool, []byte, error) {
 	defer s.client.Destroy()
 
-	switch s.step {
-	case gssAPIVerify:
-		msg, err := s.nextMessage(challenge)
+	wrapTokenReq := gssapi.WrapToken{}
+	if err := wrapTokenReq.Unmarshal(challenge, true); err != nil {
+		return false, nil, errors.Trace(err)
+	}
+	isValid, err := wrapTokenReq.Verify(s.encKey, keyusage.GSSAPI_ACCEPTOR_SEAL)
+	if !isValid {
 		if err != nil {
 			return false, nil, errors.Trace(err)
 		}
-		// Return a final payload while marking done=true.
-		// The Kafka client writes this message and finishes the auth flow.
-		return true, msg, nil
-	case gssAPIFinished:
-		return true, nil, nil
-	default:
-		return false, nil, errors.New("invalid gssapi session state")
+		return false, nil, errors.New("invalid gssapi wrap token")
 	}
-}
 
-func (s *gssapiSession) nextMessage(challenge []byte) ([]byte, error) {
-	switch s.step {
-	case gssAPIInitial:
-		token, err := newKrb5Token(s.client.Domain(), s.client.CName(), s.ticket, s.encKey)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		s.step = gssAPIVerify
-		return appendGSSAPIHeader(token)
-	case gssAPIVerify:
-		wrapTokenReq := gssapi.WrapToken{}
-		if err := wrapTokenReq.Unmarshal(challenge, true); err != nil {
-			return nil, errors.Trace(err)
-		}
-		isValid, err := wrapTokenReq.Verify(s.encKey, keyusage.GSSAPI_ACCEPTOR_SEAL)
-		if !isValid {
-			if err != nil {
-				return nil, errors.Trace(err)
-			}
-			return nil, errors.New("invalid gssapi wrap token")
-		}
-
-		wrapTokenResp, err := gssapi.NewInitiatorWrapToken(wrapTokenReq.Payload, s.encKey)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		s.step = gssAPIFinished
-		return wrapTokenResp.Marshal()
-	default:
-		return nil, errors.New("invalid gssapi session state")
+	wrapTokenResp, err := gssapi.NewInitiatorWrapToken(wrapTokenReq.Payload, s.encKey)
+	if err != nil {
+		return false, nil, errors.Trace(err)
 	}
+	msg, err := wrapTokenResp.Marshal()
+	if err != nil {
+		return false, nil, errors.Trace(err)
+	}
+	return true, msg, nil
 }
 
 func buildGSSAPIMechanism(g gssapiConfig) (sasl.Mechanism, error) {
@@ -200,7 +160,7 @@ func (c *krb5Client) CName() types.PrincipalName {
 	return c.Credentials.CName()
 }
 
-func newKerberosClient(g gssapiConfig) (kerberosClient, error) {
+func newKerberosClient(g gssapiConfig) (*krb5Client, error) {
 	cfg, err := config.Load(g.kerberosConfigPath)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -256,13 +216,9 @@ func newKrb5Token(
 
 func newAuthenticatorChecksum() []byte {
 	sum := make([]byte, 24)
-	flags := []int{gssapi.ContextFlagInteg, gssapi.ContextFlagConf}
 	binary.LittleEndian.PutUint32(sum[:4], 16)
-	for _, flag := range flags {
-		current := binary.LittleEndian.Uint32(sum[20:24])
-		current |= uint32(flag)
-		binary.LittleEndian.PutUint32(sum[20:24], current)
-	}
+	flags := uint32(gssapi.ContextFlagInteg | gssapi.ContextFlagConf)
+	binary.LittleEndian.PutUint32(sum[20:24], flags)
 	return sum
 }
 

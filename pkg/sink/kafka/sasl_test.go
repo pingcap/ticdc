@@ -23,7 +23,7 @@ import (
 func TestBuildSaslMechanismGSSAPIUserAuth(t *testing.T) {
 	t.Parallel()
 
-	o := &clientOptions{
+	o := &options{
 		sasl: &saslConfig{
 			mechanism: gssapiMechanismName,
 			gssapi: gssapiConfig{
@@ -45,7 +45,7 @@ func TestBuildSaslMechanismGSSAPIUserAuth(t *testing.T) {
 func TestBuildSaslMechanismGSSAPIKeytabAuth(t *testing.T) {
 	t.Parallel()
 
-	o := &clientOptions{
+	o := &options{
 		sasl: &saslConfig{
 			mechanism: gssapiMechanismName,
 			gssapi: gssapiConfig{

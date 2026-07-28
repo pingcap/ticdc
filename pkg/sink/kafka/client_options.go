@@ -18,11 +18,9 @@ import (
 	"crypto/tls"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kversion"
 	"github.com/twmb/franz-go/pkg/sasl"
@@ -34,30 +32,9 @@ import (
 	"golang.org/x/oauth2/clientcredentials"
 )
 
-type clientOptions struct {
-	BrokerEndpoints []string
-	ClientID        string
-
-	Version           string
-	IsAssignedVersion bool
-
-	ProducerBatchMaxBytes int
-	MaxRetry              int
-	Compression           string
-	RequiredAcks          int16
-
-	EnableTLS          bool
-	Credential         *security.Credential
-	InsecureSkipVerify bool
-	sasl               *saslConfig
-
-	DialTimeout    time.Duration
-	RequestTimeout time.Duration
-}
-
 func newOptions(
 	ctx context.Context,
-	o *clientOptions,
+	o *options,
 	hook kgo.Hook,
 ) ([]kgo.Opt, error) {
 	opts := []kgo.Opt{
@@ -65,7 +42,7 @@ func newOptions(
 		kgo.SeedBrokers(o.BrokerEndpoints...),
 		kgo.ClientID(o.ClientID),
 		kgo.DialTimeout(o.DialTimeout),
-		kgo.RequestTimeoutOverhead(o.RequestTimeout),
+		kgo.RequestTimeoutOverhead(o.requestTimeout()),
 	}
 	if hook != nil {
 		opts = append(opts, kgo.WithHooks(hook))
@@ -98,7 +75,7 @@ func newOptions(
 	return opts, nil
 }
 
-func newTLSConfig(o *clientOptions) (*tls.Config, error) {
+func newTLSConfig(o *options) (*tls.Config, error) {
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		NextProtos: []string{"h2", "http/1.1"},
@@ -110,24 +87,14 @@ func newTLSConfig(o *clientOptions) (*tls.Config, error) {
 			return nil, errors.Trace(err)
 		}
 		tlsConfig = credentialTlsConfig
-		if tlsConfig.MinVersion == 0 {
-			tlsConfig.MinVersion = tls.VersionTLS12
-		}
-		if len(tlsConfig.NextProtos) == 0 {
-			tlsConfig.NextProtos = []string{"h2", "http/1.1"}
-		}
 	}
 
 	tlsConfig.InsecureSkipVerify = o.InsecureSkipVerify
 	return tlsConfig, nil
 }
 
-func buildSaslMechanism(ctx context.Context, o *clientOptions) (sasl.Mechanism, error) {
-	if o.sasl == nil {
-		return nil, nil
-	}
-
-	switch saslMechanism(strings.ToUpper(string(o.sasl.mechanism))) {
+func buildSaslMechanism(ctx context.Context, o *options) (sasl.Mechanism, error) {
+	switch o.sasl.mechanism {
 	case plainMechanism:
 		auth := plain.Auth{
 			User: o.sasl.user,
@@ -165,7 +132,7 @@ func buildSaslMechanism(ctx context.Context, o *clientOptions) (sasl.Mechanism, 
 	return nil, errors.ErrKafkaInvalidConfig.GenWithStack("unsupported sasl mechanism %s", o.sasl.mechanism)
 }
 
-func newOauthTokenSource(ctx context.Context, o *clientOptions) (oauth2.TokenSource, error) {
+func newOauthTokenSource(ctx context.Context, o *options) (oauth2.TokenSource, error) {
 	endpointParams := url.Values{}
 	if o.sasl.oauth2.grantType != "" {
 		endpointParams.Set("grant_type", o.sasl.oauth2.grantType)
@@ -190,7 +157,7 @@ func newOauthTokenSource(ctx context.Context, o *clientOptions) (oauth2.TokenSou
 }
 
 func newProducerOptions(
-	o *clientOptions,
+	o *options,
 ) []kgo.Opt {
 	return []kgo.Opt{
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
@@ -198,28 +165,28 @@ func newProducerOptions(
 		kgo.DisableIdempotentWrite(),
 		kgo.MaxProduceRequestsInflightPerBroker(1),
 		kgo.RecordRetries(o.MaxRetry),
-		kgo.ProducerBatchMaxBytes(int32(o.ProducerBatchMaxBytes)),
-		kgo.ProduceRequestTimeout(o.RequestTimeout),
+		kgo.ProducerBatchMaxBytes(int32(o.MaxMessageBytes)),
+		kgo.ProduceRequestTimeout(o.requestTimeout()),
 		kgo.ProducerLinger(0),
 		newCompressionOption(o),
 	}
 }
 
-func newRequiredAcks(o *clientOptions) kgo.Acks {
+func newRequiredAcks(o *options) kgo.Acks {
 	switch o.RequiredAcks {
-	case -1:
+	case WaitForAll:
 		return kgo.AllISRAcks()
-	case 1:
+	case WaitForLocal:
 		return kgo.LeaderAck()
-	case 0:
+	case NoResponse:
 		return kgo.NoAck()
 	default:
-		log.Warn("unsupported required acks", zap.Int16("requiredAcks", o.RequiredAcks))
+		log.Warn("unsupported required acks", zap.Int16("requiredAcks", int16(o.RequiredAcks)))
 		return kgo.AllISRAcks()
 	}
 }
 
-func newCompressionOption(o *clientOptions) kgo.Opt {
+func newCompressionOption(o *options) kgo.Opt {
 	compression := strings.ToLower(strings.TrimSpace(o.Compression))
 	var codec kgo.CompressionCodec
 	switch compression {

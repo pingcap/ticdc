@@ -135,7 +135,7 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 		}
 
 		// the topic is not created, only validate.
-		err = admin.CreateTopic(&kafka.TopicDetail{
+		err = admin.CreateTopic(kafka.TopicDetail{
 			Name:              topic,
 			NumPartitions:     topicConfig.PartitionNum,
 			ReplicationFactor: topicConfig.ReplicationFactor,
@@ -187,6 +187,7 @@ func newWithComponents(
 		}
 		comp.close()
 		statistics.Close()
+		kafka.CleanupMetrics(changefeedID)
 	}()
 
 	asyncProducer, err = comp.factory.AsyncProducer(ctx)
@@ -229,7 +230,6 @@ func (s *sink) Run(ctx context.Context) error {
 		return s.sendDMLEvent(ctx)
 	})
 	err := g.Wait()
-	kafka.CleanupMetrics(s.changefeedID)
 	s.isNormal.Store(false)
 	return errors.Trace(err)
 }
@@ -605,6 +605,7 @@ func (s *sink) Close() {
 	s.dmlProducer.Close()
 	s.comp.close()
 	s.statistics.Close()
+	kafka.CleanupMetrics(s.changefeedID)
 }
 
 func (s *sink) BatchCount() int {
