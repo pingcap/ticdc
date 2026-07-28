@@ -111,22 +111,13 @@ func FormatMaintainerStatus(s *heartbeatpb.MaintainerStatus) string {
 		return ""
 	}
 	sb := strings.Builder{}
-<<<<<<< HEAD
-	sb.WriteString(fmt.Sprintf(
-		"changefeed: %s, feedState: %s, state: %s, checkpointTs: %d, bootstrapDone: %t, errs: [",
-=======
 	fmt.Fprintf(&sb, "changefeed: %s, feedState: %s, state: %s, checkpointTs: %d, bootstrapDone: %t, maintainerEpoch: %d, errs: [",
->>>>>>> 0eec97153 (coordinator: persist maintainer epochs before ownership changes (#5434))
 		s.ChangefeedID.GetName(),
 		s.FeedState,
 		s.State.String(),
 		s.CheckpointTs,
 		s.BootstrapDone,
-<<<<<<< HEAD
-	))
-=======
 		s.MaintainerEpoch)
->>>>>>> 0eec97153 (coordinator: persist maintainer epochs before ownership changes (#5434))
 	for _, err := range s.Err {
 		sb.WriteString(err.String())
 	}

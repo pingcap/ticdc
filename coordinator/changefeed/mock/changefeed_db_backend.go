@@ -110,20 +110,12 @@ func (mr *MockBackendMockRecorder) PauseChangefeed(ctx, id interface{}) *gomock.
 }
 
 // ResumeChangefeed mocks base method.
-<<<<<<< HEAD
-func (m *MockBackend) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ResumeChangefeed", ctx, id, newCheckpointTs)
-	ret0, _ := ret[0].(error)
-	return ret0
-=======
 func (m *MockBackend) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, candidateEpoch, checkpointTs uint64) (*config.ChangeFeedInfo, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ResumeChangefeed", ctx, id, candidateEpoch, checkpointTs)
 	ret0, _ := ret[0].(*config.ChangeFeedInfo)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
->>>>>>> 0eec97153 (coordinator: persist maintainer epochs before ownership changes (#5434))
 }
 
 // ResumeChangefeed indicates an expected call of ResumeChangefeed.

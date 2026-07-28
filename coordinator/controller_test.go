@@ -578,20 +578,12 @@ func TestResumeChangefeed(t *testing.T) {
 	// no changefeed
 	require.NotNil(t, controller.ResumeChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName), 12, true))
 
-<<<<<<< HEAD
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
-	require.NotNil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, true))
-	require.Equal(t, config.StateFailed, changefeedDB.GetByID(cfID).GetInfo().State)
-
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
-=======
 	backend.EXPECT().ResumeChangefeed(gomock.Any(), cfID, gomock.Any(), uint64(12)).
 		Return(nil, errors.New("failed")).Times(1)
 	require.NotNil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, true))
 	require.Equal(t, config.StateFailed, changefeedDB.GetByID(cfID).GetInfo().State)
 
 	expectResumeChangefeed(t, backend, cfID, cf, 12)
->>>>>>> 0eec97153 (coordinator: persist maintainer epochs before ownership changes (#5434))
 	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, false))
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
 }
@@ -641,11 +633,7 @@ func TestResumeChangefeedOverwriteUpdatesLastSavedCheckpointTs(t *testing.T) {
 	changefeedDB.AddStoppedChangefeed(cf)
 
 	newCheckpointTs := uint64(120)
-<<<<<<< HEAD
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
-=======
 	expectResumeChangefeed(t, backend, cfID, cf, newCheckpointTs)
->>>>>>> 0eec97153 (coordinator: persist maintainer epochs before ownership changes (#5434))
 	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, newCheckpointTs, true))
 	require.Equal(t, newCheckpointTs, changefeedDB.GetByID(cfID).GetLastSavedCheckPointTs())
 }
@@ -679,11 +667,7 @@ func TestResumeChangefeedIgnoresStaleMaintainerErrorAndSchedules(t *testing.T) {
 	_, _, err := cf.ForceUpdateStatus(stale)
 	require.NotNil(t, err)
 
-<<<<<<< HEAD
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
-=======
 	expectResumeChangefeed(t, backend, cfID, cf, 100)
->>>>>>> 0eec97153 (coordinator: persist maintainer epochs before ownership changes (#5434))
 	require.NoError(t, controller.ResumeChangefeed(context.Background(), cfID, 100, false))
 
 	// The changefeed should be enqueued for scheduling and should not be blocked by the stale error.
@@ -697,8 +681,6 @@ func TestResumeChangefeedIgnoresStaleMaintainerErrorAndSchedules(t *testing.T) {
 	require.True(t, cf.ShouldRun())
 }
 
-<<<<<<< HEAD
-=======
 func TestResumeChangefeedUsesBackendReturnedInfo(t *testing.T) {
 	// Scenario: stopped changefeed metadata can be edited directly in the backend while
 	// the coordinator still has an older in-memory copy. Steps: resume the changefeed
@@ -758,7 +740,6 @@ func expectResumeChangefeed(
 		}).Times(1)
 }
 
->>>>>>> 0eec97153 (coordinator: persist maintainer epochs before ownership changes (#5434))
 func TestPauseChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)

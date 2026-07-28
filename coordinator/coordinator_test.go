@@ -58,97 +58,10 @@ func (m *mockPdClient) UpdateServiceGCSafePoint(ctx context.Context, serviceID s
 	return safePoint, nil
 }
 
-<<<<<<< HEAD
-=======
 func (m *mockPdClient) GetTS(ctx context.Context) (int64, int64, error) {
 	return oracle.GetPhysical(time.Now()), 0, nil
 }
 
-func (m *mockPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.gcClient == nil {
-		m.gcClient = make(map[uint32]*mockGCStatesClient)
-	}
-	if cli, ok := m.gcClient[keyspaceID]; ok {
-		return cli
-	}
-	cli := newMockGCStatesClient(keyspaceID)
-	m.gcClient[keyspaceID] = cli
-	return cli
-}
-
-type mockGCStatesClient struct {
-	keyspaceID uint32
-
-	mu       sync.Mutex
-	barriers map[string]*pdgc.GCBarrierInfo
-}
-
-func newMockGCStatesClient(keyspaceID uint32) *mockGCStatesClient {
-	return &mockGCStatesClient{
-		keyspaceID: keyspaceID,
-		barriers:   make(map[string]*pdgc.GCBarrierInfo),
-	}
-}
-
-func (c *mockGCStatesClient) SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GCBarrierInfo, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	info := pdgc.NewGCBarrierInfo(barrierID, barrierTS, ttl, time.Now())
-	c.barriers[barrierID] = info
-	return info, nil
-}
-
-func (c *mockGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID string) (*pdgc.GCBarrierInfo, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	info, ok := c.barriers[barrierID]
-	if ok {
-		delete(c.barriers, barrierID)
-	}
-	return info, nil
-}
-
-func (c *mockGCStatesClient) GetGCState(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	barriers := make([]*pdgc.GCBarrierInfo, 0, len(c.barriers))
-	for _, info := range c.barriers {
-		barriers = append(barriers, info)
-	}
-	return pdgc.NewGCStateWithGCBarriers(c.keyspaceID, 0, 0, barriers), nil
-}
-
-func (c *mockGCStatesClient) SetGlobalGCBarrier(
-	ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration,
-) (*pdgc.GlobalGCBarrierInfo, error) {
-	return pdgc.NewGlobalGCBarrierInfo(barrierID, barrierTS, ttl, time.Now()), nil
-}
-
-func (c *mockGCStatesClient) DeleteGlobalGCBarrier(
-	ctx context.Context, barrierID string,
-) (*pdgc.GlobalGCBarrierInfo, error) {
-	return nil, nil
-}
-
-func (c *mockGCStatesClient) GetAllKeyspacesGCStates(
-	ctx context.Context, opts ...pdgc.GCStatesAPIOption,
-) (pdgc.ClusterGCStates, error) {
-	gcState, err := c.GetGCState(ctx, opts...)
-	if err != nil {
-		return pdgc.ClusterGCStates{}, err
-	}
-	return pdgc.NewClusterGCStatesWithoutGlobalGCBarriers(map[uint32]pdgc.GCState{
-		c.keyspaceID: gcState,
-	}), nil
-}
-
->>>>>>> 0eec97153 (coordinator: persist maintainer epochs before ownership changes (#5434))
 type mockMaintainerManager struct {
 	mc                 messaging.MessageCenter
 	msgCh              chan *messaging.TargetMessage

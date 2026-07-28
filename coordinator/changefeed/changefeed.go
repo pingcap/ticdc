@@ -95,19 +95,13 @@ func NewChangefeed(cfID common.ChangeFeedID,
 	return res
 }
 
-<<<<<<< HEAD
-=======
 // GetInfo returns the latest ChangeFeedInfo stored in memory.
 //
 // Changefeed keeps info non-nil after construction.
->>>>>>> 0eec97153 (coordinator: persist maintainer epochs before ownership changes (#5434))
 func (c *Changefeed) GetInfo() *config.ChangeFeedInfo {
 	return c.info.Load()
 }
 
-<<<<<<< HEAD
-func (c *Changefeed) SetInfo(info *config.ChangeFeedInfo) {
-=======
 // SetInfo updates the in-memory ChangeFeedInfo for the changefeed.
 func (c *Changefeed) SetInfo(info *config.ChangeFeedInfo) {
 	if c == nil {
@@ -120,7 +114,6 @@ func (c *Changefeed) SetInfo(info *config.ChangeFeedInfo) {
 		c.info = atomic.NewPointer(info)
 		return
 	}
->>>>>>> 0eec97153 (coordinator: persist maintainer epochs before ownership changes (#5434))
 	c.info.Store(info)
 }
 

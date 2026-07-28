@@ -971,20 +971,6 @@ func (c *Controller) ResumeChangefeed(
 		return nil
 	}
 
-	if err := c.backend.ResumeChangefeed(ctx, id, newCheckpointTs); err != nil {
-		return err
-	}
-
-<<<<<<< HEAD
-	clone, err := cf.GetInfo().Clone()
-	if err != nil {
-		return err
-	}
-
-	clone.State = config.StateNormal
-	clone.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
-	cf.SetInfo(clone)
-=======
 	checkpointTs := cf.GetStatus().CheckpointTs
 	if newCheckpointTs > 0 {
 		checkpointTs = newCheckpointTs
@@ -998,7 +984,6 @@ func (c *Controller) ResumeChangefeed(
 		return errors.New("resumed changefeed info is nil")
 	}
 	cf.SetInfo(info)
->>>>>>> 0eec97153 (coordinator: persist maintainer epochs before ownership changes (#5434))
 
 	status := cf.GetStatusForResume()
 	status.CheckpointTs = checkpointTs
