@@ -108,7 +108,13 @@ func requireAcksFromString(acks int) (RequiredAcks, error) {
 	case int(NoResponse):
 		return NoResponse, nil
 	default:
+<<<<<<< HEAD
 		return Unknown, cerror.ErrKafkaInvalidRequiredAcks.GenWithStackByArgs(acks)
+=======
+		return Unknown, errors.ErrKafkaInvalidConfig.GenWithStack(
+			"invalid required acks %d, only support these values: "+
+				"0(NoResponse), 1(WaitForLocal) and -1(WaitForAll)", acks)
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 	}
 }
 
@@ -219,7 +225,11 @@ func (o *options) setPartitionNum(realPartitionCount int32) error {
 	// the real partition count, since messages would be dispatched to different
 	// partitions, this could prevent potential correctness problems.
 	if o.PartitionNum > realPartitionCount {
+<<<<<<< HEAD
 		return cerror.ErrKafkaInvalidPartitionNum.GenWithStack(
+=======
+		return errors.ErrKafkaInvalidConfig.GenWithStack(
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 			"the number of partition (%d) specified in sink-uri is more than that of actual topic (%d)",
 			o.PartitionNum, realPartitionCount)
 	}
@@ -236,15 +246,23 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	req := &http.Request{URL: sinkURI}
 	urlParameter := &urlConfig{}
 	if err = binding.Query.Bind(req, urlParameter); err != nil {
+<<<<<<< HEAD
 		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+=======
+		return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 	}
 	if urlParameter, err = mergeConfig(sinkConfig, urlParameter); err != nil {
-		return err
+		return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
 	if urlParameter.PartitionNum != nil {
 		o.PartitionNum = *urlParameter.PartitionNum
 		if o.PartitionNum <= 0 {
+<<<<<<< HEAD
 			return cerror.ErrKafkaInvalidPartitionNum.GenWithStackByArgs(o.PartitionNum)
+=======
+			return errors.ErrKafkaInvalidConfig.GenWithStack("invalid partition num %d", o.PartitionNum)
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 		}
 	}
 
@@ -289,7 +307,7 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	if urlParameter.DialTimeout != nil && *urlParameter.DialTimeout != "" {
 		a, err := time.ParseDuration(*urlParameter.DialTimeout)
 		if err != nil {
-			return err
+			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
 		o.DialTimeout = a
 	}
@@ -297,7 +315,7 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	if urlParameter.WriteTimeout != nil && *urlParameter.WriteTimeout != "" {
 		a, err := time.ParseDuration(*urlParameter.WriteTimeout)
 		if err != nil {
-			return err
+			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
 		o.WriteTimeout = a
 	}
@@ -305,7 +323,7 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	if urlParameter.ReadTimeout != nil && *urlParameter.ReadTimeout != "" {
 		a, err := time.ParseDuration(*urlParameter.ReadTimeout)
 		if err != nil {
-			return err
+			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
 		o.ReadTimeout = a
 	}
@@ -387,8 +405,12 @@ func (o *options) applyTLS(params *urlConfig) error {
 
 	if o.Credential != nil && !o.Credential.IsEmpty() &&
 		!o.Credential.IsTLSEnabled() {
+<<<<<<< HEAD
 		return cerror.WrapError(cerror.ErrKafkaInvalidConfig,
 			errors.New("ca, cert and key files should all be supplied"))
+=======
+		return errors.ErrKafkaInvalidConfig.GenWithStack("ca, cert and key files should all be supplied")
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 	}
 
 	// if enable-tls is not set, but credential files are set,
@@ -401,8 +423,12 @@ func (o *options) applyTLS(params *urlConfig) error {
 		enableTLS := *params.EnableTLS
 
 		if o.Credential != nil && o.Credential.IsTLSEnabled() && !enableTLS {
+<<<<<<< HEAD
 			return cerror.WrapError(cerror.ErrKafkaInvalidConfig,
 				errors.New("credential files are supplied, but 'enable-tls' is set to false"))
+=======
+			return errors.ErrKafkaInvalidConfig.GenWithStack("credential files are supplied, but 'enable-tls' is set to false")
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 		}
 		o.EnableTLS = enableTLS
 	} else {
@@ -493,8 +519,12 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			decodedClientSecret, err := base64.StdEncoding.DecodeString(clientSecret)
 			if err != nil {
 				log.Error("OAuth2 client secret is not base64 encoded", zap.Error(err))
+<<<<<<< HEAD
 				return cerror.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 client secret is not base64 encoded")
+=======
+				return errors.ErrKafkaInvalidConfig.GenWithStack("OAuth2 client secret is not base64 encoded")
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 			}
 			o.SASL.OAuth2.ClientSecret = string(decodedClientSecret)
 		}
@@ -516,7 +546,11 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			}
 
 			if err := o.SASL.OAuth2.Validate(); err != nil {
+<<<<<<< HEAD
 				return cerror.ErrKafkaInvalidConfig.Wrap(err)
+=======
+				return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 			}
 			o.SASL.OAuth2.SetDefault()
 		}
@@ -552,6 +586,47 @@ func (o *options) DeriveTopicConfig() *AutoCreateTopicConfig {
 	}
 }
 
+<<<<<<< HEAD
+=======
+// ValidateReplicationFactor checks whether a topic created with this config
+// can satisfy the configured acknowledgment requirement.
+func (c *AutoCreateTopicConfig) ValidateReplicationFactor(admin ClusterAdminClient) error {
+	if c.RequiredAcks != WaitForAll {
+		return nil
+	}
+
+	raw, found, err := admin.GetBrokerConfig(MinInsyncReplicasConfigName)
+	if err != nil {
+		log.Warn("cannot get Kafka broker configuration, assume replication factor is valid",
+			zap.String("configName", MinInsyncReplicasConfigName),
+			zap.Int16("replicationFactor", c.ReplicationFactor),
+			zap.Error(err))
+		return nil
+	}
+	if !found {
+		log.Warn("Kafka broker configuration not found, assume replication factor is valid",
+			zap.String("configName", MinInsyncReplicasConfigName),
+			zap.Int16("replicationFactor", c.ReplicationFactor))
+		return nil
+	}
+	minInsyncReplicas, err := strconv.Atoi(raw)
+	if err != nil {
+		return errors.WrapError(errors.ErrKafkaAdminAPI, err, "parse-config", MinInsyncReplicasConfigName)
+	}
+
+	if int(c.ReplicationFactor) < minInsyncReplicas {
+		return errors.ErrKafkaInvalidConfig.GenWithStack(
+			"TiCDC Kafka sink's `request.required.acks` defaults to -1, "+
+				"TiCDC cannot deliver messages when the `replication-factor` %d "+
+				"is smaller than the `min.insync.replicas` %d of broker",
+			c.ReplicationFactor, minInsyncReplicas,
+		)
+	}
+
+	return nil
+}
+
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 var (
 	validClientID     = regexp.MustCompile(`\A[A-Za-z0-9._-]+\z`)
 	commonInvalidChar = regexp.MustCompile(`[\?:,"]`)
@@ -570,7 +645,11 @@ func NewKafkaClientID(captureAddr string,
 		clientID = commonInvalidChar.ReplaceAllString(clientID, "_")
 	}
 	if !validClientID.MatchString(clientID) {
+<<<<<<< HEAD
 		return "", cerror.ErrKafkaInvalidClientID.GenWithStackByArgs(clientID)
+=======
+		return "", errors.ErrKafkaInvalidConfig.GenWithStack("invalid kafka client ID %q", clientID)
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 	}
 	return
 }
@@ -584,7 +663,7 @@ func adjustOptions(
 ) error {
 	topics, err := admin.GetTopicsMeta([]string{topic}, true)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	// Only check replicationFactor >= minInsyncReplicas when producer's required acks is -1.
@@ -650,11 +729,48 @@ func adjustOptions(
 	}
 	brokerMessageMaxBytes, err := strconv.Atoi(brokerMessageMaxBytesStr)
 	if err != nil {
+<<<<<<< HEAD
 		return errors.Trace(err)
+=======
+		return err
+	}
+
+	options.MaxBatchedBytes = min(options.MaxBatchedBytes, options.MaxMessageBytes)
+	return nil
+}
+
+func adjustExistingTopicOption(
+	changefeedID common.ChangeFeedID,
+	admin ClusterAdminClient,
+	options *options,
+	topic string,
+	info TopicDetail,
+) error {
+	maxMessageBytes, found, err := getTopicMaxMessageBytes(admin, info.Name)
+	if err != nil || !found {
+		log.Warn("`max.message.bytes` not found from topic's configuration, use the option `MaxMessageBytes` as default",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
+			zap.Int("maxMessageBytes", options.MaxMessageBytes), zap.Error(err))
+		maxMessageBytes = options.MaxMessageBytes
+	}
+	options.MaxMessageBytes = maxMessageBytes
+
+	// no need to create the topic,
+	// but we would have to log user if they found enter wrong topic name later
+	if options.AutoCreate {
+		log.Warn("topic already exist, TiCDC will not create the topic",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
+			zap.String("topic", topic), zap.Any("detail", info))
+	}
+
+	if err = options.setPartitionNum(changefeedID, info.NumPartitions); err != nil {
+		return err
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 	}
 
 	// when create the topic, `max.message.bytes` is decided by the broker,
 	// it would use broker's `message.max.bytes` to set topic's `max.message.bytes`.
+<<<<<<< HEAD
 	// TiCDC need to make sure that the producer's `MaxMessageBytes` won't larger than
 	// broker's `message.max.bytes`.
 	maxMessageBytes := brokerMessageMaxBytes - maxMessageBytesOverhead
@@ -669,6 +785,14 @@ func adjustOptions(
 		if maxMessageBytes < options.MaxMessageBytes {
 			options.MaxMessageBytes = maxMessageBytes
 		}
+=======
+	messageMaxBytes, found, err := getBrokerMaxMessageBytes(admin)
+	if err != nil || !found {
+		log.Warn("`message.max.bytes` not found from broker's configuration, use the option `MaxMessageBytes` as default",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
+			zap.Int("maxMessageBytes", options.MaxMessageBytes), zap.Error(err))
+		messageMaxBytes = options.MaxMessageBytes
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 	}
 
 	// topic not exists yet, and user does not specify the `partition-num` in the sink uri.
@@ -685,6 +809,7 @@ func validateMinInsyncReplicas(
 	admin ClusterAdminClient,
 	topics map[string]TopicDetail,
 	topic string,
+<<<<<<< HEAD
 	replicationFactor int,
 ) error {
 	minInsyncReplicasConfigGetter := func() (string, bool, error) {
@@ -706,10 +831,39 @@ func validateMinInsyncReplicas(
 		}
 
 		return minInsyncReplicasStr, false, nil
+=======
+) (int, bool, error) {
+	raw, found, err := getTopicConfig(
+		admin, topic,
+		TopicMaxMessageBytesConfigName,
+		BrokerMessageMaxBytesConfigName,
+	)
+	if err != nil {
+		return 0, false, err
+	}
+	if !found {
+		return 0, false, nil
+	}
+	maxMessageBytes, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "parse-config", TopicMaxMessageBytesConfigName)
+	}
+	return maxMessageBytes, true, nil
+}
+
+func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, bool, error) {
+	raw, found, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
+	if err != nil {
+		return 0, false, err
+	}
+	if !found {
+		return 0, false, nil
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 	}
 
 	minInsyncReplicasStr, exists, err := minInsyncReplicasConfigGetter()
 	if err != nil {
+<<<<<<< HEAD
 		// 'min.insync.replica' is invisible to us in Confluent Cloud Kafka.
 		if cerror.ErrKafkaConfigNotFound.Equal(err) {
 			log.Warn("TiCDC cannot find `min.insync.replicas` from broker's configuration, " +
@@ -745,6 +899,11 @@ func validateMinInsyncReplicas(
 	}
 
 	return nil
+=======
+		return 0, false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "parse-config", BrokerMessageMaxBytesConfigName)
+	}
+	return messageMaxBytes, true, nil
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 }
 
 // getTopicConfig gets topic config by name.
@@ -757,12 +916,13 @@ func getTopicConfig(
 	topicName string,
 	topicConfigName string,
 	brokerConfigName string,
-) (string, error) {
-	if c, err := admin.GetTopicConfig(topicName, topicConfigName); err == nil {
-		return c, nil
+) (string, bool, error) {
+	c, found, err := admin.GetTopicConfig(topicName, topicConfigName)
+	if err == nil && found {
+		return c, true, nil
 	}
 
-	log.Info("kafka sink cannot find the configuration from topic, try to get it from broker",
-		zap.String("topic", topicName), zap.String("config", topicConfigName))
+	log.Info("kafka sink cannot get the configuration from topic, try to get it from broker",
+		zap.String("topic", topicName), zap.String("config", topicConfigName), zap.Error(err))
 	return admin.GetBrokerConfig(brokerConfigName)
 }

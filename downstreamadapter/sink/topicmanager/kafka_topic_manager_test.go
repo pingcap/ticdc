@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
 )
@@ -35,7 +36,56 @@ func TestCreateTopic(t *testing.T) {
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	ctx := context.Background()
+<<<<<<< HEAD
 	manager := newKafkaTopicManager(ctx, kafka.DefaultMockTopicName, changefeedID, adminClient, cfg)
+=======
+	var gotNewTopicDetail *kafka.TopicDetail
+	var gotNewTopicValidateOnly bool
+	var gotFailedTopicDetail *kafka.TopicDetail
+	var gotFailedTopicValidateOnly bool
+	gomock.InOrder(
+		adminClient.EXPECT().GetTopicsMeta([]string{kafkaTopicManagerTestTopic}, true).Return(
+			map[string]kafka.TopicDetail{
+				kafkaTopicManagerTestTopic: {
+					Name:          kafkaTopicManagerTestTopic,
+					NumPartitions: 2,
+				},
+			}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, true).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
+			func(detail *kafka.TopicDetail, validateOnly bool) error {
+				gotNewTopicDetail = detail
+				gotNewTopicValidateOnly = validateOnly
+				return nil
+			}),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).Return(
+			map[string]kafka.TopicDetail{
+				"new-topic": {
+					Name:          "new-topic",
+					NumPartitions: 2,
+				},
+			}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic2"}, true).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic2"}, false).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic-failed"}, true).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic-failed"}, false).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
+			func(detail *kafka.TopicDetail, validateOnly bool) error {
+				gotFailedTopicDetail = detail
+				gotFailedTopicValidateOnly = validateOnly
+				return errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ErrInvalidReplicationFactor, "create-topic", detail.Name)
+			}),
+	)
+
+	manager := newKafkaTopicManager(ctx, kafkaTopicManagerTestTopic, changefeedID, adminClient, cfg)
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 	defer manager.Close()
 	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, kafka.DefaultMockTopicName)
 	require.NoError(t, err)
@@ -70,18 +120,64 @@ func TestCreateTopic(t *testing.T) {
 	manager = newKafkaTopicManager(ctx, topic, changefeedID, adminClient, cfg)
 	defer manager.Close()
 	_, err = manager.CreateTopicAndWaitUntilVisible(ctx, topic)
+<<<<<<< HEAD
 	require.Regexp(
 		t,
 		"kafka create topic failed: kafka server: Replication-factor is invalid",
 		err,
 	)
+=======
+	require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+	require.ErrorIs(t, err, sarama.ErrInvalidReplicationFactor)
+	require.NotNil(t, gotFailedTopicDetail)
+	require.Equal(t, "new-topic-failed", gotFailedTopicDetail.Name)
+	require.False(t, gotFailedTopicValidateOnly)
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 }
 
 func TestCreateTopicWithDelay(t *testing.T) {
 	t.Parallel()
 
+<<<<<<< HEAD
 	adminClient := kafka.NewClusterAdminClientMockImpl()
 	defer adminClient.Close()
+=======
+	ctrl := gomock.NewController(t)
+	adminClient := kafka.NewMockClusterAdminClient(ctrl)
+	topic := "new-topic"
+	gomock.InOrder(
+		adminClient.EXPECT().GetTopicsMeta([]string{topic}, true).
+			Return(map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).
+			Return(map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetBrokerConfig(kafka.MinInsyncReplicasConfigName).
+			Return("2", true, nil),
+	)
+
+	manager := newKafkaTopicManager(
+		context.Background(),
+		topic,
+		common.NewChangefeedID4Test("test", "test"),
+		adminClient,
+		&kafka.AutoCreateTopicConfig{
+			AutoCreate:        true,
+			PartitionNum:      2,
+			ReplicationFactor: 1,
+			RequiredAcks:      kafka.WaitForAll,
+		},
+	)
+	defer manager.Close()
+
+	_, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), topic)
+	require.ErrorContains(t, err, "`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of broker")
+}
+
+func TestCreateTopicWaitsUntilVisible(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	adminClient := kafka.NewMockClusterAdminClient(ctrl)
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 	cfg := &kafka.AutoCreateTopicConfig{
 		AutoCreate:        true,
 		PartitionNum:      2,

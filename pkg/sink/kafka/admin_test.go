@@ -14,13 +14,20 @@
 package kafka
 
 import (
+	"io"
 	"testing"
 
 	"github.com/IBM/sarama"
+<<<<<<< HEAD
+=======
+	"github.com/golang/mock/gomock"
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
+<<<<<<< HEAD
 type testSaramaClient struct {
 	closed bool
 }
@@ -88,4 +95,83 @@ func TestSaramaAdminClientCloseFallsBackToClientWhenAdminIsNil(t *testing.T) {
 	}
 	require.NotPanics(t, func() { a.Close() })
 	require.True(t, client.closed)
+=======
+func TestGetBrokerConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("not found", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		admin := NewMocksaramaClusterAdmin(ctrl)
+		admin.EXPECT().DescribeCluster().Return(nil, int32(1), nil)
+		admin.EXPECT().DescribeConfig(gomock.Any()).Return([]sarama.ConfigEntry{}, nil)
+
+		client := &saramaAdminClient{
+			changefeed: common.NewChangeFeedIDWithName("test", "default"),
+			admin:      admin,
+		}
+		value, found, err := client.GetBrokerConfig("missing")
+
+		require.NoError(t, err)
+		require.False(t, found)
+		require.Empty(t, value)
+	})
+
+	t.Run("admin error", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		admin := NewMocksaramaClusterAdmin(ctrl)
+		cause := io.ErrUnexpectedEOF
+		admin.EXPECT().DescribeCluster().Return(nil, int32(0), cause)
+
+		client := &saramaAdminClient{
+			changefeed: common.NewChangeFeedIDWithName("test", "default"),
+			admin:      admin,
+		}
+		_, _, err := client.GetBrokerConfig("missing")
+
+		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+		require.ErrorIs(t, err, cause)
+	})
+}
+
+func TestAdminClientClose(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*gomock.Controller) *saramaAdminClient
+	}{
+		{
+			name: "uses admin close",
+			setup: func(ctrl *gomock.Controller) *saramaAdminClient {
+				client := NewMocksaramaClient(ctrl)
+				admin := NewMocksaramaClusterAdmin(ctrl)
+				admin.EXPECT().Close().Return(nil)
+				client.EXPECT().Close().Times(0)
+				return &saramaAdminClient{
+					changefeed: common.NewChangeFeedIDWithName("test", "default"),
+					client:     client,
+					admin:      admin,
+				}
+			},
+		},
+		{
+			name: "falls back to client when admin is nil",
+			setup: func(ctrl *gomock.Controller) *saramaAdminClient {
+				client := NewMocksaramaClient(ctrl)
+				client.EXPECT().Close().Return(nil)
+				return &saramaAdminClient{
+					changefeed: common.NewChangeFeedIDWithName("test", "default"),
+					client:     client,
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			adminClient := test.setup(ctrl)
+
+			require.NotPanics(t, func() { adminClient.Close() })
+		})
+	}
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 }

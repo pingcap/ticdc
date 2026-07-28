@@ -23,14 +23,155 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+<<<<<<< HEAD
 	"github.com/aws/aws-sdk-go/aws"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+=======
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/golang/mock/gomock"
+	"github.com/pingcap/ticdc/pkg/common"
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
 
+<<<<<<< HEAD
+=======
+const (
+	defaultMockTopicName = "mock_topic"
+
+	// These values model Kafka admin responses, not TiCDC option defaults.
+	mockClusterReplicationFactor int16 = 3
+	mockBrokerMessageMaxBytes          = "1048588"
+	mockTopicMessageMaxBytes           = "1048588"
+	mockMinInsyncReplicas              = "1"
+)
+
+type kafkaAdminFixture struct {
+	admin        *MockClusterAdminClient
+	topics       map[string]TopicDetail
+	brokerConfig map[string]string
+	topicConfig  map[string]map[string]string
+}
+
+func newKafkaAdminFixture(t *testing.T) *kafkaAdminFixture {
+	t.Helper()
+
+	ctrl := gomock.NewController(t)
+	fixture := &kafkaAdminFixture{
+		admin:  NewMockClusterAdminClient(ctrl),
+		topics: make(map[string]TopicDetail),
+		brokerConfig: map[string]string{
+			BrokerMessageMaxBytesConfigName: mockBrokerMessageMaxBytes,
+			MinInsyncReplicasConfigName:     mockMinInsyncReplicas,
+		},
+		topicConfig: make(map[string]map[string]string),
+	}
+	fixture.addTopic(defaultMockTopicName, defaultPartitionNum)
+	fixture.topicConfig[defaultMockTopicName] = map[string]string{
+		TopicMaxMessageBytesConfigName: mockTopicMessageMaxBytes,
+		MinInsyncReplicasConfigName:    mockMinInsyncReplicas,
+	}
+
+	fixture.admin.EXPECT().Close().AnyTimes()
+	fixture.admin.EXPECT().GetTopicsMeta(gomock.Any(), gomock.Any()).
+		DoAndReturn(fixture.getTopicsMeta).AnyTimes()
+	fixture.admin.EXPECT().GetTopicsPartitionsNum(gomock.Any()).
+		DoAndReturn(fixture.getTopicsPartitionsNum).AnyTimes()
+	fixture.admin.EXPECT().GetBrokerConfig(gomock.Any()).
+		DoAndReturn(fixture.getBrokerConfig).AnyTimes()
+	fixture.admin.EXPECT().GetTopicConfig(gomock.Any(), gomock.Any()).
+		DoAndReturn(fixture.getTopicConfig).AnyTimes()
+	fixture.admin.EXPECT().CreateTopic(gomock.Any(), gomock.Any()).
+		DoAndReturn(fixture.createTopic).AnyTimes()
+
+	return fixture
+}
+
+func (f *kafkaAdminFixture) addTopic(name string, partitionNum int32) {
+	f.topics[name] = TopicDetail{Name: name, NumPartitions: partitionNum}
+}
+
+func (f *kafkaAdminFixture) getTopicsMeta(
+	topics []string, _ bool,
+) (map[string]TopicDetail, error) {
+	result := make(map[string]TopicDetail, len(topics))
+	for _, topic := range topics {
+		if detail, ok := f.topics[topic]; ok {
+			result[topic] = detail
+		}
+	}
+	return result, nil
+}
+
+func (f *kafkaAdminFixture) getTopicsPartitionsNum(
+	topics []string,
+) (map[string]int32, error) {
+	result := make(map[string]int32, len(topics))
+	for _, topic := range topics {
+		if detail, ok := f.topics[topic]; ok {
+			result[topic] = detail.NumPartitions
+		}
+	}
+	return result, nil
+}
+
+func (f *kafkaAdminFixture) getBrokerConfig(configName string) (string, bool, error) {
+	if value, ok := f.brokerConfig[configName]; ok {
+		return value, true, nil
+	}
+	return "", false, nil
+}
+
+func (f *kafkaAdminFixture) getTopicConfig(topicName string, configName string) (string, bool, error) {
+	if _, ok := f.topics[topicName]; !ok {
+		return "", false, nil
+	}
+	if value, ok := f.topicConfig[topicName][configName]; ok {
+		return value, true, nil
+	}
+	return "", false, nil
+}
+
+func (f *kafkaAdminFixture) createTopic(detail *TopicDetail, _ bool) error {
+	if detail.ReplicationFactor > mockClusterReplicationFactor {
+		return sarama.ErrInvalidReplicationFactor
+	}
+	if _, ok := f.brokerConfig[MinInsyncReplicasConfigName]; !ok &&
+		detail.ReplicationFactor != mockClusterReplicationFactor {
+		return sarama.ErrPolicyViolation
+	}
+	f.topics[detail.Name] = *detail
+	return nil
+}
+
+func (f *kafkaAdminFixture) brokerMessageMaxBytes() int {
+	value, _ := strconv.Atoi(f.brokerConfig[BrokerMessageMaxBytesConfigName])
+	return value
+}
+
+func (f *kafkaAdminFixture) topicMaxMessageBytes(topicName string) int {
+	value, _ := strconv.Atoi(f.topicConfig[topicName][TopicMaxMessageBytesConfigName])
+	return value
+}
+
+func (f *kafkaAdminFixture) setMessageMaxBytes(brokerValue, topicValue string) {
+	f.brokerConfig[BrokerMessageMaxBytesConfigName] = brokerValue
+	f.topicConfig[defaultMockTopicName][TopicMaxMessageBytesConfigName] = topicValue
+}
+
+func (f *kafkaAdminFixture) setMinInsyncReplicas(minInsyncReplicas string) {
+	f.topicConfig[defaultMockTopicName][MinInsyncReplicasConfigName] = minInsyncReplicas
+	f.brokerConfig[MinInsyncReplicasConfigName] = minInsyncReplicas
+}
+
+func (f *kafkaAdminFixture) dropBrokerConfig(configName string) {
+	delete(f.brokerConfig, configName)
+}
+
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 func TestCompleteOptions(t *testing.T) {
 	options := NewOptions()
 
@@ -43,7 +184,7 @@ func TestCompleteOptions(t *testing.T) {
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 
-	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), options.PartitionNum)
 	require.Equal(t, int16(3), options.ReplicationFactor)
@@ -57,7 +198,7 @@ func TestCompleteOptions(t *testing.T) {
 	sinkURI, err = url.Parse(uri)
 	require.NoError(t, err)
 	options = NewOptions()
-	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"),
+	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
 		sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.NoError(t, err)
 	require.Len(t, options.BrokerEndpoints, 3)
@@ -67,15 +208,30 @@ func TestCompleteOptions(t *testing.T) {
 	sinkURI, err = url.Parse(uri)
 	require.NoError(t, err)
 	options = NewOptions()
-	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.Regexp(t, ".*invalid syntax.*", errors.Cause(err))
+<<<<<<< HEAD
+=======
+	for _, replicationFactor := range []string{"0", "-1"} {
+		uri = "kafka://127.0.0.1:9092/abc?replication-factor=" + replicationFactor
+		sinkURI, err = url.Parse(uri)
+		require.NoError(t, err)
+		options = NewOptions()
+		err = options.Apply(
+			common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
+			sinkURI,
+			config.GetDefaultReplicaConfig().Sink,
+		)
+		require.ErrorContains(t, err, "invalid replication-factor "+replicationFactor)
+	}
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 
 	// Illegal max-message-bytes.
 	uri = "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&max-message-bytes=a"
 	sinkURI, err = url.Parse(uri)
 	require.NoError(t, err)
 	options = NewOptions()
-	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.Regexp(t, ".*invalid syntax.*", errors.Cause(err))
 
 	// Illegal max-retry.
@@ -83,7 +239,7 @@ func TestCompleteOptions(t *testing.T) {
 	sinkURI, err = url.Parse(uri)
 	require.NoError(t, err)
 	options = NewOptions()
-	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.Regexp(t, ".*invalid syntax.*", errors.Cause(err))
 
 	// Illegal partition-num.
@@ -91,7 +247,7 @@ func TestCompleteOptions(t *testing.T) {
 	sinkURI, err = url.Parse(uri)
 	require.NoError(t, err)
 	options = NewOptions()
-	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.Regexp(t, ".*invalid syntax.*", errors.Cause(err))
 
 	// Out of range partition-num.
@@ -99,7 +255,7 @@ func TestCompleteOptions(t *testing.T) {
 	sinkURI, err = url.Parse(uri)
 	require.NoError(t, err)
 	options = NewOptions()
-	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.Regexp(t, ".*invalid partition num.*", errors.Cause(err))
 
 	// Unknown required-acks.
@@ -107,7 +263,7 @@ func TestCompleteOptions(t *testing.T) {
 	sinkURI, err = url.Parse(uri)
 	require.NoError(t, err)
 	options = NewOptions()
-	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.Regexp(t, ".*invalid required acks 3.*", errors.Cause(err))
 
 	// invalid kafka client id
@@ -115,15 +271,15 @@ func TestCompleteOptions(t *testing.T) {
 	sinkURI, err = url.Parse(uri)
 	require.NoError(t, err)
 	options = NewOptions()
-	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
-	require.True(t, errors.ErrKafkaInvalidClientID.Equal(err))
+	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	require.True(t, errors.ErrKafkaInvalidConfig.Equal(err))
 
 	// max-retry accepts non-negative sink-uri values.
 	uri = "kafka://127.0.0.1:9092/abc?max-retry=7"
 	sinkURI, err = url.Parse(uri)
 	require.NoError(t, err)
 	options = NewOptions()
-	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.NoError(t, err)
 	require.Equal(t, 7, options.MaxRetry)
 
@@ -131,7 +287,7 @@ func TestCompleteOptions(t *testing.T) {
 	sinkURI, err = url.Parse(uri)
 	require.NoError(t, err)
 	options = NewOptions()
-	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.NoError(t, err)
 	require.Equal(t, 0, options.MaxRetry)
 
@@ -140,14 +296,76 @@ func TestCompleteOptions(t *testing.T) {
 	sinkURI, err = url.Parse(uri)
 	require.NoError(t, err)
 	options = NewOptions()
-	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.NoError(t, err)
 	require.Equal(t, defaultMaxRetry, options.MaxRetry)
 }
 
+<<<<<<< HEAD
 func TestSetPartitionNum(t *testing.T) {
 	options := NewOptions()
 	err := options.setPartitionNum(2)
+=======
+func TestApplyRejectsNonPositiveMaxMessageBytes(t *testing.T) {
+	tests := []struct {
+		name        string
+		uri         string
+		configValue *int
+		expected    int
+	}{
+		{
+			name:     "zero from URI",
+			uri:      "kafka://127.0.0.1:9092/test-topic?max-message-bytes=0",
+			expected: 0,
+		},
+		{
+			name:     "negative from URI",
+			uri:      "kafka://127.0.0.1:9092/test-topic?max-message-bytes=-1",
+			expected: -1,
+		},
+		{
+			name:        "zero from sink config",
+			uri:         "kafka://127.0.0.1:9092/test-topic",
+			configValue: aws.Int(0),
+			expected:    0,
+		},
+		{
+			name:        "negative from sink config",
+			uri:         "kafka://127.0.0.1:9092/test-topic",
+			configValue: aws.Int(-1),
+			expected:    -1,
+		},
+	}
+
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sinkURI, err := url.Parse(test.uri)
+			require.NoError(t, err)
+
+			sinkConfig := config.GetDefaultReplicaConfig().Sink
+			if test.configValue != nil {
+				sinkConfig.KafkaConfig = &config.KafkaConfig{
+					MaxMessageBytes: test.configValue,
+				}
+			}
+
+			options := NewOptions()
+			err = options.Apply(changefeedID, sinkURI, sinkConfig)
+			require.ErrorContains(
+				t, err, fmt.Sprintf("invalid max-message-bytes %d", test.expected))
+			errCode, ok := errors.RFCCode(err)
+			require.True(t, ok)
+			require.Equal(t, errors.ErrKafkaInvalidConfig.RFCCode(), errCode)
+		})
+	}
+}
+
+func TestSetPartitionNum(t *testing.T) {
+	options := NewOptions()
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
+	err := options.setPartitionNum(changefeedID, 2)
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 	require.NoError(t, err)
 	require.Equal(t, int32(2), options.PartitionNum)
 
@@ -157,8 +375,13 @@ func TestSetPartitionNum(t *testing.T) {
 	require.Equal(t, int32(1), options.PartitionNum)
 
 	options.PartitionNum = 3
+<<<<<<< HEAD
 	err = options.setPartitionNum(2)
 	require.True(t, errors.ErrKafkaInvalidPartitionNum.Equal(err))
+=======
+	err = options.setPartitionNum(changefeedID, 2)
+	require.True(t, errors.ErrKafkaInvalidConfig.Equal(err))
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 }
 
 func TestClientID(t *testing.T) {
@@ -196,7 +419,7 @@ func TestClientID(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		id, err := NewKafkaClientID(tc.addr,
-			commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, tc.changefeedID), tc.configuredID)
+			common.NewChangefeedID4Test(common.DefaultKeyspaceName, tc.changefeedID), tc.configuredID)
 		if tc.hasError {
 			require.Error(t, err)
 		} else {
@@ -217,7 +440,7 @@ func TestTimeout(t *testing.T) {
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 
-	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.NoError(t, err)
 
 	require.Equal(t, 5*time.Second, options.DialTimeout)
@@ -230,8 +453,17 @@ func TestAdjustConfigTopicNotExist(t *testing.T) {
 	adminClient := NewClusterAdminClientMockImpl()
 	defer adminClient.Close()
 
+<<<<<<< HEAD
 	options := NewOptions()
 	options.BrokerEndpoints = []string{"127.0.0.1:9092"}
+=======
+	topicName := "test-topic"
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adminFixture := newKafkaAdminFixture(t)
+			adminClient := adminFixture.admin
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 
 	// topic not exist, `max-message-bytes` = `message.max.bytes`
 	options.MaxMessageBytes = adminClient.GetBrokerMessageMaxBytes()
@@ -640,10 +872,17 @@ func TestConfigurationCombinations(t *testing.T) {
 		sinkURI, err := url.Parse(uri)
 		require.Nil(t, err)
 
+<<<<<<< HEAD
 		ctx := context.Background()
 		options := NewOptions()
 		err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 		require.Nil(t, err)
+=======
+			options := NewOptions()
+			err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+			require.Nil(t, err)
+			configuredMaxMessageBytes := options.MaxMessageBytes
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 
 		changefeed := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "changefeed-test")
 		factory, err := NewMockFactory(ctx, options, changefeed)
@@ -652,11 +891,23 @@ func TestConfigurationCombinations(t *testing.T) {
 		adminClient, err := factory.AdminClient(ctx)
 		require.NoError(t, err)
 
+<<<<<<< HEAD
 		topic, ok := a.uriParams[0].(string)
 		require.True(t, ok)
 		require.NotEqual(t, "", topic)
 		err = adjustOptions(ctx, adminClient, options, topic)
 		require.Nil(t, err)
+=======
+			changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
+			err = adjustOptions(changefeedID, adminClient, options, topic)
+			require.Nil(t, err)
+			require.Equal(t, sourceMaxMessageBytes, options.MaxMessageBytes)
+			require.Equal(
+				t,
+				min(configuredMaxMessageBytes, sourceMaxMessageBytes),
+				options.MaxBatchedBytes,
+			)
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 
 		encoderConfig := common.NewConfig(config.ProtocolOpen)
 		err = encoderConfig.Apply(sinkURI, &config.SinkConfig{
@@ -709,7 +960,7 @@ func TestMerge(t *testing.T) {
 		Key:                       aws.String("key.pem"),
 	}
 	c := NewOptions()
-	err = c.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, replicaConfig.Sink)
+	err = c.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, replicaConfig.Sink)
 	require.NoError(t, err)
 	require.Equal(t, int32(12), c.PartitionNum)
 	require.Equal(t, int16(5), c.ReplicationFactor)
@@ -790,7 +1041,7 @@ func TestMerge(t *testing.T) {
 		Key:                       aws.String("key2.pem"),
 	}
 	c = NewOptions()
-	err = c.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, replicaConfig.Sink)
+	err = c.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, replicaConfig.Sink)
 	require.NoError(t, err)
 	require.Equal(t, int32(12), c.PartitionNum)
 	require.Equal(t, int16(5), c.ReplicationFactor)

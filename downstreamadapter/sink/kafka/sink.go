@@ -20,12 +20,17 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+<<<<<<< HEAD
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+=======
+	"github.com/pingcap/ticdc/pkg/sink/codec"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
@@ -40,7 +45,7 @@ const (
 )
 
 type sink struct {
-	changefeedID commonType.ChangeFeedID
+	changefeedID common.ChangeFeedID
 
 	dmlProducer      kafka.AsyncProducer
 	ddlProducer      kafka.SyncProducer
@@ -63,10 +68,11 @@ type sink struct {
 	ctx      context.Context
 }
 
-func (s *sink) SinkType() commonType.SinkType {
-	return commonType.KafkaSinkType
+func (s *sink) SinkType() common.SinkType {
+	return common.KafkaSinkType
 }
 
+<<<<<<< HEAD
 func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
 	comp, _, err := newKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig)
 	defer comp.close()
@@ -75,17 +81,108 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 
 func New(
 	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+=======
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
+	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
+	if err != nil {
+		return err
+	}
+
+	topic, err := helper.GetTopic(uri)
+	if err != nil {
+		return err
+	}
+
+	options := kafka.NewOptions()
+	if err = options.Apply(changefeedID, uri, sinkConfig); err != nil {
+		return err
+	}
+	options.Topic = topic
+
+	encoderConfig, err := helper.GetEncoderConfig(
+		changefeedID, uri, protocol, sinkConfig,
+		options.MaxMessageBytes, options.MaxBatchedBytes,
+	)
+	if err != nil {
+		return err
+	}
+
+	claimCheck, err := claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
+	if err != nil {
+		return err
+	}
+	defer claimCheck.Close()
+
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
+		return err
+	}
+
+	if _, err = columnselector.New(sinkConfig); err != nil {
+		return err
+	}
+
+	factory, err := kafka.NewSaramaFactory(ctx, options, changefeedID)
+	if err != nil {
+		return err
+	}
+
+	adminClient, err := factory.AdminClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer adminClient.Close()
+
+	topics, err := adminClient.GetTopicsMeta([]string{topic}, false)
+	if err != nil {
+		return err
+	}
+	if _, exists := topics[topic]; !exists {
+		topicConfig := options.DeriveTopicConfig()
+		if !topicConfig.AutoCreate {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topic)
+		}
+		if err = topicConfig.ValidateReplicationFactor(adminClient); err != nil {
+			return err
+		}
+
+		// the topic is not created, only validate.
+		err = adminClient.CreateTopic(&kafka.TopicDetail{
+			Name:              topic,
+			NumPartitions:     topicConfig.PartitionNum,
+			ReplicationFactor: topicConfig.ReplicationFactor,
+		}, true)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func New(
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, keyspaceID uint32,
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 ) (*sink, error) {
 	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	return newWithComponents(ctx, changefeedID, protocol, comp)
 }
 
 func newWithComponents(
 	ctx context.Context,
+<<<<<<< HEAD
 	changefeedID commonType.ChangeFeedID,
+=======
+	changefeedID common.ChangeFeedID,
+	keyspaceID uint32,
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
@@ -153,7 +250,7 @@ func (s *sink) Run(ctx context.Context) error {
 	})
 	err := g.Wait()
 	s.isNormal.Store(false)
-	return errors.Trace(err)
+	return err
 }
 
 func (s *sink) IsNormal() bool {
@@ -224,7 +321,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		default:
 			event, ok := s.eventChan.Get()
 			if !ok {
@@ -242,6 +339,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			}
 
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
+<<<<<<< HEAD
 			selector := s.comp.columnSelector.Get(schema, table)
 			rowsCount := uint64(event.Len())
 			events := make([]*commonEvent.MQRowEvent, 0, rowsCount)
@@ -277,6 +375,12 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						Checksum:        row.Checksum,
 					},
 				})
+=======
+			selector := s.comp.columnSelector.GetForTableInfo(event.TableInfo)
+			events, err := helper.NewMQRowEvents(event, topic, partitionNum, partitionGenerator, selector)
+			if err != nil {
+				return err
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 			}
 			s.rowChan.Push(events...)
 		}
@@ -287,7 +391,7 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		default:
 			event, ok := s.rowChan.Get()
 			if !ok {
@@ -380,7 +484,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		case future, ok := <-outCh:
 			if !ok {
 				log.Info("kafka sink encoder's output channel closed",
@@ -429,7 +533,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 				zap.Stringer("changefeed", s.changefeedID))
 			continue
 		}
-		common.SetDDLMessageLogInfo(message, e)
+		codecCommon.SetDDLMessageLogInfo(message, e)
 		topic := s.comp.eventRouter.GetTopicForDDL(e)
 		// Notice: We must call GetPartitionNum here,
 		// which will be responsible for automatically creating topics when they don't exist.
@@ -479,14 +583,14 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 	}()
 
 	var (
-		msg          *common.Message
+		msg          *codecCommon.Message
 		partitionNum int32
 		err          error
 	)
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		case ts, ok := <-s.checkpointChan:
 			if !ok {
 				log.Warn("kafka sink checkpoint channel closed",
@@ -503,7 +607,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			if msg == nil {
 				continue
 			}
-			common.SetCheckpointMessageLogInfo(msg, ts)
+			codecCommon.SetCheckpointMessageLogInfo(msg, ts)
 
 			tableNames := s.getAllTableNames(ts)
 			// NOTICE: When there are no tables to replicate,

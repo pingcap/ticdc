@@ -46,19 +46,24 @@ func NewSaramaFactory(
 			zap.Stringer("changefeedID", changefeedID), zap.Any("duration", duration))
 	}
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	admin, err := newAdminClient(changefeedID, o.BrokerEndpoints, config)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	defer func() {
 		admin.Close()
 	}()
 
+<<<<<<< HEAD
 	if err = adjustOptions(ctx, admin, o, o.Topic); err != nil {
 		return nil, errors.Trace(err)
+=======
+	if err = adjustOptions(changefeedID, admin, o, o.Topic); err != nil {
+		return nil, err
+>>>>>>> fa340f118 (kafka: unify sink errors and replace failpoint tests (#5786))
 	}
 
 	return &saramaFactory{
@@ -77,7 +82,7 @@ func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config
 			zap.Any("duration", duration), zap.Stringer("changefeedID", changefeedID))
 	}
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 
 	start = time.Now()
@@ -91,7 +96,7 @@ func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config
 		// `sarama.NewClusterAdminFromClient` does not take ownership of the client,
 		// so we need to close it on failures to avoid leaking background goroutines.
 		_ = client.Close()
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 	return &saramaAdminClient{
 		client:     client,
@@ -103,7 +108,7 @@ func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config
 func (f *saramaFactory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
 	config, err := newSaramaConfig(ctx, f.option)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return nil, err
 	}
 	return newAdminClient(f.changefeedID, f.option.BrokerEndpoints, config)
 }
@@ -113,18 +118,19 @@ func (f *saramaFactory) AdminClient(ctx context.Context) (ClusterAdminClient, er
 func (f *saramaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 	config, err := newSaramaConfig(ctx, f.option)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return nil, err
 	}
 	config.MetricRegistry = f.metricRegistry
 
 	client, err := sarama.NewClient(f.option.BrokerEndpoints, config)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 
 	p, err := sarama.NewSyncProducerFromClient(client)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		_ = client.Close()
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 
 	return &saramaSyncProducer{
@@ -140,25 +146,25 @@ func (f *saramaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) 
 func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
 	config, err := newSaramaConfig(ctx, f.option)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return nil, err
 	}
 	config.MetricRegistry = f.metricRegistry
 
 	client, err := sarama.NewClient(f.option.BrokerEndpoints, config)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 
 	p, err := sarama.NewAsyncProducerFromClient(client)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		_ = client.Close()
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 	return &saramaAsyncProducer{
 		client:       client,
 		producer:     p,
 		changefeedID: f.changefeedID,
 		closed:       atomic.NewBool(false),
-		failpointCh:  make(chan *sarama.ProducerError, 1),
 	}, nil
 }
 
