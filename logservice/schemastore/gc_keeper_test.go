@@ -94,12 +94,11 @@ func TestAcquireInitialGCSafePointCleansStaleKeeperService(t *testing.T) {
 	config.StoreGlobalServerConfig(cfg)
 	defer config.StoreGlobalServerConfig(originalConfig)
 
-	pdCli, state := newMockGCServiceClientForSchemaStoreGC(t)
-	keeper := newSchemaStoreGCKeeper(pdCli, common.DefaultKeyspace)
-	serviceID := keeper.serviceID()
-
-	state.serviceSafePoint[serviceID] = 100
-	state.serviceSafePoint["ticdc-default-changefeed"] = 200
+	state := &schemaStoreGCMockState{
+		serviceSafePoint:   make(map[string]uint64),
+		serviceSafePointV2: make(map[string]uint64),
+	}
+	pdCli := &gc.MockPDClient{}
 	pdCli.UpdateServiceGCSafePointFunc = func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
 		if err := ctx.Err(); err != nil {
 			return 0, err
@@ -120,6 +119,11 @@ func TestAcquireInitialGCSafePointCleansStaleKeeperService(t *testing.T) {
 		}
 		return minBefore, nil
 	}
+	keeper := newSchemaStoreGCKeeper(pdCli, common.DefaultKeyspace)
+	serviceID := keeper.serviceID()
+
+	state.serviceSafePoint[serviceID] = 100
+	state.serviceSafePoint["ticdc-default-changefeed"] = 200
 
 	s := &schemaStore{pdCli: pdCli}
 	gcSafePoint, err := s.acquireInitialGCSafePoint(context.Background(), common.DefaultKeyspace, keeper)
