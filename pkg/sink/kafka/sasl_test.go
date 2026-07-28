@@ -20,46 +20,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildSaslMechanismGSSAPIUserAuth(t *testing.T) {
+func TestBuildSaslMechanismGSSAPI(t *testing.T) {
 	t.Parallel()
 
-	o := &options{
-		sasl: &saslConfig{
-			mechanism: gssapiMechanismName,
-			gssapi: gssapiConfig{
-				authType:           userAuth,
-				kerberosConfigPath: "/etc/krb5.conf",
-				serviceName:        "kafka",
-				username:           "alice",
-				password:           "pwd",
-				realm:              "EXAMPLE.COM",
-			},
-		},
+	testCases := []struct {
+		name       string
+		authType   gssapiAuthType
+		password   string
+		keyTabPath string
+	}{
+		{name: "user", authType: userAuth, password: "pwd"},
+		{name: "keytab", authType: keyTabAuth, keyTabPath: "/tmp/a.keytab"},
 	}
 
-	mechanism, err := buildSaslMechanism(context.Background(), o)
-	require.NoError(t, err)
-	require.Equal(t, "GSSAPI", mechanism.Name())
-}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			o := &options{sasl: &saslConfig{
+				mechanism: gssapiMechanismName,
+				gssapi: gssapiConfig{
+					authType:           tc.authType,
+					kerberosConfigPath: "/etc/krb5.conf",
+					serviceName:        "kafka",
+					username:           "alice",
+					password:           tc.password,
+					keyTabPath:         tc.keyTabPath,
+					realm:              "EXAMPLE.COM",
+				},
+			}}
 
-func TestBuildSaslMechanismGSSAPIKeytabAuth(t *testing.T) {
-	t.Parallel()
-
-	o := &options{
-		sasl: &saslConfig{
-			mechanism: gssapiMechanismName,
-			gssapi: gssapiConfig{
-				authType:           keyTabAuth,
-				kerberosConfigPath: "/etc/krb5.conf",
-				serviceName:        "kafka",
-				username:           "alice",
-				keyTabPath:         "/tmp/a.keytab",
-				realm:              "EXAMPLE.COM",
-			},
-		},
+			mechanism, err := buildSaslMechanism(context.Background(), o)
+			require.NoError(t, err)
+			require.Equal(t, "GSSAPI", mechanism.Name())
+		})
 	}
-
-	mechanism, err := buildSaslMechanism(context.Background(), o)
-	require.NoError(t, err)
-	require.Equal(t, "GSSAPI", mechanism.Name())
 }

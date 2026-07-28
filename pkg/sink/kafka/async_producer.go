@@ -15,6 +15,7 @@ package kafka
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -22,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -46,8 +46,8 @@ type asyncProducer struct {
 	client       *kgo.Client
 	changefeedID commonType.ChangeFeedID
 
-	closeStarted *atomic.Bool
-	closed       *atomic.Bool
+	closeStarted atomic.Bool
+	closed       atomic.Bool
 	errCh        chan error
 }
 
@@ -70,8 +70,6 @@ func newAsyncProducer(
 	return &asyncProducer{
 		client:       client,
 		changefeedID: changefeedID,
-		closeStarted: atomic.NewBool(false),
-		closed:       atomic.NewBool(false),
 		errCh:        make(chan error, 1),
 	}, nil
 }
@@ -155,9 +153,6 @@ func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
 				zap.String("changefeed", p.changefeedID.Name()))
 			return context.Cause(ctx)
 		case err := <-p.errCh:
-			if err == nil {
-				return nil
-			}
 			return err
 		}
 	}

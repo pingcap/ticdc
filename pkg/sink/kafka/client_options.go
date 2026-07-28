@@ -190,7 +190,7 @@ func newCompressionOption(o *options) kgo.Opt {
 	compression := strings.ToLower(strings.TrimSpace(o.Compression))
 	var codec kgo.CompressionCodec
 	switch compression {
-	case "none":
+	case "", "none":
 		codec = kgo.NoCompression()
 	case "gzip":
 		codec = kgo.GzipCompression()
@@ -200,8 +200,6 @@ func newCompressionOption(o *options) kgo.Opt {
 		codec = kgo.Lz4Compression()
 	case "zstd":
 		codec = kgo.ZstdCompression()
-	case "":
-		codec = kgo.NoCompression()
 	default:
 		log.Warn("unsupported compression algorithm", zap.String("compression", o.Compression))
 		codec = kgo.NoCompression()

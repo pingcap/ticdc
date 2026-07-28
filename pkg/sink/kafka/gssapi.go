@@ -67,7 +67,8 @@ func (m *gssapiMechanism) Authenticate(
 		return nil, nil, errors.Trace(err)
 	}
 
-	token, err := newKrb5Token(client.Domain(), client.CName(), ticket, encKey)
+	token, err := newKrb5Token(
+		client.Credentials.Domain(), client.Credentials.CName(), ticket, encKey)
 	if err != nil {
 		client.Destroy()
 		return nil, nil, errors.Trace(err)
@@ -81,7 +82,7 @@ func (m *gssapiMechanism) Authenticate(
 }
 
 type gssapiSession struct {
-	client *krb5Client
+	client *client.Client
 	encKey types.EncryptionKey
 }
 
@@ -148,19 +149,7 @@ func buildGSSAPIMechanism(g gssapiConfig) (sasl.Mechanism, error) {
 	return &gssapiMechanism{config: g}, nil
 }
 
-type krb5Client struct {
-	client.Client
-}
-
-func (c *krb5Client) Domain() string {
-	return c.Credentials.Domain()
-}
-
-func (c *krb5Client) CName() types.PrincipalName {
-	return c.Credentials.CName()
-}
-
-func newKerberosClient(g gssapiConfig) (*krb5Client, error) {
+func newKerberosClient(g gssapiConfig) (*client.Client, error) {
 	cfg, err := config.Load(g.kerberosConfigPath)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -182,7 +171,7 @@ func newKerberosClient(g gssapiConfig) (*krb5Client, error) {
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 			"unsupported sasl-gssapi-auth-type %d", g.authType)
 	}
-	return &krb5Client{*krbClient}, nil
+	return krbClient, nil
 }
 
 func newKrb5Token(

@@ -214,10 +214,6 @@ func topicDetailsFromMetadata(
 
 // IsAdminAuthorizationFailed checks whether err is an authorization failure from Kafka admin APIs.
 func IsAdminAuthorizationFailed(err error) bool {
-	return isKafkaAuthorizationFailed(err)
-}
-
-func isKafkaAuthorizationFailed(err error) bool {
 	return errors.Is(err, kerr.TopicAuthorizationFailed) ||
 		errors.Is(err, kerr.ClusterAuthorizationFailed)
 }
@@ -254,7 +250,5 @@ func (a *admin) CreateTopic(detail TopicDetail, validateOnly bool) error {
 }
 
 func (a *admin) Close() {
-	if a.admin != nil {
-		a.admin.Close()
-	}
+	a.admin.Close()
 }

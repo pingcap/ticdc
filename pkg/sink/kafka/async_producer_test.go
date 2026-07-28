@@ -15,6 +15,7 @@ package kafka
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -22,11 +23,11 @@ import (
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.uber.org/atomic"
 )
 
 func TestAsyncSendClosedProducer(t *testing.T) {
-	producer := &asyncProducer{closed: atomic.NewBool(true)}
+	producer := &asyncProducer{}
+	producer.closed.Store(true)
 
 	err := producer.AsyncSend(context.Background(), "topic", 0, &codeccommon.Message{})
 
@@ -36,7 +37,6 @@ func TestAsyncSendClosedProducer(t *testing.T) {
 func TestAsyncRunCallbackReturnsQueuedErrorAndCloses(t *testing.T) {
 	producer := &asyncProducer{
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-callback"),
-		closed:       atomic.NewBool(false),
 		errCh:        make(chan error, 1),
 	}
 	producer.errCh <- errors.New("queued async error")
@@ -51,12 +51,10 @@ func TestCloseDoesNotAcknowledgeBufferedMessage(t *testing.T) {
 	client, err := kgo.NewClient(kgo.SeedBrokers("127.0.0.1:1"))
 	require.NoError(t, err)
 
-	callbackCalled := atomic.NewBool(false)
+	var callbackCalled atomic.Bool
 	producer := &asyncProducer{
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-close"),
-		closeStarted: atomic.NewBool(false),
-		closed:       atomic.NewBool(false),
 		errCh:        make(chan error, 1),
 	}
 	err = producer.AsyncSend(context.Background(), "topic", 0, &codeccommon.Message{

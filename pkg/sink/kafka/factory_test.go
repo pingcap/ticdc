@@ -87,39 +87,12 @@ func TestFactoryComponentCreationReturnsKafkaSinkError(t *testing.T) {
 		},
 	}
 
-	testCases := []struct {
-		name   string
-		create func() error
-	}{
-		{
-			name: "admin",
-			create: func() error {
-				_, err := factory.Admin(context.Background())
-				return err
-			},
-		},
-		{
-			name: "sync producer",
-			create: func() error {
-				_, err := factory.SyncProducer(context.Background())
-				return err
-			},
-		},
-		{
-			name: "async producer",
-			create: func() error {
-				_, err := factory.AsyncProducer(context.Background())
-				return err
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			requireNewKafkaSinkError(t, tc.create())
-		})
-	}
+	_, err := factory.Admin(context.Background())
+	requireNewKafkaSinkError(t, err)
+	_, err = factory.SyncProducer(context.Background())
+	requireNewKafkaSinkError(t, err)
+	_, err = factory.AsyncProducer(context.Background())
+	requireNewKafkaSinkError(t, err)
 }
 
 func requireNewKafkaSinkError(t *testing.T, err error) {

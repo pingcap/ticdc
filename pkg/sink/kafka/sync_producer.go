@@ -15,6 +15,7 @@ package kafka
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -22,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -47,7 +47,7 @@ type syncProducer struct {
 	id commonType.ChangeFeedID
 
 	client  *kgo.Client
-	closed  *atomic.Bool
+	closed  atomic.Bool
 	timeout time.Duration
 }
 
@@ -71,7 +71,6 @@ func newSyncProducer(
 	return &syncProducer{
 		id:      changefeedID,
 		client:  client,
-		closed:  atomic.NewBool(false),
 		timeout: o.requestTimeout(),
 	}, nil
 }

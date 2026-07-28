@@ -27,50 +27,6 @@ import (
 
 const kafkaTopicManagerTestTopic = "mock_topic"
 
-type mockAdminWithDeniedDescribe struct {
-	*kafka.MockAdmin
-	createTopicCalled bool
-	describeCount     int
-}
-
-func (m *mockAdminWithDeniedDescribe) GetTopicsMeta(
-	topics []string,
-	ignoreTopicError bool,
-) (map[string]kafka.TopicDetail, error) {
-	m.describeCount++
-	return nil, errors.WrapError(errors.ErrKafkaAdminAPI, kerr.TopicAuthorizationFailed, "describe-topic", topics[0])
-}
-
-func (m *mockAdminWithDeniedDescribe) CreateTopic(
-	detail kafka.TopicDetail,
-	validateOnly bool,
-) error {
-	m.createTopicCalled = true
-	return nil
-}
-
-type mockAdminWithDeniedCreate struct {
-	*kafka.MockAdmin
-	createTopicCalled bool
-	describeCount     int
-}
-
-func (m *mockAdminWithDeniedCreate) GetTopicsMeta(
-	topics []string,
-	ignoreTopicError bool,
-) (map[string]kafka.TopicDetail, error) {
-	m.describeCount++
-	return map[string]kafka.TopicDetail{}, nil
-}
-
-func (m *mockAdminWithDeniedCreate) CreateTopic(
-	detail kafka.TopicDetail,
-	validateOnly bool,
-) error {
-	m.createTopicCalled = true
-	return errors.WrapError(errors.ErrKafkaAdminAPI, kerr.ClusterAuthorizationFailed, "create-topic", detail.Name)
-}
-
 func TestCreateTopic(t *testing.T) {
 	t.Parallel()
 
@@ -260,9 +216,16 @@ func TestCreateTopicWithTopicDescribeDenied(t *testing.T) {
 	t.Parallel()
 
 	ctrl := gomock.NewController(t)
-	admin := &mockAdminWithDeniedDescribe{
-		MockAdmin: kafka.NewMockAdmin(ctrl),
-	}
+	admin := kafka.NewMockAdmin(ctrl)
+	admin.EXPECT().GetTopicsMeta([]string{"precreated-topic"}, true).Return(
+		nil,
+		errors.WrapError(
+			errors.ErrKafkaAdminAPI,
+			kerr.TopicAuthorizationFailed,
+			"describe-topic",
+			"precreated-topic",
+		),
+	)
 	cfg := &kafka.AutoCreateTopicConfig{
 		AutoCreate:        true,
 		PartitionNum:      2,
@@ -277,8 +240,6 @@ func TestCreateTopicWithTopicDescribeDenied(t *testing.T) {
 	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, "precreated-topic")
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
-	require.False(t, admin.createTopicCalled)
-	require.Equal(t, 1, admin.describeCount)
 
 	partitions, ok := manager.topics.Load("precreated-topic")
 	require.True(t, ok)
@@ -289,9 +250,19 @@ func TestCreateTopicWithCreateDenied(t *testing.T) {
 	t.Parallel()
 
 	ctrl := gomock.NewController(t)
-	admin := &mockAdminWithDeniedCreate{
-		MockAdmin: kafka.NewMockAdmin(ctrl),
-	}
+	admin := kafka.NewMockAdmin(ctrl)
+	gomock.InOrder(
+		admin.EXPECT().GetTopicsMeta([]string{"precreated-topic"}, true).Return(
+			map[string]kafka.TopicDetail{}, nil),
+		admin.EXPECT().CreateTopic(gomock.Any(), false).Return(
+			errors.WrapError(
+				errors.ErrKafkaAdminAPI,
+				kerr.ClusterAuthorizationFailed,
+				"create-topic",
+				"precreated-topic",
+			),
+		),
+	)
 	cfg := &kafka.AutoCreateTopicConfig{
 		AutoCreate:        true,
 		PartitionNum:      2,
@@ -306,8 +277,6 @@ func TestCreateTopicWithCreateDenied(t *testing.T) {
 	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, "precreated-topic")
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
-	require.True(t, admin.createTopicCalled)
-	require.Equal(t, 1, admin.describeCount)
 
 	partitions, ok := manager.topics.Load("precreated-topic")
 	require.True(t, ok)

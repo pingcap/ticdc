@@ -19,11 +19,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/atomic"
 )
 
 func TestSyncProducerClosedReturnsProducerClosed(t *testing.T) {
-	producer := &syncProducer{closed: atomic.NewBool(true)}
+	producer := &syncProducer{}
+	producer.closed.Store(true)
 
 	err := producer.SendMessage("topic", 1, &common.Message{})
 	require.ErrorIs(t, err, errors.ErrKafkaSinkClosed)
