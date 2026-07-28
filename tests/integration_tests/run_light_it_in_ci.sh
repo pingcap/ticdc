@@ -38,7 +38,7 @@ mysql_groups=(
 	# G02
 	'new_ci_collation safe_mode savepoint fail_over_ddl_C unsplittable_tables'
 	# G03
-	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D ddl_default_current_timestamp'
+	'capture_suicide_while_balance_table capture_local_fence_on_session_done kv_client_stream_reconnect fail_over_ddl_D ddl_default_current_timestamp'
 	# G04
 	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
@@ -47,11 +47,11 @@ mysql_groups=(
 	# NOTE: same_upstream_downstream is temporarily disabled on release-8.5 CI because TiDB 8.5.x
 	# does not write `cluster_id` into `mysql.tidb` (tidb#59511 not cherry-picked). Re-enable it
 	# after TiDB release-8.5 has `mysql.tidb.cluster_id`.
-	'http_api http_api_compatibility http_api_tls http_api_tls_old_arch fail_over_ddl_G synced_status'
+	'http_api http_api_compatibility http_api_tls_old_arch fail_over_ddl_G synced_status'
 	# G07
-	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config synced_status_with_redo'
+	'fail_over_ddl_H changefeed_update_config synced_status_with_redo redo_apply_table_route'
 	# G08
-	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
+	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I table_route'
 	# G09
 	'sequence cdc_server_tips ddl_sequence server_config_compatibility log_redaction fail_over_ddl_J'
 	# G10
@@ -67,7 +67,7 @@ mysql_groups=(
 	# G14
 	'batch_add_table batch_update_to_no_batch fail_over_ddl_O update_changefeed_check_config pause_changefeed_with_long_time_ddl'
 	# G15
-	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check old_arch_compatibility'
+	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check old_arch_compatibility bootstrap_retry_after_error'
 )
 
 # Resource allocation for kafka light integration tests in CI pipelines:
@@ -91,7 +91,7 @@ kafka_groups=(
 	# G07
 	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08
-	'capture_session_done_during_task fail_over_ddl_I'
+	'capture_session_done_during_task fail_over_ddl_I table_route'
 	# G09
 	'cdc_server_tips ddl_sequence log_redaction fail_over_ddl_J'
 	# G10
@@ -185,7 +185,7 @@ storage_groups=(
 	# disables the no-operator terminal-status fallback; the case depends on that rescheduling path.
 	'cli_with_auth fail_over_ddl_N'
 	# G14
-	'csv_storage_partition_table csv_storage_multi_tables_ddl fail_over_ddl_O'
+	'csv_storage_partition_table csv_storage_multi_tables_ddl table_route fail_over_ddl_O'
 	# G15
 	'split_region autorandom gc_safepoint'
 )

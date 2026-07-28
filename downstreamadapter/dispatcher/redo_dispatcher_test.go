@@ -25,6 +25,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,8 +47,9 @@ func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) 
 		nil, // redo dispatcher doesn't need syncPointConfig
 		&defaultAtomicity,
 		false, // enableSplittableCheck
+		routing.Router{},
 		make(chan TableSpanStatusWithSeq, 128),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
+		128,
 		make(chan error, 1),
 	)
 	return NewRedoDispatcher(

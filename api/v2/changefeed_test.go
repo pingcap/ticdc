@@ -26,7 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -46,7 +46,7 @@ func TestValidateResumeChangefeedState(t *testing.T) {
 
 	for _, state := range []config.FeedState{config.StateNormal, config.StateWarning, config.StatePending} {
 		err := validateResumeChangefeedState(state)
-		require.True(t, cerror.ErrChangefeedUpdateRefused.Equal(err))
+		require.True(t, errors.ErrChangefeedUpdateRefused.Equal(err))
 		require.Contains(t, err.Error(), string(state))
 	}
 }
@@ -73,7 +73,7 @@ func TestResumeChangefeedRejectsNormalBeforeGC(t *testing.T) {
 	h.ResumeChangefeed(c)
 
 	require.Len(t, c.Errors, 1)
-	require.True(t, cerror.ErrChangefeedUpdateRefused.Equal(c.Errors.Last().Err))
+	require.True(t, errors.ErrChangefeedUpdateRefused.Equal(c.Errors.Last().Err))
 	require.False(t, srv.pdClientRequested)
 	require.False(t, srv.etcdClientRequested)
 	require.False(t, co.resumeCalled)
@@ -167,38 +167,6 @@ func (c *resumeNormalCoordinator) DrainNode(ctx context.Context, target node.ID)
 
 func (c *resumeNormalCoordinator) Initialized() bool { return true }
 
-// TestMaskSinkURIForError verifies that error messages mask sensitive sink URI
-// fields. It checks both a valid URI with secret query parameters and an invalid
-// URI parse error that previously exposed raw credentials.
-func TestMaskSinkURIForError(t *testing.T) {
-	sinkURI := "kafka://127.0.0.1:9092/topic?protocol=canal-json" +
-		"&sasl-user=ticdc&sasl-password=verysecure&secret-access-key=rawsecret"
-
-	maskedURI := maskSinkURIForError(sinkURI)
-	require.NotContains(t, maskedURI, "verysecure")
-	require.NotContains(t, maskedURI, "rawsecret")
-	require.Contains(t, maskedURI, "sasl-password=xxxxx")
-	require.Contains(t, maskedURI, "secret-access-key=xxxxx")
-	require.Contains(t, maskedURI, "sasl-user=ticdc")
-
-	invalidURI := "mysql://root:verysecure@127.0.0.1/%zz"
-	require.Equal(t, "<invalid uri>", maskSinkURIForError(invalidURI))
-
-	err := genSinkURIInvalidError(invalidURI, mustParseURLError(t, invalidURI))
-	require.NotContains(t, err.Error(), "verysecure")
-	require.Contains(t, err.Error(), "<invalid uri>")
-	require.Contains(t, err.Error(), `parse "<invalid uri>"`)
-	require.Contains(t, err.Error(), "invalid URL escape")
-}
-
-func mustParseURLError(t *testing.T, rawURL string) error {
-	t.Helper()
-
-	_, err := url.Parse(rawURL)
-	require.Error(t, err)
-	return err
-}
-
 // TestVerifyRouteConflict covers route conflict detection for eligible and
 // ineligible source tables. It exercises the safe cases first, then verifies
 // that conflicts report both the shared target table and conflicting sources.
@@ -229,12 +197,12 @@ func TestVerifyRouteConflict(t *testing.T) {
 		replicaCfg,
 	)
 	require.Error(t, err)
-	require.True(t, cerror.ErrTableRouteConflict.Equal(err))
+	require.True(t, errors.ErrTableRouteConflict.Equal(err))
 
 	replicaCfg.ForceReplicate = util.AddressOf(true)
 	err = verifyRouteConflict(changefeedID, eligibleTables, ineligibleTables, replicaCfg)
 	require.Error(t, err)
-	require.True(t, cerror.ErrTableRouteConflict.Equal(err))
+	require.True(t, errors.ErrTableRouteConflict.Equal(err))
 	require.Contains(t, err.Error(), "target `archive`.`orders`")
 	require.Contains(t, err.Error(), "source `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db2`.`orders`")
@@ -250,8 +218,40 @@ func TestVerifyRouteConflict(t *testing.T) {
 		replicaCfg,
 	)
 	require.Error(t, err)
-	require.True(t, cerror.ErrTableRouteConflict.Equal(err))
+	require.True(t, errors.ErrTableRouteConflict.Equal(err))
 	require.Contains(t, err.Error(), "target `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db2`.`orders`")
+}
+
+// TestMaskSinkURIForError verifies that error messages mask sensitive sink URI
+// fields. It checks both a valid URI with secret query parameters and an invalid
+// URI parse error that previously exposed raw credentials.
+func TestMaskSinkURIForError(t *testing.T) {
+	sinkURI := "kafka://127.0.0.1:9092/topic?protocol=canal-json" +
+		"&sasl-user=ticdc&sasl-password=verysecure&secret-access-key=rawsecret"
+
+	maskedURI := maskSinkURIForError(sinkURI)
+	require.NotContains(t, maskedURI, "verysecure")
+	require.NotContains(t, maskedURI, "rawsecret")
+	require.Contains(t, maskedURI, "sasl-password=xxxxx")
+	require.Contains(t, maskedURI, "secret-access-key=xxxxx")
+	require.Contains(t, maskedURI, "sasl-user=ticdc")
+
+	invalidURI := "mysql://root:verysecure@127.0.0.1/%zz"
+	require.Equal(t, "<invalid uri>", maskSinkURIForError(invalidURI))
+
+	err := genSinkURIInvalidError(invalidURI, mustParseURLError(t, invalidURI))
+	require.NotContains(t, err.Error(), "verysecure")
+	require.Contains(t, err.Error(), "<invalid uri>")
+	require.Contains(t, err.Error(), `parse "<invalid uri>"`)
+	require.Contains(t, err.Error(), "invalid URL escape")
+}
+
+func mustParseURLError(t *testing.T, rawURL string) error {
+	t.Helper()
+
+	_, err := url.Parse(rawURL)
+	require.Error(t, err)
+	return err
 }

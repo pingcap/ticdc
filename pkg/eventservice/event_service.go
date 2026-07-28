@@ -26,11 +26,11 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -45,7 +45,7 @@ type DispatcherInfo interface {
 	GetStartTs() uint64
 	GetActionType() eventpb.ActionType
 	GetChangefeedID() common.ChangeFeedID
-	GetFilter() filter.Filter
+	GetFilterConfig() *eventpb.FilterConfig
 	GetTxnAtomicity() config.AtomicityLevel
 
 	// sync point related
@@ -56,10 +56,10 @@ type DispatcherInfo interface {
 	IsOnlyReuse() bool
 	GetBdrMode() bool
 	GetIntegrity() *integrity.Config
-	GetTimezone() *time.Location
 	GetMode() int64
 	GetEpoch() uint64
 	IsOutputRawChangeEvent() bool
+	EnableIgnoreUpdateOnlyColumns() bool
 }
 
 type DispatcherHeartBeatWithServerID struct {
@@ -79,14 +79,24 @@ type eventService struct {
 	// TODO: use a better way to cache the acceptorInfos
 	dispatcherInfoChan  chan DispatcherInfo
 	dispatcherHeartbeat chan *DispatcherHeartBeatWithServerID
+
+	tz *time.Location
 }
 
 func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) common.SubModule {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	tzName := config.GetGlobalServerConfig().TZ
+	tz, err := util.GetTimezone(tzName)
+	if err != nil {
+		log.Panic("load timezone from server config failed",
+			zap.String("timezone", tzName),
+			zap.Error(err))
+	}
 	es := &eventService{
 		mc:                  mc,
 		eventStore:          eventStore,
 		schemaStore:         schemaStore,
+		tz:                  tz,
 		brokers:             make(map[uint64]*eventBroker),
 		dispatcherInfoChan:  make(chan DispatcherInfo, 32),
 		dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, 32),
@@ -156,6 +166,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 	case messaging.TypeDispatcherHeartbeat:
 		if len(msg.Message) != 1 {
 			log.Warn("invalid dispatcher heartbeat, ignore it", zap.Any("msg", msg))
+			return nil
 		}
 		heartbeat := msg.Message[0].(*event.DispatcherHeartbeat)
 		select {
@@ -169,6 +180,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 	case messaging.TypeCongestionControl:
 		if len(msg.Message) != 1 {
 			log.Warn("invalid control message, ignore it", zap.Any("msg", msg))
+			return nil
 		}
 		m := msg.Message[0].(*event.CongestionControl)
 		s.handleCongestionControl(msg.From, m)
@@ -182,7 +194,7 @@ func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherIn
 	clusterID := info.GetClusterID()
 	c, ok := s.brokers[clusterID]
 	if !ok {
-		c = newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, info.GetTimezone(), info.GetIntegrity())
+		c = newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, s.tz, info.GetIntegrity())
 		s.brokers[clusterID] = c
 	}
 

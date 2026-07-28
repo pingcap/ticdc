@@ -83,6 +83,7 @@ EOF
 
 	check_failpoint_log_value "$FAILPOINT_API_TEST_VALUE"
 	disable_failpoint --name "$FAILPOINT_API_TEST_NAME"
+	ensure 20 check_changefeed_state "$pd_addr" "$changefeed_id" "normal" "null" ""
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 	export GO_FAILPOINTS=''

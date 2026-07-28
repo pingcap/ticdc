@@ -250,6 +250,22 @@ func (s *SinkConfig) ShouldSendAllBootstrapAtStart() bool {
 	return should
 }
 
+// TableRouteEnabled return true if there is at least one rule enabled.
+func (s *SinkConfig) TableRouteEnabled() bool {
+	if s == nil {
+		return false
+	}
+	for _, rule := range s.DispatchRules {
+		if rule == nil {
+			continue
+		}
+		if rule.TargetSchema != "" || rule.TargetTable != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // CSVConfig defines a series of configuration items for csv codec.
 type CSVConfig struct {
 	// delimiter between fields, it can be 1 character or at most 2 characters
@@ -390,6 +406,7 @@ func (d DateSeparator) String() string {
 // For MQ sinks, rules control topic / partition dispatching.
 // TargetSchema and TargetTable configure table routing.
 type DispatchRule struct {
+	// Rules are evaluated in order, and the first matching rule wins.
 	Matcher []string `toml:"matcher" json:"matcher"`
 	// Deprecated, please use PartitionRule.
 	DispatcherRule string `toml:"dispatcher" json:"dispatcher"`

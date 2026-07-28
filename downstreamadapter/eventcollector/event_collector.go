@@ -39,7 +39,7 @@ import (
 const (
 	receiveChanSize               = 1024 * 8
 	commonMsgRetryQuota           = 3 // The number of retries for most droppable dispatcher requests.
-	eventServiceHeartbeatInterval = time.Second
+	eventServiceHeartbeatInterval = 10 * time.Second
 )
 
 // DispatcherMessage is the message send to EventService.
@@ -293,7 +293,7 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.DispatcherService
 		return
 	}
 	stat := value.(*dispatcherStat)
-	stat.commitReady(c.getLocalServerID())
+	stat.session.commitLocalRegistration()
 }
 
 func (c *EventCollector) RemoveDispatcher(target dispatcher.DispatcherService) {
@@ -415,12 +415,12 @@ func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat
 
 	c.dispatcherMap.Range(func(_, value interface{}) bool {
 		stat := value.(*dispatcherStat)
-		if !stat.connState.isReceivingDataEvent() {
+		eventServiceID, checkpointTs, epoch, ok := stat.getHeartbeatReport()
+		if !ok {
 			return true
 		}
-		checkpointTs, epoch := stat.getHeartbeatProgressForEventService()
 		group(
-			stat.connState.getEventServiceID(),
+			eventServiceID,
 			stat.getDispatcherID(),
 			checkpointTs,
 			epoch,
@@ -498,14 +498,7 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 				continue
 			}
 			stat := v.(*dispatcherStat)
-			// If the serverID not match, it means the dispatcher is not registered on this server now, just ignore it the response.
-			if stat.connState.isCurrentEventService(targetMessage.From) {
-				log.Info("dispatcher removed in event service",
-					zap.Stringer("dispatcherID", ds.DispatcherID),
-					zap.Stringer("eventServiceID", targetMessage.From))
-				// register the dispatcher again
-				stat.registerTo(targetMessage.From)
-			}
+			stat.session.retryCurrentRegistrationIfRemovedFrom(targetMessage.From)
 		}
 	}
 }
@@ -681,8 +674,8 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 	c.dispatcherMap.Range(func(k, v interface{}) bool {
 		stat := v.(*dispatcherStat)
-		eventServiceID := stat.connState.getEventServiceID()
-		if eventServiceID == "" {
+		eventServiceID := stat.session.getEventServiceID()
+		if eventServiceID.IsEmpty() {
 			return true
 		}
 

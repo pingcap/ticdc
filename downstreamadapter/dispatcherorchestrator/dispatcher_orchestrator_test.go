@@ -14,9 +14,12 @@
 package dispatcherorchestrator
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -24,7 +27,182 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPendingMessageQueue_TryEnqueueDropsDuplicatesUntilDone(t *testing.T) {
+func TestOrchestratorShard_CloseWaitsForRunningHandler(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	closed := make(chan struct{})
+	shard := newOrchestratorShard(func(msg *messaging.TargetMessage) {
+		close(started)
+		<-release
+	})
+	shard.Run()
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerBootstrapRequest,
+	}
+	msg := &messaging.TargetMessage{Type: messaging.TypeMaintainerBootstrapRequest}
+	require.True(t, shard.TryEnqueue(key, msg))
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "handler did not start")
+	}
+
+	go func() {
+		shard.CloseAsync()
+		shard.Wait()
+		close(closed)
+	}()
+
+	select {
+	case <-closed:
+		require.FailNow(t, "shard closed before running handler returned")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		require.FailNow(t, "shard close did not finish after handler returned")
+	}
+}
+
+func TestOrchestratorShard_RunIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	shard := newOrchestratorShard(func(msg *messaging.TargetMessage) {
+		started <- struct{}{}
+		<-release
+	})
+	shard.Run()
+	shard.Run()
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerBootstrapRequest,
+	}
+	require.True(t, shard.TryEnqueue(key, &messaging.TargetMessage{Type: messaging.TypeMaintainerBootstrapRequest}))
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "handler did not start")
+	}
+
+	select {
+	case <-started:
+		require.FailNow(t, "Run started more than one worker")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	shard.CloseAsync()
+	shard.Wait()
+}
+
+func TestDispatcherOrchestrator_RecvMaintainerRequestRoutesDifferentShardsInParallel(t *testing.T) {
+	t.Parallel()
+
+	orchestrator := newTestDispatcherOrchestrator()
+	cfID1, shardIndex1 := findChangefeedIDOnShard(orchestrator, -1)
+	cfID2, shardIndex2 := findChangefeedIDOnShard(orchestrator, shardIndex1)
+
+	enterShard1 := make(chan struct{})
+	enterShard2 := make(chan struct{})
+	releaseShard1 := make(chan struct{})
+	releaseShard2 := make(chan struct{})
+	orchestrator.shards[shardIndex1] = newOrchestratorShard(func(msg *messaging.TargetMessage) {
+		close(enterShard1)
+		<-releaseShard1
+	})
+	orchestrator.shards[shardIndex2] = newOrchestratorShard(func(msg *messaging.TargetMessage) {
+		close(enterShard2)
+		<-releaseShard2
+	})
+	for _, shard := range orchestrator.shards {
+		shard.Run()
+	}
+	t.Cleanup(func() {
+		close(releaseShard1)
+		close(releaseShard2)
+		for _, shard := range orchestrator.shards {
+			shard.CloseAsync()
+			shard.Wait()
+		}
+	})
+
+	msg0 := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID1.ToPB()},
+	)
+	msg1 := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID2.ToPB()},
+	)
+
+	require.NoError(t, orchestrator.RecvMaintainerRequest(context.Background(), msg0))
+	require.NoError(t, orchestrator.RecvMaintainerRequest(context.Background(), msg1))
+
+	select {
+	case <-enterShard1:
+	case <-time.After(time.Second):
+		require.FailNow(t, "first shard handler did not start")
+	}
+	select {
+	case <-enterShard2:
+	case <-time.After(time.Second):
+		require.FailNow(t, "second shard handler did not start")
+	}
+}
+
+func newTestDispatcherOrchestrator() *DispatcherOrchestrator {
+	// This test only exercises local routing through RecvMaintainerRequest, so it
+	// needs shard state and the dispatcher manager map but not a message center.
+	orchestrator := &DispatcherOrchestrator{
+		dispatcherManagers:             make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		initializingDispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		shards:                         make([]*orchestratorShard, dispatcherOrchestratorShardCount),
+	}
+	for i := range orchestrator.shards {
+		orchestrator.shards[i] = newOrchestratorShard(func(msg *messaging.TargetMessage) {})
+	}
+	return orchestrator
+}
+
+func findChangefeedIDOnShard(orchestrator *DispatcherOrchestrator, excludedShard int) (common.ChangeFeedID, int) {
+	for i := range dispatcherOrchestratorShardCount * 4 {
+		cfID := newTestChangefeedID(i)
+		shardIndex := orchestrator.shardIndexForChangefeedID(cfID)
+		if shardIndex != excludedShard {
+			return cfID, shardIndex
+		}
+	}
+	panic("failed to find changefeed ID on a different shard")
+}
+
+func newTestChangefeedID(seed int) common.ChangeFeedID {
+	return common.ChangeFeedID{
+		Id: common.NewGIDWithValue(uint64(seed+1), uint64(seed+17)),
+		DisplayName: common.NewChangeFeedDisplayName(
+			fmt.Sprintf("cf-%d", seed),
+			"default",
+		),
+	}
+}
+
+func TestPendingMessageQueue_TryEnqueueDropsDuplicatesOnlyWhileQueued(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()
@@ -38,14 +216,18 @@ func TestPendingMessageQueue_TryEnqueueDropsDuplicatesUntilDone(t *testing.T) {
 	require.True(t, q.TryEnqueue(key, msg))
 	require.False(t, q.TryEnqueue(key, msg))
 
-	poppedKey, ok := q.Pop()
+	poppedMsg, ok := q.Pop()
 	require.True(t, ok)
-	require.Equal(t, key, poppedKey)
+	require.Same(t, msg, poppedMsg)
 
-	// The key remains pending while being processed.
+	// Once the request is popped, allow one queued retry for the next round.
+	require.True(t, q.TryEnqueue(key, msg))
 	require.False(t, q.TryEnqueue(key, msg))
 
-	q.Done(key)
+	nextMsg, ok := q.Pop()
+	require.True(t, ok)
+	require.Same(t, msg, nextMsg)
+
 	require.True(t, q.TryEnqueue(key, msg))
 }
 
@@ -62,15 +244,13 @@ func TestPendingMessageQueue_OrderPreservedAcrossKeys(t *testing.T) {
 	require.True(t, q.TryEnqueue(key1, &messaging.TargetMessage{Type: key1.msgType}))
 	require.True(t, q.TryEnqueue(key2, &messaging.TargetMessage{Type: key2.msgType}))
 
-	poppedKey, ok := q.Pop()
+	poppedMsg, ok := q.Pop()
 	require.True(t, ok)
-	require.Equal(t, key1, poppedKey)
-	q.Done(poppedKey)
+	require.Equal(t, key1.msgType, poppedMsg.Type)
 
-	poppedKey, ok = q.Pop()
+	poppedMsg, ok = q.Pop()
 	require.True(t, ok)
-	require.Equal(t, key2, poppedKey)
-	q.Done(poppedKey)
+	require.Equal(t, key2.msgType, poppedMsg.Type)
 }
 
 func TestPendingMessageQueue_PopReturnsAfterClose(t *testing.T) {
@@ -118,17 +298,14 @@ func TestPendingMessageQueue_CloseRequestRemovedTrueOverridesPendingFalse(t *tes
 	require.True(t, q.TryEnqueue(key, msgFalse))
 	require.True(t, q.TryEnqueue(key, msgTrue))
 
-	poppedKey, ok := q.Pop()
+	poppedMsg, ok := q.Pop()
 	require.True(t, ok)
-	require.Equal(t, key, poppedKey)
-	poppedMsg := q.Get(poppedKey)
 	require.NotNil(t, poppedMsg)
 	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
 	require.True(t, req.Removed)
-	q.Done(key)
 }
 
-func TestPendingMessageQueue_CloseRequestUpgradeBetweenPopAndGet(t *testing.T) {
+func TestPendingMessageQueue_CloseRequestUpgradeAfterPopKeepsReturnedMessageStable(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()
@@ -150,16 +327,67 @@ func TestPendingMessageQueue_CloseRequestUpgradeBetweenPopAndGet(t *testing.T) {
 	)
 
 	require.True(t, q.TryEnqueue(key, msgFalse))
-	poppedKey, ok := q.Pop()
+	poppedMsg, ok := q.Pop()
 	require.True(t, ok)
-	require.Equal(t, key, poppedKey)
+	require.NotNil(t, poppedMsg)
 
 	require.True(t, q.TryEnqueue(key, msgTrue))
-	poppedMsg := q.Get(poppedKey)
-	require.NotNil(t, poppedMsg)
 	req2 := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
-	require.True(t, req2.Removed)
-	q.Done(key)
+	require.False(t, req2.Removed)
+}
+
+func TestPendingMessageQueue_CloseRequestUpgradeAfterPopRequeuesNextRound(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerCloseRequest,
+	}
+
+	msgFalse := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB(), Removed: false},
+	)
+	msgTrue := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB(), Removed: true},
+	)
+
+	require.True(t, q.TryEnqueue(key, msgFalse))
+
+	poppedMsg, ok := q.Pop()
+	require.True(t, ok)
+
+	require.NotNil(t, poppedMsg)
+	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
+	require.False(t, req.Removed)
+
+	require.True(t, q.TryEnqueue(key, msgTrue))
+
+	type popResult struct {
+		msg *messaging.TargetMessage
+		ok  bool
+	}
+	resultCh := make(chan popResult, 1)
+	go func() {
+		nextMsg, nextOK := q.Pop()
+		resultCh <- popResult{msg: nextMsg, ok: nextOK}
+	}()
+
+	select {
+	case result := <-resultCh:
+		require.True(t, result.ok)
+		require.NotNil(t, result.msg)
+		nextReq := result.msg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
+		require.True(t, nextReq.Removed)
+	case <-time.After(time.Second):
+		q.Close()
+		require.FailNow(t, "upgraded close request was not requeued after the first pop")
+	}
 }
 
 func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
@@ -197,4 +425,93 @@ func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	key, ok = getPendingMessageKey(closeReq)
 	require.True(t, ok)
 	require.Equal(t, pendingMessageKey{changefeedID: cfID, msgType: messaging.TypeMaintainerCloseRequest}, key)
+}
+
+func TestDispatcherOrchestratorLocalFenceDropsNewMessages(t *testing.T) {
+	mc, _, stop := messaging.NewMessageCenterForTest(t)
+	defer stop()
+
+	orchestrator := &DispatcherOrchestrator{
+		mc:                 mc,
+		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		shards:             make([]*orchestratorShard, dispatcherOrchestratorShardCount),
+	}
+	processed := make(chan struct{}, 1)
+	for i := range orchestrator.shards {
+		orchestrator.shards[i] = newOrchestratorShard(func(msg *messaging.TargetMessage) {
+			processed <- struct{}{}
+		})
+		orchestrator.shards[i].Run()
+	}
+	orchestrator.LocalFence()
+	for _, shard := range orchestrator.shards {
+		shard.Wait()
+	}
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	msg := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB()},
+	)
+	require.NoError(t, orchestrator.RecvMaintainerRequest(context.Background(), msg))
+
+	select {
+	case <-processed:
+		require.FailNow(t, "local fence should drop new maintainer messages")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestDispatcherOrchestratorLocalFenceFencesManagersImmediately(t *testing.T) {
+	mc, _, stop := messaging.NewMessageCenterForTest(t)
+	defer stop()
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager := &dispatchermanager.DispatcherManager{}
+	orchestrator := &DispatcherOrchestrator{
+		mc: mc,
+		dispatcherManagers: map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{
+			cfID: manager,
+		},
+		shards: make([]*orchestratorShard, dispatcherOrchestratorShardCount),
+	}
+	for i := range orchestrator.shards {
+		orchestrator.shards[i] = newOrchestratorShard(func(msg *messaging.TargetMessage) {})
+		orchestrator.shards[i].Run()
+	}
+	orchestrator.LocalFence()
+	for _, shard := range orchestrator.shards {
+		shard.Wait()
+	}
+
+	err := manager.InitalizeTableTriggerEventDispatcher(nil)
+	require.True(t, dispatchermanager.IsWritePathClosedError(err))
+}
+
+func TestDispatcherOrchestratorLocalFenceFencesInitializingManagersImmediately(t *testing.T) {
+	mc, _, stop := messaging.NewMessageCenterForTest(t)
+	defer stop()
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager := &dispatchermanager.DispatcherManager{}
+	orchestrator := &DispatcherOrchestrator{
+		mc: mc,
+		initializingDispatcherManagers: map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{
+			cfID: manager,
+		},
+		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		shards:             make([]*orchestratorShard, dispatcherOrchestratorShardCount),
+	}
+	for i := range orchestrator.shards {
+		orchestrator.shards[i] = newOrchestratorShard(func(msg *messaging.TargetMessage) {})
+		orchestrator.shards[i].Run()
+	}
+	orchestrator.LocalFence()
+	for _, shard := range orchestrator.shards {
+		shard.Wait()
+	}
+
+	err := manager.InitalizeTableTriggerEventDispatcher(nil)
+	require.True(t, dispatchermanager.IsWritePathClosedError(err))
 }

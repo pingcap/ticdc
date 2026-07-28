@@ -285,6 +285,12 @@ func (w *Writer) Close() error {
 	defer w.Unlock()
 	// always set to false when closed, since if having err may not get fixed just by retry
 	defer w.running.Store(false)
+	defer func() {
+		if w.storage != nil {
+			w.storage.Close()
+			w.storage = nil
+		}
+	}()
 
 	if w.allocator != nil {
 		w.allocator.Close()

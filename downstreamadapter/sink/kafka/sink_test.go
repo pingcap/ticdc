@@ -17,11 +17,9 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama/mocks"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -104,93 +102,6 @@ func newKafkaSinkForTest(ctx context.Context) (*sink, error) {
 	return newKafkaSinkForTestWithProducers(ctx, nil, nil)
 }
 
-// mockSyncProducer is used to count the calls to Heartbeat.
-type mockSyncProducer struct {
-	kafka.MockSaramaSyncProducer
-	heartbeatCount int
-	mu             sync.Mutex
-}
-
-func (m *mockSyncProducer) Heartbeat() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.heartbeatCount++
-}
-
-func (m *mockSyncProducer) GetHeartbeatCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.heartbeatCount
-}
-
-func TestDDLProducerHeartbeat(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	producer := &mockSyncProducer{}
-	heartbeatInterval := 5 * time.Second
-	_, err := newKafkaSinkForTestWithProducers(ctx, nil, producer)
-	require.NoError(t, err)
-
-	// Wait for a sufficient amount of time to ensure the heartbeat ticker triggers several times.
-	// Waiting for 11 seconds to allow for at least two heartbeats.
-	// Use Eventually to avoid test flakiness.
-	require.Eventually(t, func() bool {
-		return producer.GetHeartbeatCount() >= 2
-	}, 11*time.Second, 150*time.Millisecond, "Heartbeat should be called periodically")
-
-	// Verify that closing the manager stops the heartbeat.
-	countBeforeClose := producer.GetHeartbeatCount()
-	cancel()
-	// Wait for a short period to ensure no new heartbeats occur.
-	time.Sleep(heartbeatInterval * 2)
-	require.Equal(t, countBeforeClose, producer.GetHeartbeatCount(), "Heartbeat should stop after manager is closed")
-}
-
-// mockSyncProducer is used to count the calls to Heartbeat.
-type mockAsyncProducer struct {
-	kafka.MockSaramaAsyncProducer
-	heartbeatCount int
-	mu             sync.Mutex
-}
-
-func (m *mockAsyncProducer) Heartbeat() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.heartbeatCount++
-}
-
-func (m *mockAsyncProducer) GetHeartbeatCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.heartbeatCount
-}
-
-func TestDMLProducerHeartbeat(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	producer := &mockAsyncProducer{}
-	producer.AsyncProducer = mocks.NewAsyncProducer(t, nil)
-	heartbeatInterval := 5 * time.Second
-	_, err := newKafkaSinkForTestWithProducers(ctx, producer, nil)
-	require.NoError(t, err)
-
-	// Wait for a sufficient amount of time to ensure the heartbeat ticker triggers several times.
-	// Waiting for 11 seconds to allow for at least two heartbeats.
-	// Use Eventually to avoid test flakiness.
-	require.Eventually(t, func() bool {
-		return producer.GetHeartbeatCount() >= 2
-	}, 11*time.Second, 150*time.Millisecond, "Heartbeat should be called periodically")
-
-	// Verify that closing the manager stops the heartbeat.
-	countBeforeClose := producer.GetHeartbeatCount()
-	cancel()
-	// Wait for a short period to ensure no new heartbeats occur.
-	time.Sleep(heartbeatInterval * 2)
-	require.Equal(t, countBeforeClose, producer.GetHeartbeatCount(), "Heartbeat should stop after manager is closed")
-}
-
 func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -262,7 +173,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 		}, 5*time.Second, time.Second)
 
 	// case 2: add checkpoint ts when sink is closed and it will not block
-	kafkaSink.Close(false)
+	kafkaSink.Close()
 	cancel()
 	kafkaSink.AddCheckpointTs(12345)
 }
