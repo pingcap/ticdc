@@ -124,6 +124,7 @@ func (f *saramaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) 
 
 	p, err := sarama.NewSyncProducerFromClient(client)
 	if err != nil {
+		_ = client.Close()
 		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 
@@ -151,6 +152,7 @@ func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error
 
 	p, err := sarama.NewAsyncProducerFromClient(client)
 	if err != nil {
+		_ = client.Close()
 		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 	return &saramaAsyncProducer{
