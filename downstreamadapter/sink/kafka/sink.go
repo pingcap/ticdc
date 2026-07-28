@@ -84,7 +84,7 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 
 	options := kafka.NewOptions()
 	if err = options.Apply(changefeedID, uri, sinkConfig); err != nil {
-		return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		return err
 	}
 	options.Topic = topic
 
@@ -113,18 +113,18 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 
 	factory, err := kafka.NewSaramaFactory(ctx, options, changefeedID)
 	if err != nil {
-		return errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return err
 	}
 
 	adminClient, err := factory.AdminClient(ctx)
 	if err != nil {
-		return errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return err
 	}
 	defer adminClient.Close()
 
 	topics, err := adminClient.GetTopicsMeta([]string{topic}, false)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	if _, exists := topics[topic]; !exists {
 		topicConfig := options.DeriveTopicConfig()
@@ -142,7 +142,7 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 			ReplicationFactor: topicConfig.ReplicationFactor,
 		}, true)
 		if err != nil {
-			return errors.WrapError(errors.ErrKafkaCreateTopic, err)
+			return err
 		}
 	}
 
@@ -158,7 +158,7 @@ func New(
 ) (*sink, error) {
 	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp)
 }

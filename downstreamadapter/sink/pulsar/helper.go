@@ -98,7 +98,7 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 
 	pulsarComponent.client, err = factoryCreator(pulsarComponent.config, changefeedID, sinkConfig)
 	if err != nil {
-		return pulsarComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return pulsarComponent, protocol, errors.WrapError(errors.ErrPulsarNewProducer, err)
 	}
 
 	topic, err := helper.GetTopic(sinkURI)

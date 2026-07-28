@@ -175,7 +175,7 @@ def create_changefeed(sink_uri):
     })
     headers = {"Content-Type": "application/json"}
     resp = rq.post(url, data=data, headers=headers)
-    assert "CDC:ErrKafkaNewProducer" in resp.text, f"{resp.text}"
+    assert "CDC:ErrNewKafkaSink" in resp.text, f"{resp.text}"
     assert "not found, ResolveEndpointV2" not in resp.text, f"{resp.text}"
 
     print("pass test: create changefeed")

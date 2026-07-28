@@ -143,7 +143,7 @@ func (p *saramaAsyncProducer) handleProducerError(err *sarama.ProducerError) err
 		extractLogInfo(err.Msg),
 		err.Err,
 	)
-	return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, errWithInfo)
+	return cerror.WrapError(cerror.ErrKafkaSendMessage, errWithInfo)
 }
 
 // AsyncSend is the input channel for the user to write messages to that they
@@ -152,7 +152,7 @@ func (p *saramaAsyncProducer) AsyncSend(
 	ctx context.Context, topic string, partition int32, message *common.Message,
 ) error {
 	if p.closed.Load() {
-		return cerror.ErrKafkaProducerClosed.GenWithStackByArgs()
+		return cerror.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 	failpoint.Inject("KafkaSinkAsyncSendError", func() {
 		// simulate sending message to input channel successfully but flushing

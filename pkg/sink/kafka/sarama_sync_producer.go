@@ -46,7 +46,7 @@ type saramaSyncProducer struct {
 
 func (p *saramaSyncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
 	if p.closed.Load() {
-		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
+		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 
 	msg := &sarama.ProducerMessage{
@@ -73,7 +73,7 @@ func (p *saramaSyncProducer) SendMessage(topic string, partitionNum int32, messa
 
 func (p *saramaSyncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
 	if p.closed.Load() {
-		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
+		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 
 	msgs := make([]*sarama.ProducerMessage, partitionNum)

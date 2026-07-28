@@ -20,6 +20,7 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
 )
@@ -128,7 +129,7 @@ func TestCreateTopic(t *testing.T) {
 			func(detail *kafka.TopicDetail, validateOnly bool) error {
 				gotFailedTopicDetail = detail
 				gotFailedTopicValidateOnly = validateOnly
-				return sarama.ErrInvalidReplicationFactor
+				return errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ErrInvalidReplicationFactor, "create-topic", detail.Name)
 			}),
 	)
 
@@ -179,11 +180,8 @@ func TestCreateTopic(t *testing.T) {
 	manager = newKafkaTopicManager(ctx, topic, changefeedID, adminClient, cfg)
 	defer manager.Close()
 	_, err = manager.CreateTopicAndWaitUntilVisible(ctx, topic)
-	require.Regexp(
-		t,
-		"kafka create topic failed: kafka server: Replication-factor is invalid",
-		err,
-	)
+	require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+	require.ErrorIs(t, err, sarama.ErrInvalidReplicationFactor)
 	require.NotNil(t, gotFailedTopicDetail)
 	require.Equal(t, "new-topic-failed", gotFailedTopicDetail.Name)
 	require.False(t, gotFailedTopicValidateOnly)
@@ -201,7 +199,7 @@ func TestCreateTopicValidatesReplicationFactor(t *testing.T) {
 		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).
 			Return(map[string]kafka.TopicDetail{}, nil),
 		adminClient.EXPECT().GetBrokerConfig(kafka.MinInsyncReplicasConfigName).
-			Return("2", nil),
+			Return("2", true, nil),
 	)
 
 	manager := newKafkaTopicManager(

@@ -72,23 +72,23 @@ func newKafkaSinkComponent(
 	}()
 	protocol, err := helper.GetProtocol(utils.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
-		return comp, config.ProtocolUnknown, errors.Trace(err)
+		return comp, config.ProtocolUnknown, err
 	}
 
 	topic, err := helper.GetTopic(sinkURI)
 	if err != nil {
-		return comp, protocol, errors.Trace(err)
+		return comp, protocol, err
 	}
 
 	options := kafka.NewOptions()
 	if err = options.Apply(changefeedID, sinkURI, sinkConfig); err != nil {
-		return comp, protocol, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		return comp, protocol, err
 	}
 	options.Topic = topic
 
 	comp.factory, err = kafka.NewSaramaFactory(ctx, options, changefeedID)
 	if err != nil {
-		return comp, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return comp, protocol, err
 	}
 
 	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
@@ -128,7 +128,7 @@ func newKafkaSinkComponent(
 
 	comp.adminClient, err = comp.factory.AdminClient(ctx)
 	if err != nil {
-		return comp, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return comp, protocol, err
 	}
 
 	comp.topicManager, err = topicmanager.GetTopicManagerAndTryCreateTopic(
@@ -139,7 +139,7 @@ func newKafkaSinkComponent(
 		comp.adminClient,
 	)
 	if err != nil {
-		return comp, protocol, errors.Trace(err)
+		return comp, protocol, err
 	}
 	return comp, protocol, nil
 }

@@ -14,13 +14,29 @@
 package kafka
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
+
+func TestProducerRejectsSendAfterClose(t *testing.T) {
+	t.Parallel()
+
+	message := &common.Message{}
+	syncProducer := &saramaSyncProducer{closed: atomic.NewBool(true)}
+	require.ErrorIs(t, syncProducer.SendMessage("topic", 1, message), cerror.ErrKafkaSinkClosed)
+	require.ErrorIs(t, syncProducer.SendMessages("topic", 1, message), cerror.ErrKafkaSinkClosed)
+
+	asyncProducer := &saramaAsyncProducer{closed: atomic.NewBool(true)}
+	require.ErrorIs(t, asyncProducer.AsyncSend(context.Background(), "topic", 0, message), cerror.ErrKafkaSinkClosed)
+}
 
 func TestSyncProducerClose(t *testing.T) {
 	tests := []struct {
@@ -47,7 +63,7 @@ func TestSyncProducerClose(t *testing.T) {
 			)
 
 			p := &saramaSyncProducer{
-				id:       common.NewChangeFeedIDWithName("test", "default"),
+				id:       commonType.NewChangeFeedIDWithName("test", "default"),
 				client:   client,
 				producer: producer,
 				closed:   atomic.NewBool(false),

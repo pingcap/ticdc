@@ -110,24 +110,21 @@ func (f *kafkaAdminFixture) getTopicsPartitionsNum(
 	return result, nil
 }
 
-func (f *kafkaAdminFixture) getBrokerConfig(configName string) (string, error) {
+func (f *kafkaAdminFixture) getBrokerConfig(configName string) (string, bool, error) {
 	if value, ok := f.brokerConfig[configName]; ok {
-		return value, nil
+		return value, true, nil
 	}
-	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
-		"cannot find the `%s` from the broker's configuration", configName)
+	return "", false, nil
 }
 
-func (f *kafkaAdminFixture) getTopicConfig(topicName string, configName string) (string, error) {
+func (f *kafkaAdminFixture) getTopicConfig(topicName string, configName string) (string, bool, error) {
 	if _, ok := f.topics[topicName]; !ok {
-		return "", errors.ErrKafkaConfigNotFound.GenWithStack(
-			"cannot find the `%s` from the topic's configuration", topicName)
+		return "", false, nil
 	}
 	if value, ok := f.topicConfig[topicName][configName]; ok {
-		return value, nil
+		return value, true, nil
 	}
-	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
-		"cannot find the `%s` from the topic's configuration", configName)
+	return "", false, nil
 }
 
 func (f *kafkaAdminFixture) createTopic(detail *TopicDetail, _ bool) error {
@@ -264,7 +261,7 @@ func TestCompleteOptions(t *testing.T) {
 	require.NoError(t, err)
 	options = NewOptions()
 	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
-	require.True(t, errors.ErrKafkaInvalidClientID.Equal(err))
+	require.True(t, errors.ErrKafkaInvalidConfig.Equal(err))
 
 	// max-retry accepts non-negative sink-uri values.
 	uri = "kafka://127.0.0.1:9092/abc?max-retry=7"
@@ -362,7 +359,7 @@ func TestSetPartitionNum(t *testing.T) {
 
 	options.PartitionNum = 3
 	err = options.setPartitionNum(changefeedID, 2)
-	require.True(t, errors.ErrKafkaInvalidPartitionNum.Equal(err))
+	require.True(t, errors.ErrKafkaInvalidConfig.Equal(err))
 }
 
 func TestClientID(t *testing.T) {
