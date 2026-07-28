@@ -88,7 +88,7 @@ func newKafkaSinkComponent(
 
 	comp.factory, err = kafka.NewFactory(ctx, options, changefeedID)
 	if err != nil {
-		return comp, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return comp, protocol, err
 	}
 
 	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
@@ -128,7 +128,7 @@ func newKafkaSinkComponent(
 
 	comp.admin, err = comp.factory.Admin(ctx)
 	if err != nil {
-		return comp, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return comp, protocol, err
 	}
 
 	comp.topicManager, err = topicmanager.GetTopicManagerAndTryCreateTopic(

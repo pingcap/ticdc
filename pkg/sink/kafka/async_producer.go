@@ -180,8 +180,6 @@ func (p *asyncProducer) enqueueAsyncSendError(
 	}
 }
 
-func (p *asyncProducer) Heartbeat() {}
-
 func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
 	defer p.closed.Store(true)
 	for {

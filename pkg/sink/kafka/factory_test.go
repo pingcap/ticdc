@@ -14,9 +14,12 @@
 package kafka
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,4 +93,74 @@ func TestNewClientOptionDerivesRequestTimeout(t *testing.T) {
 			require.Equal(t, tc.expectedRequestTimeout, clientOption.RequestTimeout)
 		})
 	}
+}
+
+func TestNewFactoryAdminCreationReturnsKafkaSinkError(t *testing.T) {
+	t.Parallel()
+
+	options := NewOptions()
+	options.Version = "invalid"
+	options.IsAssignedVersion = true
+
+	factory, err := NewFactory(
+		context.Background(),
+		options,
+		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
+	)
+	require.Nil(t, factory)
+	requireNewKafkaSinkError(t, err)
+}
+
+func TestFactoryComponentCreationReturnsKafkaSinkError(t *testing.T) {
+	t.Parallel()
+
+	factory := &factory{
+		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
+		clientOption: &clientOptions{
+			Version:           "invalid",
+			IsAssignedVersion: true,
+		},
+	}
+
+	testCases := []struct {
+		name   string
+		create func() error
+	}{
+		{
+			name: "admin",
+			create: func() error {
+				_, err := factory.Admin(context.Background())
+				return err
+			},
+		},
+		{
+			name: "sync producer",
+			create: func() error {
+				_, err := factory.SyncProducer(context.Background())
+				return err
+			},
+		},
+		{
+			name: "async producer",
+			create: func() error {
+				_, err := factory.AsyncProducer(context.Background())
+				return err
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			requireNewKafkaSinkError(t, tc.create())
+		})
+	}
+}
+
+func requireNewKafkaSinkError(t *testing.T, err error) {
+	t.Helper()
+
+	errCode, ok := errors.RFCCode(err)
+	require.True(t, ok)
+	require.Equal(t, errors.ErrNewKafkaSink.RFCCode(), errCode)
 }

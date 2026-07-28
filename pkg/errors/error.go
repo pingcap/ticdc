@@ -144,9 +144,9 @@ var (
 			"only support these values: 0(NoResponse),1(WaitForLocal) and -1(WaitForAll)",
 		errors.RFCCodeText("CDC:ErrKafkaInvalidRequiredAcks"),
 	)
-	ErrKafkaNewProducer = errors.Normalize(
-		"new kafka producer",
-		errors.RFCCodeText("CDC:ErrKafkaNewProducer"),
+	ErrNewKafkaSink = errors.Normalize(
+		"create kafka sink failed",
+		errors.RFCCodeText("CDC:ErrNewKafkaSink"),
 	)
 	ErrKafkaInvalidClientID = errors.Normalize(
 		"invalid kafka client ID '%s'",

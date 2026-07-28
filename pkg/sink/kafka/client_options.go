@@ -41,7 +41,6 @@ type clientOptions struct {
 	Version           string
 	IsAssignedVersion bool
 
-	MaxMessageBytes       int
 	ProducerBatchMaxBytes int
 	MaxRetry              int
 	Compression           string
@@ -193,18 +192,13 @@ func newOauthTokenSource(ctx context.Context, o *clientOptions) (oauth2.TokenSou
 func newProducerOptions(
 	o *clientOptions,
 ) []kgo.Opt {
-	producerBatchMaxBytes := o.ProducerBatchMaxBytes
-	if producerBatchMaxBytes <= 0 {
-		producerBatchMaxBytes = o.MaxMessageBytes
-	}
-
 	return []kgo.Opt{
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		kgo.RequiredAcks(newRequiredAcks(o)),
 		kgo.DisableIdempotentWrite(),
 		kgo.MaxProduceRequestsInflightPerBroker(1),
 		kgo.RecordRetries(o.MaxRetry),
-		kgo.ProducerBatchMaxBytes(int32(producerBatchMaxBytes)),
+		kgo.ProducerBatchMaxBytes(int32(o.ProducerBatchMaxBytes)),
 		kgo.ProduceRequestTimeout(o.RequestTimeout),
 		kgo.ProducerLinger(0),
 		newCompressionOption(o),

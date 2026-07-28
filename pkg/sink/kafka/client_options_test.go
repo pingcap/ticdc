@@ -57,13 +57,9 @@ func TestNewOptionsRejectsInvalidAssignedVersion(t *testing.T) {
 func TestNewProducerOptionsUsesProducerBatchMaxBytes(t *testing.T) {
 	t.Parallel()
 
-	const (
-		encoderMaxMessageBytes = 800
-		producerBatchMaxBytes  = 1048588
-	)
+	const producerBatchMaxBytes = 1048588
 	o := &clientOptions{
 		BrokerEndpoints:       []string{"127.0.0.1:9092"},
-		MaxMessageBytes:       encoderMaxMessageBytes,
 		ProducerBatchMaxBytes: producerBatchMaxBytes,
 		MaxRetry:              defaultMaxRetry,
 		RequiredAcks:          int16(WaitForAll),

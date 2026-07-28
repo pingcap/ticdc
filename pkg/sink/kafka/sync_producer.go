@@ -151,8 +151,6 @@ func (p *syncProducer) SendMessages(topic string, partitionNum int32, message *c
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 
-func (p *syncProducer) Heartbeat() {}
-
 func (p *syncProducer) Close() {
 	if !p.closed.CompareAndSwap(false, true) {
 		log.Warn("kafka DDL producer already closed",

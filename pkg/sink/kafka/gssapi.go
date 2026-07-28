@@ -41,7 +41,7 @@ const (
 	gssAPIFinished = 3
 )
 
-type kerborosClient interface {
+type kerberosClient interface {
 	Login() error
 	GetServiceTicket(spn string) (messages.Ticket, types.EncryptionKey, error)
 	Domain() string
@@ -61,7 +61,7 @@ func (m *gssapiMechanism) Authenticate(
 	_ context.Context,
 	host string,
 ) (sasl.Session, []byte, error) {
-	client, err := newKerborosClient(m.config)
+	client, err := newKerberosClient(m.config)
 	if err != nil {
 		return nil, nil, errors.Trace(err)
 	}
@@ -93,7 +93,7 @@ func (m *gssapiMechanism) Authenticate(
 }
 
 type gssapiSession struct {
-	client kerborosClient
+	client kerberosClient
 	ticket messages.Ticket
 	encKey types.EncryptionKey
 	step   int
@@ -200,7 +200,7 @@ func (c *krb5Client) CName() types.PrincipalName {
 	return c.Credentials.CName()
 }
 
-func newKerborosClient(g gssapiConfig) (kerborosClient, error) {
+func newKerberosClient(g gssapiConfig) (kerberosClient, error) {
 	cfg, err := config.Load(g.kerberosConfigPath)
 	if err != nil {
 		return nil, errors.Trace(err)

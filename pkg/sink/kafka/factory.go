@@ -45,12 +45,12 @@ func NewFactory(
 ) (Factory, error) {
 	admin, err := newAdmin(ctx, changefeedID, newClientOption(o), nil)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 	defer admin.Close()
 
 	if err := adjustOptions(changefeedID, admin, o, o.Topic); err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 
 	return &factory{
@@ -63,7 +63,7 @@ func NewFactory(
 func (f *factory) Admin(ctx context.Context) (Admin, error) {
 	admin, err := newAdmin(ctx, f.changefeedID, f.clientOption, f.metricsHook)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 	return admin, nil
 }
@@ -71,7 +71,7 @@ func (f *factory) Admin(ctx context.Context) (Admin, error) {
 func (f *factory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 	producer, err := newSyncProducer(ctx, f.changefeedID, f.clientOption, f.metricsHook)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 	return producer, nil
 }
@@ -79,7 +79,7 @@ func (f *factory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 func (f *factory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
 	producer, err := newAsyncProducer(ctx, f.changefeedID, f.clientOption, f.metricsHook)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 	return producer, nil
 }
@@ -92,7 +92,6 @@ func newClientOption(o *options) *clientOptions {
 		Version:           o.Version,
 		IsAssignedVersion: o.IsAssignedVersion,
 
-		MaxMessageBytes:       o.MaxMessageBytes,
 		ProducerBatchMaxBytes: o.MaxMessageBytes,
 		MaxRetry:              o.MaxRetry,
 		Compression:           o.Compression,

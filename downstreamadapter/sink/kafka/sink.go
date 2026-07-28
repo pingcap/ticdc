@@ -112,12 +112,12 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 
 	factory, err := kafka.NewFactory(ctx, options, changefeedID)
 	if err != nil {
-		return errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return err
 	}
 
 	admin, err := factory.Admin(ctx)
 	if err != nil {
-		return errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return err
 	}
 	defer admin.Close()
 
