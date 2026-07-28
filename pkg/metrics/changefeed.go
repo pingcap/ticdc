@@ -121,7 +121,6 @@ func ResetOwnerChangefeedMetrics() {
 	ChangefeedErrorInfoGauge.Reset()
 	ChangefeedCheckpointTsGauge.Reset()
 	ChangefeedCheckpointTsLagGauge.Reset()
-	ChangefeedDownstreamInfoGauge.Reset()
 }
 
 func initChangefeedMetrics(registry *prometheus.Registry) {

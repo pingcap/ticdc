@@ -222,14 +222,8 @@ func NewController(
 func (c *Controller) collectMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-<<<<<<< HEAD
-=======
 	defer metrics.ResetOwnerChangefeedMetrics()
 
-	// changefeedDownstreamTypeCache is used to cleanup the previous downstream type
-	// label value when a changefeed's sink-uri is updated.
-	changefeedDownstreamTypeCache := make(map[common.ChangeFeedDisplayName]string)
->>>>>>> 5d5121dfa (coordinator: clean stale owner checkpoint metrics (#5491))
 	errorMetricLabels := make(map[common.ChangeFeedID]changefeedErrorMetricLabels)
 	for {
 		select {

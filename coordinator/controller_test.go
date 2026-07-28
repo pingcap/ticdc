@@ -33,27 +33,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
-<<<<<<< HEAD
-=======
-	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus/testutil"
->>>>>>> 5d5121dfa (coordinator: clean stale owner checkpoint metrics (#5491))
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 )
-
-<<<<<<< HEAD
-=======
-type noopScheduler struct{}
-
-func (noopScheduler) Execute() time.Time {
-	return time.Now().Add(time.Hour)
-}
-
-func (noopScheduler) Name() string {
-	return pkgscheduler.BasicScheduler
-}
 
 func TestUpdateChangefeedCheckpointMetricsDeletesFinishedLabels(t *testing.T) {
 	metrics.ResetOwnerChangefeedMetrics()
@@ -85,7 +69,6 @@ func TestUpdateChangefeedCheckpointMetricsDeletesFinishedLabels(t *testing.T) {
 	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
 }
 
->>>>>>> 5d5121dfa (coordinator: clean stale owner checkpoint metrics (#5491))
 func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 	newController := func(t *testing.T) (*Controller, chan *messaging.TargetMessage, *changefeed.ChangefeedDB, node.ID) {
 		t.Helper()
