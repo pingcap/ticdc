@@ -158,7 +158,6 @@ func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error
 		producer:     p,
 		changefeedID: f.changefeedID,
 		closed:       atomic.NewBool(false),
-		failpointCh:  make(chan *sarama.ProducerError, 1),
 	}, nil
 }
 

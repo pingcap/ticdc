@@ -15,13 +15,15 @@ package kafka
 
 import (
 	"context"
-	"errors"
+	"io"
+	"strings"
 	"testing"
 
+	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
-	commonType "github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -29,13 +31,13 @@ import (
 func TestProducerRejectsSendAfterClose(t *testing.T) {
 	t.Parallel()
 
-	message := &common.Message{}
+	message := &codecCommon.Message{}
 	syncProducer := &saramaSyncProducer{closed: atomic.NewBool(true)}
-	require.ErrorIs(t, syncProducer.SendMessage("topic", 1, message), cerror.ErrKafkaSinkClosed)
-	require.ErrorIs(t, syncProducer.SendMessages("topic", 1, message), cerror.ErrKafkaSinkClosed)
+	require.ErrorIs(t, syncProducer.SendMessage("topic", 1, message), errors.ErrKafkaSinkClosed)
+	require.ErrorIs(t, syncProducer.SendMessages("topic", 1, message), errors.ErrKafkaSinkClosed)
 
 	asyncProducer := &saramaAsyncProducer{closed: atomic.NewBool(true)}
-	require.ErrorIs(t, asyncProducer.AsyncSend(context.Background(), "topic", 0, message), cerror.ErrKafkaSinkClosed)
+	require.ErrorIs(t, asyncProducer.AsyncSend(context.Background(), "topic", 0, message), errors.ErrKafkaSinkClosed)
 }
 
 func TestSyncProducerClose(t *testing.T) {
@@ -48,7 +50,7 @@ func TestSyncProducerClose(t *testing.T) {
 		},
 		{
 			name:           "still closes producer when client close fails",
-			clientCloseErr: errors.New("boom"),
+			clientCloseErr: io.ErrClosedPipe,
 		},
 	}
 
@@ -63,7 +65,7 @@ func TestSyncProducerClose(t *testing.T) {
 			)
 
 			p := &saramaSyncProducer{
-				id:       commonType.NewChangeFeedIDWithName("test", "default"),
+				id:       common.NewChangeFeedIDWithName("test", "default"),
 				client:   client,
 				producer: producer,
 				closed:   atomic.NewBool(false),
@@ -72,4 +74,73 @@ func TestSyncProducerClose(t *testing.T) {
 			p.Close()
 		})
 	}
+}
+
+func TestSyncProducerErrorWrappedOnce(t *testing.T) {
+	cause := io.ErrClosedPipe
+	tests := []struct {
+		name       string
+		expectSend func(*MocksaramaSyncProducerClient)
+		send       func(*saramaSyncProducer, *codecCommon.Message) error
+	}{
+		{
+			name: "single message",
+			expectSend: func(producer *MocksaramaSyncProducerClient) {
+				producer.EXPECT().SendMessage(gomock.Any()).Return(int32(0), int64(0), cause)
+			},
+			send: func(producer *saramaSyncProducer, message *codecCommon.Message) error {
+				return producer.SendMessage("topic", 0, message)
+			},
+		},
+		{
+			name: "message batch",
+			expectSend: func(producer *MocksaramaSyncProducerClient) {
+				producer.EXPECT().SendMessages(gomock.Any()).Return(cause)
+			},
+			send: func(producer *saramaSyncProducer, message *codecCommon.Message) error {
+				return producer.SendMessages("topic", 1, message)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			producer := NewMocksaramaSyncProducerClient(ctrl)
+			test.expectSend(producer)
+			p := &saramaSyncProducer{
+				id:       common.NewChangeFeedIDWithName("test", "default"),
+				producer: producer,
+				closed:   atomic.NewBool(false),
+			}
+			message := &codecCommon.Message{LogInfo: &codecCommon.MessageLogInfo{}}
+
+			err := test.send(p, message)
+
+			requireKafkaSendError(t, err, cause)
+		})
+	}
+}
+
+func TestAsyncProducerErrorWrappedOnce(t *testing.T) {
+	cause := io.ErrClosedPipe
+	producer := &saramaAsyncProducer{
+		changefeedID: common.NewChangeFeedIDWithName("test", "default"),
+	}
+	err := producer.handleProducerError(&sarama.ProducerError{
+		Err: cause,
+		Msg: &sarama.ProducerMessage{Metadata: &messageMetadata{
+			logInfo: &codecCommon.MessageLogInfo{},
+		}},
+	})
+
+	requireKafkaSendError(t, err, cause)
+}
+
+func requireKafkaSendError(t *testing.T, err, cause error) {
+	t.Helper()
+	require.ErrorIs(t, err, errors.ErrKafkaSendMessage)
+	require.ErrorIs(t, err, cause)
+	require.Equal(t, 1, strings.Count(err.Error(), string(errors.ErrKafkaSendMessage.RFCCode())))
+	require.NotContains(t, err.Error(), "keyspace=test")
 }

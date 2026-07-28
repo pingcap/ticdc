@@ -14,13 +14,13 @@
 package kafka
 
 import (
-	stderrors "errors"
+	"io"
 	"testing"
 
 	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,7 +47,7 @@ func TestGetBrokerConfig(t *testing.T) {
 	t.Run("admin error", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		admin := NewMocksaramaClusterAdmin(ctrl)
-		cause := stderrors.New("describe cluster failed")
+		cause := io.ErrUnexpectedEOF
 		admin.EXPECT().DescribeCluster().Return(nil, int32(0), cause)
 
 		client := &saramaAdminClient{
@@ -56,7 +56,7 @@ func TestGetBrokerConfig(t *testing.T) {
 		}
 		_, _, err := client.GetBrokerConfig("missing")
 
-		require.ErrorIs(t, err, cerror.ErrKafkaAdminAPI)
+		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
 		require.ErrorIs(t, err, cause)
 	})
 }
