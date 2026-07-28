@@ -117,7 +117,7 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 
 	err = completeSaramaSASLConfig(ctx, config, o)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		return nil, err
 	}
 
 	kafkaVersion, err := getKafkaVersion(config, o)
