@@ -85,7 +85,7 @@ func TestGetAbsentByGroupStopsAtBatch(t *testing.T) {
 		func(action func()) { action() },
 		NewEmptyChecker[testReplicationID, *testReplication],
 	)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		id := testReplicationID(fmt.Sprintf("r%d", i))
 		db.AddAbsentWithoutLock(&testReplication{
 			id:             id,
@@ -109,7 +109,7 @@ func TestGetAbsentByGroupSkipsNotRunnableTasks(t *testing.T) {
 		func(action func()) { action() },
 		NewEmptyChecker[testReplicationID, *testReplication],
 	)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		id := testReplicationID(fmt.Sprintf("r%d", i))
 		db.AddAbsentWithoutLock(&testReplication{
 			id:             id,

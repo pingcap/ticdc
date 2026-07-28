@@ -157,6 +157,26 @@ func TestEventServiceBasic(t *testing.T) {
 	}
 }
 
+func TestHandleMessageIgnoresInvalidSingleMessagePayloads(t *testing.T) {
+	es := &eventService{}
+
+	require.NotPanics(t, func() {
+		err := es.handleMessage(context.Background(), &messaging.TargetMessage{
+			Type:    messaging.TypeDispatcherHeartbeat,
+			Message: nil,
+		})
+		require.NoError(t, err)
+	})
+
+	require.NotPanics(t, func() {
+		err := es.handleMessage(context.Background(), &messaging.TargetMessage{
+			Type:    messaging.TypeCongestionControl,
+			Message: nil,
+		})
+		require.NoError(t, err)
+	})
+}
+
 var _ eventstore.EventStore = &mockEventStore{}
 
 // mockEventStore is a mock implementation of the EventStore interface
@@ -495,6 +515,10 @@ func (m *mockDispatcherInfo) GetEpoch() uint64 {
 }
 
 func (m *mockDispatcherInfo) IsOutputRawChangeEvent() bool {
+	return false
+}
+
+func (m *mockDispatcherInfo) EnableIgnoreUpdateOnlyColumns() bool {
 	return false
 }
 

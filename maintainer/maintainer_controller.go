@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -76,6 +77,11 @@ type Controller struct {
 	// maintainer and is shared by drain-aware schedulers so each tick reads a
 	// consistent host/target snapshot.
 	drainState *mscheduler.DrainState
+
+	// routeAdmin is initialized during bootstrap and shared with Barrier for
+	// route admission checks during DDL coordination.
+	routeAdmin  *routing.Admin
+	reportError func(error)
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -157,6 +163,14 @@ func NewController(changefeedID common.ChangeFeedID,
 	return controller
 }
 
+// SetErrorReporter configures the callback used to report routing errors.
+func (c *Controller) SetErrorReporter(reportError func(error)) {
+	c.reportError = reportError
+	if c.routeAdmin != nil {
+		c.routeAdmin.SetErrorReporter(reportError)
+	}
+}
+
 // HandleStatus handles the status report from the node.
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
 	c.handleStatus(from, statusList, true)
@@ -218,47 +232,6 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 			continue
 		}
 		spanController.UpdateStatus(stm, status)
-<<<<<<< HEAD
-=======
-
-		if !allowSelfHealing {
-			continue
-		}
-
-		// Fallback: dispatcher becomes non-working without an operator.
-		//
-		// In normal scheduling flow, a dispatcher should transition to Stopped/Removed as part of a maintainer
-		// operator (Remove/Move/Split...). However, after maintainer failover we can lose operatorController state
-		// while dispatcher managers keep executing the already-issued requests.
-		//
-		// A real example is a "remove request in transit" during bootstrap:
-		// - Old maintainer sends a Remove (e.g. the remove-origin phase of Move), but the request hasn't reached
-		//   dispatcher manager yet.
-		// - New maintainer bootstraps from dispatcher manager snapshots and sees the dispatcher as Working, with
-		//   no in-flight operator reported in bootstrap response.
-		// - After bootstrap, the in-transit Remove arrives, the dispatcher is removed, and the new maintainer
-		//   observes a terminal status without a corresponding operator.
-		//
-		// In these cases we'd observe a non-working status but have no operator to drive the follow-up
-		// rescheduling, so we mark the span absent to let the scheduler recreate it.
-		//
-		// Safety against message reordering/resend:
-		// - We only reach here when stm != nil and stm.GetNodeID() == from (checked above). If the span was already
-		//   rebound to a different node, we skip it, so late statuses from the old node won't trigger rescheduling.
-		// - MarkSpanAbsent is idempotent and only affects the scheduler state, so even if we get duplicate terminal
-		//   statuses, the worst case is an extra no-op absent mark.
-		if status.ComponentStatus == heartbeatpb.ComponentState_Stopped ||
-			status.ComponentStatus == heartbeatpb.ComponentState_Removed {
-			if op := operatorController.GetOperator(dispatcherID); op == nil {
-				log.Warn("dispatcher becomes non-working without operator, mark span absent for rescheduling",
-					zap.String("changefeed", c.changefeedID.Name()),
-					zap.String("from", from.String()),
-					zap.String("dispatcherID", dispatcherID.String()),
-					zap.Any("status", status))
-				spanController.MarkSpanAbsent(stm)
-			}
-		}
->>>>>>> 776315e72 (maintainer: quiesce control plane during remove handoff (#4828))
 	}
 }
 

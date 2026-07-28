@@ -205,11 +205,9 @@ func InitLogger(cfg *Config, opts ...LoggerOpt) error {
 // initOptionalComponent initializes some optional components
 func initOptionalComponent(op *loggerOp, cfg *Config) error {
 	var level zapcore.Level
-	if op.isInitGRPCLogger || op.isInitSaramaLogger {
-		err := level.UnmarshalText([]byte(cfg.Level))
-		if err != nil {
-			return errors.Trace(err)
-		}
+	err := level.UnmarshalText([]byte(cfg.Level))
+	if err != nil {
+		return errors.Trace(err)
 	}
 
 	if op.isInitGRPCLogger {
@@ -257,11 +255,14 @@ func initMySQLLogger() error {
 
 // initSaramaLogger hacks logger used in sarama lib
 func initSaramaLogger(level zapcore.Level) error {
-	logger, err := zap.NewStdLogAt(log.L().With(zap.String("component", "sarama")), level)
-	if err != nil {
-		return errors.Trace(err)
+	// only available less than info level
+	if !zapcore.InfoLevel.Enabled(level) {
+		logger, err := zap.NewStdLogAt(log.L().With(zap.String("component", "sarama")), level)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		sarama.Logger = logger
 	}
-	sarama.Logger = logger
 	return nil
 }
 
