@@ -98,10 +98,8 @@ func DeleteChangefeedCheckpointMetrics(keyspace, changefeed string) {
 
 func ResetOwnerChangefeedMetrics() {
 	ChangefeedStatusGauge.Reset()
-	ChangefeedErrorInfoGauge.Reset()
 	ChangefeedCheckpointTsGauge.Reset()
 	ChangefeedCheckpointTsLagGauge.Reset()
-	ChangefeedDownstreamInfoGauge.Reset()
 }
 
 func initChangefeedMetrics(registry *prometheus.Registry) {
