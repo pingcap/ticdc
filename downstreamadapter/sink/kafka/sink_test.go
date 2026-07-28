@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
@@ -231,8 +232,28 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	go s.Run(ctx)
 	return s, nil
+}
+
+func TestKafkaSinkRunReturnsAsyncProducerError(t *testing.T) {
+	ctx := t.Context()
+
+	ctrl := gomock.NewController(t)
+	producerErr := errors.ErrKafkaSendMessage.GenWithStackByArgs()
+	asyncProducer := kafka.NewMockAsyncProducer(ctrl)
+	syncProducer := kafka.NewMockSyncProducer(ctrl)
+	asyncProducer.EXPECT().AsyncRunCallback(gomock.Any()).Return(producerErr)
+	asyncProducer.EXPECT().Close().AnyTimes()
+	syncProducer.EXPECT().Close().AnyTimes()
+
+	kafkaSink, err := newKafkaSinkForTestWithProducers(ctx, t, ctrl, asyncProducer, syncProducer)
+	require.NoError(t, err)
+	defer kafkaSink.Close()
+
+	err = kafkaSink.Run(ctx)
+
+	require.ErrorIs(t, err, errors.ErrKafkaSendMessage)
+	require.False(t, kafkaSink.IsNormal())
 }
 
 func TestKafkaSinkBasicFunctionality(t *testing.T) {
@@ -309,6 +330,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	kafkaSink, err := newKafkaSinkForTestWithProducers(ctx, t, ctrl, asyncProducer, syncProducer)
 	require.NoError(t, err)
 	defer cancel()
+	go kafkaSink.Run(ctx)
 
 	err = kafkaSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)

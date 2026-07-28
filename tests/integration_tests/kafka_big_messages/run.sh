@@ -129,10 +129,16 @@ function run_protocol_case() {
 	local diff_config="$work_dir/diff_config.toml"
 	local pd_addr="http://${UP_PD_HOST_1}:${UP_PD_PORT_1}"
 	local sink_uri
+	local initial_topic_limit=$SMALL_TOPIC_LIMIT
+	local expected_error=ErrMessageTooLarge
+	if [ "$protocol_case" = "async_error" ]; then
+		initial_topic_limit=$LARGE_TOPIC_LIMIT
+		expected_error=ErrKafkaSendMessage
+	fi
 
 	mkdir -p "$work_dir"
 	render_diff_config "$work_dir" "$database_name" "$diff_config"
-	kafka_topic --topic "$topic_name" --max-message-bytes "$SMALL_TOPIC_LIMIT"
+	kafka_topic --topic "$topic_name" --max-message-bytes "$initial_topic_limit"
 	local start_ts
 	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
 	sink_uri=$(kafka_sink_uri "$topic_name" "$protocol" "$extra_params")
@@ -145,13 +151,17 @@ function run_protocol_case() {
 	start_kafka_consumer "$work_dir" "$sink_uri" "$schema_registry_uri" "$protocol_case"
 	wait_changefeed_state "$pd_addr" "$changefeed_id" "normal" "null"
 
+	# Lower the topic limit after the producer has started. The encoder and
+	# producer still accept the message, then Kafka rejects it asynchronously.
+	if [ "$protocol_case" = "async_error" ]; then
+		kafka_topic --topic "$topic_name" --max-message-bytes "$SMALL_TOPIC_LIMIT" --alter
+	fi
+
 	"$GENERATOR_DIR/gen_kafka_big_messages" --row-bytes="$ROW_BYTES" --row-count=1 --database-name="$database_name" --table-name=test --sql-file-path="$sql_file"
 	run_sql_file "$sql_file" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	run_sql "CREATE TABLE ${database_name}.finish_mark(id INT PRIMARY KEY)" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 
-	# The encoded row is larger than the topic limit, so the changefeed must
-	# enter the retryable warning state with ErrMessageTooLarge.
-	wait_changefeed_state "$pd_addr" "$changefeed_id" "warning" "ErrMessageTooLarge"
+	wait_changefeed_state "$pd_addr" "$changefeed_id" "warning" "$expected_error"
 
 	# Only increase Kafka's topic limit. TiCDC must recreate the sink, read the
 	# new limit, and resume without updating, pausing, or resuming the changefeed.
@@ -173,6 +183,7 @@ function run() {
 	local cases=(
 		"canal_json|canal-json||enable-tidb-extension=true"
 		"open_protocol|open-protocol||"
+		"async_error|open-protocol||max-retry=0"
 		"simple_json|simple||"
 		"simple_avro|simple||encoding-format=avro"
 		"avro|avro|$SCHEMA_REGISTRY_URI|enable-tidb-extension=true&avro-enable-watermark=true&avro-decimal-handling-mode=string&avro-bigint-unsigned-handling-mode=string"
