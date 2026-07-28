@@ -1034,9 +1034,6 @@ func (e *DispatcherManager) close() {
 	log.Info("closing event dispatcher manager",
 		zap.Stringer("changefeedID", e.changefeedID))
 
-<<<<<<< HEAD
-	defer e.closing.Store(false)
-=======
 	e.stopWritePath(false)
 	e.finishClose()
 }
@@ -1057,7 +1054,6 @@ func (e *DispatcherManager) stopWritePath(cancelFirst bool) {
 		e.cancel()
 	}
 
->>>>>>> f73e8dba2 (server, dispatcher: improve node liveness self fence (#5106))
 	if e.IsRedoEnabled() && e.redoSink != nil {
 		closeAllDispatchers(e.changefeedID, e.redoDispatcherMap, e.redoSink.SinkType())
 		log.Info("closed all redo dispatchers",

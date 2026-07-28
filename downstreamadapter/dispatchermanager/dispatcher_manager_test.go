@@ -145,7 +145,6 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	return manager
 }
 
-<<<<<<< HEAD
 func TestCountIgnoreUpdateOnlyColumnsRules(t *testing.T) {
 	t.Parallel()
 
@@ -189,7 +188,8 @@ func TestCountIgnoreUpdateOnlyColumnsRules(t *testing.T) {
 			require.Equal(t, tc.count, countIgnoreUpdateOnlyColumnsRules(tc.filter))
 		})
 	}
-=======
+}
+
 type bootstrapSchemaStoreForTest struct{}
 
 func (s *bootstrapSchemaStoreForTest) Name() string { return "bootstrap-schema-store-for-test" }
@@ -268,7 +268,6 @@ func (s *bootstrapSchemaStoreForTest) RegisterKeyspace(
 	keyspaceMeta common.KeyspaceMeta,
 ) error {
 	return nil
->>>>>>> f73e8dba2 (server, dispatcher: improve node liveness self fence (#5106))
 }
 
 func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {

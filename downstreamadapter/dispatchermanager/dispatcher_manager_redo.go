@@ -159,25 +159,10 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 	return nil
 }
 
-<<<<<<< HEAD
 func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, removeDDLTs bool) error {
-=======
-func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(redoSink *redo.Sink) (int, int) {
-	var (
-		batchCount = redoSink.BatchCount()
-		batchBytes = redoSink.BatchBytes()
-	)
-	if e.config.Consistent != nil && e.config.Consistent.EventCollectorBatchCount != nil {
-		batchCount = *e.config.Consistent.EventCollectorBatchCount
-	}
-	return batchCount, batchBytes
-}
-
-func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, _ bool) error {
 	if e.writePathClosed.Load() {
 		return newWritePathClosedError()
 	}
->>>>>>> f73e8dba2 (server, dispatcher: improve node liveness self fence (#5106))
 	start := time.Now()
 
 	dispatcherIds, _, startTsList, tableSpans, schemaIds, scheduleSkipDMLAsStartTsList := prepareCreateDispatcher(infos, e.redoDispatcherMap)

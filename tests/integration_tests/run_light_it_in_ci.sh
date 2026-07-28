@@ -38,11 +38,7 @@ mysql_groups=(
 	# G02
 	'new_ci_collation safe_mode savepoint fail_over_ddl_C unsplittable_tables'
 	# G03
-<<<<<<< HEAD
-	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D ddl_default_current_timestamp'
-=======
-	'capture_suicide_while_balance_table capture_local_fence_on_session_done kv_client_stream_reconnect fail_over_ddl_D'
->>>>>>> f73e8dba2 (server, dispatcher: improve node liveness self fence (#5106))
+	'capture_suicide_while_balance_table capture_local_fence_on_session_done kv_client_stream_reconnect fail_over_ddl_D ddl_default_current_timestamp'
 	# G04
 	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
