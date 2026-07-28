@@ -82,50 +82,6 @@ func NewOperatorController(
 	}
 }
 
-<<<<<<< HEAD
-=======
-// QuiesceExcept freezes the controller so only the listed dispatcher IDs remain active.
-//
-// This is used when a maintainer enters removing mode. The old maintainer must stop
-// issuing or advancing ordinary table operators, but the DDL trigger dispatcher close
-// operator still needs to complete.
-func (oc *Controller) QuiesceExcept(ids ...common.DispatcherID) {
-	oc.admissionMu.Lock()
-	defer oc.admissionMu.Unlock()
-
-	oc.mu.Lock()
-	defer oc.mu.Unlock()
-
-	oc.quiescing = true
-	clear(oc.allowedOperatorIDs)
-	for _, id := range ids {
-		if id.IsZero() {
-			continue
-		}
-		oc.allowedOperatorIDs[id] = struct{}{}
-	}
-}
-
-func (oc *Controller) isOperatorAllowedLocked(id common.DispatcherID) bool {
-	if !oc.quiescing {
-		return true
-	}
-	_, ok := oc.allowedOperatorIDs[id]
-	return ok
-}
-
-func (oc *Controller) isOperatorAllowed(id common.DispatcherID) bool {
-	oc.mu.RLock()
-	defer oc.mu.RUnlock()
-	return oc.isOperatorAllowedLocked(id)
-}
-
-func (oc *Controller) isQuiescing() bool {
-	oc.mu.RLock()
-	defer oc.mu.RUnlock()
-	return oc.quiescing
-}
-
 // SetMaintainerEpoch sets the epoch used by scheduler requests.
 func (oc *Controller) SetMaintainerEpoch(maintainerEpoch uint64) {
 	oc.maintainerEpoch.Store(maintainerEpoch)
@@ -136,7 +92,6 @@ func (oc *Controller) MaintainerEpoch() uint64 {
 	return oc.maintainerEpoch.Load()
 }
 
->>>>>>> a0066dcc5 (maintainer,dispatcher: fence stale maintainer epochs (#5435))
 // Execute poll the operator from the queue and execute it
 // It will be called in the thread pool.
 func (oc *Controller) Execute() time.Time {

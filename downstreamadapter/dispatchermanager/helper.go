@@ -424,40 +424,13 @@ func createDispatcherByInfo(
 		if err != nil {
 			dispatcherManager.handleError(context.Background(), err)
 		}
-		for _, info := range redoInfos {
-			// Create requests are stored in currentOperatorMap before creation and should be deleted once the dispatcher is created.
-			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
-				req := v.(SchedulerDispatcherRequest)
-				if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
-					log.Debug("delete current working add operator for redo dispatcher",
-						zap.String("changefeedID", dispatcherManager.changefeedID.String()),
-						zap.String("dispatcherID", info.Id.String()),
-						zap.Any("operator", req),
-					)
-					dispatcherManager.currentOperatorMap.Delete(info.Id)
-				}
-			}
-		}
+		deleteCreatedOperators(dispatcherManager, redoInfos, dispatcherManager.redoDispatcherMap, "redo dispatcher")
 	}
 	if len(infos) > 0 {
 		err := dispatcherManager.newEventDispatchers(infos, false)
 		if err != nil {
 			dispatcherManager.handleError(context.Background(), err)
 		}
-<<<<<<< HEAD
-		for _, info := range infos {
-			// Create requests are stored in currentOperatorMap before creation and should be deleted once the dispatcher is created.
-			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
-				req := v.(SchedulerDispatcherRequest)
-				if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
-					log.Debug("delete current working add operator",
-						zap.String("changefeedID", dispatcherManager.changefeedID.String()),
-						zap.String("dispatcherID", info.Id.String()),
-						zap.Any("operator", req),
-					)
-					dispatcherManager.currentOperatorMap.Delete(info.Id)
-				}
-=======
 		deleteCreatedOperators(dispatcherManager, infos, dispatcherManager.dispatcherMap, "dispatcher")
 	}
 }
@@ -484,7 +457,6 @@ func deleteCreatedOperators[T dispatcher.Dispatcher](
 					zap.Any("operator", req),
 				)
 				dispatcherManager.currentOperatorMap.Delete(info.ID)
->>>>>>> a0066dcc5 (maintainer,dispatcher: fence stale maintainer epochs (#5435))
 			}
 		}
 	}

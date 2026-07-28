@@ -42,16 +42,10 @@ type DispatcherOrchestrator struct {
 	mc                 messaging.MessageCenter
 	mutex              sync.Mutex // protect dispatcherManagers and closedMaintainerEpochs
 	dispatcherManagers map[common.ChangeFeedID]*dispatchermanager.DispatcherManager
-<<<<<<< HEAD
-=======
-	// initializingDispatcherManagers tracks managers that have been allocated
-	// but are not yet visible in dispatcherManagers.
-	initializingDispatcherManagers map[common.ChangeFeedID]*dispatchermanager.DispatcherManager
 	// closedMaintainerEpochs remembers the highest epoch that closed a manager.
 	// Map presence is meaningful because epoch 0 is a valid compatibility epoch.
 	// The tombstone prevents a delayed old bootstrap from recreating the manager after close.
 	closedMaintainerEpochs map[common.ChangeFeedID]uint64
->>>>>>> a0066dcc5 (maintainer,dispatcher: fence stale maintainer epochs (#5435))
 
 	// shards partition changefeed control messages by changefeed ID. Each shard keeps
 	// the existing FIFO queue semantics, while different shards can process messages
@@ -73,17 +67,10 @@ const (
 
 func New() *DispatcherOrchestrator {
 	m := &DispatcherOrchestrator{
-<<<<<<< HEAD
-		mc:                 appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
-		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		shards:             make([]*orchestratorShard, dispatcherOrchestratorShardCount),
-=======
-		mc:                             appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
-		dispatcherManagers:             make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		initializingDispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		closedMaintainerEpochs:         make(map[common.ChangeFeedID]uint64),
-		shards:                         make([]*orchestratorShard, dispatcherOrchestratorShardCount),
->>>>>>> a0066dcc5 (maintainer,dispatcher: fence stale maintainer epochs (#5435))
+		mc:                     appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
+		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+		shards:                 make([]*orchestratorShard, dispatcherOrchestratorShardCount),
 	}
 	for i := range m.shards {
 		m.shards[i] = newOrchestratorShard(m.processMessage)
@@ -248,9 +235,6 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		delete(m.closedMaintainerEpochs, cfId)
 		m.mutex.Unlock()
 		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
-<<<<<<< HEAD
-	} else {
-=======
 	}
 
 	manager.MaintainerFenceMu.Lock()
@@ -265,7 +249,6 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		return nil
 	}
 	if exists {
->>>>>>> a0066dcc5 (maintainer,dispatcher: fence stale maintainer epochs (#5435))
 		// Check and potentially add a table trigger event dispatcher.
 		// This is necessary during maintainer node migration, as the existing
 		// dispatcher manager on the new node may not have a table trigger
@@ -302,26 +285,6 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				}
 			}
 		}
-	}
-
-<<<<<<< HEAD
-	if manager.GetMaintainerID() != from {
-		manager.SetMaintainerID(from)
-		log.Info("maintainer changed",
-			zap.String("changefeed", cfId.Name()), zap.String("maintainer", from.String()))
-	}
-
-	// FIXME(fizz): This is a temporary check to ensure the maintainer epoch is consistent.
-	// I will remove this after fully testing the new maintainer epoch mechanism.
-	if manager.GetMaintainerEpoch() != cfConfig.Epoch {
-		log.Error("maintainer epoch changed, this should not happen, please report this issue",
-			zap.String("changefeed", cfId.Name()), zap.Uint64("epoch", cfConfig.Epoch))
-=======
-	if m.fenced.Load() {
-		manager.MaintainerFenceMu.Unlock()
-		manager.LocalFence()
-		return nil
->>>>>>> a0066dcc5 (maintainer,dispatcher: fence stale maintainer epochs (#5435))
 	}
 
 	var (
@@ -416,15 +379,6 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		}
 	}
 
-<<<<<<< HEAD
-=======
-	if m.fenced.Load() {
-		manager.MaintainerFenceMu.Unlock()
-		manager.LocalFence()
-		return nil
-	}
-
->>>>>>> a0066dcc5 (maintainer,dispatcher: fence stale maintainer epochs (#5435))
 	response := &heartbeatpb.MaintainerPostBootstrapResponse{
 		ChangefeedID:                  req.ChangefeedID,
 		TableTriggerEventDispatcherId: req.TableTriggerEventDispatcherId,
@@ -490,72 +444,6 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 	return m.sendResponse(from, messaging.MaintainerTopic, response)
 }
 
-<<<<<<< HEAD
-=======
-// LocalFence stops all local dispatcher managers from writing downstream without
-// waiting for dispatcher drain. Full resource cleanup is still handled by Close.
-func (m *DispatcherOrchestrator) LocalFence() {
-	if !m.fenced.CompareAndSwap(false, true) {
-		m.localFenceManagers()
-		return
-	}
-	log.Warn("dispatcher orchestrator local fence triggered")
-
-	m.mc.DeRegisterHandler(messaging.DispatcherManagerManagerTopic)
-	m.localFenceManagers()
-	m.msgGuardWaitGroup.Wait()
-	for _, shard := range m.shards {
-		shard.CloseAsync()
-	}
-	m.localFenceManagers()
-}
-
-func (m *DispatcherOrchestrator) localFenceManagers() {
-	m.mutex.Lock()
-	managers := make([]*dispatchermanager.DispatcherManager, 0,
-		len(m.dispatcherManagers)+len(m.initializingDispatcherManagers))
-	for _, manager := range m.dispatcherManagers {
-		managers = append(managers, manager)
-	}
-	for _, manager := range m.initializingDispatcherManagers {
-		managers = append(managers, manager)
-	}
-	m.mutex.Unlock()
-
-	for _, manager := range managers {
-		manager.LocalFence()
-	}
-}
-
-func (m *DispatcherOrchestrator) registerInitializingDispatcherManager(
-	cfID common.ChangeFeedID,
-	manager *dispatchermanager.DispatcherManager,
-) bool {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	if m.fenced.Load() || m.closed.Load() {
-		return false
-	}
-	if m.initializingDispatcherManagers == nil {
-		m.initializingDispatcherManagers = make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager)
-	}
-	m.initializingDispatcherManagers[cfID] = manager
-	return true
-}
-
-func (m *DispatcherOrchestrator) removeInitializingDispatcherManager(
-	cfID common.ChangeFeedID,
-	manager *dispatchermanager.DispatcherManager,
-) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	if m.initializingDispatcherManagers[cfID] == manager {
-		delete(m.initializingDispatcherManagers, cfID)
-	}
-}
-
 // recordClosedMaintainerEpochLocked remembers closed maintainer generations so
 // later bootstrap requests from older owners cannot recreate a closed manager.
 func (m *DispatcherOrchestrator) recordClosedMaintainerEpochLocked(cfID common.ChangeFeedID, maintainerEpoch uint64, removed bool) {
@@ -571,7 +459,6 @@ func (m *DispatcherOrchestrator) recordClosedMaintainerEpochLocked(cfID common.C
 	m.closedMaintainerEpochs[cfID] = maintainerEpoch
 }
 
->>>>>>> a0066dcc5 (maintainer,dispatcher: fence stale maintainer epochs (#5435))
 func createBootstrapResponse(
 	changefeedID *heartbeatpb.ChangefeedID,
 	manager *dispatchermanager.DispatcherManager,
