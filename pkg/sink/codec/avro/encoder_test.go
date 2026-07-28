@@ -69,7 +69,7 @@ func TestDMLEventE2E(t *testing.T) {
 			require.True(t, exist)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
-			decodedEvent := decoder.NextDMLEvent()
+			decodedEvent := decoder.NextDMLMessage().ToDMLEvent()
 			require.NotNil(t, decodedEvent)
 			require.NotZero(t, decodedEvent.GetTableID())
 

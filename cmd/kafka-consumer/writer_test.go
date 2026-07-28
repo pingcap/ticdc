@@ -17,11 +17,16 @@ import (
 	"context"
 	"testing"
 
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -277,4 +282,54 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	}, s.ddls)
 	require.Len(t, w.ddlList, 1)
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
+}
+
+func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
+	for _, protocol := range []config.Protocol{
+		config.ProtocolDebezium,
+		config.ProtocolDebeziumAvro,
+	} {
+		t.Run(protocol.String(), func(t *testing.T) {
+			replicaCfg := config.GetDefaultReplicaConfig()
+			eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
+			require.NoError(t, err)
+
+			w := &writer{
+				progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
+				eventRouter:            eventRouter,
+				protocol:               protocol,
+				partitionTableAccessor: codecCommon.NewPartitionTableAccessor(),
+			}
+
+			w.partitionTableAccessor.Add("target", "src")
+			ddl := &commonEvent.DDLEvent{
+				Query:      "CREATE TABLE `target`.`dst` LIKE `target`.`src`",
+				SchemaName: "target",
+				TableName:  "dst",
+				Type:       byte(timodel.ActionCreateTable),
+			}
+			w.onDDL(ddl)
+			require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
+
+			newDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
+				return &commonEvent.DMLEvent{
+					PhysicalTableID: 1,
+					CommitTs:        commitTs,
+					RowTypes:        []common.RowType{common.RowTypeUpdate},
+					Rows:            chunk.NewChunkWithCapacity(nil, 0),
+					TableInfo: &common.TableInfo{
+						TableName: common.TableName{Schema: "target", Table: "dst"},
+					},
+				}
+			}
+
+			progress := w.progresses[0]
+			w.appendMessage2Group(codecCommon.NewDMLMessageFromEvent(newDMLEvent(200)), progress, kafka.Offset(10))
+			w.appendMessage2Group(codecCommon.NewDMLMessageFromEvent(newDMLEvent(100)), progress, kafka.Offset(11))
+
+			resolved := progress.eventsGroup[1].ResolveInto(150, nil)
+			require.Len(t, resolved, 1)
+			require.Equal(t, uint64(100), resolved[0].GetCommitTs())
+		})
+	}
 }

@@ -95,8 +95,8 @@ func (d *avroDecoder) NextResolvedEvent() uint64 {
 	return d.inner.NextResolvedEvent()
 }
 
-func (d *avroDecoder) NextDMLEvent() *commonEvent.DMLEvent {
-	return d.inner.NextDMLEvent()
+func (d *avroDecoder) NextDMLMessage() *common.DMLMessage {
+	return d.inner.NextDMLMessage()
 }
 
 func (d *avroDecoder) NextDDLEvent() *commonEvent.DDLEvent {
