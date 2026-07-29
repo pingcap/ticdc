@@ -216,20 +216,25 @@ func (g *encoderGroup) cleanMetrics() {
 // future is a wrapper of the result of encoding events
 // It's used to notify the caller that the result is ready.
 type future struct {
-	Key      commonEvent.TopicPartitionKey
-	events   []*commonEvent.RowEvent
-	Messages []*common.Message
-	done     chan struct{}
+	Key             commonEvent.TopicPartitionKey
+	ApproximateSize int64
+	events          []*commonEvent.RowEvent
+	Messages        []*common.Message
+	done            chan struct{}
 }
 
 func newFuture(key commonEvent.TopicPartitionKey,
 	events ...*commonEvent.RowEvent,
 ) *future {
-	return &future{
+	future := &future{
 		Key:    key,
 		events: events,
 		done:   make(chan struct{}),
 	}
+	for _, event := range events {
+		future.ApproximateSize += event.ApproximateSize
+	}
+	return future
 }
 
 // Ready waits until the response is ready, should be called before consuming the future.

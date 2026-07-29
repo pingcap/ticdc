@@ -28,6 +28,7 @@ func NewMQRowEvents(
 ) ([]*commonEvent.MQRowEvent, error) {
 	callback := NewPostFlushRowCallback(event, uint64(event.Len()))
 	events := make([]*commonEvent.MQRowEvent, 0, event.Len())
+	approximateSize := event.GetSize()
 	if selector == nil {
 		selector = columnselector.NewDefaultColumnSelector()
 	}
@@ -57,12 +58,14 @@ func NewMQRowEvents(
 				TableInfo:       event.TableInfo,
 				StartTs:         event.StartTs,
 				CommitTs:        event.CommitTs,
+				ApproximateSize: approximateSize,
 				Event:           row,
 				Callback:        callback,
 				ColumnSelector:  selector,
 				Checksum:        row.Checksum,
 			},
 		})
+		approximateSize = 0
 	}
 	return events, nil
 }

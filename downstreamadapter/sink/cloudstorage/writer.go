@@ -63,6 +63,7 @@ type payload struct {
 	tableInfo          *common.TableInfo
 	data               []byte
 	rowsCount          int
+	approximateSize    int64
 	nBytes             int64
 	entries            []*spool.Entry
 	postFlushCallbacks []func()
@@ -229,7 +230,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 			if err != nil {
 				return 0, 0, err
 			}
-			return payload.rowsCount, payload.nBytes, nil
+			return payload.rowsCount, payload.approximateSize, nil
 		}
 
 		writer, err := d.storage.Create(ctx, dataFilePath, &storeapi.WriterOption{
@@ -256,7 +257,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 				zap.String("path", dataFilePath), zap.Error(err))
 			return 0, 0, err
 		}
-		return payload.rowsCount, payload.nBytes, nil
+		return payload.rowsCount, payload.approximateSize, nil
 	})
 	if err != nil {
 		return err

@@ -531,14 +531,17 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			if err = future.Ready(ctx); err != nil {
 				return errors.Trace(err)
 			}
-			for _, message := range future.Messages {
+			for i, message := range future.Messages {
 				start := time.Now()
 				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
 					if err = s.dmlProducer.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
 						return 0, 0, err
 					}
-					return message.GetRowsCount(), int64(message.Length()), nil
+					if i == 0 {
+						return message.GetRowsCount(), future.ApproximateSize, nil
+					}
+					return message.GetRowsCount(), 0, nil
 				}); err != nil {
 					return errors.Trace(err)
 				}

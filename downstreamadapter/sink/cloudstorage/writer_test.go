@@ -426,8 +426,12 @@ func TestWriterPostFlushDoesNotRunPausedPostEnqueue(t *testing.T) {
 	defer spoolBuffer.Release(secondEntry)
 	require.Equal(t, int64(0), secondEnqueued.Load())
 
-	payload, err := buildPayload(spoolBuffer, &tableBatch{entries: []*spool.Entry{secondEntry}})
+	payload, err := buildPayload(spoolBuffer, &tableBatch{
+		approximateSize: 123,
+		entries:         []*spool.Entry{secondEntry},
+	})
 	require.NoError(t, err)
+	require.Equal(t, int64(123), payload.approximateSize)
 	require.Len(t, payload.postFlushCallbacks, 1)
 
 	for _, postFlushCallback := range payload.postFlushCallbacks {

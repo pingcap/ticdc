@@ -177,9 +177,10 @@ type tableBatches struct {
 }
 
 type tableBatch struct {
-	size      uint64
-	tableInfo *common.TableInfo
-	entries   []*spool.Entry
+	size            uint64
+	approximateSize int64
+	tableInfo       *common.TableInfo
+	entries         []*spool.Entry
 }
 
 func newTableBatches() tableBatches {
@@ -203,6 +204,7 @@ func (t *tableBatches) addEntry(event *task, entry *spool.Entry) {
 
 	tableTask := t.tables[table]
 	tableTask.size += entry.FileBytes()
+	tableTask.approximateSize += event.approximateSize
 	tableTask.entries = append(tableTask.entries, entry)
 	t.nBytes += entry.FileBytes()
 }
@@ -285,6 +287,7 @@ func (b *payloadBuilder) Build() *payload {
 		tableInfo:          b.batch.tableInfo,
 		data:               b.buf.Bytes(),
 		rowsCount:          b.rowsCount,
+		approximateSize:    b.batch.approximateSize,
 		nBytes:             b.nBytes,
 		entries:            b.batch.entries,
 		postFlushCallbacks: b.postFlushCallbacks,

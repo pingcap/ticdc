@@ -32,9 +32,11 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -335,6 +337,8 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	err = kafkaSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
+	writeBytes := pmetrics.TotalWriteBytesCounter.WithLabelValues("test", "test", "sink")
+	beforeWriteBytes := testutil.ToFloat64(writeBytes)
 	kafkaSink.AddDMLEvent(dmlEvent)
 
 	ddlEvent2.PostFlush()
@@ -343,6 +347,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 		func() bool {
 			return count.Load() == int64(3)
 		}, 5*time.Second, time.Second)
+	require.Equal(t, float64(dmlEvent.GetSize()), testutil.ToFloat64(writeBytes)-beforeWriteBytes)
 
 	// case 2: add checkpoint ts when sink is closed and it will not block
 	kafkaSink.Close()
