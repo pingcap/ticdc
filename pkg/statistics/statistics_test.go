@@ -20,51 +20,31 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
 func TestExecBatchHistogramKeyspaceIDLabel(t *testing.T) {
-	metrics.ExecBatchHistogram.Reset()
-	t.Cleanup(metrics.ExecBatchHistogram.Reset)
-
+	const keyspaceID uint32 = 123
+	changefeedID := common.NewChangefeedID4Test(t.Name()+"-keyspace", t.Name()+"-changefeed")
 	statistics := New(
-		common.NewChangefeedID4Test("test-keyspace", "batch-row-count-keyspace-id"),
-		123,
+		changefeedID,
+		keyspaceID,
 	)
+	t.Cleanup(statistics.Close)
 	require.NoError(t, statistics.RecordBatchExecution(func() (int, int64, error) {
 		return 2, 10, nil
 	}))
 
-	require.Equal(t, 1, testutil.CollectAndCount(metrics.ExecBatchHistogram))
-	requireMetricHasLabel(t, metrics.ExecBatchHistogram, "keyspace_id", "123")
+	labelValues := []string{changefeedID.Keyspace(), changefeedID.Name(), metrics.FormatKeyspaceID(keyspaceID)}
+	observer, err := metrics.ExecBatchHistogram.GetMetricWithLabelValues(labelValues...)
+	require.NoError(t, err)
+	metric, ok := observer.(prometheus.Metric)
+	require.True(t, ok)
+	metricDTO := &dto.Metric{}
+	require.NoError(t, metric.Write(metricDTO))
+	require.Equal(t, uint64(1), metricDTO.GetHistogram().GetSampleCount())
 
 	statistics.Close()
-	require.Equal(t, 0, testutil.CollectAndCount(metrics.ExecBatchHistogram))
-}
-
-func requireMetricHasLabel(
-	t *testing.T,
-	collector prometheus.Collector,
-	labelName string,
-	labelValue string,
-) {
-	t.Helper()
-
-	registry := prometheus.NewPedanticRegistry()
-	registry.MustRegister(collector)
-	metricFamilies, err := registry.Gather()
-	require.NoError(t, err)
-	require.NotEmpty(t, metricFamilies)
-
-	for _, metricFamily := range metricFamilies {
-		for _, metric := range metricFamily.Metric {
-			for _, label := range metric.Label {
-				if label.GetName() == labelName && label.GetValue() == labelValue {
-					return
-				}
-			}
-		}
-	}
-	require.Failf(t, "metric label not found", "%s=%q", labelName, labelValue)
+	require.False(t, metrics.ExecBatchHistogram.DeleteLabelValues(labelValues...))
 }

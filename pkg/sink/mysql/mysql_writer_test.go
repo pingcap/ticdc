@@ -213,7 +213,7 @@ func TestAffectedRowsRecordedAfterCommit(t *testing.T) {
 
 	dmls := &preparedDMLs{
 		sqls:     []string{"INSERT INTO t VALUES (?)"},
-		values:   [][]interface{}{{1}},
+		values:   [][]any{{1}},
 		rowTypes: []common.RowType{common.RowTypeInsert},
 		rowCount: 1,
 	}
