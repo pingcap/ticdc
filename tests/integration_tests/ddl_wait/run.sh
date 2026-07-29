@@ -8,6 +8,30 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
+function check_downstream_indexes_match_upstream() {
+	schema_name=$1
+	table_name=$2
+	upstream_indexes=$(mysql -uroot -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} --default-character-set utf8mb4 -N -B \
+		-e "SELECT INDEX_NAME, NON_UNIQUE, INDEX_TYPE, SEQ_IN_INDEX, IFNULL(COLUMN_NAME, ''), IFNULL(COLLATION, ''), IFNULL(SUB_PART, ''), IFNULL(NULLABLE, '') \
+		FROM INFORMATION_SCHEMA.STATISTICS \
+		WHERE TABLE_SCHEMA='${schema_name}' AND TABLE_NAME='${table_name}' \
+		ORDER BY INDEX_NAME, SEQ_IN_INDEX;")
+	downstream_indexes=$(mysql -uroot -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} --default-character-set utf8mb4 -N -B \
+		-e "SELECT INDEX_NAME, NON_UNIQUE, INDEX_TYPE, SEQ_IN_INDEX, IFNULL(COLUMN_NAME, ''), IFNULL(COLLATION, ''), IFNULL(SUB_PART, ''), IFNULL(NULLABLE, '') \
+		FROM INFORMATION_SCHEMA.STATISTICS \
+		WHERE TABLE_SCHEMA='${schema_name}' AND TABLE_NAME='${table_name}' \
+		ORDER BY INDEX_NAME, SEQ_IN_INDEX;")
+
+	if [ "${upstream_indexes}" != "${downstream_indexes}" ]; then
+		echo "index metadata mismatch for ${schema_name}.${table_name}"
+		echo "upstream indexes:"
+		printf '%s\n' "${upstream_indexes}"
+		echo "downstream indexes:"
+		printf '%s\n' "${downstream_indexes}"
+		return 1
+	fi
+}
+
 # This test simulates DDL operations that take a long time.
 # TiCDC blocks DDL operations until its state is not running, except for adding indexes.
 # TiCDC also checks add index ddl state before execute a new DDL.
@@ -62,17 +86,39 @@ function run() {
 
 	# indexes should be the same when CDC retries happened
 	# ref: https://github.com/pingcap/tiflow/issues/12128
-	# FIXME: use named index to avoid duplicate index
-	# run_sql "update test.t set col = 55 where id = 5;"
-	# run_sql "alter table test.t add index (col);"
-	# run_sql "update test.t set col = 66 where id = 6;"
-	# run_sql "alter table test.t add index (col);"
-	# run_sql "update test.t set col = 77 where id = 7;"
-	# sleep 10
-	# cleanup_process $CDC_BINARY
-	# run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
-	# # make sure all tables are equal in upstream and downstream
-	# check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+	run_sql "update test.t set col = 55 where id = 5;"
+	run_sql "alter table test.t add index (col);"
+	run_sql "update test.t set col = 66 where id = 6;"
+	run_sql "alter table test.t add index (col);"
+	run_sql "update test.t set col = 77 where id = 7;"
+	sleep 10
+	cleanup_process $CDC_BINARY
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	# make sure all tables are equal in upstream and downstream
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+
+	# anonymous add index related ddl
+	run_sql "create table test.t_anon_idx (id int primary key, a int, b int, c int);"
+	run_sql "insert into test.t_anon_idx values (1, 10, 20, 30), (2, 11, 21, 31), (3, 12, 22, 32);"
+	run_sql "alter table test.t_anon_idx add index (a);"
+	run_sql "alter table test.t_anon_idx add index idx_b (b), add index (a);"
+	run_sql "alter table test.t_anon_idx add index (a), add unique (b, c);"
+	run_sql "alter table test.t_anon_idx add index (a), add column d int;"
+	run_sql "alter table test.t_anon_idx add column e int, add index (a);"
+	run_sql "alter table test.t_anon_idx drop column d, drop column e;"
+	run_sql "alter table test.t_anon_idx add index a_7(a);"
+	run_sql "alter table test.t_anon_idx add index (a);"
+	run_sql "alter table test.t_anon_idx add index (a);"
+	run_sql "alter table test.t_anon_idx add index (a);"
+	run_sql "create table test.t_anon_idx_like like test.t_anon_idx;"
+	run_sql "insert into test.t_anon_idx values (4, 13, 23, 33);"
+	check_table_exists test.t_anon_idx ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+	check_table_exists test.t_anon_idx_like ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+	check_downstream_indexes_match_upstream test t_anon_idx
+	check_downstream_indexes_match_upstream test t_anon_idx_like
+
+	# ensure both data and index schema are eventually consistent after anonymous index ddl
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 	cleanup_process $CDC_BINARY
 }
 

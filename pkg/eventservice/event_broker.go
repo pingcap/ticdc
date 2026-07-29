@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -50,7 +51,8 @@ const (
 
 	maxReadyEventIntervalSeconds = 10
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
-	defaultSendResolvedTsInterval = time.Second * 2
+	defaultSendResolvedTsInterval           = time.Second * 2
+	defaultRefreshMinSentResolvedTsInterval = time.Second * 1
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -63,6 +65,7 @@ type eventBroker struct {
 	eventStore  eventstore.EventStore
 	schemaStore schemastore.SchemaStore
 	mounter     event.Mounter
+	timezone    string
 	// msgSender is used to send the events to the dispatchers.
 	msgSender messaging.MessageSender
 	pdClock   pdutil.Clock
@@ -128,6 +131,7 @@ func newEventBroker(
 		eventStore:              eventStore,
 		pdClock:                 pdClock,
 		mounter:                 event.NewMounter(tz, integrity),
+		timezone:                tz.String(),
 		schemaStore:             schemaStore,
 		changefeedMap:           sync.Map{},
 		dispatchers:             sync.Map{},
@@ -178,6 +182,10 @@ func newEventBroker(
 
 	g.Go(func() error {
 		return c.metricsCollector.Run(ctx)
+	})
+
+	g.Go(func() error {
+		return c.refreshMinSentResolvedTs(ctx)
 	})
 
 	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
@@ -252,6 +260,23 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		zap.Int64("EventTableID", e.GetTableID()),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
+}
+
+func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
+	ticker := time.NewTicker(defaultRefreshMinSentResolvedTsInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.changefeedMap.Range(func(key, value interface{}) bool {
+				status := value.(*changefeedStatus)
+				status.refreshMinSentResolvedTs()
+				return true
+			})
+		}
+	}
 }
 
 func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {
@@ -404,9 +429,65 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		return false, common.DataRange{}
 	}
 	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
+	commitTsEndBeforeWindow := dataRange.CommitTsEnd
+	// If the latest ddl commit ts is in current resolved range and larger than current scan start,
+	// this dispatcher still has pending ddl to catch up.
+	hasPendingDDLEventInCurrentRange := dataRange.CommitTsStart < ddlState.MaxEventCommitTs &&
+		ddlState.MaxEventCommitTs <= commitTsEndBeforeWindow
+	nextSyncPointTs := task.nextSyncPoint.Load()
+	hasPendingSyncPointEventInCurrentRange := task.enableSyncPoint && commitTsEndBeforeWindow > nextSyncPointTs
+	scanMaxTs := task.changefeedStat.getScanMaxTs()
+	if scanMaxTs > 0 {
+		dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, scanMaxTs)
+		if dataRange.CommitTsEnd < commitTsEndBeforeWindow {
+			log.Debug("scan window capped",
+				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+				zap.Stringer("dispatcherID", task.id),
+				zap.Uint64("baseTs", task.changefeedStat.minSentTs.Load()),
+				zap.Uint64("scanMaxTs", scanMaxTs),
+				zap.Uint64("beforeEndTs", commitTsEndBeforeWindow),
+				zap.Uint64("afterEndTs", dataRange.CommitTsEnd),
+				zap.Duration("scanInterval", time.Duration(task.changefeedStat.scanInterval.Load())),
+			)
+		}
+	}
+
+	if dataRange.CommitTsEnd <= dataRange.CommitTsStart &&
+		(hasPendingDDLEventInCurrentRange || hasPendingSyncPointEventInCurrentRange) {
+		// Global scan window base can be pinned by other lagging dispatchers.
+		// For a table with pending ddl or syncpoint in current range, use a local bounded step
+		// to keep this dispatcher making forward progress, so barrier coverage can eventually complete.
+		interval := time.Duration(task.changefeedStat.scanInterval.Load())
+		if interval <= 0 {
+			interval = defaultScanInterval
+		}
+		localScanMaxTs := oracle.GoTimeToTS(oracle.GetTimeFromTS(dataRange.CommitTsStart).Add(interval))
+		if hasPendingSyncPointEventInCurrentRange && nextSyncPointTs >= dataRange.CommitTsStart &&
+			localScanMaxTs <= nextSyncPointTs {
+			localScanMaxTs = nextSyncPointTs + 1
+		}
+		dataRange.CommitTsEnd = min(commitTsEndBeforeWindow, localScanMaxTs)
+		if dataRange.CommitTsEnd > dataRange.CommitTsStart {
+			log.Info("scan window local advance due to pending barrier event",
+				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+				zap.Stringer("dispatcherID", task.id),
+				zap.Uint64("startTs", dataRange.CommitTsStart),
+				zap.Uint64("globalScanMaxTs", scanMaxTs),
+				zap.Uint64("localScanMaxTs", localScanMaxTs),
+				zap.Bool("hasPendingDDL", hasPendingDDLEventInCurrentRange),
+				zap.Uint64("ddlCommitTs", ddlState.MaxEventCommitTs),
+				zap.Bool("hasPendingSyncPoint", hasPendingSyncPointEventInCurrentRange),
+				zap.Uint64("nextSyncPointTs", nextSyncPointTs),
+				zap.Uint64("newEndTs", dataRange.CommitTsEnd))
+		}
+	}
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
+		// Scan range can become empty after applying capping (for example, scan window).
+		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
+		// but do not advance the watermark here.
+		c.sendSignalResolvedTs(task)
 		return false, common.DataRange{}
 	}
 
@@ -556,6 +637,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	if task.isRemoved.Load() {
 		return
 	}
+
 	// If the target is not ready to send, we don't need to scan the event store.
 	// To avoid the useless scan task.
 	if !c.msgSender.IsReadyToSend(remoteID) {
@@ -621,6 +703,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	if uint64(sl.maxDMLBytes) > task.availableMemoryQuota.Load() {
+		releaseQuota(available, uint64(sl.maxDMLBytes))
 		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
 		c.sendSignalResolvedTs(task)
 		metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
@@ -629,23 +712,23 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
-	if scannedBytes < 0 {
-		releaseQuota(available, uint64(sl.maxDMLBytes))
-	} else if scannedBytes >= 0 && scannedBytes < sl.maxDMLBytes {
-		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
-	}
-
 	if interrupted {
 		metrics.EventServiceInterruptScanCount.Inc()
 	}
 
 	if err != nil {
+		releaseQuota(available, uint64(sl.maxDMLBytes))
 		log.Error("scan events failed",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
 			zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
+	}
+	if scannedBytes < 0 {
+		releaseQuota(available, uint64(sl.maxDMLBytes))
+	} else if scannedBytes < sl.maxDMLBytes {
+		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
 	}
 
 	if scannedBytes > int64(c.scanLimitInBytes) {
@@ -925,13 +1008,14 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
 
-	status := c.getOrSetChangefeedStatus(changefeedID)
+	status := c.getOrSetChangefeedStatus(info)
 	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
 	status.addDispatcher(id, dispatcherPtr)
 	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		c.tableTriggerDispatchers.Store(id, dispatcherPtr)
+		c.metricsCollector.metricDispatcherCount.Inc()
 		log.Info("table trigger dispatcher register dispatcher",
 			zap.Uint64("clusterID", c.tidbClusterID),
 			zap.Stringer("changefeedID", changefeedID),
@@ -968,7 +1052,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		}
 		status.removeDispatcher(id)
 		if status.isEmpty() {
-			c.changefeedMap.Delete(changefeedID)
+			c.removeChangefeedStatus(status)
 		}
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
 		return nil
@@ -991,7 +1075,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		c.eventStore.UnregisterDispatcher(changefeedID, id)
 		status.removeDispatcher(id)
 		if status.isEmpty() {
-			c.changefeedMap.Delete(changefeedID)
+			c.removeChangefeedStatus(status)
 		}
 		return err
 	}
@@ -1040,8 +1124,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
 			zap.Stringer("changefeedID", changefeedID),
 		)
-		c.changefeedMap.Delete(changefeedID)
-		metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
+		c.removeChangefeedStatus(stat.changefeedStat)
 	}
 
 	c.eventStore.UnregisterDispatcher(changefeedID, id)
@@ -1058,6 +1141,19 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Stringer("dispatcherID", id), zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
 		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
 	)
+}
+
+func (c *eventBroker) removeChangefeedStatus(status *changefeedStatus) {
+	changefeedID := status.changefeedID
+	// SharedFilterStorage is process-global. Only remove the cached filter after we
+	// successfully delete this exact changefeedStatus instance, otherwise a newer
+	// status for the same changefeed could still be using it.
+	if !c.changefeedMap.CompareAndDelete(changefeedID, status) {
+		return
+	}
+
+	filter.GetSharedFilterStorage().RemoveFilter(changefeedID)
+	deleteScanWindowMetrics(changefeedID.String())
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
@@ -1110,7 +1206,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			return err
 		}
 	}
-	status := c.getOrSetChangefeedStatus(changefeedID)
+	status := c.getOrSetChangefeedStatus(dispatcherInfo)
+
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
 
@@ -1149,18 +1246,41 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	return nil
 }
 
-func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
-	stat, ok := c.changefeedMap.Load(changefeedID)
-	if !ok {
-		stat = newChangefeedStatus(changefeedID)
-		log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
-		c.changefeedMap.Store(changefeedID, stat)
+func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedStatus {
+	changefeedID := info.GetChangefeedID()
+	if stat, ok := c.changefeedMap.Load(changefeedID); ok {
+		return stat.(*changefeedStatus)
 	}
-	return stat.(*changefeedStatus)
+
+	// Filter config is changefeed scoped. In production, a config change must pause the
+	// changefeed first, which closes all related dispatchers and removes the old
+	// changefeedStatus before a new one is created. So within one changefeedStatus
+	// lifecycle we expect filter config and timezone to stay stable.
+	changefeedFilter, err := filter.GetSharedFilterStorage().GetOrSetFilter(
+		changefeedID, info.GetFilterConfig(), c.timezone)
+	if err != nil {
+		log.Panic("create filter failed",
+			zap.Stringer("changefeedID", changefeedID),
+			zap.Any("filterConfig", info.GetFilterConfig()),
+			zap.Error(err))
+	}
+
+	status := newChangefeedStatus(changefeedID, info.GetSyncPointInterval())
+	status.filter = changefeedFilter
+	actual, loaded := c.changefeedMap.LoadOrStore(changefeedID, status)
+	if loaded {
+		return actual.(*changefeedStatus)
+	}
+	log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
+	if status.scanWindowController != nil {
+		initializeScanWindowMetrics(changefeedID.String())
+	}
+	return status
 }
 
 func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
 	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
+	changedChangefeeds := make(map[*changefeedStatus]struct{})
 	now := time.Now().Unix()
 	handleProgress := func(dispatcherID common.DispatcherID, checkpointTs uint64, heartbeatEpoch uint64, checkEpoch bool) {
 		dispatcherPtr := c.getDispatcher(dispatcherID)
@@ -1176,12 +1296,21 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		}
 		dispatcher := dispatcherPtr.Load()
 		if checkEpoch && heartbeatEpoch != dispatcher.epoch {
-			log.Warn("ignore dispatcher heartbeat from stale epoch",
+			fields := []zap.Field{
 				zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
 				zap.Stringer("dispatcherID", dispatcher.id),
 				zap.Uint64("heartbeatEpoch", heartbeatEpoch),
 				zap.Uint64("dispatcherEpoch", dispatcher.epoch),
-				zap.Uint64("checkpointTs", checkpointTs))
+				zap.Uint64("checkpointTs", checkpointTs),
+			}
+			if heartbeatEpoch < dispatcher.epoch {
+				log.Warn("ignore dispatcher heartbeat from stale epoch", fields...)
+			} else {
+				// Dispatcher reset requests and heartbeat messages are routed through
+				// different EventService queues, so a heartbeat from the next epoch can
+				// be handled before the corresponding reset request is applied.
+				log.Debug("ignore dispatcher heartbeat before reset is applied", fields...)
+			}
 			return
 		}
 		// TODO: Should we check if the dispatcher's serverID is the same as the heartbeat's serverID?
@@ -1190,6 +1319,7 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		}
 		// Update the last received heartbeat time to the current time.
 		dispatcher.lastReceivedHeartbeatTime.Store(now)
+		changedChangefeeds[dispatcher.changefeedStat] = struct{}{}
 	}
 	if heartbeat.heartbeat.Version >= event.DispatcherHeartbeatVersion2 {
 		for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
@@ -1210,21 +1340,33 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	}
 
 	holder := make(map[common.GID]uint64, len(availables))
+	usage := make(map[common.GID]float64, len(availables))
+	memoryRelease := make(map[common.GID]uint32, len(availables))
 	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
+		if m.HasUsageRatio() {
+			usage[item.Gid] = item.UsageRatio
+		}
+		memoryRelease[item.Gid] = item.MemoryReleaseCount
 		for dispatcherID, available := range item.DispatcherAvailable {
 			dispatcherAvailable[dispatcherID] = available
 		}
 	}
 
+	now := time.Now()
 	c.changefeedMap.Range(func(k, v interface{}) bool {
 		changefeedID := k.(common.ChangeFeedID)
 		changefeed := v.(*changefeedStatus)
-		available, ok := holder[changefeedID.ID()]
+		availableInMsg, ok := holder[changefeedID.ID()]
 		if ok {
-			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
-			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
+			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(availableInMsg))
+			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(availableInMsg))
+		}
+		if m.HasUsageRatio() {
+			if ratio, okUsage := usage[changefeedID.ID()]; okUsage && ok {
+				changefeed.updateMemoryUsage(now, ratio, memoryRelease[changefeedID.ID()])
+			}
 		}
 		return true
 	})

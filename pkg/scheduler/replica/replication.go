@@ -171,15 +171,10 @@ func (db *replicationDB[T, R]) GetAbsentSize() int {
 }
 
 func (db *replicationDB[T, R]) GetAbsentByGroup(id GroupID, batch int) []R {
-	buffer := make([]R, 0, batch)
+	var buffer []R
 	db.withRLock(func() {
 		g := db.mustGetGroup(id)
-		for _, stm := range g.GetAbsent() {
-			buffer = append(buffer, stm)
-			if len(buffer) >= batch {
-				break
-			}
-		}
+		buffer = g.GetAbsentBatch(batch)
 	})
 	return buffer
 }
@@ -249,9 +244,11 @@ func (db *replicationDB[T, R]) GetSchedulingWithoutLock() (ret []R) {
 
 func (db *replicationDB[T, R]) GetSchedulingSize() int {
 	size := 0
-	for _, g := range db.taskGroups {
-		size += g.GetSchedulingSize()
-	}
+	db.withRLock(func() {
+		for _, g := range db.taskGroups {
+			size += g.GetSchedulingSize()
+		}
+	})
 	return size
 }
 

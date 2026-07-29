@@ -19,13 +19,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
 
 // Test callback and tableProgress works as expected after AddDMLEvent
 func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
-	sink, err := New()
+	sink, err := New(common.NewChangefeedID(common.DefaultKeyspaceName))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go sink.Run(ctx)
@@ -87,4 +88,11 @@ func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 	ddlEvent2.PostFlush()
 
 	require.Equal(t, count.Load(), int32(3))
+}
+
+func TestBlackHoleSinkBatchConfig(t *testing.T) {
+	sink, err := New(common.NewChangefeedID(common.DefaultKeyspaceName))
+	require.NoError(t, err)
+	require.Equal(t, 4096, sink.BatchCount())
+	require.Zero(t, sink.BatchBytes())
 }

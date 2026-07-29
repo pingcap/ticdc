@@ -151,7 +151,7 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 	}
 
 	metrics.ChangefeedStatusGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
-	metrics.ChangefeedCheckpointTsLagGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
+	metrics.DeleteChangefeedCheckpointMetrics(cfID.Keyspace(), cfID.Name())
 
 	return nodeID
 }

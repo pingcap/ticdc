@@ -25,7 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/version"
 	pd "github.com/tikv/pd/client"
-	pdopt "github.com/tikv/pd/client"
+	pdopt "github.com/tikv/pd/client/opt"
 	etcdlogutil "go.etcd.io/etcd/client/pkg/v3/logutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
@@ -135,7 +135,7 @@ func (f *factoryImpl) PdClient() (pd.Client, error) {
 		}
 	}
 
-	pdClient, err := pdopt.NewClientWithContext(
+	pdClient, err := pd.NewClientWithContext(
 		f.ctx, pdEndpoints, credential.PDSecurityOption(),
 		pdopt.WithMaxErrorRetry(maxGetPDClientRetryTimes),
 		// TODO(hi-rustin): add gRPC metrics to Options.

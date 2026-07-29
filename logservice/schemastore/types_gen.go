@@ -284,6 +284,25 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 				err = msgp.WrapError(err, "CDCWriteSource")
 				return
 			}
+		case "index_ids":
+			var zb0010 uint32
+			zb0010, err = dc.ReadArrayHeader()
+			if err != nil {
+				err = msgp.WrapError(err, "IndexIDs")
+				return
+			}
+			if cap(z.IndexIDs) >= int(zb0010) {
+				z.IndexIDs = (z.IndexIDs)[:zb0010]
+			} else {
+				z.IndexIDs = make([]int64, zb0010)
+			}
+			for za0009 := range z.IndexIDs {
+				z.IndexIDs[za0009], err = dc.ReadInt64()
+				if err != nil {
+					err = msgp.WrapError(err, "IndexIDs", za0009)
+					return
+				}
+			}
 		default:
 			err = dc.Skip()
 			if err != nil {
@@ -297,9 +316,9 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 
 // EncodeMsg implements msgp.Encodable
 func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
-	// map header, size 26
+	// map header, size 27
 	// write "id"
-	err = en.Append(0xde, 0x0, 0x1a, 0xa2, 0x69, 0x64)
+	err = en.Append(0xde, 0x0, 0x1b, 0xa2, 0x69, 0x64)
 	if err != nil {
 		return
 	}
@@ -614,15 +633,32 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 		err = msgp.WrapError(err, "CDCWriteSource")
 		return
 	}
+	// write "index_ids"
+	err = en.Append(0xa9, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x5f, 0x69, 0x64, 0x73)
+	if err != nil {
+		return
+	}
+	err = en.WriteArrayHeader(uint32(len(z.IndexIDs)))
+	if err != nil {
+		err = msgp.WrapError(err, "IndexIDs")
+		return
+	}
+	for za0009 := range z.IndexIDs {
+		err = en.WriteInt64(z.IndexIDs[za0009])
+		if err != nil {
+			err = msgp.WrapError(err, "IndexIDs", za0009)
+			return
+		}
+	}
 	return
 }
 
 // MarshalMsg implements msgp.Marshaler
 func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	o = msgp.Require(b, z.Msgsize())
-	// map header, size 26
+	// map header, size 27
 	// string "id"
-	o = append(o, 0xde, 0x0, 0x1a, 0xa2, 0x69, 0x64)
+	o = append(o, 0xde, 0x0, 0x1b, 0xa2, 0x69, 0x64)
 	o = msgp.AppendInt64(o, z.ID)
 	// string "type"
 	o = append(o, 0xa4, 0x74, 0x79, 0x70, 0x65)
@@ -723,6 +759,12 @@ func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	// string "cdc_write_source"
 	o = append(o, 0xb0, 0x63, 0x64, 0x63, 0x5f, 0x77, 0x72, 0x69, 0x74, 0x65, 0x5f, 0x73, 0x6f, 0x75, 0x72, 0x63, 0x65)
 	o = msgp.AppendUint64(o, z.CDCWriteSource)
+	// string "index_ids"
+	o = append(o, 0xa9, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x5f, 0x69, 0x64, 0x73)
+	o = msgp.AppendArrayHeader(o, uint32(len(z.IndexIDs)))
+	for za0009 := range z.IndexIDs {
+		o = msgp.AppendInt64(o, z.IndexIDs[za0009])
+	}
 	return
 }
 
@@ -1004,6 +1046,25 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 				err = msgp.WrapError(err, "CDCWriteSource")
 				return
 			}
+		case "index_ids":
+			var zb0010 uint32
+			zb0010, bts, err = msgp.ReadArrayHeaderBytes(bts)
+			if err != nil {
+				err = msgp.WrapError(err, "IndexIDs")
+				return
+			}
+			if cap(z.IndexIDs) >= int(zb0010) {
+				z.IndexIDs = (z.IndexIDs)[:zb0010]
+			} else {
+				z.IndexIDs = make([]int64, zb0010)
+			}
+			for za0009 := range z.IndexIDs {
+				z.IndexIDs[za0009], bts, err = msgp.ReadInt64Bytes(bts)
+				if err != nil {
+					err = msgp.WrapError(err, "IndexIDs", za0009)
+					return
+				}
+			}
 		default:
 			bts, err = msgp.Skip(bts)
 			if err != nil {
@@ -1034,7 +1095,7 @@ func (z *PersistedDDLEvent) Msgsize() (s int) {
 	for za0008 := range z.MultipleTableInfosValue {
 		s += msgp.BytesPrefixSize + len(z.MultipleTableInfosValue[za0008])
 	}
-	s += 9 + msgp.StringPrefixSize + len(z.BDRRole) + 17 + msgp.Uint64Size
+	s += 9 + msgp.StringPrefixSize + len(z.BDRRole) + 17 + msgp.Uint64Size + 10 + msgp.ArrayHeaderSize + (len(z.IndexIDs) * (msgp.Int64Size))
 	return
 }
 

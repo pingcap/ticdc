@@ -215,6 +215,11 @@ func (m *MoveDispatcherOperator) AffectedNodes() []node.ID {
 	return []node.ID{m.origin, m.dest}
 }
 
+// OriginNode returns the source node of the move.
+func (m *MoveDispatcherOperator) OriginNode() node.ID {
+	return m.origin
+}
+
 func (m *MoveDispatcherOperator) ID() common.DispatcherID {
 	return m.replicaSet.ID
 }

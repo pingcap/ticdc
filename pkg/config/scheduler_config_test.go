@@ -67,3 +67,11 @@ func TestChangefeedSchedulerConfigValidateAndAdjustRegionCountPerSpan(t *testing
 		})
 	}
 }
+
+func TestSchedulerConfigValidateAndAdjustBalanceMoveBatchSize(t *testing.T) {
+	cfg := NewDefaultSchedulerConfig()
+	require.NoError(t, cfg.ValidateAndAdjust())
+
+	cfg.BalanceMoveBatchSize = 0
+	require.Error(t, cfg.ValidateAndAdjust())
+}

@@ -27,7 +27,7 @@ import (
 )
 
 // ConflictKeys implements causality.txnEvent interface.
-func ConflictKeys(event *commonEvent.DMLEvent) []uint64 {
+func ConflictKeys(event *commonEvent.DMLEvent) map[uint64]struct{} {
 	if event.Len() == 0 {
 		return nil
 	}
@@ -51,11 +51,7 @@ func ConflictKeys(event *commonEvent.DMLEvent) []uint64 {
 		}
 	}
 
-	keys := make([]uint64, 0, len(hashRes))
-	for key := range hashRes {
-		keys = append(keys, key)
-	}
-	return keys
+	return hashRes
 }
 
 func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatcherID common.DispatcherID) [][]byte {
