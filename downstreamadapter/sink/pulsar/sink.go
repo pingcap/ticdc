@@ -533,17 +533,25 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			}
 			for i, message := range future.Messages {
 				start := time.Now()
-				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-					message.SetPartitionKey(future.Key.PartitionKey)
-					if err = s.dmlProducer.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
-						return 0, 0, err
+				rows, writeBytes := message.GetRowsCount(), int64(0)
+				if i == 0 {
+					writeBytes = future.ApproximateSize
+				}
+				callback := message.Callback
+				message.Callback = func() {
+					_ = s.statistics.RecordBatchExecution(func() (int, int64, error) {
+						return rows, writeBytes, nil
+					})
+					if callback != nil {
+						callback()
 					}
-					if i == 0 {
-						return message.GetRowsCount(), future.ApproximateSize, nil
-					}
-					return message.GetRowsCount(), 0, nil
-				}); err != nil {
-					return errors.Trace(err)
+				}
+
+				message.SetPartitionKey(future.Key.PartitionKey)
+				if err = s.dmlProducer.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
+					return s.statistics.RecordBatchExecution(func() (int, int64, error) {
+						return 0, 0, errors.Trace(err)
+					})
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())
 			}

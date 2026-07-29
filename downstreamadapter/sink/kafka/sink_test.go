@@ -312,6 +312,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	asyncProducer := kafka.NewMockAsyncProducer(ctrl)
 	syncProducer := kafka.NewMockSyncProducer(ctrl)
+	callbackCh := make(chan func(), 2)
 	asyncProducer.EXPECT().AsyncRunCallback(gomock.Any()).Return(nil).AnyTimes()
 	asyncProducer.EXPECT().AsyncSend(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		DoAndReturn(func(
@@ -320,9 +321,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 			_ int32,
 			message *codecCommon.Message,
 		) error {
-			if message.Callback != nil {
-				message.Callback()
-			}
+			callbackCh <- message.Callback
 			return nil
 		}).Times(2)
 	asyncProducer.EXPECT().Close().AnyTimes()
@@ -340,6 +339,20 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	writeBytes := pmetrics.TotalWriteBytesCounter.WithLabelValues("test", "test", "sink")
 	beforeWriteBytes := testutil.ToFloat64(writeBytes)
 	kafkaSink.AddDMLEvent(dmlEvent)
+	callbacks := make([]func(), 0, 2)
+	for range 2 {
+		select {
+		case callback := <-callbackCh:
+			callbacks = append(callbacks, callback)
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for Kafka messages")
+		}
+	}
+	require.Equal(t, beforeWriteBytes, testutil.ToFloat64(writeBytes))
+	for _, callback := range callbacks {
+		require.NotNil(t, callback)
+		callback()
+	}
 
 	ddlEvent2.PostFlush()
 

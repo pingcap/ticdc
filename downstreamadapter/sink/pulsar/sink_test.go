@@ -27,6 +27,7 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -119,19 +120,37 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 		func() { count.Add(1) },
 	}
 	dmlEvent.CommitTs = 2
+	producer := pulsarSink.dmlProducer.(*mockProducer)
+	producer.callbackCh = make(chan func(), 2)
 
 	err = pulsarSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
+	writeBytes := metrics.TotalWriteBytesCounter.WithLabelValues("test", "test", "sink")
+	beforeWriteBytes := testutil.ToFloat64(writeBytes)
 	pulsarSink.AddDMLEvent(dmlEvent)
-	time.Sleep(1 * time.Second)
+	callbacks := make([]func(), 0, 2)
+	for range 2 {
+		select {
+		case callback := <-producer.callbackCh:
+			callbacks = append(callbacks, callback)
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for Pulsar messages")
+		}
+	}
+	require.Equal(t, beforeWriteBytes, testutil.ToFloat64(writeBytes))
+	for _, callback := range callbacks {
+		require.NotNil(t, callback)
+		callback()
+	}
 
 	ddlEvent2.PostFlush()
 
-	require.Len(t, pulsarSink.dmlProducer.(*mockProducer).GetAllEvents(), 2)
+	require.Len(t, producer.GetAllEvents(), 2)
 	require.Len(t, pulsarSink.ddlProducer.(*mockProducer).GetAllEvents(), 1)
 
 	require.Equal(t, count.Load(), int64(3))
+	require.Equal(t, float64(dmlEvent.GetSize()), testutil.ToFloat64(writeBytes)-beforeWriteBytes)
 }
 
 func TestPulsarSinkBatchConfig(t *testing.T) {

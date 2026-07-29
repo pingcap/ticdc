@@ -445,26 +445,34 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			}
 			for i, message := range future.Messages {
 				start := time.Now()
-				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-					message.SetPartitionKey(future.Key.PartitionKey)
-					log.Debug("send message to kafka", zap.String("messageKey", util.RedactBytes(message.Key)), zap.String("messageValue", util.RedactBytes(message.Value)))
-					if err = s.dmlProducer.AsyncSend(
-						ctx,
-						future.Key.Topic,
-						future.Key.Partition,
-						message); err != nil {
-						log.Error("kafka sink send message failed",
-							zap.String("keyspace", s.changefeedID.Keyspace()),
-							zap.String("changefeed", s.changefeedID.Name()),
-							zap.Error(err))
+				rows, writeBytes := message.GetRowsCount(), int64(0)
+				if i == 0 {
+					writeBytes = future.ApproximateSize
+				}
+				callback := message.Callback
+				message.Callback = func() {
+					_ = s.statistics.RecordBatchExecution(func() (int, int64, error) {
+						return rows, writeBytes, nil
+					})
+					if callback != nil {
+						callback()
+					}
+				}
+
+				message.SetPartitionKey(future.Key.PartitionKey)
+				log.Debug("send message to kafka", zap.String("messageKey", util.RedactBytes(message.Key)), zap.String("messageValue", util.RedactBytes(message.Value)))
+				if err = s.dmlProducer.AsyncSend(
+					ctx,
+					future.Key.Topic,
+					future.Key.Partition,
+					message); err != nil {
+					log.Error("kafka sink send message failed",
+						zap.String("keyspace", s.changefeedID.Keyspace()),
+						zap.String("changefeed", s.changefeedID.Name()),
+						zap.Error(err))
+					return s.statistics.RecordBatchExecution(func() (int, int64, error) {
 						return 0, 0, err
-					}
-					if i == 0 {
-						return message.GetRowsCount(), future.ApproximateSize, nil
-					}
-					return message.GetRowsCount(), 0, nil
-				}); err != nil {
-					return err
+					})
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())
 			}
