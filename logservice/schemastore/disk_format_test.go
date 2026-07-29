@@ -14,14 +14,26 @@
 package schemastore
 
 import (
+	"context"
 	"testing"
 
 	"github.com/cockroachdb/pebble"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPersistSchemaSnapshotReturnsWhenListDatabasesSnapshotLost(t *testing.T) {
+	db, err := pebble.Open(t.TempDir(), &pebble.Options{})
+	require.NoError(t, err)
+	defer db.Close()
+
+	snapshotLostErr := snapshotLostByGCError{}
+	_, _, _, err = persistSchemaSnapshot(db, &snapshotLostStorage{err: snapshotLostErr}, 100, true)
+	require.ErrorIs(t, err, snapshotLostErr)
+}
 
 func TestGetAllPhysicalTablesSkipsViews(t *testing.T) {
 	db, err := pebble.Open(t.TempDir(), &pebble.Options{})
@@ -64,3 +76,40 @@ func TestGetAllPhysicalTablesSkipsViews(t *testing.T) {
 		},
 	}, tables)
 }
+
+type snapshotLostByGCError struct{}
+
+func (snapshotLostByGCError) Error() string {
+	return "GC life time is shorter than transaction duration"
+}
+
+type snapshotLostStorage struct {
+	kv.Storage
+	err error
+}
+
+func (s *snapshotLostStorage) GetSnapshot(kv.Version) kv.Snapshot {
+	return &snapshotLostSnapshot{err: s.err}
+}
+
+type snapshotLostSnapshot struct {
+	err error
+}
+
+func (s *snapshotLostSnapshot) Get(context.Context, kv.Key, ...kv.GetOption) (kv.ValueEntry, error) {
+	return kv.ValueEntry{}, s.err
+}
+
+func (s *snapshotLostSnapshot) Iter(kv.Key, kv.Key) (kv.Iterator, error) {
+	return nil, s.err
+}
+
+func (s *snapshotLostSnapshot) IterReverse(kv.Key, kv.Key) (kv.Iterator, error) {
+	return nil, s.err
+}
+
+func (s *snapshotLostSnapshot) BatchGet(context.Context, []kv.Key, ...kv.BatchGetOption) (map[string]kv.ValueEntry, error) {
+	return nil, s.err
+}
+
+func (s *snapshotLostSnapshot) SetOption(int, any) {}
