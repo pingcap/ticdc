@@ -24,13 +24,8 @@ import (
 )
 
 // NewStatistics creates a statistics
-func NewStatistics(
-	changefeed common.ChangeFeedID,
-	keyspaceID uint32,
-	sinkType string,
-) *Statistics {
+func NewStatistics(changefeed common.ChangeFeedID, keyspaceID uint32) *Statistics {
 	statistics := &Statistics{
-		sinkType:        sinkType,
 		changefeedID:    changefeed,
 		keyspaceID:      FormatKeyspaceID(keyspaceID),
 		ddlTypes:        sync.Map{},
@@ -41,12 +36,10 @@ func NewStatistics(
 	changefeedID := changefeed.Name()
 	statistics.metricExecDDLHis = ExecDDLHistogram.WithLabelValues(keyspace, changefeedID)
 	statistics.metricExecDDLRunningCnt = ExecDDLRunningGauge.WithLabelValues(keyspace, changefeedID)
-	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(keyspace, changefeedID, sinkType, statistics.keyspaceID)
-	statistics.metricExecBatchBytesHis = ExecBatchWriteBytesHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
-	statistics.metricTotalWriteBytesCnt = TotalWriteBytesCounter.WithLabelValues(keyspace, changefeedID, sinkType)
+	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(keyspace, changefeedID, statistics.keyspaceID)
+	statistics.metricTotalWriteBytesCnt = TotalWriteBytesCounter.WithLabelValues(keyspace, changefeedID)
 	statistics.metricExecErrCntForDDL = ExecutionErrorCounter.WithLabelValues(keyspace, changefeedID, "ddl")
 	statistics.metricExecErrCntForDML = ExecutionErrorCounter.WithLabelValues(keyspace, changefeedID, "dml")
-	statistics.metricExecDMLCnt = ExecDMLEventCounter.WithLabelValues(keyspace, changefeedID)
 
 	return statistics
 }
@@ -54,7 +47,6 @@ func NewStatistics(
 // Statistics maintains some status and metrics of the Sink
 // Note: All methods of Statistics should be thread-safe.
 type Statistics struct {
-	sinkType        string
 	changefeedID    common.ChangeFeedID
 	keyspaceID      string
 	ddlTypes        sync.Map
@@ -67,8 +59,6 @@ type Statistics struct {
 	// metricExecBatchHis records the executed DML batch size.
 	// this should be only useful for the MySQL Sink, and Kafka Sink with batched protocol, such as open-protocol.
 	metricExecBatchHis prometheus.Observer
-	// metricExecBatchBytesHis records the executed batch write bytes.
-	metricExecBatchBytesHis prometheus.Observer
 	// metricTotalWriteBytesCnt records the executed DML event size.
 	metricTotalWriteBytesCnt prometheus.Counter
 
@@ -76,8 +66,6 @@ type Statistics struct {
 	metricExecErrCntForDDL prometheus.Counter
 	// metricExecErrCntForDML records the error count of the Sink for DML.
 	metricExecErrCntForDML prometheus.Counter
-	// metricExecDMLCnt records the executed DML event count of the Sink.
-	metricExecDMLCnt prometheus.Counter
 }
 
 // RecordBatchExecution stats batch executors which return (batchRowCount, batchWriteBytes, error).
@@ -88,8 +76,6 @@ func (b *Statistics) RecordBatchExecution(executor func() (int, int64, error)) e
 		return err
 	}
 	b.metricExecBatchHis.Observe(float64(batchSize))
-	b.metricExecBatchBytesHis.Observe(float64(batchWriteBytes))
-	b.metricExecDMLCnt.Add(float64(batchSize))
 	b.metricTotalWriteBytesCnt.Add(float64(batchWriteBytes))
 	return nil
 }
@@ -146,9 +132,7 @@ func (b *Statistics) Close() {
 	changefeedID := b.changefeedID.Name()
 	ExecDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
 	ExecDDLRunningGauge.DeleteLabelValues(keyspace, changefeedID)
-	ExecBatchHistogram.DeleteLabelValues(keyspace, changefeedID, b.sinkType, b.keyspaceID)
-	ExecBatchWriteBytesHistogram.DeleteLabelValues(keyspace, changefeedID, b.sinkType)
-	EventSizeHistogram.DeleteLabelValues(keyspace, changefeedID)
+	ExecBatchHistogram.DeleteLabelValues(keyspace, changefeedID, b.keyspaceID)
 	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "ddl")
 	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "dml")
 	b.ddlTypes.Range(func(key, value any) bool {
@@ -163,6 +147,5 @@ func (b *Statistics) Close() {
 		ExecDMLEventRowsAffectedCounter.DeleteLabelValues(keyspace, changefeedID, countType, rowType)
 		return true
 	})
-	TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID, b.sinkType)
-	ExecDMLEventCounter.DeleteLabelValues(keyspace, changefeedID)
+	TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)
 }

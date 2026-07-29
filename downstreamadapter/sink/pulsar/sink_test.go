@@ -49,7 +49,7 @@ func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 	comp, protocol, err := newPulsarSinkComponentForTest(ctx, changefeedID, sinkURI, replicaConfig.Sink)
 	require.NoError(t, err)
 
-	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "sink")
+	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID)
 	pulsarSink := &sink{
 		changefeedID: changefeedID,
 		dmlProducer:  newMockDMLProducer(),
@@ -126,7 +126,7 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	err = pulsarSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
-	writeBytes := metrics.TotalWriteBytesCounter.WithLabelValues("test", "test", "sink")
+	writeBytes := metrics.TotalWriteBytesCounter.WithLabelValues("test", "test")
 	beforeWriteBytes := testutil.ToFloat64(writeBytes)
 	pulsarSink.AddDMLEvent(dmlEvent)
 	callbacks := make([]func(), 0, 2)

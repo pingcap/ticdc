@@ -53,7 +53,7 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	cfg.BatchDMLEnable = true
 	cfg.EnableDDLTs = defaultEnableDDLTs
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID)
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
 	t.Cleanup(writer.Close)
 	// assign a no-op stmt cache to bypass actual DB operations in unit tests
@@ -76,7 +76,7 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 	cfg.ServerInfo = version.ParseServerInfo(defaultRunningAddIndexNewSQLVersion)
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID)
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
 	t.Cleanup(writer.Close)
 
@@ -206,7 +206,7 @@ func TestAffectedRowsRecordedAfterCommit(t *testing.T) {
 	writer.statistics.Close()
 
 	changefeedID := common.NewChangefeedID4Test("test", t.Name())
-	writer.statistics = metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+	writer.statistics = metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID)
 	counter := metrics.ExecDMLEventRowsAffectedCounter.WithLabelValues(
 		changefeedID.Keyspace(), changefeedID.Name(), "actual", common.RowTypeInsert.String())
 

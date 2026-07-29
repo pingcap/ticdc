@@ -28,7 +28,6 @@ func TestExecBatchHistogramKeyspaceIDLabel(t *testing.T) {
 	statistics := NewStatistics(
 		common.NewChangefeedID4Test("test-keyspace", "batch-row-count-keyspace-id"),
 		123,
-		"sink",
 	)
 	require.NoError(t, statistics.RecordBatchExecution(func() (int, int64, error) {
 		return 2, 10, nil

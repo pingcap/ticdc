@@ -170,7 +170,7 @@ func newWithComponents(
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
-	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "sink")
+	statistics := metrics.NewStatistics(changefeedID, keyspaceID)
 	var (
 		err           error
 		asyncProducer kafka.AsyncProducer

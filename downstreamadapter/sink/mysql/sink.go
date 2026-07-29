@@ -158,7 +158,7 @@ func newMySQLSinkWithDBs(
 	progressInterval time.Duration,
 	keyspaceID uint32,
 ) *Sink {
-	stat := metrics.NewStatistics(changefeedID, keyspaceID, "TxnSink")
+	stat := metrics.NewStatistics(changefeedID, keyspaceID)
 
 	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {

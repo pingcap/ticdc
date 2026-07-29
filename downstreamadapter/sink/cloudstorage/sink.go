@@ -135,7 +135,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "cloudstorage")
+	statistics := metrics.NewStatistics(changefeedID, keyspaceID)
 	defer func() {
 		if err != nil {
 			statistics.Close()

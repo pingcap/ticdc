@@ -28,17 +28,7 @@ var (
 			Name:      "batch_row_count",
 			Help:      "Row count number for a given batch.",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 18),
-		}, []string{getKeyspaceLabel(), "changefeed", "type", "keyspace_id"}) // type is for `sinkType`
-
-	// ExecBatchWriteBytesHistogram records bytes written for each batch.
-	ExecBatchWriteBytesHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "batch_write_bytes",
-			Help:      "Bytes number for a given batch.",
-			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB~128MB
-		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
+		}, []string{getKeyspaceLabel(), "changefeed", "keyspace_id"})
 
 	// ExecWriteBytesGauge records the total number of bytes written by sink.
 	TotalWriteBytesCounter = prometheus.NewCounterVec(
@@ -47,23 +37,6 @@ var (
 			Subsystem: "sink",
 			Name:      "write_bytes_total",
 			Help:      "Total number of bytes written by sink",
-		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
-
-	EventSizeHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "event_size",
-			Help:      "The size of changed events (in bytes).",
-			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 30), // 0~32M
-		}, []string{getKeyspaceLabel(), "changefeed"})
-
-	ExecDMLEventCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "dml_event_count",
-			Help:      "Total count of DML events.",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	ExecDMLEventRowsAffectedCounter = prometheus.NewCounterVec(
@@ -235,10 +208,7 @@ var (
 func initSinkMetrics(registry *prometheus.Registry) {
 	// common sink metrics
 	registry.MustRegister(ExecBatchHistogram)
-	registry.MustRegister(ExecBatchWriteBytesHistogram)
 	registry.MustRegister(TotalWriteBytesCounter)
-	registry.MustRegister(EventSizeHistogram)
-	registry.MustRegister(ExecDMLEventCounter)
 	registry.MustRegister(ExecDMLEventRowsAffectedCounter)
 	registry.MustRegister(ActiveActiveConflictSkipRowsCounter)
 	registry.MustRegister(ExecutionErrorCounter)

@@ -336,7 +336,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	err = kafkaSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
-	writeBytes := pmetrics.TotalWriteBytesCounter.WithLabelValues("test", "test", "sink")
+	writeBytes := pmetrics.TotalWriteBytesCounter.WithLabelValues("test", "test")
 	beforeWriteBytes := testutil.ToFloat64(writeBytes)
 	kafkaSink.AddDMLEvent(dmlEvent)
 	callbacks := make([]func(), 0, 2)
