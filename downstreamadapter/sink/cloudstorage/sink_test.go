@@ -78,17 +78,17 @@ func TestBasicFunctionality(t *testing.T) {
 	createTableSQL := "create table t (id int primary key, name varchar(2048));"
 	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:   1,
-		Name: ast.NewCIStr("t"),
+		Name: parser_model.NewCIStr("t"),
 		Columns: []*timodel.ColumnInfo{
 			{
 				ID:        1,
-				Name:      ast.NewCIStr("id"),
+				Name:      parser_model.NewCIStr("id"),
 				FieldType: *types.NewFieldType(mysql.TypeLong),
 				State:     timodel.StatePublic,
 			},
 			{
 				ID:        2,
-				Name:      ast.NewCIStr("name"),
+				Name:      parser_model.NewCIStr("name"),
 				FieldType: *types.NewFieldType(mysql.TypeVarchar),
 				State:     timodel.StatePublic,
 			},
