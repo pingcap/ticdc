@@ -50,7 +50,7 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.26
 	github.com/pingcap/errors v0.11.5-0.20260508054701-306e305bcf41
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-	github.com/pingcap/kvproto v0.0.0-20260601035955-b2b3bb492278
+	github.com/pingcap/kvproto v0.0.0-20260609033303-412e01458771
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9
 	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5
 	github.com/pingcap/tidb v1.1.0-beta.0.20260625145450-3e4ee9fc99e7
@@ -109,12 +109,8 @@ require (
 	cloud.google.com/go v0.121.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	cloud.google.com/go/iam v1.5.0 // indirect
-<<<<<<< HEAD
 	cloud.google.com/go/kms v1.21.0 // indirect
-	filippo.io/edwards25519 v1.1.1 // indirect
-=======
 	filippo.io/edwards25519 v1.2.0 // indirect
->>>>>>> 103088c01 (*: bump tiflow (#5775))
 	github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4 // indirect
 	github.com/99designs/keyring v1.2.1 // indirect
 	github.com/AthenZ/athenz v1.10.39 // indirect
