@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -60,6 +61,7 @@ type indexRange struct {
 type consumer struct {
 	replicationCfg  *config.ReplicaConfig
 	codecCfg        *common.Config
+	columnSelectors *columnselector.ColumnSelectors
 	externalStorage storeapi.Storage
 	fileExtension   string
 	sink            sink.Sink
@@ -122,6 +124,10 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	if err != nil {
 		return nil, err
 	}
+	columnSelectors, err := columnselector.New(replicaConfig.Sink)
+	if err != nil {
+		return nil, err
+	}
 
 	extension := helper.GetFileExtension(protocol)
 
@@ -152,6 +158,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	return &consumer{
 		replicationCfg:    replicaConfig,
 		codecCfg:          codecConfig,
+		columnSelectors:   columnSelectors,
 		externalStorage:   storage,
 		fileExtension:     extension,
 		sink:              sink,
@@ -295,15 +302,17 @@ func (c *consumer) appendDMLEvents(
 		return errors.Trace(err)
 	}
 	var decoder common.Decoder
-
-	tableInfo, err := tableDetail.ToTableInfo()
-	if err != nil {
-		return errors.Trace(err)
-	}
-
 	switch c.codecCfg.Protocol {
 	case config.ProtocolCsv:
-		decoder, err = csv.NewDecoder(ctx, c.codecCfg, tableInfo, content)
+		tableInfo, _ := tableDetail.ToTableInfo()
+		// CSV rows contain selected values without column names, so decode with the same selector.
+		decoder, err = csv.NewDecoderWithColumnSelector(
+			ctx,
+			c.codecCfg,
+			tableInfo,
+			content,
+			c.columnSelectors.GetForTableInfo(tableInfo),
+		)
 		if err != nil {
 			return errors.Trace(err)
 		}

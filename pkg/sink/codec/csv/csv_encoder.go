@@ -39,28 +39,22 @@ func NewTxnEventEncoder(config *common.Config) common.TxnEventEncoder {
 }
 
 // AppendTxnEvent implements the TxnEventEncoder interface
-func (b *batchEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error {
-	if b.config.CSVOutputFieldHeader && b.batchSize == 0 {
-		b.setHeader(event.TableInfo)
+func (b *batchEncoder) AppendTxnEvent(rowEvents []*commonEvent.RowEvent) error {
+	if len(rowEvents) == 0 {
+		return nil
 	}
-	for {
-		row, ok := event.GetNextRow()
-		if !ok {
-			event.Rewind()
-			break
-		}
-		msg, err := rowChangedEvent2CSVMsg(b.config, &commonEvent.RowEvent{
-			TableInfo: event.TableInfo,
-			CommitTs:  event.CommitTs,
-			Event:     row,
-		})
+	if b.config.CSVOutputFieldHeader && b.batchSize == 0 {
+		b.setHeader(rowEvents[0].TableInfo, rowEvents[0].ColumnSelector)
+	}
+	for _, rowEvent := range rowEvents {
+		msg, err := rowChangedEvent2CSVMsg(b.config, rowEvent)
 		if err != nil {
 			return err
 		}
 		b.valueBuf.Write(msg.encode())
 		b.batchSize++
 	}
-	b.callback = event.PostFlush
+	b.callback = rowEvents[len(rowEvents)-1].Callback
 	return nil
 }
 
@@ -84,10 +78,13 @@ func (b *batchEncoder) Build() (messages []*common.Message) {
 	return []*common.Message{ret}
 }
 
-func (b *batchEncoder) setHeader(tableInfo *commonType.TableInfo) {
+func (b *batchEncoder) setHeader(tableInfo *commonType.TableInfo, selector commonEvent.Selector) {
 	buf := &bytes.Buffer{}
 	colNames := make([]string, 0, len(tableInfo.GetColumns()))
 	for _, col := range tableInfo.GetColumns() {
+		if !shouldEncodeColumn(col, selector) {
+			continue
+		}
 		colNames = append(colNames, col.Name.O)
 	}
 	buf.Write(encodeHeader(b.config, colNames))

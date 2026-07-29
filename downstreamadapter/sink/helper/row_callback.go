@@ -18,9 +18,9 @@ import (
 	"go.uber.org/atomic"
 )
 
-// NewTxnPostFlushRowCallback returns a row-level callback that triggers txn-level
+// NewPostFlushRowCallback returns a row-level callback that triggers txn-level
 // PostFlush exactly once when the callback has been invoked totalCount times.
-func NewTxnPostFlushRowCallback(event *event.DMLEvent, totalCount uint64) func() {
+func NewPostFlushRowCallback(event *event.DMLEvent, totalCount uint64) func() {
 	var calledCount atomic.Uint64
 	return func() {
 		if calledCount.Inc() == totalCount {

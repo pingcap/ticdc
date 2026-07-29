@@ -134,7 +134,7 @@ func TestWriterRun(t *testing.T) {
 			TableInfo:       tableInfo,
 			Rows:            chunk.MutRowFromValues(100, "hello world").ToRow().Chunk(),
 		}
-		tableTask := newDMLTask(tableName, dmlEvent)
+		tableTask := newDMLTask(tableName, dmlEvent, nil)
 		tableTask.encodedMsgs = []*common.Message{
 			{
 				Value: []byte(fmt.Sprintf(`{"id":%d,"database":"test","table":"table1","pkNames":[],"isDdl":false,`+
@@ -204,6 +204,7 @@ func TestWriterFlushMarker(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	tableTask.encodedMsgs = []*common.Message{msg}
 	require.NoError(t, d.enqueueTask(ctx, tableTask))
@@ -267,6 +268,7 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	msgA := common.NewMsg(nil, []byte(`{"id":"a"}`))
 	msgA.SetRowsCount(1)
@@ -295,6 +297,7 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 				},
 			}),
 		},
+		nil,
 	)
 	msgB := common.NewMsg(nil, []byte(`{"id":"b"}`))
 	msgB.SetRowsCount(1)
@@ -364,6 +367,7 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 			DispatcherID:     dispatcherID,
 		},
 		dmlEvent,
+		nil,
 	)
 	tableTask.encodedMsgs = []*common.Message{
 		{
@@ -387,7 +391,7 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
-func TestWriterPostFlushRunsPausedPostEnqueueBeforeLowWatermark(t *testing.T) {
+func TestWriterPostFlushDoesNotRunPausedPostEnqueue(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
@@ -414,21 +418,13 @@ func TestWriterPostFlushRunsPausedPostEnqueueBeforeLowWatermark(t *testing.T) {
 
 	var secondFlushed atomic.Int64
 	var secondEnqueued atomic.Int64
-	secondCallbacks := &txnCallbacks{
-		flushed: []func(){
-			func() {
-				secondFlushed.Add(1)
-			},
-		},
-		enqueued: []func(){
-			func() {
-				secondEnqueued.Add(1)
-			},
-		},
-	}
 	secondMsg := common.NewMsg(nil, []byte(strings.Repeat("b", 120)))
-	secondMsg.Callback = secondCallbacks.postFlush
-	secondEntry, err := spoolBuffer.Enqueue([]*common.Message{secondMsg}, secondCallbacks.postEnqueue)
+	secondMsg.Callback = func() {
+		secondFlushed.Add(1)
+	}
+	secondEntry, err := spoolBuffer.Enqueue([]*common.Message{secondMsg}, func() {
+		secondEnqueued.Add(1)
+	})
 	require.NoError(t, err)
 	defer spoolBuffer.Release(secondEntry)
 	require.Equal(t, int64(0), secondEnqueued.Load())
@@ -445,7 +441,7 @@ func TestWriterPostFlushRunsPausedPostEnqueueBeforeLowWatermark(t *testing.T) {
 	}
 
 	require.Equal(t, int64(1), secondFlushed.Load())
-	require.Equal(t, int64(1), secondEnqueued.Load())
+	require.Equal(t, int64(0), secondEnqueued.Load())
 
 	spoolBuffer.Release(firstEntry)
 	require.Equal(t, int64(1), secondEnqueued.Load())
@@ -519,6 +515,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	msg := common.NewMsg(nil, []byte(`{"id":1}`))
 	msg.SetRowsCount(1)
@@ -685,6 +682,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	msg := common.NewMsg(nil, []byte(`{"id":1}`))
 	msg.SetRowsCount(1)
@@ -751,6 +749,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 
 	var callbackCount atomic.Int64
