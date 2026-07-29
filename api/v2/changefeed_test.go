@@ -137,6 +137,15 @@ func (c *resumeNormalCoordinator) GetChangefeed(ctx context.Context, changefeedD
 		}, nil
 }
 
+// GetPersistedChangefeedInfo keeps the persisted fake state normal so the
+// handler exercises the state guard after reloading backend metadata.
+func (c *resumeNormalCoordinator) GetPersistedChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error) {
+	return &config.ChangeFeedInfo{
+		ChangefeedID: id,
+		State:        config.StateNormal,
+	}, nil
+}
+
 func (c *resumeNormalCoordinator) CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error {
 	return nil
 }
