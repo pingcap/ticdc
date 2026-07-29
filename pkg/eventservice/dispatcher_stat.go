@@ -428,12 +428,47 @@ type changefeedStatus struct {
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
+	minSentTs            atomic.Uint64
+	scanInterval         atomic.Int64
+	reportBandState      atomic.Int32
+	fastBandState        atomic.Int32
+	slowBandState        atomic.Int32
+
+	scanWindowController *adaptiveScanWindowController
+	syncPointInterval    time.Duration
 }
 
-func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
-	return &changefeedStatus{
-		changefeedID: changefeedID,
+func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
+	return newChangefeedStatusWithScanWindow(
+		changefeedID,
+		syncPointInterval,
+		isScanWindowEnabled(),
+	)
+}
+
+func isScanWindowEnabled() bool {
+	cfg := config.GetGlobalServerConfig()
+	if cfg == nil || cfg.Debug == nil || cfg.Debug.EventService == nil {
+		return true
 	}
+	return cfg.Debug.EventService.EnableScanWindow
+}
+
+func newChangefeedStatusWithScanWindow(
+	changefeedID common.ChangeFeedID,
+	syncPointInterval time.Duration,
+	enableScanWindow bool,
+) *changefeedStatus {
+	status := &changefeedStatus{
+		changefeedID:      changefeedID,
+		syncPointInterval: syncPointInterval,
+	}
+	if enableScanWindow {
+		status.scanWindowController = newAdaptiveScanWindowController(time.Now())
+	}
+	status.scanInterval.Store(int64(defaultScanInterval))
+
+	return status
 }
 
 func (c *changefeedStatus) addDispatcher(id common.DispatcherID, dispatcher *atomic.Pointer[dispatcherStat]) {
@@ -451,4 +486,8 @@ func (c *changefeedStatus) isEmpty() bool {
 		return false // stop iteration
 	})
 	return empty
+}
+
+func (c *changefeedStatus) isSyncpointEnabled() bool {
+	return c.syncPointInterval > 0
 }

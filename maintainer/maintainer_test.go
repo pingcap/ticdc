@@ -400,6 +400,169 @@ func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
 	require.Equal(t, uint64(50), status.LastSyncedTs)
 }
 
+func TestMaintainerHeartbeatDuringRemovingSkipsFailoverRecovery(t *testing.T) {
+	buildMaintainer := func(t *testing.T) (*Maintainer, *replica.SpanReplication, node.ID, chan *messaging.TargetMessage) {
+		t.Helper()
+		testutil.SetUpTestServices(t)
+		mockMC := messaging.NewMockMessageCenter()
+		appcontext.SetService(appcontext.MessageCenter, mockMC)
+
+		nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+		captureID := node.ID("node1")
+		nodeManager.GetAliveNodes()[captureID] = &node.Info{ID: captureID}
+
+		cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+		ddlDispatcherID := common.NewDispatcherID()
+		ddlSpan := replica.NewWorkingSpanReplication(cfID, ddlDispatcherID,
+			common.DDLSpanSchemaID,
+			common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+				ID:              ddlDispatcherID.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Working,
+				CheckpointTs:    10,
+				Mode:            common.DefaultMode,
+			}, captureID, false)
+		refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+		controller := NewController(cfID, 10, &mockThreadPool{},
+			config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize)
+
+		totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
+		dispatcherID := common.NewDispatcherID()
+		workingSpan := replica.NewWorkingSpanReplication(cfID, dispatcherID,
+			1,
+			&heartbeatpb.TableSpan{
+				TableID:    totalSpan.TableID,
+				StartKey:   totalSpan.StartKey,
+				EndKey:     totalSpan.EndKey,
+				KeyspaceID: common.DefaultKeyspaceID,
+			}, &heartbeatpb.TableSpanStatus{
+				ID:              dispatcherID.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Working,
+				CheckpointTs:    10,
+				Mode:            common.DefaultMode,
+			}, captureID, false)
+		controller.spanController.AddReplicatingSpan(workingSpan)
+
+		m := &Maintainer{
+			changefeedID:          cfID,
+			controller:            controller,
+			checkpointTsByCapture: newWatermarkCaptureMap(),
+			redoTsByCapture:       newWatermarkCaptureMap(),
+			statusChanged:         atomic.NewBool(false),
+		}
+		m.watermark.Watermark = &heartbeatpb.Watermark{}
+		m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
+		m.initialized.Store(true)
+		return m, workingSpan, captureID, mockMC.GetMessageChannel()
+	}
+
+	makeHeartbeat := func(dispatcherID common.DispatcherID, from node.ID, status heartbeatpb.ComponentState) *messaging.TargetMessage {
+		req := &heartbeatpb.HeartBeatRequest{
+			Watermark: &heartbeatpb.Watermark{
+				CheckpointTs: 20,
+				ResolvedTs:   20,
+			},
+			Statuses: []*heartbeatpb.TableSpanStatus{
+				{
+					ID:              dispatcherID.ToPB(),
+					ComponentStatus: status,
+					CheckpointTs:    20,
+					Mode:            common.DefaultMode,
+				},
+			},
+		}
+		return &messaging.TargetMessage{
+			From:    from,
+			Type:    messaging.TypeHeartBeatRequest,
+			Message: []messaging.IOTypeT{req},
+		}
+	}
+
+	// Scenario: a normal maintainer receives a Working heartbeat for an unknown dispatcher.
+	// Steps: report the orphan and verify normal failover recovery asks its capture to remove it.
+	t.Run("normal maintainer removes orphan working dispatcher", func(t *testing.T) {
+		m, _, captureID, messageCh := buildMaintainer(t)
+		orphanDispatcherID := common.NewDispatcherID()
+
+		m.onHeartbeatRequest(makeHeartbeat(orphanDispatcherID, captureID, heartbeatpb.ComponentState_Working))
+
+		require.Len(t, messageCh, 1)
+		msg := <-messageCh
+		require.Equal(t, messaging.TypeScheduleDispatcherRequest, msg.Type)
+		require.Equal(t, captureID, msg.To)
+		req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+		require.Equal(t, heartbeatpb.ScheduleAction_Remove, req.ScheduleAction)
+		require.Equal(t, orphanDispatcherID.ToPB(), req.Config.DispatcherID)
+	})
+
+	// Scenario: removing mode receives both an orphan Working heartbeat and a known Stopped heartbeat.
+	// Steps: suppress orphan recovery, then verify the known span still updates status bookkeeping
+	// without changing its scheduler binding or emitting a control-plane command.
+	t.Run("removing maintainer skips self healing", func(t *testing.T) {
+		m, workingSpan, captureID, messageCh := buildMaintainer(t)
+		m.removing.Store(true)
+		orphanDispatcherID := common.NewDispatcherID()
+
+		m.onHeartbeatRequest(makeHeartbeat(orphanDispatcherID, captureID, heartbeatpb.ComponentState_Working))
+		m.onHeartbeatRequest(makeHeartbeat(workingSpan.ID, captureID, heartbeatpb.ComponentState_Stopped))
+
+		require.Len(t, messageCh, 0)
+		require.Equal(t, 0, m.controller.spanController.GetAbsentSize())
+		require.Equal(t, heartbeatpb.ComponentState_Stopped, workingSpan.GetStatus().ComponentStatus)
+		require.Equal(t, captureID, workingSpan.GetNodeID())
+		require.Zero(t, m.controller.operatorController.OperatorSize())
+	})
+}
+
+func TestMaintainerRemovingSuppressesLegacyControlPlaneActions(t *testing.T) {
+	mockMC := messaging.NewMockMessageCenter()
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	m := &Maintainer{
+		changefeedID:  cfID,
+		mc:            mockMC,
+		nodeManager:   nodeManager,
+		closedNodes:   make(map[node.ID]struct{}),
+		statusChanged: atomic.NewBool(false),
+		postBootstrapMsg: &heartbeatpb.MaintainerPostBootstrapRequest{
+			ChangefeedID: cfID.ToPB(),
+		},
+	}
+	m.watermark.Watermark = &heartbeatpb.Watermark{CheckpointTs: 100, ResolvedTs: 100}
+	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
+	m.initialized.Store(true)
+	m.removing.Store(true)
+
+	// Removing maintainer must not keep resending bootstrap/post-bootstrap or barrier traffic.
+	// The only remaining control-plane action should be cascade close requests.
+	m.handleResendMessage()
+	require.Len(t, mockMC.GetMessageChannel(), 0)
+
+	// Block status handling must also stop once removal starts, otherwise the old maintainer
+	// can still schedule DDL-driven add/remove operations after handoff begins.
+	m.onBlockStateRequest(&messaging.TargetMessage{
+		From: "node1",
+		Type: messaging.TypeBlockStatusRequest,
+		Message: []messaging.IOTypeT{&heartbeatpb.BlockStatusRequest{
+			ChangefeedID: cfID.ToPB(),
+			Mode:         common.DefaultMode,
+		}},
+	})
+	require.Len(t, mockMC.GetMessageChannel(), 0)
+
+	m.cascadeRemoving.Store(true)
+	m.handleResendMessage()
+	require.Len(t, mockMC.GetMessageChannel(), 2)
+	for i := 0; i < 2; i++ {
+		msg := <-mockMC.GetMessageChannel()
+		require.Equal(t, messaging.TypeMaintainerCloseRequest, msg.Type)
+		req := msg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
+		require.Equal(t, cfID.ToPB(), req.ChangefeedID)
+	}
+}
+
 func TestMaintainerCalculateNewCheckpointTs(t *testing.T) {
 	t.Run("uses reported checkpoint", func(t *testing.T) {
 		m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
@@ -427,6 +590,52 @@ func TestMaintainerCalculateNewCheckpointTs(t *testing.T) {
 
 		require.False(t, canUpdate)
 		require.Nil(t, newWatermark)
+	})
+
+	t.Run("removing keeps blocked add operator checkpoint constraint", func(t *testing.T) {
+		// Scenario: the old maintainer enters removing mode while an Add operator is still in flight.
+		// Steps: report a higher capture watermark, quiesce all ordinary operators, and verify the
+		// checkpoint calculation remains capped at the in-flight add span's start checkpoint.
+		m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
+		nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+		nodeManager.GetAliveNodes()[selfNodeID] = &node.Info{ID: selfNodeID}
+
+		dispatcherID := common.NewDispatcherID()
+		replicaSet := replica.NewWorkingSpanReplication(
+			m.changefeedID,
+			dispatcherID,
+			1,
+			testutil.GetTableSpanByID(101),
+			&heartbeatpb.TableSpanStatus{
+				ID:              dispatcherID.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Working,
+				CheckpointTs:    10,
+				Mode:            common.DefaultMode,
+			},
+			"",
+			false,
+		)
+		m.controller.spanController.AddAbsentReplicaSet(replicaSet)
+		require.True(t, m.controller.operatorController.AddOperator(operator.NewAddDispatcherOperator(
+			m.controller.spanController,
+			replicaSet,
+			selfNodeID,
+			heartbeatpb.OperatorType_O_Add,
+		)))
+
+		m.removing.Store(true)
+		m.controller.EnterRemovingMode(m.ddlSpan.ID)
+		m.checkpointTsByCapture.Set(selfNodeID, heartbeatpb.Watermark{
+			CheckpointTs: 100,
+			ResolvedTs:   100,
+		})
+
+		newWatermark, canUpdate := m.calculateNewCheckpointTs()
+
+		require.True(t, canUpdate)
+		require.NotNil(t, newWatermark)
+		require.Equal(t, uint64(10), newWatermark.CheckpointTs)
+		require.Equal(t, uint64(10), newWatermark.ResolvedTs)
 	})
 }
 
@@ -527,6 +736,7 @@ func newMaintainerForCheckpointCalculationTest(t testing.TB) (*Maintainer, node.
 		changefeedID:          cfID,
 		selfNode:              selfNode,
 		controller:            controller,
+		ddlSpan:               ddlSpan,
 		pdClock:               pdutil.NewClock4Test(),
 		bootstrapper:          bootstrapper,
 		checkpointTsByCapture: newWatermarkCaptureMap(),
