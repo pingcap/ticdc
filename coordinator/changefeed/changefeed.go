@@ -97,12 +97,20 @@ func NewChangefeed(cfID common.ChangeFeedID,
 
 // GetInfo returns the latest ChangeFeedInfo stored in memory.
 //
-// Changefeed keeps info non-nil after construction.
+// It may return nil if the changefeed hasn't been fully initialized.
 func (c *Changefeed) GetInfo() *config.ChangeFeedInfo {
+	if c == nil || c.info == nil {
+		return nil
+	}
 	return c.info.Load()
 }
 
 // SetInfo updates the in-memory ChangeFeedInfo for the changefeed.
+//
+// It lazily initializes the internal pointer for uninitialized changefeeds
+// (primarily used by unit tests).
+//
+// If the receiver is nil, it does nothing.
 func (c *Changefeed) SetInfo(info *config.ChangeFeedInfo) {
 	if c == nil {
 		return
