@@ -95,6 +95,21 @@ func (mr *MockBackendMockRecorder) GetAllChangefeeds(ctx interface{}) *gomock.Ca
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllChangefeeds", reflect.TypeOf((*MockBackend)(nil).GetAllChangefeeds), ctx)
 }
 
+// GetChangefeedInfo mocks base method.
+func (m *MockBackend) GetChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetChangefeedInfo", ctx, id)
+	ret0, _ := ret[0].(*config.ChangeFeedInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetChangefeedInfo indicates an expected call of GetChangefeedInfo.
+func (mr *MockBackendMockRecorder) GetChangefeedInfo(ctx, id interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetChangefeedInfo", reflect.TypeOf((*MockBackend)(nil).GetChangefeedInfo), ctx, id)
+}
+
 // PauseChangefeed mocks base method.
 func (m *MockBackend) PauseChangefeed(ctx context.Context, id common.ChangeFeedID) error {
 	m.ctrl.T.Helper()

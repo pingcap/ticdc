@@ -279,11 +279,10 @@ func TestResumeChangefeed(t *testing.T) {
 
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
-		ChangefeedID: changefeedID,
-		Config:       config.GetDefaultReplicaConfig(),
-		State:        config.StateFailed,
-		Error:        &config.RunningError{Message: "old error"},
-		Epoch:        8,
+		Config: config.GetDefaultReplicaConfig(),
+		State:  config.StateFailed,
+		Error:  &config.RunningError{Message: "old error"},
+		Epoch:  8,
 	}
 	value, err := info.Marshal()
 	require.NoError(t, err)
@@ -315,6 +314,7 @@ func TestResumeChangefeed(t *testing.T) {
 
 			persistedInfo := &config.ChangeFeedInfo{}
 			require.NoError(t, persistedInfo.Unmarshal(ops[0].ValueBytes()))
+			require.Equal(t, changefeedID, persistedInfo.ChangefeedID)
 			require.Equal(t, uint64(9), persistedInfo.Epoch)
 			require.Equal(t, config.StateNormal, persistedInfo.State)
 			require.Nil(t, persistedInfo.Error)
@@ -330,6 +330,7 @@ func TestResumeChangefeed(t *testing.T) {
 
 	got, err := backend.ResumeChangefeed(context.Background(), changefeedID, 9, 300)
 	require.NoError(t, err)
+	require.Equal(t, changefeedID, got.ChangefeedID)
 	require.Equal(t, uint64(9), got.Epoch)
 	require.Equal(t, config.StateNormal, got.State)
 	require.Nil(t, got.Error)

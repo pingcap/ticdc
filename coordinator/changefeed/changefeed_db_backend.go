@@ -37,6 +37,8 @@ type EpochBumpOptions struct {
 type Backend interface {
 	// GetAllChangefeeds returns all changefeeds from the backend db, include stopped and failed changefeeds
 	GetAllChangefeeds(ctx context.Context) (map[common.ChangeFeedID]*ChangefeedMetaWrapper, error)
+	// GetChangefeedInfo returns the latest persisted changefeed info from the backend db.
+	GetChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error)
 	// CreateChangefeed saves changefeed info and status to db
 	CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error
 	// UpdateChangefeed updates changefeed info  to db

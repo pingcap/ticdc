@@ -124,6 +124,21 @@ func (b *EtcdBackend) GetAllChangefeeds(ctx context.Context) (map[common.ChangeF
 	return cfMap, nil
 }
 
+// GetChangefeedInfo returns the latest persisted changefeed info from etcd.
+func (b *EtcdBackend) GetChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error) {
+	info, err := b.etcdClient.GetChangeFeedInfo(ctx, id.DisplayName)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	// Old metadata may not embed ChangefeedID in the value. Keep the backend
+	// lookup key as the source of truth so callers can safely use the returned
+	// info for validation and in-memory replacement.
+	if info.ChangefeedID.Name() == "" {
+		info.ChangefeedID = id
+	}
+	return info, nil
+}
+
 func (b *EtcdBackend) CreateChangefeed(ctx context.Context,
 	info *config.ChangeFeedInfo,
 ) error {
