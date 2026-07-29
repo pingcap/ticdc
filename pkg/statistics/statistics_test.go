@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
@@ -36,8 +35,8 @@ func TestExecBatchHistogramKeyspaceIDLabel(t *testing.T) {
 		return 2, 10, nil
 	}))
 
-	labelValues := []string{changefeedID.Keyspace(), changefeedID.Name(), metrics.FormatKeyspaceID(keyspaceID)}
-	observer, err := metrics.ExecBatchHistogram.GetMetricWithLabelValues(labelValues...)
+	labelValues := []string{changefeedID.Keyspace(), changefeedID.Name(), formatKeyspaceID(keyspaceID)}
+	observer, err := execBatchHistogram.GetMetricWithLabelValues(labelValues...)
 	require.NoError(t, err)
 	metric, ok := observer.(prometheus.Metric)
 	require.True(t, ok)
@@ -46,5 +45,5 @@ func TestExecBatchHistogramKeyspaceIDLabel(t *testing.T) {
 	require.Equal(t, uint64(1), metricDTO.GetHistogram().GetSampleCount())
 
 	statistics.Close()
-	require.False(t, metrics.ExecBatchHistogram.DeleteLabelValues(labelValues...))
+	require.False(t, execBatchHistogram.DeleteLabelValues(labelValues...))
 }

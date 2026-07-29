@@ -29,25 +29,6 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 18),
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
-	// ExecDDLHistogram records the execution time of a DDL.
-	ExecDDLHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "ddl",
-			Name:      "exec_duration",
-			Help:      "Bucketed histogram of processing time (s) of a ddl.",
-			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 18),
-		}, []string{getKeyspaceLabel(), "changefeed"})
-
-	// ExecDDLRunningGauge records the count of running DDL.
-	ExecDDLRunningGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "ddl",
-			Name:      "exec_running",
-			Help:      "Total count of running ddl.",
-		}, []string{getKeyspaceLabel(), "changefeed"})
-
 	// ExecDDLBlockingGauge records the count of blocking DDL.
 	ExecDDLBlockingGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -56,21 +37,9 @@ var (
 			Name:      "exec_blocking",
 			Help:      "Total count of blocking ddl.",
 		}, []string{getKeyspaceLabel(), "changefeed", "mode"})
-
-	// ExecDDLCounter records the execution count of different DDL types
-	ExecDDLCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "ddl",
-			Name:      "execution",
-			Help:      "Total execution count of different DDL types.",
-		}, []string{getKeyspaceLabel(), "changefeed", "ddl_type"})
 )
 
 func initDDLMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(HandleDDLHistogram)
-	registry.MustRegister(ExecDDLHistogram)
-	registry.MustRegister(ExecDDLRunningGauge)
 	registry.MustRegister(ExecDDLBlockingGauge)
-	registry.MustRegister(ExecDDLCounter)
 }

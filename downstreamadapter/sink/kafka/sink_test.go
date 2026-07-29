@@ -32,11 +32,11 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/pingcap/ticdc/pkg/statistics"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -259,6 +259,9 @@ func TestKafkaSinkRunReturnsAsyncProducerError(t *testing.T) {
 }
 
 func TestKafkaSinkBasicFunctionality(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	statistics.InitMetrics(registry)
+
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -336,8 +339,8 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	err = kafkaSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
-	writeBytes := pmetrics.TotalWriteBytesCounter.WithLabelValues("test", "test")
-	beforeWriteBytes := testutil.ToFloat64(writeBytes)
+	metricLabels := prometheus.Labels{"changefeed": kafkaSink.changefeedID.Name()}
+	beforeWriteBytes := counterValueForLabels(t, registry, "ticdc_sink_write_bytes_total", metricLabels)
 	kafkaSink.AddDMLEvent(dmlEvent)
 	callbacks := make([]func(), 0, 2)
 	for range 2 {
@@ -348,7 +351,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 			t.Fatal("timed out waiting for Kafka messages")
 		}
 	}
-	require.Equal(t, beforeWriteBytes, testutil.ToFloat64(writeBytes))
+	require.Equal(t, beforeWriteBytes, counterValueForLabels(t, registry, "ticdc_sink_write_bytes_total", metricLabels))
 	for _, callback := range callbacks {
 		require.NotNil(t, callback)
 		callback()
@@ -360,12 +363,44 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 		func() bool {
 			return count.Load() == int64(3)
 		}, 5*time.Second, time.Second)
-	require.Equal(t, float64(dmlEvent.GetSize()), testutil.ToFloat64(writeBytes)-beforeWriteBytes)
+	require.Equal(t, float64(dmlEvent.GetSize()), counterValueForLabels(t, registry, "ticdc_sink_write_bytes_total", metricLabels)-beforeWriteBytes)
 
 	// case 2: add checkpoint ts when sink is closed and it will not block
 	kafkaSink.Close()
 	cancel()
 	kafkaSink.AddCheckpointTs(12345)
+}
+
+func counterValueForLabels(
+	t *testing.T,
+	registry *prometheus.Registry,
+	metricName string,
+	labels prometheus.Labels,
+) float64 {
+	t.Helper()
+
+	metricFamilies, err := registry.Gather()
+	require.NoError(t, err)
+	for _, metricFamily := range metricFamilies {
+		if metricFamily.GetName() != metricName {
+			continue
+		}
+		for _, metric := range metricFamily.Metric {
+			matchedLabels := 0
+			for _, label := range metric.Label {
+				if value, ok := labels[label.GetName()]; ok {
+					if value != label.GetValue() {
+						break
+					}
+					matchedLabels++
+				}
+			}
+			if matchedLabels == len(labels) {
+				return metric.GetCounter().GetValue()
+			}
+		}
+	}
+	return 0
 }
 
 func TestKafkaSinkBatchConfig(t *testing.T) {

@@ -25,10 +25,9 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/utils/chann"
-	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -73,6 +72,9 @@ func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 }
 
 func TestPulsarSinkBasicFunctionality(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	statistics.InitMetrics(registry)
+
 	pulsarSink, err := newPulsarSinkForTest(t)
 	require.NoError(t, err)
 
@@ -127,8 +129,8 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	err = pulsarSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
-	writeBytes := metrics.TotalWriteBytesCounter.WithLabelValues("test", "test")
-	beforeWriteBytes := testutil.ToFloat64(writeBytes)
+	metricLabels := prometheus.Labels{"changefeed": pulsarSink.changefeedID.Name()}
+	beforeWriteBytes := counterValueForLabels(t, registry, "ticdc_sink_write_bytes_total", metricLabels)
 	pulsarSink.AddDMLEvent(dmlEvent)
 	callbacks := make([]func(), 0, 2)
 	for range 2 {
@@ -139,7 +141,7 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 			t.Fatal("timed out waiting for Pulsar messages")
 		}
 	}
-	require.Equal(t, beforeWriteBytes, testutil.ToFloat64(writeBytes))
+	require.Equal(t, beforeWriteBytes, counterValueForLabels(t, registry, "ticdc_sink_write_bytes_total", metricLabels))
 	for _, callback := range callbacks {
 		require.NotNil(t, callback)
 		callback()
@@ -151,7 +153,39 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	require.Len(t, pulsarSink.ddlProducer.(*mockProducer).GetAllEvents(), 1)
 
 	require.Equal(t, count.Load(), int64(3))
-	require.Equal(t, float64(dmlEvent.GetSize()), testutil.ToFloat64(writeBytes)-beforeWriteBytes)
+	require.Equal(t, float64(dmlEvent.GetSize()), counterValueForLabels(t, registry, "ticdc_sink_write_bytes_total", metricLabels)-beforeWriteBytes)
+}
+
+func counterValueForLabels(
+	t *testing.T,
+	registry *prometheus.Registry,
+	metricName string,
+	labels prometheus.Labels,
+) float64 {
+	t.Helper()
+
+	metricFamilies, err := registry.Gather()
+	require.NoError(t, err)
+	for _, metricFamily := range metricFamilies {
+		if metricFamily.GetName() != metricName {
+			continue
+		}
+		for _, metric := range metricFamily.Metric {
+			matchedLabels := 0
+			for _, label := range metric.Label {
+				if value, ok := labels[label.GetName()]; ok {
+					if value != label.GetValue() {
+						break
+					}
+					matchedLabels++
+				}
+			}
+			if matchedLabels == len(labels) {
+				return metric.GetCounter().GetValue()
+			}
+		}
+	}
+	return 0
 }
 
 func TestPulsarSinkBatchConfig(t *testing.T) {
