@@ -145,6 +145,7 @@ func (b *Statistics) Close() {
 	keyspace := b.changefeedID.Keyspace()
 	changefeedID := b.changefeedID.Name()
 	ExecDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
+	ExecDDLRunningGauge.DeleteLabelValues(keyspace, changefeedID)
 	ExecBatchHistogram.DeleteLabelValues(keyspace, changefeedID, b.sinkType, b.keyspaceID)
 	ExecBatchWriteBytesHistogram.DeleteLabelValues(keyspace, changefeedID, b.sinkType)
 	EventSizeHistogram.DeleteLabelValues(keyspace, changefeedID)
