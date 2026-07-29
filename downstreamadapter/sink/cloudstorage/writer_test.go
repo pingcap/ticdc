@@ -27,11 +27,8 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
-<<<<<<< HEAD
 	"github.com/pingcap/ticdc/pkg/clock"
-=======
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"

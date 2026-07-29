@@ -49,14 +49,9 @@ type TableCol struct {
 	Elems     []string `json:"ColumnElems,omitempty"`
 }
 
-<<<<<<< HEAD:pkg/sink/cloudstorage/table_definition.go
-// FromTiColumnInfo converts from TiDB ColumnInfo to TableCol.
-func (t *TableCol) FromTiColumnInfo(col *timodel.ColumnInfo, outputColumnID bool) {
-=======
 // fromTiColumnInfo fills TableCol from a TiDB column. outputColumnID controls
 // whether ColumnId is written into the schema file payload.
-func (t *TableCol) fromTiColumnInfo(col *model.ColumnInfo, outputColumnID bool) {
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483)):pkg/cloudstorage/schema_file.go
+func (t *TableCol) fromTiColumnInfo(col *timodel.ColumnInfo, outputColumnID bool) {
 	defaultFlen, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(col.GetType())
 	isDecimalNotDefault := col.GetDecimal() != defaultDecimal &&
 		col.GetDecimal() != 0 &&
@@ -110,25 +105,10 @@ func (t *TableCol) fromTiColumnInfo(col *model.ColumnInfo, outputColumnID bool) 
 	}
 }
 
-<<<<<<< HEAD:pkg/sink/cloudstorage/table_definition.go
-// ToTiColumnInfo converts from TableCol to TiDB ColumnInfo.
-func (t *TableCol) ToTiColumnInfo(colID int64) (*timodel.ColumnInfo, error) {
-	col := new(timodel.ColumnInfo)
-
-	if t.ID != "" {
-		var err error
-		col.ID, err = strconv.ParseInt(t.ID, 10, 64)
-		if err != nil {
-			return nil, errors.WrapError(errors.ErrInternalCheckFailed, err)
-		}
-	}
-
-=======
 // toTiColumnInfo returns a TiDB column reconstructed from TableCol. colID is
 // used as the returned column ID.
-func (t *TableCol) toTiColumnInfo(colID int64) *model.ColumnInfo {
-	col := new(model.ColumnInfo)
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483)):pkg/cloudstorage/schema_file.go
+func (t *TableCol) toTiColumnInfo(colID int64) *timodel.ColumnInfo {
+	col := new(timodel.ColumnInfo)
 	col.ID = colID
 	col.Name = parser_model.NewCIStr(t.Name)
 	tp := types.StrToType(strings.ToLower(strings.TrimSuffix(t.Tp, " UNSIGNED")))
@@ -250,18 +230,11 @@ func (t *SchemaFile) Build(event *commonEvent.DDLEvent, outputColumnID bool) {
 	}
 }
 
-<<<<<<< HEAD:pkg/sink/cloudstorage/table_definition.go
-// ToTableInfo converts from TableDefinition to DDLEvent.
-func (t *TableDefinition) ToTableInfo() (*common.TableInfo, error) {
-	tidbTableInfo := &timodel.TableInfo{
-		Name: parser_model.NewCIStr(t.Table),
-=======
 // TableInfo returns decoder TableInfo rebuilt from SchemaFile columns.
 // It uses deterministic mock column IDs starting from 100.
 func (t *SchemaFile) TableInfo() *common.TableInfo {
-	tidbTableInfo := &model.TableInfo{
-		Name: ast.NewCIStr(t.Table),
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483)):pkg/cloudstorage/schema_file.go
+	tidbTableInfo := &timodel.TableInfo{
+		Name: parser_model.NewCIStr(t.Table),
 	}
 	nextMockID := int64(100) // 100 is an arbitrary number
 	for _, col := range t.Columns {

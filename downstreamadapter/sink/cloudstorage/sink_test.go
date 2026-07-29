@@ -198,19 +198,6 @@ func TestIgnoreCallsAfterRunError(t *testing.T) {
 	require.Error(t, err)
 }
 
-<<<<<<< HEAD
-=======
-func TestCloudStorageSinkBatchConfig(t *testing.T) {
-	sink := &sink{
-		cfg: &cloudstorage.Config{
-			FileSize: 2048,
-		},
-	}
-	require.Equal(t, 4096, sink.BatchCount())
-	require.Equal(t, 2048, sink.BatchBytes())
-}
-
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
 func TestWriteDDLEvent(t *testing.T) {
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
@@ -700,20 +687,8 @@ func TestCleanupExpiredFiles(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-<<<<<<< HEAD
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-=======
-	cloudStorageSink := &sink{
-		changefeedID: common.NewChangefeedID4Test("test", "test"),
-		cfg: &cloudstorage.Config{
-			DateSeparator:       config.DateSeparatorDay.String(),
-			FileExpirationDays:  1,
-			FileCleanupCronSpec: util.GetOrZero(replicaConfig.Sink.CloudStorageConfig.FileCleanupCronSpec),
-		},
-	}
-	require.NoError(t, cloudStorageSink.initCron(ctx, sinkURI, cleanupJobs))
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, cleanupJobs)
 	go cloudStorageSink.Run(ctx)

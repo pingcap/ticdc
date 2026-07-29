@@ -394,13 +394,8 @@ require (
 	sourcegraph.com/sourcegraph/appdash-data v0.0.0-20151005221446-73f23eafcf67 // indirect
 )
 
-<<<<<<< HEAD
 // copy from TiDB
 replace github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-=======
-replace (
-	github.com/IBM/sarama v1.41.2 => github.com/pingcap/sarama v1.41.2-pingcap-20260622.1
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
 
 replace github.com/pingcap/tipb => github.com/pingcap/tipb v0.0.0-20260605083900-f9f651ef5fbc
 

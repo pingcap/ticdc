@@ -72,13 +72,18 @@ func generateSchemaFile() (SchemaFile, *common.TableInfo) {
 		Columns:  columns,
 		UpdateTS: 100,
 	})
-<<<<<<< HEAD:pkg/sink/cloudstorage/table_definition_test.go
-	var def TableDefinition
-	def.FromTableInfo(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo, tableInfo.GetUpdateTS(), false)
-	return def, tableInfo
+	event := &commonEvent.DDLEvent{
+		SchemaName: tableInfo.GetSchemaName(),
+		TableName:  tableInfo.GetTableName(),
+		TableInfo:  tableInfo,
+		FinishedTs: tableInfo.GetUpdateTS(),
+	}
+	var schemaFile SchemaFile
+	schemaFile.Build(event, false)
+	return schemaFile, tableInfo
 }
 
-func TestFromDDLEventUsesTargetNames(t *testing.T) {
+func TestBuildUsesTargetNames(t *testing.T) {
 	t.Parallel()
 
 	idFieldType := types.NewFieldType(mysql.TypeLong)
@@ -104,17 +109,25 @@ func TestFromDDLEventUsesTargetNames(t *testing.T) {
 		Query:      "CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)",
 		TableInfo:  routedTableInfo,
 		FinishedTs: 100,
-=======
-	event := &commonEvent.DDLEvent{
-		SchemaName: tableInfo.GetSchemaName(),
-		TableName:  tableInfo.GetTableName(),
-		TableInfo:  tableInfo,
-		FinishedTs: tableInfo.GetUpdateTS(),
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483)):pkg/cloudstorage/schema_file_test.go
 	}
+
+	routedDDL := commonEvent.NewRoutedDDLEvent(
+		sourceDDL,
+		"CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY)",
+		"target_db",
+		"target_table",
+		"",
+		"",
+		routedTableInfo,
+		nil,
+		nil,
+	)
+
 	var schemaFile SchemaFile
-	schemaFile.Build(event, false)
-	return schemaFile, tableInfo
+	schemaFile.Build(routedDDL, false)
+	require.Equal(t, "target_db", schemaFile.Schema)
+	require.Equal(t, "target_table", schemaFile.Table)
+	require.Contains(t, schemaFile.Query, "`target_db`.`target_table`")
 }
 
 func TestTableCol(t *testing.T) {

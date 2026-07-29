@@ -26,12 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
-<<<<<<< HEAD
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/tidb/br/pkg/storage"
-=======
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"

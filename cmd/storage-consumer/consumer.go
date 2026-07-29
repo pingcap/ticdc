@@ -31,11 +31,6 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-<<<<<<< HEAD
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
-=======
-	"github.com/pingcap/ticdc/pkg/errors"
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
@@ -47,15 +42,8 @@ import (
 )
 
 const (
-<<<<<<< HEAD
-	defaultChangefeedName         = "storage-consumer"
-	defaultLogInterval            = 5 * time.Second
-	fakePartitionNumForSchemaFile = -1
-=======
 	defaultChangefeedName = "storage-consumer"
 	defaultLogInterval    = 5 * time.Second
-	metadataFileName      = "metadata"
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
 )
 
 type (
@@ -210,15 +198,9 @@ func diffDMLMaps(
 // getNewFiles returns newly created dml files in specific ranges
 func (c *consumer) getNewFiles(
 	ctx context.Context,
-<<<<<<< HEAD
-) (map[cloudstorage.DmlPathKey]fileIndexRange, error) {
-	tableDMLMap := make(map[cloudstorage.DmlPathKey]fileIndexRange)
-	opt := &storage.WalkOption{SubDir: ""}
-=======
 ) (map[cloudstorage.DMLPathKey]fileIndexRange, error) {
 	tableDMLMap := make(map[cloudstorage.DMLPathKey]fileIndexRange)
-	opt := &storeapi.WalkOption{SubDir: ""}
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
+	opt := &storage.WalkOption{SubDir: ""}
 
 	origDMLIdxMap := make(map[cloudstorage.DMLPathKey]fileIndexKeyMap, len(c.tableDMLIdxMap))
 	for k, v := range c.tableDMLIdxMap {
@@ -229,12 +211,8 @@ func (c *consumer) getNewFiles(
 		origDMLIdxMap[k] = m
 	}
 
-<<<<<<< HEAD
-	err := c.externalStorage.WalkDir(ctx, opt, func(path string, size int64) error {
-=======
 	dateSeparator := putil.GetOrZero(c.replicationCfg.Sink.DateSeparator)
 	err := c.externalStorage.WalkDir(ctx, opt, func(path string, _ int64) error {
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
 		if cloudstorage.IsSchemaFile(path) {
 			c.parseSchemaFilePath(ctx, path)
 			return nil
@@ -403,25 +381,7 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 	}
 }
 
-<<<<<<< HEAD
-func (c *consumer) parseDMLFilePath(ctx context.Context, path string) error {
-	var dmlkey cloudstorage.DmlPathKey
-	dispatcherID, err := dmlkey.ParseIndexFilePath(
-		putil.GetOrZero(c.replicationCfg.Sink.DateSeparator),
-		path,
-	)
-	if err != nil {
-		return errors.Trace(err)
-=======
 func (c *consumer) parseDMLIndexFile(ctx context.Context, path string, dmlkey cloudstorage.DMLPathKey) {
-	if c.globalCheckpointTs > 0 && dmlkey.TableVersion > c.globalCheckpointTs {
-		log.Debug("skip dml index file by checkpoint",
-			zap.String("path", path),
-			zap.Uint64("tableVersion", dmlkey.TableVersion),
-			zap.Uint64("checkpointTs", c.globalCheckpointTs))
-		return
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
-	}
 	data, err := c.externalStorage.ReadFile(ctx, path)
 	if err != nil {
 		log.Panic("read dml index file failed",
@@ -448,20 +408,7 @@ func (c *consumer) parseDMLIndexFile(ctx context.Context, path string, dmlkey cl
 
 func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) {
 	var schemaKey cloudstorage.SchemaPathKey
-<<<<<<< HEAD
-	checksumInFile, err := schemaKey.ParseSchemaFilePath(path)
-	if err != nil {
-		return errors.Trace(err)
-=======
 	schemaKey.Parse(path)
-	if c.globalCheckpointTs > 0 && schemaKey.TableVersion > c.globalCheckpointTs {
-		log.Debug("skip schema file by checkpoint",
-			zap.String("path", path),
-			zap.Uint64("tableVersion", schemaKey.TableVersion),
-			zap.Uint64("checkpointTs", c.globalCheckpointTs))
-		return
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
-	}
 	key := schemaKey.GetKey()
 	if schemaFiles, ok := c.schemaFileMap[key]; ok {
 		if _, ok := schemaFiles[schemaKey.TableVersion]; ok {
@@ -539,44 +486,6 @@ func (c *consumer) mustGetSchemaFile(key cloudstorage.SchemaPathKey) cloudstorag
 	return *schemaFile
 }
 
-<<<<<<< HEAD
-=======
-func getRenameTableOldTableKey(schemaFile cloudstorage.SchemaFile) (string, bool) {
-	if schemaFile.Type != byte(timodel.ActionRenameTable) {
-		return "", false
-	}
-	schemaName := schemaFile.Schema
-	stmt, err := parser.New().ParseOneStmt(schemaFile.Query, "", "")
-	if err != nil {
-		log.Panic("parse statement failed", zap.Any("DDL", schemaFile.Query), zap.Error(err))
-	}
-	// The query in job maybe "RENAME TABLE table1 to table2"
-	renameStmt, ok := stmt.(*ast.RenameTableStmt)
-	if !ok || len(renameStmt.TableToTables) == 0 {
-		log.Panic("invalid rename table statement", zap.Any("DDL", schemaFile.Query))
-	}
-	oldTable := renameStmt.TableToTables[0].OldTable
-	if oldTable.Schema.O != "" {
-		schemaName = oldTable.Schema.O
-	}
-	tableName := oldTable.Name.O
-	return commonType.QuoteSchema(schemaName, tableName), true
-}
-
-func (c *consumer) updateTableDDLWatermark(schemaFile cloudstorage.SchemaFile) string {
-	key := commonType.QuoteSchema(schemaFile.Schema, schemaFile.Table)
-	if c.tableDDLWatermark[key] < schemaFile.TableVersion {
-		c.tableDDLWatermark[key] = schemaFile.TableVersion
-	}
-	if oldTableKey, ok := getRenameTableOldTableKey(schemaFile); ok {
-		if c.tableDDLWatermark[oldTableKey] < schemaFile.TableVersion {
-			c.tableDDLWatermark[oldTableKey] = schemaFile.TableVersion
-		}
-	}
-	return key
-}
-
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
 func (c *consumer) handleNewFiles(
 	ctx context.Context,
 	dmlFileMap map[cloudstorage.DMLPathKey]fileIndexRange,
@@ -634,13 +543,8 @@ func (c *consumer) handleNewFiles(
 			if err := c.sink.WriteBlockEvent(ddlEvent); err != nil {
 				return errors.Trace(err)
 			}
-<<<<<<< HEAD
 			c.tableDDLWatermark[tableKey] = key.TableVersion
-			// TODO: need to cleanup tableDefMap in the future.
-=======
-			watermarkKey := c.updateTableDDLWatermark(schemaFile)
 			// TODO: need to cleanup schemaFileMap in the future.
->>>>>>> 92cdc7c3a (cloudstorage,kafka: update sarama and share storage helpers (#5483))
 			log.Info("execute ddl event successfully",
 				zap.String("query", schemaFile.Query),
 				zap.String("schema", key.Schema), zap.String("table", key.Table),
