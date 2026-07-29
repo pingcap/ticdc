@@ -62,13 +62,16 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 					return errors.Trace(err)
 				}
 
-				err = w.sequenceExecute(dmls, tx, writeTimeout)
+				affectedRows, err := w.sequenceExecute(dmls, tx, writeTimeout)
 				if err != nil {
 					return err
 				}
 
 				if err = tx.Commit(); err != nil {
 					return err
+				}
+				for i, rows := range affectedRows {
+					w.statistics.RecordRowsAffected(rows, dmls.rowTypes[i])
 				}
 
 				log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount), zap.Int("writerID", w.id))
@@ -128,7 +131,8 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 // sequenceExecute runs each SQL sequentially inside a transaction.
 func (w *Writer) sequenceExecute(
 	dmls *preparedDMLs, tx *sql.Tx, writeTimeout time.Duration,
-) error {
+) (map[int]int64, error) {
+	affectedRows := make(map[int]int64, len(dmls.sqls))
 	for i, query := range dmls.sqls {
 		args := dmls.values[i]
 		log.Debug("exec row", zap.String("sql", query), zap.String("args", util.RedactArgs(args)), zap.Int("writerID", w.id))
@@ -167,16 +171,16 @@ func (w *Writer) sequenceExecute(
 				}
 			}
 			cancelFunc()
-			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(execError, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", query, util.RedactArgs(args))))
+			return nil, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(execError, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", query, util.RedactArgs(args))))
 		}
-		if rowsAffected, err := res.RowsAffected(); err != nil {
+		if rows, err := res.RowsAffected(); err != nil {
 			log.Warn("get rows affected rows failed", zap.Error(err))
 		} else {
-			w.statistics.RecordRowsAffected(rowsAffected, dmls.rowTypes[i])
+			affectedRows[i] = rows
 		}
 		cancelFunc()
 	}
-	return nil
+	return affectedRows, nil
 }
 
 // multiStmtExecute runs SQLs using the multi-statements protocol with an implicit transaction.

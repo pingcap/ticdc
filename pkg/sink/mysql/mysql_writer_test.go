@@ -38,6 +38,7 @@ import (
 	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -195,6 +196,39 @@ func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
+}
+
+func TestAffectedRowsRecordedAfterCommit(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.CachePrepStmts = false
+	writer.cfg.MultiStmtEnable = false
+	writer.statistics.Close()
+
+	changefeedID := common.NewChangefeedID4Test("test", t.Name())
+	writer.statistics = metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+	counter := metrics.ExecDMLEventRowsAffectedCounter.WithLabelValues(
+		changefeedID.Keyspace(), changefeedID.Name(), "actual", common.RowTypeInsert.String())
+
+	dmls := &preparedDMLs{
+		sqls:     []string{"INSERT INTO t VALUES (?)"},
+		values:   [][]interface{}{{1}},
+		rowTypes: []common.RowType{common.RowTypeInsert},
+		rowCount: 1,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO t VALUES (?)").WithArgs(1).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
+	require.Error(t, writer.execDMLWithMaxRetries(dmls))
+	require.Zero(t, testutil.ToFloat64(counter))
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO t VALUES (?)").WithArgs(1).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	require.NoError(t, writer.execDMLWithMaxRetries(dmls))
+	require.Equal(t, float64(1), testutil.ToFloat64(counter))
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestMysqlWriter_FlushMultiDML(t *testing.T) {
