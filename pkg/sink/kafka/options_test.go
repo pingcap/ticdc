@@ -23,12 +23,8 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-<<<<<<< HEAD
 	"github.com/aws/aws-sdk-go/aws"
-=======
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/golang/mock/gomock"
->>>>>>> aa0083b2e (kafka, storage: optimize unit tests (#5368))
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
