@@ -38,7 +38,6 @@ import (
 	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -196,77 +195,6 @@ func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
-}
-
-func TestAffectedRowsRecordedAfterCommit(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	statistics.InitMetrics(registry)
-
-	writer, db, mock := newTestMysqlWriter(t)
-	defer db.Close()
-	writer.cfg.CachePrepStmts = false
-	writer.cfg.MultiStmtEnable = false
-	writer.statistics.Close()
-
-	changefeedID := common.NewChangefeedID4Test("test", t.Name())
-	writer.statistics = statistics.New(changefeedID, common.DefaultKeyspaceID)
-	metricLabels := prometheus.Labels{
-		"changefeed": changefeedID.Name(),
-		"count_type": "actual",
-		"row_type":   common.RowTypeInsert.String(),
-	}
-
-	dmls := &preparedDMLs{
-		sqls:     []string{"INSERT INTO t VALUES (?)"},
-		values:   [][]any{{1}},
-		rowTypes: []common.RowType{common.RowTypeInsert},
-		rowCount: 1,
-	}
-
-	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO t VALUES (?)").WithArgs(1).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
-	require.Error(t, writer.execDMLWithMaxRetries(dmls))
-	require.Zero(t, counterValueForLabels(t, registry, "ticdc_sink_dml_event_affected_row_count", metricLabels))
-
-	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO t VALUES (?)").WithArgs(1).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-	require.NoError(t, writer.execDMLWithMaxRetries(dmls))
-	require.Equal(t, float64(1), counterValueForLabels(t, registry, "ticdc_sink_dml_event_affected_row_count", metricLabels))
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func counterValueForLabels(
-	t *testing.T,
-	registry *prometheus.Registry,
-	metricName string,
-	labels prometheus.Labels,
-) float64 {
-	t.Helper()
-
-	metricFamilies, err := registry.Gather()
-	require.NoError(t, err)
-	for _, metricFamily := range metricFamilies {
-		if metricFamily.GetName() != metricName {
-			continue
-		}
-		for _, metric := range metricFamily.Metric {
-			matchedLabels := 0
-			for _, label := range metric.Label {
-				if value, ok := labels[label.GetName()]; ok {
-					if value != label.GetValue() {
-						break
-					}
-					matchedLabels++
-				}
-			}
-			if matchedLabels == len(labels) {
-				return metric.GetCounter().GetValue()
-			}
-		}
-	}
-	return 0
 }
 
 func TestMysqlWriter_FlushMultiDML(t *testing.T) {

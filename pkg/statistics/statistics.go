@@ -15,6 +15,7 @@ package statistics
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,7 +28,7 @@ import (
 func New(changefeed common.ChangeFeedID, keyspaceID uint32) *Statistics {
 	statistics := &Statistics{
 		changefeedID:    changefeed,
-		keyspaceID:      formatKeyspaceID(keyspaceID),
+		keyspaceID:      strconv.FormatUint(uint64(keyspaceID), 10),
 		ddlTypes:        sync.Map{},
 		rowsAffectedMap: sync.Map{},
 	}

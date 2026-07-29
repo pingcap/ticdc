@@ -28,9 +28,8 @@ var (
 
 // mockProducer is a mock pulsar producer
 type mockProducer struct {
-	mu         sync.Mutex
-	events     map[string][]*pulsar.ProducerMessage
-	callbackCh chan func()
+	mu     sync.Mutex
+	events map[string][]*pulsar.ProducerMessage
 }
 
 func newMockDDLProducer() ddlProducer {
@@ -81,9 +80,7 @@ func (p *mockProducer) asyncSendMessage(_ context.Context, topic string, message
 		Key:     message.GetPartitionKey(),
 	}
 	p.events[topic] = append(p.events[topic], data)
-	if p.callbackCh != nil {
-		p.callbackCh <- message.Callback
-	} else if message.Callback != nil {
+	if message.Callback != nil {
 		message.Callback()
 	}
 	return nil

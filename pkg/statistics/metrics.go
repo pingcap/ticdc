@@ -15,8 +15,6 @@
 package statistics
 
 import (
-	"strconv"
-
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -97,8 +95,4 @@ func getKeyspaceLabel() string {
 		return "keyspace_name"
 	}
 	return "namespace"
-}
-
-func formatKeyspaceID(keyspaceID uint32) string {
-	return strconv.FormatUint(uint64(keyspaceID), 10)
 }
