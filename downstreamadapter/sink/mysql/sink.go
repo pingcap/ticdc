@@ -46,7 +46,10 @@ type Sink struct {
 	dmlWriter []*mysql.Writer
 	ddlWriter *mysql.Writer
 
-	db         *sql.DB
+	// dmlDB and controlDB are the DB pools this sink is responsible for closing.
+	// Compatibility callers built through NewMySQLSink use one shared pool.
+	dmlDB      *sql.DB
+	controlDB  *sql.DB
 	statistics *metrics.Statistics
 
 	conflictDetector *causality.ConflictDetector
@@ -59,19 +62,21 @@ type Sink struct {
 	bdrMode    bool
 }
 
-// Verify is used to verify the sink uri and config is valid
-// Currently, we verify by create a real mysql connection.
+// Verify is used to verify the sink URI and config are valid.
+// It creates the same DML and control DB pools as New so verification covers
+// connection availability for both data and control-plane paths.
 func Verify(
 	ctx context.Context,
 	uri *url.URL,
 	config *config.ChangefeedConfig,
 ) error {
 	testID := common.NewChangefeedID4Test("test", "mysql_create_sink_test")
-	_, db, err := mysql.NewMysqlConfigAndDB(ctx, testID, uri, config)
+	_, dmlDB, controlDB, err := mysql.NewMysqlConfigAndDBs(ctx, testID, uri, config)
 	if err != nil {
 		return err
 	}
-	_ = db.Close()
+	_ = dmlDB.Close()
+	_ = controlDB.Close()
 	return nil
 }
 
@@ -81,11 +86,23 @@ func New(
 	config *config.ChangefeedConfig,
 	sinkURI *url.URL,
 ) (*Sink, error) {
-	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
+	cfg, dmlDB, controlDB, err := mysql.NewMysqlConfigAndDBs(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
 	}
-	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode), nil
+
+	// Expose whether the MySQL-compatible downstream is confirmed to be TiDB, so
+	// dashboards can display "tidb" when we can prove it. Otherwise, the
+	// scheme-based label remains "mysql/tidb".
+	keyspace := changefeedID.Keyspace()
+	name := changefeedID.Name()
+	if cfg.IsTiDB {
+		metrics.ChangefeedDownstreamIsTiDBGauge.WithLabelValues(keyspace, name).Set(1)
+	} else {
+		metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
+	}
+
+	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, config.BDRMode), nil
 }
 
 func NewMySQLSink(
@@ -95,10 +112,25 @@ func NewMySQLSink(
 	db *sql.DB,
 	bdrMode bool,
 ) *Sink {
+	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, db, db, bdrMode)
+}
+
+// newMySQLSinkWithControlDB creates a MySQL sink with separate pools for DML and
+// control-plane operations. The control pool is used by DDL, DDL-ts, syncpoint,
+// and other metadata paths so they do not wait behind long-lived DML sessions.
+func newMySQLSinkWithControlDB(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	cfg *mysql.Config,
+	dmlDB *sql.DB,
+	controlDB *sql.DB,
+	bdrMode bool,
+) *Sink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
 	result := &Sink{
 		changefeedID: changefeedID,
-		db:           db,
+		dmlDB:        dmlDB,
+		controlDB:    controlDB,
 		dmlWriter:    make([]*mysql.Writer, cfg.WorkerCount),
 		statistics:   stat,
 		conflictDetector: causality.New(defaultConflictDetectorSlots,
@@ -114,9 +146,9 @@ func NewMySQLSink(
 		bdrMode:    bdrMode,
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
-		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat)
+		result.dmlWriter[i] = mysql.NewWriter(ctx, i, dmlDB, cfg, changefeedID, stat)
 	}
-	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), db, cfg, changefeedID, stat)
+	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), controlDB, cfg, changefeedID, stat)
 	return result
 }
 
@@ -333,12 +365,22 @@ func (s *Sink) Close() {
 		w.Close()
 	}
 
-	if err := s.db.Close(); err != nil {
-		log.Warn("close mysql sink db meet error",
-			zap.Any("changefeed", s.changefeedID.String()),
-			zap.Error(err))
+	s.closeDBPool("dml", s.dmlDB)
+	if s.controlDB != s.dmlDB {
+		s.closeDBPool("control", s.controlDB)
 	}
 	s.statistics.Close()
+
+	metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+}
+
+func (s *Sink) closeDBPool(role string, db *sql.DB) {
+	if err := db.Close(); err != nil {
+		log.Warn("failed to close mysql sink db pool",
+			zap.String("changefeed", s.changefeedID.String()),
+			zap.String("dbRole", role),
+			zap.Error(err))
+	}
 }
 
 // CleanupRemovedChangefeed removes ddl_ts state for a deleted changefeed.

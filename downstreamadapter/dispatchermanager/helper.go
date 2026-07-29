@@ -422,6 +422,14 @@ func createDispatcherByInfo(
 	if len(redoInfos) > 0 {
 		err := dispatcherManager.newRedoDispatchers(redoInfos, false)
 		if err != nil {
+			if IsWritePathClosedError(err) {
+				log.Info("dispatcher manager write path closed, keep add operators for redo dispatchers",
+					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+					zap.Int("count", len(redoInfos)),
+					zap.Error(err),
+				)
+				return
+			}
 			dispatcherManager.handleError(context.Background(), err)
 		}
 		deleteCreatedOperators(dispatcherManager, redoInfos, dispatcherManager.redoDispatcherMap, "redo dispatcher")
@@ -429,6 +437,14 @@ func createDispatcherByInfo(
 	if len(infos) > 0 {
 		err := dispatcherManager.newEventDispatchers(infos, false)
 		if err != nil {
+			if IsWritePathClosedError(err) {
+				log.Info("dispatcher manager write path closed, keep add operators",
+					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+					zap.Int("count", len(infos)),
+					zap.Error(err),
+				)
+				return
+			}
 			dispatcherManager.handleError(context.Background(), err)
 		}
 		deleteCreatedOperators(dispatcherManager, infos, dispatcherManager.dispatcherMap, "dispatcher")
@@ -640,7 +656,7 @@ func (h *CheckpointTsMessageHandler) Handle(dispatcherManager *DispatcherManager
 	}
 	if dispatcherManager.GetTableTriggerEventDispatcher() != nil {
 		checkpointTsMessage := messages[0]
-		dispatcherManager.sink.AddCheckpointTs(checkpointTsMessage.CheckpointTs)
+		dispatcherManager.addCheckpointTs(checkpointTsMessage.CheckpointTs)
 	}
 	return false
 }

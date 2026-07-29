@@ -167,6 +167,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	return controller
 }
 
+// SetErrorReporter configures the callback used to report routing errors.
 func (c *Controller) SetErrorReporter(reportError func(error)) {
 	c.reportError = reportError
 	if c.routeAdmin != nil {
@@ -188,8 +189,12 @@ func (c *Controller) currentMaintainerEpoch() uint64 {
 	return c.maintainerEpoch.Load()
 }
 
-// HandleStatus handle the status report from the node.
+// HandleStatus handles the status report from the node.
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
+	c.handleStatus(from, statusList, true)
+}
+
+func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus, allowSelfHealing bool) {
 	// HandleStatus reconciles runtime dispatcher reports with maintainer-side state.
 	//
 	// In the steady state, spanController (desired tasks), operatorController (in-flight scheduling),
@@ -201,6 +206,10 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 	// The rules below make the system converge:
 	//   1) Orphan Working dispatcher without an operator => actively remove it to avoid leaks.
 	//   2) Non-working dispatcher without an operator => mark the span absent so scheduler can recreate it.
+	//
+	// During maintainer removal we still need status bookkeeping so close/remove can observe terminal
+	// states, but we must disable the self-healing branches. Otherwise a late Stopped/Working heartbeat
+	// can recreate dispatchers for a changefeed that is already shutting down.
 	for _, status := range statusList {
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 		operatorController := c.getOperatorController(status.Mode)
@@ -209,6 +218,9 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 		operatorController.UpdateOperatorStatus(dispatcherID, from, status)
 		stm := spanController.GetTaskByID(dispatcherID)
 		if stm == nil {
+			if !allowSelfHealing {
+				continue
+			}
 			// If maintainer doesn't know this dispatcherID, most statuses are late/outdated and can be ignored.
 			// We only need to act when the runtime says the dispatcher is Working, because that implies there's
 			// still an active dispatcher consuming resources and potentially producing output.
@@ -279,6 +291,15 @@ func (c *Controller) RemoveNode(id node.ID) {
 		c.redoOperatorController.OnNodeRemoved(id)
 	}
 	c.operatorController.OnNodeRemoved(id)
+}
+
+// EnterRemovingMode freezes normal scheduling on the old maintainer while keeping the
+// DDL trigger dispatcher close path alive.
+func (c *Controller) EnterRemovingMode(allowedDispatcherIDs ...common.DispatcherID) {
+	c.operatorController.QuiesceExcept(allowedDispatcherIDs...)
+	if c.redoOperatorController != nil {
+		c.redoOperatorController.QuiesceExcept(allowedDispatcherIDs...)
+	}
 }
 
 func (c *Controller) GetMinRedoCheckpointTs(minCheckpointTs uint64) uint64 {
