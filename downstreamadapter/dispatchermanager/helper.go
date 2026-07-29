@@ -803,11 +803,34 @@ func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherMana
 	}
 
 	mergeDispatcherRequest := reqs[0]
+<<<<<<< HEAD
+=======
+	dispatcherManager.MaintainerFenceMu.Lock()
+	defer dispatcherManager.MaintainerFenceMu.Unlock()
+	if !isMaintainerControlMessageAllowed(
+		dispatcherManager,
+		"drop stale merge dispatcher request",
+		"requestMaintainerEpoch",
+		mergeDispatcherRequest.ChangefeedID,
+		mergeDispatcherRequest.From,
+		mergeDispatcherRequest.MaintainerEpoch,
+	) {
+		return false
+	}
+	dispatcherManager.TrackMergeOperator(mergeDispatcherRequest.MergeDispatcherRequest)
+>>>>>>> 69ab69a15 (fix(*): merge operator inconsistent after maintainer move (#3769))
 	dispatcherIDs := make([]common.DispatcherID, 0, len(mergeDispatcherRequest.DispatcherIDs))
 	for _, id := range mergeDispatcherRequest.DispatcherIDs {
 		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherIDFromPB(id))
 	}
-	dispatcherManager.MergeDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID), mergeDispatcherRequest.Mode)
+	task := dispatcherManager.MergeDispatcher(
+		dispatcherIDs,
+		common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID),
+		mergeDispatcherRequest.Mode,
+	)
+	if task == nil {
+		dispatcherManager.MaybeCleanupMergeOperator(mergeDispatcherRequest.MergeDispatcherRequest)
+	}
 	return false
 }
 

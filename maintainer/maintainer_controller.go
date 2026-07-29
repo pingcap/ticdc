@@ -14,6 +14,7 @@
 package maintainer
 
 import (
+	"bytes"
 	"sync"
 	"time"
 
@@ -232,7 +233,83 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 			continue
 		}
 		spanController.UpdateStatus(stm, status)
+<<<<<<< HEAD
+=======
+
+		if !allowSelfHealing {
+			continue
+		}
+
+		// Fallback: dispatcher becomes non-working without an operator.
+		//
+		// In normal scheduling flow, a dispatcher should transition to Stopped/Removed as part of a maintainer
+		// operator (Remove/Move/Split...). However, after maintainer failover we can lose operatorController state
+		// while dispatcher managers keep executing the already-issued requests.
+		//
+		// A real example is a "remove request in transit" during bootstrap:
+		// - Old maintainer sends a Remove (e.g. the remove-origin phase of Move), but the request hasn't reached
+		//   dispatcher manager yet.
+		// - New maintainer bootstraps from dispatcher manager snapshots and sees the dispatcher as Working, with
+		//   no in-flight operator reported in bootstrap response.
+		// - After bootstrap, the in-transit Remove arrives, the dispatcher is removed, and the new maintainer
+		//   observes a terminal status without a corresponding operator.
+		//
+		// In these cases we'd observe a non-working status but have no operator to drive the follow-up
+		// rescheduling, so we mark the span absent to let the scheduler recreate it.
+		//
+		// Safety against message reordering/resend:
+		// - We only reach here when stm != nil and stm.GetNodeID() == from (checked above). If the span was already
+		//   rebound to a different node, we skip it, so late statuses from the old node won't trigger rescheduling.
+		// - MarkSpanAbsent is idempotent and only affects the scheduler state, so even if we get duplicate terminal
+		//   statuses, the worst case is an extra no-op absent mark.
+		if status.ComponentStatus == heartbeatpb.ComponentState_Stopped ||
+			status.ComponentStatus == heartbeatpb.ComponentState_Removed {
+			if op := operatorController.GetOperator(dispatcherID); op == nil {
+				if c.removeTerminalSpanCoveredByMergedSpan(spanController, stm) {
+					continue
+				}
+				log.Warn("dispatcher becomes non-working without operator, mark span absent for rescheduling",
+					zap.String("changefeed", c.changefeedID.Name()),
+					zap.String("from", from.String()),
+					zap.String("dispatcherID", dispatcherID.String()),
+					zap.Any("status", status))
+				spanController.MarkSpanAbsent(stm)
+			}
+		}
+>>>>>>> 69ab69a15 (fix(*): merge operator inconsistent after maintainer move (#3769))
 	}
+}
+
+func (c *Controller) removeTerminalSpanCoveredByMergedSpan(
+	spanController *span.Controller,
+	stm *replica.SpanReplication,
+) bool {
+	if stm == nil || stm.Span == nil {
+		return false
+	}
+	for _, candidate := range spanController.GetTasksByTableID(stm.Span.TableID) {
+		if candidate == nil || candidate == stm || candidate.ID == stm.ID || candidate.Span == nil {
+			continue
+		}
+		if candidate.GetMode() != stm.GetMode() || !spanController.IsReplicating(candidate) {
+			continue
+		}
+		if bytes.Compare(candidate.Span.StartKey, stm.Span.StartKey) <= 0 &&
+			bytes.Compare(candidate.Span.EndKey, stm.Span.EndKey) >= 0 {
+			// A successful merge can leave old source dispatchers reporting terminal statuses after
+			// maintainer failover. When the merged span already covers the source range, the source
+			// is obsolete desired state and must be removed instead of being marked absent.
+			log.Info("remove terminal span covered by merged span",
+				zap.String("changefeed", c.changefeedID.Name()),
+				zap.String("dispatcherID", stm.ID.String()),
+				zap.String("coveringDispatcherID", candidate.ID.String()),
+				zap.String("span", common.FormatTableSpan(stm.Span)),
+				zap.String("coveringSpan", common.FormatTableSpan(candidate.Span)))
+			spanController.RemoveReplicatingSpan(stm)
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {
