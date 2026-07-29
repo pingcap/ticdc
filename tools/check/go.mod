@@ -1,10 +1,6 @@
 module github.com/pingcap/tidb-cdc/_tools
 
-<<<<<<< HEAD
-go 1.25.10
-=======
 go 1.25.12
->>>>>>> 03f77677e (*: bump Go version to 1.25.12 (#5798))
 
 require (
 	github.com/AlekSi/gocov-xml v1.1.0

@@ -97,18 +97,6 @@ TiCDC can be built on the following operating systems:
 * Linux
 * MacOS
 
-<<<<<<< HEAD
-Install GoLang 1.25.10
-
-```bash
-# Linux
-wget https://go.dev/dl/go1.25.10.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.25.10.linux-amd64.tar.gz
-
-# MacOS
-curl -O https://go.dev/dl/go1.25.10.darwin-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.25.10.darwin-amd64.tar.gz
-=======
 Install GoLang 1.25.12
 
 ```bash
@@ -119,7 +107,6 @@ sudo tar -C /usr/local -xzf go1.25.12.linux-amd64.tar.gz
 # MacOS
 curl -O https://go.dev/dl/go1.25.12.darwin-amd64.tar.gz
 sudo tar -C /usr/local -xzf go1.25.12.darwin-amd64.tar.gz
->>>>>>> 03f77677e (*: bump Go version to 1.25.12 (#5798))
 
 
 export PATH=$PATH:/usr/local/go/bin
