@@ -38,6 +38,8 @@ const (
 	defaultPartitionNum = 3
 	// defaultMaxRetry is the default retry budget for Kafka producers.
 	defaultMaxRetry = 5
+	// defaultTimeout is the default timeout for Kafka connections.
+	defaultTimeout = 10 * time.Second
 )
 
 const (
@@ -186,9 +188,9 @@ func NewOptions() *options {
 		InsecureSkipVerify: false,
 		SASL:               &security.SASL{},
 		AutoCreate:         true,
-		DialTimeout:        10 * time.Second,
-		WriteTimeout:       10 * time.Second,
-		ReadTimeout:        10 * time.Second,
+		DialTimeout:        defaultTimeout,
+		WriteTimeout:       defaultTimeout,
+		ReadTimeout:        defaultTimeout,
 	}
 }
 
