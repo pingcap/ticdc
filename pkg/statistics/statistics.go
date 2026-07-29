@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package statistics
 
 import (
 	"fmt"
@@ -20,26 +20,27 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// NewStatistics creates a statistics
-func NewStatistics(changefeed common.ChangeFeedID, keyspaceID uint32) *Statistics {
+// New creates a Statistics.
+func New(changefeed common.ChangeFeedID, keyspaceID uint32) *Statistics {
 	statistics := &Statistics{
 		changefeedID:    changefeed,
-		keyspaceID:      FormatKeyspaceID(keyspaceID),
+		keyspaceID:      metrics.FormatKeyspaceID(keyspaceID),
 		ddlTypes:        sync.Map{},
 		rowsAffectedMap: sync.Map{},
 	}
 
 	keyspace := changefeed.Keyspace()
 	changefeedID := changefeed.Name()
-	statistics.metricExecDDLHis = ExecDDLHistogram.WithLabelValues(keyspace, changefeedID)
-	statistics.metricExecDDLRunningCnt = ExecDDLRunningGauge.WithLabelValues(keyspace, changefeedID)
-	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(keyspace, changefeedID, statistics.keyspaceID)
-	statistics.metricTotalWriteBytesCnt = TotalWriteBytesCounter.WithLabelValues(keyspace, changefeedID)
-	statistics.metricExecErrCntForDDL = ExecutionErrorCounter.WithLabelValues(keyspace, changefeedID, "ddl")
-	statistics.metricExecErrCntForDML = ExecutionErrorCounter.WithLabelValues(keyspace, changefeedID, "dml")
+	statistics.metricExecDDLHis = metrics.ExecDDLHistogram.WithLabelValues(keyspace, changefeedID)
+	statistics.metricExecDDLRunningCnt = metrics.ExecDDLRunningGauge.WithLabelValues(keyspace, changefeedID)
+	statistics.metricExecBatchHis = metrics.ExecBatchHistogram.WithLabelValues(keyspace, changefeedID, statistics.keyspaceID)
+	statistics.metricTotalWriteBytesCnt = metrics.TotalWriteBytesCounter.WithLabelValues(keyspace, changefeedID)
+	statistics.metricExecErrCntForDDL = metrics.ExecutionErrorCounter.WithLabelValues(keyspace, changefeedID, "ddl")
+	statistics.metricExecErrCntForDML = metrics.ExecutionErrorCounter.WithLabelValues(keyspace, changefeedID, "dml")
 
 	return statistics
 }
@@ -94,7 +95,7 @@ func (b *Statistics) RecordDDLExecution(executor func() (string, error)) error {
 		b.metricExecErrCntForDDL.Inc()
 		return err
 	}
-	metricExecDDLCounter := ExecDDLCounter.WithLabelValues(
+	metricExecDDLCounter := metrics.ExecDDLCounter.WithLabelValues(
 		b.changefeedID.Keyspace(), b.changefeedID.Name(), ddlType)
 	metricExecDDLCounter.Inc()
 	b.ddlTypes.Store(ddlType, struct{}{})
@@ -119,7 +120,7 @@ func (b *Statistics) getRowsAffected(countType, rowType string) prometheus.Count
 	if !loaded {
 		keyspace := b.changefeedID.Keyspace()
 		changefeedID := b.changefeedID.Name()
-		counter := ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, countType, rowType)
+		counter := metrics.ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, countType, rowType)
 		b.rowsAffectedMap.Store(key, counter)
 		return counter
 	}
@@ -130,22 +131,22 @@ func (b *Statistics) getRowsAffected(countType, rowType string) prometheus.Count
 func (b *Statistics) Close() {
 	keyspace := b.changefeedID.Keyspace()
 	changefeedID := b.changefeedID.Name()
-	ExecDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
-	ExecDDLRunningGauge.DeleteLabelValues(keyspace, changefeedID)
-	ExecBatchHistogram.DeleteLabelValues(keyspace, changefeedID, b.keyspaceID)
-	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "ddl")
-	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "dml")
+	metrics.ExecDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
+	metrics.ExecDDLRunningGauge.DeleteLabelValues(keyspace, changefeedID)
+	metrics.ExecBatchHistogram.DeleteLabelValues(keyspace, changefeedID, b.keyspaceID)
+	metrics.ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "ddl")
+	metrics.ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "dml")
 	b.ddlTypes.Range(func(key, value any) bool {
 		ddlType := key.(string)
-		ExecDDLCounter.DeleteLabelValues(keyspace, changefeedID, ddlType)
+		metrics.ExecDDLCounter.DeleteLabelValues(keyspace, changefeedID, ddlType)
 		return true
 	})
 	b.rowsAffectedMap.Range(func(key, value any) bool {
 		countTypeAndRowType := key.(string)
 		splitTypes := strings.Split(countTypeAndRowType, "-")
 		countType, rowType := splitTypes[0], splitTypes[1]
-		ExecDMLEventRowsAffectedCounter.DeleteLabelValues(keyspace, changefeedID, countType, rowType)
+		metrics.ExecDMLEventRowsAffectedCounter.DeleteLabelValues(keyspace, changefeedID, countType, rowType)
 		return true
 	})
-	TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)
+	metrics.TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)
 }

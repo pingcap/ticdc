@@ -19,7 +19,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/zap"
 )
@@ -28,13 +28,13 @@ import (
 // Including DDL and DML.
 type Sink struct {
 	eventCh    *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
-	statistics *metrics.Statistics
+	statistics *statistics.Statistics
 }
 
 func New(changefeedID common.ChangeFeedID, keyspaceID uint32) (*Sink, error) {
 	return &Sink{
 		eventCh:    chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
-		statistics: metrics.NewStatistics(changefeedID, keyspaceID),
+		statistics: statistics.New(changefeedID, keyspaceID),
 	}, nil
 }
 

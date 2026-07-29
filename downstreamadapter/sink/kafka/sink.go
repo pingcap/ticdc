@@ -31,6 +31,7 @@ import (
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
@@ -51,7 +52,7 @@ type sink struct {
 	metricsCollector kafka.MetricsCollector
 
 	comp       components
-	statistics *metrics.Statistics
+	statistics *statistics.Statistics
 
 	protocol      config.Protocol
 	partitionRule helper.DDLDispatchRule
@@ -170,7 +171,7 @@ func newWithComponents(
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
-	statistics := metrics.NewStatistics(changefeedID, keyspaceID)
+	statistics := statistics.New(changefeedID, keyspaceID)
 	var (
 		err           error
 		asyncProducer kafka.AsyncProducer

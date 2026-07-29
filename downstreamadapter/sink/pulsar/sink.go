@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -51,7 +52,7 @@ type sink struct {
 	ddlProducer ddlProducer
 
 	comp       component
-	statistics *metrics.Statistics
+	statistics *statistics.Statistics
 
 	protocol      config.Protocol
 	partitionRule helper.DDLDispatchRule
@@ -132,7 +133,7 @@ func newWithComponent(
 	var (
 		dmlProducer dmlProducer
 		ddlProducer ddlProducer
-		statistics  *metrics.Statistics
+		stat        *statistics.Statistics
 	)
 	defer func() {
 		if err != nil {
@@ -142,15 +143,15 @@ func newWithComponent(
 			if dmlProducer != nil {
 				dmlProducer.close()
 			}
-			if statistics != nil {
-				statistics.Close()
+			if stat != nil {
+				stat.Close()
 			}
 			comp.close()
 		}
 	}()
 
 	failpointCh := make(chan error, 1)
-	statistics = metrics.NewStatistics(changefeedID, keyspaceID)
+	stat = statistics.New(changefeedID, keyspaceID)
 	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
 	if err != nil {
 		return nil, err
@@ -173,7 +174,7 @@ func newWithComponent(
 		protocol:      protocol,
 		partitionRule: helper.GetDDLDispatchRule(protocol),
 		comp:          comp,
-		statistics:    statistics,
+		statistics:    stat,
 		isNormal:      atomic.NewBool(true),
 		ctx:           ctx,
 	}, nil
