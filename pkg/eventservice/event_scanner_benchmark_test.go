@@ -194,7 +194,7 @@ func BenchmarkEventScannerIgnoreDelete(b *testing.B) {
 			dispatcherID,
 			tableID,
 		)
-		changefeedStatus := newChangefeedStatus(disInfo.GetChangefeedID())
+		changefeedStatus := newChangefeedStatusForTest(b, disInfo)
 		changefeedStatus.filter = changefeedFilter
 		disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
 		makeDispatcherReady(disp)
