@@ -294,6 +294,9 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
+		if a <= 0 {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("dial-timeout must be greater than zero")
+		}
 		o.DialTimeout = a
 	}
 
@@ -302,6 +305,9 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
+		if a <= 0 {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("write-timeout must be greater than zero")
+		}
 		o.WriteTimeout = a
 	}
 
@@ -309,6 +315,9 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		a, err := time.ParseDuration(*urlParameter.ReadTimeout)
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		}
+		if a <= 0 {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("read-timeout must be greater than zero")
 		}
 		o.ReadTimeout = a
 	}

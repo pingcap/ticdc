@@ -216,11 +216,15 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 			)
 			return err
 		}
+		detail, ok := meta[topicName]
+		if !ok {
+			return errors.ErrKafkaAdminAPI.GenWithStackByArgs("describe-topic", topicName)
+		}
 		log.Info("topic found",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("topic", topicName),
-			zap.Int32("partitionNumber", meta[topicName].NumPartitions),
+			zap.Int32("partitionNumber", detail.NumPartitions),
 			zap.Duration("duration", time.Since(start)))
 		return nil
 	}, retry.WithBackoffBaseDelay(500),

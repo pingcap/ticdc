@@ -426,6 +426,30 @@ func TestTimeout(t *testing.T) {
 	require.Equal(t, 2*time.Minute, options.WriteTimeout)
 }
 
+func TestApplyRejectsNonPositiveTimeout(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
+	for _, parameter := range []string{"dial-timeout", "read-timeout", "write-timeout"} {
+		for _, value := range []string{"0s", "-1s"} {
+			t.Run(parameter+"="+value, func(t *testing.T) {
+				t.Parallel()
+
+				sinkURI, err := url.Parse(
+					"kafka://127.0.0.1:9092/kafka-test?" + parameter + "=" + value)
+				require.NoError(t, err)
+
+				err = NewOptions().Apply(
+					changefeedID, sinkURI, config.GetDefaultReplicaConfig().Sink)
+				require.ErrorContains(t, err, parameter+" must be greater than zero")
+				errCode, ok := errors.RFCCode(err)
+				require.True(t, ok)
+				require.Equal(t, errors.ErrKafkaInvalidConfig.RFCCode(), errCode)
+			})
+		}
+	}
+}
+
 func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *testing.T) {
 	tests := []struct {
 		name                      string
