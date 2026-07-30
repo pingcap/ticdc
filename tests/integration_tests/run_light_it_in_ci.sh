@@ -38,7 +38,7 @@ mysql_groups=(
 	# G02
 	'new_ci_collation safe_mode savepoint fail_over_ddl_C unsplittable_tables'
 	# G03
-	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D ddl_default_current_timestamp'
+	'capture_suicide_while_balance_table capture_local_fence_on_session_done kv_client_stream_reconnect fail_over_ddl_D ddl_default_current_timestamp'
 	# G04
 	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
@@ -107,7 +107,7 @@ kafka_groups=(
 	# G14
 	'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
-	'kafka_simple_basic_avro split_region autorandom gc_safepoint kafka_log_info'
+	'kafka_simple_basic_avro split_region autorandom gc_safepoint'
 )
 
 # Resource allocation for pulsar light integration tests in CI pipelines:

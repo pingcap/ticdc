@@ -47,7 +47,7 @@ func TestBalanceSchedulerCreatesMoveOperators(t *testing.T) {
 	addReplicatingMaintainer(t, db, "cf-a-2", nodeA)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 	s := NewBalanceScheduler("test", 10, oc, db, 0, drainController)
 	_ = s.Execute()
 
@@ -80,7 +80,7 @@ func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 	addReplicatingMaintainer(t, db, "cf-a-4", nodeA)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 	s := NewBalanceScheduler("test", 10, oc, db, 0, drainController)
 	_ = s.Execute()
 
@@ -118,7 +118,7 @@ func TestBalanceSchedulerSkipsUntilObservedDrainBlockWindowExpires(t *testing.T)
 	addReplicatingMaintainer(t, db, "cf-a-4", nodeA)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 	s := NewBalanceScheduler("test", 10, oc, db, 0, drainController)
 	s.drainBalanceBlockedUntil = time.Time{}
 
@@ -171,7 +171,7 @@ func TestBalanceSchedulerUsesBalanceIntervalAsDrainBlockWindow(t *testing.T) {
 	addReplicatingMaintainer(t, db, "cf-a-2", nodeA)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 	interval := 200 * time.Millisecond
 	s := NewBalanceScheduler("test", 10, oc, db, interval, drainController)
 
@@ -198,7 +198,7 @@ func TestBalanceSchedulerSkipsWhenSchedulingFrozen(t *testing.T) {
 	addReplicatingMaintainer(t, db, "cf-a-2", nodeA)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 	s := NewBalanceScheduler("test", 10, oc, db, 0, drainController)
 	_ = s.Execute()
 

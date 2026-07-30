@@ -27,12 +27,18 @@ type statistics struct {
 	queryCount      uint64
 	flushedRowCount uint64
 	errCount        uint64
+	ddlExecuted     uint64
+	ddlSucceeded    uint64
+	ddlSkipped      uint64
+	ddlFailed       uint64
 	// QPS
 	qps int
 	// row/s
 	rps int
 	// error/s
 	eps int
+	// ddl/s
+	ddls int
 }
 
 // calculateStats calculates the statistics
@@ -40,33 +46,45 @@ func (app *WorkloadApp) calculateStats(
 	lastQueryCount,
 	lastFlushed,
 	lastErrors uint64,
+	lastDDLExecuted uint64,
 	reportInterval time.Duration,
 ) statistics {
 	currentFlushed := app.Stats.FlushedRowCount.Load()
 	currentErrors := app.Stats.ErrorCount.Load()
 	currentQueryCount := app.Stats.QueryCount.Load()
+	currentDDLExecuted := app.Stats.DDLExecuted.Load()
 
 	return statistics{
 		queryCount:      currentQueryCount,
 		flushedRowCount: currentFlushed,
 		errCount:        currentErrors,
+		ddlExecuted:     currentDDLExecuted,
+		ddlSucceeded:    app.Stats.DDLSucceeded.Load(),
+		ddlSkipped:      app.Stats.DDLSkipped.Load(),
+		ddlFailed:       app.Stats.DDLFailed.Load(),
 		qps:             int(currentQueryCount-lastQueryCount) / int(reportInterval.Seconds()),
 		rps:             int(currentFlushed-lastFlushed) / int(reportInterval.Seconds()),
 		eps:             int(currentErrors-lastErrors) / int(reportInterval.Seconds()),
+		ddls:            int(currentDDLExecuted-lastDDLExecuted) / int(reportInterval.Seconds()),
 	}
 }
 
 // printStats prints the statistics
 func (app *WorkloadApp) printStats(stats statistics) {
 	status := fmt.Sprintf(
-		"Total Write Rows: %d, Total Queries: %d, Total Created Tables: %d, Total Errors: %d, QPS: %d, Row/s: %d, Error/s: %d",
+		"Total Write Rows: %d, Total Queries: %d, Total Created Tables: %d, Total Errors: %d, Total DDL Executed: %d, Total DDL Succeeded: %d, Total DDL Skipped: %d, Total DDL Failed: %d, QPS: %d, Row/s: %d, Error/s: %d, DDL/s: %d",
 		stats.flushedRowCount,
 		stats.queryCount,
 		app.Stats.CreatedTableNum.Load(),
 		stats.errCount,
+		stats.ddlExecuted,
+		stats.ddlSucceeded,
+		stats.ddlSkipped,
+		stats.ddlFailed,
 		stats.qps,
 		stats.rps,
 		stats.eps,
+		stats.ddls,
 	)
 	plog.Info(status)
 }
@@ -85,14 +103,16 @@ func (app *WorkloadApp) reportMetrics() {
 		lastQueryCount uint64
 		lastFlushed    uint64
 		lastErrorCount uint64
+		lastDDLCount   uint64
 	)
 
 	for range ticker.C {
-		stats := app.calculateStats(lastQueryCount, lastFlushed, lastErrorCount, reportInterval)
+		stats := app.calculateStats(lastQueryCount, lastFlushed, lastErrorCount, lastDDLCount, reportInterval)
 		// Update last values for next iteration
 		lastQueryCount = stats.queryCount
 		lastFlushed = stats.flushedRowCount
 		lastErrorCount = stats.errCount
+		lastDDLCount = stats.ddlExecuted
 		// Print statistics
 		app.printStats(stats)
 

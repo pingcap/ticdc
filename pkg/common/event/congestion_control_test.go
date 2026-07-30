@@ -142,8 +142,6 @@ func TestCongestionControlMarshalUnmarshal(t *testing.T) {
 	require.Equal(t, uint64(4096), availables[1].Available)
 
 	// Test case 4: CongestionControl with AvailableMemoryWithDispatchers
-	// Note: DispatcherAvailable field is not properly serialized/deserialized in current implementation
-	// So we only test the basic GID and Available fields
 	control4 := NewCongestionControl()
 	control4.clusterID = 22222
 	gid4 := common.NewGID()
@@ -168,6 +166,36 @@ func TestCongestionControlMarshalUnmarshal(t *testing.T) {
 	require.Equal(t, uint64(3000), availableMem.Available)
 	require.Equal(t, uint32(2), availableMem.DispatcherCount)
 	require.Len(t, availableMem.DispatcherAvailable, 2)
+}
+
+func TestCongestionControlV2(t *testing.T) {
+	t.Parallel()
+
+	control := NewCongestionControlWithVersion(CongestionControlVersion2)
+	control.clusterID = 33333
+	gid := common.NewGID()
+	dispatcherAvailable := map[common.DispatcherID]uint64{
+		common.NewDispatcherID(): 100,
+		common.NewDispatcherID(): 200,
+	}
+	control.AddAvailableMemoryWithDispatchersAndUsageAndReleaseCount(gid, 3000, 0.3, dispatcherAvailable, 7)
+
+	data, err := control.Marshal()
+	require.NoError(t, err)
+
+	// Verify header version
+	require.Equal(t, uint16(CongestionControlVersion2), binary.BigEndian.Uint16(data[6:8]), "version")
+
+	var decoded CongestionControl
+	err = decoded.Unmarshal(data)
+	require.NoError(t, err)
+	require.Equal(t, CongestionControlVersion2, decoded.version)
+	require.Equal(t, control.clusterID, decoded.clusterID)
+	require.Len(t, decoded.availables, 1)
+	require.Equal(t, uint64(3000), decoded.availables[0].Available)
+	require.InDelta(t, 0.3, decoded.availables[0].UsageRatio, 1e-9)
+	require.Len(t, decoded.availables[0].DispatcherAvailable, 2)
+	require.Equal(t, uint32(7), decoded.availables[0].MemoryReleaseCount)
 }
 
 func TestCongestionControlMarshalUnmarshalEdgeCases(t *testing.T) {

@@ -19,14 +19,18 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
@@ -40,7 +44,7 @@ const (
 )
 
 type sink struct {
-	changefeedID commonType.ChangeFeedID
+	changefeedID common.ChangeFeedID
 
 	dmlProducer      kafka.AsyncProducer
 	ddlProducer      kafka.SyncProducer
@@ -63,29 +67,24 @@ type sink struct {
 	ctx      context.Context
 }
 
-func (s *sink) SinkType() commonType.SinkType {
-	return commonType.KafkaSinkType
+func (s *sink) SinkType() common.SinkType {
+	return common.KafkaSinkType
 }
 
-func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
-<<<<<<< HEAD
-	comp, _, err := newKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig)
-	defer comp.close()
-	return err
-=======
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
 	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	topic, err := helper.GetTopic(uri)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	options := kafka.NewOptions()
 	if err = options.Apply(changefeedID, uri, sinkConfig); err != nil {
-		return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		return err
 	}
 	options.Topic = topic
 
@@ -94,96 +93,102 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 		options.MaxMessageBytes, options.MaxBatchedBytes,
 	)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
-	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	claimCheck, err := claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
+	if err != nil {
+		return err
+	}
+	defer claimCheck.Close()
+
+	isAvroLike := protocol == config.ProtocolAvro
 	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	if _, err = columnselector.New(sinkConfig); err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	factory, err := kafka.NewSaramaFactory(ctx, options, changefeedID)
 	if err != nil {
-		return errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return err
 	}
 
 	adminClient, err := factory.AdminClient(ctx)
 	if err != nil {
-		return errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return err
 	}
 	defer adminClient.Close()
 
 	topics, err := adminClient.GetTopicsMeta([]string{topic}, false)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
-	if _, exists := topics[topic]; exists {
-		return nil
+	if _, exists := topics[topic]; !exists {
+		topicConfig := options.DeriveTopicConfig()
+		if !topicConfig.AutoCreate {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topic)
+		}
+		if err = topicConfig.ValidateReplicationFactor(adminClient); err != nil {
+			return err
+		}
+
+		// the topic is not created, only validate.
+		err = adminClient.CreateTopic(&kafka.TopicDetail{
+			Name:              topic,
+			NumPartitions:     topicConfig.PartitionNum,
+			ReplicationFactor: topicConfig.ReplicationFactor,
+		}, true)
+		if err != nil {
+			return err
+		}
 	}
 
-	topicConfig := options.DeriveTopicConfig()
-	if !topicConfig.AutoCreate {
-		return errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topic)
-	}
-
-	// the topic is not created, only validate.
-	err = adminClient.CreateTopic(&kafka.TopicDetail{
-		Name:              topic,
-		NumPartitions:     topicConfig.PartitionNum,
-		ReplicationFactor: topicConfig.ReplicationFactor,
-	}, true)
+	_, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck)
 	if err != nil {
-		return errors.WrapError(errors.ErrKafkaCreateTopic, err)
+		return err
 	}
-
-	encoder, err := codec.NewEventEncoder(ctx, encoderConfig)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	encoder.Clean()
-
 	return nil
->>>>>>> d480b05fa (kafka: decouple batch size from Kafka message size limit (#5420))
 }
 
 func New(
-	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
 ) (*sink, error) {
 	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	return newWithComponents(ctx, changefeedID, protocol, comp)
 }
 
 func newWithComponents(
 	ctx context.Context,
-	changefeedID commonType.ChangeFeedID,
+	changefeedID common.ChangeFeedID,
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
+	statistics := metrics.NewStatistics(changefeedID, "sink")
 	var (
 		err           error
 		asyncProducer kafka.AsyncProducer
 		syncProducer  kafka.SyncProducer
 	)
 	defer func() {
-		if err != nil {
-			if syncProducer != nil {
-				syncProducer.Close()
-			}
-			if asyncProducer != nil {
-				asyncProducer.Close()
-			}
-			comp.close()
+		if err == nil {
+			return
 		}
+		if syncProducer != nil {
+			syncProducer.Close()
+		}
+		if asyncProducer != nil {
+			asyncProducer.Close()
+		}
+		comp.close()
+		statistics.Close()
 	}()
 
-	statistics := metrics.NewStatistics(changefeedID, "sink")
 	asyncProducer, err = comp.factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, err
@@ -230,7 +235,7 @@ func (s *sink) Run(ctx context.Context) error {
 	})
 	err := g.Wait()
 	s.isNormal.Store(false)
-	return errors.Trace(err)
+	return err
 }
 
 func (s *sink) IsNormal() bool {
@@ -301,7 +306,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		default:
 			event, ok := s.eventChan.Get()
 			if !ok {
@@ -330,12 +335,11 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					event.Rewind()
 					break
 				}
-
-				index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(&row, partitionNum, event.TableInfo, event.CommitTs)
+				index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(
+					&row, partitionNum, event.TableInfo, event.CommitTs)
 				if err != nil {
-					return errors.Trace(err)
+					return err
 				}
-
 				events = append(events, &commonEvent.MQRowEvent{
 					Key: commonEvent.TopicPartitionKey{
 						Topic:          topic,
@@ -364,7 +368,7 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		default:
 			event, ok := s.rowChan.Get()
 			if !ok {
@@ -457,7 +461,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		case future, ok := <-outCh:
 			if !ok {
 				log.Info("kafka sink encoder's output channel closed",
@@ -506,7 +510,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 				zap.Stringer("changefeed", s.changefeedID))
 			continue
 		}
-		common.SetDDLMessageLogInfo(message, e)
+		codecCommon.SetDDLMessageLogInfo(message, e)
 		topic := s.comp.eventRouter.GetTopicForDDL(e)
 		// Notice: We must call GetPartitionNum here,
 		// which will be responsible for automatically creating topics when they don't exist.
@@ -556,14 +560,14 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 	}()
 
 	var (
-		msg          *common.Message
+		msg          *codecCommon.Message
 		partitionNum int32
 		err          error
 	)
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		case ts, ok := <-s.checkpointChan:
 			if !ok {
 				log.Warn("kafka sink checkpoint channel closed",
@@ -580,7 +584,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			if msg == nil {
 				continue
 			}
-			common.SetCheckpointMessageLogInfo(msg, ts)
+			codecCommon.SetCheckpointMessageLogInfo(msg, ts)
 
 			tableNames := s.getAllTableNames(ts)
 			// NOTICE: When there are no tables to replicate,
@@ -635,4 +639,12 @@ func (s *sink) Close() {
 	s.dmlProducer.Close()
 	s.comp.close()
 	s.statistics.Close()
+}
+
+func (s *sink) BatchCount() int {
+	return 4096
+}
+
+func (s *sink) BatchBytes() int {
+	return 0
 }

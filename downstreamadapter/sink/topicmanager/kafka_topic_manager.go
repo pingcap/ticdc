@@ -15,14 +15,12 @@ package topicmanager
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"go.uber.org/zap"
@@ -63,7 +61,7 @@ func GetTopicManagerAndTryCreateTopic(
 	)
 
 	if _, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic); err != nil {
-		return nil, cerror.WrapError(cerror.ErrKafkaCreateTopic, err)
+		return nil, err
 	}
 
 	return topicManager, nil
@@ -104,7 +102,7 @@ func (m *kafkaTopicManager) GetPartitionNum(
 	// If the topic is not in the metadata, we try to create the topic.
 	partitionNum, err := m.CreateTopicAndWaitUntilVisible(ctx, topic)
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, err
 	}
 
 	return partitionNum, nil
@@ -124,7 +122,7 @@ func (m *kafkaTopicManager) backgroundRefreshMeta(ctx context.Context) {
 		case <-ticker.C:
 			// We ignore the error here, because the error may be caused by the
 			// network problem, and we can try to get the metadata next time.
-			topicPartitionNums, _ := m.fetchAllTopicsPartitionsNum(ctx)
+			topicPartitionNums, _ := m.fetchAllTopicsPartitionsNum()
 			for topic, partitionNum := range topicPartitionNums {
 				m.tryUpdatePartitionsAndLogging(topic, partitionNum)
 			}
@@ -163,11 +161,9 @@ func (m *kafkaTopicManager) tryUpdatePartitionsAndLogging(topic string, partitio
 // The error returned by this method could be a transient error that is fixable by the underlying logic.
 // When handling this error, please be cautious.
 // If you simply throw the error to the caller, it may impact the robustness of your program.
-func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum(
-	ctx context.Context,
-) (map[string]int32, error) {
+func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum() (map[string]int32, error) {
 	var topics []string
-	m.topics.Range(func(key, value any) bool {
+	m.topics.Range(func(key, _ any) bool {
 		topics = append(topics, key.(string))
 		return true
 	})
@@ -238,13 +234,15 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 // createTopic creates a topic with the given name
 // and returns the number of partitions.
 func (m *kafkaTopicManager) createTopic(
-	ctx context.Context,
+	_ context.Context,
 	topicName string,
 ) (int32, error) {
 	if !m.cfg.AutoCreate {
-		return 0, cerror.ErrKafkaInvalidConfig.GenWithStack(
-			fmt.Sprintf("`auto-create-topic` is false, "+
-				"and %s not found", topicName))
+		return 0, errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topicName)
+	}
+
+	if err := m.cfg.ValidateReplicationFactor(m.admin); err != nil {
+		return 0, err
 	}
 
 	start := time.Now()
@@ -264,7 +262,7 @@ func (m *kafkaTopicManager) createTopic(
 			zap.Error(err),
 			zap.Duration("duration", time.Since(start)),
 		)
-		return 0, cerror.WrapError(cerror.ErrKafkaCreateTopic, err)
+		return 0, err
 	}
 
 	log.Info(
@@ -290,28 +288,64 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	// which means we should create the topic later.
 	topicDetails, err := m.admin.GetTopicsMeta([]string{topicName}, true)
 	if err != nil {
-		return 0, errors.Trace(err)
-	}
-	if detail, ok := topicDetails[topicName]; ok {
-		numPartition := detail.NumPartitions
-		if topicName == m.defaultTopic {
-			numPartition = m.cfg.PartitionNum
+		if kafka.IsAdminAuthorizationFailed(err) {
+			return m.useConfiguredPartitionNum(topicName, err), nil
 		}
-		m.tryUpdatePartitionsAndLogging(topicName, numPartition)
+		return 0, err
+	}
+	if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
+		return numPartition, nil
+	}
+
+	topicDetails, err = m.admin.GetTopicsMeta([]string{topicName}, false)
+	if err != nil {
+		if kafka.IsAdminAuthorizationFailed(err) {
+			return m.useConfiguredPartitionNum(topicName, err), nil
+		}
+	} else if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
 		return numPartition, nil
 	}
 
 	partitionNum, err := m.createTopic(ctx, topicName)
 	if err != nil {
-		return 0, errors.Trace(err)
+		if kafka.IsAdminAuthorizationFailed(err) {
+			return m.useConfiguredPartitionNum(topicName, err), nil
+		}
+		return 0, err
 	}
 
 	err = m.waitUntilTopicVisible(ctx, topicName)
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, err
 	}
 
 	return partitionNum, nil
+}
+
+func (m *kafkaTopicManager) tryStoreTopicMeta(
+	topicName string, topicDetails map[string]kafka.TopicDetail,
+) (int32, bool) {
+	detail, ok := topicDetails[topicName]
+	if !ok {
+		return 0, false
+	}
+	numPartition := detail.NumPartitions
+	if topicName == m.defaultTopic {
+		numPartition = m.cfg.PartitionNum
+	}
+	m.tryUpdatePartitionsAndLogging(topicName, numPartition)
+	return numPartition, true
+}
+
+func (m *kafkaTopicManager) useConfiguredPartitionNum(topicName string, cause error) int32 {
+	log.Warn("skip Kafka topic creation because topic authorization failed",
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeed", m.changefeedID.Name()),
+		zap.String("topic", topicName),
+		zap.Int32("partitionNumber", m.cfg.PartitionNum),
+		zap.Error(cause))
+	m.tryUpdatePartitionsAndLogging(topicName, m.cfg.PartitionNum)
+	return m.cfg.PartitionNum
 }
 
 // Close exits the background goroutine.

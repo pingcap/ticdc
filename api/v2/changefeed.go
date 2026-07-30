@@ -52,6 +52,27 @@ import (
 	"go.uber.org/zap"
 )
 
+// validateChangefeedIDParam extracts and validates the changefeed ID from the
+// URL path parameter. On failure it writes the error to c and returns false.
+func validateChangefeedIDParam(c *gin.Context) (common.ChangeFeedDisplayName, bool) {
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
+	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s, %s",
+			changefeedDisplayName.Name, err.Error()))
+		return common.ChangeFeedDisplayName{}, false
+	}
+	return changefeedDisplayName, true
+}
+
+func maskSinkURIForError(sinkURI string) string {
+	return util.MaskSensitiveDataInURIForError(sinkURI)
+}
+
+func genSinkURIInvalidError(sinkURI string, err error) error {
+	return errors.WrapError(
+		errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err), maskSinkURIForError(sinkURI))
+}
+
 // CreateChangefeed handles create changefeed request,
 // it returns the changefeed's changefeedInfo that it just created
 // CreateChangefeed creates a changefeed
@@ -135,7 +156,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+		_ = c.Error(genSinkURIInvalidError(cfg.SinkURI, err))
 		return
 	}
 
@@ -144,7 +165,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	if config.IsMQScheme(scheme) {
 		topic, err = helper.GetTopic(sinkURIParsed)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfg.SinkURI)))
 			return
 		}
 	}
@@ -291,7 +312,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 	err = sink.Verify(ctx, cfConfig, changefeedID)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfg.SinkURI)))
 		return
 	}
 
@@ -431,7 +452,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 	// verify replicaConfig
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+		_ = c.Error(genSinkURIInvalidError(cfg.SinkURI, err))
 		return
 	}
 	err = replicaCfg.ValidateAndAdjust(sinkURIParsed)
@@ -445,7 +466,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 	if config.IsMQScheme(scheme) {
 		topic, err = helper.GetTopic(sinkURIParsed)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfg.SinkURI)))
 			return
 		}
 	}
@@ -746,6 +767,14 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	}
 	middleware.SetChangefeedOperationTarget(c, cfInfo.ChangefeedID.Keyspace(), cfInfo.ChangefeedID.Name())
 
+	// Resume validation must use persisted metadata because stopped changefeeds
+	// can be edited outside the coordinator process during legacy migration.
+	cfInfo, err = co.GetPersistedChangefeedInfo(ctx, cfInfo.ChangefeedID)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	// If there is no overrideCheckpointTs, then check whether the currentCheckpointTs is smaller than gc safepoint or not.
 	newCheckpointTs := status.CheckpointTs
 	overwriteCheckpointTs := false
@@ -761,6 +790,10 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	if keyspaceMeta.State != keyspacepb.KeyspaceState_ENABLED {
 		c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
 		c.Abort()
+		return
+	}
+	if err = validateResumeChangefeedState(cfInfo.State); err != nil {
+		_ = c.Error(err)
 		return
 	}
 
@@ -822,14 +855,14 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		)
 		sinkURIParsed, err = url.Parse(cfInfo.SinkURI)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfInfo.SinkURI))
+			_ = c.Error(genSinkURIInvalidError(cfInfo.SinkURI, err))
 			return
 		}
 		scheme := sinkURIParsed.Scheme
 		if config.IsMQScheme(scheme) {
 			topic, err = helper.GetTopic(sinkURIParsed)
 			if err != nil {
-				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfInfo.SinkURI))
+				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfInfo.SinkURI)))
 				return
 			}
 		}
@@ -975,7 +1008,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		// verify replicaConfig
 		sinkURIParsed, err := url.Parse(oldCfInfo.SinkURI)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
+			_ = c.Error(genSinkURIInvalidError(oldCfInfo.SinkURI, err))
 			return
 		}
 		err = oldCfInfo.Config.ValidateAndAdjust(sinkURIParsed)
@@ -989,7 +1022,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		if config.IsMQScheme(scheme) {
 			topic, err = helper.GetTopic(sinkURIParsed)
 			if err != nil {
-				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
+				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(oldCfInfo.SinkURI)))
 				return
 			}
 		}
@@ -1033,7 +1066,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 
 	err = sink.Verify(ctx, oldCfInfo.ToChangefeedConfig(), oldCfInfo.ChangefeedID)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(oldCfInfo.SinkURI)))
 		return
 	}
 
@@ -1054,6 +1087,15 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	)
 
 	c.JSON(getStatus(c), CfInfoToAPIModel(oldCfInfo, status, nil))
+}
+
+func validateResumeChangefeedState(state config.FeedState) error {
+	if state.IsResumable() {
+		return nil
+	}
+	return errors.ErrChangefeedUpdateRefused.GenWithStackByArgs(
+		fmt.Sprintf("can only resume changefeed when it is stopped, failed, or finished, but current state is %s", state),
+	)
 }
 
 // verifyResumeChangefeedConfig verifies the changefeed config before resuming a changefeed
