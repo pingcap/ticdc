@@ -22,10 +22,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 )
 
-// event_dispatcher_mananger_info.go is used to store the basic info and function of the event dispatcher manager
+// dispatcher_manager_info.go stores the basic info and functions of the dispatcher manager.
 
 type dispatcherCreateInfo struct {
-	Id        common.DispatcherID
+	ID        common.DispatcherID
 	TableSpan *heartbeatpb.TableSpan
 	StartTs   uint64
 	SchemaID  int64
@@ -52,10 +52,40 @@ func (e *DispatcherManager) GetMaintainerID() node.ID {
 	return e.meta.maintainerID
 }
 
-func (e *DispatcherManager) SetMaintainerID(maintainerID node.ID) {
+// TryUpdateMaintainer records the active maintainer owner and epoch.
+// Maintainer epoch 0 is accepted only while the manager is still in compatibility
+// mode. Once a non-zero epoch is known, epoch 0 must never downgrade the receiver
+// back to compatibility mode.
+func (e *DispatcherManager) TryUpdateMaintainer(from node.ID, maintainerEpoch uint64) bool {
 	e.meta.Lock()
 	defer e.meta.Unlock()
-	e.meta.maintainerID = maintainerID
+	if maintainerEpoch == 0 {
+		if e.meta.maintainerEpoch != 0 {
+			return false
+		}
+		e.meta.maintainerID = from
+		return true
+	}
+	if e.meta.maintainerEpoch > maintainerEpoch {
+		return false
+	}
+	if e.meta.maintainerEpoch == maintainerEpoch && e.meta.maintainerID != "" && e.meta.maintainerID != from {
+		return false
+	}
+	e.meta.maintainerEpoch = maintainerEpoch
+	e.meta.maintainerID = from
+	return true
+}
+
+// IsMaintainerRequestAllowed reports whether a request belongs to the current
+// maintainer owner/epoch view known by this dispatcher manager.
+func (e *DispatcherManager) IsMaintainerRequestAllowed(from node.ID, maintainerEpoch uint64) bool {
+	e.meta.Lock()
+	defer e.meta.Unlock()
+	if maintainerEpoch == 0 {
+		return e.meta.maintainerEpoch == 0 && (e.meta.maintainerID == "" || e.meta.maintainerID == from)
+	}
+	return e.meta.maintainerEpoch == maintainerEpoch && e.meta.maintainerID == from
 }
 
 func (e *DispatcherManager) GetMaintainerEpoch() uint64 {
