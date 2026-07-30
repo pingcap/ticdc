@@ -16,10 +16,13 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
 
+	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
@@ -36,6 +39,43 @@ import (
 )
 
 const kafkaSinkTestTopic = "mock_topic"
+
+func TestVerifyInvalidConfig(t *testing.T) {
+	broker := sarama.NewMockBroker(t, 1)
+	defer broker.Close()
+	broker.SetHandlerByMap(map[string]sarama.MockResponse{
+		"ApiVersionsRequest": sarama.NewMockApiVersionsResponse(t).SetApiKeys(
+			[]sarama.ApiVersionsResponseKey{
+				{ApiKey: 0},
+				{ApiKey: 1},
+				{ApiKey: 2},
+				{ApiKey: 3, MaxVersion: 9},
+			}),
+		"MetadataRequest": sarama.NewMockMetadataResponse(t).
+			SetController(broker.BrokerID()).
+			SetBroker(broker.Addr(), broker.BrokerID()).
+			SetLeader(kafkaSinkTestTopic, 0, broker.BrokerID()),
+		"DescribeConfigsRequest": sarama.NewMockDescribeConfigsResponse(t),
+	})
+
+	schemaRegistry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "invalid response", http.StatusInternalServerError)
+	}))
+	defer schemaRegistry.Close()
+
+	avroProtocol := config.ProtocolAvro.String()
+	sinkConfig := &config.SinkConfig{
+		Protocol:       &avroProtocol,
+		SchemaRegistry: &schemaRegistry.URL,
+	}
+	sinkURI, err := url.Parse("kafka://" + broker.Addr() + "/" + kafkaSinkTestTopic +
+		"?required-acks=1&kafka-version=2.4.0")
+	require.NoError(t, err)
+
+	changefeedID := common.NewChangefeedID4Test("test", "verify-invalid-config")
+	err = Verify(context.Background(), changefeedID, sinkURI, sinkConfig)
+	require.ErrorContains(t, err, "ErrAvroSchemaAPIError")
+}
 
 func newKafkaSinkForTestWithProducers(ctx context.Context,
 	t *testing.T,

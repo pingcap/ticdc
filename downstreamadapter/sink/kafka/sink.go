@@ -123,23 +123,24 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 	if err != nil {
 		return errors.Trace(err)
 	}
-	if _, exists := topics[topic]; exists {
-		return nil
-	}
+	if _, exists := topics[topic]; !exists {
+		topicConfig := options.DeriveTopicConfig()
+		if !topicConfig.AutoCreate {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topic)
+		}
+		if err = topicConfig.ValidateReplicationFactor(adminClient); err != nil {
+			return err
+		}
 
-	topicConfig := options.DeriveTopicConfig()
-	if !topicConfig.AutoCreate {
-		return errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topic)
-	}
-
-	// the topic is not created, only validate.
-	err = adminClient.CreateTopic(&kafka.TopicDetail{
-		Name:              topic,
-		NumPartitions:     topicConfig.PartitionNum,
-		ReplicationFactor: topicConfig.ReplicationFactor,
-	}, true)
-	if err != nil {
-		return errors.WrapError(errors.ErrKafkaCreateTopic, err)
+		// the topic is not created, only validate.
+		err = adminClient.CreateTopic(&kafka.TopicDetail{
+			Name:              topic,
+			NumPartitions:     topicConfig.PartitionNum,
+			ReplicationFactor: topicConfig.ReplicationFactor,
+		}, true)
+		if err != nil {
+			return errors.WrapError(errors.ErrKafkaCreateTopic, err)
+		}
 	}
 
 	_, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck)
