@@ -367,6 +367,36 @@ func TestHeartBeatResponseHandlerDropsStaleMaintainerEpoch(t *testing.T) {
 	})
 }
 
+func TestMergeDispatcherRequestHandlerDropsStaleEpochBeforeTracking(t *testing.T) {
+	// Scenario: an old maintainer retries a merge after ownership has moved to a newer epoch.
+	// Steps: send the stale request through the handler and verify it is neither executed nor
+	// persisted in the bootstrap merge journal.
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", "test-namespace")
+	dispatcherManager := &DispatcherManager{changefeedID: changefeedID}
+	dispatcherManager.meta.maintainerID = "current-maintainer"
+	dispatcherManager.meta.maintainerEpoch = 2
+
+	staleRequest := NewMergeDispatcherRequest(
+		"old-maintainer",
+		&heartbeatpb.MergeDispatcherRequest{
+			ChangefeedID: changefeedID.ToPB(),
+			DispatcherIDs: []*heartbeatpb.DispatcherID{
+				common.NewDispatcherID().ToPB(),
+				common.NewDispatcherID().ToPB(),
+			},
+			MergedDispatcherID: common.NewDispatcherID().ToPB(),
+			Mode:               common.DefaultMode,
+			MaintainerEpoch:    1,
+		},
+	)
+
+	handler := &MergeDispatcherRequestHandler{}
+	require.False(t, handler.Handle(dispatcherManager, staleRequest))
+	require.Empty(t, dispatcherManager.GetMergeOperators())
+}
+
 func TestRedoControlMessagesAllowedByMaintainerEpoch(t *testing.T) {
 	t.Parallel()
 

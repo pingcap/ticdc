@@ -971,6 +971,8 @@ func retrieveOperatorsForBootstrapResponse(
 			proto.Clone(req.ScheduleDispatcherRequest).(*heartbeatpb.ScheduleDispatcherRequest))
 		return true
 	})
+
+	response.MergeOperators = append(response.MergeOperators, manager.GetMergeOperators()...)
 }
 
 func isDispatcherInLiveMap(

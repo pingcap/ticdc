@@ -327,11 +327,56 @@ func TestController_AddMergeOperatorFailureCleansOccupyOperators(t *testing.T) {
 	require.Equal(t, 1, oc.OperatorSize())
 }
 
+func TestControllerRestoredMergeOperatorSchedule(t *testing.T) {
+	// Scenario: bootstrap restores an in-flight merge after maintainer failover.
+	// Steps: restore the merge through the controller, schedule it, and verify the request
+	// reuses the merged dispatcher ID reported during bootstrap and carries the new epoch.
+	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, toMergedReplicaSets, _, nodeA := setupMergeTestEnvironment(t)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	setAliveNodes(nodeManager, map[node.ID]*node.Info{nodeA: {ID: nodeA}})
+
+	const maintainerEpoch = uint64(7)
+	oc := NewOperatorController(toMergedReplicaSets[0].ChangefeedID, spanController, 1, common.DefaultMode)
+	oc.SetMaintainerEpoch(maintainerEpoch)
+
+	mergedSpan := &heartbeatpb.TableSpan{
+		TableID:  toMergedReplicaSets[0].Span.TableID,
+		StartKey: toMergedReplicaSets[0].Span.StartKey,
+		EndKey:   toMergedReplicaSets[len(toMergedReplicaSets)-1].Span.EndKey,
+	}
+	mergedReplicaSet := replica.NewSpanReplication(
+		toMergedReplicaSets[0].ChangefeedID,
+		common.NewDispatcherID(),
+		toMergedReplicaSets[0].GetSchemaID(),
+		mergedSpan,
+		toMergedReplicaSets[0].GetStatus().CheckpointTs,
+		common.DefaultMode,
+		toMergedReplicaSets[0].IsSplitEnabled(),
+	)
+	spanController.AddSchedulingReplicaSet(mergedReplicaSet, nodeA)
+
+	op := oc.AddRestoredMergeOperator(toMergedReplicaSets, mergedReplicaSet)
+	require.NotNil(t, op)
+	msg := op.Schedule()
+	require.NotNil(t, msg)
+
+	req := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
+	require.Equal(t, mergedReplicaSet.ID.ToPB(), req.MergedDispatcherID)
+	require.Len(t, req.DispatcherIDs, len(toMergedReplicaSets))
+	require.Equal(t, maintainerEpoch, req.MaintainerEpoch)
+}
+
 func TestMergeDispatcherOperatorScheduleMaintainerEpoch(t *testing.T) {
+	// Scenario: a newly scheduled merge must be fenced to its maintainer generation.
+	// Steps: create and schedule the operator, then verify its request carries the constructor epoch.
 	spanController, toMergedReplicaSets, occupyOperators, _ := setupMergeTestEnvironment(t)
 
 	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)
 	msg := op.Schedule()
+	require.NotNil(t, msg)
 
 	req := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
 	require.Equal(t, uint64(7), req.MaintainerEpoch)
