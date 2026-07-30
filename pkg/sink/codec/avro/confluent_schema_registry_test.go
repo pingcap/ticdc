@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -112,6 +113,32 @@ func TestSchemaRegistryBad(t *testing.T) {
 
 	_, err = NewConfluentSchemaManager(ctx, "https://127.0.0.1:8080", nil)
 	require.Error(t, err)
+}
+
+func TestRegisterReturnsServerError(t *testing.T) {
+	startHTTPInterceptForTestingRegistry()
+	defer stopHTTPInterceptForTestingRegistry()
+
+	ctx := getTestingContext()
+	manager, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
+	require.NoError(t, err)
+
+	codec, err := GenCodec(`{
+       "type": "record",
+       "name": "test",
+       "fields":
+         [
+           {
+             "type": "string",
+             "name": "field1"
+           }
+          ]
+     }`)
+	require.NoError(t, err)
+
+	schemaID, err := manager.Register(ctx, "server-error", codec.Schema())
+	require.ErrorIs(t, err, errors.ErrAvroSchemaAPIError)
+	require.Zero(t, schemaID.confluentSchemaID)
 }
 
 func TestSchemaRegistryIdempotent(t *testing.T) {
@@ -258,11 +285,11 @@ func TestGetCachedOrRegister(t *testing.T) {
 	wg.Wait()
 }
 
-func TestHTTPRetry(t *testing.T) {
+func TestHTTPRetryReturnsServerError(t *testing.T) {
 	startHTTPInterceptForTestingRegistry()
 	defer stopHTTPInterceptForTestingRegistry()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 
 	payload := []byte("test")
@@ -272,6 +299,6 @@ func TestHTTPRetry(t *testing.T) {
 
 	resp, err := httpRetry(ctx, nil, req)
 	require.NoError(t, err)
-	require.Equal(t, 200, resp.StatusCode)
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	_ = resp.Body.Close()
 }
