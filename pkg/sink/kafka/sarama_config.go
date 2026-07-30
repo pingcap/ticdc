@@ -87,11 +87,8 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 	case "zstd":
 		config.Producer.Compression = sarama.CompressionZSTD
 	default:
-		log.Warn("Unsupported compression algorithm", zap.String("compression", o.Compression))
+		log.Warn("unsupported kafka compression algorithm", zap.String("compression", o.Compression))
 		config.Producer.Compression = sarama.CompressionNone
-	}
-	if config.Producer.Compression != sarama.CompressionNone {
-		log.Info("Kafka producer uses " + compression + " compression algorithm")
 	}
 
 	if o.EnableTLS {
@@ -223,8 +220,7 @@ func selectKafkaVersion(detectedVersion sarama.KafkaVersion, o *options) (sarama
 	}
 	if !assignedVersion.IsAtLeast(maxKafkaVersion) &&
 		assignedVersion.String() != detectedVersion.String() {
-		log.Warn("The Kafka version you assigned may not be correct. "+
-			"Please assign a version equal to or less than the specified version",
+		log.Warn("configured kafka version differs from detected version",
 			zap.String("assignedVersion", assignedVersion.String()),
 			zap.String("desiredVersion", detectedVersion.String()))
 	}

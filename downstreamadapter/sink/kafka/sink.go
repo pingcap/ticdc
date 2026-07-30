@@ -257,7 +257,7 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	case *commonEvent.DDLEvent:
 		err = s.sendDDLEvent(v)
 	default:
-		log.Error("kafka sink doesn't support this type of block event",
+		log.Error("unsupported kafka sink block event type",
 			zap.String("namespace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.String("eventType", commonEvent.TypeToString(event.GetType())))
@@ -436,10 +436,6 @@ func (s *sink) sendMessages(ctx context.Context) error {
 						future.Key.Topic,
 						future.Key.Partition,
 						message); err != nil {
-						log.Error("kafka sink send message failed",
-							zap.String("keyspace", s.changefeedID.Keyspace()),
-							zap.String("changefeed", s.changefeedID.Name()),
-							zap.Error(err))
 						return 0, 0, err
 					}
 					return message.GetRowsCount(), int64(message.Length()), nil
@@ -485,7 +481,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 			return err
 		}
 	}
-	log.Info("kafka sink send DDL event",
+	log.Info("kafka ddl event sent",
 		zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
 		zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()),
 		zap.String("schema", event.GetSchemaName()), zap.String("table", event.GetTableName()))
@@ -521,7 +517,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			return context.Cause(ctx)
 		case ts, ok := <-s.checkpointChan:
 			if !ok {
-				log.Warn("kafka sink checkpoint channel closed",
+				log.Warn("kafka checkpoint channel closed",
 					zap.String("keyspace", s.changefeedID.Keyspace()),
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil

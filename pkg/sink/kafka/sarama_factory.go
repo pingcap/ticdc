@@ -42,7 +42,7 @@ func NewSaramaFactory(
 	config, err := newSaramaConfig(ctx, o)
 	duration := time.Since(start).Seconds()
 	if duration > 2 {
-		log.Warn("new sarama config cost too much time",
+		log.Warn("kafka configuration initialization is slow",
 			zap.Stringer("changefeedID", changefeedID), zap.Any("duration", duration))
 	}
 	if err != nil {
@@ -73,7 +73,7 @@ func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config
 	client, err := sarama.NewClient(endpoints, config)
 	duration := time.Since(start).Seconds()
 	if duration > 2 {
-		log.Warn("new sarama client cost too much time",
+		log.Warn("kafka client initialization is slow",
 			zap.Any("duration", duration), zap.Stringer("changefeedID", changefeedID))
 	}
 	if err != nil {
@@ -84,7 +84,7 @@ func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config
 	admin, err := sarama.NewClusterAdminFromClient(client)
 	duration = time.Since(start).Seconds()
 	if duration > 2 {
-		log.Warn("new sarama cluster admin cost too much time",
+		log.Warn("kafka admin client initialization is slow",
 			zap.Any("duration", duration), zap.Stringer("changefeedID", changefeedID))
 	}
 	if err != nil {

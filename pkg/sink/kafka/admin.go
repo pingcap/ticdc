@@ -121,7 +121,7 @@ func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool
 			if !ignoreTopicError {
 				return nil, errors.WrapError(errors.ErrKafkaAdminAPI, meta.Err, "describe-topic", meta.Name)
 			}
-			log.Warn("fetch topic meta failed",
+			log.Warn("kafka topic metadata refresh failed",
 				zap.String("keyspace", a.changefeed.Keyspace()),
 				zap.String("changefeed", a.changefeed.Name()),
 				zap.String("topic", meta.Name),
@@ -175,7 +175,7 @@ func (a *saramaAdminClient) Close() {
 	// only when admin is unexpectedly nil.
 	if a.admin != nil {
 		if err := a.admin.Close(); err != nil {
-			log.Warn("close admin client meet error",
+			log.Warn("kafka admin client close failed",
 				zap.String("keyspace", a.changefeed.Keyspace()),
 				zap.String("changefeed", a.changefeed.Name()),
 				zap.Error(err))
@@ -184,7 +184,7 @@ func (a *saramaAdminClient) Close() {
 	}
 	if a.client != nil {
 		if err := a.client.Close(); err != nil {
-			log.Warn("close kafka client meet error",
+			log.Warn("kafka client close failed",
 				zap.String("keyspace", a.changefeed.Keyspace()),
 				zap.String("changefeed", a.changefeed.Name()),
 				zap.Error(err))

@@ -133,7 +133,7 @@ func (m *kafkaTopicManager) tryUpdatePartitionsAndLogging(topic string, partitio
 		if oldPartitions.(int32) != partitions {
 			m.topics.Store(topic, partitions)
 			log.Info(
-				"update topic partition number",
+				"kafka topic partition count changed",
 				zap.String("keyspace", m.changefeedID.Keyspace()),
 				zap.String("changefeed", m.changefeedID.Name()),
 				zap.String("topic", topic),
@@ -161,7 +161,7 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum() (map[string]int32, err
 	numPartitions, err := m.admin.GetTopicsPartitionsNum(topics)
 	if err != nil {
 		log.Warn(
-			"Kafka admin client describe topics failed",
+			"kafka topic metadata refresh failed",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
@@ -208,11 +208,14 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 		retry.WithBackoffMaxDelay(1000),
 		retry.WithMaxTries(6),
 	)
-	log.Warn("kafka topic not found for too long",
-		zap.String("keyspace", m.changefeedID.Keyspace()),
-		zap.String("changefeed", m.changefeedID.Name()),
-		zap.Duration("duration", time.Since(start)),
-		zap.Error(err))
+	if err != nil {
+		log.Warn("kafka topic metadata refresh failed",
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeed", m.changefeedID.Name()),
+			zap.String("topic", topicName),
+			zap.Duration("duration", time.Since(start)),
+			zap.Error(err))
+	}
 	return err
 }
 
@@ -238,7 +241,7 @@ func (m *kafkaTopicManager) createTopic(
 	}, false)
 	if err != nil {
 		log.Error(
-			"Kafka admin client create the topic failed",
+			"kafka topic creation failed",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("topic", topicName),
@@ -251,7 +254,7 @@ func (m *kafkaTopicManager) createTopic(
 	}
 
 	log.Info(
-		"Kafka admin client create the topic success",
+		"kafka topic created",
 		zap.String("keyspace", m.changefeedID.Keyspace()),
 		zap.String("changefeed", m.changefeedID.Name()),
 		zap.String("topic", topicName),
@@ -323,7 +326,7 @@ func (m *kafkaTopicManager) tryStoreTopicMeta(
 }
 
 func (m *kafkaTopicManager) useConfiguredPartitionNum(topicName string, cause error) int32 {
-	log.Warn("skip Kafka topic creation because topic authorization failed",
+	log.Warn("kafka topic creation skipped due to authorization failure",
 		zap.String("keyspace", m.changefeedID.Keyspace()),
 		zap.String("changefeed", m.changefeedID.Name()),
 		zap.String("topic", topicName),
