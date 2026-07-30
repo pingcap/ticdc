@@ -86,6 +86,63 @@ func TestNewSaramaConfig(t *testing.T) {
 	require.Equal(t, sarama.SASLMechanism("SCRAM-SHA-256"), cfg.Net.SASL.Mechanism)
 }
 
+func TestSelectKafkaVersion(t *testing.T) {
+	tests := []struct {
+		name            string
+		detectedVersion sarama.KafkaVersion
+		assignedVersion string
+		expectedVersion sarama.KafkaVersion
+		expectedErr     error
+	}{
+		{
+			name:            "use detected version",
+			detectedVersion: sarama.V2_4_0_0,
+			expectedVersion: sarama.V2_4_0_0,
+		},
+		{
+			name:            "use fallback version",
+			detectedVersion: defaultKafkaVersion,
+			expectedVersion: defaultKafkaVersion,
+		},
+		{
+			name:            "assigned version overrides detected version",
+			detectedVersion: sarama.V2_4_0_0,
+			assignedVersion: "2.6.0",
+			expectedVersion: sarama.V2_6_0_0,
+		},
+		{
+			name:            "assigned version overrides fallback version",
+			detectedVersion: defaultKafkaVersion,
+			assignedVersion: "2.6.0",
+			expectedVersion: sarama.V2_6_0_0,
+		},
+		{
+			name:            "reject invalid assigned version",
+			detectedVersion: sarama.V2_4_0_0,
+			assignedVersion: "invalid",
+			expectedErr:     errors.ErrKafkaInvalidConfig,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options := NewOptions()
+			if test.assignedVersion != "" {
+				options.IsAssignedVersion = true
+				options.Version = test.assignedVersion
+			}
+
+			version, err := selectKafkaVersion(test.detectedVersion, options)
+			if test.expectedErr != nil {
+				require.ErrorIs(t, err, test.expectedErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.expectedVersion, version)
+		})
+	}
+}
+
 func TestNewSaramaConfigInvalidOAuthTokenURL(t *testing.T) {
 	options := NewOptions()
 	options.SASL = &security.SASL{
