@@ -17,12 +17,57 @@ make
 
 ## Common Usage Scenarios
 
+### 0. DDL Workload
+
+Run DDL workload based on a TOML config file:
+
+```bash
+./bin/workload -action ddl \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name test \
+    -ddl-config ./ddl.toml \
+    -ddl-worker 1 \
+    -ddl-timeout 2m
+```
+
+`ddl.toml` example (fixed mode):
+
+```toml
+mode = "fixed"
+
+tables = [
+  "test.sbtest1",
+  "test.sbtest2",
+]
+
+[rate_per_minute]
+add_column = 10
+drop_column = 10
+add_index = 5
+drop_index = 5
+truncate_table = 1
+```
+
+`ddl.toml` example (random mode, omit `tables`):
+
+```toml
+mode = "random"
+
+[rate_per_minute]
+add_column = 10
+drop_column = 10
+add_index = 5
+drop_index = 5
+truncate_table = 0
+```
+
 ### 1. Sysbench-style Data Insertion
 
 Insert test data using sysbench-compatible schema:
 
 ```bash
-./workload -action insert \
+./bin/workload -action insert \
     -database-host 127.0.0.1 \
     -database-port 4000 \
     -database-db-name db1 \
@@ -38,7 +83,7 @@ Insert test data using sysbench-compatible schema:
 Update existing data with large row operations:
 
 ```bash
-./workload -action update \
+./bin/workload -action update \
     -database-host 127.0.0.1 \
     -database-port 4000 \
     -database-db-name large \
