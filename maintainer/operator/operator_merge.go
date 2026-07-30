@@ -64,16 +64,10 @@ type MergeDispatcherOperator struct {
 
 func buildMergedSpanInfo(toMergedReplicaSets []*replica.SpanReplication) string {
 	var spansInfo strings.Builder
-<<<<<<< HEAD
-	for _, span := range toMergedSpans {
-		spansInfo.WriteString(fmt.Sprintf("[%s,%s,%d]",
-			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey), span.TableID))
-=======
 	for _, replicaSet := range toMergedReplicaSets {
 		span := replicaSet.Span
 		fmt.Fprintf(&spansInfo, "[%s,%s,%d]",
 			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey), span.TableID)
->>>>>>> 69ab69a15 (fix(*): merge operator inconsistent after maintainer move (#3769))
 	}
 	return spansInfo.String()
 }
@@ -111,14 +105,12 @@ func newMergeDispatcherOperator(
 	toMergedReplicaSets []*replica.SpanReplication,
 	mergedReplicaSet *replica.SpanReplication,
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
-	maintainerEpoch uint64,
 ) *MergeDispatcherOperator {
 	return &MergeDispatcherOperator{
 		spanController:      spanController,
 		originNode:          toMergedReplicaSets[0].GetNodeID(),
 		id:                  mergedReplicaSet.ID,
 		dispatcherIDs:       buildDispatcherIDs(toMergedReplicaSets),
-		maintainerEpoch:     maintainerEpoch,
 		toMergedReplicaSets: toMergedReplicaSets,
 		mergedSpanInfo:      buildMergedSpanInfo(toMergedReplicaSets),
 		occupyOperators:     occupyOperators,
@@ -160,36 +152,18 @@ func NewMergeDispatcherOperator(
 
 	spanController.AddSchedulingReplicaSet(newReplicaSet, nodeID)
 	return newMergeDispatcherOperator(
-		spanController, toMergedReplicaSets, newReplicaSet, occupyOperators, maintainerEpoch)
+		spanController, toMergedReplicaSets, newReplicaSet, occupyOperators)
 }
 
-<<<<<<< HEAD
-	op := &MergeDispatcherOperator{
-		spanController:      spanController,
-		originNode:          nodeID,
-		id:                  newDispatcherID,
-		dispatcherIDs:       dispatcherIDs,
-		toMergedReplicaSets: toMergedReplicaSets,
-		checkpointTs:        0,
-		mergedSpanInfo:      spansInfo,
-		occupyOperators:     occupyOperators,
-		newReplicaSet:       newReplicaSet,
-		sendThrottler:       newSendThrottler(),
-	}
-	return op
-=======
 // NewRestoredMergeDispatcherOperator builds a merge operator whose occupy sub-operators were restored from bootstrap.
-// The restored operator must keep the current maintainer epoch so dispatcher-manager fences accept its requests.
 func NewRestoredMergeDispatcherOperator(
 	spanController *span.Controller,
 	toMergedReplicaSets []*replica.SpanReplication,
 	mergedReplicaSet *replica.SpanReplication,
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
-	maintainerEpoch uint64,
 ) *MergeDispatcherOperator {
 	return newMergeDispatcherOperator(
-		spanController, toMergedReplicaSets, mergedReplicaSet, occupyOperators, maintainerEpoch)
->>>>>>> 69ab69a15 (fix(*): merge operator inconsistent after maintainer move (#3769))
+		spanController, toMergedReplicaSets, mergedReplicaSet, occupyOperators)
 }
 
 func setOccupyOperatorsFinished(occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {

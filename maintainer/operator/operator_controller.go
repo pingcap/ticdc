@@ -642,7 +642,6 @@ func (oc *Controller) AddRestoredMergeOperator(
 		affectedReplicaSets,
 		mergedReplicaSet,
 		operators,
-		oc.MaintainerEpoch(),
 	)
 	ret := oc.AddOperator(mergeOperator)
 	if !ret {

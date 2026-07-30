@@ -745,7 +745,6 @@ func (c *Controller) addBootstrapCleanupOperator(replicaSet *replica.SpanReplica
 		spanController,
 		replicaSet,
 		heartbeatpb.OperatorType_O_Remove,
-		operatorController.MaintainerEpoch(),
 		func() {
 			spanController.RemoveReplicatingSpan(replicaSet)
 			c.repairBootstrapTableCoverage(replicaSet)
@@ -1225,12 +1224,7 @@ func (c *Controller) handleCurrentWorkingRemove(
 			spanController,
 			replicaSet,
 			heartbeatpb.OperatorType_O_Remove,
-<<<<<<< HEAD
-			nil,
-=======
-			operatorController.MaintainerEpoch(),
 			postFinish,
->>>>>>> 69ab69a15 (fix(*): merge operator inconsistent after maintainer move (#3769))
 		)
 		if ok := operatorController.AddOperator(op); !ok {
 			log.Error("add operator failed when dealing current working operators in bootstrap, should not happen",

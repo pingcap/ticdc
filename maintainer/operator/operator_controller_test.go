@@ -327,22 +327,10 @@ func TestController_AddMergeOperatorFailureCleansOccupyOperators(t *testing.T) {
 	require.Equal(t, 1, oc.OperatorSize())
 }
 
-<<<<<<< HEAD
-=======
-func TestMergeDispatcherOperatorScheduleMaintainerEpoch(t *testing.T) {
-	spanController, toMergedReplicaSets, occupyOperators, _ := setupMergeTestEnvironment(t)
-
-	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)
-	msg := op.Schedule()
-
-	req := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
-	require.Equal(t, uint64(7), req.MaintainerEpoch)
-}
-
-func TestControllerRestoredMergeOperatorScheduleMaintainerEpoch(t *testing.T) {
+func TestControllerRestoredMergeOperatorSchedule(t *testing.T) {
 	// Scenario: bootstrap restores an in-flight merge after maintainer failover.
 	// Steps: restore the merge through the controller, schedule it, and verify the request
-	// carries the controller epoch instead of the zero value.
+	// reuses the merged dispatcher ID reported during bootstrap.
 	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)
 
@@ -351,7 +339,6 @@ func TestControllerRestoredMergeOperatorScheduleMaintainerEpoch(t *testing.T) {
 	setAliveNodes(nodeManager, map[node.ID]*node.Info{nodeA: {ID: nodeA}})
 
 	oc := NewOperatorController(toMergedReplicaSets[0].ChangefeedID, spanController, 1, common.DefaultMode)
-	oc.SetMaintainerEpoch(7)
 
 	mergedSpan := &heartbeatpb.TableSpan{
 		TableID:  toMergedReplicaSets[0].Span.TableID,
@@ -375,10 +362,10 @@ func TestControllerRestoredMergeOperatorScheduleMaintainerEpoch(t *testing.T) {
 	require.NotNil(t, msg)
 
 	req := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
-	require.Equal(t, uint64(7), req.MaintainerEpoch)
+	require.Equal(t, mergedReplicaSet.ID.ToPB(), req.MergedDispatcherID)
+	require.Len(t, req.DispatcherIDs, len(toMergedReplicaSets))
 }
 
->>>>>>> 69ab69a15 (fix(*): merge operator inconsistent after maintainer move (#3769))
 func TestController_RemoveReplicaSet_ReplacesRemoveOperatorOnTaskRemoved(t *testing.T) {
 	// Scenario: the barrier can enqueue the same remove task multiple times during failover/bootstrap.
 	// Steps:

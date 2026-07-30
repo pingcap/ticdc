@@ -1070,41 +1070,6 @@ func TestDoMergeKeepsMergeJournalUntilSourcesAreCleaned(t *testing.T) {
 	require.Empty(t, manager.GetMergeOperators())
 }
 
-func TestMergeDispatcherRequestRecvDoesNotTrackStaleMaintainerEpoch(t *testing.T) {
-	// Scenario: an old maintainer sends a delayed merge request after dispatcher manager
-	// ownership has moved to a newer epoch.
-	// Steps: receive the request through HeartBeatCollector and verify the journal is not
-	// updated before the dynamic stream handler applies its epoch fence.
-	manager := createTestManager(t)
-	require.True(t, manager.TryUpdateMaintainer("current-maintainer", 2))
-
-	collector := &HeartBeatCollector{
-		mergeDispatcherRequestDynamicStream: newMergeDispatcherRequestDynamicStream(),
-	}
-	defer collector.mergeDispatcherRequestDynamicStream.Close()
-	require.NoError(t, collector.mergeDispatcherRequestDynamicStream.AddPath(manager.changefeedID.Id, manager))
-
-	mergeReq := &heartbeatpb.MergeDispatcherRequest{
-		ChangefeedID: manager.changefeedID.ToPB(),
-		DispatcherIDs: []*heartbeatpb.DispatcherID{
-			common.NewDispatcherID().ToPB(),
-			common.NewDispatcherID().ToPB(),
-		},
-		MergedDispatcherID: common.NewDispatcherID().ToPB(),
-		Mode:               common.DefaultMode,
-		MaintainerEpoch:    1,
-	}
-	msg := messaging.NewSingleTargetMessage(
-		"receiver",
-		messaging.HeartbeatCollectorTopic,
-		mergeReq,
-	)
-	msg.From = "old-maintainer"
-
-	require.NoError(t, collector.RecvMessages(context.Background(), msg))
-	require.Empty(t, manager.GetMergeOperators())
-}
-
 // TestTrackMergeOperatorClonesRequest verifies that the merge journal owns its request data.
 // It mutates the original request and one returned snapshot, then confirms later reads retain
 // the tracked epoch and nested dispatcher IDs.
