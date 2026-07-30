@@ -16,10 +16,13 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
 
+	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
@@ -28,8 +31,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
@@ -37,17 +41,87 @@ import (
 
 const kafkaSinkTestTopic = "mock_topic"
 
-func TestVerifyValidatesEncoderConfigBeforeKafkaConnection(t *testing.T) {
-	openProtocol := config.ProtocolOpen.String()
-	sinkConfig := &config.SinkConfig{Protocol: &openProtocol}
-	sinkURI, err := url.Parse("kafka://127.0.0.1:1/" + kafkaSinkTestTopic + "?max-batch-size=0")
+func TestSinkWorkersReturnContextError(t *testing.T) {
+	contexts := []struct {
+		name       string
+		newContext func() (context.Context, context.CancelFunc)
+		cause      error
+	}{
+		{
+			name: "canceled",
+			newContext: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx, cancel
+			},
+			cause: context.Canceled,
+		},
+		{
+			name: "deadline exceeded",
+			newContext: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 0)
+			},
+			cause: context.DeadlineExceeded,
+		},
+	}
+	workers := []struct {
+		name string
+		run  func(*sink, context.Context) error
+	}{
+		{name: "calculate key partitions", run: (*sink).calculateKeyPartitions},
+		{name: "non batch encode", run: (*sink).nonBatchEncodeRun},
+		{name: "checkpoint", run: (*sink).sendCheckpoint},
+	}
+
+	for _, worker := range workers {
+		for _, contextCase := range contexts {
+			t.Run(worker.name+"/"+contextCase.name, func(t *testing.T) {
+				ctx, cancel := contextCase.newContext()
+				defer cancel()
+
+				err := worker.run(&sink{}, ctx)
+
+				require.ErrorIs(t, err, contextCase.cause)
+			})
+		}
+	}
+}
+
+func TestVerifyInvalidConfig(t *testing.T) {
+	broker := sarama.NewMockBroker(t, 1)
+	defer broker.Close()
+	broker.SetHandlerByMap(map[string]sarama.MockResponse{
+		"ApiVersionsRequest": sarama.NewMockApiVersionsResponse(t).SetApiKeys(
+			[]sarama.ApiVersionsResponseKey{
+				{ApiKey: 0},
+				{ApiKey: 1},
+				{ApiKey: 2},
+				{ApiKey: 3, MaxVersion: 9},
+			}),
+		"MetadataRequest": sarama.NewMockMetadataResponse(t).
+			SetController(broker.BrokerID()).
+			SetBroker(broker.Addr(), broker.BrokerID()).
+			SetLeader(kafkaSinkTestTopic, 0, broker.BrokerID()),
+		"DescribeConfigsRequest": sarama.NewMockDescribeConfigsResponse(t),
+	})
+
+	schemaRegistry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "invalid response", http.StatusInternalServerError)
+	}))
+	defer schemaRegistry.Close()
+
+	avroProtocol := config.ProtocolAvro.String()
+	sinkConfig := &config.SinkConfig{
+		Protocol:       &avroProtocol,
+		SchemaRegistry: &schemaRegistry.URL,
+	}
+	sinkURI, err := url.Parse("kafka://" + broker.Addr() + "/" + kafkaSinkTestTopic +
+		"?required-acks=1&kafka-version=2.4.0")
 	require.NoError(t, err)
 
-	changefeedID := common.NewChangefeedID4Test("test", "verify-existing-topic")
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	err = Verify(ctx, changefeedID, sinkURI, sinkConfig)
-	require.ErrorContains(t, err, "invalid max-batch-size 0")
+	changefeedID := common.NewChangefeedID4Test("test", "verify-invalid-config")
+	err = Verify(context.Background(), changefeedID, sinkURI, sinkConfig)
+	require.ErrorContains(t, err, "ErrAvroSchemaAPIError")
 }
 
 func newKafkaSinkForTestWithProducers(ctx context.Context,
@@ -158,8 +232,28 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	go s.Run(ctx)
 	return s, nil
+}
+
+func TestKafkaSinkRunReturnsAsyncProducerError(t *testing.T) {
+	ctx := t.Context()
+
+	ctrl := gomock.NewController(t)
+	producerErr := errors.ErrKafkaSendMessage.GenWithStackByArgs()
+	asyncProducer := kafka.NewMockAsyncProducer(ctrl)
+	syncProducer := kafka.NewMockSyncProducer(ctrl)
+	asyncProducer.EXPECT().AsyncRunCallback(gomock.Any()).Return(producerErr)
+	asyncProducer.EXPECT().Close().AnyTimes()
+	syncProducer.EXPECT().Close().AnyTimes()
+
+	kafkaSink, err := newKafkaSinkForTestWithProducers(ctx, t, ctrl, asyncProducer, syncProducer)
+	require.NoError(t, err)
+	defer kafkaSink.Close()
+
+	err = kafkaSink.Run(ctx)
+
+	require.ErrorIs(t, err, errors.ErrKafkaSendMessage)
+	require.False(t, kafkaSink.IsNormal())
 }
 
 func TestKafkaSinkBasicFunctionality(t *testing.T) {
@@ -222,7 +316,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 			_ context.Context,
 			_ string,
 			_ int32,
-			message *codeccommon.Message,
+			message *codecCommon.Message,
 		) error {
 			if message.Callback != nil {
 				message.Callback()
@@ -236,6 +330,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	kafkaSink, err := newKafkaSinkForTestWithProducers(ctx, t, ctrl, asyncProducer, syncProducer)
 	require.NoError(t, err)
 	defer cancel()
+	go kafkaSink.Run(ctx)
 
 	err = kafkaSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)

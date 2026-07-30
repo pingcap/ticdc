@@ -48,6 +48,7 @@ const (
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
 	defaultReportDispatcherStatToStoreInterval = time.Second * 10
+	defaultLargeTxnCleanupRetryInterval        = time.Second * 10
 
 	maxReadyEventIntervalSeconds = 10
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
@@ -84,6 +85,10 @@ type eventBroker struct {
 
 	// dispatcherID -> dispatcherStat map, track all table trigger dispatchers.
 	tableTriggerDispatchers sync.Map
+
+	// dispatcherStat -> struct{}, retains removed/replaced dispatchers whose
+	// large transaction spill cleanup needs another attempt.
+	pendingLargeTxnCleanup sync.Map
 
 	// taskChan is used to send the scan tasks to the scan workers.
 	taskChan []chan scanTask
@@ -204,6 +209,10 @@ func newEventBroker(
 		})
 	}
 
+	g.Go(func() error {
+		return c.runLargeTxnCleanupWorker(ctx, defaultLargeTxnCleanupRetryInterval)
+	})
+
 	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
 	return c
 }
@@ -295,8 +304,9 @@ func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
 
 func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {
 	// Can't send resolvedTs if there was a interrupted scan task happened before.
-	// d.lastScannedStartTs.Load() != 0 indicates that there was a interrupted scan task happened before.
-	if time.Since(d.lastSentResolvedTsTime.Load()) < defaultSendResolvedTsInterval || d.lastScannedStartTs.Load() != 0 {
+	// A non-zero scan-progress start-ts indicates that there was an interrupted scan task before.
+	if time.Since(d.lastSentResolvedTsTime.Load()) < defaultSendResolvedTsInterval ||
+		d.loadScanProgress().txnStartTs != 0 {
 		return
 	}
 	watermark := d.sentResolvedTs.Load()
@@ -419,28 +429,29 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 	}
 }
 
-type scanTaskRangeResult struct {
+type scanTaskRequestResult struct {
 	needScan             bool
-	dataRange            common.DataRange
+	request              eventstore.ScanRequest
 	schemaBlocked        bool
 	schemaBlockedUntilTs uint64
 }
 
-func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRange) {
-	result := c.getScanTaskRange(task)
-	return result.needScan, result.dataRange
+func (c *eventBroker) getScanTaskRequest(task scanTask) (bool, eventstore.ScanRequest) {
+	result := c.getScanTaskRequestResult(task)
+	return result.needScan, result.request
 }
 
-// getScanTaskRange determines the valid data range for scanning a given task.
+// getScanTaskRequestResult determines the valid range and resume cursor for a scan task.
 // It also reports when the applied SchemaStore frontier is the effective range
 // cap, so low-latency mode can retry the dispatcher after that frontier advances.
-func (c *eventBroker) getScanTaskRange(task scanTask) scanTaskRangeResult {
-	// 1. Get the data range of the dispatcher.
-	dataRange, needScan := task.getDataRange()
+func (c *eventBroker) getScanTaskRequestResult(task scanTask) scanTaskRequestResult {
+	// 1. Get the range and resume cursor of the dispatcher.
+	request, needScan := task.getScanRequest()
 	if !needScan {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
-		return scanTaskRangeResult{}
+		return scanTaskRequestResult{}
 	}
+	dataRange := &request.Range
 	receivedResolvedTs := dataRange.CommitTsEnd
 
 	keyspaceMeta := common.KeyspaceMeta{
@@ -452,7 +463,7 @@ func (c *eventBroker) getScanTaskRange(task scanTask) scanTaskRangeResult {
 	ddlState, err := c.schemaStore.GetTableDDLEventState(keyspaceMeta, task.info.GetTableSpan().TableID)
 	if err != nil {
 		log.Error("GetTableDDLEventState failed", zap.Uint32("keyspaceID", task.info.GetTableSpan().KeyspaceID), zap.Int64("tableID", task.info.GetTableSpan().TableID), zap.Error(err))
-		return scanTaskRangeResult{}
+		return scanTaskRequestResult{}
 	}
 	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
 	commitTsEndBeforeWindow := dataRange.CommitTsEnd
@@ -508,13 +519,36 @@ func (c *eventBroker) getScanTaskRange(task scanTask) scanTaskRangeResult {
 		}
 	}
 
+	hasRowResume := len(request.Cursor.Position) != 0
+	// A published row cursor at C came from an earlier scan whose DDL and received
+	// resolved-ts bounds had already reached C. Since those bounds do not regress,
+	// only the adaptive scan window can move CommitTsEnd behind C. For example, if
+	// C=100 and the window caps the end at 80, restore the effective range to
+	// [100, 100] so scanning resumes after Position inside that transaction.
+	if hasRowResume && dataRange.CommitTsEnd < dataRange.CommitTsStart {
+		dataRange.CommitTsEnd = dataRange.CommitTsStart
+	}
+
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
+		// A cursor makes [C, C] meaningful: Position resumes rows inside a
+		// transaction, while TxnStartTs resumes later transactions at the same C.
+		canResumeAtStart := dataRange.CommitTsEnd == dataRange.CommitTsStart &&
+			(hasRowResume || request.Cursor.TxnStartTs != 0)
+		if canResumeAtStart || task.hasPendingLargeTxnState() {
+			result := scanTaskRequestResult{needScan: true, request: request}
+			if c.lowLatencyMode {
+				result.schemaBlocked = ddlState.ResolvedTs < receivedResolvedTs &&
+					dataRange.CommitTsEnd == ddlState.ResolvedTs
+				result.schemaBlockedUntilTs = ddlState.ResolvedTs
+			}
+			return result
+		}
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		// Scan range can become empty after applying capping (for example, scan window).
 		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
 		// but do not advance the watermark here.
 		c.sendSignalResolvedTs(task)
-		result := scanTaskRangeResult{}
+		result := scanTaskRequestResult{}
 		if c.lowLatencyMode && ddlState.ResolvedTs <= dataRange.CommitTsStart && ddlState.ResolvedTs < receivedResolvedTs {
 			result.schemaBlocked = true
 			result.schemaBlockedUntilTs = dataRange.CommitTsStart
@@ -522,14 +556,15 @@ func (c *eventBroker) getScanTaskRange(task scanTask) scanTaskRangeResult {
 		return result
 	}
 
-	result := scanTaskRangeResult{}
+	result := scanTaskRequestResult{}
 	if c.lowLatencyMode {
 		result.schemaBlocked = ddlState.ResolvedTs < receivedResolvedTs && dataRange.CommitTsEnd == ddlState.ResolvedTs
 		result.schemaBlockedUntilTs = ddlState.ResolvedTs
 	}
 
 	// 3. Check whether there is any events in the data range
-	// Note: target range is (dataRange.CommitTsStart-dataRange.LastScannedTxnStartTs, dataRange.CommitTsEnd]
+	// Note: target range resumes after request.Cursor inside
+	// (dataRange.CommitTsStart, dataRange.CommitTsEnd].
 	// when `dataRange.CommitTsStart` equals `task.eventStoreCommitTs.Load()`,
 	// it is difficult to determine whether any txn events with a commitTs of `dataRange.CommitTsStart` remain unscanned.
 	// because multiple transactions may have the same commit ts.
@@ -543,7 +578,7 @@ func (c *eventBroker) getScanTaskRange(task scanTask) scanTaskRangeResult {
 		return result
 	}
 	result.needScan = true
-	result.dataRange = dataRange
+	result.request = request
 	return result
 }
 
@@ -645,6 +680,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	defer func() {
 		c.finishScan(task, interrupted, schemaBlocked, schemaBlockedUntilTs)
 	}()
+	scanCtx, finishActiveScan := task.beginActiveScan(ctx)
+	defer finishActiveScan()
 
 	var (
 		remoteID     = node.ID(task.info.GetServerID())
@@ -669,13 +706,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	rangeResult := c.getScanTaskRange(task)
-	if !rangeResult.needScan {
-		schemaBlocked = rangeResult.schemaBlocked
-		schemaBlockedUntilTs = rangeResult.schemaBlockedUntilTs
+	requestResult := c.getScanTaskRequestResult(task)
+	if !requestResult.needScan {
+		schemaBlocked = requestResult.schemaBlocked
+		schemaBlockedUntilTs = requestResult.schemaBlockedUntilTs
 		return
 	}
-	dataRange := rangeResult.dataRange
+	request := requestResult.request
 
 	// TODO: Currently, this rate limit does not take into account the priority of each task, which may lead to situations where certain tasks are starved and cannot be scheduled for a long time.
 	// For example, there are 10 dispatchers in the incremental scanning phase, with a large amount of traffic and a continuous stream of tasks, which occupy all the rate limits.
@@ -734,17 +771,20 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
-	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
+	scannedBytes, events, progress, interrupted, err := scanner.scan(scanCtx, task, request, sl)
 	if interrupted {
 		metrics.EventServiceInterruptScanCount.Inc()
 	}
 
 	if err != nil {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
+		if task.isRemoved.Load() {
+			return
+		}
 		log.Error("scan events failed",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
-			zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
+			zap.Any("scanRequest", request), zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
@@ -794,9 +834,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			log.Panic("unknown event type", zap.Any("event", e))
 		}
 	}
-	schemaBlocked = rangeResult.schemaBlocked
-	schemaBlockedUntilTs = rangeResult.schemaBlockedUntilTs
-	task.info.GetMode()
+	if progress.valid {
+		task.updateScanRangeWithPosition(
+			progress.txnCommitTs,
+			progress.txnStartTs,
+			progress.rowLevelScanPosition,
+		)
+	}
+	schemaBlocked = requestResult.schemaBlocked
+	schemaBlockedUntilTs = requestResult.schemaBlockedUntilTs
 	// Update metrics
 	metricEventBrokerScanTaskCount.Inc()
 }
@@ -1036,9 +1082,9 @@ func (c *eventBroker) prepareScanFromNotify(d *dispatcherStat) {
 		return
 	}
 
-	rangeResult := c.getScanTaskRange(d)
-	if !rangeResult.needScan {
-		c.finishScan(d, false, rangeResult.schemaBlocked, rangeResult.schemaBlockedUntilTs)
+	requestResult := c.getScanTaskRequestResult(d)
+	if !requestResult.needScan {
+		c.finishScan(d, false, requestResult.schemaBlocked, requestResult.schemaBlockedUntilTs)
 		return
 	}
 
@@ -1352,6 +1398,12 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
 	stat.markRemoved()
 	c.removeSchemaBlockedDispatcher(stat)
+	if err := c.cleanupLargeTxnState(stat); err != nil {
+		log.Warn("cleanup large txn state failed when removing dispatcher, scheduled retry",
+			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+			zap.Stringer("dispatcherID", id),
+			zap.Error(err))
+	}
 
 	if isTableTriggerDispatcher {
 		c.tableTriggerDispatchers.Delete(id)
@@ -1421,11 +1473,16 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		return nil
 	}
 
-	// Mark the old dispatcher as removed.
-	// No need to worry that the old dispatcher is still scanning,
-	// because its data will be filtered by event collector because of stale epoch.
+	// Mark the old dispatcher as removed and cancel its scan before cleaning up
+	// resources shared with that scan.
 	oldStat.markRemoved()
 	c.removeSchemaBlockedDispatcher(oldStat)
+	if err := c.cleanupLargeTxnState(oldStat); err != nil {
+		log.Warn("cleanup large txn state failed when resetting dispatcher, scheduled retry",
+			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+			zap.Stringer("dispatcherID", dispatcherID),
+			zap.Error(err))
+	}
 
 	// Create a new dispatcherStat and replace the old one.
 	// The new dispatcherStat will be used for all future operations.
@@ -1477,6 +1534,12 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		}
 		oldStat.markRemoved()
 		c.removeSchemaBlockedDispatcher(oldStat)
+		if err := c.cleanupLargeTxnState(oldStat); err != nil {
+			log.Warn("cleanup large txn state failed when retrying dispatcher reset, scheduled retry",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.Error(err))
+		}
 	}
 
 	log.Info("reset dispatcher",
@@ -1491,6 +1554,41 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	c.requestScan(newStat)
 
 	return nil
+}
+
+func (c *eventBroker) cleanupLargeTxnState(stat *dispatcherStat) error {
+	err := stat.cleanupLargeTxnState()
+	if err != nil {
+		c.pendingLargeTxnCleanup.Store(stat, struct{}{})
+		return err
+	}
+	c.pendingLargeTxnCleanup.Delete(stat)
+	return nil
+}
+
+func (c *eventBroker) retryPendingLargeTxnCleanup() {
+	c.pendingLargeTxnCleanup.Range(func(key, _ any) bool {
+		stat := key.(*dispatcherStat)
+		if err := stat.cleanupLargeTxnState(); err == nil {
+			c.pendingLargeTxnCleanup.Delete(stat)
+		}
+		return true
+	})
+}
+
+func (c *eventBroker) runLargeTxnCleanupWorker(
+	ctx context.Context, interval time.Duration,
+) error {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.retryPendingLargeTxnCleanup()
+		}
+	}
 }
 
 func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedStatus {

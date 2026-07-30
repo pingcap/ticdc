@@ -9,16 +9,17 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 MAX_RETRIES=30
-REQUIRE_ENCRYPTED_KEYSPACE_START=${REQUIRE_ENCRYPTED_KEYSPACE_START:-false}
+REQUIRE_ENCRYPTED_KEYSPACE_START=${REQUIRE_ENCRYPTED_KEYSPACE_START:-true}
+SPILL_APPEND_FAILPOINT=github.com/pingcap/ticdc/pkg/eventservice/PauseAfterLargeTxnSpillAppend
 
 LOCAL_KMS_ADDR=127.0.0.1
 LOCAL_KMS_PORT=18080
 LOCAL_KMS_PID=
+LOCAL_KMS_MODULE=github.com/nsmithuk/local-kms@v0.0.0-20230108155039-ce4561e0cb19
 
 UPSTREAM_VALID_KEYSPACE=keyspace-foo
 UPSTREAM_INVALID_KEYSPACE=keyspace-foo-invalid
 DOWNSTREAM_KEYSPACE=keyspace-bar
-INVALID_CMEK_ID=00000000-0000-0000-0000-000000000000
 
 UPSTREAM_VALID_TIDB_PORT=14001
 UPSTREAM_VALID_TIDB_STATUS=15001
@@ -49,9 +50,20 @@ function resolve_local_kms_binary() {
 			echo "$gopath/bin/local-kms"
 			return
 		fi
+
+		local install_dir="$WORK_DIR/local-kms-bin"
+		mkdir -p "$install_dir"
+		echo "local-kms is not installed; build ${LOCAL_KMS_MODULE}" >&2
+		if ! GOBIN="$install_dir" go install "$LOCAL_KMS_MODULE"; then
+			echo "failed to build ${LOCAL_KMS_MODULE}" >&2
+			return 1
+		fi
+		echo "$install_dir/local-kms"
+		return
 	fi
 
-	return 0
+	echo "local-kms is not installed and go is unavailable" >&2
+	return 1
 }
 
 function stop_local_kms() {
@@ -64,9 +76,11 @@ function stop_local_kms() {
 function start_local_kms() {
 	local local_kms_binary
 	local kms_data_dir
-	local_kms_binary=$(resolve_local_kms_binary)
+	if ! local_kms_binary=$(resolve_local_kms_binary); then
+		return 1
+	fi
 	if [ -z "${local_kms_binary}" ]; then
-		echo "skip $TEST_NAME: local-kms binary is not found"
+		echo "failed to resolve local-kms binary"
 		return 1
 	fi
 
@@ -224,11 +238,12 @@ function prepare_keyspaces_and_tidb() {
 	fi
 
 	UPSTREAM_VALID_KEYSPACE_ID=$(create_encrypted_keyspace "$UP_PD_HOST_1" "$UP_PD_PORT_1" "$UPSTREAM_VALID_KEYSPACE" "${upstream_key_id}" "${local_kms_endpoint}")
-	UPSTREAM_INVALID_KEYSPACE_ID=$(create_encrypted_keyspace "$UP_PD_HOST_1" "$UP_PD_PORT_1" "$UPSTREAM_INVALID_KEYSPACE" "${INVALID_CMEK_ID}" "${local_kms_endpoint}")
+	# Keep the negative-case keyspace usable by TiKV. Its KMS failure is
+	# injected only into TiCDC through cdc_invalid.toml.
+	UPSTREAM_INVALID_KEYSPACE_ID=$(create_encrypted_keyspace "$UP_PD_HOST_1" "$UP_PD_PORT_1" "$UPSTREAM_INVALID_KEYSPACE" "${upstream_key_id}" "${local_kms_endpoint}")
 	DOWNSTREAM_KEYSPACE_ID=$(create_encrypted_keyspace "$DOWN_PD_HOST" "$DOWN_PD_PORT" "$DOWNSTREAM_KEYSPACE" "${downstream_key_id}" "${local_kms_endpoint}")
 
-	# TiKV may generate encryption meta lazily after first writes in the keyspace.
-	echo "skip waiting encryption meta before first write: valid_keyspace_id=${UPSTREAM_VALID_KEYSPACE_ID}, invalid_keyspace_id=${UPSTREAM_INVALID_KEYSPACE_ID}"
+	echo "created encrypted keyspaces: valid_keyspace_id=${UPSTREAM_VALID_KEYSPACE_ID}, invalid_keyspace_id=${UPSTREAM_INVALID_KEYSPACE_ID}"
 
 	if ! start_keyspace_tidb \
 		"upstream" \
@@ -281,9 +296,75 @@ function assert_table_not_synced_for_duration() {
 	done
 }
 
+function generate_spill_workload() {
+	local sql_file=$1
+	local rows=2048
+
+	{
+		echo "USE cmek_valid;"
+		echo "CREATE TABLE spill_table (id BIGINT PRIMARY KEY, uk BIGINT NOT NULL, payload LONGTEXT, UNIQUE KEY uk_idx (uk));"
+		echo "BEGIN;"
+		for i in $(seq 1 "$rows"); do
+			echo "INSERT INTO spill_table VALUES ($i, $i, CONCAT('cmek-spill-before-', REPEAT('a', 1024)));"
+		done
+		echo "COMMIT;"
+		echo "BEGIN;"
+		echo "UPDATE spill_table SET uk = uk + 1000000, payload = CONCAT('cmek-spill-after-', REPEAT('b', 1024));"
+		echo "COMMIT;"
+	} >"$sql_file"
+}
+
+function run_spill_workload() {
+	local sql_file=$1
+	local workload_log=$WORK_DIR/spill-workload.log
+
+	if ! mysql -h"127.0.0.1" -P"$UPSTREAM_VALID_TIDB_PORT" -uroot \
+		--default-character-set utf8mb4 <"$sql_file" >"$workload_log" 2>&1; then
+		cat "$workload_log"
+		return 1
+	fi
+}
+
+function assert_spill_file_encrypted() {
+	local spill_dir=$WORK_DIR/cdc_data/eventservice
+	local spill_file=
+	local version=
+	local key_id_1=
+	local key_id_2=
+	local key_id_3=
+	local i=0
+
+	while [ "$i" -lt 60 ]; do
+		spill_file=$(find "$spill_dir" -maxdepth 1 -type f \
+			-name 'eventservice-large-txn-insert-*.spill' -size +11c \
+			-print -quit 2>/dev/null || true)
+		if [ -n "$spill_file" ]; then
+			read -r version key_id_1 key_id_2 key_id_3 < <(
+				od -An -tu1 -j 8 -N 4 "$spill_file"
+			)
+			if [ -n "$key_id_3" ]; then
+				if [ "$version" -eq 0 ] ||
+					{ [ "$key_id_1" -eq 0 ] && [ "$key_id_2" -eq 0 ] && [ "$key_id_3" -eq 0 ]; }; then
+					echo "spill record is not CMEK encrypted: $spill_file"
+					od -An -tx1 -j 8 -N 4 "$spill_file"
+					return 1
+				fi
+				echo "verified encrypted spill record: $spill_file"
+				return 0
+			fi
+		fi
+		i=$((i + 1))
+		sleep 1
+	done
+
+	echo "encrypted large transaction spill file was not observed under $spill_dir"
+	return 1
+}
+
 function run_with_valid_kms() {
 	local sink_uri="mysql://root@127.0.0.1:${DOWNSTREAM_TIDB_PORT}/"
 	local changefeed_id=cmek-valid
+	local spill_workload=$WORK_DIR/cmek-spill-workload.sql
 
 	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --config "$CUR/conf/cdc_valid.toml"
 	run_cdc_cli changefeed -k "$UPSTREAM_VALID_KEYSPACE" create --sink-uri="$sink_uri" -c "$changefeed_id"
@@ -293,7 +374,16 @@ function run_with_valid_kms() {
 	run_sql "INSERT INTO cmek_valid.t VALUES (1, 'apple'), (2, 'banana');" "127.0.0.1" "$UPSTREAM_VALID_TIDB_PORT"
 
 	check_table_exists "cmek_valid.t" "127.0.0.1" "$DOWNSTREAM_TIDB_PORT" 90
+
+	generate_spill_workload "$spill_workload"
+	enable_failpoint --addr "127.0.0.1:8300" --name "$SPILL_APPEND_FAILPOINT" --expr "pause"
+	run_spill_workload "$spill_workload"
+	assert_spill_file_encrypted
+	disable_failpoint --addr "127.0.0.1:8300" --name "$SPILL_APPEND_FAILPOINT"
+
 	check_sync_diff "$WORK_DIR" "$CUR/conf/diff_config.toml" 180
+	check_logs_contains "$WORK_DIR" "scan interrupted inside a large txn"
+	check_logs_contains "$WORK_DIR" "split update event"
 
 	run_cdc_cli changefeed -k "$UPSTREAM_VALID_KEYSPACE" remove -c "$changefeed_id"
 	cleanup_process "$CDC_BINARY"
@@ -313,7 +403,9 @@ function run_with_invalid_kms() {
 	ensure "$MAX_RETRIES" "check_logs_contains \"$WORK_DIR\" \"failed to decrypt master key via KMS|failed to decrypt master key via aws kms\" \"-invalid\""
 	assert_table_not_synced_for_duration "cmek_invalid.t" "127.0.0.1" "$DOWNSTREAM_TIDB_PORT" 30
 
-	run_cdc_cli changefeed -k "$UPSTREAM_INVALID_KEYSPACE" remove -c "$changefeed_id" || true
+	# The invalid KMS is expected to make encryption-dependent API requests fail.
+	# Bound the best-effort cleanup so the test does not wait forever for that API.
+	timeout --kill-after=5s 30s run_cdc_cli changefeed -k "$UPSTREAM_INVALID_KEYSPACE" remove -c "$changefeed_id" || true
 	cleanup_process "$CDC_BINARY"
 }
 
@@ -329,8 +421,20 @@ function run() {
 	fi
 
 	if ! start_local_kms; then
+		if [ "${REQUIRE_ENCRYPTED_KEYSPACE_START}" = "true" ]; then
+			echo "local-kms startup failed and strict mode is enabled"
+			exit 1
+		fi
+		echo "skip $TEST_NAME: local-kms startup failed in current environment"
 		return
 	fi
+
+	# TiKV uses the AWS SDK to access the local KMS endpoint configured on each
+	# encrypted keyspace. Dummy credentials let it sign those local requests;
+	# disabling IMDS prevents a missing credential from stalling on EC2 lookup.
+	export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-test}
+	export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-test}
+	export AWS_EC2_METADATA_DISABLED=${AWS_EC2_METADATA_DISABLED:-true}
 
 	export KEYSPACE_WAIT_REGION_SPLIT=false
 	export KEYSPACE_WAIT_REGION_SPLIT_TIMEOUT=1m

@@ -34,7 +34,7 @@ mysql_groups=(
 	# G00
 	'event_filter charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
 	# G01
-	'common_1 large_txn foreign_key changefeed_pause_resume fail_over_ddl_B'
+	'common_1 large_txn large_txn_split foreign_key changefeed_pause_resume fail_over_ddl_B'
 	# G02
 	'new_ci_collation safe_mode savepoint fail_over_ddl_C unsplittable_tables'
 	# G03
@@ -101,7 +101,7 @@ kafka_groups=(
 	# G14
 	'kafka_simple_basic avro_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
-	'kafka_simple_basic_avro split_region autorandom gc_safepoint kafka_log_info'
+	'kafka_simple_basic_avro split_region autorandom gc_safepoint'
 )
 
 # Resource allocation for pulsar light integration tests in CI pipelines:

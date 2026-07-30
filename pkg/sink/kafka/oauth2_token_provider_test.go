@@ -15,8 +15,10 @@ package kafka
 
 import (
 	"context"
+	"net/url"
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
 )
@@ -66,7 +68,9 @@ func TestNewTokenProvider(t *testing.T) {
 			if ts.expectedErr == "" {
 				require.NoError(t, err)
 			} else {
-				require.Error(t, err)
+				require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+				var escapeErr url.EscapeError
+				require.ErrorAs(t, err, &escapeErr)
 				require.Contains(t, err.Error(), ts.expectedErr)
 			}
 		})

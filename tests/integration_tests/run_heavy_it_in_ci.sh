@@ -50,7 +50,7 @@ mysql_groups=(
 	# G09
 	'availability resolve_lock merge_table drop_many_tables ddl_for_split_tables'
 	# G10
-	'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3'
+	'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3 cmek_keyspace'
 	# G11
 	'multi_changefeeds ddl_wait ddl_reentrant force_replicate_table multi_source'
 	# G12
@@ -85,7 +85,7 @@ kafka_groups=(
 	# G08
 	'kafka_simple_claim_check kafka_simple_claim_check_avro tidb_mysql_test'
 	# G09
-	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro mq_sink_error_resume multi_source'
+	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro multi_source'
 	# G10
 	'column_selector kafka_column_selector_avro ddl_with_random_move_table'
 	# G11

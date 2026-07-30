@@ -127,50 +127,21 @@ var (
 		"kafka send message failed",
 		errors.RFCCodeText("CDC:ErrKafkaSendMessage"),
 	)
-	ErrKafkaProducerClosed = errors.Normalize(
-		"kafka producer closed",
-		errors.RFCCodeText("CDC:ErrKafkaProducerClosed"),
+	ErrKafkaSinkClosed = errors.Normalize(
+		"kafka sink closed",
+		errors.RFCCodeText("CDC:ErrKafkaSinkClosed"),
 	)
-	ErrKafkaAsyncSendMessage = errors.Normalize(
-		"kafka async send message failed",
-		errors.RFCCodeText("CDC:ErrKafkaAsyncSendMessage"),
-	)
-	ErrKafkaInvalidPartitionNum = errors.Normalize(
-		"invalid partition num %d",
-		errors.RFCCodeText("CDC:ErrKafkaInvalidPartitionNum"),
-	)
-	ErrKafkaInvalidRequiredAcks = errors.Normalize(
-		"invalid required acks %d, "+
-			"only support these values: 0(NoResponse),1(WaitForLocal) and -1(WaitForAll)",
-		errors.RFCCodeText("CDC:ErrKafkaInvalidRequiredAcks"),
-	)
-	ErrKafkaNewProducer = errors.Normalize(
-		"new kafka producer",
-		errors.RFCCodeText("CDC:ErrKafkaNewProducer"),
-	)
-	ErrKafkaInvalidClientID = errors.Normalize(
-		"invalid kafka client ID '%s'",
-		errors.RFCCodeText("CDC:ErrKafkaInvalidClientID"),
-	)
-	ErrKafkaInvalidVersion = errors.Normalize(
-		"invalid kafka version",
-		errors.RFCCodeText("CDC:ErrKafkaInvalidVersion"),
+	ErrNewKafkaSink = errors.Normalize(
+		"new kafka sink",
+		errors.RFCCodeText("CDC:ErrNewKafkaSink"),
 	)
 	ErrKafkaInvalidConfig = errors.Normalize(
 		"kafka config invalid",
 		errors.RFCCodeText("CDC:ErrKafkaInvalidConfig"),
 	)
-	ErrKafkaCreateTopic = errors.Normalize(
-		"kafka create topic failed",
-		errors.RFCCodeText("CDC:ErrKafkaCreateTopic"),
-	)
-	ErrKafkaInvalidTopicExpression = errors.Normalize(
-		"invalid topic expression: %s ",
-		errors.RFCCodeText("CDC:ErrKafkaTopicExprInvalid"),
-	)
-	ErrKafkaConfigNotFound = errors.Normalize(
-		"kafka config item not found",
-		errors.RFCCodeText("CDC:ErrKafkaConfigNotFound"),
+	ErrKafkaAdminAPI = errors.Normalize(
+		"kafka admin API %s failed: %s",
+		errors.RFCCodeText("CDC:ErrKafkaAdminAPI"),
 	)
 	ErrPulsarInvalidTopicExpression = errors.Normalize(
 		"invalid topic expression",
@@ -724,6 +695,10 @@ var (
 	ErrStorageInitialize = errors.Normalize(
 		"fail to open storage for redo log",
 		errors.RFCCodeText("CDC:ErrStorageInitialize"),
+	)
+	ErrSpillFileOp = errors.Normalize(
+		"spill file operation failed: %s",
+		errors.RFCCodeText("CDC:ErrSpillFileOp"),
 	)
 
 	ErrRedoConfigInvalid = errors.Normalize(

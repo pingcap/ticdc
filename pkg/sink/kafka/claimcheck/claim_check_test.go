@@ -16,10 +16,12 @@ package claimcheck
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/objstore"
 	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
 	"github.com/stretchr/testify/require"
@@ -32,7 +34,7 @@ func TestClaimCheck(t *testing.T) {
 
 	ctx := context.Background()
 
-	changefeedID := commonType.NewChangeFeedIDWithName("test", "")
+	changefeedID := common.NewChangeFeedIDWithName("test", "")
 	largeHandleConfig := config.NewDefaultLargeMessageHandleConfig()
 
 	claimCheck, err := New(ctx, largeHandleConfig, changefeedID)
@@ -49,6 +51,18 @@ func TestClaimCheck(t *testing.T) {
 	require.Equal(t, "file:///tmp/abc/file.json", fileName)
 }
 
+func TestClaimCheckStorageErrorWrappedOnce(t *testing.T) {
+	largeHandleConfig := config.NewDefaultLargeMessageHandleConfig()
+	largeHandleConfig.LargeMessageHandleOption = config.LargeMessageHandleOptionClaimCheck
+	largeHandleConfig.ClaimCheckStorageURI = "invalid://bucket"
+
+	claimCheck, err := New(context.Background(), largeHandleConfig, common.NewChangeFeedIDWithName("test", "default"))
+
+	require.Nil(t, claimCheck)
+	require.ErrorIs(t, err, errors.ErrExternalStorageAPI)
+	require.Equal(t, 1, strings.Count(err.Error(), string(errors.ErrExternalStorageAPI.RFCCode())))
+}
+
 func TestClaimCheckCloseClosesStorage(t *testing.T) {
 	var nilClaimCheck *ClaimCheck
 	require.NotPanics(t, nilClaimCheck.Close)
@@ -58,7 +72,7 @@ func TestClaimCheckCloseClosesStorage(t *testing.T) {
 	storage.EXPECT().Close().Times(1)
 	claimCheck := &ClaimCheck{
 		storage:      storage,
-		changefeedID: commonType.NewChangeFeedIDWithName("test", "default"),
+		changefeedID: common.NewChangeFeedIDWithName("test", "default"),
 	}
 
 	claimCheck.Close()
@@ -67,7 +81,7 @@ func TestClaimCheckCloseClosesStorage(t *testing.T) {
 func TestClaimCheckConcurrentWrites(t *testing.T) {
 	ctx := context.Background()
 	storage := objstore.NewMemStorage()
-	changefeedID := commonType.NewChangeFeedIDWithName("test", "default")
+	changefeedID := common.NewChangeFeedIDWithName("test", "default")
 	claimCheck := &ClaimCheck{
 		storage:                   storage,
 		rawValue:                  true,

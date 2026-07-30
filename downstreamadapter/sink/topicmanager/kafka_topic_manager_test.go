@@ -20,6 +20,7 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
 )
@@ -82,6 +83,7 @@ func TestCreateTopic(t *testing.T) {
 		AutoCreate:        true,
 		PartitionNum:      2,
 		ReplicationFactor: 1,
+		RequiredAcks:      kafka.WaitForAll,
 	}
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
@@ -127,7 +129,7 @@ func TestCreateTopic(t *testing.T) {
 			func(detail *kafka.TopicDetail, validateOnly bool) error {
 				gotFailedTopicDetail = detail
 				gotFailedTopicValidateOnly = validateOnly
-				return sarama.ErrInvalidReplicationFactor
+				return errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ErrInvalidReplicationFactor, "create-topic", detail.Name)
 			}),
 	)
 
@@ -137,6 +139,7 @@ func TestCreateTopic(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
 
+	cfg.RequiredAcks = kafka.WaitForLocal
 	partitionNum, err = manager.CreateTopicAndWaitUntilVisible(ctx, "new-topic")
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
@@ -151,7 +154,12 @@ func TestCreateTopic(t *testing.T) {
 	require.Equal(t, int32(2), partitionsNum)
 
 	// Try to create a topic without auto create.
-	cfg.AutoCreate = false
+	cfg = &kafka.AutoCreateTopicConfig{
+		AutoCreate:        false,
+		PartitionNum:      2,
+		ReplicationFactor: 1,
+		RequiredAcks:      kafka.WaitForAll,
+	}
 	manager = newKafkaTopicManager(ctx, "new-topic2", changefeedID, adminClient, cfg)
 	defer manager.Close()
 	_, err = manager.CreateTopicAndWaitUntilVisible(ctx, "new-topic2")
@@ -172,14 +180,44 @@ func TestCreateTopic(t *testing.T) {
 	manager = newKafkaTopicManager(ctx, topic, changefeedID, adminClient, cfg)
 	defer manager.Close()
 	_, err = manager.CreateTopicAndWaitUntilVisible(ctx, topic)
-	require.Regexp(
-		t,
-		"kafka create topic failed: kafka server: Replication-factor is invalid",
-		err,
-	)
+	require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+	require.ErrorIs(t, err, sarama.ErrInvalidReplicationFactor)
 	require.NotNil(t, gotFailedTopicDetail)
 	require.Equal(t, "new-topic-failed", gotFailedTopicDetail.Name)
 	require.False(t, gotFailedTopicValidateOnly)
+}
+
+func TestCreateTopicValidatesReplicationFactor(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	adminClient := kafka.NewMockClusterAdminClient(ctrl)
+	topic := "new-topic"
+	gomock.InOrder(
+		adminClient.EXPECT().GetTopicsMeta([]string{topic}, true).
+			Return(map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).
+			Return(map[string]kafka.TopicDetail{}, nil),
+		adminClient.EXPECT().GetBrokerConfig(kafka.MinInsyncReplicasConfigName).
+			Return("2", true, nil),
+	)
+
+	manager := newKafkaTopicManager(
+		context.Background(),
+		topic,
+		common.NewChangefeedID4Test("test", "test"),
+		adminClient,
+		&kafka.AutoCreateTopicConfig{
+			AutoCreate:        true,
+			PartitionNum:      2,
+			ReplicationFactor: 1,
+			RequiredAcks:      kafka.WaitForAll,
+		},
+	)
+	defer manager.Close()
+
+	_, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), topic)
+	require.ErrorContains(t, err, "`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of broker")
 }
 
 func TestCreateTopicWaitsUntilVisible(t *testing.T) {

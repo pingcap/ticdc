@@ -337,6 +337,45 @@ func TestMergeDispatcherOperatorScheduleMaintainerEpoch(t *testing.T) {
 	require.Equal(t, uint64(7), req.MaintainerEpoch)
 }
 
+func TestControllerRestoredMergeOperatorScheduleMaintainerEpoch(t *testing.T) {
+	// Scenario: bootstrap restores an in-flight merge after maintainer failover.
+	// Steps: restore the merge through the controller, schedule it, and verify the request
+	// carries the controller epoch instead of the zero value.
+	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, toMergedReplicaSets, _, nodeA := setupMergeTestEnvironment(t)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	setAliveNodes(nodeManager, map[node.ID]*node.Info{nodeA: {ID: nodeA}})
+
+	oc := NewOperatorController(toMergedReplicaSets[0].ChangefeedID, spanController, 1, common.DefaultMode)
+	oc.SetMaintainerEpoch(7)
+
+	mergedSpan := &heartbeatpb.TableSpan{
+		TableID:  toMergedReplicaSets[0].Span.TableID,
+		StartKey: toMergedReplicaSets[0].Span.StartKey,
+		EndKey:   toMergedReplicaSets[len(toMergedReplicaSets)-1].Span.EndKey,
+	}
+	mergedReplicaSet := replica.NewSpanReplication(
+		toMergedReplicaSets[0].ChangefeedID,
+		common.NewDispatcherID(),
+		toMergedReplicaSets[0].GetSchemaID(),
+		mergedSpan,
+		toMergedReplicaSets[0].GetStatus().CheckpointTs,
+		common.DefaultMode,
+		toMergedReplicaSets[0].IsSplitEnabled(),
+	)
+	spanController.AddSchedulingReplicaSet(mergedReplicaSet, nodeA)
+
+	op := oc.AddRestoredMergeOperator(toMergedReplicaSets, mergedReplicaSet)
+	require.NotNil(t, op)
+	msg := op.Schedule()
+	require.NotNil(t, msg)
+
+	req := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
+	require.Equal(t, uint64(7), req.MaintainerEpoch)
+}
+
 func TestController_RemoveReplicaSet_ReplacesRemoveOperatorOnTaskRemoved(t *testing.T) {
 	// Scenario: the barrier can enqueue the same remove task multiple times during failover/bootstrap.
 	// Steps:
