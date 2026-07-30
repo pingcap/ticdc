@@ -483,7 +483,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 	}
 	log.Info("kafka ddl event sent",
 		zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
-		zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()),
+		zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()), zap.Any("DDL", event.GetDDLQuery()),
 		zap.String("schema", event.GetSchemaName()), zap.String("table", event.GetTableName()))
 	return nil
 }
@@ -517,9 +517,6 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			return context.Cause(ctx)
 		case ts, ok := <-s.checkpointChan:
 			if !ok {
-				log.Warn("kafka checkpoint channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 

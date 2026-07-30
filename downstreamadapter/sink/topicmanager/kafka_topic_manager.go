@@ -253,15 +253,6 @@ func (m *kafkaTopicManager) createTopic(
 		return 0, err
 	}
 
-	log.Info(
-		"kafka topic created",
-		zap.String("keyspace", m.changefeedID.Keyspace()),
-		zap.String("changefeed", m.changefeedID.Name()),
-		zap.String("topic", topicName),
-		zap.Int32("partitionNum", m.cfg.PartitionNum),
-		zap.Int16("replicationFactor", m.cfg.ReplicationFactor),
-		zap.Duration("duration", time.Since(start)),
-	)
 	m.tryUpdatePartitionsAndLogging(topicName, m.cfg.PartitionNum)
 
 	return m.cfg.PartitionNum, nil
@@ -294,6 +285,7 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 		return numPartition, nil
 	}
 
+	start := time.Now()
 	partitionNum, err := m.createTopic(ctx, topicName)
 	if err != nil {
 		if kafka.IsAdminAuthorizationFailed(err) {
@@ -306,6 +298,16 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	if err != nil {
 		return 0, err
 	}
+
+	log.Info(
+		"kafka topic created",
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeed", m.changefeedID.Name()),
+		zap.String("topic", topicName),
+		zap.Int32("partitionNum", partitionNum),
+		zap.Int16("replicationFactor", m.cfg.ReplicationFactor),
+		zap.Duration("duration", time.Since(start)),
+	)
 
 	return partitionNum, nil
 }

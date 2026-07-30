@@ -409,9 +409,9 @@ func TestClientID(t *testing.T) {
 
 func TestTimeout(t *testing.T) {
 	options := NewOptions()
-	require.Equal(t, defaultTimeout, options.DialTimeout)
-	require.Equal(t, defaultTimeout, options.ReadTimeout)
-	require.Equal(t, defaultTimeout, options.WriteTimeout)
+	require.Equal(t, 10*time.Second, options.DialTimeout)
+	require.Equal(t, 10*time.Second, options.ReadTimeout)
+	require.Equal(t, 10*time.Second, options.WriteTimeout)
 
 	uri := "kafka://127.0.0.1:9092/kafka-test?dial-timeout=5s&read-timeout=1000ms" +
 		"&write-timeout=2m"
