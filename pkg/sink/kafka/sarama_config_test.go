@@ -21,9 +21,9 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/gin-gonic/gin/binding"
-	"github.com/pingcap/errors"
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
 )
@@ -85,6 +85,21 @@ func TestNewSaramaConfig(t *testing.T) {
 	require.Equal(t, sarama.SASLMechanism("SCRAM-SHA-256"), cfg.Net.SASL.Mechanism)
 }
 
+func TestNewSaramaConfigInvalidOAuthTokenURL(t *testing.T) {
+	options := NewOptions()
+	options.SASL = &security.SASL{
+		SASLMechanism: security.OAuthMechanism,
+		OAuth2: security.OAuth2{
+			TokenURL: "http://test.com/Segment%%2815197306101420000%29",
+		},
+	}
+
+	_, err := newSaramaConfig(t.Context(), options)
+	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+	var escapeErr url.EscapeError
+	require.ErrorAs(t, err, &escapeErr)
+}
+
 func TestNewSaramaConfigMaxRetryFromSinkURI(t *testing.T) {
 	t.Parallel()
 
@@ -126,7 +141,7 @@ func TestNewSaramaConfigMaxRetryFromSinkURI(t *testing.T) {
 			sinkURI, err := url.Parse(test.sinkURI)
 			require.NoError(t, err)
 			err = options.Apply(
-				commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"),
+				common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
 				sinkURI,
 				config.GetDefaultReplicaConfig().Sink,
 			)
