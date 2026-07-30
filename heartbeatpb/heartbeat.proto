@@ -292,6 +292,8 @@ message MaintainerBootstrapResponse {
     uint64 redo_checkpoint_ts = 5;
     repeated ScheduleDispatcherRequest operators = 6;
     uint64 maintainer_epoch = 7;
+    // merge_operators contains in-flight merge dispatcher requests for bootstrap recovery.
+    repeated MergeDispatcherRequest merge_operators = 8;
 }
 
 message MaintainerPostBootstrapRequest {
