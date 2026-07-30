@@ -19,6 +19,8 @@ import (
 	perrors "github.com/pingcap/errors"
 )
 
+type RFCErrorCode = perrors.RFCErrorCode
+
 var (
 	// Is is a shortcut for errors.Is.
 	Is = errors.Is
