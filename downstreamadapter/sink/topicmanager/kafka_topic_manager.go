@@ -114,10 +114,6 @@ func (m *kafkaTopicManager) backgroundRefreshMeta(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("Background refresh Kafka metadata goroutine exit.",
-				zap.String("keyspace", m.changefeedID.Keyspace()),
-				zap.String("changefeed", m.changefeedID.Name()),
-			)
 			return
 		case <-ticker.C:
 			// We ignore the error here, because the error may be caused by the
@@ -147,13 +143,6 @@ func (m *kafkaTopicManager) tryUpdatePartitionsAndLogging(topic string, partitio
 		}
 	} else {
 		m.topics.Store(topic, partitions)
-		log.Info(
-			"store topic partition number",
-			zap.String("keyspace", m.changefeedID.Keyspace()),
-			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("topic", topic),
-			zap.Int32("partitionNumber", partitions),
-		)
 	}
 }
 
@@ -201,19 +190,13 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 	ctx context.Context,
 	topicName string,
 ) error {
+	start := time.Now()
 	topics := []string{topicName}
 	err := retry.Do(ctx, func() error {
-		start := time.Now()
 		// ignoreTopicError is set to false since we just create the topic,
 		// make sure the topic is visible.
 		meta, err := m.admin.GetTopicsMeta(topics, false)
 		if err != nil {
-			log.Warn("topic not found, retry it",
-				zap.String("keyspace", m.changefeedID.Keyspace()),
-				zap.String("changefeed", m.changefeedID.Name()),
-				zap.Error(err),
-				zap.Duration("duration", time.Since(start)),
-			)
 			return err
 		}
 		_, ok := meta[topicName]
@@ -225,7 +208,11 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 		retry.WithBackoffMaxDelay(1000),
 		retry.WithMaxTries(6),
 	)
-
+	log.Warn("kafka topic not found for too long",
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeed", m.changefeedID.Name()),
+		zap.Duration("duration", time.Since(start)),
+		zap.Error(err))
 	return err
 }
 

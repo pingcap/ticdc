@@ -97,9 +97,6 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("async producer exit since context is done",
-				zap.String("keyspace", p.changefeedID.Keyspace()),
-				zap.String("changefeed", p.changefeedID.Name()))
 			return context.Cause(ctx)
 		case ack := <-p.producer.Successes():
 			if ack != nil {

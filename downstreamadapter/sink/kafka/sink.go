@@ -311,9 +311,6 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 		default:
 			event, ok := s.eventChan.Get()
 			if !ok {
-				log.Info("kafka sink event channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			schema := event.TableInfo.GetSchemaName()
@@ -343,9 +340,6 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 		default:
 			event, ok := s.rowChan.Get()
 			if !ok {
-				log.Info("kafka sink event channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			if err := s.comp.encoderGroup.AddEvents(ctx, event.Key, &event.RowEvent); err != nil {
@@ -368,10 +362,6 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 		start := time.Now()
 		msgs, err := s.batch(ctx, msgsBuf)
 		if err != nil {
-			log.Error("kafka sink batch dml events failed",
-				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.String("changefeed", s.changefeedID.Name()),
-				zap.Error(err))
 			return err
 		}
 		if len(msgs) == 0 {
@@ -401,9 +391,6 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent) ([]*
 	default:
 		msgs, ok := s.rowChan.GetMultipleNoGroup(buffer)
 		if !ok {
-			log.Info("kafka sink event channel closed",
-				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.String("changefeed", s.changefeedID.Name()))
 			return nil, nil
 		}
 		buffer = buffer[:0]
@@ -435,9 +422,6 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			return context.Cause(ctx)
 		case future, ok := <-outCh:
 			if !ok {
-				log.Info("kafka sink encoder's output channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			if err = future.Ready(ctx); err != nil {
@@ -447,7 +431,6 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				start := time.Now()
 				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
-					log.Debug("send message to kafka", zap.String("messageKey", util.RedactBytes(message.Key)), zap.String("messageValue", util.RedactBytes(message.Value)))
 					if err = s.dmlProducer.AsyncSend(
 						ctx,
 						future.Key.Topic,
@@ -476,9 +459,6 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 			return err
 		}
 		if message == nil {
-			log.Info("Skip ddl event", zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", e.GetCommitTs()),
-				zap.String("query", e.Query),
-				zap.Stringer("changefeed", s.changefeedID))
 			continue
 		}
 		codecCommon.SetDDLMessageLogInfo(message, e)
@@ -596,10 +576,6 @@ func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 
 func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 	if s.tableSchemaStore == nil {
-		log.Warn("kafka sink table schema store is not set",
-			zap.String("keyspace", s.changefeedID.Keyspace()),
-			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Uint64("ts", ts))
 		return nil
 	}
 	return s.tableSchemaStore.GetAllTableNames(ts, true)
