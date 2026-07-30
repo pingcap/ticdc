@@ -802,7 +802,8 @@ func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *mes
 					},
 				},
 			},
-			Mode: mode,
+			Mode:            mode,
+			MaintainerEpoch: be.operatorController.MaintainerEpoch(),
 		})
 	return msg
 }
@@ -827,7 +828,8 @@ func (be *BarrierEvent) newPassActionMessage(capture node.ID, mode int64) *messa
 					InfluencedDispatchers: influenced,
 				},
 			},
-			Mode: mode,
+			Mode:            mode,
+			MaintainerEpoch: be.operatorController.MaintainerEpoch(),
 		})
 }
 

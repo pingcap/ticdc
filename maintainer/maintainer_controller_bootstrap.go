@@ -153,6 +153,7 @@ func (c *Controller) FinishBootstrap(
 		TableTriggerEventDispatcherId: c.spanController.GetDDLDispatcherID().ToPB(),
 		Schemas:                       c.prepareSchemaInfoResponse(schemaInfos),
 		RedoSchemas:                   c.prepareSchemaInfoResponse(redoSchemaInfos),
+		MaintainerEpoch:               c.currentMaintainerEpoch(),
 	}, nil
 }
 
@@ -836,8 +837,14 @@ func (c *Controller) handleCurrentWorkingAdd(
 	// 3. If the original operator is split, which is a remove + add + add...,
 	// same as move, just finish the add part.
 	case heartbeatpb.OperatorType_O_Add, heartbeatpb.OperatorType_O_Move, heartbeatpb.OperatorType_O_Split:
-		op := operator.NewAddDispatcherOperator(spanController, replicaSet, node, heartbeatpb.OperatorType_O_Add)
 		operatorController := c.getOperatorController(req.Config.Mode)
+		op := operator.NewAddDispatcherOperator(
+			spanController,
+			replicaSet,
+			node,
+			heartbeatpb.OperatorType_O_Add,
+			operatorController.MaintainerEpoch(),
+		)
 		if ok := operatorController.AddOperator(op); !ok {
 			log.Error("add operator failed when dealing current working operators in bootstrap, should not happen",
 				zap.String("nodeID", node.String()),
@@ -876,6 +883,7 @@ func (c *Controller) handleCurrentWorkingRemove(
 			spanController,
 			replicaSet,
 			heartbeatpb.OperatorType_O_Remove,
+			operatorController.MaintainerEpoch(),
 			nil,
 		)
 		if ok := operatorController.AddOperator(op); !ok {
@@ -897,6 +905,7 @@ func (c *Controller) handleCurrentWorkingRemove(
 			spanController,
 			replicaSet,
 			req.OperatorType,
+			operatorController.MaintainerEpoch(),
 			func() { // post finish
 				// Mark the span absent only if it still exists. A concurrent DDL may have already removed it,
 				// and we must not reintroduce a ghost entry into spanController.

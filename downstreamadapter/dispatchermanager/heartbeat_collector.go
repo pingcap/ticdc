@@ -263,12 +263,12 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 		heartbeatResponse := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 		c.heartBeatResponseDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(heartbeatResponse.ChangefeedID),
-			NewHeartBeatResponse(heartbeatResponse))
+			NewHeartBeatResponse(msg.From, heartbeatResponse))
 	case messaging.TypeScheduleDispatcherRequest:
 		schedulerDispatcherRequest := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 		c.schedulerDispatcherRequestDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(schedulerDispatcherRequest.ChangefeedID),
-			NewSchedulerDispatcherRequest(schedulerDispatcherRequest))
+			NewSchedulerDispatcherRequest(msg.From, schedulerDispatcherRequest))
 		// TODO: check metrics
 		metrics.HandleDispatcherRequsetCounter.WithLabelValues("default", schedulerDispatcherRequest.ChangefeedID.Name, "receive").Inc()
 	case messaging.TypeCheckpointTsMessage:
@@ -290,7 +290,7 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 		mergeDispatcherRequest := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
 		c.mergeDispatcherRequestDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(mergeDispatcherRequest.ChangefeedID),
-			NewMergeDispatcherRequest(mergeDispatcherRequest))
+			NewMergeDispatcherRequest(msg.From, mergeDispatcherRequest))
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.String("type", msg.Type.String()),

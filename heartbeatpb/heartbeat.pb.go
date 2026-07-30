@@ -837,6 +837,8 @@ type HeartBeatResponse struct {
 	ChangefeedID       *ChangefeedID       `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
 	DispatcherStatuses []*DispatcherStatus `protobuf:"bytes,2,rep,name=dispatcherStatuses,proto3" json:"dispatcherStatuses,omitempty"`
 	Mode               int64               `protobuf:"varint,3,opt,name=mode,proto3" json:"mode,omitempty"`
+	// maintainer_epoch fences barrier decisions from stale maintainers.
+	MaintainerEpoch uint64 `protobuf:"varint,4,opt,name=maintainer_epoch,json=maintainerEpoch,proto3" json:"maintainer_epoch,omitempty"`
 }
 
 func (m *HeartBeatResponse) Reset()         { *m = HeartBeatResponse{} }
@@ -889,6 +891,13 @@ func (m *HeartBeatResponse) GetDispatcherStatuses() []*DispatcherStatus {
 func (m *HeartBeatResponse) GetMode() int64 {
 	if m != nil {
 		return m.Mode
+	}
+	return 0
+}
+
+func (m *HeartBeatResponse) GetMaintainerEpoch() uint64 {
+	if m != nil {
+		return m.MaintainerEpoch
 	}
 	return 0
 }
@@ -1222,10 +1231,11 @@ func (m *DispatcherConfig) GetSkipDMLAsStartTs() bool {
 }
 
 type ScheduleDispatcherRequest struct {
-	ChangefeedID   *ChangefeedID     `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
-	Config         *DispatcherConfig `protobuf:"bytes,2,opt,name=config,proto3" json:"config,omitempty"`
-	ScheduleAction ScheduleAction    `protobuf:"varint,3,opt,name=scheduleAction,proto3,enum=heartbeatpb.ScheduleAction" json:"scheduleAction,omitempty"`
-	OperatorType   OperatorType      `protobuf:"varint,4,opt,name=operatorType,proto3,enum=heartbeatpb.OperatorType" json:"operatorType,omitempty"`
+	ChangefeedID    *ChangefeedID     `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
+	Config          *DispatcherConfig `protobuf:"bytes,2,opt,name=config,proto3" json:"config,omitempty"`
+	ScheduleAction  ScheduleAction    `protobuf:"varint,3,opt,name=scheduleAction,proto3,enum=heartbeatpb.ScheduleAction" json:"scheduleAction,omitempty"`
+	OperatorType    OperatorType      `protobuf:"varint,4,opt,name=operatorType,proto3,enum=heartbeatpb.OperatorType" json:"operatorType,omitempty"`
+	MaintainerEpoch uint64            `protobuf:"varint,5,opt,name=maintainer_epoch,json=maintainerEpoch,proto3" json:"maintainer_epoch,omitempty"`
 }
 
 func (m *ScheduleDispatcherRequest) Reset()         { *m = ScheduleDispatcherRequest{} }
@@ -1289,11 +1299,19 @@ func (m *ScheduleDispatcherRequest) GetOperatorType() OperatorType {
 	return OperatorType_O_Add
 }
 
+func (m *ScheduleDispatcherRequest) GetMaintainerEpoch() uint64 {
+	if m != nil {
+		return m.MaintainerEpoch
+	}
+	return 0
+}
+
 type MergeDispatcherRequest struct {
 	ChangefeedID       *ChangefeedID   `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
 	DispatcherIDs      []*DispatcherID `protobuf:"bytes,2,rep,name=dispatcherIDs,proto3" json:"dispatcherIDs,omitempty"`
 	MergedDispatcherID *DispatcherID   `protobuf:"bytes,3,opt,name=mergedDispatcherID,proto3" json:"mergedDispatcherID,omitempty"`
 	Mode               int64           `protobuf:"varint,4,opt,name=mode,proto3" json:"mode,omitempty"`
+	MaintainerEpoch    uint64          `protobuf:"varint,5,opt,name=maintainer_epoch,json=maintainerEpoch,proto3" json:"maintainer_epoch,omitempty"`
 }
 
 func (m *MergeDispatcherRequest) Reset()         { *m = MergeDispatcherRequest{} }
@@ -1353,6 +1371,13 @@ func (m *MergeDispatcherRequest) GetMergedDispatcherID() *DispatcherID {
 func (m *MergeDispatcherRequest) GetMode() int64 {
 	if m != nil {
 		return m.Mode
+	}
+	return 0
+}
+
+func (m *MergeDispatcherRequest) GetMaintainerEpoch() uint64 {
+	if m != nil {
+		return m.MaintainerEpoch
 	}
 	return 0
 }
@@ -1488,7 +1513,8 @@ type MaintainerStatus struct {
 	LastSyncedTs  uint64          `protobuf:"varint,7,opt,name=lastSyncedTs,proto3" json:"lastSyncedTs,omitempty"`
 	// drain_progress reports the active dispatcher drain target observed by this maintainer.
 	// Nil means no active dispatcher drain target.
-	DrainProgress *DrainProgress `protobuf:"bytes,8,opt,name=drain_progress,json=drainProgress,proto3" json:"drain_progress,omitempty"`
+	DrainProgress   *DrainProgress `protobuf:"bytes,8,opt,name=drain_progress,json=drainProgress,proto3" json:"drain_progress,omitempty"`
+	MaintainerEpoch uint64         `protobuf:"varint,9,opt,name=maintainer_epoch,json=maintainerEpoch,proto3" json:"maintainer_epoch,omitempty"`
 }
 
 func (m *MaintainerStatus) Reset()         { *m = MaintainerStatus{} }
@@ -1578,6 +1604,13 @@ func (m *MaintainerStatus) GetDrainProgress() *DrainProgress {
 		return m.DrainProgress
 	}
 	return nil
+}
+
+func (m *MaintainerStatus) GetMaintainerEpoch() uint64 {
+	if m != nil {
+		return m.MaintainerEpoch
+	}
+	return 0
 }
 
 // NodeHeartbeat is sent periodically from a node to the coordinator.
@@ -1937,6 +1970,7 @@ type AddMaintainerRequest struct {
 	CheckpointTs    uint64        `protobuf:"varint,3,opt,name=checkpoint_ts,json=checkpointTs,proto3" json:"checkpoint_ts,omitempty"`
 	IsNewChangefeed bool          `protobuf:"varint,4,opt,name=is_new_changefeed,json=isNewChangefeed,proto3" json:"is_new_changefeed,omitempty"`
 	KeyspaceId      uint32        `protobuf:"varint,5,opt,name=keyspace_id,json=keyspaceId,proto3" json:"keyspace_id,omitempty"`
+	MaintainerEpoch uint64        `protobuf:"varint,6,opt,name=maintainer_epoch,json=maintainerEpoch,proto3" json:"maintainer_epoch,omitempty"`
 }
 
 func (m *AddMaintainerRequest) Reset()         { *m = AddMaintainerRequest{} }
@@ -2007,11 +2041,19 @@ func (m *AddMaintainerRequest) GetKeyspaceId() uint32 {
 	return 0
 }
 
+func (m *AddMaintainerRequest) GetMaintainerEpoch() uint64 {
+	if m != nil {
+		return m.MaintainerEpoch
+	}
+	return 0
+}
+
 type RemoveMaintainerRequest struct {
-	Id         *ChangefeedID `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Cascade    bool          `protobuf:"varint,2,opt,name=cascade,proto3" json:"cascade,omitempty"`
-	Removed    bool          `protobuf:"varint,3,opt,name=removed,proto3" json:"removed,omitempty"`
-	KeyspaceId uint32        `protobuf:"varint,4,opt,name=keyspace_id,json=keyspaceId,proto3" json:"keyspace_id,omitempty"`
+	Id              *ChangefeedID `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Cascade         bool          `protobuf:"varint,2,opt,name=cascade,proto3" json:"cascade,omitempty"`
+	Removed         bool          `protobuf:"varint,3,opt,name=removed,proto3" json:"removed,omitempty"`
+	KeyspaceId      uint32        `protobuf:"varint,4,opt,name=keyspace_id,json=keyspaceId,proto3" json:"keyspace_id,omitempty"`
+	MaintainerEpoch uint64        `protobuf:"varint,5,opt,name=maintainer_epoch,json=maintainerEpoch,proto3" json:"maintainer_epoch,omitempty"`
 }
 
 func (m *RemoveMaintainerRequest) Reset()         { *m = RemoveMaintainerRequest{} }
@@ -2075,6 +2117,13 @@ func (m *RemoveMaintainerRequest) GetKeyspaceId() uint32 {
 	return 0
 }
 
+func (m *RemoveMaintainerRequest) GetMaintainerEpoch() uint64 {
+	if m != nil {
+		return m.MaintainerEpoch
+	}
+	return 0
+}
+
 type MaintainerBootstrapRequest struct {
 	ChangefeedID                  *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
 	Config                        []byte        `protobuf:"bytes,2,opt,name=config,proto3" json:"config,omitempty"`
@@ -2083,6 +2132,7 @@ type MaintainerBootstrapRequest struct {
 	IsNewChangefeed               bool          `protobuf:"varint,5,opt,name=is_new_changefeed,json=isNewChangefeed,proto3" json:"is_new_changefeed,omitempty"`
 	TableTriggerRedoDispatcherId  *DispatcherID `protobuf:"bytes,6,opt,name=table_trigger_redo_dispatcher_id,json=tableTriggerRedoDispatcherId,proto3" json:"table_trigger_redo_dispatcher_id,omitempty"`
 	KeyspaceId                    uint32        `protobuf:"varint,7,opt,name=keyspace_id,json=keyspaceId,proto3" json:"keyspace_id,omitempty"`
+	MaintainerEpoch               uint64        `protobuf:"varint,8,opt,name=maintainer_epoch,json=maintainerEpoch,proto3" json:"maintainer_epoch,omitempty"`
 }
 
 func (m *MaintainerBootstrapRequest) Reset()         { *m = MaintainerBootstrapRequest{} }
@@ -2167,6 +2217,13 @@ func (m *MaintainerBootstrapRequest) GetKeyspaceId() uint32 {
 	return 0
 }
 
+func (m *MaintainerBootstrapRequest) GetMaintainerEpoch() uint64 {
+	if m != nil {
+		return m.MaintainerEpoch
+	}
+	return 0
+}
+
 type MaintainerBootstrapResponse struct {
 	ChangefeedID *ChangefeedID         `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
 	Spans        []*BootstrapTableSpan `protobuf:"bytes,2,rep,name=spans,proto3" json:"spans,omitempty"`
@@ -2184,6 +2241,7 @@ type MaintainerBootstrapResponse struct {
 	// It will be used when redo enable.
 	RedoCheckpointTs uint64                       `protobuf:"varint,5,opt,name=redo_checkpoint_ts,json=redoCheckpointTs,proto3" json:"redo_checkpoint_ts,omitempty"`
 	Operators        []*ScheduleDispatcherRequest `protobuf:"bytes,6,rep,name=operators,proto3" json:"operators,omitempty"`
+	MaintainerEpoch  uint64                       `protobuf:"varint,7,opt,name=maintainer_epoch,json=maintainerEpoch,proto3" json:"maintainer_epoch,omitempty"`
 }
 
 func (m *MaintainerBootstrapResponse) Reset()         { *m = MaintainerBootstrapResponse{} }
@@ -2261,11 +2319,19 @@ func (m *MaintainerBootstrapResponse) GetOperators() []*ScheduleDispatcherReques
 	return nil
 }
 
+func (m *MaintainerBootstrapResponse) GetMaintainerEpoch() uint64 {
+	if m != nil {
+		return m.MaintainerEpoch
+	}
+	return 0
+}
+
 type MaintainerPostBootstrapRequest struct {
 	ChangefeedID                  *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
 	TableTriggerEventDispatcherId *DispatcherID `protobuf:"bytes,2,opt,name=table_trigger_event_dispatcher_id,json=tableTriggerEventDispatcherId,proto3" json:"table_trigger_event_dispatcher_id,omitempty"`
 	Schemas                       []*SchemaInfo `protobuf:"bytes,3,rep,name=schemas,proto3" json:"schemas,omitempty"`
 	RedoSchemas                   []*SchemaInfo `protobuf:"bytes,4,rep,name=redo_schemas,json=redoSchemas,proto3" json:"redo_schemas,omitempty"`
+	MaintainerEpoch               uint64        `protobuf:"varint,5,opt,name=maintainer_epoch,json=maintainerEpoch,proto3" json:"maintainer_epoch,omitempty"`
 }
 
 func (m *MaintainerPostBootstrapRequest) Reset()         { *m = MaintainerPostBootstrapRequest{} }
@@ -2329,10 +2395,18 @@ func (m *MaintainerPostBootstrapRequest) GetRedoSchemas() []*SchemaInfo {
 	return nil
 }
 
+func (m *MaintainerPostBootstrapRequest) GetMaintainerEpoch() uint64 {
+	if m != nil {
+		return m.MaintainerEpoch
+	}
+	return 0
+}
+
 type MaintainerPostBootstrapResponse struct {
 	ChangefeedID                  *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
 	TableTriggerEventDispatcherId *DispatcherID `protobuf:"bytes,2,opt,name=table_trigger_event_dispatcher_id,json=tableTriggerEventDispatcherId,proto3" json:"table_trigger_event_dispatcher_id,omitempty"`
 	Err                           *RunningError `protobuf:"bytes,3,opt,name=err,proto3" json:"err,omitempty"`
+	MaintainerEpoch               uint64        `protobuf:"varint,4,opt,name=maintainer_epoch,json=maintainerEpoch,proto3" json:"maintainer_epoch,omitempty"`
 }
 
 func (m *MaintainerPostBootstrapResponse) Reset()         { *m = MaintainerPostBootstrapResponse{} }
@@ -2387,6 +2461,13 @@ func (m *MaintainerPostBootstrapResponse) GetErr() *RunningError {
 		return m.Err
 	}
 	return nil
+}
+
+func (m *MaintainerPostBootstrapResponse) GetMaintainerEpoch() uint64 {
+	if m != nil {
+		return m.MaintainerEpoch
+	}
+	return 0
 }
 
 type SchemaInfo struct {
@@ -2596,7 +2677,8 @@ func (m *BootstrapTableSpan) GetMode() int64 {
 type MaintainerCloseRequest struct {
 	ChangefeedID *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
 	// true when remove changefeed, false when pause the changefeed.
-	Removed bool `protobuf:"varint,2,opt,name=removed,proto3" json:"removed,omitempty"`
+	Removed         bool   `protobuf:"varint,2,opt,name=removed,proto3" json:"removed,omitempty"`
+	MaintainerEpoch uint64 `protobuf:"varint,3,opt,name=maintainer_epoch,json=maintainerEpoch,proto3" json:"maintainer_epoch,omitempty"`
 }
 
 func (m *MaintainerCloseRequest) Reset()         { *m = MaintainerCloseRequest{} }
@@ -2646,9 +2728,17 @@ func (m *MaintainerCloseRequest) GetRemoved() bool {
 	return false
 }
 
+func (m *MaintainerCloseRequest) GetMaintainerEpoch() uint64 {
+	if m != nil {
+		return m.MaintainerEpoch
+	}
+	return 0
+}
+
 type MaintainerCloseResponse struct {
-	ChangefeedID *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
-	Success      bool          `protobuf:"varint,2,opt,name=success,proto3" json:"success,omitempty"`
+	ChangefeedID    *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
+	Success         bool          `protobuf:"varint,2,opt,name=success,proto3" json:"success,omitempty"`
+	MaintainerEpoch uint64        `protobuf:"varint,3,opt,name=maintainer_epoch,json=maintainerEpoch,proto3" json:"maintainer_epoch,omitempty"`
 }
 
 func (m *MaintainerCloseResponse) Reset()         { *m = MaintainerCloseResponse{} }
@@ -2696,6 +2786,13 @@ func (m *MaintainerCloseResponse) GetSuccess() bool {
 		return m.Success
 	}
 	return false
+}
+
+func (m *MaintainerCloseResponse) GetMaintainerEpoch() uint64 {
+	if m != nil {
+		return m.MaintainerEpoch
+	}
+	return 0
 }
 
 type InfluencedTables struct {
@@ -4541,6 +4638,11 @@ func (m *HeartBeatResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if m.MaintainerEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.MaintainerEpoch))
+		i--
+		dAtA[i] = 0x20
+	}
 	if m.Mode != 0 {
 		i = encodeVarintHeartbeat(dAtA, i, uint64(m.Mode))
 		i--
@@ -4842,6 +4944,11 @@ func (m *ScheduleDispatcherRequest) MarshalToSizedBuffer(dAtA []byte) (int, erro
 	_ = i
 	var l int
 	_ = l
+	if m.MaintainerEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.MaintainerEpoch))
+		i--
+		dAtA[i] = 0x28
+	}
 	if m.OperatorType != 0 {
 		i = encodeVarintHeartbeat(dAtA, i, uint64(m.OperatorType))
 		i--
@@ -4899,6 +5006,11 @@ func (m *MergeDispatcherRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) 
 	_ = i
 	var l int
 	_ = l
+	if m.MaintainerEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.MaintainerEpoch))
+		i--
+		dAtA[i] = 0x28
+	}
 	if m.Mode != 0 {
 		i = encodeVarintHeartbeat(dAtA, i, uint64(m.Mode))
 		i--
@@ -5047,6 +5159,11 @@ func (m *MaintainerStatus) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if m.MaintainerEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.MaintainerEpoch))
+		i--
+		dAtA[i] = 0x48
+	}
 	if m.DrainProgress != nil {
 		{
 			size, err := m.DrainProgress.MarshalToSizedBuffer(dAtA[:i])
@@ -5368,6 +5485,11 @@ func (m *AddMaintainerRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if m.MaintainerEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.MaintainerEpoch))
+		i--
+		dAtA[i] = 0x30
+	}
 	if m.KeyspaceId != 0 {
 		i = encodeVarintHeartbeat(dAtA, i, uint64(m.KeyspaceId))
 		i--
@@ -5430,6 +5552,11 @@ func (m *RemoveMaintainerRequest) MarshalToSizedBuffer(dAtA []byte) (int, error)
 	_ = i
 	var l int
 	_ = l
+	if m.MaintainerEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.MaintainerEpoch))
+		i--
+		dAtA[i] = 0x28
+	}
 	if m.KeyspaceId != 0 {
 		i = encodeVarintHeartbeat(dAtA, i, uint64(m.KeyspaceId))
 		i--
@@ -5490,6 +5617,11 @@ func (m *MaintainerBootstrapRequest) MarshalToSizedBuffer(dAtA []byte) (int, err
 	_ = i
 	var l int
 	_ = l
+	if m.MaintainerEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.MaintainerEpoch))
+		i--
+		dAtA[i] = 0x40
+	}
 	if m.KeyspaceId != 0 {
 		i = encodeVarintHeartbeat(dAtA, i, uint64(m.KeyspaceId))
 		i--
@@ -5576,6 +5708,11 @@ func (m *MaintainerBootstrapResponse) MarshalToSizedBuffer(dAtA []byte) (int, er
 	_ = i
 	var l int
 	_ = l
+	if m.MaintainerEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.MaintainerEpoch))
+		i--
+		dAtA[i] = 0x38
+	}
 	if len(m.Operators) > 0 {
 		for iNdEx := len(m.Operators) - 1; iNdEx >= 0; iNdEx-- {
 			{
@@ -5661,6 +5798,11 @@ func (m *MaintainerPostBootstrapRequest) MarshalToSizedBuffer(dAtA []byte) (int,
 	_ = i
 	var l int
 	_ = l
+	if m.MaintainerEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.MaintainerEpoch))
+		i--
+		dAtA[i] = 0x28
+	}
 	if len(m.RedoSchemas) > 0 {
 		for iNdEx := len(m.RedoSchemas) - 1; iNdEx >= 0; iNdEx-- {
 			{
@@ -5736,6 +5878,11 @@ func (m *MaintainerPostBootstrapResponse) MarshalToSizedBuffer(dAtA []byte) (int
 	_ = i
 	var l int
 	_ = l
+	if m.MaintainerEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.MaintainerEpoch))
+		i--
+		dAtA[i] = 0x20
+	}
 	if m.Err != nil {
 		{
 			size, err := m.Err.MarshalToSizedBuffer(dAtA[:i])
@@ -5958,6 +6105,11 @@ func (m *MaintainerCloseRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) 
 	_ = i
 	var l int
 	_ = l
+	if m.MaintainerEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.MaintainerEpoch))
+		i--
+		dAtA[i] = 0x18
+	}
 	if m.Removed {
 		i--
 		if m.Removed {
@@ -6003,6 +6155,11 @@ func (m *MaintainerCloseResponse) MarshalToSizedBuffer(dAtA []byte) (int, error)
 	_ = i
 	var l int
 	_ = l
+	if m.MaintainerEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.MaintainerEpoch))
+		i--
+		dAtA[i] = 0x18
+	}
 	if m.Success {
 		i--
 		if m.Success {
@@ -7103,6 +7260,9 @@ func (m *HeartBeatResponse) Size() (n int) {
 	if m.Mode != 0 {
 		n += 1 + sovHeartbeat(uint64(m.Mode))
 	}
+	if m.MaintainerEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.MaintainerEpoch))
+	}
 	return n
 }
 
@@ -7228,6 +7388,9 @@ func (m *ScheduleDispatcherRequest) Size() (n int) {
 	if m.OperatorType != 0 {
 		n += 1 + sovHeartbeat(uint64(m.OperatorType))
 	}
+	if m.MaintainerEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.MaintainerEpoch))
+	}
 	return n
 }
 
@@ -7253,6 +7416,9 @@ func (m *MergeDispatcherRequest) Size() (n int) {
 	}
 	if m.Mode != 0 {
 		n += 1 + sovHeartbeat(uint64(m.Mode))
+	}
+	if m.MaintainerEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.MaintainerEpoch))
 	}
 	return n
 }
@@ -7329,6 +7495,9 @@ func (m *MaintainerStatus) Size() (n int) {
 	if m.DrainProgress != nil {
 		l = m.DrainProgress.Size()
 		n += 1 + l + sovHeartbeat(uint64(l))
+	}
+	if m.MaintainerEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.MaintainerEpoch))
 	}
 	return n
 }
@@ -7461,6 +7630,9 @@ func (m *AddMaintainerRequest) Size() (n int) {
 	if m.KeyspaceId != 0 {
 		n += 1 + sovHeartbeat(uint64(m.KeyspaceId))
 	}
+	if m.MaintainerEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.MaintainerEpoch))
+	}
 	return n
 }
 
@@ -7482,6 +7654,9 @@ func (m *RemoveMaintainerRequest) Size() (n int) {
 	}
 	if m.KeyspaceId != 0 {
 		n += 1 + sovHeartbeat(uint64(m.KeyspaceId))
+	}
+	if m.MaintainerEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.MaintainerEpoch))
 	}
 	return n
 }
@@ -7516,6 +7691,9 @@ func (m *MaintainerBootstrapRequest) Size() (n int) {
 	}
 	if m.KeyspaceId != 0 {
 		n += 1 + sovHeartbeat(uint64(m.KeyspaceId))
+	}
+	if m.MaintainerEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.MaintainerEpoch))
 	}
 	return n
 }
@@ -7552,6 +7730,9 @@ func (m *MaintainerBootstrapResponse) Size() (n int) {
 			n += 1 + l + sovHeartbeat(uint64(l))
 		}
 	}
+	if m.MaintainerEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.MaintainerEpoch))
+	}
 	return n
 }
 
@@ -7581,6 +7762,9 @@ func (m *MaintainerPostBootstrapRequest) Size() (n int) {
 			n += 1 + l + sovHeartbeat(uint64(l))
 		}
 	}
+	if m.MaintainerEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.MaintainerEpoch))
+	}
 	return n
 }
 
@@ -7601,6 +7785,9 @@ func (m *MaintainerPostBootstrapResponse) Size() (n int) {
 	if m.Err != nil {
 		l = m.Err.Size()
 		n += 1 + l + sovHeartbeat(uint64(l))
+	}
+	if m.MaintainerEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.MaintainerEpoch))
 	}
 	return n
 }
@@ -7689,6 +7876,9 @@ func (m *MaintainerCloseRequest) Size() (n int) {
 	if m.Removed {
 		n += 2
 	}
+	if m.MaintainerEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.MaintainerEpoch))
+	}
 	return n
 }
 
@@ -7704,6 +7894,9 @@ func (m *MaintainerCloseResponse) Size() (n int) {
 	}
 	if m.Success {
 		n += 2
+	}
+	if m.MaintainerEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.MaintainerEpoch))
 	}
 	return n
 }
@@ -9379,6 +9572,25 @@ func (m *HeartBeatResponse) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MaintainerEpoch", wireType)
+			}
+			m.MaintainerEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MaintainerEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipHeartbeat(dAtA[iNdEx:])
@@ -10215,6 +10427,25 @@ func (m *ScheduleDispatcherRequest) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		case 5:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MaintainerEpoch", wireType)
+			}
+			m.MaintainerEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MaintainerEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipHeartbeat(dAtA[iNdEx:])
@@ -10386,6 +10617,25 @@ func (m *MergeDispatcherRequest) Unmarshal(dAtA []byte) error {
 				b := dAtA[iNdEx]
 				iNdEx++
 				m.Mode |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 5:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MaintainerEpoch", wireType)
+			}
+			m.MaintainerEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MaintainerEpoch |= uint64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -10878,6 +11128,25 @@ func (m *MaintainerStatus) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 9:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MaintainerEpoch", wireType)
+			}
+			m.MaintainerEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MaintainerEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipHeartbeat(dAtA[iNdEx:])
@@ -11695,6 +11964,25 @@ func (m *AddMaintainerRequest) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MaintainerEpoch", wireType)
+			}
+			m.MaintainerEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MaintainerEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipHeartbeat(dAtA[iNdEx:])
@@ -11836,6 +12124,25 @@ func (m *RemoveMaintainerRequest) Unmarshal(dAtA []byte) error {
 				b := dAtA[iNdEx]
 				iNdEx++
 				m.KeyspaceId |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 5:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MaintainerEpoch", wireType)
+			}
+			m.MaintainerEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MaintainerEpoch |= uint64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -12090,6 +12397,25 @@ func (m *MaintainerBootstrapRequest) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MaintainerEpoch", wireType)
+			}
+			m.MaintainerEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MaintainerEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipHeartbeat(dAtA[iNdEx:])
@@ -12318,6 +12644,25 @@ func (m *MaintainerBootstrapResponse) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 7:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MaintainerEpoch", wireType)
+			}
+			m.MaintainerEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MaintainerEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipHeartbeat(dAtA[iNdEx:])
@@ -12508,6 +12853,25 @@ func (m *MaintainerPostBootstrapRequest) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 5:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MaintainerEpoch", wireType)
+			}
+			m.MaintainerEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MaintainerEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipHeartbeat(dAtA[iNdEx:])
@@ -12666,6 +13030,25 @@ func (m *MaintainerPostBootstrapResponse) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MaintainerEpoch", wireType)
+			}
+			m.MaintainerEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MaintainerEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipHeartbeat(dAtA[iNdEx:])
@@ -13242,6 +13625,25 @@ func (m *MaintainerCloseRequest) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.Removed = bool(v != 0)
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MaintainerEpoch", wireType)
+			}
+			m.MaintainerEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MaintainerEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipHeartbeat(dAtA[iNdEx:])
@@ -13348,6 +13750,25 @@ func (m *MaintainerCloseResponse) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.Success = bool(v != 0)
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MaintainerEpoch", wireType)
+			}
+			m.MaintainerEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MaintainerEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipHeartbeat(dAtA[iNdEx:])

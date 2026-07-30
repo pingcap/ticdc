@@ -22,10 +22,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 )
 
-// event_dispatcher_mananger_info.go is used to store the basic info and function of the event dispatcher manager
+// dispatcher_manager_info.go stores the basic info and functions of the dispatcher manager.
 
 type dispatcherCreateInfo struct {
-	Id        common.DispatcherID
+	ID        common.DispatcherID
 	TableSpan *heartbeatpb.TableSpan
 	StartTs   uint64
 	SchemaID  int64
@@ -52,7 +52,11 @@ func (e *DispatcherManager) GetMaintainerID() node.ID {
 	return e.meta.maintainerID
 }
 
-func (e *DispatcherManager) SetMaintainerID(maintainerID node.ID) {
+// TryUpdateMaintainer records the active maintainer owner and epoch.
+// Maintainer epoch 0 is accepted only while the manager is still in compatibility
+// mode. Once a non-zero epoch is known, epoch 0 must never downgrade the receiver
+// back to compatibility mode.
+func (e *DispatcherManager) TryUpdateMaintainer(from node.ID, maintainerEpoch uint64) bool {
 	e.meta.Lock()
 	defer e.meta.Unlock()
 	if !e.canUpdateMaintainerLocked(from, maintainerEpoch) {

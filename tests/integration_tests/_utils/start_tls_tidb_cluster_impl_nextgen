@@ -115,15 +115,17 @@ key-path = "$TLS_DIR/server-key.pem"
 EOF
 
 # system tidb server config file
+# NOTE: TiDB config keys are section-sensitive. Keep `socket` and
+# `max-server-connections` at root level, and keep tuning knobs like
+# `run-auto-analyze` / `server-memory-quota` under `[performance]`. Otherwise
+# TiDB will report "invalid configuration options" and silently ignore them.
 cat - >"$OUT_DIR/tidb-system-config-tls.toml" <<EOF
 socket = "/tmp/tidb-system-tls.sock"
 keyspace-name = "SYSTEM"
 enable-telemetry = false
 mem-quota-query = 671088640
 new_collations_enabled_on_first_bootstrap = true
-run-auto-analyze = false
-server-memory-quota = 2684354560
-analyze-always-skip-wide-columns = true
+max-server-connections = 0
 tikv-worker-url = "http://$UP_TIKV_WORKER_HOST:$UP_TIKV_WORKER_PORT"
 
 [log.file]
@@ -131,10 +133,11 @@ max-backups = 100
 
 [performance]
 tcp-keep-alive = true
+run-auto-analyze = false
+server-memory-quota = 2684354560
 
 [instance]
 tidb_service_scope = 'dxf_service'
-max-server-connections = 0
 
 [security]
 enable-sem = false
@@ -152,18 +155,15 @@ keyspace-name = "$KEYSPACE_NAME"
 enable-telemetry = false
 mem-quota-query = 671088640
 new_collations_enabled_on_first_bootstrap = true
-run-auto-analyze = false
-server-memory-quota = 2684354560
-analyze-always-skip-wide-columns = true
+max-server-connections = 0
 
 [log.file]
 max-backups = 100
 
 [performance]
 tcp-keep-alive = true
-
-[instance]
-max-server-connections = 0
+run-auto-analyze = false
+server-memory-quota = 2684354560
 
 [security]
 enable-sem = false

@@ -2,6 +2,9 @@
 
 # cdc server is ran by binary cdc.test, kill cdc server first to avoid too much
 # noise in cdc logs.
+#
+# Also kill sink consumer binaries started by integration tests to avoid leaking
+# background processes across cases/groups.
 
 PKILL="killall -q -w -s 9 "
 if [ "$(uname)" == "Darwin" ]; then
@@ -11,6 +14,7 @@ fi
 ${PKILL} cdc.test || true
 ${PKILL} cdc || true
 ${PKILL} cdc_kafka_consumer || true
+${PKILL} cdc_pulsar_consumer || true
 ${PKILL} cdc_storage_consumer || true
 ${PKILL} tidb-server || true
 ${PKILL} tikv-server || true

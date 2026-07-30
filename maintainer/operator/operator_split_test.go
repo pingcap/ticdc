@@ -49,7 +49,7 @@ func TestSplitOperator_OriginNodeRemovedBeforeStopped(t *testing.T) {
 	// Split targets are empty, meaning let scheduler decide
 	splitTargetNodes := []node.ID{"", ""}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, splitTargetNodes, nil)
+	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, splitTargetNodes, 7, nil)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -100,7 +100,7 @@ func TestSplitOperator_OriginNodeRemovedAfterStopped(t *testing.T) {
 	// Split targets are empty, meaning let scheduler decide
 	splitTargetNodes := []node.ID{"", ""}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, splitTargetNodes, nil)
+	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, splitTargetNodes, 7, nil)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -153,7 +153,7 @@ func TestSplitOperator_SuccessfulSplitCreatesAbsentSpans(t *testing.T) {
 		},
 	}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, []node.ID{}, nil)
+	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, []node.ID{}, 7, nil)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -244,7 +244,7 @@ func TestSplitOperator_SuccessfulSplitToSchedulingTargets(t *testing.T) {
 	}
 	splitTargetNodes := []node.ID{nodeA, nodeB}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSetToSplit, splitSpans, splitTargetNodes, nil)
+	op := NewSplitDispatcherOperator(spanController, replicaSetToSplit, splitSpans, splitTargetNodes, 7, nil)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -337,7 +337,7 @@ func TestSplitOperator_PostFinishCallbackFailureMarksSpanAbsent(t *testing.T) {
 	}
 	splitTargetNodes := []node.ID{nodeA, nodeB}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSetToSplit, splitSpans, splitTargetNodes,
+	op := NewSplitDispatcherOperator(spanController, replicaSetToSplit, splitSpans, splitTargetNodes, 7,
 		func(_ *replica.SpanReplication, target node.ID) bool {
 			return target != nodeB
 		})
@@ -394,7 +394,7 @@ func TestSplitOperator_PostFinishSkipsWhenTargetNodesMismatch(t *testing.T) {
 	splitTargetNodes := []node.ID{nodeA}
 
 	postFinishCalled := 0
-	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, splitTargetNodes,
+	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, splitTargetNodes, 7,
 		func(_ *replica.SpanReplication, _ node.ID) bool {
 			postFinishCalled++
 			return true
@@ -445,7 +445,7 @@ func TestSplitOperator_TaskRemovedByDDLDoesNotSplit(t *testing.T) {
 		},
 	}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, []node.ID{}, nil)
+	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, []node.ID{}, 7, nil)
 	require.NotNil(t, op)
 
 	op.Start()

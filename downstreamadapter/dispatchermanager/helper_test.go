@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 )
 
@@ -160,7 +161,7 @@ func TestPreCheckForSchedulerHandler_RemoveAllowedWhenDispatcherMissing(t *testi
 		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
 	}
 
-	removeReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
+	removeReq := NewSchedulerDispatcherRequest("node1", &heartbeatpb.ScheduleDispatcherRequest{
 		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
 		Config: &heartbeatpb.DispatcherConfig{
 			DispatcherID: dispatcherID.ToPB(),
@@ -190,7 +191,7 @@ func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testin
 	}
 	dm.dispatcherMap.Set(dispatcherID, &dispatcher.EventDispatcher{})
 
-	createReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
+	createReq := NewSchedulerDispatcherRequest("node1", &heartbeatpb.ScheduleDispatcherRequest{
 		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
 		Config: &heartbeatpb.DispatcherConfig{
 			DispatcherID: dispatcherID.ToPB(),
