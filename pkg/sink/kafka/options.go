@@ -663,7 +663,7 @@ func adjustExistingTopicOption(
 ) error {
 	maxMessageBytes, found, err := getTopicMaxMessageBytes(admin, info.Name)
 	if err != nil || !found {
-		log.Warn("kafka topic max message bytes unavailable, using configured value",
+		log.Warn("kafka topic `max.message.bytes` unavailable, using configured value",
 			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
 			zap.Int("maxMessageBytes", options.MaxMessageBytes), zap.Error(err))
 		maxMessageBytes = options.MaxMessageBytes
@@ -685,7 +685,7 @@ func adjustNewTopicOptions(
 	// it would use broker's `message.max.bytes` to set topic's `max.message.bytes`.
 	messageMaxBytes, found, err := getBrokerMaxMessageBytes(admin)
 	if err != nil || !found {
-		log.Warn("kafka broker max message bytes unavailable, using configured value",
+		log.Warn("kafka broker `message.max.bytes` unavailable, using configured value",
 			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
 			zap.Int("maxMessageBytes", options.MaxMessageBytes), zap.Error(err))
 		messageMaxBytes = options.MaxMessageBytes
