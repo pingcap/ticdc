@@ -280,12 +280,12 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 		redoMessage := msg.Message[0].(*heartbeatpb.RedoResolvedTsForwardMessage)
 		c.redoResolvedTsForwardMessageDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(redoMessage.ChangefeedID),
-			NewRedoResolvedTsForwardMessage(redoMessage))
+			NewRedoResolvedTsForwardMessage(msg.From, redoMessage))
 	case messaging.TypeRedoMetaMessage:
 		redoMessage := msg.Message[0].(*heartbeatpb.RedoMetaMessage)
 		c.redoMetaMessageDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(redoMessage.ChangefeedID),
-			NewRedoMetaMessage(redoMessage))
+			NewRedoMetaMessage(msg.From, redoMessage))
 	case messaging.TypeMergeDispatcherRequest:
 		mergeDispatcherRequest := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
 		c.mergeDispatcherRequestDynamicStream.Push(
