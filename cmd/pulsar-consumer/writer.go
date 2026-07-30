@@ -168,6 +168,9 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	if total == 0 {
 		return w.mysqlSink.WriteBlockEvent(ddl)
 	}
+	sort.SliceStable(resolvedEvents, func(i, j int) bool {
+		return resolvedEvents[i].GetCommitTs() < resolvedEvents[j].GetCommitTs()
+	})
 	for _, e := range resolvedEvents {
 		e.AddPostFlushFunc(func() {
 			if flushed.Inc() == int64(total) {
@@ -279,6 +282,9 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	if total == 0 {
 		return nil
 	}
+	sort.SliceStable(resolvedEvents, func(i, j int) bool {
+		return resolvedEvents[i].GetCommitTs() < resolvedEvents[j].GetCommitTs()
+	})
 	for _, e := range resolvedEvents {
 		e.AddPostFlushFunc(func() {
 			if flushed.Inc() == int64(total) {
@@ -504,49 +510,29 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 		progress.eventsGroup[tableID] = group
 	}
 	if commitTs < progress.watermark {
-		log.Warn("DML Event fallback row, since less than the partition watermark, ignore it",
+		log.Warn("DML event fallback row, since less than the partition watermark, append it and sort before flush",
 			zap.Int64("tableID", tableID), zap.Int32("partition", group.Partition),
 			zap.Uint64("commitTs", commitTs), zap.Uint64("watermark", progress.watermark),
-			zap.String("schema", schema), zap.String("table", table))
+			zap.String("schema", schema), zap.String("table", table),
+			zap.Stringer("eventType", message.RowType),
+			zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
+		group.AppendMessage(message)
 		return
 	}
 	if commitTs >= group.HighWatermark {
-		group.AppendMessage(message, false)
+		group.AppendMessage(message)
 		log.Debug("DML event append to the group",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", message.RowType))
 		return
 	}
-	if w.enableTableAcrossNodes {
-		log.Warn("DML events fallback, but enableTableAcrossNodes is true, still append it",
-			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", message.RowType))
-		group.AppendMessage(message, true)
-		return
-	}
-	switch w.protocol {
-	case config.ProtocolCanalJSON:
-		// for partition table, the canal-json message cannot assign physical table id to each dml message,
-		// we cannot distinguish whether it's a real fallback event or not, still append it.
-		isPartitionTable := w.partitionTableAccessor != nil &&
-			w.partitionTableAccessor.IsPartitionTable(schema, table)
-		if isPartitionTable {
-			log.Warn("DML events fallback, but it's canal-json and partition table, still append it",
-				zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-				zap.Stringer("eventType", message.RowType))
-			group.AppendMessage(message, true)
-			return
-		}
-		log.Warn("DML event fallback row, since less than the group high watermark, ignore it",
-			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-			zap.Any("partitionWatermark", progress.watermark), zap.Any("watermark", progress.watermark),
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", message.RowType),
-			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", isPartitionTable))
-	default:
-		log.Panic("unknown protocol", zap.Any("protocol", w.protocol))
-	}
+	log.Warn("DML event commit ts fallback, append it and sort before flush",
+		zap.Int32("partition", progress.partition),
+		zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
+		zap.Any("partitionWatermark", progress.watermark),
+		zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+		zap.Stringer("eventType", message.RowType),
+		zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
+	group.AppendMessage(message)
 }

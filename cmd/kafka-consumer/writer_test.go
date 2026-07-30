@@ -268,6 +268,40 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
 }
 
+func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	flushedCommitTs := make([]uint64, 0)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
+		flushedCommitTs = append(flushedCommitTs, event.GetCommitTs())
+		event.PostFlush()
+	}).Times(2)
+
+	replicaCfg := config.GetDefaultReplicaConfig()
+	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
+	require.NoError(t, err)
+
+	p := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   20,
+	}
+	w := &writer{
+		progresses:  []*partitionProgress{p},
+		mysqlSink:   s,
+		eventRouter: eventRouter,
+		protocol:    config.ProtocolOpen,
+	}
+
+	w.appendMessage2Group(newDMLMessageForWriterTest(20), p, kafka.Offset(1))
+	w.appendMessage2Group(newDMLMessageForWriterTest(10), p, kafka.Offset(2))
+	w.appendMessage2Group(newDMLMessageForWriterTest(20), p, kafka.Offset(3))
+
+	require.True(t, w.Write(ctx, codeccommon.MessageTypeResolved))
+	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
+}
+
 func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	replicaCfg := config.GetDefaultReplicaConfig()
 	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, true)
@@ -367,4 +401,18 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 			require.Equal(t, uint64(100), resolved[0].GetCommitTs())
 		})
 	}
+}
+
+func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
+	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
+		return &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			CommitTs:        commitTs,
+			RowTypes:        []common.RowType{common.RowTypeUpdate},
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
+			},
+		}
+	})
 }
