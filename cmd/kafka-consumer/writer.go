@@ -176,9 +176,6 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 	if total == 0 {
 		return w.mysqlSink.WriteBlockEvent(ddl)
 	}
-	sort.SliceStable(resolvedEvents, func(i, j int) bool {
-		return resolvedEvents[i].GetCommitTs() < resolvedEvents[j].GetCommitTs()
-	})
 	for _, e := range resolvedEvents {
 		e.AddPostFlushFunc(func() {
 			if flushed.Inc() == int64(total) {
@@ -290,9 +287,6 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	if total == 0 {
 		return nil
 	}
-	sort.SliceStable(resolvedEvents, func(i, j int) bool {
-		return resolvedEvents[i].GetCommitTs() < resolvedEvents[j].GetCommitTs()
-	})
 	for _, e := range resolvedEvents {
 		e.AddPostFlushFunc(func() {
 			if flushed.Inc() == int64(total) {
@@ -621,6 +615,7 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 		progress.eventsGroup[tableID] = group
 	}
 	message = w.messageWithPartitionCheck(message, progress.partition, offset)
+	group.AppendMessage(message)
 	if commitTs < progress.watermark {
 		log.Warn("DML event fallback row, since less than the partition watermark, append it and sort before flush",
 			zap.Int64("tableID", tableID), zap.Int32("partition", group.Partition),
@@ -629,11 +624,9 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Stringer("eventType", message.RowType),
 			zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
-		group.AppendMessage(message)
 		return
 	}
 	if commitTs >= group.HighWatermark {
-		group.AppendMessage(message)
 		log.Debug("DML event append to the group",
 			zap.Int32("partition", group.Partition), zap.Any("offset", offset),
 			zap.Uint64("commitTs", commitTs), zap.Uint64("HighWatermark", group.HighWatermark),
@@ -648,7 +641,6 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 		zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 		zap.Stringer("eventType", message.RowType),
 		zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
-	group.AppendMessage(message)
 }
 
 func openDB(ctx context.Context, dsn string) (*sql.DB, error) {

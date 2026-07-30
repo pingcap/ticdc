@@ -103,16 +103,11 @@ func (g *EventsGroup) ResolveInto(resolve uint64, dst []*codeccommon.DMLMessage)
 	clear(original[len(remaining):])
 	g.messages = remaining
 	if len(g.messages) != 0 {
-		minCommitTs := g.messages[0].GetCommitTs()
-		for _, message := range g.messages[1:] {
-			if commitTs := message.GetCommitTs(); commitTs < minCommitTs {
-				minCommitTs = commitTs
-			}
-		}
+		firstCommitTs := g.messages[0].GetCommitTs()
 		log.Debug("not all events resolved",
 			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
 			zap.Int("resolved", len(resolved)), zap.Int("remained", len(g.messages)),
-			zap.Uint64("resolveTs", resolve), zap.Uint64("minCommitTs", minCommitTs))
+			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", firstCommitTs))
 	}
 	return dst
 }
