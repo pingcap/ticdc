@@ -62,6 +62,19 @@ func NewSaramaFactory(
 	if err = adjustOptions(changefeedID, admin, o, o.Topic); err != nil {
 		return nil, err
 	}
+	log.Info("kafka sink configuration resolved",
+		zap.String("namespace", changefeedID.Keyspace()),
+		zap.String("changefeed", changefeedID.Name()),
+		zap.String("topic", o.Topic),
+		zap.Int32("partitionNum", o.PartitionNum),
+		zap.Int("maxMessageBytes", o.MaxMessageBytes),
+		zap.Int("maxBatchedBytes", o.MaxBatchedBytes),
+		zap.String("compression", config.Producer.Compression.String()),
+		zap.Int16("requiredAcks", int16(o.RequiredAcks)),
+		zap.Int("maxRetry", o.MaxRetry),
+		zap.Duration("dialTimeout", o.DialTimeout),
+		zap.Duration("readTimeout", o.ReadTimeout),
+		zap.Duration("writeTimeout", o.WriteTimeout))
 
 	return &saramaFactory{
 		changefeedID:   changefeedID,

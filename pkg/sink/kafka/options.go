@@ -199,9 +199,6 @@ func (o *options) setPartitionNum(changefeedID common.ChangeFeedID, realPartitio
 	// user does not specify the `partition-num` in the sink-uri
 	if o.PartitionNum == 0 {
 		o.PartitionNum = realPartitionCount
-		log.Info("kafka partition count set from topic metadata",
-			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
-			zap.Int32("partitionNum", realPartitionCount))
 		return nil
 	}
 
