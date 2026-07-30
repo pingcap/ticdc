@@ -321,6 +321,7 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	s.statistics.TrackDMLEvent(event)
 	s.conflictDetector.Add(event)
 }
 

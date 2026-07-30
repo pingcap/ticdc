@@ -245,6 +245,7 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	s.statistics.TrackDMLEvent(event)
 	s.eventChan.Push(event)
 }
 
@@ -317,7 +318,6 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
-			s.statistics.TrackDMLEvent(event)
 			schema := event.TableInfo.GetSchemaName()
 			table := event.TableInfo.GetTableName()
 			topic := s.comp.eventRouter.GetTopicForRowChange(schema, table)
@@ -450,8 +450,8 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				rows := message.GetRowsCount()
 				callback := message.Callback
 				message.Callback = func() {
-					_ = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-						return rows, 0, nil
+					_ = s.statistics.RecordBatchExecution(func() (int, error) {
+						return rows, nil
 					})
 					if callback != nil {
 						callback()
@@ -469,8 +469,8 @@ func (s *sink) sendMessages(ctx context.Context) error {
 						zap.String("keyspace", s.changefeedID.Keyspace()),
 						zap.String("changefeed", s.changefeedID.Name()),
 						zap.Error(err))
-					return s.statistics.RecordBatchExecution(func() (int, int64, error) {
-						return 0, 0, err
+					return s.statistics.RecordBatchExecution(func() (int, error) {
+						return 0, err
 					})
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())

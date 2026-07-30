@@ -239,8 +239,8 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 
 	} else {
 		w.tryDryRunBlock()
-		err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
-			return dmls.rowCount, dmls.approximateSize, nil
+		err = w.statistics.RecordBatchExecution(func() (int, error) {
+			return dmls.rowCount, nil
 		})
 	}
 
