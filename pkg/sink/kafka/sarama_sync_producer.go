@@ -17,11 +17,10 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -38,15 +37,15 @@ type saramaSyncProducerClient interface {
 }
 
 type saramaSyncProducer struct {
-	id       commonType.ChangeFeedID
+	id       common.ChangeFeedID
 	client   saramaSyncClient
 	producer saramaSyncProducerClient
 	closed   *atomic.Bool
 }
 
-func (p *saramaSyncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
+func (p *saramaSyncProducer) SendMessage(topic string, partitionNum int32, message *codecCommon.Message) error {
 	if p.closed.Load() {
-		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
+		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 
 	msg := &sarama.ProducerMessage{
@@ -56,24 +55,20 @@ func (p *saramaSyncProducer) SendMessage(topic string, partitionNum int32, messa
 		Partition: partitionNum,
 	}
 	_, _, err := p.producer.SendMessage(msg)
-
-	failpoint.Inject("KafkaSinkSyncSendMessageError", func() {
-		err = errors.WrapError(errors.ErrKafkaSendMessage, errors.New("kafka sink sync send message injected error"))
-	})
-	if err != nil {
-		err = AnnotateEventError(
-			p.id.Keyspace(),
-			p.id.Name(),
-			message.LogInfo,
-			err,
-		)
+	if err == nil {
+		return nil
 	}
+	log.Error("send message to kafka failed",
+		zap.String("keyspace", p.id.Keyspace()),
+		zap.String("changefeed", p.id.Name()),
+		zap.String("eventContext", BuildEventLogContext(p.id.Keyspace(), p.id.Name(), message.LogInfo)),
+		zap.Error(err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 
-func (p *saramaSyncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
+func (p *saramaSyncProducer) SendMessages(topic string, partitionNum int32, message *codecCommon.Message) error {
 	if p.closed.Load() {
-		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
+		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 
 	msgs := make([]*sarama.ProducerMessage, partitionNum)
@@ -86,18 +81,14 @@ func (p *saramaSyncProducer) SendMessages(topic string, partitionNum int32, mess
 		}
 	}
 	err := p.producer.SendMessages(msgs)
-
-	failpoint.Inject("KafkaSinkSyncSendMessagesError", func() {
-		err = errors.WrapError(errors.ErrKafkaSendMessage, errors.New("kafka sink sync send messages injected error"))
-	})
-	if err != nil {
-		err = AnnotateEventError(
-			p.id.Keyspace(),
-			p.id.Name(),
-			message.LogInfo,
-			err,
-		)
+	if err == nil {
+		return nil
 	}
+	log.Error("send message to kafka failed",
+		zap.String("keyspace", p.id.Keyspace()),
+		zap.String("changefeed", p.id.Name()),
+		zap.String("eventContext", BuildEventLogContext(p.id.Keyspace(), p.id.Name(), message.LogInfo)),
+		zap.Error(err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 

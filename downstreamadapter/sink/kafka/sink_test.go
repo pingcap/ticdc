@@ -31,14 +31,61 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
 
 const kafkaSinkTestTopic = "mock_topic"
+
+func TestSinkWorkersReturnContextError(t *testing.T) {
+	contexts := []struct {
+		name       string
+		newContext func() (context.Context, context.CancelFunc)
+		cause      error
+	}{
+		{
+			name: "canceled",
+			newContext: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx, cancel
+			},
+			cause: context.Canceled,
+		},
+		{
+			name: "deadline exceeded",
+			newContext: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 0)
+			},
+			cause: context.DeadlineExceeded,
+		},
+	}
+	workers := []struct {
+		name string
+		run  func(*sink, context.Context) error
+	}{
+		{name: "calculate key partitions", run: (*sink).calculateKeyPartitions},
+		{name: "non batch encode", run: (*sink).nonBatchEncodeRun},
+		{name: "checkpoint", run: (*sink).sendCheckpoint},
+	}
+
+	for _, worker := range workers {
+		for _, contextCase := range contexts {
+			t.Run(worker.name+"/"+contextCase.name, func(t *testing.T) {
+				ctx, cancel := contextCase.newContext()
+				defer cancel()
+
+				err := worker.run(&sink{}, ctx)
+
+				require.ErrorIs(t, err, contextCase.cause)
+			})
+		}
+	}
+}
 
 func TestVerifyInvalidConfig(t *testing.T) {
 	broker := sarama.NewMockBroker(t, 1)
@@ -182,8 +229,28 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	go s.Run(ctx)
 	return s, nil
+}
+
+func TestKafkaSinkRunReturnsAsyncProducerError(t *testing.T) {
+	ctx := t.Context()
+
+	ctrl := gomock.NewController(t)
+	producerErr := errors.ErrKafkaSendMessage.GenWithStackByArgs()
+	asyncProducer := kafka.NewMockAsyncProducer(ctrl)
+	syncProducer := kafka.NewMockSyncProducer(ctrl)
+	asyncProducer.EXPECT().AsyncRunCallback(gomock.Any()).Return(producerErr)
+	asyncProducer.EXPECT().Close().AnyTimes()
+	syncProducer.EXPECT().Close().AnyTimes()
+
+	kafkaSink, err := newKafkaSinkForTestWithProducers(ctx, t, ctrl, asyncProducer, syncProducer)
+	require.NoError(t, err)
+	defer kafkaSink.Close()
+
+	err = kafkaSink.Run(ctx)
+
+	require.ErrorIs(t, err, errors.ErrKafkaSendMessage)
+	require.False(t, kafkaSink.IsNormal())
 }
 
 func TestKafkaSinkBasicFunctionality(t *testing.T) {
@@ -246,7 +313,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 			_ context.Context,
 			_ string,
 			_ int32,
-			message *codeccommon.Message,
+			message *codecCommon.Message,
 		) error {
 			if message.Callback != nil {
 				message.Callback()
@@ -260,6 +327,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	kafkaSink, err := newKafkaSinkForTestWithProducers(ctx, t, ctrl, asyncProducer, syncProducer)
 	require.NoError(t, err)
 	defer cancel()
+	go kafkaSink.Run(ctx)
 
 	err = kafkaSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
@@ -277,4 +345,10 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	kafkaSink.Close()
 	cancel()
 	kafkaSink.AddCheckpointTs(12345)
+}
+
+func TestKafkaSinkBatchConfig(t *testing.T) {
+	sink := &sink{}
+	require.Equal(t, 4096, sink.BatchCount())
+	require.Zero(t, sink.BatchBytes())
 }

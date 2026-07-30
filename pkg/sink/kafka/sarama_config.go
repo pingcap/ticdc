@@ -62,7 +62,7 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 	config.Producer.Flush.Bytes = 0
 	config.Producer.Flush.Messages = 0
 	config.Producer.Flush.Frequency = time.Duration(0)
-	config.Producer.Flush.MaxMessages = o.MaxMessages
+	config.Producer.Flush.MaxMessages = 0
 
 	config.Net.MaxOpenRequests = 1
 	config.Net.DialTimeout = o.DialTimeout
@@ -108,7 +108,7 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 		if o.Credential != nil && o.Credential.IsTLSEnabled() {
 			config.Net.TLS.Config, err = o.Credential.ToTLSConfig()
 			if err != nil {
-				return nil, errors.Trace(err)
+				return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 			}
 		}
 
@@ -117,7 +117,7 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 
 	err = completeSaramaSASLConfig(ctx, config, o)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		return nil, err
 	}
 
 	kafkaVersion, err := getKafkaVersion(config, o)
@@ -130,7 +130,7 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 	if o.IsAssignedVersion {
 		version, err := sarama.ParseKafkaVersion(o.Version)
 		if err != nil {
-			return nil, errors.WrapError(errors.ErrKafkaInvalidVersion, err)
+			return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
 		config.Version = version
 		if !version.IsAtLeast(maxKafkaVersion) && version.String() != kafkaVersion.String() {
@@ -177,7 +177,7 @@ func completeSaramaSASLConfig(ctx context.Context, config *sarama.Config, o *opt
 		case SASLTypeOAuth:
 			p, err := newTokenProvider(ctx, o)
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 			config.Net.SASL.TokenProvider = p
 		}
@@ -216,7 +216,7 @@ func getKafkaVersion(config *sarama.Config, o *options) (sarama.KafkaVersion, er
 	if o.IsAssignedVersion {
 		assignedVersion, err := sarama.ParseKafkaVersion(o.Version)
 		if err != nil {
-			return assignedVersion, errors.WrapError(errors.ErrKafkaInvalidVersion, err)
+			return assignedVersion, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
 		if !assignedVersion.IsAtLeast(maxKafkaVersion) && assignedVersion.String() != targetVersion.String() {
 			log.Warn("The Kafka version you assigned may not be correct. "+
