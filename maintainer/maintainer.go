@@ -205,7 +205,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
-			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo, conf.BalanceMoveBatchSize),
+			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo, conf.BalanceMoveBatchSize, info.Epoch),
 		mc:                    mc,
 		removed:               atomic.NewBool(false),
 		nodeManager:           nodeManager,
@@ -288,11 +288,13 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	keyspaceID uint32,
+	maintainerEpoch uint64,
 ) *Maintainer {
 	unused := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		SinkURI:      "",
 		Config:       config.GetDefaultReplicaConfig(),
+		Epoch:        maintainerEpoch,
 	}
 	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, 1, false, keyspaceID)
 	m.cascadeRemoving.Store(true)
@@ -385,12 +387,13 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 	}
 
 	status := &heartbeatpb.MaintainerStatus{
-		ChangefeedID:  m.changefeedID.ToPB(),
-		State:         heartbeatpb.ComponentState(m.scheduleState.Load()),
-		CheckpointTs:  m.controller.spanController.GetMaintainerCommittedCheckpointTs(),
-		Err:           runningErrors,
-		BootstrapDone: m.initialized.Load(),
-		LastSyncedTs:  m.getWatermark().LastSyncedTs,
+		ChangefeedID:    m.changefeedID.ToPB(),
+		State:           heartbeatpb.ComponentState(m.scheduleState.Load()),
+		CheckpointTs:    m.controller.spanController.GetMaintainerCommittedCheckpointTs(),
+		Err:             runningErrors,
+		BootstrapDone:   m.initialized.Load(),
+		LastSyncedTs:    m.getWatermark().LastSyncedTs,
+		MaintainerEpoch: m.currentMaintainerEpoch(),
 	}
 	drainTarget, drainEpoch := m.controller.getDispatcherDrainTarget()
 	if !drainTarget.IsEmpty() && drainEpoch > 0 {
@@ -492,6 +495,13 @@ func (m *Maintainer) cleanupMetrics() {
 	metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "redo")
 }
 
+func (m *Maintainer) markRemoved() {
+	if !m.removed.CompareAndSwap(false, true) {
+		return
+	}
+	metrics.MaintainerGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name()).Dec()
+}
+
 func (m *Maintainer) onInit() bool {
 	err := m.initialize()
 	if err != nil {
@@ -526,6 +536,14 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 		m.onMaintainerCloseResponse(msg.From, resp)
 	case messaging.TypeRemoveMaintainerRequest:
 		req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+		if !m.isMaintainerEpochRequestAllowed(req.MaintainerEpoch) {
+			log.Warn("drop stale remove maintainer request",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Stringer("from", msg.From),
+				zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
+				zap.Uint64("currentMaintainerEpoch", m.currentMaintainerEpoch()))
+			return
+		}
 		m.onRemoveMaintainer(req.Cascade, req.Removed)
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
@@ -562,9 +580,8 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 	m.controller.EnterRemovingMode(allowedDispatcherIDs...)
 	closed := m.tryCloseChangefeed()
 	if closed {
-		m.removed.Store(true)
+		m.markRemoved()
 		m.scheduleState.Store(int32(heartbeatpb.ComponentState_Stopped))
-		metrics.MaintainerGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name()).Dec()
 		log.Info("changefeed maintainer closed", zap.Stringer("changefeedID", m.changefeedID),
 			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs), zap.Bool("removed", m.removed.Load()))
 	}
@@ -861,6 +878,13 @@ func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 	}
 }
 
+func (m *Maintainer) currentMaintainerEpoch() uint64 {
+	if m.info == nil {
+		return 0
+	}
+	return m.info.Epoch
+}
+
 func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	// ignore the heartbeat if the maintainer not bootstrapped
 	if !m.initialized.Load() {
@@ -957,6 +981,10 @@ func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage)
 		zap.Stringer("sourceNodeID", msg.From))
 
 	resp := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
+	if !m.isMaintainerEpochResponseAllowed(resp.MaintainerEpoch) {
+		m.logDroppedMaintainerResponse("bootstrap", msg.From, resp.MaintainerEpoch)
+		return
+	}
 	if resp.Err != nil {
 		log.Warn("maintainer bootstrap failed",
 			zap.Stringer("changefeedID", m.changefeedID),
@@ -980,6 +1008,10 @@ func (m *Maintainer) onMaintainerPostBootstrapResponse(msg *messaging.TargetMess
 		zap.Stringer("changefeedID", m.changefeedID),
 		zap.Any("server", msg.From))
 	resp := msg.Message[0].(*heartbeatpb.MaintainerPostBootstrapResponse)
+	if !m.isMaintainerEpochResponseAllowed(resp.MaintainerEpoch) {
+		m.logDroppedMaintainerResponse("post-bootstrap", msg.From, resp.MaintainerEpoch)
+		return
+	}
 	if resp.Err != nil {
 		log.Warn("maintainer post bootstrap failed",
 			zap.Stringer("changefeedID", m.changefeedID),
@@ -989,6 +1021,36 @@ func (m *Maintainer) onMaintainerPostBootstrapResponse(msg *messaging.TargetMess
 	}
 	// disable resend post bootstrap message
 	m.postBootstrapMsg = nil
+}
+
+// isMaintainerEpochResponseAllowed accepts current-generation responses while
+// preserving epoch-0 compatibility during rolling upgrades.
+func (m *Maintainer) isMaintainerEpochResponseAllowed(responseEpoch uint64) bool {
+	return common.MaintainerEpochMatches(responseEpoch, m.currentMaintainerEpoch())
+}
+
+// isMaintainerEpochRequestAllowed fences dispatcher-manager requests that can
+// close or mutate local dispatcher state on behalf of a maintainer generation.
+func (m *Maintainer) isMaintainerEpochRequestAllowed(requestEpoch uint64) bool {
+	currentEpoch := m.currentMaintainerEpoch()
+	if requestEpoch == 0 {
+		// Epoch 0 is only valid while this maintainer is still in compatibility
+		// mode. A strict maintainer must not accept an unfenced tombstone.
+		return currentEpoch == 0
+	}
+	// A strict request can still control a compatibility maintainer during
+	// rolling upgrade, but strict maintainers require an exact epoch match.
+	return currentEpoch == 0 || requestEpoch == currentEpoch
+}
+
+// logDroppedMaintainerResponse records responses rejected by maintainer epoch fencing.
+func (m *Maintainer) logDroppedMaintainerResponse(responseType string, from node.ID, responseEpoch uint64) {
+	log.Warn("drop stale maintainer response",
+		zap.Stringer("changefeedID", m.changefeedID),
+		zap.String("responseType", responseType),
+		zap.Stringer("from", from),
+		zap.Uint64("responseMaintainerEpoch", responseEpoch),
+		zap.Uint64("currentMaintainerEpoch", m.currentMaintainerEpoch()))
 }
 
 // isMysqlCompatible returns true if the sinkURIStr is mysql compatible.
@@ -1060,6 +1122,20 @@ func (m *Maintainer) sendPostBootstrapRequest() {
 }
 
 func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeatpb.MaintainerCloseResponse) {
+	if !m.isMaintainerEpochResponseAllowed(response.MaintainerEpoch) {
+		m.logDroppedMaintainerResponse("close", from, response.MaintainerEpoch)
+		return
+	}
+	if !m.removing.Load() {
+		// Close responses only complete an active remove flow. A delayed compat
+		// response from a superseded maintainer can share this changefeed ID.
+		log.Warn("drop unexpected maintainer close response",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Stringer("from", from),
+			zap.Uint64("responseMaintainerEpoch", response.MaintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", m.currentMaintainerEpoch()))
+		return
+	}
 	if response.Success {
 		m.closedNodes[from] = struct{}{}
 		m.onRemoveMaintainer(m.cascadeRemoving.Load(), m.changefeedRemoved.Load())
@@ -1115,8 +1191,9 @@ func (m *Maintainer) trySendMaintainerCloseRequestToAllNode() bool {
 				n,
 				messaging.DispatcherManagerManagerTopic,
 				&heartbeatpb.MaintainerCloseRequest{
-					ChangefeedID: m.changefeedID.ToPB(),
-					Removed:      m.changefeedRemoved.Load(),
+					ChangefeedID:    m.changefeedID.ToPB(),
+					Removed:         m.changefeedRemoved.Load(),
+					MaintainerEpoch: m.currentMaintainerEpoch(),
 				}))
 		}
 	}
@@ -1177,6 +1254,7 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 			TableTriggerRedoDispatcherId:  nil,
 			IsNewChangefeed:               false,
 			KeyspaceId:                    m.info.KeyspaceID,
+			MaintainerEpoch:               m.currentMaintainerEpoch(),
 		}
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node

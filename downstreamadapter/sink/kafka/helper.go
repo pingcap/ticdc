@@ -128,24 +128,3 @@ func newKafkaSinkComponent(
 	}
 	return kafkaComponent, protocol, nil
 }
-<<<<<<< HEAD
-
-func newKafkaSinkComponent(
-	ctx context.Context,
-	changefeedID commonType.ChangeFeedID,
-	sinkURI *url.URL,
-	sinkConfig *config.SinkConfig,
-) (components, config.Protocol, error) {
-	return newKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, kafka.NewSaramaFactory)
-}
-
-func newKafkaSinkComponentForTest(
-	ctx context.Context,
-	changefeedID commonType.ChangeFeedID,
-	sinkURI *url.URL,
-	sinkConfig *config.SinkConfig,
-) (components, config.Protocol, error) {
-	return newKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, kafka.NewMockFactory)
-}
-=======
->>>>>>> 2667ed8c2 (kafka: make the verify lightweight (#5617))

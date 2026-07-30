@@ -92,7 +92,7 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 		return errors.Trace(err)
 	}
 
-	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	isAvroLike := protocol == config.ProtocolAvro
 	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
 		return errors.Trace(err)
 	}
