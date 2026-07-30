@@ -455,6 +455,10 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 			return err
 		}
 		if message == nil {
+			log.Info("kafka ddl event skipped",
+				zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
+				zap.Uint64("startTs", e.GetStartTs()), zap.Uint64("commitTs", e.GetCommitTs()),
+				zap.String("query", e.Query))
 			continue
 		}
 		codecCommon.SetDDLMessageLogInfo(message, e)
@@ -480,11 +484,11 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
+		log.Info("kafka ddl event sent",
+			zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
+			zap.Uint64("startTs", e.GetStartTs()), zap.Uint64("commitTs", e.GetCommitTs()),
+			zap.String("query", e.GetDDLQuery()))
 	}
-	log.Info("kafka ddl event sent",
-		zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
-		zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()), zap.Any("DDL", event.GetDDLQuery()),
-		zap.String("schema", event.GetSchemaName()), zap.String("table", event.GetTableName()))
 	return nil
 }
 
