@@ -137,8 +137,8 @@ func (m *kafkaTopicManager) tryUpdatePartitionsAndLogging(topic string, partitio
 				zap.String("keyspace", m.changefeedID.Keyspace()),
 				zap.String("changefeed", m.changefeedID.Name()),
 				zap.String("topic", topic),
-				zap.Int32("oldPartitionNumber", oldPartitions.(int32)),
-				zap.Int32("newPartitionNumber", partitions),
+				zap.Int32("oldPartitionNum", oldPartitions.(int32)),
+				zap.Int32("newPartitionNum", partitions),
 			)
 		}
 	} else {
@@ -245,7 +245,7 @@ func (m *kafkaTopicManager) createTopic(
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("topic", topicName),
-			zap.Int32("partitionNumber", m.cfg.PartitionNum),
+			zap.Int32("partitionNum", m.cfg.PartitionNum),
 			zap.Int16("replicationFactor", m.cfg.ReplicationFactor),
 			zap.Error(err),
 			zap.Duration("duration", time.Since(start)),
@@ -258,7 +258,7 @@ func (m *kafkaTopicManager) createTopic(
 		zap.String("keyspace", m.changefeedID.Keyspace()),
 		zap.String("changefeed", m.changefeedID.Name()),
 		zap.String("topic", topicName),
-		zap.Int32("partitionNumber", m.cfg.PartitionNum),
+		zap.Int32("partitionNum", m.cfg.PartitionNum),
 		zap.Int16("replicationFactor", m.cfg.ReplicationFactor),
 		zap.Duration("duration", time.Since(start)),
 	)
@@ -330,7 +330,7 @@ func (m *kafkaTopicManager) useConfiguredPartitionNum(topicName string, cause er
 		zap.String("keyspace", m.changefeedID.Keyspace()),
 		zap.String("changefeed", m.changefeedID.Name()),
 		zap.String("topic", topicName),
-		zap.Int32("partitionNumber", m.cfg.PartitionNum),
+		zap.Int32("partitionNum", m.cfg.PartitionNum),
 		zap.Error(cause))
 	m.tryUpdatePartitionsAndLogging(topicName, m.cfg.PartitionNum)
 	return m.cfg.PartitionNum

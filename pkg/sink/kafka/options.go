@@ -208,7 +208,8 @@ func (o *options) setPartitionNum(changefeedID common.ChangeFeedID, realPartitio
 	if o.PartitionNum < realPartitionCount {
 		log.Warn("configured kafka partition count is lower than topic partition count",
 			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
-			zap.Int32("sinkUriPartitions", o.PartitionNum), zap.Int32("topicPartitions", realPartitionCount))
+			zap.Int32("configuredPartitionNum", o.PartitionNum),
+			zap.Int32("topicPartitionNum", realPartitionCount))
 		return nil
 	}
 

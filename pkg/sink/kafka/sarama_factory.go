@@ -40,10 +40,12 @@ func NewSaramaFactory(
 ) (Factory, error) {
 	start := time.Now()
 	config, err := newSaramaConfig(ctx, o)
-	duration := time.Since(start).Seconds()
-	if duration > 2 {
+	duration := time.Since(start)
+	if duration > 2*time.Second {
 		log.Warn("kafka configuration initialization is slow",
-			zap.Stringer("changefeedID", changefeedID), zap.Any("duration", duration))
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeed", changefeedID.Name()),
+			zap.Duration("duration", duration))
 	}
 	if err != nil {
 		return nil, err
@@ -71,10 +73,12 @@ func NewSaramaFactory(
 func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config *sarama.Config) (ClusterAdminClient, error) {
 	start := time.Now()
 	client, err := sarama.NewClient(endpoints, config)
-	duration := time.Since(start).Seconds()
-	if duration > 2 {
+	duration := time.Since(start)
+	if duration > 2*time.Second {
 		log.Warn("kafka client initialization is slow",
-			zap.Any("duration", duration), zap.Stringer("changefeedID", changefeedID))
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeed", changefeedID.Name()),
+			zap.Duration("duration", duration))
 	}
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
@@ -82,10 +86,12 @@ func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config
 
 	start = time.Now()
 	admin, err := sarama.NewClusterAdminFromClient(client)
-	duration = time.Since(start).Seconds()
-	if duration > 2 {
+	duration = time.Since(start)
+	if duration > 2*time.Second {
 		log.Warn("kafka admin client initialization is slow",
-			zap.Any("duration", duration), zap.Stringer("changefeedID", changefeedID))
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeed", changefeedID.Name()),
+			zap.Duration("duration", duration))
 	}
 	if err != nil {
 		// `sarama.NewClusterAdminFromClient` does not take ownership of the client,
