@@ -105,8 +105,8 @@ func (s *Sink) Run(ctx context.Context) error {
 				log.Info("blackhole sink event channel closed")
 				return nil
 			}
-			err := s.statistics.RecordBatchExecution(func() (int, error) {
-				return int(event.Len()), nil
+			err := s.statistics.RecordBatchExecution(int(event.Len()), func() error {
+				return nil
 			})
 			if err != nil {
 				return err

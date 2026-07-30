@@ -47,7 +47,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	writeTimeout, _ := time.ParseDuration(w.cfg.WriteTimeout)
 	writeTimeout += networkDriftDuration
 
-	tryExec := func() (int, error) {
+	tryExec := func() error {
 		start := time.Now()
 		defer func() {
 			if time.Since(start) > w.cfg.SlowQuery {
@@ -90,9 +90,9 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			return nil
 		})
 		if err != nil {
-			return 0, err
+			return err
 		}
-		return dmls.rowCount, nil
+		return nil
 	}
 	return retry.Do(w.ctx, func() error {
 		failpoint.Inject("MySQLSinkTxnRandomError", func() {
@@ -117,7 +117,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			failpoint.Return(err)
 		})
 
-		err := w.statistics.RecordBatchExecution(tryExec)
+		err := w.statistics.RecordBatchExecution(dmls.rowCount, tryExec)
 		if err != nil {
 			return errors.Trace(w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls))
 		}

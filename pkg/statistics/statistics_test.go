@@ -31,8 +31,8 @@ func TestTrackDMLEventRecordsRawBytesOnPostFlush(t *testing.T) {
 	event := commonEvent.NewDMLEvent(common.NewDispatcherID(), 1, 1, 2, nil)
 	event.ApproximateSize = 123
 	statistics.TrackDMLEvent(event)
-	require.NoError(t, statistics.RecordBatchExecution(func() (int, error) {
-		return int(event.Len()), nil
+	require.NoError(t, statistics.RecordBatchExecution(int(event.Len()), func() error {
+		return nil
 	}))
 
 	require.Zero(t, testutil.ToFloat64(statistics.metricTotalWriteBytesCnt))

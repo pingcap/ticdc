@@ -223,20 +223,20 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	changefeed := d.changeFeedID.Name()
 	start := time.Now()
 
-	err := d.statistics.RecordBatchExecution(func() (int, error) {
+	err := d.statistics.RecordBatchExecution(payload.rowsCount, func() error {
 		if d.config.FlushConcurrency <= 1 {
 			err := d.storage.WriteFile(ctx, dataFilePath, payload.data)
 			if err != nil {
-				return 0, err
+				return err
 			}
-			return payload.rowsCount, nil
+			return nil
 		}
 
 		writer, err := d.storage.Create(ctx, dataFilePath, &storeapi.WriterOption{
 			Concurrency: d.config.FlushConcurrency,
 		})
 		if err != nil {
-			return 0, err
+			return err
 		}
 
 		_, err = writer.Write(ctx, payload.data)
@@ -247,16 +247,16 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 					zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
 					zap.String("path", dataFilePath), zap.Error(closeErr))
 			}
-			return 0, err
+			return err
 		}
 
 		if err = writer.Close(ctx); err != nil {
 			log.Error("failed to close concurrency writer",
 				zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
 				zap.String("path", dataFilePath), zap.Error(err))
-			return 0, err
+			return err
 		}
-		return payload.rowsCount, nil
+		return nil
 	})
 	if err != nil {
 		return err

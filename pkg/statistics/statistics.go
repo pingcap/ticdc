@@ -70,10 +70,10 @@ type Statistics struct {
 	metricExecErrCntForDML prometheus.Counter
 }
 
-// RecordBatchExecution records batch rows and execution errors.
+// RecordBatchExecution records batch rows for successful executions and counts errors.
 // Raw bytes are recorded by TrackDMLEvent after the transaction is flushed.
-func (b *Statistics) RecordBatchExecution(executor func() (int, error)) error {
-	batchSize, err := executor()
+func (b *Statistics) RecordBatchExecution(batchSize int, executor func() error) error {
+	err := executor()
 	if err != nil {
 		b.metricExecErrCntForDML.Inc()
 		return err
