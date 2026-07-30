@@ -38,12 +38,11 @@ type task struct {
 	dispatcherID commonType.DispatcherID
 
 	// DML-only fields.
-	postEnqueue     func()                          // Transaction enqueue callback.
-	tableInfo       *commonType.TableInfo           // Table info used after event is released.
-	versionedTable  cloudstorage.VersionedTableName // Versioned output identity for the DML event.
-	approximateSize int64                           // Approximate size of the original DML event.
-	rowEvents       []*commonEvent.RowEvent         // Row events to encode and flush.
-	encodedMsgs     []*common.Message               // Encoded result built from event.
+	postEnqueue    func()                          // Transaction enqueue callback.
+	tableInfo      *commonType.TableInfo           // Table info used after event is released.
+	versionedTable cloudstorage.VersionedTableName // Versioned output identity for the DML event.
+	rowEvents      []*commonEvent.RowEvent         // Row events to encode and flush.
+	encodedMsgs    []*common.Message               // Encoded result built from event.
 
 	// Flush-only field.
 	marker *flushMarker // Barrier marker used by FlushDMLBeforeBlock.
@@ -56,11 +55,10 @@ func newDMLTask(
 ) *task {
 	postEnqueue, postFlush := event.DetachPostCallbacks()
 	return &task{
-		kind:            taskKindDML,
-		postEnqueue:     postEnqueue,
-		tableInfo:       event.TableInfo,
-		versionedTable:  version,
-		approximateSize: event.GetSize(),
+		kind:           taskKindDML,
+		postEnqueue:    postEnqueue,
+		tableInfo:      event.TableInfo,
+		versionedTable: version,
 		// Storage txn encoders attach only the last row callback to the built
 		// batch message, so the callback is triggered once per encoded txn
 		// message. Kafka uses row-level callbacks and counts all rows before

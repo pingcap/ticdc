@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -79,6 +80,16 @@ func (b *Statistics) RecordBatchExecution(executor func() (int, int64, error)) e
 	b.metricExecBatchHis.Observe(float64(batchSize))
 	b.metricTotalWriteBytesCnt.Add(float64(batchWriteBytes))
 	return nil
+}
+
+// TrackDMLEvent records the raw size of a DML event after the whole transaction
+// has been flushed to downstream. The size is snapshotted here so the callback
+// does not retain the event.
+func (b *Statistics) TrackDMLEvent(event *commonEvent.DMLEvent) {
+	writeBytes := event.GetSize()
+	event.PushFrontFlushFunc(func() {
+		b.metricTotalWriteBytesCnt.Add(float64(writeBytes))
+	})
 }
 
 // RecordDDLExecution record the time cost of execute ddl

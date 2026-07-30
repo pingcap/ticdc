@@ -93,7 +93,6 @@ type RowEvent struct {
 	TableInfo       *common.TableInfo
 	StartTs         uint64
 	CommitTs        uint64
-	ApproximateSize int64
 	Event           RowChange
 	ColumnSelector  Selector
 	Callback        func()

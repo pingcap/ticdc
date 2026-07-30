@@ -317,6 +317,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
+			s.statistics.TrackDMLEvent(event)
 			schema := event.TableInfo.GetSchemaName()
 			table := event.TableInfo.GetTableName()
 			topic := s.comp.eventRouter.GetTopicForRowChange(schema, table)
@@ -444,16 +445,13 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			if err = future.Ready(ctx); err != nil {
 				return err
 			}
-			for i, message := range future.Messages {
+			for _, message := range future.Messages {
 				start := time.Now()
-				rows, writeBytes := message.GetRowsCount(), int64(0)
-				if i == 0 {
-					writeBytes = future.ApproximateSize
-				}
+				rows := message.GetRowsCount()
 				callback := message.Callback
 				message.Callback = func() {
 					_ = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-						return rows, writeBytes, nil
+						return rows, 0, nil
 					})
 					if callback != nil {
 						callback()
