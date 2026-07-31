@@ -281,7 +281,7 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	p := &partitionProgress{
 		partition:   0,
 		eventsGroup: make(map[int64]*util.EventsGroup),
-		watermark:   20,
+		watermark:   0,
 	}
 	w := &writer{
 		progresses: []*partitionProgress{p},
@@ -293,8 +293,65 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	w.appendMessage2Group(newDMLMessageForWriterTest(10), p)
 	w.appendMessage2Group(newDMLMessageForWriterTest(20), p)
 
+	p.watermark = 20
 	require.True(t, w.Write(ctx, codeccommon.MessageTypeResolved))
 	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
+}
+
+func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Times(0)
+
+	decoder := &deferredDMLDecoder{
+		row: &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			CommitTs:        10,
+			RowTypes:        []common.RowType{common.RowTypeInsert},
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
+			},
+		},
+	}
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   20,
+		decoder:     decoder,
+	}
+	w := &writer{
+		progresses: []*partitionProgress{progress},
+		mysqlSink:  s,
+		protocol:   config.ProtocolCanalJSON,
+	}
+
+	needCommit := w.WriteMessage(ctx, fakePulsarMessage{key: "k", payload: []byte(`{"fake":"row"}`)})
+
+	require.False(t, needCommit)
+	require.Nil(t, progress.eventsGroup[1])
+}
+
+func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   20,
+	}
+	w := &writer{
+		progresses: []*partitionProgress{
+			progress,
+			{partition: 1, watermark: 5},
+		},
+		protocol: config.ProtocolCanalJSON,
+	}
+
+	w.appendMessage2Group(newDMLMessageForWriterTest(10), progress)
+
+	require.NotNil(t, progress.eventsGroup[1])
+	resolved := progress.eventsGroup[1].ResolveInto(20, nil)
+	require.Len(t, resolved, 1)
+	require.Equal(t, uint64(10), resolved[0].GetCommitTs())
 }
 
 func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
@@ -410,7 +467,7 @@ func (d *deferredDMLDecoder) NextResolvedEvent() uint64 {
 
 func (d *deferredDMLDecoder) NextDMLMessage() *codeccommon.DMLMessage {
 	d.nextDMLMessageCount++
-	return codeccommon.NewDMLMessage(1, "test", "t", 100, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+	return codeccommon.NewDMLMessage(1, "test", "t", d.row.CommitTs, common.RowTypeInsert, func() *commonEvent.DMLEvent {
 		d.toDMLEventCount++
 		return d.row
 	})
