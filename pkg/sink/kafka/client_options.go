@@ -201,11 +201,8 @@ func newCompressionOption(o *options) kgo.Opt {
 	case "zstd":
 		codec = kgo.ZstdCompression()
 	default:
-		log.Warn("unsupported compression algorithm", zap.String("compression", o.Compression))
+		log.Warn("unsupported kafka compression algorithm", zap.String("compression", o.Compression))
 		codec = kgo.NoCompression()
-	}
-	if codec != kgo.NoCompression() {
-		log.Info("Kafka producer uses " + compression + " compression algorithm")
 	}
 	return kgo.ProducerBatchCompression(codec)
 }

@@ -82,7 +82,7 @@ func (p *asyncProducer) Close() {
 
 	start := time.Now()
 	p.client.Close()
-	log.Info("Close kafka async producer success",
+	log.Info("kafka async producer closed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
 		zap.String("changefeed", p.changefeedID.Name()),
 		zap.Duration("duration", time.Since(start)))
@@ -130,7 +130,7 @@ func (p *asyncProducer) enqueueAsyncSendError(
 	logInfo *common.MessageLogInfo,
 	err error,
 ) {
-	log.Error("send message to kafka failed",
+	log.Error("kafka message send failed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
 		zap.String("changefeed", p.changefeedID.Name()),
 		zap.String("eventContext", BuildEventLogContext(
@@ -148,9 +148,6 @@ func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("async producer exit since context is done",
-				zap.String("keyspace", p.changefeedID.Keyspace()),
-				zap.String("changefeed", p.changefeedID.Name()))
 			return context.Cause(ctx)
 		case err := <-p.errCh:
 			return err

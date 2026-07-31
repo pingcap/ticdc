@@ -412,37 +412,27 @@ func TestTimeout(t *testing.T) {
 	require.Equal(t, 2*time.Minute, options.WriteTimeout)
 }
 
-func TestTimeoutFallsBackForNonPositiveValues(t *testing.T) {
+func TestApplyRejectsNonPositiveTimeout(t *testing.T) {
 	t.Parallel()
 
-	testCases := []struct {
-		name      string
-		parameter string
-		timeout   func(*options) time.Duration
-	}{
-		{name: "dial timeout", parameter: "dial-timeout", timeout: func(o *options) time.Duration { return o.DialTimeout }},
-		{name: "read timeout", parameter: "read-timeout", timeout: func(o *options) time.Duration { return o.ReadTimeout }},
-		{name: "write timeout", parameter: "write-timeout", timeout: func(o *options) time.Duration { return o.WriteTimeout }},
-	}
+	changefeedID := commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test")
+	for _, parameter := range []string{"dial-timeout", "read-timeout", "write-timeout"} {
+		for _, value := range []string{"0s", "-1s"} {
+			t.Run(parameter+"="+value, func(t *testing.T) {
+				t.Parallel()
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			for _, value := range []string{"0s", "-1s"} {
-				sinkURI, err := url.Parse("kafka://127.0.0.1:9092/kafka-test?" + tc.parameter + "=" + value)
+				sinkURI, err := url.Parse(
+					"kafka://127.0.0.1:9092/kafka-test?" + parameter + "=" + value)
 				require.NoError(t, err)
 
-				o := NewOptions()
-				err = o.Apply(
-					commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"),
-					sinkURI,
-					config.GetDefaultReplicaConfig().Sink,
-				)
-				require.NoError(t, err)
-				require.Equal(t, defaultTimeout, tc.timeout(o))
-			}
-		})
+				err = NewOptions().Apply(
+					changefeedID, sinkURI, config.GetDefaultReplicaConfig().Sink)
+				require.ErrorContains(t, err, parameter+" must be greater than zero")
+				errCode, ok := errors.RFCCode(err)
+				require.True(t, ok)
+				require.Equal(t, errors.ErrKafkaInvalidConfig.RFCCode(), errCode)
+			})
+		}
 	}
 }
 

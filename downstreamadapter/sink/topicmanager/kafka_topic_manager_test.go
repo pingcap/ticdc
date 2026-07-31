@@ -55,6 +55,9 @@ func TestCreateTopic(t *testing.T) {
 			}, nil),
 		admin.EXPECT().GetTopicsMeta([]string{"new-topic"}, true).Return(
 			map[string]kafka.TopicDetail{}, nil),
+		admin.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).Return(
+			nil, errors.WrapError(
+				errors.ErrKafkaAdminAPI, kerr.UnknownTopicOrPartition, "describe-topic", "new-topic")),
 		admin.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
 			func(detail kafka.TopicDetail, validateOnly bool) error {
 				gotNewTopicDetail = detail
@@ -70,8 +73,14 @@ func TestCreateTopic(t *testing.T) {
 			}, nil),
 		admin.EXPECT().GetTopicsMeta([]string{"new-topic2"}, true).Return(
 			map[string]kafka.TopicDetail{}, nil),
+		admin.EXPECT().GetTopicsMeta([]string{"new-topic2"}, false).Return(
+			nil, errors.WrapError(
+				errors.ErrKafkaAdminAPI, kerr.UnknownTopicOrPartition, "describe-topic", "new-topic2")),
 		admin.EXPECT().GetTopicsMeta([]string{"new-topic-failed"}, true).Return(
 			map[string]kafka.TopicDetail{}, nil),
+		admin.EXPECT().GetTopicsMeta([]string{"new-topic-failed"}, false).Return(
+			nil, errors.WrapError(
+				errors.ErrKafkaAdminAPI, kerr.UnknownTopicOrPartition, "describe-topic", "new-topic-failed")),
 		admin.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
 			func(detail kafka.TopicDetail, validateOnly bool) error {
 				gotFailedTopicDetail = detail
@@ -142,6 +151,9 @@ func TestCreateTopicValidatesReplicationFactor(t *testing.T) {
 	gomock.InOrder(
 		admin.EXPECT().GetTopicsMeta([]string{topic}, true).
 			Return(map[string]kafka.TopicDetail{}, nil),
+		admin.EXPECT().GetTopicsMeta([]string{topic}, false).
+			Return(nil, errors.WrapError(
+				errors.ErrKafkaAdminAPI, kerr.UnknownTopicOrPartition, "describe-topic", topic)),
 		admin.EXPECT().GetBrokerConfig(kafka.MinInsyncReplicasConfigName).
 			Return("2", true, nil),
 	)
@@ -179,6 +191,9 @@ func TestCreateTopicWaitsUntilVisible(t *testing.T) {
 	gomock.InOrder(
 		admin.EXPECT().GetTopicsMeta([]string{topic}, true).Return(
 			map[string]kafka.TopicDetail{}, nil),
+		admin.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
+			nil, errors.WrapError(
+				errors.ErrKafkaAdminAPI, kerr.UnknownTopicOrPartition, "describe-topic", topic)),
 		admin.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
 			func(detail kafka.TopicDetail, validateOnly bool) error {
 				require.Equal(t, kafka.TopicDetail{
@@ -254,6 +269,13 @@ func TestCreateTopicWithCreateDenied(t *testing.T) {
 	gomock.InOrder(
 		admin.EXPECT().GetTopicsMeta([]string{"precreated-topic"}, true).Return(
 			map[string]kafka.TopicDetail{}, nil),
+		admin.EXPECT().GetTopicsMeta([]string{"precreated-topic"}, false).Return(
+			nil, errors.WrapError(
+				errors.ErrKafkaAdminAPI,
+				kerr.UnknownTopicOrPartition,
+				"describe-topic",
+				"precreated-topic",
+			)),
 		admin.EXPECT().CreateTopic(gomock.Any(), false).Return(
 			errors.WrapError(
 				errors.ErrKafkaAdminAPI,

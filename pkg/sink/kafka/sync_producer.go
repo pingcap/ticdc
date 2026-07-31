@@ -93,7 +93,7 @@ func (p *syncProducer) SendMessage(topic string, partitionNum int32, message *co
 	if err == nil {
 		return nil
 	}
-	log.Error("send message to kafka failed",
+	log.Error("kafka message send failed",
 		zap.String("keyspace", p.id.Keyspace()),
 		zap.String("changefeed", p.id.Name()),
 		zap.String("eventContext", BuildEventLogContext(
@@ -124,7 +124,7 @@ func (p *syncProducer) SendMessages(topic string, partitionNum int32, message *c
 	if err == nil {
 		return nil
 	}
-	log.Error("send message to kafka failed",
+	log.Error("kafka message send failed",
 		zap.String("keyspace", p.id.Keyspace()),
 		zap.String("changefeed", p.id.Name()),
 		zap.String("eventContext", BuildEventLogContext(
@@ -135,7 +135,7 @@ func (p *syncProducer) SendMessages(topic string, partitionNum int32, message *c
 
 func (p *syncProducer) Close() {
 	if !p.closed.CompareAndSwap(false, true) {
-		log.Warn("kafka DDL producer already closed",
+		log.Warn("kafka ddl producer already closed",
 			zap.String("keyspace", p.id.Keyspace()),
 			zap.String("changefeed", p.id.Name()))
 		return
@@ -143,7 +143,7 @@ func (p *syncProducer) Close() {
 
 	start := time.Now()
 	p.client.Close()
-	log.Info("Kafka DDL producer closed",
+	log.Info("kafka ddl producer closed",
 		zap.String("keyspace", p.id.Keyspace()),
 		zap.String("changefeed", p.id.Name()),
 		zap.Duration("duration", time.Since(start)))

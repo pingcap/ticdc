@@ -19,13 +19,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.uber.org/zap"
 )
 
 // TopicDetail represent a topic's detail information.
@@ -117,11 +115,6 @@ func (a *admin) GetBrokerConfig(configName string) (string, bool, error) {
 			return entry.MaybeValue(), true, nil
 		}
 	}
-
-	log.Warn("Kafka broker config item not found",
-		zap.String("keyspace", a.changefeed.Keyspace()),
-		zap.String("changefeed", a.changefeed.Name()),
-		zap.String("configName", configName))
 	return "", false, nil
 }
 
@@ -133,7 +126,6 @@ func (a *admin) GetTopicConfig(topicName string, configName string) (string, boo
 	if err != nil {
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", topicName)
 	}
-
 	resource, err := configs.On(topicName, nil)
 	if err != nil {
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", topicName)
@@ -144,19 +136,9 @@ func (a *admin) GetTopicConfig(topicName string, configName string) (string, boo
 
 	for _, entry := range resource.Configs {
 		if entry.Key == configName {
-			log.Info("Kafka topic config item found",
-				zap.String("keyspace", a.changefeed.Keyspace()),
-				zap.String("changefeed", a.changefeed.Name()),
-				zap.String("configName", configName),
-				zap.String("configValue", entry.MaybeValue()))
 			return entry.MaybeValue(), true, nil
 		}
 	}
-
-	log.Warn("Kafka config item not found",
-		zap.String("keyspace", a.changefeed.Keyspace()),
-		zap.String("changefeed", a.changefeed.Name()),
-		zap.String("configName", configName))
 	return "", false, nil
 }
 

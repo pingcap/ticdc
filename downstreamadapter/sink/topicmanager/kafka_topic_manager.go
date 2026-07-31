@@ -114,10 +114,6 @@ func (m *kafkaTopicManager) backgroundRefreshMeta(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("Background refresh Kafka metadata goroutine exit.",
-				zap.String("keyspace", m.changefeedID.Keyspace()),
-				zap.String("changefeed", m.changefeedID.Name()),
-			)
 			return
 		case <-ticker.C:
 			// We ignore the error here, because the error may be caused by the
@@ -137,23 +133,16 @@ func (m *kafkaTopicManager) tryUpdatePartitionsAndLogging(topic string, partitio
 		if oldPartitions.(int32) != partitions {
 			m.topics.Store(topic, partitions)
 			log.Info(
-				"update topic partition number",
+				"kafka topic partition count changed",
 				zap.String("keyspace", m.changefeedID.Keyspace()),
 				zap.String("changefeed", m.changefeedID.Name()),
 				zap.String("topic", topic),
-				zap.Int32("oldPartitionNumber", oldPartitions.(int32)),
-				zap.Int32("newPartitionNumber", partitions),
+				zap.Int32("oldPartitionNum", oldPartitions.(int32)),
+				zap.Int32("newPartitionNum", partitions),
 			)
 		}
 	} else {
 		m.topics.Store(topic, partitions)
-		log.Info(
-			"store topic partition number",
-			zap.String("keyspace", m.changefeedID.Keyspace()),
-			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("topic", topic),
-			zap.Int32("partitionNumber", partitions),
-		)
 	}
 }
 
@@ -172,7 +161,7 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum() (map[string]int32, err
 	topicDetails, err := m.admin.GetTopicsMeta(topics, false)
 	if err != nil {
 		log.Warn(
-			"Kafka admin describe topics failed",
+			"kafka topic metadata refresh failed",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
@@ -209,37 +198,32 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 	ctx context.Context,
 	topicName string,
 ) error {
+	start := time.Now()
 	topics := []string{topicName}
 	err := retry.Do(ctx, func() error {
-		start := time.Now()
 		// ignoreTopicError is set to false since we just create the topic,
 		// make sure the topic is visible.
 		meta, err := m.admin.GetTopicsMeta(topics, false)
 		if err != nil {
-			log.Warn("topic not found, retry it",
-				zap.String("keyspace", m.changefeedID.Keyspace()),
-				zap.String("changefeed", m.changefeedID.Name()),
-				zap.Error(err),
-				zap.Duration("duration", time.Since(start)),
-			)
 			return err
 		}
-		detail, ok := meta[topicName]
+		_, ok := meta[topicName]
 		if !ok {
 			return errors.ErrKafkaAdminAPI.GenWithStackByArgs("describe-topic", topicName)
 		}
-		log.Info("topic found",
-			zap.String("keyspace", m.changefeedID.Keyspace()),
-			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("topic", topicName),
-			zap.Int32("partitionNumber", detail.NumPartitions),
-			zap.Duration("duration", time.Since(start)))
 		return nil
 	}, retry.WithBackoffBaseDelay(500),
 		retry.WithBackoffMaxDelay(1000),
 		retry.WithMaxTries(6),
 	)
-
+	if err != nil {
+		log.Warn("kafka topic metadata refresh failed",
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeed", m.changefeedID.Name()),
+			zap.String("topic", topicName),
+			zap.Duration("duration", time.Since(start)),
+			zap.Error(err))
+	}
 	return err
 }
 
@@ -265,27 +249,17 @@ func (m *kafkaTopicManager) createTopic(
 	}, false)
 	if err != nil {
 		log.Error(
-			"Kafka admin create the topic failed",
+			"kafka topic creation failed",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("topic", topicName),
-			zap.Int32("partitionNumber", m.cfg.PartitionNum),
+			zap.Int32("partitionNum", m.cfg.PartitionNum),
 			zap.Int16("replicationFactor", m.cfg.ReplicationFactor),
 			zap.Error(err),
 			zap.Duration("duration", time.Since(start)),
 		)
 		return 0, err
 	}
-
-	log.Info(
-		"Kafka admin create the topic success",
-		zap.String("keyspace", m.changefeedID.Keyspace()),
-		zap.String("changefeed", m.changefeedID.Name()),
-		zap.String("topic", topicName),
-		zap.Int32("partitionNumber", m.cfg.PartitionNum),
-		zap.Int16("replicationFactor", m.cfg.ReplicationFactor),
-		zap.Duration("duration", time.Since(start)),
-	)
 	m.tryUpdatePartitionsAndLogging(topicName, m.cfg.PartitionNum)
 
 	return m.cfg.PartitionNum, nil
@@ -308,7 +282,16 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
 		return numPartition, nil
 	}
+	topicDetails, err = m.admin.GetTopicsMeta([]string{topicName}, false)
+	if err != nil {
+		if kafka.IsAdminAuthorizationFailed(err) {
+			return m.useConfiguredPartitionNum(topicName, err), nil
+		}
+	} else if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
+		return numPartition, nil
+	}
 
+	start := time.Now()
 	partitionNum, err := m.createTopic(ctx, topicName)
 	if err != nil {
 		if kafka.IsAdminAuthorizationFailed(err) {
@@ -321,6 +304,16 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	if err != nil {
 		return 0, err
 	}
+
+	log.Info(
+		"kafka topic created",
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeed", m.changefeedID.Name()),
+		zap.String("topic", topicName),
+		zap.Int32("partitionNum", partitionNum),
+		zap.Int16("replicationFactor", m.cfg.ReplicationFactor),
+		zap.Duration("duration", time.Since(start)),
+	)
 
 	return partitionNum, nil
 }
@@ -341,11 +334,11 @@ func (m *kafkaTopicManager) tryStoreTopicMeta(
 }
 
 func (m *kafkaTopicManager) useConfiguredPartitionNum(topicName string, cause error) int32 {
-	log.Warn("skip Kafka topic creation because topic authorization failed",
+	log.Warn("kafka topic creation skipped due to authorization failure",
 		zap.String("keyspace", m.changefeedID.Keyspace()),
 		zap.String("changefeed", m.changefeedID.Name()),
 		zap.String("topic", topicName),
-		zap.Int32("partitionNumber", m.cfg.PartitionNum),
+		zap.Int32("partitionNum", m.cfg.PartitionNum),
 		zap.Error(cause))
 	m.tryUpdatePartitionsAndLogging(topicName, m.cfg.PartitionNum)
 	return m.cfg.PartitionNum

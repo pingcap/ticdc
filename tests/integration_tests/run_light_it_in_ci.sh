@@ -89,7 +89,7 @@ kafka_groups=(
 	# G08
 	'capture_session_done_during_task fail_over_ddl_I table_route'
 	# G09
-	'cdc_server_tips ddl_sequence log_redaction fail_over_ddl_J'
+	'cdc_server_tips ddl_sequence fail_over_ddl_J'
 	# G10
 	'changefeed_error batch_add_table fail_over_ddl_K'
 	# G11
@@ -99,7 +99,7 @@ kafka_groups=(
 	# G13
 	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
-	'kafka_simple_basic avro_basic fail_over_ddl_O update_changefeed_check_config'
+	'kafka_simple_basic avro_basic avro_schema_registry_error fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'kafka_simple_basic_avro split_region autorandom gc_safepoint'
 )
