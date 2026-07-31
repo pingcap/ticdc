@@ -160,9 +160,6 @@ type options struct {
 	Compression  string
 	ClientID     string
 	RequiredAcks RequiredAcks
-	// Only for test. User can not set this value.
-	// The current prod default value is 0.
-	MaxMessages int
 
 	// Credential is used to connect to kafka cluster.
 	EnableTLS          bool
