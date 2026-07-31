@@ -80,6 +80,47 @@ func getMysqlSinkWithSeparateDBs(t *testing.T) (context.Context, *Sink, sqlmock.
 	return ctx, sink, dmlMock, controlMock
 }
 
+func TestMysqlSinkControlAsyncDBOnlyForTiDB(t *testing.T) {
+	ctx := context.Background()
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+
+	t.Run("mysql downstream has no control async db", func(t *testing.T) {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+
+		cfg := mysql.New()
+		cfg.WorkerCount = 1
+		cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+		cfg.CachePrepStmts = false
+		cfg.IsTiDB = false
+
+		sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute, common.DefaultKeyspaceID)
+		require.Nil(t, sink.controlAsyncDB)
+
+		mock.ExpectClose()
+		sink.Close()
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("tidb downstream has control async db", func(t *testing.T) {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+
+		cfg := mysql.New()
+		cfg.WorkerCount = 1
+		cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+		cfg.CachePrepStmts = false
+		cfg.IsTiDB = true
+
+		sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute, common.DefaultKeyspaceID)
+		require.Same(t, db, sink.controlAsyncDB)
+
+		mock.ExpectClose()
+		sink.Close()
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
 func TestMysqlSinkUsesControlAsyncDBForTiDBAddIndex(t *testing.T) {
 	dmlDB, dmlMock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)

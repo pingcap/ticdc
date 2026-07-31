@@ -88,7 +88,9 @@ func Verify(
 	}
 	_ = dmlDB.Close()
 	_ = controlDB.Close()
-	_ = controlAsyncDB.Close()
+	if controlAsyncDB != nil {
+		_ = controlAsyncDB.Close()
+	}
 	return nil
 }
 
@@ -128,7 +130,11 @@ func NewMySQLSink(
 	progressInterval time.Duration,
 	keyspaceID uint32,
 ) *Sink {
-	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, db, db, db, bdrMode, enableActiveActive, progressInterval, keyspaceID)
+	var controlAsyncDB *sql.DB
+	if cfg.IsTiDB {
+		controlAsyncDB = db
+	}
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, db, db, controlAsyncDB, bdrMode, enableActiveActive, progressInterval, keyspaceID)
 }
 
 // newMySQLSinkWithControlDB creates a MySQL sink with separate pools for DML and
@@ -146,7 +152,11 @@ func newMySQLSinkWithControlDB(
 	progressInterval time.Duration,
 	keyspaceID uint32,
 ) *Sink {
-	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, controlDB, bdrMode, enableActiveActive, progressInterval, keyspaceID)
+	var controlAsyncDB *sql.DB
+	if cfg.IsTiDB {
+		controlAsyncDB = controlDB
+	}
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, bdrMode, enableActiveActive, progressInterval, keyspaceID)
 }
 
 func newMySQLSinkWithControlAsyncDB(
@@ -176,7 +186,9 @@ func newMySQLSinkWithDBs(
 	progressInterval time.Duration,
 	keyspaceID uint32,
 ) *Sink {
-	if controlAsyncDB == nil {
+	if !cfg.IsTiDB {
+		controlAsyncDB = nil
+	} else if controlAsyncDB == nil {
 		controlAsyncDB = controlDB
 	}
 
@@ -477,7 +489,7 @@ func (s *Sink) Close() {
 	if s.controlDB != s.dmlDB {
 		s.closeDBPool("control", s.controlDB)
 	}
-	if s.controlAsyncDB != s.dmlDB && s.controlAsyncDB != s.controlDB {
+	if s.controlAsyncDB != nil && s.controlAsyncDB != s.dmlDB && s.controlAsyncDB != s.controlDB {
 		s.closeDBPool("control async", s.controlAsyncDB)
 	}
 	if s.activeActiveSyncStatsCollector != nil {

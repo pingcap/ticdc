@@ -342,9 +342,9 @@ func NewMysqlConfigAndDB(
 }
 
 // NewMysqlConfigAndDBs creates the effective MySQL sink config and independent
-// database pools for DML, control-plane work, and asynchronous DDL execution.
-// The DML pool follows the worker based sizing, while the control and async DDL
-// pools remain small and independent so DDL, DDL-ts, syncpoint, and progress
+// database pools for DML, control-plane work, and TiDB asynchronous DDL
+// execution. The DML pool follows the worker based sizing, while the control
+// pool remains small and independent so DDL, DDL-ts, syncpoint, and progress
 // metadata operations cannot be starved by long-lived DML sessions.
 func NewMysqlConfigAndDBs(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig,
@@ -363,6 +363,10 @@ func NewMysqlConfigAndDBs(
 		return nil, nil, nil, nil, err
 	}
 	configureControlDBConn(controlDB)
+
+	if !cfg.IsTiDB {
+		return cfg, dmlDB, controlDB, nil, nil
+	}
 
 	controlAsyncDSNStr, err := setDSNReadTimeout(dsnStr, cfg.AsyncDDLTimeout)
 	if err != nil {
