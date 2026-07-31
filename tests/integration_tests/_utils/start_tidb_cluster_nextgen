@@ -223,6 +223,8 @@ s3-secret-key = "$MINIO_ROOT_PASSWORD"
 s3-bucket = "cse-test-up"
 s3-region = "local"
 
+[cdc]
+enable = true
 EOF
 
 touch "$OUT_DIR/downstream-tikv.toml"
@@ -247,6 +249,9 @@ wal-sync-dir = "$TEST_DATA_DIR/wal-sync/downstream/tikv/raft-wal"
 lightweight-backup = true
 target-file-size = "512MB"
 wal-chunk-target-file-size = "128MB"
+
+[cdc]
+enable = true
 EOF
 
 echo "Starting upstream TiKV..."
