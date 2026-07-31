@@ -20,6 +20,19 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 )
 
+// EpochBumpOptions carries metadata persisted together with a changefeed epoch bump.
+type EpochBumpOptions struct {
+	CheckpointTs uint64
+	Progress     config.Progress
+	// UpdateStatus controls whether CheckpointTs and Progress overwrite the
+	// persisted status read by the bump transaction.
+	UpdateStatus bool
+	State        *config.FeedState
+	Error        *config.RunningError
+	// UpdateError controls whether Error overwrites the persisted runtime error.
+	UpdateError bool
+}
+
 // Backend is the metastore for the changefeed
 type Backend interface {
 	// GetAllChangefeeds returns all changefeeds from the backend db, include stopped and failed changefeeds
@@ -30,14 +43,18 @@ type Backend interface {
 	CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error
 	// UpdateChangefeed updates changefeed info  to db
 	UpdateChangefeed(ctx context.Context, info *config.ChangeFeedInfo, checkpointTs uint64, progress config.Progress) error
+	// ResumeChangefeed persists the resumed status with a new owner epoch.
+	ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, candidateEpoch uint64, checkpointTs uint64) (*config.ChangeFeedInfo, error)
+	// BumpChangefeedEpoch is the low-level ownership boundary used before a
+	// coordinator path can create a new maintainer owner. It only reads and
+	// updates stored status when UpdateStatus is set.
+	BumpChangefeedEpoch(ctx context.Context, id common.ChangeFeedID, candidateEpoch uint64, options EpochBumpOptions) (*config.ChangeFeedInfo, error)
 	// PauseChangefeed persists the pause status to db for a changefeed
 	PauseChangefeed(ctx context.Context, id common.ChangeFeedID) error
 	// DeleteChangefeed removes all related info of a changefeed from db
 	DeleteChangefeed(ctx context.Context, id common.ChangeFeedID) error
 	// SetChangefeedProgress persists the operation progress status to db for a changefeed
 	SetChangefeedProgress(ctx context.Context, id common.ChangeFeedID, progress config.Progress) error
-	// ResumeChangefeed persists the resumed status to db for a changefeed and returns the resumed info.
-	ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64) (*config.ChangeFeedInfo, error)
 	// UpdateChangefeedCheckpointTs persists the checkpointTs for changefeeds
 	UpdateChangefeedCheckpointTs(ctx context.Context, checkpointTs map[common.ChangeFeedID]uint64) error
 }

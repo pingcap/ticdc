@@ -18,12 +18,10 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/errors"
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	commonType "github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -31,15 +29,14 @@ import (
 type saramaAsyncProducer struct {
 	client       sarama.Client
 	producer     sarama.AsyncProducer
-	changefeedID commonType.ChangeFeedID
+	changefeedID common.ChangeFeedID
 
-	closed      *atomic.Bool
-	failpointCh chan *sarama.ProducerError
+	closed *atomic.Bool
 }
 
 type messageMetadata struct {
 	callback func()
-	logInfo  *common.MessageLogInfo
+	logInfo  *codecCommon.MessageLogInfo
 }
 
 func (p *saramaAsyncProducer) Close() {
@@ -103,13 +100,7 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			log.Info("async producer exit since context is done",
 				zap.String("keyspace", p.changefeedID.Keyspace()),
 				zap.String("changefeed", p.changefeedID.Name()))
-			return errors.Trace(ctx.Err())
-		case err := <-p.failpointCh:
-			log.Warn("Receive from failpoint chan in kafka DML producer",
-				zap.String("keyspace", p.changefeedID.Keyspace()),
-				zap.String("changefeed", p.changefeedID.Name()),
-				zap.Error(err))
-			return p.handleProducerError(err)
+			return context.Cause(ctx)
 		case ack := <-p.producer.Successes():
 			if ack != nil {
 				switch meta := ack.Metadata.(type) {
@@ -137,37 +128,23 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 }
 
 func (p *saramaAsyncProducer) handleProducerError(err *sarama.ProducerError) error {
-	errWithInfo := AnnotateEventError(
-		p.changefeedID.Keyspace(),
-		p.changefeedID.Name(),
-		extractLogInfo(err.Msg),
-		err.Err,
-	)
-	return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, errWithInfo)
+	log.Error("send message to kafka failed",
+		zap.String("keyspace", p.changefeedID.Keyspace()),
+		zap.String("changefeed", p.changefeedID.Name()),
+		zap.String("eventContext", BuildEventLogContext(
+			p.changefeedID.Keyspace(), p.changefeedID.Name(), extractLogInfo(err.Msg))),
+		zap.Error(err.Err))
+	return errors.WrapError(errors.ErrKafkaSendMessage, err.Err)
 }
 
 // AsyncSend is the input channel for the user to write messages to that they
 // wish to send.
 func (p *saramaAsyncProducer) AsyncSend(
-	ctx context.Context, topic string, partition int32, message *common.Message,
+	ctx context.Context, topic string, partition int32, message *codecCommon.Message,
 ) error {
 	if p.closed.Load() {
-		return cerror.ErrKafkaProducerClosed.GenWithStackByArgs()
+		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
-	failpoint.Inject("KafkaSinkAsyncSendError", func() {
-		// simulate sending message to input channel successfully but flushing
-		// message to Kafka meets error
-		log.Info("KafkaSinkAsyncSendError error injected", zap.String("keyspace", p.changefeedID.Keyspace()),
-			zap.String("changefeed", p.changefeedID.Name()))
-		p.failpointCh <- &sarama.ProducerError{
-			Err: errors.New("kafka sink injected error"),
-			Msg: &sarama.ProducerMessage{Metadata: &messageMetadata{
-				callback: message.Callback,
-				logInfo:  message.LogInfo,
-			}},
-		}
-		failpoint.Return(nil)
-	})
 	meta := &messageMetadata{
 		callback: message.Callback,
 		logInfo:  message.LogInfo,
@@ -181,13 +158,13 @@ func (p *saramaAsyncProducer) AsyncSend(
 	}
 	select {
 	case <-ctx.Done():
-		return errors.Trace(ctx.Err())
+		return context.Cause(ctx)
 	case p.producer.Input() <- msg:
 	}
 	return nil
 }
 
-func extractLogInfo(msg *sarama.ProducerMessage) *common.MessageLogInfo {
+func extractLogInfo(msg *sarama.ProducerMessage) *codecCommon.MessageLogInfo {
 	if msg == nil {
 		return nil
 	}

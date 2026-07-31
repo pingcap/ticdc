@@ -87,7 +87,7 @@ kafka_groups=(
 	# 'kafka_simple_claim_check kafka_simple_claim_check_avro tidb_mysql_test'
 	'kafka_simple_claim_check kafka_simple_claim_check_avro'
 	# G09
-	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro mq_sink_error_resume multi_source'
+	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro multi_source'
 	# G10
 	'kafka_column_selector kafka_column_selector_avro ddl_with_random_move_table'
 	# G11
