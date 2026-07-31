@@ -63,7 +63,7 @@ mysql_groups=(
 	# G13
 	# maintainer_failover_when_operator is temporarily excluded from release-8.5 CI because this branch
 	# disables the no-operator terminal-status fallback; the case depends on that rescheduling path.
-	'cli_with_auth fail_over_ddl_N'
+	'cli_with_auth fail_over_ddl_N cli_missing_keyspace_error'
 	# G14
 	'batch_add_table batch_update_to_no_batch fail_over_ddl_O update_changefeed_check_config pause_changefeed_with_long_time_ddl'
 	# G15
