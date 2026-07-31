@@ -642,7 +642,7 @@ func adjustOptions(
 	if exists {
 		err = adjustExistingTopicOption(changefeedID, admin, options, info)
 	} else {
-		adjustNewTopicOptions(admin, changefeedID, options)
+		adjustNewTopicOptions(changefeedID, admin, options)
 	}
 	if err != nil {
 		return err
@@ -674,8 +674,8 @@ func adjustExistingTopicOption(
 }
 
 func adjustNewTopicOptions(
-	admin ClusterAdminClient,
 	changefeedID common.ChangeFeedID,
+	admin ClusterAdminClient,
 	options *options,
 ) {
 	// when create the topic, `max.message.bytes` is decided by the broker,
