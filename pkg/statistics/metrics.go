@@ -59,7 +59,7 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "sink",
 			Name:      "write_bytes_total",
-			Help:      "Total number of bytes written by sink",
+			Help:      "Total approximate raw bytes of DML events successfully written to downstream.",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	execDMLEventRowsAffectedCounter = prometheus.NewCounterVec(

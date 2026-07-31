@@ -70,24 +70,22 @@ type Statistics struct {
 	metricExecErrCntForDML prometheus.Counter
 }
 
-// RecordBatchExecution records batch rows for successful executions and counts errors.
-// Raw bytes are recorded by TrackDMLEvent after the transaction is flushed.
-func (b *Statistics) RecordBatchExecution(batchSize int, executor func() error) error {
-	err := executor()
+// RecordDMLResult records row counts for successful DML executions and counts errors.
+// DML event bytes are recorded by TrackDMLEvent after the transaction is flushed.
+func (b *Statistics) RecordDMLResult(rowCount int, err error) {
 	if err != nil {
 		b.metricExecErrCntForDML.Inc()
-		return err
+		return
 	}
-	b.metricExecBatchHis.Observe(float64(batchSize))
-	return nil
+	b.metricExecBatchHis.Observe(float64(rowCount))
 }
 
-// TrackDMLEvent records the raw size of a DML event after the whole transaction
-// has been flushed to downstream. The size is snapshotted here so the callback
-// does not retain the event.
+// TrackDMLEvent records the approximate size reported by a DML event after the
+// whole transaction has been flushed to downstream. The size is snapshotted
+// here so the callback does not retain the event.
 func (b *Statistics) TrackDMLEvent(event *commonEvent.DMLEvent) {
 	writeBytes := event.GetSize()
-	event.PushFrontFlushFunc(func() {
+	event.AddPostFlushFunc(func() {
 		b.metricTotalWriteBytesCnt.Add(float64(writeBytes))
 	})
 }

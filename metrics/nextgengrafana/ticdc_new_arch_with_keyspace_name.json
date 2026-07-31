@@ -441,6 +441,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Approximate raw-entry bytes of DML events successfully written to downstream.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []

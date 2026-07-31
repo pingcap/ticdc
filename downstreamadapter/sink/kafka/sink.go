@@ -434,9 +434,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				rows := message.GetRowsCount()
 				callback := message.Callback
 				message.Callback = func() {
-					_ = s.statistics.RecordBatchExecution(rows, func() error {
-						return nil
-					})
+					s.statistics.RecordDMLResult(rows, nil)
 					if callback != nil {
 						callback()
 					}
@@ -448,9 +446,8 @@ func (s *sink) sendMessages(ctx context.Context) error {
 					future.Key.Topic,
 					future.Key.Partition,
 					message); err != nil {
-					return s.statistics.RecordBatchExecution(rows, func() error {
-						return err
-					})
+					s.statistics.RecordDMLResult(rows, err)
+					return err
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())
 			}

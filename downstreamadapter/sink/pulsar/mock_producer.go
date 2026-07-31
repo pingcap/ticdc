@@ -30,6 +30,8 @@ var (
 type mockProducer struct {
 	mu     sync.Mutex
 	events map[string][]*pulsar.ProducerMessage
+	// ackCh lets tests delay callbacks until they simulate a successful broker ack.
+	ackCh chan func()
 }
 
 func newMockDDLProducer() ddlProducer {
@@ -74,12 +76,18 @@ func (p *mockProducer) GetProducerByTopic(_ string) (producer pulsar.Producer, e
 func (p *mockProducer) asyncSendMessage(_ context.Context, topic string, message *common.Message,
 ) error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	data := &pulsar.ProducerMessage{
 		Payload: message.Value,
 		Key:     message.GetPartitionKey(),
 	}
 	p.events[topic] = append(p.events[topic], data)
+	ackCh := p.ackCh
+	p.mu.Unlock()
+
+	if ackCh != nil {
+		ackCh <- message.Callback
+		return nil
+	}
 	if message.Callback != nil {
 		message.Callback()
 	}
@@ -93,11 +101,15 @@ func (m *mockProducer) run(_ context.Context) error {
 
 // Close close all producers
 func (p *mockProducer) close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.events = make(map[string][]*pulsar.ProducerMessage)
 }
 
 // GetAllEvents returns the events received by the mock producer.
 func (p *mockProducer) GetAllEvents() []*pulsar.ProducerMessage {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	var events []*pulsar.ProducerMessage
 	for _, v := range p.events {
 		events = append(events, v...)
@@ -107,5 +119,7 @@ func (p *mockProducer) GetAllEvents() []*pulsar.ProducerMessage {
 
 // GetEvents returns the event filtered by the key.
 func (p *mockProducer) GetEvents(topic string) []*pulsar.ProducerMessage {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.events[topic]
 }

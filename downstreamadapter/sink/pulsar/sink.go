@@ -538,9 +538,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				rows := message.GetRowsCount()
 				callback := message.Callback
 				message.Callback = func() {
-					_ = s.statistics.RecordBatchExecution(rows, func() error {
-						return nil
-					})
+					s.statistics.RecordDMLResult(rows, nil)
 					if callback != nil {
 						callback()
 					}
@@ -548,9 +546,9 @@ func (s *sink) sendMessages(ctx context.Context) error {
 
 				message.SetPartitionKey(future.Key.PartitionKey)
 				if err = s.dmlProducer.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
-					return s.statistics.RecordBatchExecution(rows, func() error {
-						return errors.Trace(err)
-					})
+					err = errors.Trace(err)
+					s.statistics.RecordDMLResult(rows, err)
+					return err
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())
 			}

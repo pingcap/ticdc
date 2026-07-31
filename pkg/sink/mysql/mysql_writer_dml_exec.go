@@ -117,7 +117,8 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			failpoint.Return(err)
 		})
 
-		err := w.statistics.RecordBatchExecution(dmls.rowCount, tryExec)
+		err := tryExec()
+		w.statistics.RecordDMLResult(dmls.rowCount, err)
 		if err != nil {
 			return errors.Trace(w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls))
 		}
