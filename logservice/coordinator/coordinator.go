@@ -303,19 +303,19 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 		affectedGIDs[gid] = struct{}{}
 	}
 
-	if len(affectedGIDs) > 0 {
-		for gid := range affectedGIDs {
-			if state, ok := c.changefeedStates.m[gid]; ok {
-				if len(state.nodeStates) == 0 ||
-					len(state.nodesReportedSinceLastUpdate) != len(state.nodeStates) {
-					continue
-				}
-				if c.updateChangefeedMetrics(state, pdPhyTs, false) {
-					state.metricsUpdatedSinceLastTick = true
-				}
-				clear(state.nodesReportedSinceLastUpdate)
-			}
+	for gid := range affectedGIDs {
+		state, ok := c.changefeedStates.m[gid]
+		if !ok {
+			continue
 		}
+		if len(state.nodeStates) == 0 ||
+			len(state.nodesReportedSinceLastUpdate) != len(state.nodeStates) {
+			continue
+		}
+		if c.updateChangefeedMetrics(state, pdPhyTs, false) {
+			state.metricsUpdatedSinceLastTick = true
+		}
+		clear(state.nodesReportedSinceLastUpdate)
 	}
 }
 
@@ -335,6 +335,11 @@ func (c *logCoordinator) reportChangefeedMetrics() {
 	}
 }
 
+// updateChangefeedMetrics publishes the global resolved-ts and its lag.
+// A fresh complete reporting round uses each node's own report time and
+// publishes the maximum per-node lag, avoiding inflation from staggered reports.
+// A forced periodic refresh uses the current PD time and cached global minimum,
+// so the lag grows when reports stop and the cached state becomes stale.
 func (c *logCoordinator) updateChangefeedMetrics(state *changefeedState, pdPhyTs int64, force bool) bool {
 	if len(state.nodeStates) == 0 {
 		return false

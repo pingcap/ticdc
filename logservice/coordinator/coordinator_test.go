@@ -406,7 +406,9 @@ func TestUpdateChangefeedStatesWaitsForCompleteReportingRound(t *testing.T) {
 	}
 
 	newResolvedTs := report("node-1", pdTime, 50*time.Millisecond)
+	// A repeated report from the same node must not complete the reporting round.
 	report("node-1", pdTime, 50*time.Millisecond)
+	require.Len(t, state.nodesReportedSinceLastUpdate, 1)
 	report("node-2", pdTime.Add(300*time.Millisecond), 180*time.Millisecond)
 	require.Equal(t, oldResolvedTs, state.minLogServiceResolvedTs)
 	require.InDelta(t, 0.9, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
