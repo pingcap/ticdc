@@ -218,13 +218,13 @@ func (d *writer) discardEntries(entries []*spool.Entry) {
 	}
 }
 
-func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, payload *payload) error {
-	keyspace := d.changeFeedID.Keyspace()
-	changefeed := d.changeFeedID.Name()
-	start := time.Now()
+func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, payload *payload) (err error) {
+	defer func() {
+		d.statistics.RecordDMLResult(payload.rowsCount, err)
+	}()
 
-	err := d.writeData(ctx, dataFilePath, payload.data)
-	d.statistics.RecordDMLResult(payload.rowsCount, err)
+	start := time.Now()
+	err = d.writeData(ctx, dataFilePath, payload.data)
 	if err != nil {
 		return err
 	}
@@ -232,8 +232,8 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	err = d.storage.WriteFile(ctx, indexFilePath, []byte(path.Base(dataFilePath)+"\n"))
 	if err != nil {
 		log.Error("failed to write index file to external storage",
-			zap.String("keyspace", keyspace),
-			zap.String("changefeed", changefeed),
+			zap.String("keyspace", d.changeFeedID.Keyspace()),
+			zap.String("changefeed", d.changeFeedID.Name()),
 			zap.String("path", indexFilePath),
 			zap.Int("shardID", d.shardID),
 			zap.Error(err))
