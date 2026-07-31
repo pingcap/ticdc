@@ -37,7 +37,6 @@ func newTestDMLEvent(commitTs uint64, rowTypes ...common.RowType) *commonEvent.D
 	}
 }
 
-
 func TestEventsGroupResolveIntoAppendsAndClearsResolvedMessages(t *testing.T) {
 	// Scenario: A consumer resolves events by watermark/commit-ts and appends them into a downstream
 	// batch slice. We must clear resolved messages in the group's backing array to avoid retaining
