@@ -284,8 +284,6 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
 }
 
-<<<<<<< HEAD
-=======
 func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -427,7 +425,6 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	require.Equal(t, uint64(100), resolved[0].GetCommitTs())
 }
 
->>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 	for _, protocol := range []config.Protocol{
 		config.ProtocolDebezium,
