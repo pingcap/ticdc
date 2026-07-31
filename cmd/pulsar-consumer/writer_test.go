@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -285,6 +286,135 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
 }
 
+<<<<<<< HEAD
+=======
+func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	flushedCommitTs := make([]uint64, 0)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
+		flushedCommitTs = append(flushedCommitTs, event.GetCommitTs())
+		event.PostFlush()
+	}).Times(2)
+
+	p := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   0,
+	}
+	w := &writer{
+		progresses: []*partitionProgress{p},
+		mysqlSink:  s,
+		protocol:   config.ProtocolCanalJSON,
+	}
+
+	w.appendMessage2Group(newDMLMessageForWriterTest(20), p)
+	w.appendMessage2Group(newDMLMessageForWriterTest(10), p)
+	w.appendMessage2Group(newDMLMessageForWriterTest(20), p)
+
+	p.watermark = 20
+	require.True(t, w.Write(ctx, codeccommon.MessageTypeResolved))
+	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
+}
+
+func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Times(0)
+
+	decoder := &deferredDMLDecoder{
+		row: &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			CommitTs:        10,
+			RowTypes:        []common.RowType{common.RowTypeInsert},
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
+			},
+		},
+	}
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   20,
+		decoder:     decoder,
+	}
+	w := &writer{
+		progresses: []*partitionProgress{progress},
+		mysqlSink:  s,
+		protocol:   config.ProtocolCanalJSON,
+	}
+
+	needCommit := w.WriteMessage(ctx, fakePulsarMessage{key: "k", payload: []byte(`{"fake":"row"}`)})
+
+	require.False(t, needCommit)
+	require.Nil(t, progress.eventsGroup[1])
+}
+
+func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   20,
+	}
+	w := &writer{
+		progresses: []*partitionProgress{
+			progress,
+			{partition: 1, watermark: 5},
+		},
+		protocol: config.ProtocolCanalJSON,
+	}
+
+	w.appendMessage2Group(newDMLMessageForWriterTest(10), progress)
+
+	require.NotNil(t, progress.eventsGroup[1])
+	resolved := progress.eventsGroup[1].ResolveInto(20, nil)
+	require.Len(t, resolved, 1)
+	require.Equal(t, uint64(10), resolved[0].GetCommitTs())
+}
+
+func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
+	w := &writer{
+		progresses: []*partitionProgress{
+			{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)},
+		},
+		protocol:               config.ProtocolCanalJSON,
+		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
+	}
+
+	ddl := &commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `target`.`dst` LIKE `target`.`src`",
+		SchemaName: "source",
+		TableName:  "dst",
+		Type:       byte(timodel.ActionCreateTable),
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{
+				Schema:       "source",
+				Table:        "dst",
+				IsPartition:  true,
+				TargetSchema: "target",
+				TargetTable:  "dst",
+			},
+		},
+	}
+	w.onDDL(ddl)
+	require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
+
+	newDMLMessage := func(commitTs uint64) *codeccommon.DMLMessage {
+		return codeccommon.NewDMLMessage(1, "target", "dst", commitTs, common.RowTypeUpdate, nil)
+	}
+
+	progress := w.progresses[0]
+	w.appendMessage2Group(newDMLMessage(200), progress)
+	w.appendMessage2Group(newDMLMessage(100), progress)
+
+	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
+	require.Len(t, resolved, 1)
+	require.Equal(t, uint64(100), resolved[0].GetCommitTs())
+}
+
+>>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 func TestWriteMessageDefersDMLAssemblyUntilFlush(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -358,7 +488,7 @@ func (d *deferredDMLDecoder) NextResolvedEvent() uint64 {
 
 func (d *deferredDMLDecoder) NextDMLMessage() *codeccommon.DMLMessage {
 	d.nextDMLMessageCount++
-	return codeccommon.NewDMLMessage(1, "test", "t", 100, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+	return codeccommon.NewDMLMessage(1, "test", "t", d.row.CommitTs, common.RowTypeInsert, func() *commonEvent.DMLEvent {
 		d.toDMLEventCount++
 		return d.row
 	})
@@ -366,6 +496,20 @@ func (d *deferredDMLDecoder) NextDMLMessage() *codeccommon.DMLMessage {
 
 func (d *deferredDMLDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
+}
+
+func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
+	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
+		return &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			CommitTs:        commitTs,
+			RowTypes:        []common.RowType{common.RowTypeUpdate},
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
+			},
+		}
+	})
 }
 
 type fakePulsarMessage struct {

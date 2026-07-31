@@ -264,7 +264,7 @@ func (c *consumer) appendMessage2Group(message *common.DMLMessage, enableTableAc
 		c.eventsGroup[tableID] = group
 	}
 	if commitTs >= group.HighWatermark {
-		group.AppendMessage(message, false)
+		group.AppendMessage(message)
 		log.Debug("DML event append to the group",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
@@ -276,7 +276,7 @@ func (c *consumer) appendMessage2Group(message *common.DMLMessage, enableTableAc
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", message.RowType))
-		group.AppendMessage(message, true)
+		group.AppendMessage(message)
 		return
 	}
 	log.Warn("dml event commit ts fallback, ignore",
