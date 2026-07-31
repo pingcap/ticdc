@@ -232,6 +232,22 @@ func TestGenerateDSNByConfig(t *testing.T) {
 	testIsolationConfig()
 }
 
+func TestSetDSNReadTimeout(t *testing.T) {
+	t.Parallel()
+
+	dsnStr, err := setDSNReadTimeout(
+		"root:123456@tcp(127.0.0.1:4000)/?readTimeout=2m&writeTimeout=5m&timeout=3m",
+		"10m",
+	)
+	require.NoError(t, err)
+
+	dsn, err := dmysql.ParseDSN(dsnStr)
+	require.NoError(t, err)
+	require.Equal(t, 10*time.Minute, dsn.ReadTimeout)
+	require.Equal(t, 5*time.Minute, dsn.WriteTimeout)
+	require.Equal(t, 3*time.Minute, dsn.Timeout)
+}
+
 func TestConfigureControlDBConn(t *testing.T) {
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
@@ -294,6 +310,7 @@ func TestApplySinkURIParamsToConfig(t *testing.T) {
 	expected.Timezone = `"UTC"`
 	expected.TidbTxnMode = "pessimistic"
 	expected.tidbTxnModeSpecified = true
+	expected.AsyncDDLTimeout = expected.ReadTimeout
 	// expected.EnableOldValue = true
 	uriStr := "mysql://127.0.0.1:3306/?time-zone=UTC&worker-count=64&max-txn-row=20" +
 		"&max-multi-update-row=80&max-multi-update-row-size=512" +
@@ -313,6 +330,91 @@ func TestApplySinkURIParamsToConfig(t *testing.T) {
 
 	expected.sinkURI = uri
 	require.Equal(t, expected, cfg)
+}
+
+func TestApplyAsyncDDLTimeout(t *testing.T) {
+	t.Parallel()
+
+	newChangefeedConfig := func(mysqlConfig *config.MySQLConfig) *config.ChangefeedConfig {
+		return &config.ChangefeedConfig{
+			TimeZone: "UTC",
+			SinkConfig: &config.SinkConfig{
+				TiDBSourceID: 1,
+				MySQLConfig:  mysqlConfig,
+			},
+		}
+	}
+
+	cases := []struct {
+		name                    string
+		uri                     string
+		mysqlConfig             *config.MySQLConfig
+		expectedReadTimeout     string
+		expectedAsyncDDLTimeout string
+		expectedSpecified       bool
+	}{
+		{
+			name:                    "default follows read timeout",
+			uri:                     "mysql://127.0.0.1:3306/?read-timeout=4m",
+			expectedReadTimeout:     "4m",
+			expectedAsyncDDLTimeout: "4m",
+			expectedSpecified:       false,
+		},
+		{
+			name:                    "sink uri async ddl timeout",
+			uri:                     "mysql://127.0.0.1:3306/?read-timeout=4m&async-ddl-timeout=30m",
+			expectedReadTimeout:     "4m",
+			expectedAsyncDDLTimeout: "30m",
+			expectedSpecified:       true,
+		},
+		{
+			name: "config async ddl timeout",
+			uri:  "mysql://127.0.0.1:3306/?read-timeout=4m",
+			mysqlConfig: &config.MySQLConfig{
+				AsyncDDLTimeout: util.AddressOf("20m"),
+			},
+			expectedReadTimeout:     "4m",
+			expectedAsyncDDLTimeout: "20m",
+			expectedSpecified:       true,
+		},
+		{
+			name: "sink uri async ddl timeout overrides config",
+			uri:  "mysql://127.0.0.1:3306/?read-timeout=4m&async-ddl-timeout=30m",
+			mysqlConfig: &config.MySQLConfig{
+				AsyncDDLTimeout: util.AddressOf("20m"),
+			},
+			expectedReadTimeout:     "4m",
+			expectedAsyncDDLTimeout: "30m",
+			expectedSpecified:       true,
+		},
+		{
+			name: "config read timeout inherited",
+			uri:  "mysql://127.0.0.1:3306/",
+			mysqlConfig: &config.MySQLConfig{
+				ReadTimeout: util.AddressOf("6m"),
+			},
+			expectedReadTimeout:     "6m",
+			expectedAsyncDDLTimeout: "6m",
+			expectedSpecified:       false,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			uri, err := url.Parse(tc.uri)
+			require.NoError(t, err)
+			cfg := New()
+			err = cfg.Apply(uri, common.NewChangefeedID4Test("default", "changefeed-01"), newChangefeedConfig(tc.mysqlConfig))
+			require.NoError(t, err)
+
+			require.Equal(t, tc.expectedReadTimeout, cfg.ReadTimeout)
+			require.Equal(t, tc.expectedAsyncDDLTimeout, cfg.AsyncDDLTimeout)
+			require.Equal(t, tc.expectedSpecified, cfg.asyncDDLTimeoutSpecified)
+		})
+	}
 }
 
 func TestDefaultWorkerCountByDownstream(t *testing.T) {
@@ -444,6 +546,7 @@ func TestParseSinkURIBadQueryString(t *testing.T) {
 		"mysql://127.0.0.1:3306/?write-timeout=badduration",
 		"mysql://127.0.0.1:3306/?read-timeout=badduration",
 		"mysql://127.0.0.1:3306/?timeout=badduration",
+		"mysql://127.0.0.1:3306/?async-ddl-timeout=badduration",
 	}
 	var uri *url.URL
 	var err error

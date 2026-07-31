@@ -46,12 +46,15 @@ const (
 
 // Writer is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
 type Writer struct {
-	id           int
-	ctx          context.Context
-	cancel       context.CancelFunc
-	db           *sql.DB
-	cfg          *Config
-	ChangefeedID common.ChangeFeedID
+	id     int
+	ctx    context.Context
+	cancel context.CancelFunc
+	db     *sql.DB
+	// controlAsyncDB is used only by the TiDB ADD INDEX execution path, whose
+	// read timeout is intentionally independent from the regular DDL/control DB.
+	controlAsyncDB *sql.DB
+	cfg            *Config
+	ChangefeedID   common.ChangeFeedID
 
 	syncPointTableInit     bool
 	lastCleanSyncPointTime time.Time
@@ -131,6 +134,11 @@ func NewWriter(
 
 func (w *Writer) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	w.tableSchemaStore = tableSchemaStore
+}
+
+// SetControlAsyncDB sets the DB pool used to execute TiDB ADD INDEX DDLs.
+func (w *Writer) SetControlAsyncDB(db *sql.DB) {
+	w.controlAsyncDB = db
 }
 
 func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
