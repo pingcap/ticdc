@@ -37,16 +37,11 @@ func newTestDMLEvent(commitTs uint64, rowTypes ...common.RowType) *commonEvent.D
 	}
 }
 
-<<<<<<< HEAD
-func TestEventsGroupResolveIntoAppendsAndClearsResolvedPrefix(t *testing.T) {
-	// Scenario: A consumer resolves a prefix of events by watermark/commit-ts and appends them
-	// array to avoid retaining already-flushed events and causing unbounded memory growth.
-=======
+
 func TestEventsGroupResolveIntoAppendsAndClearsResolvedMessages(t *testing.T) {
 	// Scenario: A consumer resolves events by watermark/commit-ts and appends them into a downstream
 	// batch slice. We must clear resolved messages in the group's backing array to avoid retaining
 	// already-flushed events and causing unbounded memory growth.
->>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 	//
 	// Steps:
 	//  1. Append 3 events with increasing CommitTs.
