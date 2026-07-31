@@ -14,7 +14,11 @@
 package util
 
 import (
+<<<<<<< HEAD
 	"slices"
+=======
+	"math"
+>>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 	"sort"
 
 	"github.com/pingcap/log"
@@ -53,6 +57,7 @@ func NewEventsGroup(partition int32, tableID int64) *EventsGroup {
 	}
 }
 
+<<<<<<< HEAD
 // Append will append an event to event groups.
 func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 	if row.CommitTs > g.HighWatermark {
@@ -144,13 +149,88 @@ func (g *EventsGroup) ResolveInto(resolve uint64, dst []*commonEvent.DMLEvent) [
 			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
 			zap.Int("resolved", i), zap.Int("remained", len(g.events)),
 			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", g.events[0].CommitTs))
+=======
+// AppendMessage appends a message to event groups.
+func (g *EventsGroup) AppendMessage(message *codeccommon.DMLMessage) {
+	commitTs := message.GetCommitTs()
+	if commitTs > g.HighWatermark {
+		g.HighWatermark = commitTs
+	}
+	g.messages = append(g.messages, message)
+}
+
+// ResolveInto appends all messages with CommitTs <= resolve into dst in commit-ts order and removes
+// them from the group. ResolveInto copies pointers into dst first, then clears the resolved messages
+// so Go GC can reclaim them once downstream is done with them.
+func (g *EventsGroup) ResolveInto(resolve uint64, dst []*codeccommon.DMLMessage) []*codeccommon.DMLMessage {
+	if len(g.messages) == 0 {
+		return dst
+	}
+
+	original := g.messages
+	remaining := g.messages[:0]
+	resolved := make([]*codeccommon.DMLMessage, 0, len(g.messages))
+
+	var (
+		lastCommitTs       uint64
+		outOfOrder         bool
+		outOfOrderLastTs   uint64
+		outOfOrderCommitTs uint64
+	)
+	for _, message := range g.messages {
+		commitTs := message.GetCommitTs()
+		if commitTs > resolve {
+			remaining = append(remaining, message)
+			continue
+		}
+		if len(resolved) > 0 && commitTs < lastCommitTs && !outOfOrder {
+			outOfOrder = true
+			outOfOrderLastTs = lastCommitTs
+			outOfOrderCommitTs = commitTs
+		}
+		lastCommitTs = commitTs
+		resolved = append(resolved, message)
+	}
+	if len(resolved) == 0 {
+		return dst
+	}
+
+	if outOfOrder {
+		log.Warn("DML events are out of order before flush, sort them",
+			zap.Int32("partition", g.Partition),
+			zap.Int64("tableID", g.tableID),
+			zap.Uint64("resolveTs", resolve),
+			zap.Int("resolved", len(resolved)),
+			zap.Uint64("lastCommitTs", outOfOrderLastTs),
+			zap.Uint64("commitTs", outOfOrderCommitTs))
+		sort.SliceStable(resolved, func(i, j int) bool {
+			return resolved[i].GetCommitTs() < resolved[j].GetCommitTs()
+		})
+	}
+
+	dst = append(dst, resolved...)
+	clear(original[len(remaining):])
+	g.messages = remaining
+	if len(g.messages) != 0 {
+		firstCommitTs := g.messages[0].GetCommitTs()
+		log.Debug("not all events resolved",
+			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
+			zap.Int("resolved", len(resolved)), zap.Int("remained", len(g.messages)),
+			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", firstCommitTs))
+>>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 	}
 	return dst
 }
 
+<<<<<<< HEAD
 // GetAllEvents will get all events.
 func (g *EventsGroup) GetAllEvents() []*commonEvent.DMLEvent {
 	result := g.events
 	g.events = nil
 	return result
+=======
+// GetAllMessages gets all messages.
+func (g *EventsGroup) GetAllMessages() []*codeccommon.DMLMessage {
+	return g.ResolveInto(math.MaxUint64, nil)
+>>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 }

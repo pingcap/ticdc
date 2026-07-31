@@ -612,11 +612,26 @@ func (w *writer) appendRow2Group(dml *event.DMLEvent, progress *partitionProgres
 		table    = dml.TableInfo.GetTableName()
 		commitTs = dml.GetCommitTs()
 	)
+	globalWatermark := w.globalWatermark()
+	if commitTs < globalWatermark {
+		log.Warn("DML event fallback row, since less than the global watermark, ignore it",
+			zap.Int64("tableID", tableID), zap.Int32("partition", progress.partition),
+			zap.Uint64("commitTs", commitTs), zap.Any("offset", offset),
+			zap.Uint64("globalWatermark", globalWatermark),
+			zap.Uint64("partitionWatermark", progress.watermark),
+			zap.Any("watermarkOffset", progress.watermarkOffset),
+			zap.String("schema", schema), zap.String("table", table),
+			zap.Stringer("eventType", message.RowType),
+			zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
+		return
+	}
+
 	group := progress.eventsGroup[tableID]
 	if group == nil {
 		group = util.NewEventsGroup(progress.partition, tableID)
 		progress.eventsGroup[tableID] = group
 	}
+<<<<<<< HEAD
 	// IMPORTANT: Kafka offsets are append-only, but CommitTs can go backwards after
 	// a TiCDC restart/retry (at-least-once replay). We must not drop such events
 	// solely based on a "seen" watermark (e.g. HighWatermark). The only safe
@@ -650,6 +665,36 @@ func (w *writer) appendRow2Group(dml *event.DMLEvent, progress *partitionProgres
 		zap.Uint64("appliedWatermark", group.AppliedWatermark),
 		zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 		zap.Stringer("eventType", dml.RowTypes[0]))
+=======
+	message = w.messageWithPartitionCheck(message, progress.partition, offset)
+	group.AppendMessage(message)
+	if commitTs < progress.watermark {
+		log.Warn("DML event fallback row, since less than the partition watermark, append it and sort before flush",
+			zap.Int64("tableID", tableID), zap.Int32("partition", group.Partition),
+			zap.Uint64("commitTs", commitTs), zap.Any("offset", offset),
+			zap.Uint64("watermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
+			zap.Uint64("globalWatermark", globalWatermark),
+			zap.String("schema", schema), zap.String("table", table),
+			zap.Stringer("eventType", message.RowType),
+			zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
+		return
+	}
+	if commitTs >= group.HighWatermark {
+		log.Debug("DML event append to the group",
+			zap.Int32("partition", group.Partition), zap.Any("offset", offset),
+			zap.Uint64("commitTs", commitTs), zap.Uint64("HighWatermark", group.HighWatermark),
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Stringer("eventType", message.RowType))
+		return
+	}
+	log.Warn("DML event commit ts fallback, append it and sort before flush",
+		zap.Int32("partition", progress.partition), zap.Any("offset", offset),
+		zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
+		zap.Any("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
+		zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+		zap.Stringer("eventType", message.RowType),
+		zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
+>>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 }
 
 func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
