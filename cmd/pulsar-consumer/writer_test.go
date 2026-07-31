@@ -388,11 +388,9 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
 		Type:       byte(timodel.ActionCreateTable),
 		TableInfo: &common.TableInfo{
 			TableName: common.TableName{
-				Schema:       "source",
-				Table:        "dst",
-				IsPartition:  true,
-				TargetSchema: "target",
-				TargetTable:  "dst",
+				Schema:      "source",
+				Table:       "dst",
+				IsPartition: true,
 			},
 		},
 	}
