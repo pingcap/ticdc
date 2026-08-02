@@ -129,7 +129,7 @@ func TestScanPriorityUsesRestoredRegionProgress(t *testing.T) {
 	firstTask := popRegionPriorityTask(t, client.regionTaskQueue)
 	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_LOW, firstTask.priority())
 
-	firstRegion := firstTask.GetRegionInfo()
+	firstRegion := firstTask.regionInfo
 	firstRegion.lockedRangeState.ResolvedTs.Store(oracle.GoTimeToTS(currentTime.Add(-time.Minute)))
 	span.rangeLock.UnlockRange(
 		firstRegion.span.StartKey,
@@ -142,7 +142,7 @@ func TestScanPriorityUsesRestoredRegionProgress(t *testing.T) {
 	client.scheduleRegionRequest(context.Background(), retryRegion, cdcpb.ScanPriority_SCAN_PRIORITY_LOW)
 	retryTask := popRegionPriorityTask(t, client.regionTaskQueue)
 	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH, retryTask.priority())
-	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH, retryTask.GetRegionInfo().scanPriority)
+	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH, retryTask.regionInfo.scanPriority)
 	require.False(t, span.priorityPolicy.everCaughtUp.Load())
 }
 

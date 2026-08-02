@@ -46,11 +46,6 @@ func (pt *regionPriorityTask) priority() cdcpb.ScanPriority {
 	return normalizeScanPriority(pt.regionInfo.scanPriority)
 }
 
-// GetRegionInfo returns the underlying regionInfo
-func (pt *regionPriorityTask) GetRegionInfo() regionInfo {
-	return pt.regionInfo
-}
-
 func (pt *regionPriorityTask) canUseMaxWindow() bool {
 	return isHighScanPriority(pt.regionInfo.scanPriority)
 }

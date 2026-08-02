@@ -467,7 +467,7 @@ func TestRegionRetryScanPriority(t *testing.T) {
 			task, err := client.regionTaskQueue.Pop(ctx)
 			require.NoError(t, err)
 			require.Equal(t, tc.expected, task.priority())
-			require.Equal(t, tc.expected, task.GetRegionInfo().scanPriority)
+			require.Equal(t, tc.expected, task.regionInfo.scanPriority)
 		})
 	}
 }

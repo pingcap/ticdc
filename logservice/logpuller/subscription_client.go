@@ -464,7 +464,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			return err
 		}
 
-		region := regionTask.GetRegionInfo()
+		region := regionTask.regionInfo
 		region, ok := s.attachRPCContextForRegion(ctx, region)
 		// If attachRPCContextForRegion fails, the region will be re-scheduled.
 		if !ok {
