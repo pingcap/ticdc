@@ -84,7 +84,7 @@ type regionAdmissionController struct {
 
 	// currentWindow limits ordinary region scans.
 	currentWindow int
-	// maxWindow is the hard limit for previously initialized and low-lag regions.
+	// maxWindow is the hard limit for high-priority region scans.
 	maxWindow int
 	// inflight is the number of admitted regions that have not finished their
 	// initial scan. It is guarded by mu.

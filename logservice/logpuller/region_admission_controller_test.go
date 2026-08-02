@@ -84,11 +84,10 @@ func TestRegionAdmissionControllerNormalWindow(t *testing.T) {
 	require.True(t, req2.abort())
 }
 
-func TestRegionAdmissionControllerLowLagUsesMaxWindow(t *testing.T) {
+func TestRegionAdmissionControllerHighPriorityUsesMaxWindow(t *testing.T) {
 	controller := newRegionAdmissionController(1, 2)
 	currentTs := oracle.GoTimeToTS(time.Now())
 	slowCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Hour))
-	lowLagCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Minute))
 
 	submitRegionForAdmission(t, controller,
 		prepareRegionForAdmission(createTestRegionInfo(1, 1), slowCheckpointTs),
@@ -99,9 +98,9 @@ func TestRegionAdmissionControllerLowLagUsesMaxWindow(t *testing.T) {
 	submitRegionForAdmission(t, controller,
 		prepareRegionForAdmission(createTestRegionInfo(1, 2), slowCheckpointTs),
 		currentTs)
-	submitRegionForAdmission(t, controller,
-		prepareRegionForAdmission(createTestRegionInfo(1, 3), lowLagCheckpointTs),
-		currentTs)
+	highPriorityRegion := prepareRegionForAdmission(createTestRegionInfo(1, 3), slowCheckpointTs)
+	highPriorityRegion.scanPriority = TaskHighPrior.scanPriority()
+	submitRegionForAdmission(t, controller, highPriorityRegion, currentTs)
 
 	req2, err := controller.pop(t.Context(), nil)
 	require.NoError(t, err)
@@ -121,11 +120,10 @@ func TestRegionAdmissionControllerLowLagUsesMaxWindow(t *testing.T) {
 	require.True(t, req3.abort())
 }
 
-func TestRegionAdmissionControllerPrioritizesInitializedRegion(t *testing.T) {
+func TestRegionAdmissionControllerPrioritizesHighPriorityRegion(t *testing.T) {
 	controller := newRegionAdmissionController(1, 2)
 	currentTs := oracle.GoTimeToTS(time.Now())
 	slowCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Hour))
-	lowLagCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Minute))
 
 	submitRegionForAdmission(t, controller,
 		prepareRegionForAdmission(createTestRegionInfo(1, 1), slowCheckpointTs),
@@ -134,12 +132,11 @@ func TestRegionAdmissionControllerPrioritizesInitializedRegion(t *testing.T) {
 	require.NoError(t, err)
 
 	submitRegionForAdmission(t, controller,
-		prepareRegionForAdmission(createTestRegionInfo(1, 2), lowLagCheckpointTs),
+		prepareRegionForAdmission(createTestRegionInfo(1, 2), slowCheckpointTs),
 		currentTs)
-	initializedRegion := prepareRegionForAdmission(createTestRegionInfo(1, 3), slowCheckpointTs)
-	initializedRegion.wasInitialized = true
-	submitRegionForAdmission(t, controller,
-		initializedRegion, currentTs)
+	highPriorityRegion := prepareRegionForAdmission(createTestRegionInfo(1, 3), slowCheckpointTs)
+	highPriorityRegion.scanPriority = TaskHighPrior.scanPriority()
+	submitRegionForAdmission(t, controller, highPriorityRegion, currentTs)
 
 	req2, err := controller.pop(t.Context(), nil)
 	require.NoError(t, err)

@@ -13,34 +13,20 @@
 
 package logpuller
 
-import (
-	"time"
-
-	"github.com/pingcap/kvproto/pkg/cdcpb"
-	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/tikv/client-go/v2/oracle"
-)
+import "github.com/pingcap/kvproto/pkg/cdcpb"
 
 // TaskType represents the scan priority level associated with a region task.
 type TaskType int
 
 const (
 	// TaskHighPrior represents high scan priority.
-	// For example, a region task that is already close to caught up or from an
-	// initialized span is typically tagged with this level.
+	// For example, a region task for a region that is already close to caught up
+	// is typically tagged with this level.
 	TaskHighPrior TaskType = iota
 	// TaskLowPrior represents low scan priority.
 	// For example, a region task created for a subscription that starts from an
 	// older start-ts is typically tagged with this level before it catches up.
 	TaskLowPrior
-)
-
-type regionTaskPriority int
-
-const (
-	initializedRegionPriority regionTaskPriority = iota
-	lowLagRegionPriority
-	normalRegionPriority
 )
 
 func (t TaskType) String() string {
@@ -81,32 +67,24 @@ type regionPriorityTask struct {
 	regionInfo regionInfo
 	sequence   uint64
 	heapIndex  int // for heap.Item interface
-	priority   regionTaskPriority
 }
 
 // NewRegionPriorityTask creates a new priority task for region
-func NewRegionPriorityTask(regionInfo regionInfo, currentTs, sequence uint64) *regionPriorityTask {
+func NewRegionPriorityTask(regionInfo regionInfo, _ uint64, sequence uint64) *regionPriorityTask {
 	task := &regionPriorityTask{
 		taskType:  taskTypeFromScanPriority(regionInfo.scanPriority),
 		sequence:  sequence,
 		heapIndex: 0, // 0 means not in heap
 	}
-	task.updateRegion(regionInfo, currentTs)
+	task.updateRegion(regionInfo, 0)
 	return task
 }
 
 // updateRegion refreshes both the request data and its priority before the task
 // enters another scheduling stage.
-func (pt *regionPriorityTask) updateRegion(regionInfo regionInfo, currentTs uint64) {
-	priority := normalRegionPriority
-	if regionInfo.wasInitialized {
-		priority = initializedRegionPriority
-	} else if regionScanLag(currentTs, regionInfo.resolvedTs()) < lowLagRegionThreshold() {
-		priority = lowLagRegionPriority
-	}
+func (pt *regionPriorityTask) updateRegion(regionInfo regionInfo, _ uint64) {
 	pt.regionInfo = regionInfo
 	pt.taskType = taskTypeFromScanPriority(regionInfo.scanPriority)
-	pt.priority = priority
 }
 
 // GetRegionInfo returns the underlying regionInfo
@@ -115,7 +93,7 @@ func (pt *regionPriorityTask) GetRegionInfo() regionInfo {
 }
 
 func (pt *regionPriorityTask) canUseMaxWindow() bool {
-	return pt.priority != normalRegionPriority
+	return pt.taskType == TaskHighPrior
 }
 
 // SetHeapIndex sets the heap index for heap.Item interface
@@ -131,21 +109,8 @@ func (pt *regionPriorityTask) GetHeapIndex() int {
 // LessThan implements heap.Item interface. Tasks in the same priority class are
 // processed in submission order.
 func (pt *regionPriorityTask) LessThan(other *regionPriorityTask) bool {
-	if pt.priority != other.priority {
-		return pt.priority < other.priority
+	if pt.taskType != other.taskType {
+		return pt.taskType < other.taskType
 	}
 	return pt.sequence < other.sequence
-}
-
-func regionScanLag(currentTs, checkpointTs uint64) time.Duration {
-	currentTime := oracle.GetTimeFromTS(currentTs)
-	checkpointTime := oracle.GetTimeFromTS(checkpointTs)
-	if !currentTime.After(checkpointTime) {
-		return 0
-	}
-	return currentTime.Sub(checkpointTime)
-}
-
-func lowLagRegionThreshold() time.Duration {
-	return time.Duration(config.GetGlobalServerConfig().Debug.Puller.OldStartTsScanLowPriorityThreshold)
 }
