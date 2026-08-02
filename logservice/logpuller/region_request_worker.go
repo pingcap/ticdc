@@ -319,20 +319,19 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
 			s.client.eventSink.Push(subscriptionID, regionEvent)
-			continue
-		}
-
-		switch event.Event.(type) {
-		case *cdcpb.Event_Error:
-			log.Debug("region request worker receives an error for a stale region, ignore it",
-				zap.Uint64("workerID", s.workerID),
-				zap.Uint64("subscriptionID", uint64(subscriptionID)),
-				zap.Uint64("regionID", event.RegionId))
-		default:
-			log.Warn("region request worker receives a region event for an untracked region",
-				zap.Uint64("workerID", s.workerID),
-				zap.Uint64("subscriptionID", uint64(subscriptionID)),
-				zap.Uint64("regionID", event.RegionId))
+		} else {
+			switch event.Event.(type) {
+			case *cdcpb.Event_Error:
+				log.Debug("region request worker receives an error for a stale region, ignore it",
+					zap.Uint64("workerID", s.workerID),
+					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Uint64("regionID", event.RegionId))
+			default:
+				log.Warn("region request worker receives a region event for an untracked region",
+					zap.Uint64("workerID", s.workerID),
+					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Uint64("regionID", event.RegionId))
+			}
 		}
 	}
 }
