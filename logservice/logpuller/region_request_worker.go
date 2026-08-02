@@ -123,7 +123,11 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 		//   tracker.Add.
 		// - admission: requests owned by this worker but not sent yet.
 		for _, state := range s.tracker.Drain() {
-			s.notifyRegionError(state, regionErr)
+			state.markStopped(regionErr)
+			s.client.eventSink.Push(
+				SubscriptionID(state.requestID),
+				regionEvent{states: []*regionFeedState{state}},
+			)
 		}
 		// The failed stream no longer owns remote registrations.
 		s.controlQueue.drain()
@@ -166,13 +170,6 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 			return err
 		}
 	}
-}
-
-func (s *regionRequestWorker) notifyRegionError(state *regionFeedState, err error) {
-	state.markStopped(err)
-	s.client.eventSink.Push(
-		SubscriptionID(state.requestID),
-		regionEvent{states: []*regionFeedState{state}})
 }
 
 func (s *regionRequestWorker) waitForRegionRequest(ctx context.Context) (*regionReq, error) {
@@ -309,11 +306,11 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
 					zap.Uint64("regionID", event.RegionId),
 					zap.Any("error", eventData.Error))
-				s.notifyRegionError(state, &eventError{err: eventData.Error})
-				continue
+				state.markStopped(&eventError{err: eventData.Error})
 			case *cdcpb.Event_ResolvedTs:
 				regionEvent.resolvedTs = eventData.ResolvedTs
 			case *cdcpb.Event_LongTxn_:
+				// ignore
 				continue
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
@@ -322,6 +319,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
+				// it is normal to receive region error after deregister a subscription
 				log.Debug("region request worker receives an error for a stale region, ignore it",
 					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
@@ -349,6 +347,8 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	}
 
 	const resolvedTsStateBatchSize = 1024
+	// Avoid allocating a huge states slice when resolvedTsEvent.Regions is large.
+	// Push resolved-ts events in batches to reduce peak memory usage and improve GC behavior.
 	capHint := min(len(resolvedTsEvent.Regions), resolvedTsStateBatchSize)
 	resolvedStates := make([]*regionFeedState, 0, capHint)
 	flush := func() {
@@ -414,7 +414,8 @@ func (s *regionRequestWorker) sendDeregisterRequest(
 		return err
 	}
 	for _, state := range s.tracker.TakeSubscription(req.subID) {
-		s.notifyRegionError(state, &requestCancelledErr{})
+		state.markStopped(&requestCancelledErr{})
+		s.client.eventSink.Push(req.subID, regionEvent{states: []*regionFeedState{state}})
 	}
 	return nil
 }

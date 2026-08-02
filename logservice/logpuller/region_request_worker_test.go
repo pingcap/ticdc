@@ -395,7 +395,11 @@ func TestStreamRecoveryReleasesSentAdmission(t *testing.T) {
 	require.True(t, worker.tracker.Add(region.subscribedSpan.subID, region.verID.GetID(), state))
 
 	for _, state := range worker.tracker.Drain() {
-		worker.notifyRegionError(state, &storeStreamErr{})
+		state.markStopped(&storeStreamErr{})
+		worker.client.eventSink.Push(
+			SubscriptionID(state.requestID),
+			regionEvent{states: []*regionFeedState{state}},
+		)
 	}
 	worker.controlQueue.drain()
 
