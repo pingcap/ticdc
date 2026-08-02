@@ -60,21 +60,21 @@ func TestRegionPriorityTaskQueueOrder(t *testing.T) {
 	queue := priorityqueue.New[*regionPriorityTask]()
 	currentTime := time.Now()
 
-	lowTask := NewRegionPriorityTask(
+	lowTask := newRegionPriorityTask(
 		withScanPriority(
 			newPriorityTestRegion(1, oracle.GoTimeToTS(currentTime.Add(-time.Hour))),
 			cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 		),
 		3,
 	)
-	highTask1 := NewRegionPriorityTask(
+	highTask1 := newRegionPriorityTask(
 		withScanPriority(
 			newPriorityTestRegion(2, oracle.GoTimeToTS(currentTime.Add(-10*time.Minute))),
 			cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 		),
 		2,
 	)
-	highTask2 := NewRegionPriorityTask(
+	highTask2 := newRegionPriorityTask(
 		withScanPriority(
 			newPriorityTestRegion(3, oracle.GoTimeToTS(currentTime.Add(-time.Hour))),
 			cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
@@ -98,9 +98,9 @@ func TestRegionPriorityTaskFIFOWithinPriority(t *testing.T) {
 	currentTime := time.Now()
 	checkpointTs := oracle.GoTimeToTS(currentTime.Add(-time.Hour))
 
-	first := NewRegionPriorityTask(
+	first := newRegionPriorityTask(
 		withScanPriority(newPriorityTestRegion(1, checkpointTs), cdcpb.ScanPriority_SCAN_PRIORITY_HIGH), 1)
-	second := NewRegionPriorityTask(
+	second := newRegionPriorityTask(
 		withScanPriority(newPriorityTestRegion(2, checkpointTs), cdcpb.ScanPriority_SCAN_PRIORITY_HIGH), 2)
 
 	require.True(t, queue.Push(second))
@@ -115,9 +115,9 @@ func TestRegionPriorityTaskFIFOWithinPriority(t *testing.T) {
 }
 
 func TestRegionPriorityTaskUsesHighPriorityWindow(t *testing.T) {
-	highTask := NewRegionPriorityTask(
+	highTask := newRegionPriorityTask(
 		withScanPriority(newPriorityTestRegion(1, 1), cdcpb.ScanPriority_SCAN_PRIORITY_HIGH), 1)
-	lowTask := NewRegionPriorityTask(
+	lowTask := newRegionPriorityTask(
 		withScanPriority(newPriorityTestRegion(2, 1), cdcpb.ScanPriority_SCAN_PRIORITY_LOW), 2)
 
 	require.True(t, highTask.canUseMaxWindow())
@@ -126,7 +126,7 @@ func TestRegionPriorityTaskUsesHighPriorityWindow(t *testing.T) {
 
 func TestRegionPriorityTaskRefreshesRegionInfoBetweenStages(t *testing.T) {
 	region := withScanPriority(newPriorityTestRegion(1, 1), cdcpb.ScanPriority_SCAN_PRIORITY_LOW)
-	task := NewRegionPriorityTask(region, 1)
+	task := newRegionPriorityTask(region, 1)
 	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_LOW, task.priority())
 
 	region.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_HIGH

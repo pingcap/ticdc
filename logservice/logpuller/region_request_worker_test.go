@@ -445,7 +445,7 @@ func TestStreamRecoveryReschedulesWorkerBuffer(t *testing.T) {
 		},
 	}
 	for i, region := range regions {
-		require.True(t, admission.submit(NewRegionPriorityTask(region, uint64(i+1))))
+		require.True(t, admission.submit(newRegionPriorityTask(region, uint64(i+1))))
 	}
 
 	for _, task := range worker.admission.drain() {

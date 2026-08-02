@@ -56,7 +56,7 @@ func submitRegionForAdmission(
 	currentTs uint64,
 ) {
 	t.Helper()
-	task := NewRegionPriorityTask(region, region.verID.GetID())
+	task := newRegionPriorityTask(region, region.verID.GetID())
 	require.True(t, controller.submit(task))
 }
 
@@ -191,7 +191,7 @@ func TestRegionAdmissionControllerClose(t *testing.T) {
 	controller := newRegionAdmissionController(1, 1)
 	controller.close()
 	region := prepareRegionForAdmission(createTestRegionInfo(1, 1), 1)
-	require.False(t, controller.submit(NewRegionPriorityTask(region, 1)))
+	require.False(t, controller.submit(newRegionPriorityTask(region, 1)))
 
 	_, err := controller.pop(context.Background(), nil)
 	require.ErrorIs(t, err, context.Canceled)

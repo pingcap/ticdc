@@ -218,7 +218,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			pendingRegionReqCount := 0
 			s.stores.Range(func(_, value any) bool {
 				store := value.(*requestedStore)
-				pendingRegionReqCount += store.inflightCount()
+				pendingRegionReqCount += store.requestedRegionCount()
 				return true
 			})
 
@@ -395,12 +395,13 @@ func (s *requestedStore) close() {
 	}
 }
 
-func (s *requestedStore) inflightCount() int {
+func (s *requestedStore) requestedRegionCount() int {
 	s.requestWorkers.RLock()
 	defer s.requestWorkers.RUnlock()
 	count := 0
 	for _, worker := range s.requestWorkers.s {
-		count += worker.admission.stats().inflight
+		stats := worker.admission.stats()
+		count += stats.pending + stats.inflight
 	}
 	return count
 }
@@ -640,7 +641,7 @@ func (s *subscriptionClient) scheduleRegionRequest(
 			oracle.GetTimeFromTS(currentTs),
 		)
 		region.scanPriority = priority
-		s.regionTaskQueue.Push(NewRegionPriorityTask(region, s.regionTaskSequence.Add(1)))
+		s.regionTaskQueue.Push(newRegionPriorityTask(region, s.regionTaskSequence.Add(1)))
 		if log.GetLevel() <= zapcore.DebugLevel {
 			log.Debug("cdc region scan task enqueued",
 				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),

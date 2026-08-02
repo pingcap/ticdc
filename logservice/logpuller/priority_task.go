@@ -32,8 +32,8 @@ type regionPriorityTask struct {
 	heapIndex  int // for heap.Item interface
 }
 
-// NewRegionPriorityTask creates a new priority task for region
-func NewRegionPriorityTask(regionInfo regionInfo, sequence uint64) *regionPriorityTask {
+// newRegionPriorityTask creates a new priority task for region.
+func newRegionPriorityTask(regionInfo regionInfo, sequence uint64) *regionPriorityTask {
 	regionInfo.scanPriority = normalizeScanPriority(regionInfo.scanPriority)
 	return &regionPriorityTask{
 		regionInfo: regionInfo,

@@ -639,7 +639,7 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
 		lockedRangeState: &regionlock.LockedRangeState{},
 	}
-	require.True(t, admission.submit(NewRegionPriorityTask(dummyRegion, 1)))
+	require.True(t, admission.submit(newRegionPriorityTask(dummyRegion, 1)))
 
 	client.broadcastDeregister(SubscriptionID(1), true)
 	require.Equal(t, 1, worker.controlQueue.len())
@@ -662,11 +662,43 @@ func TestRequestedStoreDistributesRegionsAcrossWorkerBuffers(t *testing.T) {
 			subscribedSpan:   &subscribedSpan{subID: 1},
 			lockedRangeState: &regionlock.LockedRangeState{},
 		}
-		require.True(t, store.submit(NewRegionPriorityTask(region, i)))
+		require.True(t, store.submit(newRegionPriorityTask(region, i)))
 	}
 
 	require.Equal(t, 2, worker1.admission.stats().pending)
 	require.Equal(t, 2, worker2.admission.stats().pending)
+}
+
+func TestRequestedStoreRequestedRegionCountIncludesPendingAndInflight(t *testing.T) {
+	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
+	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
+	store := &requestedStore{storeAddr: "store-1"}
+	store.requestWorkers.s = []*regionRequestWorker{worker1, worker2}
+
+	region1 := regionInfo{
+		verID:            tikv.NewRegionVerID(1, 1, 1),
+		subscribedSpan:   &subscribedSpan{subID: 1},
+		lockedRangeState: &regionlock.LockedRangeState{},
+	}
+	region2 := regionInfo{
+		verID:            tikv.NewRegionVerID(2, 1, 1),
+		subscribedSpan:   &subscribedSpan{subID: 1},
+		lockedRangeState: &regionlock.LockedRangeState{},
+	}
+	region3 := regionInfo{
+		verID:            tikv.NewRegionVerID(3, 1, 1),
+		subscribedSpan:   &subscribedSpan{subID: 1},
+		lockedRangeState: &regionlock.LockedRangeState{},
+	}
+
+	require.True(t, worker1.admission.submit(newRegionPriorityTask(region1, 1)))
+	req, err := worker1.admission.pop(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, worker2.admission.submit(newRegionPriorityTask(region2, 2)))
+	require.True(t, worker2.admission.submit(newRegionPriorityTask(region3, 3)))
+
+	require.Equal(t, 3, store.requestedRegionCount())
+	require.True(t, req.abort())
 }
 
 func TestSubscriptionWithFailedTiKV(t *testing.T) {
