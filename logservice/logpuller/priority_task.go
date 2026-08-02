@@ -26,8 +26,8 @@ type TaskType int
 
 const (
 	// TaskHighPrior represents high scan priority.
-	// For example, a region task that is already close to caught up
-	// is typically tagged with this level.
+	// For example, a region task that is already close to caught up or from an
+	// initialized span is typically tagged with this level.
 	TaskHighPrior TaskType = iota
 	// TaskLowPrior represents low scan priority.
 	// For example, a region task created for a subscription that starts from an
