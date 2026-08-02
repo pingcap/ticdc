@@ -107,7 +107,7 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 
 func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
-	retryPriority := taskTypeFromScanPriority(errInfo.scanPriority)
+	retryPriority := normalizeScanPriority(errInfo.scanPriority)
 	//nolint:errorlint // converting large type switch to errors.As is a significant refactor
 	if _, requestCancelled := err.(*requestCancelledErr); !requestCancelled {
 		log.Debug("cdc region error",

@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/stretchr/testify/require"
@@ -55,7 +56,7 @@ func submitRegionForAdmission(
 	currentTs uint64,
 ) {
 	t.Helper()
-	task := NewRegionPriorityTask(region, currentTs, region.verID.GetID())
+	task := NewRegionPriorityTask(region, region.verID.GetID())
 	require.True(t, controller.submit(task))
 }
 
@@ -99,7 +100,7 @@ func TestRegionAdmissionControllerHighPriorityUsesMaxWindow(t *testing.T) {
 		prepareRegionForAdmission(createTestRegionInfo(1, 2), slowCheckpointTs),
 		currentTs)
 	highPriorityRegion := prepareRegionForAdmission(createTestRegionInfo(1, 3), slowCheckpointTs)
-	highPriorityRegion.scanPriority = TaskHighPrior.scanPriority()
+	highPriorityRegion.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
 	submitRegionForAdmission(t, controller, highPriorityRegion, currentTs)
 
 	req2, err := controller.pop(t.Context(), nil)
@@ -135,7 +136,7 @@ func TestRegionAdmissionControllerPrioritizesHighPriorityRegion(t *testing.T) {
 		prepareRegionForAdmission(createTestRegionInfo(1, 2), slowCheckpointTs),
 		currentTs)
 	highPriorityRegion := prepareRegionForAdmission(createTestRegionInfo(1, 3), slowCheckpointTs)
-	highPriorityRegion.scanPriority = TaskHighPrior.scanPriority()
+	highPriorityRegion.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
 	submitRegionForAdmission(t, controller, highPriorityRegion, currentTs)
 
 	req2, err := controller.pop(t.Context(), nil)
@@ -190,7 +191,7 @@ func TestRegionAdmissionControllerClose(t *testing.T) {
 	controller := newRegionAdmissionController(1, 1)
 	controller.close()
 	region := prepareRegionForAdmission(createTestRegionInfo(1, 1), 1)
-	require.False(t, controller.submit(NewRegionPriorityTask(region, 1, 1)))
+	require.False(t, controller.submit(NewRegionPriorityTask(region, 1)))
 
 	_, err := controller.pop(context.Background(), nil)
 	require.ErrorIs(t, err, context.Canceled)

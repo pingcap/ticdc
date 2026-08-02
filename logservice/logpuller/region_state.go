@@ -69,7 +69,7 @@ func newRegionInfo(
 		rpcCtx:         rpcCtx,
 		subscribedSpan: subscribedSpan,
 		filterLoop:     filterLoop,
-		scanPriority:   TaskLowPrior.scanPriority(),
+		scanPriority:   cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 	}
 }
 

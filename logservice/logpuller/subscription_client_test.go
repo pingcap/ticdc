@@ -401,50 +401,50 @@ func TestRegionRetryScanPriority(t *testing.T) {
 		priority     cdcpb.ScanPriority
 		cdcErr       *cdcpb.Error
 		everCaughtUp bool
-		expected     TaskType
+		expected     cdcpb.ScanPriority
 	}{
 		{
 			name:     "server is busy high",
 			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 			cdcErr:   &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
-			expected: TaskHighPrior,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 		},
 		{
 			name:     "server is busy low",
 			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 			cdcErr:   &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
-			expected: TaskLowPrior,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 		},
 		{
 			name:         "server is busy low after catch up",
 			priority:     cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 			cdcErr:       &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
 			everCaughtUp: true,
-			expected:     TaskHighPrior,
+			expected:     cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 		},
 		{
 			name:     "congested high",
 			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 			cdcErr:   &cdcpb.Error{Congested: &cdcpb.Congested{}},
-			expected: TaskHighPrior,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 		},
 		{
 			name:     "congested low",
 			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 			cdcErr:   &cdcpb.Error{Congested: &cdcpb.Congested{}},
-			expected: TaskLowPrior,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 		},
 		{
 			name:     "unknown retry high",
 			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 			cdcErr:   &cdcpb.Error{},
-			expected: TaskHighPrior,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 		},
 		{
 			name:     "unknown retry low",
 			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 			cdcErr:   &cdcpb.Error{},
-			expected: TaskLowPrior,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -466,8 +466,8 @@ func TestRegionRetryScanPriority(t *testing.T) {
 			defer cancel()
 			task, err := client.regionTaskQueue.Pop(ctx)
 			require.NoError(t, err)
-			require.Equal(t, tc.expected, task.taskType)
-			require.Equal(t, tc.expected.scanPriority(), task.GetRegionInfo().scanPriority)
+			require.Equal(t, tc.expected, task.priority())
+			require.Equal(t, tc.expected, task.GetRegionInfo().scanPriority)
 		})
 	}
 }
@@ -477,43 +477,43 @@ func TestRangeRetryPreservesScanPriority(t *testing.T) {
 		name     string
 		priority cdcpb.ScanPriority
 		err      error
-		expected TaskType
+		expected cdcpb.ScanPriority
 	}{
 		{
 			name:     "epoch not match high",
 			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 			err:      &eventError{err: &cdcpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}},
-			expected: TaskHighPrior,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 		},
 		{
 			name:     "epoch not match low",
 			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 			err:      &eventError{err: &cdcpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}},
-			expected: TaskLowPrior,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 		},
 		{
 			name:     "region not found high",
 			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 			err:      &eventError{err: &cdcpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}},
-			expected: TaskHighPrior,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 		},
 		{
 			name:     "region not found low",
 			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 			err:      &eventError{err: &cdcpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}},
-			expected: TaskLowPrior,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 		},
 		{
 			name:     "rpc context unavailable high",
 			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 			err:      &rpcCtxUnavailableErr{verID: tikv.NewRegionVerID(1, 1, 1)},
-			expected: TaskHighPrior,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 		},
 		{
 			name:     "rpc context unavailable low",
 			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 			err:      &rpcCtxUnavailableErr{verID: tikv.NewRegionVerID(1, 1, 1)},
-			expected: TaskLowPrior,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -639,7 +639,7 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
 		lockedRangeState: &regionlock.LockedRangeState{},
 	}
-	require.True(t, admission.submit(NewRegionPriorityTask(dummyRegion, 1, 1)))
+	require.True(t, admission.submit(NewRegionPriorityTask(dummyRegion, 1)))
 
 	client.broadcastDeregister(SubscriptionID(1), true)
 	require.Equal(t, 1, worker.controlQueue.len())
@@ -662,7 +662,7 @@ func TestRequestedStoreDistributesRegionsAcrossWorkerBuffers(t *testing.T) {
 			subscribedSpan:   &subscribedSpan{subID: 1},
 			lockedRangeState: &regionlock.LockedRangeState{},
 		}
-		require.True(t, store.submit(NewRegionPriorityTask(region, 1, i)))
+		require.True(t, store.submit(NewRegionPriorityTask(region, i)))
 	}
 
 	require.Equal(t, 2, worker1.admission.stats().pending)
