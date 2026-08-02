@@ -1,0 +1,17 @@
+newarch = true
+
+[debug.event-service]
+large-txn-threshold-in-bytes = 1048576
+
+[encryption]
+enable-encryption = true
+allow-degrade-on-error = false
+meta-refresh-interval = "1s"
+meta-cache-ttl = "1s"
+
+[encryption.kms]
+[encryption.kms.aws]
+region = "eu-west-2"
+endpoint = "http://127.0.0.1:18080"
+access-key = "test"
+secret-access-key = "test"

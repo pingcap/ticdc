@@ -108,13 +108,12 @@ func (eg *encoderGroup) runEncoder(ctx context.Context, index int) error {
 				continue
 			}
 
-			err = encoder.AppendTxnEvent(task.event)
+			err = encoder.AppendTxnEvent(task.rowEvents)
 			if err != nil {
 				return err
 			}
 			task.encodedMsgs = encoder.Build()
-			task.replacePostFlushCallbacks()
-			task.event = nil
+			task.rowEvents = nil
 			future.Done()
 		}
 	}

@@ -16,7 +16,18 @@ package logpuller
 import (
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/tikv/client-go/v2/oracle"
+)
+
+// TaskType represents the scan priority propagated to TiKV/CSE.
+type TaskType int
+
+const (
+	// TaskHighPrior represents retries or scans that should preempt older work.
+	TaskHighPrior TaskType = iota
+	// TaskLowPrior represents background initial scans for new subscriptions.
+	TaskLowPrior
 )
 
 const (
@@ -31,7 +42,41 @@ const (
 	normalRegionPriority
 )
 
+func (t TaskType) String() string {
+	switch t {
+	case TaskHighPrior:
+		return "high"
+	case TaskLowPrior:
+		return "low"
+	default:
+		return "unknown"
+	}
+}
+
+func (t TaskType) scanPriority() cdcpb.ScanPriority {
+	switch t {
+	case TaskHighPrior:
+		return cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
+	case TaskLowPrior:
+		return cdcpb.ScanPriority_SCAN_PRIORITY_LOW
+	default:
+		return cdcpb.ScanPriority_SCAN_PRIORITY_LOW
+	}
+}
+
+func taskTypeFromScanPriority(priority cdcpb.ScanPriority) TaskType {
+	if priority == cdcpb.ScanPriority_SCAN_PRIORITY_HIGH {
+		return TaskHighPrior
+	}
+	return TaskLowPrior
+}
+
+func normalizeScanPriority(priority cdcpb.ScanPriority) cdcpb.ScanPriority {
+	return taskTypeFromScanPriority(priority).scanPriority()
+}
+
 type regionPriorityTask struct {
+	taskType   TaskType
 	regionInfo regionInfo
 	sequence   uint64
 	heapIndex  int // for heap.Item interface
@@ -41,6 +86,7 @@ type regionPriorityTask struct {
 // NewRegionPriorityTask creates a new priority task for region
 func NewRegionPriorityTask(regionInfo regionInfo, currentTs, sequence uint64) *regionPriorityTask {
 	task := &regionPriorityTask{
+		taskType:  taskTypeFromScanPriority(regionInfo.scanPriority),
 		sequence:  sequence,
 		heapIndex: 0, // 0 means not in heap
 	}
@@ -58,6 +104,7 @@ func (pt *regionPriorityTask) updateRegion(regionInfo regionInfo, currentTs uint
 		priority = lowLagRegionPriority
 	}
 	pt.regionInfo = regionInfo
+	pt.taskType = taskTypeFromScanPriority(regionInfo.scanPriority)
 	pt.priority = priority
 }
 

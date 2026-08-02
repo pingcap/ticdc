@@ -79,6 +79,42 @@ func admitRegionRequest(
 	return req
 }
 
+func TestCreateRegionRequestScanPriority(t *testing.T) {
+	worker := &regionRequestWorker{
+		client: &subscriptionClient{clusterID: 1},
+	}
+
+	for _, tc := range []struct {
+		name     string
+		priority cdcpb.ScanPriority
+		expected cdcpb.ScanPriority
+	}{
+		{
+			name:     "high",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+		},
+		{
+			name:     "low",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+		},
+		{
+			name:     "unknown defaults to low",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_UNKNOWN,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
+			region.scanPriority = tc.priority
+
+			req := worker.createRegionRequest(region)
+			require.Equal(t, tc.expected, req.GetScanPriority())
+		})
+	}
+}
+
 func TestRegionRequestWorkerIgnoresDuplicateActiveRegion(t *testing.T) {
 	admission := newRegionAdmissionController(10, 1)
 	worker := &regionRequestWorker{
@@ -178,7 +214,7 @@ func newDispatchResolvedTsTestWorker(regionCount int) (*regionRequestWorker, *mo
 			metrics: sharedClientMetrics{
 				batchResolvedSize: prometheus.ObserverFunc(func(float64) {}),
 			},
-			eventSink: &regionEventSink{ds: ds},
+			eventSink: newTestRegionEventSink(ds),
 		},
 		tracker: newRegionTracker(),
 	}

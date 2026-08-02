@@ -14,20 +14,21 @@
 package util
 
 import (
-	"slices"
+	"math"
 	"sort"
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
 
-// EventsGroup could store change event message.
+// EventsGroup stores change event messages.
 type EventsGroup struct {
 	Partition int32
 	tableID   int64
 
-	events        []*commonEvent.DMLEvent
+	messages      []*codeccommon.DMLMessage
 	HighWatermark uint64
 }
 
@@ -36,24 +37,96 @@ func NewEventsGroup(partition int32, tableID int64) *EventsGroup {
 	return &EventsGroup{
 		Partition: partition,
 		tableID:   tableID,
-		events:    make([]*commonEvent.DMLEvent, 0, 1024),
+		messages:  make([]*codeccommon.DMLMessage, 0, 1024),
 	}
 }
 
-// Append will append an event to event groups.
-func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
-	if row.CommitTs > g.HighWatermark {
-		g.HighWatermark = row.CommitTs
+// AppendMessage appends a message to event groups.
+func (g *EventsGroup) AppendMessage(message *codeccommon.DMLMessage) {
+	commitTs := message.GetCommitTs()
+	if commitTs > g.HighWatermark {
+		g.HighWatermark = commitTs
+	}
+	g.messages = append(g.messages, message)
+}
+
+// ResolveInto appends all messages with CommitTs <= resolve into dst in commit-ts order and removes
+// them from the group. ResolveInto copies pointers into dst first, then clears the resolved messages
+// so Go GC can reclaim them once downstream is done with them.
+func (g *EventsGroup) ResolveInto(resolve uint64, dst []*codeccommon.DMLMessage) []*codeccommon.DMLMessage {
+	if len(g.messages) == 0 {
+		return dst
 	}
 
+	original := g.messages
+	remaining := g.messages[:0]
+	resolved := make([]*codeccommon.DMLMessage, 0, len(g.messages))
+
+	var (
+		lastCommitTs       uint64
+		outOfOrder         bool
+		outOfOrderLastTs   uint64
+		outOfOrderCommitTs uint64
+	)
+	for _, message := range g.messages {
+		commitTs := message.GetCommitTs()
+		if commitTs > resolve {
+			remaining = append(remaining, message)
+			continue
+		}
+		if len(resolved) > 0 && commitTs < lastCommitTs && !outOfOrder {
+			outOfOrder = true
+			outOfOrderLastTs = lastCommitTs
+			outOfOrderCommitTs = commitTs
+		}
+		lastCommitTs = commitTs
+		resolved = append(resolved, message)
+	}
+	if len(resolved) == 0 {
+		return dst
+	}
+
+	if outOfOrder {
+		log.Warn("DML events are out of order before flush, sort them",
+			zap.Int32("partition", g.Partition),
+			zap.Int64("tableID", g.tableID),
+			zap.Uint64("resolveTs", resolve),
+			zap.Int("resolved", len(resolved)),
+			zap.Uint64("lastCommitTs", outOfOrderLastTs),
+			zap.Uint64("commitTs", outOfOrderCommitTs))
+		sort.SliceStable(resolved, func(i, j int) bool {
+			return resolved[i].GetCommitTs() < resolved[j].GetCommitTs()
+		})
+	}
+
+	dst = append(dst, resolved...)
+	clear(original[len(remaining):])
+	g.messages = remaining
+	if len(g.messages) != 0 {
+		firstCommitTs := g.messages[0].GetCommitTs()
+		log.Debug("not all events resolved",
+			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
+			zap.Int("resolved", len(resolved)), zap.Int("remained", len(g.messages)),
+			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", firstCommitTs))
+	}
+	return dst
+}
+
+// GetAllMessages gets all messages.
+func (g *EventsGroup) GetAllMessages() []*codeccommon.DMLMessage {
+	return g.ResolveInto(math.MaxUint64, nil)
+}
+
+// AppendOrMergeDMLEvent appends a DML event, or merges it into the previous event
+// when both events belong to the same table group and have the same commit-ts.
+func AppendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLEvent) []*commonEvent.DMLEvent {
 	var lastDMLEvent *commonEvent.DMLEvent
-	if len(g.events) > 0 {
-		lastDMLEvent = g.events[len(g.events)-1]
+	if len(events) > 0 {
+		lastDMLEvent = events[len(events)-1]
 	}
 
 	if lastDMLEvent == nil || lastDMLEvent.GetCommitTs() < row.GetCommitTs() {
-		g.events = append(g.events, row)
-		return
+		return append(events, row)
 	}
 
 	if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
@@ -61,48 +134,11 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 		lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
 		lastDMLEvent.Length += row.Length
 		lastDMLEvent.PostTxnFlushed = append(lastDMLEvent.PostTxnFlushed, row.PostTxnFlushed...)
-		return
+		return events
 	}
 
-	if force {
-		i := sort.Search(len(g.events), func(i int) bool {
-			return g.events[i].CommitTs > row.CommitTs
-		})
-		g.events = slices.Insert(g.events, i, row)
-		return
-	}
 	log.Panic("append event with smaller commit ts",
-		zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
+		zap.Int64("tableID", row.GetTableID()),
 		zap.Uint64("lastCommitTs", lastDMLEvent.GetCommitTs()), zap.Uint64("commitTs", row.GetCommitTs()))
-}
-
-// ResolveInto appends all events with CommitTs <= resolve into dst and removes them from the group.
-// ResolveInto copies pointers into dst first, then clears the
-// resolved prefix so Go GC can reclaim resolved events once downstream is done with them.
-func (g *EventsGroup) ResolveInto(resolve uint64, dst []*commonEvent.DMLEvent) []*commonEvent.DMLEvent {
-	i := sort.Search(len(g.events), func(i int) bool {
-		return g.events[i].CommitTs > resolve
-	})
-	if i == 0 {
-		return dst
-	}
-
-	// Copy pointers out first so we can safely clear the group's slice without affecting callers.
-	dst = append(dst, g.events[:i]...)
-	clear(g.events[:i])
-	g.events = g.events[i:]
-	if len(g.events) != 0 {
-		log.Debug("not all events resolved",
-			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
-			zap.Int("resolved", i), zap.Int("remained", len(g.events)),
-			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", g.events[0].CommitTs))
-	}
-	return dst
-}
-
-// GetAllEvents will get all events.
-func (g *EventsGroup) GetAllEvents() []*commonEvent.DMLEvent {
-	result := g.events
-	g.events = nil
-	return result
+	return events
 }

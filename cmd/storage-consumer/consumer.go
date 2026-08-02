@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -68,6 +69,7 @@ type storageMetadata struct {
 type consumer struct {
 	replicationCfg  *config.ReplicaConfig
 	codecCfg        *common.Config
+	columnSelectors *columnselector.ColumnSelectors
 	externalStorage storeapi.Storage
 	fileExtension   string
 	sink            sink.Sink
@@ -132,6 +134,10 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	if err != nil {
 		return nil, err
 	}
+	columnSelectors, err := columnselector.New(replicaConfig.Sink)
+	if err != nil {
+		return nil, err
+	}
 
 	extension := helper.GetFileExtension(protocol)
 
@@ -148,7 +154,12 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		SinkURI:    downstreamURIStr,
 		SinkConfig: replicaConfig.Sink,
 	}
-	sink, err := sink.New(stdCtx, cfg, commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspaceName))
+	sink, err := sink.New(
+		stdCtx,
+		cfg,
+		commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspaceName),
+		commonType.DefaultKeyspaceID,
+	)
 	if err != nil {
 		log.Error("failed to create sink", zap.Error(err))
 		return nil, err
@@ -157,6 +168,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	return &consumer{
 		replicationCfg:    replicaConfig,
 		codecCfg:          codecConfig,
+		columnSelectors:   columnSelectors,
 		externalStorage:   storage,
 		fileExtension:     extension,
 		sink:              sink,
@@ -270,12 +282,12 @@ func (c *consumer) getNewFiles(
 	return tableDMLMap, err
 }
 
-func (c *consumer) appendRow2Group(dml *event.DMLEvent, enableTableAcrossNodes bool) {
+func (c *consumer) appendMessage2Group(message *common.DMLMessage, enableTableAcrossNodes bool) {
 	var (
-		tableID  = dml.GetTableID()
-		schema   = dml.TableInfo.GetSchemaName()
-		table    = dml.TableInfo.GetTableName()
-		commitTs = dml.GetCommitTs()
+		tableID  = message.TableID
+		schema   = message.Schema
+		table    = message.Table
+		commitTs = message.GetCommitTs()
 	)
 	group := c.eventsGroup[tableID]
 	if group == nil {
@@ -283,25 +295,26 @@ func (c *consumer) appendRow2Group(dml *event.DMLEvent, enableTableAcrossNodes b
 		c.eventsGroup[tableID] = group
 	}
 	if commitTs >= group.HighWatermark {
-		group.Append(dml, false)
+		group.AppendMessage(message)
 		log.Debug("DML event append to the group",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", dml.RowTypes[0]))
+			zap.Stringer("eventType", message.RowType))
 		return
 	}
 	if enableTableAcrossNodes {
 		log.Warn("DML events fallback, but enableTableAcrossNodes is true, still append it",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", dml.RowTypes[0]))
-		group.Append(dml, true)
+			zap.Stringer("eventType", message.RowType))
+		group.AppendMessage(message)
 		return
 	}
 	log.Warn("dml event commit ts fallback, ignore",
-		zap.Uint64("commitTs", dml.CommitTs),
+		zap.Uint64("commitTs", commitTs),
 		zap.Any("highWatermark", group.HighWatermark),
-		zap.Stringer("row", dml),
+		zap.String("schema", schema),
+		zap.String("table", table),
 	)
 }
 
@@ -322,7 +335,15 @@ func (c *consumer) appendDMLEvents(
 	var decoder common.Decoder
 	switch c.codecCfg.Protocol {
 	case config.ProtocolCsv:
-		decoder, err = csv.NewDecoder(ctx, c.codecCfg, schemaFile.TableInfo(), content)
+		tableInfo := schemaFile.TableInfo()
+		// CSV rows contain selected values without column names, so decode with the same selector.
+		decoder, err = csv.NewDecoderWithColumnSelector(
+			ctx,
+			c.codecCfg,
+			tableInfo,
+			content,
+			c.columnSelectors.GetForTableInfo(tableInfo),
+		)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -350,9 +371,8 @@ func (c *consumer) appendDMLEvents(
 		if tp == common.MessageTypeRow {
 			c.dmlCount.Add(1)
 
-			row := decoder.NextDMLEvent()
-			row.PhysicalTableID = tableID
-			c.appendRow2Group(row, fileIdx.EnableTableAcrossNodes)
+			message := decoder.NextDMLMessage()
+			c.appendMessage2Group(messageWithPhysicalTableID(message, tableID), fileIdx.EnableTableAcrossNodes)
 			filteredCnt++
 		}
 	}
@@ -365,12 +385,27 @@ func (c *consumer) appendDMLEvents(
 	return err
 }
 
+func messageWithPhysicalTableID(message *common.DMLMessage, tableID int64) *common.DMLMessage {
+	return common.NewDMLMessage(tableID, message.Schema, message.Table, message.GetCommitTs(), message.RowType, func() *event.DMLEvent {
+		row := message.ToDMLEvent()
+		row.PhysicalTableID = tableID
+		return row
+	})
+}
+
 func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 	group := c.eventsGroup[tableID]
 	if group == nil {
 		return nil
 	}
-	events := group.GetAllEvents()
+	messages := group.GetAllMessages()
+	if len(messages) == 0 {
+		return nil
+	}
+	events := make([]*event.DMLEvent, 0, len(messages))
+	for _, message := range messages {
+		events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
+	}
 	total := len(events)
 	if total == 0 {
 		return nil

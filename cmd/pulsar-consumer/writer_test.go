@@ -16,7 +16,9 @@ package main
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/cmd/util"
 	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
@@ -266,6 +268,92 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
 }
 
+func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	flushedCommitTs := make([]uint64, 0)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
+		flushedCommitTs = append(flushedCommitTs, event.GetCommitTs())
+		event.PostFlush()
+	}).Times(2)
+
+	p := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   0,
+	}
+	w := &writer{
+		progresses: []*partitionProgress{p},
+		mysqlSink:  s,
+		protocol:   config.ProtocolCanalJSON,
+	}
+
+	w.appendMessage2Group(newDMLMessageForWriterTest(20), p)
+	w.appendMessage2Group(newDMLMessageForWriterTest(10), p)
+	w.appendMessage2Group(newDMLMessageForWriterTest(20), p)
+
+	p.watermark = 20
+	require.True(t, w.Write(ctx, codeccommon.MessageTypeResolved))
+	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
+}
+
+func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Times(0)
+
+	decoder := &deferredDMLDecoder{
+		row: &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			CommitTs:        10,
+			RowTypes:        []common.RowType{common.RowTypeInsert},
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
+			},
+		},
+	}
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   20,
+		decoder:     decoder,
+	}
+	w := &writer{
+		progresses: []*partitionProgress{progress},
+		mysqlSink:  s,
+		protocol:   config.ProtocolCanalJSON,
+	}
+
+	needCommit := w.WriteMessage(ctx, fakePulsarMessage{key: "k", payload: []byte(`{"fake":"row"}`)})
+
+	require.False(t, needCommit)
+	require.Nil(t, progress.eventsGroup[1])
+}
+
+func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   20,
+	}
+	w := &writer{
+		progresses: []*partitionProgress{
+			progress,
+			{partition: 1, watermark: 5},
+		},
+		protocol: config.ProtocolCanalJSON,
+	}
+
+	w.appendMessage2Group(newDMLMessageForWriterTest(10), progress)
+
+	require.NotNil(t, progress.eventsGroup[1])
+	resolved := progress.eventsGroup[1].ResolveInto(20, nil)
+	require.Len(t, resolved, 1)
+	require.Equal(t, uint64(10), resolved[0].GetCommitTs())
+}
+
 func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
 	w := &writer{
 		progresses: []*partitionProgress{
@@ -293,23 +381,185 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
 	w.onDDL(ddl)
 	require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
 
-	newDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
+	newDMLMessage := func(commitTs uint64) *codeccommon.DMLMessage {
+		return codeccommon.NewDMLMessage(1, "target", "dst", commitTs, common.RowTypeUpdate, nil)
+	}
+
+	progress := w.progresses[0]
+	w.appendMessage2Group(newDMLMessage(200), progress)
+	w.appendMessage2Group(newDMLMessage(100), progress)
+
+	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
+	require.Len(t, resolved, 1)
+	require.Equal(t, uint64(100), resolved[0].GetCommitTs())
+}
+
+func TestWriteMessageDefersDMLAssemblyUntilFlush(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
+		event.PostFlush()
+	}).Times(1)
+
+	decoder := &deferredDMLDecoder{
+		row: &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			CommitTs:        100,
+			RowTypes:        []common.RowType{common.RowTypeInsert},
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
+			},
+		},
+	}
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		decoder:     decoder,
+	}
+	w := &writer{
+		progresses: []*partitionProgress{progress},
+		mysqlSink:  s,
+		protocol:   config.ProtocolCanalJSON,
+	}
+
+	needCommit := w.WriteMessage(ctx, fakePulsarMessage{key: "k", payload: []byte(`{"fake":"row"}`)})
+	require.False(t, needCommit)
+	require.Equal(t, 1, decoder.addKeyValueCount)
+	require.Equal(t, 1, decoder.hasNextCount)
+	require.Equal(t, 1, decoder.nextDMLMessageCount)
+	require.Zero(t, decoder.toDMLEventCount)
+	require.Len(t, progress.eventsGroup[1].ResolveInto(99, nil), 0)
+
+	progress.watermark = 100
+	require.True(t, w.Write(ctx, codeccommon.MessageTypeResolved))
+	require.Equal(t, 1, decoder.addKeyValueCount)
+	require.Equal(t, 1, decoder.hasNextCount)
+	require.Equal(t, 1, decoder.nextDMLMessageCount)
+	require.Equal(t, 1, decoder.toDMLEventCount)
+	require.Empty(t, progress.eventsGroup[1].ResolveInto(100, nil))
+	require.Equal(t, []byte(`{"fake":"row"}`), decoder.lastValue)
+}
+
+type deferredDMLDecoder struct {
+	row *commonEvent.DMLEvent
+
+	addKeyValueCount    int
+	hasNextCount        int
+	nextDMLMessageCount int
+	toDMLEventCount     int
+	lastValue           []byte
+}
+
+func (d *deferredDMLDecoder) AddKeyValue(_, value []byte) {
+	d.addKeyValueCount++
+	d.lastValue = append(d.lastValue[:0], value...)
+}
+
+func (d *deferredDMLDecoder) HasNext() (codeccommon.MessageType, bool) {
+	d.hasNextCount++
+	return codeccommon.MessageTypeRow, true
+}
+
+func (d *deferredDMLDecoder) NextResolvedEvent() uint64 {
+	return 0
+}
+
+func (d *deferredDMLDecoder) NextDMLMessage() *codeccommon.DMLMessage {
+	d.nextDMLMessageCount++
+	return codeccommon.NewDMLMessage(1, "test", "t", d.row.CommitTs, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+		d.toDMLEventCount++
+		return d.row
+	})
+}
+
+func (d *deferredDMLDecoder) NextDDLEvent() *commonEvent.DDLEvent {
+	return nil
+}
+
+func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
+	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
 		return &commonEvent.DMLEvent{
 			PhysicalTableID: 1,
 			CommitTs:        commitTs,
 			RowTypes:        []common.RowType{common.RowTypeUpdate},
 			Rows:            chunk.NewChunkWithCapacity(nil, 0),
 			TableInfo: &common.TableInfo{
-				TableName: common.TableName{Schema: "target", Table: "dst"},
+				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
 			},
 		}
-	}
+	})
+}
 
-	progress := w.progresses[0]
-	w.appendRow2Group(newDMLEvent(200), progress)
-	w.appendRow2Group(newDMLEvent(100), progress)
+type fakePulsarMessage struct {
+	key     string
+	payload []byte
+}
 
-	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
-	require.Len(t, resolved, 1)
-	require.Equal(t, uint64(100), resolved[0].CommitTs)
+func (m fakePulsarMessage) Topic() string {
+	return ""
+}
+
+func (m fakePulsarMessage) ProducerName() string {
+	return ""
+}
+
+func (m fakePulsarMessage) Properties() map[string]string {
+	return nil
+}
+
+func (m fakePulsarMessage) Payload() []byte {
+	return m.payload
+}
+
+func (m fakePulsarMessage) ID() pulsar.MessageID {
+	return nil
+}
+
+func (m fakePulsarMessage) PublishTime() time.Time {
+	return time.Time{}
+}
+
+func (m fakePulsarMessage) EventTime() time.Time {
+	return time.Time{}
+}
+
+func (m fakePulsarMessage) Key() string {
+	return m.key
+}
+
+func (m fakePulsarMessage) OrderingKey() string {
+	return ""
+}
+
+func (m fakePulsarMessage) RedeliveryCount() uint32 {
+	return 0
+}
+
+func (m fakePulsarMessage) IsReplicated() bool {
+	return false
+}
+
+func (m fakePulsarMessage) GetReplicatedFrom() string {
+	return ""
+}
+
+func (m fakePulsarMessage) GetSchemaValue(any) error {
+	return nil
+}
+
+func (m fakePulsarMessage) SchemaVersion() []byte {
+	return nil
+}
+
+func (m fakePulsarMessage) GetEncryptionContext() *pulsar.EncryptionContext {
+	return nil
+}
+
+func (m fakePulsarMessage) Index() *uint64 {
+	return nil
+}
+
+func (m fakePulsarMessage) BrokerPublishTime() *time.Time {
+	return nil
 }

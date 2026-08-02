@@ -26,16 +26,21 @@ import (
 
 // regionEventSink delivers region events to dynstream and owns push-side flow control.
 type regionEventSink struct {
-	ctx context.Context
-	ds  dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
-	// the following three fields are used to manage feedback from ds and notify other goroutines
-	mu     sync.Mutex
-	cond   *sync.Cond
+	// mu/cond coordinate the paused push path with pause/resume and shutdown signals.
+	mu   sync.Mutex
+	cond *sync.Cond
+	// paused tracks whether region event pushing is temporarily held back by feedback.
 	paused atomic.Bool
+	// stopped marks the sink as shutting down so blocked pushers can exit instead of waiting for resume.
+	stopped atomic.Bool
+
+	// ds owns the dynstream used to deliver region events and receive flow-control feedback.
+	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
 }
 
-func newRegionEventSink(ctx context.Context, failureHandler *regionFailureHandler) *regionEventSink {
-	sink := &regionEventSink{ctx: ctx}
+func newRegionEventSink(failureHandler *regionFailureHandler) *regionEventSink {
+	sink := &regionEventSink{}
+	sink.cond = sync.NewCond(&sink.mu)
 
 	option := dynstream.NewOption()
 	// Note: it is max batch size of the kv sent from tikv(not committed rows)
@@ -51,7 +56,6 @@ func newRegionEventSink(ctx context.Context, failureHandler *regionFailureHandle
 	)
 	ds.Start()
 	sink.ds = ds
-	sink.cond = sync.NewCond(&sink.mu)
 	return sink
 }
 
@@ -73,6 +77,9 @@ func (s *regionEventSink) Wake(subID SubscriptionID) {
 }
 
 func (s *regionEventSink) Push(subID SubscriptionID, event regionEvent) {
+	if s.stopped.Load() {
+		return
+	}
 	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)
@@ -81,16 +88,15 @@ func (s *regionEventSink) Push(subID SubscriptionID, event regionEvent) {
 
 	// slow path: wait until paused is false
 	s.mu.Lock()
-	for s.paused.Load() {
-		select {
-		case <-s.ctx.Done():
-			s.mu.Unlock()
-			return
-		default:
-			s.cond.Wait()
-		}
+	for s.paused.Load() && !s.stopped.Load() {
+		s.cond.Wait()
 	}
+	stopped := s.stopped.Load()
 	s.mu.Unlock()
+
+	if stopped {
+		return
+	}
 	s.ds.Push(subID, event)
 }
 
@@ -98,19 +104,15 @@ func (s *regionEventSink) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			s.stop()
 			return nil
 		case feedback := <-s.ds.Feedback():
 			switch feedback.FeedbackType {
 			case dynstream.PauseArea:
-				s.mu.Lock()
-				s.paused.Store(true)
-				s.mu.Unlock()
+				s.pause()
 				log.Info("subscription client pause push region event")
 			case dynstream.ResumeArea:
-				s.mu.Lock()
-				s.paused.Store(false)
-				s.cond.Broadcast()
-				s.mu.Unlock()
+				s.resume()
 				log.Info("subscription client resume push region event")
 			case dynstream.ReleasePath, dynstream.ResumePath:
 				// Ignore it, because it is no need to pause and resume a path in puller.
@@ -148,9 +150,35 @@ func (s *regionEventSink) UpdateMetrics() {
 }
 
 func (s *regionEventSink) Close() {
+	s.stop()
+	s.ds.Close()
+}
+
+func (s *regionEventSink) pause() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped.Load() || s.paused.Load() {
+		return
+	}
+	s.paused.Store(true)
+}
+
+func (s *regionEventSink) resume() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.paused.Load() {
+		return
+	}
+	s.paused.Store(false)
+	s.cond.Broadcast()
+}
+
+func (s *regionEventSink) stop() {
+	if !s.stopped.CompareAndSwap(false, true) {
+		return
+	}
 	s.mu.Lock()
 	s.paused.Store(false)
 	s.cond.Broadcast()
 	s.mu.Unlock()
-	s.ds.Close()
 }

@@ -26,7 +26,7 @@ import (
 
 // Test callback and tableProgress works as expected after AddDMLEvent
 func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
-	sink, err := New(common.NewChangefeedID(common.DefaultKeyspaceName))
+	sink, err := New(common.NewChangefeedID(common.DefaultKeyspaceName), common.DefaultKeyspaceID)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go sink.Run(ctx)
@@ -91,7 +91,7 @@ func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 }
 
 func TestBlackHoleSinkBatchConfig(t *testing.T) {
-	sink, err := New(common.NewChangefeedID(common.DefaultKeyspaceName))
+	sink, err := New(common.NewChangefeedID(common.DefaultKeyspaceName), common.DefaultKeyspaceID)
 	require.NoError(t, err)
 	require.Equal(t, 4096, sink.BatchCount())
 	require.Zero(t, sink.BatchBytes())

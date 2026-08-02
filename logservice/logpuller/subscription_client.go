@@ -36,9 +36,11 @@ import (
 	"github.com/pingcap/ticdc/utils/priorityqueue"
 	"github.com/prometheus/client_golang/prometheus"
 	kvclientv2 "github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -87,6 +89,7 @@ type rangeTask struct {
 	span           heartbeatpb.TableSpan
 	subscribedSpan *subscribedSpan
 	filterLoop     bool
+	priority       TaskType
 	wasInitialized bool
 }
 
@@ -183,7 +186,7 @@ func NewSubscriptionClient(
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	subClient.failureHandler = newRegionFailureHandler(subClient)
-	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient.failureHandler)
+	subClient.eventSink = newRegionEventSink(subClient.failureHandler)
 	subClient.spanRegistry = newSpanRegistry(subClient.pd, subClient.pdClock)
 
 	subClient.initMetrics()
@@ -256,6 +259,8 @@ func (s *subscriptionClient) Subscribe(
 		advanceResolvedTs,
 		advanceInterval,
 		bdrMode,
+		s.pdClock,
+		time.Duration(config.GetGlobalServerConfig().Debug.Puller.OldStartTsScanLowPriorityThreshold),
 	)
 	s.spanRegistry.Add(rt)
 	s.eventSink.AddPath(rt)
@@ -263,8 +268,9 @@ func (s *subscriptionClient) Subscribe(
 	select {
 	case <-s.ctx.Done():
 		log.Warn("subscribes span failed, the subscription client has closed")
-	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: rt.filterLoop}:
-		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
+	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: rt.filterLoop, priority: TaskLowPrior}:
+		log.Info("subscribes span done",
+			zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
 			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
 	}
@@ -512,7 +518,8 @@ func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
 			return ctx.Err()
 		case task := <-s.rangeTaskCh:
 			g.Go(func() error {
-				return s.divideSpanAndScheduleRegionRequests(ctx, task.span, task.subscribedSpan, task.filterLoop, task.wasInitialized)
+				return s.divideSpanAndScheduleRegionRequests(
+					ctx, task.span, task.subscribedSpan, task.filterLoop, task.priority, task.wasInitialized)
 			})
 		}
 	}
@@ -528,6 +535,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 	span heartbeatpb.TableSpan,
 	subscribedSpan *subscribedSpan,
 	filterLoop bool,
+	inheritedPriority TaskType,
 	wasInitialized bool,
 ) error {
 	// Limit the number of regions loaded at a time to make the load more stable.
@@ -593,7 +601,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			regionInfo.wasInitialized = wasInitialized
 
 			// Schedule a region request to subscribe the region.
-			s.scheduleRegionRequest(ctx, regionInfo)
+			s.scheduleRegionRequest(ctx, regionInfo, inheritedPriority)
 
 			nextSpan.StartKey = regionMeta.EndKey
 			// If the nextSpan.StartKey is larger than the subscribedSpan.span.EndKey,
@@ -607,7 +615,11 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 
 // scheduleRegionRequest locks the region's range and send the region to regionTaskQueue,
 // which will be handled by handleRegions.
-func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region regionInfo) {
+func (s *subscriptionClient) scheduleRegionRequest(
+	ctx context.Context,
+	region regionInfo,
+	inheritedPriority TaskType,
+) {
 	if region.lockedRangeState != nil && region.lockedRangeState.Initialized.Load() {
 		region.wasInitialized = true
 	}
@@ -621,11 +633,30 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 	switch lockRangeResult.Status {
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
-		s.regionTaskQueue.Push(NewRegionPriorityTask(
-			region, s.pdClock.CurrentTS(), s.regionTaskSequence.Add(1)))
+		currentTs := s.pdClock.CurrentTS()
+		priority := region.subscribedSpan.priorityPolicy.resolve(
+			inheritedPriority,
+			region.resolvedTs(),
+			oracle.GetTimeFromTS(currentTs),
+		)
+		region.scanPriority = priority.scanPriority()
+		s.regionTaskQueue.Push(NewRegionPriorityTask(region, currentTs, s.regionTaskSequence.Add(1)))
+		if log.GetLevel() <= zapcore.DebugLevel {
+			log.Debug("cdc region scan task enqueued",
+				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
+				zap.Int64("tableID", region.subscribedSpan.span.TableID),
+				zap.Uint64("startTs", region.subscribedSpan.startTs),
+				zap.Uint64("regionID", region.verID.GetID()),
+				zap.Uint64("regionEpochVersion", region.verID.GetVer()),
+				zap.Uint64("regionEpochConfVer", region.verID.GetConfVer()),
+				zap.String("priority", priority.String()),
+				zap.String("scanPriority", region.scanPriority.String()),
+				zap.String("span", common.FormatTableSpan(&region.span)))
+		}
 	case regionlock.LockRangeStatusStale:
 		for _, r := range lockRangeResult.RetryRanges {
-			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop, region.wasInitialized)
+			s.scheduleRangeRequest(
+				ctx, r, region.subscribedSpan, region.filterLoop, region.wasInitialized, inheritedPriority)
 		}
 	default:
 		return
@@ -637,12 +668,16 @@ func (s *subscriptionClient) scheduleRangeRequest(
 	subscribedSpan *subscribedSpan,
 	filterLoop bool,
 	wasInitialized bool,
+	inheritedPriority TaskType,
 ) {
 	select {
 	case <-ctx.Done():
 	case s.rangeTaskCh <- rangeTask{
-		span: span, subscribedSpan: subscribedSpan,
-		filterLoop: filterLoop, wasInitialized: wasInitialized,
+		span:           span,
+		subscribedSpan: subscribedSpan,
+		filterLoop:     filterLoop,
+		priority:       inheritedPriority,
+		wasInitialized: wasInitialized,
 	}:
 	}
 }

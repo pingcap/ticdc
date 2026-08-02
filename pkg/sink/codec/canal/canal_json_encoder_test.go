@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,7 +48,7 @@ func TestDMLE2E(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	for _, enableTiDBExtension := range []bool{false, true} {
 		codecConfig.EnableTiDBExtension = enableTiDBExtension
-		encIface, err := NewJSONRowEventEncoder(ctx, codecConfig)
+		encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		encoder := encIface.(*JSONRowEventEncoder)
@@ -82,7 +83,7 @@ func TestDMLE2E(t *testing.T) {
 		require.True(t, hasNext)
 		require.Equal(t, messageType, common.MessageTypeRow)
 
-		decodedEvent := dml2rowEvent(t, decoder.NextDMLEvent())
+		decodedEvent := dml2rowEvent(t, decoder.NextDMLMessage().ToDMLEvent())
 		require.True(t, decodedEvent.IsInsert())
 		if enableTiDBExtension {
 			require.Equal(t, insertEvent.CommitTs, decodedEvent.CommitTs)
@@ -103,7 +104,7 @@ func TestDMLE2E(t *testing.T) {
 		require.True(t, hasNext)
 		require.EqualValues(t, messageType, common.MessageTypeRow)
 
-		decodedEvent = dml2rowEvent(t, decoder.NextDMLEvent())
+		decodedEvent = dml2rowEvent(t, decoder.NextDMLMessage().ToDMLEvent())
 		require.True(t, decodedEvent.IsUpdate())
 
 		err = encoder.AppendRowChangedEvent(ctx, "", deleteEvent)
@@ -117,7 +118,7 @@ func TestDMLE2E(t *testing.T) {
 		require.True(t, hasNext)
 		require.EqualValues(t, messageType, common.MessageTypeRow)
 
-		decodedEvent = dml2rowEvent(t, decoder.NextDMLEvent())
+		decodedEvent = dml2rowEvent(t, decoder.NextDMLMessage().ToDMLEvent())
 		require.NoError(t, err)
 		require.True(t, decodedEvent.IsDelete())
 	}
@@ -131,7 +132,7 @@ func TestCanalJSONCompressionE2E(t *testing.T) {
 	codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compression.LZ4
 
 	ctx := context.Background()
-	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	encoder := encIface.(*JSONRowEventEncoder)
 
@@ -156,7 +157,7 @@ func TestCanalJSONCompressionE2E(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, messageType, common.MessageTypeRow)
 
-	decodedEvent := decoder.NextDMLEvent()
+	decodedEvent := decoder.NextDMLMessage().ToDMLEvent()
 	require.Equal(t, decodedEvent.CommitTs, insertEvent.CommitTs)
 	require.Equal(t, decodedEvent.TableInfo.GetSchemaName(), insertEvent.TableInfo.GetSchemaName())
 	require.Equal(t, decodedEvent.TableInfo.GetTableName(), insertEvent.TableInfo.GetTableName())
@@ -208,7 +209,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	encoder := encIface.(*JSONRowEventEncoder)
 
@@ -229,7 +230,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded := dml2rowEvent(t, decoder.NextDMLEvent())
+	decoded := dml2rowEvent(t, decoder.NextDMLMessage().ToDMLEvent())
 	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
 	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
 }
@@ -237,7 +238,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
-	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	encoder := encIface.(*JSONRowEventEncoder)
 
@@ -269,8 +270,11 @@ func TestCanalJSONClaimCheckE2E(t *testing.T) {
 
 	for _, rawValue := range []bool{false, true} {
 		codecConfig.LargeMessageHandle.ClaimCheckRawValue = rawValue
+		claimCheck, err := claimcheck.New(ctx, codecConfig.LargeMessageHandle, codecConfig.ChangefeedID)
+		require.NoError(t, err)
+		t.Cleanup(claimCheck.Close)
 
-		encIface, err := NewJSONRowEventEncoder(ctx, codecConfig)
+		encIface, err := NewJSONRowEventEncoder(codecConfig, claimCheck)
 		require.NoError(t, err)
 		encoder := encIface.(*JSONRowEventEncoder)
 
@@ -296,7 +300,7 @@ func TestCanalJSONClaimCheckE2E(t *testing.T) {
 		require.Equal(t, messageType, common.MessageTypeRow)
 		require.True(t, ok)
 
-		decodedLargeEvent := decoder.NextDMLEvent()
+		decodedLargeEvent := decoder.NextDMLMessage().ToDMLEvent()
 
 		require.Equal(t, insertEvent.CommitTs, decodedLargeEvent.CommitTs)
 		require.Equal(t, insertEvent.TableInfo.GetSchemaName(), decodedLargeEvent.TableInfo.GetSchemaName())
@@ -315,9 +319,7 @@ func TestNewCanalJSONMessageHandleKeyOnly4LargeMessage(t *testing.T) {
 	codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compression.LZ4
 	codecConfig.MaxMessageBytes = 500
 
-	ctx := context.Background()
-
-	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	encoder := encIface.(*JSONRowEventEncoder)
 
@@ -360,9 +362,8 @@ func TestNewCanalJSONMessageFromDDL(t *testing.T) {
 	defer helper.Close()
 
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
-	ctx := context.Background()
 
-	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	encoder := encIface.(*JSONRowEventEncoder)
 
@@ -382,7 +383,7 @@ func TestNewCanalJSONMessageFromDDL(t *testing.T) {
 	require.Equal(t, "CREATE", msg.EventType)
 
 	codecConfig.EnableTiDBExtension = true
-	encIface, err = NewJSONRowEventEncoder(ctx, codecConfig)
+	encIface, err = NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	encoder = encIface.(*JSONRowEventEncoder)
@@ -397,9 +398,8 @@ func TestNewCanalJSONMessageFromDDL(t *testing.T) {
 }
 
 func TestBatching(t *testing.T) {
-	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
-	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	encoder := encIface.(*JSONRowEventEncoder)
 	require.NotNil(t, encoder)
@@ -434,13 +434,12 @@ func TestBatching(t *testing.T) {
 func TestEncodeCheckpointEvent(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
 	var watermark uint64 = 2333
 	for _, enable := range []bool{false, true} {
 		codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 		codecConfig.EnableTiDBExtension = enable
 
-		encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+		encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		msg, err := encoder.EncodeCheckpointEvent(watermark)
@@ -482,9 +481,7 @@ func TestCheckpointEventValueMarshal(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	codecConfig.EnableTiDBExtension = true
 
-	ctx := context.Background()
-
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	var watermark uint64 = 1024
@@ -519,7 +516,7 @@ func TestDDLEventWithExtension(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	codecConfig.EnableTiDBExtension = true
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	require.NotNil(t, encoder)
 
@@ -561,9 +558,8 @@ func TestCanalJSONAppendRowChangedEventWithCallback(t *testing.T) {
 
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	codecConfig.EnableTiDBExtension = true
-	ctx := context.Background()
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	count := 0
@@ -654,7 +650,7 @@ func TestMaxMessageBytes(t *testing.T) {
 	maxMessageBytes := 300
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON).WithMaxMessageBytes(maxMessageBytes)
 
-	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encIface, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	encoder := encIface.(*JSONRowEventEncoder)
 
@@ -669,7 +665,7 @@ func TestMaxMessageBytes(t *testing.T) {
 	// the test message length is larger than max-message-bytes
 	codecConfig = codecConfig.WithMaxMessageBytes(100)
 
-	encIface, err = NewJSONRowEventEncoder(ctx, codecConfig)
+	encIface, err = NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	encoder = encIface.(*JSONRowEventEncoder)
@@ -689,7 +685,7 @@ func TestCanalJSONContentCompatibleE2E(t *testing.T) {
 	codecConfig.ContentCompatible = true
 	codecConfig.OnlyOutputUpdatedColumns = true
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -711,7 +707,7 @@ func TestCanalJSONContentCompatibleE2E(t *testing.T) {
 		require.True(t, hasNext)
 		require.Equal(t, messageType, common.MessageTypeRow)
 
-		decodedEvent := decoder.NextDMLEvent()
+		decodedEvent := decoder.NextDMLMessage().ToDMLEvent()
 		require.NoError(t, err)
 		require.Equal(t, decodedEvent.CommitTs, event.CommitTs)
 		require.Equal(t, decodedEvent.TableInfo.GetSchemaName(), event.TableInfo.GetSchemaName())
@@ -737,7 +733,7 @@ func TestE2EPartitionTableByHash(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -772,7 +768,7 @@ func TestE2EPartitionTableByHash(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, tp)
 
-	decodedEvent := decoder.NextDMLEvent()
+	decodedEvent := decoder.NextDMLMessage().ToDMLEvent()
 	require.NotZero(t, decodedEvent.GetTableID())
 }
 
@@ -794,7 +790,7 @@ func TestE2EPartitionTableByRange(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -829,7 +825,7 @@ func TestE2EPartitionTableByRange(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, tp)
 
-	decodedEvent := decoder.NextDMLEvent()
+	decodedEvent := decoder.NextDMLMessage().ToDMLEvent()
 	require.NotZero(t, decodedEvent.GetTableID())
 }
 
@@ -858,7 +854,7 @@ func TestE2EPartitionTable(t *testing.T) {
 	for _, enableTiDBExtension := range []bool{false, true} {
 		codecConfig.EnableTiDBExtension = enableTiDBExtension
 
-		encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+		encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		decoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -893,7 +889,7 @@ func TestE2EPartitionTable(t *testing.T) {
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, tp)
 
-		decodedEvent := decoder.NextDMLEvent()
+		decodedEvent := decoder.NextDMLMessage().ToDMLEvent()
 		require.NotZero(t, decodedEvent.GetTableID())
 
 		rc, ok = insertEvent1.GetNextRow()
@@ -913,7 +909,7 @@ func TestE2EPartitionTable(t *testing.T) {
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, tp)
 
-		decodedEvent = decoder.NextDMLEvent()
+		decodedEvent = decoder.NextDMLMessage().ToDMLEvent()
 		require.NotZero(t, decodedEvent.GetTableID())
 
 		rc, ok = insertEvent2.GetNextRow()
@@ -933,7 +929,7 @@ func TestE2EPartitionTable(t *testing.T) {
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, tp)
 
-		decodedEvent = decoder.NextDMLEvent()
+		decodedEvent = decoder.NextDMLMessage().ToDMLEvent()
 
 		require.NotZero(t, decodedEvent.GetTableID())
 	}

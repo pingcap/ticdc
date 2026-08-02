@@ -264,11 +264,16 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				changefeedDownstreamTypeCache[displayName] = downstreamType
 				metrics.ChangefeedDownstreamInfoGauge.WithLabelValues(keyspace, name, downstreamType).Set(1)
 
-				metrics.ChangefeedStatusGauge.WithLabelValues(keyspace, name).Set(float64(info.State.ToInt()))
+				metrics.ChangefeedStatusGauge.WithLabelValues(
+					keyspace,
+					name,
+					metrics.FormatKeyspaceID(info.KeyspaceID),
+				).Set(float64(info.State.ToInt()))
 
 				if !updateChangefeedCheckpointMetrics(
 					keyspace,
 					name,
+					info.KeyspaceID,
 					info.State,
 					cf.GetLastSavedCheckPointTs(),
 					c.pdClock.CurrentTime(),
@@ -324,13 +329,14 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 func updateChangefeedCheckpointMetrics(
 	keyspace string,
 	name string,
+	keyspaceID uint32,
 	state config.FeedState,
 	checkpointTs uint64,
 	pdTime time.Time,
 ) bool {
 	switch state {
 	case config.StateStopped, config.StateFinished, config.StateRemoved:
-		metrics.DeleteChangefeedCheckpointMetrics(keyspace, name)
+		metrics.DeleteChangefeedCheckpointMetrics(keyspace, name, keyspaceID)
 		return false
 	}
 
@@ -338,7 +344,11 @@ func updateChangefeedCheckpointMetrics(
 	phyCkpTs := oracle.ExtractPhysical(checkpointTs)
 	lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
 	metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
-	metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
+	metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(
+		keyspace,
+		name,
+		metrics.FormatKeyspaceID(keyspaceID),
+	).Set(lag)
 	return true
 }
 

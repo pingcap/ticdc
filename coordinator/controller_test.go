@@ -59,12 +59,14 @@ func TestUpdateChangefeedCheckpointMetricsDeletesFinishedLabels(t *testing.T) {
 
 	keyspace := common.DefaultKeyspaceName
 	name := "finished-metrics"
+	keyspaceID := uint32(123)
 	pdTime := time.UnixMilli(2000)
 	checkpointTs := oracle.ComposeTS(1000, 0)
 
 	require.True(t, updateChangefeedCheckpointMetrics(
 		keyspace,
 		name,
+		keyspaceID,
 		config.StateNormal,
 		checkpointTs,
 		pdTime,
@@ -75,6 +77,7 @@ func TestUpdateChangefeedCheckpointMetricsDeletesFinishedLabels(t *testing.T) {
 	require.False(t, updateChangefeedCheckpointMetrics(
 		keyspace,
 		name,
+		keyspaceID,
 		config.StateFinished,
 		checkpointTs,
 		pdTime,

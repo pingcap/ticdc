@@ -38,7 +38,7 @@ var (
 )
 
 // batchEncoder for open protocol will batch multiple row changed events into a single message.
-// One message can contain at most MaxBatchSize events, and the total size of the message cannot exceed MaxMessageBytes.
+// One message can contain at most MaxBatchSize events, and the total size of the message cannot exceed MaxBatchedBytes.
 type batchEncoder struct {
 	messages []*common.Message
 	// buff the callback of the latest message
@@ -50,11 +50,7 @@ type batchEncoder struct {
 }
 
 // NewBatchEncoder creates a new batchEncoder.
-func NewBatchEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
-	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
+func NewBatchEncoder(config *common.Config, claimCheck *claimcheck.ClaimCheck) (common.EventEncoder, error) {
 	lock.Lock()
 	clear(columnFlagsCache)
 	lock.Unlock()
@@ -62,12 +58,6 @@ func NewBatchEncoder(ctx context.Context, config *common.Config) (common.EventEn
 		config:     config,
 		claimCheck: claimCheck,
 	}, nil
-}
-
-func (d *batchEncoder) Clean() {
-	if d.claimCheck != nil {
-		d.claimCheck.CleanMetrics()
-	}
 }
 
 func (d *batchEncoder) fetchColumnFlags(e *commonEvent.RowEvent) map[string]uint64 {
@@ -174,7 +164,7 @@ func (d *batchEncoder) pushMessage(key, value []byte, callback func()) {
 	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
 	binary.BigEndian.PutUint64(valueLenByte[:], uint64(len(value)))
 
-	if len(d.messages) == 0 || d.messages[len(d.messages)-1].Length()+length > d.config.MaxMessageBytes || d.messages[len(d.messages)-1].GetRowsCount() >= d.config.MaxBatchSize {
+	if len(d.messages) == 0 || d.messages[len(d.messages)-1].Length()+length > d.config.MaxBatchedBytes || d.messages[len(d.messages)-1].GetRowsCount() >= d.config.MaxBatchSize {
 		d.finalizeCallback()
 		// create a new message
 		versionHead := make([]byte, 8)

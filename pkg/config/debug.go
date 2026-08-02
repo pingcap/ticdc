@@ -21,6 +21,12 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// DefaultOldStartTsScanLowPriorityThreshold is the default lag threshold for
+	// classifying scan tasks as low priority.
+	DefaultOldStartTsScanLowPriorityThreshold = 30 * time.Minute
+)
+
 // DebugConfig represents config for ticdc unexposed feature configurations
 type DebugConfig struct {
 	DB *DBConfig `toml:"db" json:"db"`
@@ -73,6 +79,10 @@ type PullerConfig struct {
 	// The approximate maximum store window is PendingRegionRequestQueueSize
 	// multiplied by this value.
 	RegionRequestMaxWindowMultiplier int `toml:"region-request-max-window-multiplier" json:"region_request_max_window_multiplier"`
+	// OldStartTsScanLowPriorityThreshold is the lag threshold for scan priority.
+	// Scans within this threshold are scheduled as high priority. Older scans
+	// remain low priority until their span catches up once.
+	OldStartTsScanLowPriorityThreshold TomlDuration `toml:"old-start-ts-scan-low-priority-threshold" json:"old_start_ts_scan_low_priority_threshold"`
 }
 
 // NewDefaultPullerConfig return the default puller configuration
@@ -83,9 +93,12 @@ func NewDefaultPullerConfig() *PullerConfig {
 		LogRegionDetails:                 false,
 		PendingRegionRequestQueueSize:    32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
 		RegionRequestMaxWindowMultiplier: 4,
+		OldStartTsScanLowPriorityThreshold: TomlDuration(
+			DefaultOldStartTsScanLowPriorityThreshold),
 	}
 }
 
+// ValidateAndAdjust validates and adjusts puller configuration.
 func (c *PullerConfig) ValidateAndAdjust() {
 	defaultCfg := NewDefaultPullerConfig()
 	if c.PendingRegionRequestQueueSize <= 0 {
@@ -99,6 +112,9 @@ func (c *PullerConfig) ValidateAndAdjust() {
 			zap.Int("value", c.RegionRequestMaxWindowMultiplier),
 			zap.Int("default", defaultCfg.RegionRequestMaxWindowMultiplier))
 		c.RegionRequestMaxWindowMultiplier = defaultCfg.RegionRequestMaxWindowMultiplier
+	}
+	if c.OldStartTsScanLowPriorityThreshold <= 0 {
+		c.OldStartTsScanLowPriorityThreshold = TomlDuration(DefaultOldStartTsScanLowPriorityThreshold)
 	}
 }
 
@@ -146,6 +162,10 @@ type EventServiceConfig struct {
 	// DMLEventMaxBytes is the maximum size of a DML event in bytes when split txn is enabled.
 	DMLEventMaxBytes int64 `toml:"dml-event-max-bytes" json:"dml_event_max_bytes"`
 
+	// LargeTxnThresholdInBytes is the raw KV size threshold for row-level large transaction scan interrupt
+	// and split update insert spill.
+	LargeTxnThresholdInBytes int64 `toml:"large-txn-threshold-in-bytes" json:"large_txn_threshold_in_bytes"`
+
 	EnableScanWindow bool `toml:"enable-scan-window" json:"enable_scan_window"`
 
 	// FIXME: For now we found cdc may OOM when there is a large amount of events to be sent to event collector from a remote event service.
@@ -162,6 +182,7 @@ func NewDefaultEventServiceConfig() *EventServiceConfig {
 		ScanLimitInBytes:         1024 * 1024 * 256, // 256MB
 		DMLEventMaxRows:          256,
 		DMLEventMaxBytes:         1024 * 1024 * 1, // 1MB
+		LargeTxnThresholdInBytes: 1024 * 1024 * 1, // 1MB
 		EnableScanWindow:         true,
 		EnableRemoteEventService: true,
 	}

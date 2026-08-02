@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/utils/priorityqueue"
@@ -41,6 +42,15 @@ func newPriorityTestRegion(
 		lockedRangeState: state,
 		wasInitialized:   wasInitialized,
 	}
+}
+
+func TestTaskTypeScanPriorityMapping(t *testing.T) {
+	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH, TaskHighPrior.scanPriority())
+	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_LOW, TaskLowPrior.scanPriority())
+	require.Equal(t, TaskHighPrior, taskTypeFromScanPriority(cdcpb.ScanPriority_SCAN_PRIORITY_HIGH))
+	require.Equal(t, TaskLowPrior, taskTypeFromScanPriority(cdcpb.ScanPriority_SCAN_PRIORITY_LOW))
+	require.Equal(t, TaskLowPrior, taskTypeFromScanPriority(cdcpb.ScanPriority_SCAN_PRIORITY_UNKNOWN))
+	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_LOW, normalizeScanPriority(cdcpb.ScanPriority_SCAN_PRIORITY_UNKNOWN))
 }
 
 func TestRegionPriorityTaskQueueOrder(t *testing.T) {
