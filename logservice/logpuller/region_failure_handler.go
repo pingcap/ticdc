@@ -129,13 +129,13 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
 			r.client.scheduleRangeRequest(
-				ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized, retryPriority)
+				ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
 			r.client.scheduleRangeRequest(
-				ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized, retryPriority)
+				ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
 			return nil
 		}
 		if innerErr.GetCongested() != nil {
@@ -169,7 +169,7 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
 		r.client.scheduleRangeRequest(
-			ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized, retryPriority)
+			ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
 		return nil
 	case *getStoreErr:
 		metricGetStoreErr.Inc()
@@ -177,7 +177,7 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		// cannot get the store the region belongs to, so we need to reload the region.
 		r.client.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
 		r.client.scheduleRangeRequest(
-			ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, errInfo.wasInitialized, retryPriority)
+			ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
 		return nil
 	case *storeStreamErr:
 		metricStoreSendRequestErr.Inc()

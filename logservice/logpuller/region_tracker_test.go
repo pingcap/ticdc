@@ -37,9 +37,7 @@ func TestRegionTrackerOperations(t *testing.T) {
 	require.Empty(t, tracker.TakeSubscription(1))
 
 	drained := tracker.Drain()
-	require.Equal(t, map[SubscriptionID][]*regionFeedState{
-		2: {state3},
-	}, drained)
+	require.ElementsMatch(t, []*regionFeedState{state3}, drained)
 	require.Nil(t, tracker.Get(2, 3))
 	require.Empty(t, tracker.Drain())
 }

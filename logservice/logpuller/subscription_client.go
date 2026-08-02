@@ -91,7 +91,6 @@ type rangeTask struct {
 	subscribedSpan *subscribedSpan
 	filterLoop     bool
 	priority       cdcpb.ScanPriority
-	wasInitialized bool
 }
 
 type SubscriptionClientConfig struct {
@@ -525,7 +524,7 @@ func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
 		case task := <-s.rangeTaskCh:
 			g.Go(func() error {
 				return s.divideSpanAndScheduleRegionRequests(
-					ctx, task.span, task.subscribedSpan, task.filterLoop, task.priority, task.wasInitialized)
+					ctx, task.span, task.subscribedSpan, task.filterLoop, task.priority)
 			})
 		}
 	}
@@ -542,7 +541,6 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 	subscribedSpan *subscribedSpan,
 	filterLoop bool,
 	inheritedPriority cdcpb.ScanPriority,
-	wasInitialized bool,
 ) error {
 	// Limit the number of regions loaded at a time to make the load more stable.
 	limit := 1024
@@ -604,7 +602,6 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 
 			verID := tikv.NewRegionVerID(regionMeta.Id, regionMeta.RegionEpoch.ConfVer, regionMeta.RegionEpoch.Version)
 			regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan, filterLoop)
-			regionInfo.wasInitialized = wasInitialized
 
 			// Schedule a region request to subscribe the region.
 			s.scheduleRegionRequest(ctx, regionInfo, inheritedPriority)
@@ -626,9 +623,6 @@ func (s *subscriptionClient) scheduleRegionRequest(
 	region regionInfo,
 	inheritedPriority cdcpb.ScanPriority,
 ) {
-	if region.lockedRangeState != nil && region.lockedRangeState.Initialized.Load() {
-		region.wasInitialized = true
-	}
 	lockRangeResult := region.subscribedSpan.rangeLock.LockRange(
 		ctx, region.span.StartKey, region.span.EndKey, region.verID.GetID(), region.verID.GetVer())
 
@@ -662,7 +656,7 @@ func (s *subscriptionClient) scheduleRegionRequest(
 	case regionlock.LockRangeStatusStale:
 		for _, r := range lockRangeResult.RetryRanges {
 			s.scheduleRangeRequest(
-				ctx, r, region.subscribedSpan, region.filterLoop, region.wasInitialized, inheritedPriority)
+				ctx, r, region.subscribedSpan, region.filterLoop, inheritedPriority)
 		}
 	default:
 		return
@@ -673,7 +667,6 @@ func (s *subscriptionClient) scheduleRangeRequest(
 	ctx context.Context, span heartbeatpb.TableSpan,
 	subscribedSpan *subscribedSpan,
 	filterLoop bool,
-	wasInitialized bool,
 	inheritedPriority cdcpb.ScanPriority,
 ) {
 	select {
@@ -683,7 +676,6 @@ func (s *subscriptionClient) scheduleRangeRequest(
 		subscribedSpan: subscribedSpan,
 		filterLoop:     filterLoop,
 		priority:       inheritedPriority,
-		wasInitialized: wasInitialized,
 	}:
 	}
 }

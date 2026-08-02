@@ -115,6 +115,27 @@ func newRegionRequestWorker(
 }
 
 func (s *regionRequestWorker) Run(ctx context.Context) error {
+	handleStreamFailure := func(firstReq *regionReq, regionErr error) error {
+		// Stream failure handle cases:
+		// - tracker: requests already sent to this stream.
+		// - firstReq: popped from admission for this stream, but not necessarily
+		//   added to tracker yet if the stream fails before sendRegionRequest calls
+		//   tracker.Add.
+		// - admission: requests owned by this worker but not sent yet.
+		for _, state := range s.tracker.Drain() {
+			s.notifyRegionError(state, regionErr)
+		}
+		// The failed stream no longer owns remote registrations.
+		s.controlQueue.drain()
+		if firstReq.abort() {
+			s.client.onRegionFail(newRegionErrorInfo(firstReq.regionInfo, regionErr))
+		}
+		for _, task := range s.admission.drain() {
+			s.client.onRegionFail(newRegionErrorInfo(task.regionInfo, regionErr))
+		}
+		return util.Hang(ctx, storeReconnectBackoff)
+	}
+
 	for {
 		// Do not connect an idle worker to an unavailable store indefinitely.
 		firstReq, err := s.waitForRegionRequest(ctx)
@@ -122,48 +143,28 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 			return err
 		}
 
-		regionErr := error(&storeStreamErr{})
 		if err := s.checkStoreVersion(ctx); err != nil {
-			regionErr = err
-		} else if err := s.runStream(ctx, firstReq); err != nil {
-			regionErr = err
+			if ctx.Err() != nil {
+				firstReq.abort()
+				return ctx.Err()
+			}
+			if err := handleStreamFailure(firstReq, err); err != nil {
+				return err
+			}
+			continue
 		}
+
+		regionErr := s.runStream(ctx, firstReq)
 		if ctx.Err() != nil {
 			firstReq.abort()
 			return ctx.Err()
 		}
-
-		// Stop sent requests first so their states release the admission leases.
-		// firstReq still owns its lease only if the stream failed before Send.
-		s.failStreamRegions(regionErr)
-		if firstReq.abort() {
-			s.client.onRegionFail(newRegionErrorInfo(firstReq.regionInfo, regionErr))
+		if regionErr == nil {
+			regionErr = &storeStreamErr{}
 		}
-		s.failPendingRegions(regionErr)
-
-		if err := util.Hang(ctx, storeReconnectBackoff); err != nil {
+		if err := handleStreamFailure(firstReq, regionErr); err != nil {
 			return err
 		}
-	}
-}
-
-// failStreamRegions transfers every request sent by a failed stream to the
-// recovery pipeline.
-func (s *regionRequestWorker) failStreamRegions(err error) {
-	for _, states := range s.tracker.Drain() {
-		for _, state := range states {
-			s.notifyRegionError(state, err)
-		}
-	}
-	// The failed stream no longer owns remote registrations.
-	s.controlQueue.drain()
-}
-
-// failPendingRegions transfers requests owned by this worker but not yet sent
-// to the recovery pipeline, so they can be resolved and routed again.
-func (s *regionRequestWorker) failPendingRegions(err error) {
-	for _, task := range s.admission.drain() {
-		s.client.onRegionFail(newRegionErrorInfo(task.regionInfo, err))
 	}
 }
 
@@ -171,8 +172,7 @@ func (s *regionRequestWorker) notifyRegionError(state *regionFeedState, err erro
 	state.markStopped(err)
 	s.client.eventSink.Push(
 		SubscriptionID(state.requestID),
-		regionEvent{states: []*regionFeedState{state}},
-	)
+		regionEvent{states: []*regionFeedState{state}})
 }
 
 func (s *regionRequestWorker) waitForRegionRequest(ctx context.Context) (*regionReq, error) {

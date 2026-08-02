@@ -378,7 +378,7 @@ func TestStoppedStateRemovesSentRequest(t *testing.T) {
 	require.Equal(t, 0, admission.stats().inflight)
 }
 
-func TestFailStreamRegionsReleasesSentAdmission(t *testing.T) {
+func TestStreamRecoveryReleasesSentAdmission(t *testing.T) {
 	admission := newRegionAdmissionController(1, 1)
 	ds := &mockRegionEventDynamicStream{}
 	worker := &regionRequestWorker{
@@ -394,14 +394,17 @@ func TestFailStreamRegionsReleasesSentAdmission(t *testing.T) {
 	state := newRegionFeedState(region, uint64(region.subscribedSpan.subID), worker, req)
 	require.True(t, worker.tracker.Add(region.subscribedSpan.subID, region.verID.GetID(), state))
 
-	worker.failStreamRegions(&storeStreamErr{})
+	for _, state := range worker.tracker.Drain() {
+		worker.notifyRegionError(state, &storeStreamErr{})
+	}
+	worker.controlQueue.drain()
 
 	require.Zero(t, admission.stats().inflight)
 	require.False(t, req.abort())
 	require.Equal(t, 1, ds.pushCount)
 }
 
-func TestFailPendingRegionsReschedulesWorkerBuffer(t *testing.T) {
+func TestStreamRecoveryReschedulesWorkerBuffer(t *testing.T) {
 	rawSpan := heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte("a"),
@@ -441,7 +444,9 @@ func TestFailPendingRegionsReschedulesWorkerBuffer(t *testing.T) {
 		require.True(t, admission.submit(NewRegionPriorityTask(region, uint64(i+1))))
 	}
 
-	worker.failPendingRegions(&storeStreamErr{})
+	for _, task := range worker.admission.drain() {
+		worker.client.onRegionFail(newRegionErrorInfo(task.regionInfo, &storeStreamErr{}))
+	}
 
 	require.Zero(t, admission.stats().pending)
 	require.Len(t, client.failureHandler.cache.cache, 2)
