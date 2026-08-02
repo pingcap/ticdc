@@ -214,8 +214,7 @@ func (s *regionRequestWorker) runStream(ctx context.Context, firstReq *regionReq
 			zap.Error(err))
 	}()
 
-	g, gctx := errgroup.WithContext(ctx)
-	conn, err := Connect(gctx, s.client.credential, s.store.storeAddr)
+	conn, err := Connect(ctx, s.client.credential, s.store.storeAddr)
 	if err != nil {
 		log.Warn("region request worker create grpc stream failed",
 			zap.Uint64("workerID", s.workerID),
@@ -231,6 +230,7 @@ func (s *regionRequestWorker) runStream(ctx context.Context, firstReq *regionReq
 	}
 	defer func() { _ = conn.Conn.Close() }()
 
+	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return s.receiveAndDispatchChangeEvents(conn) })
 	g.Go(func() error { return s.processRegionSendTask(gctx, conn, firstReq) })
 
@@ -435,7 +435,7 @@ func (s *regionRequestWorker) sendPendingDeregisterRequests(conn *ConnAndClient)
 
 func (s *regionRequestWorker) sendRegionRequest(conn *ConnAndClient, req *regionReq) error {
 	if !req.isActive() {
-		return &storeStreamErr{}
+		return nil
 	}
 	region := req.regionInfo
 	subID := region.subscribedSpan.subID

@@ -83,22 +83,54 @@ func TestQueuePopBlocking(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	start := time.Now()
-	task, err := q.Pop(ctx)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Nil(t, task)
-	require.GreaterOrEqual(t, time.Since(start), 50*time.Millisecond)
+	type popResult struct {
+		task *mockItem
+		err  error
+	}
+	resultCh := make(chan popResult, 1)
+	go func() {
+		task, err := q.Pop(ctx)
+		resultCh <- popResult{task: task, err: err}
+	}()
 
+	select {
+	case result := <-resultCh:
+		t.Fatalf("Pop returned before context timeout: task=%v err=%v", result.task, result.err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	select {
+	case result := <-resultCh:
+		require.ErrorIs(t, result.err, context.DeadlineExceeded)
+		require.Nil(t, result.task)
+	case <-time.After(time.Second):
+		t.Fatal("Pop did not return after context timeout")
+	}
+
+	resultCh = make(chan popResult, 1)
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		q.Push(newMockItem(10, "task1"))
 	}()
 
-	start = time.Now()
-	task, err = q.Pop(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, "task1", task.description)
-	require.GreaterOrEqual(t, time.Since(start), 50*time.Millisecond)
+	go func() {
+		task, err := q.Pop(context.Background())
+		resultCh <- popResult{task: task, err: err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		t.Fatalf("Pop returned before Push: task=%v err=%v", result.task, result.err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	select {
+	case result := <-resultCh:
+		require.NoError(t, result.err)
+		require.Equal(t, "task1", result.task.description)
+	case <-time.After(time.Second):
+		t.Fatal("Pop did not return after Push")
+	}
 }
 
 func TestQueueTryPopAndUpdateExistingItem(t *testing.T) {

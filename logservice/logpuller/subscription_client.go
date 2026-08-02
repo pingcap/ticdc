@@ -471,11 +471,19 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		if !ok {
 			continue
 		}
+		if region.subscribedSpan.stopped.Load() {
+			s.onRegionFail(newRegionErrorInfo(region, &requestCancelledErr{}))
+			continue
+		}
 
 		store := getStore(region.rpcCtx.Addr)
 		regionTask.regionInfo = region
 		if !store.submit(regionTask) {
-			return context.Canceled
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			s.onRegionFail(newRegionErrorInfo(region, &storeStreamErr{}))
+			continue
 		}
 
 		log.Debug("subscription client will request a region",

@@ -487,7 +487,7 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	require.ErrorAs(t, state.takeError(), &streamErr)
 }
 
-func TestProcessRegionSendTaskDoesNotSendRemovedRequest(t *testing.T) {
+func TestProcessRegionSendTaskSkipsRemovedRequest(t *testing.T) {
 	admission := newRegionAdmissionController(1, 1)
 	worker := &regionRequestWorker{
 		admission:    admission,
@@ -496,22 +496,28 @@ func TestProcessRegionSendTaskDoesNotSendRemovedRequest(t *testing.T) {
 		client:       &subscriptionClient{},
 		tracker:      newRegionTracker(),
 	}
-	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
-	req := admitRegionRequest(t, admission, region)
-	require.True(t, req.abort())
+	firstRegion := prepareRegionForSendTest(createTestRegionInfo(1, 1))
+	firstReq := admitRegionRequest(t, admission, firstRegion)
+	require.True(t, firstReq.abort())
 
+	secondRegion := prepareRegionForSendTest(createTestRegionInfo(1, 2))
+	require.True(t, admission.submit(newRegionPriorityTask(secondRegion, 2)))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	sendCh := make(chan *cdcpb.ChangeDataRequest, 1)
-	err := worker.processRegionSendTask(t.Context(), &ConnAndClient{
-		Client: &mockEventFeedV2Client{sendCh: sendCh},
-		Conn:   &grpc.ClientConn{},
-	}, req)
-	var streamErr *storeStreamErr
-	require.ErrorAs(t, err, &streamErr)
-	select {
-	case sentReq := <-sendCh:
-		t.Fatalf("removed request was sent: %+v", sentReq)
-	default:
-	}
+	done := make(chan error, 1)
+	go func() {
+		done <- worker.processRegionSendTask(ctx, &ConnAndClient{
+			Client: &mockEventFeedV2Client{sendCh: sendCh},
+			Conn:   &grpc.ClientConn{},
+		}, firstReq)
+	}()
+
+	sentReq := <-sendCh
+	require.Equal(t, secondRegion.verID.GetID(), sentReq.RegionId)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
 }
 
 func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
