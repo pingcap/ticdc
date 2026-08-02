@@ -338,6 +338,7 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	subscriptionID := SubscriptionID(resolvedTsEvent.RequestId)
 	metricsResolvedTsCount.Add(float64(len(resolvedTsEvent.Regions)))
 	s.client.metrics.batchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
+	// TODO: resolvedTsEvent.Ts be 0 is impossible, we need find the root cause.
 	if resolvedTsEvent.Ts == 0 {
 		log.Warn("region request worker receives a resolved ts event with zero value, ignore it",
 			zap.Uint64("workerID", s.workerID),
@@ -420,7 +421,7 @@ func (s *regionRequestWorker) sendDeregisterRequest(
 	return nil
 }
 
-func (s *regionRequestWorker) drainControlQueue(conn *ConnAndClient) error {
+func (s *regionRequestWorker) sendPendingDeregisterRequests(conn *ConnAndClient) error {
 	for {
 		req, ok := s.controlQueue.tryPop()
 		if !ok {
@@ -491,7 +492,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 			continue
 		}
 
-		if err := s.drainControlQueue(conn); err != nil {
+		if err := s.sendPendingDeregisterRequests(conn); err != nil {
 			return err
 		}
 		var err error
