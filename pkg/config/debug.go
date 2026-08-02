@@ -75,7 +75,8 @@ type PullerConfig struct {
 	// for one TiKV store. It is divided among the store's puller workers.
 	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending_region_request_queue_size"`
 	// RegionRequestMaxWindowMultiplier controls the maximum window available to
-	// previously initialized regions and regions whose scan lag is less than 30 minutes.
+	// previously initialized regions and regions whose scan lag is below the
+	// configured low-priority threshold.
 	// The approximate maximum store window is PendingRegionRequestQueueSize
 	// multiplied by this value.
 	RegionRequestMaxWindowMultiplier int `toml:"region-request-max-window-multiplier" json:"region_request_max_window_multiplier"`

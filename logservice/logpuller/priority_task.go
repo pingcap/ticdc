@@ -17,21 +17,22 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/tikv/client-go/v2/oracle"
 )
 
-// TaskType represents the scan priority propagated to TiKV/CSE.
+// TaskType represents the scan priority level associated with a region task.
 type TaskType int
 
 const (
-	// TaskHighPrior represents retries or scans that should preempt older work.
+	// TaskHighPrior represents high scan priority.
+	// For example, a region task that is already close to caught up
+	// is typically tagged with this level.
 	TaskHighPrior TaskType = iota
-	// TaskLowPrior represents background initial scans for new subscriptions.
+	// TaskLowPrior represents low scan priority.
+	// For example, a region task created for a subscription that starts from an
+	// older start-ts is typically tagged with this level before it catches up.
 	TaskLowPrior
-)
-
-const (
-	lowLagRegionThreshold = 30 * time.Minute
 )
 
 type regionTaskPriority int
@@ -100,7 +101,7 @@ func (pt *regionPriorityTask) updateRegion(regionInfo regionInfo, currentTs uint
 	priority := normalRegionPriority
 	if regionInfo.wasInitialized {
 		priority = initializedRegionPriority
-	} else if regionScanLag(currentTs, regionInfo.resolvedTs()) < lowLagRegionThreshold {
+	} else if regionScanLag(currentTs, regionInfo.resolvedTs()) < lowLagRegionThreshold() {
 		priority = lowLagRegionPriority
 	}
 	pt.regionInfo = regionInfo
@@ -143,4 +144,8 @@ func regionScanLag(currentTs, checkpointTs uint64) time.Duration {
 		return 0
 	}
 	return currentTime.Sub(checkpointTime)
+}
+
+func lowLagRegionThreshold() time.Duration {
+	return time.Duration(config.GetGlobalServerConfig().Debug.Puller.OldStartTsScanLowPriorityThreshold)
 }

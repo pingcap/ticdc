@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/utils/priorityqueue"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -105,15 +106,16 @@ func TestRegionPriorityTaskFIFOWithinPriority(t *testing.T) {
 func TestRegionPriorityTaskLowLagBoundary(t *testing.T) {
 	currentTime := time.Now()
 	currentTs := oracle.GoTimeToTS(currentTime)
+	threshold := time.Duration(config.GetGlobalServerConfig().Debug.Puller.OldStartTsScanLowPriorityThreshold)
 
 	belowThreshold := NewRegionPriorityTask(newPriorityTestRegion(
 		1,
-		oracle.GoTimeToTS(currentTime.Add(-lowLagRegionThreshold+time.Millisecond)),
+		oracle.GoTimeToTS(currentTime.Add(-threshold+time.Millisecond)),
 		false,
 	), currentTs, 1)
 	atThreshold := NewRegionPriorityTask(newPriorityTestRegion(
 		2,
-		oracle.GoTimeToTS(currentTime.Add(-lowLagRegionThreshold)),
+		oracle.GoTimeToTS(currentTime.Add(-threshold)),
 		false,
 	), currentTs, 2)
 	futureCheckpoint := NewRegionPriorityTask(newPriorityTestRegion(
