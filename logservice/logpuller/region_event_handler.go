@@ -29,8 +29,7 @@ import (
 )
 
 var (
-	metricsResolvedTsCount = metrics.PullerEventCounter.WithLabelValues("resolved_ts")
-	metricsEventCount      = metrics.PullerEventCounter.WithLabelValues("event")
+	metricsEventCount = metrics.PullerEventCounter.WithLabelValues("event")
 
 	metricRegionEventHandleDurationEntries  = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("entries")
 	metricRegionEventHandleDurationResolved = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("resolved")

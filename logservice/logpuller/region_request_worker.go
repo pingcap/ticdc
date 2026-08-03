@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/ticdc/utils/notifyqueue"
@@ -37,6 +38,11 @@ const storeReconnectBackoff = time.Second
 
 // To generate a workerID in `newRegionRequestWorker`.
 var workerIDGen atomic.Uint64
+
+var (
+	metricsResolvedTsCount  = metrics.PullerEventCounter.WithLabelValues("resolved_ts")
+	metricBatchResolvedSize = metrics.BatchResolvedEventSize.WithLabelValues("event-store")
+)
 
 type deregisterRequest struct {
 	subID      SubscriptionID
@@ -115,7 +121,7 @@ func newRegionRequestWorker(
 }
 
 func (s *regionRequestWorker) Run(ctx context.Context) error {
-	handleStreamFailure := func(firstReq *regionReq, regionErr error) error {
+	handleStreamFailure := func(firstReq *regionReq, regionErr error) {
 		// Stream failure handle cases:
 		// - tracker: requests already sent to this stream.
 		// - firstReq: popped from admission for this stream, but not necessarily
@@ -131,13 +137,12 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 		}
 		// The failed stream no longer owns remote registrations.
 		s.controlQueue.drain()
-		if firstReq.abort() {
+		if firstReq != nil && firstReq.abort() {
 			s.client.onRegionFail(newRegionErrorInfo(firstReq.regionInfo, regionErr))
 		}
 		for _, task := range s.admission.drain() {
 			s.client.onRegionFail(newRegionErrorInfo(task.regionInfo, regionErr))
 		}
-		return util.Hang(ctx, storeReconnectBackoff)
 	}
 
 	for {
@@ -156,7 +161,8 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 		if regionErr == nil {
 			regionErr = &storeStreamErr{}
 		}
-		if err := handleStreamFailure(firstReq, regionErr); err != nil {
+		handleStreamFailure(firstReq, regionErr)
+		if err := util.Hang(ctx, storeReconnectBackoff); err != nil {
 			return err
 		}
 	}
@@ -331,7 +337,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.ResolvedTs) {
 	subscriptionID := SubscriptionID(resolvedTsEvent.RequestId)
 	metricsResolvedTsCount.Add(float64(len(resolvedTsEvent.Regions)))
-	s.client.metrics.batchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
+	metricBatchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
 	// TODO: resolvedTsEvent.Ts be 0 is impossible, we need find the root cause.
 	if resolvedTsEvent.Ts == 0 {
 		log.Warn("region request worker receives a resolved ts event with zero value, ignore it",

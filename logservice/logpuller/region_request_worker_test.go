@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/utils/dynstream"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -211,9 +210,6 @@ func newDispatchResolvedTsTestWorker(regionCount int) (*regionRequestWorker, *mo
 	ds := &mockRegionEventDynamicStream{}
 	worker := &regionRequestWorker{
 		client: &subscriptionClient{
-			metrics: sharedClientMetrics{
-				batchResolvedSize: prometheus.ObserverFunc(func(float64) {}),
-			},
 			eventSink: newTestRegionEventSink(ds),
 		},
 		tracker: newRegionTracker(),
