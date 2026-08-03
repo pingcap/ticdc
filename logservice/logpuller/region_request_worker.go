@@ -147,22 +147,12 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 			return err
 		}
 
-		if err := s.checkStoreVersion(ctx); err != nil {
-			if ctx.Err() != nil {
-				firstReq.abort()
-				return ctx.Err()
-			}
-			if err := handleStreamFailure(firstReq, err); err != nil {
-				return err
-			}
-			continue
-		}
-
 		regionErr := s.runStream(ctx, firstReq)
 		if ctx.Err() != nil {
 			firstReq.abort()
 			return ctx.Err()
 		}
+		// Treat an unexpected clean stream exit as a recoverable store-stream failure.
 		if regionErr == nil {
 			regionErr = &storeStreamErr{}
 		}
@@ -204,6 +194,10 @@ func (s *regionRequestWorker) checkStoreVersion(ctx context.Context) error {
 }
 
 func (s *regionRequestWorker) runStream(ctx context.Context, firstReq *regionReq) (err error) {
+	if err := s.checkStoreVersion(ctx); err != nil {
+		return err
+	}
+
 	log.Info("region request worker going to create grpc stream",
 		zap.Uint64("workerID", s.workerID),
 		zap.String("addr", s.store.storeAddr))
@@ -439,11 +433,11 @@ func (s *regionRequestWorker) sendRegionRequest(conn *ConnAndClient, req *region
 	}
 	region := req.regionInfo
 	subID := region.subscribedSpan.subID
-	log.Debug("region request worker gets a singleRegionInfo",
+	log.Debug("region request worker sends region request",
 		zap.Uint64("workerID", s.workerID),
 		zap.Uint64("subscriptionID", uint64(subID)),
 		zap.Uint64("regionID", region.verID.GetID()),
-		zap.String("addr", s.store.storeAddr),
+		zap.String("storeAddr", s.store.storeAddr),
 		zap.Bool("bdrMode", region.filterLoop))
 
 	if region.subscribedSpan.stopped.Load() {
