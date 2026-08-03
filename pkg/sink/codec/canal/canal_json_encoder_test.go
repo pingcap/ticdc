@@ -83,7 +83,7 @@ func TestDMLE2E(t *testing.T) {
 		require.True(t, hasNext)
 		require.Equal(t, messageType, common.MessageTypeRow)
 
-		decodedEvent := dml2rowEvent(t, decoder.NextDMLEvent())
+		decodedEvent := dml2rowEvent(t, decoder.NextDMLMessage().ToDMLEvent())
 		require.True(t, decodedEvent.IsInsert())
 		if enableTiDBExtension {
 			require.Equal(t, insertEvent.CommitTs, decodedEvent.CommitTs)
@@ -104,7 +104,7 @@ func TestDMLE2E(t *testing.T) {
 		require.True(t, hasNext)
 		require.EqualValues(t, messageType, common.MessageTypeRow)
 
-		decodedEvent = dml2rowEvent(t, decoder.NextDMLEvent())
+		decodedEvent = dml2rowEvent(t, decoder.NextDMLMessage().ToDMLEvent())
 		require.True(t, decodedEvent.IsUpdate())
 
 		err = encoder.AppendRowChangedEvent(ctx, "", deleteEvent)
@@ -118,7 +118,7 @@ func TestDMLE2E(t *testing.T) {
 		require.True(t, hasNext)
 		require.EqualValues(t, messageType, common.MessageTypeRow)
 
-		decodedEvent = dml2rowEvent(t, decoder.NextDMLEvent())
+		decodedEvent = dml2rowEvent(t, decoder.NextDMLMessage().ToDMLEvent())
 		require.NoError(t, err)
 		require.True(t, decodedEvent.IsDelete())
 	}
@@ -157,7 +157,7 @@ func TestCanalJSONCompressionE2E(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, messageType, common.MessageTypeRow)
 
-	decodedEvent := decoder.NextDMLEvent()
+	decodedEvent := decoder.NextDMLMessage().ToDMLEvent()
 	require.Equal(t, decodedEvent.CommitTs, insertEvent.CommitTs)
 	require.Equal(t, decodedEvent.TableInfo.GetSchemaName(), insertEvent.TableInfo.GetSchemaName())
 	require.Equal(t, decodedEvent.TableInfo.GetTableName(), insertEvent.TableInfo.GetTableName())
@@ -230,7 +230,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded := dml2rowEvent(t, decoder.NextDMLEvent())
+	decoded := dml2rowEvent(t, decoder.NextDMLMessage().ToDMLEvent())
 	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
 	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
 }
@@ -300,7 +300,7 @@ func TestCanalJSONClaimCheckE2E(t *testing.T) {
 		require.Equal(t, messageType, common.MessageTypeRow)
 		require.True(t, ok)
 
-		decodedLargeEvent := decoder.NextDMLEvent()
+		decodedLargeEvent := decoder.NextDMLMessage().ToDMLEvent()
 
 		require.Equal(t, insertEvent.CommitTs, decodedLargeEvent.CommitTs)
 		require.Equal(t, insertEvent.TableInfo.GetSchemaName(), decodedLargeEvent.TableInfo.GetSchemaName())
@@ -707,7 +707,7 @@ func TestCanalJSONContentCompatibleE2E(t *testing.T) {
 		require.True(t, hasNext)
 		require.Equal(t, messageType, common.MessageTypeRow)
 
-		decodedEvent := decoder.NextDMLEvent()
+		decodedEvent := decoder.NextDMLMessage().ToDMLEvent()
 		require.NoError(t, err)
 		require.Equal(t, decodedEvent.CommitTs, event.CommitTs)
 		require.Equal(t, decodedEvent.TableInfo.GetSchemaName(), event.TableInfo.GetSchemaName())
@@ -768,7 +768,7 @@ func TestE2EPartitionTableByHash(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, tp)
 
-	decodedEvent := decoder.NextDMLEvent()
+	decodedEvent := decoder.NextDMLMessage().ToDMLEvent()
 	require.NotZero(t, decodedEvent.GetTableID())
 }
 
@@ -825,7 +825,7 @@ func TestE2EPartitionTableByRange(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, tp)
 
-	decodedEvent := decoder.NextDMLEvent()
+	decodedEvent := decoder.NextDMLMessage().ToDMLEvent()
 	require.NotZero(t, decodedEvent.GetTableID())
 }
 
@@ -889,7 +889,7 @@ func TestE2EPartitionTable(t *testing.T) {
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, tp)
 
-		decodedEvent := decoder.NextDMLEvent()
+		decodedEvent := decoder.NextDMLMessage().ToDMLEvent()
 		require.NotZero(t, decodedEvent.GetTableID())
 
 		rc, ok = insertEvent1.GetNextRow()
@@ -909,7 +909,7 @@ func TestE2EPartitionTable(t *testing.T) {
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, tp)
 
-		decodedEvent = decoder.NextDMLEvent()
+		decodedEvent = decoder.NextDMLMessage().ToDMLEvent()
 		require.NotZero(t, decodedEvent.GetTableID())
 
 		rc, ok = insertEvent2.GetNextRow()
@@ -929,7 +929,7 @@ func TestE2EPartitionTable(t *testing.T) {
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, tp)
 
-		decodedEvent = decoder.NextDMLEvent()
+		decodedEvent = decoder.NextDMLMessage().ToDMLEvent()
 
 		require.NotZero(t, decodedEvent.GetTableID())
 	}
