@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -228,7 +229,8 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 		}
 	}()
 
-	s, err := newWithComponents(ctx, changefeedID, common.DefaultKeyspaceID, protocol, comp)
+	s, err := newWithComponents(ctx, changefeedID, common.DefaultKeyspaceID, protocol, comp,
+		statistics.New(changefeedID, common.DefaultKeyspaceID))
 	if err != nil {
 		return nil, err
 	}

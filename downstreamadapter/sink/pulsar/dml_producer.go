@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/pulsar"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"go.uber.org/zap"
 )
 
@@ -52,6 +53,8 @@ type dmlProducers struct {
 	producers *lru.Cache
 
 	comp component
+	// statistics is owned and closed by the sink.
+	statistics *statistics.Statistics
 
 	// closedMu is used to protect `closed`.
 	// We need to ensure that closed producers are never written to.
@@ -104,6 +107,7 @@ func newDMLProducers(
 	p := &dmlProducers{
 		changefeedID: changefeedID,
 		comp:         comp,
+		statistics:   comp.statistics,
 		producers:    producers,
 		closed:       false,
 		failpointCh:  failpointCh,
@@ -138,14 +142,18 @@ func (p *dmlProducers) asyncSendMessage(
 
 	// If producers are closed, we should skip the message and return an error.
 	if p.closed {
-		return errors.ErrPulsarProducerClosed.GenWithStackByArgs()
+		err := errors.ErrPulsarProducerClosed.GenWithStackByArgs()
+		p.recordDMLResult(message.GetRowsCount(), err)
+		return err
 	}
 	failpoint.Inject("PulsarSinkAsyncSendError", func() {
 		// simulate sending message to input channel successfully but flushing
 		// message to Pulsar meets error
 		log.Info("PulsarSinkAsyncSendError error injected", zap.String("keyspace", p.changefeedID.Keyspace()),
 			zap.String("changefeed", p.changefeedID.ID().String()))
-		p.failpointCh <- errors.New("pulsar sink injected error")
+		err := errors.New("pulsar sink injected error")
+		p.recordDMLResult(message.GetRowsCount(), err)
+		p.failpointCh <- err
 		failpoint.Return(nil)
 	})
 	data := &pulsarClient.ProducerMessage{
@@ -155,6 +163,7 @@ func (p *dmlProducers) asyncSendMessage(
 
 	producer, err := p.getProducerByTopic(topic)
 	if err != nil {
+		p.recordDMLResult(message.GetRowsCount(), err)
 		return err
 	}
 
@@ -162,6 +171,7 @@ func (p *dmlProducers) asyncSendMessage(
 
 	producer.SendAsync(ctx, data,
 		func(_ pulsarClient.MessageID, m *pulsarClient.ProducerMessage, err error) {
+			p.recordDMLResult(message.GetRowsCount(), err)
 			// fail
 			if err != nil {
 				e := errors.WrapError(errors.ErrPulsarAsyncSendMessage, err)
@@ -192,6 +202,12 @@ func (p *dmlProducers) asyncSendMessage(
 	pulsar.IncPublishedDMLCount(topic, p.changefeedID.String())
 
 	return nil
+}
+
+func (p *dmlProducers) recordDMLResult(rowCount int, err error) {
+	if p.statistics != nil {
+		p.statistics.RecordDMLResult(rowCount, err)
+	}
 }
 
 func (p *dmlProducers) close() { // We have to hold the lock to synchronize closing with writing.

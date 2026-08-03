@@ -27,6 +27,7 @@ import (
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/tidb/br/pkg/utils"
 )
 
@@ -58,6 +59,7 @@ func newKafkaSinkComponent(
 	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
+	stat *statistics.Statistics,
 ) (components, config.Protocol, error) {
 	var (
 		comp components
@@ -85,7 +87,7 @@ func newKafkaSinkComponent(
 	}
 	options.Topic = topic
 
-	comp.factory, err = kafka.NewSaramaFactory(ctx, options, changefeedID)
+	comp.factory, err = kafka.NewSaramaFactoryWithStatistics(ctx, options, changefeedID, stat)
 	if err != nil {
 		return comp, protocol, err
 	}

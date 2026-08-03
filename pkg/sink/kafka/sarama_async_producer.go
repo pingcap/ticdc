@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -30,11 +31,13 @@ type saramaAsyncProducer struct {
 	client       sarama.Client
 	producer     sarama.AsyncProducer
 	changefeedID common.ChangeFeedID
+	statistics   *statistics.Statistics
 
 	closed *atomic.Bool
 }
 
 type messageMetadata struct {
+	rowCount int
 	callback func()
 	logInfo  *codecCommon.MessageLogInfo
 }
@@ -102,8 +105,11 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if ack != nil {
 				switch meta := ack.Metadata.(type) {
 				case *messageMetadata:
-					if meta != nil && meta.callback != nil {
-						meta.callback()
+					if meta != nil {
+						p.recordDMLResult(meta.rowCount, nil)
+						if meta.callback != nil {
+							meta.callback()
+						}
 					}
 				default:
 					log.Error("kafka producer received unknown message metadata type",
@@ -119,7 +125,9 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if err == nil {
 				return nil
 			}
-			return p.handleProducerError(err)
+			producerErr := p.handleProducerError(err)
+			p.recordDMLResult(extractRowCount(err.Msg), producerErr)
+			return producerErr
 		}
 	}
 }
@@ -140,9 +148,12 @@ func (p *saramaAsyncProducer) AsyncSend(
 	ctx context.Context, topic string, partition int32, message *codecCommon.Message,
 ) error {
 	if p.closed.Load() {
-		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
+		err := errors.ErrKafkaSinkClosed.GenWithStackByArgs()
+		p.recordDMLResult(message.GetRowsCount(), err)
+		return err
 	}
 	meta := &messageMetadata{
+		rowCount: message.GetRowsCount(),
 		callback: message.Callback,
 		logInfo:  message.LogInfo,
 	}
@@ -155,13 +166,37 @@ func (p *saramaAsyncProducer) AsyncSend(
 	}
 	select {
 	case <-ctx.Done():
-		return context.Cause(ctx)
+		err := context.Cause(ctx)
+		p.recordDMLResult(message.GetRowsCount(), err)
+		return err
 	case p.producer.Input() <- msg:
 	}
 	return nil
 }
 
+func (p *saramaAsyncProducer) recordDMLResult(rowCount int, err error) {
+	if p.statistics != nil {
+		p.statistics.RecordDMLResult(rowCount, err)
+	}
+}
+
+func extractRowCount(msg *sarama.ProducerMessage) int {
+	meta := extractMessageMetadata(msg)
+	if meta == nil {
+		return 0
+	}
+	return meta.rowCount
+}
+
 func extractLogInfo(msg *sarama.ProducerMessage) *codecCommon.MessageLogInfo {
+	meta := extractMessageMetadata(msg)
+	if meta == nil {
+		return nil
+	}
+	return meta.logInfo
+}
+
+func extractMessageMetadata(msg *sarama.ProducerMessage) *messageMetadata {
 	if msg == nil {
 		return nil
 	}
@@ -169,5 +204,5 @@ func extractLogInfo(msg *sarama.ProducerMessage) *codecCommon.MessageLogInfo {
 	if !ok || meta == nil {
 		return nil
 	}
-	return meta.logInfo
+	return meta
 }

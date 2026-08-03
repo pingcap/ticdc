@@ -70,8 +70,10 @@ type Statistics struct {
 	metricExecErrCntForDML prometheus.Counter
 }
 
-// RecordDMLResult records row counts for successful DML executions and counts errors.
-// DML event bytes are recorded by TrackDMLEvent after the transaction is flushed.
+// RecordDMLResult records the result of one downstream DML execution attempt.
+// Successful attempts contribute their row count; failed attempts increment the
+// DML execution error counter. DML event bytes are tracked separately because
+// they are recorded only after the whole transaction is flushed.
 func (b *Statistics) RecordDMLResult(rowCount int, err error) {
 	if err != nil {
 		b.metricExecErrCntForDML.Inc()

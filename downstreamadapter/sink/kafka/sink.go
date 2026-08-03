@@ -157,11 +157,13 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, keyspaceID uint32,
 ) (*sink, error) {
-	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
+	stat := statistics.New(changefeedID, keyspaceID)
+	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, stat)
 	if err != nil {
+		stat.Close()
 		return nil, err
 	}
-	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp)
+	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp, stat)
 }
 
 func newWithComponents(
@@ -170,8 +172,8 @@ func newWithComponents(
 	keyspaceID uint32,
 	protocol config.Protocol,
 	comp components,
+	stat *statistics.Statistics,
 ) (*sink, error) {
-	statistics := statistics.New(changefeedID, keyspaceID)
 	var (
 		err           error
 		asyncProducer kafka.AsyncProducer
@@ -188,7 +190,7 @@ func newWithComponents(
 			asyncProducer.Close()
 		}
 		comp.close()
-		statistics.Close()
+		stat.Close()
 	}()
 
 	asyncProducer, err = comp.factory.AsyncProducer(ctx)
@@ -209,7 +211,7 @@ func newWithComponents(
 		partitionRule: helper.GetDDLDispatchRule(protocol),
 		protocol:      protocol,
 		comp:          comp,
-		statistics:    statistics,
+		statistics:    stat,
 
 		checkpointChan: make(chan uint64, 16),
 		eventChan:      chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
@@ -431,22 +433,12 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			}
 			for _, message := range future.Messages {
 				start := time.Now()
-				rows := message.GetRowsCount()
-				callback := message.Callback
-				message.Callback = func() {
-					s.statistics.RecordDMLResult(rows, nil)
-					if callback != nil {
-						callback()
-					}
-				}
-
 				message.SetPartitionKey(future.Key.PartitionKey)
 				if err = s.dmlProducer.AsyncSend(
 					ctx,
 					future.Key.Topic,
 					future.Key.Partition,
 					message); err != nil {
-					s.statistics.RecordDMLResult(rows, err)
 					return err
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())

@@ -152,6 +152,7 @@ func newWithComponent(
 
 	failpointCh := make(chan error, 1)
 	stat = statistics.New(changefeedID, keyspaceID)
+	comp.statistics = stat
 	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
 	if err != nil {
 		return nil, err
@@ -535,19 +536,9 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			}
 			for _, message := range future.Messages {
 				start := time.Now()
-				rows := message.GetRowsCount()
-				callback := message.Callback
-				message.Callback = func() {
-					s.statistics.RecordDMLResult(rows, nil)
-					if callback != nil {
-						callback()
-					}
-				}
-
 				message.SetPartitionKey(future.Key.PartitionKey)
 				if err = s.dmlProducer.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
 					err = errors.Trace(err)
-					s.statistics.RecordDMLResult(rows, err)
 					return err
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())

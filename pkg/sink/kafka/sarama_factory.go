@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/rcrowley/go-metrics"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -30,6 +31,7 @@ type saramaFactory struct {
 	changefeedID   common.ChangeFeedID
 	option         *options
 	metricRegistry metrics.Registry
+	statistics     *statistics.Statistics
 }
 
 // NewSaramaFactory constructs a Factory with sarama implementation.
@@ -37,6 +39,27 @@ func NewSaramaFactory(
 	ctx context.Context,
 	o *options,
 	changefeedID common.ChangeFeedID,
+) (Factory, error) {
+	return newSaramaFactory(ctx, o, changefeedID, nil)
+}
+
+// NewSaramaFactoryWithStatistics constructs a Factory for a running sink.
+// The factory passes statistics to its DML producer without changing the
+// producer interface. The sink remains responsible for closing statistics.
+func NewSaramaFactoryWithStatistics(
+	ctx context.Context,
+	o *options,
+	changefeedID common.ChangeFeedID,
+	stat *statistics.Statistics,
+) (Factory, error) {
+	return newSaramaFactory(ctx, o, changefeedID, stat)
+}
+
+func newSaramaFactory(
+	ctx context.Context,
+	o *options,
+	changefeedID common.ChangeFeedID,
+	stat *statistics.Statistics,
 ) (Factory, error) {
 	start := time.Now()
 	config, err := newSaramaConfig(ctx, o)
@@ -80,6 +103,7 @@ func NewSaramaFactory(
 		changefeedID:   changefeedID,
 		option:         o,
 		metricRegistry: metrics.NewRegistry(),
+		statistics:     stat,
 	}, nil
 }
 
@@ -178,6 +202,7 @@ func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error
 		client:       client,
 		producer:     p,
 		changefeedID: f.changefeedID,
+		statistics:   f.statistics,
 		closed:       atomic.NewBool(false),
 	}, nil
 }
