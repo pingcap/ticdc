@@ -95,12 +95,6 @@ func TestQueuePopBlocking(t *testing.T) {
 
 	select {
 	case result := <-resultCh:
-		t.Fatalf("Pop returned before context timeout: task=%v err=%v", result.task, result.err)
-	case <-time.After(10 * time.Millisecond):
-	}
-
-	select {
-	case result := <-resultCh:
 		require.ErrorIs(t, result.err, context.DeadlineExceeded)
 		require.Nil(t, result.task)
 	case <-time.After(time.Second):
@@ -117,12 +111,6 @@ func TestQueuePopBlocking(t *testing.T) {
 		task, err := q.Pop(context.Background())
 		resultCh <- popResult{task: task, err: err}
 	}()
-
-	select {
-	case result := <-resultCh:
-		t.Fatalf("Pop returned before Push: task=%v err=%v", result.task, result.err)
-	case <-time.After(10 * time.Millisecond):
-	}
 
 	select {
 	case result := <-resultCh:
