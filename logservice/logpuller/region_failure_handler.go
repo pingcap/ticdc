@@ -64,23 +64,6 @@ func newRegionFailureHandler(
 	}
 }
 
-func (r *regionFailureHandler) retryRange(ctx context.Context, errInfo regionErrorInfo) {
-	priority := normalizeScanPriority(errInfo.scanPriority)
-	if priority == cdcpb.ScanPriority_SCAN_PRIORITY_LOW {
-		priority = errInfo.subscribedSpan.priorityPolicy.resolve(
-			priority,
-			errInfo.resolvedTs(),
-			errInfo.subscribedSpan.priorityPolicy.pdClock.CurrentTime(),
-		)
-	}
-	r.scheduleRangeRequest(ctx, rangeTask{
-		span:           errInfo.span,
-		subscribedSpan: errInfo.subscribedSpan,
-		filterLoop:     errInfo.filterLoop,
-		priority:       priority,
-	})
-}
-
 // Report admits a region failure into the recovery pipeline. It releases the
 // corresponding range lock before enqueueing the failure so new range tasks are
 // not blocked by stale region ownership.
@@ -95,6 +78,9 @@ func (r *regionFailureHandler) Report(errInfo regionErrorInfo) {
 }
 
 func (r *regionFailureHandler) Run(ctx context.Context) error {
+	log.Info("region failure handler starts")
+	defer log.Info("region failure handler exits")
+
 	handleCachedErrors := func() error {
 		for {
 			batch := r.cache.popBatch(errCacheBatchSize)
@@ -114,8 +100,8 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 		}
 	}
 
-	// e.notify should surface new failures promptly in normal flow. The ticker is
-	// only a fallback scan and is not expected to be needed in practice.
+	// r.cache.ready() should handle failures promptly in normal flow. The ticker is only a
+	// fallback scan and is not expected to be needed in practice.
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -136,6 +122,23 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 
 func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
+	rescheduleRange := func() {
+		priority := normalizeScanPriority(errInfo.scanPriority)
+		if priority == cdcpb.ScanPriority_SCAN_PRIORITY_LOW {
+			priority = errInfo.subscribedSpan.priorityPolicy.resolve(
+				priority,
+				errInfo.resolvedTs(),
+				errInfo.subscribedSpan.priorityPolicy.pdClock.CurrentTime(),
+			)
+		}
+		r.scheduleRangeRequest(ctx, rangeTask{
+			span:           errInfo.span,
+			subscribedSpan: errInfo.subscribedSpan,
+			filterLoop:     errInfo.filterLoop,
+			priority:       priority,
+		})
+	}
+
 	//nolint:errorlint // converting large type switch to errors.As is a significant refactor
 	if _, requestCancelled := err.(*requestCancelledErr); !requestCancelled {
 		log.Debug("cdc region error",
@@ -156,12 +159,12 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
-			r.retryRange(ctx, errInfo)
+			rescheduleRange()
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
-			r.retryRange(ctx, errInfo)
+			rescheduleRange()
 			return nil
 		}
 		if innerErr.GetCongested() != nil {
@@ -194,14 +197,14 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		return nil
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
-		r.retryRange(ctx, errInfo)
+		rescheduleRange()
 		return nil
 	case *getStoreErr:
 		metricGetStoreErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		// cannot get the store the region belongs to, so we need to reload the region.
 		r.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
-		r.retryRange(ctx, errInfo)
+		rescheduleRange()
 		return nil
 	case *storeStreamErr:
 		metricStoreSendRequestErr.Inc()
