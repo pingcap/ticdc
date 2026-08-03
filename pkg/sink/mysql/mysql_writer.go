@@ -64,7 +64,8 @@ type Writer struct {
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache *lru.Cache
 
-	statistics *metrics.Statistics
+	statistics           *metrics.Statistics
+	rowsAffectedCounters sync.Map
 
 	// activeActiveSyncStatsCollector accumulates conflict statistics from TiDB session
 	// variable @@tidb_cdc_active_active_sync_stats. It is shared across all DML writers
