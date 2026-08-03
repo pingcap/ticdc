@@ -122,11 +122,11 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 		}
 		o.partitionNum = int32(c)
 	}
-	partitionNum, err := getPartitionNum(o)
-	if err != nil {
-		log.Panic("cannot get the partition number", zap.String("topic", o.topic), zap.Error(err))
-	}
 	if o.partitionNum == 0 {
+		partitionNum, err := getPartitionNum(o)
+		if err != nil {
+			log.Panic("cannot get the partition number", zap.String("topic", o.topic), zap.Error(err))
+		}
 		o.partitionNum = partitionNum
 	}
 

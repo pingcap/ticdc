@@ -117,8 +117,10 @@ EOF
 
 	# Merge the split table while the syncpoint is pending.
 	merge_table_with_retry $merge_table_id "$CHANGEFEED_ID" 10
-	ensure 60 "grep -q \"merge dispatcher uses pending block event to calculate start ts\" $WORK_DIR/cdc0-1.log"
-	merge_line=$(grep "merge dispatcher uses pending block event to calculate start ts" $WORK_DIR/cdc0-1.log | grep -E "pendingCommitTs[^0-9]*${syncpoint_ts}" | tail -n 1 || true)
+	# The merge task runs in the dispatcher manager that owns the source split spans.
+	# After node2 joins, those spans may be scheduled to any CDC node.
+	ensure 60 "grep \"merge dispatcher uses pending block event to calculate start ts\" $WORK_DIR/cdc*.log | grep -Eq \"pendingCommitTs[^0-9]*${syncpoint_ts}\""
+	merge_line=$(grep "merge dispatcher uses pending block event to calculate start ts" $WORK_DIR/cdc*.log | grep -E "pendingCommitTs[^0-9]*${syncpoint_ts}" | tail -n 1 || true)
 	if [ -z "$merge_line" ]; then
 		echo "failed to find merge startTs decision log line"
 		exit 1

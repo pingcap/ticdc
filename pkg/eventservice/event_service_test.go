@@ -529,7 +529,7 @@ func (m *mockDispatcherInfo) GetTxnAtomicity() config.AtomicityLevel {
 func newChangefeedStatusForTest(t testing.TB, info DispatcherInfo) *changefeedStatus {
 	t.Helper()
 
-	status := newChangefeedStatus(info.GetChangefeedID())
+	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
 	status.filter = newChangefeedFilterForTest(t, info, time.UTC.String())
 	return status
 }
@@ -542,7 +542,7 @@ func addChangefeedStatusToBrokerForTest(
 ) *changefeedStatus {
 	t.Helper()
 
-	status := newChangefeedStatus(changefeedID)
+	status := newChangefeedStatus(changefeedID, syncPointInterval)
 	broker.changefeedMap.Store(changefeedID, status)
 	return status
 }

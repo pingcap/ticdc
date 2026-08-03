@@ -98,7 +98,8 @@ function run() {
 		exit 1
 	fi
 
-	cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" \
+	# Redo apply runs in a new process, so set TZ explicitly to match the sink URI.
+	TZ="${TIME_ZONE}" cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" \
 		--storage="$storage_path" \
 		--sink-uri="$SINK_URI" >$WORK_DIR/cdc_redo.log
 
