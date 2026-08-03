@@ -321,47 +321,10 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			}
 
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
-<<<<<<< HEAD
-			selector := s.comp.columnSelector.Get(schema, table)
-			rowsCount := uint64(event.Len())
-			events := make([]*commonEvent.MQRowEvent, 0, rowsCount)
-			rowCallback := helper.NewTxnPostFlushRowCallback(event, rowsCount)
-
-			for {
-				row, ok := event.GetNextRow()
-				if !ok {
-					event.Rewind()
-					break
-				}
-				index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(
-					&row, partitionNum, event.TableInfo, event.CommitTs)
-				if err != nil {
-					return err
-				}
-				events = append(events, &commonEvent.MQRowEvent{
-					Key: commonEvent.TopicPartitionKey{
-						Topic:          topic,
-						Partition:      index,
-						PartitionKey:   key,
-						TotalPartition: partitionNum,
-					},
-					RowEvent: commonEvent.RowEvent{
-						PhysicalTableID: event.PhysicalTableID,
-						TableInfo:       event.TableInfo,
-						StartTs:         event.StartTs,
-						CommitTs:        event.CommitTs,
-						Event:           row,
-						Callback:        rowCallback,
-						ColumnSelector:  selector,
-						Checksum:        row.Checksum,
-					},
-				})
-=======
 			selector := s.comp.columnSelector.GetForTableInfo(event.TableInfo)
 			events, err := helper.NewMQRowEvents(event, topic, partitionNum, partitionGenerator, selector)
 			if err != nil {
 				return errors.Trace(err)
->>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 			}
 			s.rowChan.Push(events...)
 		}

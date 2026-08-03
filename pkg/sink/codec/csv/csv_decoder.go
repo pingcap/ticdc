@@ -31,8 +31,8 @@ import (
 	"github.com/pingcap/tidb/pkg/lightning/mydump"
 	"github.com/pingcap/tidb/pkg/lightning/worker"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -168,7 +168,7 @@ func filterSelectedIndices(
 			}
 			selectedIndexColumn := indexColumn.Clone()
 			selectedIndexColumn.Offset = selectedOffset
-			selectedIndexColumn.Name = ast.NewCIStr(columns[indexColumn.Offset].Name.O)
+			selectedIndexColumn.Name = parser_model.NewCIStr(columns[indexColumn.Offset].Name.O)
 			selectedIndex.Columns = append(selectedIndex.Columns, selectedIndexColumn)
 		}
 		if allIndexColumnsSelected {

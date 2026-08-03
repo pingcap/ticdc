@@ -20,13 +20,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
-<<<<<<< HEAD
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
-=======
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
->>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 	"github.com/stretchr/testify/require"
 )
 
@@ -205,17 +201,17 @@ func TestVerifyTablesRequiresFullUniqueKey(t *testing.T) {
 	require.NoError(t, err)
 
 	tableInfo := commonType.WrapTableInfo("test", &model.TableInfo{
-		Name: ast.NewCIStr("t"),
+		Name: parser_model.NewCIStr("t"),
 		Columns: []*model.ColumnInfo{
 			newColumnInfoForSelectorTest(1, "a", mysql.NotNullFlag),
 			newColumnInfoForSelectorTest(2, "b", mysql.NotNullFlag),
 		},
 		Indices: []*model.IndexInfo{
 			{
-				Name: ast.NewCIStr("uk_ab"),
+				Name: parser_model.NewCIStr("uk_ab"),
 				Columns: []*model.IndexColumn{
-					{Name: ast.NewCIStr("a"), Offset: 0},
-					{Name: ast.NewCIStr("b"), Offset: 1},
+					{Name: parser_model.NewCIStr("a"), Offset: 0},
+					{Name: parser_model.NewCIStr("b"), Offset: 1},
 				},
 				Unique: true,
 				State:  model.StatePublic,
@@ -238,7 +234,7 @@ func newColumnInfoForSelectorTest(id int64, name string, flag uint) *model.Colum
 	ft.AddFlag(flag)
 	return &model.ColumnInfo{
 		ID:        id,
-		Name:      ast.NewCIStr(name),
+		Name:      parser_model.NewCIStr(name),
 		FieldType: *ft,
 		State:     model.StatePublic,
 	}
