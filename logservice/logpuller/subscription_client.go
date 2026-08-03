@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -25,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/txnutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -80,7 +82,8 @@ type resolveLockTask struct {
 type rangeTask struct {
 	span           heartbeatpb.TableSpan
 	subscribedSpan *subscribedSpan
-	wasInitialized bool
+	filterLoop     bool
+	priority       cdcpb.ScanPriority
 }
 
 // upstreamHandle contains the stable TiKV and PD dependencies shared by the
@@ -170,7 +173,7 @@ func NewSubscriptionClient(
 		subClient.scheduleRegionRequest,
 		subClient.scheduleRangeRequest,
 	)
-	subClient.eventSink = newRegionEventSink(subClient.ctx, subClient.failureHandler)
+	subClient.eventSink = newRegionEventSink(subClient.failureHandler)
 	subClient.spanRegistry = newSpanRegistry(subClient.upstream.pd, subClient.upstream.pdClock)
 	subClient.regionScheduler = newRegionRequestScheduler(
 		subClient.upstream,
@@ -234,6 +237,8 @@ func (s *subscriptionClient) Subscribe(
 		advanceResolvedTs,
 		advanceInterval,
 		bdrMode,
+		s.upstream.pdClock,
+		time.Duration(config.GetGlobalServerConfig().Debug.Puller.OldStartTsScanLowPriorityThreshold),
 	)
 	s.spanRegistry.Add(rt)
 	s.eventSink.AddPath(rt)
@@ -241,7 +246,12 @@ func (s *subscriptionClient) Subscribe(
 	select {
 	case <-s.ctx.Done():
 		log.Warn("subscribes span failed, the subscription client has closed")
-	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt}:
+	case s.rangeTaskCh <- rangeTask{
+		span:           span,
+		subscribedSpan: rt,
+		filterLoop:     rt.filterLoop,
+		priority:       cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+	}:
 		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
 			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
@@ -407,8 +417,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			}
 
 			verID := tikv.NewRegionVerID(regionMeta.Id, regionMeta.RegionEpoch.ConfVer, regionMeta.RegionEpoch.Version)
-			regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan)
-			regionInfo.wasInitialized = task.wasInitialized
+			regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan, task.filterLoop)
+			regionInfo.scanPriority = normalizeScanPriority(task.priority)
 
 			// Schedule a region request to subscribe the region.
 			s.scheduleRegionRequest(ctx, regionInfo)
@@ -426,9 +436,6 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 // scheduleRegionRequest locks the region's range before submitting it to the
 // request scheduler.
 func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region regionInfo) {
-	if region.lockedRangeState != nil && region.lockedRangeState.Initialized.Load() {
-		region.wasInitialized = true
-	}
 	lockRangeResult := region.subscribedSpan.rangeLock.LockRange(
 		ctx, region.span.StartKey, region.span.EndKey, region.verID.GetID(), region.verID.GetVer())
 
@@ -439,13 +446,19 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 	switch lockRangeResult.Status {
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
+		region.scanPriority = region.subscribedSpan.priorityPolicy.resolve(
+			region.scanPriority,
+			region.resolvedTs(),
+			s.upstream.pdClock.CurrentTime(),
+		)
 		s.regionScheduler.Submit(region)
 	case regionlock.LockRangeStatusStale:
 		for _, r := range lockRangeResult.RetryRanges {
 			s.scheduleRangeRequest(ctx, rangeTask{
 				span:           r,
 				subscribedSpan: region.subscribedSpan,
-				wasInitialized: region.wasInitialized,
+				filterLoop:     region.filterLoop,
+				priority:       region.scanPriority,
 			})
 		}
 	default:

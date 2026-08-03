@@ -461,7 +461,7 @@ func TestFailPendingRegionsReschedulesWorkerBuffer(t *testing.T) {
 		},
 	}
 	for i, region := range regions {
-		require.True(t, admission.submit(newRegionPriorityTask(region, 1, uint64(i+1))))
+		require.True(t, admission.submit(newRegionPriorityTask(region, uint64(i+1))))
 	}
 
 	worker.failPendingRegions(&storeStreamErr{})

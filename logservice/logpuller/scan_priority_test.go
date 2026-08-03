@@ -106,8 +106,10 @@ func TestScanPriorityUsesRestoredRegionProgress(t *testing.T) {
 	pdClock := pdutil.NewClock4Test()
 	pdClock.(*pdutil.Clock4Test).SetTS(currentTs)
 	client := &subscriptionClient{
-		pdClock:         pdClock,
-		regionTaskQueue: priorityqueue.New[*regionPriorityTask](),
+		upstream: &upstreamHandle{pdClock: pdClock},
+		regionScheduler: &regionRequestScheduler{
+			taskQueue: priorityqueue.New[*regionPriorityTask](),
+		},
 	}
 
 	startTs := oracle.GoTimeToTS(currentTime.Add(-time.Hour))
@@ -125,8 +127,8 @@ func TestScanPriorityUsesRestoredRegionProgress(t *testing.T) {
 	}
 	region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), rawSpan, nil, span, false)
 
-	client.scheduleRegionRequest(context.Background(), region, cdcpb.ScanPriority_SCAN_PRIORITY_LOW)
-	firstTask := popRegionPriorityTask(t, client.regionTaskQueue)
+	client.scheduleRegionRequest(context.Background(), region)
+	firstTask := popRegionPriorityTask(t, client.regionScheduler.taskQueue)
 	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_LOW, firstTask.priority())
 
 	firstRegion := firstTask.regionInfo
@@ -139,8 +141,8 @@ func TestScanPriorityUsesRestoredRegionProgress(t *testing.T) {
 	)
 
 	retryRegion := newRegionInfo(tikv.NewRegionVerID(1, 1, 2), rawSpan, nil, span, false)
-	client.scheduleRegionRequest(context.Background(), retryRegion, cdcpb.ScanPriority_SCAN_PRIORITY_LOW)
-	retryTask := popRegionPriorityTask(t, client.regionTaskQueue)
+	client.scheduleRegionRequest(context.Background(), retryRegion)
+	retryTask := popRegionPriorityTask(t, client.regionScheduler.taskQueue)
 	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH, retryTask.priority())
 	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH, retryTask.regionInfo.scanPriority)
 	require.False(t, span.priorityPolicy.everCaughtUp.Load())

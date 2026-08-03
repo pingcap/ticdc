@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -65,10 +66,19 @@ func newRegionFailureHandler(
 }
 
 func (r *regionFailureHandler) retryRange(ctx context.Context, errInfo regionErrorInfo) {
+	priority := normalizeScanPriority(errInfo.scanPriority)
+	if priority == cdcpb.ScanPriority_SCAN_PRIORITY_LOW {
+		priority = errInfo.subscribedSpan.priorityPolicy.resolve(
+			priority,
+			errInfo.resolvedTs(),
+			errInfo.subscribedSpan.priorityPolicy.pdClock.CurrentTime(),
+		)
+	}
 	r.scheduleRangeRequest(ctx, rangeTask{
 		span:           errInfo.span,
 		subscribedSpan: errInfo.subscribedSpan,
-		wasInitialized: errInfo.wasInitialized,
+		filterLoop:     errInfo.filterLoop,
+		priority:       priority,
 	})
 }
 
