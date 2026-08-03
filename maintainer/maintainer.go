@@ -72,6 +72,7 @@ type Maintainer struct {
 	pdClock            pdutil.Clock
 	eventCh            *chann.DrainableChann[*Event]
 	checkpointUpdateCh chan struct{}
+	managerHeartbeatCh chan<- struct{}
 	// blockStatusPending keeps the dedupe window local to the maintainer event
 	// queue so duplicate block-status resends do not pile up while an earlier
 	// equivalent event is still pending or being handled.
@@ -436,7 +437,7 @@ func clampIntToUint32(v int) uint32 {
 // and marks its status dirty so coordinator observes the new epoch promptly.
 func (m *Maintainer) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
 	m.controller.SetDispatcherDrainTarget(target, epoch)
-	m.statusChanged.Store(true)
+	m.markStatusChanged()
 }
 
 func (m *Maintainer) initialize() error {
@@ -470,7 +471,7 @@ func (m *Maintainer) initialize() error {
 		zap.String("status", common.FormatMaintainerStatus(m.GetMaintainerStatus())),
 		zap.String("info", m.info.String()),
 		zap.Duration("duration", time.Since(start)))
-	m.statusChanged.Store(true)
+	m.markStatusChanged()
 	return nil
 }
 
@@ -724,8 +725,8 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 		if canUpdate {
 			m.controller.spanController.AdvanceMaintainerCommittedCheckpointTs(newWatermark.CheckpointTs)
 			watermarkChanged := m.setWatermark(*newWatermark)
-			if watermarkChanged && config.GetGlobalServerConfig().IsLowLatencyMode() && m.statusChanged != nil {
-				m.statusChanged.Store(true)
+			if watermarkChanged && m.isLowLatencyMode() {
+				m.markStatusChanged()
 			}
 			m.updateMetrics()
 		}
@@ -965,11 +966,28 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 }
 
 func (m *Maintainer) notifyCheckpointUpdate() {
-	if !config.GetGlobalServerConfig().IsLowLatencyMode() {
+	if !m.isLowLatencyMode() {
 		return
 	}
 	select {
 	case m.checkpointUpdateCh <- struct{}{}:
+	default:
+	}
+}
+
+func (m *Maintainer) isLowLatencyMode() bool {
+	return m.info != nil && m.info.Config != nil && m.info.Config.IsLowLatencyMode()
+}
+
+func (m *Maintainer) markStatusChanged() {
+	if m.statusChanged != nil {
+		m.statusChanged.Store(true)
+	}
+	if !m.isLowLatencyMode() || m.managerHeartbeatCh == nil {
+		return
+	}
+	select {
+	case m.managerHeartbeatCh <- struct{}{}:
 	default:
 	}
 }
@@ -980,7 +998,7 @@ func (m *Maintainer) onError(from node.ID, err *heartbeatpb.RunningError) {
 		err.Node = info.AdvertiseAddr
 	}
 	m.runningErrors.Lock()
-	m.statusChanged.Store(true)
+	m.markStatusChanged()
 	m.runningErrors.m[from] = err
 	m.runningErrors.Unlock()
 }
@@ -1136,7 +1154,7 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 	// For a normal case(100w tables, and 16 ascii characters for each name), the memory consumption is about 30MB.
 	m.postBootstrapMsg = postBootstrapRequest
 	m.sendPostBootstrapRequest()
-	m.statusChanged.Store(true)
+	m.markStatusChanged()
 }
 
 func (m *Maintainer) sendPostBootstrapRequest() {
@@ -1196,7 +1214,7 @@ func (m *Maintainer) handleResendMessage() {
 
 func (m *Maintainer) tryCloseChangefeed() bool {
 	if m.scheduleState.Load() != int32(heartbeatpb.ComponentState_Stopped) {
-		m.statusChanged.Store(true)
+		m.markStatusChanged()
 	}
 	if !m.cascadeRemoving.Load() {
 		m.controller.operatorController.RemoveTasksByTableIDs(m.ddlSpan.Span.TableID)
@@ -1256,7 +1274,7 @@ func (m *Maintainer) handleError(err error) {
 		Code:    code,
 		Message: err.Error(),
 	}
-	m.statusChanged.Store(true)
+	m.markStatusChanged()
 }
 
 // createBootstrapMessageFactory returns a function that generates bootstrap messages

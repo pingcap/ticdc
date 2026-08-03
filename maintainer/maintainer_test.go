@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -739,37 +740,34 @@ func TestMaintainerCalCheckpointTsSkipsInvalidGlobalCheckpoint(t *testing.T) {
 }
 
 func TestMaintainerCheckpointUpdateNotification(t *testing.T) {
-	original := config.GetGlobalServerConfig()
-	t.Cleanup(func() {
-		config.StoreGlobalServerConfig(original)
-	})
-
-	m := &Maintainer{checkpointUpdateCh: make(chan struct{}, 1)}
-	cfg := original.Clone()
-	config.StoreGlobalServerConfig(cfg)
+	m := &Maintainer{
+		checkpointUpdateCh: make(chan struct{}, 1),
+		info:               &config.ChangeFeedInfo{Config: config.GetDefaultReplicaConfig()},
+	}
 	m.notifyCheckpointUpdate()
 	require.Empty(t, m.checkpointUpdateCh)
 
-	cfg.PerformanceMode = config.PerformanceModeLowLatency
-	config.StoreGlobalServerConfig(cfg)
+	m.info.Config.PerformanceMode = util.AddressOf(config.PerformanceModeLowLatency)
 	m.notifyCheckpointUpdate()
 	m.notifyCheckpointUpdate()
 	require.Len(t, m.checkpointUpdateCh, 1)
 }
 
-func TestManagerHeartbeatInterval(t *testing.T) {
-	original := config.GetGlobalServerConfig()
-	t.Cleanup(func() {
-		config.StoreGlobalServerConfig(original)
-	})
+func TestMaintainerStatusChangedNotification(t *testing.T) {
+	heartbeatCh := make(chan struct{}, 1)
+	m := &Maintainer{
+		statusChanged:      atomic.NewBool(false),
+		managerHeartbeatCh: heartbeatCh,
+		info:               &config.ChangeFeedInfo{Config: config.GetDefaultReplicaConfig()},
+	}
+	m.markStatusChanged()
+	require.True(t, m.statusChanged.Load())
+	require.Empty(t, heartbeatCh)
 
-	cfg := original.Clone()
-	config.StoreGlobalServerConfig(cfg)
-	require.Equal(t, defaultManagerHeartbeatInterval, managerHeartbeatInterval())
-
-	cfg.PerformanceMode = config.PerformanceModeLowLatency
-	config.StoreGlobalServerConfig(cfg)
-	require.Equal(t, lowLatencyManagerHeartbeatInterval, managerHeartbeatInterval())
+	m.info.Config.PerformanceMode = util.AddressOf(config.PerformanceModeLowLatency)
+	m.markStatusChanged()
+	m.markStatusChanged()
+	require.Len(t, heartbeatCh, 1)
 }
 
 func TestMaintainerSetWatermarkReportsChanges(t *testing.T) {

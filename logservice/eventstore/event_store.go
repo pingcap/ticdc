@@ -87,6 +87,7 @@ type EventStore interface {
 		notifier ResolvedTsNotifier,
 		onlyReuse bool,
 		bdrMode bool,
+		lowLatencyMode bool,
 	) bool
 
 	UnregisterDispatcher(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID)
@@ -166,7 +167,8 @@ type subscribersWithIdleTime struct {
 }
 
 type subscriptionStat struct {
-	subID logpuller.SubscriptionID
+	subID          logpuller.SubscriptionID
+	lowLatencyMode bool
 	// data span of the subscription, it can support dispatchers with smaller span
 	tableSpan   *heartbeatpb.TableSpan
 	subscribers atomic.Pointer[subscribersWithIdleTime]
@@ -475,6 +477,7 @@ func (e *eventStore) RegisterDispatcher(
 	notifier ResolvedTsNotifier,
 	onlyReuse bool,
 	bdrMode bool,
+	lowLatencyMode bool,
 ) (success bool) {
 	if e.closed.Load() {
 		return false
@@ -536,6 +539,9 @@ func (e *eventStore) RegisterDispatcher(
 		var bestMatch *subscriptionStat
 		if subStats, ok := e.dispatcherMeta.tableStats[dispatcherSpan.TableID]; ok {
 			for _, subStat := range subStats {
+				if subStat.lowLatencyMode != lowLatencyMode {
+					continue
+				}
 				// Check if this subStat's span contains the dispatcherSpan
 				if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) <= 0 &&
 					bytes.Compare(subStat.tableSpan.EndKey, dispatcherSpan.EndKey) >= 0 {
@@ -608,10 +614,11 @@ func (e *eventStore) RegisterDispatcher(
 	// cannot find an existing subscription with the same span, create a new subscription
 	chIndex := common.HashTableSpan(dispatcherSpan, len(e.chs))
 	subStat := &subscriptionStat{
-		subID:     e.subClient.AllocSubscriptionID(),
-		tableSpan: dispatcherSpan,
-		dbIndex:   chIndex,
-		eventCh:   e.chs[chIndex],
+		subID:          e.subClient.AllocSubscriptionID(),
+		lowLatencyMode: lowLatencyMode,
+		tableSpan:      dispatcherSpan,
+		dbIndex:        chIndex,
+		eventCh:        e.chs[chIndex],
 	}
 	subStat.subscribers.Store(&subscribersWithIdleTime{
 		subscribers: map[common.DispatcherID]*Subscriber{dispatcherID: {notifyFunc: wrappedNotifier}},
@@ -685,7 +692,7 @@ func (e *eventStore) RegisterDispatcher(
 
 	serverConfig := config.GetGlobalServerConfig()
 	resolvedTsAdvanceInterval := int64(serverConfig.KVClient.AdvanceIntervalInMs)
-	if serverConfig.IsLowLatencyMode() {
+	if lowLatencyMode {
 		resolvedTsAdvanceInterval = 0
 	}
 	// Note: don't hold any lock when call Subscribe

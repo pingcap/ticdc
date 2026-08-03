@@ -29,8 +29,7 @@ import (
 )
 
 const (
-	defaultManagerHeartbeatInterval    = 200 * time.Millisecond
-	lowLatencyManagerHeartbeatInterval = 50 * time.Millisecond
+	defaultManagerHeartbeatInterval = 200 * time.Millisecond
 )
 
 // Manager is the manager of all changefeed maintainer in a ticdc server, each ticdc server will
@@ -48,6 +47,8 @@ type Manager struct {
 
 	// msgCh is used to cache messages from coordinator.
 	msgCh chan *messaging.TargetMessage
+	// heartbeatCh coalesces prompt reports from low-latency maintainers.
+	heartbeatCh chan struct{}
 	// node holds node-scoped liveness and drain state that applies to the whole capture.
 	node *managerNodeState
 	// maintainers holds changefeed-scoped state and lifecycle operations.
@@ -65,12 +66,14 @@ func NewMaintainerManager(
 	nodeLiveness *liveness.Liveness,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	heartbeatCh := make(chan struct{}, 1)
 	m := &Manager{
 		mc:          mc,
 		nodeInfo:    nodeInfo,
 		msgCh:       make(chan *messaging.TargetMessage, 1024),
+		heartbeatCh: heartbeatCh,
 		node:        newManagerNodeState(nodeLiveness),
-		maintainers: newManagerMaintainerSet(conf, nodeInfo),
+		maintainers: newManagerMaintainerSet(conf, nodeInfo, heartbeatCh),
 	}
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
@@ -130,7 +133,7 @@ func (m *Manager) Name() string {
 }
 
 func (m *Manager) Run(ctx context.Context) error {
-	ticker := time.NewTicker(managerHeartbeatInterval())
+	ticker := time.NewTicker(defaultManagerHeartbeatInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -138,19 +141,14 @@ func (m *Manager) Run(ctx context.Context) error {
 			return ctx.Err()
 		case msg := <-m.msgCh:
 			m.handleMessage(msg)
+		case <-m.heartbeatCh:
+			m.sendHeartbeat()
 		case <-ticker.C:
 			m.sendNodeHeartbeat(false)
 			m.sendHeartbeat()
 			m.cleanupRemovedMaintainers()
 		}
 	}
-}
-
-func managerHeartbeatInterval() time.Duration {
-	if config.GetGlobalServerConfig().IsLowLatencyMode() {
-		return lowLatencyManagerHeartbeatInterval
-	}
-	return defaultManagerHeartbeatInterval
 }
 
 func (m *Manager) newCoordinatorTopicMessage(msg messaging.IOTypeT) *messaging.TargetMessage {

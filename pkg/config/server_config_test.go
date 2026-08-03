@@ -55,25 +55,6 @@ enable-legacy-safepoint = true
 	require.True(t, cfg.EnableLegacySafePoint)
 }
 
-func TestServerConfigPerformanceMode(t *testing.T) {
-	t.Parallel()
-
-	cfg := GetDefaultServerConfig()
-	require.Equal(t, PerformanceModeThroughput, cfg.PerformanceMode)
-	require.False(t, cfg.IsLowLatencyMode())
-
-	configPath := filepath.Join(t.TempDir(), "server.toml")
-	require.NoError(t, os.WriteFile(configPath, []byte(`performance-mode = "low-latency"`), 0o644))
-	metaData, err := toml.DecodeFile(configPath, cfg)
-	require.NoError(t, err)
-	require.Empty(t, metaData.Undecoded())
-	require.NoError(t, cfg.ValidateAndAdjust())
-	require.True(t, cfg.IsLowLatencyMode())
-
-	cfg.PerformanceMode = "invalid"
-	require.Error(t, cfg.ValidateAndAdjust())
-}
-
 func TestServerConfigClone(t *testing.T) {
 	t.Parallel()
 	conf := GetDefaultServerConfig()

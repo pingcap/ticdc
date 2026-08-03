@@ -21,18 +21,11 @@ import (
 )
 
 func TestHeartbeatIntervalsByPerformanceMode(t *testing.T) {
-	original := config.GetGlobalServerConfig()
-	t.Cleanup(func() {
-		config.StoreGlobalServerConfig(original)
-	})
+	manager := &DispatcherManager{config: &config.ChangefeedConfig{}}
+	require.Equal(t, defaultHeartbeatInterval, heartbeatInterval(manager))
+	require.Equal(t, defaultHeartbeatInitialDelay, heartbeatInitialDelay(manager))
 
-	cfg := original.Clone()
-	config.StoreGlobalServerConfig(cfg)
-	require.Equal(t, defaultHeartbeatInterval, heartbeatInterval())
-	require.Equal(t, defaultHeartbeatInitialDelay, heartbeatInitialDelay())
-
-	cfg.PerformanceMode = config.PerformanceModeLowLatency
-	config.StoreGlobalServerConfig(cfg)
-	require.Equal(t, lowLatencyHeartbeatInterval, heartbeatInterval())
-	require.Zero(t, heartbeatInitialDelay())
+	manager.config.PerformanceMode = config.PerformanceModeLowLatency
+	require.Equal(t, lowLatencyHeartbeatInterval, heartbeatInterval(manager))
+	require.Zero(t, heartbeatInitialDelay(manager))
 }

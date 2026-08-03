@@ -533,8 +533,9 @@ func (c *resolvedTsCache) reset() {
 }
 
 type changefeedStatus struct {
-	changefeedID common.ChangeFeedID
-	filter       filter.Filter
+	changefeedID   common.ChangeFeedID
+	lowLatencyMode bool
+	filter         filter.Filter
 
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 

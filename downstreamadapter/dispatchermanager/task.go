@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"go.uber.org/zap"
 )
@@ -49,7 +48,7 @@ func newHeartBeatTask(manager *DispatcherManager) *HeartBeatTask {
 		manager:    manager,
 		statusTick: 0,
 	}
-	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(heartbeatInitialDelay()))
+	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(heartbeatInitialDelay(manager)))
 	return t
 }
 
@@ -57,7 +56,7 @@ func (t *HeartBeatTask) Execute() time.Time {
 	if t.manager.closed.Load() {
 		return time.Time{}
 	}
-	executeInterval := heartbeatInterval()
+	executeInterval := heartbeatInterval(t.manager)
 	completeStatusInterval := int(time.Second * 10 / executeInterval)
 	t.statusTick++
 	needCompleteStatus := (t.statusTick)%completeStatusInterval == 0
@@ -66,15 +65,15 @@ func (t *HeartBeatTask) Execute() time.Time {
 	return time.Now().Add(executeInterval)
 }
 
-func heartbeatInterval() time.Duration {
-	if config.GetGlobalServerConfig().IsLowLatencyMode() {
+func heartbeatInterval(manager *DispatcherManager) time.Duration {
+	if manager.config.IsLowLatencyMode() {
 		return lowLatencyHeartbeatInterval
 	}
 	return defaultHeartbeatInterval
 }
 
-func heartbeatInitialDelay() time.Duration {
-	if config.GetGlobalServerConfig().IsLowLatencyMode() {
+func heartbeatInitialDelay(manager *DispatcherManager) time.Duration {
+	if manager.config.IsLowLatencyMode() {
 		return 0
 	}
 	return defaultHeartbeatInitialDelay

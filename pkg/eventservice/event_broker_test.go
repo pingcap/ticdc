@@ -94,6 +94,41 @@ func TestScanRequestCoalescing(t *testing.T) {
 	require.Equal(t, event.TypeReadyEvent, e.msgType)
 }
 
+type scanLifecycleTrackingContext struct {
+	context.Context
+	doneCalls atomic.Int64
+}
+
+func (c *scanLifecycleTrackingContext) Done() <-chan struct{} {
+	c.doneCalls.Inc()
+	return c.Context.Done()
+}
+
+func TestNoScanTaskDoesNotCreateActiveScanLifecycle(t *testing.T) {
+	broker, _, schemaStore, _ := newEventBrokerForTest()
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.startTs = 100
+	status := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	disp.setHandshaked()
+	disp.receivedResolvedTs.Store(200)
+	disp.eventStoreCommitTs.Store(0)
+	schemaStore.resolvedTs = 200
+	schemaStore.maxDDLCommitTs = 0
+
+	broker.requestScan(disp)
+	task := <-broker.taskChan[disp.scanWorkerIndex]
+	ctx := &scanLifecycleTrackingContext{Context: context.Background()}
+	broker.doScan(ctx, task)
+
+	require.Zero(t, ctx.doneCalls.Load())
+	require.Equal(t, uint64(200), disp.sentResolvedTs.Load())
+	require.False(t, disp.isScanBusy())
+}
+
 func TestGetOrSetChangefeedStatusInitializesFilter(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
@@ -157,10 +192,10 @@ func TestOnNotify(t *testing.T) {
 func TestNotifyFastPathSerializesRunningNotification(t *testing.T) {
 	broker, _, schemaStore, _ := newEventBrokerForTest()
 	broker.close()
-	broker.lowLatencyMode = true
 	schemaStore.maxDDLCommitTs = 0
 
 	info := newMockDispatcherInfoForTest(t)
+	info.lowLatencyMode = true
 	info.epoch = 1
 	info.startTs = 100
 	status := broker.getOrSetChangefeedStatus(info)
@@ -249,9 +284,9 @@ func TestNotifyFastPathPreservesSyncPointOrder(t *testing.T) {
 func TestLowLatencyScanRequestWhileRunningSchedulesContinuation(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()
-	broker.lowLatencyMode = true
 
 	info := newMockDispatcherInfoForTest(t)
+	info.lowLatencyMode = true
 	info.epoch = 1
 	info.startTs = 100
 	status := broker.getOrSetChangefeedStatus(info)
@@ -282,7 +317,6 @@ func TestLowLatencyScanRequestWhileRunningSchedulesContinuation(t *testing.T) {
 func TestThroughputModeDoesNotContinueScanRequestWhileRunning(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()
-	broker.lowLatencyMode = false
 
 	info := newMockDispatcherInfoForTest(t)
 	info.startTs = 100
@@ -308,12 +342,12 @@ func TestThroughputModeDoesNotContinueScanRequestWhileRunning(t *testing.T) {
 func TestLowLatencyScanContinuationQueueFullRecoversOnNextNotify(t *testing.T) {
 	broker, _, schemaStore, _ := newEventBrokerForTest()
 	broker.close()
-	broker.lowLatencyMode = true
 	schemaStore.maxDDLCommitTs = 0
 
 	queue := make(chan scanTask, 1)
 	broker.taskChan[0] = queue
 	info := newMockDispatcherInfoForTest(t)
+	info.lowLatencyMode = true
 	info.epoch = 1
 	info.startTs = 100
 	status := broker.getOrSetChangefeedStatus(info)
@@ -343,9 +377,9 @@ func TestLowLatencyScanContinuationQueueFullRecoversOnNextNotify(t *testing.T) {
 func TestRunningNotifyParksAtSchemaBlock(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()
-	broker.lowLatencyMode = true
 
 	info := newMockDispatcherInfoForTest(t)
+	info.lowLatencyMode = true
 	status := broker.getOrSetChangefeedStatus(info)
 	disp := newDispatcherStat(info, 1, 1, nil, status)
 	disp.scanState = dispatcherScanRunning
@@ -380,13 +414,13 @@ func TestNotifyQueueFullWaitsForCapacity(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			broker, _, _, _ := newEventBrokerForTest()
 			broker.close()
-			broker.lowLatencyMode = testCase.lowLatencyMode
 
 			queue := make(chan scanTask, 1)
 			broker.taskChan[0] = queue
 			queue <- nil
 
 			info := newMockDispatcherInfoForTest(t)
+			info.lowLatencyMode = testCase.lowLatencyMode
 			info.epoch = 1
 			info.startTs = 100
 			status := broker.getOrSetChangefeedStatus(info)
@@ -469,9 +503,9 @@ func TestInterruptedScanQueueFullRecoversOnNextNotify(t *testing.T) {
 func TestLowLatencySchemaBlockedQueueFullRetriesWithoutNotify(t *testing.T) {
 	broker, _, schemaStore, _ := newEventBrokerForTest()
 	broker.close()
-	broker.lowLatencyMode = true
 
 	info := newMockDispatcherInfoForTest(t)
+	info.lowLatencyMode = true
 	info.epoch = 1
 	info.startTs = 100
 	status := broker.getOrSetChangefeedStatus(info)
@@ -539,7 +573,6 @@ func TestLowLatencySchemaBlockedQueueFullRetriesWithoutNotify(t *testing.T) {
 func TestThroughputModeDoesNotParkSchemaBlockedDispatcher(t *testing.T) {
 	broker, _, schemaStore, _ := newEventBrokerForTest()
 	broker.close()
-	broker.lowLatencyMode = false
 
 	info := newMockDispatcherInfoForTest(t)
 	info.epoch = 1
@@ -571,11 +604,11 @@ func TestResetSchemaBlockedDispatcherRemovesOldEpoch(t *testing.T) {
 	broker, _, schemaStore, _ := newEventBrokerForTest()
 
 	info := newMockDispatcherInfoForTest(t)
+	info.lowLatencyMode = true
 	info.epoch = 1
 	info.startTs = 100
 	require.NoError(t, broker.addDispatcher(info))
 	broker.close()
-	broker.lowLatencyMode = true
 
 	dispPtr := broker.getDispatcher(info.GetID())
 	require.NotNil(t, dispPtr)
@@ -599,6 +632,7 @@ func TestResetSchemaBlockedDispatcherRemovesOldEpoch(t *testing.T) {
 	require.True(t, ok)
 
 	resetInfo := newMockDispatcherInfo(t, 100, info.GetID(), info.GetTableSpan().TableID, eventpb.ActionType_ACTION_TYPE_RESET)
+	resetInfo.lowLatencyMode = true
 	resetInfo.epoch = 2
 	require.NoError(t, broker.resetDispatcher(resetInfo))
 	newStat := dispPtr.Load()

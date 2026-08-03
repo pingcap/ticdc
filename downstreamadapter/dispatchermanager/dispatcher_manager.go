@@ -332,6 +332,7 @@ func NewDispatcherManager(
 	// Create shared info for all dispatchers
 	sharedInfo := dispatcher.NewSharedInfo(
 		manager.changefeedID,
+		manager.config.IsLowLatencyMode(),
 		manager.config.TimeZone,
 		manager.config.BDRMode,
 		manager.config.EnableActiveActive,

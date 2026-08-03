@@ -108,8 +108,10 @@ type eventBroker struct {
 	scanRateLimiter  *rate.Limiter
 	scanLimitInBytes uint64
 
-	lowLatencyMode          bool
 	schemaBlockedByKeyspace sync.Map // common.KeyspaceMeta -> *schemaBlockedDispatcherBucket
+	// schemaBlockedRetryCh enables the retry ticker lazily. A throughput-only
+	// broker should not pay for the low-latency retry loop.
+	schemaBlockedRetryCh chan struct{}
 }
 
 func newEventBroker(
@@ -158,7 +160,7 @@ func newEventBroker(
 		g:                       g,
 		scanRateLimiter:         rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
 		scanLimitInBytes:        uint64(scanLimitInBytes),
-		lowLatencyMode:          config.GetGlobalServerConfig().IsLowLatencyMode(),
+		schemaBlockedRetryCh:    make(chan struct{}, 1),
 	}
 
 	// Initialize metrics collector
@@ -203,11 +205,9 @@ func newEventBroker(
 		return c.refreshMinSentResolvedTs(ctx)
 	})
 
-	if c.lowLatencyMode {
-		g.Go(func() error {
-			return c.runScanSchemaBlockedDispatchers(ctx)
-		})
-	}
+	g.Go(func() error {
+		return c.runScanSchemaBlockedDispatchers(ctx)
+	})
 
 	g.Go(func() error {
 		return c.runLargeTxnCleanupWorker(ctx, defaultLargeTxnCleanupRetryInterval)
@@ -536,7 +536,7 @@ func (c *eventBroker) getScanTaskRequestResult(task scanTask) scanTaskRequestRes
 			(hasRowResume || request.Cursor.TxnStartTs != 0)
 		if canResumeAtStart || task.hasPendingLargeTxnState() {
 			result := scanTaskRequestResult{needScan: true, request: request}
-			if c.lowLatencyMode {
+			if task.changefeedStat.lowLatencyMode {
 				result.schemaBlocked = ddlState.ResolvedTs < receivedResolvedTs &&
 					dataRange.CommitTsEnd == ddlState.ResolvedTs
 				result.schemaBlockedUntilTs = ddlState.ResolvedTs
@@ -549,7 +549,7 @@ func (c *eventBroker) getScanTaskRequestResult(task scanTask) scanTaskRequestRes
 		// but do not advance the watermark here.
 		c.sendSignalResolvedTs(task)
 		result := scanTaskRequestResult{}
-		if c.lowLatencyMode && ddlState.ResolvedTs <= dataRange.CommitTsStart && ddlState.ResolvedTs < receivedResolvedTs {
+		if task.changefeedStat.lowLatencyMode && ddlState.ResolvedTs <= dataRange.CommitTsStart && ddlState.ResolvedTs < receivedResolvedTs {
 			result.schemaBlocked = true
 			result.schemaBlockedUntilTs = dataRange.CommitTsStart
 		}
@@ -557,7 +557,7 @@ func (c *eventBroker) getScanTaskRequestResult(task scanTask) scanTaskRequestRes
 	}
 
 	result := scanTaskRequestResult{}
-	if c.lowLatencyMode {
+	if task.changefeedStat.lowLatencyMode {
 		result.schemaBlocked = ddlState.ResolvedTs < receivedResolvedTs && dataRange.CommitTsEnd == ddlState.ResolvedTs
 		result.schemaBlockedUntilTs = ddlState.ResolvedTs
 	}
@@ -680,8 +680,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	defer func() {
 		c.finishScan(task, interrupted, schemaBlocked, schemaBlockedUntilTs)
 	}()
-	scanCtx, finishActiveScan := task.beginActiveScan(ctx)
-	defer finishActiveScan()
 
 	var (
 		remoteID     = node.ID(task.info.GetServerID())
@@ -771,6 +769,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
+	scanCtx, finishActiveScan := task.beginActiveScan(ctx)
+	defer finishActiveScan()
 	scannedBytes, events, progress, interrupted, err := scanner.scan(scanCtx, task, request, sl)
 	if interrupted {
 		metrics.EventServiceInterruptScanCount.Inc()
@@ -1059,7 +1059,7 @@ func (c *eventBroker) requestScanFromNotify(d *dispatcherStat) {
 		c.prepareScanFromNotify(d)
 		return
 	}
-	if c.lowLatencyMode && d.scanState == dispatcherScanRunning {
+	if d.changefeedStat.lowLatencyMode && d.scanState == dispatcherScanRunning {
 		d.scanState = dispatcherScanRunningPending
 	}
 	d.scanMu.Unlock()
@@ -1122,7 +1122,7 @@ func (c *eventBroker) requestScan(d *dispatcherStat) {
 	}
 	if d.scanState == dispatcherScanIdle {
 		c.tryEnqueueScanLocked(d, dispatcherScanIdle)
-	} else if c.lowLatencyMode && d.scanState == dispatcherScanRunning {
+	} else if d.changefeedStat.lowLatencyMode && d.scanState == dispatcherScanRunning {
 		d.scanState = dispatcherScanRunningPending
 	}
 }
@@ -1161,7 +1161,7 @@ func (c *eventBroker) finishScan(
 		c.tryEnqueueScanLocked(d, dispatcherScanIdle)
 		return
 	}
-	if c.lowLatencyMode && schemaBlocked {
+	if d.changefeedStat.lowLatencyMode && schemaBlocked {
 		d.scanState = dispatcherScanSchemaBlocked
 		d.schemaBlockedUntilTs = schemaBlockedUntilTs
 		bucket := c.getSchemaBlockedDispatcherBucket(d)
@@ -1199,6 +1199,12 @@ func (c *eventBroker) removeSchemaBlockedDispatcher(d *dispatcherStat) {
 }
 
 func (c *eventBroker) runScanSchemaBlockedDispatchers(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-c.schemaBlockedRetryCh:
+	}
+
 	ticker := time.NewTicker(defaultScanSchemaBlockedInterval)
 	defer ticker.Stop()
 	lastSchemaResolvedTs := make(map[common.KeyspaceMeta]uint64)
@@ -1329,6 +1335,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		},
 		info.IsOnlyReuse(),
 		info.GetBdrMode(),
+		info.IsLowLatencyMode(),
 	)
 
 	if !success {
@@ -1611,10 +1618,17 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 	}
 
 	status := newChangefeedStatus(changefeedID, info.GetSyncPointInterval())
+	status.lowLatencyMode = info.IsLowLatencyMode()
 	status.filter = changefeedFilter
 	actual, loaded := c.changefeedMap.LoadOrStore(changefeedID, status)
 	if loaded {
 		return actual.(*changefeedStatus)
+	}
+	if status.lowLatencyMode {
+		select {
+		case c.schemaBlockedRetryCh <- struct{}{}:
+		default:
+		}
 	}
 	log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
 	if status.scanWindowController != nil {

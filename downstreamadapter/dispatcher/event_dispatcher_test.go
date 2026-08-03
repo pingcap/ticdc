@@ -151,6 +151,7 @@ func newTestSharedInfo(
 ) *SharedInfo {
 	return NewSharedInfo(
 		common.NewChangefeedID(common.DefaultKeyspaceName),
+		false,
 		"system",
 		false,
 		enableActiveActive,
