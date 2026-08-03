@@ -532,7 +532,7 @@ func (w *writer) onDDL(ddl *event.DDLEvent) {
 	}
 	switch w.protocol {
 	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro, config.ProtocolSimple,
-		config.ProtocolDebezium, config.ProtocolDebeziumAvro:
+		config.ProtocolDebezium:
 	default:
 		return
 	}
@@ -687,7 +687,7 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 			zap.Any("protocol", w.protocol))
 	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro,
-		config.ProtocolDebezium, config.ProtocolDebeziumAvro:
+		config.ProtocolDebezium:
 		// for partition table, these protocols cannot assign physical table id to each dml message,
 		// we cannot distinguish whether it's a real fallback event or not, still append it.
 		if w.partitionTableAccessor.IsPartitionTable(schema, table) {

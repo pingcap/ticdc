@@ -338,7 +338,6 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 	for _, protocol := range []config.Protocol{
 		config.ProtocolDebezium,
-		config.ProtocolDebeziumAvro,
 	} {
 		t.Run(protocol.String(), func(t *testing.T) {
 			replicaCfg := config.GetDefaultReplicaConfig()
