@@ -415,18 +415,6 @@ func (s *regionRequestWorker) sendDeregisterRequest(
 	return nil
 }
 
-func (s *regionRequestWorker) sendPendingDeregisterRequests(conn *ConnAndClient) error {
-	for {
-		req, ok := s.controlQueue.tryPop()
-		if !ok {
-			return nil
-		}
-		if err := s.sendDeregisterRequest(conn, req); err != nil {
-			return err
-		}
-	}
-}
-
 func (s *regionRequestWorker) sendRegionRequest(conn *ConnAndClient, req *regionReq) error {
 	if !req.isActive() {
 		return nil
@@ -461,7 +449,7 @@ func (s *regionRequestWorker) sendRegionRequest(conn *ConnAndClient, req *region
 			zap.Uint64("regionID", region.verID.GetID()))
 		return nil
 	}
-	if err := s.sendChangeDataRequest(conn, s.createRegionRequest(region)); err != nil {
+	if err := s.sendChangeDataRequest(conn, createRegionRequest(s.client.clusterID, region)); err != nil {
 		// Transport failures are always recoverable at the region level. Preserve
 		// the stream error as the function result, but classify the region for
 		// rescheduling instead of exposing an arbitrary gRPC error downstream.
@@ -478,17 +466,27 @@ func (s *regionRequestWorker) processRegionSendTask(
 ) error {
 	regionReq := firstReq
 	for {
+		// Send the current region request before handling anything newly queued.
 		if regionReq != nil {
 			if err := s.sendRegionRequest(conn, regionReq); err != nil {
 				return err
 			}
 			regionReq = nil
-			continue
 		}
-
-		if err := s.sendPendingDeregisterRequests(conn); err != nil {
-			return err
+		// Flush pending deregisters before admitting the next region request.
+		// Admission may still contain stale tasks from a stopped subscription, but
+		// sendRegionRequest re-checks subscription liveness before tracker.Add/Send,
+		// so those tasks are dropped locally instead of recreating remote registrations.
+		for {
+			req, ok := s.controlQueue.tryPop()
+			if !ok {
+				break
+			}
+			if err := s.sendDeregisterRequest(conn, req); err != nil {
+				return err
+			}
 		}
+		// Block for the next request, but wake early when deregisters arrive.
 		var err error
 		regionReq, err = s.admission.pop(ctx, s.controlQueue.ready())
 		if err != nil {
@@ -497,9 +495,9 @@ func (s *regionRequestWorker) processRegionSendTask(
 	}
 }
 
-func (s *regionRequestWorker) createRegionRequest(region regionInfo) *cdcpb.ChangeDataRequest {
+func createRegionRequest(clusterID uint64, region regionInfo) *cdcpb.ChangeDataRequest {
 	return &cdcpb.ChangeDataRequest{
-		Header:       &cdcpb.Header{ClusterId: s.client.clusterID, TicdcVersion: version.ReleaseSemver()},
+		Header:       &cdcpb.Header{ClusterId: clusterID, TicdcVersion: version.ReleaseSemver()},
 		RegionId:     region.verID.GetID(),
 		RequestId:    uint64(region.subscribedSpan.subID),
 		RegionEpoch:  region.rpcCtx.Meta.RegionEpoch,

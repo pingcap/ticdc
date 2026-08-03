@@ -109,7 +109,7 @@ func TestCreateRegionRequestScanPriority(t *testing.T) {
 			region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
 			region.scanPriority = tc.priority
 
-			req := worker.createRegionRequest(region)
+			req := createRegionRequest(worker.client.clusterID, region)
 			require.Equal(t, tc.expected, req.GetScanPriority())
 		})
 	}
