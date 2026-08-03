@@ -124,6 +124,30 @@ func newRegionRequestWorker(
 }
 
 func (s *regionRequestWorker) Run(ctx context.Context) error {
+	handleStreamFailure := func(firstReq *regionReq, regionErr error) {
+		// Stream failure recovery:
+		// - tracker: requests already sent to this stream.
+		// - firstReq: popped from admission for this stream, but not necessarily
+		//   added to tracker yet if the stream fails before sendRegionRequest calls
+		//   tracker.Add.
+		// - admission: requests owned by this worker but not sent yet.
+		for _, state := range s.tracker.Drain() {
+			state.markStopped(regionErr)
+			s.eventSink.Push(
+				SubscriptionID(state.requestID),
+				regionEvent{states: []*regionFeedState{state}},
+			)
+		}
+		// The failed stream no longer owns remote registrations.
+		s.controlQueue.drain()
+		if firstReq != nil && firstReq.abort() {
+			s.failureHandler.Report(newRegionErrorInfo(firstReq.regionInfo, regionErr))
+		}
+		for _, task := range s.admission.drain() {
+			s.failureHandler.Report(newRegionErrorInfo(task.regionInfo, regionErr))
+		}
+	}
+
 	for {
 		// Do not connect an idle worker to an unavailable store indefinitely.
 		firstReq, err := s.waitForRegionRequest(ctx)
@@ -140,38 +164,11 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 		if regionErr == nil {
 			regionErr = &storeStreamErr{}
 		}
-		if err := s.handleStreamFailure(firstReq, regionErr); err != nil {
-			return err
-		}
+		handleStreamFailure(firstReq, regionErr)
 		if err := util.Hang(ctx, storeReconnectBackoff); err != nil {
 			return err
 		}
 	}
-}
-
-func (s *regionRequestWorker) handleStreamFailure(firstReq *regionReq, regionErr error) error {
-	// Stream failure recovery:
-	// - tracker: requests already sent to this stream.
-	// - firstReq: popped from admission for this stream, but not necessarily
-	//   added to tracker yet if the stream fails before sendRegionRequest calls
-	//   tracker.Add.
-	// - admission: requests owned by this worker but not sent yet.
-	for _, state := range s.tracker.Drain() {
-		state.markStopped(regionErr)
-		s.eventSink.Push(
-			SubscriptionID(state.requestID),
-			regionEvent{states: []*regionFeedState{state}},
-		)
-	}
-	// The failed stream no longer owns remote registrations.
-	s.controlQueue.drain()
-	if firstReq != nil && firstReq.abort() {
-		s.failureHandler.Report(newRegionErrorInfo(firstReq.regionInfo, regionErr))
-	}
-	for _, task := range s.admission.drain() {
-		s.failureHandler.Report(newRegionErrorInfo(task.regionInfo, regionErr))
-	}
-	return nil
 }
 
 func (s *regionRequestWorker) waitForRegionRequest(ctx context.Context) (*regionReq, error) {
@@ -288,13 +285,13 @@ func (s *regionRequestWorker) receiveAndDispatchChangeEvents(conn *ConnAndClient
 }
 
 func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) {
-	for _, event := range events {
-		regionID := event.RegionId
-		subscriptionID := SubscriptionID(event.RequestId)
+	for _, cdcEvent := range events {
+		regionID := cdcEvent.RegionId
+		subscriptionID := SubscriptionID(cdcEvent.RequestId)
 		state := s.tracker.Get(subscriptionID, regionID)
 		if state != nil {
-			eventToPush := regionEvent{states: []*regionFeedState{state}}
-			switch eventData := event.Event.(type) {
+			regionEvent := regionEvent{states: []*regionFeedState{state}}
+			switch eventData := cdcEvent.Event.(type) {
 			case *cdcpb.Event_Entries_:
 				if eventData == nil {
 					log.Warn("region request worker receives a region event with nil entries, ignore it",
@@ -303,40 +300,40 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 						zap.Uint64("regionID", regionID))
 					continue
 				}
-				eventToPush.entries = eventData
+				regionEvent.entries = eventData
 			case *cdcpb.Event_Admin_:
 				continue
 			case *cdcpb.Event_Error:
 				log.Debug("region request worker receives a region error",
 					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Uint64("regionID", event.RegionId),
+					zap.Uint64("regionID", cdcEvent.RegionId),
 					zap.Any("error", eventData.Error))
 				state.markStopped(&eventError{err: eventData.Error})
-				s.eventSink.Push(subscriptionID, regionEvent{states: []*regionFeedState{state}})
+				s.eventSink.Push(subscriptionID, regionEvent)
 				continue
 			case *cdcpb.Event_ResolvedTs:
-				eventToPush.resolvedTs = eventData.ResolvedTs
+				regionEvent.resolvedTs = eventData.ResolvedTs
 			case *cdcpb.Event_LongTxn_:
 				continue
 			default:
-				log.Panic("unknown event type", zap.Any("event", event))
+				log.Panic("unknown event type", zap.Any("event", cdcEvent))
 			}
-			s.eventSink.Push(subscriptionID, eventToPush)
+			s.eventSink.Push(subscriptionID, regionEvent)
 			continue
 		}
 
-		switch event.Event.(type) {
+		switch cdcEvent.Event.(type) {
 		case *cdcpb.Event_Error:
 			log.Debug("region request worker receives an error for a stale region, ignore it",
 				zap.Uint64("workerID", s.workerID),
 				zap.Uint64("subscriptionID", uint64(subscriptionID)),
-				zap.Uint64("regionID", event.RegionId))
+				zap.Uint64("regionID", cdcEvent.RegionId))
 		default:
 			log.Warn("region request worker receives a region event for an untracked region",
 				zap.Uint64("workerID", s.workerID),
 				zap.Uint64("subscriptionID", uint64(subscriptionID)),
-				zap.Uint64("regionID", event.RegionId))
+				zap.Uint64("regionID", cdcEvent.RegionId))
 		}
 	}
 }

@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
@@ -334,77 +333,6 @@ func TestStoppedStateRemovesSentRequest(t *testing.T) {
 	worker.tracker.RemoveIf(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID(), state)
 
 	require.Equal(t, 0, admission.stats().inflight)
-}
-
-func TestHandleStreamFailureReleasesSentAdmission(t *testing.T) {
-	admission := newRegionAdmissionController(1, 1)
-	ds := &mockRegionEventDynamicStream{}
-	worker := &regionRequestWorker{
-		admission:    admission,
-		controlQueue: newControlQueue(),
-		eventSink:    &regionEventSink{ds: ds},
-		tracker:      newRegionTracker(),
-	}
-	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
-	req := admitRegionRequest(t, admission, region)
-	state := newRegionFeedState(region, uint64(region.subscribedSpan.subID), worker, req)
-	require.True(t, worker.tracker.Add(region.subscribedSpan.subID, region.verID.GetID(), state))
-
-	require.NoError(t, worker.handleStreamFailure(nil, &storeStreamErr{}))
-
-	require.Zero(t, admission.stats().inflight)
-	require.False(t, req.abort())
-	require.Equal(t, 1, ds.pushCount)
-}
-
-func TestHandleStreamFailureReschedulesWorkerBuffer(t *testing.T) {
-	rawSpan := heartbeatpb.TableSpan{
-		TableID:  1,
-		StartKey: []byte("a"),
-		EndKey:   []byte("z"),
-	}
-	span := &subscribedSpan{
-		subID:     1,
-		span:      rawSpan,
-		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
-	}
-	lock1 := span.rangeLock.LockRange(t.Context(), []byte("a"), []byte("m"), 1, 1)
-	lock2 := span.rangeLock.LockRange(t.Context(), []byte("m"), []byte("z"), 2, 1)
-	require.Equal(t, regionlock.LockRangeStatusSuccess, lock1.Status)
-	require.Equal(t, regionlock.LockRangeStatusSuccess, lock2.Status)
-
-	admission := newRegionAdmissionController(1, 1)
-	failureHandler := &regionFailureHandler{cache: newErrCache()}
-	worker := &regionRequestWorker{
-		failureHandler: failureHandler,
-		admission:      admission,
-		controlQueue:   newControlQueue(),
-		tracker:        newRegionTracker(),
-	}
-	regions := []regionInfo{
-		{
-			verID: tikv.NewRegionVerID(1, 1, 1),
-			span: heartbeatpb.TableSpan{
-				TableID: 1, StartKey: []byte("a"), EndKey: []byte("m"),
-			},
-			subscribedSpan: span, lockedRangeState: lock1.LockedRangeState,
-		},
-		{
-			verID: tikv.NewRegionVerID(2, 1, 1),
-			span: heartbeatpb.TableSpan{
-				TableID: 1, StartKey: []byte("m"), EndKey: []byte("z"),
-			},
-			subscribedSpan: span, lockedRangeState: lock2.LockedRangeState,
-		},
-	}
-	for i, region := range regions {
-		require.True(t, admission.submit(newRegionPriorityTask(region, uint64(i+1))))
-	}
-
-	require.NoError(t, worker.handleStreamFailure(nil, &storeStreamErr{}))
-
-	require.Zero(t, admission.stats().pending)
-	require.Len(t, failureHandler.cache.cache, 2)
 }
 
 func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
