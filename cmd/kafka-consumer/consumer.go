@@ -62,7 +62,9 @@ func getPartitionNum(o *option) (int32, error) {
 				}
 				return 0, errors.Trace(err)
 			}
-			if topicDetail, ok := resp.Topics[topic]; ok {
+
+			topicDetail, ok := resp.Topics[topic]
+			if ok && topicDetail.Error.Code() == kafka.ErrNoError {
 				numPartitions := int32(len(topicDetail.Partitions))
 				log.Info("get partition number of topic",
 					zap.String("topic", topic),

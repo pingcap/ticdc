@@ -110,6 +110,16 @@ func (s FeedState) IsRunning() bool {
 	return s == StateNormal || s == StateWarning
 }
 
+// IsResumable returns true if the feedState can be resumed to StateNormal.
+func (s FeedState) IsResumable() bool {
+	switch s {
+	case StateFailed, StateStopped, StateFinished:
+		return true
+	default:
+		return false
+	}
+}
+
 // RunningError represents some running error from cdc components, such as processor.
 type RunningError struct {
 	Time    time.Time `json:"time"`

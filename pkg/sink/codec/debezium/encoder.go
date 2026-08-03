@@ -201,8 +201,6 @@ func (d *BatchEncoder) Build() []*common.Message {
 	return result
 }
 
-func (d *BatchEncoder) Clean() {}
-
 // newBatchEncoder creates a new Debezium BatchEncoder.
 func NewBatchEncoder(c *common.Config, clusterID string) common.EventEncoder {
 	batch := &BatchEncoder{
