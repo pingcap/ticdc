@@ -33,7 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
@@ -41,7 +41,7 @@ import (
 )
 
 // TestValidateResumeChangefeedState covers the API-side guard that runs before
-// resume GC safepoint/barrier setup. Running states must fail fast, while states
+// resume GC safepoint/barrier setup. Running states must fail fparser_model, while states
 // that are actually stopped can proceed to the remaining resume validation.
 func TestValidateResumeChangefeedState(t *testing.T) {
 	for _, state := range []config.FeedState{config.StateStopped, config.StateFailed, config.StateFinished} {
@@ -260,23 +260,25 @@ func newTableInfoWithPrimaryKeyForTest() *common.TableInfo {
 
 	return common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:         1,
-		Name:       ast.NewCIStr("t"),
+		Name:       parser_model.NewCIStr("t"),
 		PKIsHandle: true,
 		Columns: []*timodel.ColumnInfo{
 			{
 				ID:        1,
-				Name:      ast.NewCIStr("id"),
+				Name:      parser_model.NewCIStr("id"),
 				FieldType: *idFieldType,
 				State:     timodel.StatePublic,
 			},
 			{
 				ID:        2,
-				Name:      ast.NewCIStr("name"),
+				Name:      parser_model.NewCIStr("name"),
 				FieldType: *types.NewFieldType(mysql.TypeVarchar),
 				State:     timodel.StatePublic,
 			},
 		},
 	})
+}
+
 // TestMaskSinkURIForError verifies that error messages mask sensitive sink URI
 // fields. It checks both a valid URI with secret query parameters and an invalid
 // URI parse error that previously exposed raw credentials.
