@@ -62,14 +62,6 @@ var (
 			Help:      "Total approximate raw bytes of DML events successfully written to downstream.",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
-	execDMLEventRowsAffectedCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "dml_event_affected_row_count",
-			Help:      "Total count of affected rows.",
-		}, []string{getKeyspaceLabel(), "changefeed", "count_type", "row_type"})
-
 	executionErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -86,7 +78,6 @@ func InitMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(execDDLCounter)
 	registry.MustRegister(execBatchHistogram)
 	registry.MustRegister(totalWriteBytesCounter)
-	registry.MustRegister(execDMLEventRowsAffectedCounter)
 	registry.MustRegister(executionErrorCounter)
 }
 

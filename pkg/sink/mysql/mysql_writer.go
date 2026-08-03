@@ -66,6 +66,9 @@ type Writer struct {
 
 	statistics *statistics.Statistics
 
+	// affectedRows records the affected row counts reported by the downstream.
+	affectedRows *affectedRowsRecorder
+
 	// activeActiveSyncStatsCollector accumulates conflict statistics from TiDB session
 	// variable @@tidb_cdc_active_active_sync_stats. It is shared across all DML writers
 	// in a sink.
@@ -109,6 +112,7 @@ func NewWriter(
 		ddlTsTableInit:                 false,
 		stmtCache:                      cfg.stmtCache,
 		statistics:                     statistics,
+		affectedRows:                   newAffectedRowsRecorder(changefeedID),
 		maxDDLTsBatch:                  cfg.MaxTxnRow,
 		dmlSession:                     *NewDMLSession(dmlConnIdleTimeout),
 		isInErrorCausedSafeMode:        false,
@@ -291,6 +295,9 @@ func (w *Writer) tryDryRunBlock() {
 }
 
 func (w *Writer) Close() {
+	if w.affectedRows != nil {
+		w.affectedRows.close()
+	}
 	if w.stmtCache != nil {
 		w.stmtCache.Purge()
 	}

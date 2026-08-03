@@ -142,9 +142,7 @@ func (p *dmlProducers) asyncSendMessage(
 
 	// If producers are closed, we should skip the message and return an error.
 	if p.closed {
-		err := errors.ErrPulsarProducerClosed.GenWithStackByArgs()
-		p.recordDMLResult(message.GetRowsCount(), err)
-		return err
+		return p.handleSendFailure(message, errors.ErrPulsarProducerClosed.GenWithStackByArgs())
 	}
 	failpoint.Inject("PulsarSinkAsyncSendError", func() {
 		// simulate sending message to input channel successfully but flushing
@@ -152,7 +150,7 @@ func (p *dmlProducers) asyncSendMessage(
 		log.Info("PulsarSinkAsyncSendError error injected", zap.String("keyspace", p.changefeedID.Keyspace()),
 			zap.String("changefeed", p.changefeedID.ID().String()))
 		err := errors.New("pulsar sink injected error")
-		p.recordDMLResult(message.GetRowsCount(), err)
+		p.handleSendFailure(message, err)
 		p.failpointCh <- err
 		failpoint.Return(nil)
 	})
@@ -163,15 +161,14 @@ func (p *dmlProducers) asyncSendMessage(
 
 	producer, err := p.getProducerByTopic(topic)
 	if err != nil {
-		p.recordDMLResult(message.GetRowsCount(), err)
-		return err
+		return p.handleSendFailure(message, err)
 	}
 
 	// if for stress test record , add count to message callback function
 
 	producer.SendAsync(ctx, data,
 		func(_ pulsarClient.MessageID, m *pulsarClient.ProducerMessage, err error) {
-			p.recordDMLResult(message.GetRowsCount(), err)
+			p.handleAsyncSendResult(message, err)
 			// fail
 			if err != nil {
 				e := errors.WrapError(errors.ErrPulsarAsyncSendMessage, err)
@@ -194,7 +191,6 @@ func (p *dmlProducers) asyncSendMessage(
 				}
 			} else if message.Callback != nil {
 				// success
-				message.Callback()
 				pulsar.IncPublishedDMLSuccess(topic, p.changefeedID.String())
 			}
 		})
@@ -208,6 +204,22 @@ func (p *dmlProducers) recordDMLResult(rowCount int, err error) {
 	if p.statistics != nil {
 		p.statistics.RecordDMLResult(rowCount, err)
 	}
+}
+
+// handleAsyncSendResult records the result of an asynchronous send and runs
+// the message callback on success. It only touches ticdc-owned types so the
+// statistics behavior can be unit-tested without any broker machinery.
+func (p *dmlProducers) handleAsyncSendResult(message *common.Message, err error) {
+	p.recordDMLResult(message.GetRowsCount(), err)
+	if err == nil && message.Callback != nil {
+		message.Callback()
+	}
+}
+
+// handleSendFailure records a failed send attempt and returns the error.
+func (p *dmlProducers) handleSendFailure(message *common.Message, err error) error {
+	p.recordDMLResult(message.GetRowsCount(), err)
+	return err
 }
 
 func (p *dmlProducers) close() { // We have to hold the lock to synchronize closing with writing.

@@ -112,7 +112,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 		return err
 	}
 
-	factory, err := kafka.NewSaramaFactory(ctx, options, changefeedID)
+	factory, err := kafka.NewSaramaFactory(ctx, options, changefeedID, nil)
 	if err != nil {
 		return err
 	}

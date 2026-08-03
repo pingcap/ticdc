@@ -103,18 +103,13 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			return context.Cause(ctx)
 		case ack := <-p.producer.Successes():
 			if ack != nil {
-				switch meta := ack.Metadata.(type) {
-				case *messageMetadata:
-					if meta != nil {
-						p.recordDMLResult(meta.rowCount, nil)
-						if meta.callback != nil {
-							meta.callback()
-						}
-					}
-				default:
+				meta, ok := ack.Metadata.(*messageMetadata)
+				if !ok {
 					log.Error("kafka producer received unknown message metadata type",
 						zap.Any("metadata", ack.Metadata))
+					continue
 				}
+				p.handleSuccess(meta)
 			}
 		case err := <-p.producer.Errors():
 			// We should not wrap a nil pointer if the pointer
@@ -125,9 +120,7 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if err == nil {
 				return nil
 			}
-			producerErr := p.handleProducerError(err)
-			p.recordDMLResult(extractRowCount(err.Msg), producerErr)
-			return producerErr
+			return p.handleFailure(extractRowCount(err.Msg), p.handleProducerError(err))
 		}
 	}
 }
@@ -148,9 +141,7 @@ func (p *saramaAsyncProducer) AsyncSend(
 	ctx context.Context, topic string, partition int32, message *codecCommon.Message,
 ) error {
 	if p.closed.Load() {
-		err := errors.ErrKafkaSinkClosed.GenWithStackByArgs()
-		p.recordDMLResult(message.GetRowsCount(), err)
-		return err
+		return p.handleFailure(message.GetRowsCount(), errors.ErrKafkaSinkClosed.GenWithStackByArgs())
 	}
 	meta := &messageMetadata{
 		rowCount: message.GetRowsCount(),
@@ -166,12 +157,29 @@ func (p *saramaAsyncProducer) AsyncSend(
 	}
 	select {
 	case <-ctx.Done():
-		err := context.Cause(ctx)
-		p.recordDMLResult(message.GetRowsCount(), err)
-		return err
+		return p.handleFailure(message.GetRowsCount(), context.Cause(ctx))
 	case p.producer.Input() <- msg:
 	}
 	return nil
+}
+
+// handleSuccess records a successful delivery and runs the message callback.
+// It only touches ticdc-owned types so the statistics behavior can be
+// unit-tested without any broker machinery.
+func (p *saramaAsyncProducer) handleSuccess(meta *messageMetadata) {
+	if meta == nil {
+		return
+	}
+	p.recordDMLResult(meta.rowCount, nil)
+	if meta.callback != nil {
+		meta.callback()
+	}
+}
+
+// handleFailure records a failed delivery attempt and returns the error.
+func (p *saramaAsyncProducer) handleFailure(rowCount int, err error) error {
+	p.recordDMLResult(rowCount, err)
+	return err
 }
 
 func (p *saramaAsyncProducer) recordDMLResult(rowCount int, err error) {

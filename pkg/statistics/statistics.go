@@ -14,9 +14,7 @@
 package statistics
 
 import (
-	"fmt"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -28,10 +26,9 @@ import (
 // New creates a Statistics.
 func New(changefeed common.ChangeFeedID, keyspaceID uint32) *Statistics {
 	statistics := &Statistics{
-		changefeedID:    changefeed,
-		keyspaceID:      strconv.FormatUint(uint64(keyspaceID), 10),
-		ddlTypes:        sync.Map{},
-		rowsAffectedMap: sync.Map{},
+		changefeedID: changefeed,
+		keyspaceID:   strconv.FormatUint(uint64(keyspaceID), 10),
+		ddlTypes:     sync.Map{},
 	}
 
 	keyspace := changefeed.Keyspace()
@@ -49,10 +46,9 @@ func New(changefeed common.ChangeFeedID, keyspaceID uint32) *Statistics {
 // Statistics maintains some status and metrics of the Sink
 // Note: All methods of Statistics should be thread-safe.
 type Statistics struct {
-	changefeedID    common.ChangeFeedID
-	keyspaceID      string
-	ddlTypes        sync.Map
-	rowsAffectedMap sync.Map
+	changefeedID common.ChangeFeedID
+	keyspaceID   string
+	ddlTypes     sync.Map
 
 	// metricExecDDLHis records each DDL execution time duration.
 	metricExecDDLHis prometheus.Observer
@@ -114,30 +110,6 @@ func (b *Statistics) RecordDDLExecution(executor func() (string, error)) error {
 	return nil
 }
 
-func (b *Statistics) RecordTotalRowsAffected(actualRowsAffected, expectedRowsAffected int64) {
-	b.getRowsAffected("actual", "total").Add(float64(actualRowsAffected))
-	b.getRowsAffected("expected", "total").Add(float64(expectedRowsAffected))
-}
-
-func (b *Statistics) RecordRowsAffected(rowsAffected int64, rowType common.RowType) {
-	b.getRowsAffected("actual", rowType.String()).Add(float64(rowsAffected))
-	b.getRowsAffected("expected", rowType.String()).Add(1)
-	b.RecordTotalRowsAffected(rowsAffected, 1)
-}
-
-func (b *Statistics) getRowsAffected(countType, rowType string) prometheus.Counter {
-	key := fmt.Sprintf("%s-%s", countType, rowType)
-	counter, loaded := b.rowsAffectedMap.Load(key)
-	if !loaded {
-		keyspace := b.changefeedID.Keyspace()
-		changefeedID := b.changefeedID.Name()
-		counter := execDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, countType, rowType)
-		b.rowsAffectedMap.Store(key, counter)
-		return counter
-	}
-	return counter.(prometheus.Counter)
-}
-
 // Close release some internal resources.
 func (b *Statistics) Close() {
 	keyspace := b.changefeedID.Keyspace()
@@ -150,13 +122,6 @@ func (b *Statistics) Close() {
 	b.ddlTypes.Range(func(key, value any) bool {
 		ddlType := key.(string)
 		execDDLCounter.DeleteLabelValues(keyspace, changefeedID, ddlType)
-		return true
-	})
-	b.rowsAffectedMap.Range(func(key, value any) bool {
-		countTypeAndRowType := key.(string)
-		splitTypes := strings.Split(countTypeAndRowType, "-")
-		countType, rowType := splitTypes[0], splitTypes[1]
-		execDMLEventRowsAffectedCounter.DeleteLabelValues(keyspace, changefeedID, countType, rowType)
 		return true
 	})
 	totalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)

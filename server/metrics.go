@@ -16,6 +16,7 @@ package server
 import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	mysql "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -24,4 +25,5 @@ var registry = prometheus.NewRegistry()
 func init() {
 	metrics.InitMetrics(registry)
 	event.InitEventMetrics(registry)
+	mysql.InitMetrics(registry)
 }

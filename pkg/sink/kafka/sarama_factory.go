@@ -35,27 +35,9 @@ type saramaFactory struct {
 }
 
 // NewSaramaFactory constructs a Factory with sarama implementation.
+// stat is passed to the DML producer for sink statistics. It may be nil only
+// for paths that never send DML messages, such as Verify.
 func NewSaramaFactory(
-	ctx context.Context,
-	o *options,
-	changefeedID common.ChangeFeedID,
-) (Factory, error) {
-	return newSaramaFactory(ctx, o, changefeedID, nil)
-}
-
-// NewSaramaFactoryWithStatistics constructs a Factory for a running sink.
-// The factory passes statistics to its DML producer without changing the
-// producer interface. The sink remains responsible for closing statistics.
-func NewSaramaFactoryWithStatistics(
-	ctx context.Context,
-	o *options,
-	changefeedID common.ChangeFeedID,
-	stat *statistics.Statistics,
-) (Factory, error) {
-	return newSaramaFactory(ctx, o, changefeedID, stat)
-}
-
-func newSaramaFactory(
 	ctx context.Context,
 	o *options,
 	changefeedID common.ChangeFeedID,
