@@ -39,8 +39,9 @@ var (
 			Help:      "The value of GOMAXPROCS",
 		})
 
-	// buildInfo is a metric with a constant '1' value, labeled by the build metadata.
-	// It is used by dashboards to identify the exact binary running on each TiCDC server.
+	// BuildInfo is a metric with a constant '1' value, labeled by the build metadata.
+	// It is used by dashboards to identify the exact binary running on each TiCDC server,
+	// including whether the process is running in TiCDC's new or old architecture mode.
 	BuildInfo = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -48,7 +49,7 @@ var (
 			Name:      "build_info",
 			Help:      "TiCDC build information as labels.",
 		},
-		[]string{"release_version", "git_hash", "utc_build_time", "kernel_type"},
+		[]string{"release_version", "git_hash", "utc_build_time", "kernel_type", "ticdc_arch"},
 	)
 )
 

@@ -171,7 +171,13 @@ func (s *basicScheduler) schedule(
 	absentReplications := s.spanController.GetAbsentByGroup(groupID, availableSize)
 
 	pkgScheduler.BasicSchedule(availableSize, absentReplications, nodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
-		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.spanController, replication, id, heartbeatpb.OperatorType_O_Add))
+		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(
+			s.spanController,
+			replication,
+			id,
+			heartbeatpb.OperatorType_O_Add,
+			s.operatorController.MaintainerEpoch(),
+		))
 	})
 	return len(absentReplications)
 }

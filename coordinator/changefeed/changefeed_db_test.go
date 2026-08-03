@@ -21,7 +21,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -131,6 +133,25 @@ func TestRemoveChangefeed(t *testing.T) {
 	sizeMap := db.GetTaskSizePerNode()
 	_, ok := sizeMap["node1"]
 	require.False(t, ok)
+}
+
+func TestStopByChangefeedIDDeletesCheckpointMetrics(t *testing.T) {
+	metrics.ResetOwnerChangefeedMetrics()
+	t.Cleanup(metrics.ResetOwnerChangefeedMetrics)
+
+	db := NewChangefeedDB(1216)
+	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test-metrics", common.DefaultKeyspaceName)}
+	db.AddReplicatingMaintainer(cf, "node1")
+
+	metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name()).Set(100)
+	metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name()).Set(10)
+	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
+	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
+
+	require.Equal(t, node.ID("node1"), db.StopByChangefeedID(cf.ID, true))
+
+	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
+	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
 }
 
 func TestGetByID(t *testing.T) {

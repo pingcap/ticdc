@@ -595,6 +595,10 @@ func persistSchemaSnapshot(
 		start := time.Now()
 		dbInfos, err := meta.ListDatabases()
 		if err != nil {
+			// The snapshot is already GC'ed and retrying the same ts cannot recover.
+			if isGCLifeTimeError(err) {
+				return nil, nil, nil, err
+			}
 			time.Sleep(100 * time.Millisecond)
 			log.Warn("list databases failed, retrying", zap.Error(err))
 			continue
@@ -804,6 +808,12 @@ func loadAllPhysicalTablesAtTs(
 		fullTableInfo, ok := tableInfoMap[tableID]
 		if !ok {
 			log.Panic("table info not found", zap.Int64("tableID", tableID))
+		}
+		// Views have no physical KV events. Their DDLs are replicated by the
+		// table-trigger dispatcher, so creating a table dispatcher for a view can
+		// only leave an orphan after the view is dropped.
+		if fullTableInfo.View != nil {
+			continue
 		}
 		if tableFilter != nil {
 			if tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name) {
