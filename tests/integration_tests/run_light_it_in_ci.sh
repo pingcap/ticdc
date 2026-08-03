@@ -105,7 +105,7 @@ kafka_groups=(
 	# disables the no-operator terminal-status fallback; the case depends on that rescheduling path.
 	'cli_with_auth fail_over_ddl_N'
 	# G14
-	'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O update_changefeed_check_config'
+	'kafka_simple_basic avro_basic debezium_basic avro_schema_registry_error fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'kafka_simple_basic_avro split_region autorandom gc_safepoint'
 )
