@@ -38,19 +38,25 @@ type elector struct {
 	// election used for coordinator
 	election *concurrency.Election
 	// election used for log coordinator
-	logElection *concurrency.Election
-	svr         *server
+	logElection                     *concurrency.Election
+	coordinatorMaxTaskConcurrency   int
+	coordinatorCheckBalanceInterval time.Duration
+	svr                             *server
 }
 
-func NewElector(server *server) common.SubModule {
+// NewElector creates the coordinator elector with scheduler settings captured from server startup config.
+func NewElector(server *server, schedulerCfg *config.SchedulerConfig) common.SubModule {
 	election := concurrency.NewElection(server.session,
 		etcd.CaptureOwnerKey(server.EtcdClient.GetClusterID()))
 	logElection := concurrency.NewElection(server.session,
 		etcd.LogCoordinatorKey(server.EtcdClient.GetClusterID()))
+	maxTaskConcurrency, checkBalanceInterval := coordinatorSchedulerSettings(schedulerCfg)
 	return &elector{
-		election:    election,
-		logElection: logElection,
-		svr:         server,
+		election:                        election,
+		logElection:                     logElection,
+		coordinatorMaxTaskConcurrency:   maxTaskConcurrency,
+		coordinatorCheckBalanceInterval: checkBalanceInterval,
+		svr:                             server,
 	}
 }
 
@@ -140,8 +146,8 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			changefeed.NewEtcdBackend(e.svr.EtcdClient),
 			e.svr.EtcdClient.GetGCServiceID(),
 			coordinatorVersion,
-			10000,
-			time.Minute,
+			e.coordinatorMaxTaskConcurrency,
+			e.coordinatorCheckBalanceInterval,
 		)
 		e.svr.setCoordinator(co)
 		err = co.Run(ctx)
@@ -189,6 +195,10 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			zap.String("nodeID", nodeID), zap.Int64("coordinatorVersion", coordinatorVersion),
 			zap.Error(err))
 	}
+}
+
+func coordinatorSchedulerSettings(schedulerCfg *config.SchedulerConfig) (int, time.Duration) {
+	return schedulerCfg.MaxTaskConcurrency, time.Duration(schedulerCfg.CheckBalanceInterval)
 }
 
 func (e *elector) campaignLogCoordinator(ctx context.Context) error {

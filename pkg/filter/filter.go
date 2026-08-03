@@ -47,6 +47,9 @@ const (
 type Filter interface {
 	// ShouldIgnoreDML returns true if the DML event should not be handled.
 	ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64, ctx DMLFilterContext) (bool, error)
+	// ShouldIgnoreDMLByEventType returns true only when filters that do not need
+	// decoded row values can determine the DML should be ignored.
+	ShouldIgnoreDMLByEventType(dmlType common.RowType, tableInfo *common.TableInfo, startTs uint64) (bool, error)
 	// ShouldDiscardDDL returns true if the DDL event should not be handled.
 	ShouldDiscardDDL(schema, table string, ddlType timodel.ActionType, tableInfo *common.TableInfo) bool
 	// ShouldIgnoreDDL returns true if the DDL event should not be sent to downstream.
@@ -133,8 +136,28 @@ func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool, forceRep
 // 4. By update-only-column config.
 // 5. By row value expression.
 func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64, filterContext DMLFilterContext) (bool, error) {
+	ignore, err := f.ShouldIgnoreDMLByEventType(dmlType, tableInfo, startTs)
+	if ignore || err != nil {
+		return ignore, err
+	}
+	if filterContext.EnableIgnoreUpdateOnlyColumns {
+		ignoreByUpdateOnlyColumns, err := f.updateOnlyColumnsFilter.shouldSkipDML(dmlType, preRow, row, tableInfo)
+		if err != nil {
+			return false, err
+		}
+		if ignoreByUpdateOnlyColumns {
+			return true, nil
+		}
+	}
+	return f.dmlExprFilter.shouldSkipDML(dmlType, preRow, row, tableInfo)
+}
+
+func (f *filter) ShouldIgnoreDMLByEventType(dmlType common.RowType, tableInfo *common.TableInfo, startTs uint64) (bool, error) {
 	if f.shouldIgnoreStartTs(startTs) {
 		return true, nil
+	}
+	if tableInfo == nil {
+		return false, nil
 	}
 
 	if f.ShouldIgnoreTable(tableInfo.GetSchemaName(), tableInfo.GetTableName()) {
@@ -148,16 +171,7 @@ func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, 
 	if ignoreByEventType {
 		return true, nil
 	}
-	if filterContext.EnableIgnoreUpdateOnlyColumns {
-		ignoreByUpdateOnlyColumns, err := f.updateOnlyColumnsFilter.shouldSkipDML(dmlType, preRow, row, tableInfo)
-		if err != nil {
-			return false, err
-		}
-		if ignoreByUpdateOnlyColumns {
-			return true, nil
-		}
-	}
-	return f.dmlExprFilter.shouldSkipDML(dmlType, preRow, row, tableInfo)
+	return false, nil
 }
 
 // ShouldDiscardDDL checks if a DDL event should be discarded by conditions below:

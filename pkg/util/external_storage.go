@@ -64,7 +64,7 @@ func getExternalStorage(
 ) (storage.ExternalStorage, error) {
 	backEnd, err := storage.ParseBackend(uri, opts)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
 
 	ret, err := storage.New(ctx, backEnd, &storage.ExternalStorageOptions{
@@ -72,7 +72,7 @@ func getExternalStorage(
 		S3Retryer:       retryer,
 	})
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrFailToCreateExternalStorage, err)
+		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
 	defer func() {
 		if err != nil {
@@ -83,7 +83,7 @@ func getExternalStorage(
 	// Check the connection and ignore the returned bool value, since we don't care if the file exists.
 	_, err = ret.FileExists(ctx, "test")
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrFailToCreateExternalStorage, err)
+		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
 	return ret, nil
 }

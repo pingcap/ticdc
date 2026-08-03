@@ -698,8 +698,6 @@ func (a *BatchEncoder) columnToAvroData(
 	}
 }
 
-func (a *BatchEncoder) Clean() {}
-
 type avroEncodeResult struct {
 	data []byte
 	// header is the message header, it will be encoder into the head
