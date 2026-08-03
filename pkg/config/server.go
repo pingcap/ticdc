@@ -115,8 +115,9 @@ var defaultServerConfig = &ServerConfig{
 		SortDir:       DefaultSortDir,
 		CacheSizeInMB: 128, // By default, use 128M memory as sorter cache.
 	},
-	Security: &security.Credential{},
-	KVClient: NewDefaultKVClientConfig(),
+	Security:   &security.Credential{},
+	KVClient:   NewDefaultKVClientConfig(),
+	Encryption: NewDefaultEncryptionConfig(),
 	Debug: &DebugConfig{
 		DB:       NewDefaultDBConfig(),
 		Messages: defaultMessageConfig.Clone(),
@@ -152,11 +153,12 @@ type ServerConfig struct {
 	OwnerFlushInterval     TomlDuration `toml:"owner-flush-interval" json:"owner-flush-interval"`
 	ProcessorFlushInterval TomlDuration `toml:"processor-flush-interval" json:"processor-flush-interval"`
 
-	Sorter    *SorterConfig        `toml:"sorter" json:"sorter"`
-	Security  *security.Credential `toml:"security" json:"security"`
-	KVClient  *KVClientConfig      `toml:"kv-client" json:"kv-client"`
-	Debug     *DebugConfig         `toml:"debug" json:"debug"`
-	ClusterID string               `toml:"cluster-id" json:"cluster-id"`
+	Sorter     *SorterConfig        `toml:"sorter" json:"sorter"`
+	Security   *security.Credential `toml:"security" json:"security"`
+	KVClient   *KVClientConfig      `toml:"kv-client" json:"kv-client"`
+	Encryption *EncryptionConfig    `toml:"encryption" json:"encryption"`
+	Debug      *DebugConfig         `toml:"debug" json:"debug"`
+	ClusterID  string               `toml:"cluster-id" json:"cluster-id"`
 	// Deprecated: we don't use this field anymore.
 	GcTunerMemoryThreshold uint64  `toml:"gc-tuner-memory-threshold" json:"gc-tuner-memory-threshold"`
 	MemoryLimitPercentage  float64 `toml:"memory-limit-percentage" json:"memory-limit-percentage"`
@@ -279,6 +281,10 @@ func (c *ServerConfig) ValidateAndAdjust() error {
 	}
 	if err = c.KVClient.ValidateAndAdjust(); err != nil {
 		return errors.Trace(err)
+	}
+
+	if c.Encryption == nil {
+		c.Encryption = defaultCfg.Encryption
 	}
 
 	if c.Debug == nil {
