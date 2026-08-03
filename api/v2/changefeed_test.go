@@ -41,7 +41,7 @@ import (
 )
 
 // TestValidateResumeChangefeedState covers the API-side guard that runs before
-// resume GC safepoint/barrier setup. Running states must fail fparser_model, while states
+// resume GC safepoint/barrier setup. Running states must fail fast, while states
 // that are actually stopped can proceed to the remaining resume validation.
 func TestValidateResumeChangefeedState(t *testing.T) {
 	for _, state := range []config.FeedState{config.StateStopped, config.StateFailed, config.StateFinished} {
