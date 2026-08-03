@@ -42,6 +42,12 @@ func TestDMLEventRowsAffectedMetrics(t *testing.T) {
 	require.Equal(t, float64(3), testutil.ToFloat64(
 		execDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeed, "expected", "total")))
 
+	otherChangefeedID := common.NewChangefeedID4Test("test-keyspace", "other-changefeed")
+	otherWriter := &Writer{ChangefeedID: otherChangefeedID}
+	otherWriter.recordRowsAffected(4, common.RowTypeInsert)
+
 	DeleteDMLEventRowsAffectedMetrics(changefeedID)
-	require.Equal(t, 0, testutil.CollectAndCount(execDMLEventRowsAffectedCounter))
+	require.Equal(t, 4, testutil.CollectAndCount(execDMLEventRowsAffectedCounter))
+	require.Equal(t, float64(4), testutil.ToFloat64(execDMLEventRowsAffectedCounter.WithLabelValues(
+		otherChangefeedID.Keyspace(), otherChangefeedID.Name(), "actual", "insert")))
 }

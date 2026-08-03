@@ -93,11 +93,6 @@ var (
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "id"})
 )
 
-type rowsAffectedLabels struct {
-	countType string
-	rowType   string
-}
-
 // InitMetrics registers MySQL sink metrics.
 func InitMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(execDMLEventRowsAffectedCounter)
@@ -110,43 +105,10 @@ func InitMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(WorkerEventRowCount)
 }
 
-func (w *Writer) recordTotalRowsAffected(actualRowsAffected, expectedRowsAffected int64) {
-	w.getRowsAffectedCounter("actual", "total").Add(float64(actualRowsAffected))
-	w.getRowsAffectedCounter("expected", "total").Add(float64(expectedRowsAffected))
-}
-
-func (w *Writer) recordRowsAffected(rowsAffected int64, rowType common.RowType) {
-	w.getRowsAffectedCounter("actual", rowType.String()).Add(float64(rowsAffected))
-	w.getRowsAffectedCounter("expected", rowType.String()).Add(1)
-	w.recordTotalRowsAffected(rowsAffected, 1)
-}
-
-func (w *Writer) getRowsAffectedCounter(countType, rowType string) prometheus.Counter {
-	labels := rowsAffectedLabels{countType: countType, rowType: rowType}
-	counter, loaded := w.rowsAffectedCounters.Load(labels)
-	if !loaded {
-		counter := execDMLEventRowsAffectedCounter.WithLabelValues(
-			w.ChangefeedID.Keyspace(), w.ChangefeedID.Name(), countType, rowType)
-		w.rowsAffectedCounters.Store(labels, counter)
-		return counter
-	}
-	return counter.(prometheus.Counter)
-}
-
 // DeleteDMLEventRowsAffectedMetrics deletes affected-row metric series for a MySQL sink.
 func DeleteDMLEventRowsAffectedMetrics(changefeedID common.ChangeFeedID) {
-	keyspace := changefeedID.Keyspace()
-	changefeed := changefeedID.Name()
-	rowTypes := [...]common.RowType{
-		common.RowTypeDelete,
-		common.RowTypeInsert,
-		common.RowTypeUpdate,
-	}
-	for _, countType := range [...]string{"actual", "expected"} {
-		execDMLEventRowsAffectedCounter.DeleteLabelValues(keyspace, changefeed, countType, "total")
-		for _, rowType := range rowTypes {
-			execDMLEventRowsAffectedCounter.DeleteLabelValues(
-				keyspace, changefeed, countType, rowType.String())
-		}
-	}
+	execDMLEventRowsAffectedCounter.DeletePartialMatch(prometheus.Labels{
+		metrics.GetKeyspaceLabel(): changefeedID.Keyspace(),
+		"changefeed":               changefeedID.Name(),
+	})
 }
