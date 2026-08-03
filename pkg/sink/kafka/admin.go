@@ -58,10 +58,10 @@ func (a *saramaAdminClient) GetAllBrokers() []Broker {
 	return result
 }
 
-func (a *saramaAdminClient) GetBrokerConfig(configName string) (string, error) {
+func (a *saramaAdminClient) GetBrokerConfig(configName string) (string, bool, error) {
 	_, controller, err := a.admin.DescribeCluster()
 	if err != nil {
-		return "", errors.Trace(err)
+		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-cluster", "cluster")
 	}
 
 	configEntries, err := a.admin.DescribeConfig(sarama.ConfigResource{
@@ -70,7 +70,7 @@ func (a *saramaAdminClient) GetBrokerConfig(configName string) (string, error) {
 		ConfigNames: []string{configName},
 	})
 	if err != nil {
-		return "", errors.Trace(err)
+		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", configName)
 	}
 
 	// For compatibility with KOP, we checked all return values.
@@ -78,26 +78,20 @@ func (a *saramaAdminClient) GetBrokerConfig(configName string) (string, error) {
 	// 2. Kop returns all configs.
 	for _, entry := range configEntries {
 		if entry.Name == configName {
-			return entry.Value, nil
+			return entry.Value, true, nil
 		}
 	}
-
-	log.Warn("Kafka config item not found",
-		zap.String("keyspace", a.changefeed.Keyspace()),
-		zap.String("changefeed", a.changefeed.Name()),
-		zap.String("configName", configName))
-	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
-		"cannot find the `%s` from the broker's configuration", configName)
+	return "", false, nil
 }
 
-func (a *saramaAdminClient) GetTopicConfig(topicName string, configName string) (string, error) {
+func (a *saramaAdminClient) GetTopicConfig(topicName string, configName string) (string, bool, error) {
 	configEntries, err := a.admin.DescribeConfig(sarama.ConfigResource{
 		Type:        sarama.TopicResource,
 		Name:        topicName,
 		ConfigNames: []string{configName},
 	})
 	if err != nil {
-		return "", errors.Trace(err)
+		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", topicName)
 	}
 
 	// For compatibility with KOP, we checked all return values.
@@ -105,21 +99,10 @@ func (a *saramaAdminClient) GetTopicConfig(topicName string, configName string) 
 	// 2. Kop returns all configs.
 	for _, entry := range configEntries {
 		if entry.Name == configName {
-			log.Info("Kafka config item found",
-				zap.String("keyspace", a.changefeed.Keyspace()),
-				zap.String("changefeed", a.changefeed.Name()),
-				zap.String("configName", configName),
-				zap.String("configValue", entry.Value))
-			return entry.Value, nil
+			return entry.Value, true, nil
 		}
 	}
-
-	log.Warn("Kafka config item not found",
-		zap.String("keyspace", a.changefeed.Keyspace()),
-		zap.String("changefeed", a.changefeed.Name()),
-		zap.String("configName", configName))
-	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
-		"cannot find the `%s` from the topic's configuration", configName)
+	return "", false, nil
 }
 
 func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
@@ -127,7 +110,7 @@ func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool
 
 	metaList, err := a.admin.DescribeTopics(topics)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-topics", strings.Join(topics, ","))
 	}
 
 	for _, meta := range metaList {
@@ -136,9 +119,9 @@ func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool
 				continue
 			}
 			if !ignoreTopicError {
-				return nil, meta.Err
+				return nil, errors.WrapError(errors.ErrKafkaAdminAPI, meta.Err, "describe-topic", meta.Name)
 			}
-			log.Warn("fetch topic meta failed",
+			log.Warn("kafka topic metadata refresh failed",
 				zap.String("keyspace", a.changefeed.Keyspace()),
 				zap.String("changefeed", a.changefeed.Name()),
 				zap.String("topic", meta.Name),
@@ -164,7 +147,7 @@ func (a *saramaAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]
 	for _, topic := range topics {
 		partition, err := a.client.Partitions(topic)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "list-partitions", topic)
 		}
 		result[topic] = int32(len(partition))
 	}
@@ -181,7 +164,7 @@ func (a *saramaAdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) 
 	err := a.admin.CreateTopic(detail.Name, request, validateOnly)
 	// Ignore the already exists error because it's not harmful.
 	if err != nil && !strings.Contains(err.Error(), sarama.ErrTopicAlreadyExists.Error()) {
-		return err
+		return errors.WrapError(errors.ErrKafkaAdminAPI, err, "create-topic", detail.Name)
 	}
 	return nil
 }
@@ -192,7 +175,7 @@ func (a *saramaAdminClient) Close() {
 	// only when admin is unexpectedly nil.
 	if a.admin != nil {
 		if err := a.admin.Close(); err != nil {
-			log.Warn("close admin client meet error",
+			log.Warn("kafka admin client close failed",
 				zap.String("keyspace", a.changefeed.Keyspace()),
 				zap.String("changefeed", a.changefeed.Name()),
 				zap.Error(err))
@@ -201,7 +184,7 @@ func (a *saramaAdminClient) Close() {
 	}
 	if a.client != nil {
 		if err := a.client.Close(); err != nil {
-			log.Warn("close kafka client meet error",
+			log.Warn("kafka client close failed",
 				zap.String("keyspace", a.changefeed.Keyspace()),
 				zap.String("changefeed", a.changefeed.Name()),
 				zap.Error(err))

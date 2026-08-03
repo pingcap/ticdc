@@ -44,10 +44,11 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 		expectedMeta         *keyspacepb.KeyspaceMeta
 	}{
 		{
-			name:           "default keyspace",
-			keyspace:       "",
-			expectedStatus: http.StatusBadRequest,
-			expectedAbort:  true,
+			name:                 "default keyspace",
+			keyspace:             "",
+			expectedStatus:       http.StatusBadRequest,
+			expectedAbort:        true,
+			expectedBodyContains: "please specify --keyspace or -k",
 		},
 		{
 			name:     "keyspace not exist",
@@ -57,7 +58,7 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 			},
 			expectedStatus:       http.StatusBadRequest,
 			expectedAbort:        true,
-			expectedBodyContains: "invalid api parameter",
+			expectedBodyContains: "does not exist, please check --keyspace or -k",
 		},
 		{
 			name:     "internal server error",

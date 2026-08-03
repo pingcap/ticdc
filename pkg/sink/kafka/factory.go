@@ -16,7 +16,6 @@ package kafka
 import (
 	"context"
 
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
@@ -31,9 +30,6 @@ type Factory interface {
 	// MetricsCollector returns the kafka metrics collector
 	MetricsCollector(adminClient ClusterAdminClient) MetricsCollector
 }
-
-// FactoryCreator defines the type of factory creator.
-type FactoryCreator func(context.Context, *options, commonType.ChangeFeedID) (Factory, error)
 
 // SyncProducer is the kafka sync producer
 type SyncProducer interface {

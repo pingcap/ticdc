@@ -92,6 +92,9 @@ wal-chunk-target-file-size = "128MB"
 ca-path = "$TLS_DIR/ca.pem"
 cert-path = "$TLS_DIR/server.pem"
 key-path = "$TLS_DIR/server-key.pem"
+
+[cdc]
+enable = true
 EOF
 
 cat >"$OUT_DIR/tikv-worker-tls.toml" <<EOF
