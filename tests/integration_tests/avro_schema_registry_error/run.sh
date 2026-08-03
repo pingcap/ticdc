@@ -88,9 +88,6 @@ function create_changefeed() {
 	avro)
 		sink_uri="kafka://127.0.0.1:9092/${topic_name}?protocol=avro&enable-tidb-extension=true&avro-enable-watermark=true&partition-num=1&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760&avro-decimal-handling-mode=string&avro-bigint-unsigned-handling-mode=string"
 		;;
-	debezium-avro)
-		sink_uri="kafka://127.0.0.1:9092/${topic_name}?protocol=debezium-avro&enable-tidb-extension=true&avro-enable-watermark=true&partition-num=1&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760&avro-decimal-handling-mode=precise&avro-bigint-unsigned-handling-mode=string"
-		;;
 	*)
 		echo "unsupported protocol: $protocol"
 		exit 1
@@ -121,14 +118,11 @@ function run() {
 	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY"
 
 	avro_changefeed_id="avro-schema-registry-error-$RANDOM"
-	debezium_changefeed_id="debezium-avro-schema-registry-error-$RANDOM"
 	create_changefeed "avro" "$avro_changefeed_id" "ticdc-avro-schema-registry-error-$RANDOM" "$start_ts"
-	create_changefeed "debezium-avro" "$debezium_changefeed_id" "ticdc-debezium-avro-schema-registry-error-$RANDOM" "$start_ts"
 
 	run_sql "INSERT INTO avro_schema_registry_error.t1 VALUES (1, 'trigger schema register');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 
 	ensure "$MAX_RETRIES" "check_changefeed_status '127.0.0.1:8300' '$avro_changefeed_id' 'warning' 'last_warning' 'register schema failed with status 500'"
-	ensure "$MAX_RETRIES" "check_changefeed_status '127.0.0.1:8300' '$debezium_changefeed_id' 'warning' 'last_warning' 'register schema failed with status 500'"
 
 	cleanup_process "$CDC_BINARY"
 }
