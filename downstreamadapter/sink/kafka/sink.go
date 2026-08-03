@@ -31,6 +31,7 @@ import (
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
@@ -51,7 +52,7 @@ type sink struct {
 	metricsCollector kafka.MetricsCollector
 
 	comp       components
-	statistics *metrics.Statistics
+	statistics *statistics.Statistics
 
 	protocol      config.Protocol
 	partitionRule helper.DDLDispatchRule
@@ -111,7 +112,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 		return err
 	}
 
-	factory, err := kafka.NewSaramaFactory(ctx, options, changefeedID)
+	factory, err := kafka.NewSaramaFactory(ctx, options, changefeedID, nil)
 	if err != nil {
 		return err
 	}
@@ -156,11 +157,13 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, keyspaceID uint32,
 ) (*sink, error) {
-	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
+	stat := statistics.New(changefeedID, keyspaceID)
+	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, stat)
 	if err != nil {
+		stat.Close()
 		return nil, err
 	}
-	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp)
+	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp, stat)
 }
 
 func newWithComponents(
@@ -169,8 +172,8 @@ func newWithComponents(
 	keyspaceID uint32,
 	protocol config.Protocol,
 	comp components,
+	stat *statistics.Statistics,
 ) (*sink, error) {
-	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "sink")
 	var (
 		err           error
 		asyncProducer kafka.AsyncProducer
@@ -187,7 +190,7 @@ func newWithComponents(
 			asyncProducer.Close()
 		}
 		comp.close()
-		statistics.Close()
+		stat.Close()
 	}()
 
 	asyncProducer, err = comp.factory.AsyncProducer(ctx)
@@ -208,7 +211,7 @@ func newWithComponents(
 		partitionRule: helper.GetDDLDispatchRule(protocol),
 		protocol:      protocol,
 		comp:          comp,
-		statistics:    statistics,
+		statistics:    stat,
 
 		checkpointChan: make(chan uint64, 16),
 		eventChan:      chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
@@ -244,6 +247,7 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	s.statistics.TrackDMLEvent(event)
 	s.eventChan.Push(event)
 }
 
@@ -429,17 +433,12 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			}
 			for _, message := range future.Messages {
 				start := time.Now()
-				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-					message.SetPartitionKey(future.Key.PartitionKey)
-					if err = s.dmlProducer.AsyncSend(
-						ctx,
-						future.Key.Topic,
-						future.Key.Partition,
-						message); err != nil {
-						return 0, 0, err
-					}
-					return message.GetRowsCount(), int64(message.Length()), nil
-				}); err != nil {
+				message.SetPartitionKey(future.Key.PartitionKey)
+				if err = s.dmlProducer.AsyncSend(
+					ctx,
+					future.Key.Topic,
+					future.Key.Partition,
+					message); err != nil {
 					return err
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())

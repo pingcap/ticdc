@@ -25,7 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"go.uber.org/zap"
 )
 
@@ -64,7 +64,10 @@ type Writer struct {
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache *lru.Cache
 
-	statistics *metrics.Statistics
+	statistics *statistics.Statistics
+
+	// affectedRows records the affected row counts reported by the downstream.
+	affectedRows *affectedRowsRecorder
 
 	// activeActiveSyncStatsCollector accumulates conflict statistics from TiDB session
 	// variable @@tidb_cdc_active_active_sync_stats. It is shared across all DML writers
@@ -93,7 +96,7 @@ func NewWriter(
 	db *sql.DB,
 	cfg *Config,
 	changefeedID common.ChangeFeedID,
-	statistics *metrics.Statistics,
+	statistics *statistics.Statistics,
 	activeActiveSyncStatsCollector *ActiveActiveSyncStatsCollector,
 ) *Writer {
 	writerCtx, cancel := context.WithCancel(ctx)
@@ -109,6 +112,7 @@ func NewWriter(
 		ddlTsTableInit:                 false,
 		stmtCache:                      cfg.stmtCache,
 		statistics:                     statistics,
+		affectedRows:                   newAffectedRowsRecorder(changefeedID),
 		maxDDLTsBatch:                  cfg.MaxTxnRow,
 		dmlSession:                     *NewDMLSession(dmlConnIdleTimeout),
 		isInErrorCausedSafeMode:        false,
@@ -239,9 +243,7 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 
 	} else {
 		w.tryDryRunBlock()
-		err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
-			return dmls.rowCount, dmls.approximateSize, nil
-		})
+		w.statistics.RecordDMLResult(dmls.rowCount, nil)
 	}
 
 	if err != nil {
@@ -293,6 +295,9 @@ func (w *Writer) tryDryRunBlock() {
 }
 
 func (w *Writer) Close() {
+	if w.affectedRows != nil {
+		w.affectedRows.close()
+	}
 	if w.stmtCache != nil {
 		w.stmtCache.Purge()
 	}

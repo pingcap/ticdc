@@ -391,7 +391,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_dml_event_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance)",
+              "expr": "sum(rate(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -441,6 +441,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Approximate raw-entry bytes of DML events successfully written to downstream.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -483,19 +484,19 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_write_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (instance, type, changefeed)",
+              "expr": "sum(rate(ticdc_sink_write_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name, changefeed, instance)",
               "hide": false,
               "interval": "",
-              "legendFormat": "{{instance}}-{{changefeed}}-{{type}}",
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}",
               "queryType": "randomWalk",
               "refId": "A"
             },
             {
               "exemplar": true,
-              "expr": "avg_over_time(sum(rate(ticdc_sink_write_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (instance, type, changefeed)[1m:])",
+              "expr": "avg_over_time(sum(rate(ticdc_sink_write_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name, changefeed, instance)[1m:])",
               "hide": true,
               "interval": "",
-              "legendFormat": "{{instance}}-{{changefeed}}-AVG",
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-AVG",
               "refId": "B"
             }
           ],
@@ -5454,7 +5455,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(delta(ticdc_sink_execution_error{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,event_type)",
+              "expr": "sum(increase(ticdc_sink_execution_error{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,event_type)",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{event_type}}",
               "queryType": "randomWalk",
@@ -11303,7 +11304,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(delta(ticdc_ddl_execution{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,ddl_type)",
+              "expr": "sum(increase(ticdc_ddl_execution{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,ddl_type)",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{ddl_type}}",
               "queryType": "randomWalk",
@@ -11749,5 +11750,5 @@
   "timezone": "browser",
   "title": "${DS_TEST-CLUSTER}-TiCDC-New-Arch-KeyspaceName",
   "uid": "lGT5hED6vqTn",
-  "version": 41
+  "version": 42
 }

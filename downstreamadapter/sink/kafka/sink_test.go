@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -228,7 +229,8 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 		}
 	}()
 
-	s, err := newWithComponents(ctx, changefeedID, common.DefaultKeyspaceID, protocol, comp)
+	s, err := newWithComponents(ctx, changefeedID, common.DefaultKeyspaceID, protocol, comp,
+		statistics.New(changefeedID, common.DefaultKeyspaceID))
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +267,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	job := helper.DDL2Job(createTableSQL)
 	require.NotNil(t, job)
 
-	var count atomic.Int64
+	var count, dmlFlushCount atomic.Int64
 	ddlEvent := &commonEvent.DDLEvent{
 		Query:      job.Query,
 		SchemaName: job.SchemaName,
@@ -302,7 +304,10 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 		"insert into t values (1, 'test')",
 		"insert into t values (2, 'test2');")
 	dmlEvent.PostTxnFlushed = []func(){
-		func() { count.Add(1) },
+		func() {
+			count.Add(1)
+			dmlFlushCount.Add(1)
+		},
 	}
 	dmlEvent.CommitTs = 2
 
@@ -310,6 +315,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	asyncProducer := kafka.NewMockAsyncProducer(ctrl)
 	syncProducer := kafka.NewMockSyncProducer(ctrl)
+	ackCh := make(chan func(), 2)
 	asyncProducer.EXPECT().AsyncRunCallback(gomock.Any()).Return(nil).AnyTimes()
 	asyncProducer.EXPECT().AsyncSend(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		DoAndReturn(func(
@@ -318,9 +324,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 			_ int32,
 			message *codecCommon.Message,
 		) error {
-			if message.Callback != nil {
-				message.Callback()
-			}
+			ackCh <- message.Callback
 			return nil
 		}).Times(2)
 	asyncProducer.EXPECT().Close().AnyTimes()
@@ -336,6 +340,19 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	require.NoError(t, err)
 
 	kafkaSink.AddDMLEvent(dmlEvent)
+
+	require.Eventually(t, func() bool {
+		return len(ackCh) == 2
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Zero(t, dmlFlushCount.Load())
+
+	(<-ackCh)()
+	require.Zero(t, dmlFlushCount.Load())
+
+	(<-ackCh)()
+	require.Eventually(t, func() bool {
+		return dmlFlushCount.Load() == 1
+	}, 5*time.Second, 10*time.Millisecond)
 
 	ddlEvent2.PostFlush()
 

@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/rcrowley/go-metrics"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -30,13 +31,17 @@ type saramaFactory struct {
 	changefeedID   common.ChangeFeedID
 	option         *options
 	metricRegistry metrics.Registry
+	statistics     *statistics.Statistics
 }
 
 // NewSaramaFactory constructs a Factory with sarama implementation.
+// stat is passed to the DML producer for sink statistics. It may be nil only
+// for paths that never send DML messages, such as Verify.
 func NewSaramaFactory(
 	ctx context.Context,
 	o *options,
 	changefeedID common.ChangeFeedID,
+	stat *statistics.Statistics,
 ) (Factory, error) {
 	start := time.Now()
 	config, err := newSaramaConfig(ctx, o)
@@ -80,6 +85,7 @@ func NewSaramaFactory(
 		changefeedID:   changefeedID,
 		option:         o,
 		metricRegistry: metrics.NewRegistry(),
+		statistics:     stat,
 	}, nil
 }
 
@@ -178,6 +184,7 @@ func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error
 		client:       client,
 		producer:     p,
 		changefeedID: f.changefeedID,
+		statistics:   f.statistics,
 		closed:       atomic.NewBool(false),
 	}, nil
 }

@@ -31,8 +31,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/tidb/br/pkg/version"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
@@ -52,7 +52,7 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	cfg.BatchDMLEnable = true
 	cfg.EnableDDLTs = defaultEnableDDLTs
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+	statistics := statistics.New(changefeedID, common.DefaultKeyspaceID)
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
 	t.Cleanup(writer.Close)
 	// assign a no-op stmt cache to bypass actual DB operations in unit tests
@@ -75,7 +75,7 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 	cfg.ServerInfo = version.ParseServerInfo(defaultRunningAddIndexNewSQLVersion)
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+	statistics := statistics.New(changefeedID, common.DefaultKeyspaceID)
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
 	t.Cleanup(writer.Close)
 

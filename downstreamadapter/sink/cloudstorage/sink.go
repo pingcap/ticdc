@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
@@ -65,7 +66,7 @@ type sink struct {
 	lastSendCheckpointTsTime time.Time
 
 	cron       *cron.Cron
-	statistics *metrics.Statistics
+	statistics *statistics.Statistics
 
 	isNormal    *atomic.Bool
 	cleanupJobs []func() /* only for test */
@@ -135,7 +136,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "cloudstorage")
+	statistics := statistics.New(changefeedID, keyspaceID)
 	defer func() {
 		if err != nil {
 			statistics.Close()
@@ -205,6 +206,7 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 			zap.String("dispatcher", event.GetDispatcherID().String()))
 		return
 	}
+	s.statistics.TrackDMLEvent(event)
 	s.dmlWriters.addDMLEvent(event)
 }
 

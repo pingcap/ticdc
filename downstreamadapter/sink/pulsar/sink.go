@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -51,7 +52,7 @@ type sink struct {
 	ddlProducer ddlProducer
 
 	comp       component
-	statistics *metrics.Statistics
+	statistics *statistics.Statistics
 
 	protocol      config.Protocol
 	partitionRule helper.DDLDispatchRule
@@ -132,7 +133,7 @@ func newWithComponent(
 	var (
 		dmlProducer dmlProducer
 		ddlProducer ddlProducer
-		statistics  *metrics.Statistics
+		stat        *statistics.Statistics
 	)
 	defer func() {
 		if err != nil {
@@ -142,15 +143,16 @@ func newWithComponent(
 			if dmlProducer != nil {
 				dmlProducer.close()
 			}
-			if statistics != nil {
-				statistics.Close()
+			if stat != nil {
+				stat.Close()
 			}
 			comp.close()
 		}
 	}()
 
 	failpointCh := make(chan error, 1)
-	statistics = metrics.NewStatistics(changefeedID, keyspaceID, "pulsar")
+	stat = statistics.New(changefeedID, keyspaceID)
+	comp.statistics = stat
 	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
 	if err != nil {
 		return nil, err
@@ -173,7 +175,7 @@ func newWithComponent(
 		protocol:      protocol,
 		partitionRule: helper.GetDDLDispatchRule(protocol),
 		comp:          comp,
-		statistics:    statistics,
+		statistics:    stat,
 		isNormal:      atomic.NewBool(true),
 		ctx:           ctx,
 	}, nil
@@ -197,6 +199,7 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	s.statistics.TrackDMLEvent(event)
 	s.eventChan.Push(event)
 }
 
@@ -533,14 +536,10 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			}
 			for _, message := range future.Messages {
 				start := time.Now()
-				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-					message.SetPartitionKey(future.Key.PartitionKey)
-					if err = s.dmlProducer.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
-						return 0, 0, err
-					}
-					return message.GetRowsCount(), int64(message.Length()), nil
-				}); err != nil {
-					return errors.Trace(err)
+				message.SetPartitionKey(future.Key.PartitionKey)
+				if err = s.dmlProducer.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
+					err = errors.Trace(err)
+					return err
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())
 			}

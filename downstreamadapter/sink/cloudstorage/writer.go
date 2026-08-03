@@ -25,7 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -45,7 +45,7 @@ type writer struct {
 	// the channel does not need to be closed explicitly.
 	flushCh chan flushTask
 
-	statistics        *pmetrics.Statistics
+	statistics        *statistics.Statistics
 	filePathGenerator *cloudstorage.FilePathGenerator
 
 	metricFlushBytes    prometheus.Observer
@@ -74,7 +74,7 @@ func newWriter(
 	storage storeapi.Storage,
 	config *cloudstorage.Config,
 	extension string,
-	statistics *pmetrics.Statistics,
+	statistics *statistics.Statistics,
 	spoolBuffer *spool.Spool,
 ) *writer {
 	var (
@@ -218,46 +218,13 @@ func (d *writer) discardEntries(entries []*spool.Entry) {
 	}
 }
 
-func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, payload *payload) error {
-	keyspace := d.changeFeedID.Keyspace()
-	changefeed := d.changeFeedID.Name()
+func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, payload *payload) (err error) {
+	defer func() {
+		d.statistics.RecordDMLResult(payload.rowsCount, err)
+	}()
+
 	start := time.Now()
-
-	err := d.statistics.RecordBatchExecution(func() (int, int64, error) {
-		if d.config.FlushConcurrency <= 1 {
-			err := d.storage.WriteFile(ctx, dataFilePath, payload.data)
-			if err != nil {
-				return 0, 0, err
-			}
-			return payload.rowsCount, payload.nBytes, nil
-		}
-
-		writer, err := d.storage.Create(ctx, dataFilePath, &storeapi.WriterOption{
-			Concurrency: d.config.FlushConcurrency,
-		})
-		if err != nil {
-			return 0, 0, err
-		}
-
-		_, err = writer.Write(ctx, payload.data)
-		if err != nil {
-			closeErr := writer.Close(ctx)
-			if closeErr != nil {
-				log.Warn("failed to close writer after write failure",
-					zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
-					zap.String("path", dataFilePath), zap.Error(closeErr))
-			}
-			return 0, 0, err
-		}
-
-		if err = writer.Close(ctx); err != nil {
-			log.Error("failed to close concurrency writer",
-				zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
-				zap.String("path", dataFilePath), zap.Error(err))
-			return 0, 0, err
-		}
-		return payload.rowsCount, payload.nBytes, nil
-	})
+	err = d.writeData(ctx, dataFilePath, payload.data)
 	if err != nil {
 		return err
 	}
@@ -265,8 +232,8 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	err = d.storage.WriteFile(ctx, indexFilePath, []byte(path.Base(dataFilePath)+"\n"))
 	if err != nil {
 		log.Error("failed to write index file to external storage",
-			zap.String("keyspace", keyspace),
-			zap.String("changefeed", changefeed),
+			zap.String("keyspace", d.changeFeedID.Keyspace()),
+			zap.String("changefeed", d.changeFeedID.Name()),
 			zap.String("path", indexFilePath),
 			zap.Int("shardID", d.shardID),
 			zap.Error(err))
@@ -286,6 +253,40 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	}
 	// Help GC release the potentially large encoded payload buffer before returning.
 	payload.data = nil
+	return nil
+}
+
+func (d *writer) writeData(ctx context.Context, dataFilePath string, data []byte) error {
+	if d.config.FlushConcurrency <= 1 {
+		return d.storage.WriteFile(ctx, dataFilePath, data)
+	}
+
+	writer, err := d.storage.Create(ctx, dataFilePath, &storeapi.WriterOption{
+		Concurrency: d.config.FlushConcurrency,
+	})
+	if err != nil {
+		return err
+	}
+
+	_, err = writer.Write(ctx, data)
+	if err != nil {
+		closeErr := writer.Close(ctx)
+		if closeErr != nil {
+			log.Warn("failed to close writer after write failure",
+				zap.String("keyspace", d.changeFeedID.Keyspace()),
+				zap.String("changefeed", d.changeFeedID.Name()),
+				zap.String("path", dataFilePath), zap.Error(closeErr))
+		}
+		return err
+	}
+
+	if err = writer.Close(ctx); err != nil {
+		log.Error("failed to close concurrency writer",
+			zap.String("keyspace", d.changeFeedID.Keyspace()),
+			zap.String("changefeed", d.changeFeedID.Name()),
+			zap.String("path", dataFilePath), zap.Error(err))
+		return err
+	}
 	return nil
 }
 

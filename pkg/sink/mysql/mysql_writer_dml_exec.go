@@ -47,7 +47,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	writeTimeout, _ := time.ParseDuration(w.cfg.WriteTimeout)
 	writeTimeout += networkDriftDuration
 
-	tryExec := func() (int, int64, error) {
+	tryExec := func() error {
 		start := time.Now()
 		defer func() {
 			if time.Since(start) > w.cfg.SlowQuery {
@@ -87,9 +87,9 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			return nil
 		})
 		if err != nil {
-			return 0, 0, err
+			return err
 		}
-		return dmls.rowCount, dmls.approximateSize, nil
+		return nil
 	}
 	return retry.Do(w.ctx, func() error {
 		failpoint.Inject("MySQLSinkTxnRandomError", func() {
@@ -114,7 +114,8 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			failpoint.Return(err)
 		})
 
-		err := w.statistics.RecordBatchExecution(tryExec)
+		err := tryExec()
+		w.statistics.RecordDMLResult(dmls.rowCount, err)
 		if err != nil {
 			return errors.Trace(w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls))
 		}
@@ -172,7 +173,7 @@ func (w *Writer) sequenceExecute(
 		if rowsAffected, err := res.RowsAffected(); err != nil {
 			log.Warn("get rows affected rows failed", zap.Error(err))
 		} else {
-			w.statistics.RecordRowsAffected(rowsAffected, dmls.rowTypes[i])
+			w.affectedRows.recordRowsAffected(rowsAffected, dmls.rowTypes[i])
 		}
 		cancelFunc()
 	}
@@ -214,7 +215,7 @@ func (w *Writer) multiStmtExecute(
 	if rowsAffected, err := res.RowsAffected(); err != nil {
 		log.Warn("get rows affected rows failed", zap.Error(err))
 	} else {
-		w.statistics.RecordTotalRowsAffected(rowsAffected, int64(len(dmls.sqls)))
+		w.affectedRows.recordTotalRowsAffected(rowsAffected, int64(len(dmls.sqls)))
 	}
 	return nil
 }

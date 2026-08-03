@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -54,7 +55,7 @@ type Sink struct {
 	// Compatibility callers built through NewMySQLSink use one shared pool.
 	dmlDB      *sql.DB
 	controlDB  *sql.DB
-	statistics *metrics.Statistics
+	statistics *statistics.Statistics
 
 	conflictDetector *causality.ConflictDetector
 
@@ -158,7 +159,7 @@ func newMySQLSinkWithDBs(
 	progressInterval time.Duration,
 	keyspaceID uint32,
 ) *Sink {
-	stat := metrics.NewStatistics(changefeedID, keyspaceID, "TxnSink")
+	stat := statistics.New(changefeedID, keyspaceID)
 
 	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {
@@ -320,6 +321,7 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	s.statistics.TrackDMLEvent(event)
 	s.conflictDetector.Add(event)
 }
 

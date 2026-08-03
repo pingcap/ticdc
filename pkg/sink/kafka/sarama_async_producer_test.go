@@ -12,20 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package pulsar
+package kafka
 
 import (
 	"errors"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
+// gatherMetric returns the metric of the given name whose labels match
+// labelValues (alternating key/value pairs), or nil if it does not exist.
 func gatherMetric(
 	t *testing.T, reg *prometheus.Registry, name string, labelValues ...string,
 ) *dto.Metric {
@@ -60,65 +61,50 @@ func gatherMetric(
 	return nil
 }
 
-func newTestMessage(rows int, callback func()) *codecCommon.Message {
-	message := &codecCommon.Message{Key: []byte("k"), Value: []byte("v")}
-	message.SetRowsCount(rows)
-	message.Callback = callback
-	return message
-}
-
-func newTestDMLProducers(t *testing.T, changefeed string) (*dmlProducers, *prometheus.Registry) {
+func newTestStatistics(t *testing.T, changefeed string) (*saramaAsyncProducer, *prometheus.Registry) {
 	t.Helper()
 	reg := prometheus.NewRegistry()
 	statistics.InitMetrics(reg)
 	stat := statistics.New(common.NewChangefeedID4Test("test-keyspace", changefeed), 123)
 	t.Cleanup(stat.Close)
-	return &dmlProducers{statistics: stat}, reg
+	return &saramaAsyncProducer{statistics: stat}, reg
 }
 
-func TestHandleAsyncSendResultSuccess(t *testing.T) {
-	p, reg := newTestDMLProducers(t, "async-send-success")
+func TestHandleSuccessRecordsRowsAndRunsCallback(t *testing.T) {
+	p, reg := newTestStatistics(t, "handle-success")
 
 	callbackCalled := make(chan struct{})
-	message := newTestMessage(2, func() { close(callbackCalled) })
-	p.handleAsyncSendResult(message, nil)
+	p.handleSuccess(&messageMetadata{rowCount: 3, callback: func() { close(callbackCalled) }})
 
 	<-callbackCalled
 	// The row count is observed into the batch histogram on success.
 	hist := gatherMetric(t, reg, "ticdc_sink_batch_row_count",
-		"namespace", "test-keyspace", "changefeed", "async-send-success")
+		"namespace", "test-keyspace", "changefeed", "handle-success")
 	require.NotNil(t, hist)
 	require.Equal(t, uint64(1), hist.GetHistogram().GetSampleCount())
-	require.Equal(t, float64(2), hist.GetHistogram().GetSampleSum())
+	require.Equal(t, float64(3), hist.GetHistogram().GetSampleSum())
 }
 
-func TestHandleAsyncSendResultErrorSkipsCallback(t *testing.T) {
-	p, reg := newTestDMLProducers(t, "async-send-error")
+func TestHandleSuccessNilMetaIsNoop(t *testing.T) {
+	p, _ := newTestStatistics(t, "handle-success-nil")
+	require.NotPanics(t, func() { p.handleSuccess(nil) })
+}
 
-	message := newTestMessage(4, func() { t.Fatal("callback must not run on failure") })
-	p.handleAsyncSendResult(message, errors.New("broker boom"))
+func TestHandleFailureRecordsErrorAndReturnsIt(t *testing.T) {
+	p, reg := newTestStatistics(t, "handle-failure")
 
+	sentinel := errors.New("broker boom")
+	require.ErrorIs(t, p.handleFailure(5, sentinel), sentinel)
+
+	// The failed message increments the DML error counter and observes no rows.
 	errMetric := gatherMetric(t, reg, "ticdc_sink_execution_error",
-		"namespace", "test-keyspace", "changefeed", "async-send-error", "event_type", "dml")
+		"namespace", "test-keyspace", "changefeed", "handle-failure", "event_type", "dml")
 	require.NotNil(t, errMetric)
 	require.Equal(t, float64(1), errMetric.GetCounter().GetValue())
 	// No rows are observed for failed attempts; the histogram series exists
 	// (created eagerly by New) but has no samples.
 	hist := gatherMetric(t, reg, "ticdc_sink_batch_row_count",
-		"namespace", "test-keyspace", "changefeed", "async-send-error")
+		"namespace", "test-keyspace", "changefeed", "handle-failure")
 	require.NotNil(t, hist)
 	require.Equal(t, uint64(0), hist.GetHistogram().GetSampleCount())
-}
-
-func TestHandleSendFailureRecordsErrorAndReturnsIt(t *testing.T) {
-	p, reg := newTestDMLProducers(t, "send-failure")
-
-	sentinel := errors.New("producer closed")
-	message := newTestMessage(4, nil)
-	require.ErrorIs(t, p.handleSendFailure(message, sentinel), sentinel)
-
-	errMetric := gatherMetric(t, reg, "ticdc_sink_execution_error",
-		"namespace", "test-keyspace", "changefeed", "send-failure", "event_type", "dml")
-	require.NotNil(t, errMetric)
-	require.Equal(t, float64(1), errMetric.GetCounter().GetValue())
 }

@@ -18,78 +18,13 @@ import "github.com/prometheus/client_golang/prometheus"
 // LargeRowSizeLowBound is set to 2K, only track data event with size not smaller than it.
 const LargeRowSizeLowBound = 2 * 1024
 
-// ---------- Metrics used in Statistics. ---------- //
-var (
-	// ExecBatchHistogram records batch size of a txn.
-	ExecBatchHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "batch_row_count",
-			Help:      "Row count number for a given batch.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2, 18),
-		}, []string{getKeyspaceLabel(), "changefeed", "type", "keyspace_id"}) // type is for `sinkType`
-
-	// ExecBatchWriteBytesHistogram records bytes written for each batch.
-	ExecBatchWriteBytesHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "batch_write_bytes",
-			Help:      "Bytes number for a given batch.",
-			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB~128MB
-		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
-
-	// ExecWriteBytesGauge records the total number of bytes written by sink.
-	TotalWriteBytesCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "write_bytes_total",
-			Help:      "Total number of bytes written by sink",
-		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
-
-	EventSizeHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "event_size",
-			Help:      "The size of changed events (in bytes).",
-			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 30), // 0~32M
-		}, []string{getKeyspaceLabel(), "changefeed"})
-
-	ExecDMLEventCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "dml_event_count",
-			Help:      "Total count of DML events.",
-		}, []string{getKeyspaceLabel(), "changefeed"})
-
-	ExecDMLEventRowsAffectedCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "dml_event_affected_row_count",
-			Help:      "Total count of affected rows.",
-		}, []string{getKeyspaceLabel(), "changefeed", "count_type", "row_type"})
-
-	ActiveActiveConflictSkipRowsCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "active_active_conflict_skip_rows_total",
-			Help:      "Total number of rows skipped due to last-write-wins conflict resolution in TiDB active-active replication.",
-		}, []string{getKeyspaceLabel(), "changefeed"})
-	// ExecutionErrorCounter is the counter of execution errors.
-	ExecutionErrorCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "execution_error",
-			Help:      "Total count of execution errors.",
-		}, []string{getKeyspaceLabel(), "changefeed", "event_type"})
-)
+var ActiveActiveConflictSkipRowsCounter = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Namespace: "ticdc",
+		Subsystem: "sink",
+		Name:      "active_active_conflict_skip_rows_total",
+		Help:      "Total number of rows skipped due to last-write-wins conflict resolution in TiDB active-active replication.",
+	}, []string{getKeyspaceLabel(), "changefeed"})
 
 // ---------- Metrics for txn sink and backends. ---------- //
 var (
@@ -233,15 +168,7 @@ var (
 
 // InitMetrics registers all metrics in this file.
 func initSinkMetrics(registry *prometheus.Registry) {
-	// common sink metrics
-	registry.MustRegister(ExecBatchHistogram)
-	registry.MustRegister(ExecBatchWriteBytesHistogram)
-	registry.MustRegister(TotalWriteBytesCounter)
-	registry.MustRegister(EventSizeHistogram)
-	registry.MustRegister(ExecDMLEventCounter)
-	registry.MustRegister(ExecDMLEventRowsAffectedCounter)
 	registry.MustRegister(ActiveActiveConflictSkipRowsCounter)
-	registry.MustRegister(ExecutionErrorCounter)
 
 	// txn sink metrics
 	registry.MustRegister(ConflictDetectDuration)

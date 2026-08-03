@@ -19,7 +19,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/zap"
 )
@@ -28,13 +28,13 @@ import (
 // Including DDL and DML.
 type Sink struct {
 	eventCh    *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
-	statistics *metrics.Statistics
+	statistics *statistics.Statistics
 }
 
 func New(changefeedID common.ChangeFeedID, keyspaceID uint32) (*Sink, error) {
 	return &Sink{
 		eventCh:    chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
-		statistics: metrics.NewStatistics(changefeedID, keyspaceID, "sink"),
+		statistics: statistics.New(changefeedID, keyspaceID),
 	}, nil
 }
 
@@ -54,6 +54,7 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L23
 	// Use zap.Stringer to call String() method which applies log redaction
 	log.Debug("BlackHoleSink: WriteEvents", zap.Stringer("dml", event))
+	s.statistics.TrackDMLEvent(event)
 	s.eventCh.Push(event)
 }
 
@@ -104,12 +105,7 @@ func (s *Sink) Run(ctx context.Context) error {
 				log.Info("blackhole sink event channel closed")
 				return nil
 			}
-			err := s.statistics.RecordBatchExecution(func() (int, int64, error) {
-				return int(event.Len()), event.GetSize(), nil
-			})
-			if err != nil {
-				return err
-			}
+			s.statistics.RecordDMLResult(int(event.Len()), nil)
 			event.PostFlush()
 		}
 	}
