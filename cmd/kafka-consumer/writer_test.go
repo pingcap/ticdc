@@ -284,6 +284,7 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
 }
 
+<<<<<<< HEAD
 func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) {
 	// Scenario:
 	// 1) TiCDC writes DML messages to Kafka in commitTs order.
@@ -339,4 +340,105 @@ func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) 
 	w.appendRow2Group(newDMLEvent(1, 100), progress, kafka.Offset(12))
 	resolved = group.ResolveInto(150, resolvedEvents)
 	require.Empty(t, resolved)
+=======
+func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
+	replicaCfg := config.GetDefaultReplicaConfig()
+	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, true)
+	require.NoError(t, err)
+
+	w := &writer{
+		progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
+		eventRouter:            eventRouter,
+		protocol:               config.ProtocolAvro,
+		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
+	}
+
+	ddl := &commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `target`.`dst` LIKE `target`.`src`",
+		SchemaName: "source",
+		TableName:  "dst",
+		Type:       byte(timodel.ActionCreateTable),
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{
+				Schema:       "source",
+				Table:        "dst",
+				IsPartition:  true,
+				TargetSchema: "target",
+				TargetTable:  "dst",
+			},
+		},
+	}
+	w.onDDL(ddl)
+	require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
+
+	newDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
+		return &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			CommitTs:        commitTs,
+			RowTypes:        []common.RowType{common.RowTypeUpdate},
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "target", Table: "dst"},
+			},
+		}
+	}
+
+	progress := w.progresses[0]
+	w.appendRow2Group(newDMLEvent(200), progress, kafka.Offset(10))
+	w.appendRow2Group(newDMLEvent(100), progress, kafka.Offset(11))
+
+	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
+	require.Len(t, resolved, 1)
+	require.Equal(t, uint64(100), resolved[0].CommitTs)
+}
+
+func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
+	for _, protocol := range []config.Protocol{
+		config.ProtocolDebezium,
+		config.ProtocolDebeziumAvro,
+	} {
+		t.Run(protocol.String(), func(t *testing.T) {
+			replicaCfg := config.GetDefaultReplicaConfig()
+			eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
+			require.NoError(t, err)
+
+			w := &writer{
+				progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
+				eventRouter:            eventRouter,
+				protocol:               protocol,
+				partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
+			}
+
+			w.partitionTableAccessor.Add("target", "src")
+			ddl := &commonEvent.DDLEvent{
+				Query:      "CREATE TABLE `target`.`dst` LIKE `target`.`src`",
+				SchemaName: "target",
+				TableName:  "dst",
+				Type:       byte(timodel.ActionCreateTable),
+			}
+			w.onDDL(ddl)
+			require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
+
+			newDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
+				return &commonEvent.DMLEvent{
+					PhysicalTableID: 1,
+					CommitTs:        commitTs,
+					RowTypes:        []common.RowType{common.RowTypeUpdate},
+					Rows:            chunk.NewChunkWithCapacity(nil, 0),
+					TableInfo: &common.TableInfo{
+						TableName: common.TableName{Schema: "target", Table: "dst"},
+					},
+				}
+			}
+
+			progress := w.progresses[0]
+			w.appendRow2Group(newDMLEvent(200), progress, kafka.Offset(10))
+			w.appendRow2Group(newDMLEvent(100), progress, kafka.Offset(11))
+
+			resolved := progress.eventsGroup[1].ResolveInto(150, nil)
+			require.Len(t, resolved, 1)
+			require.Equal(t, uint64(100), resolved[0].CommitTs)
+		})
+	}
+>>>>>>> d220ee9b8 (sink: add debezium-avro protocol (#5475))
 }

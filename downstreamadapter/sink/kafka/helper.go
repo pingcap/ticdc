@@ -90,7 +90,7 @@ func newKafkaSinkComponent(
 		return comp, protocol, err
 	}
 
-	isAvroLike := protocol == config.ProtocolAvro
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
 	comp.eventRouter, err = eventrouter.NewEventRouter(
 		sinkConfig, topic, false, isAvroLike)
 	if err != nil {
