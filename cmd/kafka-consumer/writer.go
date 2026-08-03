@@ -553,8 +553,20 @@ func (w *writer) onDDL(ddl *event.DDLEvent) {
 		if err != nil {
 			log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
 		}
-		if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
-			w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+		if v, ok := stmt.(*ast.CreateTableStmt); ok {
+			if v.Partition != nil {
+				w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+				return
+			}
+			if v.ReferTable != nil {
+				referSchema := v.ReferTable.Schema.O
+				if referSchema == "" {
+					referSchema = ddl.GetSchemaName()
+				}
+				if w.partitionTableAccessor.IsPartitionTable(referSchema, v.ReferTable.Name.O) {
+					w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+				}
+			}
 		}
 	case model.ActionRenameTable:
 		if w.partitionTableAccessor.IsPartitionTable(ddl.ExtraSchemaName, ddl.ExtraTableName) {

@@ -35,6 +35,8 @@ type Coordinator interface {
 	ListChangefeeds(ctx context.Context, keyspace string) ([]*config.ChangeFeedInfo, []*config.ChangeFeedStatus, error)
 	// GetChangefeed returns a changefeed
 	GetChangefeed(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error)
+	// GetPersistedChangefeedInfo returns the latest backend-persisted changefeed info.
+	GetPersistedChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error)
 	// CreateChangefeed creates a new changefeed
 	CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error
 	// RemoveChangefeed gets a changefeed

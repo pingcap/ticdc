@@ -18,7 +18,7 @@ import (
 	"net/url"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 )
@@ -68,7 +68,7 @@ func newTokenProvider(ctx context.Context, o *options) (sarama.AccessTokenProvid
 
 	tokenURL, err := url.Parse(o.SASL.OAuth2.TokenURL)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
 
 	cfg := clientcredentials.Config{

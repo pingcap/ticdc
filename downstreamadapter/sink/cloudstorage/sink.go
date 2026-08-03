@@ -23,12 +23,12 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -64,9 +64,8 @@ type sink struct {
 	lastCheckpointTs         atomic.Uint64
 	lastSendCheckpointTsTime time.Time
 
-	tableSchemaStore *commonEvent.TableSchemaStore
-	cron             *cron.Cron
-	statistics       *metrics.Statistics
+	cron       *cron.Cron
+	statistics *metrics.Statistics
 
 	isNormal    *atomic.Bool
 	cleanupJobs []func() /* only for test */
@@ -88,14 +87,10 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	if err != nil {
 		return err
 	}
-<<<<<<< HEAD
-	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
-=======
 	if _, err = columnselector.New(sinkConfig); err != nil {
 		return err
 	}
 	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt, math.MaxInt)
->>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 	if err != nil {
 		return err
 	}
@@ -125,9 +120,9 @@ func New(
 	}
 	// get cloud storage file extension according to the specific protocol.
 	ext := helper.GetFileExtension(protocol)
-	// the last param maxMsgBytes is mainly to limit the size of a single message for
-	// batch protocols in mq scenario. In cloud storage sink, we just set it to max int.
-	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
+	// Message size limits are mainly for MQ batch protocols. Cloud storage uses
+	// max int for both the final message limit and the batch threshold.
+	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt, math.MaxInt)
 	if err != nil {
 		return nil, err
 	}
@@ -256,37 +251,36 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		}
 		sourceTableInfo := event.MultipleTableInfos[1]
 
-		var def cloudstorage.TableDefinition
-		def.FromTableInfo(
+		schemaEvent := *event
+		schemaEvent.TableInfo = event.TableInfo.CloneWithRouting(
 			event.GetTargetExtraSchemaName(),
 			event.GetTargetExtraTableName(),
-			event.TableInfo,
-			event.FinishedTs,
-			s.cfg.OutputColumnID,
 		)
-		def.Query = event.Query
-		def.Type = event.Type
-		if err := s.writeFile(event, def); err != nil {
+		var schemaFile cloudstorage.SchemaFile
+		schemaFile.Build(&schemaEvent, s.cfg.OutputColumnID)
+		if err := s.writeFile(event, schemaFile); err != nil {
 			return err
 		}
-		var sourceTableDef cloudstorage.TableDefinition
-		sourceTableDef.FromTableInfo(
+		sourceEvent := *event
+		sourceEvent.TableInfo = sourceTableInfo.CloneWithRouting(
 			event.GetTargetSchemaName(),
 			event.GetTargetTableName(),
-			sourceTableInfo,
-			event.FinishedTs,
-			s.cfg.OutputColumnID,
 		)
-		sourceEvent := *event
-		sourceEvent.TableInfo = sourceTableInfo
-		if err := s.writeFile(&sourceEvent, sourceTableDef); err != nil {
+		var sourceSchemaFile cloudstorage.SchemaFile
+		sourceSchemaFile.Build(&sourceEvent, s.cfg.OutputColumnID)
+		// Source schema file carries table structure only. The DDL is replayed
+		// from the exchanged table schema file.
+		sourceSchemaFile.Query = ""
+		sourceSchemaFile.Type = 0
+		if err := s.writeFile(&sourceEvent, sourceSchemaFile); err != nil {
 			return err
 		}
-	} else {
+	}
+	if event.GetDDLType() != model.ActionExchangeTablePartition {
 		for _, e := range event.GetEvents() {
-			var def cloudstorage.TableDefinition
-			def.FromDDLEvent(e, s.cfg.OutputColumnID)
-			if err := s.writeFile(e, def); err != nil {
+			var schemaFile cloudstorage.SchemaFile
+			schemaFile.Build(e, s.cfg.OutputColumnID)
+			if err := s.writeFile(e, schemaFile); err != nil {
 				return err
 			}
 		}
@@ -303,22 +297,15 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 	return nil
 }
 
-func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefinition) error {
+func (s *sink) writeFile(v *commonEvent.DDLEvent, schemaFile cloudstorage.SchemaFile) error {
 	// skip write database-level event for 'use-table-id-as-path' mode
-	if s.cfg.UseTableIDAsPath && def.Table == "" {
+	if s.cfg.UseTableIDAsPath && schemaFile.Table == "" {
 		return nil
 	}
-	encodedDef, err := def.MarshalWithQuery()
-	if err != nil {
-		return err
-	}
-
-	path, err := def.GenerateSchemaFilePath(s.cfg.UseTableIDAsPath, v.GetTableID())
-	if err != nil {
-		return err
-	}
+	encodedSchemaFile := schemaFile.Marshal()
+	path := schemaFile.Path(s.cfg.UseTableIDAsPath, v.GetTableID())
 	return s.statistics.RecordDDLExecution(func() (string, error) {
-		err = s.storage.WriteFile(s.ctx, path, encodedDef)
+		err := s.storage.WriteFile(s.ctx, path, encodedSchemaFile)
 		if err != nil {
 			return "", err
 		}
@@ -394,8 +381,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 	}
 }
 
-func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
-	s.tableSchemaStore = tableSchemaStore
+func (s *sink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {
 }
 
 func (s *sink) initCron(

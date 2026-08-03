@@ -1,4 +1,5 @@
 import sys
+import os
 import requests as rq
 from requests.exceptions import RequestException
 import time
@@ -175,7 +176,9 @@ def create_changefeed(sink_uri):
     })
     headers = {"Content-Type": "application/json"}
     resp = rq.post(url, data=data, headers=headers)
-    assert "CDC:ErrKafkaNewProducer" in resp.text, f"{resp.text}"
+    expected_error = "CDC:ErrKafkaNewProducer" if os.getenv(
+        "TICDC_NEWARCH") == "false" else "CDC:ErrNewKafkaSink"
+    assert expected_error in resp.text, f"{resp.text}"
     assert "not found, ResolveEndpointV2" not in resp.text, f"{resp.text}"
 
     print("pass test: create changefeed")
@@ -260,6 +263,23 @@ def pause_changefeed():
     assert_status_code(resp, rq.codes.bad_request, url)
     data = resp.json()
     assert data["error_code"] == "CDC:ErrChangeFeedNotExists"
+
+
+def check_keyspace_guidance():
+    url = BASE_URL0_V2 + "/changefeeds/missing-keyspace/pause"
+    resp = rq.post(url)
+    assert_status_code(resp, rq.codes.bad_request, url)
+    data = resp.json()
+    assert data["error_code"] == "CDC:ErrAPIInvalidParam"
+    assert "please specify --keyspace or -k" in data["error_msg"]
+
+    url = BASE_URL0_V2 + \
+        "/changefeeds/missing-keyspace/pause?keyspace=not-exist"
+    resp = rq.post(url)
+    assert_status_code(resp, rq.codes.bad_request, url)
+    data = resp.json()
+    assert data["error_code"] == "CDC:ErrAPIInvalidParam"
+    assert "does not exist, please check --keyspace or -k" in data["error_msg"]
 
 
 def update_changefeed():
@@ -481,6 +501,7 @@ if __name__ == "__main__":
         "list_changefeed": list_changefeed,
         "get_changefeed": get_changefeed,
         "pause_changefeed": pause_changefeed,
+        "check_keyspace_guidance": check_keyspace_guidance,
         "update_changefeed": update_changefeed,
         "resume_changefeed": resume_changefeed,
         "move_table": move_table,

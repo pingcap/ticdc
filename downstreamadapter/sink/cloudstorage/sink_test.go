@@ -21,21 +21,22 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	pkgcloudstorage "github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,7 +55,7 @@ func newSinkForTest(
 }
 
 func TestBasicFunctionality(t *testing.T) {
-	uri := fmt.Sprintf("file:///%s?protocol=csv", t.TempDir())
+	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s&file-size=1024", t.TempDir())
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 
@@ -65,30 +66,39 @@ func TestBasicFunctionality(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	go cloudStorageSink.Run(ctx)
+	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
+	defer cancelAndWaitSink(t, cancel, runDone)
 
 	var count atomic.Int64
 
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-	createTableSQL := "create table t (id int primary key, name varchar(32));"
-	job := helper.DDL2Job(createTableSQL)
-	require.NotNil(t, job)
-	helper.ApplyJob(job)
-
-	tableInfo := helper.GetTableInfo(job)
+	createTableSQL := "create table t (id int primary key, name varchar(2048));"
+	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
+		ID:   1,
+		Name: parser_model.NewCIStr("t"),
+		Columns: []*timodel.ColumnInfo{
+			{
+				ID:        1,
+				Name:      parser_model.NewCIStr("id"),
+				FieldType: *types.NewFieldType(mysql.TypeLong),
+				State:     timodel.StatePublic,
+			},
+			{
+				ID:        2,
+				Name:      parser_model.NewCIStr("name"),
+				FieldType: *types.NewFieldType(mysql.TypeVarchar),
+				State:     timodel.StatePublic,
+			},
+		},
+	})
 
 	ddlEvent := &commonEvent.DDLEvent{
-		Query:      job.Query,
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
+		Query:      createTableSQL,
+		SchemaName: "test",
+		TableName:  "t",
 		FinishedTs: 1,
 		BlockedTables: &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -102,9 +112,9 @@ func TestBasicFunctionality(t *testing.T) {
 	}
 
 	ddlEvent2 := &commonEvent.DDLEvent{
-		Query:      job.Query,
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
+		Query:      createTableSQL,
+		SchemaName: "test",
+		TableName:  "t",
 		FinishedTs: 4,
 		BlockedTables: &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -117,8 +127,17 @@ func TestBasicFunctionality(t *testing.T) {
 		},
 	}
 
-	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
-	dmlEvent.TableInfoVersion = job.BinlogInfo.FinishedTS
+	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 2)
+	rows.AppendInt64(0, 1)
+	rows.AppendString(1, strings.Repeat("x", 1024))
+	rows.AppendInt64(0, 2)
+	rows.AppendString(1, strings.Repeat("y", 1024))
+	dmlEvent := commonEvent.NewDMLEvent(common.NewDispatcherID(), tableInfo.TableName.TableID, 2, 3, tableInfo)
+	dmlEvent.TableInfoVersion = ddlEvent.FinishedTs
+	dmlEvent.SetRows(rows)
+	dmlEvent.RowTypes = []common.RowType{common.RowTypeInsert, common.RowTypeInsert}
+	dmlEvent.Length = 2
+	dmlEvent.ApproximateSize = 2
 	dmlEvent.PostTxnFlushed = []func(){
 		func() {
 			count.Add(1)
@@ -129,8 +148,9 @@ func TestBasicFunctionality(t *testing.T) {
 	require.NoError(t, err)
 
 	cloudStorageSink.AddDMLEvent(dmlEvent)
-
-	time.Sleep(5 * time.Second)
+	require.Eventually(t, func() bool {
+		return count.Load() == 2
+	}, testEventuallyTimeout, testEventuallyTick)
 
 	ddlEvent2.PostFlush()
 
@@ -219,8 +239,7 @@ func TestIgnoreCallsAfterRunError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
@@ -281,13 +300,11 @@ func TestWriteDDLEvent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
-
-	go cloudStorageSink.Run(ctx)
+	defer cloudStorageSink.Close()
 
 	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:   20,
@@ -316,7 +333,7 @@ func TestWriteDDLEvent(t *testing.T) {
 	err = cloudStorageSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
-	tableSchema, err := os.ReadFile(path.Join(tableDir, "schema_100_4192708364.json"))
+	schemaContent, err := os.ReadFile(path.Join(tableDir, "schema_100_4192708364.json"))
 	require.NoError(t, err)
 	require.JSONEq(t, `{
 		"Table": "table1",
@@ -338,7 +355,7 @@ func TestWriteDDLEvent(t *testing.T) {
 			}
 		],
 		"TableColumnsTotal": 2
-	}`, string(tableSchema))
+	}`, string(schemaContent))
 	t.Run("flush dml before write ddl", verifyWriteDDLEventFlushDMLBeforeBlock)
 }
 
@@ -355,13 +372,13 @@ func verifyWriteDDLEventFlushDMLBeforeBlock(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	go cloudStorageSink.Run(ctx)
+	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
+	defer cancelAndWaitSink(t, cancel, runDone)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -418,13 +435,11 @@ func TestWriteDDLEventWithTableIDAsPath(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
-
-	go cloudStorageSink.Run(ctx)
+	defer cloudStorageSink.Close()
 
 	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:   20,
@@ -453,9 +468,9 @@ func TestWriteDDLEventWithTableIDAsPath(t *testing.T) {
 	require.NoError(t, err)
 
 	tableDir := path.Join(parentDir, "20/meta/")
-	tableSchema, err := os.ReadFile(path.Join(tableDir, "schema_100_4192708364.json"))
+	schemaContent, err := os.ReadFile(path.Join(tableDir, "schema_100_4192708364.json"))
 	require.NoError(t, err)
-	require.Contains(t, string(tableSchema), `"Table": "table1"`)
+	require.Contains(t, string(schemaContent), `"Table": "table1"`)
 }
 
 func TestSkipDatabaseSchemaWithTableIDAsPath(t *testing.T) {
@@ -471,13 +486,13 @@ func TestSkipDatabaseSchemaWithTableIDAsPath(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	go cloudStorageSink.Run(ctx)
+	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
+	defer cancelAndWaitSink(t, cancel, runDone)
 
 	ddlEvent := &commonEvent.DDLEvent{
 		Query:      "create database test_db",
@@ -536,8 +551,7 @@ func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			mockPDClock := pdutil.NewClock4Test()
-			appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+			setPDClockForTest(t, pdutil.NewClock4Test())
 
 			cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 			require.NoError(t, err)
@@ -560,7 +574,7 @@ func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {
 	}
 }
 
-func readSchemaDefinitionForTest(t *testing.T, parentDir, schema, table string) pkgcloudstorage.TableDefinition {
+func readSchemaFileForTest(t *testing.T, parentDir, schema, table string) cloudstorage.SchemaFile {
 	t.Helper()
 
 	files, err := os.ReadDir(filepath.Join(parentDir, schema, table, "meta"))
@@ -570,9 +584,9 @@ func readSchemaDefinitionForTest(t *testing.T, parentDir, schema, table string) 
 	content, err := os.ReadFile(filepath.Join(parentDir, schema, table, "meta", files[0].Name()))
 	require.NoError(t, err)
 
-	var def pkgcloudstorage.TableDefinition
-	require.NoError(t, json.Unmarshal(content, &def))
-	return def
+	var schemaFile cloudstorage.SchemaFile
+	require.NoError(t, json.Unmarshal(content, &schemaFile))
+	return schemaFile
 }
 
 func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
@@ -588,8 +602,7 @@ func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
@@ -652,15 +665,19 @@ func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
 	err = cloudStorageSink.WriteBlockEvent(routedEvent)
 	require.NoError(t, err)
 
-	exchangeDef := readSchemaDefinitionForTest(t, parentDir, "target_db", "exchange_table_routed")
-	require.Equal(t, "target_db", exchangeDef.Schema)
-	require.Equal(t, "exchange_table_routed", exchangeDef.Table)
-	require.Equal(t, "partition_value", exchangeDef.Columns[1].Name)
+	exchangeSchemaFile := readSchemaFileForTest(t, parentDir, "target_db", "exchange_table_routed")
+	require.Equal(t, "target_db", exchangeSchemaFile.Schema)
+	require.Equal(t, "exchange_table_routed", exchangeSchemaFile.Table)
+	require.Equal(t, routedEvent.Query, exchangeSchemaFile.Query)
+	require.Equal(t, byte(timodel.ActionExchangeTablePartition), exchangeSchemaFile.Type)
+	require.Equal(t, "partition_value", exchangeSchemaFile.Columns[1].Name)
 
-	partitionedDef := readSchemaDefinitionForTest(t, parentDir, "target_db", "partitioned_routed")
-	require.Equal(t, "target_db", partitionedDef.Schema)
-	require.Equal(t, "partitioned_routed", partitionedDef.Table)
-	require.Equal(t, "exchange_value", partitionedDef.Columns[1].Name)
+	partitionedSchemaFile := readSchemaFileForTest(t, parentDir, "target_db", "partitioned_routed")
+	require.Equal(t, "target_db", partitionedSchemaFile.Schema)
+	require.Equal(t, "partitioned_routed", partitionedSchemaFile.Table)
+	require.Empty(t, partitionedSchemaFile.Query)
+	require.Zero(t, partitionedSchemaFile.Type)
+	require.Equal(t, "exchange_value", partitionedSchemaFile.Columns[1].Name)
 
 	_, err = os.Stat(filepath.Join(parentDir, "source_db"))
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -679,20 +696,18 @@ func TestWriteCheckpointEvent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	go cloudStorageSink.Run(ctx)
-	time.Sleep(3 * time.Second)
+	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
+	defer cancelAndWaitSink(t, cancel, runDone)
 
+	cloudStorageSink.lastSendCheckpointTsTime = time.Now().Add(-2 * time.Second)
 	cloudStorageSink.AddCheckpointTs(100)
 
-	time.Sleep(2 * time.Second)
-	metadata, err := os.ReadFile(path.Join(parentDir, "metadata"))
-	require.NoError(t, err)
+	metadata := readFileEventually(t, path.Join(parentDir, "metadata"))
 	require.JSONEq(t, `{"checkpoint-ts":100}`, string(metadata))
 }
 
@@ -709,8 +724,7 @@ func TestCloseBeforeRunDoesNotPanicAndCleansSpool(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	changefeedID := common.NewChangefeedID4Test("test", "close-before-run")
 	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, nil)
@@ -738,30 +752,58 @@ func TestCleanupExpiredFiles(t *testing.T) {
 	replicaConfig := config.GetDefaultReplicaConfig()
 	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
 		FileExpirationDays:  util.AddressOf(1),
-		FileCleanupCronSpec: util.AddressOf("* * * * * *"),
+		FileCleanupCronSpec: util.AddressOf("@every 1ms"),
 	}
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 
 	var count atomic.Int64
+	cleanupDone := make(chan struct{}, 1)
 	cleanupJobs := []func(){
 		func() {
 			count.Add(1)
+			select {
+			case cleanupDone <- struct{}{}:
+			default:
+			}
 		},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	cloudStorageSink := &sink{
+		changefeedID: common.NewChangefeedID4Test("test", "test"),
+		cfg: &cloudstorage.Config{
+			DateSeparator:       config.DateSeparatorDay.String(),
+			FileExpirationDays:  1,
+			FileCleanupCronSpec: util.GetOrZero(replicaConfig.Sink.CloudStorageConfig.FileCleanupCronSpec),
+		},
+	}
+	require.NoError(t, cloudStorageSink.initCron(ctx, sinkURI, cleanupJobs))
 
-	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, cleanupJobs)
-	go cloudStorageSink.Run(ctx)
-	require.NoError(t, err)
+	require.Len(t, cloudStorageSink.cron.Entries(), len(cleanupJobs))
+	cleanupJobs[0]()
+	require.Equal(t, int64(1), count.Load())
 
-	time.Sleep(5 * time.Second)
-	require.LessOrEqual(t, int64(1), count.Load())
+	cleanupDoneCh := make(chan struct{}, 1)
+	go func() {
+		cloudStorageSink.bgCleanup(ctx)
+		cleanupDoneCh <- struct{}{}
+	}()
+
+	cancel()
+	select {
+	case <-cleanupDoneCh:
+	case <-time.After(testEventuallyTimeout):
+		t.Fatal("background cleanup did not exit after context cancel")
+	}
+
+	select {
+	case <-cleanupDone:
+	default:
+		t.Fatal("cleanup job did not run")
+	}
 }
 
 func TestRemoveEmptyDirsCleanupJobCanRunMultipleTimes(t *testing.T) {

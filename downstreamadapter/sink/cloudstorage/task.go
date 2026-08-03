@@ -16,15 +16,9 @@ package cloudstorage
 import (
 	"context"
 
-<<<<<<< HEAD
-=======
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
-	"github.com/pingcap/ticdc/pkg/cloudstorage"
->>>>>>> 07e944782 (sink: add column selector for storage sink (#5595))
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 

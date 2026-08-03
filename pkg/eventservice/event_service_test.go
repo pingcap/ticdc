@@ -157,6 +157,26 @@ func TestEventServiceBasic(t *testing.T) {
 	}
 }
 
+func TestHandleMessageIgnoresInvalidSingleMessagePayloads(t *testing.T) {
+	es := &eventService{}
+
+	require.NotPanics(t, func() {
+		err := es.handleMessage(context.Background(), &messaging.TargetMessage{
+			Type:    messaging.TypeDispatcherHeartbeat,
+			Message: nil,
+		})
+		require.NoError(t, err)
+	})
+
+	require.NotPanics(t, func() {
+		err := es.handleMessage(context.Background(), &messaging.TargetMessage{
+			Type:    messaging.TypeCongestionControl,
+			Message: nil,
+		})
+		require.NoError(t, err)
+	})
+}
+
 var _ eventstore.EventStore = &mockEventStore{}
 
 // mockEventStore is a mock implementation of the EventStore interface
@@ -498,6 +518,10 @@ func (m *mockDispatcherInfo) IsOutputRawChangeEvent() bool {
 	return false
 }
 
+func (m *mockDispatcherInfo) EnableIgnoreUpdateOnlyColumns() bool {
+	return false
+}
+
 func (m *mockDispatcherInfo) GetTxnAtomicity() config.AtomicityLevel {
 	return config.DefaultAtomicityLevel()
 }
@@ -505,7 +529,7 @@ func (m *mockDispatcherInfo) GetTxnAtomicity() config.AtomicityLevel {
 func newChangefeedStatusForTest(t testing.TB, info DispatcherInfo) *changefeedStatus {
 	t.Helper()
 
-	status := newChangefeedStatus(info.GetChangefeedID())
+	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
 	status.filter = newChangefeedFilterForTest(t, info, time.UTC.String())
 	return status
 }
@@ -518,7 +542,7 @@ func addChangefeedStatusToBrokerForTest(
 ) *changefeedStatus {
 	t.Helper()
 
-	status := newChangefeedStatus(changefeedID)
+	status := newChangefeedStatus(changefeedID, syncPointInterval)
 	broker.changefeedMap.Store(changefeedID, status)
 	return status
 }
