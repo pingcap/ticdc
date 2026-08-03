@@ -18,9 +18,10 @@ import (
 	"testing"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/cmd/util"
-	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
+	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -30,40 +31,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// recordingSink is a minimal sink.Sink implementation that records which DDLs are executed.
-//
-// It lets unit tests validate consumer-side DDL flushing behavior without requiring a real downstream.
-type recordingSink struct {
-	ddls []string
-}
+func newMockSink(t *testing.T) (*sinkmock.MockSink, *[]string) {
+	t.Helper()
 
-var _ sink.Sink = (*recordingSink)(nil)
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	ddls := make([]string, 0)
 
-func (s *recordingSink) SinkType() common.SinkType { return common.MysqlSinkType }
-func (s *recordingSink) IsNormal() bool            { return true }
-func (s *recordingSink) AddDMLEvent(_ *commonEvent.DMLEvent) {
-}
+	s.EXPECT().AddDMLEvent(gomock.Any()).AnyTimes()
+	s.EXPECT().WriteBlockEvent(gomock.Any()).DoAndReturn(func(event commonEvent.BlockEvent) error {
+		if ddl, ok := event.(*commonEvent.DDLEvent); ok {
+			ddls = append(ddls, ddl.Query)
+		}
+		return nil
+	}).AnyTimes()
 
-func (s *recordingSink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
-	return nil
+	return s, &ddls
 }
-
-func (s *recordingSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
-	if ddl, ok := event.(*commonEvent.DDLEvent); ok {
-		s.ddls = append(s.ddls, ddl.Query)
-	}
-	return nil
-}
-
-func (s *recordingSink) AddCheckpointTs(_ uint64) {
-}
-
-func (s *recordingSink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {
-}
-
-func (s *recordingSink) Close() {
-}
-func (s *recordingSink) Run(_ context.Context) error { return nil }
 
 func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T) {
 	// Scenario: In some integration tests the upstream intentionally pauses dispatcher creation, which can
@@ -75,7 +59,7 @@ func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T
 	// 2) Call writer.Write and expect the DDL is executed to advance downstream schema even without the
 	//    watermark catching up.
 	ctx := context.Background()
-	s := &recordingSink{}
+	s, ddls := newMockSink(t)
 	w := &writer{
 		progresses: []*partitionProgress{
 			{partition: 0, watermark: 0},
@@ -100,7 +84,7 @@ func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T
 
 	w.Write(ctx, codeccommon.MessageTypeDDL)
 
-	require.Equal(t, []string{"CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)"}, s.ddls)
+	require.Equal(t, []string{"CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)"}, *ddls)
 	require.Empty(t, w.ddlList)
 }
 
@@ -113,7 +97,7 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 	// 2) Call writer.Write and expect nothing executes.
 	// 3) Advance watermark beyond the first DDL and expect both execute in order.
 	ctx := context.Background()
-	s := &recordingSink{}
+	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 0}
 	w := &writer{
 		progresses: []*partitionProgress{p},
@@ -145,7 +129,7 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 	}
 
 	w.Write(ctx, codeccommon.MessageTypeDDL)
-	require.Empty(t, s.ddls)
+	require.Empty(t, *ddls)
 	require.Len(t, w.ddlList, 2)
 
 	p.watermark = 200
@@ -153,7 +137,7 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 	require.Equal(t, []string{
 		"ALTER TABLE `test`.`t` ADD COLUMN `c2` INT",
 		"CREATE TABLE `test`.`t2` (`id` INT PRIMARY KEY)",
-	}, s.ddls)
+	}, *ddls)
 	require.Empty(t, w.ddlList)
 }
 
@@ -166,7 +150,7 @@ func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 	// 2) Call writer.Write and expect the DDL is NOT executed.
 	// 3) Advance watermark beyond the DDL commitTs and expect the DDL executes.
 	ctx := context.Background()
-	s := &recordingSink{}
+	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 0}
 	w := &writer{
 		progresses: []*partitionProgress{p},
@@ -191,12 +175,12 @@ func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 	}
 
 	w.Write(ctx, codeccommon.MessageTypeDDL)
-	require.Empty(t, s.ddls)
+	require.Empty(t, *ddls)
 	require.Len(t, w.ddlList, 1)
 
 	p.watermark = 200
 	w.Write(ctx, codeccommon.MessageTypeDDL)
-	require.Equal(t, []string{"CREATE TABLE `test`.`t2` LIKE `test`.`t1`"}, s.ddls)
+	require.Equal(t, []string{"CREATE TABLE `test`.`t2` LIKE `test`.`t1`"}, *ddls)
 	require.Empty(t, w.ddlList)
 }
 
@@ -210,7 +194,7 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	// 2) Call writer.Write and expect all DDLs with commitTs <= watermark execute (in commit-ts order),
 	//    and only the truly "future" DDL remains pending.
 	ctx := context.Background()
-	s := &recordingSink{}
+	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 944040962}
 	w := &writer{
 		progresses: []*partitionProgress{p},
@@ -279,22 +263,11 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 		"ALTER TABLE `common_1`.`add_and_drop_columns` ADD COLUMN `col1` INT NULL, ADD COLUMN `col2` INT NULL, ADD COLUMN `col3` INT NULL",
 		"ALTER TABLE `common_1`.`add_and_drop_columns` DROP COLUMN `col1`, DROP COLUMN `col2`",
 		"CREATE DATABASE `common`",
-	}, s.ddls)
+	}, *ddls)
 	require.Len(t, w.ddlList, 1)
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
 }
 
-<<<<<<< HEAD
-func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) {
-	// Scenario:
-	// 1) TiCDC writes DML messages to Kafka in commitTs order.
-	// 2) Under network partition / changefeed restart, TiCDC may replay older commitTs,
-	//    which will be appended to Kafka at a larger offset (commitTs appears to go backwards).
-	//
-	// The kafka-consumer must not drop these "fallback commitTs" events unless they have
-	// already been flushed to downstream (AppliedWatermark), otherwise the replay cannot
-	// heal the missing window.
-=======
 func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -386,7 +359,6 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 }
 
 func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
->>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 	replicaCfg := config.GetDefaultReplicaConfig()
 	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, true)
 	require.NoError(t, err)
@@ -434,14 +406,56 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 
 	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
 	require.Len(t, resolved, 1)
-	require.Equal(t, uint64(100), resolved[0].CommitTs)
+	require.Equal(t, uint64(100), resolved[0].GetCommitTs())
+}
 
-	// Step 3: once downstream has flushed beyond commitTs=100, the replay is safe to ignore.
-	resolvedEvents = make([]*commonEvent.DMLEvent, 0)
-	group.AppliedWatermark = 200
-	w.appendRow2Group(newDMLEvent(1, 100), progress, kafka.Offset(12))
-	resolved = group.ResolveInto(150, resolvedEvents)
-	require.Empty(t, resolved)
+func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
+	for _, protocol := range []config.Protocol{
+		config.ProtocolDebezium,
+	} {
+		t.Run(protocol.String(), func(t *testing.T) {
+			replicaCfg := config.GetDefaultReplicaConfig()
+			eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
+			require.NoError(t, err)
+
+			w := &writer{
+				progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
+				eventRouter:            eventRouter,
+				protocol:               protocol,
+				partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
+			}
+
+			w.partitionTableAccessor.Add("target", "src")
+			ddl := &commonEvent.DDLEvent{
+				Query:      "CREATE TABLE `target`.`dst` LIKE `target`.`src`",
+				SchemaName: "target",
+				TableName:  "dst",
+				Type:       byte(timodel.ActionCreateTable),
+			}
+			w.onDDL(ddl)
+			require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
+
+			newDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
+				return &commonEvent.DMLEvent{
+					PhysicalTableID: 1,
+					CommitTs:        commitTs,
+					RowTypes:        []common.RowType{common.RowTypeUpdate},
+					Rows:            chunk.NewChunkWithCapacity(nil, 0),
+					TableInfo: &common.TableInfo{
+						TableName: common.TableName{Schema: "target", Table: "dst"},
+					},
+				}
+			}
+
+			progress := w.progresses[0]
+			w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(200)), progress, kafka.Offset(10))
+			w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(100)), progress, kafka.Offset(11))
+
+			resolved := progress.eventsGroup[1].ResolveInto(150, nil)
+			require.Len(t, resolved, 1)
+			require.Equal(t, uint64(100), resolved[0].GetCommitTs())
+		})
+	}
 }
 
 func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {

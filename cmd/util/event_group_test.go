@@ -23,44 +23,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEventsGroupAppendForceMergesExistingCommitTs(t *testing.T) {
-	// Scenario:
-	// 1) An upstream transaction (commitTs=100) is split into multiple messages.
-	// 2) Due to sink retry/restart, a later transaction (commitTs=200) is observed first.
-	// 3) A "late" fragment of the commitTs=100 transaction arrives afterwards.
-	//
-	// The EventsGroup must merge the late fragment into the existing commitTs=100 event,
-	// instead of turning it into a second commitTs=100 item (which would split one upstream
-	// transaction into multiple downstream transactions).
-	group := NewEventsGroup(0, 1)
+func newTestDMLMessage(commitTs uint64) *codeccommon.DMLMessage {
+	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeInsert, nil)
+}
 
-	newDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
-		return &commonEvent.DMLEvent{
-			CommitTs: commitTs,
-			RowTypes: []common.RowType{common.RowTypeUpdate},
-			Rows:     chunk.NewChunkWithCapacity(nil, 0),
-			Length:   0,
-			TableInfo: common.NewTableInfo4Decoder("test", &timodel.TableInfo{
-				ID:   100,
-				Name: parser_model.NewCIStr("t"),
-				Columns: []*timodel.ColumnInfo{
-					{Name: parser_model.NewCIStr("a")},
-				},
-			}),
-		}
+func newTestDMLEvent(commitTs uint64, rowTypes ...common.RowType) *commonEvent.DMLEvent {
+	return &commonEvent.DMLEvent{
+		PhysicalTableID: 1,
+		CommitTs:        commitTs,
+		Length:          int32(len(rowTypes)),
+		RowTypes:        rowTypes,
+		Rows:            chunk.NewChunkWithCapacity(nil, 0),
 	}
-
-	group.Append(newDMLEvent(100), false)
-	group.Append(newDMLEvent(200), false)
-	group.Append(newDMLEvent(100), true)
-
-	require.Equal(t, uint64(200), group.HighWatermark)
-
-	var dst []*commonEvent.DMLEvent
-	dst = group.ResolveInto(150, dst)
-	require.Len(t, dst, 1)
-	require.Equal(t, uint64(100), dst[0].CommitTs)
-	require.Len(t, dst[0].RowTypes, 2)
 }
 
 func TestEventsGroupResolveIntoAppendsAndClearsResolvedMessages(t *testing.T) {
@@ -74,18 +48,6 @@ func TestEventsGroupResolveIntoAppendsAndClearsResolvedMessages(t *testing.T) {
 	//  3. Verify (a) returned events are correct, (b) group keeps only the remaining event,
 	//     (c) resolved messages in the original backing slice are cleared (nil'd).
 	group := NewEventsGroup(0, 1)
-<<<<<<< HEAD
-	e1 := &commonEvent.DMLEvent{CommitTs: 1}
-	e2 := &commonEvent.DMLEvent{CommitTs: 2}
-	e3 := &commonEvent.DMLEvent{CommitTs: 3}
-	group.Append(e1, false)
-	group.Append(e2, false)
-	group.Append(e3, false)
-
-	// Keep a reference to the original slice header so we can validate that ResolveInto clears
-	// the resolved prefix in-place (this is what prevents GC retention of flushed events).
-	original := group.events
-=======
 	m1 := newTestDMLMessage(1)
 	m2 := newTestDMLMessage(2)
 	m3 := newTestDMLMessage(3)
@@ -96,7 +58,6 @@ func TestEventsGroupResolveIntoAppendsAndClearsResolvedMessages(t *testing.T) {
 	// Keep a reference to the original slice header so we can validate that ResolveInto clears
 	// resolved messages in-place (this is what prevents GC retention of flushed events).
 	original := group.messages
->>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 
 	var dst []*codeccommon.DMLMessage
 	dst = group.ResolveInto(2, dst)
@@ -112,28 +73,17 @@ func TestEventsGroupResolveIntoAppendsAndClearsResolvedMessages(t *testing.T) {
 	// doesn't keep flushed events alive via its backing array.
 	require.Same(t, m3, original[0])
 	require.Nil(t, original[1])
-<<<<<<< HEAD
-	require.Same(t, e3, original[2])
-=======
 	require.Nil(t, original[2])
->>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 }
 
 func TestEventsGroupResolveIntoNoopWhenNothingResolved(t *testing.T) {
 	// Scenario: resolveTs is behind all buffered events.
 	// Expectation: ResolveInto should be a no-op (dst unchanged, group unchanged).
 	group := NewEventsGroup(0, 1)
-<<<<<<< HEAD
-	e1 := &commonEvent.DMLEvent{CommitTs: 10}
-	e2 := &commonEvent.DMLEvent{CommitTs: 20}
-	group.Append(e1, false)
-	group.Append(e2, false)
-=======
 	m1 := newTestDMLMessage(10)
 	m2 := newTestDMLMessage(20)
 	group.AppendMessage(m1)
 	group.AppendMessage(m2)
->>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 
 	original := group.messages
 	dst := make([]*codeccommon.DMLMessage, 0, 1)
@@ -153,17 +103,10 @@ func TestEventsGroupResolveIntoClearsAllWhenFullyResolved(t *testing.T) {
 	// Scenario: resolveTs advances beyond all buffered events.
 	// Expectation: group is emptied and all backing-array pointers for resolved events are cleared.
 	group := NewEventsGroup(0, 1)
-<<<<<<< HEAD
-	e1 := &commonEvent.DMLEvent{CommitTs: 1}
-	e2 := &commonEvent.DMLEvent{CommitTs: 2}
-	group.Append(e1, false)
-	group.Append(e2, false)
-=======
 	m1 := newTestDMLMessage(1)
 	m2 := newTestDMLMessage(2)
 	group.AppendMessage(m1)
 	group.AppendMessage(m2)
->>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 
 	original := group.messages
 	var dst []*codeccommon.DMLMessage
@@ -177,8 +120,6 @@ func TestEventsGroupResolveIntoClearsAllWhenFullyResolved(t *testing.T) {
 	require.Nil(t, original[0])
 	require.Nil(t, original[1])
 }
-<<<<<<< HEAD
-=======
 
 func TestEventsGroupResolveIntoSortsOutOfOrderResolvedMessages(t *testing.T) {
 	group := NewEventsGroup(0, 1)
@@ -271,4 +212,3 @@ func TestAppendOrMergeDMLEventAppendsDifferentCommitTs(t *testing.T) {
 	require.Same(t, e1, events[0])
 	require.Same(t, e2, events[1])
 }
->>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))

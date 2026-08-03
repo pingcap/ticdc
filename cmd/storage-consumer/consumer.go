@@ -250,13 +250,8 @@ func (c *consumer) appendMessage2Group(message *common.DMLMessage, enableTableAc
 		c.eventsGroup[tableID] = group
 	}
 	if commitTs >= group.HighWatermark {
-<<<<<<< HEAD
-		group.Append(dml, false)
-		log.Info("DML event append to the group",
-=======
 		group.AppendMessage(message)
 		log.Debug("DML event append to the group",
->>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", message.RowType))
@@ -266,13 +261,8 @@ func (c *consumer) appendMessage2Group(message *common.DMLMessage, enableTableAc
 		log.Warn("DML events fallback, but enableTableAcrossNodes is true, still append it",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-<<<<<<< HEAD
-			zap.Stringer("eventType", dml.RowTypes[0]))
-		group.Append(dml, true)
-=======
 			zap.Stringer("eventType", message.RowType))
 		group.AppendMessage(message)
->>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 		return
 	}
 	log.Warn("dml event commit ts fallback, ignore",

@@ -14,11 +14,7 @@
 package util
 
 import (
-<<<<<<< HEAD
-	"slices"
-=======
 	"math"
->>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 	"sort"
 
 	"github.com/pingcap/log"
@@ -34,13 +30,6 @@ type EventsGroup struct {
 
 	messages      []*codeccommon.DMLMessage
 	HighWatermark uint64
-	// AppliedWatermark is the maximum CommitTs that has been successfully flushed
-	// to the downstream for this group.
-	//
-	// It is used to distinguish "safe to ignore" replays (CommitTs <=
-	// AppliedWatermark) from "still needed" events that arrive late due to sink
-	// retries / restarts.
-	AppliedWatermark uint64
 }
 
 // NewEventsGroup will create new event group.
@@ -52,58 +41,6 @@ func NewEventsGroup(partition int32, tableID int64) *EventsGroup {
 	}
 }
 
-<<<<<<< HEAD
-// Append will append an event to event groups.
-func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
-	if row.CommitTs > g.HighWatermark {
-		g.HighWatermark = row.CommitTs
-	}
-
-	var lastMessage *codeccommon.DMLMessage
-	if len(g.messages) > 0 {
-		lastMessage = g.messages[len(g.messages)-1]
-	}
-
-	if lastMessage == nil || lastMessage.GetCommitTs() <= commitTs {
-		g.messages = append(g.messages, message)
-		return
-	}
-
-	if force {
-		i := sort.Search(len(g.messages), func(i int) bool {
-			return g.messages[i].GetCommitTs() > commitTs
-		})
-		g.messages = append(g.messages, nil)
-		copy(g.messages[i+1:], g.messages[i:])
-		g.messages[i] = message
-		return
-	}
-	log.Panic("append event with smaller commit ts",
-		zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
-		zap.Uint64("lastCommitTs", lastMessage.GetCommitTs()), zap.Uint64("commitTs", commitTs))
-}
-
-// ResolveInto appends all messages with CommitTs <= resolve into dst and removes them from the group.
-// ResolveInto copies pointers into dst first, then clears the resolved prefix so Go GC can reclaim
-// resolved messages once downstream is done with them.
-func (g *EventsGroup) ResolveInto(resolve uint64, dst []*codeccommon.DMLMessage) []*codeccommon.DMLMessage {
-	i := sort.Search(len(g.messages), func(i int) bool {
-		return g.messages[i].GetCommitTs() > resolve
-	})
-	if i == 0 {
-		return dst
-	}
-
-	// Copy pointers out first so we can safely clear the group's slice without affecting callers.
-	dst = append(dst, g.messages[:i]...)
-	clear(g.messages[:i])
-	g.messages = g.messages[i:]
-	if len(g.messages) != 0 {
-		log.Debug("not all events resolved",
-			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
-			zap.Int("resolved", i), zap.Int("remained", len(g.events)),
-			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", g.events[0].CommitTs))
-=======
 // AppendMessage appends a message to event groups.
 func (g *EventsGroup) AppendMessage(message *codeccommon.DMLMessage) {
 	commitTs := message.GetCommitTs()
@@ -171,20 +108,37 @@ func (g *EventsGroup) ResolveInto(resolve uint64, dst []*codeccommon.DMLMessage)
 			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
 			zap.Int("resolved", len(resolved)), zap.Int("remained", len(g.messages)),
 			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", firstCommitTs))
->>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 	}
 	return dst
 }
 
-<<<<<<< HEAD
-// GetAllEvents will get all events.
-func (g *EventsGroup) GetAllEvents() []*commonEvent.DMLEvent {
-	result := g.events
-	g.events = nil
-	return result
-=======
 // GetAllMessages gets all messages.
 func (g *EventsGroup) GetAllMessages() []*codeccommon.DMLMessage {
 	return g.ResolveInto(math.MaxUint64, nil)
->>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
+}
+
+// AppendOrMergeDMLEvent appends a DML event, or merges it into the previous event
+// when both events belong to the same table group and have the same commit-ts.
+func AppendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLEvent) []*commonEvent.DMLEvent {
+	var lastDMLEvent *commonEvent.DMLEvent
+	if len(events) > 0 {
+		lastDMLEvent = events[len(events)-1]
+	}
+
+	if lastDMLEvent == nil || lastDMLEvent.GetCommitTs() < row.GetCommitTs() {
+		return append(events, row)
+	}
+
+	if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
+		lastDMLEvent.Rows.Append(row.Rows, 0, row.Rows.NumRows())
+		lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
+		lastDMLEvent.Length += row.Length
+		lastDMLEvent.PostTxnFlushed = append(lastDMLEvent.PostTxnFlushed, row.PostTxnFlushed...)
+		return events
+	}
+
+	log.Panic("append event with smaller commit ts",
+		zap.Int64("tableID", row.GetTableID()),
+		zap.Uint64("lastCommitTs", lastDMLEvent.GetCommitTs()), zap.Uint64("commitTs", row.GetCommitTs()))
+	return events
 }
