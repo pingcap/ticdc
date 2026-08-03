@@ -79,6 +79,8 @@ func TestGenerateResolveLockTask(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		false,
+		client.upstream.pdClock,
+		30*time.Minute,
 	)
 	client.spanRegistry.Add(span)
 
@@ -147,16 +149,17 @@ func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
 
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
+	pdClock := pdutil.NewClock4Test()
 	span1 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(1), heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
-	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdClock, 30*time.Minute)
 	span2 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(2), heartbeatpb.TableSpan{
 		TableID:  2,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
-	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdClock, 30*time.Minute)
 
 	res := span1.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
@@ -266,6 +269,8 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		false,
+		pdutil.NewClock4Test(),
+		30*time.Minute,
 	)
 
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
@@ -323,6 +328,8 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		true,
+		pdutil.NewClock4Test(),
+		30*time.Minute,
 	)
 
 	res := span.rangeLock.LockRange(context.Background(), rawSpan.StartKey, rawSpan.EndKey, 1, 1)
@@ -418,8 +425,7 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 
 func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 	sink := &regionEventSink{
-		ctx: context.Background(),
-		ds:  &mockDynamicStream{},
+		ds: &mockDynamicStream{},
 	}
 	sink.cond = sync.NewCond(&sink.mu)
 	client := &subscriptionClient{eventSink: sink}
@@ -468,7 +474,7 @@ func TestBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
 		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
 		lockedRangeState: &regionlock.LockedRangeState{},
 	}
-	require.True(t, admission.submit(newRegionPriorityTask(dummyRegion, 1, 1)))
+	require.True(t, admission.submit(newRegionPriorityTask(dummyRegion, 1)))
 
 	scheduler.BroadcastDeregister(SubscriptionID(1), true)
 	require.Equal(t, 1, worker.controlQueue.len())
@@ -492,7 +498,7 @@ func TestRegionRequestStoreDistributesRegionsAcrossWorkers(t *testing.T) {
 			subscribedSpan:   &subscribedSpan{subID: 1},
 			lockedRangeState: &regionlock.LockedRangeState{},
 		}
-		require.True(t, store.submit(newRegionPriorityTask(region, 1, i)))
+		require.True(t, store.submit(newRegionPriorityTask(region, i)))
 	}
 
 	require.Equal(t, 2, worker1.admission.stats().pending)
@@ -755,7 +761,7 @@ func TestGetResolvedTargetTs(t *testing.T) {
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
-	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdutil.NewClock4Test(), 30*time.Minute)
 	span.initialized.Store(true)
 
 	// Replicate the getResolvedTargetTs closure from runResolveLockChecker

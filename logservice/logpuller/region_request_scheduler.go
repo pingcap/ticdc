@@ -77,8 +77,7 @@ func newRegionRequestScheduler(
 }
 
 func (s *regionRequestScheduler) Submit(region regionInfo) {
-	s.taskQueue.Push(newRegionPriorityTask(
-		region, s.upstream.pdClock.CurrentTS(), s.sequence.Add(1)))
+	s.taskQueue.Push(newRegionPriorityTask(region, s.sequence.Add(1)))
 }
 
 func (s *regionRequestScheduler) Run(ctx context.Context, workerGroup *errgroup.Group) error {
@@ -105,7 +104,7 @@ func (s *regionRequestScheduler) Run(ctx context.Context, workerGroup *errgroup.
 		}
 
 		store := s.getOrCreateStore(ctx, workerGroup, region.rpcCtx.Addr)
-		task.updateRegion(region, s.upstream.pdClock.CurrentTS())
+		task.regionInfo = region
 		if !store.submit(task) {
 			return context.Canceled
 		}

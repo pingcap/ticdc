@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/tikv/client-go/v2/tikv"
@@ -44,12 +45,12 @@ type regionInfo struct {
 	subscribedSpan *subscribedSpan
 	// The state of the locked range of the region.
 	lockedRangeState *regionlock.LockedRangeState
-	// wasInitialized preserves scheduling priority while a failed region is
-	// unlocked, resolved again, and subscribed with a new locked range state.
-	wasInitialized bool
 	// Whether to filter out the value write by cdc itself.
 	// It should be `true` in BDR mode
 	filterLoop bool
+	// scanPriority is sent to TiKV/CSE so remote incremental scan admission can
+	// preserve TiCDC's business priority across retries.
+	scanPriority cdcpb.ScanPriority
 }
 
 func newRegionInfo(
@@ -57,13 +58,15 @@ func newRegionInfo(
 	span heartbeatpb.TableSpan,
 	rpcCtx *tikv.RPCContext,
 	subscribedSpan *subscribedSpan,
+	filterLoop bool,
 ) regionInfo {
 	return regionInfo{
 		verID:          verID,
 		span:           span,
 		rpcCtx:         rpcCtx,
 		subscribedSpan: subscribedSpan,
-		filterLoop:     subscribedSpan.filterLoop,
+		filterLoop:     filterLoop,
+		scanPriority:   cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 	}
 }
 
@@ -77,9 +80,6 @@ type regionErrorInfo struct {
 }
 
 func newRegionErrorInfo(info regionInfo, err error) regionErrorInfo {
-	if info.lockedRangeState != nil && info.lockedRangeState.Initialized.Load() {
-		info.wasInitialized = true
-	}
 	return regionErrorInfo{
 		regionInfo: info,
 		err:        err,
