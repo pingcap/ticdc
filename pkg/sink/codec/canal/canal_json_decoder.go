@@ -414,13 +414,8 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
 
 	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
-<<<<<<< HEAD
-	// if receive a table level DDL, just remove the table info to trigger create a new one.
-	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
-=======
 	d.addDDLCommitTs(result.SchemaName, result.TableName, result.GetCommitTs())
 	d.addDDLCommitTs(result.ExtraSchemaName, result.ExtraTableName, result.GetCommitTs())
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 	return result
 }
 

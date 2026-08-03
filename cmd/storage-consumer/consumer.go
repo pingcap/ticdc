@@ -252,13 +252,8 @@ func (c *consumer) appendMessage2Group(message *common.DMLMessage, enableTableAc
 		c.eventsGroup[tableID] = group
 	}
 	if commitTs >= group.HighWatermark {
-<<<<<<< HEAD
-		group.Append(dml, false)
-		log.Info("DML event append to the group",
-=======
 		group.AppendMessage(message, false)
 		log.Debug("DML event append to the group",
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", message.RowType))

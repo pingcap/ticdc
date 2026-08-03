@@ -18,13 +18,11 @@ import (
 	"testing"
 	"time"
 
-<<<<<<< HEAD
-=======
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/golang/mock/gomock"
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -287,15 +285,7 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
 }
 
-func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) {
-	// Scenario:
-	// 1) TiCDC writes DML messages to Pulsar in commitTs order.
-	// 2) Under network partition / changefeed restart, TiCDC may replay older commitTs
-	//    at a later time (commitTs appears to go backwards).
-	//
-	// The pulsar-consumer must not drop these "fallback commitTs" events unless they
-	// have already been flushed to downstream (AppliedWatermark), otherwise replayed
-	// messages cannot heal missing windows.
+func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
 	w := &writer{
 		progresses: []*partitionProgress{
 			{
@@ -307,21 +297,6 @@ func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) 
 		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
 	}
 
-<<<<<<< HEAD
-	newDMLEvent := func(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
-		return &commonEvent.DMLEvent{
-			PhysicalTableID: tableID,
-			CommitTs:        commitTs,
-			RowTypes:        []common.RowType{common.RowTypeUpdate},
-			Rows:            chunk.NewChunkWithCapacity(nil, 0),
-			TableInfo: &common.TableInfo{
-				TableName: common.TableName{Schema: "test", Table: "t"},
-			},
-		}
-	}
-
-	progress := w.progresses[0]
-=======
 	ddl := &commonEvent.DDLEvent{
 		Query:      "CREATE TABLE `target`.`dst` LIKE `target`.`src`",
 		SchemaName: "source",
@@ -347,29 +322,9 @@ func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) 
 	progress := w.progresses[0]
 	w.appendMessage2Group(newDMLMessage(200), progress)
 	w.appendMessage2Group(newDMLMessage(100), progress)
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 
-	// Step 1: observe a larger commitTs first (e.g. produced before restart).
-	w.appendRow2Group(newDMLEvent(1, 200), progress)
-
-	// Step 2: observe a smaller commitTs later (e.g. replayed after restart).
-	w.appendRow2Group(newDMLEvent(1, 100), progress)
-
-	group := progress.eventsGroup[1]
-	require.NotNil(t, group)
-
-	// Expect: commitTs=100 is still kept and can be resolved.
-	resolved := group.ResolveInto(150, nil)
+	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
 	require.Len(t, resolved, 1)
-<<<<<<< HEAD
-	require.Equal(t, uint64(100), resolved[0].CommitTs)
-
-	// Step 3: once downstream has flushed beyond commitTs=100, replay is safe to ignore.
-	group.AppliedWatermark = 200
-	w.appendRow2Group(newDMLEvent(1, 100), progress)
-	resolved = group.ResolveInto(150, nil)
-	require.Empty(t, resolved)
-=======
 	require.Equal(t, uint64(100), resolved[0].GetCommitTs())
 }
 
@@ -527,5 +482,4 @@ func (m fakePulsarMessage) Index() *uint64 {
 
 func (m fakePulsarMessage) BrokerPublishTime() *time.Time {
 	return nil
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 }

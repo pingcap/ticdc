@@ -170,30 +170,12 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 			if !ok {
 				continue
 			}
-<<<<<<< HEAD
-			before := len(resolvedEvents)
-			resolvedEvents = g.ResolveInto(commitTs, resolvedEvents)
-			resolvedCount := len(resolvedEvents) - before
-			if resolvedCount == 0 {
-				continue
-			}
-
-			resolvedGroups = append(resolvedGroups, struct {
-				group       *util.EventsGroup
-				maxCommitTs uint64
-			}{
-				group:       g,
-				maxCommitTs: resolvedEvents[len(resolvedEvents)-1].GetCommitTs(),
-			})
-			total += resolvedCount
-=======
 			messages := g.ResolveInto(commitTs, nil)
 			events := make([]*event.DMLEvent, 0, len(messages))
 			for _, message := range messages {
 				events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
 			}
 			resolvedEvents = append(resolvedEvents, events...)
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 		}
 	}
 
@@ -311,30 +293,12 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	}, 0)
 	for _, p := range w.progresses {
 		for _, group := range p.eventsGroup {
-<<<<<<< HEAD
-			before := len(resolvedEvents)
-			resolvedEvents = group.ResolveInto(watermark, resolvedEvents)
-			resolvedCount := len(resolvedEvents) - before
-			if resolvedCount == 0 {
-				continue
-			}
-
-			resolvedGroups = append(resolvedGroups, struct {
-				group       *util.EventsGroup
-				maxCommitTs uint64
-			}{
-				group:       group,
-				maxCommitTs: resolvedEvents[len(resolvedEvents)-1].GetCommitTs(),
-			})
-			total += resolvedCount
-=======
 			messages := group.ResolveInto(watermark, nil)
 			events := make([]*event.DMLEvent, 0, len(messages))
 			for _, message := range messages {
 				events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
 			}
 			resolvedEvents = append(resolvedEvents, events...)
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 		}
 	}
 	total := len(resolvedEvents)
@@ -567,7 +531,8 @@ func (w *writer) onDDL(ddl *event.DDLEvent) {
 		return
 	}
 	switch w.protocol {
-	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro, config.ProtocolSimple, config.ProtocolDebezium:
+	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro, config.ProtocolSimple,
+		config.ProtocolDebezium, config.ProtocolDebeziumAvro:
 	default:
 		return
 	}
@@ -575,18 +540,52 @@ func (w *writer) onDDL(ddl *event.DDLEvent) {
 	// e.g. create partition table + drop table(rename table) + create normal table: the partitionTableAccessor should drop the table when the table become normal.
 	switch model.ActionType(ddl.Type) {
 	case model.ActionCreateTable:
+		if w.markPartitionTableFromDDL(ddl) {
+			return
+		}
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 		if err != nil {
 			log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
 		}
-		if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
-			w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+		if v, ok := stmt.(*ast.CreateTableStmt); ok {
+			if v.Partition != nil {
+				w.addPartitionTable(ddl.GetSchemaName(), ddl.GetTableName())
+				return
+			}
+			if v.ReferTable != nil {
+				referSchema := v.ReferTable.Schema.O
+				if referSchema == "" {
+					referSchema = ddl.GetSchemaName()
+				}
+				if w.partitionTableAccessor.IsPartitionTable(referSchema, v.ReferTable.Name.O) {
+					w.addPartitionTable(ddl.GetSchemaName(), ddl.GetTableName())
+				}
+			}
 		}
 	case model.ActionRenameTable:
 		if w.partitionTableAccessor.IsPartitionTable(ddl.ExtraSchemaName, ddl.ExtraTableName) {
-			w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+			w.addPartitionTable(ddl.GetSchemaName(), ddl.GetTableName())
 		}
+		w.markPartitionTableFromDDL(ddl)
 	}
+}
+
+func (w *writer) markPartitionTableFromDDL(ddl *event.DDLEvent) bool {
+	if ddl.TableInfo == nil || !ddl.TableInfo.IsPartitionTable() {
+		return false
+	}
+
+	w.addPartitionTable(ddl.GetSchemaName(), ddl.GetTableName())
+	w.addPartitionTable(ddl.TableInfo.GetSchemaName(), ddl.TableInfo.GetTableName())
+	w.addPartitionTable(ddl.TableInfo.GetTargetSchemaName(), ddl.TableInfo.GetTargetTableName())
+	return true
+}
+
+func (w *writer) addPartitionTable(schema, table string) {
+	if schema == "" || table == "" {
+		return
+	}
+	w.partitionTableAccessor.Add(schema, table)
 }
 
 func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset kafka.Offset) {
@@ -651,35 +650,15 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 			zap.String("schema", schema), zap.String("table", table), zap.Any("protocol", w.protocol))
 		return
 	}
-<<<<<<< HEAD
-	forceInsert := commitTs < group.HighWatermark || commitTs < progress.watermark || w.enableTableAcrossNodes
-	if forceInsert {
-		log.Warn("DML event commit ts fallback, append with forceInsert",
-=======
 	if commitTs >= group.HighWatermark {
 		message = w.messageWithPartitionCheck(message, progress.partition, offset)
 		group.AppendMessage(message, false)
 		log.Debug("DML event append to the group",
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 			zap.Int32("partition", group.Partition), zap.Any("offset", offset),
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.Uint64("appliedWatermark", group.AppliedWatermark),
 			zap.Uint64("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-<<<<<<< HEAD
-			zap.Stringer("eventType", dml.RowTypes[0]), zap.Any("protocol", w.protocol),
-			zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
-		group.Append(dml, true)
-		return
-	}
-	group.Append(dml, false)
-	log.Info("DML event append to the group",
-		zap.Int32("partition", group.Partition), zap.Any("offset", offset),
-		zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-		zap.Uint64("appliedWatermark", group.AppliedWatermark),
-		zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-		zap.Stringer("eventType", dml.RowTypes[0]))
-=======
 			zap.Stringer("eventType", message.RowType))
 		return
 	}
@@ -731,7 +710,6 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 	default:
 		log.Panic("unknown protocol", zap.Any("protocol", w.protocol))
 	}
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 }
 
 func openDB(ctx context.Context, dsn string) (*sql.DB, error) {

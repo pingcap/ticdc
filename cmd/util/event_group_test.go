@@ -18,56 +18,11 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-<<<<<<< HEAD
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	parser_model "github.com/pingcap/tidb/pkg/parser/model"
-=======
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
-<<<<<<< HEAD
-func TestEventsGroupAppendForceMergesExistingCommitTs(t *testing.T) {
-	// Scenario:
-	// 1) An upstream transaction (commitTs=100) is split into multiple messages.
-	// 2) Due to sink retry/restart, a later transaction (commitTs=200) is observed first.
-	// 3) A "late" fragment of the commitTs=100 transaction arrives afterwards.
-	//
-	// The EventsGroup must merge the late fragment into the existing commitTs=100 event,
-	// instead of turning it into a second commitTs=100 item (which would split one upstream
-	// transaction into multiple downstream transactions).
-	group := NewEventsGroup(0, 1)
-
-	newDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
-		return &commonEvent.DMLEvent{
-			CommitTs: commitTs,
-			RowTypes: []common.RowType{common.RowTypeUpdate},
-			Rows:     chunk.NewChunkWithCapacity(nil, 0),
-			Length:   0,
-			TableInfo: common.NewTableInfo4Decoder("test", &timodel.TableInfo{
-				ID:   100,
-				Name: parser_model.NewCIStr("t"),
-				Columns: []*timodel.ColumnInfo{
-					{Name: parser_model.NewCIStr("a")},
-				},
-			}),
-		}
-	}
-
-	group.Append(newDMLEvent(100), false)
-	group.Append(newDMLEvent(200), false)
-	group.Append(newDMLEvent(100), true)
-
-	require.Equal(t, uint64(200), group.HighWatermark)
-
-	var dst []*commonEvent.DMLEvent
-	dst = group.ResolveInto(150, dst)
-	require.Len(t, dst, 1)
-	require.Equal(t, uint64(100), dst[0].CommitTs)
-	require.Len(t, dst[0].RowTypes, 2)
-=======
 func newTestDMLMessage(commitTs uint64) *codeccommon.DMLMessage {
 	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeInsert, nil)
 }
@@ -80,7 +35,6 @@ func newTestDMLEvent(commitTs uint64, rowTypes ...common.RowType) *commonEvent.D
 		RowTypes:        rowTypes,
 		Rows:            chunk.NewChunkWithCapacity(nil, 0),
 	}
->>>>>>> 5573f0194 (consumer: use dml message instead of dml event (#5590))
 }
 
 func TestEventsGroupResolveIntoAppendsAndClearsResolvedPrefix(t *testing.T) {
