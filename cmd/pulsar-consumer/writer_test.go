@@ -16,15 +16,18 @@ package main
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/apache/pulsar-client-go/pulsar"
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -392,31 +395,33 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
 		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
 	}
 
-	newDMLEvent := func(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
-		return &commonEvent.DMLEvent{
-			PhysicalTableID: tableID,
-			CommitTs:        commitTs,
-			RowTypes:        []common.RowType{common.RowTypeUpdate},
-			Rows:            chunk.NewChunkWithCapacity(nil, 0),
-			TableInfo: &common.TableInfo{
-				TableName: common.TableName{Schema: "test", Table: "t"},
+	ddl := &commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `target`.`dst` LIKE `target`.`src`",
+		SchemaName: "source",
+		TableName:  "dst",
+		Type:       byte(timodel.ActionCreateTable),
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{
+				Schema:       "source",
+				Table:        "dst",
+				IsPartition:  true,
+				TargetSchema: "target",
+				TargetTable:  "dst",
 			},
-		}
+		},
+	}
+	w.onDDL(ddl)
+	require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
+
+	newDMLMessage := func(commitTs uint64) *codeccommon.DMLMessage {
+		return codeccommon.NewDMLMessage(1, "target", "dst", commitTs, common.RowTypeUpdate, nil)
 	}
 
 	progress := w.progresses[0]
+	w.appendMessage2Group(newDMLMessage(200), progress)
+	w.appendMessage2Group(newDMLMessage(100), progress)
 
-	// Step 1: observe a larger commitTs first (e.g. produced before restart).
-	w.appendRow2Group(newDMLEvent(1, 200), progress)
-
-	// Step 2: observe a smaller commitTs later (e.g. replayed after restart).
-	w.appendRow2Group(newDMLEvent(1, 100), progress)
-
-	group := progress.eventsGroup[1]
-	require.NotNil(t, group)
-
-	// Expect: commitTs=100 is still kept and can be resolved.
-	resolved := group.ResolveInto(150, nil)
+	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
 	require.Len(t, resolved, 1)
 <<<<<<< HEAD
 	require.Equal(t, uint64(100), resolved[0].CommitTs)

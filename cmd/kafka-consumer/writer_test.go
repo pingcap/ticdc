@@ -24,7 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -98,7 +98,7 @@ func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T
 		},
 	}
 
-	w.Write(ctx, codecCommon.MessageTypeDDL)
+	w.Write(ctx, codeccommon.MessageTypeDDL)
 
 	require.Equal(t, []string{"CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)"}, s.ddls)
 	require.Empty(t, w.ddlList)
@@ -144,12 +144,12 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codecCommon.MessageTypeDDL)
+	w.Write(ctx, codeccommon.MessageTypeDDL)
 	require.Empty(t, s.ddls)
 	require.Len(t, w.ddlList, 2)
 
 	p.watermark = 200
-	w.Write(ctx, codecCommon.MessageTypeDDL)
+	w.Write(ctx, codeccommon.MessageTypeDDL)
 	require.Equal(t, []string{
 		"ALTER TABLE `test`.`t` ADD COLUMN `c2` INT",
 		"CREATE TABLE `test`.`t2` (`id` INT PRIMARY KEY)",
@@ -190,12 +190,12 @@ func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codecCommon.MessageTypeDDL)
+	w.Write(ctx, codeccommon.MessageTypeDDL)
 	require.Empty(t, s.ddls)
 	require.Len(t, w.ddlList, 1)
 
 	p.watermark = 200
-	w.Write(ctx, codecCommon.MessageTypeDDL)
+	w.Write(ctx, codeccommon.MessageTypeDDL)
 	require.Equal(t, []string{"CREATE TABLE `test`.`t2` LIKE `test`.`t1`"}, s.ddls)
 	require.Empty(t, w.ddlList)
 }
@@ -272,7 +272,7 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codecCommon.MessageTypeDDL)
+	w.Write(ctx, codeccommon.MessageTypeDDL)
 
 	require.Equal(t, []string{
 		"CREATE TABLE `common_1`.`add_and_drop_columns` (`id` INT(11) NOT NULL PRIMARY KEY)",
@@ -388,42 +388,51 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 >>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 	replicaCfg := config.GetDefaultReplicaConfig()
-	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
+	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, true)
 	require.NoError(t, err)
 
 	w := &writer{
 		progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
 		eventRouter:            eventRouter,
-		protocol:               config.ProtocolCanalJSON,
-		partitionTableAccessor: codecCommon.NewPartitionTableAccessor(),
+		protocol:               config.ProtocolAvro,
+		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
 	}
 
-	newDMLEvent := func(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
+	ddl := &commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `target`.`dst` LIKE `target`.`src`",
+		SchemaName: "source",
+		TableName:  "dst",
+		Type:       byte(timodel.ActionCreateTable),
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{
+				Schema:       "source",
+				Table:        "dst",
+				IsPartition:  true,
+				TargetSchema: "target",
+				TargetTable:  "dst",
+			},
+		},
+	}
+	w.onDDL(ddl)
+	require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
+
+	newDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
 		return &commonEvent.DMLEvent{
-			PhysicalTableID: tableID,
+			PhysicalTableID: 1,
 			CommitTs:        commitTs,
 			RowTypes:        []common.RowType{common.RowTypeUpdate},
 			Rows:            chunk.NewChunkWithCapacity(nil, 0),
 			TableInfo: &common.TableInfo{
-				TableName: common.TableName{Schema: "test", Table: "t"},
+				TableName: common.TableName{Schema: "target", Table: "dst"},
 			},
 		}
 	}
 
 	progress := w.progresses[0]
+	w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(200)), progress, kafka.Offset(10))
+	w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(100)), progress, kafka.Offset(11))
 
-	// Step 1: observe a larger commitTs first (e.g. produced before restart).
-	w.appendRow2Group(newDMLEvent(1, 200), progress, kafka.Offset(10))
-
-	// Step 2: observe a smaller commitTs later (e.g. replayed after restart).
-	w.appendRow2Group(newDMLEvent(1, 100), progress, kafka.Offset(11))
-
-	group := progress.eventsGroup[1]
-	require.NotNil(t, group)
-
-	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
-	// Expect: commitTs=100 is still kept and can be resolved.
-	resolved := group.ResolveInto(150, nil)
+	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
 	require.Len(t, resolved, 1)
 	require.Equal(t, uint64(100), resolved[0].CommitTs)
 

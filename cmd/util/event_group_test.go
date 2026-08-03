@@ -18,8 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
@@ -99,15 +98,15 @@ func TestEventsGroupResolveIntoAppendsAndClearsResolvedMessages(t *testing.T) {
 	original := group.messages
 >>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 
-	var dst []*commonEvent.DMLEvent
+	var dst []*codeccommon.DMLMessage
 	dst = group.ResolveInto(2, dst)
 
 	require.Len(t, dst, 2)
-	require.Same(t, e1, dst[0])
-	require.Same(t, e2, dst[1])
+	require.Same(t, m1, dst[0])
+	require.Same(t, m2, dst[1])
 
-	require.Len(t, group.events, 1)
-	require.Same(t, e3, group.events[0])
+	require.Len(t, group.messages, 1)
+	require.Same(t, m3, group.messages[0])
 
 	// The unresolved event is compacted to the front, and the tail is cleared so the group
 	// doesn't keep flushed events alive via its backing array.
@@ -136,18 +135,18 @@ func TestEventsGroupResolveIntoNoopWhenNothingResolved(t *testing.T) {
 	group.AppendMessage(m2)
 >>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 
-	original := group.events
-	dst := make([]*commonEvent.DMLEvent, 0, 1)
+	original := group.messages
+	dst := make([]*codeccommon.DMLMessage, 0, 1)
 	dst = group.ResolveInto(5, dst)
 
 	require.Len(t, dst, 0)
-	require.Len(t, group.events, 2)
-	require.Same(t, e1, group.events[0])
-	require.Same(t, e2, group.events[1])
+	require.Len(t, group.messages, 2)
+	require.Same(t, m1, group.messages[0])
+	require.Same(t, m2, group.messages[1])
 
 	// No prefix should be cleared because nothing was resolved.
-	require.Same(t, e1, original[0])
-	require.Same(t, e2, original[1])
+	require.Same(t, m1, original[0])
+	require.Same(t, m2, original[1])
 }
 
 func TestEventsGroupResolveIntoClearsAllWhenFullyResolved(t *testing.T) {
@@ -166,15 +165,15 @@ func TestEventsGroupResolveIntoClearsAllWhenFullyResolved(t *testing.T) {
 	group.AppendMessage(m2)
 >>>>>>> af33cc193 (consumer: sort fallback DML before flush (#5824))
 
-	original := group.events
-	var dst []*commonEvent.DMLEvent
+	original := group.messages
+	var dst []*codeccommon.DMLMessage
 	dst = group.ResolveInto(100, dst)
 
 	require.Len(t, dst, 2)
-	require.Same(t, e1, dst[0])
-	require.Same(t, e2, dst[1])
+	require.Same(t, m1, dst[0])
+	require.Same(t, m2, dst[1])
 
-	require.Len(t, group.events, 0)
+	require.Len(t, group.messages, 0)
 	require.Nil(t, original[0])
 	require.Nil(t, original[1])
 }

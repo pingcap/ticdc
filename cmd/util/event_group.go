@@ -22,22 +22,17 @@ import (
 	"sort"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
 
-// EventsGroup could store change event message.
+// EventsGroup stores change event messages.
 type EventsGroup struct {
 	Partition int32
 	tableID   int64
 
-	events []*commonEvent.DMLEvent
-	// HighWatermark is the maximum CommitTs ever observed in this group.
-	//
-	// It is a "seen" watermark, not a "flushed/applied" watermark. When the
-	// consumer reads faster than it flushes to downstream, HighWatermark can be
-	// larger than AppliedWatermark.
+	messages      []*codeccommon.DMLMessage
 	HighWatermark uint64
 	// AppliedWatermark is the maximum CommitTs that has been successfully flushed
 	// to the downstream for this group.
@@ -53,7 +48,7 @@ func NewEventsGroup(partition int32, tableID int64) *EventsGroup {
 	return &EventsGroup{
 		Partition: partition,
 		tableID:   tableID,
-		events:    make([]*commonEvent.DMLEvent, 0, 1024),
+		messages:  make([]*codeccommon.DMLMessage, 0, 1024),
 	}
 }
 
@@ -64,87 +59,46 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 		g.HighWatermark = row.CommitTs
 	}
 
-	var lastDMLEvent *commonEvent.DMLEvent
-	if len(g.events) > 0 {
-		lastDMLEvent = g.events[len(g.events)-1]
+	var lastMessage *codeccommon.DMLMessage
+	if len(g.messages) > 0 {
+		lastMessage = g.messages[len(g.messages)-1]
 	}
 
-	mergeDMLEvent := func(dst, src *commonEvent.DMLEvent) {
-		dst.Rows.Append(src.Rows, 0, src.Rows.NumRows())
-		dst.RowTypes = append(dst.RowTypes, src.RowTypes...)
-		dst.Length += src.Length
-		dst.PostTxnFlushed = append(dst.PostTxnFlushed, src.PostTxnFlushed...)
-	}
-
-	if lastDMLEvent == nil || lastDMLEvent.GetCommitTs() < row.GetCommitTs() {
-		g.events = append(g.events, row)
-		return
-	}
-
-	if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
-		mergeDMLEvent(lastDMLEvent, row)
+	if lastMessage == nil || lastMessage.GetCommitTs() <= commitTs {
+		g.messages = append(g.messages, message)
 		return
 	}
 
 	if force {
-		// A smaller CommitTs can appear at a larger Kafka offset after a TiCDC
-		// restart/retry (at-least-once replay). In this case we need to insert the
-		// event by CommitTs order. If the CommitTs already exists, merge it so one
-		// upstream transaction isn't split into multiple downstream transactions.
-		i := sort.Search(len(g.events), func(i int) bool {
-			return g.events[i].CommitTs > row.CommitTs
+		i := sort.Search(len(g.messages), func(i int) bool {
+			return g.messages[i].GetCommitTs() > commitTs
 		})
-		if i > 0 && g.events[i-1].CommitTs == row.CommitTs {
-			previous := g.events[i-1]
-			// If the table info version is incompatible, we cannot merge the events,
-			//  and the event may be replayed again after the table info is updated.
-			// So we just skip this event to avoid potential panic in the downstream.
-			if !compareTableInfo(previous, row) {
-				log.Warn("skip replayed DML event due to incompatible table info, the event may be replayed again after the table info is updated",
-					zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
-					zap.Uint64("commitTs", row.CommitTs),
-					zap.Any("previous", previous),
-					zap.Any("now", row))
-				return
-			}
-			mergeDMLEvent(previous, row)
-			return
-		}
-		g.events = slices.Insert(g.events, i, row)
+		g.messages = append(g.messages, nil)
+		copy(g.messages[i+1:], g.messages[i:])
+		g.messages[i] = message
 		return
 	}
 	log.Panic("append event with smaller commit ts",
 		zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
-		zap.Uint64("lastCommitTs", lastDMLEvent.GetCommitTs()), zap.Uint64("commitTs", row.GetCommitTs()))
+		zap.Uint64("lastCommitTs", lastMessage.GetCommitTs()), zap.Uint64("commitTs", commitTs))
 }
 
-func compareTableInfo(previous, now *commonEvent.DMLEvent) bool {
-	previousInfo := previous.TableInfo.ToTiDBTableInfo()
-	nowInfo := now.TableInfo.ToTiDBTableInfo()
-	if previousInfo.UpdateTS > nowInfo.UpdateTS {
-		log.Panic("previous dml event has bigger table info version",
-			zap.Any("previous", previous),
-			zap.Any("now", now))
-	}
-	return common.NewColumnSchema4Decoder(previousInfo).SameWithTableInfo(nowInfo)
-}
-
-// ResolveInto appends all events with CommitTs <= resolve into dst and removes them from the group.
-// ResolveInto copies pointers into dst first, then clears the
-// resolved prefix so Go GC can reclaim resolved events once downstream is done with them.
-func (g *EventsGroup) ResolveInto(resolve uint64, dst []*commonEvent.DMLEvent) []*commonEvent.DMLEvent {
-	i := sort.Search(len(g.events), func(i int) bool {
-		return g.events[i].CommitTs > resolve
+// ResolveInto appends all messages with CommitTs <= resolve into dst and removes them from the group.
+// ResolveInto copies pointers into dst first, then clears the resolved prefix so Go GC can reclaim
+// resolved messages once downstream is done with them.
+func (g *EventsGroup) ResolveInto(resolve uint64, dst []*codeccommon.DMLMessage) []*codeccommon.DMLMessage {
+	i := sort.Search(len(g.messages), func(i int) bool {
+		return g.messages[i].GetCommitTs() > resolve
 	})
 	if i == 0 {
 		return dst
 	}
 
 	// Copy pointers out first so we can safely clear the group's slice without affecting callers.
-	dst = append(dst, g.events[:i]...)
-	clear(g.events[:i])
-	g.events = g.events[i:]
-	if len(g.events) != 0 {
+	dst = append(dst, g.messages[:i]...)
+	clear(g.messages[:i])
+	g.messages = g.messages[i:]
+	if len(g.messages) != 0 {
 		log.Debug("not all events resolved",
 			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
 			zap.Int("resolved", i), zap.Int("remained", len(g.events)),

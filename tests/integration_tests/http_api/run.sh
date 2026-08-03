@@ -42,6 +42,10 @@ function run() {
 	python3 $CUR/util/test_case.py check_health
 	python3 $CUR/util/test_case.py get_status
 
+	if [ "$NEXT_GEN" == "1" ]; then
+		python3 $CUR/util/test_case.py check_keyspace_guidance
+	fi
+
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
 	run_sql "CREATE table test.t1(id int primary key, val int);"
 	sleep 3
