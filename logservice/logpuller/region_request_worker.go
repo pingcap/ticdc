@@ -125,7 +125,7 @@ func newRegionRequestWorker(
 
 func (s *regionRequestWorker) Run(ctx context.Context) error {
 	handleStreamFailure := func(firstReq *regionReq, regionErr error) {
-		// Stream failure recovery:
+		// Stream failure handle cases:
 		// - tracker: requests already sent to this stream.
 		// - firstReq: popped from admission for this stream, but not necessarily
 		//   added to tracker yet if the stream fails before sendRegionRequest calls
@@ -217,8 +217,7 @@ func (s *regionRequestWorker) runStream(ctx context.Context, firstReq *regionReq
 			zap.Error(err))
 	}()
 
-	g, gctx := errgroup.WithContext(ctx)
-	conn, err := Connect(gctx, s.upstream.credential, s.storeAddr)
+	conn, err := Connect(ctx, s.upstream.credential, s.storeAddr)
 	if err != nil {
 		log.Warn("region request worker create grpc stream failed",
 			zap.Uint64("workerID", s.workerID),
@@ -234,6 +233,7 @@ func (s *regionRequestWorker) runStream(ctx context.Context, firstReq *regionReq
 	}
 	defer func() { _ = conn.Conn.Close() }()
 
+	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return s.receiveAndDispatchChangeEvents(conn) })
 	g.Go(func() error { return s.processRegionSendTask(gctx, conn, firstReq) })
 
@@ -285,13 +285,13 @@ func (s *regionRequestWorker) receiveAndDispatchChangeEvents(conn *ConnAndClient
 }
 
 func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) {
-	for _, cdcEvent := range events {
-		regionID := cdcEvent.RegionId
-		subscriptionID := SubscriptionID(cdcEvent.RequestId)
+	for _, event := range events {
+		regionID := event.RegionId
+		subscriptionID := SubscriptionID(event.RequestId)
 		state := s.tracker.Get(subscriptionID, regionID)
 		if state != nil {
 			regionEvent := regionEvent{states: []*regionFeedState{state}}
-			switch eventData := cdcEvent.Event.(type) {
+			switch eventData := event.Event.(type) {
 			case *cdcpb.Event_Entries_:
 				if eventData == nil {
 					log.Warn("region request worker receives a region event with nil entries, ignore it",
@@ -307,7 +307,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 				log.Debug("region request worker receives a region error",
 					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Uint64("regionID", cdcEvent.RegionId),
+					zap.Uint64("regionID", event.RegionId),
 					zap.Any("error", eventData.Error))
 				state.markStopped(&eventError{err: eventData.Error})
 				s.eventSink.Push(subscriptionID, regionEvent)
@@ -317,23 +317,23 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			case *cdcpb.Event_LongTxn_:
 				continue
 			default:
-				log.Panic("unknown event type", zap.Any("event", cdcEvent))
+				log.Panic("unknown event type", zap.Any("event", event))
 			}
 			s.eventSink.Push(subscriptionID, regionEvent)
 			continue
 		}
 
-		switch cdcEvent.Event.(type) {
+		switch event.Event.(type) {
 		case *cdcpb.Event_Error:
 			log.Debug("region request worker receives an error for a stale region, ignore it",
 				zap.Uint64("workerID", s.workerID),
 				zap.Uint64("subscriptionID", uint64(subscriptionID)),
-				zap.Uint64("regionID", cdcEvent.RegionId))
+				zap.Uint64("regionID", event.RegionId))
 		default:
 			log.Warn("region request worker receives a region event for an untracked region",
 				zap.Uint64("workerID", s.workerID),
 				zap.Uint64("subscriptionID", uint64(subscriptionID)),
-				zap.Uint64("regionID", cdcEvent.RegionId))
+				zap.Uint64("regionID", event.RegionId))
 		}
 	}
 }
