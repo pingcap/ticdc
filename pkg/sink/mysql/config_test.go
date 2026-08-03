@@ -310,7 +310,6 @@ func TestApplySinkURIParamsToConfig(t *testing.T) {
 	expected.Timezone = `"UTC"`
 	expected.TidbTxnMode = "pessimistic"
 	expected.tidbTxnModeSpecified = true
-	expected.AsyncDDLTimeout = expected.ReadTimeout
 	// expected.EnableOldValue = true
 	uriStr := "mysql://127.0.0.1:3306/?time-zone=UTC&worker-count=64&max-txn-row=20" +
 		"&max-multi-update-row=80&max-multi-update-row-size=512" +
@@ -351,21 +350,18 @@ func TestApplyAsyncDDLTimeout(t *testing.T) {
 		mysqlConfig             *config.MySQLConfig
 		expectedReadTimeout     string
 		expectedAsyncDDLTimeout string
-		expectedSpecified       bool
 	}{
 		{
-			name:                    "default follows read timeout",
+			name:                    "default async ddl timeout",
 			uri:                     "mysql://127.0.0.1:3306/?read-timeout=4m",
 			expectedReadTimeout:     "4m",
-			expectedAsyncDDLTimeout: "4m",
-			expectedSpecified:       false,
+			expectedAsyncDDLTimeout: defaultAsyncDDLTimeout,
 		},
 		{
 			name:                    "sink uri async ddl timeout",
 			uri:                     "mysql://127.0.0.1:3306/?read-timeout=4m&async-ddl-timeout=30m",
 			expectedReadTimeout:     "4m",
 			expectedAsyncDDLTimeout: "30m",
-			expectedSpecified:       true,
 		},
 		{
 			name: "config async ddl timeout",
@@ -375,7 +371,6 @@ func TestApplyAsyncDDLTimeout(t *testing.T) {
 			},
 			expectedReadTimeout:     "4m",
 			expectedAsyncDDLTimeout: "20m",
-			expectedSpecified:       true,
 		},
 		{
 			name: "sink uri async ddl timeout overrides config",
@@ -385,17 +380,15 @@ func TestApplyAsyncDDLTimeout(t *testing.T) {
 			},
 			expectedReadTimeout:     "4m",
 			expectedAsyncDDLTimeout: "30m",
-			expectedSpecified:       true,
 		},
 		{
-			name: "config read timeout inherited",
+			name: "config read timeout does not change async ddl timeout",
 			uri:  "mysql://127.0.0.1:3306/",
 			mysqlConfig: &config.MySQLConfig{
 				ReadTimeout: util.AddressOf("6m"),
 			},
 			expectedReadTimeout:     "6m",
-			expectedAsyncDDLTimeout: "6m",
-			expectedSpecified:       false,
+			expectedAsyncDDLTimeout: defaultAsyncDDLTimeout,
 		},
 	}
 
@@ -411,7 +404,6 @@ func TestApplyAsyncDDLTimeout(t *testing.T) {
 
 			require.Equal(t, tc.expectedReadTimeout, cfg.ReadTimeout)
 			require.Equal(t, tc.expectedAsyncDDLTimeout, cfg.AsyncDDLTimeout)
-			require.Equal(t, tc.expectedSpecified, cfg.asyncDDLTimeoutSpecified)
 		})
 	}
 }

@@ -114,16 +114,14 @@ type Config struct {
 	WriteTimeout         string
 	DialTimeout          string
 	// AsyncDDLTimeout controls the read timeout for the async DDL DB pool.
-	// If it is not explicitly set, it follows ReadTimeout for compatibility.
+	// If it is not explicitly set, it defaults to defaultAsyncDDLTimeout.
 	AsyncDDLTimeout string
-	// asyncDDLTimeoutSpecified indicates whether AsyncDDLTimeout is explicitly set by user via sink URI or changefeed config.
-	asyncDDLTimeoutSpecified bool
-	SafeMode                 bool
-	Timezone                 string
-	TLS                      string
-	SSLCa                    string
-	SSLCert                  string
-	SSLKey                   string
+	SafeMode        bool
+	Timezone        string
+	TLS             string
+	SSLCa           string
+	SSLCert         string
+	SSLKey          string
 
 	// retry number for dml
 	DMLMaxRetry uint64
@@ -187,7 +185,6 @@ func New() *Config {
 		WriteTimeout:                  defaultWriteTimeout,
 		DialTimeout:                   defaultDialTimeout,
 		AsyncDDLTimeout:               defaultAsyncDDLTimeout,
-		asyncDDLTimeoutSpecified:      false,
 		SafeMode:                      defaultSafeMode,
 		BatchDMLEnable:                defaultBatchDMLEnable,
 		MultiStmtEnable:               defaultMultiStmtEnable,
@@ -213,9 +210,6 @@ func (c *Config) mergeConfig(cfg *config.ChangefeedConfig) {
 			if mConfig.TiDBTxnMode != nil {
 				c.tidbTxnModeSpecified = true
 			}
-			if mConfig.AsyncDDLTimeout != nil {
-				c.asyncDDLTimeoutSpecified = true
-			}
 			merge(&c.WorkerCount, mConfig.WorkerCount)
 			merge(&c.MaxTxnRow, mConfig.MaxTxnRow)
 			merge(&c.MaxMultiUpdateRowCount, mConfig.MaxMultiUpdateRowCount)
@@ -228,7 +222,6 @@ func (c *Config) mergeConfig(cfg *config.ChangefeedConfig) {
 			merge(&c.WriteTimeout, mConfig.WriteTimeout)
 			merge(&c.ReadTimeout, mConfig.ReadTimeout)
 			merge(&c.DialTimeout, mConfig.Timeout)
-			merge(&c.AsyncDDLTimeout, mConfig.AsyncDDLTimeout)
 			merge(&c.BatchDMLEnable, mConfig.EnableBatchDML)
 			merge(&c.MultiStmtEnable, mConfig.EnableMultiStatement)
 			merge(&c.CachePrepStmts, mConfig.EnableCachePreparedStatement)
@@ -289,14 +282,14 @@ func (c *Config) Apply(
 	if err = getDuration(query, "timeout", &c.DialTimeout); err != nil {
 		return err
 	}
+	if cfg != nil &&
+		cfg.SinkConfig != nil &&
+		cfg.SinkConfig.MySQLConfig != nil &&
+		cfg.SinkConfig.MySQLConfig.AsyncDDLTimeout != nil {
+		c.AsyncDDLTimeout = *cfg.SinkConfig.MySQLConfig.AsyncDDLTimeout
+	}
 	if err = getDuration(query, "async-ddl-timeout", &c.AsyncDDLTimeout); err != nil {
 		return err
-	}
-	if query.Get("async-ddl-timeout") != "" {
-		c.asyncDDLTimeoutSpecified = true
-	}
-	if !c.asyncDDLTimeoutSpecified {
-		c.AsyncDDLTimeout = c.ReadTimeout
 	}
 	if err = getBatchDMLEnable(query, &c.BatchDMLEnable); err != nil {
 		return err
