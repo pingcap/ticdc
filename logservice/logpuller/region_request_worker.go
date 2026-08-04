@@ -36,10 +36,13 @@ import (
 
 const storeReconnectBackoff = time.Second
 
+var (
+	metricsResolvedTsCount  = metrics.PullerEventCounter.WithLabelValues("resolved_ts")
+	metricBatchResolvedSize = metrics.BatchResolvedEventSize.WithLabelValues("event-store")
+)
+
 // To generate a workerID in `newRegionRequestWorker`.
 var workerIDGen atomic.Uint64
-
-var metricBatchResolvedSize = metrics.BatchResolvedEventSize.WithLabelValues("event-store")
 
 type deregisterRequest struct {
 	subID      SubscriptionID
