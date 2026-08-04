@@ -19,39 +19,64 @@ import (
 	stderrors "errors"
 	"testing"
 
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/client-go/v2/oracle"
+	pdgc "github.com/tikv/pd/client/clients/gc"
 )
 
 type verifyGCSafepointTestPDClient struct {
-	physical int64
-	logical  int64
-	closed   bool
+	keyspaceID          uint32
+	txnSafePoint        uint64
+	gcSafePoint         uint64
+	loadedKeyspace      string
+	requestedKeyspaceID uint32
+	closed              bool
 }
 
-func (c *verifyGCSafepointTestPDClient) GetTS(context.Context) (int64, int64, error) {
-	return c.physical, c.logical, nil
+func (c *verifyGCSafepointTestPDClient) LoadKeyspace(_ context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
+	c.loadedKeyspace = keyspace
+	return &keyspacepb.KeyspaceMeta{Id: c.keyspaceID}, nil
+}
+
+func (c *verifyGCSafepointTestPDClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
+	c.requestedKeyspaceID = keyspaceID
+	return &verifyGCSafepointTestGCStatesClient{
+		gcState: pdgc.NewGCStateWithoutGCBarriers(
+			keyspaceID,
+			c.txnSafePoint,
+			c.gcSafePoint,
+		),
+	}
 }
 
 func (c *verifyGCSafepointTestPDClient) Close() {
 	c.closed = true
 }
 
+type verifyGCSafepointTestGCStatesClient struct {
+	pdgc.GCStatesClient
+	gcState pdgc.GCState
+}
+
+func (c *verifyGCSafepointTestGCStatesClient) GetGCState(context.Context, ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
+	return c.gcState, nil
+}
+
 func TestVerifyGCSafepointRun(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
+	t.Run("uses the current keyspace transaction safepoint", func(t *testing.T) {
 		pdClient := &verifyGCSafepointTestPDClient{
-			physical: 1000,
-			logical:  7,
+			keyspaceID:   42,
+			txnSafePoint: 123,
+			gcSafePoint:  100,
 		}
-		snapshotTS := oracle.ComposeTS(pdClient.physical, pdClient.logical)
 		o := &verifyGCSafepointOptions{
 			keyspace: "essential-v1",
 			pdClient: pdClient,
 			listDatabases: func(_ context.Context, keyspace string, ts uint64) (int, error) {
 				require.Equal(t, "essential-v1", keyspace)
-				require.Equal(t, snapshotTS, ts)
+				require.Equal(t, pdClient.txnSafePoint, ts)
 				return 3, nil
 			},
 		}
@@ -60,13 +85,18 @@ func TestVerifyGCSafepointRun(t *testing.T) {
 		cmd.SetOut(output)
 
 		require.NoError(t, o.run(cmd))
+		require.Equal(t, "essential-v1", pdClient.loadedKeyspace)
+		require.Equal(t, pdClient.keyspaceID, pdClient.requestedKeyspaceID)
 		require.True(t, pdClient.closed)
 		require.Contains(t, output.String(), "WARNING: no service safepoint blocks GC safepoint advancement")
 		require.Contains(t, output.String(), "databases: 3")
 	})
 
 	t.Run("snapshot error is returned", func(t *testing.T) {
-		pdClient := &verifyGCSafepointTestPDClient{physical: 1000}
+		pdClient := &verifyGCSafepointTestPDClient{
+			keyspaceID:   42,
+			txnSafePoint: 123,
+		}
 		o := &verifyGCSafepointOptions{
 			keyspace: "essential-v1",
 			pdClient: pdClient,

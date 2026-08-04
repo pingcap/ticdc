@@ -17,6 +17,7 @@ import (
 	"context"
 	"net/url"
 
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -27,11 +28,12 @@ import (
 	"github.com/pingcap/tidb/pkg/store/driver"
 	"github.com/spf13/cobra"
 	tikvconfig "github.com/tikv/client-go/v2/config"
-	"github.com/tikv/client-go/v2/oracle"
+	pdgc "github.com/tikv/pd/client/clients/gc"
 )
 
 type verifyGCSafepointPDClient interface {
-	GetTS(ctx context.Context) (physical int64, logical int64, err error)
+	LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error)
+	GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient
 	Close()
 }
 
@@ -61,11 +63,16 @@ func (o *verifyGCSafepointOptions) complete(f factory.Factory) error {
 func (o *verifyGCSafepointOptions) run(cmd *cobra.Command) error {
 	defer o.pdClient.Close()
 	ctx := cmd.Context()
-	physical, logical, err := o.pdClient.GetTS(ctx)
+	keyspaceMeta, err := o.pdClient.LoadKeyspace(ctx, o.keyspace)
 	if err != nil {
-		return cerrors.WrapError(cerrors.ErrPDEtcdAPIError, err)
+		return cerrors.WrapError(cerrors.ErrLoadKeyspaceFailed, err)
 	}
-	snapshotTS := oracle.ComposeTS(physical, logical)
+	gcState, err := o.pdClient.GetGCStatesClient(keyspaceMeta.Id).GetGCState(ctx)
+	if err != nil {
+		return cerrors.WrapError(cerrors.ErrGetGCBarrierFailed, err)
+	}
+	// Schema store uses the transaction safepoint as its initial metadata snapshot.
+	snapshotTS := gcState.TxnSafePoint
 	cmd.Printf("WARNING: no service safepoint blocks GC safepoint advancement; ListDatabases at snapshot %d may fail with a safepoint error.\n", snapshotTS)
 
 	databaseCount, err := o.listDatabases(ctx, o.keyspace, snapshotTS)
@@ -77,7 +84,7 @@ func (o *verifyGCSafepointOptions) run(cmd *cobra.Command) error {
 }
 
 func listDatabasesAtSnapshot(
-	ctx context.Context,
+	_ context.Context,
 	pdAddr string,
 	credential *security.Credential,
 	keyspace string,
@@ -118,7 +125,7 @@ func newCmdVerifyGCSafepoint(f factory.Factory) *cobra.Command {
 	o := &verifyGCSafepointOptions{}
 	command := &cobra.Command{
 		Use:   "verify-gc-safepoint",
-		Short: "Verify keyspace GC safepoint protection by listing databases at a protected snapshot",
+		Short: "Verify a keyspace GC safepoint by listing databases at its current snapshot",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, _ []string) {
 			util.CheckErr(o.complete(f))
