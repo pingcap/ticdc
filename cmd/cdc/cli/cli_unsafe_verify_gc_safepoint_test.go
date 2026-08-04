@@ -27,11 +27,15 @@ import (
 )
 
 type verifyGCSafepointTestPDClient struct {
+	pdgc.LegacyClientV2
 	keyspaceID          uint32
 	txnSafePoint        uint64
 	gcSafePoint         uint64
+	legacySafePoint     uint64
 	loadedKeyspace      string
 	requestedKeyspaceID uint32
+	legacyKeyspaceID    uint32
+	gcStateRequested    bool
 	closed              bool
 }
 
@@ -41,6 +45,7 @@ func (c *verifyGCSafepointTestPDClient) LoadKeyspace(_ context.Context, keyspace
 }
 
 func (c *verifyGCSafepointTestPDClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
+	c.gcStateRequested = true
 	c.requestedKeyspaceID = keyspaceID
 	return &verifyGCSafepointTestGCStatesClient{
 		gcState: pdgc.NewGCStateWithoutGCBarriers(
@@ -49,6 +54,11 @@ func (c *verifyGCSafepointTestPDClient) GetGCStatesClient(keyspaceID uint32) pdg
 			c.gcSafePoint,
 		),
 	}
+}
+
+func (c *verifyGCSafepointTestPDClient) GetMinServiceSafePointV2(_ context.Context, keyspaceID uint32) (uint64, error) {
+	c.legacyKeyspaceID = keyspaceID
+	return c.legacySafePoint, nil
 }
 
 func (c *verifyGCSafepointTestPDClient) Close() {
@@ -92,6 +102,32 @@ func TestVerifyGCSafepointRun(t *testing.T) {
 		require.Contains(t, output.String(), "databases: 3")
 	})
 
+	t.Run("uses the legacy minimum service safepoint when requested", func(t *testing.T) {
+		pdClient := &verifyGCSafepointTestPDClient{
+			keyspaceID:      42,
+			txnSafePoint:    123,
+			legacySafePoint: 456,
+		}
+		o := &verifyGCSafepointOptions{
+			keyspace:        "essential-v1",
+			legacySafepoint: true,
+			pdClient:        pdClient,
+			listDatabases: func(_ context.Context, keyspace string, ts uint64) (int, error) {
+				require.Equal(t, "essential-v1", keyspace)
+				require.Equal(t, pdClient.legacySafePoint, ts)
+				return 3, nil
+			},
+		}
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		cmd.SetOut(new(bytes.Buffer))
+
+		require.NoError(t, o.run(cmd))
+		require.Equal(t, pdClient.keyspaceID, pdClient.legacyKeyspaceID)
+		require.False(t, pdClient.gcStateRequested)
+		require.True(t, pdClient.closed)
+	})
+
 	t.Run("snapshot error is returned", func(t *testing.T) {
 		pdClient := &verifyGCSafepointTestPDClient{
 			keyspaceID:   42,
@@ -113,4 +149,13 @@ func TestVerifyGCSafepointRun(t *testing.T) {
 		require.True(t, pdClient.closed)
 		require.Contains(t, output.String(), "may fail with a safepoint error")
 	})
+}
+
+func TestVerifyGCSafepointFlags(t *testing.T) {
+	o := &verifyGCSafepointOptions{}
+	cmd := &cobra.Command{}
+	o.addFlags(cmd)
+
+	require.NoError(t, cmd.ParseFlags([]string{"--legacy-safepoint"}))
+	require.True(t, o.legacySafepoint)
 }

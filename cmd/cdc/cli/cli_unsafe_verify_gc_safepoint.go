@@ -38,13 +38,15 @@ type verifyGCSafepointPDClient interface {
 }
 
 type verifyGCSafepointOptions struct {
-	keyspace      string
-	pdClient      verifyGCSafepointPDClient
-	listDatabases func(ctx context.Context, keyspace string, snapshotTS uint64) (int, error)
+	keyspace        string
+	legacySafepoint bool
+	pdClient        verifyGCSafepointPDClient
+	listDatabases   func(ctx context.Context, keyspace string, snapshotTS uint64) (int, error)
 }
 
 func (o *verifyGCSafepointOptions) addFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&o.keyspace, "keyspace", "k", "", "Keyspace to verify")
+	cmd.Flags().BoolVar(&o.legacySafepoint, "legacy-safepoint", false, "Read the keyspace-v2 minimum service safepoint")
 	_ = cmd.MarkFlagRequired("keyspace")
 }
 
@@ -67,12 +69,25 @@ func (o *verifyGCSafepointOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return cerrors.WrapError(cerrors.ErrLoadKeyspaceFailed, err)
 	}
-	gcState, err := o.pdClient.GetGCStatesClient(keyspaceMeta.Id).GetGCState(ctx)
-	if err != nil {
-		return cerrors.WrapError(cerrors.ErrGetGCBarrierFailed, err)
+
+	var snapshotTS uint64
+	if o.legacySafepoint {
+		legacyClient, ok := o.pdClient.(pdgc.LegacyClientV2)
+		if !ok {
+			return cerrors.ErrGetServiceSafepointFailed.GenWithStackByArgs("PD client does not support LegacyClientV2")
+		}
+		snapshotTS, err = legacyClient.GetMinServiceSafePointV2(ctx, keyspaceMeta.Id)
+		if err != nil {
+			return cerrors.WrapError(cerrors.ErrGetServiceSafepointFailed, err)
+		}
+	} else {
+		gcState, err := o.pdClient.GetGCStatesClient(keyspaceMeta.Id).GetGCState(ctx)
+		if err != nil {
+			return cerrors.WrapError(cerrors.ErrGetGCBarrierFailed, err)
+		}
+		// Schema store uses the transaction safepoint as its initial metadata snapshot.
+		snapshotTS = gcState.TxnSafePoint
 	}
-	// Schema store uses the transaction safepoint as its initial metadata snapshot.
-	snapshotTS := gcState.TxnSafePoint
 	cmd.Printf("WARNING: no service safepoint blocks GC safepoint advancement; ListDatabases at snapshot %d may fail with a safepoint error.\n", snapshotTS)
 
 	databaseCount, err := o.listDatabases(ctx, o.keyspace, snapshotTS)
