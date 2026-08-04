@@ -71,7 +71,7 @@ func TestMemoryQuotaUpdateMetrics(t *testing.T) {
 
 	quota.scanMu.Lock()
 	quota.scanUsed = 7
-	quota.level = admissionFreezeAllNewScans
+	quota.level = admissionPauseWarming
 	quota.scanMu.Unlock()
 	quota.eventNotifier.waiters.Store(2)
 	t.Cleanup(func() { quota.eventNotifier.waiters.Store(0) })
@@ -88,7 +88,7 @@ func TestMemoryQuotaUpdateMetrics(t *testing.T) {
 		metrics.LogPullerMemoryQuota.WithLabelValues("scan_estimate")))
 	require.Equal(t, float64(132), testutil.ToFloat64(
 		metrics.LogPullerMemoryQuota.WithLabelValues("hard_limit")))
-	require.Equal(t, float64(admissionFreezeAllNewScans),
+	require.Equal(t, float64(admissionPauseWarming),
 		testutil.ToFloat64(metrics.LogPullerMemoryQuotaAdmissionLevel))
 	require.Equal(t, float64(2),
 		testutil.ToFloat64(metrics.LogPullerMemoryQuotaEventWaiterCount))
@@ -114,9 +114,10 @@ func TestMemoryQuotaAdmissionLevels(t *testing.T) {
 
 	require.True(t, quota.AcquireEvent(context.Background(), initializedSpan, 45))
 	require.True(t, quota.AcquireEvent(context.Background(), initializedSpan, 20))
-	_, _, admitted = quota.AcquireScan(
+	scanBytes, _, admitted = quota.AcquireScan(
 		newTestQuotaRegion(initializedSpan), initializedTs)
-	require.False(t, admitted)
+	require.True(t, admitted)
+	quota.ReleaseScan(scanBytes)
 
 	quota.ReleaseEvent(20)
 	state := getMemoryQuotaTestState(quota)

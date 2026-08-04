@@ -40,14 +40,6 @@ const (
 	// falls to 5% of the soft capacity.
 	defaultResumeWarmingRatio = 0.05
 
-	// defaultFreezeAllRatio pauses every new scan when memory pressure reaches
-	// 80% of the soft capacity.
-	defaultFreezeAllRatio = 0.8
-
-	// defaultResumeAllRatio allows new scans again after memory pressure falls
-	// to 60% of the soft capacity.
-	defaultResumeAllRatio = 0.6
-
 	// defaultHardLimitRatio blocks receiving more events when accounted event
 	// memory reaches twice the soft capacity.
 	defaultHardLimitRatio = 2.0
@@ -70,7 +62,6 @@ type admissionLevel uint8
 const (
 	admissionNormal admissionLevel = iota
 	admissionPauseWarming
-	admissionFreezeAllNewScans
 )
 
 // eventMemoryNotifier wakes event receivers that are waiting for memory. Each
@@ -140,8 +131,9 @@ func (n *eventMemoryNotifier) notify() {
 // memoryQuotaController tracks event memory retained by downstream callbacks
 // and estimated memory for admitted initial scans. Event memory is allowed to
 // exceed the soft capacity, but the receive path waits at the hard limit. Scan
-// admission first pauses uninitialized high-lag spans and freezes all new scans
-// only under heavier pressure; both transitions use hysteresis when resuming.
+// admission pauses uninitialized high-lag spans under memory pressure and uses
+// hysteresis when resuming them. Other scans continue to make progress and are
+// bounded by the region request window and the event-memory hard limit.
 type memoryQuotaController struct {
 	capacity uint64
 	// used tracks event bytes retained until downstream finishes consuming them.
@@ -166,8 +158,6 @@ type memoryQuotaController struct {
 
 	pauseWarmingLimit  uint64
 	resumeWarmingLimit uint64
-	freezeAllLimit     uint64
-	resumeAllLimit     uint64
 	hardLimit          uint64
 
 	scanEstimate uint64
@@ -185,8 +175,6 @@ func newMemoryQuotaController(capacity, scanBaseSize uint64) *memoryQuotaControl
 		level:              admissionNormal,
 		pauseWarmingLimit:  uint64(math.Ceil(float64(capacity) * defaultPauseWarmingRatio)),
 		resumeWarmingLimit: uint64(float64(capacity) * defaultResumeWarmingRatio),
-		freezeAllLimit:     uint64(math.Ceil(float64(capacity) * defaultFreezeAllRatio)),
-		resumeAllLimit:     uint64(float64(capacity) * defaultResumeAllRatio),
 		hardLimit:          uint64(float64(capacity) * defaultHardLimitRatio),
 		scanEstimate:       scanBaseSize,
 		eventNotifier:      newEventMemoryNotifier(),
@@ -216,10 +204,6 @@ func (c *memoryQuotaController) AcquireScan(
 	c.scanMu.Lock()
 	defer c.scanMu.Unlock()
 	c.refreshLevelLocked()
-	if c.level == admissionFreezeAllNewScans {
-		return 0, c.scanReady, false
-	}
-
 	warming := isWarmingScan(region, currentTs)
 	// Admission is based on the pressure before accounting this scan. This lets
 	// one scan make progress even when its estimate alone exceeds the threshold.
@@ -292,8 +276,7 @@ func (c *memoryQuotaController) ReleaseEvent(bytes uint64) {
 	}
 	used := c.used.Add(^(bytes - 1))
 	previousUsed := used + bytes
-	if crossesDown(previousUsed, used, c.resumeWarmingLimit) ||
-		crossesDown(previousUsed, used, c.resumeAllLimit) {
+	if crossesDown(previousUsed, used, c.resumeWarmingLimit) {
 		c.refreshAdmissionAndNotify()
 	}
 	c.eventNotifier.notify()
@@ -381,26 +364,12 @@ func (c *memoryQuotaController) refreshLevelLocked() {
 	// it to actual event bytes would count the same pressure twice.
 	pressure := max(c.used.Load(), c.scanUsed)
 	switch c.level {
-	case admissionFreezeAllNewScans:
-		if pressure <= c.resumeAllLimit {
-			if pressure >= c.pauseWarmingLimit {
-				c.level = admissionPauseWarming
-			} else {
-				c.level = admissionNormal
-			}
-		}
 	case admissionPauseWarming:
-		switch {
-		case pressure >= c.freezeAllLimit:
-			c.level = admissionFreezeAllNewScans
-		case pressure <= c.resumeWarmingLimit:
+		if pressure <= c.resumeWarmingLimit {
 			c.level = admissionNormal
 		}
 	default:
-		switch {
-		case pressure >= c.freezeAllLimit:
-			c.level = admissionFreezeAllNewScans
-		case pressure >= c.pauseWarmingLimit:
+		if pressure >= c.pauseWarmingLimit {
 			c.level = admissionPauseWarming
 		}
 	}
