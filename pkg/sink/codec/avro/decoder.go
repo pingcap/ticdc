@@ -115,7 +115,7 @@ func (d *decoder) NextResolvedEvent() uint64 {
 
 // NextDMLMessage returns the next row changed message if exists
 func (d *decoder) NextDMLMessage() *common.DMLMessage {
-	keyMap, valueMap, valueSchema, isDelete, deleteCommitTs := d.decodeDMLPayload()
+	keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs := d.decodeDMLPayload()
 	schemaName, tableName := schemaAndTableName(valueSchema)
 	commitTs := deleteCommitTs
 	if commitTs == 0 && !isDelete {
@@ -124,10 +124,12 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	rowType := commonType.RowTypeInsert
 	if isDelete {
 		rowType = commonType.RowTypeDelete
+	} else if d.config.AvroIncludeBeforeValue && valueMap[tidbOp] == updateOperation {
+		rowType = commonType.RowTypeUpdate
 	}
 	tableID := tableIDAllocator.Allocate(schemaName, tableName)
 	return common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
-		return d.assembleDMLEventFromDecoded(keyMap, valueMap, valueSchema, isDelete, deleteCommitTs)
+		return d.assembleDMLEventFromDecoded(keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs)
 	})
 }
 
@@ -136,6 +138,7 @@ func (d *decoder) decodeDMLPayload() (
 	valueMap map[string]any,
 	valueSchema map[string]any,
 	isDelete bool,
+	hasValue bool,
 	deleteCommitTs uint64,
 ) {
 	var (
@@ -150,9 +153,8 @@ func (d *decoder) decodeDMLPayload() (
 	}
 
 	isDeleteValue := d.isDeleteValue()
-	hasValue := len(d.value) != 0 && !isDeleteValue
-	isDelete := !hasValue
-	deleteCommitTs := uint64(0)
+	hasValue = len(d.value) != 0 && !isDeleteValue
+	isDelete = !hasValue
 	if !hasValue {
 		// Legacy delete event only has the key payload or a delete marker value.
 		// It can only be decoded as a delete row with key columns in PreRow.
@@ -171,6 +173,17 @@ func (d *decoder) decodeDMLPayload() (
 		}
 	}
 
+	return keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs
+}
+
+func (d *decoder) assembleDMLEventFromDecoded(
+	keyMap map[string]any,
+	valueMap map[string]any,
+	valueSchema map[string]any,
+	isDelete bool,
+	hasValue bool,
+	deleteCommitTs uint64,
+) *commonEvent.DMLEvent {
 	event, err := assembleEvent(keyMap, valueMap, valueSchema, isDelete, hasValue)
 	if err != nil {
 		log.Panic("assemble event failed", zap.Error(err))

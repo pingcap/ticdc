@@ -301,7 +301,7 @@ func TestAvroEncodeIncludeBeforeValue(t *testing.T) {
 			require.True(t, exist)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
-			decoded := decoder.NextDMLEvent()
+			decoded := decoder.NextDMLMessage().ToDMLEvent()
 			require.NotNil(t, decoded)
 			require.Equal(t, tc.event.CommitTs, decoded.CommitTs)
 
