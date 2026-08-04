@@ -26,13 +26,13 @@ import (
 )
 
 const (
-	// defaultPauseWarmingRatio pauses new high-lag scans when memory pressure
-	// reaches 15% of the soft capacity.
-	defaultPauseWarmingRatio = 0.15
+	// defaultPauseLowPriorityRatio pauses new low-priority scans when memory
+	// pressure reaches 15% of the soft capacity.
+	defaultPauseLowPriorityRatio = 0.15
 
-	// defaultResumeWarmingRatio resumes high-lag scans after memory pressure
-	// falls to 5% of the soft capacity.
-	defaultResumeWarmingRatio = 0.05
+	// defaultResumeLowPriorityRatio resumes low-priority scans after memory
+	// pressure falls to 5% of the soft capacity.
+	defaultResumeLowPriorityRatio = 0.05
 
 	// defaultHardLimitRatio blocks receiving more events when accounted event
 	// memory reaches twice the soft capacity.
@@ -52,7 +52,7 @@ type admissionLevel uint8
 
 const (
 	admissionNormal admissionLevel = iota
-	admissionPauseWarming
+	admissionPauseLowPriority
 )
 
 // eventMemoryNotifier wakes event receivers that are waiting for memory. Each
@@ -129,9 +129,9 @@ func (n *eventMemoryNotifier) notify() {
 // Initial scans are charged by estimate instead of measured bytes. Each
 // admitted scan starts from scanBaseSize, grows logarithmically with scan lag,
 // and is capped at maxScanLagFactor times the base size. Scan admission
-// compares max(event used, scan used) with the soft capacity: high-lag
-// "warming" scans pause at pauseWarmingLimit and resume at
-// resumeWarmingLimit, while lower-lag scans continue to make progress.
+// compares max(event used, scan used) with the soft capacity: low-priority
+// scans pause at pauseLowPriorityLimit and resume at
+// resumeLowPriorityLimit, while high-priority scans continue to make progress.
 type memoryQuotaController struct {
 	capacity uint64
 	// used tracks event bytes retained until downstream finishes consuming them.
@@ -154,8 +154,8 @@ type memoryQuotaController struct {
 	// synchronous broadcast to every store and request worker.
 	scanReady chan struct{}
 
-	pauseWarmingLimit  uint64
-	resumeWarmingLimit uint64
+	pauseLowPriorityLimit  uint64
+	resumeLowPriorityLimit uint64
 	hardLimit          uint64
 
 	scanEstimate uint64
@@ -165,8 +165,8 @@ func newMemoryQuotaController(capacity, scanBaseSize uint64) *memoryQuotaControl
 	c := &memoryQuotaController{
 		capacity:           capacity,
 		level:              admissionNormal,
-		pauseWarmingLimit:  uint64(math.Ceil(float64(capacity) * defaultPauseWarmingRatio)),
-		resumeWarmingLimit: uint64(float64(capacity) * defaultResumeWarmingRatio),
+		pauseLowPriorityLimit:  uint64(math.Ceil(float64(capacity) * defaultPauseLowPriorityRatio)),
+		resumeLowPriorityLimit: uint64(float64(capacity) * defaultResumeLowPriorityRatio),
 		hardLimit:          uint64(float64(capacity) * defaultHardLimitRatio),
 		scanEstimate:       scanBaseSize,
 		eventNotifier:      newEventMemoryNotifier(),
@@ -196,10 +196,10 @@ func (c *memoryQuotaController) AcquireScan(
 	c.scanMu.Lock()
 	defer c.scanMu.Unlock()
 	c.refreshLevelLocked()
-	warming := isWarmingScan(region, currentTs)
+	lowPriority := isLowPriorityScan(region, currentTs)
 	// Admission is based on the pressure before accounting this scan. This lets
 	// one scan make progress even when its estimate alone exceeds the threshold.
-	if warming && c.level == admissionPauseWarming {
+	if lowPriority && c.level == admissionPauseLowPriority {
 		return 0, c.scanReady, false
 	}
 	bytes = c.estimateScanSizeLocked(region, currentTs)
@@ -268,7 +268,7 @@ func (c *memoryQuotaController) ReleaseEvent(bytes uint64) {
 	}
 	used := c.used.Add(^(bytes - 1))
 	previousUsed := used + bytes
-	if crossesDown(previousUsed, used, c.resumeWarmingLimit) {
+	if crossesDown(previousUsed, used, c.resumeLowPriorityLimit) {
 		c.refreshAdmissionAndNotify()
 	}
 	c.eventNotifier.notify()
@@ -347,7 +347,7 @@ func regionScanLag(currentTs, checkpointTs uint64) time.Duration {
 	return currentTime.Sub(checkpointTime)
 }
 
-func isWarmingScan(region regionInfo, _ uint64) bool {
+func isLowPriorityScan(region regionInfo, _ uint64) bool {
 	return !isHighScanPriority(region.scanPriority)
 }
 
@@ -356,13 +356,13 @@ func (c *memoryQuotaController) refreshLevelLocked() {
 	// it to actual event bytes would count the same pressure twice.
 	pressure := max(c.used.Load(), c.scanUsed)
 	switch c.level {
-	case admissionPauseWarming:
-		if pressure <= c.resumeWarmingLimit {
+	case admissionPauseLowPriority:
+		if pressure <= c.resumeLowPriorityLimit {
 			c.level = admissionNormal
 		}
 	default:
-		if pressure >= c.pauseWarmingLimit {
-			c.level = admissionPauseWarming
+		if pressure >= c.pauseLowPriorityLimit {
+			c.level = admissionPauseLowPriority
 		}
 	}
 }
