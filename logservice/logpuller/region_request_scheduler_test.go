@@ -15,10 +15,19 @@
 package logpuller
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
+	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/utils/priorityqueue"
+	"github.com/pingcap/tidb/pkg/store/mockstore/mockcopr"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/testutils"
+	"github.com/tikv/client-go/v2/tikv"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestRegionRequestSchedulerBroadcastDeregisterUsesWorkerControlQueue(t *testing.T) {
@@ -75,4 +84,84 @@ func TestRegionRequestSchedulerInflightCountAggregatesStores(t *testing.T) {
 
 	require.True(t, req1.abort())
 	require.True(t, req2.abort())
+}
+
+func TestRegionRequestSchedulerReschedulesRegionWhenStoreSubmitFails(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, cluster, pdClient, _ := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
+	pdClient = &mockPDClient{Client: pdClient, versionGen: defaultVersionGen}
+	defer pdClient.Close()
+
+	const storeAddr = "store-1"
+	cluster.AddStore(1, storeAddr)
+	cluster.Bootstrap(11, []uint64{1}, []uint64{2}, 2)
+
+	regionCache := tikv.NewRegionCache(pdClient)
+	defer regionCache.Close()
+
+	bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
+	location, err := regionCache.LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+
+	rawSpan := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("b"),
+	}
+	span := &subscribedSpan{
+		subID:          SubscriptionID(1),
+		startTs:        100,
+		span:           rawSpan,
+		rangeLock:      regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
+		priorityPolicy: newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute),
+	}
+	lockRes := span.rangeLock.LockRange(
+		context.Background(), rawSpan.StartKey, rawSpan.EndKey, location.Region.GetID(), location.Region.GetVer())
+	require.Equal(t, regionlock.LockRangeStatusSuccess, lockRes.Status)
+
+	admission := newRegionAdmissionController(1, 1)
+	admission.close()
+	store := &regionRequestStore{workers: []*regionRequestWorker{{admission: admission}}}
+
+	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, nil, nil)
+	scheduler := &regionRequestScheduler{
+		upstream: &upstreamHandle{
+			pd:          pdClient,
+			regionCache: regionCache,
+		},
+		failureHandler: handler,
+		taskQueue:      priorityqueue.New[*regionPriorityTask](),
+	}
+	scheduler.stores.Store(storeAddr, store)
+
+	region := newRegionInfo(location.Region, rawSpan, nil, span, false)
+	region.lockedRangeState = lockRes.LockedRangeState
+	scheduler.taskQueue.Push(newRegionPriorityTask(region, 1))
+
+	var workerGroup errgroup.Group
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- scheduler.Run(ctx, &workerGroup)
+	}()
+
+	require.Eventually(t, func() bool {
+		return errCacheLen(handler) == 1
+	}, time.Second, 20*time.Millisecond)
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("scheduler exited unexpectedly: %v", err)
+	default:
+	}
+
+	batch := handler.cache.popBatch(1)
+	require.Len(t, batch, 1)
+	require.Equal(t, region.verID, batch[0].verID)
+	var streamErr *storeStreamErr
+	require.ErrorAs(t, batch[0].err, &streamErr)
+
+	cancel()
+	require.ErrorIs(t, <-errCh, context.Canceled)
 }
