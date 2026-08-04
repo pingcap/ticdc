@@ -484,7 +484,6 @@ func (s *regionRequestWorker) processRegionSendTask(
 				return err
 			}
 		}
-
 		// Flush pending deregisters before admitting the next region request.
 		// Admission may still contain stale tasks from a stopped subscription, but
 		// sendRegionRequest re-checks subscription liveness before tracker.Add/Send,
@@ -498,7 +497,6 @@ func (s *regionRequestWorker) processRegionSendTask(
 				return err
 			}
 		}
-
 		// Block for the next request, but wake early when deregisters arrive.
 		// regionReq above is already consumed and will be replaced by the next pop.
 		var err error
