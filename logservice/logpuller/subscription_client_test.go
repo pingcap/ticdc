@@ -424,27 +424,49 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 }
 
 func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	quota := newMemoryQuotaController(10, 8)
+	span := &subscribedSpan{subID: 1}
+	require.True(t, quota.AcquireEvent(ctx, span, 20))
+	t.Cleanup(func() { quota.ReleaseEvent(20) })
+
 	sink := &regionEventSink{
-		ds: &mockDynamicStream{},
+		ctx:         ctx,
+		ds:          &mockDynamicStream{},
+		memoryQuota: quota,
 	}
-	sink.cond = sync.NewCond(&sink.mu)
 	client := &subscriptionClient{eventSink: sink}
 	client.regionScheduler = &regionRequestScheduler{
 		taskQueue: priorityqueue.New[*regionPriorityTask](),
 	}
-	client.ctx, client.cancel = context.WithCancel(context.Background())
+	client.ctx = ctx
+	client.cancel = cancel
 
-	sink.paused.Store(true)
+	event := regionEvent{
+		states: []*regionFeedState{{
+			region: regionInfo{subscribedSpan: span},
+		}},
+		entries: &cdcpb.Event_Entries_{
+			Entries: &cdcpb.Event_Entries{
+				Entries: []*cdcpb.Event_Row{{
+					Key:   []byte("key"),
+					Value: []byte("value"),
+				}},
+			},
+		},
+	}
 
 	done := make(chan struct{})
 	go func() {
-		sink.Push(SubscriptionID(1), regionEvent{})
+		sink.Push(SubscriptionID(1), event)
 		close(done)
 	}()
 
 	select {
 	case <-done:
-		t.Fatal("pushRegionEventToDS should block when paused")
+		t.Fatal("pushRegionEventToDS should block when event memory is exhausted")
 	case <-time.After(100 * time.Millisecond):
 	}
 

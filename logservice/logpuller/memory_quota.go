@@ -22,12 +22,10 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/tikv/client-go/v2/oracle"
 )
 
 const (
-	// Admission ratios compare max(accounted event memory, estimated scan
-	// memory) with the soft capacity.
-
 	// defaultPauseWarmingRatio pauses new high-lag scans when memory pressure
 	// reaches 15% of the soft capacity.
 	defaultPauseWarmingRatio = 0.15
@@ -288,16 +286,11 @@ func (c *memoryQuotaController) UpdateMetrics() {
 	c.scanMu.Lock()
 	used := c.used.Load()
 	scanUsed := c.scanUsed
-	level := c.level
-	scanEstimate := c.scanEstimate
 	c.scanMu.Unlock()
 
 	metrics.LogPullerMemoryQuota.WithLabelValues("max").Set(float64(c.capacity))
 	metrics.LogPullerMemoryQuota.WithLabelValues("used").Set(float64(used))
 	metrics.LogPullerMemoryQuota.WithLabelValues("scan_used").Set(float64(scanUsed))
-	metrics.LogPullerMemoryQuota.WithLabelValues("scan_estimate").Set(float64(scanEstimate))
-	metrics.LogPullerMemoryQuota.WithLabelValues("hard_limit").Set(float64(c.hardLimit))
-	metrics.LogPullerMemoryQuotaAdmissionLevel.Set(float64(level))
 	metrics.LogPullerMemoryQuotaEventWaiterCount.Set(
 		float64(c.eventNotifier.waiters.Load()))
 }
@@ -345,12 +338,17 @@ func scanLagFactor(startTs, currentTs uint64) float64 {
 		1+defaultScanLagWeight*math.Log2(1+float64(lag)/float64(defaultScanLagUnit)))
 }
 
-func isWarmingScan(region regionInfo, currentTs uint64) bool {
-	span := region.subscribedSpan
-	if span.initialized.Load() {
-		return false
+func regionScanLag(currentTs, checkpointTs uint64) time.Duration {
+	currentTime := oracle.GetTimeFromTS(currentTs)
+	checkpointTime := oracle.GetTimeFromTS(checkpointTs)
+	if !currentTime.After(checkpointTime) {
+		return 0
 	}
-	return regionScanLag(currentTs, region.resolvedTs()) >= lowLagRegionThreshold
+	return currentTime.Sub(checkpointTime)
+}
+
+func isWarmingScan(region regionInfo, _ uint64) bool {
+	return !isHighScanPriority(region.scanPriority)
 }
 
 func (c *memoryQuotaController) refreshLevelLocked() {
