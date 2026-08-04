@@ -41,9 +41,7 @@ func newOrchestratorShard(handle func(msg *messaging.TargetMessage)) *orchestrat
 // Run starts the shard worker loop.
 func (s *orchestratorShard) Run() {
 	s.runOnce.Do(func() {
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
+		s.wg.Go(func() {
 			for {
 				msg, ok := s.queue.Pop()
 				if !ok {
@@ -51,7 +49,7 @@ func (s *orchestratorShard) Run() {
 				}
 				s.handle(msg)
 			}
-		}()
+		})
 	})
 }
 

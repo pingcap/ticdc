@@ -99,7 +99,10 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			failpoint.Return(err)
 		})
 
-		failpoint.Inject("MySQLSinkHangLongTime", func() { _ = util.Hang(w.ctx, time.Hour) })
+		failpoint.Inject("MySQLSinkHangLongTime", func() {
+			log.Warn("inject MySQLSinkHangLongTime")
+			_ = util.Hang(w.ctx, time.Hour)
+		})
 
 		failpoint.Inject("MySQLDuplicateEntryError", func() {
 			log.Warn("inject MySQLDuplicateEntryError")

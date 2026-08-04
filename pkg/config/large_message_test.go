@@ -58,6 +58,18 @@ func TestLargeMessageHandle4NotSupportedProtocol(t *testing.T) {
 	require.ErrorIs(t, err, cerror.ErrInvalidReplicaConfig)
 }
 
+func TestLargeMessageHandleRejectsUnknownOption(t *testing.T) {
+	t.Parallel()
+
+	largeMessageHandle := NewDefaultLargeMessageHandleConfig()
+	largeMessageHandle.LargeMessageHandleOption = "unknown"
+
+	require.False(t, largeMessageHandle.Disabled())
+	err := largeMessageHandle.AdjustAndValidate(ProtocolOpen, false)
+	require.ErrorIs(t, err, cerror.ErrInvalidReplicaConfig)
+	require.ErrorContains(t, err, "unknown large-message-handle-option unknown")
+}
+
 func TestHandleKeyOnly4CanalJSON(t *testing.T) {
 	t.Parallel()
 

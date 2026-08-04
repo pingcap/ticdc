@@ -546,6 +546,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		chk *chunk.Chunk,
 	) (int, *integrity.Checksum, error),
 	filter filter.Filter,
+	filterContext filter.DMLFilterContext,
 ) error {
 	// Some transactions could generate empty row change event, such as
 	// begin; insert into t (id) values (1); delete from t where id=1; commit;
@@ -601,7 +602,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 
 	if filter != nil {
 		start := time.Now()
-		skip, err := filter.ShouldIgnoreDML(rowType, preRow, row, t.TableInfo, raw.StartTs)
+		skip, err := filter.ShouldIgnoreDML(rowType, preRow, row, t.TableInfo, raw.StartTs, filterContext)
 		DMLIgnoreComputeDuration.Observe(time.Since(start).Seconds())
 		if err != nil {
 			return errors.Trace(err)
@@ -669,12 +670,41 @@ func (t *DMLEvent) PostFlush() {
 // This stage does not mean data is already written to downstream. The method is
 // idempotent and guarantees enqueue callbacks run at most once.
 func (t *DMLEvent) PostEnqueue() {
-	if !t.postEnqueueCalled.CAS(false, true) {
+	if !t.postEnqueueCalled.CompareAndSwap(false, true) {
 		return
 	}
 	for _, f := range t.PostTxnEnqueued {
 		f()
 	}
+}
+
+// DetachPostCallbacks returns callbacks with the same PostFlush/PostEnqueue
+// semantics as this event, then removes the callback slices from the event.
+// The returned closures intentionally do not capture the DMLEvent, so sinks can
+// keep callbacks after encoding without retaining the event rows.
+func (t *DMLEvent) DetachPostCallbacks() (postEnqueue func(), postFlush func()) {
+	postTxnEnqueued := append([]func(){}, t.PostTxnEnqueued...)
+	postTxnFlushed := append([]func(){}, t.PostTxnFlushed...)
+	t.PostTxnEnqueued = nil
+	t.PostTxnFlushed = nil
+
+	var postEnqueueCalled atomic.Bool
+	postEnqueueCalled.Store(t.postEnqueueCalled.Load())
+	postEnqueue = func() {
+		if !postEnqueueCalled.CompareAndSwap(false, true) {
+			return
+		}
+		for _, f := range postTxnEnqueued {
+			f()
+		}
+	}
+	postFlush = func() {
+		for _, f := range postTxnFlushed {
+			f()
+		}
+		postEnqueue()
+	}
+	return postEnqueue, postFlush
 }
 
 func (t *DMLEvent) GetSeq() uint64 {

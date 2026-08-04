@@ -14,6 +14,8 @@
 package metrics
 
 import (
+	"strconv"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -71,7 +73,7 @@ var (
 			Subsystem: "owner",
 			Name:      "status",
 			Help:      "The status of changefeeds",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed", "keyspace_id"})
 
 	// ChangefeedErrorInfoGauge records the current warning or failed reason and its occurrence time
 	// for each changefeed.
@@ -99,7 +101,7 @@ var (
 			Subsystem: "owner",
 			Name:      "checkpoint_ts_lag",
 			Help:      "changefeed checkpoint ts lag in changefeeds in seconds",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed", "keyspace_id"})
 
 	// it's a metrics used in a large number of tcms, we should always keep this metrics
 	ChangefeedCheckpointTsGauge = prometheus.NewGaugeVec(
@@ -109,7 +111,53 @@ var (
 			Name:      "checkpoint_ts",
 			Help:      "checkpoint ts of changefeeds",
 		}, []string{getKeyspaceLabel(), "changefeed"})
+
+	// ChangefeedDownstreamInfoGauge is a metric with a constant '1' value,
+	// labeled by the downstream type of each changefeed.
+	//
+	// It is used by dashboards to show a changefeed -> downstream type mapping
+	// without leaking sensitive information in sink-uri.
+	ChangefeedDownstreamInfoGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "owner",
+			Name:      "changefeed_downstream_info",
+			Help:      "Downstream type information of changefeeds exposed as labels.",
+		}, []string{getKeyspaceLabel(), "changefeed", "downstream_type"})
+
+	// ChangefeedDownstreamIsTiDBGauge indicates whether the downstream of a
+	// MySQL-compatible sink is confirmed to be TiDB (1 means yes).
+	//
+	// This metric is only set when the sink can positively identify TiDB (for
+	// example by executing `SELECT tidb_version()`), and is intentionally absent
+	// for MySQL or unknown downstreams. Dashboards can use it to override the
+	// generic "mysql/tidb" label value with "tidb" for running changefeeds.
+	ChangefeedDownstreamIsTiDBGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "changefeed_downstream_is_tidb",
+			Help:      "Whether the downstream of a changefeed is confirmed to be TiDB (1 means yes).",
+		}, []string{getKeyspaceLabel(), "changefeed"})
 )
+
+func DeleteChangefeedCheckpointMetrics(keyspace, changefeed string, keyspaceID uint32) {
+	ChangefeedCheckpointTsGauge.DeleteLabelValues(keyspace, changefeed)
+	ChangefeedCheckpointTsLagGauge.DeleteLabelValues(keyspace, changefeed, FormatKeyspaceID(keyspaceID))
+}
+
+// FormatKeyspaceID formats a keyspace ID as a metric label value.
+func FormatKeyspaceID(keyspaceID uint32) string {
+	return strconv.FormatUint(uint64(keyspaceID), 10)
+}
+
+func ResetOwnerChangefeedMetrics() {
+	ChangefeedStatusGauge.Reset()
+	ChangefeedErrorInfoGauge.Reset()
+	ChangefeedCheckpointTsGauge.Reset()
+	ChangefeedCheckpointTsLagGauge.Reset()
+	ChangefeedDownstreamInfoGauge.Reset()
+}
 
 func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MaintainerCheckpointTsGauge)
@@ -123,4 +171,6 @@ func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(ChangefeedOperationTimeGauge)
 	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
 	registry.MustRegister(ChangefeedCheckpointTsGauge)
+	registry.MustRegister(ChangefeedDownstreamInfoGauge)
+	registry.MustRegister(ChangefeedDownstreamIsTiDBGauge)
 }

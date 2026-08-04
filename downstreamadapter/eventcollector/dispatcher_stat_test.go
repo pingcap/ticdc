@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -43,11 +44,14 @@ type mockDispatcher struct {
 	id           common.DispatcherID
 	changefeedID common.ChangeFeedID
 	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
+	handleError  func(err error)
 	events       []dispatcher.DispatcherEvent
 	checkPointTs uint64
 	tableSpan    *heartbeatpb.TableSpan
 
-	skipSyncpointAtStartTs bool
+	skipSyncpointAtStartTs        bool
+	router                        routing.Router
+	enableIgnoreUpdateOnlyColumns bool
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -96,10 +100,6 @@ func (m *mockDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return &heartbeatpb.TableSpan{
 		TableID: 1,
 	}
-}
-
-func (m *mockDispatcher) GetRouter() routing.Router {
-	return routing.Router{}
 }
 
 func (m *mockDispatcher) GetBDRMode() bool {
@@ -153,6 +153,20 @@ func (m *mockDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
 
 func (m *mockDispatcher) IsOutputRawChangeEvent() bool {
 	return false
+}
+
+func (m *mockDispatcher) EnableIgnoreUpdateOnlyColumns() bool {
+	return m.enableIgnoreUpdateOnlyColumns
+}
+
+func (m *mockDispatcher) GetRouter() routing.Router {
+	return m.router
+}
+
+func (m *mockDispatcher) HandleError(err error) {
+	if m.handleError != nil {
+		m.handleError(err)
+	}
 }
 
 // mockEvent implements the Event interface for testing
@@ -764,7 +778,7 @@ func TestRemoteReadyClearsRemoteCandidates(t *testing.T) {
 		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
 	)
 
-	stat.session.registerTo(remoteServerID)
+	stat.session.retryCurrentRegistrationIfRemovedFrom(remoteServerID)
 	requireDispatcherRequests(
 		t,
 		readDispatcherRequests(t, mockEventCollector, 1),
@@ -844,6 +858,57 @@ func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 		)
 		requireNoDispatcherRequest(t, mockEventCollector)
 	})
+}
+
+func TestInitialLocalReadyCallbackIsOneShot(t *testing.T) {
+	localServerID := node.ID("local-server")
+	dispatcherID := common.NewDispatcherID()
+
+	newReadyEvent := func(from node.ID) dispatcher.DispatcherEvent {
+		return dispatcher.DispatcherEvent{
+			From: &from,
+			Event: &mockEvent{
+				eventType: commonEvent.TypeReadyEvent,
+			},
+		}
+	}
+
+	mockDisp := newMockDispatcher(dispatcherID, 0)
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+	callbackCount := 0
+	setSessionState(stat.session, "", true, "")
+	setSessionReadyCallback(stat.session, func() {
+		callbackCount++
+	})
+
+	stat.handleSignalEvent(newReadyEvent(localServerID))
+	require.Equal(t, 1, callbackCount)
+	require.Nil(t, stat.session.readyCallback)
+	requireNoDispatcherRequest(t, mockEventCollector)
+
+	stat.session.commitLocalRegistration()
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+
+	require.True(t, stat.session.retryCurrentRegistrationIfRemovedFrom(localServerID))
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_REGISTER},
+	)
+
+	stat.handleSignalEvent(newReadyEvent(localServerID))
+	require.Equal(t, 1, callbackCount)
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+	requireNoDispatcherRequest(t, mockEventCollector)
 }
 
 func TestIsFromCurrentEpoch(t *testing.T) {
@@ -1211,6 +1276,44 @@ func TestHandleBatchDataEvents(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestInjectResetDispatcherAfterBatchDataEvents(t *testing.T) {
+	failpointName := "github.com/pingcap/ticdc/downstreamadapter/eventcollector/InjectResetDispatcherAfterBatchDataEvents"
+	require.NoError(t, failpoint.Enable(failpointName, `1*return(true)`))
+	defer func() {
+		require.NoError(t, failpoint.Disable(failpointName))
+	}()
+
+	localServerID := node.ID("local-server")
+	dispatcherID := common.NewDispatcherID()
+	mockDisp := newMockDispatcher(dispatcherID, 100)
+	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		return len(events) > 0
+	}
+	collector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, collector, nil)
+	stat.currentEpoch.Store(newDispatcherEpochState(1, 1, stat.target.GetStartTs()))
+	stat.lastEventCommitTs.Store(100)
+	markSessionReceiving(stat.session, localServerID)
+
+	require.True(t, stat.handleBatchDataEvents([]dispatcher.DispatcherEvent{
+		{
+			From: &localServerID,
+			Event: &commonEvent.DMLEvent{
+				Seq:      2,
+				Epoch:    1,
+				CommitTs: 101,
+			},
+		},
+	}))
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, collector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+	require.Equal(t, uint64(2), stat.loadCurrentEpochState().epoch)
+	require.Equal(t, uint64(101), stat.loadCurrentEpochState().maxEventTs.Load())
 }
 
 func TestHandleSingleDataEvents(t *testing.T) {
@@ -1589,15 +1692,17 @@ func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 	mockDisp := newMockDispatcher(dispatcherID, 100)
 	mockDisp.checkPointTs = 220
 	stat := newDispatcherStat(mockDisp, newTestEventCollector(node.ID("local")), nil)
+	markSessionReceiving(stat.session, node.ID("local"))
 	getHeartbeatCheckpoint := func() uint64 {
-		checkpointTs, _ := stat.getHeartbeatProgressForEventService()
+		_, checkpointTs, _, ok := stat.getHeartbeatReport()
+		require.True(t, ok)
 		return checkpointTs
 	}
 
 	require.Equal(t, uint64(100), stat.loadCurrentEpochState().maxEventTs.Load())
 	require.Equal(t, uint64(100), getHeartbeatCheckpoint())
 
-	stat.doReset(node.ID("event-service-1"), 150)
+	stat.session.doReset(node.ID("event-service-1"), 150)
 	require.Equal(t, uint64(150), stat.loadCurrentEpochState().maxEventTs.Load())
 	require.Equal(t, uint64(150), getHeartbeatCheckpoint())
 
@@ -1629,19 +1734,19 @@ func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 	require.Equal(t, uint64(210), getHeartbeatCheckpoint())
 }
 
-func TestRegisterTo(t *testing.T) {
+func TestRegistrationEntrypoints(t *testing.T) {
 	localServerID := node.ID("local-server")
 	remoteServerID := node.ID("remote-server")
 	dispatcherID := common.NewDispatcherID()
 
 	// Create a mock dispatcher and event collector
 	mockDisp := newMockDispatcher(dispatcherID, 0)
+	mockDisp.enableIgnoreUpdateOnlyColumns = true
 	mockEventCollector := newTestEventCollector(localServerID)
 	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
 
-	// Test case 1: Register to local server
-	t.Run("register to local server", func(t *testing.T) {
-		stat.registerTo(localServerID)
+	t.Run("start local registration", func(t *testing.T) {
+		stat.run()
 
 		select {
 		case msg := <-mockEventCollector.dispatcherMessageChan.Out():
@@ -1651,14 +1756,14 @@ func TestRegisterTo(t *testing.T) {
 			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
 			require.False(t, req.OnlyReuse, "OnlyReuse should be false for local registration")
 			require.Equal(t, dispatcherID.ToPB(), req.DispatcherId)
+			require.True(t, req.EnableIgnoreUpdateOnlyColumns())
 		case <-time.After(1 * time.Second):
 			require.Fail(t, "timed out waiting for message")
 		}
 	})
 
-	// Test case 2: Register to remote server
-	t.Run("register to remote server", func(t *testing.T) {
-		stat.registerTo(remoteServerID)
+	t.Run("start remote probing", func(t *testing.T) {
+		stat.startRemoteProbing([]string{remoteServerID.String()})
 
 		select {
 		case msg := <-mockEventCollector.dispatcherMessageChan.Out():
@@ -1667,6 +1772,25 @@ func TestRegisterTo(t *testing.T) {
 			require.True(t, ok)
 			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
 			require.True(t, req.OnlyReuse, "OnlyReuse should be true for remote registration")
+			require.Equal(t, dispatcherID.ToPB(), req.DispatcherId)
+			require.True(t, req.EnableIgnoreUpdateOnlyColumns())
+		case <-time.After(1 * time.Second):
+			require.Fail(t, "timed out waiting for message")
+		}
+	})
+
+	t.Run("retry current registration", func(t *testing.T) {
+		setSessionState(stat.session, remoteServerID, true, "")
+
+		stat.session.retryCurrentRegistrationIfRemovedFrom(remoteServerID)
+
+		select {
+		case msg := <-mockEventCollector.dispatcherMessageChan.Out():
+			require.Equal(t, remoteServerID, msg.Message.To)
+			req, ok := msg.Message.Message[0].(*messaging.DispatcherRequest)
+			require.True(t, ok)
+			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
+			require.True(t, req.OnlyReuse, "OnlyReuse should be true for remote registration retry")
 			require.Equal(t, dispatcherID.ToPB(), req.DispatcherId)
 		case <-time.After(1 * time.Second):
 			require.Fail(t, "timed out waiting for message")
@@ -1716,7 +1840,7 @@ func TestRegisterAndRemoveRequestOrder(t *testing.T) {
 
 	registerDone := make(chan struct{})
 	go func() {
-		stat.registerTo(remoteServerID)
+		stat.startRemoteProbing([]string{remoteServerID.String()})
 		close(registerDone)
 	}()
 

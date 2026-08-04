@@ -19,7 +19,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,10 +47,20 @@ func TestParseLogFileName(t *testing.T) {
 			wantFileType: RedoRowLogFileType,
 		},
 		{
-			name: "happy row .log",
+			name: "happy row v2 .log",
 			args: arg{
 				name: fmt.Sprintf(RedoLogFileFormatV2, "cp",
 					"keyspace", "test",
+					RedoRowLogFileType, 1, uuid.NewString(), LogEXT),
+			},
+			wantTs:       1,
+			wantFileType: RedoRowLogFileType,
+		},
+		{
+			name: "happy row v2 .log keyspace with underscores",
+			args: arg{
+				name: fmt.Sprintf(RedoLogFileFormatV2, "cp",
+					"keyspace_with_underscores", "test",
 					RedoRowLogFileType, 1, uuid.NewString(), LogEXT),
 			},
 			wantTs:       1,
@@ -181,7 +191,7 @@ func TestInitExternalStorage(t *testing.T) {
 	}
 
 	for _, urlStr := range urls {
-		url, err := storage.ParseRawURL(urlStr)
+		url, err := objstore.ParseRawURL(urlStr)
 		require.NoError(t, err)
 		_, err = InitExternalStorage(context.Background(), *url)
 		require.NoError(t, err)
@@ -191,7 +201,7 @@ func TestInitExternalStorage(t *testing.T) {
 func TestValidateStorageWithOptionsSkipIOCheck(t *testing.T) {
 	t.Parallel()
 
-	uri, err := storage.ParseRawURL("s3:///redo-test-no-bucket")
+	uri, err := objstore.ParseRawURL("s3:///redo-test-no-bucket")
 	require.NoError(t, err)
 
 	err = ValidateStorageWithOptions(uri, StorageValidationOptions{EnableIOCheck: false})

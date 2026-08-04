@@ -59,6 +59,7 @@ type DispatcherInfo interface {
 	GetMode() int64
 	GetEpoch() uint64
 	IsOutputRawChangeEvent() bool
+	EnableIgnoreUpdateOnlyColumns() bool
 }
 
 type DispatcherHeartBeatWithServerID struct {
@@ -84,12 +85,26 @@ type eventService struct {
 
 func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) common.SubModule {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
-	tzName := config.GetGlobalServerConfig().TZ
+	serverConfig := config.GetGlobalServerConfig()
+	tzName := serverConfig.TZ
 	tz, err := util.GetTimezone(tzName)
 	if err != nil {
 		log.Panic("load timezone from server config failed",
 			zap.String("timezone", tzName),
 			zap.Error(err))
+	}
+	if serverConfig.DataDir != "" {
+		spillDir := getLargeTxnInsertSpillDir()
+		removed, err := cleanupLargeTxnInsertSpillFiles(spillDir)
+		if err != nil {
+			log.Warn("cleanup orphaned large transaction spill files failed",
+				zap.String("spillDir", spillDir),
+				zap.Error(err))
+		} else if removed != 0 {
+			log.Info("removed orphaned large transaction spill files",
+				zap.String("spillDir", spillDir),
+				zap.Int("removed", removed))
+		}
 	}
 	es := &eventService{
 		mc:                  mc,
@@ -165,6 +180,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 	case messaging.TypeDispatcherHeartbeat:
 		if len(msg.Message) != 1 {
 			log.Warn("invalid dispatcher heartbeat, ignore it", zap.Any("msg", msg))
+			return nil
 		}
 		heartbeat := msg.Message[0].(*event.DispatcherHeartbeat)
 		select {
@@ -178,6 +194,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 	case messaging.TypeCongestionControl:
 		if len(msg.Message) != 1 {
 			log.Warn("invalid control message, ignore it", zap.Any("msg", msg))
+			return nil
 		}
 		m := msg.Message[0].(*event.CongestionControl)
 		s.handleCongestionControl(msg.From, m)

@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/errors"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/pkg/api"
+	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -43,6 +44,7 @@ func TestChangefeedResumeCli(t *testing.T) {
 		ID:             "abc",
 		CheckpointTime: api.JSONTime{},
 		Error:          nil,
+		State:          config.StateStopped,
 	}, nil)
 	f.tso.EXPECT().Query(gomock.Any(), gomock.Any()).Return(&v2.Tso{
 		Timestamp: time.Now().Unix() * 1000,
@@ -68,6 +70,7 @@ func TestChangefeedResumeCli(t *testing.T) {
 		ID:             "abc",
 		CheckpointTime: api.JSONTime{},
 		CheckpointTs:   2,
+		State:          config.StateStopped,
 	}, nil)
 	f.tso.EXPECT().Query(gomock.Any(), gomock.Any()).Return(nil, errors.New("test")).AnyTimes()
 	require.NotNil(t, o.run(cmd))
@@ -80,6 +83,7 @@ func TestChangefeedResumeCli(t *testing.T) {
 		ID:             "abc",
 		CheckpointTime: api.JSONTime{},
 		CheckpointTs:   2,
+		State:          config.StateStopped,
 	}, nil)
 	f.tso.EXPECT().Query(gomock.Any(), gomock.Any()).Return(&v2.Tso{
 		Timestamp: time.Now().Unix() * 1000,
@@ -117,6 +121,7 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 		CheckpointTs:   2,
 		CheckpointTime: api.JSONTime{},
 		Error:          nil,
+		State:          config.StateStopped,
 	}, nil).Times(2)
 	tso := &v2.Tso{
 		Timestamp: time.Now().Unix() * 1000,
@@ -139,6 +144,7 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 		ID:             "abc",
 		CheckpointTime: api.JSONTime{},
 		Error:          nil,
+		State:          config.StateStopped,
 	}, nil)
 	f.tso.EXPECT().Query(gomock.Any(), gomock.Any()).Return(tso, nil).AnyTimes()
 	o.noConfirm = true
@@ -153,6 +159,7 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 		ID:             "abc",
 		CheckpointTime: api.JSONTime{},
 		Error:          nil,
+		State:          config.StateStopped,
 	}, nil)
 	f.tso.EXPECT().Query(gomock.Any(), gomock.Any()).Return(tso, nil).AnyTimes()
 	o.overwriteCheckpointTs = "18446744073709551615"
@@ -167,6 +174,7 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 		CheckpointTs:   2,
 		CheckpointTime: api.JSONTime{},
 		Error:          nil,
+		State:          config.StateStopped,
 	}, nil).Times(2)
 	tso = &v2.Tso{
 		Timestamp: 1,
@@ -179,4 +187,29 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 		Return(cerror.ErrStartTsBeforeGC)
 	o.overwriteCheckpointTs = "262144"
 	require.NotNil(t, o.run(cmd))
+}
+
+func TestChangefeedResumeRejectsNormalState(t *testing.T) {
+	// Scenario: the CLI reads a running changefeed before sending resume. It
+	// should return a state error immediately and never call the resume API.
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	f := newMockFactory(ctrl)
+	o := newResumeChangefeedOptions()
+	require.NoError(t, o.complete(f))
+	cmd := newCmdResumeChangefeed(f)
+
+	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").Return(&v2.ChangeFeedInfo{
+		UpstreamID:     1,
+		Keyspace:       "default",
+		ID:             "abc",
+		CheckpointTime: api.JSONTime{},
+		State:          config.StateNormal,
+	}, nil)
+
+	o.noConfirm = true
+	o.changefeedID = "abc"
+	err := o.run(cmd)
+	require.True(t, cerror.ErrChangefeedUpdateRefused.Equal(err))
+	require.Contains(t, err.Error(), string(config.StateNormal))
 }

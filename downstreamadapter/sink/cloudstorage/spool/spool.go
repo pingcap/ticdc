@@ -625,18 +625,7 @@ func (s *Spool) Release(entry *Entry) {
 		if seg != nil {
 			seg.refCnt--
 			if seg.refCnt == 0 && s.activeSegment != seg {
-				if err := seg.file.Close(); err != nil {
-					log.Warn("close spool segment file failed",
-						zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
-						zap.Error(err))
-				}
-				if err := os.Remove(seg.path); err != nil {
-					log.Warn(
-						"remove spool segment file failed",
-						zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
-						zap.String("path", seg.path), zap.Error(err))
-				}
-				delete(s.segments, seg.id)
+				s.removeSegmentLocked(seg)
 				s.metricSegmentCount.Set(float64(len(s.segments)))
 			}
 		}
@@ -734,6 +723,7 @@ func (s *Spool) getWritableSegmentLocked(needBytes int64) (*segment, error) {
 }
 
 func (s *Spool) rotateLocked() error {
+	oldSegment := s.activeSegment
 	s.nextSegmentID++
 	segmentID := s.nextSegmentID
 	path := filepath.Join(
@@ -754,9 +744,32 @@ func (s *Spool) rotateLocked() error {
 	}
 	s.segments[segmentID] = seg
 	s.activeSegment = seg
+	if oldSegment != nil && oldSegment.refCnt == 0 {
+		s.removeSegmentLocked(oldSegment)
+	}
 	s.metricRotatedCount.Inc()
 	s.metricSegmentCount.Set(float64(len(s.segments)))
 	return nil
+}
+
+func (s *Spool) removeSegmentLocked(seg *segment) {
+	if seg == nil {
+		return
+	}
+	if seg.file != nil {
+		if err := seg.file.Close(); err != nil {
+			log.Warn("close spool segment file failed",
+				zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
+				zap.Error(err))
+		}
+	}
+	if err := os.Remove(seg.path); err != nil {
+		log.Warn(
+			"remove spool segment file failed",
+			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
+			zap.String("path", seg.path), zap.Error(err))
+	}
+	delete(s.segments, seg.id)
 }
 
 func takePostFlushCallbacks(entry *Entry) []func() {

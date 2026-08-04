@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -33,6 +32,7 @@ func TestSchemaStoreGCKeeperLifecycle(t *testing.T) {
 	originalConfig := config.GetGlobalServerConfig()
 	cfg := originalConfig.Clone()
 	cfg.AdvertiseAddr = "127.0.0.1:8300"
+	cfg.EnableLegacySafePoint = false
 	config.StoreGlobalServerConfig(cfg)
 	defer config.StoreGlobalServerConfig(originalConfig)
 
@@ -54,6 +54,11 @@ func TestSchemaStoreGCKeeperLifecycle(t *testing.T) {
 		require.Equal(t, uint64(math.MaxUint64), state.serviceSafePoint[serviceID])
 		return
 	}
+	if config.GetGlobalServerConfig().EnableLegacySafePoint {
+		_, ok := state.legacyServiceSafePoint[serviceID]
+		require.False(t, ok)
+		return
+	}
 	_, ok := state.gcBarriers[serviceID]
 	require.False(t, ok)
 }
@@ -62,6 +67,7 @@ func TestCloseSchemaStoreGCKeeperUsesFreshContext(t *testing.T) {
 	originalConfig := config.GetGlobalServerConfig()
 	cfg := originalConfig.Clone()
 	cfg.AdvertiseAddr = "127.0.0.1:8300"
+	cfg.EnableLegacySafePoint = false
 	config.StoreGlobalServerConfig(cfg)
 	defer config.StoreGlobalServerConfig(originalConfig)
 
@@ -82,8 +88,58 @@ func TestCloseSchemaStoreGCKeeperUsesFreshContext(t *testing.T) {
 		require.Equal(t, uint64(math.MaxUint64), state.serviceSafePoint[serviceID])
 		return
 	}
+	if config.GetGlobalServerConfig().EnableLegacySafePoint {
+		_, ok := state.legacyServiceSafePoint[serviceID]
+		require.False(t, ok)
+		return
+	}
 	_, ok := state.gcBarriers[serviceID]
 	require.False(t, ok)
+}
+
+func TestAcquireInitialGCSafePointCleansStaleKeeperService(t *testing.T) {
+	if !kerneltype.IsClassic() {
+		t.Skip("stale classic service safepoints only affect classic mode")
+	}
+
+	originalConfig := config.GetGlobalServerConfig()
+	cfg := originalConfig.Clone()
+	cfg.AdvertiseAddr = "127.0.0.1:8301"
+	config.StoreGlobalServerConfig(cfg)
+	defer config.StoreGlobalServerConfig(originalConfig)
+
+	pdCli, state := newMockGCServiceClientForSchemaStoreGC(t)
+	keeper := newSchemaStoreGCKeeper(pdCli, common.DefaultKeyspace)
+	serviceID := keeper.serviceID()
+
+	state.serviceSafePoint[serviceID] = 100
+	state.serviceSafePoint["ticdc-default-changefeed"] = 200
+	pdCli.UpdateServiceGCSafePointFunc = func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if ttl == 0 && safePoint == math.MaxUint64 {
+			delete(state.serviceSafePoint, serviceID)
+			return minSchemaStoreServiceSafePoint(state), nil
+		}
+		if serviceID == defaultSchemaStoreGcServiceID && ttl == 0 && safePoint == 0 {
+			return minSchemaStoreServiceSafePoint(state), nil
+		}
+
+		minBefore := minSchemaStoreServiceSafePoint(state)
+		_, existed := state.serviceSafePoint[serviceID]
+		state.serviceSafePoint[serviceID] = safePoint
+		if existed {
+			return minSchemaStoreServiceSafePoint(state), nil
+		}
+		return minBefore, nil
+	}
+
+	s := &schemaStore{pdCli: pdCli}
+	gcSafePoint, err := s.acquireInitialGCSafePoint(context.Background(), common.DefaultKeyspace, keeper)
+	require.NoError(t, err)
+	require.Equal(t, uint64(200), gcSafePoint)
+	require.Equal(t, uint64(201), state.serviceSafePoint[serviceID])
 }
 
 func TestSanitizeSchemaStoreNodeID(t *testing.T) {
@@ -137,30 +193,42 @@ func assertSchemaStoreBarrierTS(t *testing.T, state *schemaStoreGCMockState, ser
 		require.Equal(t, expected, state.serviceSafePoint[serviceID])
 		return
 	}
+	if config.GetGlobalServerConfig().EnableLegacySafePoint {
+		require.Equal(t, expected, state.legacyServiceSafePoint[serviceID])
+		return
+	}
 	require.Equal(t, expected, state.gcBarriers[serviceID])
 }
 
-type schemaStoreGCMockState struct {
-	serviceSafePoint map[string]uint64
-	gcBarriers       map[string]uint64
-	txnSafePoint     uint64
+func minSchemaStoreServiceSafePoint(state *schemaStoreGCMockState) uint64 {
+	minSafePoint := uint64(math.MaxUint64)
+	for _, ts := range state.serviceSafePoint {
+		if ts < minSafePoint {
+			minSafePoint = ts
+		}
+	}
+	return minSafePoint
 }
 
-func newMockGCServiceClientForSchemaStoreGC(t *testing.T) (*gc.MockGCServiceClient, *schemaStoreGCMockState) {
+type schemaStoreGCMockState struct {
+	serviceSafePoint       map[string]uint64
+	legacyServiceSafePoint map[string]uint64
+	gcBarriers             map[string]uint64
+	txnSafePoint           uint64
+}
+
+func newMockGCServiceClientForSchemaStoreGC(t *testing.T) (*gc.MockPDClient, *schemaStoreGCMockState) {
 	t.Helper()
 
-	ctrl := gomock.NewController(t)
 	state := &schemaStoreGCMockState{
-		serviceSafePoint: make(map[string]uint64),
-		gcBarriers:       make(map[string]uint64),
-		txnSafePoint:     100,
+		serviceSafePoint:       make(map[string]uint64),
+		legacyServiceSafePoint: make(map[string]uint64),
+		gcBarriers:             make(map[string]uint64),
+		txnSafePoint:           100,
 	}
-	pdCli := gc.NewMockGCServiceClient(ctrl)
 	gcStatesCli := &mockSchemaStoreGCStatesClient{state: state}
-
-	pdCli.EXPECT().
-		UpdateServiceGCSafePoint(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+	pdCli := &gc.MockPDClient{
+		UpdateServiceGCSafePointFunc: func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
 			if err := ctx.Err(); err != nil {
 				return 0, err
 			}
@@ -175,13 +243,33 @@ func newMockGCServiceClientForSchemaStoreGC(t *testing.T) (*gc.MockGCServiceClie
 			}
 			state.serviceSafePoint[serviceID] = safePoint
 			return minSafePoint, nil
-		}).
-		AnyTimes()
-
-	pdCli.EXPECT().
-		GetGCStatesClient(gomock.Any()).
-		Return(gcStatesCli).
-		AnyTimes()
+		},
+		GetGCStatesClientFunc: func(keyspaceID uint32) pdgc.GCStatesClient {
+			return gcStatesCli
+		},
+		GetMinServiceSafePointV2Func: func(ctx context.Context, keyspaceID uint32) (uint64, error) {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			return state.txnSafePoint, nil
+		},
+		SetServiceSafePointV2Func: func(
+			ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64,
+		) (uint64, error) {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			state.legacyServiceSafePoint[serviceID] = safePoint
+			return state.txnSafePoint, nil
+		},
+		DeleteServiceSafePointV2Func: func(ctx context.Context, keyspaceID uint32, serviceID string) (uint64, error) {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			delete(state.legacyServiceSafePoint, serviceID)
+			return state.txnSafePoint, nil
+		},
+	}
 
 	return pdCli, state
 }
@@ -217,7 +305,7 @@ func (m *mockSchemaStoreGCStatesClient) DeleteGCBarrier(
 	return pdgc.NewGCBarrierInfo(barrierID, barrierTS, 0, time.Now()), nil
 }
 
-func (m *mockSchemaStoreGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+func (m *mockSchemaStoreGCStatesClient) GetGCState(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
 	if err := ctx.Err(); err != nil {
 		return pdgc.GCState{}, err
 	}
@@ -225,8 +313,35 @@ func (m *mockSchemaStoreGCStatesClient) GetGCState(ctx context.Context) (pdgc.GC
 	for id, ts := range m.state.gcBarriers {
 		gcBarriers = append(gcBarriers, pdgc.NewGCBarrierInfo(id, ts, 0, time.Now()))
 	}
-	return pdgc.GCState{
-		TxnSafePoint: m.state.txnSafePoint,
-		GCBarriers:   gcBarriers,
-	}, nil
+	return pdgc.NewGCStateWithGCBarriers(0, m.state.txnSafePoint, 0, gcBarriers), nil
+}
+
+func (m *mockSchemaStoreGCStatesClient) SetGlobalGCBarrier(
+	ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return pdgc.NewGlobalGCBarrierInfo(barrierID, barrierTS, ttl, time.Now()), nil
+}
+
+func (m *mockSchemaStoreGCStatesClient) DeleteGlobalGCBarrier(
+	ctx context.Context, barrierID string,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func (m *mockSchemaStoreGCStatesClient) GetAllKeyspacesGCStates(
+	ctx context.Context, opts ...pdgc.GCStatesAPIOption,
+) (pdgc.ClusterGCStates, error) {
+	gcState, err := m.GetGCState(ctx, opts...)
+	if err != nil {
+		return pdgc.ClusterGCStates{}, err
+	}
+	return pdgc.NewClusterGCStatesWithoutGlobalGCBarriers(map[uint32]pdgc.GCState{
+		0: gcState,
+	}), nil
 }

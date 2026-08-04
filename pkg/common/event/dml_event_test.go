@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -53,19 +54,19 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 		err := e.AppendRow(&common.RawKVEntry{
 			OpType: common.OpTypePut,
 			Value:  []byte("value1"),
-		}, mockDecodeRawKVToChunk, nil)
+		}, mockDecodeRawKVToChunk, nil, filter.DMLFilterContext{})
 		require.Nil(t, err)
 		// update
 		err = e.AppendRow(&common.RawKVEntry{
 			OpType:   common.OpTypePut,
 			Value:    []byte("value1"),
 			OldValue: []byte("old_value1"),
-		}, mockDecodeRawKVToChunk, nil)
+		}, mockDecodeRawKVToChunk, nil, filter.DMLFilterContext{})
 		require.Nil(t, err)
 		// delete
 		err = e.AppendRow(&common.RawKVEntry{
 			OpType: common.OpTypeDelete,
-		}, mockDecodeRawKVToChunk, nil)
+		}, mockDecodeRawKVToChunk, nil, filter.DMLFilterContext{})
 		require.Nil(t, err)
 	}
 	// TableInfo is not encoded, for test comparison purpose, set it to nil.
@@ -462,6 +463,7 @@ func TestDMLEventPostCallbacks(t *testing.T) {
 	t.Run("post flush triggers post enqueue once", verifyDMLEventPostFlushTriggersPostEnqueueOnce)
 	t.Run("post flush order and fallback", verifyDMLEventPostFlushRunsFlushBeforePostEnqueueFallback)
 	t.Run("post enqueue concurrent with post flush", verifyDMLEventPostEnqueueConcurrentWithPostFlush)
+	t.Run("detach callbacks", verifyDMLEventDetachPostCallbacks)
 }
 
 func verifyDMLEventPostFlushTriggersPostEnqueueOnce(t *testing.T) {
@@ -527,4 +529,27 @@ func verifyDMLEventPostEnqueueConcurrentWithPostFlush(t *testing.T) {
 	wg.Wait()
 
 	require.Equal(t, int64(1), enqueueCalled.Load())
+}
+
+func verifyDMLEventDetachPostCallbacks(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	order := make([]string, 0, 3)
+	event.AddPostFlushFunc(func() {
+		order = append(order, "flush")
+	})
+	event.AddPostEnqueueFunc(func() {
+		order = append(order, "enqueue")
+	})
+
+	postEnqueue, postFlush := event.DetachPostCallbacks()
+	require.Empty(t, event.PostTxnFlushed)
+	require.Empty(t, event.PostTxnEnqueued)
+
+	postFlush()
+	postEnqueue()
+	event.PostFlush()
+
+	require.Equal(t, []string{"flush", "enqueue"}, order)
 }

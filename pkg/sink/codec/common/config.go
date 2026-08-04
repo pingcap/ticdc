@@ -41,9 +41,12 @@ type Config struct {
 
 	Protocol config.Protocol
 
-	// control batch behavior, only for `open-protocol` and `craft` at the moment.
 	MaxMessageBytes int
-	MaxBatchSize    int
+
+	// MaxBatchedBytes controls open-protocol encoder's maximum number of bytes for a batched message.
+	MaxBatchedBytes int
+	// MaxBatchedBytes controls open-protocol encoder's maximum number of events for a batched message.
+	MaxBatchSize int
 
 	// DeleteOnlyHandleKeyColumns is true, for the delete event only output the handle key columns.
 	DeleteOnlyHandleKeyColumns bool
@@ -55,7 +58,8 @@ type Config struct {
 
 	OutputRowKey bool
 
-	// avro only
+	// avro and debezium-avro only
+	// protocol when Confluent Avro encoding is enabled.
 	AvroConfluentSchemaRegistry    string
 	AvroDecimalHandlingMode        string
 	AvroBigintUnsignedHandlingMode string
@@ -115,6 +119,7 @@ func NewConfig(protocol config.Protocol) *Config {
 		Protocol: protocol,
 
 		MaxMessageBytes: config.DefaultMaxMessageBytes,
+		MaxBatchedBytes: config.DefaultMaxMessageBytes,
 		MaxBatchSize:    defaultMaxBatchSize,
 
 		EnableTiDBExtension: false,
@@ -171,7 +176,7 @@ type urlConfig struct {
 	AvroBigintUnsignedHandlingMode *string `form:"avro-bigint-unsigned-handling-mode"`
 	AvroIncludeBeforeValue         *bool   `form:"avro-include-before-value"`
 
-	// AvroEnableWatermark is the option for enabling watermark in avro protocol
+	// AvroEnableWatermark is the option for enabling watermark in avro and debezium-avro protocol
 	// only used for internal testing, do not set this in the production environment since the
 	// confluent official consumer cannot handle watermark.
 	AvroEnableWatermark *bool `form:"avro-enable-watermark"`
@@ -196,7 +201,7 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	var err error
 	urlParameter := &urlConfig{}
 	if err = binding.Query.Bind(req, urlParameter); err != nil {
-		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrSinkInvalidConfig, err)
 	}
 	if urlParameter, err = mergeConfig(sinkConfig, urlParameter); err != nil {
 		return err
@@ -231,7 +236,8 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 		c.AvroIncludeBeforeValue = *urlParameter.AvroIncludeBeforeValue
 	}
 	if urlParameter.AvroEnableWatermark != nil {
-		if c.EnableTiDBExtension && c.Protocol == config.ProtocolAvro {
+		if c.EnableTiDBExtension &&
+			(c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebeziumAvro) {
 			c.AvroEnableWatermark = *urlParameter.AvroEnableWatermark
 		}
 	}
@@ -242,9 +248,10 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 		sinkConfig.KafkaConfig.GlueSchemaRegistryConfig != nil {
 		c.AvroGlueSchemaRegistry = sinkConfig.KafkaConfig.GlueSchemaRegistryConfig
 	}
-	if c.Protocol == config.ProtocolAvro && util.GetOrZero(sinkConfig.ForceReplicate) {
+	if (c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebeziumAvro) &&
+		util.GetOrZero(sinkConfig.ForceReplicate) {
 		return errors.ErrCodecInvalidConfig.GenWithStack(
-			`force-replicate must be disabled, when using avro protocol`)
+			`force-replicate must be disabled, when using avro or debezium-avro protocol`)
 	}
 
 	if sinkConfig != nil {
@@ -351,6 +358,12 @@ func (c *Config) WithMaxMessageBytes(bytes int) *Config {
 	return c
 }
 
+// WithMaxBatchedBytes sets the maximum batched message bytes.
+func (c *Config) WithMaxBatchedBytes(bytes int) *Config {
+	c.MaxBatchedBytes = bytes
+	return c
+}
+
 // WithChangefeedID set the `changefeedID`
 func (c *Config) WithChangefeedID(id common.ChangeFeedID) *Config {
 	c.ChangefeedID = id
@@ -360,30 +373,51 @@ func (c *Config) WithChangefeedID(id common.ChangeFeedID) *Config {
 // Validate the Config
 func (c *Config) Validate() error {
 	if c.EnableTiDBExtension &&
-		(c.Protocol != config.ProtocolCanalJSON && c.Protocol != config.ProtocolAvro && c.Protocol != config.ProtocolDebezium) {
+		(c.Protocol != config.ProtocolCanalJSON && c.Protocol != config.ProtocolAvro &&
+			c.Protocol != config.ProtocolDebezium && c.Protocol != config.ProtocolDebeziumAvro) {
 		log.Warn("ignore invalid config, enable-tidb-extension"+
-			"only supports canal-json/avro/debezium protocol",
+			"only supports canal-json/avro/debezium/debezium-avro protocol",
 			zap.Bool("enableTidbExtension", c.EnableTiDBExtension),
 			zap.String("protocol", c.Protocol.String()))
 	}
 
-	if c.Protocol == config.ProtocolAvro {
+	if c.Protocol == config.ProtocolDebezium &&
+		(c.AvroConfluentSchemaRegistry != "" || c.AvroGlueSchemaRegistry != nil) {
+		return errors.ErrCodecInvalidConfig.GenWithStack(
+			`Debezium protocol does not support schema registry; use protocol "debezium-avro"`,
+		)
+	}
+
+	if c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebeziumAvro {
 		if c.AvroConfluentSchemaRegistry != "" && c.AvroGlueSchemaRegistry != nil {
+			protocol := "Avro"
+			if c.Protocol == config.ProtocolDebeziumAvro {
+				protocol = "Debezium Avro"
+			}
 			return errors.ErrCodecInvalidConfig.GenWithStack(
-				`Avro protocol requires only one of "%s" or "%s" to specify the schema registry`,
+				`%s protocol requires only one of "%s" or "%s" to specify the schema registry`,
+				protocol,
 				codecOPTAvroSchemaRegistry,
 				coderOPTAvroGlueSchemaRegistry,
 			)
 		}
 
 		if c.AvroConfluentSchemaRegistry == "" && c.AvroGlueSchemaRegistry == nil {
+			protocol := "Avro"
+			if c.Protocol == config.ProtocolDebeziumAvro {
+				protocol = "Debezium Avro"
+			}
 			return errors.ErrCodecInvalidConfig.GenWithStack(
-				`Avro protocol requires parameter "%s" or "%s" to specify the schema registry`,
+				`%s protocol requires parameter "%s" or "%s" to specify the schema registry`,
+				protocol,
 				codecOPTAvroSchemaRegistry,
 				coderOPTAvroGlueSchemaRegistry,
 			)
 		}
 
+	}
+
+	if c.Protocol == config.ProtocolAvro {
 		if c.AvroDecimalHandlingMode != DecimalHandlingModePrecise &&
 			c.AvroDecimalHandlingMode != DecimalHandlingModeString {
 			return errors.ErrCodecInvalidConfig.GenWithStack(
@@ -417,16 +451,40 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.Protocol == config.ProtocolDebeziumAvro {
+		if c.AvroDecimalHandlingMode != DecimalHandlingModePrecise &&
+			c.AvroDecimalHandlingMode != DecimalHandlingModeString {
+			return errors.ErrCodecInvalidConfig.GenWithStack(
+				`%s value could only be "%s" or "%s"`,
+				codecOPTAvroDecimalHandlingMode,
+				DecimalHandlingModeString,
+				DecimalHandlingModePrecise,
+			)
+		}
+
+		if c.AvroBigintUnsignedHandlingMode != BigintUnsignedHandlingModeLong &&
+			c.AvroBigintUnsignedHandlingMode != BigintUnsignedHandlingModeString {
+			return errors.ErrCodecInvalidConfig.GenWithStack(
+				`%s value could only be "%s" or "%s"`,
+				codecOPTAvroBigintUnsignedHandlingMode,
+				BigintUnsignedHandlingModeLong,
+				BigintUnsignedHandlingModeString,
+			)
+		}
+	}
+
 	if c.MaxMessageBytes <= 0 {
-		return errors.ErrCodecInvalidConfig.Wrap(
-			errors.Errorf("invalid max-message-bytes %d", c.MaxMessageBytes),
-		)
+		return errors.ErrCodecInvalidConfig.GenWithStack("invalid max-message-bytes %d", c.MaxMessageBytes)
+	}
+	if c.MaxBatchedBytes < 0 {
+		return errors.ErrCodecInvalidConfig.GenWithStack("invalid max-batch-message-bytes %d", c.MaxBatchedBytes)
+	}
+	if c.MaxBatchedBytes > c.MaxMessageBytes {
+		return errors.ErrCodecInvalidConfig.GenWithStack("max-batch-message-bytes %d cannot be greater than max-message-bytes %d", c.MaxBatchedBytes, c.MaxMessageBytes)
 	}
 
 	if c.MaxBatchSize <= 0 {
-		return errors.ErrCodecInvalidConfig.Wrap(
-			errors.Errorf("invalid max-batch-size %d", c.MaxBatchSize),
-		)
+		return errors.ErrCodecInvalidConfig.GenWithStack("invalid max-batch-size %d", c.MaxBatchSize)
 	}
 
 	if c.LargeMessageHandle != nil {

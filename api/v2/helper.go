@@ -14,14 +14,17 @@
 package v2
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -87,6 +90,36 @@ func getChangeFeed(host, keyspaceName, cfName string) (ChangeFeedInfo, error) {
 // isFromV1API checks if the request comes from TiCDC API v1
 func isFromV1API(c *gin.Context) bool {
 	return c.GetHeader("from-ticdc-api-v1") == "true"
+}
+
+// mimeTOML is the media type used to request and return TOML payloads.
+const mimeTOML = "application/toml"
+
+// wantsTOML reports whether the client requested a TOML response via the
+// Accept header. A missing header, or anything other than application/toml,
+// keeps the default JSON behavior. A simple substring match is sufficient
+// while only JSON and TOML are supported; it tolerates parameters such as
+// "application/toml; charset=utf-8". Media types are case-insensitive
+// (RFC 7231 §3.1.1.1), so the header is lowercased before matching.
+func wantsTOML(c *gin.Context) bool {
+	return strings.Contains(strings.ToLower(c.GetHeader("Accept")), mimeTOML)
+}
+
+// respondWithFormat writes obj to the response, negotiating the encoding from
+// the Accept header: application/toml yields a TOML body, anything else yields
+// JSON (the unchanged default). It is the shared seam for content negotiation
+// across v2 endpoints.
+func respondWithFormat(c *gin.Context, code int, obj any) {
+	if wantsTOML(c) {
+		var buf bytes.Buffer
+		if err := toml.NewEncoder(&buf).Encode(obj); err != nil {
+			_ = c.Error(errors.Trace(err))
+			return
+		}
+		c.Data(code, mimeTOML+"; charset=utf-8", buf.Bytes())
+		return
+	}
+	c.JSON(code, obj)
 }
 
 func getStatus(c *gin.Context) int {

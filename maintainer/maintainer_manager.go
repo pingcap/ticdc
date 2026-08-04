@@ -178,6 +178,9 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	m.coordinatorVersion = req.Version
 
 	response := m.maintainers.buildBootstrapResponse()
+	drainTarget, drainEpoch := m.getDispatcherDrainTarget()
+	response.DispatcherDrainTargetNodeId = drainTarget.String()
+	response.DispatcherDrainTargetEpoch = drainEpoch
 	msg = m.newCoordinatorTopicMessage(response)
 	err := m.mc.SendCommand(msg)
 	if err != nil {

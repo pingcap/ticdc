@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"container/list"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -79,6 +80,80 @@ func (r *ResendTaskMap) Keys() []BlockEventIdentifier {
 type BlockEventIdentifier struct {
 	CommitTs    uint64
 	IsSyncPoint bool
+}
+
+// checkpointBlocker is a dispatcher-level checkpoint gate independent from
+// TableProgress, which only tracks sink flush progress. Block events for one
+// dispatcher arrive in commit-ts order, so the queue front is the smallest
+// pending commitTs. The map gives O(1) removal when ACKs arrive out of order.
+type checkpointBlocker struct {
+	mutex       sync.Mutex
+	pending     map[BlockEventIdentifier]*list.Element
+	queue       *list.List
+	minCommitTs atomic.Uint64
+}
+
+func newCheckpointBlocker() *checkpointBlocker {
+	return &checkpointBlocker{
+		pending: make(map[BlockEventIdentifier]*list.Element),
+		queue:   list.New(),
+	}
+}
+
+func (b *checkpointBlocker) add(identifier BlockEventIdentifier) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	if _, ok := b.pending[identifier]; ok {
+		return
+	}
+	if len(b.pending) == 0 {
+		// Checkpoint readers only look at minCommitTs, so publish the cap
+		// before returning the newly pending blocker to the caller.
+		b.minCommitTs.Store(identifier.CommitTs)
+	}
+	b.pending[identifier] = b.queue.PushBack(identifier)
+}
+
+func (b *checkpointBlocker) remove(identifier BlockEventIdentifier) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	elem, ok := b.pending[identifier]
+	if !ok {
+		return
+	}
+	delete(b.pending, identifier)
+	wasMin := b.queue.Front() == elem
+	b.queue.Remove(elem)
+	if wasMin {
+		b.storeMinCommitTsLocked()
+	}
+}
+
+func (b *checkpointBlocker) empty() bool {
+	return b.minCommitTs.Load() == 0
+}
+
+func (b *checkpointBlocker) len() int {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	return len(b.pending)
+}
+
+func (b *checkpointBlocker) capCheckpointTs(checkpointTs uint64) uint64 {
+	minCommitTs := b.minCommitTs.Load()
+	if minCommitTs == 0 {
+		return checkpointTs
+	}
+	return min(checkpointTs, minCommitTs-1)
+}
+
+func (b *checkpointBlocker) storeMinCommitTsLocked() {
+	front := b.queue.Front()
+	if front == nil {
+		b.minCommitTs.Store(0)
+		return
+	}
+	b.minCommitTs.Store(front.Value.(BlockEventIdentifier).CommitTs)
 }
 
 type BlockEventStatus struct {

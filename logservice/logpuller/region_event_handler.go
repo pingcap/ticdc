@@ -87,7 +87,8 @@ func (event regionEvent) mustFirstState() *regionFeedState {
 }
 
 type regionEventHandler struct {
-	subClient *subscriptionClient
+	eventSink      *regionEventSink
+	failureHandler *regionFailureHandler
 }
 
 func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {
@@ -159,7 +160,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			metricConsumeKVEventsCallbackDurationAdvanceResolvedTs.Observe(time.Since(start).Seconds())
 
 			start = time.Now()
-			h.subClient.wakeSubscription(span.subID)
+			h.eventSink.Wake(span.subID)
 			metricConsumeKVEventsCallbackDurationWakeSubscription.Observe(time.Since(start).Seconds())
 		})
 		// if not await, the wake callback will not be called, we need clear the cache manually.
@@ -255,7 +256,7 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState) {
 	}
 	if stepsToRemoved {
 		worker.takeRegionState(SubscriptionID(state.requestID), state.getRegionID())
-		h.subClient.onRegionFail(newRegionErrorInfo(state.getRegionInfo(), err))
+		h.failureHandler.Report(newRegionErrorInfo(state.getRegionInfo(), err))
 	}
 }
 
@@ -285,7 +286,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 	for _, entry := range entries.Entries.GetEntries() {
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
-			state.setInitialized()
+			span.markRegionInitialized(state)
 			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
@@ -392,12 +393,6 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	}
 
 	if shouldAdvance {
-		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
-			log.Info("subscription client is initialized",
-				zap.Uint64("subscriptionID", uint64(span.subID)),
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("resolvedTs", ts))
-		}
 		lastResolvedTs := span.resolvedTs.Load()
 		nextResolvedPhyTs := oracle.ExtractPhysical(ts)
 		// Generally, we don't want to send duplicate resolved ts,
@@ -405,7 +400,16 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 		// but when `ts` == `lastResolvedTs` == `span.startTs`,
 		// the span may just be initialized and have not receive any resolved ts before,
 		// so we also send ts in this case for quick notification to downstream.
-		if ts > lastResolvedTs || (ts == lastResolvedTs && lastResolvedTs == span.startTs) {
+		if ts > lastResolvedTs ||
+			(span.initialized.Load() && ts == lastResolvedTs && lastResolvedTs == span.startTs) {
+			if lastResolvedTs == span.startTs && ts > span.startTs && !span.initialized.Load() {
+				log.Warn("should not happen: resolved ts advances before span is initialized",
+					zap.Uint64("subscriptionID", uint64(span.subID)),
+					zap.Int64("tableID", span.span.TableID),
+					zap.Uint64("regionID", regionID),
+					zap.Uint64("startTs", span.startTs),
+					zap.Uint64("resolvedTs", ts))
+			}
 			resolvedPhyTs := oracle.ExtractPhysical(lastResolvedTs)
 			decreaseLag := float64(nextResolvedPhyTs-resolvedPhyTs) / 1e3
 			const largeResolvedTsAdvanceStepInSecs = 30
@@ -418,8 +422,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 					zap.Uint64("lastResolvedTs", lastResolvedTs),
 					zap.Float64("decreaseLag(s)", decreaseLag))
 			}
-			span.resolvedTs.Store(ts)
-			span.resolvedTsUpdated.Store(time.Now().Unix())
+			span.recordResolvedTs(ts)
 			return ts
 		}
 	}

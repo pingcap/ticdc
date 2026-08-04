@@ -31,11 +31,11 @@ type ClusterAdminClient interface {
 	// GetAllBrokers return all brokers among the cluster
 	GetAllBrokers() []Broker
 
-	// GetBrokerConfig return the broker level configuration with the `configName`
-	GetBrokerConfig(configName string) (string, error)
+	// GetBrokerConfig returns the broker-level configuration and whether it exists.
+	GetBrokerConfig(configName string) (value string, found bool, err error)
 
-	// GetTopicConfig return the topic level configuration with the `configName`
-	GetTopicConfig(topicName string, configName string) (string, error)
+	// GetTopicConfig returns the topic-level configuration and whether it exists.
+	GetTopicConfig(topicName string, configName string) (value string, found bool, err error)
 
 	// GetTopicsMeta return all target topics' metadata
 	// if `ignoreTopicError` is true, ignore the topic error and return the metadata of valid topics
@@ -46,8 +46,6 @@ type ClusterAdminClient interface {
 
 	// CreateTopic creates a new topic.
 	CreateTopic(detail *TopicDetail, validateOnly bool) error
-
-	Heartbeat()
 
 	// Close shuts down the admin client.
 	Close()

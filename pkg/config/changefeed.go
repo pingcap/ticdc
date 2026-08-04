@@ -110,6 +110,16 @@ func (s FeedState) IsRunning() bool {
 	return s == StateNormal || s == StateWarning
 }
 
+// IsResumable returns true if the feedState can be resumed to StateNormal.
+func (s FeedState) IsResumable() bool {
+	switch s {
+	case StateFailed, StateStopped, StateFinished:
+		return true
+	default:
+		return false
+	}
+}
+
 // RunningError represents some running error from cdc components, such as processor.
 type RunningError struct {
 	Time    time.Time `json:"time"`
@@ -481,8 +491,9 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 		info.rmMQOnlyFields()
 	} else {
 		// remove schema registry for MQ downstream with
-		// protocol other than avro
-		if util.GetOrZero(info.Config.Sink.Protocol) != ProtocolAvro.String() {
+		// protocol other than avro or debezium-avro
+		protocol := util.GetOrZero(info.Config.Sink.Protocol)
+		if protocol != ProtocolAvro.String() && protocol != ProtocolDebeziumAvro.String() {
 			info.Config.Sink.SchemaRegistry = nil
 		}
 	}

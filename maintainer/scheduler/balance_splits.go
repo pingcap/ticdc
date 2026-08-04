@@ -132,9 +132,22 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 			case replica.OpSplit:
 				splitSpans := s.splitter.Split(context.Background(), checkResult.SplitSpan.Span, checkResult.SpanNum, checkResult.SpanType)
 				if len(splitSpans) > 1 {
-					op := operator.NewSplitDispatcherOperator(s.spanController, checkResult.SplitSpan, splitSpans, checkResult.SplitTargetNodes, func(span *replica.SpanReplication, node node.ID) bool {
-						return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.spanController, span, node, heartbeatpb.OperatorType_O_Split))
-					})
+					op := operator.NewSplitDispatcherOperator(
+						s.spanController,
+						checkResult.SplitSpan,
+						splitSpans,
+						checkResult.SplitTargetNodes,
+						s.operatorController.MaintainerEpoch(),
+						func(span *replica.SpanReplication, node node.ID) bool {
+							return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(
+								s.spanController,
+								span,
+								node,
+								heartbeatpb.OperatorType_O_Split,
+								s.operatorController.MaintainerEpoch(),
+							))
+						},
+					)
 					ret := s.operatorController.AddOperator(op)
 					if ret {
 						availableSize--
@@ -142,7 +155,7 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 				}
 			case replica.OpMove:
 				for _, span := range checkResult.MoveSpans {
-					op := operator.NewMoveDispatcherOperator(s.spanController, span, span.GetNodeID(), checkResult.TargetNode)
+					op := s.operatorController.NewMoveOperator(span, span.GetNodeID(), checkResult.TargetNode)
 					ret := s.operatorController.AddOperator(op)
 					if ret {
 						availableSize--

@@ -40,6 +40,20 @@ func (c *errorPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient
 	return &errorGCStatesClient{err: c.err}
 }
 
+func (c *errorPdClient) GetMinServiceSafePointV2(ctx context.Context, keyspaceID uint32) (uint64, error) {
+	return 0, c.err
+}
+
+func (c *errorPdClient) SetServiceSafePointV2(
+	ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64,
+) (uint64, error) {
+	return 0, c.err
+}
+
+func (c *errorPdClient) DeleteServiceSafePointV2(ctx context.Context, keyspaceID uint32, serviceID string) (uint64, error) {
+	return 0, c.err
+}
+
 type errorGCStatesClient struct {
 	err error
 }
@@ -52,8 +66,24 @@ func (c *errorGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID str
 	return nil, c.err
 }
 
-func (c *errorGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+func (c *errorGCStatesClient) GetGCState(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
 	return pdgc.GCState{}, c.err
+}
+
+func (c *errorGCStatesClient) SetGlobalGCBarrier(
+	ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return nil, c.err
+}
+
+func (c *errorGCStatesClient) DeleteGlobalGCBarrier(ctx context.Context, barrierID string) (*pdgc.GlobalGCBarrierInfo, error) {
+	return nil, c.err
+}
+
+func (c *errorGCStatesClient) GetAllKeyspacesGCStates(
+	ctx context.Context, opts ...pdgc.GCStatesAPIOption,
+) (pdgc.ClusterGCStates, error) {
+	return pdgc.ClusterGCStates{}, c.err
 }
 
 type countingPdClient struct {
@@ -70,6 +100,21 @@ func (c *countingPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesCli
 	return &countingGCStatesClient{parent: c}
 }
 
+func (c *countingPdClient) GetMinServiceSafePointV2(ctx context.Context, keyspaceID uint32) (uint64, error) {
+	return 0, nil
+}
+
+func (c *countingPdClient) SetServiceSafePointV2(
+	ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64,
+) (uint64, error) {
+	return safePoint, nil
+}
+
+func (c *countingPdClient) DeleteServiceSafePointV2(ctx context.Context, keyspaceID uint32, serviceID string) (uint64, error) {
+	c.callCount.Add(1)
+	return 0, nil
+}
+
 type countingGCStatesClient struct {
 	parent *countingPdClient
 }
@@ -83,8 +128,24 @@ func (c *countingGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID 
 	return nil, nil
 }
 
-func (c *countingGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+func (c *countingGCStatesClient) GetGCState(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
 	return pdgc.GCState{}, nil
+}
+
+func (c *countingGCStatesClient) SetGlobalGCBarrier(
+	ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return pdgc.NewGlobalGCBarrierInfo(barrierID, barrierTS, ttl, time.Now()), nil
+}
+
+func (c *countingGCStatesClient) DeleteGlobalGCBarrier(ctx context.Context, barrierID string) (*pdgc.GlobalGCBarrierInfo, error) {
+	return nil, nil
+}
+
+func (c *countingGCStatesClient) GetAllKeyspacesGCStates(
+	ctx context.Context, opts ...pdgc.GCStatesAPIOption,
+) (pdgc.ClusterGCStates, error) {
+	return pdgc.NewClusterGCStatesWithoutGlobalGCBarriers(map[uint32]pdgc.GCState{}), nil
 }
 
 func TestCleanerGating(t *testing.T) {

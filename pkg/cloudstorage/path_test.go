@@ -1,0 +1,648 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package cloudstorage
+
+import (
+	"context"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/pingcap/ticdc/pkg/clock"
+	commonType "github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
+)
+
+type countFileExistsStorage struct {
+	storeapi.Storage
+	fileExistsCount int
+}
+
+func (s *countFileExistsStorage) FileExists(ctx context.Context, name string) (bool, error) {
+	s.fileExistsCount++
+	return s.Storage.FileExists(ctx, name)
+}
+
+func testFilePathGenerator(ctx context.Context, t *testing.T, dir string) *FilePathGenerator {
+	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
+	require.NoError(t, err)
+
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.Protocol = util.AddressOf(config.ProtocolOpen.String())
+	replicaConfig.Sink.FileIndexWidth = util.AddressOf(6)
+	cfg := NewConfig()
+	err = cfg.Apply(ctx, sinkURI, replicaConfig.Sink, true)
+	require.NoError(t, err)
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	f := NewFilePathGenerator(commonType.ChangeFeedID{}, cfg, storage, ".json")
+	return f
+}
+
+func TestGenerateDataFilePath(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema: "test",
+			Table:  "table1",
+		},
+		TableInfoVersion: 5,
+		DispatcherID:     commonType.NewDispatcherID(),
+	}
+
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
+	date := f.GenerateDateStr()
+	// date-separator: none
+	path, err := f.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000001.json", table.DispatcherID.String()), path)
+
+	// date-separator: year
+	mockClock := clock.NewMock()
+	f = testFilePathGenerator(ctx, t, dir)
+	f.config.DateSeparator = config.DateSeparatorYear.String()
+	f.SetClock(pdutil.NewMonotonicClock(mockClock))
+	mockClock.Set(time.Date(2022, 12, 31, 23, 59, 59, 0, time.UTC))
+	date = f.GenerateDateStr()
+	path, err = f.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2022/CDC_%s_000001.json", table.DispatcherID.String()), path)
+	// year changed
+	mockClock.Set(time.Date(2023, 1, 1, 0, 0, 20, 0, time.UTC))
+	date = f.GenerateDateStr()
+	path, err = f.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023/CDC_%s_000001.json", table.DispatcherID.String()), path)
+
+	// date-separator: month
+	mockClock = clock.NewMock()
+	f = testFilePathGenerator(ctx, t, dir)
+	f.config.DateSeparator = config.DateSeparatorMonth.String()
+	f.SetClock(pdutil.NewMonotonicClock(mockClock))
+
+	mockClock.Set(time.Date(2022, 12, 31, 23, 59, 59, 0, time.UTC))
+	date = f.GenerateDateStr()
+	path, err = f.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2022-12/CDC_%s_000001.json", table.DispatcherID.String()), path)
+	// month changed
+	mockClock.Set(time.Date(2023, 1, 1, 0, 0, 20, 0, time.UTC))
+	date = f.GenerateDateStr()
+	path, err = f.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-01/CDC_%s_000001.json", table.DispatcherID.String()), path)
+
+	// date-separator: day
+	mockClock = clock.NewMock()
+	f = testFilePathGenerator(ctx, t, dir)
+	f.config.DateSeparator = config.DateSeparatorDay.String()
+	f.SetClock(pdutil.NewMonotonicClock(mockClock))
+
+	mockClock.Set(time.Date(2022, 12, 31, 23, 59, 59, 0, time.UTC))
+	date = f.GenerateDateStr()
+	path, err = f.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2022-12-31/CDC_%s_000001.json", table.DispatcherID.String()), path)
+	// day changed
+	mockClock.Set(time.Date(2023, 1, 1, 0, 0, 20, 0, time.UTC))
+	date = f.GenerateDateStr()
+	path, err = f.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-01-01/CDC_%s_000001.json", table.DispatcherID.String()), path)
+}
+
+func TestGenerateDataFilePathWithTableIDAsPath(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema:  "test",
+			Table:   "table1",
+			TableID: 12345,
+		},
+		TableInfoVersion: 5,
+		DispatcherID:     commonType.NewDispatcherID(),
+	}
+
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
+	f.config.UseTableIDAsPath = true
+
+	date := f.GenerateDateStr()
+	path, err := f.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("12345/5/CDC_%s_000001.json", table.DispatcherID.String()), path)
+}
+
+func TestGenerateAndParseIndexFilePath(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	testCases := []struct {
+		name               string
+		dateSeparator      string
+		date               string
+		useTableIDAsPath   bool
+		enablePartition    bool
+		enableTableAcross  bool
+		table              VersionedTableName
+		expectedDMLPathKey DMLPathKey
+	}{
+		{
+			name:              "schema table with date",
+			dateSeparator:     config.DateSeparatorDay.String(),
+			date:              "2023-05-09",
+			enableTableAcross: true,
+			table: VersionedTableName{
+				TableNameWithPhysicTableID: commonType.TableName{
+					Schema: "test",
+					Table:  "table1",
+				},
+				TableInfoVersion: 5,
+				DispatcherID:     commonType.NewDispatcherID(),
+			},
+			expectedDMLPathKey: DMLPathKey{
+				SchemaPathKey: SchemaPathKey{
+					Schema:       "test",
+					Table:        "table1",
+					TableVersion: 5,
+				},
+				Date: "2023-05-09",
+			},
+		},
+		{
+			name:             "table id path",
+			dateSeparator:    config.DateSeparatorNone.String(),
+			useTableIDAsPath: true,
+			table: VersionedTableName{
+				TableNameWithPhysicTableID: commonType.TableName{
+					Schema:  "test",
+					Table:   "table1",
+					TableID: 12345,
+				},
+				TableInfoVersion: 5,
+				DispatcherID:     commonType.NewDispatcherID(),
+			},
+			expectedDMLPathKey: DMLPathKey{
+				SchemaPathKey: SchemaPathKey{
+					Schema:       "12345",
+					TableVersion: 5,
+				},
+				UseTableIDAsPath: true,
+				TableID:          12345,
+			},
+		},
+		{
+			name:            "partition with date",
+			dateSeparator:   config.DateSeparatorDay.String(),
+			date:            "2023-05-09",
+			enablePartition: true,
+			table: VersionedTableName{
+				TableNameWithPhysicTableID: commonType.TableName{
+					Schema:      "test",
+					Table:       "table1",
+					TableID:     55,
+					IsPartition: true,
+				},
+				TableInfoVersion: 5,
+				DispatcherID:     commonType.NewDispatcherID(),
+			},
+			expectedDMLPathKey: DMLPathKey{
+				SchemaPathKey: SchemaPathKey{
+					Schema:       "test",
+					Table:        "table1",
+					TableVersion: 5,
+				},
+				PartitionNum: 55,
+				Date:         "2023-05-09",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := testFilePathGenerator(ctx, t, t.TempDir())
+			f.config.DateSeparator = tc.dateSeparator
+			f.config.UseTableIDAsPath = tc.useTableIDAsPath
+			f.config.EnablePartitionSeparator = tc.enablePartition
+			f.config.EnableTableAcrossNodes = tc.enableTableAcross
+
+			indexPath := f.GenerateIndexFilePath(tc.table, tc.date)
+			indexKey := FileIndexKey{
+				DispatcherID:           tc.table.DispatcherID.String(),
+				EnableTableAcrossNodes: tc.enableTableAcross,
+			}
+			require.Equal(t, indexPath, tc.expectedDMLPathKey.GenerateIndexFilePath(indexKey))
+			var pathKey DMLPathKey
+			require.NoError(t, pathKey.ParseIndexFilePath(tc.dateSeparator, indexPath))
+			require.Equal(t, tc.expectedDMLPathKey, pathKey)
+		})
+	}
+}
+
+func TestParseFileIndexFromFileName(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
+	testCases := []struct {
+		fileName string
+	}{
+		{
+			fileName: "CDC000011.json",
+		},
+		{
+			fileName: "CDC1000000.json",
+		},
+	}
+
+	for _, tc := range testCases {
+		_, err := ParseFileIndexFromFileName(tc.fileName, f.extension)
+		require.NoError(t, err)
+	}
+}
+
+func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
+	mockClock := clock.NewMock()
+	f.config.DateSeparator = config.DateSeparatorDay.String()
+	f.SetClock(pdutil.NewMonotonicClock(mockClock))
+
+	mockClock.Set(time.Date(2023, 3, 9, 23, 59, 59, 0, time.UTC))
+	dispatcherID := commonType.NewDispatcherID()
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema: "test",
+			Table:  "table1",
+		},
+		TableInfoVersion: 5,
+		DispatcherID:     dispatcherID,
+	}
+	date := f.GenerateDateStr()
+	indexFilePath := f.GenerateIndexFilePath(table, date)
+	err := f.storage.WriteFile(ctx, indexFilePath, fmt.Appendf(nil, "CDC_%s_000005.json\n", dispatcherID.String()))
+	require.NoError(t, err)
+
+	dataFilePath, err := f.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-03-09/CDC_%s_000006.json", dispatcherID.String()), dataFilePath)
+}
+
+func TestGenerateDataFilePathResyncIndexFile(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	dir := t.TempDir()
+	f1 := testFilePathGenerator(ctx, t, dir)
+	f2 := testFilePathGenerator(ctx, t, dir)
+
+	dispatcherID := commonType.NewDispatcherID()
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema: "test",
+			Table:  "table1",
+		},
+		TableInfoVersion: 5,
+		DispatcherID:     dispatcherID,
+	}
+
+	date := ""
+	indexFilePath := f1.GenerateIndexFilePath(table, date)
+
+	// Simulate dispatcher moved between captures:
+	// 1) f1 generates CDC_..._000001 and writes index file.
+	dataFilePath, err := f1.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000001.json", dispatcherID.String()), dataFilePath)
+	err = f1.storage.WriteFile(ctx, dataFilePath, []byte("test1"))
+	require.NoError(t, err)
+	err = f1.storage.WriteFile(ctx, indexFilePath, fmt.Appendf(nil, "CDC_%s_000001.json\n", dispatcherID.String()))
+	require.NoError(t, err)
+
+	// 2) f2 continues from index file and generates CDC_..._000002 to CDC_..._000005,
+	// then updates index file.
+	for i := 2; i <= 5; i++ {
+		dataFilePath, err = f2.GenerateDataFilePath(ctx, table, date)
+		require.NoError(t, err)
+		require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_%06d.json", dispatcherID.String(), i), dataFilePath)
+		err = f2.storage.WriteFile(ctx, dataFilePath, []byte("test"))
+		require.NoError(t, err)
+		err = f2.storage.WriteFile(ctx, indexFilePath, fmt.Appendf(nil, "CDC_%s_%06d.json\n", dispatcherID.String(), i))
+		require.NoError(t, err)
+	}
+
+	// 3) f1 generates again after being scheduled back. It must reconcile with index file and
+	//    generate CDC_..._000006 instead of probing every existing data file one by one.
+	countStorage := &countFileExistsStorage{Storage: f1.storage}
+	f1.storage = countStorage
+	dataFilePath, err = f1.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000006.json", dispatcherID.String()), dataFilePath)
+	require.LessOrEqual(t, countStorage.fileExistsCount, 3)
+}
+
+func TestGenerateDataFilePathReconcilesStaleIndexFile(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
+
+	dispatcherID := commonType.NewDispatcherID()
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema: "test",
+			Table:  "table1",
+		},
+		TableInfoVersion: 5,
+		DispatcherID:     dispatcherID,
+	}
+
+	date := ""
+	firstDataFile := fmt.Sprintf("test/table1/5/CDC_%s_000001.json", dispatcherID.String())
+	secondDataFile := fmt.Sprintf("test/table1/5/CDC_%s_000002.json", dispatcherID.String())
+	indexFilePath := f.GenerateIndexFilePath(table, date)
+	require.NoError(t, f.storage.WriteFile(ctx, firstDataFile, []byte("test1")))
+	require.NoError(t, f.storage.WriteFile(ctx, secondDataFile, []byte("test2")))
+	require.NoError(t, f.storage.WriteFile(ctx, indexFilePath, fmt.Appendf(nil, "CDC_%s_000001.json\n", dispatcherID.String())))
+
+	dataFilePath, err := f.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000003.json", dispatcherID.String()), dataFilePath)
+}
+
+func TestIsSchemaFile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		path   string
+		expect bool
+	}{
+		{
+			"valid database schema <schema>/meta/",
+			"schema2/meta/schema_123_0123456789.json", true,
+		},
+		{
+			"valid table-level schema file <schema>/<table>/meta/",
+			"schema1/table1/meta/schema_123_0123456789.json", true,
+		},
+		{"valid special prefix", "meta/meta/schema_123_0123456789.json", true},
+		{"valid schema1", "meta/schema_123_0123456789.json", true},
+		{"missing field1", "meta/schema_012345678_.json", false},
+		{"missing field2", "meta/schema_012345678.json", false},
+		{"invalid checksum1", "meta/schema_123_012345678.json", false},
+		{"invalid checksum2", "meta/schema_123_012a4567c9.json", false},
+		{"invalid table version", "meta/schema_abc_0123456789.json", false},
+		{"invalid extension1", "meta/schema_123_0123456789.txt", false},
+		{"invalid extension2", "meta/schema_123_0123456789.json ", false},
+		{"invalid path", "meta/schema1/schema_123_0123456789.json", false},
+	}
+
+	for _, tt := range tests {
+		require.Equal(t, tt.expect, IsSchemaFile(tt.path),
+			"testCase: %s, path: %v", tt.name, tt.path)
+	}
+}
+
+func TestCheckOrWriteSchema(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
+
+	var columns []*timodel.ColumnInfo
+	ft := types.NewFieldType(mysql.TypeLong)
+	ft.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	col := &timodel.ColumnInfo{
+		Name:         ast.NewCIStr("Id"),
+		FieldType:    *ft,
+		DefaultValue: 10,
+	}
+	columns = append(columns, col)
+	tidbInfo := &timodel.TableInfo{
+		ID:      20,
+		Name:    ast.NewCIStr("table1"),
+		Columns: columns,
+		Version: 100,
+	}
+	tableInfo := commonType.WrapTableInfo("test", tidbInfo)
+
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: tableInfo.TableName,
+		TableInfoVersion:           100,
+	}
+
+	effectiveTableVersion, hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
+	require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
+
+	// test old dml file can be ignored
+	table.TableInfoVersion = 99
+	effectiveTableVersion, hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+	require.NoError(t, err)
+	require.True(t, hasNewerSchemaVersion)
+	require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
+
+	// test only table version changed, schema file should be reused
+	table.TableInfoVersion = 101
+	effectiveTableVersion, hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
+	require.Equal(t, uint64(tidbInfo.Version), effectiveTableVersion)
+
+	dir = filepath.Join(dir, "test/table1/meta")
+	files, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(files))
+
+	// test schema file is invalid
+	err = os.WriteFile(filepath.Join(dir,
+		fmt.Sprintf("%s.tmp.%s", files[0].Name(), uuid.NewString())),
+		[]byte("invalid"), 0o644)
+	require.NoError(t, err)
+	err = os.Remove(filepath.Join(dir, files[0].Name()))
+	require.NoError(t, err)
+	delete(f.versionMap, table)
+	effectiveTableVersion, hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
+	require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
+
+	files, err = os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(files))
+}
+
+func TestCheckOrWriteSchemaUsesRoutedTargetNames(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
+
+	tableInfo := commonType.WrapTableInfo("source_db", &timodel.TableInfo{
+		ID:   20,
+		Name: ast.NewCIStr("source_table"),
+		Columns: []*timodel.ColumnInfo{
+			{
+				Name:      ast.NewCIStr("id"),
+				FieldType: *types.NewFieldType(mysql.TypeLong),
+				State:     timodel.StatePublic,
+			},
+		},
+		Version: 100,
+	}).CloneWithRouting("target_db", "target_table")
+
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema:  tableInfo.GetSchemaName(),
+			Table:   tableInfo.GetTableName(),
+			TableID: tableInfo.TableName.TableID,
+		},
+		TableInfoVersion: 100,
+	}
+
+	effectiveTableVersion, hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
+	require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
+
+	files, err := os.ReadDir(filepath.Join(dir, "target_db", "target_table", "meta"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+
+	_, err = os.Stat(filepath.Join(dir, "source_db"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	dir := t.TempDir()
+	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
+	require.NoError(t, err)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorDay.String())
+	replicaConfig.Sink.Protocol = util.AddressOf(config.ProtocolCsv.String())
+	replicaConfig.Sink.FileIndexWidth = util.AddressOf(6)
+	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
+		FileExpirationDays:  util.AddressOf(1),
+		FileCleanupCronSpec: util.AddressOf("* * * * * *"),
+	}
+	cfg := NewConfig()
+	err = cfg.Apply(ctx, sinkURI, replicaConfig.Sink, true)
+	require.NoError(t, err)
+
+	// generate some expired files
+	filesWithoutPartition := []string{
+		// schma1-table1
+		"schema1/table1/5/2021-01-01/CDC000001.csv",
+		"schema1/table1/5/2021-01-01/CDC000002.csv",
+		"schema1/table1/5/2021-01-01/CDC000003.csv",
+		"schema1/table1/5/2021-01-01/" + defaultIndexFileName, // index
+		"schema1/table1/meta/schema_5_20210101.json",          // schema should never be cleaned
+		// schma1-table2
+		"schema1/table2/5/2021-01-01/CDC000001.csv",
+		"schema1/table2/5/2021-01-01/CDC000002.csv",
+		"schema1/table2/5/2021-01-01/CDC000003.csv",
+		"schema1/table2/5/2021-01-01/" + defaultIndexFileName, // index
+		"schema1/table2/meta/schema_5_20210101.json",          // schema should never be cleaned
+	}
+	for _, file := range filesWithoutPartition {
+		err := storage.WriteFile(ctx, file, []byte("test"))
+		require.NoError(t, err)
+	}
+
+	filesWithPartition := []string{
+		// schma1-table1
+		"schema1/table1/400200133/12/2021-01-01/20210101/CDC000001.csv",
+		"schema1/table1/400200133/12/2021-01-01/20210101/CDC000002.csv",
+		"schema1/table1/400200133/12/2021-01-01/20210101/CDC000003.csv",
+		"schema1/table1/400200133/12/2021-01-01/20210101/" + defaultIndexFileName, // index
+		"schema1/table1/meta/schema_5_20210101.json",                              // schema should never be cleaned
+		// schma2-table1
+		"schema2/table1/400200150/12/2021-01-01/20210101/CDC000001.csv",
+		"schema2/table1/400200150/12/2021-01-01/20210101/CDC000002.csv",
+		"schema2/table1/400200150/12/2021-01-01/20210101/CDC000003.csv",
+		"schema2/table1/400200150/12/2021-01-01/20210101/" + defaultIndexFileName, // index
+		"schema2/table1/meta/schema_5_20210101.json",                              // schema should never be cleaned
+	}
+	for _, file := range filesWithPartition {
+		err := storage.WriteFile(ctx, file, []byte("test"))
+		require.NoError(t, err)
+	}
+
+	filesNotExpired := []string{
+		// schma1-table1
+		"schema1/table1/5/2021-01-02/CDC000001.csv",
+		"schema1/table1/5/2021-01-02/CDC000002.csv",
+		"schema1/table1/5/2021-01-02/CDC000003.csv",
+		"schema1/table1/5/2021-01-02/" + defaultIndexFileName, // index
+		// schma1-table2
+		"schema1/table2/5/2021-01-02/CDC000001.csv",
+		"schema1/table2/5/2021-01-02/CDC000002.csv",
+		"schema1/table2/5/2021-01-02/CDC000003.csv",
+		"schema1/table2/5/2021-01-02/" + defaultIndexFileName, // index
+	}
+	for _, file := range filesNotExpired {
+		err := storage.WriteFile(ctx, file, []byte("test"))
+		require.NoError(t, err)
+	}
+
+	currTime := time.Date(2021, 1, 3, 0, 0, 0, 0, time.Local)
+	checkpointTs := oracle.GoTimeToTS(currTime)
+	err = RemoveExpiredFiles(ctx, commonType.ChangeFeedID{}, storage, cfg, checkpointTs)
+	require.NoError(t, err)
+}

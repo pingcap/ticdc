@@ -466,3 +466,21 @@ func TestGetScanMaxTsFallbackInterval(t *testing.T) {
 	status.minSentTs.Store(0)
 	require.Equal(t, uint64(0), status.getScanMaxTs())
 }
+
+func TestScanWindowDisabledSkipsAdjustmentAndCap(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatusWithScanWindow(
+		common.NewChangefeedID4Test("default", "test"),
+		1*time.Minute,
+		false,
+	)
+	require.Nil(t, status.scanWindowController)
+
+	status.scanInterval.Store(int64(40 * time.Second))
+	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
+	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
+
+	status.minSentTs.Store(oracle.GoTimeToTS(time.Unix(1234, 0)))
+	require.Equal(t, uint64(0), status.getScanMaxTs())
+}

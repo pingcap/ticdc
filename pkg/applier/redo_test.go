@@ -377,7 +377,7 @@ func TestApply(t *testing.T) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	require.NoError(t, err)
 	mysqlCfg.Apply(sinkURI, cfg.ChangefeedID, cfg)
-	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false, false, 1*time.Second)
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false, false, 1*time.Second, common.DefaultKeyspaceID)
 	ap.needRecoveryInfo = false
 	err = ap.Apply(ctx)
 	require.Nil(t, err)
@@ -585,7 +585,7 @@ func TestApplyBigTxn(t *testing.T) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	require.NoError(t, err)
 	mysqlCfg.Apply(sinkURI, cfg.ChangefeedID, cfg)
-	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false, false, 1*time.Second)
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false, false, 1*time.Second, common.DefaultKeyspaceID)
 	ap.needRecoveryInfo = false
 	err = ap.Apply(ctx)
 	require.Nil(t, err)
@@ -604,6 +604,25 @@ func TestApplyMeetSinkError(t *testing.T) {
 	ap := NewRedoApplier(cfg)
 	err = ap.Apply(ctx)
 	require.Regexp(t, "CDC:ErrMySQLConnectionError", err)
+}
+
+func TestApplyWithSinkTimezone(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	port, err := freeport.GetFreePort()
+	require.Nil(t, err)
+	cfg := &RedoApplierConfig{
+		Storage: "blackhole://",
+		SinkURI: fmt.Sprintf(
+			"mysql://127.0.0.1:%d/?time-zone=Asia%%2FShanghai&read-timeout=1s&timeout=1s",
+			port,
+		),
+	}
+	ap := NewRedoApplier(cfg)
+	err = ap.Apply(ctx)
+	require.Regexp(t, "CDC:ErrMySQLConnectionError", err)
+	require.NotContains(t, err.Error(), "TiCDC server timezone")
 }
 
 func getMockDB(t *testing.T) *sql.DB {

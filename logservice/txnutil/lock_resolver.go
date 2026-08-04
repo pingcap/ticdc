@@ -53,6 +53,32 @@ var (
 	metricResolveLockOperationDuration = metrics.SubscriptionClientResolveLockOperationDuration.WithLabelValues("resolve")
 )
 
+func resolveScanLockInfos(lockInfos []*kvrpcpb.LockInfo, resolve func([]*txnkv.Lock) (int64, error)) ([]*txnkv.Lock, int64, error) {
+	locks := make([]*txnkv.Lock, 0, len(lockInfos))
+	for _, lockInfo := range lockInfos {
+		sharedLockInfos := lockInfo.GetSharedLockInfos()
+		if len(sharedLockInfos) > 0 {
+			for _, sharedLockInfo := range sharedLockInfos {
+				locks = append(locks, txnkv.NewLock(sharedLockInfo))
+			}
+			continue
+		}
+		locks = append(locks, txnkv.NewLock(lockInfo))
+	}
+	if len(locks) == 0 {
+		return locks, 0, nil
+	}
+	msBeforeTxnExpired, err := resolve(locks)
+	return locks, msBeforeTxnExpired, err
+}
+
+func nextScanLockKey(locEndKey []byte, locks []*txnkv.Lock, msBeforeTxnExpired int64) []byte {
+	if msBeforeTxnExpired > 0 || len(locks) < scanLockLimit {
+		return locEndKey
+	}
+	return locks[len(locks)-1].Key
+}
+
 func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint64, maxVersion uint64) (err error) {
 	var totalLocks []*txnkv.Lock
 
@@ -146,31 +172,28 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		}
 		metricScanLockOperationDuration.Observe(time.Since(scanLockStart).Seconds())
 		locksInfo := locksResp.GetLocks()
-		locks := make([]*txnkv.Lock, len(locksInfo))
-		for i := range locksInfo {
-			locks[i] = txnkv.NewLock(locksInfo[i])
-		}
+		locks, msBeforeTxnExpired, err1 := resolveScanLockInfos(locksInfo, func(locks []*txnkv.Lock) (int64, error) {
+			resolveLockStart := time.Now()
+			msBeforeTxnExpired, err := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
+			if err == nil {
+				metricResolveLockOperationDuration.Observe(time.Since(resolveLockStart).Seconds())
+			}
+			return msBeforeTxnExpired, err
+		})
 		totalLocks = append(totalLocks, locks...)
 		metricResolveLockFoundCounter.Add(float64(len(locks)))
 
+		if err1 != nil {
+			return errors.Trace(err1)
+		}
 		if len(locks) != 0 {
-			resolveLockStart := time.Now()
-			msBeforeTxnExpired, err := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
-			if err != nil {
-				return errors.Trace(err)
-			}
-			metricResolveLockOperationDuration.Observe(time.Since(resolveLockStart).Seconds())
 			resolvedLockCount := len(locks)
 			if msBeforeTxnExpired > 0 {
 				resolvedLockCount = countExpiredLocks(kvStorage, locks)
 			}
 			metricResolveLockResolvedCounter.Add(float64(resolvedLockCount))
 		}
-		if len(locks) < scanLockLimit {
-			key = loc.EndKey
-		} else {
-			key = locks[len(locks)-1].Key
-		}
+		key = nextScanLockKey(loc.EndKey, locks, msBeforeTxnExpired)
 
 		if len(key) == 0 || (len(loc.EndKey) != 0 && bytes.Compare(key, loc.EndKey) >= 0) {
 			break

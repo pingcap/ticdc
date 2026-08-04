@@ -21,6 +21,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestFeedStateIsResumable verifies the shared state predicate used by CLI/API
+// resume paths. Only stopped or terminal-but-resumable states should be accepted.
+func TestFeedStateIsResumable(t *testing.T) {
+	tests := []struct {
+		state     FeedState
+		resumable bool
+	}{
+		{state: StateStopped, resumable: true},
+		{state: StateFailed, resumable: true},
+		{state: StateFinished, resumable: true},
+		{state: StateNormal, resumable: false},
+		{state: StateWarning, resumable: false},
+		{state: StatePending, resumable: false},
+		{state: StateRemoved, resumable: false},
+		{state: StateUnInitialized, resumable: false},
+	}
+
+	for _, tt := range tests {
+		require.Equal(t, tt.resumable, tt.state.IsResumable())
+	}
+}
+
 // TestChangeFeedInfoToChangefeedConfigBatchFields ensures the maintainer-facing
 // changefeed config keeps the optional event collector batch overrides.
 func TestChangeFeedInfoToChangefeedConfigBatchFields(t *testing.T) {
@@ -42,4 +64,39 @@ func TestChangeFeedInfoToChangefeedConfigBatchFields(t *testing.T) {
 	assertBatchFields(nil, nil)
 	assertBatchFields(util.AddressOf(0), util.AddressOf(0))
 	assertBatchFields(util.AddressOf(123), util.AddressOf(456))
+}
+
+func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		protocol     Protocol
+		keepRegistry bool
+	}{
+		{protocol: ProtocolAvro, keepRegistry: true},
+		{protocol: ProtocolDebeziumAvro, keepRegistry: true},
+		{protocol: ProtocolDebezium, keepRegistry: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.protocol.String(), func(t *testing.T) {
+			t.Parallel()
+
+			cfg := GetDefaultReplicaConfig()
+			cfg.Sink.Protocol = util.AddressOf(tt.protocol.String())
+			cfg.Sink.SchemaRegistry = util.AddressOf("http://127.0.0.1:8088")
+			info := &ChangeFeedInfo{
+				SinkURI: "kafka://127.0.0.1:9092/topic",
+				Config:  cfg,
+			}
+
+			info.RmUnusedFields()
+			if tt.keepRegistry {
+				require.NotNil(t, info.Config.Sink.SchemaRegistry)
+				require.Equal(t, "http://127.0.0.1:8088", *info.Config.Sink.SchemaRegistry)
+			} else {
+				require.Nil(t, info.Config.Sink.SchemaRegistry)
+			}
+		})
+	}
 }

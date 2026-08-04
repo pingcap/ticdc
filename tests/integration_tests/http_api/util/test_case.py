@@ -1,4 +1,5 @@
 import sys
+import os
 import requests as rq
 from requests.exceptions import RequestException
 import time
@@ -175,7 +176,9 @@ def create_changefeed(sink_uri):
     })
     headers = {"Content-Type": "application/json"}
     resp = rq.post(url, data=data, headers=headers)
-    assert "CDC:ErrKafkaNewProducer" in resp.text, f"{resp.text}"
+    expected_error = "CDC:ErrKafkaNewProducer" if os.getenv(
+        "TICDC_NEWARCH") == "false" else "CDC:ErrNewKafkaSink"
+    assert expected_error in resp.text, f"{resp.text}"
     assert "not found, ResolveEndpointV2" not in resp.text, f"{resp.text}"
 
     print("pass test: create changefeed")

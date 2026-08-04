@@ -16,6 +16,7 @@ package logpuller
 import (
 	"sync"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/tikv/client-go/v2/tikv"
@@ -46,6 +47,9 @@ type regionInfo struct {
 	// Whether to filter out the value write by cdc itself.
 	// It should be `true` in BDR mode
 	filterLoop bool
+	// scanPriority is sent to TiKV/CSE so remote incremental scan admission can
+	// preserve TiCDC's business priority across retries.
+	scanPriority cdcpb.ScanPriority
 }
 
 func (s *regionInfo) isStopped() bool {
@@ -66,6 +70,7 @@ func newRegionInfo(
 		rpcCtx:         rpcCtx,
 		subscribedSpan: subscribedSpan,
 		filterLoop:     filterLoop,
+		scanPriority:   TaskLowPrior.scanPriority(),
 	}
 }
 

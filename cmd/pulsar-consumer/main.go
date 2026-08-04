@@ -48,6 +48,7 @@ func main() {
 	cmd.Flags().StringVar(&configFile, "config", "", "config file for changefeed")
 	cmd.Flags().StringVar(&upstreamURIStr, "upstream-uri", "", "pulsar uri")
 	cmd.Flags().StringVar(&consumerOption.downstreamURI, "downstream-uri", "", "downstream sink uri")
+	cmd.Flags().StringVar(&consumerOption.subscriptionName, "subscription-name", consumerOption.subscriptionName, "pulsar subscription name")
 	cmd.Flags().StringVar(&consumerOption.timezone, "tz", "System", "Specify time zone of pulsar consumer")
 	cmd.Flags().StringVar(&consumerOption.ca, "ca", "", "CA certificate path for pulsar SSL connection")
 	cmd.Flags().StringVar(&consumerOption.cert, "cert", "", "Certificate path for pulsar SSL connection")

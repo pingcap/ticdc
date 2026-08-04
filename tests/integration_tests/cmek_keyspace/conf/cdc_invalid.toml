@@ -1,0 +1,15 @@
+newarch = true
+
+[encryption]
+enable-encryption = true
+allow-degrade-on-error = false
+meta-refresh-interval = "1s"
+meta-cache-ttl = "1s"
+
+[encryption.kms]
+[encryption.kms.aws]
+region = "eu-west-2"
+# Override only TiCDC to an unused endpoint; TiKV uses the valid endpoint from PD.
+endpoint = "http://127.0.0.1:18081"
+access-key = "test"
+secret-access-key = "test"

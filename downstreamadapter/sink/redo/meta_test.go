@@ -30,8 +30,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -369,7 +369,7 @@ func TestRedoMetaMetrics(t *testing.T) {
 
 func TestPreStartClosesExternalStorageOnFailure(t *testing.T) {
 	controller := gomock.NewController(t)
-	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage := mockobjstore.NewMockStorage(controller)
 	mockStorage.EXPECT().FileExists(gomock.Any(), gomock.Any()).Return(false, context.DeadlineExceeded)
 	mockStorage.EXPECT().Close().Times(1)
 
@@ -377,7 +377,7 @@ func TestPreStartClosesExternalStorageOnFailure(t *testing.T) {
 	defer func() {
 		redo.InitExternalStorage = oldInitExternalStorage
 	}()
-	redo.InitExternalStorage = func(context.Context, url.URL) (storage.ExternalStorage, error) {
+	redo.InitExternalStorage = func(context.Context, url.URL) (storeapi.Storage, error) {
 		return mockStorage, nil
 	}
 

@@ -19,12 +19,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 )
 
 var (
@@ -191,7 +192,7 @@ func IsBlackholeStorage(scheme string) bool {
 }
 
 // InitExternalStorage init an external storage.
-var InitExternalStorage = func(ctx context.Context, uri url.URL) (storage.ExternalStorage, error) {
+var InitExternalStorage = func(ctx context.Context, uri url.URL) (storeapi.Storage, error) {
 	s, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri.String())
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrStorageInitialize, err,
@@ -200,7 +201,7 @@ var InitExternalStorage = func(ctx context.Context, uri url.URL) (storage.Extern
 	return s, nil
 }
 
-func initExternalStorageForTest(ctx context.Context, uri url.URL) (storage.ExternalStorage, error) {
+func initExternalStorageForTest(ctx context.Context, uri url.URL) (storeapi.Storage, error) {
 	if ConsistentStorage(uri.Scheme) == consistentStorageS3 && len(uri.Host) == 0 {
 		// TODO: this branch is compatible with previous s3 logic and will be removed
 		// in the future.
@@ -279,13 +280,6 @@ const (
 	RedoMetaFileFormat = "%s_%s_%s_%s_%s%s"
 )
 
-// logFormat2ParseFormat converts redo log file name format to the space separated
-// format, which can be read and parsed by sscanf. Besides remove the suffix `%s`
-// which is used as file name extension, since we will parse extension first.
-func logFormat2ParseFormat(fmtStr string) string {
-	return strings.TrimSuffix(strings.ReplaceAll(fmtStr, "_", " "), "%s")
-}
-
 // ParseLogFileName extract the commitTs, fileType from log fileName
 func ParseLogFileName(name string) (uint64, string, error) {
 	ext := filepath.Ext(name)
@@ -305,8 +299,6 @@ func ParseLogFileName(name string) (uint64, string, error) {
 		return 0, "", nil
 	}
 
-	var commitTs uint64
-	var captureID, keyspace, changefeedID, fileType, uid string
 	// if the keyspace is not default, the log looks like:
 	// fmt.Sprintf("%s_%s_%s_%s_%d_%s%s", w.cfg.captureID,
 	// w.cfg.changeFeedID.Keyspace,w.cfg.changeFeedID.ID,
@@ -315,19 +307,13 @@ func ParseLogFileName(name string) (uint64, string, error) {
 	// fmt.Sprintf("%s_%s_%s_%d_%s%s", w.cfg.captureID,
 	// w.cfg.changeFeedID.ID,
 	// w.cfg.fileType, w.commitTS.Load(), uuid, redo.LogEXT)
-	var (
-		vars      []any
-		formatStr string
-	)
-	if len(strings.Split(name, "_")) == 6 {
-		formatStr = logFormat2ParseFormat(RedoLogFileFormatV2)
-		vars = []any{&captureID, &keyspace, &changefeedID, &fileType, &commitTs, &uid}
-	} else {
-		formatStr = logFormat2ParseFormat(RedoLogFileFormatV1)
-		vars = []any{&captureID, &changefeedID, &fileType, &commitTs, &uid}
+	parts := strings.Split(strings.TrimSuffix(name, ext), "_")
+	if len(parts) < 5 {
+		return 0, "", errors.Annotatef(errors.Errorf("missing fields"), "bad log name: %s", name)
 	}
-	name = strings.ReplaceAll(name, "_", " ")
-	_, err := fmt.Sscanf(name, formatStr, vars...)
+
+	fileType := parts[len(parts)-3]
+	commitTs, err := strconv.ParseUint(parts[len(parts)-2], 10, 64)
 	if err != nil {
 		return 0, "", errors.Annotatef(err, "bad log name: %s", name)
 	}

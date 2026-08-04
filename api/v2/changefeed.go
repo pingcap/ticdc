@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/middleware"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
@@ -43,6 +42,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
@@ -542,7 +542,7 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 
 	taskStatus := make([]config.CaptureTaskStatus, 0)
 	detail := CfInfoToAPIModel(cfInfo, status, taskStatus)
-	c.JSON(http.StatusOK, detail)
+	respondWithFormat(c, http.StatusOK, detail)
 }
 
 func shouldShowRunningError(state config.FeedState) bool {
@@ -771,6 +771,14 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	}
 	middleware.SetChangefeedOperationTarget(c, cfInfo.ChangefeedID.Keyspace(), cfInfo.ChangefeedID.Name())
 
+	// Resume validation must use persisted metadata because stopped changefeeds
+	// can be edited outside the coordinator process during legacy migration.
+	cfInfo, err = co.GetPersistedChangefeedInfo(ctx, cfInfo.ChangefeedID)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	// If there is no overrideCheckpointTs, then check whether the currentCheckpointTs is smaller than gc safepoint or not.
 	newCheckpointTs := status.CheckpointTs
 	overwriteCheckpointTs := false
@@ -786,6 +794,10 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	if keyspaceMeta.State != keyspacepb.KeyspaceState_ENABLED {
 		c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
 		c.Abort()
+		return
+	}
+	if err = validateResumeChangefeedState(cfInfo.State); err != nil {
+		_ = c.Error(err)
 		return
 	}
 
@@ -1089,6 +1101,15 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	)
 
 	c.JSON(getStatus(c), CfInfoToAPIModel(oldCfInfo, status, nil))
+}
+
+func validateResumeChangefeedState(state config.FeedState) error {
+	if state.IsResumable() {
+		return nil
+	}
+	return errors.ErrChangefeedUpdateRefused.GenWithStackByArgs(
+		fmt.Sprintf("can only resume changefeed when it is stopped, failed, or finished, but current state is %s", state),
+	)
 }
 
 // verifyResumeChangefeedConfig verifies the changefeed config before resuming a changefeed
@@ -1723,7 +1744,7 @@ func getVerifiedTables(
 		return nil, nil, nil, err
 	}
 
-	if err := verifyTable4MQ(replicaConfig, scheme, topic, protocol, tableInfos); err != nil {
+	if err := verifyTablesForSink(replicaConfig, scheme, topic, protocol, tableInfos); err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -1738,18 +1759,27 @@ func getVerifiedTables(
 	return ineligibleTables, eligibleTables, allTables, nil
 }
 
-func verifyTable4MQ(
+func verifyTablesForSink(
 	replicaConfig *config.ReplicaConfig,
 	scheme string,
 	topic string,
 	protocol config.Protocol,
 	tableInfos []*common.TableInfo,
 ) error {
+	if config.IsStorageScheme(scheme) {
+		selectors, err := columnselector.New(replicaConfig.Sink)
+		if err != nil {
+			return err
+		}
+		return selectors.VerifyTables(tableInfos, nil)
+	}
+
 	if !config.IsMQScheme(scheme) {
 		return nil
 	}
 
-	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), isAvroLike)
 	if err != nil {
 		return err
 	}

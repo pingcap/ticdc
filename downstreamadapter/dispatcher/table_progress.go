@@ -97,6 +97,7 @@ func NewTableProgress() *TableProgress {
 func (p *TableProgress) Add(event commonEvent.FlushableEvent) {
 	commitTs := event.GetCommitTs()
 	ts := Ts{startTs: event.GetStartTs(), commitTs: commitTs}
+	size := event.GetSize()
 
 	p.rwMutex.Lock()
 	defer p.rwMutex.Unlock()
@@ -108,14 +109,11 @@ func (p *TableProgress) Add(event commonEvent.FlushableEvent) {
 	p.elemMap[ts].Push(elem)
 	p.maxCommitTs = commitTs
 	event.PushFrontFlushFunc(func() {
-		p.Remove(event)
+		p.remove(ts, size)
 	})
 }
 
-// Remove deletes an event from the TableProgress.
-// Note: Consider implementing batch removal in the future if needed.
-func (p *TableProgress) Remove(event commonEvent.FlushableEvent) {
-	ts := Ts{startTs: event.GetStartTs(), commitTs: event.GetCommitTs()}
+func (p *TableProgress) remove(ts Ts, size int64) {
 	p.rwMutex.Lock()
 	defer p.rwMutex.Unlock()
 
@@ -133,7 +131,7 @@ func (p *TableProgress) Remove(event commonEvent.FlushableEvent) {
 			p.lastSyncedTs = ts.commitTs
 		}
 	}
-	p.cumulateEventSize += event.GetSize()
+	p.cumulateEventSize += size
 }
 
 // Empty checks if the TableProgress is empty.
