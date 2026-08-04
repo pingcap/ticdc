@@ -49,7 +49,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 	// initialize
 	option := dynstream.NewOption()
 	handler := &regionEventHandler{eventSink: &regionEventSink{
-		memoryQuota: newMemoryQuotaController(0, 0),
+		memoryQuota: newMemoryQuotaController(1024*1024*1024, 8*1024*1024),
 	}}
 	ds := dynstream.NewParallelDynamicStream("test", handler, option)
 	ds.Start()
@@ -208,7 +208,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	// initialize
 	option := dynstream.NewOption()
 	handler := &regionEventHandler{eventSink: &regionEventSink{
-		memoryQuota: newMemoryQuotaController(0, 0),
+		memoryQuota: newMemoryQuotaController(1024*1024*1024, 8*1024*1024),
 	}}
 	ds := dynstream.NewParallelDynamicStream("test", handler, option)
 	ds.Start()

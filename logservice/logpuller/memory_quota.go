@@ -25,10 +25,6 @@ import (
 )
 
 const (
-	// defaultLogPullerMemoryQuota is the soft memory capacity shared by event
-	// accounting and initial-scan admission.
-	defaultLogPullerMemoryQuota uint64 = 1024 * 1024 * 1024
-
 	// Admission ratios compare max(accounted event memory, estimated scan
 	// memory) with the soft capacity.
 
@@ -43,9 +39,6 @@ const (
 	// defaultHardLimitRatio blocks receiving more events when accounted event
 	// memory reaches twice the soft capacity.
 	defaultHardLimitRatio = 2.0
-
-	// defaultScanBaseSize is the minimum memory estimate for one admitted scan.
-	defaultScanBaseSize uint64 = 8 * 1024 * 1024
 
 	// defaultScanLagUnit is the lag unit used by the logarithmic scan estimate.
 	defaultScanLagUnit = 10 * time.Minute
@@ -128,12 +121,19 @@ func (n *eventMemoryNotifier) notify() {
 	n.mu.Unlock()
 }
 
-// memoryQuotaController tracks event memory retained by downstream callbacks
-// and estimated memory for admitted initial scans. Event memory is allowed to
-// exceed the soft capacity, but the receive path waits at the hard limit. Scan
-// admission pauses uninitialized high-lag spans under memory pressure and uses
-// hysteresis when resuming them. Other scans continue to make progress and are
-// bounded by the region request window and the event-memory hard limit.
+// memoryQuotaController coordinates memory pressure from two sources:
+// retained event memory and admitted initial scans.
+//
+// Event memory tracks bytes kept alive until downstream finishes consuming
+// them. It may exceed the soft capacity temporarily, but the receive path
+// blocks once it reaches the hard limit.
+//
+// Initial scans are charged by estimate instead of measured bytes. Each
+// admitted scan starts from scanBaseSize, grows logarithmically with scan lag,
+// and is capped at maxScanLagFactor times the base size. Scan admission
+// compares max(event used, scan used) with the soft capacity: high-lag
+// "warming" scans pause at pauseWarmingLimit and resume at
+// resumeWarmingLimit, while lower-lag scans continue to make progress.
 type memoryQuotaController struct {
 	capacity uint64
 	// used tracks event bytes retained until downstream finishes consuming them.
@@ -164,12 +164,6 @@ type memoryQuotaController struct {
 }
 
 func newMemoryQuotaController(capacity, scanBaseSize uint64) *memoryQuotaController {
-	if capacity == 0 {
-		capacity = defaultLogPullerMemoryQuota
-	}
-	if scanBaseSize == 0 {
-		scanBaseSize = defaultScanBaseSize
-	}
 	c := &memoryQuotaController{
 		capacity:           capacity,
 		level:              admissionNormal,

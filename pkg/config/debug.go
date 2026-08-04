@@ -24,9 +24,9 @@ import (
 const (
 	// DefaultOldStartTsScanLowPriorityThreshold is the default lag threshold for
 	// classifying scan tasks as low priority.
-	DefaultOldStartTsScanLowPriorityThreshold = 10 * time.Minute
+	DefaultOldStartTsScanLowPriorityThreshold        = 10 * time.Minute
 	defaultLogPullerMemoryQuota               uint64 = 1024 * 1024 * 1024
-	defaultLogPullerScanBaseSize             uint64 = 8 * 1024 * 1024
+	defaultLogPullerScanBaseSize              uint64 = 8 * 1024 * 1024
 )
 
 // DebugConfig represents config for ticdc unexposed feature configurations
