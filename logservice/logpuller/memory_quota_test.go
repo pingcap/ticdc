@@ -100,16 +100,16 @@ func TestMemoryQuotaUpdateMetrics(t *testing.T) {
 
 func TestMemoryQuotaAdmissionLevels(t *testing.T) {
 	quota := newMemoryQuotaController(100, 10)
-	warmingSpan := newTestQuotaSpan(1)
+	lowPrioritySpan := newTestQuotaSpan(1)
 	highPrioritySpan := newTestQuotaSpan(2)
-	warmingTs := setTestQuotaSpanLag(warmingSpan, time.Hour)
+	lowPriorityTs := setTestQuotaSpanLag(lowPrioritySpan, time.Hour)
 	highPriorityTs := setTestQuotaSpanLag(highPrioritySpan, time.Hour)
 
 	require.True(t, quota.AcquireEvent(context.Background(), highPrioritySpan, 5))
 	require.True(t, quota.AcquireEvent(context.Background(), highPrioritySpan, 10))
 	_, _, admitted := quota.AcquireScan(
-		newTestQuotaRegionWithPriority(warmingSpan, cdcpb.ScanPriority_SCAN_PRIORITY_LOW),
-		warmingTs,
+		newTestQuotaRegionWithPriority(lowPrioritySpan, cdcpb.ScanPriority_SCAN_PRIORITY_LOW),
+		lowPriorityTs,
 	)
 	require.False(t, admitted)
 
@@ -131,10 +131,10 @@ func TestMemoryQuotaAdmissionLevels(t *testing.T) {
 
 	quota.ReleaseEvent(20)
 	state := getMemoryQuotaTestState(quota)
-	require.Equal(t, admissionPauseWarming, state.level)
+	require.Equal(t, admissionPauseLowPriority, state.level)
 	quota.ReleaseEvent(45)
 	state = getMemoryQuotaTestState(quota)
-	require.Equal(t, admissionPauseWarming, state.level)
+	require.Equal(t, admissionPauseLowPriority, state.level)
 	quota.ReleaseEvent(10)
 	state = getMemoryQuotaTestState(quota)
 	require.Equal(t, admissionNormal, state.level)
@@ -299,7 +299,7 @@ func TestMemoryQuotaConcurrentWaitersDoNotLoseWakeups(t *testing.T) {
 	require.Zero(t, state.used)
 }
 
-func TestMemoryQuotaWarmingScanUsesCurrentPressure(t *testing.T) {
+func TestMemoryQuotaLowPriorityScanUsesCurrentPressure(t *testing.T) {
 	quota := newMemoryQuotaController(100, 20)
 	span := newTestQuotaSpan(1)
 	currentTs := setTestQuotaSpanLag(span, time.Hour)
@@ -309,7 +309,7 @@ func TestMemoryQuotaWarmingScanUsesCurrentPressure(t *testing.T) {
 	require.True(t, admitted)
 	require.NotZero(t, bytes1)
 	state := getMemoryQuotaTestState(quota)
-	require.Greater(t, state.scanUsed, quota.pauseWarmingLimit)
+	require.Greater(t, state.scanUsed, quota.pauseLowPriorityLimit)
 
 	_, _, admitted = quota.AcquireScan(region, currentTs)
 	require.False(t, admitted)
@@ -362,7 +362,7 @@ func TestAdmissionWaitsForMemoryAndReleasesScanMemory(t *testing.T) {
 	}()
 	select {
 	case <-result:
-		t.Fatal("warming scan should wait while memory is under pressure")
+		t.Fatal("low-priority scan should wait while memory is under pressure")
 	case <-time.After(100 * time.Millisecond):
 	}
 
@@ -405,7 +405,7 @@ func TestAdmissionWakesWhenBlockedSpanStops(t *testing.T) {
 	}()
 	select {
 	case <-result:
-		t.Fatal("warming scan should wait while memory is under pressure")
+		t.Fatal("low-priority scan should wait while memory is under pressure")
 	case <-time.After(100 * time.Millisecond):
 	}
 
