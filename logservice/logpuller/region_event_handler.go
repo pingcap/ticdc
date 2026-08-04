@@ -29,7 +29,7 @@ import (
 )
 
 var (
-	metricsEventCount      = metrics.PullerEventCounter.WithLabelValues("event")
+	metricsEventCount = metrics.PullerEventCounter.WithLabelValues("event")
 
 	metricRegionEventHandleDurationEntries  = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("entries")
 	metricRegionEventHandleDurationResolved = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("resolved")
@@ -125,7 +125,6 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	}
 
 	newResolvedTs := uint64(0)
-	wasInitialized := span.initialized.Load()
 	memoryBytes := uint64(0)
 	for _, event := range events {
 		memoryBytes += event.memoryBytes
@@ -148,9 +147,6 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		} else {
 			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
 		}
-	}
-	if !wasInitialized && span.initialized.Load() {
-		h.eventSink.memoryQuota.NotifyScanAdmission()
 	}
 	tryAdvanceResolvedTs := func() {
 		if newResolvedTs != 0 {

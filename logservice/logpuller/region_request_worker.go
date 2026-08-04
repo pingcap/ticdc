@@ -40,7 +40,7 @@ const storeReconnectBackoff = time.Second
 var workerIDGen atomic.Uint64
 
 var (
-	metricsResolvedTsCount = metrics.PullerEventCounter.WithLabelValues("resolved_ts")
+	metricsResolvedTsCount  = metrics.PullerEventCounter.WithLabelValues("resolved_ts")
 	metricBatchResolvedSize = metrics.BatchResolvedEventSize.WithLabelValues("event-store")
 )
 
@@ -125,7 +125,7 @@ func newRegionRequestWorker(
 			currentWindow,
 			maxWindowMultiplier,
 			memoryQuota,
-			upstream.pdClock.CurrentTS,
+			upstream.pdClock,
 		),
 		controlQueue: newControlQueue(),
 		tracker:      newRegionTracker(),

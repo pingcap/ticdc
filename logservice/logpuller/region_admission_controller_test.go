@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -64,11 +65,12 @@ func newTestRegionAdmissionController(
 	currentWindow int,
 	maxWindowMultiplier int,
 ) *regionAdmissionController {
+	clock := pdutil.NewClock4Test()
 	return newRegionAdmissionController(
 		currentWindow,
 		maxWindowMultiplier,
 		newMemoryQuotaController(1024*1024*1024, 8*1024*1024),
-		func() uint64 { return 0 },
+		clock,
 	)
 }
 
