@@ -176,7 +176,7 @@ func completeSaramaSASLConfig(ctx context.Context, config *sarama.Config, o *opt
 				p   sarama.AccessTokenProvider
 				err error
 			)
-			if o.SASL.OAuthProvider == saslOAuthProviderAWSMSKIAM {
+			if o.SASL.OAuthProvider == SASLOAuthProviderAWSMSKIAM {
 				p = newAWSMSKIAMTokenProvider(ctx, o.SASL.AWSMSKIAM)
 			} else {
 				p, err = newTokenProvider(ctx, o)

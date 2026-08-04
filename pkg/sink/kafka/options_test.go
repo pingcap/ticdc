@@ -357,7 +357,7 @@ func TestApplyAWSMSKIAM(t *testing.T) {
 			name: "default credential chain",
 			kafkaConfig: &config.KafkaConfig{
 				SASLMechanism:     aws.String(SASLTypeOAuth),
-				SASLOAuthProvider: aws.String(saslOAuthProviderAWSMSKIAM),
+				SASLOAuthProvider: aws.String("AWS_MSK_IAM"),
 				AWSRegion:         aws.String("ap-northeast-1"),
 				EnableTLS:         aws.Bool(true),
 			},
@@ -366,7 +366,7 @@ func TestApplyAWSMSKIAM(t *testing.T) {
 			name: "assume role",
 			kafkaConfig: &config.KafkaConfig{
 				SASLMechanism:      aws.String(SASLTypeOAuth),
-				SASLOAuthProvider:  aws.String(saslOAuthProviderAWSMSKIAM),
+				SASLOAuthProvider:  aws.String(SASLOAuthProviderAWSMSKIAM),
 				AWSRegion:          aws.String("ap-northeast-1"),
 				AWSRoleARN:         aws.String("arn:aws:iam::123456789012:role/TiCDCMSKProducer"),
 				AWSRoleSessionName: aws.String("ticdc"),
@@ -378,7 +378,7 @@ func TestApplyAWSMSKIAM(t *testing.T) {
 			name: "TLS disabled",
 			kafkaConfig: &config.KafkaConfig{
 				SASLMechanism:     aws.String(SASLTypeOAuth),
-				SASLOAuthProvider: aws.String(saslOAuthProviderAWSMSKIAM),
+				SASLOAuthProvider: aws.String(SASLOAuthProviderAWSMSKIAM),
 				AWSRegion:         aws.String("ap-northeast-1"),
 			},
 			expectedErr: "AWS MSK IAM authentication requires TLS",
@@ -387,7 +387,7 @@ func TestApplyAWSMSKIAM(t *testing.T) {
 			name: "missing region",
 			kafkaConfig: &config.KafkaConfig{
 				SASLMechanism:     aws.String(SASLTypeOAuth),
-				SASLOAuthProvider: aws.String(saslOAuthProviderAWSMSKIAM),
+				SASLOAuthProvider: aws.String(SASLOAuthProviderAWSMSKIAM),
 				EnableTLS:         aws.Bool(true),
 			},
 			expectedErr: "AWS region cannot be empty",
@@ -406,7 +406,7 @@ func TestApplyAWSMSKIAM(t *testing.T) {
 			name: "wrong SASL mechanism",
 			kafkaConfig: &config.KafkaConfig{
 				SASLMechanism:     aws.String(SASLTypePlaintext),
-				SASLOAuthProvider: aws.String(saslOAuthProviderAWSMSKIAM),
+				SASLOAuthProvider: aws.String(SASLOAuthProviderAWSMSKIAM),
 				AWSRegion:         aws.String("ap-northeast-1"),
 				EnableTLS:         aws.Bool(true),
 			},
@@ -416,7 +416,7 @@ func TestApplyAWSMSKIAM(t *testing.T) {
 			name: "external ID without role ARN",
 			kafkaConfig: &config.KafkaConfig{
 				SASLMechanism:     aws.String(SASLTypeOAuth),
-				SASLOAuthProvider: aws.String(saslOAuthProviderAWSMSKIAM),
+				SASLOAuthProvider: aws.String(SASLOAuthProviderAWSMSKIAM),
 				AWSRegion:         aws.String("ap-northeast-1"),
 				AWSExternalID:     aws.String("external-id"),
 				EnableTLS:         aws.Bool(true),
@@ -427,7 +427,7 @@ func TestApplyAWSMSKIAM(t *testing.T) {
 			name: "mixed OAuth providers",
 			kafkaConfig: &config.KafkaConfig{
 				SASLMechanism:     aws.String(SASLTypeOAuth),
-				SASLOAuthProvider: aws.String(saslOAuthProviderAWSMSKIAM),
+				SASLOAuthProvider: aws.String(SASLOAuthProviderAWSMSKIAM),
 				SASLOAuthClientID: aws.String("client-id"),
 				AWSRegion:         aws.String("ap-northeast-1"),
 				EnableTLS:         aws.Bool(true),
@@ -438,7 +438,7 @@ func TestApplyAWSMSKIAM(t *testing.T) {
 			name: "AWS provider with standard OAuth scopes",
 			kafkaConfig: &config.KafkaConfig{
 				SASLMechanism:     aws.String(SASLTypeOAuth),
-				SASLOAuthProvider: aws.String(saslOAuthProviderAWSMSKIAM),
+				SASLOAuthProvider: aws.String(SASLOAuthProviderAWSMSKIAM),
 				SASLOAuthScopes:   []string{"scope"},
 				AWSRegion:         aws.String("ap-northeast-1"),
 				EnableTLS:         aws.Bool(true),
@@ -463,7 +463,7 @@ func TestApplyAWSMSKIAM(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, saslOAuthProviderAWSMSKIAM, options.SASL.OAuthProvider)
+			require.Equal(t, SASLOAuthProviderAWSMSKIAM, options.SASL.OAuthProvider)
 			require.Equal(t, *test.kafkaConfig.AWSRegion, options.SASL.AWSMSKIAM.Region)
 			require.True(t, options.EnableTLS)
 		})

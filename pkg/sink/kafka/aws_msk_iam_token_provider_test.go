@@ -39,7 +39,7 @@ func TestCompleteSaramaSASLConfigUsesAWSMSKIAMProvider(t *testing.T) {
 	saramaConfig := sarama.NewConfig()
 	options := NewOptions()
 	options.SASL.SASLMechanism = security.OAuthMechanism
-	options.SASL.OAuthProvider = saslOAuthProviderAWSMSKIAM
+	options.SASL.OAuthProvider = SASLOAuthProviderAWSMSKIAM
 	options.SASL.AWSMSKIAM = security.AWSMSKIAM{
 		Region:          "ap-northeast-1",
 		RoleARN:         "arn:aws:iam::123456789012:role/TiCDCMSKProducer",
