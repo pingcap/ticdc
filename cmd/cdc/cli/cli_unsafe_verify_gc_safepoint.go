@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
+	"github.com/pingcap/ticdc/pkg/upstream"
 	tidbkv "github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
 	"github.com/pingcap/tidb/pkg/store/driver"
@@ -128,6 +129,9 @@ func listDatabasesAtSnapshot(
 		return 0, cerrors.WrapError(cerrors.ErrNewStore, err)
 	}
 	defer func() { _ = tiStore.Close() }()
+	if err := upstream.DisablePDRouterClient(tiStore); err != nil {
+		return 0, cerrors.WrapError(cerrors.ErrNewStore, err)
+	}
 
 	databases, err := meta.NewReader(tiStore.GetSnapshot(tidbkv.NewVersion(snapshotTS))).ListDatabases()
 	if err != nil {
