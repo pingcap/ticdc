@@ -136,10 +136,12 @@ func (s *regionRequestScheduler) Run(ctx context.Context, workerGroup *errgroup.
 			s.failureHandler.Report(newRegionErrorInfo(region, &storeStreamErr{}))
 			continue
 		}
-		log.Debug("subscription client will request a region",
-			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
-			zap.Uint64("regionID", region.verID.GetID()),
-			zap.String("addr", region.rpcCtx.Addr))
+		if log.GetLevel() <= zapcore.DebugLevel {
+			log.Debug("subscription client will request a region",
+				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
+				zap.Uint64("regionID", region.verID.GetID()),
+				zap.String("addr", region.rpcCtx.Addr))
+		}
 	}
 }
 
