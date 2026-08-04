@@ -14,13 +14,8 @@
 package logpuller
 
 import (
-	"time"
-
 	"github.com/pingcap/kvproto/pkg/cdcpb"
-	"github.com/tikv/client-go/v2/oracle"
 )
-
-const lowLagRegionThreshold = 30 * time.Minute
 
 func normalizeScanPriority(priority cdcpb.ScanPriority) cdcpb.ScanPriority {
 	if priority == cdcpb.ScanPriority_SCAN_PRIORITY_HIGH {
@@ -74,13 +69,4 @@ func (pt *regionPriorityTask) LessThan(other *regionPriorityTask) bool {
 		return isHighScanPriority(pt.regionInfo.scanPriority)
 	}
 	return pt.sequence < other.sequence
-}
-
-func regionScanLag(currentTs, checkpointTs uint64) time.Duration {
-	currentTime := oracle.GetTimeFromTS(currentTs)
-	checkpointTime := oracle.GetTimeFromTS(checkpointTs)
-	if !currentTime.After(checkpointTime) {
-		return 0
-	}
-	return currentTime.Sub(checkpointTime)
 }

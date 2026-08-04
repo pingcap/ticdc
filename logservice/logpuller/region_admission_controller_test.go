@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/stretchr/testify/require"
@@ -38,6 +39,7 @@ func createTestRegionInfo(subID SubscriptionID, regionID uint64) regionInfo {
 		span,
 		nil,
 		&subscribedSpan{subID: subID, startTs: 100, span: span},
+		false,
 	)
 }
 
@@ -54,7 +56,7 @@ func submitRegionForAdmission(
 	currentTs uint64,
 ) {
 	t.Helper()
-	task := newRegionPriorityTask(region, currentTs, region.verID.GetID())
+	task := newRegionPriorityTask(region, region.verID.GetID())
 	require.True(t, controller.submit(task))
 }
 
@@ -132,11 +134,10 @@ func TestRegionAdmissionControllerLowLagUsesMaxWindow(t *testing.T) {
 	require.True(t, req3.abort())
 }
 
-func TestRegionAdmissionControllerPrioritizesInitializedRegion(t *testing.T) {
+func TestRegionAdmissionControllerPrioritizesHighPriorityRegion(t *testing.T) {
 	controller := newTestRegionAdmissionController(1, 2)
 	currentTs := oracle.GoTimeToTS(time.Now())
 	slowCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Hour))
-	lowLagCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Minute))
 
 	submitRegionForAdmission(t, controller,
 		prepareRegionForAdmission(createTestRegionInfo(1, 1), slowCheckpointTs),
@@ -145,12 +146,12 @@ func TestRegionAdmissionControllerPrioritizesInitializedRegion(t *testing.T) {
 	require.NoError(t, err)
 
 	submitRegionForAdmission(t, controller,
-		prepareRegionForAdmission(createTestRegionInfo(1, 2), lowLagCheckpointTs),
+		prepareRegionForAdmission(createTestRegionInfo(1, 2), slowCheckpointTs),
 		currentTs)
-	initializedRegion := prepareRegionForAdmission(createTestRegionInfo(1, 3), slowCheckpointTs)
-	initializedRegion.wasInitialized = true
+	highPriorityRegion := prepareRegionForAdmission(createTestRegionInfo(1, 3), slowCheckpointTs)
+	highPriorityRegion.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
 	submitRegionForAdmission(t, controller,
-		initializedRegion, currentTs)
+		highPriorityRegion, currentTs)
 
 	req2, err := controller.pop(t.Context(), nil)
 	require.NoError(t, err)
@@ -204,7 +205,7 @@ func TestRegionAdmissionControllerClose(t *testing.T) {
 	controller := newTestRegionAdmissionController(1, 1)
 	controller.close()
 	region := prepareRegionForAdmission(createTestRegionInfo(1, 1), 1)
-	require.False(t, controller.submit(newRegionPriorityTask(region, 1, 1)))
+	require.False(t, controller.submit(newRegionPriorityTask(region, 1)))
 
 	_, err := controller.pop(context.Background(), nil)
 	require.ErrorIs(t, err, context.Canceled)

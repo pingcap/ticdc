@@ -71,13 +71,6 @@ var (
 			Name:      "memory_quota",
 			Help:      "The log puller local memory quota usage.",
 		}, []string{"type"})
-	LogPullerMemoryQuotaAdmissionLevel = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "log_puller",
-			Name:      "memory_quota_admission_level",
-			Help:      "The log puller scan admission level: 0 normal, 1 pause warming scans, 2 pause all scans.",
-		})
 	LogPullerMemoryQuotaEventWaiterCount = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -186,7 +179,6 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(LogPullerMatcherCount)
 	registry.MustRegister(LogPullerResolvedTsLag)
 	registry.MustRegister(LogPullerMemoryQuota)
-	registry.MustRegister(LogPullerMemoryQuotaAdmissionLevel)
 	registry.MustRegister(LogPullerMemoryQuotaEventWaiterCount)
 	registry.MustRegister(LogPullerMemoryQuotaEventWaitDuration)
 	registry.MustRegister(SubscriptionClientRequestedRegionCount)

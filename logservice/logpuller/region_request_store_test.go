@@ -22,8 +22,8 @@ import (
 )
 
 func TestRegionRequestStoreDistributesRegionsAcrossWorkers(t *testing.T) {
-	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
-	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
+	worker1 := &regionRequestWorker{admission: newTestRegionAdmissionController(1, 1)}
+	worker2 := &regionRequestWorker{admission: newTestRegionAdmissionController(1, 1)}
 	store := &regionRequestStore{
 		workers: []*regionRequestWorker{worker1, worker2},
 	}
@@ -39,8 +39,8 @@ func TestRegionRequestStoreDistributesRegionsAcrossWorkers(t *testing.T) {
 }
 
 func TestRegionRequestStoreRequestedRegionCountIncludesPendingAndInflight(t *testing.T) {
-	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
-	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
+	worker1 := &regionRequestWorker{admission: newTestRegionAdmissionController(2, 1)}
+	worker2 := &regionRequestWorker{admission: newTestRegionAdmissionController(2, 1)}
 	store := &regionRequestStore{
 		workers: []*regionRequestWorker{worker1, worker2},
 	}
@@ -59,8 +59,8 @@ func TestRegionRequestStoreRequestedRegionCountIncludesPendingAndInflight(t *tes
 }
 
 func TestRegionRequestStoreCloseClosesWorkerAdmissions(t *testing.T) {
-	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
-	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
+	worker1 := &regionRequestWorker{admission: newTestRegionAdmissionController(1, 1)}
+	worker2 := &regionRequestWorker{admission: newTestRegionAdmissionController(1, 1)}
 	store := &regionRequestStore{
 		workers: []*regionRequestWorker{worker1, worker2},
 	}

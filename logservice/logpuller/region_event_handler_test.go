@@ -88,6 +88,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 		span,
 		&tikv.RPCContext{},
 		subSpan,
+		false,
 	)
 	region.lockedRangeState = &regionlock.LockedRangeState{}
 	state := newRegionFeedState(region, 1, worker, nil)
@@ -424,13 +425,40 @@ func TestHandleEntriesReleasesMemoryAfterDownstreamCallback(t *testing.T) {
 	require.Zero(t, quotaState.used)
 }
 
-func TestTryMarkSpanInitializedByResolvedTs(t *testing.T) {
-	span := &subscribedSpan{subID: 1, startTs: 100}
-	require.False(t, span.tryMarkInitialized(1, 100))
+func TestSpanInitializedAfterFullRangeCoverage(t *testing.T) {
+	const startTs = 100
+	span := &subscribedSpan{
+		subID:   1,
+		startTs: startTs,
+		span: heartbeatpb.TableSpan{
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+		},
+	}
+	firstState := newRegionFeedState(regionInfo{
+		verID: tikv.NewRegionVerID(1, 1, 1),
+		span: heartbeatpb.TableSpan{
+			StartKey: []byte("a"),
+			EndKey:   []byte("m"),
+		},
+		subscribedSpan:   span,
+		lockedRangeState: &regionlock.LockedRangeState{},
+	}, uint64(span.subID), &regionRequestWorker{}, nil)
+	secondState := newRegionFeedState(regionInfo{
+		verID: tikv.NewRegionVerID(2, 1, 1),
+		span: heartbeatpb.TableSpan{
+			StartKey: []byte("m"),
+			EndKey:   []byte("z"),
+		},
+		subscribedSpan:   span,
+		lockedRangeState: &regionlock.LockedRangeState{},
+	}, uint64(span.subID), &regionRequestWorker{}, nil)
+
+	span.markRegionInitialized(firstState)
 	require.False(t, span.initialized.Load())
-	require.True(t, span.tryMarkInitialized(1, 101))
+
+	span.markRegionInitialized(secondState)
 	require.True(t, span.initialized.Load())
-	require.False(t, span.tryMarkInitialized(1, 102))
 }
 
 func TestSpanInitializationNotifiesMemoryAdmission(t *testing.T) {
@@ -443,11 +471,11 @@ func TestSpanInitializationNotifiesMemoryAdmission(t *testing.T) {
 	rangeLock := regionlock.NewRangeLock(1, []byte("a"), []byte("z"), startTs)
 	lockResult := rangeLock.LockRange(t.Context(), []byte("a"), []byte("z"), 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, lockResult.Status)
-	lockResult.LockedRangeState.Initialized.Store(true)
 
 	span := &subscribedSpan{
 		subID:             1,
 		startTs:           startTs,
+		span:              heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("z")},
 		rangeLock:         rangeLock,
 		consumeKVEvents:   func([]common.RawKVEntry, func()) bool { return false },
 		advanceResolvedTs: func(uint64) {},
@@ -455,14 +483,17 @@ func TestSpanInitializationNotifiesMemoryAdmission(t *testing.T) {
 	span.resolvedTs.Store(startTs)
 	state := newRegionFeedState(regionInfo{
 		verID:            tikv.NewRegionVerID(1, 1, 1),
+		span:             span.span,
 		subscribedSpan:   span,
 		lockedRangeState: lockResult.LockedRangeState,
 	}, uint64(span.subID), &regionRequestWorker{}, nil)
 	handler := &regionEventHandler{eventSink: &regionEventSink{memoryQuota: quota}}
 
 	require.False(t, handler.Handle(span, regionEvent{
-		states:     []*regionFeedState{state},
-		resolvedTs: startTs + 1,
+		states: []*regionFeedState{state},
+		entries: &cdcpb.Event_Entries_{Entries: &cdcpb.Event_Entries{
+			Entries: []*cdcpb.Event_Row{{Type: cdcpb.Event_INITIALIZED}},
+		}},
 	}))
 	require.True(t, span.initialized.Load())
 	select {

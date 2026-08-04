@@ -272,7 +272,7 @@ func errCacheLen(handler *regionFailureHandler) int {
 }
 
 func TestRegionRequestWorkerIgnoresDuplicateActiveRegion(t *testing.T) {
-	admission := newRegionAdmissionController(10, 1)
+	admission := newTestRegionAdmissionController(10, 1)
 	worker := &regionRequestWorker{
 		admission: admission,
 		storeAddr: "store-1",
@@ -431,7 +431,7 @@ func benchmarkDispatchResolvedTsEvent(b *testing.B, regionCount int, useLegacy b
 }
 
 func TestWaitForRegionRequestDrainsIdleControlQueue(t *testing.T) {
-	admission := newRegionAdmissionController(1, 1)
+	admission := newTestRegionAdmissionController(1, 1)
 	worker := &regionRequestWorker{
 		admission:    admission,
 		controlQueue: newControlQueue(),
@@ -513,7 +513,7 @@ func BenchmarkDispatchResolvedTsEventSmallBatchCurrent(b *testing.B) {
 }
 
 func TestStoppedStateRemovesSentRequest(t *testing.T) {
-	admission := newRegionAdmissionController(10, 1)
+	admission := newTestRegionAdmissionController(10, 1)
 	worker := &regionRequestWorker{
 		admission: admission,
 		tracker:   newRegionTracker(),
@@ -539,7 +539,7 @@ func TestRunStreamFailurePushesTrackedRegionToEventSink(t *testing.T) {
 		upstream:       &upstreamHandle{pd: pdClient, credential: &security.Credential{}},
 		eventSink:      &regionEventSink{ds: ds},
 		failureHandler: handler,
-		admission:      newRegionAdmissionController(10, 1),
+		admission:      newTestRegionAdmissionController(10, 1),
 		controlQueue:   newControlQueue(),
 		tracker:        newRegionTracker(),
 		storeAddr:      "127.0.0.1:1",
@@ -589,7 +589,7 @@ func TestRunStreamFailureReportsPendingRegionsToFailureHandler(t *testing.T) {
 		upstream:       &upstreamHandle{pd: pdClient, credential: &security.Credential{}},
 		eventSink:      &regionEventSink{ds: &mockDynamicStream{}},
 		failureHandler: handler,
-		admission:      newRegionAdmissionController(10, 1),
+		admission:      newTestRegionAdmissionController(10, 1),
 		controlQueue:   newControlQueue(),
 		tracker:        newRegionTracker(),
 		storeAddr:      "127.0.0.1:1",
@@ -618,7 +618,7 @@ func TestRunStreamFailureReportsPendingRegionsToFailureHandler(t *testing.T) {
 }
 
 func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
-	admission := newRegionAdmissionController(10, 1)
+	admission := newTestRegionAdmissionController(10, 1)
 	worker := &regionRequestWorker{
 		admission:    admission,
 		controlQueue: newControlQueue(),
@@ -649,7 +649,7 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 }
 
 func TestProcessRegionSendTaskDoesNotSendRemovedRequest(t *testing.T) {
-	admission := newRegionAdmissionController(1, 1)
+	admission := newTestRegionAdmissionController(1, 1)
 	worker := &regionRequestWorker{
 		admission:    admission,
 		controlQueue: newControlQueue(),
@@ -697,7 +697,7 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			admission := newRegionAdmissionController(10, 1)
+			admission := newTestRegionAdmissionController(10, 1)
 			worker := &regionRequestWorker{
 				admission:    admission,
 				controlQueue: newControlQueue(),
@@ -732,7 +732,7 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 func TestProcessRegionSendTaskHandlesDeregisterFromControlQueue(t *testing.T) {
 	ds := &mockRegionEventDynamicStream{}
 	worker := &regionRequestWorker{
-		admission:    newRegionAdmissionController(1, 1),
+		admission:    newTestRegionAdmissionController(1, 1),
 		controlQueue: newControlQueue(),
 		storeAddr:    "store-1",
 		upstream:     &upstreamHandle{clusterID: 42},
