@@ -769,17 +769,6 @@ func merge[T int | bool | string](dst, src *T) {
 	}
 }
 
-func mergeDuration(dst, src *string) error {
-	if src == nil {
-		return nil
-	}
-	if _, err := time.ParseDuration(*src); err != nil {
-		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
-	}
-	*dst = *src
-	return nil
-}
-
 // setWorkerCountByDownstream sets WorkerCount based on downstream type when it is not explicitly specified by user.
 func (c *Config) setWorkerCountByDownstream() {
 	if c.workerCountSpecified {
