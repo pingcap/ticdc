@@ -36,13 +36,13 @@ import (
 
 const storeReconnectBackoff = time.Second
 
+// To generate a workerID in `newRegionRequestWorker`.
+var workerIDGen atomic.Uint64
+
 var (
 	metricsResolvedTsCount  = metrics.PullerEventCounter.WithLabelValues("resolved_ts")
 	metricBatchResolvedSize = metrics.BatchResolvedEventSize.WithLabelValues("event-store")
 )
-
-// To generate a workerID in `newRegionRequestWorker`.
-var workerIDGen atomic.Uint64
 
 type deregisterRequest struct {
 	subID      SubscriptionID
@@ -315,8 +315,6 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					zap.Uint64("regionID", event.RegionId),
 					zap.Any("error", eventData.Error))
 				state.markStopped(&eventError{err: eventData.Error})
-				s.eventSink.Push(subscriptionID, regionEvent)
-				continue
 			case *cdcpb.Event_ResolvedTs:
 				regionEvent.resolvedTs = eventData.ResolvedTs
 			case *cdcpb.Event_LongTxn_:
@@ -325,20 +323,19 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
 			s.eventSink.Push(subscriptionID, regionEvent)
-			continue
-		}
-
-		switch event.Event.(type) {
-		case *cdcpb.Event_Error:
-			log.Debug("region request worker receives an error for a stale region, ignore it",
-				zap.Uint64("workerID", s.workerID),
-				zap.Uint64("subscriptionID", uint64(subscriptionID)),
-				zap.Uint64("regionID", event.RegionId))
-		default:
-			log.Warn("region request worker receives a region event for an untracked region",
-				zap.Uint64("workerID", s.workerID),
-				zap.Uint64("subscriptionID", uint64(subscriptionID)),
-				zap.Uint64("regionID", event.RegionId))
+		} else {
+			switch event.Event.(type) {
+			case *cdcpb.Event_Error:
+				log.Debug("region request worker receives an error for a stale region, ignore it",
+					zap.Uint64("workerID", s.workerID),
+					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Uint64("regionID", event.RegionId))
+			default:
+				log.Warn("region request worker receives a region event for an untracked region",
+					zap.Uint64("workerID", s.workerID),
+					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Uint64("regionID", event.RegionId))
+			}
 		}
 	}
 }
@@ -347,6 +344,7 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	subscriptionID := SubscriptionID(resolvedTsEvent.RequestId)
 	metricsResolvedTsCount.Add(float64(len(resolvedTsEvent.Regions)))
 	metricBatchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
+	// TODO: resolvedTsEvent.Ts be 0 is impossible, we need find the root cause.
 	if resolvedTsEvent.Ts == 0 {
 		log.Warn("region request worker receives a resolved ts event with zero value, ignore it",
 			zap.Uint64("workerID", s.workerID),
@@ -356,6 +354,8 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	}
 
 	const resolvedTsStateBatchSize = 1024
+	// Avoid allocating a huge states slice when resolvedTsEvent.Regions is large.
+	// Push resolved-ts events in batches to reduce peak memory usage and improve GC behavior.
 	capHint := min(len(resolvedTsEvent.Regions), resolvedTsStateBatchSize)
 	resolvedStates := make([]*regionFeedState, 0, capHint)
 	flush := func() {
@@ -483,12 +483,12 @@ func (s *regionRequestWorker) processRegionSendTask(
 			if err := s.sendRegionRequest(conn, regionReq); err != nil {
 				return err
 			}
-			regionReq = nil
 		}
 
 		// Flush pending deregisters before admitting the next region request.
-		// Sending a region request after a deregister is safe because
-		// sendRegionRequest re-checks subscription liveness before tracker.Add and Send.
+		// Admission may still contain stale tasks from a stopped subscription, but
+		// sendRegionRequest re-checks subscription liveness before tracker.Add/Send,
+		// so those tasks are dropped locally instead of recreating remote registrations.
 		for {
 			req, ok := s.controlQueue.tryPop()
 			if !ok {
@@ -500,6 +500,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 		}
 
 		// Block for the next request, but wake early when deregisters arrive.
+		// regionReq above is already consumed and will be replaced by the next pop.
 		var err error
 		regionReq, err = s.admission.pop(ctx, s.controlQueue.ready())
 		if err != nil {
