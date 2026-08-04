@@ -165,3 +165,83 @@ func TestRegionRequestSchedulerReschedulesRegionWhenStoreSubmitFails(t *testing.
 	cancel()
 	require.ErrorIs(t, <-errCh, context.Canceled)
 }
+
+func TestRegionRequestSchedulerSkipsStoppedSubscriptionBeforeCreatingStore(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, cluster, pdClient, _ := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
+	pdClient = &mockPDClient{Client: pdClient, versionGen: defaultVersionGen}
+	defer pdClient.Close()
+
+	const storeAddr = "store-1"
+	cluster.AddStore(1, storeAddr)
+	cluster.Bootstrap(11, []uint64{1}, []uint64{2}, 2)
+
+	regionCache := tikv.NewRegionCache(pdClient)
+	defer regionCache.Close()
+
+	bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
+	location, err := regionCache.LocateKey(bo, []byte("a"))
+	require.NoError(t, err)
+
+	rawSpan := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("b"),
+	}
+	span := &subscribedSpan{
+		subID:          SubscriptionID(1),
+		startTs:        100,
+		span:           rawSpan,
+		rangeLock:      regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
+		priorityPolicy: newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute),
+	}
+	lockRes := span.rangeLock.LockRange(
+		context.Background(), rawSpan.StartKey, rawSpan.EndKey, location.Region.GetID(), location.Region.GetVer())
+	require.Equal(t, regionlock.LockRangeStatusSuccess, lockRes.Status)
+	span.stopped.Store(true)
+	require.False(t, span.rangeLock.Stop())
+
+	drainedCh := make(chan *subscribedSpan, 1)
+	handler := newRegionFailureHandler(nil, func(rt *subscribedSpan) {
+		drainedCh <- rt
+	}, nil, nil)
+	scheduler := &regionRequestScheduler{
+		upstream: &upstreamHandle{
+			pd:          pdClient,
+			regionCache: regionCache,
+		},
+		failureHandler: handler,
+		taskQueue:      priorityqueue.New[*regionPriorityTask](),
+	}
+
+	region := newRegionInfo(location.Region, rawSpan, nil, span, false)
+	region.lockedRangeState = lockRes.LockedRangeState
+	scheduler.taskQueue.Push(newRegionPriorityTask(region, 1))
+
+	var workerGroup errgroup.Group
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- scheduler.Run(ctx, &workerGroup)
+	}()
+
+	select {
+	case drained := <-drainedCh:
+		require.Same(t, span, drained)
+	case <-time.After(time.Second):
+		t.Fatal("stopped subscription was not drained")
+	}
+
+	_, ok := scheduler.stores.Load(storeAddr)
+	require.False(t, ok)
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("scheduler exited unexpectedly: %v", err)
+	default:
+	}
+
+	cancel()
+	require.ErrorIs(t, <-errCh, context.Canceled)
+}

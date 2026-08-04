@@ -95,7 +95,13 @@ func (s *regionRequestScheduler) Submit(region regionInfo) {
 }
 
 func (s *regionRequestScheduler) Run(ctx context.Context, workerGroup *errgroup.Group) error {
-	defer s.closeStores()
+	defer func() {
+		s.stores.Range(func(_, value any) bool {
+			value.(*regionRequestStore).close()
+			return true
+		})
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -116,6 +122,10 @@ func (s *regionRequestScheduler) Run(ctx context.Context, workerGroup *errgroup.
 			s.failureHandler.Report(newRegionErrorInfo(region, err))
 			continue
 		}
+		if region.subscribedSpan.stopped.Load() {
+			s.failureHandler.Report(newRegionErrorInfo(region, &requestCancelledErr{}))
+			continue
+		}
 
 		store := s.getOrCreateStore(ctx, workerGroup, region.rpcCtx.Addr)
 		task.regionInfo = region
@@ -126,6 +136,10 @@ func (s *regionRequestScheduler) Run(ctx context.Context, workerGroup *errgroup.
 			s.failureHandler.Report(newRegionErrorInfo(region, &storeStreamErr{}))
 			continue
 		}
+		log.Debug("subscription client will request a region",
+			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
+			zap.Uint64("regionID", region.verID.GetID()),
+			zap.String("addr", region.rpcCtx.Addr))
 	}
 }
 
@@ -200,11 +214,4 @@ func (s *regionRequestScheduler) UpdateMetrics() {
 
 func (s *regionRequestScheduler) Close() {
 	s.taskQueue.Close()
-}
-
-func (s *regionRequestScheduler) closeStores() {
-	s.stores.Range(func(_, value any) bool {
-		value.(*regionRequestStore).close()
-		return true
-	})
 }
