@@ -503,13 +503,6 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 }
 
 func (s *sink) sendCheckpoint(ctx context.Context) error {
-	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
-	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
-	defer func() {
-		metrics.CheckpointTsMessageDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
-		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
-	}()
-
 	var (
 		msg          *codecCommon.Message
 		partitionNum int32
@@ -524,7 +517,6 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				return nil
 			}
 
-			start := time.Now()
 			msg, err = s.comp.encoder.EncodeCheckpointEvent(ts)
 			if err != nil {
 				return err
@@ -561,8 +553,6 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 					}
 				}
 			}
-			checkpointTsMessageCount.Inc()
-			checkpointTsMessageDuration.Observe(time.Since(start).Seconds())
 		}
 	}
 }

@@ -144,23 +144,6 @@ var (
 			Help:      "Batch duration for MQ worker.",
 			Buckets:   prometheus.ExponentialBuckets(0.004, 2, 10), // 4ms ~ 2s
 		}, []string{GetKeyspaceLabel(), "changefeed"})
-
-	CheckpointTsMessageDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "mq_checkpoint_ts_message_duration",
-			Help:      "Duration of sending checkpoint ts message.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{GetKeyspaceLabel(), "changefeed"})
-
-	CheckpointTsMessageCount = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "mq_checkpoint_ts_message_count",
-			Help:      "Number of checkpoint ts messages sent.",
-		}, []string{GetKeyspaceLabel(), "changefeed"})
 )
 
 // InitMetrics registers all metrics in this file.
@@ -183,8 +166,6 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(WorkerSendMessageDuration)
 	registry.MustRegister(WorkerBatchSize)
 	registry.MustRegister(WorkerBatchDuration)
-	registry.MustRegister(CheckpointTsMessageDuration)
-	registry.MustRegister(CheckpointTsMessageCount)
 
 	// pulsar sink metrics
 	initPulsarMetrics(registry)

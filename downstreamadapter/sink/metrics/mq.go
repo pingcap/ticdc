@@ -16,65 +16,25 @@ package metrics
 import (
 	"sync"
 
-	"github.com/pingcap/ticdc/pkg/sink/codec"
-	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
-	// WorkerSendMessageDuration records the duration of flushing a group messages.
-	WorkerSendMessageDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "mq_worker_send_message_duration",
-			Help:      "Send Message duration(s) for MQ worker.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{"namespace", "changefeed"})
-	// WorkerBatchSize record the size of each batched messages.
-	WorkerBatchSize = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "mq_worker_batch_size",
-			Help:      "Batch size for MQ worker.",
-			Buckets:   prometheus.ExponentialBuckets(4, 2, 10), // 4 ~ 2048
-		}, []string{"namespace", "changefeed"})
-	// WorkerBatchDuration record the time duration cost on batch messages.
-	WorkerBatchDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "mq_worker_batch_duration",
-			Help:      "Batch duration for MQ worker.",
-			Buckets:   prometheus.ExponentialBuckets(0.004, 2, 10), // 4ms ~ 2s
-		}, []string{"namespace", "changefeed"})
-)
-
-var (
 	mqServerRegistryMu sync.RWMutex
-	// mqServerRegistry is shared by all MQ sinks on the node. Bootstrap can now
-	// create multiple changefeeds concurrently, so both reads and the fallback
-	// initialization must be synchronized to avoid racing on the global pointer.
+	// mqServerRegistry is shared by all MQ sinks on the node. Bootstrap can
+	// create multiple changefeeds concurrently, so reads and initialization
+	// must be synchronized.
 	mqServerRegistry *prometheus.Registry
 )
 
-// InitMQMetrics registers all metrics in this file.
+// InitMQMetrics configures the registry used by MQ client metrics.
 func InitMQMetrics(registry *prometheus.Registry) {
 	mqServerRegistryMu.Lock()
 	mqServerRegistry = registry
 	mqServerRegistryMu.Unlock()
-
-	registry.MustRegister(WorkerSendMessageDuration)
-	registry.MustRegister(WorkerBatchSize)
-	registry.MustRegister(WorkerBatchDuration)
-	claimcheck.InitMetrics(registry)
-	codec.InitMetrics(registry)
-	kafka.InitMetrics(registry)
 }
 
-// GetMQMetricRegistry for add pulsar default metrics
+// GetMQMetricRegistry returns the registry used by MQ client metrics.
 func GetMQMetricRegistry() *prometheus.Registry {
 	mqServerRegistryMu.RLock()
 	registry := mqServerRegistry
@@ -85,8 +45,6 @@ func GetMQMetricRegistry() *prometheus.Registry {
 
 	mqServerRegistryMu.Lock()
 	defer mqServerRegistryMu.Unlock()
-	// Make sure registry is not nil when MQ sink metrics are first requested
-	// before the server metrics bootstrap wires in the shared registry.
 	if mqServerRegistry == nil {
 		mqServerRegistry = prometheus.DefaultRegisterer.(*prometheus.Registry)
 	}

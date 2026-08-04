@@ -328,17 +328,7 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 }
 
 func (s *sink) sendCheckpointTs(ctx context.Context) error {
-	var (
-		keyspace   = s.changefeedID.Keyspace()
-		changefeed = s.changefeedID.Name()
-	)
-	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(keyspace, changefeed)
-	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(keyspace, changefeed)
-	defer func() {
-		metrics.CheckpointTsMessageDuration.DeleteLabelValues(keyspace, changefeed)
-		metrics.CheckpointTsMessageCount.DeleteLabelValues(keyspace, changefeed)
-	}()
-
+	keyspace, changefeed := s.changefeedID.Keyspace(), s.changefeedID.Name()
 	var checkpoint uint64
 	for {
 		select {
@@ -376,9 +366,6 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		}
 		s.lastSendCheckpointTsTime = time.Now()
 		s.lastCheckpointTs.Store(checkpoint)
-
-		checkpointTsMessageCount.Inc()
-		checkpointTsMessageDuration.Observe(time.Since(start).Seconds())
 	}
 }
 
