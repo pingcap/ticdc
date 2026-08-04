@@ -22,10 +22,14 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
+	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/pingcap/tidb/pkg/store/mockstore/mockcopr"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -64,6 +68,38 @@ func prepareRegionForSendTest(region regionInfo) regionInfo {
 	return region
 }
 
+func TestCreateRegionRequestScanPriority(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		priority cdcpb.ScanPriority
+		expected cdcpb.ScanPriority
+	}{
+		{
+			name:     "high",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+		},
+		{
+			name:     "low",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+		},
+		{
+			name:     "unknown defaults to low",
+			priority: cdcpb.ScanPriority_SCAN_PRIORITY_UNKNOWN,
+			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
+			region.scanPriority = tc.priority
+
+			req := createRegionRequest(1, region)
+			require.Equal(t, tc.expected, req.GetScanPriority())
+		})
+	}
+}
+
 func admitRegionRequest(
 	t *testing.T,
 	controller *regionAdmissionController,
@@ -75,6 +111,99 @@ func admitRegionRequest(
 	req, err := controller.pop(t.Context(), nil)
 	require.NoError(t, err)
 	return req
+}
+
+type pushedRegionEvent struct {
+	subscriptionID SubscriptionID
+	event          regionEvent
+}
+
+type recordingRegionEventDynamicStream struct {
+	events chan pushedRegionEvent
+}
+
+func (m *recordingRegionEventDynamicStream) Start() {}
+
+func (m *recordingRegionEventDynamicStream) Close() {}
+
+func (m *recordingRegionEventDynamicStream) Push(path SubscriptionID, event regionEvent) {
+	m.events <- pushedRegionEvent{subscriptionID: path, event: event}
+}
+
+func (m *recordingRegionEventDynamicStream) Wake(SubscriptionID) {}
+
+func (m *recordingRegionEventDynamicStream) Feedback() <-chan dynstream.Feedback[int, SubscriptionID, *subscribedSpan] {
+	return nil
+}
+
+func (m *recordingRegionEventDynamicStream) AddPath(SubscriptionID, *subscribedSpan, ...dynstream.AreaSettings) error {
+	return nil
+}
+
+func (m *recordingRegionEventDynamicStream) RemovePath(SubscriptionID) error {
+	return nil
+}
+
+func (m *recordingRegionEventDynamicStream) Release(SubscriptionID) {}
+
+func (m *recordingRegionEventDynamicStream) SetAreaSettings(int, dynstream.AreaSettings) {}
+
+func (m *recordingRegionEventDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] {
+	return dynstream.Metrics[int, SubscriptionID]{}
+}
+
+func createFailureRecoveryTestRegion(t *testing.T, subID SubscriptionID, regionID uint64) regionInfo {
+	t.Helper()
+
+	fullSpan := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+	}
+	subSpan := &subscribedSpan{
+		subID:     subID,
+		startTs:   100,
+		span:      fullSpan,
+		rangeLock: regionlock.NewRangeLock(1, fullSpan.StartKey, fullSpan.EndKey, 100),
+	}
+	regionSpan := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("m"),
+	}
+	locked := subSpan.rangeLock.LockRange(context.Background(), regionSpan.StartKey, regionSpan.EndKey, regionID, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, locked.Status)
+	other := subSpan.rangeLock.LockRange(context.Background(), []byte("m"), []byte("z"), regionID+1000, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, other.Status)
+
+	region := newRegionInfo(tikv.NewRegionVerID(regionID, 1, 1), regionSpan, nil, subSpan, false)
+	region.lockedRangeState = locked.LockedRangeState
+	region.lockedRangeState.ResolvedTs.Store(100)
+	return region
+}
+
+func newFailureRecoveryTestPDClient(t *testing.T) *mockPDClient {
+	t.Helper()
+
+	_, _, pdClient, _ := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
+	return &mockPDClient{Client: pdClient, versionGen: defaultVersionGen}
+}
+
+func snapshotErrCacheRegionIDs(handler *regionFailureHandler) []uint64 {
+	handler.cache.Lock()
+	defer handler.cache.Unlock()
+
+	regionIDs := make([]uint64, 0, len(handler.cache.cache))
+	for _, errInfo := range handler.cache.cache {
+		regionIDs = append(regionIDs, errInfo.verID.GetID())
+	}
+	return regionIDs
+}
+
+func errCacheLen(handler *regionFailureHandler) int {
+	handler.cache.Lock()
+	defer handler.cache.Unlock()
+	return len(handler.cache.cache)
 }
 
 func TestRegionRequestWorkerIgnoresDuplicateActiveRegion(t *testing.T) {
@@ -333,6 +462,92 @@ func TestStoppedStateRemovesSentRequest(t *testing.T) {
 	worker.tracker.RemoveIf(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID(), state)
 
 	require.Equal(t, 0, admission.stats().inflight)
+}
+
+func TestRunStreamFailurePushesTrackedRegionToEventSink(t *testing.T) {
+	pdClient := newFailureRecoveryTestPDClient(t)
+	defer pdClient.Close()
+
+	ds := &recordingRegionEventDynamicStream{events: make(chan pushedRegionEvent, 4)}
+	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, nil, nil)
+	worker := &regionRequestWorker{
+		upstream:       &upstreamHandle{pd: pdClient, credential: &security.Credential{}},
+		eventSink:      &regionEventSink{ds: ds},
+		failureHandler: handler,
+		admission:      newRegionAdmissionController(10, 1),
+		controlQueue:   newControlQueue(),
+		tracker:        newRegionTracker(),
+		storeAddr:      "127.0.0.1:1",
+	}
+
+	sentRegion := createFailureRecoveryTestRegion(t, 1, 1)
+	sentReq := admitRegionRequest(t, worker.admission, sentRegion)
+	sentState := newRegionFeedState(sentRegion, uint64(sentRegion.subscribedSpan.subID), worker, sentReq)
+	require.True(t, worker.tracker.Add(sentRegion.subscribedSpan.subID, sentRegion.verID.GetID(), sentState))
+
+	firstRegion := createFailureRecoveryTestRegion(t, 2, 2)
+	submitRegionForAdmission(t, worker.admission, firstRegion, 100)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- worker.Run(ctx)
+	}()
+
+	var pushed pushedRegionEvent
+	select {
+	case pushed = <-ds.events:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not push tracked region after stream failure")
+	}
+
+	require.Equal(t, SubscriptionID(1), pushed.subscriptionID)
+	require.Len(t, pushed.event.states, 1)
+	require.Same(t, sentState, pushed.event.states[0])
+	require.Equal(t, 0, worker.admission.stats().inflight)
+
+	var streamErr *storeStreamErr
+	require.ErrorAs(t, sentState.takeError(), &streamErr)
+
+	cancel()
+	require.ErrorIs(t, <-runErrCh, context.Canceled)
+}
+
+func TestRunStreamFailureReportsPendingRegionsToFailureHandler(t *testing.T) {
+	pdClient := newFailureRecoveryTestPDClient(t)
+	defer pdClient.Close()
+
+	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, nil, nil)
+	worker := &regionRequestWorker{
+		upstream:       &upstreamHandle{pd: pdClient, credential: &security.Credential{}},
+		eventSink:      &regionEventSink{ds: &mockDynamicStream{}},
+		failureHandler: handler,
+		admission:      newRegionAdmissionController(10, 1),
+		controlQueue:   newControlQueue(),
+		tracker:        newRegionTracker(),
+		storeAddr:      "127.0.0.1:1",
+	}
+
+	firstRegion := createFailureRecoveryTestRegion(t, 1, 1)
+	pendingRegion := createFailureRecoveryTestRegion(t, 2, 2)
+	submitRegionForAdmission(t, worker.admission, firstRegion, 100)
+	submitRegionForAdmission(t, worker.admission, pendingRegion, 100)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- worker.Run(ctx)
+	}()
+
+	require.Eventually(t, func() bool {
+		return errCacheLen(handler) == 2
+	}, 5*time.Second, 10*time.Millisecond)
+	require.ElementsMatch(t, []uint64{1, 2}, snapshotErrCacheRegionIDs(handler))
+	require.Equal(t, 0, worker.admission.stats().pending)
+	require.Equal(t, 0, worker.admission.stats().inflight)
+
+	cancel()
+	require.ErrorIs(t, <-runErrCh, context.Canceled)
 }
 
 func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {

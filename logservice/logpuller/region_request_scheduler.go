@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -27,6 +28,7 @@ import (
 	kvclientv2 "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -77,6 +79,18 @@ func newRegionRequestScheduler(
 }
 
 func (s *regionRequestScheduler) Submit(region regionInfo) {
+	if log.GetLevel() <= zapcore.DebugLevel {
+		log.Debug("cdc region scan task enqueued",
+			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
+			zap.Int64("tableID", region.subscribedSpan.span.TableID),
+			zap.Uint64("startTs", region.subscribedSpan.startTs),
+			zap.Uint64("regionID", region.verID.GetID()),
+			zap.Uint64("regionEpochVersion", region.verID.GetVer()),
+			zap.Uint64("regionEpochConfVer", region.verID.GetConfVer()),
+			zap.String("priority", normalizeScanPriority(region.scanPriority).String()),
+			zap.String("scanPriority", region.scanPriority.String()),
+			zap.String("span", common.FormatTableSpan(&region.span)))
+	}
 	s.taskQueue.Push(newRegionPriorityTask(region, s.sequence.Add(1)))
 }
 
@@ -106,7 +120,11 @@ func (s *regionRequestScheduler) Run(ctx context.Context, workerGroup *errgroup.
 		store := s.getOrCreateStore(ctx, workerGroup, region.rpcCtx.Addr)
 		task.regionInfo = region
 		if !store.submit(task) {
-			return context.Canceled
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			s.failureHandler.Report(newRegionErrorInfo(region, &storeStreamErr{}))
+			continue
 		}
 	}
 }
