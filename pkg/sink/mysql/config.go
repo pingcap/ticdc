@@ -222,6 +222,7 @@ func (c *Config) mergeConfig(cfg *config.ChangefeedConfig) {
 			merge(&c.WriteTimeout, mConfig.WriteTimeout)
 			merge(&c.ReadTimeout, mConfig.ReadTimeout)
 			merge(&c.DialTimeout, mConfig.Timeout)
+			merge(&c.AsyncDDLTimeout, mConfig.AsyncDDLTimeout)
 			merge(&c.BatchDMLEnable, mConfig.EnableBatchDML)
 			merge(&c.MultiStmtEnable, mConfig.EnableMultiStatement)
 			merge(&c.CachePrepStmts, mConfig.EnableCachePreparedStatement)
@@ -281,12 +282,6 @@ func (c *Config) Apply(
 	}
 	if err = getDuration(query, "timeout", &c.DialTimeout); err != nil {
 		return err
-	}
-	if cfg != nil &&
-		cfg.SinkConfig != nil &&
-		cfg.SinkConfig.MySQLConfig != nil &&
-		cfg.SinkConfig.MySQLConfig.AsyncDDLTimeout != nil {
-		c.AsyncDDLTimeout = *cfg.SinkConfig.MySQLConfig.AsyncDDLTimeout
 	}
 	if err = getDuration(query, "async-ddl-timeout", &c.AsyncDDLTimeout); err != nil {
 		return err
@@ -363,30 +358,32 @@ func NewMysqlConfigAndDBs(
 
 	controlAsyncDSNStr, err := setDSNReadTimeout(dsnStr, cfg.AsyncDDLTimeout)
 	if err != nil {
-		if closeErr := dmlDB.Close(); closeErr != nil {
-			log.Warn("close mysql dml db after async ddl db dsn creation failed",
-				zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
-		}
-		if closeErr := controlDB.Close(); closeErr != nil {
-			log.Warn("close mysql control db after async ddl db dsn creation failed",
-				zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
-		}
+		closeDMLAndControlDBAfterFailure(changefeedID, dmlDB, controlDB, "async ddl db dsn creation failed")
 		return nil, nil, nil, nil, err
 	}
 	controlAsyncDB, err := CreateMysqlDBConn(controlAsyncDSNStr)
 	if err != nil {
-		if closeErr := dmlDB.Close(); closeErr != nil {
-			log.Warn("close mysql dml db after async ddl db creation failed",
-				zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
-		}
-		if closeErr := controlDB.Close(); closeErr != nil {
-			log.Warn("close mysql control db after async ddl db creation failed",
-				zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
-		}
+		closeDMLAndControlDBAfterFailure(changefeedID, dmlDB, controlDB, "async ddl db creation failed")
 		return nil, nil, nil, nil, err
 	}
 	configureControlDBConn(controlAsyncDB)
 	return cfg, dmlDB, controlDB, controlAsyncDB, nil
+}
+
+func closeDMLAndControlDBAfterFailure(
+	changefeedID common.ChangeFeedID,
+	dmlDB *sql.DB,
+	controlDB *sql.DB,
+	failureContext string,
+) {
+	if closeErr := dmlDB.Close(); closeErr != nil {
+		log.Warn("close mysql dml db after "+failureContext,
+			zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
+	}
+	if closeErr := controlDB.Close(); closeErr != nil {
+		log.Warn("close mysql control db after "+failureContext,
+			zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
+	}
 }
 
 func newMysqlConfigAndDB(
@@ -770,6 +767,17 @@ func merge[T int | bool | string](dst, src *T) {
 	if src != nil {
 		*dst = *src
 	}
+}
+
+func mergeDuration(dst, src *string) error {
+	if src == nil {
+		return nil
+	}
+	if _, err := time.ParseDuration(*src); err != nil {
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
+	}
+	*dst = *src
+	return nil
 }
 
 // setWorkerCountByDownstream sets WorkerCount based on downstream type when it is not explicitly specified by user.

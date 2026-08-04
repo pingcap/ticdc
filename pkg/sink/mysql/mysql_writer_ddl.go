@@ -253,21 +253,21 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 }
 
 func (w *Writer) getDDLExecDB(event *commonEvent.DDLEvent) *sql.DB {
-	if w.useControlAsyncDB(event) {
-		return w.controlAsyncDB
+	if w.useAsyncDB(event) {
+		return w.asyncDB
 	}
 	return w.db
 }
 
 func (w *Writer) getDDLReadTimeout(event *commonEvent.DDLEvent) string {
-	if w.useControlAsyncDB(event) {
+	if w.useAsyncDB(event) {
 		return w.cfg.AsyncDDLTimeout
 	}
 	return w.cfg.ReadTimeout
 }
 
-func (w *Writer) useControlAsyncDB(event *commonEvent.DDLEvent) bool {
-	return w.controlAsyncDB != nil &&
+func (w *Writer) useAsyncDB(event *commonEvent.DDLEvent) bool {
+	return w.asyncDB != nil &&
 		w.cfg.IsTiDB &&
 		event.GetDDLType() == timodel.ActionAddIndex
 }

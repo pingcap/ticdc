@@ -50,11 +50,11 @@ type Writer struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	db     *sql.DB
-	// controlAsyncDB is used only by the TiDB ADD INDEX execution path, whose
-	// read timeout is intentionally independent from the regular DDL/control DB.
-	controlAsyncDB *sql.DB
-	cfg            *Config
-	ChangefeedID   common.ChangeFeedID
+	// asyncDB is used only by the TiDB ADD INDEX execution path, whose
+	// read timeout is intentionally independent from the regular DB.
+	asyncDB      *sql.DB
+	cfg          *Config
+	ChangefeedID common.ChangeFeedID
 
 	syncPointTableInit     bool
 	lastCleanSyncPointTime time.Time
@@ -138,7 +138,7 @@ func (w *Writer) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaSt
 
 // SetControlAsyncDB sets the DB pool used to execute TiDB ADD INDEX DDLs.
 func (w *Writer) SetControlAsyncDB(db *sql.DB) {
-	w.controlAsyncDB = db
+	w.asyncDB = db
 }
 
 func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
