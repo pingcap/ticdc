@@ -57,6 +57,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh:      make(chan resolveLockTask, 10),
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
+		memoryQuota:            newMemoryQuotaController(0, 0),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	rawSpan := heartbeatpb.TableSpan{
@@ -305,7 +306,9 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 
 func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	client := &subscriptionClient{
-		resolveLockTaskCh: make(chan resolveLockTask, 1),
+		resolveLockTaskCh:      make(chan resolveLockTask, 1),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
+		memoryQuota:            newMemoryQuotaController(0, 0),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
@@ -457,7 +460,6 @@ func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 			},
 		},
 	}
-
 	done := make(chan struct{})
 	go func() {
 		sink.Push(SubscriptionID(1), event)

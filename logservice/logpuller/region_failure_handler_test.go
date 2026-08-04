@@ -19,7 +19,11 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/kvproto/pkg/cdcpb"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
 )
@@ -141,4 +145,78 @@ func TestRegionFailureHandlerRunDrainsErrCacheWithoutDispatcher(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("failure handler did not exit after context cancellation")
 	}
+}
+
+func TestRegionFailureHandlerDelaysNotLeaderRangeRetry(t *testing.T) {
+	pdClient := newFailureRecoveryTestPDClient(t)
+	defer pdClient.Close()
+
+	regionCache := tikv.NewRegionCache(pdClient)
+	defer regionCache.Close()
+
+	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
+	region.subscribedSpan.priorityPolicy = newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute)
+
+	rangeRetryCh := make(chan rangeTask, 2)
+	handler := newRegionFailureHandler(
+		regionCache,
+		func(*subscribedSpan) {},
+		func(context.Context, regionInfo) {
+			t.Fatal("unexpected region retry")
+		},
+		func(_ context.Context, task rangeTask) {
+			rangeRetryCh <- task
+		},
+	)
+	handler.retryDelay = func(uint32) time.Duration { return 50 * time.Millisecond }
+
+	errInfo := newRegionErrorInfo(region, &eventError{
+		err: &cdcpb.Error{NotLeader: &errorpb.NotLeader{}},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, handler.handleError(ctx, errInfo))
+	require.NoError(t, handler.handleError(ctx, errInfo))
+
+	select {
+	case <-rangeRetryCh:
+		t.Fatal("not leader retry should be delayed")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	select {
+	case task := <-rangeRetryCh:
+		require.Equal(t, region.span, task.span)
+		require.Same(t, region.subscribedSpan, task.subscribedSpan)
+	case <-time.After(time.Second):
+		t.Fatal("not leader retry was not scheduled")
+	}
+
+	select {
+	case <-rangeRetryCh:
+		t.Fatal("pending not leader retry should be deduplicated")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestRegionFailureHandlerRequestCancelledResetsRetryState(t *testing.T) {
+	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
+	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
+	key := regionRetryKey{
+		subscriptionID: region.subscribedSpan.subID,
+		regionID:       region.verID.GetID(),
+	}
+	timer := time.NewTimer(time.Hour)
+	t.Cleanup(func() { timer.Stop() })
+	handler.retries[key] = &regionRetryState{pending: true, timer: timer}
+
+	err := handler.handleError(context.Background(), newRegionErrorInfo(region, &requestCancelledErr{}))
+	require.NoError(t, err)
+
+	handler.retryMu.Lock()
+	_, ok := handler.retries[key]
+	handler.retryMu.Unlock()
+	assert.False(t, ok)
 }

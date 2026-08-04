@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -43,10 +44,47 @@ var (
 type regionFailureHandler struct {
 	cache       *errCache
 	regionCache *tikv.RegionCache
+	retryMu     sync.Mutex
+	retries     map[regionRetryKey]*regionRetryState
+	retryDelay  func(uint32) time.Duration
 
 	onTableDrained        func(*subscribedSpan)
 	scheduleRegionRequest func(context.Context, regionInfo)
 	scheduleRangeRequest  func(context.Context, rangeTask)
+}
+
+const (
+	regionRetryBaseDelay = 50 * time.Millisecond
+	regionRetryMaxDelay  = 2 * time.Second
+	regionRetryStateTTL  = 5 * time.Minute
+)
+
+type regionRetryKey struct {
+	subscriptionID SubscriptionID
+	regionID       uint64
+}
+
+type regionRetryState struct {
+	attempt    uint32
+	generation uint64
+	pending    bool
+	timer      *time.Timer
+}
+
+func notLeaderRetryDelay(attempt uint32) time.Duration {
+	if attempt == 0 {
+		attempt = 1
+	}
+	exponent := attempt - 1
+	if exponent > 16 {
+		exponent = 16
+	}
+	delay := regionRetryBaseDelay << exponent
+	if delay > regionRetryMaxDelay {
+		delay = regionRetryMaxDelay
+	}
+	half := delay / 2
+	return half + time.Duration(rand.Int64N(int64(delay-half)+1))
 }
 
 func newRegionFailureHandler(
@@ -58,9 +96,97 @@ func newRegionFailureHandler(
 	return &regionFailureHandler{
 		cache:                 newErrCache(),
 		regionCache:           regionCache,
+		retries:               make(map[regionRetryKey]*regionRetryState),
+		retryDelay:            notLeaderRetryDelay,
 		onTableDrained:        onTableDrained,
 		scheduleRegionRequest: scheduleRegionRequest,
 		scheduleRangeRequest:  scheduleRangeRequest,
+	}
+}
+
+func (r *regionFailureHandler) scheduleRegionRetry(
+	ctx context.Context,
+	region regionInfo,
+	retry func(),
+) {
+	if region.subscribedSpan == nil || region.subscribedSpan.stopped.Load() {
+		return
+	}
+	key := regionRetryKey{
+		subscriptionID: region.subscribedSpan.subID,
+		regionID:       region.verID.GetID(),
+	}
+
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	state := r.retries[key]
+	if state == nil {
+		state = &regionRetryState{}
+		r.retries[key] = state
+	}
+	if state.pending {
+		return
+	}
+	if state.timer != nil {
+		state.timer.Stop()
+	}
+	if state.attempt < 32 {
+		state.attempt++
+	}
+	state.generation++
+	generation := state.generation
+	state.pending = true
+	delay := r.retryDelay(state.attempt)
+	state.timer = time.AfterFunc(delay, func() {
+		r.retryMu.Lock()
+		current := r.retries[key]
+		if current == nil || current.generation != generation || !current.pending {
+			r.retryMu.Unlock()
+			return
+		}
+		current.pending = false
+		current.timer = time.AfterFunc(regionRetryStateTTL, func() {
+			r.expireRegionRetry(key, generation)
+		})
+		r.retryMu.Unlock()
+
+		if ctx.Err() != nil || region.subscribedSpan.stopped.Load() {
+			r.resetRegionRetry(key.subscriptionID, key.regionID)
+			return
+		}
+		retry()
+	})
+}
+
+func (r *regionFailureHandler) expireRegionRetry(key regionRetryKey, generation uint64) {
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	state := r.retries[key]
+	if state != nil && state.generation == generation && !state.pending {
+		delete(r.retries, key)
+	}
+}
+
+func (r *regionFailureHandler) resetRegionRetry(subscriptionID SubscriptionID, regionID uint64) {
+	key := regionRetryKey{subscriptionID: subscriptionID, regionID: regionID}
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	if state := r.retries[key]; state != nil {
+		if state.timer != nil {
+			state.timer.Stop()
+		}
+		delete(r.retries, key)
+	}
+}
+
+func (r *regionFailureHandler) cancelRegionRetries() {
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	for key, state := range r.retries {
+		if state.timer != nil {
+			state.timer.Stop()
+		}
+		delete(r.retries, key)
 	}
 }
 
@@ -80,6 +206,7 @@ func (r *regionFailureHandler) Report(errInfo regionErrorInfo) {
 func (r *regionFailureHandler) Run(ctx context.Context) error {
 	log.Info("region failure handler starts")
 	defer log.Info("region failure handler exits")
+	defer r.cancelRegionRetries()
 
 	handleCachedErrors := func() error {
 		for {
@@ -153,8 +280,16 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		innerErr := eerr.err
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
 			metricFeedNotLeaderCounter.Inc()
-			r.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
-			r.scheduleRegionRequest(ctx, errInfo.regionInfo)
+			leader := notLeader.GetLeader()
+			if leader == nil || leader.GetId() == 0 || leader.GetStoreId() == 0 || errInfo.rpcCtx == nil {
+				r.regionCache.InvalidateCachedRegion(errInfo.verID)
+				r.scheduleRegionRetry(ctx, errInfo.regionInfo, rescheduleRange)
+				return nil
+			}
+			r.regionCache.UpdateLeader(errInfo.verID, leader, errInfo.rpcCtx.AccessIdx)
+			r.scheduleRegionRetry(ctx, errInfo.regionInfo, func() {
+				r.scheduleRegionRequest(ctx, errInfo.regionInfo)
+			})
 			return nil
 		}
 		if innerErr.GetEpochNotMatch() != nil {
@@ -214,6 +349,9 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		return nil
 	case *requestCancelledErr:
 		// the corresponding subscription has been unsubscribed, just ignore.
+		if errInfo.subscribedSpan != nil {
+			r.resetRegionRetry(errInfo.subscribedSpan.subID, errInfo.verID.GetID())
+		}
 		return nil
 	default:
 		// TODO(qupeng): for some errors it's better to just deregister the region from TiKVs.

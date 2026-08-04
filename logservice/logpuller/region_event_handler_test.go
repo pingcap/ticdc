@@ -430,6 +430,40 @@ func TestHandleEntriesReleasesMemoryAfterDownstreamCallback(t *testing.T) {
 	require.Zero(t, quotaState.used)
 }
 
+func TestRegionEventHandlerInitializedResetsRetryState(t *testing.T) {
+	span := &subscribedSpan{
+		subID:             1,
+		span:              heartbeatpb.TableSpan{TableID: 1},
+		advanceResolvedTs: func(uint64) {},
+	}
+	failureHandler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
+	key := regionRetryKey{subscriptionID: span.subID, regionID: 1}
+	failureHandler.retries[key] = &regionRetryState{}
+
+	region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), span.span, nil, span, false)
+	region.lockedRangeState = &regionlock.LockedRangeState{}
+	region.rpcCtx = &tikv.RPCContext{Addr: "store-1"}
+	state := newRegionFeedState(region, uint64(span.subID), &regionRequestWorker{tracker: newRegionTracker()}, nil)
+
+	handler := &regionEventHandler{
+		eventSink:      &regionEventSink{memoryQuota: newMemoryQuotaController(0, 0)},
+		failureHandler: failureHandler,
+	}
+	handler.Handle(span, regionEvent{
+		states: []*regionFeedState{state},
+		entries: &cdcpb.Event_Entries_{
+			Entries: &cdcpb.Event_Entries{
+				Entries: []*cdcpb.Event_Row{{Type: cdcpb.Event_INITIALIZED}},
+			},
+		},
+	})
+
+	failureHandler.retryMu.Lock()
+	_, ok := failureHandler.retries[key]
+	failureHandler.retryMu.Unlock()
+	require.False(t, ok)
+}
+
 func TestSpanInitializedAfterFullRangeCoverage(t *testing.T) {
 	const startTs = 100
 	span := &subscribedSpan{
