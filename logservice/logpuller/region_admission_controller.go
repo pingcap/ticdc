@@ -22,6 +22,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/heap"
 	"go.uber.org/zap"
 )
@@ -100,9 +101,9 @@ type regionAdmissionController struct {
 	}
 
 	// memoryQuota gates initial scans using the log puller's global memory
-	// pressure. currentTs is sampled when a request is admitted.
+	// pressure. pdClock is sampled when a request is admitted.
 	memoryQuota *memoryQuotaController
-	currentTs   func() uint64
+	pdClock     pdutil.Clock
 	// notify wakes workers when a request is submitted or an admission slot is
 	// released. The one-element buffer prevents a wakeup from being lost between
 	// checking the admission condition and waiting on this channel. Notifications
@@ -120,7 +121,7 @@ func newRegionAdmissionController(
 	currentWindow int,
 	maxWindowMultiplier int,
 	memoryQuota *memoryQuotaController,
-	currentTs func() uint64,
+	pdClock pdutil.Clock,
 ) *regionAdmissionController {
 	if currentWindow <= 0 {
 		currentWindow = 1
@@ -136,7 +137,7 @@ func newRegionAdmissionController(
 		currentWindow: currentWindow,
 		maxWindow:     maxWindow,
 		memoryQuota:   memoryQuota,
-		currentTs:     currentTs,
+		pdClock:       pdClock,
 		notify:        make(chan struct{}, 1),
 	}
 	controller.state.pending = heap.NewHeap[*regionPriorityTask]()
@@ -205,7 +206,7 @@ func (c *regionAdmissionController) popEligibleLocked() (
 	}
 
 	scanBytes, memoryReady, admitted := c.memoryQuota.AcquireScan(
-		request.regionInfo, c.currentTs())
+		request.regionInfo, c.pdClock.CurrentTS())
 	if !admitted {
 		return nil, 0, memoryReady
 	}

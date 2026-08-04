@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -342,9 +343,9 @@ func TestAdmissionWaitsForMemoryAndReleasesScanMemory(t *testing.T) {
 	quota := newMemoryQuotaController(100, 10)
 	span := newTestQuotaSpan(1)
 	currentTs := setTestQuotaSpanLag(span, time.Hour)
-	controller := newRegionAdmissionController(1, 1, quota, func() uint64 {
-		return currentTs
-	})
+	clock := pdutil.NewClock4Test().(*pdutil.Clock4Test)
+	clock.SetTS(currentTs)
+	controller := newRegionAdmissionController(1, 1, quota, clock)
 
 	require.True(t, quota.AcquireEvent(context.Background(), span, 20))
 	region := newTestQuotaRegionWithPriority(span, cdcpb.ScanPriority_SCAN_PRIORITY_LOW)
@@ -385,9 +386,9 @@ func TestAdmissionWakesWhenBlockedSpanStops(t *testing.T) {
 	quota := newMemoryQuotaController(100, 10)
 	span := newTestQuotaSpan(1)
 	currentTs := setTestQuotaSpanLag(span, time.Hour)
-	controller := newRegionAdmissionController(1, 1, quota, func() uint64 {
-		return currentTs
-	})
+	clock := pdutil.NewClock4Test().(*pdutil.Clock4Test)
+	clock.SetTS(currentTs)
+	controller := newRegionAdmissionController(1, 1, quota, clock)
 
 	require.True(t, quota.AcquireEvent(context.Background(), span, 20))
 	require.True(t, controller.submit(newRegionPriorityTask(

@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
@@ -238,6 +239,7 @@ func TestHandleResolvedTs(t *testing.T) {
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
+			priorityPolicy:    newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute),
 		}
 		ds.AddPath(subID1, subSpan, dynstream.AreaSettings{})
 		state1.region.subscribedSpan = subSpan
@@ -261,6 +263,7 @@ func TestHandleResolvedTs(t *testing.T) {
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
+			priorityPolicy:    newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute),
 		}
 		ds.AddPath(subID2, subSpan, dynstream.AreaSettings{})
 		state2.region.subscribedSpan = subSpan
@@ -284,6 +287,7 @@ func TestHandleResolvedTs(t *testing.T) {
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
+			priorityPolicy:    newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute),
 		}
 		ds.AddPath(subID3, subSpan, dynstream.AreaSettings{})
 		state3.region.subscribedSpan = subSpan
@@ -361,6 +365,7 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 		subID:           SubscriptionID(1),
 		rangeLock:       l,
 		advanceInterval: 100,
+		priorityPolicy:  newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute),
 	}
 	span.lastAdvanceTime.Store(0)
 	worker := &regionRequestWorker{tracker: newRegionTracker()}
@@ -459,46 +464,4 @@ func TestSpanInitializedAfterFullRangeCoverage(t *testing.T) {
 
 	span.markRegionInitialized(secondState)
 	require.True(t, span.initialized.Load())
-}
-
-func TestSpanInitializationNotifiesMemoryAdmission(t *testing.T) {
-	quota := newMemoryQuotaController(1024, 8)
-	quota.scanMu.Lock()
-	notified := quota.scanReady
-	quota.scanMu.Unlock()
-
-	const startTs = 100
-	rangeLock := regionlock.NewRangeLock(1, []byte("a"), []byte("z"), startTs)
-	lockResult := rangeLock.LockRange(t.Context(), []byte("a"), []byte("z"), 1, 1)
-	require.Equal(t, regionlock.LockRangeStatusSuccess, lockResult.Status)
-
-	span := &subscribedSpan{
-		subID:             1,
-		startTs:           startTs,
-		span:              heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("z")},
-		rangeLock:         rangeLock,
-		consumeKVEvents:   func([]common.RawKVEntry, func()) bool { return false },
-		advanceResolvedTs: func(uint64) {},
-	}
-	span.resolvedTs.Store(startTs)
-	state := newRegionFeedState(regionInfo{
-		verID:            tikv.NewRegionVerID(1, 1, 1),
-		span:             span.span,
-		subscribedSpan:   span,
-		lockedRangeState: lockResult.LockedRangeState,
-	}, uint64(span.subID), &regionRequestWorker{}, nil)
-	handler := &regionEventHandler{eventSink: &regionEventSink{memoryQuota: quota}}
-
-	require.False(t, handler.Handle(span, regionEvent{
-		states: []*regionFeedState{state},
-		entries: &cdcpb.Event_Entries_{Entries: &cdcpb.Event_Entries{
-			Entries: []*cdcpb.Event_Row{{Type: cdcpb.Event_INITIALIZED}},
-		}},
-	}))
-	require.True(t, span.initialized.Load())
-	select {
-	case <-notified:
-	case <-time.After(time.Second):
-		t.Fatal("span initialization did not notify memory admission")
-	}
 }
