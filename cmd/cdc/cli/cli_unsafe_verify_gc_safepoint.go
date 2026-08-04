@@ -21,7 +21,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/upstream"
 	tidbkv "github.com/pingcap/tidb/pkg/kv"
@@ -68,23 +68,23 @@ func (o *verifyGCSafepointOptions) run(cmd *cobra.Command) error {
 	ctx := cmd.Context()
 	keyspaceMeta, err := o.pdClient.LoadKeyspace(ctx, o.keyspace)
 	if err != nil {
-		return cerrors.WrapError(cerrors.ErrLoadKeyspaceFailed, err)
+		return errors.WrapError(errors.ErrLoadKeyspaceFailed, err)
 	}
 
 	var snapshotTS uint64
 	if o.legacySafepoint {
 		legacyClient, ok := o.pdClient.(pdgc.LegacyClientV2)
 		if !ok {
-			return cerrors.ErrGetServiceSafepointFailed.GenWithStackByArgs("PD client does not support LegacyClientV2")
+			return errors.ErrGetServiceSafepointFailed.GenWithStackByArgs("PD client does not support LegacyClientV2")
 		}
 		snapshotTS, err = legacyClient.GetMinServiceSafePointV2(ctx, keyspaceMeta.Id)
 		if err != nil {
-			return cerrors.WrapError(cerrors.ErrGetServiceSafepointFailed, err)
+			return errors.WrapError(errors.ErrGetServiceSafepointFailed, err)
 		}
 	} else {
 		gcState, err := o.pdClient.GetGCStatesClient(keyspaceMeta.Id).GetGCState(ctx)
 		if err != nil {
-			return cerrors.WrapError(cerrors.ErrGetGCBarrierFailed, err)
+			return errors.WrapError(errors.ErrGetGCBarrierFailed, err)
 		}
 		// Schema store uses the transaction safepoint as its initial metadata snapshot.
 		snapshotTS = gcState.TxnSafePoint
@@ -108,7 +108,7 @@ func listDatabasesAtSnapshot(
 ) (int, error) {
 	pdURLs, err := common.NewURLsValue(pdAddr)
 	if err != nil {
-		return 0, cerrors.WrapError(cerrors.ErrNewStore, err)
+		return 0, errors.WrapError(errors.ErrNewStore, err)
 	}
 	tiURL := &url.URL{Scheme: "tikv", Host: pdURLs.HostString()}
 	query := tiURL.Query()
@@ -126,16 +126,16 @@ func listDatabasesAtSnapshot(
 		tiURL.String(), driver.WithSecurity(securityConfig),
 	)
 	if err != nil {
-		return 0, cerrors.WrapError(cerrors.ErrNewStore, err)
+		return 0, errors.WrapError(errors.ErrNewStore, err)
 	}
 	defer func() { _ = tiStore.Close() }()
 	if err := upstream.DisablePDRouterClient(tiStore); err != nil {
-		return 0, cerrors.WrapError(cerrors.ErrNewStore, err)
+		return 0, errors.WrapError(errors.ErrNewStore, err)
 	}
 
 	databases, err := meta.NewReader(tiStore.GetSnapshot(tidbkv.NewVersion(snapshotTS))).ListDatabases()
 	if err != nil {
-		return 0, cerrors.WrapError(cerrors.ErrMetaListDatabases, err)
+		return 0, errors.WrapError(errors.ErrMetaListDatabases, err)
 	}
 	return len(databases), nil
 }

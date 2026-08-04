@@ -16,11 +16,10 @@ package cli
 import (
 	"bytes"
 	"context"
-	stderrors "errors"
 	"testing"
 
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 	pdgc "github.com/tikv/pd/client/clients/gc"
@@ -137,7 +136,7 @@ func TestVerifyGCSafepointRun(t *testing.T) {
 			keyspace: "essential-v1",
 			pdClient: pdClient,
 			listDatabases: func(context.Context, string, uint64) (int, error) {
-				return 0, cerrors.WrapError(cerrors.ErrMetaListDatabases, stderrors.New("snapshot read failed"))
+				return 0, errors.WrapError(errors.ErrMetaListDatabases, context.Canceled)
 			},
 		}
 		cmd := &cobra.Command{}
