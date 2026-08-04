@@ -65,7 +65,7 @@ func newTestRegionAdmissionController(
 	return newRegionAdmissionController(
 		currentWindow,
 		maxWindowMultiplier,
-		newMemoryQuotaController(0, 0),
+		newMemoryQuotaController(1024*1024*1024, 8*1024*1024),
 		func() uint64 { return 0 },
 	)
 }

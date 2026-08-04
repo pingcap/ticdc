@@ -406,7 +406,7 @@ func TestAdmissionWakesWhenBlockedSpanStops(t *testing.T) {
 }
 
 func BenchmarkMemoryQuotaEventAccounting(b *testing.B) {
-	quota := newMemoryQuotaController(defaultLogPullerMemoryQuota, defaultScanBaseSize)
+	quota := newMemoryQuotaController(1024*1024*1024, 8*1024*1024)
 	span := newTestQuotaSpan(1)
 	ctx := context.Background()
 	b.ReportAllocs()
