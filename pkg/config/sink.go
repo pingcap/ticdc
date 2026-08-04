@@ -487,6 +487,11 @@ type KafkaConfig struct {
 	SASLOAuthScopes              []string                  `toml:"sasl-oauth-scopes" json:"sasl-oauth-scopes,omitempty"`
 	SASLOAuthGrantType           *string                   `toml:"sasl-oauth-grant-type" json:"sasl-oauth-grant-type,omitempty"`
 	SASLOAuthAudience            *string                   `toml:"sasl-oauth-audience" json:"sasl-oauth-audience,omitempty"`
+	SASLOAuthProvider            *string                   `toml:"sasl-oauth-provider" json:"sasl-oauth-provider,omitempty"`
+	AWSRegion                    *string                   `toml:"aws-region" json:"aws-region,omitempty"`
+	AWSRoleARN                   *string                   `toml:"aws-role-arn" json:"aws-role-arn,omitempty"`
+	AWSRoleSessionName           *string                   `toml:"aws-role-session-name" json:"aws-role-session-name,omitempty"`
+	AWSExternalID                *string                   `toml:"aws-external-id" json:"aws-external-id,omitempty"`
 	EnableTLS                    *bool                     `toml:"enable-tls" json:"enable-tls,omitempty"`
 	CA                           *string                   `toml:"ca" json:"ca,omitempty"`
 	Cert                         *string                   `toml:"cert" json:"cert,omitempty"`
