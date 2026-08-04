@@ -15,11 +15,8 @@ package cli
 
 import (
 	"context"
-	"fmt"
 	"net/url"
-	"time"
 
-	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -31,24 +28,16 @@ import (
 	"github.com/spf13/cobra"
 	tikvconfig "github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/oracle"
-	pdgc "github.com/tikv/pd/client/clients/gc"
-)
-
-const (
-	verifyGCSafepointTTLSeconds = int64(600)
-	verifyGCSafepointCleanupTTL = 10 * time.Second
 )
 
 type verifyGCSafepointPDClient interface {
 	GetTS(ctx context.Context) (physical int64, logical int64, err error)
-	LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error)
 	Close()
 }
 
 type verifyGCSafepointOptions struct {
 	keyspace      string
 	pdClient      verifyGCSafepointPDClient
-	legacyClient  pdgc.LegacyClientV2
 	listDatabases func(ctx context.Context, keyspace string, snapshotTS uint64) (int, error)
 }
 
@@ -62,64 +51,22 @@ func (o *verifyGCSafepointOptions) complete(f factory.Factory) error {
 	if err != nil {
 		return err
 	}
-	legacyClient, ok := pdClient.(pdgc.LegacyClientV2)
-	if !ok {
-		pdClient.Close()
-		return cerrors.ErrUpdateServiceSafepointFailed.GenWithStackByArgs("PD client does not support LegacyClientV2")
-	}
-
 	o.pdClient = pdClient
-	o.legacyClient = legacyClient
 	o.listDatabases = func(ctx context.Context, keyspace string, snapshotTS uint64) (int, error) {
 		return listDatabasesAtSnapshot(ctx, f.GetPdAddr(), f.GetCredential(), keyspace, snapshotTS)
 	}
 	return nil
 }
 
-func (o *verifyGCSafepointOptions) run(cmd *cobra.Command) (runErr error) {
+func (o *verifyGCSafepointOptions) run(cmd *cobra.Command) error {
 	defer o.pdClient.Close()
 	ctx := cmd.Context()
-	keyspaceMeta, err := o.pdClient.LoadKeyspace(ctx, o.keyspace)
-	if err != nil {
-		return cerrors.WrapError(cerrors.ErrLoadKeyspaceFailed, err)
-	}
-
 	physical, logical, err := o.pdClient.GetTS(ctx)
 	if err != nil {
 		return cerrors.WrapError(cerrors.ErrPDEtcdAPIError, err)
 	}
 	snapshotTS := oracle.ComposeTS(physical, logical)
-	serviceID := fmt.Sprintf("ticdc-gc-safepoint-verifier-%d", snapshotTS)
-	requestedSafePoint := snapshotTS + 1
-	minSafePoint, err := o.legacyClient.SetServiceSafePointV2(
-		ctx, keyspaceMeta.Id, serviceID, verifyGCSafepointTTLSeconds, requestedSafePoint,
-	)
-	if err != nil {
-		return cerrors.WrapError(cerrors.ErrUpdateServiceSafepointFailed, err)
-	}
-
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), verifyGCSafepointCleanupTTL)
-		defer cancel()
-		_, cleanupErr := o.legacyClient.DeleteServiceSafePointV2(cleanupCtx, keyspaceMeta.Id, serviceID)
-		if cleanupErr == nil {
-			return
-		}
-		cleanupErr = cerrors.WrapError(cerrors.ErrDeleteServiceSafepointFailed, cleanupErr)
-		if runErr == nil {
-			runErr = cleanupErr
-			return
-		}
-		runErr = cerrors.Annotatef(runErr, "temporary service safepoint cleanup also failed: %v", cleanupErr)
-	}()
-	if minSafePoint > requestedSafePoint {
-		return cerrors.Annotatef(
-			cerrors.ErrUpdateServiceSafepointFailed.GenWithStackByArgs(),
-			"minimum service safepoint %d exceeds requested safepoint %d",
-			minSafePoint,
-			requestedSafePoint,
-		)
-	}
+	cmd.Printf("WARNING: no service safepoint blocks GC safepoint advancement; ListDatabases at snapshot %d may fail with a safepoint error.\n", snapshotTS)
 
 	databaseCount, err := o.listDatabases(ctx, o.keyspace, snapshotTS)
 	if err != nil {
