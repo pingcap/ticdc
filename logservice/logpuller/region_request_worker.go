@@ -436,7 +436,7 @@ func (s *regionRequestWorker) sendRegionRequest(conn *ConnAndClient, req *region
 
 	if region.subscribedSpan.stopped.Load() {
 		req.abort()
-		s.client.onRegionFail(newRegionErrorInfo(region, &storeStreamErr{}))
+		s.client.onRegionFail(newRegionErrorInfo(region, &requestCancelledErr{}))
 		return nil
 	}
 
