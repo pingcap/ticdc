@@ -92,7 +92,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 		false,
 	)
 	region.lockedRangeState = &regionlock.LockedRangeState{}
-	state := newRegionFeedState(region, 1, worker, nil)
+	state := newRegionFeedState(region, 1, worker, nil, nil)
 
 	// Receive prewrite2 with empty value.
 	{
@@ -225,7 +225,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	worker := &regionRequestWorker{
 		tracker: newRegionTracker(),
 	}
-	state1 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(1, 1, 1)}, uint64(subID1), worker, nil)
+	state1 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(1, 1, 1)}, uint64(subID1), worker, nil, nil)
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
@@ -249,7 +249,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	}
 
 	subID2 := SubscriptionID(2)
-	state2 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(2, 2, 2)}, uint64(subID2), worker, nil)
+	state2 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(2, 2, 2)}, uint64(subID2), worker, nil, nil)
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
@@ -273,7 +273,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	}
 
 	subID3 := SubscriptionID(3)
-	state3 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(3, 3, 3)}, uint64(subID3), worker, nil)
+	state3 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(3, 3, 3)}, uint64(subID3), worker, nil, nil)
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
@@ -378,6 +378,7 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 		1,
 		worker,
 		nil,
+		nil,
 	)
 
 	require.Equal(t, uint64(200), handleResolvedTs(span, state, 300))
@@ -430,6 +431,42 @@ func TestHandleEntriesReleasesMemoryAfterDownstreamCallback(t *testing.T) {
 	require.Zero(t, quotaState.used)
 }
 
+func TestRegionEventHandlerInitializedResetsRecoveryState(t *testing.T) {
+	span := &subscribedSpan{
+		subID:             1,
+		span:              heartbeatpb.TableSpan{TableID: 1},
+		advanceResolvedTs: func(uint64) {},
+	}
+	failureHandler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
+	key := newRegionRecoveryKey(span.subID, span.span)
+	failureHandler.recoveries[key] = &regionRecoveryState{}
+
+	region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), span.span, nil, span, false)
+	region.lockedRangeState = &regionlock.LockedRangeState{}
+	region.rpcCtx = &tikv.RPCContext{Addr: "store-1"}
+	state := newRegionFeedState(region, uint64(span.subID), &regionRequestWorker{tracker: newRegionTracker()}, nil, func(state *regionFeedState) {
+		failureHandler.resetRegionRecovery(state.region)
+	})
+
+	handler := &regionEventHandler{
+		eventSink:      &regionEventSink{memoryQuota: newMemoryQuotaController(0, 0)},
+		failureHandler: failureHandler,
+	}
+	handler.Handle(span, regionEvent{
+		states: []*regionFeedState{state},
+		entries: &cdcpb.Event_Entries_{
+			Entries: &cdcpb.Event_Entries{
+				Entries: []*cdcpb.Event_Row{{Type: cdcpb.Event_INITIALIZED}},
+			},
+		},
+	})
+
+	failureHandler.recoveryMu.Lock()
+	_, ok := failureHandler.recoveries[key]
+	failureHandler.recoveryMu.Unlock()
+	require.False(t, ok)
+}
+
 func TestSpanInitializedAfterFullRangeCoverage(t *testing.T) {
 	const startTs = 100
 	span := &subscribedSpan{
@@ -448,7 +485,7 @@ func TestSpanInitializedAfterFullRangeCoverage(t *testing.T) {
 		},
 		subscribedSpan:   span,
 		lockedRangeState: &regionlock.LockedRangeState{},
-	}, uint64(span.subID), &regionRequestWorker{}, nil)
+	}, uint64(span.subID), &regionRequestWorker{}, nil, nil)
 	secondState := newRegionFeedState(regionInfo{
 		verID: tikv.NewRegionVerID(2, 1, 1),
 		span: heartbeatpb.TableSpan{
@@ -457,7 +494,7 @@ func TestSpanInitializedAfterFullRangeCoverage(t *testing.T) {
 		},
 		subscribedSpan:   span,
 		lockedRangeState: &regionlock.LockedRangeState{},
-	}, uint64(span.subID), &regionRequestWorker{}, nil)
+	}, uint64(span.subID), &regionRequestWorker{}, nil, nil)
 
 	span.markRegionInitialized(firstState)
 	require.False(t, span.initialized.Load())

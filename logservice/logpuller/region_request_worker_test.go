@@ -217,7 +217,7 @@ func TestRegionRequestWorkerIgnoresDuplicateActiveRegion(t *testing.T) {
 	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
 
 	req1 := admitRegionRequest(t, admission, region)
-	state1 := newRegionFeedState(region, uint64(region.subscribedSpan.subID), worker, req1)
+	state1 := newRegionFeedState(region, uint64(region.subscribedSpan.subID), worker, req1, nil)
 	require.True(t, worker.tracker.Add(region.subscribedSpan.subID, region.verID.GetID(), state1))
 
 	req2 := admitRegionRequest(t, admission, region)
@@ -456,7 +456,7 @@ func TestStoppedStateRemovesSentRequest(t *testing.T) {
 	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
 	req := admitRegionRequest(t, admission, region)
 
-	state := newRegionFeedState(req.regionInfo, uint64(req.regionInfo.subscribedSpan.subID), worker, req)
+	state := newRegionFeedState(req.regionInfo, uint64(req.regionInfo.subscribedSpan.subID), worker, req, nil)
 	require.True(t, worker.tracker.Add(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID(), state))
 	state.markStopped(errors.New("send request to store error"))
 	worker.tracker.RemoveIf(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID(), state)
@@ -482,7 +482,7 @@ func TestRunStreamFailurePushesTrackedRegionToEventSink(t *testing.T) {
 
 	sentRegion := createFailureRecoveryTestRegion(t, 1, 1)
 	sentReq := admitRegionRequest(t, worker.admission, sentRegion)
-	sentState := newRegionFeedState(sentRegion, uint64(sentRegion.subscribedSpan.subID), worker, sentReq)
+	sentState := newRegionFeedState(sentRegion, uint64(sentRegion.subscribedSpan.subID), worker, sentReq, nil)
 	require.True(t, worker.tracker.Add(sentRegion.subscribedSpan.subID, sentRegion.verID.GetID(), sentState))
 
 	firstRegion := createFailureRecoveryTestRegion(t, 2, 2)

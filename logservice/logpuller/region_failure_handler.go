@@ -15,11 +15,13 @@ package logpuller
 
 import (
 	"context"
+	"math/rand/v2"
 	"sync"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/tikv/client-go/v2/tikv"
@@ -43,10 +45,58 @@ var (
 type regionFailureHandler struct {
 	cache       *errCache
 	regionCache *tikv.RegionCache
+	recoveryMu  sync.Mutex
+	recoveries  map[regionRecoveryKey]*regionRecoveryState
 
 	onTableDrained        func(*subscribedSpan)
 	scheduleRegionRequest func(context.Context, regionInfo)
 	scheduleRangeRequest  func(context.Context, rangeTask)
+}
+
+const (
+	regionRecoveryBaseDelay = 50 * time.Millisecond
+	regionRecoveryMaxDelay  = 2 * time.Second
+	regionRecoveryStateTTL  = 5 * time.Minute
+)
+
+// regionRecoveryKey keeps backoff state across region ID and epoch changes for
+// the same logical range.
+type regionRecoveryKey struct {
+	subscriptionID SubscriptionID
+	startKey       string
+	endKey         string
+}
+
+type regionRecoveryState struct {
+	attempt   uint32
+	expiresAt time.Time
+}
+
+func newRegionRecoveryKey(
+	subscriptionID SubscriptionID,
+	span heartbeatpb.TableSpan,
+) regionRecoveryKey {
+	return regionRecoveryKey{
+		subscriptionID: subscriptionID,
+		startKey:       string(span.StartKey),
+		endKey:         string(span.EndKey),
+	}
+}
+
+func regionRecoveryDelay(attempt uint32) time.Duration {
+	if attempt == 0 {
+		attempt = 1
+	}
+	exponent := attempt - 1
+	if exponent > 16 {
+		exponent = 16
+	}
+	delay := regionRecoveryBaseDelay << exponent
+	if delay > regionRecoveryMaxDelay {
+		delay = regionRecoveryMaxDelay
+	}
+	half := delay / 2
+	return half + time.Duration(rand.Int64N(int64(delay-half)+1))
 }
 
 func newRegionFailureHandler(
@@ -58,10 +108,83 @@ func newRegionFailureHandler(
 	return &regionFailureHandler{
 		cache:                 newErrCache(),
 		regionCache:           regionCache,
+		recoveries:            make(map[regionRecoveryKey]*regionRecoveryState),
 		onTableDrained:        onTableDrained,
 		scheduleRegionRequest: scheduleRegionRequest,
 		scheduleRangeRequest:  scheduleRangeRequest,
 	}
+}
+
+func (r *regionFailureHandler) scheduleRecovery(
+	ctx context.Context,
+	subscribedSpan *subscribedSpan,
+	span heartbeatpb.TableSpan,
+	minDelay time.Duration,
+	retry func(),
+) {
+	if subscribedSpan == nil || subscribedSpan.stopped.Load() {
+		return
+	}
+	key := newRegionRecoveryKey(subscribedSpan.subID, span)
+
+	r.recoveryMu.Lock()
+	state := r.recoveries[key]
+	if state == nil {
+		state = &regionRecoveryState{}
+		r.recoveries[key] = state
+	}
+	if state.attempt < 32 {
+		state.attempt++
+	}
+	delay := regionRecoveryDelay(state.attempt)
+	if minDelay > delay {
+		delay = minDelay
+	}
+	state.expiresAt = time.Now().Add(delay + regionRecoveryStateTTL)
+	r.recoveryMu.Unlock()
+
+	time.AfterFunc(delay, func() {
+		r.recoveryMu.Lock()
+		if r.recoveries[key] != state {
+			r.recoveryMu.Unlock()
+			return
+		}
+		// Keep the attempt until the retry succeeds or the state expires.
+		state.expiresAt = time.Now().Add(regionRecoveryStateTTL)
+		r.recoveryMu.Unlock()
+
+		if ctx.Err() != nil || subscribedSpan.stopped.Load() {
+			r.resetRecovery(key)
+			return
+		}
+		retry()
+	})
+}
+
+func (r *regionFailureHandler) expireRecoveries(now time.Time) {
+	r.recoveryMu.Lock()
+	defer r.recoveryMu.Unlock()
+	for key, state := range r.recoveries {
+		if !state.expiresAt.After(now) {
+			delete(r.recoveries, key)
+		}
+	}
+}
+
+func (r *regionFailureHandler) resetRecovery(key regionRecoveryKey) {
+	r.recoveryMu.Lock()
+	defer r.recoveryMu.Unlock()
+	delete(r.recoveries, key)
+}
+
+func (r *regionFailureHandler) resetRegionRecovery(region regionInfo) {
+	r.resetRecovery(newRegionRecoveryKey(region.subscribedSpan.subID, region.span))
+}
+
+func (r *regionFailureHandler) cancelRecoveries() {
+	r.recoveryMu.Lock()
+	defer r.recoveryMu.Unlock()
+	clear(r.recoveries)
 }
 
 // Report admits a region failure into the recovery pipeline. It releases the
@@ -80,6 +203,7 @@ func (r *regionFailureHandler) Report(errInfo regionErrorInfo) {
 func (r *regionFailureHandler) Run(ctx context.Context) error {
 	log.Info("region failure handler starts")
 	defer log.Info("region failure handler exits")
+	defer r.cancelRecoveries()
 
 	handleCachedErrors := func() error {
 		for {
@@ -102,13 +226,17 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 
 	// r.cache.ready() should handle failures promptly in normal flow. The ticker is only a
 	// fallback scan and is not expected to be needed in practice.
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
+	fallbackTicker := time.NewTicker(200 * time.Millisecond)
+	defer fallbackTicker.Stop()
+	cleanupTicker := time.NewTicker(regionRecoveryStateTTL)
+	defer cleanupTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case now := <-cleanupTicker.C:
+			r.expireRecoveries(now)
+		case <-fallbackTicker.C:
 			if err := handleCachedErrors(); err != nil {
 				return err
 			}
@@ -122,7 +250,18 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 
 func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
-	rescheduleRange := func() {
+	retryRegion := func(minDelay time.Duration) {
+		r.scheduleRecovery(
+			ctx,
+			errInfo.subscribedSpan,
+			errInfo.span,
+			minDelay,
+			func() {
+				r.scheduleRegionRequest(ctx, errInfo.regionInfo)
+			},
+		)
+	}
+	retryRange := func() {
 		priority := normalizeScanPriority(errInfo.scanPriority)
 		if priority == cdcpb.ScanPriority_SCAN_PRIORITY_LOW {
 			priority = errInfo.subscribedSpan.priorityPolicy.resolve(
@@ -131,12 +270,21 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 				errInfo.subscribedSpan.priorityPolicy.pdClock.CurrentTime(),
 			)
 		}
-		r.scheduleRangeRequest(ctx, rangeTask{
+		task := rangeTask{
 			span:           errInfo.span,
 			subscribedSpan: errInfo.subscribedSpan,
 			filterLoop:     errInfo.filterLoop,
 			priority:       priority,
-		})
+		}
+		r.scheduleRecovery(
+			ctx,
+			task.subscribedSpan,
+			task.span,
+			0,
+			func() {
+				r.scheduleRangeRequest(ctx, task)
+			},
+		)
 	}
 
 	//nolint:errorlint // converting large type switch to errors.As is a significant refactor
@@ -153,28 +301,34 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		innerErr := eerr.err
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
 			metricFeedNotLeaderCounter.Inc()
-			r.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
-			r.scheduleRegionRequest(ctx, errInfo.regionInfo)
+			leader := notLeader.GetLeader()
+			if leader == nil || leader.GetId() == 0 || leader.GetStoreId() == 0 || errInfo.rpcCtx == nil {
+				r.regionCache.InvalidateCachedRegion(errInfo.verID)
+				retryRange()
+				return nil
+			}
+			r.regionCache.UpdateLeader(errInfo.verID, leader, errInfo.rpcCtx.AccessIdx)
+			retryRegion(0)
 			return nil
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
-			rescheduleRange()
+			retryRange()
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
-			rescheduleRange()
+			retryRange()
 			return nil
 		}
 		if innerErr.GetCongested() != nil {
 			metricKvCongestedCounter.Inc()
-			r.scheduleRegionRequest(ctx, errInfo.regionInfo)
+			retryRegion(0)
 			return nil
 		}
-		if innerErr.GetServerIsBusy() != nil {
+		if busy := innerErr.GetServerIsBusy(); busy != nil {
 			metricKvIsBusyCounter.Inc()
-			r.scheduleRegionRequest(ctx, errInfo.regionInfo)
+			retryRegion(time.Duration(busy.GetBackoffMs()) * time.Millisecond)
 			return nil
 		}
 		if duplicated := innerErr.GetDuplicateRequest(); duplicated != nil {
@@ -193,27 +347,30 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 			zap.Stringer("error", innerErr))
 		metricFeedUnknownErrorCounter.Inc()
-		r.scheduleRegionRequest(ctx, errInfo.regionInfo)
+		retryRegion(0)
 		return nil
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
-		rescheduleRange()
+		retryRange()
 		return nil
 	case *getStoreErr:
 		metricGetStoreErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		// cannot get the store the region belongs to, so we need to reload the region.
 		r.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
-		rescheduleRange()
+		retryRange()
 		return nil
 	case *storeStreamErr:
 		metricStoreSendRequestErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		r.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
-		r.scheduleRegionRequest(ctx, errInfo.regionInfo)
+		retryRegion(0)
 		return nil
 	case *requestCancelledErr:
 		// the corresponding subscription has been unsubscribed, just ignore.
+		if errInfo.subscribedSpan != nil {
+			r.resetRegionRecovery(errInfo.regionInfo)
+		}
 		return nil
 	default:
 		// TODO(qupeng): for some errors it's better to just deregister the region from TiKVs.

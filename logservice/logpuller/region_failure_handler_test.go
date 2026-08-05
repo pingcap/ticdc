@@ -19,7 +19,11 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/kvproto/pkg/cdcpb"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
 )
@@ -141,4 +145,119 @@ func TestRegionFailureHandlerRunDrainsErrCacheWithoutDispatcher(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("failure handler did not exit after context cancellation")
 	}
+}
+
+func TestRegionFailureHandlerSchedulesNotLeaderRangeRetry(t *testing.T) {
+	pdClient := newFailureRecoveryTestPDClient(t)
+	defer pdClient.Close()
+
+	regionCache := tikv.NewRegionCache(pdClient)
+	defer regionCache.Close()
+
+	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
+	region.subscribedSpan.priorityPolicy = newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute)
+
+	rangeRetryCh := make(chan rangeTask, 2)
+	handler := newRegionFailureHandler(
+		regionCache,
+		func(*subscribedSpan) {},
+		func(context.Context, regionInfo) {
+			t.Fatal("unexpected region retry")
+		},
+		func(_ context.Context, task rangeTask) {
+			rangeRetryCh <- task
+		},
+	)
+	errInfo := newRegionErrorInfo(region, &eventError{
+		err: &cdcpb.Error{NotLeader: &errorpb.NotLeader{}},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, handler.handleError(ctx, errInfo))
+
+	select {
+	case task := <-rangeRetryCh:
+		require.Equal(t, region.span, task.span)
+		require.Same(t, region.subscribedSpan, task.subscribedSpan)
+	case <-time.After(time.Second):
+		t.Fatal("not leader retry was not scheduled")
+	}
+}
+
+func TestRegionRecoveryBackoffFollowsRangeAcrossRegionChanges(t *testing.T) {
+	regionRetryCh := make(chan regionInfo, 2)
+	handler := newRegionFailureHandler(
+		nil,
+		func(*subscribedSpan) {},
+		func(_ context.Context, region regionInfo) {
+			regionRetryCh <- region
+		},
+		func(context.Context, rangeTask) {},
+	)
+	t.Cleanup(handler.cancelRecoveries)
+
+	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
+	errInfo := newRegionErrorInfo(region, &eventError{
+		err: &cdcpb.Error{Congested: &cdcpb.Congested{}},
+	})
+	require.NoError(t, handler.handleError(context.Background(), errInfo))
+	select {
+	case retried := <-regionRetryCh:
+		require.Equal(t, uint64(1), retried.verID.GetID())
+	case <-time.After(time.Second):
+		t.Fatal("first region recovery was not scheduled")
+	}
+
+	region.verID = tikv.NewRegionVerID(2, 1, 1)
+	errInfo = newRegionErrorInfo(region, &eventError{
+		err: &cdcpb.Error{Congested: &cdcpb.Congested{}},
+	})
+	require.NoError(t, handler.handleError(context.Background(), errInfo))
+	select {
+	case retried := <-regionRetryCh:
+		require.Equal(t, uint64(2), retried.verID.GetID())
+	case <-time.After(time.Second):
+		t.Fatal("second region recovery was not scheduled")
+	}
+
+	key := newRegionRecoveryKey(region.subscribedSpan.subID, region.span)
+	handler.recoveryMu.Lock()
+	attempt := handler.recoveries[key].attempt
+	handler.recoveryMu.Unlock()
+	require.Equal(t, uint32(2), attempt)
+}
+
+func TestRegionFailureHandlerRequestCancelledResetsRecoveryState(t *testing.T) {
+	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
+	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
+	key := newRegionRecoveryKey(region.subscribedSpan.subID, region.span)
+	handler.recoveries[key] = &regionRecoveryState{}
+
+	err := handler.handleError(context.Background(), newRegionErrorInfo(region, &requestCancelledErr{}))
+	require.NoError(t, err)
+
+	handler.recoveryMu.Lock()
+	_, ok := handler.recoveries[key]
+	handler.recoveryMu.Unlock()
+	assert.False(t, ok)
+}
+
+func TestRegionFailureHandlerExpiresRecoveryStates(t *testing.T) {
+	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
+	now := time.Now()
+	expiredKey := newRegionRecoveryKey(1, heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("b")})
+	activeKey := newRegionRecoveryKey(1, heartbeatpb.TableSpan{StartKey: []byte("b"), EndKey: []byte("c")})
+	handler.recoveries[expiredKey] = &regionRecoveryState{expiresAt: now.Add(-time.Second)}
+	handler.recoveries[activeKey] = &regionRecoveryState{expiresAt: now.Add(time.Second)}
+
+	handler.expireRecoveries(now)
+
+	handler.recoveryMu.Lock()
+	_, expiredExists := handler.recoveries[expiredKey]
+	_, activeExists := handler.recoveries[activeKey]
+	handler.recoveryMu.Unlock()
+	require.False(t, expiredExists)
+	require.True(t, activeExists)
 }

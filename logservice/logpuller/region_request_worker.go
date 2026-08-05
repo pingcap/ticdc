@@ -454,7 +454,9 @@ func (s *regionRequestWorker) sendRegionRequest(conn *ConnAndClient, req *region
 
 	// Publish the state before Send so a fast response observes its owner and
 	// admission lease.
-	state := newRegionFeedState(region, uint64(subID), s, req)
+	state := newRegionFeedState(region, uint64(subID), s, req, func(state *regionFeedState) {
+		s.failureHandler.resetRegionRecovery(state.region)
+	})
 	if !s.tracker.Add(subID, region.verID.GetID(), state) {
 		// RangeLock normally prevents duplicate active regions. Keep the existing
 		// owner, including its range-lock ownership, if that invariant is ever
