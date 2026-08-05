@@ -61,6 +61,38 @@ func TestGetBrokerConfig(t *testing.T) {
 	})
 }
 
+func TestAdminAuthorizationError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("describe topics", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		admin := NewMocksaramaClusterAdmin(ctrl)
+		admin.EXPECT().DescribeTopics([]string{"test-topic"}).
+			Return(nil, sarama.ErrTopicAuthorizationFailed)
+		client := &saramaAdminClient{admin: admin}
+
+		_, err := client.GetTopicsMeta([]string{"test-topic"}, false)
+
+		require.ErrorIs(t, err, errors.ErrKafkaAuthorizationFailed)
+		require.ErrorIs(t, err, sarama.ErrTopicAuthorizationFailed)
+		require.True(t, IsAdminAuthorizationFailed(err))
+	})
+
+	t.Run("create topic", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		admin := NewMocksaramaClusterAdmin(ctrl)
+		admin.EXPECT().CreateTopic("test-topic", gomock.Any(), false).
+			Return(sarama.ErrClusterAuthorizationFailed)
+		client := &saramaAdminClient{admin: admin}
+
+		err := client.CreateTopic(&TopicDetail{Name: "test-topic"}, false)
+
+		require.ErrorIs(t, err, errors.ErrKafkaAuthorizationFailed)
+		require.ErrorIs(t, err, sarama.ErrClusterAuthorizationFailed)
+		require.True(t, IsAdminAuthorizationFailed(err))
+	})
+}
+
 func TestAdminClientClose(t *testing.T) {
 	tests := []struct {
 		name  string

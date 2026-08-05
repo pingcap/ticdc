@@ -162,7 +162,7 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 	}
 	options.Topic = topic
 
-	adminClient := kafka.NewMockClusterAdminClient(ctrl)
+	adminClient := kafka.NewMockAdminClient(ctrl)
 	adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, true).Return(
 		map[string]kafka.TopicDetail{
 			kafkaSinkTestTopic: {

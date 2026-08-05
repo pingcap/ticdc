@@ -40,7 +40,7 @@ type kafkaTopicManager struct {
 
 	defaultTopic string
 
-	admin kafka.ClusterAdminClient
+	admin kafka.AdminClient
 	cfg   *kafka.AutoCreateTopicConfig
 
 	topics sync.Map
@@ -54,7 +54,7 @@ func GetTopicManagerAndTryCreateTopic(
 	changefeedID common.ChangeFeedID,
 	topic string,
 	topicCfg *kafka.AutoCreateTopicConfig,
-	adminClient kafka.ClusterAdminClient,
+	adminClient kafka.AdminClient,
 ) (TopicManager, error) {
 	topicManager := newKafkaTopicManager(
 		ctx, topic, changefeedID, adminClient, topicCfg,
@@ -72,7 +72,7 @@ func newKafkaTopicManager(
 	ctx context.Context,
 	defaultTopic string,
 	changefeedID common.ChangeFeedID,
-	admin kafka.ClusterAdminClient,
+	admin kafka.AdminClient,
 	cfg *kafka.AutoCreateTopicConfig,
 ) *kafkaTopicManager {
 	mgr := &kafkaTopicManager{

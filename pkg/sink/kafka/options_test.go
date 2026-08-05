@@ -42,7 +42,7 @@ const (
 )
 
 type kafkaAdminFixture struct {
-	admin        *MockClusterAdminClient
+	admin        *MockAdminClient
 	topics       map[string]TopicDetail
 	brokerConfig map[string]string
 	topicConfig  map[string]map[string]string
@@ -53,7 +53,7 @@ func newKafkaAdminFixture(t *testing.T) *kafkaAdminFixture {
 
 	ctrl := gomock.NewController(t)
 	fixture := &kafkaAdminFixture{
-		admin:  NewMockClusterAdminClient(ctrl),
+		admin:  NewMockAdminClient(ctrl),
 		topics: make(map[string]TopicDetail),
 		brokerConfig: map[string]string{
 			BrokerMessageMaxBytesConfigName: mockBrokerMessageMaxBytes,
