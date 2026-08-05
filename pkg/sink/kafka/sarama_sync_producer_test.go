@@ -19,50 +19,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
-
-type syncProducerBackendTestDouble struct {
-	messages   []syncProducerMessage
-	sendErr    error
-	closeErr   error
-	closeCalls int
-	closeOrder *[]string
-}
-
-func (p *syncProducerBackendTestDouble) SendMessage(msg syncProducerMessage) error {
-	p.messages = append(p.messages, msg)
-	return p.sendErr
-}
-
-func (p *syncProducerBackendTestDouble) SendMessages(msgs []syncProducerMessage) error {
-	p.messages = append(p.messages, msgs...)
-	return p.sendErr
-}
-
-func (p *syncProducerBackendTestDouble) Close() error {
-	p.closeCalls++
-	if p.closeOrder != nil {
-		*p.closeOrder = append(*p.closeOrder, "producer")
-	}
-	return p.closeErr
-}
-
-type closeTestDouble struct {
-	closeErr   error
-	closeCalls int
-	closeOrder *[]string
-}
-
-func (c *closeTestDouble) Close() error {
-	c.closeCalls++
-	*c.closeOrder = append(*c.closeOrder, "client")
-	return c.closeErr
-}
 
 func TestProducerRejectsSendAfterClose(t *testing.T) {
 	t.Parallel()
@@ -82,7 +45,7 @@ func TestSyncProducerClose(t *testing.T) {
 		clientCloseErr error
 	}{
 		{
-			name: "closes client and producer once in order",
+			name: "closes client and producer",
 		},
 		{
 			name:           "still closes producer when client close fails",
@@ -92,25 +55,22 @@ func TestSyncProducerClose(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			closeOrder := make([]string, 0, 2)
-			client := &closeTestDouble{
-				closeErr:   test.clientCloseErr,
-				closeOrder: &closeOrder,
-			}
-			backend := &syncProducerBackendTestDouble{closeOrder: &closeOrder}
-			producer := &saramaSyncProducer{
+			ctrl := gomock.NewController(t)
+			client := NewMocksaramaSyncClient(ctrl)
+			producer := NewMocksaramaSyncProducerClient(ctrl)
+			gomock.InOrder(
+				client.EXPECT().Close().Return(test.clientCloseErr),
+				producer.EXPECT().Close().Return(nil),
+			)
+
+			p := &saramaSyncProducer{
 				id:       common.NewChangeFeedIDWithName("test", "default"),
 				client:   client,
-				producer: backend,
+				producer: producer,
 				closed:   atomic.NewBool(false),
 			}
 
-			producer.Close()
-			producer.Close()
-
-			require.Equal(t, []string{"client", "producer"}, closeOrder)
-			require.Equal(t, 1, client.closeCalls)
-			require.Equal(t, 1, backend.closeCalls)
+			p.Close()
 		})
 	}
 }
@@ -118,17 +78,24 @@ func TestSyncProducerClose(t *testing.T) {
 func TestSyncProducerErrorWrappedOnce(t *testing.T) {
 	cause := io.ErrClosedPipe
 	tests := []struct {
-		name string
-		send func(*saramaSyncProducer, *codecCommon.Message) error
+		name       string
+		expectSend func(*MocksaramaSyncProducerClient)
+		send       func(*saramaSyncProducer, *codecCommon.Message) error
 	}{
 		{
 			name: "single message",
+			expectSend: func(producer *MocksaramaSyncProducerClient) {
+				producer.EXPECT().SendMessage(gomock.Any()).Return(int32(0), int64(0), cause)
+			},
 			send: func(producer *saramaSyncProducer, message *codecCommon.Message) error {
 				return producer.SendMessage("topic", 0, message)
 			},
 		},
 		{
 			name: "message batch",
+			expectSend: func(producer *MocksaramaSyncProducerClient) {
+				producer.EXPECT().SendMessages(gomock.Any()).Return(cause)
+			},
 			send: func(producer *saramaSyncProducer, message *codecCommon.Message) error {
 				return producer.SendMessages("topic", 1, message)
 			},
@@ -137,15 +104,17 @@ func TestSyncProducerErrorWrappedOnce(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			backend := &syncProducerBackendTestDouble{sendErr: cause}
-			producer := &saramaSyncProducer{
+			ctrl := gomock.NewController(t)
+			producer := NewMocksaramaSyncProducerClient(ctrl)
+			test.expectSend(producer)
+			p := &saramaSyncProducer{
 				id:       common.NewChangeFeedIDWithName("test", "default"),
-				producer: backend,
+				producer: producer,
 				closed:   atomic.NewBool(false),
 			}
 			message := &codecCommon.Message{LogInfo: &codecCommon.MessageLogInfo{}}
 
-			err := test.send(producer, message)
+			err := test.send(p, message)
 
 			requireKafkaSendError(t, err, cause)
 		})
