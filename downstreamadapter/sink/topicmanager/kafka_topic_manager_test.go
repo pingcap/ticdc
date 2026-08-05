@@ -41,8 +41,12 @@ func (m *mockAdminClientWithDeniedDescribe) GetTopicsMeta(
 	if ignoreTopicError {
 		return map[string]kafka.TopicDetail{}, nil
 	}
-	return nil, errors.ErrKafkaAuthorizationFailed.GenWithStackByArgs(
-		"describe-topic", topics[0])
+	return nil, errors.WrapError(
+		errors.ErrKafkaAdminAPI,
+		sarama.ErrTopicAuthorizationFailed,
+		"describe-topic",
+		topics[0],
+	)
 }
 
 func (m *mockAdminClientWithDeniedDescribe) CreateTopic(
@@ -72,8 +76,12 @@ func (m *mockAdminClientWithDeniedCreate) CreateTopic(
 	validateOnly bool,
 ) error {
 	m.createTopicCalled = true
-	return errors.ErrKafkaAuthorizationFailed.GenWithStackByArgs(
-		"create-topic", detail.Name)
+	return errors.WrapError(
+		errors.ErrKafkaAdminAPI,
+		sarama.ErrClusterAuthorizationFailed,
+		"create-topic",
+		detail.Name,
+	)
 }
 
 func TestCreateTopic(t *testing.T) {

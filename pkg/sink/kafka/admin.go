@@ -110,15 +110,6 @@ func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool
 
 	metaList, err := a.admin.DescribeTopics(topics)
 	if err != nil {
-		if errors.Is(err, sarama.ErrTopicAuthorizationFailed) ||
-			errors.Is(err, sarama.ErrClusterAuthorizationFailed) {
-			return nil, errors.WrapError(
-				errors.ErrKafkaAuthorizationFailed,
-				err,
-				"describe-topics",
-				strings.Join(topics, ","),
-			)
-		}
 		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-topics", strings.Join(topics, ","))
 	}
 
@@ -128,15 +119,6 @@ func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool
 				continue
 			}
 			if !ignoreTopicError {
-				if errors.Is(meta.Err, sarama.ErrTopicAuthorizationFailed) ||
-					errors.Is(meta.Err, sarama.ErrClusterAuthorizationFailed) {
-					return nil, errors.WrapError(
-						errors.ErrKafkaAuthorizationFailed,
-						meta.Err,
-						"describe-topic",
-						meta.Name,
-					)
-				}
 				return nil, errors.WrapError(errors.ErrKafkaAdminAPI, meta.Err, "describe-topic", meta.Name)
 			}
 			log.Warn("kafka topic metadata refresh failed",
@@ -156,7 +138,8 @@ func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool
 
 // IsAdminAuthorizationFailed checks whether err is an authorization failure from Kafka admin APIs.
 func IsAdminAuthorizationFailed(err error) bool {
-	return errors.Is(err, errors.ErrKafkaAuthorizationFailed)
+	return errors.Is(err, sarama.ErrTopicAuthorizationFailed) ||
+		errors.Is(err, sarama.ErrClusterAuthorizationFailed)
 }
 
 func (a *saramaAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
@@ -181,15 +164,6 @@ func (a *saramaAdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) 
 	err := a.admin.CreateTopic(detail.Name, request, validateOnly)
 	// Ignore the already exists error because it's not harmful.
 	if err != nil && !strings.Contains(err.Error(), sarama.ErrTopicAlreadyExists.Error()) {
-		if errors.Is(err, sarama.ErrTopicAuthorizationFailed) ||
-			errors.Is(err, sarama.ErrClusterAuthorizationFailed) {
-			return errors.WrapError(
-				errors.ErrKafkaAuthorizationFailed,
-				err,
-				"create-topic",
-				detail.Name,
-			)
-		}
 		return errors.WrapError(errors.ErrKafkaAdminAPI, err, "create-topic", detail.Name)
 	}
 	return nil
