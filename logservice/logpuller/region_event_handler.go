@@ -65,6 +65,9 @@ func (event *regionEvent) needsMemoryAccounting() bool {
 }
 
 func (event *regionEvent) getSize() int {
+	if event == nil {
+		return 0
+	}
 	size := int(unsafe.Sizeof(*event))
 	if event.entries != nil {
 		size += int(unsafe.Sizeof(*event.entries))

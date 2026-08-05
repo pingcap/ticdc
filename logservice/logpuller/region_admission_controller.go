@@ -180,13 +180,33 @@ func (c *regionAdmissionController) pop(
 		}
 		c.state.Unlock()
 
+		waitingForMemory := memoryReady != nil
+		if waitingForMemory {
+			c.memoryQuota.scanWaiters.Add(1)
+		}
+		waitStart := time.Time{}
+		if waitingForMemory {
+			waitStart = time.Now()
+		}
 		select {
 		case <-c.notify:
 		case <-memoryReady:
 		case <-interrupt:
+			if waitingForMemory {
+				c.memoryQuota.scanWaiters.Add(-1)
+				metrics.LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
+			}
 			return nil, nil
 		case <-ctx.Done():
+			if waitingForMemory {
+				c.memoryQuota.scanWaiters.Add(-1)
+				metrics.LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
+			}
 			return nil, ctx.Err()
+		}
+		if waitingForMemory {
+			c.memoryQuota.scanWaiters.Add(-1)
+			metrics.LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
 		}
 	}
 }

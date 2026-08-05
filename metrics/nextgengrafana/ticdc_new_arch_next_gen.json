@@ -8822,7 +8822,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Scan admission level (0: normal, 1: pause warming scans, 2: pause all scans) and event receivers currently blocked at the memory hard limit.",
+          "description": "Event receivers blocked at the memory hard limit and region scans blocked at the scan admission gate.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -8858,28 +8858,23 @@
           "pointradius": 2,
           "points": false,
           "renderer": "flot",
-          "seriesOverrides": [
-            {
-              "alias": "/event-waiters$/",
-              "yaxis": 2
-            }
-          ],
+          "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
           "steppedLine": false,
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_log_puller_memory_quota_admission_level{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
+              "expr": "ticdc_log_puller_memory_quota_event_waiter_count{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
               "interval": "",
-              "legendFormat": "{{instance}}-admission-level",
+              "legendFormat": "{{instance}}-event-waiters",
               "refId": "A"
             },
             {
               "exemplar": true,
-              "expr": "ticdc_log_puller_memory_quota_event_waiter_count{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
+              "expr": "ticdc_log_puller_memory_quota_scan_waiter_count{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
               "interval": "",
-              "legendFormat": "{{instance}}-event-waiters",
+              "legendFormat": "{{instance}}-scan-waiters",
               "refId": "B"
             }
           ],
@@ -8887,7 +8882,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Memory Quota Throttling",
+          "title": "Memory Quota Waiters",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -8905,15 +8900,13 @@
             {
               "format": "short",
               "logBase": 1,
-              "max": "2",
               "min": "0",
               "show": true
             },
             {
               "format": "short",
               "logBase": 1,
-              "min": "0",
-              "show": true
+              "show": false
             }
           ],
           "yaxis": {
@@ -8926,7 +8919,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Time spent waiting to receive more events after log puller memory reaches the hard limit.",
+          "description": "Time spent waiting at the event hard limit or the scan admission gate.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -8971,22 +8964,36 @@
               "exemplar": true,
               "expr": "histogram_quantile(0.99, sum(rate(ticdc_log_puller_memory_quota_event_wait_duration_bucket{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (le, instance))",
               "interval": "",
-              "legendFormat": "{{instance}}-p99",
+              "legendFormat": "{{instance}}-event-p99",
               "refId": "A"
             },
             {
               "exemplar": true,
               "expr": "sum(rate(ticdc_log_puller_memory_quota_event_wait_duration_sum{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance) / sum(rate(ticdc_log_puller_memory_quota_event_wait_duration_count{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
               "interval": "",
-              "legendFormat": "{{instance}}-avg",
+              "legendFormat": "{{instance}}-event-avg",
               "refId": "B"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_log_puller_memory_quota_scan_wait_duration_bucket{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (le, instance))",
+              "interval": "",
+              "legendFormat": "{{instance}}-scan-p99",
+              "refId": "C"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_log_puller_memory_quota_scan_wait_duration_sum{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance) / sum(rate(ticdc_log_puller_memory_quota_scan_wait_duration_count{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
+              "interval": "",
+              "legendFormat": "{{instance}}-scan-avg",
+              "refId": "D"
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Memory Quota Event Wait Duration",
+          "title": "Memory Quota Wait Duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
