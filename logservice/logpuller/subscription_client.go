@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -46,6 +47,7 @@ const (
 	// don't need to force reload region anymore.
 	regionScheduleReload = false
 
+	loadRegionRetryInterval time.Duration = 100 * time.Millisecond
 	resolveLockMinInterval  time.Duration = 10 * time.Second
 	resolveLockTickInterval time.Duration = 2 * time.Second
 	resolveLockFence        time.Duration = 4 * time.Second
@@ -370,24 +372,14 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 	// Limit the number of regions loaded at a time to make the load more stable.
 	limit := 1024
 	nextSpan := span
-	retryRange := func() {
-		retryTask := rangeTask{
-			span:           nextSpan,
-			subscribedSpan: subscribedSpan,
-			filterLoop:     task.filterLoop,
-			priority:       task.priority,
-		}
-		s.failureHandler.scheduleRecovery(
-			ctx,
-			retryTask.subscribedSpan,
-			retryTask.span,
-			0,
-			func() {
-				s.scheduleRangeRequest(ctx, retryTask)
-			},
-		)
-	}
+	backoffBeforeLoad := false
 	for {
+		if backoffBeforeLoad {
+			if err := util.Hang(ctx, loadRegionRetryInterval); err != nil {
+				return err
+			}
+			backoffBeforeLoad = false
+		}
 		log.Debug("subscription client is going to load regions",
 			zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
 			zap.Any("span", common.FormatTableSpan(&nextSpan)))
@@ -396,15 +388,12 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		regions, err := s.upstream.regionCache.BatchLoadRegionsWithKeyRange(
 			backoff, nextSpan.StartKey, nextSpan.EndKey, limit)
 		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
 			log.Warn("subscription client load regions failed",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
 				zap.Any("span", common.FormatTableSpan(&nextSpan)),
 				zap.Error(err))
-			retryRange()
-			return nil
+			backoffBeforeLoad = true
+			continue
 		}
 		regionMetas := make([]*metapb.Region, 0, len(regions))
 		for _, region := range regions {
@@ -417,8 +406,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			log.Warn("subscription client load regions with holes",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
 				zap.Any("span", common.FormatTableSpan(&nextSpan)))
-			retryRange()
-			return nil
+			backoffBeforeLoad = true
+			continue
 		}
 
 		for _, regionMeta := range regionMetas {
