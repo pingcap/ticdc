@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
 )
 
@@ -162,6 +163,249 @@ func TestCompleteOptions(t *testing.T) {
 	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.NoError(t, err)
 	require.Equal(t, defaultMaxRetry, options.MaxRetry)
+}
+
+func TestApplySASL(t *testing.T) {
+	t.Parallel()
+
+	const baseURI = "kafka://127.0.0.1:9092/abc"
+	tests := []struct {
+		name        string
+		uri         string
+		kafkaConfig *config.KafkaConfig
+		expected    security.SASL
+		expectErr   string
+	}{
+		{name: "no params", uri: baseURI},
+		{
+			name: "valid PLAIN SASL",
+			uri:  baseURI + "?sasl-user=user&sasl-password=password&sasl-mechanism=plain",
+			expected: security.SASL{
+				SASLUser:      "user",
+				SASLPassword:  "password",
+				SASLMechanism: security.PlainMechanism,
+			},
+		},
+		{
+			name: "valid SCRAM SASL",
+			uri:  baseURI + "?sasl-user=user&sasl-password=password&sasl-mechanism=SCRAM-SHA-512",
+			expected: security.SASL{
+				SASLUser:      "user",
+				SASLPassword:  "password",
+				SASLMechanism: security.SCRAM512Mechanism,
+			},
+		},
+		{
+			name: "valid GSSAPI user auth SASL",
+			uri: baseURI + "?sasl-mechanism=GSSAPI&sasl-gssapi-auth-type=USER" +
+				"&sasl-gssapi-kerberos-config-path=/root/config" +
+				"&sasl-gssapi-service-name=a&sasl-gssapi-user=user" +
+				"&sasl-gssapi-password=pwd&sasl-gssapi-realm=realm" +
+				"&sasl-gssapi-disable-pafxfast=false",
+			expected: security.SASL{
+				SASLMechanism: security.GSSAPIMechanism,
+				GSSAPI: security.GSSAPI{
+					AuthType:           security.UserAuth,
+					KerberosConfigPath: "/root/config",
+					ServiceName:        "a",
+					Username:           "user",
+					Password:           "pwd",
+					Realm:              "realm",
+				},
+			},
+		},
+		{
+			name: "valid GSSAPI keytab auth SASL",
+			uri: baseURI + "?sasl-mechanism=GSSAPI&sasl-gssapi-auth-type=keytab" +
+				"&sasl-gssapi-kerberos-config-path=/root/config" +
+				"&sasl-gssapi-service-name=a&sasl-gssapi-user=user" +
+				"&sasl-gssapi-keytab-path=/root/keytab&sasl-gssapi-realm=realm" +
+				"&sasl-gssapi-disable-pafxfast=false",
+			expected: security.SASL{
+				SASLMechanism: security.GSSAPIMechanism,
+				GSSAPI: security.GSSAPI{
+					AuthType:           security.KeyTabAuth,
+					KeyTabPath:         "/root/keytab",
+					KerberosConfigPath: "/root/config",
+					ServiceName:        "a",
+					Username:           "user",
+					Realm:              "realm",
+				},
+			},
+		},
+		{
+			name:      "invalid mechanism",
+			uri:       baseURI + "?sasl-mechanism=a",
+			expectErr: "unknown a SASL mechanism",
+		},
+		{
+			name:      "invalid GSSAPI auth type",
+			uri:       baseURI + "?sasl-mechanism=gssapi&sasl-gssapi-auth-type=keyta1b",
+			expectErr: "unknown keyta1b auth type",
+		},
+		{
+			name: "valid OAUTHBEARER SASL",
+			uri:  baseURI + "?sasl-mechanism=OAUTHBEARER",
+			kafkaConfig: &config.KafkaConfig{
+				SASLOAuthClientID:     aws.String("client_id"),
+				SASLOAuthClientSecret: aws.String("Y2xpZW50X3NlY3JldA=="),
+				SASLOAuthTokenURL:     aws.String("127.0.0.1:9093/token"),
+			},
+			expected: security.SASL{
+				SASLMechanism: security.OAuthMechanism,
+				OAuth2: security.OAuth2{
+					ClientID:     "client_id",
+					ClientSecret: "client_secret",
+					TokenURL:     "127.0.0.1:9093/token",
+					GrantType:    "client_credentials",
+				},
+			},
+		},
+		{
+			name: "invalid OAUTHBEARER SASL: missing client id",
+			uri:  baseURI + "?sasl-mechanism=OAUTHBEARER",
+			kafkaConfig: &config.KafkaConfig{
+				SASLOAuthClientSecret: aws.String("Y2xpZW50X3NlY3JldA=="),
+				SASLOAuthTokenURL:     aws.String("127.0.0.1:9093/token"),
+			},
+			expectErr: "OAuth2 client id is empty",
+		},
+		{
+			name: "invalid OAUTHBEARER SASL: missing client secret",
+			uri:  baseURI + "?sasl-mechanism=OAUTHBEARER",
+			kafkaConfig: &config.KafkaConfig{
+				SASLOAuthClientID: aws.String("client_id"),
+				SASLOAuthTokenURL: aws.String("127.0.0.1:9093/token"),
+			},
+			expectErr: "OAuth2 client secret is empty",
+		},
+		{
+			name: "invalid OAUTHBEARER SASL: missing token url",
+			uri:  baseURI + "?sasl-mechanism=OAUTHBEARER",
+			kafkaConfig: &config.KafkaConfig{
+				SASLOAuthClientID:     aws.String("client_id"),
+				SASLOAuthClientSecret: aws.String("Y2xpZW50X3NlY3JldA=="),
+			},
+			expectErr: "OAuth2 token url is empty",
+		},
+		{
+			name: "invalid OAUTHBEARER SASL: non base64 client secret",
+			uri:  baseURI + "?sasl-mechanism=OAUTHBEARER",
+			kafkaConfig: &config.KafkaConfig{
+				SASLOAuthClientID:     aws.String("client_id"),
+				SASLOAuthClientSecret: aws.String("client_secret"),
+				SASLOAuthTokenURL:     aws.String("127.0.0.1:9093/token"),
+			},
+			expectErr: "OAuth2 client secret is not base64 encoded",
+		},
+		{
+			name: "invalid OAUTHBEARER SASL: wrong mechanism",
+			uri:  baseURI + "?sasl-mechanism=GSSAPI",
+			kafkaConfig: &config.KafkaConfig{
+				SASLOAuthClientID:     aws.String("client_id"),
+				SASLOAuthClientSecret: aws.String("Y2xpZW50X3NlY3JldA=="),
+				SASLOAuthTokenURL:     aws.String("127.0.0.1:9093/token"),
+			},
+			expectErr: "OAuth2 is only supported with SASL mechanism type OAUTHBEARER",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			sinkURI, err := url.Parse(test.uri)
+			require.NoError(t, err)
+			replicaConfig := config.GetDefaultReplicaConfig()
+			replicaConfig.Sink.KafkaConfig = test.kafkaConfig
+			options := NewOptions()
+			err = options.Apply(
+				common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
+				sinkURI,
+				replicaConfig.Sink,
+			)
+			if test.expectErr != "" {
+				require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+				require.ErrorContains(t, err, test.expectErr)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, test.expected, *options.SASL)
+		})
+	}
+}
+
+func TestApplyTLS(t *testing.T) {
+	t.Parallel()
+
+	const baseURI = "kafka://127.0.0.1:9092/abc"
+	tests := []struct {
+		name               string
+		uri                string
+		expectedTLS        bool
+		expectedCredential security.Credential
+		expectErr          string
+	}{
+		{
+			name:        "tls config with enable-tls set to true",
+			uri:         baseURI + "?enable-tls=true",
+			expectedTLS: true,
+		},
+		{
+			name: "tls config with no enable-tls and credential files supplied",
+			uri:  baseURI + "?ca=/root/ca.file&cert=/root/cert.file&key=/root/key.file",
+			expectedCredential: security.Credential{
+				CAPath:   "/root/ca.file",
+				CertPath: "/root/cert.file",
+				KeyPath:  "/root/key.file",
+			},
+			expectedTLS: true,
+		},
+		{name: "tls config with no enable-tls and no credential files", uri: baseURI},
+		{
+			name: "tls config with enable-tls false and credential files supplied",
+			uri:  baseURI + "?enable-tls=false&ca=/root/ca&cert=/root/cert&key=/root/key",
+			expectedCredential: security.Credential{
+				CAPath:   "/root/ca",
+				CertPath: "/root/cert",
+				KeyPath:  "/root/key",
+			},
+			expectErr: "credential files are supplied, but 'enable-tls' is set to false",
+		},
+		{
+			name: "tls config with incomplete credential files",
+			uri:  baseURI + "?enable-tls=true&ca=/root/ca&cert=/root/cert",
+			expectedCredential: security.Credential{
+				CAPath:   "/root/ca",
+				CertPath: "/root/cert",
+			},
+			expectErr: "ca, cert and key files should all be supplied",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			sinkURI, err := url.Parse(test.uri)
+			require.NoError(t, err)
+			options := NewOptions()
+			err = options.Apply(
+				common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
+				sinkURI,
+				config.GetDefaultReplicaConfig().Sink,
+			)
+			if test.expectErr != "" {
+				require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+				require.ErrorContains(t, err, test.expectErr)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, test.expectedTLS, options.EnableTLS)
+			require.Equal(t, test.expectedCredential, *options.Credential)
+		})
+	}
 }
 
 func TestApplyRejectsNonPositiveMaxMessageBytes(t *testing.T) {
