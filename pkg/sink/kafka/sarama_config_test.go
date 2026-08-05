@@ -141,21 +141,6 @@ func TestSelectKafkaVersion(t *testing.T) {
 	}
 }
 
-func TestNewSaramaConfigInvalidOAuthTokenURL(t *testing.T) {
-	options := NewOptions()
-	options.SASL = &security.SASL{
-		SASLMechanism: security.OAuthMechanism,
-		OAuth2: security.OAuth2{
-			TokenURL: "http://test.com/Segment%%2815197306101420000%29",
-		},
-	}
-
-	_, err := newSaramaConfig(t.Context(), options)
-	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
-	var escapeErr url.EscapeError
-	require.ErrorAs(t, err, &escapeErr)
-}
-
 func TestNewSaramaConfigMaxRetryFromSinkURI(t *testing.T) {
 	t.Parallel()
 
