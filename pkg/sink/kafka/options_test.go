@@ -426,6 +426,55 @@ func TestValidateReplicationFactor(t *testing.T) {
 	}
 	err = missingBrokerConfig.ValidateReplicationFactor(adminClient)
 	require.NoError(t, err)
+
+	t.Run("replication factor satisfies min insync replicas", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		adminClient := NewMockAdminClient(ctrl)
+		adminClient.EXPECT().GetBrokerConfig(MinInsyncReplicasConfigName).
+			Return("2", true, nil)
+
+		topicConfig := &AutoCreateTopicConfig{
+			ReplicationFactor: 3,
+			RequiredAcks:      WaitForAll,
+		}
+
+		err := topicConfig.ValidateReplicationFactor(adminClient)
+		require.NoError(t, err)
+	})
+
+	t.Run("invalid min insync replicas", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		adminClient := NewMockAdminClient(ctrl)
+		adminClient.EXPECT().GetBrokerConfig(MinInsyncReplicasConfigName).
+			Return("invalid", true, nil)
+
+		topicConfig := &AutoCreateTopicConfig{
+			ReplicationFactor: 3,
+			RequiredAcks:      WaitForAll,
+		}
+
+		err := topicConfig.ValidateReplicationFactor(adminClient)
+		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+	})
+
+	t.Run("broker config lookup failure skips validation", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		adminClient := NewMockAdminClient(ctrl)
+		lookupErr := errors.ErrKafkaAdminAPI.GenWithStackByArgs(
+			"describe-config",
+			MinInsyncReplicasConfigName,
+		)
+		adminClient.EXPECT().GetBrokerConfig(MinInsyncReplicasConfigName).
+			Return("", false, lookupErr)
+
+		topicConfig := &AutoCreateTopicConfig{
+			ReplicationFactor: 1,
+			RequiredAcks:      WaitForAll,
+		}
+
+		err := topicConfig.ValidateReplicationFactor(adminClient)
+		require.NoError(t, err)
+	})
 }
 
 func TestConfigurationCombinations(t *testing.T) {
