@@ -112,7 +112,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	// Lock another range, no task will be triggered before initialized.
 	res = span.rangeLock.LockRange(context.Background(), []byte{'c'}, []byte{'d'}, 2, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-	state := newRegionFeedState(regionInfo{lockedRangeState: res.LockedRangeState, subscribedSpan: span}, 1, worker, nil)
+	state := newRegionFeedState(regionInfo{lockedRangeState: res.LockedRangeState, subscribedSpan: span}, 1, worker, nil, nil)
 	span.resolveStaleLocks(200)
 	select {
 	case <-client.resolveLockTaskCh:

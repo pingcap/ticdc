@@ -138,12 +138,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		}
 		if event.entries != nil {
 			hasEntries = true
-			state := event.mustFirstState()
-			wasInitialized := state.isInitialized()
-			handleEventEntries(span, state, event.entries)
-			if !wasInitialized && state.isInitialized() && h.failureHandler != nil {
-				h.failureHandler.resetRegionRetry(span.subID, state.getRegionID())
-			}
+			handleEventEntries(span, event.mustFirstState(), event.entries)
 		} else if event.resolvedTs != 0 {
 			hasResolved = true
 			for _, state := range event.states {
