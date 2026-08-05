@@ -147,7 +147,7 @@ func TestRegionFailureHandlerRunDrainsErrCacheWithoutDispatcher(t *testing.T) {
 	}
 }
 
-func TestRegionFailureHandlerDelaysNotLeaderRangeRetry(t *testing.T) {
+func TestRegionFailureHandlerSchedulesNotLeaderRangeRetry(t *testing.T) {
 	pdClient := newFailureRecoveryTestPDClient(t)
 	defer pdClient.Close()
 
@@ -168,8 +168,6 @@ func TestRegionFailureHandlerDelaysNotLeaderRangeRetry(t *testing.T) {
 			rangeRetryCh <- task
 		},
 	)
-	handler.recoveryDelay = func(uint32) time.Duration { return 50 * time.Millisecond }
-
 	errInfo := newRegionErrorInfo(region, &eventError{
 		err: &cdcpb.Error{NotLeader: &errorpb.NotLeader{}},
 	})
@@ -178,13 +176,6 @@ func TestRegionFailureHandlerDelaysNotLeaderRangeRetry(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, handler.handleError(ctx, errInfo))
-	require.NoError(t, handler.handleError(ctx, errInfo))
-
-	select {
-	case <-rangeRetryCh:
-		t.Fatal("not leader retry should be delayed")
-	case <-time.After(20 * time.Millisecond):
-	}
 
 	select {
 	case task := <-rangeRetryCh:
@@ -192,12 +183,6 @@ func TestRegionFailureHandlerDelaysNotLeaderRangeRetry(t *testing.T) {
 		require.Same(t, region.subscribedSpan, task.subscribedSpan)
 	case <-time.After(time.Second):
 		t.Fatal("not leader retry was not scheduled")
-	}
-
-	select {
-	case <-rangeRetryCh:
-		t.Fatal("pending not leader retry should be deduplicated")
-	case <-time.After(20 * time.Millisecond):
 	}
 }
 
@@ -212,12 +197,6 @@ func TestRegionRecoveryBackoffFollowsRangeAcrossRegionChanges(t *testing.T) {
 		func(context.Context, rangeTask) {},
 	)
 	t.Cleanup(handler.cancelRecoveries)
-
-	attempts := make([]uint32, 0, 2)
-	handler.recoveryDelay = func(attempt uint32) time.Duration {
-		attempts = append(attempts, attempt)
-		return time.Millisecond
-	}
 
 	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
 	errInfo := newRegionErrorInfo(region, &eventError{
@@ -243,16 +222,18 @@ func TestRegionRecoveryBackoffFollowsRangeAcrossRegionChanges(t *testing.T) {
 		t.Fatal("second region recovery was not scheduled")
 	}
 
-	require.Equal(t, []uint32{1, 2}, attempts)
+	key := newRegionRecoveryKey(region.subscribedSpan.subID, region.span)
+	handler.recoveryMu.Lock()
+	attempt := handler.recoveries[key].attempt
+	handler.recoveryMu.Unlock()
+	require.Equal(t, uint32(2), attempt)
 }
 
 func TestRegionFailureHandlerRequestCancelledResetsRecoveryState(t *testing.T) {
 	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
 	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
 	key := newRegionRecoveryKey(region.subscribedSpan.subID, region.span)
-	timer := time.NewTimer(time.Hour)
-	t.Cleanup(func() { timer.Stop() })
-	handler.recoveries[key] = &regionRecoveryState{pending: true, timer: timer}
+	handler.recoveries[key] = &regionRecoveryState{}
 
 	err := handler.handleError(context.Background(), newRegionErrorInfo(region, &requestCancelledErr{}))
 	require.NoError(t, err)
@@ -261,4 +242,22 @@ func TestRegionFailureHandlerRequestCancelledResetsRecoveryState(t *testing.T) {
 	_, ok := handler.recoveries[key]
 	handler.recoveryMu.Unlock()
 	assert.False(t, ok)
+}
+
+func TestRegionFailureHandlerExpiresRecoveryStates(t *testing.T) {
+	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
+	now := time.Now()
+	expiredKey := newRegionRecoveryKey(1, heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("b")})
+	activeKey := newRegionRecoveryKey(1, heartbeatpb.TableSpan{StartKey: []byte("b"), EndKey: []byte("c")})
+	handler.recoveries[expiredKey] = &regionRecoveryState{expiresAt: now.Add(-time.Second)}
+	handler.recoveries[activeKey] = &regionRecoveryState{expiresAt: now.Add(time.Second)}
+
+	handler.expireRecoveries(now)
+
+	handler.recoveryMu.Lock()
+	_, expiredExists := handler.recoveries[expiredKey]
+	_, activeExists := handler.recoveries[activeKey]
+	handler.recoveryMu.Unlock()
+	require.False(t, expiredExists)
+	require.True(t, activeExists)
 }

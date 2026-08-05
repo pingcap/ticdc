@@ -43,11 +43,10 @@ var (
 
 // regionFailureHandler handles failed regions and owns retry and reschedule decisions.
 type regionFailureHandler struct {
-	cache         *errCache
-	regionCache   *tikv.RegionCache
-	recoveryMu    sync.Mutex
-	recoveries    map[regionRecoveryKey]*regionRecoveryState
-	recoveryDelay func(uint32) time.Duration
+	cache       *errCache
+	regionCache *tikv.RegionCache
+	recoveryMu  sync.Mutex
+	recoveries  map[regionRecoveryKey]*regionRecoveryState
 
 	onTableDrained        func(*subscribedSpan)
 	scheduleRegionRequest func(context.Context, regionInfo)
@@ -69,10 +68,8 @@ type regionRecoveryKey struct {
 }
 
 type regionRecoveryState struct {
-	attempt    uint32
-	generation uint64
-	pending    bool
-	timer      *time.Timer
+	attempt   uint32
+	expiresAt time.Time
 }
 
 func newRegionRecoveryKey(
@@ -112,7 +109,6 @@ func newRegionFailureHandler(
 		cache:                 newErrCache(),
 		regionCache:           regionCache,
 		recoveries:            make(map[regionRecoveryKey]*regionRecoveryState),
-		recoveryDelay:         regionRecoveryDelay,
 		onTableDrained:        onTableDrained,
 		scheduleRegionRequest: scheduleRegionRequest,
 		scheduleRangeRequest:  scheduleRangeRequest,
@@ -132,41 +128,29 @@ func (r *regionFailureHandler) scheduleRecovery(
 	key := newRegionRecoveryKey(subscribedSpan.subID, span)
 
 	r.recoveryMu.Lock()
-	defer r.recoveryMu.Unlock()
 	state := r.recoveries[key]
 	if state == nil {
 		state = &regionRecoveryState{}
 		r.recoveries[key] = state
 	}
-	if state.pending {
-		return
-	}
-	if state.timer != nil {
-		state.timer.Stop()
-	}
 	if state.attempt < 32 {
 		state.attempt++
 	}
-	state.generation++
-	generation := state.generation
-	state.pending = true
-	delay := r.recoveryDelay(state.attempt)
+	delay := regionRecoveryDelay(state.attempt)
 	if minDelay > delay {
 		delay = minDelay
 	}
-	state.timer = time.AfterFunc(delay, func() {
+	state.expiresAt = time.Now().Add(delay + regionRecoveryStateTTL)
+	r.recoveryMu.Unlock()
+
+	time.AfterFunc(delay, func() {
 		r.recoveryMu.Lock()
-		current := r.recoveries[key]
-		if current == nil || current.generation != generation || !current.pending {
+		if r.recoveries[key] != state {
 			r.recoveryMu.Unlock()
 			return
 		}
-		// Keep the state after dispatch so the next failure of this range advances
-		// the backoff attempt. Successful initialization resets it.
-		current.pending = false
-		current.timer = time.AfterFunc(regionRecoveryStateTTL, func() {
-			r.expireRecovery(key, generation)
-		})
+		// Keep the attempt until the retry succeeds or the state expires.
+		state.expiresAt = time.Now().Add(regionRecoveryStateTTL)
 		r.recoveryMu.Unlock()
 
 		if ctx.Err() != nil || subscribedSpan.stopped.Load() {
@@ -177,24 +161,20 @@ func (r *regionFailureHandler) scheduleRecovery(
 	})
 }
 
-func (r *regionFailureHandler) expireRecovery(key regionRecoveryKey, generation uint64) {
+func (r *regionFailureHandler) expireRecoveries(now time.Time) {
 	r.recoveryMu.Lock()
 	defer r.recoveryMu.Unlock()
-	state := r.recoveries[key]
-	if state != nil && state.generation == generation && !state.pending {
-		delete(r.recoveries, key)
+	for key, state := range r.recoveries {
+		if !state.expiresAt.After(now) {
+			delete(r.recoveries, key)
+		}
 	}
 }
 
 func (r *regionFailureHandler) resetRecovery(key regionRecoveryKey) {
 	r.recoveryMu.Lock()
 	defer r.recoveryMu.Unlock()
-	if state := r.recoveries[key]; state != nil {
-		if state.timer != nil {
-			state.timer.Stop()
-		}
-		delete(r.recoveries, key)
-	}
+	delete(r.recoveries, key)
 }
 
 func (r *regionFailureHandler) resetRegionRecovery(region regionInfo) {
@@ -204,12 +184,7 @@ func (r *regionFailureHandler) resetRegionRecovery(region regionInfo) {
 func (r *regionFailureHandler) cancelRecoveries() {
 	r.recoveryMu.Lock()
 	defer r.recoveryMu.Unlock()
-	for key, state := range r.recoveries {
-		if state.timer != nil {
-			state.timer.Stop()
-		}
-		delete(r.recoveries, key)
-	}
+	clear(r.recoveries)
 }
 
 // Report admits a region failure into the recovery pipeline. It releases the
@@ -251,13 +226,17 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 
 	// r.cache.ready() should handle failures promptly in normal flow. The ticker is only a
 	// fallback scan and is not expected to be needed in practice.
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
+	fallbackTicker := time.NewTicker(200 * time.Millisecond)
+	defer fallbackTicker.Stop()
+	cleanupTicker := time.NewTicker(regionRecoveryStateTTL)
+	defer cleanupTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case now := <-cleanupTicker.C:
+			r.expireRecoveries(now)
+		case <-fallbackTicker.C:
 			if err := handleCachedErrors(); err != nil {
 				return err
 			}
