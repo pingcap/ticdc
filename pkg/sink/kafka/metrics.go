@@ -28,25 +28,25 @@ var (
 			Help: "The current number of in-flight requests" +
 				" awaiting a response for all brokers.",
 		}, []string{"namespace", "changefeed", "broker"})
-	// OutgoingByteRateGauge for outgoing events.
+	// outgoingByteRateGauge is for outgoing events.
 	// Meter mark for each request's size in bytes.
-	OutgoingByteRateGauge = prometheus.NewGaugeVec(
+	outgoingByteRateGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
 			Name:      "kafka_producer_outgoing_byte_rate",
 			Help:      "Bytes/second written off all brokers.",
 		}, []string{"namespace", "changefeed", "broker"})
-	// RequestRateGauge Meter mark by 1 for each request.
-	RequestRateGauge = prometheus.NewGaugeVec(
+	// requestRateGauge is marked by 1 for each request.
+	requestRateGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
 			Name:      "kafka_producer_request_rate",
 			Help:      "Requests/second sent to all brokers.",
 		}, []string{"namespace", "changefeed", "broker"})
-	// RequestLatencyGauge Histogram update by `requestLatency`.
-	RequestLatencyGauge = prometheus.NewGaugeVec(
+	// requestLatencyGauge is updated by the request latency histogram.
+	requestLatencyGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
@@ -84,9 +84,9 @@ var (
 func InitMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(compressionRatioGauge)
 	registry.MustRegister(recordsPerRequestGauge)
-	registry.MustRegister(OutgoingByteRateGauge)
-	registry.MustRegister(RequestRateGauge)
-	registry.MustRegister(RequestLatencyGauge)
+	registry.MustRegister(outgoingByteRateGauge)
+	registry.MustRegister(requestRateGauge)
+	registry.MustRegister(requestLatencyGauge)
 	registry.MustRegister(requestsInFlightGauge)
 	registry.MustRegister(responseRateGauge)
 

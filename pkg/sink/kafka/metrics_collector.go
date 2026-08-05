@@ -129,7 +129,7 @@ func (m *saramaMetricsCollector) collectBrokerMetrics() {
 		outgoingByteRateMetric := m.registry.Get(
 			getBrokerMetricName(outgoingByteRateMetricNamePrefix, brokerID))
 		if meter, ok := outgoingByteRateMetric.(metrics.Meter); ok {
-			OutgoingByteRateGauge.
+			outgoingByteRateGauge.
 				WithLabelValues(keyspace, changefeedID, brokerID).
 				Set(meter.Snapshot().Rate1())
 		}
@@ -137,7 +137,7 @@ func (m *saramaMetricsCollector) collectBrokerMetrics() {
 		requestRateMetric := m.registry.Get(
 			getBrokerMetricName(requestRateMetricNamePrefix, brokerID))
 		if meter, ok := requestRateMetric.(metrics.Meter); ok {
-			RequestRateGauge.
+			requestRateGauge.
 				WithLabelValues(keyspace, changefeedID, brokerID).
 				Set(meter.Snapshot().Rate1())
 		}
@@ -145,10 +145,10 @@ func (m *saramaMetricsCollector) collectBrokerMetrics() {
 		requestLatencyMetric := m.registry.Get(
 			getBrokerMetricName(requestLatencyInMsMetricNamePrefix, brokerID))
 		if histogram, ok := requestLatencyMetric.(metrics.Histogram); ok {
-			RequestLatencyGauge.
+			requestLatencyGauge.
 				WithLabelValues(keyspace, changefeedID, brokerID, avg).
 				Set(histogram.Snapshot().Mean() / 1000)
-			RequestLatencyGauge.
+			requestLatencyGauge.
 				WithLabelValues(keyspace, changefeedID, brokerID, p99).
 				Set(histogram.Snapshot().Percentile(0.99) / 1000)
 		}
@@ -192,13 +192,13 @@ func (m *saramaMetricsCollector) cleanupBrokerMetrics() {
 	changefeedID := m.changefeedID.Name()
 	for id := range m.brokers {
 		brokerID := strconv.Itoa(int(id))
-		OutgoingByteRateGauge.
+		outgoingByteRateGauge.
 			DeleteLabelValues(keyspace, changefeedID, brokerID)
-		RequestRateGauge.
+		requestRateGauge.
 			DeleteLabelValues(keyspace, changefeedID, brokerID)
-		RequestLatencyGauge.
+		requestLatencyGauge.
 			DeleteLabelValues(keyspace, changefeedID, brokerID, avg)
-		RequestLatencyGauge.
+		requestLatencyGauge.
 			DeleteLabelValues(keyspace, changefeedID, brokerID, p99)
 		requestsInFlightGauge.
 			DeleteLabelValues(keyspace, changefeedID, brokerID)
