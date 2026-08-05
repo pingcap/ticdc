@@ -394,7 +394,7 @@ replace (
 
 	// copy from TiDB
 	github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	github.com/pingcap/tidb => github.com/pingyu/tidb v1.1.0-beta.0.20260803170810-5f67e65a3614
-	github.com/pingcap/tidb/pkg/parser => github.com/pingyu/tidb/pkg/parser v0.0.0-20260803170810-5f67e65a3614
-	github.com/tikv/client-go/v2 => github.com/pingyu/client-go/v2 v2.0.1-0.20260803170505-11cb9ad8088b
+	github.com/pingcap/tidb => github.com/pingyu/tidb v1.1.0-beta.0.20260805023039-debbb81f8e59
+	github.com/pingcap/tidb/pkg/parser => github.com/pingyu/tidb/pkg/parser v0.0.0-20260805023039-debbb81f8e59
+	github.com/tikv/client-go/v2 => github.com/pingyu/client-go/v2 v2.0.1-0.20260805022548-e8984187ef67
 )
