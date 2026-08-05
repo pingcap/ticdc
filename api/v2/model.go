@@ -458,6 +458,15 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 					Token:           c.Sink.KafkaConfig.GlueSchemaRegistryConfig.Token,
 				}
 			}
+			var awsMSKIAMConfig *config.AWSMSKIAMConfig
+			if c.Sink.KafkaConfig.AWSMSKIAM != nil {
+				awsMSKIAMConfig = &config.AWSMSKIAMConfig{
+					Region:          c.Sink.KafkaConfig.AWSMSKIAM.Region,
+					RoleARN:         c.Sink.KafkaConfig.AWSMSKIAM.RoleARN,
+					RoleSessionName: c.Sink.KafkaConfig.AWSMSKIAM.RoleSessionName,
+					ExternalID:      c.Sink.KafkaConfig.AWSMSKIAM.ExternalID,
+				}
+			}
 
 			kafkaConfig = &config.KafkaConfig{
 				PartitionNum:                 c.Sink.KafkaConfig.PartitionNum,
@@ -488,6 +497,8 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				SASLOAuthScopes:              c.Sink.KafkaConfig.SASLOAuthScopes,
 				SASLOAuthGrantType:           c.Sink.KafkaConfig.SASLOAuthGrantType,
 				SASLOAuthAudience:            c.Sink.KafkaConfig.SASLOAuthAudience,
+				SASLOAuthProvider:            c.Sink.KafkaConfig.SASLOAuthProvider,
+				AWSMSKIAM:                    awsMSKIAMConfig,
 				EnableTLS:                    c.Sink.KafkaConfig.EnableTLS,
 				CA:                           c.Sink.KafkaConfig.CA,
 				Cert:                         c.Sink.KafkaConfig.Cert,
@@ -789,6 +800,15 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 					Token:           cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.Token,
 				}
 			}
+			var awsMSKIAMConfig *AWSMSKIAMConfig
+			if cloned.Sink.KafkaConfig.AWSMSKIAM != nil {
+				awsMSKIAMConfig = &AWSMSKIAMConfig{
+					Region:          cloned.Sink.KafkaConfig.AWSMSKIAM.Region,
+					RoleARN:         cloned.Sink.KafkaConfig.AWSMSKIAM.RoleARN,
+					RoleSessionName: cloned.Sink.KafkaConfig.AWSMSKIAM.RoleSessionName,
+					ExternalID:      cloned.Sink.KafkaConfig.AWSMSKIAM.ExternalID,
+				}
+			}
 
 			kafkaConfig = &KafkaConfig{
 				PartitionNum:                 cloned.Sink.KafkaConfig.PartitionNum,
@@ -819,6 +839,8 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				SASLOAuthScopes:              cloned.Sink.KafkaConfig.SASLOAuthScopes,
 				SASLOAuthGrantType:           cloned.Sink.KafkaConfig.SASLOAuthGrantType,
 				SASLOAuthAudience:            cloned.Sink.KafkaConfig.SASLOAuthAudience,
+				SASLOAuthProvider:            cloned.Sink.KafkaConfig.SASLOAuthProvider,
+				AWSMSKIAM:                    awsMSKIAMConfig,
 				EnableTLS:                    cloned.Sink.KafkaConfig.EnableTLS,
 				CA:                           cloned.Sink.KafkaConfig.CA,
 				Cert:                         cloned.Sink.KafkaConfig.Cert,
@@ -1506,6 +1528,8 @@ type KafkaConfig struct {
 	SASLOAuthScopes              []string                  `json:"sasl_oauth_scopes,omitempty" toml:"sasl-oauth-scopes,omitempty"`
 	SASLOAuthGrantType           *string                   `json:"sasl_oauth_grant_type,omitempty" toml:"sasl-oauth-grant-type,omitempty"`
 	SASLOAuthAudience            *string                   `json:"sasl_oauth_audience,omitempty" toml:"sasl-oauth-audience,omitempty"`
+	SASLOAuthProvider            *string                   `json:"sasl_oauth_provider,omitempty" toml:"sasl-oauth-provider,omitempty"`
+	AWSMSKIAM                    *AWSMSKIAMConfig          `json:"aws_msk_iam,omitempty" toml:"aws-msk-iam,omitempty"`
 	EnableTLS                    *bool                     `json:"enable_tls,omitempty" toml:"enable-tls,omitempty"`
 	CA                           *string                   `json:"ca,omitempty" toml:"ca,omitempty"`
 	Cert                         *string                   `json:"cert,omitempty" toml:"cert,omitempty"`
@@ -1571,6 +1595,14 @@ type GlueSchemaRegistryConfig struct {
 	// SecretAccessKey of the schema registry
 	SecretAccessKey string `json:"secret_access_key,omitempty" toml:"secret-access-key,omitempty"`
 	Token           string `json:"token,omitempty" toml:"token,omitempty"`
+}
+
+// AWSMSKIAMConfig represents an Amazon MSK IAM authentication configuration.
+type AWSMSKIAMConfig struct {
+	Region          string `json:"region" toml:"region"`
+	RoleARN         string `json:"role_arn,omitempty" toml:"role-arn,omitempty"`
+	RoleSessionName string `json:"role_session_name,omitempty" toml:"role-session-name,omitempty"`
+	ExternalID      string `json:"external_id,omitempty" toml:"external-id,omitempty"`
 }
 
 // OpenProtocolConfig represents the configurations for open protocol encoding
