@@ -138,6 +138,7 @@ func (f *factoryImpl) PdClient() (pd.Client, error) {
 	pdClient, err := pd.NewClientWithContext(
 		f.ctx, "cdc-factory", pdEndpoints, credential.PDSecurityOption(),
 		pdopt.WithMaxErrorRetry(maxGetPDClientRetryTimes),
+		pdopt.WithEnableRouterClient(false),
 		// TODO(hi-rustin): add gRPC metrics to Options.
 		// See also: https://github.com/pingcap/tiflow/pull/2341#discussion_r673032407.
 		pdopt.WithGRPCDialOptions(
