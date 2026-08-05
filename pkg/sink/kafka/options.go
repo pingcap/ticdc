@@ -496,17 +496,11 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 				return errors.ErrKafkaInvalidConfig.GenWithStack("SASL OAuth provider cannot be empty")
 			}
 		}
-		if kafkaConfig.AWSRegion != nil {
-			o.SASL.AWSMSKIAM.Region = strings.TrimSpace(*kafkaConfig.AWSRegion)
-		}
-		if kafkaConfig.AWSRoleARN != nil {
-			o.SASL.AWSMSKIAM.RoleARN = strings.TrimSpace(*kafkaConfig.AWSRoleARN)
-		}
-		if kafkaConfig.AWSRoleSessionName != nil {
-			o.SASL.AWSMSKIAM.RoleSessionName = strings.TrimSpace(*kafkaConfig.AWSRoleSessionName)
-		}
-		if kafkaConfig.AWSExternalID != nil {
-			o.SASL.AWSMSKIAM.ExternalID = strings.TrimSpace(*kafkaConfig.AWSExternalID)
+		if kafkaConfig.AWSMSKIAM != nil {
+			o.SASL.AWSMSKIAM.Region = strings.TrimSpace(kafkaConfig.AWSMSKIAM.Region)
+			o.SASL.AWSMSKIAM.RoleARN = strings.TrimSpace(kafkaConfig.AWSMSKIAM.RoleARN)
+			o.SASL.AWSMSKIAM.RoleSessionName = strings.TrimSpace(kafkaConfig.AWSMSKIAM.RoleSessionName)
+			o.SASL.AWSMSKIAM.ExternalID = strings.TrimSpace(kafkaConfig.AWSMSKIAM.ExternalID)
 		}
 		standardOAuthConfigPresent := kafkaConfig.SASLOAuthClientID != nil ||
 			kafkaConfig.SASLOAuthClientSecret != nil || kafkaConfig.SASLOAuthTokenURL != nil ||
@@ -576,8 +570,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 		}
 
 		awsMSKIAM := o.SASL.AWSMSKIAM
-		awsConfigPresent := o.SASL.OAuthProvider != "" || awsMSKIAM.Region != "" ||
-			awsMSKIAM.RoleARN != "" || awsMSKIAM.RoleSessionName != "" || awsMSKIAM.ExternalID != ""
+		awsConfigPresent := o.SASL.OAuthProvider != "" || kafkaConfig.AWSMSKIAM != nil
 		if awsConfigPresent {
 			if o.SASL.OAuthProvider != SASLOAuthProviderAWSMSKIAM {
 				return errors.ErrKafkaInvalidConfig.GenWithStack(
