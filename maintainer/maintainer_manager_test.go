@@ -671,13 +671,13 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	meta := &keyspacepb.KeyspaceMeta{
-		Id:   0,
-		Name: "default",
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 0},
+		Name:     "default",
 	}
 	if kerneltype.IsNextGen() {
 		meta = &keyspacepb.KeyspaceMeta{
-			Id:   1,
-			Name: "ks1",
+			Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 1},
+			Name:     "ks1",
 		}
 	}
 	keyspaceManager := keyspace.NewMockManager(ctrl)

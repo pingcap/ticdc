@@ -77,12 +77,12 @@ func (o *verifyGCSafepointOptions) run(cmd *cobra.Command) error {
 		if !ok {
 			return errors.ErrGetServiceSafepointFailed.GenWithStackByArgs("PD client does not support LegacyClientV2")
 		}
-		snapshotTS, err = legacyClient.GetMinServiceSafePointV2(ctx, keyspaceMeta.Id)
+		snapshotTS, err = legacyClient.GetMinServiceSafePointV2(ctx, keyspaceMeta.GetId())
 		if err != nil {
 			return errors.WrapError(errors.ErrGetServiceSafepointFailed, err)
 		}
 	} else {
-		gcState, err := o.pdClient.GetGCStatesClient(keyspaceMeta.Id).GetGCState(ctx)
+		gcState, err := o.pdClient.GetGCStatesClient(keyspaceMeta.GetId()).GetGCState(ctx)
 		if err != nil {
 			return errors.WrapError(errors.ErrGetGCBarrierFailed, err)
 		}

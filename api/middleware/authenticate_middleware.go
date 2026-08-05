@@ -67,7 +67,7 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 
 	// verifyTiDBUser verify whether the username and password are valid in TiDB. It does the validation via
 	// the successfully build of a connection with upstream TiDB with the username and password.
-	tidbs, err := upstream.FetchTiDBTopology(ctx, etcdCli, keyspaceMeta.Id)
+	tidbs, err := upstream.FetchTiDBTopology(ctx, etcdCli, keyspaceMeta.GetId())
 	if err != nil {
 		return errors.Trace(err)
 	}

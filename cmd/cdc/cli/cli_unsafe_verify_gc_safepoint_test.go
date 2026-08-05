@@ -40,7 +40,7 @@ type verifyGCSafepointTestPDClient struct {
 
 func (c *verifyGCSafepointTestPDClient) LoadKeyspace(_ context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
 	c.loadedKeyspace = keyspace
-	return &keyspacepb.KeyspaceMeta{Id: c.keyspaceID}, nil
+	return &keyspacepb.KeyspaceMeta{Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: c.keyspaceID}}, nil
 }
 
 func (c *verifyGCSafepointTestPDClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
