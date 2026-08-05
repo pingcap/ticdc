@@ -431,21 +431,21 @@ func TestHandleEntriesReleasesMemoryAfterDownstreamCallback(t *testing.T) {
 	require.Zero(t, quotaState.used)
 }
 
-func TestRegionEventHandlerInitializedResetsRetryState(t *testing.T) {
+func TestRegionEventHandlerInitializedResetsRecoveryState(t *testing.T) {
 	span := &subscribedSpan{
 		subID:             1,
 		span:              heartbeatpb.TableSpan{TableID: 1},
 		advanceResolvedTs: func(uint64) {},
 	}
 	failureHandler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
-	key := regionRetryKey{subscriptionID: span.subID, regionID: 1}
-	failureHandler.retries[key] = &regionRetryState{}
+	key := newRegionRecoveryKey(span.subID, span.span)
+	failureHandler.recoveries[key] = &regionRecoveryState{}
 
 	region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), span.span, nil, span, false)
 	region.lockedRangeState = &regionlock.LockedRangeState{}
 	region.rpcCtx = &tikv.RPCContext{Addr: "store-1"}
 	state := newRegionFeedState(region, uint64(span.subID), &regionRequestWorker{tracker: newRegionTracker()}, nil, func(state *regionFeedState) {
-		failureHandler.resetRegionRetry(span.subID, state.getRegionID())
+		failureHandler.resetRegionRecovery(state.region)
 	})
 
 	handler := &regionEventHandler{
@@ -461,9 +461,9 @@ func TestRegionEventHandlerInitializedResetsRetryState(t *testing.T) {
 		},
 	})
 
-	failureHandler.retryMu.Lock()
-	_, ok := failureHandler.retries[key]
-	failureHandler.retryMu.Unlock()
+	failureHandler.recoveryMu.Lock()
+	_, ok := failureHandler.recoveries[key]
+	failureHandler.recoveryMu.Unlock()
 	require.False(t, ok)
 }
 

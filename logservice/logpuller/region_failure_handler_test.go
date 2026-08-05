@@ -168,7 +168,7 @@ func TestRegionFailureHandlerDelaysNotLeaderRangeRetry(t *testing.T) {
 			rangeRetryCh <- task
 		},
 	)
-	handler.retryDelay = func(uint32) time.Duration { return 50 * time.Millisecond }
+	handler.recoveryDelay = func(uint32) time.Duration { return 50 * time.Millisecond }
 
 	errInfo := newRegionErrorInfo(region, &eventError{
 		err: &cdcpb.Error{NotLeader: &errorpb.NotLeader{}},
@@ -201,22 +201,96 @@ func TestRegionFailureHandlerDelaysNotLeaderRangeRetry(t *testing.T) {
 	}
 }
 
-func TestRegionFailureHandlerRequestCancelledResetsRetryState(t *testing.T) {
+func TestRegionRecoveryBackoffFollowsRangeAcrossRegionChanges(t *testing.T) {
+	regionRetryCh := make(chan regionInfo, 2)
+	handler := newRegionFailureHandler(
+		nil,
+		func(*subscribedSpan) {},
+		func(_ context.Context, region regionInfo) {
+			regionRetryCh <- region
+		},
+		func(context.Context, rangeTask) {},
+	)
+	t.Cleanup(handler.cancelRecoveries)
+
+	attempts := make([]uint32, 0, 2)
+	handler.recoveryDelay = func(attempt uint32) time.Duration {
+		attempts = append(attempts, attempt)
+		return time.Millisecond
+	}
+
+	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
+	errInfo := newRegionErrorInfo(region, &eventError{
+		err: &cdcpb.Error{Congested: &cdcpb.Congested{}},
+	})
+	require.NoError(t, handler.handleError(context.Background(), errInfo))
+	select {
+	case retried := <-regionRetryCh:
+		require.Equal(t, uint64(1), retried.verID.GetID())
+	case <-time.After(time.Second):
+		t.Fatal("first region recovery was not scheduled")
+	}
+
+	region.verID = tikv.NewRegionVerID(2, 1, 1)
+	errInfo = newRegionErrorInfo(region, &eventError{
+		err: &cdcpb.Error{Congested: &cdcpb.Congested{}},
+	})
+	require.NoError(t, handler.handleError(context.Background(), errInfo))
+	select {
+	case retried := <-regionRetryCh:
+		require.Equal(t, uint64(2), retried.verID.GetID())
+	case <-time.After(time.Second):
+		t.Fatal("second region recovery was not scheduled")
+	}
+
+	require.Equal(t, []uint32{1, 2}, attempts)
+}
+
+func TestRegionRecoveryPendingRangeRetrySupersedesRegionRetry(t *testing.T) {
+	handler := newRegionFailureHandler(
+		nil,
+		func(*subscribedSpan) {},
+		func(context.Context, regionInfo) {},
+		func(context.Context, rangeTask) {},
+	)
+	t.Cleanup(handler.cancelRecoveries)
+	handler.recoveryDelay = func(uint32) time.Duration { return time.Hour }
+
+	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
+	handler.scheduleRecovery(context.Background(), regionRecovery{
+		action: retryRegionRequest,
+		region: region,
+	})
+	handler.scheduleRecovery(context.Background(), regionRecovery{
+		action: retryRangeRequest,
+		rangeTask: rangeTask{
+			span:           region.span,
+			subscribedSpan: region.subscribedSpan,
+		},
+	})
+
+	key := newRegionRecoveryKey(region.subscribedSpan.subID, region.span)
+	handler.recoveryMu.Lock()
+	state := handler.recoveries[key]
+	handler.recoveryMu.Unlock()
+	require.NotNil(t, state)
+	require.Equal(t, retryRangeRequest, state.recovery.action)
+	require.Equal(t, uint32(1), state.attempt)
+}
+
+func TestRegionFailureHandlerRequestCancelledResetsRecoveryState(t *testing.T) {
 	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
 	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
-	key := regionRetryKey{
-		subscriptionID: region.subscribedSpan.subID,
-		regionID:       region.verID.GetID(),
-	}
+	key := newRegionRecoveryKey(region.subscribedSpan.subID, region.span)
 	timer := time.NewTimer(time.Hour)
 	t.Cleanup(func() { timer.Stop() })
-	handler.retries[key] = &regionRetryState{pending: true, timer: timer}
+	handler.recoveries[key] = &regionRecoveryState{pending: true, timer: timer}
 
 	err := handler.handleError(context.Background(), newRegionErrorInfo(region, &requestCancelledErr{}))
 	require.NoError(t, err)
 
-	handler.retryMu.Lock()
-	_, ok := handler.retries[key]
-	handler.retryMu.Unlock()
+	handler.recoveryMu.Lock()
+	_, ok := handler.recoveries[key]
+	handler.recoveryMu.Unlock()
 	assert.False(t, ok)
 }
