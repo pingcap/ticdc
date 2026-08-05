@@ -72,6 +72,8 @@ func (s *regionEventSink) Push(subID SubscriptionID, event regionEvent) {
 	if event.needsMemoryAccounting() {
 		span := event.mustFirstState().region.subscribedSpan
 		event.memoryBytes = uint64(event.getSize())
+		// AcquireEvent only returns false after shutdown or when the
+		// subscription has already been stopped.
 		if !s.memoryQuota.AcquireEvent(s.ctx, span, event.memoryBytes) {
 			return
 		}

@@ -55,8 +55,8 @@ type regionEvent struct {
 
 	entries    *cdcpb.Event_Entries_
 	resolvedTs uint64
-	// memoryBytes is released when this event is dropped or after downstream
-	// finishes consuming the entries derived from it.
+	// memoryBytes is released when this event is dropped or when the derived KV
+	// events no longer need to be retained by the log puller.
 	memoryBytes uint64
 }
 
