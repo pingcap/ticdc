@@ -338,6 +338,10 @@ func (c *Controller) removeTerminalSpanCoveredByMergedSpan(
 func (c *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {
 	minCheckpointTsForOperator := c.operatorController.GetMinCheckpointTs(minCheckpointTs)
 	minCheckpointTsForSpan := c.spanController.GetMinCheckpointTsForNonReplicatingSpans(minCheckpointTs)
+	log.Info("GetMinCheckpointTs",
+		zap.String("changefeed", c.changefeedID.Name()),
+		zap.Uint64("minCheckpointTsForOperator", minCheckpointTsForOperator),
+		zap.Uint64("minCheckpointTsForSpan", minCheckpointTsForSpan))
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }
 
