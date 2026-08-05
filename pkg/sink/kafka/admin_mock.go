@@ -7,169 +7,101 @@ package kafka
 import (
 	reflect "reflect"
 
-	sarama "github.com/IBM/sarama"
 	gomock "github.com/golang/mock/gomock"
 )
 
-// MocksaramaClient is a mock of saramaClient interface.
-type MocksaramaClient struct {
+// MockAdmin is a mock of Admin interface.
+type MockAdmin struct {
 	ctrl     *gomock.Controller
-	recorder *MocksaramaClientMockRecorder
+	recorder *MockAdminMockRecorder
 }
 
-// MocksaramaClientMockRecorder is the mock recorder for MocksaramaClient.
-type MocksaramaClientMockRecorder struct {
-	mock *MocksaramaClient
+// MockAdminMockRecorder is the mock recorder for MockAdmin.
+type MockAdminMockRecorder struct {
+	mock *MockAdmin
 }
 
-// NewMocksaramaClient creates a new mock instance.
-func NewMocksaramaClient(ctrl *gomock.Controller) *MocksaramaClient {
-	mock := &MocksaramaClient{ctrl: ctrl}
-	mock.recorder = &MocksaramaClientMockRecorder{mock}
+// NewMockAdmin creates a new mock instance.
+func NewMockAdmin(ctrl *gomock.Controller) *MockAdmin {
+	mock := &MockAdmin{ctrl: ctrl}
+	mock.recorder = &MockAdminMockRecorder{mock}
 	return mock
 }
 
 // EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MocksaramaClient) EXPECT() *MocksaramaClientMockRecorder {
-	return m.recorder
-}
-
-// Brokers mocks base method.
-func (m *MocksaramaClient) Brokers() []*sarama.Broker {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Brokers")
-	ret0, _ := ret[0].([]*sarama.Broker)
-	return ret0
-}
-
-// Brokers indicates an expected call of Brokers.
-func (mr *MocksaramaClientMockRecorder) Brokers() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Brokers", reflect.TypeOf((*MocksaramaClient)(nil).Brokers))
-}
-
-// Close mocks base method.
-func (m *MocksaramaClient) Close() error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Close")
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Close indicates an expected call of Close.
-func (mr *MocksaramaClientMockRecorder) Close() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MocksaramaClient)(nil).Close))
-}
-
-// Partitions mocks base method.
-func (m *MocksaramaClient) Partitions(topic string) ([]int32, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Partitions", topic)
-	ret0, _ := ret[0].([]int32)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// Partitions indicates an expected call of Partitions.
-func (mr *MocksaramaClientMockRecorder) Partitions(topic interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Partitions", reflect.TypeOf((*MocksaramaClient)(nil).Partitions), topic)
-}
-
-// MocksaramaClusterAdmin is a mock of saramaClusterAdmin interface.
-type MocksaramaClusterAdmin struct {
-	ctrl     *gomock.Controller
-	recorder *MocksaramaClusterAdminMockRecorder
-}
-
-// MocksaramaClusterAdminMockRecorder is the mock recorder for MocksaramaClusterAdmin.
-type MocksaramaClusterAdminMockRecorder struct {
-	mock *MocksaramaClusterAdmin
-}
-
-// NewMocksaramaClusterAdmin creates a new mock instance.
-func NewMocksaramaClusterAdmin(ctrl *gomock.Controller) *MocksaramaClusterAdmin {
-	mock := &MocksaramaClusterAdmin{ctrl: ctrl}
-	mock.recorder = &MocksaramaClusterAdminMockRecorder{mock}
-	return mock
-}
-
-// EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MocksaramaClusterAdmin) EXPECT() *MocksaramaClusterAdminMockRecorder {
+func (m *MockAdmin) EXPECT() *MockAdminMockRecorder {
 	return m.recorder
 }
 
 // Close mocks base method.
-func (m *MocksaramaClusterAdmin) Close() error {
+func (m *MockAdmin) Close() {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Close")
-	ret0, _ := ret[0].(error)
-	return ret0
+	m.ctrl.Call(m, "Close")
 }
 
 // Close indicates an expected call of Close.
-func (mr *MocksaramaClusterAdminMockRecorder) Close() *gomock.Call {
+func (mr *MockAdminMockRecorder) Close() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MocksaramaClusterAdmin)(nil).Close))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockAdmin)(nil).Close))
 }
 
 // CreateTopic mocks base method.
-func (m *MocksaramaClusterAdmin) CreateTopic(topic string, detail *sarama.TopicDetail, validateOnly bool) error {
+func (m *MockAdmin) CreateTopic(detail TopicDetail, validateOnly bool) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateTopic", topic, detail, validateOnly)
+	ret := m.ctrl.Call(m, "CreateTopic", detail, validateOnly)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // CreateTopic indicates an expected call of CreateTopic.
-func (mr *MocksaramaClusterAdminMockRecorder) CreateTopic(topic, detail, validateOnly interface{}) *gomock.Call {
+func (mr *MockAdminMockRecorder) CreateTopic(detail, validateOnly interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTopic", reflect.TypeOf((*MocksaramaClusterAdmin)(nil).CreateTopic), topic, detail, validateOnly)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTopic", reflect.TypeOf((*MockAdmin)(nil).CreateTopic), detail, validateOnly)
 }
 
-// DescribeCluster mocks base method.
-func (m *MocksaramaClusterAdmin) DescribeCluster() ([]*sarama.Broker, int32, error) {
+// GetBrokerConfig mocks base method.
+func (m *MockAdmin) GetBrokerConfig(configName string) (string, bool, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeCluster")
-	ret0, _ := ret[0].([]*sarama.Broker)
-	ret1, _ := ret[1].(int32)
+	ret := m.ctrl.Call(m, "GetBrokerConfig", configName)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(bool)
 	ret2, _ := ret[2].(error)
 	return ret0, ret1, ret2
 }
 
-// DescribeCluster indicates an expected call of DescribeCluster.
-func (mr *MocksaramaClusterAdminMockRecorder) DescribeCluster() *gomock.Call {
+// GetBrokerConfig indicates an expected call of GetBrokerConfig.
+func (mr *MockAdminMockRecorder) GetBrokerConfig(configName interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeCluster", reflect.TypeOf((*MocksaramaClusterAdmin)(nil).DescribeCluster))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBrokerConfig", reflect.TypeOf((*MockAdmin)(nil).GetBrokerConfig), configName)
 }
 
-// DescribeConfig mocks base method.
-func (m *MocksaramaClusterAdmin) DescribeConfig(resource sarama.ConfigResource) ([]sarama.ConfigEntry, error) {
+// GetTopicConfig mocks base method.
+func (m *MockAdmin) GetTopicConfig(topicName, configName string) (string, bool, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeConfig", resource)
-	ret0, _ := ret[0].([]sarama.ConfigEntry)
+	ret := m.ctrl.Call(m, "GetTopicConfig", topicName, configName)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetTopicConfig indicates an expected call of GetTopicConfig.
+func (mr *MockAdminMockRecorder) GetTopicConfig(topicName, configName interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicConfig", reflect.TypeOf((*MockAdmin)(nil).GetTopicConfig), topicName, configName)
+}
+
+// GetTopicsMeta mocks base method.
+func (m *MockAdmin) GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTopicsMeta", topics, ignoreTopicError)
+	ret0, _ := ret[0].(map[string]TopicDetail)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// DescribeConfig indicates an expected call of DescribeConfig.
-func (mr *MocksaramaClusterAdminMockRecorder) DescribeConfig(resource interface{}) *gomock.Call {
+// GetTopicsMeta indicates an expected call of GetTopicsMeta.
+func (mr *MockAdminMockRecorder) GetTopicsMeta(topics, ignoreTopicError interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeConfig", reflect.TypeOf((*MocksaramaClusterAdmin)(nil).DescribeConfig), resource)
-}
-
-// DescribeTopics mocks base method.
-func (m *MocksaramaClusterAdmin) DescribeTopics(topics []string) ([]*sarama.TopicMetadata, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeTopics", topics)
-	ret0, _ := ret[0].([]*sarama.TopicMetadata)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// DescribeTopics indicates an expected call of DescribeTopics.
-func (mr *MocksaramaClusterAdminMockRecorder) DescribeTopics(topics interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeTopics", reflect.TypeOf((*MocksaramaClusterAdmin)(nil).DescribeTopics), topics)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicsMeta", reflect.TypeOf((*MockAdmin)(nil).GetTopicsMeta), topics, ignoreTopicError)
 }

@@ -38,7 +38,7 @@ const (
 	defaultPartitionNum = 3
 	// defaultMaxRetry is the default retry budget for Kafka producers.
 	defaultMaxRetry = 5
-	// defaultTimeout is the default timeout for Kafka connections.
+	// defaultTimeout is the default timeout for Kafka connections and requests.
 	defaultTimeout = 10 * time.Second
 )
 
@@ -66,7 +66,7 @@ const (
 	SASLTypeSCRAMSHA256 = "SCRAM-SHA-256"
 	// SASLTypeSCRAMSHA512 represents the SCRAM-SHA-512 mechanism.
 	SASLTypeSCRAMSHA512 = "SCRAM-SHA-512"
-	// SASLTypeGSSAPI represents the gssapi mechanism.
+	// SASLTypeGSSAPI represents the GSSAPI mechanism.
 	SASLTypeGSSAPI = "GSSAPI"
 	// SASLTypeOAuth represents the SASL/OAUTHBEARER mechanism (Kafka 2.0.0+)
 	SASLTypeOAuth = "OAUTHBEARER"
@@ -166,12 +166,16 @@ type options struct {
 	EnableTLS          bool
 	Credential         *security.Credential
 	InsecureSkipVerify bool
-	SASL               *security.SASL
+	sasl               *saslConfig
 
 	// Timeout for network configurations, default to `10s`
 	DialTimeout  time.Duration
 	WriteTimeout time.Duration
 	ReadTimeout  time.Duration
+}
+
+func (o *options) requestTimeout() time.Duration {
+	return max(o.ReadTimeout, o.WriteTimeout)
 }
 
 // NewOptions returns a default Kafka configuration
@@ -186,7 +190,7 @@ func NewOptions() *options {
 		RequiredAcks:       WaitForAll,
 		Credential:         &security.Credential{},
 		InsecureSkipVerify: false,
-		SASL:               &security.SASL{},
+		sasl:               &saslConfig{},
 		AutoCreate:         true,
 		DialTimeout:        defaultTimeout,
 		WriteTimeout:       defaultTimeout,
@@ -289,36 +293,33 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	}
 
 	if urlParameter.DialTimeout != nil && *urlParameter.DialTimeout != "" {
-		a, err := time.ParseDuration(*urlParameter.DialTimeout)
+		o.DialTimeout, err = time.ParseDuration(*urlParameter.DialTimeout)
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
-		if a <= 0 {
+		if o.DialTimeout <= 0 {
 			return errors.ErrKafkaInvalidConfig.GenWithStack("dial-timeout must be greater than zero")
 		}
-		o.DialTimeout = a
 	}
 
 	if urlParameter.WriteTimeout != nil && *urlParameter.WriteTimeout != "" {
-		a, err := time.ParseDuration(*urlParameter.WriteTimeout)
+		o.WriteTimeout, err = time.ParseDuration(*urlParameter.WriteTimeout)
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
-		if a <= 0 {
+		if o.WriteTimeout <= 0 {
 			return errors.ErrKafkaInvalidConfig.GenWithStack("write-timeout must be greater than zero")
 		}
-		o.WriteTimeout = a
 	}
 
 	if urlParameter.ReadTimeout != nil && *urlParameter.ReadTimeout != "" {
-		a, err := time.ParseDuration(*urlParameter.ReadTimeout)
+		o.ReadTimeout, err = time.ParseDuration(*urlParameter.ReadTimeout)
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
-		if a <= 0 {
+		if o.ReadTimeout <= 0 {
 			return errors.ErrKafkaInvalidConfig.GenWithStack("read-timeout must be greater than zero")
 		}
-		o.ReadTimeout = a
 	}
 
 	if urlParameter.RequiredAcks != nil {
@@ -398,7 +399,8 @@ func (o *options) applyTLS(params *urlConfig) error {
 
 	if o.Credential != nil && !o.Credential.IsEmpty() &&
 		!o.Credential.IsTLSEnabled() {
-		return errors.ErrKafkaInvalidConfig.GenWithStack("ca, cert and key files should all be supplied")
+		return errors.ErrKafkaInvalidConfig.GenWithStack(
+			"ca, cert and key files should all be supplied")
 	}
 
 	// if enable-tls is not set, but credential files are set,
@@ -411,7 +413,8 @@ func (o *options) applyTLS(params *urlConfig) error {
 		enableTLS := *params.EnableTLS
 
 		if o.Credential != nil && o.Credential.IsTLSEnabled() && !enableTLS {
-			return errors.ErrKafkaInvalidConfig.GenWithStack("credential files are supplied, but 'enable-tls' is set to false")
+			return errors.ErrKafkaInvalidConfig.GenWithStack(
+				"credential files are supplied, but 'enable-tls' is set to false")
 		}
 		o.EnableTLS = enableTLS
 	} else {
@@ -430,56 +433,56 @@ func (o *options) applyTLS(params *urlConfig) error {
 
 func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConfig) error {
 	if urlParameter.SASLUser != nil && *urlParameter.SASLUser != "" {
-		o.SASL.SASLUser = *urlParameter.SASLUser
+		o.sasl.user = *urlParameter.SASLUser
 	}
 
 	if urlParameter.SASLPassword != nil && *urlParameter.SASLPassword != "" {
-		o.SASL.SASLPassword = *urlParameter.SASLPassword
+		o.sasl.password = *urlParameter.SASLPassword
 	}
 
 	if urlParameter.SASLMechanism != nil && *urlParameter.SASLMechanism != "" {
-		mechanism, err := security.SASLMechanismFromString(*urlParameter.SASLMechanism)
+		mechanism, err := saslMechanismFromString(*urlParameter.SASLMechanism)
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
-		o.SASL.SASLMechanism = mechanism
+		o.sasl.mechanism = mechanism
 	}
 
 	if urlParameter.SASLGssAPIAuthType != nil && *urlParameter.SASLGssAPIAuthType != "" {
-		authType, err := security.AuthTypeFromString(*urlParameter.SASLGssAPIAuthType)
+		authType, err := gssapiAuthTypeFromString(*urlParameter.SASLGssAPIAuthType)
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
-		o.SASL.GSSAPI.AuthType = authType
+		o.sasl.gssapi.authType = authType
 	}
 
 	if urlParameter.SASLGssAPIKeytabPath != nil && *urlParameter.SASLGssAPIKeytabPath != "" {
-		o.SASL.GSSAPI.KeyTabPath = *urlParameter.SASLGssAPIKeytabPath
+		o.sasl.gssapi.keyTabPath = *urlParameter.SASLGssAPIKeytabPath
 	}
 
 	if urlParameter.SASLGssAPIKerberosConfigPath != nil &&
 		*urlParameter.SASLGssAPIKerberosConfigPath != "" {
-		o.SASL.GSSAPI.KerberosConfigPath = *urlParameter.SASLGssAPIKerberosConfigPath
+		o.sasl.gssapi.kerberosConfigPath = *urlParameter.SASLGssAPIKerberosConfigPath
 	}
 
 	if urlParameter.SASLGssAPIServiceName != nil && *urlParameter.SASLGssAPIServiceName != "" {
-		o.SASL.GSSAPI.ServiceName = *urlParameter.SASLGssAPIServiceName
+		o.sasl.gssapi.serviceName = *urlParameter.SASLGssAPIServiceName
 	}
 
 	if urlParameter.SASLGssAPIUser != nil && *urlParameter.SASLGssAPIUser != "" {
-		o.SASL.GSSAPI.Username = *urlParameter.SASLGssAPIUser
+		o.sasl.gssapi.username = *urlParameter.SASLGssAPIUser
 	}
 
 	if urlParameter.SASLGssAPIPassword != nil && *urlParameter.SASLGssAPIPassword != "" {
-		o.SASL.GSSAPI.Password = *urlParameter.SASLGssAPIPassword
+		o.sasl.gssapi.password = *urlParameter.SASLGssAPIPassword
 	}
 
 	if urlParameter.SASLGssAPIRealm != nil && *urlParameter.SASLGssAPIRealm != "" {
-		o.SASL.GSSAPI.Realm = *urlParameter.SASLGssAPIRealm
+		o.sasl.gssapi.realm = *urlParameter.SASLGssAPIRealm
 	}
 
 	if urlParameter.SASLGssAPIDisablePafxfast != nil {
-		o.SASL.GSSAPI.DisablePAFXFAST = *urlParameter.SASLGssAPIDisablePafxfast
+		o.sasl.gssapi.disablePAFXFAST = *urlParameter.SASLGssAPIDisablePafxfast
 	}
 
 	if sinkConfig != nil && sinkConfig.KafkaConfig != nil {
@@ -488,7 +491,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			if clientID == "" {
 				return errors.ErrKafkaInvalidConfig.GenWithStack("OAuth2 client ID cannot be empty")
 			}
-			o.SASL.OAuth2.ClientID = clientID
+			o.sasl.oauth2.clientID = clientID
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthClientSecret != nil {
@@ -503,7 +506,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			if err != nil {
 				return errors.ErrKafkaInvalidConfig.GenWithStack("OAuth2 client secret is not base64 encoded")
 			}
-			o.SASL.OAuth2.ClientSecret = string(decodedClientSecret)
+			o.sasl.oauth2.clientSecret = string(decodedClientSecret)
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthTokenURL != nil {
@@ -512,32 +515,34 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 				return errors.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 token URL cannot be empty")
 			}
-			o.SASL.OAuth2.TokenURL = tokenURL
+			o.sasl.oauth2.tokenURL = tokenURL
 		}
 
-		if o.SASL.OAuth2.IsEnable() {
-			if o.SASL.SASLMechanism != security.OAuthMechanism {
+		if o.sasl.oauth2.clientID != "" ||
+			o.sasl.oauth2.clientSecret != "" ||
+			o.sasl.oauth2.tokenURL != "" {
+			if o.sasl.mechanism != oauthMechanism {
 				return errors.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 is only supported with SASL mechanism type OAUTHBEARER, but got %s",
-					o.SASL.SASLMechanism)
+					o.sasl.mechanism)
 			}
 
-			if err := o.SASL.OAuth2.Validate(); err != nil {
+			if err := o.sasl.oauth2.validate(); err != nil {
 				return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 			}
-			o.SASL.OAuth2.SetDefault()
+			o.sasl.oauth2.grantType = "client_credentials"
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthScopes != nil {
-			o.SASL.OAuth2.Scopes = sinkConfig.KafkaConfig.SASLOAuthScopes
+			o.sasl.oauth2.scopes = sinkConfig.KafkaConfig.SASLOAuthScopes
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthGrantType != nil {
-			o.SASL.OAuth2.GrantType = *sinkConfig.KafkaConfig.SASLOAuthGrantType
+			o.sasl.oauth2.grantType = *sinkConfig.KafkaConfig.SASLOAuthGrantType
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthAudience != nil {
-			o.SASL.OAuth2.Audience = *sinkConfig.KafkaConfig.SASLOAuthAudience
+			o.sasl.oauth2.audience = *sinkConfig.KafkaConfig.SASLOAuthAudience
 		}
 	}
 
@@ -563,7 +568,7 @@ func (o *options) DeriveTopicConfig() *AutoCreateTopicConfig {
 
 // ValidateReplicationFactor checks whether a topic created with this config
 // can satisfy the configured acknowledgment requirement.
-func (c *AutoCreateTopicConfig) ValidateReplicationFactor(admin ClusterAdminClient) error {
+func (c *AutoCreateTopicConfig) ValidateReplicationFactor(admin Admin) error {
 	if c.RequiredAcks != WaitForAll {
 		return nil
 	}
@@ -627,7 +632,7 @@ func NewKafkaClientID(captureAddr string,
 // from the topic or broker configuration.
 func adjustOptions(
 	changefeedID common.ChangeFeedID,
-	admin ClusterAdminClient,
+	admin Admin,
 	options *options,
 	topic string,
 ) error {
@@ -635,7 +640,6 @@ func adjustOptions(
 	if err != nil {
 		return err
 	}
-
 	info, exists := topics[topic]
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
@@ -654,7 +658,7 @@ func adjustOptions(
 
 func adjustExistingTopicOption(
 	changefeedID common.ChangeFeedID,
-	admin ClusterAdminClient,
+	admin Admin,
 	options *options,
 	info TopicDetail,
 ) error {
@@ -674,7 +678,7 @@ func adjustExistingTopicOption(
 }
 
 func adjustNewTopicOptions(
-	admin ClusterAdminClient,
+	admin Admin,
 	changefeedID common.ChangeFeedID,
 	options *options,
 ) {
@@ -696,7 +700,7 @@ func adjustNewTopicOptions(
 }
 
 func getTopicMaxMessageBytes(
-	admin ClusterAdminClient,
+	admin Admin,
 	topic string,
 ) (int, bool, error) {
 	raw, found, err := getTopicConfig(
@@ -712,12 +716,13 @@ func getTopicMaxMessageBytes(
 	}
 	maxMessageBytes, err := strconv.Atoi(raw)
 	if err != nil {
-		return 0, false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "parse-config", TopicMaxMessageBytesConfigName)
+		return 0, false, errors.WrapError(
+			errors.ErrKafkaAdminAPI, err, "parse-config", TopicMaxMessageBytesConfigName)
 	}
 	return maxMessageBytes, true, nil
 }
 
-func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, bool, error) {
+func getBrokerMaxMessageBytes(admin Admin) (int, bool, error) {
 	raw, found, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
 	if err != nil {
 		return 0, false, err
@@ -727,7 +732,8 @@ func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, bool, error) {
 	}
 	messageMaxBytes, err := strconv.Atoi(raw)
 	if err != nil {
-		return 0, false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "parse-config", BrokerMessageMaxBytesConfigName)
+		return 0, false, errors.WrapError(
+			errors.ErrKafkaAdminAPI, err, "parse-config", BrokerMessageMaxBytesConfigName)
 	}
 	return messageMaxBytes, true, nil
 }
@@ -737,7 +743,7 @@ func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, bool, error) {
 // we will try to get it from the broker's configuration.
 // NOTICE: The configuration names of topic and broker may be different for the same configuration.
 func getTopicConfig(
-	admin ClusterAdminClient,
+	admin Admin,
 	topicName string,
 	topicConfigName string,
 	brokerConfigName string,

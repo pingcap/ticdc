@@ -36,14 +36,14 @@ type components struct {
 	columnSelector *columnselector.ColumnSelectors
 	eventRouter    *eventrouter.EventRouter
 	topicManager   topicmanager.TopicManager
-	adminClient    kafka.ClusterAdminClient
+	admin          kafka.Admin
 	factory        kafka.Factory
 	claimCheck     *claimcheck.ClaimCheck
 }
 
 func (c components) close() {
-	if c.adminClient != nil {
-		c.adminClient.Close()
+	if c.admin != nil {
+		c.admin.Close()
 	}
 	if c.topicManager != nil {
 		c.topicManager.Close()
@@ -85,7 +85,7 @@ func newKafkaSinkComponent(
 	}
 	options.Topic = topic
 
-	comp.factory, err = kafka.NewSaramaFactory(ctx, options, changefeedID)
+	comp.factory, err = kafka.NewFactory(ctx, options, changefeedID)
 	if err != nil {
 		return comp, protocol, err
 	}
@@ -125,7 +125,7 @@ func newKafkaSinkComponent(
 		return comp, protocol, err
 	}
 
-	comp.adminClient, err = comp.factory.AdminClient(ctx)
+	comp.admin, err = comp.factory.Admin(ctx)
 	if err != nil {
 		return comp, protocol, err
 	}
@@ -135,7 +135,7 @@ func newKafkaSinkComponent(
 		changefeedID,
 		topic,
 		options.DeriveTopicConfig(),
-		comp.adminClient,
+		comp.admin,
 	)
 	if err != nil {
 		return comp, protocol, err

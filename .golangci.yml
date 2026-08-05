@@ -81,7 +81,6 @@ linters:
         - name: unreachable-code
         - name: unused-parameter
         - name: var-declaration
-        - name: var-naming
 
     # G104: Audit errors not checked (duplicates errcheck).
     # G115: integer overflow conversions are too noisy for this codebase.

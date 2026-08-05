@@ -46,9 +46,8 @@ const (
 type sink struct {
 	changefeedID common.ChangeFeedID
 
-	dmlProducer      kafka.AsyncProducer
-	ddlProducer      kafka.SyncProducer
-	metricsCollector kafka.MetricsCollector
+	dmlProducer kafka.AsyncProducer
+	ddlProducer kafka.SyncProducer
 
 	comp       components
 	statistics *metrics.Statistics
@@ -111,18 +110,18 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 		return err
 	}
 
-	factory, err := kafka.NewSaramaFactory(ctx, options, changefeedID)
+	factory, err := kafka.NewFactory(ctx, options, changefeedID)
 	if err != nil {
 		return err
 	}
 
-	adminClient, err := factory.AdminClient(ctx)
+	admin, err := factory.Admin(ctx)
 	if err != nil {
 		return err
 	}
-	defer adminClient.Close()
+	defer admin.Close()
 
-	topics, err := adminClient.GetTopicsMeta([]string{topic}, false)
+	topics, err := admin.GetTopicsMeta([]string{topic}, false)
 	if err != nil {
 		return err
 	}
@@ -131,12 +130,12 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 		if !topicConfig.AutoCreate {
 			return errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topic)
 		}
-		if err = topicConfig.ValidateReplicationFactor(adminClient); err != nil {
+		if err = topicConfig.ValidateReplicationFactor(admin); err != nil {
 			return err
 		}
 
 		// the topic is not created, only validate.
-		err = adminClient.CreateTopic(&kafka.TopicDetail{
+		err = admin.CreateTopic(kafka.TopicDetail{
 			Name:              topic,
 			NumPartitions:     topicConfig.PartitionNum,
 			ReplicationFactor: topicConfig.ReplicationFactor,
@@ -188,6 +187,7 @@ func newWithComponents(
 		}
 		comp.close()
 		statistics.Close()
+		kafka.CleanupMetrics(changefeedID)
 	}()
 
 	asyncProducer, err = comp.factory.AsyncProducer(ctx)
@@ -200,10 +200,9 @@ func newWithComponents(
 		return nil, err
 	}
 	return &sink{
-		changefeedID:     changefeedID,
-		dmlProducer:      asyncProducer,
-		ddlProducer:      syncProducer,
-		metricsCollector: comp.factory.MetricsCollector(comp.adminClient),
+		changefeedID: changefeedID,
+		dmlProducer:  asyncProducer,
+		ddlProducer:  syncProducer,
 
 		partitionRule: helper.GetDDLDispatchRule(protocol),
 		protocol:      protocol,
@@ -229,10 +228,6 @@ func (s *sink) Run(ctx context.Context) error {
 	})
 	g.Go(func() error {
 		return s.sendDMLEvent(ctx)
-	})
-	g.Go(func() error {
-		s.metricsCollector.Run(ctx)
-		return nil
 	})
 	err := g.Wait()
 	s.isNormal.Store(false)
@@ -583,6 +578,7 @@ func (s *sink) Close() {
 	s.dmlProducer.Close()
 	s.comp.close()
 	s.statistics.Close()
+	kafka.CleanupMetrics(s.changefeedID)
 }
 
 func (s *sink) BatchCount() int {

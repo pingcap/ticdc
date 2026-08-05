@@ -14,12 +14,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"strconv"
 	"strings"
 
-	"github.com/IBM/sarama"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func main() {
@@ -36,33 +38,47 @@ func main() {
 		log.Fatal("max-message-bytes must be greater than zero")
 	}
 
+	ctx := context.Background()
 	value := strconv.Itoa(*maxMessageBytes)
-	config := sarama.NewConfig()
-	config.ClientID = "ticdc-integration-test-kafka-topic"
-	admin, err := sarama.NewClusterAdmin(strings.Split(*brokers, ","), config)
+	client, err := kgo.NewClient(
+		kgo.SeedBrokers(strings.Split(*brokers, ",")...),
+		kgo.ClientID("ticdc-integration-test-kafka-topic"),
+	)
 	if err != nil {
 		log.Fatalf("create Kafka admin client: %v", err)
 	}
-	defer func() {
-		if err := admin.Close(); err != nil {
-			log.Printf("close Kafka admin client: %v", err)
-		}
-	}()
+	defer client.Close()
+	admin := kadm.NewClient(client)
 
-	configEntries := map[string]*string{"max.message.bytes": &value}
 	if *alter {
-		if err := admin.AlterConfig(sarama.TopicResource, *topic, configEntries, false); err != nil {
+		responses, err := admin.AlterTopicConfigsState(ctx, []kadm.AlterConfig{{
+			Name:  "max.message.bytes",
+			Value: &value,
+		}}, *topic)
+		if err != nil {
 			log.Fatalf("alter Kafka topic %s: %v", *topic, err)
+		}
+		response, err := responses.On(*topic, nil)
+		if err != nil {
+			log.Fatalf("find altered Kafka topic %s response: %v", *topic, err)
+		}
+		if response.Err != nil {
+			log.Fatalf("alter Kafka topic %s: %v", *topic, response.Err)
 		}
 		return
 	}
 
-	detail := &sarama.TopicDetail{
-		NumPartitions:     1,
-		ReplicationFactor: 1,
-		ConfigEntries:     configEntries,
-	}
-	if err := admin.CreateTopic(*topic, detail, false); err != nil {
+	responses, err := admin.CreateTopics(ctx, 1, 1, map[string]*string{
+		"max.message.bytes": &value,
+	}, *topic)
+	if err != nil {
 		log.Fatalf("create Kafka topic %s: %v", *topic, err)
+	}
+	response, err := responses.On(*topic, nil)
+	if err != nil {
+		log.Fatalf("find created Kafka topic %s response: %v", *topic, err)
+	}
+	if response.Err != nil {
+		log.Fatalf("create Kafka topic %s: %v", *topic, response.Err)
 	}
 }

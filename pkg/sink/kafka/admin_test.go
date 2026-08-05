@@ -14,91 +14,82 @@
 package kafka
 
 import (
-	"io"
 	"testing"
 
-	"github.com/IBM/sarama"
-	"github.com/golang/mock/gomock"
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
-func TestGetBrokerConfig(t *testing.T) {
+func TestTopicDetailsFromMetadata(t *testing.T) {
 	t.Parallel()
 
-	t.Run("not found", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		admin := NewMocksaramaClusterAdmin(ctrl)
-		admin.EXPECT().DescribeCluster().Return(nil, int32(1), nil)
-		admin.EXPECT().DescribeConfig(gomock.Any()).Return([]sarama.ConfigEntry{}, nil)
-
-		client := &saramaAdminClient{
-			changefeed: common.NewChangeFeedIDWithName("test", "default"),
-			admin:      admin,
-		}
-		value, found, err := client.GetBrokerConfig("missing")
-
-		require.NoError(t, err)
-		require.False(t, found)
-		require.Empty(t, value)
-	})
-
-	t.Run("admin error", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		admin := NewMocksaramaClusterAdmin(ctrl)
-		cause := io.ErrUnexpectedEOF
-		admin.EXPECT().DescribeCluster().Return(nil, int32(0), cause)
-
-		client := &saramaAdminClient{
-			changefeed: common.NewChangeFeedIDWithName("test", "default"),
-			admin:      admin,
-		}
-		_, _, err := client.GetBrokerConfig("missing")
-
-		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
-		require.ErrorIs(t, err, cause)
-	})
-}
-
-func TestAdminClientClose(t *testing.T) {
-	tests := []struct {
-		name  string
-		setup func(*gomock.Controller) *saramaAdminClient
+	const topic = "topic"
+	testCases := []struct {
+		name             string
+		metadata         kadm.Metadata
+		ignoreTopicError bool
+		expected         map[string]TopicDetail
+		expectedError    error
+		expectedCause    error
 	}{
 		{
-			name: "uses admin close",
-			setup: func(ctrl *gomock.Controller) *saramaAdminClient {
-				client := NewMocksaramaClient(ctrl)
-				admin := NewMocksaramaClusterAdmin(ctrl)
-				admin.EXPECT().Close().Return(nil)
-				client.EXPECT().Close().Times(0)
-				return &saramaAdminClient{
-					changefeed: common.NewChangeFeedIDWithName("test", "default"),
-					client:     client,
-					admin:      admin,
-				}
+			name: "success",
+			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
+				topic: {Topic: topic, Partitions: kadm.PartitionDetails{0: {}, 1: {}}},
+			}},
+			expected: map[string]TopicDetail{
+				topic: {Name: topic, NumPartitions: 2},
 			},
 		},
 		{
-			name: "falls back to client when admin is nil",
-			setup: func(ctrl *gomock.Controller) *saramaAdminClient {
-				client := NewMocksaramaClient(ctrl)
-				client.EXPECT().Close().Return(nil)
-				return &saramaAdminClient{
-					changefeed: common.NewChangeFeedIDWithName("test", "default"),
-					client:     client,
-				}
-			},
+			name: "ignore unknown topic",
+			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
+				topic: {Topic: topic, Err: kerr.UnknownTopicOrPartition},
+			}},
+			ignoreTopicError: true,
+			expected:         map[string]TopicDetail{},
+		},
+		{
+			name: "return unknown topic",
+			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
+				topic: {Topic: topic, Err: kerr.UnknownTopicOrPartition},
+			}},
+			expectedError: errors.ErrKafkaAdminAPI,
+			expectedCause: kerr.UnknownTopicOrPartition,
+		},
+		{
+			name:          "return missing topic",
+			metadata:      kadm.Metadata{Topics: kadm.TopicDetails{}},
+			expectedError: errors.ErrKafkaAdminAPI,
+			expectedCause: kerr.UnknownTopicOrPartition,
+		},
+		{
+			name: "do not ignore authorization failure",
+			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
+				topic: {Topic: topic, Err: kerr.TopicAuthorizationFailed},
+			}},
+			ignoreTopicError: true,
+			expectedError:    errors.ErrKafkaAdminAPI,
+			expectedCause:    kerr.TopicAuthorizationFailed,
 		},
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			adminClient := test.setup(ctrl)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-			require.NotPanics(t, func() { adminClient.Close() })
+			actual, err := topicDetailsFromMetadata(tc.metadata, []string{topic}, tc.ignoreTopicError)
+			if tc.expectedError != nil {
+				require.ErrorIs(t, err, tc.expectedError)
+				if tc.expectedCause != nil {
+					require.ErrorIs(t, err, tc.expectedCause)
+				}
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, actual)
 		})
 	}
 }

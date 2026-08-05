@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,13 +16,18 @@ package kafka
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/leakutil"
-	"go.uber.org/goleak"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/stretchr/testify/require"
 )
 
-func TestMain(m *testing.M) {
-	leakutil.SetUpLeakTest(
-		m,
-		goleak.IgnoreAnyFunction("github.com/godbus/dbus.(*Conn).inWorker"),
-	)
+func TestSyncProducerClosedReturnsProducerClosed(t *testing.T) {
+	producer := &syncProducer{}
+	producer.closed.Store(true)
+
+	err := producer.SendMessage("topic", 1, &common.Message{})
+	require.ErrorIs(t, err, errors.ErrKafkaSinkClosed)
+
+	err = producer.SendMessages("topic", 1, &common.Message{})
+	require.ErrorIs(t, err, errors.ErrKafkaSinkClosed)
 }

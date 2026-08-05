@@ -114,7 +114,7 @@ func encodeRowChangedEvent(
 
 	// for single message that is longer than max-message-bytes
 	// 16 is the length of `keyLenByte` and `valueLenByte`, 8 is the length of `versionHead`
-	length := len(key) + len(valueCompressed) + common.MaxRecordOverhead + 16 + 8
+	length := len(key) + len(valueCompressed) + 16 + 8
 	return key, valueCompressed, length, nil
 }
 

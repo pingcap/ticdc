@@ -17,12 +17,10 @@ import (
 	"bytes"
 	"context"
 	"io"
-	stdlog "log"
 	"os"
 	"strconv"
 	"strings"
 
-	"github.com/IBM/sarama"
 	"github.com/gin-gonic/gin"
 	"github.com/go-sql-driver/mysql"
 	"github.com/pingcap/log"
@@ -95,10 +93,9 @@ func IsDebugEnabled() bool {
 
 // loggerOp is the op for logger control
 type loggerOp struct {
-	isInitGRPCLogger   bool
-	isInitSaramaLogger bool
-	isInitMySQLLogger  bool
-	output             zapcore.WriteSyncer
+	isInitGRPCLogger  bool
+	isInitMySQLLogger bool
+	output            zapcore.WriteSyncer
 }
 
 func (op *loggerOp) applyOpts(opts []LoggerOpt) {
@@ -114,13 +111,6 @@ type LoggerOpt func(*loggerOp)
 func WithInitGRPCLogger() LoggerOpt {
 	return func(op *loggerOp) {
 		op.isInitGRPCLogger = true
-	}
-}
-
-// WithInitSaramaLogger enables sarama logger initialization when initializes global logger
-func WithInitSaramaLogger() LoggerOpt {
-	return func(op *loggerOp) {
-		op.isInitSaramaLogger = true
 	}
 }
 
@@ -144,7 +134,6 @@ func InitLogger(cfg *Config, opts ...LoggerOpt) error {
 	var op loggerOp
 	opts = []LoggerOpt{
 		WithInitGRPCLogger(),
-		WithInitSaramaLogger(),
 		WithInitMySQLLogger(),
 	}
 	op.applyOpts(opts)
@@ -206,7 +195,7 @@ func InitLogger(cfg *Config, opts ...LoggerOpt) error {
 // initOptionalComponent initializes some optional components
 func initOptionalComponent(op *loggerOp, cfg *Config) error {
 	var level zapcore.Level
-	if op.isInitGRPCLogger || op.isInitSaramaLogger {
+	if op.isInitGRPCLogger {
 		err := level.UnmarshalText([]byte(cfg.Level))
 		if err != nil {
 			return errors.Trace(err)
@@ -215,12 +204,6 @@ func initOptionalComponent(op *loggerOp, cfg *Config) error {
 
 	if op.isInitGRPCLogger {
 		if err := initGRPCLogger(level); err != nil {
-			return err
-		}
-	}
-
-	if op.isInitSaramaLogger {
-		if err := initSaramaLogger(level); err != nil {
 			return err
 		}
 	}
@@ -254,21 +237,6 @@ func initMySQLLogger() error {
 		return errors.Trace(err)
 	}
 	return mysql.SetLogger(logger)
-}
-
-// initSaramaLogger hacks logger used in sarama lib
-func initSaramaLogger(level zapcore.Level) error {
-	if zapcore.InfoLevel.Enabled(level) {
-		sarama.Logger = stdlog.New(io.Discard, "[Sarama] ", stdlog.LstdFlags)
-		return nil
-	}
-
-	logger, err := zap.NewStdLogAt(log.L().With(zap.String("component", "sarama")), level)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	sarama.Logger = logger
-	return nil
 }
 
 type loggerWriter struct {

@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
@@ -36,6 +35,7 @@ import (
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kfake"
 	"go.uber.org/atomic"
 )
 
@@ -88,22 +88,8 @@ func TestSinkWorkersReturnContextError(t *testing.T) {
 }
 
 func TestVerifyInvalidConfig(t *testing.T) {
-	broker := sarama.NewMockBroker(t, 1)
-	defer broker.Close()
-	broker.SetHandlerByMap(map[string]sarama.MockResponse{
-		"ApiVersionsRequest": sarama.NewMockApiVersionsResponse(t).SetApiKeys(
-			[]sarama.ApiVersionsResponseKey{
-				{ApiKey: 0},
-				{ApiKey: 1},
-				{ApiKey: 2},
-				{ApiKey: 3, MaxVersion: 9},
-			}),
-		"MetadataRequest": sarama.NewMockMetadataResponse(t).
-			SetController(broker.BrokerID()).
-			SetBroker(broker.Addr(), broker.BrokerID()).
-			SetLeader(kafkaSinkTestTopic, 0, broker.BrokerID()),
-		"DescribeConfigsRequest": sarama.NewMockDescribeConfigsResponse(t),
-	})
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, kafkaSinkTestTopic))
+	defer cluster.Close()
 
 	schemaRegistry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "invalid response", http.StatusInternalServerError)
@@ -115,7 +101,7 @@ func TestVerifyInvalidConfig(t *testing.T) {
 		Protocol:       &avroProtocol,
 		SchemaRegistry: &schemaRegistry.URL,
 	}
-	sinkURI, err := url.Parse("kafka://" + broker.Addr() + "/" + kafkaSinkTestTopic +
+	sinkURI, err := url.Parse("kafka://" + cluster.ListenAddrs()[0] + "/" + kafkaSinkTestTopic +
 		"?required-acks=1&kafka-version=2.4.0")
 	require.NoError(t, err)
 
@@ -158,23 +144,19 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 	}
 	options.Topic = topic
 
-	adminClient := kafka.NewMockClusterAdminClient(ctrl)
-	adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, true).Return(
+	admin := kafka.NewMockAdmin(ctrl)
+	admin.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, true).Return(
 		map[string]kafka.TopicDetail{
 			kafkaSinkTestTopic: {
 				Name:          kafkaSinkTestTopic,
 				NumPartitions: 1,
 			},
 		}, nil)
-	adminClient.EXPECT().Close().AnyTimes()
-
-	metricsCollector := kafka.NewMockMetricsCollector(ctrl)
-	metricsCollector.EXPECT().Run(gomock.Any()).AnyTimes()
+	admin.EXPECT().Close().AnyTimes()
 
 	factory := kafka.NewMockFactory(ctrl)
 	factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
 	factory.EXPECT().SyncProducer(gomock.Any()).Return(syncProducer, nil)
-	factory.EXPECT().MetricsCollector(adminClient).Return(metricsCollector)
 
 	eventRouter, err := eventrouter.NewEventRouter(sinkConfig, topic, false, false)
 	if err != nil {
@@ -204,7 +186,7 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 		changefeedID,
 		topic,
 		options.DeriveTopicConfig(),
-		adminClient,
+		admin,
 	)
 	if err != nil {
 		return nil, err
@@ -216,14 +198,14 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 		columnSelector: columnSelector,
 		eventRouter:    eventRouter,
 		topicManager:   topicManager,
-		adminClient:    adminClient,
+		admin:          admin,
 		factory:        factory,
 	}
 
-	// We must close adminClient when this func return cause by an error
-	// otherwise the adminClient will never be closed and lead to a goroutine leak.
+	// We must close admin when this func return cause by an error
+	// otherwise the admin will never be closed and lead to a goroutine leak.
 	defer func() {
-		if err != nil && comp.adminClient != nil {
+		if err != nil && comp.admin != nil {
 			comp.close()
 		}
 	}()
