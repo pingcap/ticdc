@@ -35,12 +35,12 @@ func TestRegionRequestSchedulerBroadcastDeregisterUsesWorkerControlQueue(t *test
 
 	worker1 := &regionRequestWorker{
 		storeAddr:    "store-1",
-		admission:    newRegionAdmissionController(1, 1),
+		admission:    newTestRegionAdmissionController(1, 1),
 		controlQueue: newControlQueue(),
 	}
 	worker2 := &regionRequestWorker{
 		storeAddr:    "store-2",
-		admission:    newRegionAdmissionController(1, 1),
+		admission:    newTestRegionAdmissionController(1, 1),
 		controlQueue: newControlQueue(),
 	}
 	store1 := &regionRequestStore{workers: []*regionRequestWorker{worker1}}
@@ -72,8 +72,8 @@ func TestRegionRequestSchedulerBroadcastDeregisterUsesWorkerControlQueue(t *test
 func TestRegionRequestSchedulerInflightCountAggregatesStores(t *testing.T) {
 	scheduler := &regionRequestScheduler{}
 
-	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(2, 1)}
-	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(2, 1)}
+	worker1 := &regionRequestWorker{admission: newTestRegionAdmissionController(2, 1)}
+	worker2 := &regionRequestWorker{admission: newTestRegionAdmissionController(2, 1)}
 	scheduler.stores.Store("store-1", &regionRequestStore{workers: []*regionRequestWorker{worker1}})
 	scheduler.stores.Store("store-2", &regionRequestStore{workers: []*regionRequestWorker{worker2}})
 
@@ -121,7 +121,7 @@ func TestRegionRequestSchedulerReschedulesRegionWhenStoreSubmitFails(t *testing.
 		context.Background(), rawSpan.StartKey, rawSpan.EndKey, location.Region.GetID(), location.Region.GetVer())
 	require.Equal(t, regionlock.LockRangeStatusSuccess, lockRes.Status)
 
-	admission := newRegionAdmissionController(1, 1)
+	admission := newTestRegionAdmissionController(1, 1)
 	admission.close()
 	store := &regionRequestStore{workers: []*regionRequestWorker{{admission: admission}}}
 

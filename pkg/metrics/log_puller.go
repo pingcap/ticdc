@@ -64,6 +64,43 @@ var (
 			Name:      "resolved_ts_lag",
 			Help:      "The lag of resolved ts",
 		})
+	LogPullerMemoryQuota = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota",
+			Help:      "The log puller local memory quota usage.",
+		}, []string{"type"})
+	LogPullerMemoryQuotaEventWaiterCount = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota_event_waiter_count",
+			Help:      "The number of event receivers waiting at the log puller memory hard limit.",
+		})
+	LogPullerMemoryQuotaEventWaitDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota_event_wait_duration",
+			Help:      "The duration in seconds that an event receiver waits at the log puller memory hard limit.",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 24),
+		})
+	LogPullerMemoryQuotaScanWaiterCount = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota_scan_waiter_count",
+			Help:      "The number of region scans waiting at the log puller memory quota gate.",
+		})
+	LogPullerMemoryQuotaScanWaitDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota_scan_wait_duration",
+			Help:      "The duration in seconds that a region scan waits at the log puller memory quota gate.",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 24),
+		})
 
 	SubscriptionClientResolvedTsLagGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
@@ -164,6 +201,11 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(LogPullerPrewriteCacheRowNum)
 	registry.MustRegister(LogPullerMatcherCount)
 	registry.MustRegister(LogPullerResolvedTsLag)
+	registry.MustRegister(LogPullerMemoryQuota)
+	registry.MustRegister(LogPullerMemoryQuotaEventWaiterCount)
+	registry.MustRegister(LogPullerMemoryQuotaEventWaitDuration)
+	registry.MustRegister(LogPullerMemoryQuotaScanWaiterCount)
+	registry.MustRegister(LogPullerMemoryQuotaScanWaitDuration)
 	registry.MustRegister(SubscriptionClientRequestedRegionCount)
 	registry.MustRegister(SubscriptionClientAddRegionRequestDuration)
 	registry.MustRegister(RegionRequestFinishScanDuration)
