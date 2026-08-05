@@ -141,6 +141,7 @@ type memoryQuotaController struct {
 
 	// eventNotifier owns the wait protocol used after the hard limit is reached.
 	eventNotifier *eventMemoryNotifier
+	scanWaiters   atomic.Int64
 
 	// scanMu guards scan admission state and scanReady. Scan admission happens
 	// once per region rather than once per event batch, so it is intentionally
@@ -156,21 +157,21 @@ type memoryQuotaController struct {
 
 	pauseLowPriorityLimit  uint64
 	resumeLowPriorityLimit uint64
-	hardLimit          uint64
+	hardLimit              uint64
 
 	scanEstimate uint64
 }
 
 func newMemoryQuotaController(capacity, scanBaseSize uint64) *memoryQuotaController {
 	c := &memoryQuotaController{
-		capacity:           capacity,
-		level:              admissionNormal,
+		capacity:               capacity,
+		level:                  admissionNormal,
 		pauseLowPriorityLimit:  uint64(math.Ceil(float64(capacity) * defaultPauseLowPriorityRatio)),
 		resumeLowPriorityLimit: uint64(float64(capacity) * defaultResumeLowPriorityRatio),
-		hardLimit:          uint64(float64(capacity) * defaultHardLimitRatio),
-		scanEstimate:       scanBaseSize,
-		eventNotifier:      newEventMemoryNotifier(),
-		scanReady:          make(chan struct{}),
+		hardLimit:              uint64(float64(capacity) * defaultHardLimitRatio),
+		scanEstimate:           scanBaseSize,
+		eventNotifier:          newEventMemoryNotifier(),
+		scanReady:              make(chan struct{}),
 	}
 	return c
 }
@@ -293,6 +294,8 @@ func (c *memoryQuotaController) UpdateMetrics() {
 	metrics.LogPullerMemoryQuota.WithLabelValues("scan_used").Set(float64(scanUsed))
 	metrics.LogPullerMemoryQuotaEventWaiterCount.Set(
 		float64(c.eventNotifier.waiters.Load()))
+	metrics.LogPullerMemoryQuotaScanWaiterCount.Set(
+		float64(c.scanWaiters.Load()))
 }
 
 func (c *memoryQuotaController) notifyScanAdmissionLocked() {

@@ -85,6 +85,8 @@ func TestMemoryQuotaUpdateMetrics(t *testing.T) {
 	quota.scanMu.Unlock()
 	quota.eventNotifier.waiters.Store(2)
 	t.Cleanup(func() { quota.eventNotifier.waiters.Store(0) })
+	quota.scanWaiters.Store(3)
+	t.Cleanup(func() { quota.scanWaiters.Store(0) })
 
 	quota.UpdateMetrics()
 
@@ -96,6 +98,8 @@ func TestMemoryQuotaUpdateMetrics(t *testing.T) {
 		metrics.LogPullerMemoryQuota.WithLabelValues("scan_used")))
 	require.Equal(t, float64(2),
 		testutil.ToFloat64(metrics.LogPullerMemoryQuotaEventWaiterCount))
+	require.Equal(t, float64(3),
+		testutil.ToFloat64(metrics.LogPullerMemoryQuotaScanWaiterCount))
 }
 
 func TestMemoryQuotaAdmissionLevels(t *testing.T) {
