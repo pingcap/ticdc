@@ -41,6 +41,10 @@ import (
 
 const kafkaSinkTestTopic = "mock_topic"
 
+type noopMetricsCollector struct{}
+
+func (noopMetricsCollector) Run(context.Context) {}
+
 func TestSinkWorkersReturnContextError(t *testing.T) {
 	contexts := []struct {
 		name       string
@@ -168,13 +172,10 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 		}, nil)
 	adminClient.EXPECT().Close().AnyTimes()
 
-	metricsCollector := kafka.NewMockMetricsCollector(ctrl)
-	metricsCollector.EXPECT().Run(gomock.Any()).AnyTimes()
-
 	factory := kafka.NewMockFactory(ctrl)
 	factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
 	factory.EXPECT().SyncProducer(gomock.Any()).Return(syncProducer, nil)
-	factory.EXPECT().MetricsCollector(adminClient).Return(metricsCollector)
+	factory.EXPECT().MetricsCollector(adminClient).Return(noopMetricsCollector{})
 
 	eventRouter, err := eventrouter.NewEventRouter(sinkConfig, topic, false, false)
 	if err != nil {
