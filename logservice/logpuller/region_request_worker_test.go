@@ -143,7 +143,7 @@ func TestRunStreamCancelsBlockingReceiveWhenSenderExits(t *testing.T) {
 	defer pdClient.Close()
 	cluster.AddStore(1, storeAddr)
 
-	admission := newRegionAdmissionController(1, 1)
+	admission := newTestRegionAdmissionController(1, 1)
 	worker := &regionRequestWorker{
 		admission:    admission,
 		controlQueue: newControlQueue(),

@@ -207,7 +207,7 @@ func (s *regionRequestScheduler) BroadcastDeregister(
 func (s *regionRequestScheduler) requestedRegionCount() int {
 	count := 0
 	s.stores.Range(func(_, value any) bool {
-		count += value.(*regionRequestStore).inflightCount()
+		count += value.(*regionRequestStore).requestedRegionCount()
 		return true
 	})
 	return count
