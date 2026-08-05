@@ -371,15 +371,21 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 	limit := 1024
 	nextSpan := span
 	retryRange := func() {
-		s.failureHandler.scheduleRecovery(ctx, regionRecovery{
-			action: retryRangeRequest,
-			rangeTask: rangeTask{
-				span:           nextSpan,
-				subscribedSpan: subscribedSpan,
-				filterLoop:     task.filterLoop,
-				priority:       task.priority,
+		retryTask := rangeTask{
+			span:           nextSpan,
+			subscribedSpan: subscribedSpan,
+			filterLoop:     task.filterLoop,
+			priority:       task.priority,
+		}
+		s.failureHandler.scheduleRecovery(
+			ctx,
+			retryTask.subscribedSpan,
+			retryTask.span,
+			0,
+			func() {
+				s.scheduleRangeRequest(ctx, retryTask)
 			},
-		})
+		)
 	}
 	for {
 		log.Debug("subscription client is going to load regions",

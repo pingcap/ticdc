@@ -68,39 +68,10 @@ type regionRecoveryKey struct {
 	endKey         string
 }
 
-type regionRecoveryAction int
-
-const (
-	retryRegionRequest regionRecoveryAction = iota
-	retryRangeRequest
-)
-
-type regionRecovery struct {
-	action    regionRecoveryAction
-	region    regionInfo
-	rangeTask rangeTask
-	minDelay  time.Duration
-}
-
-func (r regionRecovery) key() regionRecoveryKey {
-	if r.action == retryRegionRequest {
-		return newRegionRecoveryKey(r.region.subscribedSpan.subID, r.region.span)
-	}
-	return newRegionRecoveryKey(r.rangeTask.subscribedSpan.subID, r.rangeTask.span)
-}
-
-func (r regionRecovery) subscribedSpan() *subscribedSpan {
-	if r.action == retryRegionRequest {
-		return r.region.subscribedSpan
-	}
-	return r.rangeTask.subscribedSpan
-}
-
 type regionRecoveryState struct {
 	attempt    uint32
 	generation uint64
 	pending    bool
-	recovery   regionRecovery
 	timer      *time.Timer
 }
 
@@ -150,13 +121,15 @@ func newRegionFailureHandler(
 
 func (r *regionFailureHandler) scheduleRecovery(
 	ctx context.Context,
-	recovery regionRecovery,
+	subscribedSpan *subscribedSpan,
+	span heartbeatpb.TableSpan,
+	minDelay time.Duration,
+	retry func(),
 ) {
-	subscribedSpan := recovery.subscribedSpan()
 	if subscribedSpan == nil || subscribedSpan.stopped.Load() {
 		return
 	}
-	key := recovery.key()
+	key := newRegionRecoveryKey(subscribedSpan.subID, span)
 
 	r.recoveryMu.Lock()
 	defer r.recoveryMu.Unlock()
@@ -166,10 +139,6 @@ func (r *regionFailureHandler) scheduleRecovery(
 		r.recoveries[key] = state
 	}
 	if state.pending {
-		// Reloading the range supersedes retrying a possibly stale region.
-		if recovery.action >= state.recovery.action {
-			state.recovery = recovery
-		}
 		return
 	}
 	if state.timer != nil {
@@ -181,10 +150,9 @@ func (r *regionFailureHandler) scheduleRecovery(
 	state.generation++
 	generation := state.generation
 	state.pending = true
-	state.recovery = recovery
 	delay := r.recoveryDelay(state.attempt)
-	if recovery.minDelay > delay {
-		delay = recovery.minDelay
+	if minDelay > delay {
+		delay = minDelay
 	}
 	state.timer = time.AfterFunc(delay, func() {
 		r.recoveryMu.Lock()
@@ -193,7 +161,6 @@ func (r *regionFailureHandler) scheduleRecovery(
 			r.recoveryMu.Unlock()
 			return
 		}
-		recovery := current.recovery
 		// Keep the state after dispatch so the next failure of this range advances
 		// the backoff attempt. Successful initialization resets it.
 		current.pending = false
@@ -202,16 +169,11 @@ func (r *regionFailureHandler) scheduleRecovery(
 		})
 		r.recoveryMu.Unlock()
 
-		if ctx.Err() != nil || recovery.subscribedSpan().stopped.Load() {
+		if ctx.Err() != nil || subscribedSpan.stopped.Load() {
 			r.resetRecovery(key)
 			return
 		}
-		switch recovery.action {
-		case retryRegionRequest:
-			r.scheduleRegionRequest(ctx, recovery.region)
-		case retryRangeRequest:
-			r.scheduleRangeRequest(ctx, recovery.rangeTask)
-		}
+		retry()
 	})
 }
 
@@ -310,11 +272,15 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
 	retryRegion := func(minDelay time.Duration) {
-		r.scheduleRecovery(ctx, regionRecovery{
-			action:   retryRegionRequest,
-			region:   errInfo.regionInfo,
-			minDelay: minDelay,
-		})
+		r.scheduleRecovery(
+			ctx,
+			errInfo.subscribedSpan,
+			errInfo.span,
+			minDelay,
+			func() {
+				r.scheduleRegionRequest(ctx, errInfo.regionInfo)
+			},
+		)
 	}
 	retryRange := func() {
 		priority := normalizeScanPriority(errInfo.scanPriority)
@@ -325,15 +291,21 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 				errInfo.subscribedSpan.priorityPolicy.pdClock.CurrentTime(),
 			)
 		}
-		r.scheduleRecovery(ctx, regionRecovery{
-			action: retryRangeRequest,
-			rangeTask: rangeTask{
-				span:           errInfo.span,
-				subscribedSpan: errInfo.subscribedSpan,
-				filterLoop:     errInfo.filterLoop,
-				priority:       priority,
+		task := rangeTask{
+			span:           errInfo.span,
+			subscribedSpan: errInfo.subscribedSpan,
+			filterLoop:     errInfo.filterLoop,
+			priority:       priority,
+		}
+		r.scheduleRecovery(
+			ctx,
+			task.subscribedSpan,
+			task.span,
+			0,
+			func() {
+				r.scheduleRangeRequest(ctx, task)
 			},
-		})
+		)
 	}
 
 	//nolint:errorlint // converting large type switch to errors.As is a significant refactor

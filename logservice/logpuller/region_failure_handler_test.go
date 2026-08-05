@@ -246,38 +246,6 @@ func TestRegionRecoveryBackoffFollowsRangeAcrossRegionChanges(t *testing.T) {
 	require.Equal(t, []uint32{1, 2}, attempts)
 }
 
-func TestRegionRecoveryPendingRangeRetrySupersedesRegionRetry(t *testing.T) {
-	handler := newRegionFailureHandler(
-		nil,
-		func(*subscribedSpan) {},
-		func(context.Context, regionInfo) {},
-		func(context.Context, rangeTask) {},
-	)
-	t.Cleanup(handler.cancelRecoveries)
-	handler.recoveryDelay = func(uint32) time.Duration { return time.Hour }
-
-	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
-	handler.scheduleRecovery(context.Background(), regionRecovery{
-		action: retryRegionRequest,
-		region: region,
-	})
-	handler.scheduleRecovery(context.Background(), regionRecovery{
-		action: retryRangeRequest,
-		rangeTask: rangeTask{
-			span:           region.span,
-			subscribedSpan: region.subscribedSpan,
-		},
-	})
-
-	key := newRegionRecoveryKey(region.subscribedSpan.subID, region.span)
-	handler.recoveryMu.Lock()
-	state := handler.recoveries[key]
-	handler.recoveryMu.Unlock()
-	require.NotNil(t, state)
-	require.Equal(t, retryRangeRequest, state.recovery.action)
-	require.Equal(t, uint32(1), state.attempt)
-}
-
 func TestRegionFailureHandlerRequestCancelledResetsRecoveryState(t *testing.T) {
 	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
 	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
