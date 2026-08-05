@@ -207,6 +207,10 @@ func TestRegionRequestSchedulerSkipsStoppedSubscriptionBeforeCreatingStore(t *te
 	handler := newRegionFailureHandler(nil, func(rt *subscribedSpan) {
 		drainedCh <- rt
 	}, nil, nil)
+	handlerErrCh := make(chan error, 1)
+	go func() {
+		handlerErrCh <- handler.Run(ctx)
+	}()
 	scheduler := &regionRequestScheduler{
 		upstream: &upstreamHandle{
 			pd:          pdClient,
@@ -244,4 +248,5 @@ func TestRegionRequestSchedulerSkipsStoppedSubscriptionBeforeCreatingStore(t *te
 
 	cancel()
 	require.ErrorIs(t, <-errCh, context.Canceled)
+	require.ErrorIs(t, <-handlerErrCh, context.Canceled)
 }
