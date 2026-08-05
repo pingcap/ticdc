@@ -150,7 +150,7 @@ func (f *saramaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) 
 	return &saramaSyncProducer{
 		id:       f.changefeedID,
 		client:   client,
-		producer: p,
+		producer: &saramaSyncProducerBackend{producer: p},
 		closed:   atomic.NewBool(false),
 	}, nil
 }

@@ -14,6 +14,7 @@
 package kafka
 
 import (
+	"io"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -25,21 +26,53 @@ import (
 	"go.uber.org/zap"
 )
 
-type saramaSyncClient interface {
-	Brokers() []*sarama.Broker
+type syncProducerMessage struct {
+	topic     string
+	key       []byte
+	value     []byte
+	partition int32
+}
+
+type syncProducerBackend interface {
+	SendMessage(msg syncProducerMessage) error
+	SendMessages(msgs []syncProducerMessage) error
 	Close() error
 }
 
-type saramaSyncProducerClient interface {
-	SendMessage(msg *sarama.ProducerMessage) (partition int32, offset int64, err error)
-	SendMessages(msgs []*sarama.ProducerMessage) error
-	Close() error
+type saramaSyncProducerBackend struct {
+	producer sarama.SyncProducer
+}
+
+func (p *saramaSyncProducerBackend) SendMessage(msg syncProducerMessage) error {
+	_, _, err := p.producer.SendMessage(toSaramaProducerMessage(msg))
+	return err
+}
+
+func (p *saramaSyncProducerBackend) SendMessages(msgs []syncProducerMessage) error {
+	saramaMessages := make([]*sarama.ProducerMessage, len(msgs))
+	for i, msg := range msgs {
+		saramaMessages[i] = toSaramaProducerMessage(msg)
+	}
+	return p.producer.SendMessages(saramaMessages)
+}
+
+func (p *saramaSyncProducerBackend) Close() error {
+	return p.producer.Close()
+}
+
+func toSaramaProducerMessage(msg syncProducerMessage) *sarama.ProducerMessage {
+	return &sarama.ProducerMessage{
+		Topic:     msg.topic,
+		Key:       sarama.ByteEncoder(msg.key),
+		Value:     sarama.ByteEncoder(msg.value),
+		Partition: msg.partition,
+	}
 }
 
 type saramaSyncProducer struct {
 	id       common.ChangeFeedID
-	client   saramaSyncClient
-	producer saramaSyncProducerClient
+	client   io.Closer
+	producer syncProducerBackend
 	closed   *atomic.Bool
 }
 
@@ -48,13 +81,13 @@ func (p *saramaSyncProducer) SendMessage(topic string, partitionNum int32, messa
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 
-	msg := &sarama.ProducerMessage{
-		Topic:     topic,
-		Key:       sarama.ByteEncoder(message.Key),
-		Value:     sarama.ByteEncoder(message.Value),
-		Partition: partitionNum,
+	msg := syncProducerMessage{
+		topic:     topic,
+		key:       message.Key,
+		value:     message.Value,
+		partition: partitionNum,
 	}
-	_, _, err := p.producer.SendMessage(msg)
+	err := p.producer.SendMessage(msg)
 	if err == nil {
 		return nil
 	}
@@ -71,13 +104,13 @@ func (p *saramaSyncProducer) SendMessages(topic string, partitionNum int32, mess
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 
-	msgs := make([]*sarama.ProducerMessage, partitionNum)
+	msgs := make([]syncProducerMessage, partitionNum)
 	for i := 0; i < int(partitionNum); i++ {
-		msgs[i] = &sarama.ProducerMessage{
-			Topic:     topic,
-			Key:       sarama.ByteEncoder(message.Key),
-			Value:     sarama.ByteEncoder(message.Value),
-			Partition: int32(i),
+		msgs[i] = syncProducerMessage{
+			topic:     topic,
+			key:       message.Key,
+			value:     message.Value,
+			partition: int32(i),
 		}
 	}
 	err := p.producer.SendMessages(msgs)
