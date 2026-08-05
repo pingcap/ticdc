@@ -13,9 +13,7 @@
 
 package logpuller
 
-import (
-	"github.com/pingcap/kvproto/pkg/cdcpb"
-)
+import "github.com/pingcap/kvproto/pkg/cdcpb"
 
 func normalizeScanPriority(priority cdcpb.ScanPriority) cdcpb.ScanPriority {
 	if priority == cdcpb.ScanPriority_SCAN_PRIORITY_HIGH {

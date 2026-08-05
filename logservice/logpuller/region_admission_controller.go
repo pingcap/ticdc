@@ -74,8 +74,7 @@ func (r *regionReq) release() bool {
 	if !r.released.CompareAndSwap(false, true) {
 		return false
 	}
-	r.controller.memoryQuota.ReleaseScan(r.scanBytes)
-	r.controller.release()
+	r.controller.release(r.scanBytes)
 	return true
 }
 
@@ -96,7 +95,7 @@ type regionAdmissionController struct {
 	// It is guarded by mu.
 	pending *heap.Heap[*regionPriorityTask]
 	// memoryQuota gates initial scans using the log puller's global memory
-	// pressure. pdClock is sampled when a request is admitted.
+	// pressure. pdClock provides the current TS used for scan estimation.
 	memoryQuota *memoryQuotaController
 	pdClock     pdutil.Clock
 	// notify wakes workers when a request is submitted or an admission slot is
@@ -152,11 +151,11 @@ func (c *regionAdmissionController) submit(task *regionPriorityTask) bool {
 	return true
 }
 
-// pop waits for an eligible request. If controlReady is signaled first, it
-// returns nil without an error so the worker can handle its control queue.
+// pop waits for an eligible request. If interrupt is signaled first, it
+// returns nil without an error so the worker can handle the interrupt source.
 func (c *regionAdmissionController) pop(
 	ctx context.Context,
-	controlReady <-chan struct{},
+	interrupt <-chan struct{},
 ) (*regionReq, error) {
 	for {
 		c.mu.Lock()
@@ -180,7 +179,7 @@ func (c *regionAdmissionController) pop(
 		select {
 		case <-c.notify:
 		case <-memoryReady:
-		case <-controlReady:
+		case <-interrupt:
 			return nil, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -217,7 +216,8 @@ func (c *regionAdmissionController) windowFor(request *regionPriorityTask) int {
 	return c.currentWindow
 }
 
-func (c *regionAdmissionController) release() {
+func (c *regionAdmissionController) release(scanBytes uint64) {
+	c.memoryQuota.ReleaseScan(scanBytes)
 	c.mu.Lock()
 	if c.inflight > 0 {
 		c.inflight--
