@@ -268,6 +268,9 @@ func (m *kafkaTopicManager) createTopic(
 }
 
 // CreateTopicAndWaitUntilVisible wraps createTopic and waitUntilTopicVisible together.
+// If topic creation fails due to insufficient permissions, allow the changefeed
+// to be created, the error will be returned later by other operations such as send messages.
+// The topic can be created or modified externally later to fix the error.
 func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	ctx context.Context, topicName string,
 ) (int32, error) {
