@@ -26,7 +26,7 @@ var (
 			Subsystem: "maintainer",
 			Name:      "checkpoint_ts",
 			Help:      "checkpoint ts of maintainer",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 
 	MaintainerCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -34,7 +34,7 @@ var (
 			Subsystem: "maintainer",
 			Name:      "checkpoint_ts_lag",
 			Help:      "checkpoint ts lag of maintainer in seconds",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 
 	MaintainerResolvedTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -42,14 +42,14 @@ var (
 			Subsystem: "maintainer",
 			Name:      "resolved_ts",
 			Help:      "resolved ts of maintainer",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 	MaintainerResolvedTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "maintainer",
 			Name:      "resolved_ts_lag",
 			Help:      "resolved ts lag of maintainer in seconds",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 
 	CoordinatorCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
@@ -65,7 +65,7 @@ var (
 			Subsystem: "changefeed",
 			Name:      "maintainer_counter",
 			Help:      "The counter of changefeed maintainer",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 
 	ChangefeedStatusGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -73,7 +73,7 @@ var (
 			Subsystem: "owner",
 			Name:      "status",
 			Help:      "The status of changefeeds",
-		}, []string{getKeyspaceLabel(), "changefeed", "keyspace_id"})
+		}, []string{GetKeyspaceLabel(), "changefeed", "keyspace_id"})
 
 	// ChangefeedErrorInfoGauge records the current warning or failed reason and its occurrence time
 	// for each changefeed.
@@ -83,7 +83,7 @@ var (
 			Subsystem: "owner",
 			Name:      "changefeed_error_info",
 			Help:      "The current warning or failed reason and occurrence time of changefeeds",
-		}, []string{getKeyspaceLabel(), "changefeed", "state", "error_time", "code", "message"})
+		}, []string{GetKeyspaceLabel(), "changefeed", "state", "error_time", "code", "message"})
 
 	// ChangefeedOperationTimeGauge records a bounded set of recent user initiated
 	// changefeed operation timestamps for the Grafana investigation panel.
@@ -93,7 +93,7 @@ var (
 			Subsystem: "owner",
 			Name:      "changefeed_operation_time",
 			Help:      "Recent user initiated changefeed operation timestamps in Unix milliseconds",
-		}, []string{getKeyspaceLabel(), "changefeed", "operation", "result", "username", "details", "error", "event_id"})
+		}, []string{GetKeyspaceLabel(), "changefeed", "operation", "result", "username", "details", "error", "event_id"})
 
 	ChangefeedCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -101,7 +101,7 @@ var (
 			Subsystem: "owner",
 			Name:      "checkpoint_ts_lag",
 			Help:      "changefeed checkpoint ts lag in changefeeds in seconds",
-		}, []string{getKeyspaceLabel(), "changefeed", "keyspace_id"})
+		}, []string{GetKeyspaceLabel(), "changefeed", "keyspace_id"})
 
 	// it's a metrics used in a large number of tcms, we should always keep this metrics
 	ChangefeedCheckpointTsGauge = prometheus.NewGaugeVec(
@@ -110,7 +110,7 @@ var (
 			Subsystem: "owner",
 			Name:      "checkpoint_ts",
 			Help:      "checkpoint ts of changefeeds",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 
 	// ChangefeedDownstreamInfoGauge is a metric with a constant '1' value,
 	// labeled by the downstream type of each changefeed.
@@ -123,7 +123,7 @@ var (
 			Subsystem: "owner",
 			Name:      "changefeed_downstream_info",
 			Help:      "Downstream type information of changefeeds exposed as labels.",
-		}, []string{getKeyspaceLabel(), "changefeed", "downstream_type"})
+		}, []string{GetKeyspaceLabel(), "changefeed", "downstream_type"})
 
 	// ChangefeedDownstreamIsTiDBGauge indicates whether the downstream of a
 	// MySQL-compatible sink is confirmed to be TiDB (1 means yes).
@@ -138,7 +138,7 @@ var (
 			Subsystem: "sink",
 			Name:      "changefeed_downstream_is_tidb",
 			Help:      "Whether the downstream of a changefeed is confirmed to be TiDB (1 means yes).",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 )
 
 func DeleteChangefeedCheckpointMetrics(keyspace, changefeed string, keyspaceID uint32) {

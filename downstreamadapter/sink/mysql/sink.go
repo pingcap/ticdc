@@ -227,18 +227,18 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	keyspace := s.changefeedID.Keyspace()
 	changefeed := s.changefeedID.Name()
 
-	workerBatchFlushDuration := metrics.WorkerBatchFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-	workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-	workerTotalDuration := metrics.WorkerTotalDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-	workerHandledRows := metrics.WorkerHandledRows.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-	workerEventRowCount := metrics.WorkerEventRowCount.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerBatchFlushDuration := mysql.WorkerBatchFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerFlushDuration := mysql.WorkerFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerTotalDuration := mysql.WorkerTotalDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerHandledRows := mysql.WorkerHandledRows.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerEventRowCount := mysql.WorkerEventRowCount.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 
 	defer func() {
-		metrics.WorkerFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-		metrics.WorkerTotalDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-		metrics.WorkerHandledRows.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-		metrics.WorkerBatchFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-		metrics.WorkerEventRowCount.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		mysql.WorkerFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		mysql.WorkerTotalDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		mysql.WorkerHandledRows.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		mysql.WorkerBatchFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		mysql.WorkerEventRowCount.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	}()
 
 	inputCh := s.conflictDetector.GetOutChByCacheID(idx)
@@ -457,6 +457,7 @@ func (s *Sink) Close() {
 		s.activeActiveSyncStatsCollector.Close()
 	}
 	s.statistics.Close()
+	mysql.DeleteDMLEventRowsAffectedMetrics(s.changefeedID)
 
 	metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 }
