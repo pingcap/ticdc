@@ -124,7 +124,7 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	rowType := commonType.RowTypeInsert
 	if isDelete {
 		rowType = commonType.RowTypeDelete
-	} else if d.config.AvroIncludeBeforeValue && valueMap[tidbOp] == updateOperation {
+	} else if operation, ok := valueMap[tidbOp]; ok && operation == updateOperation {
 		rowType = commonType.RowTypeUpdate
 	}
 	tableID := tableIDAllocator.Allocate(schemaName, tableName)
@@ -168,8 +168,8 @@ func (d *decoder) decodeDMLPayload() (
 		if err != nil {
 			log.Panic("decode value failed", zap.Error(err))
 		}
-		if d.config.AvroIncludeBeforeValue {
-			isDelete = valueMap[tidbOp] == deleteOperation
+		if operation, ok := valueMap[tidbOp]; ok {
+			isDelete = operation == deleteOperation
 		}
 	}
 
@@ -278,10 +278,7 @@ func assembleEvent(
 		}
 	}
 
-	// "namespace.schema"
-	namespace := schema["namespace"].(string)
-	schemaName := strings.Split(namespace, ".")[1]
-	tableName := schema["name"].(string)
+	schemaName, tableName := schemaAndTableName(schema)
 
 	var commitTs int64
 	if hasValue {
@@ -416,7 +413,11 @@ func avroData2Columns(
 
 func schemaAndTableName(schema map[string]any) (string, string) {
 	namespace := schema["namespace"].(string)
-	return strings.Split(namespace, ".")[1], schema["name"].(string)
+	parts := strings.SplitN(namespace, ".", 2)
+	if len(parts) < 2 {
+		return "", schema["name"].(string)
+	}
+	return parts[1], schema["name"].(string)
 }
 
 func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]any) *commonType.TableInfo {

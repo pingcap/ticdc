@@ -244,23 +244,27 @@ func TestAvroEncodeIncludeBeforeValue(t *testing.T) {
 		name      string
 		event     *commonEvent.RowEvent
 		op        string
+		rowType   commonType.RowType
 		hasBefore bool
 	}{
 		{
-			name:  "insert",
-			event: newAvroRowEventForTest(tableInfo, 1024, chunk.Row{}, beforeRow),
-			op:    insertOperation,
+			name:    "insert",
+			event:   newAvroRowEventForTest(tableInfo, 1024, chunk.Row{}, beforeRow),
+			op:      insertOperation,
+			rowType: commonType.RowTypeInsert,
 		},
 		{
 			name:      "update",
 			event:     newAvroRowEventForTest(tableInfo, 1025, beforeRow, afterRow),
 			op:        updateOperation,
+			rowType:   commonType.RowTypeUpdate,
 			hasBefore: true,
 		},
 		{
 			name:      "delete",
 			event:     newAvroRowEventForTest(tableInfo, 1026, afterRow, chunk.Row{}),
 			op:        deleteOperation,
+			rowType:   commonType.RowTypeDelete,
 			hasBefore: true,
 		},
 	}
@@ -294,20 +298,48 @@ func TestAvroEncodeIncludeBeforeValue(t *testing.T) {
 
 			key, err := encoder.encodeKey(ctx, topic, tc.event)
 			require.NoError(t, err)
-			decoder := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil)
+			decoderConfig := *codecConfig
+			decoderConfig.AvroIncludeBeforeValue = false
+			decoder := NewDecoder(&decoderConfig, 0, encoder.schemaM, topic, nil)
 			decoder.AddKeyValue(key, bin)
 
 			messageType, exist := decoder.HasNext()
 			require.True(t, exist)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
-			decoded := decoder.NextDMLMessage().ToDMLEvent()
+			message := decoder.NextDMLMessage()
+			require.Equal(t, tc.rowType, message.RowType)
+			decoded := message.ToDMLEvent()
 			require.NotNil(t, decoded)
 			require.Equal(t, tc.event.CommitTs, decoded.CommitTs)
 
 			decodedRow, ok := decoded.GetNextRow()
 			require.True(t, ok)
 			common.CompareRow(t, tc.event.Event, tc.event.TableInfo, decodedRow, decoded.TableInfo)
+		})
+	}
+}
+
+func TestSchemaAndTableName(t *testing.T) {
+	testCases := []struct {
+		name       string
+		namespace  string
+		schemaName string
+	}{
+		{name: "keyspace and schema", namespace: "keyspace.schema", schemaName: "schema"},
+		{name: "empty keyspace", namespace: ".schema", schemaName: "schema"},
+		{name: "empty schema", namespace: "keyspace", schemaName: ""},
+		{name: "empty namespace", namespace: "", schemaName: ""},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			schemaName, tableName := schemaAndTableName(map[string]any{
+				"namespace": tc.namespace,
+				"name":      "table",
+			})
+			require.Equal(t, tc.schemaName, schemaName)
+			require.Equal(t, "table", tableName)
 		})
 	}
 }
