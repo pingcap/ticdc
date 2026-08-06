@@ -113,7 +113,7 @@ func NewDefaultEventStoreConfig() *EventStoreConfig {
 	return &EventStoreConfig{
 		CompressionThreshold:  16384, // 16KB
 		EnableZstdCompression: false,
-		EnableDataSharing:     false,
+		EnableDataSharing:     true,
 	}
 }
 
