@@ -162,6 +162,7 @@ function skip_if_tidb_version_less_than() {
 	fi
 
 	if tidb_version_less_than "$tidbReleaseVersion" "$minVersion"; then
+		stop_tidb_cluster
 		echo "[$(date)] <<<<<< skip test case ${testName}, TiDB version ${tidbReleaseVersion} is less than ${minVersion} >>>>>>"
 		exit 0
 	fi

@@ -99,7 +99,15 @@ function run_without_fast_create_table() {
 
 trap 'stop_test $WORK_DIR' EXIT
 run_without_fast_create_table $*
+tidb_release_version=$(get_tidb_release_version || true)
 stop_tidb_cluster
-run_with_fast_create_table $*
+if [ -z "$tidb_release_version" ]; then
+	echo "[$(date)] failed to parse TiDB release version, continue fast create table test case"
+	run_with_fast_create_table $*
+elif tidb_version_less_than "$tidb_release_version" "v8.5.0"; then
+	echo "[$(date)] <<<<<< skip fast create table part of $TEST_NAME, TiDB version ${tidb_release_version} is less than v8.5.0 >>>>>>"
+else
+	run_with_fast_create_table $*
+fi
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
