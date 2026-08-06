@@ -123,13 +123,12 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	}
 	defer adminClient.Close()
 
-	topicManager, err := topicmanager.GetTopicManagerAndTryCreateTopic(
+	err = topicmanager.EnsureTopicExists(
 		ctx, changefeedID, topic, options.DeriveTopicConfig(), adminClient,
 	)
 	if err != nil {
 		return err
 	}
-	topicManager.Close()
 
 	_, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck)
 	if err != nil {

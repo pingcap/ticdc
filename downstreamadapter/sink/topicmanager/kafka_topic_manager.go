@@ -57,37 +57,52 @@ func GetTopicManagerAndTryCreateTopic(
 	adminClient kafka.ClusterAdminClient,
 ) (TopicManager, error) {
 	topicManager := newKafkaTopicManager(
-		ctx, topic, changefeedID, adminClient, topicCfg,
+		topic, changefeedID, adminClient, topicCfg,
 	)
 
 	if _, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic); err != nil {
-		topicManager.Close()
 		return nil, err
 	}
+	topicManager.startBackgroundRefresh(ctx)
 
 	return topicManager, nil
 }
 
-// NewKafkaTopicManager creates a new topic manager.
-func newKafkaTopicManager(
+// EnsureTopicExists creates the topic if needed and waits until it is visible.
+// It does not start the background metadata refresh used by a running sink.
+func EnsureTopicExists(
 	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	topic string,
+	topicCfg *kafka.AutoCreateTopicConfig,
+	adminClient kafka.ClusterAdminClient,
+) error {
+	topicManager := newKafkaTopicManager(
+		topic, changefeedID, adminClient, topicCfg,
+	)
+	_, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic)
+	return err
+}
+
+// newKafkaTopicManager creates a topic manager without starting background work.
+func newKafkaTopicManager(
 	defaultTopic string,
 	changefeedID common.ChangeFeedID,
 	admin kafka.ClusterAdminClient,
 	cfg *kafka.AutoCreateTopicConfig,
 ) *kafkaTopicManager {
-	mgr := &kafkaTopicManager{
+	return &kafkaTopicManager{
 		defaultTopic: defaultTopic,
 		changefeedID: changefeedID,
 		admin:        admin,
 		cfg:          cfg,
 	}
+}
 
-	ctx, mgr.cancel = context.WithCancel(ctx)
-	// Background refresh metadata.
-	go mgr.backgroundRefreshMeta(ctx)
-
-	return mgr
+func (m *kafkaTopicManager) startBackgroundRefresh(ctx context.Context) {
+	refreshCtx, cancel := context.WithCancel(ctx)
+	m.cancel = cancel
+	go m.backgroundRefreshMeta(refreshCtx)
 }
 
 // GetPartitionNum returns the number of partitions of the topic.
