@@ -61,6 +61,7 @@ func GetTopicManagerAndTryCreateTopic(
 	)
 
 	if _, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic); err != nil {
+		topicManager.Close()
 		return nil, err
 	}
 
@@ -238,7 +239,7 @@ func (m *kafkaTopicManager) createTopic(
 		Name:              topicName,
 		NumPartitions:     m.cfg.PartitionNum,
 		ReplicationFactor: m.cfg.ReplicationFactor,
-	}, false)
+	})
 	if err != nil {
 		log.Error(
 			"kafka topic creation failed",
