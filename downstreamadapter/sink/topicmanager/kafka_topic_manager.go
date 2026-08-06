@@ -72,7 +72,7 @@ func EnsureTopic(
 	adminClient kafka.ClusterAdminClient,
 ) error {
 	topicManager := newKafkaTopicManager(topic, changefeedID, adminClient, topicCfg)
-	_, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic)
+	_, err := topicManager.createTopicAndWaitUntilVisible(ctx, topic, false)
 	return err
 }
 
@@ -271,12 +271,18 @@ func (m *kafkaTopicManager) createTopic(
 func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	ctx context.Context, topicName string,
 ) (int32, error) {
+	return m.createTopicAndWaitUntilVisible(ctx, topicName, true)
+}
+
+func (m *kafkaTopicManager) createTopicAndWaitUntilVisible(
+	ctx context.Context, topicName string, allowAuthorizationFailure bool,
+) (int32, error) {
 	// If the topic is not in the cache, we try to get the metadata of the topic.
 	// ignoreTopicErr is set to true to ignore the error if the topic is not found,
 	// which means we should create the topic later.
 	topicDetails, err := m.admin.GetTopicsMeta([]string{topicName}, true)
 	if err != nil {
-		if kafka.IsAdminAuthorizationFailed(err) {
+		if allowAuthorizationFailure && kafka.IsAdminAuthorizationFailed(err) {
 			return m.useConfiguredPartitionNum(topicName, err), nil
 		}
 		return 0, err
@@ -287,7 +293,7 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 
 	topicDetails, err = m.admin.GetTopicsMeta([]string{topicName}, false)
 	if err != nil {
-		if kafka.IsAdminAuthorizationFailed(err) {
+		if allowAuthorizationFailure && kafka.IsAdminAuthorizationFailed(err) {
 			return m.useConfiguredPartitionNum(topicName, err), nil
 		}
 	} else if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
@@ -297,7 +303,7 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	start := time.Now()
 	partitionNum, err := m.createTopic(ctx, topicName)
 	if err != nil {
-		if kafka.IsAdminAuthorizationFailed(err) {
+		if allowAuthorizationFailure && kafka.IsAdminAuthorizationFailed(err) {
 			return m.useConfiguredPartitionNum(topicName, err), nil
 		}
 		return 0, err

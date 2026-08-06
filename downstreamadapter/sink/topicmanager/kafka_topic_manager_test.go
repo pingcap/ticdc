@@ -250,6 +250,55 @@ func TestEnsureTopicExistsWaitsUntilVisible(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestEnsureTopicReturnsAuthorizationErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		adminClient func(*gomock.Controller) kafka.ClusterAdminClient
+		expectedErr error
+	}{
+		{
+			name: "describe denied",
+			adminClient: func(ctrl *gomock.Controller) kafka.ClusterAdminClient {
+				return &mockAdminClientWithDeniedDescribe{
+					MockClusterAdminClient: kafka.NewMockClusterAdminClient(ctrl),
+				}
+			},
+			expectedErr: sarama.ErrTopicAuthorizationFailed,
+		},
+		{
+			name: "create denied",
+			adminClient: func(ctrl *gomock.Controller) kafka.ClusterAdminClient {
+				return &mockAdminClientWithDeniedCreate{
+					MockClusterAdminClient: kafka.NewMockClusterAdminClient(ctrl),
+				}
+			},
+			expectedErr: sarama.ErrClusterAuthorizationFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &kafka.AutoCreateTopicConfig{
+				AutoCreate:        true,
+				PartitionNum:      2,
+				ReplicationFactor: 1,
+			}
+			err := EnsureTopic(
+				t.Context(),
+				common.NewChangefeedID4Test("test", "test"),
+				"default-topic",
+				cfg,
+				tt.adminClient(gomock.NewController(t)),
+			)
+			require.ErrorIs(t, err, tt.expectedErr)
+		})
+	}
+}
+
 func TestGetTopicManagerStartsBackgroundRefreshAfterTopicReady(t *testing.T) {
 	t.Parallel()
 
