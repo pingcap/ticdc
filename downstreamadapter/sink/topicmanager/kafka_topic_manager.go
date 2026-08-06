@@ -48,42 +48,6 @@ type kafkaTopicManager struct {
 	cancel context.CancelFunc
 }
 
-// GetTopicManagerAndTryCreateTopic returns the topic manager and try to create the topic.
-func GetTopicManagerAndTryCreateTopic(
-	ctx context.Context,
-	changefeedID common.ChangeFeedID,
-	topic string,
-	topicCfg *kafka.AutoCreateTopicConfig,
-	adminClient kafka.ClusterAdminClient,
-) (TopicManager, error) {
-	topicManager := newKafkaTopicManager(
-		topic, changefeedID, adminClient, topicCfg,
-	)
-
-	if _, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic); err != nil {
-		return nil, err
-	}
-	topicManager.startBackgroundRefresh(ctx)
-
-	return topicManager, nil
-}
-
-// EnsureTopicExists creates the topic if needed and waits until it is visible.
-// It does not start the background metadata refresh used by a running sink.
-func EnsureTopicExists(
-	ctx context.Context,
-	changefeedID common.ChangeFeedID,
-	topic string,
-	topicCfg *kafka.AutoCreateTopicConfig,
-	adminClient kafka.ClusterAdminClient,
-) error {
-	topicManager := newKafkaTopicManager(
-		topic, changefeedID, adminClient, topicCfg,
-	)
-	_, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic)
-	return err
-}
-
 // newKafkaTopicManager creates a topic manager without starting background work.
 func newKafkaTopicManager(
 	defaultTopic string,
@@ -99,10 +63,40 @@ func newKafkaTopicManager(
 	}
 }
 
-func (m *kafkaTopicManager) startBackgroundRefresh(ctx context.Context) {
+// EnsureTopicExists creates the topic if needed and waits until it is visible.
+// It does not start the background metadata refresh used by a running sink.
+func EnsureTopicExists(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	topic string,
+	topicCfg *kafka.AutoCreateTopicConfig,
+	adminClient kafka.ClusterAdminClient,
+) error {
+	topicManager := newKafkaTopicManager(topic, changefeedID, adminClient, topicCfg)
+	_, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic)
+	return err
+}
+
+// GetTopicManagerAndTryCreateTopic returns the topic manager and try to create the topic.
+func GetTopicManagerAndTryCreateTopic(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	topic string,
+	topicCfg *kafka.AutoCreateTopicConfig,
+	adminClient kafka.ClusterAdminClient,
+) (TopicManager, error) {
+	topicManager := newKafkaTopicManager(
+		topic, changefeedID, adminClient, topicCfg,
+	)
+
+	if _, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic); err != nil {
+		return nil, err
+	}
 	refreshCtx, cancel := context.WithCancel(ctx)
-	m.cancel = cancel
-	go m.backgroundRefreshMeta(refreshCtx)
+	topicManager.cancel = cancel
+	go topicManager.backgroundRefreshMeta(refreshCtx)
+
+	return topicManager, nil
 }
 
 // GetPartitionNum returns the number of partitions of the topic.
