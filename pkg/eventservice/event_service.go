@@ -45,7 +45,6 @@ type DispatcherInfo interface {
 	GetStartTs() uint64
 	GetActionType() eventpb.ActionType
 	GetChangefeedID() common.ChangeFeedID
-	IsLowLatencyMode() bool
 	GetFilterConfig() *eventpb.FilterConfig
 	GetTxnAtomicity() config.AtomicityLevel
 

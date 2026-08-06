@@ -156,13 +156,6 @@ var (
 			Name:      "pending_scan_task_count",
 			Help:      "The number of pending scan tasks",
 		})
-	EventServiceDroppedScanTaskCount = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "event_service",
-			Name:      "dropped_scan_task_count",
-			Help:      "The number of scan tasks dropped because the worker queue is full",
-		})
 	EventServiceDispatcherStatusCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -283,7 +276,6 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceScanTaskCount)
 	registry.MustRegister(EventServiceDispatcherStatusCount)
 	registry.MustRegister(EventServicePendingScanTaskCount)
-	registry.MustRegister(EventServiceDroppedScanTaskCount)
 	registry.MustRegister(EventServiceDispatcherUpdateResolvedTsDiff)
 	registry.MustRegister(EventServiceSkipResolvedTsCount)
 	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)

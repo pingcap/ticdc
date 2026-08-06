@@ -41,17 +41,6 @@ const (
 	updateScanLimitInterval = time.Second * 10
 )
 
-type dispatcherScanState uint8
-
-const (
-	dispatcherScanIdle dispatcherScanState = iota
-	dispatcherScanQueued
-	dispatcherScanRunning
-	dispatcherScanRunningPending
-	dispatcherScanSchemaBlocked
-	dispatcherScanRemoved
-)
-
 // Store the progress of the dispatcher, and the incremental events stats.
 // Those information will be used to decide when will the worker start to handle the push task of this dispatcher.
 type dispatcherStat struct {
@@ -145,10 +134,11 @@ type dispatcherStat struct {
 	// lastReceivedHeartbeatTime is the time when the dispatcher last received the heartbeat from the event service.
 	lastReceivedHeartbeatTime atomic.Int64
 
-	// Scan task related. scanMu protects scanState and schemaBlockedUntilTs.
-	scanMu               sync.Mutex
-	scanState            dispatcherScanState
-	schemaBlockedUntilTs uint64
+	// Scan task related
+	// taskScanning is used to indicate whether the scan task is running.
+	// If so, we should wait until it is done before we send next resolvedTs event of
+	// this dispatcher.
+	isTaskScanning atomic.Bool
 
 	// activeScanMu protects activeScan and serializes scan registration with
 	// markRemoved. activeScan lets reset/remove cancel the in-flight scan before
@@ -226,29 +216,11 @@ func (a *dispatcherStat) copyStatistics(src *dispatcherStat) {
 	a.lastSentResolvedTsTime.Store(src.lastSentResolvedTsTime.Load())
 }
 
-func (a *dispatcherStat) beginScan() bool {
-	a.scanMu.Lock()
-	defer a.scanMu.Unlock()
-	if a.isRemoved.Load() || a.scanState != dispatcherScanQueued {
-		return false
-	}
-	a.scanState = dispatcherScanRunning
-	return true
-}
-
-func (a *dispatcherStat) isScanBusy() bool {
-	a.scanMu.Lock()
-	defer a.scanMu.Unlock()
-	return a.scanState == dispatcherScanQueued ||
-		a.scanState == dispatcherScanRunning ||
-		a.scanState == dispatcherScanRunningPending
-}
-
 func (a *dispatcherStat) isHandshaked() bool {
 	return a.seq.Load() > 0
 }
 
-func (a *dispatcherStat) beginActiveScan(parent context.Context) (context.Context, func()) {
+func (a *dispatcherStat) beginScan(parent context.Context) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(parent)
 	activeScan := &activeDispatcherScan{cancel: cancel}
 
@@ -271,13 +243,8 @@ func (a *dispatcherStat) beginActiveScan(parent context.Context) (context.Contex
 }
 
 func (a *dispatcherStat) markRemoved() {
-	a.isRemoved.Store(true)
-	a.scanMu.Lock()
-	a.scanState = dispatcherScanRemoved
-	a.schemaBlockedUntilTs = 0
-	a.scanMu.Unlock()
-
 	a.activeScanMu.Lock()
+	a.isRemoved.Store(true)
 	activeScan := a.activeScan
 	a.activeScanMu.Unlock()
 	if activeScan != nil {
@@ -533,9 +500,8 @@ func (c *resolvedTsCache) reset() {
 }
 
 type changefeedStatus struct {
-	changefeedID   common.ChangeFeedID
-	lowLatencyMode bool
-	filter         filter.Filter
+	changefeedID common.ChangeFeedID
+	filter       filter.Filter
 
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
