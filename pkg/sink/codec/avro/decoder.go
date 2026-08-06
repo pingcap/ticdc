@@ -254,7 +254,7 @@ func (d *decoder) decodeDeleteCommitTs() uint64 {
 // For legacy delete, valueMap is keyMap and only contains handle columns.
 // schema is corresponding to the valueMap, it can be used to decode the valueMap to construct columns.
 func assembleEvent(
-	keyMap, valueMap, schema map[string]interface{}, isDelete bool, hasValue bool,
+	keyMap, valueMap, schema map[string]any, isDelete bool, hasValue bool,
 ) (*commonEvent.DMLEvent, error) {
 	fields, ok := schema["fields"].([]any)
 	if !ok {
@@ -270,7 +270,7 @@ func assembleEvent(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	var beforeData map[string]interface{}
+	var beforeData map[string]any
 	if hasBefore {
 		_, beforeData, err = avroData2Columns(beforeMap, fields)
 		if err != nil {
@@ -333,13 +333,13 @@ func isAvroExtensionField(name string) bool {
 	}
 }
 
-func extractBeforeValueMap(valueMap map[string]interface{}) (map[string]interface{}, bool, error) {
+func extractBeforeValueMap(valueMap map[string]any) (map[string]any, bool, error) {
 	rawBefore, ok := valueMap[ticdcBefore]
 	if !ok || rawBefore == nil {
 		return nil, false, nil
 	}
 
-	beforeUnion, ok := rawBefore.(map[string]interface{})
+	beforeUnion, ok := rawBefore.(map[string]any)
 	if !ok {
 		return nil, false, errors.ErrCodecDecode.GenWithStack("before value should be a map")
 	}
@@ -347,7 +347,7 @@ func extractBeforeValueMap(valueMap map[string]interface{}) (map[string]interfac
 		if unionName == "null" || value == nil {
 			return nil, false, nil
 		}
-		before, ok := value.(map[string]interface{})
+		before, ok := value.(map[string]any)
 		if !ok {
 			return nil, false, errors.ErrCodecDecode.GenWithStack("before record should be a map")
 		}
@@ -357,8 +357,8 @@ func extractBeforeValueMap(valueMap map[string]interface{}) (map[string]interfac
 }
 
 func avroData2Columns(
-	valueMap map[string]interface{}, fields []interface{},
-) ([]*timodel.ColumnInfo, map[string]interface{}, error) {
+	valueMap map[string]any, fields []any,
+) ([]*timodel.ColumnInfo, map[string]any, error) {
 	columns := make([]*timodel.ColumnInfo, 0, len(valueMap))
 	data := make(map[string]any, 0)
 	// fields is ordered by the column id, so iterate over it to build columns

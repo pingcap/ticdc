@@ -110,7 +110,7 @@ func TestAvroEncode4EnableChecksum(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res)
 
-	m, ok := res.(map[string]interface{})
+	m, ok := res.(map[string]any)
 	require.True(t, ok)
 
 	_, found := m[tidbRowLevelChecksum]
@@ -161,7 +161,7 @@ func TestAvroEncodeDeleteChecksum(t *testing.T) {
 
 	res, _, err := avroValueCodec.NativeFromBinary(data)
 	require.NoError(t, err)
-	m, ok := res.(map[string]interface{})
+	m, ok := res.(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, deleteOperation, m[tidbOp])
 	require.Equal(t, "22", m[tidbRowLevelChecksum])
@@ -193,12 +193,12 @@ func TestAvroEncode(t *testing.T) {
 	res, _, err := avroKeyCodec.NativeFromBinary(data)
 	require.NoError(t, err)
 	require.NotNil(t, res)
-	for k := range res.(map[string]interface{}) {
+	for k := range res.(map[string]any) {
 		if k == "_tidb_commit_ts" || k == "_tidb_op" || k == "_tidb_commit_physical_time" {
 			require.Fail(t, "key shall not include extension fields")
 		}
 	}
-	require.Equal(t, int32(127), res.(map[string]interface{})["tu1"])
+	require.Equal(t, int32(127), res.(map[string]any)["tu1"])
 
 	bin, err = encoder.encodeValue(ctx, topic, event)
 	require.NoError(t, err)
@@ -213,7 +213,7 @@ func TestAvroEncode(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res)
 
-	for k, v := range res.(map[string]interface{}) {
+	for k, v := range res.(map[string]any) {
 		if k == "_tidb_op" {
 			require.Equal(t, "c", v.(string))
 		}
@@ -282,7 +282,7 @@ func TestAvroEncodeIncludeBeforeValue(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, res)
 
-			m, ok := res.(map[string]interface{})
+			m, ok := res.(map[string]any)
 			require.True(t, ok)
 			require.Equal(t, int64(tc.event.CommitTs), m[tidbCommitTs])
 			require.Equal(t, tc.op, m[tidbOp])
@@ -400,7 +400,7 @@ func TestAvroEnvelope(t *testing.T) {
 
 	require.NoError(t, err)
 
-	testNativeData := make(map[string]interface{})
+	testNativeData := make(map[string]any)
 	testNativeData["id"] = 7
 
 	bin, err := avroCodec.BinaryFromNative(nil, testNativeData)
@@ -422,7 +422,7 @@ func TestAvroEnvelope(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, parsed)
 
-	id, exists := parsed.(map[string]interface{})["id"]
+	id, exists := parsed.(map[string]any)["id"]
 	require.True(t, exists)
 	require.Equal(t, int32(7), id)
 
@@ -442,7 +442,7 @@ func TestAvroEnvelope(t *testing.T) {
 	parsed, _, err = avroCodec.NativeFromBinary(evlp[18:])
 	require.NoError(t, err)
 	require.NotNil(t, parsed)
-	id, exists = parsed.(map[string]interface{})["id"]
+	id, exists = parsed.(map[string]any)["id"]
 	require.True(t, exists)
 	require.Equal(t, int32(7), id)
 }
