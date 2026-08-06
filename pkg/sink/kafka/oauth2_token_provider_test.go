@@ -89,8 +89,9 @@ func TestTokenProviderRequestsToken(t *testing.T) {
 
 	provider, err := newTokenProvider(t.Context(), options)
 	require.NoError(t, err)
-	_, err = provider.Token()
+	token, err := provider.Token()
 	require.NoError(t, err)
+	require.Equal(t, "access-token", token.Token)
 
 	request := <-requestCh
 	require.NoError(t, request.err)
