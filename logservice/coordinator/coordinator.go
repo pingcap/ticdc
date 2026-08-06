@@ -59,6 +59,7 @@ type changefeedState struct {
 	// the global minimum only after every current node has reported avoids
 	// exposing intermediate minima from staggered node reports.
 	nodesReportedSinceLastUpdate map[node.ID]struct{}
+	nodeReportPhyTs              map[node.ID]int64
 
 	// equal to min puller resolved ts
 	minLogServiceResolvedTs uint64
@@ -115,8 +116,6 @@ func New() LogCoordinator {
 func (c *logCoordinator) Run(ctx context.Context) error {
 	broadcastTick := time.NewTicker(time.Second)
 	defer broadcastTick.Stop()
-	metricTick := time.NewTicker(1 * time.Second)
-	defer metricTick.Stop()
 
 	for {
 		select {
@@ -147,8 +146,6 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 			if err != nil {
 				log.Warn("send reusable event service response failed", zap.Error(err))
 			}
-		case <-metricTick.C:
-			c.reportChangefeedMetrics()
 		}
 	}
 }
@@ -212,6 +209,7 @@ func (c *logCoordinator) handleNodeChange(allNodes map[node.ID]*node.Info) {
 			for _, state := range c.changefeedStates.m {
 				delete(state.nodeStates, id)
 				delete(state.nodesReportedSinceLastUpdate, id)
+				delete(state.nodeReportPhyTs, id)
 			}
 			c.changefeedStates.Unlock()
 		}
@@ -252,6 +250,7 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 			if _, incoming := incomingGIDs[gid]; !incoming {
 				delete(state.nodeStates, from)
 				delete(state.nodesReportedSinceLastUpdate, from)
+				delete(state.nodeReportPhyTs, from)
 				affectedGIDs[gid] = struct{}{}
 				log.Info("changefeed removed from node",
 					zap.Stringer("changefeedID", state.cfID),
@@ -286,6 +285,7 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 				cfID:                         cfID,
 				nodeStates:                   make(map[node.ID]uint64),
 				nodesReportedSinceLastUpdate: make(map[node.ID]struct{}),
+				nodeReportPhyTs:              make(map[node.ID]int64),
 				resolvedTsGauge:              metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
 				resolvedTsLagGauge:           metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
 			}
@@ -293,6 +293,7 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 		changefeedState := c.changefeedStates.m[gid]
 		changefeedState.nodeStates[from] = state.GetResolvedTs()
 		changefeedState.nodesReportedSinceLastUpdate[from] = struct{}{}
+		changefeedState.nodeReportPhyTs[from] = pdPhyTs
 		affectedGIDs[gid] = struct{}{}
 	}
 
@@ -303,37 +304,34 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 					len(state.nodesReportedSinceLastUpdate) != len(state.nodeStates) {
 					continue
 				}
-				c.updateChangefeedMetrics(state, pdPhyTs)
+				c.updateChangefeedMetrics(state)
 				clear(state.nodesReportedSinceLastUpdate)
 			}
 		}
 	}
 }
 
-func (c *logCoordinator) reportChangefeedMetrics() {
-	pdTime := c.pdClock.CurrentTime()
-	pdPhyTs := oracle.GetPhysical(pdTime)
-
-	c.changefeedStates.Lock()
-	defer c.changefeedStates.Unlock()
-
-	for _, state := range c.changefeedStates.m {
-		c.updateChangefeedMetrics(state, pdPhyTs)
-	}
-}
-
-// updateChangefeedMetrics publishes one stable lag definition on both the
-// report-triggered and periodic paths: the current PD wall-clock age of the
-// global minimum resolved timestamp held by the coordinator.
-func (c *logCoordinator) updateChangefeedMetrics(state *changefeedState, pdPhyTs int64) {
+// updateChangefeedMetrics publishes a new global minimum after a complete
+// reporting round. The lag is the maximum per-node lag measured at each
+// node's own report time, so staggered reports do not inflate it.
+func (c *logCoordinator) updateChangefeedMetrics(state *changefeedState) {
 	if len(state.nodeStates) == 0 {
 		return
 	}
 
 	minResolvedTs := uint64(math.MaxUint64)
-	for _, resolvedTs := range state.nodeStates {
+	var maxNodeLag float64
+	for nodeID, resolvedTs := range state.nodeStates {
 		if resolvedTs < minResolvedTs {
 			minResolvedTs = resolvedTs
+		}
+		reportPhyTs, ok := state.nodeReportPhyTs[nodeID]
+		if !ok {
+			return
+		}
+		nodeLag := float64(reportPhyTs-oracle.ExtractPhysical(resolvedTs)) / 1e3
+		if nodeLag > maxNodeLag {
+			maxNodeLag = nodeLag
 		}
 	}
 
@@ -346,7 +344,7 @@ func (c *logCoordinator) updateChangefeedMetrics(state *changefeedState, pdPhyTs
 	phyResolvedTs := oracle.ExtractPhysical(minResolvedTs)
 	state.minLogServiceResolvedTs = minResolvedTs
 	state.resolvedTsGauge.Set(float64(phyResolvedTs))
-	state.resolvedTsLagGauge.Set(float64(pdPhyTs-phyResolvedTs) / 1e3)
+	state.resolvedTsLagGauge.Set(maxNodeLag)
 }
 
 func (c *logCoordinator) getMinLogServiceResolvedTs(cfID common.ChangeFeedID) uint64 {

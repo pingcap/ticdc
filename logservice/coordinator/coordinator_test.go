@@ -350,9 +350,6 @@ func TestUpdateChangefeedStatesRefreshesMetricsImmediately(t *testing.T) {
 	require.InDelta(t, 0.5, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
 
 	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime.Add(time.Second)))
-	c.reportChangefeedMetrics()
-	require.InDelta(t, 1.5, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
-
 	newerResolvedTs := oracle.GoTimeToTS(pdTime.Add(-100 * time.Millisecond))
 	c.updateChangefeedStates(node.ID("node-2"), &logservicepb.ChangefeedStates{
 		States: []*logservicepb.ChangefeedStateEntry{{
@@ -361,10 +358,7 @@ func TestUpdateChangefeedStatesRefreshesMetricsImmediately(t *testing.T) {
 		}},
 	})
 	require.Equal(t, resolvedTs, state.minLogServiceResolvedTs)
-	require.InDelta(t, 1.5, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
-
-	c.reportChangefeedMetrics()
-	require.InDelta(t, 1.5, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
+	require.InDelta(t, 0.5, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
 }
 
 func TestUpdateChangefeedStatesWaitsForCompleteReportingRound(t *testing.T) {
@@ -383,6 +377,7 @@ func TestUpdateChangefeedStatesWaitsForCompleteReportingRound(t *testing.T) {
 			"node-3": oldResolvedTs,
 		},
 		nodesReportedSinceLastUpdate: make(map[node.ID]struct{}),
+		nodeReportPhyTs:              make(map[node.ID]int64),
 		minLogServiceResolvedTs:      oldResolvedTs,
 		resolvedTsGauge:              prometheus.NewGauge(prometheus.GaugeOpts{}),
 		resolvedTsLagGauge:           prometheus.NewGauge(prometheus.GaugeOpts{}),
@@ -411,11 +406,62 @@ func TestUpdateChangefeedStatesWaitsForCompleteReportingRound(t *testing.T) {
 
 	report("node-3", pdTime.Add(600*time.Millisecond), 120*time.Millisecond)
 	require.Equal(t, newResolvedTs, state.minLogServiceResolvedTs)
-	require.InDelta(t, 0.65, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
+	require.InDelta(t, 0.18, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
 	require.Empty(t, state.nodesReportedSinceLastUpdate)
 }
 
-func TestReportMetricsForAffectedChangefeeds(t *testing.T) {
+func TestPartialReportingRoundKeepsLastPublishedMetrics(t *testing.T) {
+	c := newLogCoordinatorForTest()
+	mockPDClock := c.pdClock.(*pdutil.Clock4Test)
+	pdTime := time.Now().Truncate(time.Millisecond)
+	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime))
+
+	cfID := common.NewChangefeedID4Test("default", "partial-reporting-round")
+	oldResolvedTs := oracle.GoTimeToTS(pdTime.Add(-900 * time.Millisecond))
+	otherResolvedTs := oracle.GoTimeToTS(pdTime.Add(-500 * time.Millisecond))
+	state := &changefeedState{
+		cfID: cfID,
+		nodeStates: map[node.ID]uint64{
+			"node-1": oldResolvedTs,
+			"node-2": otherResolvedTs,
+		},
+		nodesReportedSinceLastUpdate: make(map[node.ID]struct{}),
+		nodeReportPhyTs:              make(map[node.ID]int64),
+		minLogServiceResolvedTs:      oldResolvedTs,
+		resolvedTsGauge:              prometheus.NewGauge(prometheus.GaugeOpts{}),
+		resolvedTsLagGauge:           prometheus.NewGauge(prometheus.GaugeOpts{}),
+	}
+	state.resolvedTsGauge.Set(float64(oracle.ExtractPhysical(oldResolvedTs)))
+	state.resolvedTsLagGauge.Set(0.9)
+	c.changefeedStates.m[cfID.ID()] = state
+
+	newResolvedTs := oracle.GoTimeToTS(pdTime.Add(-100 * time.Millisecond))
+	c.updateChangefeedStates("node-1", &logservicepb.ChangefeedStates{
+		States: []*logservicepb.ChangefeedStateEntry{{
+			ChangefeedID: cfID.ToPB(),
+			ResolvedTs:   newResolvedTs,
+		}},
+	})
+	require.Equal(t, oldResolvedTs, state.minLogServiceResolvedTs)
+
+	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime.Add(200 * time.Millisecond)))
+	require.Equal(t, oldResolvedTs, state.minLogServiceResolvedTs)
+	require.Equal(t, float64(oracle.ExtractPhysical(oldResolvedTs)), testutil.ToFloat64(state.resolvedTsGauge))
+	require.InDelta(t, 0.9, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
+
+	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime.Add(300 * time.Millisecond)))
+	c.updateChangefeedStates("node-2", &logservicepb.ChangefeedStates{
+		States: []*logservicepb.ChangefeedStateEntry{{
+			ChangefeedID: cfID.ToPB(),
+			ResolvedTs:   oracle.GoTimeToTS(pdTime.Add(200 * time.Millisecond)),
+		}},
+	})
+	require.Equal(t, newResolvedTs, state.minLogServiceResolvedTs)
+	require.Equal(t, float64(oracle.ExtractPhysical(newResolvedTs)), testutil.ToFloat64(state.resolvedTsGauge))
+	require.InDelta(t, 0.1, testutil.ToFloat64(state.resolvedTsLagGauge), 1e-9)
+}
+
+func TestUpdateMetricsForAffectedChangefeeds(t *testing.T) {
 	c := newLogCoordinatorForTest()
 	mockPDClock := pdutil.NewClock4Test()
 	c.pdClock = mockPDClock
@@ -435,6 +481,7 @@ func TestReportMetricsForAffectedChangefeeds(t *testing.T) {
 		},
 		resolvedTsGauge:    prometheus.NewGauge(prometheus.GaugeOpts{}),
 		resolvedTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{}),
+		nodeReportPhyTs:    make(map[node.ID]int64),
 	}
 	c.changefeedStates.m[cfID2.ID()] = &changefeedState{
 		cfID: cfID2,
@@ -443,15 +490,20 @@ func TestReportMetricsForAffectedChangefeeds(t *testing.T) {
 		},
 		resolvedTsGauge:    prometheus.NewGauge(prometheus.GaugeOpts{}),
 		resolvedTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{}),
+		nodeReportPhyTs:    make(map[node.ID]int64),
 	}
 
 	// Set PD time
 	pdTime := time.Now()
 	mockPDClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(pdTime))
 	pdPhyTs := oracle.GetPhysical(c.pdClock.CurrentTime())
+	c.changefeedStates.m[cfID1.ID()].nodeReportPhyTs[nodeID1] = pdPhyTs
+	c.changefeedStates.m[cfID1.ID()].nodeReportPhyTs[nodeID2] = pdPhyTs
+	c.changefeedStates.m[cfID2.ID()].nodeReportPhyTs[nodeID1] = pdPhyTs
 
 	// Call update metrics
-	c.reportChangefeedMetrics()
+	c.updateChangefeedMetrics(c.changefeedStates.m[cfID1.ID()])
+	c.updateChangefeedMetrics(c.changefeedStates.m[cfID2.ID()])
 
 	// Verify metrics for cf1
 	cf1State := c.changefeedStates.m[cfID1.ID()]

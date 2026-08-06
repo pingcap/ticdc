@@ -15,9 +15,113 @@ package metrics
 
 import (
 	"strconv"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
+
+type watermarkLagKey struct {
+	keyspace   string
+	changefeed string
+}
+
+type watermarkLagValues struct {
+	checkpoint float64
+	resolved   float64
+}
+
+// WatermarkLagGauge updates checkpoint and resolved lag as one value pair.
+// Collect takes the same pair under the collector lock, so one Prometheus
+// scrape cannot combine values from two Maintainer watermark updates.
+type WatermarkLagGauge struct {
+	collector *watermarkLagCollector
+	key       watermarkLagKey
+}
+
+func (g *WatermarkLagGauge) Set(checkpoint, resolved float64) {
+	g.collector.mu.Lock()
+	defer g.collector.mu.Unlock()
+	if _, ok := g.collector.values[g.key]; !ok {
+		return
+	}
+	g.collector.values[g.key] = watermarkLagValues{
+		checkpoint: checkpoint,
+		resolved:   resolved,
+	}
+}
+
+type watermarkLagCollector struct {
+	mu             sync.RWMutex
+	values         map[watermarkLagKey]watermarkLagValues
+	checkpointDesc *prometheus.Desc
+	resolvedDesc   *prometheus.Desc
+}
+
+func newWatermarkLagCollector() *watermarkLagCollector {
+	labels := []string{getKeyspaceLabel(), "changefeed"}
+	return &watermarkLagCollector{
+		values: make(map[watermarkLagKey]watermarkLagValues),
+		checkpointDesc: prometheus.NewDesc(
+			"ticdc_maintainer_checkpoint_ts_lag",
+			"checkpoint ts lag of maintainer in seconds",
+			labels,
+			nil,
+		),
+		resolvedDesc: prometheus.NewDesc(
+			"ticdc_maintainer_resolved_ts_lag",
+			"resolved ts lag of maintainer in seconds",
+			labels,
+			nil,
+		),
+	}
+}
+
+func (c *watermarkLagCollector) WithLabelValues(keyspace, changefeed string) *WatermarkLagGauge {
+	key := watermarkLagKey{keyspace: keyspace, changefeed: changefeed}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.values[key]; !ok {
+		c.values[key] = watermarkLagValues{}
+	}
+	return &WatermarkLagGauge{collector: c, key: key}
+}
+
+func (c *watermarkLagCollector) DeleteLabelValues(keyspace, changefeed string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.values, watermarkLagKey{keyspace: keyspace, changefeed: changefeed})
+}
+
+func (c *watermarkLagCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- c.checkpointDesc
+	ch <- c.resolvedDesc
+}
+
+func (c *watermarkLagCollector) Collect(ch chan<- prometheus.Metric) {
+	c.mu.RLock()
+	values := make(map[watermarkLagKey]watermarkLagValues, len(c.values))
+	for key, value := range c.values {
+		values[key] = value
+	}
+	c.mu.RUnlock()
+
+	for key, value := range values {
+		ch <- prometheus.MustNewConstMetric(
+			c.checkpointDesc,
+			prometheus.GaugeValue,
+			value.checkpoint,
+			key.keyspace,
+			key.changefeed,
+		)
+		ch <- prometheus.MustNewConstMetric(
+			c.resolvedDesc,
+			prometheus.GaugeValue,
+			value.resolved,
+			key.keyspace,
+			key.changefeed,
+		)
+	}
+}
 
 var (
 	MaintainerCheckpointTsGauge = prometheus.NewGaugeVec(
@@ -28,14 +132,6 @@ var (
 			Help:      "checkpoint ts of maintainer",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
-	MaintainerCheckpointTsLagGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "maintainer",
-			Name:      "checkpoint_ts_lag",
-			Help:      "checkpoint ts lag of maintainer in seconds",
-		}, []string{getKeyspaceLabel(), "changefeed"})
-
 	MaintainerResolvedTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -43,13 +139,7 @@ var (
 			Name:      "resolved_ts",
 			Help:      "resolved ts of maintainer",
 		}, []string{getKeyspaceLabel(), "changefeed"})
-	MaintainerResolvedTsLagGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "maintainer",
-			Name:      "resolved_ts_lag",
-			Help:      "resolved ts lag of maintainer in seconds",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+	MaintainerWatermarkLagGauge = newWatermarkLagCollector()
 
 	CoordinatorCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
@@ -161,9 +251,8 @@ func ResetOwnerChangefeedMetrics() {
 
 func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MaintainerCheckpointTsGauge)
-	registry.MustRegister(MaintainerCheckpointTsLagGauge)
 	registry.MustRegister(MaintainerResolvedTsGauge)
-	registry.MustRegister(MaintainerResolvedTsLagGauge)
+	registry.MustRegister(MaintainerWatermarkLagGauge)
 	registry.MustRegister(CoordinatorCounter)
 	registry.MustRegister(MaintainerGauge)
 	registry.MustRegister(ChangefeedStatusGauge)

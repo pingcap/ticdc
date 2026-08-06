@@ -116,11 +116,10 @@ func cleanupMaintainerMetricsForTest(t *testing.T, cfID common.ChangeFeedID) {
 		name := cfID.Name()
 		metrics.MaintainerGauge.DeleteLabelValues(keyspace, name)
 		metrics.MaintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
-		metrics.MaintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
 		metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
 		metrics.MaintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
 		metrics.MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
-		metrics.MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
+		metrics.MaintainerWatermarkLagGauge.DeleteLabelValues(keyspace, name)
 
 		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
 		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")

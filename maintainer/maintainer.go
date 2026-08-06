@@ -154,12 +154,12 @@ type Maintainer struct {
 
 	cancel context.CancelFunc
 
-	checkpointTsGauge    prometheus.Gauge
-	checkpointTsLagGauge prometheus.Gauge
-
-	resolvedTsGauge    prometheus.Gauge
-	resolvedTsLagGauge prometheus.Gauge
-	eventChLenGauge    prometheus.Gauge
+	checkpointTsGauge prometheus.Gauge
+	resolvedTsGauge   prometheus.Gauge
+	watermarkLagGauge interface {
+		Set(checkpoint, resolved float64)
+	}
+	eventChLenGauge prometheus.Gauge
 
 	scheduledTaskGauge  prometheus.Gauge
 	spanCountGauge      prometheus.Gauge
@@ -223,11 +223,10 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		newChangefeed:         newChangefeed,
 		enableRedo:            enableRedo,
 
-		checkpointTsGauge:    metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspaceName, name),
-		checkpointTsLagGauge: metrics.MaintainerCheckpointTsLagGauge.WithLabelValues(keyspaceName, name),
-		resolvedTsGauge:      metrics.MaintainerResolvedTsGauge.WithLabelValues(keyspaceName, name),
-		resolvedTsLagGauge:   metrics.MaintainerResolvedTsLagGauge.WithLabelValues(keyspaceName, name),
-		eventChLenGauge:      metrics.MaintainerEventChLenGauge.WithLabelValues(keyspaceName, name),
+		checkpointTsGauge: metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspaceName, name),
+		resolvedTsGauge:   metrics.MaintainerResolvedTsGauge.WithLabelValues(keyspaceName, name),
+		watermarkLagGauge: metrics.MaintainerWatermarkLagGauge.WithLabelValues(keyspaceName, name),
+		eventChLenGauge:   metrics.MaintainerEventChLenGauge.WithLabelValues(keyspaceName, name),
 
 		scheduledTaskGauge:  metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "default"),
 		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "default"),
@@ -479,11 +478,10 @@ func (m *Maintainer) cleanupMetrics() {
 	keyspace := m.changefeedID.Keyspace()
 	name := m.changefeedID.Name()
 	metrics.MaintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
+	metrics.MaintainerWatermarkLagGauge.DeleteLabelValues(keyspace, name)
 
 	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
 	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
@@ -869,13 +867,12 @@ func (m *Maintainer) updateMetrics() {
 	pdPhysicalTime := oracle.GetPhysical(m.pdClock.CurrentTime())
 	phyCkpTs := oracle.ExtractPhysical(watermark.CheckpointTs)
 	m.checkpointTsGauge.Set(float64(phyCkpTs))
-	lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
-	m.checkpointTsLagGauge.Set(lag)
+	checkpointLag := float64(pdPhysicalTime-phyCkpTs) / 1e3
 
 	phyResolvedTs := oracle.ExtractPhysical(watermark.ResolvedTs)
 	m.resolvedTsGauge.Set(float64(phyResolvedTs))
-	lag = float64(pdPhysicalTime-phyResolvedTs) / 1e3
-	m.resolvedTsLagGauge.Set(lag)
+	resolvedLag := float64(pdPhysicalTime-phyResolvedTs) / 1e3
+	m.watermarkLagGauge.Set(checkpointLag, resolvedLag)
 }
 
 // send message to other components
@@ -1437,6 +1434,13 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) bool {
 	}
 	if newWatermark.ResolvedTs != math.MaxUint64 && newWatermark.ResolvedTs != m.watermark.ResolvedTs {
 		m.watermark.ResolvedTs = newWatermark.ResolvedTs
+		changed = true
+	}
+	// A committed checkpoint proves that all events up to that timestamp have
+	// been resolved. Preserve this invariant when checkpoint and resolved
+	// advance in different calculation rounds.
+	if m.watermark.ResolvedTs < m.watermark.CheckpointTs {
+		m.watermark.ResolvedTs = m.watermark.CheckpointTs
 		changed = true
 	}
 	return changed

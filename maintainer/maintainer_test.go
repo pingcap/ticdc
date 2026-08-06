@@ -40,6 +40,7 @@ import (
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -775,7 +776,37 @@ func TestMaintainerSetWatermarkReportsChanges(t *testing.T) {
 	m.watermark.Watermark = &heartbeatpb.Watermark{CheckpointTs: 1, ResolvedTs: 1}
 	require.False(t, m.setWatermark(heartbeatpb.Watermark{CheckpointTs: 1, ResolvedTs: 1}))
 	require.True(t, m.setWatermark(heartbeatpb.Watermark{CheckpointTs: 2, ResolvedTs: 1}))
+	require.Equal(t, heartbeatpb.Watermark{CheckpointTs: 2, ResolvedTs: 2}, m.getWatermark())
 	require.True(t, m.setWatermark(heartbeatpb.Watermark{CheckpointTs: 2, ResolvedTs: 3}))
+	require.Equal(t, heartbeatpb.Watermark{CheckpointTs: 2, ResolvedTs: 3}, m.getWatermark())
+}
+
+func TestMaintainerMetricsPreserveWatermarkOrder(t *testing.T) {
+	m, _ := newMaintainerForCheckpointCalculationTest(t)
+	pdTime := time.Now().Truncate(time.Millisecond)
+	m.pdClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(pdTime))
+	m.watermark.Watermark = &heartbeatpb.Watermark{
+		CheckpointTs: oracle.GoTimeToTS(pdTime.Add(-900 * time.Millisecond)),
+		ResolvedTs:   oracle.GoTimeToTS(pdTime.Add(-300 * time.Millisecond)),
+	}
+
+	m.updateMetrics()
+	lagGauge := m.watermarkLagGauge.(*testWatermarkLagGauge)
+	checkpointLag := lagGauge.checkpoint
+	resolvedLag := lagGauge.resolved
+	require.InDelta(t, 0.9, checkpointLag, 1e-9)
+	require.InDelta(t, 0.3, resolvedLag, 1e-9)
+	require.LessOrEqual(t, resolvedLag, checkpointLag)
+}
+
+type testWatermarkLagGauge struct {
+	checkpoint float64
+	resolved   float64
+}
+
+func (g *testWatermarkLagGauge) Set(checkpoint, resolved float64) {
+	g.checkpoint = checkpoint
+	g.resolved = resolved
 }
 
 func TestMaintainerHandleRedoMetaTsMessageUsesRedoCheckpointForRedoController(t *testing.T) {
@@ -840,15 +871,10 @@ func newMaintainerForCheckpointCalculationTest(t testing.TB) (*Maintainer, node.
 		checkpointTsGauge: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "test_checkpoint_ts",
 		}),
-		checkpointTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "test_checkpoint_ts_lag",
-		}),
 		resolvedTsGauge: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "test_resolved_ts",
 		}),
-		resolvedTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "test_resolved_ts_lag",
-		}),
+		watermarkLagGauge: &testWatermarkLagGauge{},
 	}
 	m.watermark.Watermark = heartbeatpb.NewMaxWatermark()
 	return m, selfNode.ID
@@ -901,15 +927,10 @@ func newMaintainerForRedoCheckpointCalculationTest(t testing.TB) (*Maintainer, n
 		checkpointTsGauge: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "test_redo_checkpoint_ts",
 		}),
-		checkpointTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "test_redo_checkpoint_ts_lag",
-		}),
 		resolvedTsGauge: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "test_redo_resolved_ts",
 		}),
-		resolvedTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "test_redo_resolved_ts_lag",
-		}),
+		watermarkLagGauge: &testWatermarkLagGauge{},
 	}
 	m.watermark.Watermark = heartbeatpb.NewMaxWatermark()
 	return m, selfNode.ID
