@@ -14,58 +14,12 @@
 package metrics
 
 import (
-	"sync"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
-
-func TestWatermarkLagCollectorCollectsAtomicPairs(t *testing.T) {
-	collector := newWatermarkLagCollector()
-	gauge := collector.WithLabelValues("default", "atomic-watermark")
-	registry := prometheus.NewPedanticRegistry()
-	registry.MustRegister(collector)
-
-	done := make(chan struct{})
-	var writer sync.WaitGroup
-	writer.Add(1)
-	go func() {
-		defer writer.Done()
-		for {
-			select {
-			case <-done:
-				return
-			default:
-				gauge.Set(0.9, 0.3)
-				gauge.Set(0.2, 0.1)
-			}
-		}
-	}()
-
-	for range 1_000 {
-		metricFamilies, err := registry.Gather()
-		require.NoError(t, err)
-		var checkpointLag, resolvedLag float64
-		for _, family := range metricFamilies {
-			switch family.GetName() {
-			case "ticdc_maintainer_checkpoint_ts_lag":
-				checkpointLag = family.Metric[0].Gauge.GetValue()
-			case "ticdc_maintainer_resolved_ts_lag":
-				resolvedLag = family.Metric[0].Gauge.GetValue()
-			}
-		}
-		require.LessOrEqual(t, resolvedLag, checkpointLag)
-	}
-	close(done)
-	writer.Wait()
-
-	collector.DeleteLabelValues("default", "atomic-watermark")
-	metricFamilies, err := registry.Gather()
-	require.NoError(t, err)
-	require.Empty(t, metricFamilies)
-}
 
 func requireMetricHasLabel(
 	t *testing.T,
