@@ -123,7 +123,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	}
 	defer adminClient.Close()
 
-	err = topicmanager.EnsureTopicExists(ctx, changefeedID, topic, options.DeriveTopicConfig(), adminClient)
+	err = topicmanager.EnsureTopic(ctx, changefeedID, topic, options.DeriveTopicConfig(), adminClient)
 	if err != nil {
 		return err
 	}

@@ -246,7 +246,7 @@ func TestEnsureTopicExistsWaitsUntilVisible(t *testing.T) {
 
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	err := EnsureTopicExists(ctx, changefeedID, topic, cfg, adminClient)
+	err := EnsureTopic(ctx, changefeedID, topic, cfg, adminClient)
 	require.NoError(t, err)
 }
 

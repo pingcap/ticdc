@@ -63,9 +63,8 @@ func newKafkaTopicManager(
 	}
 }
 
-// EnsureTopicExists creates the topic if needed and waits until it is visible.
-// It does not start the background metadata refresh used by a running sink.
-func EnsureTopicExists(
+// EnsureTopic creates the topic if needed and waits until it is visible.
+func EnsureTopic(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	topic string,
