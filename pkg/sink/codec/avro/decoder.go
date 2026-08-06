@@ -118,7 +118,7 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs := d.decodeDMLPayload()
 	schemaName, tableName := schemaAndTableName(valueSchema)
 	commitTs := deleteCommitTs
-	if commitTs == 0 && !isDelete {
+	if hasValue {
 		commitTs = uint64(valueMap[tidbCommitTs].(int64))
 	}
 	rowType := commonType.RowTypeInsert

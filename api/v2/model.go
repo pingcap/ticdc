@@ -1438,13 +1438,13 @@ type Capture struct {
 
 // CodecConfig represents a MQ codec configuration
 type CodecConfig struct {
-	EnableTiDBExtension            *bool   `json:"enable_tidb_extension,omitempty"`
-	MaxBatchSize                   *int    `json:"max_batch_size,omitempty"`
-	AvroEnableWatermark            *bool   `json:"avro_enable_watermark,omitempty"`
-	AvroDecimalHandlingMode        *string `json:"avro_decimal_handling_mode,omitempty"`
-	AvroBigintUnsignedHandlingMode *string `json:"avro_bigint_unsigned_handling_mode,omitempty"`
-	AvroIncludeBeforeValue         *bool   `json:"avro_include_before_value,omitempty"`
-	EncodingFormat                 *string `json:"encoding_format,omitempty"`
+	EnableTiDBExtension            *bool   `json:"enable_tidb_extension,omitempty" toml:"enable-tidb-extension,omitempty"`
+	MaxBatchSize                   *int    `json:"max_batch_size,omitempty" toml:"max-batch-size,omitempty"`
+	AvroEnableWatermark            *bool   `json:"avro_enable_watermark,omitempty" toml:"avro-enable-watermark,omitempty"`
+	AvroDecimalHandlingMode        *string `json:"avro_decimal_handling_mode,omitempty" toml:"avro-decimal-handling-mode,omitempty"`
+	AvroBigintUnsignedHandlingMode *string `json:"avro_bigint_unsigned_handling_mode,omitempty" toml:"avro-bigint-unsigned-handling-mode,omitempty"`
+	AvroIncludeBeforeValue         *bool   `json:"avro_include_before_value,omitempty" toml:"avro-include-before-value,omitempty"`
+	EncodingFormat                 *string `json:"encoding_format,omitempty" toml:"encoding-format,omitempty"`
 }
 
 // PulsarConfig represents a pulsar sink configuration

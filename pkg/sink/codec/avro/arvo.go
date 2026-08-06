@@ -178,6 +178,8 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *event.R
 	}
 	if a.config.EnableTiDBExtension {
 		native = a.nativeValueWithExtension(native, e)
+	} else if a.config.AvroIncludeBeforeValue {
+		native[tidbOp] = getOperation(e)
 	}
 
 	bin, err := avroCodec.BinaryFromNative(nil, native)
@@ -265,12 +267,8 @@ func routedTableName(tableInfo *commonType.TableInfo) commonType.TableName {
 func (a *BatchEncoder) schemaWithExtension(
 	top *avroSchemaTop,
 ) *avroSchemaTop {
+	top = schemaWithOperation(top)
 	top.Fields = append(top.Fields,
-		map[string]any{
-			"name":    tidbOp,
-			"type":    "string",
-			"default": "",
-		},
 		map[string]any{
 			"name":    tidbCommitTs,
 			"type":    "long",
@@ -302,6 +300,15 @@ func (a *BatchEncoder) schemaWithExtension(
 			})
 	}
 
+	return top
+}
+
+func schemaWithOperation(top *avroSchemaTop) *avroSchemaTop {
+	top.Fields = append(top.Fields, map[string]any{
+		"name":    tidbOp,
+		"type":    "string",
+		"default": "",
+	})
 	return top
 }
 
@@ -501,6 +508,8 @@ func (a *BatchEncoder) value2AvroSchema(
 
 	if a.config.EnableTiDBExtension {
 		top = a.schemaWithExtension(top)
+	} else if a.config.AvroIncludeBeforeValue {
+		top = schemaWithOperation(top)
 	}
 
 	str, err := json.Marshal(top)

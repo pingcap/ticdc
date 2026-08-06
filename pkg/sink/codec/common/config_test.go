@@ -31,7 +31,10 @@ func TestAvroIncludeBeforeValueConfig(t *testing.T) {
 
 	err = cfg.Apply(sinkURI, &config.SinkConfig{})
 	require.NoError(t, err)
+	require.False(t, cfg.EnableTiDBExtension)
 	require.True(t, cfg.AvroIncludeBeforeValue)
+	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
+	require.NoError(t, cfg.Validate())
 }
 
 func TestAvroIncludeBeforeValueConfigFile(t *testing.T) {
@@ -47,5 +50,6 @@ func TestAvroIncludeBeforeValueConfigFile(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	require.False(t, cfg.EnableTiDBExtension)
 	require.True(t, cfg.AvroIncludeBeforeValue)
 }

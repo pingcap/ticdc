@@ -309,6 +309,7 @@ func TestAvroEncodeIncludeBeforeValue(t *testing.T) {
 
 			message := decoder.NextDMLMessage()
 			require.Equal(t, tc.rowType, message.RowType)
+			require.Equal(t, tc.event.CommitTs, message.GetCommitTs())
 			decoded := message.ToDMLEvent()
 			require.NotNil(t, decoded)
 			require.Equal(t, tc.event.CommitTs, decoded.CommitTs)
@@ -316,6 +317,58 @@ func TestAvroEncodeIncludeBeforeValue(t *testing.T) {
 			decodedRow, ok := decoded.GetNextRow()
 			require.True(t, ok)
 			common.CompareRow(t, tc.event.Event, tc.event.TableInfo, decodedRow, decoded.TableInfo)
+		})
+	}
+}
+
+func TestAvroEncodeIncludeBeforeValueWithoutTiDBExtension(t *testing.T) {
+	codecConfig := common.NewConfig(config.ProtocolAvro)
+	codecConfig.AvroIncludeBeforeValue = true
+
+	ctx := t.Context()
+	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
+	defer TeardownEncoderAndSchemaRegistry4Testing()
+	require.NoError(t, err)
+
+	tableInfo := newAvroTableInfoForTest()
+	beforeRow := chunk.MutRowFromValues(int64(1), int64(18)).ToRow()
+	afterRow := chunk.MutRowFromValues(int64(1), int64(20)).ToRow()
+	testCases := []struct {
+		name  string
+		event *commonEvent.RowEvent
+		op    string
+	}{
+		{
+			name:  "update",
+			event: newAvroRowEventForTest(tableInfo, 1025, beforeRow, afterRow),
+			op:    updateOperation,
+		},
+		{
+			name:  "delete",
+			event: newAvroRowEventForTest(tableInfo, 1026, afterRow, chunk.Row{}),
+			op:    deleteOperation,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			bin, err := encoder.encodeValue(ctx, "default", tc.event)
+			require.NoError(t, err)
+			require.NotNil(t, bin)
+
+			cid, data, err := extractConfluentSchemaIDAndBinaryData(bin)
+			require.NoError(t, err)
+			avroValueCodec, err := encoder.schemaM.Lookup(ctx, "default", schemaID{confluentSchemaID: cid})
+			require.NoError(t, err)
+			res, _, err := avroValueCodec.NativeFromBinary(data)
+			require.NoError(t, err)
+
+			valueMap, ok := res.(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, tc.op, valueMap[tidbOp])
+			require.NotNil(t, valueMap[ticdcBefore])
+			require.NotContains(t, valueMap, tidbCommitTs)
+			require.NotContains(t, valueMap, tidbPhysicalTime)
 		})
 	}
 }
