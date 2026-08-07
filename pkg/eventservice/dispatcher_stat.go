@@ -41,6 +41,15 @@ const (
 	updateScanLimitInterval = time.Second * 10
 )
 
+// dispatcherScanState serializes scan preparation and execution for one dispatcher.
+// An EventStore notification claims Idle -> Running for inline preparation. If
+// data must be read, preparation changes Running or RunningPending -> Queued,
+// and a worker changes Queued -> Running. Internal requests enqueue directly
+// from Idle. In low-latency mode, a request received while Running changes it
+// to RunningPending, and completion queues one coalesced continuation. A scan
+// stopped by SchemaStore changes to SchemaBlocked and is queued again after the
+// schema frontier advances. Queue-full fallback restores Idle, except that a
+// schema retry remains SchemaBlocked. Removed is terminal for this dispatcherStat.
 type dispatcherScanState uint8
 
 const (
