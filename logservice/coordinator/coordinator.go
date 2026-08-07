@@ -381,10 +381,14 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 		found := false
 		for _, subsState := range subStates.GetSubscriptions() {
 			// Only consider subscriptions which meet the following conditions:
-			// 1. subscription's span covers the requested span
-			// 2. subscription's checkpointTs <= request startTs
-			// 3. subscription's checkpointTs < resolvedTs (meaning the subscription has finished incremental scan)
-			if bytes.Compare(subsState.Span.StartKey, span.StartKey) <= 0 &&
+			// 1. subscription belongs to the requested keyspace
+			// 2. subscription's span covers the requested span
+			// 3. subscription's checkpointTs <= request startTs
+			// 4. subscription's checkpointTs < resolvedTs (meaning the subscription has finished incremental scan)
+			// Spans from different keyspaces normally have different encoded key ranges. Check KeyspaceID
+			// explicitly because TableStates is grouped only by TableID and isolation should not rely on key encoding.
+			if subsState.Span.KeyspaceID == span.KeyspaceID &&
+				bytes.Compare(subsState.Span.StartKey, span.StartKey) <= 0 &&
 				bytes.Compare(span.EndKey, subsState.Span.EndKey) <= 0 &&
 				subsState.CheckpointTs <= startTs &&
 				subsState.CheckpointTs < subsState.ResolvedTs {
