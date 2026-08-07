@@ -103,6 +103,9 @@ func TestDebeziumConfluentAvroEncodeRowEvent(t *testing.T) {
 	require.Nil(t, source["snapshot"])
 	require.Nil(t, source["thread"])
 	require.Equal(t, "dbserver1", source["name"])
+	// start_ts is a JSON-protocol-only field: the Avro payload and its
+	// registered schema must not carry it, even with EnableTiDBExtension on.
+	require.NotContains(t, source, "start_ts")
 
 	valueSchema := decodeConfluentAvroSchemaForTest(t, messages[0].Value)
 	require.Contains(t, valueSchema, `"name":"fooEnvelope"`)
@@ -110,6 +113,7 @@ func TestDebeziumConfluentAvroEncodeRowEvent(t *testing.T) {
 	require.Contains(t, valueSchema, `"name":"Source"`)
 	require.Contains(t, valueSchema, `"logicalType":"decimal"`)
 	require.NotContains(t, valueSchema, `"field":"transaction"`)
+	require.NotContains(t, valueSchema, `"field":"start_ts"`)
 }
 
 func TestDebeziumConfluentAvroSanitizesFullNameAndUnionBranch(t *testing.T) {

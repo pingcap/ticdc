@@ -986,6 +986,15 @@ func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter, schemaName string)
 					writer.WriteBoolField("optional", false)
 					writer.WriteStringField("field", "cluster_id")
 				})
+				// start_ts is only declared for the JSON protocol: the Avro payload
+				// does not carry it, so its schema must not declare it either.
+				if !c.isDebeziumAvro() {
+					writer.WriteObjectElement(func() {
+						writer.WriteStringField("type", "int64")
+						writer.WriteBoolField("optional", false)
+						writer.WriteStringField("field", "start_ts")
+					})
+				}
 			}
 		})
 		writer.WriteBoolField("optional", false)
@@ -1084,6 +1093,11 @@ func (c *dbzCodec) EncodeValue(
 
 				// The followings are TiDB extended fields
 				jWriter.WriteUint64Field("commit_ts", e.CommitTs)
+				// start_ts: the start TSO of the transaction that made this change,
+				// exposed for downstream consumers that need transaction correlation.
+				if c.config.EnableTiDBExtension {
+					jWriter.WriteUint64Field("start_ts", e.StartTs)
+				}
 				jWriter.WriteStringField("cluster_id", c.clusterID)
 			})
 
