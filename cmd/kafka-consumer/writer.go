@@ -554,7 +554,6 @@ func (w *writer) markPartitionTableFromDDL(ddl *event.DDLEvent) bool {
 
 	w.addPartitionTable(ddl.GetSchemaName(), ddl.GetTableName())
 	w.addPartitionTable(ddl.TableInfo.GetSchemaName(), ddl.TableInfo.GetTableName())
-	w.addPartitionTable(ddl.TableInfo.GetSchemaName(), ddl.TableInfo.GetTableName())
 	return true
 }
 

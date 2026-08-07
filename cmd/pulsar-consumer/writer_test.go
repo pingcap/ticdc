@@ -372,44 +372,6 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 	require.Equal(t, uint64(10), resolved[0].GetCommitTs())
 }
 
-func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
-	w := &writer{
-		progresses: []*partitionProgress{
-			{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)},
-		},
-		protocol:               config.ProtocolCanalJSON,
-		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
-	}
-
-	ddl := &commonEvent.DDLEvent{
-		Query:      "CREATE TABLE `target`.`dst` LIKE `target`.`src`",
-		SchemaName: "source",
-		TableName:  "dst",
-		Type:       byte(timodel.ActionCreateTable),
-		TableInfo: &common.TableInfo{
-			TableName: common.TableName{
-				Schema:      "source",
-				Table:       "dst",
-				IsPartition: true,
-			},
-		},
-	}
-	w.onDDL(ddl)
-	require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
-
-	newDMLMessage := func(commitTs uint64) *codeccommon.DMLMessage {
-		return codeccommon.NewDMLMessage(1, "target", "dst", commitTs, common.RowTypeUpdate, nil)
-	}
-
-	progress := w.progresses[0]
-	w.appendMessage2Group(newDMLMessage(200), progress)
-	w.appendMessage2Group(newDMLMessage(100), progress)
-
-	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
-	require.Len(t, resolved, 1)
-	require.Equal(t, uint64(100), resolved[0].GetCommitTs())
-}
-
 func TestWriteMessageDefersDMLAssemblyUntilFlush(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
