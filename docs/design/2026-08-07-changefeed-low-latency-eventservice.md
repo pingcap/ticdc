@@ -1,18 +1,89 @@
-# Changefeed Low-Latency EventService
+# Changefeed-Level Low-Latency Mode
 
 ## Motivation
 
 TiCDC changefeeds have different performance goals. A throughput-oriented
-changefeed can batch resolved-ts updates and scan scheduling work. A
-latency-oriented changefeed should react to new progress as soon as possible,
-without changing the behavior of throughput changefeeds running on the same
-CDC cluster.
+changefeed can batch progress updates and scheduling work. A latency-oriented
+changefeed should react to new progress as soon as possible, without changing
+the behavior of throughput changefeeds running on the same CDC cluster.
 
-This design applies the low-latency choice per changefeed. EventStore keeps the
-two modes isolated, and EventService uses a small state machine to schedule
-low-latency scans without creating duplicate work.
+This design applies the choice per changefeed and is implemented in two parts:
 
-## Design
+- [PR #5862](https://github.com/pingcap/ticdc/pull/5862) adds the persisted
+  configuration, mode propagation, and low-latency control-plane reporting.
+- [PR #5900](https://github.com/pingcap/ticdc/pull/5900) adds mode-isolated
+  EventStore subscriptions and low-latency EventService scan scheduling.
+
+The mode follows this path:
+
+```mermaid
+flowchart LR
+    Config[Changefeed configuration] --> Maintainer
+    Maintainer --> DispatcherManager
+    DispatcherManager --> Request[Dispatcher register/reset request]
+    Request --> EventService
+    EventService --> EventStore
+    EventStore --> LogPuller
+```
+
+## Configuration and control plane (PR #5862)
+
+### Configuration and propagation
+
+`ReplicaConfig` adds `performance-mode` with two accepted values:
+
+- `throughput`, which is the default and preserves existing behavior.
+- `low-latency`, which enables the faster paths described below.
+
+The field is persisted with the changefeed and is supported by the API and
+TOML conversion paths. Configuration validation rejects unknown values.
+
+When a changefeed starts, the mode is copied into its runtime
+`ChangefeedConfig` and shared by its dispatchers. EventCollector then includes
+`low_latency_mode` in both dispatcher register and reset requests. This gives
+EventStore and EventService a per-dispatcher mode without relying on a global
+server setting.
+
+### Dispatcher and Maintainer reporting
+
+A throughput DispatcherManager sends dispatcher heartbeats every 200 ms and
+uses a one-second initial delay. A low-latency DispatcherManager sends them
+every 50 ms and starts without the initial delay.
+
+Maintainer also reacts to low-latency progress instead of relying only on its
+periodic work:
+
+- An accepted dispatcher watermark update signals a coalesced channel that
+  wakes checkpoint and resolved-ts calculation.
+- When the committed Maintainer watermark changes, another coalesced signal
+  asks MaintainerManager to report the status promptly to Coordinator.
+
+The channels have capacity one, so repeated updates request prompt work without
+building an unbounded notification backlog. Throughput mode keeps the periodic
+calculation and reporting behavior.
+
+Maintainer clears the observed `statusChanged` flag before taking a heartbeat
+or bootstrap snapshot. If another update races with the snapshot, it sets the
+flag again and remains visible to the next report instead of being cleared
+after the new state was produced.
+
+### LogCoordinator resolved-ts metrics
+
+EventService reports each changefeed's minimum received resolved-ts from every
+node. LogCoordinator now publishes `ticdc_owner_resolved_ts` and
+`ticdc_owner_resolved_ts_lag` only after every current reporting node has
+contributed to a complete round.
+
+The published resolved-ts is the minimum node value. The lag is the maximum
+per-node lag, with each node's lag calculated at that node's own report time.
+This avoids combining a timestamp from one node with a later clock sample from
+another node.
+
+These owner metrics describe the EventService received frontier. They are not
+the EventService sent resolved-ts or the Maintainer checkpoint-ts, so they do
+not directly measure downstream processing latency.
+
+## Event delivery path (PR #5900)
 
 ### EventStore subscriptions
 
@@ -105,15 +176,37 @@ state even before a worker starts the actual EventStore scan.
 
 ## Compatibility
 
-Low-latency behavior is enabled only for dispatchers whose changefeed selects
-that mode. Throughput changefeeds retain their configured LogPuller batching
-interval and do not use running-request continuation or schema-blocked parking.
-Both modes continue to use the same bounded worker queues, scan limits, memory
-quotas, and event ordering rules.
+Existing and unspecified configurations use throughput mode. Low-latency
+behavior is enabled only for dispatchers whose changefeed selects that mode,
+so both modes can run on the same captures.
+
+Throughput changefeeds retain their configured LogPuller batching interval,
+200 ms dispatcher heartbeat, delayed first heartbeat, periodic Maintainer
+reporting, and existing scan scheduling behavior. Both modes continue to use
+the same bounded worker queues, scan limits, memory quotas, and event ordering
+rules.
 
 ## Existing test coverage
 
-The focused unit tests cover the main behavior:
+### PR #5862
+
+- `TestReplicaConfigPerformanceMode`, `TestReplicaConfigConversion`,
+  `TestChangeFeedInfoTOMLRoundTripToInternal`, and
+  `TestChangeFeedInfoToChangefeedConfigPerformanceMode` cover defaults,
+  validation, persistence, and API/TOML conversion.
+- `TestHeartbeatIntervalsByPerformanceMode` verifies the 200 ms and 50 ms
+  heartbeat intervals and their initial delays.
+- `TestDispatcherRequestsCarryLowLatencyMode` verifies register and reset
+  request propagation.
+- `TestMaintainerCheckpointUpdateNotification`,
+  `TestMaintainerStatusChangedNotification`, and
+  `TestMaintainerSetWatermarkReportsChanges` cover coalesced low-latency
+  notifications and watermark change detection.
+- `TestUpdateChangefeedStatesWaitsForCompleteReportingRound` and
+  `TestPartialReportingRoundKeepsLastPublishedMetrics` cover complete-round
+  LogCoordinator publication and per-node report-time lag.
+
+### PR #5900
 
 - `TestEventStoreSeparatesSubscriptionsByPerformanceMode` verifies subscription
   isolation, reuse within one mode, and the zero/default advance intervals.
@@ -135,3 +228,11 @@ The focused unit tests cover the main behavior:
 - `TestNoScanTaskDoesNotCreateActiveScanLifecycle` and
   `TestDispatcherLifecycleCancelsActiveScanBeforeCleanup` cover active-scan
   creation and cancellation.
+
+The combined feature has also been exercised manually with low-latency and
+throughput changefeeds running together on three captures, with 100,000 tables
+per changefeed and about 20 MB/s shared traffic for 30 minutes. Both
+changefeeds remained normal. There is currently no single automated test that
+covers the complete path from API configuration through both control-plane and
+EventService behavior; that path is covered by the component tests above plus
+the mixed-mode manual test.
