@@ -87,7 +87,7 @@ func TestAvroEncode4EnableChecksum(t *testing.T) {
 	codecConfig.AvroDecimalHandlingMode = "string"
 	codecConfig.AvroBigintUnsignedHandlingMode = "string"
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
@@ -129,7 +129,7 @@ func TestAvroEncodeDeleteChecksum(t *testing.T) {
 	codecConfig.EnableRowChecksum = true
 	codecConfig.AvroIncludeBeforeValue = true
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
@@ -171,7 +171,7 @@ func TestAvroEncode(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolAvro)
 	codecConfig.EnableTiDBExtension = true
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
@@ -228,7 +228,7 @@ func TestAvroEncodeIncludeBeforeValue(t *testing.T) {
 	codecConfig.EnableTiDBExtension = true
 	codecConfig.AvroIncludeBeforeValue = true
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
