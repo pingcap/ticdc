@@ -103,3 +103,23 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
 	require.Equal(t, "eventual", *apiCfgBack.Consistent.Level)
 }
+
+func TestReplicaConfigConversionMySQLAsyncDDLTimeout(t *testing.T) {
+	t.Parallel()
+
+	apiCfg := &ReplicaConfig{
+		Sink: &SinkConfig{
+			MySQLConfig: &MySQLConfig{
+				AsyncDDLTimeout: util.AddressOf("45m"),
+			},
+		},
+	}
+
+	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.NotNil(t, internalCfg.Sink.MySQLConfig)
+	require.Equal(t, "45m", util.GetOrZero(internalCfg.Sink.MySQLConfig.AsyncDDLTimeout))
+
+	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.NotNil(t, apiCfgBack.Sink.MySQLConfig)
+	require.Equal(t, "45m", util.GetOrZero(apiCfgBack.Sink.MySQLConfig.AsyncDDLTimeout))
+}

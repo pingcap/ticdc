@@ -25,7 +25,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
+<<<<<<< HEAD
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
+=======
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
+>>>>>>> 430b0a8cc (sink: add async ddl timeout for add index (#5836))
 	"github.com/stretchr/testify/require"
 )
 
@@ -77,6 +82,97 @@ func getMysqlSinkWithSeparateDBs(t *testing.T) (context.Context, *Sink, sqlmock.
 
 	sink := newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, false)
 	return ctx, sink, dmlMock, controlMock
+}
+
+func TestMysqlSinkControlAsyncDBOnlyForTiDB(t *testing.T) {
+	ctx := context.Background()
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+
+	t.Run("mysql downstream has no control async db", func(t *testing.T) {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+
+		cfg := mysql.New()
+		cfg.WorkerCount = 1
+		cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+		cfg.CachePrepStmts = false
+		cfg.IsTiDB = false
+
+		sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute, common.DefaultKeyspaceID)
+		require.Nil(t, sink.controlAsyncDB)
+
+		mock.ExpectClose()
+		sink.Close()
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("tidb downstream has control async db", func(t *testing.T) {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+
+		cfg := mysql.New()
+		cfg.WorkerCount = 1
+		cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+		cfg.CachePrepStmts = false
+		cfg.IsTiDB = true
+
+		sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute, common.DefaultKeyspaceID)
+		require.Same(t, db, sink.controlAsyncDB)
+
+		mock.ExpectClose()
+		sink.Close()
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestMysqlSinkUsesControlAsyncDBForTiDBAddIndex(t *testing.T) {
+	dmlDB, dmlMock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	controlDB, controlMock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	controlAsyncDB, controlAsyncMock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	cfg := mysql.New()
+	cfg.WorkerCount = 1
+	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+	cfg.CachePrepStmts = false
+	cfg.EnableDDLTs = false
+	cfg.IsTiDB = true
+
+	sink := newMySQLSinkWithControlAsyncDB(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, false, false, time.Minute, common.DefaultKeyspaceID)
+
+	ddl := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionAddIndex),
+		Query:      "alter table t add index idx_name(name);",
+		SchemaName: "test",
+		TableName:  "t",
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
+	}
+
+	controlMock.ExpectQuery("BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;").
+		WillReturnRows(sqlmock.NewRows([]string{"@ticdc_ts"}).AddRow("2021-05-26 11:33:37.776000"))
+	controlAsyncMock.ExpectBegin()
+	controlAsyncMock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlAsyncMock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlAsyncMock.ExpectExec("alter table t add index idx_name(name);").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlAsyncMock.ExpectCommit()
+
+	require.NoError(t, sink.WriteBlockEvent(ddl))
+
+	dmlMock.ExpectClose()
+	controlMock.ExpectClose()
+	controlAsyncMock.ExpectClose()
+	sink.Close()
+
+	require.NoError(t, dmlMock.ExpectationsWereMet())
+	require.NoError(t, controlMock.ExpectationsWereMet())
+	require.NoError(t, controlAsyncMock.ExpectationsWereMet())
 }
 
 func MysqlSinkForTest() (*Sink, sqlmock.Sqlmock) {
