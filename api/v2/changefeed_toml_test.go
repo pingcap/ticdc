@@ -88,10 +88,13 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 		SinkURI: "blackhole://",
 		StartTs: 449999999999999999,
 		Config: &ReplicaConfig{
-			MemoryQuota:       util.AddressOf(uint64(1024)),
-			CaseSensitive:     util.AddressOf(true),
-			ForceReplicate:    util.AddressOf(true),
-			CheckGCSafePoint:  util.AddressOf(false),
+			MemoryQuota:      util.AddressOf(uint64(1024)),
+			CaseSensitive:    util.AddressOf(true),
+			ForceReplicate:   util.AddressOf(true),
+			CheckGCSafePoint: util.AddressOf(false),
+			Sink: &SinkConfig{
+				DebeziumIncludeStartTs: util.AddressOf(true),
+			},
 			SyncPointInterval: &JSONDuration{duration: 10 * time.Minute},
 			Integrity: &IntegrityConfig{
 				IntegrityCheckLevel:   util.AddressOf("correctness"),
@@ -113,6 +116,7 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 	// Top-level kebab-case keys and runtime field omissions.
 	require.Contains(t, out, `sink-uri = "blackhole://"`)
 	require.Contains(t, out, "start-ts")
+	require.Contains(t, out, "debezium-include-start-ts")
 	require.NotContains(t, out, "gid") // GID is omitted from TOML (toml:"-")
 
 	// The [config] section must decode into the internal ReplicaConfig used by

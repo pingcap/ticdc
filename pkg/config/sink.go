@@ -200,6 +200,9 @@ type SinkConfig struct {
 	SendAllBootstrapAtStart *bool `toml:"send-all-bootstrap-at-start" json:"send-all-bootstrap-at-start,omitempty"`
 	// Debezium only. Whether schema should be excluded in the output.
 	DebeziumDisableSchema *bool `toml:"debezium-disable-schema" json:"debezium-disable-schema,omitempty"`
+	// Debezium only. Whether the transaction start_ts should be included in
+	// the source block of the output. JSON protocol only.
+	DebeziumIncludeStartTs *bool `toml:"debezium-include-start-ts" json:"debezium-include-start-ts,omitempty"`
 
 	// CSVConfig is only available when the downstream is Storage.
 	CSVConfig *CSVConfig `toml:"csv" json:"csv,omitempty"`

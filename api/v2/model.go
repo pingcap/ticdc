@@ -580,6 +580,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		if c.Sink.DebeziumDisableSchema != nil {
 			res.Sink.DebeziumDisableSchema = util.AddressOf(*c.Sink.DebeziumDisableSchema)
 		}
+		if c.Sink.DebeziumIncludeStartTs != nil {
+			res.Sink.DebeziumIncludeStartTs = util.AddressOf(*c.Sink.DebeziumIncludeStartTs)
+		}
 
 		if c.Sink.SendBootstrapIntervalInSec != nil {
 			res.Sink.SendBootstrapIntervalInSec = util.AddressOf(*c.Sink.SendBootstrapIntervalInSec)
@@ -959,6 +962,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		if cloned.Sink.DebeziumDisableSchema != nil {
 			res.Sink.DebeziumDisableSchema = util.AddressOf(*cloned.Sink.DebeziumDisableSchema)
 		}
+		if cloned.Sink.DebeziumIncludeStartTs != nil {
+			res.Sink.DebeziumIncludeStartTs = util.AddressOf(*cloned.Sink.DebeziumIncludeStartTs)
+		}
 	}
 	if cloned.Consistent != nil {
 		if res.Consistent == nil {
@@ -1198,6 +1204,7 @@ type SinkConfig struct {
 	SendBootstrapToAllPartition      *bool               `json:"send_bootstrap_to_all_partition,omitempty" toml:"send-bootstrap-to-all-partition,omitempty"`
 	SendAllBootstrapAtStart          *bool               `json:"send_all_bootstrap_at_start,omitempty" toml:"send-all-bootstrap-at-start,omitempty"`
 	DebeziumDisableSchema            *bool               `json:"debezium_disable_schema,omitempty" toml:"debezium-disable-schema,omitempty"`
+	DebeziumIncludeStartTs           *bool               `json:"debezium_include_start_ts,omitempty" toml:"debezium-include-start-ts,omitempty"`
 	DebeziumConfig                   *DebeziumConfig     `json:"debezium,omitempty" toml:"debezium,omitempty"`
 	OpenProtocolConfig               *OpenProtocolConfig `json:"open,omitempty" toml:"open,omitempty"`
 }
