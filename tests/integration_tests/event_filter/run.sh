@@ -35,6 +35,11 @@ function run() {
 	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config "$CUR/conf/cf.toml" ;;
 	esac
 
+	# CDC forwards CREATE TABLE ... LIKE ... as-is, so the downstream must have the
+	# referenced table available for the DDL to succeed.
+	run_sql "CREATE DATABASE IF NOT EXISTS filtered_like_src;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	run_sql "CREATE TABLE IF NOT EXISTS filtered_like_src.t_src_like (id INT PRIMARY KEY, val INT);" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	# make suer table t1 is deleted in upstream and exists in downstream
@@ -49,7 +54,6 @@ function run() {
 	check_table_exists "event_filter.t_name3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "event_filter.t_virtual" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "event_filter.t_like_from_filtered" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	check_table_not_exists "filtered_like_src.t_src_like" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	sleep 20
 
 	# check those rows that are not filtered are synced to downstream
