@@ -13,9 +13,11 @@
 
 package heartbeatpb
 
-import "testing"
+import (
+	"testing"
 
-import "github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/require"
+)
 
 func TestTableSpanLess(t *testing.T) {
 	t.Parallel()
