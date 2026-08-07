@@ -3711,6 +3711,35 @@ func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTables(t *testing.T) 
 	require.ElementsMatch(t, []int64{common.DDLSpanTableID, 111, 112}, ddlEvent.BlockedTables.TableIDs)
 }
 
+func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTablesRespectFilter(t *testing.T) {
+	rawEvent := &PersistedDDLEvent{
+		Type:         byte(model.ActionCreateTable),
+		SchemaID:     1,
+		TableID:      2,
+		SchemaName:   "test",
+		TableName:    "t_new",
+		Query:        "CREATE TABLE `t_new` LIKE `t_ref`",
+		TableInfo:    newEligibleTableInfoForTest(2, "t_new"),
+		ExtraTableID: 101,
+	}
+
+	ddlEvent, ok, err := buildDDLEventForNewTableDDL(rawEvent, buildTableFilterByNameForTest("test", "t_new"), 0)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.ElementsMatch(t, []int64{common.DDLSpanTableID}, ddlEvent.BlockedTables.TableIDs)
+
+	rawEvent.ReferTablePartitionIDs = []int64{111, 112}
+	ddlEvent, ok, err = buildDDLEventForNewTableDDL(rawEvent, buildTableFilterByNameForTest("test", "t_new"), 0)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.ElementsMatch(t, []int64{common.DDLSpanTableID}, ddlEvent.BlockedTables.TableIDs)
+
+	ddlEvent, ok, err = buildDDLEventForNewTableDDL(rawEvent, buildTableFilterByNameForTest("test", "t_ref"), 0)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Empty(t, ddlEvent.BlockedTables)
+}
+
 func TestUpdateDDLHistoryForAddDropTable_CreateTableLikeAddsReferTable(t *testing.T) {
 	args := updateDDLHistoryFuncArgs{
 		ddlEvent: &PersistedDDLEvent{
