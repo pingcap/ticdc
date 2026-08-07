@@ -79,27 +79,29 @@ func (r *regionReq) release() bool {
 // regionAdmissionController owns one request worker's pending queue and
 // initial-scan window.
 type regionAdmissionController struct {
-	// mu guards the window state, inflight count, pending queue and closed flag.
-	mu sync.Mutex
-
 	// currentWindow limits ordinary region scans.
 	currentWindow int
 	// maxWindow is the hard limit for high-priority region scans.
 	maxWindow int
-	// inflight is the number of admitted regions that have not finished their
-	// initial scan. It is guarded by mu.
-	inflight int
-	// pending keeps requests that have not entered the initial-scan window.
-	// It is guarded by mu.
-	pending *heap.Heap[*regionPriorityTask]
+	// state guards the window state, inflight count, pending queue and closed flag.
+	state struct {
+		sync.Mutex
+
+		// inflight is the number of admitted regions that have not finished their
+		// initial scan. It is guarded by state.
+		inflight int
+		// pending keeps requests that have not entered the initial-scan window.
+		// It is guarded by state.
+		pending *heap.Heap[*regionPriorityTask]
+		// closed prevents new submissions and makes waiting workers exit.
+		closed bool
+	}
 	// notify wakes workers when a request is submitted or an admission slot is
 	// released. The one-element buffer prevents a wakeup from being lost between
 	// checking the admission condition and waiting on this channel. Notifications
 	// are only signals to recheck state; they do not correspond one-to-one with
 	// pending requests or available slots.
 	notify chan struct{}
-	// closed prevents new submissions and makes waiting workers exit.
-	closed bool
 }
 
 type regionAdmissionStats struct {
@@ -118,23 +120,24 @@ func newRegionAdmissionController(currentWindow, maxWindowMultiplier int) *regio
 	if currentWindow <= math.MaxInt/maxWindowMultiplier {
 		maxWindow = currentWindow * maxWindowMultiplier
 	}
-	return &regionAdmissionController{
+	controller := &regionAdmissionController{
 		currentWindow: currentWindow,
 		maxWindow:     maxWindow,
-		pending:       heap.NewHeap[*regionPriorityTask](),
 		notify:        make(chan struct{}, 1),
 	}
+	controller.state.pending = heap.NewHeap[*regionPriorityTask]()
+	return controller
 }
 
 func (c *regionAdmissionController) submit(task *regionPriorityTask) bool {
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
+	c.state.Lock()
+	if c.state.closed {
+		c.state.Unlock()
 		return false
 	}
-	c.pending.AddOrUpdate(task)
+	c.state.pending.AddOrUpdate(task)
 	c.notifyOneLocked()
-	c.mu.Unlock()
+	c.state.Unlock()
 	return true
 }
 
@@ -145,22 +148,22 @@ func (c *regionAdmissionController) pop(
 	interrupt <-chan struct{},
 ) (*regionReq, error) {
 	for {
-		c.mu.Lock()
-		if c.closed {
-			c.mu.Unlock()
+		c.state.Lock()
+		if c.state.closed {
+			c.state.Unlock()
 			return nil, context.Canceled
 		}
 		request := c.popEligibleLocked()
 		if request != nil {
-			c.inflight++
-			c.mu.Unlock()
+			c.state.inflight++
+			c.state.Unlock()
 			return &regionReq{
 				regionInfo: request.regionInfo,
 				createTime: time.Now(),
 				controller: c,
 			}, nil
 		}
-		c.mu.Unlock()
+		c.state.Unlock()
 
 		select {
 		case <-c.notify:
@@ -173,14 +176,14 @@ func (c *regionAdmissionController) pop(
 }
 
 func (c *regionAdmissionController) popEligibleLocked() *regionPriorityTask {
-	request, ok := c.pending.PeekTop()
+	request, ok := c.state.pending.PeekTop()
 	if !ok {
 		return nil
 	}
-	if c.inflight >= c.windowFor(request) {
+	if c.state.inflight >= c.windowFor(request) {
 		return nil
 	}
-	request, _ = c.pending.PopTop()
+	request, _ = c.state.pending.PopTop()
 	return request
 }
 
@@ -192,39 +195,39 @@ func (c *regionAdmissionController) windowFor(request *regionPriorityTask) int {
 }
 
 func (c *regionAdmissionController) release() {
-	c.mu.Lock()
-	if c.inflight > 0 {
-		c.inflight--
+	c.state.Lock()
+	if c.state.inflight > 0 {
+		c.state.inflight--
 		c.notifyOneLocked()
 	}
-	c.mu.Unlock()
+	c.state.Unlock()
 }
 
 func (c *regionAdmissionController) close() {
-	c.mu.Lock()
-	if !c.closed {
-		c.closed = true
+	c.state.Lock()
+	if !c.state.closed {
+		c.state.closed = true
 		close(c.notify)
 	}
-	c.mu.Unlock()
+	c.state.Unlock()
 }
 
 func (c *regionAdmissionController) stats() regionAdmissionStats {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.state.Lock()
+	defer c.state.Unlock()
 	return regionAdmissionStats{
-		pending:  c.pending.Len(),
-		inflight: c.inflight,
+		pending:  c.state.pending.Len(),
+		inflight: c.state.inflight,
 	}
 }
 
 func (c *regionAdmissionController) drain() []*regionPriorityTask {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.state.Lock()
+	defer c.state.Unlock()
 
-	requests := make([]*regionPriorityTask, 0, c.pending.Len())
+	requests := make([]*regionPriorityTask, 0, c.state.pending.Len())
 	for {
-		request, ok := c.pending.PopTop()
+		request, ok := c.state.pending.PopTop()
 		if !ok {
 			return requests
 		}
@@ -233,7 +236,7 @@ func (c *regionAdmissionController) drain() []*regionPriorityTask {
 }
 
 func (c *regionAdmissionController) notifyOneLocked() {
-	if c.closed {
+	if c.state.closed {
 		return
 	}
 	select {
