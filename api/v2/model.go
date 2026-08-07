@@ -199,6 +199,7 @@ func (d *JSONDuration) UnmarshalJSON(b []byte) error {
 
 // ReplicaConfig is a duplicate of  config.ReplicaConfig
 type ReplicaConfig struct {
+<<<<<<< HEAD
 	MemoryQuota              *uint64 `json:"memory_quota,omitempty"`
 	EventCollectorBatchCount *int    `json:"event_collector_batch_count,omitempty"`
 	EventCollectorBatchBytes *int    `json:"event_collector_batch_bytes,omitempty"`
@@ -209,6 +210,30 @@ type ReplicaConfig struct {
 	EnableSyncPoint          *bool   `json:"enable_sync_point,omitempty"`
 	EnableTableMonitor       *bool   `json:"enable_table_monitor,omitempty"`
 	BDRMode                  *bool   `json:"bdr_mode,omitempty"`
+=======
+	PerformanceMode          *string `json:"performance_mode,omitempty" toml:"performance-mode,omitempty"`
+	MemoryQuota              *uint64 `json:"memory_quota,omitempty" toml:"memory-quota,omitempty"`
+	EventCollectorBatchCount *int    `json:"event_collector_batch_count,omitempty" toml:"event-collector-batch-count,omitempty"`
+	EventCollectorBatchBytes *int    `json:"event_collector_batch_bytes,omitempty" toml:"event-collector-batch-bytes,omitempty"`
+	CaseSensitive            *bool   `json:"case_sensitive,omitempty" toml:"case-sensitive,omitempty"`
+	ForceReplicate           *bool   `json:"force_replicate,omitempty" toml:"force-replicate,omitempty"`
+	IgnoreIneligibleTable    *bool   `json:"ignore_ineligible_table,omitempty" toml:"ignore-ineligible-table,omitempty"`
+	CheckGCSafePoint         *bool   `json:"check_gc_safe_point,omitempty" toml:"check-gc-safe-point,omitempty"`
+	EnableSyncPoint          *bool   `json:"enable_sync_point,omitempty" toml:"enable-sync-point,omitempty"`
+	EnableTableMonitor       *bool   `json:"enable_table_monitor,omitempty" toml:"enable-table-monitor,omitempty"`
+	BDRMode                  *bool   `json:"bdr_mode,omitempty" toml:"bdr-mode,omitempty"`
+	// EnableActiveActive enables active-active replication mode on top of BDR.
+	// It requires BDRMode to be true and is only supported by TiDB and storage sinks.
+	EnableActiveActive *bool `json:"enable_active_active,omitempty" toml:"enable-active-active,omitempty"`
+	// ActiveActiveProgressInterval controls how often the MySQL/TiDB sink updates the
+	// active-active progress table in EnableActiveActive mode (for hard delete safety checks).
+	ActiveActiveProgressInterval *JSONDuration `json:"active_active_progress_interval,omitempty" toml:"active-active-progress-interval,omitempty"`
+	// ActiveActiveSyncStatsInterval controls how often the MySQL/TiDB sink queries
+	// the TiDB session variable @@tidb_cdc_active_active_sync_stats for conflict statistics.
+	// Set it to 0 to disable metric collection.
+	// This option only takes effect when EnableActiveActive is true and the downstream is TiDB.
+	ActiveActiveSyncStatsInterval *JSONDuration `json:"active_active_sync_stats_interval,omitempty" toml:"active-active-sync-stats-interval,omitempty"`
+>>>>>>> 167f7400e (*: add changefeed-level performance mode (#5862))
 
 	SyncPointInterval  *JSONDuration `json:"sync_point_interval,omitempty"`
 	SyncPointRetention *JSONDuration `json:"sync_point_retention,omitempty"`
@@ -235,6 +260,9 @@ func (c *ReplicaConfig) ToInternalReplicaConfig() *config.ReplicaConfig {
 func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	res *config.ReplicaConfig,
 ) *config.ReplicaConfig {
+	if c.PerformanceMode != nil {
+		res.PerformanceMode = c.PerformanceMode
+	}
 	if c.MemoryQuota != nil {
 		res.MemoryQuota = c.MemoryQuota
 	}
@@ -650,6 +678,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 	cloned := c.Clone()
 
 	res := &ReplicaConfig{
+		PerformanceMode:          cloned.PerformanceMode,
 		MemoryQuota:              cloned.MemoryQuota,
 		EventCollectorBatchCount: cloned.EventCollectorBatchCount,
 		EventCollectorBatchBytes: cloned.EventCollectorBatchBytes,

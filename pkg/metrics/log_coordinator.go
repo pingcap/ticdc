@@ -28,8 +28,13 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "owner",
 			Name:      "resolved_ts_lag",
+<<<<<<< HEAD
 			Help:      "resolved ts lag of changefeeds in seconds",
 		}, []string{getKeyspaceLabel(), "changefeed"})
+=======
+			Help:      "maximum per-node resolved ts lag at report time in seconds",
+		}, []string{GetKeyspaceLabel(), "changefeed"})
+>>>>>>> 167f7400e (*: add changefeed-level performance mode (#5862))
 )
 
 func initLogCoordinatorMetrics(registry *prometheus.Registry) {

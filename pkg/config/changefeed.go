@@ -190,10 +190,11 @@ func (t AdminJobType) IsStopState() bool {
 }
 
 type ChangefeedConfig struct {
-	ChangefeedID common.ChangeFeedID `json:"changefeed_id"`
-	StartTS      uint64              `json:"start_ts"`
-	TargetTS     uint64              `json:"target_ts"`
-	SinkURI      string              `json:"sink_uri"`
+	ChangefeedID    common.ChangeFeedID `json:"changefeed_id"`
+	PerformanceMode string              `json:"performance_mode"`
+	StartTS         uint64              `json:"start_ts"`
+	TargetTS        uint64              `json:"target_ts"`
+	SinkURI         string              `json:"sink_uri"`
 	// timezone used when checking sink uri
 	TimeZone      string `json:"timezone" default:"system"`
 	CaseSensitive bool   `json:"case_sensitive" default:"false"`
@@ -216,6 +217,10 @@ type ChangefeedConfig struct {
 	// redo releated
 	Consistent             *ConsistentConfig `toml:"consistent" json:"consistent,omitempty"`
 	EnableTableAcrossNodes bool              `toml:"enable-table-across-nodes" json:"enable-table-across-nodes,omitempty"`
+}
+
+func (cfg *ChangefeedConfig) IsLowLatencyMode() bool {
+	return cfg != nil && cfg.PerformanceMode == PerformanceModeLowLatency
 }
 
 // String implements fmt.Stringer interface, but hide some sensitive information
@@ -274,6 +279,7 @@ type ChangeFeedInfo struct {
 
 func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 	return &ChangefeedConfig{
+<<<<<<< HEAD
 		ChangefeedID:             info.ChangefeedID,
 		StartTS:                  info.StartTs,
 		TargetTS:                 info.TargetTs,
@@ -294,6 +300,32 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		TimeZone:                 GetGlobalServerConfig().TZ,
 		Consistent:               info.Config.Consistent,
 		EnableTableAcrossNodes:   util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes),
+=======
+		ChangefeedID:                  info.ChangefeedID,
+		PerformanceMode:               util.GetOrZero(info.Config.PerformanceMode),
+		StartTS:                       info.StartTs,
+		TargetTS:                      info.TargetTs,
+		SinkURI:                       info.SinkURI,
+		CaseSensitive:                 util.GetOrZero(info.Config.CaseSensitive),
+		ForceReplicate:                util.GetOrZero(info.Config.ForceReplicate),
+		SinkConfig:                    info.Config.Sink,
+		Filter:                        info.Config.Filter,
+		EnableSyncPoint:               util.GetOrZero(info.Config.EnableSyncPoint),
+		SyncPointInterval:             util.GetOrZero(info.Config.SyncPointInterval),
+		SyncPointRetention:            util.GetOrZero(info.Config.SyncPointRetention),
+		EnableSplittableCheck:         util.GetOrZero(info.Config.Scheduler.EnableSplittableCheck),
+		MemoryQuota:                   util.GetOrZero(info.Config.MemoryQuota),
+		EventCollectorBatchCount:      info.Config.EventCollectorBatchCount,
+		EventCollectorBatchBytes:      info.Config.EventCollectorBatchBytes,
+		Epoch:                         info.Epoch,
+		BDRMode:                       util.GetOrZero(info.Config.BDRMode),
+		EnableActiveActive:            util.GetOrZero(info.Config.EnableActiveActive),
+		ActiveActiveProgressInterval:  util.GetOrZero(info.Config.ActiveActiveProgressInterval),
+		ActiveActiveSyncStatsInterval: util.GetOrZero(info.Config.ActiveActiveSyncStatsInterval),
+		TimeZone:                      GetGlobalServerConfig().TZ,
+		Consistent:                    info.Config.Consistent,
+		EnableTableAcrossNodes:        util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes),
+>>>>>>> 167f7400e (*: add changefeed-level performance mode (#5862))
 		// other fields are not necessary for dispatcherManager
 	}
 }
