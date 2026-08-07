@@ -27,6 +27,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 
 	// Test case 1: All fields are set
 	apiCfg := &ReplicaConfig{
+		PerformanceMode:       util.AddressOf(config.PerformanceModeLowLatency),
 		MemoryQuota:           util.AddressOf(uint64(1024)),
 		CaseSensitive:         util.AddressOf(true),
 		ForceReplicate:        util.AddressOf(true),
@@ -62,6 +63,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	}
 
 	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.Equal(t, config.PerformanceModeLowLatency, util.GetOrZero(internalCfg.PerformanceMode))
 	require.Equal(t, uint64(1024), util.GetOrZero(internalCfg.MemoryQuota))
 	require.True(t, util.GetOrZero(internalCfg.CaseSensitive))
 	require.True(t, util.GetOrZero(internalCfg.ForceReplicate))
@@ -93,6 +95,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 
 	// Test case 3: Conversion back to API config
 	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.Equal(t, config.PerformanceModeLowLatency, util.GetOrZero(apiCfgBack.PerformanceMode))
 	require.Equal(t, uint64(1024), *apiCfgBack.MemoryQuota)
 	require.True(t, *apiCfgBack.CaseSensitive)
 	require.True(t, *apiCfgBack.ForceReplicate)
