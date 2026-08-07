@@ -202,9 +202,15 @@ func (d *decoder) assembleDMLEventFromPayload(
 ) *commonEvent.DMLEvent {
 	tableInfo := queryTableInfoFromPayload(keyPayload, valuePayload, valueSchema)
 	commitTs := getCommitTsFromPayload(valuePayload)
+	startTs := getStartTsFromPayload(valuePayload)
+	if startTs == 0 {
+		// Fall back to commit_ts for messages that do not carry start_ts,
+		// keeping the pre-feature behavior for old messages.
+		startTs = commitTs
+	}
 	event := &commonEvent.DMLEvent{
 		Rows:            chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity),
-		StartTs:         commitTs,
+		StartTs:         startTs,
 		CommitTs:        commitTs,
 		TableInfo:       tableInfo,
 		PhysicalTableID: tableInfo.TableName.TableID,
@@ -248,6 +254,22 @@ func getCommitTsFromPayload(valuePayload map[string]any) uint64 {
 		log.Error("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(source)))
 	}
 	return uint64(commitTs)
+}
+
+// getStartTsFromPayload returns the start_ts carried in the source block, or 0
+// when the field is absent (messages produced before the start_ts field existed).
+func getStartTsFromPayload(valuePayload map[string]any) uint64 {
+	source := valuePayload["source"].(map[string]any)
+	startTs, ok := source["start_ts"].(json.Number)
+	if !ok {
+		return 0
+	}
+	ts, err := startTs.Int64()
+	if err != nil {
+		log.Error("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(source)))
+		return 0
+	}
+	return uint64(ts)
 }
 
 func (d *decoder) getSchemaName() string {
