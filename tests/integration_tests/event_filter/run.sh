@@ -48,6 +48,8 @@ function run() {
 	check_table_exists "event_filter.t_name2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "event_filter.t_name3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "event_filter.t_virtual" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_table_exists "event_filter.t_like_from_filtered" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_table_not_exists "filtered_like_src.t_src_like" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	sleep 20
 
 	# check those rows that are not filtered are synced to downstream
@@ -91,6 +93,12 @@ function run() {
 	# Verify that rows with is_discounted=true are filtered
 	run_sql "select count(1) from event_filter.t_virtual where quantity > 10;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_contains "count(1): 0" # All discounted items should be filtered
+
+	run_sql "select count(1) from event_filter.t_like_from_filtered;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains "count(1): 1"
+
+	run_sql "select count(1) from event_filter.t_like_from_filtered where id=1 and val=200;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains "count(1): 1"
 
 	run_sql "TRUNCATE TABLE event_filter.t_truncate;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	run_sql_file $CUR/data/test_truncate.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
