@@ -40,6 +40,24 @@ type Workload interface {
 	BuildDeleteSql(opt DeleteOption) string
 }
 
+// InsertValuesWorkload is an optional interface for workloads that should use
+// prepared statements for inserts.
+type InsertValuesWorkload interface {
+	BuildInsertSqlWithValues(tableN int, batchSize int) (string, []interface{})
+}
+
+// UpdateValuesWorkload is an optional interface for workloads that should use
+// prepared statements for updates.
+type UpdateValuesWorkload interface {
+	BuildUpdateSqlWithValues(opt UpdateOption) (string, []interface{})
+}
+
+// DeleteValuesWorkload is an optional interface for workloads that should use
+// prepared statements for deletes.
+type DeleteValuesWorkload interface {
+	BuildDeleteSqlWithValues(opt DeleteOption) (string, []interface{})
+}
+
 type UpdateOption struct {
 	TableIndex      int
 	Batch           int
