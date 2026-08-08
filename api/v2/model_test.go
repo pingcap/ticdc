@@ -42,6 +42,16 @@ func TestReplicaConfigConversion(t *testing.T) {
 				SpoolDiskQuota:   util.AddressOf(int64(1024)),
 				SpoolBaseDir:     util.AddressOf("/tmp/ticdc-spool"),
 			},
+			KafkaConfig: &KafkaConfig{
+				SASLMechanism:     util.AddressOf("OAUTHBEARER"),
+				SASLOAuthProvider: util.AddressOf("AWS_MSK_IAM"),
+				AWSMSKIAM: &AWSMSKIAMConfig{
+					Region:          "us-west-2",
+					RoleARN:         "arn:aws:iam::123456789012:role/ticdc-msk",
+					RoleSessionName: "ticdc",
+					ExternalID:      "external-id",
+				},
+			},
 		},
 		Mounter: &MounterConfig{
 			WorkerNum: util.AddressOf(16),
@@ -75,6 +85,11 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(internalCfg.Sink.CloudStorageConfig.UseTableIDAsPath))
 	require.Equal(t, int64(1024), util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolDiskQuota))
 	require.Equal(t, "/tmp/ticdc-spool", util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolBaseDir))
+	require.Equal(t, "AWS_MSK_IAM", util.GetOrZero(internalCfg.Sink.KafkaConfig.SASLOAuthProvider))
+	require.Equal(t, "us-west-2", internalCfg.Sink.KafkaConfig.AWSMSKIAM.Region)
+	require.Equal(t, "arn:aws:iam::123456789012:role/ticdc-msk", internalCfg.Sink.KafkaConfig.AWSMSKIAM.RoleARN)
+	require.Equal(t, "ticdc", internalCfg.Sink.KafkaConfig.AWSMSKIAM.RoleSessionName)
+	require.Equal(t, "external-id", internalCfg.Sink.KafkaConfig.AWSMSKIAM.ExternalID)
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
 	require.True(t, util.GetOrZero(internalCfg.Scheduler.EnableTableAcrossNodes))
 	require.Equal(t, 1000, util.GetOrZero(internalCfg.Scheduler.RegionThreshold))
@@ -103,6 +118,11 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, *apiCfgBack.Sink.CloudStorageConfig.UseTableIDAsPath)
 	require.Equal(t, int64(1024), *apiCfgBack.Sink.CloudStorageConfig.SpoolDiskQuota)
 	require.Equal(t, "/tmp/ticdc-spool", *apiCfgBack.Sink.CloudStorageConfig.SpoolBaseDir)
+	require.Equal(t, "AWS_MSK_IAM", *apiCfgBack.Sink.KafkaConfig.SASLOAuthProvider)
+	require.Equal(t, "us-west-2", apiCfgBack.Sink.KafkaConfig.AWSMSKIAM.Region)
+	require.Equal(t, "arn:aws:iam::123456789012:role/ticdc-msk", apiCfgBack.Sink.KafkaConfig.AWSMSKIAM.RoleARN)
+	require.Equal(t, "ticdc", apiCfgBack.Sink.KafkaConfig.AWSMSKIAM.RoleSessionName)
+	require.Equal(t, "external-id", apiCfgBack.Sink.KafkaConfig.AWSMSKIAM.ExternalID)
 	require.Equal(t, 16, *apiCfgBack.Mounter.WorkerNum)
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)

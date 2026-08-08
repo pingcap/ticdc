@@ -64,6 +64,16 @@ type SASL struct {
 	SASLMechanism SASLMechanism
 	GSSAPI        GSSAPI
 	OAuth2        OAuth2
+	OAuthProvider string
+	AWSMSKIAM     AWSMSKIAM
+}
+
+// AWSMSKIAM holds parameters for Amazon MSK IAM authentication.
+type AWSMSKIAM struct {
+	Region          string
+	RoleARN         string
+	RoleSessionName string
+	ExternalID      string
 }
 
 // OAuth2 holds necessary parameters to support sasl-oauth2.
