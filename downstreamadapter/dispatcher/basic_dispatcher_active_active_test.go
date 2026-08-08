@@ -13,7 +13,9 @@
 package dispatcher
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -130,6 +132,89 @@ func TestDDLEventsAlwaysValidateActiveActive(t *testing.T) {
 	default:
 		t.Fatalf("expected DDL validation error")
 	}
+}
+
+func TestHandleEventsSkipsDMLBeforeCompletedBlockEvent(t *testing.T) {
+	sharedInfo := newTestSharedInfo(false, false, nil)
+	dispatcherSink := newDispatcherTestSink(t, common.MysqlSinkType)
+	tableSpan := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{0}, EndKey: []byte{1}}
+	dispatcher := NewBasicDispatcher(
+		common.NewDispatcherID(),
+		tableSpan,
+		100,
+		1,
+		NewSchemaIDToDispatchers(),
+		false,
+		false,
+		4096,
+		0,
+		200,
+		common.DefaultMode,
+		dispatcherSink.Sink(),
+		sharedInfo,
+	)
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	helper.DDL2Event("create table t (id int primary key, v int)")
+	oldDML := helper.DML2Event("test", "t", "insert into t values (1, 1)")
+	oldDML.DispatcherID = dispatcher.id
+	oldDML.StartTs = 110
+	oldDML.CommitTs = 120
+	newDML := helper.DML2Event("test", "t", "insert into t values (2, 2)")
+	newDML.DispatcherID = dispatcher.id
+	newDML.StartTs = 130
+	newDML.CommitTs = 140
+
+	dispatcher.blockEventStatus.recordCompleted(BlockEventIdentifier{CommitTs: 120})
+	block := dispatcher.handleEvents([]DispatcherEvent{{Event: oldDML}, {Event: newDML}}, func() {})
+	require.True(t, block)
+
+	dmls := dispatcherSink.GetDMLs()
+	require.Len(t, dmls, 1)
+	require.Equal(t, uint64(140), dmls[0].CommitTs)
+}
+
+func TestHeldObsoleteBlockEventCompletesWithoutWaitingReport(t *testing.T) {
+	sharedInfo := newTestSharedInfo(false, false, nil)
+	dispatcherSink := newDispatcherTestSink(t, common.MysqlSinkType)
+	dispatcherID := common.NewDispatcherID()
+	dispatcher := NewBasicDispatcher(
+		dispatcherID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID),
+		100,
+		common.DDLSpanSchemaID,
+		NewSchemaIDToDispatchers(),
+		false,
+		false,
+		4096,
+		0,
+		200,
+		common.DefaultMode,
+		dispatcherSink.Sink(),
+		sharedInfo,
+	)
+
+	event := commonEvent.NewSyncPointEvent(dispatcherID, 120, 1, 0)
+	dispatcher.pendingACKCount.Store(1)
+	dispatcher.DealWithBlockEvent(event)
+	require.NotNil(t, dispatcher.holdingBlockEvent)
+	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
+
+	dispatcher.blockEventStatus.recordCompleted(BlockEventIdentifier{CommitTs: 120, IsSyncPoint: true})
+	dispatcher.pendingACKCount.Store(0)
+	dispatcher.tryDealWithHeldBlockEvent()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	status := dispatcher.TakeBlockStatus(ctx)
+	require.NotNil(t, status)
+	require.Equal(t, heartbeatpb.BlockStage_DONE, status.State.Stage)
+	require.Equal(t, uint64(120), status.State.BlockTs)
+	require.True(t, status.State.IsSyncPoint)
+	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
+	require.Nil(t, dispatcher.blockEventStatus.getEvent())
 }
 
 func newTestBasicDispatcher(t *testing.T, sinkType common.SinkType, enableActiveActive bool) *BasicDispatcher {

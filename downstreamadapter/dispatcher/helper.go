@@ -161,6 +161,7 @@ type BlockEventStatus struct {
 	blockPendingEvent commonEvent.BlockEvent
 	blockStage        heartbeatpb.BlockStage
 	blockCommitTs     uint64
+	completed         BlockEventIdentifier
 }
 
 func (b *BlockEventStatus) clear() {
@@ -179,6 +180,32 @@ func (b *BlockEventStatus) setBlockEvent(event commonEvent.BlockEvent, blockStag
 	b.blockPendingEvent = event
 	b.blockStage = blockStage
 	b.blockCommitTs = event.GetCommitTs()
+}
+
+func (b *BlockEventStatus) isCompletedOrObsolete(event commonEvent.BlockEvent) bool {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	if b.completed.CommitTs == 0 {
+		return false
+	}
+	return compareBlockEventIdentifier(blockEventIdentifier(event), b.completed) <= 0
+}
+
+func (b *BlockEventStatus) isDMLCompletedOrObsolete(commitTs uint64) bool {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	return b.completed.CommitTs != 0 && commitTs <= b.completed.CommitTs
+}
+
+func (b *BlockEventStatus) recordCompleted(identifier BlockEventIdentifier) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	if b.completed.CommitTs == 0 || compareBlockEventIdentifier(identifier, b.completed) > 0 {
+		b.completed = identifier
+	}
 }
 
 func (b *BlockEventStatus) updateBlockStage(blockStage heartbeatpb.BlockStage) {
@@ -214,7 +241,8 @@ func (b *BlockEventStatus) actionMatchs(action *heartbeatpb.DispatcherAction) bo
 		return false
 	}
 
-	return b.blockCommitTs == action.CommitTs
+	pendingIsSyncPoint := b.blockPendingEvent.GetType() == commonEvent.TypeSyncPointEvent
+	return b.blockCommitTs == action.CommitTs && pendingIsSyncPoint == action.IsSyncPoint
 }
 
 // ignoredStatusMatches checks whether the ignored status is for the current pending ddl/sync point event.
@@ -242,6 +270,29 @@ func (b *BlockEventStatus) getEventCommitTs() (uint64, bool) {
 		return 0, false
 	}
 	return b.blockCommitTs, true
+}
+
+func blockEventIdentifier(event commonEvent.BlockEvent) BlockEventIdentifier {
+	return BlockEventIdentifier{
+		CommitTs:    event.GetCommitTs(),
+		IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
+	}
+}
+
+func compareBlockEventIdentifier(a, b BlockEventIdentifier) int {
+	if a.CommitTs < b.CommitTs {
+		return -1
+	}
+	if a.CommitTs > b.CommitTs {
+		return 1
+	}
+	if a.IsSyncPoint == b.IsSyncPoint {
+		return 0
+	}
+	if !a.IsSyncPoint && b.IsSyncPoint {
+		return -1
+	}
+	return 1
 }
 
 type SchemaIDToDispatchers struct {
