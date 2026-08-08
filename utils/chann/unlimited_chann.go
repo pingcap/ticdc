@@ -80,6 +80,24 @@ func (c *UnlimitedChannel[T, G]) Push(values ...T) {
 	c.cond.Signal()
 }
 
+// PushIfNotClosed pushes values to the channel and reports whether they were
+// accepted. It is intended for control paths that must distinguish a closed
+// channel from a successful enqueue.
+func (c *UnlimitedChannel[T, G]) PushIfNotClosed(values ...T) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.closed {
+		return false
+	}
+	for _, v := range values {
+		c.queue.PushBack(v)
+	}
+
+	c.cond.Signal()
+	return true
+}
+
 // Get retrieves an element from the channel.
 // Return the element and a boolean indicating whether the channel is available.
 // Return false if the channel is closed.

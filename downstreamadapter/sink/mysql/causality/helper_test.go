@@ -26,6 +26,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func testChangefeedID() common.ChangeFeedID {
+	return common.NewChangefeedID4Test("test", "test")
+}
+
 func TestGenKeyListUsesSchemaIndexWithVirtualGeneratedColumn(t *testing.T) {
 	t.Parallel()
 
