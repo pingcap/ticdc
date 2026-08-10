@@ -93,7 +93,7 @@ func NewDefaultPullerConfig() *PullerConfig {
 		ResolvedTsStuckInterval:          TomlDuration(5 * time.Minute),
 		LogRegionDetails:                 false,
 		PendingRegionRequestQueueSize:    32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
-		RegionRequestMaxWindowMultiplier: 4,
+		RegionRequestMaxWindowMultiplier: 4,  // Allows high-priority scans to use up to 4 * PendingRegionRequestQueueSize.
 		OldStartTsScanLowPriorityThreshold: TomlDuration(
 			DefaultOldStartTsScanLowPriorityThreshold),
 	}
