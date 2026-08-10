@@ -122,6 +122,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	defaultAtomicity := config.DefaultAtomicityLevel()
 	manager.sharedInfo = dispatcher.NewSharedInfo(
 		manager.changefeedID,
+		false,
 		"system",
 		manager.config.BDRMode,
 		manager.config.EnableActiveActive,

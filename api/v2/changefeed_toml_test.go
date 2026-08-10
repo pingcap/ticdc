@@ -88,6 +88,7 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 		SinkURI: "blackhole://",
 		StartTs: 449999999999999999,
 		Config: &ReplicaConfig{
+			PerformanceMode:   util.AddressOf(config.PerformanceModeLowLatency),
 			MemoryQuota:       util.AddressOf(uint64(1024)),
 			CaseSensitive:     util.AddressOf(true),
 			ForceReplicate:    util.AddressOf(true),
@@ -123,6 +124,7 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 	_, err := toml.Decode(out, &wrapper)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1024), util.GetOrZero(wrapper.Config.MemoryQuota))
+	require.Equal(t, config.PerformanceModeLowLatency, util.GetOrZero(wrapper.Config.PerformanceMode))
 	require.True(t, util.GetOrZero(wrapper.Config.CaseSensitive))
 	require.True(t, util.GetOrZero(wrapper.Config.ForceReplicate))
 	require.NotNil(t, wrapper.Config.SyncPointInterval)
