@@ -214,7 +214,10 @@ func (s *regionRequestWorker) runStream(ctx context.Context, firstReq *regionReq
 			zap.Error(err))
 	}()
 
-	conn, err := Connect(ctx, s.client.credential, s.store.storeAddr)
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+	g, gctx := errgroup.WithContext(streamCtx)
+	conn, err := Connect(gctx, s.client.credential, s.store.storeAddr)
 	if err != nil {
 		log.Warn("region request worker create grpc stream failed",
 			zap.Uint64("workerID", s.workerID),
@@ -230,7 +233,6 @@ func (s *regionRequestWorker) runStream(ctx context.Context, firstReq *regionReq
 	}
 	defer func() { _ = conn.Conn.Close() }()
 
-	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return s.receiveAndDispatchChangeEvents(conn) })
 	g.Go(func() error { return s.processRegionSendTask(gctx, conn, firstReq) })
 
