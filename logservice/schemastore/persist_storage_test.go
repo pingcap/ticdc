@@ -3197,6 +3197,93 @@ func TestRenameTable(t *testing.T) {
 	assert.Equal(t, "RENAME TABLE `SalesDB`.`t1` TO `ArchiveDB`.`t1`", ddl.Query)
 }
 
+func TestRenameTableRepairsOldTableMetadata(t *testing.T) {
+	t.Run("same schema", func(t *testing.T) {
+		job := buildRenameTableJobForTest(100, 101, "t2", 100, &model.InvolvingSchemaInfo{
+			Database: "test",
+			Table:    "t1",
+		})
+		job.Query = "RENAME TABLE t1 TO t2"
+		rawEvent := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "test", Tables: map[int64]bool{101: true}},
+			},
+			// Simulate a snapshot that already contains the post-rename table name.
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "t2"},
+			},
+		})
+
+		require.Equal(t, "RENAME TABLE `test`.`t1` TO `test`.`t2`", rawEvent.Query)
+		require.Equal(t, int64(100), rawEvent.ExtraSchemaID)
+		require.Equal(t, "test", rawEvent.ExtraSchemaName)
+		require.Equal(t, "t1", rawEvent.ExtraTableName)
+
+		ddlEvent, ok, err := buildDDLEventForRenameTable(&rawEvent, nil, 0)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, []commonEvent.SchemaTableName{{SchemaName: "test", TableName: "t1"}}, ddlEvent.BlockedTableNames)
+		require.Equal(t, &commonEvent.TableNameChange{
+			AddName:  []commonEvent.SchemaTableName{{SchemaName: "test", TableName: "t2"}},
+			DropName: []commonEvent.SchemaTableName{{SchemaName: "test", TableName: "t1"}},
+		}, ddlEvent.TableNameChange)
+	})
+
+	t.Run("cross schema with old TiDB job args", func(t *testing.T) {
+		job := buildRenameTableJobForTest(100, 101, "t1", 100, nil)
+		job.Version = model.JobVersion1
+		job.FillArgs(&model.RenameTableArgs{
+			OldSchemaID:  200,
+			NewTableName: ast.NewCIStr("t1"),
+		})
+		_, err := job.Encode(true)
+		require.NoError(t, err)
+		job.Query = "RENAME TABLE t1 TO target_db.t1"
+		rawEvent := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "target_db", Tables: map[int64]bool{101: true}},
+				200: {Name: "source_db", Tables: map[int64]bool{}},
+			},
+			// Simulate a snapshot that has already moved the table to the new schema.
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "t1"},
+			},
+		})
+
+		require.Equal(t, "RENAME TABLE `source_db`.`t1` TO `target_db`.`t1`", rawEvent.Query)
+		require.Equal(t, int64(200), rawEvent.ExtraSchemaID)
+		require.Equal(t, "source_db", rawEvent.ExtraSchemaName)
+		require.Equal(t, "t1", rawEvent.ExtraTableName)
+
+		ddlEvent, ok, err := buildDDLEventForRenameTable(&rawEvent, nil, 0)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, []commonEvent.SchemaIDChange{{
+			TableID:     101,
+			OldSchemaID: 200,
+			NewSchemaID: 100,
+		}}, ddlEvent.UpdatedSchemas)
+		require.Equal(t, &commonEvent.TableNameChange{
+			AddName:  []commonEvent.SchemaTableName{{SchemaName: "target_db", TableName: "t1"}},
+			DropName: []commonEvent.SchemaTableName{{SchemaName: "source_db", TableName: "t1"}},
+		}, ddlEvent.TableNameChange)
+
+		ddlEvent, ok, err = buildDDLEventForRenameTable(
+			&rawEvent, buildTableFilterByNameForTest("source_db", "*"), 0)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{101},
+		}, ddlEvent.NeedDroppedTables)
+		require.Equal(t, &commonEvent.TableNameChange{
+			DropName: []commonEvent.SchemaTableName{{SchemaName: "source_db", TableName: "t1"}},
+		}, ddlEvent.TableNameChange)
+	})
+}
+
 func TestBuildPersistedDDLEventForRenameTablesFallbackOldTableName(t *testing.T) {
 	job := buildRenameTablesJobForTest(
 		[]int64{100, 100},

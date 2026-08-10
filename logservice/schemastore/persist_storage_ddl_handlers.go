@@ -798,9 +798,9 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	// Note: schema id/schema name/table name may be changed or not
 	// table id does not change, we use it to get the table's prev schema id/name and table name
 	event.ExtraSchemaID = getSchemaID(args.tableMap, event.TableID)
-	// TODO: check how ExtraTableName will be used later
 	event.ExtraTableName = getTableName(args.tableMap, event.TableID)
 	event.ExtraSchemaName = getSchemaName(args.databaseMap, event.ExtraSchemaID)
+	snapshotExtraSchemaID := event.ExtraSchemaID
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	// get the table's current table name from the ddl job
 	event.TableName = event.TableInfo.Name.O
@@ -811,17 +811,18 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	//   table `test.t`, DDL `rename table t to test2.t;`, commit ts = 100
 	//   snapshot at ts = 99 already shows `t` under `test2`
 	//   => event.ExtraSchemaName becomes `test2`, which is wrong for the old name
-	// SchemaStore can still use ExtraSchemaID to update internal state,
-	// but the emitted event.Query must carry the correct old names.
-	// Rebuild them with the following precedence:
+	// Both Query and the Extra fields must carry the correct old identity, because
+	// the Extra fields are later used for filtering, blocking, table-name changes,
+	// and cross-schema updates. Rebuild them with the following precedence:
 	// 1. InvolvingSchemaInfo provides a fallback old schema/table pair, but names may be normalized.
-	// 2. RenameTableArgs.OldSchemaName overrides the fallback when available.
-	//    It is reliable in TiDB >= v8.5, but can be missing in older versions.
+	// 2. RenameTableArgs.OldSchemaID identifies the old schema. OldSchemaName overrides the fallback
+	//    when available. OldSchemaName is reliable in TiDB >= v8.5, but can be missing in older versions.
 	// 3. The original query (if it specifies old schema) has the highest priority for identifier case.
-	// 4. If the query omits old schema and ExtraSchemaID differs from SchemaID, use ExtraSchemaID to
+	// 4. If the query omits old schema and the snapshot ExtraSchemaID differs from SchemaID, use it to
 	//    recover the old schema name from the schema store.
 	oldSchemaName := ""
 	oldTableName := ""
+	renameArgsOldSchemaID := int64(0)
 	oldSchemaSource := "unknown"
 	if len(args.job.InvolvingSchemaInfo) > 0 {
 		oldSchemaName = args.job.InvolvingSchemaInfo[0].Database
@@ -832,6 +833,7 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	}
 	if args.job.Version == model.JobVersion1 || args.job.Version == model.JobVersion2 {
 		if renameArgs, err := model.GetRenameTableArgs(args.job); err == nil {
+			renameArgsOldSchemaID = renameArgs.OldSchemaID
 			if renameArgs.OldSchemaName.O != "" {
 				oldSchemaName = renameArgs.OldSchemaName.O
 				oldSchemaSource = "rename_table_args"
@@ -854,13 +856,33 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 			oldSchemaSource = "query"
 		}
 	}
-	// ExtraSchemaID can be incorrect due to snapshot timing, so only use it if the query
-	// does not specify the old schema.
-	if !queryProvidedOldSchema && event.ExtraSchemaID != 0 && event.ExtraSchemaID != event.SchemaID {
-		if extraName := getSchemaName(args.databaseMap, event.ExtraSchemaID); extraName != "" {
-			oldSchemaName = extraName
-			oldSchemaSource = "extra_schema_id"
+	oldSchemaID := int64(0)
+	if queryProvidedOldSchema {
+		oldSchemaID, _ = findSchemaIDByName(args.databaseMap, oldSchemaName)
+	} else if oldSchema, ok := args.databaseMap[renameArgsOldSchemaID]; renameArgsOldSchemaID != 0 && ok {
+		oldSchemaID = renameArgsOldSchemaID
+		oldSchemaName = oldSchema.Name
+		oldSchemaSource = "rename_table_args_old_schema_id"
+	} else if oldSchema, ok := args.databaseMap[snapshotExtraSchemaID]; snapshotExtraSchemaID != 0 && snapshotExtraSchemaID != event.SchemaID && ok {
+		oldSchemaID = snapshotExtraSchemaID
+		oldSchemaName = oldSchema.Name
+		oldSchemaSource = "extra_schema_id"
+	} else {
+		oldSchemaID, _ = findSchemaIDByName(args.databaseMap, oldSchemaName)
+	}
+	if !queryProvidedOldSchema {
+		if oldSchema, ok := args.databaseMap[oldSchemaID]; ok {
+			// Prefer the schema-store spelling unless the original query explicitly
+			// provides the old schema identifier.
+			oldSchemaName = oldSchema.Name
 		}
+	}
+	if oldSchemaID != 0 && oldSchemaName != "" && oldTableName != "" {
+		// Keep all representations of the old table identity consistent. In particular,
+		// do not leave the post-rename snapshot values in the Extra fields.
+		event.ExtraSchemaID = oldSchemaID
+		event.ExtraSchemaName = oldSchemaName
+		event.ExtraTableName = oldTableName
 	}
 	if oldSchemaName != "" && oldTableName != "" {
 		log.Info("rebuild rename table query",
