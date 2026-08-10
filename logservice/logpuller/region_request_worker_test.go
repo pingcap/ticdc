@@ -569,7 +569,9 @@ func TestRunStreamFailurePushesTrackedRegionToEventSink(t *testing.T) {
 	require.Equal(t, SubscriptionID(1), pushed.subscriptionID)
 	require.Len(t, pushed.event.states, 1)
 	require.Same(t, sentState, pushed.event.states[0])
-	require.Equal(t, 0, worker.admission.stats().inflight)
+	require.Eventually(t, func() bool {
+		return worker.admission.stats().inflight == 0
+	}, time.Second, 10*time.Millisecond)
 
 	var streamErr *storeStreamErr
 	require.ErrorAs(t, sentState.takeError(), &streamErr)

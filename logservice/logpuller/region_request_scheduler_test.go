@@ -69,18 +69,22 @@ func TestRegionRequestSchedulerBroadcastDeregisterUsesWorkerControlQueue(t *test
 	require.Equal(t, 1, worker1.admission.stats().pending)
 }
 
-func TestRegionRequestSchedulerInflightCountAggregatesStores(t *testing.T) {
+func TestRegionRequestSchedulerRequestedRegionCountAggregatesStores(t *testing.T) {
 	scheduler := &regionRequestScheduler{}
 
-	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(2, 1)}
-	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(2, 1)}
+	worker1 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
+	worker2 := &regionRequestWorker{admission: newRegionAdmissionController(1, 1)}
 	scheduler.stores.Store("store-1", &regionRequestStore{workers: []*regionRequestWorker{worker1}})
 	scheduler.stores.Store("store-2", &regionRequestStore{workers: []*regionRequestWorker{worker2}})
 
 	req1 := admitRegionRequest(t, worker1.admission, prepareRegionForAdmission(createTestRegionInfo(1, 1), 100))
 	req2 := admitRegionRequest(t, worker2.admission, prepareRegionForAdmission(createTestRegionInfo(1, 2), 100))
+	require.True(t, worker1.admission.submit(newRegionPriorityTask(
+		prepareRegionForAdmission(createTestRegionInfo(1, 3), 100), 3)))
+	require.True(t, worker2.admission.submit(newRegionPriorityTask(
+		prepareRegionForAdmission(createTestRegionInfo(1, 4), 100), 4)))
 
-	require.Equal(t, 2, scheduler.inflightCount())
+	require.Equal(t, 4, scheduler.requestedRegionCount())
 
 	require.True(t, req1.abort())
 	require.True(t, req2.abort())

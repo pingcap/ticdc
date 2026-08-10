@@ -200,18 +200,18 @@ func (s *regionRequestScheduler) BroadcastDeregister(
 	})
 }
 
-func (s *regionRequestScheduler) inflightCount() int {
+func (s *regionRequestScheduler) requestedRegionCount() int {
 	count := 0
 	s.stores.Range(func(_, value any) bool {
-		count += value.(*regionRequestStore).inflightCount()
+		count += value.(*regionRequestStore).requestedRegionCount()
 		return true
 	})
 	return count
 }
 
 func (s *regionRequestScheduler) UpdateMetrics() {
-	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("inflight").
-		Set(float64(s.inflightCount()))
+	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").
+		Set(float64(s.requestedRegionCount()))
 }
 
 func (s *regionRequestScheduler) Close() {
