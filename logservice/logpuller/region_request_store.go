@@ -41,7 +41,7 @@ func newRegionRequestStore(
 	store := &regionRequestStore{
 		workers: make([]*regionRequestWorker, 0, workerCount),
 	}
-	for i := 0; i < workerCount; i++ {
+	for range workerCount {
 		store.workers = append(store.workers, newRegionRequestWorker(
 			upstream, eventSink, failureHandler, storeAddr, workerWindow, maxWindowMultiplier))
 	}
