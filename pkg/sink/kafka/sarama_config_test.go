@@ -15,12 +15,10 @@ package kafka
 
 import (
 	"context"
-	"net/http"
 	"net/url"
 	"testing"
 
 	"github.com/IBM/sarama"
-	"github.com/gin-gonic/gin/binding"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -143,21 +141,6 @@ func TestSelectKafkaVersion(t *testing.T) {
 	}
 }
 
-func TestNewSaramaConfigInvalidOAuthTokenURL(t *testing.T) {
-	options := NewOptions()
-	options.SASL = &security.SASL{
-		SASLMechanism: security.OAuthMechanism,
-		OAuth2: security.OAuth2{
-			TokenURL: "http://test.com/Segment%%2815197306101420000%29",
-		},
-	}
-
-	_, err := newSaramaConfig(t.Context(), options)
-	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
-	var escapeErr url.EscapeError
-	require.ErrorAs(t, err, &escapeErr)
-}
-
 func TestNewSaramaConfigMaxRetryFromSinkURI(t *testing.T) {
 	t.Parallel()
 
@@ -212,6 +195,7 @@ func TestNewSaramaConfigMaxRetryFromSinkURI(t *testing.T) {
 	}
 }
 
+<<<<<<< HEAD
 func TestApplySASL(t *testing.T) {
 	t.Parallel()
 
@@ -479,6 +463,8 @@ func TestApplyTLS(t *testing.T) {
 	}
 }
 
+=======
+>>>>>>> 2b82c061f (kafka: decouple sarama from tests to make it library independent  (#5883))
 func TestCompleteSaramaSASLConfig(t *testing.T) {
 	t.Parallel()
 

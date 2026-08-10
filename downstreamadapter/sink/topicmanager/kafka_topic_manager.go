@@ -40,7 +40,7 @@ type kafkaTopicManager struct {
 
 	defaultTopic string
 
-	admin kafka.ClusterAdminClient
+	admin kafka.AdminClient
 	cfg   *kafka.AutoCreateTopicConfig
 
 	topics sync.Map
@@ -52,7 +52,7 @@ type kafkaTopicManager struct {
 func newKafkaTopicManager(
 	defaultTopic string,
 	changefeedID common.ChangeFeedID,
-	admin kafka.ClusterAdminClient,
+	admin kafka.AdminClient,
 	cfg *kafka.AutoCreateTopicConfig,
 ) *kafkaTopicManager {
 	return &kafkaTopicManager{
@@ -69,7 +69,7 @@ func EnsureTopic(
 	changefeedID common.ChangeFeedID,
 	topic string,
 	topicCfg *kafka.AutoCreateTopicConfig,
-	adminClient kafka.ClusterAdminClient,
+	adminClient kafka.AdminClient,
 ) error {
 	topicManager := newKafkaTopicManager(topic, changefeedID, adminClient, topicCfg)
 	_, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic)
@@ -82,7 +82,7 @@ func GetTopicManagerAndTryCreateTopic(
 	changefeedID common.ChangeFeedID,
 	topic string,
 	topicCfg *kafka.AutoCreateTopicConfig,
-	adminClient kafka.ClusterAdminClient,
+	adminClient kafka.AdminClient,
 ) (TopicManager, error) {
 	topicManager := newKafkaTopicManager(topic, changefeedID, adminClient, topicCfg)
 

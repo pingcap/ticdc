@@ -36,7 +36,7 @@ type components struct {
 	columnSelector *columnselector.ColumnSelectors
 	eventRouter    *eventrouter.EventRouter
 	topicManager   topicmanager.TopicManager
-	adminClient    kafka.ClusterAdminClient
+	adminClient    kafka.AdminClient
 	factory        kafka.Factory
 	claimCheck     *claimcheck.ClaimCheck
 }
