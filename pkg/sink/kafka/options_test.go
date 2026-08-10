@@ -76,7 +76,7 @@ func newKafkaAdminFixture(t *testing.T) *kafkaAdminFixture {
 		DoAndReturn(fixture.getBrokerConfig).AnyTimes()
 	fixture.admin.EXPECT().GetTopicConfig(gomock.Any(), gomock.Any()).
 		DoAndReturn(fixture.getTopicConfig).AnyTimes()
-	fixture.admin.EXPECT().CreateTopic(gomock.Any(), gomock.Any()).
+	fixture.admin.EXPECT().CreateTopic(gomock.Any()).
 		DoAndReturn(fixture.createTopic).AnyTimes()
 
 	return fixture
@@ -127,7 +127,7 @@ func (f *kafkaAdminFixture) getTopicConfig(topicName string, configName string) 
 	return "", false, nil
 }
 
-func (f *kafkaAdminFixture) createTopic(detail *TopicDetail, _ bool) error {
+func (f *kafkaAdminFixture) createTopic(detail *TopicDetail) error {
 	if detail.ReplicationFactor > mockClusterReplicationFactor {
 		return sarama.ErrInvalidReplicationFactor
 	}
@@ -485,7 +485,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 				Name:          topicName,
 				NumPartitions: 3,
 			}
-			err := adminClient.CreateTopic(detail, false)
+			err := adminClient.CreateTopic(detail)
 			require.NoError(t, err)
 
 			configuredMaxMessageBytes := test.configuredMaxMessageBytes(adminFixture)
