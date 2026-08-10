@@ -47,7 +47,8 @@ func InitMetrics(registry *prometheus.Registry) {
 	initDDLMetrics(registry)
 }
 
-func getKeyspaceLabel() string {
+// GetKeyspaceLabel returns the keyspace label name used by TiCDC metrics.
+func GetKeyspaceLabel() string {
 	if kerneltype.IsNextGen() {
 		return "keyspace_name"
 	}
