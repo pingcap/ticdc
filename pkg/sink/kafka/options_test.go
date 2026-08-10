@@ -606,7 +606,6 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 				adminClient.EXPECT().GetBrokerConfig(BrokerMessageMaxBytesConfigName).
 					Return(mockBrokerMessageMaxBytes, true, nil),
 			)
-
 			sinkURI, err := url.Parse(fmt.Sprintf(
 				"kafka://127.0.0.1:9092/%s?max-message-bytes=%d",
 				topicName, test.configuredMaxMessageBytes,

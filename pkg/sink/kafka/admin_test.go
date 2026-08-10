@@ -61,6 +61,28 @@ func TestGetBrokerConfig(t *testing.T) {
 	})
 }
 
+func TestCreateTopic(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	admin := NewMocksaramaClusterAdmin(ctrl)
+	admin.EXPECT().CreateTopic("test-topic", &sarama.TopicDetail{
+		NumPartitions:     3,
+		ReplicationFactor: 2,
+	}, false).Return(nil)
+
+	client := &saramaAdminClient{
+		changefeed: common.NewChangeFeedIDWithName("test", "default"),
+		admin:      admin,
+	}
+	err := client.CreateTopic(&TopicDetail{
+		Name:              "test-topic",
+		NumPartitions:     3,
+		ReplicationFactor: 2,
+	})
+	require.NoError(t, err)
+}
+
 func TestAdminClientClose(t *testing.T) {
 	tests := []struct {
 		name  string

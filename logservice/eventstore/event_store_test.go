@@ -183,6 +183,13 @@ func setZstdCompressionForTest(t *testing.T, enable bool) func() {
 	}
 }
 
+func getTableStatsForTest(es *eventStore, keyspaceID uint32, tableID int64) subscriptionStats {
+	return es.dispatcherMeta.tableStats[tableStatsKey{
+		keyspaceID: keyspaceID,
+		tableID:    tableID,
+	}]
+}
+
 func TestEventStoreInteractionWithSubClient(t *testing.T) {
 	restoreCfg := setDataSharingForTest(t, true)
 	defer restoreCfg()
@@ -423,10 +430,61 @@ func TestEventStoreHandlesUnencryptedValuesFromEncryptionLayer(t *testing.T) {
 
 func markSubStatsInitializedForTest(store EventStore, tableID int64) {
 	es := store.(*eventStore)
-	subStats := es.dispatcherMeta.tableStats[tableID]
+	subStats := getTableStatsForTest(es, 0, tableID)
 	for _, subStat := range subStats {
 		subStat.initialized.Store(true)
 	}
+}
+
+func TestEventStoreTableStatsAreKeyspaceAware(t *testing.T) {
+	restoreCfg := setDataSharingForTest(t, true)
+	defer restoreCfg()
+
+	subClient, store := newEventStoreForTest(t.TempDir())
+	es := store.(*eventStore)
+
+	dispatcherID1 := common.NewDispatcherID()
+	dispatcherID2 := common.NewDispatcherID()
+	tableID := int64(1)
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+
+	span1 := &heartbeatpb.TableSpan{
+		TableID:    tableID,
+		StartKey:   []byte("a"),
+		EndKey:     []byte("z"),
+		KeyspaceID: 1,
+	}
+	span2 := &heartbeatpb.TableSpan{
+		TableID:    tableID,
+		StartKey:   []byte("a"),
+		EndKey:     []byte("z"),
+		KeyspaceID: 2,
+	}
+
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID1, span1, 100, func(uint64, uint64) {}, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID2, span2, 100, func(uint64, uint64) {}, false, false))
+
+	mockSubClient := subClient.(*mockSubscriptionClient)
+	mockSubClient.mu.Lock()
+	require.Len(t, mockSubClient.subscriptions, 2)
+	mockSubClient.mu.Unlock()
+
+	es.dispatcherMeta.RLock()
+	subStats1 := getTableStatsForTest(es, span1.KeyspaceID, tableID)
+	subStats2 := getTableStatsForTest(es, span2.KeyspaceID, tableID)
+	require.Len(t, subStats1, 1)
+	require.Len(t, subStats2, 1)
+
+	dispatcherStat1 := es.dispatcherMeta.dispatcherStats[dispatcherID1]
+	dispatcherStat2 := es.dispatcherMeta.dispatcherStats[dispatcherID2]
+	require.NotNil(t, dispatcherStat1.subStat)
+	require.NotNil(t, dispatcherStat2.subStat)
+	require.Nil(t, dispatcherStat1.pendingSubStat)
+	require.Nil(t, dispatcherStat2.pendingSubStat)
+	require.Equal(t, span1.KeyspaceID, dispatcherStat1.subStat.tableSpan.KeyspaceID)
+	require.Equal(t, span2.KeyspaceID, dispatcherStat2.subStat.tableSpan.KeyspaceID)
+	require.NotEqual(t, dispatcherStat1.subStat.subID, dispatcherStat2.subStat.subID)
+	es.dispatcherMeta.RUnlock()
 }
 
 func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
@@ -484,7 +542,7 @@ func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 	}
 	{
 		store.UnregisterDispatcher(cfID, dispatcherID1)
-		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		subStats := getTableStatsForTest(store.(*eventStore), 0, tableID)
 		require.Equal(t, 1, len(subStats))
 		// because there is only one subStat, we know its subID is 1
 		subStat := subStats[logpuller.SubscriptionID(1)]
@@ -585,7 +643,7 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 	}
 	// do some check
 	{
-		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		subStats := getTableStatsForTest(store.(*eventStore), 0, tableID)
 		// 2 = 1 dispatcher for dispatcherID1 + 1 dispatcher for dispatcherID2
 		require.Equal(t, 2, len(subStats))
 	}
@@ -601,7 +659,7 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 	}
 	// do some check
 	{
-		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		subStats := getTableStatsForTest(store.(*eventStore), 0, tableID)
 		// 3 = 1 dispatcher for dispatcherID1 + 1 dispatcher for dispatcherID2 + 1 dispatcher for dispatcherID3
 		require.Equal(t, 3, len(subStats))
 		// subStat with subID 1 should have two dispatchers
@@ -620,7 +678,7 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 		}
 		ok := store.RegisterDispatcher(cfID, dispatcherID4, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
-		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		subStats := getTableStatsForTest(store.(*eventStore), 0, tableID)
 		require.Equal(t, 3, len(subStats))
 		// subStat with subID 1 should have three dispatchers
 		subStat := subStats[logpuller.SubscriptionID(1)]
@@ -632,7 +690,7 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 	// test unregister dispatcherID3 can remove its dependency on two subscriptions
 	{
 		store.UnregisterDispatcher(cfID, dispatcherID3)
-		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		subStats := getTableStatsForTest(store.(*eventStore), 0, tableID)
 		require.Equal(t, 3, len(subStats))
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
@@ -687,7 +745,7 @@ func TestEventStoreRegisterDispatcherWithoutDataSharing(t *testing.T) {
 	mockSubClient.mu.Unlock()
 
 	es.dispatcherMeta.RLock()
-	subStats := es.dispatcherMeta.tableStats[tableID]
+	subStats := getTableStatsForTest(es, 0, tableID)
 	require.Equal(t, 3, len(subStats))
 	require.Nil(t, es.dispatcherMeta.dispatcherStats[dispatcherID2].pendingSubStat)
 	require.Nil(t, es.dispatcherMeta.dispatcherStats[dispatcherID3].pendingSubStat)
@@ -779,7 +837,7 @@ func TestEventStoreUnregisterDispatcherWithoutDataSharingRemovesSubscription(t *
 	es.dispatcherMeta.RLock()
 	_, ok := es.dispatcherMeta.dispatcherStats[dispatcherID]
 	require.False(t, ok)
-	_, ok = es.dispatcherMeta.tableStats[tableID]
+	_, ok = es.dispatcherMeta.tableStats[tableStatsKey{tableID: tableID}]
 	require.False(t, ok)
 	es.dispatcherMeta.RUnlock()
 }
@@ -815,7 +873,7 @@ func TestEventStoreUnregisterDispatcherWithDataSharingKeepsSubscriptionForTTL(t 
 	mockSubClient.mu.Unlock()
 
 	es.dispatcherMeta.RLock()
-	subStats, ok := es.dispatcherMeta.tableStats[tableID]
+	subStats, ok := es.dispatcherMeta.tableStats[tableStatsKey{tableID: tableID}]
 	require.True(t, ok)
 	require.Equal(t, 1, len(subStats))
 	var subStat *subscriptionStat
@@ -862,7 +920,7 @@ func TestEventStoreUpdateCheckpointTs(t *testing.T) {
 	{
 		store.UpdateDispatcherCheckpointTs(dispatcherID1, 110)
 		store.UpdateDispatcherCheckpointTs(dispatcherID2, 120)
-		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		subStats := getTableStatsForTest(store.(*eventStore), 0, tableID)
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
 			require.NotNil(t, subStat)
@@ -876,7 +934,7 @@ func TestEventStoreUpdateCheckpointTs(t *testing.T) {
 	}
 	// update subStat resolvedTs
 	{
-		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		subStats := getTableStatsForTest(store.(*eventStore), 0, tableID)
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
 			require.NotNil(t, subStat)
@@ -890,7 +948,7 @@ func TestEventStoreUpdateCheckpointTs(t *testing.T) {
 	}
 	// check subStat checkpointTs can advance normally
 	{
-		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		subStats := getTableStatsForTest(store.(*eventStore), 0, tableID)
 		store.UpdateDispatcherCheckpointTs(dispatcherID1, 130)
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
@@ -982,7 +1040,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	cfID := common.NewChangefeedID4Test("default", "test-cf")
 
 	updateSubStatResolvedTs := func(subID logpuller.SubscriptionID, ts uint64) {
-		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		subStats := getTableStatsForTest(store.(*eventStore), 0, tableID)
 		subStat := subStats[subID]
 		require.NotNil(t, subStat)
 		subStat.resolvedTs.Store(ts)
@@ -1030,7 +1088,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 
 	// =========== check two subscriptions are created ============
 	{
-		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		subStats := getTableStatsForTest(store.(*eventStore), 0, tableID)
 		require.Equal(t, 2, len(subStats))
 	}
 
@@ -1057,7 +1115,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	}
 	// check dispatcher 2 is no longer receive event from subStat 1
 	{
-		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		subStats := getTableStatsForTest(store.(*eventStore), 0, tableID)
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
 			require.NotNil(t, subStat)
@@ -1089,7 +1147,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 		}
 	}
 	{
-		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		subStats := getTableStatsForTest(store.(*eventStore), 0, tableID)
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
 			require.NotNil(t, subStat)
@@ -1128,7 +1186,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 		}
 	}
 	{
-		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
+		subStats := getTableStatsForTest(store.(*eventStore), 0, tableID)
 		{
 			subStat := subStats[logpuller.SubscriptionID(1)]
 			require.NotNil(t, subStat)

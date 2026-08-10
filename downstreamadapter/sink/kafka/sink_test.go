@@ -110,7 +110,7 @@ func TestVerifyInvalidConfig(t *testing.T) {
 	factory := kafka.NewMockFactory(ctrl)
 	gomock.InOrder(
 		factory.EXPECT().AdminClient(gomock.Any()).Return(adminClient, nil),
-		adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, false).Return(
+		adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, true).Return(
 			map[string]kafka.TopicDetail{kafkaSinkTestTopic: {Name: kafkaSinkTestTopic}}, nil),
 		adminClient.EXPECT().Close(),
 	)
