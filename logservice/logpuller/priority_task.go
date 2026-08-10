@@ -13,6 +13,7 @@
 
 package logpuller
 
+<<<<<<< HEAD
 import (
 	"fmt"
 	"time"
@@ -40,74 +41,43 @@ const (
 
 func (t TaskType) String() string {
 	return fmt.Sprintf("%d", t)
+=======
+import "github.com/pingcap/kvproto/pkg/cdcpb"
+
+func normalizeScanPriority(priority cdcpb.ScanPriority) cdcpb.ScanPriority {
+	if priority == cdcpb.ScanPriority_SCAN_PRIORITY_HIGH {
+		return cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
+	}
+	return cdcpb.ScanPriority_SCAN_PRIORITY_LOW
+>>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 }
 
-// PriorityTask is the interface for priority-based tasks
-// It implements heap.Item interface
-type PriorityTask interface {
-	// Priority returns the priority value, lower value means higher priority
-	Priority() int
-
-	// GetRegionInfo returns the underlying regionInfo
-	GetRegionInfo() regionInfo
-
-	// heap.Item interface methods
-	SetHeapIndex(int)
-	GetHeapIndex() int
-	LessThan(PriorityTask) bool
+func isHighScanPriority(priority cdcpb.ScanPriority) bool {
+	return normalizeScanPriority(priority) == cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
 }
 
-// regionPriorityTask implements PriorityTask interface
 type regionPriorityTask struct {
-	taskType   TaskType
-	createTime time.Time
 	regionInfo regionInfo
+	sequence   uint64
 	heapIndex  int // for heap.Item interface
-	currentTs  uint64
 }
 
-// NewRegionPriorityTask creates a new priority task for region
-func NewRegionPriorityTask(taskType TaskType, regionInfo regionInfo, currentTs uint64) PriorityTask {
+// newRegionPriorityTask creates a new priority task for region.
+func newRegionPriorityTask(regionInfo regionInfo, sequence uint64) *regionPriorityTask {
+	regionInfo.scanPriority = normalizeScanPriority(regionInfo.scanPriority)
 	return &regionPriorityTask{
-		taskType:   taskType,
-		createTime: time.Now(),
 		regionInfo: regionInfo,
+		sequence:   sequence,
 		heapIndex:  0, // 0 means not in heap
-		currentTs:  currentTs,
 	}
 }
 
-// Priority calculates the priority based on task type and wait time
-// Lower value means higher priority
-func (pt *regionPriorityTask) Priority() int {
-	// Base priority based on task type
-	basePriority := 0
-	switch pt.taskType {
-	case TaskHighPrior:
-		basePriority = highPriorityBase // Highest priority
-	case TaskLowPrior:
-		basePriority = lowPriorityBase // Lowest priority
-	}
-
-	// Add time-based priority bonus
-	// Wait time in seconds, longer wait time means higher priority (lower value)
-	waitTime := time.Since(pt.createTime)
-	timeBonus := int(waitTime.Seconds())
-
-	// ResolvedTsLag in seconds, longer lag means lower priority (higher value)
-	resolvedTsLag := oracle.GetTimeFromTS(pt.currentTs).Sub(oracle.GetTimeFromTS(pt.regionInfo.subscribedSpan.resolvedTs.Load()))
-	resolvedTsLagPenalty := int(resolvedTsLag.Seconds())
-
-	priority := basePriority - timeBonus + resolvedTsLagPenalty
-	if priority < 0 {
-		priority = 0
-	}
-	return priority
+func (pt *regionPriorityTask) priority() cdcpb.ScanPriority {
+	return normalizeScanPriority(pt.regionInfo.scanPriority)
 }
 
-// GetRegionInfo returns the underlying regionInfo
-func (pt *regionPriorityTask) GetRegionInfo() regionInfo {
-	return pt.regionInfo
+func (pt *regionPriorityTask) canUseMaxWindow() bool {
+	return isHighScanPriority(pt.regionInfo.scanPriority)
 }
 
 // SetHeapIndex sets the heap index for heap.Item interface
@@ -120,8 +90,11 @@ func (pt *regionPriorityTask) GetHeapIndex() int {
 	return pt.heapIndex
 }
 
-// LessThan implements heap.Item interface
-// Returns true if this task has higher priority (lower priority value) than the other task
-func (pt *regionPriorityTask) LessThan(other PriorityTask) bool {
-	return pt.Priority() < other.Priority()
+// LessThan implements heap.Item interface. Tasks in the same priority class are
+// processed in submission order.
+func (pt *regionPriorityTask) LessThan(other *regionPriorityTask) bool {
+	if isHighScanPriority(pt.regionInfo.scanPriority) != isHighScanPriority(other.regionInfo.scanPriority) {
+		return isHighScanPriority(pt.regionInfo.scanPriority)
+	}
+	return pt.sequence < other.sequence
 }

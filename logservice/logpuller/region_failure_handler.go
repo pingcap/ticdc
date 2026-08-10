@@ -107,6 +107,10 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 
 func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
+<<<<<<< HEAD
+=======
+	retryPriority := normalizeScanPriority(errInfo.scanPriority)
+>>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 	//nolint:errorlint // converting large type switch to errors.As is a significant refactor
 	if _, requestCancelled := err.(*requestCancelledErr); !requestCancelled {
 		log.Debug("cdc region error",
@@ -127,12 +131,22 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
+<<<<<<< HEAD
 			r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
+=======
+			r.client.scheduleRangeRequest(
+				ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
+>>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
+<<<<<<< HEAD
 			r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
+=======
+			r.client.scheduleRangeRequest(
+				ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
+>>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 			return nil
 		}
 		if innerErr.GetCongested() != nil {
@@ -165,14 +179,24 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		return nil
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
+<<<<<<< HEAD
 		r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
+=======
+		r.client.scheduleRangeRequest(
+			ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
+>>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 		return nil
 	case *getStoreErr:
 		metricGetStoreErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		// cannot get the store the region belongs to, so we need to reload the region.
 		r.client.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
+<<<<<<< HEAD
 		r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
+=======
+		r.client.scheduleRangeRequest(
+			ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
+>>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 		return nil
 	case *storeStreamErr:
 		metricStoreSendRequestErr.Inc()

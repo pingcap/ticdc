@@ -8,23 +8,25 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
 package logpuller
 
 import (
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/utils/priorityqueue"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
+<<<<<<< HEAD
 // TestPriorityCalculationLogic tests the priority calculation logic in isolation
 func TestPriorityCalculationLogic(t *testing.T) {
 	currentTime := time.Now()
@@ -201,46 +203,111 @@ func TestEdgeCases(t *testing.T) {
 		// wait time longer task priority should be higher
 		require.Less(t, priority2, priority1, "wait time longer task priority should be higher")
 	})
+=======
+func newPriorityTestRegion(
+	regionID uint64,
+	checkpointTs uint64,
+) regionInfo {
+	span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
+	state := &regionlock.LockedRangeState{}
+	state.ResolvedTs.Store(checkpointTs)
+	return regionInfo{
+		verID:            tikv.NewRegionVerID(regionID, 1, 1),
+		span:             span,
+		subscribedSpan:   &subscribedSpan{subID: 1, startTs: checkpointTs, span: span},
+		lockedRangeState: state,
+	}
+}
+
+func withScanPriority(region regionInfo, priority cdcpb.ScanPriority) regionInfo {
+	region.scanPriority = priority
+	return region
+}
+
+func TestNormalizeScanPriority(t *testing.T) {
+	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH, normalizeScanPriority(cdcpb.ScanPriority_SCAN_PRIORITY_HIGH))
+	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_LOW, normalizeScanPriority(cdcpb.ScanPriority_SCAN_PRIORITY_LOW))
+	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_LOW, normalizeScanPriority(cdcpb.ScanPriority_SCAN_PRIORITY_UNKNOWN))
+	require.True(t, isHighScanPriority(cdcpb.ScanPriority_SCAN_PRIORITY_HIGH))
+	require.False(t, isHighScanPriority(cdcpb.ScanPriority_SCAN_PRIORITY_LOW))
+	require.False(t, isHighScanPriority(cdcpb.ScanPriority_SCAN_PRIORITY_UNKNOWN))
+>>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 }
 
 func TestRegionPriorityTaskQueueOrder(t *testing.T) {
-	queue := priorityqueue.New[PriorityTask]()
-	ctx := t.Context()
+	queue := priorityqueue.New[*regionPriorityTask]()
+	currentTime := time.Now()
 
-	currentTs := oracle.GoTimeToTS(time.Now())
-	verID := tikv.NewRegionVerID(1, 1, 1)
-	span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
-
-	subscribedSpan := &subscribedSpan{
-		resolvedTs: atomic.Uint64{},
-	}
-	subscribedSpan.resolvedTs.Store(oracle.GoTimeToTS(time.Now().Add(-time.Second)))
-
-	regionInfo := regionInfo{
-		verID:          verID,
-		span:           span,
-		subscribedSpan: subscribedSpan,
-	}
-
-	errorTask := NewRegionPriorityTask(TaskHighPrior, regionInfo, currentTs+1)
-	highTask := NewRegionPriorityTask(TaskHighPrior, regionInfo, currentTs)
-	lowTask := NewRegionPriorityTask(TaskLowPrior, regionInfo, currentTs)
+	lowTask := newRegionPriorityTask(
+		withScanPriority(
+			newPriorityTestRegion(1, oracle.GoTimeToTS(currentTime.Add(-time.Hour))),
+			cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+		),
+		3,
+	)
+	highTask1 := newRegionPriorityTask(
+		withScanPriority(
+			newPriorityTestRegion(2, oracle.GoTimeToTS(currentTime.Add(-10*time.Minute))),
+			cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+		),
+		2,
+	)
+	highTask2 := newRegionPriorityTask(
+		withScanPriority(
+			newPriorityTestRegion(3, oracle.GoTimeToTS(currentTime.Add(-time.Hour))),
+			cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+		),
+		1,
+	)
 
 	require.True(t, queue.Push(lowTask))
-	require.True(t, queue.Push(errorTask))
-	require.True(t, queue.Push(highTask))
+	require.True(t, queue.Push(highTask1))
+	require.True(t, queue.Push(highTask2))
 
-	first, err := queue.Pop(ctx)
+	for _, expectedRegionID := range []uint64{3, 2, 1} {
+		task, err := queue.Pop(t.Context())
+		require.NoError(t, err)
+		require.Equal(t, expectedRegionID, task.regionInfo.verID.GetID())
+	}
+}
+
+func TestRegionPriorityTaskFIFOWithinPriority(t *testing.T) {
+	queue := priorityqueue.New[*regionPriorityTask]()
+	currentTime := time.Now()
+	checkpointTs := oracle.GoTimeToTS(currentTime.Add(-time.Hour))
+
+	first := newRegionPriorityTask(
+		withScanPriority(newPriorityTestRegion(1, checkpointTs), cdcpb.ScanPriority_SCAN_PRIORITY_HIGH), 1)
+	second := newRegionPriorityTask(
+		withScanPriority(newPriorityTestRegion(2, checkpointTs), cdcpb.ScanPriority_SCAN_PRIORITY_HIGH), 2)
+
+	require.True(t, queue.Push(second))
+	require.True(t, queue.Push(first))
+
+	task, err := queue.Pop(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, TaskHighPrior, first.(*regionPriorityTask).taskType)
-
-	second, err := queue.Pop(ctx)
+	require.Equal(t, uint64(1), task.regionInfo.verID.GetID())
+	task, err = queue.Pop(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, TaskHighPrior, second.(*regionPriorityTask).taskType)
+	require.Equal(t, uint64(2), task.regionInfo.verID.GetID())
+}
 
-	third, err := queue.Pop(ctx)
-	require.NoError(t, err)
-	require.Equal(t, TaskLowPrior, third.(*regionPriorityTask).taskType)
+func TestRegionPriorityTaskUsesHighPriorityWindow(t *testing.T) {
+	highTask := newRegionPriorityTask(
+		withScanPriority(newPriorityTestRegion(1, 1), cdcpb.ScanPriority_SCAN_PRIORITY_HIGH), 1)
+	lowTask := newRegionPriorityTask(
+		withScanPriority(newPriorityTestRegion(2, 1), cdcpb.ScanPriority_SCAN_PRIORITY_LOW), 2)
 
-	require.Equal(t, 0, queue.Len())
+	require.True(t, highTask.canUseMaxWindow())
+	require.False(t, lowTask.canUseMaxWindow())
+}
+
+func TestRegionPriorityTaskRefreshesRegionInfoBetweenStages(t *testing.T) {
+	region := withScanPriority(newPriorityTestRegion(1, 1), cdcpb.ScanPriority_SCAN_PRIORITY_LOW)
+	task := newRegionPriorityTask(region, 1)
+	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_LOW, task.priority())
+
+	region.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
+	task.regionInfo = region
+	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH, task.priority())
 }
