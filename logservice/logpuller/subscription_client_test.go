@@ -444,7 +444,7 @@ func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 
 	select {
 	case <-done:
-		t.Fatal("pushRegionEventToDS should block when paused")
+		t.Fatal("regionEventSink.Push should block when paused")
 	case <-time.After(100 * time.Millisecond):
 	}
 
@@ -453,7 +453,7 @@ func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("pushRegionEventToDS should be unblocked by Close")
+		t.Fatal("regionEventSink.Push should be unblocked by Close")
 	}
 }
 
