@@ -97,8 +97,7 @@ func admitRegionRequest(
 }
 
 func TestRunStreamCancelsBlockingReceiveWhenSenderExits(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	serverImpl := &blockingEventFeedServer{requestReceived: make(chan struct{})}
 	var serverWG sync.WaitGroup
