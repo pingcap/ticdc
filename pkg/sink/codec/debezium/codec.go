@@ -886,7 +886,10 @@ func (c *dbzCodec) writeBinaryField(writer *util.JSONWriter, fieldName string, v
 	writer.WriteBase64StringField(fieldName, value)
 }
 
-func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter, schemaName string) {
+// includeStartTs should only be true for DML row events: DDL and checkpoint
+// (watermark) messages have no per-row transaction, so their payloads never
+// carry start_ts and their schemas must not declare it.
+func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter, schemaName string, includeStartTs bool) {
 	writer.WriteObjectElement(func() {
 		writer.WriteStringField("type", "struct")
 		writer.WriteArrayField("fields", func() {
@@ -990,7 +993,7 @@ func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter, schemaName string)
 			// start_ts is gated by debezium-include-start-ts and declared only for
 			// the JSON protocol: the Avro payload does not carry it, so its schema
 			// must not declare it either.
-			if c.config.DebeziumIncludeStartTs && !c.isDebeziumAvro() {
+			if includeStartTs && c.config.DebeziumIncludeStartTs && !c.isDebeziumAvro() {
 				writer.WriteObjectElement(func() {
 					writer.WriteStringField("type", "int64")
 					writer.WriteBoolField("optional", false)
@@ -1191,7 +1194,7 @@ func (c *dbzCodec) EncodeValue(
 							jWriter.WriteRaw(fieldsJSON)
 						})
 					})
-					c.writeSourceSchema(jWriter, schemaName)
+					c.writeSourceSchema(jWriter, schemaName, true)
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("type", "string")
 						jWriter.WriteBoolField("optional", false)
@@ -1479,7 +1482,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 				jWriter.WriteIntField("version", 1)
 				jWriter.WriteStringField("name", "io.debezium.connector.mysql.SchemaChangeValue")
 				jWriter.WriteArrayField("fields", func() {
-					c.writeSourceSchema(jWriter, dbName)
+					c.writeSourceSchema(jWriter, dbName, false)
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("field", "ts_ms")
 						jWriter.WriteBoolField("optional", false)
@@ -1718,7 +1721,7 @@ func (c *dbzCodec) EncodeCheckpointEvent(
 					fmt.Sprintf("%s.%s.Envelope", common.SanitizeName(c.clusterID), "watermark"))
 				jWriter.WriteIntField("version", 1)
 				jWriter.WriteArrayField("fields", func() {
-					c.writeSourceSchema(jWriter, "watermark")
+					c.writeSourceSchema(jWriter, "watermark", false)
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("type", "string")
 						jWriter.WriteBoolField("optional", false)
