@@ -430,9 +430,12 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 }
 
 type scanTaskRequestResult struct {
-	needScan             bool
-	request              eventstore.ScanRequest
-	schemaBlocked        bool
+	needScan bool
+	request  eventstore.ScanRequest
+	// schemaBlocked indicates that the scan is waiting for SchemaStore to advance.
+	schemaBlocked bool
+	// schemaBlockedUntilTs is the resolved-ts threshold SchemaStore must advance
+	// past before retrying the scan.
 	schemaBlockedUntilTs uint64
 }
 
@@ -1059,6 +1062,8 @@ func (c *eventBroker) requestScanFromNotify(d *dispatcherStat) {
 		c.prepareScanFromNotify(d)
 		return
 	}
+	// Coalesce notifications received while a low-latency scan attempt owns the
+	// dispatcher into one continuation, which finishScan enqueues afterward.
 	if d.changefeedStat.lowLatencyMode && d.scanState == dispatcherScanRunning {
 		d.scanState = dispatcherScanRunningPending
 	}
