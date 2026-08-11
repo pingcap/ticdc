@@ -457,6 +457,14 @@ type CodecConfig struct {
 	OutputRowKey                   *bool   `toml:"output-row-key" json:"output-row-key,omitempty"`
 }
 
+// AWSMSKIAMConfig represents an Amazon MSK IAM authentication configuration.
+type AWSMSKIAMConfig struct {
+	Region          string `toml:"region" json:"region"`
+	RoleARN         string `toml:"role-arn" json:"role-arn,omitempty"`
+	RoleSessionName string `toml:"role-session-name" json:"role-session-name,omitempty"`
+	ExternalID      string `toml:"external-id" json:"external-id,omitempty"`
+}
+
 // KafkaConfig represents a kafka sink configuration
 type KafkaConfig struct {
 	PartitionNum                 *int32                    `toml:"partition-num" json:"partition-num,omitempty"`
@@ -487,6 +495,8 @@ type KafkaConfig struct {
 	SASLOAuthScopes              []string                  `toml:"sasl-oauth-scopes" json:"sasl-oauth-scopes,omitempty"`
 	SASLOAuthGrantType           *string                   `toml:"sasl-oauth-grant-type" json:"sasl-oauth-grant-type,omitempty"`
 	SASLOAuthAudience            *string                   `toml:"sasl-oauth-audience" json:"sasl-oauth-audience,omitempty"`
+	SASLOAuthProvider            *string                   `toml:"sasl-oauth-provider" json:"sasl-oauth-provider,omitempty"`
+	AWSMSKIAM                    *AWSMSKIAMConfig          `toml:"aws-msk-iam" json:"aws-msk-iam,omitempty"`
 	EnableTLS                    *bool                     `toml:"enable-tls" json:"enable-tls,omitempty"`
 	CA                           *string                   `toml:"ca" json:"ca,omitempty"`
 	Cert                         *string                   `toml:"cert" json:"cert,omitempty"`
