@@ -140,6 +140,12 @@ type dispatcherStat struct {
 	// this dispatcher.
 	isTaskScanning atomic.Bool
 
+	// Scan admission state is fixed-size per dispatcher. A zero waiting timestamp
+	// means the dispatcher is not waiting for scan resources.
+	scanPending               atomic.Bool
+	scanAdmissionWaitingSince atomic.Int64
+	lastScanGrantEpoch        atomic.Uint64
+
 	// activeScanMu protects activeScan and serializes scan registration with
 	// markRemoved. activeScan lets reset/remove cancel the in-flight scan before
 	// cleaning up its large-transaction state, including interrupting TiKV/KMS
@@ -368,7 +374,10 @@ func (a *dispatcherStat) resetScanLimit() {
 	a.lastUpdateScanLimitTime.Store(time.Now())
 }
 
-type scanTask = *dispatcherStat
+type scanTask struct {
+	*dispatcherStat
+	grant scanAdmissionGrant
+}
 
 func (t scanTask) GetKey() common.DispatcherID {
 	return t.id
@@ -505,48 +514,32 @@ type changefeedStatus struct {
 
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
-	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
-	minSentTs            atomic.Uint64
-	scanInterval         atomic.Int64
-	reportBandState      atomic.Int32
-	fastBandState        atomic.Int32
-	slowBandState        atomic.Int32
-
-	scanWindowController *adaptiveScanWindowController
-	syncPointInterval    time.Duration
+	scanAdmission     *scanAdmissionController
+	syncPointInterval time.Duration
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
-	return newChangefeedStatusWithScanWindow(
-		changefeedID,
-		syncPointInterval,
-		isScanWindowEnabled(),
-	)
-}
-
-func isScanWindowEnabled() bool {
-	cfg := config.GetGlobalServerConfig()
-	if cfg == nil || cfg.Debug == nil || cfg.Debug.EventService == nil {
-		return true
-	}
-	return cfg.Debug.EventService.EnableScanWindow
-}
-
-func newChangefeedStatusWithScanWindow(
-	changefeedID common.ChangeFeedID,
-	syncPointInterval time.Duration,
-	enableScanWindow bool,
-) *changefeedStatus {
-	status := &changefeedStatus{
+	return &changefeedStatus{
 		changefeedID:      changefeedID,
 		syncPointInterval: syncPointInterval,
+		scanAdmission:     newScanAdmissionController(),
 	}
-	if enableScanWindow {
-		status.scanWindowController = newAdaptiveScanWindowController(time.Now())
-	}
-	status.scanInterval.Store(int64(defaultScanInterval))
+}
 
-	return status
+func (a *dispatcherStat) markScanAdmissionWaiting(now time.Time) {
+	a.scanAdmissionWaitingSince.CompareAndSwap(0, now.UnixNano())
+}
+
+func (a *dispatcherStat) clearScanAdmissionWait() {
+	a.scanAdmissionWaitingSince.Store(0)
+}
+
+func (a *dispatcherStat) isScanAdmissionProtected(now time.Time) bool {
+	if a.enableSyncPoint && a.receivedResolvedTs.Load() > a.nextSyncPoint.Load() {
+		return true
+	}
+	waitingSince := a.scanAdmissionWaitingSince.Load()
+	return waitingSince > 0 && now.Sub(time.Unix(0, waitingSince)) >= scanAdmissionWaitThreshold
 }
 
 func (c *changefeedStatus) addDispatcher(id common.DispatcherID, dispatcher *atomic.Pointer[dispatcherStat]) {

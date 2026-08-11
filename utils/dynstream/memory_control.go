@@ -53,7 +53,9 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 	feedbackChan chan<- Feedback[A, P, D]
 
 	pathCount            atomic.Int64
+	totalInputSize       atomic.Int64
 	totalPendingSize     atomic.Int64
+	totalHandlingSize    atomic.Int64
 	paused               atomic.Bool
 	lastSendFeedbackTime atomic.Value
 	algorithm            MemoryControlAlgorithm
@@ -227,6 +229,10 @@ func (as *areaMemStat[A, P, T, D, H]) memoryUsageRatio() float64 {
 	return float64(as.totalPendingSize.Load()) / float64(as.settings.Load().maxPendingSize)
 }
 
+func (as *areaMemStat[A, P, T, D, H]) residentSize() int64 {
+	return as.totalInputSize.Load() + as.totalPendingSize.Load() + as.totalHandlingSize.Load()
+}
+
 func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, T, D, H]) {
 	pause, resume, memoryUsageRatio := as.algorithm.ShouldPauseArea(
 		as.paused.Load(),
@@ -340,8 +346,12 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 // This method is called after the path is removed.
 func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
 	area := path.areaMemStat
+	inputSize := path.inputSize.Swap(0)
+	area.totalInputSize.Add(-inputSize)
 	pendingSize := path.pendingSize.Swap(0)
 	area.decPendingSize(path, pendingSize)
+	handlingSize := path.handlingSize.Swap(0)
+	area.totalHandlingSize.Add(-handlingSize)
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
@@ -362,12 +372,12 @@ func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A, P] {
 		areaMetric := AreaMemoryMetric[A, P]{
 			AreaValue:           area.area,
 			PathAvailableMemory: make(map[P]int64),
-			UsedMemoryValue:     area.totalPendingSize.Load(),
+			UsedMemoryValue:     area.residentSize(),
 			MaxMemoryValue:      int64(area.settings.Load().maxPendingSize),
 			PathMaxMemoryValue:  int64(area.settings.Load().pathMaxPendingSize),
 		}
 		area.pathMap.Range(func(k, v any) bool {
-			usedMemory := v.(*pathInfo[A, P, T, D, H]).pendingSize.Load()
+			usedMemory := v.(*pathInfo[A, P, T, D, H]).residentSize()
 			availableMemory := max(0, areaMetric.PathMaxMemoryValue-usedMemory)
 			areaMetric.PathAvailableMemory[k.(P)] = availableMemory
 			return true

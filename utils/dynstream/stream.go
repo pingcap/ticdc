@@ -147,6 +147,7 @@ func (s *stream[A, P, T, D, H]) addEvent(event eventWrap[A, P, T, D, H]) {
 	if s.closed.Load() {
 		return
 	}
+	event.pathInfo.addInputSize(int64(event.eventSize))
 	eventChan := s.eventChan
 	if s.option.UseBuffer {
 		eventChan = s.inChan
@@ -158,6 +159,7 @@ func (s *stream[A, P, T, D, H]) addEvent(event eventWrap[A, P, T, D, H]) {
 		// Slow path: with close check while waiting
 		select {
 		case <-s.ctx.Done():
+			event.pathInfo.releaseInputSize(int64(event.eventSize))
 		case eventChan <- event:
 		}
 	}
@@ -247,8 +249,10 @@ func (s *stream[A, P, T, D, H]) receiver() {
 // It handles the events.
 func (s *stream[A, P, T, D, H]) handleLoop() {
 	handleEvent := func(e eventWrap[A, P, T, D, H]) {
+		defer e.pathInfo.releaseInputSize(int64(e.eventSize))
 		switch {
 		case e.wake:
+			e.pathInfo.releaseHandlingSize()
 			s.eventQueue.wakePath(e.pathInfo)
 		case e.newPath:
 			s.eventQueue.initPath(e.pathInfo)
@@ -344,10 +348,13 @@ Loop:
 				batchMetrics.bytes.Observe(float64(nBytes))
 
 				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
+				path.addHandlingSize(int64(nBytes))
 				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
 
 				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)
+				} else {
+					path.releaseHandlingSize()
 				}
 
 				cleanUpEventBuf()
@@ -387,7 +394,9 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Fields used by the memory control.
 	areaMemStat *areaMemStat[A, P, T, D, H]
 
-	pendingSize atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
+	inputSize    atomic.Int64 // The total size(bytes) of events waiting in stream input buffers.
+	pendingSize  atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
+	handlingSize atomic.Int64 // The batch owned by an asynchronous handler until Wake.
 
 	lastHandleEventTs atomic.Uint64
 }
@@ -456,6 +465,58 @@ func (pi *pathInfo[A, P, T, D, H]) updatePendingSize(delta int64) {
 	if pi.pendingSize.Load() < 0 {
 		log.Debug("pendingSize is negative", zap.Int64("pendingSize", pi.pendingSize.Load()))
 		pi.pendingSize.Store(0)
+	}
+}
+
+func (pi *pathInfo[A, P, T, D, H]) residentSize() int64 {
+	return pi.inputSize.Load() + pi.pendingSize.Load() + pi.handlingSize.Load()
+}
+
+func (pi *pathInfo[A, P, T, D, H]) addInputSize(size int64) {
+	if size <= 0 || pi.areaMemStat == nil {
+		return
+	}
+	pi.inputSize.Add(size)
+	pi.areaMemStat.totalInputSize.Add(size)
+}
+
+func (pi *pathInfo[A, P, T, D, H]) releaseInputSize(size int64) {
+	if size <= 0 || pi.areaMemStat == nil {
+		return
+	}
+	released := subtractTrackedSize(&pi.inputSize, size)
+	pi.areaMemStat.totalInputSize.Add(-released)
+}
+
+func (pi *pathInfo[A, P, T, D, H]) addHandlingSize(size int64) {
+	if size <= 0 || pi.areaMemStat == nil {
+		return
+	}
+	pi.handlingSize.Add(size)
+	pi.areaMemStat.totalHandlingSize.Add(size)
+	if pi.removed.Load() {
+		pi.releaseHandlingSize()
+	}
+}
+
+func (pi *pathInfo[A, P, T, D, H]) releaseHandlingSize() {
+	if pi.areaMemStat == nil {
+		return
+	}
+	released := pi.handlingSize.Swap(0)
+	pi.areaMemStat.totalHandlingSize.Add(-released)
+}
+
+func subtractTrackedSize(value *atomic.Int64, size int64) int64 {
+	for {
+		current := value.Load()
+		if current <= 0 {
+			return 0
+		}
+		released := min(current, size)
+		if value.CompareAndSwap(current, current-released) {
+			return released
+		}
 	}
 }
 

@@ -32,6 +32,7 @@ type mockEvent struct {
 	path  string
 	value int
 	sleep time.Duration
+	await bool
 
 	work mockWork
 
@@ -76,10 +77,10 @@ func (h *mockHandler) Handle(dest any, events ...*mockEvent) (await bool) {
 	if event.done != nil {
 		event.done.Done()
 	}
-	return false
+	return event.await
 }
 
-func (h *mockHandler) GetSize(event *mockEvent) int            { return 0 }
+func (h *mockHandler) GetSize(event *mockEvent) int            { return event.value }
 func (h *mockHandler) GetArea(path string, dest any) int       { return 0 }
 func (h *mockHandler) GetMetricLabel(dest any) string          { return "test" }
 func (h *mockHandler) GetTimestamp(event *mockEvent) Timestamp { return 0 }
