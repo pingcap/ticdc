@@ -884,19 +884,21 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		}
 	}
 
-	// Fall back to snapshot metadata only when the DDL job cannot provide a complete identity.
-	if oldSchemaID == 0 || oldSchemaName == "" || oldTableName == "" {
-		snapshotSchemaID := getSchemaID(args.tableMap, event.TableID)
-		snapshotTableName := getTableName(args.tableMap, event.TableID)
-		if oldSchemaID == 0 {
-			oldSchemaID = snapshotSchemaID
-			oldSchemaSource = "table_map_fallback"
-		}
-		if oldSchemaName == "" {
-			oldSchemaName = getSchemaName(args.databaseMap, oldSchemaID)
-		}
-		if oldTableName == "" {
-			oldTableName = snapshotTableName
+	// TiDB v7.5+ rename jobs provide the old schema through job args and the old table
+	// through SQL, so they do not normally need the fallbacks below. Keep them only for
+	// malformed jobs or jobs created by unsupported TiDB versions.
+	if oldSchemaID == 0 {
+		oldSchemaID = getSchemaID(args.tableMap, event.TableID)
+		oldSchemaSource = "table_map_fallback"
+	}
+	if oldTableName == "" {
+		oldTableName = getTableName(args.tableMap, event.TableID)
+	}
+	if oldSchemaName == "" {
+		// The old schema may not be tracked. Keep the name empty instead of calling
+		// getSchemaName, which panics for an unknown schema ID.
+		if oldSchema, ok := args.databaseMap[oldSchemaID]; ok {
+			oldSchemaName = oldSchema.Name
 		}
 	}
 
