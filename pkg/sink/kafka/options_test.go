@@ -187,7 +187,16 @@ func TestApplySASL(t *testing.T) {
 			},
 		},
 		{
-			name: "valid SCRAM SASL",
+			name: "valid SCRAM-SHA-256 SASL",
+			uri:  baseURI + "?sasl-user=user&sasl-password=password&sasl-mechanism=scram-sha-256",
+			expected: security.SASL{
+				SASLUser:      "user",
+				SASLPassword:  "password",
+				SASLMechanism: security.SCRAM256Mechanism,
+			},
+		},
+		{
+			name: "valid SCRAM-SHA-512 SASL",
 			uri:  baseURI + "?sasl-user=user&sasl-password=password&sasl-mechanism=SCRAM-SHA-512",
 			expected: security.SASL{
 				SASLUser:      "user",

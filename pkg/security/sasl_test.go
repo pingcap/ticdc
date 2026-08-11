@@ -74,17 +74,27 @@ func TestSASLMechanismFromString(t *testing.T) {
 			s:                 "GSSAPI",
 			expectedMechanism: "GSSAPI",
 		},
+		{
+			name:              "lower case oauthbearer mechanism",
+			s:                 "oauthbearer",
+			expectedMechanism: "OAUTHBEARER",
+		},
+		{
+			name:              "upper case OAUTHBEARER mechanism",
+			s:                 "OAUTHBEARER",
+			expectedMechanism: "OAUTHBEARER",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			mechanism, err := SASLMechanismFromString(test.s)
+			require.Equal(t, test.expectedMechanism, string(mechanism))
 			if test.expectErr != "" {
 				require.Error(t, err)
 				require.Regexp(t, test.expectErr, err.Error())
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, test.expectedMechanism, string(mechanism))
 			}
 		})
 	}
@@ -132,12 +142,12 @@ func TestAuthTypeFromString(t *testing.T) {
 			t.Parallel()
 
 			authType, err := AuthTypeFromString(test.s)
+			require.Equal(t, test.expectedType, int(authType))
 			if test.expectErr != "" {
 				require.Error(t, err)
 				require.Regexp(t, test.expectErr, err.Error())
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, test.expectedType, int(authType))
 			}
 		})
 	}

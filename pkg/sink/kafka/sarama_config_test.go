@@ -73,7 +73,7 @@ func TestNewSaramaConfig(t *testing.T) {
 	saslOptions.SASL = &security.SASL{
 		SASLUser:      "user",
 		SASLPassword:  "password",
-		SASLMechanism: sarama.SASLTypeSCRAMSHA256,
+		SASLMechanism: security.SCRAM256Mechanism,
 	}
 
 	cfg, err = newSaramaConfig(ctx, saslOptions)

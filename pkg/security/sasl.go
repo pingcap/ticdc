@@ -16,7 +16,6 @@ package security
 import (
 	"strings"
 
-	"github.com/IBM/sarama"
 	"github.com/pingcap/errors"
 )
 
@@ -28,15 +27,15 @@ const (
 	// UnknownMechanism means the SASL mechanism is unknown.
 	UnknownMechanism SASLMechanism = ""
 	// PlainMechanism means the SASL mechanism is plain.
-	PlainMechanism SASLMechanism = sarama.SASLTypePlaintext
+	PlainMechanism SASLMechanism = "PLAIN"
 	// SCRAM256Mechanism means the SASL mechanism is SCRAM-SHA-256.
-	SCRAM256Mechanism SASLMechanism = sarama.SASLTypeSCRAMSHA256
+	SCRAM256Mechanism SASLMechanism = "SCRAM-SHA-256"
 	// SCRAM512Mechanism means the SASL mechanism is SCRAM-SHA-512.
-	SCRAM512Mechanism SASLMechanism = sarama.SASLTypeSCRAMSHA512
+	SCRAM512Mechanism SASLMechanism = "SCRAM-SHA-512"
 	// GSSAPIMechanism means the SASL mechanism is GSSAPI.
-	GSSAPIMechanism SASLMechanism = sarama.SASLTypeGSSAPI
+	GSSAPIMechanism SASLMechanism = "GSSAPI"
 	// OAuthMechanism means the SASL mechanism is OAuth2.
-	OAuthMechanism SASLMechanism = sarama.SASLTypeOAuth
+	OAuthMechanism SASLMechanism = "OAUTHBEARER"
 )
 
 // SASLMechanismFromString converts the string to SASL mechanism.
@@ -109,9 +108,9 @@ const (
 	// UnknownAuth means the auth type is unknown.
 	UnknownAuth GSSAPIAuthType = 0
 	// UserAuth means the auth type is user.
-	UserAuth GSSAPIAuthType = sarama.KRB5_USER_AUTH
+	UserAuth GSSAPIAuthType = 1
 	// KeyTabAuth means the auth type is keytab.
-	KeyTabAuth GSSAPIAuthType = sarama.KRB5_KEYTAB_AUTH
+	KeyTabAuth GSSAPIAuthType = 2
 )
 
 // AuthTypeFromString convent the string to GSSAPIAuthType.
