@@ -268,6 +268,96 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
 }
 
+func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	flushedCommitTs := make([]uint64, 0)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
+		flushedCommitTs = append(flushedCommitTs, event.GetCommitTs())
+		event.PostFlush()
+	}).Times(2)
+
+	replicaCfg := config.GetDefaultReplicaConfig()
+	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
+	require.NoError(t, err)
+
+	p := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   0,
+	}
+	w := &writer{
+		progresses:  []*partitionProgress{p},
+		mysqlSink:   s,
+		eventRouter: eventRouter,
+		protocol:    config.ProtocolOpen,
+	}
+
+	w.appendMessage2Group(newDMLMessageForWriterTest(20), p, kafka.Offset(1))
+	w.appendMessage2Group(newDMLMessageForWriterTest(10), p, kafka.Offset(2))
+	w.appendMessage2Group(newDMLMessageForWriterTest(20), p, kafka.Offset(3))
+
+	p.watermark = 20
+	require.True(t, w.Write(ctx, codeccommon.MessageTypeResolved))
+	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
+}
+
+func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Times(0)
+
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   20,
+		decoder:     &singleDMLDecoder{message: newDMLMessageForWriterTest(10)},
+	}
+	w := &writer{
+		progresses:      []*partitionProgress{progress},
+		mysqlSink:       s,
+		protocol:        config.ProtocolOpen,
+		maxBatchSize:    64,
+		maxMessageBytes: 1,
+	}
+
+	needCommit := w.WriteMessage(ctx, &kafka.Message{
+		TopicPartition: kafka.TopicPartition{Partition: 0, Offset: kafka.Offset(10)},
+	})
+
+	require.False(t, needCommit)
+	require.Nil(t, progress.eventsGroup[1])
+}
+
+func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
+	replicaCfg := config.GetDefaultReplicaConfig()
+	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
+	require.NoError(t, err)
+
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   20,
+	}
+	w := &writer{
+		progresses: []*partitionProgress{
+			progress,
+			{partition: 1, watermark: 5},
+		},
+		eventRouter: eventRouter,
+		protocol:    config.ProtocolOpen,
+	}
+
+	w.appendMessage2Group(newDMLMessageForWriterTest(10), progress, kafka.Offset(10))
+
+	require.NotNil(t, progress.eventsGroup[1])
+	resolved := progress.eventsGroup[1].ResolveInto(20, nil)
+	require.Len(t, resolved, 1)
+	require.Equal(t, uint64(10), resolved[0].GetCommitTs())
+}
+
 func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	replicaCfg := config.GetDefaultReplicaConfig()
 	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, true)
@@ -367,4 +457,43 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 			require.Equal(t, uint64(100), resolved[0].GetCommitTs())
 		})
 	}
+}
+
+func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
+	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
+		return &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			CommitTs:        commitTs,
+			RowTypes:        []common.RowType{common.RowTypeUpdate},
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
+			},
+		}
+	})
+}
+
+type singleDMLDecoder struct {
+	message  *codeccommon.DMLMessage
+	consumed bool
+}
+
+func (d *singleDMLDecoder) AddKeyValue(_, _ []byte) {
+}
+
+func (d *singleDMLDecoder) HasNext() (codeccommon.MessageType, bool) {
+	return codeccommon.MessageTypeRow, !d.consumed
+}
+
+func (d *singleDMLDecoder) NextResolvedEvent() uint64 {
+	return 0
+}
+
+func (d *singleDMLDecoder) NextDMLMessage() *codeccommon.DMLMessage {
+	d.consumed = true
+	return d.message
+}
+
+func (d *singleDMLDecoder) NextDDLEvent() *commonEvent.DDLEvent {
+	return nil
 }

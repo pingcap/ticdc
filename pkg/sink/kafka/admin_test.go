@@ -14,12 +14,15 @@
 package kafka
 
 import (
+	"context"
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kfake"
 )
 
 func TestTopicDetailsFromMetadata(t *testing.T) {
@@ -92,4 +95,34 @@ func TestTopicDetailsFromMetadata(t *testing.T) {
 			require.Equal(t, tc.expected, actual)
 		})
 	}
+}
+
+func TestCreateTopic(t *testing.T) {
+	t.Parallel()
+
+	cluster := kfake.MustCluster(kfake.NumBrokers(1))
+	defer cluster.Close()
+
+	options := NewOptions()
+	options.BrokerEndpoints = cluster.ListenAddrs()
+	admin, err := newAdmin(
+		context.Background(),
+		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
+		options,
+		nil,
+	)
+	require.NoError(t, err)
+	defer admin.Close()
+
+	const topic = "test-topic"
+	err = admin.CreateTopic(TopicDetail{
+		Name:              topic,
+		NumPartitions:     3,
+		ReplicationFactor: 1,
+	})
+	require.NoError(t, err)
+
+	topics, err := admin.GetTopicsMeta([]string{topic}, false)
+	require.NoError(t, err)
+	require.Equal(t, int32(3), topics[topic].NumPartitions)
 }

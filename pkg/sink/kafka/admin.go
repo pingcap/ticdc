@@ -46,7 +46,7 @@ type Admin interface {
 	GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error)
 
 	// CreateTopic creates a new topic.
-	CreateTopic(detail TopicDetail, validateOnly bool) error
+	CreateTopic(detail TopicDetail) error
 
 	// Close shuts down the admin.
 	Close()
@@ -200,17 +200,12 @@ func IsAdminAuthorizationFailed(err error) bool {
 		errors.Is(err, kerr.ClusterAuthorizationFailed)
 }
 
-func (a *admin) CreateTopic(detail TopicDetail, validateOnly bool) error {
+func (a *admin) CreateTopic(detail TopicDetail) error {
 	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
-	var responses kadm.CreateTopicResponses
-	var err error
-	if validateOnly {
-		responses, err = a.admin.ValidateCreateTopics(ctx, detail.NumPartitions, detail.ReplicationFactor, nil, detail.Name)
-	} else {
-		responses, err = a.admin.CreateTopics(ctx, detail.NumPartitions, detail.ReplicationFactor, nil, detail.Name)
-	}
+	responses, err := a.admin.CreateTopics(
+		ctx, detail.NumPartitions, detail.ReplicationFactor, nil, detail.Name)
 	if err != nil {
 		return errors.WrapError(errors.ErrKafkaAdminAPI, err, "create-topic", detail.Name)
 	}

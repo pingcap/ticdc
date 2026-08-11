@@ -16,11 +16,13 @@ package util
 import (
 	"testing"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
 func newTestDMLMessage(commitTs uint64) *codeccommon.DMLMessage {
@@ -37,26 +39,26 @@ func newTestDMLEvent(commitTs uint64, rowTypes ...common.RowType) *commonEvent.D
 	}
 }
 
-func TestEventsGroupResolveIntoAppendsAndClearsResolvedPrefix(t *testing.T) {
-	// Scenario: A consumer resolves a prefix of events by watermark/commit-ts and appends them
-	// into a downstream batch slice. We must clear the resolved prefix in the group's backing
-	// array to avoid retaining already-flushed events and causing unbounded memory growth.
+func TestEventsGroupResolveIntoAppendsAndClearsResolvedMessages(t *testing.T) {
+	// Scenario: A consumer resolves events by watermark/commit-ts and appends them into a downstream
+	// batch slice. We must clear resolved messages in the group's backing array to avoid retaining
+	// already-flushed events and causing unbounded memory growth.
 	//
 	// Steps:
 	//  1. Append 3 events with increasing CommitTs.
 	//  2. Call ResolveInto with resolve=2 and a nil dst.
 	//  3. Verify (a) returned events are correct, (b) group keeps only the remaining event,
-	//     (c) the resolved prefix in the original backing slice is cleared (nil'd).
+	//     (c) resolved messages in the original backing slice are cleared (nil'd).
 	group := NewEventsGroup(0, 1)
 	m1 := newTestDMLMessage(1)
 	m2 := newTestDMLMessage(2)
 	m3 := newTestDMLMessage(3)
-	group.AppendMessage(m1, false)
-	group.AppendMessage(m2, false)
-	group.AppendMessage(m3, false)
+	group.AppendMessage(m1)
+	group.AppendMessage(m2)
+	group.AppendMessage(m3)
 
 	// Keep a reference to the original slice header so we can validate that ResolveInto clears
-	// the resolved prefix in-place (this is what prevents GC retention of flushed events).
+	// resolved messages in-place (this is what prevents GC retention of flushed events).
 	original := group.messages
 
 	var dst []*codeccommon.DMLMessage
@@ -69,11 +71,11 @@ func TestEventsGroupResolveIntoAppendsAndClearsResolvedPrefix(t *testing.T) {
 	require.Len(t, group.messages, 1)
 	require.Same(t, m3, group.messages[0])
 
-	// The resolved prefix must be nil so the group doesn't keep flushed events alive via its
-	// backing array (classic Go slice memory retention pitfall).
-	require.Nil(t, original[0])
+	// The unresolved event is compacted to the front, and the tail is cleared so the group
+	// doesn't keep flushed events alive via its backing array.
+	require.Same(t, m3, original[0])
 	require.Nil(t, original[1])
-	require.Same(t, m3, original[2])
+	require.Nil(t, original[2])
 }
 
 func TestEventsGroupResolveIntoNoopWhenNothingResolved(t *testing.T) {
@@ -82,8 +84,8 @@ func TestEventsGroupResolveIntoNoopWhenNothingResolved(t *testing.T) {
 	group := NewEventsGroup(0, 1)
 	m1 := newTestDMLMessage(10)
 	m2 := newTestDMLMessage(20)
-	group.AppendMessage(m1, false)
-	group.AppendMessage(m2, false)
+	group.AppendMessage(m1)
+	group.AppendMessage(m2)
 
 	original := group.messages
 	dst := make([]*codeccommon.DMLMessage, 0, 1)
@@ -105,8 +107,8 @@ func TestEventsGroupResolveIntoClearsAllWhenFullyResolved(t *testing.T) {
 	group := NewEventsGroup(0, 1)
 	m1 := newTestDMLMessage(1)
 	m2 := newTestDMLMessage(2)
-	group.AppendMessage(m1, false)
-	group.AppendMessage(m2, false)
+	group.AppendMessage(m1)
+	group.AppendMessage(m2)
 
 	original := group.messages
 	var dst []*codeccommon.DMLMessage
@@ -119,6 +121,115 @@ func TestEventsGroupResolveIntoClearsAllWhenFullyResolved(t *testing.T) {
 	require.Len(t, group.messages, 0)
 	require.Nil(t, original[0])
 	require.Nil(t, original[1])
+}
+
+func TestEventsGroupResolveIntoSortsOutOfOrderResolvedMessages(t *testing.T) {
+	group := NewEventsGroup(0, 1)
+	m1 := newTestDMLMessage(20)
+	m2 := newTestDMLMessage(10)
+	m3 := newTestDMLMessage(30)
+	group.AppendMessage(m1)
+	group.AppendMessage(m2)
+	group.AppendMessage(m3)
+
+	original := group.messages
+	var dst []*codeccommon.DMLMessage
+	dst = group.ResolveInto(25, dst)
+
+	require.Len(t, dst, 2)
+	require.Same(t, m2, dst[0])
+	require.Same(t, m1, dst[1])
+
+	require.Len(t, group.messages, 1)
+	require.Same(t, m3, group.messages[0])
+	require.Same(t, m3, original[0])
+	require.Nil(t, original[1])
+	require.Nil(t, original[2])
+}
+
+func TestEventsGroupResolveIntoKeepsSameCommitTsStable(t *testing.T) {
+	group := NewEventsGroup(0, 1)
+	m1 := newTestDMLMessage(20)
+	m2 := newTestDMLMessage(10)
+	m3 := newTestDMLMessage(20)
+	group.AppendMessage(m1)
+	group.AppendMessage(m2)
+	group.AppendMessage(m3)
+
+	var dst []*codeccommon.DMLMessage
+	dst = group.ResolveInto(20, dst)
+
+	require.Len(t, dst, 3)
+	require.Same(t, m2, dst[0])
+	require.Same(t, m1, dst[1])
+	require.Same(t, m3, dst[2])
+	require.Empty(t, group.messages)
+}
+
+func TestEventsGroupGetAllMessagesSortsOutOfOrderMessages(t *testing.T) {
+	group := NewEventsGroup(0, 1)
+	m1 := newTestDMLMessage(20)
+	m2 := newTestDMLMessage(10)
+	m3 := newTestDMLMessage(30)
+	group.AppendMessage(m1)
+	group.AppendMessage(m2)
+	group.AppendMessage(m3)
+
+	messages := group.GetAllMessages()
+
+	require.Len(t, messages, 3)
+	require.Same(t, m2, messages[0])
+	require.Same(t, m1, messages[1])
+	require.Same(t, m3, messages[2])
+	require.Empty(t, group.messages)
+}
+
+func BenchmarkEventsGroupResolveInto(b *testing.B) {
+	const messageCount = 16 * 1024
+
+	messages := make([]*codeccommon.DMLMessage, messageCount)
+	for i := range messages {
+		messages[i] = newTestDMLMessage(uint64(i + 1))
+	}
+
+	benchmarks := []struct {
+		name       string
+		resolveTs  uint64
+		outOfOrder bool
+	}{
+		{name: "ordered/noop", resolveTs: 0},
+		{name: "ordered/half", resolveTs: messageCount / 2},
+		{name: "ordered/all", resolveTs: messageCount},
+		{name: "out-of-order/all", resolveTs: messageCount, outOfOrder: true},
+	}
+
+	oldLogLevel := log.GetLevel()
+	log.SetLevel(zapcore.FatalLevel)
+	b.Cleanup(func() { log.SetLevel(oldLogLevel) })
+
+	for _, benchmark := range benchmarks {
+		b.Run(benchmark.name, func(b *testing.B) {
+			source := messages
+			if benchmark.outOfOrder {
+				source = append([]*codeccommon.DMLMessage(nil), messages...)
+				lastIndex := len(source) - 1
+				source[lastIndex-1], source[lastIndex] = source[lastIndex], source[lastIndex-1]
+			}
+			group := NewEventsGroup(0, 1)
+			group.messages = make([]*codeccommon.DMLMessage, 0, messageCount)
+			dst := make([]*codeccommon.DMLMessage, 0, messageCount)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if len(group.messages) != messageCount {
+					group.messages = append(group.messages[:0], source...)
+					group.outOfOrder = benchmark.outOfOrder
+				}
+				dst = group.ResolveInto(benchmark.resolveTs, dst[:0])
+			}
+		})
+	}
 }
 
 func TestAppendOrMergeDMLEventMergesSameCommitTs(t *testing.T) {

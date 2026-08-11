@@ -14,6 +14,7 @@
 package util
 
 import (
+	"math"
 	"sort"
 
 	"github.com/pingcap/log"
@@ -28,6 +29,7 @@ type EventsGroup struct {
 	tableID   int64
 
 	messages      []*codeccommon.DMLMessage
+	outOfOrder    bool
 	HighWatermark uint64
 }
 
@@ -41,65 +43,64 @@ func NewEventsGroup(partition int32, tableID int64) *EventsGroup {
 }
 
 // AppendMessage appends a message to event groups.
-func (g *EventsGroup) AppendMessage(message *codeccommon.DMLMessage, force bool) {
+func (g *EventsGroup) AppendMessage(message *codeccommon.DMLMessage) {
 	commitTs := message.GetCommitTs()
+	if len(g.messages) > 0 && commitTs < g.messages[len(g.messages)-1].GetCommitTs() {
+		g.outOfOrder = true
+	}
 	if commitTs > g.HighWatermark {
 		g.HighWatermark = commitTs
 	}
-
-	var lastMessage *codeccommon.DMLMessage
-	if len(g.messages) > 0 {
-		lastMessage = g.messages[len(g.messages)-1]
-	}
-
-	if lastMessage == nil || lastMessage.GetCommitTs() <= commitTs {
-		g.messages = append(g.messages, message)
-		return
-	}
-
-	if force {
-		i := sort.Search(len(g.messages), func(i int) bool {
-			return g.messages[i].GetCommitTs() > commitTs
-		})
-		g.messages = append(g.messages, nil)
-		copy(g.messages[i+1:], g.messages[i:])
-		g.messages[i] = message
-		return
-	}
-	log.Panic("append event with smaller commit ts",
-		zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
-		zap.Uint64("lastCommitTs", lastMessage.GetCommitTs()), zap.Uint64("commitTs", commitTs))
+	g.messages = append(g.messages, message)
 }
 
-// ResolveInto appends all messages with CommitTs <= resolve into dst and removes them from the group.
-// ResolveInto copies pointers into dst first, then clears the resolved prefix so Go GC can reclaim
-// resolved messages once downstream is done with them.
+// ResolveInto appends all messages with CommitTs <= resolve into dst in commit-ts order and removes
+// them from the group. ResolveInto copies pointers into dst first, then clears the resolved messages
+// so Go GC can reclaim them once downstream is done with them.
 func (g *EventsGroup) ResolveInto(resolve uint64, dst []*codeccommon.DMLMessage) []*codeccommon.DMLMessage {
-	i := sort.Search(len(g.messages), func(i int) bool {
-		return g.messages[i].GetCommitTs() > resolve
-	})
-	if i == 0 {
+	if len(g.messages) == 0 {
 		return dst
 	}
 
-	// Copy pointers out first so we can safely clear the group's slice without affecting callers.
-	dst = append(dst, g.messages[:i]...)
-	clear(g.messages[:i])
-	g.messages = g.messages[i:]
+	if g.outOfOrder {
+		sort.SliceStable(g.messages, func(i, j int) bool {
+			return g.messages[i].GetCommitTs() < g.messages[j].GetCommitTs()
+		})
+	}
+
+	resolvedCount := sort.Search(len(g.messages), func(i int) bool {
+		return g.messages[i].GetCommitTs() > resolve
+	})
+	if g.outOfOrder {
+		log.Warn("DML events are out of order before flush, sort them",
+			zap.Int32("partition", g.Partition),
+			zap.Int64("tableID", g.tableID),
+			zap.Uint64("resolveTs", resolve),
+			zap.Int("resolved", resolvedCount))
+		g.outOfOrder = false
+	}
+	if resolvedCount == 0 {
+		return dst
+	}
+
+	dst = append(dst, g.messages[:resolvedCount]...)
+	remainingCount := len(g.messages) - resolvedCount
+	copy(g.messages, g.messages[resolvedCount:])
+	clear(g.messages[remainingCount:])
+	g.messages = g.messages[:remainingCount]
 	if len(g.messages) != 0 {
+		firstCommitTs := g.messages[0].GetCommitTs()
 		log.Debug("not all events resolved",
 			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
-			zap.Int("resolved", i), zap.Int("remained", len(g.messages)),
-			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", g.messages[0].GetCommitTs()))
+			zap.Int("resolved", resolvedCount), zap.Int("remained", len(g.messages)),
+			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", firstCommitTs))
 	}
 	return dst
 }
 
 // GetAllMessages gets all messages.
 func (g *EventsGroup) GetAllMessages() []*codeccommon.DMLMessage {
-	result := g.messages
-	g.messages = nil
-	return result
+	return g.ResolveInto(math.MaxUint64, nil)
 }
 
 // AppendOrMergeDMLEvent appends a DML event, or merges it into the previous event
