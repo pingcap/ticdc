@@ -55,7 +55,7 @@ var (
 			Subsystem: "dynamic_stream",
 			Name:      "batch_count",
 			Help:      "The number of events in each batch processed by dynamic stream",
-			Buckets:   prometheus.ExponentialBuckets(1, 2, 15), // 1 ~ 16384
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 16), // 1 ~ 32768
 		}, []string{"module", "area"})
 	DynamicStreamBatchBytes = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -63,7 +63,7 @@ var (
 			Subsystem: "dynamic_stream",
 			Name:      "batch_bytes",
 			Help:      "The total bytes in each batch processed by dynamic stream",
-			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB ~ 128MB
+			Buckets:   prometheus.ExponentialBuckets(1024, 2, 20), // 1KiB ~ 512MiB
 		}, []string{"module", "area"})
 	DynamicStreamBatchDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
