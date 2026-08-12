@@ -787,15 +787,25 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		tableTriggerDDLHistory: p.tableTriggerDDLHistory,
 	})
 
-	// Collect affected tables before updating schema metadata because some DDLs,
-	// such as drop schema, need the old metadata to determine them.
-	affectedTableIDs := make([]int64, 0)
+	// Iterate before updating schema metadata because some DDLs, such as drop
+	// schema, need the old metadata to determine their affected physical tables.
 	handler.iterateEventTablesFunc(iterateEventTablesFuncArgs{
 		event:        &ddlEvent,
 		databaseMap:  p.databaseMap,
 		partitionMap: p.partitionMap,
 		apply: func(tableIDs ...int64) {
-			affectedTableIDs = append(affectedTableIDs, tableIDs...)
+			for _, tableID := range tableIDs {
+				if store, ok := p.tableInfoStoreMap[tableID]; ok {
+					// do some safety check
+					switch model.ActionType(job.Type) {
+					case model.ActionCreateTable, model.ActionCreateTables:
+						// newly created tables should not be registered before this ddl are handled
+						log.Panic("should not be registered", zap.Int64("tableID", tableID))
+					default:
+					}
+					store.applyDDL(&ddlEvent)
+				}
+			}
 		},
 	})
 
@@ -805,19 +815,6 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		tableMap:     p.tableMap,
 		partitionMap: p.partitionMap,
 	})
-
-	for _, tableID := range affectedTableIDs {
-		if store, ok := p.tableInfoStoreMap[tableID]; ok {
-			// do some safety check
-			switch model.ActionType(job.Type) {
-			case model.ActionCreateTable, model.ActionCreateTables:
-				// newly created tables should not be registered before this ddl are handled
-				log.Panic("should not be registered", zap.Int64("tableID", tableID))
-			default:
-			}
-			store.applyDDL(&ddlEvent)
-		}
-	}
 
 	return nil
 }
