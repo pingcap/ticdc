@@ -143,6 +143,10 @@ var (
 		"kafka admin API %s failed: %s",
 		errors.RFCCodeText("CDC:ErrKafkaAdminAPI"),
 	)
+	ErrKafkaAdminAuthorizationFailed = errors.Normalize(
+		"kafka admin API %s authorization failed: %s",
+		errors.RFCCodeText("CDC:ErrKafkaAdminAuthorizationFailed"),
+	)
 	ErrPulsarInvalidTopicExpression = errors.Normalize(
 		"invalid topic expression",
 		errors.RFCCodeText("CDC:ErrPulsarTopicExprInvalid"),
