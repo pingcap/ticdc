@@ -167,6 +167,8 @@ type EventServiceConfig struct {
 	// and split update insert spill.
 	LargeTxnThresholdInBytes int64 `toml:"large-txn-threshold-in-bytes" json:"large_txn_threshold_in_bytes"`
 
+	// EnableScanWindow is retained for configuration compatibility and is ignored.
+	// Scan admission is controlled by downstream memory credits instead of a ts window.
 	EnableScanWindow bool `toml:"enable-scan-window" json:"enable_scan_window"`
 
 	// FIXME: For now we found cdc may OOM when there is a large amount of events to be sent to event collector from a remote event service.

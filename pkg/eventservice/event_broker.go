@@ -52,8 +52,7 @@ const (
 
 	maxReadyEventIntervalSeconds = 10
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
-	defaultSendResolvedTsInterval           = time.Second * 2
-	defaultRefreshMinSentResolvedTsInterval = time.Second * 1
+	defaultSendResolvedTsInterval = time.Second * 2
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -190,7 +189,7 @@ func newEventBroker(
 	})
 
 	g.Go(func() error {
-		return c.refreshMinSentResolvedTs(ctx)
+		return c.runScanAdmissionScheduler(ctx)
 	})
 
 	g.Go(func() error {
@@ -267,23 +266,6 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		zap.Int64("EventTableID", e.GetTableID()),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
-}
-
-func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
-	ticker := time.NewTicker(defaultRefreshMinSentResolvedTsInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-ticker.C:
-			c.changefeedMap.Range(func(key, value interface{}) bool {
-				status := value.(*changefeedStatus)
-				status.refreshMinSentResolvedTs()
-				return true
-			})
-		}
-	}
 }
 
 func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {
@@ -417,7 +399,7 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 // It checks various conditions (dispatcher status, DDL state, max commit ts of dml event)
 // to decide whether scanning is needed and returns the appropriate time range.
 // If no valid range is found, it returns an empty ScanRequest.
-func (c *eventBroker) getScanTaskRequest(task scanTask) (bool, eventstore.ScanRequest) {
+func (c *eventBroker) getScanTaskRequest(task *dispatcherStat) (bool, eventstore.ScanRequest) {
 	// 1. Get the range and resume cursor of the dispatcher.
 	request, needScan := task.getScanRequest()
 	if !needScan {
@@ -438,69 +420,8 @@ func (c *eventBroker) getScanTaskRequest(task scanTask) (bool, eventstore.ScanRe
 		return false, eventstore.ScanRequest{}
 	}
 	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
-	commitTsEndBeforeWindow := dataRange.CommitTsEnd
-	// If the latest ddl commit ts is in current resolved range and larger than current scan start,
-	// this dispatcher still has pending ddl to catch up.
-	hasPendingDDLEventInCurrentRange := dataRange.CommitTsStart < ddlState.MaxEventCommitTs &&
-		ddlState.MaxEventCommitTs <= commitTsEndBeforeWindow
-	nextSyncPointTs := task.nextSyncPoint.Load()
-	hasPendingSyncPointEventInCurrentRange := task.enableSyncPoint && commitTsEndBeforeWindow > nextSyncPointTs
-	scanMaxTs := task.changefeedStat.getScanMaxTs()
-	if scanMaxTs > 0 {
-		dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, scanMaxTs)
-		if dataRange.CommitTsEnd < commitTsEndBeforeWindow {
-			log.Debug("scan window capped",
-				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
-				zap.Stringer("dispatcherID", task.id),
-				zap.Uint64("baseTs", task.changefeedStat.minSentTs.Load()),
-				zap.Uint64("scanMaxTs", scanMaxTs),
-				zap.Uint64("beforeEndTs", commitTsEndBeforeWindow),
-				zap.Uint64("afterEndTs", dataRange.CommitTsEnd),
-				zap.Duration("scanInterval", time.Duration(task.changefeedStat.scanInterval.Load())),
-			)
-		}
-	}
-
-	if dataRange.CommitTsEnd <= dataRange.CommitTsStart &&
-		(hasPendingDDLEventInCurrentRange || hasPendingSyncPointEventInCurrentRange) {
-		// Global scan window base can be pinned by other lagging dispatchers.
-		// For a table with pending ddl or syncpoint in current range, use a local bounded step
-		// to keep this dispatcher making forward progress, so barrier coverage can eventually complete.
-		interval := time.Duration(task.changefeedStat.scanInterval.Load())
-		if interval <= 0 {
-			interval = defaultScanInterval
-		}
-		localScanMaxTs := oracle.GoTimeToTS(oracle.GetTimeFromTS(dataRange.CommitTsStart).Add(interval))
-		if hasPendingSyncPointEventInCurrentRange && nextSyncPointTs >= dataRange.CommitTsStart &&
-			localScanMaxTs <= nextSyncPointTs {
-			localScanMaxTs = nextSyncPointTs + 1
-		}
-		dataRange.CommitTsEnd = min(commitTsEndBeforeWindow, localScanMaxTs)
-		if dataRange.CommitTsEnd > dataRange.CommitTsStart {
-			log.Info("scan window local advance due to pending barrier event",
-				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
-				zap.Stringer("dispatcherID", task.id),
-				zap.Uint64("startTs", dataRange.CommitTsStart),
-				zap.Uint64("globalScanMaxTs", scanMaxTs),
-				zap.Uint64("localScanMaxTs", localScanMaxTs),
-				zap.Bool("hasPendingDDL", hasPendingDDLEventInCurrentRange),
-				zap.Uint64("ddlCommitTs", ddlState.MaxEventCommitTs),
-				zap.Bool("hasPendingSyncPoint", hasPendingSyncPointEventInCurrentRange),
-				zap.Uint64("nextSyncPointTs", nextSyncPointTs),
-				zap.Uint64("newEndTs", dataRange.CommitTsEnd))
-		}
-	}
 
 	hasRowResume := len(request.Cursor.Position) != 0
-	// A published row cursor at C came from an earlier scan whose DDL and received
-	// resolved-ts bounds had already reached C. Since those bounds do not regress,
-	// only the adaptive scan window can move CommitTsEnd behind C. For example, if
-	// C=100 and the window caps the end at 80, restore the effective range to
-	// [100, 100] so scanning resumes after Position inside that transaction.
-	if hasRowResume && dataRange.CommitTsEnd < dataRange.CommitTsStart {
-		dataRange.CommitTsEnd = dataRange.CommitTsStart
-	}
-
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
 		// A cursor makes [C, C] meaningful: Position resumes rows inside a
 		// transaction, while TxnStartTs resumes later transactions at the same C.
@@ -510,7 +431,6 @@ func (c *eventBroker) getScanTaskRequest(task scanTask) (bool, eventstore.ScanRe
 			return true, request
 		}
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
-		// Scan range can become empty after applying capping (for example, scan window).
 		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
 		// but do not advance the watermark here.
 		c.sendSignalResolvedTs(task)
@@ -541,7 +461,7 @@ func (c *eventBroker) getScanTaskRequest(task scanTask) (bool, eventstore.ScanRe
 //
 // Note: A true return value only indicates potential scanning need,
 // final determination occurs when the scanTask is actully processed.
-func (c *eventBroker) scanReady(task scanTask) bool {
+func (c *eventBroker) scanReady(task *dispatcherStat) bool {
 	span := task.info.GetTableSpan()
 	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		return false
@@ -566,7 +486,7 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 	return ok
 }
 
-func (c *eventBroker) checkAndSendReady(task scanTask) bool {
+func (c *eventBroker) checkAndSendReady(task *dispatcherStat) bool {
 	// only dispatcher with epoch 0 need send ready event.
 	if task.epoch == 0 {
 		now := time.Now().Unix()
@@ -593,7 +513,7 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	return true
 }
 
-func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
+func (c *eventBroker) sendHandshakeIfNeed(task *dispatcherStat) {
 	// Fast path.
 	if task.isHandshaked() {
 		return
@@ -647,7 +567,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 	}
 }
 
-func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
+func (c *eventBroker) calculateScanLimit(task *dispatcherStat) scanLimit {
 	return scanLimit{
 		maxDMLBytes: task.getCurrentScanLimitInBytes(),
 	}
@@ -656,9 +576,11 @@ func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
 func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	var interrupted bool
 	defer func() {
+		task.grant.releaseAll()
 		task.isTaskScanning.Store(false)
-		if interrupted {
-			c.pushTask(task, false)
+		pending := task.scanPending.Swap(false)
+		if interrupted || pending {
+			c.pushTask(task.dispatcherStat, false)
 		}
 	}()
 	scanCtx, finishScan := task.beginScan(ctx)
@@ -683,7 +605,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	needScan, request := c.getScanTaskRequest(task)
+	needScan, request := c.getScanTaskRequest(task.dispatcherStat)
 	if !needScan {
 		return
 	}
@@ -694,6 +616,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// Therefore, we need to consider the priority of each task in the future and allocate rate limits based on priority.
 	// My current idea is to divide rate limits into 3 different levels, and decide which rate limit to use according to lastScanBytes.
 	if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
+		task.markScanAdmissionWaiting(time.Now())
 		log.Debug("scan rate limit exceeded",
 			zap.Stringer("dispatcher", task.id),
 			zap.Int64("lastScanBytes", task.lastScanBytes.Load()),
@@ -701,7 +624,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	item, ok := c.changefeedMap.Load(changefeedID)
+	_, ok := c.changefeedMap.Load(changefeedID)
 	if !ok {
 		log.Info("changefeed status is not found, skip scan",
 			zap.Stringer("changefeed", changefeedID),
@@ -710,48 +633,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	status := item.(*changefeedStatus)
-	item, ok = status.availableMemoryQuota.Load(remoteID)
-	if !ok {
-		log.Info("available memory quota is not set, skip scan",
-			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
-		return
-	}
-
-	available := item.(*atomic.Uint64)
-	if available.Load() < c.scanLimitInBytes {
-		task.resetScanLimit()
-	}
-
-	sl := c.calculateScanLimit(task)
-	ok = allocQuota(available, uint64(sl.maxDMLBytes))
-	if !ok {
-		log.Debug("changefeed available memory quota is not enough, skip scan",
-			zap.String("changefeed", changefeedID.String()),
-			zap.String("remote", remoteID.String()),
-			zap.Uint64("available", available.Load()),
-			zap.Uint64("required", uint64(sl.maxDMLBytes)))
-		c.sendSignalResolvedTs(task)
-		metrics.EventServiceSkipScanCount.WithLabelValues("changefeed_quota").Inc()
-		return
-	}
-
-	if uint64(sl.maxDMLBytes) > task.availableMemoryQuota.Load() {
-		releaseQuota(available, uint64(sl.maxDMLBytes))
-		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
-		c.sendSignalResolvedTs(task)
-		metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
-		return
-	}
+	sl := scanLimit{maxDMLBytes: int64(task.grant.bytes)}
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
-	scannedBytes, events, progress, interrupted, err := scanner.scan(scanCtx, task, request, sl)
+	scannedBytes, events, progress, interrupted, err := scanner.scan(scanCtx, task.dispatcherStat, request, sl)
 	if interrupted {
 		metrics.EventServiceInterruptScanCount.Inc()
 	}
 
 	if err != nil {
-		releaseQuota(available, uint64(sl.maxDMLBytes))
 		if task.isRemoved.Load() {
 			return
 		}
@@ -762,11 +652,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
-	if scannedBytes < 0 {
-		releaseQuota(available, uint64(sl.maxDMLBytes))
-	} else if scannedBytes < sl.maxDMLBytes {
-		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
-	}
+	task.grant.commit(scannedBytes)
 
 	if scannedBytes > int64(c.scanLimitInBytes) {
 		log.Info("scan bytes exceeded the limit, there must be a big transaction", zap.Stringer("dispatcher", task.id), zap.Int64("scannedBytes", scannedBytes), zap.Int64("limit", int64(c.scanLimitInBytes)))
@@ -791,19 +677,19 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			if !ok {
 				log.Panic("expect a DMLEvent, but got", zap.Any("event", e))
 			}
-			c.sendDML(remoteID, dmls, task)
+			c.sendDML(remoteID, dmls, task.dispatcherStat)
 		case event.TypeDDLEvent:
 			ddl, ok := e.(*event.DDLEvent)
 			if !ok {
 				log.Panic("expect a DDLEvent, but got", zap.Any("event", e))
 			}
-			c.sendDDL(ctx, remoteID, ddl, task)
+			c.sendDDL(ctx, remoteID, ddl, task.dispatcherStat)
 		case event.TypeResolvedEvent:
 			re, ok := e.(event.ResolvedEvent)
 			if !ok {
 				log.Panic("expect a ResolvedEvent, but got", zap.Any("event", e))
 			}
-			c.sendResolvedTs(task, re.ResolvedTs)
+			c.sendResolvedTs(task.dispatcherStat, re.ResolvedTs)
 		default:
 			log.Panic("unknown event type", zap.Any("event", e))
 		}
@@ -1006,6 +892,10 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, commitTs ui
 		d.lastReceivedResolvedTsTime.Store(time.Now())
 		updateMetricEventStoreOutputResolved(d.info.GetMode())
 		d.onLatestCommitTs(commitTs)
+		if d.isTaskScanning.Load() {
+			d.scanPending.Store(true)
+			return
+		}
 		if c.scanReady(d) {
 			c.pushTask(d, true)
 		}
@@ -1013,25 +903,104 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, commitTs ui
 }
 
 func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
-	if d.isRemoved.Load() {
-		return
-	}
-
-	// make sure only one scan task can run at the same time.
-	if !d.isTaskScanning.CompareAndSwap(false, true) {
+	task, ok := c.prepareScanTask(d)
+	if !ok {
 		return
 	}
 
 	if force {
-		c.taskChan[d.scanWorkerIndex] <- d
-	} else {
-		timer := time.NewTimer(time.Millisecond * 10)
-		select {
-		case c.taskChan[d.scanWorkerIndex] <- d:
-		case <-timer.C:
-			d.isTaskScanning.Store(false)
+		c.taskChan[d.scanWorkerIndex] <- task
+		d.changefeedStat.scanAdmission.recordGrant(d)
+		return
+	}
+
+	timer := time.NewTimer(time.Millisecond * 10)
+	defer timer.Stop()
+	select {
+	case c.taskChan[d.scanWorkerIndex] <- task:
+		d.changefeedStat.scanAdmission.recordGrant(d)
+	case <-timer.C:
+		c.releasePreparedScanTask(task)
+	}
+}
+
+func (c *eventBroker) tryPushWaitingTask(d *dispatcherStat) {
+	task, ok := c.prepareScanTask(d)
+	if !ok {
+		return
+	}
+	select {
+	case c.taskChan[d.scanWorkerIndex] <- task:
+		d.changefeedStat.scanAdmission.recordGrant(d)
+	default:
+		c.releasePreparedScanTask(task)
+	}
+}
+
+func (c *eventBroker) prepareScanTask(d *dispatcherStat) (scanTask, bool) {
+	if d.isRemoved.Load() {
+		return scanTask{}, false
+	}
+
+	// isTaskScanning covers both queued and running tasks.
+	if !d.isTaskScanning.CompareAndSwap(false, true) {
+		d.scanPending.Store(true)
+		return scanTask{}, false
+	}
+
+	now := time.Now()
+	available, ok := d.changefeedStat.scanAdmission.availableMemory(node.ID(d.info.GetServerID()))
+	if ok && available < c.scanLimitInBytes {
+		d.resetScanLimit()
+	}
+	scanLimit := c.calculateScanLimit(d)
+	dispatcherAvailable := d.availableMemoryQuota.Load()
+	if uint64(scanLimit.maxDMLBytes) > dispatcherAvailable {
+		d.resetScanLimit()
+		scanLimit = c.calculateScanLimit(d)
+	}
+	if ok && d.isScanAdmissionProtected(now) {
+		protectedBytes := min(uint64(maxScanLimitInBytes), available, dispatcherAvailable)
+		if protectedBytes > uint64(scanLimit.maxDMLBytes) {
+			scanLimit.maxDMLBytes = int64(protectedBytes)
 		}
 	}
+
+	grant, reason := d.changefeedStat.scanAdmission.tryGrant(d, uint64(scanLimit.maxDMLBytes), now)
+	if reason != scanAdmissionGranted {
+		d.isTaskScanning.Store(false)
+		d.markScanAdmissionWaiting(now)
+		c.sendSignalResolvedTs(d)
+		switch reason {
+		case scanAdmissionDispatcherQuota:
+			log.Debug("dispatcher available memory quota is not enough, skip scan",
+				zap.Stringer("dispatcher", d.id),
+				zap.Uint64("available", d.availableMemoryQuota.Load()),
+				zap.Int64("required", scanLimit.maxDMLBytes))
+			metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
+		case scanAdmissionQuotaNotInitialized:
+			log.Info("available memory quota is not set, skip scan",
+				zap.Stringer("changefeed", d.changefeedStat.changefeedID),
+				zap.String("remote", d.info.GetServerID()))
+			metrics.EventServiceSkipScanCount.WithLabelValues("changefeed_quota").Inc()
+		default:
+			log.Debug("changefeed available memory quota is not enough, skip scan",
+				zap.Stringer("changefeed", d.changefeedStat.changefeedID),
+				zap.String("remote", d.info.GetServerID()),
+				zap.Uint64("available", available),
+				zap.Int64("required", scanLimit.maxDMLBytes),
+				zap.Bool("protected", d.isScanAdmissionProtected(now)))
+			metrics.EventServiceSkipScanCount.WithLabelValues("changefeed_quota").Inc()
+		}
+		return scanTask{}, false
+	}
+	return scanTask{dispatcherStat: d, grant: grant}, true
+}
+
+func (c *eventBroker) releasePreparedScanTask(task scanTask) {
+	task.grant.releaseAll()
+	task.markScanAdmissionWaiting(time.Now())
+	task.isTaskScanning.Store(false)
 }
 
 func (c *eventBroker) getDispatcher(id common.DispatcherID) *atomic.Pointer[dispatcherStat] {
@@ -1202,7 +1171,6 @@ func (c *eventBroker) removeChangefeedStatus(status *changefeedStatus) {
 	}
 
 	filter.GetSharedFilterStorage().RemoveFilter(changefeedID)
-	deleteScanWindowMetrics(changefeedID.String())
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
@@ -1371,9 +1339,6 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 		return actual.(*changefeedStatus)
 	}
 	log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
-	if status.scanWindowController != nil {
-		initializeScanWindowMetrics(changefeedID.String())
-	}
 	return status
 }
 
@@ -1439,33 +1404,21 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	}
 
 	holder := make(map[common.GID]uint64, len(availables))
-	usage := make(map[common.GID]float64, len(availables))
-	memoryRelease := make(map[common.GID]uint32, len(availables))
 	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
-		if m.HasUsageRatio() {
-			usage[item.Gid] = item.UsageRatio
-		}
-		memoryRelease[item.Gid] = item.MemoryReleaseCount
 		for dispatcherID, available := range item.DispatcherAvailable {
 			dispatcherAvailable[dispatcherID] = available
 		}
 	}
 
-	now := time.Now()
 	c.changefeedMap.Range(func(k, v interface{}) bool {
 		changefeedID := k.(common.ChangeFeedID)
 		changefeed := v.(*changefeedStatus)
 		availableInMsg, ok := holder[changefeedID.ID()]
 		if ok {
-			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(availableInMsg))
+			changefeed.scanAdmission.updateAvailableMemory(from, availableInMsg)
 			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(availableInMsg))
-		}
-		if m.HasUsageRatio() {
-			if ratio, okUsage := usage[changefeedID.ID()]; okUsage && ok {
-				changefeed.updateMemoryUsage(now, ratio, memoryRelease[changefeedID.ID()])
-			}
 		}
 		return true
 	})

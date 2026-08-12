@@ -50,10 +50,17 @@ func TestMemControlAddRemovePath(t *testing.T) {
 	mc.addPathToArea(path, settings, feedbackChan)
 	require.NotNil(t, path.areaMemStat)
 	require.Equal(t, int64(1), path.areaMemStat.pathCount.Load())
+	path.addInputSize(10)
+	path.pendingSize.Store(20)
+	path.areaMemStat.totalPendingSize.Store(20)
+	path.addHandlingSize(30)
+	require.Equal(t, int64(60), path.areaMemStat.residentSize())
 
 	// Test removing path
 	mc.removePathFromArea(path)
 	require.Equal(t, int64(0), path.areaMemStat.pathCount.Load())
+	require.Zero(t, path.residentSize())
+	require.Zero(t, path.areaMemStat.residentSize())
 	require.Empty(t, mc.areaStatMap)
 }
 

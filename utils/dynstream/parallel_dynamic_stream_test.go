@@ -175,6 +175,73 @@ func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 	require.Equal(t, int64(1), inc.Load())
 }
 
+func TestMemoryMetricsIncludeInputAndAwaitingBytes(t *testing.T) {
+	handler := &mockHandler{}
+	var handleWait sync.WaitGroup
+	handleWait.Add(1)
+	handleReleased := false
+	stream := newParallelDynamicStream("test", handler, Option{
+		StreamCount:         1,
+		EnableMemoryControl: true,
+		handleWait:          &handleWait,
+	})
+	stream.Start()
+	defer stream.Close()
+	defer func() {
+		if !handleReleased {
+			handleWait.Done()
+		}
+	}()
+
+	settings := NewAreaSettingsWithMaxPendingSize(1024, MemoryControlForEventCollector, "test")
+	require.NoError(t, stream.AddPath("path1", "dest1", settings))
+
+	startNotify := &sync.WaitGroup{}
+	doneNotify := &sync.WaitGroup{}
+	e := newMockEvent(1, "path1", 0, nil, startNotify, doneNotify)
+	e.value = 10
+	e.await = true
+	stream.Push("path1", e)
+
+	expectedBytes := int64(stream.eventExtraSize + e.value)
+	require.Eventually(t, func() bool {
+		metrics := stream.GetMetrics().MemoryControl.AreaMemoryMetrics
+		return len(metrics) == 1 && metrics[0].MemoryUsage() == expectedBytes
+	}, time.Second, 10*time.Millisecond)
+
+	handleWait.Done()
+	handleReleased = true
+	startNotify.Wait()
+	doneNotify.Wait()
+
+	require.Eventually(t, func() bool {
+		metrics := stream.GetMetrics().MemoryControl.AreaMemoryMetrics
+		if len(metrics) != 1 || metrics[0].MemoryUsage() != expectedBytes {
+			return false
+		}
+		stream.pathMap.RLock()
+		path := stream.pathMap.m["path1"]
+		stream.pathMap.RUnlock()
+		return path.pendingSize.Load() == 0
+	}, time.Second, 10*time.Millisecond)
+
+	stream.Wake("path1")
+	require.Eventually(t, func() bool {
+		metrics := stream.GetMetrics().MemoryControl.AreaMemoryMetrics
+		return len(metrics) == 1 && metrics[0].MemoryUsage() == 0
+	}, time.Second, 10*time.Millisecond)
+
+	syncDone := &sync.WaitGroup{}
+	syncEvent := newMockEvent(2, "path1", 0, nil, nil, syncDone)
+	syncEvent.value = 10
+	stream.Push("path1", syncEvent)
+	syncDone.Wait()
+	require.Eventually(t, func() bool {
+		metrics := stream.GetMetrics().MemoryControl.AreaMemoryMetrics
+		return len(metrics) == 1 && metrics[0].MemoryUsage() == 0
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestFeedBack(t *testing.T) {
 	t.Parallel()
 	fb1 := Feedback[int, string, any]{
