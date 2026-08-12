@@ -787,12 +787,27 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		tableTriggerDDLHistory: p.tableTriggerDDLHistory,
 	})
 
-	// A drop-schema DDL removes the database metadata below. Collect its physical
-	// table IDs first so registered version stores also receive the delete version.
-	var dropSchemaTableIDs []int64
-	if job.Type == model.ActionDropSchema {
-		dropSchemaTableIDs = getSchemaPhysicalTableIDs(ddlEvent.SchemaID, p.databaseMap, p.partitionMap)
-	}
+	// Iterate before updating schema metadata because some DDLs, such as drop
+	// schema, need the old metadata to determine their affected physical tables.
+	handler.iterateEventTablesFunc(iterateEventTablesFuncArgs{
+		event:        &ddlEvent,
+		databaseMap:  p.databaseMap,
+		partitionMap: p.partitionMap,
+		apply: func(tableIDs ...int64) {
+			for _, tableID := range tableIDs {
+				if store, ok := p.tableInfoStoreMap[tableID]; ok {
+					// do some safety check
+					switch model.ActionType(job.Type) {
+					case model.ActionCreateTable, model.ActionCreateTables:
+						// newly created tables should not be registered before this ddl are handled
+						log.Panic("should not be registered", zap.Int64("tableID", tableID))
+					default:
+					}
+					store.applyDDL(&ddlEvent)
+				}
+			}
+		},
+	})
 
 	handler.updateSchemaMetadataFunc(updateSchemaMetadataFuncArgs{
 		event:        &ddlEvent,
@@ -800,26 +815,6 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		tableMap:     p.tableMap,
 		partitionMap: p.partitionMap,
 	})
-
-	applyDDLToTableInfoStores := func(tableIDs ...int64) {
-		for _, tableID := range tableIDs {
-			if store, ok := p.tableInfoStoreMap[tableID]; ok {
-				// do some safety check
-				switch model.ActionType(job.Type) {
-				case model.ActionCreateTable, model.ActionCreateTables:
-					// newly created tables should not be registered before this ddl are handled
-					log.Panic("should not be registered", zap.Int64("tableID", tableID))
-				default:
-				}
-				store.applyDDL(&ddlEvent)
-			}
-		}
-	}
-	if job.Type == model.ActionDropSchema {
-		applyDDLToTableInfoStores(dropSchemaTableIDs...)
-	} else {
-		handler.iterateEventTablesFunc(&ddlEvent, applyDDLToTableInfoStores)
-	}
 
 	return nil
 }
