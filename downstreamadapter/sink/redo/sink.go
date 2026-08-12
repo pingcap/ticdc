@@ -157,8 +157,8 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	rowsCount := uint64(event.Len())
-	rowCallback := helper.NewTxnPostFlushRowCallback(event, rowsCount)
 	events := make([]*commonEvent.RedoRowEvent, 0, rowsCount)
+	rowCallback := helper.NewPostFlushRowCallback(event, uint64(rowsCount))
 
 	var (
 		startTs         = event.GetStartTs()

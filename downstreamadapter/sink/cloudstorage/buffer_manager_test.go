@@ -171,7 +171,7 @@ func newBufferedTask(table string, dispatcherID commonType.DispatcherID, payload
 		},
 		TableInfoVersion: 1,
 		DispatcherID:     dispatcherID,
-	}, event)
+	}, event, nil)
 	msg := common.NewMsg(nil, []byte(payload))
 	msg.SetRowsCount(1)
 	t.encodedMsgs = []*common.Message{msg}

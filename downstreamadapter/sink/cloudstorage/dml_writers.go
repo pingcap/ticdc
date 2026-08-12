@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -43,8 +44,9 @@ type dmlWriters struct {
 	encodeGroup *encoderGroup
 	spool       *spool.Spool
 
-	writers []*writer
-	closed  atomic.Bool
+	columnSelector *columnselector.ColumnSelectors
+	writers        []*writer
+	closed         atomic.Bool
 }
 
 func newDMLWriters(
@@ -54,6 +56,7 @@ func newDMLWriters(
 	encoderConfig *common.Config,
 	extension string,
 	statistics *metrics.Statistics,
+	columnSelector *columnselector.ColumnSelectors,
 ) (*dmlWriters, error) {
 	messageCh := chann.NewUnlimitedChannelDefault[*task]()
 	encoderGroup := newEncoderGroup(
@@ -76,12 +79,13 @@ func newDMLWriters(
 	}
 
 	return &dmlWriters{
-		changefeedID: changefeedID,
-		statistics:   statistics,
-		msgCh:        messageCh,
-		encodeGroup:  encoderGroup,
-		spool:        spool,
-		writers:      writers,
+		changefeedID:   changefeedID,
+		statistics:     statistics,
+		msgCh:          messageCh,
+		encodeGroup:    encoderGroup,
+		spool:          spool,
+		columnSelector: columnSelector,
+		writers:        writers,
 	}, nil
 }
 
@@ -168,7 +172,7 @@ func (d *dmlWriters) addDMLEvent(event *commonEvent.DMLEvent) {
 		TableInfoVersion: event.TableInfoVersion,
 		DispatcherID:     event.GetDispatcherID(),
 	}
-	d.msgCh.Push(newDMLTask(table, event))
+	d.msgCh.Push(newDMLTask(table, event, d.columnSelector.GetForTableInfo(event.TableInfo)))
 }
 
 func (d *dmlWriters) flushDMLBeforeBlock(ctx context.Context, event commonEvent.BlockEvent) error {
