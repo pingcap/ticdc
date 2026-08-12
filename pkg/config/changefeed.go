@@ -190,10 +190,11 @@ func (t AdminJobType) IsStopState() bool {
 }
 
 type ChangefeedConfig struct {
-	ChangefeedID common.ChangeFeedID `json:"changefeed_id"`
-	StartTS      uint64              `json:"start_ts"`
-	TargetTS     uint64              `json:"target_ts"`
-	SinkURI      string              `json:"sink_uri"`
+	ChangefeedID    common.ChangeFeedID `json:"changefeed_id"`
+	PerformanceMode string              `json:"performance_mode"`
+	StartTS         uint64              `json:"start_ts"`
+	TargetTS        uint64              `json:"target_ts"`
+	SinkURI         string              `json:"sink_uri"`
 	// timezone used when checking sink uri
 	TimeZone      string `json:"timezone" default:"system"`
 	CaseSensitive bool   `json:"case_sensitive" default:"false"`
@@ -219,6 +220,10 @@ type ChangefeedConfig struct {
 	// redo releated
 	Consistent             *ConsistentConfig `toml:"consistent" json:"consistent,omitempty"`
 	EnableTableAcrossNodes bool              `toml:"enable-table-across-nodes" json:"enable-table-across-nodes,omitempty"`
+}
+
+func (cfg *ChangefeedConfig) IsLowLatencyMode() bool {
+	return cfg != nil && cfg.PerformanceMode == PerformanceModeLowLatency
 }
 
 // String implements fmt.Stringer interface, but hide some sensitive information
@@ -278,6 +283,7 @@ type ChangeFeedInfo struct {
 func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 	return &ChangefeedConfig{
 		ChangefeedID:                  info.ChangefeedID,
+		PerformanceMode:               util.GetOrZero(info.Config.PerformanceMode),
 		StartTS:                       info.StartTs,
 		TargetTS:                      info.TargetTs,
 		SinkURI:                       info.SinkURI,

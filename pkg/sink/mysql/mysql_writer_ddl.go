@@ -15,6 +15,7 @@ package mysql
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
@@ -100,7 +101,8 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		}
 	})
 
-	tx, err := w.db.BeginTx(ctx, nil)
+	db := w.getDDLExecDB(event)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -231,7 +233,7 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 				log.Warn("Wait the asynchronous ddl to synchronize",
 					zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
 					zap.String("ddl", event.Query), zap.String("ddlCreateTime", ddlCreateTime),
-					zap.String("readTimeout", w.cfg.ReadTimeout), zap.Error(err))
+					zap.String("readTimeout", w.getDDLReadTimeout(event)), zap.Error(err))
 				return w.waitDDLDone(w.ctx, event, ddlCreateTime)
 			}
 			log.Warn("Execute DDL with error, retry later",
@@ -248,6 +250,26 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),
 		retry.WithMaxTries(defaultDDLMaxRetry),
 		retry.WithIsRetryableErr(errors.IsRetryableDDLError))
+}
+
+func (w *Writer) getDDLExecDB(event *commonEvent.DDLEvent) *sql.DB {
+	if w.useAsyncDB(event) {
+		return w.asyncDB
+	}
+	return w.db
+}
+
+func (w *Writer) getDDLReadTimeout(event *commonEvent.DDLEvent) string {
+	if w.useAsyncDB(event) {
+		return w.cfg.AsyncDDLTimeout
+	}
+	return w.cfg.ReadTimeout
+}
+
+func (w *Writer) useAsyncDB(event *commonEvent.DDLEvent) bool {
+	return w.asyncDB != nil &&
+		w.cfg.IsTiDB &&
+		event.GetDDLType() == timodel.ActionAddIndex
 }
 
 // waitDDLDone wait current ddl

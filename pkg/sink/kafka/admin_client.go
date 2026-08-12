@@ -25,9 +25,9 @@ type Broker struct {
 	ID int32
 }
 
-// ClusterAdminClient is the administrative client for Kafka,
+// AdminClient is the administrative client for Kafka,
 // which supports managing and inspecting topics, brokers, configurations and ACLs.
-type ClusterAdminClient interface {
+type AdminClient interface {
 	// GetAllBrokers return all brokers among the cluster
 	GetAllBrokers() []Broker
 
@@ -45,7 +45,7 @@ type ClusterAdminClient interface {
 	GetTopicsPartitionsNum(topics []string) (map[string]int32, error)
 
 	// CreateTopic creates a new topic.
-	CreateTopic(detail *TopicDetail, validateOnly bool) error
+	CreateTopic(detail *TopicDetail) error
 
 	// Close shuts down the admin client.
 	Close()

@@ -50,6 +50,8 @@ type managerMaintainerSet struct {
 	nodeInfo *node.Info
 	// taskScheduler is shared by all local maintainers to run background tasks.
 	taskScheduler threadpool.ThreadPool
+	// heartbeatCh coalesces prompt reports from low-latency maintainers.
+	heartbeatCh chan<- struct{}
 
 	// registryMu serializes registry mutations that create, replace, or fully
 	// close maintainers because maintainer metrics share changefeed labels across
@@ -60,11 +62,16 @@ type managerMaintainerSet struct {
 }
 
 // newManagerMaintainerSet initializes the changefeed-scoped state owned by a manager.
-func newManagerMaintainerSet(conf *config.SchedulerConfig, nodeInfo *node.Info) *managerMaintainerSet {
+func newManagerMaintainerSet(
+	conf *config.SchedulerConfig,
+	nodeInfo *node.Info,
+	heartbeatCh chan<- struct{},
+) *managerMaintainerSet {
 	return &managerMaintainerSet{
 		conf:          conf,
 		nodeInfo:      nodeInfo,
 		taskScheduler: threadpool.NewThreadPoolDefault(),
+		heartbeatCh:   heartbeatCh,
 	}
 }
 
@@ -167,9 +174,11 @@ func (p *managerMaintainerSet) buildBootstrapResponse() *heartbeatpb.Coordinator
 	}
 	p.registry.Range(func(_, value interface{}) bool {
 		maintainer := value.(*Maintainer)
+		// Clear the observed dirty state before taking the snapshot. Any update
+		// racing with the snapshot remains dirty for the next heartbeat.
+		maintainer.statusChanged.Store(false)
 		status := maintainer.GetMaintainerStatus()
 		response.Statuses = append(response.Statuses, status)
-		maintainer.statusChanged.Store(false)
 		maintainer.lastReportTime = time.Now()
 		return true
 	})
@@ -208,7 +217,9 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 	// Create the maintainer only after epoch admission so normal duplicate
 	// add retries do not start short-lived goroutines or metrics.
 	newMaintainer := func() *Maintainer {
-		return NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
+		maintainer := NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
+		maintainer.managerHeartbeatCh = p.heartbeatCh
+		return maintainer
 	}
 	registeredMaintainer := p.registerMaintainerForAdd(changefeedID, requestEpoch, newMaintainer)
 	if registeredMaintainer == nil {
@@ -362,11 +373,10 @@ func (p *managerMaintainerSet) buildHeartbeat() *heartbeatpb.MaintainerHeartbeat
 	response := &heartbeatpb.MaintainerHeartbeat{}
 	p.registry.Range(func(_, value interface{}) bool {
 		cfMaintainer := value.(*Maintainer)
-		if cfMaintainer.statusChanged.Load() ||
+		if cfMaintainer.statusChanged.Swap(false) ||
 			time.Since(cfMaintainer.lastReportTime) > time.Second {
 			mStatus := cfMaintainer.GetMaintainerStatus()
 			response.Statuses = append(response.Statuses, mStatus)
-			cfMaintainer.statusChanged.Store(false)
 			cfMaintainer.lastReportTime = time.Now()
 		}
 		return true

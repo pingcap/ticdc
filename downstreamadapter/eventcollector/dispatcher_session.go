@@ -534,6 +534,7 @@ func (s *dispatcherSession) newDispatcherRegisterRequest(serverID string, onlyRe
 			OutputRawChangeEvent:          s.target.IsOutputRawChangeEvent(),
 			TxnAtomicity:                  string(s.target.GetTxnAtomicity()),
 			EnableIgnoreUpdateOnlyColumns: s.target.EnableIgnoreUpdateOnlyColumns(),
+			LowLatencyMode:                s.target.IsLowLatencyMode(),
 		},
 	}
 }
@@ -570,6 +571,7 @@ func (s *dispatcherSession) newDispatcherResetRequest(serverID string, resetTs u
 			OutputRawChangeEvent:          s.target.IsOutputRawChangeEvent(),
 			TxnAtomicity:                  string(s.target.GetTxnAtomicity()),
 			EnableIgnoreUpdateOnlyColumns: s.target.EnableIgnoreUpdateOnlyColumns(),
+			LowLatencyMode:                s.target.IsLowLatencyMode(),
 		},
 	}
 }

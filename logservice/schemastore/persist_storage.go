@@ -535,15 +535,21 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 
 func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableInfoStore) error {
 	tableID := store.getTableID()
-	// get snapshot from disk before get current gc ts to make sure data is not deleted by gc process
-	storageSnap := p.db.NewSnapshot()
-	defer storageSnap.Close()
-
 	p.mu.RLock()
+	// Create the disk snapshot and copy the DDL history in the same critical
+	// section, so they describe a consistent view. A DDL persisted before this
+	// view but not yet added to history will be applied through the online path.
+	storageSnap := p.db.NewSnapshot()
+	failpoint.Inject("afterCreatingVersionStoreSnapshot", func() {
+		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/afterCreatingVersionStoreSnapshot", p)
+	})
 	kvSnapVersion := p.gcTs
 	var allDDLFinishedTs []uint64
 	allDDLFinishedTs = append(allDDLFinishedTs, p.tablesDDLHistory[tableID]...)
 	p.mu.RUnlock()
+	defer func() {
+		_ = storageSnap.Close()
+	}()
 
 	if err := addTableInfoFromKVSnap(
 		store, kvSnapVersion, storageSnap, p.encryptionManager, p.keyspaceID,
@@ -753,6 +759,9 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		// ExtraTableInfo is the normal table info before exchange
 		ddlEvent.ExtraTableInfo, _ = p.forceGetTableInfo(ddlEvent.TableID, ddlEvent.FinishedTs)
 	}
+	failpoint.Inject("beforePersistingDDL", func() {
+		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/beforePersistingDDL")
+	})
 
 	// Note: need write ddl event to disk before update ddl history,
 	// because other goroutines may read ddl events from disk according to ddl history
@@ -760,6 +769,9 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
+	failpoint.Inject("afterPersistingDDL", func() {
+		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/afterPersistingDDL")
+	})
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
