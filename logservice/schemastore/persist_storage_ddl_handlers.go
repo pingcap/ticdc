@@ -1614,19 +1614,16 @@ func iterateEventTablesForTruncateTable(event *PersistedDDLEvent, apply func(tab
 }
 
 func iterateEventTablesForAddPartition(event *PersistedDDLEvent, apply func(tableId ...int64)) {
-	newCreatedIDs := getCreatedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
-	apply(newCreatedIDs...)
+	apply(getAllPartitionIDs(event.TableInfo)...)
 }
 
 func iterateEventTablesForDropPartition(event *PersistedDDLEvent, apply func(tableId ...int64)) {
-	droppedIDs := getDroppedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
-	apply(droppedIDs...)
+	apply(event.PrevPartitions...)
 }
 
 func iterateEventTablesForTruncatePartition(event *PersistedDDLEvent, apply func(tableId ...int64)) {
 	physicalIDs := getAllPartitionIDs(event.TableInfo)
-	droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
-	apply(droppedIDs...)
+	apply(event.PrevPartitions...)
 	newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
 	apply(newCreatedIDs...)
 }
@@ -1667,8 +1664,7 @@ func iterateEventTablesForCreateTables(event *PersistedDDLEvent, apply func(tabl
 
 func iterateEventTablesForReorganizePartition(event *PersistedDDLEvent, apply func(tableId ...int64)) {
 	physicalIDs := getAllPartitionIDs(event.TableInfo)
-	droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
-	apply(droppedIDs...)
+	apply(event.PrevPartitions...)
 	newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
 	apply(newCreatedIDs...)
 }
@@ -1798,8 +1794,7 @@ func extractTableInfoFuncForTruncateTable(event *PersistedDDLEvent, tableID int6
 }
 
 func extractTableInfoFuncForAddPartition(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
-	newCreatedIDs := getCreatedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
-	for _, partition := range newCreatedIDs {
+	for _, partition := range getAllPartitionIDs(event.TableInfo) {
 		if tableID == partition {
 			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 		}
@@ -1808,10 +1803,16 @@ func extractTableInfoFuncForAddPartition(event *PersistedDDLEvent, tableID int64
 }
 
 func extractTableInfoFuncForDropPartition(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
-	droppedIDs := getDroppedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
+	physicalIDs := getAllPartitionIDs(event.TableInfo)
+	droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
 	for _, partition := range droppedIDs {
 		if tableID == partition {
 			return nil, true
+		}
+	}
+	for _, partition := range physicalIDs {
+		if tableID == partition {
+			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 		}
 	}
 	return nil, false
@@ -1825,8 +1826,7 @@ func extractTableInfoFuncForTruncateAndReorganizePartition(event *PersistedDDLEv
 			return nil, true
 		}
 	}
-	newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
-	for _, partition := range newCreatedIDs {
+	for _, partition := range physicalIDs {
 		if tableID == partition {
 			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 		}
