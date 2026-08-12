@@ -563,7 +563,7 @@ func (o *options) DeriveTopicConfig() *AutoCreateTopicConfig {
 
 // ValidateReplicationFactor checks whether a topic created with this config
 // can satisfy the configured acknowledgment requirement.
-func (c *AutoCreateTopicConfig) ValidateReplicationFactor(admin ClusterAdminClient) error {
+func (c *AutoCreateTopicConfig) ValidateReplicationFactor(admin AdminClient) error {
 	if c.RequiredAcks != WaitForAll {
 		return nil
 	}
@@ -627,7 +627,7 @@ func NewKafkaClientID(captureAddr string,
 // from the topic or broker configuration.
 func adjustOptions(
 	changefeedID common.ChangeFeedID,
-	admin ClusterAdminClient,
+	admin AdminClient,
 	options *options,
 	topic string,
 ) error {
@@ -654,7 +654,7 @@ func adjustOptions(
 
 func adjustExistingTopicOption(
 	changefeedID common.ChangeFeedID,
-	admin ClusterAdminClient,
+	admin AdminClient,
 	options *options,
 	info TopicDetail,
 ) error {
@@ -674,7 +674,7 @@ func adjustExistingTopicOption(
 }
 
 func adjustNewTopicOptions(
-	admin ClusterAdminClient,
+	admin AdminClient,
 	changefeedID common.ChangeFeedID,
 	options *options,
 ) {
@@ -696,7 +696,7 @@ func adjustNewTopicOptions(
 }
 
 func getTopicMaxMessageBytes(
-	admin ClusterAdminClient,
+	admin AdminClient,
 	topic string,
 ) (int, bool, error) {
 	raw, found, err := getTopicConfig(
@@ -717,7 +717,7 @@ func getTopicMaxMessageBytes(
 	return maxMessageBytes, true, nil
 }
 
-func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, bool, error) {
+func getBrokerMaxMessageBytes(admin AdminClient) (int, bool, error) {
 	raw, found, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
 	if err != nil {
 		return 0, false, err
@@ -737,7 +737,7 @@ func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, bool, error) {
 // we will try to get it from the broker's configuration.
 // NOTICE: The configuration names of topic and broker may be different for the same configuration.
 func getTopicConfig(
-	admin ClusterAdminClient,
+	admin AdminClient,
 	topicName string,
 	topicConfigName string,
 	brokerConfigName string,

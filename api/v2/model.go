@@ -210,6 +210,7 @@ func (d *JSONDuration) UnmarshalText(text []byte) error {
 
 // ReplicaConfig is a duplicate of  config.ReplicaConfig
 type ReplicaConfig struct {
+	PerformanceMode          *string `json:"performance_mode,omitempty" toml:"performance-mode,omitempty"`
 	MemoryQuota              *uint64 `json:"memory_quota,omitempty" toml:"memory-quota,omitempty"`
 	EventCollectorBatchCount *int    `json:"event_collector_batch_count,omitempty" toml:"event-collector-batch-count,omitempty"`
 	EventCollectorBatchBytes *int    `json:"event_collector_batch_bytes,omitempty" toml:"event-collector-batch-bytes,omitempty"`
@@ -257,6 +258,9 @@ func (c *ReplicaConfig) ToInternalReplicaConfig() *config.ReplicaConfig {
 func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	res *config.ReplicaConfig,
 ) *config.ReplicaConfig {
+	if c.PerformanceMode != nil {
+		res.PerformanceMode = c.PerformanceMode
+	}
 	if c.MemoryQuota != nil {
 		res.MemoryQuota = c.MemoryQuota
 	}
@@ -514,6 +518,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				WriteTimeout:                 c.Sink.MySQLConfig.WriteTimeout,
 				ReadTimeout:                  c.Sink.MySQLConfig.ReadTimeout,
 				Timeout:                      c.Sink.MySQLConfig.Timeout,
+				AsyncDDLTimeout:              c.Sink.MySQLConfig.AsyncDDLTimeout,
 				EnableBatchDML:               c.Sink.MySQLConfig.EnableBatchDML,
 				EnableMultiStatement:         c.Sink.MySQLConfig.EnableMultiStatement,
 				EnableCachePreparedStatement: c.Sink.MySQLConfig.EnableCachePreparedStatement,
@@ -684,6 +689,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 	cloned := c.Clone()
 
 	res := &ReplicaConfig{
+		PerformanceMode:          cloned.PerformanceMode,
 		MemoryQuota:              cloned.MemoryQuota,
 		EventCollectorBatchCount: cloned.EventCollectorBatchCount,
 		EventCollectorBatchBytes: cloned.EventCollectorBatchBytes,
@@ -848,6 +854,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				WriteTimeout:                 cloned.Sink.MySQLConfig.WriteTimeout,
 				ReadTimeout:                  cloned.Sink.MySQLConfig.ReadTimeout,
 				Timeout:                      cloned.Sink.MySQLConfig.Timeout,
+				AsyncDDLTimeout:              cloned.Sink.MySQLConfig.AsyncDDLTimeout,
 				EnableBatchDML:               cloned.Sink.MySQLConfig.EnableBatchDML,
 				EnableMultiStatement:         cloned.Sink.MySQLConfig.EnableMultiStatement,
 				EnableCachePreparedStatement: cloned.Sink.MySQLConfig.EnableCachePreparedStatement,
@@ -1537,6 +1544,7 @@ type MySQLConfig struct {
 	WriteTimeout                 *string `json:"write_timeout,omitempty" toml:"write-timeout,omitempty"`
 	ReadTimeout                  *string `json:"read_timeout,omitempty" toml:"read-timeout,omitempty"`
 	Timeout                      *string `json:"timeout,omitempty" toml:"timeout,omitempty"`
+	AsyncDDLTimeout              *string `json:"async_ddl_timeout,omitempty" toml:"async-ddl-timeout,omitempty"`
 	EnableBatchDML               *bool   `json:"enable_batch_dml,omitempty" toml:"enable-batch-dml,omitempty"`
 	EnableMultiStatement         *bool   `json:"enable_multi_statement,omitempty" toml:"enable-multi-statement,omitempty"`
 	EnableCachePreparedStatement *bool   `json:"enable_cache_prepared_statement,omitempty" toml:"enable-cache-prepared-statement,omitempty"`

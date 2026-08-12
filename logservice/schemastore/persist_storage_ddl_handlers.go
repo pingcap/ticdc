@@ -2098,7 +2098,7 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 		InfluenceType: commonEvent.InfluenceTypeNormal,
 		TableIDs:      []int64{common.DDLSpanTableID},
 	}
-	if rawEvent.ExtraTableID != 0 {
+	if shouldBlockCreateTableLikeReferTable(rawEvent, tableFilter) {
 		if len(rawEvent.ReferTablePartitionIDs) > 0 {
 			ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, rawEvent.ReferTablePartitionIDs...)
 		} else {
@@ -2163,6 +2163,37 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 
 	}
 	return ddlEvent, true, err
+}
+
+func shouldBlockCreateTableLikeReferTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) bool {
+	if rawEvent.ExtraTableID == 0 {
+		return false
+	}
+	if tableFilter == nil || rawEvent.Query == "" {
+		return true
+	}
+
+	stmt, err := parser.New().ParseOneStmt(rawEvent.Query, "", "")
+	if err != nil {
+		log.Warn("parse create table ddl failed when checking create table like reference filter",
+			zap.String("query", rawEvent.Query),
+			zap.Error(err))
+		return true
+	}
+	createStmt, ok := stmt.(*ast.CreateTableStmt)
+	if !ok || createStmt.ReferTable == nil {
+		return true
+	}
+
+	referSchema := createStmt.ReferTable.Schema.O
+	if referSchema == "" {
+		referSchema = rawEvent.SchemaName
+	}
+	referTable := createStmt.ReferTable.Name.O
+	if referTable == "" {
+		return true
+	}
+	return !tableFilter.ShouldIgnoreTable(referSchema, referTable)
 }
 
 func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {

@@ -107,7 +107,7 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 
 func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
-	retryPriority := taskTypeFromScanPriority(errInfo.scanPriority)
+	retryPriority := normalizeScanPriority(errInfo.scanPriority)
 	//nolint:errorlint // converting large type switch to errors.As is a significant refactor
 	if _, requestCancelled := err.(*requestCancelledErr); !requestCancelled {
 		log.Debug("cdc region error",
@@ -128,12 +128,14 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
-			r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
+			r.client.scheduleRangeRequest(
+				ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
-			r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
+			r.client.scheduleRangeRequest(
+				ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
 			return nil
 		}
 		if innerErr.GetCongested() != nil {
@@ -166,14 +168,16 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		return nil
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
-		r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
+		r.client.scheduleRangeRequest(
+			ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
 		return nil
 	case *getStoreErr:
 		metricGetStoreErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		// cannot get the store the region belongs to, so we need to reload the region.
 		r.client.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
-		r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
+		r.client.scheduleRangeRequest(
+			ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, retryPriority)
 		return nil
 	case *storeStreamErr:
 		metricStoreSendRequestErr.Inc()

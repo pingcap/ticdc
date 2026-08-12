@@ -27,6 +27,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 
 	// Test case 1: All fields are set
 	apiCfg := &ReplicaConfig{
+		PerformanceMode:       util.AddressOf(config.PerformanceModeLowLatency),
 		MemoryQuota:           util.AddressOf(uint64(1024)),
 		CaseSensitive:         util.AddressOf(true),
 		ForceReplicate:        util.AddressOf(true),
@@ -65,6 +66,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	}
 
 	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.Equal(t, config.PerformanceModeLowLatency, util.GetOrZero(internalCfg.PerformanceMode))
 	require.Equal(t, uint64(1024), util.GetOrZero(internalCfg.MemoryQuota))
 	require.True(t, util.GetOrZero(internalCfg.CaseSensitive))
 	require.True(t, util.GetOrZero(internalCfg.ForceReplicate))
@@ -97,6 +99,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 
 	// Test case 3: Conversion back to API config
 	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.Equal(t, config.PerformanceModeLowLatency, util.GetOrZero(apiCfgBack.PerformanceMode))
 	require.Equal(t, uint64(1024), *apiCfgBack.MemoryQuota)
 	require.True(t, *apiCfgBack.CaseSensitive)
 	require.True(t, *apiCfgBack.ForceReplicate)
@@ -211,4 +214,24 @@ func TestReplicaConfigConversionRedoBatchField(t *testing.T) {
 	require.NotNil(t, apiCfgBack.Consistent)
 	require.NotNil(t, apiCfgBack.Consistent.EventCollectorBatchCount)
 	require.Equal(t, 4096, *apiCfgBack.Consistent.EventCollectorBatchCount)
+}
+
+func TestReplicaConfigConversionMySQLAsyncDDLTimeout(t *testing.T) {
+	t.Parallel()
+
+	apiCfg := &ReplicaConfig{
+		Sink: &SinkConfig{
+			MySQLConfig: &MySQLConfig{
+				AsyncDDLTimeout: util.AddressOf("45m"),
+			},
+		},
+	}
+
+	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.NotNil(t, internalCfg.Sink.MySQLConfig)
+	require.Equal(t, "45m", util.GetOrZero(internalCfg.Sink.MySQLConfig.AsyncDDLTimeout))
+
+	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.NotNil(t, apiCfgBack.Sink.MySQLConfig)
+	require.Equal(t, "45m", util.GetOrZero(apiCfgBack.Sink.MySQLConfig.AsyncDDLTimeout))
 }
