@@ -21,10 +21,16 @@ import (
 // NewPostFlushRowCallback returns a row-level callback that triggers txn-level
 // PostFlush exactly once when the callback has been invoked totalCount times.
 func NewPostFlushRowCallback(event *event.DMLEvent, totalCount uint64) func() {
+	return NewRowCallback(totalCount, event.PostFlush)
+}
+
+// NewRowCallback returns a row-level callback that triggers callback exactly
+// once after it has been invoked totalCount times.
+func NewRowCallback(totalCount uint64, callback func()) func() {
 	var calledCount atomic.Uint64
 	return func() {
 		if calledCount.Inc() == totalCount {
-			event.PostFlush()
+			callback()
 		}
 	}
 }

@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -79,6 +78,8 @@ type options struct {
 	highWatermarkRatio float64
 	// lowWatermarkRatio is the ratio that resumes pending PostEnqueue callbacks.
 	lowWatermarkRatio float64
+
+	metrics *Metrics
 }
 
 type option func(*options)
@@ -179,19 +180,31 @@ func WithLowWatermarkRatio(lowWatermarkRatio float64) option {
 	}
 }
 
+// Metrics contains component-owned metric handles updated by a spool.
+type Metrics struct {
+	MemoryBytes        prometheus.Gauge
+	DiskBytes          prometheus.Gauge
+	PendingPostEnqueue prometheus.Gauge
+	DiskQuotaWaiters   prometheus.Gauge
+	DiskQuotaWait      prometheus.Observer
+	LoadedBytes        prometheus.Observer
+	RotatedCount       prometheus.Counter
+	SegmentCount       prometheus.Gauge
+	Close              func()
+}
+
+// WithMetrics supplies component-owned metrics to the shared spool.
+func WithMetrics(metrics *Metrics) option {
+	return func(options *options) {
+		options.metrics = metrics
+	}
+}
+
 type segmentID uint64
 
-// Spool keeps encoded DML messages after a writer shard has accepted them and
-// before that writer shard has flushed them to external storage.
-//
-// The producer is the cloud storage writer path: after encoderGroup has
-// produced encoded messages for a task, writer.Enqueue calls Spool.Enqueue to
-// hand those messages to local spool storage.
-//
-// The consumer is also the cloud storage writer path: when the writer flushes a
-// batch, it calls Spool.Load to read the queued messages back, then calls
-// Spool.Release after a successful flush or Spool.Discard when the batch is
-// ignored.
+// Spool keeps encoded sink messages after the sink has accepted them and before
+// it has flushed them to external storage. A sink releases an entry only after
+// a successful flush, or discards it when the corresponding data is ignored.
 type Spool struct {
 	keyspace   string
 	changefeed string
@@ -326,18 +339,53 @@ func New(
 		keyspace   = changefeedID.Keyspace()
 		changefeed = changefeedID.Name()
 	)
+	spoolMetrics := normalizeMetrics(cfg.metrics)
 	spool := &Spool{
 		keyspace:           keyspace,
 		changefeed:         changefeed,
 		workDir:            workDir,
-		quota:              newQuotaController(changefeedID, cfg),
+		quota:              newQuotaController(cfg),
 		segmentCapacity:    cfg.segmentCapacity,
-		metricLoadedBytes:  metrics.CloudStorageLoadBytesHistogram.WithLabelValues(keyspace, changefeed),
-		metricRotatedCount: metrics.CloudStorageRotateCountCounter.WithLabelValues(keyspace, changefeed),
-		metricSegmentCount: metrics.CloudStorageSpoolSegmentCountGauge.WithLabelValues(keyspace, changefeed),
+		metricLoadedBytes:  spoolMetrics.LoadedBytes,
+		metricRotatedCount: spoolMetrics.RotatedCount,
+		metricSegmentCount: spoolMetrics.SegmentCount,
 		segments:           make(map[segmentID]*segment),
 	}
 	return spool, nil
+}
+
+func normalizeMetrics(spoolMetrics *Metrics) *Metrics {
+	if spoolMetrics == nil {
+		spoolMetrics = &Metrics{}
+	}
+	if spoolMetrics.MemoryBytes == nil {
+		spoolMetrics.MemoryBytes = prometheus.NewGauge(prometheus.GaugeOpts{})
+	}
+	if spoolMetrics.DiskBytes == nil {
+		spoolMetrics.DiskBytes = prometheus.NewGauge(prometheus.GaugeOpts{})
+	}
+	if spoolMetrics.PendingPostEnqueue == nil {
+		spoolMetrics.PendingPostEnqueue = prometheus.NewGauge(prometheus.GaugeOpts{})
+	}
+	if spoolMetrics.DiskQuotaWaiters == nil {
+		spoolMetrics.DiskQuotaWaiters = prometheus.NewGauge(prometheus.GaugeOpts{})
+	}
+	if spoolMetrics.DiskQuotaWait == nil {
+		spoolMetrics.DiskQuotaWait = prometheus.NewHistogram(prometheus.HistogramOpts{})
+	}
+	if spoolMetrics.LoadedBytes == nil {
+		spoolMetrics.LoadedBytes = prometheus.NewHistogram(prometheus.HistogramOpts{})
+	}
+	if spoolMetrics.RotatedCount == nil {
+		spoolMetrics.RotatedCount = prometheus.NewCounter(prometheus.CounterOpts{})
+	}
+	if spoolMetrics.SegmentCount == nil {
+		spoolMetrics.SegmentCount = prometheus.NewGauge(prometheus.GaugeOpts{})
+	}
+	if spoolMetrics.Close == nil {
+		spoolMetrics.Close = func() {}
+	}
+	return spoolMetrics
 }
 
 func defaultOptions() *options {
@@ -678,9 +726,6 @@ func (s *Spool) Close() {
 			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
 			zap.String("path", s.workDir), zap.Error(err))
 	}
-	metrics.CloudStorageLoadBytesHistogram.DeleteLabelValues(s.keyspace, s.changefeed)
-	metrics.CloudStorageRotateCountCounter.DeleteLabelValues(s.keyspace, s.changefeed)
-	metrics.CloudStorageSpoolSegmentCountGauge.DeleteLabelValues(s.keyspace, s.changefeed)
 	s.quota.deleteMetrics()
 }
 

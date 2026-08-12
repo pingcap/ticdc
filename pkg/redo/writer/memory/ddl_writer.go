@@ -223,8 +223,8 @@ func toPolymorphicDDLEvent(
 	copy(data[8:], rawData)
 
 	return &polymorphicRedoEvent{
-		commitTs: rl.GetCommitTs(),
-		callback: event.PostFlush,
-		data:     data,
+		commitTs:  rl.GetCommitTs(),
+		postFlush: event.PostFlush,
+		data:      data,
 	}, nil
 }

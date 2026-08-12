@@ -31,14 +31,16 @@ import (
 
 // polymorphicRedoEvent wraps RedoLog and callback for file worker.
 type polymorphicRedoEvent struct {
-	commitTs common.Ts
-	data     []byte
-	callback func()
+	commitTs         common.Ts
+	data             []byte
+	postEnqueue      func()
+	postFlush        func()
+	flushImmediately bool
 }
 
 func (e *polymorphicRedoEvent) PostFlush() {
-	if e.callback != nil {
-		e.callback()
+	if e.postFlush != nil {
+		e.postFlush()
 	}
 }
 
@@ -56,9 +58,10 @@ func toPolymorphicDMLEvent(
 	binary.LittleEndian.PutUint64(data[:8], lenField)
 	copy(data[8:], rawData)
 	return &polymorphicRedoEvent{
-		commitTs: rl.GetCommitTs(),
-		callback: event.PostFlush,
-		data:     data,
+		commitTs:    rl.GetCommitTs(),
+		postEnqueue: event.PostEnqueue,
+		postFlush:   event.PostFlush,
+		data:        data,
 	}, nil
 }
 

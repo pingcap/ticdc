@@ -76,6 +76,7 @@ func (bs *blackHoleDMLWriter) AddDMLEvents(_ context.Context, events ...*event.R
 	log.Debug("write redo events", fields...)
 	for _, e := range events {
 		if e != nil {
+			e.PostEnqueue()
 			e.PostFlush()
 		}
 	}

@@ -15,12 +15,17 @@ package memory
 
 import (
 	"context"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,7 +43,121 @@ func TestNewDMLWriter(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	lw, err := NewDMLWriter(ctx, cfg)
+	lw, err := NewDMLWriter(ctx, cfg, 1024)
 	require.NoError(t, err)
 	require.NoError(t, lw.Close())
+}
+
+func TestDMLWriterSpoolsEncodedBytesBeforePostEnqueue(t *testing.T) {
+	changefeedID := common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName)
+	spoolBuffer, err := spool.New(
+		changefeedID,
+		spool.WithRootDir(t.TempDir()),
+		spool.WithDiskQuotaBytes(1000),
+		spool.WithSegmentBytes(1<<20),
+		spool.WithMemoryRatio(0.2),
+		spool.WithHighWatermarkRatio(0.6),
+		spool.WithLowWatermarkRatio(0.3),
+	)
+	require.NoError(t, err)
+	defer spoolBuffer.Close()
+
+	encodedCh := make(chan *polymorphicRedoEvent, 2)
+	dmlWriter := &dmlWriter{
+		encodeWorkers: &encodingWorkerGroup{outputCh: encodedCh},
+		spool:         spoolBuffer,
+		spoolEntries:  chann.NewUnlimitedChannelDefault[*redoSpoolEntry](),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- dmlWriter.writeEncodedEventsToSpool(ctx)
+	}()
+
+	var firstEnqueued atomic.Int64
+	var secondEnqueued atomic.Int64
+	firstData := []byte(strings.Repeat("a", 350))
+	secondData := []byte(strings.Repeat("b", 350))
+	encodedCh <- &polymorphicRedoEvent{
+		commitTs:    1,
+		data:        firstData,
+		postEnqueue: func() { firstEnqueued.Add(1) },
+	}
+	encodedCh <- &polymorphicRedoEvent{
+		commitTs:    2,
+		data:        secondData,
+		postEnqueue: func() { secondEnqueued.Add(1) },
+	}
+
+	readCtx, readCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer readCancel()
+	firstEntry, ok, err := dmlWriter.spoolEntries.GetWithContext(readCtx)
+	require.NoError(t, err)
+	require.True(t, ok)
+	secondEntry, ok, err := dmlWriter.spoolEntries.GetWithContext(readCtx)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	require.True(t, firstEntry.entry.IsSpilled())
+	require.True(t, secondEntry.entry.IsSpilled())
+	require.False(t, firstEntry.flushImmediately)
+	require.False(t, secondEntry.flushImmediately)
+	require.Equal(t, int64(1), firstEnqueued.Load())
+	require.Equal(t, int64(0), secondEnqueued.Load())
+
+	reader, err := spoolBuffer.NewMessageReader(firstEntry.entry)
+	require.NoError(t, err)
+	_, encodedData, _, ok, err := reader.Next()
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, firstData, encodedData)
+
+	spoolBuffer.Release(firstEntry.entry)
+	require.Equal(t, int64(0), secondEnqueued.Load())
+	spoolBuffer.Release(secondEntry.entry)
+	require.Equal(t, int64(1), secondEnqueued.Load())
+
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestDMLWriterMarksOversizedEncodedBytesForImmediateFlush(t *testing.T) {
+	changefeedID := common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName)
+	spoolBuffer, err := spool.New(
+		changefeedID,
+		spool.WithRootDir(t.TempDir()),
+		spool.WithDiskQuotaBytes(100),
+	)
+	require.NoError(t, err)
+	defer spoolBuffer.Close()
+
+	encodedCh := make(chan *polymorphicRedoEvent, 1)
+	dmlWriter := &dmlWriter{
+		encodeWorkers: &encodingWorkerGroup{outputCh: encodedCh},
+		spool:         spoolBuffer,
+		spoolEntries:  chann.NewUnlimitedChannelDefault[*redoSpoolEntry](),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- dmlWriter.writeEncodedEventsToSpool(ctx)
+	}()
+
+	encodedCh <- &polymorphicRedoEvent{
+		commitTs: 1,
+		data:     []byte(strings.Repeat("a", 200)),
+	}
+	readCtx, readCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer readCancel()
+	entry, ok, err := dmlWriter.spoolEntries.GetWithContext(readCtx)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.True(t, entry.entry.InMemory())
+	require.True(t, entry.flushImmediately)
+	spoolBuffer.Release(entry.entry)
+
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
 }

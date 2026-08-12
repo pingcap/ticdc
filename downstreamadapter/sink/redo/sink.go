@@ -61,6 +61,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.C
 // New creates a new redo sink.
 func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	cfg *config.ConsistentConfig,
+	spoolQuotaBytes uint64,
 ) (*Sink, error) {
 	var err error
 	config, err := writer.NewConfig(changefeedID, cfg)
@@ -112,7 +113,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			zap.Error(err))
 		return nil, err
 	}
-	dmlWriter, err = factory.NewRedoDMLWriter(ctx, config)
+	dmlWriter, err = factory.NewRedoDMLWriter(ctx, config, spoolQuotaBytes)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", changefeedID.Keyspace()),
@@ -168,7 +169,9 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	rowsCount := event.Len()
 	events := make([]*commonEvent.RedoRowEvent, 0, rowsCount)
-	rowCallback := helper.NewPostFlushRowCallback(event, uint64(rowsCount))
+	postEnqueue, postFlush := event.DetachPostCallbacks()
+	rowPostEnqueue := helper.NewRowCallback(uint64(rowsCount), postEnqueue)
+	rowPostFlush := helper.NewRowCallback(uint64(rowsCount), postFlush)
 
 	var (
 		startTs         = event.GetStartTs()
@@ -187,7 +190,8 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 			Event:           row,
 			PhysicalTableID: physicalTableID,
 			TableInfo:       event.TableInfo,
-			Callback:        rowCallback,
+			Callback:        rowPostFlush,
+			EnqueueCallback: rowPostEnqueue,
 		})
 	}
 	s.logBuffer.Push(events...)
@@ -237,29 +241,21 @@ func (s *Sink) Close() {
 }
 
 func (s *Sink) sendMessages(ctx context.Context) error {
-	buffer := make([]*commonEvent.RedoRowEvent, 0, redo.DefaultFlushBatchSize)
 	for {
-		select {
-		case <-ctx.Done():
-			return errors.Trace(context.Cause(ctx))
-		default:
+		event, ok, err := s.logBuffer.GetWithContext(ctx)
+		if err != nil {
+			return errors.Trace(err)
 		}
-		events, ok := s.logBuffer.GetMultipleNoGroup(buffer)
 		if !ok {
 			return nil
 		}
-		if len(events) == 0 {
-			continue
-		}
-		buffer = events[:0]
 
 		start := time.Now()
-		err := s.dmlWriter.AddDMLEvents(ctx, events...)
-		if err != nil {
+		if err := s.dmlWriter.AddDMLEvents(ctx, event); err != nil {
 			return err
 		}
 		if s.metricCollector != nil {
-			s.metricCollector.observeRowWrite(len(events), time.Since(start))
+			s.metricCollector.observeRowWrite(1, time.Since(start))
 		}
 	}
 }

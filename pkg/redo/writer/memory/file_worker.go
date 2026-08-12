@@ -212,8 +212,7 @@ func (f *fileWorkerGroup) bgWriteLogs(
 	d := time.Duration(f.cfg.FlushIntervalInMs()) * time.Millisecond
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
-	num := 0
-	cacheEventPostFlush := make([]func(), 0, redo.DefaultFlushBatchSize)
+	var cacheEventPostFlush []func()
 	flush := func() error {
 		err := f.flushAll(egCtx)
 		if err != nil {
@@ -222,7 +221,6 @@ func (f *fileWorkerGroup) bgWriteLogs(
 		for _, fn := range cacheEventPostFlush {
 			fn()
 		}
-		num = 0
 		cacheEventPostFlush = cacheEventPostFlush[:0]
 		return nil
 	}
@@ -244,15 +242,11 @@ func (f *fileWorkerGroup) bgWriteLogs(
 			if err != nil {
 				return errors.Trace(err)
 			}
-			num++
-			if num > redo.DefaultFlushBatchSize {
-				err := flush()
-				if err != nil {
+			cacheEventPostFlush = append(cacheEventPostFlush, event.PostFlush)
+			if event.flushImmediately {
+				if err := flush(); err != nil {
 					return errors.Trace(err)
 				}
-				event.PostFlush()
-			} else {
-				cacheEventPostFlush = append(cacheEventPostFlush, event.PostFlush)
 			}
 		}
 	}

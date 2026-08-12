@@ -111,12 +111,59 @@ func TestRedoSinkBatchConfig(t *testing.T) {
 		context.Background(),
 		common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
 		cfg,
+		config.DefaultChangefeedMemoryQuota,
 	)
 	require.NoError(t, err)
 	defer sink.Close()
 
 	require.Equal(t, 4096, sink.BatchCount())
 	require.Equal(t, int(32*redo.Megabyte), sink.BatchBytes())
+}
+
+func TestRedoSinkTwoStageAck(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table t (id int primary key)")
+	require.NotNil(t, job)
+	event := helper.DML2Event("test", "t", "insert into t values (1), (2), (3)")
+
+	callbacks := make([]string, 0, 2)
+	event.AddPostEnqueueFunc(func() {
+		callbacks = append(callbacks, "enqueue")
+	})
+	event.AddPostFlushFunc(func() {
+		callbacks = append(callbacks, "flush")
+	})
+
+	sink := &Sink{
+		ctx:       context.Background(),
+		logBuffer: chann.NewUnlimitedChannelDefault[*commonEvent.RedoRowEvent](),
+	}
+	sink.AddDMLEvent(event)
+	require.Empty(t, callbacks)
+
+	sink.logBuffer.Close()
+	rowEvents, ok := sink.logBuffer.GetMultipleNoGroup(
+		make([]*commonEvent.RedoRowEvent, 0, event.Len()))
+	require.True(t, ok)
+	require.Len(t, rowEvents, int(event.Len()))
+
+	for _, rowEvent := range rowEvents[:len(rowEvents)-1] {
+		rowEvent.PostEnqueue()
+	}
+	require.Empty(t, callbacks)
+	rowEvents[len(rowEvents)-1].PostEnqueue()
+	require.Equal(t, []string{"enqueue"}, callbacks)
+
+	for _, rowEvent := range rowEvents[:len(rowEvents)-1] {
+		rowEvent.PostFlush()
+	}
+	require.Equal(t, []string{"enqueue"}, callbacks)
+
+	rowEvents[len(rowEvents)-1].PostFlush()
+	require.Equal(t, []string{"enqueue", "flush"}, callbacks)
 }
 
 // TestRedoSinkInProcessor tests how redo log manager is used in processor.
@@ -144,7 +191,7 @@ func TestRedoSinkInProcessor(t *testing.T) {
 		ctx, cancel := context.WithCancel(ctx)
 		cfg := newTestConsistentConfig(storage)
 		cfg.UseFileBackend = util.AddressOf(useFileBackend)
-		dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+		dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg, config.DefaultChangefeedMemoryQuota)
 		require.NoError(t, err)
 		defer dmlMgr.Close()
 
@@ -227,7 +274,7 @@ func TestRedoSinkError(t *testing.T) {
 	defer cancel()
 
 	cfg := newTestConsistentConfig("blackhole-invalid://")
-	logMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+	logMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg, config.DefaultChangefeedMemoryQuota)
 	require.NoError(t, err)
 	defer logMgr.Close()
 
@@ -281,7 +328,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	cfg.EncodingWorkerNum = util.AddressOf(redo.DefaultEncodingWorkerNum)
 	cfg.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
 	cfg.UseFileBackend = util.AddressOf(useFileBackend)
-	dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+	dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg, config.DefaultChangefeedMemoryQuota)
 	require.NoError(b, err)
 	defer dmlMgr.Close()
 
@@ -340,7 +387,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	require.ErrorIs(b, eg.Wait(), context.Canceled)
 }
 
-func TestRedoSinkSendMessagesInBatch(t *testing.T) {
+func TestRedoSinkSendMessages(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -350,25 +397,13 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWriter := writer.NewMockRedoDMLWriter(ctrl)
-	expectWriteBatch := func(batchSize int) *gomock.Call {
-		args := make([]interface{}, 0, batchSize+1)
-		args = append(args, gomock.Any()) // context
-		for range batchSize {
-			args = append(args, gomock.Any())
-		}
-		return mockWriter.EXPECT().
-			AddDMLEvents(args[0], args[1:]...).
-			DoAndReturn(func(_ context.Context, events ...*commonEvent.RedoRowEvent) error {
-				require.Len(t, events, batchSize)
-				return nil
-			})
-	}
-
-	gomock.InOrder(
-		expectWriteBatch(redo.DefaultFlushBatchSize),
-		expectWriteBatch(redo.DefaultFlushBatchSize),
-		expectWriteBatch(17),
-	)
+	mockWriter.EXPECT().
+		AddDMLEvents(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, events ...*commonEvent.RedoRowEvent) error {
+			require.Len(t, events, 1)
+			return nil
+		}).
+		Times(3)
 
 	s := &Sink{
 		dmlWriter: mockWriter,
@@ -380,9 +415,8 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 		doneCh <- s.sendMessages(ctx)
 	}()
 
-	totalEvents := redo.DefaultFlushBatchSize*2 + 17
-	events := make([]*commonEvent.RedoRowEvent, 0, totalEvents)
-	for range totalEvents {
+	events := make([]*commonEvent.RedoRowEvent, 0, 3)
+	for range 3 {
 		events = append(events, &commonEvent.RedoRowEvent{})
 	}
 	s.logBuffer.Push(events...)

@@ -436,22 +436,22 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 	w.Close()
 }
 
-func TestRunFlushesOnBatchBoundaryAndExecutesPostFlush(t *testing.T) {
+func TestRunFlushesOnIntervalAndExecutesPostFlush(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	flushIntervalInMs := int64(60 * 1000)
+	flushIntervalInMs := int64(100)
 	flushWorkerNum := 9
-	batchWriterCfg := newTestWriterConfig(
+	writerCfg := newTestWriterConfig(
 		t,
-		common.NewChangeFeedIDWithName("test-run-batch", common.DefaultKeyspaceName),
+		common.NewChangeFeedIDWithName("test-run-interval", common.DefaultKeyspaceName),
 		&config.ConsistentConfig{
 			FlushIntervalInMs: &flushIntervalInMs,
 			FlushWorkerNum:    &flushWorkerNum,
 			Storage:           util.AddressOf("file://" + dir),
 		},
 	)
-	w, err := NewFileWriter(context.Background(), batchWriterCfg, redo.RedoRowLogFileType)
+	w, err := NewFileWriter(context.Background(), writerCfg, redo.RedoRowLogFileType)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -461,7 +461,8 @@ func TestRunFlushesOnBatchBoundaryAndExecutesPostFlush(t *testing.T) {
 	}()
 
 	postFlushCnt := atomic.NewInt64(0)
-	for i := 0; i < redo.DefaultFlushBatchSize-1; i++ {
+	const eventCount = 3
+	for i := 0; i < eventCount; i++ {
 		ts := uint64(i + 1)
 		w.GetInputCh() <- &pevent.RedoRowEvent{
 			StartTs:  ts,
@@ -472,25 +473,8 @@ func TestRunFlushesOnBatchBoundaryAndExecutesPostFlush(t *testing.T) {
 		}
 	}
 
-	// The callback should not be executed before the batch reaches the boundary.
-	require.Equal(t, int64(0), postFlushCnt.Load())
-	select {
-	case err := <-runErrCh:
-		require.Failf(t, "run exited unexpectedly", "run returned before cancel: %v", err)
-	default:
-	}
-
-	ts := uint64(redo.DefaultFlushBatchSize)
-	w.GetInputCh() <- &pevent.RedoRowEvent{
-		StartTs:  ts,
-		CommitTs: ts,
-		Callback: func() {
-			postFlushCnt.Inc()
-		},
-	}
-
 	require.Eventually(t, func() bool {
-		return postFlushCnt.Load() == int64(redo.DefaultFlushBatchSize)
+		return postFlushCnt.Load() == eventCount
 	}, 10*time.Second, 20*time.Millisecond)
 
 	cancel()

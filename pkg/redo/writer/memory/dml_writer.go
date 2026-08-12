@@ -15,11 +15,20 @@ package memory
 
 import (
 	"context"
+	"encoding/binary"
+	"math"
+	"os"
+	"path/filepath"
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/spool"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -31,13 +40,22 @@ type dmlWriter struct {
 	cfg           *writer.Config
 	encodeWorkers *encodingWorkerGroup
 	fileWorkers   *fileWorkerGroup
+	spool         *spool.Spool
+	spoolEntries  *chann.UnlimitedChannel[*redoSpoolEntry, any]
 	extStorage    storeapi.Storage
 	cancel        context.CancelFunc
 }
 
+type redoSpoolEntry struct {
+	entry            *spool.Entry
+	flushImmediately bool
+}
+
+const redoSpoolDirectory = "redo-sink-spool"
+
 // NewDMLWriter creates a new memory DML writer.
 func NewDMLWriter(
-	ctx context.Context, cfg *writer.Config, opts ...writer.Option,
+	ctx context.Context, cfg *writer.Config, spoolQuotaBytes uint64, opts ...writer.Option,
 ) (writer.RedoDMLWriter, error) {
 	extStorage, err := redo.InitExternalStorage(ctx, *cfg.URI())
 	if err != nil {
@@ -45,13 +63,31 @@ func NewDMLWriter(
 	}
 
 	encodeWorkers := newEncodingWorkerGroup(cfg)
+	fileWorkerInput := make(chan *polymorphicRedoEvent, redo.DefaultEncodingOutputChanSize)
 	fileWorkers := newFileWorkerGroup(
-		cfg, encodeWorkers.outputCh, extStorage, opts...)
+		cfg, fileWorkerInput, extStorage, opts...)
+	rootDir := config.GetGlobalServerConfig().DataDir
+	if rootDir == "" {
+		rootDir = os.TempDir()
+	}
+	rootDir = filepath.Join(rootDir, redoSpoolDirectory)
+	quotaBytes := int64(min(spoolQuotaBytes, uint64(math.MaxInt64)))
+	spoolBuffer, err := spool.New(
+		cfg.ChangeFeedID(),
+		spool.WithRootDir(rootDir),
+		spool.WithDiskQuotaBytes(quotaBytes),
+	)
+	if err != nil {
+		extStorage.Close()
+		return nil, err
+	}
 
 	return &dmlWriter{
 		cfg:           cfg,
 		encodeWorkers: encodeWorkers,
 		fileWorkers:   fileWorkers,
+		spool:         spoolBuffer,
+		spoolEntries:  chann.NewUnlimitedChannelDefault[*redoSpoolEntry](),
 		extStorage:    extStorage,
 	}, nil
 }
@@ -65,9 +101,99 @@ func (l *dmlWriter) Run(ctx context.Context) error {
 		return l.encodeWorkers.Run(egCtx)
 	})
 	eg.Go(func() error {
+		return l.writeEncodedEventsToSpool(egCtx)
+	})
+	eg.Go(func() error {
+		return l.readEncodedEventsFromSpool(egCtx)
+	})
+	eg.Go(func() error {
 		return l.fileWorkers.Run(egCtx)
 	})
 	return eg.Wait()
+}
+
+func (l *dmlWriter) writeEncodedEventsToSpool(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.Trace(context.Cause(ctx))
+		case event := <-l.encodeWorkers.outputCh:
+			if event == nil {
+				return errors.ErrUnexpected.FastGenByArgs("encoded redo event is nil")
+			}
+			key := make([]byte, 8)
+			binary.LittleEndian.PutUint64(key, event.commitTs)
+			msg := common.NewMsg(key, event.data)
+			msg.Callback = event.postFlush
+
+			for {
+				action, entry, err := l.spool.TryEnqueue(
+					[]*common.Message{msg}, event.postEnqueue)
+				if err != nil {
+					return err
+				}
+				if action == spool.EnqueueActionWaitDiskQuota {
+					if err := l.spool.WaitForDiskQuota(ctx, []*common.Message{msg}); err != nil {
+						return err
+					}
+					continue
+				}
+				l.spoolEntries.Push(&redoSpoolEntry{
+					entry:            entry,
+					flushImmediately: action == spool.EnqueueActionAcceptedOversized,
+				})
+				break
+			}
+		}
+	}
+}
+
+func (l *dmlWriter) readEncodedEventsFromSpool(ctx context.Context) error {
+	for {
+		spooled, ok, err := l.spoolEntries.GetWithContext(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		entry := spooled.entry
+		reader, err := l.spool.NewMessageReader(entry)
+		if err != nil {
+			return err
+		}
+		key, data, _, ok, err := reader.Next()
+		if err != nil {
+			return err
+		}
+		if !ok || len(key) != 8 || len(data) == 0 {
+			return errors.ErrUnexpected.FastGenByArgs("invalid encoded redo spool entry")
+		}
+		_, _, _, hasMore, err := reader.Next()
+		if err != nil {
+			return err
+		}
+		if hasMore {
+			return errors.ErrUnexpected.FastGenByArgs("encoded redo spool entry contains multiple messages")
+		}
+		postFlushCallbacks := reader.PostFlushCallbacks()
+		encodedEvent := &polymorphicRedoEvent{
+			commitTs:         binary.LittleEndian.Uint64(key),
+			data:             data,
+			flushImmediately: spooled.flushImmediately,
+			postFlush: func() {
+				for _, callback := range postFlushCallbacks {
+					callback()
+				}
+				l.spool.Release(entry)
+			},
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Trace(context.Cause(ctx))
+		case l.fileWorkers.inputCh <- encodedEvent:
+		}
+	}
 }
 
 func (l *dmlWriter) AddDMLEvents(ctx context.Context, events ...*commonEvent.RedoRowEvent) error {
@@ -93,6 +219,10 @@ func (l *dmlWriter) Close() error {
 	if l.extStorage != nil {
 		l.extStorage.Close()
 		l.extStorage = nil
+	}
+	if l.spool != nil {
+		l.spool.Close()
+		l.spool = nil
 	}
 	return nil
 }

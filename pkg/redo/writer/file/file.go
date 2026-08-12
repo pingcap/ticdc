@@ -355,8 +355,7 @@ func (w *Writer) encode(ctx context.Context) error {
 	d := time.Duration(w.cfg.FlushIntervalInMs()) * time.Millisecond
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
-	num := 0
-	cacheEventPostFlush := make([]func(), 0, redo.DefaultFlushBatchSize)
+	var cacheEventPostFlush []func()
 	flush := func() error {
 		err := w.Flush()
 		if err != nil {
@@ -365,7 +364,6 @@ func (w *Writer) encode(ctx context.Context) error {
 		for _, fn := range cacheEventPostFlush {
 			fn()
 		}
-		num = 0
 		cacheEventPostFlush = cacheEventPostFlush[:0]
 		return nil
 	}
@@ -383,16 +381,7 @@ func (w *Writer) encode(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			num++
-			if num >= redo.DefaultFlushBatchSize {
-				err := flush()
-				if err != nil {
-					return errors.Trace(err)
-				}
-				e.PostFlush()
-			} else {
-				cacheEventPostFlush = append(cacheEventPostFlush, e.PostFlush)
-			}
+			cacheEventPostFlush = append(cacheEventPostFlush, e.PostFlush)
 		}
 	}
 }
