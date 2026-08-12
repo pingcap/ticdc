@@ -26,11 +26,6 @@ import (
 
 const kafkaTopicManagerTestTopic = "mock_topic"
 
-func adminAuthorizationError(operation, resource string) error {
-	authorizationErr := errors.ErrKafkaAdminAuthorizationFailed.FastGenByArgs(operation, resource)
-	return errors.WrapError(errors.ErrKafkaAdminAPI, authorizationErr, operation, resource)
-}
-
 func TestCreateTopic(t *testing.T) {
 	t.Parallel()
 
@@ -277,7 +272,7 @@ func TestCreateTopicWithTopicDescribeDenied(t *testing.T) {
 	adminClient := kafka.NewMockAdminClient(ctrl)
 	adminClient.EXPECT().GetTopicsMeta([]string{"default-topic"}, true).Return(map[string]kafka.TopicDetail{}, nil)
 	adminClient.EXPECT().GetTopicsMeta([]string{"default-topic"}, false).Return(
-		nil, adminAuthorizationError("describe-topic", "default-topic"))
+		nil, errors.ErrKafkaAdminAuthorizationFailed.GenWithStackByArgs("describe-topic", "default-topic"))
 	manager := newKafkaTopicManager(
 		"default-topic",
 		common.NewChangefeedID4Test("test", "test"),
@@ -309,7 +304,7 @@ func TestCreateTopicWithCreateDenied(t *testing.T) {
 		Name:              "default-topic",
 		NumPartitions:     2,
 		ReplicationFactor: 1,
-	}).Return(adminAuthorizationError("create-topic", "default-topic"))
+	}).Return(errors.ErrKafkaAdminAuthorizationFailed.GenWithStackByArgs("create-topic", "default-topic"))
 	manager := newKafkaTopicManager(
 		"default-topic",
 		common.NewChangefeedID4Test("test", "test"),

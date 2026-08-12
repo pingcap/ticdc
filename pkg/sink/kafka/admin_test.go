@@ -234,17 +234,16 @@ func TestSaramaAdminAuthorizationErrorMapping(t *testing.T) {
 		sarama.ErrTopicAuthorizationFailed,
 		sarama.ErrClusterAuthorizationFailed,
 	} {
-		cause := cause
 		t.Run(cause.Error(), func(t *testing.T) {
 			err := wrapSaramaAdminError(cause, "describe-topic", "test-topic")
 
 			require.ErrorIs(t, err, errors.ErrKafkaAdminAuthorizationFailed)
-			require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+			require.NotErrorIs(t, err, errors.ErrKafkaAdminAPI)
 			require.ErrorIs(t, err, cause)
 			require.True(t, IsAdminAuthorizationFailed(err))
 			code, ok := errors.RFCCode(err)
 			require.True(t, ok)
-			require.Equal(t, errors.ErrKafkaAdminAPI.RFCCode(), code)
+			require.Equal(t, errors.ErrKafkaAdminAuthorizationFailed.RFCCode(), code)
 		})
 	}
 
@@ -262,18 +261,18 @@ func TestCreateTopic(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		adminErr    error
-		expectedErr error
+		name          string
+		adminErr      error
+		expectedErr   error
+		authorization bool
 	}{
 		{name: "success"},
 		{name: "topic already exists", adminErr: sarama.ErrTopicAlreadyExists},
-		{name: "authorization error", adminErr: sarama.ErrClusterAuthorizationFailed, expectedErr: errors.ErrKafkaAdminAuthorizationFailed},
+		{name: "authorization error", adminErr: sarama.ErrClusterAuthorizationFailed, expectedErr: errors.ErrKafkaAdminAuthorizationFailed, authorization: true},
 		{name: "general error", adminErr: sarama.ErrInvalidReplicationFactor, expectedErr: errors.ErrKafkaAdminAPI},
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			admin := NewMocksaramaClusterAdmin(ctrl)
@@ -297,8 +296,10 @@ func TestCreateTopic(t *testing.T) {
 				return
 			}
 			require.ErrorIs(t, err, test.expectedErr)
-			require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
 			require.ErrorIs(t, err, test.adminErr)
+			if test.authorization {
+				require.NotErrorIs(t, err, errors.ErrKafkaAdminAPI)
+			}
 		})
 	}
 }

@@ -142,16 +142,11 @@ func IsAdminAuthorizationFailed(err error) bool {
 }
 
 func wrapSaramaAdminError(err error, operation, resource string) error {
-	if isSaramaAdminAuthorizationFailed(err) {
-		// Preserve the ErrKafkaAdminAPI RFC code and avoid adding a second stack.
-		err = errors.ErrKafkaAdminAuthorizationFailed.Wrap(err).FastGenByArgs(operation, resource)
+	if errors.Is(err, sarama.ErrTopicAuthorizationFailed) ||
+		errors.Is(err, sarama.ErrClusterAuthorizationFailed) {
+		return errors.WrapError(errors.ErrKafkaAdminAuthorizationFailed, err, operation, resource)
 	}
 	return errors.WrapError(errors.ErrKafkaAdminAPI, err, operation, resource)
-}
-
-func isSaramaAdminAuthorizationFailed(err error) bool {
-	return errors.Is(err, sarama.ErrTopicAuthorizationFailed) ||
-		errors.Is(err, sarama.ErrClusterAuthorizationFailed)
 }
 
 func (a *saramaAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
