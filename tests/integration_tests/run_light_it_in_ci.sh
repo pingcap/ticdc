@@ -50,7 +50,7 @@ mysql_groups=(
 	# G08
 	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I table_route'
 	# G09
-	'sequence cdc_server_tips ddl_sequence server_config_compatibility log_redaction fail_over_ddl_J'
+	'sequence cdc_server_tips ddl_sequence rename_table_start_ts server_config_compatibility log_redaction fail_over_ddl_J'
 	# G10
 	'overwrite_resume_with_syncpoint restart_changefeed changefeed_error bdr_mode fail_over_ddl_K split_table_check'
 	# G11

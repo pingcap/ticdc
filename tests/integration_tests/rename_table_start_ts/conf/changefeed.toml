@@ -1,0 +1,6 @@
+[filter]
+rules = ["rename_table_start_ts_source.*", "rename_table_start_ts_target.*"]
+
+[[filter.event-filters]]
+matcher = ["rename_table_start_ts_source.t"]
+ignore-event = ["rename table"]
