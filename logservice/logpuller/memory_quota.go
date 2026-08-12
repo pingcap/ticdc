@@ -315,10 +315,7 @@ func (c *memoryQuotaController) refreshAdmissionAndNotify() {
 
 func (c *memoryQuotaController) estimateScanSizeLocked(region regionInfo, currentTs uint64) uint64 {
 	raw := float64(c.scanEstimate) * scanLagFactor(region.resolvedTs(), currentTs)
-	estimate := uint64(raw)
-	if estimate < c.scanEstimate {
-		estimate = c.scanEstimate
-	}
+	estimate := max(uint64(raw), c.scanEstimate)
 	maxEstimate := uint64(math.MaxUint64)
 	if c.scanEstimate <= math.MaxUint64/defaultMaxScanLagFactor {
 		maxEstimate = c.scanEstimate * defaultMaxScanLagFactor
