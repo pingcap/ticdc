@@ -56,27 +56,27 @@ func newTokenProvider(ctx context.Context, o *options) (sarama.AccessTokenProvid
 	// client credentials library as defined by the spec, however non-compliant
 	// auth server implementations may want a custom type
 	endpointParams := url.Values{}
-	if o.SASL.OAuth2.GrantType != "" {
-		endpointParams.Set("grant_type", o.SASL.OAuth2.GrantType)
+	if o.sasl.oauth2.grantType != "" {
+		endpointParams.Set("grant_type", o.sasl.oauth2.grantType)
 	}
 
 	// audience is an optional parameter that can be used to specify the
 	// intended audience of the token.
-	if o.SASL.OAuth2.Audience != "" {
-		endpointParams.Set("audience", o.SASL.OAuth2.Audience)
+	if o.sasl.oauth2.audience != "" {
+		endpointParams.Set("audience", o.sasl.oauth2.audience)
 	}
 
-	tokenURL, err := url.Parse(o.SASL.OAuth2.TokenURL)
+	tokenURL, err := url.Parse(o.sasl.oauth2.tokenURL)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
 
 	cfg := clientcredentials.Config{
-		ClientID:       o.SASL.OAuth2.ClientID,
-		ClientSecret:   o.SASL.OAuth2.ClientSecret,
+		ClientID:       o.sasl.oauth2.clientID,
+		ClientSecret:   o.sasl.oauth2.clientSecret,
 		TokenURL:       tokenURL.String(),
 		EndpointParams: endpointParams,
-		Scopes:         o.SASL.OAuth2.Scopes,
+		Scopes:         o.sasl.oauth2.scopes,
 	}
 	return &tokenProvider{
 		tokenSource: cfg.TokenSource(ctx),
