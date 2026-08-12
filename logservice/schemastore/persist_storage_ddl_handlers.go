@@ -830,27 +830,19 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	oldSchemaID := int64(0)
 	oldSchemaName := ""
 	oldTableName := ""
-	oldSchemaSource := "unknown"
 
 	// Start with the lower-case old schema/table names recorded for DDL dependency checks.
 	if len(args.job.InvolvingSchemaInfo) > 0 {
 		oldSchemaName = args.job.InvolvingSchemaInfo[0].Database
 		oldTableName = args.job.InvolvingSchemaInfo[0].Table
-		if oldSchemaName != "" {
-			oldSchemaSource = "involving_schema_info"
-		}
 	}
 
 	// Recover the authoritative old schema ID and its case-preserving name from job args.
 	if args.job.Version == model.JobVersion1 || args.job.Version == model.JobVersion2 {
 		if renameArgs, err := model.GetRenameTableArgs(args.job); err == nil {
 			oldSchemaID = renameArgs.OldSchemaID
-			if oldSchemaID != 0 {
-				oldSchemaSource = "rename_table_args_old_schema_id"
-			}
 			if renameArgs.OldSchemaName.O != "" {
 				oldSchemaName = renameArgs.OldSchemaName.O
-				oldSchemaSource = "rename_table_args"
 			}
 		} else {
 			log.Warn("failed to get rename table args from ddl job",
@@ -860,15 +852,28 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		}
 	}
 
-	// Recover the old table name from SQL, and prefer its schema spelling when explicitly present.
-	queryInfo, parsed := parseRenameTableQueryInfo(args.job.Query)
+	// Recover the old table name from the normalized SQL, and prefer its schema spelling
+	// when it identifies the same schema as the DDL job args. event.Query has already been
+	// parsed with job.SQLMode and restored by buildPersistedDDLEventCommon.
+	queryInfo, parsed := parseRenameTableQueryInfo(event.Query)
 	if parsed {
 		if queryInfo.oldTableName != "" {
 			oldTableName = queryInfo.oldTableName
 		}
 		if queryInfo.oldSchemaName != "" {
-			oldSchemaName = queryInfo.oldSchemaName
-			oldSchemaSource = "query"
+			queryOldSchemaID, _ := findSchemaIDByName(args.databaseMap, queryInfo.oldSchemaName)
+			if oldSchemaID != 0 && oldSchemaID != queryOldSchemaID {
+				log.Warn("rename table old schema is inconsistent between job args and query",
+					zap.Int64("jobID", args.job.ID),
+					zap.Int64("argsOldSchemaID", oldSchemaID),
+					zap.Int64("queryOldSchemaID", queryOldSchemaID),
+					zap.String("queryOldSchemaName", queryInfo.oldSchemaName),
+					zap.String("query", event.Query))
+				oldSchemaName = getSchemaName(args.databaseMap, oldSchemaID)
+			} else {
+				oldSchemaID = queryOldSchemaID
+				oldSchemaName = queryInfo.oldSchemaName
+			}
 		}
 	}
 
@@ -877,29 +882,20 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		oldSchemaID, _ = findSchemaIDByName(args.databaseMap, oldSchemaName)
 	}
 	if queryInfo.oldSchemaName == "" {
-		if oldSchema, ok := args.databaseMap[oldSchemaID]; ok {
+		if oldSchemaID != 0 {
 			// SQL does not provide the old schema spelling. Use databaseMap to replace
 			// the lower-case InvolvingSchemaInfo name with its original capitalization.
-			oldSchemaName = oldSchema.Name
+			oldSchemaName = getSchemaName(args.databaseMap, oldSchemaID)
 		}
 	}
 
 	// TiDB v7.5+ rename jobs provide the old schema through job args and the old table
-	// through SQL, so they do not normally need the fallbacks below. Keep them only for
-	// malformed jobs or jobs created by unsupported TiDB versions.
-	if oldSchemaID == 0 {
+	// through SQL. For malformed or unsupported jobs, fall back to the complete snapshot
+	// identity instead of combining fields from different sources.
+	if oldSchemaID == 0 || oldSchemaName == "" || oldTableName == "" {
 		oldSchemaID = getSchemaID(args.tableMap, event.TableID)
-		oldSchemaSource = "table_map_fallback"
-	}
-	if oldTableName == "" {
+		oldSchemaName = getSchemaName(args.databaseMap, oldSchemaID)
 		oldTableName = getTableName(args.tableMap, event.TableID)
-	}
-	if oldSchemaName == "" {
-		// The old schema may not be tracked. Keep the name empty instead of calling
-		// getSchemaName, which panics for an unknown schema ID.
-		if oldSchema, ok := args.databaseMap[oldSchemaID]; ok {
-			oldSchemaName = oldSchema.Name
-		}
 	}
 
 	// Persist the recovered old identity for downstream filtering and coordination.
@@ -908,7 +904,7 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	event.ExtraTableName = oldTableName
 
 	// Keep the executable query consistent with the recovered structured metadata.
-	if oldSchemaName != "" && oldTableName != "" {
+	if event.ExtraSchemaName != "" && event.ExtraTableName != "" {
 		log.Info("rebuild rename table query",
 			zap.Int64("jobID", event.ID),
 			zap.String("query", event.Query),
@@ -917,12 +913,9 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 			zap.String("tableName", event.TableName),
 			zap.Int64("extraSchemaID", event.ExtraSchemaID),
 			zap.String("extraSchemaName", event.ExtraSchemaName),
-			zap.String("extraTableName", event.ExtraTableName),
-			zap.String("oldSchemaName", oldSchemaName),
-			zap.String("oldTableName", oldTableName),
-			zap.String("oldSchemaSource", oldSchemaSource))
+			zap.String("extraTableName", event.ExtraTableName))
 		event.Query = fmt.Sprintf("RENAME TABLE %s TO %s",
-			common.QuoteSchema(oldSchemaName, oldTableName),
+			common.QuoteSchema(event.ExtraSchemaName, event.ExtraTableName),
 			common.QuoteSchema(event.SchemaName, event.TableName))
 	}
 	return event

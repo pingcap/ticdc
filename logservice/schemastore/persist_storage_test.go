@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -3282,6 +3283,84 @@ func TestRenameTableRepairsOldTableMetadata(t *testing.T) {
 			DropName: []commonEvent.SchemaTableName{{SchemaName: "source_db", TableName: "t1"}},
 		}, ddlEvent.TableNameChange)
 	})
+
+	t.Run("parse normalized query with ANSI quotes", func(t *testing.T) {
+		job := buildRenameTableJobForTest(100, 101, "NewTable", 100, &model.InvolvingSchemaInfo{
+			Database: "sourcedb",
+			Table:    "oldtable",
+		})
+		job.Version = model.JobVersion2
+		job.SQLMode = mysql.ModeANSIQuotes
+		job.FillArgs(&model.RenameTableArgs{
+			OldSchemaID:   200,
+			OldSchemaName: ast.NewCIStr("SourceDB"),
+			NewTableName:  ast.NewCIStr("NewTable"),
+		})
+		job.Query = `RENAME TABLE "SourceDB"."OldTable" TO "TargetDB"."NewTable"`
+
+		rawEvent := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "TargetDB", Tables: map[int64]bool{101: true}},
+				200: {Name: "SourceDB", Tables: map[int64]bool{}},
+			},
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "NewTable"},
+			},
+		})
+
+		require.Equal(t, int64(200), rawEvent.ExtraSchemaID)
+		require.Equal(t, "SourceDB", rawEvent.ExtraSchemaName)
+		require.Equal(t, "OldTable", rawEvent.ExtraTableName)
+		require.Equal(t, "RENAME TABLE `SourceDB`.`OldTable` TO `TargetDB`.`NewTable`", rawEvent.Query)
+	})
+
+	t.Run("prefer job args when query schema ID is inconsistent", func(t *testing.T) {
+		job := buildRenameTableJobForTest(100, 101, "target_t", 100, nil)
+		job.Version = model.JobVersion2
+		job.FillArgs(&model.RenameTableArgs{
+			OldSchemaID:   200,
+			OldSchemaName: ast.NewCIStr("source_db"),
+			NewTableName:  ast.NewCIStr("target_t"),
+		})
+		job.Query = "RENAME TABLE wrong_db.source_t TO target_db.target_t"
+
+		rawEvent := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "target_db", Tables: map[int64]bool{101: true}},
+				200: {Name: "source_db", Tables: map[int64]bool{}},
+				300: {Name: "wrong_db", Tables: map[int64]bool{}},
+			},
+			// The snapshot contains the post-rename identity and must not be mixed in.
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "target_t"},
+			},
+		})
+
+		require.Equal(t, int64(200), rawEvent.ExtraSchemaID)
+		require.Equal(t, "source_db", rawEvent.ExtraSchemaName)
+		require.Equal(t, "source_t", rawEvent.ExtraTableName)
+		require.Equal(t, "RENAME TABLE `source_db`.`source_t` TO `target_db`.`target_t`", rawEvent.Query)
+	})
+
+	t.Run("fall back to complete snapshot identity", func(t *testing.T) {
+		job := buildRenameTableJobForTest(100, 101, "target_t", 100, nil)
+
+		rawEvent := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "snapshot_db", Tables: map[int64]bool{101: true}},
+			},
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "snapshot_t"},
+			},
+		})
+
+		require.Equal(t, int64(100), rawEvent.ExtraSchemaID)
+		require.Equal(t, "snapshot_db", rawEvent.ExtraSchemaName)
+		require.Equal(t, "snapshot_t", rawEvent.ExtraTableName)
+	})
 }
 
 func TestBuildPersistedDDLEventForRenameTablesFallbackOldTableName(t *testing.T) {
@@ -3484,9 +3563,10 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "target`db", Tables: map[int64]bool{101: true}},
+				200: {Name: "source`db", Tables: map[int64]bool{}},
 			},
 			tableMap: map[int64]*BasicTableInfo{
-				101: {SchemaID: 100, Name: "source`t"},
+				101: {SchemaID: 200, Name: "source`t"},
 			},
 		})
 
