@@ -796,11 +796,11 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		apply: func(tableIDs ...int64) {
 			for _, tableID := range tableIDs {
 				if store, ok := p.tableInfoStoreMap[tableID]; ok {
-					// do some safety check
 					switch model.ActionType(job.Type) {
 					case model.ActionCreateTable, model.ActionCreateTables:
-						// newly created tables should not be registered before this ddl are handled
-						log.Panic("should not be registered", zap.Int64("tableID", tableID))
+						log.Warn("table was registered before create DDL was handled",
+							zap.Int64("tableID", tableID),
+							zap.Uint64("finishedTs", ddlEvent.FinishedTs))
 					default:
 					}
 					store.applyDDL(&ddlEvent)

@@ -2718,6 +2718,55 @@ func TestRegisterTable(t *testing.T) {
 		queryCases    []QueryTableInfoTestCase
 	}{
 		{
+			name: "create table registered before DDL",
+			initialDBInfos: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   50,
+						Name: ast.NewCIStr("test"),
+					},
+				},
+			},
+			ddlJobs: []*model.Job{
+				buildCreateTableJobForTest(50, 99, "t1", 1000),
+			},
+			preDDLTables: []int64{99},
+			queryCases: []QueryTableInfoTestCase{
+				{
+					tableID: 99,
+					snapTs:  1000,
+					name:    "t1",
+				},
+			},
+		},
+		{
+			name: "create tables registered before DDL",
+			initialDBInfos: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   50,
+						Name: ast.NewCIStr("test"),
+					},
+				},
+			},
+			ddlJobs: []*model.Job{
+				buildCreateTablesJobForTest(50, []int64{99, 100}, []string{"t1", "t2"}, 1000),
+			},
+			preDDLTables: []int64{99, 100},
+			queryCases: []QueryTableInfoTestCase{
+				{
+					tableID: 99,
+					snapTs:  1000,
+					name:    "t1",
+				},
+				{
+					tableID: 100,
+					snapTs:  1000,
+					name:    "t2",
+				},
+			},
+		},
+		{
 			name: "rename table",
 			initialDBInfos: []mockDBInfo{
 				{
