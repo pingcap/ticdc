@@ -342,8 +342,7 @@ func (c *Controller) observeDrainNode(target node.ID, epoch uint64) drainNodeObs
 	)
 
 	_, observation.drainingObserved, observation.stoppingObserved = c.drainController.GetStatus(target)
-	observation.logServiceDispatcherCount, observation.logServiceDispatcherCountObserved =
-		c.drainController.GetLogServiceDispatcherCount(target)
+	observation.logServiceDispatcherCount, observation.logServiceDispatcherCountObserved = c.drainController.GetLogServiceDispatcherCount(target)
 	observation.nodeState = c.drainController.GetState(target)
 	return observation
 }
