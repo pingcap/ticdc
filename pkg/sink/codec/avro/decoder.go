@@ -115,19 +115,21 @@ func (d *decoder) NextResolvedEvent() uint64 {
 
 // NextDMLMessage returns the next row changed message if exists
 func (d *decoder) NextDMLMessage() *common.DMLMessage {
-	keyMap, valueMap, valueSchema, isDelete, deleteCommitTs := d.decodeDMLPayload()
+	keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs := d.decodeDMLPayload()
 	schemaName, tableName := schemaAndTableName(valueSchema)
 	commitTs := deleteCommitTs
-	if commitTs == 0 && !isDelete {
+	if hasValue {
 		commitTs = uint64(valueMap[tidbCommitTs].(int64))
 	}
 	rowType := commonType.RowTypeInsert
 	if isDelete {
 		rowType = commonType.RowTypeDelete
+	} else if operation, ok := valueMap[tidbOp]; ok && operation == updateOperation {
+		rowType = commonType.RowTypeUpdate
 	}
 	tableID := tableIDAllocator.Allocate(schemaName, tableName)
 	return common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
-		return d.assembleDMLEventFromDecoded(keyMap, valueMap, valueSchema, isDelete, deleteCommitTs)
+		return d.assembleDMLEventFromDecoded(keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs)
 	})
 }
 
@@ -136,6 +138,7 @@ func (d *decoder) decodeDMLPayload() (
 	valueMap map[string]any,
 	valueSchema map[string]any,
 	isDelete bool,
+	hasValue bool,
 	deleteCommitTs uint64,
 ) {
 	var (
@@ -149,12 +152,13 @@ func (d *decoder) decodeDMLPayload() (
 		log.Panic("decode key failed", zap.Error(err))
 	}
 
-	// for the delete event, only have key part, it holds primary key or the unique key columns.
-	// for the insert / update, extract the value part, it holds all columns.
-	isDelete = len(d.value) == 0 || d.isDeleteValue()
-	if isDelete {
-		// delete event only have key part, treat it as the value part also.
-		if d.isDeleteValue() {
+	isDeleteValue := d.isDeleteValue()
+	hasValue = len(d.value) != 0 && !isDeleteValue
+	isDelete = !hasValue
+	if !hasValue {
+		// Legacy delete event only has the key payload or a delete marker value.
+		// It can only be decoded as a delete row with key columns in PreRow.
+		if isDeleteValue {
 			deleteCommitTs = d.decodeDeleteCommitTs()
 		}
 		valueMap = keyMap
@@ -164,9 +168,12 @@ func (d *decoder) decodeDMLPayload() (
 		if err != nil {
 			log.Panic("decode value failed", zap.Error(err))
 		}
+		if operation, ok := valueMap[tidbOp]; ok {
+			isDelete = operation == deleteOperation
+		}
 	}
 
-	return keyMap, valueMap, valueSchema, isDelete, deleteCommitTs
+	return keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs
 }
 
 func (d *decoder) assembleDMLEventFromDecoded(
@@ -174,9 +181,10 @@ func (d *decoder) assembleDMLEventFromDecoded(
 	valueMap map[string]any,
 	valueSchema map[string]any,
 	isDelete bool,
+	hasValue bool,
 	deleteCommitTs uint64,
 ) *commonEvent.DMLEvent {
-	event, err := assembleEvent(keyMap, valueMap, valueSchema, isDelete)
+	event, err := assembleEvent(keyMap, valueMap, valueSchema, isDelete, hasValue)
 	if err != nil {
 		log.Panic("assemble event failed", zap.Error(err))
 	}
@@ -185,22 +193,23 @@ func (d *decoder) assembleDMLEventFromDecoded(
 		event.CommitTs = deleteCommitTs
 	}
 
-	// Delete event only has Primary Key Columns, but the checksum is calculated based on the whole row columns,
-	// checksum verification cannot be done here, so skip it.
-	if isDelete {
+	if !hasValue {
 		return event
 	}
 
 	expectedChecksum, found := extractExpectedChecksum(valueMap)
 	corrupted := isCorrupted(valueMap)
 	if found {
-		event.Checksum = []*integrity.Checksum{{
-			Current:   uint32(expectedChecksum),
-			Corrupted: corrupted,
-		}}
+		checksum := &integrity.Checksum{Corrupted: corrupted}
+		if isDelete {
+			checksum.Previous = uint32(expectedChecksum)
+		} else {
+			checksum.Current = uint32(expectedChecksum)
+		}
+		event.Checksum = []*integrity.Checksum{checksum}
 	}
 
-	if isCorrupted(valueMap) {
+	if corrupted {
 		log.Warn("row data is corrupted",
 			zap.String("topic", d.topic), zap.Uint64("checksum", expectedChecksum))
 		for _, col := range event.TableInfo.GetColumns() {
@@ -241,15 +250,112 @@ func (d *decoder) decodeDeleteCommitTs() uint64 {
 
 // assembleEvent return a row changed event
 // keyMap hold primary key or unique key columns
-// valueMap hold all columns information
+// valueMap holds all columns for insert/update and before-value delete.
+// For legacy delete, valueMap is keyMap and only contains handle columns.
 // schema is corresponding to the valueMap, it can be used to decode the valueMap to construct columns.
 func assembleEvent(
-	keyMap, valueMap, schema map[string]any, isDelete bool,
+	keyMap, valueMap, schema map[string]any, isDelete bool, hasValue bool,
 ) (*commonEvent.DMLEvent, error) {
 	fields, ok := schema["fields"].([]any)
 	if !ok {
-		return nil, errors.New("schema fields should be a map")
+		return nil, errors.ErrCodecDecode.GenWithStack("schema fields should be a map")
 	}
+
+	columns, data, err := avroData2Columns(valueMap, fields)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	beforeMap, hasBefore, err := extractBeforeValueMap(valueMap)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	var beforeData map[string]any
+	if hasBefore {
+		_, beforeData, err = avroData2Columns(beforeMap, fields)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+	}
+
+	schemaName, tableName := schemaAndTableName(schema)
+
+	var commitTs int64
+	if hasValue {
+		o, ok := valueMap[tidbCommitTs]
+		if !ok {
+			return nil, errors.ErrCodecDecode.GenWithStack("commit ts not found")
+		}
+		commitTs = o.(int64)
+	}
+
+	event := new(commonEvent.DMLEvent)
+	event.TableInfo = queryTableInfo(schemaName, tableName, columns, keyMap)
+	event.StartTs = uint64(commitTs)
+	event.CommitTs = uint64(commitTs)
+	event.PhysicalTableID = event.TableInfo.TableName.TableID
+	event.Rows = chunk.NewChunkFromPoolWithCapacity(event.TableInfo.GetFieldSlice(), chunk.InitialCapacity)
+	event.AddPostFlushFunc(func() {
+		event.Rows.Destroy(chunk.InitialCapacity, event.TableInfo.GetFieldSlice())
+	})
+	event.Length++
+	if isDelete {
+		if hasValue {
+			if !hasBefore {
+				return nil, errors.ErrCodecDecode.GenWithStack("before value not found for delete event")
+			}
+			common.AppendRow2Chunk(beforeData, event.TableInfo.GetColumns(), event.Rows)
+		} else {
+			common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
+		}
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeDelete)
+	} else if hasBefore {
+		common.AppendRow2Chunk(beforeData, event.TableInfo.GetColumns(), event.Rows)
+		common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeUpdate)
+	} else {
+		common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeInsert)
+	}
+	return event, nil
+}
+
+func isAvroExtensionField(name string) bool {
+	switch name {
+	case tidbOp, tidbCommitTs, tidbPhysicalTime, tidbRowLevelChecksum,
+		tidbChecksumVersion, tidbCorrupted, ticdcBefore:
+		return true
+	default:
+		return false
+	}
+}
+
+func extractBeforeValueMap(valueMap map[string]any) (map[string]any, bool, error) {
+	rawBefore, ok := valueMap[ticdcBefore]
+	if !ok || rawBefore == nil {
+		return nil, false, nil
+	}
+
+	beforeUnion, ok := rawBefore.(map[string]any)
+	if !ok {
+		return nil, false, errors.ErrCodecDecode.GenWithStack("before value should be a map")
+	}
+	for unionName, value := range beforeUnion {
+		if unionName == "null" || value == nil {
+			return nil, false, nil
+		}
+		before, ok := value.(map[string]any)
+		if !ok {
+			return nil, false, errors.ErrCodecDecode.GenWithStack("before record should be a map")
+		}
+		return before, true, nil
+	}
+	return nil, false, nil
+}
+
+func avroData2Columns(
+	valueMap map[string]any, fields []any,
+) ([]*timodel.ColumnInfo, map[string]any, error) {
 	columns := make([]*timodel.ColumnInfo, 0, len(valueMap))
 	data := make(map[string]any, 0)
 	// fields is ordered by the column id, so iterate over it to build columns
@@ -257,12 +363,11 @@ func assembleEvent(
 	for idx, item := range fields {
 		field, ok := item.(map[string]any)
 		if !ok {
-			return nil, errors.New("schema field should be a map")
+			return nil, nil, errors.ErrCodecDecode.GenWithStack("schema field should be a map")
 		}
-		// `tidbOp` is the first extension field in the schema,
-		// it's not real columns, so break here.
+		// Extension fields are not real columns, so break here.
 		colName := field["name"].(string)
-		if colName == tidbOp {
+		if isAvroExtensionField(colName) {
 			break
 		}
 		// query the field to get `tidbType`, and get the mysql type from it.
@@ -286,11 +391,11 @@ func assembleEvent(
 		flag := flagFromTiDBType(tidbType)
 		value, ok := valueMap[colName]
 		if !ok {
-			return nil, errors.New("value not found")
+			return nil, nil, errors.ErrCodecDecode.GenWithStack("value not found")
 		}
 		value, err := getColumnValue(value, holder, mysqlType, flag)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, nil, errors.Trace(err)
 		}
 		data[colName] = value
 
@@ -303,41 +408,16 @@ func assembleEvent(
 		tiCol.SetFlag(flag)
 		columns = append(columns, tiCol)
 	}
-
-	schemaName, tableName := schemaAndTableName(schema)
-
-	var commitTs int64
-	if !isDelete {
-		o, ok := valueMap[tidbCommitTs]
-		if !ok {
-			return nil, errors.New("commit ts not found")
-		}
-		commitTs = o.(int64)
-	}
-
-	event := new(commonEvent.DMLEvent)
-	event.TableInfo = queryTableInfo(schemaName, tableName, columns, keyMap)
-	event.StartTs = uint64(commitTs)
-	event.CommitTs = uint64(commitTs)
-	event.PhysicalTableID = event.TableInfo.TableName.TableID
-	event.Rows = chunk.NewChunkFromPoolWithCapacity(event.TableInfo.GetFieldSlice(), chunk.InitialCapacity)
-	event.AddPostFlushFunc(func() {
-		event.Rows.Destroy(chunk.InitialCapacity, event.TableInfo.GetFieldSlice())
-	})
-	event.Length++
-	common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
-
-	rowType := commonType.RowTypeInsert
-	if isDelete {
-		rowType = commonType.RowTypeDelete
-	}
-	event.RowTypes = append(event.RowTypes, rowType)
-	return event, nil
+	return columns, data, nil
 }
 
 func schemaAndTableName(schema map[string]any) (string, string) {
 	namespace := schema["namespace"].(string)
-	return strings.Split(namespace, ".")[1], schema["name"].(string)
+	parts := strings.SplitN(namespace, ".", 2)
+	if len(parts) < 2 {
+		return "", schema["name"].(string)
+	}
+	return parts[1], schema["name"].(string)
 }
 
 func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]any) *commonType.TableInfo {
