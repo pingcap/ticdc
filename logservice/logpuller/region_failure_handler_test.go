@@ -115,7 +115,7 @@ func TestErrCachePopBatch(t *testing.T) {
 }
 
 func TestRegionFailureHandlerRunDrainsErrCacheWithoutDispatcher(t *testing.T) {
-	handler := newRegionFailureHandler(&subscriptionClient{})
+	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
 	for i := 0; i < errCacheBatchSize+5; i++ {
 		handler.cache.add(newTestRegionErrorInfo(&requestCancelledErr{}))
 	}
