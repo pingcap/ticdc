@@ -547,7 +547,9 @@ func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableIn
 	var allDDLFinishedTs []uint64
 	allDDLFinishedTs = append(allDDLFinishedTs, p.tablesDDLHistory[tableID]...)
 	p.mu.RUnlock()
-	defer storageSnap.Close()
+	defer func() {
+		_ = storageSnap.Close()
+	}()
 
 	if err := addTableInfoFromKVSnap(
 		store, kvSnapVersion, storageSnap, p.encryptionManager, p.keyspaceID,
