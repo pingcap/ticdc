@@ -791,6 +791,13 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		tableTriggerDDLHistory: p.tableTriggerDDLHistory,
 	})
 
+	// A drop-schema DDL removes the database metadata below. Collect its physical
+	// table IDs first so registered version stores also receive the delete version.
+	var dropSchemaTableIDs []int64
+	if job.Type == model.ActionDropSchema {
+		dropSchemaTableIDs = getSchemaPhysicalTableIDs(ddlEvent.SchemaID, p.databaseMap, p.partitionMap)
+	}
+
 	handler.updateSchemaMetadataFunc(updateSchemaMetadataFuncArgs{
 		event:        &ddlEvent,
 		databaseMap:  p.databaseMap,
@@ -798,7 +805,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		partitionMap: p.partitionMap,
 	})
 
-	handler.iterateEventTablesFunc(&ddlEvent, func(tableIDs ...int64) {
+	applyDDLToTableInfoStores := func(tableIDs ...int64) {
 		for _, tableID := range tableIDs {
 			if store, ok := p.tableInfoStoreMap[tableID]; ok {
 				// do some safety check
@@ -811,7 +818,12 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 				store.applyDDL(&ddlEvent)
 			}
 		}
-	})
+	}
+	if job.Type == model.ActionDropSchema {
+		applyDDLToTableInfoStores(dropSchemaTableIDs...)
+	} else {
+		handler.iterateEventTablesFunc(&ddlEvent, applyDDLToTableInfoStores)
+	}
 
 	return nil
 }
