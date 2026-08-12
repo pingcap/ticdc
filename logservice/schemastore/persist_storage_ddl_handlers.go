@@ -133,7 +133,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateFullTableInfoFunc:    updateFullTableInfoForDropSchema,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropSchema,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
-		extractTableInfoFunc:       extractTableInfoFuncIgnore,
+		extractTableInfoFunc:       extractTableInfoFuncForDropSchema,
 		buildDDLEventFunc:          buildDDLEventForDropSchema,
 	},
 	model.ActionCreateTable: {
@@ -1169,17 +1169,28 @@ func updateDDLHistoryForTableTriggerOnlyDDL(args updateDDLHistoryFuncArgs) []uin
 	return args.tableTriggerDDLHistory
 }
 
-func updateDDLHistoryForSchemaDDL(args updateDDLHistoryFuncArgs) []uint64 {
-	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
-	for tableID := range args.databaseMap[args.ddlEvent.SchemaID].Tables {
-		if partitionInfo, ok := args.partitionMap[tableID]; ok {
-			for id := range partitionInfo {
-				args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, id)
+func getSchemaPhysicalTableIDs(
+	schemaID int64,
+	databaseMap map[int64]*BasicDatabaseInfo,
+	partitionMap map[int64]BasicPartitionInfo,
+) []int64 {
+	physicalTableIDs := make([]int64, 0)
+	for tableID := range databaseMap[schemaID].Tables {
+		if partitionInfo, ok := partitionMap[tableID]; ok {
+			for partitionID := range partitionInfo {
+				physicalTableIDs = append(physicalTableIDs, partitionID)
 			}
 		} else {
-			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
+			physicalTableIDs = append(physicalTableIDs, tableID)
 		}
 	}
+	return physicalTableIDs
+}
+
+func updateDDLHistoryForSchemaDDL(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	physicalTableIDs := getSchemaPhysicalTableIDs(args.ddlEvent.SchemaID, args.databaseMap, args.partitionMap)
+	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, physicalTableIDs...)
 	return args.tableTriggerDDLHistory
 }
 
@@ -1757,6 +1768,12 @@ func extractTableInfoFuncForExchangeTablePartition(event *PersistedDDLEvent, tab
 
 func extractTableInfoFuncIgnore(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
 	return nil, false
+}
+
+func extractTableInfoFuncForDropSchema(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
+	// Drop-schema events are only added to the DDL history of physical tables in
+	// the dropped schema, so reaching this extractor means this table was deleted.
+	return nil, true
 }
 
 func extractTableInfoFuncForDropTable(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {

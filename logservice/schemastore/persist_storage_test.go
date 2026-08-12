@@ -2862,6 +2862,58 @@ func TestRegisterTable(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "drop schema",
+			initialDBInfos: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   50,
+						Name: ast.NewCIStr("test"),
+					},
+					tables: []*model.TableInfo{
+						newEligibleTableInfoForTest(99, "t1"),
+						newEligibleTableInfoForTest(100, "t2"),
+						{
+							ID:        102,
+							Name:      ast.NewCIStr("pt"),
+							Partition: buildPartitionDefinitionsForTest([]int64{201, 202}),
+						},
+					},
+				},
+			},
+			preDDLTables:  []int64{99, 201},
+			postDDLTables: []int64{100, 202},
+			ddlJobs: []*model.Job{
+				buildDropSchemaJobForTest(50, 1030),
+			},
+			queryCases: []QueryTableInfoTestCase{
+				{
+					tableID: 99,
+					snapTs:  1029,
+					name:    "t1",
+				},
+				{
+					tableID: 99,
+					snapTs:  1030,
+					deleted: true,
+				},
+				{
+					tableID: 100,
+					snapTs:  1030,
+					deleted: true,
+				},
+				{
+					tableID: 201,
+					snapTs:  1030,
+					deleted: true,
+				},
+				{
+					tableID: 202,
+					snapTs:  1030,
+					deleted: true,
+				},
+			},
+		},
 	}
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
