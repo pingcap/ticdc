@@ -15,6 +15,7 @@ package schemastore
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/pingcap/log"
@@ -1858,10 +1859,8 @@ func extractTableInfoFuncForTruncateTable(event *PersistedDDLEvent, tableID int6
 }
 
 func extractTableInfoFuncForAddPartition(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
-	for _, partition := range getAllPartitionIDs(event.TableInfo) {
-		if tableID == partition {
-			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
-		}
+	if slices.Contains(getAllPartitionIDs(event.TableInfo), tableID) {
+		return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 	}
 	return nil, false
 }
@@ -1874,10 +1873,8 @@ func extractTableInfoFuncForDropPartition(event *PersistedDDLEvent, tableID int6
 			return nil, true
 		}
 	}
-	for _, partition := range physicalIDs {
-		if tableID == partition {
-			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
-		}
+	if slices.Contains(physicalIDs, tableID) {
+		return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 	}
 	return nil, false
 }
@@ -1890,10 +1887,8 @@ func extractTableInfoFuncForTruncateAndReorganizePartition(event *PersistedDDLEv
 			return nil, true
 		}
 	}
-	for _, partition := range physicalIDs {
-		if tableID == partition {
-			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
-		}
+	if slices.Contains(physicalIDs, tableID) {
+		return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 	}
 	return nil, false
 }
