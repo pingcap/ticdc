@@ -159,11 +159,23 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 	return nil
 }
 
+func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(redoSink *redo.Sink) (int, int) {
+	var (
+		batchCount = redoSink.BatchCount()
+		batchBytes = redoSink.BatchBytes()
+	)
+	if e.config.Consistent != nil && e.config.Consistent.EventCollectorBatchCount != nil {
+		batchCount = *e.config.Consistent.EventCollectorBatchCount
+	}
+	return batchCount, batchBytes
+}
+
 func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, removeDDLTs bool) error {
 	if e.writePathClosed.Load() {
 		return newWritePathClosedError()
 	}
 	start := time.Now()
+	batchCount, batchBytes := e.getRedoEventCollectorBatchCountAndBytes(e.redoSink)
 
 	dispatcherIds, _, startTsList, tableSpans, schemaIds, scheduleSkipDMLAsStartTsList := prepareCreateDispatcher(infos, e.redoDispatcherMap)
 	if len(dispatcherIds) == 0 {
@@ -193,6 +205,8 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 			e.redoSchemaIDToDispatchers,
 			false, // skipSyncpointAtStartTs
 			scheduleSkipDMLAsStartTsList[idx],
+			batchCount,
+			batchBytes,
 			e.redoSink,
 			e.sharedInfo,
 		)
@@ -255,6 +269,7 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 	if mergedSpan == nil {
 		return nil
 	}
+	batchCount, batchBytes := e.getRedoEventCollectorBatchCountAndBytes(e.redoSink)
 
 	mergedDispatcher := dispatcher.NewRedoDispatcher(
 		mergedDispatcherID,
@@ -264,6 +279,8 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 		e.redoSchemaIDToDispatchers,
 		false, // skipSyncpointAtStartTs
 		false, // skipDMLAsStartTs
+		batchCount,
+		batchBytes,
 		e.redoSink,
 		e.sharedInfo,
 	)

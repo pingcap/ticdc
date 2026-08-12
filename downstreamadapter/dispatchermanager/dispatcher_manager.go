@@ -326,6 +326,7 @@ func NewDispatcherManager(
 	if err != nil {
 		return nil, err
 	}
+	batchCounts, batchBytes := manager.getEventCollectorBatchCountAndBytes(manager.sink)
 	// Create shared info for all dispatchers
 	sharedInfo := dispatcher.NewSharedInfo(
 		manager.changefeedID,
@@ -337,6 +338,8 @@ func NewDispatcherManager(
 		syncPointConfig,
 		manager.config.SinkConfig.TxnAtomicity,
 		manager.config.EnableSplittableCheck,
+		batchCounts,
+		batchBytes,
 		router,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		blockStatusBufferSize,
@@ -428,6 +431,20 @@ func countIgnoreUpdateOnlyColumnsRules(filter *config.FilterConfig) int {
 		}
 	}
 	return count
+}
+
+func (e *DispatcherManager) getEventCollectorBatchCountAndBytes(s sink.Sink) (int, int) {
+	var (
+		batchCount = s.BatchCount()
+		batchBytes = s.BatchBytes()
+	)
+	if e.config.EventCollectorBatchCount != nil {
+		batchCount = *e.config.EventCollectorBatchCount
+	}
+	if e.config.EventCollectorBatchBytes != nil {
+		batchBytes = *e.config.EventCollectorBatchBytes
+	}
+	return batchCount, batchBytes
 }
 
 func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {

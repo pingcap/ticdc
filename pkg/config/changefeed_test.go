@@ -16,6 +16,8 @@ package config
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,4 +41,27 @@ func TestFeedStateIsResumable(t *testing.T) {
 	for _, tt := range tests {
 		require.Equal(t, tt.resumable, tt.state.IsResumable())
 	}
+}
+
+// TestChangeFeedInfoToChangefeedConfigBatchFields ensures the maintainer-facing
+// changefeed config keeps the optional event collector batch overrides.
+func TestChangeFeedInfoToChangefeedConfigBatchFields(t *testing.T) {
+	assertBatchFields := func(batchCount *int, batchBytes *int) {
+		replicaConfig := GetDefaultReplicaConfig()
+		replicaConfig.EventCollectorBatchCount = batchCount
+		replicaConfig.EventCollectorBatchBytes = batchBytes
+
+		info := &ChangeFeedInfo{
+			ChangefeedID: common.NewChangefeedID4Test("test", "test"),
+			Config:       replicaConfig,
+		}
+
+		changefeedConfig := info.ToChangefeedConfig()
+		require.Equal(t, batchCount, changefeedConfig.EventCollectorBatchCount)
+		require.Equal(t, batchBytes, changefeedConfig.EventCollectorBatchBytes)
+	}
+
+	assertBatchFields(nil, nil)
+	assertBatchFields(util.AddressOf(0), util.AddressOf(0))
+	assertBatchFields(util.AddressOf(123), util.AddressOf(456))
 }

@@ -217,6 +217,16 @@ func TestIgnoreCallsAfterRunError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestCloudStorageSinkBatchConfig(t *testing.T) {
+	sink := &sink{
+		cfg: &cloudstorage.Config{
+			FileSize: 2048,
+		},
+	}
+	require.Equal(t, 4096, sink.BatchCount())
+	require.Equal(t, 2048, sink.BatchBytes())
+}
+
 func TestWriteDDLEvent(t *testing.T) {
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
