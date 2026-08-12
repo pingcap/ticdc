@@ -16,6 +16,7 @@ package kafka
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,7 +33,7 @@ func TestSASLMechanismFromString(t *testing.T) {
 			name:              "random mechanism",
 			s:                 "random",
 			expectedMechanism: "",
-			expectErr:         "unknown random SASL mechanism",
+			expectErr:         "unknown SASL mechanism: random",
 		},
 		{name: "lower case plain mechanism", s: "plain", expectedMechanism: "PLAIN"},
 		{name: "upper case plain mechanism", s: "PLAIN", expectedMechanism: "PLAIN"},
@@ -75,7 +76,7 @@ func TestSASLMechanismFromString(t *testing.T) {
 			mechanism, err := saslMechanismFromString(test.s)
 			require.Equal(t, test.expectedMechanism, string(mechanism))
 			if test.expectErr != "" {
-				require.Error(t, err)
+				require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 				require.Regexp(t, test.expectErr, err.Error())
 			} else {
 				require.NoError(t, err)
@@ -93,7 +94,7 @@ func TestGSSAPIAuthTypeFromString(t *testing.T) {
 		expectedType int
 		expectErr    string
 	}{
-		{name: "unknown", s: "a", expectedType: 0, expectErr: "unknown a auth type"},
+		{name: "unknown", s: "a", expectedType: 0, expectErr: "unknown auth type: a"},
 		{name: "lower case user", s: "user", expectedType: 1},
 		{name: "upper case user", s: "USER", expectedType: 1},
 		{name: "lower case keytab", s: "keytab", expectedType: 2},
@@ -107,7 +108,7 @@ func TestGSSAPIAuthTypeFromString(t *testing.T) {
 			authType, err := gssapiAuthTypeFromString(test.s)
 			require.Equal(t, test.expectedType, int(authType))
 			if test.expectErr != "" {
-				require.Error(t, err)
+				require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 				require.Regexp(t, test.expectErr, err.Error())
 			} else {
 				require.NoError(t, err)

@@ -440,7 +440,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 	if urlParameter.SASLMechanism != nil && *urlParameter.SASLMechanism != "" {
 		mechanism, err := saslMechanismFromString(*urlParameter.SASLMechanism)
 		if err != nil {
-			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+			return err
 		}
 		o.sasl.mechanism = mechanism
 	}
@@ -448,7 +448,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 	if urlParameter.SASLGssAPIAuthType != nil && *urlParameter.SASLGssAPIAuthType != "" {
 		authType, err := gssapiAuthTypeFromString(*urlParameter.SASLGssAPIAuthType)
 		if err != nil {
-			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+			return err
 		}
 		o.sasl.gssapi.authType = authType
 	}
@@ -525,7 +525,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			}
 
 			if err := o.sasl.oauth2.validate(); err != nil {
-				return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+				return err
 			}
 			o.sasl.oauth2.grantType = "client_credentials"
 		}

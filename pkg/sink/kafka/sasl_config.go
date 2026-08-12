@@ -16,7 +16,7 @@ package kafka
 import (
 	"strings"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // saslMechanism defines a SASL mechanism.
@@ -50,7 +50,7 @@ func saslMechanismFromString(s string) (saslMechanism, error) {
 	case "oauthbearer":
 		return oauthMechanism, nil
 	default:
-		return "", errors.Errorf("unknown %s SASL mechanism", s)
+		return "", errors.ErrKafkaInvalidConfig.FastGen("unknown SASL mechanism: %s", s)
 	}
 }
 
@@ -76,13 +76,13 @@ type oauth2Config struct {
 // validate validates the OAuth2 parameters.
 func (o *oauth2Config) validate() error {
 	if len(o.clientID) == 0 {
-		return errors.New("OAuth2 client id is empty")
+		return errors.ErrKafkaInvalidConfig.FastGen("OAuth2 client id is empty")
 	}
 	if len(o.clientSecret) == 0 {
-		return errors.New("OAuth2 client secret is empty")
+		return errors.ErrKafkaInvalidConfig.FastGen("OAuth2 client secret is empty")
 	}
 	if len(o.tokenURL) == 0 {
-		return errors.New("OAuth2 token url is empty")
+		return errors.ErrKafkaInvalidConfig.FastGen("OAuth2 token url is empty")
 	}
 	return nil
 }
@@ -107,7 +107,7 @@ func gssapiAuthTypeFromString(s string) (gssapiAuthType, error) {
 	case "keytab":
 		return keyTabAuth, nil
 	default:
-		return unknownAuth, errors.Errorf("unknown %s auth type", s)
+		return unknownAuth, errors.ErrKafkaInvalidConfig.FastGen("unknown auth type: %s", s)
 	}
 }
 

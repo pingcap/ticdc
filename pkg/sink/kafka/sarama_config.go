@@ -23,7 +23,6 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/security"
 	"go.uber.org/zap"
 )
 
@@ -150,11 +149,11 @@ func completeSaramaSASLConfig(ctx context.Context, config *sarama.Config, o *opt
 			config.Net.SASL.Password = o.sasl.password
 			if strings.EqualFold(string(o.sasl.mechanism), string(scram256Mechanism)) {
 				config.Net.SASL.SCRAMClientGeneratorFunc = func() sarama.SCRAMClient {
-					return &security.XDGSCRAMClient{HashGeneratorFcn: security.SHA256}
+					return &xdgSCRAMClient{HashGeneratorFcn: sha256HashGenerator}
 				}
 			} else if strings.EqualFold(string(o.sasl.mechanism), string(scram512Mechanism)) {
 				config.Net.SASL.SCRAMClientGeneratorFunc = func() sarama.SCRAMClient {
-					return &security.XDGSCRAMClient{HashGeneratorFcn: security.SHA512}
+					return &xdgSCRAMClient{HashGeneratorFcn: sha512HashGenerator}
 				}
 			}
 		case gssapiMechanism:

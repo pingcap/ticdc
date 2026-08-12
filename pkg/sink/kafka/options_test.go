@@ -245,12 +245,12 @@ func TestApplySASL(t *testing.T) {
 		{
 			name:      "invalid mechanism",
 			uri:       baseURI + "?sasl-mechanism=a",
-			expectErr: "unknown a SASL mechanism",
+			expectErr: "unknown SASL mechanism: a",
 		},
 		{
 			name:      "invalid GSSAPI auth type",
 			uri:       baseURI + "?sasl-mechanism=gssapi&sasl-gssapi-auth-type=keyta1b",
-			expectErr: "unknown keyta1b auth type",
+			expectErr: "unknown auth type: keyta1b",
 		},
 		{
 			name: "valid OAUTHBEARER SASL",
