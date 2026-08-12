@@ -1287,12 +1287,14 @@ func TestSendHandshakeIfNeedConcurrency(t *testing.T) {
 
 		// Launch multiple goroutines to call sendHandshakeIfNeed concurrently
 		for i := 0; i < numGoroutines; i++ {
-			wg.Go(func() {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
 				// Wait for all goroutines to be ready
 				startBarrier.Wait()
 				// Call the method
 				broker.sendHandshakeIfNeed(disp)
-			})
+			}()
 		}
 
 		// Start all goroutines at the same time
