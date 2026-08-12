@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
 )
@@ -30,13 +29,13 @@ func TestNewTokenProviderRejectsInvalidTokenURL(t *testing.T) {
 	t.Parallel()
 
 	options := &options{
-		SASL: &security.SASL{
-			OAuth2: security.OAuth2{
-				ClientID:     "client-id",
-				ClientSecret: "client-secret",
-				TokenURL:     "http://test.com/Segment%%2815197306101420000%29",
-				Scopes:       []string{"scope1", "scope2"},
-				GrantType:    "client_credentials",
+		sasl: &saslConfig{
+			oauth2: oauth2Config{
+				clientID:     "client-id",
+				clientSecret: "client-secret",
+				tokenURL:     "http://test.com/Segment%%2815197306101420000%29",
+				scopes:       []string{"scope1", "scope2"},
+				grantType:    "client_credentials",
 			},
 		},
 	}
@@ -75,14 +74,14 @@ func TestTokenProviderRequestsToken(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	options := &options{
-		SASL: &security.SASL{
-			OAuth2: security.OAuth2{
-				ClientID:     "client-id",
-				ClientSecret: "client-secret",
-				TokenURL:     server.URL + "/oauth2/token",
-				Scopes:       []string{"scope1", "scope2"},
-				GrantType:    "custom_grant",
-				Audience:     "test-audience",
+		sasl: &saslConfig{
+			oauth2: oauth2Config{
+				clientID:     "client-id",
+				clientSecret: "client-secret",
+				tokenURL:     server.URL + "/oauth2/token",
+				scopes:       []string{"scope1", "scope2"},
+				grantType:    "custom_grant",
+				audience:     "test-audience",
 			},
 		},
 	}
@@ -115,11 +114,11 @@ func TestTokenProviderPropagatesEndpointError(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	options := &options{
-		SASL: &security.SASL{
-			OAuth2: security.OAuth2{
-				ClientID:     "client-id",
-				ClientSecret: "client-secret",
-				TokenURL:     server.URL,
+		sasl: &saslConfig{
+			oauth2: oauth2Config{
+				clientID:     "client-id",
+				clientSecret: "client-secret",
+				tokenURL:     server.URL,
 			},
 		},
 	}

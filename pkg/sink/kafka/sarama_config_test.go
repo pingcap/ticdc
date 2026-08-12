@@ -70,10 +70,10 @@ func TestNewSaramaConfig(t *testing.T) {
 	saslOptions := NewOptions()
 	saslOptions.Version = "2.6.0"
 	saslOptions.ClientID = "test-sasl-scram"
-	saslOptions.SASL = &security.SASL{
-		SASLUser:      "user",
-		SASLPassword:  "password",
-		SASLMechanism: security.SCRAM256Mechanism,
+	saslOptions.sasl = &saslConfig{
+		user:      "user",
+		password:  "password",
+		mechanism: scram256Mechanism,
 	}
 
 	cfg, err = newSaramaConfig(ctx, saslOptions)
@@ -200,31 +200,29 @@ func TestCompleteSaramaSASLConfig(t *testing.T) {
 
 	// Test that SASL is turned on correctly.
 	options := NewOptions()
-	options.SASL = &security.SASL{
-		SASLUser:      "user",
-		SASLPassword:  "password",
-		SASLMechanism: "",
-		GSSAPI:        security.GSSAPI{},
+	options.sasl = &saslConfig{
+		user:      "user",
+		password:  "password",
+		mechanism: "",
 	}
 	ctx := context.Background()
 	saramaConfig := sarama.NewConfig()
 	completeSaramaSASLConfig(ctx, saramaConfig, options)
 	require.False(t, saramaConfig.Net.SASL.Enable)
-	options.SASL.SASLMechanism = "plain"
+	options.sasl.mechanism = "plain"
 	completeSaramaSASLConfig(ctx, saramaConfig, options)
 	require.True(t, saramaConfig.Net.SASL.Enable)
 	// Test that the SCRAMClientGeneratorFunc is set up correctly.
 	options = NewOptions()
-	options.SASL = &security.SASL{
-		SASLUser:      "user",
-		SASLPassword:  "password",
-		SASLMechanism: "plain",
-		GSSAPI:        security.GSSAPI{},
+	options.sasl = &saslConfig{
+		user:      "user",
+		password:  "password",
+		mechanism: "plain",
 	}
 	saramaConfig = sarama.NewConfig()
 	completeSaramaSASLConfig(ctx, saramaConfig, options)
 	require.Nil(t, saramaConfig.Net.SASL.SCRAMClientGeneratorFunc)
-	options.SASL.SASLMechanism = "SCRAM-SHA-512"
+	options.sasl.mechanism = "SCRAM-SHA-512"
 	completeSaramaSASLConfig(ctx, saramaConfig, options)
 	require.NotNil(t, saramaConfig.Net.SASL.SCRAMClientGeneratorFunc)
 }

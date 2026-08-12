@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package security
+package kafka
 
 import (
 	"testing"
@@ -34,16 +34,8 @@ func TestSASLMechanismFromString(t *testing.T) {
 			expectedMechanism: "",
 			expectErr:         "unknown random SASL mechanism",
 		},
-		{
-			name:              "lower case plain mechanism",
-			s:                 "plain",
-			expectedMechanism: "PLAIN",
-		},
-		{
-			name:              "upper case plain mechanism",
-			s:                 "PLAIN",
-			expectedMechanism: "PLAIN",
-		},
+		{name: "lower case plain mechanism", s: "plain", expectedMechanism: "PLAIN"},
+		{name: "upper case plain mechanism", s: "PLAIN", expectedMechanism: "PLAIN"},
 		{
 			name:              "lower case scram-sha-256 mechanism",
 			s:                 "scram-sha-256",
@@ -64,16 +56,8 @@ func TestSASLMechanismFromString(t *testing.T) {
 			s:                 "SCRAM-SHA-512",
 			expectedMechanism: "SCRAM-SHA-512",
 		},
-		{
-			name:              "lower case gssapi mechanism",
-			s:                 "gssapi",
-			expectedMechanism: "GSSAPI",
-		},
-		{
-			name:              "upper case GSSAPI mechanism",
-			s:                 "GSSAPI",
-			expectedMechanism: "GSSAPI",
-		},
+		{name: "lower case gssapi mechanism", s: "gssapi", expectedMechanism: "GSSAPI"},
+		{name: "upper case GSSAPI mechanism", s: "GSSAPI", expectedMechanism: "GSSAPI"},
 		{
 			name:              "lower case oauthbearer mechanism",
 			s:                 "oauthbearer",
@@ -88,7 +72,7 @@ func TestSASLMechanismFromString(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			mechanism, err := SASLMechanismFromString(test.s)
+			mechanism, err := saslMechanismFromString(test.s)
 			require.Equal(t, test.expectedMechanism, string(mechanism))
 			if test.expectErr != "" {
 				require.Error(t, err)
@@ -100,7 +84,7 @@ func TestSASLMechanismFromString(t *testing.T) {
 	}
 }
 
-func TestAuthTypeFromString(t *testing.T) {
+func TestGSSAPIAuthTypeFromString(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -109,39 +93,18 @@ func TestAuthTypeFromString(t *testing.T) {
 		expectedType int
 		expectErr    string
 	}{
-		{
-			name:         "unknown",
-			s:            "a",
-			expectedType: 0,
-			expectErr:    "unknown a auth type",
-		},
-		{
-			name:         "lower case user",
-			s:            "user",
-			expectedType: 1,
-		},
-		{
-			name:         "upper case user",
-			s:            "USER",
-			expectedType: 1,
-		},
-		{
-			name:         "lower case keytab",
-			s:            "keytab",
-			expectedType: 2,
-		},
-		{
-			name:         "upper case keytab",
-			s:            "KEYTAB",
-			expectedType: 2,
-		},
+		{name: "unknown", s: "a", expectedType: 0, expectErr: "unknown a auth type"},
+		{name: "lower case user", s: "user", expectedType: 1},
+		{name: "upper case user", s: "USER", expectedType: 1},
+		{name: "lower case keytab", s: "keytab", expectedType: 2},
+		{name: "upper case keytab", s: "KEYTAB", expectedType: 2},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			authType, err := AuthTypeFromString(test.s)
+			authType, err := gssapiAuthTypeFromString(test.s)
 			require.Equal(t, test.expectedType, int(authType))
 			if test.expectErr != "" {
 				require.Error(t, err)

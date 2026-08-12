@@ -141,37 +141,37 @@ func completeSaramaKafkaVersion(config *sarama.Config, o *options) error {
 }
 
 func completeSaramaSASLConfig(ctx context.Context, config *sarama.Config, o *options) error {
-	if o.SASL != nil && o.SASL.SASLMechanism != "" {
+	if o.sasl != nil && o.sasl.mechanism != "" {
 		config.Net.SASL.Enable = true
-		config.Net.SASL.Mechanism = sarama.SASLMechanism(o.SASL.SASLMechanism)
-		switch o.SASL.SASLMechanism {
-		case SASLTypeSCRAMSHA256, SASLTypeSCRAMSHA512, SASLTypePlaintext:
-			config.Net.SASL.User = o.SASL.SASLUser
-			config.Net.SASL.Password = o.SASL.SASLPassword
-			if strings.EqualFold(string(o.SASL.SASLMechanism), SASLTypeSCRAMSHA256) {
+		config.Net.SASL.Mechanism = sarama.SASLMechanism(o.sasl.mechanism)
+		switch o.sasl.mechanism {
+		case scram256Mechanism, scram512Mechanism, plainMechanism:
+			config.Net.SASL.User = o.sasl.user
+			config.Net.SASL.Password = o.sasl.password
+			if strings.EqualFold(string(o.sasl.mechanism), string(scram256Mechanism)) {
 				config.Net.SASL.SCRAMClientGeneratorFunc = func() sarama.SCRAMClient {
 					return &security.XDGSCRAMClient{HashGeneratorFcn: security.SHA256}
 				}
-			} else if strings.EqualFold(string(o.SASL.SASLMechanism), SASLTypeSCRAMSHA512) {
+			} else if strings.EqualFold(string(o.sasl.mechanism), string(scram512Mechanism)) {
 				config.Net.SASL.SCRAMClientGeneratorFunc = func() sarama.SCRAMClient {
 					return &security.XDGSCRAMClient{HashGeneratorFcn: security.SHA512}
 				}
 			}
-		case SASLTypeGSSAPI:
-			config.Net.SASL.GSSAPI.AuthType = int(o.SASL.GSSAPI.AuthType)
-			config.Net.SASL.GSSAPI.Username = o.SASL.GSSAPI.Username
-			config.Net.SASL.GSSAPI.ServiceName = o.SASL.GSSAPI.ServiceName
-			config.Net.SASL.GSSAPI.KerberosConfigPath = o.SASL.GSSAPI.KerberosConfigPath
-			config.Net.SASL.GSSAPI.Realm = o.SASL.GSSAPI.Realm
-			config.Net.SASL.GSSAPI.DisablePAFXFAST = o.SASL.GSSAPI.DisablePAFXFAST
-			switch o.SASL.GSSAPI.AuthType {
-			case security.UserAuth:
-				config.Net.SASL.GSSAPI.Password = o.SASL.GSSAPI.Password
-			case security.KeyTabAuth:
-				config.Net.SASL.GSSAPI.KeyTabPath = o.SASL.GSSAPI.KeyTabPath
+		case gssapiMechanism:
+			config.Net.SASL.GSSAPI.AuthType = int(o.sasl.gssapi.authType)
+			config.Net.SASL.GSSAPI.Username = o.sasl.gssapi.username
+			config.Net.SASL.GSSAPI.ServiceName = o.sasl.gssapi.serviceName
+			config.Net.SASL.GSSAPI.KerberosConfigPath = o.sasl.gssapi.kerberosConfigPath
+			config.Net.SASL.GSSAPI.Realm = o.sasl.gssapi.realm
+			config.Net.SASL.GSSAPI.DisablePAFXFAST = o.sasl.gssapi.disablePAFXFAST
+			switch o.sasl.gssapi.authType {
+			case userAuth:
+				config.Net.SASL.GSSAPI.Password = o.sasl.gssapi.password
+			case keyTabAuth:
+				config.Net.SASL.GSSAPI.KeyTabPath = o.sasl.gssapi.keyTabPath
 			}
 
-		case SASLTypeOAuth:
+		case oauthMechanism:
 			p, err := newTokenProvider(ctx, o)
 			if err != nil {
 				return err
