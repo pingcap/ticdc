@@ -200,6 +200,18 @@ type subscriptionStat struct {
 
 type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
 
+type tableStatsKey struct {
+	keyspaceID uint32
+	tableID    int64
+}
+
+func newTableStatsKey(span *heartbeatpb.TableSpan) tableStatsKey {
+	return tableStatsKey{
+		keyspaceID: span.KeyspaceID,
+		tableID:    span.TableID,
+	}
+}
+
 type eventWithCallback struct {
 	subID      logpuller.SubscriptionID
 	tableID    int64
@@ -247,8 +259,8 @@ type eventStore struct {
 		sync.RWMutex
 		// dispatcher id -> dispatcher stat
 		dispatcherStats map[common.DispatcherID]*dispatcherStat
-		// table id -> subscription stats
-		tableStats map[int64]subscriptionStats
+		// (keyspace id, table id) -> subscription stats
+		tableStats map[tableStatsKey]subscriptionStats
 	}
 
 	decoderPool *sync.Pool
@@ -319,7 +331,7 @@ func New(
 		store.writeTaskPools = append(store.writeTaskPools, newWriteTaskPool(store, store.dbs[i], i, store.chs[i], writeWorkerNumPerDB))
 	}
 	store.dispatcherMeta.dispatcherStats = make(map[common.DispatcherID]*dispatcherStat)
-	store.dispatcherMeta.tableStats = make(map[int64]subscriptionStats)
+	store.dispatcherMeta.tableStats = make(map[tableStatsKey]subscriptionStats)
 
 	store.messageCenter.RegisterHandler(messaging.EventStoreTopic, store.handleMessage)
 	return store
@@ -537,7 +549,8 @@ func (e *eventStore) RegisterDispatcher(
 	if enableDataSharing {
 		e.dispatcherMeta.Lock()
 		var bestMatch *subscriptionStat
-		if subStats, ok := e.dispatcherMeta.tableStats[dispatcherSpan.TableID]; ok {
+		tableKey := newTableStatsKey(dispatcherSpan)
+		if subStats, ok := e.dispatcherMeta.tableStats[tableKey]; ok {
 			for _, subStat := range subStats {
 				if subStat.lowLatencyMode != lowLatencyMode {
 					continue
@@ -635,11 +648,12 @@ func (e *eventStore) RegisterDispatcher(
 	}
 
 	e.dispatcherMeta.Lock()
+	tableKey := newTableStatsKey(dispatcherSpan)
 	e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
-	if len(e.dispatcherMeta.tableStats[dispatcherSpan.TableID]) == 0 {
-		e.dispatcherMeta.tableStats[dispatcherSpan.TableID] = make(subscriptionStats)
+	if len(e.dispatcherMeta.tableStats[tableKey]) == 0 {
+		e.dispatcherMeta.tableStats[tableKey] = make(subscriptionStats)
 	}
-	e.dispatcherMeta.tableStats[dispatcherSpan.TableID][subStat.subID] = subStat
+	e.dispatcherMeta.tableStats[tableKey][subStat.subID] = subStat
 	e.dispatcherMeta.Unlock()
 
 	consumeKVEvents := func(kvs []common.RawKVEntry, finishCallback func()) bool {
@@ -1120,7 +1134,6 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 func (e *eventStore) cleanObsoleteSubscriptionsOnce(deltaMs int64) {
 	type obsoleteSubscription struct {
 		subID   logpuller.SubscriptionID
-		tableID int64
 		dbIndex int
 		span    *heartbeatpb.TableSpan
 		idleAt  time.Time
@@ -1129,7 +1142,7 @@ func (e *eventStore) cleanObsoleteSubscriptionsOnce(deltaMs int64) {
 	obsoleteSubs := make([]obsoleteSubscription, 0)
 
 	e.dispatcherMeta.Lock()
-	for tableID, subStats := range e.dispatcherMeta.tableStats {
+	for tableKey, subStats := range e.dispatcherMeta.tableStats {
 		for subID, subStat := range subStats {
 			subData := subStat.subscribers.Load()
 			if subData == nil || len(subData.subscribers) != 0 || subData.idleTime <= 0 {
@@ -1150,7 +1163,6 @@ func (e *eventStore) cleanObsoleteSubscriptionsOnce(deltaMs int64) {
 
 			obsoleteSubs = append(obsoleteSubs, obsoleteSubscription{
 				subID:   subID,
-				tableID: tableID,
 				dbIndex: subStat.dbIndex,
 				span:    subStat.tableSpan,
 				idleAt:  time.UnixMilli(subData.idleTime).In(time.Local),
@@ -1158,7 +1170,7 @@ func (e *eventStore) cleanObsoleteSubscriptionsOnce(deltaMs int64) {
 			delete(subStats, subID)
 		}
 		if len(subStats) == 0 {
-			delete(e.dispatcherMeta.tableStats, tableID)
+			delete(e.dispatcherMeta.tableStats, tableKey)
 		}
 	}
 	e.dispatcherMeta.Unlock()
@@ -1167,11 +1179,11 @@ func (e *eventStore) cleanObsoleteSubscriptionsOnce(deltaMs int64) {
 		log.Info("clean obsolete subscription",
 			zap.Uint64("subscriptionID", uint64(sub.subID)),
 			zap.Int("dbIndex", sub.dbIndex),
-			zap.Int64("tableID", sub.tableID),
+			zap.Int64("tableID", sub.span.TableID),
 			zap.Time("idleAt", sub.idleAt))
 		e.subClient.Unsubscribe(sub.subID)
 		db := e.dbs[sub.dbIndex]
-		if err := deleteDataRange(db, uint64(sub.subID), sub.tableID, 0, math.MaxUint64); err != nil {
+		if err := deleteDataRange(db, uint64(sub.subID), sub.span.TableID, 0, math.MaxUint64); err != nil {
 			log.Warn("fail to delete events", zap.Error(err))
 		}
 		e.subscriptionChangeCh.In() <- SubscriptionChange{
