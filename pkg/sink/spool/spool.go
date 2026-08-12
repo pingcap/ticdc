@@ -82,15 +82,13 @@ type options struct {
 	metrics *Metrics
 }
 
-type option func(*options)
-
-func WithRootDir(rootDir string) option {
+func WithRootDir(rootDir string) func(*options) {
 	return func(options *options) {
 		options.rootDir = rootDir
 	}
 }
 
-func WithDiskQuotaBytes(quotaBytes int64) option {
+func WithDiskQuotaBytes(quotaBytes int64) func(*options) {
 	return func(options *options) {
 		if quotaBytes == 0 {
 			return
@@ -108,7 +106,7 @@ func WithDiskQuotaBytes(quotaBytes int64) option {
 	}
 }
 
-func WithSegmentBytes(segmentBytes int64) option {
+func WithSegmentBytes(segmentBytes int64) func(*options) {
 	return func(options *options) {
 		if segmentBytes == 0 {
 			return
@@ -126,7 +124,7 @@ func WithSegmentBytes(segmentBytes int64) option {
 	}
 }
 
-func WithMemoryRatio(memoryRatio float64) option {
+func WithMemoryRatio(memoryRatio float64) func(*options) {
 	return func(options *options) {
 		if memoryRatio == 0 {
 			return
@@ -144,7 +142,7 @@ func WithMemoryRatio(memoryRatio float64) option {
 	}
 }
 
-func WithHighWatermarkRatio(highWatermarkRatio float64) option {
+func WithHighWatermarkRatio(highWatermarkRatio float64) func(*options) {
 	return func(options *options) {
 		if highWatermarkRatio == 0 {
 			return
@@ -162,7 +160,7 @@ func WithHighWatermarkRatio(highWatermarkRatio float64) option {
 	}
 }
 
-func WithLowWatermarkRatio(lowWatermarkRatio float64) option {
+func WithLowWatermarkRatio(lowWatermarkRatio float64) func(*options) {
 	return func(options *options) {
 		if lowWatermarkRatio == 0 {
 			return
@@ -194,7 +192,7 @@ type Metrics struct {
 }
 
 // WithMetrics supplies component-owned metrics to the shared spool.
-func WithMetrics(metrics *Metrics) option {
+func WithMetrics(metrics *Metrics) func(*options) {
 	return func(options *options) {
 		options.metrics = metrics
 	}
@@ -321,7 +319,7 @@ func (e *Entry) InMemory() bool {
 // New return a spool that manages unflushed data.
 func New(
 	changefeedID commonType.ChangeFeedID,
-	opts ...option,
+	opts ...func(*options),
 ) (*Spool, error) {
 	cfg := defaultOptions()
 	for _, opt := range opts {

@@ -462,7 +462,7 @@ func TestRunFlushesOnIntervalAndExecutesPostFlush(t *testing.T) {
 
 	postFlushCnt := atomic.NewInt64(0)
 	const eventCount = 3
-	for i := 0; i < eventCount; i++ {
+	for i := range eventCount {
 		ts := uint64(i + 1)
 		w.GetInputCh() <- &pevent.RedoRowEvent{
 			StartTs:  ts,
