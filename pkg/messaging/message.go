@@ -248,6 +248,10 @@ func (r DispatcherRequest) GetChangefeedID() common.ChangeFeedID {
 	return common.NewChangefeedIDFromPB(r.ChangefeedId)
 }
 
+func (r DispatcherRequest) IsLowLatencyMode() bool {
+	return r.LowLatencyMode
+}
+
 func (r DispatcherRequest) GetFilterConfig() *eventpb.FilterConfig {
 	return r.FilterConfig
 }

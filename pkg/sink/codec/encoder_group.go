@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -133,6 +134,9 @@ func (g *encoderGroup) Run(ctx context.Context) error {
 			return g.runEncoder(ctx, idx)
 		})
 	}
+	eg.Go(func() error {
+		return g.collectMetrics(ctx)
+	})
 
 	if g.bootstrapWorker != nil {
 		eg.Go(func() error {
@@ -143,10 +147,12 @@ func (g *encoderGroup) Run(ctx context.Context) error {
 	return eg.Wait()
 }
 
-func (g *encoderGroup) runEncoder(ctx context.Context, idx int) error {
-	inputCh := g.inputCh[idx]
-	metric := encoderGroupInputChanSizeGauge.
-		WithLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name(), strconv.Itoa(idx))
+func (g *encoderGroup) collectMetrics(ctx context.Context) error {
+	inputMetrics := make([]prometheus.Gauge, len(g.inputCh))
+	for idx := range g.inputCh {
+		inputMetrics[idx] = encoderGroupInputChanSizeGauge.WithLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name(), strconv.Itoa(idx))
+	}
+	outputMetric := encoderGroupOutputChanSizeGauge.WithLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name())
 	ticker := time.NewTicker(defaultMetricInterval)
 	defer ticker.Stop()
 	for {
@@ -154,7 +160,20 @@ func (g *encoderGroup) runEncoder(ctx context.Context, idx int) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			metric.Set(float64(len(inputCh)))
+			for idx, inputCh := range g.inputCh {
+				inputMetrics[idx].Set(float64(len(inputCh)))
+			}
+			outputMetric.Set(float64(len(g.outputCh)))
+		}
+	}
+}
+
+func (g *encoderGroup) runEncoder(ctx context.Context, idx int) error {
+	inputCh := g.inputCh[idx]
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
 		case future := <-inputCh:
 			for _, event := range future.events {
 				err := g.rowEventEncoders[idx].AppendRowChangedEvent(ctx, future.Key.Topic, event)
@@ -209,7 +228,10 @@ func (g *encoderGroup) Output() <-chan *future {
 }
 
 func (g *encoderGroup) cleanMetrics() {
-	encoderGroupInputChanSizeGauge.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name())
+	for idx := range g.inputCh {
+		encoderGroupInputChanSizeGauge.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name(), strconv.Itoa(idx))
+	}
+	encoderGroupOutputChanSizeGauge.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name())
 	common.CleanMetrics(g.changefeedID)
 }
 

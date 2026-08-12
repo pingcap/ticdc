@@ -40,14 +40,15 @@ var mockChangefeedID = common.NewChangeFeedIDWithName("dispatcher_stat_test", co
 // mockDispatcher implements the dispatcher.EventDispatcher interface for testing
 type mockDispatcher struct {
 	dispatcher.EventDispatcher
-	startTs      uint64
-	id           common.DispatcherID
-	changefeedID common.ChangeFeedID
-	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
-	handleError  func(err error)
-	events       []dispatcher.DispatcherEvent
-	checkPointTs uint64
-	tableSpan    *heartbeatpb.TableSpan
+	startTs        uint64
+	id             common.DispatcherID
+	changefeedID   common.ChangeFeedID
+	handleEvents   func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
+	handleError    func(err error)
+	events         []dispatcher.DispatcherEvent
+	checkPointTs   uint64
+	tableSpan      *heartbeatpb.TableSpan
+	lowLatencyMode bool
 
 	skipSyncpointAtStartTs        bool
 	router                        routing.Router
@@ -87,6 +88,10 @@ func (m *mockDispatcher) GetId() common.DispatcherID {
 
 func (m *mockDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
+}
+
+func (m *mockDispatcher) IsLowLatencyMode() bool {
+	return m.lowLatencyMode
 }
 
 func (m *mockDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
@@ -1683,6 +1688,15 @@ func TestNewDispatcherResetRequest(t *testing.T) {
 			require.Equal(t, tc.expectedSyncPointTs, resetReq.SyncPointTs)
 		})
 	}
+}
+
+func TestDispatcherRequestsCarryLowLatencyMode(t *testing.T) {
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 100)
+	mockDisp.lowLatencyMode = true
+	stat := newDispatcherStatForTest(mockDisp, nil)
+
+	require.True(t, stat.session.newDispatcherRegisterRequest("local", false).LowLatencyMode)
+	require.True(t, stat.session.newDispatcherResetRequest("local", 100, 1).LowLatencyMode)
 }
 
 func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {

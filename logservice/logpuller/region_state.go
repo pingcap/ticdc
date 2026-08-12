@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -52,11 +53,6 @@ type regionInfo struct {
 	scanPriority cdcpb.ScanPriority
 }
 
-func (s *regionInfo) isStopped() bool {
-	// lockedRange only nil when the region's subscribedTable is stopped.
-	return s.lockedRangeState == nil
-}
-
 func newRegionInfo(
 	verID tikv.RegionVerID,
 	span heartbeatpb.TableSpan,
@@ -70,7 +66,7 @@ func newRegionInfo(
 		rpcCtx:         rpcCtx,
 		subscribedSpan: subscribedSpan,
 		filterLoop:     filterLoop,
-		scanPriority:   TaskLowPrior.scanPriority(),
+		scanPriority:   cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 	}
 }
 
@@ -107,20 +103,25 @@ type regionFeedState struct {
 		// `err` is used to retrieve errors generated outside.
 		err error
 	}
+	regionReq atomic.Pointer[regionReq]
 
 	worker *regionRequestWorker
 }
 
-func newRegionFeedState(region regionInfo, requestID uint64, worker *regionRequestWorker) *regionFeedState {
-	return &regionFeedState{
+func newRegionFeedState(
+	region regionInfo,
+	requestID uint64,
+	worker *regionRequestWorker,
+	request *regionReq,
+) *regionFeedState {
+	state := &regionFeedState{
 		region:    region,
 		requestID: requestID,
+		matcher:   newMatcher(),
 		worker:    worker,
 	}
-}
-
-func (s *regionFeedState) start() {
-	s.matcher = newMatcher()
+	state.regionReq.Store(request)
+	return state
 }
 
 // mark regionFeedState as stopped with the given error if possible.
@@ -131,7 +132,7 @@ func (s *regionFeedState) markStopped(err error) {
 		s.state.v = stateStopped
 		s.state.err = err
 	}
-	s.worker.requestCache.markStopped(s.region.subscribedSpan.subID, s.region.verID.GetID())
+	s.abortScanIfNeeded()
 }
 
 // mark regionFeedState as removed if possible.
@@ -143,7 +144,7 @@ func (s *regionFeedState) markRemoved() (changed bool) {
 		changed = true
 		s.matcher.clear()
 	}
-	s.worker.requestCache.markStopped(s.region.subscribedSpan.subID, s.region.verID.GetID())
+	s.abortScanIfNeeded()
 	return
 }
 
@@ -167,7 +168,21 @@ func (s *regionFeedState) isInitialized() bool {
 
 func (s *regionFeedState) setInitialized() {
 	s.region.lockedRangeState.Initialized.Store(true)
-	s.worker.requestCache.resolve(s.region.subscribedSpan.subID, s.region.verID.GetID())
+	s.finishScan()
+}
+
+func (s *regionFeedState) finishScan() {
+	request := s.regionReq.Swap(nil)
+	if request != nil {
+		request.finish()
+	}
+}
+
+func (s *regionFeedState) abortScanIfNeeded() {
+	request := s.regionReq.Swap(nil)
+	if request != nil {
+		request.abort()
+	}
 }
 
 func (s *regionFeedState) getRegionID() uint64 {

@@ -15,10 +15,10 @@ package logpuller
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -27,20 +27,14 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/ticdc/utils/priorityqueue"
-	"github.com/prometheus/client_golang/prometheus"
-	kvclientv2 "github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -89,16 +83,23 @@ type rangeTask struct {
 	span           heartbeatpb.TableSpan
 	subscribedSpan *subscribedSpan
 	filterLoop     bool
-	priority       TaskType
+	priority       cdcpb.ScanPriority
 }
 
-type SubscriptionClientConfig struct {
-	// The number of region request workers to send region task for every tikv store
-	RegionRequestWorkerPerStore uint
+// upstreamHandle contains the stable TiKV and PD dependencies shared by the
+// region request pipeline.
+type upstreamHandle struct {
+	pd          pd.Client
+	regionCache *tikv.RegionCache
+	pdClock     pdutil.Clock
+	credential  *security.Credential
+	clusterID   uint64
 }
 
-type sharedClientMetrics struct {
-	batchResolvedSize prometheus.Observer
+// initialize loads the cluster metadata needed by region request workers. It
+// must run before the scheduler starts any workers.
+func (u *upstreamHandle) initialize(ctx context.Context) {
+	u.clusterID = u.pd.GetClusterID(ctx)
 }
 
 // subscriptionClient is used to subscribe events of table ranges from TiKV.
@@ -122,21 +123,11 @@ type SubscriptionClient interface {
 }
 
 type subscriptionClient struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	config    *SubscriptionClientConfig
-	metrics   sharedClientMetrics
-	clusterID uint64
+	ctx      context.Context
+	cancel   context.CancelFunc
+	upstream *upstreamHandle
 
-	pd           pd.Client
-	regionCache  *tikv.RegionCache
-	pdClock      pdutil.Clock
 	lockResolver txnutil.LockResolver
-
-	stores sync.Map
-
-	// the credential to connect tikv
-	credential *security.Credential
 
 	// failureHandler handles failed regions and owns reschedule/retry decisions.
 	failureHandler *regionFailureHandler
@@ -144,13 +135,12 @@ type subscriptionClient struct {
 	eventSink *regionEventSink
 	// spanRegistry tracks subscribed spans and owns span-level background tasks.
 	spanRegistry *spanRegistry
+	// regionScheduler assigns locked region requests to per-store workers.
+	regionScheduler *regionRequestScheduler
 
 	// rangeTaskCh is used to receive range tasks.
 	// The tasks will be handled in `handleRangeTask` goroutine.
 	rangeTaskCh chan rangeTask
-	// regionTaskQueue is used to receive region tasks with priority.
-	// The region will be handled in `handleRegions` goroutine.
-	regionTaskQueue *priorityqueue.PriorityQueue[PriorityTask]
 	// resolveLockTaskCh is used to receive resolve lock tasks.
 	// The tasks will be handled in `handleResolveLockTasks` goroutine.
 	resolveLockTaskCh      chan resolveLockTask
@@ -159,33 +149,37 @@ type subscriptionClient struct {
 
 // NewSubscriptionClient creates a client.
 func NewSubscriptionClient(
-	config *SubscriptionClientConfig,
 	pd pd.Client,
 	lockResolver txnutil.LockResolver,
 	credential *security.Credential,
 ) SubscriptionClient {
 	subClient := &subscriptionClient{
-		config: config,
-
-		stores:       sync.Map{},
-		pd:           pd,
-		regionCache:  appcontext.GetService[*tikv.RegionCache](appcontext.RegionCache),
-		pdClock:      appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		upstream: &upstreamHandle{
+			pd:          pd,
+			regionCache: appcontext.GetService[*tikv.RegionCache](appcontext.RegionCache),
+			pdClock:     appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+			credential:  credential,
+		},
 		lockResolver: lockResolver,
 
-		credential: credential,
-
 		rangeTaskCh:            make(chan rangeTask, 1024),
-		regionTaskQueue:        priorityqueue.New[PriorityTask](),
 		resolveLockTaskCh:      make(chan resolveLockTask, 1024),
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
-	subClient.failureHandler = newRegionFailureHandler(subClient)
+	subClient.failureHandler = newRegionFailureHandler(
+		subClient.upstream.regionCache,
+		subClient.onTableDrained,
+		subClient.scheduleRegionRequest,
+		subClient.scheduleRangeRequest,
+	)
 	subClient.eventSink = newRegionEventSink(subClient.failureHandler)
-	subClient.spanRegistry = newSpanRegistry(subClient.pd, subClient.pdClock)
-
-	subClient.initMetrics()
+	subClient.spanRegistry = newSpanRegistry(subClient.upstream.pd, subClient.upstream.pdClock)
+	subClient.regionScheduler = newRegionRequestScheduler(
+		subClient.upstream,
+		subClient.eventSink,
+		subClient.failureHandler,
+	)
 	return subClient
 }
 
@@ -198,11 +192,6 @@ func (s *subscriptionClient) AllocSubscriptionID() SubscriptionID {
 	return SubscriptionID(subscriptionIDGen.Add(1))
 }
 
-func (s *subscriptionClient) initMetrics() {
-	// TODO: fix metrics
-	s.metrics.batchResolvedSize = metrics.BatchResolvedEventSize.WithLabelValues("event-store")
-}
-
 func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -211,19 +200,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			pendingRegionReqCount := 0
-			s.stores.Range(func(_, value any) bool {
-				store := value.(*requestedStore)
-				store.requestWorkers.RLock()
-				for _, worker := range store.requestWorkers.s {
-					worker.requestCache.clearStaleRequest()
-					pendingRegionReqCount += worker.requestCache.getPendingCount()
-				}
-				store.requestWorkers.RUnlock()
-				return true
-			})
-
-			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(float64(pendingRegionReqCount))
+			s.regionScheduler.UpdateMetrics()
 			s.eventSink.UpdateMetrics()
 			s.spanRegistry.UpdateMetrics()
 		}
@@ -260,7 +237,7 @@ func (s *subscriptionClient) Subscribe(
 		advanceResolvedTs,
 		advanceInterval,
 		bdrMode,
-		s.pdClock,
+		s.upstream.pdClock,
 		time.Duration(config.GetGlobalServerConfig().Debug.Puller.OldStartTsScanLowPriorityThreshold),
 	)
 	s.spanRegistry.Add(rt)
@@ -269,9 +246,13 @@ func (s *subscriptionClient) Subscribe(
 	select {
 	case <-s.ctx.Done():
 		log.Warn("subscribes span failed, the subscription client has closed")
-	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: rt.filterLoop, priority: TaskLowPrior}:
-		log.Info("subscribes span done",
-			zap.Uint64("subscriptionID", uint64(subID)),
+	case s.rangeTaskCh <- rangeTask{
+		span:           span,
+		subscribedSpan: rt,
+		filterLoop:     rt.filterLoop,
+		priority:       cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+	}:
+		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
 			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
 	}
@@ -293,27 +274,20 @@ func (s *subscriptionClient) Unsubscribe(subID SubscriptionID) {
 		zap.Bool("exists", rt != nil))
 }
 
-func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
-	s.eventSink.Push(subID, event)
-}
-
 func (s *subscriptionClient) Run(ctx context.Context) error {
-	// s.consume = consume
-	if s.pd == nil {
-		log.Warn("subscription client should be in test mode, skip run")
-		return nil
-	}
-	s.clusterID = s.pd.GetClusterID(ctx)
+	s.upstream.initialize(ctx)
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	g.Go(func() error { return s.updateMetrics(ctx) })
-	g.Go(func() error { return s.eventSink.Run(ctx) })
+	// The goroutines are listed by data flow; errgroup does not guarantee their
+	// actual startup order.
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
-	g.Go(func() error { return s.handleRegions(ctx, g) })
+	g.Go(func() error { return s.regionScheduler.Run(ctx, g) })
+	g.Go(func() error { return s.eventSink.Run(ctx) })
 	g.Go(func() error { return s.failureHandler.Run(ctx) })
-	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
 	g.Go(func() error { return s.spanRegistry.Run(ctx) })
+	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
+	g.Go(func() error { return s.updateMetrics(ctx) })
 
 	log.Info("subscription client starts")
 	defer log.Info("subscription client exits")
@@ -324,7 +298,7 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 func (s *subscriptionClient) Close(ctx context.Context) error {
 	s.cancel()
 	s.eventSink.Close()
-	s.regionTaskQueue.Close()
+	s.regionScheduler.Close()
 	return nil
 }
 
@@ -332,11 +306,10 @@ func (s *subscriptionClient) setTableStopped(rt *subscribedSpan) {
 	log.Info("subscription client starts to stop table",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
-	// Set stopped to true so we can stop handling region events from the table.
-	// Then send a special singleRegionInfo to regionRouter to deregister the table
-	// from all TiKV instances.
+	// Set stopped to true so we can stop handling region events from the table,
+	// then notify every existing worker to deregister the subscription.
 	if rt.stopped.CompareAndSwap(false, true) {
-		s.regionTaskQueue.Push(NewRegionPriorityTask(TaskHighPrior, regionInfo{subscribedSpan: rt, filterLoop: rt.filterLoop}, s.pdClock.CurrentTS()))
+		s.regionScheduler.BroadcastDeregister(rt.subID, rt.filterLoop)
 		if rt.rangeLock.Stop() {
 			s.onTableDrained(rt)
 		}
@@ -356,182 +329,6 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 	s.spanRegistry.Remove(rt.subID)
 }
 
-// Note: don't block the caller, otherwise there may be deadlock
-func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
-	s.failureHandler.Report(errInfo)
-}
-
-// requestedStore represents a store that has been connected.
-type requestedStore struct {
-	storeAddr string
-	// Use to select a worker to send request.
-	nextWorker atomic.Uint32
-
-	requestWorkers struct {
-		sync.RWMutex
-		s []*regionRequestWorker
-	}
-}
-
-func (rs *requestedStore) getRequestWorker() *regionRequestWorker {
-	rs.requestWorkers.RLock()
-	defer rs.requestWorkers.RUnlock()
-
-	index := rs.nextWorker.Add(1) % uint32(len(rs.requestWorkers.s))
-	return rs.requestWorkers.s[index]
-}
-
-// handleRegions receives regionInfo from regionTaskQueue and attach rpcCtx to them,
-// then send them to corresponding requestedStore.
-func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Group) error {
-	cfg := config.GetGlobalServerConfig()
-	pendingRegionRequestQueueSize := cfg.Debug.Puller.PendingRegionRequestQueueSize
-	getStore := func(storeAddr string) *requestedStore {
-		var rs *requestedStore
-		if v, ok := s.stores.Load(storeAddr); ok {
-			rs = v.(*requestedStore)
-			return rs
-		}
-
-		rs = &requestedStore{storeAddr: storeAddr}
-		rs.requestWorkers.s = make([]*regionRequestWorker, 0, s.config.RegionRequestWorkerPerStore)
-		s.stores.Store(storeAddr, rs)
-
-		perWorkerQueueSize := pendingRegionRequestQueueSize / int(s.config.RegionRequestWorkerPerStore)
-		if perWorkerQueueSize <= 0 {
-			log.Warn("pending region request queue size is smaller than the number of workers, adjust per worker queue size to 1",
-				zap.Int("pendingRegionRequestQueueSize", pendingRegionRequestQueueSize),
-				zap.Uint("regionRequestWorkerPerStore", s.config.RegionRequestWorkerPerStore))
-			perWorkerQueueSize = 1
-		}
-
-		rs.requestWorkers.Lock()
-		for i := uint(0); i < s.config.RegionRequestWorkerPerStore; i++ {
-			requestWorker := newRegionRequestWorker(ctx, s, s.credential, eg, rs, perWorkerQueueSize)
-			rs.requestWorkers.s = append(rs.requestWorkers.s, requestWorker)
-		}
-		rs.requestWorkers.Unlock()
-		return rs
-	}
-
-	defer func() {
-		s.stores.Range(func(_, value any) bool {
-			rs := value.(*requestedStore)
-
-			rs.requestWorkers.RLock()
-			for _, w := range rs.requestWorkers.s {
-				w.requestCache.clear()
-			}
-			rs.requestWorkers.RUnlock()
-
-			return true
-		})
-	}()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		// Use blocking Pop to wait for tasks
-		regionTask, err := s.regionTaskQueue.Pop(ctx)
-		if err != nil {
-			if errors.Is(err, priorityqueue.ErrClosed) {
-				return nil
-			}
-			return err
-		}
-
-		region := regionTask.GetRegionInfo()
-		if region.isStopped() {
-			enqueued, err := s.enqueueRegionToAllStores(ctx, region)
-			if err != nil {
-				return err
-			}
-			if !enqueued {
-				log.Debug("enqueue stop request failed, retry later",
-					zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)))
-				s.regionTaskQueue.Push(regionTask)
-			}
-			continue
-		}
-
-		region, ok := s.attachRPCContextForRegion(ctx, region)
-		// If attachRPCContextForRegion fails, the region will be re-scheduled.
-		if !ok {
-			continue
-		}
-
-		store := getStore(region.rpcCtx.Addr)
-		worker := store.getRequestWorker()
-		force := regionTask.Priority() <= forcedPriorityBase
-
-		ok, err = worker.add(ctx, region, force)
-		if err != nil {
-			log.Warn("subscription client add region request failed",
-				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
-				zap.Uint64("regionID", region.verID.GetID()),
-				zap.Error(err))
-			return err
-		}
-
-		if !ok {
-			s.regionTaskQueue.Push(regionTask)
-			continue
-		}
-
-		log.Debug("subscription client will request a region",
-			zap.Uint64("workID", worker.workerID),
-			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
-			zap.Uint64("regionID", region.verID.GetID()),
-			zap.String("addr", store.storeAddr))
-	}
-}
-
-func (s *subscriptionClient) enqueueRegionToAllStores(ctx context.Context, region regionInfo) (bool, error) {
-	enqueued := true
-	var firstErr error
-	s.stores.Range(func(_ any, value any) bool {
-		rs := value.(*requestedStore)
-		rs.requestWorkers.RLock()
-		workers := rs.requestWorkers.s
-		rs.requestWorkers.RUnlock()
-		for _, worker := range workers {
-			ok, err := worker.add(ctx, region, true)
-			if err != nil {
-				firstErr = err
-				enqueued = false
-				return false
-			}
-			if !ok {
-				enqueued = false
-				// It is likely the store is busy, no need to try other workers in this store now.
-				break
-			}
-		}
-		return true
-	})
-	return enqueued, firstErr
-}
-
-func (s *subscriptionClient) attachRPCContextForRegion(ctx context.Context, region regionInfo) (regionInfo, bool) {
-	bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-	rpcCtx, err := s.regionCache.GetTiKVRPCContext(bo, region.verID, kvclientv2.ReplicaReadLeader, 0)
-	if rpcCtx != nil {
-		region.rpcCtx = rpcCtx
-		return region, true
-	}
-	if err != nil {
-		log.Debug("subscription client get rpc context fail",
-			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
-			zap.Uint64("regionID", region.verID.GetID()),
-			zap.Error(err))
-	}
-	s.onRegionFail(newRegionErrorInfo(region, &rpcCtxUnavailableErr{verID: region.verID}))
-	return region, false
-}
-
 func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	// Limit the concurrent number of goroutines to convert range tasks to region tasks.
@@ -542,7 +339,7 @@ func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
 			return ctx.Err()
 		case task := <-s.rangeTaskCh:
 			g.Go(func() error {
-				return s.divideSpanAndScheduleRegionRequests(ctx, task.span, task.subscribedSpan, task.filterLoop, task.priority)
+				return s.divideSpanAndScheduleRegionRequests(ctx, task)
 			})
 		}
 	}
@@ -555,11 +352,11 @@ func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
 // 3. Schedule a region request to subscribe the region.
 func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 	ctx context.Context,
-	span heartbeatpb.TableSpan,
-	subscribedSpan *subscribedSpan,
-	filterLoop bool,
-	taskType TaskType,
+	task rangeTask,
 ) error {
+	span := task.span
+	subscribedSpan := task.subscribedSpan
+
 	// Limit the number of regions loaded at a time to make the load more stable.
 	limit := 1024
 	nextSpan := span
@@ -576,7 +373,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			zap.Any("span", common.FormatTableSpan(&nextSpan)))
 
 		backoff := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-		regions, err := s.regionCache.BatchLoadRegionsWithKeyRange(backoff, nextSpan.StartKey, nextSpan.EndKey, limit)
+		regions, err := s.upstream.regionCache.BatchLoadRegionsWithKeyRange(
+			backoff, nextSpan.StartKey, nextSpan.EndKey, limit)
 		if err != nil {
 			log.Warn("subscription client load regions failed",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
@@ -619,10 +417,11 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			}
 
 			verID := tikv.NewRegionVerID(regionMeta.Id, regionMeta.RegionEpoch.ConfVer, regionMeta.RegionEpoch.Version)
-			regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan, filterLoop)
+			regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan, task.filterLoop)
+			regionInfo.scanPriority = normalizeScanPriority(task.priority)
 
 			// Schedule a region request to subscribe the region.
-			s.scheduleRegionRequest(ctx, regionInfo, taskType)
+			s.scheduleRegionRequest(ctx, regionInfo)
 
 			nextSpan.StartKey = regionMeta.EndKey
 			// If the nextSpan.StartKey is larger than the subscribedSpan.span.EndKey,
@@ -634,13 +433,9 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 	}
 }
 
-// scheduleRegionRequest locks the region's range and send the region to regionTaskQueue,
-// which will be handled by handleRegions.
-func (s *subscriptionClient) scheduleRegionRequest(
-	ctx context.Context,
-	region regionInfo,
-	inheritedPriority TaskType,
-) {
+// scheduleRegionRequest locks the region's range before submitting it to the
+// request scheduler.
+func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region regionInfo) {
 	lockRangeResult := region.subscribedSpan.rangeLock.LockRange(
 		ctx, region.span.StartKey, region.span.EndKey, region.verID.GetID(), region.verID.GetVer())
 
@@ -651,29 +446,20 @@ func (s *subscriptionClient) scheduleRegionRequest(
 	switch lockRangeResult.Status {
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
-		currentTs := s.pdClock.CurrentTS()
-		priority := region.subscribedSpan.priorityPolicy.resolve(
-			inheritedPriority,
+		region.scanPriority = region.subscribedSpan.priorityPolicy.resolve(
+			region.scanPriority,
 			region.resolvedTs(),
-			oracle.GetTimeFromTS(currentTs),
+			s.upstream.pdClock.CurrentTime(),
 		)
-		region.scanPriority = priority.scanPriority()
-		s.regionTaskQueue.Push(NewRegionPriorityTask(priority, region, currentTs))
-		if log.GetLevel() <= zapcore.DebugLevel {
-			log.Debug("cdc region scan task enqueued",
-				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
-				zap.Int64("tableID", region.subscribedSpan.span.TableID),
-				zap.Uint64("startTs", region.subscribedSpan.startTs),
-				zap.Uint64("regionID", region.verID.GetID()),
-				zap.Uint64("regionEpochVersion", region.verID.GetVer()),
-				zap.Uint64("regionEpochConfVer", region.verID.GetConfVer()),
-				zap.String("priority", priority.String()),
-				zap.String("scanPriority", region.scanPriority.String()),
-				zap.String("span", common.FormatTableSpan(&region.span)))
-		}
+		s.regionScheduler.Submit(region)
 	case regionlock.LockRangeStatusStale:
 		for _, r := range lockRangeResult.RetryRanges {
-			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop, inheritedPriority)
+			s.scheduleRangeRequest(ctx, rangeTask{
+				span:           r,
+				subscribedSpan: region.subscribedSpan,
+				filterLoop:     region.filterLoop,
+				priority:       region.scanPriority,
+			})
 		}
 	default:
 		return
@@ -681,19 +467,12 @@ func (s *subscriptionClient) scheduleRegionRequest(
 }
 
 func (s *subscriptionClient) scheduleRangeRequest(
-	ctx context.Context, span heartbeatpb.TableSpan,
-	subscribedSpan *subscribedSpan,
-	filterLoop bool,
-	inheritedPriority TaskType,
+	ctx context.Context,
+	task rangeTask,
 ) {
 	select {
 	case <-ctx.Done():
-	case s.rangeTaskCh <- rangeTask{
-		span:           span,
-		subscribedSpan: subscribedSpan,
-		filterLoop:     filterLoop,
-		priority:       inheritedPriority,
-	}:
+	case s.rangeTaskCh <- task:
 	}
 }
 
