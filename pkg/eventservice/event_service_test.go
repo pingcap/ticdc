@@ -371,6 +371,7 @@ func (m *mockEventStore) RegisterDispatcher(
 	notifier eventstore.ResolvedTsNotifier,
 	_ bool,
 	_ bool,
+	_ bool,
 ) bool {
 	log.Info("subscribe table span", zap.Any("dispatcherID", dispatcherID),
 		zap.Uint64("startTs", startTS),
@@ -503,6 +504,7 @@ type mockDispatcherInfo struct {
 	enableSyncPoint   bool
 	nextSyncPoint     uint64
 	syncPointInterval time.Duration
+	lowLatencyMode    bool
 }
 
 func newMockDispatcherInfo(t *testing.T, startTs uint64, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
@@ -561,6 +563,10 @@ func (m *mockDispatcherInfo) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
 }
 
+func (m *mockDispatcherInfo) IsLowLatencyMode() bool {
+	return m.lowLatencyMode
+}
+
 func (m *mockDispatcherInfo) GetFilterConfig() *eventpb.FilterConfig {
 	return m.filterConfig
 }
@@ -613,6 +619,7 @@ func newChangefeedStatusForTest(t testing.TB, info DispatcherInfo) *changefeedSt
 	t.Helper()
 
 	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	status.lowLatencyMode = info.IsLowLatencyMode()
 	status.filter = newChangefeedFilterForTest(t, info, time.UTC.String())
 	return status
 }

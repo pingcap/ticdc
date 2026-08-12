@@ -28,7 +28,7 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "owner",
 			Name:      "resolved_ts_lag",
-			Help:      "resolved ts lag of changefeeds in seconds",
+			Help:      "maximum per-node resolved ts lag at report time in seconds",
 		}, []string{GetKeyspaceLabel(), "changefeed"})
 )
 

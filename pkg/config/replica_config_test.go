@@ -194,6 +194,26 @@ func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
 	require.False(t, util.GetOrZero(config.Scheduler.EnableSplittableCheck))
 }
 
+func TestReplicaConfigPerformanceMode(t *testing.T) {
+	sinkURI, err := url.Parse("mysql://localhost:3306/test")
+	require.NoError(t, err)
+
+	cfg := GetDefaultReplicaConfig()
+	require.Equal(t, PerformanceModeThroughput, util.GetOrZero(cfg.PerformanceMode))
+	require.False(t, cfg.IsLowLatencyMode())
+
+	cfg.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
+	require.NoError(t, cfg.ValidateAndAdjust(sinkURI))
+	require.True(t, cfg.IsLowLatencyMode())
+
+	cfg.PerformanceMode = util.AddressOf("invalid")
+	require.ErrorContains(t, cfg.ValidateAndAdjust(sinkURI), "unknown performance mode")
+
+	cfg.PerformanceMode = nil
+	require.NoError(t, cfg.ValidateAndAdjust(sinkURI))
+	require.Equal(t, PerformanceModeThroughput, util.GetOrZero(cfg.PerformanceMode))
+}
+
 // TestReplicaConfigValidateBatchConfig verifies validation accepts zero as an
 // explicit override and rejects values outside the supported range.
 func TestReplicaConfigValidateBatchConfig(t *testing.T) {

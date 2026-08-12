@@ -66,6 +66,19 @@ func TestChangeFeedInfoToChangefeedConfigBatchFields(t *testing.T) {
 	assertBatchFields(util.AddressOf(123), util.AddressOf(456))
 }
 
+func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
+	replicaConfig := GetDefaultReplicaConfig()
+	replicaConfig.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
+	info := &ChangeFeedInfo{
+		ChangefeedID: common.NewChangefeedID4Test("test", "test"),
+		Config:       replicaConfig,
+	}
+
+	changefeedConfig := info.ToChangefeedConfig()
+	require.Equal(t, PerformanceModeLowLatency, changefeedConfig.PerformanceMode)
+	require.True(t, changefeedConfig.IsLowLatencyMode())
+}
+
 func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *testing.T) {
 	t.Parallel()
 

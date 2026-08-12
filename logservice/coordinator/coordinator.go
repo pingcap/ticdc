@@ -55,6 +55,11 @@ type requestAndTarget struct {
 type changefeedState struct {
 	cfID       common.ChangeFeedID
 	nodeStates map[node.ID]uint64
+	// nodesReportedSinceLastUpdate tracks a complete reporting round. Publishing
+	// the global minimum only after every current node has reported avoids
+	// exposing intermediate minima from staggered node reports.
+	nodesReportedSinceLastUpdate map[node.ID]struct{}
+	nodeReportPhyTs              map[node.ID]int64
 
 	// equal to min puller resolved ts
 	minLogServiceResolvedTs uint64
@@ -111,8 +116,6 @@ func New() LogCoordinator {
 func (c *logCoordinator) Run(ctx context.Context) error {
 	broadcastTick := time.NewTicker(time.Second)
 	defer broadcastTick.Stop()
-	metricTick := time.NewTicker(1 * time.Second)
-	defer metricTick.Stop()
 
 	for {
 		select {
@@ -143,8 +146,6 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 			if err != nil {
 				log.Warn("send reusable event service response failed", zap.Error(err))
 			}
-		case <-metricTick.C:
-			c.reportChangefeedMetrics()
 		}
 	}
 }
@@ -207,6 +208,8 @@ func (c *logCoordinator) handleNodeChange(allNodes map[node.ID]*node.Info) {
 			c.changefeedStates.Lock()
 			for _, state := range c.changefeedStates.m {
 				delete(state.nodeStates, id)
+				delete(state.nodesReportedSinceLastUpdate, id)
+				delete(state.nodeReportPhyTs, id)
 			}
 			c.changefeedStates.Unlock()
 		}
@@ -229,9 +232,11 @@ func (c *logCoordinator) updateEventStoreState(nodeID node.ID, newState *logserv
 func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservicepb.ChangefeedStates) {
 	c.changefeedStates.Lock()
 	defer c.changefeedStates.Unlock()
+	pdPhyTs := oracle.GetPhysical(c.pdClock.CurrentTime())
 
 	// Create a set of incoming changefeed GIDs for efficient lookup.
 	incomingGIDs := make(map[common.GID]struct{})
+	affectedGIDs := make(map[common.GID]struct{})
 	for _, state := range states.States {
 		cfID := common.NewChangefeedIDFromPB(state.GetChangefeedID())
 		incomingGIDs[cfID.ID()] = struct{}{}
@@ -244,6 +249,9 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 			// ...but is no longer in the incoming message, it means the changefeed was removed from this node.
 			if _, incoming := incomingGIDs[gid]; !incoming {
 				delete(state.nodeStates, from)
+				delete(state.nodesReportedSinceLastUpdate, from)
+				delete(state.nodeReportPhyTs, from)
+				affectedGIDs[gid] = struct{}{}
 				log.Info("changefeed removed from node",
 					zap.Stringer("changefeedID", state.cfID),
 					zap.String("nodeID", string(from)),
@@ -274,47 +282,69 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 				zap.Uint64("changefeedGIDHigh", gid.High))
 			// Initialize metrics for the new changefeed.
 			c.changefeedStates.m[gid] = &changefeedState{
-				cfID:               cfID,
-				nodeStates:         make(map[node.ID]uint64),
-				resolvedTsGauge:    metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
-				resolvedTsLagGauge: metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+				cfID:                         cfID,
+				nodeStates:                   make(map[node.ID]uint64),
+				nodesReportedSinceLastUpdate: make(map[node.ID]struct{}),
+				nodeReportPhyTs:              make(map[node.ID]int64),
+				resolvedTsGauge:              metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+				resolvedTsLagGauge:           metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
 			}
 		}
-		c.changefeedStates.m[gid].nodeStates[from] = state.GetResolvedTs()
+		changefeedState := c.changefeedStates.m[gid]
+		changefeedState.nodeStates[from] = state.GetResolvedTs()
+		changefeedState.nodesReportedSinceLastUpdate[from] = struct{}{}
+		changefeedState.nodeReportPhyTs[from] = pdPhyTs
+		affectedGIDs[gid] = struct{}{}
+	}
+
+	if len(affectedGIDs) > 0 {
+		for gid := range affectedGIDs {
+			if state, ok := c.changefeedStates.m[gid]; ok {
+				if len(state.nodeStates) == 0 ||
+					len(state.nodesReportedSinceLastUpdate) != len(state.nodeStates) {
+					continue
+				}
+				c.updateChangefeedMetrics(state)
+				clear(state.nodesReportedSinceLastUpdate)
+			}
+		}
 	}
 }
 
-func (c *logCoordinator) reportChangefeedMetrics() {
-	pdTime := c.pdClock.CurrentTime()
-	pdPhyTs := oracle.GetPhysical(pdTime)
-
-	c.changefeedStates.Lock()
-	defer c.changefeedStates.Unlock()
-
-	for _, state := range c.changefeedStates.m {
-		if len(state.nodeStates) == 0 {
-			continue
-		}
-
-		minResolvedTs := uint64(math.MaxUint64)
-		for _, resolvedTs := range state.nodeStates {
-			if resolvedTs < minResolvedTs {
-				minResolvedTs = resolvedTs
-			}
-		}
-
-		if minResolvedTs == math.MaxUint64 {
-			log.Warn("minResolvedTs is MaxUint64, this should not happen",
-				zap.Stringer("changefeedID", state.cfID))
-			continue
-		}
-
-		phyResolvedTs := oracle.ExtractPhysical(minResolvedTs)
-		state.minLogServiceResolvedTs = minResolvedTs
-		state.resolvedTsGauge.Set(float64(phyResolvedTs))
-		lag := float64(pdPhyTs-phyResolvedTs) / 1e3
-		state.resolvedTsLagGauge.Set(lag)
+// updateChangefeedMetrics publishes a new global minimum after a complete
+// reporting round. The lag is the maximum per-node lag measured at each
+// node's own report time, so staggered reports do not inflate it.
+func (c *logCoordinator) updateChangefeedMetrics(state *changefeedState) {
+	if len(state.nodeStates) == 0 {
+		return
 	}
+
+	minResolvedTs := uint64(math.MaxUint64)
+	var maxNodeLag float64
+	for nodeID, resolvedTs := range state.nodeStates {
+		if resolvedTs < minResolvedTs {
+			minResolvedTs = resolvedTs
+		}
+		reportPhyTs, ok := state.nodeReportPhyTs[nodeID]
+		if !ok {
+			return
+		}
+		nodeLag := float64(reportPhyTs-oracle.ExtractPhysical(resolvedTs)) / 1e3
+		if nodeLag > maxNodeLag {
+			maxNodeLag = nodeLag
+		}
+	}
+
+	if minResolvedTs == math.MaxUint64 {
+		log.Warn("minResolvedTs is MaxUint64, this should not happen",
+			zap.Stringer("changefeedID", state.cfID))
+		return
+	}
+
+	phyResolvedTs := oracle.ExtractPhysical(minResolvedTs)
+	state.minLogServiceResolvedTs = minResolvedTs
+	state.resolvedTsGauge.Set(float64(phyResolvedTs))
+	state.resolvedTsLagGauge.Set(maxNodeLag)
 }
 
 func (c *logCoordinator) getMinLogServiceResolvedTs(cfID common.ChangeFeedID) uint64 {
@@ -351,10 +381,14 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 		found := false
 		for _, subsState := range subStates.GetSubscriptions() {
 			// Only consider subscriptions which meet the following conditions:
-			// 1. subscription's span covers the requested span
-			// 2. subscription's checkpointTs <= request startTs
-			// 3. subscription's checkpointTs < resolvedTs (meaning the subscription has finished incremental scan)
-			if bytes.Compare(subsState.Span.StartKey, span.StartKey) <= 0 &&
+			// 1. subscription belongs to the requested keyspace
+			// 2. subscription's span covers the requested span
+			// 3. subscription's checkpointTs <= request startTs
+			// 4. subscription's checkpointTs < resolvedTs (meaning the subscription has finished incremental scan)
+			// Spans from different keyspaces normally have different encoded key ranges. Check KeyspaceID
+			// explicitly because TableStates is grouped only by TableID and isolation should not rely on key encoding.
+			if subsState.Span.KeyspaceID == span.KeyspaceID &&
+				bytes.Compare(subsState.Span.StartKey, span.StartKey) <= 0 &&
 				bytes.Compare(span.EndKey, subsState.Span.EndKey) <= 0 &&
 				subsState.CheckpointTs <= startTs &&
 				subsState.CheckpointTs < subsState.ResolvedTs {

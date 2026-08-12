@@ -40,12 +40,40 @@ type kafkaTopicManager struct {
 
 	defaultTopic string
 
-	admin kafka.ClusterAdminClient
+	admin kafka.AdminClient
 	cfg   *kafka.AutoCreateTopicConfig
 
 	topics sync.Map
 	// cancel is used to cancel the background goroutine.
 	cancel context.CancelFunc
+}
+
+// newKafkaTopicManager creates a topic manager without starting background work.
+func newKafkaTopicManager(
+	defaultTopic string,
+	changefeedID common.ChangeFeedID,
+	admin kafka.AdminClient,
+	cfg *kafka.AutoCreateTopicConfig,
+) *kafkaTopicManager {
+	return &kafkaTopicManager{
+		defaultTopic: defaultTopic,
+		changefeedID: changefeedID,
+		admin:        admin,
+		cfg:          cfg,
+	}
+}
+
+// EnsureTopic creates the topic if needed and waits until it is visible.
+func EnsureTopic(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	topic string,
+	topicCfg *kafka.AutoCreateTopicConfig,
+	adminClient kafka.AdminClient,
+) error {
+	topicManager := newKafkaTopicManager(topic, changefeedID, adminClient, topicCfg)
+	_, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic)
+	return err
 }
 
 // GetTopicManagerAndTryCreateTopic returns the topic manager and try to create the topic.
@@ -54,39 +82,18 @@ func GetTopicManagerAndTryCreateTopic(
 	changefeedID common.ChangeFeedID,
 	topic string,
 	topicCfg *kafka.AutoCreateTopicConfig,
-	adminClient kafka.ClusterAdminClient,
+	adminClient kafka.AdminClient,
 ) (TopicManager, error) {
-	topicManager := newKafkaTopicManager(
-		ctx, topic, changefeedID, adminClient, topicCfg,
-	)
+	topicManager := newKafkaTopicManager(topic, changefeedID, adminClient, topicCfg)
 
 	if _, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic); err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	topicManager.cancel = cancel
+	go topicManager.backgroundRefreshMeta(ctx)
 
 	return topicManager, nil
-}
-
-// NewKafkaTopicManager creates a new topic manager.
-func newKafkaTopicManager(
-	ctx context.Context,
-	defaultTopic string,
-	changefeedID common.ChangeFeedID,
-	admin kafka.ClusterAdminClient,
-	cfg *kafka.AutoCreateTopicConfig,
-) *kafkaTopicManager {
-	mgr := &kafkaTopicManager{
-		defaultTopic: defaultTopic,
-		changefeedID: changefeedID,
-		admin:        admin,
-		cfg:          cfg,
-	}
-
-	ctx, mgr.cancel = context.WithCancel(ctx)
-	// Background refresh metadata.
-	go mgr.backgroundRefreshMeta(ctx)
-
-	return mgr
 }
 
 // GetPartitionNum returns the number of partitions of the topic.
@@ -238,7 +245,7 @@ func (m *kafkaTopicManager) createTopic(
 		Name:              topicName,
 		NumPartitions:     m.cfg.PartitionNum,
 		ReplicationFactor: m.cfg.ReplicationFactor,
-	}, false)
+	})
 	if err != nil {
 		log.Error(
 			"kafka topic creation failed",
@@ -259,6 +266,9 @@ func (m *kafkaTopicManager) createTopic(
 }
 
 // CreateTopicAndWaitUntilVisible wraps createTopic and waitUntilTopicVisible together.
+// If topic creation fails due to insufficient permissions, allow the changefeed
+// to be created, the error will be returned later by other operations such as send messages.
+// The topic can be created or modified externally later to fix the error.
 func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	ctx context.Context, topicName string,
 ) (int32, error) {

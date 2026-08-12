@@ -155,13 +155,13 @@ func (a *saramaAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]
 	return result, nil
 }
 
-func (a *saramaAdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) error {
+func (a *saramaAdminClient) CreateTopic(detail *TopicDetail) error {
 	request := &sarama.TopicDetail{
 		NumPartitions:     detail.NumPartitions,
 		ReplicationFactor: detail.ReplicationFactor,
 	}
 
-	err := a.admin.CreateTopic(detail.Name, request, validateOnly)
+	err := a.admin.CreateTopic(detail.Name, request, false)
 	// Ignore the already exists error because it's not harmful.
 	if err != nil && !strings.Contains(err.Error(), sarama.ErrTopicAlreadyExists.Error()) {
 		return errors.WrapError(errors.ErrKafkaAdminAPI, err, "create-topic", detail.Name)
