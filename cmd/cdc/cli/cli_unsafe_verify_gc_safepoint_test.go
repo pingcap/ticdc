@@ -97,7 +97,7 @@ func TestVerifyGCSafepointRun(t *testing.T) {
 		require.Equal(t, "essential-v1", pdClient.loadedKeyspace)
 		require.Equal(t, pdClient.keyspaceID, pdClient.requestedKeyspaceID)
 		require.True(t, pdClient.closed)
-		require.Contains(t, output.String(), "WARNING: no service safepoint blocks GC safepoint advancement")
+		require.Contains(t, output.String(), "WARNING: this verification holds no service safepoint")
 		require.Contains(t, output.String(), "databases: 3")
 	})
 
@@ -146,7 +146,28 @@ func TestVerifyGCSafepointRun(t *testing.T) {
 		err := o.run(cmd)
 		require.ErrorContains(t, err, "meta store list databases")
 		require.True(t, pdClient.closed)
-		require.Contains(t, output.String(), "may fail with a safepoint error")
+		require.Contains(t, output.String(), "before the read completes")
+	})
+
+	t.Run("zero safepoint is rejected", func(t *testing.T) {
+		pdClient := &verifyGCSafepointTestPDClient{
+			keyspaceID:   42,
+			txnSafePoint: 0,
+		}
+		o := &verifyGCSafepointOptions{
+			keyspace: "essential-v1",
+			pdClient: pdClient,
+			listDatabases: func(context.Context, string, uint64) (int, error) {
+				t.Fatal("listDatabases must not be called with a zero safepoint")
+				return 0, nil
+			},
+		}
+		cmd := &cobra.Command{}
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := o.run(cmd)
+		require.ErrorContains(t, err, "safepoint is zero")
+		require.True(t, pdClient.closed)
 	})
 }
 

@@ -57,8 +57,8 @@ func (o *verifyGCSafepointOptions) complete(f factory.Factory) error {
 		return err
 	}
 	o.pdClient = pdClient
-	o.listDatabases = func(ctx context.Context, keyspace string, snapshotTS uint64) (int, error) {
-		return listDatabasesAtSnapshot(ctx, f.GetPdAddr(), f.GetCredential(), keyspace, snapshotTS)
+	o.listDatabases = func(_ context.Context, keyspace string, snapshotTS uint64) (int, error) {
+		return listDatabasesAtSnapshot(f.GetPdAddr(), f.GetCredential(), keyspace, snapshotTS)
 	}
 	return nil
 }
@@ -84,12 +84,16 @@ func (o *verifyGCSafepointOptions) run(cmd *cobra.Command) error {
 	} else {
 		gcState, err := o.pdClient.GetGCStatesClient(keyspaceMeta.GetId()).GetGCState(ctx)
 		if err != nil {
-			return errors.WrapError(errors.ErrGetGCBarrierFailed, err)
+			return errors.Trace(err)
 		}
 		// Schema store uses the transaction safepoint as its initial metadata snapshot.
 		snapshotTS = gcState.TxnSafePoint
 	}
-	cmd.Printf("WARNING: no service safepoint blocks GC safepoint advancement; ListDatabases at snapshot %d may fail with a safepoint error.\n", snapshotTS)
+	if snapshotTS == 0 {
+		return errors.ErrGetServiceSafepointFailed.GenWithStackByArgs(
+			"safepoint is zero, keyspace GC state may be uninitialized")
+	}
+	cmd.Printf("WARNING: this verification holds no service safepoint; GC may advance past snapshot %d before the read completes.\n", snapshotTS)
 
 	databaseCount, err := o.listDatabases(ctx, o.keyspace, snapshotTS)
 	if err != nil {
@@ -100,7 +104,6 @@ func (o *verifyGCSafepointOptions) run(cmd *cobra.Command) error {
 }
 
 func listDatabasesAtSnapshot(
-	_ context.Context,
 	pdAddr string,
 	credential *security.Credential,
 	keyspace string,
