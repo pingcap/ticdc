@@ -1601,7 +1601,7 @@ func updateSchemaMetadataForRemovePartitioning(args updateSchemaMetadataFuncArgs
 // iterateEventTablesFunc begin
 // =======
 
-func iterateEventTablesIgnore(args iterateEventTablesFuncArgs) {}
+func iterateEventTablesIgnore(_ iterateEventTablesFuncArgs) {}
 
 func iterateEventTablesForDropSchema(args iterateEventTablesFuncArgs) {
 	for tableID := range args.databaseMap[args.event.SchemaID].Tables {
@@ -1789,7 +1789,7 @@ func extractTableInfoFuncIgnore(event *PersistedDDLEvent, tableID int64) (*commo
 	return nil, false
 }
 
-func extractTableInfoFuncForDropSchema(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
+func extractTableInfoFuncForDropSchema(_ *PersistedDDLEvent, _ int64) (*common.TableInfo, bool) {
 	// Drop-schema events are only added to the DDL history of physical tables in
 	// the dropped schema, so reaching this extractor means this table was deleted.
 	return nil, true
