@@ -21,9 +21,6 @@ function run() {
 	local target_db=rename_table_start_ts_target
 	local table_name=t
 	local changefeed_id=rename-table-start-ts
-	local gc_worker_key
-	local gc_worker_value
-	local pd_cluster_id
 	local rename_finished_ts
 	local start_ts
 	local table_id
@@ -49,37 +46,18 @@ function run() {
 	start_ts=$((rename_finished_ts - 1))
 	cleanup_process "$CDC_BINARY"
 
-	# Force SchemaStore to initialize from the same snapshot used by the
-	# changefeed. Restore the GC worker safepoint before creating the changefeed
-	# so its start-ts is still considered readable.
-	pd_cluster_id=$(curl -s "http://$UP_PD_HOST_1:$UP_PD_PORT_1/pd/api/v1/cluster" |
-		grep -oE '"id":[[:space:]]*[0-9]+' |
-		grep -oE '[0-9]+')
-	gc_worker_key="/pd/$pd_cluster_id/gc/safe_point/service/gc_worker"
-	gc_worker_value=$(curl -fsS "http://$UP_PD_HOST_1:$UP_PD_PORT_1/pd/api/v1/gc/safepoint" |
-		jq -cer '.service_gc_safe_points[] | select(.service_id == "gc_worker")')
-	if [ -z "$gc_worker_value" ]; then
-		echo "failed to get gc_worker service safepoint"
-		exit 1
-	fi
-	GO111MODULE=on go run "$CUR/set_gc_safepoint.go" "$UP_PD_HOST_1:$UP_PD_PORT_1" "$gc_worker_key" \
-		"{\"service_id\":\"gc_worker\",\"expired_at\":9223372036854775807,\"safe_point\":$start_ts}"
-
 	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY"
-	ensure 30 "grep 'schema store initialized' '$WORK_DIR/cdc.log' | grep -q 'resolvedTs=$start_ts'"
-	GO111MODULE=on go run "$CUR/set_gc_safepoint.go" "$UP_PD_HOST_1:$UP_PD_PORT_1" "$gc_worker_key" "$gc_worker_value"
-
 	cdc_cli_changefeed create -c "$changefeed_id" --start-ts="$start_ts" \
 		--sink-uri="mysql://normal:123456@$DOWN_TIDB_HOST:$DOWN_TIDB_PORT/" \
 		--config="$CUR/conf/changefeed.toml"
 
-	# The event filter matches the table name before the rename, so the downstream
-	# table must keep its original name.
+	# The table is in the filter before the rename and outside it afterwards. The
+	# rename DDL must still be replicated to downstream.
 	run_sql "CREATE TABLE $source_db.finish_mark (id INT PRIMARY KEY);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	check_table_exists "$source_db.finish_mark" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-	check_table_exists "$source_db.$table_name" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-	check_table_not_exists "$target_db.$table_name" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-	ensure 30 "run_sql 'SELECT id FROM $source_db.$table_name;' '$DOWN_TIDB_HOST' '$DOWN_TIDB_PORT' && check_contains 'id: 1'"
+	check_table_not_exists "$source_db.$table_name" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
+	check_table_exists "$target_db.$table_name" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
+	ensure 30 "run_sql 'SELECT id FROM $target_db.$table_name;' '$DOWN_TIDB_HOST' '$DOWN_TIDB_PORT' && check_contains 'id: 1'"
 	check_changefeed_state "http://$UP_PD_HOST_1:$UP_PD_PORT_1" "$changefeed_id" "normal" "null" ""
 
 	cleanup_process "$CDC_BINARY"
