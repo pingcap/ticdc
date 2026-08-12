@@ -200,9 +200,6 @@ type SinkConfig struct {
 	SendAllBootstrapAtStart *bool `toml:"send-all-bootstrap-at-start" json:"send-all-bootstrap-at-start,omitempty"`
 	// Debezium only. Whether schema should be excluded in the output.
 	DebeziumDisableSchema *bool `toml:"debezium-disable-schema" json:"debezium-disable-schema,omitempty"`
-	// Debezium only. Whether the transaction start_ts should be included in
-	// the source block of the output. JSON protocol only.
-	DebeziumIncludeStartTs *bool `toml:"debezium-include-start-ts" json:"debezium-include-start-ts,omitempty"`
 
 	// CSVConfig is only available when the downstream is Storage.
 	CSVConfig *CSVConfig `toml:"csv" json:"csv,omitempty"`
@@ -1170,6 +1167,9 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
+	// IncludeStartTs controls whether the transaction start_ts is included in
+	// the source block of Debezium JSON output.
+	IncludeStartTs *bool `toml:"include-start-ts" json:"include-start-ts,omitempty"`
 }
 
 // validRoutingExpressionRegexp accepts routing expressions made of literal text

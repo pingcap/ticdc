@@ -202,10 +202,11 @@ func (d *decoder) assembleDMLEventFromPayload(
 ) *commonEvent.DMLEvent {
 	tableInfo := queryTableInfoFromPayload(keyPayload, valuePayload, valueSchema)
 	commitTs := getCommitTsFromPayload(valuePayload)
-	startTs := getStartTsFromPayload(valuePayload)
-	if startTs == 0 {
-		// Fall back to commit_ts for messages that do not carry start_ts,
-		// keeping the pre-feature behavior for old messages.
+	startTs, hasStartTs := getStartTsFromPayload(valuePayload)
+	if !hasStartTs {
+		// Keep old messages consumable when start_ts is absent. Invalid values
+		// are logged by getStartTsFromPayload and also fall back so a malformed
+		// message does not stop production consumption.
 		startTs = commitTs
 	}
 	event := &commonEvent.DMLEvent{
@@ -256,20 +257,31 @@ func getCommitTsFromPayload(valuePayload map[string]any) uint64 {
 	return uint64(commitTs)
 }
 
-// getStartTsFromPayload returns the start_ts carried in the source block, or 0
-// when the field is absent (messages produced before the start_ts field existed).
-func getStartTsFromPayload(valuePayload map[string]any) uint64 {
+// getStartTsFromPayload returns the start_ts carried in the source block.
+// It returns false when the field is absent or invalid. Invalid values are
+// logged before returning so callers can fall back without stopping consumption.
+func getStartTsFromPayload(valuePayload map[string]any) (uint64, bool) {
 	source := valuePayload["source"].(map[string]any)
-	startTs, ok := source["start_ts"].(json.Number)
+	rawStartTs, exists := source["start_ts"]
+	if !exists {
+		return 0, false
+	}
+	startTs, ok := rawStartTs.(json.Number)
 	if !ok {
-		return 0
+		log.Error("decode value failed",
+			zap.String("reason", "start_ts is not an integer"),
+			zap.String("value", util.RedactAny(source)))
+		return 0, false
 	}
 	ts, err := startTs.Int64()
+	if err == nil && ts <= 0 {
+		err = errors.Errorf("start_ts must be positive: %d", ts)
+	}
 	if err != nil {
 		log.Error("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(source)))
-		return 0
+		return 0, false
 	}
-	return uint64(ts)
+	return uint64(ts), true
 }
 
 func (d *decoder) getSchemaName() string {

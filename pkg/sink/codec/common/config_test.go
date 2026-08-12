@@ -172,7 +172,7 @@ func TestDebeziumIncludeStartTsConfig(t *testing.T) {
 	on := true
 	cfg2 := NewConfig(config.ProtocolDebezium)
 	sinkConfig := config.GetDefaultReplicaConfig().Sink
-	sinkConfig.DebeziumIncludeStartTs = &on
+	sinkConfig.Debezium.IncludeStartTs = &on
 	sinkURI2, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=debezium")
 	require.NoError(t, err)
 	require.NoError(t, cfg2.Apply(sinkURI2, sinkConfig))
@@ -181,7 +181,7 @@ func TestDebeziumIncludeStartTsConfig(t *testing.T) {
 	// URI parameter overrides the config file
 	cfg3 := NewConfig(config.ProtocolDebezium)
 	sinkConfig3 := config.GetDefaultReplicaConfig().Sink
-	sinkConfig3.DebeziumIncludeStartTs = &on
+	sinkConfig3.Debezium.IncludeStartTs = &on
 	sinkURI3, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=debezium&debezium-include-start-ts=false")
 	require.NoError(t, err)
 	require.NoError(t, cfg3.Apply(sinkURI3, sinkConfig3))

@@ -540,6 +540,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			debeziumConfig = &config.DebeziumConfig{
 				OutputOldValue: c.Sink.DebeziumConfig.OutputOldValue,
 			}
+			if c.Sink.DebeziumConfig.IncludeStartTs != nil {
+				debeziumConfig.IncludeStartTs = util.AddressOf(*c.Sink.DebeziumConfig.IncludeStartTs)
+			}
 		}
 		var openProtocolConfig *config.OpenProtocolConfig
 		if c.Sink.OpenProtocolConfig != nil {
@@ -579,9 +582,6 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		}
 		if c.Sink.DebeziumDisableSchema != nil {
 			res.Sink.DebeziumDisableSchema = util.AddressOf(*c.Sink.DebeziumDisableSchema)
-		}
-		if c.Sink.DebeziumIncludeStartTs != nil {
-			res.Sink.DebeziumIncludeStartTs = util.AddressOf(*c.Sink.DebeziumIncludeStartTs)
 		}
 
 		if c.Sink.SendBootstrapIntervalInSec != nil {
@@ -906,6 +906,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			debeziumConfig = &DebeziumConfig{
 				OutputOldValue: cloned.Sink.Debezium.OutputOldValue,
 			}
+			if cloned.Sink.Debezium.IncludeStartTs != nil {
+				debeziumConfig.IncludeStartTs = util.AddressOf(*cloned.Sink.Debezium.IncludeStartTs)
+			}
 		}
 		var openProtocolConfig *OpenProtocolConfig
 		if cloned.Sink.OpenProtocol != nil {
@@ -961,9 +964,6 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 
 		if cloned.Sink.DebeziumDisableSchema != nil {
 			res.Sink.DebeziumDisableSchema = util.AddressOf(*cloned.Sink.DebeziumDisableSchema)
-		}
-		if cloned.Sink.DebeziumIncludeStartTs != nil {
-			res.Sink.DebeziumIncludeStartTs = util.AddressOf(*cloned.Sink.DebeziumIncludeStartTs)
 		}
 	}
 	if cloned.Consistent != nil {
@@ -1204,7 +1204,6 @@ type SinkConfig struct {
 	SendBootstrapToAllPartition      *bool               `json:"send_bootstrap_to_all_partition,omitempty" toml:"send-bootstrap-to-all-partition,omitempty"`
 	SendAllBootstrapAtStart          *bool               `json:"send_all_bootstrap_at_start,omitempty" toml:"send-all-bootstrap-at-start,omitempty"`
 	DebeziumDisableSchema            *bool               `json:"debezium_disable_schema,omitempty" toml:"debezium-disable-schema,omitempty"`
-	DebeziumIncludeStartTs           *bool               `json:"debezium_include_start_ts,omitempty" toml:"debezium-include-start-ts,omitempty"`
 	DebeziumConfig                   *DebeziumConfig     `json:"debezium,omitempty" toml:"debezium,omitempty"`
 	OpenProtocolConfig               *OpenProtocolConfig `json:"open,omitempty" toml:"open,omitempty"`
 }
@@ -1587,7 +1586,8 @@ type OpenProtocolConfig struct {
 
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
-	OutputOldValue bool `json:"output_old_value" toml:"output-old-value"`
+	OutputOldValue bool  `json:"output_old_value" toml:"output-old-value"`
+	IncludeStartTs *bool `json:"include_start_ts,omitempty" toml:"include-start-ts,omitempty"`
 }
 
 type DispatcherCount struct {

@@ -353,8 +353,8 @@ func mergeConfig(
 		if sinkConfig.DebeziumDisableSchema != nil {
 			dest.DebeziumDisableSchema = sinkConfig.DebeziumDisableSchema
 		}
-		if sinkConfig.DebeziumIncludeStartTs != nil {
-			dest.DebeziumIncludeStartTs = sinkConfig.DebeziumIncludeStartTs
+		if sinkConfig.Debezium != nil && sinkConfig.Debezium.IncludeStartTs != nil {
+			dest.DebeziumIncludeStartTs = sinkConfig.Debezium.IncludeStartTs
 		}
 	}
 	if err := mergo.Merge(dest, urlParameters, mergo.WithOverride); err != nil {
