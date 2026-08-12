@@ -26,6 +26,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type mockLogServiceDispatcherCounter struct {
+	count int
+}
+
+func (m *mockLogServiceDispatcherCounter) DispatcherCount() int {
+	return m.count
+}
+
 func TestSetNodeLivenessRejectEpochMismatch(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
@@ -159,6 +167,11 @@ func TestSetDispatcherDrainTargetRejectStaleUpdate(t *testing.T) {
 func TestSetDispatcherDrainTargetSendsNodeHeartbeatAck(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
+	logService := &mockLogServiceDispatcherCounter{count: 2}
+	appcontext.SetService(appcontext.EventStore, logService)
+	t.Cleanup(func() {
+		logService.count = 0
+	})
 
 	var nodeLiveness liveness.Liveness
 	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
@@ -185,6 +198,7 @@ func TestSetDispatcherDrainTargetSendsNodeHeartbeatAck(t *testing.T) {
 	hb := apply("n2", 1)
 	require.Equal(t, "n2", hb.DispatcherDrainTargetNodeId)
 	require.Equal(t, uint64(1), hb.DispatcherDrainTargetEpoch)
+	require.Equal(t, uint32(2), hb.LogServiceDispatcherCount)
 
 	hb = apply("", 1)
 	require.Equal(t, "", hb.DispatcherDrainTargetNodeId)

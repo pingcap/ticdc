@@ -64,6 +64,11 @@ type nodeState struct {
 	lastSeen    time.Time
 	nodeEpoch   uint64
 	liveness    heartbeatpb.NodeLiveness
+
+	// logServiceDispatcherCount is valid only after a STOPPING heartbeat has
+	// been observed for the current node epoch.
+	logServiceDispatcherCount         uint32
+	logServiceDispatcherCountObserved bool
 }
 
 type drainTargetSchedulerGate struct {
@@ -185,6 +190,11 @@ func (c *Controller) ObserveHeartbeat(nodeID node.ID, hb *heartbeatpb.NodeHeartb
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.observeLivenessLocked(nodeID, hb.NodeEpoch, hb.Liveness)
+	st := c.ensureNodeStateLocked(nodeID)
+	if hb.NodeEpoch == st.nodeEpoch && hb.Liveness == heartbeatpb.NodeLiveness_STOPPING {
+		st.logServiceDispatcherCount = hb.GetLogServiceDispatcherCount()
+		st.logServiceDispatcherCountObserved = true
+	}
 	c.observeTargetSchedulerAckLocked(nodeID, hb)
 }
 
@@ -413,6 +423,19 @@ func (c *Controller) GetStatus(nodeID node.ID) (drainRequested, drainingObserved
 		return false, false, false
 	}
 	return st.drainRequested, st.drainingObserved, st.stoppingObserved
+}
+
+// GetLogServiceDispatcherCount returns the dispatcher count reported by a
+// STOPPING heartbeat for the current node epoch.
+func (c *Controller) GetLogServiceDispatcherCount(nodeID node.ID) (uint32, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	st, ok := c.nodes[nodeID]
+	if !ok || !st.logServiceDispatcherCountObserved {
+		return 0, false
+	}
+	return st.logServiceDispatcherCount, true
 }
 
 // GetDrainProtocolVersion returns the bootstrap-observed drain capability for a node.

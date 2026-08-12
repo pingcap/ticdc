@@ -758,6 +758,7 @@ func TestEventStoreUnregisterDispatcherWithoutDataSharingRemovesSubscription(t *
 		EndKey:   []byte("h"),
 	}
 	require.True(t, store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(uint64, uint64) {}, false, false))
+	require.Equal(t, 1, store.DispatcherCount())
 
 	mockSubClient := subClient.(*mockSubscriptionClient)
 	mockSubClient.mu.Lock()
@@ -765,6 +766,7 @@ func TestEventStoreUnregisterDispatcherWithoutDataSharingRemovesSubscription(t *
 	mockSubClient.mu.Unlock()
 
 	store.UnregisterDispatcher(cfID, dispatcherID)
+	require.Zero(t, store.DispatcherCount())
 
 	mockSubClient.mu.Lock()
 	require.Equal(t, 1, len(mockSubClient.subscriptions))
@@ -800,8 +802,10 @@ func TestEventStoreUnregisterDispatcherWithDataSharingKeepsSubscriptionForTTL(t 
 		EndKey:   []byte("h"),
 	}
 	require.True(t, store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(uint64, uint64) {}, false, false))
+	require.Equal(t, 1, store.DispatcherCount())
 
 	store.UnregisterDispatcher(cfID, dispatcherID)
+	require.Zero(t, store.DispatcherCount())
 
 	mockSubClient := subClient.(*mockSubscriptionClient)
 	mockSubClient.mu.Lock()

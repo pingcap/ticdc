@@ -154,6 +154,39 @@ func TestDrainNodeCompletesAfterCompletionObserved(t *testing.T) {
 	require.Equal(t, epoch, c.drainSession.epoch)
 }
 
+func TestDrainNodeWaitsForLogServiceDispatchers(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
+	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	_, epoch, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+	setChangefeedDrainStatus(cf, target, epoch, 0, 0)
+
+	// A STOPPING response alone does not contain the log service dispatcher count.
+	drainController.ObserveSetNodeLivenessResponse(target, &heartbeatpb.SetNodeLivenessResponse{
+		Applied:   heartbeatpb.NodeLiveness_STOPPING,
+		NodeEpoch: 1,
+	})
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	setTargetStoppingHeartbeat(drainController, target, 2)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	setTargetStoppingHeartbeat(drainController, target, 0)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
+}
+
 func TestDrainNodeDispatcherCountBlocksCompletion(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
 	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
@@ -1171,11 +1204,19 @@ func setTargetStoppingObserved(
 	drainController *drain.Controller,
 	target node.ID,
 ) {
-	resp := &heartbeatpb.SetNodeLivenessResponse{
-		Applied:   heartbeatpb.NodeLiveness_STOPPING,
-		NodeEpoch: 1,
-	}
-	drainController.ObserveSetNodeLivenessResponse(target, resp)
+	setTargetStoppingHeartbeat(drainController, target, 0)
+}
+
+func setTargetStoppingHeartbeat(
+	drainController *drain.Controller,
+	target node.ID,
+	logServiceDispatcherCount uint32,
+) {
+	drainController.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness:                  heartbeatpb.NodeLiveness_STOPPING,
+		NodeEpoch:                 1,
+		LogServiceDispatcherCount: logServiceDispatcherCount,
+	})
 }
 
 func drainMessageChannel(ch chan *messaging.TargetMessage) {

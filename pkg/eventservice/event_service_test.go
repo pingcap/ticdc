@@ -287,6 +287,15 @@ func (m *mockEventStore) Close(ctx context.Context) error {
 func (m *mockEventStore) UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, gcTS uint64) {
 }
 
+func (m *mockEventStore) DispatcherCount() int {
+	count := 0
+	m.dispatcherMap.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	return count
+}
+
 func (m *mockEventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID) {
 	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if ok {

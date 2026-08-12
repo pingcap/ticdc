@@ -206,6 +206,9 @@ message NodeHeartbeat {
     // currently applied on this node. Empty target means the drain target is clear.
     string dispatcher_drain_target_node_id = 3;
     uint64 dispatcher_drain_target_epoch = 4;
+    // log_service_dispatcher_count is the number of dispatchers currently
+    // reading from this node's event store.
+    uint32 log_service_dispatcher_count = 5;
 }
 
 // SetNodeLivenessRequest asks a node to transition its local liveness.

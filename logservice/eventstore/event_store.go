@@ -93,6 +93,9 @@ type EventStore interface {
 
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
 
+	// DispatcherCount returns the number of dispatchers currently reading from this event store.
+	DispatcherCount() int
+
 	// GetIterator returns an iterator for the requested range and resume cursor.
 	GetIterator(dispatcherID common.DispatcherID, request ScanRequest) (EventIterator, error)
 
@@ -718,6 +721,12 @@ func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, disp
 	e.dispatcherMeta.Unlock()
 	log.Info("unregister dispatcher done", zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", dispatcherID))
+}
+
+func (e *eventStore) DispatcherCount() int {
+	e.dispatcherMeta.RLock()
+	defer e.dispatcherMeta.RUnlock()
+	return len(e.dispatcherMeta.dispatcherStats)
 }
 
 func (e *eventStore) UpdateDispatcherCheckpointTs(
