@@ -24,9 +24,14 @@ import (
 const (
 	// DefaultOldStartTsScanLowPriorityThreshold is the default lag threshold for
 	// classifying scan tasks as low priority.
-	DefaultOldStartTsScanLowPriorityThreshold        = 10 * time.Minute
-	defaultLogPullerMemoryQuota               uint64 = 1024 * 1024 * 1024
-	defaultLogPullerScanBaseSize              uint64 = 8 * 1024 * 1024
+	DefaultOldStartTsScanLowPriorityThreshold = 10 * time.Minute
+
+	// DefaultLogPullerMemoryQuota is the default Log Puller soft memory limit.
+	DefaultLogPullerMemoryQuota uint64 = 1024 * 1024 * 1024
+
+	// DefaultLogPullerScanBaseSize is the default base memory estimate for one
+	// initial scan.
+	DefaultLogPullerScanBaseSize uint64 = 8 * 1024 * 1024
 )
 
 // DebugConfig represents config for ticdc unexposed feature configurations
@@ -106,8 +111,8 @@ func NewDefaultPullerConfig() *PullerConfig {
 		RegionRequestMaxWindowMultiplier: 4,  // Allows high-priority scans to use up to 4 * PendingRegionRequestQueueSize.
 		OldStartTsScanLowPriorityThreshold: TomlDuration(
 			DefaultOldStartTsScanLowPriorityThreshold),
-		MemoryQuota:  defaultLogPullerMemoryQuota,
-		ScanBaseSize: defaultLogPullerScanBaseSize,
+		MemoryQuota:  DefaultLogPullerMemoryQuota,
+		ScanBaseSize: DefaultLogPullerScanBaseSize,
 	}
 }
 
