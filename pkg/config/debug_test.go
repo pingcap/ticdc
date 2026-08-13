@@ -24,16 +24,23 @@ func TestPullerConfigValidateAndAdjustRegionRequestWindow(t *testing.T) {
 	defaultCfg := NewDefaultPullerConfig()
 	require.Equal(t, 32, defaultCfg.PendingRegionRequestQueueSize)
 	require.Equal(t, 4, defaultCfg.RegionRequestMaxWindowMultiplier)
+	require.Equal(
+		t,
+		TomlDuration(DefaultOldStartTsScanLowPriorityThreshold),
+		defaultCfg.OldStartTsScanLowPriorityThreshold,
+	)
 	require.Equal(t, uint64(1024*1024*1024), defaultCfg.MemoryQuota)
 	require.Equal(t, uint64(8*1024*1024), defaultCfg.ScanBaseSize)
 
 	cfg := &PullerConfig{
-		PendingRegionRequestQueueSize:    -1,
-		RegionRequestMaxWindowMultiplier: 0,
+		PendingRegionRequestQueueSize:      -1,
+		RegionRequestMaxWindowMultiplier:   0,
+		OldStartTsScanLowPriorityThreshold: 0,
 	}
 	cfg.ValidateAndAdjust()
 	require.Equal(t, defaultCfg.PendingRegionRequestQueueSize, cfg.PendingRegionRequestQueueSize)
 	require.Equal(t, defaultCfg.RegionRequestMaxWindowMultiplier, cfg.RegionRequestMaxWindowMultiplier)
+	require.Equal(t, defaultCfg.OldStartTsScanLowPriorityThreshold, cfg.OldStartTsScanLowPriorityThreshold)
 	require.Equal(t, defaultCfg.MemoryQuota, cfg.MemoryQuota)
 	require.Equal(t, defaultCfg.ScanBaseSize, cfg.ScanBaseSize)
 }

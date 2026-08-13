@@ -377,8 +377,9 @@ The subscription client updates quota metrics every ten seconds.
 
 The Grafana dashboards expose three panels:
 
-- **Memory Quota** for the existing Dynamic Stream quota values and
-  `scan_estimated`.
+- **Memory Quota** for logpuller quota values from
+  `ticdc_log_puller_memory_quota`. For compatibility, the panel also reads the
+  legacy log-puller series from `ticdc_dynamic_stream_memory_usage`.
 - **Memory Quota Waiters** for current event and scan waiters.
 - **Memory Quota Wait Duration** for average and P99 wait latency.
 
