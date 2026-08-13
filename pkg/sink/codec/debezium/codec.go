@@ -886,9 +886,9 @@ func (c *dbzCodec) writeBinaryField(writer *util.JSONWriter, fieldName string, v
 	writer.WriteBase64StringField(fieldName, value)
 }
 
-// includeStartTs should only be true for DML row events: DDL and checkpoint
-// (watermark) messages have no per-row transaction, so their payloads never
-// carry start_ts and their schemas must not declare it.
+// includeStartTs indicates whether start_ts should be declared in the source
+// schema. DML callers pass the configured value, while DDL, checkpoint, and
+// Avro callers pass false because their payloads do not carry the field.
 func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter, schemaName string, includeStartTs bool) {
 	writer.WriteObjectElement(func() {
 		writer.WriteStringField("type", "struct")
@@ -990,10 +990,7 @@ func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter, schemaName string,
 					writer.WriteStringField("field", "cluster_id")
 				})
 			}
-			// start_ts is gated by debezium-include-start-ts and declared only for
-			// the JSON protocol: the Avro payload does not carry it, so its schema
-			// must not declare it either.
-			if includeStartTs && c.config.DebeziumIncludeStartTs && !c.isDebeziumAvro() {
+			if includeStartTs {
 				writer.WriteObjectElement(func() {
 					writer.WriteStringField("type", "int64")
 					writer.WriteBoolField("optional", false)
@@ -1194,7 +1191,7 @@ func (c *dbzCodec) EncodeValue(
 							jWriter.WriteRaw(fieldsJSON)
 						})
 					})
-					c.writeSourceSchema(jWriter, schemaName, true)
+					c.writeSourceSchema(jWriter, schemaName, c.config.DebeziumIncludeStartTs)
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("type", "string")
 						jWriter.WriteBoolField("optional", false)

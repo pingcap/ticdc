@@ -279,6 +279,18 @@ func TestDecodeStartTsFallbackToCommitTs(t *testing.T) {
 	messages := encoder.Build()
 	require.Len(t, messages, 1)
 
+	dec := json.NewDecoder(bytes.NewReader(messages[0].Value))
+	dec.UseNumber()
+	var value map[string]any
+	require.NoError(t, dec.Decode(&value))
+	payload := value["payload"].(map[string]any)
+	source := payload["source"].(map[string]any)
+	require.NotContains(t, source, "start_ts")
+	schema := value["schema"].(map[string]any)
+	sourceSchema := schemaFieldsByName(t, schema, "source")
+	require.NotNil(t, sourceSchema)
+	require.Nil(t, schemaFieldsByName(t, sourceSchema, "start_ts"))
+
 	decoder := NewDecoder(cfg, 0, nil)
 	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 	messageType, hasNext := decoder.HasNext()
