@@ -16,6 +16,7 @@ package schemastore
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/pingcap/log"
@@ -1684,22 +1685,17 @@ func iterateEventTablesForTruncateTable(args iterateEventTablesFuncArgs) {
 }
 
 func iterateEventTablesForAddPartition(args iterateEventTablesFuncArgs) {
-	event, apply := args.event, args.apply
-	newCreatedIDs := getCreatedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
-	apply(newCreatedIDs...)
+	args.apply(getAllPartitionIDs(args.event.TableInfo)...)
 }
 
 func iterateEventTablesForDropPartition(args iterateEventTablesFuncArgs) {
-	event, apply := args.event, args.apply
-	droppedIDs := getDroppedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
-	apply(droppedIDs...)
+	args.apply(args.event.PrevPartitions...)
 }
 
 func iterateEventTablesForTruncatePartition(args iterateEventTablesFuncArgs) {
 	event, apply := args.event, args.apply
 	physicalIDs := getAllPartitionIDs(event.TableInfo)
-	droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
-	apply(droppedIDs...)
+	apply(event.PrevPartitions...)
 	newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
 	apply(newCreatedIDs...)
 }
@@ -1744,8 +1740,7 @@ func iterateEventTablesForCreateTables(args iterateEventTablesFuncArgs) {
 func iterateEventTablesForReorganizePartition(args iterateEventTablesFuncArgs) {
 	event, apply := args.event, args.apply
 	physicalIDs := getAllPartitionIDs(event.TableInfo)
-	droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
-	apply(droppedIDs...)
+	apply(event.PrevPartitions...)
 	newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
 	apply(newCreatedIDs...)
 }
@@ -1883,21 +1878,22 @@ func extractTableInfoFuncForTruncateTable(event *PersistedDDLEvent, tableID int6
 }
 
 func extractTableInfoFuncForAddPartition(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
-	newCreatedIDs := getCreatedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
-	for _, partition := range newCreatedIDs {
-		if tableID == partition {
-			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
-		}
+	if slices.Contains(getAllPartitionIDs(event.TableInfo), tableID) {
+		return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 	}
 	return nil, false
 }
 
 func extractTableInfoFuncForDropPartition(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
-	droppedIDs := getDroppedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
+	physicalIDs := getAllPartitionIDs(event.TableInfo)
+	droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
 	for _, partition := range droppedIDs {
 		if tableID == partition {
 			return nil, true
 		}
+	}
+	if slices.Contains(physicalIDs, tableID) {
+		return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 	}
 	return nil, false
 }
@@ -1910,11 +1906,8 @@ func extractTableInfoFuncForTruncateAndReorganizePartition(event *PersistedDDLEv
 			return nil, true
 		}
 	}
-	newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
-	for _, partition := range newCreatedIDs {
-		if tableID == partition {
-			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
-		}
+	if slices.Contains(physicalIDs, tableID) {
+		return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 	}
 	return nil, false
 }
