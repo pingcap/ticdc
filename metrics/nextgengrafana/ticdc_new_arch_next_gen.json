@@ -8169,9 +8169,9 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(ticdc_log_puller_memory_quota{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", type=\"scan_estimated\"}) by (instance)",
+              "expr": "sum(ticdc_log_puller_memory_quota{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}) by (instance, type)",
               "interval": "",
-              "legendFormat": "{{instance}}-scan_estimated",
+              "legendFormat": "{{instance}}-quota-{{type}}",
               "refId": "B"
             }
           ],
