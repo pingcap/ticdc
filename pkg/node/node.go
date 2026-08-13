@@ -26,6 +26,11 @@ import (
 
 type ID string
 
+const (
+	LegacyMessagingProtocolVersion  = 1
+	CurrentMessagingProtocolVersion = 2
+)
+
 func (s ID) String() string {
 	return string(s)
 }
@@ -52,18 +57,21 @@ type Info struct {
 	DeployPath     string `json:"deploy-path"`
 	StartTimestamp int64  `json:"start-timestamp"`
 
+	MessagingProtocolVersion int `json:"messaging-protocol-version,omitempty"`
+
 	// Epoch represents how many times the node has been restarted.
 	Epoch uint64 `json:"epoch"`
 }
 
 func NewInfo(addr string, deployPath string) *Info {
 	return &Info{
-		ID:             NewID(),
-		AdvertiseAddr:  addr,
-		Version:        version.ReleaseVersion,
-		GitHash:        version.GitHash,
-		DeployPath:     deployPath,
-		StartTimestamp: time.Now().Unix(),
+		ID:                       NewID(),
+		AdvertiseAddr:            addr,
+		Version:                  version.ReleaseVersion,
+		GitHash:                  version.GitHash,
+		DeployPath:               deployPath,
+		StartTimestamp:           time.Now().Unix(),
+		MessagingProtocolVersion: CurrentMessagingProtocolVersion,
 	}
 }
 
@@ -91,12 +99,13 @@ func (c *Info) Unmarshal(data []byte) error {
 
 func CaptureInfoToNodeInfo(captureInfo *config.CaptureInfo) *Info {
 	return &Info{
-		ID:             ID(captureInfo.ID),
-		AdvertiseAddr:  captureInfo.AdvertiseAddr,
-		Version:        captureInfo.Version,
-		GitHash:        captureInfo.GitHash,
-		DeployPath:     captureInfo.DeployPath,
-		StartTimestamp: captureInfo.StartTimestamp,
+		ID:                       ID(captureInfo.ID),
+		AdvertiseAddr:            captureInfo.AdvertiseAddr,
+		Version:                  captureInfo.Version,
+		GitHash:                  captureInfo.GitHash,
+		DeployPath:               captureInfo.DeployPath,
+		StartTimestamp:           captureInfo.StartTimestamp,
+		MessagingProtocolVersion: captureInfo.MessagingProtocolVersion,
 	}
 }
 

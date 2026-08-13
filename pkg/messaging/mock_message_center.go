@@ -13,13 +13,18 @@
 
 package messaging
 
-import "github.com/pingcap/ticdc/pkg/node"
+import (
+	"sync"
+
+	"github.com/pingcap/ticdc/pkg/node"
+)
 
 var _ MessageCenter = &mockMessageCenter{}
 
 // mockMessageCenter is a mock implementation of the MessageCenter interface
 type mockMessageCenter struct {
 	messageCh chan *TargetMessage
+	nodeInfos sync.Map
 }
 
 func NewMockMessageCenter() *mockMessageCenter {
@@ -33,6 +38,17 @@ func (m *mockMessageCenter) GetMessageChannel() chan *TargetMessage {
 }
 
 func (m *mockMessageCenter) OnNodeChanges(nodeInfos map[node.ID]*node.Info) {
+	for id, info := range nodeInfos {
+		m.nodeInfos.Store(id, info)
+	}
+}
+
+func (m *mockMessageCenter) GetNodeInfo(id node.ID) *node.Info {
+	info, ok := m.nodeInfos.Load(id)
+	if !ok {
+		return nil
+	}
+	return info.(*node.Info)
 }
 
 func (m *mockMessageCenter) SendEvent(event *TargetMessage) error {

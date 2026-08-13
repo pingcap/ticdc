@@ -415,7 +415,7 @@ func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat
 	group := func(target node.ID, dispatcherID common.DispatcherID, checkpointTs uint64, epoch uint64) {
 		heartbeat, ok := groupedHeartbeats[target]
 		if !ok {
-			heartbeat = event.NewDispatcherHeartbeat()
+			heartbeat = event.NewDispatcherHeartbeatWithVersion(c.eventServiceProtocolVersion(target))
 			groupedHeartbeats[target] = heartbeat
 		}
 		heartbeat.AddDispatcherProgress(dispatcherID, checkpointTs, epoch)
@@ -437,6 +437,17 @@ func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat
 	})
 
 	return groupedHeartbeats
+}
+
+func (c *EventCollector) eventServiceProtocolVersion(target node.ID) int {
+	if target == c.serverId {
+		return node.CurrentMessagingProtocolVersion
+	}
+	info := c.mc.GetNodeInfo(target)
+	if info != nil && info.MessagingProtocolVersion >= node.CurrentMessagingProtocolVersion {
+		return node.CurrentMessagingProtocolVersion
+	}
+	return node.LegacyMessagingProtocolVersion
 }
 
 func (c *EventCollector) processDSFeedback(ctx context.Context) error {
@@ -727,7 +738,8 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 	// build congestion control messages for each node
 	result := make(map[node.ID]*event.CongestionControl)
 	for nodeID, changefeedDispatchers := range nodeDispatcherMemory {
-		congestionControl := event.NewCongestionControlWithVersion(event.CongestionControlVersion2)
+		protocolVersion := c.eventServiceProtocolVersion(nodeID)
+		congestionControl := event.NewCongestionControlWithVersion(protocolVersion)
 
 		for changefeedID, dispatcherMemory := range changefeedDispatchers {
 			if len(dispatcherMemory) == 0 {
@@ -739,13 +751,18 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			if !ok {
 				continue
 			}
-			congestionControl.AddAvailableMemoryWithDispatchersAndUsageAndReleaseCount(
-				changefeedID.ID(),
-				totalAvailable,
-				changefeedUsageRatio[changefeedID],
-				dispatcherMemory,
-				getAndResetMemoryReleaseCount(changefeedID),
-			)
+			if protocolVersion >= event.CongestionControlVersion2 {
+				congestionControl.AddAvailableMemoryWithDispatchersAndUsageAndReleaseCount(
+					changefeedID.ID(),
+					totalAvailable,
+					changefeedUsageRatio[changefeedID],
+					dispatcherMemory,
+					getAndResetMemoryReleaseCount(changefeedID),
+				)
+			} else {
+				congestionControl.AddAvailableMemoryWithDispatchers(
+					changefeedID.ID(), totalAvailable, dispatcherMemory)
+			}
 		}
 
 		if len(congestionControl.GetAvailables()) > 0 {

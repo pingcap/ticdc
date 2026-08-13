@@ -151,17 +151,9 @@ func TestDispatcherHeartbeatBackwardCompatibleV1(t *testing.T) {
 	t.Parallel()
 
 	dispatcherID := common.NewDispatcherID()
-	heartbeat := &DispatcherHeartbeat{
-		Version:   DispatcherHeartbeatVersion1,
-		ClusterID: 123,
-		DispatcherProgressesLegacy: []DispatcherProgressLegacy{
-			{
-				DispatcherID: dispatcherID,
-				CheckpointTs: 456,
-			},
-		},
-		DispatcherCount: 1,
-	}
+	heartbeat := NewDispatcherHeartbeatWithVersion(DispatcherHeartbeatVersion1)
+	heartbeat.ClusterID = 123
+	heartbeat.AddDispatcherProgress(dispatcherID, 456, 789)
 
 	data, err := heartbeat.Marshal()
 	require.NoError(t, err)

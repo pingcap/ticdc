@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -80,6 +81,9 @@ type eventService struct {
 	// TODO: use a better way to cache the acceptorInfos
 	dispatcherInfoChan  chan DispatcherInfo
 	dispatcherHeartbeat chan *DispatcherHeartBeatWithServerID
+	handlerMu           sync.Mutex
+	handlerWG           sync.WaitGroup
+	closing             bool
 
 	tz *time.Location
 }
@@ -160,6 +164,11 @@ func (s *eventService) Run(ctx context.Context) error {
 
 func (s *eventService) Close(_ context.Context) error {
 	log.Info("event service is closing")
+	s.handlerMu.Lock()
+	s.closing = true
+	s.handlerMu.Unlock()
+	s.mc.DeRegisterHandler(messaging.EventServiceTopic)
+	s.handlerWG.Wait()
 	for _, c := range s.brokers {
 		c.close()
 	}
@@ -168,6 +177,15 @@ func (s *eventService) Close(_ context.Context) error {
 }
 
 func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
+	s.handlerMu.Lock()
+	if s.closing {
+		s.handlerMu.Unlock()
+		return nil
+	}
+	s.handlerWG.Add(1)
+	s.handlerMu.Unlock()
+	defer s.handlerWG.Done()
+
 	switch msg.Type {
 	case messaging.TypeDispatcherRequest:
 		infos := msgToDispatcherInfo(msg)

@@ -645,9 +645,10 @@ func (c *server) GetCoordinatorInfo(ctx context.Context) (*node.Info, error) {
 				ID:            node.ID(captureInfo.ID),
 				AdvertiseAddr: captureInfo.AdvertiseAddr,
 
-				Version:        captureInfo.Version,
-				DeployPath:     captureInfo.DeployPath,
-				StartTimestamp: captureInfo.StartTimestamp,
+				Version:                  captureInfo.Version,
+				DeployPath:               captureInfo.DeployPath,
+				StartTimestamp:           captureInfo.StartTimestamp,
+				MessagingProtocolVersion: captureInfo.MessagingProtocolVersion,
 
 				// Epoch is now not used in TiCDC, so we just set it to 0.
 				Epoch: 0,

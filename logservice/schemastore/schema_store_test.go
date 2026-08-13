@@ -152,6 +152,38 @@ func TestIgnoreDDLByCommitTs(t *testing.T) {
 	require.NotContains(t, tableNames, "t2")
 }
 
+func TestSchemaStoreCloseWaitsForWorkersBeforeClosingPebble(t *testing.T) {
+	pstorage := newPersistentStorageForTest(t.TempDir(), nil)
+	workerStarted := make(chan struct{})
+	releaseWorker := make(chan struct{})
+	store := &keyspaceSchemaStore{dataStorage: pstorage}
+	store.wg.Add(1)
+	go func() {
+		defer store.wg.Done()
+		close(workerStarted)
+		<-releaseWorker
+	}()
+	<-workerStarted
+
+	schemaStore := &schemaStore{
+		keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{0: store},
+	}
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- schemaStore.Close(context.Background())
+	}()
+
+	select {
+	case err := <-closeDone:
+		require.FailNow(t, "schema store closed before its worker exited", "error: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	require.NoError(t, pstorage.db.Flush())
+
+	close(releaseWorker)
+	require.NoError(t, <-closeDone)
+}
+
 func TestTryUpdateResolvedTsRetryAfterDDLHandleFailure(t *testing.T) {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)

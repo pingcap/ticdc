@@ -201,6 +201,21 @@ func TestHandleMessageIgnoresInvalidSingleMessagePayloads(t *testing.T) {
 	})
 }
 
+func TestHandleMessageIgnoredAfterClose(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	es := &eventService{
+		mc:      mc,
+		brokers: make(map[uint64]*eventBroker),
+	}
+	require.NoError(t, es.Close(context.Background()))
+
+	heartbeat := commonEvent.NewDispatcherHeartbeat()
+	require.NoError(t, es.handleMessage(context.Background(), &messaging.TargetMessage{
+		Type:    messaging.TypeDispatcherHeartbeat,
+		Message: []messaging.IOTypeT{heartbeat},
+	}))
+}
+
 var _ eventstore.EventStore = &mockEventStore{}
 
 // mockEventStore is a mock implementation of the EventStore interface

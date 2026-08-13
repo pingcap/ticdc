@@ -107,8 +107,12 @@ type DispatcherHeartbeat struct {
 }
 
 func NewDispatcherHeartbeat() *DispatcherHeartbeat {
+	return NewDispatcherHeartbeatWithVersion(DispatcherHeartbeatVersion2)
+}
+
+func NewDispatcherHeartbeatWithVersion(version int) *DispatcherHeartbeat {
 	return &DispatcherHeartbeat{
-		Version: DispatcherHeartbeatVersion2,
+		Version: version,
 		// TODO: Pass a real clusterID when we support 1 TiCDC cluster subscribe multiple TiDB clusters
 		ClusterID:                  0,
 		DispatcherProgressesLegacy: make([]DispatcherProgressLegacy, 0),
@@ -118,6 +122,13 @@ func NewDispatcherHeartbeat() *DispatcherHeartbeat {
 
 func (d *DispatcherHeartbeat) AddDispatcherProgress(dispatcherID common.DispatcherID, checkpointTs uint64, epoch uint64) {
 	d.DispatcherCount++
+	if d.Version == DispatcherHeartbeatVersion1 {
+		d.DispatcherProgressesLegacy = append(d.DispatcherProgressesLegacy, DispatcherProgressLegacy{
+			DispatcherID: dispatcherID,
+			CheckpointTs: checkpointTs,
+		})
+		return
+	}
 	d.DispatcherProgresses = append(d.DispatcherProgresses, DispatcherProgress{
 		Version:      DispatcherProgressVersion1,
 		DispatcherID: dispatcherID,

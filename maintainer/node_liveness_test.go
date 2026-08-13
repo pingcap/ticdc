@@ -34,6 +34,17 @@ func (m *mockLogServiceDispatcherCounter) DispatcherCount() int {
 	return m.count
 }
 
+func registerCurrentCoordinator(mc interface {
+	OnNodeChanges(map[node.ID]*node.Info)
+}, coordinatorID node.ID) {
+	mc.OnNodeChanges(map[node.ID]*node.Info{
+		coordinatorID: {
+			ID:                       coordinatorID,
+			MessagingProtocolVersion: node.CurrentMessagingProtocolVersion,
+		},
+	})
+}
+
 func TestSetNodeLivenessRejectEpochMismatch(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
@@ -42,6 +53,7 @@ func TestSetNodeLivenessRejectEpochMismatch(t *testing.T) {
 	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
 	m.coordinatorID = node.ID("coordinator")
 	m.coordinatorVersion = 1
+	registerCurrentCoordinator(mc, m.coordinatorID)
 
 	req := &heartbeatpb.SetNodeLivenessRequest{
 		Target:    heartbeatpb.NodeLiveness_DRAINING,
@@ -68,6 +80,7 @@ func TestSetNodeLivenessApplyTransition(t *testing.T) {
 	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
 	m.coordinatorID = node.ID("coordinator")
 	m.coordinatorVersion = 1
+	registerCurrentCoordinator(mc, m.coordinatorID)
 
 	req := &heartbeatpb.SetNodeLivenessRequest{
 		Target:    heartbeatpb.NodeLiveness_DRAINING,
@@ -177,6 +190,7 @@ func TestSetDispatcherDrainTargetSendsNodeHeartbeatAck(t *testing.T) {
 	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
 	m.coordinatorID = node.ID("coordinator")
 	m.coordinatorVersion = 1
+	registerCurrentCoordinator(mc, m.coordinatorID)
 
 	apply := func(target string, epoch uint64) *heartbeatpb.NodeHeartbeat {
 		msg := messaging.NewSingleTargetMessage(
@@ -232,6 +246,29 @@ func TestCoordinatorBootstrapResponseIncludesDispatcherDrainTarget(t *testing.T)
 	resp := out.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse)
 	require.Equal(t, "n2", resp.DispatcherDrainTargetNodeId)
 	require.Equal(t, uint64(7), resp.DispatcherDrainTargetEpoch)
+	require.Empty(t, mc.GetMessageChannel())
+}
+
+func TestCoordinatorBootstrapSendsNodeHeartbeatToCurrentCoordinator(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	coordinatorID := node.ID("coordinator")
+	registerCurrentCoordinator(mc, coordinatorID)
+
+	var nodeLiveness liveness.Liveness
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	req := messaging.NewSingleTargetMessage(
+		m.nodeInfo.ID,
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1},
+	)
+	req.From = coordinatorID
+	m.onCoordinatorBootstrapRequest(req)
+
+	first := <-mc.GetMessageChannel()
+	second := <-mc.GetMessageChannel()
+	require.Equal(t, messaging.TypeCoordinatorBootstrapResponse, first.Type)
+	require.Equal(t, messaging.TypeNodeHeartbeatRequest, second.Type)
 }
 
 func TestAddMaintainerIgnoreInvalidConfig(t *testing.T) {
