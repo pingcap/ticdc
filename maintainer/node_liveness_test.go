@@ -36,7 +36,8 @@ func (m *mockLogServiceDispatcherCounter) DispatcherCount() int {
 
 func registerCurrentCoordinator(mc interface {
 	OnNodeChanges(map[node.ID]*node.Info)
-}, manager *Manager) {
+}, manager *Manager,
+) {
 	manager.nodeInfo.GitHash = "current-build"
 	mc.OnNodeChanges(map[node.ID]*node.Info{
 		manager.coordinatorID: {
