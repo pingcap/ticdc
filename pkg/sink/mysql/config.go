@@ -69,7 +69,7 @@ const (
 	defaultReadTimeout     = "2m"
 	defaultWriteTimeout    = "2m"
 	defaultDialTimeout     = "2m"
-	defaultAsyncDDLTimeout = "10s"
+	defaultAsyncDDLTimeout = "2m"
 	defaultSafeMode        = false
 	defaultTxnIsolationRC  = "READ-COMMITTED"
 	defaultCharacterSet    = "utf8mb4"
