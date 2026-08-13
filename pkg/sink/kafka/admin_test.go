@@ -140,7 +140,7 @@ func TestGetTopicConfig(t *testing.T) {
 
 		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
-		require.False(t, IsAdminAuthorizationFailed(err))
+		require.False(t, IsAuthorizationFailed(err))
 	})
 }
 
@@ -206,7 +206,46 @@ func TestGetTopicsMeta(t *testing.T) {
 
 		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
 		require.ErrorIs(t, err, sarama.ErrInvalidTopic)
-		require.False(t, IsAdminAuthorizationFailed(err))
+		require.False(t, IsAuthorizationFailed(err))
+	})
+
+	t.Run("topic authorization error", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		admin := NewMocksaramaClusterAdmin(ctrl)
+		admin.EXPECT().DescribeTopics([]string{"test-topic"}).Return([]*sarama.TopicMetadata{
+			{Name: "test-topic", Err: sarama.ErrTopicAuthorizationFailed},
+		}, nil)
+		client := &saramaAdminClient{
+			changefeed: common.NewChangeFeedIDWithName("test", "default"),
+			admin:      admin,
+		}
+
+		_, err := client.GetTopicsMeta([]string{"test-topic"}, false)
+
+		require.ErrorIs(t, err, errors.ErrKafkaAuthorizationFailed)
+		require.NotErrorIs(t, err, errors.ErrKafkaAdminAPI)
+		require.ErrorIs(t, err, sarama.ErrTopicAuthorizationFailed)
+		require.True(t, IsAuthorizationFailed(err))
+		code, ok := errors.RFCCode(err)
+		require.True(t, ok)
+		require.Equal(t, errors.ErrKafkaAuthorizationFailed.RFCCode(), code)
+	})
+
+	t.Run("cluster authorization error", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		admin := NewMocksaramaClusterAdmin(ctrl)
+		admin.EXPECT().DescribeTopics([]string{"test-topic"}).Return(nil, sarama.ErrClusterAuthorizationFailed)
+		client := &saramaAdminClient{
+			changefeed: common.NewChangeFeedIDWithName("test", "default"),
+			admin:      admin,
+		}
+
+		_, err := client.GetTopicsMeta([]string{"test-topic"}, false)
+
+		require.ErrorIs(t, err, errors.ErrKafkaAuthorizationFailed)
+		require.NotErrorIs(t, err, errors.ErrKafkaAdminAPI)
+		require.ErrorIs(t, err, sarama.ErrClusterAuthorizationFailed)
+		require.True(t, IsAuthorizationFailed(err))
 	})
 
 	t.Run("ignored topic error", func(t *testing.T) {
@@ -227,34 +266,25 @@ func TestGetTopicsMeta(t *testing.T) {
 	})
 }
 
-func TestSaramaAdminAuthorizationErrorMapping(t *testing.T) {
+func TestIsAuthorizationFailed(t *testing.T) {
 	t.Parallel()
 
-	for _, cause := range []error{
-		sarama.ErrTopicAuthorizationFailed,
-		sarama.ErrClusterAuthorizationFailed,
-	} {
-		t.Run(cause.Error(), func(t *testing.T) {
-			err := wrapSaramaAdminError(cause, "describe-topic", "test-topic")
-
-			require.ErrorIs(t, err, errors.ErrKafkaAdminAuthorizationFailed)
-			require.NotErrorIs(t, err, errors.ErrKafkaAdminAPI)
-			require.ErrorIs(t, err, cause)
-			require.True(t, IsAdminAuthorizationFailed(err))
-			code, ok := errors.RFCCode(err)
-			require.True(t, ok)
-			require.Equal(t, errors.ErrKafkaAdminAuthorizationFailed.RFCCode(), code)
-		})
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{name: "TiCDC authorization error", err: errors.ErrKafkaAuthorizationFailed.GenWithStackByArgs("describe-topic", "test-topic"), expected: true},
+		{name: "topic authorization error", err: sarama.ErrTopicAuthorizationFailed, expected: true},
+		{name: "cluster authorization error", err: sarama.ErrClusterAuthorizationFailed, expected: true},
+		{name: "general error", err: sarama.ErrInvalidTopic},
 	}
 
-	t.Run("general admin error", func(t *testing.T) {
-		err := wrapSaramaAdminError(io.ErrUnexpectedEOF, "describe-topic", "test-topic")
-
-		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
-		require.ErrorIs(t, err, io.ErrUnexpectedEOF)
-		require.NotErrorIs(t, err, errors.ErrKafkaAdminAuthorizationFailed)
-		require.False(t, IsAdminAuthorizationFailed(err))
-	})
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.expected, IsAuthorizationFailed(test.err))
+		})
+	}
 }
 
 func TestCreateTopic(t *testing.T) {
@@ -268,7 +298,7 @@ func TestCreateTopic(t *testing.T) {
 	}{
 		{name: "success"},
 		{name: "topic already exists", adminErr: sarama.ErrTopicAlreadyExists},
-		{name: "authorization error", adminErr: sarama.ErrClusterAuthorizationFailed, expectedErr: errors.ErrKafkaAdminAuthorizationFailed, authorization: true},
+		{name: "authorization error", adminErr: sarama.ErrClusterAuthorizationFailed, expectedErr: errors.ErrKafkaAuthorizationFailed, authorization: true},
 		{name: "general error", adminErr: sarama.ErrInvalidReplicationFactor, expectedErr: errors.ErrKafkaAdminAPI},
 	}
 
