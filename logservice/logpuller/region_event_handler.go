@@ -243,7 +243,16 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
 	h.eventSink.memoryQuota.ReleaseEvent(event.memoryBytes)
 	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
-	state := event.mustFirstState()
+	if len(event.states) == 0 || event.states[0] == nil {
+		log.Error("drop invalid region event",
+			zap.Bool("hasEntries", event.entries != nil),
+			zap.Uint64("resolvedTs", event.resolvedTs),
+			zap.Int("states", len(event.states)),
+			zap.Uint64("memoryBytes", event.memoryBytes))
+		return nil
+	}
+
+	state := event.states[0]
 	fields := []zap.Field{
 		zap.Bool("hasEntries", event.entries != nil),
 		zap.Uint64("resolvedTs", event.resolvedTs),
