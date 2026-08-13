@@ -332,13 +332,16 @@ func TestPartitionDDLUpdatesSurvivingPartitionTableInfo(t *testing.T) {
 			// Verify that the online path applies the DDL to a registered surviving partition.
 			liveStore := newStore(true)
 			affectedIDs := make([]int64, 0, len(tc.expectedAffectedIDs))
-			handler.iterateEventTablesFunc(event, func(tableIDs ...int64) {
-				affectedIDs = append(affectedIDs, tableIDs...)
-				for _, tableID := range tableIDs {
-					if tableID == survivorID {
-						liveStore.applyDDL(event)
+			handler.iterateEventTablesFunc(iterateEventTablesFuncArgs{
+				event: event,
+				apply: func(tableIDs ...int64) {
+					affectedIDs = append(affectedIDs, tableIDs...)
+					for _, tableID := range tableIDs {
+						if tableID == survivorID {
+							liveStore.applyDDL(event)
+						}
 					}
-				}
+				},
 			})
 			require.ElementsMatch(t, tc.expectedAffectedIDs, affectedIDs)
 			assertUpdated(liveStore)
