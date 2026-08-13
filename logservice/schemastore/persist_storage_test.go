@@ -19,9 +19,11 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"sync"
 	"testing"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -2892,6 +2894,116 @@ func TestRegisterTable(t *testing.T) {
 			pStorage.close()
 		})
 	}
+}
+
+func TestRegisterTableBuildsConsistentVersionStoreSnapshot(t *testing.T) {
+	const (
+		schemaID = int64(50)
+		tableID  = int64(99)
+		ddlTs    = uint64(1000)
+	)
+
+	pStorage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
+		{
+			dbInfo: &model.DBInfo{
+				ID:   schemaID,
+				Name: ast.NewCIStr("test"),
+			},
+			tables: []*model.TableInfo{
+				{
+					ID:   tableID,
+					Name: ast.NewCIStr("t1"),
+				},
+			},
+		},
+	})
+	t.Cleanup(func() {
+		require.NoError(t, pStorage.close())
+	})
+
+	ddlReadyToPersist := make(chan struct{})
+	continuePersistDDL := make(chan struct{})
+	ddlPersisted := make(chan struct{})
+	continueDDL := make(chan struct{})
+	versionStoreSnapshotCreated := make(chan bool, 1)
+	continueRegisterTable := make(chan struct{})
+	var releasePersistDDLOnce, releaseDDLOnce, releaseRegisterTableOnce sync.Once
+	releasePersistDDL := func() {
+		releasePersistDDLOnce.Do(func() { close(continuePersistDDL) })
+	}
+	releaseDDL := func() {
+		releaseDDLOnce.Do(func() { close(continueDDL) })
+	}
+	releaseRegisterTable := func() {
+		releaseRegisterTableOnce.Do(func() { close(continueRegisterTable) })
+	}
+	t.Cleanup(func() {
+		releaseRegisterTable()
+		releaseDDL()
+		releasePersistDDL()
+	})
+
+	const failpointPrefix = "github.com/pingcap/ticdc/logservice/schemastore/"
+	require.NoError(t, failpoint.EnableCall(failpointPrefix+"beforePersistingDDL", func() {
+		close(ddlReadyToPersist)
+		<-continuePersistDDL
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable(failpointPrefix+"beforePersistingDDL"))
+	})
+	require.NoError(t, failpoint.EnableCall(failpointPrefix+"afterPersistingDDL", func() {
+		close(ddlPersisted)
+		<-continueDDL
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable(failpointPrefix+"afterPersistingDDL"))
+	})
+	require.NoError(t, failpoint.EnableCall(failpointPrefix+"afterCreatingVersionStoreSnapshot", func(storage *persistentStorage) {
+		lockProtected := !storage.mu.TryLock()
+		if !lockProtected {
+			storage.mu.Unlock()
+		}
+		versionStoreSnapshotCreated <- lockProtected
+		<-continueRegisterTable
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable(failpointPrefix+"afterCreatingVersionStoreSnapshot"))
+	})
+
+	ddlDone := make(chan error, 1)
+	go func() {
+		ddlDone <- pStorage.handleDDLJob(buildRenameTableJobForTest(schemaID, tableID, "t2", ddlTs, nil))
+	}()
+	<-ddlReadyToPersist
+
+	registerDone := make(chan error, 1)
+	go func() {
+		registerDone <- pStorage.registerTable(tableID, 0)
+	}()
+	lockProtected := <-versionStoreSnapshotCreated
+
+	releasePersistDDL()
+	<-ddlPersisted
+
+	// The DDL is now on disk but cannot publish its history while registration
+	// holds the read lock. Registration captures the old disk/history view, and
+	// the DDL is subsequently added through the normal online apply path.
+	releaseDDL()
+	if !lockProtected {
+		// Force the original inconsistent view when the read lock is absent:
+		// the history is published before registration resumes from its old snapshot.
+		require.NoError(t, <-ddlDone)
+	}
+	releaseRegisterTable()
+	require.NoError(t, <-registerDone)
+	if lockProtected {
+		require.NoError(t, <-ddlDone)
+	}
+	require.True(t, lockProtected,
+		"the Pebble snapshot and DDL history must be captured under the same read lock")
+	tableInfo, err := pStorage.getTableInfo(tableID, ddlTs)
+	require.NoError(t, err)
+	require.Equal(t, "t2", tableInfo.TableName.Table)
 }
 
 func TestGCPersistStorage(t *testing.T) {
