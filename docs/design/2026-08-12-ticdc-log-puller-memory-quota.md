@@ -369,7 +369,7 @@ The subscription client updates quota metrics every ten seconds.
 | --- | --- |
 | `ticdc_log_puller_memory_quota{type="max"}` | Configured soft capacity `Q`. |
 | `ticdc_log_puller_memory_quota{type="used"}` | Accounted retained event bytes. |
-| `ticdc_log_puller_memory_quota{type="scan_used"}` | Estimated bytes reserved by active initial scans. |
+| `ticdc_log_puller_memory_quota{type="scan_estimated"}` | Estimated bytes reserved by active initial scans. |
 | `ticdc_log_puller_memory_quota_event_waiter_count` | Event receivers currently waiting at the hard limit. |
 | `ticdc_log_puller_memory_quota_scan_waiter_count` | Region scans currently waiting at the scan gate. |
 | `ticdc_log_puller_memory_quota_event_wait_duration` | Event receive wait duration histogram. |
@@ -377,17 +377,18 @@ The subscription client updates quota metrics every ten seconds.
 
 The Grafana dashboards expose three panels:
 
-- **Memory Quota Usage** for `max`, `used`, and `scan_used`.
+- **Memory Quota** for the existing Dynamic Stream quota values and
+  `scan_estimated`.
 - **Memory Quota Waiters** for current event and scan waiters.
 - **Memory Quota Wait Duration** for average and P99 wait latency.
 
 Operationally:
 
-- Rising `scan_used` followed by scan waiters means LOW priority initial scans
+- Rising `scan_estimated` followed by scan waiters means LOW priority initial scans
   are being intentionally paced.
 - Rising `used` with event waiters means downstream retention has reached the
   receive hard limit.
-- Persistent HIGH `scan_used` without scan waiters can be expected when active
+- Persistent HIGH `scan_estimated` without scan waiters can be expected when active
   requests are HIGH priority, because they bypass the soft scan gate.
 
 ## 10. Limitations and trade-offs

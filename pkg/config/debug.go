@@ -88,7 +88,11 @@ type PullerConfig struct {
 	OldStartTsScanLowPriorityThreshold TomlDuration `toml:"old-start-ts-scan-low-priority-threshold" json:"old_start_ts_scan_low_priority_threshold"`
 	// MemoryQuota is the log puller's local soft memory limit in bytes.
 	MemoryQuota uint64 `toml:"memory-quota" json:"memory_quota"`
-	// ScanBaseSize is the base memory estimate for one admitted initial scan.
+	// ScanBaseSize is the base memory estimate reserved for one admitted initial
+	// scan. The actual estimate grows logarithmically with scan lag, up to a
+	// bounded multiple of this value. The estimate contributes to MemoryQuota
+	// pressure and throttles new low-priority scans; it is not an actual memory
+	// allocation or a per-scan hard limit.
 	ScanBaseSize uint64 `toml:"scan-base-size" json:"scan_base_size"`
 }
 

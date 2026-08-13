@@ -291,7 +291,7 @@ func (c *memoryQuotaController) UpdateMetrics() {
 
 	metrics.LogPullerMemoryQuota.WithLabelValues("max").Set(float64(c.capacity))
 	metrics.LogPullerMemoryQuota.WithLabelValues("used").Set(float64(used))
-	metrics.LogPullerMemoryQuota.WithLabelValues("scan_used").Set(float64(scanUsed))
+	metrics.LogPullerMemoryQuota.WithLabelValues("scan_estimated").Set(float64(scanUsed))
 	metrics.LogPullerMemoryQuotaEventWaiterCount.Set(
 		float64(c.eventNotifier.waiters.Load()))
 	metrics.LogPullerMemoryQuotaScanWaiterCount.Set(

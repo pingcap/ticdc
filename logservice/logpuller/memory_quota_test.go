@@ -95,7 +95,7 @@ func TestMemoryQuotaUpdateMetrics(t *testing.T) {
 	require.Equal(t, float64(55), testutil.ToFloat64(
 		metrics.LogPullerMemoryQuota.WithLabelValues("used")))
 	require.Equal(t, float64(7), testutil.ToFloat64(
-		metrics.LogPullerMemoryQuota.WithLabelValues("scan_used")))
+		metrics.LogPullerMemoryQuota.WithLabelValues("scan_estimated")))
 	require.Equal(t, float64(2),
 		testutil.ToFloat64(metrics.LogPullerMemoryQuotaEventWaiterCount))
 	require.Equal(t, float64(3),
