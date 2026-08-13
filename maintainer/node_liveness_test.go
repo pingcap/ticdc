@@ -36,11 +36,12 @@ func (m *mockLogServiceDispatcherCounter) DispatcherCount() int {
 
 func registerCurrentCoordinator(mc interface {
 	OnNodeChanges(map[node.ID]*node.Info)
-}, coordinatorID node.ID) {
+}, manager *Manager) {
+	manager.nodeInfo.GitHash = "current-build"
 	mc.OnNodeChanges(map[node.ID]*node.Info{
-		coordinatorID: {
-			ID:                       coordinatorID,
-			MessagingProtocolVersion: node.CurrentMessagingProtocolVersion,
+		manager.coordinatorID: {
+			ID:      manager.coordinatorID,
+			GitHash: manager.nodeInfo.GitHash,
 		},
 	})
 }
@@ -53,7 +54,7 @@ func TestSetNodeLivenessRejectEpochMismatch(t *testing.T) {
 	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
 	m.coordinatorID = node.ID("coordinator")
 	m.coordinatorVersion = 1
-	registerCurrentCoordinator(mc, m.coordinatorID)
+	registerCurrentCoordinator(mc, m)
 
 	req := &heartbeatpb.SetNodeLivenessRequest{
 		Target:    heartbeatpb.NodeLiveness_DRAINING,
@@ -80,7 +81,7 @@ func TestSetNodeLivenessApplyTransition(t *testing.T) {
 	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
 	m.coordinatorID = node.ID("coordinator")
 	m.coordinatorVersion = 1
-	registerCurrentCoordinator(mc, m.coordinatorID)
+	registerCurrentCoordinator(mc, m)
 
 	req := &heartbeatpb.SetNodeLivenessRequest{
 		Target:    heartbeatpb.NodeLiveness_DRAINING,
@@ -190,7 +191,7 @@ func TestSetDispatcherDrainTargetSendsNodeHeartbeatAck(t *testing.T) {
 	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
 	m.coordinatorID = node.ID("coordinator")
 	m.coordinatorVersion = 1
-	registerCurrentCoordinator(mc, m.coordinatorID)
+	registerCurrentCoordinator(mc, m)
 
 	apply := func(target string, epoch uint64) *heartbeatpb.NodeHeartbeat {
 		msg := messaging.NewSingleTargetMessage(
@@ -253,10 +254,11 @@ func TestCoordinatorBootstrapSendsNodeHeartbeatToCurrentCoordinator(t *testing.T
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	coordinatorID := node.ID("coordinator")
-	registerCurrentCoordinator(mc, coordinatorID)
 
 	var nodeLiveness liveness.Liveness
 	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m.coordinatorID = coordinatorID
+	registerCurrentCoordinator(mc, m)
 	req := messaging.NewSingleTargetMessage(
 		m.nodeInfo.ID,
 		messaging.MaintainerManagerTopic,

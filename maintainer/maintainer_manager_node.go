@@ -96,11 +96,12 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 	// frequent retries and log spam on the 200ms tick.
 	m.node.lastNodeHeartbeatSentAt = now
 	// NodeHeartbeat uses an IO type that legacy coordinators do not recognize.
-	// Suppress it unless membership explicitly advertises current messaging
-	// support, so a new capture can safely bootstrap against an old coordinator.
+	// A matching non-empty Git hash proves the coordinator runs the same message
+	// implementation. During a rolling upgrade, suppress this new IO type until
+	// the coordinator has been upgraded to the same build.
 	coordinatorInfo := m.mc.GetNodeInfo(m.coordinatorID)
-	if coordinatorInfo == nil ||
-		coordinatorInfo.MessagingProtocolVersion < node.CurrentMessagingProtocolVersion {
+	if coordinatorInfo == nil || m.nodeInfo.GitHash == "" ||
+		coordinatorInfo.GitHash != m.nodeInfo.GitHash {
 		return
 	}
 

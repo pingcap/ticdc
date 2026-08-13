@@ -45,12 +45,11 @@ type CaptureInfo struct {
 	ID            CaptureID `json:"id"`
 	AdvertiseAddr string    `json:"address"`
 
-	Version                  string `json:"version"`
-	GitHash                  string `json:"git-hash"`
-	DeployPath               string `json:"deploy-path"`
-	StartTimestamp           int64  `json:"start-timestamp"`
-	IsNewArch                bool   `json:"is-new-arch"`
-	MessagingProtocolVersion int    `json:"messaging-protocol-version,omitempty"`
+	Version        string `json:"version"`
+	GitHash        string `json:"git-hash"`
+	DeployPath     string `json:"deploy-path"`
+	StartTimestamp int64  `json:"start-timestamp"`
+	IsNewArch      bool   `json:"is-new-arch"`
 }
 
 // Marshal using json.Marshal.

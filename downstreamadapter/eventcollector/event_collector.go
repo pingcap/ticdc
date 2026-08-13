@@ -441,13 +441,17 @@ func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat
 
 func (c *EventCollector) eventServiceProtocolVersion(target node.ID) int {
 	if target == c.serverId {
-		return node.CurrentMessagingProtocolVersion
+		return event.DispatcherHeartbeatVersion2
 	}
 	info := c.mc.GetNodeInfo(target)
-	if info != nil && info.MessagingProtocolVersion >= node.CurrentMessagingProtocolVersion {
-		return node.CurrentMessagingProtocolVersion
+	localInfo := c.mc.GetNodeInfo(c.serverId)
+	// A matching non-empty Git hash proves both endpoints run the same message
+	// implementation without introducing a separate capability in membership.
+	// During a rolling upgrade, conservatively use the legacy wire format.
+	if info != nil && localInfo != nil && localInfo.GitHash != "" && info.GitHash == localInfo.GitHash {
+		return event.DispatcherHeartbeatVersion2
 	}
-	return node.LegacyMessagingProtocolVersion
+	return event.DispatcherHeartbeatVersion1
 }
 
 func (c *EventCollector) processDSFeedback(ctx context.Context) error {

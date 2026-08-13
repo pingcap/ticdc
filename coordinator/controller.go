@@ -1165,6 +1165,7 @@ func (c *Controller) RemoveNode(id node.ID) {
 			observation.remaining,
 			observation.logServiceDispatcherCount,
 			observation.logServiceDispatcherCountObserved,
+			observation.logServiceDispatcherCountRequired,
 		)
 	}
 

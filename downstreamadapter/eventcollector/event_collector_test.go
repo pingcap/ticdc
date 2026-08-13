@@ -274,6 +274,7 @@ func TestRemoveLastDispatcher(t *testing.T) {
 func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	serverInfo := node.NewInfo("127.0.0.1:18300", "")
 	mc := messaging.NewMockMessageCenter()
+	mc.OnNodeChanges(map[node.ID]*node.Info{serverInfo.ID: serverInfo})
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
 	c := New(serverInfo.ID)
@@ -328,8 +329,8 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 
 	mc.OnNodeChanges(map[node.ID]*node.Info{
 		remoteID: {
-			ID:                       remoteID,
-			MessagingProtocolVersion: node.CurrentMessagingProtocolVersion,
+			ID:      remoteID,
+			GitHash: serverInfo.GitHash,
 		},
 	})
 	grouped = c.groupHeartbeat()

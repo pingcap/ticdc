@@ -201,14 +201,13 @@ func (c *server) setUpDir() {
 // registerNodeToEtcd the server by put the server's information in etcd
 func (c *server) registerNodeToEtcd(ctx context.Context) error {
 	cInfo := &config.CaptureInfo{
-		ID:                       config.CaptureID(c.info.ID),
-		AdvertiseAddr:            c.info.AdvertiseAddr,
-		Version:                  c.info.Version,
-		GitHash:                  c.info.GitHash,
-		DeployPath:               c.info.DeployPath,
-		StartTimestamp:           c.info.StartTimestamp,
-		IsNewArch:                true,
-		MessagingProtocolVersion: c.info.MessagingProtocolVersion,
+		ID:             config.CaptureID(c.info.ID),
+		AdvertiseAddr:  c.info.AdvertiseAddr,
+		Version:        c.info.Version,
+		GitHash:        c.info.GitHash,
+		DeployPath:     c.info.DeployPath,
+		StartTimestamp: c.info.StartTimestamp,
+		IsNewArch:      true,
 	}
 	err := c.EtcdClient.PutCaptureInfo(ctx, cInfo, c.session.Lease())
 	if err != nil {
