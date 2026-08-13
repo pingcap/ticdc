@@ -244,43 +244,48 @@ func TestPartitionDDLUpdatesSurvivingPartitionTableInfo(t *testing.T) {
 	)
 
 	testCases := []struct {
-		name             string
-		ddlType          model.ActionType
-		previousIDs      []int64
-		currentIDs       []int64
-		expectedUpdateTS uint64
-		droppedID        int64
+		name                string
+		ddlType             model.ActionType
+		previousIDs         []int64
+		currentIDs          []int64
+		expectedAffectedIDs []int64
+		expectedUpdateTS    uint64
+		droppedID           int64
 	}{
 		{
-			name:             "add partition",
-			ddlType:          model.ActionAddTablePartition,
-			previousIDs:      []int64{201, 202},
-			currentIDs:       []int64{201, 202, 203},
-			expectedUpdateTS: newUpdateTS,
+			name:                "add partition",
+			ddlType:             model.ActionAddTablePartition,
+			previousIDs:         []int64{201, 202},
+			currentIDs:          []int64{201, 202, 203},
+			expectedAffectedIDs: []int64{201, 202, 203},
+			expectedUpdateTS:    newUpdateTS,
 		},
 		{
-			name:             "drop partition",
-			ddlType:          model.ActionDropTablePartition,
-			previousIDs:      []int64{201, 202, 203},
-			currentIDs:       []int64{201, 202},
-			expectedUpdateTS: newUpdateTS,
-			droppedID:        203,
+			name:                "drop partition",
+			ddlType:             model.ActionDropTablePartition,
+			previousIDs:         []int64{201, 202, 203},
+			currentIDs:          []int64{201, 202},
+			expectedAffectedIDs: []int64{201, 202, 203},
+			expectedUpdateTS:    newUpdateTS,
+			droppedID:           203,
 		},
 		{
-			name:             "reorganize partition",
-			ddlType:          model.ActionReorganizePartition,
-			previousIDs:      []int64{201, 202, 203},
-			currentIDs:       []int64{201, 204, 205},
-			expectedUpdateTS: newUpdateTS,
-			droppedID:        202,
+			name:                "reorganize partition",
+			ddlType:             model.ActionReorganizePartition,
+			previousIDs:         []int64{201, 202, 203},
+			currentIDs:          []int64{201, 204, 205},
+			expectedAffectedIDs: []int64{201, 202, 203, 204, 205},
+			expectedUpdateTS:    newUpdateTS,
+			droppedID:           202,
 		},
 		{
-			name:             "truncate partition",
-			ddlType:          model.ActionTruncateTablePartition,
-			previousIDs:      []int64{201, 202, 203},
-			currentIDs:       []int64{201, 202, 204},
-			expectedUpdateTS: oldUpdateTS,
-			droppedID:        203,
+			name:                "truncate partition",
+			ddlType:             model.ActionTruncateTablePartition,
+			previousIDs:         []int64{201, 202, 203},
+			currentIDs:          []int64{201, 202, 204},
+			expectedAffectedIDs: []int64{201, 202, 203, 204},
+			expectedUpdateTS:    oldUpdateTS,
+			droppedID:           203,
 		},
 	}
 
@@ -326,16 +331,16 @@ func TestPartitionDDLUpdatesSurvivingPartitionTableInfo(t *testing.T) {
 
 			// Verify that the online path applies the DDL to a registered surviving partition.
 			liveStore := newStore(true)
-			applied := false
+			affectedIDs := make([]int64, 0, len(tc.expectedAffectedIDs))
 			handler.iterateEventTablesFunc(event, func(tableIDs ...int64) {
+				affectedIDs = append(affectedIDs, tableIDs...)
 				for _, tableID := range tableIDs {
 					if tableID == survivorID {
 						liveStore.applyDDL(event)
-						applied = true
 					}
 				}
 			})
-			require.True(t, applied)
+			require.ElementsMatch(t, tc.expectedAffectedIDs, affectedIDs)
 			assertUpdated(liveStore)
 
 			// Verify that the history path records and extracts the same update.
@@ -344,12 +349,21 @@ func TestPartitionDDLUpdatesSurvivingPartitionTableInfo(t *testing.T) {
 				ddlEvent:         event,
 				tablesDDLHistory: tablesDDLHistory,
 			})
-			require.Equal(t, []uint64{ddlFinishedTS}, tablesDDLHistory[survivorID])
+			require.Len(t, tablesDDLHistory, len(tc.expectedAffectedIDs))
+			for _, tableID := range tc.expectedAffectedIDs {
+				require.Equal(t, []uint64{ddlFinishedTS}, tablesDDLHistory[tableID])
+			}
 			historyStore := newStore(false)
 			historyStore.applyDDLFromPersistStorage(event)
 			historyStore.setTableInfoInitialized()
 			assertUpdated(historyStore)
 
+			for _, tableID := range tc.currentIDs {
+				tableInfo, deleted := handler.extractTableInfoFunc(event, tableID)
+				require.NotNil(t, tableInfo)
+				require.False(t, deleted)
+				require.Equal(t, tc.expectedUpdateTS, tableInfo.GetUpdateTS())
+			}
 			if tc.droppedID != 0 {
 				tableInfo, deleted := handler.extractTableInfoFunc(event, tc.droppedID)
 				require.Nil(t, tableInfo)
