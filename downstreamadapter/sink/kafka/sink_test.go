@@ -134,7 +134,6 @@ func TestKafkaSinkRunReturnsAsyncProducerError(t *testing.T) {
 	producerErr := errors.ErrKafkaSendMessage.GenWithStackByArgs()
 	kafkaSink, _, asyncProducer, _ := newKafkaSinkForTest(t, ctx, config.ProtocolOpen, &config.SinkConfig{})
 	asyncProducer.EXPECT().AsyncRunCallback(gomock.Any()).Return(producerErr)
-	defer kafkaSink.Close()
 
 	err := kafkaSink.Run(ctx)
 
@@ -325,7 +324,7 @@ func TestKafkaSinkDML(t *testing.T) {
 	eventHelper.Tk().MustExec("use test")
 	require.NotNil(t, eventHelper.DDL2Job("create table t (id int primary key, name varchar(32))"))
 
-	t.Run("forwards routed message and waits for producer callback", func(t *testing.T) {
+	t.Run("routes DML event without invoking callback synchronously", func(t *testing.T) {
 		var callbackCount atomic.Int64
 		dmlEvent := eventHelper.DML2Event("test", "t", "insert into t values (1, 'one')")
 		dmlEvent.PostTxnFlushed = []func(){func() { callbackCount.Add(1) }}
@@ -340,7 +339,6 @@ func TestKafkaSinkDML(t *testing.T) {
 				sent <- message
 				return nil
 			})
-		defer kafkaSink.Close()
 
 		runDone := make(chan error, 1)
 		go func() { runDone <- kafkaSink.sendDMLEvent(ctx) }()
@@ -353,13 +351,18 @@ func TestKafkaSinkDML(t *testing.T) {
 			require.Equal(t, 1, message.GetRowsCount())
 			require.NotNil(t, message.Callback)
 			require.Zero(t, callbackCount.Load())
-		case <-time.After(10 * time.Second):
+		case <-time.After(3 * time.Second):
 			t.Fatal("timed out waiting for Kafka Sink to send the DML message")
 		}
 
 		cause := errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 		cancel(cause)
-		require.Equal(t, cause, <-runDone)
+		select {
+		case err := <-runDone:
+			require.Equal(t, cause, err)
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for Kafka Sink workers to exit")
+		}
 		require.Zero(t, callbackCount.Load())
 	})
 
@@ -372,7 +375,6 @@ func TestKafkaSinkDML(t *testing.T) {
 			t, ctx, config.ProtocolCanalJSON, &config.SinkConfig{})
 		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(1), nil)
 		asyncProducer.EXPECT().AsyncSend(gomock.Any(), kafkaSinkTestTopic, int32(0), gomock.Any()).Return(cause)
-		defer kafkaSink.Close()
 
 		kafkaSink.AddDMLEvent(dmlEvent)
 		err := kafkaSink.sendDMLEvent(ctx)
@@ -492,6 +494,8 @@ func TestKafkaSinkCheckpoint(t *testing.T) {
 			{SchemaName: "db1", Tables: []*heartbeatpb.TableInfo{{TableName: "t1"}}},
 			{SchemaName: "db2", Tables: []*heartbeatpb.TableInfo{{TableName: "t2"}}},
 		}, common.KafkaSinkType, false))
+		// The checkpoint must be fanned out to every active topic: the two
+		// rule topics and the default topic.
 		partitionCounts := map[string]int32{"topic-a": 2, "topic-b": 3, kafkaSinkTestTopic: 4}
 		for topic, partitionCount := range partitionCounts {
 			topicManager.EXPECT().GetPartitionNum(gomock.Any(), topic).Return(partitionCount, nil)
@@ -523,8 +527,11 @@ func TestKafkaSinkCheckpoint(t *testing.T) {
 			{SchemaName: "db1", Tables: []*heartbeatpb.TableInfo{{TableName: "t1"}}},
 		}, common.KafkaSinkType, false))
 		cause := errors.ErrKafkaSendMessage.GenWithStackByArgs()
-		topicManager.EXPECT().GetPartitionNum(gomock.Any(), "topic-a").Return(int32(2), nil)
-		syncProducer.EXPECT().SendMessages("topic-a", int32(2), gomock.Any()).Return(cause)
+		// Fail whichever topic the fan-out reaches first: sendCheckpoint must
+		// return the error and stop, so exactly one GetPartitionNum and one
+		// SendMessages call are expected regardless of the topic order.
+		topicManager.EXPECT().GetPartitionNum(gomock.Any(), gomock.Any()).Return(int32(2), nil)
+		syncProducer.EXPECT().SendMessages(gomock.Any(), int32(2), gomock.Any()).Return(cause)
 		kafkaSink.checkpointChan <- 100
 
 		require.Equal(t, cause, kafkaSink.sendCheckpoint(t.Context()))
@@ -590,7 +597,7 @@ func newKafkaSinkForTest(
 		factory:        factory,
 	})
 	require.NoError(t, err)
-	t.Cleanup(kafkaSink.statistics.Close)
+	t.Cleanup(kafkaSink.Close)
 
 	return kafkaSink, topicManager, asyncProducer, syncProducer
 }
