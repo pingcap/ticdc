@@ -81,8 +81,7 @@ func TestCreateTopic(t *testing.T) {
 		admin.EXPECT().CreateTopic(gomock.Any()).DoAndReturn(
 			func(detail kafka.TopicDetail) error {
 				gotFailedTopicDetail = detail
-				return errors.ErrKafkaInvalidConfig.GenWithStack(
-					"invalid replication factor %d", detail.ReplicationFactor)
+				return errors.ErrKafkaInvalidConfig.GenWithStack("invalid replication factor %d", detail.ReplicationFactor)
 			}),
 	)
 
@@ -150,7 +149,7 @@ func TestCreateTopicValidatesReplicationFactor(t *testing.T) {
 	)
 
 	manager := newKafkaTopicManager(
-		topic,
+		"new-topic",
 		common.NewChangefeedID4Test("test", "test"),
 		admin,
 		&kafka.AutoCreateTopicConfig{
@@ -161,7 +160,8 @@ func TestCreateTopicValidatesReplicationFactor(t *testing.T) {
 		},
 	)
 
-	_, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), topic)
+	_, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), "new-topic")
+
 	require.ErrorContains(t, err, "`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of broker")
 }
 
@@ -233,6 +233,7 @@ func TestGetTopicManagerStartsBackgroundRefreshAfterTopicReady(t *testing.T) {
 		&kafka.AutoCreateTopicConfig{PartitionNum: 2},
 		admin,
 	)
+
 	require.NoError(t, err)
 	defer manager.Close()
 	require.NotNil(t, manager.(*kafkaTopicManager).cancel)
@@ -243,30 +244,25 @@ func TestCreateTopicWithTopicDescribeDenied(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	admin := kafka.NewMockAdmin(ctrl)
-	admin.EXPECT().GetTopicsMeta([]string{"precreated-topic"}, true).Return(
-		nil,
-		errors.WrapError(
-			errors.ErrKafkaAdminAPI,
-			kerr.TopicAuthorizationFailed,
-			"describe-topic",
-			"precreated-topic",
-		),
+	admin.EXPECT().GetTopicsMeta([]string{"default-topic"}, true).Return(map[string]kafka.TopicDetail{}, nil)
+	admin.EXPECT().GetTopicsMeta([]string{"default-topic"}, false).Return(
+		nil, errors.ErrKafkaAuthorizationFailed.GenWithStackByArgs("describe-topic", "default-topic"))
+	manager := newKafkaTopicManager(
+		"default-topic",
+		common.NewChangefeedID4Test("test", "test"),
+		admin,
+		&kafka.AutoCreateTopicConfig{
+			AutoCreate:        true,
+			PartitionNum:      2,
+			ReplicationFactor: 1,
+		},
 	)
-	cfg := &kafka.AutoCreateTopicConfig{
-		AutoCreate:        true,
-		PartitionNum:      2,
-		ReplicationFactor: 1,
-	}
 
-	changefeedID := common.NewChangefeedID4Test("test", "test")
-	ctx := context.Background()
-	manager := newKafkaTopicManager("precreated-topic", changefeedID, admin, cfg)
+	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), "default-topic")
 
-	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, "precreated-topic")
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
-
-	partitions, ok := manager.topics.Load("precreated-topic")
+	partitions, ok := manager.topics.Load("default-topic")
 	require.True(t, ok)
 	require.Equal(t, int32(2), partitions)
 }
@@ -276,40 +272,29 @@ func TestCreateTopicWithCreateDenied(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	admin := kafka.NewMockAdmin(ctrl)
-	gomock.InOrder(
-		admin.EXPECT().GetTopicsMeta([]string{"precreated-topic"}, true).Return(
-			map[string]kafka.TopicDetail{}, nil),
-		admin.EXPECT().GetTopicsMeta([]string{"precreated-topic"}, false).Return(
-			nil, errors.WrapError(
-				errors.ErrKafkaAdminAPI,
-				kerr.UnknownTopicOrPartition,
-				"describe-topic",
-				"precreated-topic",
-			)),
-		admin.EXPECT().CreateTopic(gomock.Any()).Return(
-			errors.WrapError(
-				errors.ErrKafkaAdminAPI,
-				kerr.ClusterAuthorizationFailed,
-				"create-topic",
-				"precreated-topic",
-			),
-		),
-	)
-	cfg := &kafka.AutoCreateTopicConfig{
-		AutoCreate:        true,
-		PartitionNum:      2,
+	admin.EXPECT().GetTopicsMeta([]string{"default-topic"}, true).Return(map[string]kafka.TopicDetail{}, nil)
+	admin.EXPECT().GetTopicsMeta([]string{"default-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
+	admin.EXPECT().CreateTopic(kafka.TopicDetail{
+		Name:              "default-topic",
+		NumPartitions:     2,
 		ReplicationFactor: 1,
-	}
+	}).Return(errors.ErrKafkaAuthorizationFailed.GenWithStackByArgs("create-topic", "default-topic"))
+	manager := newKafkaTopicManager(
+		"default-topic",
+		common.NewChangefeedID4Test("test", "test"),
+		admin,
+		&kafka.AutoCreateTopicConfig{
+			AutoCreate:        true,
+			PartitionNum:      2,
+			ReplicationFactor: 1,
+		},
+	)
 
-	changefeedID := common.NewChangefeedID4Test("test", "test")
-	ctx := context.Background()
-	manager := newKafkaTopicManager("precreated-topic", changefeedID, admin, cfg)
+	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), "default-topic")
 
-	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, "precreated-topic")
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
-
-	partitions, ok := manager.topics.Load("precreated-topic")
+	partitions, ok := manager.topics.Load("default-topic")
 	require.True(t, ok)
 	require.Equal(t, int32(2), partitions)
 }

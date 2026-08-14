@@ -284,7 +284,7 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	// which means we should create the topic later.
 	topicDetails, err := m.admin.GetTopicsMeta([]string{topicName}, true)
 	if err != nil {
-		if kafka.IsAdminAuthorizationFailed(err) {
+		if kafka.IsAuthorizationFailed(err) {
 			return m.useConfiguredPartitionNum(topicName, err), nil
 		}
 		return 0, err
@@ -294,7 +294,7 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	}
 	topicDetails, err = m.admin.GetTopicsMeta([]string{topicName}, false)
 	if err != nil {
-		if kafka.IsAdminAuthorizationFailed(err) {
+		if kafka.IsAuthorizationFailed(err) {
 			return m.useConfiguredPartitionNum(topicName, err), nil
 		}
 	} else if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
@@ -304,7 +304,7 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	start := time.Now()
 	partitionNum, err := m.createTopic(ctx, topicName)
 	if err != nil {
-		if kafka.IsAdminAuthorizationFailed(err) {
+		if kafka.IsAuthorizationFailed(err) {
 			return m.useConfiguredPartitionNum(topicName, err), nil
 		}
 		return 0, err

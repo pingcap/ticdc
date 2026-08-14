@@ -90,6 +90,9 @@ func (a *admin) GetBrokerConfig(configName string) (string, bool, error) {
 
 	meta, err := a.admin.BrokerMetadata(ctx)
 	if err != nil {
+		if IsAuthorizationFailed(err) {
+			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-cluster", "cluster")
+		}
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-cluster", "cluster")
 	}
 	if meta.Controller < 0 {
@@ -98,15 +101,24 @@ func (a *admin) GetBrokerConfig(configName string) (string, bool, error) {
 
 	configs, err := a.admin.DescribeBrokerConfigs(ctx, meta.Controller)
 	if err != nil {
+		if IsAuthorizationFailed(err) {
+			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-config", configName)
+		}
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", configName)
 	}
 
 	controllerName := strconv.Itoa(int(meta.Controller))
 	resource, err := configs.On(controllerName, nil)
 	if err != nil {
+		if IsAuthorizationFailed(err) {
+			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-config", configName)
+		}
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", configName)
 	}
 	if resource.Err != nil {
+		if IsAuthorizationFailed(resource.Err) {
+			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, resource.Err, "describe-config", configName)
+		}
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, resource.Err, "describe-config", configName)
 	}
 
@@ -124,13 +136,22 @@ func (a *admin) GetTopicConfig(topicName string, configName string) (string, boo
 
 	configs, err := a.admin.DescribeTopicConfigs(ctx, topicName)
 	if err != nil {
+		if IsAuthorizationFailed(err) {
+			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-config", topicName)
+		}
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", topicName)
 	}
 	resource, err := configs.On(topicName, nil)
 	if err != nil {
+		if IsAuthorizationFailed(err) {
+			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-config", topicName)
+		}
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", topicName)
 	}
 	if resource.Err != nil {
+		if IsAuthorizationFailed(resource.Err) {
+			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, resource.Err, "describe-config", topicName)
+		}
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, resource.Err, "describe-config", topicName)
 	}
 
@@ -142,10 +163,7 @@ func (a *admin) GetTopicConfig(topicName string, configName string) (string, boo
 	return "", false, nil
 }
 
-func (a *admin) GetTopicsMeta(
-	topics []string,
-	ignoreTopicError bool,
-) (map[string]TopicDetail, error) {
+func (a *admin) GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
 	if len(topics) == 0 {
 		return make(map[string]TopicDetail), nil
 	}
@@ -155,25 +173,21 @@ func (a *admin) GetTopicsMeta(
 
 	meta, err := a.admin.Metadata(ctx, topics...)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-topics", strings.Join(topics, ","))
+		resource := strings.Join(topics, ",")
+		if IsAuthorizationFailed(err) {
+			return nil, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-topics", resource)
+		}
+		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-topics", resource)
 	}
 
 	return topicDetailsFromMetadata(meta, topics, ignoreTopicError)
 }
 
-func topicDetailsFromMetadata(
-	meta kadm.Metadata,
-	topics []string,
-	ignoreTopicError bool,
-) (map[string]TopicDetail, error) {
+func topicDetailsFromMetadata(meta kadm.Metadata, topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
 	result := make(map[string]TopicDetail, len(topics))
 	for _, topic := range topics {
 		detail, ok := meta.Topics[topic]
 		if !ok {
-			if !ignoreTopicError {
-				return nil, errors.WrapError(
-					errors.ErrKafkaAdminAPI, kerr.UnknownTopicOrPartition, "describe-topic", topic)
-			}
 			continue
 		}
 		if detail.Err == nil {
@@ -184,19 +198,23 @@ func topicDetailsFromMetadata(
 			continue
 		}
 		if errors.Is(detail.Err, kerr.UnknownTopicOrPartition) {
-			if !ignoreTopicError {
-				return nil, errors.WrapError(errors.ErrKafkaAdminAPI, detail.Err, "describe-topic", topic)
-			}
 			continue
+		}
+		if ignoreTopicError {
+			continue
+		}
+		if IsAuthorizationFailed(detail.Err) {
+			return nil, errors.WrapError(errors.ErrKafkaAuthorizationFailed, detail.Err, "describe-topic", topic)
 		}
 		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, detail.Err, "describe-topic", topic)
 	}
 	return result, nil
 }
 
-// IsAdminAuthorizationFailed checks whether err is an authorization failure from Kafka admin APIs.
-func IsAdminAuthorizationFailed(err error) bool {
-	return errors.Is(err, kerr.TopicAuthorizationFailed) ||
+// IsAuthorizationFailed checks whether err is a Kafka authorization failure.
+func IsAuthorizationFailed(err error) bool {
+	return errors.Is(err, errors.ErrKafkaAuthorizationFailed) ||
+		errors.Is(err, kerr.TopicAuthorizationFailed) ||
 		errors.Is(err, kerr.ClusterAuthorizationFailed)
 }
 
@@ -204,9 +222,11 @@ func (a *admin) CreateTopic(detail TopicDetail) error {
 	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
 	defer cancel()
 
-	responses, err := a.admin.CreateTopics(
-		ctx, detail.NumPartitions, detail.ReplicationFactor, nil, detail.Name)
+	responses, err := a.admin.CreateTopics(ctx, detail.NumPartitions, detail.ReplicationFactor, nil, detail.Name)
 	if err != nil {
+		if IsAuthorizationFailed(err) {
+			return errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "create-topic", detail.Name)
+		}
 		return errors.WrapError(errors.ErrKafkaAdminAPI, err, "create-topic", detail.Name)
 	}
 
@@ -222,6 +242,9 @@ func (a *admin) CreateTopic(detail TopicDetail) error {
 	}
 	if errors.Is(resp.Err, kerr.InvalidReplicationFactor) {
 		return errors.WrapError(errors.ErrKafkaInvalidConfig, resp.Err)
+	}
+	if IsAuthorizationFailed(resp.Err) {
+		return errors.WrapError(errors.ErrKafkaAuthorizationFailed, resp.Err, "create-topic", detail.Name)
 	}
 	return errors.WrapError(errors.ErrKafkaAdminAPI, resp.Err, "create-topic", detail.Name)
 }

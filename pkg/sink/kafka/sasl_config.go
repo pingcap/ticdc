@@ -16,10 +16,10 @@ package kafka
 import (
 	"strings"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
-// saslMechanism defines SASL mechanism.
+// saslMechanism defines a SASL mechanism.
 type saslMechanism string
 
 // The mechanisms we currently support.
@@ -50,11 +50,11 @@ func saslMechanismFromString(s string) (saslMechanism, error) {
 	case "oauthbearer":
 		return oauthMechanism, nil
 	default:
-		return "", errors.Errorf("unknown %s SASL mechanism", s)
+		return "", errors.ErrKafkaInvalidConfig.FastGen("unknown SASL mechanism: %s", s)
 	}
 }
 
-// saslConfig holds necessary path parameter to support sasl-scram
+// saslConfig holds the configuration for SASL authentication.
 type saslConfig struct {
 	user      string
 	password  string
@@ -73,17 +73,16 @@ type oauth2Config struct {
 	audience     string
 }
 
-// validate validates the parameters of oauth2Config.
-// Some parameters are required, some are optional.
+// validate validates the OAuth2 parameters.
 func (o *oauth2Config) validate() error {
 	if len(o.clientID) == 0 {
-		return errors.New("OAuth2 client id is empty")
+		return errors.ErrKafkaInvalidConfig.FastGen("OAuth2 client id is empty")
 	}
 	if len(o.clientSecret) == 0 {
-		return errors.New("OAuth2 client secret is empty")
+		return errors.ErrKafkaInvalidConfig.FastGen("OAuth2 client secret is empty")
 	}
 	if len(o.tokenURL) == 0 {
-		return errors.New("OAuth2 token url is empty")
+		return errors.ErrKafkaInvalidConfig.FastGen("OAuth2 token url is empty")
 	}
 	return nil
 }
@@ -92,13 +91,15 @@ func (o *oauth2Config) validate() error {
 type gssapiAuthType int
 
 const (
+	// unknownAuth means the auth type is unknown.
+	unknownAuth gssapiAuthType = 0
 	// userAuth means the auth type is user.
 	userAuth gssapiAuthType = 1
 	// keyTabAuth means the auth type is keytab.
 	keyTabAuth gssapiAuthType = 2
 )
 
-// gssapiAuthTypeFromString convent the string to gssapiAuthType.
+// gssapiAuthTypeFromString converts the string to a GSSAPI authentication type.
 func gssapiAuthTypeFromString(s string) (gssapiAuthType, error) {
 	switch strings.ToLower(s) {
 	case "user":
@@ -106,11 +107,11 @@ func gssapiAuthTypeFromString(s string) (gssapiAuthType, error) {
 	case "keytab":
 		return keyTabAuth, nil
 	default:
-		return 0, errors.Errorf("unknown %s auth type", s)
+		return unknownAuth, errors.ErrKafkaInvalidConfig.FastGen("unknown auth type: %s", s)
 	}
 }
 
-// gssapiConfig holds necessary path parameter to support sasl-gssapi.
+// gssapiConfig holds necessary parameters to support sasl-gssapi.
 type gssapiConfig struct {
 	authType           gssapiAuthType
 	keyTabPath         string

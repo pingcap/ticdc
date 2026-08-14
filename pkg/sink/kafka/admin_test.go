@@ -55,27 +55,24 @@ func TestTopicDetailsFromMetadata(t *testing.T) {
 			expected:         map[string]TopicDetail{},
 		},
 		{
-			name: "return unknown topic",
+			name: "skip unknown topic",
 			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
 				topic: {Topic: topic, Err: kerr.UnknownTopicOrPartition},
 			}},
-			expectedError: errors.ErrKafkaAdminAPI,
-			expectedCause: kerr.UnknownTopicOrPartition,
+			expected: map[string]TopicDetail{},
 		},
 		{
-			name:          "return missing topic",
-			metadata:      kadm.Metadata{Topics: kadm.TopicDetails{}},
-			expectedError: errors.ErrKafkaAdminAPI,
-			expectedCause: kerr.UnknownTopicOrPartition,
+			name:     "skip missing topic",
+			metadata: kadm.Metadata{Topics: kadm.TopicDetails{}},
+			expected: map[string]TopicDetail{},
 		},
 		{
-			name: "do not ignore authorization failure",
+			name: "return authorization failure",
 			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
 				topic: {Topic: topic, Err: kerr.TopicAuthorizationFailed},
 			}},
-			ignoreTopicError: true,
-			expectedError:    errors.ErrKafkaAdminAPI,
-			expectedCause:    kerr.TopicAuthorizationFailed,
+			expectedError: errors.ErrKafkaAuthorizationFailed,
+			expectedCause: kerr.TopicAuthorizationFailed,
 		},
 	}
 
@@ -93,6 +90,31 @@ func TestTopicDetailsFromMetadata(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, tc.expected, actual)
+		})
+	}
+}
+
+func TestIsAuthorizationFailed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "TiCDC authorization error",
+			err:      errors.ErrKafkaAuthorizationFailed.GenWithStackByArgs("describe-topic", "test-topic"),
+			expected: true,
+		},
+		{name: "topic authorization error", err: kerr.TopicAuthorizationFailed, expected: true},
+		{name: "cluster authorization error", err: kerr.ClusterAuthorizationFailed, expected: true},
+		{name: "general error", err: kerr.InvalidTopicException},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.expected, IsAuthorizationFailed(test.err))
 		})
 	}
 }
