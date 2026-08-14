@@ -205,7 +205,6 @@ func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error)
 		observation.drainingObserved,
 		observation.stoppingObserved,
 		observation.remaining,
-		observation.logServiceDispatcherCount,
 	)
 
 	if completionObserved {
@@ -226,7 +225,7 @@ func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error)
 		zap.Int("dispatcherCountOnTarget", observation.dispatcherCountOnTarget),
 		zap.Int("targetInflightDrainMoveCount", observation.targetInflightDrainMoveCount),
 		zap.Int("pendingStatusCount", observation.pendingStatusCount),
-		zap.Uint32("logServiceDispatcherCount", observation.logServiceDispatcherCount),
+		zap.Int("logServiceDispatcherCount", observation.logServiceDispatcherCount),
 		zap.Int("remaining", observation.remaining))
 	return ensureDrainRemainingNonZero(observation.remaining), nil
 }
@@ -242,7 +241,6 @@ func (c *Controller) observeRemovedActiveDrainTarget(target node.ID, epoch uint6
 		observation.drainingObserved,
 		observation.stoppingObserved,
 		observation.remaining,
-		observation.logServiceDispatcherCount,
 	)
 	if completionObserved {
 		log.Info("drain completion observed for removed active target",
@@ -262,7 +260,7 @@ func (c *Controller) observeRemovedActiveDrainTarget(target node.ID, epoch uint6
 		zap.Int("dispatcherCountOnTarget", observation.dispatcherCountOnTarget),
 		zap.Int("targetInflightDrainMoveCount", observation.targetInflightDrainMoveCount),
 		zap.Int("pendingStatusCount", observation.pendingStatusCount),
-		zap.Uint32("logServiceDispatcherCount", observation.logServiceDispatcherCount),
+		zap.Int("logServiceDispatcherCount", observation.logServiceDispatcherCount),
 		zap.Int("remaining", observation.remaining))
 	return ensureDrainRemainingNonZero(observation.remaining)
 }
@@ -318,7 +316,7 @@ type drainNodeObservation struct {
 	nodeState                 drain.State
 	drainingObserved          bool
 	stoppingObserved          bool
-	logServiceDispatcherCount uint32
+	logServiceDispatcherCount int
 }
 
 func (c *Controller) observeDrainNode(target node.ID, epoch uint64) drainNodeObservation {
@@ -328,16 +326,17 @@ func (c *Controller) observeDrainNode(target node.ID, epoch uint64) drainNodeObs
 	}
 	observation.dispatcherCountOnTarget, observation.targetInflightDrainMoveCount = c.aggregateDrainTargetProgress(target, epoch)
 	observation.pendingStatusCount = c.collectDrainPendingStatus(target, epoch)
+	observation.logServiceDispatcherCount = c.drainController.GetLogServiceDispatcherCount(target)
 	observation.remaining = drainRemainingEstimate(
 		observation.maintainersOnTarget,
 		observation.inflightOpsInvolvingTarget,
 		observation.dispatcherCountOnTarget,
 		observation.targetInflightDrainMoveCount,
 		observation.pendingStatusCount,
+		observation.logServiceDispatcherCount,
 	)
 
 	_, observation.drainingObserved, observation.stoppingObserved = c.drainController.GetStatus(target)
-	observation.logServiceDispatcherCount, _ = c.drainController.GetLogServiceDispatcherCount(target)
 	observation.nodeState = c.drainController.GetState(target)
 	return observation
 }
@@ -1088,14 +1087,11 @@ func isBestEffortDrainComplete(
 	drainingObserved bool,
 	stoppingObserved bool,
 	remaining int,
-	logServiceDispatcherCount uint32,
 ) bool {
 	if nodeState == drain.StateUnknown || !drainingObserved {
 		return false
 	}
-	return stoppingObserved &&
-		remaining == 0 &&
-		logServiceDispatcherCount == 0
+	return stoppingObserved && remaining == 0
 }
 
 // drainRemainingEstimate uses the larger workload dimension to avoid obvious double counting.
@@ -1105,6 +1101,7 @@ func drainRemainingEstimate(
 	dispatcherCountOnTarget int,
 	targetInflightDrainMoveCount int,
 	pendingStatusCount int,
+	logServiceDispatcherCount int,
 ) int {
 	return max(
 		maintainersOnTarget,
@@ -1112,6 +1109,7 @@ func drainRemainingEstimate(
 		dispatcherCountOnTarget,
 		targetInflightDrainMoveCount,
 		pendingStatusCount,
+		logServiceDispatcherCount,
 	)
 }
 

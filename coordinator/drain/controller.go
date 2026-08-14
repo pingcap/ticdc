@@ -67,7 +67,7 @@ type nodeState struct {
 
 	// logServiceDispatcherCount is valid only after a STOPPING heartbeat has
 	// been observed for the current node epoch.
-	logServiceDispatcherCount uint32
+	logServiceDispatcherCount int
 }
 
 type drainTargetSchedulerGate struct {
@@ -191,7 +191,7 @@ func (c *Controller) ObserveHeartbeat(nodeID node.ID, hb *heartbeatpb.NodeHeartb
 	c.observeLivenessLocked(nodeID, hb.NodeEpoch, hb.Liveness)
 	st := c.ensureNodeStateLocked(nodeID)
 	if hb.NodeEpoch == st.nodeEpoch && hb.Liveness == heartbeatpb.NodeLiveness_STOPPING {
-		st.logServiceDispatcherCount = hb.GetLogServiceDispatcherCount()
+		st.logServiceDispatcherCount = int(hb.GetLogServiceDispatcherCount())
 	}
 	c.observeTargetSchedulerAckLocked(nodeID, hb)
 }
@@ -424,16 +424,17 @@ func (c *Controller) GetStatus(nodeID node.ID) (drainRequested, drainingObserved
 }
 
 // GetLogServiceDispatcherCount returns the dispatcher count reported by a
-// STOPPING heartbeat for the current node epoch.
-func (c *Controller) GetLogServiceDispatcherCount(nodeID node.ID) (uint32, bool) {
+// STOPPING heartbeat for the current node epoch. Nodes that do not report the
+// field use the protobuf default value zero.
+func (c *Controller) GetLogServiceDispatcherCount(nodeID node.ID) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	st, ok := c.nodes[nodeID]
 	if !ok {
-		return 0, false
+		return 0
 	}
-	return st.logServiceDispatcherCount, true
+	return st.logServiceDispatcherCount
 }
 
 // GetDrainProtocolVersion returns the bootstrap-observed drain capability for a node.

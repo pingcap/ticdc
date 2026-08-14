@@ -194,7 +194,7 @@ func TestDrainNodeWaitsForReportedLogServiceDispatchers(t *testing.T) {
 	setTargetStoppingHeartbeat(drainController, target, 2)
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
-	require.Equal(t, 1, remaining)
+	require.Equal(t, 2, remaining)
 
 	setTargetStoppingHeartbeat(drainController, target, 0)
 	remaining, err = c.DrainNode(context.Background(), target)

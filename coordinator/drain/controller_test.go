@@ -134,24 +134,20 @@ func TestDrainControllerTracksStoppingLogServiceDispatcherCountByEpoch(t *testin
 		Applied:   heartbeatpb.NodeLiveness_STOPPING,
 		NodeEpoch: 42,
 	})
-	_, observed := c.GetLogServiceDispatcherCount(target)
-	require.False(t, observed)
+	require.Zero(t, c.GetLogServiceDispatcherCount(target))
 
 	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
 		Liveness:                  heartbeatpb.NodeLiveness_STOPPING,
 		NodeEpoch:                 42,
 		LogServiceDispatcherCount: 2,
 	})
-	count, observed := c.GetLogServiceDispatcherCount(target)
-	require.True(t, observed)
-	require.Equal(t, uint32(2), count)
+	require.Equal(t, 2, c.GetLogServiceDispatcherCount(target))
 
 	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
 		NodeEpoch: 43,
 	})
-	_, observed = c.GetLogServiceDispatcherCount(target)
-	require.False(t, observed)
+	require.Zero(t, c.GetLogServiceDispatcherCount(target))
 
 	// A delayed heartbeat from the old process must not satisfy the new epoch.
 	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
@@ -159,8 +155,7 @@ func TestDrainControllerTracksStoppingLogServiceDispatcherCountByEpoch(t *testin
 		NodeEpoch:                 42,
 		LogServiceDispatcherCount: 0,
 	})
-	_, observed = c.GetLogServiceDispatcherCount(target)
-	require.False(t, observed)
+	require.Zero(t, c.GetLogServiceDispatcherCount(target))
 }
 
 func TestDrainControllerSkipStoppingForNewEpochWithoutDraining(t *testing.T) {
