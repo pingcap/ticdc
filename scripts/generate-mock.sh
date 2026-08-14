@@ -58,12 +58,14 @@ run_mockgen -source pkg/api/v2/api_client.go -destination pkg/api/v2/mock/api_cl
 run_mockgen -source pkg/sink/codec/simple/marshaller.go -destination pkg/sink/codec/simple/mock/marshaller.go
 run_mockgen -source pkg/sink/kafka/admin_client.go -destination pkg/sink/kafka/admin_client_mock.go -package kafka
 run_mockgen -source pkg/sink/kafka/factory.go -destination pkg/sink/kafka/factory_mock.go -package kafka
-run_mockgen -source pkg/sink/kafka/admin.go -destination pkg/sink/kafka/admin_mock.go -package kafka
+run_mockgen -source pkg/sink/kafka/admin.go -destination pkg/sink/kafka/sarama_admin_mock.go -package kafka
 run_mockgen -source pkg/sink/kafka/sarama_sync_producer.go -destination pkg/sink/kafka/sarama_sync_producer_mock.go -package kafka
 run_mockgen -source pkg/keyspace/keyspace_manager.go -destination pkg/keyspace/keyspace_manager_mock.go -package keyspace
 run_mockgen -source pkg/txnutil/gc/gc_manager.go -destination pkg/txnutil/gc/gc_manager_mock.go -package gc
 run_mockgen -source pkg/txnutil/gc/gc_client.go -destination pkg/txnutil/gc/gc_client_mock.go -package gc
 run_mockgen -source pkg/redo/writer/writer.go -destination pkg/redo/writer/writer_mock.go -package writer
 run_mockgen -source downstreamadapter/sink/sink.go -destination downstreamadapter/sink/mock/sink_mock.go -package mock
+
+run_mockgen -source downstreamadapter/sink/topicmanager/topic_manager.go -destination downstreamadapter/sink/topicmanager/topic_manager_mock.go -package topicmanager
 
 wait_for_batch
