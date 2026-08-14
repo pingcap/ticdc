@@ -16,21 +16,19 @@ package kafka
 import (
 	"testing"
 
-	"github.com/IBM/sarama"
 	"github.com/stretchr/testify/require"
 	"github.com/xdg/scram"
 )
 
-func TestSCRAMClientGeneratorHandshake(t *testing.T) {
+func TestSCRAMClientHandshake(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name          string
-		mechanism     saslMechanism
 		hashGenerator scram.HashGeneratorFcn
 	}{
-		{name: "SHA-256", mechanism: scram256Mechanism, hashGenerator: sha256HashGenerator},
-		{name: "SHA-512", mechanism: scram512Mechanism, hashGenerator: sha512HashGenerator},
+		{name: "SHA-256", hashGenerator: sha256HashGenerator},
+		{name: "SHA-512", hashGenerator: sha512HashGenerator},
 	}
 
 	for _, test := range tests {
@@ -41,17 +39,7 @@ func TestSCRAMClientGeneratorHandshake(t *testing.T) {
 				username = "user"
 				password = "password"
 			)
-			options := NewOptions()
-			options.sasl = &saslConfig{
-				user:      username,
-				password:  password,
-				mechanism: test.mechanism,
-			}
-			config := sarama.NewConfig()
-			require.NoError(t, completeSaramaSASLConfig(t.Context(), config, options))
-			require.NotNil(t, config.Net.SASL.SCRAMClientGeneratorFunc)
-
-			client := config.Net.SASL.SCRAMClientGeneratorFunc()
+			client := &xdgSCRAMClient{HashGeneratorFcn: test.hashGenerator}
 			require.NoError(t, client.Begin(username, password, ""))
 
 			credentialClient, err := test.hashGenerator.NewClient(username, password, "")
