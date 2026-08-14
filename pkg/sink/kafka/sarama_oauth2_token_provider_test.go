@@ -14,16 +14,21 @@
 package kafka
 
 import (
+<<<<<<< HEAD
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+=======
+	"context"
+>>>>>>> f796ba3e6 (kafka: add more unit test (#5969))
 	"net/url"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
+<<<<<<< HEAD
 	"golang.org/x/oauth2"
 )
 
@@ -160,6 +165,60 @@ func TestTokenProviderPropagatesEndpointError(t *testing.T) {
 			require.Empty(t, retrieveErr.ErrorURI)
 			require.Empty(t, retrieveErr.Body)
 			require.NotContains(t, err.Error(), "client-secret-sentinel")
+=======
+)
+
+func TestNewTokenProvider(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name        string
+		options     *options
+		expectedErr string
+	}{
+		{
+			name: "valid",
+			options: &options{
+				SASL: &security.SASL{
+					OAuth2: security.OAuth2{
+						ClientID:     "client-id",
+						ClientSecret: "client-secret",
+						TokenURL:     "http://localhost:8080/oauth2/token",
+						Scopes:       []string{"scope1", "scope2"},
+						GrantType:    "client_credentials",
+					},
+				},
+			},
+		},
+		{
+			name: "invalid token URL",
+			options: &options{
+				SASL: &security.SASL{
+					OAuth2: security.OAuth2{
+						ClientID:     "client-id",
+						ClientSecret: "client-secret",
+						TokenURL:     "http://test.com/Segment%%2815197306101420000%29",
+						Scopes:       []string{"scope1", "scope2"},
+						GrantType:    "client_credentials",
+					},
+				},
+			},
+			expectedErr: "invalid URL escape",
+		},
+	} {
+		ts := test
+		t.Run(ts.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := newTokenProvider(context.TODO(), ts.options)
+			if ts.expectedErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+				var escapeErr url.EscapeError
+				require.ErrorAs(t, err, &escapeErr)
+				require.Contains(t, err.Error(), ts.expectedErr)
+			}
+>>>>>>> f796ba3e6 (kafka: add more unit test (#5969))
 		})
 	}
 }
