@@ -25,11 +25,11 @@ import (
 
 	dmysql "github.com/go-sql-driver/mysql"
 	lru "github.com/hashicorp/golang-lru"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
@@ -108,17 +108,6 @@ type Config struct {
 	MaxMultiUpdateRowCount int
 	MaxMultiUpdateRowSize  int
 	TidbTxnMode            string
-<<<<<<< HEAD
-	ReadTimeout            string
-	WriteTimeout           string
-	DialTimeout            string
-	SafeMode               bool
-	Timezone               string
-	TLS                    string
-	SSLCa                  string
-	SSLCert                string
-	SSLKey                 string
-=======
 	// tidbTxnModeSpecified indicates whether TidbTxnMode is explicitly set by user via sink URI or changefeed config.
 	// It is used to avoid overriding user configuration when applying downstream-specific defaults.
 	tidbTxnModeSpecified bool
@@ -134,7 +123,6 @@ type Config struct {
 	SSLCa           string
 	SSLCert         string
 	SSLKey          string
->>>>>>> 430b0a8cc (sink: add async ddl timeout for add index (#5836))
 
 	// retry number for dml
 	DMLMaxRetry uint64
@@ -182,7 +170,6 @@ type Config struct {
 // New returns the default mysql backend config.
 func New() *Config {
 	return &Config{
-<<<<<<< HEAD
 		WorkerCount:            DefaultTiDBWorkerCount,
 		workerCountSpecified:   false,
 		MaxTxnRow:              DefaultMaxTxnRow,
@@ -192,6 +179,7 @@ func New() *Config {
 		ReadTimeout:            defaultReadTimeout,
 		WriteTimeout:           defaultWriteTimeout,
 		DialTimeout:            defaultDialTimeout,
+		AsyncDDLTimeout:        defaultAsyncDDLTimeout,
 		SafeMode:               defaultSafeMode,
 		BatchDMLEnable:         defaultBatchDMLEnable,
 		MultiStmtEnable:        defaultMultiStmtEnable,
@@ -202,29 +190,6 @@ func New() *Config {
 		EnableDDLTs:            defaultEnableDDLTs,
 		SlowQuery:              slowQuery,
 		whereClause:            sqlmodel.DefaultWhereClause,
-=======
-		WorkerCount:                   DefaultTiDBWorkerCount,
-		workerCountSpecified:          false,
-		MaxTxnRow:                     DefaultMaxTxnRow,
-		MaxMultiUpdateRowCount:        defaultMaxMultiUpdateRowCount,
-		MaxMultiUpdateRowSize:         defaultMaxMultiUpdateRowSize,
-		TidbTxnMode:                   defaultTiDBTxnMode,
-		ReadTimeout:                   defaultReadTimeout,
-		WriteTimeout:                  defaultWriteTimeout,
-		DialTimeout:                   defaultDialTimeout,
-		AsyncDDLTimeout:               defaultAsyncDDLTimeout,
-		SafeMode:                      defaultSafeMode,
-		BatchDMLEnable:                defaultBatchDMLEnable,
-		MultiStmtEnable:               defaultMultiStmtEnable,
-		CachePrepStmts:                defaultCachePrepStmts,
-		SourceID:                      config.DefaultTiDBSourceID,
-		DMLMaxRetry:                   8,
-		HasVectorType:                 defaultHasVectorType,
-		EnableDDLTs:                   defaultEnableDDLTs,
-		SlowQuery:                     slowQuery,
-		ActiveActiveSyncStatsInterval: time.Minute,
-		whereClause:                   sqlmodel.DefaultWhereClause,
->>>>>>> 430b0a8cc (sink: add async ddl timeout for add index (#5836))
 	}
 }
 

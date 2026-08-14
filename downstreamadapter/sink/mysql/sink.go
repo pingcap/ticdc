@@ -106,11 +106,7 @@ func New(
 		metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
 	}
 
-<<<<<<< HEAD
-	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, config.BDRMode), nil
-=======
-	return newMySQLSinkWithControlAsyncDB(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval, keyspaceID), nil
->>>>>>> 430b0a8cc (sink: add async ddl timeout for add index (#5836))
+	return newMySQLSinkWithControlAsyncDB(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, config.BDRMode), nil
 }
 
 // NewMySQLSink used for test
@@ -121,15 +117,11 @@ func NewMySQLSink(
 	db *sql.DB,
 	bdrMode bool,
 ) *Sink {
-<<<<<<< HEAD
-	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, db, db, bdrMode)
-=======
 	var controlAsyncDB *sql.DB
 	if cfg.IsTiDB {
 		controlAsyncDB = db
 	}
-	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, db, db, controlAsyncDB, bdrMode, enableActiveActive, progressInterval, keyspaceID)
->>>>>>> 430b0a8cc (sink: add async ddl timeout for add index (#5836))
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, db, db, controlAsyncDB, bdrMode)
 }
 
 // newMySQLSinkWithControlDB creates a MySQL sink with separate pools for DML and
@@ -143,14 +135,11 @@ func newMySQLSinkWithControlDB(
 	controlDB *sql.DB,
 	bdrMode bool,
 ) *Sink {
-<<<<<<< HEAD
-	stat := metrics.NewStatistics(changefeedID, "TxnSink")
-=======
 	var controlAsyncDB *sql.DB
 	if cfg.IsTiDB {
 		controlAsyncDB = controlDB
 	}
-	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, bdrMode, enableActiveActive, progressInterval, keyspaceID)
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, bdrMode)
 }
 
 func newMySQLSinkWithControlAsyncDB(
@@ -161,11 +150,8 @@ func newMySQLSinkWithControlAsyncDB(
 	controlDB *sql.DB,
 	controlAsyncDB *sql.DB,
 	bdrMode bool,
-	enableActiveActive bool,
-	progressInterval time.Duration,
-	keyspaceID uint32,
 ) *Sink {
-	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, bdrMode, enableActiveActive, progressInterval, keyspaceID)
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, bdrMode)
 }
 
 func newMySQLSinkWithDBs(
@@ -176,9 +162,6 @@ func newMySQLSinkWithDBs(
 	controlDB *sql.DB,
 	controlAsyncDB *sql.DB,
 	bdrMode bool,
-	enableActiveActive bool,
-	progressInterval time.Duration,
-	keyspaceID uint32,
 ) *Sink {
 	if !cfg.IsTiDB {
 		controlAsyncDB = nil
@@ -186,26 +169,8 @@ func newMySQLSinkWithDBs(
 		controlAsyncDB = controlDB
 	}
 
-	stat := metrics.NewStatistics(changefeedID, keyspaceID, "TxnSink")
+	stat := metrics.NewStatistics(changefeedID, "TxnSink")
 
-	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
-	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {
-		supported, err := mysql.CheckActiveActiveSyncStatsSupported(ctx, dmlDB)
-		if err != nil {
-			log.Info("failed to check tidb_cdc_active_active_sync_stats support, disable metric collection",
-				zap.String("keyspace", changefeedID.Keyspace()),
-				zap.Stringer("changefeed", changefeedID),
-				zap.Error(err))
-		} else if supported {
-			activeActiveSyncStatsCollector = mysql.NewActiveActiveSyncStatsCollector(changefeedID)
-		} else {
-			log.Info("downstream does not support tidb_cdc_active_active_sync_stats, disable metric collection",
-				zap.String("keyspace", changefeedID.Keyspace()),
-				zap.Stringer("changefeed", changefeedID))
-		}
-	}
-
->>>>>>> 430b0a8cc (sink: add async ddl timeout for add index (#5836))
 	result := &Sink{
 		changefeedID:   changefeedID,
 		dmlDB:          dmlDB,
@@ -226,18 +191,10 @@ func newMySQLSinkWithDBs(
 		bdrMode:    bdrMode,
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
-<<<<<<< HEAD
 		result.dmlWriter[i] = mysql.NewWriter(ctx, i, dmlDB, cfg, changefeedID, stat)
-=======
-		result.dmlWriter[i] = mysql.NewWriter(ctx, i, dmlDB, cfg, changefeedID, stat, activeActiveSyncStatsCollector)
-	}
-	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), controlDB, cfg, changefeedID, stat, nil)
-	result.ddlWriter.SetControlAsyncDB(controlAsyncDB)
-	if enableActiveActive {
-		result.progressTableWriter = mysql.NewProgressTableWriter(ctx, controlDB, changefeedID, cfg.MaxTxnRow, progressInterval)
->>>>>>> 430b0a8cc (sink: add async ddl timeout for add index (#5836))
 	}
 	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), controlDB, cfg, changefeedID, stat)
+	result.ddlWriter.SetControlAsyncDB(controlAsyncDB)
 	return result
 }
 
@@ -458,15 +415,9 @@ func (s *Sink) Close() {
 	if s.controlDB != s.dmlDB {
 		s.closeDBPool("control", s.controlDB)
 	}
-<<<<<<< HEAD
-=======
 	if s.controlAsyncDB != nil && s.controlAsyncDB != s.dmlDB && s.controlAsyncDB != s.controlDB {
 		s.closeDBPool("control async", s.controlAsyncDB)
 	}
-	if s.activeActiveSyncStatsCollector != nil {
-		s.activeActiveSyncStatsCollector.Close()
-	}
->>>>>>> 430b0a8cc (sink: add async ddl timeout for add index (#5836))
 	s.statistics.Close()
 
 	metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())

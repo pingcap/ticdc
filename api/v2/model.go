@@ -1475,23 +1475,6 @@ type KafkaConfig struct {
 
 // MySQLConfig represents a MySQL sink configuration
 type MySQLConfig struct {
-<<<<<<< HEAD
-	WorkerCount                  *int    `json:"worker_count,omitempty"`
-	MaxTxnRow                    *int    `json:"max_txn_row,omitempty"`
-	MaxMultiUpdateRowSize        *int    `json:"max_multi_update_row_size,omitempty"`
-	MaxMultiUpdateRowCount       *int    `json:"max_multi_update_row_count,omitempty"`
-	TiDBTxnMode                  *string `json:"tidb_txn_mode,omitempty"`
-	SSLCa                        *string `json:"ssl_ca,omitempty"`
-	SSLCert                      *string `json:"ssl_cert,omitempty"`
-	SSLKey                       *string `json:"ssl_key,omitempty"`
-	TimeZone                     *string `json:"time_zone,omitempty"`
-	WriteTimeout                 *string `json:"write_timeout,omitempty"`
-	ReadTimeout                  *string `json:"read_timeout,omitempty"`
-	Timeout                      *string `json:"timeout,omitempty"`
-	EnableBatchDML               *bool   `json:"enable_batch_dml,omitempty"`
-	EnableMultiStatement         *bool   `json:"enable_multi_statement,omitempty"`
-	EnableCachePreparedStatement *bool   `json:"enable_cache_prepared_statement,omitempty"`
-=======
 	WorkerCount                  *int    `json:"worker_count,omitempty" toml:"worker-count,omitempty"`
 	MaxTxnRow                    *int    `json:"max_txn_row,omitempty" toml:"max-txn-row,omitempty"`
 	MaxMultiUpdateRowSize        *int    `json:"max_multi_update_row_size,omitempty" toml:"max-multi-update-row-size,omitempty"`
@@ -1508,7 +1491,6 @@ type MySQLConfig struct {
 	EnableBatchDML               *bool   `json:"enable_batch_dml,omitempty" toml:"enable-batch-dml,omitempty"`
 	EnableMultiStatement         *bool   `json:"enable_multi_statement,omitempty" toml:"enable-multi-statement,omitempty"`
 	EnableCachePreparedStatement *bool   `json:"enable_cache_prepared_statement,omitempty" toml:"enable-cache-prepared-statement,omitempty"`
->>>>>>> 430b0a8cc (sink: add async ddl timeout for add index (#5836))
 }
 
 // CloudStorageConfig represents a cloud storage sink configuration

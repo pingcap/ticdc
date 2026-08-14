@@ -25,12 +25,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
-<<<<<<< HEAD
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
-=======
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
->>>>>>> 430b0a8cc (sink: add async ddl timeout for add index (#5836))
 	"github.com/stretchr/testify/require"
 )
 
@@ -94,11 +90,11 @@ func TestMysqlSinkControlAsyncDBOnlyForTiDB(t *testing.T) {
 
 		cfg := mysql.New()
 		cfg.WorkerCount = 1
-		cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+		cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 		cfg.CachePrepStmts = false
 		cfg.IsTiDB = false
 
-		sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute, common.DefaultKeyspaceID)
+		sink := NewMySQLSink(ctx, changefeedID, cfg, db, false)
 		require.Nil(t, sink.controlAsyncDB)
 
 		mock.ExpectClose()
@@ -112,11 +108,11 @@ func TestMysqlSinkControlAsyncDBOnlyForTiDB(t *testing.T) {
 
 		cfg := mysql.New()
 		cfg.WorkerCount = 1
-		cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+		cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 		cfg.CachePrepStmts = false
 		cfg.IsTiDB = true
 
-		sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute, common.DefaultKeyspaceID)
+		sink := NewMySQLSink(ctx, changefeedID, cfg, db, false)
 		require.Same(t, db, sink.controlAsyncDB)
 
 		mock.ExpectClose()
@@ -137,15 +133,15 @@ func TestMysqlSinkUsesControlAsyncDBForTiDBAddIndex(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	cfg := mysql.New()
 	cfg.WorkerCount = 1
-	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 	cfg.EnableDDLTs = false
 	cfg.IsTiDB = true
 
-	sink := newMySQLSinkWithControlAsyncDB(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, false, false, time.Minute, common.DefaultKeyspaceID)
+	sink := newMySQLSinkWithControlAsyncDB(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, false)
 
 	ddl := &commonEvent.DDLEvent{
-		Type:       byte(timodel.ActionAddIndex),
+		Type:       byte(model.ActionAddIndex),
 		Query:      "alter table t add index idx_name(name);",
 		SchemaName: "test",
 		TableName:  "t",

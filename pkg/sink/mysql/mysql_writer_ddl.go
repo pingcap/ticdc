@@ -232,13 +232,8 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 			if w.cfg.IsTiDB && ddlCreateTime != "" && errors.Cause(err) == mysql.ErrInvalidConn {
 				log.Warn("Wait the asynchronous ddl to synchronize",
 					zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
-<<<<<<< HEAD
-					zap.String("ddlCreateTime", ddlCreateTime), zap.String("ddl", event.Query),
-					zap.String("readTimeout", w.cfg.ReadTimeout), zap.Error(err))
-=======
 					zap.String("ddl", event.Query), zap.String("ddlCreateTime", ddlCreateTime),
 					zap.String("readTimeout", w.getDDLReadTimeout(event)), zap.Error(err))
->>>>>>> 430b0a8cc (sink: add async ddl timeout for add index (#5836))
 				return w.waitDDLDone(w.ctx, event, ddlCreateTime)
 			}
 			log.Warn("Execute DDL with error, retry later",
