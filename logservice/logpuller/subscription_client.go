@@ -126,7 +126,6 @@ type subscriptionClient struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	upstream *upstreamHandle
-	runState atomic.Uint32
 
 	lockResolver txnutil.LockResolver
 
@@ -287,8 +286,6 @@ func (s *subscriptionClient) Unsubscribe(subID SubscriptionID) {
 }
 
 func (s *subscriptionClient) Run(ctx context.Context) error {
-	s.runState.Store(pullerDebugStateRunning)
-	defer s.runState.Store(pullerDebugStateStopped)
 	s.upstream.initialize(ctx)
 
 	g, ctx := errgroup.WithContext(ctx)

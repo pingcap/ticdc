@@ -54,10 +54,10 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	debugGroup.DELETE("/failpoints", api.DisableFailpoint)
 	debugGroup.GET("/failpoints", api.ListFailpoints)
 	debugGroup.GET("/puller", api.GetPullerDebugInfo)
-	debugGroup.GET("/puller/subscriptions", api.ListPullerDebugSubscriptions)
-	debugGroup.GET("/puller/subscriptions/:subscription_id", api.GetPullerDebugSubscription)
-	debugGroup.GET("/puller/stores", api.ListPullerDebugStores)
-	debugGroup.GET("/puller/stores/:store_address", api.GetPullerDebugStore)
+	debugGroup.GET(
+		"/puller/subscriptions/:subscription_id/regions/:region_id",
+		api.GetPullerDebugRegion,
+	)
 
 	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
 	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
