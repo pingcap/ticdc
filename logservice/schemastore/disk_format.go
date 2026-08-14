@@ -761,6 +761,20 @@ func addTableInfoToBatchWithEncryption(
 	if err := json.Unmarshal(tableInfoValue, &tableInfo); err != nil {
 		log.Fatal("unmarshal table info failed", zap.Error(err))
 	}
+	return addTableInfoModelToBatchWithEncryption(
+		batch, ts, dbInfo, &tableInfo, tableInfoValue, encMgr, keyspaceID,
+	)
+}
+
+func addTableInfoModelToBatchWithEncryption(
+	batch *pebble.Batch,
+	ts uint64,
+	dbInfo *model.DBInfo,
+	tableInfo *model.TableInfo,
+	tableInfoValue []byte,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
+) (int64, string, []int64) {
 	// write table info to batch
 	tableKey, err := tableInfoKey(ts, tableInfo.ID)
 	if err != nil {
@@ -854,54 +868,68 @@ func persistSchemaSnapshotWithEncryption(
 			if filter.IsSysSchema(dbInfo.Name.O) {
 				continue
 			}
-			batch := db.NewBatch()
-			addSchemaInfoToBatchWithEncryption(batch, snapTs, dbInfo, encMgr, keyspaceID)
 			for {
-				rawTables, err := meta.GetMetasByDBID(dbInfo.ID)
+				batch := db.NewBatch()
+				addSchemaInfoToBatchWithEncryption(batch, snapTs, dbInfo, encMgr, keyspaceID)
+				var tablesInDB map[int64]bool
+				if collectMetaInfo {
+					tablesInDB = make(map[int64]bool)
+				}
+
+				var callbackErr error
+				err := meta.IterTables(dbInfo.ID, func(tableInfo *model.TableInfo) error {
+					tableInfoValue, err := json.Marshal(tableInfo)
+					if err != nil {
+						callbackErr = errors.WrapError(errors.ErrMarshalFailed, err)
+						return callbackErr
+					}
+					tableID, tableName, partitionIDs := addTableInfoModelToBatchWithEncryption(
+						batch, snapTs, dbInfo, tableInfo, tableInfoValue, encMgr, keyspaceID)
+					if collectMetaInfo {
+						tableMap[tableID] = &BasicTableInfo{
+							SchemaID: dbInfo.ID,
+							Name:     tableName,
+						}
+						tablesInDB[tableID] = true
+						if len(partitionIDs) > 0 {
+							partitionMap[tableID] = make(BasicPartitionInfo)
+							partitionMap[tableID].AddPartitionIDs(partitionIDs...)
+						}
+					}
+					// Bound the buffered snapshot data and reuse its allocation.
+					if batch.Len() >= 8*1024*1024 {
+						if err := batch.Commit(pebble.NoSync); err != nil {
+							callbackErr = errors.WrapError(
+								errors.ErrUnexpected, err, "commit schema snapshot batch")
+							return callbackErr
+						}
+						batch.Reset()
+					}
+					return nil
+				})
+				if callbackErr != nil {
+					_ = batch.Close()
+					return nil, nil, nil, callbackErr
+				}
 				if err == nil {
-					var tablesInDB map[int64]bool
-					if collectMetaInfo {
-						tablesInDB = make(map[int64]bool)
+					if err := batch.Commit(pebble.NoSync); err != nil {
+						_ = batch.Close()
+						return nil, nil, nil, errors.WrapError(
+							errors.ErrUnexpected, err, "commit schema snapshot batch")
 					}
-					for _, rawTable := range rawTables {
-						if !isTableRawKey(rawTable.Field) {
-							continue
-						}
-						tableID, tableName, partitionIDs := addTableInfoToBatchWithEncryption(
-							batch, snapTs, dbInfo, rawTable.Value, encMgr, keyspaceID)
-						if collectMetaInfo {
-							tableMap[tableID] = &BasicTableInfo{
-								SchemaID: dbInfo.ID,
-								Name:     tableName,
-							}
-							tablesInDB[tableID] = true
-							if len(partitionIDs) > 0 {
-								partitionMap[tableID] = make(BasicPartitionInfo)
-								for _, partitionID := range partitionIDs {
-									partitionMap[tableID].AddPartitionIDs(partitionID)
-								}
-							}
-						}
-						// 8M is arbitrary, we can adjust it later
-						if batch.Len() >= 8*1024*1024 {
-							if err := batch.Commit(pebble.NoSync); err != nil {
-								return nil, nil, nil, err
-							}
-							batch = db.NewBatch()
-						}
+					if err := batch.Close(); err != nil {
+						return nil, nil, nil, errors.WrapError(
+							errors.ErrUnexpected, err, "close schema snapshot batch")
 					}
 					if collectMetaInfo {
-						databaseInfo := &BasicDatabaseInfo{
+						databaseMap[dbInfo.ID] = &BasicDatabaseInfo{
 							Name:   dbInfo.Name.O,
 							Tables: tablesInDB,
 						}
-						databaseMap[dbInfo.ID] = databaseInfo
-					}
-					if err := batch.Commit(pebble.NoSync); err != nil {
-						return nil, nil, nil, err
 					}
 					break
 				}
+				_ = batch.Close()
 
 				// If this error is caused by the GC life time is shorter than transaction duration,
 				// it means the snapshot is lost forever, so we should return the error to the caller.
