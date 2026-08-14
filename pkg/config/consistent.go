@@ -37,6 +37,9 @@ type ConsistentConfig struct {
 	// FlushIntervalInMs is the flush interval(ms) of redo log to flush log to storage.
 	// Default is 2000ms.
 	FlushIntervalInMs *int64 `toml:"flush-interval" json:"flush-interval,omitempty"`
+	// FlushBatchSize is the number of row events that triggers a redo log flush.
+	// A value of 0 disables count-based flushing. Default is 0.
+	FlushBatchSize *int `toml:"flush-batch-size" json:"flush-batch-size,omitempty"`
 	// MetaFlushIntervalInMs is the flush interval(ms) of redo log to
 	// flush meta(resolvedTs and checkpointTs) to storage.
 	// Default is 200ms.
@@ -100,6 +103,13 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
 			fmt.Sprintf("The consistent.flush-interval:%d must be equal or greater than %d",
 				util.GetOrZero(c.FlushIntervalInMs), redo.MinFlushIntervalInMs))
+	}
+	if c.FlushBatchSize == nil {
+		c.FlushBatchSize = util.AddressOf(redo.DefaultFlushBatchSize)
+	}
+	if *c.FlushBatchSize < 0 {
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
+			"consistent.flush-batch-size must be set not smaller than 0")
 	}
 
 	if util.GetOrZero(c.MetaFlushIntervalInMs) == 0 {

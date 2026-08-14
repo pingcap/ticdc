@@ -192,23 +192,29 @@ func TestReplicaConfigConversionBatchFields(t *testing.T) {
 	require.Nil(t, apiNoBatch.EventCollectorBatchBytes)
 }
 
-func TestReplicaConfigConversionRedoBatchField(t *testing.T) {
+// TestReplicaConfigConversionRedoBatchFields verifies redo-specific batch
+// settings survive API-to-internal and internal-to-API conversion unchanged.
+func TestReplicaConfigConversionRedoBatchFields(t *testing.T) {
 	t.Parallel()
 
 	apiCfg := &ReplicaConfig{
 		Consistent: &ConsistentConfig{
 			EventCollectorBatchCount: util.AddressOf(4096),
+			FlushBatchSize:           util.AddressOf(2048),
 		},
 	}
 
 	internalCfg := apiCfg.ToInternalReplicaConfig()
 	require.NotNil(t, internalCfg.Consistent)
 	require.Equal(t, 4096, util.GetOrZero(internalCfg.Consistent.EventCollectorBatchCount))
+	require.Equal(t, 2048, util.GetOrZero(internalCfg.Consistent.FlushBatchSize))
 
 	apiCfgBack := ToAPIReplicaConfig(internalCfg)
 	require.NotNil(t, apiCfgBack.Consistent)
 	require.NotNil(t, apiCfgBack.Consistent.EventCollectorBatchCount)
 	require.Equal(t, 4096, *apiCfgBack.Consistent.EventCollectorBatchCount)
+	require.NotNil(t, apiCfgBack.Consistent.FlushBatchSize)
+	require.Equal(t, 2048, *apiCfgBack.Consistent.FlushBatchSize)
 }
 
 func TestReplicaConfigConversionMySQLAsyncDDLTimeout(t *testing.T) {

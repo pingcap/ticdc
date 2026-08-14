@@ -102,6 +102,7 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 				Level:             util.AddressOf("eventual"),
 				MaxLogSize:        util.AddressOf(int64(128)),
 				FlushIntervalInMs: util.AddressOf(int64(2000)),
+				FlushBatchSize:    util.AddressOf(2048),
 				Storage:           util.AddressOf("s3://test"),
 			},
 		},
@@ -131,6 +132,7 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 	require.Equal(t, 10*time.Minute, *wrapper.Config.SyncPointInterval)
 	require.Equal(t, "correctness", util.GetOrZero(wrapper.Config.Integrity.IntegrityCheckLevel))
 	require.Equal(t, "eventual", util.GetOrZero(wrapper.Config.Consistent.Level))
+	require.Equal(t, 2048, util.GetOrZero(wrapper.Config.Consistent.FlushBatchSize))
 }
 
 func TestCodecConfigTOMLRoundTripToInternal(t *testing.T) {

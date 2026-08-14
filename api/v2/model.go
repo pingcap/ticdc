@@ -328,6 +328,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		if c.Consistent.FlushIntervalInMs != nil {
 			res.Consistent.FlushIntervalInMs = c.Consistent.FlushIntervalInMs
 		}
+		if c.Consistent.FlushBatchSize != nil {
+			res.Consistent.FlushBatchSize = c.Consistent.FlushBatchSize
+		}
 		if c.Consistent.MetaFlushIntervalInMs != nil {
 			res.Consistent.MetaFlushIntervalInMs = c.Consistent.MetaFlushIntervalInMs
 		}
@@ -983,6 +986,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		if cloned.Consistent.FlushIntervalInMs != nil {
 			res.Consistent.FlushIntervalInMs = cloned.Consistent.FlushIntervalInMs
 		}
+		if cloned.Consistent.FlushBatchSize != nil {
+			res.Consistent.FlushBatchSize = cloned.Consistent.FlushBatchSize
+		}
 		if cloned.Consistent.MetaFlushIntervalInMs != nil {
 			res.Consistent.MetaFlushIntervalInMs = cloned.Consistent.MetaFlushIntervalInMs
 		}
@@ -1268,9 +1274,11 @@ type ColumnSelector struct {
 // ConsistentConfig represents replication consistency config for a changefeed
 // This is a duplicate of config.ConsistentConfig
 type ConsistentConfig struct {
-	Level                 *string                `json:"level,omitempty" toml:"level,omitempty"`
-	MaxLogSize            *int64                 `json:"max_log_size,omitempty" toml:"max-log-size,omitempty"`
-	FlushIntervalInMs     *int64                 `json:"flush_interval,omitempty" toml:"flush-interval,omitempty"`
+	Level             *string `json:"level,omitempty" toml:"level,omitempty"`
+	MaxLogSize        *int64  `json:"max_log_size,omitempty" toml:"max-log-size,omitempty"`
+	FlushIntervalInMs *int64  `json:"flush_interval,omitempty" toml:"flush-interval,omitempty"`
+	// FlushBatchSize is the row-count flush threshold. Zero disables it.
+	FlushBatchSize        *int                   `json:"flush_batch_size,omitempty" toml:"flush-batch-size,omitempty"`
 	MetaFlushIntervalInMs *int64                 `json:"meta_flush_interval,omitempty" toml:"meta-flush-interval,omitempty"`
 	EncodingWorkerNum     *int                   `json:"encoding_worker_num,omitempty" toml:"encoding-worker-num,omitempty"`
 	FlushWorkerNum        *int                   `json:"flush_worker_num,omitempty" toml:"flush-worker-num,omitempty"`

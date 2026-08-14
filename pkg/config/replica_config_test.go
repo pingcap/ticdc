@@ -242,6 +242,44 @@ func TestReplicaConfigValidateBatchConfig(t *testing.T) {
 	assertBatchConfig(nil, util.AddressOf(-1), "event-collector-batch-bytes")
 }
 
+// TestConsistentFlushBatchSizeValidation verifies that adjustment supplies the
+// disabled-by-default value, preserves non-negative overrides, and rejects a
+// negative row-count threshold before the redo writer is created.
+func TestConsistentFlushBatchSizeValidation(t *testing.T) {
+	require.Equal(t, 0, util.GetOrZero(GetDefaultReplicaConfig().Consistent.FlushBatchSize))
+
+	tests := []struct {
+		name      string
+		value     *int
+		wantValue int
+		wantErr   bool
+	}{
+		{name: "unset uses disabled default", wantValue: 0},
+		{name: "zero disables count based flush", value: util.AddressOf(0), wantValue: 0},
+		{name: "positive value enables count based flush", value: util.AddressOf(2048), wantValue: 2048},
+		{name: "negative value is rejected", value: util.AddressOf(-1), wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &ConsistentConfig{
+				Level:          util.AddressOf("eventual"),
+				FlushBatchSize: tt.value,
+				Storage:        util.AddressOf("blackhole://"),
+			}
+
+			err := cfg.validateAndAdjust(false)
+			if tt.wantErr {
+				require.ErrorContains(t, err, "consistent.flush-batch-size")
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, cfg.FlushBatchSize)
+			require.Equal(t, tt.wantValue, *cfg.FlushBatchSize)
+		})
+	}
+}
+
 func TestReplicaConfig_EnableRedoIOCheck_DefaultValue(t *testing.T) {
 	config := GetDefaultReplicaConfig()
 	require.True(t, util.GetOrZero(config.EnableRedoIOCheck))

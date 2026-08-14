@@ -43,6 +43,8 @@ type Config struct {
 
 	// Shared by file and memory backends as the flush ticker interval.
 	flushIntervalInMs int64
+	// Shared by file and memory backends as the optional row-count flush threshold.
+	flushBatchSize int
 
 	// Used only by the memory backend for encoding workers.
 	encodingWorkerNum int
@@ -77,6 +79,7 @@ func NewConfig(changefeedID common.ChangeFeedID, consistentCfg *config.Consisten
 		maxLogSizeInBytes: util.GetOrZero(consistentCfg.MaxLogSize) * redo.Megabyte,
 		useFileBackend:    util.GetOrZero(consistentCfg.UseFileBackend),
 		flushIntervalInMs: util.GetOrZero(consistentCfg.FlushIntervalInMs),
+		flushBatchSize:    util.GetOrZero(consistentCfg.FlushBatchSize),
 		encodingWorkerNum: util.GetOrZero(consistentCfg.EncodingWorkerNum),
 		flushWorkerNum:    util.GetOrZero(consistentCfg.FlushWorkerNum),
 		compression:       util.GetOrZero(consistentCfg.Compression),
@@ -151,6 +154,11 @@ func (cfg *Config) UseFileBackend() bool {
 
 func (cfg *Config) FlushIntervalInMs() int64 {
 	return cfg.flushIntervalInMs
+}
+
+// FlushBatchSize returns the row-count flush threshold. Zero disables it.
+func (cfg *Config) FlushBatchSize() int {
+	return cfg.flushBatchSize
 }
 
 func (cfg *Config) EncodingWorkerNum() int {

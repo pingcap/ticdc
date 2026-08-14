@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/fsutil"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
@@ -436,17 +437,22 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 	w.Close()
 }
 
+// TestRunFlushesOnBatchBoundaryAndExecutesPostFlush configures a small row
+// threshold, writes up to that boundary, and verifies callbacks run only after
+// the configured count causes the file backend to flush.
 func TestRunFlushesOnBatchBoundaryAndExecutesPostFlush(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	flushIntervalInMs := int64(60 * 1000)
+	flushBatchSize := 4
 	flushWorkerNum := 9
 	batchWriterCfg := newTestWriterConfig(
 		t,
 		common.NewChangeFeedIDWithName("test-run-batch", common.DefaultKeyspaceName),
 		&config.ConsistentConfig{
 			FlushIntervalInMs: &flushIntervalInMs,
+			FlushBatchSize:    &flushBatchSize,
 			FlushWorkerNum:    &flushWorkerNum,
 			Storage:           util.AddressOf("file://" + dir),
 		},
@@ -461,7 +467,7 @@ func TestRunFlushesOnBatchBoundaryAndExecutesPostFlush(t *testing.T) {
 	}()
 
 	postFlushCnt := atomic.NewInt64(0)
-	for i := 0; i < redo.DefaultFlushBatchSize-1; i++ {
+	for i := 0; i < flushBatchSize-1; i++ {
 		ts := uint64(i + 1)
 		w.GetInputCh() <- &pevent.RedoRowEvent{
 			StartTs:  ts,
@@ -480,7 +486,7 @@ func TestRunFlushesOnBatchBoundaryAndExecutesPostFlush(t *testing.T) {
 	default:
 	}
 
-	ts := uint64(redo.DefaultFlushBatchSize)
+	ts := uint64(flushBatchSize)
 	w.GetInputCh() <- &pevent.RedoRowEvent{
 		StartTs:  ts,
 		CommitTs: ts,
@@ -490,8 +496,125 @@ func TestRunFlushesOnBatchBoundaryAndExecutesPostFlush(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool {
-		return postFlushCnt.Load() == int64(redo.DefaultFlushBatchSize)
+		return postFlushCnt.Load() == int64(flushBatchSize)
 	}, 10*time.Second, 20*time.Millisecond)
+
+	cancel()
+	require.ErrorIs(t, <-runErrCh, context.Canceled)
+	require.NoError(t, w.Close())
+}
+
+// TestRunReleasesCallbacksAfterSizeRotation writes one event that exactly fills
+// a local redo file, confirms its callback remains pending, then writes a second
+// event to rotate the first file. The first callback must run after that durable
+// rotation while the second event remains unacknowledged in the current file.
+func TestRunReleasesCallbacksAfterSizeRotation(t *testing.T) {
+	dir := t.TempDir()
+	firstCallbackDone := make(chan struct{})
+	firstEvent := &pevent.RedoRowEvent{
+		StartTs:  1,
+		CommitTs: 1,
+		Callback: func() {
+			close(firstCallbackDone)
+		},
+	}
+	encodedFirstEvent, err := codec.MarshalRedoLog(firstEvent.ToRedoLog(), nil)
+	require.NoError(t, err)
+	_, padBytes := writer.EncodeFrameSize(len(encodedFirstEvent))
+	maxLogSizeInBytes := int64(8 + len(encodedFirstEvent) + padBytes)
+
+	w, err := newWriter(&localFileConfig{
+		dir:               dir,
+		maxLogSizeInBytes: maxLogSizeInBytes,
+		flushIntervalInMs: int64(time.Hour / time.Millisecond),
+		flushBatchSize:    0,
+		flushWorkerNum:    1,
+	}, redo.RedoRowLogFileType, nil)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- w.Run(ctx)
+	}()
+
+	w.GetInputCh() <- firstEvent
+	require.Eventually(t, func() bool {
+		return w.eventCommitTS.Load() == firstEvent.CommitTs
+	}, 10*time.Second, 10*time.Millisecond)
+	select {
+	case <-firstCallbackDone:
+		require.FailNow(t, "callback ran before the file became durable")
+	default:
+	}
+
+	secondCallbackCount := atomic.NewInt64(0)
+	secondEvent := &pevent.RedoRowEvent{
+		StartTs:  2,
+		CommitTs: 2,
+		Callback: func() {
+			secondCallbackCount.Inc()
+		},
+	}
+	w.GetInputCh() <- secondEvent
+	select {
+	case <-firstCallbackDone:
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "callback was not released after size rotation")
+	}
+	require.Zero(t, secondCallbackCount.Load())
+
+	cancel()
+	require.ErrorIs(t, <-runErrCh, context.Canceled)
+	require.NoError(t, w.Close())
+}
+
+// TestRunDisablesCountBasedFlushWithZero writes more rows than the old fixed
+// boundary while using a long ticker interval, then verifies the file backend
+// processes them without executing callbacks through a row-count flush.
+func TestRunDisablesCountBasedFlushWithZero(t *testing.T) {
+	t.Parallel()
+
+	const legacyFlushBatchSize = 1024
+	dir := t.TempDir()
+	flushIntervalInMs := int64(60 * 1000)
+	flushBatchSize := 0
+	flushWorkerNum := 9
+	writerCfg := newTestWriterConfig(
+		t,
+		common.NewChangeFeedIDWithName("test-run-disabled-batch", common.DefaultKeyspaceName),
+		&config.ConsistentConfig{
+			FlushIntervalInMs: &flushIntervalInMs,
+			FlushBatchSize:    &flushBatchSize,
+			FlushWorkerNum:    &flushWorkerNum,
+			Storage:           util.AddressOf("file://" + dir),
+		},
+	)
+	w, err := NewFileWriter(context.Background(), writerCfg, redo.RedoRowLogFileType)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- w.Run(ctx)
+	}()
+
+	postFlushCnt := atomic.NewInt64(0)
+	lastCommitTs := uint64(legacyFlushBatchSize + 2)
+	for ts := uint64(1); ts <= lastCommitTs; ts++ {
+		w.GetInputCh() <- &pevent.RedoRowEvent{
+			StartTs:  ts,
+			CommitTs: ts,
+			Callback: func() {
+				postFlushCnt.Inc()
+			},
+		}
+	}
+
+	require.Eventually(t, func() bool {
+		return w.eventCommitTS.Load() == lastCommitTs
+	}, 10*time.Second, 20*time.Millisecond)
+	require.Zero(t, postFlushCnt.Load())
 
 	cancel()
 	require.ErrorIs(t, <-runErrCh, context.Canceled)

@@ -340,6 +340,9 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	require.ErrorIs(b, eg.Wait(), context.Canceled)
 }
 
+// TestRedoSinkSendMessagesInBatch fills the unlimited buffer, drains it through
+// the bounded writer-input batches, and verifies this transport batch remains
+// independent of the configurable persistent flush threshold.
 func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 	t.Parallel()
 
@@ -365,8 +368,8 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 	}
 
 	gomock.InOrder(
-		expectWriteBatch(redo.DefaultFlushBatchSize),
-		expectWriteBatch(redo.DefaultFlushBatchSize),
+		expectWriteBatch(dmlWriterInputBatchSize),
+		expectWriteBatch(dmlWriterInputBatchSize),
 		expectWriteBatch(17),
 	)
 
@@ -380,7 +383,7 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 		doneCh <- s.sendMessages(ctx)
 	}()
 
-	totalEvents := redo.DefaultFlushBatchSize*2 + 17
+	totalEvents := dmlWriterInputBatchSize*2 + 17
 	events := make([]*commonEvent.RedoRowEvent, 0, totalEvents)
 	for range totalEvents {
 		events = append(events, &commonEvent.RedoRowEvent{})

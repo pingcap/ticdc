@@ -28,9 +28,12 @@ import (
 func TestNewConfigUsesConsistentConfigValues(t *testing.T) {
 	t.Parallel()
 
+	// Configure every writer-owned option, build the runtime config, and verify
+	// that each value, including the optional row flush threshold, is preserved.
 	changefeedID := common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName)
 	maxLogSize := int64(128)
 	flushIntervalInMs := int64(1234)
+	flushBatchSize := 2048
 	encodingWorkerNum := 5
 	flushWorkerNum := 6
 	compressionType := "lz4"
@@ -38,6 +41,7 @@ func TestNewConfigUsesConsistentConfigValues(t *testing.T) {
 	consistentCfg := testutil.NewConsistentConfig("nfs:///tmp/redo")
 	consistentCfg.MaxLogSize = util.AddressOf(maxLogSize)
 	consistentCfg.FlushIntervalInMs = util.AddressOf(flushIntervalInMs)
+	consistentCfg.FlushBatchSize = util.AddressOf(flushBatchSize)
 	consistentCfg.EncodingWorkerNum = util.AddressOf(encodingWorkerNum)
 	consistentCfg.FlushWorkerNum = util.AddressOf(flushWorkerNum)
 	consistentCfg.Compression = util.AddressOf(compressionType)
@@ -53,6 +57,7 @@ func TestNewConfigUsesConsistentConfigValues(t *testing.T) {
 	require.True(t, cfg.UseExternalStorage())
 	require.Equal(t, maxLogSize*redo.Megabyte, cfg.MaxLogSizeInBytes())
 	require.Equal(t, flushIntervalInMs, cfg.FlushIntervalInMs())
+	require.Equal(t, flushBatchSize, cfg.FlushBatchSize())
 	require.Equal(t, encodingWorkerNum, cfg.EncodingWorkerNum())
 	require.Equal(t, flushWorkerNum, cfg.FlushWorkerNum())
 	require.Equal(t, flushConcurrency, cfg.FlushConcurrency())

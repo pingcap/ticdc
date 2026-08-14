@@ -49,8 +49,8 @@ const (
 	DefaultMetaFlushIntervalInMs = 200
 	// MinFlushIntervalInMs is the minimum flush interval for redo log.
 	MinFlushIntervalInMs = 50
-	// DefaultFlushBatchSize is the default flush batch size for redo log.
-	DefaultFlushBatchSize = 1024
+	// DefaultFlushBatchSize disables count-based redo log flushing by default.
+	DefaultFlushBatchSize = 0
 
 	// DefaultEncodingWorkerNum is the default number of encoding workers.
 	DefaultEncodingWorkerNum = 16

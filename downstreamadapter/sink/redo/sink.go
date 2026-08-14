@@ -33,6 +33,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// dmlWriterInputBatchSize bounds each transfer from the unlimited sink buffer
+// into the writer. It is independent of the writer's persistent flush policy.
+const dmlWriterInputBatchSize = 1024
+
 // Sink manages redo log writer, buffers un-persistent redo logs, calculates
 // redo log resolved ts. It implements Sink interface.
 type Sink struct {
@@ -237,7 +241,7 @@ func (s *Sink) Close() {
 }
 
 func (s *Sink) sendMessages(ctx context.Context) error {
-	buffer := make([]*commonEvent.RedoRowEvent, 0, redo.DefaultFlushBatchSize)
+	buffer := make([]*commonEvent.RedoRowEvent, 0, dmlWriterInputBatchSize)
 	for {
 		select {
 		case <-ctx.Done():

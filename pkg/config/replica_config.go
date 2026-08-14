@@ -92,6 +92,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		Level:                 util.AddressOf("none"),
 		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
 		FlushIntervalInMs:     util.AddressOf(int64(redo.DefaultFlushIntervalInMs)),
+		FlushBatchSize:        util.AddressOf(redo.DefaultFlushBatchSize),
 		MetaFlushIntervalInMs: util.AddressOf(int64(redo.DefaultMetaFlushIntervalInMs)),
 		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
 		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
