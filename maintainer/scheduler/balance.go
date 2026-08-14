@@ -67,7 +67,7 @@ func NewBalanceScheduler(
 	return &balanceScheduler{
 		changefeedID:         changefeedID,
 		batchSize:            moveBatchSize,
-		random:               rand.New(rand.NewSource(time.Now().UnixNano())),
+		random:               rand.New(rand.NewSource(time.Now().UnixNano())), // #nosec G404
 		operatorController:   oc,
 		spanController:       sc,
 		nodeManager:          appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
