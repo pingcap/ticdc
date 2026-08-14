@@ -19,9 +19,11 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"sync"
 	"testing"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -29,6 +31,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -2716,6 +2719,55 @@ func TestRegisterTable(t *testing.T) {
 		queryCases    []QueryTableInfoTestCase
 	}{
 		{
+			name: "create table registered before DDL",
+			initialDBInfos: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   50,
+						Name: ast.NewCIStr("test"),
+					},
+				},
+			},
+			ddlJobs: []*model.Job{
+				buildCreateTableJobForTest(50, 99, "t1", 1000),
+			},
+			preDDLTables: []int64{99},
+			queryCases: []QueryTableInfoTestCase{
+				{
+					tableID: 99,
+					snapTs:  1000,
+					name:    "t1",
+				},
+			},
+		},
+		{
+			name: "create tables registered before DDL",
+			initialDBInfos: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   50,
+						Name: ast.NewCIStr("test"),
+					},
+				},
+			},
+			ddlJobs: []*model.Job{
+				buildCreateTablesJobForTest(50, []int64{99, 100}, []string{"t1", "t2"}, 1000),
+			},
+			preDDLTables: []int64{99, 100},
+			queryCases: []QueryTableInfoTestCase{
+				{
+					tableID: 99,
+					snapTs:  1000,
+					name:    "t1",
+				},
+				{
+					tableID: 100,
+					snapTs:  1000,
+					name:    "t2",
+				},
+			},
+		},
+		{
 			name: "rename table",
 			initialDBInfos: []mockDBInfo{
 				{
@@ -2860,6 +2912,58 @@ func TestRegisterTable(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "drop schema",
+			initialDBInfos: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   50,
+						Name: ast.NewCIStr("test"),
+					},
+					tables: []*model.TableInfo{
+						newEligibleTableInfoForTest(99, "t1"),
+						newEligibleTableInfoForTest(100, "t2"),
+						{
+							ID:        102,
+							Name:      ast.NewCIStr("pt"),
+							Partition: buildPartitionDefinitionsForTest([]int64{201, 202}),
+						},
+					},
+				},
+			},
+			preDDLTables:  []int64{99, 201},
+			postDDLTables: []int64{100, 202},
+			ddlJobs: []*model.Job{
+				buildDropSchemaJobForTest(50, 1030),
+			},
+			queryCases: []QueryTableInfoTestCase{
+				{
+					tableID: 99,
+					snapTs:  1029,
+					name:    "t1",
+				},
+				{
+					tableID: 99,
+					snapTs:  1030,
+					deleted: true,
+				},
+				{
+					tableID: 100,
+					snapTs:  1030,
+					deleted: true,
+				},
+				{
+					tableID: 201,
+					snapTs:  1030,
+					deleted: true,
+				},
+				{
+					tableID: 202,
+					snapTs:  1030,
+					deleted: true,
+				},
+			},
+		},
 	}
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2892,6 +2996,116 @@ func TestRegisterTable(t *testing.T) {
 			pStorage.close()
 		})
 	}
+}
+
+func TestRegisterTableBuildsConsistentVersionStoreSnapshot(t *testing.T) {
+	const (
+		schemaID = int64(50)
+		tableID  = int64(99)
+		ddlTs    = uint64(1000)
+	)
+
+	pStorage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
+		{
+			dbInfo: &model.DBInfo{
+				ID:   schemaID,
+				Name: ast.NewCIStr("test"),
+			},
+			tables: []*model.TableInfo{
+				{
+					ID:   tableID,
+					Name: ast.NewCIStr("t1"),
+				},
+			},
+		},
+	})
+	t.Cleanup(func() {
+		require.NoError(t, pStorage.close())
+	})
+
+	ddlReadyToPersist := make(chan struct{})
+	continuePersistDDL := make(chan struct{})
+	ddlPersisted := make(chan struct{})
+	continueDDL := make(chan struct{})
+	versionStoreSnapshotCreated := make(chan bool, 1)
+	continueRegisterTable := make(chan struct{})
+	var releasePersistDDLOnce, releaseDDLOnce, releaseRegisterTableOnce sync.Once
+	releasePersistDDL := func() {
+		releasePersistDDLOnce.Do(func() { close(continuePersistDDL) })
+	}
+	releaseDDL := func() {
+		releaseDDLOnce.Do(func() { close(continueDDL) })
+	}
+	releaseRegisterTable := func() {
+		releaseRegisterTableOnce.Do(func() { close(continueRegisterTable) })
+	}
+	t.Cleanup(func() {
+		releaseRegisterTable()
+		releaseDDL()
+		releasePersistDDL()
+	})
+
+	const failpointPrefix = "github.com/pingcap/ticdc/logservice/schemastore/"
+	require.NoError(t, failpoint.EnableCall(failpointPrefix+"beforePersistingDDL", func() {
+		close(ddlReadyToPersist)
+		<-continuePersistDDL
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable(failpointPrefix+"beforePersistingDDL"))
+	})
+	require.NoError(t, failpoint.EnableCall(failpointPrefix+"afterPersistingDDL", func() {
+		close(ddlPersisted)
+		<-continueDDL
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable(failpointPrefix+"afterPersistingDDL"))
+	})
+	require.NoError(t, failpoint.EnableCall(failpointPrefix+"afterCreatingVersionStoreSnapshot", func(storage *persistentStorage) {
+		lockProtected := !storage.mu.TryLock()
+		if !lockProtected {
+			storage.mu.Unlock()
+		}
+		versionStoreSnapshotCreated <- lockProtected
+		<-continueRegisterTable
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable(failpointPrefix+"afterCreatingVersionStoreSnapshot"))
+	})
+
+	ddlDone := make(chan error, 1)
+	go func() {
+		ddlDone <- pStorage.handleDDLJob(buildRenameTableJobForTest(schemaID, tableID, "t2", ddlTs, nil))
+	}()
+	<-ddlReadyToPersist
+
+	registerDone := make(chan error, 1)
+	go func() {
+		registerDone <- pStorage.registerTable(tableID, 0)
+	}()
+	lockProtected := <-versionStoreSnapshotCreated
+
+	releasePersistDDL()
+	<-ddlPersisted
+
+	// The DDL is now on disk but cannot publish its history while registration
+	// holds the read lock. Registration captures the old disk/history view, and
+	// the DDL is subsequently added through the normal online apply path.
+	releaseDDL()
+	if !lockProtected {
+		// Force the original inconsistent view when the read lock is absent:
+		// the history is published before registration resumes from its old snapshot.
+		require.NoError(t, <-ddlDone)
+	}
+	releaseRegisterTable()
+	require.NoError(t, <-registerDone)
+	if lockProtected {
+		require.NoError(t, <-ddlDone)
+	}
+	require.True(t, lockProtected,
+		"the Pebble snapshot and DDL history must be captured under the same read lock")
+	tableInfo, err := pStorage.getTableInfo(tableID, ddlTs)
+	require.NoError(t, err)
+	require.Equal(t, "t2", tableInfo.TableName.Table)
 }
 
 func TestGCPersistStorage(t *testing.T) {
@@ -3197,6 +3411,171 @@ func TestRenameTable(t *testing.T) {
 	assert.Equal(t, "RENAME TABLE `SalesDB`.`t1` TO `ArchiveDB`.`t1`", ddl.Query)
 }
 
+func TestRenameTableRepairsOldTableMetadata(t *testing.T) {
+	t.Run("same schema", func(t *testing.T) {
+		job := buildRenameTableJobForTest(100, 101, "t2", 100, &model.InvolvingSchemaInfo{
+			Database: "test",
+			Table:    "t1",
+		})
+		job.Query = "RENAME TABLE t1 TO t2"
+		rawEvent := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "test", Tables: map[int64]bool{101: true}},
+			},
+			// Simulate a snapshot that already contains the post-rename table name.
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "t2"},
+			},
+		})
+
+		require.Equal(t, "RENAME TABLE `test`.`t1` TO `test`.`t2`", rawEvent.Query)
+		require.Equal(t, int64(100), rawEvent.ExtraSchemaID)
+		require.Equal(t, "test", rawEvent.ExtraSchemaName)
+		require.Equal(t, "t1", rawEvent.ExtraTableName)
+
+		ddlEvent, ok, err := buildDDLEventForRenameTable(&rawEvent, nil, 0)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, []commonEvent.SchemaTableName{{SchemaName: "test", TableName: "t1"}}, ddlEvent.BlockedTableNames)
+		require.Equal(t, &commonEvent.TableNameChange{
+			AddName:  []commonEvent.SchemaTableName{{SchemaName: "test", TableName: "t2"}},
+			DropName: []commonEvent.SchemaTableName{{SchemaName: "test", TableName: "t1"}},
+		}, ddlEvent.TableNameChange)
+	})
+
+	t.Run("cross schema with old TiDB job args", func(t *testing.T) {
+		job := buildRenameTableJobForTest(100, 101, "t1", 100, nil)
+		job.Version = model.JobVersion1
+		job.FillArgs(&model.RenameTableArgs{
+			OldSchemaID:  200,
+			NewTableName: ast.NewCIStr("t1"),
+		})
+		_, err := job.Encode(true)
+		require.NoError(t, err)
+		job.Query = "RENAME TABLE t1 TO target_db.t1"
+		rawEvent := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "target_db", Tables: map[int64]bool{101: true}},
+				200: {Name: "source_db", Tables: map[int64]bool{}},
+			},
+			// Simulate a snapshot that has already moved the table to the new schema.
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "t1"},
+			},
+		})
+
+		require.Equal(t, "RENAME TABLE `source_db`.`t1` TO `target_db`.`t1`", rawEvent.Query)
+		require.Equal(t, int64(200), rawEvent.ExtraSchemaID)
+		require.Equal(t, "source_db", rawEvent.ExtraSchemaName)
+		require.Equal(t, "t1", rawEvent.ExtraTableName)
+
+		ddlEvent, ok, err := buildDDLEventForRenameTable(&rawEvent, nil, 0)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, []commonEvent.SchemaIDChange{{
+			TableID:     101,
+			OldSchemaID: 200,
+			NewSchemaID: 100,
+		}}, ddlEvent.UpdatedSchemas)
+		require.Equal(t, &commonEvent.TableNameChange{
+			AddName:  []commonEvent.SchemaTableName{{SchemaName: "target_db", TableName: "t1"}},
+			DropName: []commonEvent.SchemaTableName{{SchemaName: "source_db", TableName: "t1"}},
+		}, ddlEvent.TableNameChange)
+
+		ddlEvent, ok, err = buildDDLEventForRenameTable(
+			&rawEvent, buildTableFilterByNameForTest("source_db", "*"), 0)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{101},
+		}, ddlEvent.NeedDroppedTables)
+		require.Equal(t, &commonEvent.TableNameChange{
+			DropName: []commonEvent.SchemaTableName{{SchemaName: "source_db", TableName: "t1"}},
+		}, ddlEvent.TableNameChange)
+	})
+
+	t.Run("parse normalized query with ANSI quotes", func(t *testing.T) {
+		job := buildRenameTableJobForTest(100, 101, "NewTable", 100, &model.InvolvingSchemaInfo{
+			Database: "sourcedb",
+			Table:    "oldtable",
+		})
+		job.Version = model.JobVersion2
+		job.SQLMode = mysql.ModeANSIQuotes
+		job.FillArgs(&model.RenameTableArgs{
+			OldSchemaID:   200,
+			OldSchemaName: ast.NewCIStr("SourceDB"),
+			NewTableName:  ast.NewCIStr("NewTable"),
+		})
+		job.Query = `RENAME TABLE "SourceDB"."OldTable" TO "TargetDB"."NewTable"`
+
+		rawEvent := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "TargetDB", Tables: map[int64]bool{101: true}},
+				200: {Name: "SourceDB", Tables: map[int64]bool{}},
+			},
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "NewTable"},
+			},
+		})
+
+		require.Equal(t, int64(200), rawEvent.ExtraSchemaID)
+		require.Equal(t, "SourceDB", rawEvent.ExtraSchemaName)
+		require.Equal(t, "OldTable", rawEvent.ExtraTableName)
+		require.Equal(t, "RENAME TABLE `SourceDB`.`OldTable` TO `TargetDB`.`NewTable`", rawEvent.Query)
+	})
+
+	t.Run("prefer job args when query schema ID is inconsistent", func(t *testing.T) {
+		job := buildRenameTableJobForTest(100, 101, "target_t", 100, nil)
+		job.Version = model.JobVersion2
+		job.FillArgs(&model.RenameTableArgs{
+			OldSchemaID:   200,
+			OldSchemaName: ast.NewCIStr("source_db"),
+			NewTableName:  ast.NewCIStr("target_t"),
+		})
+		job.Query = "RENAME TABLE wrong_db.source_t TO target_db.target_t"
+
+		rawEvent := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "target_db", Tables: map[int64]bool{101: true}},
+				200: {Name: "source_db", Tables: map[int64]bool{}},
+				300: {Name: "wrong_db", Tables: map[int64]bool{}},
+			},
+			// The snapshot contains the post-rename identity and must not be mixed in.
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "target_t"},
+			},
+		})
+
+		require.Equal(t, int64(200), rawEvent.ExtraSchemaID)
+		require.Equal(t, "source_db", rawEvent.ExtraSchemaName)
+		require.Equal(t, "source_t", rawEvent.ExtraTableName)
+		require.Equal(t, "RENAME TABLE `source_db`.`source_t` TO `target_db`.`target_t`", rawEvent.Query)
+	})
+
+	t.Run("fall back to complete snapshot identity", func(t *testing.T) {
+		job := buildRenameTableJobForTest(100, 101, "target_t", 100, nil)
+
+		rawEvent := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "snapshot_db", Tables: map[int64]bool{101: true}},
+			},
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "snapshot_t"},
+			},
+		})
+
+		require.Equal(t, int64(100), rawEvent.ExtraSchemaID)
+		require.Equal(t, "snapshot_db", rawEvent.ExtraSchemaName)
+		require.Equal(t, "snapshot_t", rawEvent.ExtraTableName)
+	})
+}
+
 func TestBuildPersistedDDLEventForRenameTablesFallbackOldTableName(t *testing.T) {
 	job := buildRenameTablesJobForTest(
 		[]int64{100, 100},
@@ -3397,9 +3776,10 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "target`db", Tables: map[int64]bool{101: true}},
+				200: {Name: "source`db", Tables: map[int64]bool{}},
 			},
 			tableMap: map[int64]*BasicTableInfo{
-				101: {SchemaID: 100, Name: "source`t"},
+				101: {SchemaID: 200, Name: "source`t"},
 			},
 		})
 

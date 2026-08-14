@@ -535,15 +535,21 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 
 func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableInfoStore) error {
 	tableID := store.getTableID()
-	// get snapshot from disk before get current gc ts to make sure data is not deleted by gc process
-	storageSnap := p.db.NewSnapshot()
-	defer storageSnap.Close()
-
 	p.mu.RLock()
+	// Create the disk snapshot and copy the DDL history in the same critical
+	// section, so they describe a consistent view. A DDL persisted before this
+	// view but not yet added to history will be applied through the online path.
+	storageSnap := p.db.NewSnapshot()
+	failpoint.Inject("afterCreatingVersionStoreSnapshot", func() {
+		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/afterCreatingVersionStoreSnapshot", p)
+	})
 	kvSnapVersion := p.gcTs
 	var allDDLFinishedTs []uint64
 	allDDLFinishedTs = append(allDDLFinishedTs, p.tablesDDLHistory[tableID]...)
 	p.mu.RUnlock()
+	defer func() {
+		_ = storageSnap.Close()
+	}()
 
 	if err := addTableInfoFromKVSnap(
 		store, kvSnapVersion, storageSnap, p.encryptionManager, p.keyspaceID,
@@ -753,6 +759,9 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		// ExtraTableInfo is the normal table info before exchange
 		ddlEvent.ExtraTableInfo, _ = p.forceGetTableInfo(ddlEvent.TableID, ddlEvent.FinishedTs)
 	}
+	failpoint.Inject("beforePersistingDDL", func() {
+		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/beforePersistingDDL")
+	})
 
 	// Note: need write ddl event to disk before update ddl history,
 	// because other goroutines may read ddl events from disk according to ddl history
@@ -760,6 +769,9 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
+	failpoint.Inject("afterPersistingDDL", func() {
+		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/afterPersistingDDL")
+	})
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -775,6 +787,28 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		tableTriggerDDLHistory: p.tableTriggerDDLHistory,
 	})
 
+	// Iterate before updating schema metadata because some DDLs, such as drop
+	// schema, need the old metadata to determine their affected physical tables.
+	handler.iterateEventTablesFunc(iterateEventTablesFuncArgs{
+		event:        &ddlEvent,
+		databaseMap:  p.databaseMap,
+		partitionMap: p.partitionMap,
+		apply: func(tableIDs ...int64) {
+			for _, tableID := range tableIDs {
+				if store, ok := p.tableInfoStoreMap[tableID]; ok {
+					switch job.Type {
+					case model.ActionCreateTable, model.ActionCreateTables:
+						log.Warn("table was registered before create DDL was handled",
+							zap.Int64("tableID", tableID),
+							zap.Uint64("finishedTs", ddlEvent.FinishedTs))
+					default:
+					}
+					store.applyDDL(&ddlEvent)
+				}
+			}
+		},
+	})
+
 	handler.updateSchemaMetadataFunc(updateSchemaMetadataFuncArgs{
 		event:        &ddlEvent,
 		databaseMap:  p.databaseMap,
@@ -782,26 +816,11 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		partitionMap: p.partitionMap,
 	})
 
-	handler.iterateEventTablesFunc(&ddlEvent, func(tableIDs ...int64) {
-		for _, tableID := range tableIDs {
-			if store, ok := p.tableInfoStoreMap[tableID]; ok {
-				// do some safety check
-				switch model.ActionType(job.Type) {
-				case model.ActionCreateTable, model.ActionCreateTables:
-					// newly created tables should not be registered before this ddl are handled
-					log.Panic("should not be registered", zap.Int64("tableID", tableID))
-				default:
-				}
-				store.applyDDL(&ddlEvent)
-			}
-		}
-	})
-
 	return nil
 }
 
 func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
-	switch model.ActionType(job.Type) {
+	switch job.Type {
 	// Skipping ActionCreateTable and ActionCreateTables when the table already exists:
 	// 1. It is possible to receive ActionCreateTable and ActionCreateTables multiple times,
 	//    and filtering duplicates in a generic way is challenging.
