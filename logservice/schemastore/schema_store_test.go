@@ -157,12 +157,10 @@ func TestSchemaStoreCloseWaitsForWorkersBeforeClosingPebble(t *testing.T) {
 	workerStarted := make(chan struct{})
 	releaseWorker := make(chan struct{})
 	store := &keyspaceSchemaStore{dataStorage: pstorage}
-	store.wg.Add(1)
-	go func() {
-		defer store.wg.Done()
+	store.wg.Go(func() {
 		close(workerStarted)
 		<-releaseWorker
-	}()
+	})
 	<-workerStarted
 
 	schemaStore := &schemaStore{
