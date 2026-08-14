@@ -16,11 +16,14 @@ package logpuller
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/tikv"
 )
 
 type mockRegionEventSinkStream struct {
@@ -106,4 +109,58 @@ func TestRegionEventSinkTracksEntriesUntilDrop(t *testing.T) {
 	(&regionEventHandler{eventSink: sink}).OnDrop(pushed)
 	quotaState = getMemoryQuotaTestState(quota)
 	require.Zero(t, quotaState.used)
+}
+
+func TestRegionEventSinkRemovePathReleasesQueuedEventMemory(t *testing.T) {
+	quota := newMemoryQuotaController(1024*1024, 8)
+	sink := newRegionEventSink(context.Background(), nil, quota)
+	defer sink.Close()
+
+	span := newTestQuotaSpan(1)
+	span.resolvedTs.Store(100)
+	callbackCh := make(chan func(), 1)
+	span.consumeKVEvents = func(_ []common.RawKVEntry, callback func()) bool {
+		callbackCh <- callback
+		return true
+	}
+	span.advanceResolvedTs = func(uint64) {}
+	sink.AddPath(span)
+
+	worker := &regionRequestWorker{}
+	region := newTestQuotaRegion(span)
+	region.rpcCtx = &tikv.RPCContext{}
+	state := newRegionFeedState(
+		region,
+		uint64(span.subID),
+		worker,
+		nil,
+	)
+	newEvent := func(commitTs uint64) regionEvent {
+		return regionEvent{
+			states: []*regionFeedState{state},
+			entries: &cdcpb.Event_Entries_{Entries: &cdcpb.Event_Entries{
+				Entries: []*cdcpb.Event_Row{{
+					Type:     cdcpb.Event_COMMITTED,
+					OpType:   cdcpb.Event_Row_PUT,
+					CommitTs: commitTs,
+				}},
+			}},
+		}
+	}
+
+	sink.Push(span.subID, newEvent(101))
+	callback := <-callbackCh
+	firstEventUsed := getMemoryQuotaTestState(quota).used
+	require.NotZero(t, firstEventUsed)
+
+	// The first event blocks the path until callback is invoked, so this event
+	// remains queued when the path is removed.
+	sink.Push(span.subID, newEvent(102))
+	require.Greater(t, getMemoryQuotaTestState(quota).used, firstEventUsed)
+	require.NoError(t, sink.RemovePath(span.subID))
+
+	callback()
+	require.Eventually(t, func() bool {
+		return getMemoryQuotaTestState(quota).used == 0
+	}, time.Second, 10*time.Millisecond)
 }
