@@ -274,7 +274,6 @@ func TestRemoveLastDispatcher(t *testing.T) {
 func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	serverInfo := node.NewInfo("127.0.0.1:18300", "")
 	mc := messaging.NewMockMessageCenter()
-	mc.OnNodeChanges(map[node.ID]*node.Info{serverInfo.ID: serverInfo})
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
 	c := New(serverInfo.ID)
@@ -318,28 +317,12 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 
 	remoteHeartbeat := grouped[remoteID]
 	require.NotNil(t, remoteHeartbeat)
-	require.Equal(t, commonEvent.DispatcherHeartbeatVersion1, remoteHeartbeat.Version)
-	require.Len(t, remoteHeartbeat.DispatcherProgressesLegacy, 1)
-	require.Equal(t, remoteDispatcher.id, remoteHeartbeat.DispatcherProgressesLegacy[0].DispatcherID)
-	require.Equal(t, uint64(210), remoteHeartbeat.DispatcherProgressesLegacy[0].CheckpointTs)
-
-	controlMessages := c.newCongestionControlMessages()
-	require.Equal(t, commonEvent.CongestionControlVersion2, controlMessages[serverInfo.ID].GetVersion())
-	require.Equal(t, commonEvent.CongestionControlVersion1, controlMessages[remoteID].GetVersion())
-
-	mc.OnNodeChanges(map[node.ID]*node.Info{
-		remoteID: {
-			ID:      remoteID,
-			GitHash: serverInfo.GitHash,
-		},
-	})
-	grouped = c.groupHeartbeat()
-	remoteHeartbeat = grouped[remoteID]
 	require.Equal(t, commonEvent.DispatcherHeartbeatVersion2, remoteHeartbeat.Version)
 	require.Len(t, remoteHeartbeat.DispatcherProgresses, 1)
+	require.Equal(t, uint8(commonEvent.DispatcherProgressVersion1), remoteHeartbeat.DispatcherProgresses[0].Version)
+	require.Equal(t, remoteDispatcher.id, remoteHeartbeat.DispatcherProgresses[0].DispatcherID)
+	require.Equal(t, uint64(210), remoteHeartbeat.DispatcherProgresses[0].CheckpointTs)
 	require.Equal(t, uint64(5), remoteHeartbeat.DispatcherProgresses[0].Epoch)
-	controlMessages = c.newCongestionControlMessages()
-	require.Equal(t, commonEvent.CongestionControlVersion2, controlMessages[remoteID].GetVersion())
 }
 
 func TestGroupHeartbeatResetThenHandshake(t *testing.T) {

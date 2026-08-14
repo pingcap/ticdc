@@ -206,8 +206,6 @@ func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error)
 		observation.stoppingObserved,
 		observation.remaining,
 		observation.logServiceDispatcherCount,
-		observation.logServiceDispatcherCountObserved,
-		observation.logServiceDispatcherCountRequired,
 	)
 
 	if completionObserved {
@@ -229,8 +227,6 @@ func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error)
 		zap.Int("targetInflightDrainMoveCount", observation.targetInflightDrainMoveCount),
 		zap.Int("pendingStatusCount", observation.pendingStatusCount),
 		zap.Uint32("logServiceDispatcherCount", observation.logServiceDispatcherCount),
-		zap.Bool("logServiceDispatcherCountObserved", observation.logServiceDispatcherCountObserved),
-		zap.Bool("logServiceDispatcherCountRequired", observation.logServiceDispatcherCountRequired),
 		zap.Int("remaining", observation.remaining))
 	return ensureDrainRemainingNonZero(observation.remaining), nil
 }
@@ -247,8 +243,6 @@ func (c *Controller) observeRemovedActiveDrainTarget(target node.ID, epoch uint6
 		observation.stoppingObserved,
 		observation.remaining,
 		observation.logServiceDispatcherCount,
-		observation.logServiceDispatcherCountObserved,
-		observation.logServiceDispatcherCountRequired,
 	)
 	if completionObserved {
 		log.Info("drain completion observed for removed active target",
@@ -269,7 +263,6 @@ func (c *Controller) observeRemovedActiveDrainTarget(target node.ID, epoch uint6
 		zap.Int("targetInflightDrainMoveCount", observation.targetInflightDrainMoveCount),
 		zap.Int("pendingStatusCount", observation.pendingStatusCount),
 		zap.Uint32("logServiceDispatcherCount", observation.logServiceDispatcherCount),
-		zap.Bool("logServiceDispatcherCountObserved", observation.logServiceDispatcherCountObserved),
 		zap.Int("remaining", observation.remaining))
 	return ensureDrainRemainingNonZero(observation.remaining)
 }
@@ -321,13 +314,11 @@ type drainNodeObservation struct {
 	// pendingStatusCount is the number of running changefeeds not converged to the active target epoch.
 	pendingStatusCount int
 	// remaining is the max of all workload dimensions used by drain completion gating.
-	remaining                         int
-	nodeState                         drain.State
-	drainingObserved                  bool
-	stoppingObserved                  bool
-	logServiceDispatcherCount         uint32
-	logServiceDispatcherCountObserved bool
-	logServiceDispatcherCountRequired bool
+	remaining                 int
+	nodeState                 drain.State
+	drainingObserved          bool
+	stoppingObserved          bool
+	logServiceDispatcherCount uint32
 }
 
 func (c *Controller) observeDrainNode(target node.ID, epoch uint64) drainNodeObservation {
@@ -346,10 +337,7 @@ func (c *Controller) observeDrainNode(target node.ID, epoch uint64) drainNodeObs
 	)
 
 	_, observation.drainingObserved, observation.stoppingObserved = c.drainController.GetStatus(target)
-	observation.logServiceDispatcherCount, observation.logServiceDispatcherCountObserved = c.drainController.GetLogServiceDispatcherCount(target)
-	drainProtocolVersion, drainProtocolObserved := c.drainController.GetDrainProtocolVersion(target)
-	observation.logServiceDispatcherCountRequired = !drainProtocolObserved ||
-		heartbeatpb.SupportsLogServiceDispatcherCount(drainProtocolVersion)
+	observation.logServiceDispatcherCount, _ = c.drainController.GetLogServiceDispatcherCount(target)
 	observation.nodeState = c.drainController.GetState(target)
 	return observation
 }
@@ -1101,16 +1089,13 @@ func isBestEffortDrainComplete(
 	stoppingObserved bool,
 	remaining int,
 	logServiceDispatcherCount uint32,
-	logServiceDispatcherCountObserved bool,
-	logServiceDispatcherCountRequired bool,
 ) bool {
 	if nodeState == drain.StateUnknown || !drainingObserved {
 		return false
 	}
 	return stoppingObserved &&
 		remaining == 0 &&
-		(!logServiceDispatcherCountRequired ||
-			logServiceDispatcherCountObserved && logServiceDispatcherCount == 0)
+		logServiceDispatcherCount == 0
 }
 
 // drainRemainingEstimate uses the larger workload dimension to avoid obvious double counting.

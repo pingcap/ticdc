@@ -43,7 +43,6 @@ const (
 type MessageCenter interface {
 	MessageSender
 	MessageReceiver
-	GetNodeInfo(node.ID) *node.Info
 	// OnNodeChanges is called when the nodes in the cluster are changed. The message center should update the target list.
 	OnNodeChanges(map[node.ID]*node.Info)
 	Close()
@@ -88,11 +87,8 @@ type messageCenter struct {
 		m map[node.ID]*remoteMessageTarget
 	}
 
-	nodeInfos struct {
-		sync.RWMutex
-		m map[node.ID]*node.Info
-	}
-	notifyCh chan map[node.ID]*node.Info
+	remoteNodeInfos map[node.ID]*node.Info
+	notifyCh        chan map[node.ID]*node.Info
 
 	grpcServer *grpc.Server
 	router     *router
@@ -126,7 +122,6 @@ func NewMessageCenter(
 		notifyCh:       make(chan map[node.ID]*node.Info, 128),
 	}
 	mc.remoteTargets.m = make(map[node.ID]*remoteMessageTarget)
-	mc.nodeInfos.m = make(map[node.ID]*node.Info)
 
 	log.Info("create message center success.",
 		zap.Stringer("id", id), zap.String("addr", cfg.Addr))
@@ -200,12 +195,6 @@ func (mc *messageCenter) DeRegisterHandler(topic string) {
 	mc.router.deRegisterHandler(topic)
 }
 
-func (mc *messageCenter) GetNodeInfo(id node.ID) *node.Info {
-	mc.nodeInfos.RLock()
-	defer mc.nodeInfos.RUnlock()
-	return mc.nodeInfos.m[id]
-}
-
 func (mc *messageCenter) OnNodeChanges(activeNode map[node.ID]*node.Info) {
 	mc.notifyCh <- activeNode
 	log.Info("notify node changes", zap.Any("activeNode", activeNode))
@@ -216,9 +205,7 @@ func (mc *messageCenter) handleNodeChanges(activeNode map[node.ID]*node.Info) {
 	for id, node := range activeNode {
 		infosMap[id] = node
 	}
-	mc.nodeInfos.Lock()
-	mc.nodeInfos.m = infosMap
-	mc.nodeInfos.Unlock()
+	mc.remoteNodeInfos = infosMap
 
 	currentTargets := make(map[node.ID]bool)
 	currentTargets[mc.id] = true

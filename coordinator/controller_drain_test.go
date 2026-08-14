@@ -154,7 +154,7 @@ func TestDrainNodeCompletesAfterCompletionObserved(t *testing.T) {
 	require.Equal(t, epoch, c.drainSession.epoch)
 }
 
-func TestDrainNodeWaitsForLogServiceDispatchers(t *testing.T) {
+func TestDrainNodeUsesDefaultLogServiceDispatcherCount(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
 	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
@@ -167,29 +167,20 @@ func TestDrainNodeWaitsForLogServiceDispatchers(t *testing.T) {
 	require.True(t, ok)
 	setChangefeedDrainStatus(cf, target, epoch, 0, 0)
 
-	// A STOPPING response alone does not contain the log service dispatcher count.
+	// Old nodes do not report the log service dispatcher count. Its protobuf
+	// default is zero, so the missing field must not block drain completion.
 	drainController.ObserveSetNodeLivenessResponse(target, &heartbeatpb.SetNodeLivenessResponse{
 		Applied:   heartbeatpb.NodeLiveness_STOPPING,
 		NodeEpoch: 1,
 	})
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
-	require.Equal(t, 1, remaining)
-
-	setTargetStoppingHeartbeat(drainController, target, 2)
-	remaining, err = c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 1, remaining)
-
-	setTargetStoppingHeartbeat(drainController, target, 0)
-	remaining, err = c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
 	require.Equal(t, 0, remaining)
 }
 
-func TestDrainNodeVersion1IgnoresMissingLogServiceDispatcherCount(t *testing.T) {
+func TestDrainNodeWaitsForReportedLogServiceDispatchers(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, heartbeatpb.DrainProtocolVersion1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -199,11 +190,13 @@ func TestDrainNodeVersion1IgnoresMissingLogServiceDispatcherCount(t *testing.T) 
 	_, epoch, ok := c.getDispatcherDrainTarget()
 	require.True(t, ok)
 	setChangefeedDrainStatus(cf, target, epoch, 0, 0)
-	drainController.ObserveSetNodeLivenessResponse(target, &heartbeatpb.SetNodeLivenessResponse{
-		Applied:   heartbeatpb.NodeLiveness_STOPPING,
-		NodeEpoch: 1,
-	})
 
+	setTargetStoppingHeartbeat(drainController, target, 2)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	setTargetStoppingHeartbeat(drainController, target, 0)
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 0, remaining)

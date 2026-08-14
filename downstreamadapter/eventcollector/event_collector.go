@@ -415,7 +415,7 @@ func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat
 	group := func(target node.ID, dispatcherID common.DispatcherID, checkpointTs uint64, epoch uint64) {
 		heartbeat, ok := groupedHeartbeats[target]
 		if !ok {
-			heartbeat = event.NewDispatcherHeartbeatWithVersion(c.eventServiceProtocolVersion(target))
+			heartbeat = event.NewDispatcherHeartbeat()
 			groupedHeartbeats[target] = heartbeat
 		}
 		heartbeat.AddDispatcherProgress(dispatcherID, checkpointTs, epoch)
@@ -437,21 +437,6 @@ func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat
 	})
 
 	return groupedHeartbeats
-}
-
-func (c *EventCollector) eventServiceProtocolVersion(target node.ID) int {
-	if target == c.serverId {
-		return event.DispatcherHeartbeatVersion2
-	}
-	info := c.mc.GetNodeInfo(target)
-	localInfo := c.mc.GetNodeInfo(c.serverId)
-	// A matching non-empty Git hash proves both endpoints run the same message
-	// implementation without introducing a separate capability in membership.
-	// During a rolling upgrade, conservatively use the legacy wire format.
-	if info != nil && localInfo != nil && localInfo.GitHash != "" && info.GitHash == localInfo.GitHash {
-		return event.DispatcherHeartbeatVersion2
-	}
-	return event.DispatcherHeartbeatVersion1
 }
 
 func (c *EventCollector) processDSFeedback(ctx context.Context) error {
@@ -742,8 +727,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 	// build congestion control messages for each node
 	result := make(map[node.ID]*event.CongestionControl)
 	for nodeID, changefeedDispatchers := range nodeDispatcherMemory {
-		protocolVersion := c.eventServiceProtocolVersion(nodeID)
-		congestionControl := event.NewCongestionControlWithVersion(protocolVersion)
+		congestionControl := event.NewCongestionControlWithVersion(event.CongestionControlVersion2)
 
 		for changefeedID, dispatcherMemory := range changefeedDispatchers {
 			if len(dispatcherMemory) == 0 {
@@ -755,18 +739,13 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			if !ok {
 				continue
 			}
-			if protocolVersion >= event.CongestionControlVersion2 {
-				congestionControl.AddAvailableMemoryWithDispatchersAndUsageAndReleaseCount(
-					changefeedID.ID(),
-					totalAvailable,
-					changefeedUsageRatio[changefeedID],
-					dispatcherMemory,
-					getAndResetMemoryReleaseCount(changefeedID),
-				)
-			} else {
-				congestionControl.AddAvailableMemoryWithDispatchers(
-					changefeedID.ID(), totalAvailable, dispatcherMemory)
-			}
+			congestionControl.AddAvailableMemoryWithDispatchersAndUsageAndReleaseCount(
+				changefeedID.ID(),
+				totalAvailable,
+				changefeedUsageRatio[changefeedID],
+				dispatcherMemory,
+				getAndResetMemoryReleaseCount(changefeedID),
+			)
 		}
 
 		if len(congestionControl.GetAvailables()) > 0 {
