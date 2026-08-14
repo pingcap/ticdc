@@ -4574,6 +4574,38 @@ func TestGetAllPhysicalTablesReplaysTopologyChangingDDL(t *testing.T) {
 	}
 }
 
+func TestUpdateFullTableInfoForPartitioningDDL(t *testing.T) {
+	for _, action := range []model.ActionType{
+		model.ActionAlterTablePartitioning,
+		model.ActionRemovePartitioning,
+	} {
+		t.Run(action.String(), func(t *testing.T) {
+			const oldTableID int64 = 100
+			const newTableID int64 = 200
+			newTableInfo := newEligibleTableInfoForTest(newTableID, "t")
+			tableInfoMap := map[int64]*model.TableInfo{
+				oldTableID: newEligibleTableInfoForTest(oldTableID, "t"),
+			}
+
+			handler, ok := allDDLHandlers[action]
+			require.True(t, ok)
+			handler.updateFullTableInfoFunc(updateFullTableInfoFuncArgs{
+				event: &PersistedDDLEvent{
+					Type:         byte(action),
+					TableID:      newTableID,
+					ExtraTableID: oldTableID,
+					TableInfo:    newTableInfo,
+				},
+				tableInfoMap: tableInfoMap,
+			})
+
+			require.NotContains(t, tableInfoMap, oldTableID)
+			require.Same(t, newTableInfo, tableInfoMap[newTableID])
+			require.Len(t, tableInfoMap, 1)
+		})
+	}
+}
+
 func TestRegisteredTableInfoForComplexDDL(t *testing.T) {
 	t.Run("rename tables", func(t *testing.T) {
 		storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
