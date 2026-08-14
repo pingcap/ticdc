@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -26,11 +27,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type mockLogServiceDispatcherCounter struct {
+type mockEventStore struct {
+	eventstore.EventStore
 	count int
 }
 
-func (m *mockLogServiceDispatcherCounter) DispatcherCount() int {
+var _ eventstore.EventStore = (*mockEventStore)(nil)
+
+func (m *mockEventStore) DispatcherCount() int {
 	return m.count
 }
 
@@ -167,10 +171,15 @@ func TestSetDispatcherDrainTargetRejectStaleUpdate(t *testing.T) {
 func TestSetDispatcherDrainTargetSendsNodeHeartbeatAck(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	logService := &mockLogServiceDispatcherCounter{count: 2}
+	previousEventStore, hadPreviousEventStore := appcontext.TryGetService[any](appcontext.EventStore)
+	logService := &mockEventStore{count: 2}
 	appcontext.SetService(appcontext.EventStore, logService)
 	t.Cleanup(func() {
-		logService.count = 0
+		if hadPreviousEventStore {
+			appcontext.SetService(appcontext.EventStore, previousEventStore)
+		} else {
+			appcontext.DeleteService(appcontext.EventStore)
+		}
 	})
 
 	var nodeLiveness liveness.Liveness
