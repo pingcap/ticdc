@@ -209,7 +209,7 @@ func buildRequiredTypesByPackage(cases []structGuardCase) map[packageKey][]strin
 func queryModuleInfo(t *testing.T, modulePath string) *moduleInfo {
 	t.Helper()
 
-	cmd := exec.Command("go", "mod", "download", "-json", modulePath+"@master")
+	cmd := exec.Command("go", "mod", "download", "-json", modulePath+"@release-8.5")
 	output, cmdErr := cmd.CombinedOutput()
 	mod, decodeErr := decodeModuleInfo(output)
 	require.NoError(t, decodeErr, "unmarshal module metadata for %s failed", modulePath)
