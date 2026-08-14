@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
-	"github.com/pingcap/ticdc/pkg/redo/writer/factory"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
@@ -103,7 +102,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 		}
 	}()
 
-	ddlWriter, err = factory.NewRedoDDLWriter(ctx, config)
+	ddlWriter, err = writer.NewDDLWriter(ctx, config)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", changefeedID.Keyspace()),
@@ -112,7 +111,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			zap.Error(err))
 		return nil, err
 	}
-	dmlWriter, err = factory.NewRedoDMLWriter(ctx, config)
+	dmlWriter, err = writer.NewDMLWriter(ctx, config)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", changefeedID.Keyspace()),

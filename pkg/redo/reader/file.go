@@ -21,7 +21,6 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
-	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -35,8 +34,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
-	"github.com/pingcap/ticdc/pkg/redo/writer/file"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -245,12 +242,11 @@ func sortAndWriteFile(
 	fileName string, cfg *readerConfig,
 ) error {
 	sortedName := getSortedFileName(fileName)
-	w, err := file.NewLocalFileWriter(cfg.dir, math.MaxInt32, cfg.fileType, writer.WithLogFileName(func() string {
-		return sortedName
-	}))
+	w, err := newFramedFileWriter(filepath.Join(cfg.dir, sortedName))
 	if err != nil {
 		return err
 	}
+	defer w.Abort()
 
 	fileContent, err := extStorage.ReadFile(egCtx, fileName)
 	if err != nil {
@@ -293,8 +289,7 @@ func sortAndWriteFile(
 		if err != nil {
 			return errors.WrapError(errors.ErrMarshalFailed, err)
 		}
-		_, err = w.Write(data)
-		if err != nil {
+		if err = w.Write(data); err != nil {
 			return err
 		}
 	}
@@ -320,8 +315,7 @@ func shouldOpen(startTs uint64, name, fixedType string) (bool, error) {
 	return commitTs > startTs, nil
 }
 
-// Read implement Read interface.
-// TODO: more general reader pair with writer in writer pkg
+// Read implements the fileReader interface.
 func (r *reader) Read() (*pevent.RedoLog, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -367,7 +361,7 @@ func readInt64(r io.Reader) (int64, error) {
 	return n, err
 }
 
-// decodeFrameSize pair with encodeFrameSize in writer.file
+// decodeFrameSize pairs with writer.EncodeFrameSize.
 // the func use code from etcd wal/decoder.go
 func decodeFrameSize(lenField int64) (recBytes int64, padBytes int64) {
 	// the record size is stored in the lower 56 bits of the 64-bit length

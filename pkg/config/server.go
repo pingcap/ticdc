@@ -35,9 +35,6 @@ const (
 	// DefaultSortDir is the default value of sort-dir, it will be a subordinate directory of data-dir.
 	DefaultSortDir = "/tmp/sorter"
 
-	// DefaultRedoDir is a subordinate directory path of data-dir.
-	DefaultRedoDir = "/tmp/redo"
-
 	// DebugConfigurationItem is the name of debug configurations
 	DebugConfigurationItem = "debug"
 

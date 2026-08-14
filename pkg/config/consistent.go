@@ -53,9 +53,8 @@ type ConsistentConfig struct {
 	FlushWorkerNum *int `toml:"flush-worker-num" json:"flush-worker-num,omitempty"`
 	// Storage is the storage path(uri) to store redo log.
 	Storage *string `toml:"storage" json:"storage,omitempty"`
-	// UseFileBackend is a flag to enable file backend for redo log.
-	// file backend means before flush redo log to storage, it will be written to local file.
-	// Default is false.
+	// UseFileBackend is retained for compatibility and ignored. Redo always uses
+	// the spooled memory writer.
 	UseFileBackend *bool `toml:"use-file-backend" json:"use-file-backend,omitempty"`
 	// Compression is the compression algorithm used for redo log.
 	// Default is "", it means no compression, equals to `none`.

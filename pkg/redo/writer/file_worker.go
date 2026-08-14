@@ -11,7 +11,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-package memory
+package writer
 
 import (
 	"bytes"
@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
@@ -84,8 +83,8 @@ func (f *fileCache) markFlushed() {
 }
 
 type fileWorkerGroup struct {
-	cfg           *writer.Config
-	op            *writer.LogWriterOptions
+	cfg           *Config
+	op            *LogWriterOptions
 	workerNum     int
 	inputCh       chan *polymorphicRedoEvent
 	extStorage    storeapi.Storage
@@ -103,17 +102,17 @@ type fileWorkerGroup struct {
 // fileWorkerGroup receives encoded redo events and writes them to cache, with
 // background goroutines handling file flush.
 func newFileWorkerGroup(
-	cfg *writer.Config,
+	cfg *Config,
 	inputCh chan *polymorphicRedoEvent,
 	extStorage storeapi.Storage,
-	opts ...writer.Option,
+	opts ...Option,
 ) *fileWorkerGroup {
 	workerNum := cfg.FlushWorkerNum()
 	if workerNum <= 0 {
 		workerNum = redo.DefaultFlushWorkerNum
 	}
 
-	op := &writer.LogWriterOptions{}
+	op := &LogWriterOptions{}
 	for _, opt := range opts {
 		opt(op)
 	}

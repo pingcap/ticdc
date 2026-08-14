@@ -11,20 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memory
+package writer
 
 import (
 	"context"
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/pingcap/ticdc/utils/chann"
@@ -33,10 +33,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-var _ writer.RedoDMLWriter = (*dmlWriter)(nil)
+var _ RedoDMLWriter = (*dmlWriter)(nil)
 
 type dmlWriter struct {
-	cfg           *writer.Config
+	cfg           *Config
 	encodeWorkers *encodingWorkerGroup
 	fileWorkers   *fileWorkerGroup
 	spool         *spool.Spool
@@ -52,10 +52,20 @@ type redoSpoolEntry struct {
 
 const redoSpoolDirectory = "redo-sink-spool"
 
-// NewDMLWriter creates a new memory DML writer.
+// NewDMLWriter creates a new redo DML writer.
 func NewDMLWriter(
-	ctx context.Context, cfg *writer.Config, opts ...writer.Option,
-) (writer.RedoDMLWriter, error) {
+	ctx context.Context, cfg *Config, opts ...Option,
+) (RedoDMLWriter, error) {
+	uri := cfg.URI()
+	if redo.IsBlackholeStorage(uri.Scheme) {
+		return newBlackHoleDMLWriter(strings.HasSuffix(uri.Scheme, "invalid")), nil
+	}
+	return newDMLWriter(ctx, cfg, opts...)
+}
+
+func newDMLWriter(
+	ctx context.Context, cfg *Config, opts ...Option,
+) (RedoDMLWriter, error) {
 	extStorage, err := redo.InitExternalStorage(ctx, *cfg.URI())
 	if err != nil {
 		return nil, err

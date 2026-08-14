@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memory
+package writer
 
 import (
 	"context"
@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -33,14 +32,14 @@ func TestWriteDDL(t *testing.T) {
 
 	extStorage, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
 	require.NoError(t, err)
-	cfg, err := writer.NewConfig(
+	cfg, err := NewConfig(
 		common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
 		testutil.NewConsistentConfig(uri.String()),
 	)
 	require.NoError(t, err)
 
 	filename := t.Name()
-	lw, err := NewDDLWriter(ctx, cfg, writer.WithLogFileName(func() string {
+	lw, err := NewDDLWriter(ctx, cfg, WithLogFileName(func() string {
 		return filename
 	}))
 	require.NoError(t, err)

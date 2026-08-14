@@ -11,7 +11,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-package memory
+package writer
 
 import (
 	"testing"
@@ -19,7 +19,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -30,13 +29,13 @@ func TestNewEncodingWorkerGroup(t *testing.T) {
 	changefeed := common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName)
 	cfg := testutil.NewConsistentConfig("nfs:///tmp/redo")
 	cfg.EncodingWorkerNum = util.AddressOf(3)
-	writerCfg, err := writer.NewConfig(changefeed, cfg)
+	writerCfg, err := NewConfig(changefeed, cfg)
 	require.NoError(t, err)
 	g := newEncodingWorkerGroup(writerCfg)
 	require.Equal(t, 3, g.workerNum)
 	require.Len(t, g.inputChs, 3)
 
-	defaultCfg, err := writer.NewConfig(changefeed, testutil.NewConsistentConfig("nfs:///tmp/redo"))
+	defaultCfg, err := NewConfig(changefeed, testutil.NewConsistentConfig("nfs:///tmp/redo"))
 	require.NoError(t, err)
 	g = newEncodingWorkerGroup(defaultCfg)
 	require.Equal(t, redo.DefaultEncodingWorkerNum, g.workerNum)

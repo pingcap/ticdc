@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memory
+package writer
 
 import (
 	"context"
@@ -23,7 +23,6 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
@@ -43,7 +42,7 @@ func TestNewDMLWriter(t *testing.T) {
 	spoolBaseDir := t.TempDir()
 	consistentCfg.SpoolBaseDir = util.AddressOf(spoolBaseDir)
 	consistentCfg.SpoolDiskQuota = util.AddressOf(int64(1024))
-	cfg, err := writer.NewConfig(changefeedID, consistentCfg)
+	cfg, err := NewConfig(changefeedID, consistentCfg)
 	require.NoError(t, err)
 
 	lw, err := NewDMLWriter(ctx, cfg)
