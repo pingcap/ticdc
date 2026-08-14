@@ -506,8 +506,16 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		}
 		var debeziumConfig *config.DebeziumConfig
 		if c.Sink.DebeziumConfig != nil {
+			// Fall back to the default when OutputOldValue is omitted.
+			outputOldValue := config.DefaultDebeziumOutputOldValue
+			if c.Sink.DebeziumConfig.OutputOldValue != nil {
+				outputOldValue = *c.Sink.DebeziumConfig.OutputOldValue
+			}
 			debeziumConfig = &config.DebeziumConfig{
-				OutputOldValue: c.Sink.DebeziumConfig.OutputOldValue,
+				OutputOldValue: outputOldValue,
+			}
+			if c.Sink.DebeziumConfig.IncludeStartTs != nil {
+				debeziumConfig.IncludeStartTs = util.AddressOf(*c.Sink.DebeziumConfig.IncludeStartTs)
 			}
 		}
 		var openProtocolConfig *config.OpenProtocolConfig
@@ -863,7 +871,10 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		var debeziumConfig *DebeziumConfig
 		if cloned.Sink.Debezium != nil {
 			debeziumConfig = &DebeziumConfig{
-				OutputOldValue: cloned.Sink.Debezium.OutputOldValue,
+				OutputOldValue: util.AddressOf(cloned.Sink.Debezium.OutputOldValue),
+			}
+			if cloned.Sink.Debezium.IncludeStartTs != nil {
+				debeziumConfig.IncludeStartTs = util.AddressOf(*cloned.Sink.Debezium.IncludeStartTs)
 			}
 		}
 		var openProtocolConfig *OpenProtocolConfig
@@ -1545,7 +1556,8 @@ type OpenProtocolConfig struct {
 
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
-	OutputOldValue bool `json:"output_old_value"`
+	OutputOldValue *bool `json:"output_old_value,omitempty"`
+	IncludeStartTs *bool `json:"include_start_ts,omitempty"`
 }
 
 type DispatcherCount struct {
