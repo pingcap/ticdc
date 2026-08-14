@@ -95,6 +95,10 @@ const (
 	// to send all tables bootstrap message at changefeed start.
 	DefaultSendAllBootstrapAtStart = false
 
+	// DefaultDebeziumOutputOldValue is the default value of whether
+	// to output the old value in debezium protocol messages.
+	DefaultDebeziumOutputOldValue = true
+
 	// DefaultMaxReconnectToPulsarBroker is the default max reconnect times to pulsar broker.
 	// The pulsar client uses an exponential backoff with jitter to reconnect to the broker.
 	// Based on test, when the max reconnect times is 3,
