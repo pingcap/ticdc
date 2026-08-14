@@ -16,17 +16,19 @@ package v2
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/ticdc/api/middleware"
+	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/server"
 )
 
 // OpenAPIV2 provides CDC v2 APIs
 type OpenAPIV2 struct {
-	server server.Server
+	server              server.Server
+	pullerDebugProvider logpuller.DebugInfoProvider
 }
 
 // NewOpenAPIV2 creates a new OpenAPIV2.
 func NewOpenAPIV2(c server.Server) OpenAPIV2 {
-	return OpenAPIV2{c}
+	return OpenAPIV2{server: c}
 }
 
 // RegisterOpenAPIV2Routes registers routes for OpenAPI
@@ -51,6 +53,11 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	debugGroup.POST("/failpoints", api.EnableFailpoint)
 	debugGroup.DELETE("/failpoints", api.DisableFailpoint)
 	debugGroup.GET("/failpoints", api.ListFailpoints)
+	debugGroup.GET("/puller", api.GetPullerDebugInfo)
+	debugGroup.GET(
+		"/puller/subscriptions/:subscription_id/regions/:region_id",
+		api.GetPullerDebugRegion,
+	)
 
 	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
 	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
