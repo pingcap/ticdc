@@ -35,73 +35,30 @@ func (m *MockDebugInfoProvider) EXPECT() *MockDebugInfoProviderMockRecorder {
 }
 
 // GetPullerDebugInfo mocks base method.
-func (m *MockDebugInfoProvider) GetPullerDebugInfo() logpuller.PullerDebugInfo {
+func (m *MockDebugInfoProvider) GetPullerDebugInfo(options logpuller.PullerDebugOptions) logpuller.PullerDebugInfo {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetPullerDebugInfo")
+	ret := m.ctrl.Call(m, "GetPullerDebugInfo", options)
 	ret0, _ := ret[0].(logpuller.PullerDebugInfo)
 	return ret0
 }
 
 // GetPullerDebugInfo indicates an expected call of GetPullerDebugInfo.
-func (mr *MockDebugInfoProviderMockRecorder) GetPullerDebugInfo() *gomock.Call {
+func (mr *MockDebugInfoProviderMockRecorder) GetPullerDebugInfo(options interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPullerDebugInfo", reflect.TypeOf((*MockDebugInfoProvider)(nil).GetPullerDebugInfo))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPullerDebugInfo", reflect.TypeOf((*MockDebugInfoProvider)(nil).GetPullerDebugInfo), options)
 }
 
-// GetPullerDebugStore mocks base method.
-func (m *MockDebugInfoProvider) GetPullerDebugStore(address string) (logpuller.PullerStoreDebugInfo, bool) {
+// GetPullerDebugRegion mocks base method.
+func (m *MockDebugInfoProvider) GetPullerDebugRegion(subID logpuller.SubscriptionID, regionID uint64) (logpuller.PullerRegionDebugDetail, bool) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetPullerDebugStore", address)
-	ret0, _ := ret[0].(logpuller.PullerStoreDebugInfo)
+	ret := m.ctrl.Call(m, "GetPullerDebugRegion", subID, regionID)
+	ret0, _ := ret[0].(logpuller.PullerRegionDebugDetail)
 	ret1, _ := ret[1].(bool)
 	return ret0, ret1
 }
 
-// GetPullerDebugStore indicates an expected call of GetPullerDebugStore.
-func (mr *MockDebugInfoProviderMockRecorder) GetPullerDebugStore(address interface{}) *gomock.Call {
+// GetPullerDebugRegion indicates an expected call of GetPullerDebugRegion.
+func (mr *MockDebugInfoProviderMockRecorder) GetPullerDebugRegion(subID, regionID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPullerDebugStore", reflect.TypeOf((*MockDebugInfoProvider)(nil).GetPullerDebugStore), address)
-}
-
-// GetPullerDebugStores mocks base method.
-func (m *MockDebugInfoProvider) GetPullerDebugStores() []logpuller.PullerStoreDebugInfo {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetPullerDebugStores")
-	ret0, _ := ret[0].([]logpuller.PullerStoreDebugInfo)
-	return ret0
-}
-
-// GetPullerDebugStores indicates an expected call of GetPullerDebugStores.
-func (mr *MockDebugInfoProviderMockRecorder) GetPullerDebugStores() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPullerDebugStores", reflect.TypeOf((*MockDebugInfoProvider)(nil).GetPullerDebugStores))
-}
-
-// GetPullerDebugSubscription mocks base method.
-func (m *MockDebugInfoProvider) GetPullerDebugSubscription(subID logpuller.SubscriptionID, options logpuller.PullerSubscriptionDebugOptions) (logpuller.PullerSubscriptionDetail, bool) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetPullerDebugSubscription", subID, options)
-	ret0, _ := ret[0].(logpuller.PullerSubscriptionDetail)
-	ret1, _ := ret[1].(bool)
-	return ret0, ret1
-}
-
-// GetPullerDebugSubscription indicates an expected call of GetPullerDebugSubscription.
-func (mr *MockDebugInfoProviderMockRecorder) GetPullerDebugSubscription(subID, options interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPullerDebugSubscription", reflect.TypeOf((*MockDebugInfoProvider)(nil).GetPullerDebugSubscription), subID, options)
-}
-
-// GetPullerDebugSubscriptions mocks base method.
-func (m *MockDebugInfoProvider) GetPullerDebugSubscriptions() []logpuller.PullerSubscriptionDebugInfo {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetPullerDebugSubscriptions")
-	ret0, _ := ret[0].([]logpuller.PullerSubscriptionDebugInfo)
-	return ret0
-}
-
-// GetPullerDebugSubscriptions indicates an expected call of GetPullerDebugSubscriptions.
-func (mr *MockDebugInfoProviderMockRecorder) GetPullerDebugSubscriptions() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPullerDebugSubscriptions", reflect.TypeOf((*MockDebugInfoProvider)(nil).GetPullerDebugSubscriptions))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPullerDebugRegion", reflect.TypeOf((*MockDebugInfoProvider)(nil).GetPullerDebugRegion), subID, regionID)
 }

@@ -8,6 +8,7 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
@@ -30,104 +31,76 @@ func TestPullerDebugAPI(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := gomock.NewController(t)
 	provider := logpullermock.NewMockDebugInfoProvider(ctrl)
-	api := OpenAPIV2{pullerDebugProvider: provider}
-	router := newPullerDebugTestRouter(api)
+	router := newPullerDebugTestRouter(OpenAPIV2{pullerDebugProvider: provider})
 
-	provider.EXPECT().GetPullerDebugInfo().Return(logpuller.PullerDebugInfo{State: "running"})
-	response := performPullerDebugRequest(t, router, "/debug/puller")
-	require.Equal(t, http.StatusOK, response.Code)
-	var overview logpuller.PullerDebugInfo
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &overview))
-	require.Equal(t, "running", overview.State)
-
-	provider.EXPECT().GetPullerDebugSubscriptions().Return([]logpuller.PullerSubscriptionDebugInfo{
-		{SubscriptionID: 1, TableID: 10, Initialized: true},
-		{SubscriptionID: 2, TableID: 20, Stopped: true},
-		{SubscriptionID: 3, TableID: 30},
+	options := logpuller.PullerDebugOptions{SubscriptionLimit: 2, RegionLimit: 3}
+	provider.EXPECT().GetPullerDebugInfo(options).Return(logpuller.PullerDebugInfo{
+		SlowSubscriptions: []logpuller.PullerSubscriptionDebugInfo{{
+			SubscriptionID: 1,
+			SlowRegions: []logpuller.PullerRegionDebugInfo{{
+				RegionID: 11,
+			}},
+		}},
 	})
-	response = performPullerDebugRequest(t, router, "/debug/puller/subscriptions?limit=2")
+	response := performPullerDebugRequest(
+		router, "/debug/puller?subscription_limit=2&region_limit=3")
 	require.Equal(t, http.StatusOK, response.Code)
-	var subscriptions pullerSubscriptionListResponse
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &subscriptions))
-	require.Len(t, subscriptions.Items, 2)
-	require.Equal(t, logpuller.SubscriptionID(2), subscriptions.NextAfterID)
+	var info logpuller.PullerDebugInfo
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &info))
+	require.Equal(t, logpuller.SubscriptionID(1),
+		info.SlowSubscriptions[0].SubscriptionID)
+	require.Equal(t, uint64(11), info.SlowSubscriptions[0].SlowRegions[0].RegionID)
 
-	detailOptions := logpuller.PullerSubscriptionDebugOptions{
-		RegionMode:  "slow",
-		RegionLimit: 2,
-		IncludeKeys: true,
-	}
-	provider.EXPECT().GetPullerDebugSubscription(logpuller.SubscriptionID(3), detailOptions).
-		Return(logpuller.PullerSubscriptionDetail{
-			Subscription: logpuller.PullerSubscriptionDebugInfo{SubscriptionID: 3},
+	provider.EXPECT().GetPullerDebugRegion(
+		logpuller.SubscriptionID(1), uint64(11)).
+		Return(logpuller.PullerRegionDebugDetail{
+			SubscriptionID: 1,
+			Region:         logpuller.PullerRegionDebugInfo{RegionID: 11},
 		}, true)
-	response = performPullerDebugRequest(t, router,
-		"/debug/puller/subscriptions/3?regions=slow&region_limit=2&include_keys=true")
+	response = performPullerDebugRequest(
+		router, "/debug/puller/subscriptions/1/regions/11")
 	require.Equal(t, http.StatusOK, response.Code)
-	var detail logpuller.PullerSubscriptionDetail
+	var detail logpuller.PullerRegionDebugDetail
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &detail))
-	require.Equal(t, logpuller.SubscriptionID(3), detail.Subscription.SubscriptionID)
-
-	provider.EXPECT().GetPullerDebugStores().Return([]logpuller.PullerStoreDebugInfo{{
-		Address: "tikv-1:20160",
-	}})
-	response = performPullerDebugRequest(t, router, "/debug/puller/stores")
-	require.Equal(t, http.StatusOK, response.Code)
-	var stores pullerStoreListResponse
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &stores))
-	require.Equal(t, "tikv-1:20160", stores.Items[0].Address)
-
-	provider.EXPECT().GetPullerDebugStore("tikv-1:20160").Return(logpuller.PullerStoreDebugInfo{
-		Address: "tikv-1:20160",
-	}, true)
-	response = performPullerDebugRequest(t, router, "/debug/puller/stores/tikv-1:20160")
-	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, uint64(11), detail.Region.RegionID)
 }
 
 func TestPullerDebugAPIValidationAndNotFound(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctrl := gomock.NewController(t)
 	provider := logpullermock.NewMockDebugInfoProvider(ctrl)
-	api := OpenAPIV2{pullerDebugProvider: provider}
-	router := newPullerDebugTestRouter(api)
+	router := newPullerDebugTestRouter(OpenAPIV2{pullerDebugProvider: provider})
 
-	response := performPullerDebugRequest(t, router, "/debug/puller/subscriptions?limit=0")
+	response := performPullerDebugRequest(
+		router, "/debug/puller?subscription_limit=21")
 	require.Equal(t, http.StatusBadRequest, response.Code)
 
-	response = performPullerDebugRequest(t, router, "/debug/puller/subscriptions/not-a-number")
+	response = performPullerDebugRequest(
+		router, "/debug/puller/subscriptions/not-a-number/regions/11")
 	require.Equal(t, http.StatusBadRequest, response.Code)
 
-	provider.EXPECT().GetPullerDebugSubscription(
-		logpuller.SubscriptionID(999),
-		logpuller.PullerSubscriptionDebugOptions{
-			RegionMode:  "none",
-			RegionLimit: defaultPullerDebugListLimit,
-		},
-	).Return(logpuller.PullerSubscriptionDetail{}, false)
-	response = performPullerDebugRequest(t, router, "/debug/puller/subscriptions/999")
-	require.Equal(t, http.StatusNotFound, response.Code)
-
-	provider.EXPECT().GetPullerDebugStore("missing:20160").Return(logpuller.PullerStoreDebugInfo{}, false)
-	response = performPullerDebugRequest(t, router, "/debug/puller/stores/missing:20160")
+	provider.EXPECT().GetPullerDebugRegion(
+		logpuller.SubscriptionID(999), uint64(11)).
+		Return(logpuller.PullerRegionDebugDetail{}, false)
+	response = performPullerDebugRequest(
+		router, "/debug/puller/subscriptions/999/regions/11")
 	require.Equal(t, http.StatusNotFound, response.Code)
 }
 
 func newPullerDebugTestRouter(api OpenAPIV2) *gin.Engine {
 	router := gin.New()
 	router.GET("/debug/puller", api.GetPullerDebugInfo)
-	router.GET("/debug/puller/subscriptions", api.ListPullerDebugSubscriptions)
-	router.GET("/debug/puller/subscriptions/:subscription_id", api.GetPullerDebugSubscription)
-	router.GET("/debug/puller/stores", api.ListPullerDebugStores)
-	router.GET("/debug/puller/stores/:store_address", api.GetPullerDebugStore)
+	router.GET(
+		"/debug/puller/subscriptions/:subscription_id/regions/:region_id",
+		api.GetPullerDebugRegion,
+	)
 	return router
 }
 
 func performPullerDebugRequest(
-	t *testing.T,
 	router *gin.Engine,
 	path string,
 ) *httptest.ResponseRecorder {
-	t.Helper()
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, path, nil)
 	router.ServeHTTP(recorder, request)
