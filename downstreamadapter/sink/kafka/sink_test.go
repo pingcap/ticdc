@@ -324,7 +324,7 @@ func TestKafkaSinkDML(t *testing.T) {
 	eventHelper.Tk().MustExec("use test")
 	require.NotNil(t, eventHelper.DDL2Job("create table t (id int primary key, name varchar(32))"))
 
-	t.Run("routes DML event without invoking callback synchronously", func(t *testing.T) {
+	t.Run("routes DML event and forwards producer callback", func(t *testing.T) {
 		var callbackCount atomic.Int64
 		dmlEvent := eventHelper.DML2Event("test", "t", "insert into t values (1, 'one')")
 		dmlEvent.PostTxnFlushed = []func(){func() { callbackCount.Add(1) }}
@@ -351,6 +351,8 @@ func TestKafkaSinkDML(t *testing.T) {
 			require.Equal(t, 1, message.GetRowsCount())
 			require.NotNil(t, message.Callback)
 			require.Zero(t, callbackCount.Load())
+			message.Callback()
+			require.Equal(t, int64(1), callbackCount.Load())
 		case <-time.After(3 * time.Second):
 			t.Fatal("timed out waiting for Kafka Sink to send the DML message")
 		}
@@ -363,7 +365,7 @@ func TestKafkaSinkDML(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatal("timed out waiting for Kafka Sink workers to exit")
 		}
-		require.Zero(t, callbackCount.Load())
+		require.Equal(t, int64(1), callbackCount.Load())
 	})
 
 	t.Run("returns AsyncSend error unchanged", func(t *testing.T) {
