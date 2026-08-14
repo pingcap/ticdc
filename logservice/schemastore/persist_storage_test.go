@@ -4463,6 +4463,7 @@ func TestExtractTableInfoFuncForSingleTableDDL_CreateTableLikeReferTableIgnored(
 		require.False(t, deleted)
 	})
 }
+
 func TestGetAllPhysicalTablesReplaysTopologyChangingDDL(t *testing.T) {
 	testCases := []struct {
 		name        string
