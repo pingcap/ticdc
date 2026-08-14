@@ -57,17 +57,18 @@ func initRedoComponet(
 	}
 	var err error
 	redoDispatcherMap := newDispatcherMap[*dispatcher.RedoDispatcher]()
+	redoSink, err := redo.New(ctx, changefeedID, manager.config.Consistent)
+	if err != nil {
+		return err
+	}
+	redoSchemaIDToDispatchers := dispatcher.NewSchemaIDToDispatchers()
+
 	totalQuota := manager.sinkQuota
 	consistentMemoryUsage := manager.config.Consistent.MemoryUsage
 	if consistentMemoryUsage == nil {
 		consistentMemoryUsage = config.GetDefaultReplicaConfig().Consistent.MemoryUsage
 	}
 	redoQuota := totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
-	redoSink, err := redo.New(ctx, changefeedID, manager.config.Consistent)
-	if err != nil {
-		return err
-	}
-	redoSchemaIDToDispatchers := dispatcher.NewSchemaIDToDispatchers()
 
 	manager.writePathMu.Lock()
 	if manager.writePathClosed.Load() {
