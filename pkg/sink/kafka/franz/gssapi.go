@@ -33,10 +33,12 @@ import (
 )
 
 const (
-	tokIDKrbAPReq = 256
+	// tokIDKrbAPReq and gssAPIGeneric identify a Kerberos AP-REQ inside a GSS-API initial context token.
+	tokIDKrbAPReq = 0x0100
 	gssAPIGeneric = 0x60
-	userAuth      = 1
-	keyTabAuth    = 2
+	// Authentication type values are part of sink URI compatibility and must remain stable.
+	userAuth   = 1
+	keyTabAuth = 2
 )
 
 type gssapiMechanism struct {

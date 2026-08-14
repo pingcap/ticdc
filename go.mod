@@ -47,7 +47,7 @@ require (
 	github.com/jcmturner/gofork v1.7.6
 	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/json-iterator/go v1.1.12
-	github.com/klauspost/compress v1.18.6
+	github.com/klauspost/compress v1.18.7
 	github.com/linkedin/goavro/v2 v2.14.0
 	github.com/mailru/easyjson v0.9.1
 	github.com/phayes/freeport v0.0.0-20180830031419-95f893ade6f2
@@ -76,7 +76,7 @@ require (
 	github.com/tikv/pd v1.1.0-beta.0.20260604125942-9f1c47b1e851
 	github.com/tikv/pd/client v0.0.0-20260604125942-9f1c47b1e851
 	github.com/tinylib/msgp v1.5.0
-	github.com/twmb/franz-go v1.21.5
+	github.com/twmb/franz-go v1.21.6
 	github.com/twmb/franz-go/pkg/kadm v1.18.0
 	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260727183601-4176fc0fcaf7
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1

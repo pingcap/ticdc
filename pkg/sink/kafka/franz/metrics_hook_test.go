@@ -43,6 +43,7 @@ func TestInitMetrics(t *testing.T) {
 			CompressedBytes:   1,
 		},
 	)
+	hook.OnBrokerThrottle(kgo.BrokerMetadata{NodeID: 1}, time.Millisecond, true)
 
 	registry := prometheus.NewRegistry()
 	InitMetrics(registry)
@@ -58,6 +59,7 @@ func TestInitMetrics(t *testing.T) {
 	require.Contains(t, names, "ticdc_sink_kafka_franz_producer_records_per_batch")
 	require.Contains(t, names, "ticdc_sink_kafka_franz_producer_uncompressed_bytes_total")
 	require.Contains(t, names, "ticdc_sink_kafka_franz_producer_compressed_bytes_total")
+	require.Contains(t, names, "ticdc_sink_kafka_franz_producer_throttle_time_seconds")
 }
 
 func TestMetricsHookRecordsRawValues(t *testing.T) {
@@ -118,4 +120,16 @@ func TestMetricsHookRecordsRawValues(t *testing.T) {
 
 	hook.OnBrokerWrite(kgo.BrokerMetadata{NodeID: -1}, 0, 1, 0, 0, nil)
 	hook.OnBrokerE2E(kgo.BrokerMetadata{NodeID: -1}, 0, kgo.BrokerE2E{})
+
+	hook.OnBrokerThrottle(meta, 10*time.Millisecond, true)
+	hook.OnBrokerThrottle(meta, 50*time.Millisecond, false)
+	hook.OnBrokerThrottle(kgo.BrokerMetadata{NodeID: 2}, 30*time.Millisecond, true)
+	hook.OnBrokerThrottle(kgo.BrokerMetadata{NodeID: -1}, time.Second, true)
+
+	throttleMetric, ok := metrics.throttleTime.(prometheus.Metric)
+	require.True(t, ok)
+	throttleHistogram := &dto.Metric{}
+	require.NoError(t, throttleMetric.Write(throttleHistogram))
+	require.Equal(t, uint64(2), throttleHistogram.GetHistogram().GetSampleCount())
+	require.InDelta(t, 0.06, throttleHistogram.GetHistogram().GetSampleSum(), 0.000001)
 }

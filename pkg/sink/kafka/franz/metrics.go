@@ -52,6 +52,14 @@ var (
 		Buckets:   prometheus.DefBuckets,
 	}, []string{"namespace", "changefeed", "broker"})
 
+	throttleTime = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "ticdc",
+		Subsystem: "sink",
+		Name:      "kafka_franz_producer_throttle_time_seconds",
+		Help:      "Kafka broker throttle time reported to the producer in seconds.",
+		Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20),
+	}, []string{"namespace", "changefeed", "broker"})
+
 	recordsPerBatch = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "sink",
@@ -82,6 +90,7 @@ func InitMetrics(registry *prometheus.Registry) {
 		requestsTotal,
 		responsesTotal,
 		requestDuration,
+		throttleTime,
 		recordsPerBatch,
 		uncompressedBytesTotal,
 		compressedBytesTotal,

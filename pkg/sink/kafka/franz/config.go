@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"github.com/twmb/franz-go/pkg/kversion"
 	"github.com/twmb/franz-go/pkg/sasl"
 	"github.com/twmb/franz-go/pkg/sasl/oauth"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
@@ -36,21 +35,31 @@ import (
 )
 
 const (
+	// defaultMaxBufferedBytes bounds the producer's per-client byte buffer under normal configurations.
 	defaultMaxBufferedBytes = 64 << 20
+	// defaultBrokerWriteBytes matches Kafka's default socket.request.max.bytes limit.
 	defaultBrokerWriteBytes = 100 << 20
-	minProducerBatchBytes   = 512
-	maxProducerBatchBytes   = 1 << 30
+	// minProducerBatchBytes and maxProducerBatchBytes are franz-go's accepted batch-size bounds.
+	minProducerBatchBytes = 512
+	maxProducerBatchBytes = 1 << 30
 
-	NoResponse   = int16(0)
+	// NoResponse requests no broker acknowledgement. A send completes after the
+	// request is written. Broker-side failures are not reported, so messages can be lost.
+	NoResponse = int16(0)
+	// WaitForLocal requests acknowledgement from the partition leader. A send completes
+	// after the leader writes the message locally. An acknowledged message can be lost
+	// if the leader fails before follower replication.
 	WaitForLocal = int16(1)
-	WaitForAll   = int16(-1)
+	// WaitForAll requests acknowledgement from all in-sync replicas. A send completes
+	// after the replication requirement is met. It is the default and provides the
+	// strongest durability, at the cost of higher latency or failed sends when too few
+	// replicas are in sync.
+	WaitForAll = int16(-1)
 )
 
 type Config struct {
 	BrokerEndpoints []string
 	ClientID        string
-	Version         string
-	AssignedVersion bool
 	MaxMessageBytes int
 	MaxRetry        int
 	Compression     string
@@ -109,14 +118,6 @@ func newClientOptions(
 	}
 	if hook != nil {
 		opts = append(opts, kgo.WithHooks(hook))
-	}
-
-	if cfg.AssignedVersion {
-		versions := kversion.FromString(cfg.Version)
-		if versions == nil {
-			return nil, errors.ErrKafkaInvalidConfig.GenWithStack("invalid kafka version %s", cfg.Version)
-		}
-		opts = append(opts, kgo.MaxVersions(versions))
 	}
 
 	if cfg.TLSConfig != nil {
@@ -201,7 +202,9 @@ func producerOptions(cfg Config) ([]kgo.Opt, error) {
 	return []kgo.Opt{
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		kgo.RequiredAcks(requiredAcks(cfg.RequiredAcks)),
+		// Retried requests may create duplicates because broker-side producer ID deduplication is disabled.
 		kgo.DisableIdempotentWrite(),
+		// More than one in-flight request can reorder records when an earlier request is retried.
 		kgo.MaxProduceRequestsInflightPerBroker(1),
 		kgo.RecordRetries(cfg.MaxRetry),
 		kgo.UnknownTopicRetries(cfg.MaxRetry),

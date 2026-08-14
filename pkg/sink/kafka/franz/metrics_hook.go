@@ -46,9 +46,11 @@ type brokerMetrics struct {
 	responsesReadError prometheus.Counter
 	requestsInFlight   prometheus.Gauge
 	requestDuration    prometheus.Observer
+	throttleTime       prometheus.Observer
 }
 
 const (
+	// Result values are fixed to keep the broker-level metric label cardinality bounded.
 	metricResultSuccess    = "success"
 	metricResultWriteError = "write_error"
 	metricResultReadError  = "read_error"
@@ -65,6 +67,18 @@ func newMetricsHook(changefeedID common.ChangeFeedID) *metricsHook {
 		uncompressedBytesTotal: uncompressedBytesTotal.WithLabelValues(keyspace, changefeed),
 		compressedBytesTotal:   compressedBytesTotal.WithLabelValues(keyspace, changefeed),
 	}
+}
+
+func (h *metricsHook) OnBrokerThrottle(
+	meta kgo.BrokerMetadata,
+	throttleInterval time.Duration,
+	_ bool,
+) {
+	if meta.NodeID < 0 {
+		return
+	}
+
+	h.broker(meta.NodeID).throttleTime.Observe(throttleInterval.Seconds())
 }
 
 func (h *metricsHook) broker(nodeID int32) *brokerMetrics {
@@ -85,6 +99,7 @@ func (h *metricsHook) broker(nodeID int32) *brokerMetrics {
 			h.keyspace, h.changefeed, brokerID, metricResultReadError),
 		requestsInFlight: requestsInFlight.WithLabelValues(h.keyspace, h.changefeed, brokerID),
 		requestDuration:  requestDuration.WithLabelValues(h.keyspace, h.changefeed, brokerID),
+		throttleTime:     throttleTime.WithLabelValues(h.keyspace, h.changefeed, brokerID),
 	}
 
 	actual, _ := h.brokers.LoadOrStore(nodeID, metrics)
@@ -104,6 +119,7 @@ func CleanupMetrics(changefeedID common.ChangeFeedID) {
 	responsesTotal.DeletePartialMatch(labels)
 	requestsInFlight.DeletePartialMatch(labels)
 	requestDuration.DeletePartialMatch(labels)
+	throttleTime.DeletePartialMatch(labels)
 	recordsPerBatch.DeletePartialMatch(labels)
 	uncompressedBytesTotal.DeletePartialMatch(labels)
 	compressedBytesTotal.DeletePartialMatch(labels)

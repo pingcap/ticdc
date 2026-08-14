@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/errors"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kfake"
@@ -54,20 +53,26 @@ func TestFactorySelection(t *testing.T) {
 	}
 }
 
-func TestFactoryDoesNotFallbackAfterFranzFailure(t *testing.T) {
+func TestFranzIgnoresConfiguredKafkaVersion(t *testing.T) {
+	const topic = "version-negotiation"
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	defer cluster.Close()
+
 	options := NewOptions()
 	options.ClientID = "ticdc-test"
-	options.BrokerEndpoints = []string{"127.0.0.1:9092"}
-	options.Topic = "no-fallback"
+	options.BrokerEndpoints = cluster.ListenAddrs()
+	options.Topic = topic
 	options.Version = "invalid"
 	options.IsAssignedVersion = true
 
-	_, err := NewFactory(
+	factory, err := NewFactory(
 		context.Background(),
 		options,
-		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "no-fallback"),
+		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "version-negotiation"),
 	)
-	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+	require.NoError(t, err)
+	require.IsType(t, &franzFactoryAdapter{}, factory)
+	CleanupFactoryMetrics(factory)
 }
 
 func TestFranzAndSaramaFactoriesAreIndependent(t *testing.T) {

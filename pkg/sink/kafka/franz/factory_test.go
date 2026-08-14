@@ -49,8 +49,7 @@ func TestFactoryCreatesAllClients(t *testing.T) {
 func TestFactoryCleansMetricsAfterProducerConstructionFailure(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "factory-error")
 	config := testConfig([]string{"127.0.0.1:9092"})
-	config.Version = "invalid"
-	config.AssignedVersion = true
+	config.MaxMessageBytes = maxProducerBatchBytes + 1
 	factory := NewFactory(config, changefeedID)
 
 	_, err := factory.SyncProducer(context.Background())

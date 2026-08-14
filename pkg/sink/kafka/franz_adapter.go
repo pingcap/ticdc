@@ -30,8 +30,7 @@ type franzFactoryAdapter struct {
 	inner *franz.Factory
 }
 
-// NewFranzFactory constructs the additive franz-go implementation while the
-// existing Sarama factory remains unchanged.
+// NewFranzFactory constructs a franz-go Kafka client factory.
 func NewFranzFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
 	config, err := newFranzConfig(o)
 	if err != nil {
@@ -159,8 +158,6 @@ func newFranzConfig(o *options) (franz.Config, error) {
 	config := franz.Config{
 		BrokerEndpoints: append([]string(nil), o.BrokerEndpoints...),
 		ClientID:        o.ClientID,
-		Version:         o.Version,
-		AssignedVersion: o.IsAssignedVersion,
 		MaxMessageBytes: o.MaxMessageBytes,
 		MaxRetry:        o.MaxRetry,
 		Compression:     o.Compression,

@@ -92,6 +92,20 @@ func TestProducerOptionsBoundBufferAndBatch(t *testing.T) {
 	require.Equal(t, int32(defaultBrokerWriteBytes), client.OptValue(kgo.BrokerMaxWriteBytes))
 }
 
+func TestProducerOptionsUseSingleNonIdempotentRequest(t *testing.T) {
+	config := testConfig([]string{"127.0.0.1:9092"})
+
+	producerOpts, err := producerOptions(config)
+	require.NoError(t, err)
+
+	client, err := kgo.NewClient(producerOpts...)
+	require.NoError(t, err)
+	defer client.Close()
+
+	require.Equal(t, true, client.OptValue(kgo.DisableIdempotentWrite))
+	require.Equal(t, 1, client.OptValue(kgo.MaxProduceRequestsInflightPerBroker))
+}
+
 func TestProducerLimitsScaleWithConfiguredMessage(t *testing.T) {
 	maxMessageBytes := defaultBrokerWriteBytes + 1
 	config := testConfig([]string{"127.0.0.1:9092"})
@@ -157,19 +171,6 @@ func TestCompressionOptions(t *testing.T) {
 			require.Equal(t, []kgo.CompressionCodec{test.expected}, client.OptValue(kgo.ProducerBatchCompression))
 		})
 	}
-}
-
-func TestInvalidAssignedVersionUsesInvalidConfigError(t *testing.T) {
-	cfg := testConfig([]string{"127.0.0.1:9092"})
-	cfg.Version = "invalid"
-	cfg.AssignedVersion = true
-
-	_, err := NewAdmin(
-		context.Background(),
-		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "invalid-version"),
-		cfg,
-	)
-	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 }
 
 func TestBuildGSSAPIMechanism(t *testing.T) {

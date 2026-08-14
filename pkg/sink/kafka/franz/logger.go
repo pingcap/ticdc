@@ -26,6 +26,7 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// logValueLimit bounds individual string fields emitted by the franz-go logger.
 const logValueLimit = 1024
 
 type logger struct {
