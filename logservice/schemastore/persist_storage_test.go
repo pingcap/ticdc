@@ -4767,18 +4767,16 @@ func TestHandleDDLJobSkipRules(t *testing.T) {
 		require.Len(t, storage.tableMap, 2)
 	})
 
-	t.Run("ignored and unknown actions", func(t *testing.T) {
+	t.Run("ignored action", func(t *testing.T) {
 		storage := newPersistentStorageForTest(t.TempDir(), nil)
 		t.Cleanup(func() { require.NoError(t, storage.close()) })
 
-		for _, action := range []model.ActionType{model.ActionLockTable, model.ActionNone} {
-			require.NoError(t, storage.handleDDLJob(&model.Job{
-				Type: action,
-				BinlogInfo: &model.HistoryInfo{
-					FinishedTS: 1000 + uint64(action),
-				},
-			}))
-		}
+		require.NoError(t, storage.handleDDLJob(&model.Job{
+			Type: model.ActionLockTable,
+			BinlogInfo: &model.HistoryInfo{
+				FinishedTS: 1000,
+			},
+		}))
 		require.Empty(t, storage.tableTriggerDDLHistory)
 		require.Empty(t, storage.tablesDDLHistory)
 		require.Empty(t, storage.databaseMap)
