@@ -15,92 +15,56 @@ package kafka
 
 import (
 	"context"
-	"strings"
 
-	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/errors"
-	"go.uber.org/zap"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
-// Factory is used to produce all Kafka components.
+// Factory is used to produce all kafka components.
 type Factory interface {
-	// Admin returns a Kafka admin.
-	Admin(ctx context.Context) (Admin, error)
-	// SyncProducer creates a sync producer to write messages to Kafka.
+	// AdminClient return a kafka cluster admin client
+	AdminClient(ctx context.Context) (AdminClient, error)
+	// SyncProducer creates a sync producer to writer message to kafka
 	SyncProducer(ctx context.Context) (SyncProducer, error)
-	// AsyncProducer creates an async producer to write messages to Kafka.
+	// AsyncProducer creates an async producer to writer message to kafka
 	AsyncProducer(ctx context.Context) (AsyncProducer, error)
+	// MetricsCollector returns the kafka metrics collector
+	MetricsCollector(adminClient AdminClient) MetricsCollector
 }
 
-type factory struct {
-	changefeedID common.ChangeFeedID
-	options      options
+// SyncProducer is the kafka sync producer
+type SyncProducer interface {
+	// SendMessage produces a given message, and returns only when it either has
+	// succeeded or failed to produce. It will return the partition and the offset
+	// of the produced message, or an error if the message failed to produce.
+	SendMessage(topic string, partitionNum int32, message *common.Message) error
+
+	// SendMessages produces a given set of messages, and returns only when all
+	// messages in the set have either succeeded or failed. Note that messages
+	// can succeed and fail individually; if some succeed and some fail,
+	// SendMessages will return an error.
+	SendMessages(topic string, partitionNum int32, message *common.Message) error
+
+	// Close shuts down the producer; you must call this function before a producer
+	// object passes out of scope, as it may otherwise leak memory.
+	// You must call this before calling Close on the underlying client.
+	Close()
 }
 
-// NewFactory constructs a Factory.
-func NewFactory(
-	ctx context.Context,
-	o *options,
-	changefeedID common.ChangeFeedID,
-) (Factory, error) {
-	admin, err := newAdmin(ctx, changefeedID, o, nil)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
-	}
-	defer admin.Close()
+// AsyncProducer is the kafka async producer
+type AsyncProducer interface {
+	// Close shuts down the producer and waits for any buffered messages to be
+	// flushed. You must call this function before a producer object passes out of
+	// scope, as it may otherwise leak memory. You must call this before process
+	// shutting down, or you may lose messages. You must call this before calling
+	// Close on the underlying client.
+	Close()
 
-	if err := adjustOptions(changefeedID, admin, o, o.Topic); err != nil {
-		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
-	}
-	compression := strings.ToLower(strings.TrimSpace(o.Compression))
-	if compression == "" {
-		compression = "none"
-	}
-	log.Info("kafka sink configuration resolved",
-		zap.String("namespace", changefeedID.Keyspace()),
-		zap.String("changefeed", changefeedID.Name()),
-		zap.String("topic", o.Topic),
-		zap.Int32("partitionNum", o.PartitionNum),
-		zap.Int("maxMessageBytes", o.MaxMessageBytes),
-		zap.Int("maxBatchedBytes", o.MaxBatchedBytes),
-		zap.String("compression", compression),
-		zap.Int16("requiredAcks", int16(o.RequiredAcks)),
-		zap.Int("maxRetry", o.MaxRetry),
-		zap.Duration("dialTimeout", o.DialTimeout),
-		zap.Duration("readTimeout", o.ReadTimeout),
-		zap.Duration("writeTimeout", o.WriteTimeout))
+	// AsyncSend is the input channel for the user to write messages to that they
+	// wish to send.
+	AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error
 
-	return &factory{
-		changefeedID: changefeedID,
-		options:      *o,
-	}, nil
-}
-
-func (f *factory) Admin(ctx context.Context) (Admin, error) {
-	admin, err := newAdmin(ctx, f.changefeedID, &f.options, nil)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
-	}
-	return admin, nil
-}
-
-func (f *factory) SyncProducer(ctx context.Context) (SyncProducer, error) {
-	hook := newKafkaMetricsHook(f.changefeedID)
-	producer, err := newSyncProducer(ctx, f.changefeedID, &f.options, hook)
-	if err != nil {
-		CleanupMetrics(f.changefeedID)
-		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
-	}
-	return producer, nil
-}
-
-func (f *factory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
-	hook := newKafkaMetricsHook(f.changefeedID)
-	producer, err := newAsyncProducer(ctx, f.changefeedID, &f.options, hook)
-	if err != nil {
-		CleanupMetrics(f.changefeedID)
-		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
-	}
-	return producer, nil
+	// AsyncRunCallback process the messages that has sent to kafka,
+	// and run tha attached callback. the caller should call this
+	// method in a background goroutine
+	AsyncRunCallback(ctx context.Context) error
 }

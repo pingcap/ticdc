@@ -38,8 +38,12 @@ const (
 	defaultPartitionNum = 3
 	// defaultMaxRetry is the default retry budget for Kafka producers.
 	defaultMaxRetry = 5
-	// defaultTimeout is the default timeout for Kafka connections and requests.
+	// defaultTimeout is the default timeout for Kafka connections.
 	defaultTimeout = 10 * time.Second
+	// KafkaClientFranz is the default Kafka client implementation.
+	KafkaClientFranz = "franz"
+	// KafkaClientSarama keeps the master implementation available as a fallback.
+	KafkaClientSarama = "sarama"
 )
 
 const (
@@ -66,7 +70,7 @@ const (
 	SASLTypeSCRAMSHA256 = "SCRAM-SHA-256"
 	// SASLTypeSCRAMSHA512 represents the SCRAM-SHA-512 mechanism.
 	SASLTypeSCRAMSHA512 = "SCRAM-SHA-512"
-	// SASLTypeGSSAPI represents the GSSAPI mechanism.
+	// SASLTypeGSSAPI represents the gssapi mechanism.
 	SASLTypeGSSAPI = "GSSAPI"
 	// SASLTypeOAuth represents the SASL/OAUTHBEARER mechanism (Kafka 2.0.0+)
 	SASLTypeOAuth = "OAUTHBEARER"
@@ -108,6 +112,7 @@ func requireAcksFromString(acks int) (RequiredAcks, error) {
 }
 
 type urlConfig struct {
+	KafkaClient                  *string `form:"kafka-client"`
 	PartitionNum                 *int32  `form:"partition-num"`
 	ReplicationFactor            *int16  `form:"replication-factor"`
 	KafkaVersion                 *string `form:"kafka-version"`
@@ -140,6 +145,7 @@ type urlConfig struct {
 
 // options stores Kafka sink configurations
 type options struct {
+	Client          string
 	Topic           string
 	BrokerEndpoints []string
 
@@ -174,13 +180,10 @@ type options struct {
 	ReadTimeout  time.Duration
 }
 
-func (o *options) requestTimeout() time.Duration {
-	return max(o.ReadTimeout, o.WriteTimeout)
-}
-
 // NewOptions returns a default Kafka configuration
 func NewOptions() *options {
 	return &options{
+		Client:             KafkaClientFranz,
 		Version:            "2.4.0",
 		MaxMessageBytes:    config.DefaultMaxMessageBytes,
 		MaxBatchedBytes:    config.DefaultMaxMessageBytes,
@@ -266,6 +269,12 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		o.MaxMessageBytes = *urlParameter.MaxMessageBytes
 	}
 	o.MaxBatchedBytes = o.MaxMessageBytes
+	if urlParameter.KafkaClient != nil {
+		o.Client = strings.ToLower(strings.TrimSpace(*urlParameter.KafkaClient))
+	}
+	if o.Client != KafkaClientFranz && o.Client != KafkaClientSarama {
+		return errors.ErrKafkaInvalidConfig.GenWithStack("invalid kafka-client %q, only support franz and sarama", o.Client)
+	}
 
 	if urlParameter.MaxRetry != nil && *urlParameter.MaxRetry >= 0 {
 		o.MaxRetry = *urlParameter.MaxRetry
@@ -293,33 +302,36 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	}
 
 	if urlParameter.DialTimeout != nil && *urlParameter.DialTimeout != "" {
-		o.DialTimeout, err = time.ParseDuration(*urlParameter.DialTimeout)
+		a, err := time.ParseDuration(*urlParameter.DialTimeout)
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
-		if o.DialTimeout <= 0 {
+		if a <= 0 {
 			return errors.ErrKafkaInvalidConfig.GenWithStack("dial-timeout must be greater than zero")
 		}
+		o.DialTimeout = a
 	}
 
 	if urlParameter.WriteTimeout != nil && *urlParameter.WriteTimeout != "" {
-		o.WriteTimeout, err = time.ParseDuration(*urlParameter.WriteTimeout)
+		a, err := time.ParseDuration(*urlParameter.WriteTimeout)
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
-		if o.WriteTimeout <= 0 {
+		if a <= 0 {
 			return errors.ErrKafkaInvalidConfig.GenWithStack("write-timeout must be greater than zero")
 		}
+		o.WriteTimeout = a
 	}
 
 	if urlParameter.ReadTimeout != nil && *urlParameter.ReadTimeout != "" {
-		o.ReadTimeout, err = time.ParseDuration(*urlParameter.ReadTimeout)
+		a, err := time.ParseDuration(*urlParameter.ReadTimeout)
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
-		if o.ReadTimeout <= 0 {
+		if a <= 0 {
 			return errors.ErrKafkaInvalidConfig.GenWithStack("read-timeout must be greater than zero")
 		}
+		o.ReadTimeout = a
 	}
 
 	if urlParameter.RequiredAcks != nil {
@@ -399,8 +411,7 @@ func (o *options) applyTLS(params *urlConfig) error {
 
 	if o.Credential != nil && !o.Credential.IsEmpty() &&
 		!o.Credential.IsTLSEnabled() {
-		return errors.ErrKafkaInvalidConfig.GenWithStack(
-			"ca, cert and key files should all be supplied")
+		return errors.ErrKafkaInvalidConfig.GenWithStack("ca, cert and key files should all be supplied")
 	}
 
 	// if enable-tls is not set, but credential files are set,
@@ -413,8 +424,7 @@ func (o *options) applyTLS(params *urlConfig) error {
 		enableTLS := *params.EnableTLS
 
 		if o.Credential != nil && o.Credential.IsTLSEnabled() && !enableTLS {
-			return errors.ErrKafkaInvalidConfig.GenWithStack(
-				"credential files are supplied, but 'enable-tls' is set to false")
+			return errors.ErrKafkaInvalidConfig.GenWithStack("credential files are supplied, but 'enable-tls' is set to false")
 		}
 		o.EnableTLS = enableTLS
 	} else {
@@ -568,7 +578,7 @@ func (o *options) DeriveTopicConfig() *AutoCreateTopicConfig {
 
 // ValidateReplicationFactor checks whether a topic created with this config
 // can satisfy the configured acknowledgment requirement.
-func (c *AutoCreateTopicConfig) ValidateReplicationFactor(admin Admin) error {
+func (c *AutoCreateTopicConfig) ValidateReplicationFactor(admin AdminClient) error {
 	if c.RequiredAcks != WaitForAll {
 		return nil
 	}
@@ -632,7 +642,7 @@ func NewKafkaClientID(captureAddr string,
 // from the topic or broker configuration.
 func adjustOptions(
 	changefeedID common.ChangeFeedID,
-	admin Admin,
+	admin AdminClient,
 	options *options,
 	topic string,
 ) error {
@@ -640,6 +650,7 @@ func adjustOptions(
 	if err != nil {
 		return err
 	}
+
 	info, exists := topics[topic]
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
@@ -658,7 +669,7 @@ func adjustOptions(
 
 func adjustExistingTopicOption(
 	changefeedID common.ChangeFeedID,
-	admin Admin,
+	admin AdminClient,
 	options *options,
 	info TopicDetail,
 ) error {
@@ -678,7 +689,7 @@ func adjustExistingTopicOption(
 }
 
 func adjustNewTopicOptions(
-	admin Admin,
+	admin AdminClient,
 	changefeedID common.ChangeFeedID,
 	options *options,
 ) {
@@ -700,7 +711,7 @@ func adjustNewTopicOptions(
 }
 
 func getTopicMaxMessageBytes(
-	admin Admin,
+	admin AdminClient,
 	topic string,
 ) (int, bool, error) {
 	raw, found, err := getTopicConfig(
@@ -716,13 +727,12 @@ func getTopicMaxMessageBytes(
 	}
 	maxMessageBytes, err := strconv.Atoi(raw)
 	if err != nil {
-		return 0, false, errors.WrapError(
-			errors.ErrKafkaAdminAPI, err, "parse-config", TopicMaxMessageBytesConfigName)
+		return 0, false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "parse-config", TopicMaxMessageBytesConfigName)
 	}
 	return maxMessageBytes, true, nil
 }
 
-func getBrokerMaxMessageBytes(admin Admin) (int, bool, error) {
+func getBrokerMaxMessageBytes(admin AdminClient) (int, bool, error) {
 	raw, found, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
 	if err != nil {
 		return 0, false, err
@@ -732,8 +742,7 @@ func getBrokerMaxMessageBytes(admin Admin) (int, bool, error) {
 	}
 	messageMaxBytes, err := strconv.Atoi(raw)
 	if err != nil {
-		return 0, false, errors.WrapError(
-			errors.ErrKafkaAdminAPI, err, "parse-config", BrokerMessageMaxBytesConfigName)
+		return 0, false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "parse-config", BrokerMessageMaxBytesConfigName)
 	}
 	return messageMaxBytes, true, nil
 }
@@ -743,7 +752,7 @@ func getBrokerMaxMessageBytes(admin Admin) (int, bool, error) {
 // we will try to get it from the broker's configuration.
 // NOTICE: The configuration names of topic and broker may be different for the same configuration.
 func getTopicConfig(
-	admin Admin,
+	admin AdminClient,
 	topicName string,
 	topicConfigName string,
 	brokerConfigName string,

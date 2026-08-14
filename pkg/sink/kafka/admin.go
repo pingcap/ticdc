@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,92 +14,64 @@
 package kafka
 
 import (
-	"context"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/IBM/sarama"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/twmb/franz-go/pkg/kadm"
-	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kgo"
+	"go.uber.org/zap"
 )
 
-// TopicDetail represent a topic's detail information.
-type TopicDetail struct {
-	Name              string
-	NumPartitions     int32
-	ReplicationFactor int16
-}
-
-// Admin manages and inspects Kafka topics, brokers, configurations, and ACLs.
-type Admin interface {
-	// GetBrokerConfig return the broker level configuration with the `configName`
-	GetBrokerConfig(configName string) (value string, found bool, err error)
-
-	// GetTopicConfig return the topic level configuration with the `configName`
-	GetTopicConfig(topicName string, configName string) (value string, found bool, err error)
-
-	// GetTopicsMeta return all target topics' metadata
-	// if `ignoreTopicError` is true, ignore the topic error and return the metadata of valid topics
-	GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error)
-
-	// CreateTopic creates a new topic.
-	CreateTopic(detail TopicDetail) error
-
-	// Close shuts down the admin.
-	Close()
-}
-
-type admin struct {
+type saramaAdminClient struct {
 	changefeed common.ChangeFeedID
 
-	client  *kgo.Client
-	admin   *kadm.Client
-	timeout time.Duration
+	// client is the underlying sarama client created for this admin wrapper.
+	// It must be closed to stop background goroutines (e.g. metadata updater) and release memory.
+	client saramaClient
+	admin  saramaClusterAdmin
 }
 
-func newAdmin(
-	ctx context.Context,
-	changefeedID common.ChangeFeedID,
-	o *options,
-	hook kgo.Hook,
-) (*admin, error) {
-	opts, err := newOptions(ctx, o, hook)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	client, err := kgo.NewClient(opts...)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	return &admin{
-		changefeed: changefeedID,
-		client:     client,
-		admin:      kadm.NewClient(client),
-		timeout:    o.requestTimeout(),
-	}, nil
+type saramaClient interface {
+	Brokers() []*sarama.Broker
+	Partitions(topic string) ([]int32, error)
+	Close() error
 }
 
-func (a *admin) GetBrokerConfig(configName string) (string, bool, error) {
-	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
-	defer cancel()
+type saramaClusterAdmin interface {
+	DescribeCluster() (brokers []*sarama.Broker, controllerID int32, err error)
+	DescribeConfig(resource sarama.ConfigResource) ([]sarama.ConfigEntry, error)
+	DescribeTopics(topics []string) (metadata []*sarama.TopicMetadata, err error)
+	CreateTopic(topic string, detail *sarama.TopicDetail, validateOnly bool) error
+	Close() error
+}
 
-	meta, err := a.admin.BrokerMetadata(ctx)
+func (a *saramaAdminClient) GetAllBrokers() []Broker {
+	brokers := a.client.Brokers()
+	result := make([]Broker, 0, len(brokers))
+	for _, broker := range brokers {
+		result = append(result, Broker{
+			ID: broker.ID(),
+		})
+	}
+	return result
+}
+
+func (a *saramaAdminClient) GetBrokerConfig(configName string) (string, bool, error) {
+	_, controller, err := a.admin.DescribeCluster()
 	if err != nil {
 		if IsAuthorizationFailed(err) {
 			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-cluster", "cluster")
 		}
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-cluster", "cluster")
 	}
-	if meta.Controller < 0 {
-		return "", false, errors.ErrKafkaAdminAPI.GenWithStackByArgs("describe-cluster", "cluster")
-	}
 
-	configs, err := a.admin.DescribeBrokerConfigs(ctx, meta.Controller)
+	configEntries, err := a.admin.DescribeConfig(sarama.ConfigResource{
+		Type:        sarama.BrokerResource,
+		Name:        strconv.Itoa(int(controller)),
+		ConfigNames: []string{configName},
+	})
 	if err != nil {
 		if IsAuthorizationFailed(err) {
 			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-config", configName)
@@ -107,71 +79,45 @@ func (a *admin) GetBrokerConfig(configName string) (string, bool, error) {
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", configName)
 	}
 
-	controllerName := strconv.Itoa(int(meta.Controller))
-	resource, err := configs.On(controllerName, nil)
-	if err != nil {
-		if IsAuthorizationFailed(err) {
-			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-config", configName)
-		}
-		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", configName)
-	}
-	if resource.Err != nil {
-		if IsAuthorizationFailed(resource.Err) {
-			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, resource.Err, "describe-config", configName)
-		}
-		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, resource.Err, "describe-config", configName)
-	}
-
-	for _, entry := range resource.Configs {
-		if entry.Key == configName {
-			return entry.MaybeValue(), true, nil
+	// For compatibility with KOP, we checked all return values.
+	// 1. Kafka only returns requested configs.
+	// 2. Kop returns all configs.
+	for _, entry := range configEntries {
+		if entry.Name == configName {
+			return entry.Value, true, nil
 		}
 	}
 	return "", false, nil
 }
 
-func (a *admin) GetTopicConfig(topicName string, configName string) (string, bool, error) {
-	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
-	defer cancel()
-
-	configs, err := a.admin.DescribeTopicConfigs(ctx, topicName)
+func (a *saramaAdminClient) GetTopicConfig(topicName string, configName string) (string, bool, error) {
+	configEntries, err := a.admin.DescribeConfig(sarama.ConfigResource{
+		Type:        sarama.TopicResource,
+		Name:        topicName,
+		ConfigNames: []string{configName},
+	})
 	if err != nil {
 		if IsAuthorizationFailed(err) {
 			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-config", topicName)
 		}
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", topicName)
 	}
-	resource, err := configs.On(topicName, nil)
-	if err != nil {
-		if IsAuthorizationFailed(err) {
-			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-config", topicName)
-		}
-		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", topicName)
-	}
-	if resource.Err != nil {
-		if IsAuthorizationFailed(resource.Err) {
-			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, resource.Err, "describe-config", topicName)
-		}
-		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, resource.Err, "describe-config", topicName)
-	}
 
-	for _, entry := range resource.Configs {
-		if entry.Key == configName {
-			return entry.MaybeValue(), true, nil
+	// For compatibility with KOP, we checked all return values.
+	// 1. Kafka only returns requested configs.
+	// 2. Kop returns all configs.
+	for _, entry := range configEntries {
+		if entry.Name == configName {
+			return entry.Value, true, nil
 		}
 	}
 	return "", false, nil
 }
 
-func (a *admin) GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
-	if len(topics) == 0 {
-		return make(map[string]TopicDetail), nil
-	}
+func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
+	result := make(map[string]TopicDetail, len(topics))
 
-	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
-	defer cancel()
-
-	meta, err := a.admin.Metadata(ctx, topics...)
+	metaList, err := a.admin.DescribeTopics(topics)
 	if err != nil {
 		resource := strings.Join(topics, ",")
 		if IsAuthorizationFailed(err) {
@@ -180,33 +126,28 @@ func (a *admin) GetTopicsMeta(topics []string, ignoreTopicError bool) (map[strin
 		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-topics", resource)
 	}
 
-	return topicDetailsFromMetadata(meta, topics, ignoreTopicError)
-}
-
-func topicDetailsFromMetadata(meta kadm.Metadata, topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
-	result := make(map[string]TopicDetail, len(topics))
-	for _, topic := range topics {
-		detail, ok := meta.Topics[topic]
-		if !ok {
-			continue
-		}
-		if detail.Err == nil {
-			result[topic] = TopicDetail{
-				Name:          topic,
-				NumPartitions: int32(len(detail.Partitions)),
+	for _, meta := range metaList {
+		if meta.Err != sarama.ErrNoError {
+			if meta.Err == sarama.ErrUnknownTopicOrPartition {
+				continue
 			}
+			if !ignoreTopicError {
+				if IsAuthorizationFailed(meta.Err) {
+					return nil, errors.WrapError(errors.ErrKafkaAuthorizationFailed, meta.Err, "describe-topic", meta.Name)
+				}
+				return nil, errors.WrapError(errors.ErrKafkaAdminAPI, meta.Err, "describe-topic", meta.Name)
+			}
+			log.Warn("kafka topic metadata refresh failed",
+				zap.String("keyspace", a.changefeed.Keyspace()),
+				zap.String("changefeed", a.changefeed.Name()),
+				zap.String("topic", meta.Name),
+				zap.Error(meta.Err))
 			continue
 		}
-		if errors.Is(detail.Err, kerr.UnknownTopicOrPartition) {
-			continue
+		result[meta.Name] = TopicDetail{
+			Name:          meta.Name,
+			NumPartitions: int32(len(meta.Partitions)),
 		}
-		if ignoreTopicError {
-			continue
-		}
-		if IsAuthorizationFailed(detail.Err) {
-			return nil, errors.WrapError(errors.ErrKafkaAuthorizationFailed, detail.Err, "describe-topic", topic)
-		}
-		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, detail.Err, "describe-topic", topic)
 	}
 	return result, nil
 }
@@ -214,41 +155,62 @@ func topicDetailsFromMetadata(meta kadm.Metadata, topics []string, ignoreTopicEr
 // IsAuthorizationFailed checks whether err is a Kafka authorization failure.
 func IsAuthorizationFailed(err error) bool {
 	return errors.Is(err, errors.ErrKafkaAuthorizationFailed) ||
-		errors.Is(err, kerr.TopicAuthorizationFailed) ||
-		errors.Is(err, kerr.ClusterAuthorizationFailed)
+		errors.Is(err, sarama.ErrTopicAuthorizationFailed) ||
+		errors.Is(err, sarama.ErrClusterAuthorizationFailed)
 }
 
-func (a *admin) CreateTopic(detail TopicDetail) error {
-	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
-	defer cancel()
+func (a *saramaAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
+	result := make(map[string]int32, len(topics))
+	for _, topic := range topics {
+		partition, err := a.client.Partitions(topic)
+		if err != nil {
+			if IsAuthorizationFailed(err) {
+				return nil, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "list-partitions", topic)
+			}
+			return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "list-partitions", topic)
+		}
+		result[topic] = int32(len(partition))
+	}
 
-	responses, err := a.admin.CreateTopics(ctx, detail.NumPartitions, detail.ReplicationFactor, nil, detail.Name)
-	if err != nil {
+	return result, nil
+}
+
+func (a *saramaAdminClient) CreateTopic(detail *TopicDetail) error {
+	request := &sarama.TopicDetail{
+		NumPartitions:     detail.NumPartitions,
+		ReplicationFactor: detail.ReplicationFactor,
+	}
+
+	err := a.admin.CreateTopic(detail.Name, request, false)
+	// Ignore the already exists error because it's not harmful.
+	if err != nil && !strings.Contains(err.Error(), sarama.ErrTopicAlreadyExists.Error()) {
 		if IsAuthorizationFailed(err) {
 			return errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "create-topic", detail.Name)
 		}
 		return errors.WrapError(errors.ErrKafkaAdminAPI, err, "create-topic", detail.Name)
 	}
-
-	resp, ok := responses[detail.Name]
-	if !ok {
-		return errors.ErrKafkaAdminAPI.GenWithStackByArgs("create-topic", detail.Name)
-	}
-	if resp.Err == nil {
-		return nil
-	}
-	if errors.Is(resp.Err, kerr.TopicAlreadyExists) {
-		return nil
-	}
-	if errors.Is(resp.Err, kerr.InvalidReplicationFactor) {
-		return errors.WrapError(errors.ErrKafkaInvalidConfig, resp.Err)
-	}
-	if IsAuthorizationFailed(resp.Err) {
-		return errors.WrapError(errors.ErrKafkaAuthorizationFailed, resp.Err, "create-topic", detail.Name)
-	}
-	return errors.WrapError(errors.ErrKafkaAdminAPI, resp.Err, "create-topic", detail.Name)
+	return nil
 }
 
-func (a *admin) Close() {
-	a.admin.Close()
+func (a *saramaAdminClient) Close() {
+	// For admins created via sarama.NewClusterAdminFromClient, admin.Close() takes care
+	// of closing the underlying client as well. Fall back to closing the client directly
+	// only when admin is unexpectedly nil.
+	if a.admin != nil {
+		if err := a.admin.Close(); err != nil {
+			log.Warn("kafka admin client close failed",
+				zap.String("keyspace", a.changefeed.Keyspace()),
+				zap.String("changefeed", a.changefeed.Name()),
+				zap.Error(err))
+		}
+		return
+	}
+	if a.client != nil {
+		if err := a.client.Close(); err != nil {
+			log.Warn("kafka client close failed",
+				zap.String("keyspace", a.changefeed.Keyspace()),
+				zap.String("changefeed", a.changefeed.Name()),
+				zap.Error(err))
+		}
+	}
 }

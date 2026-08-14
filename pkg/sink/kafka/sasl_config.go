@@ -30,8 +30,8 @@ const (
 	scram256Mechanism saslMechanism = "SCRAM-SHA-256"
 	// scram512Mechanism means the SASL mechanism is SCRAM-SHA-512.
 	scram512Mechanism saslMechanism = "SCRAM-SHA-512"
-	// gssapiMechanismName means the SASL mechanism is GSSAPI.
-	gssapiMechanismName saslMechanism = "GSSAPI"
+	// gssapiMechanism means the SASL mechanism is GSSAPI.
+	gssapiMechanism saslMechanism = "GSSAPI"
 	// oauthMechanism means the SASL mechanism is OAUTHBEARER.
 	oauthMechanism saslMechanism = "OAUTHBEARER"
 )
@@ -46,7 +46,7 @@ func saslMechanismFromString(s string) (saslMechanism, error) {
 	case "scram-sha-512":
 		return scram512Mechanism, nil
 	case "gssapi":
-		return gssapiMechanismName, nil
+		return gssapiMechanism, nil
 	case "oauthbearer":
 		return oauthMechanism, nil
 	default:

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kafka
+package franz
 
 import (
 	"context"
@@ -19,62 +19,53 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
 )
 
-// AsyncProducer is the kafka async producer
-type AsyncProducer interface {
-	// Close shuts down the producer and releases its Kafka client resources.
-	// Buffered messages fail instead of being flushed.
-	Close()
-
-	// AsyncSend is the input channel for the user to write messages to that they
-	// wish to send.
-	AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error
-
-	// AsyncRunCallback process the messages that has sent to kafka,
-	// and run tha attached callback. the caller should call this
-	// method in a background goroutine
-	AsyncRunCallback(ctx context.Context) error
-}
-
-type asyncProducer struct {
+type AsyncProducer struct {
 	client       *kgo.Client
-	changefeedID commonType.ChangeFeedID
+	changefeedID common.ChangeFeedID
 
 	closeStarted atomic.Bool
 	closed       atomic.Bool
 	errCh        chan error
 }
 
-func newAsyncProducer(
+func NewAsyncProducer(
 	ctx context.Context,
-	changefeedID commonType.ChangeFeedID,
-	o *options,
+	changefeedID common.ChangeFeedID,
+	cfg Config,
 	hook *metricsHook,
-) (*asyncProducer, error) {
-	opts, err := newOptions(ctx, o, hook)
+) (*AsyncProducer, error) {
+	opts, err := newClientOptions(ctx, changefeedID, "async-producer", cfg, hook)
 	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	opts = append(opts, newProducerOptions(o)...)
-	client, err := kgo.NewClient(opts...)
-	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
-	return &asyncProducer{
+	producerOpts, err := producerOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	opts = append(opts, producerOpts...)
+
+	client, err := kgo.NewClient(opts...)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
+	}
+
+	return &AsyncProducer{
 		client:       client,
 		changefeedID: changefeedID,
 		errCh:        make(chan error, 1),
 	}, nil
 }
 
-func (p *asyncProducer) Close() {
+func (p *AsyncProducer) Close() {
 	if !p.closeStarted.CompareAndSwap(false, true) {
 		return
 	}
@@ -82,17 +73,18 @@ func (p *asyncProducer) Close() {
 
 	start := time.Now()
 	p.client.Close()
+
 	log.Info("kafka async producer closed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
 		zap.String("changefeed", p.changefeedID.Name()),
 		zap.Duration("duration", time.Since(start)))
 }
 
-func (p *asyncProducer) AsyncSend(
+func (p *AsyncProducer) AsyncSend(
 	ctx context.Context,
 	topic string,
 	partition int32,
-	message *common.Message,
+	message *codeccommon.Message,
 ) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
@@ -118,32 +110,36 @@ func (p *asyncProducer) AsyncSend(
 			p.enqueueAsyncSendError(logInfo, err)
 			return
 		}
+
 		if callback != nil {
 			callback()
 		}
 	}
+
 	p.client.Produce(ctx, record, promise)
+
 	return nil
 }
 
-func (p *asyncProducer) enqueueAsyncSendError(
-	logInfo *common.MessageLogInfo,
+func (p *AsyncProducer) enqueueAsyncSendError(
+	logInfo *codeccommon.MessageLogInfo,
 	err error,
 ) {
 	log.Error("kafka message send failed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
 		zap.String("changefeed", p.changefeedID.Name()),
-		zap.String("eventContext", BuildEventLogContext(
+		zap.String("eventContext", buildEventLogContext(
 			p.changefeedID.Keyspace(), p.changefeedID.Name(), logInfo)),
 		zap.Error(err))
+
 	select {
 	case p.errCh <- errors.WrapError(errors.ErrKafkaSendMessage, err):
-	// todo: remove this default after support dispatcher recover logic.
+	// Keep the first error until the dispatcher can recover from multiple errors.
 	default:
 	}
 }
 
-func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
+func (p *AsyncProducer) AsyncRunCallback(ctx context.Context) error {
 	defer p.closed.Store(true)
 	for {
 		select {

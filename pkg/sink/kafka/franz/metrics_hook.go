@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kafka
+package franz
 
 import (
 	"strconv"
@@ -25,8 +25,8 @@ import (
 
 // metricsHook adapts franz-go client callbacks to TiCDC's Kafka sink metrics.
 // franz-go calls these hook methods while writing requests, receiving responses,
-// and flushing produce batches. The hook does not poll Kafka; it only converts
-// the callback payloads into the existing TiCDC Kafka metric vectors.
+// and flushing produce batches. The hook does not poll Kafka; it only records
+// raw callback values for Prometheus.
 type metricsHook struct {
 	keyspace   string
 	changefeed string
@@ -54,9 +54,10 @@ const (
 	metricResultReadError  = "read_error"
 )
 
-func newKafkaMetricsHook(changefeedID common.ChangeFeedID) *metricsHook {
+func newMetricsHook(changefeedID common.ChangeFeedID) *metricsHook {
 	keyspace := changefeedID.Keyspace()
 	changefeed := changefeedID.Name()
+
 	return &metricsHook{
 		keyspace:               keyspace,
 		changefeed:             changefeed,
@@ -82,23 +83,26 @@ func (h *metricsHook) broker(nodeID int32) *brokerMetrics {
 			h.keyspace, h.changefeed, brokerID, metricResultSuccess),
 		responsesReadError: responsesTotal.WithLabelValues(
 			h.keyspace, h.changefeed, brokerID, metricResultReadError),
-		requestsInFlight: requestsInFlightGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID),
+		requestsInFlight: requestsInFlight.WithLabelValues(h.keyspace, h.changefeed, brokerID),
 		requestDuration:  requestDuration.WithLabelValues(h.keyspace, h.changefeed, brokerID),
 	}
+
 	actual, _ := h.brokers.LoadOrStore(nodeID, metrics)
+
 	return actual.(*brokerMetrics)
 }
 
-// CleanupMetrics removes Kafka sink metric series after all of its clients are closed.
+// CleanupMetrics removes producer series after all clients are closed.
 func CleanupMetrics(changefeedID common.ChangeFeedID) {
 	labels := prometheus.Labels{
 		"namespace":  changefeedID.Keyspace(),
 		"changefeed": changefeedID.Name(),
 	}
+
 	outgoingBytesTotal.DeletePartialMatch(labels)
 	requestsTotal.DeletePartialMatch(labels)
 	responsesTotal.DeletePartialMatch(labels)
-	requestsInFlightGauge.DeletePartialMatch(labels)
+	requestsInFlight.DeletePartialMatch(labels)
 	requestDuration.DeletePartialMatch(labels)
 	recordsPerBatch.DeletePartialMatch(labels)
 	uncompressedBytesTotal.DeletePartialMatch(labels)
@@ -116,11 +120,13 @@ func (h *metricsHook) OnBrokerWrite(
 	if meta.NodeID < 0 {
 		return
 	}
+
 	metrics := h.broker(meta.NodeID)
 
 	if bytesWritten > 0 {
 		metrics.outgoingBytesTotal.Add(float64(bytesWritten))
 	}
+
 	if err != nil {
 		metrics.requestsWriteError.Inc()
 	} else {
@@ -137,6 +143,7 @@ func (h *metricsHook) OnBrokerE2E(
 	if meta.NodeID < 0 {
 		return
 	}
+
 	metrics := h.broker(meta.NodeID)
 
 	if e2e.WriteErr == nil {
@@ -149,6 +156,7 @@ func (h *metricsHook) OnBrokerE2E(
 			}
 		}
 	}
+
 	if e2e.Err() == nil {
 		metrics.requestDuration.Observe(e2e.DurationE2E().Seconds())
 	}
@@ -163,9 +171,11 @@ func (h *metricsHook) OnProduceBatchWritten(
 	if m.NumRecords > 0 {
 		h.recordsPerBatch.Observe(float64(m.NumRecords))
 	}
+
 	if m.UncompressedBytes > 0 {
 		h.uncompressedBytesTotal.Add(float64(m.UncompressedBytes))
 	}
+
 	if m.CompressedBytes > 0 {
 		h.compressedBytesTotal.Add(float64(m.CompressedBytes))
 	}

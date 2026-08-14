@@ -953,7 +953,7 @@ func TestLargeMessageWithHandleEnableHandleKeyOnly(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(130)
+	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(168)
 	codecConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
 	encoder, err := NewBatchEncoder(codecConfig, nil)
 	require.NoError(t, err)
@@ -993,7 +993,7 @@ func TestLargeMessageWithHandleEnableHandleKeyOnly(t *testing.T) {
 
 func TestLargeMessageWithoutHandle(t *testing.T) {
 	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(100)
+	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(150)
 	codecConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
 	encoder, err := NewBatchEncoder(codecConfig, nil)
 	require.NoError(t, err)

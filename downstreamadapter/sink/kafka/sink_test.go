@@ -35,10 +35,15 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kfake"
 	"go.uber.org/atomic"
 )
 
 const kafkaSinkTestTopic = "mock_topic"
+
+type noopMetricsCollector struct{}
+
+func (noopMetricsCollector) Run(context.Context) {}
 
 func TestSinkWorkersReturnContextError(t *testing.T) {
 	contexts := []struct {
@@ -87,6 +92,9 @@ func TestSinkWorkersReturnContextError(t *testing.T) {
 }
 
 func TestVerifyInvalidConfig(t *testing.T) {
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, kafkaSinkTestTopic))
+	defer cluster.Close()
+
 	schemaRegistry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "invalid response", http.StatusInternalServerError)
 	}))
@@ -97,27 +105,9 @@ func TestVerifyInvalidConfig(t *testing.T) {
 		Protocol:       &avroProtocol,
 		SchemaRegistry: &schemaRegistry.URL,
 	}
-	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/" + kafkaSinkTestTopic +
+	sinkURI, err := url.Parse("kafka://" + cluster.ListenAddrs()[0] + "/" + kafkaSinkTestTopic +
 		"?required-acks=1&kafka-version=2.4.0")
 	require.NoError(t, err)
-
-	ctrl := gomock.NewController(t)
-	admin := kafka.NewMockAdmin(ctrl)
-	factory := kafka.NewMockFactory(ctrl)
-	gomock.InOrder(
-		factory.EXPECT().Admin(gomock.Any()).Return(admin, nil),
-		admin.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, true).Return(
-			map[string]kafka.TopicDetail{kafkaSinkTestTopic: {Name: kafkaSinkTestTopic}}, nil),
-		admin.EXPECT().Close(),
-	)
-
-	originalCreateKafkaFactory := createKafkaFactory
-	createKafkaFactory = func(_ func() (kafka.Factory, error)) (kafka.Factory, error) {
-		return factory, nil
-	}
-	t.Cleanup(func() {
-		createKafkaFactory = originalCreateKafkaFactory
-	})
 
 	changefeedID := common.NewChangefeedID4Test("test", "verify-invalid-config")
 	err = Verify(context.Background(), changefeedID, sinkURI, sinkConfig)
@@ -188,7 +178,8 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	dmlEvent.CommitTs = 2
 
 	ctx, cancel := context.WithCancel(context.Background())
-	kafkaSink, topicManager, asyncProducer, syncProducer := newKafkaSinkForTest(t, ctx, config.ProtocolOpen, &config.SinkConfig{})
+	kafkaSink, topicManager, asyncProducer, syncProducer := newKafkaSinkForTest(
+		t, ctx, config.ProtocolOpen, &config.SinkConfig{})
 	topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(1), nil).AnyTimes()
 	asyncProducer.EXPECT().AsyncRunCallback(gomock.Any()).Return(nil).AnyTimes()
 	asyncProducer.EXPECT().AsyncSend(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
@@ -235,12 +226,12 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 	t.Run("async producer creation fails", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		factory := kafka.NewMockFactory(ctrl)
-		admin := kafka.NewMockAdmin(ctrl)
+		adminClient := kafka.NewMockAdminClient(ctrl)
 		topicManager := topicmanager.NewMockTopicManager(ctrl)
 		cause := errors.ErrKafkaSendMessage.GenWithStackByArgs()
 
 		factory.EXPECT().AsyncProducer(gomock.Any()).Return(nil, cause)
-		admin.EXPECT().Close()
+		adminClient.EXPECT().Close()
 		topicManager.EXPECT().Close()
 
 		kafkaSink, err := newWithComponents(
@@ -248,7 +239,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 			common.NewChangefeedID4Test("test", "async-creation-fails"),
 			common.DefaultKeyspaceID,
 			config.ProtocolOpen,
-			components{factory: factory, admin: admin, topicManager: topicManager},
+			components{factory: factory, adminClient: adminClient, topicManager: topicManager},
 		)
 
 		require.Nil(t, kafkaSink)
@@ -258,7 +249,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 	t.Run("sync producer creation fails", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		factory := kafka.NewMockFactory(ctrl)
-		admin := kafka.NewMockAdmin(ctrl)
+		adminClient := kafka.NewMockAdminClient(ctrl)
 		topicManager := topicmanager.NewMockTopicManager(ctrl)
 		asyncProducer := kafka.NewMockAsyncProducer(ctrl)
 		cause := errors.ErrKafkaSendMessage.GenWithStackByArgs()
@@ -266,7 +257,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
 		factory.EXPECT().SyncProducer(gomock.Any()).Return(nil, cause)
 		asyncProducer.EXPECT().Close()
-		admin.EXPECT().Close()
+		adminClient.EXPECT().Close()
 		topicManager.EXPECT().Close()
 
 		kafkaSink, err := newWithComponents(
@@ -274,7 +265,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 			common.NewChangefeedID4Test("test", "sync-creation-fails"),
 			common.DefaultKeyspaceID,
 			config.ProtocolOpen,
-			components{factory: factory, admin: admin, topicManager: topicManager},
+			components{factory: factory, adminClient: adminClient, topicManager: topicManager},
 		)
 
 		require.Nil(t, kafkaSink)
@@ -284,7 +275,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 	t.Run("successful construction owns resources until close", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		factory := kafka.NewMockFactory(ctrl)
-		admin := kafka.NewMockAdmin(ctrl)
+		adminClient := kafka.NewMockAdminClient(ctrl)
 		topicManager := topicmanager.NewMockTopicManager(ctrl)
 		asyncProducer := kafka.NewMockAsyncProducer(ctrl)
 		syncProducer := kafka.NewMockSyncProducer(ctrl)
@@ -292,9 +283,10 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 
 		factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
 		factory.EXPECT().SyncProducer(gomock.Any()).Return(syncProducer, nil)
+		factory.EXPECT().MetricsCollector(adminClient).Return(noopMetricsCollector{})
 		asyncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) })
 		syncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) })
-		admin.EXPECT().Close().Do(func() { closeCount.Add(1) })
+		adminClient.EXPECT().Close().Do(func() { closeCount.Add(1) })
 		topicManager.EXPECT().Close().Do(func() { closeCount.Add(1) })
 
 		kafkaSink, err := newWithComponents(
@@ -302,7 +294,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 			common.NewChangefeedID4Test("test", "successful-construction"),
 			common.DefaultKeyspaceID,
 			config.ProtocolOpen,
-			components{factory: factory, admin: admin, topicManager: topicManager},
+			components{factory: factory, adminClient: adminClient, topicManager: topicManager},
 		)
 
 		require.NoError(t, err)
@@ -325,7 +317,8 @@ func TestKafkaSinkDML(t *testing.T) {
 
 		sent := make(chan *codecCommon.Message, 1)
 		ctx, cancel := context.WithCancelCause(t.Context())
-		kafkaSink, topicManager, asyncProducer, _ := newKafkaSinkForTest(t, ctx, config.ProtocolOpen, &config.SinkConfig{})
+		kafkaSink, topicManager, asyncProducer, _ := newKafkaSinkForTest(
+			t, ctx, config.ProtocolOpen, &config.SinkConfig{})
 		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(1), nil)
 		asyncProducer.EXPECT().AsyncSend(gomock.Any(), kafkaSinkTestTopic, int32(0), gomock.Any()).
 			DoAndReturn(func(_ context.Context, _ string, _ int32, message *codecCommon.Message) error {
@@ -366,7 +359,8 @@ func TestKafkaSinkDML(t *testing.T) {
 		cause := errors.ErrKafkaSendMessage.GenWithStackByArgs()
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		kafkaSink, topicManager, asyncProducer, _ := newKafkaSinkForTest(t, ctx, config.ProtocolCanalJSON, &config.SinkConfig{})
+		kafkaSink, topicManager, asyncProducer, _ := newKafkaSinkForTest(
+			t, ctx, config.ProtocolCanalJSON, &config.SinkConfig{})
 		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(1), nil)
 		asyncProducer.EXPECT().AsyncSend(gomock.Any(), kafkaSinkTestTopic, int32(0), gomock.Any()).Return(cause)
 
@@ -378,7 +372,8 @@ func TestKafkaSinkDML(t *testing.T) {
 
 	t.Run("returns topic manager error unchanged", func(t *testing.T) {
 		dmlEvent := eventHelper.DML2Event("test", "t", "insert into t values (3, 'three')")
-		kafkaSink, topicManager, _, _ := newKafkaSinkForTest(t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
+		kafkaSink, topicManager, _, _ := newKafkaSinkForTest(
+			t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
 		cause := context.DeadlineExceeded
 		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(0), cause)
 		kafkaSink.AddDMLEvent(dmlEvent)
@@ -397,7 +392,8 @@ func TestKafkaSinkDDL(t *testing.T) {
 	}
 
 	t.Run("all partitions", func(t *testing.T) {
-		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
+		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(
+			t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
 		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(4), nil)
 		syncProducer.EXPECT().SendMessages(kafkaSinkTestTopic, int32(4), gomock.Any()).
 			DoAndReturn(func(_ string, _ int32, message *codecCommon.Message) error {
@@ -410,7 +406,8 @@ func TestKafkaSinkDDL(t *testing.T) {
 	})
 
 	t.Run("partition zero", func(t *testing.T) {
-		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(t, t.Context(), config.ProtocolCanalJSON, &config.SinkConfig{})
+		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(
+			t, t.Context(), config.ProtocolCanalJSON, &config.SinkConfig{})
 		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(4), nil)
 		syncProducer.EXPECT().SendMessage(kafkaSinkTestTopic, int32(0), gomock.Any()).
 			DoAndReturn(func(_ string, _ int32, message *codecCommon.Message) error {
@@ -422,7 +419,8 @@ func TestKafkaSinkDDL(t *testing.T) {
 	})
 
 	t.Run("topic manager error", func(t *testing.T) {
-		kafkaSink, topicManager, _, _ := newKafkaSinkForTest(t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
+		kafkaSink, topicManager, _, _ := newKafkaSinkForTest(
+			t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
 		cause := context.DeadlineExceeded
 		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(0), cause)
 
@@ -430,7 +428,8 @@ func TestKafkaSinkDDL(t *testing.T) {
 	})
 
 	t.Run("producer error marks sink abnormal", func(t *testing.T) {
-		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
+		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(
+			t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
 		cause := errors.ErrKafkaSendMessage.GenWithStackByArgs()
 		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(2), nil)
 		syncProducer.EXPECT().SendMessages(kafkaSinkTestTopic, int32(2), gomock.Any()).Return(cause)
@@ -440,14 +439,16 @@ func TestKafkaSinkDDL(t *testing.T) {
 	})
 
 	t.Run("nil encoded message", func(t *testing.T) {
-		kafkaSink, _, _, _ := newKafkaSinkForTest(t, t.Context(), config.ProtocolDebezium, &config.SinkConfig{})
+		kafkaSink, _, _, _ := newKafkaSinkForTest(
+			t, t.Context(), config.ProtocolDebezium, &config.SinkConfig{})
 		unsupportedDDL := &commonEvent.DDLEvent{Type: byte(model.ActionNone), Query: "unsupported"}
 
 		require.NoError(t, kafkaSink.sendDDLEvent(unsupportedDDL))
 	})
 
 	t.Run("unsupported block event", func(t *testing.T) {
-		kafkaSink, _, _, _ := newKafkaSinkForTest(t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
+		kafkaSink, _, _, _ := newKafkaSinkForTest(
+			t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
 		syncPoint := commonEvent.NewSyncPointEvent(common.NewDispatcherID(), 1, 1, 1)
 
 		require.ErrorIs(t, kafkaSink.WriteBlockEvent(syncPoint), errors.ErrInvalidEventType)
@@ -456,7 +457,8 @@ func TestKafkaSinkDDL(t *testing.T) {
 
 func TestKafkaSinkCheckpoint(t *testing.T) {
 	t.Run("default topic without tables", func(t *testing.T) {
-		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
+		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(
+			t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
 		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(3), nil)
 		syncProducer.EXPECT().SendMessages(kafkaSinkTestTopic, int32(3), gomock.Any()).
 			DoAndReturn(func(_ string, _ int32, message *codecCommon.Message) error {
@@ -474,7 +476,8 @@ func TestKafkaSinkCheckpoint(t *testing.T) {
 			{Matcher: []string{"db1.t1"}, PartitionRule: "table", TopicRule: "topic-a"},
 			{Matcher: []string{"db2.t2"}, PartitionRule: "table", TopicRule: "topic-b"},
 		}}
-		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(t, t.Context(), config.ProtocolOpen, sinkConfig)
+		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(
+			t, t.Context(), config.ProtocolOpen, sinkConfig)
 		kafkaSink.SetTableSchemaStore(commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{
 			{SchemaName: "db1", Tables: []*heartbeatpb.TableInfo{{TableName: "t1"}}},
 			{SchemaName: "db2", Tables: []*heartbeatpb.TableInfo{{TableName: "t2"}}},
@@ -493,7 +496,8 @@ func TestKafkaSinkCheckpoint(t *testing.T) {
 	})
 
 	t.Run("topic manager error", func(t *testing.T) {
-		kafkaSink, topicManager, _, _ := newKafkaSinkForTest(t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
+		kafkaSink, topicManager, _, _ := newKafkaSinkForTest(
+			t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
 		cause := context.DeadlineExceeded
 		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(0), cause)
 		kafkaSink.checkpointChan <- 100
@@ -505,7 +509,8 @@ func TestKafkaSinkCheckpoint(t *testing.T) {
 		sinkConfig := &config.SinkConfig{DispatchRules: []*config.DispatchRule{
 			{Matcher: []string{"db1.t1"}, PartitionRule: "table", TopicRule: "topic-a"},
 		}}
-		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(t, t.Context(), config.ProtocolOpen, sinkConfig)
+		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(
+			t, t.Context(), config.ProtocolOpen, sinkConfig)
 		kafkaSink.SetTableSchemaStore(commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{
 			{SchemaName: "db1", Tables: []*heartbeatpb.TableInfo{{TableName: "t1"}}},
 		}, common.KafkaSinkType, false))
@@ -521,7 +526,8 @@ func TestKafkaSinkCheckpoint(t *testing.T) {
 	})
 
 	t.Run("nil encoded message", func(t *testing.T) {
-		kafkaSink, _, _, _ := newKafkaSinkForTest(t, t.Context(), config.ProtocolCanalJSON, &config.SinkConfig{})
+		kafkaSink, _, _, _ := newKafkaSinkForTest(
+			t, t.Context(), config.ProtocolCanalJSON, &config.SinkConfig{})
 		kafkaSink.checkpointChan <- 100
 		close(kafkaSink.checkpointChan)
 
@@ -568,6 +574,8 @@ func newKafkaSinkForTest(
 	factory := kafka.NewMockFactory(ctrl)
 	factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
 	factory.EXPECT().SyncProducer(gomock.Any()).Return(syncProducer, nil)
+	factory.EXPECT().MetricsCollector(nil).Return(noopMetricsCollector{})
+
 	kafkaSink, err := newWithComponents(ctx, changefeedID, common.DefaultKeyspaceID, protocol, components{
 		encoderGroup:   encoderGroup,
 		encoder:        encoder,

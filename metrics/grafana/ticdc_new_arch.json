@@ -17788,12 +17788,21 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_kafka_producer_outgoing_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker)",
+              "expr": "sum(ticdc_sink_kafka_producer_outgoing_byte_rate{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace,changefeed, instance, broker)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
               "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}",
               "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_sink_kafka_franz_producer_outgoing_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker)",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "franz-{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}",
+              "refId": "B"
             }
           ],
           "thresholds": [],
@@ -17897,6 +17906,15 @@
               "intervalFactor": 1,
               "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}",
               "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(ticdc_sink_kafka_franz_producer_in_flight_requests{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace,changefeed, instance, broker)",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "franz-{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}",
+              "refId": "B"
             }
           ],
           "thresholds": [],
@@ -17946,7 +17964,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Kafka request end-to-end duration in seconds. Average and p99 are calculated from one-minute histogram rates.",
+          "description": "The request latency in seconds for all brokers. Franz values show the one-minute average and p99.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -17994,21 +18012,30 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_kafka_producer_request_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker) / sum(rate(ticdc_sink_kafka_producer_request_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker)",
+              "expr": "sum(ticdc_sink_kafka_producer_request_latency{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace,changefeed, instance, broker, type)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}-avg",
+              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}-{{type}}",
               "refId": "A"
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.99, sum(rate(ticdc_sink_kafka_producer_request_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (le, namespace, changefeed, instance, broker))",
+              "expr": "sum(rate(ticdc_sink_kafka_franz_producer_request_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker) / sum(rate(ticdc_sink_kafka_franz_producer_request_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}-p99",
+              "legendFormat": "franz-{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}-avg",
               "refId": "B"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_sink_kafka_franz_producer_request_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (le, namespace,changefeed, instance, broker))",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "franz-{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}-p99",
+              "refId": "C"
             }
           ],
           "thresholds": [],
@@ -18106,12 +18133,30 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_kafka_producer_requests_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker, result)",
+              "expr": "sum(ticdc_sink_kafka_producer_request_rate{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace,changefeed, instance, broker)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}-{{result}}",
+              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}",
               "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_sink_kafka_franz_producer_requests_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker, result)",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "franz-request-{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}-{{result}}",
+              "refId": "B"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_sink_kafka_franz_producer_responses_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker, result)",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "franz-response-{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}-{{result}}",
+              "refId": "C"
             }
           ],
           "thresholds": [],
@@ -18161,7 +18206,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Records in each successfully written topic-partition batch. Average and p99 are calculated from one-minute histogram rates.",
+          "description": "Records per producer batch for franz-go and per request for Sarama.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -18209,28 +18254,37 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_kafka_producer_records_per_batch_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance) / sum(rate(ticdc_sink_kafka_producer_records_per_batch_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance)",
+              "expr": "sum(ticdc_sink_kafka_producer_records_per_request{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace,changefeed, instance, type)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-avg",
+              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{type}}",
               "refId": "A"
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.99, sum(rate(ticdc_sink_kafka_producer_records_per_batch_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (le, namespace, changefeed, instance))",
+              "expr": "sum(rate(ticdc_sink_kafka_franz_producer_records_per_batch_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance) / sum(rate(ticdc_sink_kafka_franz_producer_records_per_batch_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-p99",
+              "legendFormat": "franz-{{namespace}}-{{changefeed}}-{{instance}}-avg",
               "refId": "B"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_sink_kafka_franz_producer_records_per_batch_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (le, namespace,changefeed, instance))",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "franz-{{namespace}}-{{changefeed}}-{{instance}}-p99",
+              "refId": "C"
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Kafka Records Per Batch",
+          "title": "Kafka Records Per Batch or Request",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -18273,7 +18327,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Compression ratio of successfully written batches. Compression ratio = uncompressed byte rate / compressed byte rate * 100.",
+          "description": "The compression ratio times 100 of record batches for all topics. Compression ratio = Size of original data / Size of compressed data * 100",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -18319,12 +18373,21 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "100 * sum(rate(ticdc_sink_kafka_producer_uncompressed_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance) / sum(rate(ticdc_sink_kafka_producer_compressed_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance)",
+              "expr": "sum(ticdc_sink_kafka_producer_compression_ratio{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace,changefeed, instance, type)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}",
+              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{type}}",
               "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "100 * sum(rate(ticdc_sink_kafka_franz_producer_uncompressed_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance) / sum(rate(ticdc_sink_kafka_franz_producer_compressed_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance)",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "franz-{{namespace}}-{{changefeed}}-{{instance}}",
+              "refId": "B"
             }
           ],
           "thresholds": [],

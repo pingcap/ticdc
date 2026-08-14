@@ -11,13 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kafka
+package franz
 
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
-	"strings"
+	"net"
 
 	"github.com/jcmturner/gofork/encoding/asn1"
 	"github.com/jcmturner/gokrb5/v8/asn1tools"
@@ -36,53 +35,85 @@ import (
 const (
 	tokIDKrbAPReq = 256
 	gssAPIGeneric = 0x60
+	userAuth      = 1
+	keyTabAuth    = 2
 )
 
 type gssapiMechanism struct {
-	config gssapiConfig
+	config    GSSAPIConfig
+	newClient func(GSSAPIConfig) (kerberosClient, error)
+	newToken  func(string, types.PrincipalName, messages.Ticket, types.EncryptionKey) ([]byte, error)
+}
+
+type kerberosClient interface {
+	Login() error
+	Destroy()
+	GetServiceTicket(string) (messages.Ticket, types.EncryptionKey, error)
+	Domain() string
+	CName() types.PrincipalName
+}
+
+type gokrb5Client struct {
+	*client.Client
 }
 
 func (m *gssapiMechanism) Name() string {
-	return string(gssapiMechanismName)
+	return "GSSAPI"
 }
 
 func (m *gssapiMechanism) Authenticate(
 	_ context.Context,
 	host string,
 ) (sasl.Session, []byte, error) {
-	client, err := newKerberosClient(m.config)
+	client, err := m.newClient(m.config)
 	if err != nil {
-		return nil, nil, errors.Trace(err)
-	}
-	if err = client.Login(); err != nil {
-		client.Destroy()
-		return nil, nil, errors.Trace(err)
+		return nil, nil, err
 	}
 
-	serverHost := strings.SplitN(host, ":", 2)[0]
-	spn := fmt.Sprintf("%s/%s", m.config.serviceName, serverHost)
+	if err = client.Login(); err != nil {
+		client.Destroy()
+		return nil, nil, errors.WrapError(errors.ErrNewKafkaSink, err)
+	}
+
+	serverHost, err := brokerHost(host)
+	if err != nil {
+		client.Destroy()
+		return nil, nil, err
+	}
+
+	spn := m.config.ServiceName + "/" + serverHost
 	ticket, encKey, err := client.GetServiceTicket(spn)
 	if err != nil {
 		client.Destroy()
-		return nil, nil, errors.Trace(err)
+		return nil, nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 
-	token, err := newKrb5Token(
-		client.Credentials.Domain(), client.Credentials.CName(), ticket, encKey)
+	token, err := m.newToken(client.Domain(), client.CName(), ticket, encKey)
 	if err != nil {
 		client.Destroy()
-		return nil, nil, errors.Trace(err)
+		return nil, nil, err
 	}
+
 	firstMessage, err := appendGSSAPIHeader(token)
 	if err != nil {
 		client.Destroy()
-		return nil, nil, errors.Trace(err)
+		return nil, nil, err
 	}
+
 	return &gssapiSession{client: client, encKey: encKey}, firstMessage, nil
 }
 
+func brokerHost(address string) (string, error) {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+	}
+
+	return host, nil
+}
+
 type gssapiSession struct {
-	client *client.Client
+	client kerberosClient
 	encKey types.EncryptionKey
 }
 
@@ -91,88 +122,101 @@ func (s *gssapiSession) Challenge(challenge []byte) (bool, []byte, error) {
 
 	wrapTokenReq := gssapi.WrapToken{}
 	if err := wrapTokenReq.Unmarshal(challenge, true); err != nil {
-		return false, nil, errors.Trace(err)
+		return false, nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
+
 	isValid, err := wrapTokenReq.Verify(s.encKey, keyusage.GSSAPI_ACCEPTOR_SEAL)
 	if !isValid {
 		if err != nil {
-			return false, nil, errors.Trace(err)
+			return false, nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 		}
-		return false, nil, errors.New("invalid gssapi wrap token")
+
+		return false, nil, errors.ErrNewKafkaSink.GenWithStackByArgs()
 	}
 
 	wrapTokenResp, err := gssapi.NewInitiatorWrapToken(wrapTokenReq.Payload, s.encKey)
 	if err != nil {
-		return false, nil, errors.Trace(err)
+		return false, nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
+
 	msg, err := wrapTokenResp.Marshal()
 	if err != nil {
-		return false, nil, errors.Trace(err)
+		return false, nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
+
 	return true, msg, nil
 }
 
-func buildGSSAPIMechanism(g gssapiConfig) (sasl.Mechanism, error) {
-	if g.serviceName == "" {
+func buildGSSAPIMechanism(g GSSAPIConfig) (sasl.Mechanism, error) {
+	if g.ServiceName == "" {
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 			"sasl-gssapi-service-name must not be empty when sasl mechanism is GSSAPI")
 	}
-	if g.kerberosConfigPath == "" {
+	if g.KerberosConfigPath == "" {
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 			"sasl-gssapi-kerberos-config-path must not be empty when sasl mechanism is GSSAPI")
 	}
-	if g.username == "" {
+	if g.Username == "" {
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 			"sasl-gssapi-user must not be empty when sasl mechanism is GSSAPI")
 	}
-	if g.realm == "" {
+	if g.Realm == "" {
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 			"sasl-gssapi-realm must not be empty when sasl mechanism is GSSAPI")
 	}
 
-	switch g.authType {
+	switch g.AuthType {
 	case userAuth:
-		if g.password == "" {
+		if g.Password == "" {
 			return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 				"sasl-gssapi-password must not be empty when sasl-gssapi-auth-type is USER")
 		}
 	case keyTabAuth:
-		if g.keyTabPath == "" {
+		if g.KeyTabPath == "" {
 			return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 				"sasl-gssapi-keytab-path must not be empty when sasl-gssapi-auth-type is KEYTAB")
 		}
 	default:
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
-			"unsupported sasl-gssapi-auth-type %d", g.authType)
+			"unsupported sasl-gssapi-auth-type %d", g.AuthType)
 	}
 
-	return &gssapiMechanism{config: g}, nil
+	return &gssapiMechanism{
+		config:    g,
+		newClient: newKerberosClient,
+		newToken:  newKrb5Token,
+	}, nil
 }
 
-func newKerberosClient(g gssapiConfig) (*client.Client, error) {
-	cfg, err := config.Load(g.kerberosConfigPath)
+func newKerberosClient(g GSSAPIConfig) (kerberosClient, error) {
+	cfg, err := config.Load(g.KerberosConfigPath)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
 
 	var krbClient *client.Client
-	switch g.authType {
+	switch g.AuthType {
 	case keyTabAuth:
-		kt, err := keytab.Load(g.keyTabPath)
+		kt, err := keytab.Load(g.KeyTabPath)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
 		krbClient = client.NewWithKeytab(
-			g.username, g.realm, kt, cfg, client.DisablePAFXFAST(g.disablePAFXFAST))
+			g.Username, g.Realm, kt, cfg, client.DisablePAFXFAST(g.DisablePAFXFAST))
 	case userAuth:
 		krbClient = client.NewWithPassword(
-			g.username, g.realm, g.password, cfg, client.DisablePAFXFAST(g.disablePAFXFAST))
+			g.Username, g.Realm, g.Password, cfg, client.DisablePAFXFAST(g.DisablePAFXFAST))
 	default:
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
-			"unsupported sasl-gssapi-auth-type %d", g.authType)
+			"unsupported sasl-gssapi-auth-type %d", g.AuthType)
 	}
-	return krbClient, nil
+
+	return &gokrb5Client{Client: krbClient}, nil
 }
+
+func (c *gokrb5Client) Domain() string { return c.Credentials.Domain() }
+
+func (c *gokrb5Client) CName() types.PrincipalName { return c.Credentials.CName() }
 
 func newKrb5Token(
 	domain string,
@@ -182,42 +226,49 @@ func newKrb5Token(
 ) ([]byte, error) {
 	authenticator, err := types.NewAuthenticator(domain, cname)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 
 	authenticator.Cksum = types.Checksum{
 		CksumType: chksumtype.GSSAPI,
 		Checksum:  newAuthenticatorChecksum(),
 	}
+
 	apReq, err := messages.NewAPReq(ticket, sessionKey, authenticator)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 
 	body, err := apReq.Marshal()
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
+
 	prefix := make([]byte, 2, 2+len(body))
 	binary.BigEndian.PutUint16(prefix, tokIDKrbAPReq)
+
 	return append(prefix, body...), nil
 }
 
 func newAuthenticatorChecksum() []byte {
 	sum := make([]byte, 24)
 	binary.LittleEndian.PutUint32(sum[:4], 16)
+
 	flags := uint32(gssapi.ContextFlagInteg | gssapi.ContextFlagConf)
 	binary.LittleEndian.PutUint32(sum[20:24], flags)
+
 	return sum
 }
 
 func appendGSSAPIHeader(payload []byte) ([]byte, error) {
 	oidBytes, err := asn1.Marshal(gssapi.OIDKRB5.OID())
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
+
 	tkoLengthBytes := asn1tools.MarshalLengthBytes(len(oidBytes) + len(payload))
 	header := append([]byte{gssAPIGeneric}, tkoLengthBytes...)
 	header = append(header, oidBytes...)
+
 	return append(header, payload...), nil
 }

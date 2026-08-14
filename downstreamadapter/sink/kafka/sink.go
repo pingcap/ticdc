@@ -47,8 +47,9 @@ const (
 type sink struct {
 	changefeedID common.ChangeFeedID
 
-	dmlProducer kafka.AsyncProducer
-	ddlProducer kafka.SyncProducer
+	dmlProducer      kafka.AsyncProducer
+	ddlProducer      kafka.SyncProducer
+	metricsCollector kafka.MetricsCollector
 
 	comp       components
 	statistics *metrics.Statistics
@@ -69,10 +70,6 @@ type sink struct {
 
 func (s *sink) SinkType() common.SinkType {
 	return common.KafkaSinkType
-}
-
-var createKafkaFactory = func(createFactory func() (kafka.Factory, error)) (kafka.Factory, error) {
-	return createFactory()
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
@@ -115,20 +112,18 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 		return err
 	}
 
-	factory, err := createKafkaFactory(func() (kafka.Factory, error) {
-		return kafka.NewFactory(ctx, options, changefeedID)
-	})
+	factory, err := kafka.NewFactory(ctx, options, changefeedID)
 	if err != nil {
 		return err
 	}
 
-	admin, err := factory.Admin(ctx)
+	adminClient, err := factory.AdminClient(ctx)
 	if err != nil {
 		return err
 	}
-	defer admin.Close()
+	defer adminClient.Close()
 
-	err = topicmanager.EnsureTopic(ctx, changefeedID, topic, options.DeriveTopicConfig(), admin)
+	err = topicmanager.EnsureTopic(ctx, changefeedID, topic, options.DeriveTopicConfig(), adminClient)
 	if err != nil {
 		return err
 	}
@@ -175,7 +170,7 @@ func newWithComponents(
 		}
 		comp.close()
 		statistics.Close()
-		kafka.CleanupMetrics(changefeedID)
+		kafka.CleanupFactoryMetrics(comp.factory)
 	}()
 
 	asyncProducer, err = comp.factory.AsyncProducer(ctx)
@@ -188,9 +183,10 @@ func newWithComponents(
 		return nil, err
 	}
 	return &sink{
-		changefeedID: changefeedID,
-		dmlProducer:  asyncProducer,
-		ddlProducer:  syncProducer,
+		changefeedID:     changefeedID,
+		dmlProducer:      asyncProducer,
+		ddlProducer:      syncProducer,
+		metricsCollector: comp.factory.MetricsCollector(comp.adminClient),
 
 		partitionRule: helper.GetDDLDispatchRule(protocol),
 		protocol:      protocol,
@@ -216,6 +212,10 @@ func (s *sink) Run(ctx context.Context) error {
 	})
 	g.Go(func() error {
 		return s.sendDMLEvent(ctx)
+	})
+	g.Go(func() error {
+		s.metricsCollector.Run(ctx)
+		return nil
 	})
 	err := g.Wait()
 	s.isNormal.Store(false)
@@ -566,7 +566,7 @@ func (s *sink) Close() {
 	s.dmlProducer.Close()
 	s.comp.close()
 	s.statistics.Close()
-	kafka.CleanupMetrics(s.changefeedID)
+	kafka.CleanupFactoryMetrics(s.comp.factory)
 }
 
 func (s *sink) BatchCount() int {

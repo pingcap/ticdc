@@ -9,6 +9,7 @@ import (
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
+	common "github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
 // MockFactory is a mock of Factory interface.
@@ -34,19 +35,19 @@ func (m *MockFactory) EXPECT() *MockFactoryMockRecorder {
 	return m.recorder
 }
 
-// Admin mocks base method.
-func (m *MockFactory) Admin(ctx context.Context) (Admin, error) {
+// AdminClient mocks base method.
+func (m *MockFactory) AdminClient(ctx context.Context) (AdminClient, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Admin", ctx)
-	ret0, _ := ret[0].(Admin)
+	ret := m.ctrl.Call(m, "AdminClient", ctx)
+	ret0, _ := ret[0].(AdminClient)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// Admin indicates an expected call of Admin.
-func (mr *MockFactoryMockRecorder) Admin(ctx interface{}) *gomock.Call {
+// AdminClient indicates an expected call of AdminClient.
+func (mr *MockFactoryMockRecorder) AdminClient(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Admin", reflect.TypeOf((*MockFactory)(nil).Admin), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AdminClient", reflect.TypeOf((*MockFactory)(nil).AdminClient), ctx)
 }
 
 // AsyncProducer mocks base method.
@@ -64,6 +65,20 @@ func (mr *MockFactoryMockRecorder) AsyncProducer(ctx interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AsyncProducer", reflect.TypeOf((*MockFactory)(nil).AsyncProducer), ctx)
 }
 
+// MetricsCollector mocks base method.
+func (m *MockFactory) MetricsCollector(adminClient AdminClient) MetricsCollector {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MetricsCollector", adminClient)
+	ret0, _ := ret[0].(MetricsCollector)
+	return ret0
+}
+
+// MetricsCollector indicates an expected call of MetricsCollector.
+func (mr *MockFactoryMockRecorder) MetricsCollector(adminClient interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MetricsCollector", reflect.TypeOf((*MockFactory)(nil).MetricsCollector), adminClient)
+}
+
 // SyncProducer mocks base method.
 func (m *MockFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 	m.ctrl.T.Helper()
@@ -77,4 +92,130 @@ func (m *MockFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 func (mr *MockFactoryMockRecorder) SyncProducer(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SyncProducer", reflect.TypeOf((*MockFactory)(nil).SyncProducer), ctx)
+}
+
+// MockSyncProducer is a mock of SyncProducer interface.
+type MockSyncProducer struct {
+	ctrl     *gomock.Controller
+	recorder *MockSyncProducerMockRecorder
+}
+
+// MockSyncProducerMockRecorder is the mock recorder for MockSyncProducer.
+type MockSyncProducerMockRecorder struct {
+	mock *MockSyncProducer
+}
+
+// NewMockSyncProducer creates a new mock instance.
+func NewMockSyncProducer(ctrl *gomock.Controller) *MockSyncProducer {
+	mock := &MockSyncProducer{ctrl: ctrl}
+	mock.recorder = &MockSyncProducerMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockSyncProducer) EXPECT() *MockSyncProducerMockRecorder {
+	return m.recorder
+}
+
+// Close mocks base method.
+func (m *MockSyncProducer) Close() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Close")
+}
+
+// Close indicates an expected call of Close.
+func (mr *MockSyncProducerMockRecorder) Close() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockSyncProducer)(nil).Close))
+}
+
+// SendMessage mocks base method.
+func (m *MockSyncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SendMessage", topic, partitionNum, message)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SendMessage indicates an expected call of SendMessage.
+func (mr *MockSyncProducerMockRecorder) SendMessage(topic, partitionNum, message interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SendMessage", reflect.TypeOf((*MockSyncProducer)(nil).SendMessage), topic, partitionNum, message)
+}
+
+// SendMessages mocks base method.
+func (m *MockSyncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SendMessages", topic, partitionNum, message)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SendMessages indicates an expected call of SendMessages.
+func (mr *MockSyncProducerMockRecorder) SendMessages(topic, partitionNum, message interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SendMessages", reflect.TypeOf((*MockSyncProducer)(nil).SendMessages), topic, partitionNum, message)
+}
+
+// MockAsyncProducer is a mock of AsyncProducer interface.
+type MockAsyncProducer struct {
+	ctrl     *gomock.Controller
+	recorder *MockAsyncProducerMockRecorder
+}
+
+// MockAsyncProducerMockRecorder is the mock recorder for MockAsyncProducer.
+type MockAsyncProducerMockRecorder struct {
+	mock *MockAsyncProducer
+}
+
+// NewMockAsyncProducer creates a new mock instance.
+func NewMockAsyncProducer(ctrl *gomock.Controller) *MockAsyncProducer {
+	mock := &MockAsyncProducer{ctrl: ctrl}
+	mock.recorder = &MockAsyncProducerMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockAsyncProducer) EXPECT() *MockAsyncProducerMockRecorder {
+	return m.recorder
+}
+
+// AsyncRunCallback mocks base method.
+func (m *MockAsyncProducer) AsyncRunCallback(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AsyncRunCallback", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AsyncRunCallback indicates an expected call of AsyncRunCallback.
+func (mr *MockAsyncProducerMockRecorder) AsyncRunCallback(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AsyncRunCallback", reflect.TypeOf((*MockAsyncProducer)(nil).AsyncRunCallback), ctx)
+}
+
+// AsyncSend mocks base method.
+func (m *MockAsyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AsyncSend", ctx, topic, partition, message)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AsyncSend indicates an expected call of AsyncSend.
+func (mr *MockAsyncProducerMockRecorder) AsyncSend(ctx, topic, partition, message interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AsyncSend", reflect.TypeOf((*MockAsyncProducer)(nil).AsyncSend), ctx, topic, partition, message)
+}
+
+// Close mocks base method.
+func (m *MockAsyncProducer) Close() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Close")
+}
+
+// Close indicates an expected call of Close.
+func (mr *MockAsyncProducerMockRecorder) Close() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockAsyncProducer)(nil).Close))
 }
