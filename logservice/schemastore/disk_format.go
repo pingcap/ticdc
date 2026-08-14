@@ -739,34 +739,8 @@ func addSchemaInfoToBatchWithEncryption(batch *pebble.Batch, ts uint64, info *mo
 	batch.Set(schemaKey, schemaValue, pebble.NoSync)
 }
 
-func addTableInfoToBatch(
-	batch *pebble.Batch,
-	ts uint64,
-	dbInfo *model.DBInfo,
-	tableInfoValue []byte,
-) (int64, string, []int64) {
-	return addTableInfoToBatchWithEncryption(batch, ts, dbInfo, tableInfoValue, nil, 0)
-}
-
 // addTableInfoToBatchWithEncryption encrypts and adds table info to batch if encryption is enabled
 func addTableInfoToBatchWithEncryption(
-	batch *pebble.Batch,
-	ts uint64,
-	dbInfo *model.DBInfo,
-	tableInfoValue []byte,
-	encMgr encryption.EncryptionManager,
-	keyspaceID uint32,
-) (int64, string, []int64) {
-	tableInfo := model.TableInfo{}
-	if err := json.Unmarshal(tableInfoValue, &tableInfo); err != nil {
-		log.Fatal("unmarshal table info failed", zap.Error(err))
-	}
-	return addTableInfoModelToBatchWithEncryption(
-		batch, ts, dbInfo, &tableInfo, tableInfoValue, encMgr, keyspaceID,
-	)
-}
-
-func addTableInfoModelToBatchWithEncryption(
 	batch *pebble.Batch,
 	ts uint64,
 	dbInfo *model.DBInfo,
@@ -883,7 +857,7 @@ func persistSchemaSnapshotWithEncryption(
 						callbackErr = errors.WrapError(errors.ErrMarshalFailed, err)
 						return callbackErr
 					}
-					tableID, tableName, partitionIDs := addTableInfoModelToBatchWithEncryption(
+					tableID, tableName, partitionIDs := addTableInfoToBatchWithEncryption(
 						batch, snapTs, dbInfo, tableInfo, tableInfoValue, encMgr, keyspaceID)
 					if collectMetaInfo {
 						tableMap[tableID] = &BasicTableInfo{

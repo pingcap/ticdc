@@ -305,7 +305,7 @@ func TestGetAllPhysicalTablesSkipsViews(t *testing.T) {
 	for _, info := range []*model.TableInfo{tableInfo, viewInfo} {
 		value, err := json.Marshal(info)
 		require.NoError(t, err)
-		addTableInfoToBatch(batch, snapshotTs, dbInfo, value)
+		addTableInfoToBatchWithEncryption(batch, snapshotTs, dbInfo, info, value, nil, 0)
 	}
 	require.NoError(t, batch.Commit(pebble.NoSync))
 

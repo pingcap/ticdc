@@ -137,7 +137,8 @@ func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos []mockDBInfo) {
 			if err != nil {
 				log.Panic("marshal table info fail", zap.Error(err))
 			}
-			addTableInfoToBatch(batch, snapTs, dbInfo.dbInfo, tableInfoValue)
+			addTableInfoToBatchWithEncryption(
+				batch, snapTs, dbInfo.dbInfo, tableInfo, tableInfoValue, nil, 0)
 		}
 	}
 	if err := batch.Commit(pebble.NoSync); err != nil {
