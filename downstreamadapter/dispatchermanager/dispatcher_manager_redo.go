@@ -63,7 +63,7 @@ func initRedoComponet(
 		consistentMemoryUsage = config.GetDefaultReplicaConfig().Consistent.MemoryUsage
 	}
 	redoQuota := totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
-	redoSink, err := redo.New(ctx, changefeedID, manager.config.Consistent, redoQuota)
+	redoSink, err := redo.New(ctx, changefeedID, manager.config.Consistent)
 	if err != nil {
 		return err
 	}

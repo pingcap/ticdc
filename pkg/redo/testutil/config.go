@@ -40,5 +40,7 @@ func NewConsistentConfig(storage string) *config.ConsistentConfig {
 		FlushWorkerNum:        util.AddressOf(flushWorkerNum),
 		Compression:           util.AddressOf(compressionType),
 		FlushConcurrency:      util.AddressOf(flushConcurrency),
+		SpoolDiskQuota:        util.AddressOf(redo.DefaultSpoolDiskQuota),
+		SpoolBaseDir:          util.AddressOf(""),
 	}
 }

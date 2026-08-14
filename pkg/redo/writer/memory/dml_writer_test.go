@@ -15,6 +15,7 @@ package memory
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -37,15 +38,20 @@ func TestNewDMLWriter(t *testing.T) {
 
 	_, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
 	require.NoError(t, err)
-	cfg, err := writer.NewConfig(
-		common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
-		testutil.NewConsistentConfig(uri.String()),
-	)
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
+	consistentCfg := testutil.NewConsistentConfig(uri.String())
+	spoolBaseDir := t.TempDir()
+	consistentCfg.SpoolBaseDir = util.AddressOf(spoolBaseDir)
+	consistentCfg.SpoolDiskQuota = util.AddressOf(int64(1024))
+	cfg, err := writer.NewConfig(changefeedID, consistentCfg)
 	require.NoError(t, err)
 
-	lw, err := NewDMLWriter(ctx, cfg, 1024)
+	lw, err := NewDMLWriter(ctx, cfg)
 	require.NoError(t, err)
+	spoolDir := filepath.Join(spoolBaseDir, changefeedID.Keyspace(), changefeedID.Name())
+	require.DirExists(t, spoolDir)
 	require.NoError(t, lw.Close())
+	require.NoDirExists(t, spoolDir)
 }
 
 func TestDMLWriterSpoolsEncodedBytesBeforePostEnqueue(t *testing.T) {

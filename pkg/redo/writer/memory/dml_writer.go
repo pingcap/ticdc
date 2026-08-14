@@ -16,7 +16,6 @@ package memory
 import (
 	"context"
 	"encoding/binary"
-	"math"
 	"os"
 	"path/filepath"
 
@@ -55,7 +54,7 @@ const redoSpoolDirectory = "redo-sink-spool"
 
 // NewDMLWriter creates a new memory DML writer.
 func NewDMLWriter(
-	ctx context.Context, cfg *writer.Config, spoolQuotaBytes uint64, opts ...writer.Option,
+	ctx context.Context, cfg *writer.Config, opts ...writer.Option,
 ) (writer.RedoDMLWriter, error) {
 	extStorage, err := redo.InitExternalStorage(ctx, *cfg.URI())
 	if err != nil {
@@ -66,16 +65,18 @@ func NewDMLWriter(
 	fileWorkerInput := make(chan *polymorphicRedoEvent, redo.DefaultEncodingOutputChanSize)
 	fileWorkers := newFileWorkerGroup(
 		cfg, fileWorkerInput, extStorage, opts...)
-	rootDir := config.GetGlobalServerConfig().DataDir
-	if rootDir == "" {
-		rootDir = os.TempDir()
+	spoolBaseDir := cfg.SpoolBaseDir()
+	if spoolBaseDir == "" {
+		spoolBaseDir = config.GetGlobalServerConfig().DataDir
+		if spoolBaseDir == "" {
+			spoolBaseDir = os.TempDir()
+		}
+		spoolBaseDir = filepath.Join(spoolBaseDir, redoSpoolDirectory)
 	}
-	rootDir = filepath.Join(rootDir, redoSpoolDirectory)
-	quotaBytes := int64(min(spoolQuotaBytes, uint64(math.MaxInt64)))
 	spoolBuffer, err := spool.New(
 		cfg.ChangeFeedID(),
-		spool.WithRootDir(rootDir),
-		spool.WithDiskQuotaBytes(quotaBytes),
+		spool.WithRootDir(spoolBaseDir),
+		spool.WithDiskQuotaBytes(cfg.SpoolDiskQuota()),
 	)
 	if err != nil {
 		extStorage.Close()

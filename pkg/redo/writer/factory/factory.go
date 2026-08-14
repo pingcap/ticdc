@@ -26,7 +26,7 @@ import (
 
 // NewRedoDMLWriter creates a new RedoDMLWriter.
 func NewRedoDMLWriter(
-	ctx context.Context, cfg *writer.Config, spoolQuotaBytes uint64,
+	ctx context.Context, cfg *writer.Config,
 ) (writer.RedoDMLWriter, error) {
 	uri := cfg.URI()
 	if redo.IsBlackholeStorage(uri.Scheme) {
@@ -36,7 +36,7 @@ func NewRedoDMLWriter(
 
 	// DML always uses the spooled writer, regardless of use-file-backend, so
 	// both backend configurations have the same acknowledgement semantics.
-	return memory.NewDMLWriter(ctx, cfg, spoolQuotaBytes)
+	return memory.NewDMLWriter(ctx, cfg)
 }
 
 // NewRedoDDLWriter creates a new RedoDDLWriter.

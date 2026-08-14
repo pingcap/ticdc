@@ -111,7 +111,6 @@ func TestRedoSinkBatchConfig(t *testing.T) {
 		context.Background(),
 		common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
 		cfg,
-		config.DefaultChangefeedMemoryQuota,
 	)
 	require.NoError(t, err)
 	defer sink.Close()
@@ -191,7 +190,7 @@ func TestRedoSinkInProcessor(t *testing.T) {
 		ctx, cancel := context.WithCancel(ctx)
 		cfg := newTestConsistentConfig(storage)
 		cfg.UseFileBackend = util.AddressOf(useFileBackend)
-		dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg, config.DefaultChangefeedMemoryQuota)
+		dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 		require.NoError(t, err)
 		defer dmlMgr.Close()
 
@@ -274,7 +273,7 @@ func TestRedoSinkError(t *testing.T) {
 	defer cancel()
 
 	cfg := newTestConsistentConfig("blackhole-invalid://")
-	logMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg, config.DefaultChangefeedMemoryQuota)
+	logMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 	require.NoError(t, err)
 	defer logMgr.Close()
 
@@ -328,7 +327,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	cfg.EncodingWorkerNum = util.AddressOf(redo.DefaultEncodingWorkerNum)
 	cfg.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
 	cfg.UseFileBackend = util.AddressOf(useFileBackend)
-	dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg, config.DefaultChangefeedMemoryQuota)
+	dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 	require.NoError(b, err)
 	defer dmlMgr.Close()
 

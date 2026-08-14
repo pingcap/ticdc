@@ -53,6 +53,9 @@ type Config struct {
 	compression string
 	// Used only by the memory backend for flush concurrency.
 	flushConcurrency int
+	// Used by the memory backend to configure local spool storage.
+	spoolDiskQuota int64
+	spoolBaseDir   string
 
 	// Used only by the file backend as the local writer directory.
 	dir string
@@ -81,6 +84,8 @@ func NewConfig(changefeedID common.ChangeFeedID, consistentCfg *config.Consisten
 		flushWorkerNum:    util.GetOrZero(consistentCfg.FlushWorkerNum),
 		compression:       util.GetOrZero(consistentCfg.Compression),
 		flushConcurrency:  util.GetOrZero(consistentCfg.FlushConcurrency),
+		spoolDiskQuota:    util.GetOrZero(consistentCfg.SpoolDiskQuota),
+		spoolBaseDir:      util.GetOrZero(consistentCfg.SpoolBaseDir),
 	}
 	cfg.dir = newWriterDir(cfg)
 	return cfg, nil
@@ -167,4 +172,12 @@ func (cfg *Config) Compression() string {
 
 func (cfg *Config) FlushConcurrency() int {
 	return cfg.flushConcurrency
+}
+
+func (cfg *Config) SpoolDiskQuota() int64 {
+	return cfg.spoolDiskQuota
+}
+
+func (cfg *Config) SpoolBaseDir() string {
+	return cfg.spoolBaseDir
 }

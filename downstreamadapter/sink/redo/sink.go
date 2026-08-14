@@ -61,7 +61,6 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.C
 // New creates a new redo sink.
 func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	cfg *config.ConsistentConfig,
-	spoolQuotaBytes uint64,
 ) (*Sink, error) {
 	var err error
 	config, err := writer.NewConfig(changefeedID, cfg)
@@ -113,7 +112,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			zap.Error(err))
 		return nil, err
 	}
-	dmlWriter, err = factory.NewRedoDMLWriter(ctx, config, spoolQuotaBytes)
+	dmlWriter, err = factory.NewRedoDMLWriter(ctx, config)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", changefeedID.Keyspace()),

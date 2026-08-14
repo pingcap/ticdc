@@ -352,6 +352,12 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		if c.Consistent.FlushConcurrency != nil {
 			res.Consistent.FlushConcurrency = c.Consistent.FlushConcurrency
 		}
+		if c.Consistent.SpoolDiskQuota != nil {
+			res.Consistent.SpoolDiskQuota = c.Consistent.SpoolDiskQuota
+		}
+		if c.Consistent.SpoolBaseDir != nil {
+			res.Consistent.SpoolBaseDir = c.Consistent.SpoolBaseDir
+		}
 
 		if c.Consistent.MemoryUsage != nil {
 			res.Consistent.MemoryUsage = &config.ConsistentMemoryUsage{
@@ -1005,6 +1011,12 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		if cloned.Consistent.FlushConcurrency != nil {
 			res.Consistent.FlushConcurrency = cloned.Consistent.FlushConcurrency
 		}
+		if cloned.Consistent.SpoolDiskQuota != nil {
+			res.Consistent.SpoolDiskQuota = cloned.Consistent.SpoolDiskQuota
+		}
+		if cloned.Consistent.SpoolBaseDir != nil {
+			res.Consistent.SpoolBaseDir = cloned.Consistent.SpoolBaseDir
+		}
 		if cloned.Consistent.MemoryUsage != nil {
 			res.Consistent.MemoryUsage = &ConsistentMemoryUsage{
 				MemoryQuotaPercentage: cloned.Consistent.MemoryUsage.MemoryQuotaPercentage,
@@ -1276,6 +1288,8 @@ type ConsistentConfig struct {
 	UseFileBackend        *bool                  `json:"use_file_backend,omitempty" toml:"use-file-backend,omitempty"`
 	Compression           *string                `json:"compression,omitempty" toml:"compression,omitempty"`
 	FlushConcurrency      *int                   `json:"flush_concurrency,omitempty" toml:"flush-concurrency,omitempty"`
+	SpoolDiskQuota        *int64                 `json:"spool_disk_quota,omitempty" toml:"spool-disk-quota,omitempty"`
+	SpoolBaseDir          *string                `json:"spool_base_dir,omitempty" toml:"spool-base-dir,omitempty"`
 	MemoryUsage           *ConsistentMemoryUsage `json:"memory_usage,omitempty" toml:"memory-usage,omitempty"`
 
 	EventCollectorBatchCount *int `json:"event_collector_batch_count,omitempty" toml:"event-collector-batch-count,omitempty"`

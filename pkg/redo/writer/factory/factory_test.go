@@ -32,7 +32,7 @@ func TestNewRedoWriters(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	dmlWriter, err := NewRedoDMLWriter(context.Background(), cfg, 1024)
+	dmlWriter, err := NewRedoDMLWriter(context.Background(), cfg)
 	require.NoError(t, err)
 	require.Implements(t, (*writer.RedoDMLWriter)(nil), dmlWriter)
 

@@ -24,6 +24,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
@@ -107,6 +108,8 @@ var customReplicaConfig = &ReplicaConfig{
 		UseFileBackend:        false,
 		EncoderWorkerNum:      31,
 		FlushWorkerNum:        18,
+		SpoolDiskQuota:        redo.DefaultSpoolDiskQuota,
+		SpoolBaseDir:          "",
 	},
 }
 
@@ -160,6 +163,8 @@ var defaultReplicaConfig = &ReplicaConfig{
 		FlushWorkerNum:        8,
 		Storage:               "",
 		UseFileBackend:        false,
+		SpoolDiskQuota:        redo.DefaultSpoolDiskQuota,
+		SpoolBaseDir:          "",
 	},
 }
 
