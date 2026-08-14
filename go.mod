@@ -55,7 +55,7 @@ require (
 	github.com/pingcap/kvproto v0.0.0-20260724054804-059694ae4472
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9
 	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5
-	github.com/pingcap/tidb v1.1.0-beta.0.20260813153327-eadd1201d6e3
+	github.com/pingcap/tidb v1.1.0-beta.0.20260814130643-17c0dd0fe42b
 	github.com/pingcap/tidb-dashboard v0.0.0-20260316045729-aa6178a60657
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20260813153327-eadd1201d6e3
 	github.com/pingcap/tiflow v0.0.0-20260723070929-e8736df4fe74

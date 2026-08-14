@@ -762,8 +762,8 @@ github.com/pingcap/sarama v1.41.2-pingcap-20260622.1 h1:TrtpL+fs51pUc21CZ8mzIotO
 github.com/pingcap/sarama v1.41.2-pingcap-20260622.1/go.mod h1:PIL6ZKKKhm19IbQpmpJcFnybAi1yXtgLAitDAeBdNCw=
 github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5 h1:T4pXRhBflzDeAhmOQHNPRRogMYxP13V7BkYw3ZsoSfE=
 github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5/go.mod h1:rlimy0GcTvjiJqvD5mXTRr8O2eNZPBrcUgiWVYp9530=
-github.com/pingcap/tidb v1.1.0-beta.0.20260813153327-eadd1201d6e3 h1:5QHSYxuBK8Fdeundi6a6P/4Ze7oFfWav/IYZjPGGZTA=
-github.com/pingcap/tidb v1.1.0-beta.0.20260813153327-eadd1201d6e3/go.mod h1:bLoByS0sAk37XgFbvwcuDRtD1ai4mKggEZAmtzUIHYM=
+github.com/pingcap/tidb v1.1.0-beta.0.20260814130643-17c0dd0fe42b h1:3XPmcywgkTchg4u0uE3W1HghFIAhDPlXuO3qwNCoJ2M=
+github.com/pingcap/tidb v1.1.0-beta.0.20260814130643-17c0dd0fe42b/go.mod h1:bLoByS0sAk37XgFbvwcuDRtD1ai4mKggEZAmtzUIHYM=
 github.com/pingcap/tidb-dashboard v0.0.0-20260316045729-aa6178a60657 h1:o/epSPBAWPf4LC4qTAw/AkDRid5ejP4EOcV2CSZ06gw=
 github.com/pingcap/tidb-dashboard v0.0.0-20260316045729-aa6178a60657/go.mod h1:3C4RKDXCp3OtN0EsL4Qec3/LFXyJsWITsLCmvNV3bZ4=
 github.com/pingcap/tidb/pkg/parser v0.0.0-20260813153327-eadd1201d6e3 h1:WOwd0YPkouam/X08fNfKOWt7v1ZnLOeuBWvyNV5+VTY=
