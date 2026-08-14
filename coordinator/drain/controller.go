@@ -67,8 +67,7 @@ type nodeState struct {
 
 	// logServiceDispatcherCount is valid only after a STOPPING heartbeat has
 	// been observed for the current node epoch.
-	logServiceDispatcherCount         uint32
-	logServiceDispatcherCountObserved bool
+	logServiceDispatcherCount uint32
 }
 
 type drainTargetSchedulerGate struct {
@@ -193,7 +192,6 @@ func (c *Controller) ObserveHeartbeat(nodeID node.ID, hb *heartbeatpb.NodeHeartb
 	st := c.ensureNodeStateLocked(nodeID)
 	if hb.NodeEpoch == st.nodeEpoch && hb.Liveness == heartbeatpb.NodeLiveness_STOPPING {
 		st.logServiceDispatcherCount = hb.GetLogServiceDispatcherCount()
-		st.logServiceDispatcherCountObserved = true
 	}
 	c.observeTargetSchedulerAckLocked(nodeID, hb)
 }
@@ -432,7 +430,7 @@ func (c *Controller) GetLogServiceDispatcherCount(nodeID node.ID) (uint32, bool)
 	defer c.mu.Unlock()
 
 	st, ok := c.nodes[nodeID]
-	if !ok || !st.logServiceDispatcherCountObserved {
+	if !ok {
 		return 0, false
 	}
 	return st.logServiceDispatcherCount, true

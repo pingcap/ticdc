@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/eventstore"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -29,10 +30,6 @@ import (
 // nodeHeartbeatInterval bounds background node heartbeat frequency.
 // Forced heartbeats bypass this throttle to acknowledge state changes immediately.
 const nodeHeartbeatInterval = 5 * time.Second
-
-type logServiceDispatcherCounter interface {
-	DispatcherCount() int
-}
 
 // managerNodeState owns node-scoped state shared by all local maintainers.
 type managerNodeState struct {
@@ -102,7 +99,7 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 	}
 	drainTarget, drainEpoch := m.getDispatcherDrainTarget()
 	logServiceDispatcherCount := 0
-	if store, ok := appcontext.TryGetService[logServiceDispatcherCounter](appcontext.EventStore); ok {
+	if store, ok := appcontext.TryGetService[eventstore.EventStore](appcontext.EventStore); ok {
 		logServiceDispatcherCount = store.DispatcherCount()
 	}
 	hb := &heartbeatpb.NodeHeartbeat{
