@@ -745,10 +745,13 @@ func addTableInfoToBatchWithEncryption(
 	ts uint64,
 	dbInfo *model.DBInfo,
 	tableInfo *model.TableInfo,
-	tableInfoValue []byte,
 	encMgr encryption.EncryptionManager,
 	keyspaceID uint32,
-) (int64, string, []int64) {
+) (int64, string, []int64, error) {
+	tableInfoValue, err := json.Marshal(tableInfo)
+	if err != nil {
+		return 0, "", nil, errors.WrapError(errors.ErrMarshalFailed, err)
+	}
 	// write table info to batch
 	tableKey, err := tableInfoKey(ts, tableInfo.ID)
 	if err != nil {
@@ -794,7 +797,7 @@ func addTableInfoToBatchWithEncryption(
 			partitionIDs = append(partitionIDs, partition.ID)
 		}
 	}
-	return tableInfo.ID, tableInfo.Name.O, partitionIDs
+	return tableInfo.ID, tableInfo.Name.O, partitionIDs, nil
 }
 
 // persistSchemaSnapshot write database/table/partition info to disks.
@@ -852,13 +855,12 @@ func persistSchemaSnapshotWithEncryption(
 
 				var callbackErr error
 				err := meta.IterTables(dbInfo.ID, func(tableInfo *model.TableInfo) error {
-					tableInfoValue, err := json.Marshal(tableInfo)
+					tableID, tableName, partitionIDs, err := addTableInfoToBatchWithEncryption(
+						batch, snapTs, dbInfo, tableInfo, encMgr, keyspaceID)
 					if err != nil {
-						callbackErr = errors.WrapError(errors.ErrMarshalFailed, err)
+						callbackErr = err
 						return callbackErr
 					}
-					tableID, tableName, partitionIDs := addTableInfoToBatchWithEncryption(
-						batch, snapTs, dbInfo, tableInfo, tableInfoValue, encMgr, keyspaceID)
 					if collectMetaInfo {
 						tableMap[tableID] = &BasicTableInfo{
 							SchemaID: dbInfo.ID,

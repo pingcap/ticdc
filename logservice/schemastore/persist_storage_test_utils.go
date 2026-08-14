@@ -15,7 +15,6 @@ package schemastore
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -133,12 +132,11 @@ func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos []mockDBInfo) {
 	for _, dbInfo := range dbInfos {
 		addSchemaInfoToBatch(batch, snapTs, dbInfo.dbInfo)
 		for _, tableInfo := range dbInfo.tables {
-			tableInfoValue, err := json.Marshal(tableInfo)
+			_, _, _, err := addTableInfoToBatchWithEncryption(
+				batch, snapTs, dbInfo.dbInfo, tableInfo, nil, 0)
 			if err != nil {
-				log.Panic("marshal table info fail", zap.Error(err))
+				log.Panic("add table info to batch fail", zap.Error(err))
 			}
-			addTableInfoToBatchWithEncryption(
-				batch, snapTs, dbInfo.dbInfo, tableInfo, tableInfoValue, nil, 0)
 		}
 	}
 	if err := batch.Commit(pebble.NoSync); err != nil {
