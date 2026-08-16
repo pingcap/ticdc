@@ -303,8 +303,8 @@ func TestGetAllPhysicalTablesSkipsViews(t *testing.T) {
 	}()
 	addSchemaInfoToBatch(batch, snapshotTs, dbInfo)
 	for _, info := range []*model.TableInfo{tableInfo, viewInfo} {
-		_, _, _, err := addTableInfoToBatchWithEncryption(
-			batch, snapshotTs, dbInfo, info, nil, 0)
+		_, _, _, _, err := addTableInfoToBatchWithEncryption(
+			batch, snapshotTs, dbInfo, info, nil, 0, nil)
 		require.NoError(t, err)
 	}
 	require.NoError(t, batch.Commit(pebble.NoSync))
@@ -327,6 +327,34 @@ func TestGetAllPhysicalTablesSkipsViews(t *testing.T) {
 			},
 		},
 	}, tables)
+}
+
+func TestAddTableInfoToBatchReusesMarshalBuffer(t *testing.T) {
+	db, err := pebble.Open(t.TempDir(), &pebble.Options{})
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, db.Close())
+	}()
+
+	const snapshotTs = uint64(100)
+	dbInfo := &model.DBInfo{ID: 100, Name: ast.NewCIStr("test")}
+	tableInfo := newEligibleTableInfoForTest(200, "t1")
+	batch := db.NewBatch()
+	defer func() {
+		require.NoError(t, batch.Close())
+	}()
+
+	_, _, _, marshalBuf, err := addTableInfoToBatchWithEncryption(
+		batch, snapshotTs, dbInfo, tableInfo, nil, 0, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, marshalBuf)
+	firstByte := &marshalBuf[0]
+
+	_, _, _, marshalBuf, err = addTableInfoToBatchWithEncryption(
+		batch, snapshotTs, dbInfo, tableInfo, nil, 0, marshalBuf)
+	require.NoError(t, err)
+	require.NotEmpty(t, marshalBuf)
+	require.Same(t, firstByte, &marshalBuf[0])
 }
 
 type snapshotLostByGCError struct{}

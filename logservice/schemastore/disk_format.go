@@ -59,7 +59,8 @@ const (
 	snapshotPartitionKeyPrefix = "sp_"
 	ddlKeyPrefix               = "ds_"
 
-	schemaStoreKeyMaskLen = 8
+	schemaStoreKeyMaskLen        = 8
+	schemaSnapshotBatchFlushSize = 512 * 1024
 )
 
 const (
@@ -747,10 +748,11 @@ func addTableInfoToBatchWithEncryption(
 	tableInfo *model.TableInfo,
 	encMgr encryption.EncryptionManager,
 	keyspaceID uint32,
-) (int64, string, []int64, error) {
+	marshalBuf []byte,
+) (int64, string, []int64, []byte, error) {
 	tableInfoValue, err := json.Marshal(tableInfo)
 	if err != nil {
-		return 0, "", nil, errors.WrapError(errors.ErrMarshalFailed, err)
+		return 0, "", nil, marshalBuf, errors.WrapError(errors.ErrMarshalFailed, err)
 	}
 	// write table info to batch
 	tableKey, err := tableInfoKey(ts, tableInfo.ID)
@@ -762,10 +764,11 @@ func addTableInfoToBatchWithEncryption(
 		SchemaName:     dbInfo.Name.O,
 		TableInfoValue: tableInfoValue,
 	}
-	tableInfoEntryValue, err := tableInfoEntry.MarshalMsg(nil)
+	tableInfoEntryValue, err := tableInfoEntry.MarshalMsg(marshalBuf[:0])
 	if err != nil {
 		log.Fatal("marshal table info entry failed", zap.Error(err))
 	}
+	marshalBuf = tableInfoEntryValue
 
 	keyMask := uint64(0)
 	// Encrypt if encryption is enabled
@@ -797,7 +800,7 @@ func addTableInfoToBatchWithEncryption(
 			partitionIDs = append(partitionIDs, partition.ID)
 		}
 	}
-	return tableInfo.ID, tableInfo.Name.O, partitionIDs, nil
+	return tableInfo.ID, tableInfo.Name.O, partitionIDs, marshalBuf, nil
 }
 
 // persistSchemaSnapshot write database/table/partition info to disks.
@@ -841,6 +844,7 @@ func persistSchemaSnapshotWithEncryption(
 			tableMap = make(map[int64]*BasicTableInfo)
 			partitionMap = make(map[int64]BasicPartitionInfo)
 		}
+		var tableInfoEntryMarshalBuf []byte
 		for _, dbInfo := range dbInfos {
 			if filter.IsSysSchema(dbInfo.Name.O) {
 				continue
@@ -855,8 +859,11 @@ func persistSchemaSnapshotWithEncryption(
 
 				var callbackErr error
 				err := meta.IterTables(dbInfo.ID, func(tableInfo *model.TableInfo) error {
-					tableID, tableName, partitionIDs, err := addTableInfoToBatchWithEncryption(
-						batch, snapTs, dbInfo, tableInfo, encMgr, keyspaceID)
+					tableID, tableName, partitionIDs, marshalBuf, err :=
+						addTableInfoToBatchWithEncryption(
+							batch, snapTs, dbInfo, tableInfo, encMgr, keyspaceID,
+							tableInfoEntryMarshalBuf)
+					tableInfoEntryMarshalBuf = marshalBuf
 					if err != nil {
 						callbackErr = err
 						return callbackErr
@@ -872,8 +879,9 @@ func persistSchemaSnapshotWithEncryption(
 							partitionMap[tableID].AddPartitionIDs(partitionIDs...)
 						}
 					}
-					// Bound the buffered snapshot data and reuse its allocation.
-					if batch.Len() >= 8*1024*1024 {
+					// Keep the batch below Pebble's 1 MiB retention limit so Reset
+					// can reuse the backing buffer instead of allocating it again.
+					if batch.Len() >= schemaSnapshotBatchFlushSize {
 						if err := batch.Commit(pebble.NoSync); err != nil {
 							callbackErr = errors.WrapError(
 								errors.ErrUnexpected, err, "commit schema snapshot batch")
