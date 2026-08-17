@@ -15,6 +15,7 @@ package canal
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 
@@ -22,9 +23,14 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+<<<<<<< HEAD
+=======
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
+	"github.com/pingcap/tidb/pkg/kv"
+	"github.com/pingcap/tidb/pkg/tablecodec"
+>>>>>>> c4b1563cb (canal: avoid hard-coded table IDs in TestRowKey (#5982))
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
@@ -1406,9 +1412,7 @@ func TestRowKey(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotEqual(t, tidb_ext.CommitTs, 0)
-	expected := "dIAAAAAAAAB0X3KAAAAAAAAAAQ=="
-	if kerneltype.IsNextGen() {
-		expected = "dIAAAAAAAAAHX3KAAAAAAAAAAQ=="
-	}
+	expectedRowKey := tablecodec.EncodeRowKeyWithHandle(tableInfo.TableName.TableID, kv.IntHandle(1))
+	expected := base64.StdEncoding.EncodeToString(expectedRowKey)
 	require.Equal(t, expected, tidb_ext.Rowkey)
 }
