@@ -439,7 +439,7 @@ func TestRegionEventHandlerInitializedResetsRecoveryState(t *testing.T) {
 	}
 	failureHandler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
 	key := newRegionRecoveryKey(span.subID, span.span)
-	failureHandler.recoveries[key] = &regionRecoveryState{}
+	failureHandler.recovery.states[key] = &regionRecoveryState{}
 
 	region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), span.span, nil, span, false)
 	region.lockedRangeState = &regionlock.LockedRangeState{}
@@ -461,9 +461,9 @@ func TestRegionEventHandlerInitializedResetsRecoveryState(t *testing.T) {
 		},
 	})
 
-	failureHandler.recoveryMu.Lock()
-	_, ok := failureHandler.recoveries[key]
-	failureHandler.recoveryMu.Unlock()
+	failureHandler.recovery.Lock()
+	_, ok := failureHandler.recovery.states[key]
+	failureHandler.recovery.Unlock()
 	require.False(t, ok)
 }
 

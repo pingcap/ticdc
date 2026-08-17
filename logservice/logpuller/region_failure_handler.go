@@ -45,8 +45,10 @@ var (
 type regionFailureHandler struct {
 	cache       *errCache
 	regionCache *tikv.RegionCache
-	recoveryMu  sync.Mutex
-	recoveries  map[regionRecoveryKey]*regionRecoveryState
+	recovery     struct {
+		sync.Mutex
+		states map[regionRecoveryKey]*regionRecoveryState
+	}
 
 	onTableDrained        func(*subscribedSpan)
 	scheduleRegionRequest func(context.Context, regionInfo)
@@ -54,8 +56,14 @@ type regionFailureHandler struct {
 }
 
 const (
+	// regionRecoveryBaseDelay is the initial retry backoff for one logical
+	// range after a transient region failure.
 	regionRecoveryBaseDelay = 50 * time.Millisecond
+	// regionRecoveryMaxDelay is the upper bound of the exponential retry
+	// backoff for one logical range.
 	regionRecoveryMaxDelay  = 2 * time.Second
+	// regionRecoveryStateTTL is how long retry state is kept without a
+	// successful reset before it is garbage-collected.
 	regionRecoveryStateTTL  = 5 * time.Minute
 )
 
@@ -105,16 +113,21 @@ func newRegionFailureHandler(
 	scheduleRegionRequest func(context.Context, regionInfo),
 	scheduleRangeRequest func(context.Context, rangeTask),
 ) *regionFailureHandler {
-	return &regionFailureHandler{
+	handler := &regionFailureHandler{
 		cache:                 newErrCache(),
 		regionCache:           regionCache,
-		recoveries:            make(map[regionRecoveryKey]*regionRecoveryState),
 		onTableDrained:        onTableDrained,
 		scheduleRegionRequest: scheduleRegionRequest,
 		scheduleRangeRequest:  scheduleRangeRequest,
 	}
+	handler.recovery.states = make(map[regionRecoveryKey]*regionRecoveryState)
+	return handler
 }
 
+// scheduleRecovery applies per-range retry backoff for transient failures. It
+// keeps retry state by logical range, extends that state while a delayed retry
+// is still pending, and skips the retry if the subscription or context has
+// already stopped.
 func (r *regionFailureHandler) scheduleRecovery(
 	ctx context.Context,
 	subscribedSpan *subscribedSpan,
@@ -127,11 +140,11 @@ func (r *regionFailureHandler) scheduleRecovery(
 	}
 	key := newRegionRecoveryKey(subscribedSpan.subID, span)
 
-	r.recoveryMu.Lock()
-	state := r.recoveries[key]
+	r.recovery.Lock()
+	state := r.recovery.states[key]
 	if state == nil {
 		state = &regionRecoveryState{}
-		r.recoveries[key] = state
+		r.recovery.states[key] = state
 	}
 	if state.attempt < 32 {
 		state.attempt++
@@ -141,17 +154,17 @@ func (r *regionFailureHandler) scheduleRecovery(
 		delay = minDelay
 	}
 	state.expiresAt = time.Now().Add(delay + regionRecoveryStateTTL)
-	r.recoveryMu.Unlock()
+	r.recovery.Unlock()
 
 	time.AfterFunc(delay, func() {
-		r.recoveryMu.Lock()
-		if r.recoveries[key] != state {
-			r.recoveryMu.Unlock()
+		r.recovery.Lock()
+		if r.recovery.states[key] != state {
+			r.recovery.Unlock()
 			return
 		}
 		// Keep the attempt until the retry succeeds or the state expires.
 		state.expiresAt = time.Now().Add(regionRecoveryStateTTL)
-		r.recoveryMu.Unlock()
+		r.recovery.Unlock()
 
 		if ctx.Err() != nil || subscribedSpan.stopped.Load() {
 			r.resetRecovery(key)
@@ -162,19 +175,19 @@ func (r *regionFailureHandler) scheduleRecovery(
 }
 
 func (r *regionFailureHandler) expireRecoveries(now time.Time) {
-	r.recoveryMu.Lock()
-	defer r.recoveryMu.Unlock()
-	for key, state := range r.recoveries {
+	r.recovery.Lock()
+	defer r.recovery.Unlock()
+	for key, state := range r.recovery.states {
 		if !state.expiresAt.After(now) {
-			delete(r.recoveries, key)
+			delete(r.recovery.states, key)
 		}
 	}
 }
 
 func (r *regionFailureHandler) resetRecovery(key regionRecoveryKey) {
-	r.recoveryMu.Lock()
-	defer r.recoveryMu.Unlock()
-	delete(r.recoveries, key)
+	r.recovery.Lock()
+	defer r.recovery.Unlock()
+	delete(r.recovery.states, key)
 }
 
 func (r *regionFailureHandler) resetRegionRecovery(region regionInfo) {
@@ -182,9 +195,9 @@ func (r *regionFailureHandler) resetRegionRecovery(region regionInfo) {
 }
 
 func (r *regionFailureHandler) cancelRecoveries() {
-	r.recoveryMu.Lock()
-	defer r.recoveryMu.Unlock()
-	clear(r.recoveries)
+	r.recovery.Lock()
+	defer r.recovery.Unlock()
+	clear(r.recovery.states)
 }
 
 // Report admits a region failure into the recovery pipeline. It releases the

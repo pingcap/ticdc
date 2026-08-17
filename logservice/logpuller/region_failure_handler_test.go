@@ -223,9 +223,9 @@ func TestRegionRecoveryBackoffFollowsRangeAcrossRegionChanges(t *testing.T) {
 	}
 
 	key := newRegionRecoveryKey(region.subscribedSpan.subID, region.span)
-	handler.recoveryMu.Lock()
-	attempt := handler.recoveries[key].attempt
-	handler.recoveryMu.Unlock()
+	handler.recovery.Lock()
+	attempt := handler.recovery.states[key].attempt
+	handler.recovery.Unlock()
 	require.Equal(t, uint32(2), attempt)
 }
 
@@ -233,14 +233,14 @@ func TestRegionFailureHandlerRequestCancelledResetsRecoveryState(t *testing.T) {
 	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
 	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
 	key := newRegionRecoveryKey(region.subscribedSpan.subID, region.span)
-	handler.recoveries[key] = &regionRecoveryState{}
+	handler.recovery.states[key] = &regionRecoveryState{}
 
 	err := handler.handleError(context.Background(), newRegionErrorInfo(region, &requestCancelledErr{}))
 	require.NoError(t, err)
 
-	handler.recoveryMu.Lock()
-	_, ok := handler.recoveries[key]
-	handler.recoveryMu.Unlock()
+	handler.recovery.Lock()
+	_, ok := handler.recovery.states[key]
+	handler.recovery.Unlock()
 	assert.False(t, ok)
 }
 
@@ -249,15 +249,15 @@ func TestRegionFailureHandlerExpiresRecoveryStates(t *testing.T) {
 	now := time.Now()
 	expiredKey := newRegionRecoveryKey(1, heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("b")})
 	activeKey := newRegionRecoveryKey(1, heartbeatpb.TableSpan{StartKey: []byte("b"), EndKey: []byte("c")})
-	handler.recoveries[expiredKey] = &regionRecoveryState{expiresAt: now.Add(-time.Second)}
-	handler.recoveries[activeKey] = &regionRecoveryState{expiresAt: now.Add(time.Second)}
+	handler.recovery.states[expiredKey] = &regionRecoveryState{expiresAt: now.Add(-time.Second)}
+	handler.recovery.states[activeKey] = &regionRecoveryState{expiresAt: now.Add(time.Second)}
 
 	handler.expireRecoveries(now)
 
-	handler.recoveryMu.Lock()
-	_, expiredExists := handler.recoveries[expiredKey]
-	_, activeExists := handler.recoveries[activeKey]
-	handler.recoveryMu.Unlock()
+	handler.recovery.Lock()
+	_, expiredExists := handler.recovery.states[expiredKey]
+	_, activeExists := handler.recovery.states[activeKey]
+	handler.recovery.Unlock()
 	require.False(t, expiredExists)
 	require.True(t, activeExists)
 }
