@@ -50,6 +50,7 @@ const (
 	requestLatencyInMsMetricNamePrefix = "request-latency-in-ms-for-broker-"
 	requestsInFlightMetricNamePrefix   = "requests-in-flight-for-broker-"
 	responseRateMetricNamePrefix       = "response-rate-for-broker-"
+	throttleTimeMetricNamePrefix       = "throttle-time-in-ms-for-broker-"
 
 	p99 = "p99"
 	avg = "avg"
@@ -168,6 +169,18 @@ func (m *saramaMetricsCollector) collectBrokerMetrics() {
 				WithLabelValues(keyspace, changefeedID, brokerID).
 				Set(meter.Snapshot().Rate1())
 		}
+
+		throttleTimeMetric := m.registry.Get(getBrokerMetricName(
+			throttleTimeMetricNamePrefix, brokerID))
+		if histogram, ok := throttleTimeMetric.(metrics.Histogram); ok {
+			snapshot := histogram.Snapshot()
+			throttleTimeGauge.
+				WithLabelValues(keyspace, changefeedID, brokerID, avg).
+				Set(snapshot.Mean() / 1000)
+			throttleTimeGauge.
+				WithLabelValues(keyspace, changefeedID, brokerID, p99).
+				Set(snapshot.Percentile(0.99) / 1000)
+		}
 	}
 }
 
@@ -204,6 +217,10 @@ func (m *saramaMetricsCollector) cleanupBrokerMetrics() {
 			DeleteLabelValues(keyspace, changefeedID, brokerID)
 		responseRateGauge.
 			DeleteLabelValues(keyspace, changefeedID, brokerID)
+		throttleTimeGauge.
+			DeleteLabelValues(keyspace, changefeedID, brokerID, avg)
+		throttleTimeGauge.
+			DeleteLabelValues(keyspace, changefeedID, brokerID, p99)
 
 	}
 }
