@@ -411,15 +411,11 @@ func (c *Config) Validate() error {
 	}
 
 	if c.MaxMessageBytes <= 0 {
-		return errors.ErrCodecInvalidConfig.Wrap(
-			errors.Errorf("invalid max-message-bytes %d", c.MaxMessageBytes),
-		)
+		return errors.ErrCodecInvalidConfig.GenWithStack("invalid max-message-bytes %d", c.MaxMessageBytes)
 	}
 
 	if c.MaxBatchSize <= 0 {
-		return errors.ErrCodecInvalidConfig.Wrap(
-			errors.Errorf("invalid max-batch-size %d", c.MaxBatchSize),
-		)
+		return errors.ErrCodecInvalidConfig.GenWithStack("invalid max-batch-size %d", c.MaxBatchSize)
 	}
 
 	if c.LargeMessageHandle != nil {
