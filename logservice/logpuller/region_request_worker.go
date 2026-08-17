@@ -112,6 +112,7 @@ func newRegionRequestWorker(
 	storeAddr string,
 	currentWindow int,
 	maxWindowMultiplier int,
+	memoryQuota *memoryQuotaController,
 ) *regionRequestWorker {
 	workerID := workerIDGen.Add(1)
 	return &regionRequestWorker{
@@ -120,9 +121,14 @@ func newRegionRequestWorker(
 		eventSink:      eventSink,
 		failureHandler: failureHandler,
 		storeAddr:      storeAddr,
-		admission:      newRegionAdmissionController(currentWindow, maxWindowMultiplier),
-		controlQueue:   newControlQueue(),
-		tracker:        newRegionTracker(),
+		admission: newRegionAdmissionController(
+			currentWindow,
+			maxWindowMultiplier,
+			memoryQuota,
+			upstream.pdClock,
+		),
+		controlQueue: newControlQueue(),
+		tracker:      newRegionTracker(),
 	}
 }
 
