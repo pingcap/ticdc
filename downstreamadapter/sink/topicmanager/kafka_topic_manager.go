@@ -208,33 +208,32 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 	ctx context.Context,
 	topicName string,
 ) error {
+	start := time.Now()
 	topics := []string{topicName}
 	err := retry.Do(ctx, func() error {
-		start := time.Now()
 		// ignoreTopicError is set to false since we just create the topic,
 		// make sure the topic is visible.
 		meta, err := m.admin.GetTopicsMeta(topics, false)
 		if err != nil {
-			log.Warn("topic not found, retry it",
-				zap.String("keyspace", m.changefeedID.Keyspace()),
-				zap.String("changefeed", m.changefeedID.Name()),
-				zap.Error(err),
-				zap.Duration("duration", time.Since(start)),
-			)
 			return err
 		}
-		log.Info("topic found",
-			zap.String("keyspace", m.changefeedID.Keyspace()),
-			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("topic", topicName),
-			zap.Int32("partitionNumber", meta[topicName].NumPartitions),
-			zap.Duration("duration", time.Since(start)))
+		_, ok := meta[topicName]
+		if !ok {
+			return errors.ErrKafkaAdminAPI.GenWithStackByArgs("describe-topic", topicName)
+		}
 		return nil
 	}, retry.WithBackoffBaseDelay(500),
 		retry.WithBackoffMaxDelay(1000),
 		retry.WithMaxTries(6),
 	)
-
+	if err != nil {
+		log.Warn("kafka topic metadata refresh failed",
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeed", m.changefeedID.Name()),
+			zap.String("topic", topicName),
+			zap.Duration("duration", time.Since(start)),
+			zap.Error(err))
+	}
 	return err
 }
 
