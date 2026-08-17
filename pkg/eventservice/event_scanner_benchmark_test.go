@@ -136,7 +136,6 @@ func BenchmarkDMLProcessorIgnoreDelete(b *testing.B) {
 			changefeedFilter,
 			false,
 			common.DefaultMode,
-			false,
 		)
 		b.ReportAllocs()
 		b.ResetTimer()

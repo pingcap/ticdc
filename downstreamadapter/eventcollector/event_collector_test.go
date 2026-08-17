@@ -145,10 +145,6 @@ func (m *mockEventDispatcher) GetRouter() routing.Router {
 	return routing.Router{}
 }
 
-func (m *mockEventDispatcher) EnableIgnoreUpdateOnlyColumns() bool {
-	return false
-}
-
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
 	targetMessage := messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, msg)
 	targetMessage.From = id
