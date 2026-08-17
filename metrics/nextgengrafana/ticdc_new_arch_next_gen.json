@@ -8119,7 +8119,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Actual event memory, estimated in-flight scan memory, and the configured memory limits.",
+          "description": "Log puller memory quota",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -8162,7 +8162,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_log_puller_memory_quota{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}) by (instance, type)",
+              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", module=~\"log-puller\"}) by (instance, type)",
               "interval": "",
               "legendFormat": "{{instance}}-{{type}}",
               "refId": "A"
@@ -8179,7 +8179,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Memory Quota Usage",
+          "title": "Memory Quota",
           "tooltip": {
             "shared": true,
             "sort": 0,
