@@ -14,7 +14,6 @@
 package kafka
 
 import (
-	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -39,6 +38,8 @@ const (
 	defaultPartitionNum = 3
 	// defaultMaxRetry is the default retry budget for Kafka producers.
 	defaultMaxRetry = 5
+	// defaultTimeout is the default timeout for Kafka connections.
+	defaultTimeout = 10 * time.Second
 
 	// the `max-message-bytes` is set equal to topic's `max.message.bytes`, and is used to check
 	// whether the message is larger than the max size limit. It's found some message pass the message
@@ -192,27 +193,25 @@ func NewOptions() *options {
 		InsecureSkipVerify: false,
 		SASL:               &security.SASL{},
 		AutoCreate:         true,
-		DialTimeout:        10 * time.Second,
-		WriteTimeout:       10 * time.Second,
-		ReadTimeout:        10 * time.Second,
+		DialTimeout:        defaultTimeout,
+		WriteTimeout:       defaultTimeout,
+		ReadTimeout:        defaultTimeout,
 	}
 }
 
 // setPartitionNum set the partition-num by the topic's partition count.
-func (o *options) setPartitionNum(realPartitionCount int32) error {
+func (o *options) setPartitionNum(changefeedID common.ChangeFeedID, realPartitionCount int32) error {
 	// user does not specify the `partition-num` in the sink-uri
 	if o.PartitionNum == 0 {
 		o.PartitionNum = realPartitionCount
-		log.Info("partitionNum is not set, set by topic's partition-num",
-			zap.Int32("partitionNum", realPartitionCount))
 		return nil
 	}
 
 	if o.PartitionNum < realPartitionCount {
-		log.Warn("number of partition specified in sink-uri is less than that of the actual topic. "+
-			"Some partitions will not have messages dispatched to",
-			zap.Int32("sinkUriPartitions", o.PartitionNum),
-			zap.Int32("topicPartitions", realPartitionCount))
+		log.Warn("configured kafka partition count is lower than topic partition count",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
+			zap.Int32("configuredPartitionNum", o.PartitionNum),
+			zap.Int32("topicPartitionNum", realPartitionCount))
 		return nil
 	}
 
@@ -295,6 +294,9 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
+		if a <= 0 {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("dial-timeout must be greater than zero")
+		}
 		o.DialTimeout = a
 	}
 
@@ -303,6 +305,9 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
+		if a <= 0 {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("write-timeout must be greater than zero")
+		}
 		o.WriteTimeout = a
 	}
 
@@ -310,6 +315,9 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		a, err := time.ParseDuration(*urlParameter.ReadTimeout)
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		}
+		if a <= 0 {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("read-timeout must be greater than zero")
 		}
 		o.ReadTimeout = a
 	}
@@ -563,14 +571,14 @@ func (c *AutoCreateTopicConfig) ValidateReplicationFactor(admin ClusterAdminClie
 
 	raw, found, err := admin.GetBrokerConfig(MinInsyncReplicasConfigName)
 	if err != nil {
-		log.Warn("cannot get Kafka broker configuration, assume replication factor is valid",
+		log.Warn("kafka broker configuration lookup failed, skipping replication factor validation",
 			zap.String("configName", MinInsyncReplicasConfigName),
 			zap.Int16("replicationFactor", c.ReplicationFactor),
 			zap.Error(err))
 		return nil
 	}
 	if !found {
-		log.Warn("Kafka broker configuration not found, assume replication factor is valid",
+		log.Warn("kafka broker configuration not found, skipping replication factor validation",
 			zap.String("configName", MinInsyncReplicasConfigName),
 			zap.Int16("replicationFactor", c.ReplicationFactor))
 		return nil
@@ -617,7 +625,7 @@ func NewKafkaClientID(captureAddr string,
 
 // adjustOptions adjust the `options` and `sarama.Config` by condition.
 func adjustOptions(
-	ctx context.Context,
+	changefeedID common.ChangeFeedID,
 	admin ClusterAdminClient,
 	options *options,
 	topic string,
@@ -633,7 +641,7 @@ func adjustOptions(
 	if exists {
 		// make sure that producer's `MaxMessageBytes` smaller than topic's `max.message.bytes`
 		topicMaxMessageBytesStr, found, err := getTopicConfig(
-			ctx, admin, info.Name,
+			admin, info.Name,
 			TopicMaxMessageBytesConfigName,
 			BrokerMessageMaxBytesConfigName,
 		)
@@ -665,12 +673,7 @@ func adjustOptions(
 
 		// no need to create the topic,
 		// but we would have to log user if they found enter wrong topic name later
-		if options.AutoCreate {
-			log.Warn("topic already exist, TiCDC will not create the topic",
-				zap.String("topic", topic), zap.Any("detail", info))
-		}
-
-		if err = options.setPartitionNum(info.NumPartitions); err != nil {
+		if err = options.setPartitionNum(changefeedID, info.NumPartitions); err != nil {
 			return err
 		}
 
@@ -711,8 +714,6 @@ func adjustOptions(
 	// topic not exists yet, and user does not specify the `partition-num` in the sink uri.
 	if options.PartitionNum == 0 {
 		options.PartitionNum = defaultPartitionNum
-		log.Warn("partition-num is not set, use the default partition count",
-			zap.String("topic", topic), zap.Int32("partitions", options.PartitionNum))
 	}
 	return nil
 }
@@ -722,7 +723,6 @@ func adjustOptions(
 // we will try to get it from the broker's configuration.
 // NOTICE: The configuration names of topic and broker may be different for the same configuration.
 func getTopicConfig(
-	_ context.Context,
 	admin ClusterAdminClient,
 	topicName string,
 	topicConfigName string,
@@ -733,7 +733,5 @@ func getTopicConfig(
 		return c, true, nil
 	}
 
-	log.Info("kafka sink cannot get the configuration from topic, try to get it from broker",
-		zap.String("topic", topicName), zap.String("config", topicConfigName), zap.Error(err))
 	return admin.GetBrokerConfig(brokerConfigName)
 }

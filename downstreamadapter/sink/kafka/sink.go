@@ -235,7 +235,7 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	case *commonEvent.DDLEvent:
 		err = s.sendDDLEvent(v)
 	default:
-		log.Error("kafka sink doesn't support this type of block event",
+		log.Error("unsupported kafka sink block event type",
 			zap.String("namespace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.String("eventType", commonEvent.TypeToString(event.GetType())))
@@ -370,10 +370,6 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 		start := time.Now()
 		msgs, err := s.batch(ctx, msgsBuf)
 		if err != nil {
-			log.Error("kafka sink batch dml events failed",
-				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.String("changefeed", s.changefeedID.Name()),
-				zap.Error(err))
 			return err
 		}
 		if len(msgs) == 0 {
@@ -443,16 +439,11 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				start := time.Now()
 				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
-					log.Debug("send message to kafka", zap.String("messageKey", util.RedactBytes(message.Key)), zap.String("messageValue", util.RedactBytes(message.Value)))
 					if err = s.dmlProducer.AsyncSend(
 						ctx,
 						future.Key.Topic,
 						future.Key.Partition,
 						message); err != nil {
-						log.Error("kafka sink send message failed",
-							zap.String("keyspace", s.changefeedID.Keyspace()),
-							zap.String("changefeed", s.changefeedID.Name()),
-							zap.Error(err))
 						return 0, 0, err
 					}
 					return message.GetRowsCount(), int64(message.Length()), nil
@@ -472,9 +463,10 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 			return err
 		}
 		if message == nil {
-			log.Info("Skip ddl event", zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", e.GetCommitTs()),
-				zap.String("query", e.Query),
-				zap.Stringer("changefeed", s.changefeedID))
+			log.Info("kafka ddl event skipped",
+				zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
+				zap.Uint64("startTs", e.GetStartTs()), zap.Uint64("commitTs", e.GetCommitTs()),
+				zap.String("query", e.Query))
 			continue
 		}
 		codecCommon.SetDDLMessageLogInfo(message, e)
@@ -500,11 +492,11 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
+		log.Info("kafka ddl event sent",
+			zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
+			zap.Uint64("startTs", e.GetStartTs()), zap.Uint64("commitTs", e.GetCommitTs()),
+			zap.String("query", e.GetDDLQuery()))
 	}
-	log.Info("kafka sink send DDL event",
-		zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
-		zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()),
-		zap.String("schema", event.GetSchemaName()), zap.String("table", event.GetTableName()))
 	return nil
 }
 
@@ -589,10 +581,6 @@ func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 
 func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 	if s.tableSchemaStore == nil {
-		log.Warn("kafka sink table schema store is not set",
-			zap.String("keyspace", s.changefeedID.Keyspace()),
-			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Uint64("ts", ts))
 		return nil
 	}
 	return s.tableSchemaStore.GetAllTableNames(ts)

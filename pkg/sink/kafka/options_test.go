@@ -300,17 +300,18 @@ func TestCompleteOptions(t *testing.T) {
 
 func TestSetPartitionNum(t *testing.T) {
 	options := NewOptions()
-	err := options.setPartitionNum(2)
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
+	err := options.setPartitionNum(changefeedID, 2)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), options.PartitionNum)
 
 	options.PartitionNum = 1
-	err = options.setPartitionNum(2)
+	err = options.setPartitionNum(changefeedID, 2)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), options.PartitionNum)
 
 	options.PartitionNum = 3
-	err = options.setPartitionNum(2)
+	err = options.setPartitionNum(changefeedID, 2)
 	require.True(t, errors.ErrKafkaInvalidConfig.Equal(err))
 }
 
@@ -378,6 +379,30 @@ func TestTimeout(t *testing.T) {
 	require.Equal(t, 2*time.Minute, options.WriteTimeout)
 }
 
+func TestApplyRejectsNonPositiveTimeout(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
+	for _, parameter := range []string{"dial-timeout", "read-timeout", "write-timeout"} {
+		for _, value := range []string{"0s", "-1s"} {
+			t.Run(parameter+"="+value, func(t *testing.T) {
+				t.Parallel()
+
+				sinkURI, err := url.Parse(
+					"kafka://127.0.0.1:9092/kafka-test?" + parameter + "=" + value)
+				require.NoError(t, err)
+
+				err = NewOptions().Apply(
+					changefeedID, sinkURI, config.GetDefaultReplicaConfig().Sink)
+				require.ErrorContains(t, err, parameter+" must be greater than zero")
+				errCode, ok := errors.RFCCode(err)
+				require.True(t, ok)
+				require.Equal(t, errors.ErrKafkaInvalidConfig.RFCCode(), errCode)
+			})
+		}
+	}
+}
+
 func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *testing.T) {
 	tests := []struct {
 		name                      string
@@ -404,6 +429,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 	}
 
 	topicName := "test-topic"
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			adminFixture := newKafkaAdminFixture(t)
@@ -425,7 +451,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 			)
 
 			ctx := context.Background()
-			err = adjustOptions(ctx, adminClient, options, topicName)
+			err = adjustOptions(changefeedID, adminClient, options, topicName)
 			require.NoError(t, err)
 
 			saramaConfig, err := newSaramaConfig(ctx, options)
@@ -653,7 +679,8 @@ func TestConfigurationCombinations(t *testing.T) {
 			}
 			expectedMaxMessageBytes := expectedAdjustedMaxMessageBytes(options.MaxMessageBytes, sourceMaxMessageBytes)
 
-			err = adjustOptions(context.Background(), adminClient, options, topic)
+			changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
+			err = adjustOptions(changefeedID, adminClient, options, topic)
 			require.Nil(t, err)
 			require.Equal(t, expectedMaxMessageBytes, options.MaxMessageBytes)
 
