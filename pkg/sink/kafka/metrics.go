@@ -74,7 +74,7 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "sink",
 			Name:      "kafka_producer_throttle_time",
-			Help:      "Kafka broker throttle time in milliseconds.",
+			Help:      "Kafka broker throttle time in seconds.",
 		}, []string{"namespace", "changefeed", "broker", "type"})
 
 	// Meter mark by 1 once a response received.

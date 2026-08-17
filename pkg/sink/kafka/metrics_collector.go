@@ -176,10 +176,10 @@ func (m *saramaMetricsCollector) collectBrokerMetrics() {
 			snapshot := histogram.Snapshot()
 			throttleTimeGauge.
 				WithLabelValues(keyspace, changefeedID, brokerID, avg).
-				Set(snapshot.Mean())
+				Set(snapshot.Mean() / 1000)
 			throttleTimeGauge.
 				WithLabelValues(keyspace, changefeedID, brokerID, p99).
-				Set(snapshot.Percentile(0.99))
+				Set(snapshot.Percentile(0.99) / 1000)
 		}
 	}
 }
