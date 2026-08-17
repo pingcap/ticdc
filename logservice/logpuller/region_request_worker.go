@@ -62,6 +62,7 @@ type regionRequestWorker struct {
 }
 
 func newRegionRequestWorker(
+<<<<<<< HEAD
 	ctx context.Context,
 	client *subscriptionClient,
 	credential *security.Credential,
@@ -74,6 +75,31 @@ func newRegionRequestWorker(
 		client:       client,
 		store:        store,
 		requestCache: newRequestCache(requestCacheSize),
+=======
+	upstream *upstreamHandle,
+	eventSink *regionEventSink,
+	failureHandler *regionFailureHandler,
+	storeAddr string,
+	currentWindow int,
+	maxWindowMultiplier int,
+	memoryQuota *memoryQuotaController,
+) *regionRequestWorker {
+	workerID := workerIDGen.Add(1)
+	return &regionRequestWorker{
+		workerID:       workerID,
+		upstream:       upstream,
+		eventSink:      eventSink,
+		failureHandler: failureHandler,
+		storeAddr:      storeAddr,
+		admission: newRegionAdmissionController(
+			currentWindow,
+			maxWindowMultiplier,
+			memoryQuota,
+			upstream.pdClock,
+		),
+		controlQueue: newControlQueue(),
+		tracker:      newRegionTracker(),
+>>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 	}
 	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
 

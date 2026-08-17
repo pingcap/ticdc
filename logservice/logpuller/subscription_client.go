@@ -142,6 +142,13 @@ type subscriptionClient struct {
 	eventSink *regionEventSink
 	// spanRegistry tracks subscribed spans and owns span-level background tasks.
 	spanRegistry *spanRegistry
+<<<<<<< HEAD
+=======
+	// regionScheduler assigns locked region requests to per-store workers.
+	regionScheduler *regionRequestScheduler
+	// memoryQuota owns event-memory accounting and initial-scan admission.
+	memoryQuota *memoryQuotaController
+>>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 
 	// rangeTaskCh is used to receive range tasks.
 	// The tasks will be handled in `handleRangeTask` goroutine.
@@ -179,11 +186,35 @@ func NewSubscriptionClient(
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
+<<<<<<< HEAD
 	subClient.failureHandler = newRegionFailureHandler(subClient)
 	subClient.eventSink = newRegionEventSink(subClient.failureHandler)
 	subClient.spanRegistry = newSpanRegistry(subClient.pd, subClient.pdClock)
 
 	subClient.initMetrics()
+=======
+	pullerConfig := config.GetGlobalServerConfig().Debug.Puller
+	subClient.memoryQuota = newMemoryQuotaController(
+		pullerConfig.MemoryQuota, pullerConfig.ScanBaseSize)
+	subClient.failureHandler = newRegionFailureHandler(
+		subClient.upstream.regionCache,
+		subClient.onTableDrained,
+		subClient.scheduleRegionRequest,
+		subClient.scheduleRangeRequest,
+	)
+	subClient.eventSink = newRegionEventSink(
+		subClient.ctx,
+		subClient.failureHandler,
+		subClient.memoryQuota,
+	)
+	subClient.spanRegistry = newSpanRegistry(subClient.upstream.pd, subClient.upstream.pdClock)
+	subClient.regionScheduler = newRegionRequestScheduler(
+		subClient.upstream,
+		subClient.eventSink,
+		subClient.failureHandler,
+		subClient.memoryQuota,
+	)
+>>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 	return subClient
 }
 
@@ -223,6 +254,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 
 			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(float64(pendingRegionReqCount))
 			s.eventSink.UpdateMetrics()
+			s.memoryQuota.UpdateMetrics()
 			s.spanRegistry.UpdateMetrics()
 		}
 	}
@@ -302,6 +334,16 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 
 	g, ctx := errgroup.WithContext(ctx)
 
+<<<<<<< HEAD
+=======
+	// The goroutines are listed by data flow; errgroup does not guarantee their
+	// actual startup order.
+	g.Go(func() error { return s.handleRangeTasks(ctx) })
+	g.Go(func() error { return s.regionScheduler.Run(ctx, g) })
+	g.Go(func() error { return s.failureHandler.Run(ctx) })
+	g.Go(func() error { return s.spanRegistry.Run(ctx) })
+	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
+>>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 	g.Go(func() error { return s.updateMetrics(ctx) })
 	g.Go(func() error { return s.eventSink.Run(ctx) })
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
@@ -331,7 +373,13 @@ func (s *subscriptionClient) setTableStopped(rt *subscribedSpan) {
 	// Then send a special singleRegionInfo to regionRouter to deregister the table
 	// from all TiKV instances.
 	if rt.stopped.CompareAndSwap(false, true) {
+<<<<<<< HEAD
 		s.regionTaskQueue.Push(NewRegionPriorityTask(TaskHighPrior, regionInfo{subscribedSpan: rt, filterLoop: rt.filterLoop}, s.pdClock.CurrentTS()))
+=======
+		// Wake event receivers and scan admission so they can observe stopped.
+		s.memoryQuota.WakeAll()
+		s.regionScheduler.BroadcastDeregister(rt.subID, rt.filterLoop)
+>>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 		if rt.rangeLock.Stop() {
 			s.onTableDrained(rt)
 		}

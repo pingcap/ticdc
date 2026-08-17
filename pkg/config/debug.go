@@ -17,6 +17,24 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+<<<<<<< HEAD
+=======
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
+)
+
+const (
+	// DefaultOldStartTsScanLowPriorityThreshold is the default lag threshold for
+	// classifying scan tasks as low priority.
+	DefaultOldStartTsScanLowPriorityThreshold = 10 * time.Minute
+
+	// DefaultLogPullerMemoryQuota is the default Log Puller soft memory limit.
+	DefaultLogPullerMemoryQuota uint64 = 1024 * 1024 * 1024
+
+	// DefaultLogPullerScanBaseSize is the default base memory estimate for one
+	// initial scan.
+	DefaultLogPullerScanBaseSize uint64 = 8 * 1024 * 1024
+>>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 )
 
 // DebugConfig represents config for ticdc unexposed feature configurations
@@ -67,15 +85,78 @@ type PullerConfig struct {
 	// For example, if PendingRegionRequestQueueSize is 32 and there are 8 workers connecting to the same store,
 	// each worker's queue size will be 32 / 8 = 4.
 	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending_region_request_queue_size"`
+<<<<<<< HEAD
+=======
+	// RegionRequestMaxWindowMultiplier controls the maximum window available to
+	// previously initialized regions and regions whose scan lag is below the
+	// configured low-priority threshold.
+	// The approximate maximum store window is PendingRegionRequestQueueSize
+	// multiplied by this value.
+	RegionRequestMaxWindowMultiplier int `toml:"region-request-max-window-multiplier" json:"region_request_max_window_multiplier"`
+	// OldStartTsScanLowPriorityThreshold is the lag threshold for scan priority.
+	// Scans within this threshold are scheduled as high priority. Older scans
+	// remain low priority until their span catches up once.
+	OldStartTsScanLowPriorityThreshold TomlDuration `toml:"old-start-ts-scan-low-priority-threshold" json:"old_start_ts_scan_low_priority_threshold"`
+	// MemoryQuota is the log puller's local soft memory limit in bytes.
+	MemoryQuota uint64 `toml:"memory-quota" json:"memory_quota"`
+	// ScanBaseSize is the base memory estimate reserved for one admitted initial
+	// scan. The actual estimate grows logarithmically with scan lag, up to a
+	// bounded multiple of this value. The estimate contributes to MemoryQuota
+	// pressure and throttles new low-priority scans; it is not an actual memory
+	// allocation or a per-scan hard limit.
+	ScanBaseSize uint64 `toml:"scan-base-size" json:"scan_base_size"`
+>>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 }
 
 // NewDefaultPullerConfig return the default puller configuration
 func NewDefaultPullerConfig() *PullerConfig {
 	return &PullerConfig{
+<<<<<<< HEAD
 		EnableResolvedTsStuckDetection: false,
 		ResolvedTsStuckInterval:        TomlDuration(5 * time.Minute),
 		LogRegionDetails:               false,
 		PendingRegionRequestQueueSize:  32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
+=======
+		EnableResolvedTsStuckDetection:   false,
+		ResolvedTsStuckInterval:          TomlDuration(5 * time.Minute),
+		LogRegionDetails:                 false,
+		PendingRegionRequestQueueSize:    32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
+		RegionRequestMaxWindowMultiplier: 4,  // Allows high-priority scans to use up to 4 * PendingRegionRequestQueueSize.
+		OldStartTsScanLowPriorityThreshold: TomlDuration(
+			DefaultOldStartTsScanLowPriorityThreshold),
+		MemoryQuota:  DefaultLogPullerMemoryQuota,
+		ScanBaseSize: DefaultLogPullerScanBaseSize,
+	}
+}
+
+// ValidateAndAdjust validates and adjusts puller configuration.
+func (c *PullerConfig) ValidateAndAdjust() {
+	defaultCfg := NewDefaultPullerConfig()
+	if c.PendingRegionRequestQueueSize <= 0 {
+		log.Warn("pending region request queue size must be positive, use default value",
+			zap.Int("value", c.PendingRegionRequestQueueSize),
+			zap.Int("default", defaultCfg.PendingRegionRequestQueueSize))
+		c.PendingRegionRequestQueueSize = defaultCfg.PendingRegionRequestQueueSize
+	}
+	if c.RegionRequestMaxWindowMultiplier <= 0 {
+		log.Warn("region request max window multiplier must be positive, use default value",
+			zap.Int("value", c.RegionRequestMaxWindowMultiplier),
+			zap.Int("default", defaultCfg.RegionRequestMaxWindowMultiplier))
+		c.RegionRequestMaxWindowMultiplier = defaultCfg.RegionRequestMaxWindowMultiplier
+	}
+	if c.OldStartTsScanLowPriorityThreshold <= 0 {
+		c.OldStartTsScanLowPriorityThreshold = TomlDuration(DefaultOldStartTsScanLowPriorityThreshold)
+>>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
+	}
+	if c.MemoryQuota == 0 {
+		log.Warn("log puller memory quota must be positive, use default value",
+			zap.Uint64("default", defaultCfg.MemoryQuota))
+		c.MemoryQuota = defaultCfg.MemoryQuota
+	}
+	if c.ScanBaseSize == 0 {
+		log.Warn("log puller scan base size must be positive, use default value",
+			zap.Uint64("default", defaultCfg.ScanBaseSize))
+		c.ScanBaseSize = defaultCfg.ScanBaseSize
 	}
 }
 

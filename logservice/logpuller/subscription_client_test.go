@@ -308,7 +308,11 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh: make(chan resolveLockTask, 1),
+<<<<<<< HEAD
 		regionTaskQueue:   priorityqueue.New[PriorityTask](),
+=======
+		memoryQuota:       newMemoryQuotaController(1024, 8),
+>>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
@@ -423,25 +427,66 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 	return dynstream.Metrics[int, SubscriptionID]{}
 }
 
+<<<<<<< HEAD
 func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 	sink := newTestRegionEventSink(&mockDynamicStream{})
 	client := &subscriptionClient{
 		eventSink:       sink,
 		regionTaskQueue: priorityqueue.New[PriorityTask](),
-	}
-	client.ctx, client.cancel = context.WithCancel(context.Background())
+=======
+func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	sink.paused.Store(true)
+	quota := newMemoryQuotaController(10, 8)
+	span := &subscribedSpan{subID: 1}
+	require.True(t, quota.AcquireEvent(ctx, span, 20))
+	t.Cleanup(func() { quota.ReleaseEvent(20) })
+
+	sink := &regionEventSink{
+		ctx:         ctx,
+		ds:          &mockDynamicStream{},
+		memoryQuota: quota,
+	}
+	client := &subscriptionClient{eventSink: sink}
+	client.regionScheduler = &regionRequestScheduler{
+		taskQueue: priorityqueue.New[*regionPriorityTask](),
+>>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
+	}
+	client.ctx = ctx
+	client.cancel = cancel
+
+	event := regionEvent{
+		states: []*regionFeedState{{
+			region: regionInfo{subscribedSpan: span},
+		}},
+		entries: &cdcpb.Event_Entries_{
+			Entries: &cdcpb.Event_Entries{
+				Entries: []*cdcpb.Event_Row{{
+					Key:   []byte("key"),
+					Value: []byte("value"),
+				}},
+			},
+		},
+	}
 
 	done := make(chan struct{})
 	go func() {
+<<<<<<< HEAD
 		client.pushRegionEventToDS(SubscriptionID(1), regionEvent{})
+=======
+		sink.Push(SubscriptionID(1), event)
+>>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 		close(done)
 	}()
 
 	select {
 	case <-done:
+<<<<<<< HEAD
 		t.Fatal("pushRegionEventToDS should block when paused")
+=======
+		t.Fatal("regionEventSink.Push should block when event memory is exhausted")
+>>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 	case <-time.After(100 * time.Millisecond):
 	}
 
