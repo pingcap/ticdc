@@ -308,6 +308,18 @@ func loadTablesInKVSnapWithEncryption(
 	encMgr encryption.EncryptionManager,
 	keyspaceID uint32,
 ) (map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
+	return loadTablesInKVSnapWithEncryptionAndCallback(
+		snap, gcTs, databaseMap, encMgr, keyspaceID, nil)
+}
+
+func loadTablesInKVSnapWithEncryptionAndCallback(
+	snap *pebble.Snapshot,
+	gcTs uint64,
+	databaseMap map[int64]*BasicDatabaseInfo,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
+	onTable func(schemaName string, tableInfo *model.TableInfo),
+) (map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
 	tablesInKVSnap := make(map[int64]*BasicTableInfo)
 	partitionsInKVSnap := make(map[int64]BasicPartitionInfo)
 
@@ -356,6 +368,9 @@ func loadTablesInKVSnapWithEncryption(
 			SchemaID: table_info_entry.SchemaID,
 			Name:     tableInfo.Name.O,
 		}
+		if onTable != nil {
+			onTable(table_info_entry.SchemaName, &tableInfo)
+		}
 		if tableInfo.Partition != nil {
 			partitionInfo := make(BasicPartitionInfo)
 			for _, partition := range tableInfo.Partition.Definitions {
@@ -365,6 +380,58 @@ func loadTablesInKVSnapWithEncryption(
 		}
 	}
 	return tablesInKVSnap, partitionsInKVSnap, nil
+}
+
+type physicalTableTraits struct {
+	isView    bool
+	eligible  bool
+	splitable bool
+}
+
+func physicalTableTraitsFromModel(
+	tableInfo *model.TableInfo,
+	tableFilter filter.Filter,
+) physicalTableTraits {
+	eligible := true
+	if tableFilter != nil {
+		// IsEligible only needs these structural fields. Avoid WrapTableInfo here,
+		// which would build and retain a full column schema for every table.
+		compactTableInfo := &common.TableInfo{
+			HasPKOrNotNullUK: common.OriginalHasPKOrNotNullUK(tableInfo),
+			View:             tableInfo.View,
+			Sequence:         tableInfo.Sequence,
+		}
+		eligible = tableFilter.IsEligibleTable(compactTableInfo)
+	}
+	return physicalTableTraits{
+		isView:    tableInfo.View != nil,
+		eligible:  eligible,
+		splitable: isSplitable(tableInfo),
+	}
+}
+
+func physicalTableTraitsFromCommon(
+	tableInfo *common.TableInfo,
+	tableFilter filter.Filter,
+) physicalTableTraits {
+	eligible := true
+	if tableFilter != nil {
+		eligible = tableFilter.IsEligibleTable(tableInfo)
+	}
+	splitable := tableInfo.GetPkColInfo() != nil
+	if splitable {
+		for _, index := range tableInfo.GetIndices() {
+			if !index.Primary && index.Unique {
+				splitable = false
+				break
+			}
+		}
+	}
+	return physicalTableTraits{
+		isView:    tableInfo.IsView(),
+		eligible:  eligible,
+		splitable: splitable,
+	}
 }
 
 func loadFullTablesInKVSnap(
@@ -859,10 +926,9 @@ func persistSchemaSnapshotWithEncryption(
 
 				var callbackErr error
 				err := meta.IterTables(dbInfo.ID, func(tableInfo *model.TableInfo) error {
-					tableID, tableName, partitionIDs, marshalBuf, err :=
-						addTableInfoToBatchWithEncryption(
-							batch, snapTs, dbInfo, tableInfo, encMgr, keyspaceID,
-							tableInfoEntryMarshalBuf)
+					tableID, tableName, partitionIDs, marshalBuf, err := addTableInfoToBatchWithEncryption(
+						batch, snapTs, dbInfo, tableInfo, encMgr, keyspaceID,
+						tableInfoEntryMarshalBuf)
 					tableInfoEntryMarshalBuf = marshalBuf
 					if err != nil {
 						callbackErr = err
@@ -984,6 +1050,32 @@ func cleanObsoleteData(db *pebble.DB, oldGcTs uint64, gcTs uint64) {
 	}
 }
 
+func loadPhysicalTableTraitsAtTs(
+	storageSnap *pebble.Snapshot,
+	gcTs uint64,
+	snapVersion uint64,
+	physicalTableID int64,
+	ddlHistory []uint64,
+	tableFilter filter.Filter,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
+) (physicalTableTraits, error) {
+	store := newEmptyVersionedTableInfoStore(physicalTableID)
+	if err := addTableInfoFromKVSnap(store, gcTs, storageSnap, encMgr, keyspaceID); err != nil {
+		return physicalTableTraits{}, err
+	}
+	for _, version := range ddlHistory {
+		ddlEvent := readPersistedDDLEventWithEncryption(storageSnap, version, encMgr, keyspaceID)
+		store.applyDDLFromPersistStorage(&ddlEvent)
+	}
+	store.setTableInfoInitialized()
+	tableInfo, err := store.getTableInfo(snapVersion)
+	if err != nil {
+		return physicalTableTraits{}, err
+	}
+	return physicalTableTraitsFromCommon(tableInfo, tableFilter), nil
+}
+
 func loadAllPhysicalTablesAtTs(
 	storageSnap *pebble.Snapshot,
 	gcTs uint64,
@@ -998,13 +1090,17 @@ func loadAllPhysicalTablesAtTs(
 		return nil, err
 	}
 
-	tableInfoMap, tableMap, partitionMap, err := loadFullTablesInKVSnapWithEncryption(
-		storageSnap, gcTs, databaseMap, encMgr, keyspaceID)
+	tableTraits := make(map[int64]physicalTableTraits)
+	tableMap, partitionMap, err := loadTablesInKVSnapWithEncryptionAndCallback(
+		storageSnap, gcTs, databaseMap, encMgr, keyspaceID,
+		func(_ string, tableInfo *model.TableInfo) {
+			tableTraits[tableInfo.ID] = physicalTableTraitsFromModel(tableInfo, tableFilter)
+		})
 	if err != nil {
 		return nil, err
 	}
 	log.Info("after load tables in kv snap",
-		zap.Int("tableInfoMapLen", len(tableInfoMap)),
+		zap.Int("tableTraitsLen", len(tableTraits)),
 		zap.Int("tableMapLen", len(tableMap)),
 		zap.Int("partitionMapLen", len(partitionMap)))
 
@@ -1025,6 +1121,8 @@ func loadAllPhysicalTablesAtTs(
 		log.Fatal("new iterator failed", zap.Error(err))
 	}
 	defer snapIter.Close()
+	tablesDDLHistory := make(map[int64][]uint64)
+	tableTriggerDDLHistory := make([]uint64, 0)
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
 		ddlValue := snapIter.Value()
 		ddlValue, err = decryptValueIfNeeded(snapIter.Key(), ddlValue, encMgr, keyspaceID)
@@ -1039,12 +1137,13 @@ func loadAllPhysicalTablesAtTs(
 		if !ok {
 			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
 		}
-		// Note: updateFullTableInfoFunc must be called before updateSchemaMetadataFunc,
-		// because it depends on some info which may be updated by updateSchemaMetadataFunc.
-		handler.updateFullTableInfoFunc(updateFullTableInfoFuncArgs{
-			event:        &ddlEvent,
-			databaseMap:  databaseMap,
-			tableInfoMap: tableInfoMap,
+		tableTriggerDDLHistory = handler.updateDDLHistoryFunc(updateDDLHistoryFuncArgs{
+			ddlEvent:               &ddlEvent,
+			databaseMap:            databaseMap,
+			tableMap:               tableMap,
+			partitionMap:           partitionMap,
+			tablesDDLHistory:       tablesDDLHistory,
+			tableTriggerDDLHistory: tableTriggerDDLHistory,
 		})
 		handler.updateSchemaMetadataFunc(updateSchemaMetadataFuncArgs{
 			event:        &ddlEvent,
@@ -1054,7 +1153,7 @@ func loadAllPhysicalTablesAtTs(
 		})
 	}
 	log.Info("after load tables from ddl",
-		zap.Int("tableInfoMapLen", len(tableInfoMap)),
+		zap.Int("tableTraitsLen", len(tableTraits)),
 		zap.Int("tableMapLen", len(tableMap)),
 		zap.Int("partitionMapLen", len(partitionMap)))
 	tables := make([]commonEvent.Table, 0)
@@ -1067,27 +1166,41 @@ func loadAllPhysicalTablesAtTs(
 				zap.Any("databaseMapLen", len(databaseMap)))
 		}
 		schemaName := databaseMap[tableInfo.SchemaID].Name
-		fullTableInfo, ok := tableInfoMap[tableID]
-		if !ok {
-			log.Panic("table info not found", zap.Int64("tableID", tableID))
+		physicalTableID := tableID
+		if partitionInfo, ok := partitionMap[tableID]; ok {
+			for partitionID := range partitionInfo {
+				physicalTableID = partitionID
+				break
+			}
+		}
+		traits, ok := tableTraits[tableID]
+		ddlHistory := tablesDDLHistory[physicalTableID]
+		if !ok || len(ddlHistory) > 0 {
+			traits, err = loadPhysicalTableTraitsAtTs(
+				storageSnap, gcTs, snapVersion, physicalTableID, ddlHistory,
+				tableFilter, encMgr, keyspaceID)
+			if err != nil {
+				return nil, err
+			}
 		}
 		// Views have no physical KV events. Their DDLs are replicated by the
 		// table-trigger dispatcher, so creating a table dispatcher for a view can
 		// only leave an orphan after the view is dropped.
-		if fullTableInfo.View != nil {
+		if traits.isView {
 			continue
 		}
 		if tableFilter != nil {
 			if tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name) {
 				continue
 			}
-			if !tableFilter.IsEligibleTable(common.WrapTableInfo(schemaName, fullTableInfo)) {
-				log.Info("table is not eligible, should ignore this table", zap.String("schema", schemaName), zap.String("table", tableInfo.Name), zap.Any("tableInfo", fullTableInfo))
+			if !traits.eligible {
+				log.Info("table is not eligible, should ignore this table",
+					zap.String("schema", schemaName), zap.String("table", tableInfo.Name))
 				continue
 			}
 		}
 
-		splitable := isSplitable(fullTableInfo)
+		splitable := traits.splitable
 		if partitionInfo, ok := partitionMap[tableID]; ok {
 			for partitionID := range partitionInfo {
 				tables = append(tables, commonEvent.Table{
