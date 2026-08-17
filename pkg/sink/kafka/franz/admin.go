@@ -51,6 +51,9 @@ func NewAdmin(
 	if err != nil {
 		return nil, err
 	}
+	// MetadataMinAge is the minimum interval between metadata requests.
+	// It must stay below the visibility retry interval to avoid retrying a cached topic-not-found result.
+	opts = append(opts, kgo.MetadataMinAge(100*time.Millisecond))
 
 	client, err := kgo.NewClient(opts...)
 	if err != nil {

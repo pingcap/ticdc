@@ -16,6 +16,7 @@ package franz
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -178,6 +179,10 @@ func TestAdminOperations(t *testing.T) {
 	require.Equal(t, map[string]int32{existingTopic: 3}, partitions)
 
 	const topic = "test-topic"
+	topics, err := admin.GetTopicsMeta([]string{topic}, true)
+	require.NoError(t, err)
+	require.Empty(t, topics)
+
 	err = admin.CreateTopic(&TopicDetail{
 		Name:              topic,
 		NumPartitions:     3,
@@ -185,9 +190,11 @@ func TestAdminOperations(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	topics, err := admin.GetTopicsMeta([]string{topic}, false)
-	require.NoError(t, err)
-	require.Equal(t, int32(3), topics[topic].NumPartitions)
+	require.Eventually(t, func() bool {
+		topics, err = admin.GetTopicsMeta([]string{topic}, false)
+		return err == nil && topics[topic].NumPartitions == 3
+	}, time.Second, 20*time.Millisecond)
+
 	require.NoError(t, admin.CreateTopic(&TopicDetail{Name: topic, NumPartitions: 3, ReplicationFactor: 1}))
 }
 

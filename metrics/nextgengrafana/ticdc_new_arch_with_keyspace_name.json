@@ -11629,7 +11629,8 @@
           },
           "yaxes": [
             {
-              "format": "bytes",
+              "decimals": 1,
+              "format": "Bps",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -11732,7 +11733,8 @@
           },
           "yaxes": [
             {
-              "format": "none",
+              "decimals": 0,
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -11807,7 +11809,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_kafka_franz_producer_request_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance, broker) / sum(rate(ticdc_sink_kafka_franz_producer_request_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance, broker)",
+              "expr": "1000 * sum(rate(ticdc_sink_kafka_franz_producer_request_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance, broker) / sum(rate(ticdc_sink_kafka_franz_producer_request_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance, broker)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -11816,7 +11818,7 @@
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.99, sum(rate(ticdc_sink_kafka_franz_producer_request_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (le, keyspace_name,changefeed, instance, broker))",
+              "expr": "1000 * histogram_quantile(0.99, sum(rate(ticdc_sink_kafka_franz_producer_request_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (le, keyspace_name,changefeed, instance, broker))",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -11844,7 +11846,8 @@
           },
           "yaxes": [
             {
-              "format": "s",
+              "decimals": 1,
+              "format": "ms",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -11956,7 +11959,8 @@
           },
           "yaxes": [
             {
-              "format": "none",
+              "decimals": 1,
+              "format": "ops",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -12068,7 +12072,8 @@
           },
           "yaxes": [
             {
-              "format": "none",
+              "decimals": 1,
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -12169,6 +12174,7 @@
           },
           "yaxes": [
             {
+              "decimals": 1,
               "format": "percent",
               "label": null,
               "logBase": 1,
@@ -12244,7 +12250,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(sum(rate(ticdc_sink_kafka_franz_producer_throttle_time_seconds_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance, broker) / sum(rate(ticdc_sink_kafka_franz_producer_throttle_time_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance, broker)) by (keyspace_name,changefeed, instance)",
+              "expr": "1000 * max(sum(rate(ticdc_sink_kafka_franz_producer_throttle_time_seconds_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance, broker) / sum(rate(ticdc_sink_kafka_franz_producer_throttle_time_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance, broker)) by (keyspace_name,changefeed, instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -12253,7 +12259,7 @@
             },
             {
               "exemplar": true,
-              "expr": "max(histogram_quantile(0.99, sum(rate(ticdc_sink_kafka_franz_producer_throttle_time_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (le, keyspace_name,changefeed, instance, broker))) by (keyspace_name,changefeed, instance)",
+              "expr": "1000 * max(histogram_quantile(0.99, sum(rate(ticdc_sink_kafka_franz_producer_throttle_time_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (le, keyspace_name,changefeed, instance, broker))) by (keyspace_name,changefeed, instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -12281,7 +12287,8 @@
           },
           "yaxes": [
             {
-              "format": "s",
+              "decimals": 1,
+              "format": "ms",
               "label": null,
               "logBase": 1,
               "max": null,
