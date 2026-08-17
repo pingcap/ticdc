@@ -68,7 +68,6 @@ func NewSaramaFactory(
 		zap.String("topic", o.Topic),
 		zap.Int32("partitionNum", o.PartitionNum),
 		zap.Int("maxMessageBytes", o.MaxMessageBytes),
-		zap.Int("maxBatchedBytes", o.MaxBatchedBytes),
 		zap.String("compression", config.Producer.Compression.String()),
 		zap.Int16("requiredAcks", int16(o.RequiredAcks)),
 		zap.Int("maxRetry", o.MaxRetry),
