@@ -212,42 +212,50 @@ func TestEnsureTopicExistsWaitsUntilVisible(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	adminClient := kafka.NewMockClusterAdminClient(ctrl)
-	cfg := &kafka.AutoCreateTopicConfig{
-		AutoCreate:        true,
-		PartitionNum:      2,
-		ReplicationFactor: 1,
-	}
-
-	topic := "delayed-topic"
-	gomock.InOrder(
-		adminClient.EXPECT().GetTopicsMeta([]string{topic}, true).Return(
-			map[string]kafka.TopicDetail{}, nil),
-		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
-			map[string]kafka.TopicDetail{}, nil),
-		adminClient.EXPECT().CreateTopic(gomock.Any()).DoAndReturn(
-			func(detail *kafka.TopicDetail) error {
-				require.Equal(t, &kafka.TopicDetail{
-					Name:              topic,
-					NumPartitions:     2,
-					ReplicationFactor: 1,
-				}, detail)
-				return nil
-			}),
-		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
-			map[string]kafka.TopicDetail{}, nil),
-		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
-			map[string]kafka.TopicDetail{
-				topic: {
-					Name:          topic,
+	created := false
+	postCreateDescribeCount := 0
+	adminClient.EXPECT().GetTopicsMeta([]string{"delayed-topic"}, true).Return(map[string]kafka.TopicDetail{}, nil)
+	adminClient.EXPECT().GetTopicsMeta([]string{"delayed-topic"}, false).DoAndReturn(
+		func([]string, bool) (map[string]kafka.TopicDetail, error) {
+			if !created {
+				return map[string]kafka.TopicDetail{}, nil
+			}
+			postCreateDescribeCount++
+			if postCreateDescribeCount == 1 {
+				return map[string]kafka.TopicDetail{}, nil
+			}
+			return map[string]kafka.TopicDetail{
+				"delayed-topic": {
+					Name:          "delayed-topic",
 					NumPartitions: 2,
 				},
-			}, nil),
+			}, nil
+		}).Times(3)
+	adminClient.EXPECT().CreateTopic(gomock.Any()).DoAndReturn(
+		func(detail *kafka.TopicDetail) error {
+			require.Equal(t, &kafka.TopicDetail{
+				Name:              "delayed-topic",
+				NumPartitions:     2,
+				ReplicationFactor: 1,
+			}, detail)
+			created = true
+			return nil
+		})
+
+	err := EnsureTopic(
+		context.Background(),
+		common.NewChangefeedID4Test("test", "test"),
+		"delayed-topic",
+		&kafka.AutoCreateTopicConfig{
+			AutoCreate:        true,
+			PartitionNum:      2,
+			ReplicationFactor: 1,
+		},
+		adminClient,
 	)
 
-	ctx := context.Background()
-	changefeedID := common.NewChangefeedID4Test("test", "test")
-	err := EnsureTopic(ctx, changefeedID, topic, cfg, adminClient)
 	require.NoError(t, err)
+	require.Equal(t, 2, postCreateDescribeCount)
 }
 
 func TestGetTopicManagerStartsBackgroundRefreshAfterTopicReady(t *testing.T) {

@@ -89,10 +89,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	}
 	options.Topic = topic
 
-	encoderConfig, err := helper.GetEncoderConfig(
-		changefeedID, uri, protocol, sinkConfig,
-		options.MaxMessageBytes, options.MaxBatchedBytes,
-	)
+	encoderConfig, err := helper.GetEncoderConfig(changefeedID, uri, protocol, sinkConfig, options.MaxMessageBytes)
 	if err != nil {
 		return err
 	}

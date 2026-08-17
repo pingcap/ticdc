@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -154,6 +155,14 @@ func (f *kafkaAdminFixture) setMessageMaxBytes(brokerValue, topicValue string) {
 	f.topicConfig[defaultMockTopicName][TopicMaxMessageBytesConfigName] = topicValue
 }
 
+func expectedAdjustedMaxMessageBytes(configuredMaxMessageBytes, sourceMaxMessageBytes int) int {
+	sourceMaxMessageBytes -= maxMessageBytesOverhead
+	if configuredMaxMessageBytes < sourceMaxMessageBytes {
+		return configuredMaxMessageBytes
+	}
+	return sourceMaxMessageBytes
+}
+
 func (f *kafkaAdminFixture) setMinInsyncReplicas(minInsyncReplicas string) {
 	f.topicConfig[defaultMockTopicName][MinInsyncReplicasConfigName] = minInsyncReplicas
 	f.brokerConfig[MinInsyncReplicasConfigName] = minInsyncReplicas
@@ -181,7 +190,6 @@ func TestCompleteOptions(t *testing.T) {
 	require.Equal(t, int16(3), options.ReplicationFactor)
 	require.Equal(t, "2.6.0", options.Version)
 	require.Equal(t, 4096, options.MaxMessageBytes)
-	require.Equal(t, 4096, options.MaxBatchedBytes)
 	require.Equal(t, WaitForLocal, options.RequiredAcks)
 	require.Equal(t, defaultMaxRetry, options.MaxRetry)
 
@@ -288,60 +296,6 @@ func TestCompleteOptions(t *testing.T) {
 	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.NoError(t, err)
 	require.Equal(t, defaultMaxRetry, options.MaxRetry)
-}
-
-func TestApplyRejectsNonPositiveMaxMessageBytes(t *testing.T) {
-	tests := []struct {
-		name        string
-		uri         string
-		configValue *int
-		expected    int
-	}{
-		{
-			name:     "zero from URI",
-			uri:      "kafka://127.0.0.1:9092/test-topic?max-message-bytes=0",
-			expected: 0,
-		},
-		{
-			name:     "negative from URI",
-			uri:      "kafka://127.0.0.1:9092/test-topic?max-message-bytes=-1",
-			expected: -1,
-		},
-		{
-			name:        "zero from sink config",
-			uri:         "kafka://127.0.0.1:9092/test-topic",
-			configValue: aws.Int(0),
-			expected:    0,
-		},
-		{
-			name:        "negative from sink config",
-			uri:         "kafka://127.0.0.1:9092/test-topic",
-			configValue: aws.Int(-1),
-			expected:    -1,
-		},
-	}
-
-	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			sinkURI, err := url.Parse(test.uri)
-			require.NoError(t, err)
-
-			sinkConfig := config.GetDefaultReplicaConfig().Sink
-			if test.configValue != nil {
-				sinkConfig.KafkaConfig = &config.KafkaConfig{
-					MaxMessageBytes: test.configValue,
-				}
-			}
-
-			options := NewOptions()
-			err = options.Apply(changefeedID, sinkURI, sinkConfig)
-			require.ErrorContains(t, err, fmt.Sprintf("invalid max-message-bytes %d", test.expected))
-			errCode, ok := errors.RFCCode(err)
-			require.True(t, ok)
-			require.Equal(t, errors.ErrKafkaInvalidConfig.RFCCode(), errCode)
-		})
-	}
 }
 
 func TestSetPartitionNum(t *testing.T) {
@@ -455,13 +409,13 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 		configuredMaxMessageBytes func(*kafkaAdminFixture) int
 	}{
 		{
-			name: "uses broker limit when configured value is below broker",
+			name: "keeps configured value below broker limit",
 			configuredMaxMessageBytes: func(*kafkaAdminFixture) int {
 				return 1024
 			},
 		},
 		{
-			name: "uses broker limit when configured value is below broker by one byte",
+			name: "uses broker limit when configured value is within overhead",
 			configuredMaxMessageBytes: func(f *kafkaAdminFixture) int {
 				return f.brokerMessageMaxBytes() - 1
 			},
@@ -488,23 +442,13 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 			err := adminClient.CreateTopic(detail)
 			require.NoError(t, err)
 
-			configuredMaxMessageBytes := test.configuredMaxMessageBytes(adminFixture)
-			sinkURI, err := url.Parse(fmt.Sprintf(
-				"kafka://127.0.0.1:9092/%s?max-message-bytes=%d",
-				topicName, configuredMaxMessageBytes,
-			))
-			require.NoError(t, err)
-
 			options := NewOptions()
-			err = options.Apply(
-				changefeedID,
-				sinkURI,
-				config.GetDefaultReplicaConfig().Sink,
+			options.BrokerEndpoints = []string{"127.0.0.1:9092"}
+			options.MaxMessageBytes = test.configuredMaxMessageBytes(adminFixture)
+			expectedMaxMessageBytes := expectedAdjustedMaxMessageBytes(
+				options.MaxMessageBytes,
+				adminFixture.brokerMessageMaxBytes(),
 			)
-			require.NoError(t, err)
-			require.Equal(t, configuredMaxMessageBytes, options.MaxMessageBytes)
-			require.Equal(t, configuredMaxMessageBytes, options.MaxBatchedBytes)
-			expectedProducerLimit := adminFixture.brokerMessageMaxBytes()
 
 			ctx := context.Background()
 			err = adjustOptions(changefeedID, adminClient, options, topicName)
@@ -513,13 +457,8 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 			saramaConfig, err := newSaramaConfig(ctx, options)
 			require.NoError(t, err)
 
-			require.Equal(t, expectedProducerLimit, options.MaxMessageBytes)
-			require.Equal(
-				t,
-				min(configuredMaxMessageBytes, expectedProducerLimit),
-				options.MaxBatchedBytes,
-			)
-			require.Equal(t, expectedProducerLimit, saramaConfig.Producer.MaxMessageBytes)
+			require.Equal(t, expectedMaxMessageBytes, options.MaxMessageBytes)
+			require.Equal(t, expectedMaxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
 		})
 	}
 }
@@ -612,7 +551,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			mockTopicMessageMaxBytes,
 		},
 		{
-			"new topic broker below user",
+			"new topic broker overhead below user",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
 			[]any{"not-created-topic", strconv.Itoa(1024*1024 + 1)},
 			mockBrokerMessageMaxBytes,
@@ -678,7 +617,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			strconv.Itoa(config.DefaultMaxMessageBytes + 1),
 		},
 		{
-			"existing topic topic below user",
+			"existing topic topic overhead below user",
 			"kafka://127.0.0.1:9092/%s?max-message-bytes=%s",
 			[]any{defaultMockTopicName, strconv.Itoa(1024*1024 + 1)},
 			mockBrokerMessageMaxBytes,
@@ -729,7 +668,6 @@ func TestConfigurationCombinations(t *testing.T) {
 			options := NewOptions()
 			err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 			require.Nil(t, err)
-			configuredMaxMessageBytes := options.MaxMessageBytes
 
 			topic, ok := a.uriParams[0].(string)
 			require.True(t, ok)
@@ -739,15 +677,31 @@ func TestConfigurationCombinations(t *testing.T) {
 			if _, exists := adminFixture.topics[topic]; exists {
 				sourceMaxMessageBytes = adminFixture.topicMaxMessageBytes(topic)
 			}
+			expectedMaxMessageBytes := expectedAdjustedMaxMessageBytes(options.MaxMessageBytes, sourceMaxMessageBytes)
+
 			changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
 			err = adjustOptions(changefeedID, adminClient, options, topic)
 			require.Nil(t, err)
-			require.Equal(t, sourceMaxMessageBytes, options.MaxMessageBytes)
-			require.Equal(
-				t,
-				min(configuredMaxMessageBytes, sourceMaxMessageBytes),
-				options.MaxBatchedBytes,
-			)
+			require.Equal(t, expectedMaxMessageBytes, options.MaxMessageBytes)
+
+			saramaConfig, err := newSaramaConfig(context.Background(), options)
+			require.Nil(t, err)
+			require.Equal(t, expectedMaxMessageBytes, saramaConfig.Producer.MaxMessageBytes)
+
+			encoderConfig := codecCommon.NewConfig(config.ProtocolOpen)
+			err = encoderConfig.Apply(sinkURI, &config.SinkConfig{
+				KafkaConfig: &config.KafkaConfig{
+					LargeMessageHandle: config.NewDefaultLargeMessageHandleConfig(),
+				},
+			})
+			require.Nil(t, err)
+			encoderConfig.WithMaxMessageBytes(options.MaxMessageBytes)
+
+			err = encoderConfig.Validate()
+			require.Nil(t, err)
+
+			// producer's `MaxMessageBytes` = encoder's `MaxMessageBytes`.
+			require.Equal(t, expectedMaxMessageBytes, encoderConfig.MaxMessageBytes)
 
 			adminClient.Close()
 		})
@@ -792,7 +746,6 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, int16(5), c.ReplicationFactor)
 	require.Equal(t, "3.1.2", c.Version)
 	require.Equal(t, 1024*1024, c.MaxMessageBytes)
-	require.Equal(t, 1024*1024, c.MaxBatchedBytes)
 	require.Equal(t, "gzip", c.Compression)
 	require.Equal(t, "test-id", c.ClientID)
 	require.Equal(t, true, c.AutoCreate)
@@ -874,7 +827,6 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, int16(5), c.ReplicationFactor)
 	require.Equal(t, "3.1.2", c.Version)
 	require.Equal(t, 1024*1024, c.MaxMessageBytes)
-	require.Equal(t, 1024*1024, c.MaxBatchedBytes)
 	require.Equal(t, "gzip", c.Compression)
 	require.Equal(t, "test-id", c.ClientID)
 	require.Equal(t, true, c.AutoCreate)

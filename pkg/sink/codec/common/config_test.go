@@ -33,7 +33,7 @@ func TestApplyReturnsSinkInvalidConfigForQueryBindingError(t *testing.T) {
 	require.Equal(t, errors.ErrSinkInvalidConfig.RFCCode(), errCode)
 }
 
-func TestValidateMaxBatchMessageBytes(t *testing.T) {
+func TestValidateMessageLimits(t *testing.T) {
 	tests := []struct {
 		name     string
 		adjust   func(*Config)
@@ -45,21 +45,6 @@ func TestValidateMaxBatchMessageBytes(t *testing.T) {
 				cfg.MaxMessageBytes = 0
 			},
 			expected: "invalid max-message-bytes 0",
-		},
-		{
-			name: "negative max batched bytes",
-			adjust: func(cfg *Config) {
-				cfg.MaxBatchedBytes = -1
-			},
-			expected: "invalid max-batch-message-bytes -1",
-		},
-		{
-			name: "max batched bytes exceeds max message bytes",
-			adjust: func(cfg *Config) {
-				cfg.MaxMessageBytes = 100
-				cfg.MaxBatchedBytes = 101
-			},
-			expected: "max-batch-message-bytes 101 cannot be greater than max-message-bytes 100",
 		},
 		{
 			name: "non-positive max batch size",

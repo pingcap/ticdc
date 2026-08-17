@@ -778,9 +778,7 @@ func TestEncoderMultipleMessage(t *testing.T) {
 		`insert into test.t values (3, 333)`)
 
 	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolOpen).
-		WithMaxMessageBytes(1000).
-		WithMaxBatchedBytes(400)
+	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(400)
 	encoder, err := NewBatchEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
@@ -810,13 +808,11 @@ func TestEncoderMultipleMessage(t *testing.T) {
 	require.Equal(t, 2, len(messages))
 	require.Equal(t, 2, messages[0].GetRowsCount())
 	require.Equal(t, 1, messages[1].GetRowsCount())
-	require.LessOrEqual(t, messages[0].Length(), codecConfig.MaxBatchedBytes)
-	require.LessOrEqual(t, messages[1].Length(), codecConfig.MaxBatchedBytes)
-	require.Equal(t, 0, count)
 
-	messages[0].Callback()
-	require.Equal(t, 2, count)
-	messages[1].Callback()
+	for _, message := range messages {
+		message.Callback()
+	}
+
 	require.Equal(t, 3, count)
 
 	decoder, err := NewDecoder(ctx, 0, codecConfig, nil)
@@ -887,48 +883,6 @@ func TestMessageTooLarge(t *testing.T) {
 	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.ErrorIs(t, err, errors.ErrMessageTooLarge)
 	require.Equal(t, count, 0)
-}
-
-func TestMessageLargerThanBatchLimit(t *testing.T) {
-	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolOpen).
-		WithMaxMessageBytes(400).
-		WithMaxBatchedBytes(100)
-	encoder, err := NewBatchEncoder(codecConfig, nil)
-	require.NoError(t, err)
-
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-	helper.Tk().MustExec("use test")
-
-	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int)`)
-	tableInfo := helper.GetTableInfo(job)
-	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 123)`)
-	require.NotNil(t, dmlEvent)
-	insertRow, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
-
-	count := 0
-	insertRowEvent := &commonEvent.RowEvent{
-		TableInfo:      tableInfo,
-		CommitTs:       dmlEvent.GetCommitTs(),
-		Event:          insertRow,
-		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() { count++ },
-	}
-
-	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
-	require.NoError(t, err)
-
-	messages := encoder.Build()
-	require.Len(t, messages, 1)
-	require.Equal(t, 1, messages[0].GetRowsCount())
-	require.Greater(t, messages[0].Length(), codecConfig.MaxBatchedBytes)
-	require.LessOrEqual(t, messages[0].Length(), codecConfig.MaxMessageBytes)
-	require.Equal(t, 0, count)
-
-	messages[0].Callback()
-	require.Equal(t, 1, count)
 }
 
 func TestLargeMessageWithHandleEnableHandleKeyOnly(t *testing.T) {
