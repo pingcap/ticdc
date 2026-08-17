@@ -32,7 +32,22 @@ function run() {
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c ${changefeed_id} --config="$CUR/conf/changefeed.toml"
 	run_sql_file $CUR/data/ddl.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	sleep 5
+	# Ensure the DDL is sent before lowering max-message-bytes. Handle-key-only only applies to DML.
+	ddl_done_tso=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
+	retry=60
+	cnt=0
+	while [[ $cnt -lt $retry ]]; do
+		checkpoint=$(cdc_cli_changefeed query -c ${changefeed_id} | grep -v "Command to ticdc" | jq -r '.checkpoint_tso')
+		if [[ "$checkpoint" != "null" && "$checkpoint" -gt "$ddl_done_tso" ]]; then
+			break
+		fi
+		sleep 2
+		cnt=$((cnt + 1))
+	done
+	if [[ $cnt -ge $retry ]]; then
+		echo "checkpoint tso did not exceed DDL completion tso in time: checkpoint=$checkpoint, ddl_done_tso=$ddl_done_tso"
+		exit 1
+	fi
 
 	cdc_cli_changefeed pause -c ${changefeed_id}
 

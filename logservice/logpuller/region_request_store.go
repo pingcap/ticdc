@@ -37,13 +37,21 @@ func newRegionRequestStore(
 	workerCount int,
 	workerWindow int,
 	maxWindowMultiplier int,
+	memoryQuota *memoryQuotaController,
 ) *regionRequestStore {
 	store := &regionRequestStore{
 		workers: make([]*regionRequestWorker, 0, workerCount),
 	}
 	for range workerCount {
 		store.workers = append(store.workers, newRegionRequestWorker(
-			upstream, eventSink, failureHandler, storeAddr, workerWindow, maxWindowMultiplier))
+			upstream,
+			eventSink,
+			failureHandler,
+			storeAddr,
+			workerWindow,
+			maxWindowMultiplier,
+			memoryQuota,
+		))
 	}
 	return store
 }

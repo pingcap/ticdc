@@ -454,7 +454,7 @@ func (c *dbzCodec) buildDebeziumConnectSourceSchema(
 ) (*debeziumConnectSchema, error) {
 	buf := &bytes.Buffer{}
 	writer := util.BorrowJSONWriter(buf)
-	c.writeSourceSchema(writer, schemaName)
+	c.writeSourceSchema(writer, schemaName, false)
 	util.ReturnJSONWriter(writer)
 
 	return decodeDebeziumConnectSchema(buf.Bytes())

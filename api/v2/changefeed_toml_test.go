@@ -88,11 +88,16 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 		SinkURI: "blackhole://",
 		StartTs: 449999999999999999,
 		Config: &ReplicaConfig{
-			PerformanceMode:   util.AddressOf(config.PerformanceModeLowLatency),
-			MemoryQuota:       util.AddressOf(uint64(1024)),
-			CaseSensitive:     util.AddressOf(true),
-			ForceReplicate:    util.AddressOf(true),
-			CheckGCSafePoint:  util.AddressOf(false),
+			PerformanceMode:  util.AddressOf(config.PerformanceModeLowLatency),
+			MemoryQuota:      util.AddressOf(uint64(1024)),
+			CaseSensitive:    util.AddressOf(true),
+			ForceReplicate:   util.AddressOf(true),
+			CheckGCSafePoint: util.AddressOf(false),
+			Sink: &SinkConfig{
+				DebeziumConfig: &DebeziumConfig{
+					IncludeStartTs: util.AddressOf(true),
+				},
+			},
 			SyncPointInterval: &JSONDuration{duration: 10 * time.Minute},
 			Integrity: &IntegrityConfig{
 				IntegrityCheckLevel:   util.AddressOf("correctness"),
@@ -114,6 +119,8 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 	// Top-level kebab-case keys and runtime field omissions.
 	require.Contains(t, out, `sink-uri = "blackhole://"`)
 	require.Contains(t, out, "start-ts")
+	require.Contains(t, out, "[config.sink.debezium]")
+	require.Contains(t, out, "include-start-ts = true")
 	require.NotContains(t, out, "gid") // GID is omitted from TOML (toml:"-")
 
 	// The [config] section must decode into the internal ReplicaConfig used by
@@ -131,6 +138,7 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 	require.Equal(t, 10*time.Minute, *wrapper.Config.SyncPointInterval)
 	require.Equal(t, "correctness", util.GetOrZero(wrapper.Config.Integrity.IntegrityCheckLevel))
 	require.Equal(t, "eventual", util.GetOrZero(wrapper.Config.Consistent.Level))
+	require.True(t, util.GetOrZero(wrapper.Config.Sink.Debezium.IncludeStartTs))
 }
 
 func TestCodecConfigTOMLRoundTripToInternal(t *testing.T) {
