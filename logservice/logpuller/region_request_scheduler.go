@@ -42,6 +42,7 @@ type regionRequestScheduler struct {
 	upstream       *upstreamHandle
 	eventSink      *regionEventSink
 	failureHandler *regionFailureHandler
+	memoryQuota    *memoryQuotaController
 
 	// taskQueue orders all regions before they are assigned to a TiKV store.
 	taskQueue *priorityqueue.PriorityQueue[*regionPriorityTask]
@@ -63,6 +64,7 @@ func newRegionRequestScheduler(
 	upstream *upstreamHandle,
 	eventSink *regionEventSink,
 	failureHandler *regionFailureHandler,
+	memoryQuota *memoryQuotaController,
 ) *regionRequestScheduler {
 	pullerConfig := config.GetGlobalServerConfig().Debug.Puller
 	workerCount := regionRequestWorkerPerStore
@@ -71,6 +73,7 @@ func newRegionRequestScheduler(
 		upstream:            upstream,
 		eventSink:           eventSink,
 		failureHandler:      failureHandler,
+		memoryQuota:         memoryQuota,
 		taskQueue:           priorityqueue.New[*regionPriorityTask](),
 		workerCount:         workerCount,
 		workerWindow:        workerWindow,
@@ -182,6 +185,7 @@ func (s *regionRequestScheduler) getOrCreateStore(
 		s.workerCount,
 		s.workerWindow,
 		s.maxWindowMultiplier,
+		s.memoryQuota,
 	)
 	// The scheduler run loop is the only writer. Publish the store after its
 	// immutable worker list is complete, then start its workers.

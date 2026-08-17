@@ -25,6 +25,13 @@ const (
 	// DefaultOldStartTsScanLowPriorityThreshold is the default lag threshold for
 	// classifying scan tasks as low priority.
 	DefaultOldStartTsScanLowPriorityThreshold = 10 * time.Minute
+
+	// DefaultLogPullerMemoryQuota is the default Log Puller soft memory limit.
+	DefaultLogPullerMemoryQuota uint64 = 1024 * 1024 * 1024
+
+	// DefaultLogPullerScanBaseSize is the default base memory estimate for one
+	// initial scan.
+	DefaultLogPullerScanBaseSize uint64 = 8 * 1024 * 1024
 )
 
 // DebugConfig represents config for ticdc unexposed feature configurations
@@ -84,6 +91,14 @@ type PullerConfig struct {
 	// Scans within this threshold are scheduled as high priority. Older scans
 	// remain low priority until their span catches up once.
 	OldStartTsScanLowPriorityThreshold TomlDuration `toml:"old-start-ts-scan-low-priority-threshold" json:"old_start_ts_scan_low_priority_threshold"`
+	// MemoryQuota is the log puller's local soft memory limit in bytes.
+	MemoryQuota uint64 `toml:"memory-quota" json:"memory_quota"`
+	// ScanBaseSize is the base memory estimate reserved for one admitted initial
+	// scan. The actual estimate grows logarithmically with scan lag, up to a
+	// bounded multiple of this value. The estimate contributes to MemoryQuota
+	// pressure and throttles new low-priority scans; it is not an actual memory
+	// allocation or a per-scan hard limit.
+	ScanBaseSize uint64 `toml:"scan-base-size" json:"scan_base_size"`
 }
 
 // NewDefaultPullerConfig return the default puller configuration
@@ -96,6 +111,8 @@ func NewDefaultPullerConfig() *PullerConfig {
 		RegionRequestMaxWindowMultiplier: 4,  // Allows high-priority scans to use up to 4 * PendingRegionRequestQueueSize.
 		OldStartTsScanLowPriorityThreshold: TomlDuration(
 			DefaultOldStartTsScanLowPriorityThreshold),
+		MemoryQuota:  DefaultLogPullerMemoryQuota,
+		ScanBaseSize: DefaultLogPullerScanBaseSize,
 	}
 }
 
@@ -116,6 +133,16 @@ func (c *PullerConfig) ValidateAndAdjust() {
 	}
 	if c.OldStartTsScanLowPriorityThreshold <= 0 {
 		c.OldStartTsScanLowPriorityThreshold = TomlDuration(DefaultOldStartTsScanLowPriorityThreshold)
+	}
+	if c.MemoryQuota == 0 {
+		log.Warn("log puller memory quota must be positive, use default value",
+			zap.Uint64("default", defaultCfg.MemoryQuota))
+		c.MemoryQuota = defaultCfg.MemoryQuota
+	}
+	if c.ScanBaseSize == 0 {
+		log.Warn("log puller scan base size must be positive, use default value",
+			zap.Uint64("default", defaultCfg.ScanBaseSize))
+		c.ScanBaseSize = defaultCfg.ScanBaseSize
 	}
 }
 
