@@ -234,7 +234,9 @@ func TestEnsureTopicExistsWaitsUntilVisible(t *testing.T) {
 				return nil
 			}),
 		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
-			map[string]kafka.TopicDetail{}, nil),
+			nil, sarama.ErrUnknownTopicOrPartition),
+		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
+			nil, sarama.ErrUnknownTopicOrPartition),
 		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
 			map[string]kafka.TopicDetail{
 				topic: {

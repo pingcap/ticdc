@@ -58,7 +58,7 @@ func (p *saramaSyncProducer) SendMessage(topic string, partitionNum int32, messa
 	if err == nil {
 		return nil
 	}
-	log.Error("kafka message send failed",
+	log.Error("send message to kafka failed",
 		zap.String("keyspace", p.id.Keyspace()),
 		zap.String("changefeed", p.id.Name()),
 		zap.String("eventContext", BuildEventLogContext(p.id.Keyspace(), p.id.Name(), message.LogInfo)),
@@ -84,7 +84,7 @@ func (p *saramaSyncProducer) SendMessages(topic string, partitionNum int32, mess
 	if err == nil {
 		return nil
 	}
-	log.Error("kafka message send failed",
+	log.Error("send message to kafka failed",
 		zap.String("keyspace", p.id.Keyspace()),
 		zap.String("changefeed", p.id.Name()),
 		zap.String("eventContext", BuildEventLogContext(p.id.Keyspace(), p.id.Name(), message.LogInfo)),
@@ -94,7 +94,7 @@ func (p *saramaSyncProducer) SendMessages(topic string, partitionNum int32, mess
 
 func (p *saramaSyncProducer) Close() {
 	if p.closed.Load() {
-		log.Warn("kafka ddl producer already closed",
+		log.Warn("kafka DDL producer already closed",
 			zap.String("keyspace", p.id.Keyspace()),
 			zap.String("changefeed", p.id.Name()))
 		return
@@ -106,7 +106,7 @@ func (p *saramaSyncProducer) Close() {
 	// so producer.Close() alone won't release the underlying client resources.
 	if p.client != nil {
 		if err := p.client.Close(); err != nil {
-			log.Warn("kafka ddl producer client close failed",
+			log.Warn("Close Kafka DDL producer client with error",
 				zap.String("keyspace", p.id.Keyspace()),
 				zap.String("changefeed", p.id.Name()),
 				zap.Duration("duration", time.Since(start)),
@@ -115,7 +115,7 @@ func (p *saramaSyncProducer) Close() {
 	}
 	if p.producer != nil {
 		if err := p.producer.Close(); err != nil {
-			log.Error("kafka ddl producer close failed",
+			log.Error("Close Kafka DDL producer with error",
 				zap.String("keyspace", p.id.Keyspace()),
 				zap.String("changefeed", p.id.Name()),
 				zap.Duration("duration", time.Since(start)),
@@ -123,7 +123,7 @@ func (p *saramaSyncProducer) Close() {
 			return
 		}
 	}
-	log.Info("kafka ddl producer closed",
+	log.Info("Kafka DDL producer closed",
 		zap.String("keyspace", p.id.Keyspace()),
 		zap.String("changefeed", p.id.Name()),
 		zap.Duration("duration", time.Since(start)))

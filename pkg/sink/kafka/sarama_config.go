@@ -62,7 +62,7 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 	config.Producer.Flush.Bytes = 0
 	config.Producer.Flush.Messages = 0
 	config.Producer.Flush.Frequency = time.Duration(0)
-	config.Producer.Flush.MaxMessages = 0
+	config.Producer.Flush.MaxMessages = o.MaxMessages
 
 	config.Net.MaxOpenRequests = 1
 	config.Net.DialTimeout = o.DialTimeout
@@ -87,8 +87,11 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 	case "zstd":
 		config.Producer.Compression = sarama.CompressionZSTD
 	default:
-		log.Warn("unsupported kafka compression algorithm", zap.String("compression", o.Compression))
+		log.Warn("Unsupported compression algorithm", zap.String("compression", o.Compression))
 		config.Producer.Compression = sarama.CompressionNone
+	}
+	if config.Producer.Compression != sarama.CompressionNone {
+		log.Info("Kafka producer uses " + compression + " compression algorithm")
 	}
 
 	if o.EnableTLS {
@@ -117,27 +120,27 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 		return nil, err
 	}
 
-	err = completeSaramaKafkaVersion(config, o)
+	kafkaVersion, err := getKafkaVersion(config, o)
 	if err != nil {
-		return nil, err
-	}
-	return config, nil
-}
-
-func completeSaramaKafkaVersion(config *sarama.Config, o *options) error {
-	detectedVersion, err := detectKafkaVersion(config, o)
-	if err != nil {
-		log.Warn("kafka version detection failed, using fallback version",
-			zap.Strings("brokers", o.BrokerEndpoints),
-			zap.String("fallbackVersion", detectedVersion.String()),
-			zap.Error(err))
-	}
-	kafkaVersion, err := selectKafkaVersion(detectedVersion, o)
-	if err != nil {
-		return err
+		log.Warn("Can't get Kafka version by broker. ticdc will use default version",
+			zap.String("defaultVersion", kafkaVersion.String()))
 	}
 	config.Version = kafkaVersion
-	return nil
+
+	if o.IsAssignedVersion {
+		version, err := sarama.ParseKafkaVersion(o.Version)
+		if err != nil {
+			return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		}
+		config.Version = version
+		if !version.IsAtLeast(maxKafkaVersion) && version.String() != kafkaVersion.String() {
+			log.Warn("The Kafka version you assigned may not be correct. "+
+				"Please assign a version equal to or less than the specified version",
+				zap.String("assignedVersion", version.String()),
+				zap.String("desiredVersion", kafkaVersion.String()))
+		}
+	}
+	return config, nil
 }
 
 func completeSaramaSASLConfig(ctx context.Context, config *sarama.Config, o *options) error {
@@ -183,7 +186,7 @@ func completeSaramaSASLConfig(ctx context.Context, config *sarama.Config, o *opt
 	return nil
 }
 
-func detectKafkaVersion(config *sarama.Config, o *options) (sarama.KafkaVersion, error) {
+func getKafkaVersion(config *sarama.Config, o *options) (sarama.KafkaVersion, error) {
 	addrs := o.BrokerEndpoints
 	if len(addrs) > 1 {
 		// Shuffle the list of addresses to randomize the order in which
@@ -205,26 +208,25 @@ func detectKafkaVersion(config *sarama.Config, o *options) (sarama.KafkaVersion,
 		}
 	}
 	if err != nil {
+		log.Warn("kafka sink use the default kafka version since cannot find it from the brokers",
+			zap.String("defaultVersion", defaultKafkaVersion.String()))
 		targetVersion = defaultKafkaVersion
 	}
-	return targetVersion, err
-}
 
-func selectKafkaVersion(detectedVersion sarama.KafkaVersion, o *options) (sarama.KafkaVersion, error) {
-	if !o.IsAssignedVersion {
-		return detectedVersion, nil
+	if o.IsAssignedVersion {
+		assignedVersion, err := sarama.ParseKafkaVersion(o.Version)
+		if err != nil {
+			return assignedVersion, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		}
+		if !assignedVersion.IsAtLeast(maxKafkaVersion) && assignedVersion.String() != targetVersion.String() {
+			log.Warn("The Kafka version you assigned may not be correct. "+
+				"Please assign a version equal to or less than the specified version",
+				zap.String("assignedVersion", assignedVersion.String()),
+				zap.String("desiredVersion", targetVersion.String()))
+		}
+		targetVersion = assignedVersion
 	}
-	assignedVersion, err := sarama.ParseKafkaVersion(o.Version)
-	if err != nil {
-		return assignedVersion, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
-	}
-	if !assignedVersion.IsAtLeast(maxKafkaVersion) &&
-		assignedVersion.String() != detectedVersion.String() {
-		log.Warn("configured kafka version differs from detected version",
-			zap.String("assignedVersion", assignedVersion.String()),
-			zap.String("desiredVersion", detectedVersion.String()))
-	}
-	return assignedVersion, nil
+	return targetVersion, nil
 }
 
 func getKafkaVersionFromBroker(config *sarama.Config, requestVersion int16, addr string) (sarama.KafkaVersion, error) {
@@ -235,10 +237,12 @@ func getKafkaVersionFromBroker(config *sarama.Config, requestVersion int16, addr
 		_ = broker.Close()
 	}()
 	if err != nil {
+		log.Warn("Kafka fail to open broker", zap.String("addr", addr), zap.Error(err))
 		return KafkaVersion, err
 	}
 	apiResponse, err := broker.ApiVersions(&sarama.ApiVersionsRequest{Version: requestVersion})
 	if err != nil {
+		log.Warn("Kafka fail to get ApiVersions", zap.String("addr", addr), zap.Error(err))
 		return KafkaVersion, err
 	}
 	// ApiKey method

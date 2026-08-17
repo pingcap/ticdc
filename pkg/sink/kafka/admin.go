@@ -81,6 +81,11 @@ func (a *saramaAdminClient) GetBrokerConfig(configName string) (string, bool, er
 			return entry.Value, true, nil
 		}
 	}
+
+	log.Warn("Kafka config item not found",
+		zap.String("keyspace", a.changefeed.Keyspace()),
+		zap.String("changefeed", a.changefeed.Name()),
+		zap.String("configName", configName))
 	return "", false, nil
 }
 
@@ -99,9 +104,19 @@ func (a *saramaAdminClient) GetTopicConfig(topicName string, configName string) 
 	// 2. Kop returns all configs.
 	for _, entry := range configEntries {
 		if entry.Name == configName {
+			log.Info("Kafka config item found",
+				zap.String("keyspace", a.changefeed.Keyspace()),
+				zap.String("changefeed", a.changefeed.Name()),
+				zap.String("configName", configName),
+				zap.String("configValue", entry.Value))
 			return entry.Value, true, nil
 		}
 	}
+
+	log.Warn("Kafka config item not found",
+		zap.String("keyspace", a.changefeed.Keyspace()),
+		zap.String("changefeed", a.changefeed.Name()),
+		zap.String("configName", configName))
 	return "", false, nil
 }
 
@@ -121,7 +136,7 @@ func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool
 			if !ignoreTopicError {
 				return nil, errors.WrapError(errors.ErrKafkaAdminAPI, meta.Err, "describe-topic", meta.Name)
 			}
-			log.Warn("kafka topic metadata refresh failed",
+			log.Warn("fetch topic meta failed",
 				zap.String("keyspace", a.changefeed.Keyspace()),
 				zap.String("changefeed", a.changefeed.Name()),
 				zap.String("topic", meta.Name),
@@ -175,7 +190,7 @@ func (a *saramaAdminClient) Close() {
 	// only when admin is unexpectedly nil.
 	if a.admin != nil {
 		if err := a.admin.Close(); err != nil {
-			log.Warn("kafka admin client close failed",
+			log.Warn("close admin client meet error",
 				zap.String("keyspace", a.changefeed.Keyspace()),
 				zap.String("changefeed", a.changefeed.Name()),
 				zap.Error(err))
@@ -184,7 +199,7 @@ func (a *saramaAdminClient) Close() {
 	}
 	if a.client != nil {
 		if err := a.client.Close(); err != nil {
-			log.Warn("kafka client close failed",
+			log.Warn("close kafka client meet error",
 				zap.String("keyspace", a.changefeed.Keyspace()),
 				zap.String("changefeed", a.changefeed.Name()),
 				zap.Error(err))

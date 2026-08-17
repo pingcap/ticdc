@@ -62,13 +62,13 @@ func (p *saramaAsyncProducer) Close() {
 		// To prevent the scenario mentioned above, close the client first.
 		start := time.Now()
 		if err := p.client.Close(); err != nil {
-			log.Warn("kafka async producer client close failed",
+			log.Warn("Close kafka async producer client error",
 				zap.String("keyspace", p.changefeedID.Keyspace()),
 				zap.String("changefeed", p.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
 		} else {
-			log.Info("kafka async producer client closed",
+			log.Info("Close kafka async producer client success",
 				zap.String("keyspace", p.changefeedID.Keyspace()),
 				zap.String("changefeed", p.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)))
@@ -76,13 +76,13 @@ func (p *saramaAsyncProducer) Close() {
 
 		start = time.Now()
 		if err := p.producer.Close(); err != nil {
-			log.Warn("kafka async producer close failed",
+			log.Warn("Close kafka async producer error",
 				zap.String("keyspace", p.changefeedID.Keyspace()),
 				zap.String("changefeed", p.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
 		} else {
-			log.Info("kafka async producer closed",
+			log.Info("Close kafka async producer success",
 				zap.String("keyspace", p.changefeedID.Keyspace()),
 				zap.String("changefeed", p.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)))
@@ -97,6 +97,9 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 	for {
 		select {
 		case <-ctx.Done():
+			log.Info("async producer exit since context is done",
+				zap.String("keyspace", p.changefeedID.Keyspace()),
+				zap.String("changefeed", p.changefeedID.Name()))
 			return context.Cause(ctx)
 		case ack := <-p.producer.Successes():
 			if ack != nil {
@@ -106,7 +109,7 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 						meta.callback()
 					}
 				default:
-					log.Error("kafka producer received unknown message metadata type",
+					log.Error("unknown message metadata type in async producer",
 						zap.Any("metadata", ack.Metadata))
 				}
 			}
@@ -125,7 +128,7 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 }
 
 func (p *saramaAsyncProducer) handleProducerError(err *sarama.ProducerError) error {
-	log.Error("kafka message send failed",
+	log.Error("send message to kafka failed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
 		zap.String("changefeed", p.changefeedID.Name()),
 		zap.String("eventContext", BuildEventLogContext(

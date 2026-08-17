@@ -52,7 +52,7 @@ func New(ctx context.Context, config *config.LargeMessageHandleConfig, changefee
 	start := time.Now()
 	externalStorage, err := util.GetExternalStorageWithDefaultTimeout(ctx, config.ClaimCheckStorageURI)
 	if err != nil {
-		log.Error("external storage creation failed",
+		log.Error("create external storage failed",
 			zap.String("keyspace", changefeedID.Keyspace()),
 			zap.String("changefeed", changefeedID.Name()),
 			zap.String("storageURI", util.MaskSensitiveDataInURI(config.ClaimCheckStorageURI)),

@@ -14,6 +14,7 @@
 package kafka
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -38,8 +39,13 @@ const (
 	defaultPartitionNum = 3
 	// defaultMaxRetry is the default retry budget for Kafka producers.
 	defaultMaxRetry = 5
-	// defaultTimeout is the default timeout for Kafka connections.
-	defaultTimeout = 10 * time.Second
+
+	// the `max-message-bytes` is set equal to topic's `max.message.bytes`, and is used to check
+	// whether the message is larger than the max size limit. It's found some message pass the message
+	// size limit check at the client side and failed at the broker side since message enlarged during
+	// the network transmission. so we set the `max-message-bytes` to a smaller value to avoid this problem.
+	// maxMessageBytesOverhead is used to reduce the `max-message-bytes`.
+	maxMessageBytesOverhead = 128
 )
 
 const (
@@ -151,15 +157,14 @@ type options struct {
 	Version           string
 	IsAssignedVersion bool
 	RequestVersion    int16
-	// MaxMessageBytes controls the byte size limit of the producer and encoded messages.
-	MaxMessageBytes int
-	// MaxBatchedBytes controls the byte size limit when batching messages.
-	MaxBatchedBytes int
-
-	MaxRetry     int
-	Compression  string
-	ClientID     string
-	RequiredAcks RequiredAcks
+	MaxMessageBytes   int
+	MaxRetry          int
+	Compression       string
+	ClientID          string
+	RequiredAcks      RequiredAcks
+	// Only for test. User can not set this value.
+	// The current prod default value is 0.
+	MaxMessages int
 
 	// Credential is used to connect to kafka cluster.
 	EnableTLS          bool
@@ -176,9 +181,9 @@ type options struct {
 // NewOptions returns a default Kafka configuration
 func NewOptions() *options {
 	return &options{
-		Version:            "2.4.0",
+		Version: "2.4.0",
+		// MaxMessageBytes will be used to initialize producer
 		MaxMessageBytes:    config.DefaultMaxMessageBytes,
-		MaxBatchedBytes:    config.DefaultMaxMessageBytes,
 		MaxRetry:           defaultMaxRetry,
 		ReplicationFactor:  1,
 		Compression:        "none",
@@ -187,25 +192,27 @@ func NewOptions() *options {
 		InsecureSkipVerify: false,
 		SASL:               &security.SASL{},
 		AutoCreate:         true,
-		DialTimeout:        defaultTimeout,
-		WriteTimeout:       defaultTimeout,
-		ReadTimeout:        defaultTimeout,
+		DialTimeout:        10 * time.Second,
+		WriteTimeout:       10 * time.Second,
+		ReadTimeout:        10 * time.Second,
 	}
 }
 
 // setPartitionNum set the partition-num by the topic's partition count.
-func (o *options) setPartitionNum(changefeedID common.ChangeFeedID, realPartitionCount int32) error {
+func (o *options) setPartitionNum(realPartitionCount int32) error {
 	// user does not specify the `partition-num` in the sink-uri
 	if o.PartitionNum == 0 {
 		o.PartitionNum = realPartitionCount
+		log.Info("partitionNum is not set, set by topic's partition-num",
+			zap.Int32("partitionNum", realPartitionCount))
 		return nil
 	}
 
 	if o.PartitionNum < realPartitionCount {
-		log.Warn("configured kafka partition count is lower than topic partition count",
-			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
-			zap.Int32("configuredPartitionNum", o.PartitionNum),
-			zap.Int32("topicPartitionNum", realPartitionCount))
+		log.Warn("number of partition specified in sink-uri is less than that of the actual topic. "+
+			"Some partitions will not have messages dispatched to",
+			zap.Int32("sinkUriPartitions", o.PartitionNum),
+			zap.Int32("topicPartitions", realPartitionCount))
 		return nil
 	}
 
@@ -255,13 +262,8 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	}
 
 	if urlParameter.MaxMessageBytes != nil {
-		if *urlParameter.MaxMessageBytes <= 0 {
-			return errors.ErrKafkaInvalidConfig.GenWithStack(
-				"invalid max-message-bytes %d", *urlParameter.MaxMessageBytes)
-		}
 		o.MaxMessageBytes = *urlParameter.MaxMessageBytes
 	}
-	o.MaxBatchedBytes = o.MaxMessageBytes
 
 	if urlParameter.MaxRetry != nil && *urlParameter.MaxRetry >= 0 {
 		o.MaxRetry = *urlParameter.MaxRetry
@@ -293,9 +295,6 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
-		if a <= 0 {
-			return errors.ErrKafkaInvalidConfig.GenWithStack("dial-timeout must be greater than zero")
-		}
 		o.DialTimeout = a
 	}
 
@@ -304,9 +303,6 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
-		if a <= 0 {
-			return errors.ErrKafkaInvalidConfig.GenWithStack("write-timeout must be greater than zero")
-		}
 		o.WriteTimeout = a
 	}
 
@@ -314,9 +310,6 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		a, err := time.ParseDuration(*urlParameter.ReadTimeout)
 		if err != nil {
 			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
-		}
-		if a <= 0 {
-			return errors.ErrKafkaInvalidConfig.GenWithStack("read-timeout must be greater than zero")
 		}
 		o.ReadTimeout = a
 	}
@@ -501,6 +494,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			// BASE64 decode the client secret
 			decodedClientSecret, err := base64.StdEncoding.DecodeString(clientSecret)
 			if err != nil {
+				log.Error("OAuth2 client secret is not base64 encoded", zap.Error(err))
 				return errors.ErrKafkaInvalidConfig.GenWithStack("OAuth2 client secret is not base64 encoded")
 			}
 			o.SASL.OAuth2.ClientSecret = string(decodedClientSecret)
@@ -570,14 +564,14 @@ func (c *AutoCreateTopicConfig) ValidateReplicationFactor(admin ClusterAdminClie
 
 	raw, found, err := admin.GetBrokerConfig(MinInsyncReplicasConfigName)
 	if err != nil {
-		log.Warn("kafka broker configuration lookup failed, skipping replication factor validation",
+		log.Warn("cannot get Kafka broker configuration, assume replication factor is valid",
 			zap.String("configName", MinInsyncReplicasConfigName),
 			zap.Int16("replicationFactor", c.ReplicationFactor),
 			zap.Error(err))
 		return nil
 	}
 	if !found {
-		log.Warn("kafka broker configuration not found, skipping replication factor validation",
+		log.Warn("Kafka broker configuration not found, assume replication factor is valid",
 			zap.String("configName", MinInsyncReplicasConfigName),
 			zap.Int16("replicationFactor", c.ReplicationFactor))
 		return nil
@@ -622,11 +616,9 @@ func NewKafkaClientID(captureAddr string,
 	return
 }
 
-// adjustOptions adjusts options with Kafka runtime metadata.
-// It overwrites MaxMessageBytes with the final producer message limit derived
-// from the topic or broker configuration.
+// adjustOptions adjust the `options` and `sarama.Config` by condition.
 func adjustOptions(
-	changefeedID common.ChangeFeedID,
+	ctx context.Context,
 	admin ClusterAdminClient,
 	options *options,
 	topic string,
@@ -640,98 +632,90 @@ func adjustOptions(
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
 	if exists {
-		err = adjustExistingTopicOption(changefeedID, admin, options, info)
-	} else {
-		adjustNewTopicOptions(changefeedID, admin, options)
+		// make sure that producer's `MaxMessageBytes` smaller than topic's `max.message.bytes`
+		topicMaxMessageBytesStr, found, err := getTopicConfig(
+			ctx, admin, info.Name,
+			TopicMaxMessageBytesConfigName,
+			BrokerMessageMaxBytesConfigName,
+		)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return errors.ErrKafkaAdminAPI.GenWithStack(
+				"Kafka configuration %s not found in topic %s or broker",
+				TopicMaxMessageBytesConfigName, info.Name)
+		}
+		topicMaxMessageBytes, err := strconv.Atoi(topicMaxMessageBytesStr)
+		if err != nil {
+			return errors.WrapError(errors.ErrKafkaAdminAPI, err,
+				"parse-config", TopicMaxMessageBytesConfigName)
+		}
+
+		maxMessageBytes := topicMaxMessageBytes - maxMessageBytesOverhead
+		if topicMaxMessageBytes <= options.MaxMessageBytes {
+			log.Warn("topic's `max.message.bytes` less than the `max-message-bytes`,"+
+				"use topic's `max.message.bytes` to initialize the Kafka producer",
+				zap.Int("max.message.bytes", topicMaxMessageBytes),
+				zap.Int("max-message-bytes", options.MaxMessageBytes),
+				zap.Int("real-max-message-bytes", maxMessageBytes))
+			options.MaxMessageBytes = maxMessageBytes
+		} else if maxMessageBytes < options.MaxMessageBytes {
+			options.MaxMessageBytes = maxMessageBytes
+		}
+
+		// no need to create the topic,
+		// but we would have to log user if they found enter wrong topic name later
+		if options.AutoCreate {
+			log.Warn("topic already exist, TiCDC will not create the topic",
+				zap.String("topic", topic), zap.Any("detail", info))
+		}
+
+		if err = options.setPartitionNum(info.NumPartitions); err != nil {
+			return err
+		}
+
+		return nil
 	}
+
+	brokerMessageMaxBytesStr, found, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
 	if err != nil {
+		log.Warn("TiCDC cannot find `message.max.bytes` from broker's configuration")
 		return err
 	}
-
-	options.MaxBatchedBytes = min(options.MaxBatchedBytes, options.MaxMessageBytes)
-	return nil
-}
-
-func adjustExistingTopicOption(
-	changefeedID common.ChangeFeedID,
-	admin ClusterAdminClient,
-	options *options,
-	info TopicDetail,
-) error {
-	maxMessageBytes, found, err := getTopicMaxMessageBytes(admin, info.Name)
-	if err != nil || !found {
-		log.Warn("kafka topic `max.message.bytes` unavailable, using configured value",
-			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
-			zap.Int("maxMessageBytes", options.MaxMessageBytes), zap.Error(err))
-		maxMessageBytes = options.MaxMessageBytes
+	if !found {
+		return errors.ErrKafkaAdminAPI.GenWithStack(
+			"Kafka broker configuration %s not found", BrokerMessageMaxBytesConfigName)
 	}
-	options.MaxMessageBytes = maxMessageBytes
-
-	if err = options.setPartitionNum(changefeedID, info.NumPartitions); err != nil {
-		return err
+	brokerMessageMaxBytes, err := strconv.Atoi(brokerMessageMaxBytesStr)
+	if err != nil {
+		return errors.WrapError(errors.ErrKafkaAdminAPI, err,
+			"parse-config", BrokerMessageMaxBytesConfigName)
 	}
-	return nil
-}
 
-func adjustNewTopicOptions(
-	changefeedID common.ChangeFeedID,
-	admin ClusterAdminClient,
-	options *options,
-) {
 	// when create the topic, `max.message.bytes` is decided by the broker,
 	// it would use broker's `message.max.bytes` to set topic's `max.message.bytes`.
-	messageMaxBytes, found, err := getBrokerMaxMessageBytes(admin)
-	if err != nil || !found {
-		log.Warn("kafka broker `message.max.bytes` unavailable, using configured value",
-			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
-			zap.Int("maxMessageBytes", options.MaxMessageBytes), zap.Error(err))
-		messageMaxBytes = options.MaxMessageBytes
+	// TiCDC need to make sure that the producer's `MaxMessageBytes` won't larger than
+	// broker's `message.max.bytes`.
+	maxMessageBytes := brokerMessageMaxBytes - maxMessageBytesOverhead
+	if brokerMessageMaxBytes <= options.MaxMessageBytes {
+		log.Warn("broker's `message.max.bytes` less than the `max-message-bytes`,"+
+			"use broker's `message.max.bytes` to initialize the Kafka producer",
+			zap.Int("message.max.bytes", brokerMessageMaxBytes),
+			zap.Int("max-message-bytes", options.MaxMessageBytes),
+			zap.Int("real-max-message-bytes", maxMessageBytes))
+		options.MaxMessageBytes = maxMessageBytes
+	} else if maxMessageBytes < options.MaxMessageBytes {
+		options.MaxMessageBytes = maxMessageBytes
 	}
-	options.MaxMessageBytes = messageMaxBytes
 
 	// topic not exists yet, and user does not specify the `partition-num` in the sink uri.
 	if options.PartitionNum == 0 {
 		options.PartitionNum = defaultPartitionNum
+		log.Warn("partition-num is not set, use the default partition count",
+			zap.String("topic", topic), zap.Int32("partitions", options.PartitionNum))
 	}
-}
-
-func getTopicMaxMessageBytes(
-	admin ClusterAdminClient,
-	topic string,
-) (int, bool, error) {
-	raw, found, err := getTopicConfig(
-		admin, topic,
-		TopicMaxMessageBytesConfigName,
-		BrokerMessageMaxBytesConfigName,
-	)
-	if err != nil {
-		return 0, false, err
-	}
-	if !found {
-		return 0, false, nil
-	}
-	maxMessageBytes, err := strconv.Atoi(raw)
-	if err != nil {
-		return 0, false, errors.WrapError(
-			errors.ErrKafkaAdminAPI, err, "parse-config", TopicMaxMessageBytesConfigName)
-	}
-	return maxMessageBytes, true, nil
-}
-
-func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, bool, error) {
-	raw, found, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
-	if err != nil {
-		return 0, false, err
-	}
-	if !found {
-		return 0, false, nil
-	}
-	messageMaxBytes, err := strconv.Atoi(raw)
-	if err != nil {
-		return 0, false, errors.WrapError(
-			errors.ErrKafkaAdminAPI, err, "parse-config", BrokerMessageMaxBytesConfigName)
-	}
-	return messageMaxBytes, true, nil
+	return nil
 }
 
 // getTopicConfig gets topic config by name.
@@ -739,6 +723,7 @@ func getBrokerMaxMessageBytes(admin ClusterAdminClient) (int, bool, error) {
 // we will try to get it from the broker's configuration.
 // NOTICE: The configuration names of topic and broker may be different for the same configuration.
 func getTopicConfig(
+	_ context.Context,
 	admin ClusterAdminClient,
 	topicName string,
 	topicConfigName string,
@@ -749,5 +734,7 @@ func getTopicConfig(
 		return c, true, nil
 	}
 
+	log.Info("kafka sink cannot get the configuration from topic, try to get it from broker",
+		zap.String("topic", topicName), zap.String("config", topicConfigName), zap.Error(err))
 	return admin.GetBrokerConfig(brokerConfigName)
 }

@@ -93,7 +93,7 @@ kafka_groups=(
 	# G08
 	'capture_session_done_during_task fail_over_ddl_I table_route'
 	# G09
-	'cdc_server_tips ddl_sequence fail_over_ddl_J'
+	'cdc_server_tips ddl_sequence log_redaction fail_over_ddl_J'
 	# G10
 	'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
 	# G11
