@@ -847,6 +847,39 @@ func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 		requireNoDispatcherRequest(t, mockEventCollector)
 	})
 
+	t.Run("local ready waits until its resolved ts covers the current checkpoint", func(t *testing.T) {
+		mockDisp := newMockDispatcher(dispatcherID, 100)
+		mockDisp.checkPointTs = 200
+		mockEventCollector := newTestEventCollector(localServerID)
+		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+		setSessionState(stat.session, remoteServerID, true, "")
+		newLocalReadyEvent := func(resolvedTs uint64) dispatcher.DispatcherEvent {
+			ready := commonEvent.NewReadyEventWithResolvedTs(dispatcherID, resolvedTs)
+			return dispatcher.DispatcherEvent{
+				From:  &localServerID,
+				Event: &ready,
+			}
+		}
+
+		stat.handleSignalEvent(newLocalReadyEvent(199))
+
+		currentEventServiceID, localReadyPending, pendingRemoteTarget := sessionState(stat.session)
+		require.Equal(t, remoteServerID, currentEventServiceID)
+		require.True(t, localReadyPending)
+		require.Empty(t, pendingRemoteTarget)
+		requireNoDispatcherRequest(t, mockEventCollector)
+
+		stat.handleSignalEvent(newLocalReadyEvent(200))
+
+		requireDispatcherRequests(
+			t,
+			readDispatcherRequests(t, mockEventCollector, 2),
+			dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+			dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+		)
+		requireNoDispatcherRequest(t, mockEventCollector)
+	})
+
 	t.Run("local ready with callback still removes speculative remote register", func(t *testing.T) {
 		mockDisp := newMockDispatcher(dispatcherID, 0)
 		mockEventCollector := newTestEventCollector(localServerID)
