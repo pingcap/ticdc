@@ -14,7 +14,6 @@
 package kafka
 
 import (
-	"context"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -22,12 +21,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,133 +34,9 @@ const (
 	defaultMockTopicName = "mock_topic"
 
 	// These values model Kafka admin responses, not TiCDC option defaults.
-	mockClusterReplicationFactor int16 = 3
-	mockBrokerMessageMaxBytes          = "1048588"
-	mockTopicMessageMaxBytes           = "1048588"
-	mockMinInsyncReplicas              = "1"
+	mockBrokerMessageMaxBytes = "1048588"
+	mockTopicMessageMaxBytes  = "1048588"
 )
-
-type kafkaAdminFixture struct {
-	admin        *MockClusterAdminClient
-	topics       map[string]TopicDetail
-	brokerConfig map[string]string
-	topicConfig  map[string]map[string]string
-}
-
-func newKafkaAdminFixture(t *testing.T) *kafkaAdminFixture {
-	t.Helper()
-
-	ctrl := gomock.NewController(t)
-	fixture := &kafkaAdminFixture{
-		admin:  NewMockClusterAdminClient(ctrl),
-		topics: make(map[string]TopicDetail),
-		brokerConfig: map[string]string{
-			BrokerMessageMaxBytesConfigName: mockBrokerMessageMaxBytes,
-			MinInsyncReplicasConfigName:     mockMinInsyncReplicas,
-		},
-		topicConfig: make(map[string]map[string]string),
-	}
-	fixture.addTopic(defaultMockTopicName, defaultPartitionNum)
-	fixture.topicConfig[defaultMockTopicName] = map[string]string{
-		TopicMaxMessageBytesConfigName: mockTopicMessageMaxBytes,
-		MinInsyncReplicasConfigName:    mockMinInsyncReplicas,
-	}
-
-	fixture.admin.EXPECT().Close().AnyTimes()
-	fixture.admin.EXPECT().GetTopicsMeta(gomock.Any(), gomock.Any()).
-		DoAndReturn(fixture.getTopicsMeta).AnyTimes()
-	fixture.admin.EXPECT().GetTopicsPartitionsNum(gomock.Any()).
-		DoAndReturn(fixture.getTopicsPartitionsNum).AnyTimes()
-	fixture.admin.EXPECT().GetBrokerConfig(gomock.Any()).
-		DoAndReturn(fixture.getBrokerConfig).AnyTimes()
-	fixture.admin.EXPECT().GetTopicConfig(gomock.Any(), gomock.Any()).
-		DoAndReturn(fixture.getTopicConfig).AnyTimes()
-	fixture.admin.EXPECT().CreateTopic(gomock.Any(), gomock.Any()).
-		DoAndReturn(fixture.createTopic).AnyTimes()
-
-	return fixture
-}
-
-func (f *kafkaAdminFixture) addTopic(name string, partitionNum int32) {
-	f.topics[name] = TopicDetail{Name: name, NumPartitions: partitionNum}
-}
-
-func (f *kafkaAdminFixture) getTopicsMeta(
-	topics []string, _ bool,
-) (map[string]TopicDetail, error) {
-	result := make(map[string]TopicDetail, len(topics))
-	for _, topic := range topics {
-		if detail, ok := f.topics[topic]; ok {
-			result[topic] = detail
-		}
-	}
-	return result, nil
-}
-
-func (f *kafkaAdminFixture) getTopicsPartitionsNum(
-	topics []string,
-) (map[string]int32, error) {
-	result := make(map[string]int32, len(topics))
-	for _, topic := range topics {
-		if detail, ok := f.topics[topic]; ok {
-			result[topic] = detail.NumPartitions
-		}
-	}
-	return result, nil
-}
-
-func (f *kafkaAdminFixture) getBrokerConfig(configName string) (string, bool, error) {
-	if value, ok := f.brokerConfig[configName]; ok {
-		return value, true, nil
-	}
-	return "", false, nil
-}
-
-func (f *kafkaAdminFixture) getTopicConfig(topicName string, configName string) (string, bool, error) {
-	if _, ok := f.topics[topicName]; !ok {
-		return "", false, nil
-	}
-	if value, ok := f.topicConfig[topicName][configName]; ok {
-		return value, true, nil
-	}
-	return "", false, nil
-}
-
-func (f *kafkaAdminFixture) createTopic(detail *TopicDetail, _ bool) error {
-	if detail.ReplicationFactor > mockClusterReplicationFactor {
-		return sarama.ErrInvalidReplicationFactor
-	}
-	if _, ok := f.brokerConfig[MinInsyncReplicasConfigName]; !ok &&
-		detail.ReplicationFactor != mockClusterReplicationFactor {
-		return sarama.ErrPolicyViolation
-	}
-	f.topics[detail.Name] = *detail
-	return nil
-}
-
-func (f *kafkaAdminFixture) brokerMessageMaxBytes() int {
-	value, _ := strconv.Atoi(f.brokerConfig[BrokerMessageMaxBytesConfigName])
-	return value
-}
-
-func (f *kafkaAdminFixture) topicMaxMessageBytes(topicName string) int {
-	value, _ := strconv.Atoi(f.topicConfig[topicName][TopicMaxMessageBytesConfigName])
-	return value
-}
-
-func (f *kafkaAdminFixture) setMessageMaxBytes(brokerValue, topicValue string) {
-	f.brokerConfig[BrokerMessageMaxBytesConfigName] = brokerValue
-	f.topicConfig[defaultMockTopicName][TopicMaxMessageBytesConfigName] = topicValue
-}
-
-func (f *kafkaAdminFixture) setMinInsyncReplicas(minInsyncReplicas string) {
-	f.topicConfig[defaultMockTopicName][MinInsyncReplicasConfigName] = minInsyncReplicas
-	f.brokerConfig[MinInsyncReplicasConfigName] = minInsyncReplicas
-}
-
-func (f *kafkaAdminFixture) dropBrokerConfig(configName string) {
-	delete(f.brokerConfig, configName)
-}
 
 func TestCompleteOptions(t *testing.T) {
 	options := NewOptions()
@@ -288,6 +163,258 @@ func TestCompleteOptions(t *testing.T) {
 	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.NoError(t, err)
 	require.Equal(t, defaultMaxRetry, options.MaxRetry)
+}
+
+func TestApplySASL(t *testing.T) {
+	t.Parallel()
+
+	const baseURI = "kafka://127.0.0.1:9092/abc"
+	tests := []struct {
+		name        string
+		uri         string
+		kafkaConfig *config.KafkaConfig
+		expected    saslConfig
+		expectErr   string
+	}{
+		{name: "no params", uri: baseURI},
+		{
+			name: "valid PLAIN SASL",
+			uri:  baseURI + "?sasl-user=user&sasl-password=password&sasl-mechanism=plain",
+			expected: saslConfig{
+				user:      "user",
+				password:  "password",
+				mechanism: plainMechanism,
+			},
+		},
+		{
+			name: "valid SCRAM-SHA-256 SASL",
+			uri:  baseURI + "?sasl-user=user&sasl-password=password&sasl-mechanism=scram-sha-256",
+			expected: saslConfig{
+				user:      "user",
+				password:  "password",
+				mechanism: scram256Mechanism,
+			},
+		},
+		{
+			name: "valid SCRAM-SHA-512 SASL",
+			uri:  baseURI + "?sasl-user=user&sasl-password=password&sasl-mechanism=SCRAM-SHA-512",
+			expected: saslConfig{
+				user:      "user",
+				password:  "password",
+				mechanism: scram512Mechanism,
+			},
+		},
+		{
+			name: "valid GSSAPI user auth SASL",
+			uri: baseURI + "?sasl-mechanism=GSSAPI&sasl-gssapi-auth-type=USER" +
+				"&sasl-gssapi-kerberos-config-path=/root/config" +
+				"&sasl-gssapi-service-name=a&sasl-gssapi-user=user" +
+				"&sasl-gssapi-password=pwd&sasl-gssapi-realm=realm" +
+				"&sasl-gssapi-disable-pafxfast=false",
+			expected: saslConfig{
+				mechanism: gssapiMechanism,
+				gssapi: gssapiConfig{
+					authType:           userAuth,
+					kerberosConfigPath: "/root/config",
+					serviceName:        "a",
+					username:           "user",
+					password:           "pwd",
+					realm:              "realm",
+				},
+			},
+		},
+		{
+			name: "valid GSSAPI keytab auth SASL",
+			uri: baseURI + "?sasl-mechanism=GSSAPI&sasl-gssapi-auth-type=keytab" +
+				"&sasl-gssapi-kerberos-config-path=/root/config" +
+				"&sasl-gssapi-service-name=a&sasl-gssapi-user=user" +
+				"&sasl-gssapi-keytab-path=/root/keytab&sasl-gssapi-realm=realm" +
+				"&sasl-gssapi-disable-pafxfast=false",
+			expected: saslConfig{
+				mechanism: gssapiMechanism,
+				gssapi: gssapiConfig{
+					authType:           keyTabAuth,
+					keyTabPath:         "/root/keytab",
+					kerberosConfigPath: "/root/config",
+					serviceName:        "a",
+					username:           "user",
+					realm:              "realm",
+				},
+			},
+		},
+		{
+			name:      "invalid mechanism",
+			uri:       baseURI + "?sasl-mechanism=a",
+			expectErr: "unknown SASL mechanism: a",
+		},
+		{
+			name:      "invalid GSSAPI auth type",
+			uri:       baseURI + "?sasl-mechanism=gssapi&sasl-gssapi-auth-type=keyta1b",
+			expectErr: "unknown auth type: keyta1b",
+		},
+		{
+			name: "valid OAUTHBEARER SASL",
+			uri:  baseURI + "?sasl-mechanism=OAUTHBEARER",
+			kafkaConfig: &config.KafkaConfig{
+				SASLOAuthClientID:     aws.String("client_id"),
+				SASLOAuthClientSecret: aws.String("Y2xpZW50X3NlY3JldA=="),
+				SASLOAuthTokenURL:     aws.String("127.0.0.1:9093/token"),
+			},
+			expected: saslConfig{
+				mechanism: oauthMechanism,
+				oauth2: oauth2Config{
+					clientID:     "client_id",
+					clientSecret: "client_secret",
+					tokenURL:     "127.0.0.1:9093/token",
+					grantType:    "client_credentials",
+				},
+			},
+		},
+		{
+			name: "invalid OAUTHBEARER SASL: missing client id",
+			uri:  baseURI + "?sasl-mechanism=OAUTHBEARER",
+			kafkaConfig: &config.KafkaConfig{
+				SASLOAuthClientSecret: aws.String("Y2xpZW50X3NlY3JldA=="),
+				SASLOAuthTokenURL:     aws.String("127.0.0.1:9093/token"),
+			},
+			expectErr: "OAuth2 client id is empty",
+		},
+		{
+			name: "invalid OAUTHBEARER SASL: missing client secret",
+			uri:  baseURI + "?sasl-mechanism=OAUTHBEARER",
+			kafkaConfig: &config.KafkaConfig{
+				SASLOAuthClientID: aws.String("client_id"),
+				SASLOAuthTokenURL: aws.String("127.0.0.1:9093/token"),
+			},
+			expectErr: "OAuth2 client secret is empty",
+		},
+		{
+			name: "invalid OAUTHBEARER SASL: missing token url",
+			uri:  baseURI + "?sasl-mechanism=OAUTHBEARER",
+			kafkaConfig: &config.KafkaConfig{
+				SASLOAuthClientID:     aws.String("client_id"),
+				SASLOAuthClientSecret: aws.String("Y2xpZW50X3NlY3JldA=="),
+			},
+			expectErr: "OAuth2 token url is empty",
+		},
+		{
+			name: "invalid OAUTHBEARER SASL: non base64 client secret",
+			uri:  baseURI + "?sasl-mechanism=OAUTHBEARER",
+			kafkaConfig: &config.KafkaConfig{
+				SASLOAuthClientID:     aws.String("client_id"),
+				SASLOAuthClientSecret: aws.String("client_secret"),
+				SASLOAuthTokenURL:     aws.String("127.0.0.1:9093/token"),
+			},
+			expectErr: "OAuth2 client secret is not base64 encoded",
+		},
+		{
+			name: "invalid OAUTHBEARER SASL: wrong mechanism",
+			uri:  baseURI + "?sasl-mechanism=GSSAPI",
+			kafkaConfig: &config.KafkaConfig{
+				SASLOAuthClientID:     aws.String("client_id"),
+				SASLOAuthClientSecret: aws.String("Y2xpZW50X3NlY3JldA=="),
+				SASLOAuthTokenURL:     aws.String("127.0.0.1:9093/token"),
+			},
+			expectErr: "OAuth2 is only supported with SASL mechanism type OAUTHBEARER",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			sinkURI, err := url.Parse(test.uri)
+			require.NoError(t, err)
+			replicaConfig := config.GetDefaultReplicaConfig()
+			replicaConfig.Sink.KafkaConfig = test.kafkaConfig
+			options := NewOptions()
+			err = options.Apply(
+				common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
+				sinkURI,
+				replicaConfig.Sink,
+			)
+			if test.expectErr != "" {
+				require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+				require.ErrorContains(t, err, test.expectErr)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, test.expected, *options.sasl)
+		})
+	}
+}
+
+func TestApplyTLS(t *testing.T) {
+	t.Parallel()
+
+	const baseURI = "kafka://127.0.0.1:9092/abc"
+	tests := []struct {
+		name               string
+		uri                string
+		expectedTLS        bool
+		expectedCredential security.Credential
+		expectErr          string
+	}{
+		{
+			name:        "tls config with enable-tls set to true",
+			uri:         baseURI + "?enable-tls=true",
+			expectedTLS: true,
+		},
+		{
+			name: "tls config with no enable-tls and credential files supplied",
+			uri:  baseURI + "?ca=/root/ca.file&cert=/root/cert.file&key=/root/key.file",
+			expectedCredential: security.Credential{
+				CAPath:   "/root/ca.file",
+				CertPath: "/root/cert.file",
+				KeyPath:  "/root/key.file",
+			},
+			expectedTLS: true,
+		},
+		{name: "tls config with no enable-tls and no credential files", uri: baseURI},
+		{
+			name: "tls config with enable-tls false and credential files supplied",
+			uri:  baseURI + "?enable-tls=false&ca=/root/ca&cert=/root/cert&key=/root/key",
+			expectedCredential: security.Credential{
+				CAPath:   "/root/ca",
+				CertPath: "/root/cert",
+				KeyPath:  "/root/key",
+			},
+			expectErr: "credential files are supplied, but 'enable-tls' is set to false",
+		},
+		{
+			name: "tls config with incomplete credential files",
+			uri:  baseURI + "?enable-tls=true&ca=/root/ca&cert=/root/cert",
+			expectedCredential: security.Credential{
+				CAPath:   "/root/ca",
+				CertPath: "/root/cert",
+			},
+			expectErr: "ca, cert and key files should all be supplied",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			sinkURI, err := url.Parse(test.uri)
+			require.NoError(t, err)
+			options := NewOptions()
+			err = options.Apply(
+				common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
+				sinkURI,
+				config.GetDefaultReplicaConfig().Sink,
+			)
+			if test.expectErr != "" {
+				require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+				require.ErrorContains(t, err, test.expectErr)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, test.expectedTLS, options.EnableTLS)
+			require.Equal(t, test.expectedCredential, *options.Credential)
+		})
+	}
 }
 
 func TestApplyRejectsNonPositiveMaxMessageBytes(t *testing.T) {
@@ -451,27 +578,24 @@ func TestApplyRejectsNonPositiveTimeout(t *testing.T) {
 }
 
 func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *testing.T) {
+	brokerMessageMaxBytes, err := strconv.Atoi(mockBrokerMessageMaxBytes)
+	require.NoError(t, err)
+
 	tests := []struct {
 		name                      string
-		configuredMaxMessageBytes func(*kafkaAdminFixture) int
+		configuredMaxMessageBytes int
 	}{
 		{
-			name: "uses broker limit when configured value is below broker",
-			configuredMaxMessageBytes: func(*kafkaAdminFixture) int {
-				return 1024
-			},
+			name:                      "uses broker limit when configured value is below broker",
+			configuredMaxMessageBytes: 1024,
 		},
 		{
-			name: "uses broker limit when configured value is below broker by one byte",
-			configuredMaxMessageBytes: func(f *kafkaAdminFixture) int {
-				return f.brokerMessageMaxBytes() - 1
-			},
+			name:                      "uses broker limit when configured value is below broker by one byte",
+			configuredMaxMessageBytes: brokerMessageMaxBytes - 1,
 		},
 		{
-			name: "uses broker limit when configured value is above broker",
-			configuredMaxMessageBytes: func(f *kafkaAdminFixture) int {
-				return f.brokerMessageMaxBytes() + 1
-			},
+			name:                      "uses broker limit when configured value is above broker",
+			configuredMaxMessageBytes: brokerMessageMaxBytes + 1,
 		},
 	}
 
@@ -479,53 +603,53 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			adminFixture := newKafkaAdminFixture(t)
-			adminClient := adminFixture.admin
-
-			detail := &TopicDetail{
-				Name:          topicName,
-				NumPartitions: 3,
-			}
-			err := adminClient.CreateTopic(detail, false)
-			require.NoError(t, err)
-
-			configuredMaxMessageBytes := test.configuredMaxMessageBytes(adminFixture)
+			ctrl := gomock.NewController(t)
+			adminClient := NewMockAdminClient(ctrl)
+			gomock.InOrder(
+				adminClient.EXPECT().GetTopicsMeta([]string{topicName}, true).Return(
+					map[string]TopicDetail{
+						topicName: {Name: topicName, NumPartitions: 3},
+					}, nil),
+				adminClient.EXPECT().GetTopicConfig(topicName, TopicMaxMessageBytesConfigName).
+					Return("", false, nil),
+				adminClient.EXPECT().GetBrokerConfig(BrokerMessageMaxBytesConfigName).
+					Return(mockBrokerMessageMaxBytes, true, nil),
+			)
 			sinkURI, err := url.Parse(fmt.Sprintf(
 				"kafka://127.0.0.1:9092/%s?max-message-bytes=%d",
-				topicName, configuredMaxMessageBytes,
+				topicName, test.configuredMaxMessageBytes,
 			))
 			require.NoError(t, err)
 
 			options := NewOptions()
 			err = options.Apply(changefeedID, sinkURI, config.GetDefaultReplicaConfig().Sink)
 			require.NoError(t, err)
-			require.Equal(t, configuredMaxMessageBytes, options.MaxMessageBytes)
-			require.Equal(t, configuredMaxMessageBytes, options.MaxBatchedBytes)
-			expectedProducerLimit := adminFixture.brokerMessageMaxBytes()
+			require.Equal(t, test.configuredMaxMessageBytes, options.MaxMessageBytes)
+			require.Equal(t, test.configuredMaxMessageBytes, options.MaxBatchedBytes)
 
-			ctx := context.Background()
 			err = adjustOptions(changefeedID, adminClient, options, topicName)
 			require.NoError(t, err)
 
-			saramaConfig, err := newSaramaConfig(ctx, options)
-			require.NoError(t, err)
-
-			require.NotEqual(t, configuredMaxMessageBytes, options.MaxMessageBytes)
-			require.Equal(t, expectedProducerLimit, options.MaxMessageBytes)
+			require.NotEqual(t, test.configuredMaxMessageBytes, options.MaxMessageBytes)
+			require.Equal(t, brokerMessageMaxBytes, options.MaxMessageBytes)
 			require.Equal(
 				t,
-				min(configuredMaxMessageBytes, expectedProducerLimit),
+				min(test.configuredMaxMessageBytes, brokerMessageMaxBytes),
 				options.MaxBatchedBytes,
 			)
-			require.Equal(t, expectedProducerLimit, saramaConfig.Producer.MaxMessageBytes)
 		})
 	}
 }
 
 func TestValidateReplicationFactor(t *testing.T) {
-	adminFixture := newKafkaAdminFixture(t)
-	adminClient := adminFixture.admin
-	adminFixture.setMinInsyncReplicas("2")
+	ctrl := gomock.NewController(t)
+	adminClient := NewMockAdminClient(ctrl)
+	gomock.InOrder(
+		adminClient.EXPECT().GetBrokerConfig(MinInsyncReplicasConfigName).
+			Return("2", true, nil),
+		adminClient.EXPECT().GetBrokerConfig(MinInsyncReplicasConfigName).
+			Return("", false, nil),
+	)
 
 	topicConfig := &AutoCreateTopicConfig{
 		AutoCreate:        true,
@@ -547,7 +671,6 @@ func TestValidateReplicationFactor(t *testing.T) {
 	err = localAcksConfig.ValidateReplicationFactor(adminClient)
 	require.NoError(t, err)
 
-	adminFixture.dropBrokerConfig(MinInsyncReplicasConfigName)
 	missingBrokerConfig := &AutoCreateTopicConfig{
 		AutoCreate:        true,
 		ReplicationFactor: 1,
@@ -555,15 +678,55 @@ func TestValidateReplicationFactor(t *testing.T) {
 	}
 	err = missingBrokerConfig.ValidateReplicationFactor(adminClient)
 	require.NoError(t, err)
-}
 
-func TestCreateProducerFailed(t *testing.T) {
-	options := NewOptions()
-	options.Version = "invalid"
-	options.IsAssignedVersion = true
-	saramaConfig, err := newSaramaConfig(context.Background(), options)
-	require.Regexp(t, "invalid version.*", errors.Cause(err))
-	require.Nil(t, saramaConfig)
+	t.Run("replication factor satisfies min insync replicas", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		adminClient := NewMockAdminClient(ctrl)
+		adminClient.EXPECT().GetBrokerConfig(MinInsyncReplicasConfigName).
+			Return("2", true, nil)
+
+		topicConfig := &AutoCreateTopicConfig{
+			ReplicationFactor: 3,
+			RequiredAcks:      WaitForAll,
+		}
+
+		err := topicConfig.ValidateReplicationFactor(adminClient)
+		require.NoError(t, err)
+	})
+
+	t.Run("invalid min insync replicas", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		adminClient := NewMockAdminClient(ctrl)
+		adminClient.EXPECT().GetBrokerConfig(MinInsyncReplicasConfigName).
+			Return("invalid", true, nil)
+
+		topicConfig := &AutoCreateTopicConfig{
+			ReplicationFactor: 3,
+			RequiredAcks:      WaitForAll,
+		}
+
+		err := topicConfig.ValidateReplicationFactor(adminClient)
+		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+	})
+
+	t.Run("broker config lookup failure skips validation", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		adminClient := NewMockAdminClient(ctrl)
+		lookupErr := errors.ErrKafkaAdminAPI.GenWithStackByArgs(
+			"describe-config",
+			MinInsyncReplicasConfigName,
+		)
+		adminClient.EXPECT().GetBrokerConfig(MinInsyncReplicasConfigName).
+			Return("", false, lookupErr)
+
+		topicConfig := &AutoCreateTopicConfig{
+			ReplicationFactor: 1,
+			RequiredAcks:      WaitForAll,
+		}
+
+		err := topicConfig.ValidateReplicationFactor(adminClient)
+		require.NoError(t, err)
+	})
 }
 
 func TestConfigurationCombinations(t *testing.T) {
@@ -716,39 +879,53 @@ func TestConfigurationCombinations(t *testing.T) {
 
 	for _, a := range combinations {
 		t.Run(a.name, func(t *testing.T) {
-			adminFixture := newKafkaAdminFixture(t)
-			adminFixture.setMessageMaxBytes(a.brokerMessageMaxBytes, a.topicMaxMessageBytes)
-			adminClient := adminFixture.admin
-
 			uri := fmt.Sprintf(a.uriTemplate, a.uriParams...)
 			sinkURI, err := url.Parse(uri)
 			require.Nil(t, err)
+
+			topic, ok := a.uriParams[0].(string)
+			require.True(t, ok)
+			require.NotEqual(t, "", topic)
+
+			ctrl := gomock.NewController(t)
+			adminClient := NewMockAdminClient(ctrl)
+			metadataCall := adminClient.EXPECT().GetTopicsMeta([]string{topic}, true)
+			sourceMaxMessageBytes := a.brokerMessageMaxBytes
+			if topic == defaultMockTopicName {
+				metadataCall.Return(map[string]TopicDetail{
+					topic: {Name: topic, NumPartitions: defaultPartitionNum},
+				}, nil)
+				gomock.InOrder(
+					metadataCall,
+					adminClient.EXPECT().GetTopicConfig(topic, TopicMaxMessageBytesConfigName).
+						Return(a.topicMaxMessageBytes, true, nil),
+				)
+				sourceMaxMessageBytes = a.topicMaxMessageBytes
+			} else {
+				metadataCall.Return(map[string]TopicDetail{}, nil)
+				gomock.InOrder(
+					metadataCall,
+					adminClient.EXPECT().GetBrokerConfig(BrokerMessageMaxBytesConfigName).
+						Return(a.brokerMessageMaxBytes, true, nil),
+				)
+			}
 
 			options := NewOptions()
 			err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 			require.Nil(t, err)
 			configuredMaxMessageBytes := options.MaxMessageBytes
 
-			topic, ok := a.uriParams[0].(string)
-			require.True(t, ok)
-			require.NotEqual(t, "", topic)
-
-			sourceMaxMessageBytes := adminFixture.brokerMessageMaxBytes()
-			if _, exists := adminFixture.topics[topic]; exists {
-				sourceMaxMessageBytes = adminFixture.topicMaxMessageBytes(topic)
-			}
-
+			expectedMaxMessageBytes, err := strconv.Atoi(sourceMaxMessageBytes)
+			require.NoError(t, err)
 			changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
 			err = adjustOptions(changefeedID, adminClient, options, topic)
 			require.Nil(t, err)
-			require.Equal(t, sourceMaxMessageBytes, options.MaxMessageBytes)
+			require.Equal(t, expectedMaxMessageBytes, options.MaxMessageBytes)
 			require.Equal(
 				t,
-				min(configuredMaxMessageBytes, sourceMaxMessageBytes),
+				min(configuredMaxMessageBytes, expectedMaxMessageBytes),
 				options.MaxBatchedBytes,
 			)
-
-			adminClient.Close()
 		})
 	}
 }
@@ -798,16 +975,16 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, time.Minute+time.Second, c.DialTimeout)
 	require.Equal(t, 2*time.Minute+time.Second, c.WriteTimeout)
 	require.Equal(t, 1, int(c.RequiredAcks))
-	require.Equal(t, "abc", c.SASL.SASLUser)
-	require.Equal(t, "123", c.SASL.SASLPassword)
-	require.Equal(t, "plain", strings.ToLower(string(c.SASL.SASLMechanism)))
-	require.Equal(t, 2, int(c.SASL.GSSAPI.AuthType))
-	require.Equal(t, "SASLGssAPIKeytabPath", c.SASL.GSSAPI.KeyTabPath)
-	require.Equal(t, "service", c.SASL.GSSAPI.ServiceName)
-	require.Equal(t, "user", c.SASL.GSSAPI.Username)
-	require.Equal(t, "pass", c.SASL.GSSAPI.Password)
-	require.Equal(t, "realm", c.SASL.GSSAPI.Realm)
-	require.Equal(t, true, c.SASL.GSSAPI.DisablePAFXFAST)
+	require.Equal(t, "abc", c.sasl.user)
+	require.Equal(t, "123", c.sasl.password)
+	require.Equal(t, "plain", strings.ToLower(string(c.sasl.mechanism)))
+	require.Equal(t, 2, int(c.sasl.gssapi.authType))
+	require.Equal(t, "SASLGssAPIKeytabPath", c.sasl.gssapi.keyTabPath)
+	require.Equal(t, "service", c.sasl.gssapi.serviceName)
+	require.Equal(t, "user", c.sasl.gssapi.username)
+	require.Equal(t, "pass", c.sasl.gssapi.password)
+	require.Equal(t, "realm", c.sasl.gssapi.realm)
+	require.Equal(t, true, c.sasl.gssapi.disablePAFXFAST)
 	require.Equal(t, true, c.EnableTLS)
 	require.Equal(t, "ca.pem", c.Credential.CAPath)
 	require.Equal(t, "cert.pem", c.Credential.CertPath)
@@ -880,16 +1057,16 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, time.Minute+time.Second, c.DialTimeout)
 	require.Equal(t, 2*time.Minute+time.Second, c.WriteTimeout)
 	require.Equal(t, 1, int(c.RequiredAcks))
-	require.Equal(t, "abc", c.SASL.SASLUser)
-	require.Equal(t, "123", c.SASL.SASLPassword)
-	require.Equal(t, "plain", strings.ToLower(string(c.SASL.SASLMechanism)))
-	require.Equal(t, 2, int(c.SASL.GSSAPI.AuthType))
-	require.Equal(t, "SASLGssAPIKeytabPath", c.SASL.GSSAPI.KeyTabPath)
-	require.Equal(t, "service", c.SASL.GSSAPI.ServiceName)
-	require.Equal(t, "user", c.SASL.GSSAPI.Username)
-	require.Equal(t, "pass", c.SASL.GSSAPI.Password)
-	require.Equal(t, "realm", c.SASL.GSSAPI.Realm)
-	require.Equal(t, true, c.SASL.GSSAPI.DisablePAFXFAST)
+	require.Equal(t, "abc", c.sasl.user)
+	require.Equal(t, "123", c.sasl.password)
+	require.Equal(t, "plain", strings.ToLower(string(c.sasl.mechanism)))
+	require.Equal(t, 2, int(c.sasl.gssapi.authType))
+	require.Equal(t, "SASLGssAPIKeytabPath", c.sasl.gssapi.keyTabPath)
+	require.Equal(t, "service", c.sasl.gssapi.serviceName)
+	require.Equal(t, "user", c.sasl.gssapi.username)
+	require.Equal(t, "pass", c.sasl.gssapi.password)
+	require.Equal(t, "realm", c.sasl.gssapi.realm)
+	require.Equal(t, true, c.sasl.gssapi.disablePAFXFAST)
 	require.Equal(t, true, c.EnableTLS)
 	require.Equal(t, "ca.pem", c.Credential.CAPath)
 	require.Equal(t, "cert.pem", c.Credential.CertPath)

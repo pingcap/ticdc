@@ -467,6 +467,30 @@ func TestRegionEventHandlerInitializedResetsRecoveryState(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestOnDropInvalidEventReleasesMemory(t *testing.T) {
+	testCases := []struct {
+		name   string
+		states []*regionFeedState
+	}{
+		{name: "empty states"},
+		{name: "nil state", states: []*regionFeedState{nil}},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			quota := newMemoryQuotaController(1024, 8)
+			span := newTestQuotaSpan(1)
+			require.True(t, quota.AcquireEvent(context.Background(), span, 10))
+			handler := &regionEventHandler{eventSink: &regionEventSink{memoryQuota: quota}}
+
+			require.NotPanics(t, func() {
+				handler.OnDrop(regionEvent{states: testCase.states, memoryBytes: 10})
+			})
+			require.Zero(t, getMemoryQuotaTestState(quota).used)
+		})
+	}
+}
+
 func TestSpanInitializedAfterFullRangeCoverage(t *testing.T) {
 	const startTs = 100
 	span := &subscribedSpan{

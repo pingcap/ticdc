@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -71,6 +72,10 @@ func (s *sink) SinkType() common.SinkType {
 	return common.KafkaSinkType
 }
 
+var createKafkaFactory = func(createSaramaFactory func() (kafka.Factory, error)) (kafka.Factory, error) {
+	return createSaramaFactory()
+}
+
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
 	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
@@ -111,7 +116,9 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 		return err
 	}
 
-	factory, err := kafka.NewSaramaFactory(ctx, options, changefeedID)
+	factory, err := createKafkaFactory(func() (kafka.Factory, error) {
+		return kafka.NewSaramaFactory(ctx, options, changefeedID)
+	})
 	if err != nil {
 		return err
 	}
@@ -122,28 +129,9 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	}
 	defer adminClient.Close()
 
-	topics, err := adminClient.GetTopicsMeta([]string{topic}, false)
+	err = topicmanager.EnsureTopic(ctx, changefeedID, topic, options.DeriveTopicConfig(), adminClient)
 	if err != nil {
 		return err
-	}
-	if _, exists := topics[topic]; !exists {
-		topicConfig := options.DeriveTopicConfig()
-		if !topicConfig.AutoCreate {
-			return errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topic)
-		}
-		if err = topicConfig.ValidateReplicationFactor(adminClient); err != nil {
-			return err
-		}
-
-		// the topic is not created, only validate.
-		err = adminClient.CreateTopic(&kafka.TopicDetail{
-			Name:              topic,
-			NumPartitions:     topicConfig.PartitionNum,
-			ReplicationFactor: topicConfig.ReplicationFactor,
-		}, true)
-		if err != nil {
-			return err
-		}
 	}
 
 	_, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck)

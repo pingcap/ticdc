@@ -42,7 +42,7 @@ func newRegionRequestStore(
 	store := &regionRequestStore{
 		workers: make([]*regionRequestWorker, 0, workerCount),
 	}
-	for i := 0; i < workerCount; i++ {
+	for range workerCount {
 		store.workers = append(store.workers, newRegionRequestWorker(
 			upstream,
 			eventSink,
@@ -79,10 +79,11 @@ func (s *regionRequestStore) close() {
 	}
 }
 
-func (s *regionRequestStore) inflightCount() int {
+func (s *regionRequestStore) requestedRegionCount() int {
 	count := 0
 	for _, worker := range s.workers {
-		count += worker.admission.stats().inflight
+		stats := worker.admission.stats()
+		count += stats.pending + stats.inflight
 	}
 	return count
 }

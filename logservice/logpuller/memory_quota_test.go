@@ -16,6 +16,7 @@ package logpuller
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -95,7 +96,7 @@ func TestMemoryQuotaUpdateMetrics(t *testing.T) {
 	require.Equal(t, float64(55), testutil.ToFloat64(
 		metrics.LogPullerMemoryQuota.WithLabelValues("used")))
 	require.Equal(t, float64(7), testutil.ToFloat64(
-		metrics.LogPullerMemoryQuota.WithLabelValues("scan_used")))
+		metrics.LogPullerMemoryQuota.WithLabelValues("scan_estimated")))
 	require.Equal(t, float64(2),
 		testutil.ToFloat64(metrics.LogPullerMemoryQuotaEventWaiterCount))
 	require.Equal(t, float64(3),
@@ -143,6 +144,42 @@ func TestMemoryQuotaAdmissionLevels(t *testing.T) {
 	state = getMemoryQuotaTestState(quota)
 	require.Equal(t, admissionNormal, state.level)
 	quota.ReleaseEvent(5)
+}
+
+func TestMemoryQuotaReleaseEventClampsToZero(t *testing.T) {
+	quota := newMemoryQuotaController(100, 10)
+	span := newTestQuotaSpan(1)
+	currentTs := setTestQuotaSpanLag(span, time.Hour)
+
+	require.True(t, quota.AcquireEvent(context.Background(), span, 20))
+	_, _, admitted := quota.AcquireScan(
+		newTestQuotaRegionWithPriority(span, cdcpb.ScanPriority_SCAN_PRIORITY_LOW),
+		currentTs,
+	)
+	require.False(t, admitted)
+
+	quota.ReleaseEvent(30)
+	state := getMemoryQuotaTestState(quota)
+	require.Zero(t, state.used)
+	require.Equal(t, admissionNormal, state.level)
+
+	require.True(t, quota.AcquireEvent(context.Background(), span, 1))
+	quota.ReleaseEvent(1)
+}
+
+func TestMemoryQuotaDerivedLimitsSaturate(t *testing.T) {
+	quota := newMemoryQuotaController(math.MaxUint64, math.MaxUint64/2+1)
+	require.Equal(t, uint64(math.MaxUint64), quota.hardLimit)
+
+	span := newTestQuotaSpan(1)
+	currentTs := setTestQuotaSpanLag(span, 24*time.Hour)
+	scanBytes, _, admitted := quota.AcquireScan(
+		newTestQuotaRegionWithPriority(span, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH),
+		currentTs,
+	)
+	require.True(t, admitted)
+	require.Equal(t, uint64(math.MaxUint64), scanBytes)
+	quota.ReleaseScan(scanBytes)
 }
 
 func TestMemoryQuotaSpanStopKeepsOwnedMemoryUntilRelease(t *testing.T) {

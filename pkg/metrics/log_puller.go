@@ -125,14 +125,6 @@ var (
 			Help:      "duration (s) for region request to be finished.",
 			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 		})
-	SubscriptionClientAddRegionRequestDuration = prometheus.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "subscription_client",
-			Name:      "add_region_request_duration",
-			Help:      "The cost of adding region request",
-			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
-		})
 	SubscriptionClientSubscribedRegionCount = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -207,7 +199,6 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(LogPullerMemoryQuotaScanWaiterCount)
 	registry.MustRegister(LogPullerMemoryQuotaScanWaitDuration)
 	registry.MustRegister(SubscriptionClientRequestedRegionCount)
-	registry.MustRegister(SubscriptionClientAddRegionRequestDuration)
 	registry.MustRegister(RegionRequestFinishScanDuration)
 	registry.MustRegister(SubscriptionClientSubscribedRegionCount)
 	registry.MustRegister(SubscriptionClientResolveLockTaskDropCounter)

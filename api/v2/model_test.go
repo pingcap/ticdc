@@ -27,6 +27,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 
 	// Test case 1: All fields are set
 	apiCfg := &ReplicaConfig{
+		PerformanceMode:       util.AddressOf(config.PerformanceModeLowLatency),
 		MemoryQuota:           util.AddressOf(uint64(1024)),
 		CaseSensitive:         util.AddressOf(true),
 		ForceReplicate:        util.AddressOf(true),
@@ -40,6 +41,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 				UseTableIDAsPath: util.AddressOf(true),
 				SpoolDiskQuota:   util.AddressOf(int64(1024)),
 				SpoolBaseDir:     util.AddressOf("/tmp/ticdc-spool"),
+			},
+			DebeziumConfig: &DebeziumConfig{
+				IncludeStartTs: util.AddressOf(true),
 			},
 		},
 		Mounter: &MounterConfig{
@@ -62,6 +66,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	}
 
 	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.Equal(t, config.PerformanceModeLowLatency, util.GetOrZero(internalCfg.PerformanceMode))
 	require.Equal(t, uint64(1024), util.GetOrZero(internalCfg.MemoryQuota))
 	require.True(t, util.GetOrZero(internalCfg.CaseSensitive))
 	require.True(t, util.GetOrZero(internalCfg.ForceReplicate))
@@ -73,6 +78,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(internalCfg.Sink.CloudStorageConfig.UseTableIDAsPath))
 	require.Equal(t, int64(1024), util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolDiskQuota))
 	require.Equal(t, "/tmp/ticdc-spool", util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolBaseDir))
+	require.True(t, util.GetOrZero(internalCfg.Sink.Debezium.IncludeStartTs))
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
 	require.True(t, util.GetOrZero(internalCfg.Scheduler.EnableTableAcrossNodes))
 	require.Equal(t, 1000, util.GetOrZero(internalCfg.Scheduler.RegionThreshold))
@@ -82,6 +88,21 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(128), util.GetOrZero(internalCfg.Consistent.MaxLogSize))
 	require.Equal(t, int64(2000), util.GetOrZero(internalCfg.Consistent.FlushIntervalInMs))
 	require.Equal(t, "s3://test", util.GetOrZero(internalCfg.Consistent.Storage))
+	// output_old_value is omitted in apiCfg and must keep its default (true).
+	require.True(t, internalCfg.Sink.Debezium.OutputOldValue)
+
+	// An explicit output_old_value must be honored.
+	apiCfgDebezium := &ReplicaConfig{
+		Sink: &SinkConfig{
+			DebeziumConfig: &DebeziumConfig{
+				OutputOldValue: util.AddressOf(false),
+				IncludeStartTs: util.AddressOf(true),
+			},
+		},
+	}
+	internalDebezium := apiCfgDebezium.ToInternalReplicaConfig()
+	require.False(t, internalDebezium.Sink.Debezium.OutputOldValue)
+	require.True(t, util.GetOrZero(internalDebezium.Sink.Debezium.IncludeStartTs))
 
 	// Test case 2: Nil fields (should use defaults or be nil)
 	apiCfgNil := &ReplicaConfig{}
@@ -93,6 +114,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 
 	// Test case 3: Conversion back to API config
 	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.Equal(t, config.PerformanceModeLowLatency, util.GetOrZero(apiCfgBack.PerformanceMode))
 	require.Equal(t, uint64(1024), *apiCfgBack.MemoryQuota)
 	require.True(t, *apiCfgBack.CaseSensitive)
 	require.True(t, *apiCfgBack.ForceReplicate)
@@ -100,6 +122,8 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, *apiCfgBack.Sink.CloudStorageConfig.UseTableIDAsPath)
 	require.Equal(t, int64(1024), *apiCfgBack.Sink.CloudStorageConfig.SpoolDiskQuota)
 	require.Equal(t, "/tmp/ticdc-spool", *apiCfgBack.Sink.CloudStorageConfig.SpoolBaseDir)
+	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.IncludeStartTs))
+	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.OutputOldValue))
 	require.Equal(t, 16, *apiCfgBack.Mounter.WorkerNum)
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
@@ -206,4 +230,54 @@ func TestReplicaConfigConversionRedoBatchField(t *testing.T) {
 	require.NotNil(t, apiCfgBack.Consistent)
 	require.NotNil(t, apiCfgBack.Consistent.EventCollectorBatchCount)
 	require.Equal(t, 4096, *apiCfgBack.Consistent.EventCollectorBatchCount)
+}
+
+func TestReplicaConfigConversionMySQLAsyncDDLTimeout(t *testing.T) {
+	t.Parallel()
+
+	apiCfg := &ReplicaConfig{
+		Sink: &SinkConfig{
+			MySQLConfig: &MySQLConfig{
+				AsyncDDLTimeout: util.AddressOf("45m"),
+			},
+		},
+	}
+
+	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.NotNil(t, internalCfg.Sink.MySQLConfig)
+	require.Equal(t, "45m", util.GetOrZero(internalCfg.Sink.MySQLConfig.AsyncDDLTimeout))
+
+	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.NotNil(t, apiCfgBack.Sink.MySQLConfig)
+	require.Equal(t, "45m", util.GetOrZero(apiCfgBack.Sink.MySQLConfig.AsyncDDLTimeout))
+}
+
+func TestReplicaConfigCodecConfigConversion(t *testing.T) {
+	t.Parallel()
+
+	apiCfg := &ReplicaConfig{
+		Sink: &SinkConfig{
+			KafkaConfig: &KafkaConfig{
+				CodecConfig: &CodecConfig{
+					EnableTiDBExtension:            util.AddressOf(true),
+					MaxBatchSize:                   util.AddressOf(16),
+					AvroEnableWatermark:            util.AddressOf(true),
+					AvroDecimalHandlingMode:        util.AddressOf("string"),
+					AvroBigintUnsignedHandlingMode: util.AddressOf("string"),
+					AvroIncludeBeforeValue:         util.AddressOf(true),
+					EncodingFormat:                 util.AddressOf("avro"),
+				},
+			},
+		},
+	}
+
+	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.NotNil(t, internalCfg.Sink.KafkaConfig)
+	require.NotNil(t, internalCfg.Sink.KafkaConfig.CodecConfig)
+	require.True(t, util.GetOrZero(internalCfg.Sink.KafkaConfig.CodecConfig.AvroIncludeBeforeValue))
+
+	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.NotNil(t, apiCfgBack.Sink.KafkaConfig)
+	require.NotNil(t, apiCfgBack.Sink.KafkaConfig.CodecConfig)
+	require.True(t, util.GetOrZero(apiCfgBack.Sink.KafkaConfig.CodecConfig.AvroIncludeBeforeValue))
 }

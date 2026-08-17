@@ -16,6 +16,7 @@ package logpuller
 import (
 	"context"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -113,6 +114,20 @@ func admitRegionRequest(
 	return req
 }
 
+type blockingEventFeedServer struct {
+	cdcpb.UnimplementedChangeDataServer
+	requestReceived chan struct{}
+}
+
+func (s *blockingEventFeedServer) EventFeedV2(stream cdcpb.ChangeData_EventFeedV2Server) error {
+	if _, err := stream.Recv(); err != nil {
+		return err
+	}
+	close(s.requestReceived)
+	<-stream.Context().Done()
+	return stream.Context().Err()
+}
+
 type pushedRegionEvent struct {
 	subscriptionID SubscriptionID
 	event          regionEvent
@@ -204,6 +219,56 @@ func errCacheLen(handler *regionFailureHandler) int {
 	handler.cache.Lock()
 	defer handler.cache.Unlock()
 	return len(handler.cache.cache)
+}
+
+func TestRunStreamCancelsBlockingReceiveWhenSenderExits(t *testing.T) {
+	ctx := t.Context()
+
+	serverImpl := &blockingEventFeedServer{requestReceived: make(chan struct{})}
+	var serverWG sync.WaitGroup
+	server, storeAddr := newMockService(ctx, t, serverImpl, &serverWG)
+	defer func() {
+		server.Stop()
+		serverWG.Wait()
+	}()
+
+	_, cluster, pdClient, _ := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
+	defer pdClient.Close()
+	cluster.AddStore(1, storeAddr)
+
+	admission := newTestRegionAdmissionController(1, 1)
+	worker := &regionRequestWorker{
+		admission:    admission,
+		controlQueue: newControlQueue(),
+		storeAddr:    storeAddr,
+		upstream: &upstreamHandle{
+			pd:         &mockPDClient{Client: pdClient, versionGen: defaultVersionGen},
+			credential: &security.Credential{},
+		},
+		tracker: newRegionTracker(),
+	}
+	region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
+	req := admitRegionRequest(t, admission, region)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- worker.runStream(ctx, req)
+	}()
+
+	select {
+	case <-serverImpl.requestReceived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the first region request")
+	}
+	admission.close()
+
+	select {
+	case err := <-done:
+		var streamErr *storeStreamErr
+		require.ErrorAs(t, err, &streamErr)
+	case <-time.After(time.Second):
+		t.Fatal("runStream did not cancel the blocking receive")
+	}
 }
 
 func TestRegionRequestWorkerIgnoresDuplicateActiveRegion(t *testing.T) {
@@ -504,7 +569,9 @@ func TestRunStreamFailurePushesTrackedRegionToEventSink(t *testing.T) {
 	require.Equal(t, SubscriptionID(1), pushed.subscriptionID)
 	require.Len(t, pushed.event.states, 1)
 	require.Same(t, sentState, pushed.event.states[0])
-	require.Equal(t, 0, worker.admission.stats().inflight)
+	require.Eventually(t, func() bool {
+		return worker.admission.stats().inflight == 0
+	}, time.Second, 10*time.Millisecond)
 
 	var streamErr *storeStreamErr
 	require.ErrorAs(t, sentState.takeError(), &streamErr)

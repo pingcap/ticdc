@@ -163,12 +163,16 @@ type memoryQuotaController struct {
 }
 
 func newMemoryQuotaController(capacity, scanBaseSize uint64) *memoryQuotaController {
+	hardLimit := uint64(math.MaxUint64)
+	if capacity <= math.MaxUint64/uint64(defaultHardLimitRatio) {
+		hardLimit = capacity * uint64(defaultHardLimitRatio)
+	}
 	c := &memoryQuotaController{
 		capacity:               capacity,
 		level:                  admissionNormal,
 		pauseLowPriorityLimit:  uint64(math.Ceil(float64(capacity) * defaultPauseLowPriorityRatio)),
 		resumeLowPriorityLimit: uint64(float64(capacity) * defaultResumeLowPriorityRatio),
-		hardLimit:              uint64(float64(capacity) * defaultHardLimitRatio),
+		hardLimit:              hardLimit,
 		scanEstimate:           scanBaseSize,
 		eventNotifier:          newEventMemoryNotifier(),
 		scanReady:              make(chan struct{}),
@@ -267,8 +271,14 @@ func (c *memoryQuotaController) ReleaseEvent(bytes uint64) {
 	if bytes == 0 {
 		return
 	}
-	used := c.used.Add(^(bytes - 1))
-	previousUsed := used + bytes
+	var previousUsed, used uint64
+	for {
+		previousUsed = c.used.Load()
+		used = subtractFloor(previousUsed, bytes)
+		if c.used.CompareAndSwap(previousUsed, used) {
+			break
+		}
+	}
 	if crossesDown(previousUsed, used, c.resumeLowPriorityLimit) {
 		c.refreshAdmissionAndNotify()
 	}
@@ -291,7 +301,7 @@ func (c *memoryQuotaController) UpdateMetrics() {
 
 	metrics.LogPullerMemoryQuota.WithLabelValues("max").Set(float64(c.capacity))
 	metrics.LogPullerMemoryQuota.WithLabelValues("used").Set(float64(used))
-	metrics.LogPullerMemoryQuota.WithLabelValues("scan_used").Set(float64(scanUsed))
+	metrics.LogPullerMemoryQuota.WithLabelValues("scan_estimated").Set(float64(scanUsed))
 	metrics.LogPullerMemoryQuotaEventWaiterCount.Set(
 		float64(c.eventNotifier.waiters.Load()))
 	metrics.LogPullerMemoryQuotaScanWaiterCount.Set(
@@ -315,9 +325,9 @@ func (c *memoryQuotaController) refreshAdmissionAndNotify() {
 
 func (c *memoryQuotaController) estimateScanSizeLocked(region regionInfo, currentTs uint64) uint64 {
 	raw := float64(c.scanEstimate) * scanLagFactor(region.resolvedTs(), currentTs)
-	estimate := uint64(raw)
-	if estimate < c.scanEstimate {
-		estimate = c.scanEstimate
+	estimate := uint64(math.MaxUint64)
+	if raw < float64(math.MaxUint64) {
+		estimate = max(uint64(raw), c.scanEstimate)
 	}
 	maxEstimate := uint64(math.MaxUint64)
 	if c.scanEstimate <= math.MaxUint64/defaultMaxScanLagFactor {

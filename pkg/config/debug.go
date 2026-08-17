@@ -24,9 +24,14 @@ import (
 const (
 	// DefaultOldStartTsScanLowPriorityThreshold is the default lag threshold for
 	// classifying scan tasks as low priority.
-	DefaultOldStartTsScanLowPriorityThreshold        = 10 * time.Minute
-	defaultLogPullerMemoryQuota               uint64 = 1024 * 1024 * 1024
-	defaultLogPullerScanBaseSize              uint64 = 8 * 1024 * 1024
+	DefaultOldStartTsScanLowPriorityThreshold = 10 * time.Minute
+
+	// DefaultLogPullerMemoryQuota is the default Log Puller soft memory limit.
+	DefaultLogPullerMemoryQuota uint64 = 1024 * 1024 * 1024
+
+	// DefaultLogPullerScanBaseSize is the default base memory estimate for one
+	// initial scan.
+	DefaultLogPullerScanBaseSize uint64 = 8 * 1024 * 1024
 )
 
 // DebugConfig represents config for ticdc unexposed feature configurations
@@ -88,7 +93,11 @@ type PullerConfig struct {
 	OldStartTsScanLowPriorityThreshold TomlDuration `toml:"old-start-ts-scan-low-priority-threshold" json:"old_start_ts_scan_low_priority_threshold"`
 	// MemoryQuota is the log puller's local soft memory limit in bytes.
 	MemoryQuota uint64 `toml:"memory-quota" json:"memory_quota"`
-	// ScanBaseSize is the base memory estimate for one admitted initial scan.
+	// ScanBaseSize is the base memory estimate reserved for one admitted initial
+	// scan. The actual estimate grows logarithmically with scan lag, up to a
+	// bounded multiple of this value. The estimate contributes to MemoryQuota
+	// pressure and throttles new low-priority scans; it is not an actual memory
+	// allocation or a per-scan hard limit.
 	ScanBaseSize uint64 `toml:"scan-base-size" json:"scan_base_size"`
 }
 
@@ -99,11 +108,11 @@ func NewDefaultPullerConfig() *PullerConfig {
 		ResolvedTsStuckInterval:          TomlDuration(5 * time.Minute),
 		LogRegionDetails:                 false,
 		PendingRegionRequestQueueSize:    32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
-		RegionRequestMaxWindowMultiplier: 4,
+		RegionRequestMaxWindowMultiplier: 4,  // Allows high-priority scans to use up to 4 * PendingRegionRequestQueueSize.
 		OldStartTsScanLowPriorityThreshold: TomlDuration(
 			DefaultOldStartTsScanLowPriorityThreshold),
-		MemoryQuota:  defaultLogPullerMemoryQuota,
-		ScanBaseSize: defaultLogPullerScanBaseSize,
+		MemoryQuota:  DefaultLogPullerMemoryQuota,
+		ScanBaseSize: DefaultLogPullerScanBaseSize,
 	}
 }
 

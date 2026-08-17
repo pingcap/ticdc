@@ -38,7 +38,7 @@ func TestRegionRequestStoreDistributesRegionsAcrossWorkers(t *testing.T) {
 	require.Equal(t, 2, worker2.admission.stats().pending)
 }
 
-func TestRegionRequestStoreInflightCountAggregatesWorkers(t *testing.T) {
+func TestRegionRequestStoreRequestedRegionCountIncludesPendingAndInflight(t *testing.T) {
 	worker1 := &regionRequestWorker{admission: newTestRegionAdmissionController(2, 1)}
 	worker2 := &regionRequestWorker{admission: newTestRegionAdmissionController(2, 1)}
 	store := &regionRequestStore{
@@ -47,8 +47,12 @@ func TestRegionRequestStoreInflightCountAggregatesWorkers(t *testing.T) {
 
 	req1 := admitRegionRequest(t, worker1.admission, prepareRegionForAdmission(createTestRegionInfo(1, 1), 100))
 	req2 := admitRegionRequest(t, worker2.admission, prepareRegionForAdmission(createTestRegionInfo(1, 2), 100))
+	require.True(t, worker1.admission.submit(newRegionPriorityTask(
+		prepareRegionForAdmission(createTestRegionInfo(1, 3), 100), 3)))
+	require.True(t, worker2.admission.submit(newRegionPriorityTask(
+		prepareRegionForAdmission(createTestRegionInfo(1, 4), 100), 4)))
 
-	require.Equal(t, 2, store.inflightCount())
+	require.Equal(t, 4, store.requestedRegionCount())
 
 	require.True(t, req1.abort())
 	require.True(t, req2.abort())
