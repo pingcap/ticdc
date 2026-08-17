@@ -494,7 +494,6 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			// BASE64 decode the client secret
 			decodedClientSecret, err := base64.StdEncoding.DecodeString(clientSecret)
 			if err != nil {
-				log.Error("OAuth2 client secret is not base64 encoded", zap.Error(err))
 				return errors.ErrKafkaInvalidConfig.GenWithStack("OAuth2 client secret is not base64 encoded")
 			}
 			o.SASL.OAuth2.ClientSecret = string(decodedClientSecret)

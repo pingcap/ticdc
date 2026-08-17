@@ -289,9 +289,6 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 		default:
 			event, ok := s.eventChan.Get()
 			if !ok {
-				log.Info("kafka sink event channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			schema := event.TableInfo.GetSchemaName()
@@ -351,9 +348,6 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 		default:
 			event, ok := s.rowChan.Get()
 			if !ok {
-				log.Info("kafka sink event channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			if err := s.comp.encoderGroup.AddEvents(ctx, event.Key, &event.RowEvent); err != nil {
@@ -409,9 +403,6 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent) ([]*
 	default:
 		msgs, ok := s.rowChan.GetMultipleNoGroup(buffer)
 		if !ok {
-			log.Info("kafka sink event channel closed",
-				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.String("changefeed", s.changefeedID.Name()))
 			return nil, nil
 		}
 		buffer = buffer[:0]
@@ -443,9 +434,6 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			return context.Cause(ctx)
 		case future, ok := <-outCh:
 			if !ok {
-				log.Info("kafka sink encoder's output channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			if err = future.Ready(ctx); err != nil {
@@ -549,9 +537,6 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			return context.Cause(ctx)
 		case ts, ok := <-s.checkpointChan:
 			if !ok {
-				log.Warn("kafka sink checkpoint channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 
