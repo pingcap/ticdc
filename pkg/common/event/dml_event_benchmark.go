@@ -17,7 +17,6 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
@@ -117,7 +116,7 @@ func createBatchDMLEvent(b *testing.B, dmlNum, rowNum int) {
 			_ = batchDMLEvent.AppendDMLEvent(dmlEvent)
 			for j := 0; j < rowNum; j++ {
 				for _, rawKV := range rawKvs {
-					err := dmlEvent.AppendRow(rawKV, helper.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
+					err := dmlEvent.AppendRow(rawKV, helper.mounter.DecodeToChunk, nil)
 					require.NoError(b, err)
 				}
 			}
@@ -144,7 +143,7 @@ func createDMLEvents(b *testing.B, dmlNum, rowNum int) {
 			event.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), defaultRowCount))
 			for j := 0; j < rowNum; j++ {
 				for _, rawKV := range rawKvs {
-					err := event.AppendRow(rawKV, helper.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
+					err := event.AppendRow(rawKV, helper.mounter.DecodeToChunk, nil)
 					require.NoError(b, err)
 				}
 			}

@@ -218,21 +218,6 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 	)
 }
 
-func TestEnableIgnoreUpdateOnlyColumns(t *testing.T) {
-	require.True(t, newDispatcherForTest(
-		newDispatcherTestSink(t, common.KafkaSinkType).Sink(),
-		&heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{0}, EndKey: []byte{1}},
-	).EnableIgnoreUpdateOnlyColumns())
-	require.False(t, newDispatcherForTest(
-		newDispatcherTestSink(t, common.MysqlSinkType).Sink(),
-		&heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{0}, EndKey: []byte{1}},
-	).EnableIgnoreUpdateOnlyColumns())
-	require.False(t, newDispatcherForTest(
-		newDispatcherTestSink(t, common.PulsarSinkType).Sink(),
-		&heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{0}, EndKey: []byte{1}},
-	).EnableIgnoreUpdateOnlyColumns())
-}
-
 var count atomic.Int32
 
 func callback() {

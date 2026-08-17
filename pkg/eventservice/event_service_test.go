@@ -518,10 +518,6 @@ func (m *mockDispatcherInfo) IsOutputRawChangeEvent() bool {
 	return false
 }
 
-func (m *mockDispatcherInfo) EnableIgnoreUpdateOnlyColumns() bool {
-	return false
-}
-
 func (m *mockDispatcherInfo) GetTxnAtomicity() config.AtomicityLevel {
 	return config.DefaultAtomicityLevel()
 }

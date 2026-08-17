@@ -56,7 +56,6 @@ type DispatcherService interface {
 	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 	IsOutputRawChangeEvent() bool
-	EnableIgnoreUpdateOnlyColumns() bool
 }
 
 // Dispatcher defines the interface for event dispatchers that are responsible for receiving events

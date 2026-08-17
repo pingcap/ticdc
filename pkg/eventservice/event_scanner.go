@@ -207,13 +207,7 @@ func (s *eventScanner) scanAndMergeEvents(
 ) (bool, error) {
 	tableID := session.dataRange.Span.TableID
 	dispatcher := session.dispatcherStat
-	processor := newDMLProcessor(
-		s.mounter,
-		s.schemaGetter,
-		dispatcher.filter,
-		dispatcher.info.IsOutputRawChangeEvent(),
-		s.mode,
-		dispatcher.info.EnableIgnoreUpdateOnlyColumns())
+	processor := newDMLProcessor(s.mounter, s.schemaGetter, dispatcher.filter, dispatcher.info.IsOutputRawChangeEvent(), s.mode)
 
 	for {
 		shouldStop, err := s.checkScanConditions(session)
@@ -667,7 +661,6 @@ func (t *TxnEvent) AppendRow(
 		chk *chunk.Chunk,
 	) (int, *integrity.Checksum, error),
 	filter filter.Filter,
-	filterContext filter.DMLFilterContext,
 ) error {
 	if t.shouldSplitTxn && (t.CurrentDMLEvent.Len() >= t.DMLEventMaxRows || t.CurrentDMLEvent.GetSize() >= t.DMLEventMaxBytes) {
 		newDMLEvent := event.NewDMLEvent(
@@ -682,7 +675,7 @@ func (t *TxnEvent) AppendRow(
 			return err
 		}
 	}
-	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter, filterContext)
+	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter)
 }
 
 // dmlTypeFilterCacheSize follows common.RowType iota values: delete, insert, update.
@@ -693,8 +686,7 @@ type dmlProcessor struct {
 	mounter      event.Mounter
 	schemaGetter schemaGetter
 
-	filter        filter.Filter
-	filterContext filter.DMLFilterContext
+	filter filter.Filter
 	// dmlTypeFilterCache caches the pre-decode filter result within the current transaction.
 	// The cache is reset when a new transaction starts. It is safe because tableInfo
 	// and startTs are fixed for the current transaction.
@@ -719,18 +711,12 @@ type dmlProcessor struct {
 // newDMLProcessor creates a new DML processor
 func newDMLProcessor(
 	mounter event.Mounter, schemaGetter schemaGetter,
-	dmlFilter filter.Filter, outputRawChangeEvent bool, mode int64,
-	enableIgnoreUpdateOnlyColumns bool,
+	filter filter.Filter, outputRawChangeEvent bool, mode int64,
 ) *dmlProcessor {
-	filterContext := filter.DMLFilterContext{}
-	if enableIgnoreUpdateOnlyColumns {
-		filterContext.EnableIgnoreUpdateOnlyColumns = true
-	}
 	return &dmlProcessor{
 		mounter:              mounter,
 		schemaGetter:         schemaGetter,
-		filter:               dmlFilter,
-		filterContext:        filterContext,
+		filter:               filter,
 		batchDML:             event.NewBatchDMLEvent(),
 		insertRowCache:       make([]*common.RawKVEntry, 0),
 		outputRawChangeEvent: outputRawChangeEvent,
@@ -759,7 +745,7 @@ func (p *dmlProcessor) startTxn(
 func (p *dmlProcessor) commitTxn() error {
 	if p.currentTxn != nil && len(p.insertRowCache) > 0 {
 		for _, insertRow := range p.insertRowCache {
-			if err := p.currentTxn.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter, p.filterContext); err != nil {
+			if err := p.currentTxn.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter); err != nil {
 				return err
 			}
 		}
@@ -811,7 +797,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		if ignore {
 			return nil
 		}
-		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter, p.filterContext)
+		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 	}
 
 	var (
@@ -837,7 +823,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, shouldSplit)
 
 	if !shouldSplit {
-		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter, p.filterContext)
+		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 	}
 
 	log.Debug("split update event", zap.Uint64("startTs", rawEvent.StartTs),
@@ -861,7 +847,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	if ignoreDelete {
 		return nil
 	}
-	return p.currentTxn.AppendRow(deleteRow, p.mounter.DecodeToChunk, p.filter, p.filterContext)
+	return p.currentTxn.AppendRow(deleteRow, p.mounter.DecodeToChunk, p.filter)
 }
 
 func (p *dmlProcessor) shouldIgnoreRawEventByDMLType(rawEvent *common.RawKVEntry) (bool, error) {
