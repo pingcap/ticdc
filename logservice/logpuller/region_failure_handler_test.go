@@ -242,7 +242,6 @@ func TestScheduleRecoveryCoalescesPendingRetries(t *testing.T) {
 	}
 
 	handler.scheduleRecovery(ctx, subSpan, span, 100*time.Millisecond, retry)
-	time.Sleep(20 * time.Millisecond)
 	handler.scheduleRecovery(ctx, subSpan, span, 100*time.Millisecond, retry)
 
 	select {
