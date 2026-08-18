@@ -48,9 +48,9 @@ import (
 //     pendingRemoteEventServiceID=""
 //
 // This means local registration and remote probing can overlap. A remote service
-// may serve data first, but after the local service catches up to the dispatcher
-// checkpoint, a later local ready moves the dispatcher back to local and cleans
-// up remote registrations.
+// may serve data first, but after the local service catches up to the progress
+// the remote reported (and the dispatcher checkpoint), a later local ready moves
+// the dispatcher back to local and cleans up remote registrations.
 type dispatcherConnState struct {
 	sync.RWMutex
 	// removed marks the session as terminal after removal starts. New
@@ -71,6 +71,14 @@ type dispatcherConnState struct {
 	// remoteCandidates are the remaining remote EventServices to probe after the
 	// current pending remote reports not reusable.
 	remoteCandidates []string
+	// remoteResolvedTs is the resolved ts reported by the remote EventService
+	// currently serving. It is only meaningful while currentEventServiceID is a
+	// remote service and is cleared when the local service wins back. The local
+	// ready must cover it before taking over: the sink checkpoint alone is not a
+	// safe baseline before the remote delivers its first events because it still
+	// equals the dispatcher start ts, which would let a barely started local
+	// subscription win the race and stall the table while catching up from TiKV.
+	remoteResolvedTs uint64
 }
 
 // Registration state transitions.
@@ -128,7 +136,8 @@ type readyDecision struct {
 //     only trigger cleanup;
 //  2. local ready can be accepted while local registration is still pending. If
 //     a remote is already serving, local only wins after its resolved ts covers
-//     the dispatcher's current checkpoint;
+//     both the current dispatcher checkpoint and the progress the remote
+//     reported;
 //  3. remote ready is accepted only from the single remote candidate currently
 //     being probed.
 func (d *dispatcherConnState) acceptReady(
@@ -148,9 +157,20 @@ func (d *dispatcherConnState) acceptReady(
 			return readyDecision{}
 		}
 		if !d.currentEventServiceID.IsEmpty() &&
-			d.currentEventServiceID != localServerID &&
-			readyResolvedTs < requiredCheckpointTs {
-			return readyDecision{}
+			d.currentEventServiceID != localServerID {
+			// The sink checkpoint alone is not a safe baseline before the remote
+			// delivers its first events: it still equals the dispatcher start ts,
+			// so a local subscription that has barely started could win the race
+			// and stall the table while catching up from TiKV. The remote
+			// service's reported resolved ts captures where the remote actually
+			// is, so the local service must cover that first.
+			baseline := requiredCheckpointTs
+			if d.remoteResolvedTs > baseline {
+				baseline = d.remoteResolvedTs
+			}
+			if readyResolvedTs < baseline {
+				return readyDecision{}
+			}
 		}
 
 		decision := readyDecision{
@@ -164,6 +184,7 @@ func (d *dispatcherConnState) acceptReady(
 		d.localReadyPending = false
 		d.pendingRemoteEventServiceID = ""
 		d.remoteCandidates = nil
+		d.remoteResolvedTs = 0
 		return decision
 	}
 
@@ -187,6 +208,10 @@ func (d *dispatcherConnState) acceptReady(
 	// later local ready may move the dispatcher back to local.
 	d.pendingRemoteEventServiceID = ""
 	d.remoteCandidates = nil
+	// Record the remote progress the local service must catch up to before it
+	// may win back. This is more meaningful than the sink checkpoint, which
+	// still equals the start ts before the remote delivers its first events.
+	d.remoteResolvedTs = readyResolvedTs
 	return readyDecision{
 		commitTarget: from,
 	}
@@ -207,6 +232,7 @@ func (d *dispatcherConnState) beginRemove(localServerID node.ID) ([]node.ID, boo
 	d.localReadyPending = false
 	d.pendingRemoteEventServiceID = ""
 	d.remoteCandidates = nil
+	d.remoteResolvedTs = 0
 	return []node.ID(targets), false
 }
 
