@@ -70,8 +70,8 @@ func TestResumeChangefeedRejectsNormalBeforeGC(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v2/changefeeds/test/resume?keyspace=default", nil)
 	c.Params = gin.Params{{Key: api.APIOpVarChangefeedID, Value: "test"}}
 	c.Set("ctx-keyspace", &keyspacepb.KeyspaceMeta{
-		Id:    common.DefaultKeyspaceID,
-		State: keyspacepb.KeyspaceState_ENABLED,
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: common.DefaultKeyspaceID},
+		State:    keyspacepb.KeyspaceState_ENABLED,
 	})
 
 	h.ResumeChangefeed(c)
