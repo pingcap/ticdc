@@ -45,7 +45,7 @@ var (
 type regionFailureHandler struct {
 	cache       *errCache
 	regionCache *tikv.RegionCache
-	recovery     struct {
+	recovery    struct {
 		sync.Mutex
 		states map[regionRecoveryKey]*regionRecoveryState
 	}
@@ -61,10 +61,10 @@ const (
 	regionRecoveryBaseDelay = 50 * time.Millisecond
 	// regionRecoveryMaxDelay is the upper bound of the exponential retry
 	// backoff for one logical range.
-	regionRecoveryMaxDelay  = 2 * time.Second
+	regionRecoveryMaxDelay = 2 * time.Second
 	// regionRecoveryStateTTL is how long retry state is kept without a
 	// successful reset before it is garbage-collected.
-	regionRecoveryStateTTL  = 5 * time.Minute
+	regionRecoveryStateTTL = 5 * time.Minute
 )
 
 // regionRecoveryKey keeps backoff state across region ID and epoch changes for
