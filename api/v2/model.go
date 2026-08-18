@@ -443,6 +443,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 					AvroEnableWatermark:            oldConfig.AvroEnableWatermark,
 					AvroDecimalHandlingMode:        oldConfig.AvroDecimalHandlingMode,
 					AvroBigintUnsignedHandlingMode: oldConfig.AvroBigintUnsignedHandlingMode,
+					AvroIncludeBeforeValue:         oldConfig.AvroIncludeBeforeValue,
 					EncodingFormat:                 oldConfig.EncodingFormat,
 				}
 			}
@@ -548,8 +549,16 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		}
 		var debeziumConfig *config.DebeziumConfig
 		if c.Sink.DebeziumConfig != nil {
+			// Fall back to the default when OutputOldValue is omitted.
+			outputOldValue := config.DefaultDebeziumOutputOldValue
+			if c.Sink.DebeziumConfig.OutputOldValue != nil {
+				outputOldValue = *c.Sink.DebeziumConfig.OutputOldValue
+			}
 			debeziumConfig = &config.DebeziumConfig{
-				OutputOldValue: c.Sink.DebeziumConfig.OutputOldValue,
+				OutputOldValue: outputOldValue,
+			}
+			if c.Sink.DebeziumConfig.IncludeStartTs != nil {
+				debeziumConfig.IncludeStartTs = util.AddressOf(*c.Sink.DebeziumConfig.IncludeStartTs)
 			}
 		}
 		var openProtocolConfig *config.OpenProtocolConfig
@@ -776,6 +785,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 					AvroEnableWatermark:            oldConfig.AvroEnableWatermark,
 					AvroDecimalHandlingMode:        oldConfig.AvroDecimalHandlingMode,
 					AvroBigintUnsignedHandlingMode: oldConfig.AvroBigintUnsignedHandlingMode,
+					AvroIncludeBeforeValue:         oldConfig.AvroIncludeBeforeValue,
 					EncodingFormat:                 oldConfig.EncodingFormat,
 				}
 			}
@@ -914,7 +924,10 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		var debeziumConfig *DebeziumConfig
 		if cloned.Sink.Debezium != nil {
 			debeziumConfig = &DebeziumConfig{
-				OutputOldValue: cloned.Sink.Debezium.OutputOldValue,
+				OutputOldValue: util.AddressOf(cloned.Sink.Debezium.OutputOldValue),
+			}
+			if cloned.Sink.Debezium.IncludeStartTs != nil {
+				debeziumConfig.IncludeStartTs = util.AddressOf(*cloned.Sink.Debezium.IncludeStartTs)
 			}
 		}
 		var openProtocolConfig *OpenProtocolConfig
@@ -1462,6 +1475,7 @@ type CodecConfig struct {
 	AvroEnableWatermark            *bool   `json:"avro_enable_watermark,omitempty" toml:"avro-enable-watermark,omitempty"`
 	AvroDecimalHandlingMode        *string `json:"avro_decimal_handling_mode,omitempty" toml:"avro-decimal-handling-mode,omitempty"`
 	AvroBigintUnsignedHandlingMode *string `json:"avro_bigint_unsigned_handling_mode,omitempty" toml:"avro-bigint-unsigned-handling-mode,omitempty"`
+	AvroIncludeBeforeValue         *bool   `json:"avro_include_before_value,omitempty" toml:"avro-include-before-value,omitempty"`
 	EncodingFormat                 *string `json:"encoding_format,omitempty" toml:"encoding-format,omitempty"`
 }
 
@@ -1602,7 +1616,8 @@ type OpenProtocolConfig struct {
 
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
-	OutputOldValue bool `json:"output_old_value" toml:"output-old-value"`
+	OutputOldValue *bool `json:"output_old_value,omitempty" toml:"output-old-value,omitempty"`
+	IncludeStartTs *bool `json:"include_start_ts,omitempty" toml:"include-start-ts,omitempty"`
 }
 
 type DispatcherCount struct {

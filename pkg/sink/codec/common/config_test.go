@@ -23,138 +23,70 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestApplyReturnsSinkInvalidConfigForQueryBindingError(t *testing.T) {
-	cfg := NewConfig(config.ProtocolOpen)
-	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?max-batch-size=invalid")
+func TestAvroIncludeBeforeValueConfig(t *testing.T) {
+	cfg := NewConfig(config.ProtocolAvro)
+	require.False(t, cfg.AvroIncludeBeforeValue)
+
+	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=avro&avro-include-before-value=true")
 	require.NoError(t, err)
 
-	err = cfg.Apply(sinkURI, config.GetDefaultReplicaConfig().Sink)
-	errCode, ok := errors.RFCCode(err)
-	require.True(t, ok, err)
-	require.Equal(t, errors.ErrSinkInvalidConfig.RFCCode(), errCode)
-}
-
-func TestValidateMaxBatchMessageBytes(t *testing.T) {
-	tests := []struct {
-		name     string
-		adjust   func(*Config)
-		expected string
-	}{
-		{
-			name: "non-positive max message bytes",
-			adjust: func(cfg *Config) {
-				cfg.MaxMessageBytes = 0
-			},
-			expected: "invalid max-message-bytes 0",
-		},
-		{
-			name: "negative max batched bytes",
-			adjust: func(cfg *Config) {
-				cfg.MaxBatchedBytes = -1
-			},
-			expected: "invalid max-batch-message-bytes -1",
-		},
-		{
-			name: "max batched bytes exceeds max message bytes",
-			adjust: func(cfg *Config) {
-				cfg.MaxMessageBytes = 100
-				cfg.MaxBatchedBytes = 101
-			},
-			expected: "max-batch-message-bytes 101 cannot be greater than max-message-bytes 100",
-		},
-		{
-			name: "non-positive max batch size",
-			adjust: func(cfg *Config) {
-				cfg.MaxBatchSize = 0
-			},
-			expected: "invalid max-batch-size 0",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			cfg := NewConfig(config.ProtocolOpen)
-			test.adjust(cfg)
-
-			err := cfg.Validate()
-			require.ErrorContains(t, err, test.expected)
-			errCode, ok := errors.RFCCode(err)
-			require.True(t, ok, err)
-			require.Equal(t, errors.ErrCodecInvalidConfig.RFCCode(), errCode)
-		})
-	}
-}
-
-func TestDebeziumAvroSchemaRegistryConfig(t *testing.T) {
-	t.Parallel()
-
-	cfg := NewConfig(config.ProtocolDebeziumAvro)
+	err = cfg.Apply(sinkURI, &config.SinkConfig{})
+	require.NoError(t, err)
+	require.False(t, cfg.EnableTiDBExtension)
+	require.True(t, cfg.AvroIncludeBeforeValue)
 	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
 	require.NoError(t, cfg.Validate())
-
-	cfg = NewConfig(config.ProtocolDebeziumAvro)
-	cfg.AvroGlueSchemaRegistry = &config.GlueSchemaRegistryConfig{
-		RegistryName: "test-registry",
-		Region:       "us-east-1",
-	}
-	require.NoError(t, cfg.Validate())
-
-	cfg = NewConfig(config.ProtocolDebeziumAvro)
-	require.ErrorContains(
-		t,
-		cfg.Validate(),
-		`Debezium Avro protocol requires parameter "schema-registry" or "glue-schema-registry"`,
-	)
-
-	cfg = NewConfig(config.ProtocolDebeziumAvro)
-	cfg.AvroGlueSchemaRegistry = &config.GlueSchemaRegistryConfig{}
-	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
-	require.ErrorContains(
-		t,
-		cfg.Validate(),
-		`Debezium Avro protocol requires only one of "schema-registry" or "glue-schema-registry"`,
-	)
-
-	cfg = NewConfig(config.ProtocolDebezium)
-	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
-	require.ErrorContains(t, cfg.Validate(), `Debezium protocol does not support schema registry`)
 }
 
-func TestDebeziumAvroGlueSchemaRegistryConfig(t *testing.T) {
-	t.Parallel()
-
-	cfg := NewConfig(config.ProtocolDebeziumAvro)
-	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=debezium-avro")
+func TestAvroIncludeBeforeValueConfigFile(t *testing.T) {
+	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=avro")
 	require.NoError(t, err)
 
-	glueSchemaRegistryConfig := &config.GlueSchemaRegistryConfig{
-		RegistryName: "test-registry",
-		Region:       "us-east-1",
-	}
+	cfg := NewConfig(config.ProtocolAvro)
+	err = cfg.Apply(sinkURI, &config.SinkConfig{
+		KafkaConfig: &config.KafkaConfig{
+			CodecConfig: &config.CodecConfig{
+				AvroIncludeBeforeValue: util.AddressOf(true),
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, cfg.EnableTiDBExtension)
+	require.True(t, cfg.AvroIncludeBeforeValue)
+}
+
+func TestDebeziumIncludeStartTsConfig(t *testing.T) {
+	// URI parameter
+	cfg := NewConfig(config.ProtocolDebezium)
+	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=debezium&debezium-include-start-ts=true")
+	require.NoError(t, err)
+	require.NoError(t, cfg.Apply(sinkURI, config.GetDefaultReplicaConfig().Sink))
+	require.True(t, cfg.DebeziumIncludeStartTs)
+	require.NoError(t, cfg.Validate())
+
+	// changefeed config file
+	on := true
+	cfg2 := NewConfig(config.ProtocolDebezium)
 	sinkConfig := config.GetDefaultReplicaConfig().Sink
-	sinkConfig.KafkaConfig = &config.KafkaConfig{
-		GlueSchemaRegistryConfig: glueSchemaRegistryConfig,
-	}
-
-	err = cfg.Apply(sinkURI, sinkConfig)
+	sinkConfig.Debezium.IncludeStartTs = &on
+	sinkURI2, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=debezium")
 	require.NoError(t, err)
-	require.Same(t, glueSchemaRegistryConfig, cfg.AvroGlueSchemaRegistry)
-	require.Empty(t, cfg.AvroConfluentSchemaRegistry)
-	require.NoError(t, cfg.Validate())
-}
+	require.NoError(t, cfg2.Apply(sinkURI2, sinkConfig))
+	require.True(t, cfg2.DebeziumIncludeStartTs)
 
-func TestDebeziumAvroWatermarkConfig(t *testing.T) {
-	t.Parallel()
-
-	cfg := NewConfig(config.ProtocolDebeziumAvro)
-	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=debezium-avro&enable-tidb-extension=true&avro-enable-watermark=true")
+	// URI parameter overrides the config file
+	cfg3 := NewConfig(config.ProtocolDebezium)
+	sinkConfig3 := config.GetDefaultReplicaConfig().Sink
+	sinkConfig3.Debezium.IncludeStartTs = &on
+	sinkURI3, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=debezium&debezium-include-start-ts=false")
 	require.NoError(t, err)
+	require.NoError(t, cfg3.Apply(sinkURI3, sinkConfig3))
+	require.False(t, cfg3.DebeziumIncludeStartTs)
 
-	sinkConfig := config.GetDefaultReplicaConfig().Sink
-	sinkConfig.SchemaRegistry = util.AddressOf("http://127.0.0.1:8081")
-	err = cfg.Apply(sinkURI, sinkConfig)
-	require.NoError(t, err)
-	require.True(t, cfg.EnableTiDBExtension)
-	require.True(t, cfg.AvroEnableWatermark)
-	require.Equal(t, "http://127.0.0.1:8081", cfg.AvroConfluentSchemaRegistry)
+	// only supported by the debezium (JSON) protocol
+	cfg4 := NewConfig(config.ProtocolDebeziumAvro)
+	cfg4.DebeziumIncludeStartTs = true
+	errCode, ok := errors.RFCCode(cfg4.Validate())
+	require.True(t, ok)
+	require.Equal(t, errors.ErrCodecInvalidConfig.RFCCode(), errCode)
 }

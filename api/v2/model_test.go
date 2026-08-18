@@ -42,6 +42,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 				SpoolDiskQuota:   util.AddressOf(int64(1024)),
 				SpoolBaseDir:     util.AddressOf("/tmp/ticdc-spool"),
 			},
+			DebeziumConfig: &DebeziumConfig{
+				IncludeStartTs: util.AddressOf(true),
+			},
 		},
 		Mounter: &MounterConfig{
 			WorkerNum: util.AddressOf(16),
@@ -77,6 +80,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(internalCfg.Sink.CloudStorageConfig.UseTableIDAsPath))
 	require.Equal(t, int64(1024), util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolDiskQuota))
 	require.Equal(t, "/tmp/ticdc-spool", util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolBaseDir))
+	require.True(t, util.GetOrZero(internalCfg.Sink.Debezium.IncludeStartTs))
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
 	require.True(t, util.GetOrZero(internalCfg.Scheduler.EnableTableAcrossNodes))
 	require.Equal(t, 1000, util.GetOrZero(internalCfg.Scheduler.RegionThreshold))
@@ -88,6 +92,21 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, "s3://test", util.GetOrZero(internalCfg.Consistent.Storage))
 	require.Equal(t, int64(2048), util.GetOrZero(internalCfg.Consistent.SpoolDiskQuota))
 	require.Equal(t, "/tmp/redo-spool", util.GetOrZero(internalCfg.Consistent.SpoolBaseDir))
+	// output_old_value is omitted in apiCfg and must keep its default (true).
+	require.True(t, internalCfg.Sink.Debezium.OutputOldValue)
+
+	// An explicit output_old_value must be honored.
+	apiCfgDebezium := &ReplicaConfig{
+		Sink: &SinkConfig{
+			DebeziumConfig: &DebeziumConfig{
+				OutputOldValue: util.AddressOf(false),
+				IncludeStartTs: util.AddressOf(true),
+			},
+		},
+	}
+	internalDebezium := apiCfgDebezium.ToInternalReplicaConfig()
+	require.False(t, internalDebezium.Sink.Debezium.OutputOldValue)
+	require.True(t, util.GetOrZero(internalDebezium.Sink.Debezium.IncludeStartTs))
 
 	// Test case 2: Nil fields (should use defaults or be nil)
 	apiCfgNil := &ReplicaConfig{}
@@ -107,6 +126,8 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, *apiCfgBack.Sink.CloudStorageConfig.UseTableIDAsPath)
 	require.Equal(t, int64(1024), *apiCfgBack.Sink.CloudStorageConfig.SpoolDiskQuota)
 	require.Equal(t, "/tmp/ticdc-spool", *apiCfgBack.Sink.CloudStorageConfig.SpoolBaseDir)
+	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.IncludeStartTs))
+	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.OutputOldValue))
 	require.Equal(t, 16, *apiCfgBack.Mounter.WorkerNum)
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
@@ -235,4 +256,34 @@ func TestReplicaConfigConversionMySQLAsyncDDLTimeout(t *testing.T) {
 	apiCfgBack := ToAPIReplicaConfig(internalCfg)
 	require.NotNil(t, apiCfgBack.Sink.MySQLConfig)
 	require.Equal(t, "45m", util.GetOrZero(apiCfgBack.Sink.MySQLConfig.AsyncDDLTimeout))
+}
+
+func TestReplicaConfigCodecConfigConversion(t *testing.T) {
+	t.Parallel()
+
+	apiCfg := &ReplicaConfig{
+		Sink: &SinkConfig{
+			KafkaConfig: &KafkaConfig{
+				CodecConfig: &CodecConfig{
+					EnableTiDBExtension:            util.AddressOf(true),
+					MaxBatchSize:                   util.AddressOf(16),
+					AvroEnableWatermark:            util.AddressOf(true),
+					AvroDecimalHandlingMode:        util.AddressOf("string"),
+					AvroBigintUnsignedHandlingMode: util.AddressOf("string"),
+					AvroIncludeBeforeValue:         util.AddressOf(true),
+					EncodingFormat:                 util.AddressOf("avro"),
+				},
+			},
+		},
+	}
+
+	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.NotNil(t, internalCfg.Sink.KafkaConfig)
+	require.NotNil(t, internalCfg.Sink.KafkaConfig.CodecConfig)
+	require.True(t, util.GetOrZero(internalCfg.Sink.KafkaConfig.CodecConfig.AvroIncludeBeforeValue))
+
+	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.NotNil(t, apiCfgBack.Sink.KafkaConfig)
+	require.NotNil(t, apiCfgBack.Sink.KafkaConfig.CodecConfig)
+	require.True(t, util.GetOrZero(apiCfgBack.Sink.KafkaConfig.CodecConfig.AvroIncludeBeforeValue))
 }

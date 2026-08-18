@@ -173,26 +173,35 @@ func TestApplySASL(t *testing.T) {
 		name        string
 		uri         string
 		kafkaConfig *config.KafkaConfig
-		expected    security.SASL
+		expected    saslConfig
 		expectErr   string
 	}{
 		{name: "no params", uri: baseURI},
 		{
 			name: "valid PLAIN SASL",
 			uri:  baseURI + "?sasl-user=user&sasl-password=password&sasl-mechanism=plain",
-			expected: security.SASL{
-				SASLUser:      "user",
-				SASLPassword:  "password",
-				SASLMechanism: security.PlainMechanism,
+			expected: saslConfig{
+				user:      "user",
+				password:  "password",
+				mechanism: plainMechanism,
 			},
 		},
 		{
-			name: "valid SCRAM SASL",
+			name: "valid SCRAM-SHA-256 SASL",
+			uri:  baseURI + "?sasl-user=user&sasl-password=password&sasl-mechanism=scram-sha-256",
+			expected: saslConfig{
+				user:      "user",
+				password:  "password",
+				mechanism: scram256Mechanism,
+			},
+		},
+		{
+			name: "valid SCRAM-SHA-512 SASL",
 			uri:  baseURI + "?sasl-user=user&sasl-password=password&sasl-mechanism=SCRAM-SHA-512",
-			expected: security.SASL{
-				SASLUser:      "user",
-				SASLPassword:  "password",
-				SASLMechanism: security.SCRAM512Mechanism,
+			expected: saslConfig{
+				user:      "user",
+				password:  "password",
+				mechanism: scram512Mechanism,
 			},
 		},
 		{
@@ -202,15 +211,15 @@ func TestApplySASL(t *testing.T) {
 				"&sasl-gssapi-service-name=a&sasl-gssapi-user=user" +
 				"&sasl-gssapi-password=pwd&sasl-gssapi-realm=realm" +
 				"&sasl-gssapi-disable-pafxfast=false",
-			expected: security.SASL{
-				SASLMechanism: security.GSSAPIMechanism,
-				GSSAPI: security.GSSAPI{
-					AuthType:           security.UserAuth,
-					KerberosConfigPath: "/root/config",
-					ServiceName:        "a",
-					Username:           "user",
-					Password:           "pwd",
-					Realm:              "realm",
+			expected: saslConfig{
+				mechanism: gssapiMechanism,
+				gssapi: gssapiConfig{
+					authType:           userAuth,
+					kerberosConfigPath: "/root/config",
+					serviceName:        "a",
+					username:           "user",
+					password:           "pwd",
+					realm:              "realm",
 				},
 			},
 		},
@@ -221,27 +230,27 @@ func TestApplySASL(t *testing.T) {
 				"&sasl-gssapi-service-name=a&sasl-gssapi-user=user" +
 				"&sasl-gssapi-keytab-path=/root/keytab&sasl-gssapi-realm=realm" +
 				"&sasl-gssapi-disable-pafxfast=false",
-			expected: security.SASL{
-				SASLMechanism: security.GSSAPIMechanism,
-				GSSAPI: security.GSSAPI{
-					AuthType:           security.KeyTabAuth,
-					KeyTabPath:         "/root/keytab",
-					KerberosConfigPath: "/root/config",
-					ServiceName:        "a",
-					Username:           "user",
-					Realm:              "realm",
+			expected: saslConfig{
+				mechanism: gssapiMechanism,
+				gssapi: gssapiConfig{
+					authType:           keyTabAuth,
+					keyTabPath:         "/root/keytab",
+					kerberosConfigPath: "/root/config",
+					serviceName:        "a",
+					username:           "user",
+					realm:              "realm",
 				},
 			},
 		},
 		{
 			name:      "invalid mechanism",
 			uri:       baseURI + "?sasl-mechanism=a",
-			expectErr: "unknown a SASL mechanism",
+			expectErr: "unknown SASL mechanism: a",
 		},
 		{
 			name:      "invalid GSSAPI auth type",
 			uri:       baseURI + "?sasl-mechanism=gssapi&sasl-gssapi-auth-type=keyta1b",
-			expectErr: "unknown keyta1b auth type",
+			expectErr: "unknown auth type: keyta1b",
 		},
 		{
 			name: "valid OAUTHBEARER SASL",
@@ -251,13 +260,13 @@ func TestApplySASL(t *testing.T) {
 				SASLOAuthClientSecret: aws.String("Y2xpZW50X3NlY3JldA=="),
 				SASLOAuthTokenURL:     aws.String("127.0.0.1:9093/token"),
 			},
-			expected: security.SASL{
-				SASLMechanism: security.OAuthMechanism,
-				OAuth2: security.OAuth2{
-					ClientID:     "client_id",
-					ClientSecret: "client_secret",
-					TokenURL:     "127.0.0.1:9093/token",
-					GrantType:    "client_credentials",
+			expected: saslConfig{
+				mechanism: oauthMechanism,
+				oauth2: oauth2Config{
+					clientID:     "client_id",
+					clientSecret: "client_secret",
+					tokenURL:     "127.0.0.1:9093/token",
+					grantType:    "client_credentials",
 				},
 			},
 		},
@@ -331,7 +340,7 @@ func TestApplySASL(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			require.Equal(t, test.expected, *options.SASL)
+			require.Equal(t, test.expected, *options.sasl)
 		})
 	}
 }
@@ -966,16 +975,16 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, time.Minute+time.Second, c.DialTimeout)
 	require.Equal(t, 2*time.Minute+time.Second, c.WriteTimeout)
 	require.Equal(t, 1, int(c.RequiredAcks))
-	require.Equal(t, "abc", c.SASL.SASLUser)
-	require.Equal(t, "123", c.SASL.SASLPassword)
-	require.Equal(t, "plain", strings.ToLower(string(c.SASL.SASLMechanism)))
-	require.Equal(t, 2, int(c.SASL.GSSAPI.AuthType))
-	require.Equal(t, "SASLGssAPIKeytabPath", c.SASL.GSSAPI.KeyTabPath)
-	require.Equal(t, "service", c.SASL.GSSAPI.ServiceName)
-	require.Equal(t, "user", c.SASL.GSSAPI.Username)
-	require.Equal(t, "pass", c.SASL.GSSAPI.Password)
-	require.Equal(t, "realm", c.SASL.GSSAPI.Realm)
-	require.Equal(t, true, c.SASL.GSSAPI.DisablePAFXFAST)
+	require.Equal(t, "abc", c.sasl.user)
+	require.Equal(t, "123", c.sasl.password)
+	require.Equal(t, "plain", strings.ToLower(string(c.sasl.mechanism)))
+	require.Equal(t, 2, int(c.sasl.gssapi.authType))
+	require.Equal(t, "SASLGssAPIKeytabPath", c.sasl.gssapi.keyTabPath)
+	require.Equal(t, "service", c.sasl.gssapi.serviceName)
+	require.Equal(t, "user", c.sasl.gssapi.username)
+	require.Equal(t, "pass", c.sasl.gssapi.password)
+	require.Equal(t, "realm", c.sasl.gssapi.realm)
+	require.Equal(t, true, c.sasl.gssapi.disablePAFXFAST)
 	require.Equal(t, true, c.EnableTLS)
 	require.Equal(t, "ca.pem", c.Credential.CAPath)
 	require.Equal(t, "cert.pem", c.Credential.CertPath)
@@ -1048,16 +1057,16 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, time.Minute+time.Second, c.DialTimeout)
 	require.Equal(t, 2*time.Minute+time.Second, c.WriteTimeout)
 	require.Equal(t, 1, int(c.RequiredAcks))
-	require.Equal(t, "abc", c.SASL.SASLUser)
-	require.Equal(t, "123", c.SASL.SASLPassword)
-	require.Equal(t, "plain", strings.ToLower(string(c.SASL.SASLMechanism)))
-	require.Equal(t, 2, int(c.SASL.GSSAPI.AuthType))
-	require.Equal(t, "SASLGssAPIKeytabPath", c.SASL.GSSAPI.KeyTabPath)
-	require.Equal(t, "service", c.SASL.GSSAPI.ServiceName)
-	require.Equal(t, "user", c.SASL.GSSAPI.Username)
-	require.Equal(t, "pass", c.SASL.GSSAPI.Password)
-	require.Equal(t, "realm", c.SASL.GSSAPI.Realm)
-	require.Equal(t, true, c.SASL.GSSAPI.DisablePAFXFAST)
+	require.Equal(t, "abc", c.sasl.user)
+	require.Equal(t, "123", c.sasl.password)
+	require.Equal(t, "plain", strings.ToLower(string(c.sasl.mechanism)))
+	require.Equal(t, 2, int(c.sasl.gssapi.authType))
+	require.Equal(t, "SASLGssAPIKeytabPath", c.sasl.gssapi.keyTabPath)
+	require.Equal(t, "service", c.sasl.gssapi.serviceName)
+	require.Equal(t, "user", c.sasl.gssapi.username)
+	require.Equal(t, "pass", c.sasl.gssapi.password)
+	require.Equal(t, "realm", c.sasl.gssapi.realm)
+	require.Equal(t, true, c.sasl.gssapi.disablePAFXFAST)
 	require.Equal(t, true, c.EnableTLS)
 	require.Equal(t, "ca.pem", c.Credential.CAPath)
 	require.Equal(t, "cert.pem", c.Credential.CertPath)
