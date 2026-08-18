@@ -221,6 +221,82 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 	)
 }
 
+func TestRedoDispatcherDrainsSafeBatchPrefix(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job("create table t(id int primary key, v int)")
+
+	newDML := func(id, commitTs uint64) *commonEvent.DMLEvent {
+		dml := helper.DML2Event(
+			"test",
+			"t",
+			fmt.Sprintf("insert into t values(%d, %d)", id, id),
+		)
+		require.NotNil(t, dml)
+		dml.CommitTs = commitTs
+		dml.Length = 1
+		return dml
+	}
+
+	testSink := newDispatcherTestSink(t, common.MysqlSinkType)
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+	var redoTs atomic.Uint64
+	redoTs.Store(9)
+	dispatcher := NewEventDispatcher(
+		common.NewDispatcherID(),
+		tableSpan,
+		0,
+		1,
+		NewSchemaIDToDispatchers(),
+		false,
+		false,
+		0,
+		testSink.Sink(),
+		newTestSharedInfo(false, false, newTestSyncPointConfig()),
+		true,
+		&redoTs,
+	)
+
+	nodeID := node.NewID()
+	events := []DispatcherEvent{
+		NewDispatcherEvent(&nodeID, newDML(1, 10)),
+		NewDispatcherEvent(&nodeID, newDML(2, 11)),
+		NewDispatcherEvent(&nodeID, newDML(3, 12)),
+	}
+	var wakeCount atomic.Int32
+
+	require.True(t, dispatcher.HandleEvents(events, func() { wakeCount.Add(1) }))
+	require.Empty(t, testSink.GetDMLs())
+	require.Zero(t, wakeCount.Load())
+
+	// A redo update covering only part of the cached batch must immediately
+	// drain that safe prefix instead of waiting for the batch tail.
+	redoTs.Store(11)
+	dispatcher.HandleCacheEvents()
+	require.Len(t, testSink.GetDMLs(), 2)
+	require.Zero(t, wakeCount.Load())
+
+	// Advancing the redo fence must not enqueue the suffix until the safe prefix
+	// has completed its sink callback.
+	redoTs.Store(12)
+	dispatcher.HandleCacheEvents()
+	require.Len(t, testSink.GetDMLs(), 2)
+
+	testSink.FlushDMLs()
+	require.Eventually(t, func() bool {
+		return len(testSink.GetDMLs()) == 1
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Zero(t, wakeCount.Load())
+
+	testSink.FlushDMLs()
+	require.Eventually(t, func() bool {
+		return wakeCount.Load() == 1
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
 var count atomic.Int32
 
 func callback() {

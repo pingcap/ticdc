@@ -135,12 +135,50 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 }
 
 func (d *EventDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
-	// the dispatcherEvents will be cached util the redoGlobalTs is updated.
-	if d.redoEnable && len(dispatcherEvents) > 0 && d.redoGlobalTs.Load() < dispatcherEvents[len(dispatcherEvents)-1].GetCommitTs() {
+	if !d.redoEnable || len(dispatcherEvents) == 0 {
+		return d.handleEvents(dispatcherEvents, wakeCallback)
+	}
+
+	// Events for one dispatcher are ordered by commit-ts. Drain the maximal
+	// prefix already covered by the redo fence instead of caching the whole
+	// batch just because its tail is newer. This keeps the normal sink moving
+	// while preserving the invariant that it never overtakes persisted redo.
+	redoTs := d.redoGlobalTs.Load()
+	firstBlocked := 0
+	for firstBlocked < len(dispatcherEvents) &&
+		dispatcherEvents[firstBlocked].GetCommitTs() <= redoTs {
+		firstBlocked++
+	}
+	if firstBlocked == len(dispatcherEvents) {
+		return d.handleEvents(dispatcherEvents, wakeCallback)
+	}
+	if firstBlocked == 0 {
 		d.cache(dispatcherEvents, wakeCallback)
 		return true
 	}
-	return d.handleEvents(dispatcherEvents, wakeCallback)
+
+	// Dynamic stream reuses the input slice after this path is woken. Retain a
+	// copy of the blocked suffix until the safe prefix has reached its sink
+	// callback, then continue asynchronously to avoid re-entering the sink from
+	// inside PostFlush.
+	remaining := append(
+		make([]DispatcherEvent, 0, len(dispatcherEvents)-firstBlocked),
+		dispatcherEvents[firstBlocked:]...,
+	)
+	block := d.handleEvents(dispatcherEvents[:firstBlocked], func() {
+		GetDispatcherTaskScheduler().SubmitFunc(func() time.Time {
+			if !d.HandleEvents(remaining, wakeCallback) {
+				wakeCallback()
+			}
+			return time.Time{}
+		}, time.Now())
+	})
+	if !block {
+		// The safe prefix contained only resolved or filtered events, so it has
+		// no asynchronous sink callback to continue the blocked suffix.
+		return d.HandleEvents(remaining, wakeCallback)
+	}
+	return true
 }
 
 // Remove is called when TryClose returns true
