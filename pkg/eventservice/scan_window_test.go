@@ -448,6 +448,37 @@ func TestRefreshMinSentResolvedTsStaleFallback(t *testing.T) {
 	require.Equal(t, uint64(123), status.minSentTs.Load())
 }
 
+func TestRefreshMinSentResolvedTsPrefersRedoProgress(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), time.Minute)
+	newDispatcher := func(mode int64, sentTs uint64) *dispatcherStat {
+		info := newMockDispatcherInfoForTest(t)
+		info.mode = mode
+		info.changefeedID = status.changefeedID
+		dispatcher := newDispatcherStat(info, 1, 1, nil, status)
+		dispatcher.seq.Store(1)
+		dispatcher.sentResolvedTs.Store(sentTs)
+		ptr := &atomic.Pointer[dispatcherStat]{}
+		ptr.Store(dispatcher)
+		status.addDispatcher(info.id, ptr)
+		return dispatcher
+	}
+
+	// The normal dispatcher is downstream of the persisted redo fence. Its
+	// lower watermark must not pin the producer that advances that fence.
+	normal := newDispatcher(common.DefaultMode, 100)
+	redo := newDispatcher(common.RedoMode, 200)
+	status.refreshMinSentResolvedTs()
+	require.Equal(t, uint64(200), status.minSentTs.Load())
+
+	// Fall back to the ordinary minimum after the redo path is removed.
+	redo.isRemoved.Store(true)
+	status.refreshMinSentResolvedTs()
+	require.Equal(t, uint64(100), status.minSentTs.Load())
+	require.False(t, normal.isRemoved.Load())
+}
+
 func TestGetScanMaxTsFallbackInterval(t *testing.T) {
 	t.Parallel()
 

@@ -846,8 +846,12 @@ func (c *changefeedStatus) refreshMinSentResolvedTs() {
 	now := time.Now()
 	minSentResolvedTs := ^uint64(0)
 	minSentResolvedTsWithStale := ^uint64(0)
+	minRedoSentResolvedTs := ^uint64(0)
+	minRedoSentResolvedTsWithStale := ^uint64(0)
 	hasEligible := false
 	hasNonStale := false
+	hasRedoEligible := false
+	hasRedoNonStale := false
 	c.dispatchers.Range(func(_ any, value any) bool {
 		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 		if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.seq.Load() == 0 {
@@ -858,6 +862,13 @@ func (c *changefeedStatus) refreshMinSentResolvedTs() {
 		sentResolvedTs := dispatcher.sentResolvedTs.Load()
 		if sentResolvedTs < minSentResolvedTsWithStale {
 			minSentResolvedTsWithStale = sentResolvedTs
+		}
+		isRedo := dispatcher.info != nil && common.IsRedoMode(dispatcher.info.GetMode())
+		if isRedo {
+			hasRedoEligible = true
+			if sentResolvedTs < minRedoSentResolvedTsWithStale {
+				minRedoSentResolvedTsWithStale = sentResolvedTs
+			}
 		}
 
 		lastHeartbeatTime := dispatcher.lastReceivedHeartbeatTime.Load()
@@ -871,11 +882,32 @@ func (c *changefeedStatus) refreshMinSentResolvedTs() {
 		if sentResolvedTs < minSentResolvedTs {
 			minSentResolvedTs = sentResolvedTs
 		}
+		if isRedo {
+			hasRedoNonStale = true
+			if sentResolvedTs < minRedoSentResolvedTs {
+				minRedoSentResolvedTs = sentResolvedTs
+			}
+		}
 		return true
 	})
 
 	if !hasEligible {
 		c.storeMinSentTs(0)
+		return
+	}
+	// A normal dispatcher in an eventual-consistency changefeed can be blocked
+	// by the persisted redo resolved-ts and exhaust its downstream path quota.
+	// Letting that dependent path pin the shared scan-window base also stops the
+	// redo dispatcher that must advance the fence, creating a quota-driven
+	// stop-and-burst cycle. Once redo dispatchers are active, derive the shared
+	// base from their progress; normal dispatchers remain bounded by the same
+	// window and their own downstream quota.
+	if hasRedoEligible {
+		if hasRedoNonStale {
+			c.storeMinSentTs(minRedoSentResolvedTs)
+		} else {
+			c.storeMinSentTs(minRedoSentResolvedTsWithStale)
+		}
 		return
 	}
 	if !hasNonStale {
