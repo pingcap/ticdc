@@ -1,0 +1,24 @@
+# sync_diff config for validating the table_info_sharing workload.
+
+check-thread-count = 4
+export-fix-sql = true
+check-struct-only = false
+
+[task]
+    output-dir = "/tmp/tidb_cdc_test/table_info_sharing/sync_diff/output"
+    source-instances = ["upstream"]
+    target-instance = "downstream"
+    target-check-tables = ["table_info_sharing.table_info_sharing_*"]
+
+[data-sources]
+[data-sources.upstream]
+    host = "127.0.0.1"
+    port = 4000
+    user = "root"
+    password = ""
+
+[data-sources.downstream]
+    host = "127.0.0.1"
+    port = 3306
+    user = "root"
+    password = ""
