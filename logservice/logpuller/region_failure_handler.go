@@ -174,6 +174,7 @@ func (r *regionFailureHandler) scheduleRecovery(
 	})
 }
 
+// expireRecoveries removes retry states whose retention deadline has passed.
 func (r *regionFailureHandler) expireRecoveries(now time.Time) {
 	r.recovery.Lock()
 	defer r.recovery.Unlock()
@@ -184,16 +185,19 @@ func (r *regionFailureHandler) expireRecoveries(now time.Time) {
 	}
 }
 
+// resetRecovery drops the retry state for one logical range.
 func (r *regionFailureHandler) resetRecovery(key regionRecoveryKey) {
 	r.recovery.Lock()
 	defer r.recovery.Unlock()
 	delete(r.recovery.states, key)
 }
 
+// resetRegionRecovery drops the retry state for the region's logical range.
 func (r *regionFailureHandler) resetRegionRecovery(region regionInfo) {
 	r.resetRecovery(newRegionRecoveryKey(region.subscribedSpan.subID, region.span))
 }
 
+// cancelRecoveries clears all in-memory retry states on shutdown.
 func (r *regionFailureHandler) cancelRecoveries() {
 	r.recovery.Lock()
 	defer r.recovery.Unlock()
