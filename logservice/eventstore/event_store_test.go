@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -1984,6 +1985,39 @@ func TestEventWithCallbackSizerUsesCurrentKVBytes(t *testing.T) {
 	}
 
 	require.Equal(t, len("key")+len("value")+len("old"), eventWithCallbackSizer(event))
+}
+
+func TestGetEventWriteBatchBoundsRawBytes(t *testing.T) {
+	dataCh := chann.NewUnlimitedChannel[eventWithCallback, uint64](nil, eventWithCallbackSizer)
+	defer dataCh.Close()
+
+	payload := make([]byte, writeBatchMaxBytes/2+1)
+	for range 3 {
+		dataCh.Push(eventWithCallback{kvs: []common.RawKVEntry{{Key: payload}}})
+	}
+
+	batch, ok := getEventWriteBatch(dataCh, make([]eventWithCallback, 0, 128))
+	require.True(t, ok)
+	require.Len(t, batch, 2)
+	require.GreaterOrEqual(t, eventWithCallbackSizer(batch[0])+eventWithCallbackSizer(batch[1]), writeBatchMaxBytes)
+
+	batch, ok = getEventWriteBatch(dataCh, batch[:0])
+	require.True(t, ok)
+	require.Len(t, batch, 1)
+
+	oversizedCh := chann.NewUnlimitedChannel[eventWithCallback, uint64](nil, eventWithCallbackSizer)
+	defer oversizedCh.Close()
+	oversizedCh.Push(
+		eventWithCallback{kvs: []common.RawKVEntry{{Key: make([]byte, writeBatchMaxBytes+1)}}},
+		eventWithCallback{kvs: []common.RawKVEntry{{Key: []byte("next")}}},
+	)
+	batch, ok = getEventWriteBatch(oversizedCh, batch[:0])
+	require.True(t, ok)
+	require.Len(t, batch, 1)
+	require.Greater(t, eventWithCallbackSizer(batch[0]), writeBatchMaxBytes)
+	batch, ok = getEventWriteBatch(oversizedCh, batch[:0])
+	require.True(t, ok)
+	require.Len(t, batch, 1)
 }
 
 func TestEventStoreIter_NextWithFiltering(t *testing.T) {

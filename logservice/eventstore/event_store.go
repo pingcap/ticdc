@@ -280,6 +280,9 @@ const (
 	dataDir             = "event_store"
 	dbCount             = 4
 	writeWorkerNumPerDB = 2
+	// Bound the raw event bytes held by each EventStore write worker. A single
+	// oversized event is still accepted so it cannot block the write queue.
+	writeBatchMaxBytes = 16 * 1024 * 1024
 )
 
 func New(
@@ -355,6 +358,13 @@ func newWriteTaskPool(store *eventStore, db *pebble.DB, index int, ch *chann.Unl
 	}
 }
 
+func getEventWriteBatch(
+	dataCh *chann.UnlimitedChannel[eventWithCallback, uint64],
+	buffer []eventWithCallback,
+) ([]eventWithCallback, bool) {
+	return dataCh.GetMultipleNoGroup(buffer, writeBatchMaxBytes)
+}
+
 func (p *writeTaskPool) run(ctx context.Context) {
 	p.store.wg.Add(p.workerNum)
 	for i := 0; i < p.workerNum; i++ {
@@ -379,7 +389,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				default:
-					events, ok := p.dataCh.GetMultipleNoGroup(buffer)
+					events, ok := getEventWriteBatch(p.dataCh, buffer)
 					if !ok {
 						return
 					}
