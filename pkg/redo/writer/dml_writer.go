@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -58,6 +59,13 @@ const (
 	// the remaining encoded events.
 	defaultRedoSpoolMemoryRatio = 0.2
 	maxRedoSpoolMemoryBytes     = int64(256 * 1024 * 1024)
+
+	// Batch encoded rows before handing them to the spool. The spool supports
+	// multiple messages per entry, and batching avoids one local append/read and
+	// one unlimited-channel node per row under sustained workloads.
+	redoSpoolBatchCount           = 4096
+	redoSpoolBatchBytes           = 16 * 1024 * 1024
+	redoSpoolInitialBatchCapacity = 64
 )
 
 func redoSpoolMemoryRatio(diskQuotaBytes int64) float64 {
@@ -144,37 +152,86 @@ func (l *dmlWriter) Run(ctx context.Context) error {
 }
 
 func (l *dmlWriter) writeEncodedEventsToSpool(ctx context.Context) error {
+	var pending *polymorphicRedoEvent
 	for {
-		select {
-		case <-ctx.Done():
-			return errors.Trace(context.Cause(ctx))
-		case event := <-l.encodeWorkers.outputCh:
-			if event == nil {
-				return errors.ErrUnexpected.FastGenByArgs("encoded redo event is nil")
+		first := pending
+		pending = nil
+		if first == nil {
+			select {
+			case <-ctx.Done():
+				return errors.Trace(context.Cause(ctx))
+			case first = <-l.encodeWorkers.outputCh:
 			}
+		}
+		if first == nil {
+			return errors.ErrUnexpected.FastGenByArgs("encoded redo event is nil")
+		}
+
+		events := make([]*polymorphicRedoEvent, 0, redoSpoolInitialBatchCapacity)
+		events = append(events, first)
+		batchBytes := len(first.data)
+	drain:
+		for len(events) < redoSpoolBatchCount && batchBytes < redoSpoolBatchBytes {
+			select {
+			case <-ctx.Done():
+				return errors.Trace(context.Cause(ctx))
+			case event := <-l.encodeWorkers.outputCh:
+				if event == nil {
+					return errors.ErrUnexpected.FastGenByArgs("encoded redo event is nil")
+				}
+				if batchBytes+len(event.data) > redoSpoolBatchBytes {
+					pending = event
+					break drain
+				}
+				events = append(events, event)
+				batchBytes += len(event.data)
+			default:
+				break drain
+			}
+		}
+
+		msgs := make([]*common.Message, 0, len(events))
+		postEnqueueCallbacks := make([]func(), 0, len(events))
+		for _, event := range events {
 			key := make([]byte, 8)
 			binary.LittleEndian.PutUint64(key, event.commitTs)
 			msg := common.NewMsg(key, event.data)
+			// Keep one callback slot per message so the spool reader can map
+			// callbacks back to their encoded rows without losing association.
 			msg.Callback = event.postFlush
+			if msg.Callback == nil {
+				msg.Callback = func() {}
+			}
+			msgs = append(msgs, msg)
+			if event.postEnqueue != nil {
+				postEnqueueCallbacks = append(postEnqueueCallbacks, event.postEnqueue)
+			}
+		}
+		var postEnqueue func()
+		if len(postEnqueueCallbacks) != 0 {
+			postEnqueue = func() {
+				for _, callback := range postEnqueueCallbacks {
+					callback()
+				}
+			}
+		}
 
-			for {
-				action, entry, err := l.spool.TryEnqueue(
-					[]*common.Message{msg}, event.postEnqueue)
-				if err != nil {
+		for {
+			action, entry, err := l.spool.TryEnqueue(msgs, postEnqueue)
+			if err != nil {
+				return err
+			}
+			if action == spool.EnqueueActionWaitDiskQuota {
+				if err := l.spool.WaitForDiskQuota(ctx, msgs); err != nil {
 					return err
 				}
-				if action == spool.EnqueueActionWaitDiskQuota {
-					if err := l.spool.WaitForDiskQuota(ctx, []*common.Message{msg}); err != nil {
-						return err
-					}
-					continue
-				}
-				l.spoolEntries.Push(&redoSpoolEntry{
-					entry:            entry,
-					flushImmediately: action == spool.EnqueueActionAcceptedOversized,
-				})
-				break
+				continue
 			}
+			l.spoolEntries.Push(&redoSpoolEntry{
+				entry:            entry,
+				flushImmediately: action == spool.EnqueueActionAcceptedOversized,
+			})
+			break
 		}
 	}
 }
@@ -193,36 +250,47 @@ func (l *dmlWriter) readEncodedEventsFromSpool(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		key, data, _, ok, err := reader.Next()
-		if err != nil {
-			return err
+		encodedEvents := make([]*polymorphicRedoEvent, 0, redoSpoolInitialBatchCapacity)
+		for {
+			key, data, _, ok, err := reader.Next()
+			if err != nil {
+				return err
+			}
+			if !ok {
+				break
+			}
+			if len(key) != 8 || len(data) == 0 {
+				return errors.ErrUnexpected.FastGenByArgs("invalid encoded redo spool entry")
+			}
+			encodedEvents = append(encodedEvents, &polymorphicRedoEvent{
+				commitTs: binary.LittleEndian.Uint64(key),
+				data:     data,
+			})
 		}
-		if !ok || len(key) != 8 || len(data) == 0 {
-			return errors.ErrUnexpected.FastGenByArgs("invalid encoded redo spool entry")
-		}
-		_, _, _, hasMore, err := reader.Next()
-		if err != nil {
-			return err
-		}
-		if hasMore {
-			return errors.ErrUnexpected.FastGenByArgs("encoded redo spool entry contains multiple messages")
+		if len(encodedEvents) == 0 {
+			return errors.ErrUnexpected.FastGenByArgs("encoded redo spool entry is empty")
 		}
 		postFlushCallbacks := reader.PostFlushCallbacks()
-		encodedEvent := &polymorphicRedoEvent{
-			commitTs:         binary.LittleEndian.Uint64(key),
-			data:             data,
-			flushImmediately: spooled.flushImmediately,
-			postFlush: func() {
-				for _, callback := range postFlushCallbacks {
-					callback()
-				}
-				l.spool.Release(entry)
-			},
+		if len(postFlushCallbacks) != len(encodedEvents) {
+			return errors.ErrUnexpected.FastGenByArgs(
+				"encoded redo spool entry callback count does not match message count")
 		}
-		select {
-		case <-ctx.Done():
-			return errors.Trace(context.Cause(ctx))
-		case l.fileWorkers.inputCh <- encodedEvent:
+		var remaining atomic.Int64
+		remaining.Store(int64(len(encodedEvents)))
+		for i, encodedEvent := range encodedEvents {
+			callback := postFlushCallbacks[i]
+			encodedEvent.flushImmediately = spooled.flushImmediately && i == len(encodedEvents)-1
+			encodedEvent.postFlush = func() {
+				callback()
+				if remaining.Add(-1) == 0 {
+					l.spool.Release(entry)
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return errors.Trace(context.Cause(ctx))
+			case l.fileWorkers.inputCh <- encodedEvent:
+			}
 		}
 	}
 }
