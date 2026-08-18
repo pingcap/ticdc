@@ -396,9 +396,21 @@ func (c *EventCollector) sendEventServiceHeartbeats(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-ticker.C:
+			c.expireStaleRemoteProbes()
 			c.sendDispatcherHeartbeat()
 		}
 	}
+}
+
+// expireStaleRemoteProbes abandons remote reuse probes that have been waiting
+// too long so the affected dispatchers can fall back to their local event
+// service instead of blocking on a silent remote.
+func (c *EventCollector) expireStaleRemoteProbes() {
+	c.dispatcherMap.Range(func(_, value any) bool {
+		stat := value.(*dispatcherStat)
+		stat.expireStaleRemoteProbe()
+		return true
+	})
 }
 
 func (c *EventCollector) sendDispatcherHeartbeat() {

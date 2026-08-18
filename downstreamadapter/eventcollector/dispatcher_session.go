@@ -16,6 +16,7 @@ package eventcollector
 import (
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
@@ -26,6 +27,13 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/zap"
 )
+
+// remoteProbeTimeout bounds how long a single remote reuse probe may stay in
+// flight without a ready or not-reusable response before the dispatcher gives
+// up on that candidate and falls back to the local event service. Without it, a
+// silent remote would leave the dispatcher permanently waiting because the
+// local ready is held while the probe is in flight.
+const remoteProbeTimeout = 10 * time.Second
 
 // dispatcherConnState owns the EventService registration state for one dispatcher.
 // It does not send messages. Its job is to apply atomic state transitions and
@@ -50,7 +58,11 @@ import (
 // This means local registration and remote probing can overlap. A remote service
 // may serve data first, but after the local service catches up to the progress
 // the remote reported (and the dispatcher checkpoint), a later local ready moves
-// the dispatcher back to local and cleans up remote registrations.
+// the dispatcher back to local and cleans up remote registrations. While a
+// remote reuse probe is still in flight the local ready is held, so the remote
+// (which already serves the span) wins over a local subscription that has not
+// served data yet; the probe expires after remoteProbeTimeout to unblock the
+// local fallback.
 type dispatcherConnState struct {
 	sync.RWMutex
 	// removed marks the session as terminal after removal starts. New
@@ -79,6 +91,10 @@ type dispatcherConnState struct {
 	// equals the dispatcher start ts, which would let a barely started local
 	// subscription win the race and stall the table while catching up from TiKV.
 	remoteResolvedTs uint64
+	// remoteProbeStartAt records when the current remote reuse probe was sent,
+	// so a silent remote (no ready and no not-reusable response) can be
+	// abandoned after remoteProbeTimeout instead of blocking the dispatcher.
+	remoteProbeStartAt time.Time
 }
 
 // Registration state transitions.
@@ -101,6 +117,7 @@ func (d *dispatcherConnState) beginRegisterToRemote(serverID node.ID) bool {
 		return false
 	}
 	d.pendingRemoteEventServiceID = serverID
+	d.remoteProbeStartAt = time.Now()
 	return true
 }
 
@@ -134,10 +151,12 @@ type readyDecision struct {
 // acceptReady enforces the ready acceptance rules:
 //  1. once local is already serving, any later remote ready is stale and should
 //     only trigger cleanup;
-//  2. local ready can be accepted while local registration is still pending. If
-//     a remote is already serving, local only wins after its resolved ts covers
-//     both the current dispatcher checkpoint and the progress the remote
-//     reported;
+//  2. local ready can be accepted while local registration is still pending,
+//     but only after any in-flight remote reuse probe has concluded (the remote
+//     already serves the span and should win over a local subscription that has
+//     not served data yet) and, when a remote is already serving, after the
+//     local resolved ts covers both the current dispatcher checkpoint and the
+//     progress the remote reported;
 //  3. remote ready is accepted only from the single remote candidate currently
 //     being probed.
 func (d *dispatcherConnState) acceptReady(
@@ -145,6 +164,8 @@ func (d *dispatcherConnState) acceptReady(
 	localServerID node.ID,
 	readyResolvedTs uint64,
 	requiredCheckpointTs uint64,
+	remoteDeliveredTs uint64,
+	dispatcherStartTs uint64,
 ) readyDecision {
 	d.Lock()
 	defer d.Unlock()
@@ -158,19 +179,31 @@ func (d *dispatcherConnState) acceptReady(
 		}
 		if !d.currentEventServiceID.IsEmpty() &&
 			d.currentEventServiceID != localServerID {
-			// The sink checkpoint alone is not a safe baseline before the remote
-			// delivers its first events: it still equals the dispatcher start ts,
-			// so a local subscription that has barely started could win the race
-			// and stall the table while catching up from TiKV. The remote
-			// service's reported resolved ts captures where the remote actually
-			// is, so the local service must cover that first.
+			// The local event service may only win back once its resolved ts
+			// covers the position the current remote has actually delivered to
+			// the sink, so the switch never stalls the table. Before the remote
+			// delivers its first events the sink position still equals the
+			// dispatcher start ts, which would let a barely started local
+			// subscription win the race; hold on the remote's reported progress
+			// until data actually flows.
 			baseline := requiredCheckpointTs
-			if d.remoteResolvedTs > baseline {
+			if remoteDeliveredTs > baseline {
+				baseline = remoteDeliveredTs
+			}
+			if baseline <= dispatcherStartTs && d.remoteResolvedTs > baseline {
 				baseline = d.remoteResolvedTs
 			}
 			if readyResolvedTs < baseline {
 				return readyDecision{}
 			}
+		} else if !d.pendingRemoteEventServiceID.IsEmpty() {
+			// A remote reuse probe is in flight. A local ready only means the
+			// local registration is complete, not that the local subscription
+			// has served any data yet: its resolved ts still starts at the move
+			// checkpoint. Prefer the remote, which already serves the span, over
+			// letting the local win by arriving first. The probe expires after
+			// remoteProbeTimeout so a silent remote cannot block the fallback.
+			return readyDecision{}
 		}
 
 		decision := readyDecision{
@@ -185,6 +218,7 @@ func (d *dispatcherConnState) acceptReady(
 		d.pendingRemoteEventServiceID = ""
 		d.remoteCandidates = nil
 		d.remoteResolvedTs = 0
+		d.remoteProbeStartAt = time.Time{}
 		return decision
 	}
 
@@ -208,6 +242,7 @@ func (d *dispatcherConnState) acceptReady(
 	// later local ready may move the dispatcher back to local.
 	d.pendingRemoteEventServiceID = ""
 	d.remoteCandidates = nil
+	d.remoteProbeStartAt = time.Time{}
 	// Record the remote progress the local service must catch up to before it
 	// may win back. This is more meaningful than the sink checkpoint, which
 	// still equals the start ts before the remote delivers its first events.
@@ -233,6 +268,7 @@ func (d *dispatcherConnState) beginRemove(localServerID node.ID) ([]node.ID, boo
 	d.pendingRemoteEventServiceID = ""
 	d.remoteCandidates = nil
 	d.remoteResolvedTs = 0
+	d.remoteProbeStartAt = time.Time{}
 	return []node.ID(targets), false
 }
 
@@ -277,6 +313,7 @@ func (d *dispatcherConnState) beginRemoteProbing(nodes []string) (node.ID, bool)
 	}
 	candidate := node.ID(nodes[0])
 	d.pendingRemoteEventServiceID = candidate
+	d.remoteProbeStartAt = time.Now()
 	d.remoteCandidates = nodes[1:]
 	return candidate, true
 }
@@ -297,6 +334,31 @@ func (d *dispatcherConnState) advanceRemoteProbeAfterNotReusable(from node.ID) (
 	candidate := node.ID(d.remoteCandidates[0])
 	d.remoteCandidates = d.remoteCandidates[1:]
 	d.pendingRemoteEventServiceID = candidate
+	d.remoteProbeStartAt = time.Now()
+	return candidate, true
+}
+
+// expireRemoteProbeLocked abandons a remote reuse probe that has been in flight
+// longer than timeout without a ready or not-reusable response. It advances to
+// the next candidate when one remains, otherwise it clears the pending probe so
+// the dispatcher can fall back to the local event service.
+func (d *dispatcherConnState) expireRemoteProbeLocked(now time.Time, timeout time.Duration) (node.ID, bool) {
+	d.Lock()
+	defer d.Unlock()
+	if d.removed || d.pendingRemoteEventServiceID.IsEmpty() {
+		return "", false
+	}
+	if d.remoteProbeStartAt.IsZero() || now.Sub(d.remoteProbeStartAt) < timeout {
+		return "", false
+	}
+	if len(d.remoteCandidates) == 0 {
+		d.pendingRemoteEventServiceID = ""
+		return "", true
+	}
+	candidate := node.ID(d.remoteCandidates[0])
+	d.remoteCandidates = d.remoteCandidates[1:]
+	d.pendingRemoteEventServiceID = candidate
+	d.remoteProbeStartAt = now
 	return candidate, true
 }
 
@@ -504,11 +566,18 @@ func (s *dispatcherSession) handleReadyEvent(from node.ID, readyResolvedTs uint6
 	// connState decides whether this ready should be accepted and which stale
 	// registrations must be cleaned up. Session only applies the side effects.
 	requiredCheckpointTs := s.target.GetCheckpointTs()
+	// remoteDeliveredTs is the highest resolved ts the sink has received from
+	// the current event service, i.e. the position the remote has actually
+	// delivered. The local service must catch up to it before winning back so
+	// the switch never stalls the table while the local catches up from TiKV.
+	remoteDeliveredTs := s.target.GetResolvedTs()
 	accepted := s.connState.acceptReady(
 		from,
 		s.localServerID,
 		readyResolvedTs,
 		requiredCheckpointTs,
+		remoteDeliveredTs,
+		s.target.GetStartTs(),
 	)
 	for _, target := range accepted.cleanupTargets {
 		s.removeFromLocked(target)
@@ -649,6 +718,29 @@ func (s *dispatcherSession) startRemoteProbing(nodes []string) {
 		zap.Int64("tableID", s.target.GetTableSpan().TableID),
 		zap.Strings("nodes", nodes))
 	s.sendRegisterRequest(candidate)
+}
+
+// expireStaleRemoteProbe abandons a remote reuse probe that has been waiting
+// too long, advancing to the next candidate or clearing the pending probe so
+// the local event service can take over. It is called periodically so a silent
+// remote cannot block the dispatcher forever.
+func (s *dispatcherSession) expireStaleRemoteProbe() {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	if s.connState.isRemoved() {
+		return
+	}
+	nextCandidate, advanced := s.connState.expireRemoteProbeLocked(time.Now(), remoteProbeTimeout)
+	if !advanced {
+		return
+	}
+	log.Info("remote reuse probe timed out",
+		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
+		zap.Stringer("dispatcherID", s.target.GetId()),
+		zap.Stringer("nextCandidate", nextCandidate))
+	if !nextCandidate.IsEmpty() {
+		s.sendRegisterRequest(nextCandidate)
+	}
 }
 
 // Read-only session queries.
