@@ -76,8 +76,9 @@ type regionRecoveryKey struct {
 }
 
 type regionRecoveryState struct {
-	attempt   uint32
-	expiresAt time.Time
+	attempt    uint32
+	generation uint64
+	expiresAt  time.Time
 }
 
 func newRegionRecoveryKey(
@@ -105,6 +106,14 @@ func regionRecoveryDelay(attempt uint32) time.Duration {
 	}
 	half := delay / 2
 	return half + time.Duration(rand.Int64N(int64(delay-half)+1))
+}
+
+func safeBackoffDuration(backoffMs uint64) time.Duration {
+	maxBackoffMs := uint64((10 * time.Minute) / time.Millisecond)
+	if backoffMs > maxBackoffMs {
+		backoffMs = maxBackoffMs
+	}
+	return time.Duration(backoffMs) * time.Millisecond
 }
 
 func newRegionFailureHandler(
@@ -149,6 +158,8 @@ func (r *regionFailureHandler) scheduleRecovery(
 	if state.attempt < 32 {
 		state.attempt++
 	}
+	state.generation++
+	generation := state.generation
 	delay := regionRecoveryDelay(state.attempt)
 	if minDelay > delay {
 		delay = minDelay
@@ -158,7 +169,8 @@ func (r *regionFailureHandler) scheduleRecovery(
 
 	time.AfterFunc(delay, func() {
 		r.recovery.Lock()
-		if r.recovery.states[key] != state {
+		currentState := r.recovery.states[key]
+		if currentState != state || currentState.generation != generation {
 			r.recovery.Unlock()
 			return
 		}
@@ -345,7 +357,7 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		}
 		if busy := innerErr.GetServerIsBusy(); busy != nil {
 			metricKvIsBusyCounter.Inc()
-			retryRegion(time.Duration(busy.GetBackoffMs()) * time.Millisecond)
+			retryRegion(safeBackoffDuration(busy.GetBackoffMs()))
 			return nil
 		}
 		if duplicated := innerErr.GetDuplicateRequest(); duplicated != nil {

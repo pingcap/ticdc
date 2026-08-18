@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -229,6 +230,37 @@ func TestRegionRecoveryBackoffFollowsRangeAcrossRegionChanges(t *testing.T) {
 	require.Equal(t, uint32(2), attempt)
 }
 
+func TestScheduleRecoveryCoalescesPendingRetries(t *testing.T) {
+	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
+	t.Cleanup(handler.cancelRecoveries)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	subSpan := &subscribedSpan{subID: SubscriptionID(1)}
+	span := heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("b")}
+	retryCh := make(chan struct{}, 2)
+	retry := func() {
+		retryCh <- struct{}{}
+	}
+
+	handler.scheduleRecovery(ctx, subSpan, span, 100*time.Millisecond, retry)
+	time.Sleep(20 * time.Millisecond)
+	handler.scheduleRecovery(ctx, subSpan, span, 100*time.Millisecond, retry)
+
+	select {
+	case <-retryCh:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("retry was not scheduled")
+	}
+
+	select {
+	case <-retryCh:
+		t.Fatal("expected coalesced retries for the same recovery key")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func TestRegionFailureHandlerRequestCancelledResetsRecoveryState(t *testing.T) {
 	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
 	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
@@ -260,4 +292,13 @@ func TestRegionFailureHandlerExpiresRecoveryStates(t *testing.T) {
 	handler.recovery.Unlock()
 	require.False(t, expiredExists)
 	require.True(t, activeExists)
+}
+
+func TestSafeBackoffDuration(t *testing.T) {
+	require.Equal(t, time.Duration(0), safeBackoffDuration(0))
+	require.Equal(t, 123*time.Millisecond, safeBackoffDuration(123))
+	require.Equal(t, 10*time.Second, safeBackoffDuration(10_000))
+	require.Equal(t, 10*time.Minute, safeBackoffDuration(10*60*1000))
+	require.Equal(t, 10*time.Minute, safeBackoffDuration(11*60*1000))
+	require.Equal(t, 10*time.Minute, safeBackoffDuration(math.MaxUint64))
 }
