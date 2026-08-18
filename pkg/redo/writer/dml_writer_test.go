@@ -53,6 +53,15 @@ func TestNewDMLWriter(t *testing.T) {
 	require.NoDirExists(t, spoolDir)
 }
 
+func TestRedoSpoolMemoryRatio(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 0.025, redoSpoolMemoryRatio(0))
+	require.Equal(t, 0.025, redoSpoolMemoryRatio(-1))
+	require.Equal(t, defaultRedoSpoolMemoryRatio, redoSpoolMemoryRatio(1024*1024*1024))
+	require.Equal(t, 0.025, redoSpoolMemoryRatio(10*1024*1024*1024))
+}
+
 func TestDMLWriterSpoolsEncodedBytesBeforePostEnqueue(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName)
 	spoolBuffer, err := spool.New(

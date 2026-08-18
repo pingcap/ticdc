@@ -50,7 +50,26 @@ type redoSpoolEntry struct {
 	flushImmediately bool
 }
 
-const redoSpoolDirectory = "redo-sink-spool"
+const (
+	redoSpoolDirectory = "redo-sink-spool"
+
+	// Keep the redo spool's in-memory hot set small enough that it does not
+	// compete with the changefeed event quota. The spool can use local disk for
+	// the remaining encoded events.
+	defaultRedoSpoolMemoryRatio = 0.2
+	maxRedoSpoolMemoryBytes     = int64(256 * 1024 * 1024)
+)
+
+func redoSpoolMemoryRatio(diskQuotaBytes int64) float64 {
+	if diskQuotaBytes <= 0 {
+		diskQuotaBytes = redo.DefaultSpoolDiskQuota
+	}
+	maxMemoryRatio := float64(maxRedoSpoolMemoryBytes) / float64(diskQuotaBytes)
+	if maxMemoryRatio < defaultRedoSpoolMemoryRatio {
+		return maxMemoryRatio
+	}
+	return defaultRedoSpoolMemoryRatio
+}
 
 // NewDMLWriter creates a new redo DML writer.
 func NewDMLWriter(
@@ -87,6 +106,7 @@ func newDMLWriter(
 		cfg.ChangeFeedID(),
 		spool.WithRootDir(spoolBaseDir),
 		spool.WithDiskQuotaBytes(cfg.SpoolDiskQuota()),
+		spool.WithMemoryRatio(redoSpoolMemoryRatio(cfg.SpoolDiskQuota())),
 	)
 	if err != nil {
 		extStorage.Close()
