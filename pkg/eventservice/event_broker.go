@@ -699,8 +699,16 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 }
 
 func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
+	maxDMLBytes := task.getCurrentScanLimitInBytes()
+	// The persisted redo resolved-ts gates normal sink visibility. Bound each
+	// redo scan fragment so a CPU-heavy source-time window publishes completed
+	// transaction boundaries regularly instead of holding the global redo fence
+	// behind one long scan task.
+	if common.IsRedoMode(task.info.GetMode()) {
+		maxDMLBytes = min(maxDMLBytes, int64(maxRedoScanLimitInBytes))
+	}
 	return scanLimit{
-		maxDMLBytes: task.getCurrentScanLimitInBytes(),
+		maxDMLBytes: maxDMLBytes,
 	}
 }
 
