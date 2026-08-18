@@ -46,6 +46,11 @@ type fileCache struct {
 	filename string
 	flushed  chan struct{}
 	writer   *dataWriter
+	// postFlush contains callbacks for the events persisted in this file.
+	// Keeping callbacks with their file lets flushAll release completed prefixes
+	// as each file finishes instead of batching every callback behind the slowest
+	// upload in the flush round.
+	postFlush []func()
 }
 
 type dataWriter struct {
@@ -211,17 +216,8 @@ func (f *fileWorkerGroup) bgWriteLogs(
 	d := time.Duration(f.cfg.FlushIntervalInMs()) * time.Millisecond
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
-	var cacheEventPostFlush []func()
 	flush := func() error {
-		err := f.flushAll(egCtx)
-		if err != nil {
-			return err
-		}
-		for _, fn := range cacheEventPostFlush {
-			fn()
-		}
-		cacheEventPostFlush = cacheEventPostFlush[:0]
-		return nil
+		return f.flushAll(egCtx)
 	}
 	for {
 		select {
@@ -241,7 +237,6 @@ func (f *fileWorkerGroup) bgWriteLogs(
 			if err != nil {
 				return errors.Trace(err)
 			}
-			cacheEventPostFlush = append(cacheEventPostFlush, event.PostFlush)
 			if event.flushImmediately {
 				if err := flush(); err != nil {
 					return errors.Trace(err)
@@ -276,7 +271,9 @@ func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) 
 }
 
 // newFileCache write event to a new file cache.
-func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) *fileCache {
+func (f *fileWorkerGroup) newFileCache(
+	data []byte, commitTs common.Ts, postFlush func(),
+) *fileCache {
 	bufPtr := f.pool.Get().(*[]byte)
 	buf := *bufPtr
 	buf = buf[:0]
@@ -308,6 +305,7 @@ func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) *fileCac
 		minCommitTs: commitTs,
 		flushed:     make(chan struct{}),
 		writer:      dw,
+		postFlush:   []func(){postFlush},
 	}
 }
 
@@ -327,7 +325,7 @@ func (f *fileWorkerGroup) writeToCache(
 	defer f.metricWriteBytes.Add(float64(writeLen))
 
 	if len(f.files) == 0 {
-		file := f.newFileCache(data, commitTs)
+		file := f.newFileCache(data, commitTs, event.PostFlush)
 		if file == nil {
 			return errors.ErrRedoWriterStopped.FastGenByArgs("failed to create file cache")
 		}
@@ -342,7 +340,7 @@ func (f *fileWorkerGroup) writeToCache(
 			return errors.Trace(egCtx.Err())
 		case f.flushCh <- file:
 		}
-		file := f.newFileCache(data, commitTs)
+		file := f.newFileCache(data, commitTs, event.PostFlush)
 		if file == nil {
 			return errors.ErrRedoWriterStopped.FastGenByArgs("failed to create file cache")
 		}
@@ -356,6 +354,7 @@ func (f *fileWorkerGroup) writeToCache(
 	}
 
 	file.fileSize += writeLen
+	file.postFlush = append(file.postFlush, event.PostFlush)
 	if commitTs > file.maxCommitTs {
 		file.maxCommitTs = commitTs
 	}
@@ -377,12 +376,17 @@ func (f *fileWorkerGroup) flushAll(egCtx context.Context) error {
 	case f.flushCh <- file:
 	}
 
-	// wait all files flushed
+	// Wait in file creation order and release each durable prefix immediately.
+	// Uploads still run concurrently in the flush workers.
 	for _, file := range f.files {
 		err := file.waitFlushed(egCtx)
 		if err != nil {
 			return errors.Trace(err)
 		}
+		for _, callback := range file.postFlush {
+			callback()
+		}
+		file.postFlush = nil
 	}
 	f.files = f.files[:0]
 	return nil
