@@ -821,27 +821,6 @@ func TestScanWindowCatchUpDisabledDoesNotSchedule(t *testing.T) {
 	require.Empty(t, broker.taskChan[0])
 }
 
-func TestCalculateScanLimitCapsRedoFragments(t *testing.T) {
-	broker, _, _, _ := newEventBrokerForTest()
-	broker.close()
-
-	normalInfo := newMockDispatcherInfoForTest(t)
-	normalStatus := broker.getOrSetChangefeedStatus(normalInfo)
-	normal := newDispatcherStat(normalInfo, 1, 1, nil, normalStatus)
-	normal.currentScanLimitInBytes.Store(maxScanLimitInBytes)
-	require.Equal(t, int64(maxScanLimitInBytes), broker.calculateScanLimit(normal).maxDMLBytes)
-
-	redoInfo := newMockDispatcherInfoForTest(t)
-	redoInfo.mode = common.RedoMode
-	redoStatus := broker.getOrSetChangefeedStatus(redoInfo)
-	redo := newDispatcherStat(redoInfo, 1, 1, nil, redoStatus)
-	redo.currentScanLimitInBytes.Store(maxScanLimitInBytes)
-	require.Equal(t, int64(maxRedoScanLimitInBytes), broker.calculateScanLimit(redo).maxDMLBytes)
-
-	redo.currentScanLimitInBytes.Store(minScanLimitInBytes)
-	require.Equal(t, int64(minScanLimitInBytes), broker.calculateScanLimit(redo).maxDMLBytes)
-}
-
 func TestRedoRegistrationCapsExistingChangefeedScanWindow(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()

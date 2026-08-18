@@ -38,7 +38,6 @@ const (
 
 	minScanLimitInBytes     = 1024        // 1KB
 	maxScanLimitInBytes     = 1024 * 1024 // 1MB
-	maxRedoScanLimitInBytes = 64 * 1024   // 64KB
 	updateScanLimitInterval = time.Second * 10
 )
 
