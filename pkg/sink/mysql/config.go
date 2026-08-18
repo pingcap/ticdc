@@ -25,11 +25,11 @@ import (
 
 	dmysql "github.com/go-sql-driver/mysql"
 	lru "github.com/hashicorp/golang-lru"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
@@ -65,13 +65,14 @@ const (
 	// The upper limit of max multi update row size(8KB).
 	maxMaxMultiUpdateRowSize = 8192
 
-	defaultTiDBTxnMode    = txnModeOptimistic
-	defaultReadTimeout    = "2m"
-	defaultWriteTimeout   = "2m"
-	defaultDialTimeout    = "2m"
-	defaultSafeMode       = false
-	defaultTxnIsolationRC = "READ-COMMITTED"
-	defaultCharacterSet   = "utf8mb4"
+	defaultTiDBTxnMode     = txnModeOptimistic
+	defaultReadTimeout     = "2m"
+	defaultWriteTimeout    = "2m"
+	defaultDialTimeout     = "2m"
+	defaultAsyncDDLTimeout = "2m"
+	defaultSafeMode        = false
+	defaultTxnIsolationRC  = "READ-COMMITTED"
+	defaultCharacterSet    = "utf8mb4"
 
 	// BackoffBaseDelay indicates the base delay time for retrying.
 	BackoffBaseDelay = 100 * time.Millisecond
@@ -107,15 +108,21 @@ type Config struct {
 	MaxMultiUpdateRowCount int
 	MaxMultiUpdateRowSize  int
 	TidbTxnMode            string
-	ReadTimeout            string
-	WriteTimeout           string
-	DialTimeout            string
-	SafeMode               bool
-	Timezone               string
-	TLS                    string
-	SSLCa                  string
-	SSLCert                string
-	SSLKey                 string
+	// tidbTxnModeSpecified indicates whether TidbTxnMode is explicitly set by user via sink URI or changefeed config.
+	// It is used to avoid overriding user configuration when applying downstream-specific defaults.
+	tidbTxnModeSpecified bool
+	ReadTimeout          string
+	WriteTimeout         string
+	DialTimeout          string
+	// AsyncDDLTimeout controls the read timeout for the async DDL DB pool.
+	// If it is not explicitly set, it defaults to defaultAsyncDDLTimeout.
+	AsyncDDLTimeout string
+	SafeMode        bool
+	Timezone        string
+	TLS             string
+	SSLCa           string
+	SSLCert         string
+	SSLKey          string
 
 	// retry number for dml
 	DMLMaxRetry uint64
@@ -172,6 +179,7 @@ func New() *Config {
 		ReadTimeout:            defaultReadTimeout,
 		WriteTimeout:           defaultWriteTimeout,
 		DialTimeout:            defaultDialTimeout,
+		AsyncDDLTimeout:        defaultAsyncDDLTimeout,
 		SafeMode:               defaultSafeMode,
 		BatchDMLEnable:         defaultBatchDMLEnable,
 		MultiStmtEnable:        defaultMultiStmtEnable,
@@ -205,6 +213,7 @@ func (c *Config) mergeConfig(cfg *config.ChangefeedConfig) {
 			merge(&c.WriteTimeout, mConfig.WriteTimeout)
 			merge(&c.ReadTimeout, mConfig.ReadTimeout)
 			merge(&c.DialTimeout, mConfig.Timeout)
+			merge(&c.AsyncDDLTimeout, mConfig.AsyncDDLTimeout)
 			merge(&c.BatchDMLEnable, mConfig.EnableBatchDML)
 			merge(&c.MultiStmtEnable, mConfig.EnableMultiStatement)
 			merge(&c.CachePrepStmts, mConfig.EnableCachePreparedStatement)
@@ -265,6 +274,9 @@ func (c *Config) Apply(
 	if err = getDuration(query, "timeout", &c.DialTimeout); err != nil {
 		return err
 	}
+	if err = getDuration(query, "async-ddl-timeout", &c.AsyncDDLTimeout); err != nil {
+		return err
+	}
 	if err = getBatchDMLEnable(query, &c.BatchDMLEnable); err != nil {
 		return err
 	}
@@ -309,16 +321,16 @@ func NewMysqlConfigAndDB(
 }
 
 // NewMysqlConfigAndDBs creates the effective MySQL sink config and independent
-// database pools for DML and control-plane work. The DML pool follows the worker
-// based sizing, while the control pool remains small and independent so DDL,
-// DDL-ts, syncpoint, and progress metadata operations cannot be starved by
-// long-lived DML sessions.
+// database pools for DML, control-plane work, and TiDB asynchronous DDL
+// execution. The DML pool follows the worker based sizing, while the control
+// pool remains small and independent so DDL, DDL-ts, syncpoint, and progress
+// metadata operations cannot be starved by long-lived DML sessions.
 func NewMysqlConfigAndDBs(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig,
-) (*Config, *sql.DB, *sql.DB, error) {
+) (*Config, *sql.DB, *sql.DB, *sql.DB, error) {
 	cfg, dmlDB, dsnStr, err := newMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	controlDB, err := CreateMysqlDBConn(dsnStr)
@@ -327,10 +339,42 @@ func NewMysqlConfigAndDBs(
 			log.Warn("close mysql dml db after control db creation failed",
 				zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
 		}
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	configureControlDBConn(controlDB)
-	return cfg, dmlDB, controlDB, nil
+
+	if !cfg.IsTiDB {
+		return cfg, dmlDB, controlDB, nil, nil
+	}
+
+	controlAsyncDSNStr, err := setDSNReadTimeout(dsnStr, cfg.AsyncDDLTimeout)
+	if err != nil {
+		closeDMLAndControlDBAfterFailure(changefeedID, dmlDB, controlDB, "async ddl db dsn creation failed")
+		return nil, nil, nil, nil, err
+	}
+	controlAsyncDB, err := CreateMysqlDBConn(controlAsyncDSNStr)
+	if err != nil {
+		closeDMLAndControlDBAfterFailure(changefeedID, dmlDB, controlDB, "async ddl db creation failed")
+		return nil, nil, nil, nil, err
+	}
+	configureControlDBConn(controlAsyncDB)
+	return cfg, dmlDB, controlDB, controlAsyncDB, nil
+}
+
+func closeDMLAndControlDBAfterFailure(
+	changefeedID common.ChangeFeedID,
+	dmlDB *sql.DB,
+	controlDB *sql.DB,
+	failureContext string,
+) {
+	if closeErr := dmlDB.Close(); closeErr != nil {
+		log.Warn("close mysql dml db after "+failureContext,
+			zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
+	}
+	if closeErr := controlDB.Close(); closeErr != nil {
+		log.Warn("close mysql control db after "+failureContext,
+			zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
+	}
 }
 
 func newMysqlConfigAndDB(
@@ -415,6 +459,19 @@ func newMysqlConfigAndDB(
 		cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 	}
 	return cfg, db, dsnStr, nil
+}
+
+func setDSNReadTimeout(dsnStr string, readTimeout string) (string, error) {
+	dsn, err := dmysql.ParseDSN(dsnStr)
+	if err != nil {
+		return "", errors.WrapError(errors.ErrMySQLInvalidConfig, err)
+	}
+	readTimeoutDuration, err := time.ParseDuration(readTimeout)
+	if err != nil {
+		return "", errors.WrapError(errors.ErrMySQLInvalidConfig, err)
+	}
+	dsn.ReadTimeout = readTimeoutDuration
+	return dsn.FormatDSN(), nil
 }
 
 func configureDMLDBConn(db *sql.DB, cfg *Config) {
