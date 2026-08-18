@@ -773,8 +773,8 @@ func TestRedoRegistrationCapsExistingChangefeedScanWindow(t *testing.T) {
 	redoInfo.mode = common.RedoMode
 	require.Same(t, status, broker.getOrSetChangefeedStatus(redoInfo))
 	require.True(t, status.hasRedoDispatcher.Load())
-	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
-	require.Equal(t, defaultScanInterval, status.maxScanInterval())
+	require.Equal(t, int64(minScanInterval), status.scanInterval.Load())
+	require.Equal(t, minScanInterval, status.maxScanInterval())
 }
 
 func TestGetScanTaskRequestKeepsTxnCursorInsideShrunkWindow(t *testing.T) {

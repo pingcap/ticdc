@@ -467,7 +467,7 @@ func TestGetScanMaxTsFallbackInterval(t *testing.T) {
 	require.Equal(t, uint64(0), status.getScanMaxTs())
 }
 
-func TestRedoDispatcherCapsScanWindowAtDefaultInterval(t *testing.T) {
+func TestRedoDispatcherCapsScanWindowAtMinimumInterval(t *testing.T) {
 	t.Parallel()
 
 	status := newChangefeedStatus(
@@ -477,15 +477,15 @@ func TestRedoDispatcherCapsScanWindowAtDefaultInterval(t *testing.T) {
 	status.scanInterval.Store(int64(40 * time.Second))
 
 	status.observeDispatcherMode(common.RedoMode)
-	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
-	require.Equal(t, defaultScanInterval, status.maxScanInterval())
+	require.Equal(t, int64(minScanInterval), status.scanInterval.Load())
+	require.Equal(t, minScanInterval, status.maxScanInterval())
 
 	now := time.Now()
 	markScanWindowReadyForIncrease(status, now)
 	for i := 0; i <= int(memoryUsageWindowDuration/time.Second); i++ {
 		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0, 0)
 	}
-	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
+	require.Equal(t, int64(minScanInterval), status.scanInterval.Load())
 }
 
 func TestRedoDispatcherPreservesSmallerSyncPointCap(t *testing.T) {
@@ -493,13 +493,13 @@ func TestRedoDispatcherPreservesSmallerSyncPointCap(t *testing.T) {
 
 	status := newChangefeedStatus(
 		common.NewChangefeedID4Test("default", t.Name()),
-		2*time.Second,
+		500*time.Millisecond,
 	)
 	status.scanInterval.Store(int64(40 * time.Second))
 
 	status.observeDispatcherMode(common.RedoMode)
-	require.Equal(t, int64(2*time.Second), status.scanInterval.Load())
-	require.Equal(t, 2*time.Second, status.maxScanInterval())
+	require.Equal(t, int64(500*time.Millisecond), status.scanInterval.Load())
+	require.Equal(t, 500*time.Millisecond, status.maxScanInterval())
 }
 
 func TestDefaultDispatcherDoesNotAddRedoScanWindowCap(t *testing.T) {

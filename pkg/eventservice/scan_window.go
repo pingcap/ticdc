@@ -811,8 +811,8 @@ func (c *changefeedStatus) maxScanInterval() time.Duration {
 	if c.isSyncpointEnabled() && c.syncPointInterval < interval {
 		interval = c.syncPointInterval
 	}
-	if c.hasRedoDispatcher.Load() && defaultScanInterval < interval {
-		interval = defaultScanInterval
+	if c.hasRedoDispatcher.Load() && minScanInterval < interval {
+		interval = minScanInterval
 	}
 	return interval
 }
