@@ -96,15 +96,10 @@ func regionRecoveryDelay(attempt uint32) time.Duration {
 	if attempt == 0 {
 		attempt = 1
 	}
-	exponent := attempt - 1
-	if exponent > 16 {
-		exponent = 16
-	}
-	delay := regionRecoveryBaseDelay << exponent
-	if delay > regionRecoveryMaxDelay {
-		delay = regionRecoveryMaxDelay
-	}
+	exponent := min(attempt-1, uint32(16))
+	delay := min(regionRecoveryBaseDelay<<exponent, regionRecoveryMaxDelay)
 	half := delay / 2
+	//nolint:gosec // jitter only needs cheap non-cryptographic randomness
 	return half + time.Duration(rand.Int64N(int64(delay-half)+1))
 }
 
@@ -161,9 +156,7 @@ func (r *regionFailureHandler) scheduleRecovery(
 	state.generation++
 	generation := state.generation
 	delay := regionRecoveryDelay(state.attempt)
-	if minDelay > delay {
-		delay = minDelay
-	}
+	delay = max(delay, minDelay)
 	state.expiresAt = time.Now().Add(delay + regionRecoveryStateTTL)
 	r.recovery.Unlock()
 

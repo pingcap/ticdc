@@ -125,8 +125,7 @@ func TestRegionFailureHandlerRunDrainsErrCacheWithoutDispatcher(t *testing.T) {
 		handler.cache.add(newTestRegionErrorInfo(&requestCancelledErr{}))
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, cancel := context.WithCancel(t.Context())
 
 	runDone := make(chan error, 1)
 	go func() {
@@ -173,8 +172,7 @@ func TestRegionFailureHandlerSchedulesNotLeaderRangeRetry(t *testing.T) {
 		err: &cdcpb.Error{NotLeader: &errorpb.NotLeader{}},
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	require.NoError(t, handler.handleError(ctx, errInfo))
 
@@ -234,8 +232,7 @@ func TestScheduleRecoveryCoalescesPendingRetries(t *testing.T) {
 	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
 	t.Cleanup(handler.cancelRecoveries)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	subSpan := &subscribedSpan{subID: SubscriptionID(1)}
 	span := heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("b")}
