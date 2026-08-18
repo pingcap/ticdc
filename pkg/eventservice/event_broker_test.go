@@ -760,6 +760,23 @@ func TestScanRangeCappedByScanWindow(t *testing.T) {
 	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), result.request.Range.CommitTsEnd)
 }
 
+func TestRedoRegistrationCapsExistingChangefeedScanWindow(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	normalInfo := newMockDispatcherInfoForTest(t)
+	status := broker.getOrSetChangefeedStatus(normalInfo)
+	status.scanInterval.Store(int64(40 * time.Second))
+
+	redoInfo := newMockDispatcherInfoForTest(t)
+	redoInfo.changefeedID = normalInfo.changefeedID
+	redoInfo.mode = common.RedoMode
+	require.Same(t, status, broker.getOrSetChangefeedStatus(redoInfo))
+	require.True(t, status.hasRedoDispatcher.Load())
+	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
+	require.Equal(t, defaultScanInterval, status.maxScanInterval())
+}
+
 func TestGetScanTaskRequestKeepsTxnCursorInsideShrunkWindow(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.

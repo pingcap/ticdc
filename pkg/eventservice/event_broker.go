@@ -1606,7 +1606,9 @@ func (c *eventBroker) runLargeTxnCleanupWorker(
 func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedStatus {
 	changefeedID := info.GetChangefeedID()
 	if stat, ok := c.changefeedMap.Load(changefeedID); ok {
-		return stat.(*changefeedStatus)
+		status := stat.(*changefeedStatus)
+		status.observeDispatcherMode(info.GetMode())
+		return status
 	}
 
 	// Filter config is changefeed scoped. In production, a config change must pause the
@@ -1627,7 +1629,9 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 	status.filter = changefeedFilter
 	actual, loaded := c.changefeedMap.LoadOrStore(changefeedID, status)
 	if loaded {
-		return actual.(*changefeedStatus)
+		status = actual.(*changefeedStatus)
+		status.observeDispatcherMode(info.GetMode())
+		return status
 	}
 	if status.lowLatencyMode {
 		select {
@@ -1639,6 +1643,7 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 	if status.scanWindowController != nil {
 		initializeScanWindowMetrics(changefeedID.String())
 	}
+	status.observeDispatcherMode(info.GetMode())
 	return status
 }
 

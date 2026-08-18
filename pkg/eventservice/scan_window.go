@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
@@ -302,10 +303,21 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, usageRatio float64, 
 
 	normalizedUsageRatio := normalizeUsageRatio(usageRatio)
 	current := time.Duration(c.scanInterval.Load())
-	decision := c.scanWindowController.OnCongestionReport(now, current, c.maxScanInterval(), scanWindowReport{
+	maxInterval := c.maxScanInterval()
+	decision := c.scanWindowController.OnCongestionReport(now, current, maxInterval, scanWindowReport{
 		usageRatio:         normalizedUsageRatio,
 		memoryReleaseCount: memoryReleaseCount,
 	})
+	// Very-low-pressure recovery may intentionally exceed the sync point soft cap.
+	// Redo is different: its persisted resolved-ts gates normal sink visibility, so
+	// the redo cap is a latency boundary and must never be exceeded.
+	if c.hasRedoDispatcher.Load() && decision.newInterval > maxInterval {
+		decision.newInterval = maxInterval
+		decision.maxInterval = maxInterval
+		if decision.newInterval == current {
+			decision.reason = scanWindowDecisionNone
+		}
+	}
 	c.observeScanWindowControllerMetrics(normalizedUsageRatio, memoryReleaseCount, current, decision)
 	if decision.newInterval == current {
 		return
@@ -795,19 +807,35 @@ func ema(previous float64, value float64, alpha float64) float64 {
 }
 
 func (c *changefeedStatus) maxScanInterval() time.Duration {
-	if !c.isSyncpointEnabled() {
-		return maxScanInterval
+	interval := maxScanInterval
+	if c.isSyncpointEnabled() && c.syncPointInterval < interval {
+		interval = c.syncPointInterval
+	}
+	if c.hasRedoDispatcher.Load() && defaultScanInterval < interval {
+		interval = defaultScanInterval
+	}
+	return interval
+}
+
+func (c *changefeedStatus) observeDispatcherMode(mode int64) {
+	if !common.IsRedoMode(mode) || !c.hasRedoDispatcher.CompareAndSwap(false, true) {
+		return
+	}
+	if c.scanWindowController == nil {
+		return
 	}
 
-	interval := c.syncPointInterval
-	if interval <= 0 {
-		return maxScanInterval
+	limit := c.maxScanInterval()
+	current := time.Duration(c.scanInterval.Load())
+	if current <= limit {
+		return
 	}
-
-	if interval < maxScanInterval {
-		return interval
-	}
-	return maxScanInterval
+	c.scanInterval.Store(int64(limit))
+	metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(c.changefeedID.String()).Set(limit.Seconds())
+	log.Info("scan interval capped for redo changefeed",
+		zap.Stringer("changefeedID", c.changefeedID),
+		zap.Duration("oldInterval", current),
+		zap.Duration("newInterval", limit))
 }
 
 func (c *changefeedStatus) refreshMinSentResolvedTs() {

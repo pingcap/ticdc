@@ -554,6 +554,7 @@ type changefeedStatus struct {
 	reportBandState      atomic.Int32
 	fastBandState        atomic.Int32
 	slowBandState        atomic.Int32
+	hasRedoDispatcher    atomic.Bool
 
 	scanWindowController *adaptiveScanWindowController
 	syncPointInterval    time.Duration
