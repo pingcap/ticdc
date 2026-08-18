@@ -365,6 +365,54 @@ func getEventWriteBatch(
 	return dataCh.GetMultipleNoGroup(buffer, writeBatchMaxBytes)
 }
 
+func enqueueEventWriteBatch(
+	dataCh *chann.UnlimitedChannel[eventWithCallback, uint64],
+	event eventWithCallback,
+) {
+	if len(event.kvs) == 0 || eventWithCallbackSizer(event) <= writeBatchMaxBytes {
+		dataCh.Push(event)
+		return
+	}
+
+	fragmentCount := int64(0)
+	for start := 0; start < len(event.kvs); fragmentCount++ {
+		start = nextEventWriteFragmentEnd(event.kvs, start)
+	}
+
+	var remaining atomic.Int64
+	remaining.Store(fragmentCount)
+	finishCallback := event.callback
+	for start := 0; start < len(event.kvs); {
+		end := nextEventWriteFragmentEnd(event.kvs, start)
+		fragment := event
+		fragment.kvs = event.kvs[start:end]
+		fragment.callback = func() {
+			if remaining.Add(-1) == 0 {
+				finishCallback()
+			}
+		}
+		dataCh.Push(fragment)
+		start = end
+	}
+}
+
+func nextEventWriteFragmentEnd(kvs []common.RawKVEntry, start int) int {
+	bytes := 0
+	end := start
+	for end < len(kvs) {
+		kvBytes := len(kvs[end].Key) + len(kvs[end].Value) + len(kvs[end].OldValue)
+		if end > start && bytes+kvBytes > writeBatchMaxBytes {
+			break
+		}
+		bytes += kvBytes
+		end++
+		if bytes >= writeBatchMaxBytes {
+			break
+		}
+	}
+	return end
+}
+
 func (p *writeTaskPool) run(ctx context.Context) {
 	p.store.wg.Add(p.workerNum)
 	for i := 0; i < p.workerNum; i++ {
@@ -677,7 +725,7 @@ func (e *eventStore) RegisterDispatcher(
 		}
 		subStat.lastReceiveDMLTime.Store(now.UnixMilli())
 		util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
-		subStat.eventCh.Push(eventWithCallback{
+		enqueueEventWriteBatch(subStat.eventCh, eventWithCallback{
 			subID:             subStat.subID,
 			tableID:           subStat.tableSpan.TableID,
 			keyspaceID:        subStat.tableSpan.KeyspaceID,

@@ -1998,8 +1998,13 @@ func TestGetEventWriteBatchBoundsRawBytes(t *testing.T) {
 
 	batch, ok := getEventWriteBatch(dataCh, make([]eventWithCallback, 0, 128))
 	require.True(t, ok)
-	require.Len(t, batch, 2)
-	require.GreaterOrEqual(t, eventWithCallbackSizer(batch[0])+eventWithCallbackSizer(batch[1]), writeBatchMaxBytes)
+	require.Len(t, batch, 1)
+	require.LessOrEqual(t, eventWithCallbackSizer(batch[0]), writeBatchMaxBytes)
+
+	batch, ok = getEventWriteBatch(dataCh, batch[:0])
+	require.True(t, ok)
+	require.Len(t, batch, 1)
+	require.LessOrEqual(t, eventWithCallbackSizer(batch[0]), writeBatchMaxBytes)
 
 	batch, ok = getEventWriteBatch(dataCh, batch[:0])
 	require.True(t, ok)
@@ -2018,6 +2023,40 @@ func TestGetEventWriteBatchBoundsRawBytes(t *testing.T) {
 	batch, ok = getEventWriteBatch(oversizedCh, batch[:0])
 	require.True(t, ok)
 	require.Len(t, batch, 1)
+}
+
+func TestEnqueueEventWriteBatchSplitsOversizedInputAndJoinsCallback(t *testing.T) {
+	dataCh := chann.NewUnlimitedChannel[eventWithCallback, uint64](nil, eventWithCallbackSizer)
+	defer dataCh.Close()
+
+	payload := make([]byte, writeBatchMaxBytes/2+1)
+	callbackCount := atomic.Int64{}
+	enqueueEventWriteBatch(dataCh, eventWithCallback{
+		subID:      42,
+		tableID:    43,
+		keyspaceID: 44,
+		kvs: []common.RawKVEntry{
+			{Key: payload},
+			{Value: payload},
+			{OldValue: payload},
+		},
+		callback: func() { callbackCount.Add(1) },
+	})
+
+	for i := range 3 {
+		fragment, ok := dataCh.Get()
+		require.True(t, ok)
+		require.Equal(t, logpuller.SubscriptionID(42), fragment.subID)
+		require.Equal(t, int64(43), fragment.tableID)
+		require.Equal(t, uint32(44), fragment.keyspaceID)
+		require.Len(t, fragment.kvs, 1)
+		require.LessOrEqual(t, eventWithCallbackSizer(fragment), writeBatchMaxBytes)
+		fragment.callback()
+		if i < 2 {
+			require.Zero(t, callbackCount.Load())
+		}
+	}
+	require.Equal(t, int64(1), callbackCount.Load())
 }
 
 func TestEventStoreIter_NextWithFiltering(t *testing.T) {

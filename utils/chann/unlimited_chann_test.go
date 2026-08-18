@@ -199,3 +199,26 @@ func TestUnlimitedChannelGetWithContext(t *testing.T) {
 		assert.Equal(t, stdErrors.Is(err, context.Canceled), true)
 	})
 }
+
+func TestGetMultipleNoGroupStrictByteLimit(t *testing.T) {
+	ch := NewUnlimitedChannel[int, int](nil, func(v int) int { return v })
+	defer ch.Close()
+	ch.Push(6, 6, 20, 1)
+
+	buffer, ok := ch.GetMultipleNoGroup(make([]int, 0, 4), 10)
+	assert.Equal(t, ok, true)
+	assert.Equal(t, buffer, []int{6})
+
+	buffer, ok = ch.GetMultipleNoGroup(buffer[:0], 10)
+	assert.Equal(t, ok, true)
+	assert.Equal(t, buffer, []int{6})
+
+	// An oversized first element must still make progress.
+	buffer, ok = ch.GetMultipleNoGroup(buffer[:0], 10)
+	assert.Equal(t, ok, true)
+	assert.Equal(t, buffer, []int{20})
+
+	buffer, ok = ch.GetMultipleNoGroup(buffer[:0], 10)
+	assert.Equal(t, ok, true)
+	assert.Equal(t, buffer, []int{1})
+}

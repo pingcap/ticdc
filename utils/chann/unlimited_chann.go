@@ -174,13 +174,20 @@ func (c *UnlimitedChannel[T, G]) getMultiple(gmt getMultType, buffer []T, batchB
 	switch gmt {
 	case getMultNoGroup:
 		for len(buffer) < cap && bytes < maxBytes {
-
-			v, ok := c.queue.PopFront()
+			v, ok := c.queue.FrontRef()
 			if !ok {
 				break
 			}
-			buffer = append(buffer, v)
-			bytes += getBytes(v)
+			nextBytes := getBytes(*v)
+			// Keep the byte limit strict once the batch has an element. The
+			// first element is always accepted so an oversized value cannot
+			// block the queue forever.
+			if len(buffer) > 0 && bytes+nextBytes > maxBytes {
+				break
+			}
+			buffer = append(buffer, *v)
+			bytes += nextBytes
+			c.queue.PopFront()
 		}
 	case getMultMixdGroupCons, getMultSingleGroup:
 		first, ok := c.queue.FrontRef()
@@ -212,7 +219,8 @@ func (c *UnlimitedChannel[T, G]) getMultiple(gmt getMultType, buffer []T, batchB
 	return buffer, true
 }
 
-// Get multiple elements from the channel.
+// Get multiple elements from the channel. When batchBytes is set, the returned
+// batch stays within that limit unless its first element is oversized.
 func (c *UnlimitedChannel[T, G]) GetMultipleNoGroup(buffer []T, batchBytes ...int) ([]T, bool) {
 	return c.getMultiple(getMultNoGroup, buffer, batchBytes...)
 }
