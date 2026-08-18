@@ -296,10 +296,42 @@ func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
 			c.changefeedMap.Range(func(key, value interface{}) bool {
 				status := value.(*changefeedStatus)
 				status.refreshMinSentResolvedTs()
+				c.requestScanWindowCatchUp(status)
 				return true
 			})
 		}
 	}
+}
+
+// requestScanWindowCatchUp keeps dispatchers moving while the scan window is
+// advancing. EventStore notifications received during a throughput-mode scan
+// are intentionally coalesced. Without this periodic retry, a dispatcher that
+// finishes one complete (and therefore non-interrupted) window can remain idle
+// behind its received resolved-ts until another EventStore notification arrives.
+func (c *eventBroker) requestScanWindowCatchUp(status *changefeedStatus) {
+	if status.scanWindowController == nil {
+		return
+	}
+
+	scanMaxTs := status.getScanMaxTs()
+	if scanMaxTs == 0 {
+		return
+	}
+	status.dispatchers.Range(func(_, value any) bool {
+		d := value.(*atomic.Pointer[dispatcherStat]).Load()
+		if d == nil || d.isRemoved.Load() {
+			return true
+		}
+
+		progress := d.loadScanProgress()
+		hasResumeCursor := progress.txnStartTs != 0 ||
+			len(progress.rowLevelScanPosition) != 0 || d.hasPendingLargeTxnState()
+		upperBound := min(d.receivedResolvedTs.Load(), scanMaxTs)
+		if progress.txnCommitTs < upperBound || hasResumeCursor {
+			c.requestScan(d)
+		}
+		return true
+	})
 }
 
 func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {

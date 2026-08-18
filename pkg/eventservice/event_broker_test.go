@@ -760,6 +760,67 @@ func TestScanRangeCappedByScanWindow(t *testing.T) {
 	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), result.request.Range.CommitTsEnd)
 }
 
+func TestScanWindowCatchUpSchedulesEachAdvancedWindow(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	baseTime := time.Now()
+	baseTs := oracle.GoTimeToTS(baseTime)
+	firstWindowEnd := oracle.GoTimeToTS(baseTime.Add(defaultScanInterval))
+	receivedTs := oracle.GoTimeToTS(baseTime.Add(3 * defaultScanInterval))
+	info.startTs = baseTs
+
+	status := newChangefeedStatusWithScanWindow(info.GetChangefeedID(), 0, true)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	disp.seq.Store(1)
+	disp.receivedResolvedTs.Store(receivedTs)
+	disp.eventStoreCommitTs.Store(receivedTs)
+	dispPtr := &atomic.Pointer[dispatcherStat]{}
+	dispPtr.Store(disp)
+	status.addDispatcher(disp.id, dispPtr)
+
+	status.refreshMinSentResolvedTs()
+	broker.requestScanWindowCatchUp(status)
+	require.Len(t, broker.taskChan[0], 1)
+
+	// Repeated ticks must not enqueue a duplicate while the dispatcher is busy.
+	broker.requestScanWindowCatchUp(status)
+	require.Len(t, broker.taskChan[0], 1)
+
+	task := <-broker.taskChan[0]
+	require.True(t, task.beginScan())
+	disp.updateSentResolvedTs(firstWindowEnd)
+	broker.finishScan(disp, false, false, 0)
+
+	// The dispatcher is at the current global cap, so it waits until the base
+	// refresh observes the completed window.
+	broker.requestScanWindowCatchUp(status)
+	require.Empty(t, broker.taskChan[0])
+	status.refreshMinSentResolvedTs()
+	broker.requestScanWindowCatchUp(status)
+	require.Len(t, broker.taskChan[0], 1)
+}
+
+func TestScanWindowCatchUpDisabledDoesNotSchedule(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	status := newChangefeedStatusWithScanWindow(info.GetChangefeedID(), 0, false)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	disp.seq.Store(1)
+	disp.receivedResolvedTs.Store(info.startTs + 100)
+	dispPtr := &atomic.Pointer[dispatcherStat]{}
+	dispPtr.Store(disp)
+	status.addDispatcher(disp.id, dispPtr)
+
+	broker.requestScanWindowCatchUp(status)
+	require.Empty(t, broker.taskChan[0])
+}
+
 func TestRedoRegistrationCapsExistingChangefeedScanWindow(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
