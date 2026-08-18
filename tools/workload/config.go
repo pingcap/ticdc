@@ -43,6 +43,8 @@ type WorkloadConfig struct {
 	TotalRowCount       uint64
 	PercentageForUpdate float64
 	PercentageForDelete float64
+	TargetRowsPerSec    int
+	MaxRuntime          time.Duration
 
 	// Action control
 	Action          string
@@ -63,6 +65,12 @@ type WorkloadConfig struct {
 	UpdateLargeColumnSize int
 	// For sysbench workload
 	RangeNum int
+
+	// Customer workload related
+	CustomerModel      string
+	CustomerRowSize    int
+	CustomerKeyspace   uint64
+	CustomerInitialSeq uint64
 
 	// Partition related
 	Partitioned bool
@@ -94,6 +102,8 @@ func NewWorkloadConfig() *WorkloadConfig {
 		TotalRowCount:       1000000000,
 		PercentageForUpdate: 0,
 		PercentageForDelete: 0,
+		TargetRowsPerSec:    0,
+		MaxRuntime:          0,
 
 		// Action control
 		Action:          "prepare",
@@ -117,6 +127,12 @@ func NewWorkloadConfig() *WorkloadConfig {
 		// For sysbench workload
 		RangeNum: 5,
 
+		// For customer workload
+		CustomerModel:      "A",
+		CustomerRowSize:    0,
+		CustomerKeyspace:   0,
+		CustomerInitialSeq: 0,
+
 		// Partition related
 		Partitioned: true,
 
@@ -138,9 +154,11 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.Uint64Var(&c.TotalRowCount, "total-row-count", c.TotalRowCount, "the total row count of the workload, default is 1 billion")
 	flag.Float64Var(&c.PercentageForUpdate, "percentage-for-update", c.PercentageForUpdate, "percentage for update: [0, 1.0]")
 	flag.Float64Var(&c.PercentageForDelete, "percentage-for-delete", c.PercentageForDelete, "percentage for delete: [0, 1.0]")
+	flag.IntVar(&c.TargetRowsPerSec, "target-rows-per-sec", c.TargetRowsPerSec, "target rows per second across all DML workers, 0 means unlimited")
+	flag.DurationVar(&c.MaxRuntime, "max-runtime", c.MaxRuntime, "maximum DML runtime, 0 means unlimited")
 	flag.BoolVar(&c.SkipCreateTable, "skip-create-table", c.SkipCreateTable, "do not create tables")
 	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, ddl, cleanup]")
-	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank3, bank_update, crawler, dc, wide_table_with_json]")
+	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank3, bank_update, crawler, dc, wide_table_with_json, customer_workload]")
 	flag.StringVar(&c.DBHost, "database-host", c.DBHost, "database host")
 	flag.StringVar(&c.DBUser, "database-user", c.DBUser, "database user")
 	flag.StringVar(&c.DBPassword, "database-password", c.DBPassword, "database password")
@@ -160,6 +178,11 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.IntVar(&c.UpdateLargeColumnSize, "update-large-column-size", c.UpdateLargeColumnSize, "the size of the large column to update")
 	// For sysbench workload
 	flag.IntVar(&c.RangeNum, "range-num", c.RangeNum, "the number of ranges for sysbench workload")
+	// For customer workload
+	flag.StringVar(&c.CustomerModel, "customer-model", c.CustomerModel, "customer workload model: [A, B, C, D]")
+	flag.IntVar(&c.CustomerRowSize, "customer-row-size", c.CustomerRowSize, "override customer workload payload row size in bytes, 0 means model default")
+	flag.Uint64Var(&c.CustomerKeyspace, "customer-keyspace", c.CustomerKeyspace, "customer workload update/delete keyspace per table, 0 derives from total-row-count/table-count")
+	flag.Uint64Var(&c.CustomerInitialSeq, "customer-initial-seq", c.CustomerInitialSeq, "customer workload initial inserted sequence per table, 0 derives from customer-keyspace in non-prepare actions")
 	// Partition related
 	flag.BoolVar(&c.Partitioned, "partitioned", c.Partitioned, "whether to create tables as partitioned tables when the workload supports it")
 	flag.BoolVar(&c.Partitioned, "bank3-partitioned", c.Partitioned, "deprecated: use -partitioned")
@@ -175,6 +198,15 @@ func (c *WorkloadConfig) ParseFlags() error {
 	if c.PercentageForUpdate+c.PercentageForDelete > 1.0 {
 		return fmt.Errorf("PercentageForUpdate (%.2f) + PercentageForDelete (%.2f) must be <= 1.0",
 			c.PercentageForUpdate, c.PercentageForDelete)
+	}
+	if c.TargetRowsPerSec < 0 {
+		return fmt.Errorf("target-rows-per-sec must be >= 0")
+	}
+	if c.MaxRuntime < 0 {
+		return fmt.Errorf("max-runtime must be >= 0")
+	}
+	if c.CustomerRowSize < 0 {
+		return fmt.Errorf("customer-row-size must be >= 0")
 	}
 
 	if c.OnlyDDL && c.OnlyDML {
