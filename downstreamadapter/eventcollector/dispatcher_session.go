@@ -91,9 +91,12 @@ type dispatcherConnState struct {
 	// equals the dispatcher start ts, which would let a barely started local
 	// subscription win the race and stall the table while catching up from TiKV.
 	remoteResolvedTs uint64
-	// remoteProbeStartAt records when the current remote reuse probe was sent,
-	// so a silent remote (no ready and no not-reusable response) can be
-	// abandoned after remoteProbeTimeout instead of blocking the dispatcher.
+	// remoteProbeStartAt marks the start of the remote reuse probing effort:
+	// from when the reusable-event-service request is sent (t0) through the
+	// candidate register round-trips. While it is non-zero the local ready is
+	// held so the remote (which already serves the span) wins over a local
+	// subscription that has not served data yet. It is cleared when the probe
+	// concludes (remote accepted, no reusable candidate, or timeout).
 	remoteProbeStartAt time.Time
 }
 
@@ -106,6 +109,19 @@ func (d *dispatcherConnState) beginRegisterToLocal() bool {
 	}
 	d.localReadyPending = true
 	return true
+}
+
+// beginRemoteProbeRequest records that the dispatcher has asked the log
+// coordinator for reusable remote event services. The local ready is held from
+// this point (not only after a candidate register is sent) so the remote gets a
+// chance even when the coordinator response is slower than the local ready.
+func (d *dispatcherConnState) beginRemoteProbeRequest() {
+	d.Lock()
+	defer d.Unlock()
+	if d.removed || !d.remoteProbeStartAt.IsZero() {
+		return
+	}
+	d.remoteProbeStartAt = time.Now()
 }
 
 // beginRegisterToRemote records that the dispatcher is attempting to register to
@@ -196,13 +212,15 @@ func (d *dispatcherConnState) acceptReady(
 			if readyResolvedTs < baseline {
 				return readyDecision{}
 			}
-		} else if !d.pendingRemoteEventServiceID.IsEmpty() {
-			// A remote reuse probe is in flight. A local ready only means the
-			// local registration is complete, not that the local subscription
-			// has served any data yet: its resolved ts still starts at the move
-			// checkpoint. Prefer the remote, which already serves the span, over
-			// letting the local win by arriving first. The probe expires after
-			// remoteProbeTimeout so a silent remote cannot block the fallback.
+		} else if !d.remoteProbeStartAt.IsZero() {
+			// A remote reuse probe is in flight, either waiting for the log
+			// coordinator response or registering a candidate. A local ready
+			// only means the local registration is complete, not that the local
+			// subscription has served any data yet: its resolved ts still starts
+			// at the move checkpoint. Prefer the remote, which already serves
+			// the span, over letting the local win by arriving first. The probe
+			// expires after remoteProbeTimeout so a silent coordinator/remote
+			// cannot block the fallback.
 			return readyDecision{}
 		}
 
@@ -309,6 +327,9 @@ func (d *dispatcherConnState) beginRemoteProbing(nodes []string) (node.ID, bool)
 		return "", false
 	}
 	if len(nodes) == 0 {
+		// No remote can reuse the span, so the probing effort concludes and the
+		// local event service may take over.
+		d.remoteProbeStartAt = time.Time{}
 		return "", false
 	}
 	candidate := node.ID(nodes[0])
@@ -328,7 +349,10 @@ func (d *dispatcherConnState) advanceRemoteProbeAfterNotReusable(from node.ID) (
 		return "", false
 	}
 	if len(d.remoteCandidates) == 0 {
+		// No more candidates: the probing effort concludes and the local event
+		// service may take over.
 		d.pendingRemoteEventServiceID = ""
+		d.remoteProbeStartAt = time.Time{}
 		return "", true
 	}
 	candidate := node.ID(d.remoteCandidates[0])
@@ -341,18 +365,27 @@ func (d *dispatcherConnState) advanceRemoteProbeAfterNotReusable(from node.ID) (
 // expireRemoteProbeLocked abandons a remote reuse probe that has been in flight
 // longer than timeout without a ready or not-reusable response. It advances to
 // the next candidate when one remains, otherwise it clears the pending probe so
-// the dispatcher can fall back to the local event service.
+// the dispatcher can fall back to the local event service. The probe may still
+// be waiting for the log coordinator response (no pending candidate yet); in
+// that case the whole effort is abandoned the same way.
 func (d *dispatcherConnState) expireRemoteProbeLocked(now time.Time, timeout time.Duration) (node.ID, bool) {
 	d.Lock()
 	defer d.Unlock()
-	if d.removed || d.pendingRemoteEventServiceID.IsEmpty() {
+	if d.removed || d.remoteProbeStartAt.IsZero() {
 		return "", false
 	}
-	if d.remoteProbeStartAt.IsZero() || now.Sub(d.remoteProbeStartAt) < timeout {
+	if now.Sub(d.remoteProbeStartAt) < timeout {
 		return "", false
+	}
+	if d.pendingRemoteEventServiceID.IsEmpty() {
+		// Still waiting for the reusable-event-service response. Conclude the
+		// probing effort and let the local event service take over.
+		d.remoteProbeStartAt = time.Time{}
+		return "", true
 	}
 	if len(d.remoteCandidates) == 0 {
 		d.pendingRemoteEventServiceID = ""
+		d.remoteProbeStartAt = time.Time{}
 		return "", true
 	}
 	candidate := node.ID(d.remoteCandidates[0])
@@ -718,6 +751,15 @@ func (s *dispatcherSession) startRemoteProbing(nodes []string) {
 		zap.Int64("tableID", s.target.GetTableSpan().TableID),
 		zap.Strings("nodes", nodes))
 	s.sendRegisterRequest(candidate)
+}
+
+// beginRemoteProbeRequest marks the start of the remote reuse probing effort.
+// It is called when the reusable-event-service request is sent, so the local
+// ready is held even before the log coordinator responds.
+func (s *dispatcherSession) beginRemoteProbeRequest() {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	s.connState.beginRemoteProbeRequest()
 }
 
 // expireStaleRemoteProbe abandons a remote reuse probe that has been waiting

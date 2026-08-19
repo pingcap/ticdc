@@ -1102,6 +1102,54 @@ func TestRemoteProbeExpiryFallsBackToLocal(t *testing.T) {
 	})
 }
 
+func TestRemoteProbeRequestGatesLocalReady(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+	dispatcherID := common.NewDispatcherID()
+
+	newLocalReadyEvent := func(resolvedTs uint64) dispatcher.DispatcherEvent {
+		ready := commonEvent.NewReadyEventWithResolvedTs(dispatcherID, resolvedTs)
+		return dispatcher.DispatcherEvent{
+			From:  &localServerID,
+			Event: &ready,
+		}
+	}
+
+	mockDisp := newMockDispatcher(dispatcherID, 100)
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+	setSessionState(stat.session, "", true, "")
+
+	// The reusable-event-service request is sent before any candidate is known.
+	// The local ready must be held from this point so the remote gets a chance
+	// even when the log coordinator responds later than the local ready.
+	stat.beginRemoteProbeRequest()
+	stat.handleSignalEvent(newLocalReadyEvent(100))
+	currentEventServiceID, localReadyPending, _ := sessionState(stat.session)
+	require.Empty(t, currentEventServiceID)
+	require.True(t, localReadyPending)
+	requireNoDispatcherRequest(t, mockEventCollector)
+
+	// The log coordinator responds with a reusable candidate; the remote wins.
+	stat.startRemoteProbing([]string{remoteServerID.String()})
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REGISTER},
+	)
+	remoteReady := commonEvent.NewReadyEventWithResolvedTs(dispatcherID, 300)
+	stat.handleSignalEvent(dispatcher.DispatcherEvent{
+		From:  &remoteServerID,
+		Event: &remoteReady,
+	})
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+	requireNoDispatcherRequest(t, mockEventCollector)
+}
+
 func TestInitialLocalReadyCallbackIsOneShot(t *testing.T) {
 	localServerID := node.ID("local-server")
 	dispatcherID := common.NewDispatcherID()

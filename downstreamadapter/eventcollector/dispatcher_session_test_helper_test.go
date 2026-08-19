@@ -30,6 +30,9 @@ func setSessionState(
 	session.connState.currentEventServiceID = currentEventServiceID
 	session.connState.localReadyPending = localReadyPending
 	session.connState.pendingRemoteEventServiceID = pendingRemoteTarget
+	if !pendingRemoteTarget.IsEmpty() {
+		session.connState.remoteProbeStartAt = time.Now()
+	}
 }
 
 func setSessionRemoteCandidates(session *dispatcherSession, nodes []string) {

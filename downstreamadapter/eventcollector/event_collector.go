@@ -240,6 +240,14 @@ func (c *EventCollector) Close() {
 
 func (c *EventCollector) AddDispatcher(target dispatcher.DispatcherService, memoryQuota uint64) {
 	c.PrepareAddDispatcher(target, memoryQuota, nil)
+	// Mark the remote reuse probing effort as started before sending the
+	// reusable-event-service request, so the local ready is held from the very
+	// beginning instead of letting the local subscription win by arriving first.
+	if target.GetTableSpan().TableID != 0 {
+		if v, ok := c.dispatcherMap.Load(target.GetId()); ok {
+			v.(*dispatcherStat).beginRemoteProbeRequest()
+		}
+	}
 	c.logCoordinatorClient.requestReusableEventService(target)
 }
 

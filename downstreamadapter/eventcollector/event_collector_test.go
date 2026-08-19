@@ -159,6 +159,19 @@ func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
 	return targetMessage
 }
 
+// concludeRemoteProbe simulates the log coordinator returning no reusable
+// candidates so the remote probing effort ends and the local event service can
+// take over. Tests that exercise the collector without the log coordinator must
+// call this after AddDispatcher, otherwise the local ready is held while the
+// probe is in flight.
+func concludeRemoteProbe(c *EventCollector, id common.DispatcherID) {
+	v, ok := c.dispatcherMap.Load(id)
+	if !ok {
+		return
+	}
+	v.(*dispatcherStat).startRemoteProbing(nil)
+}
+
 func TestProcessMessage(t *testing.T) {
 	ctx := context.Background()
 	node := node.NewInfo("127.0.0.1:18300", "")
@@ -214,6 +227,7 @@ func TestProcessMessage(t *testing.T) {
 		}
 	}
 	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
+	concludeRemoteProbe(c, did)
 
 	ch <- newMessage(node.ID, &readyEvent)
 	ch <- newMessage(node.ID, &handshakeEvent)
@@ -440,6 +454,7 @@ func TestEventCollectorBatchByCount(t *testing.T) {
 		return false
 	}
 	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
+	concludeRemoteProbe(c, did)
 
 	from := localServerID
 	readyEvent := commonEvent.NewReadyEvent(did)
@@ -529,6 +544,7 @@ func TestEventCollectorBatchByBytes(t *testing.T) {
 		}
 	}
 	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
+	concludeRemoteProbe(c, did)
 
 	from := localServerID
 	readyEvent := commonEvent.NewReadyEvent(did)
