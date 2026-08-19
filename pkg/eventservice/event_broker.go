@@ -522,13 +522,14 @@ func (c *eventBroker) getScanTaskRequestResult(task scanTask) scanTaskRequestRes
 		}
 	}
 
-	hasRowResume := len(request.Cursor.Position) != 0
-	// A published row cursor at C came from an earlier scan whose DDL and received
+	hasResumeCursor := request.Cursor.TxnStartTs != 0 || len(request.Cursor.Position) != 0
+	// A published cursor at C came from an earlier scan whose DDL and received
 	// resolved-ts bounds had already reached C. Since those bounds do not regress,
 	// only the adaptive scan window can move CommitTsEnd behind C. For example, if
 	// C=100 and the window caps the end at 80, restore the effective range to
-	// [100, 100] so scanning resumes after Position inside that transaction.
-	if hasRowResume && dataRange.CommitTsEnd < dataRange.CommitTsStart {
+	// [100, 100] so Position can resume rows inside a transaction, or TxnStartTs
+	// can resume later transactions sharing commit-ts C.
+	if hasResumeCursor && dataRange.CommitTsEnd < dataRange.CommitTsStart {
 		dataRange.CommitTsEnd = dataRange.CommitTsStart
 	}
 
@@ -536,7 +537,7 @@ func (c *eventBroker) getScanTaskRequestResult(task scanTask) scanTaskRequestRes
 		// A cursor makes [C, C] meaningful: Position resumes rows inside a
 		// transaction, while TxnStartTs resumes later transactions at the same C.
 		canResumeAtStart := dataRange.CommitTsEnd == dataRange.CommitTsStart &&
-			(hasRowResume || request.Cursor.TxnStartTs != 0)
+			hasResumeCursor
 		if canResumeAtStart || task.hasPendingLargeTxnState() {
 			result := scanTaskRequestResult{needScan: true, request: request}
 			if task.changefeedStat.lowLatencyMode {
