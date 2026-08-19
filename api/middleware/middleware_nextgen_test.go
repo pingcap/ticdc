@@ -74,18 +74,18 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 			keyspace: "success",
 			init: func(t *testing.T, mock *keyspace.MockManager) {
 				mock.EXPECT().LoadKeyspace(gomock.Any(), "success").Return(&keyspacepb.KeyspaceMeta{
-					Id:    1,
-					Name:  "kespace1",
-					State: keyspacepb.KeyspaceState_ENABLED,
+					Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 1},
+					Name:     "kespace1",
+					State:    keyspacepb.KeyspaceState_ENABLED,
 				}, nil)
 			},
 			expectedStatus:       http.StatusOK,
 			expectedAbort:        false,
 			expectedBodyContains: "",
 			expectedMeta: &keyspacepb.KeyspaceMeta{
-				Id:    1,
-				Name:  "kespace1",
-				State: keyspacepb.KeyspaceState_ENABLED,
+				Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 1},
+				Name:     "kespace1",
+				State:    keyspacepb.KeyspaceState_ENABLED,
 			},
 		},
 	}
