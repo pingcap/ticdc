@@ -19,7 +19,6 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -99,7 +98,7 @@ func TestDebeziumIncludeStartTsConfig(t *testing.T) {
 	require.False(t, cfg3.DebeziumIncludeStartTs)
 
 	// only supported by the debezium (JSON) protocol
-	cfg4 := NewConfig(config.ProtocolDebeziumAvro)
+	cfg4 := NewConfig(config.ProtocolCanalJSON)
 	cfg4.DebeziumIncludeStartTs = true
 	errCode, ok := errors.RFCCode(cfg4.Validate())
 	require.True(t, ok)
