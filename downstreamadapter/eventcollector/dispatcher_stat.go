@@ -133,20 +133,6 @@ func (d *dispatcherStat) startRemoteProbing(nodes []string) {
 	d.session.startRemoteProbing(nodes)
 }
 
-// beginRemoteProbeRequest marks the start of the remote reuse probing effort so
-// the local ready is held even before the log coordinator responds.
-func (d *dispatcherStat) beginRemoteProbeRequest() {
-	d.session.beginRemoteProbeRequest()
-}
-
-// expireStaleRemoteProbe is called periodically by the event collector to
-// abandon remote reuse probes that have been waiting too long, so a silent
-// remote cannot block the dispatcher from falling back to the local event
-// service.
-func (d *dispatcherStat) expireStaleRemoteProbe() {
-	d.session.expireStaleRemoteProbe()
-}
-
 func (d *dispatcherStat) advanceEpochForReset(resetTs uint64) uint64 {
 	for {
 		currentState := d.loadCurrentEpochState()

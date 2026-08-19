@@ -595,7 +595,15 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 			return false
 		}
 		remoteID := node.ID(task.info.GetServerID())
-		event := event.NewReadyEventWithResolvedTs(task.info.GetID(), task.receivedResolvedTs.Load())
+		// Use the written (persisted) resolved ts for the ready event, not the
+		// puller's enqueue watermark: the scan can only serve data that has been
+		// written to the event store, so reporting the enqueue watermark would
+		// promise data that is not servable yet.
+		writtenResolvedTs := c.eventStore.GetSubscriptionWrittenResolvedTs(task.id)
+		if writtenResolvedTs == 0 {
+			writtenResolvedTs = task.receivedResolvedTs.Load()
+		}
+		event := event.NewReadyEventWithResolvedTs(task.info.GetID(), writtenResolvedTs)
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 		log.Debug("send ready event to dispatcher",

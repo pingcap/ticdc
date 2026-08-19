@@ -640,7 +640,7 @@ func TestHandleSignalEvent(t *testing.T) {
 			expectedPendingRemoteTarget: "",
 		},
 		{
-			name: "hold local ready while remote probe is in flight",
+			name: "handle ready event from local server while remote probe is in flight",
 			event: dispatcher.DispatcherEvent{
 				From: &localServerID,
 				Event: &mockEvent{
@@ -650,13 +650,12 @@ func TestHandleSignalEvent(t *testing.T) {
 			initialState: func(stat *dispatcherStat) {
 				setSessionState(stat.session, "", true, remoteServerID)
 			},
-			// The local ready only means the local registration is complete; the
-			// remote probe is still in flight and may serve the span, so the
-			// local must not win by arriving first.
-			expectedEventServiceID:      "",
-			expectedReceivingData:       false,
-			expectedAwaitingLocalReady:  true,
-			expectedPendingRemoteTarget: remoteServerID,
+			// The local ready wins immediately because no remote is serving yet;
+			// the remote only wins if its ready arrives first.
+			expectedEventServiceID:      localServerID,
+			expectedReceivingData:       true,
+			expectedAwaitingLocalReady:  false,
+			expectedPendingRemoteTarget: "",
 		},
 		{
 			name: "handle ready event from remote server",
@@ -819,7 +818,7 @@ func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 		}
 	}
 
-	t.Run("local ready is held while remote probe is in flight", func(t *testing.T) {
+	t.Run("local ready wins immediately while remote probe is in flight", func(t *testing.T) {
 		mockDisp := newMockDispatcher(dispatcherID, 0)
 		mockEventCollector := newTestEventCollector(localServerID)
 		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
@@ -828,31 +827,39 @@ func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 		stat.handleSignalEvent(newReadyEvent(localServerID))
 
 		currentEventServiceID, localReadyPending, pendingRemoteTarget := sessionState(stat.session)
-		require.Empty(t, currentEventServiceID)
-		require.True(t, localReadyPending)
-		require.Equal(t, remoteServerID, pendingRemoteTarget)
+		require.Equal(t, localServerID, currentEventServiceID)
+		require.False(t, localReadyPending)
+		require.Empty(t, pendingRemoteTarget)
+		requireDispatcherRequests(
+			t,
+			readDispatcherRequests(t, mockEventCollector, 2),
+			dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+			dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+		)
 		requireNoDispatcherRequest(t, mockEventCollector)
 	})
 
-	t.Run("local ready wins after remote probe reports not reusable", func(t *testing.T) {
+	t.Run("remote ready after local won is stale and only triggers cleanup", func(t *testing.T) {
 		mockDisp := newMockDispatcher(dispatcherID, 0)
 		mockEventCollector := newTestEventCollector(localServerID)
 		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
 		setSessionState(stat.session, "", true, remoteServerID)
 
-		// The only candidate reports not reusable, so the probe concludes with
-		// no remote to serve the span. The next local ready is accepted.
-		stat.handleSignalEvent(dispatcher.DispatcherEvent{
-			From:  &remoteServerID,
-			Event: &mockEvent{eventType: commonEvent.TypeNotReusableEvent},
-		})
-		requireNoDispatcherRequest(t, mockEventCollector)
-
 		stat.handleSignalEvent(newReadyEvent(localServerID))
 		requireDispatcherRequests(
 			t,
-			readDispatcherRequests(t, mockEventCollector, 1),
+			readDispatcherRequests(t, mockEventCollector, 2),
+			dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
 			dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+		)
+
+		// A late remote ready is stale: the dispatcher is already on local, so
+		// it only triggers a cleanup of the stale remote registration.
+		stat.handleSignalEvent(newReadyEvent(remoteServerID))
+		requireDispatcherRequests(
+			t,
+			readDispatcherRequests(t, mockEventCollector, 1),
+			dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
 		)
 		requireNoDispatcherRequest(t, mockEventCollector)
 	})
@@ -908,7 +915,7 @@ func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 		requireNoDispatcherRequest(t, mockEventCollector)
 	})
 
-	t.Run("local ready with callback is held while remote probe is in flight", func(t *testing.T) {
+	t.Run("local ready with callback fires immediately while remote probe is in flight", func(t *testing.T) {
 		mockDisp := newMockDispatcher(dispatcherID, 0)
 		mockEventCollector := newTestEventCollector(localServerID)
 		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
@@ -918,17 +925,12 @@ func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 
 		stat.handleSignalEvent(newReadyEvent(localServerID))
 
-		require.False(t, callbackFired)
-		requireNoDispatcherRequest(t, mockEventCollector)
-
-		// Once the probe concludes without a reusable remote, the local ready
-		// fires the callback and no speculative remote register remains.
-		stat.handleSignalEvent(dispatcher.DispatcherEvent{
-			From:  &remoteServerID,
-			Event: &mockEvent{eventType: commonEvent.TypeNotReusableEvent},
-		})
-		stat.handleSignalEvent(newReadyEvent(localServerID))
 		require.True(t, callbackFired)
+		requireDispatcherRequests(
+			t,
+			readDispatcherRequests(t, mockEventCollector, 1),
+			dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+		)
 		requireNoDispatcherRequest(t, mockEventCollector)
 	})
 }
@@ -1044,148 +1046,6 @@ func TestLocalReadyGatedByRemoteDeliveredResolvedTs(t *testing.T) {
 		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
 	)
 	require.Zero(t, sessionRemoteResolvedTs(stat.session))
-	requireNoDispatcherRequest(t, mockEventCollector)
-}
-
-func TestRemoteProbeExpiryFallsBackToLocal(t *testing.T) {
-	localServerID := node.ID("local-server")
-	remoteServerID := node.ID("remote-server")
-	dispatcherID := common.NewDispatcherID()
-
-	newLocalReadyEvent := func(resolvedTs uint64) dispatcher.DispatcherEvent {
-		ready := commonEvent.NewReadyEventWithResolvedTs(dispatcherID, resolvedTs)
-		return dispatcher.DispatcherEvent{
-			From:  &localServerID,
-			Event: &ready,
-		}
-	}
-
-	t.Run("silent remote probe expires and local ready is accepted", func(t *testing.T) {
-		mockDisp := newMockDispatcher(dispatcherID, 100)
-		mockEventCollector := newTestEventCollector(localServerID)
-		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
-		setSessionState(stat.session, "", true, remoteServerID)
-
-		// While the probe is still young the local ready is held.
-		stat.handleSignalEvent(newLocalReadyEvent(100))
-		requireNoDispatcherRequest(t, mockEventCollector)
-
-		// Once the probe has been in flight past the timeout, the periodic
-		// expiry clears it so the next local ready wins.
-		setSessionRemoteProbeStartAt(stat.session, time.Now().Add(-remoteProbeTimeout-time.Second))
-		stat.expireStaleRemoteProbe()
-		currentEventServiceID, localReadyPending, pendingRemoteTarget := sessionState(stat.session)
-		require.Empty(t, currentEventServiceID)
-		require.True(t, localReadyPending)
-		require.Empty(t, pendingRemoteTarget)
-
-		stat.handleSignalEvent(newLocalReadyEvent(100))
-		requireDispatcherRequests(
-			t,
-			readDispatcherRequests(t, mockEventCollector, 1),
-			dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
-		)
-		requireNoDispatcherRequest(t, mockEventCollector)
-	})
-
-	t.Run("young remote probe is not expired", func(t *testing.T) {
-		mockDisp := newMockDispatcher(dispatcherID, 100)
-		mockEventCollector := newTestEventCollector(localServerID)
-		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
-		setSessionState(stat.session, "", true, remoteServerID)
-
-		stat.expireStaleRemoteProbe()
-		currentEventServiceID, _, pendingRemoteTarget := sessionState(stat.session)
-		require.Empty(t, currentEventServiceID)
-		require.Equal(t, remoteServerID, pendingRemoteTarget)
-		requireNoDispatcherRequest(t, mockEventCollector)
-	})
-}
-
-func TestRemoteProbeRequestGatesLocalReady(t *testing.T) {
-	localServerID := node.ID("local-server")
-	remoteServerID := node.ID("remote-server")
-	dispatcherID := common.NewDispatcherID()
-
-	newLocalReadyEvent := func(resolvedTs uint64) dispatcher.DispatcherEvent {
-		ready := commonEvent.NewReadyEventWithResolvedTs(dispatcherID, resolvedTs)
-		return dispatcher.DispatcherEvent{
-			From:  &localServerID,
-			Event: &ready,
-		}
-	}
-
-	mockDisp := newMockDispatcher(dispatcherID, 100)
-	mockEventCollector := newTestEventCollector(localServerID)
-	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
-	setSessionState(stat.session, "", true, "")
-
-	// The reusable-event-service request is sent before any candidate is known.
-	// The local ready must be held from this point so the remote gets a chance
-	// even when the log coordinator responds later than the local ready.
-	stat.beginRemoteProbeRequest()
-	stat.handleSignalEvent(newLocalReadyEvent(100))
-	currentEventServiceID, localReadyPending, _ := sessionState(stat.session)
-	require.Empty(t, currentEventServiceID)
-	require.True(t, localReadyPending)
-	requireNoDispatcherRequest(t, mockEventCollector)
-
-	// The log coordinator responds with a reusable candidate; the remote wins.
-	stat.startRemoteProbing([]string{remoteServerID.String()})
-	requireDispatcherRequests(
-		t,
-		readDispatcherRequests(t, mockEventCollector, 1),
-		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REGISTER},
-	)
-	remoteReady := commonEvent.NewReadyEventWithResolvedTs(dispatcherID, 300)
-	stat.handleSignalEvent(dispatcher.DispatcherEvent{
-		From:  &remoteServerID,
-		Event: &remoteReady,
-	})
-	requireDispatcherRequests(
-		t,
-		readDispatcherRequests(t, mockEventCollector, 1),
-		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
-	)
-	requireNoDispatcherRequest(t, mockEventCollector)
-}
-
-func TestLocalReadyAcceptedWhenCaughtUpDuringProbe(t *testing.T) {
-	localServerID := node.ID("local-server")
-	remoteServerID := node.ID("remote-server")
-	dispatcherID := common.NewDispatcherID()
-	baseTime := time.Now()
-
-	mockDisp := newMockDispatcher(dispatcherID, oracle.GoTimeToTS(baseTime))
-	mockEventCollector := newTestEventCollector(localServerID)
-	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
-	setSessionState(stat.session, "", true, remoteServerID)
-
-	newLocalReadyEvent := func(resolvedTs uint64) dispatcher.DispatcherEvent {
-		ready := commonEvent.NewReadyEventWithResolvedTs(dispatcherID, resolvedTs)
-		return dispatcher.DispatcherEvent{
-			From:  &localServerID,
-			Event: &ready,
-		}
-	}
-
-	// A fresh local subscription that has barely started is held for the probe.
-	stat.handleSignalEvent(newLocalReadyEvent(oracle.GoTimeToTS(baseTime)))
-	currentEventServiceID, localReadyPending, _ := sessionState(stat.session)
-	require.Empty(t, currentEventServiceID)
-	require.True(t, localReadyPending)
-	requireNoDispatcherRequest(t, mockEventCollector)
-
-	// A local subscription that has already caught up (pulled well past the
-	// move checkpoint) wins immediately even while the probe is in flight, so
-	// the dispatcher never waits for a probe it does not need.
-	stat.handleSignalEvent(newLocalReadyEvent(oracle.GoTimeToTS(baseTime.Add(2 * time.Second))))
-	requireDispatcherRequests(
-		t,
-		readDispatcherRequests(t, mockEventCollector, 2),
-		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
-		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
-	)
 	requireNoDispatcherRequest(t, mockEventCollector)
 }
 

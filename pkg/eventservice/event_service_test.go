@@ -311,6 +311,10 @@ func (m *mockEventStore) DispatcherCount() int {
 	return count
 }
 
+func (m *mockEventStore) GetSubscriptionWrittenResolvedTs(dispatcherID common.DispatcherID) uint64 {
+	return 0
+}
+
 func (m *mockEventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID) {
 	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if ok {

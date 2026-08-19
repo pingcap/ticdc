@@ -13,11 +13,7 @@
 
 package eventcollector
 
-import (
-	"time"
-
-	"github.com/pingcap/ticdc/pkg/node"
-)
+import "github.com/pingcap/ticdc/pkg/node"
 
 func setSessionState(
 	session *dispatcherSession,
@@ -30,9 +26,6 @@ func setSessionState(
 	session.connState.currentEventServiceID = currentEventServiceID
 	session.connState.localReadyPending = localReadyPending
 	session.connState.pendingRemoteEventServiceID = pendingRemoteTarget
-	if !pendingRemoteTarget.IsEmpty() {
-		session.connState.remoteProbeStartAt = time.Now()
-	}
 }
 
 func setSessionRemoteCandidates(session *dispatcherSession, nodes []string) {
@@ -45,12 +38,6 @@ func setSessionRemoteResolvedTs(session *dispatcherSession, resolvedTs uint64) {
 	session.connState.Lock()
 	defer session.connState.Unlock()
 	session.connState.remoteResolvedTs = resolvedTs
-}
-
-func setSessionRemoteProbeStartAt(session *dispatcherSession, startAt time.Time) {
-	session.connState.Lock()
-	defer session.connState.Unlock()
-	session.connState.remoteProbeStartAt = startAt
 }
 
 func setSessionReadyCallback(session *dispatcherSession, readyCallback func()) {

@@ -240,14 +240,6 @@ func (c *EventCollector) Close() {
 
 func (c *EventCollector) AddDispatcher(target dispatcher.DispatcherService, memoryQuota uint64) {
 	c.PrepareAddDispatcher(target, memoryQuota, nil)
-	// Mark the remote reuse probing effort as started before sending the
-	// reusable-event-service request, so the local ready is held from the very
-	// beginning instead of letting the local subscription win by arriving first.
-	if target.GetTableSpan().TableID != 0 {
-		if v, ok := c.dispatcherMap.Load(target.GetId()); ok {
-			v.(*dispatcherStat).beginRemoteProbeRequest()
-		}
-	}
 	c.logCoordinatorClient.requestReusableEventService(target)
 }
 
@@ -404,21 +396,9 @@ func (c *EventCollector) sendEventServiceHeartbeats(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-ticker.C:
-			c.expireStaleRemoteProbes()
 			c.sendDispatcherHeartbeat()
 		}
 	}
-}
-
-// expireStaleRemoteProbes abandons remote reuse probes that have been waiting
-// too long so the affected dispatchers can fall back to their local event
-// service instead of blocking on a silent remote.
-func (c *EventCollector) expireStaleRemoteProbes() {
-	c.dispatcherMap.Range(func(_, value any) bool {
-		stat := value.(*dispatcherStat)
-		stat.expireStaleRemoteProbe()
-		return true
-	})
 }
 
 func (c *EventCollector) sendDispatcherHeartbeat() {
