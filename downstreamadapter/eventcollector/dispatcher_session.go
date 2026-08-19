@@ -25,6 +25,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -33,7 +34,15 @@ import (
 // up on that candidate and falls back to the local event service. Without it, a
 // silent remote would leave the dispatcher permanently waiting because the
 // local ready is held while the probe is in flight.
-const remoteProbeTimeout = 10 * time.Second
+const remoteProbeTimeout = 5 * time.Second
+
+// remoteProbeLocalCatchUpMargin is the minimum physical-ts lead the local
+// subscription must have over the dispatcher start ts before its ready may win
+// while a remote reuse probe is still in flight. A fresh subscription that has
+// barely started should yield to the remote (which already serves the span); a
+// reused subscription that is already serving real data may win immediately so
+// the dispatcher never waits for a probe it does not need.
+const remoteProbeLocalCatchUpMargin = time.Second
 
 // dispatcherConnState owns the EventService registration state for one dispatcher.
 // It does not send messages. Its job is to apply atomic state transitions and
@@ -122,6 +131,19 @@ func (d *dispatcherConnState) beginRemoteProbeRequest() {
 		return
 	}
 	d.remoteProbeStartAt = time.Now()
+}
+
+// localHasCaughtUp reports whether the local subscription has already pulled at
+// least remoteProbeLocalCatchUpMargin past the dispatcher start ts, i.e. it is
+// serving real data and winning the local ready immediately does not risk a
+// stall. A fresh subscription that has barely started returns false so the
+// remote probe (which already serves the span) gets a chance.
+func (d *dispatcherConnState) localHasCaughtUp(localResolvedTs uint64, dispatcherStartTs uint64) bool {
+	if localResolvedTs <= dispatcherStartTs {
+		return false
+	}
+	return oracle.ExtractPhysical(localResolvedTs)-oracle.ExtractPhysical(dispatcherStartTs) >=
+		remoteProbeLocalCatchUpMargin.Milliseconds()
 }
 
 // beginRegisterToRemote records that the dispatcher is attempting to register to
@@ -216,12 +238,18 @@ func (d *dispatcherConnState) acceptReady(
 			// A remote reuse probe is in flight, either waiting for the log
 			// coordinator response or registering a candidate. A local ready
 			// only means the local registration is complete, not that the local
-			// subscription has served any data yet: its resolved ts still starts
-			// at the move checkpoint. Prefer the remote, which already serves
-			// the span, over letting the local win by arriving first. The probe
-			// expires after remoteProbeTimeout so a silent coordinator/remote
-			// cannot block the fallback.
-			return readyDecision{}
+			// subscription has served any data yet: a fresh subscription's
+			// resolved ts still starts at the move checkpoint. Prefer the
+			// remote, which already serves the span, over letting the local win
+			// by arriving first. However, if the local subscription has already
+			// pulled well past the move checkpoint (e.g. the node reused an
+			// existing subscription), it is already as fast as the remote and
+			// should win immediately instead of waiting. The probe expires after
+			// remoteProbeTimeout so a silent coordinator/remote cannot block the
+			// fallback.
+			if !d.localHasCaughtUp(readyResolvedTs, dispatcherStartTs) {
+				return readyDecision{}
+			}
 		}
 
 		decision := readyDecision{

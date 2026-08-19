@@ -1150,6 +1150,45 @@ func TestRemoteProbeRequestGatesLocalReady(t *testing.T) {
 	requireNoDispatcherRequest(t, mockEventCollector)
 }
 
+func TestLocalReadyAcceptedWhenCaughtUpDuringProbe(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+	dispatcherID := common.NewDispatcherID()
+	baseTime := time.Now()
+
+	mockDisp := newMockDispatcher(dispatcherID, oracle.GoTimeToTS(baseTime))
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+	setSessionState(stat.session, "", true, remoteServerID)
+
+	newLocalReadyEvent := func(resolvedTs uint64) dispatcher.DispatcherEvent {
+		ready := commonEvent.NewReadyEventWithResolvedTs(dispatcherID, resolvedTs)
+		return dispatcher.DispatcherEvent{
+			From:  &localServerID,
+			Event: &ready,
+		}
+	}
+
+	// A fresh local subscription that has barely started is held for the probe.
+	stat.handleSignalEvent(newLocalReadyEvent(oracle.GoTimeToTS(baseTime)))
+	currentEventServiceID, localReadyPending, _ := sessionState(stat.session)
+	require.Empty(t, currentEventServiceID)
+	require.True(t, localReadyPending)
+	requireNoDispatcherRequest(t, mockEventCollector)
+
+	// A local subscription that has already caught up (pulled well past the
+	// move checkpoint) wins immediately even while the probe is in flight, so
+	// the dispatcher never waits for a probe it does not need.
+	stat.handleSignalEvent(newLocalReadyEvent(oracle.GoTimeToTS(baseTime.Add(2 * time.Second))))
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 2),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+	requireNoDispatcherRequest(t, mockEventCollector)
+}
+
 func TestInitialLocalReadyCallbackIsOneShot(t *testing.T) {
 	localServerID := node.ID("local-server")
 	dispatcherID := common.NewDispatcherID()
