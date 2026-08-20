@@ -386,7 +386,7 @@ func TestPreStartClosesExternalStorageOnFailure(t *testing.T) {
 
 	cfg := &config.ConsistentConfig{
 		Storage:               util.AddressOf(storageURI.String()),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+		MetaFlushIntervalInMs: util.AddressOf(int64(redo.DefaultMetaFlushIntervalInMs)),
 	}
 	m := NewRedoMeta(common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName), 1, cfg)
 	err = m.PreStart(context.Background())
