@@ -17,7 +17,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
@@ -25,6 +24,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/atomic"
@@ -68,6 +68,7 @@ func newDMLWriters(
 		changefeedID,
 		spool.WithRootDir(config.SpoolBaseDir),
 		spool.WithDiskQuotaBytes(config.SpoolDiskQuota),
+		spool.WithMetrics(newSpoolMetrics(changefeedID)),
 	)
 	if err != nil {
 		return nil, err

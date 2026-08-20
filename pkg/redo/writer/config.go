@@ -16,7 +16,6 @@ package writer
 import (
 	"fmt"
 	"net/url"
-	"path/filepath"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -28,34 +27,31 @@ import (
 
 // Config is the config for redo log writer.
 type Config struct {
-	// Shared by file and memory backends for log file naming.
+	// Used for redo log file naming.
 	captureID config.CaptureID
-	// Shared by file and memory backends for metrics and log file naming.
+	// Used for metrics and redo log file naming.
 	changefeedID common.ChangeFeedID
 
-	// Shared by factory and both backends to initialize storage.
+	// Used to initialize redo storage.
 	uri *url.URL
-	// Shared by file and memory backends as the rotate threshold.
+	// Used as the redo log file rotate threshold.
 	maxLogSizeInBytes int64
 
-	// Used by the factory to choose the file backend.
-	useFileBackend bool
-
-	// Shared by file and memory backends as the flush ticker interval.
+	// Used as the flush ticker interval.
 	flushIntervalInMs int64
 
 	// Used only by the memory backend for encoding workers.
 	encodingWorkerNum int
 
-	// Shared by file and memory backends for worker fanout sizing.
+	// Used for flush worker fanout sizing.
 	flushWorkerNum int
 	// Used only by the memory backend for file compression.
 	compression string
 	// Used only by the memory backend for flush concurrency.
 	flushConcurrency int
-
-	// Used only by the file backend as the local writer directory.
-	dir string
+	// Used by the memory backend to configure local spool storage.
+	spoolDiskQuota int64
+	spoolBaseDir   string
 }
 
 // NewConfig builds the runtime writer config from an adjusted ConsistentConfig.
@@ -75,40 +71,15 @@ func NewConfig(changefeedID common.ChangeFeedID, consistentCfg *config.Consisten
 		changefeedID:      changefeedID,
 		uri:               uri,
 		maxLogSizeInBytes: util.GetOrZero(consistentCfg.MaxLogSize) * redo.Megabyte,
-		useFileBackend:    util.GetOrZero(consistentCfg.UseFileBackend),
 		flushIntervalInMs: util.GetOrZero(consistentCfg.FlushIntervalInMs),
 		encodingWorkerNum: util.GetOrZero(consistentCfg.EncodingWorkerNum),
 		flushWorkerNum:    util.GetOrZero(consistentCfg.FlushWorkerNum),
 		compression:       util.GetOrZero(consistentCfg.Compression),
 		flushConcurrency:  util.GetOrZero(consistentCfg.FlushConcurrency),
+		spoolDiskQuota:    util.GetOrZero(consistentCfg.SpoolDiskQuota),
+		spoolBaseDir:      util.GetOrZero(consistentCfg.SpoolBaseDir),
 	}
-	cfg.dir = newWriterDir(cfg)
 	return cfg, nil
-}
-
-// newWriterDir returns the local working directory only when a file writer will
-// actually use it. Remote memory backend writes do not need a local directory.
-// file:// uses the configured path directly, while remote file backend writes
-// stage local files under the server data dir before uploading them.
-func newWriterDir(cfg *Config) string {
-	if cfg == nil || cfg.uri == nil {
-		return ""
-	}
-	if !cfg.UseExternalStorage() {
-		return cfg.uri.Path
-	}
-	if cfg.uri.Scheme == "file" {
-		return cfg.uri.Path
-	}
-	if !cfg.useFileBackend {
-		return ""
-	}
-	return filepath.Join(
-		config.GetGlobalServerConfig().DataDir,
-		config.DefaultRedoDir,
-		cfg.changefeedID.Keyspace(),
-		cfg.changefeedID.Name(),
-	)
 }
 
 func (cfg Config) String() string {
@@ -116,9 +87,9 @@ func (cfg Config) String() string {
 	if cfg.uri != nil {
 		uri = cfg.uri.String()
 	}
-	return fmt.Sprintf("%s:%s:%s:%s:%d:%s:%t",
+	return fmt.Sprintf("%s:%s:%s:%d:%s:%t",
 		cfg.changefeedID.Keyspace(), cfg.changefeedID.Name(), cfg.captureID,
-		cfg.dir, cfg.maxLogSizeInBytes, uri, cfg.UseExternalStorage())
+		cfg.maxLogSizeInBytes, uri, cfg.UseExternalStorage())
 }
 
 func (cfg *Config) CaptureID() config.CaptureID {
@@ -137,16 +108,8 @@ func (cfg *Config) UseExternalStorage() bool {
 	return cfg.uri != nil && redo.IsExternalStorage(cfg.uri.Scheme)
 }
 
-func (cfg *Config) Dir() string {
-	return cfg.dir
-}
-
 func (cfg *Config) MaxLogSizeInBytes() int64 {
 	return cfg.maxLogSizeInBytes
-}
-
-func (cfg *Config) UseFileBackend() bool {
-	return cfg.useFileBackend
 }
 
 func (cfg *Config) FlushIntervalInMs() int64 {
@@ -167,4 +130,12 @@ func (cfg *Config) Compression() string {
 
 func (cfg *Config) FlushConcurrency() int {
 	return cfg.flushConcurrency
+}
+
+func (cfg *Config) SpoolDiskQuota() int64 {
+	return cfg.spoolDiskQuota
+}
+
+func (cfg *Config) SpoolBaseDir() string {
+	return cfg.spoolBaseDir
 }

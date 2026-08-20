@@ -201,9 +201,10 @@ func TestNewUsesDefaultOptionsWhenValuesAreMissing(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, manager)
 	require.Equal(t, defaultSegmentCapacity, manager.segmentCapacity)
-	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultMemoryRatio), manager.quota.budget.memoryQuotaBytes)
-	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultHighWatermarkRatio), manager.quota.budget.highWatermarkBytes)
-	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultLowWatermarkRatio), manager.quota.budget.lowWatermarkBytes)
+	limits := manager.quota.budget.Limits()
+	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultMemoryRatio), limits.MemoryQuotaBytes)
+	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultHighWatermarkRatio), limits.HighWatermarkBytes)
+	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultLowWatermarkRatio), limits.LowWatermarkBytes)
 	manager.Close()
 }
 
@@ -272,9 +273,10 @@ func TestNewSanitizesInvalidOptions(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, manager)
 	require.Equal(t, defaultSegmentCapacity, manager.segmentCapacity)
-	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultMemoryRatio), manager.quota.budget.memoryQuotaBytes)
-	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultHighWatermarkRatio), manager.quota.budget.highWatermarkBytes)
-	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultLowWatermarkRatio), manager.quota.budget.lowWatermarkBytes)
+	limits := manager.quota.budget.Limits()
+	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultMemoryRatio), limits.MemoryQuotaBytes)
+	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultHighWatermarkRatio), limits.HighWatermarkBytes)
+	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultLowWatermarkRatio), limits.LowWatermarkBytes)
 	manager.Close()
 }
 
@@ -295,9 +297,10 @@ func TestNewAppliesFunctionalOptions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(baseDir, changefeedID.Keyspace(), changefeedID.Name()), manager.workDir)
 	require.Equal(t, int64(4096), manager.segmentCapacity)
-	require.Equal(t, int64(512), manager.quota.budget.memoryQuotaBytes)
-	require.Equal(t, int64(1536), manager.quota.budget.highWatermarkBytes)
-	require.Equal(t, int64(1024), manager.quota.budget.lowWatermarkBytes)
+	limits := manager.quota.budget.Limits()
+	require.Equal(t, int64(512), limits.MemoryQuotaBytes)
+	require.Equal(t, int64(1536), limits.HighWatermarkBytes)
+	require.Equal(t, int64(1024), limits.LowWatermarkBytes)
 	manager.Close()
 }
 

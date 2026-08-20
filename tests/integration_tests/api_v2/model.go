@@ -279,6 +279,8 @@ type ConsistentConfig struct {
 	FlushWorkerNum        int    `json:"flush_worker_num"`
 	Storage               string `json:"storage"`
 	UseFileBackend        bool   `json:"use_file_backend"`
+	SpoolDiskQuota        int64  `json:"spool_disk_quota"`
+	SpoolBaseDir          string `json:"spool_base_dir"`
 }
 
 // ChangefeedSchedulerConfig is per changefeed scheduler settings.

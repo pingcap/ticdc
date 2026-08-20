@@ -376,7 +376,7 @@ func (e *DispatcherManager) SetRedoResolvedTs(resolvedTs uint64) bool {
 }
 
 func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
-	ticker := time.NewTicker(time.Duration(*e.config.Consistent.FlushIntervalInMs) * time.Millisecond)
+	ticker := time.NewTicker(time.Duration(*e.config.Consistent.MetaFlushIntervalInMs) * time.Millisecond)
 	defer ticker.Stop()
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	var preResolvedTs uint64

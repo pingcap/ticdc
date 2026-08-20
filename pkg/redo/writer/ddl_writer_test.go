@@ -11,34 +11,55 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memory
+package writer
 
 import (
 	"context"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewDMLWriter(t *testing.T) {
+func TestWriteDDL(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
+	extStorage, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
 	require.NoError(t, err)
-	cfg, err := writer.NewConfig(
+	cfg, err := NewConfig(
 		common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
 		testutil.NewConsistentConfig(uri.String()),
 	)
 	require.NoError(t, err)
 
-	lw, err := NewDMLWriter(ctx, cfg)
+	filename := t.Name()
+	lw, err := NewDDLWriter(ctx, cfg, WithLogFileName(func() string {
+		return filename
+	}))
 	require.NoError(t, err)
+
+	ddls := []*pevent.DDLEvent{
+		nil,
+		{FinishedTs: 1},
+		{FinishedTs: 10},
+		{FinishedTs: 8},
+	}
+	for _, ddl := range ddls {
+		require.NoError(t, lw.WriteDDLEvent(ctx, ddl))
+	}
+
+	err = extStorage.WalkDir(ctx, nil, func(path string, size int64) error {
+		require.Equal(t, filename, path)
+		return nil
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, lw.Close())
 	require.NoError(t, lw.Close())
 }

@@ -24,7 +24,7 @@ func NewConsistentConfig(storage string) *config.ConsistentConfig {
 	level := string(redo.ConsistentLevelEventual)
 	maxLogSize := int64(redo.DefaultMaxLogSize)
 	flushIntervalInMs := int64(redo.DefaultFlushIntervalInMs)
-	metaFlushIntervalInMs := int64(redo.MinFlushIntervalInMs)
+	metaFlushIntervalInMs := int64(redo.DefaultMetaFlushIntervalInMs)
 	encodingWorkerNum := redo.DefaultEncodingWorkerNum
 	flushWorkerNum := redo.DefaultFlushWorkerNum
 	compressionType := compression.None
@@ -40,5 +40,7 @@ func NewConsistentConfig(storage string) *config.ConsistentConfig {
 		FlushWorkerNum:        util.AddressOf(flushWorkerNum),
 		Compression:           util.AddressOf(compressionType),
 		FlushConcurrency:      util.AddressOf(flushConcurrency),
+		SpoolDiskQuota:        util.AddressOf(redo.DefaultSpoolDiskQuota),
+		SpoolBaseDir:          util.AddressOf(""),
 	}
 }
