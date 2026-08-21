@@ -34,6 +34,12 @@ func setSessionRemoteCandidates(session *dispatcherSession, nodes []string) {
 	session.connState.remoteCandidates = nodes
 }
 
+func setSessionRemoteResolvedTs(session *dispatcherSession, resolvedTs uint64) {
+	session.connState.Lock()
+	defer session.connState.Unlock()
+	session.connState.remoteResolvedTs = resolvedTs
+}
+
 func setSessionReadyCallback(session *dispatcherSession, readyCallback func()) {
 	session.readyCallback = readyCallback
 }
@@ -56,4 +62,10 @@ func sessionState(session *dispatcherSession) (node.ID, bool, node.ID) {
 	session.connState.RLock()
 	defer session.connState.RUnlock()
 	return session.connState.currentEventServiceID, session.connState.localReadyPending, session.connState.pendingRemoteEventServiceID
+}
+
+func sessionRemoteResolvedTs(session *dispatcherSession) uint64 {
+	session.connState.RLock()
+	defer session.connState.RUnlock()
+	return session.connState.remoteResolvedTs
 }

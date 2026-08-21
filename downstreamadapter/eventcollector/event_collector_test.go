@@ -272,11 +272,8 @@ func TestRemoveLastDispatcher(t *testing.T) {
 }
 
 func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
-	ctx := context.Background()
 	serverInfo := node.NewInfo("127.0.0.1:18300", "")
-	mc := messaging.NewMessageCenter(ctx, serverInfo.ID, config.NewDefaultMessageCenterConfig(serverInfo.AdvertiseAddr), nil)
-	mc.Run(ctx)
-	defer mc.Close()
+	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
 	c := New(serverInfo.ID)

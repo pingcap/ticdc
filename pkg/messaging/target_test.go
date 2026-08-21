@@ -18,7 +18,9 @@ import (
 	"testing"
 
 	"github.com/pingcap/log"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -32,6 +34,27 @@ func newRemoteMessageTargetForTest() *remoteMessageTarget {
 	receivedMsgCh := make(chan *TargetMessage, 1)
 	rt := newRemoteMessageTarget(ctx, localId, remoteId, "", "", receivedMsgCh, receivedMsgCh, cfg, nil)
 	return rt
+}
+
+func TestDecodeMessageDropsEmptyDecodedPayload(t *testing.T) {
+	rt := newRemoteMessageTargetForTest()
+	defer rt.close()
+
+	received := rt.decodeMessage(&proto.Message{
+		Type:    int32(TypeDispatcherHeartbeat),
+		Payload: [][]byte{{0}},
+	})
+	require.Nil(t, received)
+
+	heartbeat := commonEvent.NewDispatcherHeartbeat()
+	payload, err := heartbeat.Marshal()
+	require.NoError(t, err)
+	received = rt.decodeMessage(&proto.Message{
+		Type:    int32(TypeDispatcherHeartbeat),
+		Payload: [][]byte{payload},
+	})
+	require.NotNil(t, received)
+	require.Len(t, received.Message, 1)
 }
 
 func TestRemoteTargetNewMessage(t *testing.T) {

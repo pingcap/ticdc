@@ -619,31 +619,39 @@ func (s *remoteMessageTarget) handleIncomingMessage(ctx context.Context, stream 
 			return err
 		}
 
-		mt := IOType(message.Type)
-
-		targetMsg := &TargetMessage{
-			From:  node.ID(message.From),
-			To:    node.ID(message.To),
-			Topic: message.Topic,
-			Type:  mt,
+		targetMsg := s.decodeMessage(message)
+		if targetMsg != nil {
+			ch <- targetMsg
 		}
-
-		for _, payload := range message.Payload {
-			msg, err := decodeIOType(mt, payload)
-			if err != nil {
-				log.Error("Failed to decode message",
-					zap.Error(err),
-					zap.Stringer("localID", s.messageCenterID),
-					zap.String("localAddr", s.localAddr),
-					zap.Stringer("remoteID", s.targetId),
-					zap.String("remoteAddr", s.targetAddr))
-				continue
-			}
-			targetMsg.Message = append(targetMsg.Message, msg)
-		}
-
-		ch <- targetMsg
 	}
+}
+
+func (s *remoteMessageTarget) decodeMessage(message *proto.Message) *TargetMessage {
+	mt := IOType(message.Type)
+	targetMsg := &TargetMessage{
+		From:  node.ID(message.From),
+		To:    node.ID(message.To),
+		Topic: message.Topic,
+		Type:  mt,
+	}
+
+	for _, payload := range message.Payload {
+		msg, err := decodeIOType(mt, payload)
+		if err != nil {
+			log.Error("Failed to decode message",
+				zap.Error(err),
+				zap.Stringer("localID", s.messageCenterID),
+				zap.String("localAddr", s.localAddr),
+				zap.Stringer("remoteID", s.targetId),
+				zap.String("remoteAddr", s.targetAddr))
+			continue
+		}
+		targetMsg.Message = append(targetMsg.Message, msg)
+	}
+	if len(targetMsg.Message) == 0 {
+		return nil
+	}
+	return targetMsg
 }
 
 // Create a new protocol message from target messages

@@ -92,6 +92,9 @@ func TestScanRequestCoalescing(t *testing.T) {
 	require.False(t, disp.isScanBusy())
 	e := <-broker.messageCh[0]
 	require.Equal(t, event.TypeReadyEvent, e.msgType)
+	ready, ok := e.e.(*event.ReadyEvent)
+	require.True(t, ok)
+	require.Equal(t, uint64(102), ready.ResolvedTs)
 }
 
 type scanLifecycleTrackingContext struct {

@@ -94,6 +94,15 @@ type EventStore interface {
 
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
 
+	// DispatcherCount returns the number of dispatchers currently reading from this event store.
+	DispatcherCount() int
+
+	// GetSubscriptionWrittenResolvedTs returns the watermark of data that has
+	// actually been persisted for the dispatcher's subscription. It may be lower
+	// than the puller's resolved ts because of the write queue, and is what the
+	// ready event should report so it never promises data the scan cannot serve.
+	GetSubscriptionWrittenResolvedTs(dispatcherID common.DispatcherID) uint64
+
 	// GetIterator returns an iterator for the requested range and resume cursor.
 	GetIterator(dispatcherID common.DispatcherID, request ScanRequest) (EventIterator, error)
 
@@ -194,6 +203,12 @@ type subscriptionStat struct {
 	lastReceiveDMLTime atomic.Int64
 	// the resolveTs persisted in the store
 	resolvedTs atomic.Uint64
+	// writtenResolvedTs is the watermark of data that has actually been
+	// persisted to the store (written by the write path). It may lag resolvedTs
+	// (the puller's enqueue watermark) by the write queue, and it is the value
+	// the ready event should report so it never promises data the scan cannot
+	// serve yet.
+	writtenResolvedTs atomic.Uint64
 	// the max commit ts of dml event in the store
 	maxEventCommitTs atomic.Uint64
 }
@@ -355,6 +370,40 @@ func newWriteTaskPool(store *eventStore, db *pebble.DB, index int, ch *chann.Unl
 	}
 }
 
+// advanceWrittenResolvedTs advances the written resolved ts of every
+// subscription whose events were just persisted to pebble. The ready event and
+// the scan range are driven by this watermark (via GetSubscriptionWrittenResolvedTs)
+// so they never promise data that has not actually been written yet.
+func (p *writeTaskPool) advanceWrittenResolvedTs(events []eventWithCallback) {
+	type subWriteKey struct {
+		tableKey tableStatsKey
+		subID    logpuller.SubscriptionID
+	}
+	written := make(map[subWriteKey]uint64, 8)
+	for _, e := range events {
+		key := subWriteKey{
+			tableKey: tableStatsKey{keyspaceID: e.keyspaceID, tableID: e.tableID},
+			subID:    e.subID,
+		}
+		if e.currentResolvedTs > written[key] {
+			written[key] = e.currentResolvedTs
+		}
+	}
+	if len(written) == 0 {
+		return
+	}
+	p.store.dispatcherMeta.RLock()
+	for key, ts := range written {
+		subStats := p.store.dispatcherMeta.tableStats[key.tableKey]
+		subStat, ok := subStats[key.subID]
+		if !ok {
+			continue
+		}
+		util.CompareAndMonotonicIncrease(&subStat.writtenResolvedTs, ts)
+	}
+	p.store.dispatcherMeta.RUnlock()
+}
+
 func (p *writeTaskPool) run(ctx context.Context) {
 	p.store.wg.Add(p.workerNum)
 	for i := 0; i < p.workerNum; i++ {
@@ -397,6 +446,8 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					for idx := range events {
 						events[idx].callback()
 					}
+
+					p.advanceWrittenResolvedTs(events)
 
 					buffer = buffer[:0]
 				}
@@ -639,6 +690,7 @@ func (e *eventStore) RegisterDispatcher(
 	})
 	subStat.checkpointTs.Store(startTs)
 	subStat.resolvedTs.Store(startTs)
+	subStat.writtenResolvedTs.Store(startTs)
 	subStat.maxEventCommitTs.Store(0)
 	subStat.lastLogLagTime.Store(0)
 	if stat.subStat == nil {
@@ -742,6 +794,22 @@ func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, disp
 	e.dispatcherMeta.Unlock()
 	log.Info("unregister dispatcher done", zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", dispatcherID))
+}
+
+func (e *eventStore) DispatcherCount() int {
+	e.dispatcherMeta.RLock()
+	defer e.dispatcherMeta.RUnlock()
+	return len(e.dispatcherMeta.dispatcherStats)
+}
+
+func (e *eventStore) GetSubscriptionWrittenResolvedTs(dispatcherID common.DispatcherID) uint64 {
+	e.dispatcherMeta.RLock()
+	defer e.dispatcherMeta.RUnlock()
+	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
+	if !ok || stat.subStat == nil {
+		return 0
+	}
+	return stat.subStat.writtenResolvedTs.Load()
 }
 
 func (e *eventStore) UpdateDispatcherCheckpointTs(

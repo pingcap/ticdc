@@ -201,6 +201,21 @@ func TestHandleMessageIgnoresInvalidSingleMessagePayloads(t *testing.T) {
 	})
 }
 
+func TestHandleMessageIgnoredAfterClose(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	es := &eventService{
+		mc:      mc,
+		brokers: make(map[uint64]*eventBroker),
+	}
+	require.NoError(t, es.Close(context.Background()))
+
+	heartbeat := commonEvent.NewDispatcherHeartbeat()
+	require.NoError(t, es.handleMessage(context.Background(), &messaging.TargetMessage{
+		Type:    messaging.TypeDispatcherHeartbeat,
+		Message: []messaging.IOTypeT{heartbeat},
+	}))
+}
+
 var _ eventstore.EventStore = &mockEventStore{}
 
 // mockEventStore is a mock implementation of the EventStore interface
@@ -285,6 +300,19 @@ func (m *mockEventStore) Close(ctx context.Context) error {
 }
 
 func (m *mockEventStore) UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, gcTS uint64) {
+}
+
+func (m *mockEventStore) DispatcherCount() int {
+	count := 0
+	m.dispatcherMap.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	return count
+}
+
+func (m *mockEventStore) GetSubscriptionWrittenResolvedTs(dispatcherID common.DispatcherID) uint64 {
+	return 0
 }
 
 func (m *mockEventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID) {

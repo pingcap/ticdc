@@ -126,6 +126,38 @@ func TestDrainControllerResetObservedStateForNewEpoch(t *testing.T) {
 	c.mu.Unlock()
 }
 
+func TestDrainControllerTracksStoppingLogServiceDispatcherCountByEpoch(t *testing.T) {
+	c := NewController(messaging.NewMockMessageCenter())
+	target := node.ID("n1")
+
+	c.ObserveSetNodeLivenessResponse(target, &heartbeatpb.SetNodeLivenessResponse{
+		Applied:   heartbeatpb.NodeLiveness_STOPPING,
+		NodeEpoch: 42,
+	})
+	require.Zero(t, c.GetLogServiceDispatcherCount(target))
+
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness:                  heartbeatpb.NodeLiveness_STOPPING,
+		NodeEpoch:                 42,
+		LogServiceDispatcherCount: 2,
+	})
+	require.Equal(t, 2, c.GetLogServiceDispatcherCount(target))
+
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 43,
+	})
+	require.Zero(t, c.GetLogServiceDispatcherCount(target))
+
+	// A delayed heartbeat from the old process must not satisfy the new epoch.
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness:                  heartbeatpb.NodeLiveness_STOPPING,
+		NodeEpoch:                 42,
+		LogServiceDispatcherCount: 0,
+	})
+	require.Zero(t, c.GetLogServiceDispatcherCount(target))
+}
+
 func TestDrainControllerSkipStoppingForNewEpochWithoutDraining(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	c := NewController(mc)

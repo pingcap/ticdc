@@ -48,8 +48,11 @@ import (
 //     pendingRemoteEventServiceID=""
 //
 // This means local registration and remote probing can overlap. A remote service
-// may serve data first, but a later local ready still moves the dispatcher back
-// to local and cleans up remote registrations.
+// may serve data first (its ready usually arrives before the local ready because
+// the local subscription has to initialize first), but after the local service
+// catches up to the progress the remote reported (and the dispatcher
+// checkpoint), a later local ready moves the dispatcher back to local and
+// cleans up remote registrations.
 type dispatcherConnState struct {
 	sync.RWMutex
 	// removed marks the session as terminal after removal starts. New
@@ -60,7 +63,8 @@ type dispatcherConnState struct {
 	currentEventServiceID node.ID
 	// localReadyPending means the local register request has been sent but local
 	// ready has not been accepted. It may be true while a remote service is
-	// already current; local ready wins when it arrives later.
+	// already current; local ready wins after its resolved ts covers the current
+	// dispatcher checkpoint.
 	localReadyPending bool
 	// pendingRemoteEventServiceID is the remote EventService currently being
 	// probed for reuse. It waits for either ready or not reusable, and only one
@@ -69,6 +73,14 @@ type dispatcherConnState struct {
 	// remoteCandidates are the remaining remote EventServices to probe after the
 	// current pending remote reports not reusable.
 	remoteCandidates []string
+	// remoteResolvedTs is the resolved ts reported by the remote EventService
+	// currently serving. It is only meaningful while currentEventServiceID is a
+	// remote service and is cleared when the local service wins back. The local
+	// ready must cover it before taking over: the sink checkpoint alone is not a
+	// safe baseline before the remote delivers its first events because it still
+	// equals the dispatcher start ts, which would let a barely started local
+	// subscription win the race and stall the table while catching up from TiKV.
+	remoteResolvedTs uint64
 }
 
 // Registration state transitions.
@@ -124,11 +136,19 @@ type readyDecision struct {
 // acceptReady enforces the ready acceptance rules:
 //  1. once local is already serving, any later remote ready is stale and should
 //     only trigger cleanup;
-//  2. local ready can be accepted while local registration is still pending, and
-//     local wins over any remote that started serving earlier;
+//  2. local ready can be accepted while local registration is still pending;
+//     when a remote is already serving, the local resolved ts must cover both
+//     the current dispatcher checkpoint and the progress the remote reported;
 //  3. remote ready is accepted only from the single remote candidate currently
 //     being probed.
-func (d *dispatcherConnState) acceptReady(from node.ID, localServerID node.ID) readyDecision {
+func (d *dispatcherConnState) acceptReady(
+	from node.ID,
+	localServerID node.ID,
+	readyResolvedTs uint64,
+	requiredCheckpointTs uint64,
+	remoteDeliveredTs uint64,
+	dispatcherStartTs uint64,
+) readyDecision {
 	d.Lock()
 	defer d.Unlock()
 	if d.removed {
@@ -138,6 +158,23 @@ func (d *dispatcherConnState) acceptReady(from node.ID, localServerID node.ID) r
 	if from == localServerID {
 		if !d.localReadyPending {
 			return readyDecision{}
+		}
+		if !d.currentEventServiceID.IsEmpty() &&
+			d.currentEventServiceID != localServerID {
+			// The local event service may only win back once its resolved ts
+			// covers the position the current remote has actually delivered to
+			// the sink, so the switch never stalls the table. Before the remote
+			// delivers its first events the sink position still equals the
+			// dispatcher start ts, which would let a barely started local
+			// subscription win the race; hold on the remote's reported progress
+			// until data actually flows.
+			baseline := max(requiredCheckpointTs, remoteDeliveredTs)
+			if baseline <= dispatcherStartTs && d.remoteResolvedTs > baseline {
+				baseline = d.remoteResolvedTs
+			}
+			if readyResolvedTs < baseline {
+				return readyDecision{}
+			}
 		}
 
 		decision := readyDecision{
@@ -151,6 +188,7 @@ func (d *dispatcherConnState) acceptReady(from node.ID, localServerID node.ID) r
 		d.localReadyPending = false
 		d.pendingRemoteEventServiceID = ""
 		d.remoteCandidates = nil
+		d.remoteResolvedTs = 0
 		return decision
 	}
 
@@ -170,10 +208,14 @@ func (d *dispatcherConnState) acceptReady(from node.ID, localServerID node.ID) r
 	}
 
 	d.currentEventServiceID = from
-	// Keep localReadyPending unchanged: local ready may still arrive later and
-	// move the dispatcher back to local.
+	// Keep localReadyPending unchanged: after the local service catches up, a
+	// later local ready may move the dispatcher back to local.
 	d.pendingRemoteEventServiceID = ""
 	d.remoteCandidates = nil
+	// Record the remote progress the local service must catch up to before it
+	// may win back. This is more meaningful than the sink checkpoint, which
+	// still equals the start ts before the remote delivers its first events.
+	d.remoteResolvedTs = readyResolvedTs
 	return readyDecision{
 		commitTarget: from,
 	}
@@ -194,6 +236,7 @@ func (d *dispatcherConnState) beginRemove(localServerID node.ID) ([]node.ID, boo
 	d.localReadyPending = false
 	d.pendingRemoteEventServiceID = ""
 	d.remoteCandidates = nil
+	d.remoteResolvedTs = 0
 	return []node.ID(targets), false
 }
 
@@ -440,7 +483,7 @@ func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) 
 	from := *event.From
 	switch event.GetType() {
 	case commonEvent.TypeReadyEvent:
-		s.handleReadyEvent(from)
+		s.handleReadyEvent(from, uint64(event.GetCommitTs()))
 	case commonEvent.TypeNotReusableEvent:
 		if from == s.localServerID {
 			log.Panic("should not happen: local event service should not send not reusable event")
@@ -459,12 +502,25 @@ func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) 
 
 // handleReadyEvent applies the ready decision produced by connState: clean up
 // any stale registrations, then commit whichever target won the ready race.
-func (s *dispatcherSession) handleReadyEvent(from node.ID) {
+func (s *dispatcherSession) handleReadyEvent(from node.ID, readyResolvedTs uint64) {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
 	// connState decides whether this ready should be accepted and which stale
 	// registrations must be cleaned up. Session only applies the side effects.
-	accepted := s.connState.acceptReady(from, s.localServerID)
+	requiredCheckpointTs := s.target.GetCheckpointTs()
+	// remoteDeliveredTs is the highest resolved ts the sink has received from
+	// the current event service, i.e. the position the remote has actually
+	// delivered. The local service must catch up to it before winning back so
+	// the switch never stalls the table while the local catches up from TiKV.
+	remoteDeliveredTs := s.target.GetResolvedTs()
+	accepted := s.connState.acceptReady(
+		from,
+		s.localServerID,
+		readyResolvedTs,
+		requiredCheckpointTs,
+		remoteDeliveredTs,
+		s.target.GetStartTs(),
+	)
 	for _, target := range accepted.cleanupTargets {
 		s.removeFromLocked(target)
 	}
@@ -472,13 +528,13 @@ func (s *dispatcherSession) handleReadyEvent(from node.ID) {
 		return
 	}
 	if accepted.commitTarget == s.localServerID {
-		s.handleAcceptedLocalReadyLocked()
+		s.handleAcceptedLocalReadyLocked(requiredCheckpointTs)
 		return
 	}
 	s.handleAcceptedRemoteReadyLocked(accepted.commitTarget)
 }
 
-func (s *dispatcherSession) handleAcceptedLocalReadyLocked() {
+func (s *dispatcherSession) handleAcceptedLocalReadyLocked(resetTs uint64) {
 	if s.readyCallback != nil {
 		// This path is used during the initial add flow before the dispatcher is
 		// committed. Local is still authoritative, so any speculative remote
@@ -491,7 +547,7 @@ func (s *dispatcherSession) handleAcceptedLocalReadyLocked() {
 	log.Info("received ready signal from local event service, prepare to reset the dispatcher",
 		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", s.target.GetId()))
-	s.doResetLocked(s.localServerID, s.target.GetCheckpointTs())
+	s.doResetLocked(s.localServerID, resetTs)
 }
 
 func (s *dispatcherSession) handleAcceptedRemoteReadyLocked(serverID node.ID) {
