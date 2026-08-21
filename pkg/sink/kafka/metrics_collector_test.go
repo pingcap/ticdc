@@ -25,7 +25,6 @@ import (
 
 func TestCollectBrokerThrottleTime(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "throttle-time")
-	cleanupThrottleTime(changefeedID)
 
 	registry := metrics.NewRegistry()
 	firstBroker := metrics.NewHistogram(metrics.NewUniformSample(10))
@@ -46,14 +45,22 @@ func TestCollectBrokerThrottleTime(t *testing.T) {
 	}
 	collector.collectBrokerMetrics()
 
-	require.Equal(t, float64(40), testutil.ToFloat64(throttleTimeGauge.WithLabelValues(
-		changefeedID.Keyspace(), changefeedID.Name(), avg)))
-	require.Equal(t, float64(50), testutil.ToFloat64(throttleTimeGauge.WithLabelValues(
-		changefeedID.Keyspace(), changefeedID.Name(), p99)))
+	require.Equal(t, 0.03, testutil.ToFloat64(throttleTimeGauge.WithLabelValues(
+		changefeedID.Keyspace(), changefeedID.Name(), "1", avg)))
+	require.Equal(t, 0.05, testutil.ToFloat64(throttleTimeGauge.WithLabelValues(
+		changefeedID.Keyspace(), changefeedID.Name(), "1", p99)))
+	require.Equal(t, 0.04, testutil.ToFloat64(throttleTimeGauge.WithLabelValues(
+		changefeedID.Keyspace(), changefeedID.Name(), "2", avg)))
+	require.Equal(t, 0.04, testutil.ToFloat64(throttleTimeGauge.WithLabelValues(
+		changefeedID.Keyspace(), changefeedID.Name(), "2", p99)))
 
 	collector.cleanupMetrics()
 	require.False(t, throttleTimeGauge.DeleteLabelValues(
-		changefeedID.Keyspace(), changefeedID.Name(), avg))
+		changefeedID.Keyspace(), changefeedID.Name(), "1", avg))
 	require.False(t, throttleTimeGauge.DeleteLabelValues(
-		changefeedID.Keyspace(), changefeedID.Name(), p99))
+		changefeedID.Keyspace(), changefeedID.Name(), "1", p99))
+	require.False(t, throttleTimeGauge.DeleteLabelValues(
+		changefeedID.Keyspace(), changefeedID.Name(), "2", avg))
+	require.False(t, throttleTimeGauge.DeleteLabelValues(
+		changefeedID.Keyspace(), changefeedID.Name(), "2", p99))
 }

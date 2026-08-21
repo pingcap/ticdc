@@ -75,8 +75,8 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "sink",
 			Name:      "kafka_producer_throttle_time",
-			Help:      "Kafka broker throttle time in milliseconds, aggregated as the maximum across brokers.",
-		}, []string{"namespace", "changefeed", "type"})
+			Help:      "Kafka broker throttle time in seconds.",
+		}, []string{"namespace", "changefeed", "broker", "type"})
 
 	// Meter mark by 1 once a response received.
 	responseRateGauge = prometheus.NewGaugeVec(

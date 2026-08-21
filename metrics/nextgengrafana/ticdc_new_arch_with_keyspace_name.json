@@ -7698,7 +7698,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Maximum average and p99 broker throttle time reported by the producer.",
+          "description": "Average and p99 throttle time reported by each broker.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -7746,11 +7746,11 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_kafka_producer_throttle_time{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, type)",
+              "expr": "sum(ticdc_sink_kafka_producer_throttle_time{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, broker, type)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{type}}",
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{broker}}-{{type}}",
               "refId": "A"
             }
           ],
@@ -7774,7 +7774,8 @@
           },
           "yaxes": [
             {
-              "format": "ms",
+              "decimals": 1,
+              "format": "s",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -12629,5 +12630,5 @@
   "timezone": "browser",
   "title": "${DS_TEST-CLUSTER}-TiCDC-New-Arch-KeyspaceName",
   "uid": "lGT5hED6vqTn",
-  "version": 41
+  "version": 42
 }

@@ -125,7 +125,6 @@ func (m *saramaMetricsCollector) collectProducerMetrics() {
 func (m *saramaMetricsCollector) collectBrokerMetrics() {
 	keyspace := m.changefeedID.Keyspace()
 	changefeedID := m.changefeedID.Name()
-	var maxThrottleAvg, maxThrottleP99 float64
 
 	for id := range m.brokers {
 		brokerID := strconv.Itoa(int(id))
@@ -176,12 +175,14 @@ func (m *saramaMetricsCollector) collectBrokerMetrics() {
 			throttleTimeMetricNamePrefix, brokerID))
 		if histogram, ok := throttleTimeMetric.(metrics.Histogram); ok {
 			snapshot := histogram.Snapshot()
-			maxThrottleAvg = max(maxThrottleAvg, snapshot.Mean())
-			maxThrottleP99 = max(maxThrottleP99, snapshot.Percentile(0.99))
+			throttleTimeGauge.
+				WithLabelValues(keyspace, changefeedID, brokerID, avg).
+				Set(snapshot.Mean() / 1000)
+			throttleTimeGauge.
+				WithLabelValues(keyspace, changefeedID, brokerID, p99).
+				Set(snapshot.Percentile(0.99) / 1000)
 		}
 	}
-
-	setThrottleTime(m.changefeedID, maxThrottleAvg, maxThrottleP99)
 }
 
 func getBrokerMetricName(prefix, brokerID string) string {
@@ -198,8 +199,6 @@ func (m *saramaMetricsCollector) cleanupProducerMetrics() {
 		DeleteLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), avg)
 	recordsPerRequestGauge.
 		DeleteLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), p99)
-
-	cleanupThrottleTime(m.changefeedID)
 }
 
 func (m *saramaMetricsCollector) cleanupBrokerMetrics() {
@@ -219,6 +218,10 @@ func (m *saramaMetricsCollector) cleanupBrokerMetrics() {
 			DeleteLabelValues(keyspace, changefeedID, brokerID)
 		responseRateGauge.
 			DeleteLabelValues(keyspace, changefeedID, brokerID)
+		throttleTimeGauge.
+			DeleteLabelValues(keyspace, changefeedID, brokerID, avg)
+		throttleTimeGauge.
+			DeleteLabelValues(keyspace, changefeedID, brokerID, p99)
 
 	}
 }
@@ -226,18 +229,4 @@ func (m *saramaMetricsCollector) cleanupBrokerMetrics() {
 func (m *saramaMetricsCollector) cleanupMetrics() {
 	m.cleanupProducerMetrics()
 	m.cleanupBrokerMetrics()
-}
-
-func setThrottleTime(changefeedID common.ChangeFeedID, average, percentile99 float64) {
-	throttleTimeGauge.
-		WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), avg).
-		Set(average)
-	throttleTimeGauge.
-		WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), p99).
-		Set(percentile99)
-}
-
-func cleanupThrottleTime(changefeedID common.ChangeFeedID) {
-	throttleTimeGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.Name(), avg)
-	throttleTimeGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.Name(), p99)
 }

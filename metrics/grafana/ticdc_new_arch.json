@@ -8166,6 +8166,13 @@
               "interval": "",
               "legendFormat": "{{instance}}-{{type}}",
               "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(ticdc_log_puller_memory_quota{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}) by (instance, type)",
+              "interval": "",
+              "legendFormat": "{{instance}}-quota-{{type}}",
+              "refId": "B"
             }
           ],
           "thresholds": [],
@@ -8814,6 +8821,214 @@
           "yaxis": {
             "align": false,
             "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Event receivers blocked at the memory hard limit and region scans blocked at the scan admission gate.",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 0,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 57
+          },
+          "hiddenSeries": false,
+          "id": 26001,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "ticdc_log_puller_memory_quota_event_waiter_count{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
+              "interval": "",
+              "legendFormat": "{{instance}}-event-waiters",
+              "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "ticdc_log_puller_memory_quota_scan_waiter_count{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
+              "interval": "",
+              "legendFormat": "{{instance}}-scan-waiters",
+              "refId": "B"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Memory Quota Waiters",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "logBase": 1,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "logBase": 1,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Time spent waiting at the event hard limit or the scan admission gate.",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 0,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 57
+          },
+          "hiddenSeries": false,
+          "id": 26002,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_log_puller_memory_quota_event_wait_duration_bucket{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (le, instance))",
+              "interval": "",
+              "legendFormat": "{{instance}}-event-p99",
+              "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_log_puller_memory_quota_event_wait_duration_sum{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance) / sum(rate(ticdc_log_puller_memory_quota_event_wait_duration_count{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
+              "interval": "",
+              "legendFormat": "{{instance}}-event-avg",
+              "refId": "B"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_log_puller_memory_quota_scan_wait_duration_bucket{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (le, instance))",
+              "interval": "",
+              "legendFormat": "{{instance}}-scan-p99",
+              "refId": "C"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_log_puller_memory_quota_scan_wait_duration_sum{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance) / sum(rate(ticdc_log_puller_memory_quota_scan_wait_duration_count{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
+              "interval": "",
+              "legendFormat": "{{instance}}-scan-avg",
+              "refId": "D"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Memory Quota Wait Duration",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "logBase": 1,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "logBase": 1,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false
           }
         }
       ],
@@ -19173,7 +19388,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Maximum average and p99 broker throttle time reported by the producer.",
+          "description": "Average and p99 throttle time reported by each broker.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -19221,11 +19436,11 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_kafka_producer_throttle_time{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace,changefeed, instance, type)",
+              "expr": "sum(ticdc_sink_kafka_producer_throttle_time{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace,changefeed, instance, broker, type)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{type}}",
+              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}-{{type}}",
               "refId": "A"
             }
           ],
@@ -19249,7 +19464,8 @@
           },
           "yaxes": [
             {
-              "format": "ms",
+              "decimals": 1,
+              "format": "s",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -29222,5 +29438,5 @@
   "timezone": "browser",
   "title": "${DS_TEST-CLUSTER}-TiCDC-New-Arch",
   "uid": "YiGL8hBZ0aac",
-  "version": 41
+  "version": 42
 }
