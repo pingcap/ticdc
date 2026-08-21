@@ -147,6 +147,17 @@ func (w *writer) run(ctx context.Context) error {
 	return w.mysqlSink.Run(ctx)
 }
 
+func (w *writer) cleanupEventsGroups() {
+	for _, progress := range w.progresses {
+		for _, group := range progress.eventsGroup {
+			if err := group.Cleanup(); err != nil {
+				log.Warn("cleanup events group spill file failed",
+					zap.Int32("partition", progress.partition), zap.Error(err))
+			}
+		}
+	}
+}
+
 func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 	var (
 		done = make(chan struct{}, 1)
@@ -628,8 +639,9 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 		group = util.NewEventsGroup(progress.partition, tableID)
 		progress.eventsGroup[tableID] = group
 	}
-	message = w.messageWithPartitionCheck(message, progress.partition, offset)
-	group.AppendMessage(message)
+	group.AppendMessageWithPostRestore(message, func(message *common.DMLMessage) *common.DMLMessage {
+		return w.messageWithPartitionCheck(message, progress.partition, offset)
+	})
 	if commitTs < progress.watermark {
 		log.Warn("DML event fallback row, since less than the partition watermark, append it and sort before flush",
 			zap.Int64("tableID", tableID), zap.Int32("partition", group.Partition),

@@ -124,6 +124,8 @@ func (c *consumer) readMessage(ctx context.Context) error {
 
 // Run the consumer, read data and write to the downstream target.
 func (c *consumer) Run(ctx context.Context) error {
+	defer c.writer.cleanupEventsGroups()
+
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return c.writer.run(ctx)

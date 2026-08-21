@@ -449,6 +449,14 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 	}
 }
 
+func (c *consumer) cleanupEventsGroups() {
+	for _, group := range c.eventsGroup {
+		if err := group.Cleanup(); err != nil {
+			log.Warn("cleanup events group spill file failed", zap.Error(err))
+		}
+	}
+}
+
 func (c *consumer) parseDMLIndexFile(ctx context.Context, path string, dmlkey cloudstorage.DMLPathKey) {
 	if c.globalCheckpointTs > 0 && dmlkey.TableVersion > c.globalCheckpointTs {
 		log.Debug("skip dml index file by checkpoint",
@@ -767,6 +775,8 @@ func (c *consumer) handle(ctx context.Context) error {
 }
 
 func (c *consumer) run(ctx context.Context) error {
+	defer c.cleanupEventsGroups()
+
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return c.sink.Run(ctx)

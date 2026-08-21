@@ -381,20 +381,16 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
 	w.onDDL(ddl)
 	require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
 
-	newDMLMessage := func(commitTs uint64) *codeccommon.DMLMessage {
-		return codeccommon.NewDMLMessage(1, "target", "dst", commitTs, common.RowTypeUpdate, nil)
-	}
-
 	progress := w.progresses[0]
-	w.appendMessage2Group(newDMLMessage(200), progress)
-	w.appendMessage2Group(newDMLMessage(100), progress)
+	w.appendMessage2Group(newDMLMessageForWriterTest(200), progress)
+	w.appendMessage2Group(newDMLMessageForWriterTest(100), progress)
 
 	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
 	require.Len(t, resolved, 1)
 	require.Equal(t, uint64(100), resolved[0].GetCommitTs())
 }
 
-func TestWriteMessageDefersDMLAssemblyUntilFlush(t *testing.T) {
+func TestWriteMessageSpillsDMLImmediately(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	s := sinkmock.NewMockSink(ctrl)
@@ -428,7 +424,7 @@ func TestWriteMessageDefersDMLAssemblyUntilFlush(t *testing.T) {
 	require.Equal(t, 1, decoder.addKeyValueCount)
 	require.Equal(t, 1, decoder.hasNextCount)
 	require.Equal(t, 1, decoder.nextDMLMessageCount)
-	require.Zero(t, decoder.toDMLEventCount)
+	require.Equal(t, 1, decoder.toDMLEventCount)
 	require.Len(t, progress.eventsGroup[1].ResolveInto(99, nil), 0)
 
 	progress.watermark = 100

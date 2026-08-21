@@ -139,6 +139,17 @@ func (w *writer) run(ctx context.Context) error {
 	return w.mysqlSink.Run(ctx)
 }
 
+func (w *writer) cleanupEventsGroups() {
+	for _, progress := range w.progresses {
+		for _, group := range progress.eventsGroup {
+			if err := group.Cleanup(); err != nil {
+				log.Warn("cleanup events group spill file failed",
+					zap.Int32("partition", progress.partition), zap.Error(err))
+			}
+		}
+	}
+}
+
 func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) error {
 	var (
 		done = make(chan struct{}, 1)
