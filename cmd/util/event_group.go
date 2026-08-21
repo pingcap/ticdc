@@ -86,7 +86,7 @@ func (g *EventsGroup) appendMessage(
 	}
 	commitTs := message.GetCommitTs()
 
-	data, row, err := marshalDMLMessage(message)
+	data, _, err := marshalDMLMessage(message)
 	if err != nil {
 		return err
 	}
@@ -111,9 +111,6 @@ func (g *EventsGroup) appendMessage(
 		handle:      handle,
 		postRestore: postRestore,
 	})
-	// Codec decoders use this callback to release their pooled chunks. The event is durable in the
-	// spill file now, so the original in-memory event is no longer needed.
-	row.PostFlush()
 	return nil
 }
 

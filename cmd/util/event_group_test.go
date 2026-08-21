@@ -225,6 +225,19 @@ func TestEventsGroupRestoresSpilledEventRowsAndTableInfo(t *testing.T) {
 	require.Equal(t, int64(42), restored.Rows.GetRow(0).GetInt64(0))
 }
 
+func TestEventsGroupSpillDoesNotSignalDownstreamCallbacks(t *testing.T) {
+	event := newTestDMLEvent(100, common.RowTypeInsert)
+	var enqueued, flushed int
+	event.AddPostEnqueueFunc(func() { enqueued++ })
+	event.AddPostFlushFunc(func() { flushed++ })
+
+	group := NewEventsGroup(0, 1)
+	defer func() { require.NoError(t, group.Cleanup()) }()
+	require.NoError(t, group.AppendMessage(codeccommon.NewDMLMessageFromEvent(event)))
+	require.Zero(t, enqueued)
+	require.Zero(t, flushed)
+}
+
 func BenchmarkEventsGroupResolveInto(b *testing.B) {
 	const messageCount = 16 * 1024
 
