@@ -603,7 +603,7 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 		if writtenResolvedTs == 0 {
 			writtenResolvedTs = task.receivedResolvedTs.Load()
 		}
-		event := event.NewReadyEventWithResolvedTs(task.info.GetID(), writtenResolvedTs)
+		event := event.NewReadyEvent(task.info.GetID(), writtenResolvedTs)
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 		log.Debug("send ready event to dispatcher",

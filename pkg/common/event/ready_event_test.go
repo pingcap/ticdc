@@ -23,7 +23,7 @@ import (
 
 func TestReadyEvent(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewReadyEventWithResolvedTs(did, 123)
+	e := NewReadyEvent(did, 123)
 	data, err := e.Marshal()
 	require.NoError(t, err)
 	require.Len(t, data, int(e.GetSize())+int(GetEventHeaderSize()))
@@ -38,7 +38,7 @@ func TestReadyEvent(t *testing.T) {
 
 func TestReadyEventMethods(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewReadyEventWithResolvedTs(did, 123)
+	e := NewReadyEvent(did, 123)
 
 	// Test GetType
 	require.Equal(t, TypeReadyEvent, e.GetType())
@@ -66,7 +66,7 @@ func TestReadyEventMethods(t *testing.T) {
 }
 
 func TestReadyEventMarshalUnmarshal(t *testing.T) {
-	normalEvent := NewReadyEventWithResolvedTs(common.NewDispatcherID(), 123)
+	normalEvent := NewReadyEvent(common.NewDispatcherID(), 123)
 	testCases := []struct {
 		name      string
 		event     *ReadyEvent
@@ -127,7 +127,7 @@ func TestReadyEventDecodeLegacyPayload(t *testing.T) {
 
 func TestReadyEventLegacyDecoderIgnoresResolvedTs(t *testing.T) {
 	did := common.NewDispatcherID()
-	event := NewReadyEventWithResolvedTs(did, 123)
+	event := NewReadyEvent(did, 123)
 	data, err := event.Marshal()
 	require.NoError(t, err)
 
@@ -146,7 +146,7 @@ func TestReadyEventLegacyDecoderIgnoresResolvedTs(t *testing.T) {
 // TestReadyEventHeader verifies the unified header format
 func TestReadyEventHeader(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewReadyEvent(did)
+	e := NewReadyEvent(did, 123)
 
 	data, err := e.Marshal()
 	require.NoError(t, err)
@@ -229,7 +229,7 @@ func TestReadyEventUnmarshalErrors(t *testing.T) {
 // TestReadyEventSize verifies GetSize calculation
 func TestReadyEventSize(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewReadyEvent(did)
+	e := NewReadyEvent(did, 123)
 
 	// GetSize should only return business data size, not including header
 	expectedSize := int64(did.GetSize() + 8)

@@ -889,7 +889,7 @@ func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
 		setSessionState(stat.session, remoteServerID, true, "")
 		newLocalReadyEvent := func(resolvedTs uint64) dispatcher.DispatcherEvent {
-			ready := commonEvent.NewReadyEventWithResolvedTs(dispatcherID, resolvedTs)
+			ready := commonEvent.NewReadyEvent(dispatcherID, resolvedTs)
 			return dispatcher.DispatcherEvent{
 				From:  &localServerID,
 				Event: &ready,
@@ -952,7 +952,7 @@ func TestLocalReadyGatedByRemoteServedResolvedTs(t *testing.T) {
 	setSessionState(stat.session, "", true, remoteServerID)
 
 	// Accept a remote ready that reports the remote is already serving at 300.
-	remoteReady := commonEvent.NewReadyEventWithResolvedTs(dispatcherID, 300)
+	remoteReady := commonEvent.NewReadyEvent(dispatcherID, 300)
 	stat.handleSignalEvent(dispatcher.DispatcherEvent{
 		From:  &remoteServerID,
 		Event: &remoteReady,
@@ -965,7 +965,7 @@ func TestLocalReadyGatedByRemoteServedResolvedTs(t *testing.T) {
 	require.Equal(t, uint64(300), sessionRemoteResolvedTs(stat.session))
 
 	newLocalReadyEvent := func(resolvedTs uint64) dispatcher.DispatcherEvent {
-		ready := commonEvent.NewReadyEventWithResolvedTs(dispatcherID, resolvedTs)
+		ready := commonEvent.NewReadyEvent(dispatcherID, resolvedTs)
 		return dispatcher.DispatcherEvent{
 			From:  &localServerID,
 			Event: &ready,
@@ -1010,7 +1010,7 @@ func TestLocalReadyGatedByRemoteDeliveredResolvedTs(t *testing.T) {
 	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
 	setSessionState(stat.session, "", true, remoteServerID)
 
-	remoteReady := commonEvent.NewReadyEventWithResolvedTs(dispatcherID, 300)
+	remoteReady := commonEvent.NewReadyEvent(dispatcherID, 300)
 	stat.handleSignalEvent(dispatcher.DispatcherEvent{
 		From:  &remoteServerID,
 		Event: &remoteReady,
@@ -1023,7 +1023,7 @@ func TestLocalReadyGatedByRemoteDeliveredResolvedTs(t *testing.T) {
 	require.Equal(t, uint64(300), sessionRemoteResolvedTs(stat.session))
 
 	newLocalReadyEvent := func(resolvedTs uint64) dispatcher.DispatcherEvent {
-		ready := commonEvent.NewReadyEventWithResolvedTs(dispatcherID, resolvedTs)
+		ready := commonEvent.NewReadyEvent(dispatcherID, resolvedTs)
 		return dispatcher.DispatcherEvent{
 			From:  &localServerID,
 			Event: &ready,

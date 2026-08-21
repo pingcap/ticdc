@@ -168,10 +168,7 @@ func (d *dispatcherConnState) acceptReady(
 			// dispatcher start ts, which would let a barely started local
 			// subscription win the race; hold on the remote's reported progress
 			// until data actually flows.
-			baseline := requiredCheckpointTs
-			if remoteDeliveredTs > baseline {
-				baseline = remoteDeliveredTs
-			}
+			baseline := max(requiredCheckpointTs, remoteDeliveredTs)
 			if baseline <= dispatcherStartTs && d.remoteResolvedTs > baseline {
 				baseline = d.remoteResolvedTs
 			}

@@ -35,11 +35,7 @@ type ReadyEvent struct {
 	ResolvedTs uint64
 }
 
-func NewReadyEvent(dispatcherID common.DispatcherID) ReadyEvent {
-	return NewReadyEventWithResolvedTs(dispatcherID, 0)
-}
-
-func NewReadyEventWithResolvedTs(dispatcherID common.DispatcherID, resolvedTs uint64) ReadyEvent {
+func NewReadyEvent(dispatcherID common.DispatcherID, resolvedTs uint64) ReadyEvent {
 	return ReadyEvent{
 		Version:      ReadyEventVersion1,
 		DispatcherID: dispatcherID,
