@@ -62,8 +62,8 @@ func NewEventsGroup(partition int32, tableID int64) *EventsGroup {
 // AppendMessage materializes a message and appends it to a local spill file. DMLMessage carries a
 // decoder closure, so persisting its reconstructed event is necessary to release the decoder input
 // retained by that closure.
-func (g *EventsGroup) AppendMessage(message *codeccommon.DMLMessage) {
-	g.appendMessage(message, nil)
+func (g *EventsGroup) AppendMessage(message *codeccommon.DMLMessage) error {
+	return g.appendMessage(message, nil)
 }
 
 // AppendMessageWithPostRestore appends a message and applies postRestore after it is read back from
@@ -72,38 +72,39 @@ func (g *EventsGroup) AppendMessage(message *codeccommon.DMLMessage) {
 func (g *EventsGroup) AppendMessageWithPostRestore(
 	message *codeccommon.DMLMessage,
 	postRestore func(*codeccommon.DMLMessage) *codeccommon.DMLMessage,
-) {
-	g.appendMessage(message, postRestore)
+) error {
+	return g.appendMessage(message, postRestore)
 }
 
 func (g *EventsGroup) appendMessage(
 	message *codeccommon.DMLMessage,
 	postRestore func(*codeccommon.DMLMessage) *codeccommon.DMLMessage,
-) {
+
+) error {
+	if message == nil {
+		return errors.ErrSpillFileOp.FastGenByArgs("cannot spill nil DML message")
+	}
 	commitTs := message.GetCommitTs()
+
+	data, row, err := marshalDMLMessage(message)
+	if err != nil {
+		return err
+	}
+	if g.spillFile == nil {
+		g.spillFile, err = spill.NewRecordFile(os.TempDir(), eventsGroupSpillPattern)
+		if err != nil {
+			return err
+		}
+	}
+	handle, err := g.spillFile.Append(data)
+	if err != nil {
+		return err
+	}
 	if len(g.messages) > 0 && commitTs < g.messages[len(g.messages)-1].commitTs {
 		g.outOfOrder = true
 	}
 	if commitTs > g.HighWatermark {
 		g.HighWatermark = commitTs
-	}
-
-	data, row, err := marshalDMLMessage(message)
-	if err != nil {
-		log.Panic("marshal DML message for spill failed",
-			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID), zap.Error(err))
-	}
-	if g.spillFile == nil {
-		g.spillFile, err = spill.NewRecordFile(os.TempDir(), eventsGroupSpillPattern)
-		if err != nil {
-			log.Panic("create events group spill file failed",
-				zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID), zap.Error(err))
-		}
-	}
-	handle, err := g.spillFile.Append(data)
-	if err != nil {
-		log.Panic("write DML message to spill file failed",
-			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID), zap.Error(err))
 	}
 	g.messages = append(g.messages, spilledMessage{
 		commitTs:    commitTs,
@@ -113,14 +114,15 @@ func (g *EventsGroup) appendMessage(
 	// Codec decoders use this callback to release their pooled chunks. The event is durable in the
 	// spill file now, so the original in-memory event is no longer needed.
 	row.PostFlush()
+	return nil
 }
 
 // ResolveInto appends all messages with CommitTs <= resolve into dst in commit-ts order and removes
 // them from the group. Resolved messages are restored from the spill file only when downstream needs
 // them, keeping the buffered group out of heap memory.
-func (g *EventsGroup) ResolveInto(resolve uint64, dst []*codeccommon.DMLMessage) []*codeccommon.DMLMessage {
+func (g *EventsGroup) ResolveInto(resolve uint64, dst []*codeccommon.DMLMessage) ([]*codeccommon.DMLMessage, error) {
 	if len(g.messages) == 0 {
-		return dst
+		return dst, nil
 	}
 
 	if g.outOfOrder {
@@ -141,19 +143,20 @@ func (g *EventsGroup) ResolveInto(resolve uint64, dst []*codeccommon.DMLMessage)
 		g.outOfOrder = false
 	}
 	if resolvedCount == 0 {
-		return dst
+		return dst, nil
+	}
+	if g.spillFile == nil {
+		return dst, errors.ErrSpillFileOp.FastGenByArgs("events group spill file is missing")
 	}
 
 	for _, message := range g.messages[:resolvedCount] {
 		data, err := g.spillFile.Read(message.handle)
 		if err != nil {
-			log.Panic("read DML message from spill file failed",
-				zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID), zap.Error(err))
+			return dst, err
 		}
 		restored, err := unmarshalDMLMessage(data)
 		if err != nil {
-			log.Panic("unmarshal DML message from spill file failed",
-				zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID), zap.Error(err))
+			return dst, err
 		}
 		if message.postRestore != nil {
 			restored = message.postRestore(restored)
@@ -166,8 +169,7 @@ func (g *EventsGroup) ResolveInto(resolve uint64, dst []*codeccommon.DMLMessage)
 	g.messages = g.messages[:remainingCount]
 	if len(g.messages) == 0 {
 		if err := g.spillFile.Cleanup(); err != nil {
-			log.Panic("cleanup events group spill file failed",
-				zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID), zap.Error(err))
+			return dst, err
 		}
 		g.spillFile = nil
 	}
@@ -178,11 +180,11 @@ func (g *EventsGroup) ResolveInto(resolve uint64, dst []*codeccommon.DMLMessage)
 			zap.Int("resolved", resolvedCount), zap.Int("remained", len(g.messages)),
 			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", firstCommitTs))
 	}
-	return dst
+	return dst, nil
 }
 
 // GetAllMessages gets all messages.
-func (g *EventsGroup) GetAllMessages() []*codeccommon.DMLMessage {
+func (g *EventsGroup) GetAllMessages() ([]*codeccommon.DMLMessage, error) {
 	return g.ResolveInto(math.MaxUint64, nil)
 }
 
@@ -192,10 +194,13 @@ func (g *EventsGroup) Cleanup() error {
 		return nil
 	}
 	err := g.spillFile.Cleanup()
+	if err != nil {
+		return err
+	}
 	g.spillFile = nil
 	clear(g.messages)
 	g.messages = g.messages[:0]
-	return err
+	return nil
 }
 
 func marshalDMLMessage(message *codeccommon.DMLMessage) (data []byte, row *commonEvent.DMLEvent, err error) {
@@ -223,6 +228,8 @@ func marshalDMLMessage(message *codeccommon.DMLMessage) (data []byte, row *commo
 			if row.Rows != nil && row.Rows.NumRows() > 0 {
 				return nil, nil, err
 			}
+			log.Warn("spill DML event without table info",
+				zap.Int64("tableID", row.PhysicalTableID), zap.Uint64("commitTs", row.CommitTs), zap.Error(err))
 			tableInfoData = nil
 		} else {
 			tableInfoStored = true
@@ -236,6 +243,8 @@ func marshalDMLMessage(message *codeccommon.DMLMessage) (data []byte, row *commo
 			if row.Rows.NumRows() > 0 {
 				return nil, nil, err
 			}
+			log.Warn("spill DML event without row data",
+				zap.Int64("tableID", row.PhysicalTableID), zap.Uint64("commitTs", row.CommitTs), zap.Error(err))
 			rowsData = nil
 		}
 	}
@@ -245,7 +254,7 @@ func marshalDMLMessage(message *codeccommon.DMLMessage) (data []byte, row *commo
 		return nil, nil, errors.WrapError(errors.ErrSpillFileOp, err, "marshal DML checksums")
 	}
 
-	data = make([]byte, 0, 7*8+len(eventData)+len(tableInfoData)+len(rowsData)+len(checksumData))
+	data = make([]byte, 0, 10*8+len(eventData)+len(tableInfoData)+len(rowsData)+len(checksumData)+len(message.Schema)+len(message.Table))
 	data = appendUint64(data, uint64(len(eventData)))
 	data = append(data, eventData...)
 	data = appendUint64(data, uint64(len(tableInfoData)))
@@ -254,6 +263,11 @@ func marshalDMLMessage(message *codeccommon.DMLMessage) (data []byte, row *commo
 	data = append(data, rowsData...)
 	data = appendUint64(data, uint64(len(checksumData)))
 	data = append(data, checksumData...)
+	data = appendUint64(data, uint64(len(message.Schema)))
+	data = append(data, message.Schema...)
+	data = appendUint64(data, uint64(len(message.Table)))
+	data = append(data, message.Table...)
+	data = appendUint64(data, uint64(message.RowType))
 	if row.Rows != nil {
 		data = appendUint64(data, 1)
 	} else {
@@ -309,6 +323,21 @@ func unmarshalDMLMessage(data []byte) (*codeccommon.DMLMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	schemaData, data, err := readSpilledField(data)
+	if err != nil {
+		return nil, err
+	}
+	tableData, data, err := readSpilledField(data)
+	if err != nil {
+		return nil, err
+	}
+	rowType, data, err := readSpilledUint64(data)
+	if err != nil {
+		return nil, err
+	}
+	if rowType > uint64(^commonType.RowType(0)) {
+		return nil, errors.ErrSpillFileOp.FastGenByArgs("invalid DML spill row type")
+	}
 	rowsPresent, data, err := readSpilledUint64(data)
 	if err != nil {
 		return nil, err
@@ -346,26 +375,31 @@ func unmarshalDMLMessage(data []byte) (*codeccommon.DMLMessage, error) {
 		if row.TableInfo != nil {
 			fieldTypes = row.TableInfo.GetFieldSlice()
 		}
-		row.Rows, _ = chunk.NewCodec(fieldTypes).Decode(rowsData)
+		rows, err := unmarshalDMLRows(rowsData, fieldTypes)
+		if err != nil {
+			return nil, err
+		}
+		row.Rows = rows
 	}
 	row.TableInfoVersion = tableInfoVersion
 	row.ReplicatingTs = replicatingTs
 	if err := json.Unmarshal(checksumData, &row.Checksum); err != nil {
 		return nil, errors.WrapError(errors.ErrSpillFileOp, err, "unmarshal DML checksums")
 	}
-	if len(row.RowTypes) == 0 {
-		return nil, errors.ErrSpillFileOp.FastGenByArgs("spilled DML event has no row type")
-	}
+	return codeccommon.NewDMLMessage(row.PhysicalTableID, string(schemaData), string(tableData), row.CommitTs,
+		commonType.RowType(rowType), func() *commonEvent.DMLEvent {
+			return row
+		}), nil
+}
 
-	var schema, table string
-	if row.TableInfo != nil {
-		schema = row.TableInfo.GetSchemaName()
-		table = row.TableInfo.GetTableName()
-	}
-
-	return codeccommon.NewDMLMessage(row.PhysicalTableID, schema, table, row.CommitTs, row.RowTypes[0], func() *commonEvent.DMLEvent {
-		return row
-	}), nil
+func unmarshalDMLRows(data []byte, fieldTypes []*types.FieldType) (rows *chunk.Chunk, err error) {
+	defer func() {
+		if recover() != nil {
+			err = errors.ErrSpillFileOp.FastGenByArgs("decode DML spill rows")
+		}
+	}()
+	rows, _ = chunk.NewCodec(fieldTypes).Decode(data)
+	return rows, nil
 }
 
 func appendUint64(data []byte, value uint64) []byte {

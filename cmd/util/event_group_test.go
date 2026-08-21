@@ -66,7 +66,8 @@ func TestEventsGroupResolveIntoAppendsAndCleansResolvedSpillRecords(t *testing.T
 	spillPath := group.spillFile.Path()
 
 	var dst []*codeccommon.DMLMessage
-	dst = group.ResolveInto(2, dst)
+	dst, err := group.ResolveInto(2, dst)
+	require.NoError(t, err)
 
 	require.Len(t, dst, 2)
 	require.Equal(t, m1.GetCommitTs(), dst[0].GetCommitTs())
@@ -76,9 +77,10 @@ func TestEventsGroupResolveIntoAppendsAndCleansResolvedSpillRecords(t *testing.T
 	require.Equal(t, m3.GetCommitTs(), group.messages[0].commitTs)
 	require.FileExists(t, spillPath)
 
-	group.GetAllMessages()
+	_, err = group.GetAllMessages()
+	require.NoError(t, err)
 	require.Nil(t, group.spillFile)
-	_, err := os.Stat(spillPath)
+	_, err = os.Stat(spillPath)
 	require.True(t, os.IsNotExist(err))
 }
 
@@ -92,7 +94,8 @@ func TestEventsGroupResolveIntoNoopWhenNothingResolved(t *testing.T) {
 	group.AppendMessage(m2)
 
 	dst := make([]*codeccommon.DMLMessage, 0, 1)
-	dst = group.ResolveInto(5, dst)
+	dst, err := group.ResolveInto(5, dst)
+	require.NoError(t, err)
 
 	require.Len(t, dst, 0)
 	require.Len(t, group.messages, 2)
@@ -111,7 +114,8 @@ func TestEventsGroupResolveIntoClearsAllWhenFullyResolved(t *testing.T) {
 
 	spillPath := group.spillFile.Path()
 	var dst []*codeccommon.DMLMessage
-	dst = group.ResolveInto(100, dst)
+	dst, err := group.ResolveInto(100, dst)
+	require.NoError(t, err)
 
 	require.Len(t, dst, 2)
 	require.Equal(t, m1.GetCommitTs(), dst[0].GetCommitTs())
@@ -119,7 +123,7 @@ func TestEventsGroupResolveIntoClearsAllWhenFullyResolved(t *testing.T) {
 
 	require.Len(t, group.messages, 0)
 	require.Nil(t, group.spillFile)
-	_, err := os.Stat(spillPath)
+	_, err = os.Stat(spillPath)
 	require.True(t, os.IsNotExist(err))
 }
 
@@ -133,7 +137,8 @@ func TestEventsGroupResolveIntoSortsOutOfOrderResolvedMessages(t *testing.T) {
 	group.AppendMessage(m3)
 
 	var dst []*codeccommon.DMLMessage
-	dst = group.ResolveInto(25, dst)
+	dst, err := group.ResolveInto(25, dst)
+	require.NoError(t, err)
 
 	require.Len(t, dst, 2)
 	require.Equal(t, m2.GetCommitTs(), dst[0].GetCommitTs())
@@ -153,7 +158,8 @@ func TestEventsGroupResolveIntoKeepsSameCommitTsStable(t *testing.T) {
 	group.AppendMessage(m3)
 
 	var dst []*codeccommon.DMLMessage
-	dst = group.ResolveInto(20, dst)
+	dst, err := group.ResolveInto(20, dst)
+	require.NoError(t, err)
 
 	require.Len(t, dst, 3)
 	require.Equal(t, m2.GetCommitTs(), dst[0].GetCommitTs())
@@ -171,7 +177,8 @@ func TestEventsGroupGetAllMessagesSortsOutOfOrderMessages(t *testing.T) {
 	group.AppendMessage(m2)
 	group.AppendMessage(m3)
 
-	messages := group.GetAllMessages()
+	messages, err := group.GetAllMessages()
+	require.NoError(t, err)
 
 	require.Len(t, messages, 3)
 	require.Equal(t, m2.GetCommitTs(), messages[0].GetCommitTs())
@@ -205,7 +212,8 @@ func TestEventsGroupRestoresSpilledEventRowsAndTableInfo(t *testing.T) {
 	group := NewEventsGroup(0, 1)
 	group.AppendMessage(codeccommon.NewDMLMessageFromEvent(event))
 
-	messages := group.GetAllMessages()
+	messages, err := group.GetAllMessages()
+	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	restored := messages[0].ToDMLEvent()
 	require.Equal(t, uint64(100), restored.CommitTs)
@@ -252,12 +260,24 @@ func BenchmarkEventsGroupResolveInto(b *testing.B) {
 
 			b.ReportAllocs()
 			b.ResetTimer()
+			b.StopTimer()
 			for b.Loop() {
 				group := NewEventsGroup(0, 1)
 				for _, message := range source {
-					group.AppendMessage(message)
+					if err := group.AppendMessage(message); err != nil {
+						b.Fatal(err)
+					}
 				}
-				dst = group.ResolveInto(benchmark.resolveTs, dst[:0])
+				b.StartTimer()
+				var err error
+				dst, err = group.ResolveInto(benchmark.resolveTs, dst[:0])
+				b.StopTimer()
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := group.Cleanup(); err != nil {
+					b.Fatal(err)
+				}
 			}
 		})
 	}
