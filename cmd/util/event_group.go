@@ -79,7 +79,6 @@ func (g *EventsGroup) AppendMessageWithPostRestore(
 func (g *EventsGroup) appendMessage(
 	message *codeccommon.DMLMessage,
 	postRestore func(*codeccommon.DMLMessage) *codeccommon.DMLMessage,
-
 ) error {
 	if message == nil {
 		return errors.ErrSpillFileOp.FastGenByArgs("cannot spill nil DML message")
