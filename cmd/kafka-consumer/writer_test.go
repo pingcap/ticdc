@@ -299,7 +299,9 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	w.appendMessage2Group(newDMLMessageForWriterTest(20), p, kafka.Offset(3))
 
 	p.watermark = 20
-	require.True(t, w.Write(ctx, codeccommon.MessageTypeResolved))
+	needCommit, err := w.Write(ctx, codeccommon.MessageTypeResolved)
+	require.NoError(t, err)
+	require.True(t, needCommit)
 	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
 }
 
@@ -323,9 +325,10 @@ func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 		maxMessageBytes: 1,
 	}
 
-	needCommit := w.WriteMessage(ctx, &kafka.Message{
+	needCommit, err := w.WriteMessage(ctx, &kafka.Message{
 		TopicPartition: kafka.TopicPartition{Partition: 0, Offset: kafka.Offset(10)},
 	})
+	require.NoError(t, err)
 
 	require.False(t, needCommit)
 	require.Nil(t, progress.eventsGroup[1])
@@ -353,7 +356,8 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 	w.appendMessage2Group(newDMLMessageForWriterTest(10), progress, kafka.Offset(10))
 
 	require.NotNil(t, progress.eventsGroup[1])
-	resolved := progress.eventsGroup[1].ResolveInto(20, nil)
+	resolved, err := progress.eventsGroup[1].ResolveInto(20, nil)
+	require.NoError(t, err)
 	require.Len(t, resolved, 1)
 	require.Equal(t, uint64(10), resolved[0].GetCommitTs())
 }
@@ -404,7 +408,8 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(200)), progress, kafka.Offset(10))
 	w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(100)), progress, kafka.Offset(11))
 
-	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
+	resolved, err := progress.eventsGroup[1].ResolveInto(150, nil)
+	require.NoError(t, err)
 	require.Len(t, resolved, 1)
 	require.Equal(t, uint64(100), resolved[0].GetCommitTs())
 }
@@ -452,7 +457,8 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 			w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(200)), progress, kafka.Offset(10))
 			w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(100)), progress, kafka.Offset(11))
 
-			resolved := progress.eventsGroup[1].ResolveInto(150, nil)
+			resolved, err := progress.eventsGroup[1].ResolveInto(150, nil)
+			require.NoError(t, err)
 			require.Len(t, resolved, 1)
 			require.Equal(t, uint64(100), resolved[0].GetCommitTs())
 		})

@@ -294,7 +294,9 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	w.appendMessage2Group(newDMLMessageForWriterTest(20), p)
 
 	p.watermark = 20
-	require.True(t, w.Write(ctx, codeccommon.MessageTypeResolved))
+	needCommit, err := w.Write(ctx, codeccommon.MessageTypeResolved)
+	require.NoError(t, err)
+	require.True(t, needCommit)
 	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
 }
 
@@ -326,7 +328,8 @@ func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 		protocol:   config.ProtocolCanalJSON,
 	}
 
-	needCommit := w.WriteMessage(ctx, fakePulsarMessage{key: "k", payload: []byte(`{"fake":"row"}`)})
+	needCommit, err := w.WriteMessage(ctx, fakePulsarMessage{key: "k", payload: []byte(`{"fake":"row"}`)})
+	require.NoError(t, err)
 
 	require.False(t, needCommit)
 	require.Nil(t, progress.eventsGroup[1])
@@ -349,7 +352,8 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 	w.appendMessage2Group(newDMLMessageForWriterTest(10), progress)
 
 	require.NotNil(t, progress.eventsGroup[1])
-	resolved := progress.eventsGroup[1].ResolveInto(20, nil)
+	resolved, err := progress.eventsGroup[1].ResolveInto(20, nil)
+	require.NoError(t, err)
 	require.Len(t, resolved, 1)
 	require.Equal(t, uint64(10), resolved[0].GetCommitTs())
 }
@@ -381,20 +385,17 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
 	w.onDDL(ddl)
 	require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
 
-	newDMLMessage := func(commitTs uint64) *codeccommon.DMLMessage {
-		return codeccommon.NewDMLMessage(1, "target", "dst", commitTs, common.RowTypeUpdate, nil)
-	}
-
 	progress := w.progresses[0]
-	w.appendMessage2Group(newDMLMessage(200), progress)
-	w.appendMessage2Group(newDMLMessage(100), progress)
+	w.appendMessage2Group(newDMLMessageForWriterTest(200), progress)
+	w.appendMessage2Group(newDMLMessageForWriterTest(100), progress)
 
-	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
+	resolved, err := progress.eventsGroup[1].ResolveInto(150, nil)
+	require.NoError(t, err)
 	require.Len(t, resolved, 1)
 	require.Equal(t, uint64(100), resolved[0].GetCommitTs())
 }
 
-func TestWriteMessageDefersDMLAssemblyUntilFlush(t *testing.T) {
+func TestWriteMessageSpillsDMLImmediately(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	s := sinkmock.NewMockSink(ctrl)
@@ -423,21 +424,28 @@ func TestWriteMessageDefersDMLAssemblyUntilFlush(t *testing.T) {
 		protocol:   config.ProtocolCanalJSON,
 	}
 
-	needCommit := w.WriteMessage(ctx, fakePulsarMessage{key: "k", payload: []byte(`{"fake":"row"}`)})
+	needCommit, err := w.WriteMessage(ctx, fakePulsarMessage{key: "k", payload: []byte(`{"fake":"row"}`)})
+	require.NoError(t, err)
 	require.False(t, needCommit)
 	require.Equal(t, 1, decoder.addKeyValueCount)
 	require.Equal(t, 1, decoder.hasNextCount)
 	require.Equal(t, 1, decoder.nextDMLMessageCount)
-	require.Zero(t, decoder.toDMLEventCount)
-	require.Len(t, progress.eventsGroup[1].ResolveInto(99, nil), 0)
+	require.Equal(t, 1, decoder.toDMLEventCount)
+	resolved, err := progress.eventsGroup[1].ResolveInto(99, nil)
+	require.NoError(t, err)
+	require.Len(t, resolved, 0)
 
 	progress.watermark = 100
-	require.True(t, w.Write(ctx, codeccommon.MessageTypeResolved))
+	needCommit, err = w.Write(ctx, codeccommon.MessageTypeResolved)
+	require.NoError(t, err)
+	require.True(t, needCommit)
 	require.Equal(t, 1, decoder.addKeyValueCount)
 	require.Equal(t, 1, decoder.hasNextCount)
 	require.Equal(t, 1, decoder.nextDMLMessageCount)
 	require.Equal(t, 1, decoder.toDMLEventCount)
-	require.Empty(t, progress.eventsGroup[1].ResolveInto(100, nil))
+	resolved, err = progress.eventsGroup[1].ResolveInto(100, nil)
+	require.NoError(t, err)
+	require.Empty(t, resolved)
 	require.Equal(t, []byte(`{"fake":"row"}`), decoder.lastValue)
 }
 
