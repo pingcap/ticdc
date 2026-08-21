@@ -85,7 +85,7 @@ func newKafkaSinkComponent(
 	}
 	options.Topic = topic
 
-	comp.factory, err = kafka.NewSaramaFactory(ctx, options, changefeedID)
+	comp.factory, err = kafka.NewFactory(ctx, options, changefeedID)
 	if err != nil {
 		return comp, protocol, err
 	}

@@ -72,10 +72,6 @@ func (s *sink) SinkType() common.SinkType {
 	return common.KafkaSinkType
 }
 
-var createKafkaFactory = func(createSaramaFactory func() (kafka.Factory, error)) (kafka.Factory, error) {
-	return createSaramaFactory()
-}
-
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
 	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
@@ -116,9 +112,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 		return err
 	}
 
-	factory, err := createKafkaFactory(func() (kafka.Factory, error) {
-		return kafka.NewSaramaFactory(ctx, options, changefeedID)
-	})
+	factory, err := kafka.NewFactory(ctx, options, changefeedID)
 	if err != nil {
 		return err
 	}
@@ -176,6 +170,7 @@ func newWithComponents(
 		}
 		comp.close()
 		statistics.Close()
+		kafka.CleanupFactoryMetrics(comp.factory)
 	}()
 
 	asyncProducer, err = comp.factory.AsyncProducer(ctx)
@@ -571,6 +566,7 @@ func (s *sink) Close() {
 	s.dmlProducer.Close()
 	s.comp.close()
 	s.statistics.Close()
+	kafka.CleanupFactoryMetrics(s.comp.factory)
 }
 
 func (s *sink) BatchCount() int {

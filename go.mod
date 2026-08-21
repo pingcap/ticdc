@@ -44,6 +44,8 @@ require (
 	github.com/imdario/mergo v0.3.16
 	github.com/integralist/go-findroot v0.0.0-20160518114804-ac90681525dc
 	github.com/jarcoal/httpmock v1.2.0
+	github.com/jcmturner/gofork v1.7.6
+	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/json-iterator/go v1.1.12
 	github.com/klauspost/compress v1.19.0
 	github.com/linkedin/goavro/v2 v2.14.0
@@ -74,6 +76,10 @@ require (
 	github.com/tikv/pd v1.1.0-beta.0.20260604125942-9f1c47b1e851
 	github.com/tikv/pd/client v0.0.0-20260805103528-afa43111d149
 	github.com/tinylib/msgp v1.5.0
+	github.com/twmb/franz-go v1.21.6
+	github.com/twmb/franz-go/pkg/kadm v1.18.0
+	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260727183601-4176fc0fcaf7
+	github.com/twmb/franz-go/pkg/kmsg v1.13.1
 	github.com/uber-go/atomic v1.4.0
 	github.com/xdg/scram v1.0.5
 	github.com/zeebo/assert v1.3.0
@@ -242,8 +248,6 @@ require (
 	github.com/influxdata/tdigest v0.0.1 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
-	github.com/jcmturner/gofork v1.7.6 // indirect
-	github.com/jcmturner/gokrb5/v8 v8.4.4 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
 	github.com/jedib0t/go-pretty/v6 v6.2.2 // indirect
 	github.com/jellydator/ttlcache/v3 v3.0.1 // indirect

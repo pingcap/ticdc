@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kfake"
 	"go.uber.org/atomic"
 )
 
@@ -91,6 +92,9 @@ func TestSinkWorkersReturnContextError(t *testing.T) {
 }
 
 func TestVerifyInvalidConfig(t *testing.T) {
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, kafkaSinkTestTopic))
+	defer cluster.Close()
+
 	schemaRegistry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "invalid response", http.StatusInternalServerError)
 	}))
@@ -101,27 +105,9 @@ func TestVerifyInvalidConfig(t *testing.T) {
 		Protocol:       &avroProtocol,
 		SchemaRegistry: &schemaRegistry.URL,
 	}
-	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/" + kafkaSinkTestTopic +
+	sinkURI, err := url.Parse("kafka://" + cluster.ListenAddrs()[0] + "/" + kafkaSinkTestTopic +
 		"?required-acks=1&kafka-version=2.4.0")
 	require.NoError(t, err)
-
-	ctrl := gomock.NewController(t)
-	adminClient := kafka.NewMockAdminClient(ctrl)
-	factory := kafka.NewMockFactory(ctrl)
-	gomock.InOrder(
-		factory.EXPECT().AdminClient(gomock.Any()).Return(adminClient, nil),
-		adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, true).Return(
-			map[string]kafka.TopicDetail{kafkaSinkTestTopic: {Name: kafkaSinkTestTopic}}, nil),
-		adminClient.EXPECT().Close(),
-	)
-
-	originalCreateKafkaFactory := createKafkaFactory
-	createKafkaFactory = func(_ func() (kafka.Factory, error)) (kafka.Factory, error) {
-		return factory, nil
-	}
-	t.Cleanup(func() {
-		createKafkaFactory = originalCreateKafkaFactory
-	})
 
 	changefeedID := common.NewChangefeedID4Test("test", "verify-invalid-config")
 	err = Verify(context.Background(), changefeedID, sinkURI, sinkConfig)

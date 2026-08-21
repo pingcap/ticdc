@@ -38,6 +38,49 @@ const (
 	mockTopicMessageMaxBytes  = "1048588"
 )
 
+func TestKafkaClientSelection(t *testing.T) {
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "client-selection")
+	require.Equal(t, KafkaClientFranz, NewOptions().Client)
+
+	for _, test := range []struct {
+		name     string
+		uri      string
+		expected string
+		wantErr  bool
+	}{
+		{
+			name:     "URI selects sarama",
+			uri:      "kafka://127.0.0.1:9092/topic?kafka-client=sarama",
+			expected: KafkaClientSarama,
+		},
+		{
+			name:     "URI value is case insensitive",
+			uri:      "kafka://127.0.0.1:9092/topic?kafka-client=FRANZ",
+			expected: KafkaClientFranz,
+		},
+		{
+			name:    "invalid client",
+			uri:     "kafka://127.0.0.1:9092/topic?kafka-client=other",
+			wantErr: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sinkURI, err := url.Parse(test.uri)
+			require.NoError(t, err)
+
+			options := NewOptions()
+			err = options.Apply(changefeedID, sinkURI, &config.SinkConfig{})
+			if test.wantErr {
+				require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, test.expected, options.Client)
+		})
+	}
+}
+
 func TestCompleteOptions(t *testing.T) {
 	options := NewOptions()
 

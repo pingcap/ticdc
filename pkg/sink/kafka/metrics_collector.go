@@ -125,6 +125,7 @@ func (m *saramaMetricsCollector) collectProducerMetrics() {
 func (m *saramaMetricsCollector) collectBrokerMetrics() {
 	keyspace := m.changefeedID.Keyspace()
 	changefeedID := m.changefeedID.Name()
+
 	for id := range m.brokers {
 		brokerID := strconv.Itoa(int(id))
 		outgoingByteRateMetric := m.registry.Get(

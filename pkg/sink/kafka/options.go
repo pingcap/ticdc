@@ -40,6 +40,10 @@ const (
 	defaultMaxRetry = 5
 	// defaultTimeout is the default timeout for Kafka connections.
 	defaultTimeout = 10 * time.Second
+	// KafkaClientFranz is the default Kafka client implementation.
+	KafkaClientFranz = "franz"
+	// KafkaClientSarama keeps the master implementation available as a fallback.
+	KafkaClientSarama = "sarama"
 )
 
 const (
@@ -108,6 +112,7 @@ func requireAcksFromString(acks int) (RequiredAcks, error) {
 }
 
 type urlConfig struct {
+	KafkaClient                  *string `form:"kafka-client"`
 	PartitionNum                 *int32  `form:"partition-num"`
 	ReplicationFactor            *int16  `form:"replication-factor"`
 	KafkaVersion                 *string `form:"kafka-version"`
@@ -140,6 +145,7 @@ type urlConfig struct {
 
 // options stores Kafka sink configurations
 type options struct {
+	Client          string
 	Topic           string
 	BrokerEndpoints []string
 
@@ -177,6 +183,7 @@ type options struct {
 // NewOptions returns a default Kafka configuration
 func NewOptions() *options {
 	return &options{
+		Client:             KafkaClientFranz,
 		Version:            "2.4.0",
 		MaxMessageBytes:    config.DefaultMaxMessageBytes,
 		MaxBatchedBytes:    config.DefaultMaxMessageBytes,
@@ -262,6 +269,12 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		o.MaxMessageBytes = *urlParameter.MaxMessageBytes
 	}
 	o.MaxBatchedBytes = o.MaxMessageBytes
+	if urlParameter.KafkaClient != nil {
+		o.Client = strings.ToLower(strings.TrimSpace(*urlParameter.KafkaClient))
+	}
+	if o.Client != KafkaClientFranz && o.Client != KafkaClientSarama {
+		return errors.ErrKafkaInvalidConfig.GenWithStack("invalid kafka-client %q, only support franz and sarama", o.Client)
+	}
 
 	if urlParameter.MaxRetry != nil && *urlParameter.MaxRetry >= 0 {
 		o.MaxRetry = *urlParameter.MaxRetry
