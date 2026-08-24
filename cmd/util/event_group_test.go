@@ -231,30 +231,19 @@ func TestEventsGroupRestoresRowsFromSharedChunk(t *testing.T) {
 		Name: ast.NewCIStr("t"),
 		Columns: []*model.ColumnInfo{
 			{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLonglong)},
-			{ID: 2, Name: ast.NewCIStr("v1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
 		},
 	})
 	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 4)
-	for _, value := range []struct {
-		null  bool
-		value int64
-	}{
-		{null: true}, {value: 1}, {null: true}, {value: 2},
-	} {
-		rows.AppendInt64(0, 42)
-		if value.null {
-			rows.AppendNull(1)
-		} else {
-			rows.AppendInt64(1, value.value)
-		}
+	for i := int64(0); i < 4; i++ {
+		rows.AppendInt64(0, i)
 	}
 
 	group := NewEventsGroup(0, 1)
 	for _, offset := range []int{0, 2} {
 		event := commonEvent.NewDMLEvent(common.NewDispatcherID(), 1, 90, 100, tableInfo)
 		event.Rows = rows
-		event.RowTypes = []common.RowType{common.RowTypeInsert, common.RowTypeInsert}
-		event.Length = 2
+		event.RowTypes = []common.RowType{common.RowTypeUpdate}
+		event.Length = 1
 		event.PreviousTotalOffset = offset
 		require.NoError(t, group.AppendMessage(codeccommon.NewDMLMessageFromEvent(event)))
 	}
@@ -265,12 +254,16 @@ func TestEventsGroupRestoresRowsFromSharedChunk(t *testing.T) {
 	for _, message := range messages {
 		restored := message.ToDMLEvent()
 		require.Zero(t, restored.PreviousTotalOffset)
-		require.Len(t, restored.RowTypes, restored.Rows.NumRows())
+		require.Equal(t, 2, restored.Rows.NumRows())
 	}
 
 	second := messages[1].ToDMLEvent()
-	require.True(t, second.Rows.GetRow(0).IsNull(1))
-	require.Equal(t, int64(2), second.Rows.GetRow(1).GetInt64(1))
+	row, ok := second.GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, int64(2), row.PreRow.GetInt64(0))
+	require.Equal(t, int64(3), row.Row.GetInt64(0))
+	_, ok = second.GetNextRow()
+	require.False(t, ok)
 }
 
 func TestEventsGroupSpillDoesNotSignalDownstreamCallbacks(t *testing.T) {

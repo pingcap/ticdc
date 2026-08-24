@@ -306,7 +306,17 @@ func marshalDMLRows(row *commonEvent.DMLEvent, tableInfoStored bool) (data []byt
 	begin := row.PreviousTotalOffset
 	end := row.Rows.NumRows()
 	if len(row.RowTypes) != 0 {
-		end = begin + len(row.RowTypes)
+		end = begin
+		for _, rowType := range row.RowTypes {
+			switch rowType {
+			case commonType.RowTypeInsert, commonType.RowTypeDelete:
+				end++
+			case commonType.RowTypeUpdate:
+				end += 2
+			default:
+				return nil, errors.ErrSpillFileOp.FastGenByArgs("DML event has invalid row type")
+			}
+		}
 	}
 	if begin < 0 || end < begin || end > row.Rows.NumRows() {
 		return nil, errors.ErrSpillFileOp.FastGenByArgs("DML event rows are outside the shared chunk")
