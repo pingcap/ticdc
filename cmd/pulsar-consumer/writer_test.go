@@ -276,7 +276,7 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
 		flushedCommitTs = append(flushedCommitTs, event.GetCommitTs())
 		event.PostFlush()
-	}).Times(2)
+	}).Times(3)
 
 	p := &partitionProgress{
 		partition:   0,
@@ -297,7 +297,7 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	needCommit, err := w.Write(ctx, codeccommon.MessageTypeResolved)
 	require.NoError(t, err)
 	require.True(t, needCommit)
-	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
+	require.Equal(t, []uint64{10, 20, 20}, flushedCommitTs)
 }
 
 func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {

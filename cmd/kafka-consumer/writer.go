@@ -183,11 +183,14 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 			if err != nil {
 				return err
 			}
-			events := make([]*event.DMLEvent, 0, len(messages))
+			// A commit-ts is only a timestamp in a multi-source stream. It does
+			// not identify one transaction, so events from different upstreams can
+			// legitimately have the same value while carrying different schema
+			// snapshots. Keep restored events separate instead of merging their
+			// chunks by commit-ts.
 			for _, message := range messages {
-				events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
+				resolvedEvents = append(resolvedEvents, message.ToDMLEvent())
 			}
-			resolvedEvents = append(resolvedEvents, events...)
 		}
 	}
 
@@ -298,11 +301,11 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			events := make([]*event.DMLEvent, 0, len(messages))
+			// See flushDDLEvent: events with an identical commit-ts can belong to
+			// different upstream transactions in a multi-source stream.
 			for _, message := range messages {
-				events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
+				resolvedEvents = append(resolvedEvents, message.ToDMLEvent())
 			}
-			resolvedEvents = append(resolvedEvents, events...)
 		}
 	}
 	total := len(resolvedEvents)
