@@ -173,6 +173,17 @@ func (o *countingOperator) OnTaskRemoved()           {}
 func (o *countingOperator) String() string           { return "counting-operator" }
 func (o *countingOperator) BlockTsForward() bool     { return o.blockTsForward }
 
+type blockingTaskRemovedOperator struct {
+	*countingOperator
+	taskRemovedEntered chan struct{}
+	releaseTaskRemoved chan struct{}
+}
+
+func (o *blockingTaskRemovedOperator) OnTaskRemoved() {
+	close(o.taskRemovedEntered)
+	<-o.releaseTaskRemoved
+}
+
 type synchronizedAdmissionOperator struct {
 	*countingOperator
 	idCalls syncatomic.Int32
@@ -503,6 +514,61 @@ func TestController_RemoveReplicaSet_ReplacesRemoveOperatorOnTaskRemoved(t *test
 
 	require.Equal(t, int32(0), postFinishCount.Load())
 	require.NotNil(t, oc.GetOperator(replicaSet.ID))
+}
+
+func TestController_RemoveReplicaSetBlocksNormalAdmissionUntilReplacement(t *testing.T) {
+	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, changefeedID, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	setAliveNodes(nodeManager, map[node.ID]*node.Info{nodeA: {ID: nodeA}})
+
+	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode)
+	old := &blockingTaskRemovedOperator{
+		countingOperator:   &countingOperator{id: replicaSet.ID, targetNode: nodeA},
+		taskRemovedEntered: make(chan struct{}),
+		releaseTaskRemoved: make(chan struct{}),
+	}
+	require.True(t, oc.AddOperator(old))
+
+	replacement := newRemoveDispatcherOperator(
+		spanController,
+		replicaSet,
+		heartbeatpb.OperatorType_O_Remove,
+		7,
+	)
+	replacementDone := make(chan struct{})
+	go func() {
+		oc.removeReplicaSet(replacement)
+		close(replacementDone)
+	}()
+	<-old.taskRemovedEntered
+
+	concurrent := &countingOperator{id: replicaSet.ID, targetNode: nodeA}
+	addStarted := make(chan struct{})
+	addResult := make(chan bool, 1)
+	go func() {
+		close(addStarted)
+		addResult <- oc.AddOperator(concurrent)
+	}()
+	<-addStarted
+	require.Never(t, func() bool { return len(addResult) != 0 }, 100*time.Millisecond, 10*time.Millisecond)
+
+	close(old.releaseTaskRemoved)
+	require.Eventually(t, func() bool {
+		select {
+		case <-replacementDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return len(addResult) == 1 }, time.Second, 10*time.Millisecond)
+	require.False(t, <-addResult)
+	require.Equal(t, int32(0), concurrent.startCount.Load())
+	require.Same(t, replacement, oc.GetOperator(replicaSet.ID))
 }
 
 func TestController_QuiesceExceptFreezesNonAllowedOperators(t *testing.T) {
