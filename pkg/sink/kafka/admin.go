@@ -128,9 +128,6 @@ func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool
 
 	for _, meta := range metaList {
 		if meta.Err != sarama.ErrNoError {
-			if meta.Err == sarama.ErrUnknownTopicOrPartition {
-				continue
-			}
 			if !ignoreTopicError {
 				if IsAuthorizationFailed(meta.Err) {
 					return nil, errors.WrapError(errors.ErrKafkaAuthorizationFailed, meta.Err, "describe-topic", meta.Name)

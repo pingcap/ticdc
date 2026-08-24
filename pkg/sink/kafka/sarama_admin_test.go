@@ -147,7 +147,7 @@ func TestGetTopicConfig(t *testing.T) {
 func TestGetTopicsMeta(t *testing.T) {
 	t.Parallel()
 
-	t.Run("returns valid topics and ignores unknown topics", func(t *testing.T) {
+	t.Run("returns unknown topic error", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		admin := NewMocksaramaClusterAdmin(ctrl)
 		admin.EXPECT().DescribeTopics([]string{"valid-topic", "missing-topic"}).Return([]*sarama.TopicMetadata{
@@ -167,13 +167,9 @@ func TestGetTopicsMeta(t *testing.T) {
 
 		topics, err := client.GetTopicsMeta([]string{"valid-topic", "missing-topic"}, false)
 
-		require.NoError(t, err)
-		require.Equal(t, map[string]TopicDetail{
-			"valid-topic": {
-				Name:          "valid-topic",
-				NumPartitions: 2,
-			},
-		}, topics)
+		require.Nil(t, topics)
+		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+		require.ErrorIs(t, err, sarama.ErrUnknownTopicOrPartition)
 	})
 
 	t.Run("missing response", func(t *testing.T) {
