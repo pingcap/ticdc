@@ -259,7 +259,7 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 			zap.String("operator", op.String()))
 		return false
 	}
-	return oc.pushOperatorWithAdmission(op)
+	return oc.pushOperatorWithAdmission(op, false)
 }
 
 func (oc *Controller) UpdateOperatorStatus(id common.DispatcherID, from node.ID, status *heartbeatpb.TableSpanStatus) {
@@ -488,35 +488,32 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 		old.OP.OnTaskRemoved()
 		oc.finalizeOperator(old, op.ID())
 	}
-	oc.pushOperatorWithAdmission(op)
+	oc.pushOperatorWithAdmission(op, true)
 }
 
-// pushOperator add an operator to the controller queue.
-func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
-	oc.admissionMu.RLock()
-	defer oc.admissionMu.RUnlock()
+func (oc *Controller) pushOperatorWithAdmission(
+	op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+	replaceExisting bool,
+) bool {
+	withTime := operator.NewOperatorWithTime(op, time.Now())
+	opID := op.ID()
 
-	if !oc.isOperatorAllowed(op.ID()) {
-		log.Info("skip operator while controller is quiescing",
+	oc.mu.Lock()
+	if old, ok := oc.operators[opID]; ok && !replaceExisting {
+		oc.mu.Unlock()
+		log.Info("add operator failed, operator already exists",
 			zap.String("role", oc.role),
 			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.String("dispatcherID", op.ID().String()),
-			zap.String("operator", op.String()))
+			zap.String("operator", op.String()),
+			zap.String("oldOperator", old.OP.String()))
 		return false
 	}
-	return oc.pushOperatorWithAdmission(op)
-}
-
-func (oc *Controller) pushOperatorWithAdmission(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
+	oc.operators[opID] = withTime
+	oc.mu.Unlock()
 	log.Info("add operator to running queue",
 		zap.String("role", oc.role),
 		zap.Stringer("changefeedID", oc.changefeedID),
 		zap.String("operator", op.String()))
-	withTime := operator.NewOperatorWithTime(op, time.Now())
-
-	oc.mu.Lock()
-	oc.operators[op.ID()] = withTime
-	oc.mu.Unlock()
 
 	op.Start()
 	// Check affected nodes after Start to avoid operators being forced into terminal states
