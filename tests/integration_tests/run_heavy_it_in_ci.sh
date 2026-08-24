@@ -194,6 +194,10 @@ echo "Group Number (parsed): ${group_num}"
 if [[ $group_num =~ ^[0-9]+$ ]] && [[ -n ${groups[10#${group_num}]} ]]; then
 	# force use decimal index
 	test_names="${groups[10#${group_num}]}"
+	if [[ "$sink_type" == "mysql" ]]; then
+		# Temporarily run the regression case in every MySQL shard.
+		test_names="ddl_with_random_move_table"
+	fi
 	# Run test cases
 	echo "Run cases: ${test_names}"
 	export TICDC_NEWARCH=true
