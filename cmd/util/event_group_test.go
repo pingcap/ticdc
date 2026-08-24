@@ -242,7 +242,9 @@ func TestEventsGroupRestoresRowsFromSharedChunk(t *testing.T) {
 	for _, offset := range []int{0, 2} {
 		event := commonEvent.NewDMLEvent(common.NewDispatcherID(), 1, 90, 100, tableInfo)
 		event.Rows = rows
-		event.RowTypes = []common.RowType{common.RowTypeUpdate}
+		// A decoded update occupies two RowTypes entries, matching its before
+		// and after rows in the shared chunk.
+		event.RowTypes = []common.RowType{common.RowTypeUpdate, common.RowTypeUpdate}
 		event.Length = 1
 		event.PreviousTotalOffset = offset
 		require.NoError(t, group.AppendMessage(codeccommon.NewDMLMessageFromEvent(event)))
@@ -263,6 +265,41 @@ func TestEventsGroupRestoresRowsFromSharedChunk(t *testing.T) {
 	require.Equal(t, int64(2), row.PreRow.GetInt64(0))
 	require.Equal(t, int64(3), row.Row.GetInt64(0))
 	_, ok = second.GetNextRow()
+	require.False(t, ok)
+}
+
+func TestEventsGroupRestoresCompactUpdateRows(t *testing.T) {
+	tableInfo := common.WrapTableInfo("test", &model.TableInfo{
+		ID:   1,
+		Name: ast.NewCIStr("t"),
+		Columns: []*model.ColumnInfo{
+			{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLonglong)},
+		},
+	})
+	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 2)
+	rows.AppendInt64(0, 1)
+	rows.AppendInt64(0, 2)
+
+	// The Avro decoder represents an update with one RowType even though the
+	// chunk still contains both before and after rows.
+	event := commonEvent.NewDMLEvent(common.NewDispatcherID(), 1, 90, 100, tableInfo)
+	event.Rows = rows
+	event.RowTypes = []common.RowType{common.RowTypeUpdate}
+	event.Length = 1
+
+	group := NewEventsGroup(0, 1)
+	require.NoError(t, group.AppendMessage(codeccommon.NewDMLMessageFromEvent(event)))
+	messages, err := group.GetAllMessages()
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+
+	restored := messages[0].ToDMLEvent()
+	require.Equal(t, 2, restored.Rows.NumRows())
+	row, ok := restored.GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, int64(1), row.PreRow.GetInt64(0))
+	require.Equal(t, int64(2), row.Row.GetInt64(0))
+	_, ok = restored.GetNextRow()
 	require.False(t, ok)
 }
 

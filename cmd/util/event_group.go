@@ -306,13 +306,26 @@ func marshalDMLRows(row *commonEvent.DMLEvent, tableInfoStored bool) (data []byt
 	begin := row.PreviousTotalOffset
 	end := row.Rows.NumRows()
 	if len(row.RowTypes) != 0 {
-		end = begin
+		end = begin + len(row.RowTypes)
+		// Most decoders, including batched DML events, use one RowType entry per
+		// physical chunk row. An update consequently appears twice. The Avro
+		// decoder instead represents its single logical update with one entry,
+		// while retaining both rows in the chunk. Length distinguishes the two
+		// encodings: it is the number of logical row changes.
+		compactRowTypes := row.Length > 0 && len(row.RowTypes) == int(row.Length)
+		if compactRowTypes {
+			end = begin
+		}
 		for _, rowType := range row.RowTypes {
 			switch rowType {
 			case commonType.RowTypeInsert, commonType.RowTypeDelete:
-				end++
+				if compactRowTypes {
+					end++
+				}
 			case commonType.RowTypeUpdate:
-				end += 2
+				if compactRowTypes {
+					end += 2
+				}
 			default:
 				return nil, errors.ErrSpillFileOp.FastGenByArgs("DML event has invalid row type")
 			}
