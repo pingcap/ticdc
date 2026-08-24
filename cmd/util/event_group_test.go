@@ -225,6 +225,65 @@ func TestEventsGroupRestoresSpilledEventRowsAndTableInfo(t *testing.T) {
 	require.Equal(t, int64(42), restored.Rows.GetRow(0).GetInt64(0))
 }
 
+func TestEventsGroupRestoresRowsFromSharedChunk(t *testing.T) {
+	tableInfo := common.WrapTableInfo("test", &model.TableInfo{
+		ID:   1,
+		Name: ast.NewCIStr("t"),
+		Columns: []*model.ColumnInfo{
+			{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLonglong)},
+			{ID: 2, Name: ast.NewCIStr("v1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+		},
+	})
+	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 4)
+	for _, value := range []struct {
+		null  bool
+		value int64
+	}{
+		{null: true}, {value: 1}, {null: true}, {value: 2},
+	} {
+		rows.AppendInt64(0, 42)
+		if value.null {
+			rows.AppendNull(1)
+		} else {
+			rows.AppendInt64(1, value.value)
+		}
+	}
+
+	group := NewEventsGroup(0, 1)
+	for _, offset := range []int{0, 2} {
+		event := commonEvent.NewDMLEvent(common.NewDispatcherID(), 1, 90, 100, tableInfo)
+		event.Rows = rows
+		event.RowTypes = []common.RowType{common.RowTypeInsert, common.RowTypeInsert}
+		event.Length = 2
+		event.PreviousTotalOffset = offset
+		require.NoError(t, group.AppendMessage(codeccommon.NewDMLMessageFromEvent(event)))
+	}
+
+	messages, err := group.GetAllMessages()
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	for _, message := range messages {
+		restored := message.ToDMLEvent()
+		require.Zero(t, restored.PreviousTotalOffset)
+		require.Len(t, restored.RowTypes, restored.Rows.NumRows())
+	}
+
+	second := messages[1].ToDMLEvent()
+	require.True(t, second.Rows.GetRow(0).IsNull(1))
+	require.Equal(t, int64(2), second.Rows.GetRow(1).GetInt64(1))
+
+	var events []*commonEvent.DMLEvent
+	for _, message := range messages {
+		events = AppendOrMergeDMLEvent(events, message.ToDMLEvent())
+	}
+	require.Len(t, events, 1)
+	require.Len(t, events[0].RowTypes, events[0].Rows.NumRows())
+	require.True(t, events[0].Rows.GetRow(0).IsNull(1))
+	require.Equal(t, int64(1), events[0].Rows.GetRow(1).GetInt64(1))
+	require.True(t, events[0].Rows.GetRow(2).IsNull(1))
+	require.Equal(t, int64(2), events[0].Rows.GetRow(3).GetInt64(1))
+}
+
 func TestEventsGroupSpillDoesNotSignalDownstreamCallbacks(t *testing.T) {
 	event := newTestDMLEvent(100, common.RowTypeInsert)
 	var enqueued, flushed int

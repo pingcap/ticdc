@@ -211,7 +211,11 @@ func marshalDMLMessage(message *codeccommon.DMLMessage) (data []byte, row *commo
 	if row.Version == 0 {
 		row.Version = commonEvent.DMLEventVersion1
 	}
-	eventData, err := row.Marshal()
+	// Rows can be shared by several DML events. Persist only this event's rows
+	// below, so its offset must be reset in the serialized event as well.
+	event := *row
+	event.PreviousTotalOffset = 0
+	eventData, err := event.Marshal()
 	if err != nil {
 		return nil, nil, errors.WrapError(errors.ErrSpillFileOp, err, "marshal DML event")
 	}
@@ -299,7 +303,21 @@ func marshalDMLRows(row *commonEvent.DMLEvent, tableInfoStored bool) (data []byt
 	if tableInfoStored {
 		fieldTypes = row.TableInfo.GetFieldSlice()
 	}
-	return chunk.NewCodec(fieldTypes).Encode(row.Rows), nil
+	begin := row.PreviousTotalOffset
+	end := row.Rows.NumRows()
+	if len(row.RowTypes) != 0 {
+		end = begin + len(row.RowTypes)
+	}
+	if begin < 0 || end < begin || end > row.Rows.NumRows() {
+		return nil, errors.ErrSpillFileOp.FastGenByArgs("DML event rows are outside the shared chunk")
+	}
+	if !tableInfoStored && begin != 0 {
+		return nil, errors.ErrSpillFileOp.FastGenByArgs("DML event rows require table info")
+	}
+
+	rows := chunk.NewChunkWithCapacity(fieldTypes, end-begin)
+	rows.Append(row.Rows, begin, end)
+	return chunk.NewCodec(fieldTypes).Encode(rows), nil
 }
 
 func unmarshalDMLMessage(data []byte) (*codeccommon.DMLMessage, error) {
