@@ -53,7 +53,8 @@ type Controller struct {
 	nodeManager     *watcher.NodeManager
 	maintainerEpoch atomic.Uint64
 
-	// admissionMu serializes removing-mode quiesce with normal operator side effects.
+	// admissionMu serializes removing-mode quiesce and remove-operator replacement
+	// with normal operator side effects.
 	// A normal operator must hold the read side from its final allow check through
 	// Start or Schedule/SendCommand so it cannot cross the handoff boundary after
 	// QuiesceExcept has made the controller quiescing.
@@ -465,8 +466,8 @@ func (oc *Controller) cancelOperator(opID common.DispatcherID) {
 }
 
 func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
-	oc.admissionMu.RLock()
-	defer oc.admissionMu.RUnlock()
+	oc.admissionMu.Lock()
+	defer oc.admissionMu.Unlock()
 
 	if !oc.isOperatorAllowed(op.ID()) {
 		log.Info("skip remove operator while controller is quiescing",
