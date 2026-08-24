@@ -439,29 +439,3 @@ func readSpilledUint64(data []byte) (uint64, []byte, error) {
 	}
 	return binary.BigEndian.Uint64(data[:8]), data[8:], nil
 }
-
-// AppendOrMergeDMLEvent appends a DML event, or merges it into the previous event
-// when both events belong to the same table group and have the same commit-ts.
-func AppendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLEvent) []*commonEvent.DMLEvent {
-	var lastDMLEvent *commonEvent.DMLEvent
-	if len(events) > 0 {
-		lastDMLEvent = events[len(events)-1]
-	}
-
-	if lastDMLEvent == nil || lastDMLEvent.GetCommitTs() < row.GetCommitTs() {
-		return append(events, row)
-	}
-
-	if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
-		lastDMLEvent.Rows.Append(row.Rows, 0, row.Rows.NumRows())
-		lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
-		lastDMLEvent.Length += row.Length
-		lastDMLEvent.PostTxnFlushed = append(lastDMLEvent.PostTxnFlushed, row.PostTxnFlushed...)
-		return events
-	}
-
-	log.Panic("append event with smaller commit ts",
-		zap.Int64("tableID", row.GetTableID()),
-		zap.Uint64("lastCommitTs", lastDMLEvent.GetCommitTs()), zap.Uint64("commitTs", row.GetCommitTs()))
-	return events
-}

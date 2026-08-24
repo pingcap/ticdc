@@ -271,17 +271,6 @@ func TestEventsGroupRestoresRowsFromSharedChunk(t *testing.T) {
 	second := messages[1].ToDMLEvent()
 	require.True(t, second.Rows.GetRow(0).IsNull(1))
 	require.Equal(t, int64(2), second.Rows.GetRow(1).GetInt64(1))
-
-	var events []*commonEvent.DMLEvent
-	for _, message := range messages {
-		events = AppendOrMergeDMLEvent(events, message.ToDMLEvent())
-	}
-	require.Len(t, events, 1)
-	require.Len(t, events[0].RowTypes, events[0].Rows.NumRows())
-	require.True(t, events[0].Rows.GetRow(0).IsNull(1))
-	require.Equal(t, int64(1), events[0].Rows.GetRow(1).GetInt64(1))
-	require.True(t, events[0].Rows.GetRow(2).IsNull(1))
-	require.Equal(t, int64(2), events[0].Rows.GetRow(3).GetInt64(1))
 }
 
 func TestEventsGroupSpillDoesNotSignalDownstreamCallbacks(t *testing.T) {
@@ -353,35 +342,4 @@ func BenchmarkEventsGroupResolveInto(b *testing.B) {
 			}
 		})
 	}
-}
-
-func TestAppendOrMergeDMLEventMergesSameCommitTs(t *testing.T) {
-	var flushed []int
-	e1 := newTestDMLEvent(10, common.RowTypeInsert)
-	e1.AddPostFlushFunc(func() { flushed = append(flushed, 1) })
-	e2 := newTestDMLEvent(10, common.RowTypeDelete)
-	e2.AddPostFlushFunc(func() { flushed = append(flushed, 2) })
-
-	events := AppendOrMergeDMLEvent(nil, e1)
-	events = AppendOrMergeDMLEvent(events, e2)
-
-	require.Len(t, events, 1)
-	require.Same(t, e1, events[0])
-	require.Equal(t, int32(2), events[0].Length)
-	require.Equal(t, []common.RowType{common.RowTypeInsert, common.RowTypeDelete}, events[0].RowTypes)
-
-	events[0].PostFlush()
-	require.Equal(t, []int{1, 2}, flushed)
-}
-
-func TestAppendOrMergeDMLEventAppendsDifferentCommitTs(t *testing.T) {
-	e1 := newTestDMLEvent(10, common.RowTypeInsert)
-	e2 := newTestDMLEvent(20, common.RowTypeDelete)
-
-	events := AppendOrMergeDMLEvent(nil, e1)
-	events = AppendOrMergeDMLEvent(events, e2)
-
-	require.Len(t, events, 2)
-	require.Same(t, e1, events[0])
-	require.Same(t, e2, events[1])
 }
