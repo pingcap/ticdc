@@ -163,6 +163,41 @@ type BlockEventStatus struct {
 	blockCommitTs     uint64
 }
 
+type completedBlockEventState struct {
+	mutex      sync.Mutex
+	identifier BlockEventIdentifier
+	valid      bool
+}
+
+func (s *completedBlockEventState) markDone(identifier BlockEventIdentifier) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.identifier = identifier
+	s.valid = true
+}
+
+func (s *completedBlockEventState) latest() (BlockEventIdentifier, bool) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return s.identifier, s.valid
+}
+
+func compareBlockEventIdentifier(a, b BlockEventIdentifier) int {
+	if a.CommitTs < b.CommitTs {
+		return -1
+	}
+	if a.CommitTs > b.CommitTs {
+		return 1
+	}
+	if a.IsSyncPoint == b.IsSyncPoint {
+		return 0
+	}
+	if !a.IsSyncPoint && b.IsSyncPoint {
+		return -1
+	}
+	return 1
+}
+
 func (b *BlockEventStatus) clear() {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()

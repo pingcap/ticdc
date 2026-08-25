@@ -686,6 +686,175 @@ func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
 	require.Equal(t, int32(1), flushCalls.Load())
 }
 
+func TestDuplicateWriteDoesNotOfferDoneWhileWriterStillWriting(t *testing.T) {
+	keyspaceID := getTestingKeyspaceID()
+	tableSpan := getUncompleteTableSpan()
+	tableSpan.KeyspaceID = keyspaceID
+	mockSink := newDispatcherTestSink(t, common.MysqlSinkType)
+
+	writeStarted := make(chan struct{}, 1)
+	writeRelease := make(chan struct{})
+	mockSink.SetWriteBlockEventHook(func(event commonEvent.BlockEvent) error {
+		if event.GetCommitTs() != 20 {
+			event.PostFlush()
+			return nil
+		}
+		select {
+		case writeStarted <- struct{}{}:
+		default:
+		}
+		<-writeRelease
+		event.PostFlush()
+		return nil
+	})
+
+	dispatcher := newDispatcherForTest(mockSink.Sink(), tableSpan)
+	nodeID := node.NewID()
+	ddlEvent := &commonEvent.DDLEvent{
+		FinishedTs: 20,
+		StartTs:    20,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
+	}
+
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, func() {})
+	require.True(t, block)
+
+	msg, ok := takeBlockStatusWithTimeout(t, dispatcher, time.Second)
+	require.True(t, ok, "expected blocking DDL to enter WAITING")
+	require.True(t, msg.State.IsBlocked)
+	require.Equal(t, uint64(20), msg.State.BlockTs)
+	require.Equal(t, heartbeatpb.BlockStage_WAITING, msg.State.Stage)
+
+	await := dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		Action: &heartbeatpb.DispatcherAction{
+			Action:      heartbeatpb.Action_Write,
+			CommitTs:    ddlEvent.FinishedTs,
+			IsSyncPoint: false,
+		},
+	})
+	require.True(t, await)
+
+	select {
+	case <-writeStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected first write action to start sink write")
+	}
+
+	pendingEvent, blockStage := dispatcher.blockEventStatus.getEventAndStage()
+	require.Same(t, ddlEvent, pendingEvent)
+	require.Equal(t, heartbeatpb.BlockStage_WRITING, blockStage)
+
+	failpointName := "github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeDuplicateWriteOfferDone"
+	require.NoError(t, failpoint.Enable(failpointName, `pause`))
+	failpointEnabled := true
+	defer func() {
+		if failpointEnabled {
+			require.NoError(t, failpoint.Disable(failpointName))
+		}
+	}()
+
+	duplicateAwaitCh := make(chan bool, 1)
+	go func() {
+		duplicateAwaitCh <- dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+			Action: &heartbeatpb.DispatcherAction{
+				Action:      heartbeatpb.Action_Write,
+				CommitTs:    ddlEvent.FinishedTs,
+				IsSyncPoint: false,
+			},
+		})
+	}()
+
+	if msg, ok := takeBlockStatusWithTimeout(t, dispatcher, 200*time.Millisecond); ok {
+		require.FailNow(t, "unexpected DONE before duplicate write fallback resumed", "msg=%v", msg)
+	}
+
+	require.NoError(t, failpoint.Disable(failpointName))
+	failpointEnabled = false
+
+	require.False(t, <-duplicateAwaitCh)
+
+	msg, ok = takeBlockStatusWithTimeout(t, dispatcher, 200*time.Millisecond)
+	require.False(t, ok, "duplicate write must not offer DONE before the real write finishes: %v", msg)
+
+	pendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
+	require.Same(t, ddlEvent, pendingEvent)
+	require.Equal(t, heartbeatpb.BlockStage_WRITING, blockStage)
+
+	close(writeRelease)
+
+	msg, ok = takeBlockStatusWithTimeout(t, dispatcher, time.Second)
+	require.True(t, ok, "expected DONE only after the real write finishes")
+	require.True(t, msg.State.IsBlocked)
+	require.Equal(t, uint64(20), msg.State.BlockTs)
+	require.Equal(t, heartbeatpb.BlockStage_DONE, msg.State.Stage)
+
+	require.Eventually(t, func() bool {
+		pendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
+		return pendingEvent == nil && blockStage == heartbeatpb.BlockStage_NONE
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestDuplicateWriteReoffersDoneAfterRealWriteFinished(t *testing.T) {
+	keyspaceID := getTestingKeyspaceID()
+	tableSpan := getUncompleteTableSpan()
+	tableSpan.KeyspaceID = keyspaceID
+	mockSink := newDispatcherTestSink(t, common.MysqlSinkType)
+
+	dispatcher := newDispatcherForTest(mockSink.Sink(), tableSpan)
+	nodeID := node.NewID()
+	ddlEvent := &commonEvent.DDLEvent{
+		FinishedTs: 21,
+		StartTs:    21,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
+	}
+
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, func() {})
+	require.True(t, block)
+
+	msg, ok := takeBlockStatusWithTimeout(t, dispatcher, time.Second)
+	require.True(t, ok, "expected blocking DDL to enter WAITING")
+	require.Equal(t, heartbeatpb.BlockStage_WAITING, msg.State.Stage)
+
+	await := dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		Action: &heartbeatpb.DispatcherAction{
+			Action:      heartbeatpb.Action_Write,
+			CommitTs:    ddlEvent.FinishedTs,
+			IsSyncPoint: false,
+		},
+	})
+	require.True(t, await)
+
+	msg, ok = takeBlockStatusWithTimeout(t, dispatcher, time.Second)
+	require.True(t, ok, "expected DONE after the real write finishes")
+	require.Equal(t, heartbeatpb.BlockStage_DONE, msg.State.Stage)
+
+	require.Eventually(t, func() bool {
+		pendingEvent, blockStage := dispatcher.blockEventStatus.getEventAndStage()
+		return pendingEvent == nil && blockStage == heartbeatpb.BlockStage_NONE
+	}, time.Second, 10*time.Millisecond)
+
+	await = dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		Action: &heartbeatpb.DispatcherAction{
+			Action:      heartbeatpb.Action_Write,
+			CommitTs:    ddlEvent.FinishedTs,
+			IsSyncPoint: false,
+		},
+	})
+	require.False(t, await)
+
+	msg, ok = takeBlockStatusWithTimeout(t, dispatcher, time.Second)
+	require.True(t, ok, "expected duplicate write to re-offer DONE after completion")
+	require.True(t, msg.State.IsBlocked)
+	require.Equal(t, uint64(21), msg.State.BlockTs)
+	require.Equal(t, heartbeatpb.BlockStage_DONE, msg.State.Stage)
+}
+
 // test uncompelete table span can correctly handle the ddl events
 func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	count.Swap(0)

@@ -182,6 +182,10 @@ type BasicDispatcher struct {
 
 	// blockEventStatus is used to store the current pending ddl/sync point event and its block status.
 	blockEventStatus BlockEventStatus
+	// completedBlockEvent remembers the newest block event that has already
+	// finished local write/pass execution, so a later duplicate action can
+	// re-offer DONE if the original completion status was lost in transit.
+	completedBlockEvent completedBlockEventState
 
 	// tableProgress is used to calculate the checkpointTs of the dispatcher
 	tableProgress *TableProgress
@@ -813,8 +817,9 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 	// Step3: deal with the dispatcher action
 	action := dispatcherStatus.GetAction()
 	if action != nil {
-		pendingEvent := d.blockEventStatus.getEvent()
-		if pendingEvent == nil && action.CommitTs > d.GetResolvedTs() {
+		pendingEvent, blockStage := d.blockEventStatus.getEventAndStage()
+		if pendingEvent == nil && action.CommitTs > d.GetResolvedTs() &&
+			d.shouldIgnoreUnmatchedBlockAction(action, nil, blockStage) {
 			// we have not received the block event, and the action is for the future event, so just ignore
 			log.Debug("pending event is nil, and the action's commit is larger than dispatchers resolvedTs",
 				zap.Uint64("resolvedTs", d.GetResolvedTs()),
@@ -870,12 +875,18 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				return false
 			}
 		} else {
-			ts, ok := d.blockEventStatus.getEventCommitTs()
-			if ok && action.CommitTs > ts {
-				log.Debug("pending event's commitTs is smaller than the action's commitTs, just ignore it",
-					zap.Uint64("pendingEventCommitTs", ts),
-					zap.Uint64("actionCommitTs", action.CommitTs),
-					zap.Stringer("dispatcher", d.id))
+			if d.shouldIgnoreUnmatchedBlockAction(action, pendingEvent, blockStage) {
+				if pendingEvent != nil && action.Action == heartbeatpb.Action_Write &&
+					action.CommitTs == pendingEvent.GetCommitTs() {
+					failpoint.Inject("BlockOrWaitBeforeDuplicateWriteOfferDone", nil)
+				}
+				log.Debug("ignore unmatched block action",
+					zap.Stringer("dispatcher", d.id),
+					zap.Int64("mode", d.mode),
+					zap.Uint64("commitTs", action.CommitTs),
+					zap.Bool("isSyncPoint", action.IsSyncPoint),
+					zap.Int("action", int(action.Action)),
+					zap.Any("blockStage", blockStage))
 				return false
 			}
 		}
@@ -884,6 +895,41 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		d.offerDoneBlockStatus(action.CommitTs, action.IsSyncPoint)
 	}
 	return false
+}
+
+func (d *BasicDispatcher) shouldIgnoreUnmatchedBlockAction(
+	action *heartbeatpb.DispatcherAction,
+	pendingEvent commonEvent.BlockEvent,
+	blockStage heartbeatpb.BlockStage,
+) bool {
+	actionIdentifier := BlockEventIdentifier{
+		CommitTs:    action.CommitTs,
+		IsSyncPoint: action.IsSyncPoint,
+	}
+	if pendingEvent != nil {
+		pendingIdentifier := BlockEventIdentifier{
+			CommitTs:    pendingEvent.GetCommitTs(),
+			IsSyncPoint: pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,
+		}
+		switch compareBlockEventIdentifier(actionIdentifier, pendingIdentifier) {
+		case 1:
+			return true
+		case 0:
+			// The current block event is still live. Duplicate actions for the
+			// same event must wait for the real write/pass completion to report DONE.
+			return blockStage != heartbeatpb.BlockStage_NONE
+		default:
+			return false
+		}
+	}
+
+	latestCompleted, ok := d.completedBlockEvent.latest()
+	if !ok {
+		return true
+	}
+	// Once a block event has completed locally, duplicate WRITE/PASS actions for
+	// that event or any older event can safely be answered with DONE again.
+	return compareBlockEventIdentifier(actionIdentifier, latestCompleted) > 0
 }
 
 // ExecuteBlockEventDDL writes the block event to the sink and then reports DONE to the maintainer.
@@ -917,6 +963,10 @@ func (d *BasicDispatcher) reportBlockedEventDone(
 	actionCommitTs uint64,
 	actionIsSyncPoint bool,
 ) {
+	d.completedBlockEvent.markDone(BlockEventIdentifier{
+		CommitTs:    actionCommitTs,
+		IsSyncPoint: actionIsSyncPoint,
+	})
 	d.offerDoneBlockStatus(actionCommitTs, actionIsSyncPoint)
 	GetDispatcherStatusDynamicStream().Wake(d.id)
 }
