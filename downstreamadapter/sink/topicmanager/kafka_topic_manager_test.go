@@ -217,15 +217,11 @@ func TestEnsureTopicExistsWaitsUntilVisible(t *testing.T) {
 				)
 			case 2:
 				return map[string]kafka.TopicDetail{}, nil
-			case 3:
-				return map[string]kafka.TopicDetail{
-					"delayed-topic": topicDetail("delayed-topic", 1),
-				}, nil
 			}
 			return map[string]kafka.TopicDetail{
 				"delayed-topic": topicDetail("delayed-topic", 2),
 			}, nil
-		}).Times(5)
+		}).Times(4)
 	adminClient.EXPECT().CreateTopic(gomock.Any()).DoAndReturn(
 		func(detail *kafka.TopicDetail) error {
 			require.Equal(t, &kafka.TopicDetail{
@@ -252,7 +248,7 @@ func TestEnsureTopicExistsWaitsUntilVisible(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
-	require.Equal(t, 4, postCreateDescribeCount)
+	require.Equal(t, 3, postCreateDescribeCount)
 	cachedPartitionNum, cached := manager.topics.Load("delayed-topic")
 	require.True(t, cached)
 	require.Equal(t, int32(2), cachedPartitionNum)
@@ -316,7 +312,7 @@ func TestWaitUntilTopicVisibleHonorsContextCancellation(t *testing.T) {
 		&kafka.AutoCreateTopicConfig{PartitionNum: 2},
 	)
 
-	err := manager.waitUntilTopicVisible(ctx, "cancelled-topic", 2)
+	err := manager.waitUntilTopicVisible(ctx, "cancelled-topic")
 
 	require.ErrorIs(t, err, context.Canceled)
 }
@@ -342,31 +338,10 @@ func TestWaitUntilTopicVisibleStopsOnNonRetryableError(t *testing.T) {
 		&kafka.AutoCreateTopicConfig{PartitionNum: 2},
 	)
 
-	err := manager.waitUntilTopicVisible(context.Background(), "invalid-topic", 2)
+	err := manager.waitUntilTopicVisible(context.Background(), "invalid-topic")
 
 	require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
 	require.ErrorIs(t, err, sarama.ErrInvalidTopic)
-}
-
-func TestWaitUntilTopicVisibleAllowsAdditionalPartitions(t *testing.T) {
-	t.Parallel()
-
-	ctrl := gomock.NewController(t)
-	adminClient := kafka.NewMockAdminClient(ctrl)
-	adminClient.EXPECT().GetTopicsMeta([]string{"expanded-topic"}, false).Return(
-		map[string]kafka.TopicDetail{
-			"expanded-topic": topicDetail("expanded-topic", 3),
-		}, nil)
-	manager := newKafkaTopicManager(
-		"expanded-topic",
-		common.NewChangefeedID4Test("test", "test"),
-		adminClient,
-		&kafka.AutoCreateTopicConfig{PartitionNum: 2},
-	)
-
-	err := manager.waitUntilTopicVisible(context.Background(), "expanded-topic", 2)
-
-	require.NoError(t, err)
 }
 
 func TestGetTopicManagerStartsBackgroundRefreshAfterTopicReady(t *testing.T) {

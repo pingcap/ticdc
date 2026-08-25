@@ -196,7 +196,6 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum() (map[string]int32, err
 func (m *kafkaTopicManager) waitUntilTopicVisible(
 	ctx context.Context,
 	topicName string,
-	requiredPartitionNum int32,
 ) error {
 	start := time.Now()
 	topics := []string{topicName}
@@ -219,17 +218,14 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 		}
 		metadataFound = true
 		observedPartitionNum = detail.NumPartitions
-		if detail.NumPartitions < requiredPartitionNum {
-			return errors.ErrKafkaAdminAPI.GenWithStackByArgs("describe-topic", topicName)
-		}
 		return nil
 	}, retry.WithBackoffBaseDelay(500),
 		retry.WithBackoffMaxDelay(1000),
 		retry.WithMaxTries(6),
 		retry.WithIsRetryableErr(func(err error) bool {
 			// A direct ErrKafkaAdminAPI is generated above when the topic metadata
-			// is missing or has too few partitions. Admin client errors wrap their
-			// original cause and are classified by Kafka error semantics.
+			// is missing. Admin client errors wrap their original cause and are
+			// classified by Kafka error semantics.
 			return errors.ErrKafkaAdminAPI.Equal(errors.Cause(err)) ||
 				kafka.IsRetryableTopicMetadataError(err)
 		}),
@@ -244,7 +240,6 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 			zap.String("topic", topicName),
 			zap.Int("attempts", attempts),
 			zap.Bool("metadataFound", metadataFound),
-			zap.Int32("requiredPartitionNum", requiredPartitionNum),
 			zap.Int32("observedPartitionNum", observedPartitionNum),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
@@ -256,7 +251,6 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("topic", topicName),
 			zap.Int("attempts", attempts),
-			zap.Int32("requiredPartitionNum", requiredPartitionNum),
 			zap.Int32("observedPartitionNum", observedPartitionNum),
 			zap.Duration("duration", time.Since(start)))
 	}
@@ -339,7 +333,7 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 		return 0, err
 	}
 
-	err = m.waitUntilTopicVisible(ctx, topicName, partitionNum)
+	err = m.waitUntilTopicVisible(ctx, topicName)
 	if err != nil {
 		return 0, err
 	}
@@ -367,9 +361,6 @@ func (m *kafkaTopicManager) tryStoreTopicMeta(
 	}
 	numPartition := detail.NumPartitions
 	if topicName == m.defaultTopic {
-		if detail.NumPartitions < m.cfg.PartitionNum {
-			return 0, false
-		}
 		numPartition = m.cfg.PartitionNum
 	}
 	m.tryUpdatePartitionsAndLogging(topicName, numPartition)
