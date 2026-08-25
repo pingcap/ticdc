@@ -17,7 +17,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -207,21 +206,13 @@ func TestEnsureTopicExistsWaitsUntilVisible(t *testing.T) {
 			postCreateDescribeCount++
 			_, cached := manager.topics.Load("delayed-topic")
 			require.False(t, cached)
-			switch postCreateDescribeCount {
-			case 1:
-				return nil, errors.WrapError(
-					errors.ErrKafkaAdminAPI,
-					sarama.ErrUnknownTopicOrPartition,
-					"describe-topic",
-					"delayed-topic",
-				)
-			case 2:
+			if postCreateDescribeCount == 1 {
 				return map[string]kafka.TopicDetail{}, nil
 			}
 			return map[string]kafka.TopicDetail{
 				"delayed-topic": topicDetail("delayed-topic", 2),
 			}, nil
-		}).Times(4)
+		}).Times(3)
 	adminClient.EXPECT().CreateTopic(gomock.Any()).DoAndReturn(
 		func(detail *kafka.TopicDetail) error {
 			require.Equal(t, &kafka.TopicDetail{
@@ -248,7 +239,7 @@ func TestEnsureTopicExistsWaitsUntilVisible(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
-	require.Equal(t, 3, postCreateDescribeCount)
+	require.Equal(t, 2, postCreateDescribeCount)
 	cachedPartitionNum, cached := manager.topics.Load("delayed-topic")
 	require.True(t, cached)
 	require.Equal(t, int32(2), cachedPartitionNum)
@@ -298,12 +289,7 @@ func TestWaitUntilTopicVisibleHonorsContextCancellation(t *testing.T) {
 	adminClient.EXPECT().GetTopicsMeta([]string{"cancelled-topic"}, false).DoAndReturn(
 		func([]string, bool) (map[string]kafka.TopicDetail, error) {
 			cancel()
-			return nil, errors.WrapError(
-				errors.ErrKafkaAdminAPI,
-				sarama.ErrUnknownTopicOrPartition,
-				"describe-topic",
-				"cancelled-topic",
-			)
+			return map[string]kafka.TopicDetail{}, nil
 		})
 	manager := newKafkaTopicManager(
 		"cancelled-topic",
@@ -324,12 +310,7 @@ func TestWaitUntilTopicVisibleStopsOnNonRetryableError(t *testing.T) {
 	adminClient := kafka.NewMockAdminClient(ctrl)
 	adminClient.EXPECT().GetTopicsMeta([]string{"invalid-topic"}, false).Return(
 		nil,
-		errors.WrapError(
-			errors.ErrKafkaAdminAPI,
-			sarama.ErrInvalidTopic,
-			"describe-topic",
-			"invalid-topic",
-		),
+		errors.ErrKafkaInvalidConfig.GenWithStack("invalid topic"),
 	).Times(1)
 	manager := newKafkaTopicManager(
 		"invalid-topic",
@@ -340,8 +321,7 @@ func TestWaitUntilTopicVisibleStopsOnNonRetryableError(t *testing.T) {
 
 	err := manager.waitUntilTopicVisible(context.Background(), "invalid-topic")
 
-	require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
-	require.ErrorIs(t, err, sarama.ErrInvalidTopic)
+	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 }
 
 func TestGetTopicManagerStartsBackgroundRefreshAfterTopicReady(t *testing.T) {
