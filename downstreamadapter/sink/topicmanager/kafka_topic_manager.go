@@ -15,6 +15,7 @@ package topicmanager
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -196,19 +197,39 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum() (map[string]int32, err
 func (m *kafkaTopicManager) waitUntilTopicVisible(
 	ctx context.Context,
 	topicName string,
+	requiredPartitionNum int32,
 ) error {
 	start := time.Now()
 	topics := []string{topicName}
+	attempts := 0
+	metadataFound := false
+	observedPartitionNum := int32(0)
 	err := retry.Do(ctx, func() error {
+		attempts++
+		metadataFound = false
+		observedPartitionNum = 0
 		// ignoreTopicError is set to false since we just create the topic,
 		// make sure the topic is visible.
 		meta, err := m.admin.GetTopicsMeta(topics, false)
 		if err != nil {
 			return err
 		}
-		_, ok := meta[topicName]
+		detail, ok := meta[topicName]
 		if !ok {
 			return errors.ErrKafkaAdminAPI.GenWithStackByArgs("describe-topic", topicName)
+		}
+		metadataFound = true
+		observedPartitionNum = detail.NumPartitions
+		if detail.NumPartitions < requiredPartitionNum {
+			return errors.ErrKafkaAdminAPI.GenWithStackByArgs(
+				"describe-topic",
+				fmt.Sprintf(
+					"%s has %d partitions, requires at least %d",
+					topicName,
+					detail.NumPartitions,
+					requiredPartitionNum,
+				),
+			)
 		}
 		return nil
 	}, retry.WithBackoffBaseDelay(500),
@@ -216,14 +237,32 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 		retry.WithMaxTries(6),
 	)
 	if err != nil {
-		log.Warn("kafka topic metadata refresh failed",
+		if errors.Is(errors.Cause(err), context.Canceled) {
+			return err
+		}
+		log.Warn("kafka topic is not ready after metadata retries",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("topic", topicName),
+			zap.Int("attempts", attempts),
+			zap.Bool("metadataFound", metadataFound),
+			zap.Int32("requiredPartitionNum", requiredPartitionNum),
+			zap.Int32("observedPartitionNum", observedPartitionNum),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
+		return err
 	}
-	return err
+	if attempts > 1 {
+		log.Info("kafka topic became ready after metadata retries",
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeed", m.changefeedID.Name()),
+			zap.String("topic", topicName),
+			zap.Int("attempts", attempts),
+			zap.Int32("requiredPartitionNum", requiredPartitionNum),
+			zap.Int32("observedPartitionNum", observedPartitionNum),
+			zap.Duration("duration", time.Since(start)))
+	}
+	return nil
 }
 
 // createTopic creates a topic with the given name
@@ -259,8 +298,6 @@ func (m *kafkaTopicManager) createTopic(
 		)
 		return 0, err
 	}
-
-	m.tryUpdatePartitionsAndLogging(topicName, m.cfg.PartitionNum)
 
 	return m.cfg.PartitionNum, nil
 }
@@ -304,10 +341,11 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 		return 0, err
 	}
 
-	err = m.waitUntilTopicVisible(ctx, topicName)
+	err = m.waitUntilTopicVisible(ctx, topicName, partitionNum)
 	if err != nil {
 		return 0, err
 	}
+	m.tryUpdatePartitionsAndLogging(topicName, partitionNum)
 
 	log.Info(
 		"kafka topic created",
@@ -331,6 +369,9 @@ func (m *kafkaTopicManager) tryStoreTopicMeta(
 	}
 	numPartition := detail.NumPartitions
 	if topicName == m.defaultTopic {
+		if detail.NumPartitions < m.cfg.PartitionNum {
+			return 0, false
+		}
 		numPartition = m.cfg.PartitionNum
 	}
 	m.tryUpdatePartitionsAndLogging(topicName, numPartition)
