@@ -199,25 +199,17 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 ) error {
 	start := time.Now()
 	topics := []string{topicName}
-	attempts := 0
-	metadataFound := false
-	observedPartitionNum := int32(0)
 	err := retry.Do(ctx, func() error {
-		attempts++
-		metadataFound = false
-		observedPartitionNum = 0
 		// ignoreTopicError is set to false since we just create the topic,
 		// make sure the topic is visible.
 		meta, err := m.admin.GetTopicsMeta(topics, false)
 		if err != nil {
 			return err
 		}
-		detail, ok := meta[topicName]
+		_, ok := meta[topicName]
 		if !ok {
 			return errors.ErrKafkaAdminAPI.GenWithStackByArgs("describe-topic", topicName)
 		}
-		metadataFound = true
-		observedPartitionNum = detail.NumPartitions
 		return nil
 	}, retry.WithBackoffBaseDelay(500),
 		retry.WithBackoffMaxDelay(1000),
@@ -231,30 +223,14 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 		}),
 	)
 	if err != nil {
-		if errors.Is(errors.Cause(err), context.Canceled) {
-			return err
-		}
-		log.Warn("kafka topic readiness check failed",
+		log.Warn("kafka topic metadata refresh failed",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("topic", topicName),
-			zap.Int("attempts", attempts),
-			zap.Bool("metadataFound", metadataFound),
-			zap.Int32("observedPartitionNum", observedPartitionNum),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
-		return err
 	}
-	if attempts > 1 {
-		log.Info("kafka topic became ready after metadata retries",
-			zap.String("keyspace", m.changefeedID.Keyspace()),
-			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("topic", topicName),
-			zap.Int("attempts", attempts),
-			zap.Int32("observedPartitionNum", observedPartitionNum),
-			zap.Duration("duration", time.Since(start)))
-	}
-	return nil
+	return err
 }
 
 // createTopic creates a topic with the given name
