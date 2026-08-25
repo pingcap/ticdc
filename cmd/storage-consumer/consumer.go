@@ -309,10 +309,7 @@ func (c *consumer) appendMessage2Group(message *common.DMLMessage, enableTableAc
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", message.RowType))
-		if err := group.AppendMessage(message); err != nil {
-			return err
-		}
-		return nil
+		return group.AppendMessage(message)
 	}
 	log.Warn("dml event commit ts fallback, ignore",
 		zap.Uint64("commitTs", commitTs),

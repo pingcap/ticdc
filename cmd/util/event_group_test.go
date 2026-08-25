@@ -234,7 +234,7 @@ func TestEventsGroupRestoresRowsFromSharedChunk(t *testing.T) {
 		},
 	})
 	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 4)
-	for i := int64(0); i < 4; i++ {
+	for i := range int64(4) {
 		rows.AppendInt64(0, i)
 	}
 
