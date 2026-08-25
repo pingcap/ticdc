@@ -215,11 +215,7 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 		retry.WithBackoffMaxDelay(1000),
 		retry.WithMaxTries(6),
 		retry.WithIsRetryableErr(func(err error) bool {
-			// A direct ErrKafkaAdminAPI is generated above when the topic metadata
-			// is missing. Admin client errors wrap their original cause and are
-			// classified by Kafka error semantics.
-			return errors.ErrKafkaAdminAPI.Equal(errors.Cause(err)) ||
-				kafka.IsRetryableTopicMetadataError(err)
+			return !kafka.IsUnretryableTopicMetadataError(err)
 		}),
 	)
 	if err != nil {

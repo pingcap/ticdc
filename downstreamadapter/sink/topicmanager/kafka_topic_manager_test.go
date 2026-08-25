@@ -15,8 +15,10 @@ package topicmanager
 
 import (
 	"context"
+	"io"
 	"testing"
 
+	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -66,23 +68,41 @@ func TestCreateTopic(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		adminClient := kafka.NewMockAdminClient(ctrl)
 		var createdTopic *kafka.TopicDetail
+		postCreateDescribeCount := 0
+		var manager *kafkaTopicManager
 		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, true).Return(map[string]kafka.TopicDetail{}, nil)
 		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).DoAndReturn(
 			func([]string, bool) (map[string]kafka.TopicDetail, error) {
 				if createdTopic == nil {
-					return map[string]kafka.TopicDetail{}, nil
+					return nil, errors.WrapError(
+						errors.ErrKafkaAdminAPI,
+						sarama.ErrUnknownTopicOrPartition,
+						"describe-topic",
+						"new-topic",
+					)
+				}
+				postCreateDescribeCount++
+				_, cached := manager.topics.Load("new-topic")
+				require.False(t, cached)
+				if postCreateDescribeCount == 1 {
+					return nil, errors.WrapError(
+						errors.ErrKafkaAdminAPI,
+						io.EOF,
+						"describe-topic",
+						"new-topic",
+					)
 				}
 				return map[string]kafka.TopicDetail{
 					createdTopic.Name: topicDetail(createdTopic.Name, createdTopic.NumPartitions),
 				}, nil
-			}).Times(2)
+			}).Times(3)
 		adminClient.EXPECT().CreateTopic(gomock.Any()).DoAndReturn(
 			func(detail *kafka.TopicDetail) error {
 				copy := *detail
 				createdTopic = &copy
 				return nil
 			})
-		manager := newKafkaTopicManager(
+		manager = newKafkaTopicManager(
 			kafkaTopicManagerTestTopic,
 			changefeedID,
 			adminClient,
@@ -103,6 +123,7 @@ func TestCreateTopic(t *testing.T) {
 			NumPartitions:     2,
 			ReplicationFactor: 1,
 		}, createdTopic)
+		require.Equal(t, 2, postCreateDescribeCount)
 		partitionsNum, err := manager.GetPartitionNum(context.Background(), "new-topic")
 		require.NoError(t, err)
 		require.Equal(t, int32(2), partitionsNum)
@@ -189,120 +210,6 @@ func TestCreateTopicValidatesReplicationFactor(t *testing.T) {
 	require.ErrorContains(t, err, "`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of broker")
 }
 
-func TestEnsureTopicExistsWaitsUntilVisible(t *testing.T) {
-	t.Parallel()
-
-	ctrl := gomock.NewController(t)
-	adminClient := kafka.NewMockAdminClient(ctrl)
-	created := false
-	postCreateDescribeCount := 0
-	var manager *kafkaTopicManager
-	adminClient.EXPECT().GetTopicsMeta([]string{"delayed-topic"}, true).Return(map[string]kafka.TopicDetail{}, nil)
-	adminClient.EXPECT().GetTopicsMeta([]string{"delayed-topic"}, false).DoAndReturn(
-		func([]string, bool) (map[string]kafka.TopicDetail, error) {
-			if !created {
-				return map[string]kafka.TopicDetail{}, nil
-			}
-			postCreateDescribeCount++
-			_, cached := manager.topics.Load("delayed-topic")
-			require.False(t, cached)
-			if postCreateDescribeCount == 1 {
-				return map[string]kafka.TopicDetail{}, nil
-			}
-			return map[string]kafka.TopicDetail{
-				"delayed-topic": topicDetail("delayed-topic", 2),
-			}, nil
-		}).Times(3)
-	adminClient.EXPECT().CreateTopic(gomock.Any()).DoAndReturn(
-		func(detail *kafka.TopicDetail) error {
-			require.Equal(t, &kafka.TopicDetail{
-				Name:              "delayed-topic",
-				NumPartitions:     2,
-				ReplicationFactor: 1,
-			}, detail)
-			created = true
-			return nil
-		})
-
-	manager = newKafkaTopicManager(
-		"delayed-topic",
-		common.NewChangefeedID4Test("test", "test"),
-		adminClient,
-		&kafka.AutoCreateTopicConfig{
-			AutoCreate:        true,
-			PartitionNum:      2,
-			ReplicationFactor: 1,
-		},
-	)
-
-	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), "delayed-topic")
-
-	require.NoError(t, err)
-	require.Equal(t, int32(2), partitionNum)
-	require.Equal(t, 2, postCreateDescribeCount)
-	cachedPartitionNum, cached := manager.topics.Load("delayed-topic")
-	require.True(t, cached)
-	require.Equal(t, int32(2), cachedPartitionNum)
-}
-
-func TestCreateTopicDoesNotCacheBeforeVisibilityRetryExhausted(t *testing.T) {
-	t.Parallel()
-
-	ctrl := gomock.NewController(t)
-	adminClient := kafka.NewMockAdminClient(ctrl)
-	adminClient.EXPECT().GetTopicsMeta([]string{"never-visible-topic"}, true).
-		Return(map[string]kafka.TopicDetail{}, nil)
-	adminClient.EXPECT().GetTopicsMeta([]string{"never-visible-topic"}, false).
-		Return(map[string]kafka.TopicDetail{}, nil).
-		Times(7)
-	adminClient.EXPECT().CreateTopic(&kafka.TopicDetail{
-		Name:              "never-visible-topic",
-		NumPartitions:     2,
-		ReplicationFactor: 1,
-	}).Return(nil)
-	manager := newKafkaTopicManager(
-		"never-visible-topic",
-		common.NewChangefeedID4Test("test", "test"),
-		adminClient,
-		&kafka.AutoCreateTopicConfig{
-			AutoCreate:        true,
-			PartitionNum:      2,
-			ReplicationFactor: 1,
-			RequiredAcks:      kafka.WaitForLocal,
-		},
-	)
-
-	_, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), "never-visible-topic")
-
-	require.ErrorIs(t, err, errors.ErrReachMaxTry)
-	require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
-	_, cached := manager.topics.Load("never-visible-topic")
-	require.False(t, cached)
-}
-
-func TestWaitUntilTopicVisibleHonorsContextCancellation(t *testing.T) {
-	t.Parallel()
-
-	ctrl := gomock.NewController(t)
-	adminClient := kafka.NewMockAdminClient(ctrl)
-	ctx, cancel := context.WithCancel(context.Background())
-	adminClient.EXPECT().GetTopicsMeta([]string{"cancelled-topic"}, false).DoAndReturn(
-		func([]string, bool) (map[string]kafka.TopicDetail, error) {
-			cancel()
-			return map[string]kafka.TopicDetail{}, nil
-		})
-	manager := newKafkaTopicManager(
-		"cancelled-topic",
-		common.NewChangefeedID4Test("test", "test"),
-		adminClient,
-		&kafka.AutoCreateTopicConfig{PartitionNum: 2},
-	)
-
-	err := manager.waitUntilTopicVisible(ctx, "cancelled-topic")
-
-	require.ErrorIs(t, err, context.Canceled)
-}
-
 func TestWaitUntilTopicVisibleStopsOnNonRetryableError(t *testing.T) {
 	t.Parallel()
 
@@ -310,7 +217,12 @@ func TestWaitUntilTopicVisibleStopsOnNonRetryableError(t *testing.T) {
 	adminClient := kafka.NewMockAdminClient(ctrl)
 	adminClient.EXPECT().GetTopicsMeta([]string{"invalid-topic"}, false).Return(
 		nil,
-		errors.ErrKafkaInvalidConfig.GenWithStack("invalid topic"),
+		errors.WrapError(
+			errors.ErrKafkaAdminAPI,
+			sarama.ErrInvalidTopic,
+			"describe-topic",
+			"invalid-topic",
+		),
 	).Times(1)
 	manager := newKafkaTopicManager(
 		"invalid-topic",
@@ -321,7 +233,8 @@ func TestWaitUntilTopicVisibleStopsOnNonRetryableError(t *testing.T) {
 
 	err := manager.waitUntilTopicVisible(context.Background(), "invalid-topic")
 
-	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+	require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+	require.ErrorIs(t, err, sarama.ErrInvalidTopic)
 }
 
 func TestGetTopicManagerStartsBackgroundRefreshAfterTopicReady(t *testing.T) {

@@ -156,23 +156,23 @@ func IsAuthorizationFailed(err error) bool {
 		errors.Is(err, sarama.ErrClusterAuthorizationFailed)
 }
 
-// IsRetryableTopicMetadataError reports whether a Kafka metadata error can be
-// caused by a temporary topic, broker, network, or controller state.
-func IsRetryableTopicMetadataError(err error) bool {
-	return errors.Is(err, sarama.ErrUnknownTopicOrPartition) ||
-		errors.Is(err, sarama.ErrLeaderNotAvailable) ||
-		errors.Is(err, sarama.ErrNotLeaderForPartition) ||
-		errors.Is(err, sarama.ErrRequestTimedOut) ||
-		errors.Is(err, sarama.ErrBrokerNotAvailable) ||
-		errors.Is(err, sarama.ErrReplicaNotAvailable) ||
-		errors.Is(err, sarama.ErrStaleControllerEpochCode) ||
-		errors.Is(err, sarama.ErrNetworkException) ||
-		errors.Is(err, sarama.ErrNotController) ||
-		errors.Is(err, sarama.ErrKafkaStorageError) ||
-		errors.Is(err, sarama.ErrOutOfBrokers) ||
-		errors.Is(err, sarama.ErrBrokerNotFound) ||
-		errors.Is(err, sarama.ErrIncompleteResponse) ||
-		errors.Is(err, sarama.ErrControllerNotAvailable)
+// IsUnretryableTopicMetadataError reports whether a Kafka metadata request
+// requires a configuration, credential, permission, or request change to succeed.
+func IsUnretryableTopicMetadataError(err error) bool {
+	if IsAuthorizationFailed(err) ||
+		errors.Is(err, errors.ErrKafkaInvalidConfig) ||
+		errors.Is(err, sarama.ErrInvalidTopic) ||
+		errors.Is(err, sarama.ErrInvalidConfig) ||
+		errors.Is(err, sarama.ErrSASLAuthenticationFailed) ||
+		errors.Is(err, sarama.ErrUnsupportedSASLMechanism) ||
+		errors.Is(err, sarama.ErrIllegalSASLState) ||
+		errors.Is(err, sarama.ErrUnsupportedVersion) ||
+		errors.Is(err, sarama.ErrInvalidRequest) {
+		return true
+	}
+
+	var configErr sarama.ConfigurationError
+	return errors.As(err, &configErr)
 }
 
 func (a *saramaAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
