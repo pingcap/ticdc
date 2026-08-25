@@ -147,7 +147,7 @@ func TestGetTopicConfig(t *testing.T) {
 func TestGetTopicsMeta(t *testing.T) {
 	t.Parallel()
 
-	t.Run("returns unknown topic error", func(t *testing.T) {
+	t.Run("returns unknown topic error when topic errors are not ignored", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		admin := NewMocksaramaClusterAdmin(ctrl)
 		admin.EXPECT().DescribeTopics([]string{"valid-topic", "missing-topic"}).Return([]*sarama.TopicMetadata{
@@ -170,6 +170,35 @@ func TestGetTopicsMeta(t *testing.T) {
 		require.Nil(t, topics)
 		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
 		require.ErrorIs(t, err, sarama.ErrUnknownTopicOrPartition)
+	})
+
+	t.Run("ignores unknown topic error and returns valid topics", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		admin := NewMocksaramaClusterAdmin(ctrl)
+		admin.EXPECT().DescribeTopics([]string{"valid-topic", "missing-topic"}).Return([]*sarama.TopicMetadata{
+			{
+				Name:       "valid-topic",
+				Partitions: []*sarama.PartitionMetadata{{}, {}},
+			},
+			{
+				Name: "missing-topic",
+				Err:  sarama.ErrUnknownTopicOrPartition,
+			},
+		}, nil)
+		client := &saramaAdminClient{
+			changefeed: common.NewChangeFeedIDWithName("test", "default"),
+			admin:      admin,
+		}
+
+		topics, err := client.GetTopicsMeta([]string{"valid-topic", "missing-topic"}, true)
+
+		require.NoError(t, err)
+		require.Equal(t, map[string]TopicDetail{
+			"valid-topic": {
+				Name:          "valid-topic",
+				NumPartitions: 2,
+			},
+		}, topics)
 	})
 
 	t.Run("missing response", func(t *testing.T) {
@@ -244,7 +273,7 @@ func TestGetTopicsMeta(t *testing.T) {
 		require.True(t, IsAuthorizationFailed(err))
 	})
 
-	t.Run("ignored topic error", func(t *testing.T) {
+	t.Run("ignores non-unknown topic error", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		admin := NewMocksaramaClusterAdmin(ctrl)
 		admin.EXPECT().DescribeTopics([]string{"test-topic"}).Return([]*sarama.TopicMetadata{
