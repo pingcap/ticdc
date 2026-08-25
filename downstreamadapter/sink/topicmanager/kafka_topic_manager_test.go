@@ -321,6 +321,33 @@ func TestWaitUntilTopicVisibleHonorsContextCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestWaitUntilTopicVisibleStopsOnNonRetryableError(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	adminClient := kafka.NewMockAdminClient(ctrl)
+	adminClient.EXPECT().GetTopicsMeta([]string{"invalid-topic"}, false).Return(
+		nil,
+		errors.WrapError(
+			errors.ErrKafkaAdminAPI,
+			sarama.ErrInvalidTopic,
+			"describe-topic",
+			"invalid-topic",
+		),
+	).Times(1)
+	manager := newKafkaTopicManager(
+		"invalid-topic",
+		common.NewChangefeedID4Test("test", "test"),
+		adminClient,
+		&kafka.AutoCreateTopicConfig{PartitionNum: 2},
+	)
+
+	err := manager.waitUntilTopicVisible(context.Background(), "invalid-topic", 2)
+
+	require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+	require.ErrorIs(t, err, sarama.ErrInvalidTopic)
+}
+
 func TestWaitUntilTopicVisibleAllowsAdditionalPartitions(t *testing.T) {
 	t.Parallel()
 

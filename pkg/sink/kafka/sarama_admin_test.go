@@ -312,6 +312,43 @@ func TestIsAuthorizationFailed(t *testing.T) {
 	}
 }
 
+func TestIsRetryableTopicMetadataError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{name: "unknown topic", err: sarama.ErrUnknownTopicOrPartition, expected: true},
+		{name: "leader unavailable", err: sarama.ErrLeaderNotAvailable, expected: true},
+		{name: "request timeout", err: sarama.ErrRequestTimedOut, expected: true},
+		{name: "network exception", err: sarama.ErrNetworkException, expected: true},
+		{name: "controller changed", err: sarama.ErrNotController, expected: true},
+		{name: "no broker available", err: sarama.ErrOutOfBrokers, expected: true},
+		{
+			name: "wrapped retryable error",
+			err: errors.WrapError(
+				errors.ErrKafkaAdminAPI,
+				sarama.ErrUnknownTopicOrPartition,
+				"describe-topic",
+				"test-topic",
+			),
+			expected: true,
+		},
+		{name: "authorization failure", err: sarama.ErrTopicAuthorizationFailed},
+		{name: "invalid topic", err: sarama.ErrInvalidTopic},
+		{name: "unknown broker error", err: sarama.ErrUnknown},
+		{name: "context cancellation", err: context.Canceled},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.expected, IsRetryableTopicMetadataError(test.err))
+		})
+	}
+}
+
 func TestCreateTopic(t *testing.T) {
 	t.Parallel()
 

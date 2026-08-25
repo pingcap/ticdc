@@ -15,7 +15,6 @@ package topicmanager
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -221,26 +220,25 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 		metadataFound = true
 		observedPartitionNum = detail.NumPartitions
 		if detail.NumPartitions < requiredPartitionNum {
-			return errors.ErrKafkaAdminAPI.GenWithStackByArgs(
-				"describe-topic",
-				fmt.Sprintf(
-					"%s has %d partitions, requires at least %d",
-					topicName,
-					detail.NumPartitions,
-					requiredPartitionNum,
-				),
-			)
+			return errors.ErrKafkaAdminAPI.GenWithStackByArgs("describe-topic", topicName)
 		}
 		return nil
 	}, retry.WithBackoffBaseDelay(500),
 		retry.WithBackoffMaxDelay(1000),
 		retry.WithMaxTries(6),
+		retry.WithIsRetryableErr(func(err error) bool {
+			// A direct ErrKafkaAdminAPI is generated above when the topic metadata
+			// is missing or has too few partitions. Admin client errors wrap their
+			// original cause and are classified by Kafka error semantics.
+			return errors.ErrKafkaAdminAPI.Equal(errors.Cause(err)) ||
+				kafka.IsRetryableTopicMetadataError(err)
+		}),
 	)
 	if err != nil {
 		if errors.Is(errors.Cause(err), context.Canceled) {
 			return err
 		}
-		log.Warn("kafka topic is not ready after metadata retries",
+		log.Warn("kafka topic readiness check failed",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("topic", topicName),
