@@ -454,14 +454,22 @@ func (oc *Controller) finalizeOperator(
 		zap.String("operator", op.String()))
 }
 
-func (oc *Controller) cancelOperator(opID common.DispatcherID) {
+func (oc *Controller) cancelOperator(
+	expected operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+) {
+	// Serialize rollback with remove-operator replacement. Otherwise a stale rollback
+	// could resolve the dispatcher ID after the replacement and cancel the new operator.
+	oc.admissionMu.RLock()
+	defer oc.admissionMu.RUnlock()
+
+	opID := expected.ID()
 	oc.mu.RLock()
 	item, ok := oc.operators[opID]
 	oc.mu.RUnlock()
-	if !ok {
+	if !ok || item.OP != expected {
 		return
 	}
-	item.OP.OnTaskRemoved()
+	expected.OnTaskRemoved()
 	oc.finalizeOperator(item, opID)
 }
 
@@ -600,7 +608,7 @@ func (oc *Controller) cancelMergeOccupyOperators(
 	operators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
 ) {
 	for _, op := range operators {
-		oc.cancelOperator(op.ID())
+		oc.cancelOperator(op)
 	}
 }
 

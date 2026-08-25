@@ -28,6 +28,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	scheduleroperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 )
@@ -575,6 +576,42 @@ func TestController_RemoveReplicaSetBlocksNormalAdmissionUntilReplacement(t *tes
 	require.False(t, <-addResult)
 	require.Equal(t, int32(0), concurrent.startCount.Load())
 	require.Same(t, replacement, oc.GetOperator(replicaSet.ID))
+}
+
+func TestControllerStaleMergeRollbackDoesNotCancelReplacementRemove(t *testing.T) {
+	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, changefeedID, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	setAliveNodes(nodeManager, map[node.ID]*node.Info{nodeA: {ID: nodeA}})
+
+	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode)
+	occupy := NewOccupyDispatcherOperator(spanController, replicaSet)
+	require.True(t, oc.AddOperator(occupy))
+
+	replacement := newRemoveDispatcherOperator(
+		spanController,
+		replicaSet,
+		heartbeatpb.OperatorType_O_Remove,
+		7,
+	)
+	oc.removeReplicaSet(replacement)
+	require.Same(t, replacement, oc.GetOperator(replicaSet.ID))
+
+	// Simulate a delayed merge rollback that still holds the replaced occupy operator.
+	oc.cancelMergeOccupyOperators(
+		[]scheduleroperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]{occupy},
+	)
+
+	require.Same(t, replacement, oc.GetOperator(replicaSet.ID))
+	require.False(t, replacement.IsFinished())
+	msg := replacement.Schedule()
+	require.NotNil(t, msg)
+	require.Equal(t, nodeA, msg.To)
+	require.Equal(t, heartbeatpb.ScheduleAction_Remove,
+		msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).ScheduleAction)
 }
 
 func TestController_QuiesceExceptFreezesNonAllowedOperators(t *testing.T) {
