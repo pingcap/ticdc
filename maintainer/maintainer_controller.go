@@ -259,6 +259,49 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 			continue
 		}
 		spanController.UpdateStatus(stm, status)
+<<<<<<< HEAD
+=======
+
+		if !allowSelfHealing {
+			continue
+		}
+
+		// Fallback: dispatcher becomes non-working without an operator.
+		//
+		// In normal scheduling flow, a dispatcher should transition to Stopped/Removed as part of a maintainer
+		// operator (Remove/Move/Split...). However, after maintainer failover we can lose operatorController state
+		// while dispatcher managers keep executing the already-issued requests.
+		//
+		// A real example is a "remove request in transit" during bootstrap:
+		// - Old maintainer sends a Remove (e.g. the remove-origin phase of Move), but the request hasn't reached
+		//   dispatcher manager yet.
+		// - New maintainer bootstraps from dispatcher manager snapshots and sees the dispatcher as Working, with
+		//   no in-flight operator reported in bootstrap response.
+		// - After bootstrap, the in-transit Remove arrives, the dispatcher is removed, and the new maintainer
+		//   observes a terminal status without a corresponding operator.
+		//
+		// In these cases we'd observe a non-working status but have no operator to drive the follow-up
+		// rescheduling, so we mark the span absent to let the scheduler recreate it.
+		//
+		// Safety against message reordering/resend:
+		// MarkSpanAbsentIfCurrent atomically verifies that stm is still the current desired task and is still bound
+		// to the reporting node. A concurrent split, merge, move, or DDL removal therefore makes this a no-op.
+		if status.ComponentStatus == heartbeatpb.ComponentState_Stopped ||
+			status.ComponentStatus == heartbeatpb.ComponentState_Removed {
+			if op := operatorController.GetOperator(dispatcherID); op == nil {
+				if c.removeTerminalSpanCoveredByMergedSpan(spanController, stm) {
+					continue
+				}
+				if spanController.MarkSpanAbsentIfCurrent(stm, from) {
+					log.Warn("dispatcher becomes non-working without operator, mark span absent for rescheduling",
+						zap.String("changefeed", c.changefeedID.Name()),
+						zap.String("from", from.String()),
+						zap.String("dispatcherID", dispatcherID.String()),
+						zap.Any("status", status))
+				}
+			}
+		}
+>>>>>>> 3f0a68abf (maintainer: prevent stale spans from reentering scheduler state (#6073))
 	}
 }
 
