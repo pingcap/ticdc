@@ -181,7 +181,7 @@ main_with_consistent() {
 
 	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MERGE_AND_SPLIT_TABLE_PID
 	# to ensure row changed events have been replicated to TiCDC
-	sleep 20
+	sleep 30
 	if ((RANDOM % 2)); then
 		# For rename table, modify column ddl, drop column, drop index and drop table ddl, the struct of table is wrong when appling snapshot.
 		# see https://github.com/pingcap/tidb/issues/63464.
