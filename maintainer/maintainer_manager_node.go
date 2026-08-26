@@ -22,12 +22,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"go.uber.org/zap"
 )
-
-// nodeHeartbeatInterval bounds background node heartbeat frequency.
-// Forced heartbeats bypass this throttle to acknowledge state changes immediately.
-const nodeHeartbeatInterval = 5 * time.Second
 
 // managerNodeState owns node-scoped state shared by all local maintainers.
 type managerNodeState struct {
@@ -54,13 +51,19 @@ type managerNodeState struct {
 	// lastNodeHeartbeatSentAt records the last successful periodic node heartbeat
 	// send so background heartbeats can be throttled.
 	lastNodeHeartbeatSentAt time.Time
+
+	writeLeaseRequestSeq    uint64
+	writeLeaseRequestSentAt map[uint64]time.Time
+	lastAppliedLeaseSeq     uint64
+	pendingWitnessAck       *heartbeatpb.WriteLeaseWitnessAck
 }
 
 // newManagerNodeState initializes the node-scoped state owned by a manager.
 func newManagerNodeState(nodeLiveness *liveness.Liveness) *managerNodeState {
 	return &managerNodeState{
-		liveness:  nodeLiveness,
-		nodeEpoch: newNodeEpoch(),
+		liveness:                nodeLiveness,
+		nodeEpoch:               newNodeEpoch(),
+		writeLeaseRequestSentAt: make(map[uint64]time.Time),
 	}
 }
 
@@ -83,7 +86,7 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 	}
 
 	now := time.Now()
-	if !force && now.Sub(m.node.lastNodeHeartbeatSentAt) < nodeHeartbeatInterval {
+	if !force && now.Sub(m.node.lastNodeHeartbeatSentAt) < writelease.NodeHeartbeatInterval {
 		return
 	}
 	// Update before sending so a transient send failure will not cause
@@ -95,6 +98,10 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 		currentLiveness = m.node.liveness.Load()
 	}
 	drainTarget, drainEpoch := m.getDispatcherDrainTarget()
+	m.node.writeLeaseRequestSeq++
+	requestSeq := m.node.writeLeaseRequestSeq
+	m.node.writeLeaseRequestSentAt[requestSeq] = now
+	m.node.pruneWriteLeaseRequests(now)
 	hb := &heartbeatpb.NodeHeartbeat{
 		Liveness:  m.toNodeLivenessPB(currentLiveness),
 		NodeEpoch: m.node.nodeEpoch,
@@ -102,15 +109,81 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 		// confirm both activation and clearing even when no maintainers exist.
 		DispatcherDrainTargetNodeId: drainTarget.String(),
 		DispatcherDrainTargetEpoch:  drainEpoch,
+		WriteLeaseRequestSeq:        requestSeq,
+		WriteLeaseProtocolVersion:   heartbeatpb.CurrentWriteLeaseProtocolVersion,
+		WriteLeaseWitnessAck:        m.node.pendingWitnessAck,
 	}
 	target := m.newCoordinatorTopicMessage(hb)
 	if err := m.mc.SendCommand(target); err != nil {
+		delete(m.node.writeLeaseRequestSentAt, requestSeq)
 		log.Warn("send node heartbeat failed",
 			zap.Stringer("from", m.nodeInfo.ID),
 			zap.Stringer("target", target.To),
 			zap.Error(err))
 		return
 	}
+	m.node.pendingWitnessAck = nil
+}
+
+func (m *Manager) onNodeHeartbeatResponse(msg *messaging.TargetMessage) {
+	if msg.From != m.coordinatorID {
+		return
+	}
+	response := msg.Message[0].(*heartbeatpb.NodeHeartbeatResponse)
+	if response.GetCoordinatorVersion() != m.coordinatorVersion ||
+		response.GetTargetNodeEpoch() != m.node.nodeEpoch {
+		return
+	}
+
+	challenge := response.GetWitnessChallenge()
+	if challenge != nil &&
+		challenge.GetCoordinatorVersion() == m.coordinatorVersion &&
+		challenge.GetWitnessNodeEpoch() == m.node.nodeEpoch &&
+		len(challenge.GetNonce()) > 0 {
+		m.node.pendingWitnessAck = &heartbeatpb.WriteLeaseWitnessAck{
+			CoordinatorVersion:   challenge.GetCoordinatorVersion(),
+			CoordinatorNodeEpoch: challenge.GetCoordinatorNodeEpoch(),
+			SelfRequestSeq:       challenge.GetSelfRequestSeq(),
+			WitnessNodeEpoch:     challenge.GetWitnessNodeEpoch(),
+			Nonce:                append([]byte(nil), challenge.GetNonce()...),
+		}
+		m.sendNodeHeartbeat(true)
+	}
+
+	requestSeq := response.GetRequestSeq()
+	if requestSeq == 0 || requestSeq <= m.node.lastAppliedLeaseSeq {
+		return
+	}
+	requestSentAt, ok := m.node.writeLeaseRequestSentAt[requestSeq]
+	if !ok {
+		return
+	}
+	duration := time.Duration(response.GetLeaseDurationMs()) * time.Millisecond
+	if duration <= 0 || duration > writelease.P2PLeaseDuration {
+		return
+	}
+	if m.writeGate.RenewP2P(requestSentAt, duration) {
+		m.node.lastAppliedLeaseSeq = requestSeq
+		for seq := range m.node.writeLeaseRequestSentAt {
+			if seq <= requestSeq {
+				delete(m.node.writeLeaseRequestSentAt, seq)
+			}
+		}
+	}
+}
+
+func (n *managerNodeState) pruneWriteLeaseRequests(now time.Time) {
+	for seq, sentAt := range n.writeLeaseRequestSentAt {
+		if !sentAt.Add(writelease.P2PLeaseDuration).After(now) {
+			delete(n.writeLeaseRequestSentAt, seq)
+		}
+	}
+}
+
+func (n *managerNodeState) resetWriteLeaseRequests() {
+	n.writeLeaseRequestSentAt = make(map[uint64]time.Time)
+	n.lastAppliedLeaseSeq = 0
+	n.pendingWitnessAck = nil
 }
 
 // onSetNodeLivenessRequest applies a coordinator-driven liveness transition if

@@ -15,6 +15,7 @@ package maintainer
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -23,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/stretchr/testify/require"
 )
 
@@ -218,6 +220,92 @@ func TestCoordinatorBootstrapResponseIncludesDispatcherDrainTarget(t *testing.T)
 	resp := out.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse)
 	require.Equal(t, "n2", resp.DispatcherDrainTargetNodeId)
 	require.Equal(t, uint64(7), resp.DispatcherDrainTargetEpoch)
+	require.Equal(t, heartbeatpb.CurrentWriteLeaseProtocolVersion, resp.WriteLeaseProtocolVersion)
+}
+
+func TestNodeHeartbeatResponseRenewsP2PWriteLease(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	gate := writelease.NewGate()
+	appcontext.SetService(appcontext.CaptureWriteGate, gate)
+
+	var nodeLiveness liveness.Liveness
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m.coordinatorID = node.ID("coordinator")
+	m.coordinatorVersion = 10
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+
+	m.sendNodeHeartbeat(true)
+	heartbeatMessage := <-mc.GetMessageChannel()
+	heartbeat := heartbeatMessage.Message[0].(*heartbeatpb.NodeHeartbeat)
+	require.Equal(t, heartbeatpb.CurrentWriteLeaseProtocolVersion, heartbeat.WriteLeaseProtocolVersion)
+	require.NotZero(t, heartbeat.WriteLeaseRequestSeq)
+
+	responseMessage := messaging.NewSingleTargetMessage(
+		m.nodeInfo.ID,
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.NodeHeartbeatResponse{
+			CoordinatorVersion: 10,
+			TargetNodeEpoch:    m.node.nodeEpoch,
+			RequestSeq:         heartbeat.WriteLeaseRequestSeq,
+			LeaseDurationMs:    uint64(writelease.P2PLeaseDuration.Milliseconds()),
+		},
+	)
+	responseMessage.From = m.coordinatorID
+	m.onNodeHeartbeatResponse(responseMessage)
+
+	require.True(t, gate.IsWritable())
+
+	// An old coordinator response cannot renew a new request.
+	m.writeGate.InvalidateP2P()
+	responseMessage.Message[0].(*heartbeatpb.NodeHeartbeatResponse).CoordinatorVersion = 9
+	m.onNodeHeartbeatResponse(responseMessage)
+	require.False(t, gate.IsWritable())
+
+	// Replaying an already applied sequence from the current coordinator is also rejected.
+	responseMessage.Message[0].(*heartbeatpb.NodeHeartbeatResponse).CoordinatorVersion = 10
+	m.onNodeHeartbeatResponse(responseMessage)
+	require.False(t, gate.IsWritable())
+}
+
+func TestNodeHeartbeatResponseEchoesWitnessChallenge(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(appcontext.CaptureWriteGate, writelease.NewGate())
+
+	var nodeLiveness liveness.Liveness
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m.coordinatorID = node.ID("coordinator")
+	m.coordinatorVersion = 10
+
+	challenge := &heartbeatpb.WriteLeaseWitnessChallenge{
+		CoordinatorVersion:   10,
+		CoordinatorNodeEpoch: 11,
+		SelfRequestSeq:       7,
+		WitnessNodeEpoch:     m.node.nodeEpoch,
+		Nonce:                []byte("nonce"),
+	}
+	message := messaging.NewSingleTargetMessage(
+		m.nodeInfo.ID,
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.NodeHeartbeatResponse{
+			CoordinatorVersion: 10,
+			TargetNodeEpoch:    m.node.nodeEpoch,
+			WitnessChallenge:   challenge,
+		},
+	)
+	message.From = m.coordinatorID
+	m.onNodeHeartbeatResponse(message)
+
+	heartbeatMessage := <-mc.GetMessageChannel()
+	heartbeat := heartbeatMessage.Message[0].(*heartbeatpb.NodeHeartbeat)
+	ack := heartbeat.GetWriteLeaseWitnessAck()
+	require.NotNil(t, ack)
+	require.Equal(t, challenge.CoordinatorVersion, ack.CoordinatorVersion)
+	require.Equal(t, challenge.CoordinatorNodeEpoch, ack.CoordinatorNodeEpoch)
+	require.Equal(t, challenge.SelfRequestSeq, ack.SelfRequestSeq)
+	require.Equal(t, challenge.WitnessNodeEpoch, ack.WitnessNodeEpoch)
+	require.Equal(t, challenge.Nonce, ack.Nonce)
 }
 
 func TestAddMaintainerIgnoreInvalidConfig(t *testing.T) {

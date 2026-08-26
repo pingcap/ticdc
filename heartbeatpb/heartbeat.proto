@@ -206,6 +206,33 @@ message NodeHeartbeat {
     // currently applied on this node. Empty target means the drain target is clear.
     string dispatcher_drain_target_node_id = 3;
     uint64 dispatcher_drain_target_epoch = 4;
+    uint64 write_lease_request_seq = 5;
+    uint32 write_lease_protocol_version = 6;
+    WriteLeaseWitnessAck write_lease_witness_ack = 7;
+}
+
+message WriteLeaseWitnessChallenge {
+    int64 coordinator_version = 1;
+    uint64 coordinator_node_epoch = 2;
+    uint64 self_request_seq = 3;
+    uint64 witness_node_epoch = 4;
+    bytes nonce = 5;
+}
+
+message WriteLeaseWitnessAck {
+    int64 coordinator_version = 1;
+    uint64 coordinator_node_epoch = 2;
+    uint64 self_request_seq = 3;
+    uint64 witness_node_epoch = 4;
+    bytes nonce = 5;
+}
+
+message NodeHeartbeatResponse {
+    int64 coordinator_version = 1;
+    uint64 target_node_epoch = 2;
+    uint64 request_seq = 3;
+    uint64 lease_duration_ms = 4;
+    WriteLeaseWitnessChallenge witness_challenge = 5;
 }
 
 // SetNodeLivenessRequest asks a node to transition its local liveness.
@@ -244,6 +271,7 @@ message CoordinatorBootstrapResponse {
     // scheduling resumes.
     string dispatcher_drain_target_node_id = 3;
     uint64 dispatcher_drain_target_epoch = 4;
+    uint32 write_lease_protocol_version = 5;
 }
 
 message AddMaintainerRequest {

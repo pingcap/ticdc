@@ -90,6 +90,7 @@ type Controller struct {
 	apiLock            sync.RWMutex
 
 	drainController *drain.Controller
+	writeLease      *captureWriteLeaseController
 
 	// drainSession is the in-memory drain state machine for v1 drain API.
 	// Only one drain session is allowed at a time.
@@ -185,6 +186,7 @@ func NewController(
 		pdClient:           pdClient,
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		drainController:    drainController,
+		writeLease:         newCaptureWriteLeaseController(version, selfNode.ID),
 	}
 	c.nodeChanged.changed = false
 
@@ -421,6 +423,7 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 			c.maybeBroadcastDispatcherDrainTarget(true)
 		}
 		c.syncDrainSchedulingPolicy()
+		c.handleCaptureWriteLeaseHeartbeat(msg.From, req)
 	case messaging.TypeSetNodeLivenessResponse:
 		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
 		c.drainController.ObserveSetNodeLivenessResponse(msg.From, req)
@@ -511,6 +514,9 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 		zap.Any("removedNodes", removedNodes))
 
 	for _, n := range removedNodes {
+		if c.writeLease != nil {
+			c.writeLease.removeNode(n)
+		}
 		c.RemoveNode(n)
 	}
 	for _, n := range addedNodes {
@@ -525,6 +531,21 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 	}
 	c.maybeBroadcastDispatcherDrainTarget(true)
 	c.handleBootstrapResponses(ctx, responses)
+}
+
+func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *heartbeatpb.NodeHeartbeat) {
+	if c.writeLease == nil || c.bootstrapper == nil || !c.bootstrapper.NodeInitialized(from) {
+		return
+	}
+	initializedNodes := make([]node.ID, 0)
+	for _, id := range c.bootstrapper.GetAllNodeIDs() {
+		if c.bootstrapper.NodeInitialized(id) {
+			initializedNodes = append(initializedNodes, id)
+		}
+	}
+	for _, message := range c.writeLease.handleHeartbeat(from, heartbeat, initializedNodes) {
+		_ = c.messageCenter.SendCommand(message)
+	}
 }
 
 func (c *Controller) onMaintainerBootstrapResponse(ctx context.Context, req *messaging.TargetMessage) {
