@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/liveness"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -73,6 +74,31 @@ func TestSessionWatchdogFencesOnExpiredLease(t *testing.T) {
 	require.True(t, errors.ErrCaptureSuicide.Equal(err), err)
 	require.Equal(t, int32(1), fencer.count.Load())
 	require.Equal(t, liveness.CaptureStopping, c.liveness.Load())
+}
+
+func TestSessionWatchdogRenewsEtcdWriteProof(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	cdcEtcdClient := etcd.NewMockCDCEtcdClient(ctrl)
+	rawEtcdClient := etcd.NewMockClient(ctrl)
+	cdcEtcdClient.EXPECT().GetEtcdClient().Return(rawEtcdClient).AnyTimes()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	rawEtcdClient.EXPECT().
+		TimeToLive(gomock.Any(), clientv3.LeaseID(100)).
+		DoAndReturn(func(context.Context, clientv3.LeaseID, ...clientv3.LeaseOption) (*clientv3.LeaseTimeToLiveResponse, error) {
+			cancel()
+			return &clientv3.LeaseTimeToLiveResponse{TTL: 10}, nil
+		})
+
+	gate := writelease.NewGate()
+	requestSentAt := time.Now()
+	require.True(t, gate.RenewP2P(requestSentAt, writelease.P2PLeaseDuration))
+	c := &server{EtcdClient: cdcEtcdClient, writeGate: gate}
+
+	err := c.watchEtcdSession(ctx, make(chan struct{}), 100, time.Millisecond)
+
+	require.NoError(t, err)
+	require.True(t, gate.IsWritable())
 }
 
 func TestLocalFenceIsIdempotent(t *testing.T) {

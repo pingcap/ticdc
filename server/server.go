@@ -46,6 +46,7 @@ import (
 	tiserver "github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/tcpserver"
 	"github.com/pingcap/ticdc/pkg/upstream"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/server/watcher"
 	pd "github.com/tikv/pd/client"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -55,10 +56,12 @@ import (
 )
 
 const (
-	closeServiceTimeout  = 15 * time.Second
-	cleanMetaDuration    = 10 * time.Second
-	oldArchCheckInterval = 100 * time.Millisecond
-	sessionWatchInterval = time.Second
+	closeServiceTimeout   = 15 * time.Second
+	cleanMetaDuration     = 10 * time.Second
+	oldArchCheckInterval  = 100 * time.Millisecond
+	sessionWatchInterval  = time.Second
+	etcdTTLRequestTimeout = 3 * time.Second
+	etcdTTLSafetyMargin   = time.Second
 	// GracefulShutdownTimeout is used to prevent the CDC process from hanging for an extended period due to certain modules don't exit immediately.
 	GracefulShutdownTimeout = 30 * time.Second
 )
@@ -145,6 +148,7 @@ type server struct {
 	closed atomic.Bool
 
 	localFenceOnce atomic.Bool
+	writeGate      *writelease.Gate
 }
 
 // New returns a new Server instance
@@ -251,6 +255,9 @@ func (c *server) initialize(ctx context.Context) error {
 func (c *server) setPreServices(ctx context.Context) error {
 	// Set ID to Global Context
 	appctx.SetID(c.info.ID.String())
+
+	c.writeGate = writelease.NewGate()
+	appctx.SetService(appctx.CaptureWriteGate, c.writeGate)
 
 	// Set PDClock to Global Context
 	var err error
@@ -433,7 +440,10 @@ func (c *server) watchEtcdSession(
 			c.localFence("etcd session done")
 			return errors.ErrCaptureSuicide.GenWithStackByArgs()
 		case <-ticker.C:
-			ttl, err := c.EtcdClient.GetEtcdClient().TimeToLive(ctx, leaseID)
+			requestSentAt := time.Now()
+			ttlCtx, cancel := context.WithTimeout(ctx, etcdTTLRequestTimeout)
+			ttl, err := c.EtcdClient.GetEtcdClient().TimeToLive(ttlCtx, leaseID)
+			cancel()
 			if err != nil {
 				if ctx.Err() != nil {
 					return nil
@@ -441,9 +451,19 @@ func (c *server) watchEtcdSession(
 				log.Warn("check etcd session ttl failed", zap.Error(err))
 				continue
 			}
-			if ttl != nil && ttl.TTL == -1 {
+			if ttl == nil {
+				continue
+			}
+			if ttl.TTL <= 0 {
 				c.localFence("etcd lease expired")
 				return errors.ErrCaptureSuicide.GenWithStackByArgs()
+			}
+			proofDuration := time.Duration(ttl.TTL)*time.Second - etcdTTLSafetyMargin
+			if proofDuration > writelease.EtcdProofDuration {
+				proofDuration = writelease.EtcdProofDuration
+			}
+			if proofDuration > 0 && c.writeGate != nil {
+				c.writeGate.RenewEtcd(requestSentAt, proofDuration)
 			}
 		}
 	}
@@ -455,6 +475,9 @@ func (c *server) localFence(reason string) {
 	}
 
 	log.Warn("local fence triggered", zap.String("reason", reason))
+	if c.writeGate != nil {
+		c.writeGate.Fence()
+	}
 
 	c.liveness.Store(liveness.CaptureDraining)
 	c.liveness.Store(liveness.CaptureStopping)
