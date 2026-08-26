@@ -24,7 +24,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/liveness"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/writelease"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -139,6 +141,26 @@ func TestEtcdTTLRequestTimeoutUsesCurrentProofDeadline(t *testing.T) {
 	timeout := c.etcdTTLRequestTimeout(now)
 	require.Equal(t, 500*time.Millisecond, timeout)
 	require.Equal(t, etcdTTLRequestTimeout, (&server{writeGate: writelease.NewGate()}).etcdTTLRequestTimeout(now))
+}
+
+func TestCaptureWriteGateMonitorRecordsBlockTransition(t *testing.T) {
+	gate := writelease.NewGate()
+	now := time.Now()
+	require.True(t, gate.RenewP2P(now, 200*time.Millisecond))
+	require.True(t, gate.RenewEtcd(now, 200*time.Millisecond))
+	c := &server{writeGate: gate}
+
+	counter := metrics.CaptureWriteBlockCounter.WithLabelValues(string(writelease.BlockReasonBothExpired))
+	before := testutil.ToFloat64(counter)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.monitorCaptureWriteGate(ctx, 5*time.Millisecond)
+
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(counter) == before+1
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, float64(1), testutil.ToFloat64(
+		metrics.CaptureWriteGateState.WithLabelValues(string(writelease.BlockReasonBothExpired))))
 }
 
 func TestLocalFenceIsIdempotent(t *testing.T) {

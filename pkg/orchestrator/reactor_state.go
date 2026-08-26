@@ -66,6 +66,12 @@ func NewGlobalState(clusterID string, captureSessionTTL int) *GlobalReactorState
 	}
 }
 
+// CaptureRemoveTTLSeconds returns the delay between observing capture-key
+// deletion and publishing the capture removal to schedulers.
+func (s *GlobalReactorState) CaptureRemoveTTLSeconds() int {
+	return s.captureRemoveTTL
+}
+
 // NewGlobalStateForTest creates a new global state for test.
 func NewGlobalStateForTest(clusterID string) *GlobalReactorState {
 	return NewGlobalState(clusterID, 0)

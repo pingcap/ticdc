@@ -912,6 +912,7 @@ func (c *Controller) stopStaleBootstrapMaintainers(
 }
 
 func (c *Controller) Stop() {
+	metrics.CaptureP2PWitnessAvailable.Set(0)
 	c.taskHandlerMutex.Lock()
 	for _, h := range c.taskHandlers {
 		h.Cancel()

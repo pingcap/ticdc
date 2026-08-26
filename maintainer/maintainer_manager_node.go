@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"go.uber.org/zap"
@@ -127,11 +128,16 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 
 func (m *Manager) onNodeHeartbeatResponse(msg *messaging.TargetMessage) {
 	if msg.From != m.coordinatorID {
+		metrics.CaptureLeaseResponseRejectedCounter.WithLabelValues("sender").Inc()
 		return
 	}
 	response := msg.Message[0].(*heartbeatpb.NodeHeartbeatResponse)
-	if response.GetCoordinatorVersion() != m.coordinatorVersion ||
-		response.GetTargetNodeEpoch() != m.node.nodeEpoch {
+	if response.GetCoordinatorVersion() != m.coordinatorVersion {
+		metrics.CaptureLeaseResponseRejectedCounter.WithLabelValues("coordinator_version").Inc()
+		return
+	}
+	if response.GetTargetNodeEpoch() != m.node.nodeEpoch {
+		metrics.CaptureLeaseResponseRejectedCounter.WithLabelValues("node_epoch").Inc()
 		return
 	}
 
@@ -151,15 +157,24 @@ func (m *Manager) onNodeHeartbeatResponse(msg *messaging.TargetMessage) {
 	}
 
 	requestSeq := response.GetRequestSeq()
-	if requestSeq == 0 || requestSeq <= m.node.lastAppliedLeaseSeq {
+	if requestSeq == 0 {
+		if challenge == nil {
+			metrics.CaptureLeaseResponseRejectedCounter.WithLabelValues("request_sequence").Inc()
+		}
+		return
+	}
+	if requestSeq <= m.node.lastAppliedLeaseSeq {
+		metrics.CaptureLeaseResponseRejectedCounter.WithLabelValues("replayed_sequence").Inc()
 		return
 	}
 	requestSentAt, ok := m.node.writeLeaseRequestSentAt[requestSeq]
 	if !ok {
+		metrics.CaptureLeaseResponseRejectedCounter.WithLabelValues("unknown_sequence").Inc()
 		return
 	}
 	duration := time.Duration(response.GetLeaseDurationMs()) * time.Millisecond
 	if duration <= 0 || duration > writelease.P2PLeaseDuration {
+		metrics.CaptureLeaseResponseRejectedCounter.WithLabelValues("lease_duration").Inc()
 		return
 	}
 	if m.writeGate.RenewP2P(requestSentAt, duration) {
@@ -169,6 +184,8 @@ func (m *Manager) onNodeHeartbeatResponse(msg *messaging.TargetMessage) {
 				delete(m.node.writeLeaseRequestSentAt, seq)
 			}
 		}
+	} else {
+		metrics.CaptureLeaseResponseRejectedCounter.WithLabelValues("expired_or_fenced").Inc()
 	}
 }
 

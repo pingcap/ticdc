@@ -26,13 +26,17 @@ func TestGateRequiresBothProofs(t *testing.T) {
 	gate := newGate(func() time.Time { return now })
 
 	require.False(t, gate.IsWritable())
+	require.Equal(t, BlockReasonBothExpired, gate.Status().Reason)
 	require.True(t, gate.RenewP2P(now, P2PLeaseDuration))
 	require.False(t, gate.IsWritable())
+	require.Equal(t, BlockReasonEtcdExpired, gate.Status().Reason)
 	require.True(t, gate.RenewEtcd(now, EtcdProofDuration))
 	require.True(t, gate.IsWritable())
+	require.Equal(t, BlockReasonWritable, gate.Status().Reason)
 
 	now = now.Add(P2PLeaseDuration)
 	require.False(t, gate.IsWritable())
+	require.Equal(t, BlockReasonBothExpired, gate.Status().Reason)
 
 	require.True(t, gate.RenewP2P(now, P2PLeaseDuration))
 	require.False(t, gate.IsWritable())
@@ -51,6 +55,7 @@ func TestGateRejectsLateRenewalAndFenceIsIrreversible(t *testing.T) {
 	require.True(t, gate.RenewEtcd(now, EtcdProofDuration))
 	gate.Fence()
 	require.False(t, gate.IsWritable())
+	require.Equal(t, BlockReasonFenced, gate.Status().Reason)
 	require.False(t, gate.RenewP2P(now, 2*P2PLeaseDuration))
 	require.False(t, gate.RenewEtcd(now, 2*EtcdProofDuration))
 }

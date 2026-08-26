@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/writelease"
 )
@@ -146,13 +147,16 @@ func (c *captureWriteLeaseController) handleSelfHeartbeat(
 		}
 	}
 	if !remoteExists {
+		metrics.CaptureP2PWitnessAvailable.Set(0)
 		return []*messaging.TargetMessage{
 			c.newGrant(c.selfNodeID, heartbeat.GetNodeEpoch(), heartbeat.GetWriteLeaseRequestSeq()),
 		}
 	}
 	if len(witnesses) == 0 {
+		metrics.CaptureP2PWitnessAvailable.Set(0)
 		return nil
 	}
+	metrics.CaptureP2PWitnessAvailable.Set(1)
 
 	if c.pendingWitness != nil {
 		if c.now().Before(c.pendingWitness.expiresAt) {

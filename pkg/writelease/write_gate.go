@@ -26,6 +26,26 @@ const (
 	EtcdProofDuration     = 5 * time.Second
 )
 
+// BlockReason explains why the capture write gate is closed.
+type BlockReason string
+
+const (
+	BlockReasonWritable    BlockReason = "writable"
+	BlockReasonP2PExpired  BlockReason = "p2p_expired"
+	BlockReasonEtcdExpired BlockReason = "etcd_proof_expired"
+	BlockReasonBothExpired BlockReason = "both_expired"
+	BlockReasonFenced      BlockReason = "fenced"
+)
+
+// Status is a point-in-time view used for metrics and transition logs. Write
+// admission still reads the immutable lease snapshot directly.
+type Status struct {
+	Reason             BlockReason
+	Writable           bool
+	P2PRemaining       time.Duration
+	EtcdProofRemaining time.Duration
+}
+
 type leaseState struct {
 	p2pValidUntil       time.Time
 	etcdProofValidUntil time.Time
@@ -63,6 +83,32 @@ func newGate(now func() time.Time) *Gate {
 // not entered the irreversible fenced state.
 func (g *Gate) IsWritable() bool {
 	return g.isWritableAt(g.now())
+}
+
+// Status returns the current gate state and non-negative lease lifetimes.
+func (g *Gate) Status() Status {
+	now := g.now()
+	state := g.state.Load()
+	p2pRemaining := max(state.p2pValidUntil.Sub(now), 0)
+	etcdRemaining := max(state.etcdProofValidUntil.Sub(now), 0)
+
+	reason := BlockReasonWritable
+	switch {
+	case state.fenced:
+		reason = BlockReasonFenced
+	case p2pRemaining == 0 && etcdRemaining == 0:
+		reason = BlockReasonBothExpired
+	case p2pRemaining == 0:
+		reason = BlockReasonP2PExpired
+	case etcdRemaining == 0:
+		reason = BlockReasonEtcdExpired
+	}
+	return Status{
+		Reason:             reason,
+		Writable:           reason == BlockReasonWritable,
+		P2PRemaining:       p2pRemaining,
+		EtcdProofRemaining: etcdRemaining,
+	}
 }
 
 func (g *Gate) isWritableAt(now time.Time) bool {

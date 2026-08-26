@@ -40,6 +40,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -62,6 +63,7 @@ const (
 	sessionWatchInterval  = time.Second
 	etcdTTLRequestTimeout = 3 * time.Second
 	etcdTTLSafetyMargin   = time.Second
+	writeGateMonitorTick  = 100 * time.Millisecond
 	// GracefulShutdownTimeout is used to prevent the CDC process from hanging for an extended period due to certain modules don't exit immediately.
 	GracefulShutdownTimeout = 30 * time.Second
 )
@@ -387,6 +389,10 @@ func (c *server) Run(ctx context.Context) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
+	g.Go(func() error {
+		c.monitorCaptureWriteGate(gctx, writeGateMonitorTick)
+		return nil
+	})
 
 	fatalErrCh := make(chan error, 1)
 	go func() {
@@ -478,6 +484,54 @@ func (c *server) etcdTTLRequestTimeout(now time.Time) time.Duration {
 		return etcdTTLRequestTimeout
 	}
 	return min(etcdTTLRequestTimeout, proofValidUntil.Sub(now))
+}
+
+func (c *server) monitorCaptureWriteGate(ctx context.Context, interval time.Duration) {
+	if c.writeGate == nil {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	previous := c.writeGate.Status()
+	c.recordCaptureWriteGateMetrics(previous)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			current := c.writeGate.Status()
+			c.recordCaptureWriteGateMetrics(current)
+			if current.Reason == previous.Reason {
+				continue
+			}
+			if previous.Writable && !current.Writable {
+				metrics.CaptureWriteBlockCounter.WithLabelValues(string(current.Reason)).Inc()
+				log.Warn("capture write gate blocked", zap.String("reason", string(current.Reason)))
+			} else if !previous.Writable && current.Writable {
+				log.Info("capture write gate recovered")
+			}
+			previous = current
+		}
+	}
+}
+
+func (c *server) recordCaptureWriteGateMetrics(status writelease.Status) {
+	for _, reason := range []writelease.BlockReason{
+		writelease.BlockReasonWritable,
+		writelease.BlockReasonP2PExpired,
+		writelease.BlockReasonEtcdExpired,
+		writelease.BlockReasonBothExpired,
+		writelease.BlockReasonFenced,
+	} {
+		value := float64(0)
+		if status.Reason == reason {
+			value = 1
+		}
+		metrics.CaptureWriteGateState.WithLabelValues(string(reason)).Set(value)
+	}
+	metrics.CaptureP2PLeaseRemainingSeconds.Set(status.P2PRemaining.Seconds())
+	metrics.CaptureEtcdProofRemainingSeconds.Set(status.EtcdProofRemaining.Seconds())
 }
 
 func (c *server) localFence(reason string) {
