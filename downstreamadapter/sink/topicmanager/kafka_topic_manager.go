@@ -46,6 +46,7 @@ type kafkaTopicManager struct {
 	topics sync.Map
 	// cancel is used to cancel the background goroutine.
 	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // newKafkaTopicManager creates a topic manager without starting background work.
@@ -91,7 +92,11 @@ func GetTopicManagerAndTryCreateTopic(
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	topicManager.cancel = cancel
-	go topicManager.backgroundRefreshMeta(ctx)
+	topicManager.wg.Add(1)
+	go func() {
+		defer topicManager.wg.Done()
+		topicManager.backgroundRefreshMeta(ctx)
+	}()
 
 	return topicManager, nil
 }
@@ -350,7 +355,10 @@ func (m *kafkaTopicManager) useConfiguredPartitionNum(topicName string, cause er
 	return m.cfg.PartitionNum
 }
 
-// Close exits the background goroutine.
+// Close cancels the background goroutine and waits for it to exit.
 func (m *kafkaTopicManager) Close() {
-	m.cancel()
+	if m.cancel != nil {
+		m.cancel()
+	}
+	m.wg.Wait()
 }

@@ -415,14 +415,38 @@ func TestCreateTopic(t *testing.T) {
 	}
 }
 
-func TestAdminClientClose(t *testing.T) {
+type closeTrackingSaramaClient struct {
+	sarama.Client
+	closed bool
+}
+
+func (c *closeTrackingSaramaClient) Close() error {
+	c.closed = true
+	return nil
+}
+
+func TestSaramaAdminClientCloseDelegatesClientCleanupToAdmin(t *testing.T) {
 	ctrl := gomock.NewController(t)
+	underlyingClient := &closeTrackingSaramaClient{}
 	admin := NewMocksaramaClusterAdmin(ctrl)
-	admin.EXPECT().Close().Return(nil)
+	admin.EXPECT().Close().DoAndReturn(underlyingClient.Close)
 	client := &saramaAdminClient{
 		changefeed: common.NewChangeFeedIDWithName("test", "default"),
+		client:     underlyingClient,
 		admin:      admin,
 	}
 
+	client.Close()
+	require.True(t, underlyingClient.closed)
+}
+
+func TestSaramaAdminClientCloseFallsBackToClientWhenAdminIsNil(t *testing.T) {
+	underlyingClient := &closeTrackingSaramaClient{}
+	client := &saramaAdminClient{
+		changefeed: common.NewChangeFeedIDWithName("test", "default"),
+		client:     underlyingClient,
+	}
+
 	require.NotPanics(t, func() { client.Close() })
+	require.True(t, underlyingClient.closed)
 }

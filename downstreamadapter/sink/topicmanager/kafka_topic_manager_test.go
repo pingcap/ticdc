@@ -17,6 +17,7 @@ import (
 	"context"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
@@ -258,6 +259,44 @@ func TestGetTopicManagerStartsBackgroundRefreshAfterTopicReady(t *testing.T) {
 	require.NoError(t, err)
 	defer manager.Close()
 	require.NotNil(t, manager.(*kafkaTopicManager).cancel)
+}
+
+func TestKafkaTopicManagerCloseWaitsForBackgroundWork(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	manager := &kafkaTopicManager{cancel: cancel}
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	manager.wg.Add(1)
+	go func() {
+		defer manager.wg.Done()
+		<-ctx.Done()
+		close(canceled)
+		<-release
+	}()
+
+	closed := make(chan struct{})
+	go func() {
+		manager.Close()
+		close(closed)
+	}()
+
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		require.FailNow(t, "background work was not canceled")
+	}
+	select {
+	case <-closed:
+		require.FailNow(t, "Close returned before background work exited")
+	default:
+	}
+
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		require.FailNow(t, "Close did not wait for background work to exit")
+	}
 }
 
 func TestCreateTopicWithTopicDescribeDenied(t *testing.T) {

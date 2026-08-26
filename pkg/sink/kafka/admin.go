@@ -32,6 +32,9 @@ type saramaAdminClient struct {
 	admin  saramaClusterAdmin
 }
 
+// saramaClusterAdmin is the subset of sarama.ClusterAdmin used by TiCDC.
+// The narrow interface also lets cleanup tests verify that closing the admin
+// releases the client passed to sarama.NewClusterAdminFromClient.
 type saramaClusterAdmin interface {
 	DescribeCluster() (brokers []*sarama.Broker, controllerID int32, err error)
 	DescribeConfig(resource sarama.ConfigResource) ([]sarama.ConfigEntry, error)
@@ -204,10 +207,23 @@ func (a *saramaAdminClient) CreateTopic(detail *TopicDetail) error {
 func (a *saramaAdminClient) Close() {
 	// NewClusterAdminFromClient transfers the close responsibility to the admin.
 	// Closing it also releases the client shared by the runtime producers.
-	if err := a.admin.Close(); err != nil {
-		log.Warn("kafka admin client close failed",
-			zap.String("keyspace", a.changefeed.Keyspace()),
-			zap.String("changefeed", a.changefeed.Name()),
-			zap.Error(err))
+	if a.admin != nil {
+		if err := a.admin.Close(); err != nil {
+			log.Warn("kafka admin client close failed",
+				zap.String("keyspace", a.changefeed.Keyspace()),
+				zap.String("changefeed", a.changefeed.Name()),
+				zap.Error(err))
+		}
+		return
+	}
+	// Preserve cleanup for a partially initialized wrapper. This is also the
+	// resource-leak regression guard from PR #4437.
+	if a.client != nil {
+		if err := a.client.Close(); err != nil {
+			log.Warn("kafka client close failed",
+				zap.String("keyspace", a.changefeed.Keyspace()),
+				zap.String("changefeed", a.changefeed.Name()),
+				zap.Error(err))
+		}
 	}
 }
