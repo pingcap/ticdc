@@ -556,9 +556,17 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 	} else {
 		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("response").Add(float64(len(messages)))
 	}
+	hasGrant := false
+	for _, message := range messages {
+		response, ok := message.Message[0].(*heartbeatpb.NodeHeartbeatResponse)
+		if ok && response.GetRequestSeq() != 0 {
+			hasGrant = true
+			break
+		}
+	}
 	delayed := false
 	failpoint.Inject("DelayCaptureWriteLeaseResponse", func(value failpoint.Value) {
-		if value.(bool) && len(messages) > 0 {
+		if value.(bool) && hasGrant {
 			content, readErr := os.ReadFile(delayWriteLeaseResponseMarker)
 			delayMillis, parseErr := strconv.Atoi(string(content))
 			if readErr == nil && parseErr == nil && delayMillis > 0 &&
@@ -579,7 +587,7 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 		return
 	}
 	failpoint.Inject("DuplicateCaptureWriteLeaseResponse", func(value failpoint.Value) {
-		if value.(bool) && os.Remove(duplicateWriteLeaseMarker) == nil {
+		if value.(bool) && hasGrant && os.Remove(duplicateWriteLeaseMarker) == nil {
 			for _, message := range messages {
 				_ = c.messageCenter.SendCommand(message)
 			}
