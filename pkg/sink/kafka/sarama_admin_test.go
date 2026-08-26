@@ -416,43 +416,13 @@ func TestCreateTopic(t *testing.T) {
 }
 
 func TestAdminClientClose(t *testing.T) {
-	tests := []struct {
-		name  string
-		setup func(*gomock.Controller) *saramaAdminClient
-	}{
-		{
-			name: "uses admin close",
-			setup: func(ctrl *gomock.Controller) *saramaAdminClient {
-				client := NewMocksaramaClient(ctrl)
-				admin := NewMocksaramaClusterAdmin(ctrl)
-				admin.EXPECT().Close().Return(nil)
-				client.EXPECT().Close().Times(0)
-				return &saramaAdminClient{
-					changefeed: common.NewChangeFeedIDWithName("test", "default"),
-					client:     client,
-					admin:      admin,
-				}
-			},
-		},
-		{
-			name: "falls back to client when admin is nil",
-			setup: func(ctrl *gomock.Controller) *saramaAdminClient {
-				client := NewMocksaramaClient(ctrl)
-				client.EXPECT().Close().Return(nil)
-				return &saramaAdminClient{
-					changefeed: common.NewChangeFeedIDWithName("test", "default"),
-					client:     client,
-				}
-			},
-		},
+	ctrl := gomock.NewController(t)
+	admin := NewMocksaramaClusterAdmin(ctrl)
+	admin.EXPECT().Close().Return(nil)
+	client := &saramaAdminClient{
+		changefeed: common.NewChangeFeedIDWithName("test", "default"),
+		admin:      admin,
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			adminClient := test.setup(ctrl)
-
-			require.NotPanics(t, func() { adminClient.Close() })
-		})
-	}
+	require.NotPanics(t, func() { client.Close() })
 }

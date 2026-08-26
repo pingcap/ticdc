@@ -11,57 +11,6 @@ import (
 	gomock "github.com/golang/mock/gomock"
 )
 
-// MocksaramaSyncClient is a mock of saramaSyncClient interface.
-type MocksaramaSyncClient struct {
-	ctrl     *gomock.Controller
-	recorder *MocksaramaSyncClientMockRecorder
-}
-
-// MocksaramaSyncClientMockRecorder is the mock recorder for MocksaramaSyncClient.
-type MocksaramaSyncClientMockRecorder struct {
-	mock *MocksaramaSyncClient
-}
-
-// NewMocksaramaSyncClient creates a new mock instance.
-func NewMocksaramaSyncClient(ctrl *gomock.Controller) *MocksaramaSyncClient {
-	mock := &MocksaramaSyncClient{ctrl: ctrl}
-	mock.recorder = &MocksaramaSyncClientMockRecorder{mock}
-	return mock
-}
-
-// EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MocksaramaSyncClient) EXPECT() *MocksaramaSyncClientMockRecorder {
-	return m.recorder
-}
-
-// Brokers mocks base method.
-func (m *MocksaramaSyncClient) Brokers() []*sarama.Broker {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Brokers")
-	ret0, _ := ret[0].([]*sarama.Broker)
-	return ret0
-}
-
-// Brokers indicates an expected call of Brokers.
-func (mr *MocksaramaSyncClientMockRecorder) Brokers() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Brokers", reflect.TypeOf((*MocksaramaSyncClient)(nil).Brokers))
-}
-
-// Close mocks base method.
-func (m *MocksaramaSyncClient) Close() error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Close")
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Close indicates an expected call of Close.
-func (mr *MocksaramaSyncClientMockRecorder) Close() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MocksaramaSyncClient)(nil).Close))
-}
-
 // MocksaramaSyncProducerClient is a mock of saramaSyncProducerClient interface.
 type MocksaramaSyncProducerClient struct {
 	ctrl     *gomock.Controller

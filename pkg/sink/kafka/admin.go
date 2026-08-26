@@ -27,16 +27,9 @@ import (
 type saramaAdminClient struct {
 	changefeed common.ChangeFeedID
 
-	// client is the underlying sarama client created for this admin wrapper.
-	// It must be closed to stop background goroutines (e.g. metadata updater) and release memory.
-	client saramaClient
+	// client is shared by the runtime admin and producers. admin.Close closes it.
+	client sarama.Client
 	admin  saramaClusterAdmin
-}
-
-type saramaClient interface {
-	Brokers() []*sarama.Broker
-	Partitions(topic string) ([]int32, error)
-	Close() error
 }
 
 type saramaClusterAdmin interface {
@@ -209,24 +202,12 @@ func (a *saramaAdminClient) CreateTopic(detail *TopicDetail) error {
 }
 
 func (a *saramaAdminClient) Close() {
-	// For admins created via sarama.NewClusterAdminFromClient, admin.Close() takes care
-	// of closing the underlying client as well. Fall back to closing the client directly
-	// only when admin is unexpectedly nil.
-	if a.admin != nil {
-		if err := a.admin.Close(); err != nil {
-			log.Warn("kafka admin client close failed",
-				zap.String("keyspace", a.changefeed.Keyspace()),
-				zap.String("changefeed", a.changefeed.Name()),
-				zap.Error(err))
-		}
-		return
-	}
-	if a.client != nil {
-		if err := a.client.Close(); err != nil {
-			log.Warn("kafka client close failed",
-				zap.String("keyspace", a.changefeed.Keyspace()),
-				zap.String("changefeed", a.changefeed.Name()),
-				zap.Error(err))
-		}
+	// NewClusterAdminFromClient transfers the close responsibility to the admin.
+	// Closing it also releases the client shared by the runtime producers.
+	if err := a.admin.Close(); err != nil {
+		log.Warn("kafka admin client close failed",
+			zap.String("keyspace", a.changefeed.Keyspace()),
+			zap.String("changefeed", a.changefeed.Name()),
+			zap.Error(err))
 	}
 }

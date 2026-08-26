@@ -30,6 +30,7 @@ type saramaFactory struct {
 	changefeedID   common.ChangeFeedID
 	option         *options
 	metricRegistry metrics.Registry
+	client         sarama.Client
 }
 
 // NewSaramaFactory constructs a Factory with sarama implementation.
@@ -83,7 +84,7 @@ func NewSaramaFactory(
 	}, nil
 }
 
-func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config *sarama.Config) (AdminClient, error) {
+func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config *sarama.Config) (*saramaAdminClient, error) {
 	start := time.Now()
 	client, err := sarama.NewClient(endpoints, config)
 	duration := time.Since(start)
@@ -107,8 +108,7 @@ func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config
 			zap.Duration("duration", duration))
 	}
 	if err != nil {
-		// `sarama.NewClusterAdminFromClient` does not take ownership of the client,
-		// so we need to close it on failures to avoid leaking background goroutines.
+		// No admin exists to close the client when construction fails.
 		_ = client.Close()
 		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
@@ -124,32 +124,26 @@ func (f *saramaFactory) AdminClient(ctx context.Context) (AdminClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newAdminClient(f.changefeedID, f.option.BrokerEndpoints, config)
+	config.MetricRegistry = f.metricRegistry
+
+	admin, err := newAdminClient(f.changefeedID, f.option.BrokerEndpoints, config)
+	if err != nil {
+		return nil, err
+	}
+	f.client = admin.client
+	return admin, nil
 }
 
 // SyncProducer returns a Sync SyncProducer,
 // it should be the caller's responsibility to close the producer
-func (f *saramaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
-	config, err := newSaramaConfig(ctx, f.option)
+func (f *saramaFactory) SyncProducer(context.Context) (SyncProducer, error) {
+	p, err := sarama.NewSyncProducerFromClient(f.client)
 	if err != nil {
-		return nil, err
-	}
-	config.MetricRegistry = f.metricRegistry
-
-	client, err := sarama.NewClient(f.option.BrokerEndpoints, config)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
-	}
-
-	p, err := sarama.NewSyncProducerFromClient(client)
-	if err != nil {
-		_ = client.Close()
 		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 
 	return &saramaSyncProducer{
 		id:       f.changefeedID,
-		client:   client,
 		producer: p,
 		closed:   atomic.NewBool(false),
 	}, nil
@@ -157,25 +151,12 @@ func (f *saramaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) 
 
 // AsyncProducer return an Async SyncProducer,
 // it should be the caller's responsibility to close the producer
-func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
-	config, err := newSaramaConfig(ctx, f.option)
+func (f *saramaFactory) AsyncProducer(context.Context) (AsyncProducer, error) {
+	p, err := sarama.NewAsyncProducerFromClient(f.client)
 	if err != nil {
-		return nil, err
-	}
-	config.MetricRegistry = f.metricRegistry
-
-	client, err := sarama.NewClient(f.option.BrokerEndpoints, config)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
-	}
-
-	p, err := sarama.NewAsyncProducerFromClient(client)
-	if err != nil {
-		_ = client.Close()
 		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 	return &saramaAsyncProducer{
-		client:       client,
 		producer:     p,
 		changefeedID: f.changefeedID,
 		closed:       atomic.NewBool(false),

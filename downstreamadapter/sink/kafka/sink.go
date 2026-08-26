@@ -168,13 +168,15 @@ func newWithComponents(
 		if err == nil {
 			return
 		}
+		// Closing the admin releases the shared Sarama client and unblocks
+		// producer shutdown when Kafka is unhealthy.
+		comp.close()
 		if syncProducer != nil {
 			syncProducer.Close()
 		}
 		if asyncProducer != nil {
 			asyncProducer.Close()
 		}
-		comp.close()
 		statistics.Close()
 	}()
 
@@ -263,6 +265,7 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *sink) close() {
+	s.isNormal.Store(false)
 	s.eventChan.Close()
 	s.rowChan.Close()
 }
@@ -317,6 +320,11 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			events, err := helper.NewMQRowEvents(event, topic, partitionNum, partitionGenerator, selector)
 			if err != nil {
 				return err
+			}
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			default:
 			}
 			s.rowChan.Push(events...)
 		}
@@ -570,11 +578,12 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 }
 
 func (s *sink) Close() {
-	s.isNormal.Store(false)
 	s.close()
+	// Close the shared Sarama client before producer facades to help unblock
+	// their broker operations during shutdown.
+	s.comp.close()
 	s.ddlProducer.Close()
 	s.dmlProducer.Close()
-	s.comp.close()
 	s.statistics.Close()
 }
 
