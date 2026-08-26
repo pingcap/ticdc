@@ -1217,7 +1217,10 @@ func (c *Controller) newBootstrapMessage(id node.ID, addr string) *messaging.Tar
 	return messaging.NewSingleTargetMessage(
 		id,
 		messaging.MaintainerManagerTopic,
-		&heartbeatpb.CoordinatorBootstrapRequest{Version: c.version})
+		&heartbeatpb.CoordinatorBootstrapRequest{
+			Version:                   c.version,
+			WriteLeaseProtocolVersion: heartbeatpb.CurrentWriteLeaseProtocolVersion,
+		})
 }
 
 // updateChangefeedEpoch bumps the persisted owner epoch before a state change

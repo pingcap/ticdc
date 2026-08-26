@@ -256,6 +256,9 @@ message SetDispatcherDrainTargetRequest {
 
 message CoordinatorBootstrapRequest {
     int64 version = 1;
+    // Zero keeps the peer in legacy mode. A non-zero version activates the
+    // capture P2P write lease only on peers that understand this protocol.
+    uint32 write_lease_protocol_version = 2;
 }
 
 message CoordinatorBootstrapResponse {

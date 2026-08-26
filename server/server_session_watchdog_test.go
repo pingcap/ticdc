@@ -145,6 +145,7 @@ func TestEtcdTTLRequestTimeoutUsesCurrentProofDeadline(t *testing.T) {
 
 func TestCaptureWriteGateMonitorRecordsBlockTransition(t *testing.T) {
 	gate := writelease.NewGate()
+	gate.SetP2PRequired(true)
 	now := time.Now()
 	require.True(t, gate.RenewP2P(now, 200*time.Millisecond))
 	require.True(t, gate.RenewEtcd(now, 200*time.Millisecond))

@@ -24,6 +24,7 @@ import (
 func TestGateRequiresBothProofs(t *testing.T) {
 	now := time.Unix(100, 0)
 	gate := newGate(func() time.Time { return now })
+	gate.SetP2PRequired(true)
 
 	require.False(t, gate.IsWritable())
 	require.Equal(t, BlockReasonBothExpired, gate.Status().Reason)
@@ -47,6 +48,7 @@ func TestGateRequiresBothProofs(t *testing.T) {
 func TestGateRejectsLateRenewalAndFenceIsIrreversible(t *testing.T) {
 	now := time.Unix(100, 0)
 	gate := newGate(func() time.Time { return now })
+	gate.SetP2PRequired(true)
 
 	require.False(t, gate.RenewP2P(now.Add(-P2PLeaseDuration), P2PLeaseDuration))
 	require.False(t, gate.RenewEtcd(now.Add(-EtcdProofDuration), EtcdProofDuration))
@@ -62,6 +64,7 @@ func TestGateRejectsLateRenewalAndFenceIsIrreversible(t *testing.T) {
 
 func TestGateWaitUntilWritable(t *testing.T) {
 	gate := NewGate()
+	gate.SetP2PRequired(true)
 	done := make(chan error, 1)
 	go func() {
 		done <- gate.WaitUntilWritable(context.Background())
@@ -79,6 +82,28 @@ func TestGateWaitUntilWritable(t *testing.T) {
 
 	gate.InvalidateP2P()
 	require.False(t, gate.IsWritable())
+}
+
+func TestGateNegotiatesP2PPerCoordinator(t *testing.T) {
+	now := time.Unix(100, 0)
+	gate := newGate(func() time.Time { return now })
+
+	// Legacy mode never requires a P2P grant, but it still requires fresh etcd
+	// proof and remains protected by an irreversible local fence.
+	require.False(t, gate.IsWritable())
+	require.True(t, gate.RenewEtcd(now, EtcdProofDuration))
+	require.True(t, gate.IsWritable())
+	require.False(t, gate.Status().P2PRequired)
+
+	gate.SetP2PRequired(true)
+	require.False(t, gate.IsWritable())
+	require.Equal(t, BlockReasonP2PExpired, gate.Status().Reason)
+	require.True(t, gate.RenewP2P(now, P2PLeaseDuration))
+	require.True(t, gate.IsWritable())
+
+	gate.InvalidateP2P()
+	gate.SetP2PRequired(false)
+	require.True(t, gate.IsWritable())
 }
 
 func TestGateWaitReturnsOnContextCancellation(t *testing.T) {

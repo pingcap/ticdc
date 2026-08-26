@@ -42,6 +42,7 @@ const (
 type Status struct {
 	Reason             BlockReason
 	Writable           bool
+	P2PRequired        bool
 	P2PRemaining       time.Duration
 	EtcdProofRemaining time.Duration
 }
@@ -49,6 +50,7 @@ type Status struct {
 type leaseState struct {
 	p2pValidUntil       time.Time
 	etcdProofValidUntil time.Time
+	p2pRequired         bool
 	fenced              bool
 }
 
@@ -64,8 +66,9 @@ type Gate struct {
 	changed chan struct{}
 }
 
-// NewGate creates a fail-closed write gate. Both P2P and etcd proofs must be
-// renewed before writes can be admitted.
+// NewGate creates a fail-closed write gate. Etcd proof is always required.
+// P2P proof becomes mandatory only after a coordinator negotiates the current
+// write-lease protocol, so rolling upgrades do not stop legacy nodes.
 func NewGate() *Gate {
 	return newGate(time.Now)
 }
@@ -96,9 +99,9 @@ func (g *Gate) Status() Status {
 	switch {
 	case state.fenced:
 		reason = BlockReasonFenced
-	case p2pRemaining == 0 && etcdRemaining == 0:
+	case state.p2pRequired && p2pRemaining == 0 && etcdRemaining == 0:
 		reason = BlockReasonBothExpired
-	case p2pRemaining == 0:
+	case state.p2pRequired && p2pRemaining == 0:
 		reason = BlockReasonP2PExpired
 	case etcdRemaining == 0:
 		reason = BlockReasonEtcdExpired
@@ -106,6 +109,7 @@ func (g *Gate) Status() Status {
 	return Status{
 		Reason:             reason,
 		Writable:           reason == BlockReasonWritable,
+		P2PRequired:        state.p2pRequired,
 		P2PRemaining:       p2pRemaining,
 		EtcdProofRemaining: etcdRemaining,
 	}
@@ -114,7 +118,7 @@ func (g *Gate) Status() Status {
 func (g *Gate) isWritableAt(now time.Time) bool {
 	state := g.state.Load()
 	return !state.fenced &&
-		now.Before(state.p2pValidUntil) &&
+		(!state.p2pRequired || now.Before(state.p2pValidUntil)) &&
 		now.Before(state.etcdProofValidUntil)
 }
 
@@ -153,6 +157,22 @@ func (g *Gate) RenewP2P(requestSentAt time.Time, duration time.Duration) bool {
 // It rejects responses that were already expired when they arrived.
 func (g *Gate) RenewEtcd(requestSentAt time.Time, duration time.Duration) bool {
 	return g.renew(requestSentAt.Add(duration), false)
+}
+
+// SetP2PRequired activates or deactivates P2P enforcement for the current
+// coordinator generation. Legacy coordinators leave it disabled; a current
+// coordinator enables it before its first grant is accepted.
+func (g *Gate) SetP2PRequired(required bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	current := g.state.Load()
+	if current.fenced || current.p2pRequired == required {
+		return
+	}
+	next := *current
+	next.p2pRequired = required
+	g.publishLocked(&next)
 }
 
 func (g *Gate) renew(validUntil time.Time, p2p bool) bool {

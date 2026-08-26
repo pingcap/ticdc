@@ -223,6 +223,42 @@ func TestCoordinatorBootstrapResponseIncludesDispatcherDrainTarget(t *testing.T)
 	require.Equal(t, heartbeatpb.CurrentWriteLeaseProtocolVersion, resp.WriteLeaseProtocolVersion)
 }
 
+func TestCoordinatorBootstrapNegotiatesP2PWriteLease(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	gate := writelease.NewGate()
+	appcontext.SetService(appcontext.CaptureWriteGate, gate)
+
+	var nodeLiveness liveness.Liveness
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	require.True(t, gate.IsWritable())
+
+	bootstrap := func(coordinator node.ID, protocolVersion uint32) {
+		message := messaging.NewSingleTargetMessage(
+			m.nodeInfo.ID,
+			messaging.MaintainerManagerTopic,
+			&heartbeatpb.CoordinatorBootstrapRequest{
+				Version:                   1,
+				WriteLeaseProtocolVersion: protocolVersion,
+			},
+		)
+		message.From = coordinator
+		m.onCoordinatorBootstrapRequest(message)
+		// Bootstrap response and the forced node heartbeat.
+		<-mc.GetMessageChannel()
+		<-mc.GetMessageChannel()
+	}
+
+	bootstrap(node.ID("new-coordinator"), heartbeatpb.CurrentWriteLeaseProtocolVersion)
+	require.True(t, gate.Status().P2PRequired)
+	require.False(t, gate.IsWritable())
+
+	bootstrap(node.ID("legacy-coordinator"), heartbeatpb.LegacyWriteLeaseProtocolVersion)
+	require.False(t, gate.Status().P2PRequired)
+	require.True(t, gate.IsWritable())
+}
+
 func TestNodeHeartbeatResponseRenewsP2PWriteLease(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
@@ -233,6 +269,7 @@ func TestNodeHeartbeatResponseRenewsP2PWriteLease(t *testing.T) {
 	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
 	m.coordinatorID = node.ID("coordinator")
 	m.coordinatorVersion = 10
+	gate.SetP2PRequired(true)
 	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
 
 	m.sendNodeHeartbeat(true)
