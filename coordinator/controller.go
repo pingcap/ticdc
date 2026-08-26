@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/drain"
@@ -543,7 +544,34 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 			initializedNodes = append(initializedNodes, id)
 		}
 	}
-	for _, message := range c.writeLease.handleHeartbeat(from, heartbeat, initializedNodes) {
+	messages := c.writeLease.handleHeartbeat(from, heartbeat, initializedNodes)
+	delayed := false
+	failpoint.Inject("DelayCaptureWriteLeaseResponse", func(value failpoint.Value) {
+		delay := time.Duration(value.(int)) * time.Millisecond
+		if delay <= 0 || len(messages) == 0 {
+			return
+		}
+		delayed = true
+		deferredMessages := append([]*messaging.TargetMessage(nil), messages...)
+		go func() {
+			time.Sleep(delay)
+			for _, message := range deferredMessages {
+				_ = c.messageCenter.SendCommand(message)
+			}
+		}()
+	})
+	if delayed {
+		return
+	}
+	failpoint.Inject("DuplicateCaptureWriteLeaseResponse", func(value failpoint.Value) {
+		if !value.(bool) {
+			return
+		}
+		for _, message := range messages {
+			_ = c.messageCenter.SendCommand(message)
+		}
+	})
+	for _, message := range messages {
 		_ = c.messageCenter.SendCommand(message)
 	}
 }
