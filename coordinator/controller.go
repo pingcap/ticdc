@@ -558,39 +558,31 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 	}
 	delayed := false
 	failpoint.Inject("DelayCaptureWriteLeaseResponse", func(value failpoint.Value) {
-		if !value.(bool) || len(messages) == 0 {
-			return
-		}
-		content, err := os.ReadFile(delayWriteLeaseResponseMarker)
-		if err != nil {
-			return
-		}
-		if err := os.Remove(delayWriteLeaseResponseMarker); err != nil {
-			return
-		}
-		delayMillis, err := strconv.Atoi(string(content))
-		if err != nil || delayMillis <= 0 {
-			return
-		}
-		delay := time.Duration(delayMillis) * time.Millisecond
-		delayed = true
-		deferredMessages := append([]*messaging.TargetMessage(nil), messages...)
-		go func() {
-			time.Sleep(delay)
-			for _, message := range deferredMessages {
-				_ = c.messageCenter.SendCommand(message)
+		if value.(bool) && len(messages) > 0 {
+			content, readErr := os.ReadFile(delayWriteLeaseResponseMarker)
+			delayMillis, parseErr := strconv.Atoi(string(content))
+			if readErr == nil && parseErr == nil && delayMillis > 0 &&
+				os.Remove(delayWriteLeaseResponseMarker) == nil {
+				delay := time.Duration(delayMillis) * time.Millisecond
+				delayed = true
+				deferredMessages := append([]*messaging.TargetMessage(nil), messages...)
+				go func() {
+					time.Sleep(delay)
+					for _, message := range deferredMessages {
+						_ = c.messageCenter.SendCommand(message)
+					}
+				}()
 			}
-		}()
+		}
 	})
 	if delayed {
 		return
 	}
 	failpoint.Inject("DuplicateCaptureWriteLeaseResponse", func(value failpoint.Value) {
-		if !value.(bool) || os.Remove(duplicateWriteLeaseMarker) != nil {
-			return
-		}
-		for _, message := range messages {
-			_ = c.messageCenter.SendCommand(message)
+		if value.(bool) && os.Remove(duplicateWriteLeaseMarker) == nil {
+			for _, message := range messages {
+				_ = c.messageCenter.SendCommand(message)
+			}
 		}
 	})
 	for _, message := range messages {
