@@ -28,7 +28,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const defaultCaptureRemoveTTL = 5
+const defaultCaptureRemoveTTL = 10
 
 // GlobalReactorState represents a global state which stores all key-value pairs in ETCD
 type GlobalReactorState struct {
