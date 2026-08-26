@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -78,6 +79,7 @@ func initRedoComponet(
 	}
 	manager.redoDispatcherMap = redoDispatcherMap
 	manager.redoSink = redoSink
+	manager.redoWriteSink = withCaptureWriteGate(ctx, redoSink)
 	manager.redoSchemaIDToDispatchers = redoSchemaIDToDispatchers
 	manager.redoQuota = redoQuota
 	manager.sinkQuota = totalQuota - redoQuota
@@ -207,7 +209,7 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 			scheduleSkipDMLAsStartTsList[idx],
 			batchCount,
 			batchBytes,
-			e.redoSink,
+			e.getRedoWriteSink(),
 			e.sharedInfo,
 		)
 		if e.heartBeatTask == nil {
@@ -253,6 +255,13 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 	return nil
 }
 
+func (e *DispatcherManager) getRedoWriteSink() sink.Sink {
+	if e.redoWriteSink != nil {
+		return e.redoWriteSink
+	}
+	return e.redoSink
+}
+
 func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID) *MergeCheckTask {
 	// Step 1: check the dispatcherIDs and mergedDispatcherID are valid:
 	//         1. whether the mergedDispatcherID is not exist in the dispatcherMap
@@ -281,7 +290,7 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 		false, // skipDMLAsStartTs
 		batchCount,
 		batchBytes,
-		e.redoSink,
+		e.getRedoWriteSink(),
 		e.sharedInfo,
 	)
 
