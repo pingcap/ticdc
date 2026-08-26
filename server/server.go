@@ -441,7 +441,7 @@ func (c *server) watchEtcdSession(
 			return errors.ErrCaptureSuicide.GenWithStackByArgs()
 		case <-ticker.C:
 			requestSentAt := time.Now()
-			ttlCtx, cancel := context.WithTimeout(ctx, etcdTTLRequestTimeout)
+			ttlCtx, cancel := context.WithTimeout(ctx, c.etcdTTLRequestTimeout(requestSentAt))
 			ttl, err := c.EtcdClient.GetEtcdClient().TimeToLive(ttlCtx, leaseID)
 			cancel()
 			if err != nil {
@@ -467,6 +467,17 @@ func (c *server) watchEtcdSession(
 			}
 		}
 	}
+}
+
+func (c *server) etcdTTLRequestTimeout(now time.Time) time.Duration {
+	if c.writeGate == nil {
+		return etcdTTLRequestTimeout
+	}
+	proofValidUntil := c.writeGate.EtcdProofValidUntil()
+	if proofValidUntil.IsZero() || !proofValidUntil.After(now) {
+		return etcdTTLRequestTimeout
+	}
+	return min(etcdTTLRequestTimeout, proofValidUntil.Sub(now))
 }
 
 func (c *server) localFence(reason string) {
