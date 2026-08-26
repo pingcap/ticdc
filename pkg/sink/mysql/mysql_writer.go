@@ -151,6 +151,7 @@ func (w *Writer) SetWriteGate(gate *writelease.Gate) {
 // the writer is shutting down, so callers must not execute the DML batch.
 func (w *Writer) grantWrite() bool {
 	if w.writeGate == nil {
+		metrics.CaptureLastWriteAdmissionTimestamp.SetToCurrentTime()
 		return true
 	}
 	for {
@@ -158,6 +159,7 @@ func (w *Writer) grantWrite() bool {
 			return false
 		}
 		if w.writeGate.IsWritable() {
+			metrics.CaptureLastWriteAdmissionTimestamp.SetToCurrentTime()
 			return true
 		}
 	}

@@ -44,6 +44,13 @@ var (
 			Name:      "capture_write_block_total",
 			Help:      "Number of capture write gate transitions from writable to blocked.",
 		}, []string{"reason"})
+	CaptureLastWriteAdmissionTimestamp = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "capture_last_write_admission_timestamp_seconds",
+			Help:      "Unix timestamp of the most recent downstream write admitted by this capture.",
+		})
 	CaptureLeaseResponseRejectedCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -72,6 +79,7 @@ func initCaptureWriteLeaseMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CaptureP2PLeaseRemainingSeconds)
 	registry.MustRegister(CaptureEtcdProofRemainingSeconds)
 	registry.MustRegister(CaptureWriteBlockCounter)
+	registry.MustRegister(CaptureLastWriteAdmissionTimestamp)
 	registry.MustRegister(CaptureLeaseResponseRejectedCounter)
 	registry.MustRegister(CaptureSafeToRescheduleDelaySeconds)
 	registry.MustRegister(CaptureP2PWitnessAvailable)
