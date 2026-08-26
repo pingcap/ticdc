@@ -29,13 +29,6 @@ import (
 
 const kafkaTopicManagerTestTopic = "mock_topic"
 
-func topicDetail(topic string, partitionNum int32) kafka.TopicDetail {
-	return kafka.TopicDetail{
-		Name:          topic,
-		NumPartitions: partitionNum,
-	}
-}
-
 func TestCreateTopic(t *testing.T) {
 	t.Parallel()
 
@@ -48,7 +41,7 @@ func TestCreateTopic(t *testing.T) {
 		adminClient := kafka.NewMockAdminClient(ctrl)
 		adminClient.EXPECT().GetTopicsMeta([]string{kafkaTopicManagerTestTopic}, true).Return(
 			map[string]kafka.TopicDetail{
-				kafkaTopicManagerTestTopic: topicDetail(kafkaTopicManagerTestTopic, 2),
+				kafkaTopicManagerTestTopic: {Name: kafkaTopicManagerTestTopic, NumPartitions: 2},
 			}, nil)
 		manager := newKafkaTopicManager(
 			kafkaTopicManagerTestTopic,
@@ -84,7 +77,7 @@ func TestCreateTopic(t *testing.T) {
 					return nil, errors.WrapError(errors.ErrKafkaAdminAPI, io.EOF, "describe-topic", "new-topic")
 				}
 				return map[string]kafka.TopicDetail{
-					createdTopic.Name: topicDetail(createdTopic.Name, createdTopic.NumPartitions),
+					createdTopic.Name: {Name: createdTopic.Name, NumPartitions: createdTopic.NumPartitions},
 				}, nil
 			}).Times(3)
 		adminClient.EXPECT().CreateTopic(gomock.Any()).DoAndReturn(
@@ -230,7 +223,7 @@ func TestGetTopicManagerStartsBackgroundRefreshAfterTopicReady(t *testing.T) {
 	adminClient := kafka.NewMockAdminClient(ctrl)
 	adminClient.EXPECT().GetTopicsMeta([]string{"existing-topic"}, true).Return(
 		map[string]kafka.TopicDetail{
-			"existing-topic": topicDetail("existing-topic", 2),
+			"existing-topic": {Name: "existing-topic", NumPartitions: 2},
 		}, nil)
 
 	manager, err := GetTopicManagerAndTryCreateTopic(
@@ -251,13 +244,11 @@ func TestKafkaTopicManagerCloseWaitsForBackgroundWork(t *testing.T) {
 	manager := &kafkaTopicManager{cancel: cancel}
 	canceled := make(chan struct{})
 	release := make(chan struct{})
-	manager.wg.Add(1)
-	go func() {
-		defer manager.wg.Done()
+	manager.wg.Go(func() {
 		<-ctx.Done()
 		close(canceled)
 		<-release
-	}()
+	})
 
 	closed := make(chan struct{})
 	go func() {

@@ -344,6 +344,7 @@ func TestIsUnretryableKafkaError(t *testing.T) {
 		{name: "unsupported version", err: sarama.ErrUnsupportedVersion, unretryable: true},
 		{name: "invalid request", err: sarama.ErrInvalidRequest, unretryable: true},
 		{name: "client configuration error", err: sarama.ConfigurationError("invalid client config"), unretryable: true},
+		{name: "wrapped client configuration error", err: errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ConfigurationError("invalid client config"), "describe-topic", "test-topic"), unretryable: true},
 		{
 			name:        "wrapped invalid topic",
 			err:         errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ErrInvalidTopic, "describe-topic", "test-topic"),

@@ -92,11 +92,9 @@ func GetTopicManagerAndTryCreateTopic(
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	topicManager.cancel = cancel
-	topicManager.wg.Add(1)
-	go func() {
-		defer topicManager.wg.Done()
+	topicManager.wg.Go(func() {
 		topicManager.backgroundRefreshMeta(ctx)
-	}()
+	})
 
 	return topicManager, nil
 }

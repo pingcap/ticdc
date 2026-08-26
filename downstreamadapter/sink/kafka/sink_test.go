@@ -412,6 +412,23 @@ func TestKafkaSinkDML(t *testing.T) {
 
 		require.Equal(t, cause, kafkaSink.calculateKeyPartitions(t.Context()))
 	})
+
+	t.Run("canceled after topic lookup", func(t *testing.T) {
+		dmlEvent := eventHelper.DML2Event("test", "t", "insert into t values (4, 'four')")
+		ctx, cancel := context.WithCancelCause(t.Context())
+		kafkaSink, topicManager, _, _ := newKafkaSinkForTest(
+			t, ctx, config.ProtocolOpen, &config.SinkConfig{})
+		cause := errors.ErrKafkaSinkClosed.GenWithStackByArgs()
+		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).
+			DoAndReturn(func(context.Context, string) (int32, error) {
+				cancel(cause)
+				return 1, nil
+			})
+		kafkaSink.AddDMLEvent(dmlEvent)
+
+		require.Equal(t, cause, kafkaSink.calculateKeyPartitions(ctx))
+		require.Zero(t, kafkaSink.rowChan.Len())
+	})
 }
 
 func TestKafkaSinkDDL(t *testing.T) {
