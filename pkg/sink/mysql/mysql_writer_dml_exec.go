@@ -58,6 +58,9 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			if !w.grantWrite() {
 				return errors.Trace(w.ctx.Err())
 			}
+			// This failpoint models an operation that was admitted while the write
+			// lease was valid but remains in flight after the lease expires.
+			failpoint.Inject("MySQLSinkHangAfterWriteAdmission", nil)
 			if fallbackToSeqWay || !w.cfg.MultiStmtEnable {
 				// use sequence way to execute the dmls
 				tx, err := conn.BeginTx(w.ctx, nil)
