@@ -22,8 +22,13 @@ import (
 
 type writeGatedSink struct {
 	Sink
-	ctx  context.Context
-	gate *writelease.Gate
+	ctx                context.Context
+	gate               *writelease.Gate
+	dmlGateInTransport bool
+}
+
+type transportWriteGateSetter interface {
+	SetWriteGate(gate *writelease.Gate)
 }
 
 // WithWriteGate prevents new downstream side effects from entering a sink
@@ -32,14 +37,24 @@ func WithWriteGate(ctx context.Context, inner Sink, gate *writelease.Gate) Sink 
 	if gate == nil {
 		return inner
 	}
+	dmlGateInTransport := false
+	if setter, ok := inner.(transportWriteGateSetter); ok {
+		setter.SetWriteGate(gate)
+		dmlGateInTransport = true
+	}
 	return &writeGatedSink{
-		Sink: inner,
-		ctx:  ctx,
-		gate: gate,
+		Sink:               inner,
+		ctx:                ctx,
+		gate:               gate,
+		dmlGateInTransport: dmlGateInTransport,
 	}
 }
 
 func (s *writeGatedSink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	if s.dmlGateInTransport {
+		s.Sink.AddDMLEvent(event)
+		return
+	}
 	if s.waitUntilWritable() {
 		s.Sink.AddDMLEvent(event)
 	}

@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -353,6 +354,14 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 	if s.progressTableWriter != nil {
 		// ProgressTableWriter needs table name snapshots to build progress rows.
 		s.progressTableWriter.SetTableSchemaStore(tableSchemaStore)
+	}
+}
+
+// SetWriteGate delegates DML admission to the transport writers, where each
+// batch is checked immediately before it is executed downstream.
+func (s *Sink) SetWriteGate(gate *writelease.Gate) {
+	for _, writer := range s.dmlWriter {
+		writer.SetWriteGate(gate)
 	}
 }
 

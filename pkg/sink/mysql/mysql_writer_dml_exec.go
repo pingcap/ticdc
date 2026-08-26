@@ -55,6 +55,9 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			}
 		}()
 		err := w.dmlSession.withConn(w, writeTimeout, func(conn *sql.Conn) error {
+			if !w.grantWrite() {
+				return errors.Trace(w.ctx.Err())
+			}
 			if fallbackToSeqWay || !w.cfg.MultiStmtEnable {
 				// use sequence way to execute the dmls
 				tx, err := conn.BeginTx(w.ctx, nil)

@@ -25,6 +25,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type transportGatedSink struct {
+	*mock.MockSink
+	gate *writelease.Gate
+}
+
+func (s *transportGatedSink) SetWriteGate(gate *writelease.Gate) {
+	s.gate = gate
+}
+
 func TestWriteGatedSinkBlocksAndResumesDML(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	inner := mock.NewMockSink(ctrl)
@@ -59,6 +68,18 @@ func TestWriteGatedSinkBlocksAndResumesDML(t *testing.T) {
 		}
 	}, time.Second, 10*time.Millisecond)
 	<-done
+}
+
+func TestWriteGatedSinkDelegatesDMLAdmissionToTransport(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	innerMock := mock.NewMockSink(ctrl)
+	inner := &transportGatedSink{MockSink: innerMock}
+	gate := writelease.NewGate()
+	gated := sink.WithWriteGate(context.Background(), inner, gate)
+
+	innerMock.EXPECT().AddDMLEvent(nil)
+	gated.AddDMLEvent(nil)
+	require.Same(t, gate, inner.gate)
 }
 
 func TestWriteGatedSinkStopsWaitingWhenContextIsCanceled(t *testing.T) {

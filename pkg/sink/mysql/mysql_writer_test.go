@@ -33,6 +33,7 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/br/pkg/version"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
@@ -125,6 +126,57 @@ func TestMysqlWriter_FlushDML(t *testing.T) {
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
+}
+
+func TestMysqlWriterWaitsForWriteGrantBeforeExecute(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	require.NotNil(t, helper.DDL2Job("create table t (id int primary key, name varchar(32));"))
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')")
+	dmlEvent.CommitTs = 2
+	dmlEvent.ReplicatingTs = 1
+	dmlEvent.DispatcherID = common.NewDispatcherID()
+
+	gate := writelease.NewGate()
+	gate.SetP2PRequired(true)
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	writer.SetWriteGate(gate)
+
+	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
+		WithArgs(1, "test").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- writer.Flush([]*commonEvent.DMLEvent{dmlEvent})
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("DML execute returned before the transport received a write grant: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	require.True(t, gate.RenewP2P(time.Now(), writelease.P2PLeaseDuration))
+	require.NoError(t, <-done)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMysqlWriterGrantWriteRejectsAfterShutdown(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+
+	gate := writelease.NewGate()
+	gate.SetP2PRequired(true)
+	writer.SetWriteGate(gate)
+	writer.cancel()
+
+	require.False(t, writer.grantWrite())
 }
 
 func TestMysqlWriter_FlushNoopWhenActiveActiveRowsDropped(t *testing.T) {
