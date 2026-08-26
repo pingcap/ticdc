@@ -18,6 +18,8 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +32,8 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
 )
+
+const hangDownstreamCommitMarker = "/tmp/ticdc-hang-downstream-commit"
 
 // execDMLWithMaxRetries executes prepared DMLs with retry/backoff handling.
 func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
@@ -48,6 +52,8 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	writeTimeout += networkDriftDuration
 
 	tryExec := func() (int, int64, error) {
+		commitHangDuration := time.Duration(0)
+		commitHangToken := ""
 		start := time.Now()
 		defer func() {
 			if time.Since(start) > w.cfg.SlowQuery {
@@ -59,12 +65,16 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 				return errors.Trace(w.ctx.Err())
 			}
 			// This failpoint models an operation that was admitted while the write
-			// lease was valid but remains in flight after the lease expires.
+			// lease was valid but whose COMMIT remains in flight after the lease
+			// expires. The marker makes the one-shot fault deterministic for a
+			// selected capture and batch.
 			failpoint.Inject("MySQLSinkHangAfterWriteAdmission", func(value failpoint.Value) {
-				duration := time.Duration(value.(int)) * time.Second
-				log.Warn("hold downstream write after admission", zap.Duration("duration", duration))
-				time.Sleep(duration)
-				log.Warn("resume downstream write after admission", zap.Duration("duration", duration))
+				if value.(bool) {
+					commitHangDuration, commitHangToken = consumeCommitHangMarker(hangDownstreamCommitMarker)
+					if commitHangDuration > 0 {
+						fallbackToSeqWay = true
+					}
+				}
 			})
 			if fallbackToSeqWay || !w.cfg.MultiStmtEnable {
 				// use sequence way to execute the dmls
@@ -76,6 +86,15 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 				err = w.sequenceExecute(dmls, tx, writeTimeout)
 				if err != nil {
 					return err
+				}
+				if commitHangDuration > 0 {
+					log.Warn("hold downstream commit after write admission",
+						zap.Duration("duration", commitHangDuration),
+						zap.String("testToken", commitHangToken))
+					time.Sleep(commitHangDuration)
+					log.Warn("resume downstream commit after write admission",
+						zap.Duration("duration", commitHangDuration),
+						zap.String("testToken", commitHangToken))
 				}
 
 				if err = tx.Commit(); err != nil {
@@ -134,6 +153,25 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),
 		retry.WithMaxTries(w.cfg.DMLMaxRetry),
 		retry.WithIsRetryableErr(isRetryableDMLError))
+}
+
+func consumeCommitHangMarker(path string) (time.Duration, string) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return 0, ""
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(content)), ",", 2)
+	seconds, parseErr := strconv.Atoi(parts[0])
+	if parseErr != nil || seconds <= 0 || len(parts) != 2 || parts[1] == "" {
+		_ = os.Remove(path)
+		return 0, ""
+	}
+	// Multiple MySQL workers may observe the marker concurrently. Only the
+	// worker that removes it owns this one-shot fault.
+	if err := os.Remove(path); err != nil {
+		return 0, ""
+	}
+	return time.Duration(seconds) * time.Second, parts[1]
 }
 
 // sequenceExecute runs each SQL sequentially inside a transaction.
