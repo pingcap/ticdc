@@ -127,6 +127,7 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 }
 
 func (m *Manager) onNodeHeartbeatResponse(msg *messaging.TargetMessage) {
+	metrics.CaptureLeaseResponseCounter.WithLabelValues("received").Inc()
 	if msg.From != m.coordinatorID {
 		metrics.CaptureLeaseResponseRejectedCounter.WithLabelValues("sender").Inc()
 		return
@@ -178,6 +179,7 @@ func (m *Manager) onNodeHeartbeatResponse(msg *messaging.TargetMessage) {
 		return
 	}
 	if m.writeGate.RenewP2P(requestSentAt, duration) {
+		metrics.CaptureLeaseResponseCounter.WithLabelValues("accepted").Inc()
 		m.node.lastAppliedLeaseSeq = requestSeq
 		for seq := range m.node.writeLeaseRequestSentAt {
 			if seq <= requestSeq {

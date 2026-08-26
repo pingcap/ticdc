@@ -58,6 +58,20 @@ var (
 			Name:      "capture_lease_response_rejected_total",
 			Help:      "Number of rejected P2P write lease responses.",
 		}, []string{"reason"})
+	CaptureLeaseHeartbeatCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "coordinator",
+			Name:      "capture_lease_heartbeat_total",
+			Help:      "Number of capture write lease heartbeats by handling result.",
+		}, []string{"result"})
+	CaptureLeaseResponseCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "capture_lease_response_total",
+			Help:      "Number of capture write lease responses by handling result.",
+		}, []string{"result"})
 	CaptureSafeToRescheduleDelaySeconds = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -81,6 +95,8 @@ func initCaptureWriteLeaseMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CaptureWriteBlockCounter)
 	registry.MustRegister(CaptureLastWriteAdmissionTimestamp)
 	registry.MustRegister(CaptureLeaseResponseRejectedCounter)
+	registry.MustRegister(CaptureLeaseHeartbeatCounter)
+	registry.MustRegister(CaptureLeaseResponseCounter)
 	registry.MustRegister(CaptureSafeToRescheduleDelaySeconds)
 	registry.MustRegister(CaptureP2PWitnessAvailable)
 }

@@ -540,8 +540,10 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 
 func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *heartbeatpb.NodeHeartbeat) {
 	if c.writeLease == nil || c.bootstrapper == nil || !c.bootstrapper.NodeInitialized(from) {
+		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("uninitialized").Inc()
 		return
 	}
+	metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("received").Inc()
 	initializedNodes := make([]node.ID, 0)
 	for _, id := range c.bootstrapper.GetAllNodeIDs() {
 		if c.bootstrapper.NodeInitialized(id) {
@@ -549,6 +551,11 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 		}
 	}
 	messages := c.writeLease.handleHeartbeat(from, heartbeat, initializedNodes)
+	if len(messages) == 0 {
+		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("no_response").Inc()
+	} else {
+		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("response").Add(float64(len(messages)))
+	}
 	delayed := false
 	failpoint.Inject("DelayCaptureWriteLeaseResponse", func(value failpoint.Value) {
 		if !value.(bool) || len(messages) == 0 {
@@ -587,7 +594,9 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 		}
 	})
 	for _, message := range messages {
-		_ = c.messageCenter.SendCommand(message)
+		if err := c.messageCenter.SendCommand(message); err != nil {
+			metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("send_failed").Inc()
+		}
 	}
 }
 
