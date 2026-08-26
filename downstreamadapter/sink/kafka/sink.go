@@ -122,12 +122,12 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	if err != nil {
 		return err
 	}
+	defer factory.Close()
 
 	adminClient, err := factory.AdminClient(ctx)
 	if err != nil {
 		return err
 	}
-	defer adminClient.Close()
 
 	err = topicmanager.EnsureTopic(ctx, changefeedID, topic, options.DeriveTopicConfig(), adminClient)
 	if err != nil {
@@ -168,8 +168,8 @@ func newWithComponents(
 		if err == nil {
 			return
 		}
-		// Closing the admin releases the shared Sarama client and unblocks
-		// producer shutdown when Kafka is unhealthy.
+		// Release shared Kafka resources first to help unblock producer shutdown
+		// when Kafka is unhealthy.
 		comp.close()
 		if syncProducer != nil {
 			syncProducer.Close()
@@ -579,8 +579,8 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 
 func (s *sink) Close() {
 	s.close()
-	// Close the shared Sarama client before producer facades to help unblock
-	// their broker operations during shutdown.
+	// Release shared Kafka resources before closing producers to help unblock
+	// their shutdown.
 	s.comp.close()
 	s.ddlProducer.Close()
 	s.dmlProducer.Close()

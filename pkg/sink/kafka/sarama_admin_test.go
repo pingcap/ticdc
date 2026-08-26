@@ -312,7 +312,7 @@ func TestIsAuthorizationFailed(t *testing.T) {
 	}
 }
 
-func TestIsUnretryableTopicMetadataError(t *testing.T) {
+func TestIsUnretryableKafkaError(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -330,12 +330,7 @@ func TestIsUnretryableTopicMetadataError(t *testing.T) {
 		{name: "unknown broker error", err: sarama.ErrUnknown},
 		{
 			name: "wrapped unknown topic",
-			err: errors.WrapError(
-				errors.ErrKafkaAdminAPI,
-				sarama.ErrUnknownTopicOrPartition,
-				"describe-topic",
-				"test-topic",
-			),
+			err:  errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ErrUnknownTopicOrPartition, "describe-topic", "test-topic"),
 		},
 		{name: "context cancellation", err: context.Canceled},
 		{name: "TiCDC invalid config", err: errors.ErrKafkaInvalidConfig.GenWithStack("invalid config"), unretryable: true},
@@ -350,20 +345,15 @@ func TestIsUnretryableTopicMetadataError(t *testing.T) {
 		{name: "invalid request", err: sarama.ErrInvalidRequest, unretryable: true},
 		{name: "client configuration error", err: sarama.ConfigurationError("invalid client config"), unretryable: true},
 		{
-			name: "wrapped invalid topic",
-			err: errors.WrapError(
-				errors.ErrKafkaAdminAPI,
-				sarama.ErrInvalidTopic,
-				"describe-topic",
-				"test-topic",
-			),
+			name:        "wrapped invalid topic",
+			err:         errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ErrInvalidTopic, "describe-topic", "test-topic"),
 			unretryable: true,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.unretryable, IsUnretryableTopicMetadataError(test.err))
+			require.Equal(t, test.unretryable, IsUnretryableKafkaError(test.err))
 		})
 	}
 }
@@ -425,6 +415,14 @@ func (c *closeTrackingSaramaClient) Close() error {
 	return nil
 }
 
+func (c *closeTrackingSaramaClient) Controller() (*sarama.Broker, error) {
+	return &sarama.Broker{}, nil
+}
+
+func (c *closeTrackingSaramaClient) Config() *sarama.Config {
+	return sarama.NewConfig()
+}
+
 func TestSaramaAdminClientCloseDelegatesClientCleanupToAdmin(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	underlyingClient := &closeTrackingSaramaClient{}
@@ -448,5 +446,21 @@ func TestSaramaAdminClientCloseFallsBackToClientWhenAdminIsNil(t *testing.T) {
 	}
 
 	require.NotPanics(t, func() { client.Close() })
+	require.True(t, underlyingClient.closed)
+}
+
+func TestSaramaFactoryOwnsSharedClient(t *testing.T) {
+	underlyingClient := &closeTrackingSaramaClient{}
+	factory := &saramaFactory{
+		changefeedID: common.NewChangeFeedIDWithName("test", "default"),
+		client:       underlyingClient,
+	}
+
+	adminClient, err := factory.AdminClient(t.Context())
+	require.NoError(t, err)
+	require.Same(t, underlyingClient, adminClient.(*saramaAdminClient).client)
+	require.False(t, underlyingClient.closed)
+
+	factory.Close()
 	require.True(t, underlyingClient.closed)
 }

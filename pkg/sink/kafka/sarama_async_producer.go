@@ -46,7 +46,7 @@ func (p *saramaAsyncProducer) Close() {
 		// Safety:
 		// * If the kafka cluster is running well, it will be closed as soon as possible.
 		//   Also, we cancel all table pipelines before closed, so it's safe.
-		// * The shared client is closed by the admin during sink shutdown, which helps
+		// * The shared client is closed by the Factory during sink shutdown, which helps
 		//   unblock broker operations before this producer is closed.
 		// * For Kafka Sink, duplicate data is acceptable.
 		// * There is a risk of goroutine leakage, but it is acceptable and our main

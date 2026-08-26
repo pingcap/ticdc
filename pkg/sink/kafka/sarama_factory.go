@@ -28,7 +28,6 @@ import (
 
 type saramaFactory struct {
 	changefeedID   common.ChangeFeedID
-	option         *options
 	metricRegistry metrics.Registry
 	client         sarama.Client
 }
@@ -52,10 +51,19 @@ func NewSaramaFactory(
 		return nil, err
 	}
 
-	admin, err := newAdminClient(changefeedID, o.BrokerEndpoints, config)
-	if err != nil {
-		return nil, err
+	start = time.Now()
+	clusterAdmin, err := sarama.NewClusterAdmin(o.BrokerEndpoints, config)
+	duration = time.Since(start)
+	if duration > 2*time.Second {
+		log.Warn("kafka admin client initialization is slow",
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeed", changefeedID.Name()),
+			zap.Duration("duration", duration))
 	}
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
+	}
+	admin := &saramaAdminClient{changefeed: changefeedID, admin: clusterAdmin}
 	defer func() {
 		admin.Close()
 	}()
@@ -77,17 +85,14 @@ func NewSaramaFactory(
 		zap.Duration("readTimeout", o.ReadTimeout),
 		zap.Duration("writeTimeout", o.WriteTimeout))
 
-	return &saramaFactory{
-		changefeedID:   changefeedID,
-		option:         o,
-		metricRegistry: metrics.NewRegistry(),
-	}, nil
-}
+	config, err = newSaramaConfig(ctx, o)
+	if err != nil {
+		return nil, err
+	}
 
-func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config *sarama.Config) (*saramaAdminClient, error) {
-	start := time.Now()
-	client, err := sarama.NewClient(endpoints, config)
-	duration := time.Since(start)
+	start = time.Now()
+	client, err := sarama.NewClient(o.BrokerEndpoints, config)
+	duration = time.Since(start)
 	if duration > 2*time.Second {
 		log.Warn("kafka client initialization is slow",
 			zap.String("keyspace", changefeedID.Keyspace()),
@@ -98,40 +103,42 @@ func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config
 		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 
-	start = time.Now()
-	admin, err := sarama.NewClusterAdminFromClient(client)
-	duration = time.Since(start)
-	if duration > 2*time.Second {
-		log.Warn("kafka admin client initialization is slow",
-			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeed", changefeedID.Name()),
-			zap.Duration("duration", duration))
-	}
-	if err != nil {
-		// No admin exists to close the client when construction fails.
-		_ = client.Close()
-		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
-	}
-	return &saramaAdminClient{
-		client:     client,
-		admin:      admin,
-		changefeed: changefeedID,
+	return &saramaFactory{
+		changefeedID:   changefeedID,
+		metricRegistry: config.MetricRegistry,
+		client:         client,
 	}, nil
 }
 
-func (f *saramaFactory) AdminClient(ctx context.Context) (AdminClient, error) {
-	config, err := newSaramaConfig(ctx, f.option)
-	if err != nil {
-		return nil, err
+func (f *saramaFactory) AdminClient(context.Context) (AdminClient, error) {
+	start := time.Now()
+	admin, err := sarama.NewClusterAdminFromClient(f.client)
+	duration := time.Since(start)
+	if duration > 2*time.Second {
+		log.Warn("kafka admin client initialization is slow",
+			zap.String("keyspace", f.changefeedID.Keyspace()),
+			zap.String("changefeed", f.changefeedID.Name()),
+			zap.Duration("duration", duration))
 	}
-	config.MetricRegistry = f.metricRegistry
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
+	}
+	return &saramaAdminClient{
+		client:     f.client,
+		admin:      admin,
+		changefeed: f.changefeedID,
+	}, nil
+}
 
-	admin, err := newAdminClient(f.changefeedID, f.option.BrokerEndpoints, config)
-	if err != nil {
-		return nil, err
+func (f *saramaFactory) Close() {
+	if f.client != nil {
+		if err := f.client.Close(); err != nil {
+			log.Warn("kafka client close failed",
+				zap.String("keyspace", f.changefeedID.Keyspace()),
+				zap.String("changefeed", f.changefeedID.Name()),
+				zap.Error(err))
+		}
 	}
-	f.client = admin.client
-	return admin, nil
 }
 
 // SyncProducer returns a Sync SyncProducer,

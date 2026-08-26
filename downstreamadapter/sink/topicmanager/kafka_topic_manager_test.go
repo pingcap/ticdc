@@ -75,23 +75,13 @@ func TestCreateTopic(t *testing.T) {
 		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).DoAndReturn(
 			func([]string, bool) (map[string]kafka.TopicDetail, error) {
 				if createdTopic == nil {
-					return nil, errors.WrapError(
-						errors.ErrKafkaAdminAPI,
-						sarama.ErrUnknownTopicOrPartition,
-						"describe-topic",
-						"new-topic",
-					)
+					return nil, errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ErrUnknownTopicOrPartition, "describe-topic", "new-topic")
 				}
 				postCreateDescribeCount++
 				_, cached := manager.topics.Load("new-topic")
 				require.False(t, cached)
 				if postCreateDescribeCount == 1 {
-					return nil, errors.WrapError(
-						errors.ErrKafkaAdminAPI,
-						io.EOF,
-						"describe-topic",
-						"new-topic",
-					)
+					return nil, errors.WrapError(errors.ErrKafkaAdminAPI, io.EOF, "describe-topic", "new-topic")
 				}
 				return map[string]kafka.TopicDetail{
 					createdTopic.Name: topicDetail(createdTopic.Name, createdTopic.NumPartitions),
@@ -211,19 +201,14 @@ func TestCreateTopicValidatesReplicationFactor(t *testing.T) {
 	require.ErrorContains(t, err, "`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of broker")
 }
 
-func TestWaitUntilTopicVisibleStopsOnNonRetryableError(t *testing.T) {
+func TestWaitUntilTopicVisibleUnretryableError(t *testing.T) {
 	t.Parallel()
 
 	ctrl := gomock.NewController(t)
 	adminClient := kafka.NewMockAdminClient(ctrl)
 	adminClient.EXPECT().GetTopicsMeta([]string{"invalid-topic"}, false).Return(
 		nil,
-		errors.WrapError(
-			errors.ErrKafkaAdminAPI,
-			sarama.ErrInvalidTopic,
-			"describe-topic",
-			"invalid-topic",
-		),
+		errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ErrInvalidTopic, "describe-topic", "invalid-topic"),
 	).Times(1)
 	manager := newKafkaTopicManager(
 		"invalid-topic",

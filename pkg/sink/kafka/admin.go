@@ -27,7 +27,8 @@ import (
 type saramaAdminClient struct {
 	changefeed common.ChangeFeedID
 
-	// client is shared by the runtime admin and producers. admin.Close closes it.
+	// client is set for Admin methods that use the client shared by the Factory.
+	// Configuration probing only uses admin and leaves client nil.
 	client sarama.Client
 	admin  saramaClusterAdmin
 }
@@ -152,9 +153,10 @@ func IsAuthorizationFailed(err error) bool {
 		errors.Is(err, sarama.ErrClusterAuthorizationFailed)
 }
 
-// IsUnretryableTopicMetadataError reports whether a Kafka metadata request
-// requires a configuration, credential, permission, or request change to succeed.
-func IsUnretryableTopicMetadataError(err error) bool {
+// IsUnretryableKafkaError reports whether err is not retryable.
+// See Apache Kafka protocol error definitions:
+// https://kafka.apache.org/38/generated/protocol_errors.html
+func IsUnretryableKafkaError(err error) bool {
 	if IsAuthorizationFailed(err) ||
 		errors.Is(err, errors.ErrKafkaInvalidConfig) ||
 		errors.Is(err, sarama.ErrInvalidTopic) ||
@@ -205,8 +207,8 @@ func (a *saramaAdminClient) CreateTopic(detail *TopicDetail) error {
 }
 
 func (a *saramaAdminClient) Close() {
-	// NewClusterAdminFromClient transfers the close responsibility to the admin.
-	// Closing it also releases the client shared by the runtime producers.
+	// Sarama closes the client passed to NewClusterAdminFromClient when the
+	// cluster admin is closed.
 	if a.admin != nil {
 		if err := a.admin.Close(); err != nil {
 			log.Warn("kafka admin client close failed",
@@ -216,7 +218,7 @@ func (a *saramaAdminClient) Close() {
 		}
 		return
 	}
-	// Preserve cleanup for a partially initialized wrapper. This is also the
+	// Preserve cleanup for a partially initialized admin. This is also the
 	// resource-leak regression guard from PR #4437.
 	if a.client != nil {
 		if err := a.client.Close(); err != nil {

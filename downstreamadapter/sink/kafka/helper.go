@@ -45,8 +45,8 @@ func (c components) close() {
 	if c.topicManager != nil {
 		c.topicManager.Close()
 	}
-	if c.adminClient != nil {
-		c.adminClient.Close()
+	if c.factory != nil {
+		c.factory.Close()
 	}
 	if c.claimCheck != nil {
 		c.claimCheck.Close()

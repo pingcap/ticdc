@@ -112,7 +112,7 @@ func TestVerifyInvalidConfig(t *testing.T) {
 		factory.EXPECT().AdminClient(gomock.Any()).Return(adminClient, nil),
 		adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, true).Return(
 			map[string]kafka.TopicDetail{kafkaSinkTestTopic: {Name: kafkaSinkTestTopic}}, nil),
-		adminClient.EXPECT().Close(),
+		factory.EXPECT().Close(),
 	)
 
 	originalCreateKafkaFactory := createKafkaFactory
@@ -247,7 +247,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		factory.EXPECT().AsyncProducer(gomock.Any()).Return(nil, cause)
 		gomock.InOrder(
 			topicManager.EXPECT().Close(),
-			adminClient.EXPECT().Close(),
+			factory.EXPECT().Close(),
 		)
 
 		kafkaSink, err := newWithComponents(
@@ -274,7 +274,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		factory.EXPECT().SyncProducer(gomock.Any()).Return(nil, cause)
 		gomock.InOrder(
 			topicManager.EXPECT().Close(),
-			adminClient.EXPECT().Close(),
+			factory.EXPECT().Close(),
 			asyncProducer.EXPECT().Close(),
 		)
 
@@ -304,7 +304,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		factory.EXPECT().MetricsCollector(adminClient).Return(noopMetricsCollector{})
 		gomock.InOrder(
 			topicManager.EXPECT().Close().Do(func() { closeCount.Add(1) }),
-			adminClient.EXPECT().Close().Do(func() { closeCount.Add(1) }),
+			factory.EXPECT().Close().Do(func() { closeCount.Add(1) }),
 			syncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) }),
 			asyncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) }),
 		)
@@ -607,6 +607,7 @@ func newKafkaSinkForTest(
 	factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
 	factory.EXPECT().SyncProducer(gomock.Any()).Return(syncProducer, nil)
 	factory.EXPECT().MetricsCollector(nil).Return(noopMetricsCollector{})
+	factory.EXPECT().Close().AnyTimes()
 
 	kafkaSink, err := newWithComponents(ctx, changefeedID, common.DefaultKeyspaceID, protocol, components{
 		encoderGroup:   encoderGroup,

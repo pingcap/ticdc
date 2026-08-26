@@ -220,7 +220,7 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 		retry.WithBackoffMaxDelay(1000),
 		retry.WithMaxTries(6),
 		retry.WithIsRetryableErr(func(err error) bool {
-			return !kafka.IsUnretryableTopicMetadataError(err)
+			return !kafka.IsUnretryableKafkaError(err)
 		}),
 	)
 	if err != nil {

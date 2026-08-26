@@ -29,6 +29,8 @@ type Factory interface {
 	AsyncProducer(ctx context.Context) (AsyncProducer, error)
 	// MetricsCollector returns the kafka metrics collector
 	MetricsCollector(adminClient AdminClient) MetricsCollector
+	// Close releases resources shared by all components created by this factory.
+	Close()
 }
 
 // SyncProducer is the kafka sync producer
@@ -46,7 +48,6 @@ type SyncProducer interface {
 
 	// Close shuts down the producer; you must call this function before a producer
 	// object passes out of scope, as it may otherwise leak memory.
-	// You must call this before calling Close on the underlying client.
 	Close()
 }
 
@@ -55,8 +56,7 @@ type AsyncProducer interface {
 	// Close shuts down the producer and waits for any buffered messages to be
 	// flushed. You must call this function before a producer object passes out of
 	// scope, as it may otherwise leak memory. You must call this before process
-	// shutting down, or you may lose messages. You must call this before calling
-	// Close on the underlying client.
+	// shutting down, or you may lose messages.
 	Close()
 
 	// AsyncSend is the input channel for the user to write messages to that they
