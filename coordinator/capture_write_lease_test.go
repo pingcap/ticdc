@@ -38,7 +38,13 @@ func TestCaptureWriteLeaseGrantsRemoteNode(t *testing.T) {
 
 	require.Empty(t, controller.handleHeartbeat(node.ID("capture-1"), heartbeat, []node.ID{"capture-1"}))
 
-	// A restarted node can begin its request sequence from one under a new epoch.
+	// A different process epoch cannot replace the epoch already associated
+	// with a tracked capture ID.
+	messages = controller.handleHeartbeat(node.ID("capture-1"), newWriteLeaseHeartbeat(12, 1), []node.ID{"capture-1"})
+	require.Empty(t, messages)
+
+	// Removing and re-adding the capture resets its fencing state.
+	controller.removeNode(node.ID("capture-1"))
 	messages = controller.handleHeartbeat(node.ID("capture-1"), newWriteLeaseHeartbeat(12, 1), []node.ID{"capture-1"})
 	require.Len(t, messages, 1)
 	require.Equal(t, uint64(12), requireWriteLeaseResponse(t, messages[0]).TargetNodeEpoch)

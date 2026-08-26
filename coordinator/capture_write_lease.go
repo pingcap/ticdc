@@ -74,13 +74,14 @@ func (c *captureWriteLeaseController) handleHeartbeat(
 	}
 
 	state := c.nodes[from]
-	if state == nil || state.nodeEpoch != heartbeat.GetNodeEpoch() {
+	if state == nil {
 		state = &captureLeaseNodeState{nodeEpoch: heartbeat.GetNodeEpoch()}
 		c.nodes[from] = state
-		if c.pendingWitness != nil &&
-			(c.pendingWitness.witnessNodeID == from || from == c.selfNodeID) {
-			c.pendingWitness = nil
-		}
+	} else if state.nodeEpoch != heartbeat.GetNodeEpoch() {
+		// A process epoch is immutable while the same capture ID remains in the
+		// bootstrapper. Accepting an epoch change here would let a delayed old
+		// process heartbeat roll the coordinator's fencing state backwards.
+		return nil
 	}
 	if heartbeat.GetWriteLeaseRequestSeq() <= state.lastRequestSeq {
 		return nil
