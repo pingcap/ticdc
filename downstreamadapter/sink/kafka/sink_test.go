@@ -313,8 +313,23 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Zero(t, closeCount.Load())
+		require.True(t, kafkaSink.IsNormal())
+
+		kafkaSink.isNormal.Store(false)
+		kafkaSink.AddDMLEvent(&commonEvent.DMLEvent{})
+		require.Zero(t, kafkaSink.eventChan.Len())
+		kafkaSink.isNormal.Store(true)
+
 		kafkaSink.Close()
 		require.Equal(t, int64(4), closeCount.Load())
+		require.False(t, kafkaSink.IsNormal())
+
+		_, ok, err := kafkaSink.eventChan.GetWithContext(t.Context())
+		require.NoError(t, err)
+		require.False(t, ok)
+		_, ok, err = kafkaSink.rowChan.GetWithContext(t.Context())
+		require.NoError(t, err)
+		require.False(t, ok)
 	})
 }
 
