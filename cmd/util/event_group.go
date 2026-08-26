@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"math"
 	"os"
+	"reflect"
 	"sort"
 
 	"github.com/pingcap/log"
@@ -197,6 +198,66 @@ func (g *EventsGroup) Cleanup() error {
 	clear(g.messages)
 	g.messages = g.messages[:0]
 	return nil
+}
+
+// AppendOrMergeDMLEvent appends row to events, or merges it into the preceding
+// event when both are compatible parts of the same transaction. Events with the
+// same commit-ts from different sources can use different table schemas, so a
+// commit-ts alone is not enough to merge their chunks safely.
+func AppendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLEvent) []*commonEvent.DMLEvent {
+	if len(events) == 0 || !canMergeDMLEvents(events[len(events)-1], row) {
+		return append(events, row)
+	}
+
+	last := events[len(events)-1]
+	lastRowTypeCount := len(last.RowTypes)
+	rowRowTypeCount := len(row.RowTypes)
+	last.Rows.Append(row.Rows, 0, row.Rows.NumRows())
+	last.RowTypes = append(last.RowTypes, row.RowTypes...)
+	last.RowKeys = appendOptionalDMLValues(last.RowKeys, row.RowKeys, lastRowTypeCount, rowRowTypeCount)
+	last.Checksum = appendOptionalDMLValues(last.Checksum, row.Checksum, lastRowTypeCount, rowRowTypeCount)
+	last.Length += row.Length
+	last.ApproximateSize += row.ApproximateSize
+	last.PostTxnEnqueued = append(last.PostTxnEnqueued, row.PostTxnEnqueued...)
+	last.PostTxnFlushed = append(last.PostTxnFlushed, row.PostTxnFlushed...)
+	return events
+}
+
+func canMergeDMLEvents(last, row *commonEvent.DMLEvent) bool {
+	if last == nil || row == nil ||
+		last.CommitTs != row.CommitTs ||
+		last.StartTs != row.StartTs ||
+		last.DispatcherID != row.DispatcherID ||
+		last.PhysicalTableID != row.PhysicalTableID ||
+		last.TableInfoVersion != row.TableInfoVersion ||
+		last.TableInfo == nil || row.TableInfo == nil ||
+		last.TableInfo.GetSchemaName() != row.TableInfo.GetSchemaName() ||
+		last.TableInfo.GetTableName() != row.TableInfo.GetTableName() ||
+		last.TableInfo.GetUpdateTS() != row.TableInfo.GetUpdateTS() ||
+		last.Rows == nil || row.Rows == nil ||
+		last.Rows.NumCols() != row.Rows.NumCols() ||
+		last.PreviousTotalOffset != 0 || row.PreviousTotalOffset != 0 ||
+		!reflect.DeepEqual(last.TableInfo.GetFieldSlice(), row.TableInfo.GetFieldSlice()) {
+		return false
+	}
+
+	return hasOptionalDMLValues(last.RowKeys, len(last.RowTypes)) &&
+		hasOptionalDMLValues(row.RowKeys, len(row.RowTypes)) &&
+		hasOptionalDMLValues(last.Checksum, len(last.RowTypes)) &&
+		hasOptionalDMLValues(row.Checksum, len(row.RowTypes))
+}
+
+func hasOptionalDMLValues[T any](values []T, rowTypeCount int) bool {
+	return len(values) == 0 || len(values) == rowTypeCount
+}
+
+func appendOptionalDMLValues[T any](last, row []T, lastRowTypeCount, rowRowTypeCount int) []T {
+	if len(last) == 0 && len(row) != 0 {
+		last = make([]T, lastRowTypeCount)
+	} else if len(last) != 0 && len(row) == 0 {
+		row = make([]T, rowRowTypeCount)
+	}
+	return append(last, row...)
 }
 
 func marshalDMLMessage(message *codeccommon.DMLMessage) (data []byte, row *commonEvent.DMLEvent, err error) {

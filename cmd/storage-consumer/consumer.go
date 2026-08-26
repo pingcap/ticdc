@@ -409,11 +409,9 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 	if len(messages) == 0 {
 		return nil
 	}
-	// A commit-ts is only a timestamp in a multi-source stream. Keep restored
-	// events separate instead of merging chunks from independent transactions.
 	events := make([]*event.DMLEvent, 0, len(messages))
 	for _, message := range messages {
-		events = append(events, message.ToDMLEvent())
+		events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
 	}
 	total := len(events)
 	if total == 0 {

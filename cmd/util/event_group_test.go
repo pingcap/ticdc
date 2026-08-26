@@ -14,6 +14,7 @@
 package util
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -43,6 +44,113 @@ func newTestDMLEvent(commitTs uint64, rowTypes ...common.RowType) *commonEvent.D
 		RowTypes:        rowTypes,
 		Rows:            chunk.NewChunkWithCapacity(nil, 0),
 	}
+}
+
+func newMergeTestTableInfo(tableID int64, updateTS uint64, columnCount int) *common.TableInfo {
+	columns := make([]*model.ColumnInfo, columnCount)
+	for i := range columns {
+		columns[i] = &model.ColumnInfo{
+			ID:        int64(i + 1),
+			Offset:    i,
+			Name:      ast.NewCIStr(fmt.Sprintf("c%d", i)),
+			FieldType: *types.NewFieldType(mysql.TypeLonglong),
+		}
+	}
+	return common.WrapTableInfo("test", &model.TableInfo{
+		ID:       tableID,
+		Name:     ast.NewCIStr("t"),
+		UpdateTS: updateTS,
+		Columns:  columns,
+	})
+}
+
+func newMergeTestDMLEvent(
+	commitTs uint64, tableInfo *common.TableInfo, value int64,
+) *commonEvent.DMLEvent {
+	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
+	for column := range tableInfo.GetFieldSlice() {
+		rows.AppendInt64(column, value)
+	}
+	return &commonEvent.DMLEvent{
+		DispatcherID:     common.DispatcherID{Low: 1},
+		PhysicalTableID:  tableInfo.TableName.TableID,
+		StartTs:          commitTs - 1,
+		CommitTs:         commitTs,
+		Length:           1,
+		RowTypes:         []common.RowType{common.RowTypeInsert},
+		Rows:             rows,
+		TableInfo:        tableInfo,
+		TableInfoVersion: tableInfo.GetUpdateTS(),
+	}
+}
+
+func TestAppendOrMergeDMLEvent(t *testing.T) {
+	t.Run("merge compatible events", func(t *testing.T) {
+		tableInfo := newMergeTestTableInfo(1, 10, 1)
+		first := newMergeTestDMLEvent(100, tableInfo, 1)
+		second := newMergeTestDMLEvent(100, tableInfo, 2)
+		first.RowKeys = [][]byte{[]byte("first")}
+		second.RowKeys = [][]byte{[]byte("second")}
+		first.Checksum = []*integrity.Checksum{{Current: 1}}
+		second.Checksum = []*integrity.Checksum{{Current: 2}}
+		var flushed []int
+		first.AddPostFlushFunc(func() { flushed = append(flushed, 1) })
+		second.AddPostFlushFunc(func() { flushed = append(flushed, 2) })
+
+		events := AppendOrMergeDMLEvent(nil, first)
+		events = AppendOrMergeDMLEvent(events, second)
+
+		require.Len(t, events, 1)
+		require.Same(t, first, events[0])
+		require.Equal(t, int32(2), first.Length)
+		require.Equal(t, 2, first.Rows.NumRows())
+		require.Equal(t, []byte("second"), first.RowKeys[1])
+		require.Equal(t, uint32(2), first.Checksum[1].Current)
+		first.PostFlush()
+		require.Equal(t, []int{1, 2}, flushed)
+	})
+
+	t.Run("keep different schema layouts separate", func(t *testing.T) {
+		first := newMergeTestDMLEvent(100, newMergeTestTableInfo(1, 10, 1), 1)
+		second := newMergeTestDMLEvent(100, newMergeTestTableInfo(1, 11, 2), 2)
+
+		events := AppendOrMergeDMLEvent(nil, first)
+		events = AppendOrMergeDMLEvent(events, second)
+
+		require.Len(t, events, 2)
+		require.Same(t, first, events[0])
+		require.Same(t, second, events[1])
+	})
+
+	t.Run("keep different dispatchers separate", func(t *testing.T) {
+		tableInfo := newMergeTestTableInfo(1, 10, 1)
+		first := newMergeTestDMLEvent(100, tableInfo, 1)
+		second := newMergeTestDMLEvent(100, tableInfo, 2)
+		second.DispatcherID = common.DispatcherID{Low: 2}
+
+		events := AppendOrMergeDMLEvent(nil, first)
+		events = AppendOrMergeDMLEvent(events, second)
+
+		require.Len(t, events, 2)
+	})
+
+	t.Run("merge compatible events restored from spill", func(t *testing.T) {
+		tableInfo := newMergeTestTableInfo(1, 10, 1)
+		group := NewEventsGroup(0, 1)
+		require.NoError(t, group.AppendMessage(codeccommon.NewDMLMessageFromEvent(
+			newMergeTestDMLEvent(100, tableInfo, 1))))
+		require.NoError(t, group.AppendMessage(codeccommon.NewDMLMessageFromEvent(
+			newMergeTestDMLEvent(100, tableInfo, 2))))
+
+		messages, err := group.GetAllMessages()
+		require.NoError(t, err)
+		require.Len(t, messages, 2)
+		events := AppendOrMergeDMLEvent(nil, messages[0].ToDMLEvent())
+		events = AppendOrMergeDMLEvent(events, messages[1].ToDMLEvent())
+
+		require.Len(t, events, 1)
+		require.Equal(t, 2, events[0].Rows.NumRows())
+	})
 }
 
 func TestEventsGroupResolveIntoAppendsAndCleansResolvedSpillRecords(t *testing.T) {

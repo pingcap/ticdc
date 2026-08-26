@@ -273,10 +273,12 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	s := sinkmock.NewMockSink(ctrl)
 	flushedCommitTs := make([]uint64, 0)
+	flushedRowTypeCounts := make([]int, 0)
 	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
 		flushedCommitTs = append(flushedCommitTs, event.GetCommitTs())
+		flushedRowTypeCounts = append(flushedRowTypeCounts, len(event.RowTypes))
 		event.PostFlush()
-	}).Times(3)
+	}).Times(2)
 
 	replicaCfg := config.GetDefaultReplicaConfig()
 	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
@@ -302,7 +304,8 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	needCommit, err := w.Write(ctx, codeccommon.MessageTypeResolved)
 	require.NoError(t, err)
 	require.True(t, needCommit)
-	require.Equal(t, []uint64{10, 20, 20}, flushedCommitTs)
+	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
+	require.Equal(t, []int{1, 2}, flushedRowTypeCounts)
 }
 
 func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
