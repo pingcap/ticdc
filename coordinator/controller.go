@@ -16,6 +16,8 @@ package coordinator
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -51,6 +53,8 @@ const (
 	nodeChangeHandlerID           = "coordinator-controller"
 	createChangefeedMaxRetry      = 10
 	createChangefeedRetryInterval = 5 * time.Second
+	delayWriteLeaseResponseMarker = "/tmp/ticdc-delay-write-lease-response"
+	duplicateWriteLeaseMarker     = "/tmp/ticdc-duplicate-write-lease-response"
 )
 
 // Controller schedules and balance changefeeds, there are 3 main components:
@@ -547,10 +551,21 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 	messages := c.writeLease.handleHeartbeat(from, heartbeat, initializedNodes)
 	delayed := false
 	failpoint.Inject("DelayCaptureWriteLeaseResponse", func(value failpoint.Value) {
-		delay := time.Duration(value.(int)) * time.Millisecond
-		if delay <= 0 || len(messages) == 0 {
+		if !value.(bool) || len(messages) == 0 {
 			return
 		}
+		content, err := os.ReadFile(delayWriteLeaseResponseMarker)
+		if err != nil {
+			return
+		}
+		if err := os.Remove(delayWriteLeaseResponseMarker); err != nil {
+			return
+		}
+		delayMillis, err := strconv.Atoi(string(content))
+		if err != nil || delayMillis <= 0 {
+			return
+		}
+		delay := time.Duration(delayMillis) * time.Millisecond
 		delayed = true
 		deferredMessages := append([]*messaging.TargetMessage(nil), messages...)
 		go func() {
@@ -564,7 +579,7 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 		return
 	}
 	failpoint.Inject("DuplicateCaptureWriteLeaseResponse", func(value failpoint.Value) {
-		if !value.(bool) {
+		if !value.(bool) || os.Remove(duplicateWriteLeaseMarker) != nil {
 			return
 		}
 		for _, message := range messages {
