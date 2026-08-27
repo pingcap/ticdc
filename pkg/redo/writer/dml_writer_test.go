@@ -53,6 +53,15 @@ func TestNewDMLWriter(t *testing.T) {
 	require.NoDirExists(t, spoolDir)
 }
 
+func TestRedoSpoolMemoryRatio(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 0.025, redoSpoolMemoryRatio(0))
+	require.Equal(t, 0.025, redoSpoolMemoryRatio(-1))
+	require.Equal(t, defaultRedoSpoolMemoryRatio, redoSpoolMemoryRatio(1024*1024*1024))
+	require.Equal(t, 0.025, redoSpoolMemoryRatio(10*1024*1024*1024))
+}
+
 func TestDMLWriterSpoolsEncodedBytesBeforePostEnqueue(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName)
 	spoolBuffer, err := spool.New(
@@ -89,17 +98,19 @@ func TestDMLWriterSpoolsEncodedBytesBeforePostEnqueue(t *testing.T) {
 		data:        firstData,
 		postEnqueue: func() { firstEnqueued.Add(1) },
 	}
-	encodedCh <- &polymorphicRedoEvent{
-		commitTs:    2,
-		data:        secondData,
-		postEnqueue: func() { secondEnqueued.Add(1) },
-	}
 
 	readCtx, readCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer readCancel()
 	firstEntry, ok, err := dmlWriter.spoolEntries.GetWithContext(readCtx)
 	require.NoError(t, err)
 	require.True(t, ok)
+	// Send the second event only after the first entry has been emitted. This
+	// keeps this test focused on quota callback behavior instead of batching.
+	encodedCh <- &polymorphicRedoEvent{
+		commitTs:    2,
+		data:        secondData,
+		postEnqueue: func() { secondEnqueued.Add(1) },
+	}
 	secondEntry, ok, err := dmlWriter.spoolEntries.GetWithContext(readCtx)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -122,6 +133,144 @@ func TestDMLWriterSpoolsEncodedBytesBeforePostEnqueue(t *testing.T) {
 	require.Equal(t, int64(0), secondEnqueued.Load())
 	spoolBuffer.Release(secondEntry.entry)
 	require.Equal(t, int64(1), secondEnqueued.Load())
+
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestDMLWriterBatchesSpoolEntriesAndReleasesAfterAllFlushes(t *testing.T) {
+	changefeedID := common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName)
+	spoolBuffer, err := spool.New(
+		changefeedID,
+		spool.WithRootDir(t.TempDir()),
+		spool.WithDiskQuotaBytes(1024*1024),
+		spool.WithSegmentBytes(1024*1024),
+		spool.WithMemoryRatio(0.2),
+	)
+	require.NoError(t, err)
+	defer spoolBuffer.Close()
+
+	encodedCh := make(chan *polymorphicRedoEvent, 3)
+	spoolEntries := chann.NewUnlimitedChannelDefault[*redoSpoolEntry]()
+	dmlWriter := &dmlWriter{
+		encodeWorkers: &encodingWorkerGroup{outputCh: encodedCh},
+		spool:         spoolBuffer,
+		spoolEntries:  spoolEntries,
+	}
+
+	var enqueued atomic.Int64
+	var flushed atomic.Int64
+	for i := 1; i <= 3; i++ {
+		encodedCh <- &polymorphicRedoEvent{
+			commitTs:    uint64(i),
+			data:        []byte(strings.Repeat(string(rune('a'+i-1)), 100*1024)),
+			postEnqueue: func() { enqueued.Add(1) },
+			postFlush:   func() { flushed.Add(1) },
+		}
+	}
+
+	writeCtx, cancelWrite := context.WithCancel(context.Background())
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- dmlWriter.writeEncodedEventsToSpool(writeCtx)
+	}()
+
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelRead()
+	spooled, ok, err := spoolEntries.GetWithContext(readCtx)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.True(t, spooled.entry.IsSpilled())
+	require.Equal(t, int64(3), enqueued.Load())
+
+	cancelWrite()
+	require.ErrorIs(t, <-writeDone, context.Canceled)
+
+	fileWorkerInput := make(chan *polymorphicRedoEvent, 3)
+	dmlWriter.fileWorkers = &fileWorkerGroup{inputCh: fileWorkerInput}
+	spoolEntries.Push(spooled)
+	consumeCtx, cancelConsume := context.WithCancel(context.Background())
+	consumeDone := make(chan error, 1)
+	go func() {
+		consumeDone <- dmlWriter.readEncodedEventsFromSpool(consumeCtx)
+	}()
+
+	events := make([]*polymorphicRedoEvent, 0, 3)
+	for i := 0; i < 3; i++ {
+		select {
+		case event := <-fileWorkerInput:
+			events = append(events, event)
+		case <-readCtx.Done():
+			require.FailNow(t, "timed out waiting for decoded redo event")
+		}
+	}
+	for i, event := range events {
+		require.Equal(t, uint64(i+1), event.commitTs)
+		require.False(t, event.flushImmediately)
+	}
+
+	events[0].PostFlush()
+	events[1].PostFlush()
+	require.Equal(t, int64(2), flushed.Load())
+	require.True(t, spooled.entry.IsSpilled())
+	events[2].PostFlush()
+	require.Equal(t, int64(3), flushed.Load())
+	require.False(t, spooled.entry.IsSpilled())
+
+	cancelConsume()
+	require.ErrorIs(t, <-consumeDone, context.Canceled)
+}
+
+func TestDMLWriterFlushesBeforeWaitingForDiskQuota(t *testing.T) {
+	changefeedID := common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName)
+	spoolBuffer, err := spool.New(
+		changefeedID,
+		spool.WithRootDir(t.TempDir()),
+		spool.WithDiskQuotaBytes(1000),
+		spool.WithSegmentBytes(1<<20),
+		spool.WithMemoryRatio(0.01),
+	)
+	require.NoError(t, err)
+	defer spoolBuffer.Close()
+
+	encodedCh := make(chan *polymorphicRedoEvent, 1)
+	spoolEntries := chann.NewUnlimitedChannelDefault[*redoSpoolEntry]()
+	dmlWriter := &dmlWriter{
+		encodeWorkers: &encodingWorkerGroup{outputCh: encodedCh},
+		spool:         spoolBuffer,
+		spoolEntries:  spoolEntries,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- dmlWriter.writeEncodedEventsToSpool(ctx)
+	}()
+
+	readCtx, readCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer readCancel()
+	encodedCh <- &polymorphicRedoEvent{commitTs: 1, data: []byte(strings.Repeat("a", 700))}
+	firstEntry, ok, err := spoolEntries.GetWithContext(readCtx)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, firstEntry.entry)
+
+	encodedCh <- &polymorphicRedoEvent{commitTs: 2, data: []byte(strings.Repeat("b", 700))}
+	barrier, ok, err := spoolEntries.GetWithContext(readCtx)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Nil(t, barrier.entry)
+	require.NotNil(t, barrier.flushBarrier)
+
+	// A real file worker releases the first entry's quota before acknowledging
+	// the ordered barrier.
+	spoolBuffer.Release(firstEntry.entry)
+	barrier.flushBarrier <- nil
+	secondEntry, ok, err := spoolEntries.GetWithContext(readCtx)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, secondEntry.entry)
+	spoolBuffer.Release(secondEntry.entry)
 
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)

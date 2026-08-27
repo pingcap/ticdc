@@ -35,6 +35,7 @@ type polymorphicRedoEvent struct {
 	postEnqueue      func()
 	postFlush        func()
 	flushImmediately bool
+	flushBarrier     chan error
 }
 
 func (e *polymorphicRedoEvent) PostFlush() {
