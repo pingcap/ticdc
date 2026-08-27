@@ -202,9 +202,16 @@ func (d *decoder) assembleDMLEventFromPayload(
 ) *commonEvent.DMLEvent {
 	tableInfo := queryTableInfoFromPayload(keyPayload, valuePayload, valueSchema)
 	commitTs := getCommitTsFromPayload(valuePayload)
+	startTs, hasStartTs := getStartTsFromPayload(valuePayload)
+	if !hasStartTs {
+		// Keep old messages consumable when start_ts is absent. Invalid values
+		// are logged by getStartTsFromPayload and also fall back so a malformed
+		// message does not stop production consumption.
+		startTs = commitTs
+	}
 	event := &commonEvent.DMLEvent{
 		Rows:            chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity),
-		StartTs:         commitTs,
+		StartTs:         startTs,
 		CommitTs:        commitTs,
 		TableInfo:       tableInfo,
 		PhysicalTableID: tableInfo.TableName.TableID,
@@ -248,6 +255,33 @@ func getCommitTsFromPayload(valuePayload map[string]any) uint64 {
 		log.Error("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(source)))
 	}
 	return uint64(commitTs)
+}
+
+// getStartTsFromPayload returns the start_ts carried in the source block.
+// It returns false when the field is absent or invalid. Invalid values are
+// logged before returning so callers can fall back without stopping consumption.
+func getStartTsFromPayload(valuePayload map[string]any) (uint64, bool) {
+	source := valuePayload["source"].(map[string]any)
+	rawStartTs, exists := source["start_ts"]
+	if !exists {
+		return 0, false
+	}
+	startTs, ok := rawStartTs.(json.Number)
+	if !ok {
+		log.Error("decode value failed",
+			zap.String("reason", "start_ts is not an integer"),
+			zap.String("value", util.RedactAny(source)))
+		return 0, false
+	}
+	ts, err := startTs.Int64()
+	if err == nil && ts <= 0 {
+		err = errors.Errorf("start_ts must be positive: %d", ts)
+	}
+	if err != nil {
+		log.Error("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(source)))
+		return 0, false
+	}
+	return uint64(ts), true
 }
 
 func (d *decoder) getSchemaName() string {

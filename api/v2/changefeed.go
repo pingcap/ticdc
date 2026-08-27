@@ -221,7 +221,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		ctx,
 		h.server.GetPdClient(),
 		createGcServiceID,
-		keyspaceMeta.Id,
+		keyspaceMeta.GetId(),
 		changefeedID,
 		ensureTTL, cfg.StartTs); err != nil {
 		if !errors.ErrStartTsBeforeGC.Equal(err) {
@@ -240,7 +240,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		undoErr := gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			pdClient,
-			keyspaceMeta.Id,
+			keyspaceMeta.GetId(),
 			createGcServiceID,
 			changefeedID,
 		)
@@ -268,7 +268,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	// We create a new context here.
 	schemaCxt := context.Background()
 	if err = schemaStore.RegisterKeyspace(schemaCxt, common.KeyspaceMeta{
-		ID:   keyspaceMeta.Id,
+		ID:   keyspaceMeta.GetId(),
 		Name: keyspaceMeta.Name,
 	}); err != nil {
 		_ = c.Error(err)
@@ -304,7 +304,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		Config:         replicaCfg,
 		State:          config.StateNormal,
 		CreatorVersion: version.ReleaseVersion,
-		KeyspaceID:     keyspaceMeta.Id,
+		KeyspaceID:     keyspaceMeta.GetId(),
 	}
 
 	// verify sinkURI
@@ -826,7 +826,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		ctx,
 		h.server.GetPdClient(),
 		resumeGcServiceID,
-		keyspaceMeta.Id,
+		keyspaceMeta.GetId(),
 		cfInfo.ChangefeedID,
 		newCheckpointTs); err != nil {
 		_ = c.Error(err)
@@ -840,7 +840,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		undoErr := gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			h.server.GetPdClient(),
-			keyspaceMeta.Id,
+			keyspaceMeta.GetId(),
 			resumeGcServiceID,
 			cfInfo.ChangefeedID,
 		)

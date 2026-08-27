@@ -886,7 +886,10 @@ func (c *dbzCodec) writeBinaryField(writer *util.JSONWriter, fieldName string, v
 	writer.WriteBase64StringField(fieldName, value)
 }
 
-func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter, schemaName string) {
+// includeStartTs indicates whether start_ts should be declared in the source
+// schema. DML callers pass the configured value, while DDL, checkpoint, and
+// Avro callers pass false because their payloads do not carry the field.
+func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter, schemaName string, includeStartTs bool) {
 	writer.WriteObjectElement(func() {
 		writer.WriteStringField("type", "struct")
 		writer.WriteArrayField("fields", func() {
@@ -987,6 +990,13 @@ func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter, schemaName string)
 					writer.WriteStringField("field", "cluster_id")
 				})
 			}
+			if includeStartTs {
+				writer.WriteObjectElement(func() {
+					writer.WriteStringField("type", "int64")
+					writer.WriteBoolField("optional", false)
+					writer.WriteStringField("field", "start_ts")
+				})
+			}
 		})
 		writer.WriteBoolField("optional", false)
 		writer.WriteStringField("name", c.sourceSchemaName(schemaName))
@@ -1084,6 +1094,11 @@ func (c *dbzCodec) EncodeValue(
 
 				// The followings are TiDB extended fields
 				jWriter.WriteUint64Field("commit_ts", e.CommitTs)
+				// start_ts: the start TSO of the transaction that made this change,
+				// exposed for downstream consumers that need transaction correlation.
+				if c.config.DebeziumIncludeStartTs {
+					jWriter.WriteUint64Field("start_ts", e.StartTs)
+				}
 				jWriter.WriteStringField("cluster_id", c.clusterID)
 			})
 
@@ -1176,7 +1191,7 @@ func (c *dbzCodec) EncodeValue(
 							jWriter.WriteRaw(fieldsJSON)
 						})
 					})
-					c.writeSourceSchema(jWriter, schemaName)
+					c.writeSourceSchema(jWriter, schemaName, c.config.DebeziumIncludeStartTs)
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("type", "string")
 						jWriter.WriteBoolField("optional", false)
@@ -1464,7 +1479,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 				jWriter.WriteIntField("version", 1)
 				jWriter.WriteStringField("name", "io.debezium.connector.mysql.SchemaChangeValue")
 				jWriter.WriteArrayField("fields", func() {
-					c.writeSourceSchema(jWriter, dbName)
+					c.writeSourceSchema(jWriter, dbName, false)
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("field", "ts_ms")
 						jWriter.WriteBoolField("optional", false)
@@ -1703,7 +1718,7 @@ func (c *dbzCodec) EncodeCheckpointEvent(
 					fmt.Sprintf("%s.%s.Envelope", common.SanitizeName(c.clusterID), "watermark"))
 				jWriter.WriteIntField("version", 1)
 				jWriter.WriteArrayField("fields", func() {
-					c.writeSourceSchema(jWriter, "watermark")
+					c.writeSourceSchema(jWriter, "watermark", false)
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("type", "string")
 						jWriter.WriteBoolField("optional", false)

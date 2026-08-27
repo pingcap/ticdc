@@ -87,6 +87,7 @@ func setupTestEnvironment(t *testing.T) (*span.Controller, common.ChangeFeedID, 
 // 4. Verify that the move is aborted and the span is marked absent after origin is stopped
 func TestMoveOperator_DestNodeRemovedBeforeOriginStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
 
 	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, 7)
 	require.NotNil(t, op)
@@ -131,6 +132,7 @@ func TestMoveOperator_DestNodeRemovedBeforeOriginStopped(t *testing.T) {
 // 5. Verify that the span is marked as absent for rescheduling
 func TestMoveOperator_DestNodeRemovedAfterOriginStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
 
 	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, 7)
 	require.NotNil(t, op)
@@ -270,6 +272,7 @@ func TestMoveOperator_BothNodesRemovedBeforeStartDoesNotLeaveSchedulingWithoutNo
 // 4. Verify that the move is aborted and the span becomes absent for rescheduling
 func TestMoveOperator_DestThenOriginRemovedAbortsToAbsent(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
 
 	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, 7)
 	require.NotNil(t, op)

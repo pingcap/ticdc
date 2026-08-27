@@ -71,7 +71,7 @@ func (c *server) prepare(ctx context.Context) (err error) {
 				MinConnectTimeout: 3 * time.Second,
 			}),
 		),
-		pdopt.WithEnableRouterClient(false),
+		pdopt.WithEnableRouterClient(false), // Compatible with old PD which doesn't support the `QueryRegion` API.
 		pdopt.WithForwardingOption(config.EnablePDForwarding))
 	if err != nil {
 		return errors.Trace(err)
