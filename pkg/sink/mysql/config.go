@@ -305,7 +305,6 @@ func (c *Config) Apply(
 		return err
 	}
 
-	// c.EnableOldValue = config.EnableOldValue
 	// Note: The TiDBSourceID should never be 0 here, but we have found that
 	// in some problematic cases, the TiDBSourceID is 0 since something went wrong in the
 	// configuration process. So we need to check it here again.
