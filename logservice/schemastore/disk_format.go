@@ -293,14 +293,6 @@ func loadDatabasesInKVSnapWithEncryption(snap *pebble.Snapshot, gcTs uint64, enc
 	return databaseMap, nil
 }
 
-func loadTablesInKVSnap(
-	snap *pebble.Snapshot,
-	gcTs uint64,
-	databaseMap map[int64]*BasicDatabaseInfo,
-) (map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
-	return loadTablesInKVSnapWithEncryption(snap, gcTs, databaseMap, nil, 0)
-}
-
 func loadTablesInKVSnapWithEncryption(
 	snap *pebble.Snapshot,
 	gcTs uint64,
@@ -432,82 +424,6 @@ func physicalTableTraitsFromCommon(
 		eligible:  eligible,
 		splitable: splitable,
 	}
-}
-
-func loadFullTablesInKVSnap(
-	snap *pebble.Snapshot,
-	gcTs uint64,
-	databaseMap map[int64]*BasicDatabaseInfo,
-) (map[int64]*model.TableInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
-	return loadFullTablesInKVSnapWithEncryption(snap, gcTs, databaseMap, nil, 0)
-}
-
-func loadFullTablesInKVSnapWithEncryption(
-	snap *pebble.Snapshot,
-	gcTs uint64,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	encMgr encryption.EncryptionManager,
-	keyspaceID uint32,
-) (map[int64]*model.TableInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
-	tableInfosInKVSnap := make(map[int64]*model.TableInfo)
-	tablesInKVSnap := make(map[int64]*BasicTableInfo)
-	partitionsInKVSnap := make(map[int64]BasicPartitionInfo)
-
-	startKey, err := tableInfoKey(gcTs, 0)
-	if err != nil {
-		log.Fatal("generate lower bound failed", zap.Error(err))
-	}
-	endKey, err := tableInfoKey(gcTs, math.MaxInt64)
-	if err != nil {
-		log.Fatal("generate upper bound failed", zap.Error(err))
-	}
-	snapIter, err := snap.NewIter(&pebble.IterOptions{
-		LowerBound: startKey,
-		UpperBound: endKey,
-	})
-	if err != nil {
-		log.Fatal("new iterator failed", zap.Error(err))
-	}
-	defer snapIter.Close()
-	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
-		value := snapIter.Value()
-		value, err = decryptValueIfNeeded(snapIter.Key(), value, encMgr, keyspaceID)
-		if err != nil {
-			log.Fatal("decrypt table info failed", zap.Error(err))
-		}
-
-		var table_info_entry PersistedTableInfoEntry
-		if _, err := table_info_entry.UnmarshalMsg(value); err != nil {
-			log.Fatal("unmarshal table info entry failed", zap.Error(err))
-		}
-
-		tableInfo := model.TableInfo{}
-		if err := json.Unmarshal(table_info_entry.TableInfoValue, &tableInfo); err != nil {
-			log.Fatal("unmarshal table info failed", zap.Error(err))
-		}
-		databaseInfo, ok := databaseMap[table_info_entry.SchemaID]
-		if !ok {
-			log.Panic("database not found",
-				zap.Int64("schemaID", table_info_entry.SchemaID),
-				zap.String("schemaName", table_info_entry.SchemaName),
-				zap.String("tableName", tableInfo.Name.O))
-		}
-		// TODO: add a unit test for this case
-		tableInfosInKVSnap[tableInfo.ID] = &tableInfo
-		databaseInfo.Tables[tableInfo.ID] = true
-		tablesInKVSnap[tableInfo.ID] = &BasicTableInfo{
-			SchemaID: table_info_entry.SchemaID,
-			Name:     tableInfo.Name.O,
-		}
-		if tableInfo.Partition != nil {
-			partitionInfo := make(BasicPartitionInfo)
-			for _, partition := range tableInfo.Partition.Definitions {
-				partitionInfo[partition.ID] = nil
-			}
-			partitionsInKVSnap[tableInfo.ID] = partitionInfo
-		}
-	}
-	return tableInfosInKVSnap, tablesInKVSnap, partitionsInKVSnap, nil
 }
 
 // load the ddl jobs in the range (gcTs, upperBound] and apply the ddl job to update database and table info
@@ -1189,15 +1105,13 @@ func loadAllPhysicalTablesAtTs(
 		if traits.isView {
 			continue
 		}
-		if tableFilter != nil {
-			if tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name) {
-				continue
-			}
-			if !traits.eligible {
-				log.Info("table is not eligible, should ignore this table",
-					zap.String("schema", schemaName), zap.String("table", tableInfo.Name))
-				continue
-			}
+		if tableFilter != nil && tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name) {
+			continue
+		}
+		if !traits.eligible {
+			log.Info("table is not eligible, should ignore this table",
+				zap.String("schema", schemaName), zap.String("table", tableInfo.Name))
+			continue
 		}
 
 		splitable := traits.splitable
