@@ -42,14 +42,14 @@ type partitionProgress struct {
 	partition   int32
 	watermark   uint64
 	eventsGroup map[int64]*util.EventsGroup
-	decoder     common.Decoder
+	decoder     *util.DMLMessageDecoder
 }
 
 func newPartitionProgress(partition int32, decoder common.Decoder) *partitionProgress {
 	return &partitionProgress{
 		partition:   partition,
 		eventsGroup: make(map[int64]*util.EventsGroup),
-		decoder:     decoder,
+		decoder:     util.NewDMLMessageDecoder(decoder),
 	}
 }
 
@@ -367,8 +367,7 @@ func (w *writer) WriteMessage(ctx context.Context, message pulsar.Message) (bool
 		if dmlMessage == nil {
 			log.Panic("DML message is nil, it's not expected")
 		}
-		if err := w.appendMessage2Group(dmlMessage, progress,
-			util.NewDMLMessageSpillData(progress.decoder, []byte(message.Key()), message.Payload(), 0)); err != nil {
+		if err := w.appendMessage2Group(dmlMessage, progress); err != nil {
 			return false, err
 		}
 	default:
@@ -512,7 +511,6 @@ func (w *writer) addPartitionTable(schema, table string) {
 func (w *writer) appendMessage2Group(
 	message *common.DMLMessage,
 	progress *partitionProgress,
-	spillDataArgs ...util.DMLMessageSpillData,
 ) error {
 	var (
 		tableID  = message.TableID
@@ -538,13 +536,7 @@ func (w *writer) appendMessage2Group(
 		group = util.NewEventsGroup(progress.partition, tableID)
 		progress.eventsGroup[tableID] = group
 	}
-	spillData := util.DMLMessageSpillData{
-		Restore: func([]byte) (*common.DMLMessage, error) { return message, nil },
-	}
-	if len(spillDataArgs) > 0 {
-		spillData = spillDataArgs[0]
-	}
-	if err := group.AppendSpillMessage(message, spillData); err != nil {
+	if err := group.AppendMessage(message); err != nil {
 		return err
 	}
 	if commitTs < progress.watermark {

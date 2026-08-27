@@ -45,14 +45,14 @@ type partitionProgress struct {
 	watermarkOffset kafka.Offset
 
 	eventsGroup map[int64]*util.EventsGroup
-	decoder     common.Decoder
+	decoder     *util.DMLMessageDecoder
 }
 
 func newPartitionProgress(partition int32, decoder common.Decoder) *partitionProgress {
 	return &partitionProgress{
 		partition:   partition,
 		eventsGroup: make(map[int64]*util.EventsGroup),
-		decoder:     decoder,
+		decoder:     util.NewDMLMessageDecoder(decoder),
 	}
 }
 
@@ -343,6 +343,9 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 	)
 
 	progress := w.progresses[partition]
+	progress.decoder.SetDMLMessageRestorer(func(message *common.DMLMessage) *common.DMLMessage {
+		return w.messageWithPartitionCheck(message, progress.partition, offset)
+	})
 	progress.decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, hasNext := progress.decoder.HasNext()
@@ -365,15 +368,14 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 		// but all DDL event messages should be consumed.
 		ddl := progress.decoder.NextDDLEvent()
 
-		if dec, ok := progress.decoder.(*simple.Decoder); ok {
+		if dec, ok := progress.decoder.Unwrap().(*simple.Decoder); ok {
 			cachedMessages := dec.GetCachedMessages()
 			for _, dmlMessage := range cachedMessages {
 				log.Info("simple protocol cached event resolved, append to the group",
 					zap.Int64("tableID", dmlMessage.TableID), zap.Uint64("commitTs", dmlMessage.GetCommitTs()),
 					zap.Int32("partition", partition), zap.Any("offset", offset))
-				if err := w.appendMessage2Group(dmlMessage, progress, offset, util.DMLMessageSpillData{
-					Restore: func([]byte) (*common.DMLMessage, error) { return dmlMessage, nil },
-				}); err != nil {
+				progress.decoder.AttachCachedDMLMessage(dmlMessage)
+				if err := w.appendMessage2Group(dmlMessage, progress, offset); err != nil {
 					return false, err
 				}
 			}
@@ -409,8 +411,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 			break
 		}
 
-		if err := w.appendMessage2Group(dmlMessage, progress, offset,
-			util.NewDMLMessageSpillData(progress.decoder, message.Key, message.Value, uint64(counter))); err != nil {
+		if err := w.appendMessage2Group(dmlMessage, progress, offset); err != nil {
 			return false, err
 		}
 		counter++
@@ -428,8 +429,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 				log.Debug("DML message is nil, it's cached", zap.Int32("partition", partition), zap.Any("offset", offset))
 				break
 			}
-			if err := w.appendMessage2Group(dmlMessage, progress, offset,
-				util.NewDMLMessageSpillData(progress.decoder, message.Key, message.Value, uint64(counter))); err != nil {
+			if err := w.appendMessage2Group(dmlMessage, progress, offset); err != nil {
 				return false, err
 			}
 			counter++
@@ -629,7 +629,6 @@ func (w *writer) appendMessage2Group(
 	message *common.DMLMessage,
 	progress *partitionProgress,
 	offset kafka.Offset,
-	spillDataArgs ...util.DMLMessageSpillData,
 ) error {
 	// if the kafka cluster is normal, this should not hit.
 	// else if the cluster is abnormal, the consumer may consume old message, then cause the watermark fallback.
@@ -658,16 +657,7 @@ func (w *writer) appendMessage2Group(
 		group = util.NewEventsGroup(progress.partition, tableID)
 		progress.eventsGroup[tableID] = group
 	}
-	spillData := util.DMLMessageSpillData{
-		Restore: func([]byte) (*common.DMLMessage, error) { return message, nil },
-	}
-	if len(spillDataArgs) > 0 {
-		spillData = spillDataArgs[0]
-	}
-	spillData.PostRestore = func(message *common.DMLMessage) *common.DMLMessage {
-		return w.messageWithPartitionCheck(message, progress.partition, offset)
-	}
-	if err := group.AppendSpillMessage(message, spillData); err != nil {
+	if err := group.AppendMessage(message); err != nil {
 		return err
 	}
 	if commitTs < progress.watermark {

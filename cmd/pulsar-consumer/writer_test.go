@@ -291,9 +291,13 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 		protocol:   config.ProtocolCanalJSON,
 	}
 
-	w.appendMessage2Group(newDMLMessageForWriterTest(20), p)
-	w.appendMessage2Group(newDMLMessageForWriterTest(10), p)
-	w.appendMessage2Group(newDMLMessageForWriterTest(20), p)
+	for _, message := range []*codeccommon.DMLMessage{
+		newDMLMessageForWriterTest(20),
+		newDMLMessageForWriterTest(10),
+		newDMLMessageForWriterTest(20),
+	} {
+		require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), p))
+	}
 
 	p.watermark = 20
 	needCommit, err := w.Write(ctx, codeccommon.MessageTypeResolved)
@@ -323,7 +327,7 @@ func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 		partition:   0,
 		eventsGroup: make(map[int64]*util.EventsGroup),
 		watermark:   20,
-		decoder:     decoder,
+		decoder:     util.NewDMLMessageDecoder(decoder),
 	}
 	w := &writer{
 		progresses: []*partitionProgress{progress},
@@ -352,7 +356,8 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 		protocol: config.ProtocolCanalJSON,
 	}
 
-	w.appendMessage2Group(newDMLMessageForWriterTest(10), progress)
+	message := newDMLMessageForWriterTest(10)
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), progress))
 
 	require.NotNil(t, progress.eventsGroup[1])
 	resolved, err := progress.eventsGroup[1].ResolveInto(20, nil)
@@ -389,8 +394,10 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
 	require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
 
 	progress := w.progresses[0]
-	w.appendMessage2Group(newDMLMessageForWriterTest(200), progress)
-	w.appendMessage2Group(newDMLMessageForWriterTest(100), progress)
+	first := newDMLMessageForWriterTest(200)
+	second := newDMLMessageForWriterTest(100)
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress))
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress))
 
 	resolved, err := progress.eventsGroup[1].ResolveInto(150, nil)
 	require.NoError(t, err)
@@ -419,7 +426,7 @@ func TestWriteMessageSpillsDMLImmediately(t *testing.T) {
 	progress := &partitionProgress{
 		partition:   0,
 		eventsGroup: make(map[int64]*util.EventsGroup),
-		decoder:     decoder,
+		decoder:     util.NewDMLMessageDecoder(decoder),
 	}
 	w := &writer{
 		progresses: []*partitionProgress{progress},
@@ -504,6 +511,16 @@ func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
 			},
 		}
 	})
+}
+
+func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codeccommon.DMLMessage {
+	messageData := codeccommon.NewDMLMessageData(nil, nil,
+		func([]byte, uint64) (*codeccommon.DMLMessage, error) {
+			return message, nil
+		},
+	)
+	messageData.AttachDMLMessage(message)
+	return message
 }
 
 type fakePulsarMessage struct {
