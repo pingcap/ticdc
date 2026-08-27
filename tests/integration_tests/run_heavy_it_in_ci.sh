@@ -30,7 +30,7 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'api_v2 generate_column many_pk_or_uk multi_source table_route_conflict_detection'
+	'api_v2 generate_column many_pk_or_uk multi_source table_route_conflict_detection changefeed_partition_table_start_ts'
 	# G01
 	'ddl_for_split_tables_with_random_move_table'
 	# G02
@@ -194,10 +194,6 @@ echo "Group Number (parsed): ${group_num}"
 if [[ $group_num =~ ^[0-9]+$ ]] && [[ -n ${groups[10#${group_num}]} ]]; then
 	# force use decimal index
 	test_names="${groups[10#${group_num}]}"
-	if [[ "$sink_type" == "mysql" ]]; then
-		# Temporarily run the regression case in every MySQL shard.
-		test_names="ddl_for_split_tables_with_random_merge_and_split"
-	fi
 	# Run test cases
 	echo "Run cases: ${test_names}"
 	export TICDC_NEWARCH=true

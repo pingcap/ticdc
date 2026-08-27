@@ -1,0 +1,318 @@
+#!/bin/bash
+
+set -euo pipefail
+
+CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "$CUR/../_utils/test_prepare"
+WORK_DIR=$OUT_DIR/$TEST_NAME
+CDC_BINARY=cdc.test
+SINK_TYPE=$1
+
+DB_NAME=changefeed_partition_table_start_ts
+TABLE_COUNT=1000
+NO_PK_TABLE=no_pk_partition_table
+ELIGIBILITY_TABLE=eligibility_partition_table
+VIEW_NAME=schemastore_view
+ddl_names=()
+ddl_commit_ts=()
+expected_table_ids=()
+expected_table_counts=()
+filter_checkpoint_ts=0
+filter_expected_table_ids=
+last_checkpoint_ts=0
+
+mysql_upstream() {
+	mysql -uroot -h"$UP_TIDB_HOST" -P"$UP_TIDB_PORT" --default-character-set utf8mb4 "$@"
+}
+
+get_ddl_commit_ts() {
+	local table_name=$1
+	local ddl_marker=$2
+	local ddl_ts=0
+	for _ in $(seq 1 30); do
+		ddl_ts=$(curl -fsS "http://${UP_TIDB_HOST}:${UP_TIDB_STATUS}/ddl/history" |
+			jq -r --arg table_name "$table_name" --arg ddl_marker "$ddl_marker" '
+				[.[] | select(
+					((.query // "") | ascii_downcase | contains($table_name)) and
+					((.query // "") | ascii_downcase | contains($ddl_marker))
+				) | (.binlog.FinishedTS // 0)] |
+				max // 0')
+		if [[ "$ddl_ts" =~ ^[1-9][0-9]*$ ]]; then
+			echo "$ddl_ts"
+			return 0
+		fi
+		sleep 1
+	done
+
+	echo "failed to find DDL commit ts for $table_name" >&2
+	return 1
+}
+
+create_tables() {
+	local sql_file="$WORK_DIR/create_tables.sql"
+	{
+		printf 'DROP DATABASE IF EXISTS `%s`;\n' "$DB_NAME"
+		printf 'CREATE DATABASE `%s`;\n' "$DB_NAME"
+		for ((i = 0; i < TABLE_COUNT; i++)); do
+			local table_name
+			table_name=$(printf 'pt_%04d' "$i")
+			printf 'CREATE TABLE `%s`.`%s` (id INT NOT NULL PRIMARY KEY, value INT) PARTITION BY RANGE (id) (PARTITION p0 VALUES LESS THAN (10), PARTITION p1 VALUES LESS THAN (20), PARTITION p2 VALUES LESS THAN (30));\n' \
+				"$DB_NAME" "$table_name"
+		done
+		printf 'CREATE TABLE `%s`.`exchange_0004` (id INT NOT NULL PRIMARY KEY, value INT);\n' "$DB_NAME"
+		printf 'CREATE TABLE `%s`.`%s` (id INT NOT NULL, value INT) PARTITION BY RANGE (id) (PARTITION p0 VALUES LESS THAN (10), PARTITION p1 VALUES LESS THAN (20), PARTITION p2 VALUES LESS THAN (30));\n' \
+			"$DB_NAME" "$NO_PK_TABLE"
+		printf 'CREATE TABLE `%s`.`%s` (id INT NOT NULL, value INT) PARTITION BY RANGE (id) (PARTITION p0 VALUES LESS THAN (10), PARTITION p1 VALUES LESS THAN (20), PARTITION p2 VALUES LESS THAN (30));\n' \
+			"$DB_NAME" "$ELIGIBILITY_TABLE"
+		printf 'CREATE VIEW `%s`.`%s` AS SELECT id, value FROM `%s`.`pt_0000`;\n' \
+			"$DB_NAME" "$VIEW_NAME" "$DB_NAME"
+	} >"$sql_file"
+
+	mysql_upstream <"$sql_file" >"$WORK_DIR/create_tables.log" 2>&1
+}
+
+execute_partition_ddls() {
+	run_sql "ALTER TABLE ${DB_NAME}.pt_0000 ADD PARTITION (PARTITION p3 VALUES LESS THAN (40));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	record_ddl_checkpoint add_partition pt_0000 "add partition"
+	local checkpoint_index=$((${#ddl_names[@]} - 1))
+	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
+		"${expected_table_ids[$checkpoint_index]}"
+	validate_checkpoint filtered_partition "$filter_checkpoint_ts" \
+		"$filter_expected_table_ids" "$filter_config"
+
+	run_sql "ALTER TABLE ${DB_NAME}.pt_0001 DROP PARTITION p2;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	record_ddl_checkpoint drop_partition pt_0001 "drop partition"
+	checkpoint_index=$((${#ddl_names[@]} - 1))
+	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
+		"${expected_table_ids[$checkpoint_index]}"
+
+	run_sql "ALTER TABLE ${DB_NAME}.pt_0002 TRUNCATE PARTITION p1;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	record_ddl_checkpoint truncate_partition pt_0002 "truncate partition"
+	checkpoint_index=$((${#ddl_names[@]} - 1))
+	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
+		"${expected_table_ids[$checkpoint_index]}"
+
+	run_sql "ALTER TABLE ${DB_NAME}.pt_0003 REORGANIZE PARTITION p1, p2 INTO (PARTITION p1_new VALUES LESS THAN (15), PARTITION p2_new VALUES LESS THAN (30));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	record_ddl_checkpoint reorganize_partition pt_0003 "reorganize partition"
+	checkpoint_index=$((${#ddl_names[@]} - 1))
+	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
+		"${expected_table_ids[$checkpoint_index]}"
+
+	run_sql "ALTER TABLE ${DB_NAME}.${ELIGIBILITY_TABLE} ADD PRIMARY KEY (id);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	record_ddl_checkpoint add_primary_key "$ELIGIBILITY_TABLE" "add primary key" false true
+	checkpoint_index=$((${#ddl_names[@]} - 1))
+	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
+		"${expected_table_ids[$checkpoint_index]}"
+
+	run_sql "ALTER TABLE ${DB_NAME}.pt_0004 EXCHANGE PARTITION p0 WITH TABLE ${DB_NAME}.exchange_0004 WITHOUT VALIDATION;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	record_ddl_checkpoint exchange_partition pt_0004 "exchange partition" false true
+	checkpoint_index=$((${#ddl_names[@]} - 1))
+	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
+		"${expected_table_ids[$checkpoint_index]}"
+
+	for i in "${!ddl_names[@]}"; do
+		printf 'partition DDL checkpoint: name=%s commit_ts=%s table_count=%s\n' \
+			"${ddl_names[$i]}" "${ddl_commit_ts[$i]}" "${expected_table_counts[$i]}"
+	done
+}
+
+record_checkpoint() {
+	local checkpoint_name=$1
+	local checkpoint_ts=$2
+	local include_no_pk=$3
+	local include_eligibility=$4
+	local table_ids
+	local table_count
+
+	if ((checkpoint_ts <= last_checkpoint_ts)); then
+		echo "Checkpoint $checkpoint_name has a non-increasing commit ts: $checkpoint_ts" >&2
+		return 1
+	fi
+
+	# Capture the expected physical IDs at this checkpoint, before the next DDL
+	# changes the current TiDB metadata.
+	table_ids=$(get_expected_table_ids "$include_no_pk" "$include_eligibility")
+	table_count=$(awk -F, 'NF {print NF}' <<<"$table_ids")
+	if [ -z "$table_ids" ] || [ -z "$table_count" ]; then
+		echo "failed to get expected tables after $checkpoint_name" >&2
+		return 1
+	fi
+
+	ddl_names+=("$checkpoint_name")
+	ddl_commit_ts+=("$checkpoint_ts")
+	expected_table_ids+=("$table_ids")
+	expected_table_counts+=("$table_count")
+	last_checkpoint_ts=$checkpoint_ts
+}
+
+record_ddl_checkpoint() {
+	local ddl_name=$1
+	local table_name=$2
+	local ddl_marker=$3
+	local include_no_pk=${4:-false}
+	local include_eligibility=${5:-false}
+	local ddl_ts
+
+	ddl_ts=$(get_ddl_commit_ts "$table_name" "$ddl_marker")
+	record_checkpoint "$ddl_name" "$ddl_ts" "$include_no_pk" "$include_eligibility"
+	if [ "$ddl_name" = add_partition ]; then
+		filter_checkpoint_ts=$ddl_ts
+		filter_expected_table_ids=$(get_expected_table_ids_for_table pt_0000)
+	fi
+}
+
+get_expected_table_ids() {
+	local include_no_pk=${1:-false}
+	local include_eligibility=${2:-false}
+	local table_condition="TABLE_NAME REGEXP '^pt_[0-9]+$'"
+	if [ "$include_no_pk" = true ]; then
+		table_condition+=" OR TABLE_NAME = '${NO_PK_TABLE}'"
+	fi
+	if [ "$include_eligibility" = true ]; then
+		table_condition+=" OR TABLE_NAME = '${ELIGIBILITY_TABLE}'"
+	fi
+
+	mysql_upstream -N -B -e "
+		SELECT table_id
+		FROM (
+			-- EXCHANGE swaps the partition ID and the non-partitioned table ID,
+			-- so both information_schema tables are needed here.
+			SELECT TIDB_PARTITION_ID AS table_id
+			FROM information_schema.partitions
+			WHERE TABLE_SCHEMA = '${DB_NAME}'
+			  AND (${table_condition})
+			  AND TIDB_PARTITION_ID IS NOT NULL
+			UNION ALL
+			SELECT TIDB_TABLE_ID AS table_id
+			FROM information_schema.tables
+			WHERE TABLE_SCHEMA = '${DB_NAME}'
+			  AND TABLE_NAME = 'exchange_0004'
+		) AS physical_tables
+		ORDER BY table_id;
+	" | paste -sd, -
+}
+
+get_expected_table_ids_for_table() {
+	local table_name=$1
+	mysql_upstream -N -B -e "
+		SELECT TIDB_PARTITION_ID
+		FROM information_schema.partitions
+		WHERE TABLE_SCHEMA = '${DB_NAME}'
+		  AND TABLE_NAME = '${table_name}'
+		  AND TIDB_PARTITION_ID IS NOT NULL
+		ORDER BY TIDB_PARTITION_ID;
+	" | paste -sd, -
+}
+
+get_actual_table_ids() {
+	local changefeed_id=$1
+	local response
+	if ! response=$(curl -fsS "http://${CDC_HOST}:${CDC_PORT}/api/v2/changefeeds/${changefeed_id}/tables?keyspace=${KEYSPACE_NAME}"); then
+		return 1
+	fi
+	echo "$response" | jq -r '[.items[]?.table_ids[]?] | sort | join(",")'
+}
+
+check_tables() {
+	local changefeed_id=$1
+	local expected_ids=$2
+	local expected_count=$3
+	local actual_ids
+	local actual_count
+	actual_ids=$(get_actual_table_ids "$changefeed_id")
+	actual_count=0
+	if [ -n "$actual_ids" ]; then
+		actual_count=$(awk -F, '{print NF}' <<<"$actual_ids")
+	fi
+
+	echo "changefeed table count: actual=$actual_count expected=$expected_count"
+	if [ "$actual_count" -ne "$expected_count" ]; then
+		return 1
+	fi
+	if [ "$actual_ids" != "$expected_ids" ]; then
+		echo "changefeed physical table IDs do not match the TiDB partition IDs" >&2
+		return 1
+	fi
+}
+
+validate_checkpoint() {
+	local checkpoint_name=$1
+	local start_ts=$2
+	local expected_ids=$3
+	local config_path=${4:-}
+	local expected_count
+	local changefeed_id="schemastore-partition-table-${checkpoint_name}-$RANDOM"
+	local -a create_args=(
+		create
+		--pd="http://${UP_PD_HOST_1}:${UP_PD_PORT_1}"
+		--start-ts="$start_ts"
+		--sink-uri="blackhole://"
+		--changefeed-id="$changefeed_id"
+	)
+
+	expected_count=$(awk -F, 'NF {print NF}' <<<"$expected_ids")
+	if [ -n "$config_path" ]; then
+		create_args+=(--config "$config_path")
+	fi
+
+	cdc_cli_changefeed "${create_args[@]}"
+	query_dispatcher_count "${CDC_HOST}:${CDC_PORT}" "$changefeed_id" "$expected_count" 120
+	for _ in $(seq 1 120); do
+		if check_tables "$changefeed_id" "$expected_ids" "$expected_count"; then
+			break
+		fi
+		sleep 2
+	done
+	check_tables "$changefeed_id" "$expected_ids" "$expected_count"
+
+	cdc_cli_changefeed remove \
+		--pd="http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
+		--changefeed-id="$changefeed_id"
+	printf 'validated checkpoint: name=%s commit_ts=%s table_count=%s\n' \
+		"$checkpoint_name" "$start_ts" "$expected_count"
+}
+
+run() {
+	# The test validates the table list API and does not need a sink-specific consumer.
+	if [ "$SINK_TYPE" != "mysql" ]; then
+		return
+	fi
+
+	rm -rf "$WORK_DIR"
+	mkdir -p "$WORK_DIR"
+	start_tidb_cluster --workdir "$WORK_DIR"
+	run_sql "SET GLOBAL tidb_enable_exchange_partition = ON;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY"
+
+	create_tables
+	baseline_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
+	baseline_force_replicate_table_ids=$(get_expected_table_ids true true)
+	record_checkpoint baseline "$baseline_ts" false false
+
+	filter_config="$WORK_DIR/filter.toml"
+	printf '[filter]\nrules = ["%s.%s"]\n' "$DB_NAME" pt_0000 >"$filter_config"
+	force_replicate_config="$WORK_DIR/force_replicate.toml"
+	printf 'force-replicate = true\n' >"$force_replicate_config"
+
+	validate_checkpoint baseline "$baseline_ts" \
+		"${expected_table_ids[0]}"
+	validate_checkpoint force_replicate_baseline "$baseline_ts" \
+		"$baseline_force_replicate_table_ids" "$force_replicate_config"
+
+	execute_partition_ddls
+
+	# Restart CDC after the first schema-store initialization. The next
+	# checkpoint validations must rebuild the schema from the persisted DDLs.
+	cleanup_process "$CDC_BINARY"
+	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY"
+	last_checkpoint_index=$((${#ddl_names[@]} - 1))
+	validate_checkpoint restart_final "${ddl_commit_ts[$last_checkpoint_index]}" \
+		"${expected_table_ids[$last_checkpoint_index]}"
+
+	cleanup_process "$CDC_BINARY"
+}
+
+trap 'stop_test "$WORK_DIR"' EXIT
+run "$@"
+check_logs "$WORK_DIR"
+echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
