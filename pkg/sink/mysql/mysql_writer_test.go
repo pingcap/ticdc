@@ -17,8 +17,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -179,19 +177,6 @@ func TestMysqlWriterGrantWriteRejectsAfterShutdown(t *testing.T) {
 	writer.cancel()
 
 	require.False(t, writer.grantWrite())
-}
-
-func TestConsumeCommitHangMarker(t *testing.T) {
-	marker := filepath.Join(t.TempDir(), "commit-hang")
-	require.NoError(t, os.WriteFile(marker, []byte("20,case-123"), 0o600))
-
-	duration, token := consumeCommitHangMarker(marker)
-	require.Equal(t, 20*time.Second, duration)
-	require.Equal(t, "case-123", token)
-
-	duration, token = consumeCommitHangMarker(marker)
-	require.Zero(t, duration)
-	require.Empty(t, token)
 }
 
 func TestMysqlWriter_FlushNoopWhenActiveActiveRowsDropped(t *testing.T) {
