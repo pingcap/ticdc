@@ -27,6 +27,7 @@ import (
 )
 
 type saramaAsyncProducer struct {
+	client       sarama.Client
 	producer     sarama.AsyncProducer
 	changefeedID common.ChangeFeedID
 
@@ -46,13 +47,34 @@ func (p *saramaAsyncProducer) Close() {
 		// Safety:
 		// * If the kafka cluster is running well, it will be closed as soon as possible.
 		//   Also, we cancel all table pipelines before closed, so it's safe.
-		// * The shared client is closed by the Factory during sink shutdown, which helps
-		//   unblock broker operations before this producer is closed.
+		// * If there is a problem with the kafka cluster, it will shut down the client first,
+		//   which means no more data will be sent because the connection to the broker is dropped.
+		//   Also, we cancel all table pipelines before closed, so it's safe.
 		// * For Kafka Sink, duplicate data is acceptable.
 		// * There is a risk of goroutine leakage, but it is acceptable and our main
 		//   goal is not to get stuck with the processor tick.
 
+		// `client` is mainly used by `asyncProducer` to fetch metadata and perform other related
+		// operations. When we close the `kafkaSaramaProducer`,
+		// there is no need for TiCDC to make sure that all buffered messages are flushed.
+		// Consider the situation where the broker is irresponsive. If the client were not
+		// closed, `asyncProducer.Close()` would waste a mount of time to try flush all messages.
+		// To prevent the scenario mentioned above, close the client first.
 		start := time.Now()
+		if err := p.client.Close(); err != nil {
+			log.Warn("kafka async producer client close failed",
+				zap.String("keyspace", p.changefeedID.Keyspace()),
+				zap.String("changefeed", p.changefeedID.Name()),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err))
+		} else {
+			log.Info("kafka async producer client closed",
+				zap.String("keyspace", p.changefeedID.Keyspace()),
+				zap.String("changefeed", p.changefeedID.Name()),
+				zap.Duration("duration", time.Since(start)))
+		}
+
+		start = time.Now()
 		if err := p.producer.Close(); err != nil {
 			log.Warn("kafka async producer close failed",
 				zap.String("keyspace", p.changefeedID.Keyspace()),

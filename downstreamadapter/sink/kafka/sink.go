@@ -122,12 +122,12 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	if err != nil {
 		return err
 	}
-	defer factory.Close()
 
 	adminClient, err := factory.AdminClient(ctx)
 	if err != nil {
 		return err
 	}
+	defer adminClient.Close()
 
 	err = topicmanager.EnsureTopic(ctx, changefeedID, topic, options.DeriveTopicConfig(), adminClient)
 	if err != nil {
@@ -168,15 +168,13 @@ func newWithComponents(
 		if err == nil {
 			return
 		}
-		// Release shared Kafka resources first to help unblock producer shutdown
-		// when Kafka is unhealthy.
-		comp.close()
 		if syncProducer != nil {
 			syncProducer.Close()
 		}
 		if asyncProducer != nil {
 			asyncProducer.Close()
 		}
+		comp.close()
 		statistics.Close()
 	}()
 
@@ -579,11 +577,9 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 
 func (s *sink) Close() {
 	s.close()
-	// Release shared Kafka resources before closing producers to help unblock
-	// their shutdown.
-	s.comp.close()
 	s.ddlProducer.Close()
 	s.dmlProducer.Close()
+	s.comp.close()
 	s.statistics.Close()
 }
 

@@ -11,6 +11,72 @@ import (
 	gomock "github.com/golang/mock/gomock"
 )
 
+// MocksaramaClient is a mock of saramaClient interface.
+type MocksaramaClient struct {
+	ctrl     *gomock.Controller
+	recorder *MocksaramaClientMockRecorder
+}
+
+// MocksaramaClientMockRecorder is the mock recorder for MocksaramaClient.
+type MocksaramaClientMockRecorder struct {
+	mock *MocksaramaClient
+}
+
+// NewMocksaramaClient creates a new mock instance.
+func NewMocksaramaClient(ctrl *gomock.Controller) *MocksaramaClient {
+	mock := &MocksaramaClient{ctrl: ctrl}
+	mock.recorder = &MocksaramaClientMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MocksaramaClient) EXPECT() *MocksaramaClientMockRecorder {
+	return m.recorder
+}
+
+// Brokers mocks base method.
+func (m *MocksaramaClient) Brokers() []*sarama.Broker {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Brokers")
+	ret0, _ := ret[0].([]*sarama.Broker)
+	return ret0
+}
+
+// Brokers indicates an expected call of Brokers.
+func (mr *MocksaramaClientMockRecorder) Brokers() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Brokers", reflect.TypeOf((*MocksaramaClient)(nil).Brokers))
+}
+
+// Close mocks base method.
+func (m *MocksaramaClient) Close() error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Close")
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Close indicates an expected call of Close.
+func (mr *MocksaramaClientMockRecorder) Close() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MocksaramaClient)(nil).Close))
+}
+
+// Partitions mocks base method.
+func (m *MocksaramaClient) Partitions(topic string) ([]int32, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Partitions", topic)
+	ret0, _ := ret[0].([]int32)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Partitions indicates an expected call of Partitions.
+func (mr *MocksaramaClientMockRecorder) Partitions(topic interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Partitions", reflect.TypeOf((*MocksaramaClient)(nil).Partitions), topic)
+}
+
 // MocksaramaClusterAdmin is a mock of saramaClusterAdmin interface.
 type MocksaramaClusterAdmin struct {
 	ctrl     *gomock.Controller

@@ -25,6 +25,11 @@ import (
 	"go.uber.org/zap"
 )
 
+type saramaSyncClient interface {
+	Brokers() []*sarama.Broker
+	Close() error
+}
+
 type saramaSyncProducerClient interface {
 	SendMessage(msg *sarama.ProducerMessage) (partition int32, offset int64, err error)
 	SendMessages(msgs []*sarama.ProducerMessage) error
@@ -33,6 +38,7 @@ type saramaSyncProducerClient interface {
 
 type saramaSyncProducer struct {
 	id       common.ChangeFeedID
+	client   saramaSyncClient
 	producer saramaSyncProducerClient
 	closed   *atomic.Bool
 }
@@ -96,6 +102,17 @@ func (p *saramaSyncProducer) Close() {
 
 	p.closed.Store(true)
 	start := time.Now()
+	// sarama.NewSyncProducerFromClient wraps the provided client with a nopCloserClient,
+	// so producer.Close() alone won't release the underlying client resources.
+	if p.client != nil {
+		if err := p.client.Close(); err != nil {
+			log.Warn("kafka ddl producer client close failed",
+				zap.String("keyspace", p.id.Keyspace()),
+				zap.String("changefeed", p.id.Name()),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err))
+		}
+	}
 	if p.producer != nil {
 		if err := p.producer.Close(); err != nil {
 			log.Error("kafka ddl producer close failed",

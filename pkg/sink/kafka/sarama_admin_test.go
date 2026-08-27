@@ -406,62 +406,44 @@ func TestCreateTopic(t *testing.T) {
 	}
 }
 
-type closeTrackingSaramaClient struct {
-	sarama.Client
-	closed bool
-}
-
-func (c *closeTrackingSaramaClient) Close() error {
-	c.closed = true
-	return nil
-}
-
-func (c *closeTrackingSaramaClient) Controller() (*sarama.Broker, error) {
-	return &sarama.Broker{}, nil
-}
-
-func (c *closeTrackingSaramaClient) Config() *sarama.Config {
-	return sarama.NewConfig()
-}
-
-func TestSaramaAdminClientCloseDelegatesClientCleanupToAdmin(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	underlyingClient := &closeTrackingSaramaClient{}
-	admin := NewMocksaramaClusterAdmin(ctrl)
-	admin.EXPECT().Close().DoAndReturn(underlyingClient.Close)
-	client := &saramaAdminClient{
-		changefeed: common.NewChangeFeedIDWithName("test", "default"),
-		client:     underlyingClient,
-		admin:      admin,
+func TestAdminClientClose(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*gomock.Controller) *saramaAdminClient
+	}{
+		{
+			name: "uses admin close",
+			setup: func(ctrl *gomock.Controller) *saramaAdminClient {
+				client := NewMocksaramaClient(ctrl)
+				admin := NewMocksaramaClusterAdmin(ctrl)
+				admin.EXPECT().Close().Return(nil)
+				client.EXPECT().Close().Times(0)
+				return &saramaAdminClient{
+					changefeed: common.NewChangeFeedIDWithName("test", "default"),
+					client:     client,
+					admin:      admin,
+				}
+			},
+		},
+		{
+			name: "falls back to client when admin is nil",
+			setup: func(ctrl *gomock.Controller) *saramaAdminClient {
+				client := NewMocksaramaClient(ctrl)
+				client.EXPECT().Close().Return(nil)
+				return &saramaAdminClient{
+					changefeed: common.NewChangeFeedIDWithName("test", "default"),
+					client:     client,
+				}
+			},
+		},
 	}
 
-	client.Close()
-	require.True(t, underlyingClient.closed)
-}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			adminClient := test.setup(ctrl)
 
-func TestSaramaAdminClientCloseFallsBackToClientWhenAdminIsNil(t *testing.T) {
-	underlyingClient := &closeTrackingSaramaClient{}
-	client := &saramaAdminClient{
-		changefeed: common.NewChangeFeedIDWithName("test", "default"),
-		client:     underlyingClient,
+			require.NotPanics(t, func() { adminClient.Close() })
+		})
 	}
-
-	require.NotPanics(t, func() { client.Close() })
-	require.True(t, underlyingClient.closed)
-}
-
-func TestSaramaFactoryOwnsSharedClient(t *testing.T) {
-	underlyingClient := &closeTrackingSaramaClient{}
-	factory := &saramaFactory{
-		changefeedID: common.NewChangeFeedIDWithName("test", "default"),
-		client:       underlyingClient,
-	}
-
-	adminClient, err := factory.AdminClient(t.Context())
-	require.NoError(t, err)
-	require.Same(t, underlyingClient, adminClient.(*saramaAdminClient).client)
-	require.False(t, underlyingClient.closed)
-
-	factory.Close()
-	require.True(t, underlyingClient.closed)
 }

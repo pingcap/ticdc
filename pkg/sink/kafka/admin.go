@@ -27,15 +27,18 @@ import (
 type saramaAdminClient struct {
 	changefeed common.ChangeFeedID
 
-	// client is set for Admin methods that use the client shared by the Factory.
-	// Configuration probing only uses admin and leaves client nil.
-	client sarama.Client
+	// client is the underlying sarama client created for this admin wrapper.
+	// It must be closed to stop background goroutines (e.g. metadata updater) and release memory.
+	client saramaClient
 	admin  saramaClusterAdmin
 }
 
-// saramaClusterAdmin is the subset of sarama.ClusterAdmin used by TiCDC.
-// The narrow interface also lets cleanup tests verify that closing the admin
-// releases the client passed to sarama.NewClusterAdminFromClient.
+type saramaClient interface {
+	Brokers() []*sarama.Broker
+	Partitions(topic string) ([]int32, error)
+	Close() error
+}
+
 type saramaClusterAdmin interface {
 	DescribeCluster() (brokers []*sarama.Broker, controllerID int32, err error)
 	DescribeConfig(resource sarama.ConfigResource) ([]sarama.ConfigEntry, error)
@@ -207,8 +210,9 @@ func (a *saramaAdminClient) CreateTopic(detail *TopicDetail) error {
 }
 
 func (a *saramaAdminClient) Close() {
-	// Sarama closes the client passed to NewClusterAdminFromClient when the
-	// cluster admin is closed.
+	// For admins created via sarama.NewClusterAdminFromClient, admin.Close() takes care
+	// of closing the underlying client as well. Fall back to closing the client directly
+	// only when admin is unexpectedly nil.
 	if a.admin != nil {
 		if err := a.admin.Close(); err != nil {
 			log.Warn("kafka admin client close failed",
@@ -218,8 +222,6 @@ func (a *saramaAdminClient) Close() {
 		}
 		return
 	}
-	// Preserve cleanup for a partially initialized admin. This is also the
-	// resource-leak regression guard from PR #4437.
 	if a.client != nil {
 		if err := a.client.Close(); err != nil {
 			log.Warn("kafka client close failed",

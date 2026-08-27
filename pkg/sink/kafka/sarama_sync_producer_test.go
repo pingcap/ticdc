@@ -40,16 +40,39 @@ func TestProducerRejectsSendAfterClose(t *testing.T) {
 }
 
 func TestSyncProducerClose(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	producer := NewMocksaramaSyncProducerClient(ctrl)
-	producer.EXPECT().Close().Return(nil)
-	p := &saramaSyncProducer{
-		id:       common.NewChangeFeedIDWithName("test", "default"),
-		producer: producer,
-		closed:   atomic.NewBool(false),
+	tests := []struct {
+		name           string
+		clientCloseErr error
+	}{
+		{
+			name: "closes client and producer",
+		},
+		{
+			name:           "still closes producer when client close fails",
+			clientCloseErr: io.ErrClosedPipe,
+		},
 	}
 
-	p.Close()
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			client := NewMocksaramaSyncClient(ctrl)
+			producer := NewMocksaramaSyncProducerClient(ctrl)
+			gomock.InOrder(
+				client.EXPECT().Close().Return(test.clientCloseErr),
+				producer.EXPECT().Close().Return(nil),
+			)
+
+			p := &saramaSyncProducer{
+				id:       common.NewChangeFeedIDWithName("test", "default"),
+				client:   client,
+				producer: producer,
+				closed:   atomic.NewBool(false),
+			}
+
+			p.Close()
+		})
+	}
 }
 
 func TestSyncProducerErrorWrappedOnce(t *testing.T) {
