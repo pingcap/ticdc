@@ -23,6 +23,8 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -327,6 +329,81 @@ func TestGetAllPhysicalTablesSkipsViews(t *testing.T) {
 			},
 		},
 	}, tables)
+}
+
+func TestPhysicalTableTraitsFromTiDBTableInfo(t *testing.T) {
+	noKeyTable := &model.TableInfo{
+		ID:   201,
+		Name: ast.NewCIStr("t_no_key"),
+	}
+	view := &model.TableInfo{
+		ID:   202,
+		Name: ast.NewCIStr("v1"),
+		View: &model.ViewInfo{},
+	}
+	sequence := &model.TableInfo{
+		ID:       203,
+		Name:     ast.NewCIStr("s1"),
+		Sequence: &model.SequenceInfo{},
+	}
+
+	testCases := []struct {
+		name           string
+		tableInfo      *model.TableInfo
+		forceReplicate bool
+		want           physicalTableTraits
+	}{
+		{
+			name:      "table with primary key",
+			tableInfo: newEligibleTableInfoForTest(200, "t1"),
+			want: physicalTableTraits{
+				eligible:  true,
+				splitable: true,
+			},
+		},
+		{
+			name:      "table without key",
+			tableInfo: noKeyTable,
+			want: physicalTableTraits{
+				eligible: false,
+			},
+		},
+		{
+			name:           "table without key with force replicate",
+			tableInfo:      noKeyTable,
+			forceReplicate: true,
+			want: physicalTableTraits{
+				eligible: true,
+			},
+		},
+		{
+			name:      "view",
+			tableInfo: view,
+			want: physicalTableTraits{
+				isView:   true,
+				eligible: true,
+			},
+		},
+		{
+			name:           "sequence with force replicate",
+			tableInfo:      sequence,
+			forceReplicate: true,
+			want: physicalTableTraits{
+				eligible: false,
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			tableFilter, err := filter.NewFilter(
+				config.NewDefaultFilterConfig(), "", false, testCase.forceReplicate)
+			require.NoError(t, err)
+
+			traits := physicalTableTraitsFromTiDBTableInfo(testCase.tableInfo, tableFilter)
+			require.Equal(t, testCase.want, traits)
+		})
+	}
 }
 
 func TestAddTableInfoToBatchReusesMarshalBuffer(t *testing.T) {

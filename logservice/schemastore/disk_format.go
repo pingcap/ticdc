@@ -375,12 +375,15 @@ func loadTablesInKVSnapWithEncryptionAndCallback(
 }
 
 type physicalTableTraits struct {
-	isView    bool
-	eligible  bool
+	// isView indicates whether the table is a view without physical KV data.
+	isView bool
+	// eligible indicates whether the table can be replicated by the changefeed.
+	eligible bool
+	// splitable indicates whether the table can be split across dispatchers.
 	splitable bool
 }
 
-func physicalTableTraitsFromModel(
+func physicalTableTraitsFromTiDBTableInfo(
 	tableInfo *model.TableInfo,
 	tableFilter filter.Filter,
 ) physicalTableTraits {
@@ -402,7 +405,7 @@ func physicalTableTraitsFromModel(
 	}
 }
 
-func physicalTableTraitsFromCommon(
+func physicalTableTraitsFromCommonTableInfo(
 	tableInfo *common.TableInfo,
 	tableFilter filter.Filter,
 ) physicalTableTraits {
@@ -559,7 +562,8 @@ func readTableInfoInKVSnapWithEncryption(
 	}
 	schemaName, tableInfo := readRawTableInfo(tableID)
 	if tableInfo == nil {
-		// check whether it a physical partition id
+		// Table metadata is stored under the logical table ID. If the caller
+		// gives a physical partition ID, use the partition mapping to find it.
 		logicalTableID := tryReadLogicalTableID(snap, tableID, version)
 		if logicalTableID != 0 {
 			schemaName, tableInfo = readRawTableInfo(logicalTableID)
@@ -966,6 +970,11 @@ func cleanObsoleteData(db *pebble.DB, oldGcTs uint64, gcTs uint64) {
 	}
 }
 
+// loadPhysicalTableTraitsAtTs rebuilds the traits of one table at snapVersion.
+// physicalTableID can be a normal table ID or a physical partition ID. In the
+// latter case, addTableInfoFromKVSnap resolves the partition ID to the logical
+// table metadata, while the versioned store keeps the physical ID so that the
+// DDL extractors can match the per-partition DDL history correctly.
 func loadPhysicalTableTraitsAtTs(
 	storageSnap *pebble.Snapshot,
 	gcTs uint64,
@@ -989,7 +998,7 @@ func loadPhysicalTableTraitsAtTs(
 	if err != nil {
 		return physicalTableTraits{}, err
 	}
-	return physicalTableTraitsFromCommon(tableInfo, tableFilter), nil
+	return physicalTableTraitsFromCommonTableInfo(tableInfo, tableFilter), nil
 }
 
 func loadAllPhysicalTablesAtTs(
@@ -1010,7 +1019,7 @@ func loadAllPhysicalTablesAtTs(
 	tableMap, partitionMap, err := loadTablesInKVSnapWithEncryptionAndCallback(
 		storageSnap, gcTs, databaseMap, encMgr, keyspaceID,
 		func(_ string, tableInfo *model.TableInfo) {
-			tableTraits[tableInfo.ID] = physicalTableTraitsFromModel(tableInfo, tableFilter)
+			tableTraits[tableInfo.ID] = physicalTableTraitsFromTiDBTableInfo(tableInfo, tableFilter)
 		})
 	if err != nil {
 		return nil, err
@@ -1084,6 +1093,10 @@ func loadAllPhysicalTablesAtTs(
 		schemaName := databaseMap[tableInfo.SchemaID].Name
 		physicalTableID := tableID
 		if partitionInfo, ok := partitionMap[tableID]; ok {
+			// tableMap is keyed by logical table ID, but DDL history for a
+			// partition table is keyed by physical partition ID. All partitions
+			// share the same table traits, so any current partition can be used
+			// to select the history needed to rebuild those traits.
 			for partitionID := range partitionInfo {
 				physicalTableID = partitionID
 				break
