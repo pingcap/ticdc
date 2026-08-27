@@ -64,9 +64,7 @@ func newMergeTestTableInfo(tableID int64, updateTS uint64, columnCount int) *com
 	})
 }
 
-func newMergeTestDMLEvent(
-	commitTs uint64, tableInfo *common.TableInfo, value int64,
-) *commonEvent.DMLEvent {
+func newMergeTestDMLEvent(commitTs uint64, tableInfo *common.TableInfo, value int64) *commonEvent.DMLEvent {
 	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	for column := range tableInfo.GetFieldSlice() {
 		rows.AppendInt64(column, value)
@@ -84,6 +82,11 @@ func newMergeTestDMLEvent(
 	}
 }
 
+func newMergeTestDMLMessage(event *commonEvent.DMLEvent) *codeccommon.DMLMessage {
+	return codeccommon.NewDMLMessage(event.GetTableID(), event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName(),
+		event.GetCommitTs(), event.RowTypes[0], func() *commonEvent.DMLEvent { return event })
+}
+
 func TestAppendOrMergeDMLEvent(t *testing.T) {
 	t.Run("merge compatible events", func(t *testing.T) {
 		tableInfo := newMergeTestTableInfo(1, 10, 1)
@@ -97,8 +100,10 @@ func TestAppendOrMergeDMLEvent(t *testing.T) {
 		first.AddPostFlushFunc(func() { flushed = append(flushed, 1) })
 		second.AddPostFlushFunc(func() { flushed = append(flushed, 2) })
 
-		events := AppendOrMergeDMLEvent(nil, first)
-		events = AppendOrMergeDMLEvent(events, second)
+		events := DMLMessagesToEvents([]*codeccommon.DMLMessage{
+			newMergeTestDMLMessage(first),
+			newMergeTestDMLMessage(second),
+		})
 
 		require.Len(t, events, 1)
 		require.Same(t, first, events[0])
@@ -114,8 +119,10 @@ func TestAppendOrMergeDMLEvent(t *testing.T) {
 		first := newMergeTestDMLEvent(100, newMergeTestTableInfo(1, 10, 1), 1)
 		second := newMergeTestDMLEvent(100, newMergeTestTableInfo(1, 11, 2), 2)
 
-		events := AppendOrMergeDMLEvent(nil, first)
-		events = AppendOrMergeDMLEvent(events, second)
+		events := DMLMessagesToEvents([]*codeccommon.DMLMessage{
+			newMergeTestDMLMessage(first),
+			newMergeTestDMLMessage(second),
+		})
 
 		require.Len(t, events, 2)
 		require.Same(t, first, events[0])
@@ -128,8 +135,10 @@ func TestAppendOrMergeDMLEvent(t *testing.T) {
 		second := newMergeTestDMLEvent(100, tableInfo, 2)
 		second.DispatcherID = common.DispatcherID{Low: 2}
 
-		events := AppendOrMergeDMLEvent(nil, first)
-		events = AppendOrMergeDMLEvent(events, second)
+		events := DMLMessagesToEvents([]*codeccommon.DMLMessage{
+			newMergeTestDMLMessage(first),
+			newMergeTestDMLMessage(second),
+		})
 
 		require.Len(t, events, 2)
 	})
@@ -137,16 +146,15 @@ func TestAppendOrMergeDMLEvent(t *testing.T) {
 	t.Run("merge compatible events restored from spill", func(t *testing.T) {
 		tableInfo := newMergeTestTableInfo(1, 10, 1)
 		group := NewEventsGroup(0, 1)
-		require.NoError(t, group.AppendMessage(codeccommon.NewDMLMessageFromEvent(
-			newMergeTestDMLEvent(100, tableInfo, 1))))
-		require.NoError(t, group.AppendMessage(codeccommon.NewDMLMessageFromEvent(
-			newMergeTestDMLEvent(100, tableInfo, 2))))
+		first := newMergeTestDMLEvent(100, tableInfo, 1)
+		second := newMergeTestDMLEvent(100, tableInfo, 2)
+		require.NoError(t, group.AppendMessage(newMergeTestDMLMessage(first)))
+		require.NoError(t, group.AppendMessage(newMergeTestDMLMessage(second)))
 
 		messages, err := group.GetAllMessages()
 		require.NoError(t, err)
 		require.Len(t, messages, 2)
-		events := AppendOrMergeDMLEvent(nil, messages[0].ToDMLEvent())
-		events = AppendOrMergeDMLEvent(events, messages[1].ToDMLEvent())
+		events := DMLMessagesToEvents(messages)
 
 		require.Len(t, events, 1)
 		require.Equal(t, 2, events[0].Rows.NumRows())
@@ -361,10 +369,10 @@ func TestEventsGroupRestoresRowsFromSharedChunk(t *testing.T) {
 	messages, err := group.GetAllMessages()
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
+	require.Zero(t, messages[0].ToDMLEvent().PreviousTotalOffset)
+	require.Equal(t, 2, messages[1].ToDMLEvent().PreviousTotalOffset)
 	for _, message := range messages {
-		restored := message.ToDMLEvent()
-		require.Zero(t, restored.PreviousTotalOffset)
-		require.Equal(t, 2, restored.Rows.NumRows())
+		require.Equal(t, 4, message.ToDMLEvent().Rows.NumRows())
 	}
 
 	second := messages[1].ToDMLEvent()

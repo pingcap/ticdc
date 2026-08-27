@@ -15,20 +15,15 @@ package util
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"math"
 	"os"
-	"reflect"
 	"sort"
 
 	"github.com/pingcap/log"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/spill"
-	"github.com/pingcap/tidb/pkg/types"
-	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
 
@@ -37,7 +32,16 @@ const eventsGroupSpillPattern = "ticdc-events-group-*.spill"
 type spilledMessage struct {
 	commitTs    uint64
 	handle      spill.Handle
+	restore     func([]byte) (*codeccommon.DMLMessage, error)
 	postRestore func(*codeccommon.DMLMessage) *codeccommon.DMLMessage
+}
+
+// DMLMessageSpillData is an opaque codec payload which can restore a lazy DML
+// message after it is read from disk. Restore must not construct a DMLEvent.
+type DMLMessageSpillData struct {
+	Data        []byte
+	Restore     func([]byte) (*codeccommon.DMLMessage, error)
+	PostRestore func(*codeccommon.DMLMessage) *codeccommon.DMLMessage
 }
 
 // EventsGroup stores change event messages.
@@ -60,41 +64,44 @@ func NewEventsGroup(partition int32, tableID int64) *EventsGroup {
 	}
 }
 
-// AppendMessage materializes a message and appends it to a local spill file. DMLMessage carries a
-// decoder closure, so persisting its reconstructed event is necessary to release the decoder input
-// retained by that closure.
+// AppendMessage is kept for tests that already own a materialized event. Consumer
+// code must use AppendSpillMessage so DMLEvent construction stays at flush time.
 func (g *EventsGroup) AppendMessage(message *codeccommon.DMLMessage) error {
-	return g.appendMessage(message, nil)
+	return g.AppendSpillMessage(message, DMLMessageSpillData{
+		Restore: func([]byte) (*codeccommon.DMLMessage, error) {
+			return message, nil
+		},
+	})
 }
 
-// AppendMessageWithPostRestore appends a message and applies postRestore after it is read back from
-// disk. It keeps consumer checks that intentionally run immediately before flushing out of the
-// on-disk representation.
-func (g *EventsGroup) AppendMessageWithPostRestore(
+// AppendSpillMessage appends an opaque codec payload to the spill file. It does
+// not call DMLMessage.ToDMLEvent; the restored message remains lazy until the
+// consumer flushes it against a watermark or DDL barrier.
+func (g *EventsGroup) AppendSpillMessage(
 	message *codeccommon.DMLMessage,
-	postRestore func(*codeccommon.DMLMessage) *codeccommon.DMLMessage,
-) error {
-	return g.appendMessage(message, postRestore)
-}
-
-func (g *EventsGroup) appendMessage(
-	message *codeccommon.DMLMessage,
-	postRestore func(*codeccommon.DMLMessage) *codeccommon.DMLMessage,
+	spillData DMLMessageSpillData,
 ) error {
 	if message == nil {
 		return errors.ErrSpillFileOp.FastGenByArgs("cannot spill nil DML message")
 	}
+	if spillData.Restore == nil {
+		return errors.ErrSpillFileOp.FastGenByArgs("cannot spill DML message without restore function")
+	}
 	commitTs := message.GetCommitTs()
 
-	data, _, err := marshalDMLMessage(message)
-	if err != nil {
-		return err
-	}
 	if g.spillFile == nil {
+		var err error
 		g.spillFile, err = spill.NewRecordFile(os.TempDir(), eventsGroupSpillPattern)
 		if err != nil {
 			return err
 		}
+	}
+	data := spillData.Data
+	if len(data) == 0 {
+		// A lazy message may not need an input payload (for example, a Simple
+		// decoder message released from its table-info cache). RecordFile rejects
+		// empty records, so retain a marker while keeping the event lazy.
+		data = []byte{0}
 	}
 	handle, err := g.spillFile.Append(data)
 	if err != nil {
@@ -109,7 +116,8 @@ func (g *EventsGroup) appendMessage(
 	g.messages = append(g.messages, spilledMessage{
 		commitTs:    commitTs,
 		handle:      handle,
-		postRestore: postRestore,
+		restore:     spillData.Restore,
+		postRestore: spillData.PostRestore,
 	})
 	return nil
 }
@@ -119,6 +127,12 @@ func (g *EventsGroup) appendMessage(
 // them, keeping the buffered group out of heap memory.
 func (g *EventsGroup) ResolveInto(resolve uint64, dst []*codeccommon.DMLMessage) ([]*codeccommon.DMLMessage, error) {
 	if len(g.messages) == 0 {
+		if g.spillFile != nil {
+			if err := g.spillFile.Cleanup(); err != nil {
+				return dst, err
+			}
+			g.spillFile = nil
+		}
 		return dst, nil
 	}
 
@@ -151,7 +165,7 @@ func (g *EventsGroup) ResolveInto(resolve uint64, dst []*codeccommon.DMLMessage)
 		if err != nil {
 			return dst, err
 		}
-		restored, err := unmarshalDMLMessage(data)
+		restored, err := message.restore(data)
 		if err != nil {
 			return dst, err
 		}
@@ -200,12 +214,18 @@ func (g *EventsGroup) Cleanup() error {
 	return nil
 }
 
-// AppendOrMergeDMLEvent appends row to events, or merges it into the preceding
-// event when both are compatible parts of the same transaction. Events with the
-// same commit-ts from different sources can use different table schemas, so a
-// commit-ts alone is not enough to merge their chunks safely.
-func AppendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLEvent) []*commonEvent.DMLEvent {
-	if len(events) == 0 || !canMergeDMLEvents(events[len(events)-1], row) {
+// DMLMessagesToEvents materializes messages and merges compatible adjacent
+// messages before they are handed to the downstream sink.
+func DMLMessagesToEvents(messages []*codeccommon.DMLMessage) []*commonEvent.DMLEvent {
+	events := make([]*commonEvent.DMLEvent, 0, len(messages))
+	for _, message := range messages {
+		events = appendOrMergeDMLEvent(events, message.ToDMLEvent())
+	}
+	return events
+}
+
+func appendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLEvent) []*commonEvent.DMLEvent {
+	if len(events) == 0 || !sameDMLTransaction(events[len(events)-1], row) {
 		return append(events, row)
 	}
 
@@ -223,25 +243,21 @@ func AppendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLE
 	return events
 }
 
-func canMergeDMLEvents(last, row *commonEvent.DMLEvent) bool {
-	if last == nil || row == nil ||
-		last.CommitTs != row.CommitTs ||
-		last.StartTs != row.StartTs ||
-		last.DispatcherID != row.DispatcherID ||
-		last.PhysicalTableID != row.PhysicalTableID ||
-		last.TableInfoVersion != row.TableInfoVersion ||
-		last.TableInfo == nil || row.TableInfo == nil ||
-		last.TableInfo.GetSchemaName() != row.TableInfo.GetSchemaName() ||
-		last.TableInfo.GetTableName() != row.TableInfo.GetTableName() ||
-		last.TableInfo.GetUpdateTS() != row.TableInfo.GetUpdateTS() ||
-		last.Rows == nil || row.Rows == nil ||
-		last.Rows.NumCols() != row.Rows.NumCols() ||
-		last.PreviousTotalOffset != 0 || row.PreviousTotalOffset != 0 ||
-		!reflect.DeepEqual(last.TableInfo.GetFieldSlice(), row.TableInfo.GetFieldSlice()) {
-		return false
-	}
-
-	return hasOptionalDMLValues(last.RowKeys, len(last.RowTypes)) &&
+func sameDMLTransaction(last, row *commonEvent.DMLEvent) bool {
+	return last != nil && row != nil &&
+		last.CommitTs == row.CommitTs &&
+		last.StartTs == row.StartTs &&
+		last.DispatcherID == row.DispatcherID &&
+		last.PhysicalTableID == row.PhysicalTableID &&
+		last.TableInfoVersion == row.TableInfoVersion &&
+		last.TableInfo != nil && row.TableInfo != nil &&
+		last.TableInfo.GetSchemaName() == row.TableInfo.GetSchemaName() &&
+		last.TableInfo.GetTableName() == row.TableInfo.GetTableName() &&
+		last.TableInfo.GetUpdateTS() == row.TableInfo.GetUpdateTS() &&
+		last.Rows != nil && row.Rows != nil &&
+		last.Rows.NumCols() == row.Rows.NumCols() &&
+		last.PreviousTotalOffset == 0 && row.PreviousTotalOffset == 0 &&
+		hasOptionalDMLValues(last.RowKeys, len(last.RowTypes)) &&
 		hasOptionalDMLValues(row.RowKeys, len(row.RowTypes)) &&
 		hasOptionalDMLValues(last.Checksum, len(last.RowTypes)) &&
 		hasOptionalDMLValues(row.Checksum, len(row.RowTypes))
@@ -260,264 +276,112 @@ func appendOptionalDMLValues[T any](last, row []T, lastRowTypeCount, rowRowTypeC
 	return append(last, row...)
 }
 
-func marshalDMLMessage(message *codeccommon.DMLMessage) (data []byte, row *commonEvent.DMLEvent, err error) {
-	if message == nil {
-		return nil, nil, errors.ErrSpillFileOp.FastGenByArgs("cannot spill nil DML message")
-	}
+// NewDMLMessageSpillData preserves the original codec input and the ordinal of
+// its DML message. The decoder is intentionally used only during ResolveInto:
+// this preserves the old behaviour where schema is selected at the DDL or
+// watermark barrier, rather than while the message is appended.
+func NewDMLMessageSpillData(
+	decoder codeccommon.Decoder, key, value []byte, dmlIndex uint64,
+) DMLMessageSpillData {
+	return NewDMLMessageSpillDataWithDecoderFactory(key, value, dmlIndex,
+		func([]byte, []byte) (codeccommon.Decoder, error) { return decoder, nil })
+}
 
-	row = message.ToDMLEvent()
-	if row == nil {
-		return nil, nil, errors.ErrSpillFileOp.FastGenByArgs("cannot spill DML message without event")
-	}
-	if row.Version == 0 {
-		row.Version = commonEvent.DMLEventVersion1
-	}
-	// Rows can be shared by several DML events. Persist only this event's rows
-	// below, so its offset must be reset in the serialized event as well.
-	event := *row
-	event.PreviousTotalOffset = 0
-	eventData, err := event.Marshal()
-	if err != nil {
-		return nil, nil, errors.WrapError(errors.ErrSpillFileOp, err, "marshal DML event")
-	}
-
-	var tableInfoData []byte
-	tableInfoStored := false
-	if row.TableInfo != nil {
-		tableInfoData, err = marshalDMLTableInfo(row.TableInfo)
-		if err != nil {
-			if row.Rows != nil && row.Rows.NumRows() > 0 {
-				return nil, nil, err
+// NewDMLMessageSpillDataWithDecoderFactory is for decoders such as CSV whose
+// input is supplied during construction rather than through AddKeyValue.
+func NewDMLMessageSpillDataWithDecoderFactory(
+	key, value []byte,
+	dmlIndex uint64,
+	decoderFactory func([]byte, []byte) (codeccommon.Decoder, error),
+) DMLMessageSpillData {
+	data := make([]byte, 0, 3*8+len(key)+len(value))
+	data = appendSpillUint64(data, dmlIndex)
+	data = appendSpillBytes(data, key)
+	data = appendSpillBytes(data, value)
+	return DMLMessageSpillData{
+		Data: data,
+		Restore: func(data []byte) (*codeccommon.DMLMessage, error) {
+			dmlIndex, key, value, err := unmarshalDMLMessageSpillData(data)
+			if err != nil {
+				return nil, err
 			}
-			log.Warn("spill DML event without table info",
-				zap.Int64("tableID", row.PhysicalTableID), zap.Uint64("commitTs", row.CommitTs), zap.Error(err))
-			tableInfoData = nil
-		} else {
-			tableInfoStored = true
-		}
-	}
-
-	var rowsData []byte
-	if row.Rows != nil && (row.Rows.NumRows() > 0 || tableInfoStored) {
-		rowsData, err = marshalDMLRows(row, tableInfoStored)
-		if err != nil {
-			if row.Rows.NumRows() > 0 {
-				return nil, nil, err
+			decoder, err := decoderFactory(key, value)
+			if err != nil {
+				return nil, errors.WrapError(errors.ErrSpillFileOp, err, "create DML spill decoder")
 			}
-			log.Warn("spill DML event without row data",
-				zap.Int64("tableID", row.PhysicalTableID), zap.Uint64("commitTs", row.CommitTs), zap.Error(err))
-			rowsData = nil
-		}
+			return restoreDMLMessage(decoder, key, value, dmlIndex)
+		},
 	}
-
-	checksumData, err := json.Marshal(row.Checksum)
-	if err != nil {
-		return nil, nil, errors.WrapError(errors.ErrSpillFileOp, err, "marshal DML checksums")
-	}
-
-	data = make([]byte, 0, 10*8+len(eventData)+len(tableInfoData)+len(rowsData)+len(checksumData)+len(message.Schema)+len(message.Table))
-	data = appendUint64(data, uint64(len(eventData)))
-	data = append(data, eventData...)
-	data = appendUint64(data, uint64(len(tableInfoData)))
-	data = append(data, tableInfoData...)
-	data = appendUint64(data, uint64(len(rowsData)))
-	data = append(data, rowsData...)
-	data = appendUint64(data, uint64(len(checksumData)))
-	data = append(data, checksumData...)
-	data = appendUint64(data, uint64(len(message.Schema)))
-	data = append(data, message.Schema...)
-	data = appendUint64(data, uint64(len(message.Table)))
-	data = append(data, message.Table...)
-	data = appendUint64(data, uint64(message.RowType))
-	if row.Rows != nil {
-		data = appendUint64(data, 1)
-	} else {
-		data = appendUint64(data, 0)
-	}
-	data = appendUint64(data, row.TableInfoVersion)
-	data = appendUint64(data, row.ReplicatingTs)
-	return data, row, nil
 }
 
-func marshalDMLTableInfo(tableInfo *commonType.TableInfo) (data []byte, err error) {
-	defer func() {
-		if recover() != nil {
-			err = errors.ErrSpillFileOp.FastGenByArgs("marshal incomplete DML table info")
-		}
-	}()
-
-	data, err = tableInfo.Marshal()
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrSpillFileOp, err, "marshal DML table info")
-	}
-	return data, nil
-}
-
-func marshalDMLRows(row *commonEvent.DMLEvent, tableInfoStored bool) (data []byte, err error) {
-	defer func() {
-		if recover() != nil {
-			err = errors.ErrSpillFileOp.FastGenByArgs("marshal DML rows with incomplete table info")
-		}
-	}()
-
-	fieldTypes := []*types.FieldType(nil)
-	if tableInfoStored {
-		fieldTypes = row.TableInfo.GetFieldSlice()
-	}
-	begin := row.PreviousTotalOffset
-	end := row.Rows.NumRows()
-	if len(row.RowTypes) != 0 {
-		end = begin + len(row.RowTypes)
-		// Most decoders, including batched DML events, use one RowType entry per
-		// physical chunk row. An update consequently appears twice. The Avro
-		// decoder instead represents its single logical update with one entry,
-		// while retaining both rows in the chunk. Length distinguishes the two
-		// encodings: it is the number of logical row changes.
-		compactRowTypes := row.Length > 0 && len(row.RowTypes) == int(row.Length)
-		if compactRowTypes {
-			end = begin
-		}
-		for _, rowType := range row.RowTypes {
-			switch rowType {
-			case commonType.RowTypeInsert, commonType.RowTypeDelete:
-				if compactRowTypes {
-					end++
-				}
-			case commonType.RowTypeUpdate:
-				if compactRowTypes {
-					end += 2
-				}
-			default:
-				return nil, errors.ErrSpillFileOp.FastGenByArgs("DML event has invalid row type")
+func restoreDMLMessage(
+	decoder codeccommon.Decoder, key, value []byte, dmlIndex uint64,
+) (*codeccommon.DMLMessage, error) {
+	decoder.AddKeyValue(key, value)
+	var restored *codeccommon.DMLMessage
+	for currentIndex := uint64(0); ; currentIndex++ {
+		messageType, hasNext := decoder.HasNext()
+		if !hasNext {
+			if restored == nil {
+				return nil, errors.ErrSpillFileOp.FastGenByArgs("DML spill payload has no message")
 			}
+			return restored, nil
+		}
+		if messageType != codeccommon.MessageTypeRow {
+			return nil, errors.ErrSpillFileOp.FastGenByArgs("DML spill payload contains a non-DML message")
+		}
+		message := decoder.NextDMLMessage()
+		if message == nil {
+			return nil, errors.ErrSpillFileOp.FastGenByArgs("DML spill payload cannot be restored")
+		}
+		if currentIndex == dmlIndex {
+			restored = message
 		}
 	}
-	if begin < 0 || end < begin || end > row.Rows.NumRows() {
-		return nil, errors.ErrSpillFileOp.FastGenByArgs("DML event rows are outside the shared chunk")
-	}
-	if !tableInfoStored && begin != 0 {
-		return nil, errors.ErrSpillFileOp.FastGenByArgs("DML event rows require table info")
-	}
-
-	rows := chunk.NewChunkWithCapacity(fieldTypes, end-begin)
-	rows.Append(row.Rows, begin, end)
-	return chunk.NewCodec(fieldTypes).Encode(rows), nil
 }
 
-func unmarshalDMLMessage(data []byte) (*codeccommon.DMLMessage, error) {
-	eventData, data, err := readSpilledField(data)
-	if err != nil {
-		return nil, err
-	}
-	tableInfoData, data, err := readSpilledField(data)
-	if err != nil {
-		return nil, err
-	}
-	rowsData, data, err := readSpilledField(data)
-	if err != nil {
-		return nil, err
-	}
-	checksumData, data, err := readSpilledField(data)
-	if err != nil {
-		return nil, err
-	}
-	schemaData, data, err := readSpilledField(data)
-	if err != nil {
-		return nil, err
-	}
-	tableData, data, err := readSpilledField(data)
-	if err != nil {
-		return nil, err
-	}
-	rowType, data, err := readSpilledUint64(data)
-	if err != nil {
-		return nil, err
-	}
-	if rowType > uint64(^commonType.RowType(0)) {
-		return nil, errors.ErrSpillFileOp.FastGenByArgs("invalid DML spill row type")
-	}
-	rowsPresent, data, err := readSpilledUint64(data)
-	if err != nil {
-		return nil, err
-	}
-	if rowsPresent > 1 {
-		return nil, errors.ErrSpillFileOp.FastGenByArgs("invalid DML spill rows flag")
-	}
-	tableInfoVersion, data, err := readSpilledUint64(data)
-	if err != nil {
-		return nil, err
-	}
-	replicatingTs, data, err := readSpilledUint64(data)
-	if err != nil {
-		return nil, err
-	}
-	if len(data) != 0 {
-		return nil, errors.ErrSpillFileOp.FastGenByArgs("unexpected trailing DML spill data")
-	}
-
-	row := &commonEvent.DMLEvent{}
-	if err := row.Unmarshal(eventData); err != nil {
-		return nil, errors.WrapError(errors.ErrSpillFileOp, err, "unmarshal DML event")
-	}
-	if len(tableInfoData) != 0 {
-		tableInfo, err := commonType.UnmarshalJSONToTableInfo(tableInfoData)
-		if err != nil {
-			return nil, errors.WrapError(errors.ErrSpillFileOp, err, "unmarshal DML table info")
-		}
-		row.TableInfo = tableInfo
-	}
-	if rowsPresent == 1 && len(rowsData) == 0 {
-		row.Rows = chunk.NewChunkWithCapacity(nil, 0)
-	} else if len(rowsData) != 0 {
-		fieldTypes := []*types.FieldType(nil)
-		if row.TableInfo != nil {
-			fieldTypes = row.TableInfo.GetFieldSlice()
-		}
-		rows, err := unmarshalDMLRows(rowsData, fieldTypes)
-		if err != nil {
-			return nil, err
-		}
-		row.Rows = rows
-	}
-	row.TableInfoVersion = tableInfoVersion
-	row.ReplicatingTs = replicatingTs
-	if err := json.Unmarshal(checksumData, &row.Checksum); err != nil {
-		return nil, errors.WrapError(errors.ErrSpillFileOp, err, "unmarshal DML checksums")
-	}
-	return codeccommon.NewDMLMessage(row.PhysicalTableID, string(schemaData), string(tableData), row.CommitTs,
-		commonType.RowType(rowType), func() *commonEvent.DMLEvent {
-			return row
-		}), nil
+func appendSpillBytes(data, value []byte) []byte {
+	data = appendSpillUint64(data, uint64(len(value)))
+	return append(data, value...)
 }
 
-func unmarshalDMLRows(data []byte, fieldTypes []*types.FieldType) (rows *chunk.Chunk, err error) {
-	defer func() {
-		if recover() != nil {
-			err = errors.ErrSpillFileOp.FastGenByArgs("decode DML spill rows")
-		}
-	}()
-	rows, _ = chunk.NewCodec(fieldTypes).Decode(data)
-	return rows, nil
-}
-
-func appendUint64(data []byte, value uint64) []byte {
+func appendSpillUint64(data []byte, value uint64) []byte {
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], value)
 	return append(data, buf[:]...)
 }
 
-func readSpilledField(data []byte) ([]byte, []byte, error) {
-	length, data, err := readSpilledUint64(data)
+func unmarshalDMLMessageSpillData(data []byte) (uint64, []byte, []byte, error) {
+	dmlIndex, data, err := readSpillUint64(data)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	key, data, err := readSpillBytes(data)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	value, data, err := readSpillBytes(data)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	if len(data) != 0 {
+		return 0, nil, nil, errors.ErrSpillFileOp.FastGenByArgs("unexpected trailing DML spill data")
+	}
+	return dmlIndex, key, value, nil
+}
+
+func readSpillBytes(data []byte) ([]byte, []byte, error) {
+	length, data, err := readSpillUint64(data)
 	if err != nil {
 		return nil, nil, err
 	}
 	if length > uint64(len(data)) {
-		return nil, nil, errors.ErrSpillFileOp.FastGenByArgs("invalid DML spill field length")
+		return nil, nil, errors.ErrSpillFileOp.FastGenByArgs("invalid DML spill payload length")
 	}
 	return data[:length], data[length:], nil
 }
 
-func readSpilledUint64(data []byte) (uint64, []byte, error) {
+func readSpillUint64(data []byte) (uint64, []byte, error) {
 	if len(data) < 8 {
 		return 0, nil, errors.ErrSpillFileOp.FastGenByArgs("truncated DML spill data")
 	}

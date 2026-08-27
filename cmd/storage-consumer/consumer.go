@@ -282,7 +282,11 @@ func (c *consumer) getNewFiles(
 	return tableDMLMap, err
 }
 
-func (c *consumer) appendMessage2Group(message *common.DMLMessage, enableTableAcrossNodes bool) error {
+func (c *consumer) appendMessage2Group(
+	message *common.DMLMessage,
+	enableTableAcrossNodes bool,
+	spillData util.DMLMessageSpillData,
+) error {
 	var (
 		tableID  = message.TableID
 		schema   = message.Schema
@@ -295,7 +299,7 @@ func (c *consumer) appendMessage2Group(message *common.DMLMessage, enableTableAc
 		c.eventsGroup[tableID] = group
 	}
 	if commitTs >= group.HighWatermark {
-		if err := group.AppendMessage(message); err != nil {
+		if err := group.AppendSpillMessage(message, spillData); err != nil {
 			return err
 		}
 		log.Debug("DML event append to the group",
@@ -309,7 +313,7 @@ func (c *consumer) appendMessage2Group(message *common.DMLMessage, enableTableAc
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", message.RowType))
-		return group.AppendMessage(message)
+		return group.AppendSpillMessage(message, spillData)
 	}
 	log.Warn("dml event commit ts fallback, ignore",
 		zap.Uint64("commitTs", commitTs),
@@ -358,6 +362,7 @@ func (c *consumer) appendDMLEvents(
 	}
 
 	cnt := 0
+	dmlIndex := uint64(0)
 	filteredCnt := 0
 	for {
 		tp, hasNext := decoder.HasNext()
@@ -374,7 +379,12 @@ func (c *consumer) appendDMLEvents(
 			c.dmlCount.Add(1)
 
 			message := decoder.NextDMLMessage()
-			if err := c.appendMessage2Group(messageWithPhysicalTableID(message, tableID), fileIdx.EnableTableAcrossNodes); err != nil {
+			spillData := c.newDMLMessageSpillData(ctx, schemaFile, content, dmlIndex)
+			dmlIndex++
+			spillData.PostRestore = func(message *common.DMLMessage) *common.DMLMessage {
+				return messageWithPhysicalTableID(message, tableID)
+			}
+			if err := c.appendMessage2Group(message, fileIdx.EnableTableAcrossNodes, spillData); err != nil {
 				return err
 			}
 			filteredCnt++
@@ -387,6 +397,28 @@ func (c *consumer) appendDMLEvents(
 		zap.Int("filteredRowsCnt", filteredCnt))
 
 	return err
+}
+
+func (c *consumer) newDMLMessageSpillData(
+	ctx context.Context,
+	schemaFile cloudstorage.SchemaFile,
+	content []byte,
+	dmlIndex uint64,
+) util.DMLMessageSpillData {
+	tableInfo := schemaFile.TableInfo()
+	selector := c.columnSelectors.GetForTableInfo(tableInfo)
+	return util.NewDMLMessageSpillDataWithDecoderFactory(nil, content, dmlIndex,
+		func(_ []byte, value []byte) (common.Decoder, error) {
+			switch c.codecCfg.Protocol {
+			case config.ProtocolCsv:
+				return csv.NewDecoderWithColumnSelector(ctx, c.codecCfg, tableInfo, value, selector)
+			case config.ProtocolCanalJSON:
+				decoder := canal.NewTxnDecoder(c.codecCfg)
+				return decoder, nil
+			default:
+				return nil, errors.ErrSpillFileOp.FastGenByArgs("unsupported storage DML spill protocol")
+			}
+		})
 }
 
 func messageWithPhysicalTableID(message *common.DMLMessage, tableID int64) *common.DMLMessage {
@@ -409,10 +441,7 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 	if len(messages) == 0 {
 		return nil
 	}
-	events := make([]*event.DMLEvent, 0, len(messages))
-	for _, message := range messages {
-		events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
-	}
+	events := util.DMLMessagesToEvents(messages)
 	total := len(events)
 	if total == 0 {
 		return nil

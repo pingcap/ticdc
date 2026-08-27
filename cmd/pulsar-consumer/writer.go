@@ -175,10 +175,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			if err != nil {
 				return err
 			}
-			events := make([]*commonEvent.DMLEvent, 0, len(messages))
-			for _, message := range messages {
-				events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
-			}
+			events := util.DMLMessagesToEvents(messages)
 			resolvedEvents = append(resolvedEvents, events...)
 		}
 	}
@@ -290,10 +287,7 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			events := make([]*commonEvent.DMLEvent, 0, len(messages))
-			for _, message := range messages {
-				events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
-			}
+			events := util.DMLMessagesToEvents(messages)
 			resolvedEvents = append(resolvedEvents, events...)
 		}
 	}
@@ -373,7 +367,8 @@ func (w *writer) WriteMessage(ctx context.Context, message pulsar.Message) (bool
 		if dmlMessage == nil {
 			log.Panic("DML message is nil, it's not expected")
 		}
-		if err := w.appendMessage2Group(dmlMessage, progress); err != nil {
+		if err := w.appendMessage2Group(dmlMessage, progress,
+			util.NewDMLMessageSpillData(progress.decoder, []byte(message.Key()), message.Payload(), 0)); err != nil {
 			return false, err
 		}
 	default:
@@ -514,7 +509,11 @@ func (w *writer) addPartitionTable(schema, table string) {
 	w.partitionTableAccessor.Add(schema, table)
 }
 
-func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *partitionProgress) error {
+func (w *writer) appendMessage2Group(
+	message *common.DMLMessage,
+	progress *partitionProgress,
+	spillDataArgs ...util.DMLMessageSpillData,
+) error {
 	var (
 		tableID  = message.TableID
 		schema   = message.Schema
@@ -539,7 +538,13 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 		group = util.NewEventsGroup(progress.partition, tableID)
 		progress.eventsGroup[tableID] = group
 	}
-	if err := group.AppendMessage(message); err != nil {
+	spillData := util.DMLMessageSpillData{
+		Restore: func([]byte) (*common.DMLMessage, error) { return message, nil },
+	}
+	if len(spillDataArgs) > 0 {
+		spillData = spillDataArgs[0]
+	}
+	if err := group.AppendSpillMessage(message, spillData); err != nil {
 		return err
 	}
 	if commitTs < progress.watermark {

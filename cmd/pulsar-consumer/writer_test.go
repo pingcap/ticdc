@@ -433,7 +433,7 @@ func TestWriteMessageSpillsDMLImmediately(t *testing.T) {
 	require.Equal(t, 1, decoder.addKeyValueCount)
 	require.Equal(t, 1, decoder.hasNextCount)
 	require.Equal(t, 1, decoder.nextDMLMessageCount)
-	require.Equal(t, 1, decoder.toDMLEventCount)
+	require.Zero(t, decoder.toDMLEventCount)
 	resolved, err := progress.eventsGroup[1].ResolveInto(99, nil)
 	require.NoError(t, err)
 	require.Len(t, resolved, 0)
@@ -442,9 +442,9 @@ func TestWriteMessageSpillsDMLImmediately(t *testing.T) {
 	needCommit, err = w.Write(ctx, codeccommon.MessageTypeResolved)
 	require.NoError(t, err)
 	require.True(t, needCommit)
-	require.Equal(t, 1, decoder.addKeyValueCount)
-	require.Equal(t, 1, decoder.hasNextCount)
-	require.Equal(t, 1, decoder.nextDMLMessageCount)
+	require.Equal(t, 2, decoder.addKeyValueCount)
+	require.Equal(t, 3, decoder.hasNextCount)
+	require.Equal(t, 2, decoder.nextDMLMessageCount)
 	require.Equal(t, 1, decoder.toDMLEventCount)
 	resolved, err = progress.eventsGroup[1].ResolveInto(100, nil)
 	require.NoError(t, err)
@@ -460,16 +460,18 @@ type deferredDMLDecoder struct {
 	nextDMLMessageCount int
 	toDMLEventCount     int
 	lastValue           []byte
+	pending             bool
 }
 
 func (d *deferredDMLDecoder) AddKeyValue(_, value []byte) {
 	d.addKeyValueCount++
 	d.lastValue = append(d.lastValue[:0], value...)
+	d.pending = true
 }
 
 func (d *deferredDMLDecoder) HasNext() (codeccommon.MessageType, bool) {
 	d.hasNextCount++
-	return codeccommon.MessageTypeRow, true
+	return codeccommon.MessageTypeRow, d.pending
 }
 
 func (d *deferredDMLDecoder) NextResolvedEvent() uint64 {
@@ -478,6 +480,7 @@ func (d *deferredDMLDecoder) NextResolvedEvent() uint64 {
 
 func (d *deferredDMLDecoder) NextDMLMessage() *codeccommon.DMLMessage {
 	d.nextDMLMessageCount++
+	d.pending = false
 	return codeccommon.NewDMLMessage(1, "test", "t", d.row.CommitTs, common.RowTypeInsert, func() *commonEvent.DMLEvent {
 		d.toDMLEventCount++
 		return d.row
@@ -492,6 +495,7 @@ func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
 	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
 		return &commonEvent.DMLEvent{
 			PhysicalTableID: 1,
+			StartTs:         commitTs - 1,
 			CommitTs:        commitTs,
 			RowTypes:        []common.RowType{common.RowTypeUpdate},
 			Rows:            chunk.NewChunkWithCapacity(nil, 0),

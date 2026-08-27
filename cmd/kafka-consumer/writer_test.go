@@ -472,6 +472,7 @@ func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
 	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
 		return &commonEvent.DMLEvent{
 			PhysicalTableID: 1,
+			StartTs:         commitTs - 1,
 			CommitTs:        commitTs,
 			RowTypes:        []common.RowType{common.RowTypeUpdate},
 			Rows:            chunk.NewChunkWithCapacity(nil, 0),
