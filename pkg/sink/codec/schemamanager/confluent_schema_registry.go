@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package avro
+package schemamanager
 
 import (
 	"bytes"
@@ -39,7 +39,8 @@ import (
 // confluent avro wire format, the first byte is always 0
 // https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format
 const (
-	magicByte                    = uint8(0)
+	// ConfluentMagicByte is the first byte of the Confluent Avro wire format.
+	ConfluentMagicByte           = uint8(0)
 	schemaRegistryRequestTimeout = 30 * time.Second
 )
 
@@ -125,9 +126,9 @@ func (m *confluentSchemaManager) Register(
 	ctx context.Context,
 	schemaName string,
 	schemaDefinition string,
-) (schemaID, error) {
+) (SchemaID, error) {
 	// The Schema Registry expects the JSON to be without newline characters
-	id := schemaID{}
+	id := SchemaID{}
 	log.Info("confluentSchemaManager", zap.String("schemaDefinition", schemaDefinition), zap.String("schemaName", schemaName))
 
 	buffer := new(bytes.Buffer)
@@ -213,7 +214,7 @@ func (m *confluentSchemaManager) Register(
 func (m *confluentSchemaManager) Lookup(
 	ctx context.Context,
 	schemaName string,
-	schemaID schemaID,
+	schemaID SchemaID,
 ) (*goavro.Codec, error) {
 	m.cacheRWLock.RLock()
 	entry, exists := m.cache[schemaName]
@@ -405,8 +406,13 @@ func (m *confluentSchemaManager) RegistryType() string {
 // https://rmoff.net/2020/07/03/why-json-isnt-the-same-as-json-schema-in-kafka-connect-converters \
 // -and-ksqldb-viewing-kafka-messages-bytes-as-hex/
 func (m *confluentSchemaManager) getMsgHeader(schemaID int) ([]byte, error) {
+	return BuildConfluentWireHeader(schemaID)
+}
+
+// BuildConfluentWireHeader builds a Confluent Avro wire header.
+func BuildConfluentWireHeader(schemaID int) ([]byte, error) {
 	head := new(bytes.Buffer)
-	err := head.WriteByte(magicByte)
+	err := head.WriteByte(ConfluentMagicByte)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrEncodeFailed, err)
 	}
@@ -491,7 +497,8 @@ func httpRetry(
 	return resp, nil
 }
 
-func getConfluentSchemaIDFromHeader(header []byte) (uint32, error) {
+// GetConfluentSchemaIDFromHeader extracts a schema ID from a Confluent wire header.
+func GetConfluentSchemaIDFromHeader(header []byte) (uint32, error) {
 	if len(header) < 5 {
 		return 0, errors.ErrDecodeFailed.GenWithStackByArgs("header too short")
 	}

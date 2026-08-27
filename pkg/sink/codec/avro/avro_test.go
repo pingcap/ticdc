@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -103,7 +104,7 @@ func TestAvroEncode4EnableChecksum(t *testing.T) {
 	cid, data, err := extractConfluentSchemaIDAndBinaryData(bin)
 	require.NoError(t, err)
 
-	avroValueCodec, err := encoder.schemaM.Lookup(ctx, topic, schemaID{confluentSchemaID: cid})
+	avroValueCodec, err := encoder.schemaM.Lookup(ctx, topic, schemamanager.NewConfluentSchemaID(cid))
 	require.NoError(t, err)
 
 	res, _, err := avroValueCodec.NativeFromBinary(data)
@@ -156,7 +157,7 @@ func TestAvroEncodeDeleteChecksum(t *testing.T) {
 	cid, data, err := extractConfluentSchemaIDAndBinaryData(bin)
 	require.NoError(t, err)
 
-	avroValueCodec, err := encoder.schemaM.Lookup(ctx, topic, schemaID{confluentSchemaID: cid})
+	avroValueCodec, err := encoder.schemaM.Lookup(ctx, topic, schemamanager.NewConfluentSchemaID(cid))
 	require.NoError(t, err)
 
 	res, _, err := avroValueCodec.NativeFromBinary(data)
@@ -187,7 +188,7 @@ func TestAvroEncode(t *testing.T) {
 	cid, data, err := extractConfluentSchemaIDAndBinaryData(bin)
 	require.NoError(t, err)
 
-	avroKeyCodec, err := encoder.schemaM.Lookup(ctx, topic, schemaID{confluentSchemaID: cid})
+	avroKeyCodec, err := encoder.schemaM.Lookup(ctx, topic, schemamanager.NewConfluentSchemaID(cid))
 	require.NoError(t, err)
 
 	res, _, err := avroKeyCodec.NativeFromBinary(data)
@@ -206,7 +207,7 @@ func TestAvroEncode(t *testing.T) {
 	cid, data, err = extractConfluentSchemaIDAndBinaryData(bin)
 	require.NoError(t, err)
 
-	avroValueCodec, err := encoder.schemaM.Lookup(ctx, topic, schemaID{confluentSchemaID: cid})
+	avroValueCodec, err := encoder.schemaM.Lookup(ctx, topic, schemamanager.NewConfluentSchemaID(cid))
 	require.NoError(t, err)
 
 	res, _, err = avroValueCodec.NativeFromBinary(data)
@@ -279,7 +280,7 @@ func TestAvroEncodeIncludeBeforeValue(t *testing.T) {
 			cid, data, err := extractConfluentSchemaIDAndBinaryData(bin)
 			require.NoError(t, err)
 
-			avroValueCodec, err := encoder.schemaM.Lookup(ctx, topic, schemaID{confluentSchemaID: cid})
+			avroValueCodec, err := encoder.schemaM.Lookup(ctx, topic, schemamanager.NewConfluentSchemaID(cid))
 			require.NoError(t, err)
 
 			res, _, err := avroValueCodec.NativeFromBinary(data)
@@ -358,7 +359,7 @@ func TestAvroEncodeIncludeBeforeValueWithoutTiDBExtension(t *testing.T) {
 
 			cid, data, err := extractConfluentSchemaIDAndBinaryData(bin)
 			require.NoError(t, err)
-			avroValueCodec, err := encoder.schemaM.Lookup(ctx, "default", schemaID{confluentSchemaID: cid})
+			avroValueCodec, err := encoder.schemaM.Lookup(ctx, "default", schemamanager.NewConfluentSchemaID(cid))
 			require.NoError(t, err)
 			res, _, err := avroValueCodec.NativeFromBinary(data)
 			require.NoError(t, err)
@@ -422,7 +423,7 @@ func TestAvroEncodeDeleteEventUsesPreRowForKey(t *testing.T) {
 
 	avroKeyCodec, err := encoder.schemaM.Lookup(ctx,
 		topicName2SchemaSubjects(topic, keySchemaSuffix),
-		schemaID{confluentSchemaID: cid})
+		schemamanager.NewConfluentSchemaID(cid))
 	require.NoError(t, err)
 
 	res, _, err := avroKeyCodec.NativeFromBinary(data)
@@ -472,8 +473,6 @@ func TestAvroEncodeDeleteEventWithWatermarkCarriesCommitTs(t *testing.T) {
 
 func TestAvroEnvelope(t *testing.T) {
 	t.Parallel()
-	cManager := &confluentSchemaManager{}
-	gManager := &glueSchemaManager{}
 	avroCodec, err := GenCodec(`
        {
          "type": "record",
@@ -492,7 +491,7 @@ func TestAvroEnvelope(t *testing.T) {
 	require.NoError(t, err)
 
 	// test confluent schema message
-	header, err := cManager.getMsgHeader(8)
+	header, err := schemamanager.BuildConfluentWireHeader(8)
 	require.NoError(t, err)
 	res := avroEncodeResult{
 		data:   bin,
@@ -514,7 +513,7 @@ func TestAvroEnvelope(t *testing.T) {
 	// test glue schema message
 	uuidGenerator := uuid.NewGenerator()
 	uuidS := uuidGenerator.NewString()
-	header, err = gManager.getMsgHeader(uuidS)
+	header, err = schemamanager.BuildGlueWireHeader(uuidS)
 	require.NoError(t, err)
 	res = avroEncodeResult{
 		data:   bin,

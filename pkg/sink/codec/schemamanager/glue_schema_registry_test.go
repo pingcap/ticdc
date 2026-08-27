@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package avro
+package schemamanager
 
 import (
 	"context"
@@ -107,9 +107,9 @@ func TestGlueSchemaManager_getMsgHeader(t *testing.T) {
 
 	header, err := m.getMsgHeader(schemaID.glueSchemaID)
 	require.NoError(t, err)
-	require.Equal(t, header[0], headerVersionByte)
-	require.Equal(t, header[1], compressionDefaultByte)
-	sid, err := getGlueSchemaIDFromHeader(header)
+	require.Equal(t, header[0], GlueHeaderVersionByte)
+	require.Equal(t, header[1], GlueCompressionDefaultByte)
+	sid, err := GetGlueSchemaIDFromHeader(header)
 	require.NoError(t, err)
 	require.Equal(t, schemaID.glueSchemaID, sid)
 }

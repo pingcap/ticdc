@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package avro
+package schemamanager
 
 import (
 	"context"
@@ -97,8 +97,8 @@ func (m *glueSchemaManager) Register(
 	ctx context.Context,
 	schemaName string,
 	schemaDefinition string,
-) (schemaID, error) {
-	id := schemaID{}
+) (SchemaID, error) {
+	id := SchemaID{}
 	ok, _, err := m.getSchemaByName(ctx, schemaName)
 	if err != nil {
 		return id, errors.Trace(err)
@@ -126,7 +126,7 @@ func (m *glueSchemaManager) Register(
 func (m *glueSchemaManager) Lookup(
 	ctx context.Context,
 	schemaName string,
-	schemaID schemaID,
+	schemaID SchemaID,
 ) (*goavro.Codec, error) {
 	m.cacheRWLock.RLock()
 	entry, exists := m.cache[schemaName]
@@ -327,14 +327,21 @@ func (m *glueSchemaManager) getSchemaByID(ctx context.Context, schemaID string) 
 // master/common/src/main/java/com/amazonaws/services/
 // schemaregistry/utils/AWSSchemaRegistryConstants.java
 const (
-	headerVersionByte      = uint8(3) // 3 is fixed for the glue message
-	compressionDefaultByte = uint8(0) // 0  no compression
+	// GlueHeaderVersionByte is fixed at 3 for the Glue wire format.
+	GlueHeaderVersionByte = uint8(3)
+	// GlueCompressionDefaultByte indicates that the Glue payload is not compressed.
+	GlueCompressionDefaultByte = uint8(0)
 )
 
 func (m *glueSchemaManager) getMsgHeader(schemaID string) ([]byte, error) {
+	return BuildGlueWireHeader(schemaID)
+}
+
+// BuildGlueWireHeader builds an AWS Glue Avro wire header.
+func BuildGlueWireHeader(schemaID string) ([]byte, error) {
 	header := []byte{}
-	header = append(header, headerVersionByte)
-	header = append(header, compressionDefaultByte)
+	header = append(header, GlueHeaderVersionByte)
+	header = append(header, GlueCompressionDefaultByte)
 	uuid, err := uuid.ParseBytes([]byte(schemaID))
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrEncodeFailed, err)
@@ -343,7 +350,8 @@ func (m *glueSchemaManager) getMsgHeader(schemaID string) ([]byte, error) {
 	return header, nil
 }
 
-func getGlueSchemaIDFromHeader(header []byte) (string, error) {
+// GetGlueSchemaIDFromHeader extracts a schema ID from an AWS Glue wire header.
+func GetGlueSchemaIDFromHeader(header []byte) (string, error) {
 	if len(header) < 18 {
 		return "", errors.ErrDecodeFailed.GenWithStackByArgs("header is too short")
 	}

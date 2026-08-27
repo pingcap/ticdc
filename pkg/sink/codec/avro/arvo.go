@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -813,8 +814,8 @@ func SetupEncoderAndSchemaRegistry4Testing(
 	ctx context.Context,
 	config *common.Config,
 ) (*BatchEncoder, error) {
-	startHTTPInterceptForTestingRegistry()
-	schemaM, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
+	schemamanager.SetupTestingRegistry()
+	schemaM, err := schemamanager.NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -829,12 +830,12 @@ func SetupEncoderAndSchemaRegistry4Testing(
 
 // TeardownEncoderAndSchemaRegistry4Testing stop the local schema registry for testing.
 func TeardownEncoderAndSchemaRegistry4Testing() {
-	stopHTTPInterceptForTestingRegistry()
+	schemamanager.TeardownTestingRegistry()
 }
 
 // GenCodec generate avro codec.
 // Don't treat string literal "null" as null, because we can distinguish them.
 // See https://github.com/pingcap/tiflow/issues/11994
 func GenCodec(schema string) (*goavro.Codec, error) {
-	return goavro.NewCodecWithOptions(schema, &goavro.CodecOption{EnableStringNull: false})
+	return schemamanager.GenCodec(schema)
 }

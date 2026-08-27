@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package avro
+package schemamanager
 
 import (
 	"bytes"
@@ -32,8 +32,8 @@ func getTestingContext() context.Context {
 }
 
 func TestSchemaRegistry(t *testing.T) {
-	startHTTPInterceptForTestingRegistry()
-	defer stopHTTPInterceptForTestingRegistry()
+	SetupTestingRegistry()
+	defer TeardownTestingRegistry()
 
 	ctx := getTestingContext()
 	manager, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
@@ -44,7 +44,7 @@ func TestSchemaRegistry(t *testing.T) {
 	err = manager.ClearRegistry(ctx, topic)
 	require.NoError(t, err)
 
-	_, err = manager.Lookup(ctx, topic, schemaID{confluentSchemaID: 1})
+	_, err = manager.Lookup(ctx, topic, SchemaID{confluentSchemaID: 1})
 	require.Regexp(t, `.*not\sfound.*`, err)
 
 	codec, err := GenCodec(`{
@@ -104,8 +104,8 @@ func TestSchemaRegistry(t *testing.T) {
 }
 
 func TestSchemaRegistryBad(t *testing.T) {
-	startHTTPInterceptForTestingRegistry()
-	defer stopHTTPInterceptForTestingRegistry()
+	SetupTestingRegistry()
+	defer TeardownTestingRegistry()
 
 	ctx := getTestingContext()
 	_, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:808", nil)
@@ -116,8 +116,8 @@ func TestSchemaRegistryBad(t *testing.T) {
 }
 
 func TestRegisterReturnsServerError(t *testing.T) {
-	startHTTPInterceptForTestingRegistry()
-	defer stopHTTPInterceptForTestingRegistry()
+	SetupTestingRegistry()
+	defer TeardownTestingRegistry()
 
 	ctx := getTestingContext()
 	manager, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
@@ -142,8 +142,8 @@ func TestRegisterReturnsServerError(t *testing.T) {
 }
 
 func TestSchemaRegistryIdempotent(t *testing.T) {
-	startHTTPInterceptForTestingRegistry()
-	defer stopHTTPInterceptForTestingRegistry()
+	SetupTestingRegistry()
+	defer TeardownTestingRegistry()
 
 	ctx := getTestingContext()
 	manager, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
@@ -187,8 +187,8 @@ func TestSchemaRegistryIdempotent(t *testing.T) {
 }
 
 func TestGetCachedOrRegister(t *testing.T) {
-	startHTTPInterceptForTestingRegistry()
-	defer stopHTTPInterceptForTestingRegistry()
+	SetupTestingRegistry()
+	defer TeardownTestingRegistry()
 
 	ctx := getTestingContext()
 	manager, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
@@ -223,7 +223,7 @@ func TestGetCachedOrRegister(t *testing.T) {
 
 	codec, header, err := manager.GetCachedOrRegister(ctx, topic, 1, schemaGen)
 	require.NoError(t, err)
-	cID, err := getConfluentSchemaIDFromHeader(header)
+	cID, err := GetConfluentSchemaIDFromHeader(header)
 	require.NoError(t, err)
 	require.Greater(t, cID, uint32(0))
 	require.NotNil(t, codec)
@@ -275,7 +275,7 @@ func TestGetCachedOrRegister(t *testing.T) {
 					schemaGen,
 				)
 				require.NoError(t, err)
-				cID, err := getConfluentSchemaIDFromHeader(header)
+				cID, err := GetConfluentSchemaIDFromHeader(header)
 				require.NoError(t, err)
 				require.Greater(t, cID, uint32(0))
 				require.NotNil(t, codec)
@@ -286,8 +286,8 @@ func TestGetCachedOrRegister(t *testing.T) {
 }
 
 func TestHTTPRetryReturnsServerError(t *testing.T) {
-	startHTTPInterceptForTestingRegistry()
-	defer stopHTTPInterceptForTestingRegistry()
+	SetupTestingRegistry()
+	defer TeardownTestingRegistry()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()

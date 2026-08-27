@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -46,7 +47,7 @@ type decoder struct {
 
 	upstreamTiDB *sql.DB
 
-	schemaM SchemaManager
+	schemaM schemamanager.SchemaManager
 
 	key   []byte
 	value []byte
@@ -56,7 +57,7 @@ type decoder struct {
 func NewDecoder(
 	config *common.Config,
 	idx int,
-	schemaM SchemaManager,
+	schemaM schemamanager.SchemaManager,
 	topic string,
 	db *sql.DB,
 ) common.Decoder {
@@ -91,7 +92,7 @@ func (d *decoder) HasNext() (common.MessageType, bool) {
 		log.Panic("avro invalid data, the length of value is less than 1", zap.String("data", util.RedactAny(d.value)))
 	}
 	switch d.value[0] {
-	case magicByte:
+	case schemamanager.ConfluentMagicByte:
 		return common.MessageTypeRow, true
 	case ddlByte:
 		return common.MessageTypeDDL, true
@@ -616,11 +617,11 @@ func extractConfluentSchemaIDAndBinaryData(data []byte) (int, []byte, error) {
 		return 0, nil, errors.ErrAvroInvalidMessage.
 			FastGenByArgs("an avro message using confluent schema registry should have at least 5 bytes")
 	}
-	if data[0] != magicByte {
+	if data[0] != schemamanager.ConfluentMagicByte {
 		return 0, nil, errors.ErrAvroInvalidMessage.
 			FastGenByArgs("magic byte is not match, it should be 0")
 	}
-	id, err := getConfluentSchemaIDFromHeader(data[0:5])
+	id, err := schemamanager.GetConfluentSchemaIDFromHeader(data[0:5])
 	if err != nil {
 		return 0, nil, errors.Trace(err)
 	}
@@ -632,15 +633,15 @@ func extractGlueSchemaIDAndBinaryData(data []byte) (string, []byte, error) {
 		return "", nil, errors.ErrAvroInvalidMessage.
 			FastGenByArgs("an avro message using glue schema registry should have at least 18 bytes")
 	}
-	if data[0] != headerVersionByte {
+	if data[0] != schemamanager.GlueHeaderVersionByte {
 		return "", nil, errors.ErrAvroInvalidMessage.
-			FastGenByArgs("header version byte is not match, it should be %d", headerVersionByte)
+			FastGenByArgs("header version byte is not match, it should be %d", schemamanager.GlueHeaderVersionByte)
 	}
-	if data[1] != compressionDefaultByte {
+	if data[1] != schemamanager.GlueCompressionDefaultByte {
 		return "", nil, errors.ErrAvroInvalidMessage.
-			FastGenByArgs("compression byte is not match, it should be %d", compressionDefaultByte)
+			FastGenByArgs("compression byte is not match, it should be %d", schemamanager.GlueCompressionDefaultByte)
 	}
-	id, err := getGlueSchemaIDFromHeader(data[0:18])
+	id, err := schemamanager.GetGlueSchemaIDFromHeader(data[0:18])
 	if err != nil {
 		return "", nil, errors.Trace(err)
 	}
@@ -648,9 +649,9 @@ func extractGlueSchemaIDAndBinaryData(data []byte) (string, []byte, error) {
 }
 
 func decodeRawBytes(
-	ctx context.Context, schemaM SchemaManager, data []byte, topic string,
+	ctx context.Context, schemaM schemamanager.SchemaManager, data []byte, topic string,
 ) (map[string]any, map[string]any, error) {
-	var schemaID schemaID
+	var schemaID schemamanager.SchemaID
 	var binary []byte
 	var err error
 	var cid int
@@ -662,13 +663,13 @@ func decodeRawBytes(
 		if err != nil {
 			return nil, nil, err
 		}
-		schemaID.confluentSchemaID = cid
+		schemaID = schemamanager.NewConfluentSchemaID(cid)
 	case common.SchemaRegistryTypeGlue:
 		gid, binary, err = extractGlueSchemaIDAndBinaryData(data)
 		if err != nil {
 			return nil, nil, err
 		}
-		schemaID.glueSchemaID = gid
+		schemaID = schemamanager.NewGlueSchemaID(gid)
 	default:
 		return nil, nil, errors.ErrCodecDecode.GenWithStack("unknown schema registry type")
 	}
