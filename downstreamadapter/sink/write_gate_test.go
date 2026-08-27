@@ -38,9 +38,7 @@ func TestWriteGatedSinkBlocksAndResumesDML(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	inner := mock.NewMockSink(ctrl)
 	gate := writelease.NewGate()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	gated := sink.WithWriteGate(ctx, inner, gate)
+	gated := sink.WithWriteGate(t.Context(), inner, gate)
 
 	written := make(chan struct{})
 	inner.EXPECT().AddDMLEvent(nil).Do(func(_ any) { close(written) })
@@ -101,9 +99,7 @@ func TestWriteGatedSinkCoversEveryWriteEntry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	inner := mock.NewMockSink(ctrl)
 	gate := writelease.NewGate()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	gated := sink.WithWriteGate(ctx, inner, gate)
+	gated := sink.WithWriteGate(t.Context(), inner, gate)
 
 	// A checkpoint is safe to drop while closed because later checkpoints
 	// supersede it.

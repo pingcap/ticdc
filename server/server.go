@@ -465,9 +465,7 @@ func (c *server) watchEtcdSession(
 				return errors.ErrCaptureSuicide.GenWithStackByArgs()
 			}
 			proofDuration := time.Duration(ttl.TTL)*time.Second - etcdTTLSafetyMargin
-			if proofDuration > writelease.EtcdProofDuration {
-				proofDuration = writelease.EtcdProofDuration
-			}
+			proofDuration = min(proofDuration, writelease.EtcdProofDuration)
 			if proofDuration > 0 && c.writeGate != nil {
 				c.writeGate.RenewEtcd(requestSentAt, proofDuration)
 			}

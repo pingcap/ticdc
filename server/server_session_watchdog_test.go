@@ -122,7 +122,7 @@ func TestSessionWatchdogDoesNotFenceOnTTLQueryError(t *testing.T) {
 				return nil, context.DeadlineExceeded
 			}
 			cancel()
-			return &clientv3.LeaseTimeToLiveResponse{TTL: 10}, nil
+			return nil, context.Canceled
 		}).Times(2)
 
 	c := &server{EtcdClient: cdcEtcdClient, writeGate: writelease.NewGate()}
@@ -153,9 +153,7 @@ func TestCaptureWriteGateMonitorRecordsBlockTransition(t *testing.T) {
 
 	counter := metrics.CaptureWriteBlockCounter.WithLabelValues(string(writelease.BlockReasonBothExpired))
 	before := testutil.ToFloat64(counter)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go c.monitorCaptureWriteGate(ctx, 5*time.Millisecond)
+	go c.monitorCaptureWriteGate(t.Context(), 5*time.Millisecond)
 
 	require.Eventually(t, func() bool {
 		return testutil.ToFloat64(counter) == before+1

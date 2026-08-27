@@ -16,7 +16,7 @@ package coordinator
 import (
 	"bytes"
 	"crypto/rand"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -165,7 +165,7 @@ func (c *captureWriteLeaseController) handleSelfHeartbeat(
 		c.pendingWitness = nil
 	}
 
-	sort.Slice(witnesses, func(i, j int) bool { return witnesses[i] < witnesses[j] })
+	slices.Sort(witnesses)
 	witness := witnesses[c.nextWitnessIndex%len(witnesses)]
 	c.nextWitnessIndex++
 	witnessEpoch := c.nodes[witness].nodeEpoch
