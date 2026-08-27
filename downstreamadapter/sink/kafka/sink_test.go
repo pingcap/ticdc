@@ -246,8 +246,8 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 
 		factory.EXPECT().AsyncProducer(gomock.Any()).Return(nil, cause)
 		gomock.InOrder(
-			topicManager.EXPECT().Close(),
 			adminClient.EXPECT().Close(),
+			topicManager.EXPECT().Close(),
 		)
 
 		kafkaSink, err := newWithComponents(
@@ -274,8 +274,8 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		factory.EXPECT().SyncProducer(gomock.Any()).Return(nil, cause)
 		gomock.InOrder(
 			asyncProducer.EXPECT().Close(),
-			topicManager.EXPECT().Close(),
 			adminClient.EXPECT().Close(),
+			topicManager.EXPECT().Close(),
 		)
 
 		kafkaSink, err := newWithComponents(
@@ -305,8 +305,8 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		gomock.InOrder(
 			syncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) }),
 			asyncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) }),
-			topicManager.EXPECT().Close().Do(func() { closeCount.Add(1) }),
 			adminClient.EXPECT().Close().Do(func() { closeCount.Add(1) }),
+			topicManager.EXPECT().Close().Do(func() { closeCount.Add(1) }),
 		)
 
 		kafkaSink, err := newWithComponents(
