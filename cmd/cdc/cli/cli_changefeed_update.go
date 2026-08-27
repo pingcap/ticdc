@@ -117,7 +117,19 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 		return nil
 	}
 	cmd.Printf("Diff of changefeed config:\n")
-	for _, change := range changelog {
+	maskedOld, err := old.CloneWithMaskedSensitiveData()
+	if err != nil {
+		return err
+	}
+	maskedNewInfo, err := newInfo.CloneWithMaskedSensitiveData()
+	if err != nil {
+		return err
+	}
+	maskedChangelog, err := diff.Diff(maskedOld, maskedNewInfo)
+	if err != nil {
+		return err
+	}
+	for _, change := range maskedChangelog {
 		cmd.Printf("%+v\n", change)
 	}
 
@@ -169,7 +181,11 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	infoStr, err := json.Marshal(info)
+	maskedInfo, err := info.CloneWithMaskedSensitiveData()
+	if err != nil {
+		return err
+	}
+	infoStr, err := json.Marshal(maskedInfo)
 	if err != nil {
 		return err
 	}

@@ -1411,6 +1411,36 @@ func (info *ChangeFeedInfo) Clone() (*ChangeFeedInfo, error) {
 	return cloned, err
 }
 
+// CloneWithMaskedSensitiveData returns a clone safe for user-visible output.
+func (info *ChangeFeedInfo) CloneWithMaskedSensitiveData() (*ChangeFeedInfo, error) {
+	cloned, err := info.Clone()
+	if err != nil {
+		return nil, err
+	}
+
+	cloned.SinkURI = util.MaskSensitiveDataInURI(cloned.SinkURI)
+	if cloned.Config != nil {
+		internalConfig := cloned.Config.ToInternalReplicaConfig()
+		internalConfig.MaskSensitiveData()
+		maskedConfig := ToAPIReplicaConfig(internalConfig)
+		if cloned.Config.Sink != nil && maskedConfig.Sink != nil {
+			if cloned.Config.Sink.SchemaRegistry != nil {
+				cloned.Config.Sink.SchemaRegistry = maskedConfig.Sink.SchemaRegistry
+			}
+			if cloned.Config.Sink.KafkaConfig != nil {
+				cloned.Config.Sink.KafkaConfig = maskedConfig.Sink.KafkaConfig
+			}
+			if cloned.Config.Sink.PulsarConfig != nil {
+				cloned.Config.Sink.PulsarConfig = maskedConfig.Sink.PulsarConfig
+			}
+		}
+		if cloned.Config.Consistent != nil && cloned.Config.Consistent.Storage != nil && maskedConfig.Consistent != nil {
+			cloned.Config.Consistent.Storage = maskedConfig.Consistent.Storage
+		}
+	}
+	return cloned, nil
+}
+
 // Unmarshal unmarshals into *ChangeFeedInfo from json marshal byte slice
 func (info *ChangeFeedInfo) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, &info)

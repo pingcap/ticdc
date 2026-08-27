@@ -14,6 +14,7 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"testing"
 
@@ -33,12 +34,19 @@ func TestChangefeedRemoveCli(t *testing.T) {
 
 	cmd := newCmdRemoveChangefeed(f)
 
-	cf.EXPECT().Get(gomock.Any(), "test", "abc").Return(&v2.ChangeFeedInfo{}, nil)
+	cf.EXPECT().Get(gomock.Any(), "test", "abc").Return(&v2.ChangeFeedInfo{
+		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
+	}, nil)
 	cf.EXPECT().Delete(gomock.Any(), "test", "abc").Return(nil)
 	cf.EXPECT().Get(gomock.Any(), "test", "abc").Return(nil,
 		cerror.ErrChangeFeedNotExists.GenWithStackByArgs("abc"))
 	os.Args = []string{"remove", "--changefeed-id=abc", "--keyspace=test"}
+	output := new(bytes.Buffer)
+	cmd.SetOut(output)
 	require.Nil(t, cmd.Execute())
+	require.NotContains(t, output.String(), "sink-password-sentinel")
+	require.NotContains(t, output.String(), "uri-secret-sentinel")
+	require.Contains(t, output.String(), "user:xxxxx@")
 	cf.EXPECT().Get(gomock.Any(), "default", "abc").Return(nil,
 		cerror.ErrChangeFeedNotExists.GenWithStackByArgs("abc"))
 	os.Args = []string{"remove", "--changefeed-id=abc", "--keyspace=default"}

@@ -13,12 +13,42 @@
 package v2
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
+
+func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
+	info := &ChangeFeedInfo{
+		ID:      "test",
+		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
+		Config: &ReplicaConfig{Sink: &SinkConfig{KafkaConfig: &KafkaConfig{
+			SASLPassword:          util.AddressOf("plain-password-sentinel"),
+			SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
+			SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
+		}}},
+	}
+
+	masked, err := info.CloneWithMaskedSensitiveData()
+	require.NoError(t, err)
+	serialized, err := masked.Marshal()
+	require.NoError(t, err)
+	for _, secret := range []string{
+		"sink-password-sentinel",
+		"uri-secret-sentinel",
+		"plain-password-sentinel",
+		"gssapi-password-sentinel",
+		"oauth-secret-sentinel",
+	} {
+		require.False(t, strings.Contains(serialized, secret))
+	}
+	require.NotContains(t, serialized, "memory_quota")
+	require.Equal(t, "plain-password-sentinel", *info.Config.Sink.KafkaConfig.SASLPassword)
+	require.Contains(t, info.SinkURI, "sink-password-sentinel")
+}
 
 // TestReplicaConfigConversion verifies API/internal replica config conversion,
 // including round-tripping the optional event collector batch overrides.

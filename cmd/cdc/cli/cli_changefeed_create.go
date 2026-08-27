@@ -337,7 +337,11 @@ func (o *createChangefeedOptions) run(ctx context.Context, cmd *cobra.Command) e
 		}
 		return err
 	}
-	infoStr, err := info.Marshal()
+	maskedInfo, err := info.CloneWithMaskedSensitiveData()
+	if err != nil {
+		return err
+	}
+	infoStr, err := maskedInfo.Marshal()
 	if err != nil {
 		return err
 	}
