@@ -39,7 +39,7 @@ func TestCreateTopic(t *testing.T) {
 
 		ctrl := gomock.NewController(t)
 		adminClient := kafka.NewMockAdminClient(ctrl)
-		adminClient.EXPECT().GetTopicsMeta([]string{kafkaTopicManagerTestTopic}, true).Return(
+		adminClient.EXPECT().GetTopicsMeta([]string{kafkaTopicManagerTestTopic}, false).Return(
 			map[string]kafka.TopicDetail{
 				kafkaTopicManagerTestTopic: {Name: kafkaTopicManagerTestTopic, NumPartitions: 2},
 			}, nil)
@@ -64,7 +64,6 @@ func TestCreateTopic(t *testing.T) {
 		var createdTopic *kafka.TopicDetail
 		postCreateDescribeCount := 0
 		var manager *kafkaTopicManager
-		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, true).Return(map[string]kafka.TopicDetail{}, nil)
 		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).DoAndReturn(
 			func([]string, bool) (map[string]kafka.TopicDetail, error) {
 				if createdTopic == nil {
@@ -118,7 +117,6 @@ func TestCreateTopic(t *testing.T) {
 
 		ctrl := gomock.NewController(t)
 		adminClient := kafka.NewMockAdminClient(ctrl)
-		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, true).Return(map[string]kafka.TopicDetail{}, nil)
 		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
 		manager := newKafkaTopicManager(
 			"new-topic",
@@ -142,7 +140,6 @@ func TestCreateTopic(t *testing.T) {
 
 		ctrl := gomock.NewController(t)
 		adminClient := kafka.NewMockAdminClient(ctrl)
-		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, true).Return(map[string]kafka.TopicDetail{}, nil)
 		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
 		var createdTopic *kafka.TopicDetail
 		adminClient.EXPECT().CreateTopic(gomock.Any()).DoAndReturn(
@@ -174,7 +171,6 @@ func TestCreateTopicValidatesReplicationFactor(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	adminClient := kafka.NewMockAdminClient(ctrl)
-	adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, true).Return(map[string]kafka.TopicDetail{}, nil)
 	adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
 	adminClient.EXPECT().GetBrokerConfig(kafka.MinInsyncReplicasConfigName).Return("2", true, nil)
 	manager := newKafkaTopicManager(
@@ -221,7 +217,7 @@ func TestGetTopicManagerStartsBackgroundRefreshAfterTopicReady(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	adminClient := kafka.NewMockAdminClient(ctrl)
-	adminClient.EXPECT().GetTopicsMeta([]string{"existing-topic"}, true).Return(
+	adminClient.EXPECT().GetTopicsMeta([]string{"existing-topic"}, false).Return(
 		map[string]kafka.TopicDetail{
 			"existing-topic": {Name: "existing-topic", NumPartitions: 2},
 		}, nil)
@@ -280,7 +276,6 @@ func TestCreateTopicWithTopicDescribeDenied(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	adminClient := kafka.NewMockAdminClient(ctrl)
-	adminClient.EXPECT().GetTopicsMeta([]string{"default-topic"}, true).Return(map[string]kafka.TopicDetail{}, nil)
 	adminClient.EXPECT().GetTopicsMeta([]string{"default-topic"}, false).Return(
 		nil, errors.ErrKafkaAuthorizationFailed.GenWithStackByArgs("describe-topic", "default-topic"))
 	manager := newKafkaTopicManager(
@@ -308,7 +303,6 @@ func TestCreateTopicWithCreateDenied(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	adminClient := kafka.NewMockAdminClient(ctrl)
-	adminClient.EXPECT().GetTopicsMeta([]string{"default-topic"}, true).Return(map[string]kafka.TopicDetail{}, nil)
 	adminClient.EXPECT().GetTopicsMeta([]string{"default-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
 	adminClient.EXPECT().CreateTopic(&kafka.TopicDetail{
 		Name:              "default-topic",
