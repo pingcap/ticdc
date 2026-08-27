@@ -96,6 +96,7 @@ type fileWorkerGroup struct {
 
 	metricWriteBytes       prometheus.Gauge
 	metricFlushAllDuration prometheus.Observer
+	metricBusyRatio        prometheus.Counter
 }
 
 // newFileWorkerGroup creates a DML fileWorkerGroup.
@@ -141,6 +142,8 @@ func newFileWorkerGroup(
 			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType),
 		metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
 			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType),
+		metricBusyRatio: metrics.RedoWorkerBusyRatio.
+			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType),
 	}
 }
 
@@ -175,6 +178,8 @@ func (f *fileWorkerGroup) close() {
 	metrics.RedoFlushAllDurationHistogram.
 		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType)
 	metrics.RedoWriteBytesGauge.
+		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType)
+	metrics.RedoWorkerBusyRatio.
 		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType)
 }
 
@@ -228,7 +233,9 @@ func (f *fileWorkerGroup) bgWriteLogs(
 		case <-egCtx.Done():
 			return errors.Trace(egCtx.Err())
 		case <-ticker.C:
+			start := time.Now()
 			err := flush()
+			f.metricBusyRatio.Add(time.Since(start).Seconds())
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -237,16 +244,20 @@ func (f *fileWorkerGroup) bgWriteLogs(
 				log.Error("inputCh of redo file worker is closed unexpectedly")
 				return errors.ErrUnexpected.FastGenByArgs("inputCh of redo file worker is closed unexpectedly")
 			}
+			start := time.Now()
 			err := f.writeToCache(egCtx, event)
 			if err != nil {
+				f.metricBusyRatio.Add(time.Since(start).Seconds())
 				return errors.Trace(err)
 			}
 			cacheEventPostFlush = append(cacheEventPostFlush, event.PostFlush)
 			if event.flushImmediately {
 				if err := flush(); err != nil {
+					f.metricBusyRatio.Add(time.Since(start).Seconds())
 					return errors.Trace(err)
 				}
 			}
+			f.metricBusyRatio.Add(time.Since(start).Seconds())
 		}
 	}
 }
