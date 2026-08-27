@@ -99,7 +99,7 @@ func (w *framedFileWriter) Close() error {
 	if err != nil {
 		return errors.WrapError(errors.ErrRedoFileOp, err)
 	}
-	defer dir.Close()
+	defer dir.Close() // nolint:errcheck
 	if err := dir.Sync(); err != nil {
 		return errors.WrapError(errors.ErrRedoFileOp, err)
 	}
