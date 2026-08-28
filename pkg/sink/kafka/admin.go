@@ -156,10 +156,17 @@ func IsAuthorizationFailed(err error) bool {
 		errors.Is(err, sarama.ErrClusterAuthorizationFailed)
 }
 
+<<<<<<< HEAD
 // IsUnretryableSaramaError reports whether a Sarama error is not retryable.
 // See Apache Kafka protocol error definitions:
 // https://kafka.apache.org/38/generated/protocol_errors.html
 func IsUnretryableSaramaError(err error) bool {
+=======
+// IsUnretryableKafkaError reports whether err is not retryable.
+// See Apache Kafka protocol error definitions:
+// https://kafka.apache.org/38/generated/protocol_errors.html
+func IsUnretryableKafkaError(err error) bool {
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 	if IsAuthorizationFailed(err) ||
 		errors.Is(err, errors.ErrKafkaInvalidConfig) ||
 		errors.Is(err, sarama.ErrInvalidTopic) ||
@@ -176,6 +183,7 @@ func IsUnretryableSaramaError(err error) bool {
 	return errors.As(err, &configErr)
 }
 
+<<<<<<< HEAD
 // IsUnretryableKafkaError reports whether a Kafka error is not retryable.
 func IsUnretryableKafkaError(err error) bool {
 	if errors.Is(err, errors.ErrKafkaAuthorizationFailed) ||
@@ -192,6 +200,9 @@ func IsUnretryableKafkaError(err error) bool {
 }
 
 func (a *saramaAdminClient) GetTopicsPartitionsNum(_ context.Context, topics []string) (map[string]int32, error) {
+=======
+func (a *saramaAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 	result := make(map[string]int32, len(topics))
 	for _, topic := range topics {
 		partition, err := a.client.Partitions(topic)

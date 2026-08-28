@@ -39,7 +39,11 @@ func TestCreateTopic(t *testing.T) {
 
 		ctrl := gomock.NewController(t)
 		adminClient := kafka.NewMockAdminClient(ctrl)
+<<<<<<< HEAD
 		adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{kafkaTopicManagerTestTopic}, false).Return(
+=======
+		adminClient.EXPECT().GetTopicsMeta([]string{kafkaTopicManagerTestTopic}, false).Return(
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 			map[string]kafka.TopicDetail{
 				kafkaTopicManagerTestTopic: {Name: kafkaTopicManagerTestTopic, NumPartitions: 2},
 			}, nil)
@@ -64,8 +68,13 @@ func TestCreateTopic(t *testing.T) {
 		var createdTopic *kafka.TopicDetail
 		postCreateDescribeCount := 0
 		var manager *kafkaTopicManager
+<<<<<<< HEAD
 		adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{"new-topic"}, false).DoAndReturn(
 			func(context.Context, []string, bool) (map[string]kafka.TopicDetail, error) {
+=======
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).DoAndReturn(
+			func([]string, bool) (map[string]kafka.TopicDetail, error) {
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 				if createdTopic == nil {
 					return nil, errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ErrUnknownTopicOrPartition, "describe-topic", "new-topic")
 				}
@@ -79,8 +88,13 @@ func TestCreateTopic(t *testing.T) {
 					createdTopic.Name: {Name: createdTopic.Name, NumPartitions: createdTopic.NumPartitions},
 				}, nil
 			}).Times(3)
+<<<<<<< HEAD
 		adminClient.EXPECT().CreateTopic(gomock.Any(), gomock.Any()).DoAndReturn(
 			func(_ context.Context, detail *kafka.TopicDetail) error {
+=======
+		adminClient.EXPECT().CreateTopic(gomock.Any()).DoAndReturn(
+			func(detail *kafka.TopicDetail) error {
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 				copy := *detail
 				createdTopic = &copy
 				return nil
@@ -117,7 +131,11 @@ func TestCreateTopic(t *testing.T) {
 
 		ctrl := gomock.NewController(t)
 		adminClient := kafka.NewMockAdminClient(ctrl)
+<<<<<<< HEAD
 		adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{"new-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
+=======
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 		manager := newKafkaTopicManager(
 			"new-topic",
 			changefeedID,
@@ -140,7 +158,11 @@ func TestCreateTopic(t *testing.T) {
 
 		ctrl := gomock.NewController(t)
 		adminClient := kafka.NewMockAdminClient(ctrl)
+<<<<<<< HEAD
 		adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{"new-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
+=======
+		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 		var createdTopic *kafka.TopicDetail
 		adminClient.EXPECT().CreateTopic(gomock.Any(), gomock.Any()).DoAndReturn(
 			func(_ context.Context, detail *kafka.TopicDetail) error {
@@ -171,8 +193,13 @@ func TestCreateTopicValidatesReplicationFactor(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	adminClient := kafka.NewMockAdminClient(ctrl)
+<<<<<<< HEAD
 	adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{"new-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
 	adminClient.EXPECT().GetBrokerConfig(gomock.Any(), kafka.MinInsyncReplicasConfigName).Return("2", true, nil)
+=======
+	adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
+	adminClient.EXPECT().GetBrokerConfig(kafka.MinInsyncReplicasConfigName).Return("2", true, nil)
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 	manager := newKafkaTopicManager(
 		"new-topic",
 		common.NewChangefeedID4Test("test", "test"),
@@ -193,6 +220,7 @@ func TestCreateTopicValidatesReplicationFactor(t *testing.T) {
 func TestWaitUntilTopicVisibleUnretryableError(t *testing.T) {
 	t.Parallel()
 
+<<<<<<< HEAD
 	for _, test := range []struct {
 		name  string
 		cause error
@@ -222,6 +250,25 @@ func TestWaitUntilTopicVisibleUnretryableError(t *testing.T) {
 			require.ErrorIs(t, err, test.cause)
 		})
 	}
+=======
+	ctrl := gomock.NewController(t)
+	adminClient := kafka.NewMockAdminClient(ctrl)
+	adminClient.EXPECT().GetTopicsMeta([]string{"invalid-topic"}, false).Return(
+		nil,
+		errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ErrInvalidTopic, "describe-topic", "invalid-topic"),
+	).Times(1)
+	manager := newKafkaTopicManager(
+		"invalid-topic",
+		common.NewChangefeedID4Test("test", "test"),
+		adminClient,
+		&kafka.AutoCreateTopicConfig{PartitionNum: 2},
+	)
+
+	err := manager.waitUntilTopicVisible(context.Background(), "invalid-topic")
+
+	require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+	require.ErrorIs(t, err, sarama.ErrInvalidTopic)
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 }
 
 func TestGetTopicManagerStartsBackgroundRefreshAfterTopicReady(t *testing.T) {
@@ -229,7 +276,11 @@ func TestGetTopicManagerStartsBackgroundRefreshAfterTopicReady(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	adminClient := kafka.NewMockAdminClient(ctrl)
+<<<<<<< HEAD
 	adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{"existing-topic"}, false).Return(
+=======
+	adminClient.EXPECT().GetTopicsMeta([]string{"existing-topic"}, false).Return(
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 		map[string]kafka.TopicDetail{
 			"existing-topic": {Name: "existing-topic", NumPartitions: 2},
 		}, nil)
@@ -252,7 +303,11 @@ func TestCreateTopicWithTopicDescribeDenied(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	adminClient := kafka.NewMockAdminClient(ctrl)
+<<<<<<< HEAD
 	adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{"default-topic"}, false).Return(
+=======
+	adminClient.EXPECT().GetTopicsMeta([]string{"default-topic"}, false).Return(
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 		nil, errors.ErrKafkaAuthorizationFailed.GenWithStackByArgs("describe-topic", "default-topic"))
 	manager := newKafkaTopicManager(
 		"default-topic",
@@ -279,8 +334,13 @@ func TestCreateTopicWithCreateDenied(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	adminClient := kafka.NewMockAdminClient(ctrl)
+<<<<<<< HEAD
 	adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{"default-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
 	adminClient.EXPECT().CreateTopic(gomock.Any(), &kafka.TopicDetail{
+=======
+	adminClient.EXPECT().GetTopicsMeta([]string{"default-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
+	adminClient.EXPECT().CreateTopic(&kafka.TopicDetail{
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 		Name:              "default-topic",
 		NumPartitions:     2,
 		ReplicationFactor: 1,

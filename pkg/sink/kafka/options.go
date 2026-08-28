@@ -650,10 +650,22 @@ func NewKafkaClientID(captureAddr string,
 // adjustOptions adjusts options with Kafka runtime metadata.
 // It overwrites MaxMessageBytes with the final producer message limit derived
 // from the topic or broker configuration.
+<<<<<<< HEAD
 func adjustOptions(ctx context.Context, changefeedID common.ChangeFeedID, admin AdminClient, options *options, topic string) error {
 	// The topic may not exist yet and will be created later by the topic manager,
 	// so ignore per-topic metadata errors here.
 	topics, err := admin.GetTopicsMeta(ctx, []string{topic}, true)
+=======
+func adjustOptions(
+	changefeedID common.ChangeFeedID,
+	admin AdminClient,
+	options *options,
+	topic string,
+) error {
+	// The topic may not exist yet and will be created later by the topic manager,
+	// so ignore per-topic metadata errors here.
+	topics, err := admin.GetTopicsMeta([]string{topic}, true)
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 	if err != nil {
 		return err
 	}
