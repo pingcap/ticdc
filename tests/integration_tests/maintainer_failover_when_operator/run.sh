@@ -72,7 +72,13 @@ function get_table_replication_count() {
 	local table_id=$3
 	local mode=$4
 	curl -s "http://${api_addr}/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME&mode=$mode" |
-		jq -r --argjson tid "$table_id" '[.items[].table_ids[] | select(. == $tid)] | length'
+		jq -r --argjson tid "$table_id" '
+			if (.items | type) == "array" then
+				[.items[].table_ids[] | select(. == $tid)] | length
+			else
+				null
+			end
+		'
 }
 
 function wait_for_table_replication_count() {
