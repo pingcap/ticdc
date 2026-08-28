@@ -29,12 +29,21 @@ get_ddl_commit_ts() {
 	local ddl_ts=0
 	for _ in $(seq 1 30); do
 		ddl_ts=$(curl -fsS "http://${UP_TIDB_HOST}:${UP_TIDB_STATUS}/ddl/history" |
-			jq -r --arg table_name "$table_name" --arg ddl_marker "$ddl_marker" '
-				[.[] | select(
-					((.query // "") | ascii_downcase | contains($table_name)) and
-					((.query // "") | ascii_downcase | contains($ddl_marker))
-				) | (.binlog.FinishedTS // 0)] |
-				max // 0')
+			python3 -c '
+import json
+import sys
+
+table_name = sys.argv[1].lower()
+ddl_marker = sys.argv[2].lower()
+history = json.load(sys.stdin)
+timestamps = [
+    entry.get("binlog", {}).get("FinishedTS", 0)
+    for entry in history
+    if table_name in entry.get("query", "").lower()
+    and ddl_marker in entry.get("query", "").lower()
+]
+print(max(timestamps, default=0))
+' "$table_name" "$ddl_marker")
 		if [[ "$ddl_ts" =~ ^[1-9][0-9]*$ ]]; then
 			echo "$ddl_ts"
 			return 0
@@ -73,6 +82,11 @@ execute_partition_ddls() {
 	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
 		"${expected_table_ids[$checkpoint_index]}"
 
+	# Fast reorg requires at least tidb_ddl_disk_quota bytes of local disk. The
+	# distributed task path also requires fast reorg, so disable both in
+	# separate sessions before opening the DDL session.
+	run_sql "SET GLOBAL tidb_enable_dist_task = OFF;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "SET GLOBAL tidb_ddl_enable_fast_reorg = OFF;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	run_sql_file "$CUR/data/add_primary_key.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	record_ddl_checkpoint add_primary_key "$ELIGIBILITY_TABLE" "add primary key" false true
 	checkpoint_index=$((${#ddl_names[@]} - 1))
