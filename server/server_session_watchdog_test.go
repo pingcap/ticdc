@@ -78,6 +78,34 @@ func TestSessionWatchdogFencesOnExpiredLease(t *testing.T) {
 	require.Equal(t, liveness.CaptureStopping, c.liveness.Load())
 }
 
+func TestSessionWatchdogDoesNotFenceOnLiveLeaseWithZeroTTL(t *testing.T) {
+	fencer := &testLocalFencer{}
+	appctx.SetService(appctx.DispatcherOrchestrator, fencer)
+
+	ctrl := gomock.NewController(t)
+	cdcEtcdClient := etcd.NewMockCDCEtcdClient(ctrl)
+	rawEtcdClient := etcd.NewMockClient(ctrl)
+	cdcEtcdClient.EXPECT().GetEtcdClient().Return(rawEtcdClient).AnyTimes()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	rawEtcdClient.EXPECT().
+		TimeToLive(gomock.Any(), clientv3.LeaseID(100)).
+		DoAndReturn(func(context.Context, clientv3.LeaseID, ...clientv3.LeaseOption) (*clientv3.LeaseTimeToLiveResponse, error) {
+			cancel()
+			return &clientv3.LeaseTimeToLiveResponse{TTL: 0}, nil
+		})
+
+	gate := writelease.NewGate()
+	require.True(t, gate.RenewP2P(time.Now(), writelease.P2PLeaseDuration))
+	c := &server{EtcdClient: cdcEtcdClient, writeGate: gate}
+
+	err := c.watchEtcdSession(ctx, make(chan struct{}), 100, time.Millisecond)
+
+	require.NoError(t, err)
+	require.Equal(t, int32(0), fencer.count.Load())
+	require.False(t, gate.IsWritable())
+}
+
 func TestSessionWatchdogRenewsEtcdWriteProof(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	cdcEtcdClient := etcd.NewMockCDCEtcdClient(ctrl)

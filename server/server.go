@@ -467,7 +467,7 @@ func (c *server) watchEtcdSession(
 			if ttl == nil {
 				continue
 			}
-			if ttl.TTL <= 0 {
+			if ttl.TTL < 0 {
 				c.localFence("etcd lease expired")
 				return errors.ErrCaptureSuicide.GenWithStackByArgs()
 			}
