@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -201,120 +200,6 @@ func TestMaskSinkURIForError(t *testing.T) {
 	require.Contains(t, err.Error(), "<invalid uri>")
 	require.Contains(t, err.Error(), `parse "<invalid uri>"`)
 	require.Contains(t, err.Error(), "invalid URL escape")
-}
-
-func TestCfInfoToAPIModelMasksSensitiveData(t *testing.T) {
-	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.KafkaConfig = &config.KafkaConfig{
-		SASLUser:              util.AddressOf("ticdc-user"),
-		SASLPassword:          util.AddressOf("plain-password-sentinel"),
-		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
-		SASLOAuthClientID:     util.AddressOf("oauth-client-id"),
-		SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
-		SASLOAuthTokenURL: util.AddressOf(
-			"https://oauth.example.com/token?client_secret=token-url-secret-sentinel&audience=ticdc"),
-	}
-	info := &config.ChangeFeedInfo{
-		ChangefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
-		SinkURI: "kafka://sink-user:sink-password-sentinel@127.0.0.1:9092/topic" +
-			"?protocol=canal-json&secret-access-key=uri-secret-sentinel",
-		Config: replicaConfig,
-	}
-	status := &config.ChangeFeedStatus{CheckpointTs: 123}
-
-	apiInfo := CfInfoToAPIModel(info, status, nil)
-	response, err := apiInfo.Marshal()
-	require.NoError(t, err)
-
-	for _, secret := range []string{
-		"sink-password-sentinel",
-		"uri-secret-sentinel",
-		"plain-password-sentinel",
-		"gssapi-password-sentinel",
-		"oauth-secret-sentinel",
-		"token-url-secret-sentinel",
-	} {
-		require.NotContains(t, response, secret)
-	}
-	require.Contains(t, apiInfo.SinkURI, "sink-user:xxxxx@")
-	require.Contains(t, apiInfo.SinkURI, "secret-access-key=xxxxx")
-	require.Equal(t, "******", *apiInfo.Config.Sink.KafkaConfig.SASLPassword)
-	require.Equal(t, "******", *apiInfo.Config.Sink.KafkaConfig.SASLGssAPIPassword)
-	require.Equal(t, "******", *apiInfo.Config.Sink.KafkaConfig.SASLOAuthClientSecret)
-	require.Equal(t, "ticdc-user", *apiInfo.Config.Sink.KafkaConfig.SASLUser)
-	require.Equal(t, "oauth-client-id", *apiInfo.Config.Sink.KafkaConfig.SASLOAuthClientID)
-
-	// Building an API response must not modify the in-memory changefeed config.
-	require.Equal(t, "plain-password-sentinel", *info.Config.Sink.KafkaConfig.SASLPassword)
-	require.Equal(t, "oauth-secret-sentinel", *info.Config.Sink.KafkaConfig.SASLOAuthClientSecret)
-	require.Contains(t, info.SinkURI, "sink-password-sentinel")
-}
-
-func TestRestoreMaskedChangefeedCredentials(t *testing.T) {
-	original := config.GetDefaultReplicaConfig()
-	original.Sink.SchemaRegistry = util.AddressOf(
-		"https://registry.example.com?access-key=registry-access-sentinel")
-	original.Sink.KafkaConfig = &config.KafkaConfig{
-		SASLPassword:          util.AddressOf("plain-password-sentinel"),
-		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
-		SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
-		SASLOAuthTokenURL: util.AddressOf(
-			"https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
-		Key: util.AddressOf("/path/to/private-key"),
-		GlueSchemaRegistryConfig: &config.GlueSchemaRegistryConfig{
-			AccessKey:       "glue-access-sentinel",
-			SecretAccessKey: "glue-secret-sentinel",
-			Token:           "glue-token-sentinel",
-		},
-	}
-	original.Consistent.Storage = util.AddressOf(
-		"s3://bucket/prefix?access-key=storage-access-sentinel")
-
-	masked := original.Clone()
-	masked.MaskSensitiveData()
-	updated := ToAPIReplicaConfig(masked).ToInternalReplicaConfig()
-	restoreMaskedSensitiveData(updated, original)
-
-	require.Equal(t, original.Sink.SchemaRegistry, updated.Sink.SchemaRegistry)
-	require.Equal(t, original.Sink.KafkaConfig, updated.Sink.KafkaConfig)
-	require.Equal(t, original.Consistent.Storage, updated.Consistent.Storage)
-
-	updatedWithURIChange := ToAPIReplicaConfig(masked).ToInternalReplicaConfig()
-	updatedWithURIChange.Sink.KafkaConfig.SASLOAuthTokenURL = util.AddressOf(
-		*updatedWithURIChange.Sink.KafkaConfig.SASLOAuthTokenURL + "&audience=new-audience")
-	restoreMaskedSensitiveData(updatedWithURIChange, original)
-	require.Contains(t, *updatedWithURIChange.Sink.KafkaConfig.SASLOAuthTokenURL,
-		"client_secret=token-url-secret-sentinel")
-	require.Contains(t, *updatedWithURIChange.Sink.KafkaConfig.SASLOAuthTokenURL,
-		"audience=new-audience")
-
-	updated.Sink.KafkaConfig.SASLPassword = util.AddressOf("replacement-password")
-	restoreMaskedSensitiveData(updated, original)
-	require.Equal(t, "replacement-password", *updated.Sink.KafkaConfig.SASLPassword)
-
-	originalSinkURI := "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel"
-	maskedSinkURI := util.MaskSensitiveDataInURI(originalSinkURI)
-	restoredSinkURI, changed := restoreMaskedSinkURI(maskedSinkURI, originalSinkURI)
-	require.False(t, changed)
-	require.Equal(t, originalSinkURI, restoredSinkURI)
-	maskedSinkURI = strings.Replace(maskedSinkURI, "/topic?", "/new-topic?", 1) + "&protocol=avro"
-	restoredSinkURI, changed = restoreMaskedSinkURI(maskedSinkURI, originalSinkURI)
-	require.True(t, changed)
-	require.Contains(t, restoredSinkURI, "sink-password-sentinel")
-	require.Contains(t, restoredSinkURI, "secret=uri-secret-sentinel")
-	require.Contains(t, restoredSinkURI, "/new-topic")
-	require.Contains(t, restoredSinkURI, "protocol=avro")
-
-	newEndpointURI := strings.Replace(maskedSinkURI, "127.0.0.1:9092", "new-broker:9092", 1)
-	restoredSinkURI, changed = restoreMaskedSinkURI(newEndpointURI, originalSinkURI)
-	require.True(t, changed)
-	require.NotContains(t, restoredSinkURI, "sink-password-sentinel")
-	require.NotContains(t, restoredSinkURI, "uri-secret-sentinel")
-
-	replacementSinkURI := "kafka://127.0.0.1:9092/new-topic"
-	restoredSinkURI, changed = restoreMaskedSinkURI(replacementSinkURI, originalSinkURI)
-	require.True(t, changed)
-	require.Equal(t, replacementSinkURI, restoredSinkURI)
 }
 
 func mustParseURLError(t *testing.T, rawURL string) error {

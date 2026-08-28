@@ -71,14 +71,8 @@ func TestChangefeedQueryCli(t *testing.T) {
 	require.NotNil(t, o.run(cmd))
 
 	// query success
-	cfV2.EXPECT().Get(gomock.Any(), gomock.Any(), "bcd").Return(&v2.ChangeFeedInfo{
-		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
-		Config: &v2.ReplicaConfig{Sink: &v2.SinkConfig{KafkaConfig: &v2.KafkaConfig{
-			SASLPassword:          configString("plain-password-sentinel"),
-			SASLGssAPIPassword:    configString("gssapi-password-sentinel"),
-			SASLOAuthClientSecret: configString("oauth-secret-sentinel"),
-		}}},
-	}, nil)
+	cfV2.EXPECT().Get(gomock.Any(), gomock.Any(), "bcd").
+		Return(changefeedInfoWithSensitiveData(), nil)
 
 	o.simplified = false
 	o.changefeedID = "bcd"
@@ -89,15 +83,7 @@ func TestChangefeedQueryCli(t *testing.T) {
 	require.Nil(t, err)
 	// make sure config is printed
 	require.Contains(t, string(out), "config")
-	for _, secret := range []string{
-		"sink-password-sentinel",
-		"uri-secret-sentinel",
-		"plain-password-sentinel",
-		"gssapi-password-sentinel",
-		"oauth-secret-sentinel",
-	} {
-		require.NotContains(t, string(out), secret)
-	}
+	requireMaskedChangefeedOutput(t, string(out))
 
 	// query failed
 	cfV2.EXPECT().Get(gomock.Any(), gomock.Any(), "bcd").Return(nil, errors.New("test"))

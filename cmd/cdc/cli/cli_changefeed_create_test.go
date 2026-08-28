@@ -168,28 +168,12 @@ func TestChangefeedCreateCli(t *testing.T) {
 	f.changefeeds.EXPECT().VerifyTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(&v2.Tables{
 		IneligibleTables: []v2.TableName{{}},
 	}, nil)
-	f.changefeeds.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).Return(&v2.ChangeFeedInfo{
-		ID:      "abc",
-		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?client_secret=uri-secret-sentinel",
-		Config: &v2.ReplicaConfig{Sink: &v2.SinkConfig{KafkaConfig: &v2.KafkaConfig{
-			SASLPassword:          configString("plain-password-sentinel"),
-			SASLGssAPIPassword:    configString("gssapi-password-sentinel"),
-			SASLOAuthClientSecret: configString("oauth-secret-sentinel"),
-		}}},
-	}, nil)
+	f.changefeeds.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(changefeedInfoWithSensitiveData(), nil)
 	output := new(bytes.Buffer)
 	cmd.SetOut(output)
 	require.Nil(t, cmd.Execute())
-	for _, secret := range []string{
-		"sink-password-sentinel",
-		"uri-secret-sentinel",
-		"plain-password-sentinel",
-		"gssapi-password-sentinel",
-		"oauth-secret-sentinel",
-	} {
-		require.NotContains(t, output.String(), secret)
-	}
-	require.Contains(t, output.String(), `"sasl_password":"******"`)
+	requireMaskedChangefeedOutput(t, output.String())
 
 	cmd = newCmdCreateChangefeed(f)
 	o := newCreateChangefeedOptions(newChangefeedCommonOptions())
@@ -200,6 +184,32 @@ func TestChangefeedCreateCli(t *testing.T) {
 
 func configString(value string) *string {
 	return &value
+}
+
+func changefeedInfoWithSensitiveData() *v2.ChangeFeedInfo {
+	return &v2.ChangeFeedInfo{
+		ID:      "abc",
+		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?client_secret=uri-secret-sentinel",
+		Config: &v2.ReplicaConfig{Sink: &v2.SinkConfig{KafkaConfig: &v2.KafkaConfig{
+			SASLPassword:          configString("plain-password-sentinel"),
+			SASLGssAPIPassword:    configString("gssapi-password-sentinel"),
+			SASLOAuthClientSecret: configString("oauth-secret-sentinel"),
+		}}},
+	}
+}
+
+func requireMaskedChangefeedOutput(t *testing.T, output string) {
+	t.Helper()
+	for _, secret := range []string{
+		"sink-password-sentinel",
+		"uri-secret-sentinel",
+		"plain-password-sentinel",
+		"gssapi-password-sentinel",
+		"oauth-secret-sentinel",
+	} {
+		require.NotContains(t, output, secret)
+	}
+	require.Contains(t, output, "******")
 }
 
 func TestCompleteReplicaCfgSkipConsistentStorageIOCheckInCLI(t *testing.T) {

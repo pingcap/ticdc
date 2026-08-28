@@ -527,6 +527,10 @@ func (k *KafkaConfig) MaskSensitiveData() {
 	if k.SASLOAuthTokenURL != nil {
 		k.SASLOAuthTokenURL = aws.String(util.MaskSensitiveDataInURI(*k.SASLOAuthTokenURL))
 	}
+	if k.LargeMessageHandle != nil {
+		k.LargeMessageHandle.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(
+			k.LargeMessageHandle.ClaimCheckStorageURI)
+	}
 }
 
 // PulsarCompressionType is the compression type for pulsar

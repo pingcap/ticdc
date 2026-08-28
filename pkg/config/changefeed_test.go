@@ -79,6 +79,45 @@ func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
 	require.True(t, changefeedConfig.IsLowLatencyMode())
 }
 
+func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
+	replicaConfig := GetDefaultReplicaConfig()
+	replicaConfig.Sink.KafkaConfig = &KafkaConfig{
+		SASLPassword:          util.AddressOf("plain-password-sentinel"),
+		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
+		SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
+		SASLOAuthTokenURL: util.AddressOf(
+			"https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
+		LargeMessageHandle: &LargeMessageHandleConfig{
+			ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel",
+		},
+	}
+	info := &ChangeFeedInfo{
+		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic" +
+			"?secret=uri-secret-sentinel",
+		Config: replicaConfig,
+	}
+	original, err := info.Marshal()
+	require.NoError(t, err)
+
+	output := info.String()
+	for _, secret := range []string{
+		"sink-password-sentinel",
+		"uri-secret-sentinel",
+		"plain-password-sentinel",
+		"gssapi-password-sentinel",
+		"oauth-secret-sentinel",
+		"token-url-secret-sentinel",
+		"claim-check-secret-sentinel",
+	} {
+		require.NotContains(t, output, secret)
+	}
+	require.Contains(t, output, "xxxxx")
+	require.Contains(t, output, "******")
+	afterLogging, err := info.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, original, afterLogging)
+}
+
 func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *testing.T) {
 	t.Parallel()
 

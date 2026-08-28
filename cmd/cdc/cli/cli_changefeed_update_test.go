@@ -15,6 +15,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,29 +116,16 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	require.NotNil(t, o.run(cmd))
 
 	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").
-		Return(&v2.ChangeFeedInfo{
-			ID:      "abc",
-			SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
-			Config: &v2.ReplicaConfig{
-				Sink: &v2.SinkConfig{KafkaConfig: &v2.KafkaConfig{
-					SASLPassword:          configString("plain-password-sentinel"),
-					SASLGssAPIPassword:    configString("gssapi-password-sentinel"),
-					SASLOAuthClientSecret: configString("oauth-secret-sentinel"),
-				}},
-			},
-		}, nil)
+		Return(changefeedInfoWithSensitiveData(), nil)
 	f.changefeeds.EXPECT().GetAllTables(gomock.Any(), gomock.Any(), "ks").
 		Return(&v2.Tables{}, nil)
 	f.changefeeds.EXPECT().Update(gomock.Any(), gomock.Any(), "ks", "abc").
-		Return(&v2.ChangeFeedInfo{
-			ID:      "abc",
-			SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
-			Config: &v2.ReplicaConfig{Sink: &v2.SinkConfig{KafkaConfig: &v2.KafkaConfig{
-				SASLPassword:          configString("plain-password-sentinel"),
-				SASLGssAPIPassword:    configString("gssapi-password-sentinel"),
-				SASLOAuthClientSecret: configString("oauth-secret-sentinel"),
-			}}},
-		}, nil)
+		DoAndReturn(func(_ context.Context, cfg *v2.ChangefeedConfig, _, _ string) (*v2.ChangeFeedInfo, error) {
+			require.Equal(t, "plain-password-sentinel", *cfg.ReplicaConfig.Sink.KafkaConfig.SASLPassword)
+			require.Equal(t, "gssapi-password-sentinel", *cfg.ReplicaConfig.Sink.KafkaConfig.SASLGssAPIPassword)
+			require.Equal(t, "oauth-secret-sentinel", *cfg.ReplicaConfig.Sink.KafkaConfig.SASLOAuthClientSecret)
+			return changefeedInfoWithSensitiveData(), nil
+		})
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "cf.toml")
 	err := os.WriteFile(configPath, []byte(""), 0o644)
@@ -172,15 +160,7 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	output := new(bytes.Buffer)
 	cmd.SetOut(output)
 	require.Nil(t, cmd.Execute())
-	for _, secret := range []string{
-		"sink-password-sentinel",
-		"uri-secret-sentinel",
-		"plain-password-sentinel",
-		"gssapi-password-sentinel",
-		"oauth-secret-sentinel",
-	} {
-		require.NotContains(t, output.String(), secret)
-	}
+	requireMaskedChangefeedOutput(t, output.String())
 
 	// no diff
 	cmd = newCmdUpdateChangefeed(f)

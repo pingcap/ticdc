@@ -13,7 +13,6 @@
 package v2
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
@@ -29,8 +28,13 @@ func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 			SASLPassword:          util.AddressOf("plain-password-sentinel"),
 			SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
 			SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
+			LargeMessageHandle: &LargeMessageHandleConfig{
+				ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel",
+			},
 		}}},
 	}
+	original, err := info.Marshal()
+	require.NoError(t, err)
 
 	masked, err := info.CloneWithMaskedSensitiveData()
 	require.NoError(t, err)
@@ -42,12 +46,14 @@ func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 		"plain-password-sentinel",
 		"gssapi-password-sentinel",
 		"oauth-secret-sentinel",
+		"claim-check-secret-sentinel",
 	} {
-		require.False(t, strings.Contains(serialized, secret))
+		require.NotContains(t, serialized, secret)
 	}
 	require.NotContains(t, serialized, "memory_quota")
-	require.Equal(t, "plain-password-sentinel", *info.Config.Sink.KafkaConfig.SASLPassword)
-	require.Contains(t, info.SinkURI, "sink-password-sentinel")
+	afterMasking, err := info.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, original, afterMasking)
 }
 
 // TestReplicaConfigConversion verifies API/internal replica config conversion,
