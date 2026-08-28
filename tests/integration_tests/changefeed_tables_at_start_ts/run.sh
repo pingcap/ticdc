@@ -268,7 +268,8 @@ validate_checkpoint() {
 	local expected_ids=$3
 	local config_path=${4:-}
 	local expected_count
-	local changefeed_id="changefeed-partition-table-${checkpoint_name}-$RANDOM"
+	local changefeed_name=${checkpoint_name//_/-}
+	local changefeed_id="changefeed-partition-table-${changefeed_name}-$RANDOM"
 	local -a create_args=(
 		create
 		--pd="http://${UP_PD_HOST_1}:${UP_PD_PORT_1}"
