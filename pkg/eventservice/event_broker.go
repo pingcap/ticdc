@@ -482,7 +482,35 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		}
 	}
 
+<<<<<<< HEAD
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
+=======
+	hasResumeCursor := request.Cursor.TxnStartTs != 0 || len(request.Cursor.Position) != 0
+	// A published cursor at C came from an earlier scan whose DDL and received
+	// resolved-ts bounds had already reached C. Since those bounds do not regress,
+	// only the adaptive scan window can move CommitTsEnd behind C. For example, if
+	// C=100 and the window caps the end at 80, restore the effective range to
+	// [100, 100] so Position can resume rows inside a transaction, or TxnStartTs
+	// can resume later transactions sharing commit-ts C.
+	if hasResumeCursor && dataRange.CommitTsEnd < dataRange.CommitTsStart {
+		dataRange.CommitTsEnd = dataRange.CommitTsStart
+	}
+
+	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
+		// A cursor makes [C, C] meaningful: Position resumes rows inside a
+		// transaction, while TxnStartTs resumes later transactions at the same C.
+		canResumeAtStart := dataRange.CommitTsEnd == dataRange.CommitTsStart &&
+			hasResumeCursor
+		if canResumeAtStart || task.hasPendingLargeTxnState() {
+			result := scanTaskRequestResult{needScan: true, request: request}
+			if task.changefeedStat.lowLatencyMode {
+				result.schemaBlocked = ddlState.ResolvedTs < receivedResolvedTs &&
+					dataRange.CommitTsEnd == ddlState.ResolvedTs
+				result.schemaBlockedUntilTs = ddlState.ResolvedTs
+			}
+			return result
+		}
+>>>>>>> 8f7a22bbe (eventservice: keep transaction cursor inside scan window (#6040))
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		// Scan range can become empty after applying capping (for example, scan window).
 		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
