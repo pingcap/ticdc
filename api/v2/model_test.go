@@ -24,14 +24,37 @@ func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 	info := &ChangeFeedInfo{
 		ID:      "test",
 		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
-		Config: &ReplicaConfig{Sink: &SinkConfig{KafkaConfig: &KafkaConfig{
-			SASLPassword:          util.AddressOf("plain-password-sentinel"),
-			SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
-			SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
-			LargeMessageHandle: &LargeMessageHandleConfig{
-				ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel",
+		Config: &ReplicaConfig{
+			Sink: &SinkConfig{
+				SchemaRegistry: util.AddressOf(
+					"https://registry.example.com?access-key=registry-secret-sentinel"),
+				KafkaConfig: &KafkaConfig{
+					KafkaClientID:         util.AddressOf("visible-client-id"),
+					SASLPassword:          util.AddressOf("plain-password-sentinel"),
+					SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
+					SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
+					SASLOAuthTokenURL: util.AddressOf(
+						"https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
+					LargeMessageHandle: &LargeMessageHandleConfig{
+						ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel",
+					},
+					GlueSchemaRegistryConfig: &GlueSchemaRegistryConfig{
+						AccessKey:       "glue-access-sentinel",
+						SecretAccessKey: "glue-secret-sentinel",
+						Token:           "glue-token-sentinel",
+					},
+				},
+				PulsarConfig: &PulsarConfig{
+					AuthenticationToken: util.AddressOf("pulsar-token-sentinel"),
+					BasicPassword:       util.AddressOf("pulsar-password-sentinel"),
+					OAuth2: &PulsarOAuth2{
+						OAuth2PrivateKey: "pulsar-private-key-sentinel",
+					},
+				},
 			},
-		}}},
+			Consistent: &ConsistentConfig{Storage: util.AddressOf(
+				"s3://bucket/prefix?access-key=consistent-secret-sentinel")},
+		},
 	}
 	original, err := info.Marshal()
 	require.NoError(t, err)
@@ -40,17 +63,10 @@ func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 	require.NoError(t, err)
 	serialized, err := masked.Marshal()
 	require.NoError(t, err)
-	for _, secret := range []string{
-		"sink-password-sentinel",
-		"uri-secret-sentinel",
-		"plain-password-sentinel",
-		"gssapi-password-sentinel",
-		"oauth-secret-sentinel",
-		"claim-check-secret-sentinel",
-	} {
-		require.NotContains(t, serialized, secret)
-	}
+	require.NotContains(t, serialized, "sentinel")
 	require.NotContains(t, serialized, "memory_quota")
+	require.Contains(t, serialized, "visible-client-id")
+	require.Nil(t, masked.Config.Sink.KafkaConfig.Key)
 	afterMasking, err := info.Marshal()
 	require.NoError(t, err)
 	require.Equal(t, original, afterMasking)

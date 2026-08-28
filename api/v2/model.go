@@ -1419,26 +1419,62 @@ func (info *ChangeFeedInfo) CloneWithMaskedSensitiveData() (*ChangeFeedInfo, err
 	}
 
 	cloned.SinkURI = util.MaskSensitiveDataInURI(cloned.SinkURI)
-	if cloned.Config != nil {
-		internalConfig := cloned.Config.ToInternalReplicaConfig()
-		internalConfig.MaskSensitiveData()
-		maskedConfig := ToAPIReplicaConfig(internalConfig)
-		if cloned.Config.Sink != nil && maskedConfig.Sink != nil {
-			if cloned.Config.Sink.SchemaRegistry != nil {
-				cloned.Config.Sink.SchemaRegistry = maskedConfig.Sink.SchemaRegistry
-			}
-			if cloned.Config.Sink.KafkaConfig != nil {
-				cloned.Config.Sink.KafkaConfig = maskedConfig.Sink.KafkaConfig
-			}
-			if cloned.Config.Sink.PulsarConfig != nil {
-				cloned.Config.Sink.PulsarConfig = maskedConfig.Sink.PulsarConfig
-			}
+	cloned.Config.maskSensitiveData()
+	return cloned, nil
+}
+
+// maskSensitiveData masks configured API fields without populating omitted fields.
+func (c *ReplicaConfig) maskSensitiveData() {
+	if c == nil {
+		return
+	}
+	if c.Consistent != nil && c.Consistent.Storage != nil {
+		*c.Consistent.Storage = util.MaskSensitiveDataInURI(*c.Consistent.Storage)
+	}
+	if c.Sink == nil {
+		return
+	}
+
+	if c.Sink.SchemaRegistry != nil {
+		*c.Sink.SchemaRegistry = util.MaskSensitiveDataInURI(*c.Sink.SchemaRegistry)
+	}
+	if kafka := c.Sink.KafkaConfig; kafka != nil {
+		maskSensitiveString(kafka.SASLPassword)
+		maskSensitiveString(kafka.SASLGssAPIPassword)
+		maskSensitiveString(kafka.SASLOAuthClientSecret)
+		maskSensitiveString(kafka.Key)
+		if kafka.SASLOAuthTokenURL != nil {
+			*kafka.SASLOAuthTokenURL = util.MaskSensitiveDataInURI(*kafka.SASLOAuthTokenURL)
 		}
-		if cloned.Config.Consistent != nil && cloned.Config.Consistent.Storage != nil && maskedConfig.Consistent != nil {
-			cloned.Config.Consistent.Storage = maskedConfig.Consistent.Storage
+		if kafka.LargeMessageHandle != nil {
+			kafka.LargeMessageHandle.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(
+				kafka.LargeMessageHandle.ClaimCheckStorageURI)
+		}
+		if glue := kafka.GlueSchemaRegistryConfig; glue != nil {
+			maskSensitiveValue(&glue.AccessKey)
+			maskSensitiveValue(&glue.SecretAccessKey)
+			maskSensitiveValue(&glue.Token)
 		}
 	}
-	return cloned, nil
+	if pulsar := c.Sink.PulsarConfig; pulsar != nil {
+		maskSensitiveString(pulsar.AuthenticationToken)
+		maskSensitiveString(pulsar.BasicPassword)
+		if pulsar.OAuth2 != nil {
+			maskSensitiveValue(&pulsar.OAuth2.OAuth2PrivateKey)
+		}
+	}
+}
+
+func maskSensitiveString(value *string) {
+	if value != nil {
+		*value = "******"
+	}
+}
+
+func maskSensitiveValue(value *string) {
+	if *value != "" {
+		*value = "******"
+	}
 }
 
 // Unmarshal unmarshals into *ChangeFeedInfo from json marshal byte slice

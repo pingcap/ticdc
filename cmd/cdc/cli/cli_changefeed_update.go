@@ -14,7 +14,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"strings"
 
 	"github.com/pingcap/log"
@@ -185,7 +184,7 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	infoStr, err := json.Marshal(maskedInfo)
+	infoStr, err := maskedInfo.Marshal()
 	if err != nil {
 		return err
 	}
