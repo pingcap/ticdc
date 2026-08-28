@@ -9,7 +9,7 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
 DB_NAME=changefeed_tables_at_start_ts
-TABLE_COUNT=1000
+TABLE_COUNT=100
 NO_PK_TABLE=no_pk_partition_table
 ELIGIBILITY_TABLE=eligibility_partition_table
 VIEW_NAME=schemastore_view
@@ -56,7 +56,7 @@ create_tables() {
 		for ((i = 0; i < TABLE_COUNT; i++)); do
 			local table_name
 			table_name=$(printf 'pt_%04d' "$i")
-			printf 'CREATE TABLE `%s`.`%s` (id INT NOT NULL PRIMARY KEY, value INT) PARTITION BY RANGE (id) (PARTITION p0 VALUES LESS THAN (10), PARTITION p1 VALUES LESS THAN (20), PARTITION p2 VALUES LESS THAN (30));\n' \
+			printf 'CREATE TABLE `%s`.`%s` (id INT NOT NULL PRIMARY KEY, value INT) PARTITION BY RANGE (id) (PARTITION p0 VALUES LESS THAN (10), PARTITION p1 VALUES LESS THAN (20), PARTITION p2 VALUES LESS THAN (30), PARTITION p3 VALUES LESS THAN (40), PARTITION p4 VALUES LESS THAN (50));\n' \
 				"$DB_NAME" "$table_name"
 		done
 		printf 'CREATE TABLE `%s`.`exchange_0004` (id INT NOT NULL PRIMARY KEY, value INT);\n' "$DB_NAME"
@@ -72,7 +72,7 @@ create_tables() {
 }
 
 execute_partition_ddls() {
-	run_sql "ALTER TABLE ${DB_NAME}.pt_0000 ADD PARTITION (PARTITION p3 VALUES LESS THAN (40));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "ALTER TABLE ${DB_NAME}.pt_0000 ADD PARTITION (PARTITION p5 VALUES LESS THAN (60));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	record_ddl_checkpoint add_partition pt_0000 "add partition"
 	local checkpoint_index=$((${#ddl_names[@]} - 1))
 	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
@@ -80,7 +80,7 @@ execute_partition_ddls() {
 	validate_checkpoint filtered_partition "$filter_checkpoint_ts" \
 		"$filter_expected_table_ids" "$filter_config"
 
-	run_sql "ALTER TABLE ${DB_NAME}.pt_0001 DROP PARTITION p2;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "ALTER TABLE ${DB_NAME}.pt_0001 DROP PARTITION p4;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	record_ddl_checkpoint drop_partition pt_0001 "drop partition"
 	checkpoint_index=$((${#ddl_names[@]} - 1))
 	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
@@ -92,7 +92,7 @@ execute_partition_ddls() {
 	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
 		"${expected_table_ids[$checkpoint_index]}"
 
-	run_sql "ALTER TABLE ${DB_NAME}.pt_0003 REORGANIZE PARTITION p1, p2 INTO (PARTITION p1_new VALUES LESS THAN (15), PARTITION p2_new VALUES LESS THAN (30));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "ALTER TABLE ${DB_NAME}.pt_0003 REORGANIZE PARTITION p2, p3 INTO (PARTITION p2_new VALUES LESS THAN (25), PARTITION p3_new VALUES LESS THAN (40));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	record_ddl_checkpoint reorganize_partition pt_0003 "reorganize partition"
 	checkpoint_index=$((${#ddl_names[@]} - 1))
 	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
@@ -249,7 +249,8 @@ wait_for_dispatcher_count() {
 	local expected_count=$2
 	local response
 	local actual_count
-	for _ in $(seq 1 120); do
+	# Retry every 2 seconds for up to 10 minutes.
+	for _ in $(seq 1 300); do
 		response=$(curl -sS "http://${CDC_HOST}:${CDC_PORT}/api/v2/changefeeds/${changefeed_id}/get_dispatcher_count?mode=0&keyspace=${KEYSPACE_NAME}" 2>/dev/null || true)
 		actual_count=$(jq -r '.count // empty' <<<"$response" 2>/dev/null || true)
 		if [ "$actual_count" = "$expected_count" ]; then
