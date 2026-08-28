@@ -8,7 +8,7 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
-DB_NAME=changefeed_partition_table_start_ts
+DB_NAME=changefeed_tables_at_start_ts
 TABLE_COUNT=1000
 NO_PK_TABLE=no_pk_partition_table
 ELIGIBILITY_TABLE=eligibility_partition_table
@@ -175,6 +175,10 @@ get_expected_table_ids() {
 	mysql_upstream -N -B -e "
 		SELECT table_id
 		FROM (
+			-- The table-trigger dispatcher uses table ID 0 and is included in
+			-- the changefeed table list together with physical table IDs.
+			SELECT 0 AS table_id
+			UNION ALL
 			-- EXCHANGE swaps the partition ID and the non-partitioned table ID,
 			-- so both information_schema tables are needed here.
 			SELECT TIDB_PARTITION_ID AS table_id
@@ -195,12 +199,17 @@ get_expected_table_ids() {
 get_expected_table_ids_for_table() {
 	local table_name=$1
 	mysql_upstream -N -B -e "
-		SELECT TIDB_PARTITION_ID
-		FROM information_schema.partitions
-		WHERE TABLE_SCHEMA = '${DB_NAME}'
-		  AND TABLE_NAME = '${table_name}'
-		  AND TIDB_PARTITION_ID IS NOT NULL
-		ORDER BY TIDB_PARTITION_ID;
+		SELECT table_id
+		FROM (
+			SELECT 0 AS table_id
+			UNION ALL
+			SELECT TIDB_PARTITION_ID AS table_id
+			FROM information_schema.partitions
+			WHERE TABLE_SCHEMA = '${DB_NAME}'
+			  AND TABLE_NAME = '${table_name}'
+			  AND TIDB_PARTITION_ID IS NOT NULL
+		) AS physical_tables
+		ORDER BY table_id;
 	" | paste -sd, -
 }
 
@@ -259,7 +268,6 @@ validate_checkpoint() {
 	local expected_ids=$3
 	local config_path=${4:-}
 	local expected_count
-	local expected_dispatcher_count
 	local changefeed_id="changefeed-partition-table-${checkpoint_name}-$RANDOM"
 	local -a create_args=(
 		create
@@ -271,15 +279,12 @@ validate_checkpoint() {
 	)
 
 	expected_count=$(awk -F, 'NF {print NF}' <<<"$expected_ids")
-	# A changefeed always has one table-trigger dispatcher in addition to the
-	# dispatchers for the physical tables.
-	expected_dispatcher_count=$((expected_count + 1))
 	if [ -n "$config_path" ]; then
 		create_args+=(--config "$config_path")
 	fi
 
 	cdc_cli_changefeed "${create_args[@]}"
-	wait_for_dispatcher_count "$changefeed_id" "$expected_dispatcher_count"
+	wait_for_dispatcher_count "$changefeed_id" "$expected_count"
 	for _ in $(seq 1 120); do
 		if check_tables "$changefeed_id" "$expected_ids" "$expected_count"; then
 			break
