@@ -235,28 +235,51 @@ check_tables() {
 	fi
 }
 
+wait_for_dispatcher_count() {
+	local changefeed_id=$1
+	local expected_count=$2
+	local response
+	local actual_count
+	for _ in $(seq 1 120); do
+		response=$(curl -sS "http://${CDC_HOST}:${CDC_PORT}/api/v2/changefeeds/${changefeed_id}/get_dispatcher_count?mode=0&keyspace=${KEYSPACE_NAME}" 2>/dev/null || true)
+		actual_count=$(jq -r '.count // empty' <<<"$response" 2>/dev/null || true)
+		if [ "$actual_count" = "$expected_count" ]; then
+			return 0
+		fi
+		sleep 2
+	done
+
+	echo "dispatcher count did not converge: actual=$actual_count expected=$expected_count" >&2
+	return 1
+}
+
 validate_checkpoint() {
 	local checkpoint_name=$1
 	local start_ts=$2
 	local expected_ids=$3
 	local config_path=${4:-}
 	local expected_count
-	local changefeed_id="schemastore-partition-table-${checkpoint_name}-$RANDOM"
+	local expected_dispatcher_count
+	local changefeed_id="changefeed-partition-table-${checkpoint_name}-$RANDOM"
 	local -a create_args=(
 		create
 		--pd="http://${UP_PD_HOST_1}:${UP_PD_PORT_1}"
 		--start-ts="$start_ts"
 		--sink-uri="blackhole://"
 		--changefeed-id="$changefeed_id"
+		--no-confirm=true
 	)
 
 	expected_count=$(awk -F, 'NF {print NF}' <<<"$expected_ids")
+	# A changefeed always has one table-trigger dispatcher in addition to the
+	# dispatchers for the physical tables.
+	expected_dispatcher_count=$((expected_count + 1))
 	if [ -n "$config_path" ]; then
 		create_args+=(--config "$config_path")
 	fi
 
 	cdc_cli_changefeed "${create_args[@]}"
-	query_dispatcher_count "${CDC_HOST}:${CDC_PORT}" "$changefeed_id" "$expected_count" 120
+	wait_for_dispatcher_count "$changefeed_id" "$expected_dispatcher_count"
 	for _ in $(seq 1 120); do
 		if check_tables "$changefeed_id" "$expected_ids" "$expected_count"; then
 			break
