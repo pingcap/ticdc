@@ -21,7 +21,9 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"sync"
 
+	"github.com/linkedin/goavro/v2"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -48,6 +50,7 @@ type decoder struct {
 	upstreamTiDB *sql.DB
 
 	schemaM schemamanager.SchemaManager
+	codecs  sync.Map
 
 	key   []byte
 	value []byte
@@ -648,8 +651,8 @@ func extractGlueSchemaIDAndBinaryData(data []byte) (string, []byte, error) {
 	return id, data[18:], nil
 }
 
-func decodeRawBytes(
-	ctx context.Context, schemaM schemamanager.SchemaManager, data []byte, topic string,
+func (d *decoder) decodeRawBytes(
+	ctx context.Context, data []byte,
 ) (map[string]any, map[string]any, error) {
 	var schemaID schemamanager.SchemaID
 	var binary []byte
@@ -657,7 +660,7 @@ func decodeRawBytes(
 	var cid int
 	var gid string
 
-	switch schemaM.RegistryType() {
+	switch d.schemaM.RegistryType() {
 	case common.SchemaRegistryTypeConfluent:
 		cid, binary, err = extractConfluentSchemaIDAndBinaryData(data)
 		if err != nil {
@@ -674,7 +677,7 @@ func decodeRawBytes(
 		return nil, nil, errors.ErrCodecDecode.GenWithStack("unknown schema registry type")
 	}
 
-	codec, err := schemaM.Lookup(ctx, topic, schemaID)
+	codec, err := d.lookupCodec(ctx, schemaID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -697,16 +700,35 @@ func decodeRawBytes(
 	return result, schema, nil
 }
 
+func (d *decoder) lookupCodec(
+	ctx context.Context, schemaID schemamanager.SchemaID,
+) (*goavro.Codec, error) {
+	if cached, ok := d.codecs.Load(schemaID); ok {
+		return cached.(*goavro.Codec), nil
+	}
+
+	schemaDefinition, err := d.schemaM.Lookup(ctx, d.topic, schemaID)
+	if err != nil {
+		return nil, err
+	}
+	codec, err := GenCodec(schemaDefinition)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+	}
+	actual, _ := d.codecs.LoadOrStore(schemaID, codec)
+	return actual.(*goavro.Codec), nil
+}
+
 func (d *decoder) decodeKey(ctx context.Context) (map[string]any, map[string]any, error) {
 	data := d.key
 	d.key = nil
-	return decodeRawBytes(ctx, d.schemaM, data, d.topic)
+	return d.decodeRawBytes(ctx, data)
 }
 
 func (d *decoder) decodeValue(ctx context.Context) (map[string]any, map[string]any, error) {
 	data := d.value
 	d.value = nil
-	return decodeRawBytes(ctx, d.schemaM, data, d.topic)
+	return d.decodeRawBytes(ctx, data)
 }
 
 func mysqlTypeFromTiDBType(tidbType string) byte {

@@ -18,10 +18,10 @@ import (
 	"context"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jarcoal/httpmock"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -48,7 +48,7 @@ func TestSchemaRegistry(t *testing.T) {
 	_, err = manager.Lookup(ctx, topic, SchemaID{confluentSchemaID: 1})
 	require.Regexp(t, `.*not\sfound.*`, err)
 
-	codec, err := GenCodec(`{
+	schemaDefinition := `{
        "type": "record",
        "name": "test",
        "fields":
@@ -56,19 +56,18 @@ func TestSchemaRegistry(t *testing.T) {
            {
              "type": "string",
              "name": "field1"
-           }
+          }
           ]
-     }`)
+     }`
+
+	schemaID, err := manager.Register(ctx, topic, schemaDefinition)
 	require.NoError(t, err)
 
-	schemaID, err := manager.Register(ctx, topic, codec.Schema())
+	lookedUpSchema, err := manager.Lookup(ctx, topic, schemaID)
 	require.NoError(t, err)
+	require.Equal(t, schemaDefinition, lookedUpSchema)
 
-	codec2, err := manager.Lookup(ctx, topic, schemaID)
-	require.NoError(t, err)
-	require.Equal(t, codec.CanonicalSchema(), codec2.CanonicalSchema())
-
-	codec, err = GenCodec(`{
+	schemaDefinition = `{
        "type": "record",
        "name": "test",
        "fields":
@@ -92,16 +91,15 @@ func TestSchemaRegistry(t *testing.T) {
 			],
 			"default": "null",
 			"name": "field3"
-		   }
+          }
           ]
-     }`)
-	require.NoError(t, err)
-	schemaID, err = manager.Register(ctx, topic, codec.Schema())
+     }`
+	schemaID, err = manager.Register(ctx, topic, schemaDefinition)
 	require.NoError(t, err)
 
-	codec2, err = manager.Lookup(ctx, topic, schemaID)
+	lookedUpSchema, err = manager.Lookup(ctx, topic, schemaID)
 	require.NoError(t, err)
-	require.Equal(t, codec.CanonicalSchema(), codec2.CanonicalSchema())
+	require.Equal(t, schemaDefinition, lookedUpSchema)
 }
 
 func TestSchemaRegistryBad(t *testing.T) {
@@ -124,7 +122,7 @@ func TestRegisterReturnsServerError(t *testing.T) {
 	manager, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
 	require.NoError(t, err)
 
-	codec, err := GenCodec(`{
+	schemaDefinition := `{
        "type": "record",
        "name": "test",
        "fields":
@@ -132,12 +130,11 @@ func TestRegisterReturnsServerError(t *testing.T) {
            {
              "type": "string",
              "name": "field1"
-           }
+          }
           ]
-     }`)
-	require.NoError(t, err)
+     }`
 
-	schemaID, err := manager.Register(ctx, "server-error", codec.Schema())
+	schemaID, err := manager.Register(ctx, "server-error", schemaDefinition)
 	require.ErrorIs(t, err, errors.ErrAvroSchemaAPIError)
 	require.Zero(t, schemaID.confluentSchemaID)
 }
@@ -157,7 +154,7 @@ func TestSchemaRegistryIdempotent(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	codec, err := GenCodec(`{
+	schemaDefinition := `{
        "type": "record",
        "name": "test",
        "fields":
@@ -173,14 +170,13 @@ func TestSchemaRegistryIdempotent(t *testing.T) {
              ],
              "default": null,
              "name": "field2"
-           }
+          }
           ]
-     }`)
-	require.NoError(t, err)
+     }`
 
 	id := 0
 	for i := 0; i < 20; i++ {
-		id1, err := manager.Register(ctx, topic, codec.Schema())
+		id1, err := manager.Register(ctx, topic, schemaDefinition)
 		require.NoError(t, err)
 		require.True(t, id == 0 || id == id1.confluentSchemaID)
 		id = id1.confluentSchemaID
@@ -195,12 +191,7 @@ func TestGetCachedOrRegister(t *testing.T) {
 	manager, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
 	require.NoError(t, err)
 
-	called := 0
-	// nolint:unparam
-	// NOTICE:This is a function parameter definition, so it cannot be modified.
-	schemaGen := func() (string, error) {
-		called++
-		return `{
+	schemaDefinition := `{
        "type": "record",
        "name": "test1",
        "fields":
@@ -216,75 +207,28 @@ func TestGetCachedOrRegister(t *testing.T) {
              ],
              "default": null,
              "name": "field2"
-           }
+          }
           ]
-     }`, nil
-	}
+     }`
 	topic := "cdctest"
+	initialCalls := httpmock.GetTotalCallCount()
 
-	codec, header, err := manager.GetCachedOrRegister(ctx, topic, "test1", 1, schemaGen)
+	header, err := manager.GetCachedOrRegister(ctx, topic, "test1", 1, schemaDefinition)
 	require.NoError(t, err)
 	cID, err := GetConfluentSchemaIDFromHeader(header)
 	require.NoError(t, err)
 	require.Greater(t, cID, uint32(0))
-	require.NotNil(t, codec)
-	require.Equal(t, 1, called)
+	require.Equal(t, initialCalls+1, httpmock.GetTotalCallCount())
 
-	codec1, _, err := manager.GetCachedOrRegister(ctx, topic, "test1", 1, schemaGen)
+	header1, err := manager.GetCachedOrRegister(ctx, topic, "test1", 1, schemaDefinition)
 	require.NoError(t, err)
-	require.True(t, codec == codec1) // check identity
-	require.Equal(t, 1, called)
+	require.Equal(t, header, header1)
+	require.Equal(t, initialCalls+1, httpmock.GetTotalCallCount())
 
-	codec2, _, err := manager.GetCachedOrRegister(ctx, topic, "test1", 2, schemaGen)
+	header2, err := manager.GetCachedOrRegister(ctx, topic, "test1", 2, schemaDefinition)
 	require.NoError(t, err)
-	require.NotEqual(t, codec, codec2)
-	require.Equal(t, 2, called)
-
-	schemaGen = func() (string, error) {
-		return `{
-       "type": "record",
-       "name": "test1",
-       "fields":
-         [
-           {
-             "type": "string",
-             "name": "field1"
-           },
-           {
-             "type": [
-      			"null",
-      			"string"
-             ],
-             "default": null,
-             "name": "field2"
-           }
-          ]
-     }`, nil
-	}
-
-	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
-		finalI := i
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 100; j++ {
-				codec, header, err := manager.GetCachedOrRegister(
-					ctx,
-					topic,
-					"test1",
-					uint64(finalI),
-					schemaGen,
-				)
-				require.NoError(t, err)
-				cID, err := GetConfluentSchemaIDFromHeader(header)
-				require.NoError(t, err)
-				require.Greater(t, cID, uint32(0))
-				require.NotNil(t, codec)
-			}
-		}()
-	}
-	wg.Wait()
+	require.Equal(t, header, header2)
+	require.Equal(t, initialCalls+2, httpmock.GetTotalCallCount())
 }
 
 func TestGetCachedOrRegisterWithDifferentSchemaIdentity(t *testing.T) {
@@ -302,17 +246,19 @@ func TestGetCachedOrRegisterWithDifferentSchemaIdentity(t *testing.T) {
 	firstSchema := `{"type":"record","name":"source_table","fields":[{"name":"id","type":"int"}]}`
 	secondSchema := `{"type":"record","name":"target_table","fields":[{"name":"id","type":"int"}]}`
 
-	_, firstHeader, err := manager.GetCachedOrRegister(ctx, subject, "source_table", tableVersion, func() (string, error) {
-		return firstSchema, nil
-	})
+	firstHeader, err := manager.GetCachedOrRegister(
+		ctx, subject, "source_table", tableVersion, firstSchema)
 	require.NoError(t, err)
 
-	secondCodec, secondHeader, err := manager.GetCachedOrRegister(ctx, subject, "target_table", tableVersion, func() (string, error) {
-		return secondSchema, nil
-	})
+	secondHeader, err := manager.GetCachedOrRegister(
+		ctx, subject, "target_table", tableVersion, secondSchema)
 	require.NoError(t, err)
-	require.JSONEq(t, secondSchema, secondCodec.Schema())
 	require.NotEqual(t, firstHeader, secondHeader)
+	schemaID, err := GetConfluentSchemaIDFromHeader(secondHeader)
+	require.NoError(t, err)
+	lookedUpSchema, err := manager.Lookup(ctx, subject, NewConfluentSchemaID(int(schemaID)))
+	require.NoError(t, err)
+	require.Equal(t, secondSchema, lookedUpSchema)
 }
 
 func TestGetCachedOrRegisterDeduplicatesConcurrentRegistration(t *testing.T) {
@@ -325,69 +271,50 @@ func TestGetCachedOrRegisterDeduplicatesConcurrentRegistration(t *testing.T) {
 
 	const concurrency = 32
 	start := make(chan struct{})
-	releaseSchemaGen := make(chan struct{})
 	results := make(chan error, concurrency)
-	var generated atomic.Int32
+	initialCalls := httpmock.GetTotalCallCount()
+	schemaDefinition := `{"type":"record","name":"table","fields":[{"name":"id","type":"int"}]}`
 	var wg sync.WaitGroup
 	for range concurrency {
 		wg.Add(1)
 		wg.Go(func() {
 			defer wg.Done()
 			<-start
-			_, _, err := manager.GetCachedOrRegister(ctx, "table-route-value", "target.table", 1, func() (string, error) {
-				generated.Add(1)
-				<-releaseSchemaGen
-				return `{"type":"record","name":"table","fields":[{"name":"id","type":"int"}]}`, nil
-			})
+			_, err := manager.GetCachedOrRegister(
+				ctx, "table-route-value", "target.table", 1, schemaDefinition)
 			results <- err
 		})
 	}
-	var releaseOnce sync.Once
-	release := func() {
-		releaseOnce.Do(func() { close(releaseSchemaGen) })
-	}
-	defer wg.Wait()
-	defer release()
 
 	close(start)
-	require.Eventually(t, func() bool { return generated.Load() > 0 }, time.Second, time.Millisecond)
-	time.Sleep(50 * time.Millisecond)
-	generatedBeforeRelease := generated.Load()
-	release()
 	wg.Wait()
 	close(results)
 
-	require.Equal(t, int32(1), generatedBeforeRelease)
 	for err := range results {
 		require.NoError(t, err)
 	}
+	require.Equal(t, initialCalls+1, httpmock.GetTotalCallCount())
 }
 
-func TestGetCachedOrRegisterSerializesRegistrationBySubject(t *testing.T) {
-	SetupTestingRegistry()
-	defer TeardownTestingRegistry()
-
-	ctx := getTestingContext()
-	manager, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
-	require.NoError(t, err)
-
+func TestSchemaCacheSerializesCreationBySubject(t *testing.T) {
+	cache := newSchemaCache()
 	firstStarted := make(chan struct{})
 	secondStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	results := make(chan error, 2)
 	go func() {
-		_, _, err := manager.GetCachedOrRegister(ctx, "table-route-value", "target.first", 1, func() (string, error) {
+		_, _, err := cache.getOrCreate("table-route-value", "target.first", 1, func() (*schemaCacheEntry, error) {
 			close(firstStarted)
 			<-releaseFirst
-			return `{"type":"record","name":"first","fields":[{"name":"id","type":"int"}]}`, nil
+			return &schemaCacheEntry{schemaVersion: 1}, nil
 		})
 		results <- err
 	}()
 	<-firstStarted
 	go func() {
-		_, _, err := manager.GetCachedOrRegister(ctx, "table-route-value", "target.second", 1, func() (string, error) {
+		_, _, err := cache.getOrCreate("table-route-value", "target.second", 1, func() (*schemaCacheEntry, error) {
 			close(secondStarted)
-			return `{"type":"record","name":"second","fields":[{"name":"id","type":"int"}]}`, nil
+			return &schemaCacheEntry{schemaVersion: 1}, nil
 		})
 		results <- err
 	}()

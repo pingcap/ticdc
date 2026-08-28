@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/linkedin/goavro/v2"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
@@ -38,7 +37,6 @@ import (
 // confluent avro wire format, the first byte is always 0
 // https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format
 const (
-	// ConfluentMagicByte is the first byte of the Confluent Avro wire format.
 	ConfluentMagicByte           = uint8(0)
 	schemaRegistryRequestTimeout = 30 * time.Second
 )
@@ -125,18 +123,11 @@ func (m *confluentSchemaManager) Register(
 	schemaName string,
 	schemaDefinition string,
 ) (SchemaID, error) {
-	// The Schema Registry expects the JSON to be without newline characters
 	id := SchemaID{}
 	log.Info("confluentSchemaManager", zap.String("schemaDefinition", schemaDefinition), zap.String("schemaName", schemaName))
 
-	buffer := new(bytes.Buffer)
-	err := json.Compact(buffer, []byte(schemaDefinition))
-	if err != nil {
-		log.Error("Could not compact schema", zap.Error(err))
-		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
-	}
 	reqBody := registerRequest{
-		Schema: buffer.String(),
+		Schema: schemaDefinition,
 	}
 	payload, err := json.Marshal(&reqBody)
 	if err != nil {
@@ -213,11 +204,11 @@ func (m *confluentSchemaManager) Lookup(
 	ctx context.Context,
 	schemaName string,
 	schemaID SchemaID,
-) (*goavro.Codec, error) {
+) (string, error) {
 	cacheKey := newDecodeCacheKey(schemaName)
 	entry, exists := m.cache.load(cacheKey)
 	if exists && entry.schemaID.confluentSchemaID == schemaID.confluentSchemaID {
-		return entry.codec, nil
+		return entry.schemaDefinition, nil
 	}
 
 	uri := m.registryURL + "/schemas/ids/" + strconv.Itoa(schemaID.confluentSchemaID)
@@ -225,7 +216,7 @@ func (m *confluentSchemaManager) Lookup(
 	req, err := http.NewRequestWithContext(ctx, "GET", uri, nil)
 	if err != nil {
 		log.Error("Error constructing request for Registry lookup", zap.Error(err))
-		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+		return "", errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	req.Header.Add(
 		"Accept",
@@ -235,14 +226,14 @@ func (m *confluentSchemaManager) Lookup(
 
 	resp, err := httpRetry(ctx, m.credential, req)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Error("Failed to parse result from Registry", zap.Error(err))
-		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+		return "", errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
 	if resp.StatusCode != 200 && resp.StatusCode != 404 {
@@ -250,7 +241,7 @@ func (m *confluentSchemaManager) Lookup(
 			zap.Int("status", resp.StatusCode),
 			zap.String("uri", uri),
 			zap.ByteString("responseBody", body))
-		return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
+		return "", errors.ErrAvroSchemaAPIError.GenWithStack(
 			"Failed to query schema from the Registry, HTTP error",
 		)
 	}
@@ -259,7 +250,7 @@ func (m *confluentSchemaManager) Lookup(
 		log.Warn("Specified schema not found in Registry",
 			zap.String("key", schemaName),
 			zap.Int("schemaID", schemaID.confluentSchemaID))
-		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(
+		return "", errors.ErrAvroSchemaAPIError.GenWithStackByArgs(
 			"Schema not found in Registry",
 		)
 	}
@@ -268,23 +259,19 @@ func (m *confluentSchemaManager) Lookup(
 	err = json.Unmarshal(body, &jsonResp)
 	if err != nil {
 		log.Error("Failed to parse result from Registry", zap.Error(err))
-		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+		return "", errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
 	cacheEntry := new(schemaCacheEntry)
-	cacheEntry.codec, err = GenCodec(jsonResp.Schema)
-	if err != nil {
-		log.Error("Creating Avro codec failed", zap.Error(err))
-		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
-	}
+	cacheEntry.schemaDefinition = jsonResp.Schema
 	cacheEntry.schemaID.confluentSchemaID = schemaID.confluentSchemaID
-	cacheEntry.header, err = m.getMsgHeader(schemaID.confluentSchemaID)
+	cacheEntry.header, err = BuildConfluentWireHeader(schemaID.confluentSchemaID)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	m.cache.store(cacheKey, cacheEntry)
-	return cacheEntry.codec, nil
+	return cacheEntry.schemaDefinition, nil
 }
 
 // GetCachedOrRegister checks if the suitable Avro schema has been cached.
@@ -295,65 +282,54 @@ func (m *confluentSchemaManager) GetCachedOrRegister(
 	ctx context.Context,
 	schemaSubject string,
 	schemaIdentity string,
-	tableVersion uint64,
-	schemaGen SchemaGenerator,
-) (*goavro.Codec, []byte, error) {
+	schemaVersion uint64,
+	schemaDefinition string,
+) ([]byte, error) {
 	entry, cached, err := m.cache.getOrCreate(
-		schemaSubject, schemaIdentity, tableVersion,
+		schemaSubject, schemaIdentity, schemaVersion,
 		func() (*schemaCacheEntry, error) {
-			log.Info("Avro schema lookup cache miss",
+			log.Info("Schema lookup cache miss",
 				zap.String("key", schemaSubject),
 				zap.String("schemaIdentity", schemaIdentity),
-				zap.Uint64("tableVersion", tableVersion))
+				zap.Uint64("schemaVersion", schemaVersion))
 
-			schema, err := schemaGen()
-			if err != nil {
-				return nil, err
-			}
-
-			codec, err := GenCodec(schema)
-			if err != nil {
-				log.Error("GetCachedOrRegister: Could not make goavro codec", zap.Error(err))
-				return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
-			}
-
-			id, err := m.Register(ctx, schemaSubject, schema)
+			id, err := m.Register(ctx, schemaSubject, schemaDefinition)
 			if err != nil {
 				log.Error("GetCachedOrRegister: Could not register schema", zap.Error(err))
 				return nil, errors.Trace(err)
 			}
 
-			header, err := m.getMsgHeader(id.confluentSchemaID)
+			header, err := BuildConfluentWireHeader(id.confluentSchemaID)
 			if err != nil {
 				return nil, err
 			}
 
 			return &schemaCacheEntry{
-				tableVersion: tableVersion,
-				schemaID:     id,
-				codec:        codec,
-				header:       header,
+				schemaVersion:    schemaVersion,
+				schemaID:         id,
+				schemaDefinition: schemaDefinition,
+				header:           header,
 			}, nil
 		},
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if cached {
 		log.Debug("Avro schema GetCachedOrRegister cache hit",
 			zap.String("key", schemaSubject),
 			zap.String("schemaIdentity", schemaIdentity),
-			zap.Uint64("tableVersion", tableVersion),
+			zap.Uint64("schemaVersion", schemaVersion),
 			zap.Int("schemaID", entry.schemaID.confluentSchemaID))
 	} else {
 		log.Info("Avro schema GetCachedOrRegister successful with cache miss",
-			zap.Uint64("tableVersion", entry.tableVersion),
+			zap.Uint64("schemaVersion", entry.schemaVersion),
 			zap.Int("schemaID", entry.schemaID.confluentSchemaID),
-			zap.String("schema", entry.codec.Schema()))
+			zap.String("schema", entry.schemaDefinition))
 	}
 
-	return entry.codec, entry.header, nil
+	return entry.header, nil
 }
 
 // ClearRegistry clears the Registry subject for the given table. Should be idempotent.
@@ -399,13 +375,6 @@ func (m *confluentSchemaManager) ClearRegistry(ctx context.Context, schemaSubjec
 
 func (m *confluentSchemaManager) RegistryType() string {
 	return m.registryType
-}
-
-// confluent avro wire format, confluent avro is not same as apache avro
-// https://rmoff.net/2020/07/03/why-json-isnt-the-same-as-json-schema-in-kafka-connect-converters \
-// -and-ksqldb-viewing-kafka-messages-bytes-as-hex/
-func (m *confluentSchemaManager) getMsgHeader(schemaID int) ([]byte, error) {
-	return BuildConfluentWireHeader(schemaID)
 }
 
 // BuildConfluentWireHeader builds a Confluent Avro wire header.

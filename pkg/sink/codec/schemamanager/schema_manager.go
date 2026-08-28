@@ -17,7 +17,6 @@ package schemamanager
 import (
 	"context"
 
-	"github.com/linkedin/goavro/v2"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
@@ -46,15 +45,12 @@ func NewSchemaManager(ctx context.Context, config *common.Config) (SchemaManager
 // SchemaManager manages schemas registered in a schema registry.
 type SchemaManager interface {
 	Register(ctx context.Context, schemaName string, schemaDefinition string) (SchemaID, error)
-	Lookup(ctx context.Context, schemaName string, schemaID SchemaID) (*goavro.Codec, error)
+	Lookup(ctx context.Context, schemaName string, schemaID SchemaID) (string, error)
 	GetCachedOrRegister(ctx context.Context, schemaName, schemaIdentity string,
-		tableVersion uint64, schemaGen SchemaGenerator) (*goavro.Codec, []byte, error)
+		schemaVersion uint64, schemaDefinition string) ([]byte, error)
 	RegistryType() string
 	ClearRegistry(ctx context.Context, schemaName string) error
 }
-
-// SchemaGenerator returns an Avro schema in JSON.
-type SchemaGenerator func() (string, error)
 
 // SchemaID identifies a schema in Confluent or AWS Glue Schema Registry.
 type SchemaID struct {
@@ -70,9 +66,4 @@ func NewConfluentSchemaID(schemaID int) SchemaID {
 // NewGlueSchemaID creates an AWS Glue schema ID.
 func NewGlueSchemaID(schemaID string) SchemaID {
 	return SchemaID{glueSchemaID: schemaID}
-}
-
-// GenCodec creates an Avro codec without treating the string literal "null" as null.
-func GenCodec(schema string) (*goavro.Codec, error) {
-	return goavro.NewCodecWithOptions(schema, &goavro.CodecOption{EnableStringNull: false})
 }

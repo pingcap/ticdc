@@ -16,15 +16,13 @@ package schemamanager
 
 import (
 	"sync"
-
-	"github.com/linkedin/goavro/v2"
 )
 
 type schemaCacheEntry struct {
-	tableVersion uint64
-	schemaID     SchemaID
-	codec        *goavro.Codec
-	header       []byte
+	schemaVersion    uint64
+	schemaID         SchemaID
+	schemaDefinition string
+	header           []byte
 }
 
 type schemaCacheKey struct {
@@ -64,10 +62,10 @@ func (c *schemaCache) load(key schemaCacheKey) (*schemaCacheEntry, bool) {
 }
 
 func (c *schemaCache) loadByVersion(
-	key schemaCacheKey, tableVersion uint64,
+	key schemaCacheKey, schemaVersion uint64,
 ) (*schemaCacheEntry, bool) {
 	entry, ok := c.load(key)
-	return entry, ok && entry.tableVersion == tableVersion
+	return entry, ok && entry.schemaVersion == schemaVersion
 }
 
 func (c *schemaCache) store(key schemaCacheKey, entry *schemaCacheEntry) {
@@ -79,18 +77,18 @@ func (c *schemaCache) store(key schemaCacheKey, entry *schemaCacheEntry) {
 func (c *schemaCache) getOrCreate(
 	schemaName string,
 	schemaIdentity string,
-	tableVersion uint64,
+	schemaVersion uint64,
 	create func() (*schemaCacheEntry, error),
 ) (*schemaCacheEntry, bool, error) {
 	key := newEncodeCacheKey(schemaName, schemaIdentity)
-	if entry, ok := c.loadByVersion(key, tableVersion); ok {
+	if entry, ok := c.loadByVersion(key, schemaVersion); ok {
 		return entry, true, nil
 	}
 
 	unlock := c.lockSubject(schemaName)
 	defer unlock()
 
-	if entry, ok := c.loadByVersion(key, tableVersion); ok {
+	if entry, ok := c.loadByVersion(key, schemaVersion); ok {
 		return entry, true, nil
 	}
 

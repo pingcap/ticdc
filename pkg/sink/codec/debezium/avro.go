@@ -166,7 +166,7 @@ func (d *BatchEncoder) encodeAvroPayload(
 	}
 
 	subject := debeziumAvroSubject(topic, subjectSuffix, message.Schema.Name)
-	avroCodec, header, err := d.schemaM.GetCachedOrRegister(
+	avroCodec, header, err := d.codecCache.GetOrRegister(
 		ctx,
 		subject,
 		message.Schema.Name,

@@ -30,10 +30,11 @@ func newAvroEncoderForTest(
 	keyspace string, schemaM schemamanager.SchemaManager, config *common.Config,
 ) common.EventEncoder {
 	return &BatchEncoder{
-		keyspace: keyspace,
-		schemaM:  schemaM,
-		result:   make([]*common.Message, 0, 1),
-		config:   config,
+		keyspace:   keyspace,
+		schemaM:    schemaM,
+		codecCache: NewCodecCache(schemaM),
+		result:     make([]*common.Message, 0, 1),
+		config:     config,
 	}
 }
 

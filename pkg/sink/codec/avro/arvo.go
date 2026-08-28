@@ -53,7 +53,7 @@ func (a *BatchEncoder) getValueSchemaCodec(
 	}
 
 	subject := topicName2SchemaSubjects(topic, valueSchemaSuffix)
-	avroCodec, header, err := a.schemaM.GetCachedOrRegister(
+	avroCodec, header, err := a.codecCache.GetOrRegister(
 		ctx, subject, tableName.String(), tableVersion, schemaGen)
 	if err != nil {
 		return nil, nil, errors.Trace(err)
@@ -74,7 +74,7 @@ func (a *BatchEncoder) getKeySchemaCodec(
 	}
 
 	subject := topicName2SchemaSubjects(topic, keySchemaSuffix)
-	avroCodec, header, err := a.schemaM.GetCachedOrRegister(
+	avroCodec, header, err := a.codecCache.GetOrRegister(
 		ctx, subject, tableName.String(), tableVersion, schemaGen)
 	if err != nil {
 		return nil, nil, errors.Trace(err)
@@ -823,10 +823,11 @@ func SetupEncoderAndSchemaRegistry4Testing(
 	}
 
 	return &BatchEncoder{
-		keyspace: commonType.DefaultKeyspaceName,
-		schemaM:  schemaM,
-		result:   make([]*common.Message, 0, 1),
-		config:   config,
+		keyspace:   commonType.DefaultKeyspaceName,
+		schemaM:    schemaM,
+		codecCache: NewCodecCache(schemaM),
+		result:     make([]*common.Message, 0, 1),
+		config:     config,
 	}, nil
 }
 
@@ -839,5 +840,5 @@ func TeardownEncoderAndSchemaRegistry4Testing() {
 // Don't treat string literal "null" as null, because we can distinguish them.
 // See https://github.com/pingcap/tiflow/issues/11994
 func GenCodec(schema string) (*goavro.Codec, error) {
-	return schemamanager.GenCodec(schema)
+	return goavro.NewCodecWithOptions(schema, &goavro.CodecOption{EnableStringNull: false})
 }

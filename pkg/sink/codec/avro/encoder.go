@@ -29,9 +29,10 @@ import (
 
 // BatchEncoder converts the events to binary Avro data
 type BatchEncoder struct {
-	keyspace string
-	schemaM  schemamanager.SchemaManager
-	result   []*common.Message
+	keyspace   string
+	schemaM    schemamanager.SchemaManager
+	codecCache *CodecCache
+	result     []*common.Message
 
 	config *common.Config
 }
@@ -42,10 +43,11 @@ func NewAvroEncoder(config *common.Config, schemaM schemamanager.SchemaManager) 
 		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs("schema manager is nil")
 	}
 	return &BatchEncoder{
-		keyspace: config.ChangefeedID.Keyspace(),
-		schemaM:  schemaM,
-		result:   make([]*common.Message, 0, 1),
-		config:   config,
+		keyspace:   config.ChangefeedID.Keyspace(),
+		schemaM:    schemaM,
+		codecCache: NewCodecCache(schemaM),
+		result:     make([]*common.Message, 0, 1),
+		config:     config,
 	}, nil
 }
 

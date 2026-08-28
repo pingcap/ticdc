@@ -22,6 +22,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	codecavro "github.com/pingcap/ticdc/pkg/sink/codec/avro"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"go.uber.org/zap"
@@ -34,7 +35,8 @@ type BatchEncoder struct {
 	config *common.Config
 	codec  *dbzCodec
 
-	schemaM schemamanager.SchemaManager
+	schemaM    schemamanager.SchemaManager
+	codecCache *codecavro.CodecCache
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
@@ -234,7 +236,8 @@ func NewAvroBatchEncoder(
 			clusterID: clusterID,
 			nowFunc:   time.Now,
 		},
-		schemaM: schemaM,
+		schemaM:    schemaM,
+		codecCache: codecavro.NewCodecCache(schemaM),
 	}
 	return batch, nil
 }
