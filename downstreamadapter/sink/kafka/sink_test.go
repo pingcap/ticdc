@@ -425,7 +425,6 @@ func TestKafkaSinkDML(t *testing.T) {
 				return 1, nil
 			})
 		kafkaSink.AddDMLEvent(dmlEvent)
-
 		require.Equal(t, cause, kafkaSink.calculateKeyPartitions(ctx))
 		require.Zero(t, kafkaSink.rowChan.Len())
 	})
