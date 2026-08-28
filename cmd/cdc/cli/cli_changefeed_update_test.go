@@ -26,7 +26,7 @@ import (
 	"github.com/pingcap/log"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/pkg/config"
-	putil "github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -78,7 +78,7 @@ func TestApplyChanges(t *testing.T) {
 	newInfo, err = o.applyChanges(oldInfo, cmd)
 	require.Nil(t, err)
 	require.Equal(t,
-		putil.AddressOf("https://username:password@localhost:8081"),
+		util.AddressOf("https://username:password@localhost:8081"),
 		newInfo.Config.Sink.SchemaRegistry)
 }
 

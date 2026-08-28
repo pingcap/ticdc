@@ -1439,10 +1439,10 @@ func (c *ReplicaConfig) maskSensitiveData() {
 		*c.Sink.SchemaRegistry = util.MaskSensitiveDataInURI(*c.Sink.SchemaRegistry)
 	}
 	if kafka := c.Sink.KafkaConfig; kafka != nil {
-		maskSensitiveString(kafka.SASLPassword)
-		maskSensitiveString(kafka.SASLGssAPIPassword)
-		maskSensitiveString(kafka.SASLOAuthClientSecret)
-		maskSensitiveString(kafka.Key)
+		util.MaskSensitiveString(kafka.SASLPassword)
+		util.MaskSensitiveString(kafka.SASLGssAPIPassword)
+		util.MaskSensitiveString(kafka.SASLOAuthClientSecret)
+		util.MaskSensitiveString(kafka.Key)
 		if kafka.SASLOAuthTokenURL != nil {
 			*kafka.SASLOAuthTokenURL = util.MaskSensitiveDataInURI(*kafka.SASLOAuthTokenURL)
 		}
@@ -1450,29 +1450,17 @@ func (c *ReplicaConfig) maskSensitiveData() {
 			kafka.LargeMessageHandle.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(kafka.LargeMessageHandle.ClaimCheckStorageURI)
 		}
 		if glue := kafka.GlueSchemaRegistryConfig; glue != nil {
-			maskSensitiveValue(&glue.AccessKey)
-			maskSensitiveValue(&glue.SecretAccessKey)
-			maskSensitiveValue(&glue.Token)
+			util.MaskSensitiveString(&glue.AccessKey)
+			util.MaskSensitiveString(&glue.SecretAccessKey)
+			util.MaskSensitiveString(&glue.Token)
 		}
 	}
 	if pulsar := c.Sink.PulsarConfig; pulsar != nil {
-		maskSensitiveString(pulsar.AuthenticationToken)
-		maskSensitiveString(pulsar.BasicPassword)
+		util.MaskSensitiveString(pulsar.AuthenticationToken)
+		util.MaskSensitiveString(pulsar.BasicPassword)
 		if pulsar.OAuth2 != nil {
-			maskSensitiveValue(&pulsar.OAuth2.OAuth2PrivateKey)
+			util.MaskSensitiveString(&pulsar.OAuth2.OAuth2PrivateKey)
 		}
-	}
-}
-
-func maskSensitiveString(value *string) {
-	if value != nil {
-		*value = "******"
-	}
-}
-
-func maskSensitiveValue(value *string) {
-	if *value != "" {
-		*value = "******"
 	}
 }
 

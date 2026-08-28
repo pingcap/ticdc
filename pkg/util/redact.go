@@ -84,6 +84,13 @@ func RedactValue(value string) string {
 	}
 }
 
+// MaskSensitiveString replaces a non-empty string with a fixed mask.
+func MaskSensitiveString(value *string) {
+	if value != nil && *value != "" {
+		*value = "******"
+	}
+}
+
 // RedactAny redacts any value by converting to string and applying redaction.
 // Returns "?" for ON mode, wrapped value with ‹› for MARKER mode, original for OFF.
 // In MARKER mode, embedded markers are escaped using TiDB's redact.String().

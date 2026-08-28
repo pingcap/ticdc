@@ -80,8 +80,8 @@ func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
 }
 
 func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
-	replicaConfig := GetDefaultReplicaConfig()
-	replicaConfig.Sink.KafkaConfig = &KafkaConfig{
+	cfg := GetDefaultReplicaConfig()
+	cfg.Sink.KafkaConfig = &KafkaConfig{
 		SASLPassword:          util.AddressOf("plain-password-sentinel"),
 		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
 		SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
@@ -90,7 +90,7 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	}
 	info := &ChangeFeedInfo{
 		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
-		Config:  replicaConfig,
+		Config:  cfg,
 	}
 	original, err := info.Marshal()
 	require.NoError(t, err)
@@ -109,9 +109,9 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	}
 	require.Contains(t, output, "xxxxx")
 	require.Contains(t, output, "******")
-	afterLogging, err := info.Marshal()
+	after, err := info.Marshal()
 	require.NoError(t, err)
-	require.Equal(t, original, afterLogging)
+	require.Equal(t, original, after)
 }
 
 func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *testing.T) {

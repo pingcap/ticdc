@@ -54,15 +54,15 @@ func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 
 	masked, err := info.CloneWithMaskedSensitiveData()
 	require.NoError(t, err)
-	serialized, err := masked.Marshal()
+	output, err := masked.Marshal()
 	require.NoError(t, err)
-	require.NotContains(t, serialized, "sentinel")
-	require.NotContains(t, serialized, "memory_quota")
-	require.Contains(t, serialized, "visible-client-id")
+	require.NotContains(t, output, "sentinel")
+	require.NotContains(t, output, "memory_quota")
+	require.Contains(t, output, "visible-client-id")
 	require.Nil(t, masked.Config.Sink.KafkaConfig.Key)
-	afterMasking, err := info.Marshal()
+	after, err := info.Marshal()
 	require.NoError(t, err)
-	require.Equal(t, original, afterMasking)
+	require.Equal(t, original, after)
 }
 
 // TestReplicaConfigConversion verifies API/internal replica config conversion,
