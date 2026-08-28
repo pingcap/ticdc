@@ -115,8 +115,7 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	o.changefeedID = "abc"
 	require.NotNil(t, o.run(cmd))
 
-	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").
-		Return(changefeedInfoWithSensitiveData(), nil)
+	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").Return(changefeedInfoWithSensitiveData(), nil)
 	f.changefeeds.EXPECT().GetAllTables(gomock.Any(), gomock.Any(), "ks").
 		Return(&v2.Tables{}, nil)
 	f.changefeeds.EXPECT().Update(gomock.Any(), gomock.Any(), "ks", "abc").

@@ -71,8 +71,7 @@ func TestChangefeedQueryCli(t *testing.T) {
 	require.NotNil(t, o.run(cmd))
 
 	// query success
-	cfV2.EXPECT().Get(gomock.Any(), gomock.Any(), "bcd").
-		Return(changefeedInfoWithSensitiveData(), nil)
+	cfV2.EXPECT().Get(gomock.Any(), gomock.Any(), "bcd").Return(changefeedInfoWithSensitiveData(), nil)
 
 	o.simplified = false
 	o.changefeedID = "bcd"

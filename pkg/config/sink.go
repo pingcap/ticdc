@@ -528,8 +528,7 @@ func (k *KafkaConfig) MaskSensitiveData() {
 		k.SASLOAuthTokenURL = aws.String(util.MaskSensitiveDataInURI(*k.SASLOAuthTokenURL))
 	}
 	if k.LargeMessageHandle != nil {
-		k.LargeMessageHandle.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(
-			k.LargeMessageHandle.ClaimCheckStorageURI)
+		k.LargeMessageHandle.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(k.LargeMessageHandle.ClaimCheckStorageURI)
 	}
 }
 

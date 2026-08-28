@@ -1447,8 +1447,7 @@ func (c *ReplicaConfig) maskSensitiveData() {
 			*kafka.SASLOAuthTokenURL = util.MaskSensitiveDataInURI(*kafka.SASLOAuthTokenURL)
 		}
 		if kafka.LargeMessageHandle != nil {
-			kafka.LargeMessageHandle.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(
-				kafka.LargeMessageHandle.ClaimCheckStorageURI)
+			kafka.LargeMessageHandle.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(kafka.LargeMessageHandle.ClaimCheckStorageURI)
 		}
 		if glue := kafka.GlueSchemaRegistryConfig; glue != nil {
 			maskSensitiveValue(&glue.AccessKey)

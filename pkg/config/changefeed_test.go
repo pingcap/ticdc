@@ -85,16 +85,12 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 		SASLPassword:          util.AddressOf("plain-password-sentinel"),
 		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
 		SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
-		SASLOAuthTokenURL: util.AddressOf(
-			"https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
-		LargeMessageHandle: &LargeMessageHandleConfig{
-			ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel",
-		},
+		SASLOAuthTokenURL:     util.AddressOf("https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
+		LargeMessageHandle:    &LargeMessageHandleConfig{ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel"},
 	}
 	info := &ChangeFeedInfo{
-		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic" +
-			"?secret=uri-secret-sentinel",
-		Config: replicaConfig,
+		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
+		Config:  replicaConfig,
 	}
 	original, err := info.Marshal()
 	require.NoError(t, err)

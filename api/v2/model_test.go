@@ -26,18 +26,14 @@ func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
 		Config: &ReplicaConfig{
 			Sink: &SinkConfig{
-				SchemaRegistry: util.AddressOf(
-					"https://registry.example.com?access-key=registry-secret-sentinel"),
+				SchemaRegistry: util.AddressOf("https://registry.example.com?access-key=registry-secret-sentinel"),
 				KafkaConfig: &KafkaConfig{
 					KafkaClientID:         util.AddressOf("visible-client-id"),
 					SASLPassword:          util.AddressOf("plain-password-sentinel"),
 					SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
 					SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
-					SASLOAuthTokenURL: util.AddressOf(
-						"https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
-					LargeMessageHandle: &LargeMessageHandleConfig{
-						ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel",
-					},
+					SASLOAuthTokenURL:     util.AddressOf("https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
+					LargeMessageHandle:    &LargeMessageHandleConfig{ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel"},
 					GlueSchemaRegistryConfig: &GlueSchemaRegistryConfig{
 						AccessKey:       "glue-access-sentinel",
 						SecretAccessKey: "glue-secret-sentinel",
@@ -47,13 +43,10 @@ func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 				PulsarConfig: &PulsarConfig{
 					AuthenticationToken: util.AddressOf("pulsar-token-sentinel"),
 					BasicPassword:       util.AddressOf("pulsar-password-sentinel"),
-					OAuth2: &PulsarOAuth2{
-						OAuth2PrivateKey: "pulsar-private-key-sentinel",
-					},
+					OAuth2:              &PulsarOAuth2{OAuth2PrivateKey: "pulsar-private-key-sentinel"},
 				},
 			},
-			Consistent: &ConsistentConfig{Storage: util.AddressOf(
-				"s3://bucket/prefix?access-key=consistent-secret-sentinel")},
+			Consistent: &ConsistentConfig{Storage: util.AddressOf("s3://bucket/prefix?access-key=consistent-secret-sentinel")},
 		},
 	}
 	original, err := info.Marshal()

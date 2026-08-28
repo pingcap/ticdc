@@ -34,9 +34,7 @@ func TestChangefeedRemoveCli(t *testing.T) {
 
 	cmd := newCmdRemoveChangefeed(f)
 
-	cf.EXPECT().Get(gomock.Any(), "test", "abc").Return(&v2.ChangeFeedInfo{
-		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
-	}, nil)
+	cf.EXPECT().Get(gomock.Any(), "test", "abc").Return(&v2.ChangeFeedInfo{SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel"}, nil)
 	cf.EXPECT().Delete(gomock.Any(), "test", "abc").Return(nil)
 	cf.EXPECT().Get(gomock.Any(), "test", "abc").Return(nil,
 		cerror.ErrChangeFeedNotExists.GenWithStackByArgs("abc"))
