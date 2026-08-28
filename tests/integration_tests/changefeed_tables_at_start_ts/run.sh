@@ -9,10 +9,8 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
 DB_NAME=changefeed_tables_at_start_ts
-TABLE_COUNT=100
 NO_PK_TABLE=no_pk_partition_table
 ELIGIBILITY_TABLE=eligibility_partition_table
-VIEW_NAME=schemastore_view
 ddl_names=()
 ddl_commit_ts=()
 expected_table_ids=()
@@ -48,31 +46,8 @@ get_ddl_commit_ts() {
 	return 1
 }
 
-create_tables() {
-	local sql_file="$WORK_DIR/create_tables.sql"
-	{
-		printf 'DROP DATABASE IF EXISTS `%s`;\n' "$DB_NAME"
-		printf 'CREATE DATABASE `%s`;\n' "$DB_NAME"
-		for ((i = 0; i < TABLE_COUNT; i++)); do
-			local table_name
-			table_name=$(printf 'pt_%04d' "$i")
-			printf 'CREATE TABLE `%s`.`%s` (id INT NOT NULL PRIMARY KEY, value INT) PARTITION BY RANGE (id) (PARTITION p0 VALUES LESS THAN (10), PARTITION p1 VALUES LESS THAN (20), PARTITION p2 VALUES LESS THAN (30), PARTITION p3 VALUES LESS THAN (40), PARTITION p4 VALUES LESS THAN (50));\n' \
-				"$DB_NAME" "$table_name"
-		done
-		printf 'CREATE TABLE `%s`.`exchange_0004` (id INT NOT NULL PRIMARY KEY, value INT);\n' "$DB_NAME"
-		printf 'CREATE TABLE `%s`.`%s` (id INT NOT NULL, value INT) PARTITION BY RANGE (id) (PARTITION p0 VALUES LESS THAN (10), PARTITION p1 VALUES LESS THAN (20), PARTITION p2 VALUES LESS THAN (30));\n' \
-			"$DB_NAME" "$NO_PK_TABLE"
-		printf 'CREATE TABLE `%s`.`%s` (id INT NOT NULL, value INT) PARTITION BY RANGE (id) (PARTITION p0 VALUES LESS THAN (10), PARTITION p1 VALUES LESS THAN (20), PARTITION p2 VALUES LESS THAN (30));\n' \
-			"$DB_NAME" "$ELIGIBILITY_TABLE"
-		printf 'CREATE VIEW `%s`.`%s` AS SELECT id, value FROM `%s`.`pt_0000`;\n' \
-			"$DB_NAME" "$VIEW_NAME" "$DB_NAME"
-	} >"$sql_file"
-
-	mysql_upstream <"$sql_file" >"$WORK_DIR/create_tables.log" 2>&1
-}
-
 execute_partition_ddls() {
-	run_sql "ALTER TABLE ${DB_NAME}.pt_0000 ADD PARTITION (PARTITION p5 VALUES LESS THAN (60));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql_file "$CUR/data/add_partition.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	record_ddl_checkpoint add_partition pt_0000 "add partition"
 	local checkpoint_index=$((${#ddl_names[@]} - 1))
 	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
@@ -80,31 +55,31 @@ execute_partition_ddls() {
 	validate_checkpoint filtered_partition "$filter_checkpoint_ts" \
 		"$filter_expected_table_ids" "$filter_config"
 
-	run_sql "ALTER TABLE ${DB_NAME}.pt_0001 DROP PARTITION p4;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql_file "$CUR/data/drop_partition.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	record_ddl_checkpoint drop_partition pt_0001 "drop partition"
 	checkpoint_index=$((${#ddl_names[@]} - 1))
 	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
 		"${expected_table_ids[$checkpoint_index]}"
 
-	run_sql "ALTER TABLE ${DB_NAME}.pt_0002 TRUNCATE PARTITION p1;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql_file "$CUR/data/truncate_partition.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	record_ddl_checkpoint truncate_partition pt_0002 "truncate partition"
 	checkpoint_index=$((${#ddl_names[@]} - 1))
 	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
 		"${expected_table_ids[$checkpoint_index]}"
 
-	run_sql "ALTER TABLE ${DB_NAME}.pt_0003 REORGANIZE PARTITION p2, p3 INTO (PARTITION p2_new VALUES LESS THAN (25), PARTITION p3_new VALUES LESS THAN (40));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql_file "$CUR/data/reorganize_partition.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	record_ddl_checkpoint reorganize_partition pt_0003 "reorganize partition"
 	checkpoint_index=$((${#ddl_names[@]} - 1))
 	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
 		"${expected_table_ids[$checkpoint_index]}"
 
-	run_sql "ALTER TABLE ${DB_NAME}.${ELIGIBILITY_TABLE} ADD PRIMARY KEY (id);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql_file "$CUR/data/add_primary_key.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	record_ddl_checkpoint add_primary_key "$ELIGIBILITY_TABLE" "add primary key" false true
 	checkpoint_index=$((${#ddl_names[@]} - 1))
 	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
 		"${expected_table_ids[$checkpoint_index]}"
 
-	run_sql "ALTER TABLE ${DB_NAME}.pt_0004 EXCHANGE PARTITION p0 WITH TABLE ${DB_NAME}.exchange_0004 WITHOUT VALIDATION;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql_file "$CUR/data/exchange_partition.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	record_ddl_checkpoint exchange_partition pt_0004 "exchange partition" false true
 	checkpoint_index=$((${#ddl_names[@]} - 1))
 	validate_checkpoint "${ddl_names[$checkpoint_index]}" "${ddl_commit_ts[$checkpoint_index]}" \
@@ -314,15 +289,13 @@ run() {
 	run_sql "SET GLOBAL tidb_enable_exchange_partition = ON;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY"
 
-	create_tables
+	run_sql_file "$CUR/data/prepare.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	baseline_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
 	baseline_force_replicate_table_ids=$(get_expected_table_ids true true)
 	record_checkpoint baseline "$baseline_ts" false false
 
-	filter_config="$WORK_DIR/filter.toml"
-	printf '[filter]\nrules = ["%s.%s"]\n' "$DB_NAME" pt_0000 >"$filter_config"
-	force_replicate_config="$WORK_DIR/force_replicate.toml"
-	printf 'force-replicate = true\n' >"$force_replicate_config"
+	filter_config="$CUR/conf/filter.toml"
+	force_replicate_config="$CUR/conf/force_replicate.toml"
 
 	validate_checkpoint baseline "$baseline_ts" \
 		"${expected_table_ids[0]}"
