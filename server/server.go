@@ -57,13 +57,20 @@ import (
 )
 
 const (
-	closeServiceTimeout   = 15 * time.Second
-	cleanMetaDuration     = 10 * time.Second
-	oldArchCheckInterval  = 100 * time.Millisecond
-	sessionWatchInterval  = time.Second
+	// closeServiceTimeout bounds shutdown of all pre-services.
+	closeServiceTimeout = 15 * time.Second
+	// cleanMetaDuration bounds deletion of this capture's etcd registration during shutdown.
+	cleanMetaDuration = 10 * time.Second
+	// oldArchCheckInterval is the retry interval while waiting for the old-architecture capture to stop.
+	oldArchCheckInterval = 100 * time.Millisecond
+	// sessionWatchInterval is the cadence for checking the etcd session TTL.
+	sessionWatchInterval = time.Second
+	// etcdTTLRequestTimeout bounds one etcd session TTL request.
 	etcdTTLRequestTimeout = 3 * time.Second
-	etcdTTLSafetyMargin   = time.Second
-	writeGateMonitorTick  = 100 * time.Millisecond
+	// etcdTTLSafetyMargin is subtracted from the observed TTL before accepting it as write proof.
+	etcdTTLSafetyMargin = time.Second
+	// writeGateMonitorTick is the cadence for recording write-gate metrics and state transitions.
+	writeGateMonitorTick = 100 * time.Millisecond
 	// GracefulShutdownTimeout is used to prevent the CDC process from hanging for an extended period due to certain modules don't exit immediately.
 	GracefulShutdownTimeout = 30 * time.Second
 )

@@ -21,20 +21,42 @@ import (
 )
 
 const (
+	// NodeHeartbeatInterval is the cadence for capture heartbeats and P2P write-lease requests.
 	NodeHeartbeatInterval = 500 * time.Millisecond
-	P2PLeaseDuration      = 5 * time.Second
-	EtcdProofDuration     = 5 * time.Second
+	// P2PLeaseDuration is the maximum validity period of a coordinator-issued P2P write proof.
+	P2PLeaseDuration = 5 * time.Second
+	// EtcdProofDuration caps the validity period derived from a positive etcd session TTL check.
+	EtcdProofDuration = 5 * time.Second
 )
 
-// BlockReason explains why the capture write gate is closed.
+// BlockReason reports whether the capture write gate is writable or why it is
+// blocked. The gate is writable only when its etcd proof is fresh and, after
+// the current write-lease protocol is enabled, its P2P proof is also fresh.
+//
+// writable means all required proofs are fresh. etcd_proof_expired means the
+// required etcd proof is absent or expired; p2p_expired means the required P2P
+// proof is absent or expired while the etcd proof is fresh; and both_expired
+// means both required proofs are absent or expired. Renewing the missing proof
+// moves those recoverable states toward writable; a proof expiring or a
+// coordinator change invalidating P2P proof moves the state back to blocked.
+//
+// fenced takes precedence over every proof state. It is entered only when the
+// local capture fences itself after losing its etcd session or detecting that
+// the session expired. Fencing is irreversible for the process lifetime, so
+// later proof renewals cannot make the gate writable.
 type BlockReason string
 
 const (
-	BlockReasonWritable    BlockReason = "writable"
-	BlockReasonP2PExpired  BlockReason = "p2p_expired"
+	// BlockReasonWritable indicates that all currently required write proofs are fresh.
+	BlockReasonWritable BlockReason = "writable"
+	// BlockReasonP2PExpired indicates that the required P2P proof is absent or expired.
+	BlockReasonP2PExpired BlockReason = "p2p_expired"
+	// BlockReasonEtcdExpired indicates that the required etcd proof is absent or expired.
 	BlockReasonEtcdExpired BlockReason = "etcd_proof_expired"
+	// BlockReasonBothExpired indicates that both required write proofs are absent or expired.
 	BlockReasonBothExpired BlockReason = "both_expired"
-	BlockReasonFenced      BlockReason = "fenced"
+	// BlockReasonFenced indicates that this capture was locally and irreversibly fenced.
+	BlockReasonFenced BlockReason = "fenced"
 )
 
 // Status is a point-in-time view used for metrics and transition logs. Write
