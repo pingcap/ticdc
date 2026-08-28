@@ -81,6 +81,45 @@ func newAvroTableInfoForTest() *commonType.TableInfo {
 	})
 }
 
+func TestAvroSchemaCacheIncludesRoutedTableName(t *testing.T) {
+	codecConfig := common.NewConfig(config.ProtocolAvro)
+	codecConfig.EnableTiDBExtension = true
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
+	defer TeardownEncoderAndSchemaRegistry4Testing()
+	require.NoError(t, err)
+
+	baseTableInfo := newAvroTableInfoForTest()
+	event := newAvroRowEventForTest(
+		baseTableInfo.CloneWithRouting("target_db", "cross_move_source_routed"),
+		1024,
+		chunk.Row{},
+		chunk.MutRowFromValues(int64(1), int64(18)).ToRow(),
+	)
+
+	const topic = "table-route"
+	firstValue, err := encoder.encodeValue(ctx, topic, event)
+	require.NoError(t, err)
+	firstSchemaID, _, err := extractConfluentSchemaIDAndBinaryData(firstValue)
+	require.NoError(t, err)
+
+	event.TableInfo = baseTableInfo.CloneWithRouting("target_extra_db", "cross_move_target_routed")
+	secondValue, err := encoder.encodeValue(ctx, topic, event)
+	require.NoError(t, err)
+	secondSchemaID, _, err := extractConfluentSchemaIDAndBinaryData(secondValue)
+	require.NoError(t, err)
+	require.NotEqual(t, firstSchemaID, secondSchemaID)
+
+	secondCodec, err := encoder.schemaM.Lookup(
+		ctx, topic, schemamanager.NewConfluentSchemaID(secondSchemaID))
+	require.NoError(t, err)
+	require.Contains(t, secondCodec.Schema(), `"name":"cross_move_target_routed"`)
+	require.Contains(t, secondCodec.Schema(), `"namespace":"default.target_extra_db"`)
+}
+
 func TestAvroEncode4EnableChecksum(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolAvro)
 	codecConfig.EnableTiDBExtension = true

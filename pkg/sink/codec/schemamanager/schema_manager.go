@@ -47,7 +47,7 @@ func NewSchemaManager(ctx context.Context, config *common.Config) (SchemaManager
 type SchemaManager interface {
 	Register(ctx context.Context, schemaName string, schemaDefinition string) (SchemaID, error)
 	Lookup(ctx context.Context, schemaName string, schemaID SchemaID) (*goavro.Codec, error)
-	GetCachedOrRegister(ctx context.Context, topicName string,
+	GetCachedOrRegister(ctx context.Context, schemaName, schemaIdentity string,
 		tableVersion uint64, schemaGen SchemaGenerator) (*goavro.Codec, []byte, error)
 	RegistryType() string
 	ClearRegistry(ctx context.Context, schemaName string) error
@@ -70,13 +70,6 @@ func NewConfluentSchemaID(schemaID int) SchemaID {
 // NewGlueSchemaID creates an AWS Glue schema ID.
 func NewGlueSchemaID(schemaID string) SchemaID {
 	return SchemaID{glueSchemaID: schemaID}
-}
-
-type schemaCacheEntry struct {
-	tableVersion uint64
-	schemaID     SchemaID
-	codec        *goavro.Codec
-	header       []byte
 }
 
 // GenCodec creates an Avro codec without treating the string literal "null" as null.

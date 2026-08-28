@@ -23,7 +23,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -52,8 +51,7 @@ type confluentSchemaManager struct {
 
 	credential *security.Credential // placeholder, currently always nil
 
-	cacheRWLock  sync.RWMutex
-	cache        map[string]*schemaCacheEntry
+	cache        *schemaCache
 	registryType string
 }
 
@@ -116,7 +114,7 @@ func NewConfluentSchemaManager(
 
 	return &confluentSchemaManager{
 		registryURL:  registryURL,
-		cache:        make(map[string]*schemaCacheEntry, 1),
+		cache:        newSchemaCache(),
 		registryType: common.SchemaRegistryTypeConfluent,
 	}, nil
 }
@@ -216,13 +214,11 @@ func (m *confluentSchemaManager) Lookup(
 	schemaName string,
 	schemaID SchemaID,
 ) (*goavro.Codec, error) {
-	m.cacheRWLock.RLock()
-	entry, exists := m.cache[schemaName]
+	cacheKey := newDecodeCacheKey(schemaName)
+	entry, exists := m.cache.load(cacheKey)
 	if exists && entry.schemaID.confluentSchemaID == schemaID.confluentSchemaID {
-		m.cacheRWLock.RUnlock()
 		return entry.codec, nil
 	}
-	m.cacheRWLock.RUnlock()
 
 	uri := m.registryURL + "/schemas/ids/" + strconv.Itoa(schemaID.confluentSchemaID)
 
@@ -287,9 +283,7 @@ func (m *confluentSchemaManager) Lookup(
 		return nil, err
 	}
 
-	m.cacheRWLock.Lock()
-	m.cache[schemaName] = cacheEntry
-	m.cacheRWLock.Unlock()
+	m.cache.store(cacheKey, cacheEntry)
 	return cacheEntry.codec, nil
 }
 
@@ -300,61 +294,66 @@ func (m *confluentSchemaManager) Lookup(
 func (m *confluentSchemaManager) GetCachedOrRegister(
 	ctx context.Context,
 	schemaSubject string,
+	schemaIdentity string,
 	tableVersion uint64,
 	schemaGen SchemaGenerator,
 ) (*goavro.Codec, []byte, error) {
-	m.cacheRWLock.RLock()
-	if entry, exists := m.cache[schemaSubject]; exists && entry.tableVersion == tableVersion {
+	entry, cached, err := m.cache.getOrCreate(
+		schemaSubject, schemaIdentity, tableVersion,
+		func() (*schemaCacheEntry, error) {
+			log.Info("Avro schema lookup cache miss",
+				zap.String("key", schemaSubject),
+				zap.String("schemaIdentity", schemaIdentity),
+				zap.Uint64("tableVersion", tableVersion))
+
+			schema, err := schemaGen()
+			if err != nil {
+				return nil, err
+			}
+
+			codec, err := GenCodec(schema)
+			if err != nil {
+				log.Error("GetCachedOrRegister: Could not make goavro codec", zap.Error(err))
+				return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+			}
+
+			id, err := m.Register(ctx, schemaSubject, schema)
+			if err != nil {
+				log.Error("GetCachedOrRegister: Could not register schema", zap.Error(err))
+				return nil, errors.Trace(err)
+			}
+
+			header, err := m.getMsgHeader(id.confluentSchemaID)
+			if err != nil {
+				return nil, err
+			}
+
+			return &schemaCacheEntry{
+				tableVersion: tableVersion,
+				schemaID:     id,
+				codec:        codec,
+				header:       header,
+			}, nil
+		},
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if cached {
 		log.Debug("Avro schema GetCachedOrRegister cache hit",
 			zap.String("key", schemaSubject),
+			zap.String("schemaIdentity", schemaIdentity),
 			zap.Uint64("tableVersion", tableVersion),
 			zap.Int("schemaID", entry.schemaID.confluentSchemaID))
-		m.cacheRWLock.RUnlock()
-		return entry.codec, entry.header, nil
-	}
-	m.cacheRWLock.RUnlock()
-
-	log.Info("Avro schema lookup cache miss",
-		zap.String("key", schemaSubject),
-		zap.Uint64("tableVersion", tableVersion))
-
-	schema, err := schemaGen()
-	if err != nil {
-		return nil, nil, err
+	} else {
+		log.Info("Avro schema GetCachedOrRegister successful with cache miss",
+			zap.Uint64("tableVersion", entry.tableVersion),
+			zap.Int("schemaID", entry.schemaID.confluentSchemaID),
+			zap.String("schema", entry.codec.Schema()))
 	}
 
-	codec, err := GenCodec(schema)
-	if err != nil {
-		log.Error("GetCachedOrRegister: Could not make goavro codec", zap.Error(err))
-		return nil, nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
-	}
-
-	id, err := m.Register(ctx, schemaSubject, schema)
-	if err != nil {
-		log.Error("GetCachedOrRegister: Could not register schema", zap.Error(err))
-		return nil, nil, errors.Trace(err)
-	}
-
-	cacheEntry := new(schemaCacheEntry)
-	cacheEntry.codec = codec
-	cacheEntry.schemaID = id
-	cacheEntry.tableVersion = tableVersion
-	header, err := m.getMsgHeader(cacheEntry.schemaID.confluentSchemaID)
-	if err != nil {
-		return nil, nil, err
-	}
-	cacheEntry.header = header
-
-	m.cacheRWLock.Lock()
-	m.cache[schemaSubject] = cacheEntry
-	m.cacheRWLock.Unlock()
-
-	log.Info("Avro schema GetCachedOrRegister successful with cache miss",
-		zap.Uint64("tableVersion", cacheEntry.tableVersion),
-		zap.Int("schemaID", cacheEntry.schemaID.confluentSchemaID),
-		zap.String("schema", cacheEntry.codec.Schema()))
-
-	return codec, cacheEntry.header, nil
+	return entry.codec, entry.header, nil
 }
 
 // ClearRegistry clears the Registry subject for the given table. Should be idempotent.

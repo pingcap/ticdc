@@ -25,7 +25,7 @@ func newClueSchemaManagerForTest() *glueSchemaManager {
 	res := &glueSchemaManager{
 		registryName: "test_registry",
 		client:       newMockGlueClientImpl(),
-		cache:        make(map[string]*schemaCacheEntry),
+		cache:        newSchemaCache(),
 		registryType: common.SchemaRegistryTypeGlue,
 	}
 	return res
@@ -74,7 +74,7 @@ func TestGlueSchemaManager_GetCachedOrRegister(t *testing.T) {
 
 	schemaName := "test_schema"
 	schemaDefinition := `{"type": "record", "name": "test_schema", "fields": [{"name": "field1", "type": "string"}]}`
-	codec, _, err := m.GetCachedOrRegister(ctx, schemaName, 1, func() (string, error) {
+	codec, _, err := m.GetCachedOrRegister(ctx, schemaName, schemaName, 1, func() (string, error) {
 		return schemaDefinition, nil
 	})
 	require.NoError(t, err)
@@ -82,11 +82,19 @@ func TestGlueSchemaManager_GetCachedOrRegister(t *testing.T) {
 	require.Equal(t, schemaDefinition, codec.Schema())
 
 	// Get the same schema again
-	codec2, _, err := m.GetCachedOrRegister(ctx, schemaName, 1, func() (string, error) {
+	codec2, _, err := m.GetCachedOrRegister(ctx, schemaName, schemaName, 1, func() (string, error) {
 		return schemaDefinition, nil
 	})
 	require.NoError(t, err)
 	require.Equal(t, codec, codec2)
+
+	routedSchemaDefinition := `{"type": "record", "name": "test_schema_routed", "fields": [{"name": "field1", "type": "string"}]}`
+	routedCodec, _, err := m.GetCachedOrRegister(ctx, schemaName, "test_schema_routed", 1, func() (string, error) {
+		return routedSchemaDefinition, nil
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, codec, routedCodec)
+	require.Equal(t, routedSchemaDefinition, routedCodec.Schema())
 }
 
 func TestGlueSchemaManager_RegistryType(t *testing.T) {

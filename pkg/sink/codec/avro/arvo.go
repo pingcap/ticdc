@@ -53,7 +53,8 @@ func (a *BatchEncoder) getValueSchemaCodec(
 	}
 
 	subject := topicName2SchemaSubjects(topic, valueSchemaSuffix)
-	avroCodec, header, err := a.schemaM.GetCachedOrRegister(ctx, subject, tableVersion, schemaGen)
+	avroCodec, header, err := a.schemaM.GetCachedOrRegister(
+		ctx, subject, tableName.String(), tableVersion, schemaGen)
 	if err != nil {
 		return nil, nil, errors.Trace(err)
 	}
@@ -73,7 +74,8 @@ func (a *BatchEncoder) getKeySchemaCodec(
 	}
 
 	subject := topicName2SchemaSubjects(topic, keySchemaSuffix)
-	avroCodec, header, err := a.schemaM.GetCachedOrRegister(ctx, subject, tableVersion, schemaGen)
+	avroCodec, header, err := a.schemaM.GetCachedOrRegister(
+		ctx, subject, tableName.String(), tableVersion, schemaGen)
 	if err != nil {
 		return nil, nil, errors.Trace(err)
 	}

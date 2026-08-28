@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -42,8 +41,7 @@ type glueSchemaManager struct {
 	registryName string
 	client       glueClient
 
-	cacheRWLock  sync.RWMutex
-	cache        map[string]*schemaCacheEntry
+	cache        *schemaCache
 	registryType string
 }
 
@@ -72,7 +70,7 @@ func NewGlueSchemaManager(
 	res := &glueSchemaManager{
 		registryName: cfg.RegistryName,
 		client:       client,
-		cache:        make(map[string]*schemaCacheEntry),
+		cache:        newSchemaCache(),
 		registryType: common.SchemaRegistryTypeGlue,
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -128,20 +126,18 @@ func (m *glueSchemaManager) Lookup(
 	schemaName string,
 	schemaID SchemaID,
 ) (*goavro.Codec, error) {
-	m.cacheRWLock.RLock()
-	entry, exists := m.cache[schemaName]
-	if exists && entry.schemaID.confluentSchemaID == schemaID.confluentSchemaID {
+	cacheKey := newDecodeCacheKey(schemaName)
+	entry, exists := m.cache.load(cacheKey)
+	if exists && entry.schemaID.glueSchemaID == schemaID.glueSchemaID {
 		log.Debug("Avro schema lookup cache hit",
 			zap.String("key", schemaName),
-			zap.Int("schemaID", entry.schemaID.confluentSchemaID))
-		m.cacheRWLock.RUnlock()
+			zap.String("schemaID", entry.schemaID.glueSchemaID))
 		return entry.codec, nil
 	}
-	m.cacheRWLock.RUnlock()
 
 	log.Info("Avro schema lookup cache miss",
 		zap.String("key", schemaName),
-		zap.Int("schemaID", schemaID.confluentSchemaID))
+		zap.String("schemaID", schemaID.glueSchemaID))
 
 	ok, schema, err := m.getSchemaByID(ctx, schemaID.glueSchemaID)
 	if err != nil {
@@ -164,13 +160,11 @@ func (m *glueSchemaManager) Lookup(
 		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
-	m.cacheRWLock.Lock()
-	defer m.cacheRWLock.Unlock()
-	m.cache[schemaName] = &schemaCacheEntry{
+	m.cache.store(cacheKey, &schemaCacheEntry{
 		schemaID: schemaID,
 		codec:    codec,
 		header:   header,
-	}
+	})
 
 	return codec, nil
 }
@@ -182,66 +176,69 @@ func (m *glueSchemaManager) Lookup(
 func (m *glueSchemaManager) GetCachedOrRegister(
 	ctx context.Context,
 	schemaName string,
+	schemaIdentity string,
 	tableVersion uint64,
 	schemaGen SchemaGenerator,
 ) (*goavro.Codec, []byte, error) {
-	m.cacheRWLock.RLock()
-	if entry, exists := m.cache[schemaName]; exists && entry.tableVersion == tableVersion {
-		log.Debug("Avro schema GetCachedOrRegister cache hit",
-			zap.String("schemaName", schemaName),
-			zap.Uint64("tableVersion", tableVersion),
-			zap.String("schemaID", entry.schemaID.glueSchemaID))
-		m.cacheRWLock.RUnlock()
-		return entry.codec, entry.header, nil
-	}
-	m.cacheRWLock.RUnlock()
+	entry, cached, err := m.cache.getOrCreate(
+		schemaName, schemaIdentity, tableVersion,
+		func() (*schemaCacheEntry, error) {
+			log.Info("Avro schema lookup cache miss",
+				zap.String("schemaName", schemaName),
+				zap.String("schemaIdentity", schemaIdentity),
+				zap.Uint64("tableVersion", tableVersion))
 
-	log.Info("Avro schema lookup cache miss",
-		zap.String("schemaName", schemaName),
-		zap.Uint64("tableVersion", tableVersion))
+			schema, err := schemaGen()
+			if err != nil {
+				return nil, err
+			}
 
-	schema, err := schemaGen()
+			codec, err := GenCodec(schema)
+			if err != nil {
+				log.Error("GetCachedOrRegister: Could not make goavro codec", zap.Error(err))
+				return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+			}
+
+			log.Info(fmt.Sprintf("The code to be registered: %#v", schema))
+
+			id, err := m.Register(ctx, schemaName, schema)
+			if err != nil {
+				log.Error("GetCachedOrRegister: Could not register schema", zap.Error(err))
+				return nil, errors.Trace(err)
+			}
+
+			header, err := m.getMsgHeader(id.glueSchemaID)
+			if err != nil {
+				log.Error("GetCachedOrRegister: Could not get message header", zap.Error(err))
+				return nil, errors.Trace(err)
+			}
+
+			return &schemaCacheEntry{
+				tableVersion: tableVersion,
+				schemaID:     id,
+				codec:        codec,
+				header:       header,
+			}, nil
+		},
+	)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	codec, err := GenCodec(schema)
-	if err != nil {
-		log.Error("GetCachedOrRegister: Could not make goavro codec", zap.Error(err))
-		return nil, nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+	if cached {
+		log.Debug("Avro schema GetCachedOrRegister cache hit",
+			zap.String("schemaName", schemaName),
+			zap.String("schemaIdentity", schemaIdentity),
+			zap.Uint64("tableVersion", tableVersion),
+			zap.String("schemaID", entry.schemaID.glueSchemaID))
+	} else {
+		log.Info("Avro schema GetCachedOrRegister successful with cache miss",
+			zap.String("schemaName", schemaName),
+			zap.Uint64("tableVersion", tableVersion),
+			zap.String("schemaID", entry.schemaID.glueSchemaID))
 	}
 
-	log.Info(fmt.Sprintf("The code to be registered: %#v", schema))
-
-	id, err := m.Register(ctx, schemaName, schema)
-	if err != nil {
-		log.Error("GetCachedOrRegister: Could not register schema", zap.Error(err))
-		return nil, nil, errors.Trace(err)
-	}
-
-	header, err := m.getMsgHeader(id.glueSchemaID)
-	if err != nil {
-		log.Error("GetCachedOrRegister: Could not get message header", zap.Error(err))
-		return nil, nil, errors.Trace(err)
-	}
-
-	cacheEntry := &schemaCacheEntry{
-		tableVersion: tableVersion,
-		schemaID:     id,
-		codec:        codec,
-		header:       header,
-	}
-
-	m.cacheRWLock.Lock()
-	m.cache[schemaName] = cacheEntry
-	m.cacheRWLock.Unlock()
-
-	log.Info("Avro schema GetCachedOrRegister successful with cache miss",
-		zap.String("schemaName", schemaName),
-		zap.Uint64("tableVersion", tableVersion),
-		zap.String("schemaID", id.glueSchemaID))
-
-	return codec, header, nil
+	return entry.codec, entry.header, nil
 }
 
 // ClearRegistry implements SchemaManager, it is not used.

@@ -169,6 +169,7 @@ func (d *BatchEncoder) encodeAvroPayload(
 	avroCodec, header, err := d.schemaM.GetCachedOrRegister(
 		ctx,
 		subject,
+		message.Schema.Name,
 		schemaVersion,
 		func() (string, error) {
 			converter := newDebeziumAvroSchemaConverter()
