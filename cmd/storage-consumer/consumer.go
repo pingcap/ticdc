@@ -361,7 +361,7 @@ func (c *consumer) appendDMLEvents(
 	}
 
 	spillDecoder := util.NewDMLMessageDecoderWithDataFactory(decoder,
-		func(_ common.Decoder, key, value []byte) *common.DMLMessageData {
+		func(_ common.Decoder, _, value []byte) *common.DMLMessageData {
 			return c.newDMLMessageData(ctx, schemaFile, value, tableID)
 		})
 	spillDecoder.SetRawMessage(nil, content)
