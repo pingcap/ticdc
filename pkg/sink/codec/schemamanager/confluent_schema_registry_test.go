@@ -331,7 +331,7 @@ func TestGetCachedOrRegisterDeduplicatesConcurrentRegistration(t *testing.T) {
 	var wg sync.WaitGroup
 	for range concurrency {
 		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			defer wg.Done()
 			<-start
 			_, _, err := manager.GetCachedOrRegister(ctx, "table-route-value", "target.table", 1, func() (string, error) {
@@ -340,7 +340,7 @@ func TestGetCachedOrRegisterDeduplicatesConcurrentRegistration(t *testing.T) {
 				return `{"type":"record","name":"table","fields":[{"name":"id","type":"int"}]}`, nil
 			})
 			results <- err
-		}()
+		})
 	}
 	var releaseOnce sync.Once
 	release := func() {
