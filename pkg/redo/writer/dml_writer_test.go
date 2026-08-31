@@ -196,7 +196,7 @@ func TestDMLWriterBatchesSpoolEntriesAndReleasesAfterAllFlushes(t *testing.T) {
 	}()
 
 	events := make([]*polymorphicRedoEvent, 0, 3)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		select {
 		case event := <-fileWorkerInput:
 			events = append(events, event)
