@@ -188,7 +188,7 @@ func TestProcessMessage(t *testing.T) {
 	)
 	require.NotNil(t, dmls)
 
-	readyEvent := commonEvent.NewReadyEvent(did)
+	readyEvent := commonEvent.NewReadyEvent(did, 0)
 	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, ddl.TableInfo)
 	events := make(map[uint64]commonEvent.Event)
 	ddl.DispatcherID = did
@@ -214,6 +214,11 @@ func TestProcessMessage(t *testing.T) {
 		}
 	}
 	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
+	// The test has no coordinator to answer the reusable EventService query, so
+	// release the pending hold and let the local ready be accepted.
+	stat := c.getDispatcherStatByID(did)
+	require.NotNil(t, stat)
+	clearSessionRemoteProbePending(stat.session)
 
 	ch <- newMessage(node.ID, &readyEvent)
 	ch <- newMessage(node.ID, &handshakeEvent)
@@ -440,9 +445,14 @@ func TestEventCollectorBatchByCount(t *testing.T) {
 		return false
 	}
 	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
+	// The test has no coordinator to answer the reusable EventService query, so
+	// release the pending hold and let the local ready be accepted.
+	stat := c.getDispatcherStatByID(did)
+	require.NotNil(t, stat)
+	clearSessionRemoteProbePending(stat.session)
 
 	from := localServerID
-	readyEvent := commonEvent.NewReadyEvent(did)
+	readyEvent := commonEvent.NewReadyEvent(did, 0)
 	c.ds.Push(did, dispatcher.NewDispatcherEvent(&from, &readyEvent))
 
 	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, ddl.TableInfo)
@@ -529,9 +539,14 @@ func TestEventCollectorBatchByBytes(t *testing.T) {
 		}
 	}
 	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
+	// The test has no coordinator to answer the reusable EventService query, so
+	// release the pending hold and let the local ready be accepted.
+	stat := c.getDispatcherStatByID(did)
+	require.NotNil(t, stat)
+	clearSessionRemoteProbePending(stat.session)
 
 	from := localServerID
-	readyEvent := commonEvent.NewReadyEvent(did)
+	readyEvent := commonEvent.NewReadyEvent(did, 0)
 	c.ds.Push(did, dispatcher.NewDispatcherEvent(&from, &readyEvent))
 
 	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, ddl.TableInfo)

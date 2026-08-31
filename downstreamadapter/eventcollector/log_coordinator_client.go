@@ -107,6 +107,15 @@ func (l *LogCoordinatorClient) run(ctx context.Context) error {
 
 func (l *LogCoordinatorClient) requestReusableEventService(dispatcher dispatcher.DispatcherService) {
 	if dispatcher.GetTableSpan().TableID != 0 {
+		if l.enableRemoteEventService {
+			// Hold the local ready until the coordinator answers, so a
+			// barely-started local subscription cannot win the ready race before
+			// reusable remote candidates are even known. The hold is released by
+			// the coordinator answer (beginRemoteProbing) or after a timeout.
+			if stat := l.eventCollector.getDispatcherStatByID(dispatcher.GetId()); stat != nil {
+				stat.session.beginRemoteProbePending()
+			}
+		}
 		l.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
 			ID:      dispatcher.GetId().ToPB(),
 			Span:    dispatcher.GetTableSpan(),

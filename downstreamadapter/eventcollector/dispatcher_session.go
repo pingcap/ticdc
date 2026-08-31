@@ -16,6 +16,7 @@ package eventcollector
 import (
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
@@ -25,6 +26,15 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/zap"
+)
+
+const (
+	// remoteProbePendingTimeout bounds how long a local ready is held while
+	// awaiting the coordinator's answer to the reusable EventService query. The
+	// remote round trip is normally fast; this only covers the case where the
+	// coordinator is slow or temporarily unavailable so startup falls back to
+	// local instead of blocking forever.
+	remoteProbePendingTimeout = 5 * time.Second
 )
 
 // dispatcherConnState owns the EventService registration state for one dispatcher.
@@ -81,6 +91,15 @@ type dispatcherConnState struct {
 	// equals the dispatcher start ts, which would let a barely started local
 	// subscription win the race and stall the table while catching up from TiKV.
 	remoteResolvedTs uint64
+	// remoteProbePending is true while the collector has asked the coordinator
+	// for reusable remote EventServices but has not received the answer yet.
+	// While set, a local ready is held so a barely-started local subscription
+	// cannot win the ready race before remote candidates are even known.
+	remoteProbePending bool
+	// remoteProbePendingDeadline bounds how long the local ready is held while
+	// awaiting the coordinator answer. Once it passes, the hold is released so
+	// a silent coordinator cannot stall startup.
+	remoteProbePendingDeadline time.Time
 }
 
 // Registration state transitions.
@@ -104,6 +123,20 @@ func (d *dispatcherConnState) beginRegisterToRemote(serverID node.ID) bool {
 	}
 	d.pendingRemoteEventServiceID = serverID
 	return true
+}
+
+// beginRemoteProbePending records that the collector has asked the coordinator
+// for reusable remote EventServices but has not received the answer yet. The
+// hold expires at remoteProbePendingTimeout so a silent coordinator cannot
+// block the local fallback.
+func (d *dispatcherConnState) beginRemoteProbePending() {
+	d.Lock()
+	defer d.Unlock()
+	if d.removed {
+		return
+	}
+	d.remoteProbePending = true
+	d.remoteProbePendingDeadline = time.Now().Add(remoteProbePendingTimeout)
 }
 
 type cleanupTargets []node.ID
@@ -175,8 +208,27 @@ func (d *dispatcherConnState) acceptReady(
 			if readyResolvedTs < baseline {
 				return readyDecision{}
 			}
+		} else {
+			// No remote is serving yet. Hold the local ready until the remote
+			// reuse probe resolves: either while awaiting the coordinator's
+			// answer or while a candidate probe is in flight, so a
+			// barely-started local subscription cannot win the race before
+			// remote candidates are even known. A stale coordinator answer
+			// (timeout) releases the hold and falls back to local.
+			if d.remoteProbePending && time.Now().Before(d.remoteProbePendingDeadline) {
+				return readyDecision{}
+			}
+			d.remoteProbePending = false
+			if !d.pendingRemoteEventServiceID.IsEmpty() {
+				// A remote reuse probe is in flight. A local ready only means the
+				// local registration is complete, not that the local subscription
+				// has served any data yet: its resolved ts still starts at the move
+				// checkpoint. Prefer the remote, which already serves the span, over
+				// letting the local win by arriving first. The probe expires after
+				// remoteProbeTimeout so a silent remote cannot block the fallback.
+				return readyDecision{}
+			}
 		}
-
 		decision := readyDecision{
 			commitTarget:   localServerID,
 			cleanupTargets: make(cleanupTargets, 0, 2),
@@ -237,6 +289,7 @@ func (d *dispatcherConnState) beginRemove(localServerID node.ID) ([]node.ID, boo
 	d.pendingRemoteEventServiceID = ""
 	d.remoteCandidates = nil
 	d.remoteResolvedTs = 0
+	d.remoteProbePending = false
 	return []node.ID(targets), false
 }
 
@@ -268,6 +321,9 @@ func (d *dispatcherConnState) isRemoved() bool {
 func (d *dispatcherConnState) beginRemoteProbing(nodes []string) (node.ID, bool) {
 	d.Lock()
 	defer d.Unlock()
+	// The coordinator answer has arrived. Whether it yields candidates or not,
+	// the local ready must no longer be held for it.
+	d.remoteProbePending = false
 	if d.removed {
 		return "", false
 	}
@@ -352,6 +408,16 @@ func (s *dispatcherSession) startLocalRegistration() {
 		return
 	}
 	s.sendRegisterRequest(s.localServerID)
+}
+
+// beginRemoteProbePending records that the collector has asked the coordinator
+// for reusable remote EventServices and has not received the answer yet. While
+// pending, a local ready is held so a barely-started local subscription cannot
+// win the ready race before remote candidates are even known.
+func (s *dispatcherSession) beginRemoteProbePending() {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	s.connState.beginRemoteProbePending()
 }
 
 func (s *dispatcherSession) retryCurrentRegistrationIfRemovedFrom(serverID node.ID) bool {
@@ -483,7 +549,7 @@ func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) 
 	from := *event.From
 	switch event.GetType() {
 	case commonEvent.TypeReadyEvent:
-		s.handleReadyEvent(from, uint64(event.GetCommitTs()))
+		s.handleReadyEvent(from, event.GetCommitTs())
 	case commonEvent.TypeNotReusableEvent:
 		if from == s.localServerID {
 			log.Panic("should not happen: local event service should not send not reusable event")
