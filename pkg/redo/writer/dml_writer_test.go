@@ -17,11 +17,13 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -44,13 +46,88 @@ func TestNewDMLWriter(t *testing.T) {
 	consistentCfg.SpoolDiskQuota = util.AddressOf(int64(1024))
 	cfg, err := NewConfig(changefeedID, consistentCfg)
 	require.NoError(t, err)
+	cfg.captureID = "capture-a"
 
 	lw, err := NewDMLWriter(ctx, cfg)
 	require.NoError(t, err)
-	spoolDir := filepath.Join(spoolBaseDir, changefeedID.Keyspace(), changefeedID.Name())
+	spoolDir := filepath.Join(
+		spoolBaseDir, redoSpoolDirectory, cfg.CaptureID(),
+		changefeedID.Keyspace(), changefeedID.Name(),
+	)
 	require.DirExists(t, spoolDir)
 	require.NoError(t, lw.Close())
 	require.NoDirExists(t, spoolDir)
+	require.Error(t, lw.Run(ctx))
+	require.NoError(t, lw.Close())
+}
+
+func TestDMLWriterCloseWaitsForRunBeforeClosingSpool(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	_, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
+	require.NoError(t, err)
+	changefeedID := common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName)
+	consistentCfg := testutil.NewConsistentConfig(uri.String())
+	spoolBaseDir := t.TempDir()
+	consistentCfg.SpoolBaseDir = util.AddressOf(spoolBaseDir)
+	consistentCfg.SpoolDiskQuota = util.AddressOf(int64(1))
+	consistentCfg.MaxLogSize = util.AddressOf(int64(1))
+	consistentCfg.EncodingWorkerNum = util.AddressOf(1)
+	consistentCfg.FlushWorkerNum = util.AddressOf(1)
+	cfg, err := NewConfig(changefeedID, consistentCfg)
+	require.NoError(t, err)
+	cfg.captureID = "capture-a"
+
+	lw, err := NewDMLWriter(ctx, cfg)
+	require.NoError(t, err)
+	spoolDir := filepath.Join(
+		spoolBaseDir, redoSpoolDirectory, cfg.CaptureID(),
+		changefeedID.Keyspace(), changefeedID.Name(),
+	)
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- lw.Run(ctx)
+	}()
+
+	callbackStarted := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(releaseCallback) })
+	}
+	t.Cleanup(release)
+	require.NoError(t, lw.AddDMLEvents(ctx, &commonEvent.RedoRowEvent{
+		CommitTs: 1,
+		Callback: func() {
+			close(callbackStarted)
+			<-releaseCallback
+		},
+	}))
+	select {
+	case <-callbackStarted:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "timed out waiting for post-flush callback")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- lw.Close()
+	}()
+	select {
+	case err := <-closeDone:
+		require.FailNow(t, "Close returned before the running pipeline exited", "error: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	require.DirExists(t, spoolDir)
+
+	release()
+	require.NoError(t, <-closeDone)
+	require.ErrorIs(t, <-runDone, context.Canceled)
+	require.NoDirExists(t, spoolDir)
+	require.Error(t, lw.AddDMLEvents(ctx, &commonEvent.RedoRowEvent{}))
+	require.NoError(t, lw.Close())
 }
 
 func TestRedoSpoolMemoryRatio(t *testing.T) {

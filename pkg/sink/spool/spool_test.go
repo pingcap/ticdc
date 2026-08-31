@@ -33,6 +33,62 @@ func newTestMessage(value string, rows int) *common.Message {
 	return msg
 }
 
+func TestDirectoryNamespaceIsolation(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "namespace-isolation")
+	rootDir := t.TempDir()
+	type owner struct {
+		namespace string
+		captureID string
+	}
+	owners := []owner{
+		{namespace: "cloudstorage-sink-spool", captureID: "capture-a"},
+		{namespace: "redo-sink-spool", captureID: "capture-a"},
+		{namespace: "redo-sink-spool", captureID: "capture-b"},
+	}
+
+	spools := make([]*Spool, 0, len(owners))
+	entries := make([]*Entry, 0, len(owners))
+	for _, owner := range owners {
+		manager, err := New(
+			changefeedID,
+			WithRootDir(rootDir),
+			WithDirectoryNamespace(owner.namespace, owner.captureID),
+			WithDiskQuotaBytes(64),
+			WithMemoryRatio(0.01),
+		)
+		require.NoError(t, err)
+		spools = append(spools, manager)
+
+		entry, err := manager.Enqueue([]*common.Message{newTestMessage("spilled-data", 1)}, nil)
+		require.NoError(t, err)
+		require.True(t, entry.IsSpilled())
+		entries = append(entries, entry)
+	}
+	for i, owner := range owners {
+		require.DirExists(t, filepath.Join(
+			rootDir, owner.namespace, owner.captureID,
+			changefeedID.Keyspace(), changefeedID.Name(),
+		))
+		defer spools[i].Close()
+	}
+
+	spools[0].Close()
+	for i := 1; i < len(spools); i++ {
+		reader, err := spools[i].NewMessageReader(entries[i])
+		require.NoError(t, err)
+		_, value, _, ok, err := reader.Next()
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, []byte("spilled-data"), value)
+	}
+	require.NoDirExists(t, filepath.Join(
+		rootDir, owners[0].namespace, owners[0].captureID,
+		changefeedID.Keyspace(), changefeedID.Name(),
+	))
+}
+
 func TestSuppressAndResumeWake(t *testing.T) {
 	t.Parallel()
 

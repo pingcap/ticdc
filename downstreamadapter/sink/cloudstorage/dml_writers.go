@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	serverconfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/spool"
@@ -30,6 +31,8 @@ import (
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 )
+
+const cloudStorageSpoolDirectory = "cloudstorage-sink-spool"
 
 // dmlWriters coordinates encoding and output shard writers.
 type dmlWriters struct {
@@ -67,6 +70,10 @@ func newDMLWriters(
 	spool, err := spool.New(
 		changefeedID,
 		spool.WithRootDir(config.SpoolBaseDir),
+		spool.WithDirectoryNamespace(
+			cloudStorageSpoolDirectory,
+			serverconfig.GetGlobalServerConfig().AdvertiseAddr,
+		),
 		spool.WithDiskQuotaBytes(config.SpoolDiskQuota),
 		spool.WithMetrics(newSpoolMetrics(changefeedID)),
 	)

@@ -130,6 +130,8 @@ func (l *ddlWriter) Close() error {
 		return nil
 	}
 	l.closed = true
+	l.extStorage.Close()
+	l.extStorage = nil
 	l.closeMetrics()
 	return nil
 }

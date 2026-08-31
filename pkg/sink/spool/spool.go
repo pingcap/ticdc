@@ -63,6 +63,10 @@ type options struct {
 	// rootDir is the base directory used to build one changefeed's spool
 	// directory. If empty, use TiCDC's data dir as the base directory.
 	rootDir string
+	// namespace and captureID give each spool owner an independent directory
+	// below rootDir before the changefeed path is appended.
+	namespace string
+	captureID string
 
 	// diskQuotaBytes is the disk budget for local spool files.
 	// spool still derives in-memory and watermark thresholds from it, but the
@@ -85,6 +89,15 @@ type options struct {
 func WithRootDir(rootDir string) func(*options) {
 	return func(options *options) {
 		options.rootDir = rootDir
+	}
+}
+
+// WithDirectoryNamespace isolates one spool owner and capture below the base
+// directory. Callers that can share a base directory should always set it.
+func WithDirectoryNamespace(namespace, captureID string) func(*options) {
+	return func(options *options) {
+		options.namespace = namespace
+		options.captureID = captureID
 	}
 }
 
@@ -328,7 +341,7 @@ func New(
 		}
 	}
 	normalizeOptions(cfg)
-	workDir := resolveWorkDir(changefeedID, cfg.rootDir)
+	workDir := resolveWorkDir(changefeedID, cfg.rootDir, cfg.namespace, cfg.captureID)
 	if err := prepareWorkDir(workDir); err != nil {
 		return nil, err
 	}
@@ -411,18 +424,24 @@ func normalizeOptions(cfg *options) {
 	cfg.highWatermarkRatio = defaultHighWatermarkRatio
 }
 
-func resolveWorkDir(changefeedID commonType.ChangeFeedID, rootDir string) string {
+func resolveWorkDir(
+	changefeedID commonType.ChangeFeedID, rootDir, namespace, captureID string,
+) string {
 	baseDir := rootDir
 	if baseDir == "" {
 		baseDir = config.GetGlobalServerConfig().DataDir
 		if baseDir == "" {
 			baseDir = os.TempDir()
 		}
-		baseDir = filepath.Join(baseDir, defaultDirectoryName)
+		if namespace == "" {
+			namespace = defaultDirectoryName
+		}
 	}
 
 	return filepath.Join(
 		baseDir,
+		namespace,
+		captureID,
 		changefeedID.Keyspace(),
 		changefeedID.Name(),
 	)

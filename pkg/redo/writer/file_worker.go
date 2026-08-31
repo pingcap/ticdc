@@ -285,9 +285,13 @@ func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) 
 	}
 	file.markFlushed()
 
-	bufPtr := &file.data
+	// Capture the backing slice before clearing the cache field: taking the
+	// address of file.data itself and putting that interior pointer would hand
+	// the pool a pointer to a nil slice (file.data is set to nil below), losing
+	// the max-log-size buffer reuse and keeping the whole fileCache alive.
+	buf := file.data[:0]
 	file.data = nil
-	f.pool.Put(bufPtr)
+	f.pool.Put(&buf)
 	return nil
 }
 

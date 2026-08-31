@@ -15,14 +15,43 @@ package writer
 
 import (
 	"context"
+	"net/url"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
+
+func TestDDLWriterCloseStorageOnce(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mockStorage := mockobjstore.NewMockStorage(ctrl)
+	mockStorage.EXPECT().Close().Times(1)
+
+	oldInitExternalStorage := redo.InitExternalStorage
+	t.Cleanup(func() {
+		redo.InitExternalStorage = oldInitExternalStorage
+	})
+	redo.InitExternalStorage = func(context.Context, url.URL) (storeapi.Storage, error) {
+		return mockStorage, nil
+	}
+
+	cfg, err := NewConfig(
+		common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName),
+		testutil.NewConsistentConfig("file:///tmp/redo"),
+	)
+	require.NoError(t, err)
+	lw, err := NewDDLWriter(t.Context(), cfg)
+	require.NoError(t, err)
+	require.NoError(t, lw.Close())
+	require.NoError(t, lw.Close())
+}
 
 func TestWriteDDL(t *testing.T) {
 	t.Parallel()

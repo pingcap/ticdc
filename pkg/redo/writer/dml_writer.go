@@ -16,14 +16,12 @@ package writer
 import (
 	"context"
 	"encoding/binary"
-	"os"
-	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -43,7 +41,13 @@ type dmlWriter struct {
 	spool         *spool.Spool
 	spoolEntries  *chann.UnlimitedChannel[*redoSpoolEntry, any]
 	extStorage    storeapi.Storage
-	cancel        context.CancelFunc
+
+	lifecycleMu sync.Mutex
+	runStarted  bool
+	closed      atomic.Bool
+	cancel      context.CancelFunc
+	runDone     chan struct{}
+	closeOnce   sync.Once
 }
 
 type redoSpoolEntry struct {
@@ -103,17 +107,10 @@ func newDMLWriter(
 	fileWorkerInput := make(chan *polymorphicRedoEvent, redo.DefaultEncodingOutputChanSize)
 	fileWorkers := newFileWorkerGroup(
 		cfg, fileWorkerInput, extStorage, opts...)
-	spoolBaseDir := cfg.SpoolBaseDir()
-	if spoolBaseDir == "" {
-		spoolBaseDir = config.GetGlobalServerConfig().DataDir
-		if spoolBaseDir == "" {
-			spoolBaseDir = os.TempDir()
-		}
-		spoolBaseDir = filepath.Join(spoolBaseDir, redoSpoolDirectory)
-	}
 	spoolBuffer, err := spool.New(
 		cfg.ChangeFeedID(),
-		spool.WithRootDir(spoolBaseDir),
+		spool.WithRootDir(cfg.SpoolBaseDir()),
+		spool.WithDirectoryNamespace(redoSpoolDirectory, cfg.CaptureID()),
 		spool.WithDiskQuotaBytes(cfg.SpoolDiskQuota()),
 		spool.WithMemoryRatio(redoSpoolMemoryRatio(cfg.SpoolDiskQuota())),
 	)
@@ -129,12 +126,23 @@ func newDMLWriter(
 		spool:         spoolBuffer,
 		spoolEntries:  chann.NewUnlimitedChannelDefault[*redoSpoolEntry](),
 		extStorage:    extStorage,
+		runDone:       make(chan struct{}),
 	}, nil
 }
 
 func (l *dmlWriter) Run(ctx context.Context) error {
+	l.lifecycleMu.Lock()
+	if l.closed.Load() || l.runStarted {
+		l.lifecycleMu.Unlock()
+		return errors.ErrRedoWriterStopped.GenWithStackByArgs()
+	}
+	l.runStarted = true
 	newCtx, cancel := context.WithCancel(ctx)
 	l.cancel = cancel
+	l.lifecycleMu.Unlock()
+	defer cancel()
+	defer close(l.runDone)
+	defer l.closed.Store(true)
 
 	eg, egCtx := errgroup.WithContext(newCtx)
 	eg.Go(func() error {
@@ -319,6 +327,9 @@ func (l *dmlWriter) readEncodedEventsFromSpool(ctx context.Context) error {
 }
 
 func (l *dmlWriter) AddDMLEvents(ctx context.Context, events ...*commonEvent.RedoRowEvent) error {
+	if l.closed.Load() {
+		return errors.ErrRedoWriterStopped.GenWithStackByArgs()
+	}
 	for _, event := range events {
 		if event == nil {
 			log.Warn("writing nil event to redo log, ignore this",
@@ -334,17 +345,23 @@ func (l *dmlWriter) AddDMLEvents(ctx context.Context, events ...*commonEvent.Red
 }
 
 func (l *dmlWriter) Close() error {
-	if l.cancel != nil {
-		l.cancel()
-		l.cancel = nil
-	}
-	if l.extStorage != nil {
+	l.closeOnce.Do(func() {
+		l.closed.Store(true)
+
+		l.lifecycleMu.Lock()
+		cancel := l.cancel
+		runStarted := l.runStarted
+		l.lifecycleMu.Unlock()
+
+		if cancel != nil {
+			cancel()
+		}
+		if runStarted {
+			<-l.runDone
+		}
+
 		l.extStorage.Close()
-		l.extStorage = nil
-	}
-	if l.spool != nil {
 		l.spool.Close()
-		l.spool = nil
-	}
+	})
 	return nil
 }

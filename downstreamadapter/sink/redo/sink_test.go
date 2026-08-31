@@ -17,6 +17,9 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net/url"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -31,7 +34,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
+	ubergomock "go.uber.org/mock/gomock"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -45,6 +51,40 @@ func newTestConsistentConfig(storage string) *config.ConsistentConfig {
 	cfg.EncodingWorkerNum = util.AddressOf(workerNumberForTest)
 	cfg.FlushWorkerNum = util.AddressOf(workerNumberForTest)
 	return cfg
+}
+
+func TestNewClosesWritersWhenDMLConstructionFails(t *testing.T) {
+	ctrl := ubergomock.NewController(t)
+	ddlStorage := mockobjstore.NewMockStorage(ctrl)
+	dmlStorage := mockobjstore.NewMockStorage(ctrl)
+	ddlStorage.EXPECT().Close().Times(1)
+	dmlStorage.EXPECT().Close().Times(1)
+
+	oldInitExternalStorage := redo.InitExternalStorage
+	t.Cleanup(func() {
+		redo.InitExternalStorage = oldInitExternalStorage
+	})
+	initCalls := 0
+	redo.InitExternalStorage = func(context.Context, url.URL) (storeapi.Storage, error) {
+		initCalls++
+		if initCalls == 1 {
+			return ddlStorage, nil
+		}
+		return dmlStorage, nil
+	}
+
+	spoolBaseDir := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(spoolBaseDir, []byte("file"), 0o600))
+	cfg := newTestConsistentConfig("file:///tmp/redo")
+	cfg.SpoolBaseDir = util.AddressOf(spoolBaseDir)
+
+	_, err := New(
+		t.Context(),
+		common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName),
+		cfg,
+	)
+	require.Error(t, err)
+	require.Equal(t, 2, initCalls)
 }
 
 func TestConsistentConfig(t *testing.T) {

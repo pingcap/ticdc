@@ -27,6 +27,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFileCacheBackingSliceReusedFromPool(t *testing.T) {
+	ctx := context.Background()
+
+	extStorage, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
+	require.NoError(t, err)
+	defer extStorage.Close()
+
+	changefeedID := common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName)
+	consistentCfg := testutil.NewConsistentConfig(uri.String())
+	consistentCfg.MaxLogSize = util.AddressOf(int64(1))
+	flushInterval := int64(time.Hour / time.Millisecond)
+	consistentCfg.FlushIntervalInMs = util.AddressOf(flushInterval)
+	cfg, err := NewConfig(changefeedID, consistentCfg)
+	require.NoError(t, err)
+
+	worker := newFileWorkerGroup(cfg, make(chan *polymorphicRedoEvent, 1), extStorage)
+
+	// The first cache allocates the max-log-size backing array from the pool.
+	first := worker.newFileCache([]byte("redo data"), 1, func() {})
+	require.NotNil(t, first)
+	poolCapacity := cap(first.data)
+	require.Equal(t, cfg.MaxLogSizeInBytes(), int64(poolCapacity))
+
+	// Flushing must hand the backing array back to the pool (not an interior
+	// pointer to a now-nil field), so the next cache reuses the allocation.
+	require.NoError(t, worker.syncWriteFile(ctx, first))
+	require.Nil(t, first.data)
+
+	second := worker.newFileCache([]byte("more redo data"), 2, func() {})
+	require.NotNil(t, second)
+	require.Equal(t, poolCapacity, cap(second.data))
+}
+
 func TestFlushAllReleasesCallbacksPerCompletedFile(t *testing.T) {
 	firstFlushed := make(chan struct{})
 	secondFlushed := make(chan struct{})
