@@ -206,6 +206,8 @@ if [[ "$restart" == "true" ]]; then
 	fi
 
 	guard_failure_file="$workdir/cdc$logsuffix.guard_failed"
+	guard_stop_file="$workdir/cdc$logsuffix.guard_stopped"
+	rm -f "$guard_failure_file" "$guard_stop_file"
 	restart_count=0
 	while true; do
 		if GO_FAILPOINTS=$failpoint $binary $coverprofile_arg server $newarch \
@@ -223,7 +225,7 @@ if [[ "$restart" == "true" ]]; then
 			exit_status=$?
 		fi
 
-		if [ "$exit_status" -eq 143 ]; then
+		if [ -f "$guard_stop_file" ] || [ "$exit_status" -eq 143 ]; then
 			break
 		fi
 		if [ "$max_restarts" -ge 0 ] && [ "$restart_count" -ge "$max_restarts" ]; then

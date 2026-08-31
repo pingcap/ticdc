@@ -1,0 +1,26 @@
+#!/bin/bash
+
+set -eu
+
+workdir=
+logsuffix=
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--workdir)
+		workdir=$2
+		shift
+		;;
+	--logsuffix)
+		logsuffix=$2
+		shift
+		;;
+	*)
+		echo "Unknown parameter: $1" >&2
+		exit 1
+		;;
+	esac
+	shift
+done
+
+touch "$workdir/cdc$logsuffix.guard_stopped"
