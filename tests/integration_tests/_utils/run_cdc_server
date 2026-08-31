@@ -7,6 +7,8 @@
 # --logsuffix: log suffix
 # --addr: address
 # --pd: pd address
+# --restart: restart CDC server after an unexpected exit
+# --max-restarts: maximum number of unexpected exits to restart (-1 for unlimited)
 # --redact-info-log: log redaction mode (false|true|marker)
 #                    Generates a config file with [security] redact-info-log setting
 #                    Values: false (OFF, no redaction), true (ON, full redaction),
@@ -32,6 +34,7 @@ log_level=debug
 # Can be set at startup via config file. Once enabled via API at runtime, it cannot be disabled.
 redact_log_mode=
 restart=
+max_restarts=-1
 failpoint=$GO_FAILPOINTS
 config_path=
 data_dir=
@@ -83,6 +86,10 @@ while [[ ${1} ]]; do
 		;;
 	--restart)
 		restart=${2}
+		shift
+		;;
+	--max-restarts)
+		max_restarts=${2}
 		shift
 		;;
 	--failpoint)
@@ -193,8 +200,14 @@ fi
 set -x
 
 if [[ "$restart" == "true" ]]; then
+	if ! [[ "$max_restarts" =~ ^-?[0-9]+$ ]] || [ "$max_restarts" -lt -1 ]; then
+		echo "Invalid max restarts: $max_restarts" >&2
+		exit 1
+	fi
+
+	restart_count=0
 	while true; do
-		GO_FAILPOINTS=$failpoint $binary $coverprofile_arg server $newarch \
+		if GO_FAILPOINTS=$failpoint $binary $coverprofile_arg server $newarch \
 			--log-file $workdir/cdc$logsuffix.log \
 			--log-level $log_level \
 			--data-dir "$data_dir" \
@@ -203,10 +216,22 @@ if [[ "$restart" == "true" ]]; then
 			$tls \
 			$certcn \
 			$addr \
-			$pd_addr >>$workdir/stdout$logsuffix.log 2>&1
-		if [ $? -eq 143 ]; then
+			$pd_addr >>$workdir/stdout$logsuffix.log 2>&1; then
+			exit_status=0
+		else
+			exit_status=$?
+		fi
+
+		if [ "$exit_status" -eq 143 ]; then
 			break
 		fi
+		if [ "$max_restarts" -ge 0 ] && [ "$restart_count" -ge "$max_restarts" ]; then
+			echo "[$(date)] cdc server $logsuffix exited unexpectedly (status $exit_status); max restarts ($max_restarts) exhausted" >&2
+			break
+		fi
+
+		restart_count=$((restart_count + 1))
+		echo "[$(date)] cdc server $logsuffix exited unexpectedly (status $exit_status); restarting ($restart_count/$max_restarts)"
 		sleep 1
 	done &
 else
