@@ -1000,7 +1000,8 @@ func loadAllPhysicalTablesAtTs(
 	encMgr encryption.EncryptionManager,
 	keyspaceID uint32,
 ) ([]commonEvent.Table, error) {
-	// TODO: respect tableFilter(filter table in kv snap is easy, filter ddl jobs need more attention)
+	// Replay all DDLs to reconstruct the table metadata before applying the
+	// table filter to the final physical table list.
 	databaseMap, err := loadDatabasesInKVSnapWithEncryption(storageSnap, gcTs, encMgr, keyspaceID)
 	if err != nil {
 		return nil, err
