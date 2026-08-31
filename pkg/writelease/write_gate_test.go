@@ -142,3 +142,8 @@ func TestGateWaitReturnsOnContextCancellation(t *testing.T) {
 
 	require.ErrorIs(t, gate.WaitUntilWritable(ctx), context.Canceled)
 }
+
+func TestOptionalGatePreservesLegacyWrites(t *testing.T) {
+	require.True(t, CanWrite(nil))
+	require.NoError(t, WaitForWrite(t.Context(), nil))
+}

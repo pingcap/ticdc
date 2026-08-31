@@ -110,6 +110,12 @@ func (g *Gate) IsWritable() bool {
 	return g.isWritableAt(g.now())
 }
 
+// CanWrite reports whether writes are admitted. A nil gate means write-lease
+// enforcement is not installed, which preserves the legacy sink behavior.
+func CanWrite(gate *Gate) bool {
+	return gate == nil || gate.IsWritable()
+}
+
 // Status returns the current gate state and non-negative lease lifetimes.
 func (g *Gate) Status() Status {
 	now := g.now()
@@ -170,6 +176,15 @@ func (g *Gate) WaitUntilWritable(ctx context.Context) error {
 		case <-changed:
 		}
 	}
+}
+
+// WaitForWrite waits for write admission when a gate is installed. A nil gate
+// preserves the legacy sink behavior.
+func WaitForWrite(ctx context.Context, gate *Gate) error {
+	if gate == nil {
+		return nil
+	}
+	return gate.WaitUntilWritable(ctx)
 }
 
 // RenewP2P renews the coordinator-issued proof from the request send time.
