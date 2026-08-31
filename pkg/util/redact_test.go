@@ -617,6 +617,8 @@ func TestRedactStringsReturnsNewSlice(t *testing.T) {
 }
 
 func TestMaskSensitiveString(t *testing.T) {
+	defer withRedactMode(t, perrors.RedactLogDisable)()
+
 	MaskSensitiveString(nil)
 	empty := ""
 	MaskSensitiveString(&empty)

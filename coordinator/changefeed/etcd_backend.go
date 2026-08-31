@@ -500,7 +500,7 @@ func logEtcdOps(ops []clientv3.Op, committed bool) {
 		if op.IsDelete() {
 			logFn("[etcd] delete key", zap.ByteString("key", op.KeyBytes()))
 		} else {
-			logFn("[etcd] put key", zap.ByteString("key", op.KeyBytes()), zap.ByteString("value", op.ValueBytes()))
+			logFn("[etcd] put key", zap.ByteString("key", op.KeyBytes()), zap.Int("valueBytes", len(op.ValueBytes())))
 		}
 	}
 	logFn("[etcd] ============State Commit=============", zap.Bool("committed", committed))

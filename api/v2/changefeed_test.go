@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -185,7 +186,7 @@ func TestMaskSinkURIForError(t *testing.T) {
 	sinkURI := "kafka://127.0.0.1:9092/topic?protocol=canal-json" +
 		"&sasl-user=ticdc&sasl-password=verysecure&secret-access-key=rawsecret"
 
-	maskedURI := maskSinkURIForError(sinkURI)
+	maskedURI := util.MaskSensitiveDataInURIForError(sinkURI)
 	require.NotContains(t, maskedURI, "verysecure")
 	require.NotContains(t, maskedURI, "rawsecret")
 	require.Contains(t, maskedURI, "sasl-password=xxxxx")
@@ -193,13 +194,151 @@ func TestMaskSinkURIForError(t *testing.T) {
 	require.Contains(t, maskedURI, "sasl-user=ticdc")
 
 	invalidURI := "mysql://root:verysecure@127.0.0.1/%zz"
-	require.Equal(t, "<invalid uri>", maskSinkURIForError(invalidURI))
+	require.Equal(t, "<invalid uri>", util.MaskSensitiveDataInURIForError(invalidURI))
 
 	err := genSinkURIInvalidError(invalidURI, mustParseURLError(t, invalidURI))
 	require.NotContains(t, err.Error(), "verysecure")
 	require.Contains(t, err.Error(), "<invalid uri>")
 	require.Contains(t, err.Error(), `parse "<invalid uri>"`)
 	require.Contains(t, err.Error(), "invalid URL escape")
+}
+
+func TestCfInfoToAPIModelMasksKafkaCredentials(t *testing.T) {
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.SchemaRegistry = util.AddressOf(
+		"https://registry-user:registry-password-sentinel@registry.example.com?access-key=registry-access-sentinel")
+	replicaConfig.Sink.KafkaConfig = &config.KafkaConfig{
+		SASLUser:              util.AddressOf("ticdc-user"),
+		SASLPassword:          util.AddressOf("plain-password-sentinel"),
+		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
+		SASLOAuthClientID:     util.AddressOf("oauth-client-id"),
+		SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
+		SASLOAuthTokenURL: util.AddressOf(
+			"https://oauth.example.com/token?client_secret=token-url-secret-sentinel&audience=ticdc"),
+		Key: util.AddressOf("private-key-sentinel"),
+		LargeMessageHandle: &config.LargeMessageHandleConfig{
+			ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel",
+		},
+		GlueSchemaRegistryConfig: &config.GlueSchemaRegistryConfig{
+			AccessKey:       "glue-access-sentinel",
+			SecretAccessKey: "glue-secret-sentinel",
+			Token:           "glue-token-sentinel",
+		},
+	}
+	info := &config.ChangeFeedInfo{
+		ChangefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		SinkURI: "kafka://sink-user:sink-password-sentinel@127.0.0.1:9092/topic" +
+			"?protocol=canal-json&sasl-password=uri-sasl-password-sentinel&secret-access-key=uri-secret-sentinel",
+		Config: replicaConfig,
+	}
+	status := &config.ChangeFeedStatus{CheckpointTs: 123}
+
+	apiInfo := CfInfoToAPIModel(info, status, nil)
+	response, err := apiInfo.Marshal()
+	require.NoError(t, err)
+
+	for _, secret := range []string{
+		"sink-password-sentinel",
+		"uri-sasl-password-sentinel",
+		"uri-secret-sentinel",
+		"registry-password-sentinel",
+		"registry-access-sentinel",
+		"plain-password-sentinel",
+		"gssapi-password-sentinel",
+		"oauth-secret-sentinel",
+		"token-url-secret-sentinel",
+		"private-key-sentinel",
+		"claim-check-secret-sentinel",
+		"glue-access-sentinel",
+		"glue-secret-sentinel",
+		"glue-token-sentinel",
+	} {
+		require.NotContains(t, response, secret)
+	}
+	require.Contains(t, apiInfo.SinkURI, "sink-user:xxxxx@")
+	require.Contains(t, apiInfo.SinkURI, "sasl-password=xxxxx")
+	require.Contains(t, apiInfo.SinkURI, "secret-access-key=xxxxx")
+	require.Equal(t, "******", *apiInfo.Config.Sink.KafkaConfig.SASLPassword)
+	require.Equal(t, "******", *apiInfo.Config.Sink.KafkaConfig.SASLGssAPIPassword)
+	require.Equal(t, "******", *apiInfo.Config.Sink.KafkaConfig.SASLOAuthClientSecret)
+	require.Equal(t, "******", *apiInfo.Config.Sink.KafkaConfig.Key)
+	require.Equal(t, "ticdc-user", *apiInfo.Config.Sink.KafkaConfig.SASLUser)
+	require.Equal(t, "oauth-client-id", *apiInfo.Config.Sink.KafkaConfig.SASLOAuthClientID)
+
+	// Building an API response must not modify the in-memory changefeed config.
+	require.Equal(t, "plain-password-sentinel", *info.Config.Sink.KafkaConfig.SASLPassword)
+	require.Equal(t, "oauth-secret-sentinel", *info.Config.Sink.KafkaConfig.SASLOAuthClientSecret)
+	require.Contains(t, info.SinkURI, "sink-password-sentinel")
+}
+
+func TestRestoreMaskedChangefeedCredentials(t *testing.T) {
+	original := config.GetDefaultReplicaConfig()
+	original.Sink.SchemaRegistry = util.AddressOf(
+		"https://registry.example.com?access-key=registry-access-sentinel")
+	original.Sink.KafkaConfig = &config.KafkaConfig{
+		SASLPassword:          util.AddressOf("plain-password-sentinel"),
+		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
+		SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
+		SASLOAuthTokenURL: util.AddressOf(
+			"https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
+		Key: util.AddressOf("private-key-sentinel"),
+		LargeMessageHandle: &config.LargeMessageHandleConfig{
+			ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel",
+		},
+		GlueSchemaRegistryConfig: &config.GlueSchemaRegistryConfig{
+			AccessKey:       "glue-access-sentinel",
+			SecretAccessKey: "glue-secret-sentinel",
+			Token:           "glue-token-sentinel",
+		},
+	}
+
+	maskedAPI := ToAPIReplicaConfig(original)
+	maskedAPI.maskSensitiveData()
+	updated := maskedAPI.ToInternalReplicaConfig()
+	restoreMaskedSensitiveData(updated, original)
+
+	require.Equal(t, original.Sink.SchemaRegistry, updated.Sink.SchemaRegistry)
+	require.Equal(t, original.Sink.KafkaConfig, updated.Sink.KafkaConfig)
+
+	updatedWithURIChange := maskedAPI.ToInternalReplicaConfig()
+	updatedWithURIChange.Sink.KafkaConfig.SASLOAuthTokenURL = util.AddressOf(
+		*updatedWithURIChange.Sink.KafkaConfig.SASLOAuthTokenURL + "&audience=new-audience")
+	updatedWithURIChange.Sink.KafkaConfig.LargeMessageHandle.ClaimCheckStorageURI += "&region=new-region"
+	restoreMaskedSensitiveData(updatedWithURIChange, original)
+	require.Contains(t, *updatedWithURIChange.Sink.KafkaConfig.SASLOAuthTokenURL,
+		"client_secret=token-url-secret-sentinel")
+	require.Contains(t, *updatedWithURIChange.Sink.KafkaConfig.SASLOAuthTokenURL,
+		"audience=new-audience")
+	require.Contains(t, updatedWithURIChange.Sink.KafkaConfig.LargeMessageHandle.ClaimCheckStorageURI,
+		"access-key=claim-check-secret-sentinel")
+	require.Contains(t, updatedWithURIChange.Sink.KafkaConfig.LargeMessageHandle.ClaimCheckStorageURI,
+		"region=new-region")
+
+	updated.Sink.KafkaConfig.SASLPassword = util.AddressOf("replacement-password")
+	restoreMaskedSensitiveData(updated, original)
+	require.Equal(t, "replacement-password", *updated.Sink.KafkaConfig.SASLPassword)
+
+	originalSinkURI := "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel"
+	maskedSinkURI := util.MaskSensitiveDataInURI(originalSinkURI)
+	restoredSinkURI := restoreMaskedURI(maskedSinkURI, originalSinkURI)
+	require.Equal(t, originalSinkURI, restoredSinkURI)
+	maskedSinkURI = strings.Replace(maskedSinkURI, "/topic?", "/new-topic?", 1) + "&protocol=avro"
+	restoredSinkURI = restoreMaskedURI(maskedSinkURI, originalSinkURI)
+	require.NotEqual(t, originalSinkURI, restoredSinkURI)
+	require.Contains(t, restoredSinkURI, "sink-password-sentinel")
+	require.Contains(t, restoredSinkURI, "secret=uri-secret-sentinel")
+	require.Contains(t, restoredSinkURI, "/new-topic")
+
+	newEndpointURI := strings.Replace(maskedSinkURI, "127.0.0.1:9092", "new-broker:9092", 1)
+	restoredSinkURI = restoreMaskedURI(newEndpointURI, originalSinkURI)
+	require.NotEqual(t, originalSinkURI, restoredSinkURI)
+	require.NotContains(t, restoredSinkURI, "sink-password-sentinel")
+	require.NotContains(t, restoredSinkURI, "uri-secret-sentinel")
+
+	originalWithoutUserInfo := "kafka://127.0.0.1:9092/topic?secret=uri-secret-sentinel"
+	maskedWithoutUserInfo := util.MaskSensitiveDataInURI(originalWithoutUserInfo)
+	restoredSinkURI = restoreMaskedURI(maskedWithoutUserInfo, originalWithoutUserInfo)
+	require.Equal(t, originalWithoutUserInfo, restoredSinkURI)
 }
 
 func mustParseURLError(t *testing.T, rawURL string) error {

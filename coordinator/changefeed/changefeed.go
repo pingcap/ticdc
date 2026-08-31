@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -64,7 +65,7 @@ func NewChangefeed(cfID common.ChangeFeedID,
 	uri, err := url.Parse(info.SinkURI)
 	if err != nil {
 		log.Panic("unable to parse sink-uri",
-			zap.String("url", info.SinkURI), zap.Error(err))
+			zap.String("url", util.MaskSensitiveDataInURIForError(info.SinkURI)), zap.Error(err))
 	}
 	res := &Changefeed{
 		ID:                       cfID,
