@@ -149,7 +149,7 @@ func TestSchemaRegistryIdempotent(t *testing.T) {
 
 	topic := "cdctest"
 
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		err = manager.ClearRegistry(ctx, topic)
 		require.NoError(t, err)
 	}
@@ -175,7 +175,7 @@ func TestSchemaRegistryIdempotent(t *testing.T) {
      }`
 
 	id := 0
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		id1, err := manager.Register(ctx, topic, schemaDefinition)
 		require.NoError(t, err)
 		require.True(t, id == 0 || id == id1.confluentSchemaID)
