@@ -156,6 +156,10 @@ func TestMysqlWriterWaitsForWriteGrantBeforeExecute(t *testing.T) {
 		done <- writer.Flush([]*commonEvent.DMLEvent{dmlEvent})
 	}()
 
+	require.Never(t, func() bool {
+		return db.Stats().InUse != 0
+	}, 50*time.Millisecond, time.Millisecond, "writer held a connection while waiting for a write grant")
+
 	select {
 	case err := <-done:
 		t.Fatalf("DML execute returned before the transport received a write grant: %v", err)
@@ -165,6 +169,24 @@ func TestMysqlWriterWaitsForWriteGrantBeforeExecute(t *testing.T) {
 	require.True(t, gate.RenewP2P(time.Now(), writelease.P2PLeaseDuration))
 	require.NoError(t, <-done)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMysqlWriterReleasesConnectionWhenFinalAdmissionFails(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+
+	callbackCalled := false
+	admitted, err := writer.dmlSession.withConn(writer, time.Second, func() bool {
+		return false
+	}, func(*sql.Conn) error {
+		callbackCalled = true
+		return nil
+	})
+	require.NoError(t, err)
+	require.False(t, admitted)
+	require.False(t, callbackCalled)
+	require.Nil(t, writer.dmlSession.conn)
+	require.Zero(t, db.Stats().InUse)
 }
 
 func TestMysqlWriterGrantWriteRejectsAfterShutdown(t *testing.T) {
