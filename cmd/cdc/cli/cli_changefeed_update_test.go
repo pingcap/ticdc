@@ -14,6 +14,8 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +26,7 @@ import (
 	"github.com/pingcap/log"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/pkg/config"
-	putil "github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,7 +78,7 @@ func TestApplyChanges(t *testing.T) {
 	newInfo, err = o.applyChanges(oldInfo, cmd)
 	require.Nil(t, err)
 	require.Equal(t,
-		putil.AddressOf("https://username:password@localhost:8081"),
+		util.AddressOf("https://username:password@localhost:8081"),
 		newInfo.Config.Sink.SchemaRegistry)
 }
 
@@ -113,17 +115,22 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	o.changefeedID = "abc"
 	require.NotNil(t, o.run(cmd))
 
-	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").
-		Return(&v2.ChangeFeedInfo{
-			ID: "abc",
-			Config: &v2.ReplicaConfig{
-				Sink: &v2.SinkConfig{},
-			},
-		}, nil)
+	oldInfo := &v2.ChangeFeedInfo{
+		ID:      "abc",
+		SinkURI: "kafka://user:xxxxx@127.0.0.1:9092/topic",
+		Config:  v2.ToAPIReplicaConfig(config.GetDefaultReplicaConfig()),
+	}
+	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").Return(oldInfo, nil)
 	f.changefeeds.EXPECT().GetAllTables(gomock.Any(), gomock.Any(), "ks").
 		Return(&v2.Tables{}, nil)
 	f.changefeeds.EXPECT().Update(gomock.Any(), gomock.Any(), "ks", "abc").
-		Return(&v2.ChangeFeedInfo{}, nil)
+		DoAndReturn(func(_ context.Context, cfg *v2.ChangefeedConfig, _, _ string) (*v2.ChangeFeedInfo, error) {
+			require.Contains(t, cfg.SinkURI, "update-password-sentinel")
+			return &v2.ChangeFeedInfo{
+				ID:      "abc",
+				SinkURI: "kafka://user:xxxxx@127.0.0.1:9092/topic",
+			}, nil
+		})
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "cf.toml")
 	err := os.WriteFile(configPath, []byte(""), 0o644)
@@ -133,7 +140,7 @@ func TestChangefeedUpdateCli(t *testing.T) {
 		"--config=" + configPath,
 		"--no-confirm=false",
 		"--target-ts=10",
-		"--sink-uri=abcd",
+		"--sink-uri=kafka://user:update-password-sentinel@127.0.0.1:9092/topic",
 		"--schema-registry=a",
 		"--sort-engine=memory",
 		"--changefeed-id=abc",
@@ -155,7 +162,11 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	defer func() {
 		os.Stdin = stdin
 	}()
+	output := new(bytes.Buffer)
+	cmd.SetOut(output)
 	require.Nil(t, cmd.Execute())
+	require.NotContains(t, output.String(), "update-password-sentinel")
+	require.Contains(t, output.String(), "xxxxx")
 
 	// no diff
 	cmd = newCmdUpdateChangefeed(f)
