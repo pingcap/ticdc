@@ -84,6 +84,35 @@ func TestGateWaitUntilWritable(t *testing.T) {
 	require.False(t, gate.IsWritable())
 }
 
+func TestGateNotifiesOnlyWhenWritable(t *testing.T) {
+	now := time.Unix(100, 0)
+	gate := newGate(func() time.Time { return now })
+	gate.SetP2PRequired(true)
+
+	changed := gate.changed
+	require.True(t, gate.RenewP2P(now, P2PLeaseDuration))
+	select {
+	case <-changed:
+		t.Fatal("P2P renewal notified waiters while etcd proof was still expired")
+	default:
+	}
+
+	require.True(t, gate.RenewEtcd(now, EtcdProofDuration))
+	select {
+	case <-changed:
+	default:
+		t.Fatal("etcd renewal did not notify waiters when the gate became writable")
+	}
+
+	changed = gate.changed
+	require.True(t, gate.RenewEtcd(now.Add(time.Second), EtcdProofDuration))
+	select {
+	case <-changed:
+		t.Fatal("etcd renewal notified waiters while the gate remained writable")
+	default:
+	}
+}
+
 func TestGateNegotiatesP2PPerCoordinator(t *testing.T) {
 	now := time.Unix(100, 0)
 	gate := newGate(func() time.Time { return now })

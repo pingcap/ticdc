@@ -138,7 +138,10 @@ func (g *Gate) Status() Status {
 }
 
 func (g *Gate) isWritableAt(now time.Time) bool {
-	state := g.state.Load()
+	return isStateWritableAt(g.state.Load(), now)
+}
+
+func isStateWritableAt(state *leaseState, now time.Time) bool {
 	return !state.fenced &&
 		(!state.p2pRequired || now.Before(state.p2pValidUntil)) &&
 		now.Before(state.etcdProofValidUntil)
@@ -261,7 +264,12 @@ func (g *Gate) EtcdProofValidUntil() time.Time {
 }
 
 func (g *Gate) publishLocked(next *leaseState) {
+	now := g.now()
+	becameWritable := !isStateWritableAt(g.state.Load(), now) && isStateWritableAt(next, now)
 	g.state.Store(next)
+	if !becameWritable {
+		return
+	}
 	close(g.changed)
 	g.changed = make(chan struct{})
 }
