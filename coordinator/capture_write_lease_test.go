@@ -126,6 +126,41 @@ func TestCaptureWriteLeaseSingleNodeFallback(t *testing.T) {
 	require.Equal(t, uint64(1), requireWriteLeaseResponse(t, messages[0]).RequestSeq)
 }
 
+func TestCaptureWriteLeaseRetriesAnotherWitnessBeforeLeaseExpires(t *testing.T) {
+	now := time.Unix(100, 0)
+	controller := newCaptureWriteLeaseController(10, node.ID("coordinator"))
+	controller.now = func() time.Time { return now }
+	initializedNodes := []node.ID{"coordinator", "capture-1", "capture-2"}
+
+	controller.handleHeartbeat(node.ID("capture-1"), newWriteLeaseHeartbeat(21, 1), initializedNodes)
+	controller.handleHeartbeat(node.ID("capture-2"), newWriteLeaseHeartbeat(31, 1), initializedNodes)
+
+	messages := controller.handleHeartbeat(
+		node.ID("coordinator"),
+		newWriteLeaseHeartbeat(11, 1),
+		initializedNodes,
+	)
+	require.Len(t, messages, 1)
+	require.Equal(t, node.ID("capture-1"), messages[0].To)
+
+	now = now.Add(writelease.NodeHeartbeatInterval)
+	require.Empty(t, controller.handleHeartbeat(
+		node.ID("coordinator"),
+		newWriteLeaseHeartbeat(11, 2),
+		initializedNodes,
+	))
+
+	now = now.Add(writelease.NodeHeartbeatInterval)
+	messages = controller.handleHeartbeat(
+		node.ID("coordinator"),
+		newWriteLeaseHeartbeat(11, 3),
+		initializedNodes,
+	)
+	require.Len(t, messages, 1)
+	require.Equal(t, node.ID("capture-2"), messages[0].To)
+	require.Less(t, witnessChallengeTimeout, writelease.P2PLeaseDuration)
+}
+
 func TestCaptureWriteLeaseRejectsInvalidHeartbeatAndLateWitness(t *testing.T) {
 	now := time.Unix(100, 0)
 	controller := newCaptureWriteLeaseController(10, node.ID("coordinator"))
@@ -146,7 +181,7 @@ func TestCaptureWriteLeaseRejectsInvalidHeartbeatAndLateWitness(t *testing.T) {
 		[]node.ID{"coordinator", "capture-1"},
 	)
 	challenge := requireWriteLeaseResponse(t, challengeMessages[0]).GetWitnessChallenge()
-	now = now.Add(writelease.P2PLeaseDuration)
+	now = now.Add(witnessChallengeTimeout)
 
 	ackHeartbeat := newWriteLeaseHeartbeat(21, 4)
 	ackHeartbeat.WriteLeaseWitnessAck = &heartbeatpb.WriteLeaseWitnessAck{

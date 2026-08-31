@@ -26,7 +26,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/writelease"
 )
 
-const witnessNonceSize = 16
+const (
+	witnessNonceSize        = 16
+	witnessChallengeTimeout = time.Second
+)
 
 type captureLeaseNodeState struct {
 	nodeEpoch      uint64
@@ -180,7 +183,7 @@ func (c *captureWriteLeaseController) handleSelfHeartbeat(
 		witnessNodeID:    witness,
 		witnessNodeEpoch: witnessEpoch,
 		nonce:            nonce,
-		expiresAt:        c.now().Add(writelease.P2PLeaseDuration),
+		expiresAt:        c.now().Add(witnessChallengeTimeout),
 	}
 	response := &heartbeatpb.NodeHeartbeatResponse{
 		CoordinatorVersion: c.coordinatorVersion,
