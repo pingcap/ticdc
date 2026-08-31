@@ -24,12 +24,8 @@ function prepare() {
 	# Create changefeed
 	cdc_cli_changefeed create --sink-uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/"
 }
-function stop_cdc_guards() {
-	stop_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "cdc1"
-	stop_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "cdc2"
-}
 
-trap 'stop_cdc_guards; stop_test "$WORK_DIR"' EXIT
+trap 'stop_test "$WORK_DIR"' EXIT
 # Only support MySQL sink for complex transaction test
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare $*
@@ -59,7 +55,7 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "cdc1"
 	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "cdc2"
 
-	stop_cdc_guards
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 	echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
 fi

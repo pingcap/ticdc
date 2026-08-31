@@ -208,6 +208,8 @@ if [[ "$restart" == "true" ]]; then
 	guard_failure_file="$workdir/cdc$logsuffix.guard_failed"
 	guard_stop_file="$workdir/cdc$logsuffix.guard_stopped"
 	rm -f "$guard_failure_file" "$guard_stop_file"
+	guard_registry="$OUT_DIR/.cdc_guard_stops.$TEST_NAME"
+	printf '%s\n' "$guard_stop_file" >>"$guard_registry"
 	restart_count=0
 	while true; do
 		if GO_FAILPOINTS=$failpoint $binary $coverprofile_arg server $newarch \
