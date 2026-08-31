@@ -173,21 +173,29 @@ func (m *Manager) onNodeHeartbeatResponse(msg *messaging.TargetMessage) {
 		metrics.CaptureLeaseResponseRejectedCounter.WithLabelValues("unknown_sequence").Inc()
 		return
 	}
-	duration := time.Duration(response.GetLeaseDurationMs()) * time.Millisecond
-	if duration <= 0 || duration > writelease.P2PLeaseDuration {
-		metrics.CaptureLeaseResponseRejectedCounter.WithLabelValues("lease_duration").Inc()
-		return
-	}
-	if m.writeGate.RenewP2P(requestSentAt, duration) {
-		metrics.CaptureLeaseResponseCounter.WithLabelValues("accepted").Inc()
-		m.node.lastAppliedLeaseSeq = requestSeq
-		for seq := range m.node.writeLeaseRequestSentAt {
-			if seq <= requestSeq {
-				delete(m.node.writeLeaseRequestSentAt, seq)
-			}
-		}
+	leaseDurationMs := response.GetLeaseDurationMs()
+	if leaseDurationMs == 0 {
+		// The coordinator observed an unknown or legacy capture, so the whole
+		// cluster temporarily falls back to etcd-only write admission.
+		m.writeGate.SetP2PRequired(false)
 	} else {
-		metrics.CaptureLeaseResponseRejectedCounter.WithLabelValues("expired_or_fenced").Inc()
+		duration := time.Duration(leaseDurationMs) * time.Millisecond
+		if duration <= 0 || duration > writelease.P2PLeaseDuration {
+			metrics.CaptureLeaseResponseRejectedCounter.WithLabelValues("lease_duration").Inc()
+			return
+		}
+		if !m.writeGate.RenewP2P(requestSentAt, duration) {
+			metrics.CaptureLeaseResponseRejectedCounter.WithLabelValues("expired_or_fenced").Inc()
+			return
+		}
+		m.writeGate.SetP2PRequired(true)
+	}
+	metrics.CaptureLeaseResponseCounter.WithLabelValues("accepted").Inc()
+	m.node.lastAppliedLeaseSeq = requestSeq
+	for seq := range m.node.writeLeaseRequestSentAt {
+		if seq <= requestSeq {
+			delete(m.node.writeLeaseRequestSentAt, seq)
+		}
 	}
 }
 

@@ -52,6 +52,8 @@ type captureWriteLeaseController struct {
 	nonce              func([]byte) (int, error)
 
 	nodes            map[node.ID]*captureLeaseNodeState
+	p2pCapableNodes  map[node.ID]struct{}
+	p2pLeaseEnabled  bool
 	pendingWitness   *pendingWitnessChallenge
 	nextWitnessIndex int
 }
@@ -63,7 +65,32 @@ func newCaptureWriteLeaseController(version int64, selfNodeID node.ID) *captureW
 		now:                time.Now,
 		nonce:              rand.Read,
 		nodes:              make(map[node.ID]*captureLeaseNodeState),
+		p2pCapableNodes:    make(map[node.ID]struct{}),
 	}
+}
+
+func (c *captureWriteLeaseController) observeNodeCapability(id node.ID, version uint32) {
+	if version == heartbeatpb.CurrentWriteLeaseProtocolVersion {
+		c.p2pCapableNodes[id] = struct{}{}
+	} else {
+		delete(c.p2pCapableNodes, id)
+	}
+}
+
+// updateClusterMode enables P2P only when every active capture has reported
+// support for the current protocol. A missing capability is treated as legacy.
+func (c *captureWriteLeaseController) updateClusterMode(activeNodes []node.ID) {
+	p2pEnabled := len(activeNodes) > 0
+	for _, id := range activeNodes {
+		if _, ok := c.p2pCapableNodes[id]; !ok {
+			p2pEnabled = false
+			break
+		}
+	}
+	if c.p2pLeaseEnabled && !p2pEnabled {
+		c.pendingWitness = nil
+	}
+	c.p2pLeaseEnabled = p2pEnabled
 }
 
 func (c *captureWriteLeaseController) handleHeartbeat(
@@ -138,6 +165,13 @@ func (c *captureWriteLeaseController) handleSelfHeartbeat(
 	heartbeat *heartbeatpb.NodeHeartbeat,
 	initializedNodes []node.ID,
 ) []*messaging.TargetMessage {
+	if !c.p2pLeaseEnabled {
+		metrics.CaptureP2PWitnessAvailable.Set(0)
+		return []*messaging.TargetMessage{
+			c.newGrant(c.selfNodeID, heartbeat.GetNodeEpoch(), heartbeat.GetWriteLeaseRequestSeq()),
+		}
+	}
+
 	remoteExists := false
 	witnesses := make([]node.ID, 0, len(initializedNodes))
 	for _, id := range initializedNodes {
@@ -206,6 +240,12 @@ func (c *captureWriteLeaseController) newGrant(
 	targetNodeEpoch uint64,
 	requestSeq uint64,
 ) *messaging.TargetMessage {
+	// A zero duration is an authenticated, sequence-checked signal that the
+	// cluster is in mixed-version mode and P2P enforcement must stay disabled.
+	leaseDurationMs := uint64(0)
+	if c.p2pLeaseEnabled {
+		leaseDurationMs = uint64(writelease.P2PLeaseDuration.Milliseconds())
+	}
 	return messaging.NewSingleTargetMessage(
 		target,
 		messaging.MaintainerManagerTopic,
@@ -213,13 +253,14 @@ func (c *captureWriteLeaseController) newGrant(
 			CoordinatorVersion: c.coordinatorVersion,
 			TargetNodeEpoch:    targetNodeEpoch,
 			RequestSeq:         requestSeq,
-			LeaseDurationMs:    uint64(writelease.P2PLeaseDuration.Milliseconds()),
+			LeaseDurationMs:    leaseDurationMs,
 		},
 	)
 }
 
 func (c *captureWriteLeaseController) removeNode(id node.ID) {
 	delete(c.nodes, id)
+	delete(c.p2pCapableNodes, id)
 	if c.pendingWitness != nil &&
 		(c.pendingWitness.witnessNodeID == id || id == c.selfNodeID) {
 		c.pendingWitness = nil

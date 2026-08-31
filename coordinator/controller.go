@@ -215,6 +215,7 @@ func NewController(
 	added, _, requests, _ := c.bootstrapper.HandleNodesChange(nodes)
 	log.Info("coordinator bootstrap initial nodes",
 		zap.Int("addedCount", len(added)), zap.Any("addedNodes", nodes))
+	c.writeLease.updateClusterMode(c.bootstrapper.GetAllNodeIDs())
 
 	for _, req := range requests {
 		err := c.messageCenter.SendCommand(req)
@@ -528,6 +529,9 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 	for _, n := range addedNodes {
 		c.clearCompletedDrainTarget(n)
 	}
+	if c.writeLease != nil {
+		c.writeLease.updateClusterMode(c.bootstrapper.GetAllNodeIDs())
+	}
 	for _, req := range requests {
 		err := c.messageCenter.SendCommand(req)
 		if err != nil {
@@ -545,11 +549,11 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 		return
 	}
 	metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("received").Inc()
-	initializedNodes := make([]node.ID, 0)
-	for _, id := range c.bootstrapper.GetAllNodeIDs() {
-		if c.bootstrapper.NodeInitialized(id) {
-			initializedNodes = append(initializedNodes, id)
-		}
+	var initializedNodes []node.ID
+	if from == c.writeLease.selfNodeID {
+		// Only the coordinator capture needs remote membership to select a witness.
+		// Remote captures can be granted directly after sender validation.
+		initializedNodes = c.bootstrapper.GetInitializedNodeIDs()
 	}
 	messages := c.writeLease.handleHeartbeat(from, heartbeat, initializedNodes)
 	if len(messages) == 0 {
@@ -619,6 +623,10 @@ func (c *Controller) onMaintainerBootstrapResponse(ctx context.Context, req *mes
 		zap.Int("maintainerCount", len(response.Statuses)))
 	responses := c.bootstrapper.HandleBootstrapResponse(req.From, response)
 	if c.bootstrapper.HasNode(req.From) {
+		if c.writeLease != nil {
+			c.writeLease.observeNodeCapability(req.From, response.GetWriteLeaseProtocolVersion())
+			c.writeLease.updateClusterMode(c.bootstrapper.GetAllNodeIDs())
+		}
 		if c.maybeAddDispatcherDrainSyncNode(req.From, response.GetDrainProtocolVersion()) {
 			c.maybeBroadcastDispatcherDrainTarget(true)
 		} else if c.observeStaleDispatcherDrainTargetSnapshot(req.From, drainTargetSnapshotFromBootstrap(response)) {
@@ -1277,12 +1285,14 @@ func (c *Controller) submitPeriodTask() {
 
 func (c *Controller) newBootstrapMessage(id node.ID, addr string) *messaging.TargetMessage {
 	log.Info("send coordinator bootstrap request", zap.Any("nodeID", id), zap.String("nodeAddr", addr))
+	// Bootstrap every node in legacy mode while its capability is unknown. The
+	// periodic lease response enables P2P after every active node reports support.
 	return messaging.NewSingleTargetMessage(
 		id,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{
 			Version:                   c.version,
-			WriteLeaseProtocolVersion: heartbeatpb.CurrentWriteLeaseProtocolVersion,
+			WriteLeaseProtocolVersion: heartbeatpb.LegacyWriteLeaseProtocolVersion,
 		})
 }
 

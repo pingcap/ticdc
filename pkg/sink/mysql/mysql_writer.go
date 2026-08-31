@@ -148,7 +148,7 @@ func (w *Writer) SetWriteGate(gate *writelease.Gate) {
 }
 
 // grantWrite waits for a valid capture write lease. It returns false only when
-// the writer is shutting down, so callers must not execute the DML batch.
+// the writer is shutting down, so callers must not execute the downstream write.
 func (w *Writer) grantWrite() bool {
 	if w.writeGate == nil {
 		metrics.CaptureLastWriteAdmissionTimestamp.SetToCurrentTime()

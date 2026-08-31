@@ -305,6 +305,55 @@ func TestNodeHeartbeatResponseRenewsP2PWriteLease(t *testing.T) {
 	require.False(t, gate.IsWritable())
 }
 
+func TestNodeHeartbeatResponseUpdatesClusterP2PMode(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	gate := writelease.NewGate()
+	appcontext.SetService(appcontext.CaptureWriteGate, gate)
+
+	var nodeLiveness liveness.Liveness
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m.coordinatorID = node.ID("coordinator")
+	m.coordinatorVersion = 10
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+
+	m.sendNodeHeartbeat(true)
+	heartbeatMessage := <-mc.GetMessageChannel()
+	heartbeat := heartbeatMessage.Message[0].(*heartbeatpb.NodeHeartbeat)
+	grant := messaging.NewSingleTargetMessage(
+		m.nodeInfo.ID,
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.NodeHeartbeatResponse{
+			CoordinatorVersion: 10,
+			TargetNodeEpoch:    m.node.nodeEpoch,
+			RequestSeq:         heartbeat.WriteLeaseRequestSeq,
+			LeaseDurationMs:    uint64(writelease.P2PLeaseDuration.Milliseconds()),
+		},
+	)
+	grant.From = m.coordinatorID
+	m.onNodeHeartbeatResponse(grant)
+	require.True(t, gate.Status().P2PRequired)
+	require.True(t, gate.IsWritable())
+
+	m.sendNodeHeartbeat(true)
+	heartbeatMessage = <-mc.GetMessageChannel()
+	heartbeat = heartbeatMessage.Message[0].(*heartbeatpb.NodeHeartbeat)
+	disable := messaging.NewSingleTargetMessage(
+		m.nodeInfo.ID,
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.NodeHeartbeatResponse{
+			CoordinatorVersion: 10,
+			TargetNodeEpoch:    m.node.nodeEpoch,
+			RequestSeq:         heartbeat.WriteLeaseRequestSeq,
+			LeaseDurationMs:    0,
+		},
+	)
+	disable.From = m.coordinatorID
+	m.onNodeHeartbeatResponse(disable)
+	require.False(t, gate.Status().P2PRequired)
+	require.True(t, gate.IsWritable())
+}
+
 func TestNodeHeartbeatResponseEchoesWitnessChallenge(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
