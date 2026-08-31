@@ -65,7 +65,8 @@ func NewChangefeed(cfID common.ChangeFeedID,
 	uri, err := url.Parse(info.SinkURI)
 	if err != nil {
 		log.Panic("unable to parse sink-uri",
-			zap.String("url", util.MaskSensitiveDataInURIForError(info.SinkURI)), zap.Error(err))
+			zap.String("url", util.MaskSensitiveDataInURIForError(info.SinkURI)),
+			zap.Error(util.MaskSensitiveDataInURLError(err)))
 	}
 	res := &Changefeed{
 		ID:                       cfID,
