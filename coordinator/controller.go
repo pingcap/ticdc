@@ -54,6 +54,7 @@ const (
 	createChangefeedMaxRetry      = 10
 	createChangefeedRetryInterval = 5 * time.Second
 	delayWriteLeaseResponseMarker = "/tmp/ticdc-delay-write-lease-response"
+	dropWriteLeaseResponseMarker  = "/tmp/ticdc-drop-write-lease-response"
 	duplicateWriteLeaseMarker     = "/tmp/ticdc-duplicate-write-lease-response"
 )
 
@@ -586,10 +587,20 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 	if delayed {
 		return
 	}
+	dropped := false
+	failpoint.Inject("DropCaptureWriteLeaseResponse", func(value failpoint.Value) {
+		if value.(bool) && hasGrant && os.Remove(dropWriteLeaseResponseMarker) == nil {
+			dropped = true
+		}
+	})
+	if dropped {
+		return
+	}
 	failpoint.Inject("DuplicateCaptureWriteLeaseResponse", func(value failpoint.Value) {
 		if value.(bool) && hasGrant && os.Remove(duplicateWriteLeaseMarker) == nil {
 			for _, message := range messages {
-				_ = c.messageCenter.SendCommand(message)
+				duplicate := *message
+				_ = c.messageCenter.SendCommand(&duplicate)
 			}
 		}
 	})
