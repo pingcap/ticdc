@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -349,6 +350,65 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	kafkaSink.Close()
 	cancel()
 	kafkaSink.AddCheckpointTs(12345)
+}
+
+func TestKafkaSinkWriteGateBlocksDMLSend(t *testing.T) {
+	eventHelper := commonEvent.NewEventTestHelper(t)
+	defer eventHelper.Close()
+	eventHelper.Tk().MustExec("use test")
+	require.NotNil(t, eventHelper.DDL2Job("create table t (id int primary key)"))
+	dmlEvent := eventHelper.DML2Event("test", "t", "insert into t values (1)")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctrl := gomock.NewController(t)
+	asyncProducer := kafka.NewMockAsyncProducer(ctrl)
+	syncProducer := kafka.NewMockSyncProducer(ctrl)
+	sent := make(chan struct{}, 1)
+	asyncProducer.EXPECT().AsyncRunCallback(gomock.Any()).Return(nil).AnyTimes()
+	asyncProducer.EXPECT().AsyncSend(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(
+			_ context.Context,
+			_ string,
+			_ int32,
+			message *codecCommon.Message,
+		) error {
+			if message.Callback != nil {
+				message.Callback()
+			}
+			sent <- struct{}{}
+			return nil
+		}).Times(1)
+	asyncProducer.EXPECT().Close().AnyTimes()
+	syncProducer.EXPECT().Close().AnyTimes()
+
+	kafkaSink, err := newKafkaSinkForTestWithProducers(ctx, t, ctrl, asyncProducer, syncProducer)
+	require.NoError(t, err)
+	defer kafkaSink.Close()
+	gate := writelease.NewGate()
+	kafkaSink.SetWriteGate(gate)
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- kafkaSink.Run(ctx)
+	}()
+	kafkaSink.AddDMLEvent(dmlEvent)
+
+	select {
+	case <-sent:
+		t.Fatal("Kafka DML was sent while the capture write gate was closed")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	select {
+	case <-sent:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Kafka DML was not sent after the capture write gate reopened")
+	}
+
+	cancel()
+	require.ErrorIs(t, <-runDone, context.Canceled)
 }
 
 func TestKafkaSinkBatchConfig(t *testing.T) {

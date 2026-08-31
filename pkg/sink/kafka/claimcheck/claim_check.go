@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -41,6 +42,7 @@ type ClaimCheck struct {
 	// cost on send messages to the claim check external storage.
 	metricSendMessageDuration prometheus.Observer
 	metricSendMessageCount    prometheus.Counter
+	writeGate                 *writelease.Gate
 }
 
 // New return a new ClaimCheck.
@@ -82,6 +84,9 @@ func (c *ClaimCheck) WriteMessage(ctx context.Context, key, value []byte, fileNa
 			return errors.WrapError(errors.ErrMarshalFailed, err)
 		}
 	}
+	if err := writelease.WaitForWrite(ctx, c.writeGate); err != nil {
+		return err
+	}
 	start := time.Now()
 	err = c.storage.WriteFile(ctx, fileName, value)
 	if err != nil {
@@ -90,6 +95,12 @@ func (c *ClaimCheck) WriteMessage(ctx context.Context, key, value []byte, fileNa
 	c.metricSendMessageDuration.Observe(time.Since(start).Seconds())
 	c.metricSendMessageCount.Inc()
 	return nil
+}
+
+// SetWriteGate installs capture-wide write admission for claim-check object
+// publication.
+func (c *ClaimCheck) SetWriteGate(gate *writelease.Gate) {
+	c.writeGate = gate
 }
 
 // FileNameWithPrefix returns the file name with prefix, the full path.
