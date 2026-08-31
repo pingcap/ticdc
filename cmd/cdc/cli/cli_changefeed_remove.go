@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/spf13/cobra"
 )
 
@@ -70,7 +69,7 @@ func (o *removeChangefeedOptions) run(cmd *cobra.Command) error {
 		return err
 	}
 	checkpointTs := changefeedDetail.CheckpointTs
-	sinkURI := putil.MaskSensitiveDataInURI(changefeedDetail.SinkURI)
+	sinkURI := changefeedDetail.SinkURI
 
 	err = o.apiClient.Changefeeds().Delete(ctx, o.keyspace, o.changefeedID)
 	if err != nil {

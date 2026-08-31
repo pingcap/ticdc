@@ -159,7 +159,7 @@ func (s *GlobalReactorState) Update(key util.EtcdKey, value []byte, _ bool) erro
 	case etcd.CDCKeyTypeMetaVersion:
 	default:
 		log.Warn("receive an unexpected etcd event", zap.String("key", key.String()),
-			zap.Int("valueBytes", len(value)), zap.String("role", s.Role))
+			zap.String("role", s.Role))
 	}
 	return nil
 }
@@ -431,7 +431,7 @@ func (s *ChangefeedReactorState) Update(key util.EtcdKey, value []byte, _ bool) 
 		return errors.Trace(err)
 	}
 	if err := s.UpdateCDCKey(k, value); err != nil {
-		log.Error("failed to update status", zap.String("key", key.String()), zap.Int("valueBytes", len(value)))
+		log.Error("failed to update status", zap.String("key", key.String()))
 		return errors.Trace(err)
 	}
 	return nil

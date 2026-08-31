@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -269,76 +268,6 @@ func TestCfInfoToAPIModelMasksKafkaCredentials(t *testing.T) {
 	require.Equal(t, "plain-password-sentinel", *info.Config.Sink.KafkaConfig.SASLPassword)
 	require.Equal(t, "oauth-secret-sentinel", *info.Config.Sink.KafkaConfig.SASLOAuthClientSecret)
 	require.Contains(t, info.SinkURI, "sink-password-sentinel")
-}
-
-func TestRestoreMaskedChangefeedCredentials(t *testing.T) {
-	original := config.GetDefaultReplicaConfig()
-	original.Sink.SchemaRegistry = util.AddressOf(
-		"https://registry.example.com?access-key=registry-access-sentinel")
-	original.Sink.KafkaConfig = &config.KafkaConfig{
-		SASLPassword:          util.AddressOf("plain-password-sentinel"),
-		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
-		SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
-		SASLOAuthTokenURL: util.AddressOf(
-			"https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
-		Key: util.AddressOf("private-key-sentinel"),
-		LargeMessageHandle: &config.LargeMessageHandleConfig{
-			ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel",
-		},
-		GlueSchemaRegistryConfig: &config.GlueSchemaRegistryConfig{
-			AccessKey:       "glue-access-sentinel",
-			SecretAccessKey: "glue-secret-sentinel",
-			Token:           "glue-token-sentinel",
-		},
-	}
-
-	maskedAPI := ToAPIReplicaConfig(original)
-	maskedAPI.maskSensitiveData()
-	updated := maskedAPI.ToInternalReplicaConfig()
-	restoreMaskedSensitiveData(updated, original)
-
-	require.Equal(t, original.Sink.SchemaRegistry, updated.Sink.SchemaRegistry)
-	require.Equal(t, original.Sink.KafkaConfig, updated.Sink.KafkaConfig)
-
-	updatedWithURIChange := maskedAPI.ToInternalReplicaConfig()
-	updatedWithURIChange.Sink.KafkaConfig.SASLOAuthTokenURL = util.AddressOf(
-		*updatedWithURIChange.Sink.KafkaConfig.SASLOAuthTokenURL + "&audience=new-audience")
-	updatedWithURIChange.Sink.KafkaConfig.LargeMessageHandle.ClaimCheckStorageURI += "&region=new-region"
-	restoreMaskedSensitiveData(updatedWithURIChange, original)
-	require.Contains(t, *updatedWithURIChange.Sink.KafkaConfig.SASLOAuthTokenURL,
-		"client_secret=token-url-secret-sentinel")
-	require.Contains(t, *updatedWithURIChange.Sink.KafkaConfig.SASLOAuthTokenURL,
-		"audience=new-audience")
-	require.Contains(t, updatedWithURIChange.Sink.KafkaConfig.LargeMessageHandle.ClaimCheckStorageURI,
-		"access-key=claim-check-secret-sentinel")
-	require.Contains(t, updatedWithURIChange.Sink.KafkaConfig.LargeMessageHandle.ClaimCheckStorageURI,
-		"region=new-region")
-
-	updated.Sink.KafkaConfig.SASLPassword = util.AddressOf("replacement-password")
-	restoreMaskedSensitiveData(updated, original)
-	require.Equal(t, "replacement-password", *updated.Sink.KafkaConfig.SASLPassword)
-
-	originalSinkURI := "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel"
-	maskedSinkURI := util.MaskSensitiveDataInURI(originalSinkURI)
-	restoredSinkURI := restoreMaskedURI(maskedSinkURI, originalSinkURI)
-	require.Equal(t, originalSinkURI, restoredSinkURI)
-	maskedSinkURI = strings.Replace(maskedSinkURI, "/topic?", "/new-topic?", 1) + "&protocol=avro"
-	restoredSinkURI = restoreMaskedURI(maskedSinkURI, originalSinkURI)
-	require.NotEqual(t, originalSinkURI, restoredSinkURI)
-	require.Contains(t, restoredSinkURI, "sink-password-sentinel")
-	require.Contains(t, restoredSinkURI, "secret=uri-secret-sentinel")
-	require.Contains(t, restoredSinkURI, "/new-topic")
-
-	newEndpointURI := strings.Replace(maskedSinkURI, "127.0.0.1:9092", "new-broker:9092", 1)
-	restoredSinkURI = restoreMaskedURI(newEndpointURI, originalSinkURI)
-	require.NotEqual(t, originalSinkURI, restoredSinkURI)
-	require.NotContains(t, restoredSinkURI, "sink-password-sentinel")
-	require.NotContains(t, restoredSinkURI, "uri-secret-sentinel")
-
-	originalWithoutUserInfo := "kafka://127.0.0.1:9092/topic?secret=uri-secret-sentinel"
-	maskedWithoutUserInfo := util.MaskSensitiveDataInURI(originalWithoutUserInfo)
-	restoredSinkURI = restoreMaskedURI(maskedWithoutUserInfo, originalWithoutUserInfo)
-	require.Equal(t, originalWithoutUserInfo, restoredSinkURI)
 }
 
 func mustParseURLError(t *testing.T, rawURL string) error {

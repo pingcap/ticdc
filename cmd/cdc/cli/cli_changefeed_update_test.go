@@ -115,15 +115,21 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	o.changefeedID = "abc"
 	require.NotNil(t, o.run(cmd))
 
-	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").Return(changefeedInfoWithSensitiveData(), nil)
+	oldInfo := &v2.ChangeFeedInfo{
+		ID:      "abc",
+		SinkURI: "kafka://user:xxxxx@127.0.0.1:9092/topic",
+		Config:  v2.ToAPIReplicaConfig(config.GetDefaultReplicaConfig()),
+	}
+	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").Return(oldInfo, nil)
 	f.changefeeds.EXPECT().GetAllTables(gomock.Any(), gomock.Any(), "ks").
 		Return(&v2.Tables{}, nil)
 	f.changefeeds.EXPECT().Update(gomock.Any(), gomock.Any(), "ks", "abc").
 		DoAndReturn(func(_ context.Context, cfg *v2.ChangefeedConfig, _, _ string) (*v2.ChangeFeedInfo, error) {
-			require.Equal(t, "plain-password-sentinel", *cfg.ReplicaConfig.Sink.KafkaConfig.SASLPassword)
-			require.Equal(t, "gssapi-password-sentinel", *cfg.ReplicaConfig.Sink.KafkaConfig.SASLGssAPIPassword)
-			require.Equal(t, "oauth-secret-sentinel", *cfg.ReplicaConfig.Sink.KafkaConfig.SASLOAuthClientSecret)
-			return changefeedInfoWithSensitiveData(), nil
+			require.Contains(t, cfg.SinkURI, "update-password-sentinel")
+			return &v2.ChangeFeedInfo{
+				ID:      "abc",
+				SinkURI: "kafka://user:xxxxx@127.0.0.1:9092/topic",
+			}, nil
 		})
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "cf.toml")
@@ -134,7 +140,7 @@ func TestChangefeedUpdateCli(t *testing.T) {
 		"--config=" + configPath,
 		"--no-confirm=false",
 		"--target-ts=10",
-		"--sink-uri=abcd",
+		"--sink-uri=kafka://user:update-password-sentinel@127.0.0.1:9092/topic",
 		"--schema-registry=a",
 		"--sort-engine=memory",
 		"--changefeed-id=abc",
@@ -159,7 +165,8 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	output := new(bytes.Buffer)
 	cmd.SetOut(output)
 	require.Nil(t, cmd.Execute())
-	requireMaskedChangefeedOutput(t, output.String())
+	require.NotContains(t, output.String(), "update-password-sentinel")
+	require.Contains(t, output.String(), "xxxxx")
 
 	// no diff
 	cmd = newCmdUpdateChangefeed(f)

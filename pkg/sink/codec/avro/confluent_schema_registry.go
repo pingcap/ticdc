@@ -91,8 +91,7 @@ func NewConfluentSchemaManager(
 	resp, err := httpCli.Get(ctx, registryURL)
 	if err != nil {
 		err = util.MaskSensitiveDataInURLError(err)
-		log.Error("Test connection to Schema Registry failed",
-			zap.String("registryURL", util.MaskSensitiveDataInURI(registryURL)), zap.Error(err))
+		log.Error("Test connection to Schema Registry failed", zap.Error(err))
 		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	defer resp.Body.Close()
@@ -104,16 +103,13 @@ func NewConfluentSchemaManager(
 	}
 
 	if string(text[:]) != "{}" {
-		log.Error("Unexpected response from Schema Registry", zap.Int("responseBytes", len(text)))
+		log.Error("Unexpected response from Schema Registry", zap.ByteString("response", text))
 		return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
 			"Unexpected response from Schema Registry",
 		)
 	}
 
-	log.Info(
-		"Successfully tested connectivity to Schema Registry",
-		zap.String("registryURL", util.MaskSensitiveDataInURI(registryURL)),
-	)
+	log.Info("Successfully tested connectivity to Schema Registry")
 
 	return &confluentSchemaManager{
 		registryURL:  registryURL,
@@ -147,7 +143,7 @@ func (m *confluentSchemaManager) Register(
 		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	uri := m.registryURL + "/subjects/" + url.QueryEscape(schemaName) + "/versions"
-	log.Info("Registering schema", zap.String("uri", util.MaskSensitiveDataInURI(uri)), zap.ByteString("payload", payload))
+	log.Info("Registering schema", zap.ByteString("payload", payload))
 
 	req, err := http.NewRequestWithContext(ctx, "POST", uri, bytes.NewReader(payload))
 	if err != nil {
@@ -180,9 +176,8 @@ func (m *confluentSchemaManager) Register(
 		log.Error(
 			"Failed to register schema to the Registry, HTTP error",
 			zap.Int("status", resp.StatusCode),
-			zap.String("uri", util.MaskSensitiveDataInURI(uri)),
 			zap.ByteString("requestBody", payload),
-			zap.Int("responseBytes", len(body)),
+			zap.ByteString("responseBody", body),
 		)
 		return id, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(
 			"register schema failed with status " + strconv.Itoa(resp.StatusCode),
@@ -205,8 +200,7 @@ func (m *confluentSchemaManager) Register(
 
 	log.Info("Registered schema successfully",
 		zap.Int("schemaID", jsonResp.SchemaID),
-		zap.String("uri", util.MaskSensitiveDataInURI(uri)),
-		zap.Int("responseBytes", len(body)))
+		zap.ByteString("body", body))
 
 	id.confluentSchemaID = jsonResp.SchemaID
 	return id, nil
@@ -255,8 +249,7 @@ func (m *confluentSchemaManager) Lookup(
 	if resp.StatusCode != 200 && resp.StatusCode != 404 {
 		log.Error("Failed to query schema from the Registry, HTTP error",
 			zap.Int("status", resp.StatusCode),
-			zap.String("uri", util.MaskSensitiveDataInURI(uri)),
-			zap.Int("responseBytes", len(body)))
+			zap.ByteString("responseBody", body))
 		return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
 			"Failed to query schema from the Registry, HTTP error",
 		)

@@ -21,7 +21,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -991,14 +990,11 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	}
 	if updateCfConfig.ReplicaConfig != nil {
 		configUpdated = true
-		updatedConfig := updateCfConfig.ReplicaConfig.ToInternalReplicaConfig()
-		restoreMaskedSensitiveData(updatedConfig, oldCfInfo.Config)
-		oldCfInfo.Config = updatedConfig
+		oldCfInfo.Config = updateCfConfig.ReplicaConfig.ToInternalReplicaConfig()
 	}
 	if updateCfConfig.SinkURI != "" {
-		restoredSinkURI := restoreMaskedURI(updateCfConfig.SinkURI, oldCfInfo.SinkURI)
-		sinkURIUpdated = restoredSinkURI != oldCfInfo.SinkURI
-		oldCfInfo.SinkURI = restoredSinkURI
+		sinkURIUpdated = true
+		oldCfInfo.SinkURI = updateCfConfig.SinkURI
 	}
 	if updateCfConfig.StartTs != 0 {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("start_ts can not be updated"))
@@ -1102,146 +1098,6 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	)
 
 	c.JSON(getStatus(c), CfInfoToAPIModel(oldCfInfo, status, nil))
-}
-
-func restoreMaskedURI(updated, original string) string {
-	updatedURI, err := url.Parse(updated)
-	if err != nil {
-		return updated
-	}
-	originalURI, err := url.Parse(original)
-	if err != nil {
-		return updated
-	}
-	updatedUsername, originalUsername := "", ""
-	if updatedURI.User != nil {
-		updatedUsername = updatedURI.User.Username()
-	}
-	if originalURI.User != nil {
-		originalUsername = originalURI.User.Username()
-	}
-	if !strings.EqualFold(updatedURI.Scheme, originalURI.Scheme) ||
-		!strings.EqualFold(updatedURI.Host, originalURI.Host) ||
-		updatedUsername != originalUsername {
-		return updated
-	}
-
-	var updatedPassword, originalPassword string
-	var updatedHasPassword, originalHasPassword bool
-	if updatedURI.User != nil {
-		updatedPassword, updatedHasPassword = updatedURI.User.Password()
-	}
-	if originalURI.User != nil {
-		originalPassword, originalHasPassword = originalURI.User.Password()
-	}
-	if updatedHasPassword && updatedPassword == "xxxxx" && originalHasPassword {
-		updatedURI.User = url.UserPassword(updatedUsername, originalPassword)
-	}
-
-	maskedOriginalURI, err := url.Parse(util.MaskSensitiveDataInURI(original))
-	if err != nil {
-		return updatedURI.String()
-	}
-	updatedQuery := updatedURI.Query()
-	originalQuery := originalURI.Query()
-	maskedOriginalQuery := maskedOriginalURI.Query()
-	for key, values := range updatedQuery {
-		maskedOriginalValues, ok := maskedOriginalQuery[key]
-		if len(values) == 1 && values[0] == "xxxxx" && ok &&
-			len(maskedOriginalValues) == 1 && maskedOriginalValues[0] == "xxxxx" {
-			updatedQuery[key] = append([]string(nil), originalQuery[key]...)
-		}
-	}
-	updatedURI.RawQuery = updatedQuery.Encode()
-	return updatedURI.String()
-}
-
-func restoreMaskedSensitiveData(updated, original *config.ReplicaConfig) {
-	if updated == nil || original == nil {
-		return
-	}
-
-	masked := ToAPIReplicaConfig(original)
-	masked.maskSensitiveData()
-	maskedInternal := masked.ToInternalReplicaConfig()
-
-	if updated.Sink != nil && original.Sink != nil && maskedInternal.Sink != nil {
-		restoreMaskedString(&updated.Sink.SchemaRegistry, maskedInternal.Sink.SchemaRegistry, original.Sink.SchemaRegistry)
-		if updated.Sink.SchemaRegistry != nil && original.Sink.SchemaRegistry != nil {
-			value := restoreMaskedURI(*updated.Sink.SchemaRegistry, *original.Sink.SchemaRegistry)
-			updated.Sink.SchemaRegistry = &value
-		}
-
-		if updated.Sink.KafkaConfig != nil && original.Sink.KafkaConfig != nil && maskedInternal.Sink.KafkaConfig != nil {
-			updatedKafka := updated.Sink.KafkaConfig
-			originalKafka := original.Sink.KafkaConfig
-			maskedKafka := maskedInternal.Sink.KafkaConfig
-			restoreMaskedString(&updatedKafka.SASLPassword, maskedKafka.SASLPassword, originalKafka.SASLPassword)
-			restoreMaskedString(&updatedKafka.SASLGssAPIPassword, maskedKafka.SASLGssAPIPassword, originalKafka.SASLGssAPIPassword)
-			restoreMaskedString(&updatedKafka.SASLOAuthClientSecret, maskedKafka.SASLOAuthClientSecret, originalKafka.SASLOAuthClientSecret)
-			restoreMaskedString(&updatedKafka.SASLOAuthTokenURL, maskedKafka.SASLOAuthTokenURL, originalKafka.SASLOAuthTokenURL)
-			if updatedKafka.SASLOAuthTokenURL != nil && originalKafka.SASLOAuthTokenURL != nil {
-				value := restoreMaskedURI(*updatedKafka.SASLOAuthTokenURL, *originalKafka.SASLOAuthTokenURL)
-				updatedKafka.SASLOAuthTokenURL = &value
-			}
-			restoreMaskedString(&updatedKafka.Key, maskedKafka.Key, originalKafka.Key)
-
-			if updatedKafka.LargeMessageHandle != nil && originalKafka.LargeMessageHandle != nil && maskedKafka.LargeMessageHandle != nil {
-				restoreMaskedValue(
-					&updatedKafka.LargeMessageHandle.ClaimCheckStorageURI,
-					maskedKafka.LargeMessageHandle.ClaimCheckStorageURI,
-					originalKafka.LargeMessageHandle.ClaimCheckStorageURI)
-				updatedKafka.LargeMessageHandle.ClaimCheckStorageURI = restoreMaskedURI(
-					updatedKafka.LargeMessageHandle.ClaimCheckStorageURI,
-					originalKafka.LargeMessageHandle.ClaimCheckStorageURI)
-			}
-			if updatedKafka.GlueSchemaRegistryConfig != nil && originalKafka.GlueSchemaRegistryConfig != nil && maskedKafka.GlueSchemaRegistryConfig != nil {
-				restoreMaskedValue(&updatedKafka.GlueSchemaRegistryConfig.AccessKey, maskedKafka.GlueSchemaRegistryConfig.AccessKey, originalKafka.GlueSchemaRegistryConfig.AccessKey)
-				restoreMaskedValue(&updatedKafka.GlueSchemaRegistryConfig.SecretAccessKey, maskedKafka.GlueSchemaRegistryConfig.SecretAccessKey, originalKafka.GlueSchemaRegistryConfig.SecretAccessKey)
-				restoreMaskedValue(&updatedKafka.GlueSchemaRegistryConfig.Token, maskedKafka.GlueSchemaRegistryConfig.Token, originalKafka.GlueSchemaRegistryConfig.Token)
-			}
-		}
-
-		if updated.Sink.PulsarConfig != nil && original.Sink.PulsarConfig != nil && maskedInternal.Sink.PulsarConfig != nil {
-			updatedPulsar := updated.Sink.PulsarConfig
-			originalPulsar := original.Sink.PulsarConfig
-			maskedPulsar := maskedInternal.Sink.PulsarConfig
-			restoreMaskedString(&updatedPulsar.AuthenticationToken, maskedPulsar.AuthenticationToken, originalPulsar.AuthenticationToken)
-			restoreMaskedString(&updatedPulsar.BasicPassword, maskedPulsar.BasicPassword, originalPulsar.BasicPassword)
-			if updatedPulsar.OAuth2 != nil && originalPulsar.OAuth2 != nil && maskedPulsar.OAuth2 != nil {
-				restoreMaskedValue(&updatedPulsar.OAuth2.OAuth2PrivateKey, maskedPulsar.OAuth2.OAuth2PrivateKey, originalPulsar.OAuth2.OAuth2PrivateKey)
-			}
-		}
-	}
-
-	if updated.Consistent != nil && original.Consistent != nil && maskedInternal.Consistent != nil {
-		restoreMaskedString(&updated.Consistent.Storage, maskedInternal.Consistent.Storage, original.Consistent.Storage)
-		if updated.Consistent.Storage != nil && original.Consistent.Storage != nil {
-			value := restoreMaskedURI(*updated.Consistent.Storage, *original.Consistent.Storage)
-			updated.Consistent.Storage = &value
-		}
-	}
-}
-
-func restoreMaskedString(updated **string, masked, original *string) {
-	if updated == nil || *updated == nil || masked == nil || **updated != *masked {
-		return
-	}
-	if original != nil && *masked == *original {
-		return
-	}
-	if original == nil {
-		*updated = nil
-		return
-	}
-	value := *original
-	*updated = &value
-}
-
-func restoreMaskedValue(updated *string, masked, original string) {
-	if updated != nil && *updated == masked && masked != original {
-		*updated = original
-	}
 }
 
 func validateResumeChangefeedState(state config.FeedState) error {

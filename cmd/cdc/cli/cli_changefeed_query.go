@@ -98,10 +98,6 @@ func (o *queryChangefeedOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	detail, err = detail.CloneWithMaskedSensitiveData()
-	if err != nil {
-		return err
-	}
 	meta := &cfMeta{
 		UpstreamID:     detail.UpstreamID,
 		ID:             detail.ID,

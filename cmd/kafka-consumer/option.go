@@ -73,8 +73,7 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	}
 	scheme := strings.ToLower(upstreamURI.Scheme)
 	if scheme != "kafka" {
-		log.Panic("invalid upstream-uri scheme, the scheme of upstream-uri must be `kafka`",
-			zap.String("upstreamURI", putil.MaskSensitiveDataInURI(upstreamURIStr)))
+		log.Panic("invalid upstream-uri scheme, the scheme of upstream-uri must be `kafka`")
 	}
 
 	o.topic = strings.TrimFunc(upstreamURI.Path, func(r rune) bool {
@@ -167,11 +166,8 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 		zap.String("topic", o.topic),
 		zap.Int32("partitionNum", o.partitionNum),
 		zap.String("protocol", protocol.String()),
-		zap.String("schemaRegistryURL", putil.MaskSensitiveDataInURI(o.schemaRegistryURI)),
 		zap.String("groupID", o.groupID),
 		zap.Int("maxMessageBytes", o.maxMessageBytes),
 		zap.Int("maxBatchSize", o.maxBatchSize),
-		zap.String("configFile", configFile),
-		zap.String("upstreamURI", putil.MaskSensitiveDataInURI(upstreamURI.String())),
-		zap.String("downstreamURI", putil.MaskSensitiveDataInURI(o.downstreamURI)))
+		zap.String("configFile", configFile))
 }

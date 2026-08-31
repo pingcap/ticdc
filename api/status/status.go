@@ -68,7 +68,7 @@ func (h *statusAPI) writeEtcdInfo(ctx context.Context, cli etcd.CDCEtcdClient, w
 				value = info.String()
 			}
 		}
-		fmt.Fprintf(w, "%s\n\t%s\n\n", string(kv.Key), value)
+		_, _ = fmt.Fprintf(w, "%s\n\t%s\n\n", string(kv.Key), value)
 	}
 }
 

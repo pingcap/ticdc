@@ -113,11 +113,7 @@ func (o *OpenAPIV1) createChangefeed(c *gin.Context) {
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
 	c.Request.ContentLength = int64(len(jsonData))
 
-	changefeedConfig.SinkURI = util.MaskSensitiveDataInURI(changefeedConfig.SinkURI)
-	if changefeedConfig.SinkConfig != nil {
-		changefeedConfig.SinkConfig.MaskSensitiveData()
-	}
-	log.Info("create changefeed api v1", zap.Any("changefeedConfig", changefeedConfig))
+	log.Info("create changefeed api v1", zap.String("changefeedID", changefeedConfig.ID))
 
 	o.v2.CreateChangefeed(c)
 }
@@ -138,11 +134,7 @@ func (o *OpenAPIV1) updateChangefeed(c *gin.Context) {
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
 	c.Request.ContentLength = int64(len(jsonData))
 
-	changefeedConfig.SinkURI = util.MaskSensitiveDataInURI(changefeedConfig.SinkURI)
-	if changefeedConfig.SinkConfig != nil {
-		changefeedConfig.SinkConfig.MaskSensitiveData()
-	}
-	log.Info("update changefeed api v1", zap.Any("changefeedConfig", changefeedConfig))
+	log.Info("update changefeed api v1", zap.String("changefeedID", changefeedConfig.ID))
 	o.v2.UpdateChangefeed(c)
 }
 

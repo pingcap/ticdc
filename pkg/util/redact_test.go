@@ -615,15 +615,3 @@ func TestRedactStringsReturnsNewSlice(t *testing.T) {
 	require.NotEqual(t, original, result, "Result should be different from original")
 	require.Equal(t, []string{"?", "?", "?"}, result)
 }
-
-func TestMaskSensitiveString(t *testing.T) {
-	defer withRedactMode(t, perrors.RedactLogDisable)()
-
-	MaskSensitiveString(nil)
-	empty := ""
-	MaskSensitiveString(&empty)
-	require.Empty(t, empty)
-	value := "secret"
-	MaskSensitiveString(&value)
-	require.Equal(t, "******", value)
-}

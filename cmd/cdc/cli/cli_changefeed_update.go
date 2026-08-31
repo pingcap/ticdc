@@ -180,10 +180,6 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	info, err = info.CloneWithMaskedSensitiveData()
-	if err != nil {
-		return err
-	}
 	infoStr, err := info.Marshal()
 	if err != nil {
 		return err

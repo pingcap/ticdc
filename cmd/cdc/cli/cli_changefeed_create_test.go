@@ -14,7 +14,6 @@
 package cli
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -25,7 +24,6 @@ import (
 	"github.com/golang/mock/gomock"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
@@ -169,43 +167,14 @@ func TestChangefeedCreateCli(t *testing.T) {
 	f.changefeeds.EXPECT().VerifyTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(&v2.Tables{
 		IneligibleTables: []v2.TableName{{}},
 	}, nil)
-	f.changefeeds.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).Return(changefeedInfoWithSensitiveData(), nil)
-	output := new(bytes.Buffer)
-	cmd.SetOut(output)
+	f.changefeeds.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).Return(&v2.ChangeFeedInfo{}, nil)
 	require.Nil(t, cmd.Execute())
-	requireMaskedChangefeedOutput(t, output.String())
 
 	cmd = newCmdCreateChangefeed(f)
 	o := newCreateChangefeedOptions(newChangefeedCommonOptions())
 	o.commonChangefeedOptions.sortDir = "/tmp/test"
 	require.NoError(t, o.complete(f))
 	require.Contains(t, o.validate(cmd).Error(), "creating changefeed with `--sort-dir`")
-}
-
-func changefeedInfoWithSensitiveData() *v2.ChangeFeedInfo {
-	return &v2.ChangeFeedInfo{
-		ID:      "abc",
-		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?client_secret=uri-secret-sentinel",
-		Config: &v2.ReplicaConfig{Sink: &v2.SinkConfig{KafkaConfig: &v2.KafkaConfig{
-			SASLPassword:          util.AddressOf("plain-password-sentinel"),
-			SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
-			SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
-		}}},
-	}
-}
-
-func requireMaskedChangefeedOutput(t *testing.T, output string) {
-	t.Helper()
-	for _, secret := range []string{
-		"sink-password-sentinel",
-		"uri-secret-sentinel",
-		"plain-password-sentinel",
-		"gssapi-password-sentinel",
-		"oauth-secret-sentinel",
-	} {
-		require.NotContains(t, output, secret)
-	}
-	require.Contains(t, output, "******")
 }
 
 func TestCompleteReplicaCfgSkipConsistentStorageIOCheckInCLI(t *testing.T) {

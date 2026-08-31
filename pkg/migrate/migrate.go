@@ -229,7 +229,7 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 				err = info.Unmarshal(v.Value)
 				if err != nil {
 					log.Error("unmarshal changefeed failed",
-						zap.Int("valueBytes", len(v.Value)),
+						zap.String("key", oldKey),
 						zap.Error(err))
 					return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
 				}

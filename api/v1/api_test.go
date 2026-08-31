@@ -16,7 +16,6 @@ package v1
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,46 +26,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 )
-
-func TestChangefeedConfigMasksKafkaCredentials(t *testing.T) {
-	cfg := changefeedConfig{
-		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic" +
-			"?sasl-password=uri-password-sentinel&secret-access-key=uri-secret-sentinel",
-		SinkConfig: &config.SinkConfig{
-			SchemaRegistry: util.AddressOf("https://registry.example.com?access-key=registry-secret-sentinel"),
-			KafkaConfig: &config.KafkaConfig{
-				SASLPassword:          util.AddressOf("sasl-password-sentinel"),
-				SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
-				SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
-				Key:                   util.AddressOf("private-key-sentinel"),
-			},
-		},
-	}
-
-	cfg.SinkURI = util.MaskSensitiveDataInURI(cfg.SinkURI)
-	cfg.SinkConfig.MaskSensitiveData()
-	encoded, err := json.Marshal(cfg)
-	require.NoError(t, err)
-	output := string(encoded)
-	for _, secret := range []string{
-		"sink-password-sentinel",
-		"uri-password-sentinel",
-		"uri-secret-sentinel",
-		"registry-secret-sentinel",
-		"sasl-password-sentinel",
-		"gssapi-password-sentinel",
-		"oauth-secret-sentinel",
-		"private-key-sentinel",
-	} {
-		require.NotContains(t, output, secret)
-	}
-	require.Contains(t, output, "xxxxx")
-	require.Contains(t, output, "******")
-}
 
 func TestDrainCaptureRouteRequiresAuthentication(t *testing.T) {
 	configureDrainCaptureAuth(t, true)
