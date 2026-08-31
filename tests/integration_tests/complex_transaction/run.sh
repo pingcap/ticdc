@@ -45,9 +45,15 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 
 	echo "[$(date)] Workload completed, verifying data consistency with CDC sync..."
 
+	check_cdc_server_guard --workdir $WORK_DIR --logsuffix "cdc1"
+	check_cdc_server_guard --workdir $WORK_DIR --logsuffix "cdc2"
+
 	# Use sync_diff_inspector to verify data consistency
 	# It will retry until data is consistent or timeout
 	check_sync_diff $WORK_DIR $CUR/diff_config.toml 100 3
+
+	check_cdc_server_guard --workdir $WORK_DIR --logsuffix "cdc1"
+	check_cdc_server_guard --workdir $WORK_DIR --logsuffix "cdc2"
 
 	cleanup_process $CDC_BINARY
 	echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

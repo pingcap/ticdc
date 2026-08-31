@@ -205,6 +205,7 @@ if [[ "$restart" == "true" ]]; then
 		exit 1
 	fi
 
+	guard_failure_file="$workdir/cdc$logsuffix.guard_failed"
 	restart_count=0
 	while true; do
 		if GO_FAILPOINTS=$failpoint $binary $coverprofile_arg server $newarch \
@@ -226,8 +227,14 @@ if [[ "$restart" == "true" ]]; then
 			break
 		fi
 		if [ "$max_restarts" -ge 0 ] && [ "$restart_count" -ge "$max_restarts" ]; then
-			echo "[$(date)] cdc server $logsuffix exited unexpectedly (status $exit_status); max restarts ($max_restarts) exhausted" >&2
-			break
+			guard_exit_status=$exit_status
+			if [ "$guard_exit_status" -eq 0 ]; then
+				guard_exit_status=1
+			fi
+			guard_failure_message="[$(date)] cdc server $logsuffix exited unexpectedly (status $exit_status); max restarts ($max_restarts) exhausted"
+			echo "$guard_failure_message" >"$guard_failure_file"
+			echo "$guard_failure_message" >&2
+			exit "$guard_exit_status"
 		fi
 
 		restart_count=$((restart_count + 1))
