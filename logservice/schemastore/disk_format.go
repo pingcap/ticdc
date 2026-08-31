@@ -413,19 +413,10 @@ func physicalTableTraitsFromCommonTableInfo(
 	if tableFilter != nil {
 		eligible = tableFilter.IsEligibleTable(tableInfo)
 	}
-	splitable := tableInfo.GetPkColInfo() != nil
-	if splitable {
-		for _, index := range tableInfo.GetIndices() {
-			if !index.Primary && index.Unique {
-				splitable = false
-				break
-			}
-		}
-	}
 	return physicalTableTraits{
 		isView:    tableInfo.IsView(),
 		eligible:  eligible,
-		splitable: splitable,
+		splitable: commonEvent.IsSplitable(tableInfo),
 	}
 }
 
