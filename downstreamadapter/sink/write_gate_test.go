@@ -25,19 +25,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type transportGatedSink struct {
-	*mock.MockSink
-	gate *writelease.Gate
-}
-
-func (s *transportGatedSink) SetWriteGate(gate *writelease.Gate) {
-	s.gate = gate
-}
-
 func TestWriteGatedSinkBlocksAndResumesDML(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	inner := mock.NewMockSink(ctrl)
 	gate := writelease.NewGate()
+	inner.EXPECT().SetWriteGate(gate)
 	gated := sink.WithWriteGate(t.Context(), inner, gate)
 
 	written := make(chan struct{})
@@ -68,23 +60,12 @@ func TestWriteGatedSinkBlocksAndResumesDML(t *testing.T) {
 	<-done
 }
 
-func TestWriteGatedSinkDelegatesDMLAdmissionToTransport(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	innerMock := mock.NewMockSink(ctrl)
-	inner := &transportGatedSink{MockSink: innerMock}
-	gate := writelease.NewGate()
-	gated := sink.WithWriteGate(context.Background(), inner, gate)
-
-	innerMock.EXPECT().AddDMLEvent(nil)
-	gated.AddDMLEvent(nil)
-	require.Same(t, gate, inner.gate)
-}
-
 func TestWriteGatedSinkStopsWaitingWhenContextIsCanceled(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	inner := mock.NewMockSink(ctrl)
 	gate := writelease.NewGate()
 	ctx, cancel := context.WithCancel(context.Background())
+	inner.EXPECT().SetWriteGate(gate)
 	gated := sink.WithWriteGate(ctx, inner, gate)
 
 	done := make(chan error, 1)
@@ -99,6 +80,7 @@ func TestWriteGatedSinkCoversEveryWriteEntry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	inner := mock.NewMockSink(ctrl)
 	gate := writelease.NewGate()
+	inner.EXPECT().SetWriteGate(gate)
 	gated := sink.WithWriteGate(t.Context(), inner, gate)
 
 	// A checkpoint is safe to drop while closed because later checkpoints
