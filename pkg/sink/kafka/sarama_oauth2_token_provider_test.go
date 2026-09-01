@@ -15,21 +15,17 @@ package kafka
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/x509"
 	"encoding/pem"
 	"io"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
 )
@@ -185,35 +181,16 @@ func TestTokenProviderRejectsMismatchedOAuthCA(t *testing.T) {
 	t.Parallel()
 
 	tokenServer := newTLSTokenServer(t)
-	options := newOAuthOptions(tokenServer.URL, writeUnrelatedCA(t))
+	unrelatedCA, err := security.NewCA()
+	require.NoError(t, err)
+	caPath := filepath.Join(t.TempDir(), "unrelated-ca.pem")
+	require.NoError(t, os.WriteFile(caPath, unrelatedCA.CAPEM, 0o600))
+	options := newOAuthOptions(tokenServer.URL, caPath)
 
 	provider, err := newTokenProvider(t.Context(), options)
 	require.NoError(t, err)
 	_, err = provider.Token()
 	require.ErrorContains(t, err, "certificate signed by unknown authority")
-}
-
-func writeUnrelatedCA(t *testing.T) string {
-	t.Helper()
-
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	certificate, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
-	require.NoError(t, err)
-
-	caPath := filepath.Join(t.TempDir(), "unrelated-ca.pem")
-	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate})
-	require.NotNil(t, caPEM)
-	require.NoError(t, os.WriteFile(caPath, caPEM, 0o600))
-	return caPath
 }
 
 func TestTokenProviderWithoutOAuthCAKeepsContextHTTPClient(t *testing.T) {

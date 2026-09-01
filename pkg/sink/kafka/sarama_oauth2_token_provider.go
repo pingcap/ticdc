@@ -116,14 +116,9 @@ func contextWithOAuthCA(ctx context.Context, caPath string) (context.Context, er
 			caPath, http.DefaultTransport)
 	}
 	transport := defaultTransport.Clone()
-	tlsConfig := transport.TLSClientConfig
-	if tlsConfig == nil {
-		tlsConfig = &tls.Config{}
-	} else {
-		tlsConfig = tlsConfig.Clone()
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{}
 	}
-	tlsConfig.RootCAs = rootCAs
-	transport.TLSClientConfig = tlsConfig
-	httpClient := &http.Client{Transport: transport}
-	return context.WithValue(ctx, oauth2.HTTPClient, httpClient), nil
+	transport.TLSClientConfig.RootCAs = rootCAs
+	return context.WithValue(ctx, oauth2.HTTPClient, &http.Client{Transport: transport}), nil
 }
