@@ -595,8 +595,16 @@ func parseValue(
 	return val
 }
 
+func startTsFromMessage(msg *message) uint64 {
+	if msg.StartTs != 0 {
+		return msg.StartTs
+	}
+	return msg.CommitTs
+}
+
 func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowChecksum bool, db *sql.DB) *commonEvent.DMLEvent {
 	result := &commonEvent.DMLEvent{
+		StartTs:         startTsFromMessage(msg),
 		CommitTs:        msg.CommitTs,
 		PhysicalTableID: msg.TableID,
 		TableInfo:       tableInfo,

@@ -97,6 +97,9 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 				DebeziumConfig: &DebeziumConfig{
 					IncludeStartTs: util.AddressOf(true),
 				},
+				SimpleConfig: &SimpleConfig{
+					IncludeStartTs: util.AddressOf(true),
+				},
 			},
 			SyncPointInterval: &JSONDuration{duration: 10 * time.Minute},
 			Integrity: &IntegrityConfig{
@@ -120,6 +123,7 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 	require.Contains(t, out, `sink-uri = "blackhole://"`)
 	require.Contains(t, out, "start-ts")
 	require.Contains(t, out, "[config.sink.debezium]")
+	require.Contains(t, out, "[config.sink.simple]")
 	require.Contains(t, out, "include-start-ts = true")
 	require.NotContains(t, out, "gid") // GID is omitted from TOML (toml:"-")
 
@@ -139,6 +143,7 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 	require.Equal(t, "correctness", util.GetOrZero(wrapper.Config.Integrity.IntegrityCheckLevel))
 	require.Equal(t, "eventual", util.GetOrZero(wrapper.Config.Consistent.Level))
 	require.True(t, util.GetOrZero(wrapper.Config.Sink.Debezium.IncludeStartTs))
+	require.True(t, util.GetOrZero(wrapper.Config.Sink.Simple.IncludeStartTs))
 }
 
 func TestCodecConfigTOMLRoundTripToInternal(t *testing.T) {

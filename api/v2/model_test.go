@@ -90,6 +90,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 			DebeziumConfig: &DebeziumConfig{
 				IncludeStartTs: util.AddressOf(true),
 			},
+			SimpleConfig: &SimpleConfig{
+				IncludeStartTs: util.AddressOf(true),
+			},
 		},
 		Mounter: &MounterConfig{
 			WorkerNum: util.AddressOf(16),
@@ -124,6 +127,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(1024), util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolDiskQuota))
 	require.Equal(t, "/tmp/ticdc-spool", util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolBaseDir))
 	require.True(t, util.GetOrZero(internalCfg.Sink.Debezium.IncludeStartTs))
+	require.True(t, util.GetOrZero(internalCfg.Sink.Simple.IncludeStartTs))
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
 	require.True(t, util.GetOrZero(internalCfg.Scheduler.EnableTableAcrossNodes))
 	require.Equal(t, 1000, util.GetOrZero(internalCfg.Scheduler.RegionThreshold))
@@ -168,6 +172,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(1024), *apiCfgBack.Sink.CloudStorageConfig.SpoolDiskQuota)
 	require.Equal(t, "/tmp/ticdc-spool", *apiCfgBack.Sink.CloudStorageConfig.SpoolBaseDir)
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.IncludeStartTs))
+	require.True(t, util.GetOrZero(apiCfgBack.Sink.SimpleConfig.IncludeStartTs))
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.OutputOldValue))
 	require.Equal(t, 16, *apiCfgBack.Mounter.WorkerNum)
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
