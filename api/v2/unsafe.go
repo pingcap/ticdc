@@ -16,11 +16,13 @@ package v2
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/logservice/txnutil"
+	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"go.uber.org/zap"
@@ -35,9 +37,18 @@ func (h *OpenAPIV2) CDCMetaData(c *gin.Context) {
 	}
 	resp := make([]EtcdData, 0, len(kvs))
 	for _, pair := range kvs {
+		value := string(pair.Value)
+		if strings.Contains(string(pair.Key), "/changefeed/info/") {
+			info := new(config.ChangeFeedInfo)
+			if err := info.Unmarshal(pair.Value); err != nil {
+				value = "<redacted>"
+			} else {
+				value = info.String()
+			}
+		}
 		resp = append(resp, EtcdData{
 			Key:   string(pair.Key),
-			Value: string(pair.Value),
+			Value: value,
 		})
 	}
 	c.IndentedJSON(http.StatusOK, resp)
@@ -59,10 +70,10 @@ func (h *OpenAPIV2) ResolveLock(c *gin.Context) {
 	keyspaceMeta := middleware.GetKeyspaceFromContext(c)
 
 	txnResolver := txnutil.NewLockerResolver()
-	if err := txnResolver.Resolve(schemaCxt, keyspaceMeta.Id, resolveLockReq.RegionID, resolveLockReq.Ts); err != nil {
+	if err := txnResolver.Resolve(schemaCxt, keyspaceMeta.GetId(), resolveLockReq.RegionID, resolveLockReq.Ts); err != nil {
 		log.Error(
 			"resolve lock failed",
-			zap.Uint32("keyspaceID", keyspaceMeta.Id),
+			zap.Uint32("keyspaceID", keyspaceMeta.GetId()),
 			zap.Uint64("regionID", resolveLockReq.RegionID),
 			zap.Uint64("resolveLockTs", resolveLockReq.Ts),
 			zap.Error(err),
@@ -87,7 +98,7 @@ func (h *OpenAPIV2) DeleteServiceGcSafePoint(c *gin.Context) {
 	err := gc.UnifyDeleteGcSafepoint(
 		c,
 		pdClient,
-		keyspaceMeta.Id,
+		keyspaceMeta.GetId(),
 		h.server.GetEtcdClient().GetGCServiceID(),
 	)
 	if err != nil {

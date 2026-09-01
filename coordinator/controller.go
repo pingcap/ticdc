@@ -867,7 +867,10 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 				c.operatorController.StopChangefeed(ctx, cfID, remove)
 			}
 			c.stopStaleBootstrapMaintainers(cfID, staleMaintainers, remove)
-			log.Info("stop changefeed when bootstrapping", zap.String("changefeed", cfID.String()), zap.Any("meta", cfMeta))
+			log.Info("stop changefeed when bootstrapping",
+				zap.String("changefeed", cfID.String()),
+				zap.Int("progress", int(cfMeta.Status.Progress)),
+				zap.Uint64("checkpointTs", cfMeta.Status.CheckpointTs))
 		default:
 			c.stopStaleBootstrapMaintainers(cfID, staleMaintainers, false)
 		}

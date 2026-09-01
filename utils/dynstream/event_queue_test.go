@@ -239,6 +239,7 @@ func TestRemovePath(t *testing.T) {
 	events, _, _, _ := eq.popEvents(b)
 	require.Equal(t, 0, len(events))
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
+	require.Equal(t, []*mockEvent{{value: 1}}, handler.drainDroppedEvents())
 }
 
 func TestAreaBatchCount(t *testing.T) {

@@ -19,11 +19,13 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/version"
@@ -57,7 +59,16 @@ func (h *statusAPI) writeEtcdInfo(ctx context.Context, cli etcd.CDCEtcdClient, w
 	}
 
 	for _, kv := range kvs {
-		fmt.Fprintf(w, "%s\n\t%s\n\n", string(kv.Key), string(kv.Value))
+		value := string(kv.Value)
+		if strings.Contains(string(kv.Key), "/changefeed/info/") {
+			info := new(config.ChangeFeedInfo)
+			if err := info.Unmarshal(kv.Value); err != nil {
+				value = "<redacted>"
+			} else {
+				value = info.String()
+			}
+		}
+		_, _ = fmt.Fprintf(w, "%s\n\t%s\n\n", string(kv.Key), value)
 	}
 }
 

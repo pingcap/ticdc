@@ -95,8 +95,10 @@ func (q *controlQueue) ready() <-chan struct{} {
 type regionRequestWorker struct {
 	workerID uint64
 
-	client *subscriptionClient
-	store  *requestedStore
+	upstream       *upstreamHandle
+	eventSink      *regionEventSink
+	failureHandler *regionFailureHandler
+	storeAddr      string
 
 	admission    *regionAdmissionController
 	controlQueue *controlQueue
@@ -104,17 +106,27 @@ type regionRequestWorker struct {
 }
 
 func newRegionRequestWorker(
-	client *subscriptionClient,
-	store *requestedStore,
+	upstream *upstreamHandle,
+	eventSink *regionEventSink,
+	failureHandler *regionFailureHandler,
+	storeAddr string,
 	currentWindow int,
 	maxWindowMultiplier int,
+	memoryQuota *memoryQuotaController,
 ) *regionRequestWorker {
 	workerID := workerIDGen.Add(1)
 	return &regionRequestWorker{
-		workerID:     workerID,
-		client:       client,
-		store:        store,
-		admission:    newRegionAdmissionController(currentWindow, maxWindowMultiplier),
+		workerID:       workerID,
+		upstream:       upstream,
+		eventSink:      eventSink,
+		failureHandler: failureHandler,
+		storeAddr:      storeAddr,
+		admission: newRegionAdmissionController(
+			currentWindow,
+			maxWindowMultiplier,
+			memoryQuota,
+			upstream.pdClock,
+		),
 		controlQueue: newControlQueue(),
 		tracker:      newRegionTracker(),
 	}
@@ -130,7 +142,7 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 		// - admission: requests owned by this worker but not sent yet.
 		for _, state := range s.tracker.Drain() {
 			state.markStopped(regionErr)
-			s.client.eventSink.Push(
+			s.eventSink.Push(
 				SubscriptionID(state.requestID),
 				regionEvent{states: []*regionFeedState{state}},
 			)
@@ -138,10 +150,10 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 		// The failed stream no longer owns remote registrations.
 		s.controlQueue.drain()
 		if firstReq != nil && firstReq.abort() {
-			s.client.onRegionFail(newRegionErrorInfo(firstReq.regionInfo, regionErr))
+			s.failureHandler.Report(newRegionErrorInfo(firstReq.regionInfo, regionErr))
 		}
 		for _, task := range s.admission.drain() {
-			s.client.onRegionFail(newRegionErrorInfo(task.regionInfo, regionErr))
+			s.failureHandler.Report(newRegionErrorInfo(task.regionInfo, regionErr))
 		}
 	}
 
@@ -182,7 +194,7 @@ func (s *regionRequestWorker) waitForRegionRequest(ctx context.Context) (*region
 }
 
 func (s *regionRequestWorker) checkStoreVersion(ctx context.Context) error {
-	err := version.CheckStoreVersion(ctx, s.client.pd)
+	err := version.CheckStoreVersion(ctx, s.upstream.pd)
 	if err == nil {
 		return nil
 	}
@@ -191,7 +203,7 @@ func (s *regionRequestWorker) checkStoreVersion(ctx context.Context) error {
 	}
 	log.Error("event feed check store version fails",
 		zap.Uint64("workerID", s.workerID),
-		zap.String("addr", s.store.storeAddr),
+		zap.String("addr", s.storeAddr),
 		zap.Error(err))
 	if cerror.Is(err, cerror.ErrGetAllStoresFailed) {
 		return &getStoreErr{}
@@ -206,22 +218,22 @@ func (s *regionRequestWorker) runStream(ctx context.Context, firstReq *regionReq
 
 	log.Info("region request worker going to create grpc stream",
 		zap.Uint64("workerID", s.workerID),
-		zap.String("addr", s.store.storeAddr))
+		zap.String("addr", s.storeAddr))
 	defer func() {
 		log.Info("region request worker exits",
 			zap.Uint64("workerID", s.workerID),
-			zap.String("addr", s.store.storeAddr),
+			zap.String("addr", s.storeAddr),
 			zap.Error(err))
 	}()
 
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
 	g, gctx := errgroup.WithContext(streamCtx)
-	conn, err := Connect(gctx, s.client.credential, s.store.storeAddr)
+	conn, err := Connect(gctx, s.upstream.credential, s.storeAddr)
 	if err != nil {
 		log.Warn("region request worker create grpc stream failed",
 			zap.Uint64("workerID", s.workerID),
-			zap.String("addr", s.store.storeAddr),
+			zap.String("addr", s.storeAddr),
 			zap.Error(err))
 		if conn != nil && conn.Conn != nil {
 			_ = conn.Conn.Close()
@@ -269,7 +281,7 @@ func (s *regionRequestWorker) receiveAndDispatchChangeEvents(conn *ConnAndClient
 		if err != nil {
 			log.Info("region request worker receive from grpc stream failed",
 				zap.Uint64("workerID", s.workerID),
-				zap.String("addr", s.store.storeAddr),
+				zap.String("addr", s.storeAddr),
 				zap.String("code", grpcstatus.Code(err).String()),
 				zap.Error(err))
 			return normalizeStreamError(err)
@@ -301,6 +313,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 				}
 				regionEvent.entries = eventData
 			case *cdcpb.Event_Admin_:
+				// ignore
 				continue
 			case *cdcpb.Event_Error:
 				log.Debug("region request worker receives a region error",
@@ -312,12 +325,11 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			case *cdcpb.Event_ResolvedTs:
 				regionEvent.resolvedTs = eventData.ResolvedTs
 			case *cdcpb.Event_LongTxn_:
-				// ignore
 				continue
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.client.eventSink.Push(subscriptionID, regionEvent)
+			s.eventSink.Push(subscriptionID, regionEvent)
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
@@ -358,7 +370,7 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 		if len(resolvedStates) == 0 {
 			return
 		}
-		s.client.eventSink.Push(subscriptionID, regionEvent{
+		s.eventSink.Push(subscriptionID, regionEvent{
 			resolvedTs: resolvedTsEvent.Ts,
 			states:     resolvedStates,
 		})
@@ -394,7 +406,7 @@ func (s *regionRequestWorker) sendChangeDataRequest(
 			zap.Uint64("workerID", s.workerID),
 			zap.Uint64("subscriptionID", req.RequestId),
 			zap.Uint64("regionID", req.RegionId),
-			zap.String("addr", s.store.storeAddr),
+			zap.String("addr", s.storeAddr),
 			zap.Error(err))
 		return normalizeStreamError(err)
 	}
@@ -406,7 +418,7 @@ func (s *regionRequestWorker) sendDeregisterRequest(
 	req deregisterRequest,
 ) error {
 	changeDataReq := &cdcpb.ChangeDataRequest{
-		Header:    &cdcpb.Header{ClusterId: s.client.clusterID, TicdcVersion: version.ReleaseSemver()},
+		Header:    &cdcpb.Header{ClusterId: s.upstream.clusterID, TicdcVersion: version.ReleaseSemver()},
 		RequestId: uint64(req.subID),
 		Request: &cdcpb.ChangeDataRequest_Deregister_{
 			Deregister: &cdcpb.ChangeDataRequest_Deregister{},
@@ -418,7 +430,7 @@ func (s *regionRequestWorker) sendDeregisterRequest(
 	}
 	for _, state := range s.tracker.TakeSubscription(req.subID) {
 		state.markStopped(&requestCancelledErr{})
-		s.client.eventSink.Push(req.subID, regionEvent{states: []*regionFeedState{state}})
+		s.eventSink.Push(req.subID, regionEvent{states: []*regionFeedState{state}})
 	}
 	return nil
 }
@@ -433,18 +445,20 @@ func (s *regionRequestWorker) sendRegionRequest(conn *ConnAndClient, req *region
 		zap.Uint64("workerID", s.workerID),
 		zap.Uint64("subscriptionID", uint64(subID)),
 		zap.Uint64("regionID", region.verID.GetID()),
-		zap.String("storeAddr", s.store.storeAddr),
+		zap.String("addr", s.storeAddr),
 		zap.Bool("bdrMode", region.filterLoop))
 
 	if region.subscribedSpan.stopped.Load() {
 		req.abort()
-		s.client.onRegionFail(newRegionErrorInfo(region, &requestCancelledErr{}))
+		s.failureHandler.Report(newRegionErrorInfo(region, &requestCancelledErr{}))
 		return nil
 	}
 
 	// Publish the state before Send so a fast response observes its owner and
 	// admission lease.
-	state := newRegionFeedState(region, uint64(subID), s, req)
+	state := newRegionFeedState(region, uint64(subID), s, req, func(state *regionFeedState) {
+		s.failureHandler.resetRegionRecovery(state.region)
+	})
 	if !s.tracker.Add(subID, region.verID.GetID(), state) {
 		// RangeLock normally prevents duplicate active regions. Keep the existing
 		// owner, including its range-lock ownership, if that invariant is ever
@@ -457,7 +471,7 @@ func (s *regionRequestWorker) sendRegionRequest(conn *ConnAndClient, req *region
 			zap.Uint64("regionID", region.verID.GetID()))
 		return nil
 	}
-	if err := s.sendChangeDataRequest(conn, createRegionRequest(s.client.clusterID, region)); err != nil {
+	if err := s.sendChangeDataRequest(conn, createRegionRequest(s.upstream.clusterID, region)); err != nil {
 		// Transport failures are always recoverable at the region level. Preserve
 		// the stream error as the function result, but classify the region for
 		// rescheduling instead of exposing an arbitrary gRPC error downstream.

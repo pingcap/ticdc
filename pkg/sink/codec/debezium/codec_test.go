@@ -1544,3 +1544,44 @@ func BenchmarkEncodeLargeBinary(b *testing.B) {
 		codec.EncodeValue(e, buf)
 	}
 }
+
+func TestStartTsNotInDDLAndCheckpointEvents(t *testing.T) {
+	// Even with debezium-include-start-ts enabled, DDL and checkpoint
+	// (watermark) messages must not declare start_ts in their schemas:
+	// their payloads never carry the field (no per-row transaction), and a
+	// declared-but-absent non-optional field breaks schema-validating consumers.
+	codec := &dbzCodec{
+		config:    common.NewConfig(config.ProtocolDebezium),
+		clusterID: "test_cluster",
+		nowFunc:   func() time.Time { return time.Unix(1701326309, 0) },
+	}
+	codec.config.DebeziumIncludeStartTs = true
+	codec.config.DebeziumDisableSchema = false
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job(`create table test.table1(id int(10) primary key)`)
+	job := helper.DDL2Job(`RENAME TABLE test.table1 to test.table2`)
+	tableInfo := helper.GetTableInfo(job)
+
+	e := &commonEvent.DDLEvent{
+		FinishedTs:      1,
+		TableInfo:       tableInfo,
+		SchemaName:      "test",
+		TableName:       "table2",
+		ExtraSchemaName: "test",
+		ExtraTableName:  "table1",
+		Type:            byte(timodel.ActionRenameTable),
+		Query:           job.Query,
+	}
+	keyBuf := bytes.NewBuffer(nil)
+	buf := bytes.NewBuffer(nil)
+	require.NoError(t, codec.EncodeDDLEvent(e, keyBuf, buf))
+	require.NotContains(t, buf.String(), "start_ts")
+
+	keyBuf.Reset()
+	buf.Reset()
+	require.NoError(t, codec.EncodeCheckpointEvent(3, keyBuf, buf))
+	require.NotContains(t, buf.String(), "start_ts")
+}

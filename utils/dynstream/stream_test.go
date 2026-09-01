@@ -208,6 +208,20 @@ func TestPathInfo(t *testing.T) {
 	require.Equal(t, int64(0), pi.pendingSize.Load())
 }
 
+func TestDropPoppedBatchAfterRemovePath(t *testing.T) {
+	handler := mockHandler{}
+	stream := newStream(1, "test", &handler, Option{}, newTestBatchConfigRegistry())
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil)
+	events := []*mockEvent{{id: 1}, {id: 2}}
+
+	require.False(t, stream.dropBatchIfPathRemoved(path, events))
+	require.Empty(t, handler.drainDroppedEvents())
+
+	path.removed.Store(true)
+	require.True(t, stream.dropBatchIfPathRemoved(path, events))
+	require.Equal(t, events, handler.drainDroppedEvents())
+}
+
 func TestStreamEvictsOldestBatchMetricCacheEntry(t *testing.T) {
 	handler := mockHandler{}
 	stream := newStream(1, "test-batch-metric-cache-limit", &handler, Option{}, newTestBatchConfigRegistry())
