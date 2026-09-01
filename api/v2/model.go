@@ -454,6 +454,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				SASLOAuthClientID:            c.Sink.KafkaConfig.SASLOAuthClientID,
 				SASLOAuthClientSecret:        c.Sink.KafkaConfig.SASLOAuthClientSecret,
 				SASLOAuthTokenURL:            c.Sink.KafkaConfig.SASLOAuthTokenURL,
+				SASLOAuthCA:                  c.Sink.KafkaConfig.SASLOAuthCA,
 				SASLOAuthScopes:              c.Sink.KafkaConfig.SASLOAuthScopes,
 				SASLOAuthGrantType:           c.Sink.KafkaConfig.SASLOAuthGrantType,
 				SASLOAuthAudience:            c.Sink.KafkaConfig.SASLOAuthAudience,
@@ -778,6 +779,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				SASLOAuthClientID:            cloned.Sink.KafkaConfig.SASLOAuthClientID,
 				SASLOAuthClientSecret:        cloned.Sink.KafkaConfig.SASLOAuthClientSecret,
 				SASLOAuthTokenURL:            cloned.Sink.KafkaConfig.SASLOAuthTokenURL,
+				SASLOAuthCA:                  cloned.Sink.KafkaConfig.SASLOAuthCA,
 				SASLOAuthScopes:              cloned.Sink.KafkaConfig.SASLOAuthScopes,
 				SASLOAuthGrantType:           cloned.Sink.KafkaConfig.SASLOAuthGrantType,
 				SASLOAuthAudience:            cloned.Sink.KafkaConfig.SASLOAuthAudience,
@@ -1443,6 +1445,7 @@ type PulsarOAuth2 struct {
 
 // KafkaConfig represents a kafka sink configuration
 type KafkaConfig struct {
+<<<<<<< HEAD
 	PartitionNum                 *int32                    `json:"partition_num,omitempty"`
 	ReplicationFactor            *int16                    `json:"replication_factor,omitempty"`
 	KafkaVersion                 *string                   `json:"kafka_version,omitempty"`
@@ -1480,6 +1483,46 @@ type KafkaConfig struct {
 	LargeMessageHandle           *LargeMessageHandleConfig `json:"large_message_handle,omitempty"`
 	GlueSchemaRegistryConfig     *GlueSchemaRegistryConfig `json:"glue_schema_registry_config,omitempty"`
 	OutputRawChangeEvent         *bool                     `json:"output_raw_change_event,omitempty"`
+=======
+	PartitionNum                 *int32                    `json:"partition_num,omitempty" toml:"partition-num,omitempty"`
+	ReplicationFactor            *int16                    `json:"replication_factor,omitempty" toml:"replication-factor,omitempty"`
+	KafkaVersion                 *string                   `json:"kafka_version,omitempty" toml:"kafka-version,omitempty"`
+	MaxMessageBytes              *int                      `json:"max_message_bytes,omitempty" toml:"max-message-bytes,omitempty"`
+	Compression                  *string                   `json:"compression,omitempty" toml:"compression,omitempty"`
+	KafkaClientID                *string                   `json:"kafka_client_id,omitempty" toml:"kafka-client-id,omitempty"`
+	AutoCreateTopic              *bool                     `json:"auto_create_topic,omitempty" toml:"auto-create-topic,omitempty"`
+	DialTimeout                  *string                   `json:"dial_timeout,omitempty" toml:"dial-timeout,omitempty"`
+	WriteTimeout                 *string                   `json:"write_timeout,omitempty" toml:"write-timeout,omitempty"`
+	ReadTimeout                  *string                   `json:"read_timeout,omitempty" toml:"read-timeout,omitempty"`
+	RequiredAcks                 *int                      `json:"required_acks,omitempty" toml:"required-acks,omitempty"`
+	SASLUser                     *string                   `json:"sasl_user,omitempty" toml:"sasl-user,omitempty"`
+	SASLPassword                 *string                   `json:"sasl_password,omitempty" toml:"sasl-password,omitempty"`
+	SASLMechanism                *string                   `json:"sasl_mechanism,omitempty" toml:"sasl-mechanism,omitempty"`
+	SASLGssAPIAuthType           *string                   `json:"sasl_gssapi_auth_type,omitempty" toml:"sasl-gssapi-auth-type,omitempty"`
+	SASLGssAPIKeytabPath         *string                   `json:"sasl_gssapi_keytab_path,omitempty" toml:"sasl-gssapi-keytab-path,omitempty"`
+	SASLGssAPIKerberosConfigPath *string                   `json:"sasl_gssapi_kerberos_config_path,omitempty" toml:"sasl-gssapi-kerberos-config-path,omitempty"`
+	SASLGssAPIServiceName        *string                   `json:"sasl_gssapi_service_name,omitempty" toml:"sasl-gssapi-service-name,omitempty"`
+	SASLGssAPIUser               *string                   `json:"sasl_gssapi_user,omitempty" toml:"sasl-gssapi-user,omitempty"`
+	SASLGssAPIPassword           *string                   `json:"sasl_gssapi_password,omitempty" toml:"sasl-gssapi-password,omitempty"`
+	SASLGssAPIRealm              *string                   `json:"sasl_gssapi_realm,omitempty" toml:"sasl-gssapi-realm,omitempty"`
+	SASLGssAPIDisablePafxfast    *bool                     `json:"sasl_gssapi_disable_pafxfast,omitempty" toml:"sasl-gssapi-disable-pafxfast,omitempty"`
+	SASLOAuthClientID            *string                   `json:"sasl_oauth_client_id,omitempty" toml:"sasl-oauth-client-id,omitempty"`
+	SASLOAuthClientSecret        *string                   `json:"sasl_oauth_client_secret,omitempty" toml:"sasl-oauth-client-secret,omitempty"`
+	SASLOAuthTokenURL            *string                   `json:"sasl_oauth_token_url,omitempty" toml:"sasl-oauth-token-url,omitempty"`
+	SASLOAuthCA                  *string                   `json:"sasl_oauth_ca,omitempty" toml:"sasl-oauth-ca,omitempty"`
+	SASLOAuthScopes              []string                  `json:"sasl_oauth_scopes,omitempty" toml:"sasl-oauth-scopes,omitempty"`
+	SASLOAuthGrantType           *string                   `json:"sasl_oauth_grant_type,omitempty" toml:"sasl-oauth-grant-type,omitempty"`
+	SASLOAuthAudience            *string                   `json:"sasl_oauth_audience,omitempty" toml:"sasl-oauth-audience,omitempty"`
+	EnableTLS                    *bool                     `json:"enable_tls,omitempty" toml:"enable-tls,omitempty"`
+	CA                           *string                   `json:"ca,omitempty" toml:"ca,omitempty"`
+	Cert                         *string                   `json:"cert,omitempty" toml:"cert,omitempty"`
+	Key                          *string                   `json:"key,omitempty" toml:"key,omitempty"`
+	InsecureSkipVerify           *bool                     `json:"insecure_skip_verify,omitempty" toml:"insecure-skip-verify,omitempty"`
+	CodecConfig                  *CodecConfig              `json:"codec_config,omitempty" toml:"codec-config,omitempty"`
+	LargeMessageHandle           *LargeMessageHandleConfig `json:"large_message_handle,omitempty" toml:"large-message-handle,omitempty"`
+	GlueSchemaRegistryConfig     *GlueSchemaRegistryConfig `json:"glue_schema_registry_config,omitempty" toml:"glue-schema-registry-config,omitempty"`
+	OutputRawChangeEvent         *bool                     `json:"output_raw_change_event,omitempty" toml:"output-raw-change-event,omitempty"`
+>>>>>>> 5dd51b1ad (kafka: support private CA for OAuth token endpoint (#6140))
 }
 
 // MySQLConfig represents a MySQL sink configuration

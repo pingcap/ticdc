@@ -516,8 +516,24 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			o.SASL.OAuth2.TokenURL = tokenURL
 		}
 
+<<<<<<< HEAD
 		if o.SASL.OAuth2.IsEnable() {
 			if o.SASL.SASLMechanism != security.OAuthMechanism {
+=======
+		if sinkConfig.KafkaConfig.SASLOAuthCA != nil {
+			caPath := *sinkConfig.KafkaConfig.SASLOAuthCA
+			if caPath == "" {
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
+					"OAuth2 CA path cannot be empty")
+			}
+			o.sasl.oauth2.caPath = caPath
+		}
+
+		if o.sasl.oauth2.clientID != "" ||
+			o.sasl.oauth2.clientSecret != "" ||
+			o.sasl.oauth2.tokenURL != "" {
+			if o.sasl.mechanism != oauthMechanism {
+>>>>>>> 5dd51b1ad (kafka: support private CA for OAuth token endpoint (#6140))
 				return errors.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 is only supported with SASL mechanism type OAUTHBEARER, but got %s",
 					o.SASL.SASLMechanism)

@@ -194,6 +194,48 @@ func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
 	require.False(t, util.GetOrZero(config.Scheduler.EnableSplittableCheck))
 }
 
+<<<<<<< HEAD
+=======
+func TestReplicaConfigClonePreservesKafkaOAuthCA(t *testing.T) {
+	t.Parallel()
+
+	cfg := GetDefaultReplicaConfig()
+	cfg.Sink.KafkaConfig = &KafkaConfig{
+		SASLOAuthCA: util.AddressOf("/etc/ssl/oauth-ca.pem"),
+	}
+
+	cloned := cfg.Clone()
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(cloned.Sink.KafkaConfig.SASLOAuthCA))
+	require.NotSame(t, cfg.Sink.KafkaConfig.SASLOAuthCA, cloned.Sink.KafkaConfig.SASLOAuthCA)
+	encoded, err := cfg.Marshal()
+	require.NoError(t, err)
+	require.Contains(t, encoded, `"sasl-oauth-ca":"/etc/ssl/oauth-ca.pem"`)
+
+	*cloned.Sink.KafkaConfig.SASLOAuthCA = "/etc/ssl/other-ca.pem"
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(cfg.Sink.KafkaConfig.SASLOAuthCA))
+}
+
+func TestReplicaConfigPerformanceMode(t *testing.T) {
+	sinkURI, err := url.Parse("mysql://localhost:3306/test")
+	require.NoError(t, err)
+
+	cfg := GetDefaultReplicaConfig()
+	require.Equal(t, PerformanceModeThroughput, util.GetOrZero(cfg.PerformanceMode))
+	require.False(t, cfg.IsLowLatencyMode())
+
+	cfg.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
+	require.NoError(t, cfg.ValidateAndAdjust(sinkURI))
+	require.True(t, cfg.IsLowLatencyMode())
+
+	cfg.PerformanceMode = util.AddressOf("invalid")
+	require.ErrorContains(t, cfg.ValidateAndAdjust(sinkURI), "unknown performance mode")
+
+	cfg.PerformanceMode = nil
+	require.NoError(t, cfg.ValidateAndAdjust(sinkURI))
+	require.Equal(t, PerformanceModeThroughput, util.GetOrZero(cfg.PerformanceMode))
+}
+
+>>>>>>> 5dd51b1ad (kafka: support private CA for OAuth token endpoint (#6140))
 // TestReplicaConfigValidateBatchConfig verifies validation accepts zero as an
 // explicit override and rejects values outside the supported range.
 func TestReplicaConfigValidateBatchConfig(t *testing.T) {
