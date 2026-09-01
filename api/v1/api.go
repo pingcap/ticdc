@@ -113,13 +113,7 @@ func (o *OpenAPIV1) createChangefeed(c *gin.Context) {
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
 	c.Request.ContentLength = int64(len(jsonData))
 
-	muskURI, err := util.MaskSinkURI(changefeedConfig.SinkURI)
-	if err != nil {
-		log.Warn("failed to mask sink uri", zap.Error(err))
-		muskURI = ""
-	}
-	changefeedConfig.SinkURI = muskURI
-	log.Info("create changefeed api v1", zap.Any("changefeedConfig", changefeedConfig))
+	log.Info("create changefeed api v1", zap.String("changefeedID", changefeedConfig.ID))
 
 	o.v2.CreateChangefeed(c)
 }
@@ -140,13 +134,7 @@ func (o *OpenAPIV1) updateChangefeed(c *gin.Context) {
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
 	c.Request.ContentLength = int64(len(jsonData))
 
-	muskURI, err := util.MaskSinkURI(changefeedConfig.SinkURI)
-	if err != nil {
-		log.Warn("failed to mask sink uri", zap.Error(err))
-		muskURI = ""
-	}
-	changefeedConfig.SinkURI = muskURI
-	log.Info("update changefeed api v1", zap.Any("changefeedConfig", changefeedConfig))
+	log.Info("update changefeed api v1", zap.String("changefeedID", changefeedConfig.ID))
 	o.v2.UpdateChangefeed(c)
 }
 
