@@ -15,7 +15,11 @@ package kafka
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"net/http"
 	"net/url"
+	"os"
 
 	"github.com/IBM/sarama"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -71,6 +75,13 @@ func newTokenProvider(ctx context.Context, o *options) (sarama.AccessTokenProvid
 		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
 
+	if o.sasl.oauth2.caPath != "" {
+		ctx, err = contextWithOAuthCA(ctx, o.sasl.oauth2.caPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	cfg := clientcredentials.Config{
 		ClientID:       o.sasl.oauth2.clientID,
 		ClientSecret:   o.sasl.oauth2.clientSecret,
@@ -81,4 +92,38 @@ func newTokenProvider(ctx context.Context, o *options) (sarama.AccessTokenProvid
 	return &tokenProvider{
 		tokenSource: cfg.TokenSource(ctx),
 	}, nil
+}
+
+func contextWithOAuthCA(ctx context.Context, caPath string) (context.Context, error) {
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+	}
+
+	rootCAs, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+	}
+	if !rootCAs.AppendCertsFromPEM(caPEM) {
+		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
+			"OAuth2 CA file %q does not contain a valid certificate", caPath)
+	}
+
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
+			"cannot configure OAuth2 CA file %q with HTTP transport type %T",
+			caPath, http.DefaultTransport)
+	}
+	transport := defaultTransport.Clone()
+	tlsConfig := transport.TLSClientConfig
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{}
+	} else {
+		tlsConfig = tlsConfig.Clone()
+	}
+	tlsConfig.RootCAs = rootCAs
+	transport.TLSClientConfig = tlsConfig
+	httpClient := &http.Client{Transport: transport}
+	return context.WithValue(ctx, oauth2.HTTPClient, httpClient), nil
 }

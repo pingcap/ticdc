@@ -326,3 +326,21 @@ func TestReplicaConfigCodecConfigConversion(t *testing.T) {
 	require.NotNil(t, apiCfgBack.Sink.KafkaConfig.CodecConfig)
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.KafkaConfig.CodecConfig.AvroIncludeBeforeValue))
 }
+
+func TestReplicaConfigKafkaOAuthCAConversion(t *testing.T) {
+	t.Parallel()
+
+	apiCfg := &ReplicaConfig{
+		Sink: &SinkConfig{
+			KafkaConfig: &KafkaConfig{
+				SASLOAuthCA: util.AddressOf("/etc/ssl/oauth-ca.pem"),
+			},
+		},
+	}
+
+	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(internalCfg.Sink.KafkaConfig.SASLOAuthCA))
+
+	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(apiCfgBack.Sink.KafkaConfig.SASLOAuthCA))
+}
