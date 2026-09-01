@@ -18,6 +18,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"sync"
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -260,17 +261,33 @@ func NewDMLMessageDataWithDecoderFactory(
 	key, value []byte,
 	decoderFactory func([]byte, []byte) (codeccommon.Decoder, error),
 ) *codeccommon.DMLMessageData {
+	var (
+		once     sync.Once
+		messages []*codeccommon.DMLMessage
+		err      error
+	)
 	return codeccommon.NewDMLMessageData(key, value,
 		func(data []byte, dmlIndex uint64) (*codeccommon.DMLMessage, error) {
-			key, value, err := unmarshalDMLMessageData(data)
+			once.Do(func() {
+				key, value, unmarshalErr := unmarshalDMLMessageData(data)
+				if unmarshalErr != nil {
+					err = unmarshalErr
+					return
+				}
+				decoder, decoderErr := decoderFactory(key, value)
+				if decoderErr != nil {
+					err = errors.WrapError(errors.ErrSpillFileOp, decoderErr, "create DML spill decoder")
+					return
+				}
+				messages, err = restoreDMLMessages(decoder, key, value)
+			})
 			if err != nil {
 				return nil, err
 			}
-			decoder, err := decoderFactory(key, value)
-			if err != nil {
-				return nil, errors.WrapError(errors.ErrSpillFileOp, err, "create DML spill decoder")
+			if dmlIndex >= uint64(len(messages)) {
+				return nil, errors.ErrSpillFileOp.FastGenByArgs("DML spill message index is out of range")
 			}
-			return restoreDMLMessage(decoder, key, value, dmlIndex)
+			return messages[dmlIndex], nil
 		})
 }
 
@@ -283,18 +300,18 @@ func marshalDMLMessageData(key, value []byte) []byte {
 	return appendSpillBytes(data, value)
 }
 
-func restoreDMLMessage(
-	decoder codeccommon.Decoder, key, value []byte, dmlIndex uint64,
-) (*codeccommon.DMLMessage, error) {
+func restoreDMLMessages(
+	decoder codeccommon.Decoder, key, value []byte,
+) ([]*codeccommon.DMLMessage, error) {
 	decoder.AddKeyValue(key, value)
-	var restored *codeccommon.DMLMessage
-	for currentIndex := uint64(0); ; currentIndex++ {
+	messages := make([]*codeccommon.DMLMessage, 0, 1)
+	for {
 		messageType, hasNext := decoder.HasNext()
 		if !hasNext {
-			if restored == nil {
+			if len(messages) == 0 {
 				return nil, errors.ErrSpillFileOp.FastGenByArgs("DML spill payload has no message")
 			}
-			return restored, nil
+			return messages, nil
 		}
 		if messageType != codeccommon.MessageTypeRow {
 			return nil, errors.ErrSpillFileOp.FastGenByArgs("DML spill payload contains a non-DML message")
@@ -303,9 +320,7 @@ func restoreDMLMessage(
 		if message == nil {
 			return nil, errors.ErrSpillFileOp.FastGenByArgs("DML spill payload cannot be restored")
 		}
-		if currentIndex == dmlIndex {
-			restored = message
-		}
+		messages = append(messages, message)
 	}
 }
 

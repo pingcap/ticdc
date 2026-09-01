@@ -183,6 +183,39 @@ func TestEventsGroupSharesRawMessageData(t *testing.T) {
 	require.Same(t, second, messages[1])
 }
 
+func TestEventsGroupRestoresSharedSpillInputOnce(t *testing.T) {
+	// A single canal-json input can contain thousands of DML messages. Restoring
+	// each ordinal must not re-decode the complete input.
+	inputMessages := []*codeccommon.DMLMessage{
+		newTestDMLMessage(30),
+		newTestDMLMessage(10),
+		newTestDMLMessage(20),
+	}
+	var decoderCount int
+	messageData := NewDMLMessageDataWithDecoderFactory(nil, []byte("raw message"),
+		func(_, _ []byte) (codeccommon.Decoder, error) {
+			decoderCount++
+			return &dmlMessageDecoderStub{messages: []*codeccommon.DMLMessage{
+				newTestDMLMessage(30),
+				newTestDMLMessage(10),
+				newTestDMLMessage(20),
+			}}, nil
+		})
+
+	group := NewEventsGroup(0, 1)
+	for _, message := range inputMessages {
+		messageData.AttachDMLMessage(message)
+		require.NoError(t, group.AppendMessage(message))
+	}
+
+	messages, err := group.GetAllMessages()
+	require.NoError(t, err)
+	require.Equal(t, 1, decoderCount)
+	require.Equal(t, []uint64{10, 20, 30}, []uint64{
+		messages[0].GetCommitTs(), messages[1].GetCommitTs(), messages[2].GetCommitTs(),
+	})
+}
+
 func TestEventsGroupResolveIntoAppendsAndCleansResolvedSpillRecords(t *testing.T) {
 	// Scenario: A consumer resolves events by watermark/commit-ts and appends them into a downstream
 	// batch slice. Buffered messages are held only by a spill file, and the file must be cleaned once
