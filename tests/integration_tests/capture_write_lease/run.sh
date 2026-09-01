@@ -28,9 +28,9 @@ YCSB_TARGET=1000
 YCSB_THREADS=4
 LEASE_DELAY_MS=7000
 LEASE_DELAY_SECONDS=9
-LEASE_DELAY_MARKER=/tmp/ticdc-delay-write-lease-response
-LEASE_DROP_MARKER=/tmp/ticdc-drop-write-lease-response
-LEASE_DUPLICATE_MARKER=/tmp/ticdc-duplicate-write-lease-response
+LEASE_DELAY_FAILPOINT=github.com/pingcap/ticdc/coordinator/DelayCaptureWriteLeaseResponse
+LEASE_DROP_FAILPOINT=github.com/pingcap/ticdc/coordinator/DropCaptureWriteLeaseResponse
+LEASE_DUPLICATE_FAILPOINT=github.com/pingcap/ticdc/coordinator/DuplicateCaptureWriteLeaseResponse
 
 function ycsb_load() {
 	go-ycsb load mysql -P "$CUR/conf/write_lease_workload" \
@@ -120,6 +120,63 @@ function wait_for_gate_state() {
 	return 1
 }
 
+function capture_has_active_p2p_lease() {
+	local port=$1
+
+	curl -fsS --max-time 5 "http://127.0.0.1:${port}/metrics" |
+		awk '$1 == "ticdc_server_capture_p2p_lease_remaining_seconds" && $2 > 0 { found = 1 } END { exit !found }'
+}
+
+function wait_for_active_p2p_leases() {
+	local port
+	local ready
+
+	for ((i = 0; i < 30; i++)); do
+		ready=true
+		for port in $(seq $((CDC_BASE_PORT + 1)) $((CDC_BASE_PORT + CDC_COUNT))); do
+			if ! capture_has_active_p2p_lease "$port"; then
+				ready=false
+				break
+			fi
+		done
+		if [ "$ready" = true ]; then
+			return
+		fi
+		sleep 1
+	done
+
+	echo "captures did not obtain active P2P write leases" >&2
+	return 1
+}
+
+function enable_lease_failpoint() {
+	local name=$1
+	local expr=$2
+	local port
+
+	for port in $(seq $((CDC_BASE_PORT + 1)) $((CDC_BASE_PORT + CDC_COUNT))); do
+		enable_failpoint --addr "127.0.0.1:${port}" --name "$name" --expr "$expr"
+	done
+}
+
+function disable_lease_failpoint() {
+	local name=$1
+	local port
+
+	for port in $(seq $((CDC_BASE_PORT + 1)) $((CDC_BASE_PORT + CDC_COUNT))); do
+		disable_failpoint --addr "127.0.0.1:${port}" --name "$name"
+	done
+}
+
+function disable_lease_failpoint_best_effort() {
+	local name=$1
+	local port
+
+	for port in $(seq $((CDC_BASE_PORT + 1)) $((CDC_BASE_PORT + CDC_COUNT))); do
+		disable_failpoint --addr "127.0.0.1:${port}" --name "$name" >/dev/null 2>&1 || true
+	done
+}
+
 function rejected_lease_response_count() {
 	local reason=$1
 	local port
@@ -192,29 +249,19 @@ function assert_cdc_processes_alive() {
 }
 
 function start_lease_response_delay() {
+	enable_lease_failpoint "$LEASE_DELAY_FAILPOINT" "return(${LEASE_DELAY_MS})"
 	(
-		local deadline=$((SECONDS + LEASE_DELAY_SECONDS))
-		local temp_marker="${LEASE_DELAY_MARKER}.$$"
-		while ((SECONDS < deadline)); do
-			printf '%s' "$LEASE_DELAY_MS" >"$temp_marker"
-			mv "$temp_marker" "$LEASE_DELAY_MARKER"
-			sleep 0.05
-		done
-		rm -f "$temp_marker"
+		sleep "$LEASE_DELAY_SECONDS"
+		disable_lease_failpoint "$LEASE_DELAY_FAILPOINT"
 	) &
 	lease_fault_pid=$!
 }
 
 function start_lease_response_drop() {
+	enable_lease_failpoint "$LEASE_DROP_FAILPOINT" "return(true)"
 	(
-		local deadline=$((SECONDS + LEASE_DELAY_SECONDS))
-		local temp_marker="${LEASE_DROP_MARKER}.$$"
-		while ((SECONDS < deadline)); do
-			printf '1\n' >"$temp_marker"
-			mv "$temp_marker" "$LEASE_DROP_MARKER"
-			sleep 0.05
-		done
-		rm -f "$temp_marker"
+		sleep "$LEASE_DELAY_SECONDS"
+		disable_lease_failpoint "$LEASE_DROP_FAILPOINT"
 	) &
 	lease_fault_pid=$!
 }
@@ -268,12 +315,9 @@ function run_lease_expiry_round() {
 	fi
 	wait "$lease_fault_pid"
 	if [ "$fault" = delay ]; then
-		rm -f "$LEASE_DELAY_MARKER"
 		# Depending on whether a newer grant was applied first, the delayed grant is
 		# rejected as an unknown or replayed sequence; neither may reopen admission.
 		wait_for_stale_lease_response_rejection "$rejected_count"
-	else
-		rm -f "$LEASE_DROP_MARKER"
 	fi
 	wait_for_gate_state writable "$blocked_cdc_port"
 	wait_for_probe_count "$expected_after"
@@ -298,6 +342,7 @@ function run_write_lease_test() {
 	done
 	check_table_exists "${LEASE_DB}.${YCSB_TABLE}" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_sync_diff "$WORK_DIR" "$CUR/conf/write_lease_diff_config.toml" 120
+	wait_for_active_p2p_leases
 
 	ycsb_run >"$WORK_DIR/ycsb.log" 2>&1 &
 	ycsb_pid=$!
@@ -315,8 +360,9 @@ function run_write_lease_test() {
 	done
 
 	duplicate_rejected_count=$(rejected_lease_response_count replayed_sequence)
-	printf '1\n' >"$LEASE_DUPLICATE_MARKER"
+	enable_lease_failpoint "$LEASE_DUPLICATE_FAILPOINT" "return(true)"
 	wait_for_rejected_lease_response replayed_sequence "$duplicate_rejected_count"
+	disable_lease_failpoint "$LEASE_DUPLICATE_FAILPOINT"
 	wait "$ycsb_pid"
 	grep -Eq '^INSERT - .*Count: [1-9][0-9]*,' "$WORK_DIR/ycsb.log"
 	grep -Eq '^UPDATE - .*Count: [1-9][0-9]*,' "$WORK_DIR/ycsb.log"
@@ -338,7 +384,7 @@ function run() {
 		go-ycsb load mysql -P $CUR/conf/workload1 -p mysql.host=${UP_TIDB_HOST} -p mysql.port=${UP_TIDB_PORT} -p mysql.user=root -p mysql.db=$db
 	done
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/utils/dynstream/InjectDropEvent=10%return(true);github.com/pingcap/ticdc/coordinator/DelayCaptureWriteLeaseResponse=return(true);github.com/pingcap/ticdc/coordinator/DropCaptureWriteLeaseResponse=return(true);github.com/pingcap/ticdc/coordinator/DuplicateCaptureWriteLeaseResponse=return(true)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/utils/dynstream/InjectDropEvent=10%return(true)'
 	# start $CDC_COUNT cdc servers, and create a changefeed
 	for i in $(seq $CDC_COUNT); do
 		run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "$i" --addr "127.0.0.1:$((CDC_BASE_PORT + i))" --pd "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}"
@@ -379,7 +425,9 @@ function run() {
 }
 
 function cleanup() {
-	rm -f "$LEASE_DELAY_MARKER" "$LEASE_DROP_MARKER" "$LEASE_DUPLICATE_MARKER"
+	disable_lease_failpoint_best_effort "$LEASE_DELAY_FAILPOINT"
+	disable_lease_failpoint_best_effort "$LEASE_DROP_FAILPOINT"
+	disable_lease_failpoint_best_effort "$LEASE_DUPLICATE_FAILPOINT"
 	stop_test "$WORK_DIR"
 }
 

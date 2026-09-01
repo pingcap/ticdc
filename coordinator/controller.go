@@ -16,8 +16,6 @@ package coordinator
 import (
 	"context"
 	"fmt"
-	"os"
-	"strconv"
 	"sync"
 	"time"
 
@@ -53,9 +51,6 @@ const (
 	nodeChangeHandlerID           = "coordinator-controller"
 	createChangefeedMaxRetry      = 10
 	createChangefeedRetryInterval = 5 * time.Second
-	delayWriteLeaseResponseMarker = "/tmp/ticdc-delay-write-lease-response"
-	dropWriteLeaseResponseMarker  = "/tmp/ticdc-drop-write-lease-response"
-	duplicateWriteLeaseMarker     = "/tmp/ticdc-duplicate-write-lease-response"
 )
 
 // Controller schedules and balance changefeeds, there are 3 main components:
@@ -571,21 +566,17 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 	}
 	delayed := false
 	failpoint.Inject("DelayCaptureWriteLeaseResponse", func(value failpoint.Value) {
-		if value.(bool) && hasGrant {
-			content, readErr := os.ReadFile(delayWriteLeaseResponseMarker)
-			delayMillis, parseErr := strconv.Atoi(string(content))
-			if readErr == nil && parseErr == nil && delayMillis > 0 &&
-				os.Remove(delayWriteLeaseResponseMarker) == nil {
-				delay := time.Duration(delayMillis) * time.Millisecond
-				delayed = true
-				deferredMessages := append([]*messaging.TargetMessage(nil), messages...)
-				go func() {
-					time.Sleep(delay)
-					for _, message := range deferredMessages {
-						_ = c.messageCenter.SendCommand(message)
-					}
-				}()
-			}
+		delayMillis, ok := value.(int)
+		if ok && delayMillis > 0 && hasGrant {
+			delay := time.Duration(delayMillis) * time.Millisecond
+			delayed = true
+			deferredMessages := append([]*messaging.TargetMessage(nil), messages...)
+			go func() {
+				time.Sleep(delay)
+				for _, message := range deferredMessages {
+					_ = c.messageCenter.SendCommand(message)
+				}
+			}()
 		}
 	})
 	if delayed {
@@ -593,7 +584,7 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 	}
 	dropped := false
 	failpoint.Inject("DropCaptureWriteLeaseResponse", func(value failpoint.Value) {
-		if value.(bool) && hasGrant && os.Remove(dropWriteLeaseResponseMarker) == nil {
+		if value.(bool) && hasGrant {
 			dropped = true
 		}
 	})
@@ -601,7 +592,7 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 		return
 	}
 	failpoint.Inject("DuplicateCaptureWriteLeaseResponse", func(value failpoint.Value) {
-		if value.(bool) && hasGrant && os.Remove(duplicateWriteLeaseMarker) == nil {
+		if value.(bool) && hasGrant {
 			for _, message := range messages {
 				duplicate := *message
 				_ = c.messageCenter.SendCommand(&duplicate)

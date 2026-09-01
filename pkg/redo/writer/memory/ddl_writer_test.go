@@ -68,8 +68,7 @@ func TestWriteDDL(t *testing.T) {
 }
 
 func TestWriteDDLWaitsForWriteGate(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	extStorage, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
 	require.NoError(t, err)
