@@ -294,8 +294,8 @@ func (c *EventCollector) prepareAddDispatcher(
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
 	if probeRemote {
-		// Start remote reuse before local registration. Both paths then race, but
-		// local ready always remains an immediate fallback.
+		// Start remote reuse before local registration. Both paths race, and the
+		// local fallback is released when the bounded remote probe fails.
 		c.logCoordinatorClient.requestReusableEventService(target)
 	}
 	stat.run()

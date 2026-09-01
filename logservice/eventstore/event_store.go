@@ -1801,18 +1801,60 @@ type SubscriptionChange struct {
 	ResolvedTs   uint64 // only valid for SubscriptionChangeTypeAdd/SubscriptionChangeTypeUpdate
 }
 
+const (
+	eventStoreStateUploadInterval       = 10 * time.Second
+	eventStoreTopologyReportDelay       = 100 * time.Millisecond
+	eventStoreTopologyReportMinInterval = time.Second
+)
+
 func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
-	tick := time.NewTicker(10 * time.Second)
+	tick := time.NewTicker(eventStoreStateUploadInterval)
+	defer tick.Stop()
+	topologyReportTimer := time.NewTimer(time.Hour)
+	if !topologyReportTimer.Stop() {
+		<-topologyReportTimer.C
+	}
+	defer topologyReportTimer.Stop()
+
 	state := &logservicepb.EventStoreState{
 		TableStates: make(map[int64]*logservicepb.TableState),
+	}
+	topologyReportScheduled := false
+	lastTopologyReportTime := time.Time{}
+	sendState := func() {
+		coordinatorID := e.getCoordinatorInfo()
+		if coordinatorID == "" {
+			return
+		}
+		// When the log coordinator resides on the same node, it will receive the same object reference.
+		// To prevent data races, we need to create a clone of the state.
+		message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state.Copy())
+		// just ignore messages fail to send
+		if err := e.messageCenter.SendEvent(message); err != nil {
+			log.Warn("send broadcast message to coordinator failed", zap.Error(err))
+		}
+	}
+	scheduleTopologyReport := func() {
+		if topologyReportScheduled {
+			return
+		}
+		delay := eventStoreTopologyReportDelay
+		if sinceLastReport := time.Since(lastTopologyReportTime); !lastTopologyReportTime.IsZero() &&
+			sinceLastReport < eventStoreTopologyReportMinInterval {
+			delay = eventStoreTopologyReportMinInterval - sinceLastReport
+		}
+		topologyReportTimer.Reset(delay)
+		topologyReportScheduled = true
 	}
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case change := <-e.subscriptionChangeCh.Out():
+			shouldReportPromptly := false
 			switch change.ChangeType {
 			case SubscriptionChangeTypeAdd:
+				shouldReportPromptly = true
 				log.Info("add subscription for upload state", zap.Uint64("subscriptionID", change.SubID))
 				if tableState, ok := state.TableStates[change.Span.TableID]; ok {
 					tableState.Subscriptions = append(tableState.Subscriptions, &logservicepb.SubscriptionState{
@@ -1834,6 +1876,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					}
 				}
 			case SubscriptionChangeTypeRemove:
+				shouldReportPromptly = true
 				log.Info("remove subscription from upload state", zap.Uint64("subscriptionID", change.SubID))
 				tableState, ok := state.TableStates[change.Span.TableID]
 				if !ok {
@@ -1868,6 +1911,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					continue
 				}
 				subState := tableState.Subscriptions[targetIndex]
+				wasReusable := subState.CheckpointTs < subState.ResolvedTs
 				if change.CheckpointTs < subState.CheckpointTs || change.ResolvedTs < subState.ResolvedTs {
 					log.Warn("ignore stale subscription state update",
 						zap.Uint64("subscriptionID", change.SubID),
@@ -1879,21 +1923,22 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 				}
 				subState.CheckpointTs = change.CheckpointTs
 				subState.ResolvedTs = change.ResolvedTs
+				// A newly created subscription is not a reuse candidate until
+				// its resolved ts moves ahead of its checkpoint. Report that
+				// transition promptly so a just-reloaded peer can find it.
+				shouldReportPromptly = !wasReusable && subState.CheckpointTs < subState.ResolvedTs
 			default:
 				log.Panic("invalid subscription change type", zap.Int("changeType", int(change.ChangeType)))
 			}
+			if shouldReportPromptly {
+				scheduleTopologyReport()
+			}
+		case <-topologyReportTimer.C:
+			topologyReportScheduled = false
+			lastTopologyReportTime = time.Now()
+			sendState()
 		case <-tick.C:
-			coordinatorID := e.getCoordinatorInfo()
-			if coordinatorID == "" {
-				continue
-			}
-			// When the log coordinator resides on the same node, it will receive the same object reference.
-			// To prevent data races, we need to create a clone of the state.
-			message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state.Copy())
-			// just ignore messages fail to send
-			if err := e.messageCenter.SendEvent(message); err != nil {
-				log.Warn("send broadcast message to coordinator failed", zap.Error(err))
-			}
+			sendState()
 		}
 	}
 }

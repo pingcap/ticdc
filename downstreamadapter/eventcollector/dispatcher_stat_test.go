@@ -1139,6 +1139,50 @@ func TestRemoteProbeAnswerWithCandidatesStartsProbeAndWins(t *testing.T) {
 	require.Equal(t, node.ID(""), pendingRemoteTarget)
 }
 
+func TestRemoteProbeTimeoutReleasesHeldLocalReady(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+
+	markSessionRegistering(stat.session, localServerID)
+	stat.session.beginRemoteProbePending()
+	stat.session.startRemoteProbing([]string{remoteServerID.String()})
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REGISTER},
+	)
+
+	// Local Ready alone is not sufficient to switch: the reusable remote source
+	// may still be available and avoids a fresh TiKV catch-up.
+	stat.handleSignalEvent(dispatcher.DispatcherEvent{
+		From: &localServerID,
+		Event: &mockEvent{
+			eventType: commonEvent.TypeReadyEvent,
+		},
+	})
+	requireNoDispatcherRequest(t, mockEventCollector)
+
+	// A silent remote must not leave the table paused. The active timeout
+	// cancels the remote probe and commits the already-ready local registration.
+	generation := stat.session.remoteProbeGeneration
+	stat.session.handleRemoteProbeTimeout(generation)
+
+	currentEventServiceID, localReadyPending, pendingRemoteTarget := sessionState(stat.session)
+	require.Equal(t, localServerID, currentEventServiceID)
+	require.False(t, localReadyPending)
+	require.Empty(t, pendingRemoteTarget)
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 2),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+}
+
 func TestIsFromCurrentEpoch(t *testing.T) {
 	t.Parallel()
 
