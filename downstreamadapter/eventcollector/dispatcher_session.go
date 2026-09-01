@@ -378,6 +378,9 @@ type dispatcherSession struct {
 	sendMessage func(*messaging.TargetMessage)
 	// advanceEpochForReset advances the dispatcher's epoch and returns the new value.
 	advanceEpochForReset func(resetTs uint64) uint64
+	// markNextRemoteReset marks that the next reset starts a remote recovery
+	// epoch whose first safe sink progress should be reported promptly.
+	markNextRemoteReset func()
 	// readyCallback is only set during the initial local registration path.
 	readyCallback func()
 	// connState tracks which EventService this session is currently talking to.
@@ -393,6 +396,7 @@ func newDispatcherSession(
 	localServerID node.ID,
 	sendMessage func(*messaging.TargetMessage),
 	advanceEpochForReset func(resetTs uint64) uint64,
+	markNextRemoteReset func(),
 	readyCallback func(),
 ) *dispatcherSession {
 	return &dispatcherSession{
@@ -400,6 +404,7 @@ func newDispatcherSession(
 		localServerID:        localServerID,
 		sendMessage:          sendMessage,
 		advanceEpochForReset: advanceEpochForReset,
+		markNextRemoteReset:  markNextRemoteReset,
 		readyCallback:        readyCallback,
 	}
 }
@@ -680,6 +685,9 @@ func (s *dispatcherSession) handleAcceptedRemoteReadyLocked(serverID node.ID) {
 		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", s.target.GetId()),
 		zap.Stringer("eventServiceID", serverID))
+	if s.markNextRemoteReset != nil {
+		s.markNextRemoteReset()
+	}
 	s.doResetLocked(serverID, s.target.GetCheckpointTs())
 }
 

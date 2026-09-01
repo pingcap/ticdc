@@ -40,6 +40,7 @@ const (
 	receiveChanSize               = 1024 * 8
 	commonMsgRetryQuota           = 3 // The number of retries for most droppable dispatcher requests.
 	eventServiceHeartbeatInterval = 10 * time.Second
+	recoveryHeartbeatBatchDelay   = 10 * time.Millisecond
 )
 
 // DispatcherMessage is the message send to EventService.
@@ -122,6 +123,10 @@ type EventCollector struct {
 	// dispatcherMessageChan buffers requests to the EventService.
 	// It automatically retries failed requests up to a configured maximum retry limit.
 	dispatcherMessageChan *chann.DrainableChann[DispatcherMessage]
+	// heartbeatSignal coalesces recovery progress reports. It is only signaled
+	// after a remote reset has made sink progress, so normal steady-state
+	// heartbeats continue to use eventServiceHeartbeatInterval.
+	heartbeatSignal chan struct{}
 
 	receiveChannels     []chan *messaging.TargetMessage
 	redoReceiveChannels []chan *messaging.TargetMessage
@@ -159,6 +164,7 @@ func New(serverId node.ID) *EventCollector {
 		serverId:                             serverId,
 		dispatcherMap:                        sync.Map{},
 		dispatcherMessageChan:                chann.NewAutoDrainChann[DispatcherMessage](),
+		heartbeatSignal:                      make(chan struct{}, 1),
 		mc:                                   appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		receiveChannels:                      receiveChannels,
 		redoReceiveChannels:                  redoReceiveChannels,
@@ -410,7 +416,40 @@ func (c *EventCollector) sendEventServiceHeartbeats(ctx context.Context) error {
 			return context.Cause(ctx)
 		case <-ticker.C:
 			c.sendDispatcherHeartbeat()
+		case <-c.heartbeatSignal:
+			if !c.waitForRecoveryHeartbeatBatch(ctx) {
+				return context.Cause(ctx)
+			}
+			c.sendDispatcherHeartbeat()
 		}
+	}
+}
+
+func (c *EventCollector) waitForRecoveryHeartbeatBatch(ctx context.Context) bool {
+	timer := time.NewTimer(recoveryHeartbeatBatchDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+	}
+	for {
+		select {
+		case <-c.heartbeatSignal:
+		default:
+			return true
+		}
+	}
+}
+
+// requestRecoveryHeartbeat asks the heartbeat worker to promptly report the
+// current sink checkpoint after a remote source has recovered. Multiple
+// dispatchers often recover together, so one buffered signal is enough to
+// batch them into a single heartbeat without adding steady-state traffic.
+func (c *EventCollector) requestRecoveryHeartbeat() {
+	select {
+	case c.heartbeatSignal <- struct{}{}:
+	default:
 	}
 }
 

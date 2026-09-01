@@ -2015,6 +2015,47 @@ func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 	require.Equal(t, uint64(210), getHeartbeatCheckpoint())
 }
 
+func TestRemoteResetReportsHeartbeatAfterFirstSinkProgress(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+	collector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 100), collector, nil)
+	oldEpoch := stat.loadCurrentEpochState()
+
+	// A remote reset must not report a checkpoint before the new epoch has
+	// actually made sink progress.
+	stat.session.handleAcceptedRemoteReadyLocked(remoteServerID)
+	select {
+	case <-collector.heartbeatSignal:
+		require.Fail(t, "remote reset reported heartbeat before sink progress")
+	default:
+	}
+
+	// A late callback from the old epoch must not consume the one-shot report.
+	stat.reportRecoveryHeartbeatAfterSinkProgress(oldEpoch)
+	select {
+	case <-collector.heartbeatSignal:
+		require.Fail(t, "stale epoch requested recovery heartbeat")
+	default:
+	}
+
+	stat.reportRecoveryHeartbeatAfterSinkProgress(stat.loadCurrentEpochState())
+	select {
+	case <-collector.heartbeatSignal:
+	case <-time.After(time.Second):
+		require.Fail(t, "recovery heartbeat was not requested")
+	}
+
+	// A recovery produces only one prompt heartbeat. The normal ten-second
+	// periodic heartbeat continues to handle all later progress.
+	stat.reportRecoveryHeartbeatAfterSinkProgress(stat.loadCurrentEpochState())
+	select {
+	case <-collector.heartbeatSignal:
+		require.Fail(t, "recovery heartbeat was requested more than once")
+	default:
+	}
+}
+
 func TestRegistrationEntrypoints(t *testing.T) {
 	localServerID := node.ID("local-server")
 	remoteServerID := node.ID("remote-server")
