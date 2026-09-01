@@ -76,10 +76,11 @@ func newTokenProvider(ctx context.Context, o *options) (sarama.AccessTokenProvid
 	}
 
 	if o.sasl.oauth2.caPath != "" {
-		ctx, err = contextWithOAuthCA(ctx, o.sasl.oauth2.caPath)
+		httpClient, err := oauthHTTPClient(o.sasl.oauth2.caPath)
 		if err != nil {
 			return nil, err
 		}
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
 	}
 
 	cfg := clientcredentials.Config{
@@ -94,7 +95,7 @@ func newTokenProvider(ctx context.Context, o *options) (sarama.AccessTokenProvid
 	}, nil
 }
 
-func contextWithOAuthCA(ctx context.Context, caPath string) (context.Context, error) {
+func oauthHTTPClient(caPath string) (*http.Client, error) {
 	caPEM, err := os.ReadFile(caPath)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
@@ -120,5 +121,5 @@ func contextWithOAuthCA(ctx context.Context, caPath string) (context.Context, er
 		transport.TLSClientConfig = &tls.Config{}
 	}
 	transport.TLSClientConfig.RootCAs = rootCAs
-	return context.WithValue(ctx, oauth2.HTTPClient, &http.Client{Transport: transport}), nil
+	return &http.Client{Transport: transport}, nil
 }

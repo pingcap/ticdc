@@ -209,6 +209,13 @@ func newFranzConfig(o *options) (franz.Config, error) {
 				Audience:     o.sasl.oauth2.audience,
 			},
 		}
+		if o.sasl.oauth2.caPath != "" {
+			httpClient, err := oauthHTTPClient(o.sasl.oauth2.caPath)
+			if err != nil {
+				return franz.Config{}, err
+			}
+			config.SASL.OAuth2.HTTPClient = httpClient
+		}
 	}
 
 	return config, nil

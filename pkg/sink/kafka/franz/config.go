@@ -17,6 +17,7 @@ package franz
 import (
 	"context"
 	"crypto/tls"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -97,6 +98,7 @@ type OAuth2Config struct {
 	Scopes       []string
 	GrantType    string
 	Audience     string
+	HTTPClient   *http.Client
 }
 
 func (c Config) requestTimeout() time.Duration { return max(c.ReadTimeout, c.WriteTimeout) }
@@ -163,6 +165,10 @@ func buildSASLMechanism(ctx context.Context, cfg SASLConfig) (sasl.Mechanism, er
 }
 
 func newOAuthTokenSource(ctx context.Context, cfg OAuth2Config) (oauth2.TokenSource, error) {
+	if cfg.HTTPClient != nil {
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, cfg.HTTPClient)
+	}
+
 	endpointParams := url.Values{}
 	if cfg.GrantType != "" {
 		endpointParams.Set("grant_type", cfg.GrantType)

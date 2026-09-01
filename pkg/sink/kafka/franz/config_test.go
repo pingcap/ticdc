@@ -244,6 +244,25 @@ func TestOAuthTokenSource(t *testing.T) {
 	require.Equal(t, "scope-a scope-b", form.Get("scope"))
 }
 
+func TestOAuthTokenSourceUsesHTTPClient(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, err := io.WriteString(w, `{"access_token":"token","token_type":"bearer"}`)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	source, err := newOAuthTokenSource(context.Background(), OAuth2Config{
+		TokenURL:   server.URL,
+		HTTPClient: server.Client(),
+	})
+	require.NoError(t, err)
+
+	token, err := source.Token()
+	require.NoError(t, err)
+	require.Equal(t, "token", token.AccessToken)
+}
+
 func TestOAuthTokenSourceRejectsInvalidURL(t *testing.T) {
 	_, err := newOAuthTokenSource(context.Background(), OAuth2Config{TokenURL: "http://example.com/%%"})
 	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
