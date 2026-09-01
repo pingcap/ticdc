@@ -239,8 +239,7 @@ func (c *EventCollector) Close() {
 }
 
 func (c *EventCollector) AddDispatcher(target dispatcher.DispatcherService, memoryQuota uint64) {
-	c.PrepareAddDispatcher(target, memoryQuota, nil)
-	c.logCoordinatorClient.requestReusableEventService(target)
+	c.prepareAddDispatcher(target, memoryQuota, nil, true)
 }
 
 func (c *EventCollector) HasDispatcher(dispatcherID common.DispatcherID) bool {
@@ -254,6 +253,15 @@ func (c *EventCollector) PrepareAddDispatcher(
 	target dispatcher.DispatcherService,
 	memoryQuota uint64,
 	readyCallback func(),
+) {
+	c.prepareAddDispatcher(target, memoryQuota, readyCallback, false)
+}
+
+func (c *EventCollector) prepareAddDispatcher(
+	target dispatcher.DispatcherService,
+	memoryQuota uint64,
+	readyCallback func(),
+	probeRemote bool,
 ) {
 	changefeedID := target.GetChangefeedID()
 	log.Info("add dispatcher", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcher", target.GetId()))
@@ -284,6 +292,11 @@ func (c *EventCollector) PrepareAddDispatcher(
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
+	}
+	if probeRemote {
+		// Start remote reuse before local registration. Both paths then race, but
+		// local ready always remains an immediate fallback.
+		c.logCoordinatorClient.requestReusableEventService(target)
 	}
 	stat.run()
 }

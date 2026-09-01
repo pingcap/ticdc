@@ -28,14 +28,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	// remoteProbePendingTimeout bounds how long a local ready is held while
-	// awaiting the coordinator's answer to the reusable EventService query. The
-	// remote round trip is normally fast; this only covers the case where the
-	// coordinator is slow or temporarily unavailable so startup falls back to
-	// local instead of blocking forever.
-	remoteProbePendingTimeout = 5 * time.Second
-)
+const remoteProbePendingTimeout = 5 * time.Second
 
 // dispatcherConnState owns the EventService registration state for one dispatcher.
 // It does not send messages. Its job is to apply atomic state transitions and
@@ -59,10 +52,10 @@ const (
 //
 // This means local registration and remote probing can overlap. A remote service
 // may serve data first (its ready usually arrives before the local ready because
-// the local subscription has to initialize first), but after the local service
-// catches up to the progress the remote reported (and the dispatcher
-// checkpoint), a later local ready moves the dispatcher back to local and
-// cleans up remote registrations.
+// the local subscription has to initialize first). If local becomes ready
+// first, it proceeds immediately rather than waiting for control-plane probes.
+// Once remote is serving, a later local ready must catch up to its progress
+// before taking over.
 type dispatcherConnState struct {
 	sync.RWMutex
 	// removed marks the session as terminal after removal starts. New
@@ -90,16 +83,20 @@ type dispatcherConnState struct {
 	// safe baseline before the remote delivers its first events because it still
 	// equals the dispatcher start ts, which would let a barely started local
 	// subscription win the race and stall the table while catching up from TiKV.
-	remoteResolvedTs uint64
-	// remoteProbePending is true while the collector has asked the coordinator
-	// for reusable remote EventServices but has not received the answer yet.
-	// While set, a local ready is held so a barely-started local subscription
-	// cannot win the ready race before remote candidates are even known.
-	remoteProbePending bool
-	// remoteProbePendingDeadline bounds how long the local ready is held while
-	// awaiting the coordinator answer. Once it passes, the hold is released so
-	// a silent coordinator cannot stall startup.
+	remoteResolvedTs           uint64
+	remoteProbePending         bool
 	remoteProbePendingDeadline time.Time
+	heldLocalReady             bool
+}
+
+func (d *dispatcherConnState) beginRemoteProbePending() {
+	d.Lock()
+	defer d.Unlock()
+	if d.removed {
+		return
+	}
+	d.remoteProbePending = true
+	d.remoteProbePendingDeadline = time.Now().Add(remoteProbePendingTimeout)
 }
 
 // Registration state transitions.
@@ -123,20 +120,6 @@ func (d *dispatcherConnState) beginRegisterToRemote(serverID node.ID) bool {
 	}
 	d.pendingRemoteEventServiceID = serverID
 	return true
-}
-
-// beginRemoteProbePending records that the collector has asked the coordinator
-// for reusable remote EventServices but has not received the answer yet. The
-// hold expires at remoteProbePendingTimeout so a silent coordinator cannot
-// block the local fallback.
-func (d *dispatcherConnState) beginRemoteProbePending() {
-	d.Lock()
-	defer d.Unlock()
-	if d.removed {
-		return
-	}
-	d.remoteProbePending = true
-	d.remoteProbePendingDeadline = time.Now().Add(remoteProbePendingTimeout)
 }
 
 type cleanupTargets []node.ID
@@ -192,6 +175,7 @@ func (d *dispatcherConnState) acceptReady(
 		if !d.localReadyPending {
 			return readyDecision{}
 		}
+		d.heldLocalReady = true
 		if !d.currentEventServiceID.IsEmpty() &&
 			d.currentEventServiceID != localServerID {
 			// The local event service may only win back once its resolved ts
@@ -209,23 +193,11 @@ func (d *dispatcherConnState) acceptReady(
 				return readyDecision{}
 			}
 		} else {
-			// No remote is serving yet. Hold the local ready until the remote
-			// reuse probe resolves: either while awaiting the coordinator's
-			// answer or while a candidate probe is in flight, so a
-			// barely-started local subscription cannot win the race before
-			// remote candidates are even known. A stale coordinator answer
-			// (timeout) releases the hold and falls back to local.
 			if d.remoteProbePending && time.Now().Before(d.remoteProbePendingDeadline) {
 				return readyDecision{}
 			}
 			d.remoteProbePending = false
 			if !d.pendingRemoteEventServiceID.IsEmpty() {
-				// A remote reuse probe is in flight. A local ready only means the
-				// local registration is complete, not that the local subscription
-				// has served any data yet: its resolved ts still starts at the move
-				// checkpoint. Prefer the remote, which already serves the span, over
-				// letting the local win by arriving first. The probe expires after
-				// remoteProbeTimeout so a silent remote cannot block the fallback.
 				return readyDecision{}
 			}
 		}
@@ -241,6 +213,7 @@ func (d *dispatcherConnState) acceptReady(
 		d.pendingRemoteEventServiceID = ""
 		d.remoteCandidates = nil
 		d.remoteResolvedTs = 0
+		d.heldLocalReady = false
 		return decision
 	}
 
@@ -273,6 +246,19 @@ func (d *dispatcherConnState) acceptReady(
 	}
 }
 
+func (d *dispatcherConnState) acceptHeldLocalReady(localServerID node.ID) readyDecision {
+	d.Lock()
+	defer d.Unlock()
+	if d.removed || !d.heldLocalReady || !d.currentEventServiceID.IsEmpty() ||
+		d.remoteProbePending || !d.pendingRemoteEventServiceID.IsEmpty() {
+		return readyDecision{}
+	}
+	d.currentEventServiceID = localServerID
+	d.localReadyPending = false
+	d.heldLocalReady = false
+	return readyDecision{commitTarget: localServerID}
+}
+
 func (d *dispatcherConnState) beginRemove(localServerID node.ID) ([]node.ID, bool) {
 	d.Lock()
 	defer d.Unlock()
@@ -288,6 +274,7 @@ func (d *dispatcherConnState) beginRemove(localServerID node.ID) ([]node.ID, boo
 	d.localReadyPending = false
 	d.pendingRemoteEventServiceID = ""
 	d.remoteCandidates = nil
+	d.heldLocalReady = false
 	d.remoteResolvedTs = 0
 	d.remoteProbePending = false
 	return []node.ID(targets), false
@@ -321,8 +308,6 @@ func (d *dispatcherConnState) isRemoved() bool {
 func (d *dispatcherConnState) beginRemoteProbing(nodes []string) (node.ID, bool) {
 	d.Lock()
 	defer d.Unlock()
-	// The coordinator answer has arrived. Whether it yields candidates or not,
-	// the local ready must no longer be held for it.
 	d.remoteProbePending = false
 	if d.removed {
 		return "", false
@@ -410,10 +395,6 @@ func (s *dispatcherSession) startLocalRegistration() {
 	s.sendRegisterRequest(s.localServerID)
 }
 
-// beginRemoteProbePending records that the collector has asked the coordinator
-// for reusable remote EventServices and has not received the answer yet. While
-// pending, a local ready is held so a barely-started local subscription cannot
-// win the ready race before remote candidates are even known.
 func (s *dispatcherSession) beginRemoteProbePending() {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
@@ -557,13 +538,25 @@ func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) 
 		s.requestMu.Lock()
 		defer s.requestMu.Unlock()
 		nextCandidate, accepted := s.connState.advanceRemoteProbeAfterNotReusable(from)
-		if !accepted || nextCandidate.IsEmpty() {
+		if !accepted {
+			return
+		}
+		if nextCandidate.IsEmpty() {
+			s.acceptHeldLocalReadyLocked()
 			return
 		}
 		s.sendRegisterRequest(nextCandidate)
 	default:
 		log.Panic("should not happen: unknown signal event type", zap.Int("eventType", event.GetType()))
 	}
+}
+
+func (s *dispatcherSession) acceptHeldLocalReadyLocked() {
+	accepted := s.connState.acceptHeldLocalReady(s.localServerID)
+	if accepted.commitTarget.IsEmpty() {
+		return
+	}
+	s.handleAcceptedLocalReadyLocked(s.target.GetCheckpointTs())
 }
 
 // handleReadyEvent applies the ready decision produced by connState: clean up
@@ -718,6 +711,7 @@ func (s *dispatcherSession) startRemoteProbing(nodes []string) {
 	defer s.requestMu.Unlock()
 	candidate, ok := s.connState.beginRemoteProbing(nodes)
 	if !ok {
+		s.acceptHeldLocalReadyLocked()
 		return
 	}
 	log.Info("set remote candidates",

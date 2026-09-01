@@ -214,11 +214,6 @@ func TestProcessMessage(t *testing.T) {
 		}
 	}
 	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
-	// The test has no coordinator to answer the reusable EventService query, so
-	// release the pending hold and let the local ready be accepted.
-	stat := c.getDispatcherStatByID(did)
-	require.NotNil(t, stat)
-	clearSessionRemoteProbePending(stat.session)
 
 	ch <- newMessage(node.ID, &readyEvent)
 	ch <- newMessage(node.ID, &handshakeEvent)
@@ -445,11 +440,6 @@ func TestEventCollectorBatchByCount(t *testing.T) {
 		return false
 	}
 	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
-	// The test has no coordinator to answer the reusable EventService query, so
-	// release the pending hold and let the local ready be accepted.
-	stat := c.getDispatcherStatByID(did)
-	require.NotNil(t, stat)
-	clearSessionRemoteProbePending(stat.session)
 
 	from := localServerID
 	readyEvent := commonEvent.NewReadyEvent(did, 0)
@@ -539,11 +529,6 @@ func TestEventCollectorBatchByBytes(t *testing.T) {
 		}
 	}
 	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
-	// The test has no coordinator to answer the reusable EventService query, so
-	// release the pending hold and let the local ready be accepted.
-	stat := c.getDispatcherStatByID(did)
-	require.NotNil(t, stat)
-	clearSessionRemoteProbePending(stat.session)
 
 	from := localServerID
 	readyEvent := commonEvent.NewReadyEvent(did, 0)
