@@ -284,10 +284,10 @@ func (c *consumer) getNewFiles(
 
 func (c *consumer) appendMessage2Group(
 	message *common.DMLMessage,
+	tableID int64,
 	enableTableAcrossNodes bool,
 ) error {
 	var (
-		tableID  = message.TableID
 		schema   = message.Schema
 		table    = message.Table
 		commitTs = message.GetCommitTs()
@@ -382,7 +382,7 @@ func (c *consumer) appendDMLEvents(
 			c.dmlCount.Add(1)
 
 			message := spillDecoder.NextDMLMessage()
-			if err := c.appendMessage2Group(message, fileIdx.EnableTableAcrossNodes); err != nil {
+			if err := c.appendMessage2Group(message, tableID, fileIdx.EnableTableAcrossNodes); err != nil {
 				return err
 			}
 			filteredCnt++
