@@ -147,7 +147,7 @@ func TestGetTopicConfig(t *testing.T) {
 func TestGetTopicsMeta(t *testing.T) {
 	t.Parallel()
 
-	t.Run("returns valid topics and ignores unknown topics", func(t *testing.T) {
+	t.Run("returns unknown topic error when topic errors are not ignored", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		admin := NewMocksaramaClusterAdmin(ctrl)
 		admin.EXPECT().DescribeTopics([]string{"valid-topic", "missing-topic"}).Return([]*sarama.TopicMetadata{
@@ -166,6 +166,31 @@ func TestGetTopicsMeta(t *testing.T) {
 		}
 
 		topics, err := client.GetTopicsMeta([]string{"valid-topic", "missing-topic"}, false)
+
+		require.Nil(t, topics)
+		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+		require.ErrorIs(t, err, sarama.ErrUnknownTopicOrPartition)
+	})
+
+	t.Run("ignores unknown topic error and returns valid topics", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		admin := NewMocksaramaClusterAdmin(ctrl)
+		admin.EXPECT().DescribeTopics([]string{"valid-topic", "missing-topic"}).Return([]*sarama.TopicMetadata{
+			{
+				Name:       "valid-topic",
+				Partitions: []*sarama.PartitionMetadata{{}, {}},
+			},
+			{
+				Name: "missing-topic",
+				Err:  sarama.ErrUnknownTopicOrPartition,
+			},
+		}, nil)
+		client := &saramaAdminClient{
+			changefeed: common.NewChangeFeedIDWithName("test", "default"),
+			admin:      admin,
+		}
+
+		topics, err := client.GetTopicsMeta([]string{"valid-topic", "missing-topic"}, true)
 
 		require.NoError(t, err)
 		require.Equal(t, map[string]TopicDetail{
@@ -248,7 +273,7 @@ func TestGetTopicsMeta(t *testing.T) {
 		require.True(t, IsAuthorizationFailed(err))
 	})
 
-	t.Run("ignored topic error", func(t *testing.T) {
+	t.Run("ignores non-unknown topic error", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		admin := NewMocksaramaClusterAdmin(ctrl)
 		admin.EXPECT().DescribeTopics([]string{"test-topic"}).Return([]*sarama.TopicMetadata{
@@ -283,6 +308,53 @@ func TestIsAuthorizationFailed(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.expected, IsAuthorizationFailed(test.err))
+		})
+	}
+}
+
+func TestIsUnretryableKafkaError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		err         error
+		unretryable bool
+	}{
+		{name: "unknown topic", err: sarama.ErrUnknownTopicOrPartition},
+		{name: "leader unavailable", err: sarama.ErrLeaderNotAvailable},
+		{name: "request timeout", err: sarama.ErrRequestTimedOut},
+		{name: "network exception", err: sarama.ErrNetworkException},
+		{name: "controller changed", err: sarama.ErrNotController},
+		{name: "no broker available", err: sarama.ErrOutOfBrokers},
+		{name: "EOF", err: io.EOF},
+		{name: "unknown broker error", err: sarama.ErrUnknown},
+		{
+			name: "wrapped unknown topic",
+			err:  errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ErrUnknownTopicOrPartition, "describe-topic", "test-topic"),
+		},
+		{name: "context cancellation", err: context.Canceled},
+		{name: "TiCDC invalid config", err: errors.ErrKafkaInvalidConfig.GenWithStack("invalid config"), unretryable: true},
+		{name: "topic authorization failure", err: sarama.ErrTopicAuthorizationFailed, unretryable: true},
+		{name: "cluster authorization failure", err: sarama.ErrClusterAuthorizationFailed, unretryable: true},
+		{name: "invalid topic", err: sarama.ErrInvalidTopic, unretryable: true},
+		{name: "invalid config", err: sarama.ErrInvalidConfig, unretryable: true},
+		{name: "SASL authentication failure", err: sarama.ErrSASLAuthenticationFailed, unretryable: true},
+		{name: "unsupported SASL mechanism", err: sarama.ErrUnsupportedSASLMechanism, unretryable: true},
+		{name: "illegal SASL state", err: sarama.ErrIllegalSASLState, unretryable: true},
+		{name: "unsupported version", err: sarama.ErrUnsupportedVersion, unretryable: true},
+		{name: "invalid request", err: sarama.ErrInvalidRequest, unretryable: true},
+		{name: "client configuration error", err: sarama.ConfigurationError("invalid client config"), unretryable: true},
+		{name: "wrapped client configuration error", err: errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ConfigurationError("invalid client config"), "describe-topic", "test-topic"), unretryable: true},
+		{
+			name:        "wrapped invalid topic",
+			err:         errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ErrInvalidTopic, "describe-topic", "test-topic"),
+			unretryable: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.unretryable, IsUnretryableKafkaError(test.err))
 		})
 	}
 }
