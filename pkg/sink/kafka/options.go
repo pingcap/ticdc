@@ -528,6 +528,15 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			o.sasl.oauth2.tokenURL = tokenURL
 		}
 
+		if sinkConfig.KafkaConfig.SASLOAuthCA != nil {
+			caPath := *sinkConfig.KafkaConfig.SASLOAuthCA
+			if caPath == "" {
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
+					"OAuth2 CA path cannot be empty")
+			}
+			o.sasl.oauth2.caPath = caPath
+		}
+
 		if o.sasl.oauth2.clientID != "" ||
 			o.sasl.oauth2.clientSecret != "" ||
 			o.sasl.oauth2.tokenURL != "" {
