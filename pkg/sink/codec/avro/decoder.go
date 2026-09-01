@@ -21,8 +21,8 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
-	"sync"
 
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/linkedin/goavro/v2"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -42,6 +42,10 @@ import (
 
 var tableIDAllocator = common.NewTableIDAllocator()
 
+// decoderCodecCacheSize bounds the compiled codecs retained by each partition decoder.
+// It keeps recently active routed-table schemas without retaining every historical version.
+const decoderCodecCacheSize = 128
+
 type decoder struct {
 	idx    int
 	config *common.Config
@@ -50,7 +54,7 @@ type decoder struct {
 	upstreamTiDB *sql.DB
 
 	schemaM schemamanager.SchemaManager
-	codecs  sync.Map
+	codecs  *lru.Cache
 
 	key   []byte
 	value []byte
@@ -65,11 +69,13 @@ func NewDecoder(
 	db *sql.DB,
 ) common.Decoder {
 	tableIDAllocator.Clean()
+	codecs, _ := lru.New(decoderCodecCacheSize)
 	return &decoder{
 		idx:          idx,
 		config:       config,
 		topic:        topic,
 		schemaM:      schemaM,
+		codecs:       codecs,
 		upstreamTiDB: db,
 	}
 }
@@ -703,7 +709,7 @@ func (d *decoder) decodeRawBytes(
 func (d *decoder) lookupCodec(
 	ctx context.Context, schemaID schemamanager.SchemaID,
 ) (*goavro.Codec, error) {
-	if cached, ok := d.codecs.Load(schemaID); ok {
+	if cached, ok := d.codecs.Get(schemaID); ok {
 		return cached.(*goavro.Codec), nil
 	}
 
@@ -715,8 +721,8 @@ func (d *decoder) lookupCodec(
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
-	actual, _ := d.codecs.LoadOrStore(schemaID, codec)
-	return actual.(*goavro.Codec), nil
+	d.codecs.Add(schemaID, codec)
+	return codec, nil
 }
 
 func (d *decoder) decodeKey(ctx context.Context) (map[string]any, map[string]any, error) {

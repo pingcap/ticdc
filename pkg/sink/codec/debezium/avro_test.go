@@ -44,6 +44,28 @@ func newAvroBatchEncoderForTest(
 	return NewAvroBatchEncoder(cfg, clusterID, schemaM)
 }
 
+func TestDebeziumAvroDecoderSchemaCacheIsBounded(t *testing.T) {
+	cfg := common.NewConfig(config.ProtocolDebeziumAvro)
+	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
+	decoder, err := NewAvroDecoder(t.Context(), cfg, 0, nil)
+	require.NoError(t, err)
+	avroDecoder := decoder.(*avroDecoder)
+	schema := &registeredDebeziumAvroSchema{}
+
+	for schemaID := 1; schemaID <= debeziumAvroDecoderSchemaCacheSize; schemaID++ {
+		avroDecoder.schemas.Add(schemaID, schema)
+	}
+
+	// Keep schema 1 hot, so adding one more schema evicts schema 2.
+	_, ok := avroDecoder.schemas.Get(1)
+	require.True(t, ok)
+	avroDecoder.schemas.Add(debeziumAvroDecoderSchemaCacheSize+1, schema)
+
+	require.Equal(t, debeziumAvroDecoderSchemaCacheSize, avroDecoder.schemas.Len())
+	require.True(t, avroDecoder.schemas.Contains(1))
+	require.False(t, avroDecoder.schemas.Contains(2))
+}
+
 func TestDebeziumConfluentAvroEncodeRowEvent(t *testing.T) {
 	ctx := context.Background()
 	_, err := avro.SetupEncoderAndSchemaRegistry4Testing(
