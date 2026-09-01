@@ -1411,6 +1411,63 @@ func (info *ChangeFeedInfo) Clone() (*ChangeFeedInfo, error) {
 	return cloned, err
 }
 
+// CloneWithMaskedSensitiveData returns a clone safe for user-visible output.
+func (info *ChangeFeedInfo) CloneWithMaskedSensitiveData() (*ChangeFeedInfo, error) {
+	cloned, err := info.Clone()
+	if err != nil {
+		return nil, err
+	}
+
+	cloned.SinkURI = util.MaskSensitiveDataInURI(cloned.SinkURI)
+	cloned.Config.maskSensitiveData()
+	return cloned, nil
+}
+
+// maskSensitiveData masks configured API fields without populating omitted fields.
+func (c *ReplicaConfig) maskSensitiveData() {
+	if c == nil {
+		return
+	}
+	if c.Consistent != nil && c.Consistent.Storage != nil {
+		*c.Consistent.Storage = util.MaskSensitiveDataInURI(*c.Consistent.Storage)
+	}
+	if c.Sink == nil {
+		return
+	}
+
+	if c.Sink.SchemaRegistry != nil {
+		*c.Sink.SchemaRegistry = util.MaskSensitiveDataInURI(*c.Sink.SchemaRegistry)
+	}
+	var sensitiveFields []*string
+	if kafka := c.Sink.KafkaConfig; kafka != nil {
+		sensitiveFields = append(sensitiveFields,
+			kafka.SASLPassword,
+			kafka.SASLGssAPIPassword,
+			kafka.SASLOAuthClientSecret,
+			kafka.Key)
+		if kafka.SASLOAuthTokenURL != nil {
+			*kafka.SASLOAuthTokenURL = util.MaskSensitiveDataInURI(*kafka.SASLOAuthTokenURL)
+		}
+		if kafka.LargeMessageHandle != nil {
+			kafka.LargeMessageHandle.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(kafka.LargeMessageHandle.ClaimCheckStorageURI)
+		}
+		if glue := kafka.GlueSchemaRegistryConfig; glue != nil {
+			sensitiveFields = append(sensitiveFields, &glue.AccessKey, &glue.SecretAccessKey, &glue.Token)
+		}
+	}
+	if pulsar := c.Sink.PulsarConfig; pulsar != nil {
+		sensitiveFields = append(sensitiveFields, pulsar.AuthenticationToken, pulsar.BasicPassword)
+		if pulsar.OAuth2 != nil {
+			sensitiveFields = append(sensitiveFields, &pulsar.OAuth2.OAuth2PrivateKey)
+		}
+	}
+	for _, field := range sensitiveFields {
+		if field != nil && *field != "" {
+			*field = "******"
+		}
+	}
+}
+
 // Unmarshal unmarshals into *ChangeFeedInfo from json marshal byte slice
 func (info *ChangeFeedInfo) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, &info)

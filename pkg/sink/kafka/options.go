@@ -646,6 +646,8 @@ func adjustOptions(
 	options *options,
 	topic string,
 ) error {
+	// The topic may not exist yet and will be created later by the topic manager,
+	// so ignore per-topic metadata errors here.
 	topics, err := admin.GetTopicsMeta([]string{topic}, true)
 	if err != nil {
 		return err

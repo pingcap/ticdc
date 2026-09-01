@@ -227,6 +227,9 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	if !s.isNormal.Load() {
+		return
+	}
 	s.eventChan.Push(event)
 }
 
@@ -255,6 +258,7 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *sink) close() {
+	s.isNormal.Store(false)
 	s.eventChan.Close()
 	s.rowChan.Close()
 }
@@ -309,6 +313,11 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			events, err := helper.NewMQRowEvents(event, topic, partitionNum, partitionGenerator, selector)
 			if err != nil {
 				return err
+			}
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			default:
 			}
 			s.rowChan.Push(events...)
 		}
@@ -562,6 +571,7 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 }
 
 func (s *sink) Close() {
+	s.close()
 	s.ddlProducer.Close()
 	s.dmlProducer.Close()
 	s.comp.close()

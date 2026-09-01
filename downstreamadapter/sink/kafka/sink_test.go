@@ -231,8 +231,10 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		cause := errors.ErrKafkaSendMessage.GenWithStackByArgs()
 
 		factory.EXPECT().AsyncProducer(gomock.Any()).Return(nil, cause)
-		adminClient.EXPECT().Close()
-		topicManager.EXPECT().Close()
+		gomock.InOrder(
+			adminClient.EXPECT().Close(),
+			topicManager.EXPECT().Close(),
+		)
 
 		kafkaSink, err := newWithComponents(
 			t.Context(),
@@ -256,9 +258,11 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 
 		factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
 		factory.EXPECT().SyncProducer(gomock.Any()).Return(nil, cause)
-		asyncProducer.EXPECT().Close()
-		adminClient.EXPECT().Close()
-		topicManager.EXPECT().Close()
+		gomock.InOrder(
+			asyncProducer.EXPECT().Close(),
+			adminClient.EXPECT().Close(),
+			topicManager.EXPECT().Close(),
+		)
 
 		kafkaSink, err := newWithComponents(
 			t.Context(),
@@ -284,10 +288,12 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
 		factory.EXPECT().SyncProducer(gomock.Any()).Return(syncProducer, nil)
 		factory.EXPECT().MetricsCollector(adminClient).Return(noopMetricsCollector{})
-		asyncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) })
-		syncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) })
-		adminClient.EXPECT().Close().Do(func() { closeCount.Add(1) })
-		topicManager.EXPECT().Close().Do(func() { closeCount.Add(1) })
+		gomock.InOrder(
+			syncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) }),
+			asyncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) }),
+			adminClient.EXPECT().Close().Do(func() { closeCount.Add(1) }),
+			topicManager.EXPECT().Close().Do(func() { closeCount.Add(1) }),
+		)
 
 		kafkaSink, err := newWithComponents(
 			t.Context(),
@@ -299,8 +305,20 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Zero(t, closeCount.Load())
+		require.True(t, kafkaSink.IsNormal())
+
 		kafkaSink.Close()
 		require.Equal(t, int64(4), closeCount.Load())
+		require.False(t, kafkaSink.IsNormal())
+		kafkaSink.AddDMLEvent(&commonEvent.DMLEvent{})
+		require.Zero(t, kafkaSink.eventChan.Len())
+
+		_, ok, err := kafkaSink.eventChan.GetWithContext(t.Context())
+		require.NoError(t, err)
+		require.False(t, ok)
+		_, ok, err = kafkaSink.rowChan.GetWithContext(t.Context())
+		require.NoError(t, err)
+		require.False(t, ok)
 	})
 }
 
@@ -379,6 +397,22 @@ func TestKafkaSinkDML(t *testing.T) {
 		kafkaSink.AddDMLEvent(dmlEvent)
 
 		require.Equal(t, cause, kafkaSink.calculateKeyPartitions(t.Context()))
+	})
+
+	t.Run("canceled after topic lookup", func(t *testing.T) {
+		dmlEvent := eventHelper.DML2Event("test", "t", "insert into t values (4, 'four')")
+		ctx, cancel := context.WithCancelCause(t.Context())
+		kafkaSink, topicManager, _, _ := newKafkaSinkForTest(
+			t, ctx, config.ProtocolOpen, &config.SinkConfig{})
+		cause := errors.ErrKafkaSinkClosed.GenWithStackByArgs()
+		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).
+			DoAndReturn(func(context.Context, string) (int32, error) {
+				cancel(cause)
+				return 1, nil
+			})
+		kafkaSink.AddDMLEvent(dmlEvent)
+		require.Equal(t, cause, kafkaSink.calculateKeyPartitions(ctx))
+		require.Zero(t, kafkaSink.rowChan.Len())
 	})
 }
 

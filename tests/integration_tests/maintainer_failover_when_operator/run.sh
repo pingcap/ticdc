@@ -72,7 +72,13 @@ function get_table_replication_count() {
 	local table_id=$3
 	local mode=$4
 	curl -s "http://${api_addr}/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME&mode=$mode" |
-		jq -r --argjson tid "$table_id" '[.items[].table_ids[] | select(. == $tid)] | length'
+		jq -r --argjson tid "$table_id" '
+			if (.items | type) == "array" then
+				[.items[].table_ids[] | select(. == $tid)] | length
+			else
+				null
+			end
+		'
 }
 
 function wait_for_table_replication_count() {
@@ -221,6 +227,32 @@ function wait_for_add_operator_inflight_in_logs() {
 		sleep 2
 	done
 	echo "add operator for table $table_id not observed in logs" >&2
+	return 1
+}
+
+function get_merge_dispatcher_created_log_count() {
+	local work_dir=$1
+	local table_id=$2
+	local pattern='new (redo )?dispatcher created\(merge dispatcher\)'
+
+	grep -Ehs "${pattern}.*tableID[^0-9]*${table_id}([^0-9]|$)" "$work_dir"/cdc*.log 2>/dev/null | wc -l
+}
+
+function wait_for_new_merge_dispatcher_created_in_logs() {
+	local work_dir=$1
+	local table_id=$2
+	local initial_count=$3
+	local retry=$4
+
+	for ((i = 0; i < retry; i++)); do
+		local current_count
+		current_count=$(get_merge_dispatcher_created_log_count "$work_dir" "$table_id")
+		if [ "$current_count" -gt "$initial_count" ]; then
+			return 0
+		fi
+		sleep 2
+	done
+	echo "new merge dispatcher for table $table_id not observed in logs" >&2
 	return 1
 }
 
@@ -446,6 +478,18 @@ function run_impl() {
 	fi
 
 	enable_failpoint --addr "$origin_addr" --name "$FAILPOINT_NOT_READY_TO_CLOSE_DISPATCHER" --expr "return(true)"
+
+	# Merge operator: persist the merge request before BlockCreateDispatcher starts holding the dispatcher manager's
+	# maintainer fence. The merged-dispatcher log is emitted after TrackMergeOperator, so waiting for a new occurrence
+	# proves the merge request will be included in the bootstrap response after maintainer failover.
+	merge_dispatcher_log_count=$(get_merge_dispatcher_created_log_count "$work_dir" "$table_id_6")
+	set +e
+	merge_table_with_retry "$table_id_6" "$changefeed_id" 1 "$mode" &
+	merge_pid=$!
+	set -e
+	wait_for_new_merge_dispatcher_created_in_logs "$work_dir" "$table_id_6" "$merge_dispatcher_log_count" 60
+	wait_for_table_replication_count "$api_addr" "$changefeed_id" "$table_id_6" "$((merge_replication_count_before + 1))" ge "$mode" 60
+
 	enable_failpoint_on_all_addrs "$FAILPOINT_BLOCK_CREATE_DISPATCHER" "pause"
 
 	# Add operator: create new tables and insert some data while create-dispatcher is blocked.
@@ -480,15 +524,6 @@ function run_impl() {
 
 	# failpoint is enabled on origin, so the table should not move to target
 	wait_for_table_on_addr "$api_addr" "$changefeed_id" "$table_id_1" "$origin_addr" "$mode"
-
-	# Merge operator: issue merge against the dedicated split table while source dispatcher close is blocked.
-	# Once the merged dispatcher appears, the maintainer can be killed safely because the merge request has
-	# already reached dispatcher manager state and must be restored from bootstrap on failover.
-	set +e
-	merge_table_with_retry "$table_id_6" "$changefeed_id" 1 "$mode" &
-	merge_pid=$!
-	set -e
-	wait_for_table_replication_count "$api_addr" "$changefeed_id" "$table_id_6" "$((merge_replication_count_before + 1))" ge "$mode" 60
 
 	# Remove operator: drop one table while dispatcher close is blocked.
 	run_sql "DROP TABLE maintainer_failover_when_operator.t3;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
