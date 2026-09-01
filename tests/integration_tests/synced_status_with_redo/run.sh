@@ -145,13 +145,11 @@ function run_normal_case_and_unavailable_pd() {
 	fi
 
 	#==========
-	# case 2: test with unavailable pd, query will not get the available response
+	# case 2: when PD is unavailable, the capture loses its etcd write proof and
+	# exits instead of continuing to serve a potentially stale synced response.
+	cdc_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	kill_pd
-
-	sleep 20
-
-	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
-	error_code=$(echo $synced_status | jq -r '.error_code')
+	ensure 30 "! kill -0 $cdc_pid > /dev/null 2>&1"
 	cleanup_process $CDC_BINARY
 	stop_tidb_cluster
 }
