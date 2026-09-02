@@ -14,12 +14,43 @@
 package config
 
 import (
+	"encoding/json"
 	"net/url"
 	"testing"
 
+<<<<<<< HEAD
+=======
+	"github.com/BurntSushi/toml"
+	"github.com/pingcap/ticdc/pkg/errors"
+>>>>>>> 0697ba0ec (cloudstorage: make all DateSeparator fields use the enum instead of string (#6078))
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDateSeparatorSerialization(t *testing.T) {
+	t.Parallel()
+
+	var jsonConfig SinkConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"date-separator":"DAY"}`), &jsonConfig))
+	require.Equal(t, DateSeparatorDay, util.GetOrZero(jsonConfig.DateSeparator))
+
+	encoded, err := json.Marshal(jsonConfig)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"date-separator":"day","integrity":null}`, string(encoded))
+
+	var tomlConfig SinkConfig
+	_, err = toml.Decode(`date-separator = "Month"`, &tomlConfig)
+	require.NoError(t, err)
+	require.Equal(t, DateSeparatorMonth, util.GetOrZero(tomlConfig.DateSeparator))
+
+	err = json.Unmarshal([]byte(`{"date-separator":"week"}`), &SinkConfig{})
+	require.Error(t, err)
+	require.True(t, errors.ErrStorageSinkInvalidConfig.Equal(err), "%+v", err)
+
+	_, err = toml.Decode(`date-separator = "week"`, &SinkConfig{})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "CDC:ErrStorageSinkInvalidConfig")
+}
 
 func TestValidateTxnAtomicity(t *testing.T) {
 	t.Parallel()

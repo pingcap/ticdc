@@ -56,7 +56,7 @@ func testFilePathGenerator(ctx context.Context, t *testing.T, dir string) *FileP
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	replicaConfig.Sink.Protocol = util.AddressOf(config.ProtocolOpen.String())
 	replicaConfig.Sink.FileIndexWidth = util.AddressOf(6)
 	cfg := NewConfig()
@@ -95,8 +95,12 @@ func TestGenerateDataFilePath(t *testing.T) {
 	// date-separator: year
 	mockClock := clock.NewMock()
 	f = testFilePathGenerator(ctx, t, dir)
+<<<<<<< HEAD:pkg/sink/cloudstorage/path_test.go
 	f.versionMap[table] = table.TableInfoVersion
 	f.config.DateSeparator = config.DateSeparatorYear.String()
+=======
+	f.config.DateSeparator = config.DateSeparatorYear
+>>>>>>> 0697ba0ec (cloudstorage: make all DateSeparator fields use the enum instead of string (#6078)):pkg/cloudstorage/path_test.go
 	f.SetClock(pdutil.NewMonotonicClock(mockClock))
 	mockClock.Set(time.Date(2022, 12, 31, 23, 59, 59, 0, time.UTC))
 	date = f.GenerateDateStr()
@@ -113,8 +117,12 @@ func TestGenerateDataFilePath(t *testing.T) {
 	// date-separator: month
 	mockClock = clock.NewMock()
 	f = testFilePathGenerator(ctx, t, dir)
+<<<<<<< HEAD:pkg/sink/cloudstorage/path_test.go
 	f.versionMap[table] = table.TableInfoVersion
 	f.config.DateSeparator = config.DateSeparatorMonth.String()
+=======
+	f.config.DateSeparator = config.DateSeparatorMonth
+>>>>>>> 0697ba0ec (cloudstorage: make all DateSeparator fields use the enum instead of string (#6078)):pkg/cloudstorage/path_test.go
 	f.SetClock(pdutil.NewMonotonicClock(mockClock))
 
 	mockClock.Set(time.Date(2022, 12, 31, 23, 59, 59, 0, time.UTC))
@@ -132,8 +140,12 @@ func TestGenerateDataFilePath(t *testing.T) {
 	// date-separator: day
 	mockClock = clock.NewMock()
 	f = testFilePathGenerator(ctx, t, dir)
+<<<<<<< HEAD:pkg/sink/cloudstorage/path_test.go
 	f.versionMap[table] = table.TableInfoVersion
 	f.config.DateSeparator = config.DateSeparatorDay.String()
+=======
+	f.config.DateSeparator = config.DateSeparatorDay
+>>>>>>> 0697ba0ec (cloudstorage: make all DateSeparator fields use the enum instead of string (#6078)):pkg/cloudstorage/path_test.go
 	f.SetClock(pdutil.NewMonotonicClock(mockClock))
 
 	mockClock.Set(time.Date(2022, 12, 31, 23, 59, 59, 0, time.UTC))
@@ -179,8 +191,119 @@ func TestGenerateDataFilePathWithTableIDAsPath(t *testing.T) {
 func TestFetchIndexFromFileName(t *testing.T) {
 	t.Parallel()
 
+<<<<<<< HEAD:pkg/sink/cloudstorage/path_test.go
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
+=======
+	ctx := t.Context()
+
+	testCases := []struct {
+		name               string
+		dateSeparator      config.DateSeparator
+		date               string
+		useTableIDAsPath   bool
+		enablePartition    bool
+		enableTableAcross  bool
+		table              VersionedTableName
+		expectedDMLPathKey DMLPathKey
+	}{
+		{
+			name:              "schema table with date",
+			dateSeparator:     config.DateSeparatorDay,
+			date:              "2023-05-09",
+			enableTableAcross: true,
+			table: VersionedTableName{
+				TableNameWithPhysicTableID: commonType.TableName{
+					Schema: "test",
+					Table:  "table1",
+				},
+				TableInfoVersion: 5,
+				DispatcherID:     commonType.NewDispatcherID(),
+			},
+			expectedDMLPathKey: DMLPathKey{
+				SchemaPathKey: SchemaPathKey{
+					Schema:       "test",
+					Table:        "table1",
+					TableVersion: 5,
+				},
+				Date: "2023-05-09",
+			},
+		},
+		{
+			name:             "table id path",
+			dateSeparator:    config.DateSeparatorNone,
+			useTableIDAsPath: true,
+			table: VersionedTableName{
+				TableNameWithPhysicTableID: commonType.TableName{
+					Schema:  "test",
+					Table:   "table1",
+					TableID: 12345,
+				},
+				TableInfoVersion: 5,
+				DispatcherID:     commonType.NewDispatcherID(),
+			},
+			expectedDMLPathKey: DMLPathKey{
+				SchemaPathKey: SchemaPathKey{
+					Schema:       "12345",
+					TableVersion: 5,
+				},
+				UseTableIDAsPath: true,
+				TableID:          12345,
+			},
+		},
+		{
+			name:            "partition with date",
+			dateSeparator:   config.DateSeparatorDay,
+			date:            "2023-05-09",
+			enablePartition: true,
+			table: VersionedTableName{
+				TableNameWithPhysicTableID: commonType.TableName{
+					Schema:      "test",
+					Table:       "table1",
+					TableID:     55,
+					IsPartition: true,
+				},
+				TableInfoVersion: 5,
+				DispatcherID:     commonType.NewDispatcherID(),
+			},
+			expectedDMLPathKey: DMLPathKey{
+				SchemaPathKey: SchemaPathKey{
+					Schema:       "test",
+					Table:        "table1",
+					TableVersion: 5,
+				},
+				PartitionNum: 55,
+				Date:         "2023-05-09",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := testFilePathGenerator(ctx, t, t.TempDir())
+			f.config.DateSeparator = tc.dateSeparator
+			f.config.UseTableIDAsPath = tc.useTableIDAsPath
+			f.config.EnablePartitionSeparator = tc.enablePartition
+			f.config.EnableTableAcrossNodes = tc.enableTableAcross
+
+			indexPath := f.GenerateIndexFilePath(tc.table, tc.date)
+			indexKey := FileIndexKey{
+				DispatcherID:           tc.table.DispatcherID.String(),
+				EnableTableAcrossNodes: tc.enableTableAcross,
+			}
+			require.Equal(t, indexPath, tc.expectedDMLPathKey.GenerateIndexFilePath(indexKey))
+			var pathKey DMLPathKey
+			require.NoError(t, pathKey.ParseIndexFilePath(tc.dateSeparator, indexPath))
+			require.Equal(t, tc.expectedDMLPathKey, pathKey)
+		})
+	}
+}
+
+func TestParseFileIndexFromFileName(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+>>>>>>> 0697ba0ec (cloudstorage: make all DateSeparator fields use the enum instead of string (#6078)):pkg/cloudstorage/path_test.go
 
 	dir := t.TempDir()
 	f := testFilePathGenerator(ctx, t, dir)
@@ -233,7 +356,7 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	dir := t.TempDir()
 	f := testFilePathGenerator(ctx, t, dir)
 	mockClock := clock.NewMock()
-	f.config.DateSeparator = config.DateSeparatorDay.String()
+	f.config.DateSeparator = config.DateSeparatorDay
 	f.SetClock(pdutil.NewMonotonicClock(mockClock))
 
 	mockClock.Set(time.Date(2023, 3, 9, 23, 59, 59, 0, time.UTC))
@@ -466,7 +589,7 @@ func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorDay.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorDay)
 	replicaConfig.Sink.Protocol = util.AddressOf(config.ProtocolCsv.String())
 	replicaConfig.Sink.FileIndexWidth = util.AddressOf(6)
 	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{

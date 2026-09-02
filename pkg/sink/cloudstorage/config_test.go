@@ -22,6 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,7 +32,7 @@ func TestConfigApply(t *testing.T) {
 	expected.FlushInterval = 10 * time.Second
 	expected.FileSize = 16 * 1024 * 1024
 	expected.FileIndexWidth = config.DefaultFileIndexWidth
-	expected.DateSeparator = config.DateSeparatorDay.String()
+	expected.DateSeparator = config.DateSeparatorDay
 	expected.EnablePartitionSeparator = true
 	expected.FlushConcurrency = 1
 	expected.SpoolDiskQuota = 10 * 1024 * 1024 * 1024
@@ -41,6 +42,7 @@ func TestConfigApply(t *testing.T) {
 	require.NoError(t, err)
 
 	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorDay)
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 	cfg := NewConfig()

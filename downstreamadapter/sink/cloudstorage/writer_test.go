@@ -55,7 +55,7 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	require.NoError(t, err)
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
 	cfg.FileIndexWidth = 6
 	require.NoError(t, err)
@@ -470,7 +470,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
 		// Keep the quota larger than this encoded batch so the controller still
 		// spills it to local spool files instead of taking the oversized in-memory fast path.
@@ -645,7 +645,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 	require.NoError(t, err)
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 	cfg.FileIndexWidth = 6
@@ -711,7 +711,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 	require.NoError(t, err)
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 	cfg.FileIndexWidth = 6

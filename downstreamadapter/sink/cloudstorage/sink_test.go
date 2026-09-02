@@ -148,7 +148,7 @@ func TestCloudStorageSinkWithColumnSelector(t *testing.T) {
 	}
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -646,8 +646,20 @@ func TestCleanupExpiredFiles(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+<<<<<<< HEAD
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+=======
+	cloudStorageSink := &sink{
+		changefeedID: common.NewChangefeedID4Test("test", "test"),
+		cfg: &cloudstorage.Config{
+			DateSeparator:       config.DateSeparatorDay,
+			FileExpirationDays:  1,
+			FileCleanupCronSpec: util.GetOrZero(replicaConfig.Sink.CloudStorageConfig.FileCleanupCronSpec),
+		},
+	}
+	require.NoError(t, cloudStorageSink.initCron(ctx, sinkURI, cleanupJobs))
+>>>>>>> 0697ba0ec (cloudstorage: make all DateSeparator fields use the enum instead of string (#6078))
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, cleanupJobs)
 	go cloudStorageSink.Run(ctx)
