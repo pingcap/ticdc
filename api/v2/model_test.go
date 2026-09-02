@@ -13,12 +13,25 @@
 package v2
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSinkConfigDateSeparator(t *testing.T) {
+	t.Parallel()
+
+	var sinkConfig SinkConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"date_separator":"DAY"}`), &sinkConfig))
+	require.Equal(t, config.DateSeparatorDay, util.GetOrZero(sinkConfig.DateSeparator))
+
+	err := json.Unmarshal([]byte(`{"date_separator":"week"}`), &SinkConfig{})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "CDC:ErrStorageSinkInvalidConfig")
+}
 
 func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 	info := &ChangeFeedInfo{
@@ -93,6 +106,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 			SimpleConfig: &SimpleConfig{
 				IncludeStartTs: util.AddressOf(true),
 			},
+			KafkaConfig: &KafkaConfig{
+				SASLOAuthCA: util.AddressOf("/etc/ssl/oauth-ca.pem"),
+			},
 		},
 		Mounter: &MounterConfig{
 			WorkerNum: util.AddressOf(16),
@@ -128,6 +144,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, "/tmp/ticdc-spool", util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolBaseDir))
 	require.True(t, util.GetOrZero(internalCfg.Sink.Debezium.IncludeStartTs))
 	require.True(t, util.GetOrZero(internalCfg.Sink.Simple.IncludeStartTs))
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(internalCfg.Sink.KafkaConfig.SASLOAuthCA))
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
 	require.True(t, util.GetOrZero(internalCfg.Scheduler.EnableTableAcrossNodes))
 	require.Equal(t, 1000, util.GetOrZero(internalCfg.Scheduler.RegionThreshold))
@@ -174,6 +191,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.IncludeStartTs))
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.SimpleConfig.IncludeStartTs))
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.OutputOldValue))
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(apiCfgBack.Sink.KafkaConfig.SASLOAuthCA))
 	require.Equal(t, 16, *apiCfgBack.Mounter.WorkerNum)
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)

@@ -56,7 +56,7 @@ func testFilePathGenerator(ctx context.Context, t *testing.T, dir string) *FileP
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	replicaConfig.Sink.Protocol = util.AddressOf(config.ProtocolOpen.String())
 	replicaConfig.Sink.FileIndexWidth = util.AddressOf(6)
 	cfg := NewConfig()
@@ -93,7 +93,7 @@ func TestGenerateDataFilePath(t *testing.T) {
 	// date-separator: year
 	mockClock := clock.NewMock()
 	f = testFilePathGenerator(ctx, t, dir)
-	f.config.DateSeparator = config.DateSeparatorYear.String()
+	f.config.DateSeparator = config.DateSeparatorYear
 	f.SetClock(pdutil.NewMonotonicClock(mockClock))
 	mockClock.Set(time.Date(2022, 12, 31, 23, 59, 59, 0, time.UTC))
 	date = f.GenerateDateStr()
@@ -110,7 +110,7 @@ func TestGenerateDataFilePath(t *testing.T) {
 	// date-separator: month
 	mockClock = clock.NewMock()
 	f = testFilePathGenerator(ctx, t, dir)
-	f.config.DateSeparator = config.DateSeparatorMonth.String()
+	f.config.DateSeparator = config.DateSeparatorMonth
 	f.SetClock(pdutil.NewMonotonicClock(mockClock))
 
 	mockClock.Set(time.Date(2022, 12, 31, 23, 59, 59, 0, time.UTC))
@@ -128,7 +128,7 @@ func TestGenerateDataFilePath(t *testing.T) {
 	// date-separator: day
 	mockClock = clock.NewMock()
 	f = testFilePathGenerator(ctx, t, dir)
-	f.config.DateSeparator = config.DateSeparatorDay.String()
+	f.config.DateSeparator = config.DateSeparatorDay
 	f.SetClock(pdutil.NewMonotonicClock(mockClock))
 
 	mockClock.Set(time.Date(2022, 12, 31, 23, 59, 59, 0, time.UTC))
@@ -176,7 +176,7 @@ func TestGenerateAndParseIndexFilePath(t *testing.T) {
 
 	testCases := []struct {
 		name               string
-		dateSeparator      string
+		dateSeparator      config.DateSeparator
 		date               string
 		useTableIDAsPath   bool
 		enablePartition    bool
@@ -186,7 +186,7 @@ func TestGenerateAndParseIndexFilePath(t *testing.T) {
 	}{
 		{
 			name:              "schema table with date",
-			dateSeparator:     config.DateSeparatorDay.String(),
+			dateSeparator:     config.DateSeparatorDay,
 			date:              "2023-05-09",
 			enableTableAcross: true,
 			table: VersionedTableName{
@@ -208,7 +208,7 @@ func TestGenerateAndParseIndexFilePath(t *testing.T) {
 		},
 		{
 			name:             "table id path",
-			dateSeparator:    config.DateSeparatorNone.String(),
+			dateSeparator:    config.DateSeparatorNone,
 			useTableIDAsPath: true,
 			table: VersionedTableName{
 				TableNameWithPhysicTableID: commonType.TableName{
@@ -230,7 +230,7 @@ func TestGenerateAndParseIndexFilePath(t *testing.T) {
 		},
 		{
 			name:            "partition with date",
-			dateSeparator:   config.DateSeparatorDay.String(),
+			dateSeparator:   config.DateSeparatorDay,
 			date:            "2023-05-09",
 			enablePartition: true,
 			table: VersionedTableName{
@@ -308,7 +308,7 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	dir := t.TempDir()
 	f := testFilePathGenerator(ctx, t, dir)
 	mockClock := clock.NewMock()
-	f.config.DateSeparator = config.DateSeparatorDay.String()
+	f.config.DateSeparator = config.DateSeparatorDay
 	f.SetClock(pdutil.NewMonotonicClock(mockClock))
 
 	mockClock.Set(time.Date(2023, 3, 9, 23, 59, 59, 0, time.UTC))
@@ -574,7 +574,7 @@ func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorDay.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorDay)
 	replicaConfig.Sink.Protocol = util.AddressOf(config.ProtocolCsv.String())
 	replicaConfig.Sink.FileIndexWidth = util.AddressOf(6)
 	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{

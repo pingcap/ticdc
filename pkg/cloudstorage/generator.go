@@ -323,11 +323,11 @@ func (f *FilePathGenerator) GenerateDateStr() string {
 	currTime := f.pdClock.CurrentTime()
 	// Note: `dateStr` is formatted using local TZ.
 	switch f.config.DateSeparator {
-	case config.DateSeparatorYear.String():
+	case config.DateSeparatorYear:
 		dateStr = currTime.Format("2006")
-	case config.DateSeparatorMonth.String():
+	case config.DateSeparatorMonth:
 		dateStr = currTime.Format("2006-01")
-	case config.DateSeparatorDay.String():
+	case config.DateSeparatorDay:
 		dateStr = currTime.Format("2006-01-02")
 	default:
 	}
@@ -519,7 +519,7 @@ func RemoveExpiredFiles(
 	cfg *Config,
 	checkpointTs uint64,
 ) error {
-	if cfg.DateSeparator != config.DateSeparatorDay.String() {
+	if cfg.DateSeparator != config.DateSeparatorDay {
 		return nil
 	}
 	if dateSeparatorDayRegexp == nil {

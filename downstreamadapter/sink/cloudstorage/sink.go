@@ -403,11 +403,11 @@ func (s *sink) initCron(
 }
 
 func (s *sink) bgCleanup(ctx context.Context) {
-	if s.cfg.DateSeparator != config.DateSeparatorDay.String() || s.cfg.FileExpirationDays <= 0 {
+	if s.cfg.DateSeparator != config.DateSeparatorDay || s.cfg.FileExpirationDays <= 0 {
 		log.Info("skip cleanup expired files for storage sink",
 			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeedID", s.changefeedID.Name()),
-			zap.String("dateSeparator", s.cfg.DateSeparator),
+			zap.Stringer("dateSeparator", s.cfg.DateSeparator),
 			zap.Int("expiredFileTTL", s.cfg.FileExpirationDays))
 		return
 	}
@@ -417,7 +417,7 @@ func (s *sink) bgCleanup(ctx context.Context) {
 	log.Info("start schedule cleanup expired files for storage sink",
 		zap.String("keyspace", s.changefeedID.Keyspace()),
 		zap.String("changefeedID", s.changefeedID.Name()),
-		zap.String("dateSeparator", s.cfg.DateSeparator),
+		zap.Stringer("dateSeparator", s.cfg.DateSeparator),
 		zap.Int("expiredFileTTL", s.cfg.FileExpirationDays))
 
 	// wait for the context done

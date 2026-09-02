@@ -490,6 +490,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				SASLOAuthClientID:            c.Sink.KafkaConfig.SASLOAuthClientID,
 				SASLOAuthClientSecret:        c.Sink.KafkaConfig.SASLOAuthClientSecret,
 				SASLOAuthTokenURL:            c.Sink.KafkaConfig.SASLOAuthTokenURL,
+				SASLOAuthCA:                  c.Sink.KafkaConfig.SASLOAuthCA,
 				SASLOAuthScopes:              c.Sink.KafkaConfig.SASLOAuthScopes,
 				SASLOAuthGrantType:           c.Sink.KafkaConfig.SASLOAuthGrantType,
 				SASLOAuthAudience:            c.Sink.KafkaConfig.SASLOAuthAudience,
@@ -839,6 +840,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				SASLOAuthClientID:            cloned.Sink.KafkaConfig.SASLOAuthClientID,
 				SASLOAuthClientSecret:        cloned.Sink.KafkaConfig.SASLOAuthClientSecret,
 				SASLOAuthTokenURL:            cloned.Sink.KafkaConfig.SASLOAuthTokenURL,
+				SASLOAuthCA:                  cloned.Sink.KafkaConfig.SASLOAuthCA,
 				SASLOAuthScopes:              cloned.Sink.KafkaConfig.SASLOAuthScopes,
 				SASLOAuthGrantType:           cloned.Sink.KafkaConfig.SASLOAuthGrantType,
 				SASLOAuthAudience:            cloned.Sink.KafkaConfig.SASLOAuthAudience,
@@ -1205,17 +1207,17 @@ type Table struct {
 // SinkConfig represents sink config for a changefeed
 // This is a duplicate of config.SinkConfig
 type SinkConfig struct {
-	Protocol                 *string           `json:"protocol,omitempty" toml:"protocol,omitempty"`
-	SchemaRegistry           *string           `json:"schema_registry,omitempty" toml:"schema-registry,omitempty"`
-	CSVConfig                *CSVConfig        `json:"csv,omitempty" toml:"csv,omitempty"`
-	DispatchRules            []*DispatchRule   `json:"dispatchers,omitempty" toml:"dispatchers,omitempty"`
-	ColumnSelectors          []*ColumnSelector `json:"column_selectors,omitempty" toml:"column-selectors,omitempty"`
-	TxnAtomicity             *string           `json:"transaction_atomicity,omitempty" toml:"transaction-atomicity,omitempty"`
-	EncoderConcurrency       *int              `json:"encoder_concurrency,omitempty" toml:"encoder-concurrency,omitempty"`
-	Terminator               *string           `json:"terminator,omitempty" toml:"terminator,omitempty"`
-	DateSeparator            *string           `json:"date_separator,omitempty" toml:"date-separator,omitempty"`
-	EnablePartitionSeparator *bool             `json:"enable_partition_separator,omitempty" toml:"enable-partition-separator,omitempty"`
-	FileIndexWidth           *int              `json:"file_index_width,omitempty" toml:"file-index-digit,omitempty"`
+	Protocol                 *string               `json:"protocol,omitempty" toml:"protocol,omitempty"`
+	SchemaRegistry           *string               `json:"schema_registry,omitempty" toml:"schema-registry,omitempty"`
+	CSVConfig                *CSVConfig            `json:"csv,omitempty" toml:"csv,omitempty"`
+	DispatchRules            []*DispatchRule       `json:"dispatchers,omitempty" toml:"dispatchers,omitempty"`
+	ColumnSelectors          []*ColumnSelector     `json:"column_selectors,omitempty" toml:"column-selectors,omitempty"`
+	TxnAtomicity             *string               `json:"transaction_atomicity,omitempty" toml:"transaction-atomicity,omitempty"`
+	EncoderConcurrency       *int                  `json:"encoder_concurrency,omitempty" toml:"encoder-concurrency,omitempty"`
+	Terminator               *string               `json:"terminator,omitempty" toml:"terminator,omitempty"`
+	DateSeparator            *config.DateSeparator `json:"date_separator,omitempty" toml:"date-separator,omitempty"`
+	EnablePartitionSeparator *bool                 `json:"enable_partition_separator,omitempty" toml:"enable-partition-separator,omitempty"`
+	FileIndexWidth           *int                  `json:"file_index_width,omitempty" toml:"file-index-digit,omitempty"`
 	// deprecated: it's become useless since v9.0.0
 	EnableKafkaSinkV2                *bool               `json:"enable_kafka_sink_v2,omitempty" toml:"enable-kafka-sink-v2,omitempty"`
 	OnlyOutputUpdatedColumns         *bool               `json:"only_output_updated_columns,omitempty" toml:"only-output-updated-columns,omitempty"`
@@ -1596,6 +1598,7 @@ type KafkaConfig struct {
 	SASLOAuthClientID            *string                   `json:"sasl_oauth_client_id,omitempty" toml:"sasl-oauth-client-id,omitempty"`
 	SASLOAuthClientSecret        *string                   `json:"sasl_oauth_client_secret,omitempty" toml:"sasl-oauth-client-secret,omitempty"`
 	SASLOAuthTokenURL            *string                   `json:"sasl_oauth_token_url,omitempty" toml:"sasl-oauth-token-url,omitempty"`
+	SASLOAuthCA                  *string                   `json:"sasl_oauth_ca,omitempty" toml:"sasl-oauth-ca,omitempty"`
 	SASLOAuthScopes              []string                  `json:"sasl_oauth_scopes,omitempty" toml:"sasl-oauth-scopes,omitempty"`
 	SASLOAuthGrantType           *string                   `json:"sasl_oauth_grant_type,omitempty" toml:"sasl-oauth-grant-type,omitempty"`
 	SASLOAuthAudience            *string                   `json:"sasl_oauth_audience,omitempty" toml:"sasl-oauth-audience,omitempty"`
