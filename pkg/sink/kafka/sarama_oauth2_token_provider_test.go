@@ -152,22 +152,6 @@ func TestTokenProviderUsesOAuthCA(t *testing.T) {
 	require.Equal(t, "access-token", token.Token)
 }
 
-func TestFranzConfigUsesOAuthCA(t *testing.T) {
-	t.Parallel()
-
-	server := newTLSTokenServer(t)
-	caPath := writeServerCA(t, server)
-	options := newOAuthOptions(server.URL, caPath)
-	options.sasl.mechanism = oauthMechanism
-	config, err := newFranzConfig(options)
-	require.NoError(t, err)
-	require.NotNil(t, config.SASL.OAuth2.HTTPClient)
-
-	response, err := config.SASL.OAuth2.HTTPClient.Get(server.URL)
-	require.NoError(t, err)
-	require.NoError(t, response.Body.Close())
-}
-
 func TestTokenProviderRejectsInvalidOAuthCA(t *testing.T) {
 	t.Parallel()
 

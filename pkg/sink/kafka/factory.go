@@ -29,6 +29,8 @@ type Factory interface {
 	AsyncProducer(ctx context.Context) (AsyncProducer, error)
 	// MetricsCollector returns the kafka metrics collector
 	MetricsCollector(adminClient AdminClient) MetricsCollector
+	// CleanupMetrics removes metrics owned directly by the factory.
+	CleanupMetrics()
 }
 
 // SyncProducer is the kafka sync producer

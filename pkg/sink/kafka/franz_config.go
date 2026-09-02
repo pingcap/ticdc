@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
 	"crypto/tls"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -43,91 +42,47 @@ const (
 	// minProducerBatchBytes and maxProducerBatchBytes are franz-go's accepted batch-size bounds.
 	minProducerBatchBytes = 512
 	maxProducerBatchBytes = 1 << 30
-
-	// NoResponse requests no broker acknowledgement. A send completes after the
-	// request is written. Broker-side failures are not reported, so messages can be lost.
-	NoResponse = int16(0)
-	// WaitForLocal requests acknowledgement from the partition leader. A send completes
-	// after the leader writes the message locally. An acknowledged message can be lost
-	// if the leader fails before follower replication.
-	WaitForLocal = int16(1)
-	// WaitForAll requests acknowledgement from all in-sync replicas. A send completes
-	// after the replication requirement is met. It is the default and provides the
-	// strongest durability, at the cost of higher latency or failed sends when too few
-	// replicas are in sync.
-	WaitForAll = int16(-1)
 )
 
-type Config struct {
-	BrokerEndpoints []string
-	ClientID        string
-	MaxMessageBytes int
-	MaxRetry        int
-	Compression     string
-	RequiredAcks    int16
-	DialTimeout     time.Duration
-	ReadTimeout     time.Duration
-	WriteTimeout    time.Duration
-	TLSConfig       *tls.Config
-	SASL            *SASLConfig
-}
-
-type SASLConfig struct {
-	Mechanism string
-	User      string
-	Password  string
-	GSSAPI    GSSAPIConfig
-	OAuth2    OAuth2Config
-}
-
-type GSSAPIConfig struct {
-	AuthType           int
-	KeyTabPath         string
-	KerberosConfigPath string
-	ServiceName        string
-	Username           string
-	Password           string
-	Realm              string
-	DisablePAFXFAST    bool
-}
-
-type OAuth2Config struct {
-	ClientID     string
-	ClientSecret string
-	TokenURL     string
-	Scopes       []string
-	GrantType    string
-	Audience     string
-	HTTPClient   *http.Client
-}
-
-func (c Config) requestTimeout() time.Duration { return max(c.ReadTimeout, c.WriteTimeout) }
+func requestTimeout(o *options) time.Duration { return max(o.ReadTimeout, o.WriteTimeout) }
 
 func newClientOptions(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	role string,
-	cfg Config,
+	o *options,
 	hook *metricsHook,
 ) ([]kgo.Opt, error) {
 	opts := []kgo.Opt{
 		kgo.WithContext(ctx),
-		kgo.SeedBrokers(cfg.BrokerEndpoints...),
-		kgo.ClientID(cfg.ClientID),
-		kgo.DialTimeout(cfg.DialTimeout),
-		kgo.RequestTimeoutOverhead(cfg.requestTimeout()),
-		kgo.WithLogger(newLogger(changefeedID, role)),
+		kgo.SeedBrokers(o.BrokerEndpoints...),
+		kgo.ClientID(o.ClientID),
+		kgo.DialTimeout(o.DialTimeout),
+		kgo.RequestTimeoutOverhead(requestTimeout(o)),
+		kgo.WithLogger(newClientLogger(changefeedID, role)),
 	}
 	if hook != nil {
 		opts = append(opts, kgo.WithHooks(hook))
 	}
 
-	if cfg.TLSConfig != nil {
-		opts = append(opts, kgo.DialTLSConfig(cfg.TLSConfig))
+	if o.EnableTLS {
+		tlsConfig := &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			NextProtos: []string{"h2", "http/1.1"},
+		}
+		if o.Credential != nil && o.Credential.IsTLSEnabled() {
+			var err error
+			tlsConfig, err = o.Credential.ToTLSConfig()
+			if err != nil {
+				return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+			}
+		}
+		tlsConfig.InsecureSkipVerify = o.InsecureSkipVerify
+		opts = append(opts, kgo.DialTLSConfig(tlsConfig))
 	}
 
-	if cfg.SASL != nil && cfg.SASL.Mechanism != "" {
-		mechanism, err := buildSASLMechanism(ctx, *cfg.SASL)
+	if o.sasl != nil && o.sasl.mechanism != "" {
+		mechanism, err := buildSASLMechanism(ctx, o.sasl)
 		if err != nil {
 			return nil, err
 		}
@@ -137,16 +92,16 @@ func newClientOptions(
 	return opts, nil
 }
 
-func buildSASLMechanism(ctx context.Context, cfg SASLConfig) (sasl.Mechanism, error) {
-	switch strings.ToUpper(cfg.Mechanism) {
-	case "PLAIN":
-		return plain.Auth{User: cfg.User, Pass: cfg.Password}.AsMechanism(), nil
-	case "SCRAM-SHA-256":
-		return scram.Auth{User: cfg.User, Pass: cfg.Password}.AsSha256Mechanism(), nil
-	case "SCRAM-SHA-512":
-		return scram.Auth{User: cfg.User, Pass: cfg.Password}.AsSha512Mechanism(), nil
-	case "OAUTHBEARER":
-		tokenSource, err := newOAuthTokenSource(ctx, cfg.OAuth2)
+func buildSASLMechanism(ctx context.Context, cfg *saslConfig) (sasl.Mechanism, error) {
+	switch cfg.mechanism {
+	case plainMechanism:
+		return plain.Auth{User: cfg.user, Pass: cfg.password}.AsMechanism(), nil
+	case scram256Mechanism:
+		return scram.Auth{User: cfg.user, Pass: cfg.password}.AsSha256Mechanism(), nil
+	case scram512Mechanism:
+		return scram.Auth{User: cfg.user, Pass: cfg.password}.AsSha512Mechanism(), nil
+	case oauthMechanism:
+		tokenSource, err := newOAuthTokenSource(ctx, cfg.oauth2)
 		if err != nil {
 			return nil, err
 		}
@@ -157,73 +112,101 @@ func buildSASLMechanism(ctx context.Context, cfg SASLConfig) (sasl.Mechanism, er
 			}
 			return oauth.Auth{Token: token.AccessToken}, nil
 		}), nil
-	case "GSSAPI":
-		return buildGSSAPIMechanism(cfg.GSSAPI)
+	case gssapiMechanism:
+		return buildGSSAPIMechanism(cfg.gssapi)
 	default:
-		return nil, errors.ErrKafkaInvalidConfig.GenWithStack("unsupported sasl mechanism %s", cfg.Mechanism)
+		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
+			"unsupported sasl mechanism %s", cfg.mechanism)
 	}
 }
 
-func newOAuthTokenSource(ctx context.Context, cfg OAuth2Config) (oauth2.TokenSource, error) {
-	if cfg.HTTPClient != nil {
-		ctx = context.WithValue(ctx, oauth2.HTTPClient, cfg.HTTPClient)
+func newOAuthTokenSource(ctx context.Context, cfg oauth2Config) (oauth2.TokenSource, error) {
+	if cfg.caPath != "" {
+		httpClient, err := oauthHTTPClient(cfg.caPath)
+		if err != nil {
+			return nil, err
+		}
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
 	}
 
 	endpointParams := url.Values{}
-	if cfg.GrantType != "" {
-		endpointParams.Set("grant_type", cfg.GrantType)
+	if cfg.grantType != "" {
+		endpointParams.Set("grant_type", cfg.grantType)
 	}
-	if cfg.Audience != "" {
-		endpointParams.Set("audience", cfg.Audience)
+	if cfg.audience != "" {
+		endpointParams.Set("audience", cfg.audience)
 	}
-	tokenURL, err := url.Parse(cfg.TokenURL)
+	tokenURL, err := url.Parse(cfg.tokenURL)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
 	config := &clientcredentials.Config{
-		ClientID:       cfg.ClientID,
-		ClientSecret:   cfg.ClientSecret,
+		ClientID:       cfg.clientID,
+		ClientSecret:   cfg.clientSecret,
 		TokenURL:       tokenURL.String(),
 		EndpointParams: endpointParams,
-		Scopes:         cfg.Scopes,
+		Scopes:         cfg.scopes,
 	}
 	return config.TokenSource(ctx), nil
 }
 
-func producerOptions(cfg Config) ([]kgo.Opt, error) {
-	if cfg.MaxMessageBytes > maxProducerBatchBytes {
+func newProducerClient(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	role string,
+	o *options,
+) (*kgo.Client, error) {
+	opts, err := newClientOptions(ctx, changefeedID, role, o, newMetricsHook(changefeedID))
+	if err != nil {
+		return nil, err
+	}
+
+	producerOpts, err := producerOptions(o)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := kgo.NewClient(append(opts, producerOpts...)...)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
+	}
+	return client, nil
+}
+
+func producerOptions(o *options) ([]kgo.Opt, error) {
+	if o.MaxMessageBytes > maxProducerBatchBytes {
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 			"max-message-bytes %d exceeds franz-go limit %d",
-			cfg.MaxMessageBytes,
+			o.MaxMessageBytes,
 			maxProducerBatchBytes,
 		)
 	}
 
 	// Use 64 MiB as the default budget, but never make it smaller than the configured message limit.
 	// Keep franz-go's 10,000-record default as a second bound.
-	maxBufferedBytes := max(defaultMaxBufferedBytes, cfg.MaxMessageBytes)
-	maxBatchBytes := max(minProducerBatchBytes, cfg.MaxMessageBytes)
+	maxBufferedBytes := max(defaultMaxBufferedBytes, o.MaxMessageBytes)
+	maxBatchBytes := max(minProducerBatchBytes, o.MaxMessageBytes)
 	maxBrokerWriteBytes := max(defaultBrokerWriteBytes, maxBatchBytes)
 
 	return []kgo.Opt{
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
-		kgo.RequiredAcks(requiredAcks(cfg.RequiredAcks)),
+		kgo.RequiredAcks(requiredAcks(o.RequiredAcks)),
 		// Retried requests may create duplicates because broker-side producer ID deduplication is disabled.
 		kgo.DisableIdempotentWrite(),
 		// More than one in-flight request can reorder records when an earlier request is retried.
 		kgo.MaxProduceRequestsInflightPerBroker(1),
-		kgo.RecordRetries(cfg.MaxRetry),
-		kgo.UnknownTopicRetries(cfg.MaxRetry),
+		kgo.RecordRetries(o.MaxRetry),
+		kgo.UnknownTopicRetries(o.MaxRetry),
 		kgo.MaxBufferedBytes(maxBufferedBytes),
 		kgo.ProducerBatchMaxBytes(int32(maxBatchBytes)),
 		kgo.BrokerMaxWriteBytes(int32(maxBrokerWriteBytes)),
-		kgo.ProduceRequestTimeout(cfg.requestTimeout()),
+		kgo.ProduceRequestTimeout(requestTimeout(o)),
 		kgo.ProducerLinger(0),
-		compressionOption(cfg.Compression),
+		compressionOption(o.Compression),
 	}, nil
 }
 
-func requiredAcks(required int16) kgo.Acks {
+func requiredAcks(required RequiredAcks) kgo.Acks {
 	switch required {
 	case WaitForAll:
 		return kgo.AllISRAcks()
@@ -232,7 +215,7 @@ func requiredAcks(required int16) kgo.Acks {
 	case NoResponse:
 		return kgo.NoAck()
 	default:
-		log.Warn("unsupported required acks", zap.Int16("requiredAcks", required))
+		log.Warn("unsupported required acks", zap.Int16("requiredAcks", int16(required)))
 		return kgo.AllISRAcks()
 	}
 }

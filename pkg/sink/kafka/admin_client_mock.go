@@ -5,6 +5,7 @@
 package kafka
 
 import (
+	context "context"
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
@@ -46,37 +47,37 @@ func (mr *MockAdminClientMockRecorder) Close() *gomock.Call {
 }
 
 // CreateTopic mocks base method.
-func (m *MockAdminClient) CreateTopic(detail *TopicDetail) error {
+func (m *MockAdminClient) CreateTopic(ctx context.Context, detail *TopicDetail) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateTopic", detail)
+	ret := m.ctrl.Call(m, "CreateTopic", ctx, detail)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // CreateTopic indicates an expected call of CreateTopic.
-func (mr *MockAdminClientMockRecorder) CreateTopic(detail interface{}) *gomock.Call {
+func (mr *MockAdminClientMockRecorder) CreateTopic(ctx, detail interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTopic", reflect.TypeOf((*MockAdminClient)(nil).CreateTopic), detail)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTopic", reflect.TypeOf((*MockAdminClient)(nil).CreateTopic), ctx, detail)
 }
 
 // GetAllBrokers mocks base method.
-func (m *MockAdminClient) GetAllBrokers() []Broker {
+func (m *MockAdminClient) GetAllBrokers(ctx context.Context) []Broker {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetAllBrokers")
+	ret := m.ctrl.Call(m, "GetAllBrokers", ctx)
 	ret0, _ := ret[0].([]Broker)
 	return ret0
 }
 
 // GetAllBrokers indicates an expected call of GetAllBrokers.
-func (mr *MockAdminClientMockRecorder) GetAllBrokers() *gomock.Call {
+func (mr *MockAdminClientMockRecorder) GetAllBrokers(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllBrokers", reflect.TypeOf((*MockAdminClient)(nil).GetAllBrokers))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllBrokers", reflect.TypeOf((*MockAdminClient)(nil).GetAllBrokers), ctx)
 }
 
 // GetBrokerConfig mocks base method.
-func (m *MockAdminClient) GetBrokerConfig(configName string) (string, bool, error) {
+func (m *MockAdminClient) GetBrokerConfig(ctx context.Context, configName string) (string, bool, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetBrokerConfig", configName)
+	ret := m.ctrl.Call(m, "GetBrokerConfig", ctx, configName)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(bool)
 	ret2, _ := ret[2].(error)
@@ -84,15 +85,15 @@ func (m *MockAdminClient) GetBrokerConfig(configName string) (string, bool, erro
 }
 
 // GetBrokerConfig indicates an expected call of GetBrokerConfig.
-func (mr *MockAdminClientMockRecorder) GetBrokerConfig(configName interface{}) *gomock.Call {
+func (mr *MockAdminClientMockRecorder) GetBrokerConfig(ctx, configName interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBrokerConfig", reflect.TypeOf((*MockAdminClient)(nil).GetBrokerConfig), configName)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBrokerConfig", reflect.TypeOf((*MockAdminClient)(nil).GetBrokerConfig), ctx, configName)
 }
 
 // GetTopicConfig mocks base method.
-func (m *MockAdminClient) GetTopicConfig(topicName, configName string) (string, bool, error) {
+func (m *MockAdminClient) GetTopicConfig(ctx context.Context, topicName, configName string) (string, bool, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetTopicConfig", topicName, configName)
+	ret := m.ctrl.Call(m, "GetTopicConfig", ctx, topicName, configName)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(bool)
 	ret2, _ := ret[2].(error)
@@ -100,37 +101,37 @@ func (m *MockAdminClient) GetTopicConfig(topicName, configName string) (string, 
 }
 
 // GetTopicConfig indicates an expected call of GetTopicConfig.
-func (mr *MockAdminClientMockRecorder) GetTopicConfig(topicName, configName interface{}) *gomock.Call {
+func (mr *MockAdminClientMockRecorder) GetTopicConfig(ctx, topicName, configName interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicConfig", reflect.TypeOf((*MockAdminClient)(nil).GetTopicConfig), topicName, configName)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicConfig", reflect.TypeOf((*MockAdminClient)(nil).GetTopicConfig), ctx, topicName, configName)
 }
 
 // GetTopicsMeta mocks base method.
-func (m *MockAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
+func (m *MockAdminClient) GetTopicsMeta(ctx context.Context, topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetTopicsMeta", topics, ignoreTopicError)
+	ret := m.ctrl.Call(m, "GetTopicsMeta", ctx, topics, ignoreTopicError)
 	ret0, _ := ret[0].(map[string]TopicDetail)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetTopicsMeta indicates an expected call of GetTopicsMeta.
-func (mr *MockAdminClientMockRecorder) GetTopicsMeta(topics, ignoreTopicError interface{}) *gomock.Call {
+func (mr *MockAdminClientMockRecorder) GetTopicsMeta(ctx, topics, ignoreTopicError interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicsMeta", reflect.TypeOf((*MockAdminClient)(nil).GetTopicsMeta), topics, ignoreTopicError)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicsMeta", reflect.TypeOf((*MockAdminClient)(nil).GetTopicsMeta), ctx, topics, ignoreTopicError)
 }
 
 // GetTopicsPartitionsNum mocks base method.
-func (m *MockAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
+func (m *MockAdminClient) GetTopicsPartitionsNum(ctx context.Context, topics []string) (map[string]int32, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetTopicsPartitionsNum", topics)
+	ret := m.ctrl.Call(m, "GetTopicsPartitionsNum", ctx, topics)
 	ret0, _ := ret[0].(map[string]int32)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetTopicsPartitionsNum indicates an expected call of GetTopicsPartitionsNum.
-func (mr *MockAdminClientMockRecorder) GetTopicsPartitionsNum(topics interface{}) *gomock.Call {
+func (mr *MockAdminClientMockRecorder) GetTopicsPartitionsNum(ctx, topics interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicsPartitionsNum", reflect.TypeOf((*MockAdminClient)(nil).GetTopicsPartitionsNum), topics)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicsPartitionsNum", reflect.TypeOf((*MockAdminClient)(nil).GetTopicsPartitionsNum), ctx, topics)
 }

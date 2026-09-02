@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -33,7 +31,7 @@ func TestLoggerLevelAndFiltering(t *testing.T) {
 	oldLevel := log.GetLevel()
 	defer log.SetLevel(oldLevel)
 
-	clientLogger := newLogger(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "logger"), "producer").(*logger)
+	clientLogger := newClientLogger(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "logger"), "producer").(*clientLogger)
 
 	log.SetLevel(zapcore.InfoLevel)
 	require.Equal(t, kgo.LogLevelWarn, clientLogger.Level())
@@ -50,28 +48,12 @@ func TestLoggerLevelAndFiltering(t *testing.T) {
 	})
 }
 
-func TestLoggerSamplingIsConcurrent(t *testing.T) {
-	clientLogger := newLogger(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "logger"), "producer").(*logger)
-	now := time.Now()
-	clientLogger.now = func() time.Time { return now }
-
-	var wg sync.WaitGroup
-	for range 20 {
-		wg.Go(func() {
-			clientLogger.shouldLog(kgo.LogLevelWarn, "repeat")
-		})
-	}
-
-	wg.Wait()
-	require.Equal(t, uint64(20), clientLogger.counts["2:repeat"])
-}
-
 func TestLoggerPreservesContextAndRedactsValues(t *testing.T) {
 	core, logs := observer.New(zapcore.DebugLevel)
 	restore := log.ReplaceGlobals(zap.New(core), nil)
 	defer restore()
 
-	clientLogger := newLogger(common.NewChangefeedID4Test("keyspace", "changefeed"), "producer")
+	clientLogger := newClientLogger(common.NewChangefeedID4Test("keyspace", "changefeed"), "producer")
 	clientLogger.Log(
 		kgo.LogLevelWarn,
 		"connection failed",
@@ -98,7 +80,7 @@ func TestLoggerSamplesRepeatedMessages(t *testing.T) {
 	restore := log.ReplaceGlobals(zap.New(core), nil)
 	defer restore()
 
-	clientLogger := newLogger(common.NewChangefeedID4Test("keyspace", "changefeed"), "producer")
+	clientLogger := newClientLogger(common.NewChangefeedID4Test("keyspace", "changefeed"), "producer")
 	for range 105 {
 		clientLogger.Log(kgo.LogLevelWarn, "repeated")
 	}

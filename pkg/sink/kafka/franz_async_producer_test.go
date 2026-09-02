@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -30,7 +30,7 @@ import (
 )
 
 func TestAsyncSendClosedProducer(t *testing.T) {
-	producer := &AsyncProducer{}
+	producer := &asyncProducer{}
 	producer.closed.Store(true)
 
 	err := producer.AsyncSend(context.Background(), "topic", 0, &codeccommon.Message{})
@@ -41,12 +41,12 @@ func TestAsyncSendClosedProducer(t *testing.T) {
 func TestAsyncSendCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	producer := &AsyncProducer{}
+	producer := &asyncProducer{}
 	require.ErrorIs(t, producer.AsyncSend(ctx, "topic", 0, &codeccommon.Message{}), context.Canceled)
 }
 
 func TestAsyncRunCallbackReturnsQueuedErrorAndCloses(t *testing.T) {
-	producer := &AsyncProducer{
+	producer := &asyncProducer{
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-callback"),
 		errCh:        make(chan error, 1),
 	}
@@ -63,7 +63,7 @@ func TestCloseDoesNotAcknowledgeBufferedMessage(t *testing.T) {
 	require.NoError(t, err)
 
 	var callbackCalled atomic.Bool
-	producer := &AsyncProducer{
+	producer := &asyncProducer{
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-close"),
 		errCh:        make(chan error, 1),
@@ -87,11 +87,10 @@ func TestAsyncProducerCallbackExactlyOnce(t *testing.T) {
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 	defer cluster.Close()
 
-	producer, err := NewAsyncProducer(
+	producer, err := newAsyncProducer(
 		context.Background(),
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-success"),
-		testConfig(cluster.ListenAddrs()),
-		nil,
+		testOptions(cluster.ListenAddrs()),
 	)
 	require.NoError(t, err)
 	defer producer.Close()
@@ -126,11 +125,10 @@ func TestAsyncProducerReportsProduceFailure(t *testing.T) {
 		return produceResponseWithError(req, 0, kerr.InvalidTopicException.Code)
 	})
 
-	producer, err := NewAsyncProducer(
+	producer, err := newAsyncProducer(
 		context.Background(),
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-error"),
-		testConfig(cluster.ListenAddrs()),
-		nil,
+		testOptions(cluster.ListenAddrs()),
 	)
 	require.NoError(t, err)
 	defer producer.Close()
@@ -159,7 +157,7 @@ func TestBufferBackpressureCanBeCanceled(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	producer := &AsyncProducer{
+	producer := &asyncProducer{
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "backpressure"),
 		errCh:        make(chan error, 1),

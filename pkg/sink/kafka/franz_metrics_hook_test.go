@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -29,8 +29,8 @@ import (
 
 func TestInitMetrics(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "metrics-registration")
-	CleanupMetrics(changefeedID)
-	t.Cleanup(func() { CleanupMetrics(changefeedID) })
+	cleanupMetrics(changefeedID)
+	t.Cleanup(func() { cleanupMetrics(changefeedID) })
 
 	hook := newMetricsHook(changefeedID)
 	hook.OnProduceBatchWritten(
@@ -64,8 +64,8 @@ func TestInitMetrics(t *testing.T) {
 
 func TestMetricsHookRecordsRawValues(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "metrics-hook")
-	CleanupMetrics(changefeedID)
-	t.Cleanup(func() { CleanupMetrics(changefeedID) })
+	cleanupMetrics(changefeedID)
+	t.Cleanup(func() { cleanupMetrics(changefeedID) })
 	hook := newMetricsHook(changefeedID)
 	meta := kgo.BrokerMetadata{NodeID: 1}
 

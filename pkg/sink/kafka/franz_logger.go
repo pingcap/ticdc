@@ -11,12 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -29,36 +28,32 @@ import (
 // logValueLimit bounds individual string fields emitted by the franz-go logger.
 const logValueLimit = 1024
 
-type logger struct {
-	changefeedID common.ChangeFeedID
-	role         string
-	now          func() time.Time
-	mu           sync.Mutex
-	windowStart  time.Time
-	counts       map[string]uint64
+type clientLogger struct {
+	logger *zap.Logger
 }
 
-func newLogger(changefeedID common.ChangeFeedID, role string) kgo.Logger {
-	return &logger{changefeedID: changefeedID, role: role, now: time.Now, counts: make(map[string]uint64)}
+func newClientLogger(changefeedID common.ChangeFeedID, role string) kgo.Logger {
+	logger := log.L().With(
+		zap.String("component", "kafka-client"),
+		zap.String("keyspace", changefeedID.Keyspace()),
+		zap.String("changefeed", changefeedID.Name()),
+		zap.String("role", role),
+	).WithOptions(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
+		return zapcore.NewSamplerWithOptions(core, time.Minute, 5, 100)
+	}))
+
+	return &clientLogger{logger: logger}
 }
 
-func (l *logger) Level() kgo.LogLevel {
+func (l *clientLogger) Level() kgo.LogLevel {
 	if log.GetLevel() <= zapcore.DebugLevel {
 		return kgo.LogLevelInfo
 	}
 	return kgo.LogLevelWarn
 }
 
-func (l *logger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
-	if !l.shouldLog(level, msg) {
-		return
-	}
-	fields := []zap.Field{
-		zap.String("component", "kafka-client"),
-		zap.String("keyspace", l.changefeedID.Keyspace()),
-		zap.String("changefeed", l.changefeedID.Name()),
-		zap.String("role", l.role),
-	}
+func (l *clientLogger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
+	fields := make([]zap.Field, 0, (len(keyvals)+1)/2)
 
 	for i := 0; i < len(keyvals); i += 2 {
 		key := fmt.Sprint(keyvals[i])
@@ -77,28 +72,12 @@ func (l *logger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
 
 	switch level {
 	case kgo.LogLevelError:
-		log.Error(msg, fields...)
+		l.logger.Error(msg, fields...)
 	case kgo.LogLevelWarn:
-		log.Warn(msg, fields...)
+		l.logger.Warn(msg, fields...)
 	default:
-		log.Debug(msg, fields...)
+		l.logger.Debug(msg, fields...)
 	}
-}
-
-func (l *logger) shouldLog(level kgo.LogLevel, msg string) bool {
-	now := l.now()
-	key := fmt.Sprintf("%d:%s", level, msg)
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.windowStart.IsZero() || now.Sub(l.windowStart) >= time.Minute {
-		l.windowStart, l.counts = now, make(map[string]uint64)
-	}
-
-	l.counts[key]++
-
-	return l.counts[key] <= 5 || l.counts[key]%100 == 0
 }
 
 func isSensitiveLogKey(key string) bool {

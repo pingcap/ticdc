@@ -45,7 +45,7 @@ func TestGetBrokerConfig(t *testing.T) {
 			changefeed: common.NewChangeFeedIDWithName("test", "default"),
 			admin:      admin,
 		}
-		value, found, err := client.GetBrokerConfig("message.max.bytes")
+		value, found, err := client.GetBrokerConfig(t.Context(), "message.max.bytes")
 
 		require.NoError(t, err)
 		require.True(t, found)
@@ -62,7 +62,7 @@ func TestGetBrokerConfig(t *testing.T) {
 			changefeed: common.NewChangeFeedIDWithName("test", "default"),
 			admin:      admin,
 		}
-		value, found, err := client.GetBrokerConfig("missing")
+		value, found, err := client.GetBrokerConfig(t.Context(), "missing")
 
 		require.NoError(t, err)
 		require.False(t, found)
@@ -79,7 +79,7 @@ func TestGetBrokerConfig(t *testing.T) {
 			changefeed: common.NewChangeFeedIDWithName("test", "default"),
 			admin:      admin,
 		}
-		_, _, err := client.GetBrokerConfig("missing")
+		_, _, err := client.GetBrokerConfig(t.Context(), "missing")
 
 		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
 		require.ErrorIs(t, err, cause)
@@ -104,7 +104,7 @@ func TestGetTopicConfig(t *testing.T) {
 			admin:      admin,
 		}
 
-		value, found, err := client.GetTopicConfig("test-topic", "max.message.bytes")
+		value, found, err := client.GetTopicConfig(t.Context(), "test-topic", "max.message.bytes")
 
 		require.NoError(t, err)
 		require.True(t, found)
@@ -120,7 +120,7 @@ func TestGetTopicConfig(t *testing.T) {
 			admin:      admin,
 		}
 
-		value, found, err := client.GetTopicConfig("test-topic", "missing")
+		value, found, err := client.GetTopicConfig(t.Context(), "test-topic", "missing")
 
 		require.NoError(t, err)
 		require.False(t, found)
@@ -136,7 +136,7 @@ func TestGetTopicConfig(t *testing.T) {
 			admin:      admin,
 		}
 
-		_, _, err := client.GetTopicConfig("test-topic", "missing")
+		_, _, err := client.GetTopicConfig(t.Context(), "test-topic", "missing")
 
 		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
@@ -165,7 +165,7 @@ func TestGetTopicsMeta(t *testing.T) {
 			admin:      admin,
 		}
 
-		topics, err := client.GetTopicsMeta([]string{"valid-topic", "missing-topic"}, false)
+		topics, err := client.GetTopicsMeta(t.Context(), []string{"valid-topic", "missing-topic"}, false)
 
 		require.Nil(t, topics)
 		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
@@ -190,7 +190,7 @@ func TestGetTopicsMeta(t *testing.T) {
 			admin:      admin,
 		}
 
-		topics, err := client.GetTopicsMeta([]string{"valid-topic", "missing-topic"}, true)
+		topics, err := client.GetTopicsMeta(t.Context(), []string{"valid-topic", "missing-topic"}, true)
 
 		require.NoError(t, err)
 		require.Equal(t, map[string]TopicDetail{
@@ -210,7 +210,7 @@ func TestGetTopicsMeta(t *testing.T) {
 			admin:      admin,
 		}
 
-		topics, err := client.GetTopicsMeta([]string{"missing-topic"}, false)
+		topics, err := client.GetTopicsMeta(t.Context(), []string{"missing-topic"}, false)
 
 		require.NoError(t, err)
 		require.Empty(t, topics)
@@ -227,7 +227,7 @@ func TestGetTopicsMeta(t *testing.T) {
 			admin:      admin,
 		}
 
-		_, err := client.GetTopicsMeta([]string{"test-topic"}, false)
+		_, err := client.GetTopicsMeta(t.Context(), []string{"test-topic"}, false)
 
 		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
 		require.ErrorIs(t, err, sarama.ErrInvalidTopic)
@@ -245,7 +245,7 @@ func TestGetTopicsMeta(t *testing.T) {
 			admin:      admin,
 		}
 
-		_, err := client.GetTopicsMeta([]string{"test-topic"}, false)
+		_, err := client.GetTopicsMeta(t.Context(), []string{"test-topic"}, false)
 
 		require.ErrorIs(t, err, errors.ErrKafkaAuthorizationFailed)
 		require.NotErrorIs(t, err, errors.ErrKafkaAdminAPI)
@@ -265,7 +265,7 @@ func TestGetTopicsMeta(t *testing.T) {
 			admin:      admin,
 		}
 
-		_, err := client.GetTopicsMeta([]string{"test-topic"}, false)
+		_, err := client.GetTopicsMeta(t.Context(), []string{"test-topic"}, false)
 
 		require.ErrorIs(t, err, errors.ErrKafkaAuthorizationFailed)
 		require.NotErrorIs(t, err, errors.ErrKafkaAdminAPI)
@@ -284,7 +284,7 @@ func TestGetTopicsMeta(t *testing.T) {
 			admin:      admin,
 		}
 
-		topics, err := client.GetTopicsMeta([]string{"test-topic"}, true)
+		topics, err := client.GetTopicsMeta(t.Context(), []string{"test-topic"}, true)
 
 		require.NoError(t, err)
 		require.Empty(t, topics)
@@ -387,7 +387,7 @@ func TestCreateTopic(t *testing.T) {
 				admin:      admin,
 			}
 
-			err := client.CreateTopic(&TopicDetail{
+			err := client.CreateTopic(t.Context(), &TopicDetail{
 				Name:              "test-topic",
 				NumPartitions:     3,
 				ReplicationFactor: 2,

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -23,23 +23,23 @@ import (
 )
 
 func TestGSSAPIConfigValidation(t *testing.T) {
-	valid := GSSAPIConfig{
-		AuthType:           userAuth,
-		KerberosConfigPath: "/etc/krb5.conf",
-		ServiceName:        "kafka",
-		Username:           "alice",
-		Password:           "secret",
-		Realm:              "EXAMPLE.COM",
+	valid := gssapiConfig{
+		authType:           userAuth,
+		kerberosConfigPath: "/etc/krb5.conf",
+		serviceName:        "kafka",
+		username:           "alice",
+		password:           "secret",
+		realm:              "EXAMPLE.COM",
 	}
 
-	for _, mutate := range []func(*GSSAPIConfig){
-		func(cfg *GSSAPIConfig) { cfg.ServiceName = "" },
-		func(cfg *GSSAPIConfig) { cfg.KerberosConfigPath = "" },
-		func(cfg *GSSAPIConfig) { cfg.Username = "" },
-		func(cfg *GSSAPIConfig) { cfg.Realm = "" },
-		func(cfg *GSSAPIConfig) { cfg.Password = "" },
-		func(cfg *GSSAPIConfig) { cfg.AuthType = 0 },
-		func(cfg *GSSAPIConfig) { cfg.AuthType, cfg.KeyTabPath = keyTabAuth, "" },
+	for _, mutate := range []func(*gssapiConfig){
+		func(cfg *gssapiConfig) { cfg.serviceName = "" },
+		func(cfg *gssapiConfig) { cfg.kerberosConfigPath = "" },
+		func(cfg *gssapiConfig) { cfg.username = "" },
+		func(cfg *gssapiConfig) { cfg.realm = "" },
+		func(cfg *gssapiConfig) { cfg.password = "" },
+		func(cfg *gssapiConfig) { cfg.authType = 0 },
+		func(cfg *gssapiConfig) { cfg.authType, cfg.keyTabPath = keyTabAuth, "" },
 	} {
 		cfg := valid
 		mutate(&cfg)
@@ -50,13 +50,13 @@ func TestGSSAPIConfigValidation(t *testing.T) {
 }
 
 func TestGSSAPIRejectsMissingKerberosConfig(t *testing.T) {
-	mechanism, err := buildGSSAPIMechanism(GSSAPIConfig{
-		AuthType:           userAuth,
-		KerberosConfigPath: "/path/that/does/not/exist",
-		ServiceName:        "kafka",
-		Username:           "alice",
-		Password:           "secret",
-		Realm:              "EXAMPLE.COM",
+	mechanism, err := buildGSSAPIMechanism(gssapiConfig{
+		authType:           userAuth,
+		kerberosConfigPath: "/path/that/does/not/exist",
+		serviceName:        "kafka",
+		username:           "alice",
+		password:           "secret",
+		realm:              "EXAMPLE.COM",
 	})
 	require.NoError(t, err)
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -29,55 +29,54 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func testConfig(brokers []string) Config {
-	return Config{
-		BrokerEndpoints: brokers,
-		MaxMessageBytes: 1 << 20,
-		MaxRetry:        1,
-		RequiredAcks:    WaitForAll,
-		DialTimeout:     time.Second,
-		ReadTimeout:     time.Second,
-		WriteTimeout:    time.Second,
-	}
+func testOptions(brokers []string) *options {
+	o := NewOptions()
+	o.BrokerEndpoints = brokers
+	o.MaxMessageBytes = 1 << 20
+	o.MaxRetry = 1
+	o.DialTimeout = time.Second
+	o.ReadTimeout = time.Second
+	o.WriteTimeout = time.Second
+	return o
 }
 
-func TestRequiredAcks(t *testing.T) {
+func TestFranzRequiredAcks(t *testing.T) {
 	for _, test := range []struct {
-		required int16
+		required RequiredAcks
 		expected kgo.Acks
 	}{
 		{required: WaitForAll, expected: kgo.AllISRAcks()},
 		{required: WaitForLocal, expected: kgo.LeaderAck()},
 		{required: NoResponse, expected: kgo.NoAck()},
-		{required: 2, expected: kgo.AllISRAcks()},
+		{required: RequiredAcks(2), expected: kgo.AllISRAcks()},
 	} {
 		require.Equal(t, test.expected, requiredAcks(test.required))
 	}
 }
 
-func TestRequestTimeoutUsesLargerTimeout(t *testing.T) {
-	cfg := Config{ReadTimeout: time.Second, WriteTimeout: 2 * time.Second}
-	require.Equal(t, 2*time.Second, cfg.requestTimeout())
+func TestFranzRequestTimeoutUsesLargerTimeout(t *testing.T) {
+	o := &options{ReadTimeout: time.Second, WriteTimeout: 2 * time.Second}
+	require.Equal(t, 2*time.Second, requestTimeout(o))
 
-	cfg.ReadTimeout = 3 * time.Second
-	require.Equal(t, 3*time.Second, cfg.requestTimeout())
+	o.ReadTimeout = 3 * time.Second
+	require.Equal(t, 3*time.Second, requestTimeout(o))
 }
 
 func TestProducerOptionsBoundBufferAndBatch(t *testing.T) {
 	const batchBytes = 1048588
-	cfg := testConfig([]string{"127.0.0.1:9092"})
-	cfg.MaxMessageBytes = batchBytes
+	o := testOptions([]string{"127.0.0.1:9092"})
+	o.MaxMessageBytes = batchBytes
 
 	opts, err := newClientOptions(
 		context.Background(),
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "config"),
 		"test",
-		cfg,
+		o,
 		nil,
 	)
 	require.NoError(t, err)
 
-	producerOpts, err := producerOptions(cfg)
+	producerOpts, err := producerOptions(o)
 	require.NoError(t, err)
 
 	client, err := kgo.NewClient(append(opts, producerOpts...)...)
@@ -93,7 +92,7 @@ func TestProducerOptionsBoundBufferAndBatch(t *testing.T) {
 }
 
 func TestProducerOptionsUseSingleNonIdempotentRequest(t *testing.T) {
-	config := testConfig([]string{"127.0.0.1:9092"})
+	config := testOptions([]string{"127.0.0.1:9092"})
 
 	producerOpts, err := producerOptions(config)
 	require.NoError(t, err)
@@ -108,7 +107,7 @@ func TestProducerOptionsUseSingleNonIdempotentRequest(t *testing.T) {
 
 func TestProducerLimitsScaleWithConfiguredMessage(t *testing.T) {
 	maxMessageBytes := defaultBrokerWriteBytes + 1
-	config := testConfig([]string{"127.0.0.1:9092"})
+	config := testOptions([]string{"127.0.0.1:9092"})
 	config.MaxMessageBytes = maxMessageBytes
 
 	producerOpts, err := producerOptions(config)
@@ -123,7 +122,7 @@ func TestProducerLimitsScaleWithConfiguredMessage(t *testing.T) {
 }
 
 func TestProducerOptionsClampSmallBatch(t *testing.T) {
-	config := testConfig([]string{"127.0.0.1:9092"})
+	config := testOptions([]string{"127.0.0.1:9092"})
 	config.MaxMessageBytes = minProducerBatchBytes - 1
 
 	producerOpts, err := producerOptions(config)
@@ -137,7 +136,7 @@ func TestProducerOptionsClampSmallBatch(t *testing.T) {
 }
 
 func TestProducerOptionsRejectOversizedBatch(t *testing.T) {
-	config := testConfig([]string{"127.0.0.1:9092"})
+	config := testOptions([]string{"127.0.0.1:9092"})
 	config.MaxMessageBytes = maxProducerBatchBytes + 1
 
 	_, err := producerOptions(config)
@@ -158,7 +157,7 @@ func TestCompressionOptions(t *testing.T) {
 		{name: "unknown falls back to none", compression: "unknown", expected: kgo.NoCompression()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			cfg := testConfig([]string{"127.0.0.1:9092"})
+			cfg := testOptions([]string{"127.0.0.1:9092"})
 			cfg.Compression = test.compression
 
 			producerOpts, err := producerOptions(cfg)
@@ -173,41 +172,41 @@ func TestCompressionOptions(t *testing.T) {
 	}
 }
 
-func TestBuildGSSAPIMechanism(t *testing.T) {
-	for _, cfg := range []GSSAPIConfig{
-		{AuthType: userAuth, Password: "pwd"},
-		{AuthType: keyTabAuth, KeyTabPath: "/tmp/a.keytab"},
+func TestBuildFranzGSSAPIMechanism(t *testing.T) {
+	for _, cfg := range []gssapiConfig{
+		{authType: userAuth, password: "pwd"},
+		{authType: keyTabAuth, keyTabPath: "/tmp/a.keytab"},
 	} {
-		cfg.KerberosConfigPath = "/etc/krb5.conf"
-		cfg.ServiceName = "kafka"
-		cfg.Username = "alice"
-		cfg.Realm = "EXAMPLE.COM"
+		cfg.kerberosConfigPath = "/etc/krb5.conf"
+		cfg.serviceName = "kafka"
+		cfg.username = "alice"
+		cfg.realm = "EXAMPLE.COM"
 
-		mechanism, err := buildSASLMechanism(context.Background(), SASLConfig{
-			Mechanism: "GSSAPI",
-			GSSAPI:    cfg,
+		mechanism, err := buildSASLMechanism(context.Background(), &saslConfig{
+			mechanism: gssapiMechanism,
+			gssapi:    cfg,
 		})
 		require.NoError(t, err)
 		require.Equal(t, "GSSAPI", mechanism.Name())
 	}
 }
 
-func TestBuildSASLMechanisms(t *testing.T) {
-	for _, mechanism := range []string{"PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"} {
-		actual, err := buildSASLMechanism(context.Background(), SASLConfig{
-			Mechanism: mechanism,
-			User:      "alice",
-			Password:  "secret",
+func TestBuildFranzSASLMechanisms(t *testing.T) {
+	for _, mechanism := range []saslMechanism{plainMechanism, scram256Mechanism, scram512Mechanism} {
+		actual, err := buildSASLMechanism(context.Background(), &saslConfig{
+			mechanism: mechanism,
+			user:      "alice",
+			password:  "secret",
 		})
 		require.NoError(t, err)
-		require.Equal(t, mechanism, actual.Name())
+		require.Equal(t, string(mechanism), actual.Name())
 	}
 
-	_, err := buildSASLMechanism(context.Background(), SASLConfig{Mechanism: "unknown"})
+	_, err := buildSASLMechanism(context.Background(), &saslConfig{mechanism: "unknown"})
 	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 }
 
-func TestOAuthTokenSource(t *testing.T) {
+func TestFranzOAuthTokenSource(t *testing.T) {
 	request := make(chan url.Values, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
@@ -224,13 +223,13 @@ func TestOAuthTokenSource(t *testing.T) {
 	}))
 	defer server.Close()
 
-	source, err := newOAuthTokenSource(context.Background(), OAuth2Config{
-		ClientID:     "client",
-		ClientSecret: "secret",
-		TokenURL:     server.URL,
-		Scopes:       []string{"scope-a", "scope-b"},
-		GrantType:    "custom",
-		Audience:     "audience",
+	source, err := newOAuthTokenSource(context.Background(), oauth2Config{
+		clientID:     "client",
+		clientSecret: "secret",
+		tokenURL:     server.URL,
+		scopes:       []string{"scope-a", "scope-b"},
+		grantType:    "custom",
+		audience:     "audience",
 	})
 	require.NoError(t, err)
 
@@ -244,26 +243,7 @@ func TestOAuthTokenSource(t *testing.T) {
 	require.Equal(t, "scope-a scope-b", form.Get("scope"))
 }
 
-func TestOAuthTokenSourceUsesHTTPClient(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, err := io.WriteString(w, `{"access_token":"token","token_type":"bearer"}`)
-		require.NoError(t, err)
-	}))
-	defer server.Close()
-
-	source, err := newOAuthTokenSource(context.Background(), OAuth2Config{
-		TokenURL:   server.URL,
-		HTTPClient: server.Client(),
-	})
-	require.NoError(t, err)
-
-	token, err := source.Token()
-	require.NoError(t, err)
-	require.Equal(t, "token", token.AccessToken)
-}
-
-func TestOAuthTokenSourceRejectsInvalidURL(t *testing.T) {
-	_, err := newOAuthTokenSource(context.Background(), OAuth2Config{TokenURL: "http://example.com/%%"})
+func TestFranzOAuthTokenSourceRejectsInvalidURL(t *testing.T) {
+	_, err := newOAuthTokenSource(context.Background(), oauth2Config{tokenURL: "http://example.com/%%"})
 	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 }

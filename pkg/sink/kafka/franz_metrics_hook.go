@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"strconv"
@@ -23,7 +23,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-// metricsHook adapts franz-go client callbacks to TiCDC's Kafka sink metrics.
+// metricsHook adapts client callbacks to TiCDC's Kafka sink metrics.
 // franz-go calls these hook methods while writing requests, receiving responses,
 // and flushing produce batches. The hook does not poll Kafka; it only records
 // raw callback values for Prometheus.
@@ -107,8 +107,8 @@ func (h *metricsHook) broker(nodeID int32) *brokerMetrics {
 	return actual.(*brokerMetrics)
 }
 
-// CleanupMetrics removes producer series after all clients are closed.
-func CleanupMetrics(changefeedID common.ChangeFeedID) {
+// cleanupMetrics removes producer series after all clients are closed.
+func cleanupMetrics(changefeedID common.ChangeFeedID) {
 	labels := prometheus.Labels{
 		"namespace":  changefeedID.Keyspace(),
 		"changefeed": changefeedID.Name(),

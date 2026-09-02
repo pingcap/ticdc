@@ -25,12 +25,5 @@ func NewFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedI
 	if o.Client == KafkaClientSarama {
 		return NewSaramaFactory(ctx, o, changefeedID)
 	}
-	return NewFranzFactory(ctx, o, changefeedID)
-}
-
-// CleanupFactoryMetrics removes metrics owned directly by a client factory.
-func CleanupFactoryMetrics(factory Factory) {
-	if cleaner, ok := factory.(interface{ CleanupMetrics() }); ok {
-		cleaner.CleanupMetrics()
-	}
+	return newFactory(ctx, o, changefeedID)
 }

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -26,28 +26,19 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-type Broker struct{ ID int32 }
-
-type TopicDetail struct {
-	Name              string
-	NumPartitions     int32
-	ReplicationFactor int16
-}
-
-type Admin struct {
+type admin struct {
 	changefeed common.ChangeFeedID
 
-	client  *kgo.Client
 	admin   *kadm.Client
 	timeout time.Duration
 }
 
-func NewAdmin(
+func newAdmin(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
-	cfg Config,
-) (*Admin, error) {
-	opts, err := newClientOptions(ctx, changefeedID, "admin", cfg, nil)
+	o *options,
+) (*admin, error) {
+	opts, err := newClientOptions(ctx, changefeedID, "admin", o, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -60,16 +51,15 @@ func NewAdmin(
 		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 
-	return &Admin{
+	return &admin{
 		changefeed: changefeedID,
-		client:     client,
 		admin:      kadm.NewClient(client),
-		timeout:    cfg.requestTimeout(),
+		timeout:    requestTimeout(o),
 	}, nil
 }
 
-func (a *Admin) GetAllBrokers() []Broker {
-	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
+func (a *admin) GetAllBrokers(ctx context.Context) []Broker {
+	ctx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 
 	meta, err := a.admin.BrokerMetadata(ctx)
@@ -85,8 +75,8 @@ func (a *Admin) GetAllBrokers() []Broker {
 	return brokers
 }
 
-func (a *Admin) GetBrokerConfig(configName string) (string, bool, error) {
-	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
+func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 
 	meta, err := a.admin.BrokerMetadata(ctx)
@@ -138,8 +128,8 @@ func (a *Admin) GetBrokerConfig(configName string) (string, bool, error) {
 	return "", false, nil
 }
 
-func (a *Admin) GetTopicConfig(topicName string, configName string) (string, bool, error) {
-	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
+func (a *admin) GetTopicConfig(ctx context.Context, topicName string, configName string) (string, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 
 	configs, err := a.admin.DescribeTopicConfigs(ctx, topicName)
@@ -177,12 +167,12 @@ func (a *Admin) GetTopicConfig(topicName string, configName string) (string, boo
 	return "", false, nil
 }
 
-func (a *Admin) GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
+func (a *admin) GetTopicsMeta(ctx context.Context, topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
 	if len(topics) == 0 {
 		return make(map[string]TopicDetail), nil
 	}
 
-	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
+	ctx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 
 	meta, err := a.admin.Metadata(ctx, topics...)
@@ -238,8 +228,8 @@ func isAuthorizationFailed(err error) bool {
 		errors.Is(err, kerr.ClusterAuthorizationFailed)
 }
 
-func (a *Admin) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
-	details, err := a.GetTopicsMeta(topics, false)
+func (a *admin) GetTopicsPartitionsNum(ctx context.Context, topics []string) (map[string]int32, error) {
+	details, err := a.GetTopicsMeta(ctx, topics, false)
 	if err != nil {
 		return nil, err
 	}
@@ -252,8 +242,8 @@ func (a *Admin) GetTopicsPartitionsNum(topics []string) (map[string]int32, error
 	return partitions, nil
 }
 
-func (a *Admin) CreateTopic(detail *TopicDetail) error {
-	ctx, cancel := context.WithTimeout(a.client.Context(), a.timeout)
+func (a *admin) CreateTopic(ctx context.Context, detail *TopicDetail) error {
+	ctx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 
 	responses, err := a.admin.CreateTopics(ctx, detail.NumPartitions, detail.ReplicationFactor, nil, detail.Name)
@@ -289,6 +279,6 @@ func (a *Admin) CreateTopic(detail *TopicDetail) error {
 	return errors.WrapError(errors.ErrKafkaAdminAPI, resp.Err, "create-topic", detail.Name)
 }
 
-func (a *Admin) Close() {
+func (a *admin) Close() {
 	a.admin.Close()
 }

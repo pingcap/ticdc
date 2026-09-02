@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -27,7 +27,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-func TestTopicDetailsFromMetadata(t *testing.T) {
+func TestFranzTopicDetailsFromMetadata(t *testing.T) {
 	t.Parallel()
 
 	const topic = "topic"
@@ -116,7 +116,7 @@ func TestTopicDetailsFromMetadata(t *testing.T) {
 	}
 }
 
-func TestIsAuthorizationFailed(t *testing.T) {
+func TestFranzIsAuthorizationFailed(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -141,49 +141,66 @@ func TestIsAuthorizationFailed(t *testing.T) {
 	}
 }
 
+func TestAdminHonorsCallContext(t *testing.T) {
+	admin, err := newAdmin(
+		t.Context(),
+		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "context"),
+		testOptions([]string{"127.0.0.1:1"}),
+	)
+	require.NoError(t, err)
+	t.Cleanup(admin.Close)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, err = admin.GetTopicsMeta(ctx, []string{"topic"}, false)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestAdminOperations(t *testing.T) {
 	const existingTopic = "existing-topic"
+	ctx := t.Context()
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(3, existingTopic))
 	defer cluster.Close()
 
-	admin, err := NewAdmin(
-		context.Background(),
+	admin, err := newAdmin(
+		ctx,
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
-		testConfig(cluster.ListenAddrs()),
+		testOptions(cluster.ListenAddrs()),
 	)
 	require.NoError(t, err)
 	defer admin.Close()
 
-	require.Len(t, admin.GetAllBrokers(), 1)
+	require.Len(t, admin.GetAllBrokers(ctx), 1)
 
-	value, found, err := admin.GetBrokerConfig("message.max.bytes")
+	value, found, err := admin.GetBrokerConfig(ctx, "message.max.bytes")
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, "1048588", value)
 
-	_, found, err = admin.GetBrokerConfig("missing")
+	_, found, err = admin.GetBrokerConfig(ctx, "missing")
 	require.NoError(t, err)
 	require.False(t, found)
 
-	value, found, err = admin.GetTopicConfig(existingTopic, "max.message.bytes")
+	value, found, err = admin.GetTopicConfig(ctx, existingTopic, "max.message.bytes")
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, "1048588", value)
 
-	_, found, err = admin.GetTopicConfig(existingTopic, "missing")
+	_, found, err = admin.GetTopicConfig(ctx, existingTopic, "missing")
 	require.NoError(t, err)
 	require.False(t, found)
 
-	partitions, err := admin.GetTopicsPartitionsNum([]string{existingTopic})
+	partitions, err := admin.GetTopicsPartitionsNum(ctx, []string{existingTopic})
 	require.NoError(t, err)
 	require.Equal(t, map[string]int32{existingTopic: 3}, partitions)
 
 	const topic = "test-topic"
-	topics, err := admin.GetTopicsMeta([]string{topic}, true)
+	topics, err := admin.GetTopicsMeta(ctx, []string{topic}, true)
 	require.NoError(t, err)
 	require.Empty(t, topics)
 
-	err = admin.CreateTopic(&TopicDetail{
+	err = admin.CreateTopic(ctx, &TopicDetail{
 		Name:              topic,
 		NumPartitions:     3,
 		ReplicationFactor: 1,
@@ -191,21 +208,22 @@ func TestAdminOperations(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		topics, err = admin.GetTopicsMeta([]string{topic}, false)
+		topics, err = admin.GetTopicsMeta(ctx, []string{topic}, false)
 		return err == nil && topics[topic].NumPartitions == 3
 	}, time.Second, 20*time.Millisecond)
 
-	require.NoError(t, admin.CreateTopic(&TopicDetail{Name: topic, NumPartitions: 3, ReplicationFactor: 1}))
+	require.NoError(t, admin.CreateTopic(ctx, &TopicDetail{Name: topic, NumPartitions: 3, ReplicationFactor: 1}))
 }
 
 func TestCreateTopicErrors(t *testing.T) {
+	ctx := t.Context()
 	cluster := kfake.MustCluster(kfake.NumBrokers(1))
 	defer cluster.Close()
 
-	admin, err := NewAdmin(
-		context.Background(),
+	admin, err := newAdmin(
+		ctx,
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "create-errors"),
-		testConfig(cluster.ListenAddrs()),
+		testOptions(cluster.ListenAddrs()),
 	)
 	require.NoError(t, err)
 	defer admin.Close()
@@ -215,7 +233,7 @@ func TestCreateTopicErrors(t *testing.T) {
 	cluster.ControlKey(int16(kmsg.CreateTopics), func(req kmsg.Request) (kmsg.Response, error, bool) {
 		return req.ResponseKind(), nil, true
 	})
-	require.ErrorIs(t, admin.CreateTopic(detail), errors.ErrKafkaAdminAPI)
+	require.ErrorIs(t, admin.CreateTopic(ctx, detail), errors.ErrKafkaAdminAPI)
 
 	for _, test := range []struct {
 		name     string
@@ -248,7 +266,7 @@ func TestCreateTopicErrors(t *testing.T) {
 				return response, nil, true
 			})
 
-			require.ErrorIs(t, admin.CreateTopic(detail), test.expected)
+			require.ErrorIs(t, admin.CreateTopic(ctx, detail), test.expected)
 		})
 	}
 }

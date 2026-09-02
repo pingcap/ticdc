@@ -32,6 +32,8 @@ type saramaFactory struct {
 	metricRegistry metrics.Registry
 }
 
+func (*saramaFactory) CleanupMetrics() {}
+
 // NewSaramaFactory constructs a Factory with sarama implementation.
 func NewSaramaFactory(
 	ctx context.Context,
@@ -59,7 +61,7 @@ func NewSaramaFactory(
 		admin.Close()
 	}()
 
-	if err = adjustOptions(changefeedID, admin, o, o.Topic); err != nil {
+	if err = adjustOptions(ctx, changefeedID, admin, o, o.Topic); err != nil {
 		return nil, err
 	}
 	log.Info("kafka sink configuration resolved",

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -27,7 +27,7 @@ import (
 )
 
 func TestSyncProducerClosedReturnsProducerClosed(t *testing.T) {
-	producer := &SyncProducer{}
+	producer := &syncProducer{}
 	producer.closed.Store(true)
 
 	err := producer.SendMessage("topic", 1, &codeccommon.Message{})
@@ -42,11 +42,10 @@ func TestSyncProducerSendsToRequestedPartitions(t *testing.T) {
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
 	defer cluster.Close()
 
-	producer, err := NewSyncProducer(
+	producer, err := newSyncProducer(
 		context.Background(),
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "sync"),
-		testConfig(cluster.ListenAddrs()),
-		nil,
+		testOptions(cluster.ListenAddrs()),
 	)
 	require.NoError(t, err)
 	defer producer.Close()
@@ -64,11 +63,10 @@ func TestSyncProducerReturnsPartialFailure(t *testing.T) {
 		return produceResponseWithError(req, 1, kerr.InvalidTopicException.Code)
 	})
 
-	producer, err := NewSyncProducer(
+	producer, err := newSyncProducer(
 		context.Background(),
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "partial"),
-		testConfig(cluster.ListenAddrs()),
-		nil,
+		testOptions(cluster.ListenAddrs()),
 	)
 	require.NoError(t, err)
 	defer producer.Close()
@@ -79,11 +77,10 @@ func TestSyncProducerReturnsPartialFailure(t *testing.T) {
 }
 
 func TestSyncProducerCloseIsIdempotent(t *testing.T) {
-	client, err := NewSyncProducer(
+	client, err := newSyncProducer(
 		context.Background(),
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "close"),
-		testConfig([]string{"127.0.0.1:1"}),
-		nil,
+		testOptions([]string{"127.0.0.1:1"}),
 	)
 	require.NoError(t, err)
 

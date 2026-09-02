@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import (
 	"context"
@@ -26,7 +26,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type AsyncProducer struct {
+type asyncProducer struct {
 	client       *kgo.Client
 	changefeedID common.ChangeFeedID
 
@@ -35,37 +35,24 @@ type AsyncProducer struct {
 	errCh        chan error
 }
 
-func NewAsyncProducer(
+func newAsyncProducer(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
-	cfg Config,
-	hook *metricsHook,
-) (*AsyncProducer, error) {
-	opts, err := newClientOptions(ctx, changefeedID, "async-producer", cfg, hook)
+	o *options,
+) (*asyncProducer, error) {
+	client, err := newProducerClient(ctx, changefeedID, "async-producer", o)
 	if err != nil {
 		return nil, err
 	}
 
-	producerOpts, err := producerOptions(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	opts = append(opts, producerOpts...)
-
-	client, err := kgo.NewClient(opts...)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
-	}
-
-	return &AsyncProducer{
+	return &asyncProducer{
 		client:       client,
 		changefeedID: changefeedID,
 		errCh:        make(chan error, 1),
 	}, nil
 }
 
-func (p *AsyncProducer) Close() {
+func (p *asyncProducer) Close() {
 	if !p.closeStarted.CompareAndSwap(false, true) {
 		return
 	}
@@ -80,7 +67,7 @@ func (p *AsyncProducer) Close() {
 		zap.Duration("duration", time.Since(start)))
 }
 
-func (p *AsyncProducer) AsyncSend(
+func (p *asyncProducer) AsyncSend(
 	ctx context.Context,
 	topic string,
 	partition int32,
@@ -121,14 +108,14 @@ func (p *AsyncProducer) AsyncSend(
 	return nil
 }
 
-func (p *AsyncProducer) enqueueAsyncSendError(
+func (p *asyncProducer) enqueueAsyncSendError(
 	logInfo *codeccommon.MessageLogInfo,
 	err error,
 ) {
 	log.Error("kafka message send failed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
 		zap.String("changefeed", p.changefeedID.Name()),
-		zap.String("eventContext", buildEventLogContext(
+		zap.String("eventContext", BuildEventLogContext(
 			p.changefeedID.Keyspace(), p.changefeedID.Name(), logInfo)),
 		zap.Error(err))
 
@@ -139,7 +126,7 @@ func (p *AsyncProducer) enqueueAsyncSendError(
 	}
 }
 
-func (p *AsyncProducer) AsyncRunCallback(ctx context.Context) error {
+func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
 	defer p.closed.Store(true)
 	for {
 		select {

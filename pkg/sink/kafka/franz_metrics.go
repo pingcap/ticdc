@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package franz
+package kafka
 
 import "github.com/prometheus/client_golang/prometheus"
 
@@ -82,17 +82,3 @@ var (
 		Help:      "Total record bytes after compression in successfully written franz-go batches.",
 	}, []string{"namespace", "changefeed"})
 )
-
-func InitMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(
-		requestsInFlight,
-		outgoingBytesTotal,
-		requestsTotal,
-		responsesTotal,
-		requestDuration,
-		throttleTime,
-		recordsPerBatch,
-		uncompressedBytesTotal,
-		compressedBytesTotal,
-	)
-}

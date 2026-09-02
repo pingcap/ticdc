@@ -170,7 +170,7 @@ func newWithComponents(
 		}
 		comp.close()
 		statistics.Close()
-		kafka.CleanupFactoryMetrics(comp.factory)
+		comp.factory.CleanupMetrics()
 	}()
 
 	asyncProducer, err = comp.factory.AsyncProducer(ctx)
@@ -576,7 +576,7 @@ func (s *sink) Close() {
 	s.dmlProducer.Close()
 	s.comp.close()
 	s.statistics.Close()
-	kafka.CleanupFactoryMetrics(s.comp.factory)
+	s.comp.factory.CleanupMetrics()
 }
 
 func (s *sink) BatchCount() int {

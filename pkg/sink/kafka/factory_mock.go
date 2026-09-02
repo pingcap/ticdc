@@ -65,6 +65,18 @@ func (mr *MockFactoryMockRecorder) AsyncProducer(ctx interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AsyncProducer", reflect.TypeOf((*MockFactory)(nil).AsyncProducer), ctx)
 }
 
+// CleanupMetrics mocks base method.
+func (m *MockFactory) CleanupMetrics() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "CleanupMetrics")
+}
+
+// CleanupMetrics indicates an expected call of CleanupMetrics.
+func (mr *MockFactoryMockRecorder) CleanupMetrics() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CleanupMetrics", reflect.TypeOf((*MockFactory)(nil).CleanupMetrics))
+}
+
 // MetricsCollector mocks base method.
 func (m *MockFactory) MetricsCollector(adminClient AdminClient) MetricsCollector {
 	m.ctrl.T.Helper()

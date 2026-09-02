@@ -21,13 +21,12 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 )
 
-func TestIsUnretryableFranzError(t *testing.T) {
+func TestIsUnretryableClientError(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -58,7 +57,7 @@ func TestIsUnretryableFranzError(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			require.Equal(t, test.unretryable, IsUnretryableFranzError(test.err))
+			require.Equal(t, test.unretryable, IsUnretryableKafkaError(test.err))
 		})
 	}
 }
@@ -73,7 +72,7 @@ func TestFactorySelection(t *testing.T) {
 		client   string
 		expected Factory
 	}{
-		{client: KafkaClientFranz, expected: &franzFactoryAdapter{}},
+		{client: KafkaClientFranz, expected: &franzFactory{}},
 		{client: KafkaClientSarama, expected: &saramaFactory{}},
 	} {
 		t.Run(test.client, func(t *testing.T) {
@@ -87,7 +86,7 @@ func TestFactorySelection(t *testing.T) {
 			require.NoError(t, err)
 			require.IsType(t, test.expected, factory)
 
-			CleanupFactoryMetrics(factory)
+			factory.CleanupMetrics()
 		})
 	}
 }
@@ -110,53 +109,6 @@ func TestFranzIgnoresConfiguredKafkaVersion(t *testing.T) {
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "version-negotiation"),
 	)
 	require.NoError(t, err)
-	require.IsType(t, &franzFactoryAdapter{}, factory)
-	CleanupFactoryMetrics(factory)
-}
-
-func TestFranzAndSaramaFactoriesAreIndependent(t *testing.T) {
-	const topic = "factory-independence"
-	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
-	defer cluster.Close()
-
-	franzOptions := NewOptions()
-	franzOptions.ClientID = "ticdc-franz-test"
-	franzOptions.BrokerEndpoints = cluster.ListenAddrs()
-	franzOptions.Topic = topic
-
-	franzFactory, err := NewFactory(
-		context.Background(),
-		franzOptions,
-		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "franz"),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { CleanupFactoryMetrics(franzFactory) })
-
-	saramaOptions := NewOptions()
-	saramaOptions.Client = KafkaClientSarama
-	saramaOptions.ClientID = "ticdc-sarama-test"
-	saramaOptions.BrokerEndpoints = cluster.ListenAddrs()
-	saramaOptions.Topic = topic
-
-	saramaFactory, err := NewFactory(
-		context.Background(),
-		saramaOptions,
-		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "sarama"),
-	)
-	require.NoError(t, err)
-
-	franzProducer, err := franzFactory.SyncProducer(context.Background())
-	require.NoError(t, err)
-	t.Cleanup(franzProducer.Close)
-
-	saramaProducer, err := saramaFactory.SyncProducer(context.Background())
-	require.NoError(t, err)
-	t.Cleanup(saramaProducer.Close)
-
-	message := &codeccommon.Message{Value: []byte("value")}
-	require.NoError(t, franzProducer.SendMessage(topic, 0, message))
-	require.NoError(t, saramaProducer.SendMessage(topic, 0, message))
-
-	franzProducer.Close()
-	require.NoError(t, saramaProducer.SendMessage(topic, 0, message))
+	require.IsType(t, &franzFactory{}, factory)
+	factory.CleanupMetrics()
 }
