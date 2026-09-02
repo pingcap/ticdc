@@ -62,6 +62,110 @@ func TestController_StopChangefeed(t *testing.T) {
 	require.Len(t, oc.operators, 1)
 }
 
+<<<<<<< HEAD
+=======
+func TestController_StopChangefeedWithMaintainerEpoch(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	oc, _, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend, nil)
+	owner := node.NewInfo("localhost:8301", "")
+	nodeManager.GetAliveNodes()[owner.ID] = owner
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        20,
+	},
+		1, true)
+	changefeedDB.AddReplicatingMaintainer(cf, owner.ID)
+
+	op := oc.StopChangefeedWithMaintainerEpoch(context.Background(), cfID, false, 10)
+	reqMsg := op.Schedule()
+	require.Equal(t, owner.ID, reqMsg.To)
+	req := reqMsg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, uint64(10), req.MaintainerEpoch)
+
+	// A repeated warning arrives after the first stop has cleared the placement.
+	// Keep stopping the original owner instead of replacing the operator with a
+	// coordinator-local stop carrying a newer epoch.
+	repeatedOp := oc.StopChangefeedWithMaintainerEpoch(context.Background(), cfID, false, 20)
+	require.Same(t, op, repeatedOp)
+	repeatedReqMsg := repeatedOp.Schedule()
+	require.Equal(t, owner.ID, repeatedReqMsg.To)
+	repeatedReq := repeatedReqMsg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, uint64(10), repeatedReq.MaintainerEpoch)
+	require.False(t, repeatedReq.Removed)
+}
+
+func TestController_StopRemoteMaintainerWithMaintainerEpoch(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	oc, _, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend, nil)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        20,
+	}, 1, true)
+	changefeedDB.AddAbsentChangefeed(cf)
+
+	oldNode := node.ID("old-node")
+	nodeManager.GetAliveNodes()[oldNode] = &node.Info{ID: oldNode}
+	op := oc.StopRemoteMaintainerWithMaintainerEpoch(cfID, oldNode, false, 10)
+	reqMsg := op.Schedule()
+	require.Equal(t, oldNode, reqMsg.To)
+	req := reqMsg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, uint64(10), req.MaintainerEpoch)
+
+	op.Check(oldNode, &heartbeatpb.MaintainerStatus{
+		State:           heartbeatpb.ComponentState_Stopped,
+		MaintainerEpoch: 20,
+	})
+	require.False(t, op.IsFinished())
+
+	op.Check(oldNode, &heartbeatpb.MaintainerStatus{
+		State:           heartbeatpb.ComponentState_Stopped,
+		MaintainerEpoch: 10,
+	})
+	require.True(t, op.IsFinished())
+}
+
+func TestController_StopChangefeedDoesNotReuseStaleOwnerCleanup(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	oc, _, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend, nil)
+	staleOwner := node.NewInfo("localhost:8301", "")
+	currentOwner := node.NewInfo("localhost:8302", "")
+	nodeManager.GetAliveNodes()[staleOwner.ID] = staleOwner
+	nodeManager.GetAliveNodes()[currentOwner.ID] = currentOwner
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        20,
+	}, 1, true)
+	changefeedDB.AddReplicatingMaintainer(cf, currentOwner.ID)
+
+	staleOp := oc.StopRemoteMaintainerWithMaintainerEpoch(cfID, staleOwner.ID, false, 10)
+	require.Equal(t, staleOwner.ID, staleOp.Schedule().To)
+
+	backend.EXPECT().SetChangefeedProgress(gomock.Any(), cfID, config.ProgressNone).Return(nil).Times(1)
+	currentOp := oc.StopChangefeedWithMaintainerEpoch(context.Background(), cfID, false, 20)
+	require.NotSame(t, staleOp, currentOp)
+	currentReqMsg := currentOp.Schedule()
+	require.Equal(t, currentOwner.ID, currentReqMsg.To)
+	currentReq := currentReqMsg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, uint64(20), currentReq.MaintainerEpoch)
+}
+
+>>>>>>> ea94ac1be (coordinator: preserve stop operator on repeated warnings (#6135))
 func TestController_AddOperator(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
