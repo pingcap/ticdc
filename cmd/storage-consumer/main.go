@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -82,6 +83,7 @@ func init() {
 }
 
 func main() {
+	debug.SetMemoryLimit(8 * 1024 * 1024 * 1024)
 	var consumer *consumer
 	var err error
 
