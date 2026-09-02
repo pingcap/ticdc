@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -76,6 +77,7 @@ type consumer struct {
 	// tableDMLIdxMap maintains a map of <dmlPathKey, fileIndexKeyMap>
 	tableDMLIdxMap map[cloudstorage.DMLPathKey]fileIndexKeyMap
 	eventsGroup    map[int64]*util.EventsGroup
+	spillStore     *util.SpillStore
 	// tableDDLWatermark maintains a map of <`schema`.`table`, max executed DDL table version>.
 	// DML files with smaller table versions are considered stale replays and should be ignored.
 	tableDDLWatermark map[string]uint64
@@ -175,12 +177,20 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		errCh:             errCh,
 		tableDMLIdxMap:    make(map[cloudstorage.DMLPathKey]fileIndexKeyMap),
 		eventsGroup:       make(map[int64]*util.EventsGroup),
+		spillStore:        util.NewSpillStore(),
 		tableDDLWatermark: make(map[string]uint64),
 		schemaFileMap:     make(map[string]map[uint64]*cloudstorage.SchemaFile),
 		tableIDGenerator: &fakeTableIDGenerator{
 			tableIDs: make(map[string]int64),
 		},
 	}, nil
+}
+
+func (c *consumer) getSpillStore() *util.SpillStore {
+	if c.spillStore == nil {
+		c.spillStore = util.NewSpillStore()
+	}
+	return c.spillStore
 }
 
 // map1 - map2
@@ -294,7 +304,7 @@ func (c *consumer) appendMessage2Group(
 	)
 	group := c.eventsGroup[tableID]
 	if group == nil {
-		group = util.NewEventsGroup(0, tableID)
+		group = util.NewEventsGroup(0, tableID, c.getSpillStore())
 		c.eventsGroup[tableID] = group
 	}
 	if commitTs >= group.HighWatermark {
@@ -417,13 +427,16 @@ func (c *consumer) newDMLMessageData(
 				return nil, errors.ErrSpillFileOp.FastGenByArgs("unsupported storage DML spill protocol")
 			}
 		})
-	restore := messageData.Restore
-	messageData.Restore = func(data []byte, dmlIndex uint64) (*common.DMLMessage, error) {
-		message, err := restore(data, dmlIndex)
+	decode := messageData.Decode
+	messageData.Decode = func(data []byte) ([]*common.DMLMessage, error) {
+		messages, err := decode(data)
 		if err != nil {
 			return nil, err
 		}
-		return messageWithPhysicalTableID(message, tableID), nil
+		for i, message := range messages {
+			messages[i] = messageWithPhysicalTableID(message, tableID)
+		}
+		return messages, nil
 	}
 	return messageData
 }
@@ -441,28 +454,62 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 	if group == nil {
 		return nil
 	}
-	messages, err := group.GetAllMessages()
-	if err != nil {
-		return err
+	start := time.Now()
+	total := 0
+	for {
+		batch, hasMore, err := group.PrepareResolve(
+			math.MaxUint64, c.getSpillStore().ResolveLimit())
+		if err != nil {
+			return err
+		}
+		if batch == nil {
+			break
+		}
+		events := util.DMLMessagesToEvents(batch.Messages)
+		if len(events) != 0 {
+			fields := []zap.Field{zap.Int64("tableID", tableID)}
+			if events[0].TableInfo != nil {
+				fields = append(fields,
+					zap.String("schema", events[0].TableInfo.GetSchemaName()),
+					zap.String("table", events[0].TableInfo.GetTableName()))
+			}
+			if err := c.flushDMLBatch(ctx, events, fields...); err != nil {
+				return err
+			}
+			total += len(events)
+		}
+		batch.Ack()
+		if !hasMore {
+			break
+		}
 	}
-	if len(messages) == 0 {
+	if total != 0 {
+		stats := c.getSpillStore().Stats()
+		log.Info("flush DML events done", zap.Int64("tableID", tableID),
+			zap.Int("total", total), zap.Duration("duration", time.Since(start)),
+			zap.Int64("spillPayloadWriteBytes", stats.PayloadWriteBytes),
+			zap.Int64("spillPayloadReadBytes", stats.PayloadReadBytes),
+			zap.Int64("spillPayloadWriteCount", stats.PayloadWriteCount),
+			zap.Int64("spillPayloadReadCount", stats.PayloadReadCount),
+			zap.Int64("spillPayloadDecodeCount", stats.PayloadDecodeCount),
+			zap.Int64("spillPendingBytes", stats.PendingBytes),
+			zap.Int("spillLivePayloads", stats.LivePayloads),
+			zap.Int("spillLiveSegments", stats.LiveSegments))
+	}
+	return nil
+}
+
+func (c *consumer) flushDMLBatch(
+	ctx context.Context, events []*event.DMLEvent, fields ...zap.Field,
+) error {
+	if len(events) == 0 {
 		return nil
 	}
-	events := util.DMLMessagesToEvents(messages)
 	total := len(events)
-	if total == 0 {
-		return nil
-	}
 	var (
-		schema string
-		table  string
+		flushed atomic.Int64
+		done    = make(chan struct{})
 	)
-	if events[0].TableInfo != nil {
-		schema = events[0].TableInfo.GetSchemaName()
-		table = events[0].TableInfo.GetTableName()
-	}
-	var flushed atomic.Int64
-	done := make(chan struct{})
 	for _, e := range events {
 		e.AddPostFlushFunc(func() {
 			if flushed.Inc() == int64(total) {
@@ -472,8 +519,6 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 		c.sink.AddDMLEvent(e)
 	}
 
-	// Make sure all events are flushed to downstream.
-	start := time.Now()
 	ticker := time.NewTicker(defaultLogInterval)
 	defer ticker.Stop()
 	for {
@@ -481,13 +526,10 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-done:
-			log.Info("flush DML events done",
-				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
 			return nil
 		case <-ticker.C:
-			log.Warn("DML events cannot be flushed in time",
-				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+			log.Warn("DML events cannot be flushed in time", append(fields,
+				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))...)
 		}
 	}
 }
@@ -495,12 +537,11 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 func (c *consumer) cleanupEventsGroups() error {
 	var cleanupErr error
 	for _, group := range c.eventsGroup {
-		if err := group.Cleanup(); err != nil {
-			log.Warn("cleanup events group spill file failed", zap.Error(err))
-			if cleanupErr == nil {
-				cleanupErr = err
-			}
-		}
+		_ = group.Cleanup()
+	}
+	if err := c.getSpillStore().Cleanup(); err != nil {
+		cleanupErr = err
+		log.Warn("cleanup spill store failed", zap.Error(err))
 	}
 	return cleanupErr
 }
@@ -762,6 +803,11 @@ func (c *consumer) handleNewFiles(
 					zap.String("path", filePath))
 				if err := c.appendDMLEvents(ctx, tableID, schemaFile, key, fileIndex); err != nil {
 					return err
+				}
+				if c.getSpillStore().ShouldDrain() {
+					if err := c.flushDMLEvents(ctx, tableID); err != nil {
+						return err
+					}
 				}
 			}
 		}

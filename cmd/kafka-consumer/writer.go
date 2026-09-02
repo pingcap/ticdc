@@ -87,6 +87,7 @@ type writer struct {
 	maxBatchSize           int
 	mysqlSink              sink.Sink
 	enableTableAcrossNodes bool
+	spillStore             *util.SpillStore
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -99,6 +100,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		ddlList:                make([]*event.DDLEvent, 0),
 		ddlWithMaxCommitTs:     make(map[int64]uint64),
 		enableTableAcrossNodes: o.enableTableAcrossNodes,
+		spillStore:             util.NewSpillStore(),
 	}
 	var (
 		db  *sql.DB
@@ -147,62 +149,129 @@ func (w *writer) run(ctx context.Context) error {
 	return w.mysqlSink.Run(ctx)
 }
 
+func (w *writer) getSpillStore() *util.SpillStore {
+	if w.spillStore == nil {
+		w.spillStore = util.NewSpillStore()
+	}
+	return w.spillStore
+}
+
 func (w *writer) cleanupEventsGroups() error {
 	var cleanupErr error
 	for _, progress := range w.progresses {
 		for _, group := range progress.eventsGroup {
-			if err := group.Cleanup(); err != nil {
-				log.Warn("cleanup events group spill file failed",
-					zap.Int32("partition", progress.partition), zap.Error(err))
-				if cleanupErr == nil {
-					cleanupErr = err
-				}
-			}
+			_ = group.Cleanup()
 		}
+	}
+	if err := w.getSpillStore().Cleanup(); err != nil {
+		cleanupErr = err
+		log.Warn("cleanup spill store failed", zap.Error(err))
 	}
 	return cleanupErr
 }
 
 func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
-	var (
-		done = make(chan struct{}, 1)
-
-		flushed atomic.Int64
-	)
-
 	tableIDs := w.getBlockTableIDs(ddl)
 	commitTs := ddl.GetCommitTs()
-	resolvedEvents := make([]*event.DMLEvent, 0)
+	start := time.Now()
+	groups := make([]*util.EventsGroup, 0)
 	for tableID := range tableIDs {
 		for _, progress := range w.progresses {
 			g, ok := progress.eventsGroup[tableID]
 			if !ok {
 				continue
 			}
-			messages, err := g.ResolveInto(commitTs, nil)
-			if err != nil {
-				return err
-			}
-			events := util.DMLMessagesToEvents(messages)
-			resolvedEvents = append(resolvedEvents, events...)
+			groups = append(groups, g)
 		}
 	}
-
-	total := len(resolvedEvents)
-	if total == 0 {
-		return w.mysqlSink.WriteBlockEvent(ddl)
+	total, err := w.flushEventsFromGroups(ctx, groups, commitTs,
+		zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query))
+	if err != nil {
+		return err
 	}
-	for _, e := range resolvedEvents {
+
+	if total != 0 {
+		log.Info("flush DML events before DDL done", zap.Uint64("DDLCommitTs", commitTs),
+			zap.Int("total", total), zap.Duration("duration", time.Since(start)),
+			zap.Any("tables", tableIDs))
+	}
+	return w.mysqlSink.WriteBlockEvent(ddl)
+}
+
+func (w *writer) flushEventsFromGroups(
+	ctx context.Context, groups []*util.EventsGroup, resolveTs uint64, fields ...zap.Field,
+) (int, error) {
+	limit := w.getSpillStore().ResolveLimit()
+	batchEvents := make([]*event.DMLEvent, 0, limit.MaxMessages)
+	batchMessages := 0
+	var batchBytes int64
+	total := 0
+	prepared := make([]*util.ResolveBatch, 0, len(groups))
+	flush := func() error {
+		if err := w.flushDMLBatch(ctx, batchEvents, fields...); err != nil {
+			return err
+		}
+		for _, batch := range prepared {
+			batch.Ack()
+		}
+		total += len(batchEvents)
+		batchEvents = nil
+		prepared = prepared[:0]
+		batchMessages = 0
+		batchBytes = 0
+		return nil
+	}
+
+	for {
+		hasMoreGroups := false
+		preparedAny := false
+		for _, group := range groups {
+			if batchMessages >= limit.MaxMessages || batchBytes >= limit.MaxBytes {
+				if err := flush(); err != nil {
+					return 0, err
+				}
+			}
+			remaining := util.ResolveLimit{
+				MaxBytes:    limit.MaxBytes - batchBytes,
+				MaxMessages: limit.MaxMessages - batchMessages,
+			}
+			batch, hasMore, err := group.PrepareResolve(resolveTs, remaining)
+			if err != nil {
+				return 0, err
+			}
+			hasMoreGroups = hasMoreGroups || hasMore
+			if batch != nil {
+				preparedAny = true
+				prepared = append(prepared, batch)
+				batchEvents = append(batchEvents, util.DMLMessagesToEvents(batch.Messages)...)
+				batchMessages += len(batch.Messages)
+				batchBytes += batch.ResolvedBytes
+			}
+		}
+		if err := flush(); err != nil {
+			return 0, err
+		}
+		if !hasMoreGroups || !preparedAny {
+			break
+		}
+	}
+	return total, nil
+}
+
+func (w *writer) flushDMLBatch(ctx context.Context, events []*event.DMLEvent, fields ...zap.Field) error {
+	if len(events) == 0 {
+		return nil
+	}
+	done := make(chan struct{})
+	var flushed atomic.Int64
+	for _, e := range events {
 		e.AddPostFlushFunc(func() {
-			if flushed.Inc() == int64(total) {
+			if flushed.Inc() == int64(len(events)) {
 				close(done)
 			}
 		})
 		w.mysqlSink.AddDMLEvent(e)
 	}
-
-	log.Info("flush DML events before DDL", zap.Uint64("DDLCommitTs", commitTs), zap.Int("total", total))
-	start := time.Now()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
@@ -210,14 +279,10 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-done:
-			log.Info("flush DML events before DDL done", zap.Uint64("DDLCommitTs", commitTs),
-				zap.Int("total", total), zap.Duration("duration", time.Since(start)),
-				zap.Any("tables", tableIDs))
-			return w.mysqlSink.WriteBlockEvent(ddl)
+			return nil
 		case <-ticker.C:
-			log.Warn("DML events cannot be flushed in time",
-				zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query),
-				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+			log.Warn("DML events cannot be flushed in time", append(fields,
+				zap.Int("total", len(events)), zap.Int64("flushed", flushed.Load()))...)
 		}
 	}
 }
@@ -281,56 +346,30 @@ func (w *writer) globalWatermark() uint64 {
 }
 
 func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
-	var (
-		done = make(chan struct{}, 1)
-
-		flushed atomic.Int64
-	)
-
 	watermark := w.globalWatermark()
-	resolvedEvents := make([]*event.DMLEvent, 0)
+	start := time.Now()
+	groups := make([]*util.EventsGroup, 0)
 	for _, p := range w.progresses {
 		for _, group := range p.eventsGroup {
-			messages, err := group.ResolveInto(watermark, nil)
-			if err != nil {
-				return err
-			}
-			events := util.DMLMessagesToEvents(messages)
-			resolvedEvents = append(resolvedEvents, events...)
+			groups = append(groups, group)
 		}
 	}
-	total := len(resolvedEvents)
-	if total == 0 {
-		return nil
+	total, err := w.flushEventsFromGroups(ctx, groups, watermark, zap.Uint64("watermark", watermark))
+	if err != nil {
+		return err
 	}
-	for _, e := range resolvedEvents {
-		e.AddPostFlushFunc(func() {
-			if flushed.Inc() == int64(total) {
-				close(done)
-			}
-		})
-		w.mysqlSink.AddDMLEvent(e)
-		log.Debug("flush DML event", zap.Int64("tableID", e.GetTableID()),
-			zap.Uint64("commitTs", e.GetCommitTs()), zap.Any("startTs", e.GetStartTs()))
+	if total != 0 {
+		stats := w.getSpillStore().Stats()
+		log.Info("flush DML events done", zap.Uint64("watermark", watermark),
+			zap.Int("total", total), zap.Duration("duration", time.Since(start)),
+			zap.Int64("spillPayloadWriteBytes", stats.PayloadWriteBytes),
+			zap.Int64("spillPayloadReadBytes", stats.PayloadReadBytes),
+			zap.Int64("spillPayloadWriteCount", stats.PayloadWriteCount),
+			zap.Int64("spillPayloadReadCount", stats.PayloadReadCount),
+			zap.Int64("spillPayloadDecodeCount", stats.PayloadDecodeCount),
+			zap.Int64("spillPendingBytes", stats.PendingBytes))
 	}
-
-	log.Info("flush DML events by watermark", zap.Uint64("watermark", watermark), zap.Int("total", total))
-	start := time.Now()
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-done:
-			log.Info("flush DML events done", zap.Uint64("watermark", watermark),
-				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
-			return nil
-		case <-ticker.C:
-			log.Warn("DML events cannot be flushed in time", zap.Uint64("watermark", watermark),
-				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
-		}
-	}
+	return nil
 }
 
 // WriteMessage is to decode kafka message to event.
@@ -354,6 +393,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 	}
 
 	needFlush := false
+	wasDraining := w.getSpillStore().ShouldDrain()
 	switch messageType {
 	case common.MessageTypeResolved:
 		newWatermark := progress.decoder.NextResolvedEvent()
@@ -452,6 +492,11 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 	}
 	if needFlush {
 		return w.Write(ctx, messageType)
+	}
+	if !wasDraining && w.getSpillStore().ShouldDrain() {
+		if err := w.flushDMLEventsByWatermark(ctx); err != nil {
+			return false, err
+		}
 	}
 	return false, nil
 }
@@ -654,7 +699,7 @@ func (w *writer) appendMessage2Group(
 
 	group := progress.eventsGroup[tableID]
 	if group == nil {
-		group = util.NewEventsGroup(progress.partition, tableID)
+		group = util.NewEventsGroup(progress.partition, tableID, w.getSpillStore())
 		progress.eventsGroup[tableID] = group
 	}
 	if err := group.AppendMessage(message); err != nil {

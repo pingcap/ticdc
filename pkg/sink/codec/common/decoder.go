@@ -24,10 +24,12 @@ import (
 // message after it has been spilled. One input can be attached to multiple
 // DMLMessages; Attach assigns each message its ordinal in that input.
 type DMLMessageData struct {
-	ID      uint64
-	Key     []byte
-	Value   []byte
-	Restore func([]byte, uint64) (*DMLMessage, error)
+	ID    uint64
+	Key   []byte
+	Value []byte
+	// Decode restores every DML message from one encoded input. The spill
+	// store owns the decoded result and maps messages by their attached ordinal.
+	Decode func([]byte) ([]*DMLMessage, error)
 
 	nextDMLIndex uint64
 }
@@ -37,13 +39,13 @@ var nextDMLMessageDataID atomic.Uint64
 // NewDMLMessageData creates data shared by DMLMessages decoded from one input.
 func NewDMLMessageData(
 	key, value []byte,
-	restore func([]byte, uint64) (*DMLMessage, error),
+	decode func([]byte) ([]*DMLMessage, error),
 ) *DMLMessageData {
 	return &DMLMessageData{
-		ID:      nextDMLMessageDataID.Add(1),
-		Key:     key,
-		Value:   value,
-		Restore: restore,
+		ID:     nextDMLMessageDataID.Add(1),
+		Key:    key,
+		Value:  value,
+		Decode: decode,
 	}
 }
 

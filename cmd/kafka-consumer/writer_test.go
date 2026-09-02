@@ -497,8 +497,8 @@ func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
 
 func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codeccommon.DMLMessage {
 	messageData := codeccommon.NewDMLMessageData(nil, nil,
-		func([]byte, uint64) (*codeccommon.DMLMessage, error) {
-			return message, nil
+		func([]byte) ([]*codeccommon.DMLMessage, error) {
+			return []*codeccommon.DMLMessage{message}, nil
 		},
 	)
 	messageData.AttachDMLMessage(message)

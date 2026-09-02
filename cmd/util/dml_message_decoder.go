@@ -78,7 +78,7 @@ func (d *DMLMessageDecoder) NextDMLMessage() *codeccommon.DMLMessage {
 
 func (d *DMLMessageDecoder) attachDMLMessage(message *codeccommon.DMLMessage) {
 	if d.data == nil {
-		d.data = d.wrapRestore(d.factory(d.Decoder, d.key, d.value))
+		d.data = d.wrapDecode(d.factory(d.Decoder, d.key, d.value))
 	}
 	d.data.AttachDMLMessage(message)
 }
@@ -87,21 +87,26 @@ func (d *DMLMessageDecoder) attachDMLMessage(message *codeccommon.DMLMessage) {
 // Simple's DDL cache. It has no raw row payload to restore.
 func (d *DMLMessageDecoder) AttachCachedDMLMessage(message *codeccommon.DMLMessage) {
 	data := codeccommon.NewDMLMessageData(nil, nil,
-		func([]byte, uint64) (*codeccommon.DMLMessage, error) { return message, nil })
-	d.wrapRestore(data).AttachDMLMessage(message)
+		func([]byte) ([]*codeccommon.DMLMessage, error) {
+			return []*codeccommon.DMLMessage{message}, nil
+		})
+	d.wrapDecode(data).AttachDMLMessage(message)
 }
 
-func (d *DMLMessageDecoder) wrapRestore(data *codeccommon.DMLMessageData) *codeccommon.DMLMessageData {
+func (d *DMLMessageDecoder) wrapDecode(data *codeccommon.DMLMessageData) *codeccommon.DMLMessageData {
 	if d.restore == nil {
 		return data
 	}
-	restore := data.Restore
-	data.Restore = func(data []byte, dmlIndex uint64) (*codeccommon.DMLMessage, error) {
-		message, err := restore(data, dmlIndex)
+	decode := data.Decode
+	data.Decode = func(payload []byte) ([]*codeccommon.DMLMessage, error) {
+		messages, err := decode(payload)
 		if err != nil {
 			return nil, err
 		}
-		return d.restore(message), nil
+		for i, message := range messages {
+			messages[i] = d.restore(message)
+		}
+		return messages, nil
 	}
 	return data
 }
