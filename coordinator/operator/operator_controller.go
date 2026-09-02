@@ -127,6 +127,54 @@ func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 
+<<<<<<< HEAD
+=======
+	keyspaceID := common.DefaultKeyspaceID
+	changefeed := oc.changefeedDB.GetByID(cfID)
+	if changefeed != nil {
+		keyspaceID = changefeed.GetKeyspaceID()
+	}
+	return oc.pushStopChangefeedOperator(
+		keyspaceID, cfID, nodeID, removed, maintainerEpoch, stopChangefeedKindStaleOwner)
+}
+
+// stopChangefeed creates a stop operator using the owner epoch that must be
+// fenced. During a move, the origin epoch is kept until the target is bound.
+func (oc *Controller) stopChangefeed(
+	cfID common.ChangeFeedID,
+	removed bool,
+	maintainerEpoch uint64,
+	hasMaintainerEpoch bool,
+) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+
+	if !removed {
+		if old, ok := oc.operators[cfID]; ok {
+			if oldStop, ok := old.OP.(*StopChangefeedOperator); ok &&
+				oldStop.kind == stopChangefeedKindCurrentPlacement {
+				return oldStop
+			}
+		}
+	}
+
+	changefeed := oc.changefeedDB.GetByID(cfID)
+	keyspaceID := common.DefaultKeyspaceID
+	if changefeed != nil {
+		keyspaceID = changefeed.GetKeyspaceID()
+		if !hasMaintainerEpoch {
+			maintainerEpoch = changefeed.GetInfo().Epoch
+		}
+	}
+
+	var originNode node.ID
+	var originEpoch uint64
+	var useOriginEpoch bool
+	if !hasMaintainerEpoch {
+		originNode, originEpoch, useOriginEpoch = oc.moveOriginStopTargetLocked(cfID)
+	}
+
+>>>>>>> ea94ac1be (coordinator: preserve stop operator on repeated warnings (#6135))
 	scheduledNode := oc.changefeedDB.StopByChangefeedID(cfID, removed)
 	if scheduledNode == "" {
 		log.Info("changefeed is not scheduled, try stop maintainer using coordinator node",
@@ -136,17 +184,36 @@ func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID
 		scheduledNode = oc.selfNode.ID
 	}
 
+<<<<<<< HEAD
 	changefeed := oc.changefeedDB.GetByID(cfID)
 	keyspaceID := changefeed.GetKeyspaceID()
+=======
+	return oc.pushStopChangefeedOperator(
+		keyspaceID, cfID, scheduledNode, removed, maintainerEpoch, stopChangefeedKindCurrentPlacement)
+}
+>>>>>>> ea94ac1be (coordinator: preserve stop operator on repeated warnings (#6135))
 
 	return oc.pushStopChangefeedOperator(keyspaceID, cfID, scheduledNode, removed)
 }
 
 // pushStopChangefeedOperator pushes a stop changefeed operator to the controller.
+<<<<<<< HEAD
 // it checks if the operator already exists, if exists, it will replace the old one.
 // if the old operator is the removing operator, it will skip this operator.
 func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.ChangeFeedID, nodeID node.ID, remove bool) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
 	op := NewStopChangefeedOperator(keyspaceID, cfID, nodeID, oc.selfNode.ID, oc.backend, remove)
+=======
+// Keep an existing placement stop for repeated non-removing requests. A stale-owner
+// cleanup does not represent the current placement and may be replaced.
+func (oc *Controller) pushStopChangefeedOperator(
+	keyspaceID uint32,
+	cfID common.ChangeFeedID,
+	nodeID node.ID,
+	remove bool,
+	maintainerEpoch uint64,
+	kind stopChangefeedKind,
+) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
+>>>>>>> ea94ac1be (coordinator: preserve stop operator on repeated warnings (#6135))
 	if old, ok := oc.operators[cfID]; ok {
 		oldStop, ok := old.OP.(*StopChangefeedOperator)
 		if ok {
@@ -155,6 +222,13 @@ func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.
 					zap.String("role", oc.role),
 					zap.String("changefeed", cfID.Name()))
 				return oldStop
+			}
+			if !remove {
+				if oldStop.kind == stopChangefeedKindCurrentPlacement ||
+					(kind == stopChangefeedKindStaleOwner &&
+						oldStop.nodeID == nodeID && oldStop.maintainerEpoch == maintainerEpoch) {
+					return oldStop
+				}
 			}
 		}
 		log.Info("changefeed is stopped, replace the old one",
@@ -166,6 +240,7 @@ func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.
 		old.IsRemoved.Store(true)
 		delete(oc.operators, old.OP.ID())
 	}
+	op := NewStopChangefeedOperator(keyspaceID, cfID, nodeID, oc.selfNode.ID, oc.backend, remove, maintainerEpoch, kind)
 	oc.pushOperator(op)
 	return op
 }

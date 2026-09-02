@@ -38,7 +38,11 @@ func TestStopChangefeedOperator_OnNodeRemove(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
+<<<<<<< HEAD
 	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", backend, true)
+=======
+	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", backend, true, 10, stopChangefeedKindCurrentPlacement)
+>>>>>>> ea94ac1be (coordinator: preserve stop operator on repeated warnings (#6135))
 	op.OnNodeRemove("n1")
 	require.Equal(t, "n2", op.nodeID.String())
 	require.False(t, op.finished.Load())
@@ -54,7 +58,11 @@ func TestStopChangefeedOperator_OnTaskRemoved(t *testing.T) {
 	},
 		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
+<<<<<<< HEAD
 	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", nil, true)
+=======
+	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", nil, true, 10, stopChangefeedKindCurrentPlacement)
+>>>>>>> ea94ac1be (coordinator: preserve stop operator on repeated warnings (#6135))
 	op.OnTaskRemoved()
 	require.True(t, op.finished.Load())
 }
@@ -72,11 +80,19 @@ func TestStopChangefeedOperator_PostFinish(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
+<<<<<<< HEAD
 	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", backend, true)
 	backend.EXPECT().DeleteChangefeed(gomock.Any(), cfID).Return(errors.New("err"))
 	op.PostFinish()
 
 	op2 := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", backend, false)
+=======
+	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", backend, true, 10, stopChangefeedKindCurrentPlacement)
+	backend.EXPECT().DeleteChangefeed(gomock.Any(), cfID).Return(errors.New("err"))
+	op.PostFinish()
+
+	op2 := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", backend, false, 10, stopChangefeedKindCurrentPlacement)
+>>>>>>> ea94ac1be (coordinator: preserve stop operator on repeated warnings (#6135))
 	backend.EXPECT().SetChangefeedProgress(gomock.Any(), cfID, config.ProgressNone).Return(errors.New("err"))
 	op2.PostFinish()
 }
