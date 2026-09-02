@@ -34,19 +34,6 @@ type syncProducer struct {
 	timeout time.Duration
 }
 
-func newSyncProducer(ctx context.Context, changefeedID common.ChangeFeedID, clientOpts []kgo.Opt, producerOpts []kgo.Opt, timeout time.Duration) (*syncProducer, error) {
-	client, err := newProducerClient(ctx, changefeedID, "sync-producer", clientOpts, producerOpts)
-	if err != nil {
-		return nil, err
-	}
-
-	return &syncProducer{
-		id:      changefeedID,
-		client:  client,
-		timeout: timeout,
-	}, nil
-}
-
 func (p *syncProducer) SendMessage(ctx context.Context, topic string, partitionNum int32, message *codeccommon.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()

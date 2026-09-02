@@ -88,12 +88,11 @@ func TestAsyncProducerCallbackExactlyOnce(t *testing.T) {
 	defer cluster.Close()
 	o := testOptions(cluster.ListenAddrs())
 
-	producer, err := newAsyncProducer(
-		context.Background(),
-		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-success"),
-		testClientOptions(t, o),
-		testProducerOptions(t, o),
-	)
+	producer, err := (&franzFactory{
+		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-success"),
+		clientOpts:   testClientOptions(t, o),
+		producerOpts: testProducerOptions(t, o),
+	}).AsyncProducer(context.Background())
 	require.NoError(t, err)
 	defer producer.Close()
 
@@ -128,12 +127,11 @@ func TestAsyncProducerReportsProduceFailure(t *testing.T) {
 	})
 	o := testOptions(cluster.ListenAddrs())
 
-	producer, err := newAsyncProducer(
-		context.Background(),
-		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-error"),
-		testClientOptions(t, o),
-		testProducerOptions(t, o),
-	)
+	producer, err := (&franzFactory{
+		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-error"),
+		clientOpts:   testClientOptions(t, o),
+		producerOpts: testProducerOptions(t, o),
+	}).AsyncProducer(context.Background())
 	require.NoError(t, err)
 	defer producer.Close()
 

@@ -43,13 +43,12 @@ func TestSyncProducerSendsToRequestedPartitions(t *testing.T) {
 	defer cluster.Close()
 	o := testOptions(cluster.ListenAddrs())
 
-	producer, err := newSyncProducer(
-		context.Background(),
-		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "sync"),
-		testClientOptions(t, o),
-		testProducerOptions(t, o),
-		requestTimeout(o),
-	)
+	producer, err := (&franzFactory{
+		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "sync"),
+		clientOpts:   testClientOptions(t, o),
+		producerOpts: testProducerOptions(t, o),
+		timeout:      requestTimeout(o),
+	}).SyncProducer(context.Background())
 	require.NoError(t, err)
 	defer producer.Close()
 
@@ -67,13 +66,12 @@ func TestSyncProducerReturnsPartialFailure(t *testing.T) {
 	})
 	o := testOptions(cluster.ListenAddrs())
 
-	producer, err := newSyncProducer(
-		context.Background(),
-		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "partial"),
-		testClientOptions(t, o),
-		testProducerOptions(t, o),
-		requestTimeout(o),
-	)
+	producer, err := (&franzFactory{
+		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "partial"),
+		clientOpts:   testClientOptions(t, o),
+		producerOpts: testProducerOptions(t, o),
+		timeout:      requestTimeout(o),
+	}).SyncProducer(context.Background())
 	require.NoError(t, err)
 	defer producer.Close()
 
@@ -84,13 +82,12 @@ func TestSyncProducerReturnsPartialFailure(t *testing.T) {
 
 func TestSyncProducerUsesSendContext(t *testing.T) {
 	o := testOptions([]string{"127.0.0.1:1"})
-	producer, err := newSyncProducer(
-		t.Context(),
-		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "canceled"),
-		testClientOptions(t, o),
-		testProducerOptions(t, o),
-		requestTimeout(o),
-	)
+	producer, err := (&franzFactory{
+		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "canceled"),
+		clientOpts:   testClientOptions(t, o),
+		producerOpts: testProducerOptions(t, o),
+		timeout:      requestTimeout(o),
+	}).SyncProducer(t.Context())
 	require.NoError(t, err)
 	defer producer.Close()
 
@@ -104,13 +101,12 @@ func TestSyncProducerUsesSendContext(t *testing.T) {
 
 func TestSyncProducerCloseIsIdempotent(t *testing.T) {
 	o := testOptions([]string{"127.0.0.1:1"})
-	client, err := newSyncProducer(
-		context.Background(),
-		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "close"),
-		testClientOptions(t, o),
-		testProducerOptions(t, o),
-		requestTimeout(o),
-	)
+	client, err := (&franzFactory{
+		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "close"),
+		clientOpts:   testClientOptions(t, o),
+		producerOpts: testProducerOptions(t, o),
+		timeout:      requestTimeout(o),
+	}).SyncProducer(context.Background())
 	require.NoError(t, err)
 
 	client.Close()

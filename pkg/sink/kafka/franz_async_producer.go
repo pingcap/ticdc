@@ -35,19 +35,6 @@ type asyncProducer struct {
 	errCh        chan error
 }
 
-func newAsyncProducer(ctx context.Context, changefeedID common.ChangeFeedID, clientOpts []kgo.Opt, producerOpts []kgo.Opt) (*asyncProducer, error) {
-	client, err := newProducerClient(ctx, changefeedID, "async-producer", clientOpts, producerOpts)
-	if err != nil {
-		return nil, err
-	}
-
-	return &asyncProducer{
-		client:       client,
-		changefeedID: changefeedID,
-		errCh:        make(chan error, 1),
-	}, nil
-}
-
 func (p *asyncProducer) Close() {
 	if !p.closeStarted.CompareAndSwap(false, true) {
 		return

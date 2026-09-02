@@ -84,19 +84,19 @@ func (f *franzFactory) AdminClient(ctx context.Context) (AdminClient, error) {
 }
 
 func (f *franzFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
-	producer, err := newSyncProducer(ctx, f.changefeedID, f.clientOpts, f.producerOpts, f.timeout)
+	client, err := newProducerClient(ctx, f.changefeedID, "sync-producer", f.clientOpts, f.producerOpts)
 	if err != nil {
-		cleanupMetrics(f.changefeedID)
+		return nil, err
 	}
-	return producer, err
+	return &syncProducer{id: f.changefeedID, client: client, timeout: f.timeout}, nil
 }
 
 func (f *franzFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
-	producer, err := newAsyncProducer(ctx, f.changefeedID, f.clientOpts, f.producerOpts)
+	client, err := newProducerClient(ctx, f.changefeedID, "async-producer", f.clientOpts, f.producerOpts)
 	if err != nil {
-		cleanupMetrics(f.changefeedID)
+		return nil, err
 	}
-	return producer, err
+	return &asyncProducer{client: client, changefeedID: f.changefeedID, errCh: make(chan error, 1)}, nil
 }
 
 func (f *franzFactory) MetricsCollector(AdminClient) MetricsCollector {
