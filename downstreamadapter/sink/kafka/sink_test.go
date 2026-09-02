@@ -194,7 +194,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 			}
 			return nil
 		}).Times(2)
-	syncProducer.EXPECT().SendMessages(gomock.Any(), int32(1), gomock.Any()).Return(nil)
+	syncProducer.EXPECT().SendMessages(gomock.Any(), gomock.Any(), int32(1), gomock.Any()).Return(nil)
 	defer cancel()
 	go kafkaSink.Run(ctx)
 
@@ -429,8 +429,8 @@ func TestKafkaSinkDDL(t *testing.T) {
 		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(
 			t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
 		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(4), nil)
-		syncProducer.EXPECT().SendMessages(kafkaSinkTestTopic, int32(4), gomock.Any()).
-			DoAndReturn(func(_ string, _ int32, message *codecCommon.Message) error {
+		syncProducer.EXPECT().SendMessages(gomock.Any(), kafkaSinkTestTopic, int32(4), gomock.Any()).
+			DoAndReturn(func(_ context.Context, _ string, _ int32, message *codecCommon.Message) error {
 				require.NotEmpty(t, message.Key)
 				require.NotEmpty(t, message.Value)
 				return nil
@@ -443,8 +443,8 @@ func TestKafkaSinkDDL(t *testing.T) {
 		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(
 			t, t.Context(), config.ProtocolCanalJSON, &config.SinkConfig{})
 		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(4), nil)
-		syncProducer.EXPECT().SendMessage(kafkaSinkTestTopic, int32(0), gomock.Any()).
-			DoAndReturn(func(_ string, _ int32, message *codecCommon.Message) error {
+		syncProducer.EXPECT().SendMessage(gomock.Any(), kafkaSinkTestTopic, int32(0), gomock.Any()).
+			DoAndReturn(func(_ context.Context, _ string, _ int32, message *codecCommon.Message) error {
 				require.NotEmpty(t, message.Value)
 				return nil
 			})
@@ -466,7 +466,7 @@ func TestKafkaSinkDDL(t *testing.T) {
 			t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
 		cause := errors.ErrKafkaSendMessage.GenWithStackByArgs()
 		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(2), nil)
-		syncProducer.EXPECT().SendMessages(kafkaSinkTestTopic, int32(2), gomock.Any()).Return(cause)
+		syncProducer.EXPECT().SendMessages(gomock.Any(), kafkaSinkTestTopic, int32(2), gomock.Any()).Return(cause)
 
 		require.Equal(t, cause, kafkaSink.WriteBlockEvent(ddlEvent))
 		require.False(t, kafkaSink.IsNormal())
@@ -494,8 +494,8 @@ func TestKafkaSinkCheckpoint(t *testing.T) {
 		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(
 			t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
 		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(3), nil)
-		syncProducer.EXPECT().SendMessages(kafkaSinkTestTopic, int32(3), gomock.Any()).
-			DoAndReturn(func(_ string, _ int32, message *codecCommon.Message) error {
+		syncProducer.EXPECT().SendMessages(gomock.Any(), kafkaSinkTestTopic, int32(3), gomock.Any()).
+			DoAndReturn(func(_ context.Context, _ string, _ int32, message *codecCommon.Message) error {
 				require.NotEmpty(t, message.Key)
 				return nil
 			})
@@ -521,7 +521,7 @@ func TestKafkaSinkCheckpoint(t *testing.T) {
 		partitionCounts := map[string]int32{"topic-a": 2, "topic-b": 3, kafkaSinkTestTopic: 4}
 		for topic, partitionCount := range partitionCounts {
 			topicManager.EXPECT().GetPartitionNum(gomock.Any(), topic).Return(partitionCount, nil)
-			syncProducer.EXPECT().SendMessages(topic, partitionCount, gomock.Any()).Return(nil)
+			syncProducer.EXPECT().SendMessages(gomock.Any(), topic, partitionCount, gomock.Any()).Return(nil)
 		}
 		kafkaSink.checkpointChan <- 100
 		close(kafkaSink.checkpointChan)
@@ -553,7 +553,7 @@ func TestKafkaSinkCheckpoint(t *testing.T) {
 		// return the error and stop, so exactly one GetPartitionNum and one
 		// SendMessages call are expected regardless of the topic order.
 		topicManager.EXPECT().GetPartitionNum(gomock.Any(), gomock.Any()).Return(int32(2), nil)
-		syncProducer.EXPECT().SendMessages(gomock.Any(), int32(2), gomock.Any()).Return(cause)
+		syncProducer.EXPECT().SendMessages(gomock.Any(), gomock.Any(), int32(2), gomock.Any()).Return(cause)
 		kafkaSink.checkpointChan <- 100
 
 		require.Equal(t, cause, kafkaSink.sendCheckpoint(t.Context()))

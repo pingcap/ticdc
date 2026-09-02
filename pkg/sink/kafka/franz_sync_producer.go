@@ -51,7 +51,9 @@ func newSyncProducer(
 	}, nil
 }
 
-func (p *syncProducer) SendMessage(topic string, partitionNum int32, message *codeccommon.Message) error {
+func (p *syncProducer) SendMessage(
+	ctx context.Context, topic string, partitionNum int32, message *codeccommon.Message,
+) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
@@ -62,10 +64,12 @@ func (p *syncProducer) SendMessage(topic string, partitionNum int32, message *co
 		Key:       message.Key,
 		Value:     message.Value,
 	}
-	return p.sendRecords(message, record)
+	return p.sendRecords(ctx, message, record)
 }
 
-func (p *syncProducer) SendMessages(topic string, partitionNum int32, message *codeccommon.Message) error {
+func (p *syncProducer) SendMessages(
+	ctx context.Context, topic string, partitionNum int32, message *codeccommon.Message,
+) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
@@ -80,11 +84,13 @@ func (p *syncProducer) SendMessages(topic string, partitionNum int32, message *c
 		})
 	}
 
-	return p.sendRecords(message, records...)
+	return p.sendRecords(ctx, message, records...)
 }
 
-func (p *syncProducer) sendRecords(message *codeccommon.Message, records ...*kgo.Record) error {
-	ctx, cancel := context.WithTimeout(p.client.Context(), p.timeout)
+func (p *syncProducer) sendRecords(
+	ctx context.Context, message *codeccommon.Message, records ...*kgo.Record,
+) error {
+	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
 	err := p.client.ProduceSync(ctx, records...).FirstErr()

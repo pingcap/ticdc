@@ -30,10 +30,10 @@ func TestSyncProducerClosedReturnsProducerClosed(t *testing.T) {
 	producer := &syncProducer{}
 	producer.closed.Store(true)
 
-	err := producer.SendMessage("topic", 1, &codeccommon.Message{})
+	err := producer.SendMessage(t.Context(), "topic", 1, &codeccommon.Message{})
 	require.ErrorIs(t, err, errors.ErrKafkaSinkClosed)
 
-	err = producer.SendMessages("topic", 1, &codeccommon.Message{})
+	err = producer.SendMessages(t.Context(), "topic", 1, &codeccommon.Message{})
 	require.ErrorIs(t, err, errors.ErrKafkaSinkClosed)
 }
 
@@ -50,8 +50,8 @@ func TestSyncProducerSendsToRequestedPartitions(t *testing.T) {
 	require.NoError(t, err)
 	defer producer.Close()
 
-	require.NoError(t, producer.SendMessage(topic, 2, &codeccommon.Message{Key: []byte("key"), Value: []byte("value")}))
-	require.NoError(t, producer.SendMessages(topic, 3, &codeccommon.Message{Value: []byte("all")}))
+	require.NoError(t, producer.SendMessage(t.Context(), topic, 2, &codeccommon.Message{Key: []byte("key"), Value: []byte("value")}))
+	require.NoError(t, producer.SendMessages(t.Context(), topic, 3, &codeccommon.Message{Value: []byte("all")}))
 }
 
 func TestSyncProducerReturnsPartialFailure(t *testing.T) {
@@ -71,9 +71,26 @@ func TestSyncProducerReturnsPartialFailure(t *testing.T) {
 	require.NoError(t, err)
 	defer producer.Close()
 
-	err = producer.SendMessages(topic, 3, &codeccommon.Message{Value: []byte("value")})
+	err = producer.SendMessages(t.Context(), topic, 3, &codeccommon.Message{Value: []byte("value")})
 	require.ErrorIs(t, err, errors.ErrKafkaSendMessage)
 	require.ErrorIs(t, err, kerr.InvalidTopicException)
+}
+
+func TestSyncProducerUsesSendContext(t *testing.T) {
+	producer, err := newSyncProducer(
+		t.Context(),
+		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "canceled"),
+		testOptions([]string{"127.0.0.1:1"}),
+	)
+	require.NoError(t, err)
+	defer producer.Close()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err = producer.SendMessage(ctx, "topic", 0, &codeccommon.Message{})
+	require.ErrorIs(t, err, errors.ErrKafkaSendMessage)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestSyncProducerCloseIsIdempotent(t *testing.T) {

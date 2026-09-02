@@ -142,31 +142,31 @@ func (mr *MockSyncProducerMockRecorder) Close() *gomock.Call {
 }
 
 // SendMessage mocks base method.
-func (m *MockSyncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
+func (m *MockSyncProducer) SendMessage(ctx context.Context, topic string, partitionNum int32, message *common.Message) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SendMessage", topic, partitionNum, message)
+	ret := m.ctrl.Call(m, "SendMessage", ctx, topic, partitionNum, message)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // SendMessage indicates an expected call of SendMessage.
-func (mr *MockSyncProducerMockRecorder) SendMessage(topic, partitionNum, message interface{}) *gomock.Call {
+func (mr *MockSyncProducerMockRecorder) SendMessage(ctx, topic, partitionNum, message interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SendMessage", reflect.TypeOf((*MockSyncProducer)(nil).SendMessage), topic, partitionNum, message)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SendMessage", reflect.TypeOf((*MockSyncProducer)(nil).SendMessage), ctx, topic, partitionNum, message)
 }
 
 // SendMessages mocks base method.
-func (m *MockSyncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
+func (m *MockSyncProducer) SendMessages(ctx context.Context, topic string, partitionNum int32, message *common.Message) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SendMessages", topic, partitionNum, message)
+	ret := m.ctrl.Call(m, "SendMessages", ctx, topic, partitionNum, message)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // SendMessages indicates an expected call of SendMessages.
-func (mr *MockSyncProducerMockRecorder) SendMessages(topic, partitionNum, message interface{}) *gomock.Call {
+func (mr *MockSyncProducerMockRecorder) SendMessages(ctx, topic, partitionNum, message interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SendMessages", reflect.TypeOf((*MockSyncProducer)(nil).SendMessages), topic, partitionNum, message)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SendMessages", reflect.TypeOf((*MockSyncProducer)(nil).SendMessages), ctx, topic, partitionNum, message)
 }
 
 // MockAsyncProducer is a mock of AsyncProducer interface.
