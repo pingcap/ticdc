@@ -312,7 +312,7 @@ func TestIsAuthorizationFailed(t *testing.T) {
 	}
 }
 
-func TestIsUnretryableKafkaError(t *testing.T) {
+func TestIsUnretryableSaramaError(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -354,7 +354,7 @@ func TestIsUnretryableKafkaError(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.unretryable, IsUnretryableKafkaError(test.err))
+			require.Equal(t, test.unretryable, IsUnretryableSaramaError(test.err))
 		})
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/franz"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"go.uber.org/zap"
 )
 
@@ -104,6 +105,21 @@ type franzMetricsCollector struct{}
 func (franzMetricsCollector) Run(ctx context.Context) { <-ctx.Done() }
 
 type franzAdminAdapter struct{ inner *franz.Admin }
+
+// IsUnretryableFranzError reports whether a franz-go error is not retryable.
+func IsUnretryableFranzError(err error) bool {
+	return errors.Is(err, errors.ErrKafkaAuthorizationFailed) ||
+		errors.Is(err, errors.ErrKafkaInvalidConfig) ||
+		errors.Is(err, kerr.TopicAuthorizationFailed) ||
+		errors.Is(err, kerr.ClusterAuthorizationFailed) ||
+		errors.Is(err, kerr.InvalidTopicException) ||
+		errors.Is(err, kerr.InvalidConfig) ||
+		errors.Is(err, kerr.SaslAuthenticationFailed) ||
+		errors.Is(err, kerr.UnsupportedSaslMechanism) ||
+		errors.Is(err, kerr.IllegalSaslState) ||
+		errors.Is(err, kerr.UnsupportedVersion) ||
+		errors.Is(err, kerr.InvalidRequest)
+}
 
 func (a *franzAdminAdapter) GetAllBrokers() []Broker {
 	inner := a.inner.GetAllBrokers()

@@ -16,13 +16,52 @@ package kafka
 
 import (
 	"context"
+	"io"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 )
+
+func TestIsUnretryableFranzError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		err         error
+		unretryable bool
+	}{
+		{name: "unknown topic", err: kerr.UnknownTopicOrPartition},
+		{name: "leader unavailable", err: kerr.LeaderNotAvailable},
+		{name: "request timeout", err: kerr.RequestTimedOut},
+		{name: "network exception", err: kerr.NetworkException},
+		{name: "controller changed", err: kerr.NotController},
+		{name: "EOF", err: io.EOF},
+		{name: "invalid topic", err: kerr.InvalidTopicException, unretryable: true},
+		{name: "invalid config", err: kerr.InvalidConfig, unretryable: true},
+		{name: "SASL authentication failure", err: kerr.SaslAuthenticationFailed, unretryable: true},
+		{name: "unsupported SASL mechanism", err: kerr.UnsupportedSaslMechanism, unretryable: true},
+		{name: "illegal SASL state", err: kerr.IllegalSaslState, unretryable: true},
+		{name: "unsupported version", err: kerr.UnsupportedVersion, unretryable: true},
+		{name: "invalid request", err: kerr.InvalidRequest, unretryable: true},
+		{
+			name:        "wrapped invalid topic",
+			err:         errors.WrapError(errors.ErrKafkaAdminAPI, kerr.InvalidTopicException, "describe-topic", "test-topic"),
+			unretryable: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, test.unretryable, IsUnretryableFranzError(test.err))
+		})
+	}
+}
 
 func TestFactorySelection(t *testing.T) {
 	const topic = "factory-selection"

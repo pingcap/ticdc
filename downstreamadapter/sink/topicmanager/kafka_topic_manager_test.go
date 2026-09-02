@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 const kafkaTopicManagerTestTopic = "mock_topic"
@@ -192,23 +193,35 @@ func TestCreateTopicValidatesReplicationFactor(t *testing.T) {
 func TestWaitUntilTopicVisibleUnretryableError(t *testing.T) {
 	t.Parallel()
 
-	ctrl := gomock.NewController(t)
-	adminClient := kafka.NewMockAdminClient(ctrl)
-	adminClient.EXPECT().GetTopicsMeta([]string{"invalid-topic"}, false).Return(
-		nil,
-		errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ErrInvalidTopic, "describe-topic", "invalid-topic"),
-	).Times(1)
-	manager := newKafkaTopicManager(
-		"invalid-topic",
-		common.NewChangefeedID4Test("test", "test"),
-		adminClient,
-		&kafka.AutoCreateTopicConfig{PartitionNum: 2},
-	)
+	for _, test := range []struct {
+		name  string
+		cause error
+	}{
+		{name: "sarama", cause: sarama.ErrInvalidTopic},
+		{name: "franz-go", cause: kerr.InvalidTopicException},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 
-	err := manager.waitUntilTopicVisible(context.Background(), "invalid-topic")
+			ctrl := gomock.NewController(t)
+			adminClient := kafka.NewMockAdminClient(ctrl)
+			adminClient.EXPECT().GetTopicsMeta([]string{"invalid-topic"}, false).Return(
+				nil,
+				errors.WrapError(errors.ErrKafkaAdminAPI, test.cause, "describe-topic", "invalid-topic"),
+			).Times(1)
+			manager := newKafkaTopicManager(
+				"invalid-topic",
+				common.NewChangefeedID4Test("test", "test"),
+				adminClient,
+				&kafka.AutoCreateTopicConfig{PartitionNum: 2},
+			)
 
-	require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
-	require.ErrorIs(t, err, sarama.ErrInvalidTopic)
+			err := manager.waitUntilTopicVisible(context.Background(), "invalid-topic")
+
+			require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+			require.ErrorIs(t, err, test.cause)
+		})
+	}
 }
 
 func TestGetTopicManagerStartsBackgroundRefreshAfterTopicReady(t *testing.T) {
