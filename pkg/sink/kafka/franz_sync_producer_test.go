@@ -41,11 +41,14 @@ func TestSyncProducerSendsToRequestedPartitions(t *testing.T) {
 	const topic = "sync-topic"
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
 	defer cluster.Close()
+	o := testOptions(cluster.ListenAddrs())
 
 	producer, err := newSyncProducer(
 		context.Background(),
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "sync"),
-		testOptions(cluster.ListenAddrs()),
+		testClientOptions(t, o),
+		testProducerOptions(t, o),
+		requestTimeout(o),
 	)
 	require.NoError(t, err)
 	defer producer.Close()
@@ -62,11 +65,14 @@ func TestSyncProducerReturnsPartialFailure(t *testing.T) {
 	cluster.ControlKey(int16(kmsg.Produce), func(req kmsg.Request) (kmsg.Response, error, bool) {
 		return produceResponseWithError(req, 1, kerr.InvalidTopicException.Code)
 	})
+	o := testOptions(cluster.ListenAddrs())
 
 	producer, err := newSyncProducer(
 		context.Background(),
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "partial"),
-		testOptions(cluster.ListenAddrs()),
+		testClientOptions(t, o),
+		testProducerOptions(t, o),
+		requestTimeout(o),
 	)
 	require.NoError(t, err)
 	defer producer.Close()
@@ -77,10 +83,13 @@ func TestSyncProducerReturnsPartialFailure(t *testing.T) {
 }
 
 func TestSyncProducerUsesSendContext(t *testing.T) {
+	o := testOptions([]string{"127.0.0.1:1"})
 	producer, err := newSyncProducer(
 		t.Context(),
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "canceled"),
-		testOptions([]string{"127.0.0.1:1"}),
+		testClientOptions(t, o),
+		testProducerOptions(t, o),
+		requestTimeout(o),
 	)
 	require.NoError(t, err)
 	defer producer.Close()
@@ -94,10 +103,13 @@ func TestSyncProducerUsesSendContext(t *testing.T) {
 }
 
 func TestSyncProducerCloseIsIdempotent(t *testing.T) {
+	o := testOptions([]string{"127.0.0.1:1"})
 	client, err := newSyncProducer(
 		context.Background(),
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "close"),
-		testOptions([]string{"127.0.0.1:1"}),
+		testClientOptions(t, o),
+		testProducerOptions(t, o),
+		requestTimeout(o),
 	)
 	require.NoError(t, err)
 
@@ -125,6 +137,5 @@ func produceResponseWithError(req kmsg.Request, failedPartition int32, errorCode
 
 		response.Topics = append(response.Topics, responseTopic)
 	}
-
 	return response, nil, true
 }

@@ -17,6 +17,7 @@ package kafka
 import (
 	"context"
 	"crypto/tls"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -46,23 +47,12 @@ const (
 
 func requestTimeout(o *options) time.Duration { return max(o.ReadTimeout, o.WriteTimeout) }
 
-func newClientOptions(
-	ctx context.Context,
-	changefeedID common.ChangeFeedID,
-	role string,
-	o *options,
-	hook *metricsHook,
-) ([]kgo.Opt, error) {
+func clientOptions(o *options) ([]kgo.Opt, error) {
 	opts := []kgo.Opt{
-		kgo.WithContext(ctx),
 		kgo.SeedBrokers(o.BrokerEndpoints...),
 		kgo.ClientID(o.ClientID),
 		kgo.DialTimeout(o.DialTimeout),
 		kgo.RequestTimeoutOverhead(requestTimeout(o)),
-		kgo.WithLogger(newClientLogger(changefeedID, role)),
-	}
-	if hook != nil {
-		opts = append(opts, kgo.WithHooks(hook))
 	}
 
 	if o.EnableTLS {
@@ -82,17 +72,16 @@ func newClientOptions(
 	}
 
 	if o.sasl != nil && o.sasl.mechanism != "" {
-		mechanism, err := buildSASLMechanism(ctx, o.sasl)
+		mechanism, err := buildSASLMechanism(o.sasl)
 		if err != nil {
 			return nil, err
 		}
 		opts = append(opts, kgo.SASL(mechanism))
 	}
-
 	return opts, nil
 }
 
-func buildSASLMechanism(ctx context.Context, cfg *saslConfig) (sasl.Mechanism, error) {
+func buildSASLMechanism(cfg *saslConfig) (sasl.Mechanism, error) {
 	switch cfg.mechanism {
 	case plainMechanism:
 		return plain.Auth{User: cfg.user, Pass: cfg.password}.AsMechanism(), nil
@@ -101,17 +90,7 @@ func buildSASLMechanism(ctx context.Context, cfg *saslConfig) (sasl.Mechanism, e
 	case scram512Mechanism:
 		return scram.Auth{User: cfg.user, Pass: cfg.password}.AsSha512Mechanism(), nil
 	case oauthMechanism:
-		tokenSource, err := newOAuthTokenSource(ctx, cfg.oauth2)
-		if err != nil {
-			return nil, err
-		}
-		return oauth.Oauth(func(context.Context) (oauth.Auth, error) {
-			token, err := tokenSource.Token()
-			if err != nil {
-				return oauth.Auth{}, errors.WrapError(errors.ErrNewKafkaSink, err)
-			}
-			return oauth.Auth{Token: token.AccessToken}, nil
-		}), nil
+		return buildOAuthMechanism(cfg.oauth2)
 	case gssapiMechanism:
 		return buildGSSAPIMechanism(cfg.gssapi)
 	default:
@@ -120,13 +99,14 @@ func buildSASLMechanism(ctx context.Context, cfg *saslConfig) (sasl.Mechanism, e
 	}
 }
 
-func newOAuthTokenSource(ctx context.Context, cfg oauth2Config) (oauth2.TokenSource, error) {
+func buildOAuthMechanism(cfg oauth2Config) (sasl.Mechanism, error) {
+	var httpClient *http.Client
 	if cfg.caPath != "" {
-		httpClient, err := oauthHTTPClient(cfg.caPath)
+		var err error
+		httpClient, err = oauthHTTPClient(cfg.caPath)
 		if err != nil {
 			return nil, err
 		}
-		ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
 	}
 
 	endpointParams := url.Values{}
@@ -147,26 +127,29 @@ func newOAuthTokenSource(ctx context.Context, cfg oauth2Config) (oauth2.TokenSou
 		EndpointParams: endpointParams,
 		Scopes:         cfg.scopes,
 	}
-	return config.TokenSource(ctx), nil
+	return oauth.Oauth(func(ctx context.Context) (oauth.Auth, error) {
+		if httpClient != nil {
+			ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
+		}
+		token, err := config.TokenSource(ctx).Token()
+		if err != nil {
+			return oauth.Auth{}, errors.WrapError(errors.ErrNewKafkaSink, err)
+		}
+		return oauth.Auth{Token: token.AccessToken}, nil
+	}), nil
 }
 
-func newProducerClient(
-	ctx context.Context,
-	changefeedID common.ChangeFeedID,
-	role string,
-	o *options,
-) (*kgo.Client, error) {
-	opts, err := newClientOptions(ctx, changefeedID, role, o, newMetricsHook(changefeedID))
-	if err != nil {
-		return nil, err
-	}
+func newProducerClient(ctx context.Context, changefeedID common.ChangeFeedID, role string, clientOpts []kgo.Opt, producerOpts []kgo.Opt) (*kgo.Client, error) {
+	opts := make([]kgo.Opt, 0, len(clientOpts)+len(producerOpts)+3)
+	opts = append(opts, clientOpts...)
+	opts = append(opts,
+		kgo.WithContext(ctx),
+		kgo.WithLogger(newClientLogger(changefeedID, role)),
+		kgo.WithHooks(newMetricsHook(changefeedID)),
+	)
+	opts = append(opts, producerOpts...)
 
-	producerOpts, err := producerOptions(o)
-	if err != nil {
-		return nil, err
-	}
-
-	client, err := kgo.NewClient(append(opts, producerOpts...)...)
+	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
@@ -187,7 +170,6 @@ func producerOptions(o *options) ([]kgo.Opt, error) {
 	maxBufferedBytes := max(defaultMaxBufferedBytes, o.MaxMessageBytes)
 	maxBatchBytes := max(minProducerBatchBytes, o.MaxMessageBytes)
 	maxBrokerWriteBytes := max(defaultBrokerWriteBytes, maxBatchBytes)
-
 	return []kgo.Opt{
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		kgo.RequiredAcks(requiredAcks(o.RequiredAcks)),

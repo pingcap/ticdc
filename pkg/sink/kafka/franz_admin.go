@@ -33,15 +33,13 @@ type admin struct {
 	timeout time.Duration
 }
 
-func newAdmin(
-	ctx context.Context,
-	changefeedID common.ChangeFeedID,
-	o *options,
-) (*admin, error) {
-	opts, err := newClientOptions(ctx, changefeedID, "admin", o, nil)
-	if err != nil {
-		return nil, err
-	}
+func newAdmin(ctx context.Context, changefeedID common.ChangeFeedID, clientOpts []kgo.Opt, timeout time.Duration) (*admin, error) {
+	opts := make([]kgo.Opt, 0, len(clientOpts)+3)
+	opts = append(opts, clientOpts...)
+	opts = append(opts,
+		kgo.WithContext(ctx),
+		kgo.WithLogger(newClientLogger(changefeedID, "admin")),
+	)
 	// MetadataMinAge is the minimum interval between metadata requests.
 	// It must stay below the visibility retry interval to avoid retrying a cached topic-not-found result.
 	opts = append(opts, kgo.MetadataMinAge(100*time.Millisecond))
@@ -54,7 +52,7 @@ func newAdmin(
 	return &admin{
 		changefeed: changefeedID,
 		admin:      kadm.NewClient(client),
-		timeout:    requestTimeout(o),
+		timeout:    timeout,
 	}, nil
 }
 
@@ -71,7 +69,6 @@ func (a *admin) GetAllBrokers(ctx context.Context) []Broker {
 	for id := range meta.Brokers {
 		brokers = append(brokers, Broker{ID: int32(id)})
 	}
-
 	return brokers
 }
 
@@ -84,7 +81,6 @@ func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string,
 		if isAuthorizationFailed(err) {
 			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-cluster", "cluster")
 		}
-
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-cluster", "cluster")
 	}
 
@@ -97,7 +93,6 @@ func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string,
 		if isAuthorizationFailed(err) {
 			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-config", configName)
 		}
-
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", configName)
 	}
 
@@ -107,7 +102,6 @@ func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string,
 		if isAuthorizationFailed(err) {
 			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-config", configName)
 		}
-
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", configName)
 	}
 
@@ -115,7 +109,6 @@ func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string,
 		if isAuthorizationFailed(resource.Err) {
 			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, resource.Err, "describe-config", configName)
 		}
-
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, resource.Err, "describe-config", configName)
 	}
 
@@ -124,7 +117,6 @@ func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string,
 			return entry.MaybeValue(), true, nil
 		}
 	}
-
 	return "", false, nil
 }
 
@@ -137,7 +129,6 @@ func (a *admin) GetTopicConfig(ctx context.Context, topicName string, configName
 		if isAuthorizationFailed(err) {
 			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-config", topicName)
 		}
-
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", topicName)
 	}
 
@@ -146,7 +137,6 @@ func (a *admin) GetTopicConfig(ctx context.Context, topicName string, configName
 		if isAuthorizationFailed(err) {
 			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-config", topicName)
 		}
-
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-config", topicName)
 	}
 
@@ -154,7 +144,6 @@ func (a *admin) GetTopicConfig(ctx context.Context, topicName string, configName
 		if isAuthorizationFailed(resource.Err) {
 			return "", false, errors.WrapError(errors.ErrKafkaAuthorizationFailed, resource.Err, "describe-config", topicName)
 		}
-
 		return "", false, errors.WrapError(errors.ErrKafkaAdminAPI, resource.Err, "describe-config", topicName)
 	}
 
@@ -163,7 +152,6 @@ func (a *admin) GetTopicConfig(ctx context.Context, topicName string, configName
 			return entry.MaybeValue(), true, nil
 		}
 	}
-
 	return "", false, nil
 }
 
@@ -181,7 +169,6 @@ func (a *admin) GetTopicsMeta(ctx context.Context, topics []string, ignoreTopicE
 		if isAuthorizationFailed(err) {
 			return nil, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-topics", resource)
 		}
-
 		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "describe-topics", resource)
 	}
 
@@ -196,7 +183,6 @@ func topicDetailsFromMetadata(meta kadm.Metadata, topics []string, ignoreTopicEr
 			if ignoreTopicError {
 				continue
 			}
-
 			return nil, errors.WrapError(errors.ErrKafkaAdminAPI, kerr.UnknownTopicOrPartition, "describe-topic", topic)
 		}
 
@@ -215,10 +201,8 @@ func topicDetailsFromMetadata(meta kadm.Metadata, topics []string, ignoreTopicEr
 		if isAuthorizationFailed(detail.Err) {
 			return nil, errors.WrapError(errors.ErrKafkaAuthorizationFailed, detail.Err, "describe-topic", topic)
 		}
-
 		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, detail.Err, "describe-topic", topic)
 	}
-
 	return result, nil
 }
 
@@ -238,7 +222,6 @@ func (a *admin) GetTopicsPartitionsNum(ctx context.Context, topics []string) (ma
 	for topic, detail := range details {
 		partitions[topic] = detail.NumPartitions
 	}
-
 	return partitions, nil
 }
 
@@ -251,7 +234,6 @@ func (a *admin) CreateTopic(ctx context.Context, detail *TopicDetail) error {
 		if isAuthorizationFailed(err) {
 			return errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "create-topic", detail.Name)
 		}
-
 		return errors.WrapError(errors.ErrKafkaAdminAPI, err, "create-topic", detail.Name)
 	}
 
@@ -275,7 +257,6 @@ func (a *admin) CreateTopic(ctx context.Context, detail *TopicDetail) error {
 	if isAuthorizationFailed(resp.Err) {
 		return errors.WrapError(errors.ErrKafkaAuthorizationFailed, resp.Err, "create-topic", detail.Name)
 	}
-
 	return errors.WrapError(errors.ErrKafkaAdminAPI, resp.Err, "create-topic", detail.Name)
 }
 

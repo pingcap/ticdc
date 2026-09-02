@@ -14,6 +14,7 @@
 package kafka
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -28,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kfake"
 )
 
 const (
@@ -77,6 +79,35 @@ func TestKafkaClientSelection(t *testing.T) {
 
 			require.NoError(t, err)
 			require.Equal(t, test.expected, options.Client)
+		})
+	}
+}
+
+func TestFactorySelection(t *testing.T) {
+	const topic = "factory-selection"
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	defer cluster.Close()
+
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "factory-selection")
+	for _, test := range []struct {
+		client   string
+		expected Factory
+	}{
+		{client: KafkaClientFranz, expected: &franzFactory{}},
+		{client: KafkaClientSarama, expected: &saramaFactory{}},
+	} {
+		t.Run(test.client, func(t *testing.T) {
+			o := NewOptions()
+			o.Client = test.client
+			o.ClientID = "ticdc-test"
+			o.BrokerEndpoints = cluster.ListenAddrs()
+			o.Topic = topic
+
+			factory, err := NewFactory(context.Background(), o, changefeedID)
+			require.NoError(t, err)
+			require.IsType(t, test.expected, factory)
+
+			factory.CleanupMetrics()
 		})
 	}
 }

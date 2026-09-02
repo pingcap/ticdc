@@ -35,12 +35,8 @@ type asyncProducer struct {
 	errCh        chan error
 }
 
-func newAsyncProducer(
-	ctx context.Context,
-	changefeedID common.ChangeFeedID,
-	o *options,
-) (*asyncProducer, error) {
-	client, err := newProducerClient(ctx, changefeedID, "async-producer", o)
+func newAsyncProducer(ctx context.Context, changefeedID common.ChangeFeedID, clientOpts []kgo.Opt, producerOpts []kgo.Opt) (*asyncProducer, error) {
+	client, err := newProducerClient(ctx, changefeedID, "async-producer", clientOpts, producerOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -67,12 +63,7 @@ func (p *asyncProducer) Close() {
 		zap.Duration("duration", time.Since(start)))
 }
 
-func (p *asyncProducer) AsyncSend(
-	ctx context.Context,
-	topic string,
-	partition int32,
-	message *codeccommon.Message,
-) error {
+func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *codeccommon.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
@@ -104,14 +95,10 @@ func (p *asyncProducer) AsyncSend(
 	}
 
 	p.client.Produce(ctx, record, promise)
-
 	return nil
 }
 
-func (p *asyncProducer) enqueueAsyncSendError(
-	logInfo *codeccommon.MessageLogInfo,
-	err error,
-) {
+func (p *asyncProducer) enqueueAsyncSendError(logInfo *codeccommon.MessageLogInfo, err error) {
 	log.Error("kafka message send failed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
 		zap.String("changefeed", p.changefeedID.Name()),

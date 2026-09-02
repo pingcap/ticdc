@@ -41,36 +41,29 @@ func buildGSSAPIMechanism(g gssapiConfig) (sasl.Mechanism, error) {
 
 func validateGSSAPIConfig(g gssapiConfig) error {
 	if g.serviceName == "" {
-		return errors.ErrKafkaInvalidConfig.GenWithStack(
-			"sasl-gssapi-service-name must not be empty when sasl mechanism is GSSAPI")
+		return errors.ErrKafkaInvalidConfig.GenWithStack("sasl-gssapi-service-name must not be empty when sasl mechanism is GSSAPI")
 	}
 	if g.kerberosConfigPath == "" {
-		return errors.ErrKafkaInvalidConfig.GenWithStack(
-			"sasl-gssapi-kerberos-config-path must not be empty when sasl mechanism is GSSAPI")
+		return errors.ErrKafkaInvalidConfig.GenWithStack("sasl-gssapi-kerberos-config-path must not be empty when sasl mechanism is GSSAPI")
 	}
 	if g.username == "" {
-		return errors.ErrKafkaInvalidConfig.GenWithStack(
-			"sasl-gssapi-user must not be empty when sasl mechanism is GSSAPI")
+		return errors.ErrKafkaInvalidConfig.GenWithStack("sasl-gssapi-user must not be empty when sasl mechanism is GSSAPI")
 	}
 	if g.realm == "" {
-		return errors.ErrKafkaInvalidConfig.GenWithStack(
-			"sasl-gssapi-realm must not be empty when sasl mechanism is GSSAPI")
+		return errors.ErrKafkaInvalidConfig.GenWithStack("sasl-gssapi-realm must not be empty when sasl mechanism is GSSAPI")
 	}
 
 	switch g.authType {
 	case userAuth:
 		if g.password == "" {
-			return errors.ErrKafkaInvalidConfig.GenWithStack(
-				"sasl-gssapi-password must not be empty when sasl-gssapi-auth-type is USER")
+			return errors.ErrKafkaInvalidConfig.GenWithStack("sasl-gssapi-password must not be empty when sasl-gssapi-auth-type is USER")
 		}
 	case keyTabAuth:
 		if g.keyTabPath == "" {
-			return errors.ErrKafkaInvalidConfig.GenWithStack(
-				"sasl-gssapi-keytab-path must not be empty when sasl-gssapi-auth-type is KEYTAB")
+			return errors.ErrKafkaInvalidConfig.GenWithStack("sasl-gssapi-keytab-path must not be empty when sasl-gssapi-auth-type is KEYTAB")
 		}
 	default:
-		return errors.ErrKafkaInvalidConfig.GenWithStack(
-			"unsupported sasl-gssapi-auth-type %d", g.authType)
+		return errors.ErrKafkaInvalidConfig.GenWithStack("unsupported sasl-gssapi-auth-type %d", g.authType)
 	}
 	return nil
 }
@@ -83,17 +76,14 @@ func newKerberosClient(g gssapiConfig) (*client.Client, error) {
 
 	switch g.authType {
 	case userAuth:
-		return client.NewWithPassword(
-			g.username, g.realm, g.password, cfg, client.DisablePAFXFAST(g.disablePAFXFAST)), nil
+		return client.NewWithPassword(g.username, g.realm, g.password, cfg, client.DisablePAFXFAST(g.disablePAFXFAST)), nil
 	case keyTabAuth:
 		kt, err := keytab.Load(g.keyTabPath)
 		if err != nil {
 			return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
-		return client.NewWithKeytab(
-			g.username, g.realm, kt, cfg, client.DisablePAFXFAST(g.disablePAFXFAST)), nil
+		return client.NewWithKeytab(g.username, g.realm, kt, cfg, client.DisablePAFXFAST(g.disablePAFXFAST)), nil
 	default:
-		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
-			"unsupported sasl-gssapi-auth-type %d", g.authType)
+		return nil, errors.ErrKafkaInvalidConfig.GenWithStack("unsupported sasl-gssapi-auth-type %d", g.authType)
 	}
 }

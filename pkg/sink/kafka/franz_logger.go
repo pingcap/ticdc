@@ -41,7 +41,6 @@ func newClientLogger(changefeedID common.ChangeFeedID, role string) kgo.Logger {
 	).WithOptions(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
 		return zapcore.NewSamplerWithOptions(core, time.Minute, 5, 100)
 	}))
-
 	return &clientLogger{logger: logger}
 }
 
@@ -54,7 +53,6 @@ func (l *clientLogger) Level() kgo.LogLevel {
 
 func (l *clientLogger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
 	fields := make([]zap.Field, 0, (len(keyvals)+1)/2)
-
 	for i := 0; i < len(keyvals); i += 2 {
 		key := fmt.Sprint(keyvals[i])
 		value := any("<missing>")
@@ -99,6 +97,5 @@ func isSensitiveLogKey(key string) bool {
 			return true
 		}
 	}
-
 	return false
 }

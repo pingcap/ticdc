@@ -59,7 +59,6 @@ const (
 func newMetricsHook(changefeedID common.ChangeFeedID) *metricsHook {
 	keyspace := changefeedID.Keyspace()
 	changefeed := changefeedID.Name()
-
 	return &metricsHook{
 		keyspace:               keyspace,
 		changefeed:             changefeed,
@@ -69,11 +68,7 @@ func newMetricsHook(changefeedID common.ChangeFeedID) *metricsHook {
 	}
 }
 
-func (h *metricsHook) OnBrokerThrottle(
-	meta kgo.BrokerMetadata,
-	throttleInterval time.Duration,
-	_ bool,
-) {
+func (h *metricsHook) OnBrokerThrottle(meta kgo.BrokerMetadata, throttleInterval time.Duration, _ bool) {
 	if meta.NodeID < 0 {
 		return
 	}
@@ -89,21 +84,16 @@ func (h *metricsHook) broker(nodeID int32) *brokerMetrics {
 	brokerID := strconv.Itoa(int(nodeID))
 	metrics := &brokerMetrics{
 		outgoingBytesTotal: outgoingBytesTotal.WithLabelValues(h.keyspace, h.changefeed, brokerID),
-		requestsSuccess: requestsTotal.WithLabelValues(
-			h.keyspace, h.changefeed, brokerID, metricResultSuccess),
-		requestsWriteError: requestsTotal.WithLabelValues(
-			h.keyspace, h.changefeed, brokerID, metricResultWriteError),
-		responsesSuccess: responsesTotal.WithLabelValues(
-			h.keyspace, h.changefeed, brokerID, metricResultSuccess),
-		responsesReadError: responsesTotal.WithLabelValues(
-			h.keyspace, h.changefeed, brokerID, metricResultReadError),
-		requestsInFlight: requestsInFlight.WithLabelValues(h.keyspace, h.changefeed, brokerID),
-		requestDuration:  requestDuration.WithLabelValues(h.keyspace, h.changefeed, brokerID),
-		throttleTime:     throttleTime.WithLabelValues(h.keyspace, h.changefeed, brokerID),
+		requestsSuccess:    requestsTotal.WithLabelValues(h.keyspace, h.changefeed, brokerID, metricResultSuccess),
+		requestsWriteError: requestsTotal.WithLabelValues(h.keyspace, h.changefeed, brokerID, metricResultWriteError),
+		responsesSuccess:   responsesTotal.WithLabelValues(h.keyspace, h.changefeed, brokerID, metricResultSuccess),
+		responsesReadError: responsesTotal.WithLabelValues(h.keyspace, h.changefeed, brokerID, metricResultReadError),
+		requestsInFlight:   requestsInFlight.WithLabelValues(h.keyspace, h.changefeed, brokerID),
+		requestDuration:    requestDuration.WithLabelValues(h.keyspace, h.changefeed, brokerID),
+		throttleTime:       throttleTime.WithLabelValues(h.keyspace, h.changefeed, brokerID),
 	}
 
 	actual, _ := h.brokers.LoadOrStore(nodeID, metrics)
-
 	return actual.(*brokerMetrics)
 }
 
@@ -125,14 +115,7 @@ func cleanupMetrics(changefeedID common.ChangeFeedID) {
 	compressedBytesTotal.DeletePartialMatch(labels)
 }
 
-func (h *metricsHook) OnBrokerWrite(
-	meta kgo.BrokerMetadata,
-	_ int16,
-	bytesWritten int,
-	_ time.Duration,
-	_ time.Duration,
-	err error,
-) {
+func (h *metricsHook) OnBrokerWrite(meta kgo.BrokerMetadata, _ int16, bytesWritten int, _ time.Duration, _ time.Duration, err error) {
 	if meta.NodeID < 0 {
 		return
 	}
@@ -151,11 +134,7 @@ func (h *metricsHook) OnBrokerWrite(
 	}
 }
 
-func (h *metricsHook) OnBrokerE2E(
-	meta kgo.BrokerMetadata,
-	_ int16,
-	e2e kgo.BrokerE2E,
-) {
+func (h *metricsHook) OnBrokerE2E(meta kgo.BrokerMetadata, _ int16, e2e kgo.BrokerE2E) {
 	if meta.NodeID < 0 {
 		return
 	}
@@ -178,12 +157,7 @@ func (h *metricsHook) OnBrokerE2E(
 	}
 }
 
-func (h *metricsHook) OnProduceBatchWritten(
-	_ kgo.BrokerMetadata,
-	_ string,
-	_ int32,
-	m kgo.ProduceBatchMetrics,
-) {
+func (h *metricsHook) OnProduceBatchWritten(_ kgo.BrokerMetadata, _ string, _ int32, m kgo.ProduceBatchMetrics) {
 	if m.NumRecords > 0 {
 		h.recordsPerBatch.Observe(float64(m.NumRecords))
 	}

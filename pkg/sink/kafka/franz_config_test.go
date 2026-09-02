@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -38,6 +39,20 @@ func testOptions(brokers []string) *options {
 	o.ReadTimeout = time.Second
 	o.WriteTimeout = time.Second
 	return o
+}
+
+func testClientOptions(t *testing.T, o *options) []kgo.Opt {
+	t.Helper()
+	opts, err := clientOptions(o)
+	require.NoError(t, err)
+	return opts
+}
+
+func testProducerOptions(t *testing.T, o *options) []kgo.Opt {
+	t.Helper()
+	opts, err := producerOptions(o)
+	require.NoError(t, err)
+	return opts
 }
 
 func TestFranzRequiredAcks(t *testing.T) {
@@ -62,18 +77,34 @@ func TestFranzRequestTimeoutUsesLargerTimeout(t *testing.T) {
 	require.Equal(t, 3*time.Second, requestTimeout(o))
 }
 
+func TestFranzIgnoresConfiguredKafkaVersion(t *testing.T) {
+	const topic = "version-negotiation"
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	defer cluster.Close()
+
+	o := NewOptions()
+	o.ClientID = "ticdc-test"
+	o.BrokerEndpoints = cluster.ListenAddrs()
+	o.Topic = topic
+	o.Version = "invalid"
+	o.IsAssignedVersion = true
+
+	factory, err := NewFactory(
+		context.Background(),
+		o,
+		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "version-negotiation"),
+	)
+	require.NoError(t, err)
+	require.IsType(t, &franzFactory{}, factory)
+	factory.CleanupMetrics()
+}
+
 func TestProducerOptionsBoundBufferAndBatch(t *testing.T) {
 	const batchBytes = 1048588
 	o := testOptions([]string{"127.0.0.1:9092"})
 	o.MaxMessageBytes = batchBytes
 
-	opts, err := newClientOptions(
-		context.Background(),
-		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "config"),
-		"test",
-		o,
-		nil,
-	)
+	opts, err := clientOptions(o)
 	require.NoError(t, err)
 
 	producerOpts, err := producerOptions(o)
@@ -182,7 +213,7 @@ func TestBuildFranzGSSAPIMechanism(t *testing.T) {
 		cfg.username = "alice"
 		cfg.realm = "EXAMPLE.COM"
 
-		mechanism, err := buildSASLMechanism(context.Background(), &saslConfig{
+		mechanism, err := buildSASLMechanism(&saslConfig{
 			mechanism: gssapiMechanism,
 			gssapi:    cfg,
 		})
@@ -193,7 +224,7 @@ func TestBuildFranzGSSAPIMechanism(t *testing.T) {
 
 func TestBuildFranzSASLMechanisms(t *testing.T) {
 	for _, mechanism := range []saslMechanism{plainMechanism, scram256Mechanism, scram512Mechanism} {
-		actual, err := buildSASLMechanism(context.Background(), &saslConfig{
+		actual, err := buildSASLMechanism(&saslConfig{
 			mechanism: mechanism,
 			user:      "alice",
 			password:  "secret",
@@ -202,7 +233,7 @@ func TestBuildFranzSASLMechanisms(t *testing.T) {
 		require.Equal(t, string(mechanism), actual.Name())
 	}
 
-	_, err := buildSASLMechanism(context.Background(), &saslConfig{mechanism: "unknown"})
+	_, err := buildSASLMechanism(&saslConfig{mechanism: "unknown"})
 	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 }
 
@@ -223,19 +254,21 @@ func TestFranzOAuthTokenSource(t *testing.T) {
 	}))
 	defer server.Close()
 
-	source, err := newOAuthTokenSource(context.Background(), oauth2Config{
-		clientID:     "client",
-		clientSecret: "secret",
-		tokenURL:     server.URL,
-		scopes:       []string{"scope-a", "scope-b"},
-		grantType:    "custom",
-		audience:     "audience",
+	mechanism, err := buildSASLMechanism(&saslConfig{
+		mechanism: oauthMechanism,
+		oauth2: oauth2Config{
+			clientID:     "client",
+			clientSecret: "secret",
+			tokenURL:     server.URL,
+			scopes:       []string{"scope-a", "scope-b"},
+			grantType:    "custom",
+			audience:     "audience",
+		},
 	})
 	require.NoError(t, err)
 
-	token, err := source.Token()
+	_, _, err = mechanism.Authenticate(context.Background(), "")
 	require.NoError(t, err)
-	require.Equal(t, "token", token.AccessToken)
 
 	form := <-request
 	require.Equal(t, "custom", form.Get("grant_type"))
@@ -244,6 +277,9 @@ func TestFranzOAuthTokenSource(t *testing.T) {
 }
 
 func TestFranzOAuthTokenSourceRejectsInvalidURL(t *testing.T) {
-	_, err := newOAuthTokenSource(context.Background(), oauth2Config{tokenURL: "http://example.com/%%"})
+	_, err := buildSASLMechanism(&saslConfig{
+		mechanism: oauthMechanism,
+		oauth2:    oauth2Config{tokenURL: "http://example.com/%%"},
+	})
 	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 }

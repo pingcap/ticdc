@@ -15,6 +15,7 @@ package kafka
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -26,6 +27,42 @@ import (
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
+
+func TestIsUnretryableClientError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		err         error
+		unretryable bool
+	}{
+		{name: "unknown topic", err: kerr.UnknownTopicOrPartition},
+		{name: "leader unavailable", err: kerr.LeaderNotAvailable},
+		{name: "request timeout", err: kerr.RequestTimedOut},
+		{name: "network exception", err: kerr.NetworkException},
+		{name: "controller changed", err: kerr.NotController},
+		{name: "EOF", err: io.EOF},
+		{name: "invalid topic", err: kerr.InvalidTopicException, unretryable: true},
+		{name: "invalid config", err: kerr.InvalidConfig, unretryable: true},
+		{name: "SASL authentication failure", err: kerr.SaslAuthenticationFailed, unretryable: true},
+		{name: "unsupported SASL mechanism", err: kerr.UnsupportedSaslMechanism, unretryable: true},
+		{name: "illegal SASL state", err: kerr.IllegalSaslState, unretryable: true},
+		{name: "unsupported version", err: kerr.UnsupportedVersion, unretryable: true},
+		{name: "invalid request", err: kerr.InvalidRequest, unretryable: true},
+		{
+			name:        "wrapped invalid topic",
+			err:         errors.WrapError(errors.ErrKafkaAdminAPI, kerr.InvalidTopicException, "describe-topic", "test-topic"),
+			unretryable: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, test.unretryable, IsUnretryableKafkaError(test.err))
+		})
+	}
+}
 
 func TestFranzTopicDetailsFromMetadata(t *testing.T) {
 	t.Parallel()
@@ -142,10 +179,12 @@ func TestFranzIsAuthorizationFailed(t *testing.T) {
 }
 
 func TestAdminHonorsCallContext(t *testing.T) {
+	o := testOptions([]string{"127.0.0.1:1"})
 	admin, err := newAdmin(
 		t.Context(),
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "context"),
-		testOptions([]string{"127.0.0.1:1"}),
+		testClientOptions(t, o),
+		requestTimeout(o),
 	)
 	require.NoError(t, err)
 	t.Cleanup(admin.Close)
@@ -162,11 +201,13 @@ func TestAdminOperations(t *testing.T) {
 	ctx := t.Context()
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(3, existingTopic))
 	defer cluster.Close()
+	o := testOptions(cluster.ListenAddrs())
 
 	admin, err := newAdmin(
 		ctx,
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
-		testOptions(cluster.ListenAddrs()),
+		testClientOptions(t, o),
+		requestTimeout(o),
 	)
 	require.NoError(t, err)
 	defer admin.Close()
@@ -219,11 +260,13 @@ func TestCreateTopicErrors(t *testing.T) {
 	ctx := t.Context()
 	cluster := kfake.MustCluster(kfake.NumBrokers(1))
 	defer cluster.Close()
+	o := testOptions(cluster.ListenAddrs())
 
 	admin, err := newAdmin(
 		ctx,
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "create-errors"),
-		testOptions(cluster.ListenAddrs()),
+		testClientOptions(t, o),
+		requestTimeout(o),
 	)
 	require.NoError(t, err)
 	defer admin.Close()
@@ -262,7 +305,6 @@ func TestCreateTopicErrors(t *testing.T) {
 				topic := kmsg.NewCreateTopicsResponseTopic()
 				topic.Topic, topic.ErrorCode = detail.Name, test.code
 				response.Topics = append(response.Topics, topic)
-
 				return response, nil, true
 			})
 

@@ -17,25 +17,38 @@ package kafka
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
 )
 
 type franzFactory struct {
-	options      *options
 	changefeedID common.ChangeFeedID
+	clientOpts   []kgo.Opt
+	producerOpts []kgo.Opt
+	timeout      time.Duration
 }
 
-func newFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
-	admin, err := newAdmin(ctx, changefeedID, o)
+func newFranzFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
+	clientOpts, err := clientOptions(o)
+	if err != nil {
+		return nil, err
+	}
+	timeout := requestTimeout(o)
+	admin, err := newAdmin(ctx, changefeedID, clientOpts, timeout)
 	if err != nil {
 		return nil, err
 	}
 	defer admin.Close()
 
 	if err := adjustOptions(ctx, changefeedID, admin, o, o.Topic); err != nil {
+		return nil, err
+	}
+	producerOpts, err := producerOptions(o)
+	if err != nil {
 		return nil, err
 	}
 
@@ -58,16 +71,20 @@ func newFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedI
 		zap.Duration("dialTimeout", o.DialTimeout),
 		zap.Duration("readTimeout", o.ReadTimeout),
 		zap.Duration("writeTimeout", o.WriteTimeout))
-
-	return &franzFactory{options: o, changefeedID: changefeedID}, nil
+	return &franzFactory{
+		changefeedID: changefeedID,
+		clientOpts:   clientOpts,
+		producerOpts: producerOpts,
+		timeout:      timeout,
+	}, nil
 }
 
 func (f *franzFactory) AdminClient(ctx context.Context) (AdminClient, error) {
-	return newAdmin(ctx, f.changefeedID, f.options)
+	return newAdmin(ctx, f.changefeedID, f.clientOpts, f.timeout)
 }
 
 func (f *franzFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
-	producer, err := newSyncProducer(ctx, f.changefeedID, f.options)
+	producer, err := newSyncProducer(ctx, f.changefeedID, f.clientOpts, f.producerOpts, f.timeout)
 	if err != nil {
 		cleanupMetrics(f.changefeedID)
 	}
@@ -75,7 +92,7 @@ func (f *franzFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 }
 
 func (f *franzFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
-	producer, err := newAsyncProducer(ctx, f.changefeedID, f.options)
+	producer, err := newAsyncProducer(ctx, f.changefeedID, f.clientOpts, f.producerOpts)
 	if err != nil {
 		cleanupMetrics(f.changefeedID)
 	}

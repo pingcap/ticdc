@@ -34,12 +34,8 @@ type syncProducer struct {
 	timeout time.Duration
 }
 
-func newSyncProducer(
-	ctx context.Context,
-	changefeedID common.ChangeFeedID,
-	o *options,
-) (*syncProducer, error) {
-	client, err := newProducerClient(ctx, changefeedID, "sync-producer", o)
+func newSyncProducer(ctx context.Context, changefeedID common.ChangeFeedID, clientOpts []kgo.Opt, producerOpts []kgo.Opt, timeout time.Duration) (*syncProducer, error) {
+	client, err := newProducerClient(ctx, changefeedID, "sync-producer", clientOpts, producerOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -47,13 +43,11 @@ func newSyncProducer(
 	return &syncProducer{
 		id:      changefeedID,
 		client:  client,
-		timeout: requestTimeout(o),
+		timeout: timeout,
 	}, nil
 }
 
-func (p *syncProducer) SendMessage(
-	ctx context.Context, topic string, partitionNum int32, message *codeccommon.Message,
-) error {
+func (p *syncProducer) SendMessage(ctx context.Context, topic string, partitionNum int32, message *codeccommon.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
@@ -67,9 +61,7 @@ func (p *syncProducer) SendMessage(
 	return p.sendRecords(ctx, message, record)
 }
 
-func (p *syncProducer) SendMessages(
-	ctx context.Context, topic string, partitionNum int32, message *codeccommon.Message,
-) error {
+func (p *syncProducer) SendMessages(ctx context.Context, topic string, partitionNum int32, message *codeccommon.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
@@ -87,9 +79,7 @@ func (p *syncProducer) SendMessages(
 	return p.sendRecords(ctx, message, records...)
 }
 
-func (p *syncProducer) sendRecords(
-	ctx context.Context, message *codeccommon.Message, records ...*kgo.Record,
-) error {
+func (p *syncProducer) sendRecords(ctx context.Context, message *codeccommon.Message, records ...*kgo.Record) error {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
@@ -104,7 +94,6 @@ func (p *syncProducer) sendRecords(
 		zap.String("eventContext", BuildEventLogContext(
 			p.id.Keyspace(), p.id.Name(), message.LogInfo)),
 		zap.Error(err))
-
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 

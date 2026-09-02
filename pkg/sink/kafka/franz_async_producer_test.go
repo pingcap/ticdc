@@ -86,11 +86,13 @@ func TestAsyncProducerCallbackExactlyOnce(t *testing.T) {
 	const topic = "async-topic"
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 	defer cluster.Close()
+	o := testOptions(cluster.ListenAddrs())
 
 	producer, err := newAsyncProducer(
 		context.Background(),
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-success"),
-		testOptions(cluster.ListenAddrs()),
+		testClientOptions(t, o),
+		testProducerOptions(t, o),
 	)
 	require.NoError(t, err)
 	defer producer.Close()
@@ -124,11 +126,13 @@ func TestAsyncProducerReportsProduceFailure(t *testing.T) {
 	cluster.ControlKey(int16(kmsg.Produce), func(req kmsg.Request) (kmsg.Response, error, bool) {
 		return produceResponseWithError(req, 0, kerr.InvalidTopicException.Code)
 	})
+	o := testOptions(cluster.ListenAddrs())
 
 	producer, err := newAsyncProducer(
 		context.Background(),
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-error"),
-		testOptions(cluster.ListenAddrs()),
+		testClientOptions(t, o),
+		testProducerOptions(t, o),
 	)
 	require.NoError(t, err)
 	defer producer.Close()

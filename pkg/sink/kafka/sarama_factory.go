@@ -34,12 +34,8 @@ type saramaFactory struct {
 
 func (*saramaFactory) CleanupMetrics() {}
 
-// NewSaramaFactory constructs a Factory with sarama implementation.
-func NewSaramaFactory(
-	ctx context.Context,
-	o *options,
-	changefeedID common.ChangeFeedID,
-) (Factory, error) {
+// newSaramaFactory constructs a Factory with sarama implementation.
+func newSaramaFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
 	start := time.Now()
 	config, err := newSaramaConfig(ctx, o)
 	duration := time.Since(start)
@@ -184,9 +180,7 @@ func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error
 	}, nil
 }
 
-func (f *saramaFactory) MetricsCollector(
-	adminClient AdminClient,
-) MetricsCollector {
+func (f *saramaFactory) MetricsCollector(adminClient AdminClient) MetricsCollector {
 	return &saramaMetricsCollector{
 		changefeedID: f.changefeedID,
 		adminClient:  adminClient,
