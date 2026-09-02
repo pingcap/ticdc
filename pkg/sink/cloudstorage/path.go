@@ -348,11 +348,11 @@ func (f *FilePathGenerator) GenerateDateStr() string {
 	currTime := f.pdClock.CurrentTime()
 	// Note: `dateStr` is formatted using local TZ.
 	switch f.config.DateSeparator {
-	case config.DateSeparatorYear.String():
+	case config.DateSeparatorYear:
 		dateStr = currTime.Format("2006")
-	case config.DateSeparatorMonth.String():
+	case config.DateSeparatorMonth:
 		dateStr = currTime.Format("2006-01")
-	case config.DateSeparatorDay.String():
+	case config.DateSeparatorDay:
 		dateStr = currTime.Format("2006-01-02")
 	default:
 	}
@@ -537,9 +537,15 @@ func RemoveExpiredFiles(
 	storage storeapi.Storage,
 	cfg *Config,
 	checkpointTs uint64,
+<<<<<<< HEAD:pkg/sink/cloudstorage/path.go
 ) (uint64, error) {
 	if cfg.DateSeparator != config.DateSeparatorDay.String() {
 		return 0, nil
+=======
+) error {
+	if cfg.DateSeparator != config.DateSeparatorDay {
+		return nil
+>>>>>>> 0697ba0ec (cloudstorage: make all DateSeparator fields use the enum instead of string (#6078)):pkg/cloudstorage/generator.go
 	}
 	if dateSeparatorDayRegexp == nil {
 		dateSeparatorDayRegexp = regexp.MustCompile(config.DateSeparatorDay.GetPattern())
