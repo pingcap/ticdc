@@ -314,7 +314,12 @@ func TestWriterFlushWaitsForWriteGate(t *testing.T) {
 	require.Empty(t, files)
 
 	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
-	require.NoError(t, <-done)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("redo file flush did not resume after the capture write gate reopened")
+	}
 	files, err = filepath.Glob(filepath.Join(dir, "*"+redo.LogEXT))
 	require.NoError(t, err)
 	require.NotEmpty(t, files)

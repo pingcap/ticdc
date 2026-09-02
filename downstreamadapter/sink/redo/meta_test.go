@@ -141,7 +141,12 @@ func TestRedoMetaFlushWaitsForWriteGate(t *testing.T) {
 	require.Equal(t, initialMetaFile, m.preMetaFile)
 
 	require.True(t, gate.RenewP2P(time.Now(), writelease.P2PLeaseDuration))
-	require.NoError(t, <-done)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("redo metadata flush did not resume after the capture write gate reopened")
+	}
 	require.NotEqual(t, initialMetaFile, m.preMetaFile)
 	exists, err := m.extStorage.FileExists(ctx, initialMetaFile)
 	require.NoError(t, err)

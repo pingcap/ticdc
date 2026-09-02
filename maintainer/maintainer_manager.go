@@ -200,7 +200,7 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 		m.node.resetWriteLeaseRequests()
 	}
 	m.writeGate.SetP2PRequired(
-		req.GetWriteLeaseProtocolVersion() >= heartbeatpb.CurrentWriteLeaseProtocolVersion,
+		req.GetWriteLeaseProtocolVersion() == heartbeatpb.CurrentWriteLeaseProtocolVersion,
 	)
 	m.coordinatorID = msg.From
 	m.coordinatorVersion = req.Version

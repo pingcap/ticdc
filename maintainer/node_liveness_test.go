@@ -257,6 +257,10 @@ func TestCoordinatorBootstrapNegotiatesP2PWriteLease(t *testing.T) {
 	bootstrap(node.ID("legacy-coordinator"), heartbeatpb.LegacyWriteLeaseProtocolVersion)
 	require.False(t, gate.Status().P2PRequired)
 	require.True(t, gate.IsWritable())
+
+	bootstrap(node.ID("future-coordinator"), heartbeatpb.CurrentWriteLeaseProtocolVersion+1)
+	require.False(t, gate.Status().P2PRequired)
+	require.True(t, gate.IsWritable())
 }
 
 func TestNodeHeartbeatResponseRenewsP2PWriteLease(t *testing.T) {

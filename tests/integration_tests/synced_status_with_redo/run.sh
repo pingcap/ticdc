@@ -148,6 +148,10 @@ function run_normal_case_and_unavailable_pd() {
 	# case 2: when PD is unavailable, the capture loses its etcd write proof and
 	# exits instead of continuing to serve a potentially stale synced response.
 	cdc_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
+	if [ -z "$cdc_pid" ] || [ "$cdc_pid" = "null" ]; then
+		echo "failed to get a valid cdc pid"
+		exit 1
+	fi
 	kill_pd
 	ensure 30 "! kill -0 $cdc_pid > /dev/null 2>&1"
 	cleanup_process $CDC_BINARY
