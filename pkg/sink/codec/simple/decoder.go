@@ -255,6 +255,7 @@ func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(
 		TableID:       m.TableID,
 		Type:          m.Type,
 		CommitTs:      m.CommitTs,
+		StartTs:       m.StartTs,
 		SchemaVersion: m.SchemaVersion,
 	}
 
