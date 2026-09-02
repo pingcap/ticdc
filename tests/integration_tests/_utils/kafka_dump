@@ -1,0 +1,12 @@
+#!/bin/bash
+
+set -eu
+
+CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+UTILITY_DIR="$CUR/../../utils/kafka_dump"
+
+if [ ! -f "$UTILITY_DIR/kafka_dump" ]; then
+	(cd "$UTILITY_DIR" && GO111MODULE=on go build)
+fi
+
+"$UTILITY_DIR/kafka_dump" "$@"
