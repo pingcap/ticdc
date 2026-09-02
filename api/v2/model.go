@@ -1193,17 +1193,17 @@ type Table struct {
 // SinkConfig represents sink config for a changefeed
 // This is a duplicate of config.SinkConfig
 type SinkConfig struct {
-	Protocol                 *string           `json:"protocol,omitempty" toml:"protocol,omitempty"`
-	SchemaRegistry           *string           `json:"schema_registry,omitempty" toml:"schema-registry,omitempty"`
-	CSVConfig                *CSVConfig        `json:"csv,omitempty" toml:"csv,omitempty"`
-	DispatchRules            []*DispatchRule   `json:"dispatchers,omitempty" toml:"dispatchers,omitempty"`
-	ColumnSelectors          []*ColumnSelector `json:"column_selectors,omitempty" toml:"column-selectors,omitempty"`
-	TxnAtomicity             *string           `json:"transaction_atomicity,omitempty" toml:"transaction-atomicity,omitempty"`
-	EncoderConcurrency       *int              `json:"encoder_concurrency,omitempty" toml:"encoder-concurrency,omitempty"`
-	Terminator               *string           `json:"terminator,omitempty" toml:"terminator,omitempty"`
-	DateSeparator            *string           `json:"date_separator,omitempty" toml:"date-separator,omitempty"`
-	EnablePartitionSeparator *bool             `json:"enable_partition_separator,omitempty" toml:"enable-partition-separator,omitempty"`
-	FileIndexWidth           *int              `json:"file_index_width,omitempty" toml:"file-index-digit,omitempty"`
+	Protocol                 *string               `json:"protocol,omitempty" toml:"protocol,omitempty"`
+	SchemaRegistry           *string               `json:"schema_registry,omitempty" toml:"schema-registry,omitempty"`
+	CSVConfig                *CSVConfig            `json:"csv,omitempty" toml:"csv,omitempty"`
+	DispatchRules            []*DispatchRule       `json:"dispatchers,omitempty" toml:"dispatchers,omitempty"`
+	ColumnSelectors          []*ColumnSelector     `json:"column_selectors,omitempty" toml:"column-selectors,omitempty"`
+	TxnAtomicity             *string               `json:"transaction_atomicity,omitempty" toml:"transaction-atomicity,omitempty"`
+	EncoderConcurrency       *int                  `json:"encoder_concurrency,omitempty" toml:"encoder-concurrency,omitempty"`
+	Terminator               *string               `json:"terminator,omitempty" toml:"terminator,omitempty"`
+	DateSeparator            *config.DateSeparator `json:"date_separator,omitempty" toml:"date-separator,omitempty"`
+	EnablePartitionSeparator *bool                 `json:"enable_partition_separator,omitempty" toml:"enable-partition-separator,omitempty"`
+	FileIndexWidth           *int                  `json:"file_index_width,omitempty" toml:"file-index-digit,omitempty"`
 	// deprecated: it's become useless since v9.0.0
 	EnableKafkaSinkV2                *bool               `json:"enable_kafka_sink_v2,omitempty" toml:"enable-kafka-sink-v2,omitempty"`
 	OnlyOutputUpdatedColumns         *bool               `json:"only_output_updated_columns,omitempty" toml:"only-output-updated-columns,omitempty"`

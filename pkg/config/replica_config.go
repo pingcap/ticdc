@@ -73,7 +73,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		},
 		EncoderConcurrency:               util.AddressOf(DefaultEncoderGroupConcurrency),
 		Terminator:                       util.AddressOf(CRLF),
-		DateSeparator:                    util.AddressOf(DateSeparatorDay.String()),
+		DateSeparator:                    util.AddressOf(DateSeparatorDay),
 		EnablePartitionSeparator:         util.AddressOf(true),
 		OnlyOutputUpdatedColumns:         util.AddressOf(false),
 		DeleteOnlyOutputHandleKeyColumns: util.AddressOf(false),
