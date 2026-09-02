@@ -258,6 +258,10 @@ func TestController_StopChangefeedDoesNotReuseStaleOwnerCleanup(t *testing.T) {
 	staleOp := oc.StopRemoteMaintainerWithMaintainerEpoch(cfID, staleOwner.ID, false, 10)
 	require.Equal(t, staleOwner.ID, staleOp.Schedule().To)
 
+<<<<<<< HEAD
+=======
+	backend.EXPECT().SetChangefeedProgress(gomock.Any(), cfID, config.ProgressNone).Return(nil).Times(1)
+>>>>>>> ea94ac1be (coordinator: preserve stop operator on repeated warnings (#6135))
 	currentOp := oc.StopChangefeedWithMaintainerEpoch(context.Background(), cfID, false, 20)
 	require.NotSame(t, staleOp, currentOp)
 	currentReqMsg := currentOp.Schedule()
