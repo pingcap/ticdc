@@ -14,6 +14,7 @@
 package util
 
 import (
+	"bytes"
 	"container/list"
 	"encoding/binary"
 	"fmt"
@@ -47,6 +48,7 @@ const (
 	defaultResolveBatchMessages = 10000
 	defaultMessageMetadataBytes = 128
 	defaultIndexBatchMessages   = 10000
+	defaultIndexCleanupMessages = 100000
 	defaultDiskCheckBytes       = 16 * 1024 * 1024
 	defaultDiskUsageLimit       = 0.90
 	defaultIndexCacheBytes      = 32 * 1024 * 1024
@@ -65,6 +67,7 @@ type spillConfig struct {
 	resolveBatchMessages int
 	messageMetadataBytes int64
 	indexBatchMessages   int
+	indexCleanupMessages int64
 	diskCheckBytes       int64
 	diskUsageLimit       float64
 }
@@ -79,6 +82,7 @@ func defaultSpillConfig() spillConfig {
 		resolveBatchMessages: defaultResolveBatchMessages,
 		messageMetadataBytes: defaultMessageMetadataBytes,
 		indexBatchMessages:   defaultIndexBatchMessages,
+		indexCleanupMessages: defaultIndexCleanupMessages,
 		diskCheckBytes:       defaultDiskCheckBytes,
 		diskUsageLimit:       defaultDiskUsageLimit,
 	}
@@ -182,6 +186,8 @@ type SpillStore struct {
 	readRecord func(*spill.RecordFile, spill.Handle) ([]byte, error)
 	diskUsage  func(string) (filesystemUsage, error)
 	stats      SpillStats
+
+	indexDeleteRangeCount int64
 }
 
 var nextSpillStoreID atomic.Uint64
@@ -283,6 +289,12 @@ type EventsGroup struct {
 	appliedTs      uint64
 	postRestore    func(*codeccommon.DMLMessage, int64) *codeccommon.DMLMessage
 	HighWatermark  uint64
+
+	// indexCursor is the first logical key not acknowledged by the downstream.
+	indexCursor []byte
+	// indexCleanupStart begins the acknowledged prefix not yet deleted from Pebble.
+	indexCleanupStart []byte
+	indexCleanupCount int64
 }
 
 // NewEventsGroup will create new event group.
@@ -294,14 +306,17 @@ func NewEventsGroup(partition int32, tableID int64, stores ...*SpillStore) *Even
 		ownsStore = false
 	}
 	store.nextGroupID++
+	lower, _ := eventIndexBounds(store.nextGroupID)
 	return &EventsGroup{
-		Partition:    partition,
-		tableID:      tableID,
-		id:           store.nextGroupID,
-		store:        store,
-		ownsStore:    ownsStore,
-		segmentRefs:  make(map[uint64]int64),
-		restorerRefs: make(map[uint64]int64),
+		Partition:         partition,
+		tableID:           tableID,
+		id:                store.nextGroupID,
+		store:             store,
+		ownsStore:         ownsStore,
+		segmentRefs:       make(map[uint64]int64),
+		restorerRefs:      make(map[uint64]int64),
+		indexCursor:       lower,
+		indexCleanupStart: append([]byte(nil), lower...),
 	}
 }
 
@@ -506,6 +521,10 @@ func eventIndexBounds(groupID uint64) ([]byte, []byte) {
 	return lower, upper
 }
 
+func nextEventIndexKey(key []byte) []byte {
+	return append(append([]byte(nil), key...), 0)
+}
+
 func encodeEventIndexValue(
 	location payloadLocation, dmlIndex, restorerID uint64, sourcePosition int64,
 ) []byte {
@@ -701,6 +720,43 @@ func (s *SpillStore) checkDiskUsage(nextWriteBytes int64, force bool) error {
 	return s.terminalErr
 }
 
+func (g *EventsGroup) deleteAppliedIndex(end []byte) error {
+	if bytes.Compare(g.indexCleanupStart, end) >= 0 {
+		return nil
+	}
+	if err := g.store.checkDiskUsage(eventIndexKeyBytes+eventIndexValueBytes, true); err != nil {
+		return err
+	}
+	if err := g.store.index.DeleteRange(g.indexCleanupStart, end, pebble.NoSync); err != nil {
+		return errors.WrapError(errors.ErrSpillFileOp, err, "delete applied spill event range")
+	}
+	g.store.indexDeleteRangeCount++
+	return nil
+}
+
+// prepareIndexAppend preserves ordering if a caller appends an event older
+// than the already applied cursor. Consumers normally reject such events by
+// their global watermark. Keeping the fallback here prevents the generic
+// EventsGroup from skipping a late event or deleting it with a future
+// coalesced range tombstone.
+func (g *EventsGroup) prepareIndexAppend(key []byte) error {
+	if bytes.Compare(key, g.indexCursor) >= 0 {
+		return nil
+	}
+	if g.indexCleanupCount != 0 {
+		if err := g.store.flushEventIndex(); err != nil {
+			return err
+		}
+		if err := g.deleteAppliedIndex(g.indexCursor); err != nil {
+			return err
+		}
+	}
+	g.indexCursor = append(g.indexCursor[:0], key...)
+	g.indexCleanupStart = append(g.indexCleanupStart[:0], key...)
+	g.indexCleanupCount = 0
+	return nil
+}
+
 // Cleanup removes all temporary index and payload state when a consumer stops.
 func (s *SpillStore) Cleanup() error {
 	var cleanupErr error
@@ -758,6 +814,11 @@ func (g *EventsGroup) AppendMessage(
 		return errors.ErrSpillFileOp.FastGenByArgs("cannot spill DML message without decode function")
 	}
 	commitTs := message.GetCommitTs()
+	g.store.nextSequence++
+	key := encodeEventIndexKey(g.id, commitTs, g.store.nextSequence)
+	if err := g.prepareIndexAppend(key); err != nil {
+		return err
+	}
 	location, err := g.store.acquirePayload(messageData)
 	if err != nil {
 		return err
@@ -769,8 +830,6 @@ func (g *EventsGroup) AppendMessage(
 		g.HighWatermark = commitTs
 	}
 	g.lastAppendedTs = commitTs
-	g.store.nextSequence++
-	key := encodeEventIndexKey(g.id, commitTs, g.store.nextSequence)
 	value := encodeEventIndexValue(location, dmlIndex, messageData.Restorer.ID, messageData.SourcePosition)
 	if err := g.store.appendEventIndex(key, value); err != nil {
 		return err
@@ -831,7 +890,8 @@ func (g *EventsGroup) PrepareResolve(
 		return nil, false, err
 	}
 
-	lower, upper := eventIndexBounds(g.id)
+	_, upper := eventIndexBounds(g.id)
+	lower := g.indexCursor
 	iterator, err := g.store.index.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
 		return nil, false, errors.WrapError(errors.ErrSpillFileOp, err, "create spill event iterator")
@@ -1028,13 +1088,17 @@ func (g *EventsGroup) ack(batch *ResolveBatch) error {
 		g.store.unpinPayloads(batch.payloads)
 		return nil
 	}
-	if err := g.store.checkDiskUsage(eventIndexKeyBytes+eventIndexValueBytes, true); err != nil {
-		return err
+	end := nextEventIndexKey(batch.entries[len(batch.entries)-1].key)
+	indexCleanupCount := g.indexCleanupCount + int64(len(batch.entries))
+	cleanupMessages := g.store.config.indexCleanupMessages
+	if cleanupMessages <= 0 {
+		cleanupMessages = defaultIndexCleanupMessages
 	}
-	start := batch.entries[0].key
-	end := append(append([]byte(nil), batch.entries[len(batch.entries)-1].key...), 0)
-	if err := g.store.index.DeleteRange(start, end, pebble.NoSync); err != nil {
-		return errors.WrapError(errors.ErrSpillFileOp, err, "delete applied spill event range")
+	indexDeleted := indexCleanupCount >= cleanupMessages
+	if indexDeleted {
+		if err := g.deleteAppliedIndex(end); err != nil {
+			return err
+		}
 	}
 	for _, message := range batch.entries {
 		g.releaseEvent(message.location.segmentID, message.restorerID, 1)
@@ -1045,6 +1109,13 @@ func (g *EventsGroup) ack(batch *ResolveBatch) error {
 	lastCommitTs := batch.entries[len(batch.entries)-1].commitTs
 	if lastCommitTs > g.appliedTs {
 		g.appliedTs = lastCommitTs
+	}
+	g.indexCursor = end
+	if indexDeleted {
+		g.indexCleanupStart = append(g.indexCleanupStart[:0], end...)
+		g.indexCleanupCount = 0
+	} else {
+		g.indexCleanupCount = indexCleanupCount
 	}
 	g.batchPending = false
 	g.store.unpinPayloads(batch.payloads)
@@ -1064,7 +1135,7 @@ func (g *EventsGroup) Cleanup() error {
 	if g.batchPending {
 		return errors.ErrSpillFileOp.FastGenByArgs("cannot clean events group with pending resolve batch")
 	}
-	if g.pendingCount != 0 && g.store.index != nil {
+	if g.store.index != nil {
 		if err := g.store.flushEventIndex(); err != nil {
 			return err
 		}
@@ -1072,17 +1143,22 @@ func (g *EventsGroup) Cleanup() error {
 		if err := g.store.index.DeleteRange(lower, upper, pebble.NoSync); err != nil {
 			return errors.WrapError(errors.ErrSpillFileOp, err, "delete spill event group")
 		}
-		for segmentID, count := range g.segmentRefs {
-			g.releaseSegmentRefs(segmentID, count)
-		}
-		for restorerID, count := range g.restorerRefs {
-			g.releaseRestorerRefs(restorerID, count)
-		}
-		g.store.releasePending(g.pendingCount * g.store.config.messageMetadataBytes)
+		g.store.indexDeleteRangeCount++
 	}
+	for segmentID, count := range g.segmentRefs {
+		g.releaseSegmentRefs(segmentID, count)
+	}
+	for restorerID, count := range g.restorerRefs {
+		g.releaseRestorerRefs(restorerID, count)
+	}
+	g.store.releasePending(g.pendingCount * g.store.config.messageMetadataBytes)
 	g.pendingCount = 0
 	clear(g.segmentRefs)
 	clear(g.restorerRefs)
+	lower, _ := eventIndexBounds(g.id)
+	g.indexCursor = lower
+	g.indexCleanupStart = append(g.indexCleanupStart[:0], lower...)
+	g.indexCleanupCount = 0
 	g.batchPending = false
 	if g.ownsStore {
 		return g.store.Cleanup()

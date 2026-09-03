@@ -63,9 +63,13 @@ func attachTestDMLMessageDataWithPayload(
 }
 
 func readGroupIndex(t *testing.T, group *EventsGroup) []spilledMessage {
+	return readGroupIndexFrom(t, group, group.indexCursor)
+}
+
+func readGroupIndexFrom(t *testing.T, group *EventsGroup, lower []byte) []spilledMessage {
 	t.Helper()
 	require.NoError(t, group.store.flushEventIndex())
-	lower, upper := eventIndexBounds(group.id)
+	_, upper := eventIndexBounds(group.id)
 	iterator, err := group.store.index.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, iterator.Close()) }()
@@ -78,6 +82,92 @@ func readGroupIndex(t *testing.T, group *EventsGroup) []spilledMessage {
 	}
 	require.NoError(t, iterator.Error())
 	return entries
+}
+
+func TestEventsGroupResolvesFromAppliedIndexCursor(t *testing.T) {
+	config := defaultSpillConfig()
+	config.resolveBatchMessages = 1
+	config.indexCleanupMessages = 1000
+	store := newSpillStore(config)
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
+	group := NewEventsGroup(0, 1, store)
+
+	const messageCount = 129
+	for commitTs := uint64(1); commitTs <= messageCount; commitTs++ {
+		require.NoError(t, group.AppendMessage(
+			attachTestDMLMessageData(newTestDMLMessage(commitTs))))
+	}
+	for resolveTs := uint64(1); resolveTs < messageCount; resolveTs++ {
+		batch, _, err := group.PrepareResolve(resolveTs, store.ResolveLimit())
+		require.NoError(t, err)
+		require.NoError(t, batch.Ack())
+	}
+
+	require.Zero(t, store.indexDeleteRangeCount)
+	lower, _ := eventIndexBounds(group.id)
+	require.Len(t, readGroupIndexFrom(t, group, lower), messageCount)
+	entries := readGroupIndex(t, group)
+	require.Len(t, entries, 1)
+	require.Equal(t, uint64(messageCount), entries[0].commitTs)
+}
+
+func TestEventsGroupCoalescesAppliedIndexCleanup(t *testing.T) {
+	config := defaultSpillConfig()
+	config.resolveBatchMessages = 1
+	config.indexCleanupMessages = 64
+	store := newSpillStore(config)
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
+	group := NewEventsGroup(0, 1, store)
+
+	const messageCount = 257
+	for commitTs := uint64(1); commitTs <= messageCount; commitTs++ {
+		require.NoError(t, group.AppendMessage(
+			attachTestDMLMessageData(newTestDMLMessage(commitTs))))
+	}
+
+	for resolveTs := uint64(1); resolveTs < messageCount; resolveTs++ {
+		batch, _, err := group.PrepareResolve(resolveTs, store.ResolveLimit())
+		require.NoError(t, err)
+		require.NotNil(t, batch)
+		require.Len(t, batch.Messages, 1)
+		require.Equal(t, resolveTs, batch.Messages[0].GetCommitTs())
+		require.NoError(t, batch.Ack())
+	}
+
+	require.Equal(t, int64(4), store.indexDeleteRangeCount)
+	require.Zero(t, group.indexCleanupCount)
+	require.Equal(t, int64(1), group.pendingCount)
+	entries := readGroupIndex(t, group)
+	require.Len(t, entries, 1)
+	require.Equal(t, uint64(messageCount), entries[0].commitTs)
+}
+
+func TestEventsGroupRestoresLateEventBehindAppliedCursor(t *testing.T) {
+	config := defaultSpillConfig()
+	config.indexCleanupMessages = 100
+	store := newSpillStore(config)
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
+	group := NewEventsGroup(0, 1, store)
+
+	for _, commitTs := range []uint64{10, 20, 30} {
+		require.NoError(t, group.AppendMessage(
+			attachTestDMLMessageData(newTestDMLMessage(commitTs))))
+	}
+	resolved, err := group.ResolveInto(20, nil)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{10, 20}, []uint64{
+		resolved[0].GetCommitTs(), resolved[1].GetCommitTs(),
+	})
+	require.Zero(t, store.indexDeleteRangeCount)
+
+	require.NoError(t, group.AppendMessage(
+		attachTestDMLMessageData(newTestDMLMessage(15))))
+	require.Equal(t, int64(1), store.indexDeleteRangeCount)
+	resolved, err = group.GetAllMessages()
+	require.NoError(t, err)
+	require.Equal(t, []uint64{15, 30}, []uint64{
+		resolved[0].GetCommitTs(), resolved[1].GetCommitTs(),
+	})
 }
 
 func newTestDMLEvent(commitTs uint64, rowTypes ...common.RowType) *commonEvent.DMLEvent {
@@ -546,6 +636,7 @@ func TestSpillStoreDefaults(t *testing.T) {
 	require.Equal(t, int64(1024*1024*1024), store.config.pendingHighBytes)
 	require.Equal(t, int64(512*1024*1024), store.config.pendingLowBytes)
 	require.Equal(t, ResolveLimit{MaxBytes: 64 * 1024 * 1024, MaxMessages: 10000}, store.ResolveLimit())
+	require.Equal(t, int64(100000), store.config.indexCleanupMessages)
 	require.Equal(t, 0.90, store.config.diskUsageLimit)
 }
 
@@ -1004,5 +1095,49 @@ func BenchmarkEventsGroupResolveInto(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+func BenchmarkEventsGroupResolveIncrementally(b *testing.B) {
+	const (
+		messageCount  = 32 * 1024
+		batchMessages = 16
+	)
+
+	oldLogLevel := log.GetLevel()
+	log.SetLevel(zapcore.FatalLevel)
+	b.Cleanup(func() { log.SetLevel(oldLogLevel) })
+
+	b.ReportAllocs()
+	for range b.N {
+		b.StopTimer()
+		config := defaultSpillConfig()
+		config.resolveBatchMessages = batchMessages
+		store := newSpillStore(config)
+		group := NewEventsGroup(0, 1, store)
+		for i := 1; i <= messageCount; i++ {
+			if err := group.AppendMessage(
+				attachTestDMLMessageData(newTestDMLMessage(uint64(i)))); err != nil {
+				b.Fatal(err)
+			}
+		}
+
+		b.StartTimer()
+		for {
+			batch, hasMore, err := group.PrepareResolve(math.MaxUint64, store.ResolveLimit())
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err := batch.Ack(); err != nil {
+				b.Fatal(err)
+			}
+			if !hasMore {
+				break
+			}
+		}
+		b.StopTimer()
+		if err := store.Cleanup(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
