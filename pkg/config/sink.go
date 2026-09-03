@@ -211,6 +211,8 @@ type SinkConfig struct {
 	OpenProtocol *OpenProtocolConfig `toml:"open" json:"open,omitempty"`
 	// DebeziumConfig related configurations
 	Debezium *DebeziumConfig `toml:"debezium" json:"debezium,omitempty"`
+	// Simple protocol related configurations
+	Simple *SimpleConfig `toml:"simple" json:"simple,omitempty"`
 
 	CaseSensitive *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	// Integrity is only available when the downstream is MQ.
@@ -1188,6 +1190,13 @@ type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
 	// IncludeStartTs controls whether the transaction start_ts is included in
 	// the source block of Debezium JSON output.
+	IncludeStartTs *bool `toml:"include-start-ts" json:"include-start-ts,omitempty"`
+}
+
+// SimpleConfig represents the configurations for simple protocol encoding
+type SimpleConfig struct {
+	// IncludeStartTs controls whether the transaction start_ts is included in
+	// Simple JSON DML messages. Encoding-format=avro rejects this option.
 	IncludeStartTs *bool `toml:"include-start-ts" json:"include-start-ts,omitempty"`
 }
 
