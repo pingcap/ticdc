@@ -23,43 +23,31 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"go.uber.org/zap"
 )
 
 // BatchEncoder converts the events to binary Avro data
 type BatchEncoder struct {
-	keyspace string
-	schemaM  SchemaManager
-	result   []*common.Message
+	keyspace   string
+	schemaM    schemamanager.SchemaManager
+	codecCache *CodecCache
+	result     []*common.Message
 
 	config *common.Config
 }
 
-// NewAvroEncoder return a avro encoder.
-func NewAvroEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
-	var schemaM SchemaManager
-	var err error
-
-	schemaRegistryType := config.SchemaRegistryType()
-	switch schemaRegistryType {
-	case common.SchemaRegistryTypeConfluent:
-		schemaM, err = NewConfluentSchemaManager(ctx, config.AvroConfluentSchemaRegistry, nil)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-	case common.SchemaRegistryTypeGlue:
-		schemaM, err = NewGlueSchemaManager(ctx, config.AvroGlueSchemaRegistry)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-	default:
-		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(schemaRegistryType)
+// NewAvroEncoder returns an Avro encoder using the given schema manager.
+func NewAvroEncoder(config *common.Config, schemaM schemamanager.SchemaManager) (common.EventEncoder, error) {
+	if schemaM == nil {
+		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs("schema manager is nil")
 	}
 	return &BatchEncoder{
-		keyspace: config.ChangefeedID.Keyspace(),
-		schemaM:  schemaM,
-		result:   make([]*common.Message, 0, 1),
-		config:   config,
+		keyspace:   config.ChangefeedID.Keyspace(),
+		schemaM:    schemaM,
+		codecCache: NewCodecCache(schemaM),
+		result:     make([]*common.Message, 0, 1),
+		config:     config,
 	}, nil
 }
 
