@@ -898,7 +898,9 @@ func (g *EventsGroup) PrepareResolve(
 	}
 	defer iterator.Close()
 
-	entries := make([]spilledMessage, 0, boundedMessageCapacity(limit))
+	// Most groups have no event below a given global watermark. Allocate the
+	// batch lazily so polling those groups does not create a full-sized slice.
+	var entries []spilledMessage
 	seenPayloads := make(map[payloadCacheKey]struct{})
 	var plannedBytes int64
 	var lastCommitTs uint64
@@ -925,6 +927,13 @@ func (g *EventsGroup) PrepareResolve(
 		if len(entries) > 0 && exceedsResolveLimit(len(entries), plannedBytes, additionalBytes, limit) &&
 			commitTs != lastCommitTs {
 			break
+		}
+		if entries == nil {
+			capacity := boundedMessageCapacity(limit)
+			if int64(capacity) > g.pendingCount {
+				capacity = int(g.pendingCount)
+			}
+			entries = make([]spilledMessage, 0, capacity)
 		}
 		entries = append(entries, entry)
 		plannedBytes += additionalBytes
