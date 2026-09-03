@@ -26,21 +26,31 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
 	"github.com/pingcap/ticdc/pkg/sink/codec/debezium"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"go.uber.org/zap"
 )
 
-func NewEventEncoder(ctx context.Context, cfg *common.Config, claimCheck *claimcheck.ClaimCheck) (common.EventEncoder, error) {
+func NewEventEncoder(
+	cfg *common.Config,
+	claimCheck *claimcheck.ClaimCheck,
+	schemaM schemamanager.SchemaManager,
+) (common.EventEncoder, error) {
 	switch cfg.Protocol {
 	case config.ProtocolDefault, config.ProtocolOpen:
 		return open.NewBatchEncoder(cfg, claimCheck)
 	case config.ProtocolAvro:
-		return avro.NewAvroEncoder(ctx, cfg)
+		return avro.NewAvroEncoder(cfg, schemaM)
 	case config.ProtocolCanalJSON:
 		return canal.NewJSONRowEventEncoder(cfg, claimCheck)
 	case config.ProtocolDebezium:
 		return debezium.NewBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID), nil
+<<<<<<< HEAD
+=======
+	case config.ProtocolDebeziumAvro:
+		return debezium.NewAvroBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID, schemaM)
+>>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 	case config.ProtocolSimple:
 		return simple.NewEncoder(cfg, claimCheck)
 	default:
@@ -58,7 +68,7 @@ func NewEventDecoder(
 	case config.ProtocolCanalJSON:
 		return canal.NewDecoder(ctx, codecConfig, upstreamTiDB)
 	case config.ProtocolAvro:
-		schemaM, err := avro.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
+		schemaM, err := schemamanager.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}

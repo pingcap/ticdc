@@ -21,7 +21,12 @@ import (
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+<<<<<<< HEAD
+=======
+	codecavro "github.com/pingcap/ticdc/pkg/sink/codec/avro"
+>>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"go.uber.org/zap"
 )
 
@@ -31,6 +36,12 @@ type BatchEncoder struct {
 
 	config *common.Config
 	codec  *dbzCodec
+<<<<<<< HEAD
+=======
+
+	schemaM    schemamanager.SchemaManager
+	codecCache *codecavro.CodecCache
+>>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
@@ -178,3 +189,31 @@ func NewBatchEncoder(c *common.Config, clusterID string) common.EventEncoder {
 	}
 	return batch
 }
+<<<<<<< HEAD
+=======
+
+func NewAvroBatchEncoder(
+	c *common.Config,
+	clusterID string,
+	schemaM schemamanager.SchemaManager,
+) (common.EventEncoder, error) {
+	if schemaM == nil {
+		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs("schema manager is nil")
+	}
+
+	codecConfig := *c
+	codecConfig.DebeziumDisableSchema = false
+	batch := &BatchEncoder{
+		messages: nil,
+		config:   c,
+		codec: &dbzCodec{
+			config:    &codecConfig,
+			clusterID: clusterID,
+			nowFunc:   time.Now,
+		},
+		schemaM:    schemaM,
+		codecCache: codecavro.NewCodecCache(schemaM),
+	}
+	return batch, nil
+}
+>>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))

@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -125,7 +126,15 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 		return err
 	}
 
-	_, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck)
+	var schemaM schemamanager.SchemaManager
+	if isAvroLike {
+		schemaM, err = schemamanager.NewSchemaManager(ctx, encoderConfig)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = codec.NewEventEncoder(encoderConfig, claimCheck, schemaM)
 	if err != nil {
 		return err
 	}
