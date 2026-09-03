@@ -609,9 +609,9 @@ func newKafkaSinkForTest(
 	require.NoError(t, err)
 	encoderConfig := codecCommon.NewConfig(protocol).WithChangefeedID(changefeedID)
 	encoderConfig.MaxBatchSize = 1
-	encoderGroup, err := codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, nil, changefeedID)
+	encoderGroup, err := codec.NewEncoderGroup(sinkConfig, encoderConfig, nil, nil, changefeedID)
 	require.NoError(t, err)
-	encoder, err := codec.NewEventEncoder(ctx, encoderConfig, nil)
+	encoder, err := codec.NewEventEncoder(encoderConfig, nil, nil)
 	require.NoError(t, err)
 	topicManager := topicmanager.NewMockTopicManager(ctrl)
 	asyncProducer := kafka.NewMockAsyncProducer(ctrl)
