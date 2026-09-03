@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/coordinator/drain"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -200,6 +201,11 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 		controller.drainController.ObserveHeartbeat(targetNodeID, &heartbeatpb.NodeHeartbeat{
 			NodeEpoch: 1,
 			Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		})
+		controller.drainController.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{
+			TargetNodeId: targetNodeID.String(),
+			NodeEpoch:    1,
+			Observed:     true,
 		})
 
 		controller.onPeriodTask()

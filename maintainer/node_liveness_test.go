@@ -26,6 +26,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type testEventBrokerDispatcherCountProvider struct {
+	count int
+}
+
+func (p *testEventBrokerDispatcherCountProvider) GetDispatcherCount() int {
+	return p.count
+}
+
 func TestSetNodeLivenessRejectEpochMismatch(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
@@ -78,6 +86,46 @@ func TestSetNodeLivenessApplyTransition(t *testing.T) {
 		[]messaging.IOType{first.Type, second.Type},
 	)
 	require.Equal(t, liveness.CaptureDraining, nodeLiveness.Load())
+}
+
+func TestSetNodeLivenessStoppingWaitsForEventBrokerDispatchers(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	provider := &testEventBrokerDispatcherCountProvider{count: 1}
+	appcontext.SetService(appcontext.EventService, provider)
+
+	var nodeLiveness liveness.Liveness
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m.coordinatorID = node.ID("coordinator")
+
+	request := func(target heartbeatpb.NodeLiveness) {
+		msg := messaging.NewSingleTargetMessage(
+			m.nodeInfo.ID,
+			messaging.MaintainerManagerTopic,
+			&heartbeatpb.SetNodeLivenessRequest{Target: target, NodeEpoch: m.node.nodeEpoch},
+		)
+		msg.From = m.coordinatorID
+		m.onSetNodeLivenessRequest(msg)
+	}
+	drainMessages := func() {
+		for {
+			select {
+			case <-mc.GetMessageChannel():
+			default:
+				return
+			}
+		}
+	}
+
+	request(heartbeatpb.NodeLiveness_DRAINING)
+	drainMessages()
+	request(heartbeatpb.NodeLiveness_STOPPING)
+	require.Equal(t, liveness.CaptureDraining, nodeLiveness.Load())
+	drainMessages()
+
+	provider.count = 0
+	request(heartbeatpb.NodeLiveness_STOPPING)
+	require.Equal(t, liveness.CaptureStopping, nodeLiveness.Load())
 }
 
 func TestSetDispatcherDrainTargetApplyAndClear(t *testing.T) {

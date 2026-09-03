@@ -205,6 +205,8 @@ func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error)
 		observation.drainingObserved,
 		observation.stoppingObserved,
 		observation.remaining,
+		observation.eventBrokerDispatcherCountObserved,
+		observation.eventBrokerDispatcherCount,
 	)
 
 	if completionObserved {
@@ -225,6 +227,8 @@ func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error)
 		zap.Int("dispatcherCountOnTarget", observation.dispatcherCountOnTarget),
 		zap.Int("targetInflightDrainMoveCount", observation.targetInflightDrainMoveCount),
 		zap.Int("pendingStatusCount", observation.pendingStatusCount),
+		zap.Int("eventBrokerDispatcherCount", observation.eventBrokerDispatcherCount),
+		zap.Bool("eventBrokerDispatcherCountObserved", observation.eventBrokerDispatcherCountObserved),
 		zap.Int("remaining", observation.remaining))
 	return ensureDrainRemainingNonZero(observation.remaining), nil
 }
@@ -240,6 +244,8 @@ func (c *Controller) observeRemovedActiveDrainTarget(target node.ID, epoch uint6
 		observation.drainingObserved,
 		observation.stoppingObserved,
 		observation.remaining,
+		observation.eventBrokerDispatcherCountObserved,
+		observation.eventBrokerDispatcherCount,
 	)
 	if completionObserved {
 		log.Info("drain completion observed for removed active target",
@@ -259,6 +265,8 @@ func (c *Controller) observeRemovedActiveDrainTarget(target node.ID, epoch uint6
 		zap.Int("dispatcherCountOnTarget", observation.dispatcherCountOnTarget),
 		zap.Int("targetInflightDrainMoveCount", observation.targetInflightDrainMoveCount),
 		zap.Int("pendingStatusCount", observation.pendingStatusCount),
+		zap.Int("eventBrokerDispatcherCount", observation.eventBrokerDispatcherCount),
+		zap.Bool("eventBrokerDispatcherCountObserved", observation.eventBrokerDispatcherCountObserved),
 		zap.Int("remaining", observation.remaining))
 	return ensureDrainRemainingNonZero(observation.remaining)
 }
@@ -309,6 +317,10 @@ type drainNodeObservation struct {
 	targetInflightDrainMoveCount int
 	// pendingStatusCount is the number of running changefeeds not converged to the active target epoch.
 	pendingStatusCount int
+	// eventBrokerDispatcherCount is the node-reported number of dispatchers
+	// still registered in the local event broker.
+	eventBrokerDispatcherCount         int
+	eventBrokerDispatcherCountObserved bool
 	// remaining is the max of all workload dimensions used by drain completion gating.
 	remaining        int
 	nodeState        drain.State
@@ -323,12 +335,16 @@ func (c *Controller) observeDrainNode(target node.ID, epoch uint64) drainNodeObs
 	}
 	observation.dispatcherCountOnTarget, observation.targetInflightDrainMoveCount = c.aggregateDrainTargetProgress(target, epoch)
 	observation.pendingStatusCount = c.collectDrainPendingStatus(target, epoch)
+	eventBrokerDispatcherCount, eventBrokerDispatcherCountObserved := c.drainController.GetEventBrokerDispatcherCount(target)
+	observation.eventBrokerDispatcherCount = int(eventBrokerDispatcherCount)
+	observation.eventBrokerDispatcherCountObserved = eventBrokerDispatcherCountObserved
 	observation.remaining = drainRemainingEstimate(
 		observation.maintainersOnTarget,
 		observation.inflightOpsInvolvingTarget,
 		observation.dispatcherCountOnTarget,
 		observation.targetInflightDrainMoveCount,
 		observation.pendingStatusCount,
+		observation.eventBrokerDispatcherCount,
 	)
 
 	_, observation.drainingObserved, observation.stoppingObserved = c.drainController.GetStatus(target)
@@ -386,6 +402,8 @@ func (c *Controller) isDrainReadyToStop(target node.ID, epoch uint64) bool {
 
 	return observation.nodeState != drain.StateUnknown &&
 		observation.drainingObserved &&
+		observation.eventBrokerDispatcherCountObserved &&
+		observation.eventBrokerDispatcherCount == 0 &&
 		observation.remaining == 0
 }
 
@@ -1082,11 +1100,14 @@ func isBestEffortDrainComplete(
 	drainingObserved bool,
 	stoppingObserved bool,
 	remaining int,
+	eventBrokerDispatcherCountObserved bool,
+	eventBrokerDispatcherCount int,
 ) bool {
 	if nodeState == drain.StateUnknown || !drainingObserved {
 		return false
 	}
-	return stoppingObserved && remaining == 0
+	return stoppingObserved && remaining == 0 &&
+		eventBrokerDispatcherCountObserved && eventBrokerDispatcherCount == 0
 }
 
 // drainRemainingEstimate uses the larger workload dimension to avoid obvious double counting.
@@ -1096,6 +1117,7 @@ func drainRemainingEstimate(
 	dispatcherCountOnTarget int,
 	targetInflightDrainMoveCount int,
 	pendingStatusCount int,
+	eventBrokerDispatcherCount int,
 ) int {
 	return max(
 		maintainersOnTarget,
@@ -1103,6 +1125,7 @@ func drainRemainingEstimate(
 		dispatcherCountOnTarget,
 		targetInflightDrainMoveCount,
 		pendingStatusCount,
+		eventBrokerDispatcherCount,
 	)
 }
 

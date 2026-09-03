@@ -32,6 +32,7 @@ const (
 	defaultHeartbeatInterval     = 200 * time.Millisecond
 	lowLatencyHeartbeatInterval  = 50 * time.Millisecond
 	defaultHeartbeatInitialDelay = time.Second
+	completeStatusInterval       = 200 * time.Millisecond
 )
 
 // HeartbeatTask is a perioic task to collect the heartbeat status from event dispatcher manager and push to heartbeatRequestQueue
@@ -57,9 +58,9 @@ func (t *HeartBeatTask) Execute() time.Time {
 		return time.Time{}
 	}
 	executeInterval := heartbeatInterval(t.manager)
-	completeStatusInterval := int(time.Second * 10 / executeInterval)
+	completeStatusEveryNHeartbeats := completeStatusHeartbeatCount(t.manager)
 	t.statusTick++
-	needCompleteStatus := (t.statusTick)%completeStatusInterval == 0
+	needCompleteStatus := (t.statusTick)%completeStatusEveryNHeartbeats == 0
 	message := t.manager.aggregateDispatcherHeartbeats(needCompleteStatus)
 	t.manager.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: t.manager.GetMaintainerID(), Request: message})
 	return time.Now().Add(executeInterval)
@@ -70,6 +71,10 @@ func heartbeatInterval(manager *DispatcherManager) time.Duration {
 		return lowLatencyHeartbeatInterval
 	}
 	return defaultHeartbeatInterval
+}
+
+func completeStatusHeartbeatCount(manager *DispatcherManager) int {
+	return max(int(completeStatusInterval/heartbeatInterval(manager)), 1)
 }
 
 func heartbeatInitialDelay(manager *DispatcherManager) time.Duration {

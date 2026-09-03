@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
@@ -33,7 +34,33 @@ func newLogCoordinatorForTest() *logCoordinator {
 	c.eventStoreStates.m = make(map[node.ID]*logservicepb.EventStoreState)
 	c.nodes.m = make(map[node.ID]*node.Info)
 	c.changefeedStates.m = make(map[common.GID]*changefeedState)
+	c.eventBrokerDispatcherCounts.m = make(map[node.ID]eventBrokerDispatcherCountState)
 	return c
+}
+
+func TestEventBrokerDispatcherCountReportAndQuery(t *testing.T) {
+	c := newLogCoordinatorForTest()
+	mc := messaging.NewMockMessageCenter()
+	c.messageCenter = mc
+	nodeID := node.ID("node-1")
+
+	c.updateEventBrokerDispatcherCount(nodeID, &logservicepb.EventBrokerDispatcherCount{
+		NodeEpoch:       2,
+		DispatcherCount: 3,
+	})
+	c.updateEventBrokerDispatcherCount(nodeID, &logservicepb.EventBrokerDispatcherCount{
+		NodeEpoch:       1,
+		DispatcherCount: 0,
+	})
+
+	c.sendEventBrokerDispatcherCount(node.ID("coordinator"), &logservicepb.EventBrokerDispatcherCountRequest{
+		TargetNodeId: nodeID.String(),
+	})
+	message := <-mc.GetMessageChannel()
+	response := message.Message[0].(*logservicepb.EventBrokerDispatcherCountResponse)
+	require.True(t, response.GetObserved())
+	require.Equal(t, uint64(2), response.GetNodeEpoch())
+	require.Equal(t, uint32(3), response.GetDispatcherCount())
 }
 
 func TestGetCandidateNodes(t *testing.T) {

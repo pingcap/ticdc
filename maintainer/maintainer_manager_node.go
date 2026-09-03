@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -113,6 +114,22 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 	}
 }
 
+type eventBrokerDispatcherCountProvider interface {
+	GetDispatcherCount() int
+}
+
+func (m *Manager) GetNodeEpoch() uint64 {
+	return m.node.nodeEpoch
+}
+
+func (m *Manager) getEventBrokerDispatcherCount() (int, bool) {
+	provider, ok := appcontext.TryGetService[eventBrokerDispatcherCountProvider](appcontext.EventService)
+	if !ok {
+		return 0, false
+	}
+	return provider.GetDispatcherCount(), true
+}
+
 // onSetNodeLivenessRequest applies a coordinator-driven liveness transition if
 // the request targets the current process epoch. The transition is monotonic:
 // the node may move forward to a stricter state but never roll back locally.
@@ -140,6 +157,18 @@ func (m *Manager) onSetNodeLivenessRequest(msg *messaging.TargetMessage) {
 	}
 
 	target := m.fromNodeLivenessPB(req.Target)
+	if target == liveness.CaptureStopping {
+		if count, ready := m.getEventBrokerDispatcherCount(); !ready || count != 0 {
+			log.Info("reject node liveness transition while event broker dispatcher state is not ready or non-zero",
+				zap.Stringer("nodeID", m.nodeInfo.ID),
+				zap.Int("eventBrokerDispatcherCount", count),
+				zap.Bool("eventBrokerDispatcherCountReady", ready),
+				zap.Uint64("epoch", m.node.nodeEpoch))
+			m.sendNodeHeartbeat(true)
+			m.sendSetNodeLivenessResponse(current)
+			return
+		}
+	}
 	if m.node.liveness != nil && target > current && m.node.liveness.Store(target) {
 		log.Info("node liveness transition applied",
 			zap.Stringer("nodeID", m.nodeInfo.ID),
