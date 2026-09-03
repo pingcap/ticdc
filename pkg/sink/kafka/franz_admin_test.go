@@ -172,9 +172,7 @@ func TestFranzIsAuthorizationFailed(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.expected, isAuthorizationFailed(test.err))
-		})
+		t.Run(test.name, func(t *testing.T) { require.Equal(t, test.expected, isAuthorizationFailed(test.err)) })
 	}
 }
 

@@ -28,9 +28,7 @@ import (
 // logValueLimit bounds individual string fields emitted by the franz-go logger.
 const logValueLimit = 1024
 
-type clientLogger struct {
-	logger *zap.Logger
-}
+type clientLogger struct{ logger *zap.Logger }
 
 func newClientLogger(changefeedID common.ChangeFeedID, role string) kgo.Logger {
 	logger := log.L().With(

@@ -35,18 +35,19 @@ import (
 	"golang.org/x/oauth2/clientcredentials"
 )
 
-const (
-	// defaultMaxBufferedBytes bounds the producer's per-client byte buffer under normal configurations.
-	defaultMaxBufferedBytes = 64 << 20
-	// defaultBrokerWriteBytes matches Kafka's default socket.request.max.bytes limit.
-	defaultBrokerWriteBytes = 100 << 20
-	// minProducerBatchBytes and maxProducerBatchBytes are franz-go's accepted batch-size bounds.
-	minProducerBatchBytes = 512
-	maxProducerBatchBytes = 1 << 30
-)
+// producerMaxBufferedBytes bounds each producer client's buffered payload.
+// Produce blocks when the buffer is full and resumes when records complete
+// or its context is canceled. A larger single record fails with MessageTooLarge.
+const producerMaxBufferedBytes = 64 << 20
+
+// Kafka defaults socket.request.max.bytes to 100 MiB. Keeping franz-go at the
+// same limit prevents a Topic's batch configuration from increasing request memory.
+const franzDefaultMaxRequestBytes = 100 << 20
 
 func requestTimeout(o *options) time.Duration { return max(o.ReadTimeout, o.WriteTimeout) }
 
+// Admin and producer clients share connection options. Producer delivery and
+// resource limits stay separate so they cannot affect admin operations.
 func clientOptions(o *options) ([]kgo.Opt, error) {
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(o.BrokerEndpoints...),
@@ -81,6 +82,31 @@ func clientOptions(o *options) ([]kgo.Opt, error) {
 	return opts, nil
 }
 
+func producerOptions(o *options) []kgo.Opt {
+	maxMessageBytes := int32(min(o.MaxMessageBytes, franzDefaultMaxRequestBytes))
+	return []kgo.Opt{
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.RequiredAcks(requiredAcks(o.RequiredAcks)),
+		// Retried requests may create duplicates because broker-side producer ID deduplication is disabled.
+		kgo.DisableIdempotentWrite(),
+		// More than one in-flight request can reorder records when an earlier request is retried.
+		kgo.MaxProduceRequestsInflightPerBroker(1),
+		kgo.RecordRetries(o.MaxRetry),
+		kgo.UnknownTopicRetries(o.MaxRetry),
+		// Limit each client to 64 MiB of buffered payload. The in-flight limit
+		// applies per broker and does not bound records queued for other brokers,
+		// metadata, or retries, so the producer needs a separate byte limit.
+		// 64 MiB leaves room above TiCDC's default 10 MiB message limit while
+		// bounding the memory hidden by the 10,000-record default.
+		kgo.MaxBufferedBytes(producerMaxBufferedBytes),
+		// ProducerBatchMaxBytes is franz-go's name for Kafka's max.message.bytes limit.
+		kgo.ProducerBatchMaxBytes(maxMessageBytes),
+		kgo.ProduceRequestTimeout(requestTimeout(o)),
+		kgo.ProducerLinger(0),
+		compressionOption(o.Compression),
+	}
+}
+
 func buildSASLMechanism(cfg *saslConfig) (sasl.Mechanism, error) {
 	switch cfg.mechanism {
 	case plainMechanism:
@@ -94,8 +120,7 @@ func buildSASLMechanism(cfg *saslConfig) (sasl.Mechanism, error) {
 	case gssapiMechanism:
 		return buildGSSAPIMechanism(cfg.gssapi)
 	default:
-		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
-			"unsupported sasl mechanism %s", cfg.mechanism)
+		return nil, errors.ErrKafkaInvalidConfig.GenWithStack("unsupported sasl mechanism %s", cfg.mechanism)
 	}
 }
 
@@ -142,11 +167,7 @@ func buildOAuthMechanism(cfg oauth2Config) (sasl.Mechanism, error) {
 func newProducerClient(ctx context.Context, changefeedID common.ChangeFeedID, role string, clientOpts []kgo.Opt, producerOpts []kgo.Opt) (*kgo.Client, error) {
 	opts := make([]kgo.Opt, 0, len(clientOpts)+len(producerOpts)+3)
 	opts = append(opts, clientOpts...)
-	opts = append(opts,
-		kgo.WithContext(ctx),
-		kgo.WithLogger(newClientLogger(changefeedID, role)),
-		kgo.WithHooks(newMetricsHook(changefeedID)),
-	)
+	opts = append(opts, kgo.WithContext(ctx), kgo.WithLogger(newClientLogger(changefeedID, role)), kgo.WithHooks(newMetricsHook(changefeedID)))
 	opts = append(opts, producerOpts...)
 
 	client, err := kgo.NewClient(opts...)
@@ -154,38 +175,6 @@ func newProducerClient(ctx context.Context, changefeedID common.ChangeFeedID, ro
 		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 	return client, nil
-}
-
-func producerOptions(o *options) ([]kgo.Opt, error) {
-	if o.MaxMessageBytes > maxProducerBatchBytes {
-		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
-			"max-message-bytes %d exceeds franz-go limit %d",
-			o.MaxMessageBytes,
-			maxProducerBatchBytes,
-		)
-	}
-
-	// Use 64 MiB as the default budget, but never make it smaller than the configured message limit.
-	// Keep franz-go's 10,000-record default as a second bound.
-	maxBufferedBytes := max(defaultMaxBufferedBytes, o.MaxMessageBytes)
-	maxBatchBytes := max(minProducerBatchBytes, o.MaxMessageBytes)
-	maxBrokerWriteBytes := max(defaultBrokerWriteBytes, maxBatchBytes)
-	return []kgo.Opt{
-		kgo.RecordPartitioner(kgo.ManualPartitioner()),
-		kgo.RequiredAcks(requiredAcks(o.RequiredAcks)),
-		// Retried requests may create duplicates because broker-side producer ID deduplication is disabled.
-		kgo.DisableIdempotentWrite(),
-		// More than one in-flight request can reorder records when an earlier request is retried.
-		kgo.MaxProduceRequestsInflightPerBroker(1),
-		kgo.RecordRetries(o.MaxRetry),
-		kgo.UnknownTopicRetries(o.MaxRetry),
-		kgo.MaxBufferedBytes(maxBufferedBytes),
-		kgo.ProducerBatchMaxBytes(int32(maxBatchBytes)),
-		kgo.BrokerMaxWriteBytes(int32(maxBrokerWriteBytes)),
-		kgo.ProduceRequestTimeout(requestTimeout(o)),
-		kgo.ProducerLinger(0),
-		compressionOption(o.Compression),
-	}, nil
 }
 
 func requiredAcks(required RequiredAcks) kgo.Acks {

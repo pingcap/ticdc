@@ -48,13 +48,6 @@ func testClientOptions(t *testing.T, o *options) []kgo.Opt {
 	return opts
 }
 
-func testProducerOptions(t *testing.T, o *options) []kgo.Opt {
-	t.Helper()
-	opts, err := producerOptions(o)
-	require.NoError(t, err)
-	return opts
-}
-
 func TestFranzRequiredAcks(t *testing.T) {
 	for _, test := range []struct {
 		required RequiredAcks
@@ -99,34 +92,32 @@ func TestFranzIgnoresConfiguredKafkaVersion(t *testing.T) {
 	factory.CleanupMetrics()
 }
 
-func TestProducerOptionsBoundBufferAndBatch(t *testing.T) {
-	const batchBytes = 1048588
+func TestProducerOptionsConfigureMessageAndBufferLimits(t *testing.T) {
+	const maxMessageBytes = 1048588
 	o := testOptions([]string{"127.0.0.1:9092"})
-	o.MaxMessageBytes = batchBytes
+	o.MaxMessageBytes = maxMessageBytes
 
 	opts, err := clientOptions(o)
 	require.NoError(t, err)
 
-	producerOpts, err := producerOptions(o)
-	require.NoError(t, err)
+	producerOpts := producerOptions(o)
 
 	client, err := kgo.NewClient(append(opts, producerOpts...)...)
 	require.NoError(t, err)
 	defer client.Close()
 
-	require.Equal(t, int32(batchBytes), client.OptValue(kgo.ProducerBatchMaxBytes))
-	require.Equal(t, int64(defaultMaxBufferedBytes), client.OptValue(kgo.MaxBufferedBytes))
+	require.Equal(t, int32(maxMessageBytes), client.OptValue(kgo.ProducerBatchMaxBytes))
+	require.Equal(t, int64(producerMaxBufferedBytes), client.OptValue(kgo.MaxBufferedBytes))
 	require.Equal(t, int64(10000), client.OptValue(kgo.MaxBufferedRecords))
 	require.Equal(t, int64(1), client.OptValue(kgo.RecordRetries))
 	require.Equal(t, int64(1), client.OptValue(kgo.UnknownTopicRetries))
-	require.Equal(t, int32(defaultBrokerWriteBytes), client.OptValue(kgo.BrokerMaxWriteBytes))
+	require.Equal(t, int32(100<<20), client.OptValue(kgo.BrokerMaxWriteBytes))
 }
 
 func TestProducerOptionsUseSingleNonIdempotentRequest(t *testing.T) {
 	config := testOptions([]string{"127.0.0.1:9092"})
 
-	producerOpts, err := producerOptions(config)
-	require.NoError(t, err)
+	producerOpts := producerOptions(config)
 
 	client, err := kgo.NewClient(producerOpts...)
 	require.NoError(t, err)
@@ -136,42 +127,43 @@ func TestProducerOptionsUseSingleNonIdempotentRequest(t *testing.T) {
 	require.Equal(t, 1, client.OptValue(kgo.MaxProduceRequestsInflightPerBroker))
 }
 
-func TestProducerLimitsScaleWithConfiguredMessage(t *testing.T) {
-	maxMessageBytes := defaultBrokerWriteBytes + 1
+func TestProducerLimitsDoNotScaleWithConfiguredMessage(t *testing.T) {
+	maxMessageBytes := 32 << 20
 	config := testOptions([]string{"127.0.0.1:9092"})
 	config.MaxMessageBytes = maxMessageBytes
 
-	producerOpts, err := producerOptions(config)
-	require.NoError(t, err)
+	producerOpts := producerOptions(config)
 
 	client, err := kgo.NewClient(producerOpts...)
 	require.NoError(t, err)
 	defer client.Close()
 
-	require.Equal(t, int64(maxMessageBytes), client.OptValue(kgo.MaxBufferedBytes))
-	require.Equal(t, int32(maxMessageBytes), client.OptValue(kgo.BrokerMaxWriteBytes))
+	require.Equal(t, int64(producerMaxBufferedBytes), client.OptValue(kgo.MaxBufferedBytes))
+	require.Equal(t, int32(100<<20), client.OptValue(kgo.BrokerMaxWriteBytes))
 }
 
-func TestProducerOptionsClampSmallBatch(t *testing.T) {
+func TestProducerOptionsDoNotClampSmallBatch(t *testing.T) {
 	config := testOptions([]string{"127.0.0.1:9092"})
-	config.MaxMessageBytes = minProducerBatchBytes - 1
+	config.MaxMessageBytes = 511
 
-	producerOpts, err := producerOptions(config)
-	require.NoError(t, err)
+	producerOpts := producerOptions(config)
+
+	_, err := kgo.NewClient(producerOpts...)
+	require.Error(t, err)
+}
+
+func TestProducerOptionsCapMessageBytesAtRequestLimit(t *testing.T) {
+	config := testOptions([]string{"127.0.0.1:9092"})
+	config.MaxMessageBytes = franzDefaultMaxRequestBytes + 1
+
+	producerOpts := producerOptions(config)
 
 	client, err := kgo.NewClient(producerOpts...)
 	require.NoError(t, err)
 	defer client.Close()
 
-	require.Equal(t, int32(minProducerBatchBytes), client.OptValue(kgo.ProducerBatchMaxBytes))
-}
-
-func TestProducerOptionsRejectOversizedBatch(t *testing.T) {
-	config := testOptions([]string{"127.0.0.1:9092"})
-	config.MaxMessageBytes = maxProducerBatchBytes + 1
-
-	_, err := producerOptions(config)
-	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+	require.Equal(t, int32(franzDefaultMaxRequestBytes), client.OptValue(kgo.ProducerBatchMaxBytes))
+	require.Equal(t, int32(franzDefaultMaxRequestBytes), client.OptValue(kgo.BrokerMaxWriteBytes))
 }
 
 func TestCompressionOptions(t *testing.T) {
@@ -191,8 +183,7 @@ func TestCompressionOptions(t *testing.T) {
 			cfg := testOptions([]string{"127.0.0.1:9092"})
 			cfg.Compression = test.compression
 
-			producerOpts, err := producerOptions(cfg)
-			require.NoError(t, err)
+			producerOpts := producerOptions(cfg)
 
 			client, err := kgo.NewClient(producerOpts...)
 			require.NoError(t, err)

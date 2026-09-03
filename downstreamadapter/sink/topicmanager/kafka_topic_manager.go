@@ -231,10 +231,7 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 
 // createTopic creates a topic with the given name
 // and returns the number of partitions.
-func (m *kafkaTopicManager) createTopic(
-	ctx context.Context,
-	topicName string,
-) (int32, error) {
+func (m *kafkaTopicManager) createTopic(ctx context.Context, topicName string) (int32, error) {
 	if !m.cfg.AutoCreate {
 		return 0, errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topicName)
 	}

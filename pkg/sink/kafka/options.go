@@ -650,13 +650,7 @@ func NewKafkaClientID(captureAddr string,
 // adjustOptions adjusts options with Kafka runtime metadata.
 // It overwrites MaxMessageBytes with the final producer message limit derived
 // from the topic or broker configuration.
-func adjustOptions(
-	ctx context.Context,
-	changefeedID common.ChangeFeedID,
-	admin AdminClient,
-	options *options,
-	topic string,
-) error {
+func adjustOptions(ctx context.Context, changefeedID common.ChangeFeedID, admin AdminClient, options *options, topic string) error {
 	// The topic may not exist yet and will be created later by the topic manager,
 	// so ignore per-topic metadata errors here.
 	topics, err := admin.GetTopicsMeta(ctx, []string{topic}, true)
@@ -680,13 +674,7 @@ func adjustOptions(
 	return nil
 }
 
-func adjustExistingTopicOption(
-	ctx context.Context,
-	changefeedID common.ChangeFeedID,
-	admin AdminClient,
-	options *options,
-	info TopicDetail,
-) error {
+func adjustExistingTopicOption(ctx context.Context, changefeedID common.ChangeFeedID, admin AdminClient, options *options, info TopicDetail) error {
 	maxMessageBytes, found, err := getTopicMaxMessageBytes(ctx, admin, info.Name)
 	if err != nil || !found {
 		log.Warn("kafka topic `max.message.bytes` unavailable, using configured value",
@@ -702,12 +690,7 @@ func adjustExistingTopicOption(
 	return nil
 }
 
-func adjustNewTopicOptions(
-	ctx context.Context,
-	admin AdminClient,
-	changefeedID common.ChangeFeedID,
-	options *options,
-) {
+func adjustNewTopicOptions(ctx context.Context, admin AdminClient, changefeedID common.ChangeFeedID, options *options) {
 	// when create the topic, `max.message.bytes` is decided by the broker,
 	// it would use broker's `message.max.bytes` to set topic's `max.message.bytes`.
 	messageMaxBytes, found, err := getBrokerMaxMessageBytes(ctx, admin)
@@ -725,16 +708,8 @@ func adjustNewTopicOptions(
 	}
 }
 
-func getTopicMaxMessageBytes(
-	ctx context.Context,
-	admin AdminClient,
-	topic string,
-) (int, bool, error) {
-	raw, found, err := getTopicConfig(
-		ctx, admin, topic,
-		TopicMaxMessageBytesConfigName,
-		BrokerMessageMaxBytesConfigName,
-	)
+func getTopicMaxMessageBytes(ctx context.Context, admin AdminClient, topic string) (int, bool, error) {
+	raw, found, err := getTopicConfig(ctx, admin, topic, TopicMaxMessageBytesConfigName, BrokerMessageMaxBytesConfigName)
 	if err != nil {
 		return 0, false, err
 	}
@@ -767,13 +742,7 @@ func getBrokerMaxMessageBytes(ctx context.Context, admin AdminClient) (int, bool
 // If the topic does not have this configuration,
 // we will try to get it from the broker's configuration.
 // NOTICE: The configuration names of topic and broker may be different for the same configuration.
-func getTopicConfig(
-	ctx context.Context,
-	admin AdminClient,
-	topicName string,
-	topicConfigName string,
-	brokerConfigName string,
-) (string, bool, error) {
+func getTopicConfig(ctx context.Context, admin AdminClient, topicName, topicConfigName, brokerConfigName string) (string, bool, error) {
 	c, found, err := admin.GetTopicConfig(ctx, topicName, topicConfigName)
 	if err == nil && found {
 		return c, true, nil

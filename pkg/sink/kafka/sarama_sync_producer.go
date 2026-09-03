@@ -44,9 +44,7 @@ type saramaSyncProducer struct {
 	closed   *atomic.Bool
 }
 
-func (p *saramaSyncProducer) SendMessage(
-	_ context.Context, topic string, partitionNum int32, message *codecCommon.Message,
-) error {
+func (p *saramaSyncProducer) SendMessage(_ context.Context, topic string, partitionNum int32, message *codecCommon.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
@@ -69,9 +67,7 @@ func (p *saramaSyncProducer) SendMessage(
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 
-func (p *saramaSyncProducer) SendMessages(
-	_ context.Context, topic string, partitionNum int32, message *codecCommon.Message,
-) error {
+func (p *saramaSyncProducer) SendMessages(_ context.Context, topic string, partitionNum int32, message *codecCommon.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}

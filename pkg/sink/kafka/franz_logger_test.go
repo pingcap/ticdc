@@ -43,9 +43,7 @@ func TestLoggerLevelAndFiltering(t *testing.T) {
 		require.True(t, isSensitiveLogKey(key))
 	}
 
-	require.NotPanics(t, func() {
-		clientLogger.Log(kgo.LogLevelWarn, "odd key value", "key-only")
-	})
+	require.NotPanics(t, func() { clientLogger.Log(kgo.LogLevelWarn, "odd key value", "key-only") })
 }
 
 func TestLoggerPreservesContextAndRedactsValues(t *testing.T) {

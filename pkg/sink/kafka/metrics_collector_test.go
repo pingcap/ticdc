@@ -30,13 +30,11 @@ func TestCollectBrokerThrottleTime(t *testing.T) {
 	firstBroker := metrics.NewHistogram(metrics.NewUniformSample(10))
 	firstBroker.Update(10)
 	firstBroker.Update(50)
-	require.NoError(t, registry.Register(
-		getBrokerMetricName(throttleTimeMetricNamePrefix, "1"), firstBroker))
+	require.NoError(t, registry.Register(getBrokerMetricName(throttleTimeMetricNamePrefix, "1"), firstBroker))
 
 	secondBroker := metrics.NewHistogram(metrics.NewUniformSample(10))
 	secondBroker.Update(40)
-	require.NoError(t, registry.Register(
-		getBrokerMetricName(throttleTimeMetricNamePrefix, "2"), secondBroker))
+	require.NoError(t, registry.Register(getBrokerMetricName(throttleTimeMetricNamePrefix, "2"), secondBroker))
 
 	collector := saramaMetricsCollector{
 		changefeedID: changefeedID,
@@ -45,22 +43,14 @@ func TestCollectBrokerThrottleTime(t *testing.T) {
 	}
 	collector.collectBrokerMetrics()
 
-	require.Equal(t, 0.03, testutil.ToFloat64(throttleTimeGauge.WithLabelValues(
-		changefeedID.Keyspace(), changefeedID.Name(), "1", avg)))
-	require.Equal(t, 0.05, testutil.ToFloat64(throttleTimeGauge.WithLabelValues(
-		changefeedID.Keyspace(), changefeedID.Name(), "1", p99)))
-	require.Equal(t, 0.04, testutil.ToFloat64(throttleTimeGauge.WithLabelValues(
-		changefeedID.Keyspace(), changefeedID.Name(), "2", avg)))
-	require.Equal(t, 0.04, testutil.ToFloat64(throttleTimeGauge.WithLabelValues(
-		changefeedID.Keyspace(), changefeedID.Name(), "2", p99)))
+	require.Equal(t, 0.03, testutil.ToFloat64(throttleTimeGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "1", avg)))
+	require.Equal(t, 0.05, testutil.ToFloat64(throttleTimeGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "1", p99)))
+	require.Equal(t, 0.04, testutil.ToFloat64(throttleTimeGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "2", avg)))
+	require.Equal(t, 0.04, testutil.ToFloat64(throttleTimeGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "2", p99)))
 
 	collector.cleanupMetrics()
-	require.False(t, throttleTimeGauge.DeleteLabelValues(
-		changefeedID.Keyspace(), changefeedID.Name(), "1", avg))
-	require.False(t, throttleTimeGauge.DeleteLabelValues(
-		changefeedID.Keyspace(), changefeedID.Name(), "1", p99))
-	require.False(t, throttleTimeGauge.DeleteLabelValues(
-		changefeedID.Keyspace(), changefeedID.Name(), "2", avg))
-	require.False(t, throttleTimeGauge.DeleteLabelValues(
-		changefeedID.Keyspace(), changefeedID.Name(), "2", p99))
+	require.False(t, throttleTimeGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "1", avg))
+	require.False(t, throttleTimeGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "1", p99))
+	require.False(t, throttleTimeGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "2", avg))
+	require.False(t, throttleTimeGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "2", p99))
 }

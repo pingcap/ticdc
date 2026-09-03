@@ -46,8 +46,7 @@ func TestSyncProducerSendsToRequestedPartitions(t *testing.T) {
 	producer, err := (&franzFactory{
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "sync"),
 		clientOpts:   testClientOptions(t, o),
-		producerOpts: testProducerOptions(t, o),
-		timeout:      requestTimeout(o),
+		producerOpts: producerOptions(o),
 	}).SyncProducer(context.Background())
 	require.NoError(t, err)
 	defer producer.Close()
@@ -69,8 +68,7 @@ func TestSyncProducerReturnsPartialFailure(t *testing.T) {
 	producer, err := (&franzFactory{
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "partial"),
 		clientOpts:   testClientOptions(t, o),
-		producerOpts: testProducerOptions(t, o),
-		timeout:      requestTimeout(o),
+		producerOpts: producerOptions(o),
 	}).SyncProducer(context.Background())
 	require.NoError(t, err)
 	defer producer.Close()
@@ -85,8 +83,7 @@ func TestSyncProducerUsesSendContext(t *testing.T) {
 	producer, err := (&franzFactory{
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "canceled"),
 		clientOpts:   testClientOptions(t, o),
-		producerOpts: testProducerOptions(t, o),
-		timeout:      requestTimeout(o),
+		producerOpts: producerOptions(o),
 	}).SyncProducer(t.Context())
 	require.NoError(t, err)
 	defer producer.Close()
@@ -104,8 +101,7 @@ func TestSyncProducerCloseIsIdempotent(t *testing.T) {
 	client, err := (&franzFactory{
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "close"),
 		clientOpts:   testClientOptions(t, o),
-		producerOpts: testProducerOptions(t, o),
-		timeout:      requestTimeout(o),
+		producerOpts: producerOptions(o),
 	}).SyncProducer(context.Background())
 	require.NoError(t, err)
 

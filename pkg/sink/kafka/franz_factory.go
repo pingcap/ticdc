@@ -47,10 +47,7 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 	if err := adjustOptions(ctx, changefeedID, admin, o, o.Topic); err != nil {
 		return nil, err
 	}
-	producerOpts, err := producerOptions(o)
-	if err != nil {
-		return nil, err
-	}
+	producerOpts := producerOptions(o)
 
 	compression := strings.ToLower(strings.TrimSpace(o.Compression))
 	if compression == "" {
@@ -88,7 +85,10 @@ func (f *franzFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &syncProducer{id: f.changefeedID, client: client, timeout: f.timeout}, nil
+	return &syncProducer{
+		id:     f.changefeedID,
+		client: client,
+	}, nil
 }
 
 func (f *franzFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
@@ -96,7 +96,11 @@ func (f *franzFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error)
 	if err != nil {
 		return nil, err
 	}
-	return &asyncProducer{client: client, changefeedID: f.changefeedID, errCh: make(chan error, 1)}, nil
+	return &asyncProducer{
+		client:       client,
+		changefeedID: f.changefeedID,
+		errCh:        make(chan error, 1),
+	}, nil
 }
 
 func (f *franzFactory) MetricsCollector(AdminClient) MetricsCollector {

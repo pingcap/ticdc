@@ -53,9 +53,7 @@ func (a *saramaAdminClient) GetAllBrokers(_ context.Context) []Broker {
 	brokers := a.client.Brokers()
 	result := make([]Broker, 0, len(brokers))
 	for _, broker := range brokers {
-		result = append(result, Broker{
-			ID: broker.ID(),
-		})
+		result = append(result, Broker{ID: broker.ID()})
 	}
 	return result
 }

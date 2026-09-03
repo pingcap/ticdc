@@ -72,7 +72,18 @@ func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition i
 	logInfo := message.LogInfo
 	promise := func(_ *kgo.Record, err error) {
 		if err != nil {
-			p.enqueueAsyncSendError(logInfo, err)
+			log.Error("kafka message send failed",
+				zap.String("keyspace", p.changefeedID.Keyspace()),
+				zap.String("changefeed", p.changefeedID.Name()),
+				zap.String("eventContext", BuildEventLogContext(
+					p.changefeedID.Keyspace(), p.changefeedID.Name(), logInfo)),
+				zap.Error(err))
+
+			select {
+			case p.errCh <- errors.WrapError(errors.ErrKafkaSendMessage, err):
+			// Keep the first error until the dispatcher can recover from multiple errors.
+			default:
+			}
 			return
 		}
 
@@ -83,21 +94,6 @@ func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition i
 
 	p.client.Produce(ctx, record, promise)
 	return nil
-}
-
-func (p *asyncProducer) enqueueAsyncSendError(logInfo *codeccommon.MessageLogInfo, err error) {
-	log.Error("kafka message send failed",
-		zap.String("keyspace", p.changefeedID.Keyspace()),
-		zap.String("changefeed", p.changefeedID.Name()),
-		zap.String("eventContext", BuildEventLogContext(
-			p.changefeedID.Keyspace(), p.changefeedID.Name(), logInfo)),
-		zap.Error(err))
-
-	select {
-	case p.errCh <- errors.WrapError(errors.ErrKafkaSendMessage, err):
-	// Keep the first error until the dispatcher can recover from multiple errors.
-	default:
-	}
 }
 
 func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {

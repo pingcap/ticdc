@@ -91,7 +91,7 @@ func TestAsyncProducerCallbackExactlyOnce(t *testing.T) {
 	producer, err := (&franzFactory{
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-success"),
 		clientOpts:   testClientOptions(t, o),
-		producerOpts: testProducerOptions(t, o),
+		producerOpts: producerOptions(o),
 	}).AsyncProducer(context.Background())
 	require.NoError(t, err)
 	defer producer.Close()
@@ -130,7 +130,7 @@ func TestAsyncProducerReportsProduceFailure(t *testing.T) {
 	producer, err := (&franzFactory{
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-error"),
 		clientOpts:   testClientOptions(t, o),
-		producerOpts: testProducerOptions(t, o),
+		producerOpts: producerOptions(o),
 	}).AsyncProducer(context.Background())
 	require.NoError(t, err)
 	defer producer.Close()
@@ -152,11 +152,7 @@ func TestAsyncProducerReportsProduceFailure(t *testing.T) {
 }
 
 func TestBufferBackpressureCanBeCanceled(t *testing.T) {
-	client, err := kgo.NewClient(
-		kgo.SeedBrokers("127.0.0.1:1"),
-		kgo.MaxBufferedBytes(10),
-		kgo.RecordRetries(100),
-	)
+	client, err := kgo.NewClient(kgo.SeedBrokers("127.0.0.1:1"), kgo.MaxBufferedBytes(10), kgo.RecordRetries(100))
 	require.NoError(t, err)
 
 	producer := &asyncProducer{
@@ -171,9 +167,7 @@ func TestBufferBackpressureCanBeCanceled(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() {
-		done <- producer.AsyncSend(ctx, "topic", 0, &codeccommon.Message{Value: make([]byte, 10)})
-	}()
+	go func() { done <- producer.AsyncSend(ctx, "topic", 0, &codeccommon.Message{Value: make([]byte, 10)}) }()
 
 	select {
 	case <-done:

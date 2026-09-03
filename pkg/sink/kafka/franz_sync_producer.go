@@ -21,7 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
 )
@@ -29,12 +29,11 @@ import (
 type syncProducer struct {
 	id common.ChangeFeedID
 
-	client  *kgo.Client
-	closed  atomic.Bool
-	timeout time.Duration
+	client *kgo.Client
+	closed atomic.Bool
 }
 
-func (p *syncProducer) SendMessage(ctx context.Context, topic string, partitionNum int32, message *codeccommon.Message) error {
+func (p *syncProducer) SendMessage(ctx context.Context, topic string, partitionNum int32, message *codecCommon.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
@@ -48,7 +47,7 @@ func (p *syncProducer) SendMessage(ctx context.Context, topic string, partitionN
 	return p.sendRecords(ctx, message, record)
 }
 
-func (p *syncProducer) SendMessages(ctx context.Context, topic string, partitionNum int32, message *codeccommon.Message) error {
+func (p *syncProducer) SendMessages(ctx context.Context, topic string, partitionNum int32, message *codecCommon.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
@@ -66,20 +65,15 @@ func (p *syncProducer) SendMessages(ctx context.Context, topic string, partition
 	return p.sendRecords(ctx, message, records...)
 }
 
-func (p *syncProducer) sendRecords(ctx context.Context, message *codeccommon.Message, records ...*kgo.Record) error {
-	ctx, cancel := context.WithTimeout(ctx, p.timeout)
-	defer cancel()
-
+func (p *syncProducer) sendRecords(ctx context.Context, message *codecCommon.Message, records ...*kgo.Record) error {
 	err := p.client.ProduceSync(ctx, records...).FirstErr()
 	if err == nil {
 		return nil
 	}
 
 	log.Error("kafka message send failed",
-		zap.String("keyspace", p.id.Keyspace()),
-		zap.String("changefeed", p.id.Name()),
-		zap.String("eventContext", BuildEventLogContext(
-			p.id.Keyspace(), p.id.Name(), message.LogInfo)),
+		zap.String("keyspace", p.id.Keyspace()), zap.String("changefeed", p.id.Name()),
+		zap.String("eventContext", BuildEventLogContext(p.id.Keyspace(), p.id.Name(), message.LogInfo)),
 		zap.Error(err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
@@ -87,8 +81,7 @@ func (p *syncProducer) sendRecords(ctx context.Context, message *codeccommon.Mes
 func (p *syncProducer) Close() {
 	if !p.closed.CompareAndSwap(false, true) {
 		log.Warn("kafka ddl producer already closed",
-			zap.String("keyspace", p.id.Keyspace()),
-			zap.String("changefeed", p.id.Name()))
+			zap.String("keyspace", p.id.Keyspace()), zap.String("changefeed", p.id.Name()))
 		return
 	}
 
@@ -96,7 +89,6 @@ func (p *syncProducer) Close() {
 	p.client.Close()
 
 	log.Info("kafka ddl producer closed",
-		zap.String("keyspace", p.id.Keyspace()),
-		zap.String("changefeed", p.id.Name()),
+		zap.String("keyspace", p.id.Keyspace()), zap.String("changefeed", p.id.Name()),
 		zap.Duration("duration", time.Since(start)))
 }
