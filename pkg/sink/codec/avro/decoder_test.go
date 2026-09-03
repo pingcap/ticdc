@@ -31,9 +31,10 @@ func TestDecoderCodecCacheIsBounded(t *testing.T) {
 	for i := 1; i <= decoderCodecCacheSize; i++ {
 		schemaID := schemamanager.NewConfluentSchemaID(i)
 		decoder.codecs.Add(schemaID, codec)
-		if i == 1 {
+		switch i {
+		case 1:
 			firstID = schemaID
-		} else if i == 2 {
+		case 2:
 			secondID = schemaID
 		}
 	}
