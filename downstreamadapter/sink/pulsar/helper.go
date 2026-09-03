@@ -127,12 +127,12 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.encoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, nil, changefeedID)
+	pulsarComponent.encoderGroup, err = codec.NewEncoderGroup(sinkConfig, encoderConfig, nil, nil, changefeedID)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig, nil)
+	pulsarComponent.encoder, err = codec.NewEventEncoder(encoderConfig, nil, nil)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
