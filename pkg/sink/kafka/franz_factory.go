@@ -34,16 +34,21 @@ type franzFactory struct {
 }
 
 func newFranzFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
-	clientOpts, err := clientOptions(ctx, o)
+	adminOpts, err := clientOptions(ctx, o)
 	if err != nil {
 		return nil, err
 	}
-	admin, err := newAdmin(ctx, changefeedID, clientOpts)
+	admin, err := newAdmin(ctx, changefeedID, adminOpts)
 	if err != nil {
 		return nil, err
 	}
 	err = adjustOptions(ctx, changefeedID, admin, o, o.Topic)
 	admin.Close()
+	if err != nil {
+		return nil, err
+	}
+	// The temporary admin and shared client must not own the same SASL authentication state.
+	clientOpts, err := clientOptions(ctx, o)
 	if err != nil {
 		return nil, err
 	}

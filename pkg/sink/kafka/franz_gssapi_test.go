@@ -15,7 +15,6 @@
 package kafka
 
 import (
-	"context"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -49,7 +48,7 @@ func TestGSSAPIConfigValidation(t *testing.T) {
 	}
 }
 
-func TestGSSAPIRejectsMissingKerberosConfig(t *testing.T) {
+func TestGSSAPIMissingConfig(t *testing.T) {
 	mechanism, err := buildGSSAPIMechanism(gssapiConfig{
 		authType:           userAuth,
 		kerberosConfigPath: "/path/that/does/not/exist",
@@ -58,8 +57,6 @@ func TestGSSAPIRejectsMissingKerberosConfig(t *testing.T) {
 		password:           "secret",
 		realm:              "EXAMPLE.COM",
 	})
-	require.NoError(t, err)
-
-	_, _, err = mechanism.Authenticate(context.Background(), "broker:9092")
 	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+	require.Nil(t, mechanism)
 }

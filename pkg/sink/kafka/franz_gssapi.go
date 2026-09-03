@@ -15,8 +15,6 @@
 package kafka
 
 import (
-	"context"
-
 	"github.com/jcmturner/gokrb5/v8/client"
 	"github.com/jcmturner/gokrb5/v8/config"
 	"github.com/jcmturner/gokrb5/v8/keytab"
@@ -30,13 +28,11 @@ func buildGSSAPIMechanism(g gssapiConfig) (sasl.Mechanism, error) {
 		return nil, err
 	}
 
-	return kerberos.Kerberos(func(context.Context) (kerberos.Auth, error) {
-		krbClient, err := newKerberosClient(g)
-		if err != nil {
-			return kerberos.Auth{}, err
-		}
-		return kerberos.Auth{Client: krbClient, Service: g.serviceName}, nil
-	}), nil
+	krbClient, err := newKerberosClient(g)
+	if err != nil {
+		return nil, err
+	}
+	return kerberos.Auth{Client: krbClient, Service: g.serviceName}.AsMechanismWithClose(), nil
 }
 
 func validateGSSAPIConfig(g gssapiConfig) error {

@@ -20,13 +20,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jcmturner/gokrb5/v8/iana/etypeID"
+	"github.com/jcmturner/gokrb5/v8/keytab"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sasl"
 )
 
 func testOptions(brokers []string) *options {
@@ -175,12 +180,28 @@ func TestCompressionOptions(t *testing.T) {
 	}
 }
 
-func TestBuildFranzGSSAPIMechanism(t *testing.T) {
+func TestGSSAPIMechanism(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "krb5.conf")
+	require.NoError(t, os.WriteFile(configPath, []byte(`[libdefaults]
+ default_realm = EXAMPLE.COM
+[realms]
+ EXAMPLE.COM = {
+  kdc = localhost:88
+ }
+`), 0o600))
+	keytabPath := filepath.Join(dir, "client.keytab")
+	kt := keytab.New()
+	require.NoError(t, kt.AddEntry("alice", "EXAMPLE.COM", "pwd", time.Now(), 1, etypeID.AES256_CTS_HMAC_SHA1_96))
+	keytabBytes, err := kt.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(keytabPath, keytabBytes, 0o600))
+
 	for _, cfg := range []gssapiConfig{
 		{authType: userAuth, password: "pwd"},
-		{authType: keyTabAuth, keyTabPath: "/tmp/a.keytab"},
+		{authType: keyTabAuth, keyTabPath: keytabPath},
 	} {
-		cfg.kerberosConfigPath = "/etc/krb5.conf"
+		cfg.kerberosConfigPath = configPath
 		cfg.serviceName = "kafka"
 		cfg.username = "alice"
 		cfg.realm = "EXAMPLE.COM"
@@ -191,6 +212,16 @@ func TestBuildFranzGSSAPIMechanism(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, "GSSAPI", mechanism.Name())
+		closing, ok := mechanism.(sasl.ClosingMechanism)
+		require.True(t, ok)
+		closing.Close()
+
+		next, err := buildGSSAPIMechanism(cfg)
+		require.NoError(t, err)
+		require.NotSame(t, mechanism, next)
+		nextClosing, ok := next.(sasl.ClosingMechanism)
+		require.True(t, ok)
+		nextClosing.Close()
 	}
 }
 
