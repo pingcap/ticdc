@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils"
@@ -25,8 +26,9 @@ import (
 )
 
 const (
-	resendInterval     = time.Second
-	defaultLivenessTTL = 30 * time.Second
+	resendInterval                      = time.Second
+	defaultLivenessTTL                  = 30 * time.Second
+	eventBrokerDispatcherCountReportTTL = 3 * time.Second
 )
 
 // State is the coordinator-derived node liveness state.
@@ -54,6 +56,13 @@ type nodeState struct {
 	drainingObserved bool
 	// stoppingObserved indicates the node has reported STOPPING.
 	stoppingObserved bool
+	// eventBrokerDispatcherCount is the latest log-coordinator-reported count
+	// of dispatchers registered in the event broker.
+	eventBrokerDispatcherCount     uint32
+	eventBrokerDispatcherNodeEpoch uint64
+	// eventBrokerDispatcherCountObserved indicates the count is trustworthy.
+	eventBrokerDispatcherCountObserved   bool
+	eventBrokerDispatcherCountObservedAt time.Time
 
 	// lastDrainCmdSentAt is the last send time of a DRAINING command for resend throttling.
 	lastDrainCmdSentAt time.Time
@@ -186,6 +195,33 @@ func (c *Controller) ObserveHeartbeat(nodeID node.ID, hb *heartbeatpb.NodeHeartb
 	defer c.mu.Unlock()
 	c.observeLivenessLocked(nodeID, hb.NodeEpoch, hb.Liveness)
 	c.observeTargetSchedulerAckLocked(nodeID, hb)
+}
+
+// ObserveEventBrokerDispatcherCountResponse records the latest snapshot
+// returned by the log coordinator. An absent, stale, or wrong-epoch snapshot
+// is treated as unknown so it cannot authorize a restart.
+func (c *Controller) ObserveEventBrokerDispatcherCountResponse(
+	resp *logservicepb.EventBrokerDispatcherCountResponse,
+) {
+	if resp == nil || resp.GetTargetNodeId() == "" {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	st := c.ensureNodeStateLocked(node.ID(resp.GetTargetNodeId()))
+	st.eventBrokerDispatcherCountObserved = false
+	if !resp.GetObserved() || resp.GetReportAgeMs() > uint64(eventBrokerDispatcherCountReportTTL/time.Millisecond) {
+		return
+	}
+	if !st.observedSet || st.nodeEpoch != resp.GetNodeEpoch() {
+		return
+	}
+	st.eventBrokerDispatcherCount = resp.GetDispatcherCount()
+	st.eventBrokerDispatcherNodeEpoch = resp.GetNodeEpoch()
+	st.eventBrokerDispatcherCountObserved = true
+	st.eventBrokerDispatcherCountObservedAt = time.Now()
 }
 
 // ObserveSetNodeLivenessResponse updates drain progression from explicit liveness responses.
@@ -425,6 +461,21 @@ func (c *Controller) GetDrainProtocolVersion(nodeID node.ID) (uint32, bool) {
 		return 0, false
 	}
 	return st.drainProtocolVersion, true
+}
+
+// GetEventBrokerDispatcherCount returns the latest log-coordinator-reported
+// event broker dispatcher count and whether the value is still usable.
+func (c *Controller) GetEventBrokerDispatcherCount(nodeID node.ID) (uint32, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	st, ok := c.nodes[nodeID]
+	if !ok || !st.observedSet || !st.eventBrokerDispatcherCountObserved ||
+		st.nodeEpoch != st.eventBrokerDispatcherNodeEpoch ||
+		time.Since(st.eventBrokerDispatcherCountObservedAt) > eventBrokerDispatcherCountReportTTL {
+		return 0, false
+	}
+	return st.eventBrokerDispatcherCount, true
 }
 
 // GetState returns coordinator-derived liveness state.

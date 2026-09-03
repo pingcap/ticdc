@@ -33,6 +33,29 @@ message ChangefeedStates {
     repeated ChangefeedStateEntry States = 1;
 }
 
+// EventBrokerDispatcherCount is reported by an event service to the log
+// coordinator and describes the dispatcher count for its capture node.
+message EventBrokerDispatcherCount {
+    uint64 NodeEpoch = 1;
+    uint32 DispatcherCount = 2;
+}
+
+// EventBrokerDispatcherCountRequest asks the log coordinator for the latest
+// dispatcher count reported by a capture node.
+message EventBrokerDispatcherCountRequest {
+    string TargetNodeId = 1;
+}
+
+// EventBrokerDispatcherCountResponse contains the latest dispatcher count for
+// a capture node. Observed is false when no report is available.
+message EventBrokerDispatcherCountResponse {
+    string TargetNodeId = 1;
+    uint64 NodeEpoch = 2;
+    uint32 DispatcherCount = 3;
+    uint64 ReportAgeMs = 4;
+    bool Observed = 5;
+}
+
 message ReusableEventServiceRequest {
     heartbeatpb.DispatcherID ID = 1;
     heartbeatpb.TableSpan Span = 2;
