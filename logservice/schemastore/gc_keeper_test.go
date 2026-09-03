@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
@@ -27,6 +28,88 @@ import (
 	"github.com/stretchr/testify/require"
 	pdgc "github.com/tikv/pd/client/clients/gc"
 )
+
+func TestSchemaStoreGCKeeperStopsRefreshingTombstoneKeyspace(t *testing.T) {
+	if kerneltype.IsClassic() {
+		t.Skip("keyspace state is only available in next-gen mode")
+	}
+
+	originalConfig := config.GetGlobalServerConfig()
+	cfg := originalConfig.Clone()
+	cfg.EnableLegacySafePoint = true
+	config.StoreGlobalServerConfig(cfg)
+	defer config.StoreGlobalServerConfig(originalConfig)
+
+	testCases := []struct {
+		name              string
+		refreshErr        error
+		keyspaceState     keyspacepb.KeyspaceState
+		loadErr           error
+		shouldContinue    bool
+		expectedLoadCalls int
+	}{
+		{
+			name:           "successful refresh",
+			keyspaceState:  keyspacepb.KeyspaceState_ENABLED,
+			shouldContinue: true,
+		},
+		{
+			name:              "tombstone keyspace",
+			refreshErr:        errors.New("cannot update keyspace that's TOMBSTONE"),
+			keyspaceState:     keyspacepb.KeyspaceState_TOMBSTONE,
+			shouldContinue:    false,
+			expectedLoadCalls: 1,
+		},
+		{
+			name:              "enabled keyspace",
+			refreshErr:        errors.New("temporary safepoint refresh failure"),
+			keyspaceState:     keyspacepb.KeyspaceState_ENABLED,
+			shouldContinue:    true,
+			expectedLoadCalls: 1,
+		},
+		{
+			name:              "keyspace state lookup failure",
+			refreshErr:        errors.New("temporary safepoint refresh failure"),
+			loadErr:           errors.New("temporary keyspace state lookup failure"),
+			shouldContinue:    true,
+			expectedLoadCalls: 1,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			pdCli := &mockSchemaStorePDClient{
+				MockPDClient: &gc.MockPDClient{
+					SetServiceSafePointV2Func: func(
+						context.Context, uint32, string, int64, uint64,
+					) (uint64, error) {
+						return 100, tc.refreshErr
+					},
+				},
+				keyspaceMeta: &keyspacepb.KeyspaceMeta{State: tc.keyspaceState},
+				loadErr:      tc.loadErr,
+			}
+			keeper := newSchemaStoreGCKeeper(pdCli, common.KeyspaceMeta{ID: 42, Name: "test-keyspace"})
+
+			require.Equal(t, tc.shouldContinue, keeper.refreshSafepoint(context.Background(), 100))
+			require.Equal(t, tc.expectedLoadCalls, pdCli.loadCalls)
+		})
+	}
+}
+
+type mockSchemaStorePDClient struct {
+	*gc.MockPDClient
+	keyspaceMeta *keyspacepb.KeyspaceMeta
+	loadErr      error
+	loadCalls    int
+}
+
+func (m *mockSchemaStorePDClient) LoadKeyspaceByID(
+	context.Context, uint32,
+) (*keyspacepb.KeyspaceMeta, error) {
+	m.loadCalls++
+	return m.keyspaceMeta, m.loadErr
+}
 
 func TestSchemaStoreGCKeeperLifecycle(t *testing.T) {
 	originalConfig := config.GetGlobalServerConfig()
