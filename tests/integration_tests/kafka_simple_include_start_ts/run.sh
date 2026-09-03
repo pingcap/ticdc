@@ -96,7 +96,8 @@ function run() {
 		return
 	fi
 
-	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
+	rm -rf -- "${WORK_DIR:?WORK_DIR is unset}"
+	mkdir -p -- "$WORK_DIR"
 	start_tidb_cluster --workdir $WORK_DIR
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 

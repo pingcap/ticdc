@@ -124,7 +124,10 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 	require.Contains(t, out, "start-ts")
 	require.Contains(t, out, "[config.sink.debezium]")
 	require.Contains(t, out, "[config.sink.simple]")
-	require.Contains(t, out, "include-start-ts = true")
+	// Assert include-start-ts under each protocol table so a Debezium-only
+	// serialization cannot satisfy the Simple round-trip.
+	require.Regexp(t, `(?s)\[config\.sink\.debezium\][^\[]*include-start-ts = true`, out)
+	require.Regexp(t, `(?s)\[config\.sink\.simple\][^\[]*include-start-ts = true`, out)
 	require.NotContains(t, out, "gid") // GID is omitted from TOML (toml:"-")
 
 	// The [config] section must decode into the internal ReplicaConfig used by
