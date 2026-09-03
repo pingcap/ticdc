@@ -45,39 +45,49 @@ func TestAsyncSendCanceled(t *testing.T) {
 	require.ErrorIs(t, producer.AsyncSend(ctx, "topic", 0, &codeccommon.Message{}), context.Canceled)
 }
 
-func TestAsyncCallbackError(t *testing.T) {
-	producer := &asyncProducer{
-		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-callback"),
-		resultCh:     make(chan asyncProduceResult, 1),
-	}
-	producer.resultCh <- asyncProduceResult{err: context.DeadlineExceeded}
-
-	err := producer.AsyncRunCallback(context.Background())
-
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-}
-
-func TestCloseDoesNotAcknowledge(t *testing.T) {
-	client, err := kgo.NewClient(kgo.SeedBrokers("127.0.0.1:1"))
+func TestAsyncPartition(t *testing.T) {
+	const topic = "async-partition"
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
+	defer cluster.Close()
+	partition := make(chan int32, 1)
+	cluster.ControlKey(int16(kmsg.Produce), func(req kmsg.Request) (kmsg.Response, error, bool) {
+		partition <- req.(*kmsg.ProduceRequest).Topics[0].Partitions[0].Partition
+		return produceResponseWithError(req, -1, 0)
+	})
+	o := testOptions(cluster.ListenAddrs())
+	client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
 	require.NoError(t, err)
-
-	var callbackCalled atomic.Bool
+	defer client.Close()
 	producer := &asyncProducer{
 		client:       client,
-		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-close"),
+		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-partition"),
 		resultCh:     make(chan asyncProduceResult, 1),
 	}
-	defer client.Close()
-	err = producer.AsyncSend(context.Background(), "topic", 0, &codeccommon.Message{
-		Callback: func() {
-			callbackCalled.Store(true)
-		},
-	})
+
+	require.NoError(t, producer.AsyncSend(t.Context(), topic, 2, &codeccommon.Message{Value: []byte("value")}))
+	require.Eventually(t, func() bool { return client.BufferedProduceRecords() == 0 }, time.Second, time.Millisecond)
+	require.Equal(t, int32(2), <-partition)
+}
+
+func TestAsyncCallbackStopsWithClient(t *testing.T) {
+	client, err := kgo.NewClient(kgo.SeedBrokers("127.0.0.1:1"))
 	require.NoError(t, err)
+	producer := &asyncProducer{
+		client:       client,
+		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-callback-close"),
+		resultCh:     make(chan asyncProduceResult, 1),
+	}
 
-	producer.Close()
+	done := make(chan error, 1)
+	go func() { done <- producer.AsyncRunCallback(context.Background()) }()
+	client.Close()
 
-	require.False(t, callbackCalled.Load())
+	select {
+	case err = <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("callback runner did not stop with the client")
+	}
 }
 
 func TestFactoryCloseUnblocksPromise(t *testing.T) {
@@ -234,8 +244,7 @@ func TestAsyncProduceFailure(t *testing.T) {
 	defer cancel()
 
 	err = producer.AsyncRunCallback(callbackCtx)
-	require.ErrorIs(t, err, errors.ErrKafkaSendMessage)
-	require.ErrorIs(t, err, kerr.InvalidTopicException)
+	requireKafkaSendError(t, err, kerr.InvalidTopicException)
 	require.False(t, callbackCalled.Load())
 }
 

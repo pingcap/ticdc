@@ -17,8 +17,6 @@ package kafka
 import (
 	"context"
 	"crypto/tls"
-	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/pingcap/log"
@@ -29,8 +27,6 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl/plain"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 	"go.uber.org/zap"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/clientcredentials"
 )
 
 // franz-go counts a record from Produce acceptance until its delivery callback
@@ -145,38 +141,11 @@ func buildSASLMechanism(ctx context.Context, cfg *saslConfig) (sasl.Mechanism, e
 }
 
 func buildOAuthMechanism(ctx context.Context, cfg oauth2Config) (sasl.Mechanism, error) {
-	var httpClient *http.Client
-	if cfg.caPath != "" {
-		var err error
-		httpClient, err = oauthHTTPClient(cfg.caPath)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	endpointParams := url.Values{}
-	if cfg.grantType != "" {
-		endpointParams.Set("grant_type", cfg.grantType)
-	}
-	if cfg.audience != "" {
-		endpointParams.Set("audience", cfg.audience)
-	}
-	tokenURL, err := url.Parse(cfg.tokenURL)
+	tokenSource, err := newOAuthTokenSource(ctx, cfg)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
-	}
-	config := &clientcredentials.Config{
-		ClientID:       cfg.clientID,
-		ClientSecret:   cfg.clientSecret,
-		TokenURL:       tokenURL.String(),
-		EndpointParams: endpointParams,
-		Scopes:         cfg.scopes,
-	}
-	if httpClient != nil {
-		ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
+		return nil, err
 	}
 	// One token source shares cached credentials across broker connections and refreshes them on expiry.
-	tokenSource := config.TokenSource(ctx)
 	return oauth.Oauth(func(context.Context) (oauth.Auth, error) {
 		token, err := tokenSource.Token()
 		if err != nil {

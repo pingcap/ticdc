@@ -284,6 +284,54 @@ func TestAdminOperations(t *testing.T) {
 	require.NoError(t, admin.CreateTopic(ctx, &TopicDetail{Name: topic, NumPartitions: 3, ReplicationFactor: 1}))
 }
 
+func TestAdminConfigErrors(t *testing.T) {
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "topic"))
+	defer cluster.Close()
+	o := testOptions(cluster.ListenAddrs())
+	admin, err := newAdmin(
+		t.Context(),
+		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "config-errors"),
+		testClientOptions(t, o),
+	)
+	require.NoError(t, err)
+	defer admin.Close()
+
+	for _, test := range []struct {
+		name          string
+		broker        bool
+		responseError *kerr.Error
+		expectedError error
+	}{
+		{name: "broker authorization", broker: true, responseError: kerr.ClusterAuthorizationFailed, expectedError: errors.ErrKafkaAuthorizationFailed},
+		{name: "broker error", broker: true, responseError: kerr.InvalidRequest, expectedError: errors.ErrKafkaAdminAPI},
+		{name: "topic authorization", responseError: kerr.TopicAuthorizationFailed, expectedError: errors.ErrKafkaAuthorizationFailed},
+		{name: "topic error", responseError: kerr.InvalidTopicException, expectedError: errors.ErrKafkaAdminAPI},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cluster.ControlKey(int16(kmsg.DescribeConfigs), func(req kmsg.Request) (kmsg.Response, error, bool) {
+				request := req.(*kmsg.DescribeConfigsRequest)
+				response := req.ResponseKind().(*kmsg.DescribeConfigsResponse)
+				for _, requested := range request.Resources {
+					resource := kmsg.NewDescribeConfigsResponseResource()
+					resource.ResourceType = requested.ResourceType
+					resource.ResourceName = requested.ResourceName
+					resource.ErrorCode = test.responseError.Code
+					response.Resources = append(response.Resources, resource)
+				}
+				return response, nil, true
+			})
+
+			if test.broker {
+				_, _, err = admin.GetBrokerConfig(t.Context(), "message.max.bytes")
+			} else {
+				_, _, err = admin.GetTopicConfig(t.Context(), "topic", "max.message.bytes")
+			}
+			require.ErrorIs(t, err, test.expectedError)
+			require.ErrorIs(t, err, test.responseError)
+		})
+	}
+}
+
 func TestCreateTopicErrors(t *testing.T) {
 	ctx := t.Context()
 	cluster := kfake.MustCluster(kfake.NumBrokers(1))

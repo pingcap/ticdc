@@ -15,6 +15,8 @@ package kafka
 
 import (
 	"context"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -42,6 +44,20 @@ func TestSyncProducerPartitions(t *testing.T) {
 	const topic = "sync-topic"
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
 	defer cluster.Close()
+	var mu sync.Mutex
+	var partitions []int32
+	cluster.ControlKey(int16(kmsg.Produce), func(req kmsg.Request) (kmsg.Response, error, bool) {
+		cluster.KeepControl()
+		request := req.(*kmsg.ProduceRequest)
+		mu.Lock()
+		defer mu.Unlock()
+		for _, requestTopic := range request.Topics {
+			for _, partition := range requestTopic.Partitions {
+				partitions = append(partitions, partition.Partition)
+			}
+		}
+		return produceResponseWithError(req, -1, 0)
+	})
 	o := testOptions(cluster.ListenAddrs())
 
 	client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
@@ -54,7 +70,15 @@ func TestSyncProducerPartitions(t *testing.T) {
 	defer producer.Close()
 
 	require.NoError(t, producer.SendMessage(t.Context(), topic, 2, &codeccommon.Message{Key: []byte("key"), Value: []byte("value")}))
+	mu.Lock()
+	require.Equal(t, []int32{2}, partitions)
+	partitions = nil
+	mu.Unlock()
 	require.NoError(t, producer.SendMessages(t.Context(), topic, 3, &codeccommon.Message{Value: []byte("all")}))
+	mu.Lock()
+	slices.Sort(partitions)
+	require.Equal(t, []int32{0, 1, 2}, partitions)
+	mu.Unlock()
 }
 
 func TestSyncProducerPartialFailure(t *testing.T) {
@@ -77,8 +101,7 @@ func TestSyncProducerPartialFailure(t *testing.T) {
 	defer producer.Close()
 
 	err = producer.SendMessages(t.Context(), topic, 3, &codeccommon.Message{Value: []byte("value")})
-	require.ErrorIs(t, err, errors.ErrKafkaSendMessage)
-	require.ErrorIs(t, err, kerr.InvalidTopicException)
+	requireKafkaSendError(t, err, kerr.InvalidTopicException)
 }
 
 func TestSyncProducerContext(t *testing.T) {
@@ -100,18 +123,12 @@ func TestSyncProducerContext(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-func TestSyncProducerCloseIsIdempotent(t *testing.T) {
-	o := testOptions([]string{"127.0.0.1:1"})
-	client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
-	require.NoError(t, err)
-	defer client.Close()
-	producer := &syncProducer{
-		id:     common.NewChangefeedID4Test(common.DefaultKeyspaceName, "close"),
-		client: client,
-	}
+func TestFranzSyncProducerClose(t *testing.T) {
+	producer := &syncProducer{id: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "close")}
 
 	producer.Close()
 	producer.Close()
+	require.True(t, producer.closed.Load())
 }
 
 func produceResponseWithError(req kmsg.Request, failedPartition int32, errorCode int16) (kmsg.Response, error, bool) {

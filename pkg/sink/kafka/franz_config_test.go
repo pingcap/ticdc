@@ -16,6 +16,7 @@ package kafka
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,9 +30,13 @@ import (
 	"github.com/jcmturner/gokrb5/v8/iana/etypeID"
 	"github.com/jcmturner/gokrb5/v8/keytab"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl"
+	"golang.org/x/oauth2"
 )
 
 func testOptions(brokers []string) *options {
@@ -66,88 +71,95 @@ func TestFranzRequiredAcks(t *testing.T) {
 	}
 }
 
-func TestFranzProducerTimeouts(t *testing.T) {
-	o := testOptions([]string{"127.0.0.1:9092"})
-	o.ReadTimeout = 3 * time.Second
-	o.WriteTimeout = 2 * time.Second
+func TestClientOptions(t *testing.T) {
+	t.Run("timeouts", func(t *testing.T) {
+		o := testOptions([]string{"127.0.0.1:9092"})
+		o.ReadTimeout = 3 * time.Second
+		o.WriteTimeout = 2 * time.Second
+		client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
+		require.NoError(t, err)
+		defer client.Close()
 
-	opts := testClientOptions(t, o)
-	client, err := kgo.NewClient(append(opts, producerOptions(o)...)...)
-	require.NoError(t, err)
-	defer client.Close()
+		require.Equal(t, 2*time.Second, client.OptValue(kgo.RequestTimeoutOverhead))
+		require.Equal(t, 3*time.Second, client.OptValue(kgo.ProduceRequestTimeout))
+	})
 
-	require.Equal(t, 2*time.Second, client.OptValue(kgo.RequestTimeoutOverhead))
-	require.Equal(t, 3*time.Second, client.OptValue(kgo.ProduceRequestTimeout))
+	t.Run("TLS", func(t *testing.T) {
+		ca, err := security.NewCA()
+		require.NoError(t, err)
+		certPEM, keyPEM, err := ca.GenerateCerts("localhost")
+		require.NoError(t, err)
+		certificate, err := tls.X509KeyPair(certPEM, keyPEM)
+		require.NoError(t, err)
+		cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.TLS(&tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{certificate},
+		}))
+		defer cluster.Close()
+
+		dir := t.TempDir()
+		caPath := filepath.Join(dir, "ca.pem")
+		certPath := filepath.Join(dir, "cert.pem")
+		keyPath := filepath.Join(dir, "key.pem")
+		require.NoError(t, os.WriteFile(caPath, ca.CAPEM, 0o600))
+		require.NoError(t, os.WriteFile(certPath, certPEM, 0o600))
+		require.NoError(t, os.WriteFile(keyPath, keyPEM, 0o600))
+		o := testOptions(cluster.ListenAddrs())
+		o.EnableTLS = true
+		o.Credential = &security.Credential{CAPath: caPath, CertPath: certPath, KeyPath: keyPath}
+		client, err := kgo.NewClient(testClientOptions(t, o)...)
+		require.NoError(t, err)
+		defer client.Close()
+
+		metadata, err := kadm.NewClient(client).Metadata(t.Context())
+		require.NoError(t, err)
+		require.Len(t, metadata.Brokers, 1)
+	})
+
+	t.Run("SASL", func(t *testing.T) {
+		cluster := kfake.MustCluster(
+			kfake.NumBrokers(1),
+			kfake.EnableSASL(),
+			kfake.Superuser("PLAIN", "alice", "secret"),
+		)
+		defer cluster.Close()
+		o := testOptions(cluster.ListenAddrs())
+		o.sasl = &saslConfig{mechanism: plainMechanism, user: "alice", password: "secret"}
+		client, err := kgo.NewClient(testClientOptions(t, o)...)
+		require.NoError(t, err)
+		defer client.Close()
+
+		metadata, err := kadm.NewClient(client).Metadata(t.Context())
+		require.NoError(t, err)
+		require.Len(t, metadata.Brokers, 1)
+	})
 }
 
-func TestProducerOptionsConfigureMessageAndBufferLimits(t *testing.T) {
-	const maxMessageBytes = 1048588
-	o := testOptions([]string{"127.0.0.1:9092"})
-	o.MaxMessageBytes = maxMessageBytes
-
-	opts, err := clientOptions(t.Context(), o)
-	require.NoError(t, err)
-
-	producerOpts := producerOptions(o)
-
-	client, err := kgo.NewClient(append(opts, producerOpts...)...)
-	require.NoError(t, err)
-	defer client.Close()
-
-	require.Equal(t, int32(maxMessageBytes), client.OptValue(kgo.ProducerBatchMaxBytes))
-	require.Equal(t, int64(producerMaxBufferedBytes), client.OptValue(kgo.MaxBufferedBytes))
-	require.Equal(t, int64(producerMaxBufferedRecords), client.OptValue(kgo.MaxBufferedRecords))
-	require.Equal(t, int64(1), client.OptValue(kgo.RecordRetries))
-	require.Equal(t, int64(1), client.OptValue(kgo.UnknownTopicRetries))
-	require.Equal(t, int32(producerMaxRequestBytes), client.OptValue(kgo.BrokerMaxWriteBytes))
-}
-
-func TestProducerOptionsUseSingleNonIdempotentRequest(t *testing.T) {
-	config := testOptions([]string{"127.0.0.1:9092"})
-
-	producerOpts := producerOptions(config)
-
-	client, err := kgo.NewClient(producerOpts...)
-	require.NoError(t, err)
-	defer client.Close()
-
-	require.Equal(t, true, client.OptValue(kgo.DisableIdempotentWrite))
-	require.Equal(t, 1, client.OptValue(kgo.MaxProduceRequestsInflightPerBroker))
-}
-
-func TestProducerLimitsDoNotScaleWithConfiguredMessage(t *testing.T) {
-	maxMessageBytes := 32 << 20
-	config := testOptions([]string{"127.0.0.1:9092"})
-	config.MaxMessageBytes = maxMessageBytes
-
-	producerOpts := producerOptions(config)
-
-	client, err := kgo.NewClient(producerOpts...)
-	require.NoError(t, err)
-	defer client.Close()
-
-	require.Equal(t, int64(producerMaxBufferedBytes), client.OptValue(kgo.MaxBufferedBytes))
-	require.Equal(t, int32(producerMaxRequestBytes), client.OptValue(kgo.BrokerMaxWriteBytes))
-}
-
-func TestProducerOptionsLimitBatchToProduceRequest(t *testing.T) {
+func TestProducerLimits(t *testing.T) {
 	for _, test := range []struct {
 		name            string
 		maxMessageBytes int
+		expectedBatch   int32
 	}{
-		{name: "at request limit", maxMessageBytes: producerMaxRequestBytes},
-		{name: "above request limit", maxMessageBytes: 128 << 20},
+		{name: "configured", maxMessageBytes: 1048588, expectedBatch: 1048588},
+		{name: "at request limit", maxMessageBytes: producerMaxRequestBytes, expectedBatch: producerMaxRequestBytes},
+		{name: "above request limit", maxMessageBytes: 128 << 20, expectedBatch: producerMaxRequestBytes},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			config := testOptions([]string{"127.0.0.1:9092"})
-			config.MaxMessageBytes = test.maxMessageBytes
+			o := testOptions([]string{"127.0.0.1:9092"})
+			o.MaxMessageBytes = test.maxMessageBytes
 
-			client, err := kgo.NewClient(producerOptions(config)...)
+			client, err := kgo.NewClient(producerOptions(o)...)
 			require.NoError(t, err)
 			defer client.Close()
 
-			require.Equal(t, int32(producerMaxRequestBytes), client.OptValue(kgo.ProducerBatchMaxBytes))
+			require.Equal(t, test.expectedBatch, client.OptValue(kgo.ProducerBatchMaxBytes))
+			require.Equal(t, int64(producerMaxBufferedBytes), client.OptValue(kgo.MaxBufferedBytes))
+			require.Equal(t, int64(producerMaxBufferedRecords), client.OptValue(kgo.MaxBufferedRecords))
+			require.Equal(t, int64(o.MaxRetry), client.OptValue(kgo.RecordRetries))
+			require.Equal(t, int64(o.MaxRetry), client.OptValue(kgo.UnknownTopicRetries))
 			require.Equal(t, int32(producerMaxRequestBytes), client.OptValue(kgo.BrokerMaxWriteBytes))
+			require.Equal(t, time.Duration(0), client.OptValue(kgo.ProducerLinger))
 		})
 	}
 }
@@ -240,57 +252,72 @@ func TestBuildFranzSASLMechanisms(t *testing.T) {
 	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 }
 
-func TestFranzOAuthTokenSource(t *testing.T) {
-	var tokenRequests atomic.Int32
-	request := make(chan url.Values, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			t.Errorf("parse token request: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		tokenRequests.Add(1)
-		select {
-		case request <- r.PostForm:
-		default:
-		}
+func TestFranzOAuth(t *testing.T) {
+	t.Run("token reuse", func(t *testing.T) {
+		var tokenRequests atomic.Int32
+		request := make(chan url.Values, 1)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := r.ParseForm(); err != nil {
+				t.Errorf("parse token request: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			tokenRequests.Add(1)
+			select {
+			case request <- r.PostForm:
+			default:
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if _, err := io.WriteString(w, `{"access_token":"token","token_type":"bearer"}`); err != nil {
+				t.Errorf("write token response: %v", err)
+			}
+		}))
+		defer server.Close()
 
-		w.Header().Set("Content-Type", "application/json")
-		if _, err := io.WriteString(w, `{"access_token":"token","token_type":"bearer"}`); err != nil {
-			t.Errorf("write token response: %v", err)
-		}
-	}))
-	defer server.Close()
+		mechanism, err := buildSASLMechanism(t.Context(), &saslConfig{
+			mechanism: oauthMechanism,
+			oauth2: oauth2Config{
+				clientID:     "client",
+				clientSecret: "secret",
+				tokenURL:     server.URL,
+				scopes:       []string{"scope-a", "scope-b"},
+				grantType:    "custom",
+				audience:     "audience",
+			},
+		})
+		require.NoError(t, err)
+		_, _, err = mechanism.Authenticate(context.Background(), "")
+		require.NoError(t, err)
+		_, _, err = mechanism.Authenticate(context.Background(), "")
+		require.NoError(t, err)
 
-	mechanism, err := buildSASLMechanism(t.Context(), &saslConfig{
-		mechanism: oauthMechanism,
-		oauth2: oauth2Config{
-			clientID:     "client",
-			clientSecret: "secret",
-			tokenURL:     server.URL,
-			scopes:       []string{"scope-a", "scope-b"},
-			grantType:    "custom",
-			audience:     "audience",
-		},
+		form := <-request
+		require.Equal(t, int32(1), tokenRequests.Load())
+		require.Equal(t, "custom", form.Get("grant_type"))
+		require.Equal(t, "audience", form.Get("audience"))
+		require.Equal(t, "scope-a scope-b", form.Get("scope"))
 	})
-	require.NoError(t, err)
 
-	_, _, err = mechanism.Authenticate(context.Background(), "")
-	require.NoError(t, err)
-	_, _, err = mechanism.Authenticate(context.Background(), "")
-	require.NoError(t, err)
+	t.Run("endpoint error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			if _, err := io.WriteString(w, `{"error":"invalid_client"}`); err != nil {
+				t.Errorf("write token error response: %v", err)
+			}
+		}))
+		defer server.Close()
+		mechanism, err := buildOAuthMechanism(t.Context(), oauth2Config{tokenURL: server.URL})
+		require.NoError(t, err)
 
-	form := <-request
-	require.Equal(t, int32(1), tokenRequests.Load())
-	require.Equal(t, "custom", form.Get("grant_type"))
-	require.Equal(t, "audience", form.Get("audience"))
-	require.Equal(t, "scope-a scope-b", form.Get("scope"))
-}
-
-func TestFranzOAuthTokenSourceRejectsInvalidURL(t *testing.T) {
-	_, err := buildSASLMechanism(t.Context(), &saslConfig{
-		mechanism: oauthMechanism,
-		oauth2:    oauth2Config{tokenURL: "http://example.com/%%"},
+		_, _, err = mechanism.Authenticate(context.Background(), "")
+		require.ErrorIs(t, err, errors.ErrNewKafkaSink)
+		var retrieveErr *oauth2.RetrieveError
+		require.ErrorAs(t, err, &retrieveErr)
 	})
-	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+
+	t.Run("invalid URL", func(t *testing.T) {
+		_, err := buildOAuthMechanism(t.Context(), oauth2Config{tokenURL: "http://example.com/%%"})
+		require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+	})
 }

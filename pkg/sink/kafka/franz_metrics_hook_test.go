@@ -16,6 +16,7 @@ package kafka
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,42 +28,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func TestInitMetrics(t *testing.T) {
-	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "metrics-registration")
-	cleanupMetrics(changefeedID)
-	t.Cleanup(func() { cleanupMetrics(changefeedID) })
-
-	hook := newMetricsHook(changefeedID)
-	hook.OnProduceBatchWritten(
-		kgo.BrokerMetadata{},
-		"topic",
-		0,
-		kgo.ProduceBatchMetrics{
-			NumRecords:        1,
-			UncompressedBytes: 2,
-			CompressedBytes:   1,
-		},
-	)
-	hook.OnBrokerThrottle(kgo.BrokerMetadata{NodeID: 1}, time.Millisecond, true)
-
-	registry := prometheus.NewRegistry()
-	InitMetrics(registry)
-
-	metricFamilies, err := registry.Gather()
-	require.NoError(t, err)
-
-	names := make([]string, 0, len(metricFamilies))
-	for _, family := range metricFamilies {
-		names = append(names, family.GetName())
-	}
-
-	require.Contains(t, names, "ticdc_sink_kafka_franz_producer_records_per_batch")
-	require.Contains(t, names, "ticdc_sink_kafka_franz_producer_uncompressed_bytes_total")
-	require.Contains(t, names, "ticdc_sink_kafka_franz_producer_compressed_bytes_total")
-	require.Contains(t, names, "ticdc_sink_kafka_franz_producer_throttle_time_seconds")
-}
-
-func TestMetricsHookRecordsRawValues(t *testing.T) {
+func TestMetricsHook(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "metrics-hook")
 	cleanupMetrics(changefeedID)
 	t.Cleanup(func() { cleanupMetrics(changefeedID) })
@@ -93,6 +59,34 @@ func TestMetricsHookRecordsRawValues(t *testing.T) {
 	require.Equal(t, float64(5), testutil.ToFloat64(
 		compressedBytesTotal.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	))
+	batchMetric, ok := hook.recordsPerBatch.(prometheus.Metric)
+	require.True(t, ok)
+	batchHistogram := &dto.Metric{}
+	require.NoError(t, batchMetric.Write(batchHistogram))
+	require.Equal(t, uint64(1), batchHistogram.GetHistogram().GetSampleCount())
+	require.Equal(t, float64(3), batchHistogram.GetHistogram().GetSampleSum())
+
+	registry := prometheus.NewRegistry()
+	InitMetrics(registry)
+	metricFamilies, err := registry.Gather()
+	require.NoError(t, err)
+	names := make([]string, 0, len(metricFamilies))
+	for _, family := range metricFamilies {
+		if strings.HasPrefix(family.GetName(), "ticdc_sink_kafka_franz_producer_") {
+			names = append(names, family.GetName())
+		}
+	}
+	require.ElementsMatch(t, []string{
+		"ticdc_sink_kafka_franz_producer_compressed_bytes_total",
+		"ticdc_sink_kafka_franz_producer_in_flight_requests",
+		"ticdc_sink_kafka_franz_producer_outgoing_bytes_total",
+		"ticdc_sink_kafka_franz_producer_records_per_batch",
+		"ticdc_sink_kafka_franz_producer_request_duration_seconds",
+		"ticdc_sink_kafka_franz_producer_requests_total",
+		"ticdc_sink_kafka_franz_producer_responses_total",
+		"ticdc_sink_kafka_franz_producer_throttle_time_seconds",
+		"ticdc_sink_kafka_franz_producer_uncompressed_bytes_total",
+	}, names)
 
 	hook.OnBrokerWrite(meta, 0, 0, 0, 0, nil)
 	hook.OnBrokerE2E(meta, 0, kgo.BrokerE2E{
@@ -132,4 +126,17 @@ func TestMetricsHookRecordsRawValues(t *testing.T) {
 	require.NoError(t, throttleMetric.Write(throttleHistogram))
 	require.Equal(t, uint64(2), throttleHistogram.GetHistogram().GetSampleCount())
 	require.InDelta(t, 0.06, throttleHistogram.GetHistogram().GetSampleSum(), 0.000001)
+	keyspace, changefeed, broker := changefeedID.Keyspace(), changefeedID.Name(), "1"
+	cleanupMetrics(changefeedID)
+	require.False(t, outgoingBytesTotal.DeleteLabelValues(keyspace, changefeed, broker))
+	require.False(t, requestsTotal.DeleteLabelValues(keyspace, changefeed, broker, metricResultSuccess))
+	require.False(t, requestsTotal.DeleteLabelValues(keyspace, changefeed, broker, metricResultWriteError))
+	require.False(t, responsesTotal.DeleteLabelValues(keyspace, changefeed, broker, metricResultSuccess))
+	require.False(t, responsesTotal.DeleteLabelValues(keyspace, changefeed, broker, metricResultReadError))
+	require.False(t, requestsInFlight.DeleteLabelValues(keyspace, changefeed, broker))
+	require.False(t, requestDuration.DeleteLabelValues(keyspace, changefeed, broker))
+	require.False(t, throttleTime.DeleteLabelValues(keyspace, changefeed, broker))
+	require.False(t, recordsPerBatch.DeleteLabelValues(keyspace, changefeed))
+	require.False(t, uncompressedBytesTotal.DeleteLabelValues(keyspace, changefeed))
+	require.False(t, compressedBytesTotal.DeleteLabelValues(keyspace, changefeed))
 }

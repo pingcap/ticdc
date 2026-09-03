@@ -94,6 +94,8 @@ func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
+		case <-p.client.Context().Done():
+			return context.Cause(p.client.Context())
 		case result := <-p.resultCh:
 			if result.err != nil {
 				log.Error("kafka message send failed",

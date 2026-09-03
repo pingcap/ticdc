@@ -16,7 +16,6 @@ package kafka
 import (
 	"context"
 	"io"
-	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -130,12 +129,4 @@ func TestAsyncProducerErrorWrappedOnce(t *testing.T) {
 	err := producer.handleProducerError(cause, &codecCommon.MessageLogInfo{})
 
 	requireKafkaSendError(t, err, cause)
-}
-
-func requireKafkaSendError(t *testing.T, err, cause error) {
-	t.Helper()
-	require.ErrorIs(t, err, errors.ErrKafkaSendMessage)
-	require.ErrorIs(t, err, cause)
-	require.Equal(t, 1, strings.Count(err.Error(), string(errors.ErrKafkaSendMessage.RFCCode())))
-	require.NotContains(t, err.Error(), "keyspace=test")
 }
