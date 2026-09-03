@@ -204,7 +204,9 @@ func (w *writer) flushEventsFromGroups(
 			return err
 		}
 		for _, batch := range prepared {
-			batch.Ack()
+			if err := batch.Ack(); err != nil {
+				return err
+			}
 		}
 		total += len(batchEvents)
 		batchEvents = nil
@@ -361,7 +363,12 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 			zap.Int64("spillPayloadWriteCount", stats.PayloadWriteCount),
 			zap.Int64("spillPayloadReadCount", stats.PayloadReadCount),
 			zap.Int64("spillPayloadDecodeCount", stats.PayloadDecodeCount),
-			zap.Int64("spillPendingBytes", stats.PendingBytes))
+			zap.Int64("spillIndexWriteCount", stats.IndexWriteCount),
+			zap.Int64("spillIndexReadCount", stats.IndexReadCount),
+			zap.Int64("spillAppliedEventCount", stats.AppliedEventCount),
+			zap.Int64("spillPendingBytes", stats.PendingBytes),
+			zap.Int("spillLivePayloads", stats.LivePayloads),
+			zap.Int("spillLiveSegments", stats.LiveSegments))
 	}
 	return nil
 }

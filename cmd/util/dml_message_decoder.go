@@ -27,15 +27,19 @@ type DMLMessageDecoder struct {
 	key, value []byte
 	data       *codeccommon.DMLMessageData
 	factory    DMLMessageDataFactory
-	restore    func(*codeccommon.DMLMessage) *codeccommon.DMLMessage
+	restorer   *codeccommon.DMLMessageRestorer
+	share      bool
+	position   int64
 }
 
 // NewDMLMessageDecoder wraps a decoder with the standard raw-message restorer.
 func NewDMLMessageDecoder(decoder codeccommon.Decoder) *DMLMessageDecoder {
-	return NewDMLMessageDecoderWithDataFactory(decoder,
+	d := NewDMLMessageDecoderWithDataFactory(decoder,
 		func(decoder codeccommon.Decoder, key, value []byte) *codeccommon.DMLMessageData {
 			return NewDMLMessageData(decoder, key, value)
 		})
+	d.share = true
+	return d
 }
 
 // NewDMLMessageDecoderWithDataFactory is for decoders such as CSV whose
@@ -46,11 +50,11 @@ func NewDMLMessageDecoderWithDataFactory(
 	return &DMLMessageDecoder{Decoder: decoder, factory: factory}
 }
 
-// SetDMLMessageRestorer sets the per-input restore wrapper before AddKeyValue.
-func (d *DMLMessageDecoder) SetDMLMessageRestorer(
-	restore func(*codeccommon.DMLMessage) *codeccommon.DMLMessage,
-) {
-	d.restore = restore
+// SetSourcePosition records broker-specific source metadata, such as a Kafka
+// offset. The position is persisted in every event descriptor and can be used
+// by an EventsGroup post-restore hook without retaining a closure per input.
+func (d *DMLMessageDecoder) SetSourcePosition(position int64) {
+	d.position = position
 }
 
 // AddKeyValue implements codeccommon.Decoder.
@@ -78,7 +82,15 @@ func (d *DMLMessageDecoder) NextDMLMessage() *codeccommon.DMLMessage {
 
 func (d *DMLMessageDecoder) attachDMLMessage(message *codeccommon.DMLMessage) {
 	if d.data == nil {
-		d.data = d.wrapDecode(d.factory(d.Decoder, d.key, d.value))
+		d.data = d.factory(d.Decoder, d.key, d.value)
+		if d.share {
+			if d.restorer == nil {
+				d.restorer = d.data.Restorer
+			} else {
+				d.data.Restorer = d.restorer
+			}
+		}
+		d.data.SourcePosition = d.position
 	}
 	d.data.AttachDMLMessage(message)
 }
@@ -90,25 +102,8 @@ func (d *DMLMessageDecoder) AttachCachedDMLMessage(message *codeccommon.DMLMessa
 		func([]byte) ([]*codeccommon.DMLMessage, error) {
 			return []*codeccommon.DMLMessage{message}, nil
 		})
-	d.wrapDecode(data).AttachDMLMessage(message)
-}
-
-func (d *DMLMessageDecoder) wrapDecode(data *codeccommon.DMLMessageData) *codeccommon.DMLMessageData {
-	if d.restore == nil {
-		return data
-	}
-	decode := data.Decode
-	data.Decode = func(payload []byte) ([]*codeccommon.DMLMessage, error) {
-		messages, err := decode(payload)
-		if err != nil {
-			return nil, err
-		}
-		for i, message := range messages {
-			messages[i] = d.restore(message)
-		}
-		return messages, nil
-	}
-	return data
+	data.SourcePosition = d.position
+	data.AttachDMLMessage(message)
 }
 
 // Unwrap returns the decoder that produces protocol messages.

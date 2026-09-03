@@ -24,29 +24,83 @@ import (
 // message after it has been spilled. One input can be attached to multiple
 // DMLMessages; Attach assigns each message its ordinal in that input.
 type DMLMessageData struct {
-	ID    uint64
-	Key   []byte
-	Value []byte
-	// Decode restores every DML message from one encoded input. The spill
-	// store owns the decoded result and maps messages by their attached ordinal.
-	Decode func([]byte) ([]*DMLMessage, error)
+	ID             uint64
+	Key            []byte
+	Value          []byte
+	Restorer       *DMLMessageRestorer
+	SourcePosition int64
 
 	nextDMLIndex uint64
+
+	spillStoreID   uint64
+	spillSegmentID uint64
+	spillOffset    int64
+	spillLength    uint64
 }
 
 var nextDMLMessageDataID atomic.Uint64
+
+// DMLMessageRestorer restores every DML message from one encoded input. A
+// restorer can be shared by all inputs decoded by the same decoder context, so
+// a spill queue does not need to retain one closure per input message.
+type DMLMessageRestorer struct {
+	ID     uint64
+	Decode func([]byte) ([]*DMLMessage, error)
+}
+
+var nextDMLMessageRestorerID atomic.Uint64
+
+// NewDMLMessageRestorer creates a decoder context that can be shared by many
+// DMLMessageData values.
+func NewDMLMessageRestorer(decode func([]byte) ([]*DMLMessage, error)) *DMLMessageRestorer {
+	return &DMLMessageRestorer{
+		ID:     nextDMLMessageRestorerID.Add(1),
+		Decode: decode,
+	}
+}
 
 // NewDMLMessageData creates data shared by DMLMessages decoded from one input.
 func NewDMLMessageData(
 	key, value []byte,
 	decode func([]byte) ([]*DMLMessage, error),
 ) *DMLMessageData {
+	return NewDMLMessageDataWithRestorer(key, value, NewDMLMessageRestorer(decode))
+}
+
+// NewDMLMessageDataWithRestorer creates input data using a reusable decoder
+// context.
+func NewDMLMessageDataWithRestorer(
+	key, value []byte,
+	restorer *DMLMessageRestorer,
+) *DMLMessageData {
 	return &DMLMessageData{
-		ID:     nextDMLMessageDataID.Add(1),
-		Key:    key,
-		Value:  value,
-		Decode: decode,
+		ID:       nextDMLMessageDataID.Add(1),
+		Key:      key,
+		Value:    value,
+		Restorer: restorer,
 	}
+}
+
+// SpillLocation returns the payload record already written by storeID.
+func (d *DMLMessageData) SpillLocation(storeID uint64) (
+	segmentID uint64, offset int64, length uint64, ok bool,
+) {
+	if d == nil || d.spillStoreID != storeID || d.spillSegmentID == 0 {
+		return 0, 0, 0, false
+	}
+	return d.spillSegmentID, d.spillOffset, d.spillLength, true
+}
+
+// SetSpillLocation records the payload location while this input is being
+// appended. The input object is short-lived; the location is copied into each
+// disk-backed event descriptor.
+func (d *DMLMessageData) SetSpillLocation(
+	storeID, segmentID uint64, offset int64, length uint64,
+) {
+	d.spillStoreID = storeID
+	d.spillSegmentID = segmentID
+	d.spillOffset = offset
+	d.spillLength = length
 }
 
 type DMLMessage struct {

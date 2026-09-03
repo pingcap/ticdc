@@ -20,6 +20,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -59,6 +60,24 @@ func attachTestDMLMessageDataWithPayload(
 	)
 	messageData.AttachDMLMessage(message)
 	return message
+}
+
+func readGroupIndex(t *testing.T, group *EventsGroup) []spilledMessage {
+	t.Helper()
+	require.NoError(t, group.store.flushEventIndex())
+	lower, upper := eventIndexBounds(group.id)
+	iterator, err := group.store.index.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, iterator.Close()) }()
+
+	entries := make([]spilledMessage, 0)
+	for valid := iterator.First(); valid; valid = iterator.Next() {
+		entry, err := decodeSpilledMessage(iterator.Key(), iterator.Value())
+		require.NoError(t, err)
+		entries = append(entries, entry)
+	}
+	require.NoError(t, iterator.Error())
+	return entries
 }
 
 func newTestDMLEvent(commitTs uint64, rowTypes ...common.RowType) *commonEvent.DMLEvent {
@@ -187,11 +206,11 @@ func TestEventsGroupSharesRawMessageData(t *testing.T) {
 	require.NoError(t, group.AppendMessage(first))
 	messageData.AttachDMLMessage(second)
 	require.NoError(t, group.AppendMessage(second))
-	require.Len(t, group.messages, 2)
-	require.Same(t, group.messages[0].payload, group.messages[1].payload)
-	require.Equal(t, group.messages[0].payload.handle, group.messages[1].payload.handle)
-	require.Equal(t, uint64(0), group.messages[0].dmlIndex)
-	require.Equal(t, uint64(1), group.messages[1].dmlIndex)
+	entries := readGroupIndex(t, group)
+	require.Len(t, entries, 2)
+	require.Equal(t, entries[0].location, entries[1].location)
+	require.Equal(t, uint64(0), entries[0].dmlIndex)
+	require.Equal(t, uint64(1), entries[1].dmlIndex)
 
 	messages, err := group.GetAllMessages()
 	require.NoError(t, err)
@@ -242,6 +261,7 @@ func TestEventsGroupReadsLargeSharedPayloadOnceAcrossBatches(t *testing.T) {
 	config := defaultSpillConfig()
 	config.resolveBatchMessages = 10000
 	store := newSpillStore(config)
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
 	group := NewEventsGroup(0, 1, store)
 	originalMessages := make([]*codeccommon.DMLMessage, messageCount)
 	restoredMessages := make([]*codeccommon.DMLMessage, messageCount)
@@ -277,11 +297,11 @@ func TestEventsGroupReadsLargeSharedPayloadOnceAcrossBatches(t *testing.T) {
 		batchCount++
 		resolved += len(batch.Messages)
 		if batchCount == 1 {
-			require.Equal(t, int64(group.messages[0].payload.handle.Length), batch.ResolvedBytes)
+			require.Positive(t, batch.ResolvedBytes)
 		} else {
 			require.Zero(t, batch.ResolvedBytes)
 		}
-		batch.Ack()
+		require.NoError(t, batch.Ack())
 		if !hasMore {
 			break
 		}
@@ -296,12 +316,13 @@ func TestEventsGroupReadsLargeSharedPayloadOnceAcrossBatches(t *testing.T) {
 	require.Equal(t, int64(1), store.Stats().PayloadDecodeCount)
 	require.Equal(t, store.Stats().PayloadWriteBytes, store.Stats().PayloadReadBytes)
 	require.Zero(t, store.PendingBytes())
-	require.Empty(t, store.payloads)
+	require.Empty(t, store.restorers)
 	require.Empty(t, store.segments)
 }
 
 func TestEventsGroupsSharePayloadUntilEveryGroupAcks(t *testing.T) {
 	store := NewSpillStore()
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
 	firstGroup := NewEventsGroup(0, 1, store)
 	secondGroup := NewEventsGroup(0, 2, store)
 	first := newTestDMLMessage(1)
@@ -330,15 +351,16 @@ func TestEventsGroupsSharePayloadUntilEveryGroupAcks(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, readCount)
 	require.Equal(t, 1, decodeCount)
-	require.Len(t, store.payloads, 1)
+	require.Equal(t, 1, store.Stats().LivePayloads)
 	require.Len(t, store.segments, 1)
-	spillPath := firstGroup.messages[0].payload.segment.file.Path()
+	entry := readGroupIndex(t, firstGroup)[0]
+	spillPath := store.segments[entry.location.segmentID].file.Path()
 
-	firstBatch.Ack()
-	require.Len(t, store.payloads, 1)
+	require.NoError(t, firstBatch.Ack())
+	require.Equal(t, 1, store.Stats().LivePayloads)
 	require.FileExists(t, spillPath)
-	secondBatch.Ack()
-	require.Empty(t, store.payloads)
+	require.NoError(t, secondBatch.Ack())
+	require.Zero(t, store.Stats().LivePayloads)
 	require.Empty(t, store.segments)
 	_, err = os.Stat(spillPath)
 	require.True(t, os.IsNotExist(err))
@@ -346,21 +368,23 @@ func TestEventsGroupsSharePayloadUntilEveryGroupAcks(t *testing.T) {
 
 func TestEventsGroupPrepareDoesNotReleaseBeforeAck(t *testing.T) {
 	store := NewSpillStore()
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
 	group := NewEventsGroup(0, 1, store)
 	message := attachTestDMLMessageDataWithPayload(newTestDMLMessage(1), nil, []byte("payload"))
 	require.NoError(t, group.AppendMessage(message))
-	spillPath := group.messages[0].payload.segment.file.Path()
+	entry := readGroupIndex(t, group)[0]
+	spillPath := store.segments[entry.location.segmentID].file.Path()
 
 	batch, _, err := group.PrepareResolve(math.MaxUint64, store.ResolveLimit())
 	require.NoError(t, err)
 	require.Len(t, batch.Messages, 1)
-	require.Len(t, group.messages, 1)
+	require.Equal(t, int64(1), group.pendingCount)
 	require.FileExists(t, spillPath)
 	_, _, err = group.PrepareResolve(math.MaxUint64, store.ResolveLimit())
 	require.Error(t, err)
 
-	batch.Ack()
-	require.Empty(t, group.messages)
+	require.NoError(t, batch.Ack())
+	require.Zero(t, group.pendingCount)
 	_, err = os.Stat(spillPath)
 	require.True(t, os.IsNotExist(err))
 }
@@ -372,15 +396,18 @@ func TestEventsGroupSegmentsAndPendingWatermarks(t *testing.T) {
 	config.pendingLowBytes = 41
 	config.messageMetadataBytes = 1
 	store := newSpillStore(config)
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
 	group := NewEventsGroup(0, 1, store)
 
 	first := attachTestDMLMessageDataWithPayload(newTestDMLMessage(1), nil, make([]byte, 16))
 	second := attachTestDMLMessageDataWithPayload(newTestDMLMessage(2), nil, make([]byte, 16))
 	require.NoError(t, group.AppendMessage(first))
-	firstSegment := group.messages[0].payload.segment
+	firstEntry := readGroupIndex(t, group)[0]
+	firstSegment := store.segments[firstEntry.location.segmentID]
 	firstPath := firstSegment.file.Path()
 	require.NoError(t, group.AppendMessage(second))
-	secondPath := group.messages[1].payload.segment.file.Path()
+	entries := readGroupIndex(t, group)
+	secondPath := store.segments[entries[1].location.segmentID].file.Path()
 
 	require.Len(t, store.segments, 2)
 	require.Equal(t, int64(82), store.PendingBytes())
@@ -407,6 +434,7 @@ func TestEventsGroupKeepsSharedPayloadInOneSegment(t *testing.T) {
 	config := defaultSpillConfig()
 	config.segmentMessages = 1
 	store := newSpillStore(config)
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
 	group := NewEventsGroup(0, 1, store)
 	first := newTestDMLMessage(1)
 	second := newTestDMLMessage(2)
@@ -420,10 +448,9 @@ func TestEventsGroupKeepsSharedPayloadInOneSegment(t *testing.T) {
 	messageData.AttachDMLMessage(second)
 	require.NoError(t, group.AppendMessage(second))
 
+	entries := readGroupIndex(t, group)
 	require.Len(t, store.segments, 1)
-	require.Same(t, group.messages[0].payload, group.messages[1].payload)
-	require.Same(t, group.messages[0].payload.segment, group.messages[1].payload.segment)
-	require.Equal(t, group.messages[0].payload.handle, group.messages[1].payload.handle)
+	require.Equal(t, entries[0].location, entries[1].location)
 	require.NoError(t, group.Cleanup())
 }
 
@@ -431,6 +458,7 @@ func TestEventsGroupAllowsOversizeSegment(t *testing.T) {
 	config := defaultSpillConfig()
 	config.segmentBytes = 16
 	store := newSpillStore(config)
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
 	group := NewEventsGroup(0, 1, store)
 
 	message := attachTestDMLMessageDataWithPayload(
@@ -451,6 +479,7 @@ func TestEventsGroupAllowsOversizeSegment(t *testing.T) {
 func TestEventsGroupRestoreErrorDoesNotReleasePendingData(t *testing.T) {
 	config := defaultSpillConfig()
 	store := newSpillStore(config)
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
 	group := NewEventsGroup(0, 1, store)
 	wantErr := errors.New("restore failed")
 	messageData := codeccommon.NewDMLMessageData([]byte("key"), []byte("value"),
@@ -464,7 +493,7 @@ func TestEventsGroupRestoreErrorDoesNotReleasePendingData(t *testing.T) {
 
 	_, _, _, err := group.ResolveIntoBatch(math.MaxUint64, nil, store.ResolveLimit())
 	require.ErrorIs(t, err, wantErr)
-	require.Len(t, group.messages, 1)
+	require.Equal(t, int64(1), group.pendingCount)
 	require.Equal(t, pendingBytes, store.PendingBytes())
 	require.NoError(t, group.Cleanup())
 	require.Zero(t, store.PendingBytes())
@@ -512,27 +541,130 @@ func TestSpillStoreAllowsPendingAboveHighWatermark(t *testing.T) {
 
 func TestSpillStoreDefaults(t *testing.T) {
 	store := NewSpillStore()
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
 	require.Equal(t, int64(128*1024*1024), store.config.segmentBytes)
 	require.Equal(t, int64(1024*1024*1024), store.config.pendingHighBytes)
 	require.Equal(t, int64(512*1024*1024), store.config.pendingLowBytes)
 	require.Equal(t, ResolveLimit{MaxBytes: 64 * 1024 * 1024, MaxMessages: 10000}, store.ResolveLimit())
+	require.Equal(t, 0.90, store.config.diskUsageLimit)
 }
 
-func TestEventsGroupShrinksResolvedMetadata(t *testing.T) {
-	group := NewEventsGroup(0, 1)
-	const messageCount = 2048
-	for i := 1; i <= messageCount; i++ {
-		require.NoError(t, group.AppendMessage(
-			attachTestDMLMessageData(newTestDMLMessage(uint64(i)))))
+func TestSpillStoreRejectsWriteAboveDiskUsageLimit(t *testing.T) {
+	config := defaultSpillConfig()
+	config.diskCheckBytes = 1
+	store := newSpillStore(config)
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
+	store.diskUsage = func(string) (filesystemUsage, error) {
+		return filesystemUsage{usedBytes: 91, totalBytes: 100}, nil
 	}
-	require.Greater(t, cap(group.messages), 1024)
+	group := NewEventsGroup(0, 1, store)
 
-	messages, hasMore, _, err := group.ResolveIntoBatch(1536, nil, ResolveLimit{})
+	err := group.AppendMessage(attachTestDMLMessageData(newTestDMLMessage(1)))
+	require.ErrorContains(t, err, "spill filesystem usage")
+	require.ErrorContains(t, err, "90.00% limit")
+	require.Same(t, store.terminalErr, err)
+	require.Zero(t, group.pendingCount)
+	require.Empty(t, store.segments)
+	require.NoError(t, store.Cleanup())
+}
+
+func TestEventsGroupTracksResolvedAndAppliedFrontiers(t *testing.T) {
+	store := NewSpillStore()
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
+	group := NewEventsGroup(0, 1, store)
+	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(newTestDMLMessage(1))))
+	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(newTestDMLMessage(2))))
+
+	batch, hasMore, err := group.PrepareResolve(1, store.ResolveLimit())
 	require.NoError(t, err)
 	require.False(t, hasMore)
-	require.Len(t, messages, 1536)
-	require.Len(t, group.messages, 512)
-	require.Equal(t, len(group.messages), cap(group.messages))
+	require.Equal(t, uint64(2), group.HighWatermark)
+	require.Equal(t, uint64(1), group.resolvedTs)
+	require.Zero(t, group.appliedTs)
+	require.Equal(t, int64(2), group.pendingCount)
+
+	require.NoError(t, batch.Ack())
+	require.Equal(t, uint64(1), group.appliedTs)
+	require.Equal(t, int64(1), group.pendingCount)
+	require.Equal(t, int64(1), store.Stats().AppliedEventCount)
+	require.NoError(t, group.Cleanup())
+	require.NoError(t, store.Cleanup())
+}
+
+func TestEventsGroupRestoresPersistedSourcePosition(t *testing.T) {
+	group := NewEventsGroup(3, 1)
+	message := newTestDMLMessage(10)
+	messageData := codeccommon.NewDMLMessageData(nil, nil,
+		func([]byte) ([]*codeccommon.DMLMessage, error) {
+			return []*codeccommon.DMLMessage{message}, nil
+		})
+	messageData.SourcePosition = 42
+	messageData.AttachDMLMessage(message)
+	var restoredPosition int64
+	group.SetPostRestore(func(message *codeccommon.DMLMessage, position int64) *codeccommon.DMLMessage {
+		restoredPosition = position
+		return message
+	})
+
+	require.NoError(t, group.AppendMessage(message))
+	messages, err := group.GetAllMessages()
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Equal(t, int64(42), restoredPosition)
+}
+
+func TestSpillStoreRestoreCacheHasByteAndEntryBounds(t *testing.T) {
+	config := defaultSpillConfig()
+	config.resolveBatchBytes = 1 << 20
+	config.resolveBatchMessages = 2
+	store := newSpillStore(config)
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
+	group := NewEventsGroup(0, 1, store)
+	for commitTs := uint64(1); commitTs <= 4; commitTs++ {
+		require.NoError(t, group.AppendMessage(
+			attachTestDMLMessageDataWithPayload(newTestDMLMessage(commitTs), nil, []byte{byte(commitTs)})))
+	}
+
+	for commitTs := uint64(1); commitTs <= 3; commitTs++ {
+		batch, hasMore, err := group.PrepareResolve(4, ResolveLimit{MaxMessages: 1})
+		require.NoError(t, err)
+		require.True(t, hasMore)
+		require.Equal(t, commitTs, batch.Messages[0].GetCommitTs())
+		require.NoError(t, batch.Ack())
+		require.LessOrEqual(t, len(store.cache), 2)
+		require.LessOrEqual(t, store.cacheBytes, config.resolveBatchBytes)
+	}
+
+	batch, hasMore, err := group.PrepareResolve(4, ResolveLimit{MaxMessages: 1})
+	require.NoError(t, err)
+	require.False(t, hasMore)
+	require.NoError(t, batch.Ack())
+	require.Empty(t, store.cache)
+}
+
+func TestEventsGroupKeepsPerEventMetadataOnDisk(t *testing.T) {
+	group := NewEventsGroup(0, 1)
+	const messageCount = 2048
+	messages := make([]*codeccommon.DMLMessage, 0, messageCount)
+	for i := 1; i <= messageCount; i++ {
+		messages = append(messages, newTestDMLMessage(uint64(i)))
+	}
+	messageData := codeccommon.NewDMLMessageData(nil, nil,
+		func([]byte) ([]*codeccommon.DMLMessage, error) { return messages, nil })
+	for _, message := range messages {
+		messageData.AttachDMLMessage(message)
+		require.NoError(t, group.AppendMessage(message))
+	}
+	require.Equal(t, int64(messageCount), group.pendingCount)
+	require.Len(t, group.segmentRefs, 1)
+	require.Len(t, group.restorerRefs, 1)
+
+	resolved, hasMore, _, err := group.ResolveIntoBatch(1536, nil, ResolveLimit{})
+	require.NoError(t, err)
+	require.False(t, hasMore)
+	require.Len(t, resolved, 1536)
+	require.Equal(t, int64(512), group.pendingCount)
+	require.Len(t, readGroupIndex(t, group), 512)
 	require.NoError(t, group.Cleanup())
 }
 
@@ -564,8 +696,10 @@ func TestEventsGroupResolveIntoAppendsAndCleansResolvedSpillRecords(t *testing.T
 	require.Equal(t, m1.GetCommitTs(), dst[0].GetCommitTs())
 	require.Equal(t, m2.GetCommitTs(), dst[1].GetCommitTs())
 
-	require.Len(t, group.messages, 1)
-	require.Equal(t, m3.GetCommitTs(), group.messages[0].commitTs)
+	require.Equal(t, int64(1), group.pendingCount)
+	entries := readGroupIndex(t, group)
+	require.Len(t, entries, 1)
+	require.Equal(t, m3.GetCommitTs(), entries[0].commitTs)
 	require.FileExists(t, spillPath)
 
 	_, err = group.GetAllMessages()
@@ -590,9 +724,10 @@ func TestEventsGroupResolveIntoNoopWhenNothingResolved(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, dst, 0)
-	require.Len(t, group.messages, 2)
-	require.Equal(t, m1.GetCommitTs(), group.messages[0].commitTs)
-	require.Equal(t, m2.GetCommitTs(), group.messages[1].commitTs)
+	require.Equal(t, int64(2), group.pendingCount)
+	entries := readGroupIndex(t, group)
+	require.Equal(t, m1.GetCommitTs(), entries[0].commitTs)
+	require.Equal(t, m2.GetCommitTs(), entries[1].commitTs)
 }
 
 func TestEventsGroupResolveIntoClearsAllWhenFullyResolved(t *testing.T) {
@@ -613,7 +748,7 @@ func TestEventsGroupResolveIntoClearsAllWhenFullyResolved(t *testing.T) {
 	require.Equal(t, m1.GetCommitTs(), dst[0].GetCommitTs())
 	require.Equal(t, m2.GetCommitTs(), dst[1].GetCommitTs())
 
-	require.Len(t, group.messages, 0)
+	require.Zero(t, group.pendingCount)
 	require.Nil(t, group.store.activeSegment)
 	require.Empty(t, group.store.segments)
 	_, err = os.Stat(spillPath)
@@ -637,8 +772,9 @@ func TestEventsGroupResolveIntoSortsOutOfOrderResolvedMessages(t *testing.T) {
 	require.Equal(t, m2.GetCommitTs(), dst[0].GetCommitTs())
 	require.Equal(t, m1.GetCommitTs(), dst[1].GetCommitTs())
 
-	require.Len(t, group.messages, 1)
-	require.Equal(t, m3.GetCommitTs(), group.messages[0].commitTs)
+	require.Equal(t, int64(1), group.pendingCount)
+	entries := readGroupIndex(t, group)
+	require.Equal(t, m3.GetCommitTs(), entries[0].commitTs)
 }
 
 func TestEventsGroupResolveIntoKeepsSameCommitTsStable(t *testing.T) {
@@ -658,7 +794,7 @@ func TestEventsGroupResolveIntoKeepsSameCommitTsStable(t *testing.T) {
 	require.Equal(t, m2.GetCommitTs(), dst[0].GetCommitTs())
 	require.Equal(t, m1.GetCommitTs(), dst[1].GetCommitTs())
 	require.Equal(t, m3.GetCommitTs(), dst[2].GetCommitTs())
-	require.Empty(t, group.messages)
+	require.Zero(t, group.pendingCount)
 }
 
 func TestEventsGroupGetAllMessagesSortsOutOfOrderMessages(t *testing.T) {
@@ -677,7 +813,7 @@ func TestEventsGroupGetAllMessagesSortsOutOfOrderMessages(t *testing.T) {
 	require.Equal(t, m2.GetCommitTs(), messages[0].GetCommitTs())
 	require.Equal(t, m1.GetCommitTs(), messages[1].GetCommitTs())
 	require.Equal(t, m3.GetCommitTs(), messages[2].GetCommitTs())
-	require.Empty(t, group.messages)
+	require.Zero(t, group.pendingCount)
 }
 
 func TestEventsGroupRestoresSpilledEventRowsAndTableInfo(t *testing.T) {

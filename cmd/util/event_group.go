@@ -14,20 +14,29 @@
 package util
 
 import (
+	"container/list"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"os"
-	"sort"
+	"path/filepath"
+	"sync/atomic"
 
+	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/spill"
 	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
 )
 
-const eventsGroupSpillPattern = "ticdc-events-group-*.spill"
+const (
+	eventsGroupSpillDirPattern = "ticdc-events-group-*"
+	payloadSpillPattern        = "payload-*.spill"
+	spillIndexDir              = "index"
+)
 
 const (
 	defaultSpillSegmentBytes    = 128 * 1024 * 1024
@@ -37,7 +46,14 @@ const (
 	defaultResolveBatchBytes    = 64 * 1024 * 1024
 	defaultResolveBatchMessages = 10000
 	defaultMessageMetadataBytes = 128
+	defaultIndexBatchMessages   = 10000
+	defaultDiskCheckBytes       = 16 * 1024 * 1024
+	defaultDiskUsageLimit       = 0.90
+	defaultIndexCacheBytes      = 32 * 1024 * 1024
+	defaultIndexMemTableBytes   = 16 * 1024 * 1024
 	spillRecordLengthBytes      = 8
+	eventIndexKeyBytes          = 3 * 8
+	eventIndexValueBytes        = 6 * 8
 )
 
 type spillConfig struct {
@@ -48,6 +64,9 @@ type spillConfig struct {
 	resolveBatchBytes    int64
 	resolveBatchMessages int
 	messageMetadataBytes int64
+	indexBatchMessages   int
+	diskCheckBytes       int64
+	diskUsageLimit       float64
 }
 
 func defaultSpillConfig() spillConfig {
@@ -59,6 +78,9 @@ func defaultSpillConfig() spillConfig {
 		resolveBatchBytes:    defaultResolveBatchBytes,
 		resolveBatchMessages: defaultResolveBatchMessages,
 		messageMetadataBytes: defaultMessageMetadataBytes,
+		indexBatchMessages:   defaultIndexBatchMessages,
+		diskCheckBytes:       defaultDiskCheckBytes,
+		diskUsageLimit:       defaultDiskUsageLimit,
 	}
 }
 
@@ -78,21 +100,91 @@ type SpillStats struct {
 	PayloadDecodeCount int64
 	LivePayloads       int
 	LiveSegments       int
+	IndexWriteCount    int64
+	IndexReadCount     int64
+	AppliedEventCount  int64
 }
 
-// SpillStore owns spill payloads and segments across all event groups in one consumer.
-// Its watermarks request draining; they are not a hard quota and never reject an append.
+type filesystemUsage struct {
+	usedBytes  uint64
+	totalBytes uint64
+}
+
+type payloadLocation struct {
+	segmentID uint64
+	handle    spill.Handle
+}
+
+type spillSegment struct {
+	id            uint64
+	file          *spill.RecordFile
+	bytes         int64
+	payloadCount  int
+	pendingEvents int64
+}
+
+type registeredRestorer struct {
+	decode func([]byte) ([]*codeccommon.DMLMessage, error)
+	refs   int64
+}
+
+type payloadCacheKey struct {
+	segmentID uint64
+	offset    int64
+}
+
+type payloadCacheEntry struct {
+	key      payloadCacheKey
+	messages []*codeccommon.DMLMessage
+	bytes    int64
+	pins     int
+	element  *list.Element
+}
+
+type spilledMessage struct {
+	key            []byte
+	commitTs       uint64
+	location       payloadLocation
+	dmlIndex       uint64
+	restorerID     uint64
+	sourcePosition int64
+}
+
+// SpillStore owns a disk-backed ordered event index and append-only payload
+// segments shared by all event groups in one consumer. Pending DML descriptors
+// live in Pebble rather than one Go object per row. Only a bounded restore cache
+// and segment-level reference counts remain in memory. Filesystem usage is
+// checked periodically while appending and before every applied-range delete;
+// crossing the hard limit latches an error so the consumer terminates.
 type SpillStore struct {
-	config        spillConfig
-	segments      map[*spillSegment]struct{}
-	activeSegment *spillSegment
-	payloads      map[uint64]*spillPayload
-	pendingBytes  int64
-	draining      bool
+	id                  uint64
+	config              spillConfig
+	rootDir             string
+	index               *pebble.DB
+	indexCache          *pebble.Cache
+	indexBatch          *pebble.Batch
+	indexBatchCount     int
+	segments            map[uint64]*spillSegment
+	activeSegment       *spillSegment
+	restorers           map[uint64]*registeredRestorer
+	cache               map[payloadCacheKey]*payloadCacheEntry
+	cacheLRU            list.List
+	cacheBytes          int64
+	pendingBytes        int64
+	livePayloads        int
+	draining            bool
+	nextSegmentID       uint64
+	nextGroupID         uint64
+	nextSequence        uint64
+	bytesSinceDiskCheck int64
+	terminalErr         error
 
 	readRecord func(*spill.RecordFile, spill.Handle) ([]byte, error)
+	diskUsage  func(string) (filesystemUsage, error)
 	stats      SpillStats
 }
+
+var nextSpillStoreID atomic.Uint64
 
 // NewSpillStore creates a process-wide store with the default spill limits.
 func NewSpillStore() *SpillStore {
@@ -101,12 +193,15 @@ func NewSpillStore() *SpillStore {
 
 func newSpillStore(config spillConfig) *SpillStore {
 	return &SpillStore{
-		config:   config,
-		segments: make(map[*spillSegment]struct{}),
-		payloads: make(map[uint64]*spillPayload),
+		id:        nextSpillStoreID.Add(1),
+		config:    config,
+		segments:  make(map[uint64]*spillSegment),
+		restorers: make(map[uint64]*registeredRestorer),
+		cache:     make(map[payloadCacheKey]*payloadCacheEntry),
 		readRecord: func(file *spill.RecordFile, handle spill.Handle) ([]byte, error) {
 			return file.Read(handle)
 		},
+		diskUsage: getFilesystemUsage,
 	}
 }
 
@@ -118,7 +213,8 @@ func (s *SpillStore) ResolveLimit() ResolveLimit {
 	}
 }
 
-// PendingBytes returns conservatively accounted payload, decoded cache, and metadata bytes.
+// PendingBytes returns conservatively accounted payload, decoded cache, and
+// logical index bytes. Physical index usage is covered by the filesystem guard.
 func (s *SpillStore) PendingBytes() int64 {
 	return s.pendingBytes
 }
@@ -132,7 +228,7 @@ func (s *SpillStore) ShouldDrain() bool {
 func (s *SpillStore) Stats() SpillStats {
 	stats := s.stats
 	stats.PendingBytes = s.pendingBytes
-	stats.LivePayloads = len(s.payloads)
+	stats.LivePayloads = s.livePayloads
 	stats.LiveSegments = len(s.segments)
 	return stats
 }
@@ -169,68 +265,114 @@ func (s *SpillStore) releasePending(bytes int64) {
 	}
 }
 
-type spillSegment struct {
-	file            *spill.RecordFile
-	bytes           int64
-	payloadCount    int
-	pendingPayloads int
-}
-
-type spillPayload struct {
-	id           uint64
-	segment      *spillSegment
-	handle       spill.Handle
-	decode       func([]byte) ([]*codeccommon.DMLMessage, error)
-	decoded      []*codeccommon.DMLMessage
-	decodedBytes int64
-	loaded       bool
-	refs         int
-}
-
-type spilledMessage struct {
-	commitTs uint64
-	payload  *spillPayload
-	dmlIndex uint64
-}
-
 // EventsGroup stores change event messages.
 type EventsGroup struct {
 	Partition int32
 	tableID   int64
 
-	messages      []spilledMessage
-	store         *SpillStore
-	batchPending  bool
-	outOfOrder    bool
-	HighWatermark uint64
+	id             uint64
+	store          *SpillStore
+	ownsStore      bool
+	pendingCount   int64
+	segmentRefs    map[uint64]int64
+	restorerRefs   map[uint64]int64
+	batchPending   bool
+	outOfOrder     bool
+	lastAppendedTs uint64
+	resolvedTs     uint64
+	appliedTs      uint64
+	postRestore    func(*codeccommon.DMLMessage, int64) *codeccommon.DMLMessage
+	HighWatermark  uint64
 }
 
 // NewEventsGroup will create new event group.
 func NewEventsGroup(partition int32, tableID int64, stores ...*SpillStore) *EventsGroup {
 	store := NewSpillStore()
+	ownsStore := true
 	if len(stores) != 0 && stores[0] != nil {
 		store = stores[0]
+		ownsStore = false
 	}
+	store.nextGroupID++
 	return &EventsGroup{
-		Partition: partition,
-		tableID:   tableID,
-		messages:  make([]spilledMessage, 0, 1024),
-		store:     store,
+		Partition:    partition,
+		tableID:      tableID,
+		id:           store.nextGroupID,
+		store:        store,
+		ownsStore:    ownsStore,
+		segmentRefs:  make(map[uint64]int64),
+		restorerRefs: make(map[uint64]int64),
 	}
 }
 
+// SetPostRestore installs a bounded group-level hook for source metadata that
+// must be applied after lazy decoding. Unlike the old per-input closure, this
+// hook does not grow with the backlog.
+func (g *EventsGroup) SetPostRestore(
+	restore func(*codeccommon.DMLMessage, int64) *codeccommon.DMLMessage,
+) {
+	g.postRestore = restore
+}
+
+func (s *SpillStore) ensureOpen() error {
+	if s.terminalErr != nil {
+		return s.terminalErr
+	}
+	if s.index != nil {
+		return nil
+	}
+
+	rootDir, err := os.MkdirTemp(os.TempDir(), eventsGroupSpillDirPattern)
+	if err != nil {
+		return errors.WrapError(errors.ErrSpillFileOp, err, "create spill store directory")
+	}
+	s.rootDir = rootDir
+	if err := s.checkDiskUsage(0, true); err != nil {
+		return err
+	}
+
+	cache := pebble.NewCache(defaultIndexCacheBytes)
+	options := &pebble.Options{
+		Cache:                       cache,
+		DisableWAL:                  true,
+		MaxOpenFiles:                128,
+		MemTableSize:                defaultIndexMemTableBytes,
+		MemTableStopWritesThreshold: 2,
+		MaxConcurrentCompactions:    func() int { return 1 },
+	}
+	index, err := pebble.Open(filepath.Join(rootDir, spillIndexDir), options)
+	if err != nil {
+		cache.Unref()
+		return errors.WrapError(errors.ErrSpillFileOp, err, "open spill event index")
+	}
+	s.indexCache = cache
+	s.index = index
+	s.indexBatch = index.NewBatch()
+	return nil
+}
+
 func (s *SpillStore) newSegment() error {
-	file, err := spill.NewRecordFile(os.TempDir(), eventsGroupSpillPattern)
+	if err := s.ensureOpen(); err != nil {
+		return err
+	}
+	if err := s.checkDiskUsage(0, true); err != nil {
+		return err
+	}
+	file, err := spill.NewRecordFile(s.rootDir, payloadSpillPattern)
 	if err != nil {
 		return err
 	}
-	segment := &spillSegment{file: file}
-	s.segments[segment] = struct{}{}
+	s.nextSegmentID++
+	segment := &spillSegment{id: s.nextSegmentID, file: file}
+	s.segments[segment.id] = segment
 	s.activeSegment = segment
 	return nil
 }
 
 func (s *SpillStore) prepareSegment(recordBytes int64) error {
+	if err := s.ensureOpen(); err != nil {
+		return err
+	}
 	segment := s.activeSegment
 	if segment != nil && (segment.bytes+recordBytes > s.config.segmentBytes ||
 		segment.payloadCount >= s.config.segmentMessages) {
@@ -270,139 +412,335 @@ func appendMessageData(file *spill.RecordFile, key, value []byte) (spill.Handle,
 	return file.AppendChunks(keyLen[:], key, valueLen[:], value)
 }
 
-func (s *SpillStore) acquirePayload(data *codeccommon.DMLMessageData) (*spillPayload, error) {
-	if payload, ok := s.payloads[data.ID]; ok {
-		return payload, nil
+func (s *SpillStore) acquirePayload(data *codeccommon.DMLMessageData) (payloadLocation, error) {
+	if segmentID, offset, length, ok := data.SpillLocation(s.id); ok {
+		if _, exists := s.segments[segmentID]; exists {
+			return payloadLocation{
+				segmentID: segmentID,
+				handle:    spill.Handle{Offset: offset, Length: length},
+			}, nil
+		}
 	}
 	recordBytes := spillMessageDataSize(data.Key, data.Value)
+	if err := s.checkDiskUsage(recordBytes, false); err != nil {
+		return payloadLocation{}, err
+	}
 	if err := s.prepareSegment(recordBytes); err != nil {
-		return nil, err
+		return payloadLocation{}, err
 	}
 	segment := s.activeSegment
 	handle, err := appendMessageData(segment.file, data.Key, data.Value)
 	if err != nil {
-		return nil, err
+		return payloadLocation{}, err
 	}
-	payload := &spillPayload{
-		id:      data.ID,
-		segment: segment,
-		handle:  handle,
-		decode:  data.Decode,
-	}
-	s.payloads[data.ID] = payload
+	data.SetSpillLocation(s.id, segment.id, handle.Offset, handle.Length)
 	segment.bytes += recordBytes
 	segment.payloadCount++
-	segment.pendingPayloads++
+	s.livePayloads++
 	s.addPending(recordBytes)
 	s.stats.PayloadWriteBytes += int64(handle.Length)
 	s.stats.PayloadWriteCount++
 	s.sealFullSegment()
-	return payload, nil
-}
-
-func (s *SpillStore) retainPayload(payload *spillPayload) {
-	payload.refs++
-	s.addPending(s.config.messageMetadataBytes)
-}
-
-func (s *SpillStore) loadPayload(payload *spillPayload) (int64, error) {
-	if payload.loaded {
-		return 0, nil
-	}
-	if payload.segment == nil || payload.segment.file == nil {
-		return 0, errors.ErrSpillFileOp.FastGenByArgs("spill payload segment is missing")
-	}
-	data, err := s.readRecord(payload.segment.file, payload.handle)
-	if err != nil {
-		return 0, err
-	}
-	messages, err := payload.decode(data)
-	if err != nil {
-		return 0, err
-	}
-	payload.decoded = messages
-	payload.loaded = true
-	payload.decodedBytes = int64(payload.handle.Length)
-	s.addPending(payload.decodedBytes)
-	s.stats.PayloadReadBytes += int64(payload.handle.Length)
-	s.stats.PayloadReadCount++
-	s.stats.PayloadDecodeCount++
-	return int64(payload.handle.Length), nil
-}
-
-func (s *SpillStore) messageAt(payload *spillPayload, index uint64) (*codeccommon.DMLMessage, int64, error) {
-	readBytes, err := s.loadPayload(payload)
-	if err != nil {
-		return nil, 0, err
-	}
-	if index >= uint64(len(payload.decoded)) {
-		return nil, 0, errors.ErrSpillFileOp.FastGenByArgs("DML spill message index is out of range")
-	}
-	message := payload.decoded[index]
-	if message == nil {
-		return nil, 0, errors.ErrSpillFileOp.FastGenByArgs("DML spill message was already released")
-	}
-	return message, readBytes, nil
-}
-
-func (s *SpillStore) releasePayloadRef(payload *spillPayload, index uint64) {
-	if payload.loaded && index < uint64(len(payload.decoded)) {
-		payload.decoded[index] = nil
-	}
-	payload.refs--
-	s.releasePending(s.config.messageMetadataBytes)
-	if payload.refs != 0 {
-		return
-	}
-	if payload.loaded {
-		s.releasePending(payload.decodedBytes)
-	}
-	payload.decoded = nil
-	payload.decode = nil
-	delete(s.payloads, payload.id)
-
-	segment := payload.segment
-	segment.pendingPayloads--
-	if segment.pendingPayloads == 0 {
-		s.cleanupSegment(segment)
-	}
+	return payloadLocation{segmentID: segment.id, handle: handle}, nil
 }
 
 func (s *SpillStore) cleanupSegment(segment *spillSegment) {
 	if s.activeSegment == segment {
 		s.activeSegment = nil
 	}
+	s.evictSegmentCache(segment.id)
 	if err := segment.file.Cleanup(); err != nil {
 		log.Warn("cleanup spill segment failed", zap.String("path", segment.file.Path()), zap.Error(err))
 		return
 	}
 	s.releasePending(segment.bytes)
-	delete(s.segments, segment)
+	s.livePayloads -= segment.payloadCount
+	delete(s.segments, segment.id)
 }
 
-// Cleanup removes all remaining payload and segment state when a consumer stops.
-func (s *SpillStore) Cleanup() error {
-	for _, payload := range s.payloads {
-		s.releasePending(int64(payload.refs) * s.config.messageMetadataBytes)
-		if payload.loaded {
-			s.releasePending(payload.decodedBytes)
-		}
-		payload.decoded = nil
-		payload.decode = nil
+func (s *SpillStore) appendEventIndex(key, value []byte) error {
+	if err := s.ensureOpen(); err != nil {
+		return err
 	}
-	clear(s.payloads)
-	s.activeSegment = nil
-	var cleanupErr error
-	for segment := range s.segments {
-		if err := segment.file.Cleanup(); err != nil {
-			if cleanupErr == nil {
-				cleanupErr = err
+	if err := s.checkDiskUsage(int64(len(key)+len(value)), false); err != nil {
+		return err
+	}
+	if err := s.indexBatch.Set(key, value, nil); err != nil {
+		return errors.WrapError(errors.ErrSpillFileOp, err, "append spill event index")
+	}
+	s.indexBatchCount++
+	if s.indexBatchCount >= s.config.indexBatchMessages {
+		return s.flushEventIndex()
+	}
+	return nil
+}
+
+func (s *SpillStore) flushEventIndex() error {
+	if s.indexBatchCount == 0 {
+		return nil
+	}
+	if err := s.indexBatch.Commit(pebble.NoSync); err != nil {
+		return errors.WrapError(errors.ErrSpillFileOp, err, "commit spill event index")
+	}
+	if err := s.indexBatch.Close(); err != nil {
+		return errors.WrapError(errors.ErrSpillFileOp, err, "close committed spill event index batch")
+	}
+	s.indexBatch = s.index.NewBatch()
+	s.indexBatchCount = 0
+	return nil
+}
+
+func encodeEventIndexKey(groupID, commitTs, sequence uint64) []byte {
+	key := make([]byte, eventIndexKeyBytes)
+	binary.BigEndian.PutUint64(key[0:8], groupID)
+	binary.BigEndian.PutUint64(key[8:16], commitTs)
+	binary.BigEndian.PutUint64(key[16:24], sequence)
+	return key
+}
+
+func eventIndexBounds(groupID uint64) ([]byte, []byte) {
+	lower := make([]byte, 8)
+	upper := make([]byte, 8)
+	binary.BigEndian.PutUint64(lower, groupID)
+	binary.BigEndian.PutUint64(upper, groupID+1)
+	return lower, upper
+}
+
+func encodeEventIndexValue(
+	location payloadLocation, dmlIndex, restorerID uint64, sourcePosition int64,
+) []byte {
+	value := make([]byte, eventIndexValueBytes)
+	binary.BigEndian.PutUint64(value[0:8], location.segmentID)
+	binary.BigEndian.PutUint64(value[8:16], uint64(location.handle.Offset))
+	binary.BigEndian.PutUint64(value[16:24], location.handle.Length)
+	binary.BigEndian.PutUint64(value[24:32], dmlIndex)
+	binary.BigEndian.PutUint64(value[32:40], restorerID)
+	binary.BigEndian.PutUint64(value[40:48], uint64(sourcePosition))
+	return value
+}
+
+func decodeEventIndexCommitTs(key []byte) (uint64, error) {
+	if len(key) != eventIndexKeyBytes {
+		return 0, errors.ErrSpillFileOp.FastGenByArgs("invalid spill event index key")
+	}
+	return binary.BigEndian.Uint64(key[8:16]), nil
+}
+
+func decodeSpilledMessage(key, value []byte) (spilledMessage, error) {
+	commitTs, err := decodeEventIndexCommitTs(key)
+	if err != nil {
+		return spilledMessage{}, err
+	}
+	if len(value) != eventIndexValueBytes {
+		return spilledMessage{}, errors.ErrSpillFileOp.FastGenByArgs("invalid spill event index value")
+	}
+	return spilledMessage{
+		key:      append([]byte(nil), key...),
+		commitTs: commitTs,
+		location: payloadLocation{
+			segmentID: binary.BigEndian.Uint64(value[0:8]),
+			handle: spill.Handle{
+				Offset: int64(binary.BigEndian.Uint64(value[8:16])),
+				Length: binary.BigEndian.Uint64(value[16:24]),
+			},
+		},
+		dmlIndex:       binary.BigEndian.Uint64(value[24:32]),
+		restorerID:     binary.BigEndian.Uint64(value[32:40]),
+		sourcePosition: int64(binary.BigEndian.Uint64(value[40:48])),
+	}, nil
+}
+
+func (s *SpillStore) trimPayloadCache() {
+	byteLimit := s.config.resolveBatchBytes
+	if byteLimit <= 0 {
+		byteLimit = defaultResolveBatchBytes
+	}
+	entryLimit := s.config.resolveBatchMessages
+	if entryLimit <= 0 {
+		entryLimit = defaultResolveBatchMessages
+	}
+	for s.cacheBytes > byteLimit || len(s.cache) > entryLimit {
+		var victim *payloadCacheEntry
+		for element := s.cacheLRU.Back(); element != nil; element = element.Prev() {
+			entry := element.Value.(*payloadCacheEntry)
+			if entry.pins == 0 {
+				victim = entry
+				break
 			}
-			continue
 		}
-		s.releasePending(segment.bytes)
-		delete(s.segments, segment)
+		if victim == nil {
+			return
+		}
+		s.removePayloadCacheEntry(victim)
 	}
+}
+
+func (s *SpillStore) removePayloadCacheEntry(entry *payloadCacheEntry) {
+	if entry == nil || entry.element == nil {
+		return
+	}
+	delete(s.cache, entry.key)
+	s.cacheLRU.Remove(entry.element)
+	entry.element = nil
+	entry.messages = nil
+	s.cacheBytes -= entry.bytes
+	s.releasePending(entry.bytes)
+}
+
+func (s *SpillStore) unpinPayloads(payloads []*payloadCacheEntry) {
+	for _, payload := range payloads {
+		payload.pins--
+		if payload.pins < 0 {
+			log.Panic("spill payload cache pin underflow",
+				zap.Uint64("segmentID", payload.key.segmentID), zap.Int64("offset", payload.key.offset))
+		}
+	}
+	s.trimPayloadCache()
+}
+
+func (s *SpillStore) evictSegmentCache(segmentID uint64) {
+	for _, entry := range s.cache {
+		if entry.key.segmentID == segmentID {
+			s.removePayloadCacheEntry(entry)
+		}
+	}
+}
+
+func (g *EventsGroup) releaseEvent(segmentID, restorerID uint64, count int64) {
+	g.releaseSegmentRefs(segmentID, count)
+	g.releaseRestorerRefs(restorerID, count)
+}
+
+func (g *EventsGroup) releaseSegmentRefs(segmentID uint64, count int64) {
+	segment := g.store.segments[segmentID]
+	if segment == nil || segment.pendingEvents < count || g.segmentRefs[segmentID] < count {
+		log.Panic("spill segment reference underflow",
+			zap.Uint64("segmentID", segmentID), zap.Int64("released", count))
+	}
+	segment.pendingEvents -= count
+	g.segmentRefs[segmentID] -= count
+	if g.segmentRefs[segmentID] == 0 {
+		delete(g.segmentRefs, segmentID)
+	}
+	if segment.pendingEvents == 0 {
+		g.store.cleanupSegment(segment)
+	}
+}
+
+func (g *EventsGroup) releaseRestorerRefs(restorerID uint64, count int64) {
+	restorer := g.store.restorers[restorerID]
+	if restorer == nil || restorer.refs < count || g.restorerRefs[restorerID] < count {
+		log.Panic("spill restorer reference underflow",
+			zap.Uint64("restorerID", restorerID), zap.Int64("released", count))
+	}
+	restorer.refs -= count
+	g.restorerRefs[restorerID] -= count
+	if g.restorerRefs[restorerID] == 0 {
+		delete(g.restorerRefs, restorerID)
+	}
+	if restorer.refs == 0 {
+		delete(g.store.restorers, restorerID)
+	}
+}
+
+func getFilesystemUsage(path string) (filesystemUsage, error) {
+	var stat unix.Statfs_t
+	if err := unix.Statfs(path, &stat); err != nil {
+		return filesystemUsage{}, errors.WrapError(errors.ErrSpillFileOp, err, "read spill filesystem usage")
+	}
+	if stat.Bsize <= 0 {
+		return filesystemUsage{}, errors.ErrSpillFileOp.FastGenByArgs("spill filesystem has invalid block size")
+	}
+	blockSize := uint64(stat.Bsize)
+	totalBytes := uint64(stat.Blocks) * blockSize
+	availableBytes := uint64(stat.Bavail) * blockSize
+	if availableBytes > totalBytes {
+		return filesystemUsage{}, errors.ErrSpillFileOp.FastGenByArgs("spill filesystem has invalid available blocks")
+	}
+	return filesystemUsage{usedBytes: totalBytes - availableBytes, totalBytes: totalBytes}, nil
+}
+
+func (s *SpillStore) checkDiskUsage(nextWriteBytes int64, force bool) error {
+	if s.terminalErr != nil {
+		return s.terminalErr
+	}
+	s.bytesSinceDiskCheck += nextWriteBytes
+	if !force && s.config.diskCheckBytes > 0 && s.bytesSinceDiskCheck < s.config.diskCheckBytes {
+		return nil
+	}
+	path := s.rootDir
+	if path == "" {
+		path = os.TempDir()
+	}
+	usage, err := s.diskUsage(path)
+	if err != nil {
+		return err
+	}
+	s.bytesSinceDiskCheck = 0
+	if usage.totalBytes == 0 {
+		return errors.ErrSpillFileOp.FastGenByArgs("spill filesystem has zero capacity")
+	}
+	projectedUsed := usage.usedBytes
+	if nextWriteBytes > 0 && uint64(nextWriteBytes) <= ^uint64(0)-projectedUsed {
+		projectedUsed += uint64(nextWriteBytes)
+	}
+	ratio := float64(projectedUsed) / float64(usage.totalBytes)
+	if ratio <= s.config.diskUsageLimit {
+		return nil
+	}
+	message := fmt.Sprintf(
+		"spill filesystem usage %.2f%% exceeds %.2f%% limit: path=%s usedBytes=%d totalBytes=%d",
+		ratio*100, s.config.diskUsageLimit*100, path, projectedUsed, usage.totalBytes)
+	s.terminalErr = errors.ErrSpillFileOp.FastGenByArgs(message)
+	log.Error("spill filesystem usage limit exceeded; stop consumer",
+		zap.String("path", path),
+		zap.Uint64("usedBytes", projectedUsed),
+		zap.Uint64("totalBytes", usage.totalBytes),
+		zap.Float64("usagePercent", ratio*100),
+		zap.Float64("limitPercent", s.config.diskUsageLimit*100))
+	return s.terminalErr
+}
+
+// Cleanup removes all temporary index and payload state when a consumer stops.
+func (s *SpillStore) Cleanup() error {
+	var cleanupErr error
+	if s.indexBatch != nil {
+		if err := s.indexBatch.Close(); err != nil && cleanupErr == nil {
+			cleanupErr = errors.WrapError(errors.ErrSpillFileOp, err, "close spill event index batch")
+		}
+		s.indexBatch = nil
+	}
+	if s.index != nil {
+		if err := s.index.Close(); err != nil && cleanupErr == nil {
+			cleanupErr = errors.WrapError(errors.ErrSpillFileOp, err, "close spill event index")
+		}
+		s.index = nil
+	}
+	if s.indexCache != nil {
+		s.indexCache.Unref()
+		s.indexCache = nil
+	}
+	for _, segment := range s.segments {
+		if err := segment.file.Cleanup(); err != nil && cleanupErr == nil {
+			cleanupErr = err
+		}
+	}
+	if s.rootDir != "" {
+		if err := os.RemoveAll(s.rootDir); err != nil && cleanupErr == nil {
+			cleanupErr = errors.WrapError(errors.ErrSpillFileOp, err, "remove spill store directory")
+		}
+	}
+	s.rootDir = ""
+	s.activeSegment = nil
+	clear(s.segments)
+	clear(s.restorers)
+	clear(s.cache)
+	s.cacheLRU.Init()
+	s.cacheBytes = 0
+	s.pendingBytes = 0
+	s.livePayloads = 0
+	s.draining = false
+	s.indexBatchCount = 0
 	return cleanupErr
 }
 
@@ -416,26 +754,41 @@ func (g *EventsGroup) AppendMessage(
 		return errors.ErrSpillFileOp.FastGenByArgs("cannot spill nil DML message")
 	}
 	messageData, dmlIndex := message.SpillData()
-	if messageData == nil || messageData.Decode == nil {
+	if messageData == nil || messageData.Restorer == nil || messageData.Restorer.Decode == nil {
 		return errors.ErrSpillFileOp.FastGenByArgs("cannot spill DML message without decode function")
 	}
 	commitTs := message.GetCommitTs()
-	payload, err := g.store.acquirePayload(messageData)
+	location, err := g.store.acquirePayload(messageData)
 	if err != nil {
 		return err
 	}
-	if len(g.messages) > 0 && commitTs < g.messages[len(g.messages)-1].commitTs {
+	if g.pendingCount > 0 && commitTs < g.lastAppendedTs {
 		g.outOfOrder = true
 	}
 	if commitTs > g.HighWatermark {
 		g.HighWatermark = commitTs
 	}
-	g.messages = append(g.messages, spilledMessage{
-		commitTs: commitTs,
-		payload:  payload,
-		dmlIndex: dmlIndex,
-	})
-	g.store.retainPayload(payload)
+	g.lastAppendedTs = commitTs
+	g.store.nextSequence++
+	key := encodeEventIndexKey(g.id, commitTs, g.store.nextSequence)
+	value := encodeEventIndexValue(location, dmlIndex, messageData.Restorer.ID, messageData.SourcePosition)
+	if err := g.store.appendEventIndex(key, value); err != nil {
+		return err
+	}
+
+	segment := g.store.segments[location.segmentID]
+	segment.pendingEvents++
+	restorer := g.store.restorers[messageData.Restorer.ID]
+	if restorer == nil {
+		restorer = &registeredRestorer{decode: messageData.Restorer.Decode}
+		g.store.restorers[messageData.Restorer.ID] = restorer
+	}
+	restorer.refs++
+	g.pendingCount++
+	g.segmentRefs[location.segmentID]++
+	g.restorerRefs[messageData.Restorer.ID]++
+	g.store.addPending(g.store.config.messageMetadataBytes)
+	g.store.stats.IndexWriteCount++
 	return nil
 }
 
@@ -444,17 +797,21 @@ type ResolveBatch struct {
 	Messages      []*codeccommon.DMLMessage
 	ResolvedBytes int64
 	group         *EventsGroup
-	count         int
+	entries       []spilledMessage
+	payloads      []*payloadCacheEntry
 	acked         bool
 }
 
 // Ack releases a prepared group prefix after downstream flush callbacks complete.
-func (b *ResolveBatch) Ack() {
+func (b *ResolveBatch) Ack() error {
 	if b == nil || b.acked {
-		return
+		return nil
 	}
-	b.group.ack(b.count)
+	if err := b.group.ack(b); err != nil {
+		return err
+	}
 	b.acked = true
+	return nil
 }
 
 // PrepareResolve restores one bounded group prefix without removing it.
@@ -464,45 +821,180 @@ func (g *EventsGroup) PrepareResolve(
 	if g.batchPending {
 		return nil, false, errors.ErrSpillFileOp.FastGenByArgs("events group already has a pending resolve batch")
 	}
-	if len(g.messages) == 0 {
+	if resolve > g.resolvedTs {
+		g.resolvedTs = resolve
+	}
+	if g.pendingCount == 0 {
 		return nil, false, nil
 	}
-	if g.outOfOrder {
-		sort.SliceStable(g.messages, func(i, j int) bool {
-			return g.messages[i].commitTs < g.messages[j].commitTs
-		})
-	}
-	resolvedCount := sort.Search(len(g.messages), func(i int) bool {
-		return g.messages[i].commitTs > resolve
-	})
-	if g.outOfOrder {
-		log.Warn("DML events are out of order before flush, sort them",
-			zap.Int32("partition", g.Partition),
-			zap.Int64("tableID", g.tableID),
-			zap.Uint64("resolveTs", resolve),
-			zap.Int("resolved", resolvedCount))
-		g.outOfOrder = false
-	}
-	if resolvedCount == 0 {
-		return nil, false, nil
+	if err := g.store.flushEventIndex(); err != nil {
+		return nil, false, err
 	}
 
-	batchCount := boundedResolvedBatch(g.messages[:resolvedCount], limit)
-	batch := &ResolveBatch{
-		Messages: make([]*codeccommon.DMLMessage, 0, batchCount),
-		group:    g,
-		count:    batchCount,
+	lower, upper := eventIndexBounds(g.id)
+	iterator, err := g.store.index.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return nil, false, errors.WrapError(errors.ErrSpillFileOp, err, "create spill event iterator")
 	}
-	for _, message := range g.messages[:batchCount] {
-		restored, readBytes, err := g.store.messageAt(message.payload, message.dmlIndex)
+	defer iterator.Close()
+
+	entries := make([]spilledMessage, 0, boundedMessageCapacity(limit))
+	seenPayloads := make(map[payloadCacheKey]struct{})
+	var plannedBytes int64
+	var lastCommitTs uint64
+	valid := iterator.First()
+	for valid {
+		commitTs, err := decodeEventIndexCommitTs(iterator.Key())
 		if err != nil {
 			return nil, false, err
+		}
+		if commitTs > g.resolvedTs {
+			break
+		}
+		entry, err := decodeSpilledMessage(iterator.Key(), iterator.Value())
+		if err != nil {
+			return nil, false, err
+		}
+		payloadKey := payloadCacheKey{segmentID: entry.location.segmentID, offset: entry.location.handle.Offset}
+		additionalBytes := int64(0)
+		if _, ok := seenPayloads[payloadKey]; !ok {
+			if _, cached := g.store.cache[payloadKey]; !cached {
+				additionalBytes = int64(entry.location.handle.Length)
+			}
+		}
+		if len(entries) > 0 && exceedsResolveLimit(len(entries), plannedBytes, additionalBytes, limit) &&
+			commitTs != lastCommitTs {
+			break
+		}
+		entries = append(entries, entry)
+		plannedBytes += additionalBytes
+		seenPayloads[payloadKey] = struct{}{}
+		lastCommitTs = commitTs
+		valid = iterator.Next()
+	}
+	if err := iterator.Error(); err != nil {
+		return nil, false, errors.WrapError(errors.ErrSpillFileOp, err, "iterate spill event index")
+	}
+	if len(entries) == 0 {
+		return nil, false, nil
+	}
+	hasMore := false
+	if valid {
+		nextCommitTs, err := decodeEventIndexCommitTs(iterator.Key())
+		if err != nil {
+			return nil, false, err
+		}
+		hasMore = nextCommitTs <= g.resolvedTs
+	}
+	if g.outOfOrder {
+		log.Warn("DML events were appended out of order; restore from ordered spill index",
+			zap.Int32("partition", g.Partition),
+			zap.Int64("tableID", g.tableID),
+			zap.Uint64("resolveTs", g.resolvedTs),
+			zap.Int("resolved", len(entries)))
+		g.outOfOrder = false
+	}
+	batch := &ResolveBatch{
+		Messages: make([]*codeccommon.DMLMessage, 0, len(entries)),
+		group:    g,
+		entries:  entries,
+	}
+	loaded := make(map[payloadCacheKey]*payloadCacheEntry)
+	for _, message := range entries {
+		payloadKey := payloadCacheKey{segmentID: message.location.segmentID, offset: message.location.handle.Offset}
+		payload := loaded[payloadKey]
+		readBytes := int64(0)
+		if payload == nil {
+			payload, readBytes, err = g.store.loadAndPinPayload(message)
+			if err != nil {
+				g.store.unpinPayloads(batch.payloads)
+				return nil, false, err
+			}
+			loaded[payloadKey] = payload
+			batch.payloads = append(batch.payloads, payload)
+		}
+		if message.dmlIndex >= uint64(len(payload.messages)) {
+			g.store.unpinPayloads(batch.payloads)
+			return nil, false, errors.ErrSpillFileOp.FastGenByArgs("DML spill message index is out of range")
+		}
+		restored := payload.messages[message.dmlIndex]
+		if restored == nil {
+			g.store.unpinPayloads(batch.payloads)
+			return nil, false, errors.ErrSpillFileOp.FastGenByArgs("DML spill message is nil")
+		}
+		if g.postRestore != nil {
+			restored = g.postRestore(restored, message.sourcePosition)
+		}
+		if restored == nil {
+			g.store.unpinPayloads(batch.payloads)
+			return nil, false, errors.ErrSpillFileOp.FastGenByArgs("post-restore returned nil DML message")
 		}
 		batch.Messages = append(batch.Messages, restored)
 		batch.ResolvedBytes += readBytes
 	}
+	g.store.stats.IndexReadCount += int64(len(entries))
 	g.batchPending = true
-	return batch, batchCount < resolvedCount, nil
+	return batch, hasMore, nil
+}
+
+func boundedMessageCapacity(limit ResolveLimit) int {
+	if limit.MaxMessages <= 0 || limit.MaxMessages > defaultResolveBatchMessages {
+		return defaultResolveBatchMessages
+	}
+	return limit.MaxMessages
+}
+
+func exceedsResolveLimit(count int, bytes, additionalBytes int64, limit ResolveLimit) bool {
+	maxBytes := limit.MaxBytes
+	if maxBytes <= 0 {
+		maxBytes = math.MaxInt64
+	}
+	maxMessages := limit.MaxMessages
+	if maxMessages <= 0 {
+		maxMessages = int(^uint(0) >> 1)
+	}
+	return count >= maxMessages || bytes+additionalBytes > maxBytes
+}
+
+func (s *SpillStore) loadAndPinPayload(message spilledMessage) (*payloadCacheEntry, int64, error) {
+	key := payloadCacheKey{segmentID: message.location.segmentID, offset: message.location.handle.Offset}
+	if cached := s.cache[key]; cached != nil {
+		cached.pins++
+		s.cacheLRU.MoveToFront(cached.element)
+		return cached, 0, nil
+	}
+	segment := s.segments[message.location.segmentID]
+	if segment == nil || segment.file == nil {
+		return nil, 0, errors.ErrSpillFileOp.FastGenByArgs("spill payload segment is missing")
+	}
+	restorer := s.restorers[message.restorerID]
+	if restorer == nil || restorer.decode == nil {
+		return nil, 0, errors.ErrSpillFileOp.FastGenByArgs("DML spill restorer is missing")
+	}
+	data, err := s.readRecord(segment.file, message.location.handle)
+	if err != nil {
+		return nil, 0, err
+	}
+	messages, err := restorer.decode(data)
+	if err != nil {
+		return nil, 0, err
+	}
+	entry := &payloadCacheEntry{
+		key:      key,
+		messages: messages,
+		bytes: int64(message.location.handle.Length) +
+			int64(len(messages))*s.config.messageMetadataBytes,
+		pins: 1,
+	}
+	entry.element = s.cacheLRU.PushFront(entry)
+	s.cache[key] = entry
+	s.cacheBytes += entry.bytes
+	s.addPending(entry.bytes)
+	s.stats.PayloadReadBytes += int64(message.location.handle.Length)
+	s.stats.PayloadReadCount++
+	s.stats.PayloadDecodeCount++
+	s.trimPayloadCache()
+	return entry, int64(message.location.handle.Length), nil
 }
 
 // ResolveInto appends all messages with CommitTs <= resolve into dst in commit-ts order.
@@ -524,60 +1016,42 @@ func (g *EventsGroup) ResolveIntoBatch(
 	}
 	dst = append(dst, batch.Messages...)
 	resolvedBytes := batch.ResolvedBytes
-	batch.Ack()
+	if err := batch.Ack(); err != nil {
+		return dst, hasMore, resolvedBytes, err
+	}
 	return dst, hasMore, resolvedBytes, nil
 }
 
-func boundedResolvedBatch(messages []spilledMessage, limit ResolveLimit) int {
-	if len(messages) == 0 {
-		return 0
+func (g *EventsGroup) ack(batch *ResolveBatch) error {
+	if len(batch.entries) == 0 {
+		g.batchPending = false
+		g.store.unpinPayloads(batch.payloads)
+		return nil
 	}
-	maxBytes := limit.MaxBytes
-	if maxBytes <= 0 {
-		maxBytes = math.MaxInt64
+	if err := g.store.checkDiskUsage(eventIndexKeyBytes+eventIndexValueBytes, true); err != nil {
+		return err
 	}
-	maxMessages := limit.MaxMessages
-	if maxMessages <= 0 {
-		maxMessages = int(^uint(0) >> 1)
+	start := batch.entries[0].key
+	end := append(append([]byte(nil), batch.entries[len(batch.entries)-1].key...), 0)
+	if err := g.store.index.DeleteRange(start, end, pebble.NoSync); err != nil {
+		return errors.WrapError(errors.ErrSpillFileOp, err, "delete applied spill event range")
 	}
-
-	seenPayloads := make(map[*spillPayload]struct{})
-	var bytes int64
-	for i, message := range messages {
-		additionalBytes := int64(0)
-		if !message.payload.loaded {
-			if _, ok := seenPayloads[message.payload]; !ok {
-				additionalBytes = int64(message.payload.handle.Length)
-			}
-		}
-		exceedsLimit := i > 0 && (i >= maxMessages || bytes+additionalBytes > maxBytes)
-		if exceedsLimit && message.commitTs != messages[i-1].commitTs {
-			return i
-		}
-		bytes += additionalBytes
-		seenPayloads[message.payload] = struct{}{}
+	for _, message := range batch.entries {
+		g.releaseEvent(message.location.segmentID, message.restorerID, 1)
 	}
-	return len(messages)
-}
-
-func (g *EventsGroup) ack(count int) {
-	for i := range count {
-		message := &g.messages[i]
-		g.store.releasePayloadRef(message.payload, message.dmlIndex)
-	}
-	remainingCount := len(g.messages) - count
-	copy(g.messages, g.messages[count:])
-	clear(g.messages[remainingCount:])
-	if remainingCount == 0 {
-		g.messages = nil
-	} else if cap(g.messages) > 2*remainingCount && cap(g.messages) > 1024 {
-		remaining := make([]spilledMessage, remainingCount)
-		copy(remaining, g.messages[:remainingCount])
-		g.messages = remaining
-	} else {
-		g.messages = g.messages[:remainingCount]
+	g.pendingCount -= int64(len(batch.entries))
+	g.store.releasePending(int64(len(batch.entries)) * g.store.config.messageMetadataBytes)
+	g.store.stats.AppliedEventCount += int64(len(batch.entries))
+	lastCommitTs := batch.entries[len(batch.entries)-1].commitTs
+	if lastCommitTs > g.appliedTs {
+		g.appliedTs = lastCommitTs
 	}
 	g.batchPending = false
+	g.store.unpinPayloads(batch.payloads)
+	if g.pendingCount == 0 && g.ownsStore {
+		return g.store.Cleanup()
+	}
+	return nil
 }
 
 // GetAllMessages gets all messages.
@@ -587,13 +1061,32 @@ func (g *EventsGroup) GetAllMessages() ([]*codeccommon.DMLMessage, error) {
 
 // Cleanup removes pending spill records when the consumer is stopping.
 func (g *EventsGroup) Cleanup() error {
-	for i := range g.messages {
-		message := &g.messages[i]
-		g.store.releasePayloadRef(message.payload, message.dmlIndex)
+	if g.batchPending {
+		return errors.ErrSpillFileOp.FastGenByArgs("cannot clean events group with pending resolve batch")
 	}
-	clear(g.messages)
-	g.messages = nil
+	if g.pendingCount != 0 && g.store.index != nil {
+		if err := g.store.flushEventIndex(); err != nil {
+			return err
+		}
+		lower, upper := eventIndexBounds(g.id)
+		if err := g.store.index.DeleteRange(lower, upper, pebble.NoSync); err != nil {
+			return errors.WrapError(errors.ErrSpillFileOp, err, "delete spill event group")
+		}
+		for segmentID, count := range g.segmentRefs {
+			g.releaseSegmentRefs(segmentID, count)
+		}
+		for restorerID, count := range g.restorerRefs {
+			g.releaseRestorerRefs(restorerID, count)
+		}
+		g.store.releasePending(g.pendingCount * g.store.config.messageMetadataBytes)
+	}
+	g.pendingCount = 0
+	clear(g.segmentRefs)
+	clear(g.restorerRefs)
 	g.batchPending = false
+	if g.ownsStore {
+		return g.store.Cleanup()
+	}
 	return nil
 }
 

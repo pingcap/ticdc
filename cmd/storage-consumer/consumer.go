@@ -427,8 +427,8 @@ func (c *consumer) newDMLMessageData(
 				return nil, errors.ErrSpillFileOp.FastGenByArgs("unsupported storage DML spill protocol")
 			}
 		})
-	decode := messageData.Decode
-	messageData.Decode = func(data []byte) ([]*common.DMLMessage, error) {
+	decode := messageData.Restorer.Decode
+	messageData.Restorer = common.NewDMLMessageRestorer(func(data []byte) ([]*common.DMLMessage, error) {
 		messages, err := decode(data)
 		if err != nil {
 			return nil, err
@@ -437,7 +437,7 @@ func (c *consumer) newDMLMessageData(
 			messages[i] = messageWithPhysicalTableID(message, tableID)
 		}
 		return messages, nil
-	}
+	})
 	return messageData
 }
 
@@ -478,7 +478,9 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 			}
 			total += len(events)
 		}
-		batch.Ack()
+		if err := batch.Ack(); err != nil {
+			return err
+		}
 		if !hasMore {
 			break
 		}
@@ -492,6 +494,9 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 			zap.Int64("spillPayloadWriteCount", stats.PayloadWriteCount),
 			zap.Int64("spillPayloadReadCount", stats.PayloadReadCount),
 			zap.Int64("spillPayloadDecodeCount", stats.PayloadDecodeCount),
+			zap.Int64("spillIndexWriteCount", stats.IndexWriteCount),
+			zap.Int64("spillIndexReadCount", stats.IndexReadCount),
+			zap.Int64("spillAppliedEventCount", stats.AppliedEventCount),
 			zap.Int64("spillPendingBytes", stats.PendingBytes),
 			zap.Int("spillLivePayloads", stats.LivePayloads),
 			zap.Int("spillLiveSegments", stats.LiveSegments))

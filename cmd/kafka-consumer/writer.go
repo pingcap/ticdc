@@ -212,7 +212,9 @@ func (w *writer) flushEventsFromGroups(
 			return err
 		}
 		for _, batch := range prepared {
-			batch.Ack()
+			if err := batch.Ack(); err != nil {
+				return err
+			}
 		}
 		total += len(batchEvents)
 		batchEvents = nil
@@ -367,7 +369,12 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 			zap.Int64("spillPayloadWriteCount", stats.PayloadWriteCount),
 			zap.Int64("spillPayloadReadCount", stats.PayloadReadCount),
 			zap.Int64("spillPayloadDecodeCount", stats.PayloadDecodeCount),
-			zap.Int64("spillPendingBytes", stats.PendingBytes))
+			zap.Int64("spillIndexWriteCount", stats.IndexWriteCount),
+			zap.Int64("spillIndexReadCount", stats.IndexReadCount),
+			zap.Int64("spillAppliedEventCount", stats.AppliedEventCount),
+			zap.Int64("spillPendingBytes", stats.PendingBytes),
+			zap.Int("spillLivePayloads", stats.LivePayloads),
+			zap.Int("spillLiveSegments", stats.LiveSegments))
 	}
 	return nil
 }
@@ -382,9 +389,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 	)
 
 	progress := w.progresses[partition]
-	progress.decoder.SetDMLMessageRestorer(func(message *common.DMLMessage) *common.DMLMessage {
-		return w.messageWithPartitionCheck(message, progress.partition, offset)
-	})
+	progress.decoder.SetSourcePosition(int64(offset))
 	progress.decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, hasNext := progress.decoder.HasNext()
@@ -700,7 +705,13 @@ func (w *writer) appendMessage2Group(
 	group := progress.eventsGroup[tableID]
 	if group == nil {
 		group = util.NewEventsGroup(progress.partition, tableID, w.getSpillStore())
+		group.SetPostRestore(func(message *common.DMLMessage, sourcePosition int64) *common.DMLMessage {
+			return w.messageWithPartitionCheck(message, progress.partition, kafka.Offset(sourcePosition))
+		})
 		progress.eventsGroup[tableID] = group
+	}
+	if messageData, _ := message.SpillData(); messageData != nil {
+		messageData.SourcePosition = int64(offset)
 	}
 	if err := group.AppendMessage(message); err != nil {
 		return err
