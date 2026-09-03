@@ -74,6 +74,7 @@ type DDLEventState struct {
 
 type keyspaceSchemaStore struct {
 	cancel        context.CancelFunc
+	wg            sync.WaitGroup
 	ddlJobFetcher *ddlJobFetcher
 	gcKeeper      *schemaStoreGCKeeper
 	pdClock       pdutil.Clock
@@ -349,6 +350,7 @@ func (s *schemaStore) Close(ctx context.Context) error {
 		if store.cancel != nil {
 			store.cancel()
 		}
+		store.wg.Wait()
 		if store.gcKeeper != nil {
 			err := closeSchemaStoreGCKeeper(keyspaceID, store.gcKeeper)
 			if err != nil {
@@ -603,7 +605,9 @@ func (s *schemaStore) RegisterKeyspace(
 		return store.resolvedTs.Load()
 	})
 
+	store.wg.Add(1)
 	go func(ctx context.Context, schemaStore *keyspaceSchemaStore) {
+		defer schemaStore.wg.Done()
 		ticker := time.NewTicker(50 * time.Millisecond)
 		defer ticker.Stop()
 		for {

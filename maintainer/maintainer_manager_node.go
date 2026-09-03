@@ -19,6 +19,8 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/eventstore"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -74,9 +76,10 @@ func newNodeEpoch() uint64 {
 	return nodeEpoch
 }
 
-// sendNodeHeartbeat reports node-scoped liveness and dispatcher drain target to
-// coordinator. It is the authoritative acknowledgement channel for node-level
-// drain state, including cases where no changefeed maintainer exists locally.
+// sendNodeHeartbeat reports node-scoped liveness, dispatcher drain target, and
+// the local log service dispatcher count to coordinator. It is the authoritative
+// acknowledgement channel for node-level drain state, including cases where no
+// changefeed maintainer exists locally.
 func (m *Manager) sendNodeHeartbeat(force bool) {
 	if !m.isBootstrap() {
 		return
@@ -95,9 +98,14 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 		currentLiveness = m.node.liveness.Load()
 	}
 	drainTarget, drainEpoch := m.getDispatcherDrainTarget()
+	logServiceDispatcherCount := 0
+	if store, ok := appcontext.TryGetService[eventstore.EventStore](appcontext.EventStore); ok {
+		logServiceDispatcherCount = store.DispatcherCount()
+	}
 	hb := &heartbeatpb.NodeHeartbeat{
-		Liveness:  m.toNodeLivenessPB(currentLiveness),
-		NodeEpoch: m.node.nodeEpoch,
+		Liveness:                  m.toNodeLivenessPB(currentLiveness),
+		NodeEpoch:                 m.node.nodeEpoch,
+		LogServiceDispatcherCount: uint32(logServiceDispatcherCount),
 		// Report the manager-level dispatcher drain target so coordinator can
 		// confirm both activation and clearing even when no maintainers exist.
 		DispatcherDrainTargetNodeId: drainTarget.String(),

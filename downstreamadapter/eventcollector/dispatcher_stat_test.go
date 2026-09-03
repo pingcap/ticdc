@@ -47,6 +47,7 @@ type mockDispatcher struct {
 	handleError    func(err error)
 	events         []dispatcher.DispatcherEvent
 	checkPointTs   uint64
+	resolvedTs     uint64
 	tableSpan      *heartbeatpb.TableSpan
 	lowLatencyMode bool
 
@@ -128,7 +129,10 @@ func (m *mockDispatcher) GetSkipSyncpointAtStartTs() bool {
 }
 
 func (m *mockDispatcher) GetResolvedTs() uint64 {
-	return m.startTs
+	if m.resolvedTs == 0 {
+		return m.startTs
+	}
+	return m.resolvedTs
 }
 
 func (m *mockDispatcher) GetCheckpointTs() uint64 {
@@ -636,7 +640,7 @@ func TestHandleSignalEvent(t *testing.T) {
 			expectedPendingRemoteTarget: "",
 		},
 		{
-			name: "handle ready event from local server without callback",
+			name: "hold ready event from local server while remote probe is in flight",
 			event: dispatcher.DispatcherEvent{
 				From: &localServerID,
 				Event: &mockEvent{
@@ -646,10 +650,10 @@ func TestHandleSignalEvent(t *testing.T) {
 			initialState: func(stat *dispatcherStat) {
 				setSessionState(stat.session, "", true, remoteServerID)
 			},
-			expectedEventServiceID:      localServerID,
-			expectedReceivingData:       true,
-			expectedAwaitingLocalReady:  false,
-			expectedPendingRemoteTarget: "",
+			expectedEventServiceID:      "",
+			expectedReceivingData:       false,
+			expectedAwaitingLocalReady:  true,
+			expectedPendingRemoteTarget: remoteServerID,
 		},
 		{
 			name: "handle ready event from remote server",
@@ -812,7 +816,7 @@ func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 		}
 	}
 
-	t.Run("local ready removes pending remote register and resets local", func(t *testing.T) {
+	t.Run("local ready is held while remote probe is in flight", func(t *testing.T) {
 		mockDisp := newMockDispatcher(dispatcherID, 0)
 		mockEventCollector := newTestEventCollector(localServerID)
 		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
@@ -820,11 +824,27 @@ func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 
 		stat.handleSignalEvent(newReadyEvent(localServerID))
 
+		currentEventServiceID, localReadyPending, pendingRemoteTarget := sessionState(stat.session)
+		require.Equal(t, node.ID(""), currentEventServiceID)
+		require.True(t, localReadyPending)
+		require.Equal(t, remoteServerID, pendingRemoteTarget)
+		requireNoDispatcherRequest(t, mockEventCollector)
+	})
+
+	t.Run("remote ready after local won is stale and only triggers cleanup", func(t *testing.T) {
+		mockDisp := newMockDispatcher(dispatcherID, 0)
+		mockEventCollector := newTestEventCollector(localServerID)
+		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+		// Local is already serving.
+		setSessionState(stat.session, localServerID, false, "")
+
+		// A late remote ready is stale: the dispatcher is already on local, so
+		// it only triggers a cleanup of the stale remote registration.
+		stat.handleSignalEvent(newReadyEvent(remoteServerID))
 		requireDispatcherRequests(
 			t,
-			readDispatcherRequests(t, mockEventCollector, 2),
+			readDispatcherRequests(t, mockEventCollector, 1),
 			dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
-			dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
 		)
 		requireNoDispatcherRequest(t, mockEventCollector)
 	})
@@ -847,22 +867,166 @@ func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 		requireNoDispatcherRequest(t, mockEventCollector)
 	})
 
-	t.Run("local ready with callback still removes speculative remote register", func(t *testing.T) {
+	t.Run("local ready waits until its resolved ts covers the current checkpoint", func(t *testing.T) {
+		mockDisp := newMockDispatcher(dispatcherID, 100)
+		mockDisp.checkPointTs = 200
+		mockEventCollector := newTestEventCollector(localServerID)
+		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+		setSessionState(stat.session, remoteServerID, true, "")
+		newLocalReadyEvent := func(resolvedTs uint64) dispatcher.DispatcherEvent {
+			ready := commonEvent.NewReadyEvent(dispatcherID, resolvedTs)
+			return dispatcher.DispatcherEvent{
+				From:  &localServerID,
+				Event: &ready,
+			}
+		}
+
+		stat.handleSignalEvent(newLocalReadyEvent(199))
+
+		currentEventServiceID, localReadyPending, pendingRemoteTarget := sessionState(stat.session)
+		require.Equal(t, remoteServerID, currentEventServiceID)
+		require.True(t, localReadyPending)
+		require.Empty(t, pendingRemoteTarget)
+		requireNoDispatcherRequest(t, mockEventCollector)
+
+		stat.handleSignalEvent(newLocalReadyEvent(200))
+
+		requireDispatcherRequests(
+			t,
+			readDispatcherRequests(t, mockEventCollector, 2),
+			dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+			dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+		)
+		requireNoDispatcherRequest(t, mockEventCollector)
+	})
+
+	t.Run("local ready with callback is held while remote probe is in flight", func(t *testing.T) {
 		mockDisp := newMockDispatcher(dispatcherID, 0)
 		mockEventCollector := newTestEventCollector(localServerID)
 		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
 		setSessionState(stat.session, "", true, remoteServerID)
-		setSessionReadyCallback(stat.session, func() {})
+		callbackFired := false
+		setSessionReadyCallback(stat.session, func() { callbackFired = true })
 
 		stat.handleSignalEvent(newReadyEvent(localServerID))
 
-		requireDispatcherRequests(
-			t,
-			readDispatcherRequests(t, mockEventCollector, 1),
-			dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
-		)
+		require.False(t, callbackFired)
 		requireNoDispatcherRequest(t, mockEventCollector)
 	})
+}
+
+func TestLocalReadyGatedByRemoteServedResolvedTs(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+	dispatcherID := common.NewDispatcherID()
+
+	// The remote has been accepted but has not delivered its first events yet,
+	// so the sink checkpoint and resolved ts both still equal the dispatcher
+	// start ts. The local ready must still cover the resolved ts the remote
+	// reported, otherwise the fresh local subscription would win the race and
+	// stall the table while catching up from TiKV.
+	mockDisp := newMockDispatcher(dispatcherID, 100)
+	mockDisp.checkPointTs = 100
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+	setSessionState(stat.session, "", true, remoteServerID)
+
+	// Accept a remote ready that reports the remote is already serving at 300.
+	remoteReady := commonEvent.NewReadyEvent(dispatcherID, 300)
+	stat.handleSignalEvent(dispatcher.DispatcherEvent{
+		From:  &remoteServerID,
+		Event: &remoteReady,
+	})
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+	require.Equal(t, uint64(300), sessionRemoteResolvedTs(stat.session))
+
+	newLocalReadyEvent := func(resolvedTs uint64) dispatcher.DispatcherEvent {
+		ready := commonEvent.NewReadyEvent(dispatcherID, resolvedTs)
+		return dispatcher.DispatcherEvent{
+			From:  &localServerID,
+			Event: &ready,
+		}
+	}
+
+	// Local ready above the sink checkpoint but below the remote progress is
+	// still rejected, otherwise the fresh local subscription would stall the
+	// table while catching up from TiKV.
+	stat.handleSignalEvent(newLocalReadyEvent(200))
+	currentEventServiceID, localReadyPending, pendingRemoteTarget := sessionState(stat.session)
+	require.Equal(t, remoteServerID, currentEventServiceID)
+	require.True(t, localReadyPending)
+	require.Empty(t, pendingRemoteTarget)
+	requireNoDispatcherRequest(t, mockEventCollector)
+
+	// Once local catches up to the remote progress it wins back and clears it.
+	stat.handleSignalEvent(newLocalReadyEvent(300))
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 2),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+	require.Zero(t, sessionRemoteResolvedTs(stat.session))
+	requireNoDispatcherRequest(t, mockEventCollector)
+}
+
+func TestLocalReadyGatedByRemoteDeliveredResolvedTs(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+	dispatcherID := common.NewDispatcherID()
+
+	// Once the remote delivers data the sink resolved ts reflects the position
+	// it actually delivered (250), which is the catch-up target. The remote's
+	// reported frontier (300) must not inflate the baseline, otherwise the
+	// local would wait on the remote's pull progress it does not need.
+	mockDisp := newMockDispatcher(dispatcherID, 100)
+	mockDisp.checkPointTs = 100
+	mockDisp.resolvedTs = 250
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+	setSessionState(stat.session, "", true, remoteServerID)
+
+	remoteReady := commonEvent.NewReadyEvent(dispatcherID, 300)
+	stat.handleSignalEvent(dispatcher.DispatcherEvent{
+		From:  &remoteServerID,
+		Event: &remoteReady,
+	})
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+	require.Equal(t, uint64(300), sessionRemoteResolvedTs(stat.session))
+
+	newLocalReadyEvent := func(resolvedTs uint64) dispatcher.DispatcherEvent {
+		ready := commonEvent.NewReadyEvent(dispatcherID, resolvedTs)
+		return dispatcher.DispatcherEvent{
+			From:  &localServerID,
+			Event: &ready,
+		}
+	}
+
+	// The local must cover what the remote delivered (250), not its frontier.
+	stat.handleSignalEvent(newLocalReadyEvent(249))
+	currentEventServiceID, localReadyPending, pendingRemoteTarget := sessionState(stat.session)
+	require.Equal(t, remoteServerID, currentEventServiceID)
+	require.True(t, localReadyPending)
+	require.Empty(t, pendingRemoteTarget)
+	requireNoDispatcherRequest(t, mockEventCollector)
+
+	stat.handleSignalEvent(newLocalReadyEvent(250))
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 2),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+	require.Zero(t, sessionRemoteResolvedTs(stat.session))
+	requireNoDispatcherRequest(t, mockEventCollector)
 }
 
 func TestInitialLocalReadyCallbackIsOneShot(t *testing.T) {
@@ -914,6 +1078,109 @@ func TestInitialLocalReadyCallbackIsOneShot(t *testing.T) {
 		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
 	)
 	requireNoDispatcherRequest(t, mockEventCollector)
+}
+
+func TestRemoteProbeAnswerWithNoCandidatesKeepsLocalFallback(t *testing.T) {
+	localServerID := node.ID("local-server")
+
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+
+	setSessionState(stat.session, "", true, "")
+	// The coordinator answers with no reusable remote. Local registration never
+	// waited for this answer and can proceed as soon as it is ready.
+	stat.session.startRemoteProbing(nil)
+	requireNoDispatcherRequest(t, mockEventCollector)
+
+	stat.handleSignalEvent(dispatcher.DispatcherEvent{
+		From: &localServerID,
+		Event: &mockEvent{
+			eventType: commonEvent.TypeReadyEvent,
+		},
+	})
+	currentEventServiceID, localReadyPending, _ := sessionState(stat.session)
+	require.Equal(t, localServerID, currentEventServiceID)
+	require.False(t, localReadyPending)
+}
+
+func TestRemoteProbeAnswerWithCandidatesStartsProbeAndWins(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+
+	setSessionState(stat.session, "", true, "")
+	// The coordinator answers with a reusable candidate before local is ready,
+	// so the remote probe can win without delaying a ready local fallback.
+	stat.session.startRemoteProbing([]string{remoteServerID.String()})
+	currentEventServiceID, localReadyPending, pendingRemoteTarget := sessionState(stat.session)
+	require.Equal(t, node.ID(""), currentEventServiceID)
+	require.True(t, localReadyPending)
+	require.Equal(t, remoteServerID, pendingRemoteTarget)
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REGISTER},
+	)
+
+	// The probed remote reports ready and wins over the local subscription.
+	stat.handleSignalEvent(dispatcher.DispatcherEvent{
+		From: &remoteServerID,
+		Event: &mockEvent{
+			eventType: commonEvent.TypeReadyEvent,
+		},
+	})
+	currentEventServiceID, localReadyPending, pendingRemoteTarget = sessionState(stat.session)
+	require.Equal(t, remoteServerID, currentEventServiceID)
+	require.True(t, localReadyPending)
+	require.Equal(t, node.ID(""), pendingRemoteTarget)
+}
+
+func TestRemoteProbeTimeoutReleasesHeldLocalReady(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+
+	markSessionRegistering(stat.session, localServerID)
+	stat.session.beginRemoteProbePending()
+	stat.session.startRemoteProbing([]string{remoteServerID.String()})
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REGISTER},
+	)
+
+	// Local Ready alone is not sufficient to switch: the reusable remote source
+	// may still be available and avoids a fresh TiKV catch-up.
+	stat.handleSignalEvent(dispatcher.DispatcherEvent{
+		From: &localServerID,
+		Event: &mockEvent{
+			eventType: commonEvent.TypeReadyEvent,
+		},
+	})
+	requireNoDispatcherRequest(t, mockEventCollector)
+
+	// A silent remote must not leave the table paused. The active timeout
+	// cancels the remote probe and commits the already-ready local registration.
+	generation := stat.session.remoteProbeGeneration
+	stat.session.handleRemoteProbeTimeout(generation)
+
+	currentEventServiceID, localReadyPending, pendingRemoteTarget := sessionState(stat.session)
+	require.Equal(t, localServerID, currentEventServiceID)
+	require.False(t, localReadyPending)
+	require.Empty(t, pendingRemoteTarget)
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 2),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
 }
 
 func TestIsFromCurrentEpoch(t *testing.T) {
@@ -1746,6 +2013,47 @@ func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 	stat.handleDataEvents(dispatcher.DispatcherEvent{Event: dml})
 	require.Equal(t, uint64(210), stat.loadCurrentEpochState().maxEventTs.Load())
 	require.Equal(t, uint64(210), getHeartbeatCheckpoint())
+}
+
+func TestRemoteResetReportsHeartbeatAfterFirstSinkProgress(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+	collector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 100), collector, nil)
+	oldEpoch := stat.loadCurrentEpochState()
+
+	// A remote reset must not report a checkpoint before the new epoch has
+	// actually made sink progress.
+	stat.session.handleAcceptedRemoteReadyLocked(remoteServerID)
+	select {
+	case <-collector.heartbeatSignal:
+		require.Fail(t, "remote reset reported heartbeat before sink progress")
+	default:
+	}
+
+	// A late callback from the old epoch must not consume the one-shot report.
+	stat.reportRecoveryHeartbeatAfterSinkProgress(oldEpoch)
+	select {
+	case <-collector.heartbeatSignal:
+		require.Fail(t, "stale epoch requested recovery heartbeat")
+	default:
+	}
+
+	stat.reportRecoveryHeartbeatAfterSinkProgress(stat.loadCurrentEpochState())
+	select {
+	case <-collector.heartbeatSignal:
+	case <-time.After(time.Second):
+		require.Fail(t, "recovery heartbeat was not requested")
+	}
+
+	// A recovery produces only one prompt heartbeat. The normal ten-second
+	// periodic heartbeat continues to handle all later progress.
+	stat.reportRecoveryHeartbeatAfterSinkProgress(stat.loadCurrentEpochState())
+	select {
+	case <-collector.heartbeatSignal:
+		require.Fail(t, "recovery heartbeat was requested more than once")
+	default:
+	}
 }
 
 func TestRegistrationEntrypoints(t *testing.T) {

@@ -23,7 +23,7 @@ import (
 
 func TestReadyEvent(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewReadyEvent(did)
+	e := NewReadyEvent(did, 123)
 	data, err := e.Marshal()
 	require.NoError(t, err)
 	require.Len(t, data, int(e.GetSize())+int(GetEventHeaderSize()))
@@ -33,11 +33,12 @@ func TestReadyEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, e.Version, e2.Version)
 	require.Equal(t, e.DispatcherID, e2.DispatcherID)
+	require.Equal(t, e.ResolvedTs, e2.ResolvedTs)
 }
 
 func TestReadyEventMethods(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewReadyEvent(did)
+	e := NewReadyEvent(did, 123)
 
 	// Test GetType
 	require.Equal(t, TypeReadyEvent, e.GetType())
@@ -52,7 +53,7 @@ func TestReadyEventMethods(t *testing.T) {
 	require.Equal(t, did, e.GetDispatcherID())
 
 	// Test GetCommitTs
-	require.Equal(t, common.Ts(0), e.GetCommitTs())
+	require.Equal(t, common.Ts(123), e.GetCommitTs())
 
 	// Test GetStartTs
 	require.Equal(t, common.Ts(0), e.GetStartTs())
@@ -65,7 +66,7 @@ func TestReadyEventMethods(t *testing.T) {
 }
 
 func TestReadyEventMarshalUnmarshal(t *testing.T) {
-	normalEvent := NewReadyEvent(common.NewDispatcherID())
+	normalEvent := NewReadyEvent(common.NewDispatcherID(), 123)
 	testCases := []struct {
 		name      string
 		event     *ReadyEvent
@@ -108,14 +109,44 @@ func TestReadyEventMarshalUnmarshal(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.event.Version, e2.Version)
 			require.Equal(t, tc.event.DispatcherID, e2.DispatcherID)
+			require.Equal(t, tc.event.ResolvedTs, e2.ResolvedTs)
 		})
 	}
+}
+
+func TestReadyEventDecodeLegacyPayload(t *testing.T) {
+	did := common.NewDispatcherID()
+	data, err := MarshalEventWithHeader(TypeReadyEvent, ReadyEventVersion1, did.Marshal())
+	require.NoError(t, err)
+
+	var event ReadyEvent
+	require.NoError(t, event.Unmarshal(data))
+	require.Equal(t, did, event.DispatcherID)
+	require.Zero(t, event.ResolvedTs)
+}
+
+func TestReadyEventLegacyDecoderIgnoresResolvedTs(t *testing.T) {
+	did := common.NewDispatcherID()
+	event := NewReadyEvent(did, 123)
+	data, err := event.Marshal()
+	require.NoError(t, err)
+
+	payload, version, err := ValidateAndExtractPayload(data, TypeReadyEvent)
+	require.NoError(t, err)
+	require.Equal(t, ReadyEventVersion1, version)
+
+	// ReadyEvent's legacy version 1 decoder only unmarshals DispatcherID. Keep
+	// this assertion to guarantee that appending ResolvedTs remains compatible
+	// with older nodes during a rolling upgrade.
+	var legacyDispatcherID common.DispatcherID
+	require.NoError(t, legacyDispatcherID.Unmarshal(payload))
+	require.Equal(t, did, legacyDispatcherID)
 }
 
 // TestReadyEventHeader verifies the unified header format
 func TestReadyEventHeader(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewReadyEvent(did)
+	e := NewReadyEvent(did, 123)
 
 	data, err := e.Marshal()
 	require.NoError(t, err)
@@ -198,10 +229,10 @@ func TestReadyEventUnmarshalErrors(t *testing.T) {
 // TestReadyEventSize verifies GetSize calculation
 func TestReadyEventSize(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewReadyEvent(did)
+	e := NewReadyEvent(did, 123)
 
 	// GetSize should only return business data size, not including header
-	expectedSize := int64(did.GetSize())
+	expectedSize := int64(did.GetSize() + 8)
 	require.Equal(t, expectedSize, e.GetSize())
 
 	// Marshaled data should include header

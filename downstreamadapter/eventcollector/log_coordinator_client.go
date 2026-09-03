@@ -48,7 +48,8 @@ func newLogCoordinatorClient(eventCollector *EventCollector) *LogCoordinatorClie
 		eventCollector:            eventCollector,
 		mc:                        appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		logCoordinatorRequestChan: chann.NewAutoDrainChann[*logservicepb.ReusableEventServiceRequest](),
-		enableRemoteEventService:  config.GetGlobalServerConfig().Debug.EventService.EnableRemoteEventService,
+		enableRemoteEventService: config.GetGlobalServerConfig().Debug.EventService.EnableRemoteEventService &&
+			config.GetGlobalServerConfig().Debug.EventStore.EnableDataSharing,
 	}
 	client.mc.RegisterHandler(logCoordinatorClientTopic, client.MessageCenterHandler)
 	return client
@@ -106,12 +107,16 @@ func (l *LogCoordinatorClient) run(ctx context.Context) error {
 }
 
 func (l *LogCoordinatorClient) requestReusableEventService(dispatcher dispatcher.DispatcherService) {
-	if dispatcher.GetTableSpan().TableID != 0 {
-		l.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
-			ID:      dispatcher.GetId().ToPB(),
-			Span:    dispatcher.GetTableSpan(),
-			StartTs: dispatcher.GetStartTs(),
-		}
+	if dispatcher.GetTableSpan().TableID == 0 || !l.enableRemoteEventService {
+		return
+	}
+	if stat := l.eventCollector.getDispatcherStatByID(dispatcher.GetId()); stat != nil {
+		stat.session.beginRemoteProbePending()
+	}
+	l.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
+		ID:      dispatcher.GetId().ToPB(),
+		Span:    dispatcher.GetTableSpan(),
+		StartTs: dispatcher.GetStartTs(),
 	}
 }
 

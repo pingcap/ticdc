@@ -31,6 +31,10 @@ import (
 
 type dispatcherEpochState struct {
 	epoch uint64
+	// recoveryHeartbeat is true only for an epoch started by a remote reset.
+	// It keeps the recovery fast path out of the normal sink callback hot path.
+	recoveryHeartbeat     bool
+	recoveryHeartbeatSent atomic.Bool
 	// lastEventSeq is the sequence number of the last received DML/DDL/Handshake
 	// event in this epoch.
 	lastEventSeq atomic.Uint64
@@ -76,6 +80,8 @@ type dispatcherStat struct {
 	// tableInfoVersion is the latest schema version delivered to this dispatcher.
 	// It may advance even when tableInfo is not replaced.
 	tableInfoVersion atomic.Uint64
+	// remoteResetPending marks that the next epoch is created by a remote reset.
+	remoteResetPending atomic.Bool
 }
 
 func newDispatcherStat(
@@ -110,6 +116,7 @@ func newDispatcherStatInternal(
 		localServerID,
 		sendMessage,
 		stat.advanceEpochForReset,
+		stat.markNextRemoteReset,
 		readyCallback,
 	)
 	return stat
@@ -137,9 +144,20 @@ func (d *dispatcherStat) advanceEpochForReset(resetTs uint64) uint64 {
 	for {
 		currentState := d.loadCurrentEpochState()
 		nextState := newDispatcherEpochState(currentState.epoch+1, 0, resetTs)
+		nextState.recoveryHeartbeat = d.remoteResetPending.CompareAndSwap(true, false)
 		if d.currentEpoch.CompareAndSwap(currentState, nextState) {
 			return nextState.epoch
 		}
+	}
+}
+
+func (d *dispatcherStat) markNextRemoteReset() {
+	d.remoteResetPending.Store(true)
+}
+
+func (d *dispatcherStat) reportRecoveryHeartbeatAfterSinkProgress(state *dispatcherEpochState) {
+	if state.recoveryHeartbeat && d.loadCurrentEpochState() == state && state.recoveryHeartbeatSent.CompareAndSwap(false, true) {
+		d.eventCollector.requestRecoveryHeartbeat()
 	}
 }
 
@@ -392,7 +410,10 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 		return false
 	}
 	d.updateCommitTsStateByEvents(state, validEvents)
-	handled := d.target.HandleEvents(validEvents, func() { d.wake() })
+	handled := d.target.HandleEvents(validEvents, func() {
+		d.reportRecoveryHeartbeatAfterSinkProgress(state)
+		d.wake()
+	})
 	if hasDML {
 		failpoint.Inject("InjectResetDispatcherAfterBatchDataEvents", func() {
 			log.Info("inject dispatcher reset after batch data events",
@@ -455,7 +476,10 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		d.updateTableInfoByDDL(ddl)
 	}
 	d.updateCommitTsStateByEvents(state, events)
-	return d.target.HandleEvents(events, func() { d.wake() })
+	return d.target.HandleEvents(events, func() {
+		d.reportRecoveryHeartbeatAfterSinkProgress(state)
+		d.wake()
+	})
 }
 
 // updateTableInfoByDDL advances the table schema version and, when the DDL

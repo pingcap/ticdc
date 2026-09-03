@@ -188,7 +188,7 @@ func TestProcessMessage(t *testing.T) {
 	)
 	require.NotNil(t, dmls)
 
-	readyEvent := commonEvent.NewReadyEvent(did)
+	readyEvent := commonEvent.NewReadyEvent(did, 0)
 	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, ddl.TableInfo)
 	events := make(map[uint64]commonEvent.Event)
 	ddl.DispatcherID = did
@@ -272,11 +272,8 @@ func TestRemoveLastDispatcher(t *testing.T) {
 }
 
 func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
-	ctx := context.Background()
 	serverInfo := node.NewInfo("127.0.0.1:18300", "")
-	mc := messaging.NewMessageCenter(ctx, serverInfo.ID, config.NewDefaultMessageCenterConfig(serverInfo.AdvertiseAddr), nil)
-	mc.Run(ctx)
-	defer mc.Close()
+	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
 	c := New(serverInfo.ID)
@@ -445,7 +442,7 @@ func TestEventCollectorBatchByCount(t *testing.T) {
 	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
 
 	from := localServerID
-	readyEvent := commonEvent.NewReadyEvent(did)
+	readyEvent := commonEvent.NewReadyEvent(did, 0)
 	c.ds.Push(did, dispatcher.NewDispatcherEvent(&from, &readyEvent))
 
 	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, ddl.TableInfo)
@@ -534,7 +531,7 @@ func TestEventCollectorBatchByBytes(t *testing.T) {
 	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
 
 	from := localServerID
-	readyEvent := commonEvent.NewReadyEvent(did)
+	readyEvent := commonEvent.NewReadyEvent(did, 0)
 	c.ds.Push(did, dispatcher.NewDispatcherEvent(&from, &readyEvent))
 
 	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, ddl.TableInfo)

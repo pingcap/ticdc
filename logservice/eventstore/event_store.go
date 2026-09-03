@@ -94,6 +94,15 @@ type EventStore interface {
 
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
 
+	// DispatcherCount returns the number of dispatchers currently reading from this event store.
+	DispatcherCount() int
+
+	// GetSubscriptionWrittenResolvedTs returns the watermark of data that has
+	// actually been persisted for the dispatcher's subscription. It may be lower
+	// than the puller's resolved ts because of the write queue, and is what the
+	// ready event should report so it never promises data the scan cannot serve.
+	GetSubscriptionWrittenResolvedTs(dispatcherID common.DispatcherID) uint64
+
 	// GetIterator returns an iterator for the requested range and resume cursor.
 	GetIterator(dispatcherID common.DispatcherID, request ScanRequest) (EventIterator, error)
 
@@ -194,6 +203,12 @@ type subscriptionStat struct {
 	lastReceiveDMLTime atomic.Int64
 	// the resolveTs persisted in the store
 	resolvedTs atomic.Uint64
+	// writtenResolvedTs is the watermark of data that has actually been
+	// persisted to the store (written by the write path). It may lag resolvedTs
+	// (the puller's enqueue watermark) by the write queue, and it is the value
+	// the ready event should report so it never promises data the scan cannot
+	// serve yet.
+	writtenResolvedTs atomic.Uint64
 	// the max commit ts of dml event in the store
 	maxEventCommitTs atomic.Uint64
 }
@@ -355,6 +370,40 @@ func newWriteTaskPool(store *eventStore, db *pebble.DB, index int, ch *chann.Unl
 	}
 }
 
+// advanceWrittenResolvedTs advances the written resolved ts of every
+// subscription whose events were just persisted to pebble. The ready event and
+// the scan range are driven by this watermark (via GetSubscriptionWrittenResolvedTs)
+// so they never promise data that has not actually been written yet.
+func (p *writeTaskPool) advanceWrittenResolvedTs(events []eventWithCallback) {
+	type subWriteKey struct {
+		tableKey tableStatsKey
+		subID    logpuller.SubscriptionID
+	}
+	written := make(map[subWriteKey]uint64, 8)
+	for _, e := range events {
+		key := subWriteKey{
+			tableKey: tableStatsKey{keyspaceID: e.keyspaceID, tableID: e.tableID},
+			subID:    e.subID,
+		}
+		if e.currentResolvedTs > written[key] {
+			written[key] = e.currentResolvedTs
+		}
+	}
+	if len(written) == 0 {
+		return
+	}
+	p.store.dispatcherMeta.RLock()
+	for key, ts := range written {
+		subStats := p.store.dispatcherMeta.tableStats[key.tableKey]
+		subStat, ok := subStats[key.subID]
+		if !ok {
+			continue
+		}
+		util.CompareAndMonotonicIncrease(&subStat.writtenResolvedTs, ts)
+	}
+	p.store.dispatcherMeta.RUnlock()
+}
+
 func (p *writeTaskPool) run(ctx context.Context) {
 	p.store.wg.Add(p.workerNum)
 	for i := 0; i < p.workerNum; i++ {
@@ -397,6 +446,8 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					for idx := range events {
 						events[idx].callback()
 					}
+
+					p.advanceWrittenResolvedTs(events)
 
 					buffer = buffer[:0]
 				}
@@ -639,6 +690,7 @@ func (e *eventStore) RegisterDispatcher(
 	})
 	subStat.checkpointTs.Store(startTs)
 	subStat.resolvedTs.Store(startTs)
+	subStat.writtenResolvedTs.Store(startTs)
 	subStat.maxEventCommitTs.Store(0)
 	subStat.lastLogLagTime.Store(0)
 	if stat.subStat == nil {
@@ -742,6 +794,22 @@ func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, disp
 	e.dispatcherMeta.Unlock()
 	log.Info("unregister dispatcher done", zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", dispatcherID))
+}
+
+func (e *eventStore) DispatcherCount() int {
+	e.dispatcherMeta.RLock()
+	defer e.dispatcherMeta.RUnlock()
+	return len(e.dispatcherMeta.dispatcherStats)
+}
+
+func (e *eventStore) GetSubscriptionWrittenResolvedTs(dispatcherID common.DispatcherID) uint64 {
+	e.dispatcherMeta.RLock()
+	defer e.dispatcherMeta.RUnlock()
+	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
+	if !ok || stat.subStat == nil {
+		return 0
+	}
+	return stat.subStat.writtenResolvedTs.Load()
 }
 
 func (e *eventStore) UpdateDispatcherCheckpointTs(
@@ -1733,18 +1801,60 @@ type SubscriptionChange struct {
 	ResolvedTs   uint64 // only valid for SubscriptionChangeTypeAdd/SubscriptionChangeTypeUpdate
 }
 
+const (
+	eventStoreStateUploadInterval       = 10 * time.Second
+	eventStoreTopologyReportDelay       = 100 * time.Millisecond
+	eventStoreTopologyReportMinInterval = time.Second
+)
+
 func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
-	tick := time.NewTicker(10 * time.Second)
+	tick := time.NewTicker(eventStoreStateUploadInterval)
+	defer tick.Stop()
+	topologyReportTimer := time.NewTimer(time.Hour)
+	if !topologyReportTimer.Stop() {
+		<-topologyReportTimer.C
+	}
+	defer topologyReportTimer.Stop()
+
 	state := &logservicepb.EventStoreState{
 		TableStates: make(map[int64]*logservicepb.TableState),
+	}
+	topologyReportScheduled := false
+	lastTopologyReportTime := time.Time{}
+	sendState := func() {
+		coordinatorID := e.getCoordinatorInfo()
+		if coordinatorID == "" {
+			return
+		}
+		// When the log coordinator resides on the same node, it will receive the same object reference.
+		// To prevent data races, we need to create a clone of the state.
+		message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state.Copy())
+		// just ignore messages fail to send
+		if err := e.messageCenter.SendEvent(message); err != nil {
+			log.Warn("send broadcast message to coordinator failed", zap.Error(err))
+		}
+	}
+	scheduleTopologyReport := func() {
+		if topologyReportScheduled {
+			return
+		}
+		delay := eventStoreTopologyReportDelay
+		if sinceLastReport := time.Since(lastTopologyReportTime); !lastTopologyReportTime.IsZero() &&
+			sinceLastReport < eventStoreTopologyReportMinInterval {
+			delay = eventStoreTopologyReportMinInterval - sinceLastReport
+		}
+		topologyReportTimer.Reset(delay)
+		topologyReportScheduled = true
 	}
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case change := <-e.subscriptionChangeCh.Out():
+			shouldReportPromptly := false
 			switch change.ChangeType {
 			case SubscriptionChangeTypeAdd:
+				shouldReportPromptly = true
 				log.Info("add subscription for upload state", zap.Uint64("subscriptionID", change.SubID))
 				if tableState, ok := state.TableStates[change.Span.TableID]; ok {
 					tableState.Subscriptions = append(tableState.Subscriptions, &logservicepb.SubscriptionState{
@@ -1766,6 +1876,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					}
 				}
 			case SubscriptionChangeTypeRemove:
+				shouldReportPromptly = true
 				log.Info("remove subscription from upload state", zap.Uint64("subscriptionID", change.SubID))
 				tableState, ok := state.TableStates[change.Span.TableID]
 				if !ok {
@@ -1800,6 +1911,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					continue
 				}
 				subState := tableState.Subscriptions[targetIndex]
+				wasReusable := subState.CheckpointTs < subState.ResolvedTs
 				if change.CheckpointTs < subState.CheckpointTs || change.ResolvedTs < subState.ResolvedTs {
 					log.Warn("ignore stale subscription state update",
 						zap.Uint64("subscriptionID", change.SubID),
@@ -1811,21 +1923,22 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 				}
 				subState.CheckpointTs = change.CheckpointTs
 				subState.ResolvedTs = change.ResolvedTs
+				// A newly created subscription is not a reuse candidate until
+				// its resolved ts moves ahead of its checkpoint. Report that
+				// transition promptly so a just-reloaded peer can find it.
+				shouldReportPromptly = !wasReusable && subState.CheckpointTs < subState.ResolvedTs
 			default:
 				log.Panic("invalid subscription change type", zap.Int("changeType", int(change.ChangeType)))
 			}
+			if shouldReportPromptly {
+				scheduleTopologyReport()
+			}
+		case <-topologyReportTimer.C:
+			topologyReportScheduled = false
+			lastTopologyReportTime = time.Now()
+			sendState()
 		case <-tick.C:
-			coordinatorID := e.getCoordinatorInfo()
-			if coordinatorID == "" {
-				continue
-			}
-			// When the log coordinator resides on the same node, it will receive the same object reference.
-			// To prevent data races, we need to create a clone of the state.
-			message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state.Copy())
-			// just ignore messages fail to send
-			if err := e.messageCenter.SendEvent(message); err != nil {
-				log.Warn("send broadcast message to coordinator failed", zap.Error(err))
-			}
+			sendState()
 		}
 	}
 }

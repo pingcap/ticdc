@@ -28,6 +28,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -35,6 +36,7 @@ import (
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -172,6 +174,67 @@ func setDataSharingForTest(t *testing.T, enable bool) func() {
 	return func() {
 		config.StoreGlobalServerConfig(originalCfg)
 	}
+}
+
+func TestUploadStatePromptlyAfterSubscriptionTopologyChange(t *testing.T) {
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	store := New(t.TempDir(), NewMockSubscriptionClient()).(*eventStore)
+	defer func() {
+		require.NoError(t, store.Close(context.Background()))
+	}()
+
+	store.setCoordinatorInfo(node.ID("coordinator"))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- store.uploadStatePeriodically(ctx)
+	}()
+
+	span := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 42)
+	store.subscriptionChangeCh.In() <- SubscriptionChange{
+		ChangeType:   SubscriptionChangeTypeAdd,
+		SubID:        1,
+		Span:         &span,
+		CheckpointTs: 100,
+		ResolvedTs:   100,
+	}
+
+	select {
+	case msg := <-mc.GetMessageChannel():
+		require.Equal(t, node.ID("coordinator"), msg.To)
+		require.Len(t, msg.Message, 1)
+		state, ok := msg.Message[0].(*logservicepb.EventStoreState)
+		require.True(t, ok)
+		subscriptions := state.TableStates[42].Subscriptions
+		require.Len(t, subscriptions, 1)
+		require.Equal(t, uint64(1), subscriptions[0].SubID)
+	case <-time.After(time.Second):
+		t.Fatal("topology change was not reported promptly")
+	}
+
+	// A new subscription is not reusable until resolved ts is ahead of
+	// checkpoint ts. That first usable transition must not wait for the normal
+	// ten-second periodic report.
+	store.subscriptionChangeCh.In() <- SubscriptionChange{
+		ChangeType:   SubscriptionChangeTypeUpdate,
+		SubID:        1,
+		Span:         &span,
+		CheckpointTs: 100,
+		ResolvedTs:   201,
+	}
+	select {
+	case msg := <-mc.GetMessageChannel():
+		state, ok := msg.Message[0].(*logservicepb.EventStoreState)
+		require.True(t, ok)
+		require.Equal(t, uint64(201), state.TableStates[42].Subscriptions[0].ResolvedTs)
+	case <-time.After(2 * time.Second):
+		t.Fatal("first reusable subscription state was not reported promptly")
+	}
+
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
 }
 
 func setZstdCompressionForTest(t *testing.T, enable bool) func() {
@@ -866,6 +929,7 @@ func TestEventStoreUnregisterDispatcherWithoutDataSharingRemovesSubscription(t *
 		EndKey:   []byte("h"),
 	}
 	require.True(t, store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(uint64, uint64) {}, false, false, false))
+	require.Equal(t, 1, store.DispatcherCount())
 
 	mockSubClient := subClient.(*mockSubscriptionClient)
 	mockSubClient.mu.Lock()
@@ -873,6 +937,7 @@ func TestEventStoreUnregisterDispatcherWithoutDataSharingRemovesSubscription(t *
 	mockSubClient.mu.Unlock()
 
 	store.UnregisterDispatcher(cfID, dispatcherID)
+	require.Zero(t, store.DispatcherCount())
 
 	mockSubClient.mu.Lock()
 	require.Equal(t, 1, len(mockSubClient.subscriptions))
@@ -908,8 +973,10 @@ func TestEventStoreUnregisterDispatcherWithDataSharingKeepsSubscriptionForTTL(t 
 		EndKey:   []byte("h"),
 	}
 	require.True(t, store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(uint64, uint64) {}, false, false, false))
+	require.Equal(t, 1, store.DispatcherCount())
 
 	store.UnregisterDispatcher(cfID, dispatcherID)
+	require.Zero(t, store.DispatcherCount())
 
 	mockSubClient := subClient.(*mockSubscriptionClient)
 	mockSubClient.mu.Lock()
