@@ -23,10 +23,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-func TestSyncProducerClosedReturnsProducerClosed(t *testing.T) {
+func TestSyncProducerClosed(t *testing.T) {
 	producer := &syncProducer{}
 	producer.closed.Store(true)
 
@@ -37,25 +38,26 @@ func TestSyncProducerClosedReturnsProducerClosed(t *testing.T) {
 	require.ErrorIs(t, err, errors.ErrKafkaSinkClosed)
 }
 
-func TestSyncProducerSendsToRequestedPartitions(t *testing.T) {
+func TestSyncProducerPartitions(t *testing.T) {
 	const topic = "sync-topic"
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
 	defer cluster.Close()
 	o := testOptions(cluster.ListenAddrs())
 
-	producer, err := (&franzFactory{
-		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "sync"),
-		clientOpts:   testClientOptions(t, o),
-		producerOpts: producerOptions(o),
-	}).SyncProducer(context.Background())
+	client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
 	require.NoError(t, err)
+	defer client.Close()
+	producer := &syncProducer{
+		id:     common.NewChangefeedID4Test(common.DefaultKeyspaceName, "sync"),
+		client: client,
+	}
 	defer producer.Close()
 
 	require.NoError(t, producer.SendMessage(t.Context(), topic, 2, &codeccommon.Message{Key: []byte("key"), Value: []byte("value")}))
 	require.NoError(t, producer.SendMessages(t.Context(), topic, 3, &codeccommon.Message{Value: []byte("all")}))
 }
 
-func TestSyncProducerReturnsPartialFailure(t *testing.T) {
+func TestSyncProducerPartialFailure(t *testing.T) {
 	const topic = "partial-failure"
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
 	defer cluster.Close()
@@ -65,12 +67,13 @@ func TestSyncProducerReturnsPartialFailure(t *testing.T) {
 	})
 	o := testOptions(cluster.ListenAddrs())
 
-	producer, err := (&franzFactory{
-		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "partial"),
-		clientOpts:   testClientOptions(t, o),
-		producerOpts: producerOptions(o),
-	}).SyncProducer(context.Background())
+	client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
 	require.NoError(t, err)
+	defer client.Close()
+	producer := &syncProducer{
+		id:     common.NewChangefeedID4Test(common.DefaultKeyspaceName, "partial"),
+		client: client,
+	}
 	defer producer.Close()
 
 	err = producer.SendMessages(t.Context(), topic, 3, &codeccommon.Message{Value: []byte("value")})
@@ -78,14 +81,15 @@ func TestSyncProducerReturnsPartialFailure(t *testing.T) {
 	require.ErrorIs(t, err, kerr.InvalidTopicException)
 }
 
-func TestSyncProducerUsesSendContext(t *testing.T) {
+func TestSyncProducerContext(t *testing.T) {
 	o := testOptions([]string{"127.0.0.1:1"})
-	producer, err := (&franzFactory{
-		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "canceled"),
-		clientOpts:   testClientOptions(t, o),
-		producerOpts: producerOptions(o),
-	}).SyncProducer(t.Context())
+	client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
 	require.NoError(t, err)
+	defer client.Close()
+	producer := &syncProducer{
+		id:     common.NewChangefeedID4Test(common.DefaultKeyspaceName, "canceled"),
+		client: client,
+	}
 	defer producer.Close()
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -98,15 +102,16 @@ func TestSyncProducerUsesSendContext(t *testing.T) {
 
 func TestSyncProducerCloseIsIdempotent(t *testing.T) {
 	o := testOptions([]string{"127.0.0.1:1"})
-	client, err := (&franzFactory{
-		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "close"),
-		clientOpts:   testClientOptions(t, o),
-		producerOpts: producerOptions(o),
-	}).SyncProducer(context.Background())
+	client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
 	require.NoError(t, err)
+	defer client.Close()
+	producer := &syncProducer{
+		id:     common.NewChangefeedID4Test(common.DefaultKeyspaceName, "close"),
+		client: client,
+	}
 
-	client.Close()
-	client.Close()
+	producer.Close()
+	producer.Close()
 }
 
 func produceResponseWithError(req kmsg.Request, failedPartition int32, errorCode int16) (kmsg.Response, error, bool) {

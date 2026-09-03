@@ -51,6 +51,9 @@ func (c components) close() {
 	if c.claimCheck != nil {
 		c.claimCheck.Close()
 	}
+	if c.factory != nil {
+		c.factory.Close()
+	}
 }
 
 func newKafkaSinkComponent(

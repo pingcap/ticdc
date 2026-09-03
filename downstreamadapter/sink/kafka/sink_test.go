@@ -234,7 +234,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		gomock.InOrder(
 			adminClient.EXPECT().Close(),
 			topicManager.EXPECT().Close(),
-			factory.EXPECT().CleanupMetrics(),
+			factory.EXPECT().Close(),
 		)
 
 		kafkaSink, err := newWithComponents(
@@ -263,7 +263,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 			asyncProducer.EXPECT().Close(),
 			adminClient.EXPECT().Close(),
 			topicManager.EXPECT().Close(),
-			factory.EXPECT().CleanupMetrics(),
+			factory.EXPECT().Close(),
 		)
 
 		kafkaSink, err := newWithComponents(
@@ -295,7 +295,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 			asyncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) }),
 			adminClient.EXPECT().Close().Do(func() { closeCount.Add(1) }),
 			topicManager.EXPECT().Close().Do(func() { closeCount.Add(1) }),
-			factory.EXPECT().CleanupMetrics(),
+			factory.EXPECT().Close().Do(func() { closeCount.Add(1) }),
 		)
 
 		kafkaSink, err := newWithComponents(
@@ -311,7 +311,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		require.True(t, kafkaSink.IsNormal())
 
 		kafkaSink.Close()
-		require.Equal(t, int64(4), closeCount.Load())
+		require.Equal(t, int64(5), closeCount.Load())
 		require.False(t, kafkaSink.IsNormal())
 		kafkaSink.AddDMLEvent(&commonEvent.DMLEvent{})
 		require.Zero(t, kafkaSink.eventChan.Len())
@@ -612,7 +612,7 @@ func newKafkaSinkForTest(
 	factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
 	factory.EXPECT().SyncProducer(gomock.Any()).Return(syncProducer, nil)
 	factory.EXPECT().MetricsCollector(nil).Return(noopMetricsCollector{})
-	factory.EXPECT().CleanupMetrics().AnyTimes()
+	factory.EXPECT().Close().AnyTimes()
 
 	kafkaSink, err := newWithComponents(ctx, changefeedID, common.DefaultKeyspaceID, protocol, components{
 		encoderGroup:   encoderGroup,

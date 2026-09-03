@@ -46,8 +46,6 @@ func (p *asyncProducer) Close() {
 	}
 
 	start := time.Now()
-	p.client.Close()
-
 	log.Info("kafka async producer closed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
 		zap.String("changefeed", p.changefeedID.Name()),
@@ -75,10 +73,15 @@ func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition i
 	callback := message.Callback
 	logInfo := message.LogInfo
 	promise := func(_ *kgo.Record, err error) {
-		p.resultCh <- asyncProduceResult{
+		result := asyncProduceResult{
 			callback: callback,
 			logInfo:  logInfo,
 			err:      err,
+		}
+		select {
+		case p.resultCh <- result:
+		case <-ctx.Done():
+		case <-p.client.Context().Done():
 		}
 	}
 

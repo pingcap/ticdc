@@ -32,7 +32,7 @@ type saramaFactory struct {
 	metricRegistry metrics.Registry
 }
 
-func (*saramaFactory) CleanupMetrics() {}
+func (*saramaFactory) Close() {}
 
 // newSaramaFactory constructs a Factory with sarama implementation.
 func newSaramaFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {

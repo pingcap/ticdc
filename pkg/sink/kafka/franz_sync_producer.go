@@ -82,8 +82,6 @@ func (p *syncProducer) Close() {
 	}
 
 	start := time.Now()
-	p.client.Close()
-
 	log.Info("kafka ddl producer closed",
 		zap.String("keyspace", p.id.Keyspace()), zap.String("changefeed", p.id.Name()),
 		zap.Duration("duration", time.Since(start)))

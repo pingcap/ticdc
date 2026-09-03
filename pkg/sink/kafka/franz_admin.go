@@ -29,17 +29,19 @@ import (
 )
 
 type admin struct {
-	changefeed common.ChangeFeedID
-	admin      *kadm.Client
+	changefeed  common.ChangeFeedID
+	admin       *kadm.Client
+	closeClient func()
 }
+
+const adminMetadataMinAge = 100 * time.Millisecond
 
 func newAdmin(ctx context.Context, changefeedID common.ChangeFeedID, clientOpts []kgo.Opt) (*admin, error) {
 	opts := make([]kgo.Opt, 0, len(clientOpts)+3)
 	opts = append(opts, clientOpts...)
 	opts = append(opts, kgo.WithContext(ctx), kgo.WithLogger(newClientLogger(changefeedID, "admin")))
-	// MetadataMinAge is the minimum interval between metadata requests.
 	// It must stay below the visibility retry interval to avoid retrying a cached topic-not-found result.
-	opts = append(opts, kgo.MetadataMinAge(100*time.Millisecond))
+	opts = append(opts, kgo.MetadataMinAge(adminMetadataMinAge))
 
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
@@ -47,8 +49,9 @@ func newAdmin(ctx context.Context, changefeedID common.ChangeFeedID, clientOpts 
 	}
 
 	return &admin{
-		changefeed: changefeedID,
-		admin:      kadm.NewClient(client),
+		changefeed:  changefeedID,
+		admin:       kadm.NewClient(client),
+		closeClient: client.Close,
 	}, nil
 }
 
@@ -249,4 +252,8 @@ func (a *admin) CreateTopic(ctx context.Context, detail *TopicDetail) error {
 	return errors.WrapError(errors.ErrKafkaAdminAPI, resp.Err, "create-topic", detail.Name)
 }
 
-func (a *admin) Close() { a.admin.Close() }
+func (a *admin) Close() {
+	if a.closeClient != nil {
+		a.closeClient()
+	}
+}

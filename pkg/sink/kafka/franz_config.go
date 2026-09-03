@@ -22,7 +22,6 @@ import (
 	"strings"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl"
@@ -37,18 +36,18 @@ import (
 // franz-go counts a record from Produce acceptance until its delivery callback
 // returns, including metadata lookup, batching, sending, Broker response, and
 // retries. A record larger than the byte limit fails immediately; otherwise,
-// either limit blocks later Produce calls. Their ratio is 1 KiB per record, so
+// either limit blocks later Produce calls. Their ratio is 2 KiB per record, so
 // bytes govern larger records while count bounds smaller record objects.
 const (
-	producerMaxBufferedBytes   = 64 << 20
+	producerMaxBufferedBytes   = 128 << 20
 	producerMaxBufferedRecords = 1 << 16
 )
 
 // producerMaxRequestBytes matches franz-go's default BrokerMaxWriteBytes and Kafka's default socket.request.max.bytes.
 const producerMaxRequestBytes = 100 << 20
 
-// Admin and producer clients share connection options. Producer delivery and
-// resource limits stay separate so they cannot affect admin operations.
+// The shared client uses these options for all Kafka requests. Producer options
+// below apply only to Produce requests and buffered records.
 func clientOptions(ctx context.Context, o *options) ([]kgo.Opt, error) {
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(o.BrokerEndpoints...),
@@ -63,7 +62,6 @@ func clientOptions(ctx context.Context, o *options) ([]kgo.Opt, error) {
 	if o.EnableTLS {
 		tlsConfig := &tls.Config{
 			MinVersion: tls.VersionTLS12,
-			NextProtos: []string{"h2", "http/1.1"},
 		}
 		if o.Credential != nil && o.Credential.IsTLSEnabled() {
 			var err error
@@ -98,11 +96,11 @@ func producerOptions(o *options) []kgo.Opt {
 		// default jittered backoff adds about 6.2s to 9.3s across five retries.
 		kgo.RecordRetries(o.MaxRetry),
 		kgo.UnknownTopicRetries(o.MaxRetry),
-		// Limit each client to 64 MiB of buffered payload. The in-flight limit
+		// Limit each client to 128 MiB of buffered payload. The in-flight limit
 		// applies per broker and does not bound records queued for other brokers,
 		// metadata, or retries, so the producer needs a separate byte limit.
-		// 64 MiB leaves room above TiCDC's default 10 MiB message limit while
-		// bounding buffered payload memory.
+		// 128 MiB exceeds the 100 MiB record batch limit, so a valid single
+		// record is not rejected by the buffer limit.
 		kgo.MaxBufferedBytes(producerMaxBufferedBytes),
 		kgo.MaxBufferedRecords(producerMaxBufferedRecords),
 		// A record batch must fit in the 100 MiB Produce request limit.
@@ -186,24 +184,6 @@ func buildOAuthMechanism(ctx context.Context, cfg oauth2Config) (sasl.Mechanism,
 		}
 		return oauth.Auth{Token: token.AccessToken}, nil
 	}), nil
-}
-
-func newProducerClient(
-	ctx context.Context, changefeedID common.ChangeFeedID, role string, clientOpts []kgo.Opt, producerOpts []kgo.Opt,
-) (*kgo.Client, error) {
-	opts := make([]kgo.Opt, 0, len(clientOpts)+len(producerOpts)+3)
-	opts = append(opts, clientOpts...)
-	opts = append(opts,
-		kgo.WithContext(ctx),
-		kgo.WithLogger(newClientLogger(changefeedID, role)),
-		kgo.WithHooks(newMetricsHook(changefeedID)))
-	opts = append(opts, producerOpts...)
-
-	client, err := kgo.NewClient(opts...)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
-	}
-	return client, nil
 }
 
 func requiredAcks(required RequiredAcks) kgo.Acks {

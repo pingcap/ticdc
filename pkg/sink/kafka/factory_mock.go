@@ -65,16 +65,16 @@ func (mr *MockFactoryMockRecorder) AsyncProducer(ctx interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AsyncProducer", reflect.TypeOf((*MockFactory)(nil).AsyncProducer), ctx)
 }
 
-// CleanupMetrics mocks base method.
-func (m *MockFactory) CleanupMetrics() {
+// Close mocks base method.
+func (m *MockFactory) Close() {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "CleanupMetrics")
+	m.ctrl.Call(m, "Close")
 }
 
-// CleanupMetrics indicates an expected call of CleanupMetrics.
-func (mr *MockFactoryMockRecorder) CleanupMetrics() *gomock.Call {
+// Close indicates an expected call of Close.
+func (mr *MockFactoryMockRecorder) Close() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CleanupMetrics", reflect.TypeOf((*MockFactory)(nil).CleanupMetrics))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockFactory)(nil).Close))
 }
 
 // MetricsCollector mocks base method.

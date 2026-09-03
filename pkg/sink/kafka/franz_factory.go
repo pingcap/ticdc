@@ -17,17 +17,20 @@ package kafka
 import (
 	"context"
 	"strings"
+	"sync"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
 )
 
 type franzFactory struct {
 	changefeedID common.ChangeFeedID
-	clientOpts   []kgo.Opt
-	producerOpts []kgo.Opt
+	client       *kgo.Client
+	closeOnce    sync.Once
 }
 
 func newFranzFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
@@ -39,12 +42,27 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 	if err != nil {
 		return nil, err
 	}
-	defer admin.Close()
-
-	if err := adjustOptions(ctx, changefeedID, admin, o, o.Topic); err != nil {
+	err = adjustOptions(ctx, changefeedID, admin, o, o.Topic)
+	admin.Close()
+	if err != nil {
 		return nil, err
 	}
 	producerOpts := producerOptions(o)
+	metricsHook := newMetricsHook(changefeedID)
+	opts := make([]kgo.Opt, 0, len(clientOpts)+len(producerOpts)+4)
+	opts = append(opts, clientOpts...)
+	opts = append(opts,
+		kgo.WithContext(ctx),
+		kgo.WithLogger(newClientLogger(changefeedID, "shared")),
+		kgo.WithHooks(metricsHook),
+		kgo.MetadataMinAge(adminMetadataMinAge))
+	opts = append(opts, producerOpts...)
+
+	client, err := kgo.NewClient(opts...)
+	if err != nil {
+		cleanupMetrics(changefeedID)
+		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
+	}
 
 	compression := strings.ToLower(strings.TrimSpace(o.Compression))
 	if compression == "" {
@@ -67,43 +85,44 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 		zap.Duration("writeTimeout", o.WriteTimeout))
 	return &franzFactory{
 		changefeedID: changefeedID,
-		clientOpts:   clientOpts,
-		producerOpts: producerOpts,
+		client:       client,
 	}, nil
 }
 
-func (f *franzFactory) AdminClient(ctx context.Context) (AdminClient, error) {
-	return newAdmin(ctx, f.changefeedID, f.clientOpts)
+func (f *franzFactory) AdminClient(context.Context) (AdminClient, error) {
+	return &admin{
+		changefeed: f.changefeedID,
+		admin:      kadm.NewClient(f.client),
+	}, nil
 }
 
-func (f *franzFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
-	client, err := newProducerClient(ctx, f.changefeedID, "sync-producer", f.clientOpts, f.producerOpts)
-	if err != nil {
-		return nil, err
-	}
+func (f *franzFactory) SyncProducer(context.Context) (SyncProducer, error) {
 	return &syncProducer{
 		id:     f.changefeedID,
-		client: client,
+		client: f.client,
 	}, nil
 }
 
-func (f *franzFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
-	client, err := newProducerClient(ctx, f.changefeedID, "async-producer", f.clientOpts, f.producerOpts)
-	if err != nil {
-		return nil, err
-	}
+func (f *franzFactory) AsyncProducer(context.Context) (AsyncProducer, error) {
 	return &asyncProducer{
-		client:       client,
+		client:       f.client,
 		changefeedID: f.changefeedID,
 		resultCh:     make(chan asyncProduceResult, producerMaxBufferedRecords),
 	}, nil
 }
 
+func (f *franzFactory) Close() {
+	f.closeOnce.Do(func() {
+		if f.client != nil {
+			f.client.Close()
+		}
+		cleanupMetrics(f.changefeedID)
+	})
+}
+
 func (f *franzFactory) MetricsCollector(AdminClient) MetricsCollector {
 	return noopMetricsCollector{}
 }
-
-func (f *franzFactory) CleanupMetrics() { cleanupMetrics(f.changefeedID) }
 
 type noopMetricsCollector struct{}
 

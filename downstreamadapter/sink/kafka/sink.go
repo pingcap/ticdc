@@ -119,6 +119,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	if err != nil {
 		return err
 	}
+	defer factory.Close()
 
 	adminClient, err := factory.AdminClient(ctx)
 	if err != nil {
@@ -173,7 +174,6 @@ func newWithComponents(
 		}
 		comp.close()
 		statistics.Close()
-		comp.factory.CleanupMetrics()
 	}()
 
 	asyncProducer, err = comp.factory.AsyncProducer(ctx)
@@ -425,7 +425,6 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			for _, message := range future.Messages {
 				start := time.Now()
 				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-					message.SetPartitionKey(future.Key.PartitionKey)
 					if err = s.dmlProducer.AsyncSend(
 						ctx,
 						future.Key.Topic,
@@ -579,7 +578,6 @@ func (s *sink) Close() {
 	s.dmlProducer.Close()
 	s.comp.close()
 	s.statistics.Close()
-	s.comp.factory.CleanupMetrics()
 }
 
 func (s *sink) BatchCount() int {

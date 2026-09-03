@@ -28,8 +28,10 @@ func NewFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedI
 	return newFranzFactory(ctx, o, changefeedID)
 }
 
-// Factory is used to produce all kafka components.
+// Factory creates Kafka components for one changefeed.
 type Factory interface {
+	// Close releases factory-owned resources after all components are closed.
+	Close()
 	// AdminClient return a kafka cluster admin client
 	AdminClient(ctx context.Context) (AdminClient, error)
 	// SyncProducer creates a sync producer to writer message to kafka
@@ -38,8 +40,6 @@ type Factory interface {
 	AsyncProducer(ctx context.Context) (AsyncProducer, error)
 	// MetricsCollector returns the kafka metrics collector
 	MetricsCollector(adminClient AdminClient) MetricsCollector
-	// CleanupMetrics removes metrics owned directly by the factory.
-	CleanupMetrics()
 }
 
 // SyncProducer is the kafka sync producer
@@ -55,19 +55,13 @@ type SyncProducer interface {
 	// SendMessages will return an error.
 	SendMessages(ctx context.Context, topic string, partitionNum int32, message *codecCommon.Message) error
 
-	// Close shuts down the producer; you must call this function before a producer
-	// object passes out of scope, as it may otherwise leak memory.
-	// You must call this before calling Close on the underlying client.
+	// Close stops the producer. It must be called before Factory.Close.
 	Close()
 }
 
 // AsyncProducer is the kafka async producer
 type AsyncProducer interface {
-	// Close shuts down the producer and waits for any buffered messages to be
-	// flushed. You must call this function before a producer object passes out of
-	// scope, as it may otherwise leak memory. You must call this before process
-	// shutting down, or you may lose messages. You must call this before calling
-	// Close on the underlying client.
+	// Close stops the producer. It must be called before Factory.Close.
 	Close()
 
 	// AsyncSend is the input channel for the user to write messages to that they

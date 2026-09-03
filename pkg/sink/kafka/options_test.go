@@ -107,7 +107,7 @@ func TestFactorySelection(t *testing.T) {
 			require.NoError(t, err)
 			require.IsType(t, test.expected, factory)
 
-			factory.CleanupMetrics()
+			factory.Close()
 		})
 	}
 }
