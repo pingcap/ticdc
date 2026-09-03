@@ -34,10 +34,6 @@ type syncProducer struct {
 }
 
 func (p *syncProducer) SendMessage(ctx context.Context, topic string, partitionNum int32, message *codecCommon.Message) error {
-	if p.closed.Load() {
-		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
-	}
-
 	record := &kgo.Record{
 		Topic:     topic,
 		Partition: partitionNum,
@@ -48,10 +44,6 @@ func (p *syncProducer) SendMessage(ctx context.Context, topic string, partitionN
 }
 
 func (p *syncProducer) SendMessages(ctx context.Context, topic string, partitionNum int32, message *codecCommon.Message) error {
-	if p.closed.Load() {
-		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
-	}
-
 	records := make([]*kgo.Record, 0, partitionNum)
 	for i := 0; i < int(partitionNum); i++ {
 		records = append(records, &kgo.Record{
@@ -66,6 +58,10 @@ func (p *syncProducer) SendMessages(ctx context.Context, topic string, partition
 }
 
 func (p *syncProducer) sendRecords(ctx context.Context, message *codecCommon.Message, records ...*kgo.Record) error {
+	if p.closed.Load() {
+		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
+	}
+
 	err := p.client.ProduceSync(ctx, records...).FirstErr()
 	if err == nil {
 		return nil

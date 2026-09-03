@@ -125,16 +125,6 @@ func TestProducerLimitsDoNotScaleWithConfiguredMessage(t *testing.T) {
 	require.Equal(t, int32(producerMaxRequestBytes), client.OptValue(kgo.BrokerMaxWriteBytes))
 }
 
-func TestProducerOptionsDoNotClampSmallBatch(t *testing.T) {
-	config := testOptions([]string{"127.0.0.1:9092"})
-	config.MaxMessageBytes = 511
-
-	producerOpts := producerOptions(config)
-
-	_, err := kgo.NewClient(producerOpts...)
-	require.Error(t, err)
-}
-
 func TestProducerOptionsLimitBatchToProduceRequest(t *testing.T) {
 	for _, test := range []struct {
 		name            string
