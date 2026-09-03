@@ -49,7 +49,7 @@ PY
 }
 
 insert_probe_rows() {
-	mysql -uroot -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} --default-character-set utf8mb4 -N <<EOF
+	mysql -uroot -h"${UP_TIDB_HOST}" -P"${UP_TIDB_PORT}" --default-character-set utf8mb4 -N <<EOF
 CREATE DATABASE IF NOT EXISTS test;
 CREATE TABLE IF NOT EXISTS test.cdc_start_ts_probe (
 	id BIGINT PRIMARY KEY,
