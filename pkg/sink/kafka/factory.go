@@ -74,8 +74,8 @@ type AsyncProducer interface {
 	// wish to send.
 	AsyncSend(ctx context.Context, topic string, partition int32, message *codecCommon.Message) error
 
-	// AsyncRunCallback process the messages that has sent to kafka,
-	// and run tha attached callback. the caller should call this
-	// method in a background goroutine
+	// AsyncRunCallback invokes callbacks for successfully delivered messages and
+	// returns the first terminal delivery error. The caller should run it in a
+	// background goroutine.
 	AsyncRunCallback(ctx context.Context) error
 }

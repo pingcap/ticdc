@@ -48,9 +48,9 @@ func TestAsyncSendCanceledContext(t *testing.T) {
 func TestAsyncRunCallbackReturnsQueuedError(t *testing.T) {
 	producer := &asyncProducer{
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-callback"),
-		errCh:        make(chan error, 1),
+		resultCh:     make(chan asyncProduceResult, 1),
 	}
-	producer.errCh <- context.DeadlineExceeded
+	producer.resultCh <- asyncProduceResult{err: context.DeadlineExceeded}
 
 	err := producer.AsyncRunCallback(context.Background())
 
@@ -65,7 +65,7 @@ func TestCloseDoesNotAcknowledgeBufferedMessage(t *testing.T) {
 	producer := &asyncProducer{
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-close"),
-		errCh:        make(chan error, 1),
+		resultCh:     make(chan asyncProduceResult, 1),
 	}
 	err = producer.AsyncSend(context.Background(), "topic", 0, &codeccommon.Message{
 		Callback: func() {
@@ -87,12 +87,13 @@ func TestAsyncProducerCallbackExactlyOnce(t *testing.T) {
 	defer cluster.Close()
 	o := testOptions(cluster.ListenAddrs())
 
-	producer, err := (&franzFactory{
+	created, err := (&franzFactory{
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-success"),
 		clientOpts:   testClientOptions(t, o),
 		producerOpts: producerOptions(o),
 	}).AsyncProducer(context.Background())
 	require.NoError(t, err)
+	producer := created.(*asyncProducer)
 	defer producer.Close()
 
 	var calls atomic.Int32
@@ -105,6 +106,12 @@ func TestAsyncProducerCallbackExactlyOnce(t *testing.T) {
 		},
 	}
 	require.NoError(t, producer.AsyncSend(context.Background(), topic, 0, message))
+	require.Eventually(t, func() bool { return producer.client.BufferedProduceRecords() == 0 }, time.Second, time.Millisecond)
+	require.Zero(t, calls.Load())
+
+	callbackCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- producer.AsyncRunCallback(callbackCtx) }()
 
 	select {
 	case <-called:
@@ -114,6 +121,63 @@ func TestAsyncProducerCallbackExactlyOnce(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 	require.Equal(t, int32(1), calls.Load())
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestAsyncProducerCallbackDoesNotBlockPromiseWorker(t *testing.T) {
+	const topic = "async-callback-isolation"
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	defer cluster.Close()
+	o := testOptions(cluster.ListenAddrs())
+
+	created, err := (&franzFactory{
+		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-callback-isolation"),
+		clientOpts:   testClientOptions(t, o),
+		producerOpts: producerOptions(o),
+	}).AsyncProducer(context.Background())
+	require.NoError(t, err)
+	producer := created.(*asyncProducer)
+	defer producer.Close()
+
+	callbackStarted := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	secondCallback := make(chan struct{})
+	require.NoError(t, producer.AsyncSend(context.Background(), topic, 0, &codeccommon.Message{
+		Value: []byte("first"),
+		Callback: func() {
+			close(callbackStarted)
+			<-releaseCallback
+		},
+	}))
+	require.NoError(t, producer.AsyncSend(context.Background(), topic, 0, &codeccommon.Message{
+		Value:    []byte("second"),
+		Callback: func() { close(secondCallback) },
+	}))
+
+	callbackCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- producer.AsyncRunCallback(callbackCtx) }()
+	select {
+	case <-callbackStarted:
+	case <-time.After(time.Second):
+		t.Fatal("produce callback was not called")
+	}
+	require.Eventually(t, func() bool { return producer.client.BufferedProduceRecords() == 0 }, time.Second, time.Millisecond)
+	select {
+	case <-secondCallback:
+		t.Fatal("second callback ran before the first callback completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releaseCallback)
+	select {
+	case <-secondCallback:
+	case <-time.After(time.Second):
+		t.Fatal("second callback was not called")
+	}
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
 }
 
 func TestAsyncProducerReportsProduceFailure(t *testing.T) {
@@ -157,7 +221,7 @@ func TestBufferBackpressureCanBeCanceled(t *testing.T) {
 	producer := &asyncProducer{
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "backpressure"),
-		errCh:        make(chan error, 1),
+		resultCh:     make(chan asyncProduceResult, 2),
 	}
 	t.Cleanup(producer.Close)
 

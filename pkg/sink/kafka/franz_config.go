@@ -46,7 +46,7 @@ const (
 
 // Admin and producer clients share connection options. Producer delivery and
 // resource limits stay separate so they cannot affect admin operations.
-func clientOptions(o *options) ([]kgo.Opt, error) {
+func clientOptions(ctx context.Context, o *options) ([]kgo.Opt, error) {
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(o.BrokerEndpoints...),
 		kgo.ClientID(o.ClientID),
@@ -74,7 +74,7 @@ func clientOptions(o *options) ([]kgo.Opt, error) {
 	}
 
 	if o.sasl != nil && o.sasl.mechanism != "" {
-		mechanism, err := buildSASLMechanism(o.sasl)
+		mechanism, err := buildSASLMechanism(ctx, o.sasl)
 		if err != nil {
 			return nil, err
 		}
@@ -126,7 +126,7 @@ func producerOptions(o *options) []kgo.Opt {
 	}
 }
 
-func buildSASLMechanism(cfg *saslConfig) (sasl.Mechanism, error) {
+func buildSASLMechanism(ctx context.Context, cfg *saslConfig) (sasl.Mechanism, error) {
 	switch cfg.mechanism {
 	case plainMechanism:
 		return plain.Auth{User: cfg.user, Pass: cfg.password}.AsMechanism(), nil
@@ -135,7 +135,7 @@ func buildSASLMechanism(cfg *saslConfig) (sasl.Mechanism, error) {
 	case scram512Mechanism:
 		return scram.Auth{User: cfg.user, Pass: cfg.password}.AsSha512Mechanism(), nil
 	case oauthMechanism:
-		return buildOAuthMechanism(cfg.oauth2)
+		return buildOAuthMechanism(ctx, cfg.oauth2)
 	case gssapiMechanism:
 		return buildGSSAPIMechanism(cfg.gssapi)
 	default:
@@ -143,7 +143,7 @@ func buildSASLMechanism(cfg *saslConfig) (sasl.Mechanism, error) {
 	}
 }
 
-func buildOAuthMechanism(cfg oauth2Config) (sasl.Mechanism, error) {
+func buildOAuthMechanism(ctx context.Context, cfg oauth2Config) (sasl.Mechanism, error) {
 	var httpClient *http.Client
 	if cfg.caPath != "" {
 		var err error
@@ -171,11 +171,13 @@ func buildOAuthMechanism(cfg oauth2Config) (sasl.Mechanism, error) {
 		EndpointParams: endpointParams,
 		Scopes:         cfg.scopes,
 	}
-	return oauth.Oauth(func(ctx context.Context) (oauth.Auth, error) {
-		if httpClient != nil {
-			ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
-		}
-		token, err := config.TokenSource(ctx).Token()
+	if httpClient != nil {
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
+	}
+	// One token source shares cached credentials across broker connections and refreshes them on expiry.
+	tokenSource := config.TokenSource(ctx)
+	return oauth.Oauth(func(context.Context) (oauth.Auth, error) {
+		token, err := tokenSource.Token()
 		if err != nil {
 			return oauth.Auth{}, errors.WrapError(errors.ErrNewKafkaSink, err)
 		}

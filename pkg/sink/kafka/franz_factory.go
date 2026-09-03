@@ -31,7 +31,7 @@ type franzFactory struct {
 }
 
 func newFranzFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
-	clientOpts, err := clientOptions(o)
+	clientOpts, err := clientOptions(ctx, o)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,7 @@ func (f *franzFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error)
 	return &asyncProducer{
 		client:       client,
 		changefeedID: f.changefeedID,
-		errCh:        make(chan error, 1),
+		resultCh:     make(chan asyncProduceResult, producerMaxBufferedRecords),
 	}, nil
 }
 

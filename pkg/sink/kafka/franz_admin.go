@@ -19,11 +19,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.uber.org/zap"
 )
 
 type admin struct {
@@ -148,6 +150,14 @@ func (a *admin) GetTopicsMeta(ctx context.Context, topics []string, ignoreTopicE
 	meta, err := a.admin.Metadata(ctx, topics...)
 	if err != nil {
 		resource := strings.Join(topics, ",")
+		if ignoreTopicError && errors.Is(err, kerr.TopicAuthorizationFailed) {
+			log.Warn("kafka topic metadata refresh failed",
+				zap.String("keyspace", a.changefeed.Keyspace()),
+				zap.String("changefeed", a.changefeed.Name()),
+				zap.String("topic", resource),
+				zap.Error(err))
+			return make(map[string]TopicDetail), nil
+		}
 		if isAuthorizationFailed(err) {
 			return nil, errors.WrapError(errors.ErrKafkaAuthorizationFailed, err, "describe-topics", resource)
 		}
@@ -176,7 +186,7 @@ func topicDetailsFromMetadata(meta kadm.Metadata, topics []string, ignoreTopicEr
 			continue
 		}
 
-		if ignoreTopicError && errors.Is(detail.Err, kerr.UnknownTopicOrPartition) {
+		if ignoreTopicError {
 			continue
 		}
 

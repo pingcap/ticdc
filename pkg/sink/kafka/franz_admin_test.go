@@ -116,22 +116,20 @@ func TestFranzTopicDetailsFromMetadata(t *testing.T) {
 			expectedCause: kerr.TopicAuthorizationFailed,
 		},
 		{
-			name: "do not ignore authorization failure",
+			name: "ignore authorization failure",
 			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
 				topic: {Topic: topic, Err: kerr.TopicAuthorizationFailed},
 			}},
 			ignoreTopicError: true,
-			expectedError:    errors.ErrKafkaAuthorizationFailed,
-			expectedCause:    kerr.TopicAuthorizationFailed,
+			expected:         map[string]TopicDetail{},
 		},
 		{
-			name: "do not ignore general failure",
+			name: "ignore general failure",
 			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
 				topic: {Topic: topic, Err: kerr.InvalidTopicException},
 			}},
 			ignoreTopicError: true,
-			expectedError:    errors.ErrKafkaAdminAPI,
-			expectedCause:    kerr.InvalidTopicException,
+			expected:         map[string]TopicDetail{},
 		},
 	}
 
@@ -151,6 +149,40 @@ func TestFranzTopicDetailsFromMetadata(t *testing.T) {
 			require.Equal(t, tc.expected, actual)
 		})
 	}
+}
+
+func TestFranzGetTopicsMetaIgnoresTopicAuthorizationFailure(t *testing.T) {
+	cluster := kfake.MustCluster(kfake.NumBrokers(1))
+	defer cluster.Close()
+
+	cluster.ControlKey(int16(kmsg.Metadata), func(req kmsg.Request) (kmsg.Response, error, bool) {
+		request := req.(*kmsg.MetadataRequest)
+		response := request.ResponseKind().(*kmsg.MetadataResponse)
+		for _, requestTopic := range request.Topics {
+			responseTopic := kmsg.NewMetadataResponseTopic()
+			responseTopic.Topic = requestTopic.Topic
+			responseTopic.ErrorCode = kerr.TopicAuthorizationFailed.Code
+			response.Topics = append(response.Topics, responseTopic)
+		}
+		return response, nil, true
+	})
+
+	o := testOptions(cluster.ListenAddrs())
+	admin, err := newAdmin(
+		t.Context(),
+		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "ignore-topic-authorization"),
+		testClientOptions(t, o),
+	)
+	require.NoError(t, err)
+	defer admin.Close()
+
+	topics, err := admin.GetTopicsMeta(t.Context(), []string{"topic"}, true)
+	require.NoError(t, err)
+	require.Empty(t, topics)
+
+	_, err = admin.GetTopicsMeta(t.Context(), []string{"topic"}, false)
+	require.ErrorIs(t, err, errors.ErrKafkaAuthorizationFailed)
+	require.ErrorIs(t, err, kerr.TopicAuthorizationFailed)
 }
 
 func TestFranzIsAuthorizationFailed(t *testing.T) {

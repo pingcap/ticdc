@@ -30,8 +30,14 @@ type asyncProducer struct {
 	client       *kgo.Client
 	changefeedID common.ChangeFeedID
 
-	closed atomic.Bool
-	errCh  chan error
+	closed   atomic.Bool
+	resultCh chan asyncProduceResult
+}
+
+type asyncProduceResult struct {
+	callback func()
+	logInfo  *codeccommon.MessageLogInfo
+	err      error
 }
 
 func (p *asyncProducer) Close() {
@@ -69,24 +75,10 @@ func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition i
 	callback := message.Callback
 	logInfo := message.LogInfo
 	promise := func(_ *kgo.Record, err error) {
-		if err != nil {
-			log.Error("kafka message send failed",
-				zap.String("keyspace", p.changefeedID.Keyspace()),
-				zap.String("changefeed", p.changefeedID.Name()),
-				zap.String("eventContext", BuildEventLogContext(
-					p.changefeedID.Keyspace(), p.changefeedID.Name(), logInfo)),
-				zap.Error(err))
-
-			select {
-			case p.errCh <- errors.WrapError(errors.ErrKafkaSendMessage, err):
-			// Keep the first error until the dispatcher can recover from multiple errors.
-			default:
-			}
-			return
-		}
-
-		if callback != nil {
-			callback()
+		p.resultCh <- asyncProduceResult{
+			callback: callback,
+			logInfo:  logInfo,
+			err:      err,
 		}
 	}
 
@@ -99,8 +91,19 @@ func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case err := <-p.errCh:
-			return err
+		case result := <-p.resultCh:
+			if result.err != nil {
+				log.Error("kafka message send failed",
+					zap.String("keyspace", p.changefeedID.Keyspace()),
+					zap.String("changefeed", p.changefeedID.Name()),
+					zap.String("eventContext", BuildEventLogContext(
+						p.changefeedID.Keyspace(), p.changefeedID.Name(), result.logInfo)),
+					zap.Error(result.err))
+				return errors.WrapError(errors.ErrKafkaSendMessage, result.err)
+			}
+			if result.callback != nil {
+				result.callback()
+			}
 		}
 	}
 }
