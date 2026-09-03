@@ -44,6 +44,9 @@ const (
 	producerMaxBufferedRecords = 1 << 16
 )
 
+// producerMaxRequestBytes matches franz-go's default BrokerMaxWriteBytes and Kafka's default socket.request.max.bytes.
+const producerMaxRequestBytes = 100 << 20
+
 // Admin and producer clients share connection options. Producer delivery and
 // resource limits stay separate so they cannot affect admin operations.
 func clientOptions(ctx context.Context, o *options) ([]kgo.Opt, error) {
@@ -102,8 +105,8 @@ func producerOptions(o *options) []kgo.Opt {
 		// bounding buffered payload memory.
 		kgo.MaxBufferedBytes(producerMaxBufferedBytes),
 		kgo.MaxBufferedRecords(producerMaxBufferedRecords),
-		// ProducerBatchMaxBytes is franz-go's name for Kafka's max.message.bytes limit.
-		kgo.ProducerBatchMaxBytes(int32(o.MaxMessageBytes)),
+		// A record batch must fit in the 100 MiB Produce request limit.
+		kgo.ProducerBatchMaxBytes(int32(min(o.MaxMessageBytes, producerMaxRequestBytes))),
 		// This value limits how long the Broker may process a Produce request;
 		// read-timeout is therefore not an exact socket read deadline. Together
 		// with RequestTimeoutOverhead above, the socket write deadline is

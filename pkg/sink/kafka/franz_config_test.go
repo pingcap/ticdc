@@ -94,7 +94,7 @@ func TestProducerOptionsConfigureMessageAndBufferLimits(t *testing.T) {
 	require.Equal(t, int64(producerMaxBufferedRecords), client.OptValue(kgo.MaxBufferedRecords))
 	require.Equal(t, int64(1), client.OptValue(kgo.RecordRetries))
 	require.Equal(t, int64(1), client.OptValue(kgo.UnknownTopicRetries))
-	require.Equal(t, int32(100<<20), client.OptValue(kgo.BrokerMaxWriteBytes))
+	require.Equal(t, int32(producerMaxRequestBytes), client.OptValue(kgo.BrokerMaxWriteBytes))
 }
 
 func TestProducerOptionsUseSingleNonIdempotentRequest(t *testing.T) {
@@ -122,7 +122,7 @@ func TestProducerLimitsDoNotScaleWithConfiguredMessage(t *testing.T) {
 	defer client.Close()
 
 	require.Equal(t, int64(producerMaxBufferedBytes), client.OptValue(kgo.MaxBufferedBytes))
-	require.Equal(t, int32(100<<20), client.OptValue(kgo.BrokerMaxWriteBytes))
+	require.Equal(t, int32(producerMaxRequestBytes), client.OptValue(kgo.BrokerMaxWriteBytes))
 }
 
 func TestProducerOptionsDoNotClampSmallBatch(t *testing.T) {
@@ -135,20 +135,26 @@ func TestProducerOptionsDoNotClampSmallBatch(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestProducerOptionsUseKafkaBatchLimitDirectly(t *testing.T) {
-	const maxMessageBytes = 128 << 20
-	config := testOptions([]string{"127.0.0.1:9092"})
-	config.MaxMessageBytes = maxMessageBytes
+func TestProducerOptionsLimitBatchToProduceRequest(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		maxMessageBytes int
+	}{
+		{name: "at request limit", maxMessageBytes: producerMaxRequestBytes},
+		{name: "above request limit", maxMessageBytes: 128 << 20},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := testOptions([]string{"127.0.0.1:9092"})
+			config.MaxMessageBytes = test.maxMessageBytes
 
-	producerOpts := producerOptions(config)
-	// Raise the request limit only to let franz-go validate this test client.
-	producerOpts = append(producerOpts, kgo.BrokerMaxWriteBytes(maxMessageBytes))
+			client, err := kgo.NewClient(producerOptions(config)...)
+			require.NoError(t, err)
+			defer client.Close()
 
-	client, err := kgo.NewClient(producerOpts...)
-	require.NoError(t, err)
-	defer client.Close()
-
-	require.Equal(t, int32(maxMessageBytes), client.OptValue(kgo.ProducerBatchMaxBytes))
+			require.Equal(t, int32(producerMaxRequestBytes), client.OptValue(kgo.ProducerBatchMaxBytes))
+			require.Equal(t, int32(producerMaxRequestBytes), client.OptValue(kgo.BrokerMaxWriteBytes))
+		})
+	}
 }
 
 func TestCompressionOptions(t *testing.T) {
