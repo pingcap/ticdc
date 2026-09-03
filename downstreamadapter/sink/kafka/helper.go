@@ -25,7 +25,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
+<<<<<<< HEAD
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+=======
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
+>>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/tidb/br/pkg/utils"
 )
@@ -99,12 +104,28 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
+<<<<<<< HEAD
 	kafkaComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
+=======
+	var schemaM schemamanager.SchemaManager
+	if isAvroLike {
+		schemaM, err = schemamanager.NewSchemaManager(ctx, encoderConfig)
+		if err != nil {
+			return comp, protocol, err
+		}
+	}
+
+	comp.encoderGroup, err = codec.NewEncoderGroup(sinkConfig, encoderConfig, comp.claimCheck, schemaM, changefeedID)
+>>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
+<<<<<<< HEAD
 	kafkaComponent.adminClient, err = kafkaComponent.factory.AdminClient(ctx)
+=======
+	comp.encoder, err = codec.NewEventEncoder(encoderConfig, comp.claimCheck, schemaM)
+>>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 	if err != nil {
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}

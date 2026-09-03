@@ -123,12 +123,20 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
+<<<<<<< HEAD
 	pulsarComponent.encoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
+=======
+	pulsarComponent.encoderGroup, err = codec.NewEncoderGroup(sinkConfig, encoderConfig, nil, nil, changefeedID)
+>>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
+<<<<<<< HEAD
 	pulsarComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
+=======
+	pulsarComponent.encoder, err = codec.NewEventEncoder(encoderConfig, nil, nil)
+>>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package avro
+package schemamanager
 
 import (
 	"context"
@@ -25,7 +25,7 @@ func newClueSchemaManagerForTest() *glueSchemaManager {
 	res := &glueSchemaManager{
 		registryName: "test_registry",
 		client:       newMockGlueClientImpl(),
-		cache:        make(map[string]*schemaCacheEntry),
+		cache:        newSchemaCache(),
 		registryType: common.SchemaRegistryTypeGlue,
 	}
 	return res
@@ -62,10 +62,9 @@ func TestGlueSchemaManager_Lookup(t *testing.T) {
 	schemaID, err := m.Register(ctx, schemaName, schemaDefinition)
 	require.NoError(t, err)
 
-	codec, err := m.Lookup(ctx, schemaName, schemaID)
+	lookedUpSchema, err := m.Lookup(ctx, schemaName, schemaID)
 	require.NoError(t, err)
-	require.NotNil(t, codec)
-	require.Equal(t, schemaDefinition, codec.Schema())
+	require.Equal(t, schemaDefinition, lookedUpSchema)
 }
 
 func TestGlueSchemaManager_GetCachedOrRegister(t *testing.T) {
@@ -74,19 +73,25 @@ func TestGlueSchemaManager_GetCachedOrRegister(t *testing.T) {
 
 	schemaName := "test_schema"
 	schemaDefinition := `{"type": "record", "name": "test_schema", "fields": [{"name": "field1", "type": "string"}]}`
-	codec, _, err := m.GetCachedOrRegister(ctx, schemaName, 1, func() (string, error) {
-		return schemaDefinition, nil
-	})
+	header, err := m.GetCachedOrRegister(ctx, schemaName, schemaName, 1, schemaDefinition)
 	require.NoError(t, err)
-	require.NotNil(t, codec)
-	require.Equal(t, schemaDefinition, codec.Schema())
+	require.NotEmpty(t, header)
 
 	// Get the same schema again
-	codec2, _, err := m.GetCachedOrRegister(ctx, schemaName, 1, func() (string, error) {
-		return schemaDefinition, nil
-	})
+	header2, err := m.GetCachedOrRegister(ctx, schemaName, schemaName, 1, schemaDefinition)
 	require.NoError(t, err)
-	require.Equal(t, codec, codec2)
+	require.Equal(t, header, header2)
+
+	routedSchemaDefinition := `{"type": "record", "name": "test_schema_routed", "fields": [{"name": "field1", "type": "string"}]}`
+	routedHeader, err := m.GetCachedOrRegister(
+		ctx, schemaName, "test_schema_routed", 1, routedSchemaDefinition)
+	require.NoError(t, err)
+	require.NotEqual(t, header, routedHeader)
+	schemaID, err := GetGlueSchemaIDFromHeader(routedHeader)
+	require.NoError(t, err)
+	lookedUpSchema, err := m.Lookup(ctx, schemaName, NewGlueSchemaID(schemaID))
+	require.NoError(t, err)
+	require.Equal(t, routedSchemaDefinition, lookedUpSchema)
 }
 
 func TestGlueSchemaManager_RegistryType(t *testing.T) {
@@ -107,9 +112,9 @@ func TestGlueSchemaManager_getMsgHeader(t *testing.T) {
 
 	header, err := m.getMsgHeader(schemaID.glueSchemaID)
 	require.NoError(t, err)
-	require.Equal(t, header[0], headerVersionByte)
-	require.Equal(t, header[1], compressionDefaultByte)
-	sid, err := getGlueSchemaIDFromHeader(header)
+	require.Equal(t, header[0], GlueHeaderVersionByte)
+	require.Equal(t, header[1], GlueCompressionDefaultByte)
+	sid, err := GetGlueSchemaIDFromHeader(header)
 	require.NoError(t, err)
 	require.Equal(t, schemaID.glueSchemaID, sid)
 }
