@@ -45,7 +45,7 @@ func TestAsyncSendCanceledContext(t *testing.T) {
 	require.ErrorIs(t, producer.AsyncSend(ctx, "topic", 0, &codeccommon.Message{}), context.Canceled)
 }
 
-func TestAsyncRunCallbackReturnsQueuedErrorAndCloses(t *testing.T) {
+func TestAsyncRunCallbackReturnsQueuedError(t *testing.T) {
 	producer := &asyncProducer{
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-callback"),
 		errCh:        make(chan error, 1),
@@ -55,7 +55,6 @@ func TestAsyncRunCallbackReturnsQueuedErrorAndCloses(t *testing.T) {
 	err := producer.AsyncRunCallback(context.Background())
 
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.True(t, producer.closed.Load())
 }
 
 func TestCloseDoesNotAcknowledgeBufferedMessage(t *testing.T) {

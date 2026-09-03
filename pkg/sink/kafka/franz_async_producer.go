@@ -30,16 +30,14 @@ type asyncProducer struct {
 	client       *kgo.Client
 	changefeedID common.ChangeFeedID
 
-	closeStarted atomic.Bool
-	closed       atomic.Bool
-	errCh        chan error
+	closed atomic.Bool
+	errCh  chan error
 }
 
 func (p *asyncProducer) Close() {
-	if !p.closeStarted.CompareAndSwap(false, true) {
+	if !p.closed.CompareAndSwap(false, true) {
 		return
 	}
-	p.closed.Store(true)
 
 	start := time.Now()
 	p.client.Close()
@@ -97,7 +95,6 @@ func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition i
 }
 
 func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
-	defer p.closed.Store(true)
 	for {
 		select {
 		case <-ctx.Done():

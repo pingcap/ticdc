@@ -17,7 +17,6 @@ package kafka
 import (
 	"context"
 	"strings"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -29,7 +28,6 @@ type franzFactory struct {
 	changefeedID common.ChangeFeedID
 	clientOpts   []kgo.Opt
 	producerOpts []kgo.Opt
-	timeout      time.Duration
 }
 
 func newFranzFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
@@ -37,8 +35,7 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 	if err != nil {
 		return nil, err
 	}
-	timeout := requestTimeout(o)
-	admin, err := newAdmin(ctx, changefeedID, clientOpts, timeout)
+	admin, err := newAdmin(ctx, changefeedID, clientOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -72,12 +69,11 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 		changefeedID: changefeedID,
 		clientOpts:   clientOpts,
 		producerOpts: producerOpts,
-		timeout:      timeout,
 	}, nil
 }
 
 func (f *franzFactory) AdminClient(ctx context.Context) (AdminClient, error) {
-	return newAdmin(ctx, f.changefeedID, f.clientOpts, f.timeout)
+	return newAdmin(ctx, f.changefeedID, f.clientOpts)
 }
 
 func (f *franzFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {

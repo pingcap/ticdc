@@ -109,6 +109,9 @@ func newKafkaSinkComponent(
 	if err != nil {
 		return comp, protocol, err
 	}
+	if options.Client == kafka.KafkaClientFranz {
+		encoderConfig.WithKafkaRecordBatchSize()
+	}
 
 	comp.claimCheck, err = claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
 	if err != nil {

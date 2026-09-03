@@ -28,12 +28,10 @@ import (
 
 type admin struct {
 	changefeed common.ChangeFeedID
-
-	admin   *kadm.Client
-	timeout time.Duration
+	admin      *kadm.Client
 }
 
-func newAdmin(ctx context.Context, changefeedID common.ChangeFeedID, clientOpts []kgo.Opt, timeout time.Duration) (*admin, error) {
+func newAdmin(ctx context.Context, changefeedID common.ChangeFeedID, clientOpts []kgo.Opt) (*admin, error) {
 	opts := make([]kgo.Opt, 0, len(clientOpts)+3)
 	opts = append(opts, clientOpts...)
 	opts = append(opts, kgo.WithContext(ctx), kgo.WithLogger(newClientLogger(changefeedID, "admin")))
@@ -49,14 +47,10 @@ func newAdmin(ctx context.Context, changefeedID common.ChangeFeedID, clientOpts 
 	return &admin{
 		changefeed: changefeedID,
 		admin:      kadm.NewClient(client),
-		timeout:    timeout,
 	}, nil
 }
 
 func (a *admin) GetAllBrokers(ctx context.Context) []Broker {
-	ctx, cancel := context.WithTimeout(ctx, a.timeout)
-	defer cancel()
-
 	meta, err := a.admin.BrokerMetadata(ctx)
 	if err != nil {
 		return nil
@@ -70,9 +64,6 @@ func (a *admin) GetAllBrokers(ctx context.Context) []Broker {
 }
 
 func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string, bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, a.timeout)
-	defer cancel()
-
 	meta, err := a.admin.BrokerMetadata(ctx)
 	if err != nil {
 		if isAuthorizationFailed(err) {
@@ -118,9 +109,6 @@ func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string,
 }
 
 func (a *admin) GetTopicConfig(ctx context.Context, topicName string, configName string) (string, bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, a.timeout)
-	defer cancel()
-
 	configs, err := a.admin.DescribeTopicConfigs(ctx, topicName)
 	if err != nil {
 		if isAuthorizationFailed(err) {
@@ -156,9 +144,6 @@ func (a *admin) GetTopicsMeta(ctx context.Context, topics []string, ignoreTopicE
 	if len(topics) == 0 {
 		return make(map[string]TopicDetail), nil
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, a.timeout)
-	defer cancel()
 
 	meta, err := a.admin.Metadata(ctx, topics...)
 	if err != nil {
@@ -223,9 +208,6 @@ func (a *admin) GetTopicsPartitionsNum(ctx context.Context, topics []string) (ma
 }
 
 func (a *admin) CreateTopic(ctx context.Context, detail *TopicDetail) error {
-	ctx, cancel := context.WithTimeout(ctx, a.timeout)
-	defer cancel()
-
 	responses, err := a.admin.CreateTopics(ctx, detail.NumPartitions, detail.ReplicationFactor, nil, detail.Name)
 	if err != nil {
 		if isAuthorizationFailed(err) {

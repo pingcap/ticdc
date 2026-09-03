@@ -182,7 +182,6 @@ func TestAdminHonorsCallContext(t *testing.T) {
 		t.Context(),
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "context"),
 		testClientOptions(t, o),
-		requestTimeout(o),
 	)
 	require.NoError(t, err)
 	t.Cleanup(admin.Close)
@@ -205,7 +204,6 @@ func TestAdminOperations(t *testing.T) {
 		ctx,
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
 		testClientOptions(t, o),
-		requestTimeout(o),
 	)
 	require.NoError(t, err)
 	defer admin.Close()
@@ -264,7 +262,6 @@ func TestCreateTopicErrors(t *testing.T) {
 		ctx,
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "create-errors"),
 		testClientOptions(t, o),
-		requestTimeout(o),
 	)
 	require.NoError(t, err)
 	defer admin.Close()

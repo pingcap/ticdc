@@ -20,7 +20,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -35,16 +34,15 @@ import (
 	"golang.org/x/oauth2/clientcredentials"
 )
 
-// producerMaxBufferedBytes bounds each producer client's buffered payload.
-// Produce blocks when the buffer is full and resumes when records complete
-// or its context is canceled. A larger single record fails with MessageTooLarge.
-const producerMaxBufferedBytes = 64 << 20
-
-// Kafka defaults socket.request.max.bytes to 100 MiB. Keeping franz-go at the
-// same limit prevents a Topic's batch configuration from increasing request memory.
-const franzDefaultMaxRequestBytes = 100 << 20
-
-func requestTimeout(o *options) time.Duration { return max(o.ReadTimeout, o.WriteTimeout) }
+// franz-go counts a record from Produce acceptance until its delivery callback
+// returns, including metadata lookup, batching, sending, Broker response, and
+// retries. A record larger than the byte limit fails immediately; otherwise,
+// either limit blocks later Produce calls. Their ratio is 1 KiB per record, so
+// bytes govern larger records while count bounds smaller record objects.
+const (
+	producerMaxBufferedBytes   = 64 << 20
+	producerMaxBufferedRecords = 1 << 16
+)
 
 // Admin and producer clients share connection options. Producer delivery and
 // resource limits stay separate so they cannot affect admin operations.
@@ -53,7 +51,10 @@ func clientOptions(o *options) ([]kgo.Opt, error) {
 		kgo.SeedBrokers(o.BrokerEndpoints...),
 		kgo.ClientID(o.ClientID),
 		kgo.DialTimeout(o.DialTimeout),
-		kgo.RequestTimeoutOverhead(requestTimeout(o)),
+		// franz-go does not expose an independent socket read timeout. This value
+		// sets the socket write deadline and is added to each request-specific
+		// Broker processing timeout to form the socket read deadline.
+		kgo.RequestTimeoutOverhead(o.WriteTimeout),
 	}
 
 	if o.EnableTLS {
@@ -83,7 +84,6 @@ func clientOptions(o *options) ([]kgo.Opt, error) {
 }
 
 func producerOptions(o *options) []kgo.Opt {
-	maxMessageBytes := int32(min(o.MaxMessageBytes, franzDefaultMaxRequestBytes))
 	return []kgo.Opt{
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		kgo.RequiredAcks(requiredAcks(o.RequiredAcks)),
@@ -91,17 +91,36 @@ func producerOptions(o *options) []kgo.Opt {
 		kgo.DisableIdempotentWrite(),
 		// More than one in-flight request can reorder records when an earlier request is retried.
 		kgo.MaxProduceRequestsInflightPerBroker(1),
+		// The default of five retries allows six Produce attempts. franz-go's
+		// default jittered backoff adds about 6.2s to 9.3s across five retries.
 		kgo.RecordRetries(o.MaxRetry),
 		kgo.UnknownTopicRetries(o.MaxRetry),
 		// Limit each client to 64 MiB of buffered payload. The in-flight limit
 		// applies per broker and does not bound records queued for other brokers,
 		// metadata, or retries, so the producer needs a separate byte limit.
 		// 64 MiB leaves room above TiCDC's default 10 MiB message limit while
-		// bounding the memory hidden by the 10,000-record default.
+		// bounding buffered payload memory.
 		kgo.MaxBufferedBytes(producerMaxBufferedBytes),
+		kgo.MaxBufferedRecords(producerMaxBufferedRecords),
 		// ProducerBatchMaxBytes is franz-go's name for Kafka's max.message.bytes limit.
-		kgo.ProducerBatchMaxBytes(maxMessageBytes),
-		kgo.ProduceRequestTimeout(requestTimeout(o)),
+		kgo.ProducerBatchMaxBytes(int32(o.MaxMessageBytes)),
+		// This value limits how long the Broker may process a Produce request;
+		// read-timeout is therefore not an exact socket read deadline. Together
+		// with RequestTimeoutOverhead above, the socket write deadline is
+		// write-timeout, the Broker processing timeout is read-timeout, and the
+		// socket read deadline is read-timeout plus write-timeout.
+		// With the default 10s timeout, the Broker may process a Produce request
+		// for 10s, the socket write deadline is 10s, and the socket read deadline
+		// is 20s. Across six attempts, consecutive timeouts take about 66s-69s
+		// when the Broker returns on its processing deadline, 126s-129s when it
+		// never replies, or 186s-189s if every write and read reaches its deadline.
+		// Buffering, metadata lookup, connection setup, and Broker throttling are
+		// not included; the caller context is the end-to-end bound.
+		// A Broker processing timeout returns REQUEST_TIMED_OUT, which franz-go
+		// retries. The original record may already be stored, so retries may create
+		// duplicates while idempotent writes are disabled. Exhausting the retry
+		// budget fails the record and reports the error through its callback.
+		kgo.ProduceRequestTimeout(o.ReadTimeout),
 		kgo.ProducerLinger(0),
 		compressionOption(o.Compression),
 	}
@@ -164,10 +183,15 @@ func buildOAuthMechanism(cfg oauth2Config) (sasl.Mechanism, error) {
 	}), nil
 }
 
-func newProducerClient(ctx context.Context, changefeedID common.ChangeFeedID, role string, clientOpts []kgo.Opt, producerOpts []kgo.Opt) (*kgo.Client, error) {
+func newProducerClient(
+	ctx context.Context, changefeedID common.ChangeFeedID, role string, clientOpts []kgo.Opt, producerOpts []kgo.Opt,
+) (*kgo.Client, error) {
 	opts := make([]kgo.Opt, 0, len(clientOpts)+len(producerOpts)+3)
 	opts = append(opts, clientOpts...)
-	opts = append(opts, kgo.WithContext(ctx), kgo.WithLogger(newClientLogger(changefeedID, role)), kgo.WithHooks(newMetricsHook(changefeedID)))
+	opts = append(opts,
+		kgo.WithContext(ctx),
+		kgo.WithLogger(newClientLogger(changefeedID, role)),
+		kgo.WithHooks(newMetricsHook(changefeedID)))
 	opts = append(opts, producerOpts...)
 
 	client, err := kgo.NewClient(opts...)

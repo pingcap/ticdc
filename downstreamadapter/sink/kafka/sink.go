@@ -96,6 +96,9 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	if err != nil {
 		return err
 	}
+	if options.Client == kafka.KafkaClientFranz {
+		encoderConfig.WithKafkaRecordBatchSize()
+	}
 
 	claimCheck, err := claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
 	if err != nil {
