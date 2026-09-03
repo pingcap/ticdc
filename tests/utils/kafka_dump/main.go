@@ -96,7 +96,11 @@ func main() {
 		wg.Add(1)
 		go func(pc sarama.PartitionConsumer) {
 			defer wg.Done()
-			defer pc.Close()
+			defer func() {
+				if err := pc.Close(); err != nil {
+					log.Printf("close partition consumer: %v", err)
+				}
+			}()
 			for {
 				select {
 				case <-ctx.Done():

@@ -49,19 +49,19 @@ PY
 }
 
 insert_probe_rows() {
-	mysql -uroot -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} --default-character-set utf8mb4 -N -e "
-		CREATE DATABASE IF NOT EXISTS test;
-		CREATE TABLE IF NOT EXISTS test.cdc_start_ts_probe (
-			id BIGINT PRIMARY KEY,
-			expected_start_ts BIGINT UNSIGNED NOT NULL
-		);
-		TRUNCATE TABLE test.cdc_start_ts_probe;
-		START TRANSACTION;
-		SELECT @@tidb_current_ts INTO @ts;
-		INSERT INTO test.cdc_start_ts_probe VALUES (1, @ts), (2, @ts);
-		COMMIT;
-		SELECT @ts;
-	"
+	mysql -uroot -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} --default-character-set utf8mb4 -N <<EOF
+CREATE DATABASE IF NOT EXISTS test;
+CREATE TABLE IF NOT EXISTS test.cdc_start_ts_probe (
+	id BIGINT PRIMARY KEY,
+	expected_start_ts BIGINT UNSIGNED NOT NULL
+);
+TRUNCATE TABLE test.cdc_start_ts_probe;
+START TRANSACTION;
+SET @ts = @@tidb_current_ts;
+INSERT INTO test.cdc_start_ts_probe VALUES (1, @ts), (2, @ts);
+COMMIT;
+SELECT @ts;
+EOF
 }
 
 run_mode() {
