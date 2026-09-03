@@ -78,8 +78,7 @@ func initRedoComponet(
 		return newWritePathClosedError()
 	}
 	manager.redoDispatcherMap = redoDispatcherMap
-	manager.redoSink = redoSink
-	manager.redoWriteSink = withCaptureWriteGate(ctx, redoSink)
+	manager.redoSink = withCaptureWriteGate(ctx, redoSink)
 	manager.redoSchemaIDToDispatchers = redoSchemaIDToDispatchers
 	manager.redoQuota = redoQuota
 	manager.sinkQuota = totalQuota - redoQuota
@@ -161,7 +160,7 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 	return nil
 }
 
-func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(redoSink *redo.Sink) (int, int) {
+func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(redoSink sink.Sink) (int, int) {
 	var (
 		batchCount = redoSink.BatchCount()
 		batchBytes = redoSink.BatchBytes()
@@ -209,7 +208,7 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 			scheduleSkipDMLAsStartTsList[idx],
 			batchCount,
 			batchBytes,
-			e.getRedoWriteSink(),
+			e.redoSink,
 			e.sharedInfo,
 		)
 		if e.heartBeatTask == nil {
@@ -255,13 +254,6 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 	return nil
 }
 
-func (e *DispatcherManager) getRedoWriteSink() sink.Sink {
-	if e.redoWriteSink != nil {
-		return e.redoWriteSink
-	}
-	return e.redoSink
-}
-
 func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID) *MergeCheckTask {
 	// Step 1: check the dispatcherIDs and mergedDispatcherID are valid:
 	//         1. whether the mergedDispatcherID is not exist in the dispatcherMap
@@ -290,7 +282,7 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 		false, // skipDMLAsStartTs
 		batchCount,
 		batchBytes,
-		e.getRedoWriteSink(),
+		e.redoSink,
 		e.sharedInfo,
 	)
 

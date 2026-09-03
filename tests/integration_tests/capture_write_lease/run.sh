@@ -4,8 +4,9 @@
 #
 # Runs three captures with rate-limited INSERT/UPDATE traffic. For the MySQL
 # sink, it delays and drops coordinator-to-capture write-lease grants, then
-# verifies write admission closes, recovers, rejects stale grants, and remains
-# data-consistent. The drop simulates one-way P2P control-plane loss only.
+# verifies write admission closes, Redo publication stops, both recover, stale
+# grants are rejected, and the data remains consistent. The drop simulates
+# one-way P2P control-plane loss only.
 
 set -eu
 
@@ -19,6 +20,7 @@ CDC_COUNT=3
 DB_COUNT=4
 CDC_BASE_PORT=${CDC_PORT}
 LEASE_DB=capture_write_lease
+REDO_DB=capture_write_lease_redo
 LEASE_PROBE_TABLE_PREFIX=lease_probe
 LEASE_PROBE_TABLE_COUNT=3
 YCSB_TABLE=usertable
@@ -28,9 +30,15 @@ YCSB_TARGET=1000
 YCSB_THREADS=4
 LEASE_DELAY_MS=7000
 LEASE_DELAY_SECONDS=9
+LEASE_DROP_SECONDS=15
 LEASE_DELAY_FAILPOINT=github.com/pingcap/ticdc/coordinator/DelayCaptureWriteLeaseResponse
 LEASE_DROP_FAILPOINT=github.com/pingcap/ticdc/coordinator/DropCaptureWriteLeaseResponse
 LEASE_DUPLICATE_FAILPOINT=github.com/pingcap/ticdc/coordinator/DuplicateCaptureWriteLeaseResponse
+MYSQL_HANG_FAILPOINT=github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime
+MAIN_CHANGEFEED_ID=capture-write-lease-main-test
+REDO_CHANGEFEED_ID=capture-write-lease-redo-test
+REDO_STORAGE_PATH="file://$WORK_DIR/redo"
+REDO_DOWNLOAD_PATH="$WORK_DIR/cdc_data/redo/$REDO_CHANGEFEED_ID"
 
 function ycsb_load() {
 	go-ycsb load mysql -P "$CUR/conf/write_lease_workload" \
@@ -65,7 +73,7 @@ function probe_count() {
 		if [ -n "$expression" ]; then
 			expression+=" + "
 		fi
-		expression+="(SELECT COUNT(*) FROM ${LEASE_DB}.${LEASE_PROBE_TABLE_PREFIX}_${index})"
+		expression+="(SELECT COUNT(*) FROM ${REDO_DB}.${LEASE_PROBE_TABLE_PREFIX}_${index})"
 	done
 	mysql -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} -uroot -N -s \
 		-e "SELECT ${expression};"
@@ -120,6 +128,29 @@ function wait_for_gate_state() {
 	return 1
 }
 
+function wait_for_all_gate_state() {
+	local state=$1
+	local port
+	local ready
+
+	for ((i = 0; i < 30; i++)); do
+		ready=true
+		for port in $(seq $((CDC_BASE_PORT + 1)) $((CDC_BASE_PORT + CDC_COUNT))); do
+			if ! capture_has_gate_state "$port" "$state"; then
+				ready=false
+				break
+			fi
+		done
+		if [ "$ready" = true ]; then
+			return
+		fi
+		sleep 1
+	done
+
+	echo "not all write gates reached ${state}" >&2
+	return 1
+}
+
 function capture_has_active_p2p_lease() {
 	local port=$1
 
@@ -147,6 +178,30 @@ function wait_for_active_p2p_leases() {
 
 	echo "captures did not obtain active P2P write leases" >&2
 	return 1
+}
+
+function redo_resolved_ts() {
+	cdc redo meta --storage="$REDO_STORAGE_PATH" --tmp-dir="$REDO_DOWNLOAD_PATH/meta" |
+		grep -oE "resolved-ts:[0-9]+" | awk -F: '{print $2}'
+}
+
+function assert_redo_resolved_before() {
+	local upper_bound=$1
+	local duration=$2
+	local resolved_ts
+
+	for ((i = 0; i < duration; i++)); do
+		resolved_ts=$(redo_resolved_ts)
+		if ! [[ "$resolved_ts" =~ ^[0-9]+$ ]]; then
+			echo "invalid redo resolved ts: ${resolved_ts}" >&2
+			return 1
+		fi
+		if [ "$resolved_ts" -ge "$upper_bound" ]; then
+			echo "redo resolved ts ${resolved_ts} advanced to ${upper_bound} while write gates were closed" >&2
+			return 1
+		fi
+		sleep 1
+	done
 }
 
 function enable_lease_failpoint() {
@@ -260,7 +315,7 @@ function start_lease_response_delay() {
 function start_lease_response_drop() {
 	enable_lease_failpoint "$LEASE_DROP_FAILPOINT" "return(true)"
 	(
-		sleep "$LEASE_DELAY_SECONDS"
+		sleep "$LEASE_DROP_SECONDS"
 		disable_lease_failpoint "$LEASE_DROP_FAILPOINT"
 	) &
 	lease_fault_pid=$!
@@ -280,7 +335,7 @@ function insert_probe_rows() {
 			fi
 			values+="(${id}, ${id})"
 		done
-		run_sql "INSERT INTO ${LEASE_DB}.${LEASE_PROBE_TABLE_PREFIX}_${index} VALUES ${values};" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+		run_sql "INSERT INTO ${REDO_DB}.${LEASE_PROBE_TABLE_PREFIX}_${index} VALUES ${values};" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	done
 }
 
@@ -291,6 +346,7 @@ function run_lease_expiry_round() {
 	local blocked_cdc_port
 	local count
 	local rejected_count
+	local redo_target_tso
 
 	case "$fault" in
 	delay)
@@ -306,7 +362,17 @@ function run_lease_expiry_round() {
 	wait_for_gate_state p2p_expired
 	blocked_cdc_port=$lease_gate_state_port
 	assert_cdc_processes_alive
+	if [ "$fault" = drop ]; then
+		# Close every capture gate so neither Redo writers nor RedoMeta can publish
+		# progress for events produced below.
+		wait_for_all_gate_state p2p_expired
+		sleep 1
+	fi
 	insert_probe_rows $(((round - 1) * 100 + 1))
+	if [ "$fault" = drop ]; then
+		redo_target_tso=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
+		assert_redo_resolved_before "$redo_target_tso" 3
+	fi
 	sleep 2
 	count=$(probe_count)
 	if [ "$count" -ge "$expected_after" ]; then
@@ -321,28 +387,42 @@ function run_lease_expiry_round() {
 	fi
 	wait_for_gate_state writable "$blocked_cdc_port"
 	wait_for_probe_count "$expected_after"
+	if [ "$fault" = drop ]; then
+		ensure 60 check_redo_resolved_ts "$REDO_CHANGEFEED_ID" "$redo_target_tso" \
+			"$REDO_STORAGE_PATH" "$REDO_DOWNLOAD_PATH/meta"
+	fi
 }
 
 function run_write_lease_test() {
 	local duplicate_rejected_count
+	local redo_start_tso
 
 	if [ "$SINK_TYPE" != mysql ]; then
 		return
 	fi
 
 	run_sql "CREATE DATABASE ${LEASE_DB};" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "CREATE DATABASE ${REDO_DB};" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	# Dynamic table scheduling assigns each small probe table to a capture. Three
 	# tables cover the three captures while keeping probe traffic negligible.
 	for i in $(seq "$LEASE_PROBE_TABLE_COUNT"); do
-		run_sql "CREATE TABLE ${LEASE_DB}.${LEASE_PROBE_TABLE_PREFIX}_${i} (id BIGINT PRIMARY KEY, v BIGINT NOT NULL);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+		run_sql \
+			"CREATE TABLE ${REDO_DB}.${LEASE_PROBE_TABLE_PREFIX}_${i} (id BIGINT PRIMARY KEY, v BIGINT NOT NULL);" \
+			${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	done
+	cdc_cli_changefeed create --start-ts="$start_ts" --sink-uri="$SINK_URI" \
+		--changefeed-id="$REDO_CHANGEFEED_ID" --config="$CUR/conf/changefeed-redo.toml" \
+		--server="127.0.0.1:$((CDC_BASE_PORT + 1))"
 	ycsb_load
 	for i in $(seq "$LEASE_PROBE_TABLE_COUNT"); do
-		check_table_exists "${LEASE_DB}.${LEASE_PROBE_TABLE_PREFIX}_${i}" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+		check_table_exists "${REDO_DB}.${LEASE_PROBE_TABLE_PREFIX}_${i}" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	done
 	check_table_exists "${LEASE_DB}.${YCSB_TABLE}" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_sync_diff "$WORK_DIR" "$CUR/conf/write_lease_diff_config.toml" 120
 	wait_for_active_p2p_leases
+	redo_start_tso=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
+	ensure 60 check_redo_resolved_ts "$REDO_CHANGEFEED_ID" "$redo_start_tso" \
+		"$REDO_STORAGE_PATH" "$REDO_DOWNLOAD_PATH/meta"
 
 	ycsb_run >"$WORK_DIR/ycsb.log" 2>&1 &
 	ycsb_pid=$!
@@ -366,6 +446,35 @@ function run_write_lease_test() {
 	wait "$ycsb_pid"
 	grep -Eq '^INSERT - .*Count: [1-9][0-9]*,' "$WORK_DIR/ycsb.log"
 	grep -Eq '^UPDATE - .*Count: [1-9][0-9]*,' "$WORK_DIR/ycsb.log"
+	check_sync_diff "$WORK_DIR" "$CUR/conf/write_lease_diff_config.toml" 120
+}
+
+function run_redo_apply_test() {
+	local count
+	local expected_after=$((4 * 100 * LEASE_PROBE_TABLE_COUNT))
+	local redo_apply_tso
+
+	if [ "$SINK_TYPE" != mysql ]; then
+		return
+	fi
+
+	# Hold the normal MySQL sink while Redo continues, then recover the missing
+	# downstream rows from Redo after the captures stop.
+	enable_lease_failpoint "$MYSQL_HANG_FAILPOINT" "return(true)"
+	insert_probe_rows 1001
+	redo_apply_tso=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
+	ensure 60 check_redo_resolved_ts "$REDO_CHANGEFEED_ID" "$redo_apply_tso" \
+		"$REDO_STORAGE_PATH" "$REDO_DOWNLOAD_PATH/meta"
+	count=$(probe_count)
+	if [ "$count" -ge "$expected_after" ]; then
+		echo "MySQL sink was not blocked before Redo recovery" >&2
+		return 1
+	fi
+
+	cleanup_process "$CDC_BINARY"
+	cdc redo apply --log-level debug --tmp-dir="$REDO_DOWNLOAD_PATH/apply" \
+		--storage="$REDO_STORAGE_PATH" \
+		--sink-uri="mysql://normal:123456@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/" >"$WORK_DIR/cdc_redo.log"
 	check_sync_diff "$WORK_DIR" "$CUR/conf/write_lease_diff_config.toml" 120
 }
 
@@ -400,7 +509,13 @@ function run() {
 		;;
 	*) SINK_URI="mysql://normal:123456@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/" ;;
 	esac
-	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --server="127.0.0.1:$((CDC_BASE_PORT + 1))"
+	if [ "$SINK_TYPE" = mysql ]; then
+		cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" \
+			--changefeed-id="$MAIN_CHANGEFEED_ID" --config="$CUR/conf/changefeed-main.toml" \
+			--server="127.0.0.1:$((CDC_BASE_PORT + 1))"
+	else
+		cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --server="127.0.0.1:$((CDC_BASE_PORT + 1))"
+	fi
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
@@ -420,6 +535,7 @@ function run() {
 	done
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 	run_write_lease_test
+	run_redo_apply_test
 
 	cleanup_process $CDC_BINARY
 }
@@ -428,6 +544,7 @@ function cleanup() {
 	disable_lease_failpoint_best_effort "$LEASE_DELAY_FAILPOINT"
 	disable_lease_failpoint_best_effort "$LEASE_DROP_FAILPOINT"
 	disable_lease_failpoint_best_effort "$LEASE_DUPLICATE_FAILPOINT"
+	disable_lease_failpoint_best_effort "$MYSQL_HANG_FAILPOINT"
 	stop_test "$WORK_DIR"
 }
 

@@ -45,6 +45,8 @@ type pendingWitnessChallenge struct {
 	expiresAt        time.Time
 }
 
+// captureWriteLeaseController is owned by Controller's single event-handling
+// goroutine after construction. Its mutable state is not safe for concurrent use.
 type captureWriteLeaseController struct {
 	coordinatorVersion int64
 	selfNodeID         node.ID

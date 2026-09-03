@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -156,10 +155,9 @@ type DispatcherManager struct {
 	redoEnabled bool
 	// redoReady set to true after the redo components are fully initialized and safe for concurrent access.
 	redoReady atomic.Bool
-	redoSink  *redo.Sink
-	// redoWriteSink is the capture-write-gated view used by redo dispatchers.
-	// redoSink remains the concrete sink used for lifecycle and redo metadata.
-	redoWriteSink sink.Sink
+	// redoSink is the capture-write-gated sink used by redo dispatchers and for
+	// lifecycle management.
+	redoSink sink.Sink
 	// redoGlobalTs stores the resolved-ts of the redo metadata and blocks events in the common dispatcher where the commit-ts is greater than the resolved-ts.
 	redoGlobalTs atomic.Uint64
 

@@ -14,9 +14,9 @@ check-struct-only = false
     target-instance = "tidb0"
 
     target-check-tables = [
-        "capture_write_lease.lease_probe_1",
-        "capture_write_lease.lease_probe_2",
-        "capture_write_lease.lease_probe_3",
+        "capture_write_lease_redo.lease_probe_1",
+        "capture_write_lease_redo.lease_probe_2",
+        "capture_write_lease_redo.lease_probe_3",
         "capture_write_lease.usertable",
     ]
 

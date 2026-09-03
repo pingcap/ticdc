@@ -516,17 +516,13 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 		zap.Any("removedNodes", removedNodes))
 
 	for _, n := range removedNodes {
-		if c.writeLease != nil {
-			c.writeLease.removeNode(n)
-		}
+		c.writeLease.removeNode(n)
 		c.RemoveNode(n)
 	}
 	for _, n := range addedNodes {
 		c.clearCompletedDrainTarget(n)
 	}
-	if c.writeLease != nil {
-		c.writeLease.updateClusterMode(c.bootstrapper.GetAllNodeIDs())
-	}
+	c.writeLease.updateClusterMode(c.bootstrapper.GetAllNodeIDs())
 	for _, req := range requests {
 		err := c.messageCenter.SendCommand(req)
 		if err != nil {
@@ -539,7 +535,7 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 }
 
 func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *heartbeatpb.NodeHeartbeat) {
-	if c.writeLease == nil || c.bootstrapper == nil || !c.bootstrapper.NodeInitialized(from) {
+	if c.bootstrapper == nil || !c.bootstrapper.NodeInitialized(from) {
 		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("uninitialized").Inc()
 		return
 	}
@@ -614,10 +610,8 @@ func (c *Controller) onMaintainerBootstrapResponse(ctx context.Context, req *mes
 		zap.Int("maintainerCount", len(response.Statuses)))
 	responses := c.bootstrapper.HandleBootstrapResponse(req.From, response)
 	if c.bootstrapper.HasNode(req.From) {
-		if c.writeLease != nil {
-			c.writeLease.observeNodeCapability(req.From, response.GetWriteLeaseProtocolVersion())
-			c.writeLease.updateClusterMode(c.bootstrapper.GetAllNodeIDs())
-		}
+		c.writeLease.observeNodeCapability(req.From, response.GetWriteLeaseProtocolVersion())
+		c.writeLease.updateClusterMode(c.bootstrapper.GetAllNodeIDs())
 		if c.maybeAddDispatcherDrainSyncNode(req.From, response.GetDrainProtocolVersion()) {
 			c.maybeBroadcastDispatcherDrainTarget(true)
 		} else if c.observeStaleDispatcherDrainTargetSnapshot(req.From, drainTargetSnapshotFromBootstrap(response)) {
