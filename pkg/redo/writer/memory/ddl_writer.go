@@ -32,7 +32,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
+<<<<<<< HEAD
 	"github.com/pingcap/tidb/br/pkg/storage"
+=======
+	"github.com/pingcap/ticdc/pkg/writelease"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
@@ -51,6 +56,7 @@ type ddlWriter struct {
 	closed      bool
 	writeMetric prometheus.Gauge
 	flushMetric prometheus.Observer
+	writeGate   *writelease.Gate
 }
 
 // NewDDLWriter creates a new memory DDL writer.
@@ -88,6 +94,10 @@ func (l *ddlWriter) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchem
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.tableSchema = tableSchemaStore
+}
+
+func (l *ddlWriter) SetWriteGate(gate *writelease.Gate) {
+	l.writeGate = gate
 }
 
 func (l *ddlWriter) WriteDDLEvent(ctx context.Context, event *commonEvent.DDLEvent) error {
@@ -134,6 +144,9 @@ func (l *ddlWriter) write(ctx context.Context, event *polymorphicRedoEvent) erro
 		return errors.ErrRedoFileSizeExceed.GenWithStackByArgs(writeLen, l.cfg.MaxLogSizeInBytes())
 	}
 	defer l.writeMetric.Add(float64(writeLen))
+	if err := writelease.WaitForWrite(ctx, l.writeGate); err != nil {
+		return err
+	}
 
 	start := time.Now()
 	data, err := l.prepareWriteData(event.data)
@@ -141,6 +154,9 @@ func (l *ddlWriter) write(ctx context.Context, event *polymorphicRedoEvent) erro
 		return err
 	}
 	fileName := l.getLogFileName(event.commitTs)
+	if err := writelease.WaitForWrite(ctx, l.writeGate); err != nil {
+		return err
+	}
 	if l.cfg.FlushConcurrency() <= 1 {
 		err = l.extStorage.WriteFile(ctx, fileName, data)
 	} else {

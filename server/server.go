@@ -38,12 +38,14 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
 	tiserver "github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/tcpserver"
 	"github.com/pingcap/ticdc/pkg/upstream"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/server/watcher"
 	pd "github.com/tikv/pd/client"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -53,10 +55,20 @@ import (
 )
 
 const (
-	closeServiceTimeout  = 15 * time.Second
-	cleanMetaDuration    = 10 * time.Second
+	// closeServiceTimeout bounds shutdown of all pre-services.
+	closeServiceTimeout = 15 * time.Second
+	// cleanMetaDuration bounds deletion of this capture's etcd registration during shutdown.
+	cleanMetaDuration = 10 * time.Second
+	// oldArchCheckInterval is the retry interval while waiting for the old-architecture capture to stop.
 	oldArchCheckInterval = 100 * time.Millisecond
+	// sessionWatchInterval is the cadence for checking the etcd session TTL.
 	sessionWatchInterval = time.Second
+	// etcdTTLRequestTimeout bounds one etcd session TTL request.
+	etcdTTLRequestTimeout = 3 * time.Second
+	// etcdTTLSafetyMargin is subtracted from the observed TTL before accepting it as write proof.
+	etcdTTLSafetyMargin = time.Second
+	// writeGateMonitorTick is the cadence for recording write-gate metrics and state transitions.
+	writeGateMonitorTick = 100 * time.Millisecond
 	// GracefulShutdownTimeout is used to prevent the CDC process from hanging for an extended period due to certain modules don't exit immediately.
 	GracefulShutdownTimeout = 30 * time.Second
 )
@@ -143,6 +155,7 @@ type server struct {
 	closed atomic.Bool
 
 	localFenceOnce atomic.Bool
+	writeGate      *writelease.Gate
 }
 
 // New returns a new Server instance
@@ -250,6 +263,9 @@ func (c *server) setPreServices(ctx context.Context) error {
 	// Set ID to Global Context
 	appctx.SetID(c.info.ID.String())
 
+	c.writeGate = writelease.NewGate()
+	appctx.SetService(appctx.CaptureWriteGate, c.writeGate)
+
 	// Set PDClock to Global Context
 	var err error
 	c.PDClock, err = pdutil.NewClock(ctx, c.pdClient)
@@ -352,6 +368,10 @@ func (c *server) Run(ctx context.Context) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
+	g.Go(func() error {
+		c.monitorCaptureWriteGate(gctx, writeGateMonitorTick)
+		return nil
+	})
 
 	fatalErrCh := make(chan error, 1)
 	go func() {
@@ -405,7 +425,10 @@ func (c *server) watchEtcdSession(
 			c.localFence("etcd session done")
 			return errors.ErrCaptureSuicide.GenWithStackByArgs()
 		case <-ticker.C:
-			ttl, err := c.EtcdClient.GetEtcdClient().TimeToLive(ctx, leaseID)
+			requestSentAt := time.Now()
+			ttlCtx, cancel := context.WithTimeout(ctx, c.etcdTTLRequestTimeout(requestSentAt))
+			ttl, err := c.EtcdClient.GetEtcdClient().TimeToLive(ttlCtx, leaseID)
+			cancel()
 			if err != nil {
 				if ctx.Err() != nil {
 					return nil
@@ -413,12 +436,79 @@ func (c *server) watchEtcdSession(
 				log.Warn("check etcd session ttl failed", zap.Error(err))
 				continue
 			}
-			if ttl != nil && ttl.TTL == -1 {
+			if ttl == nil {
+				continue
+			}
+			if ttl.TTL < 0 {
 				c.localFence("etcd lease expired")
 				return errors.ErrCaptureSuicide.GenWithStackByArgs()
 			}
+			proofDuration := time.Duration(ttl.TTL)*time.Second - etcdTTLSafetyMargin
+			proofDuration = min(proofDuration, writelease.EtcdProofDuration)
+			if proofDuration > 0 && c.writeGate != nil {
+				c.writeGate.RenewEtcd(requestSentAt, proofDuration)
+			}
 		}
 	}
+}
+
+func (c *server) etcdTTLRequestTimeout(now time.Time) time.Duration {
+	if c.writeGate == nil {
+		return etcdTTLRequestTimeout
+	}
+	proofValidUntil := c.writeGate.EtcdProofValidUntil()
+	if proofValidUntil.IsZero() || !proofValidUntil.After(now) {
+		return etcdTTLRequestTimeout
+	}
+	return min(etcdTTLRequestTimeout, proofValidUntil.Sub(now))
+}
+
+func (c *server) monitorCaptureWriteGate(ctx context.Context, interval time.Duration) {
+	if c.writeGate == nil {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	previous := c.writeGate.Status()
+	c.recordCaptureWriteGateMetrics(previous)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			current := c.writeGate.Status()
+			c.recordCaptureWriteGateMetrics(current)
+			if current.Reason == previous.Reason {
+				continue
+			}
+			if previous.Writable && !current.Writable {
+				metrics.CaptureWriteBlockCounter.WithLabelValues(string(current.Reason)).Inc()
+				log.Warn("capture write gate blocked", zap.String("reason", string(current.Reason)))
+			} else if !previous.Writable && current.Writable {
+				log.Info("capture write gate recovered")
+			}
+			previous = current
+		}
+	}
+}
+
+func (c *server) recordCaptureWriteGateMetrics(status writelease.Status) {
+	for _, reason := range []writelease.BlockReason{
+		writelease.BlockReasonWritable,
+		writelease.BlockReasonP2PExpired,
+		writelease.BlockReasonEtcdExpired,
+		writelease.BlockReasonBothExpired,
+		writelease.BlockReasonFenced,
+	} {
+		value := float64(0)
+		if status.Reason == reason {
+			value = 1
+		}
+		metrics.CaptureWriteGateState.WithLabelValues(string(reason)).Set(value)
+	}
+	metrics.CaptureP2PLeaseRemainingSeconds.Set(status.P2PRemaining.Seconds())
+	metrics.CaptureEtcdProofRemainingSeconds.Set(status.EtcdProofRemaining.Seconds())
 }
 
 func (c *server) localFence(reason string) {
@@ -427,6 +517,9 @@ func (c *server) localFence(reason string) {
 	}
 
 	log.Warn("local fence triggered", zap.String("reason", reason))
+	if c.writeGate != nil {
+		c.writeGate.Fence()
+	}
 
 	c.liveness.Store(liveness.CaptureDraining)
 	c.liveness.Store(liveness.CaptureStopping)

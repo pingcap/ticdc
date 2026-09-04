@@ -32,6 +32,7 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/br/pkg/version"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
@@ -116,6 +117,112 @@ func TestMysqlWriter_FlushDML(t *testing.T) {
 	require.NoError(t, err)
 }
 
+<<<<<<< HEAD
+=======
+func TestMysqlWriterWaitsForWriteGrantBeforeExecute(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	require.NotNil(t, helper.DDL2Job("create table t (id int primary key, name varchar(32));"))
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')")
+	dmlEvent.CommitTs = 2
+	dmlEvent.ReplicatingTs = 1
+	dmlEvent.DispatcherID = common.NewDispatcherID()
+
+	gate := writelease.NewGate()
+	gate.SetP2PRequired(true)
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	writer.SetWriteGate(gate)
+
+	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
+		WithArgs(1, "test").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- writer.Flush([]*commonEvent.DMLEvent{dmlEvent})
+	}()
+
+	require.Never(t, func() bool {
+		return db.Stats().InUse != 0
+	}, 50*time.Millisecond, time.Millisecond, "writer held a connection while waiting for a write grant")
+
+	select {
+	case err := <-done:
+		t.Fatalf("DML execute returned before the transport received a write grant: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	require.True(t, gate.RenewP2P(time.Now(), writelease.P2PLeaseDuration))
+	require.NoError(t, <-done)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMysqlWriterReleasesConnectionWhenFinalAdmissionFails(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+
+	callbackCalled := false
+	admitted, err := writer.dmlSession.withConn(writer, time.Second, func() bool {
+		return false
+	}, func(*sql.Conn) error {
+		callbackCalled = true
+		return nil
+	})
+	require.NoError(t, err)
+	require.False(t, admitted)
+	require.False(t, callbackCalled)
+	require.Nil(t, writer.dmlSession.conn)
+	require.Zero(t, db.Stats().InUse)
+}
+
+func TestMysqlWriterGrantWriteRejectsAfterShutdown(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+
+	gate := writelease.NewGate()
+	gate.SetP2PRequired(true)
+	writer.SetWriteGate(gate)
+	writer.cancel()
+
+	require.False(t, writer.grantWrite())
+}
+
+func TestMysqlWriter_FlushNoopWhenActiveActiveRowsDropped(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.EnableActiveActive = true
+	writer.cfg.IsTiDB = true
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t (id int primary key, name varchar(32), _tidb_origin_ts bigint unsigned null, _tidb_softdelete_time timestamp null);"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'a', 10, NULL)")
+	dmlEvent.CommitTs = 2
+	dmlEvent.ReplicatingTs = 1
+	dmlEvent.DispatcherID = common.NewDispatcherID()
+
+	flushed := false
+	dmlEvent.AddPostFlushFunc(func() {
+		flushed = true
+	})
+
+	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent})
+	require.NoError(t, err)
+	require.True(t, flushed)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()

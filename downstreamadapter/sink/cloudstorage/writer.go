@@ -26,7 +26,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
+<<<<<<< HEAD
 	"github.com/pingcap/tidb/br/pkg/storage"
+=======
+	"github.com/pingcap/ticdc/pkg/writelease"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -50,6 +55,12 @@ type writer struct {
 
 	metricFlushBytes    prometheus.Observer
 	metricFlushDuration prometheus.Observer
+	writeGate           *writelease.Gate
+}
+
+func (d *writer) setWriteGate(gate *writelease.Gate) {
+	d.writeGate = gate
+	d.filePathGenerator.SetWriteGate(gate)
 }
 
 // flushTask is internal and never crosses component boundary.
@@ -221,6 +232,9 @@ func (d *writer) discardEntries(entries []*spool.Entry) {
 func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, payload *payload) error {
 	keyspace := d.changeFeedID.Keyspace()
 	changefeed := d.changeFeedID.Name()
+	if err := writelease.WaitForWrite(ctx, d.writeGate); err != nil {
+		return err
+	}
 	start := time.Now()
 
 	err := d.statistics.RecordBatchExecution(func() (int, int64, error) {
@@ -262,6 +276,9 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 		return err
 	}
 
+	if err := writelease.WaitForWrite(ctx, d.writeGate); err != nil {
+		return err
+	}
 	err = d.storage.WriteFile(ctx, indexFilePath, []byte(path.Base(dataFilePath)+"\n"))
 	if err != nil {
 		log.Error("failed to write index file to external storage",

@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/drain"
@@ -90,6 +91,7 @@ type Controller struct {
 	apiLock            sync.RWMutex
 
 	drainController *drain.Controller
+	writeLease      *captureWriteLeaseController
 
 	// drainSession is the in-memory drain state machine for v1 drain API.
 	// Only one drain session is allowed at a time.
@@ -185,6 +187,7 @@ func NewController(
 		pdClient:           pdClient,
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		drainController:    drainController,
+		writeLease:         newCaptureWriteLeaseController(version, selfNode.ID),
 	}
 	c.nodeChanged.changed = false
 
@@ -207,6 +210,7 @@ func NewController(
 	added, _, requests, _ := c.bootstrapper.HandleNodesChange(nodes)
 	log.Info("coordinator bootstrap initial nodes",
 		zap.Int("addedCount", len(added)), zap.Any("addedNodes", nodes))
+	c.writeLease.updateClusterMode(c.bootstrapper.GetAllNodeIDs())
 
 	for _, req := range requests {
 		err := c.messageCenter.SendCommand(req)
@@ -411,6 +415,7 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 			c.maybeBroadcastDispatcherDrainTarget(true)
 		}
 		c.syncDrainSchedulingPolicy()
+		c.handleCaptureWriteLeaseHeartbeat(msg.From, req)
 	case messaging.TypeSetNodeLivenessResponse:
 		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
 		c.drainController.ObserveSetNodeLivenessResponse(msg.From, req)
@@ -496,11 +501,13 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 		zap.Any("removedNodes", removedNodes))
 
 	for _, n := range removedNodes {
+		c.writeLease.removeNode(n)
 		c.RemoveNode(n)
 	}
 	for _, n := range addedNodes {
 		c.clearCompletedDrainTarget(n)
 	}
+	c.writeLease.updateClusterMode(c.bootstrapper.GetAllNodeIDs())
 	for _, req := range requests {
 		err := c.messageCenter.SendCommand(req)
 		if err != nil {
@@ -512,6 +519,74 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 	c.handleBootstrapResponses(ctx, responses)
 }
 
+func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *heartbeatpb.NodeHeartbeat) {
+	if c.bootstrapper == nil || !c.bootstrapper.NodeInitialized(from) {
+		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("uninitialized").Inc()
+		return
+	}
+	metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("received").Inc()
+	var initializedNodes []node.ID
+	if from == c.writeLease.selfNodeID {
+		// Only the coordinator capture needs remote membership to select a witness.
+		// Remote captures can be granted directly after sender validation.
+		initializedNodes = c.bootstrapper.GetInitializedNodeIDs()
+	}
+	messages := c.writeLease.handleHeartbeat(from, heartbeat, initializedNodes)
+	if len(messages) == 0 {
+		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("no_response").Inc()
+	} else {
+		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("response").Add(float64(len(messages)))
+	}
+	hasGrant := false
+	for _, message := range messages {
+		response, ok := message.Message[0].(*heartbeatpb.NodeHeartbeatResponse)
+		if ok && response.GetRequestSeq() != 0 {
+			hasGrant = true
+			break
+		}
+	}
+	delayed := false
+	failpoint.Inject("DelayCaptureWriteLeaseResponse", func(value failpoint.Value) {
+		delayMillis, ok := value.(int)
+		if ok && delayMillis > 0 && hasGrant {
+			delay := time.Duration(delayMillis) * time.Millisecond
+			delayed = true
+			deferredMessages := append([]*messaging.TargetMessage(nil), messages...)
+			go func() {
+				time.Sleep(delay)
+				for _, message := range deferredMessages {
+					_ = c.messageCenter.SendCommand(message)
+				}
+			}()
+		}
+	})
+	if delayed {
+		return
+	}
+	dropped := false
+	failpoint.Inject("DropCaptureWriteLeaseResponse", func(value failpoint.Value) {
+		if value.(bool) && hasGrant {
+			dropped = true
+		}
+	})
+	if dropped {
+		return
+	}
+	failpoint.Inject("DuplicateCaptureWriteLeaseResponse", func(value failpoint.Value) {
+		if value.(bool) && hasGrant {
+			for _, message := range messages {
+				duplicate := *message
+				_ = c.messageCenter.SendCommand(&duplicate)
+			}
+		}
+	})
+	for _, message := range messages {
+		if err := c.messageCenter.SendCommand(message); err != nil {
+			metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("send_failed").Inc()
+		}
+	}
+}
+
 func (c *Controller) onMaintainerBootstrapResponse(ctx context.Context, req *messaging.TargetMessage) {
 	response := req.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse)
 	c.drainController.ObserveBootstrapResponse(req.From, response)
@@ -520,6 +595,8 @@ func (c *Controller) onMaintainerBootstrapResponse(ctx context.Context, req *mes
 		zap.Int("maintainerCount", len(response.Statuses)))
 	responses := c.bootstrapper.HandleBootstrapResponse(req.From, response)
 	if c.bootstrapper.HasNode(req.From) {
+		c.writeLease.observeNodeCapability(req.From, response.GetWriteLeaseProtocolVersion())
+		c.writeLease.updateClusterMode(c.bootstrapper.GetAllNodeIDs())
 		if c.maybeAddDispatcherDrainSyncNode(req.From, response.GetDrainProtocolVersion()) {
 			c.maybeBroadcastDispatcherDrainTarget(true)
 		} else if c.observeStaleDispatcherDrainTargetSnapshot(req.From, drainTargetSnapshotFromBootstrap(response)) {
@@ -876,6 +953,7 @@ func (c *Controller) stopStaleBootstrapMaintainers(
 }
 
 func (c *Controller) Stop() {
+	metrics.CaptureP2PWitnessAvailable.Set(0)
 	c.taskHandlerMutex.Lock()
 	for _, h := range c.taskHandlers {
 		h.Cancel()
@@ -1185,10 +1263,15 @@ func (c *Controller) submitPeriodTask() {
 
 func (c *Controller) newBootstrapMessage(id node.ID, addr string) *messaging.TargetMessage {
 	log.Info("send coordinator bootstrap request", zap.Any("nodeID", id), zap.String("nodeAddr", addr))
+	// Bootstrap every node in legacy mode while its capability is unknown. The
+	// periodic lease response enables P2P after every active node reports support.
 	return messaging.NewSingleTargetMessage(
 		id,
 		messaging.MaintainerManagerTopic,
-		&heartbeatpb.CoordinatorBootstrapRequest{Version: c.version})
+		&heartbeatpb.CoordinatorBootstrapRequest{
+			Version:                   c.version,
+			WriteLeaseProtocolVersion: heartbeatpb.LegacyWriteLeaseProtocolVersion,
+		})
 }
 
 // updateChangefeedEpoch bumps the persisted owner epoch before a state change
