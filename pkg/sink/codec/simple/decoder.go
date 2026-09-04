@@ -171,6 +171,7 @@ func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 }
 
 func (d *Decoder) newDMLMessage(msg *message, tableInfo *commonType.TableInfo) *common.DMLMessage {
+	tableIDAllocator.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
 	return common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), func() *commonEvent.DMLEvent {
 		return d.assembleDMLEvent(msg, tableInfo)
 	})
@@ -200,8 +201,6 @@ func (d *Decoder) assembleDMLEvent(msg *message, tableInfo *commonType.TableInfo
 	}
 
 	event := buildDMLEvent(msg, tableInfo, d.config.EnableRowChecksum, d.upstreamTiDB)
-
-	tableIDAllocator.AddBlockTableID(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName(), event.GetTableID())
 
 	log.Debug("row changed event assembled", zap.Any("event", event))
 	return event
@@ -324,6 +323,11 @@ func (d *Decoder) GetCachedMessages() []*common.DMLMessage {
 	result := d.CachedDMLMessages
 	d.CachedDMLMessages = nil
 	return result
+}
+
+// GetTableIDs identifies every table and partition whose events belong to the logical table.
+func (d *Decoder) GetTableIDs(schema, table string) []int64 {
+	return tableIDAllocator.GetBlockedTables(schema, table)
 }
 
 // TableInfoProvider is used to store and read table info
