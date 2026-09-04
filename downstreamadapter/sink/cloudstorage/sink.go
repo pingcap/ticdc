@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/robfig/cron"
@@ -75,7 +76,8 @@ type sink struct {
 	// we have to use the context from the struct to perceive the context done from the upper layer
 	// To perceive the context done from the upper layer
 	// it's the same as the context passed into the Run method.
-	ctx context.Context
+	ctx       context.Context
+	writeGate *writelease.Gate
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool) error {
@@ -295,6 +297,7 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefiniti
 			zap.String("query", def.Query))
 		return nil
 	}
+<<<<<<< HEAD
 	encodedDef, err := def.MarshalWithQuery()
 	if err != nil {
 		return err
@@ -306,6 +309,13 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefiniti
 	}
 	log.Debug("write ddl event to external storage",
 		zap.String("path", path), zap.Any("ddl", v))
+=======
+	encodedSchemaFile := schemaFile.Marshal()
+	path := schemaFile.Path(s.cfg.UseTableIDAsPath, v.GetTableID())
+	if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
+		return err
+	}
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	return s.statistics.RecordDDLExecution(func() (string, error) {
 		err = s.storage.WriteFile(s.ctx, path, encodedDef)
 		if err != nil {
@@ -313,6 +323,13 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefiniti
 		}
 		return v.GetDDLType().String(), nil
 	})
+}
+
+func (s *sink) SetWriteGate(gate *writelease.Gate) {
+	s.writeGate = gate
+	if s.dmlWriters != nil {
+		s.dmlWriters.setWriteGate(gate)
+	}
 }
 
 func (s *sink) AddCheckpointTs(ts uint64) {
@@ -365,6 +382,9 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 				zap.Uint64("checkpoint", checkpoint),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
+		}
+		if !writelease.CanWrite(s.writeGate) {
+			continue
 		}
 		err = s.storage.WriteFile(ctx, "metadata", message)
 		if err != nil {
@@ -437,6 +457,9 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 	var isRemoveEmptyDirsRunning atomic.Bool
 	if isLocal {
 		ret = append(ret, func() {
+			if !writelease.CanWrite(s.writeGate) {
+				return
+			}
 			if !isRemoveEmptyDirsRunning.CompareAndSwap(false, true) {
 				log.Warn("remove empty dirs is already running, skip this round",
 					zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -469,6 +492,9 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 
 	var isCleanupRunning atomic.Bool
 	ret = append(ret, func() {
+		if !writelease.CanWrite(s.writeGate) {
+			return
+		}
 		if !isCleanupRunning.CompareAndSwap(false, true) {
 			log.Warn("cleanup expired files is already running, skip this round",
 				zap.String("keyspace", s.changefeedID.Keyspace()),

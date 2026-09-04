@@ -83,7 +83,15 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 				"Partition", "Compression", "View", "Sequence", "Lock", "Version", "TiFlashReplica", "IsColumnar",
 				"TempTableType", "TableCacheStatusType", "PlacementPolicyRef", "StatsOptions",
 				"ExchangePartitionInfo", "TTLInfo", "IsActiveActive", "SoftdeleteInfo", "Affinity",
+<<<<<<< HEAD
 				"Revision", "DBID", "Mode", "EngineAttribute", "StorageClassTier", "StorageClassTransitions",
+=======
+				"Revision", "DBID",
+				// Materialized-view metadata is table-level and does not affect the shared column schema.
+				"MaterializedViewBase", "MaterializedView", "MaterializedViewLog",
+				// These table-level storage settings do not affect the shared column schema.
+				"EngineAttribute", "StorageClassTier", "StorageClassTransitions", "Mode",
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 			},
 		},
 		{

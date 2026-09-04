@@ -40,6 +40,7 @@ func InitMetrics(registry *prometheus.Registry) {
 	initLogPullerMetrics(registry)
 	common.InitCommonMetrics(registry)
 	initDynamicStreamMetrics(registry)
+	initCaptureWriteLeaseMetrics(registry)
 
 	kafka.InitMetrics(registry)
 	gc.InitMetrics(registry)

@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -77,7 +78,7 @@ func initRedoComponet(
 		return newWritePathClosedError()
 	}
 	manager.redoDispatcherMap = redoDispatcherMap
-	manager.redoSink = redoSink
+	manager.redoSink = withCaptureWriteGate(ctx, redoSink)
 	manager.redoSchemaIDToDispatchers = redoSchemaIDToDispatchers
 	manager.redoQuota = redoQuota
 	manager.sinkQuota = totalQuota - redoQuota
@@ -159,6 +160,20 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 	return nil
 }
 
+<<<<<<< HEAD
+=======
+func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(redoSink sink.Sink) (int, int) {
+	var (
+		batchCount = redoSink.BatchCount()
+		batchBytes = redoSink.BatchBytes()
+	)
+	if e.config.Consistent != nil && e.config.Consistent.EventCollectorBatchCount != nil {
+		batchCount = *e.config.Consistent.EventCollectorBatchCount
+	}
+	return batchCount, batchBytes
+}
+
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, _ bool) error {
 	if e.writePathClosed.Load() {
 		return newWritePathClosedError()

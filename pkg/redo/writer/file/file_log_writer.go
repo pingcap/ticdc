@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"go.uber.org/zap"
 )
 
@@ -29,7 +30,11 @@ var _ writer.RedoLogWriter = &logWriter{}
 type logWriter struct {
 	cfg           *writer.Config
 	backendWriter fileWriter
+<<<<<<< HEAD
 	fileType      string
+=======
+	writeGate     *writelease.Gate
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 }
 
 // NewLogWriter create a new logWriter.
@@ -45,6 +50,11 @@ func NewLogWriter(
 
 func (l *logWriter) SetTableSchemaStore(tableSchemaStore *event.TableSchemaStore) {
 	l.backendWriter.SetTableSchemaStore(tableSchemaStore)
+}
+
+func (l *logWriter) SetWriteGate(gate *writelease.Gate) {
+	l.writeGate = gate
+	l.backendWriter.SetWriteGate(gate)
 }
 
 func (l *logWriter) Run(ctx context.Context) error {
@@ -101,7 +111,36 @@ func (l *logWriter) asyncWriteEvents(ctx context.Context, events ...writer.RedoE
 	return nil
 }
 
+<<<<<<< HEAD
 // Close implements RedoLogWriter.Close.
+=======
+func (l *ddlWriter) WriteDDLEvent(ctx context.Context, event *commonEvent.DDLEvent) error {
+	select {
+	case <-ctx.Done():
+		return errors.Trace(ctx.Err())
+	default:
+	}
+
+	if l.isStopped() {
+		return errors.ErrRedoWriterStopped.GenWithStackByArgs()
+	}
+	if event == nil {
+		log.Warn("writing nil event to redo log, ignore this",
+			zap.String("keyspace", l.cfg.ChangeFeedID().Keyspace()),
+			zap.String("changefeed", l.cfg.ChangeFeedID().Name()),
+			zap.String("capture", l.cfg.CaptureID()))
+		return nil
+	}
+	if err := writelease.WaitForWrite(ctx, l.writeGate); err != nil {
+		return err
+	}
+	if err := l.backendWriter.SyncWrite(ctx, event); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
+}
+
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 func (l *logWriter) Close() (err error) {
 	return l.backendWriter.Close()
 }

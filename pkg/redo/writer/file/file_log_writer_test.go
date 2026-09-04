@@ -80,8 +80,13 @@ func TestLogWriterWriteDDL(t *testing.T) {
 	for _, tt := range tests {
 		mockWriter := &mockFileWriter{}
 		mockWriter.On("IsRunning").Return(tt.isRunning)
+<<<<<<< HEAD
 		mockWriter.On("SyncWrite", mock.Anything).Return(tt.writerErr)
 		w := logWriter{
+=======
+		mockWriter.On("SyncWrite", mock.Anything, mock.Anything).Return(tt.writerErr)
+		w := ddlWriter{logWriter: &logWriter{
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 			cfg:           newTestWriterConfig(t, common.ChangeFeedID{}, nil),
 			backendWriter: mockWriter,
 			fileType:      redo.RedoDDLLogFileType,

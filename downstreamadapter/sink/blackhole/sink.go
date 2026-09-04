@@ -19,6 +19,12 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+<<<<<<< HEAD
+=======
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/writelease"
+	"github.com/pingcap/ticdc/utils/chann"
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	"go.uber.org/zap"
 )
 
@@ -45,7 +51,14 @@ func (s *sink) SinkType() common.SinkType {
 func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 }
 
+<<<<<<< HEAD
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+=======
+func (s *Sink) SetWriteGate(_ *writelease.Gate) {
+}
+
+func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	// NOTE: don't change the log, integration test `lossy_ddl` depends on it.
 	// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L23
 	// Use zap.Stringer to call String() method which applies log redaction

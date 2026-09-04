@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/atomic"
@@ -48,6 +49,12 @@ type dmlWriters struct {
 	columnSelector *columnselector.ColumnSelectors
 	writers        []*writer
 	closed         atomic.Bool
+}
+
+func (d *dmlWriters) setWriteGate(gate *writelease.Gate) {
+	for _, writer := range d.writers {
+		writer.setWriteGate(gate)
+	}
 }
 
 func newDMLWriters(

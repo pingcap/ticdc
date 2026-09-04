@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/operator"
@@ -86,6 +87,33 @@ type Controller struct {
 
 	changefeedChangeCh chan []*changefeedChange
 	apiLock            sync.RWMutex
+<<<<<<< HEAD
+=======
+
+	drainController *drain.Controller
+	writeLease      *captureWriteLeaseController
+
+	// drainSession is the in-memory drain state machine for v1 drain API.
+	// Only one drain session is allowed at a time.
+	drainSessionMu sync.Mutex
+	drainSession   *drainSession
+	// maxObservedDrainEpoch tracks the highest epoch reported by drain protocol
+	// participants, including empty clear targets. It keeps future drain
+	// fencing tokens compatible with old UnixNano-based epochs after rolling
+	// patch or owner failover.
+	maxObservedDrainEpoch uint64
+	// lastGeneratedDrainEpoch keeps epochs strictly increasing within one owner.
+	lastGeneratedDrainEpoch uint64
+	// drainClearState keeps a clearing tombstone after target membership removal
+	// closes the active drain session. It lets coordinator resend the clear
+	// request until all nodes confirm they have dropped the stale drain target
+	// for that epoch.
+	drainClearState *drainClearState
+	// drainCompleted keeps the last successfully completed drain target after
+	// membership removal closed the active session. It preserves v1 API polling
+	// semantics so late polls still observe success instead of capture-not-exist.
+	drainCompleted *drainCompletedState
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 }
 
 type changefeedChange struct {
@@ -148,6 +176,11 @@ func NewController(
 		changefeedChangeCh: changefeedChangeCh,
 		pdClient:           pdClient,
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+<<<<<<< HEAD
+=======
+		drainController:    drainController,
+		writeLease:         newCaptureWriteLeaseController(version, selfNode.ID),
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	}
 	c.nodeChanged.changed = false
 
@@ -170,6 +203,7 @@ func NewController(
 	added, _, requests, _ := c.bootstrapper.HandleNodesChange(nodes)
 	log.Info("coordinator bootstrap initial nodes",
 		zap.Int("addedCount", len(added)), zap.Any("addedNodes", nodes))
+	c.writeLease.updateClusterMode(c.bootstrapper.GetAllNodeIDs())
 
 	for _, req := range requests {
 		err := c.messageCenter.SendCommand(req)
@@ -312,6 +346,23 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
 			c.handleMaintainerStatus(msg.From, req.Statuses)
 		}
+<<<<<<< HEAD
+=======
+		req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
+		c.handleMaintainerStatus(msg.From, req.Statuses)
+	case messaging.TypeNodeHeartbeatRequest:
+		req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
+		c.drainController.ObserveHeartbeat(msg.From, req)
+		if c.observeDispatcherDrainTargetHeartbeat(msg.From, req) {
+			c.maybeBroadcastDispatcherDrainTarget(true)
+		}
+		c.syncDrainSchedulingPolicy()
+		c.handleCaptureWriteLeaseHeartbeat(msg.From, req)
+	case messaging.TypeSetNodeLivenessResponse:
+		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
+		c.drainController.ObserveSetNodeLivenessResponse(msg.From, req)
+		c.syncDrainSchedulingPolicy()
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
 	default:
@@ -375,8 +426,16 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 		zap.Any("removedNodes", removedNodes))
 
 	for _, n := range removedNodes {
+		c.writeLease.removeNode(n)
 		c.RemoveNode(n)
 	}
+<<<<<<< HEAD
+=======
+	for _, n := range addedNodes {
+		c.clearCompletedDrainTarget(n)
+	}
+	c.writeLease.updateClusterMode(c.bootstrapper.GetAllNodeIDs())
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	for _, req := range requests {
 		err := c.messageCenter.SendCommand(req)
 		if err != nil {
@@ -387,12 +446,92 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 	c.handleBootstrapResponses(ctx, responses)
 }
 
+func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *heartbeatpb.NodeHeartbeat) {
+	if c.bootstrapper == nil || !c.bootstrapper.NodeInitialized(from) {
+		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("uninitialized").Inc()
+		return
+	}
+	metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("received").Inc()
+	var initializedNodes []node.ID
+	if from == c.writeLease.selfNodeID {
+		// Only the coordinator capture needs remote membership to select a witness.
+		// Remote captures can be granted directly after sender validation.
+		initializedNodes = c.bootstrapper.GetInitializedNodeIDs()
+	}
+	messages := c.writeLease.handleHeartbeat(from, heartbeat, initializedNodes)
+	if len(messages) == 0 {
+		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("no_response").Inc()
+	} else {
+		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("response").Add(float64(len(messages)))
+	}
+	hasGrant := false
+	for _, message := range messages {
+		response, ok := message.Message[0].(*heartbeatpb.NodeHeartbeatResponse)
+		if ok && response.GetRequestSeq() != 0 {
+			hasGrant = true
+			break
+		}
+	}
+	delayed := false
+	failpoint.Inject("DelayCaptureWriteLeaseResponse", func(value failpoint.Value) {
+		delayMillis, ok := value.(int)
+		if ok && delayMillis > 0 && hasGrant {
+			delay := time.Duration(delayMillis) * time.Millisecond
+			delayed = true
+			deferredMessages := append([]*messaging.TargetMessage(nil), messages...)
+			go func() {
+				time.Sleep(delay)
+				for _, message := range deferredMessages {
+					_ = c.messageCenter.SendCommand(message)
+				}
+			}()
+		}
+	})
+	if delayed {
+		return
+	}
+	dropped := false
+	failpoint.Inject("DropCaptureWriteLeaseResponse", func(value failpoint.Value) {
+		if value.(bool) && hasGrant {
+			dropped = true
+		}
+	})
+	if dropped {
+		return
+	}
+	failpoint.Inject("DuplicateCaptureWriteLeaseResponse", func(value failpoint.Value) {
+		if value.(bool) && hasGrant {
+			for _, message := range messages {
+				duplicate := *message
+				_ = c.messageCenter.SendCommand(&duplicate)
+			}
+		}
+	})
+	for _, message := range messages {
+		if err := c.messageCenter.SendCommand(message); err != nil {
+			metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("send_failed").Inc()
+		}
+	}
+}
+
 func (c *Controller) onMaintainerBootstrapResponse(ctx context.Context, req *messaging.TargetMessage) {
 	response := req.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse)
 	log.Info("controller received maintainer bootstrap response",
 		zap.Stringer("node", req.From),
 		zap.Int("maintainerCount", len(response.Statuses)))
 	responses := c.bootstrapper.HandleBootstrapResponse(req.From, response)
+<<<<<<< HEAD
+=======
+	if c.bootstrapper.HasNode(req.From) {
+		c.writeLease.observeNodeCapability(req.From, response.GetWriteLeaseProtocolVersion())
+		c.writeLease.updateClusterMode(c.bootstrapper.GetAllNodeIDs())
+		if c.maybeAddDispatcherDrainSyncNode(req.From, response.GetDrainProtocolVersion()) {
+			c.maybeBroadcastDispatcherDrainTarget(true)
+		} else if c.observeStaleDispatcherDrainTargetSnapshot(req.From, drainTargetSnapshotFromBootstrap(response)) {
+			c.maybeBroadcastDispatcherDrainTarget(true)
+		}
+	}
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	c.handleBootstrapResponses(ctx, responses)
 }
 
@@ -629,6 +768,7 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 }
 
 func (c *Controller) Stop() {
+	metrics.CaptureP2PWitnessAvailable.Set(0)
 	c.taskHandlerMutex.Lock()
 	for _, h := range c.taskHandlers {
 		h.Cancel()
@@ -889,10 +1029,15 @@ func (c *Controller) submitPeriodTask() {
 
 func (c *Controller) newBootstrapMessage(id node.ID, addr string) *messaging.TargetMessage {
 	log.Info("send coordinator bootstrap request", zap.Any("nodeID", id), zap.String("nodeAddr", addr))
+	// Bootstrap every node in legacy mode while its capability is unknown. The
+	// periodic lease response enables P2P after every active node reports support.
 	return messaging.NewSingleTargetMessage(
 		id,
 		messaging.MaintainerManagerTopic,
-		&heartbeatpb.CoordinatorBootstrapRequest{Version: c.version})
+		&heartbeatpb.CoordinatorBootstrapRequest{
+			Version:                   c.version,
+			WriteLeaseProtocolVersion: heartbeatpb.LegacyWriteLeaseProtocolVersion,
+		})
 }
 
 func (c *Controller) updateChangefeedEpoch(ctx context.Context, id common.ChangeFeedID) {

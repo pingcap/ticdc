@@ -29,6 +29,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
+<<<<<<< HEAD
+=======
+	"github.com/pingcap/ticdc/pkg/writelease"
+	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -109,6 +115,45 @@ func TestInitAndWriteMeta(t *testing.T) {
 
 	cancel()
 	require.ErrorIs(t, eg.Wait(), context.Canceled)
+}
+
+func TestRedoMetaFlushWaitsForWriteGate(t *testing.T) {
+	ctx := t.Context()
+	changefeedID := common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName)
+	_, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
+	require.NoError(t, err)
+	m := NewRedoMeta(changefeedID, 1, testutil.NewConsistentConfig(uri.String()))
+	gate := writelease.NewGate()
+	m.SetWriteGate(gate)
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	require.NoError(t, m.PreStart(ctx))
+	t.Cleanup(func() {
+		m.closeExtStorage()
+		m.CleanupMetrics()
+	})
+	initialMetaFile := m.preMetaFile
+	require.NotEmpty(t, initialMetaFile)
+	gate.SetP2PRequired(true)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- m.flush(ctx, misc.NewMeta(2, 3))
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, initialMetaFile, m.preMetaFile)
+
+	require.True(t, gate.RenewP2P(time.Now(), writelease.P2PLeaseDuration))
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("redo metadata flush did not resume after the capture write gate reopened")
+	}
+	require.NotEqual(t, initialMetaFile, m.preMetaFile)
+	exists, err := m.extStorage.FileExists(ctx, initialMetaFile)
+	require.NoError(t, err)
+	require.False(t, exists)
 }
 
 func TestPreCleanupAndWriteMeta(t *testing.T) {

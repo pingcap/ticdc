@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/hash"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -192,6 +193,7 @@ type FilePathGenerator struct {
 	// This can differ from TableInfoVersion when reusing an existing schema file
 	// with the same checksum.
 	versionMap map[VersionedTableName]uint64
+	writeGate  *writelease.Gate
 }
 
 // NewFilePathGenerator creates a FilePathGenerator.
@@ -214,9 +216,23 @@ func NewFilePathGenerator(
 	}
 }
 
+<<<<<<< HEAD:pkg/sink/cloudstorage/path.go
 // CheckOrWriteSchema checks whether the schema file exists in the storage and
 // write scheme.json if necessary.
 // It returns true if there is a newer schema version in storage than the passed table version.
+=======
+// SetWriteGate installs capture-wide admission for schema-file publication.
+func (f *FilePathGenerator) SetWriteGate(gate *writelease.Gate) {
+	f.writeGate = gate
+}
+
+// CheckOrWriteSchema ensures the schema file for table/tableInfo exists.
+// The first return value is the schema version that must be used in later
+// data/index paths. The second return value is true when storage already has a
+// newer schema with the same checksum, so the caller should discard the old DML
+// batch. Storage errors are returned from checking, walking, or writing schema
+// files.
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092)):pkg/cloudstorage/generator.go
 func (f *FilePathGenerator) CheckOrWriteSchema(
 	ctx context.Context,
 	table VersionedTableName,
@@ -327,12 +343,24 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 			zap.Any("versionedTableName", table),
 			zap.Uint32("checksum", checksum))
 	}
+<<<<<<< HEAD:pkg/sink/cloudstorage/path.go
 	encodedDetail, err := def.MarshalWithQuery()
 	if err != nil {
 		return false, err
 	}
 	f.versionMap[table] = table.TableInfoVersion
 	return false, f.storage.WriteFile(ctx, tblSchemaFile, encodedDetail)
+=======
+	encodedSchemaFile := schemaFile.Marshal()
+	if err := writelease.WaitForWrite(ctx, f.writeGate); err != nil {
+		return 0, false, err
+	}
+	if err := f.storage.WriteFile(ctx, schemaFilePath, encodedSchemaFile); err != nil {
+		return 0, false, err
+	}
+	f.versionMap[table] = table.TableInfoVersion
+	return table.TableInfoVersion, false, nil
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092)):pkg/cloudstorage/generator.go
 }
 
 // SetClock is used for unit test
