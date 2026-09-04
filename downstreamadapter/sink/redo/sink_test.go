@@ -17,6 +17,9 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net/url"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -31,7 +34,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
+	ubergomock "go.uber.org/mock/gomock"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -45,6 +51,40 @@ func newTestConsistentConfig(storage string) *config.ConsistentConfig {
 	cfg.EncodingWorkerNum = util.AddressOf(workerNumberForTest)
 	cfg.FlushWorkerNum = util.AddressOf(workerNumberForTest)
 	return cfg
+}
+
+func TestNewClosesWritersWhenDMLConstructionFails(t *testing.T) {
+	ctrl := ubergomock.NewController(t)
+	ddlStorage := mockobjstore.NewMockStorage(ctrl)
+	dmlStorage := mockobjstore.NewMockStorage(ctrl)
+	ddlStorage.EXPECT().Close().Times(1)
+	dmlStorage.EXPECT().Close().Times(1)
+
+	oldInitExternalStorage := redo.InitExternalStorage
+	t.Cleanup(func() {
+		redo.InitExternalStorage = oldInitExternalStorage
+	})
+	initCalls := 0
+	redo.InitExternalStorage = func(context.Context, url.URL) (storeapi.Storage, error) {
+		initCalls++
+		if initCalls == 1 {
+			return ddlStorage, nil
+		}
+		return dmlStorage, nil
+	}
+
+	spoolBaseDir := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(spoolBaseDir, []byte("file"), 0o600))
+	cfg := newTestConsistentConfig("file:///tmp/redo")
+	cfg.SpoolBaseDir = util.AddressOf(spoolBaseDir)
+
+	_, err := New(
+		t.Context(),
+		common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName),
+		cfg,
+	)
+	require.Error(t, err)
+	require.Equal(t, 2, initCalls)
 }
 
 func TestConsistentConfig(t *testing.T) {
@@ -117,6 +157,52 @@ func TestRedoSinkBatchConfig(t *testing.T) {
 
 	require.Equal(t, 4096, sink.BatchCount())
 	require.Equal(t, int(32*redo.Megabyte), sink.BatchBytes())
+}
+
+func TestRedoSinkTwoStageAck(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table t (id int primary key)")
+	require.NotNil(t, job)
+	event := helper.DML2Event("test", "t", "insert into t values (1), (2), (3)")
+
+	callbacks := make([]string, 0, 2)
+	event.AddPostEnqueueFunc(func() {
+		callbacks = append(callbacks, "enqueue")
+	})
+	event.AddPostFlushFunc(func() {
+		callbacks = append(callbacks, "flush")
+	})
+
+	sink := &Sink{
+		ctx:       context.Background(),
+		logBuffer: chann.NewUnlimitedChannelDefault[*commonEvent.RedoRowEvent](),
+	}
+	sink.AddDMLEvent(event)
+	require.Empty(t, callbacks)
+
+	sink.logBuffer.Close()
+	rowEvents, ok := sink.logBuffer.GetMultipleNoGroup(
+		make([]*commonEvent.RedoRowEvent, 0, event.Len()))
+	require.True(t, ok)
+	require.Len(t, rowEvents, int(event.Len()))
+
+	for _, rowEvent := range rowEvents[:len(rowEvents)-1] {
+		rowEvent.PostEnqueue()
+	}
+	require.Empty(t, callbacks)
+	rowEvents[len(rowEvents)-1].PostEnqueue()
+	require.Equal(t, []string{"enqueue"}, callbacks)
+
+	for _, rowEvent := range rowEvents[:len(rowEvents)-1] {
+		rowEvent.PostFlush()
+	}
+	require.Equal(t, []string{"enqueue"}, callbacks)
+
+	rowEvents[len(rowEvents)-1].PostFlush()
+	require.Equal(t, []string{"enqueue", "flush"}, callbacks)
 }
 
 // TestRedoSinkInProcessor tests how redo log manager is used in processor.
@@ -340,7 +426,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	require.ErrorIs(b, eg.Wait(), context.Canceled)
 }
 
-func TestRedoSinkSendMessagesInBatch(t *testing.T) {
+func TestRedoSinkSendMessages(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -350,25 +436,13 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWriter := writer.NewMockRedoDMLWriter(ctrl)
-	expectWriteBatch := func(batchSize int) *gomock.Call {
-		args := make([]interface{}, 0, batchSize+1)
-		args = append(args, gomock.Any()) // context
-		for range batchSize {
-			args = append(args, gomock.Any())
-		}
-		return mockWriter.EXPECT().
-			AddDMLEvents(args[0], args[1:]...).
-			DoAndReturn(func(_ context.Context, events ...*commonEvent.RedoRowEvent) error {
-				require.Len(t, events, batchSize)
-				return nil
-			})
-	}
-
-	gomock.InOrder(
-		expectWriteBatch(redo.DefaultFlushBatchSize),
-		expectWriteBatch(redo.DefaultFlushBatchSize),
-		expectWriteBatch(17),
-	)
+	mockWriter.EXPECT().
+		AddDMLEvents(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, events ...*commonEvent.RedoRowEvent) error {
+			require.Len(t, events, 1)
+			return nil
+		}).
+		Times(3)
 
 	s := &Sink{
 		dmlWriter: mockWriter,
@@ -380,9 +454,8 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 		doneCh <- s.sendMessages(ctx)
 	}()
 
-	totalEvents := redo.DefaultFlushBatchSize*2 + 17
-	events := make([]*commonEvent.RedoRowEvent, 0, totalEvents)
-	for range totalEvents {
+	events := make([]*commonEvent.RedoRowEvent, 0, 3)
+	for range 3 {
 		events = append(events, &commonEvent.RedoRowEvent{})
 	}
 	s.logBuffer.Push(events...)

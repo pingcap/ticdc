@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -64,6 +63,10 @@ type options struct {
 	// rootDir is the base directory used to build one changefeed's spool
 	// directory. If empty, use TiCDC's data dir as the base directory.
 	rootDir string
+	// namespace and captureID give each spool owner an independent directory
+	// below rootDir before the changefeed path is appended.
+	namespace string
+	captureID string
 
 	// diskQuotaBytes is the disk budget for local spool files.
 	// spool still derives in-memory and watermark thresholds from it, but the
@@ -79,17 +82,26 @@ type options struct {
 	highWatermarkRatio float64
 	// lowWatermarkRatio is the ratio that resumes pending PostEnqueue callbacks.
 	lowWatermarkRatio float64
+
+	metrics *Metrics
 }
 
-type option func(*options)
-
-func WithRootDir(rootDir string) option {
+func WithRootDir(rootDir string) func(*options) {
 	return func(options *options) {
 		options.rootDir = rootDir
 	}
 }
 
-func WithDiskQuotaBytes(quotaBytes int64) option {
+// WithDirectoryNamespace isolates one spool owner and capture below the base
+// directory. Callers that can share a base directory should always set it.
+func WithDirectoryNamespace(namespace, captureID string) func(*options) {
+	return func(options *options) {
+		options.namespace = namespace
+		options.captureID = captureID
+	}
+}
+
+func WithDiskQuotaBytes(quotaBytes int64) func(*options) {
 	return func(options *options) {
 		if quotaBytes == 0 {
 			return
@@ -107,7 +119,7 @@ func WithDiskQuotaBytes(quotaBytes int64) option {
 	}
 }
 
-func WithSegmentBytes(segmentBytes int64) option {
+func WithSegmentBytes(segmentBytes int64) func(*options) {
 	return func(options *options) {
 		if segmentBytes == 0 {
 			return
@@ -125,7 +137,7 @@ func WithSegmentBytes(segmentBytes int64) option {
 	}
 }
 
-func WithMemoryRatio(memoryRatio float64) option {
+func WithMemoryRatio(memoryRatio float64) func(*options) {
 	return func(options *options) {
 		if memoryRatio == 0 {
 			return
@@ -143,7 +155,7 @@ func WithMemoryRatio(memoryRatio float64) option {
 	}
 }
 
-func WithHighWatermarkRatio(highWatermarkRatio float64) option {
+func WithHighWatermarkRatio(highWatermarkRatio float64) func(*options) {
 	return func(options *options) {
 		if highWatermarkRatio == 0 {
 			return
@@ -161,7 +173,7 @@ func WithHighWatermarkRatio(highWatermarkRatio float64) option {
 	}
 }
 
-func WithLowWatermarkRatio(lowWatermarkRatio float64) option {
+func WithLowWatermarkRatio(lowWatermarkRatio float64) func(*options) {
 	return func(options *options) {
 		if lowWatermarkRatio == 0 {
 			return
@@ -179,19 +191,31 @@ func WithLowWatermarkRatio(lowWatermarkRatio float64) option {
 	}
 }
 
+// Metrics contains component-owned metric handles updated by a spool.
+type Metrics struct {
+	MemoryBytes        prometheus.Gauge
+	DiskBytes          prometheus.Gauge
+	PendingPostEnqueue prometheus.Gauge
+	DiskQuotaWaiters   prometheus.Gauge
+	DiskQuotaWait      prometheus.Observer
+	LoadedBytes        prometheus.Observer
+	RotatedCount       prometheus.Counter
+	SegmentCount       prometheus.Gauge
+	Close              func()
+}
+
+// WithMetrics supplies component-owned metrics to the shared spool.
+func WithMetrics(metrics *Metrics) func(*options) {
+	return func(options *options) {
+		options.metrics = metrics
+	}
+}
+
 type segmentID uint64
 
-// Spool keeps encoded DML messages after a writer shard has accepted them and
-// before that writer shard has flushed them to external storage.
-//
-// The producer is the cloud storage writer path: after encoderGroup has
-// produced encoded messages for a task, writer.Enqueue calls Spool.Enqueue to
-// hand those messages to local spool storage.
-//
-// The consumer is also the cloud storage writer path: when the writer flushes a
-// batch, it calls Spool.Load to read the queued messages back, then calls
-// Spool.Release after a successful flush or Spool.Discard when the batch is
-// ignored.
+// Spool keeps encoded sink messages after the sink has accepted them and before
+// it has flushed them to external storage. A sink releases an entry only after
+// a successful flush, or discards it when the corresponding data is ignored.
 type Spool struct {
 	keyspace   string
 	changefeed string
@@ -308,7 +332,7 @@ func (e *Entry) InMemory() bool {
 // New return a spool that manages unflushed data.
 func New(
 	changefeedID commonType.ChangeFeedID,
-	opts ...option,
+	opts ...func(*options),
 ) (*Spool, error) {
 	cfg := defaultOptions()
 	for _, opt := range opts {
@@ -317,7 +341,7 @@ func New(
 		}
 	}
 	normalizeOptions(cfg)
-	workDir := resolveWorkDir(changefeedID, cfg.rootDir)
+	workDir := resolveWorkDir(changefeedID, cfg.rootDir, cfg.namespace, cfg.captureID)
 	if err := prepareWorkDir(workDir); err != nil {
 		return nil, err
 	}
@@ -326,18 +350,53 @@ func New(
 		keyspace   = changefeedID.Keyspace()
 		changefeed = changefeedID.Name()
 	)
+	spoolMetrics := normalizeMetrics(cfg.metrics)
 	spool := &Spool{
 		keyspace:           keyspace,
 		changefeed:         changefeed,
 		workDir:            workDir,
-		quota:              newQuotaController(changefeedID, cfg),
+		quota:              newQuotaController(cfg),
 		segmentCapacity:    cfg.segmentCapacity,
-		metricLoadedBytes:  metrics.CloudStorageLoadBytesHistogram.WithLabelValues(keyspace, changefeed),
-		metricRotatedCount: metrics.CloudStorageRotateCountCounter.WithLabelValues(keyspace, changefeed),
-		metricSegmentCount: metrics.CloudStorageSpoolSegmentCountGauge.WithLabelValues(keyspace, changefeed),
+		metricLoadedBytes:  spoolMetrics.LoadedBytes,
+		metricRotatedCount: spoolMetrics.RotatedCount,
+		metricSegmentCount: spoolMetrics.SegmentCount,
 		segments:           make(map[segmentID]*segment),
 	}
 	return spool, nil
+}
+
+func normalizeMetrics(spoolMetrics *Metrics) *Metrics {
+	if spoolMetrics == nil {
+		spoolMetrics = &Metrics{}
+	}
+	if spoolMetrics.MemoryBytes == nil {
+		spoolMetrics.MemoryBytes = prometheus.NewGauge(prometheus.GaugeOpts{})
+	}
+	if spoolMetrics.DiskBytes == nil {
+		spoolMetrics.DiskBytes = prometheus.NewGauge(prometheus.GaugeOpts{})
+	}
+	if spoolMetrics.PendingPostEnqueue == nil {
+		spoolMetrics.PendingPostEnqueue = prometheus.NewGauge(prometheus.GaugeOpts{})
+	}
+	if spoolMetrics.DiskQuotaWaiters == nil {
+		spoolMetrics.DiskQuotaWaiters = prometheus.NewGauge(prometheus.GaugeOpts{})
+	}
+	if spoolMetrics.DiskQuotaWait == nil {
+		spoolMetrics.DiskQuotaWait = prometheus.NewHistogram(prometheus.HistogramOpts{})
+	}
+	if spoolMetrics.LoadedBytes == nil {
+		spoolMetrics.LoadedBytes = prometheus.NewHistogram(prometheus.HistogramOpts{})
+	}
+	if spoolMetrics.RotatedCount == nil {
+		spoolMetrics.RotatedCount = prometheus.NewCounter(prometheus.CounterOpts{})
+	}
+	if spoolMetrics.SegmentCount == nil {
+		spoolMetrics.SegmentCount = prometheus.NewGauge(prometheus.GaugeOpts{})
+	}
+	if spoolMetrics.Close == nil {
+		spoolMetrics.Close = func() {}
+	}
+	return spoolMetrics
 }
 
 func defaultOptions() *options {
@@ -365,18 +424,24 @@ func normalizeOptions(cfg *options) {
 	cfg.highWatermarkRatio = defaultHighWatermarkRatio
 }
 
-func resolveWorkDir(changefeedID commonType.ChangeFeedID, rootDir string) string {
+func resolveWorkDir(
+	changefeedID commonType.ChangeFeedID, rootDir, namespace, captureID string,
+) string {
 	baseDir := rootDir
 	if baseDir == "" {
 		baseDir = config.GetGlobalServerConfig().DataDir
 		if baseDir == "" {
 			baseDir = os.TempDir()
 		}
-		baseDir = filepath.Join(baseDir, defaultDirectoryName)
+		if namespace == "" {
+			namespace = defaultDirectoryName
+		}
 	}
 
 	return filepath.Join(
 		baseDir,
+		namespace,
+		captureID,
 		changefeedID.Keyspace(),
 		changefeedID.Name(),
 	)
@@ -620,17 +685,26 @@ func (s *Spool) Release(entry *Entry) {
 		return
 	}
 
+	releasedBytes := accountingBytes
 	if spilled {
+		releasedBytes = 0
 		seg := s.segments[location.id]
 		if seg != nil {
 			seg.refCnt--
-			if seg.refCnt == 0 && s.activeSegment != seg {
-				s.removeSegmentLocked(seg)
-				s.metricSegmentCount.Set(float64(len(s.segments)))
+			if seg.refCnt == 0 {
+				if s.activeSegment == seg {
+					releasedBytes = s.truncateSegmentLocked(seg)
+				} else {
+					releasedBytes = seg.size
+					if !s.removeSegmentLocked(seg) {
+						releasedBytes = 0
+					}
+					s.metricSegmentCount.Set(float64(len(s.segments)))
+				}
 			}
 		}
 	}
-	postEnqueueCallbacks := s.quota.release(accountingBytes, spilled)
+	postEnqueueCallbacks := s.quota.release(releasedBytes, spilled)
 	s.mu.Unlock()
 
 	for _, postEnqueueCallback := range postEnqueueCallbacks {
@@ -678,9 +752,6 @@ func (s *Spool) Close() {
 			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
 			zap.String("path", s.workDir), zap.Error(err))
 	}
-	metrics.CloudStorageLoadBytesHistogram.DeleteLabelValues(s.keyspace, s.changefeed)
-	metrics.CloudStorageRotateCountCounter.DeleteLabelValues(s.keyspace, s.changefeed)
-	metrics.CloudStorageSpoolSegmentCountGauge.DeleteLabelValues(s.keyspace, s.changefeed)
 	s.quota.deleteMetrics()
 }
 
@@ -752,9 +823,26 @@ func (s *Spool) rotateLocked() error {
 	return nil
 }
 
-func (s *Spool) removeSegmentLocked(seg *segment) {
+func (s *Spool) truncateSegmentLocked(seg *segment) int64 {
+	if seg == nil || seg.size == 0 {
+		return 0
+	}
+	releasedBytes := seg.size
+	if err := seg.file.Truncate(0); err != nil {
+		log.Warn(
+			"truncate active spool segment file failed",
+			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
+			zap.String("path", seg.path), zap.Error(err),
+		)
+		return 0
+	}
+	seg.size = 0
+	return releasedBytes
+}
+
+func (s *Spool) removeSegmentLocked(seg *segment) bool {
 	if seg == nil {
-		return
+		return false
 	}
 	if seg.file != nil {
 		if err := seg.file.Close(); err != nil {
@@ -768,8 +856,10 @@ func (s *Spool) removeSegmentLocked(seg *segment) {
 			"remove spool segment file failed",
 			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
 			zap.String("path", seg.path), zap.Error(err))
+		return false
 	}
 	delete(s.segments, seg.id)
+	return true
 }
 
 func takePostFlushCallbacks(entry *Entry) []func() {

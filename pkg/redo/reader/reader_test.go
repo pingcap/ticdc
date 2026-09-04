@@ -28,10 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
-	"github.com/pingcap/ticdc/pkg/redo/testutil"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
-	"github.com/pingcap/ticdc/pkg/redo/writer/file"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
@@ -42,22 +38,13 @@ import (
 )
 
 func genLogFile(
-	ctx context.Context, t *testing.T,
+	_ context.Context, t *testing.T,
 	dir string, logType string,
 	minCommitTs, maxCommitTs uint64,
 ) {
-	consistentCfg := testutil.NewConsistentConfig("file://" + dir)
-	consistentCfg.MaxLogSize = util.AddressOf(int64(1))
-	cfg, err := writer.NewConfig(
-		common.NewChangeFeedIDWithName("reader-test", common.DefaultKeyspaceName),
-		consistentCfg,
-	)
-	require.NoError(t, err)
 	fileName := fmt.Sprintf(redo.RedoLogFileFormatV2, "capture", "default",
 		"changefeed", logType, maxCommitTs, uuid.NewString(), redo.LogEXT)
-	w, err := file.NewFileWriter(ctx, cfg, logType, writer.WithLogFileName(func() string {
-		return fileName
-	}))
+	w, err := newFramedFileWriter(filepath.Join(dir, fileName))
 	require.Nil(t, err)
 	switch logType {
 	case redo.RedoRowLogFileType:
@@ -72,8 +59,7 @@ func genLogFile(
 			log := event.ToRedoLog()
 			rawData, err := codec.MarshalRedoLog(log, nil)
 			require.Nil(t, err)
-			_, err = w.Write(rawData)
-			require.Nil(t, err)
+			require.NoError(t, w.Write(rawData))
 		}
 	case redo.RedoDDLLogFileType:
 		event := &pevent.DDLEvent{
@@ -83,8 +69,7 @@ func genLogFile(
 		log := event.ToRedoLog()
 		rawData, err := codec.MarshalRedoLog(log, nil)
 		require.Nil(t, err)
-		_, err = w.Write(rawData)
-		require.Nil(t, err)
+		require.NoError(t, w.Write(rawData))
 	}
 	err = w.Close()
 	require.Nil(t, err)

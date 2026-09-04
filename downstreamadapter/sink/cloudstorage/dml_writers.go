@@ -17,19 +17,22 @@ import (
 	"context"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	serverconfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 )
+
+const cloudStorageSpoolDirectory = "cloudstorage-sink-spool"
 
 // dmlWriters coordinates encoding and output shard writers.
 type dmlWriters struct {
@@ -67,7 +70,12 @@ func newDMLWriters(
 	spool, err := spool.New(
 		changefeedID,
 		spool.WithRootDir(config.SpoolBaseDir),
+		spool.WithDirectoryNamespace(
+			cloudStorageSpoolDirectory,
+			serverconfig.GetGlobalServerConfig().AdvertiseAddr,
+		),
 		spool.WithDiskQuotaBytes(config.SpoolDiskQuota),
+		spool.WithMetrics(newSpoolMetrics(changefeedID)),
 	)
 	if err != nil {
 		return nil, err

@@ -14,7 +14,6 @@
 package writer
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -35,6 +34,8 @@ func TestNewConfigUsesConsistentConfigValues(t *testing.T) {
 	flushWorkerNum := 6
 	compressionType := "lz4"
 	flushConcurrency := 7
+	spoolDiskQuota := int64(8 * 1024 * 1024)
+	spoolBaseDir := t.TempDir()
 	consistentCfg := testutil.NewConsistentConfig("nfs:///tmp/redo")
 	consistentCfg.MaxLogSize = util.AddressOf(maxLogSize)
 	consistentCfg.FlushIntervalInMs = util.AddressOf(flushIntervalInMs)
@@ -42,6 +43,8 @@ func TestNewConfigUsesConsistentConfigValues(t *testing.T) {
 	consistentCfg.FlushWorkerNum = util.AddressOf(flushWorkerNum)
 	consistentCfg.Compression = util.AddressOf(compressionType)
 	consistentCfg.FlushConcurrency = util.AddressOf(flushConcurrency)
+	consistentCfg.SpoolDiskQuota = util.AddressOf(spoolDiskQuota)
+	consistentCfg.SpoolBaseDir = util.AddressOf(spoolBaseDir)
 	cfg, err := NewConfig(changefeedID, consistentCfg)
 	require.NoError(t, err)
 
@@ -49,7 +52,6 @@ func TestNewConfigUsesConsistentConfigValues(t *testing.T) {
 	require.Equal(t, config.GetGlobalServerConfig().AdvertiseAddr, cfg.CaptureID())
 	require.NotNil(t, cfg.URI())
 	require.Equal(t, "file", cfg.URI().Scheme)
-	require.Equal(t, "/tmp/redo", cfg.Dir())
 	require.True(t, cfg.UseExternalStorage())
 	require.Equal(t, maxLogSize*redo.Megabyte, cfg.MaxLogSizeInBytes())
 	require.Equal(t, flushIntervalInMs, cfg.FlushIntervalInMs())
@@ -57,39 +59,8 @@ func TestNewConfigUsesConsistentConfigValues(t *testing.T) {
 	require.Equal(t, flushWorkerNum, cfg.FlushWorkerNum())
 	require.Equal(t, flushConcurrency, cfg.FlushConcurrency())
 	require.Equal(t, compressionType, cfg.Compression())
-	require.False(t, cfg.UseFileBackend())
-}
-
-func TestNewConfigInitializesFileBackendDirForExternalStorage(t *testing.T) {
-	t.Parallel()
-
-	changefeedID := common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName)
-	consistentCfg := testutil.NewConsistentConfig("s3://bucket/prefix")
-	consistentCfg.UseFileBackend = util.AddressOf(true)
-	cfg, err := NewConfig(changefeedID, consistentCfg)
-	require.NoError(t, err)
-
-	require.NotNil(t, cfg.URI())
-	require.Equal(t, "s3", cfg.URI().Scheme)
-	require.True(t, cfg.UseExternalStorage())
-	require.True(t, cfg.UseFileBackend())
-	require.Equal(t,
-		filepath.Join(config.GetGlobalServerConfig().DataDir, config.DefaultRedoDir, changefeedID.Keyspace(), changefeedID.Name()),
-		cfg.Dir())
-}
-
-func TestNewConfigLeavesDirEmptyForRemoteMemoryBackend(t *testing.T) {
-	t.Parallel()
-
-	changefeedID := common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName)
-	cfg, err := NewConfig(changefeedID, testutil.NewConsistentConfig("s3://bucket/prefix"))
-	require.NoError(t, err)
-
-	require.NotNil(t, cfg.URI())
-	require.Equal(t, "s3", cfg.URI().Scheme)
-	require.True(t, cfg.UseExternalStorage())
-	require.False(t, cfg.UseFileBackend())
-	require.Empty(t, cfg.Dir())
+	require.Equal(t, spoolDiskQuota, cfg.SpoolDiskQuota())
+	require.Equal(t, spoolBaseDir, cfg.SpoolBaseDir())
 }
 
 func TestNewConfigReturnsErrorForInvalidStorageURI(t *testing.T) {
