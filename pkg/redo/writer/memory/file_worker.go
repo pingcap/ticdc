@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -98,6 +99,11 @@ type fileWorkerGroup struct {
 
 	metricWriteBytes       prometheus.Gauge
 	metricFlushAllDuration prometheus.Observer
+	writeGate              *writelease.Gate
+}
+
+func (f *fileWorkerGroup) setWriteGate(gate *writelease.Gate) {
+	f.writeGate = gate
 }
 
 // newFileWorkerGroup create a fileWorkerGroup
@@ -276,9 +282,15 @@ func (f *fileWorkerGroup) syncWrite(egCtx context.Context, event *polymorphicRed
 
 func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) error {
 	var err error
+	if err = writelease.WaitForWrite(egCtx, f.writeGate); err != nil {
+		return err
+	}
 	start := time.Now()
 	file.filename = f.getLogFileName(file.maxCommitTs)
 	if err = file.writer.Close(); err != nil {
+		return err
+	}
+	if err = writelease.WaitForWrite(egCtx, f.writeGate); err != nil {
 		return err
 	}
 	if f.cfg.FlushConcurrency() <= 1 {

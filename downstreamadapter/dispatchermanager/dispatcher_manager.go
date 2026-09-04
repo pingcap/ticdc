@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -40,6 +39,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
@@ -154,13 +154,19 @@ type DispatcherManager struct {
 
 	// sink is used to send all the events to the downstream.
 	sink sink.Sink
+	// writeSink is the capture-write-gated view passed to dispatchers.
+	// sink remains the concrete implementation used for lifecycle and
+	// sink-specific recovery operations.
+	writeSink sink.Sink
 
 	// redo related
 	// redoEnabled is immutable and set to true if enabled.
 	redoEnabled bool
 	// redoReady set to true after the redo components are fully initialized and safe for concurrent access.
 	redoReady atomic.Bool
-	redoSink  *redo.Sink
+	// redoSink is the capture-write-gated sink used by redo dispatchers and for
+	// lifecycle management.
+	redoSink sink.Sink
 	// redoGlobalTs stores the resolved-ts of the redo metadata and blocks events in the common dispatcher where the commit-ts is greater than the resolved-ts.
 	redoGlobalTs atomic.Uint64
 
@@ -302,6 +308,7 @@ func NewDispatcherManager(
 		return nil, newWritePathClosedError()
 	}
 	manager.sink = createdSink
+	manager.writeSink = withCaptureWriteGate(ctx, createdSink)
 	manager.writePathMu.Unlock()
 
 	// Determine outputRawChangeEvent based on sink type
@@ -404,6 +411,51 @@ func NewDispatcherManager(
 	return manager, nil
 }
 
+<<<<<<< HEAD
+=======
+func withCaptureWriteGate(ctx context.Context, inner sink.Sink) sink.Sink {
+	gate, ok := appcontext.TryGetService[*writelease.Gate](appcontext.CaptureWriteGate)
+	if !ok {
+		return inner
+	}
+	return sink.WithWriteGate(ctx, inner, gate)
+}
+
+func (e *DispatcherManager) getWriteSink() sink.Sink {
+	if e.writeSink != nil {
+		return e.writeSink
+	}
+	return e.sink
+}
+
+func countIgnoreUpdateOnlyColumnsRules(filter *config.FilterConfig) int {
+	if filter == nil {
+		return 0
+	}
+	count := 0
+	for _, rule := range filter.EventFilters {
+		if rule != nil && len(rule.IgnoreUpdateOnlyColumns) > 0 {
+			count++
+		}
+	}
+	return count
+}
+
+func (e *DispatcherManager) getEventCollectorBatchCountAndBytes(s sink.Sink) (int, int) {
+	var (
+		batchCount = s.BatchCount()
+		batchBytes = s.BatchBytes()
+	)
+	if e.config.EventCollectorBatchCount != nil {
+		batchCount = *e.config.EventCollectorBatchCount
+	}
+	if e.config.EventCollectorBatchBytes != nil {
+		batchBytes = *e.config.EventCollectorBatchBytes
+	}
+	return batchCount, batchBytes
+}
+
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
 	if e.GetTableTriggerEventDispatcher() != nil {
 		return errors.ErrChangefeedInitTableTriggerDispatcherFailed.FastGenByArgs("table trigger event dispatcher existed!")
@@ -573,7 +625,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			skipSyncpointAtStartTsList[idx],
 			skipDMLAsStartTs,
 			currentPdTs,
-			e.sink,
+			e.getWriteSink(),
 			e.sharedInfo,
 			e.IsRedoEnabled(),
 			&e.redoGlobalTs,
@@ -984,7 +1036,7 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		false, // skipSyncpointAtStartTs
 		false, // skipDMLAsStartTs will be set later after calculating real startTs
 		0,     // currentPDTs will be calculated later.
-		e.sink,
+		e.getWriteSink(),
 		e.sharedInfo,
 		e.IsRedoEnabled(),
 		&e.redoGlobalTs,
@@ -1142,7 +1194,7 @@ func (e *DispatcherManager) addCheckpointTs(checkpointTs uint64) {
 	if e.writePathClosed.Load() {
 		return
 	}
-	e.sink.AddCheckpointTs(checkpointTs)
+	e.getWriteSink().AddCheckpointTs(checkpointTs)
 }
 
 func (e *DispatcherManager) finishClose() {

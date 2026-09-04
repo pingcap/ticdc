@@ -10,6 +10,7 @@ import (
 
 	gomock "github.com/golang/mock/gomock"
 	event "github.com/pingcap/ticdc/pkg/common/event"
+	writelease "github.com/pingcap/ticdc/pkg/writelease"
 )
 
 // MockRedoEvent is a mock of RedoEvent interface.
@@ -109,7 +110,60 @@ func (m *MockRedoLogWriter) Run(ctx context.Context) error {
 // Run indicates an expected call of Run.
 func (mr *MockRedoLogWriterMockRecorder) Run(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
+<<<<<<< HEAD
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockRedoLogWriter)(nil).Run), ctx)
+=======
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockRedoDMLWriter)(nil).Run), ctx)
+}
+
+// SetWriteGate mocks base method.
+func (m *MockRedoDMLWriter) SetWriteGate(gate *writelease.Gate) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetWriteGate", gate)
+}
+
+// SetWriteGate indicates an expected call of SetWriteGate.
+func (mr *MockRedoDMLWriterMockRecorder) SetWriteGate(gate interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetWriteGate", reflect.TypeOf((*MockRedoDMLWriter)(nil).SetWriteGate), gate)
+}
+
+// MockRedoDDLWriter is a mock of RedoDDLWriter interface.
+type MockRedoDDLWriter struct {
+	ctrl     *gomock.Controller
+	recorder *MockRedoDDLWriterMockRecorder
+}
+
+// MockRedoDDLWriterMockRecorder is the mock recorder for MockRedoDDLWriter.
+type MockRedoDDLWriterMockRecorder struct {
+	mock *MockRedoDDLWriter
+}
+
+// NewMockRedoDDLWriter creates a new mock instance.
+func NewMockRedoDDLWriter(ctrl *gomock.Controller) *MockRedoDDLWriter {
+	mock := &MockRedoDDLWriter{ctrl: ctrl}
+	mock.recorder = &MockRedoDDLWriterMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockRedoDDLWriter) EXPECT() *MockRedoDDLWriterMockRecorder {
+	return m.recorder
+}
+
+// Close mocks base method.
+func (m *MockRedoDDLWriter) Close() error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Close")
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Close indicates an expected call of Close.
+func (mr *MockRedoDDLWriterMockRecorder) Close() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockRedoDDLWriter)(nil).Close))
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 }
 
 // SetTableSchemaStore mocks base method.
@@ -124,8 +178,25 @@ func (mr *MockRedoLogWriterMockRecorder) SetTableSchemaStore(arg0 interface{}) *
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetTableSchemaStore", reflect.TypeOf((*MockRedoLogWriter)(nil).SetTableSchemaStore), arg0)
 }
 
+<<<<<<< HEAD
 // WriteEvents mocks base method.
 func (m *MockRedoLogWriter) WriteEvents(ctx context.Context, events ...RedoEvent) error {
+=======
+// SetWriteGate mocks base method.
+func (m *MockRedoDDLWriter) SetWriteGate(gate *writelease.Gate) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetWriteGate", gate)
+}
+
+// SetWriteGate indicates an expected call of SetWriteGate.
+func (mr *MockRedoDDLWriterMockRecorder) SetWriteGate(gate interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetWriteGate", reflect.TypeOf((*MockRedoDDLWriter)(nil).SetWriteGate), gate)
+}
+
+// WriteDDLEvent mocks base method.
+func (m *MockRedoDDLWriter) WriteDDLEvent(ctx context.Context, event *event.DDLEvent) error {
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	m.ctrl.T.Helper()
 	varargs := []interface{}{ctx}
 	for _, a := range events {

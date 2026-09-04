@@ -147,14 +147,110 @@ message MaintainerStatus {
     repeated RunningError err = 5;
     bool bootstrap_done = 6;
     uint64 lastSyncedTs = 7;  // last synced ts of all tables in the changefeed, used in /:changefeed_id/synced API
+<<<<<<< HEAD
+=======
+    // drain_progress reports the active dispatcher drain target observed by this maintainer.
+    // Nil means no active dispatcher drain target.
+    DrainProgress drain_progress = 8;
+    uint64 maintainer_epoch = 9;
+}
+
+// NodeLiveness is node-reported liveness.
+// Coordinator uses it for destination filtering and safe rolling-restart handoff
+// without persisting a separate intent in etcd.
+// It is monotonic and only allows: ALIVE -> DRAINING -> STOPPING.
+enum NodeLiveness {
+    // ALIVE accepts new destination placement, maintainer creation, and leader campaign/service.
+    ALIVE = 0;
+    // DRAINING is excluded from destination selection and is being drained.
+    // In-flight operations may still complete, but no new leader campaign is allowed.
+    DRAINING = 1;
+    // STOPPING keeps destination exclusion and enforces shutdown safety.
+    // It rejects new maintainer creation, allows cleanup/remove
+    STOPPING = 2;
+}
+
+// NodeHeartbeat is sent periodically from a node to the coordinator.
+message NodeHeartbeat {
+    NodeLiveness liveness = 1;
+    uint64 node_epoch = 2;
+    // dispatcher_drain_target_* reports the manager-level dispatcher drain target
+    // currently applied on this node. Empty target means the drain target is clear.
+    string dispatcher_drain_target_node_id = 3;
+    uint64 dispatcher_drain_target_epoch = 4;
+    uint64 write_lease_request_seq = 5;
+    uint32 write_lease_protocol_version = 6;
+    WriteLeaseWitnessAck write_lease_witness_ack = 7;
+}
+
+message WriteLeaseWitnessChallenge {
+    int64 coordinator_version = 1;
+    uint64 coordinator_node_epoch = 2;
+    uint64 self_request_seq = 3;
+    uint64 witness_node_epoch = 4;
+    bytes nonce = 5;
+}
+
+message WriteLeaseWitnessAck {
+    int64 coordinator_version = 1;
+    uint64 coordinator_node_epoch = 2;
+    uint64 self_request_seq = 3;
+    uint64 witness_node_epoch = 4;
+    bytes nonce = 5;
+}
+
+message NodeHeartbeatResponse {
+    int64 coordinator_version = 1;
+    uint64 target_node_epoch = 2;
+    uint64 request_seq = 3;
+    uint64 lease_duration_ms = 4;
+    WriteLeaseWitnessChallenge witness_challenge = 5;
+}
+
+// SetNodeLivenessRequest asks a node to transition its local liveness.
+message SetNodeLivenessRequest {
+    NodeLiveness target = 1;
+    uint64 node_epoch = 2;
+}
+
+// SetNodeLivenessResponse reports the liveness state applied by the node.
+message SetNodeLivenessResponse {
+    NodeLiveness applied = 1;
+    uint64 node_epoch = 2;
+}
+
+// SetDispatcherDrainTargetRequest asks a maintainer manager to apply the dispatcher drain target.
+// target_node_id can be empty to clear the current target.
+message SetDispatcherDrainTargetRequest {
+    string target_node_id = 1;
+    uint64 target_epoch = 2;
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 }
 
 message CoordinatorBootstrapRequest {
     int64 version = 1;
+    // Zero keeps the peer in legacy mode. A non-zero version activates the
+    // capture P2P write lease only on peers that understand this protocol.
+    uint32 write_lease_protocol_version = 2;
 }
 
 message CoordinatorBootstrapResponse {
     repeated MaintainerStatus statuses = 1;
+<<<<<<< HEAD
+=======
+    // drain_protocol_version is the node-scoped drain capability supported by
+    // the bootstrap responder. Zero means the node only supports the legacy
+    // hard-restart behavior. Non-zero versions opt into the coordinator-driven
+    // drain protocol used by rolling restart orchestration.
+    uint32 drain_protocol_version = 2;
+    // dispatcher_drain_target_* reports the manager-level drain target snapshot
+    // applied before this bootstrap response is sent. Coordinator uses it to
+    // clear stale targets inherited across coordinator failover before
+    // scheduling resumes.
+    string dispatcher_drain_target_node_id = 3;
+    uint64 dispatcher_drain_target_epoch = 4;
+    uint32 write_lease_protocol_version = 5;
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 }
 
 message AddMaintainerRequest {

@@ -48,6 +48,7 @@ func TestHandleNewNodes(t *testing.T) {
 	require.Len(t, removed, 0)
 	require.Len(t, requests, 2)
 	require.Len(t, b.GetAllNodeIDs(), 2)
+	require.Empty(t, b.GetInitializedNodeIDs())
 	require.Nil(t, responses)
 	require.False(t, b.AllNodesReady())
 
@@ -72,6 +73,7 @@ func TestHandleNewNodes(t *testing.T) {
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}},
 		})
 	require.False(t, b.AllNodesReady())
+	require.Equal(t, []node.ID{node1.ID}, b.GetInitializedNodeIDs())
 	require.Nil(t, responses)
 
 	// all nodes responses received, bootstrapped
@@ -83,6 +85,7 @@ func TestHandleNewNodes(t *testing.T) {
 		})
 	require.True(t, b.AllNodesReady())
 	require.Len(t, responses, 2)
+	require.ElementsMatch(t, []node.ID{node1.ID, node2.ID}, b.GetInitializedNodeIDs())
 	require.Equal(t, 1, len(responses[node1.ID].Spans))
 	require.Equal(t, 2, len(responses[node2.ID].Spans))
 

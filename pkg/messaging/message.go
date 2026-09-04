@@ -104,6 +104,16 @@ const (
 	TypeRedoResolvedTsForwardMessage       IOType = 39
 	TypeDispatcherSetChecksumUpdateRequest IOType = 40
 	TypeDispatcherSetChecksumAckResponse   IOType = 41
+<<<<<<< HEAD
+=======
+
+	// Node drain related
+	TypeNodeHeartbeatRequest            IOType = 42
+	TypeSetNodeLivenessRequest          IOType = 43
+	TypeSetNodeLivenessResponse         IOType = 44
+	TypeSetDispatcherDrainTargetRequest IOType = 45
+	TypeNodeHeartbeatResponse           IOType = 46
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 )
 
 func (t IOType) String() string {
@@ -190,6 +200,19 @@ func (t IOType) String() string {
 		return "MergeDispatcherRequest"
 	case TypeLogCoordinatorChangefeedStates:
 		return "TypeLogCoordinatorChangefeedStates"
+<<<<<<< HEAD
+=======
+	case TypeNodeHeartbeatRequest:
+		return "NodeHeartbeatRequest"
+	case TypeSetNodeLivenessRequest:
+		return "SetNodeLivenessRequest"
+	case TypeSetNodeLivenessResponse:
+		return "SetNodeLivenessResponse"
+	case TypeSetDispatcherDrainTargetRequest:
+		return "SetDispatcherDrainTargetRequest"
+	case TypeNodeHeartbeatResponse:
+		return "NodeHeartbeatResponse"
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	default:
 	}
 	return "Unknown"
@@ -389,6 +412,19 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.LogCoordinatorResolvedTsRequest{}
 	case TypeLogCoordinatorResolvedTsResponse:
 		m = &heartbeatpb.LogCoordinatorResolvedTsResponse{}
+<<<<<<< HEAD
+=======
+	case TypeNodeHeartbeatRequest:
+		m = &heartbeatpb.NodeHeartbeat{}
+	case TypeSetNodeLivenessRequest:
+		m = &heartbeatpb.SetNodeLivenessRequest{}
+	case TypeSetNodeLivenessResponse:
+		m = &heartbeatpb.SetNodeLivenessResponse{}
+	case TypeSetDispatcherDrainTargetRequest:
+		m = &heartbeatpb.SetDispatcherDrainTargetRequest{}
+	case TypeNodeHeartbeatResponse:
+		m = &heartbeatpb.NodeHeartbeatResponse{}
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	default:
 		log.Debug("Unimplemented IOType, ignore the message", zap.Stringer("Type", ioType))
 		return nil, errors.ErrUnimplementedIOType.GenWithStackByArgs(int(ioType))
@@ -501,6 +537,19 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeLogCoordinatorResolvedTsRequest
 	case *heartbeatpb.LogCoordinatorResolvedTsResponse:
 		ioType = TypeLogCoordinatorResolvedTsResponse
+<<<<<<< HEAD
+=======
+	case *heartbeatpb.NodeHeartbeat:
+		ioType = TypeNodeHeartbeatRequest
+	case *heartbeatpb.SetNodeLivenessRequest:
+		ioType = TypeSetNodeLivenessRequest
+	case *heartbeatpb.SetNodeLivenessResponse:
+		ioType = TypeSetNodeLivenessResponse
+	case *heartbeatpb.SetDispatcherDrainTargetRequest:
+		ioType = TypeSetDispatcherDrainTargetRequest
+	case *heartbeatpb.NodeHeartbeatResponse:
+		ioType = TypeNodeHeartbeatResponse
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	default:
 		panic("unknown io type")
 	}
