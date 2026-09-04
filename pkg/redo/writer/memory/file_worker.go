@@ -30,7 +30,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
+<<<<<<< HEAD
 	"github.com/pingcap/tidb/br/pkg/storage"
+=======
+	"github.com/pingcap/ticdc/pkg/writelease"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -97,6 +102,11 @@ type fileWorkerGroup struct {
 
 	metricWriteBytes       prometheus.Gauge
 	metricFlushAllDuration prometheus.Observer
+	writeGate              *writelease.Gate
+}
+
+func (f *fileWorkerGroup) setWriteGate(gate *writelease.Gate) {
+	f.writeGate = gate
 }
 
 // newFileWorkerGroup creates a DML fileWorkerGroup.
@@ -260,9 +270,15 @@ func (f *fileWorkerGroup) bgWriteLogs(
 
 func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) error {
 	var err error
+	if err = writelease.WaitForWrite(egCtx, f.writeGate); err != nil {
+		return err
+	}
 	start := time.Now()
 	file.filename = f.getLogFileName(file.maxCommitTs)
 	if err = file.writer.Close(); err != nil {
+		return err
+	}
+	if err = writelease.WaitForWrite(egCtx, f.writeGate); err != nil {
 		return err
 	}
 	if f.cfg.FlushConcurrency() <= 1 {

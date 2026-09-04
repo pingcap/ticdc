@@ -29,7 +29,13 @@ import (
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
+<<<<<<< HEAD
 	"github.com/pingcap/tidb/br/pkg/storage"
+=======
+	"github.com/pingcap/ticdc/pkg/writelease"
+	"github.com/pingcap/tidb/pkg/objstore"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
@@ -62,6 +68,7 @@ type RedoMeta struct {
 	metricResolvedTs       prometheus.Gauge
 
 	flushIntervalInMs int64
+	writeGate         *writelease.Gate
 }
 
 // NewRedoMeta creates a new redo meta.
@@ -98,6 +105,10 @@ func NewRedoMeta(
 // which means the external storage is accessible to the meta.
 func (m *RedoMeta) Running() bool {
 	return m.running.Load()
+}
+
+func (m *RedoMeta) SetWriteGate(gate *writelease.Gate) {
+	m.writeGate = gate
 }
 
 func (m *RedoMeta) PreStart(ctx context.Context) (err error) {
@@ -262,6 +273,11 @@ func (m *RedoMeta) initMeta(ctx context.Context) error {
 		zap.Uint64("checkpointTs", flushedMeta.CheckpointTs),
 		zap.Uint64("resolvedTs", flushedMeta.ResolvedTs))
 
+	if len(toRemoveMetaFiles) != 0 {
+		if err := writelease.WaitForWrite(ctx, m.writeGate); err != nil {
+			return err
+		}
+	}
 	return util.DeleteFilesInExtStorage(ctx, m.extStorage, toRemoveMetaFiles)
 }
 
@@ -273,6 +289,9 @@ func (m *RedoMeta) preCleanupExtStorage(ctx context.Context) error {
 	}
 	if !ret {
 		return nil
+	}
+	if err := writelease.WaitForWrite(ctx, m.writeGate); err != nil {
+		return err
 	}
 
 	changefeedMatcher := getChangefeedMatcher(m.changeFeedID)
@@ -286,6 +305,9 @@ func (m *RedoMeta) preCleanupExtStorage(ctx context.Context) error {
 		return err
 	}
 
+	if err := writelease.WaitForWrite(ctx, m.writeGate); err != nil {
+		return err
+	}
 	err = m.extStorage.DeleteFile(ctx, deleteMarker)
 	if err != nil && !util.IsNotExistInExtStorage(err) {
 		return errors.WrapError(errors.ErrExternalStorageAPI, err)
@@ -344,6 +366,9 @@ func (m *RedoMeta) deleteAllLogs(ctx context.Context) error {
 	}
 	// Write deleted mark before clean any files.
 	deleteMarker := getDeletedChangefeedMarker(m.changeFeedID)
+	if err := writelease.WaitForWrite(ctx, m.writeGate); err != nil {
+		return err
+	}
 	if err := m.extStorage.WriteFile(ctx, deleteMarker, []byte("D")); err != nil {
 		return errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
@@ -351,6 +376,9 @@ func (m *RedoMeta) deleteAllLogs(ctx context.Context) error {
 		zap.String("keyspace", m.changeFeedID.Keyspace()),
 		zap.String("changefeed", m.changeFeedID.Name()))
 
+	if err := writelease.WaitForWrite(ctx, m.writeGate); err != nil {
+		return err
+	}
 	changefeedMatcher := getChangefeedMatcher(m.changeFeedID)
 	return util.RemoveFilesIf(ctx, m.extStorage, func(path string) bool {
 		if path == deleteMarker || !strings.Contains(path, changefeedMatcher) {
@@ -419,6 +447,9 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 		return errors.WrapError(errors.ErrMarshalFailed, err)
 	}
 	metaFile := getMetafileName(m.captureID, m.changeFeedID, m.uuidGenerator)
+	if err := writelease.WaitForWrite(ctx, m.writeGate); err != nil {
+		return err
+	}
 	if err := m.extStorage.WriteFile(ctx, metaFile, data); err != nil {
 		log.Error("redo: meta manager flush meta write file failed",
 			zap.String("keyspace", m.changeFeedID.Keyspace()),
@@ -427,7 +458,7 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 		return errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
 
-	if m.preMetaFile != "" {
+	if m.preMetaFile != "" && writelease.CanWrite(m.writeGate) {
 		if m.preMetaFile == metaFile {
 			// This should only happen when use a constant uuid generator in test.
 			return nil
@@ -516,6 +547,9 @@ func (m *RedoMeta) bgGC(egCtx context.Context) error {
 		case <-ticker.C:
 			ckpt := m.metaCheckpointTs.getFlushed()
 			if ckpt == preCkpt {
+				continue
+			}
+			if !writelease.CanWrite(m.writeGate) {
 				continue
 			}
 			preCkpt = ckpt

@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"go.uber.org/zap"
 )
 
@@ -47,6 +48,7 @@ type Manager struct {
 	node *managerNodeState
 	// maintainers holds changefeed-scoped state and lifecycle operations.
 	maintainers *managerMaintainerSet
+	writeGate   *writelease.Gate
 }
 
 // NewMaintainerManager create a changefeed maintainer manager instance
@@ -60,12 +62,25 @@ func NewMaintainerManager(
 	nodeLiveness *liveness.Liveness,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+<<<<<<< HEAD
+=======
+	heartbeatCh := make(chan struct{}, 1)
+	writeGate, ok := appcontext.TryGetService[*writelease.Gate](appcontext.CaptureWriteGate)
+	if !ok {
+		writeGate = writelease.NewGate()
+	}
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	m := &Manager{
 		mc:          mc,
 		nodeInfo:    nodeInfo,
 		msgCh:       make(chan *messaging.TargetMessage, 1024),
 		node:        newManagerNodeState(nodeLiveness),
+<<<<<<< HEAD
 		maintainers: newManagerMaintainerSet(conf, nodeInfo),
+=======
+		maintainers: newManagerMaintainerSet(conf, nodeInfo, heartbeatCh),
+		writeGate:   writeGate,
+>>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	}
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
@@ -85,7 +100,8 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 		messaging.TypeRemoveMaintainerRequest,
 		messaging.TypeCoordinatorBootstrapRequest,
 		messaging.TypeSetNodeLivenessRequest,
-		messaging.TypeSetDispatcherDrainTargetRequest:
+		messaging.TypeSetDispatcherDrainTargetRequest,
+		messaging.TypeNodeHeartbeatResponse:
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -127,6 +143,8 @@ func (m *Manager) Name() string {
 func (m *Manager) Run(ctx context.Context) error {
 	ticker := time.NewTicker(time.Millisecond * 200)
 	defer ticker.Stop()
+	nodeHeartbeatTicker := time.NewTicker(writelease.NodeHeartbeatInterval)
+	defer nodeHeartbeatTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -134,9 +152,10 @@ func (m *Manager) Run(ctx context.Context) error {
 		case msg := <-m.msgCh:
 			m.handleMessage(msg)
 		case <-ticker.C:
-			m.sendNodeHeartbeat(false)
 			m.sendHeartbeat()
 			m.cleanupRemovedMaintainers()
+		case <-nodeHeartbeatTicker.C:
+			m.sendNodeHeartbeat(false)
 		}
 	}
 }
@@ -174,6 +193,13 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 			zap.Int64("version", req.Version))
 		return
 	}
+	if m.coordinatorID != msg.From || m.coordinatorVersion != req.Version {
+		m.writeGate.InvalidateP2P()
+		m.node.resetWriteLeaseRequests()
+	}
+	m.writeGate.SetP2PRequired(
+		req.GetWriteLeaseProtocolVersion() == heartbeatpb.CurrentWriteLeaseProtocolVersion,
+	)
 	m.coordinatorID = msg.From
 	m.coordinatorVersion = req.Version
 
@@ -217,6 +243,8 @@ func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 		m.onSetNodeLivenessRequest(msg)
 	case messaging.TypeSetDispatcherDrainTargetRequest:
 		m.onSetDispatcherDrainTargetRequest(msg)
+	case messaging.TypeNodeHeartbeatResponse:
+		m.onNodeHeartbeatResponse(msg)
 	default:
 	}
 }

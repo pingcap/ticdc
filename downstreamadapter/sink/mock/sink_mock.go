@@ -11,6 +11,7 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	common "github.com/pingcap/ticdc/pkg/common"
 	event "github.com/pingcap/ticdc/pkg/common/event"
+	writelease "github.com/pingcap/ticdc/pkg/writelease"
 )
 
 // MockSink is a mock of Sink interface.
@@ -152,6 +153,18 @@ func (m *MockSink) SetTableSchemaStore(tableSchemaStore *event.TableSchemaStore)
 func (mr *MockSinkMockRecorder) SetTableSchemaStore(tableSchemaStore interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetTableSchemaStore", reflect.TypeOf((*MockSink)(nil).SetTableSchemaStore), tableSchemaStore)
+}
+
+// SetWriteGate mocks base method.
+func (m *MockSink) SetWriteGate(gate *writelease.Gate) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetWriteGate", gate)
+}
+
+// SetWriteGate indicates an expected call of SetWriteGate.
+func (mr *MockSinkMockRecorder) SetWriteGate(gate interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetWriteGate", reflect.TypeOf((*MockSink)(nil).SetWriteGate), gate)
 }
 
 // SinkType mocks base method.
