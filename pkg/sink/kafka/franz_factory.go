@@ -112,7 +112,7 @@ func (f *franzFactory) AsyncProducer(context.Context) (AsyncProducer, error) {
 	return &asyncProducer{
 		client:       f.client,
 		changefeedID: f.changefeedID,
-		resultCh:     make(chan asyncProduceResult, producerMaxBufferedRecords),
+		resultCh:     make(chan asyncProduceResult, 1),
 	}, nil
 }
 
