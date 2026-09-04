@@ -902,6 +902,9 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		Watermark:       heartbeatpb.NewMaxWatermark(),
 		RedoWatermark:   heartbeatpb.NewMaxWatermark(),
 	}
+	if eventStoreWriteBytes, ok := metrics.GetEventStoreWriteBytes(); ok {
+		message.NodeResourceUsage = &heartbeatpb.NodeResourceUsage{EventStoreWriteBytes: eventStoreWriteBytes}
+	}
 
 	toCleanMap := make([]*cleanMap, 0)
 	dispatcherCount := 0

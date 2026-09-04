@@ -161,6 +161,9 @@ type SplitSpanChecker struct {
 	nodeManager *watcher.NodeManager
 	pdClock     pdutil.Clock
 
+	nodeResourceUsage        *NodeResourceUsageTracker
+	lastEventStoreWriteBytes map[node.ID]uint64
+
 	refresher              *RegionCountRefresher
 	splitSpanCheckDuration prometheus.Observer
 }
@@ -181,6 +184,7 @@ func NewSplitSpanChecker(
 	groupID replica.GroupID,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
 	refresher *RegionCountRefresher,
+	nodeResourceUsage *NodeResourceUsageTracker,
 ) *SplitSpanChecker {
 	if schedulerCfg == nil {
 		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))
@@ -198,10 +202,38 @@ func NewSplitSpanChecker(
 		mergeCheckCount:        0,
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		nodeResourceUsage:      nodeResourceUsage,
 		splitSpanCheckDuration: metrics.SplitSpanCheckDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), replica.GetGroupName(groupID)),
 
 		refresher: refresher,
 	}
+}
+
+// sampleEventStoreWriteBytes returns the bytes written on each node since the
+// previous balance check. It intentionally requires complete consecutive
+// snapshots so mixed-version clusters keep the old scheduling behavior.
+func (s *SplitSpanChecker) sampleEventStoreWriteBytes(aliveNodeIDs []node.ID) (map[node.ID]uint64, bool) {
+	current, ok := s.nodeResourceUsage.EventStoreWriteBytes(aliveNodeIDs)
+	if !ok {
+		s.lastEventStoreWriteBytes = nil
+		return nil, false
+	}
+
+	previous := s.lastEventStoreWriteBytes
+	s.lastEventStoreWriteBytes = current
+	if previous == nil {
+		return nil, false
+	}
+
+	delta := make(map[node.ID]uint64, len(aliveNodeIDs))
+	for _, nodeID := range aliveNodeIDs {
+		previousWriteBytes, ok := previous[nodeID]
+		if !ok || current[nodeID] < previousWriteBytes {
+			return nil, false
+		}
+		delta[nodeID] = current[nodeID] - previousWriteBytes
+	}
+	return delta, true
 }
 
 func (s *SplitSpanChecker) AddReplica(replica *SpanReplication) {
@@ -325,6 +357,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	}
 
 	aliveNodeIDs := s.nodeManager.GetAliveNodeIDs()
+	eventStoreWriteBytes, eventStoreWriteBytesAvailable := s.sampleEventStoreWriteBytes(aliveNodeIDs)
 
 	lastThreeTrafficPerNode := make(map[node.ID][]float64)
 	lastThreeTrafficSum := make([]float64, 3)
@@ -354,7 +387,9 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 
 	// step3. check the traffic of each node. If the traffic is not balanced,
 	//        we try to move some spans from the node with max traffic to the node with min traffic
-	results, minTrafficNodeID, maxTrafficNodeID := s.checkBalanceTraffic(aliveNodeIDs, lastThreeTrafficSum, lastThreeTrafficPerNode, taskMap)
+	results, minTrafficNodeID, maxTrafficNodeID := s.checkBalanceTraffic(
+		aliveNodeIDs, lastThreeTrafficSum, lastThreeTrafficPerNode, taskMap,
+		eventStoreWriteBytes, eventStoreWriteBytesAvailable)
 	if len(results) > 0 {
 		return results
 	}
@@ -1039,6 +1074,8 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	lastThreeTrafficSum []float64,
 	lastThreeTrafficPerNode map[node.ID][]float64,
 	taskMap map[node.ID][]*splitSpanStatus,
+	eventStoreWriteBytes map[node.ID]uint64,
+	eventStoreWriteBytesAvailable bool,
 ) (results []SplitSpanCheckResult, minTrafficNodeID node.ID, maxTrafficNodeID node.ID) {
 	log.Debug("checkBalanceTraffic try to balance traffic",
 		zap.Any("changefeedID", s.changefeedID),
@@ -1077,6 +1114,28 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 
 	minTrafficNodeID = aliveNodeIDs[0]
 	maxTrafficNodeID = aliveNodeIDs[nodeCount-1]
+	targetNodeID := minTrafficNodeID
+	if eventStoreWriteBytesAvailable {
+		// Restrict candidates to nodes below this group's average traffic, then
+		// prefer the one doing the least node-wide EventStore work. This keeps
+		// the move useful for the group while accounting for other changefeeds.
+		var targetWriteBytes uint64
+		targetNodeID = ""
+		for _, nodeID := range aliveNodeIDs {
+			if nodeID == maxTrafficNodeID ||
+				lastThreeTrafficPerNode[nodeID][latestTrafficIndex] >= avgLastThreeTraffic[latestTrafficIndex] {
+				continue
+			}
+			if targetNodeID == "" || eventStoreWriteBytes[nodeID] < targetWriteBytes {
+				targetNodeID = nodeID
+				targetWriteBytes = eventStoreWriteBytes[nodeID]
+			}
+		}
+		if targetNodeID == "" {
+			s.balanceCondition.reset()
+			return
+		}
+	}
 
 	log.Debug("traffic node info", zap.Any("minTrafficNodeID", minTrafficNodeID), zap.Any("maxTrafficNodeID", maxTrafficNodeID))
 
@@ -1155,7 +1214,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	// calculate the diff traffic between the avg traffic and the min/max traffic
 	// we try to move spans, whose total traffic is close to diffTraffic,
 	// from the max node to min node
-	diffInMinNode := avgLastThreeTraffic[latestTrafficIndex] - lastThreeTrafficPerNode[minTrafficNodeID][latestTrafficIndex]
+	diffInMinNode := avgLastThreeTraffic[latestTrafficIndex] - lastThreeTrafficPerNode[targetNodeID][latestTrafficIndex]
 	diffInMaxNode := lastThreeTrafficPerNode[maxTrafficNodeID][latestTrafficIndex] - avgLastThreeTraffic[latestTrafficIndex]
 	diffTraffic := math.Min(diffInMinNode, diffInMaxNode)
 
@@ -1196,12 +1255,12 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 			zap.String("changefeed", s.changefeedID.String()),
 			zap.Int64("group", s.groupID),
 			zap.Any("moveSpans", moveSpans),
-			zap.Any("minTrafficNodeID", minTrafficNodeID),
+			zap.Any("targetNodeID", targetNodeID),
 		)
 		results = append(results, SplitSpanCheckResult{
 			OpType:     OpMove,
 			MoveSpans:  moveSpans,
-			TargetNode: minTrafficNodeID,
+			TargetNode: targetNodeID,
 		})
 		s.balanceCondition.reset()
 		return
@@ -1219,7 +1278,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		zap.Stringer("changefeed", s.changefeedID),
 		zap.String("splitSpan", span.ID.String()),
 		zap.Int64("group", s.groupID),
-		zap.Any("splitTargetNodes", []node.ID{minTrafficNodeID, maxTrafficNodeID}),
+		zap.Any("splitTargetNodes", []node.ID{targetNodeID, maxTrafficNodeID}),
 	)
 
 	results = append(results, SplitSpanCheckResult{
@@ -1227,7 +1286,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		SplitSpan:        span.SpanReplication,
 		SpanNum:          2,
 		SpanType:         split.GetSplitType(span.regionCount),
-		SplitTargetNodes: []node.ID{minTrafficNodeID, maxTrafficNodeID}, // split the span, and one in minTrafficNode, one in maxTrafficNode, to balance traffic
+		SplitTargetNodes: []node.ID{targetNodeID, maxTrafficNodeID}, // split the span, and one in targetNode, one in maxTrafficNode, to balance traffic
 	})
 
 	s.balanceCondition.reset()

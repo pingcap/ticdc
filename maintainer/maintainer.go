@@ -903,6 +903,7 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
+	m.controller.UpdateNodeResourceUsage(msg.From, req.NodeResourceUsage)
 
 	// ATOMIC CHECKPOINT UPDATE: Part 1 of race condition fix
 	// Update checkpointTsByCapture BEFORE processing operator status to ensure atomicity
