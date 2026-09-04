@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -64,6 +65,7 @@ type sink struct {
 	checkpointTsChan chan uint64
 	eventChan        *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
 	rowChan          *chann.UnlimitedChannel[*commonEvent.MQRowEvent, any]
+	writeGate        *writelease.Gate
 }
 
 func (s *sink) SinkType() commonType.SinkType {
@@ -200,6 +202,10 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.eventChan.Push(event)
 }
 
+func (s *sink) SetWriteGate(gate *writelease.Gate) {
+	s.writeGate = gate
+}
+
 func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
 	return nil
 }
@@ -240,12 +246,18 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		}
 		common.SetDDLMessageLogInfo(message, e)
 		topic := s.comp.eventRouter.GetTopicForDDL(e)
+		if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
+			return err
+		}
 		// Notice: We must call GetPartitionNum here,
 		// which will be responsible for automatically creating topics when they don't exist.
 		// If it is not called here and kafka has `auto.create.topics.enable` turned on,
 		// then the auto-created topic will not be created as configured by ticdc.
 		_, err = s.comp.topicManager.GetPartitionNum(s.ctx, topic)
 		if err != nil {
+			return err
+		}
+		if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
 			return err
 		}
 		ddlType := e.GetDDLType().String()
@@ -316,6 +328,9 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				continue
 			}
 			common.SetCheckpointMessageLogInfo(msg, ts)
+			if !writelease.CanWrite(s.writeGate) {
+				continue
+			}
 
 			tableNames := s.getAllTableNames(ts)
 			// NOTICE: When there are no tables to replicate,
@@ -327,6 +342,9 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				if err != nil {
 					return errors.Trace(err)
 				}
+				if !writelease.CanWrite(s.writeGate) {
+					continue
+				}
 				err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg, common.MessageTypeResolved)
 				if err != nil {
 					return errors.Trace(err)
@@ -337,6 +355,9 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 					_, err = s.comp.topicManager.GetPartitionNum(ctx, topic)
 					if err != nil {
 						return errors.Trace(err)
+					}
+					if !writelease.CanWrite(s.writeGate) {
+						break
 					}
 					err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg, common.MessageTypeResolved)
 					if err != nil {
@@ -398,6 +419,9 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			schema := event.TableInfo.GetSchemaName()
 			table := event.TableInfo.GetTableName()
 			topic := s.comp.eventRouter.GetTopicForRowChange(schema, table)
+			if err := writelease.WaitForWrite(ctx, s.writeGate); err != nil {
+				return errors.Trace(err)
+			}
 			partitionNum, err := s.comp.topicManager.GetPartitionNum(ctx, topic)
 			if err != nil {
 				return errors.Trace(err)
@@ -532,6 +556,9 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				return errors.Trace(err)
 			}
 			for _, message := range future.Messages {
+				if err = writelease.WaitForWrite(ctx, s.writeGate); err != nil {
+					return errors.Trace(err)
+				}
 				start := time.Now()
 				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)

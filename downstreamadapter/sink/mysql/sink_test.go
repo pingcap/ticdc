@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/stretchr/testify/require"
@@ -600,8 +601,35 @@ func TestGetTableRecoveryInfo_RemoveDDLTs(t *testing.T) {
 	mock.ExpectCommit()
 	mock.ExpectClose() // Expect database close when sink.Close() is called
 
-	// Call GetTableRecoveryInfo with removeDDLTs=true
-	resultStartTsList, skipSyncpointList, skipDMLList, err := sink.GetTableRecoveryInfo(tableIDs, inputStartTsList, true)
+	gate := writelease.NewGate()
+	gate.SetP2PRequired(true)
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	sink.SetWriteGate(gate)
+
+	type recoveryResult struct {
+		startTsList   []int64
+		skipSyncpoint []bool
+		skipDML       []bool
+		err           error
+	}
+	resultCh := make(chan recoveryResult, 1)
+	go func() {
+		startTsList, skipSyncpoint, skipDML, err := sink.GetTableRecoveryInfo(tableIDs, inputStartTsList, true)
+		resultCh <- recoveryResult{startTsList, skipSyncpoint, skipDML, err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		t.Fatalf("DDL-ts cleanup passed through a closed capture write gate: %v", result.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	require.True(t, gate.RenewP2P(time.Now(), writelease.P2PLeaseDuration))
+	result := <-resultCh
+	resultStartTsList := result.startTsList
+	skipSyncpointList := result.skipSyncpoint
+	skipDMLList := result.skipDML
+	err := result.err
 
 	require.NoError(t, err)
 	require.Len(t, resultStartTsList, 3)

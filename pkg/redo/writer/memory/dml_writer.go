@@ -20,6 +20,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -83,6 +84,10 @@ func (l *dmlWriter) AddDMLEvents(ctx context.Context, events ...*commonEvent.Red
 		}
 	}
 	return nil
+}
+
+func (l *dmlWriter) SetWriteGate(gate *writelease.Gate) {
+	l.fileWorkers.setWriteGate(gate)
 }
 
 func (l *dmlWriter) Close() error {
