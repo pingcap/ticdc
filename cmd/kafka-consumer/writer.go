@@ -232,11 +232,8 @@ func (w *writer) getBlockTableIDs(ddl *event.DDLEvent) map[int64]struct{} {
 	}
 	if w.partitionTableAccessor != nil &&
 		w.partitionTableAccessor.IsPartitionTable(ddl.GetSchemaName(), ddl.GetTableName()) {
-		for _, progress := range w.progresses {
-			provider, ok := progress.decoder.(tableIDProvider)
-			if !ok {
-				continue
-			}
+		provider, ok := w.progresses[0].decoder.(tableIDProvider)
+		if ok {
 			for _, tableID := range provider.GetTableIDs(ddl.GetSchemaName(), ddl.GetTableName()) {
 				tableIDs[tableID] = struct{}{}
 			}
