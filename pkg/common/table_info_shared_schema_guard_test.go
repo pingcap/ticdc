@@ -66,7 +66,7 @@ type goSourceFile struct {
 // whose shared-schema compatibility has been reviewed and recorded here.
 // New upstream fields should be reviewed and then added here intentionally.
 func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
-	// This guard intentionally checks the latest TiDB master to detect
+	// This guard intentionally checks the latest TiDB release-8.5 to detect
 	// upstream struct-field changes before TiCDC upgrades its pinned TiDB version.
 	cases := []structGuardCase{
 		{
@@ -205,12 +205,12 @@ func buildRequiredTypesByPackage(cases []structGuardCase) map[packageKey][]strin
 	return requiredTypesByPackage
 }
 
-// queryModuleInfo resolves a module at @master and returns location/version
+// queryModuleInfo resolves a module at @release-8.5 and returns location/version
 // information for source-level contract checks.
 func queryModuleInfo(t *testing.T, modulePath string) *moduleInfo {
 	t.Helper()
 
-	cmd := exec.Command("go", "mod", "download", "-json", modulePath+"@master")
+	cmd := exec.Command("go", "mod", "download", "-json", modulePath+"@release-8.5")
 	output, cmdErr := cmd.CombinedOutput()
 	mod, decodeErr := decodeModuleInfo(output)
 	require.NoError(t, decodeErr, "unmarshal module metadata for %s failed", modulePath)

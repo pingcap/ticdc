@@ -720,6 +720,7 @@ type MySQLConfig struct {
 	WriteTimeout                 *string `toml:"write-timeout" json:"write-timeout,omitempty"`
 	ReadTimeout                  *string `toml:"read-timeout" json:"read-timeout,omitempty"`
 	Timeout                      *string `toml:"timeout" json:"timeout,omitempty"`
+	AsyncDDLTimeout              *string `toml:"async-ddl-timeout" json:"async-ddl-timeout,omitempty"`
 	EnableBatchDML               *bool   `toml:"enable-batch-dml" json:"enable-batch-dml,omitempty"`
 	EnableMultiStatement         *bool   `toml:"enable-multi-statement" json:"enable-multi-statement,omitempty"`
 	EnableCachePreparedStatement *bool   `toml:"enable-cache-prepared-statement" json:"enable-cache-prepared-statement,omitempty"`
