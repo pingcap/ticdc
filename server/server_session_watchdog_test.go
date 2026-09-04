@@ -93,7 +93,7 @@ func TestSessionWatchdogDoesNotFenceOnLiveLeaseWithZeroTTL(t *testing.T) {
 		DoAndReturn(func(context.Context, clientv3.LeaseID, ...clientv3.LeaseOption) (*clientv3.LeaseTimeToLiveResponse, error) {
 			cancel()
 			return &clientv3.LeaseTimeToLiveResponse{TTL: 0}, nil
-		})
+		}).MinTimes(1)
 
 	gate := writelease.NewGate()
 	require.True(t, gate.RenewP2P(time.Now(), writelease.P2PLeaseDuration))
@@ -118,7 +118,7 @@ func TestSessionWatchdogRenewsEtcdWriteProof(t *testing.T) {
 		DoAndReturn(func(context.Context, clientv3.LeaseID, ...clientv3.LeaseOption) (*clientv3.LeaseTimeToLiveResponse, error) {
 			cancel()
 			return &clientv3.LeaseTimeToLiveResponse{TTL: 10}, nil
-		})
+		}).MinTimes(1)
 
 	gate := writelease.NewGate()
 	requestSentAt := time.Now()
