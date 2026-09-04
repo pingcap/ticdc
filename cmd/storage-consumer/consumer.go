@@ -284,9 +284,12 @@ func (c *consumer) getNewFiles(
 	return tableDMLMap, err
 }
 
-func (c *consumer) appendMessage2Group(message *common.DMLMessage, enableTableAcrossNodes bool) {
+func (c *consumer) appendMessage2Group(
+	message *common.DMLMessage,
+	tableID int64,
+	enableTableAcrossNodes bool,
+) error {
 	var (
-		tableID  = message.TableID
 		schema   = message.Schema
 		table    = message.Table
 		commitTs = message.GetCommitTs()
@@ -297,20 +300,21 @@ func (c *consumer) appendMessage2Group(message *common.DMLMessage, enableTableAc
 		c.eventsGroup[tableID] = group
 	}
 	if commitTs >= group.HighWatermark {
-		group.AppendMessage(message)
+		if err := group.AppendMessage(message); err != nil {
+			return err
+		}
 		log.Debug("DML event append to the group",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", message.RowType))
-		return
+		return nil
 	}
 	if enableTableAcrossNodes {
 		log.Warn("DML events fallback, but enableTableAcrossNodes is true, still append it",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", message.RowType))
-		group.AppendMessage(message)
-		return
+		return group.AppendMessage(message)
 	}
 	log.Warn("dml event commit ts fallback, ignore",
 		zap.Uint64("commitTs", commitTs),
@@ -318,6 +322,7 @@ func (c *consumer) appendMessage2Group(message *common.DMLMessage, enableTableAc
 		zap.String("schema", schema),
 		zap.String("table", table),
 	)
+	return nil
 }
 
 // appendDMLEvents decodes RowChangedEvents from file content and append them to event group.
@@ -357,10 +362,15 @@ func (c *consumer) appendDMLEvents(
 		decoder.AddKeyValue(nil, content)
 	}
 
+	spillDecoder := util.NewDMLMessageDecoderWithDataFactory(decoder,
+		func(_ common.Decoder, _, value []byte) *common.DMLMessageData {
+			return c.newDMLMessageData(ctx, schemaFile, value, tableID)
+		})
+	spillDecoder.SetRawMessage(nil, content)
 	cnt := 0
 	filteredCnt := 0
 	for {
-		tp, hasNext := decoder.HasNext()
+		tp, hasNext := spillDecoder.HasNext()
 		if err != nil {
 			log.Error("failed to decode message", zap.Error(err))
 			return err
@@ -373,8 +383,10 @@ func (c *consumer) appendDMLEvents(
 		if tp == common.MessageTypeRow {
 			c.dmlCount.Add(1)
 
-			message := decoder.NextDMLMessage()
-			c.appendMessage2Group(messageWithPhysicalTableID(message, tableID), fileIdx.EnableTableAcrossNodes)
+			message := spillDecoder.NextDMLMessage()
+			if err := c.appendMessage2Group(message, tableID, fileIdx.EnableTableAcrossNodes); err != nil {
+				return err
+			}
 			filteredCnt++
 		}
 	}
@@ -385,6 +397,37 @@ func (c *consumer) appendDMLEvents(
 		zap.Int("filteredRowsCnt", filteredCnt))
 
 	return err
+}
+
+func (c *consumer) newDMLMessageData(
+	ctx context.Context,
+	schemaFile cloudstorage.SchemaFile,
+	content []byte,
+	tableID int64,
+) *common.DMLMessageData {
+	tableInfo := schemaFile.TableInfo()
+	selector := c.columnSelectors.GetForTableInfo(tableInfo)
+	messageData := util.NewDMLMessageDataWithDecoderFactory(nil, content,
+		func(_ []byte, value []byte) (common.Decoder, error) {
+			switch c.codecCfg.Protocol {
+			case config.ProtocolCsv:
+				return csv.NewDecoderWithColumnSelector(ctx, c.codecCfg, tableInfo, value, selector)
+			case config.ProtocolCanalJSON:
+				decoder := canal.NewTxnDecoder(c.codecCfg)
+				return decoder, nil
+			default:
+				return nil, errors.ErrSpillFileOp.FastGenByArgs("unsupported storage DML spill protocol")
+			}
+		})
+	restore := messageData.Restore
+	messageData.Restore = func(data []byte, dmlIndex uint64) (*common.DMLMessage, error) {
+		message, err := restore(data, dmlIndex)
+		if err != nil {
+			return nil, err
+		}
+		return messageWithPhysicalTableID(message, tableID), nil
+	}
+	return messageData
 }
 
 func messageWithPhysicalTableID(message *common.DMLMessage, tableID int64) *common.DMLMessage {
@@ -400,14 +443,14 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 	if group == nil {
 		return nil
 	}
-	messages := group.GetAllMessages()
+	messages, err := group.GetAllMessages()
+	if err != nil {
+		return err
+	}
 	if len(messages) == 0 {
 		return nil
 	}
-	events := make([]*event.DMLEvent, 0, len(messages))
-	for _, message := range messages {
-		events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
-	}
+	events := util.DMLMessagesToEvents(messages)
 	total := len(events)
 	if total == 0 {
 		return nil
@@ -449,6 +492,19 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 		}
 	}
+}
+
+func (c *consumer) cleanupEventsGroups() error {
+	var cleanupErr error
+	for _, group := range c.eventsGroup {
+		if err := group.Cleanup(); err != nil {
+			log.Warn("cleanup events group spill file failed", zap.Error(err))
+			if cleanupErr == nil {
+				cleanupErr = err
+			}
+		}
+	}
+	return cleanupErr
 }
 
 func (c *consumer) parseDMLIndexFile(ctx context.Context, path string, dmlkey cloudstorage.DMLPathKey) {
@@ -768,7 +824,13 @@ func (c *consumer) handle(ctx context.Context) error {
 	}
 }
 
-func (c *consumer) run(ctx context.Context) error {
+func (c *consumer) run(ctx context.Context) (err error) {
+	defer func() {
+		if cleanupErr := c.cleanupEventsGroups(); err == nil && cleanupErr != nil {
+			err = cleanupErr
+		}
+	}()
+
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return c.sink.Run(ctx)

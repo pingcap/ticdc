@@ -14,9 +14,38 @@
 package common
 
 import (
+	"sync/atomic"
+
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 )
+
+// DMLMessageData keeps the original encoded input needed to restore a DML
+// message after it has been spilled. One input can be attached to multiple
+// DMLMessages; Attach assigns each message its ordinal in that input.
+type DMLMessageData struct {
+	ID      uint64
+	Key     []byte
+	Value   []byte
+	Restore func([]byte, uint64) (*DMLMessage, error)
+
+	nextDMLIndex uint64
+}
+
+var nextDMLMessageDataID atomic.Uint64
+
+// NewDMLMessageData creates data shared by DMLMessages decoded from one input.
+func NewDMLMessageData(
+	key, value []byte,
+	restore func([]byte, uint64) (*DMLMessage, error),
+) *DMLMessageData {
+	return &DMLMessageData{
+		ID:      nextDMLMessageDataID.Add(1),
+		Key:     key,
+		Value:   value,
+		Restore: restore,
+	}
+}
 
 type DMLMessage struct {
 	TableID int64
@@ -28,6 +57,8 @@ type DMLMessage struct {
 	// toDMLEvent may be called after the decoder has consumed later messages.
 	// It must only use data captured by this DMLMessage and must not depend on decoder cursor state.
 	toDMLEvent func() *commonEvent.DMLEvent
+	spillData  *DMLMessageData
+	dmlIndex   uint64
 }
 
 func NewDMLMessage(
@@ -72,6 +103,21 @@ func (m *DMLMessage) GetCommitTs() uint64 {
 
 func (m *DMLMessage) ToDMLEvent() *commonEvent.DMLEvent {
 	return m.toDMLEvent()
+}
+
+// AttachDMLMessageData attaches the original input required to restore this
+// message after spill. It must be called once for every decoded DML, including
+// DMLs the consumer later discards.
+func (d *DMLMessageData) AttachDMLMessage(message *DMLMessage) {
+	message.spillData = d
+	message.dmlIndex = d.nextDMLIndex
+	d.nextDMLIndex++
+}
+
+// SpillData returns the data and ordinal attached while this message was
+// decoded. They are used by the consumer's in-memory events group only.
+func (m *DMLMessage) SpillData() (*DMLMessageData, uint64) {
+	return m.spillData, m.dmlIndex
 }
 
 // Decoder is an abstraction for events decoder
