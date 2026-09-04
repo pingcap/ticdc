@@ -194,6 +194,13 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 	c.handleStatus(from, statusList, true)
 }
 
+func (c *Controller) UpdateNodeResourceUsage(from node.ID, usage *heartbeatpb.NodeResourceUsage) {
+	c.spanController.UpdateNodeResourceUsage(from, usage)
+	if c.redoSpanController != nil {
+		c.redoSpanController.UpdateNodeResourceUsage(from, usage)
+	}
+}
+
 func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus, allowSelfHealing bool) {
 	// HandleStatus reconciles runtime dispatcher reports with maintainer-side state.
 	//

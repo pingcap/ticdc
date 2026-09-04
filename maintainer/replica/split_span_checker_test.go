@@ -90,7 +90,7 @@ func createTestSplitSpanReplications(cfID common.ChangeFeedID, tableID int64, sp
 
 func newTestSplitChecker(t *testing.T, cfID common.ChangeFeedID, groupID pkgreplica.GroupID, schedulerCfg *config.ChangefeedSchedulerConfig) *SplitSpanChecker {
 	refresher := NewRegionCountRefresher(cfID, util.GetOrZero(schedulerCfg.RegionCountRefreshInterval))
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg, refresher)
+	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg, refresher, NewNodeResourceUsageTracker())
 	return checker
 }
 
@@ -677,6 +677,64 @@ func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 	require.Equal(t, "node2", string(moveResult.TargetNode))
 	require.Len(t, moveResult.MoveSpans, 1)
 	require.True(t, moveResult.MoveSpans[0] == spanStatus2.SpanReplication)
+}
+
+func TestSplitSpanChecker_CheckBalanceTraffic_AvoidsBusyEventStore(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+
+	schedulerCfg := &config.ChangefeedSchedulerConfig{
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
+	}
+
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	for _, nodeID := range []node.ID{"source", "busy", "idle"} {
+		nodeManager.GetAliveNodes()[nodeID] = node.NewInfo(nodeID.String(), "")
+	}
+
+	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
+	checker := newTestSplitChecker(t, cfID, replicas[0].GetGroupID(), schedulerCfg)
+	for _, replica := range replicas {
+		checker.AddReplica(replica)
+	}
+
+	// Group-local output traffic makes "busy" look like the best destination.
+	// The source has a small movable span and one large span.
+	replicas[0].SetNodeID("source")
+	replicas[1].SetNodeID("source")
+	replicas[2].SetNodeID("busy")
+	replicas[3].SetNodeID("idle")
+	traffic := []float64{300, 1300, 100, 300}
+	for i, replica := range replicas {
+		status := checker.allTasks[replica.ID]
+		status.lastThreeTraffic = []float64{traffic[i], traffic[i], traffic[i]}
+		status.regionCount = 3
+		status.GetStatus().CheckpointTs = oracle.ComposeTS(time.Now().Add(-10*time.Second).UnixMilli(), 0)
+	}
+	checker.balanceCondition.statusUpdated = true
+
+	// Seed the previous cumulative counters. During the next interval, the
+	// group-local minimum receives much more EventStore input from other work.
+	for _, nodeID := range []node.ID{"source", "busy", "idle"} {
+		checker.nodeResourceUsage.UpdateEventStoreWriteBytes(nodeID, 100)
+	}
+	_, available := checker.sampleEventStoreWriteBytes(nodeManager.GetAliveNodeIDs())
+	require.False(t, available)
+	checker.nodeResourceUsage.UpdateEventStoreWriteBytes("source", 400)
+	checker.nodeResourceUsage.UpdateEventStoreWriteBytes("busy", 4100)
+	checker.nodeResourceUsage.UpdateEventStoreWriteBytes("idle", 200)
+
+	results := checker.Check(10)
+	require.Len(t, results, 1)
+	moveResult := results.([]SplitSpanCheckResult)[0]
+	require.Equal(t, OpMove, moveResult.OpType)
+	require.Equal(t, node.ID("idle"), moveResult.TargetNode)
+	require.Equal(t, replicas[0], moveResult.MoveSpans[0])
 }
 
 func TestSplitSpanChecker_CheckBalanceTraffic_NoBalanceNeeded(t *testing.T) {

@@ -15,6 +15,7 @@ package metrics
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 var (
@@ -334,6 +335,17 @@ var (
 		Help:      "The read amplification for event store pebble DB",
 	}, []string{"id"})
 )
+
+// GetEventStoreWriteBytes returns the process-wide cumulative number of bytes
+// written by EventStore. The second return value reports whether the metric
+// snapshot succeeded.
+func GetEventStoreWriteBytes() (uint64, bool) {
+	metric := &dto.Metric{}
+	if err := EventStoreWriteBytes.Write(metric); err != nil {
+		return 0, false
+	}
+	return uint64(metric.GetCounter().GetValue()), true
+}
 
 func initEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreSubscriptionGauge)

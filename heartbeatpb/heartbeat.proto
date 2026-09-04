@@ -17,6 +17,7 @@ message HeartBeatRequest {
     repeated TableSpanStatus statuses = 4;
     bool compeleteStatus = 5;  // Whether includes all table spans in the changefeed?
     RunningError err = 6;
+    NodeResourceUsage node_resource_usage = 7;
 }
 
 message Watermark {
@@ -517,4 +518,11 @@ message DispatcherSetChecksumUpdateRequest {
     int64 mode = 3;
     uint64 seq = 4;
     DispatcherSetChecksum checksum = 5;
+}
+
+// NodeResourceUsage carries node-wide cumulative resource counters. The
+// maintainer derives rates from consecutive heartbeats and uses them to avoid
+// scheduling traffic onto a node that is busy with another changefeed.
+message NodeResourceUsage {
+    uint64 event_store_write_bytes = 1;
 }

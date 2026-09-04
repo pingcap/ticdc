@@ -72,7 +72,8 @@ type Controller struct {
 	nonReplicatingCheckpointTs *checkpointTsTracker
 
 	// newGroupChecker creates a GroupChecker for validating span groups
-	newGroupChecker func(groupID pkgreplica.GroupID) pkgreplica.GroupChecker[common.DispatcherID, *replica.SpanReplication]
+	newGroupChecker   func(groupID pkgreplica.GroupID) pkgreplica.GroupChecker[common.DispatcherID, *replica.SpanReplication]
+	nodeResourceUsage *replica.NodeResourceUsageTracker
 
 	nodeManager            *watcher.NodeManager
 	splitter               *split.Splitter
@@ -98,10 +99,12 @@ func NewController(
 	keyspaceID uint32,
 	mode int64,
 ) *Controller {
+	nodeResourceUsage := replica.NewNodeResourceUsageTracker()
 	c := &Controller{
 		changefeedID:                    changefeedID,
 		ddlSpan:                         ddlSpan,
-		newGroupChecker:                 replica.GetNewGroupChecker(changefeedID, schedulerCfg, refresher),
+		newGroupChecker:                 replica.GetNewGroupChecker(changefeedID, schedulerCfg, refresher, nodeResourceUsage),
+		nodeResourceUsage:               nodeResourceUsage,
 		nodeManager:                     appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:                        splitter,
 		ddlDispatcherID:                 ddlSpan.ID,
@@ -119,6 +122,15 @@ func NewController(
 	c.ReplicationDB = pkgreplica.NewReplicationDB(changefeedID.String(), c.doWithRLock, c.newGroupChecker)
 	c.initializeDDLSpan(ddlSpan)
 	return c
+}
+
+// UpdateNodeResourceUsage records the latest node-wide EventStore counter for
+// traffic-aware destination selection.
+func (c *Controller) UpdateNodeResourceUsage(nodeID node.ID, usage *heartbeatpb.NodeResourceUsage) {
+	if usage == nil {
+		return
+	}
+	c.nodeResourceUsage.UpdateEventStoreWriteBytes(nodeID, usage.EventStoreWriteBytes)
 }
 
 // doWithRLock is a helper function to execute the action with a read lock
