@@ -273,8 +273,10 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	s := sinkmock.NewMockSink(ctrl)
 	flushedCommitTs := make([]uint64, 0)
+	flushedRowTypeCounts := make([]int, 0)
 	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
 		flushedCommitTs = append(flushedCommitTs, event.GetCommitTs())
+		flushedRowTypeCounts = append(flushedRowTypeCounts, len(event.RowTypes))
 		event.PostFlush()
 	}).Times(2)
 
@@ -294,13 +296,23 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 		protocol:    config.ProtocolOpen,
 	}
 
-	w.appendMessage2Group(newDMLMessageForWriterTest(20), p, kafka.Offset(1))
-	w.appendMessage2Group(newDMLMessageForWriterTest(10), p, kafka.Offset(2))
-	w.appendMessage2Group(newDMLMessageForWriterTest(20), p, kafka.Offset(3))
+	for _, item := range []struct {
+		message *codeccommon.DMLMessage
+		offset  kafka.Offset
+	}{
+		{newDMLMessageForWriterTest(20), kafka.Offset(1)},
+		{newDMLMessageForWriterTest(10), kafka.Offset(2)},
+		{newDMLMessageForWriterTest(20), kafka.Offset(3)},
+	} {
+		require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(item.message), p, item.offset))
+	}
 
 	p.watermark = 20
-	require.True(t, w.Write(ctx, codeccommon.MessageTypeResolved))
+	needCommit, err := w.Write(ctx, codeccommon.MessageTypeResolved)
+	require.NoError(t, err)
+	require.True(t, needCommit)
 	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
+	require.Equal(t, []int{1, 2}, flushedRowTypeCounts)
 }
 
 func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
@@ -313,7 +325,7 @@ func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 		partition:   0,
 		eventsGroup: make(map[int64]*util.EventsGroup),
 		watermark:   20,
-		decoder:     &singleDMLDecoder{message: newDMLMessageForWriterTest(10)},
+		decoder:     util.NewDMLMessageDecoder(&singleDMLDecoder{message: newDMLMessageForWriterTest(10)}),
 	}
 	w := &writer{
 		progresses:      []*partitionProgress{progress},
@@ -323,9 +335,10 @@ func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 		maxMessageBytes: 1,
 	}
 
-	needCommit := w.WriteMessage(ctx, &kafka.Message{
+	needCommit, err := w.WriteMessage(ctx, &kafka.Message{
 		TopicPartition: kafka.TopicPartition{Partition: 0, Offset: kafka.Offset(10)},
 	})
+	require.NoError(t, err)
 
 	require.False(t, needCommit)
 	require.Nil(t, progress.eventsGroup[1])
@@ -350,10 +363,12 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 		protocol:    config.ProtocolOpen,
 	}
 
-	w.appendMessage2Group(newDMLMessageForWriterTest(10), progress, kafka.Offset(10))
+	message := newDMLMessageForWriterTest(10)
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), progress, kafka.Offset(10)))
 
 	require.NotNil(t, progress.eventsGroup[1])
-	resolved := progress.eventsGroup[1].ResolveInto(20, nil)
+	resolved, err := progress.eventsGroup[1].ResolveInto(20, nil)
+	require.NoError(t, err)
 	require.Len(t, resolved, 1)
 	require.Equal(t, uint64(10), resolved[0].GetCommitTs())
 }
@@ -401,10 +416,13 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	}
 
 	progress := w.progresses[0]
-	w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(200)), progress, kafka.Offset(10))
-	w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(100)), progress, kafka.Offset(11))
+	first := codeccommon.NewDMLMessageFromEvent(newDMLEvent(200))
+	second := codeccommon.NewDMLMessageFromEvent(newDMLEvent(100))
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress, kafka.Offset(10)))
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress, kafka.Offset(11)))
 
-	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
+	resolved, err := progress.eventsGroup[1].ResolveInto(150, nil)
+	require.NoError(t, err)
 	require.Len(t, resolved, 1)
 	require.Equal(t, uint64(100), resolved[0].GetCommitTs())
 }
@@ -449,10 +467,13 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 			}
 
 			progress := w.progresses[0]
-			w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(200)), progress, kafka.Offset(10))
-			w.appendMessage2Group(codeccommon.NewDMLMessageFromEvent(newDMLEvent(100)), progress, kafka.Offset(11))
+			first := codeccommon.NewDMLMessageFromEvent(newDMLEvent(200))
+			second := codeccommon.NewDMLMessageFromEvent(newDMLEvent(100))
+			require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress, kafka.Offset(10)))
+			require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress, kafka.Offset(11)))
 
-			resolved := progress.eventsGroup[1].ResolveInto(150, nil)
+			resolved, err := progress.eventsGroup[1].ResolveInto(150, nil)
+			require.NoError(t, err)
 			require.Len(t, resolved, 1)
 			require.Equal(t, uint64(100), resolved[0].GetCommitTs())
 		})
@@ -463,6 +484,7 @@ func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
 	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
 		return &commonEvent.DMLEvent{
 			PhysicalTableID: 1,
+			StartTs:         commitTs - 1,
 			CommitTs:        commitTs,
 			RowTypes:        []common.RowType{common.RowTypeUpdate},
 			Rows:            chunk.NewChunkWithCapacity(nil, 0),
@@ -471,6 +493,16 @@ func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
 			},
 		}
 	})
+}
+
+func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codeccommon.DMLMessage {
+	messageData := codeccommon.NewDMLMessageData(nil, nil,
+		func([]byte) ([]*codeccommon.DMLMessage, error) {
+			return []*codeccommon.DMLMessage{message}, nil
+		},
+	)
+	messageData.AttachDMLMessage(message)
+	return message
 }
 
 type singleDMLDecoder struct {
