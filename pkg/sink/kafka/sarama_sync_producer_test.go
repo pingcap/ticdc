@@ -16,7 +16,6 @@ package kafka
 import (
 	"context"
 	"io"
-	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -32,8 +31,8 @@ func TestProducerRejectsSendAfterClose(t *testing.T) {
 
 	message := &codecCommon.Message{}
 	syncProducer := &saramaSyncProducer{closed: atomic.NewBool(true)}
-	require.ErrorIs(t, syncProducer.SendMessage("topic", 1, message), errors.ErrKafkaSinkClosed)
-	require.ErrorIs(t, syncProducer.SendMessages("topic", 1, message), errors.ErrKafkaSinkClosed)
+	require.ErrorIs(t, syncProducer.SendMessage(t.Context(), "topic", 1, message), errors.ErrKafkaSinkClosed)
+	require.ErrorIs(t, syncProducer.SendMessages(t.Context(), "topic", 1, message), errors.ErrKafkaSinkClosed)
 
 	asyncProducer := &saramaAsyncProducer{closed: atomic.NewBool(true)}
 	require.ErrorIs(t, asyncProducer.AsyncSend(context.Background(), "topic", 0, message), errors.ErrKafkaSinkClosed)
@@ -88,7 +87,7 @@ func TestSyncProducerErrorWrappedOnce(t *testing.T) {
 				producer.EXPECT().SendMessage(gomock.Any()).Return(int32(0), int64(0), cause)
 			},
 			send: func(producer *saramaSyncProducer, message *codecCommon.Message) error {
-				return producer.SendMessage("topic", 0, message)
+				return producer.SendMessage(t.Context(), "topic", 0, message)
 			},
 		},
 		{
@@ -97,7 +96,7 @@ func TestSyncProducerErrorWrappedOnce(t *testing.T) {
 				producer.EXPECT().SendMessages(gomock.Any()).Return(cause)
 			},
 			send: func(producer *saramaSyncProducer, message *codecCommon.Message) error {
-				return producer.SendMessages("topic", 1, message)
+				return producer.SendMessages(t.Context(), "topic", 1, message)
 			},
 		},
 	}
@@ -130,12 +129,4 @@ func TestAsyncProducerErrorWrappedOnce(t *testing.T) {
 	err := producer.handleProducerError(cause, &codecCommon.MessageLogInfo{})
 
 	requireKafkaSendError(t, err, cause)
-}
-
-func requireKafkaSendError(t *testing.T, err, cause error) {
-	t.Helper()
-	require.ErrorIs(t, err, errors.ErrKafkaSendMessage)
-	require.ErrorIs(t, err, cause)
-	require.Equal(t, 1, strings.Count(err.Error(), string(errors.ErrKafkaSendMessage.RFCCode())))
-	require.NotContains(t, err.Error(), "keyspace=test")
 }

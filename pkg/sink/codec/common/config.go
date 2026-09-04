@@ -48,6 +48,8 @@ type Config struct {
 	// MaxBatchedBytes controls open-protocol encoder's maximum number of events for a batched message.
 	MaxBatchSize int
 
+	useKafkaRecordBatchSize bool
+
 	// DeleteOnlyHandleKeyColumns is true, for the delete event only output the handle key columns.
 	DeleteOnlyHandleKeyColumns bool
 
@@ -394,6 +396,30 @@ func (c *Config) WithMaxMessageBytes(bytes int) *Config {
 func (c *Config) WithMaxBatchedBytes(bytes int) *Config {
 	c.MaxBatchedBytes = bytes
 	return c
+}
+
+// WithKafkaRecordBatchSize applies encoder byte limits to the complete
+// uncompressed Kafka record batch rather than a client-specific estimate.
+func (c *Config) WithKafkaRecordBatchSize() *Config {
+	c.useKafkaRecordBatchSize = true
+	return c
+}
+
+// MessageLength returns the size used by encoder byte-limit checks.
+func (c *Config) MessageLength(message *Message) int {
+	if c.useKafkaRecordBatchSize {
+		return message.KafkaRecordBatchLength()
+	}
+	return message.Length()
+}
+
+// MessageLengthForKeyValue returns the size used by encoder byte-limit checks
+// before a Message has been constructed.
+func (c *Config) MessageLengthForKeyValue(keyLength, valueLength int) int {
+	if c.useKafkaRecordBatchSize {
+		return keyLength + valueLength + kafkaRecordBatchOverhead
+	}
+	return keyLength + valueLength + MaxRecordOverhead
 }
 
 // WithChangefeedID set the `changefeedID`

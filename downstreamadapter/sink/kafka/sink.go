@@ -73,10 +73,6 @@ func (s *sink) SinkType() common.SinkType {
 	return common.KafkaSinkType
 }
 
-var createKafkaFactory = func(createSaramaFactory func() (kafka.Factory, error)) (kafka.Factory, error) {
-	return createSaramaFactory()
-}
-
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
 	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
@@ -101,6 +97,9 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	if err != nil {
 		return err
 	}
+	if options.Client == kafka.KafkaClientFranz {
+		encoderConfig.WithKafkaRecordBatchSize()
+	}
 
 	claimCheck, err := claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
 	if err != nil {
@@ -117,12 +116,11 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 		return err
 	}
 
-	factory, err := createKafkaFactory(func() (kafka.Factory, error) {
-		return kafka.NewSaramaFactory(ctx, options, changefeedID)
-	})
+	factory, err := kafka.NewFactory(ctx, options, changefeedID)
 	if err != nil {
 		return err
 	}
+	defer factory.Close()
 
 	adminClient, err := factory.AdminClient(ctx)
 	if err != nil {
@@ -436,7 +434,6 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			for _, message := range future.Messages {
 				start := time.Now()
 				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-					message.SetPartitionKey(future.Key.PartitionKey)
 					if err = s.dmlProducer.AsyncSend(
 						ctx,
 						future.Key.Topic,
@@ -480,11 +477,11 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		ddlType := e.GetDDLType().String()
 		if s.partitionRule == helper.PartitionAll {
 			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.SendMessages(topic, partitionNum, message)
+				return ddlType, s.ddlProducer.SendMessages(s.ctx, topic, partitionNum, message)
 			})
 		} else {
 			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.SendMessage(topic, 0, message)
+				return ddlType, s.ddlProducer.SendMessage(s.ctx, topic, 0, message)
 			})
 		}
 		if err != nil {
@@ -550,7 +547,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				if err != nil {
 					return err
 				}
-				err = s.ddlProducer.SendMessages(topic, partitionNum, msg)
+				err = s.ddlProducer.SendMessages(ctx, topic, partitionNum, msg)
 				if err != nil {
 					return err
 				}
@@ -561,7 +558,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 					if err != nil {
 						return err
 					}
-					err = s.ddlProducer.SendMessages(topic, partitionNum, msg)
+					err = s.ddlProducer.SendMessages(ctx, topic, partitionNum, msg)
 					if err != nil {
 						return err
 					}

@@ -13,6 +13,8 @@
 
 package kafka
 
+import "context"
+
 // TopicDetail represent a topic's detail information.
 type TopicDetail struct {
 	Name              string
@@ -29,23 +31,23 @@ type Broker struct {
 // which supports managing and inspecting topics, brokers, configurations and ACLs.
 type AdminClient interface {
 	// GetAllBrokers return all brokers among the cluster
-	GetAllBrokers() []Broker
+	GetAllBrokers(ctx context.Context) []Broker
 
 	// GetBrokerConfig returns the broker-level configuration and whether it exists.
-	GetBrokerConfig(configName string) (value string, found bool, err error)
+	GetBrokerConfig(ctx context.Context, configName string) (value string, found bool, err error)
 
 	// GetTopicConfig returns the topic-level configuration and whether it exists.
-	GetTopicConfig(topicName string, configName string) (value string, found bool, err error)
+	GetTopicConfig(ctx context.Context, topicName string, configName string) (value string, found bool, err error)
 
 	// GetTopicsMeta return all target topics' metadata
 	// if `ignoreTopicError` is true, ignore the topic error and return the metadata of valid topics
-	GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error)
+	GetTopicsMeta(ctx context.Context, topics []string, ignoreTopicError bool) (map[string]TopicDetail, error)
 
 	// GetTopicsPartitionsNum return the number of partitions of each topic.
-	GetTopicsPartitionsNum(topics []string) (map[string]int32, error)
+	GetTopicsPartitionsNum(ctx context.Context, topics []string) (map[string]int32, error)
 
 	// CreateTopic creates a new topic.
-	CreateTopic(detail *TopicDetail) error
+	CreateTopic(ctx context.Context, detail *TopicDetail) error
 
 	// Close shuts down the admin client.
 	Close()
