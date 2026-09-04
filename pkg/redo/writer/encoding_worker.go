@@ -57,10 +57,12 @@ func toPolymorphicDMLEvent(
 	data := make([]byte, 8+len(rawData)+padBytes)
 	binary.LittleEndian.PutUint64(data[:8], lenField)
 	copy(data[8:], rawData)
+	// Store the callback fields instead of method values such as event.PostFlush.
+	// A method value captures event and would retain its RowChange and TableInfo until the callback runs.
 	return &polymorphicRedoEvent{
 		commitTs:    rl.GetCommitTs(),
-		postEnqueue: event.PostEnqueue,
-		postFlush:   event.PostFlush,
+		postEnqueue: event.EnqueueCallback,
+		postFlush:   event.Callback,
 		data:        data,
 	}, nil
 }

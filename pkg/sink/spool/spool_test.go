@@ -33,6 +33,21 @@ func newTestMessage(value string, rows int) *common.Message {
 	return msg
 }
 
+func spoolDirectorySize(t *testing.T, workDir string) int64 {
+	t.Helper()
+	entries, err := os.ReadDir(workDir)
+	require.NoError(t, err)
+	var size int64
+	for _, entry := range entries {
+		info, err := entry.Info()
+		require.NoError(t, err)
+		if !info.IsDir() {
+			size += info.Size()
+		}
+	}
+	return size
+}
+
 func TestDirectoryNamespaceIsolation(t *testing.T) {
 	t.Parallel()
 
@@ -425,7 +440,7 @@ func TestCloseRemovesOwnedChangefeedDir(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestRotateRemovesReleasedActiveSegment(t *testing.T) {
+func TestReleaseTruncatesAndReusesActiveSegment(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
@@ -448,6 +463,10 @@ func TestRotateRemovesReleasedActiveSegment(t *testing.T) {
 	require.NoError(t, err)
 
 	manager.Release(firstEntry)
+	firstSegmentInfo, err := os.Stat(firstSegmentPath)
+	require.NoError(t, err)
+	require.Zero(t, firstSegmentInfo.Size())
+	require.Zero(t, manager.quota.budget.DiskBytes())
 
 	secondEntry, err := manager.Enqueue([]*common.Message{newTestMessage("second-entry", 1)}, nil)
 	require.NoError(t, err)
@@ -455,9 +474,139 @@ func TestRotateRemovesReleasedActiveSegment(t *testing.T) {
 	defer manager.Release(secondEntry)
 
 	_, err = os.Stat(firstSegmentPath)
-	require.ErrorIs(t, err, os.ErrNotExist)
-	_, err = os.Stat(filepath.Join(manager.workDir, "segment-000002.log"))
 	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(manager.workDir, "segment-000002.log"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	reader, err := manager.NewMessageReader(secondEntry)
+	require.NoError(t, err)
+	_, value, _, ok, err := reader.Next()
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []byte("second-entry"), value)
+}
+
+func TestDiskQuotaTracksActualActiveSegmentSize(t *testing.T) {
+	t.Parallel()
+
+	const diskQuota = int64(40)
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool-physical-quota")
+	manager, err := New(
+		changefeedID,
+		WithDiskQuotaBytes(diskQuota),
+		WithRootDir(t.TempDir()),
+		WithSegmentBytes(1<<20),
+		WithMemoryRatio(0.01),
+	)
+	require.NoError(t, err)
+	defer manager.Close()
+
+	for range 100 {
+		action, entry, err := manager.TryEnqueue(
+			[]*common.Message{newTestMessage("ten-bytes!", 1)}, nil,
+		)
+		require.NoError(t, err)
+		require.Equal(t, EnqueueActionAccepted, action)
+		require.True(t, entry.IsSpilled())
+		require.LessOrEqual(t, spoolDirectorySize(t, manager.workDir), diskQuota)
+
+		manager.Release(entry)
+		require.Zero(t, spoolDirectorySize(t, manager.workDir))
+		require.Zero(t, manager.quota.budget.DiskBytes())
+	}
+}
+
+func TestDiskQuotaIsReleasedAfterWholeSegmentIsReclaimed(t *testing.T) {
+	t.Parallel()
+
+	const diskQuota = int64(80)
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool-out-of-order-release")
+	manager, err := New(
+		changefeedID,
+		WithDiskQuotaBytes(diskQuota),
+		WithRootDir(t.TempDir()),
+		WithSegmentBytes(1<<20),
+		WithMemoryRatio(0.01),
+	)
+	require.NoError(t, err)
+	defer manager.Close()
+
+	entries := make([]*Entry, 0, 3)
+	for range 3 {
+		action, entry, err := manager.TryEnqueue(
+			[]*common.Message{newTestMessage("ten-bytes!", 1)}, nil,
+		)
+		require.NoError(t, err)
+		require.Equal(t, EnqueueActionAccepted, action)
+		entries = append(entries, entry)
+	}
+	physicalBytes := spoolDirectorySize(t, manager.workDir)
+	require.Equal(t, physicalBytes, manager.quota.budget.DiskBytes())
+	require.LessOrEqual(t, physicalBytes, diskQuota)
+
+	manager.Release(entries[0])
+	manager.Release(entries[1])
+	require.Equal(t, physicalBytes, spoolDirectorySize(t, manager.workDir))
+	require.Equal(t, physicalBytes, manager.quota.budget.DiskBytes())
+
+	action, entry, err := manager.TryEnqueue(
+		[]*common.Message{newTestMessage("x", 1)}, nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, EnqueueActionWaitDiskQuota, action)
+	require.Nil(t, entry)
+
+	manager.Release(entries[2])
+	require.Zero(t, spoolDirectorySize(t, manager.workDir))
+	require.Zero(t, manager.quota.budget.DiskBytes())
+}
+
+func TestDiskQuotaTracksOutOfOrderSegmentRemoval(t *testing.T) {
+	t.Parallel()
+
+	const diskQuota = int64(80)
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool-segment-removal")
+	manager, err := New(
+		changefeedID,
+		WithDiskQuotaBytes(diskQuota),
+		WithRootDir(t.TempDir()),
+		WithSegmentBytes(40),
+		WithMemoryRatio(0.01),
+	)
+	require.NoError(t, err)
+	defer manager.Close()
+	assertDiskUsage := func() {
+		physicalBytes := spoolDirectorySize(t, manager.workDir)
+		require.Equal(t, physicalBytes, manager.quota.budget.DiskBytes())
+		require.LessOrEqual(t, physicalBytes, diskQuota)
+	}
+
+	entries := make([]*Entry, 0, 3)
+	for range 3 {
+		action, entry, err := manager.TryEnqueue(
+			[]*common.Message{newTestMessage("ten-bytes!", 1)}, nil,
+		)
+		require.NoError(t, err)
+		require.Equal(t, EnqueueActionAccepted, action)
+		entries = append(entries, entry)
+	}
+	assertDiskUsage()
+
+	manager.Release(entries[1])
+	assertDiskUsage()
+	action, fourthEntry, err := manager.TryEnqueue(
+		[]*common.Message{newTestMessage("ten-bytes!", 1)}, nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, EnqueueActionAccepted, action)
+	assertDiskUsage()
+
+	manager.Release(entries[0])
+	assertDiskUsage()
+	manager.Release(entries[2])
+	assertDiskUsage()
+	manager.Release(fourthEntry)
+	assertDiskUsage()
+	require.Zero(t, manager.quota.budget.DiskBytes())
 }
 
 func TestEnqueueSpillsWhenSerializedBatchExceedsMemoryQuota(t *testing.T) {

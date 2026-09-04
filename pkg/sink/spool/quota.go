@@ -126,9 +126,9 @@ func (q *quotaController) acquire(
 // release should be called after the entry has been fully flushed or
 // discarded. It returns all pending PostEnqueue callbacks once local usage has
 // dropped back to the low watermark.
-func (q *quotaController) release(entryBytes int64, spilled bool) []func() {
-	atOrBelowLowWatermark := q.budget.Release(entryBytes, spilled)
-	if spilled {
+func (q *quotaController) release(releasedBytes int64, spilled bool) []func() {
+	atOrBelowLowWatermark := q.budget.Release(releasedBytes, spilled)
+	if spilled && releasedBytes > 0 {
 		q.wakeDiskQuotaWaiters()
 	}
 	defer q.updateMetrics()

@@ -685,17 +685,26 @@ func (s *Spool) Release(entry *Entry) {
 		return
 	}
 
+	releasedBytes := accountingBytes
 	if spilled {
+		releasedBytes = 0
 		seg := s.segments[location.id]
 		if seg != nil {
 			seg.refCnt--
-			if seg.refCnt == 0 && s.activeSegment != seg {
-				s.removeSegmentLocked(seg)
-				s.metricSegmentCount.Set(float64(len(s.segments)))
+			if seg.refCnt == 0 {
+				if s.activeSegment == seg {
+					releasedBytes = s.truncateSegmentLocked(seg)
+				} else {
+					releasedBytes = seg.size
+					if !s.removeSegmentLocked(seg) {
+						releasedBytes = 0
+					}
+					s.metricSegmentCount.Set(float64(len(s.segments)))
+				}
 			}
 		}
 	}
-	postEnqueueCallbacks := s.quota.release(accountingBytes, spilled)
+	postEnqueueCallbacks := s.quota.release(releasedBytes, spilled)
 	s.mu.Unlock()
 
 	for _, postEnqueueCallback := range postEnqueueCallbacks {
@@ -814,9 +823,26 @@ func (s *Spool) rotateLocked() error {
 	return nil
 }
 
-func (s *Spool) removeSegmentLocked(seg *segment) {
+func (s *Spool) truncateSegmentLocked(seg *segment) int64 {
+	if seg == nil || seg.size == 0 {
+		return 0
+	}
+	releasedBytes := seg.size
+	if err := seg.file.Truncate(0); err != nil {
+		log.Warn(
+			"truncate active spool segment file failed",
+			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
+			zap.String("path", seg.path), zap.Error(err),
+		)
+		return 0
+	}
+	seg.size = 0
+	return releasedBytes
+}
+
+func (s *Spool) removeSegmentLocked(seg *segment) bool {
 	if seg == nil {
-		return
+		return false
 	}
 	if seg.file != nil {
 		if err := seg.file.Close(); err != nil {
@@ -830,8 +856,10 @@ func (s *Spool) removeSegmentLocked(seg *segment) {
 			"remove spool segment file failed",
 			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
 			zap.String("path", seg.path), zap.Error(err))
+		return false
 	}
 	delete(s.segments, seg.id)
+	return true
 }
 
 func takePostFlushCallbacks(entry *Entry) []func() {

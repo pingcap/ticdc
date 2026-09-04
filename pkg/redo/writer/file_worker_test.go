@@ -61,22 +61,19 @@ func TestFileCacheBackingSliceReusedFromPool(t *testing.T) {
 }
 
 func TestFlushAllReleasesCallbacksPerCompletedFile(t *testing.T) {
-	firstFlushed := make(chan struct{})
-	secondFlushed := make(chan struct{})
 	var firstCallback atomic.Int64
 	var secondCallback atomic.Int64
 
 	first := &fileCache{
-		flushed:   firstFlushed,
 		postFlush: []func(){func() { firstCallback.Add(1) }},
 	}
 	second := &fileCache{
-		flushed:   secondFlushed,
 		postFlush: []func(){func() { secondCallback.Add(1) }},
 	}
 	worker := &fileWorkerGroup{
-		files:   []*fileCache{first, second},
-		flushCh: make(chan *fileCache, 1),
+		files:      []*fileCache{first, second},
+		flushCh:    make(chan *fileCache, 1),
+		completeCh: make(chan *fileCache, 2),
 	}
 
 	done := make(chan error, 1)
@@ -85,7 +82,7 @@ func TestFlushAllReleasesCallbacksPerCompletedFile(t *testing.T) {
 	}()
 
 	require.Same(t, second, <-worker.flushCh)
-	close(firstFlushed)
+	worker.completeCh <- first
 	require.Eventually(t, func() bool {
 		return firstCallback.Load() == 1
 	}, 5*time.Second, 10*time.Millisecond)
@@ -96,10 +93,72 @@ func TestFlushAllReleasesCallbacksPerCompletedFile(t *testing.T) {
 	default:
 	}
 
-	close(secondFlushed)
+	worker.completeCh <- second
 	require.NoError(t, <-done)
 	require.Equal(t, int64(1), secondCallback.Load())
 	require.Empty(t, worker.files)
+}
+
+func TestCompletedFilesReleaseCallbacksInCreationOrder(t *testing.T) {
+	var callbackOrder []int
+	first := &fileCache{postFlush: []func(){func() { callbackOrder = append(callbackOrder, 1) }}}
+	second := &fileCache{postFlush: []func(){func() { callbackOrder = append(callbackOrder, 2) }}}
+	worker := &fileWorkerGroup{files: []*fileCache{first, second}}
+
+	worker.completeFile(second)
+	require.Empty(t, callbackOrder)
+	require.Len(t, worker.files, 2)
+
+	worker.completeFile(first)
+	require.Equal(t, []int{1, 2}, callbackOrder)
+	require.Empty(t, worker.files)
+}
+
+func TestRotatedFileReleasesCallbackWithoutFlushAll(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	extStorage, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
+	require.NoError(t, err)
+	defer extStorage.Close()
+
+	changefeedID := common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName)
+	consistentCfg := testutil.NewConsistentConfig(uri.String())
+	flushInterval := int64(time.Hour / time.Millisecond)
+	consistentCfg.FlushIntervalInMs = util.AddressOf(flushInterval)
+	cfg, err := NewConfig(changefeedID, consistentCfg)
+	require.NoError(t, err)
+	cfg.maxLogSizeInBytes = 4
+
+	inputCh := make(chan *polymorphicRedoEvent, 2)
+	worker := newFileWorkerGroup(cfg, inputCh, extStorage)
+	done := make(chan error, 1)
+	go func() {
+		done <- worker.Run(ctx)
+	}()
+
+	firstFlushed := make(chan struct{}, 1)
+	var secondFlushed atomic.Int64
+	inputCh <- &polymorphicRedoEvent{
+		commitTs:  1,
+		data:      []byte("redo"),
+		postFlush: func() { firstFlushed <- struct{}{} },
+	}
+	inputCh <- &polymorphicRedoEvent{
+		commitTs:  2,
+		data:      []byte("x"),
+		postFlush: func() { secondFlushed.Add(1) },
+	}
+
+	select {
+	case <-firstFlushed:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "rotated file callback waited for the next flushAll")
+	}
+	require.Equal(t, int64(0), secondFlushed.Load())
+
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
 }
 
 func TestFileWorkerFlushBarrier(t *testing.T) {
