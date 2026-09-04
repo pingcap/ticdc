@@ -57,12 +57,6 @@ func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition i
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 
-	select {
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	default:
-	}
-
 	record := &kgo.Record{
 		Topic:     topic,
 		Partition: partition,
@@ -85,8 +79,15 @@ func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition i
 		}
 	}
 
+	// Produce can buffer a record without checking ctx, so reject prior cancellation.
+	// If it waits for buffer space, canceling ctx makes it return; propagate the cause below.
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	default:
+	}
 	p.client.Produce(ctx, record, promise)
-	return nil
+	return context.Cause(ctx)
 }
 
 func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {

@@ -277,7 +277,7 @@ func TestBufferBackpressure(t *testing.T) {
 
 	select {
 	case err = <-done:
-		require.NoError(t, err)
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(time.Second):
 		t.Fatal("canceled send remained blocked")
 	}
