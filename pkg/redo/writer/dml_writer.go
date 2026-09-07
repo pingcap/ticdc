@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/spool"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/zap"
@@ -342,6 +343,10 @@ func (l *dmlWriter) AddDMLEvents(ctx context.Context, events ...*commonEvent.Red
 		}
 	}
 	return nil
+}
+
+func (l *dmlWriter) SetWriteGate(gate *writelease.Gate) {
+	l.fileWorkers.setWriteGate(gate)
 }
 
 func (l *dmlWriter) Close() error {

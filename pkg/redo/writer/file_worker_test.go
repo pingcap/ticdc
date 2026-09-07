@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/prometheus/client_golang/prometheus"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -58,6 +59,56 @@ func TestFileCacheBackingSliceReusedFromPool(t *testing.T) {
 	second := worker.newFileCache([]byte("more redo data"), 2, func() {})
 	require.NotNil(t, second)
 	require.Equal(t, poolCapacity, cap(second.data))
+}
+
+func TestDMLWriterWaitsForWriteGate(t *testing.T) {
+	ctx := t.Context()
+
+	extStorage, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
+	require.NoError(t, err)
+	defer extStorage.Close()
+
+	changefeedID := common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName)
+	cfg, err := NewConfig(changefeedID, testutil.NewConsistentConfig(uri.String()))
+	require.NoError(t, err)
+
+	const filename = "gated-dml.log"
+	worker := newFileWorkerGroup(
+		cfg,
+		make(chan *polymorphicRedoEvent, 1),
+		extStorage,
+		WithLogFileName(func() string { return filename }),
+	)
+	dmlWriter := &dmlWriter{fileWorkers: worker}
+	gate := writelease.NewGate()
+	dmlWriter.SetWriteGate(gate)
+	file := worker.newFileCache([]byte("redo-event"), 1, func() {})
+	require.NotNil(t, file)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- worker.syncWriteFile(ctx, file)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("redo file flush returned while the capture write gate was closed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	exists, err := extStorage.FileExists(ctx, filename)
+	require.NoError(t, err)
+	require.False(t, exists)
+
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("redo file flush did not resume after the capture write gate reopened")
+	}
+	exists, err = extStorage.FileExists(ctx, filename)
+	require.NoError(t, err)
+	require.True(t, exists)
 }
 
 func TestFlushAllReleasesCallbacksPerCompletedFile(t *testing.T) {

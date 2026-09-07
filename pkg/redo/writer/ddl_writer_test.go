@@ -23,7 +23,6 @@ import (
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
@@ -101,14 +100,14 @@ func TestWriteDDLWaitsForWriteGate(t *testing.T) {
 
 	extStorage, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
 	require.NoError(t, err)
-	cfg, err := writer.NewConfig(
+	cfg, err := NewConfig(
 		common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
 		testutil.NewConsistentConfig(uri.String()),
 	)
 	require.NoError(t, err)
 
 	const filename = "gated-ddl.log"
-	lw, err := NewDDLWriter(ctx, cfg, writer.WithLogFileName(func() string {
+	lw, err := NewDDLWriter(ctx, cfg, WithLogFileName(func() string {
 		return filename
 	}))
 	require.NoError(t, err)
