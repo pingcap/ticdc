@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/eventstore"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -1040,6 +1041,33 @@ func (c *eventBroker) close() {
 // event broker, including table trigger dispatchers.
 func (c *eventBroker) getDispatcherCount() int {
 	return int(c.dispatcherCount.Load())
+}
+
+type nodeEpochProvider interface {
+	GetNodeEpoch() uint64
+}
+
+// reportDispatcherCountToLogCoordinator reports this broker's dispatcher
+// count. The log coordinator aggregates reports from all brokers on a node.
+func (c *eventBroker) reportDispatcherCountToLogCoordinator() {
+	logCoordinatorID := c.eventStore.GetLogCoordinatorNodeID()
+	if logCoordinatorID == "" {
+		return
+	}
+	nodeEpoch, ok := appcontext.TryGetService[nodeEpochProvider](appcontext.MaintainerManager)
+	if !ok {
+		return
+	}
+	message := messaging.NewSingleTargetMessage(
+		logCoordinatorID,
+		messaging.LogCoordinatorTopic,
+		&logservicepb.EventBrokerDispatcherCount{
+			NodeEpoch:       nodeEpoch.GetNodeEpoch(),
+			DispatcherCount: uint32(max(c.getDispatcherCount(), 0)),
+			BrokerID:        c.tidbClusterID,
+		},
+	)
+	_ = c.msgSender.SendEvent(message)
 }
 
 func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, commitTs uint64) {

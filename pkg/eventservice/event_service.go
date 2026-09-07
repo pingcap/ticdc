@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/eventstore"
-	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -135,8 +134,6 @@ func (s *eventService) Run(ctx context.Context) error {
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-	dispatcherCountTicker := time.NewTicker(time.Second)
-	defer dispatcherCountTicker.Stop()
 	dispatcherChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("dispatcherInfo")
 	heartbeatChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("heartbeat")
 	for {
@@ -146,8 +143,6 @@ func (s *eventService) Run(ctx context.Context) error {
 		case <-ticker.C:
 			dispatcherChanSize.Set(float64(len(s.dispatcherInfoChan)))
 			heartbeatChanSize.Set(float64(len(s.dispatcherHeartbeat)))
-		case <-dispatcherCountTicker.C:
-			s.reportDispatcherCountToLogCoordinator()
 		case info := <-s.dispatcherInfoChan:
 			switch info.GetActionType() {
 			case eventpb.ActionType_ACTION_TYPE_REGISTER:
@@ -191,33 +186,6 @@ func (s *eventService) GetDispatcherCount() int {
 		count += broker.getDispatcherCount()
 	}
 	return count
-}
-
-type nodeEpochProvider interface {
-	GetNodeEpoch() uint64
-}
-
-// reportDispatcherCountToLogCoordinator reports a node-level snapshot. The
-// log coordinator uses the source node ID from the message and keeps the
-// latest report for coordinator drain queries.
-func (s *eventService) reportDispatcherCountToLogCoordinator() {
-	logCoordinatorID := s.eventStore.GetLogCoordinatorNodeID()
-	if logCoordinatorID == "" {
-		return
-	}
-	nodeEpoch, ok := appcontext.TryGetService[nodeEpochProvider](appcontext.MaintainerManager)
-	if !ok {
-		return
-	}
-	message := messaging.NewSingleTargetMessage(
-		node.ID(logCoordinatorID),
-		messaging.LogCoordinatorTopic,
-		&logservicepb.EventBrokerDispatcherCount{
-			NodeEpoch:       nodeEpoch.GetNodeEpoch(),
-			DispatcherCount: uint32(max(s.GetDispatcherCount(), 0)),
-		},
-	)
-	_ = s.mc.SendEvent(message)
 }
 
 func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {

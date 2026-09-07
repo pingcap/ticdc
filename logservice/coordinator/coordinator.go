@@ -38,9 +38,10 @@ import (
 )
 
 const (
-	eventStoreTopic           = messaging.EventStoreTopic
-	logCoordinatorTopic       = messaging.LogCoordinatorTopic
-	logCoordinatorClientTopic = messaging.LogCoordinatorClientTopic
+	eventStoreTopic                     = messaging.EventStoreTopic
+	logCoordinatorTopic                 = messaging.LogCoordinatorTopic
+	logCoordinatorClientTopic           = messaging.LogCoordinatorClientTopic
+	eventBrokerDispatcherCountReportTTL = 3 * time.Second
 )
 
 type LogCoordinator interface {
@@ -52,10 +53,14 @@ type requestAndTarget struct {
 	target node.ID
 }
 
-type eventBrokerDispatcherCountState struct {
-	nodeEpoch       uint64
+type eventBrokerDispatcherReport struct {
 	dispatcherCount uint32
 	receivedAt      time.Time
+}
+
+type eventBrokerDispatcherCountState struct {
+	nodeEpoch uint64
+	brokers   map[uint64]eventBrokerDispatcherReport
 }
 
 type changefeedState struct {
@@ -252,11 +257,17 @@ func (c *logCoordinator) updateEventBrokerDispatcherCount(
 	if ok && report.GetNodeEpoch() < current.nodeEpoch {
 		return
 	}
-	c.eventBrokerDispatcherCounts.m[nodeID] = eventBrokerDispatcherCountState{
-		nodeEpoch:       report.GetNodeEpoch(),
+	if !ok || report.GetNodeEpoch() > current.nodeEpoch {
+		current = eventBrokerDispatcherCountState{
+			nodeEpoch: report.GetNodeEpoch(),
+			brokers:   make(map[uint64]eventBrokerDispatcherReport),
+		}
+	}
+	current.brokers[report.GetBrokerID()] = eventBrokerDispatcherReport{
 		dispatcherCount: report.GetDispatcherCount(),
 		receivedAt:      time.Now(),
 	}
+	c.eventBrokerDispatcherCounts.m[nodeID] = current
 }
 
 func (c *logCoordinator) sendEventBrokerDispatcherCount(
@@ -269,15 +280,30 @@ func (c *logCoordinator) sendEventBrokerDispatcherCount(
 	c.eventBrokerDispatcherCounts.RLock()
 	state, ok := c.eventBrokerDispatcherCounts.m[targetNodeID]
 	c.eventBrokerDispatcherCounts.RUnlock()
-	if ok {
-		age := time.Since(state.receivedAt)
-		if age < 0 {
-			age = 0
+	if ok && len(state.brokers) != 0 {
+		var dispatcherCount uint32
+		var maxAge time.Duration
+		observed := true
+		for _, report := range state.brokers {
+			age := time.Since(report.receivedAt)
+			if age < 0 {
+				age = 0
+			}
+			if age > eventBrokerDispatcherCountReportTTL {
+				observed = false
+				break
+			}
+			dispatcherCount += report.dispatcherCount
+			if age > maxAge {
+				maxAge = age
+			}
 		}
-		response.NodeEpoch = state.nodeEpoch
-		response.DispatcherCount = state.dispatcherCount
-		response.ReportAgeMs = uint64(age / time.Millisecond)
-		response.Observed = true
+		if observed {
+			response.NodeEpoch = state.nodeEpoch
+			response.DispatcherCount = dispatcherCount
+			response.ReportAgeMs = uint64(maxAge / time.Millisecond)
+			response.Observed = true
+		}
 	}
 	_ = c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(
 		target,

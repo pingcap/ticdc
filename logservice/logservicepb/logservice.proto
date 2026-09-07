@@ -38,6 +38,7 @@ message ChangefeedStates {
 message EventBrokerDispatcherCount {
     uint64 NodeEpoch = 1;
     uint32 DispatcherCount = 2;
+    uint64 BrokerID = 3;
 }
 
 // EventBrokerDispatcherCountRequest asks the log coordinator for the latest

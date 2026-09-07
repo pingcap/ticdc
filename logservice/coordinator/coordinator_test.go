@@ -47,10 +47,17 @@ func TestEventBrokerDispatcherCountReportAndQuery(t *testing.T) {
 	c.updateEventBrokerDispatcherCount(nodeID, &logservicepb.EventBrokerDispatcherCount{
 		NodeEpoch:       2,
 		DispatcherCount: 3,
+		BrokerID:        1,
+	})
+	c.updateEventBrokerDispatcherCount(nodeID, &logservicepb.EventBrokerDispatcherCount{
+		NodeEpoch:       2,
+		DispatcherCount: 4,
+		BrokerID:        2,
 	})
 	c.updateEventBrokerDispatcherCount(nodeID, &logservicepb.EventBrokerDispatcherCount{
 		NodeEpoch:       1,
 		DispatcherCount: 0,
+		BrokerID:        1,
 	})
 
 	c.sendEventBrokerDispatcherCount(node.ID("coordinator"), &logservicepb.EventBrokerDispatcherCountRequest{
@@ -60,7 +67,7 @@ func TestEventBrokerDispatcherCountReportAndQuery(t *testing.T) {
 	response := message.Message[0].(*logservicepb.EventBrokerDispatcherCountResponse)
 	require.True(t, response.GetObserved())
 	require.Equal(t, uint64(2), response.GetNodeEpoch())
-	require.Equal(t, uint32(3), response.GetDispatcherCount())
+	require.Equal(t, uint32(7), response.GetDispatcherCount())
 }
 
 func TestGetCandidateNodes(t *testing.T) {
