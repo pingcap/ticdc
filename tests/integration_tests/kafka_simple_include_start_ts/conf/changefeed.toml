@@ -1,0 +1,2 @@
+[sink.simple]
+include-start-ts = true
