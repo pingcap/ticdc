@@ -108,17 +108,15 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 		NodeEpoch: m.node.nodeEpoch,
 		// Report the manager-level dispatcher drain target so coordinator can
 		// confirm both activation and clearing even when no maintainers exist.
-		DispatcherDrainTargetNodeId: drainTarget.String(),
-		DispatcherDrainTargetEpoch:  drainEpoch,
-		WriteLeaseRequestSeq:        requestSeq,
-		WriteLeaseProtocolVersion:   heartbeatpb.CurrentWriteLeaseProtocolVersion,
-		WriteLeaseWitnessAck:        m.node.pendingWitnessAck,
-	}
-	if m.resourceUsageProvider != nil {
-		hb.NodeResourceUsageProtocolVersion = heartbeatpb.CurrentNodeResourceUsageProtocolVersion
-		hb.NodeResourceUsage = &heartbeatpb.NodeResourceUsage{
+		DispatcherDrainTargetNodeId:      drainTarget.String(),
+		DispatcherDrainTargetEpoch:       drainEpoch,
+		WriteLeaseRequestSeq:             requestSeq,
+		WriteLeaseProtocolVersion:        heartbeatpb.CurrentWriteLeaseProtocolVersion,
+		WriteLeaseWitnessAck:             m.node.pendingWitnessAck,
+		NodeResourceUsageProtocolVersion: heartbeatpb.CurrentNodeResourceUsageProtocolVersion,
+		NodeResourceUsage: &heartbeatpb.NodeResourceUsage{
 			EventStoreWriteBytes: m.resourceUsageProvider.EventStoreWriteBytes(),
-		}
+		},
 	}
 	target := m.newCoordinatorTopicMessage(hb)
 	if err := m.mc.SendCommand(target); err != nil {
