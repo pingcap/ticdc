@@ -36,15 +36,17 @@ message ChangefeedStates {
 // EventBrokerDispatcherCount is reported by an event service to the log
 // coordinator and describes the dispatcher count for its capture node.
 message EventBrokerDispatcherCount {
-    uint64 NodeEpoch = 1;
-    uint32 DispatcherCount = 2;
-    uint64 BrokerID = 3;
+    uint32 DispatcherCount = 1;
+    uint64 BrokerID = 2;
 }
 
 // EventBrokerDispatcherCountRequest asks the log coordinator for the latest
 // dispatcher count reported by a capture node.
 message EventBrokerDispatcherCountRequest {
     string TargetNodeId = 1;
+    // NodeEpoch is supplied by coordinator so the log coordinator can discard
+    // reports left by a previous process instance.
+    uint64 NodeEpoch = 2;
 }
 
 // EventBrokerDispatcherCountResponse contains the latest dispatcher count for

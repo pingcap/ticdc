@@ -175,19 +175,6 @@ func (s *eventService) Close(_ context.Context) error {
 	return nil
 }
 
-// GetDispatcherCount returns the number of dispatchers currently registered
-// in all event brokers owned by this event service.
-func (s *eventService) GetDispatcherCount() int {
-	s.brokersMu.RLock()
-	defer s.brokersMu.RUnlock()
-
-	count := 0
-	for _, broker := range s.brokers {
-		count += broker.getDispatcherCount()
-	}
-	return count
-}
-
 func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
 	switch msg.Type {
 	case messaging.TypeDispatcherRequest:

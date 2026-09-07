@@ -59,6 +59,8 @@ type eventBrokerDispatcherReport struct {
 }
 
 type eventBrokerDispatcherCountState struct {
+	// nodeEpoch is supplied by the coordinator query. A new epoch clears the
+	// reports collected from the previous process instance.
 	nodeEpoch uint64
 	brokers   map[uint64]eventBrokerDispatcherReport
 }
@@ -254,13 +256,9 @@ func (c *logCoordinator) updateEventBrokerDispatcherCount(
 	defer c.eventBrokerDispatcherCounts.Unlock()
 
 	current, ok := c.eventBrokerDispatcherCounts.m[nodeID]
-	if ok && report.GetNodeEpoch() < current.nodeEpoch {
-		return
-	}
-	if !ok || report.GetNodeEpoch() > current.nodeEpoch {
+	if !ok {
 		current = eventBrokerDispatcherCountState{
-			nodeEpoch: report.GetNodeEpoch(),
-			brokers:   make(map[uint64]eventBrokerDispatcherReport),
+			brokers: make(map[uint64]eventBrokerDispatcherReport),
 		}
 	}
 	current.brokers[report.GetBrokerID()] = eventBrokerDispatcherReport{
@@ -277,9 +275,16 @@ func (c *logCoordinator) sendEventBrokerDispatcherCount(
 		TargetNodeId: req.GetTargetNodeId(),
 	}
 	targetNodeID := node.ID(req.GetTargetNodeId())
-	c.eventBrokerDispatcherCounts.RLock()
+	c.eventBrokerDispatcherCounts.Lock()
 	state, ok := c.eventBrokerDispatcherCounts.m[targetNodeID]
-	c.eventBrokerDispatcherCounts.RUnlock()
+	if !ok || state.nodeEpoch != req.GetNodeEpoch() {
+		state = eventBrokerDispatcherCountState{
+			nodeEpoch: req.GetNodeEpoch(),
+			brokers:   make(map[uint64]eventBrokerDispatcherReport),
+		}
+		c.eventBrokerDispatcherCounts.m[targetNodeID] = state
+		ok = false
+	}
 	if ok && len(state.brokers) != 0 {
 		var dispatcherCount uint32
 		var maxAge time.Duration
@@ -305,6 +310,8 @@ func (c *logCoordinator) sendEventBrokerDispatcherCount(
 			response.Observed = true
 		}
 	}
+	c.eventBrokerDispatcherCounts.Unlock()
+
 	_ = c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(
 		target,
 		messaging.CoordinatorTopic,

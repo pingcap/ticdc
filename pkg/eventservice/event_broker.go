@@ -1043,10 +1043,6 @@ func (c *eventBroker) getDispatcherCount() int {
 	return int(c.dispatcherCount.Load())
 }
 
-type nodeEpochProvider interface {
-	GetNodeEpoch() uint64
-}
-
 // reportDispatcherCountToLogCoordinator reports this broker's dispatcher
 // count. The log coordinator aggregates reports from all brokers on a node.
 func (c *eventBroker) reportDispatcherCountToLogCoordinator() {
@@ -1054,15 +1050,10 @@ func (c *eventBroker) reportDispatcherCountToLogCoordinator() {
 	if logCoordinatorID == "" {
 		return
 	}
-	nodeEpoch, ok := appcontext.TryGetService[nodeEpochProvider](appcontext.MaintainerManager)
-	if !ok {
-		return
-	}
 	message := messaging.NewSingleTargetMessage(
 		logCoordinatorID,
 		messaging.LogCoordinatorTopic,
 		&logservicepb.EventBrokerDispatcherCount{
-			NodeEpoch:       nodeEpoch.GetNodeEpoch(),
 			DispatcherCount: uint32(max(c.getDispatcherCount(), 0)),
 			BrokerID:        c.tidbClusterID,
 		},
