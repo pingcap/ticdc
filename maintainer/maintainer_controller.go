@@ -98,24 +98,6 @@ func NewController(changefeedID common.ChangeFeedID,
 	enableRedo bool,
 	balanceMoveBatchSize int,
 	maintainerEpoch uint64,
-) *Controller {
-	return newController(
-		changefeedID, checkpointTs, taskPool, replicaConfig, ddlSpan, redoDDLSpan,
-		batchSize, balanceInterval, refresher, keyspaceMeta, enableRedo,
-		balanceMoveBatchSize, maintainerEpoch, replica.NewNodeResourceUsageTracker())
-}
-
-func newController(changefeedID common.ChangeFeedID,
-	checkpointTs uint64,
-	taskPool threadpool.ThreadPool,
-	replicaConfig *config.ReplicaConfig,
-	ddlSpan, redoDDLSpan *replica.SpanReplication,
-	batchSize int, balanceInterval time.Duration,
-	refresher *replica.RegionCountRefresher,
-	keyspaceMeta common.KeyspaceMeta,
-	enableRedo bool,
-	balanceMoveBatchSize int,
-	maintainerEpoch uint64,
 	nodeResourceUsage *replica.NodeResourceUsageTracker,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)

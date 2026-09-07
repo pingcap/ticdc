@@ -76,16 +76,6 @@ func NewMaintainerManager(
 	nodeInfo *node.Info,
 	conf *config.SchedulerConfig,
 	nodeLiveness *liveness.Liveness,
-) *Manager {
-	return NewMaintainerManagerWithResourceUsage(nodeInfo, conf, nodeLiveness, nil)
-}
-
-// NewMaintainerManagerWithResourceUsage creates a maintainer manager that
-// includes process-wide resource counters in its node heartbeat.
-func NewMaintainerManagerWithResourceUsage(
-	nodeInfo *node.Info,
-	conf *config.SchedulerConfig,
-	nodeLiveness *liveness.Liveness,
 	resourceUsageProvider NodeResourceUsageProvider,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
