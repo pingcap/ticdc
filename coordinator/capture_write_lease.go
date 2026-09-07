@@ -38,7 +38,6 @@ type captureLeaseNodeState struct {
 	resourceUsageProtocolVersion uint32
 	eventStoreWriteBytes         uint64
 	resourceUsageUpdated         time.Time
-	resourceUsageReported        bool
 }
 
 type pendingWitnessChallenge struct {
@@ -137,9 +136,8 @@ func (c *captureWriteLeaseController) handleHeartbeat(
 	if state.resourceUsageProtocolVersion == heartbeatpb.CurrentNodeResourceUsageProtocolVersion && usage != nil {
 		state.eventStoreWriteBytes = usage.GetEventStoreWriteBytes()
 		state.resourceUsageUpdated = c.now()
-		state.resourceUsageReported = true
 	} else {
-		state.resourceUsageReported = false
+		state.resourceUsageUpdated = time.Time{}
 	}
 
 	messages := c.handleWitnessAck(from, heartbeat)
@@ -303,7 +301,8 @@ func (c *captureWriteLeaseController) nodeResourceUsageSnapshot() (
 	nodeIDs := make([]node.ID, 0, len(c.activeNodes))
 	for nodeID := range c.activeNodes {
 		state := c.nodes[nodeID]
-		if !state.resourceUsageReported || now.Sub(state.resourceUsageUpdated) > nodeResourceUsageStaleThreshold {
+		if state.resourceUsageUpdated.IsZero() ||
+			now.Sub(state.resourceUsageUpdated) > nodeResourceUsageStaleThreshold {
 			return nil, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE
 		}
 		nodeIDs = append(nodeIDs, nodeID)
