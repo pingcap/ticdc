@@ -17,75 +17,99 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/node"
 )
 
 // Resource usage is normally reported by the node heartbeat every 500ms.
-// Allow several missed reports before falling back to group-local traffic.
+// Allow several missed reports before treating current-version telemetry as
+// incomplete and suppressing traffic-driven moves.
 const nodeResourceUsageStaleThreshold = 5 * time.Second
 
-type eventStoreWriteBytesSample struct {
-	writeBytes uint64
-	updatedAt  time.Time
-}
-
-// NodeResourceUsageTracker stores the latest cluster-wide cumulative counters
-// shared by all changefeed maintainers on one node.
+// NodeResourceUsageTracker converts cluster-wide cumulative counters into one
+// immutable delta snapshot shared by all local changefeed group checkers.
 type NodeResourceUsageTracker struct {
 	mu                   sync.RWMutex
-	eventStoreWriteBytes map[node.ID]eventStoreWriteBytesSample
+	previousWriteBytes   map[node.ID]uint64
+	eventStoreWriteDelta map[node.ID]uint64
+	status               heartbeatpb.NodeResourceUsageStatus
+	updatedAt            time.Time
 	now                  func() time.Time
 }
 
 func NewNodeResourceUsageTracker() *NodeResourceUsageTracker {
 	return &NodeResourceUsageTracker{
-		eventStoreWriteBytes: make(map[node.ID]eventStoreWriteBytesSample),
-		now:                  time.Now,
+		status: heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_UNSUPPORTED,
+		now:    time.Now,
 	}
 }
 
-func (t *NodeResourceUsageTracker) UpdateEventStoreWriteBytes(nodeID node.ID, writeBytes uint64) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.eventStoreWriteBytes[nodeID] = eventStoreWriteBytesSample{
-		writeBytes: writeBytes,
-		updatedAt:  t.now(),
-	}
-}
-
-// ReplaceEventStoreWriteBytes atomically replaces the cluster snapshot. Nodes
-// omitted by coordinator are removed immediately so stale or legacy reports
-// cannot remain eligible until the local freshness timeout.
-func (t *NodeResourceUsageTracker) ReplaceEventStoreWriteBytes(writeBytes map[node.ID]uint64) {
+// ReplaceEventStoreWriteBytes atomically replaces the cluster snapshot and
+// computes one delta map for all group checkers. Incomplete telemetry clears
+// the baseline; unsupported telemetry preserves the rolling-upgrade fallback.
+// The tracker takes ownership of writeBytes and never mutates it.
+func (t *NodeResourceUsageTracker) ReplaceEventStoreWriteBytes(
+	writeBytes map[node.ID]uint64,
+	status heartbeatpb.NodeResourceUsageStatus,
+) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	now := t.now()
-	t.eventStoreWriteBytes = make(map[node.ID]eventStoreWriteBytesSample, len(writeBytes))
-	for nodeID, value := range writeBytes {
-		t.eventStoreWriteBytes[nodeID] = eventStoreWriteBytesSample{
-			writeBytes: value,
-			updatedAt:  now,
+	if status != heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE {
+		if status != heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_UNSUPPORTED {
+			status = heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE
 		}
+		t.previousWriteBytes = nil
+		t.eventStoreWriteDelta = nil
+		t.status = status
+		t.updatedAt = now
+		return
 	}
+
+	current := writeBytes
+	previous := t.previousWriteBytes
+	previousIsFresh := !t.updatedAt.IsZero() && now.Sub(t.updatedAt) <= nodeResourceUsageStaleThreshold
+	t.previousWriteBytes = current
+	t.eventStoreWriteDelta = nil
+	t.status = heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE
+	t.updatedAt = now
+	if !previousIsFresh || len(previous) != len(current) {
+		return
+	}
+
+	delta := make(map[node.ID]uint64, len(current))
+	for nodeID, currentValue := range current {
+		previousValue, ok := previous[nodeID]
+		if !ok || currentValue < previousValue {
+			return
+		}
+		delta[nodeID] = currentValue - previousValue
+	}
+	t.eventStoreWriteDelta = delta
+	t.status = heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE
 }
 
-// EventStoreWriteBytes returns a complete snapshot for the requested nodes.
-// The second return value is false when any node has not reported the counter or
-// its last report is stale. This lets callers retain the old scheduling behavior
-// during rolling upgrades and heartbeat interruptions.
-func (t *NodeResourceUsageTracker) EventStoreWriteBytes(nodeIDs []node.ID) (map[node.ID]uint64, bool) {
+// EventStoreWriteBytesDelta returns a shared immutable delta snapshot and its
+// availability. Unsupported means callers may use the legacy policy during a
+// rolling upgrade. Incomplete means resource-aware moves must be suppressed.
+func (t *NodeResourceUsageTracker) EventStoreWriteBytesDelta(
+	nodeIDs []node.ID,
+) (map[node.ID]uint64, heartbeatpb.NodeResourceUsageStatus) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	now := t.now()
-	result := make(map[node.ID]uint64, len(nodeIDs))
-	for _, nodeID := range nodeIDs {
-		sample, ok := t.eventStoreWriteBytes[nodeID]
-		if !ok || now.Sub(sample.updatedAt) > nodeResourceUsageStaleThreshold {
-			return nil, false
-		}
-		result[nodeID] = sample.writeBytes
+	if t.status == heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_UNSUPPORTED {
+		return nil, t.status
 	}
-	return result, true
+	if t.status != heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE ||
+		t.now().Sub(t.updatedAt) > nodeResourceUsageStaleThreshold {
+		return nil, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE
+	}
+	for _, nodeID := range nodeIDs {
+		if _, ok := t.eventStoreWriteDelta[nodeID]; !ok {
+			return nil, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE
+		}
+	}
+	return t.eventStoreWriteDelta, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE
 }

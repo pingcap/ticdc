@@ -40,7 +40,11 @@ import (
 	"go.uber.org/zap"
 )
 
-const latestTrafficIndex = 0
+const (
+	latestTrafficIndex                        = 0
+	trafficBalanceSkipResourceUsageIncomplete = "resource_usage_incomplete"
+	trafficBalanceSkipNoEventStoreHeadroom    = "no_event_store_headroom"
+)
 
 var (
 	minTrafficBalanceThreshold         = float64(1024 * 1024) // 1MB
@@ -161,8 +165,7 @@ type SplitSpanChecker struct {
 	nodeManager *watcher.NodeManager
 	pdClock     pdutil.Clock
 
-	nodeResourceUsage        *NodeResourceUsageTracker
-	lastEventStoreWriteBytes map[node.ID]uint64
+	nodeResourceUsage *NodeResourceUsageTracker
 
 	refresher              *RegionCountRefresher
 	splitSpanCheckDuration prometheus.Observer
@@ -207,33 +210,6 @@ func NewSplitSpanChecker(
 
 		refresher: refresher,
 	}
-}
-
-// sampleEventStoreWriteBytes returns the bytes written on each node since the
-// previous balance check. It intentionally requires complete consecutive
-// snapshots so mixed-version clusters keep the old scheduling behavior.
-func (s *SplitSpanChecker) sampleEventStoreWriteBytes(aliveNodeIDs []node.ID) (map[node.ID]uint64, bool) {
-	current, ok := s.nodeResourceUsage.EventStoreWriteBytes(aliveNodeIDs)
-	if !ok {
-		s.lastEventStoreWriteBytes = nil
-		return nil, false
-	}
-
-	previous := s.lastEventStoreWriteBytes
-	s.lastEventStoreWriteBytes = current
-	if previous == nil {
-		return nil, false
-	}
-
-	delta := make(map[node.ID]uint64, len(aliveNodeIDs))
-	for _, nodeID := range aliveNodeIDs {
-		previousWriteBytes, ok := previous[nodeID]
-		if !ok || current[nodeID] < previousWriteBytes {
-			return nil, false
-		}
-		delta[nodeID] = current[nodeID] - previousWriteBytes
-	}
-	return delta, true
 }
 
 func (s *SplitSpanChecker) AddReplica(replica *SpanReplication) {
@@ -357,7 +333,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	}
 
 	aliveNodeIDs := s.nodeManager.GetAliveNodeIDs()
-	eventStoreWriteBytes, eventStoreWriteBytesAvailable := s.sampleEventStoreWriteBytes(aliveNodeIDs)
+	eventStoreWriteBytes, nodeResourceUsageStatus := s.nodeResourceUsage.EventStoreWriteBytesDelta(aliveNodeIDs)
 
 	lastThreeTrafficPerNode := make(map[node.ID][]float64)
 	lastThreeTrafficSum := make([]float64, 3)
@@ -389,7 +365,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	//        we try to move some spans from the node with max traffic to the node with min traffic
 	results, minTrafficNodeID, maxTrafficNodeID := s.checkBalanceTraffic(
 		aliveNodeIDs, lastThreeTrafficSum, lastThreeTrafficPerNode, taskMap,
-		eventStoreWriteBytes, eventStoreWriteBytesAvailable)
+		eventStoreWriteBytes, nodeResourceUsageStatus)
 	if len(results) > 0 {
 		return results
 	}
@@ -1075,7 +1051,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	lastThreeTrafficPerNode map[node.ID][]float64,
 	taskMap map[node.ID][]*splitSpanStatus,
 	eventStoreWriteBytes map[node.ID]uint64,
-	eventStoreWriteBytesAvailable bool,
+	nodeResourceUsageStatus heartbeatpb.NodeResourceUsageStatus,
 ) (results []SplitSpanCheckResult, minTrafficNodeID node.ID, maxTrafficNodeID node.ID) {
 	log.Debug("checkBalanceTraffic try to balance traffic",
 		zap.Any("changefeedID", s.changefeedID),
@@ -1114,28 +1090,6 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 
 	minTrafficNodeID = aliveNodeIDs[0]
 	maxTrafficNodeID = aliveNodeIDs[nodeCount-1]
-	targetNodeID := minTrafficNodeID
-	if eventStoreWriteBytesAvailable {
-		// Restrict candidates to nodes below this group's average traffic, then
-		// prefer the one doing the least node-wide EventStore work. This keeps
-		// the move useful for the group while accounting for other changefeeds.
-		var targetWriteBytes uint64
-		targetNodeID = ""
-		for _, nodeID := range aliveNodeIDs {
-			if nodeID == maxTrafficNodeID ||
-				lastThreeTrafficPerNode[nodeID][latestTrafficIndex] >= avgLastThreeTraffic[latestTrafficIndex] {
-				continue
-			}
-			if targetNodeID == "" || eventStoreWriteBytes[nodeID] < targetWriteBytes {
-				targetNodeID = nodeID
-				targetWriteBytes = eventStoreWriteBytes[nodeID]
-			}
-		}
-		if targetNodeID == "" {
-			s.balanceCondition.reset()
-			return
-		}
-	}
 
 	log.Debug("traffic node info", zap.Any("minTrafficNodeID", minTrafficNodeID), zap.Any("maxTrafficNodeID", maxTrafficNodeID))
 
@@ -1207,6 +1161,38 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		)
 		if s.balanceCondition.balanceScore < s.balanceScoreThreshold {
 			// now is unbalanced, but we want to check more times to avoid balance too frequently
+			return
+		}
+	}
+
+	targetNodeID := minTrafficNodeID
+	if nodeResourceUsageStatus == heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE {
+		metrics.TrafficBalanceSkipCounter.WithLabelValues(
+			trafficBalanceSkipResourceUsageIncomplete).Inc()
+		s.balanceCondition.reset()
+		return
+	}
+	if nodeResourceUsageStatus == heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE {
+		// Restrict candidates to nodes below this group's average traffic, then
+		// require less node-wide EventStore work than the source. Ranking alone
+		// is insufficient when every otherwise eligible destination is busier.
+		var targetWriteBytes uint64
+		targetNodeID = ""
+		for _, nodeID := range aliveNodeIDs {
+			if nodeID == maxTrafficNodeID ||
+				lastThreeTrafficPerNode[nodeID][latestTrafficIndex] >= avgLastThreeTraffic[latestTrafficIndex] ||
+				eventStoreWriteBytes[nodeID] >= eventStoreWriteBytes[maxTrafficNodeID] {
+				continue
+			}
+			if targetNodeID == "" || eventStoreWriteBytes[nodeID] < targetWriteBytes {
+				targetNodeID = nodeID
+				targetWriteBytes = eventStoreWriteBytes[nodeID]
+			}
+		}
+		if targetNodeID == "" {
+			metrics.TrafficBalanceSkipCounter.WithLabelValues(
+				trafficBalanceSkipNoEventStoreHeadroom).Inc()
+			s.balanceCondition.reset()
 			return
 		}
 	}

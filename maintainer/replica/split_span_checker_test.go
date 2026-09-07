@@ -94,6 +94,16 @@ func newTestSplitChecker(t *testing.T, cfID common.ChangeFeedID, groupID pkgrepl
 	return checker
 }
 
+func setEventStoreWriteBytesSnapshots(
+	tracker *NodeResourceUsageTracker,
+	previous, current map[node.ID]uint64,
+) {
+	tracker.ReplaceEventStoreWriteBytes(
+		previous, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE)
+	tracker.ReplaceEventStoreWriteBytes(
+		current, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE)
+}
+
 func TestSplitTableSpanIntoMultiple_Properties(t *testing.T) {
 	spanA := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 100)
 	count := 10000
@@ -718,16 +728,11 @@ func TestSplitSpanChecker_CheckBalanceTraffic_AvoidsBusyEventStore(t *testing.T)
 	}
 	checker.balanceCondition.statusUpdated = true
 
-	// Seed the previous cumulative counters. During the next interval, the
-	// group-local minimum receives much more EventStore input from other work.
-	for _, nodeID := range []node.ID{"source", "busy", "idle"} {
-		checker.nodeResourceUsage.UpdateEventStoreWriteBytes(nodeID, 100)
-	}
-	_, available := checker.sampleEventStoreWriteBytes(nodeManager.GetAliveNodeIDs())
-	require.False(t, available)
-	checker.nodeResourceUsage.UpdateEventStoreWriteBytes("source", 400)
-	checker.nodeResourceUsage.UpdateEventStoreWriteBytes("busy", 4100)
-	checker.nodeResourceUsage.UpdateEventStoreWriteBytes("idle", 200)
+	// During the latest interval, the group-local minimum receives much more
+	// EventStore input from other work, while the third node has headroom.
+	setEventStoreWriteBytesSnapshots(checker.nodeResourceUsage,
+		map[node.ID]uint64{"source": 100, "busy": 100, "idle": 100},
+		map[node.ID]uint64{"source": 400, "busy": 4100, "idle": 200})
 
 	results := checker.Check(10)
 	require.Len(t, results, 1)
@@ -735,6 +740,75 @@ func TestSplitSpanChecker_CheckBalanceTraffic_AvoidsBusyEventStore(t *testing.T)
 	require.Equal(t, OpMove, moveResult.OpType)
 	require.Equal(t, node.ID("idle"), moveResult.TargetNode)
 	require.Equal(t, replicas[0], moveResult.MoveSpans[0])
+}
+
+func TestSplitSpanChecker_CheckBalanceTraffic_RejectsUnsafeDestination(t *testing.T) {
+	tests := []struct {
+		name    string
+		prepare func(*NodeResourceUsageTracker)
+	}{
+		{
+			name: "destination busier than source",
+			prepare: func(tracker *NodeResourceUsageTracker) {
+				setEventStoreWriteBytesSnapshots(tracker,
+					map[node.ID]uint64{"source": 100, "destination": 100},
+					map[node.ID]uint64{"source": 200, "destination": 4100})
+			},
+		},
+		{
+			name: "supported telemetry becomes stale",
+			prepare: func(tracker *NodeResourceUsageTracker) {
+				now := time.Unix(100, 0)
+				tracker.now = func() time.Time { return now }
+				setEventStoreWriteBytesSnapshots(tracker,
+					map[node.ID]uint64{"source": 100, "destination": 100},
+					map[node.ID]uint64{"source": 200, "destination": 110})
+				now = now.Add(nodeResourceUsageStaleThreshold + time.Nanosecond)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testutil.SetUpTestServices(t)
+			cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+			schedulerCfg := &config.ChangefeedSchedulerConfig{
+				WriteKeyThreshold:          util.AddressOf(1000),
+				RegionThreshold:            util.AddressOf(10),
+				RegionCountRefreshInterval: util.AddressOf(time.Minute),
+				BalanceScoreThreshold:      util.AddressOf(1),
+				MinTrafficPercentage:       util.AddressOf(0.8),
+				MaxTrafficPercentage:       util.AddressOf(1.2),
+			}
+
+			nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+			for _, nodeID := range []node.ID{"source", "destination"} {
+				nodeManager.GetAliveNodes()[nodeID] = node.NewInfo(nodeID.String(), "")
+			}
+
+			replicas := createTestSplitSpanReplications(cfID, 100000, 3)
+			checker := newTestSplitChecker(t, cfID, replicas[0].GetGroupID(), schedulerCfg)
+			for _, replica := range replicas {
+				checker.AddReplica(replica)
+			}
+
+			replicas[0].SetNodeID("source")
+			replicas[1].SetNodeID("source")
+			replicas[2].SetNodeID("destination")
+			traffic := []float64{300, 1300, 100}
+			for i, replica := range replicas {
+				status := checker.allTasks[replica.ID]
+				status.lastThreeTraffic = []float64{traffic[i], traffic[i], traffic[i]}
+				status.regionCount = 3
+				status.GetStatus().CheckpointTs = oracle.ComposeTS(
+					time.Now().Add(-10*time.Second).UnixMilli(), 0)
+			}
+			checker.balanceCondition.statusUpdated = true
+			tt.prepare(checker.nodeResourceUsage)
+
+			require.Empty(t, checker.Check(10))
+		})
+	}
 }
 
 func TestSplitSpanChecker_CheckBalanceTraffic_NoBalanceNeeded(t *testing.T) {

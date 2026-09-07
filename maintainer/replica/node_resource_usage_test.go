@@ -17,93 +17,71 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNodeResourceUsageTrackerRequiresFreshCompleteSnapshot(t *testing.T) {
+func TestNodeResourceUsageTrackerSharesDeltaSnapshot(t *testing.T) {
 	now := time.Unix(100, 0)
 	tracker := NewNodeResourceUsageTracker()
 	tracker.now = func() time.Time { return now }
-
-	tracker.UpdateEventStoreWriteBytes("node1", 100)
-	writeBytes, ok := tracker.EventStoreWriteBytes([]node.ID{"node1"})
-	require.True(t, ok)
-	require.Equal(t, map[node.ID]uint64{"node1": 100}, writeBytes)
-
-	// A node running an older version does not report this counter. In that case
-	// the complete snapshot is unavailable and the caller falls back.
-	_, ok = tracker.EventStoreWriteBytes([]node.ID{"node1", "node2"})
-	require.False(t, ok)
-
-	tracker.UpdateEventStoreWriteBytes("node2", 200)
-	now = now.Add(nodeResourceUsageStaleThreshold + time.Nanosecond)
-	_, ok = tracker.EventStoreWriteBytes([]node.ID{"node1", "node2"})
-	require.False(t, ok)
-
-	tracker.UpdateEventStoreWriteBytes("node1", 300)
-	tracker.UpdateEventStoreWriteBytes("node2", 400)
-	writeBytes, ok = tracker.EventStoreWriteBytes([]node.ID{"node1", "node2"})
-	require.True(t, ok)
-	require.Equal(t, map[node.ID]uint64{"node1": 300, "node2": 400}, writeBytes)
-}
-
-func TestNodeResourceUsageTrackerReplacesClusterSnapshot(t *testing.T) {
-	now := time.Unix(100, 0)
-	tracker := NewNodeResourceUsageTracker()
-	tracker.now = func() time.Time { return now }
+	nodeIDs := []node.ID{"node1", "node2"}
 
 	tracker.ReplaceEventStoreWriteBytes(map[node.ID]uint64{
 		"node1": 100,
 		"node2": 200,
-	})
-	writeBytes, ok := tracker.EventStoreWriteBytes([]node.ID{"node1", "node2"})
-	require.True(t, ok)
-	require.Equal(t, map[node.ID]uint64{"node1": 100, "node2": 200}, writeBytes)
-
-	tracker.ReplaceEventStoreWriteBytes(map[node.ID]uint64{"node1": 300})
-	_, ok = tracker.EventStoreWriteBytes([]node.ID{"node1", "node2"})
-	require.False(t, ok)
-	writeBytes, ok = tracker.EventStoreWriteBytes([]node.ID{"node1"})
-	require.True(t, ok)
-	require.Equal(t, map[node.ID]uint64{"node1": 300}, writeBytes)
-}
-
-func TestSplitSpanCheckerRebuildsBaselineAfterStaleSample(t *testing.T) {
-	now := time.Unix(100, 0)
-	tracker := NewNodeResourceUsageTracker()
-	tracker.now = func() time.Time { return now }
-	checker := &SplitSpanChecker{nodeResourceUsage: tracker}
-	nodeIDs := []node.ID{"node1", "node2"}
-
-	tracker.UpdateEventStoreWriteBytes("node1", 100)
-	tracker.UpdateEventStoreWriteBytes("node2", 200)
-	_, ok := checker.sampleEventStoreWriteBytes(nodeIDs)
-	require.False(t, ok)
+	}, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE)
+	_, status := tracker.EventStoreWriteBytesDelta(nodeIDs)
+	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE, status)
 
 	now = now.Add(time.Second)
-	tracker.UpdateEventStoreWriteBytes("node1", 110)
-	tracker.UpdateEventStoreWriteBytes("node2", 220)
-	writeBytes, ok := checker.sampleEventStoreWriteBytes(nodeIDs)
-	require.True(t, ok)
-	require.Equal(t, map[node.ID]uint64{"node1": 10, "node2": 20}, writeBytes)
+	tracker.ReplaceEventStoreWriteBytes(map[node.ID]uint64{
+		"node1": 110,
+		"node2": 220,
+	}, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE)
+	delta, status := tracker.EventStoreWriteBytesDelta(nodeIDs)
+	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE, status)
+	require.Equal(t, map[node.ID]uint64{"node1": 10, "node2": 20}, delta)
+
+	deltaAgain, status := tracker.EventStoreWriteBytesDelta(nodeIDs)
+	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE, status)
+	require.Equal(t, delta, deltaAgain)
+	require.Zero(t, testing.AllocsPerRun(100, func() {
+		tracker.EventStoreWriteBytesDelta(nodeIDs)
+	}))
 
 	now = now.Add(nodeResourceUsageStaleThreshold + time.Nanosecond)
-	_, ok = checker.sampleEventStoreWriteBytes(nodeIDs)
-	require.False(t, ok)
-	require.Nil(t, checker.lastEventStoreWriteBytes)
+	_, status = tracker.EventStoreWriteBytesDelta(nodeIDs)
+	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE, status)
 
 	// Fresh reports after an interruption establish a new baseline. They must
 	// not be compared with counters from before the interruption.
-	tracker.UpdateEventStoreWriteBytes("node1", 200)
-	tracker.UpdateEventStoreWriteBytes("node2", 400)
-	_, ok = checker.sampleEventStoreWriteBytes(nodeIDs)
-	require.False(t, ok)
+	tracker.ReplaceEventStoreWriteBytes(map[node.ID]uint64{
+		"node1": 200,
+		"node2": 400,
+	}, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE)
+	_, status = tracker.EventStoreWriteBytesDelta(nodeIDs)
+	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE, status)
 
 	now = now.Add(time.Second)
-	tracker.UpdateEventStoreWriteBytes("node1", 230)
-	tracker.UpdateEventStoreWriteBytes("node2", 440)
-	writeBytes, ok = checker.sampleEventStoreWriteBytes(nodeIDs)
-	require.True(t, ok)
-	require.Equal(t, map[node.ID]uint64{"node1": 30, "node2": 40}, writeBytes)
+	tracker.ReplaceEventStoreWriteBytes(map[node.ID]uint64{
+		"node1": 230,
+		"node2": 440,
+	}, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE)
+	delta, status = tracker.EventStoreWriteBytesDelta(nodeIDs)
+	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE, status)
+	require.Equal(t, map[node.ID]uint64{"node1": 30, "node2": 40}, delta)
+}
+
+func TestNodeResourceUsageTrackerDistinguishesUnsupportedAndIncomplete(t *testing.T) {
+	tracker := NewNodeResourceUsageTracker()
+	nodeIDs := []node.ID{"node1", "node2"}
+
+	_, status := tracker.EventStoreWriteBytesDelta(nodeIDs)
+	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_UNSUPPORTED, status)
+
+	tracker.ReplaceEventStoreWriteBytes(nil, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE)
+	_, status = tracker.EventStoreWriteBytesDelta(nodeIDs)
+	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE, status)
 }

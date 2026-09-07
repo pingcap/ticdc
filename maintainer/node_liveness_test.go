@@ -336,6 +336,8 @@ func TestNodeHeartbeatReportsAndReceivesResourceUsage(t *testing.T) {
 	heartbeat := heartbeatMessage.Message[0].(*heartbeatpb.NodeHeartbeat)
 	require.Equal(t, uint64(123), heartbeat.GetNodeResourceUsage().GetEventStoreWriteBytes())
 	require.Empty(t, heartbeat.GetNodeResourceUsage().GetNodeId())
+	require.Equal(t, heartbeatpb.CurrentNodeResourceUsageProtocolVersion,
+		heartbeat.GetNodeResourceUsageProtocolVersion())
 
 	responseMessage := messaging.NewSingleTargetMessage(
 		m.nodeInfo.ID,
@@ -349,14 +351,39 @@ func TestNodeHeartbeatReportsAndReceivesResourceUsage(t *testing.T) {
 				{NodeId: "n1", EventStoreWriteBytes: 123},
 				{NodeId: "n2", EventStoreWriteBytes: 456},
 			},
+			NodeResourceUsageStatus: heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE,
 		},
 	)
 	responseMessage.From = m.coordinatorID
 	m.onNodeHeartbeatResponse(responseMessage)
 
-	writeBytes, ok := m.nodeResourceUsage.EventStoreWriteBytes([]node.ID{"n1", "n2"})
-	require.True(t, ok)
-	require.Equal(t, map[node.ID]uint64{"n1": 123, "n2": 456}, writeBytes)
+	_, status := m.nodeResourceUsage.EventStoreWriteBytesDelta([]node.ID{"n1", "n2"})
+	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE, status)
+
+	m.sendNodeHeartbeat(true)
+	heartbeatMessage = <-mc.GetMessageChannel()
+	heartbeat = heartbeatMessage.Message[0].(*heartbeatpb.NodeHeartbeat)
+	responseMessage = messaging.NewSingleTargetMessage(
+		m.nodeInfo.ID,
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.NodeHeartbeatResponse{
+			CoordinatorVersion: 10,
+			TargetNodeEpoch:    m.node.nodeEpoch,
+			RequestSeq:         heartbeat.WriteLeaseRequestSeq,
+			LeaseDurationMs:    0,
+			NodeResourceUsages: []*heartbeatpb.NodeResourceUsage{
+				{NodeId: "n1", EventStoreWriteBytes: 133},
+				{NodeId: "n2", EventStoreWriteBytes: 476},
+			},
+			NodeResourceUsageStatus: heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE,
+		},
+	)
+	responseMessage.From = m.coordinatorID
+	m.onNodeHeartbeatResponse(responseMessage)
+
+	delta, status := m.nodeResourceUsage.EventStoreWriteBytesDelta([]node.ID{"n1", "n2"})
+	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE, status)
+	require.Equal(t, map[node.ID]uint64{"n1": 10, "n2": 20}, delta)
 }
 
 func TestNodeHeartbeatResponseUpdatesClusterP2PMode(t *testing.T) {

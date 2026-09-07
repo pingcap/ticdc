@@ -115,6 +115,7 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 		WriteLeaseWitnessAck:        m.node.pendingWitnessAck,
 	}
 	if m.resourceUsageProvider != nil {
+		hb.NodeResourceUsageProtocolVersion = heartbeatpb.CurrentNodeResourceUsageProtocolVersion
 		hb.NodeResourceUsage = &heartbeatpb.NodeResourceUsage{
 			EventStoreWriteBytes: m.resourceUsageProvider.EventStoreWriteBytes(),
 		}
@@ -195,14 +196,17 @@ func (m *Manager) onNodeHeartbeatResponse(msg *messaging.TargetMessage) {
 		}
 		m.writeGate.SetP2PRequired(true)
 	}
-	resourceUsage := make(map[node.ID]uint64, len(response.NodeResourceUsages))
-	for _, usage := range response.NodeResourceUsages {
-		if usage == nil || usage.NodeId == "" {
-			continue
+	var resourceUsage map[node.ID]uint64
+	if response.NodeResourceUsageStatus == heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE {
+		resourceUsage = make(map[node.ID]uint64, len(response.NodeResourceUsages))
+		for _, usage := range response.NodeResourceUsages {
+			if usage == nil || usage.NodeId == "" {
+				continue
+			}
+			resourceUsage[node.ID(usage.NodeId)] = usage.EventStoreWriteBytes
 		}
-		resourceUsage[node.ID(usage.NodeId)] = usage.EventStoreWriteBytes
 	}
-	m.nodeResourceUsage.ReplaceEventStoreWriteBytes(resourceUsage)
+	m.nodeResourceUsage.ReplaceEventStoreWriteBytes(resourceUsage, response.NodeResourceUsageStatus)
 	metrics.CaptureLeaseResponseCounter.WithLabelValues("accepted").Inc()
 	m.node.lastAppliedLeaseSeq = requestSeq
 	for seq := range m.node.writeLeaseRequestSentAt {

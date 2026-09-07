@@ -33,11 +33,12 @@ const (
 )
 
 type captureLeaseNodeState struct {
-	nodeEpoch             uint64
-	lastRequestSeq        uint64
-	eventStoreWriteBytes  uint64
-	resourceUsageUpdated  time.Time
-	resourceUsageReported bool
+	nodeEpoch                    uint64
+	lastRequestSeq               uint64
+	resourceUsageProtocolVersion uint32
+	eventStoreWriteBytes         uint64
+	resourceUsageUpdated         time.Time
+	resourceUsageReported        bool
 }
 
 type pendingWitnessChallenge struct {
@@ -58,6 +59,7 @@ type captureWriteLeaseController struct {
 	nonce              func([]byte) (int, error)
 
 	nodes            map[node.ID]*captureLeaseNodeState
+	activeNodes      map[node.ID]struct{}
 	p2pCapableNodes  map[node.ID]struct{}
 	p2pLeaseEnabled  bool
 	pendingWitness   *pendingWitnessChallenge
@@ -71,6 +73,7 @@ func newCaptureWriteLeaseController(version int64, selfNodeID node.ID) *captureW
 		now:                time.Now,
 		nonce:              rand.Read,
 		nodes:              make(map[node.ID]*captureLeaseNodeState),
+		activeNodes:        make(map[node.ID]struct{}),
 		p2pCapableNodes:    make(map[node.ID]struct{}),
 	}
 }
@@ -86,6 +89,11 @@ func (c *captureWriteLeaseController) observeNodeCapability(id node.ID, version 
 // updateClusterMode enables P2P only when every active capture has reported
 // support for the current protocol. A missing capability is treated as legacy.
 func (c *captureWriteLeaseController) updateClusterMode(activeNodes []node.ID) {
+	c.activeNodes = make(map[node.ID]struct{}, len(activeNodes))
+	for _, id := range activeNodes {
+		c.activeNodes[id] = struct{}{}
+	}
+
 	p2pEnabled := len(activeNodes) > 0
 	for _, id := range activeNodes {
 		if _, ok := c.p2pCapableNodes[id]; !ok {
@@ -124,7 +132,9 @@ func (c *captureWriteLeaseController) handleHeartbeat(
 		return nil
 	}
 	state.lastRequestSeq = heartbeat.GetWriteLeaseRequestSeq()
-	if usage := heartbeat.GetNodeResourceUsage(); usage != nil {
+	state.resourceUsageProtocolVersion = heartbeat.GetNodeResourceUsageProtocolVersion()
+	usage := heartbeat.GetNodeResourceUsage()
+	if state.resourceUsageProtocolVersion == heartbeatpb.CurrentNodeResourceUsageProtocolVersion && usage != nil {
 		state.eventStoreWriteBytes = usage.GetEventStoreWriteBytes()
 		state.resourceUsageUpdated = c.now()
 		state.resourceUsageReported = true
@@ -259,26 +269,44 @@ func (c *captureWriteLeaseController) newGrant(
 	if c.p2pLeaseEnabled {
 		leaseDurationMs = uint64(writelease.P2PLeaseDuration.Milliseconds())
 	}
+	nodeResourceUsages, nodeResourceUsageStatus := c.nodeResourceUsageSnapshot()
 	return messaging.NewSingleTargetMessage(
 		target,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.NodeHeartbeatResponse{
-			CoordinatorVersion: c.coordinatorVersion,
-			TargetNodeEpoch:    targetNodeEpoch,
-			RequestSeq:         requestSeq,
-			LeaseDurationMs:    leaseDurationMs,
-			NodeResourceUsages: c.nodeResourceUsageSnapshot(),
+			CoordinatorVersion:      c.coordinatorVersion,
+			TargetNodeEpoch:         targetNodeEpoch,
+			RequestSeq:              requestSeq,
+			LeaseDurationMs:         leaseDurationMs,
+			NodeResourceUsages:      nodeResourceUsages,
+			NodeResourceUsageStatus: nodeResourceUsageStatus,
 		},
 	)
 }
 
-func (c *captureWriteLeaseController) nodeResourceUsageSnapshot() []*heartbeatpb.NodeResourceUsage {
-	now := c.now()
-	nodeIDs := make([]node.ID, 0, len(c.nodes))
-	for nodeID, state := range c.nodes {
-		if state.resourceUsageReported && now.Sub(state.resourceUsageUpdated) <= nodeResourceUsageStaleThreshold {
-			nodeIDs = append(nodeIDs, nodeID)
+func (c *captureWriteLeaseController) nodeResourceUsageSnapshot() (
+	[]*heartbeatpb.NodeResourceUsage,
+	heartbeatpb.NodeResourceUsageStatus,
+) {
+	if len(c.activeNodes) == 0 {
+		return nil, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_UNSUPPORTED
+	}
+	for nodeID := range c.activeNodes {
+		state := c.nodes[nodeID]
+		if state == nil ||
+			state.resourceUsageProtocolVersion != heartbeatpb.CurrentNodeResourceUsageProtocolVersion {
+			return nil, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_UNSUPPORTED
 		}
+	}
+
+	now := c.now()
+	nodeIDs := make([]node.ID, 0, len(c.activeNodes))
+	for nodeID := range c.activeNodes {
+		state := c.nodes[nodeID]
+		if !state.resourceUsageReported || now.Sub(state.resourceUsageUpdated) > nodeResourceUsageStaleThreshold {
+			return nil, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE
+		}
+		nodeIDs = append(nodeIDs, nodeID)
 	}
 	slices.Sort(nodeIDs)
 
@@ -289,11 +317,12 @@ func (c *captureWriteLeaseController) nodeResourceUsageSnapshot() []*heartbeatpb
 			EventStoreWriteBytes: c.nodes[nodeID].eventStoreWriteBytes,
 		})
 	}
-	return result
+	return result, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE
 }
 
 func (c *captureWriteLeaseController) removeNode(id node.ID) {
 	delete(c.nodes, id)
+	delete(c.activeNodes, id)
 	delete(c.p2pCapableNodes, id)
 	if c.pendingWitness != nil &&
 		(c.pendingWitness.witnessNodeID == id || id == c.selfNodeID) {
