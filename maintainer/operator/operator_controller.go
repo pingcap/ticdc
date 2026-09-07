@@ -53,7 +53,8 @@ type Controller struct {
 	nodeManager     *watcher.NodeManager
 	maintainerEpoch atomic.Uint64
 
-	// admissionMu serializes removing-mode quiesce with normal operator side effects.
+	// admissionMu serializes removing-mode quiesce and remove-operator replacement
+	// with normal operator side effects.
 	// A normal operator must hold the read side from its final allow check through
 	// Start or Schedule/SendCommand so it cannot cross the handoff boundary after
 	// QuiesceExcept has made the controller quiescing.
@@ -259,7 +260,7 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 			zap.String("operator", op.String()))
 		return false
 	}
-	return oc.pushOperatorWithAdmission(op)
+	return oc.pushOperatorWithAdmission(op, false)
 }
 
 func (oc *Controller) UpdateOperatorStatus(id common.DispatcherID, from node.ID, status *heartbeatpb.TableSpanStatus) {
@@ -453,20 +454,28 @@ func (oc *Controller) finalizeOperator(
 		zap.String("operator", op.String()))
 }
 
-func (oc *Controller) cancelOperator(opID common.DispatcherID) {
+func (oc *Controller) cancelOperator(
+	expected operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+) {
+	// Serialize rollback with remove-operator replacement. Otherwise a stale rollback
+	// could resolve the dispatcher ID after the replacement and cancel the new operator.
+	oc.admissionMu.RLock()
+	defer oc.admissionMu.RUnlock()
+
+	opID := expected.ID()
 	oc.mu.RLock()
 	item, ok := oc.operators[opID]
 	oc.mu.RUnlock()
-	if !ok {
+	if !ok || item.OP != expected {
 		return
 	}
-	item.OP.OnTaskRemoved()
+	expected.OnTaskRemoved()
 	oc.finalizeOperator(item, opID)
 }
 
 func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
-	oc.admissionMu.RLock()
-	defer oc.admissionMu.RUnlock()
+	oc.admissionMu.Lock()
+	defer oc.admissionMu.Unlock()
 
 	if !oc.isOperatorAllowed(op.ID()) {
 		log.Info("skip remove operator while controller is quiescing",
@@ -488,35 +497,32 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 		old.OP.OnTaskRemoved()
 		oc.finalizeOperator(old, op.ID())
 	}
-	oc.pushOperatorWithAdmission(op)
+	oc.pushOperatorWithAdmission(op, true)
 }
 
-// pushOperator add an operator to the controller queue.
-func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
-	oc.admissionMu.RLock()
-	defer oc.admissionMu.RUnlock()
+func (oc *Controller) pushOperatorWithAdmission(
+	op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+	replaceExisting bool,
+) bool {
+	withTime := operator.NewOperatorWithTime(op, time.Now())
+	opID := op.ID()
 
-	if !oc.isOperatorAllowed(op.ID()) {
-		log.Info("skip operator while controller is quiescing",
+	oc.mu.Lock()
+	if old, ok := oc.operators[opID]; ok && !replaceExisting {
+		oc.mu.Unlock()
+		log.Info("add operator failed, operator already exists",
 			zap.String("role", oc.role),
 			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.String("dispatcherID", op.ID().String()),
-			zap.String("operator", op.String()))
+			zap.String("operator", op.String()),
+			zap.String("oldOperator", old.OP.String()))
 		return false
 	}
-	return oc.pushOperatorWithAdmission(op)
-}
-
-func (oc *Controller) pushOperatorWithAdmission(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
+	oc.operators[opID] = withTime
+	oc.mu.Unlock()
 	log.Info("add operator to running queue",
 		zap.String("role", oc.role),
 		zap.Stringer("changefeedID", oc.changefeedID),
 		zap.String("operator", op.String()))
-	withTime := operator.NewOperatorWithTime(op, time.Now())
-
-	oc.mu.Lock()
-	oc.operators[op.ID()] = withTime
-	oc.mu.Unlock()
 
 	op.Start()
 	// Check affected nodes after Start to avoid operators being forced into terminal states
@@ -602,7 +608,7 @@ func (oc *Controller) cancelMergeOccupyOperators(
 	operators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
 ) {
 	for _, op := range operators {
-		oc.cancelOperator(op.ID())
+		oc.cancelOperator(op)
 	}
 }
 

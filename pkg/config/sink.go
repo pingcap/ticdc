@@ -156,7 +156,7 @@ type SinkConfig struct {
 	// Terminator is NOT available when the downstream is DB.
 	Terminator *string `toml:"terminator" json:"terminator,omitempty"`
 	// DateSeparator is only available when the downstream is Storage.
-	DateSeparator *string `toml:"date-separator" json:"date-separator,omitempty"`
+	DateSeparator *DateSeparator `toml:"date-separator" json:"date-separator,omitempty"`
 	// EnablePartitionSeparator is only available when the downstream is Storage.
 	EnablePartitionSeparator *bool `toml:"enable-partition-separator" json:"enable-partition-separator,omitempty"`
 	// FileIndexWidth is only available when the downstream is Storage
@@ -211,6 +211,8 @@ type SinkConfig struct {
 	OpenProtocol *OpenProtocolConfig `toml:"open" json:"open,omitempty"`
 	// DebeziumConfig related configurations
 	Debezium *DebeziumConfig `toml:"debezium" json:"debezium,omitempty"`
+	// Simple protocol related configurations
+	Simple *SimpleConfig `toml:"simple" json:"simple,omitempty"`
 
 	CaseSensitive *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	// Integrity is only available when the downstream is MQ.
@@ -376,6 +378,20 @@ func (d *DateSeparator) FromString(separator string) error {
 	return nil
 }
 
+// MarshalText implements encoding.TextMarshaler.
+func (d DateSeparator) MarshalText() ([]byte, error) {
+	return []byte(d.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (d *DateSeparator) UnmarshalText(text []byte) error {
+	if err := d.FromString(string(text)); err != nil {
+		return cerror.ErrStorageSinkInvalidConfig.GenWithStack(
+			"invalid date separator %q", text)
+	}
+	return nil
+}
+
 // GetPattern returns the pattern of the date separator.
 func (d DateSeparator) GetPattern() string {
 	switch d {
@@ -489,6 +505,7 @@ type KafkaConfig struct {
 	SASLOAuthClientID            *string                   `toml:"sasl-oauth-client-id" json:"sasl-oauth-client-id,omitempty"`
 	SASLOAuthClientSecret        *string                   `toml:"sasl-oauth-client-secret" json:"sasl-oauth-client-secret,omitempty"`
 	SASLOAuthTokenURL            *string                   `toml:"sasl-oauth-token-url" json:"sasl-oauth-token-url,omitempty"`
+	SASLOAuthCA                  *string                   `toml:"sasl-oauth-ca" json:"sasl-oauth-ca,omitempty"`
 	SASLOAuthScopes              []string                  `toml:"sasl-oauth-scopes" json:"sasl-oauth-scopes,omitempty"`
 	SASLOAuthGrantType           *string                   `toml:"sasl-oauth-grant-type" json:"sasl-oauth-grant-type,omitempty"`
 	SASLOAuthAudience            *string                   `toml:"sasl-oauth-audience" json:"sasl-oauth-audience,omitempty"`
@@ -515,17 +532,23 @@ func (k *KafkaConfig) GetOutputRawChangeEvent() bool {
 
 // MaskSensitiveData masks sensitive data in KafkaConfig
 func (k *KafkaConfig) MaskSensitiveData() {
-	k.SASLPassword = aws.String("******")
-	k.SASLGssAPIPassword = aws.String("******")
-	k.SASLOAuthClientSecret = aws.String("******")
-	k.Key = aws.String("******")
+	sensitiveFields := []*string{k.SASLPassword, k.SASLGssAPIPassword, k.SASLOAuthClientSecret, k.Key}
 	if k.GlueSchemaRegistryConfig != nil {
-		k.GlueSchemaRegistryConfig.AccessKey = "******"
-		k.GlueSchemaRegistryConfig.Token = "******"
-		k.GlueSchemaRegistryConfig.SecretAccessKey = "******"
+		sensitiveFields = append(sensitiveFields,
+			&k.GlueSchemaRegistryConfig.AccessKey,
+			&k.GlueSchemaRegistryConfig.Token,
+			&k.GlueSchemaRegistryConfig.SecretAccessKey)
+	}
+	for _, field := range sensitiveFields {
+		if field != nil && *field != "" {
+			*field = "******"
+		}
 	}
 	if k.SASLOAuthTokenURL != nil {
 		k.SASLOAuthTokenURL = aws.String(util.MaskSensitiveDataInURI(*k.SASLOAuthTokenURL))
+	}
+	if k.LargeMessageHandle != nil {
+		k.LargeMessageHandle.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(k.LargeMessageHandle.ClaimCheckStorageURI)
 	}
 }
 
@@ -877,14 +900,6 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 
 	// validate storage sink related config
 	if sinkURI != nil && IsStorageScheme(sinkURI.Scheme) {
-		// validate date separator
-		if len(util.GetOrZero(s.DateSeparator)) > 0 {
-			var separator DateSeparator
-			if err := separator.FromString(util.GetOrZero(s.DateSeparator)); err != nil {
-				return cerror.WrapError(cerror.ErrSinkInvalidConfig, err)
-			}
-		}
-
 		// File index width should be in [minFileIndexWidth, maxFileIndexWidth].
 		// In most scenarios, the user does not need to change this configuration,
 		// so the default value of this parameter is not set and just make silent
@@ -1175,6 +1190,13 @@ type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
 	// IncludeStartTs controls whether the transaction start_ts is included in
 	// the source block of Debezium JSON output.
+	IncludeStartTs *bool `toml:"include-start-ts" json:"include-start-ts,omitempty"`
+}
+
+// SimpleConfig represents the configurations for simple protocol encoding
+type SimpleConfig struct {
+	// IncludeStartTs controls whether the transaction start_ts is included in
+	// Simple JSON DML messages. Encoding-format=avro rejects this option.
 	IncludeStartTs *bool `toml:"include-start-ts" json:"include-start-ts,omitempty"`
 }
 

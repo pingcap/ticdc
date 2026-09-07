@@ -515,6 +515,15 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			o.sasl.oauth2.tokenURL = tokenURL
 		}
 
+		if sinkConfig.KafkaConfig.SASLOAuthCA != nil {
+			caPath := *sinkConfig.KafkaConfig.SASLOAuthCA
+			if caPath == "" {
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
+					"OAuth2 CA path cannot be empty")
+			}
+			o.sasl.oauth2.caPath = caPath
+		}
+
 		if o.sasl.oauth2.clientID != "" ||
 			o.sasl.oauth2.clientSecret != "" ||
 			o.sasl.oauth2.tokenURL != "" {
@@ -633,6 +642,8 @@ func adjustOptions(
 	options *options,
 	topic string,
 ) error {
+	// The topic may not exist yet and will be created later by the topic manager,
+	// so ignore per-topic metadata errors here.
 	topics, err := admin.GetTopicsMeta([]string{topic}, true)
 	if err != nil {
 		return err

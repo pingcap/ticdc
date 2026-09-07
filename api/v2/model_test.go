@@ -13,12 +13,70 @@
 package v2
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSinkConfigDateSeparator(t *testing.T) {
+	t.Parallel()
+
+	var sinkConfig SinkConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"date_separator":"DAY"}`), &sinkConfig))
+	require.Equal(t, config.DateSeparatorDay, util.GetOrZero(sinkConfig.DateSeparator))
+
+	err := json.Unmarshal([]byte(`{"date_separator":"week"}`), &SinkConfig{})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "CDC:ErrStorageSinkInvalidConfig")
+}
+
+func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
+	info := &ChangeFeedInfo{
+		ID:      "test",
+		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
+		Config: &ReplicaConfig{
+			Sink: &SinkConfig{
+				SchemaRegistry: util.AddressOf("https://registry.example.com?access-key=registry-secret-sentinel"),
+				KafkaConfig: &KafkaConfig{
+					KafkaClientID:         util.AddressOf("visible-client-id"),
+					SASLPassword:          util.AddressOf("plain-password-sentinel"),
+					SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
+					SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
+					SASLOAuthTokenURL:     util.AddressOf("https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
+					LargeMessageHandle:    &LargeMessageHandleConfig{ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel"},
+					GlueSchemaRegistryConfig: &GlueSchemaRegistryConfig{
+						AccessKey:       "glue-access-sentinel",
+						SecretAccessKey: "glue-secret-sentinel",
+						Token:           "glue-token-sentinel",
+					},
+				},
+				PulsarConfig: &PulsarConfig{
+					AuthenticationToken: util.AddressOf("pulsar-token-sentinel"),
+					BasicPassword:       util.AddressOf("pulsar-password-sentinel"),
+					OAuth2:              &PulsarOAuth2{OAuth2PrivateKey: "pulsar-private-key-sentinel"},
+				},
+			},
+			Consistent: &ConsistentConfig{Storage: util.AddressOf("s3://bucket/prefix?access-key=consistent-secret-sentinel")},
+		},
+	}
+	original, err := info.Marshal()
+	require.NoError(t, err)
+
+	masked, err := info.CloneWithMaskedSensitiveData()
+	require.NoError(t, err)
+	output, err := masked.Marshal()
+	require.NoError(t, err)
+	require.NotContains(t, output, "sentinel")
+	require.NotContains(t, output, "memory_quota")
+	require.Contains(t, output, "visible-client-id")
+	require.Nil(t, masked.Config.Sink.KafkaConfig.Key)
+	after, err := info.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
 
 // TestReplicaConfigConversion verifies API/internal replica config conversion,
 // including round-tripping the optional event collector batch overrides.
@@ -44,6 +102,12 @@ func TestReplicaConfigConversion(t *testing.T) {
 			},
 			DebeziumConfig: &DebeziumConfig{
 				IncludeStartTs: util.AddressOf(true),
+			},
+			SimpleConfig: &SimpleConfig{
+				IncludeStartTs: util.AddressOf(true),
+			},
+			KafkaConfig: &KafkaConfig{
+				SASLOAuthCA: util.AddressOf("/etc/ssl/oauth-ca.pem"),
 			},
 		},
 		Mounter: &MounterConfig{
@@ -81,6 +145,8 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(1024), util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolDiskQuota))
 	require.Equal(t, "/tmp/ticdc-spool", util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolBaseDir))
 	require.True(t, util.GetOrZero(internalCfg.Sink.Debezium.IncludeStartTs))
+	require.True(t, util.GetOrZero(internalCfg.Sink.Simple.IncludeStartTs))
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(internalCfg.Sink.KafkaConfig.SASLOAuthCA))
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
 	require.True(t, util.GetOrZero(internalCfg.Scheduler.EnableTableAcrossNodes))
 	require.Equal(t, 1000, util.GetOrZero(internalCfg.Scheduler.RegionThreshold))
@@ -127,7 +193,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(1024), *apiCfgBack.Sink.CloudStorageConfig.SpoolDiskQuota)
 	require.Equal(t, "/tmp/ticdc-spool", *apiCfgBack.Sink.CloudStorageConfig.SpoolBaseDir)
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.IncludeStartTs))
+	require.True(t, util.GetOrZero(apiCfgBack.Sink.SimpleConfig.IncludeStartTs))
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.OutputOldValue))
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(apiCfgBack.Sink.KafkaConfig.SASLOAuthCA))
 	require.Equal(t, 16, *apiCfgBack.Mounter.WorkerNum)
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)

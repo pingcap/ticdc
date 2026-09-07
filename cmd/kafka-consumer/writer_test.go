@@ -303,6 +303,83 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
 }
 
+func TestPartitionDDLFlushOrder(t *testing.T) {
+	const (
+		logicalTableID   = int64(100)
+		physicalTableID  = int64(101)
+		unrelatedTableID = int64(102)
+	)
+
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	order := make([]string, 0, 2)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
+		order = append(order, "dml")
+		event.PostFlush()
+	})
+	s.EXPECT().WriteBlockEvent(gomock.Any()).DoAndReturn(func(commonEvent.BlockEvent) error {
+		order = append(order, "ddl")
+		return nil
+	})
+
+	newMessage := func(tableID int64, table string) *codeccommon.DMLMessage {
+		return codeccommon.NewDMLMessage(tableID, "test", table, 10, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+			return &commonEvent.DMLEvent{
+				PhysicalTableID: tableID,
+				CommitTs:        10,
+				RowTypes:        []common.RowType{common.RowTypeInsert},
+				Rows:            chunk.NewChunkWithCapacity(nil, 0),
+				TableInfo: &common.TableInfo{
+					TableName: common.TableName{Schema: "test", Table: table, TableID: tableID},
+				},
+			}
+		})
+	}
+
+	partitionGroup := util.NewEventsGroup(1, physicalTableID)
+	partitionGroup.AppendMessage(newMessage(physicalTableID, "members"))
+	unrelatedGroup := util.NewEventsGroup(1, unrelatedTableID)
+	unrelatedGroup.AppendMessage(newMessage(unrelatedTableID, "other"))
+
+	w := &writer{
+		progresses: []*partitionProgress{
+			{
+				partition: 0,
+				decoder: &tableIDDecoder{
+					tableIDs: []int64{logicalTableID, physicalTableID},
+				},
+				eventsGroup: make(map[int64]*util.EventsGroup),
+			},
+			{
+				partition: 1,
+				eventsGroup: map[int64]*util.EventsGroup{
+					physicalTableID:  partitionGroup,
+					unrelatedTableID: unrelatedGroup,
+				},
+			},
+		},
+		mysqlSink:              s,
+		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
+	}
+	w.partitionTableAccessor.Add("test", "members")
+
+	err := w.flushDDLEvent(context.Background(), &commonEvent.DDLEvent{
+		Query:      "ALTER TABLE members DROP PARTITION p0",
+		SchemaName: "test",
+		TableName:  "members",
+		Type:       byte(timodel.ActionDropTablePartition),
+		FinishedTs: 20,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{logicalTableID},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"dml", "ddl"}, order)
+	require.Empty(t, partitionGroup.GetAllMessages())
+	require.Len(t, unrelatedGroup.GetAllMessages(), 1)
+}
+
 func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -476,6 +553,15 @@ func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
 type singleDMLDecoder struct {
 	message  *codeccommon.DMLMessage
 	consumed bool
+}
+
+type tableIDDecoder struct {
+	codeccommon.Decoder
+	tableIDs []int64
+}
+
+func (d *tableIDDecoder) GetTableIDs(string, string) []int64 {
+	return d.tableIDs
 }
 
 func (d *singleDMLDecoder) AddKeyValue(_, _ []byte) {

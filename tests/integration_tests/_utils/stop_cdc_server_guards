@@ -1,0 +1,14 @@
+#!/bin/bash
+
+set -eu
+
+guard_registry="$OUT_DIR/.cdc_guard_stops.$TEST_NAME"
+if [ ! -f "$guard_registry" ]; then
+	exit 0
+fi
+
+while IFS= read -r guard_stop_file; do
+	if [ -n "$guard_stop_file" ]; then
+		touch "$guard_stop_file"
+	fi
+done <"$guard_registry"

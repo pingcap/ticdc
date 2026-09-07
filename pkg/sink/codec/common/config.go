@@ -102,6 +102,9 @@ type Config struct {
 	// Debezium only. Whether the transaction start_ts should be included in
 	// the source block of the output. JSON protocol only.
 	DebeziumIncludeStartTs bool
+	// Simple only. Whether the transaction start_ts should be included in
+	// Simple JSON DML messages. Encoding-format=avro rejects this option.
+	SimpleIncludeStartTs bool
 	// CSV only. Whether header should be included in the output.
 	CSVOutputFieldHeader bool
 }
@@ -149,6 +152,7 @@ func NewConfig(protocol config.Protocol) *Config {
 		OpenOutputOldValue:     true,
 		DebeziumDisableSchema:  false,
 		DebeziumIncludeStartTs: false,
+		SimpleIncludeStartTs:   false,
 		CSVOutputFieldHeader:   false,
 	}
 }
@@ -191,6 +195,7 @@ type urlConfig struct {
 
 	DebeziumDisableSchema  *bool `form:"debezium-disable-schema"`
 	DebeziumIncludeStartTs *bool `form:"debezium-include-start-ts"`
+	SimpleIncludeStartTs   *bool `form:"simple-include-start-ts"`
 	// EncodingFormatType is only works for the simple protocol,
 	// can be `json` and `avro`, default to `json`.
 	EncodingFormatType *string `form:"encoding-format"`
@@ -328,6 +333,12 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	if rawURLParameter.DebeziumIncludeStartTs != nil {
 		c.DebeziumIncludeStartTs = *rawURLParameter.DebeziumIncludeStartTs
 	}
+	if urlParameter.SimpleIncludeStartTs != nil {
+		c.SimpleIncludeStartTs = *urlParameter.SimpleIncludeStartTs
+	}
+	if rawURLParameter.SimpleIncludeStartTs != nil {
+		c.SimpleIncludeStartTs = *rawURLParameter.SimpleIncludeStartTs
+	}
 
 	return nil
 }
@@ -362,6 +373,9 @@ func mergeConfig(
 		}
 		if sinkConfig.Debezium != nil && sinkConfig.Debezium.IncludeStartTs != nil {
 			dest.DebeziumIncludeStartTs = sinkConfig.Debezium.IncludeStartTs
+		}
+		if sinkConfig.Simple != nil && sinkConfig.Simple.IncludeStartTs != nil {
+			dest.SimpleIncludeStartTs = sinkConfig.Simple.IncludeStartTs
 		}
 	}
 	if err := mergo.Merge(dest, urlParameters, mergo.WithOverride); err != nil {
@@ -410,6 +424,19 @@ func (c *Config) Validate() error {
 		return errors.ErrCodecInvalidConfig.GenWithStack(
 			`debezium-include-start-ts only takes effect with protocol "debezium"`,
 		)
+	}
+
+	if c.SimpleIncludeStartTs {
+		if c.Protocol != config.ProtocolSimple {
+			return errors.ErrCodecInvalidConfig.GenWithStack(
+				`simple-include-start-ts only takes effect with protocol "simple"`,
+			)
+		}
+		if c.EncodingFormat == EncodingFormatAvro {
+			return errors.ErrCodecInvalidConfig.GenWithStack(
+				`simple-include-start-ts is not supported with encoding-format "avro"`,
+			)
+		}
 	}
 
 	if c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebeziumAvro {

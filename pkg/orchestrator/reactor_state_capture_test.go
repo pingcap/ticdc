@@ -23,6 +23,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGlobalReactorStateCaptureRemoveTTL(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 10, NewGlobalState(etcd.DefaultCDCClusterID, 0).captureRemoveTTL)
+	require.Equal(t, 10, NewGlobalState(etcd.DefaultCDCClusterID, 10).captureRemoveTTL)
+	require.Equal(t, 15, NewGlobalState(etcd.DefaultCDCClusterID, 30).captureRemoveTTL)
+}
+
 func TestGlobalReactorStateKeepsCaptureAfterReRegister(t *testing.T) {
 	t.Parallel()
 

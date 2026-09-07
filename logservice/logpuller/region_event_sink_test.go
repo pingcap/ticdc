@@ -134,6 +134,7 @@ func TestRegionEventSinkRemovePathReleasesQueuedEventMemory(t *testing.T) {
 		uint64(span.subID),
 		worker,
 		nil,
+		nil,
 	)
 	newEvent := func(commitTs uint64) regionEvent {
 		return regionEvent{

@@ -631,9 +631,14 @@ func TestNoServiceSafePoint(t *testing.T) {
 }
 
 func TestMaskChangefeedData(t *testing.T) {
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.KafkaConfig = &config.KafkaConfig{
+		SASLPassword:          util.AddressOf("sasl-password-sentinel"),
+		SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
+	}
 	info := config.ChangeFeedInfo{
-		SinkURI: "mysql://root:root@127.0.0.1:3306",
-		StartTs: 1, TargetTs: 100, State: config.StateNormal,
+		SinkURI: "kafka://root:sink-password-sentinel@127.0.0.1:9092/topic?sasl-password=uri-password-sentinel",
+		StartTs: 1, TargetTs: 100, State: config.StateNormal, Config: replicaConfig,
 	}
 	data, err := json.Marshal(&info)
 	require.Nil(t, err)
@@ -641,7 +646,11 @@ func TestMaskChangefeedData(t *testing.T) {
 	maskedInfo := config.ChangeFeedInfo{}
 	err = json.Unmarshal([]byte(masked), &maskedInfo)
 	require.Nil(t, err)
-	require.Equal(t, "mysql://username:password@***", maskedInfo.SinkURI)
-	maskedInfo.SinkURI = "mysql://root:root@127.0.0.1:3306"
-	require.Equal(t, info, maskedInfo)
+	require.NotContains(t, masked, "sink-password-sentinel")
+	require.NotContains(t, masked, "uri-password-sentinel")
+	require.NotContains(t, masked, "sasl-password-sentinel")
+	require.NotContains(t, masked, "oauth-secret-sentinel")
+	require.Contains(t, maskedInfo.SinkURI, "root:xxxxx@127.0.0.1:9092")
+	require.Equal(t, "******", *maskedInfo.Config.Sink.KafkaConfig.SASLPassword)
+	require.Equal(t, "<redacted>", maskChangefeedInfo([]byte(`{"sink-uri":`)))
 }

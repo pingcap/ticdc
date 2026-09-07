@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -32,6 +33,20 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
+
+func lookupCodecForTest(
+	t *testing.T,
+	ctx context.Context,
+	schemaM schemamanager.SchemaManager,
+	schemaName string,
+	schemaID schemamanager.SchemaID,
+) *goavro.Codec {
+	schemaDefinition, err := schemaM.Lookup(ctx, schemaName, schemaID)
+	require.NoError(t, err)
+	codec, err := GenCodec(schemaDefinition)
+	require.NoError(t, err)
+	return codec
+}
 
 func newAvroRowEventForTest(
 	tableInfo *commonType.TableInfo,
@@ -80,6 +95,44 @@ func newAvroTableInfoForTest() *commonType.TableInfo {
 	})
 }
 
+func TestAvroSchemaCacheIncludesRoutedTableName(t *testing.T) {
+	codecConfig := common.NewConfig(config.ProtocolAvro)
+	codecConfig.EnableTiDBExtension = true
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
+	defer TeardownEncoderAndSchemaRegistry4Testing()
+	require.NoError(t, err)
+
+	baseTableInfo := newAvroTableInfoForTest()
+	event := newAvroRowEventForTest(
+		baseTableInfo.CloneWithRouting("target_db", "cross_move_source_routed"),
+		1024,
+		chunk.Row{},
+		chunk.MutRowFromValues(int64(1), int64(18)).ToRow(),
+	)
+
+	const topic = "table-route"
+	firstValue, err := encoder.encodeValue(ctx, topic, event)
+	require.NoError(t, err)
+	firstSchemaID, _, err := extractConfluentSchemaIDAndBinaryData(firstValue)
+	require.NoError(t, err)
+
+	event.TableInfo = baseTableInfo.CloneWithRouting("target_extra_db", "cross_move_target_routed")
+	secondValue, err := encoder.encodeValue(ctx, topic, event)
+	require.NoError(t, err)
+	secondSchemaID, _, err := extractConfluentSchemaIDAndBinaryData(secondValue)
+	require.NoError(t, err)
+	require.NotEqual(t, firstSchemaID, secondSchemaID)
+
+	secondCodec := lookupCodecForTest(
+		t, ctx, encoder.schemaM, topic, schemamanager.NewConfluentSchemaID(secondSchemaID))
+	require.Contains(t, secondCodec.Schema(), `"name":"cross_move_target_routed"`)
+	require.Contains(t, secondCodec.Schema(), `"namespace":"default.target_extra_db"`)
+}
+
 func TestAvroEncode4EnableChecksum(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolAvro)
 	codecConfig.EnableTiDBExtension = true
@@ -103,8 +156,8 @@ func TestAvroEncode4EnableChecksum(t *testing.T) {
 	cid, data, err := extractConfluentSchemaIDAndBinaryData(bin)
 	require.NoError(t, err)
 
-	avroValueCodec, err := encoder.schemaM.Lookup(ctx, topic, schemaID{confluentSchemaID: cid})
-	require.NoError(t, err)
+	avroValueCodec := lookupCodecForTest(
+		t, ctx, encoder.schemaM, topic, schemamanager.NewConfluentSchemaID(cid))
 
 	res, _, err := avroValueCodec.NativeFromBinary(data)
 	require.NoError(t, err)
@@ -156,8 +209,8 @@ func TestAvroEncodeDeleteChecksum(t *testing.T) {
 	cid, data, err := extractConfluentSchemaIDAndBinaryData(bin)
 	require.NoError(t, err)
 
-	avroValueCodec, err := encoder.schemaM.Lookup(ctx, topic, schemaID{confluentSchemaID: cid})
-	require.NoError(t, err)
+	avroValueCodec := lookupCodecForTest(
+		t, ctx, encoder.schemaM, topic, schemamanager.NewConfluentSchemaID(cid))
 
 	res, _, err := avroValueCodec.NativeFromBinary(data)
 	require.NoError(t, err)
@@ -187,8 +240,8 @@ func TestAvroEncode(t *testing.T) {
 	cid, data, err := extractConfluentSchemaIDAndBinaryData(bin)
 	require.NoError(t, err)
 
-	avroKeyCodec, err := encoder.schemaM.Lookup(ctx, topic, schemaID{confluentSchemaID: cid})
-	require.NoError(t, err)
+	avroKeyCodec := lookupCodecForTest(
+		t, ctx, encoder.schemaM, topic, schemamanager.NewConfluentSchemaID(cid))
 
 	res, _, err := avroKeyCodec.NativeFromBinary(data)
 	require.NoError(t, err)
@@ -206,8 +259,8 @@ func TestAvroEncode(t *testing.T) {
 	cid, data, err = extractConfluentSchemaIDAndBinaryData(bin)
 	require.NoError(t, err)
 
-	avroValueCodec, err := encoder.schemaM.Lookup(ctx, topic, schemaID{confluentSchemaID: cid})
-	require.NoError(t, err)
+	avroValueCodec := lookupCodecForTest(
+		t, ctx, encoder.schemaM, topic, schemamanager.NewConfluentSchemaID(cid))
 
 	res, _, err = avroValueCodec.NativeFromBinary(data)
 	require.NoError(t, err)
@@ -279,8 +332,8 @@ func TestAvroEncodeIncludeBeforeValue(t *testing.T) {
 			cid, data, err := extractConfluentSchemaIDAndBinaryData(bin)
 			require.NoError(t, err)
 
-			avroValueCodec, err := encoder.schemaM.Lookup(ctx, topic, schemaID{confluentSchemaID: cid})
-			require.NoError(t, err)
+			avroValueCodec := lookupCodecForTest(
+				t, ctx, encoder.schemaM, topic, schemamanager.NewConfluentSchemaID(cid))
 
 			res, _, err := avroValueCodec.NativeFromBinary(data)
 			require.NoError(t, err)
@@ -358,8 +411,8 @@ func TestAvroEncodeIncludeBeforeValueWithoutTiDBExtension(t *testing.T) {
 
 			cid, data, err := extractConfluentSchemaIDAndBinaryData(bin)
 			require.NoError(t, err)
-			avroValueCodec, err := encoder.schemaM.Lookup(ctx, "default", schemaID{confluentSchemaID: cid})
-			require.NoError(t, err)
+			avroValueCodec := lookupCodecForTest(
+				t, ctx, encoder.schemaM, "default", schemamanager.NewConfluentSchemaID(cid))
 			res, _, err := avroValueCodec.NativeFromBinary(data)
 			require.NoError(t, err)
 
@@ -420,10 +473,9 @@ func TestAvroEncodeDeleteEventUsesPreRowForKey(t *testing.T) {
 	cid, data, err := extractConfluentSchemaIDAndBinaryData(messages[0].Key)
 	require.NoError(t, err)
 
-	avroKeyCodec, err := encoder.schemaM.Lookup(ctx,
+	avroKeyCodec := lookupCodecForTest(t, ctx, encoder.schemaM,
 		topicName2SchemaSubjects(topic, keySchemaSuffix),
-		schemaID{confluentSchemaID: cid})
-	require.NoError(t, err)
+		schemamanager.NewConfluentSchemaID(cid))
 
 	res, _, err := avroKeyCodec.NativeFromBinary(data)
 	require.NoError(t, err)
@@ -472,8 +524,6 @@ func TestAvroEncodeDeleteEventWithWatermarkCarriesCommitTs(t *testing.T) {
 
 func TestAvroEnvelope(t *testing.T) {
 	t.Parallel()
-	cManager := &confluentSchemaManager{}
-	gManager := &glueSchemaManager{}
 	avroCodec, err := GenCodec(`
        {
          "type": "record",
@@ -492,7 +542,7 @@ func TestAvroEnvelope(t *testing.T) {
 	require.NoError(t, err)
 
 	// test confluent schema message
-	header, err := cManager.getMsgHeader(8)
+	header, err := schemamanager.BuildConfluentWireHeader(8)
 	require.NoError(t, err)
 	res := avroEncodeResult{
 		data:   bin,
@@ -514,7 +564,7 @@ func TestAvroEnvelope(t *testing.T) {
 	// test glue schema message
 	uuidGenerator := uuid.NewGenerator()
 	uuidS := uuidGenerator.NewString()
-	header, err = gManager.getMsgHeader(uuidS)
+	header, err = schemamanager.BuildGlueWireHeader(uuidS)
 	require.NoError(t, err)
 	res = avroEncodeResult{
 		data:   bin,

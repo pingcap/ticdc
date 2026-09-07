@@ -28,6 +28,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	scheduleroperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 )
@@ -146,6 +147,7 @@ type countingOperator struct {
 	id               common.DispatcherID
 	targetNode       node.ID
 	blockTsForward   bool
+	startCount       syncatomic.Int32
 	scheduleCount    syncatomic.Int32
 	checkCount       syncatomic.Int32
 	nodeRemovedCount syncatomic.Int32
@@ -153,7 +155,7 @@ type countingOperator struct {
 
 func (o *countingOperator) ID() common.DispatcherID { return o.id }
 func (o *countingOperator) Type() string            { return "add" }
-func (o *countingOperator) Start()                  {}
+func (o *countingOperator) Start()                  { o.startCount.Add(1) }
 func (o *countingOperator) Schedule() *messaging.TargetMessage {
 	o.scheduleCount.Add(1)
 	return messaging.NewSingleTargetMessage(o.targetNode, messaging.MaintainerManagerTopic, &heartbeatpb.RemoveMaintainerRequest{})
@@ -171,6 +173,35 @@ func (o *countingOperator) AffectedNodes() []node.ID { return []node.ID{o.target
 func (o *countingOperator) OnTaskRemoved()           {}
 func (o *countingOperator) String() string           { return "counting-operator" }
 func (o *countingOperator) BlockTsForward() bool     { return o.blockTsForward }
+
+type blockingTaskRemovedOperator struct {
+	*countingOperator
+	taskRemovedEntered chan struct{}
+	releaseTaskRemoved chan struct{}
+}
+
+func (o *blockingTaskRemovedOperator) OnTaskRemoved() {
+	close(o.taskRemovedEntered)
+	<-o.releaseTaskRemoved
+}
+
+type synchronizedAdmissionOperator struct {
+	*countingOperator
+	idCalls syncatomic.Int32
+	ready   *sync.WaitGroup
+	release <-chan struct{}
+}
+
+func (o *synchronizedAdmissionOperator) ID() common.DispatcherID {
+	// The second ID lookup happens after AddOperator's initial duplicate check
+	// and before the operator is registered. Hold both callers in that window
+	// to deterministically exercise concurrent admission for the same ID.
+	if o.idCalls.Add(1) == 2 {
+		o.ready.Done()
+		<-o.release
+	}
+	return o.countingOperator.ID()
+}
 
 type blockingScheduleOperator struct {
 	id         common.DispatcherID
@@ -284,6 +315,87 @@ func TestController_PostFinishCalledOnceOnReplace(t *testing.T) {
 	wg.Wait()
 
 	require.Equal(t, int32(1), op.postFinishCount.Load())
+}
+
+func TestController_AddOperatorAtomicallyRejectsConcurrentDuplicate(t *testing.T) {
+	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, changefeedID, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	setAliveNodes(nodeManager, map[node.ID]*node.Info{nodeA: {ID: nodeA}})
+
+	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode)
+	var ready sync.WaitGroup
+	ready.Add(2)
+	release := make(chan struct{})
+	operators := []*synchronizedAdmissionOperator{
+		{
+			countingOperator: &countingOperator{id: replicaSet.ID, targetNode: nodeA},
+			ready:            &ready,
+			release:          release,
+		},
+		{
+			countingOperator: &countingOperator{id: replicaSet.ID, targetNode: nodeA},
+			ready:            &ready,
+			release:          release,
+		},
+	}
+
+	results := make(chan bool, len(operators))
+	for _, op := range operators {
+		go func() {
+			results <- oc.AddOperator(op)
+		}()
+	}
+	ready.Wait()
+	close(release)
+
+	successes := 0
+	for range operators {
+		if <-results {
+			successes++
+		}
+	}
+	require.Equal(t, 1, successes)
+	require.Equal(t, int32(1), operators[0].startCount.Load()+operators[1].startCount.Load())
+	require.Equal(t, 1, oc.OperatorSize())
+	require.Len(t, oc.runningQueue, 1)
+}
+
+func TestController_AddOperatorAllowsMoveWithEmptyOrigin(t *testing.T) {
+	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, changefeedID, replicaSet, _, nodeB := setupTestEnvironment(t)
+	absentReplica := replica.NewSpanReplication(
+		changefeedID,
+		replicaSet.ID,
+		replicaSet.GetSchemaID(),
+		replicaSet.Span,
+		replicaSet.GetStatus().CheckpointTs,
+		common.DefaultMode,
+		false,
+	)
+	spanController.AddAbsentReplicaSet(absentReplica)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	setAliveNodes(nodeManager, map[node.ID]*node.Info{nodeB: {ID: nodeB}})
+
+	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode)
+	op := NewMoveDispatcherOperator(spanController, absentReplica, "", nodeB, 7)
+	require.True(t, oc.AddOperator(op))
+	require.Same(t, op, oc.GetOperator(absentReplica.ID))
+	require.Equal(t, nodeB, absentReplica.GetNodeID())
+	require.Equal(t, 0, spanController.GetAbsentSize())
+	require.Equal(t, 1, spanController.GetSchedulingSize())
+	require.Len(t, oc.runningQueue, 1)
+
+	msg := op.Schedule()
+	require.NotNil(t, msg)
+	require.Equal(t, nodeB, msg.To)
+	require.Equal(t, heartbeatpb.ScheduleAction_Create,
+		msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).ScheduleAction)
 }
 
 func TestController_OnNodeRemoved_WithOccupyOperatorMarksSpanAbsent(t *testing.T) {
@@ -403,6 +515,97 @@ func TestController_RemoveReplicaSet_ReplacesRemoveOperatorOnTaskRemoved(t *test
 
 	require.Equal(t, int32(0), postFinishCount.Load())
 	require.NotNil(t, oc.GetOperator(replicaSet.ID))
+}
+
+func TestController_RemoveReplicaSetBlocksNormalAdmissionUntilReplacement(t *testing.T) {
+	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, changefeedID, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	setAliveNodes(nodeManager, map[node.ID]*node.Info{nodeA: {ID: nodeA}})
+
+	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode)
+	old := &blockingTaskRemovedOperator{
+		countingOperator:   &countingOperator{id: replicaSet.ID, targetNode: nodeA},
+		taskRemovedEntered: make(chan struct{}),
+		releaseTaskRemoved: make(chan struct{}),
+	}
+	require.True(t, oc.AddOperator(old))
+
+	replacement := newRemoveDispatcherOperator(
+		spanController,
+		replicaSet,
+		heartbeatpb.OperatorType_O_Remove,
+		7,
+	)
+	replacementDone := make(chan struct{})
+	go func() {
+		oc.removeReplicaSet(replacement)
+		close(replacementDone)
+	}()
+	<-old.taskRemovedEntered
+
+	concurrent := &countingOperator{id: replicaSet.ID, targetNode: nodeA}
+	addStarted := make(chan struct{})
+	addResult := make(chan bool, 1)
+	go func() {
+		close(addStarted)
+		addResult <- oc.AddOperator(concurrent)
+	}()
+	<-addStarted
+	require.Never(t, func() bool { return len(addResult) != 0 }, 100*time.Millisecond, 10*time.Millisecond)
+
+	close(old.releaseTaskRemoved)
+	require.Eventually(t, func() bool {
+		select {
+		case <-replacementDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return len(addResult) == 1 }, time.Second, 10*time.Millisecond)
+	require.False(t, <-addResult)
+	require.Equal(t, int32(0), concurrent.startCount.Load())
+	require.Same(t, replacement, oc.GetOperator(replicaSet.ID))
+}
+
+func TestControllerStaleMergeRollbackDoesNotCancelReplacementRemove(t *testing.T) {
+	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, changefeedID, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	setAliveNodes(nodeManager, map[node.ID]*node.Info{nodeA: {ID: nodeA}})
+
+	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode)
+	occupy := NewOccupyDispatcherOperator(spanController, replicaSet)
+	require.True(t, oc.AddOperator(occupy))
+
+	replacement := newRemoveDispatcherOperator(
+		spanController,
+		replicaSet,
+		heartbeatpb.OperatorType_O_Remove,
+		7,
+	)
+	oc.removeReplicaSet(replacement)
+	require.Same(t, replacement, oc.GetOperator(replicaSet.ID))
+
+	// Simulate a delayed merge rollback that still holds the replaced occupy operator.
+	oc.cancelMergeOccupyOperators(
+		[]scheduleroperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]{occupy},
+	)
+
+	require.Same(t, replacement, oc.GetOperator(replicaSet.ID))
+	require.False(t, replacement.IsFinished())
+	msg := replacement.Schedule()
+	require.NotNil(t, msg)
+	require.Equal(t, nodeA, msg.To)
+	require.Equal(t, heartbeatpb.ScheduleAction_Remove,
+		msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).ScheduleAction)
 }
 
 func TestController_QuiesceExceptFreezesNonAllowedOperators(t *testing.T) {

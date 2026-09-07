@@ -57,6 +57,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh:      make(chan resolveLockTask, 10),
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
+		memoryQuota:            newMemoryQuotaController(0, 0),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	rawSpan := heartbeatpb.TableSpan{
@@ -111,7 +112,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	// Lock another range, no task will be triggered before initialized.
 	res = span.rangeLock.LockRange(context.Background(), []byte{'c'}, []byte{'d'}, 2, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-	state := newRegionFeedState(regionInfo{lockedRangeState: res.LockedRangeState, subscribedSpan: span}, 1, worker, nil)
+	state := newRegionFeedState(regionInfo{lockedRangeState: res.LockedRangeState, subscribedSpan: span}, 1, worker, nil, nil)
 	span.resolveStaleLocks(200)
 	select {
 	case <-client.resolveLockTaskCh:
@@ -305,8 +306,9 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 
 func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	client := &subscriptionClient{
-		resolveLockTaskCh: make(chan resolveLockTask, 1),
-		memoryQuota:       newMemoryQuotaController(1024, 8),
+		resolveLockTaskCh:      make(chan resolveLockTask, 1),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
+		memoryQuota:            newMemoryQuotaController(0, 0),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
@@ -458,7 +460,6 @@ func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 			},
 		},
 	}
-
 	done := make(chan struct{})
 	go func() {
 		sink.Push(SubscriptionID(1), event)
@@ -467,7 +468,7 @@ func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 
 	select {
 	case <-done:
-		t.Fatal("regionEventSink.Push should block when event memory is exhausted")
+		t.Fatal("pushRegionEventToDS should block when event memory is exhausted")
 	case <-time.After(100 * time.Millisecond):
 	}
 
@@ -476,7 +477,7 @@ func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("regionEventSink.Push should be unblocked by Close")
+		t.Fatal("pushRegionEventToDS should be unblocked by Close")
 	}
 }
 

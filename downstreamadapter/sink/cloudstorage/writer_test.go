@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/objstore/objectio"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
@@ -53,7 +54,7 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	require.NoError(t, err)
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
 	cfg.FileIndexWidth = 6
 	require.NoError(t, err)
@@ -467,7 +468,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
 		// Keep the quota larger than this encoded batch so the controller still
 		// spills it to local spool files instead of taking the oversized in-memory fast path.
@@ -597,6 +598,12 @@ type failOnIndexStorage struct {
 	storeapi.Storage
 }
 
+type fenceAfterDataStorage struct {
+	storeapi.Storage
+	dataFile string
+	gate     *writelease.Gate
+}
+
 type failOnCloseStorage struct {
 	storeapi.Storage
 }
@@ -610,6 +617,53 @@ func (s *failOnIndexStorage) WriteFile(ctx context.Context, name string, data []
 		return errors.New("index write failed")
 	}
 	return s.Storage.WriteFile(ctx, name, data)
+}
+
+func (s *fenceAfterDataStorage) WriteFile(ctx context.Context, name string, data []byte) error {
+	if err := s.Storage.WriteFile(ctx, name, data); err != nil {
+		return err
+	}
+	if name == s.dataFile {
+		s.gate.Fence()
+	}
+	return nil
+}
+
+func TestWriterChecksWriteGateBeforePublishingIndex(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	parentDir := t.TempDir()
+	d := testWriter(ctx, t, parentDir)
+	gate := writelease.NewGate()
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+
+	dataFile := "data.json"
+	indexFile := "meta/data.index"
+	d.storage = &fenceAfterDataStorage{
+		Storage:  d.storage,
+		dataFile: dataFile,
+		gate:     gate,
+	}
+	d.setWriteGate(gate)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- d.writeDataFile(ctx, dataFile, indexFile, &payload{
+			data:      []byte(`{"id":1}`),
+			rowsCount: 1,
+			nBytes:    8,
+		})
+	}()
+
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(path.Join(parentDir, dataFile))
+		return err == nil
+	}, time.Second, 10*time.Millisecond)
+	_, err := os.Stat(path.Join(parentDir, indexFile))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
 }
 
 func (s *failOnCloseStorage) Create(
@@ -641,7 +695,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 	require.NoError(t, err)
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 	cfg.FileIndexWidth = 6
@@ -706,7 +760,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 	require.NoError(t, err)
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 	cfg.FileIndexWidth = 6
