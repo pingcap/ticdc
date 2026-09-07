@@ -385,7 +385,7 @@ func TestMaintainerSchedule(t *testing.T) {
 		},
 		&config.ChangeFeedInfo{
 			Config: config.GetDefaultReplicaConfig(),
-		}, n, taskScheduler, 10, true, common.DefaultKeyspaceID)
+		}, n, taskScheduler, 10, true, common.DefaultKeyspaceID, replica.NewNodeResourceUsageTracker())
 	defer maintainer.Close()
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic,

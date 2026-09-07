@@ -20,7 +20,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 )
 
-// Resource usage is normally reported every 200ms (50ms in low-latency mode).
+// Resource usage is normally reported by the node heartbeat every 500ms.
 // Allow several missed reports before falling back to group-local traffic.
 const nodeResourceUsageStaleThreshold = 5 * time.Second
 
@@ -29,8 +29,8 @@ type eventStoreWriteBytesSample struct {
 	updatedAt  time.Time
 }
 
-// NodeResourceUsageTracker stores the latest node-wide cumulative counters
-// reported to one changefeed maintainer.
+// NodeResourceUsageTracker stores the latest cluster-wide cumulative counters
+// shared by all changefeed maintainers on one node.
 type NodeResourceUsageTracker struct {
 	mu                   sync.RWMutex
 	eventStoreWriteBytes map[node.ID]eventStoreWriteBytesSample
@@ -50,6 +50,23 @@ func (t *NodeResourceUsageTracker) UpdateEventStoreWriteBytes(nodeID node.ID, wr
 	t.eventStoreWriteBytes[nodeID] = eventStoreWriteBytesSample{
 		writeBytes: writeBytes,
 		updatedAt:  t.now(),
+	}
+}
+
+// ReplaceEventStoreWriteBytes atomically replaces the cluster snapshot. Nodes
+// omitted by coordinator are removed immediately so stale or legacy reports
+// cannot remain eligible until the local freshness timeout.
+func (t *NodeResourceUsageTracker) ReplaceEventStoreWriteBytes(writeBytes map[node.ID]uint64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	now := t.now()
+	t.eventStoreWriteBytes = make(map[node.ID]eventStoreWriteBytesSample, len(writeBytes))
+	for nodeID, value := range writeBytes {
+		t.eventStoreWriteBytes[nodeID] = eventStoreWriteBytesSample{
+			writeBytes: value,
+			updatedAt:  now,
+		}
 	}
 }
 

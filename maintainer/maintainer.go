@@ -180,6 +180,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	checkpointTs uint64,
 	newChangefeed bool,
 	keyspaceID uint32,
+	nodeResourceUsage *replica.NodeResourceUsageTracker,
 ) *Maintainer {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -207,8 +208,8 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		eventCh:            chann.NewAutoDrainChann[*Event](),
 		checkpointUpdateCh: make(chan struct{}, 1),
 		startCheckpointTs:  checkpointTs,
-		controller: NewController(cfID, checkpointTs, taskScheduler,
-			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo, conf.BalanceMoveBatchSize, info.Epoch),
+		controller: newController(cfID, checkpointTs, taskScheduler,
+			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo, conf.BalanceMoveBatchSize, info.Epoch, nodeResourceUsage),
 		mc:                    mc,
 		removed:               atomic.NewBool(false),
 		nodeManager:           nodeManager,
@@ -292,6 +293,7 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	taskScheduler threadpool.ThreadPool,
 	keyspaceID uint32,
 	maintainerEpoch uint64,
+	nodeResourceUsage *replica.NodeResourceUsageTracker,
 ) *Maintainer {
 	unused := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
@@ -299,7 +301,7 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 		Config:       config.GetDefaultReplicaConfig(),
 		Epoch:        maintainerEpoch,
 	}
-	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, 1, false, keyspaceID)
+	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, 1, false, keyspaceID, nodeResourceUsage)
 	m.cascadeRemoving.Store(true)
 	return m
 }
@@ -903,7 +905,6 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
-	m.controller.UpdateNodeResourceUsage(msg.From, req.NodeResourceUsage)
 
 	// ATOMIC CHECKPOINT UPDATE: Part 1 of race condition fix
 	// Update checkpointTsByCapture BEFORE processing operator status to ensure atomicity

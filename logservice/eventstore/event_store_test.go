@@ -1691,7 +1691,9 @@ func TestEventStoreKVEntryCount(t *testing.T) {
 	encoder, err := zstd.NewWriter(nil)
 	require.NoError(t, err)
 	defer encoder.Close()
+	writeBytesBefore := store.EventStoreWriteBytes()
 	require.NoError(t, store.writeEvents(store.dbs[0], events, encoder, nil, nil))
+	require.Greater(t, store.EventStoreWriteBytes(), writeBytesBefore)
 
 	for i, metric := range entryMetrics {
 		require.Equal(t, before[i]+1, testutil.ToFloat64(metric))

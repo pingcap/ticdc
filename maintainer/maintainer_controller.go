@@ -99,6 +99,25 @@ func NewController(changefeedID common.ChangeFeedID,
 	balanceMoveBatchSize int,
 	maintainerEpoch uint64,
 ) *Controller {
+	return newController(
+		changefeedID, checkpointTs, taskPool, replicaConfig, ddlSpan, redoDDLSpan,
+		batchSize, balanceInterval, refresher, keyspaceMeta, enableRedo,
+		balanceMoveBatchSize, maintainerEpoch, replica.NewNodeResourceUsageTracker())
+}
+
+func newController(changefeedID common.ChangeFeedID,
+	checkpointTs uint64,
+	taskPool threadpool.ThreadPool,
+	replicaConfig *config.ReplicaConfig,
+	ddlSpan, redoDDLSpan *replica.SpanReplication,
+	batchSize int, balanceInterval time.Duration,
+	refresher *replica.RegionCountRefresher,
+	keyspaceMeta common.KeyspaceMeta,
+	enableRedo bool,
+	balanceMoveBatchSize int,
+	maintainerEpoch uint64,
+	nodeResourceUsage *replica.NodeResourceUsageTracker,
+) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
 	var (
@@ -117,14 +136,18 @@ func NewController(changefeedID common.ChangeFeedID,
 	if replicaConfig != nil {
 		schedulerCfg = replicaConfig.Scheduler
 	}
-	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg, refresher, keyspaceMeta.ID, common.DefaultMode)
+	spanController := span.NewControllerWithNodeResourceUsage(
+		changefeedID, ddlSpan, splitter, schedulerCfg, refresher,
+		keyspaceMeta.ID, common.DefaultMode, nodeResourceUsage)
 
 	var (
 		redoSpanController *span.Controller
 		redoOC             *operator.Controller
 	)
 	if enableRedo {
-		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, refresher, keyspaceMeta.ID, common.RedoMode)
+		redoSpanController = span.NewControllerWithNodeResourceUsage(
+			changefeedID, redoDDLSpan, splitter, schedulerCfg, refresher,
+			keyspaceMeta.ID, common.RedoMode, nodeResourceUsage)
 		redoOC = operator.NewOperatorController(changefeedID, redoSpanController, batchSize, common.RedoMode)
 	}
 	// Create operator controller using spanController
@@ -192,13 +215,6 @@ func (c *Controller) currentMaintainerEpoch() uint64 {
 // HandleStatus handle the status report from the node.
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
 	c.handleStatus(from, statusList, true)
-}
-
-func (c *Controller) UpdateNodeResourceUsage(from node.ID, usage *heartbeatpb.NodeResourceUsage) {
-	c.spanController.UpdateNodeResourceUsage(from, usage)
-	if c.redoSpanController != nil {
-		c.redoSpanController.UpdateNodeResourceUsage(from, usage)
-	}
 }
 
 func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus, allowSelfHealing bool) {

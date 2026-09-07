@@ -114,6 +114,11 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 		WriteLeaseProtocolVersion:   heartbeatpb.CurrentWriteLeaseProtocolVersion,
 		WriteLeaseWitnessAck:        m.node.pendingWitnessAck,
 	}
+	if m.resourceUsageProvider != nil {
+		hb.NodeResourceUsage = &heartbeatpb.NodeResourceUsage{
+			EventStoreWriteBytes: m.resourceUsageProvider.EventStoreWriteBytes(),
+		}
+	}
 	target := m.newCoordinatorTopicMessage(hb)
 	if err := m.mc.SendCommand(target); err != nil {
 		delete(m.node.writeLeaseRequestSentAt, requestSeq)
@@ -190,6 +195,14 @@ func (m *Manager) onNodeHeartbeatResponse(msg *messaging.TargetMessage) {
 		}
 		m.writeGate.SetP2PRequired(true)
 	}
+	resourceUsage := make(map[node.ID]uint64, len(response.NodeResourceUsages))
+	for _, usage := range response.NodeResourceUsages {
+		if usage == nil || usage.NodeId == "" {
+			continue
+		}
+		resourceUsage[node.ID(usage.NodeId)] = usage.EventStoreWriteBytes
+	}
+	m.nodeResourceUsage.ReplaceEventStoreWriteBytes(resourceUsage)
 	metrics.CaptureLeaseResponseCounter.WithLabelValues("accepted").Inc()
 	m.node.lastAppliedLeaseSeq = requestSeq
 	for seq := range m.node.writeLeaseRequestSentAt {

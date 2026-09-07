@@ -354,6 +354,10 @@ func (m *mockEventStore) GetLogCoordinatorNodeID() node.ID {
 	return ""
 }
 
+func (m *mockEventStore) EventStoreWriteBytes() uint64 {
+	return 0
+}
+
 func (m *mockEventStore) RegisterDispatcher(
 	changefeedID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,

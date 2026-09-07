@@ -11,13 +11,13 @@ message TableSpan {
 }
 
 message HeartBeatRequest {
+    reserved 7;
     ChangefeedID changefeedID = 1;
     Watermark watermark = 2;
     Watermark redoWatermark = 3;
     repeated TableSpanStatus statuses = 4;
     bool compeleteStatus = 5;  // Whether includes all table spans in the changefeed?
     RunningError err = 6;
-    NodeResourceUsage node_resource_usage = 7;
 }
 
 message Watermark {
@@ -210,6 +210,7 @@ message NodeHeartbeat {
     uint64 write_lease_request_seq = 5;
     uint32 write_lease_protocol_version = 6;
     WriteLeaseWitnessAck write_lease_witness_ack = 7;
+    NodeResourceUsage node_resource_usage = 8;
 }
 
 message WriteLeaseWitnessChallenge {
@@ -234,6 +235,7 @@ message NodeHeartbeatResponse {
     uint64 request_seq = 3;
     uint64 lease_duration_ms = 4;
     WriteLeaseWitnessChallenge witness_challenge = 5;
+    repeated NodeResourceUsage node_resource_usages = 6;
 }
 
 // SetNodeLivenessRequest asks a node to transition its local liveness.
@@ -551,9 +553,10 @@ message DispatcherSetChecksumUpdateRequest {
     DispatcherSetChecksum checksum = 5;
 }
 
-// NodeResourceUsage carries node-wide cumulative resource counters. The
-// maintainer derives rates from consecutive heartbeats and uses them to avoid
-// scheduling traffic onto a node that is busy with another changefeed.
+// NodeResourceUsage carries node-wide cumulative resource counters. A node
+// heartbeat request omits node_id because the sender identity is authoritative;
+// coordinator responses set it for every entry in the cluster snapshot.
 message NodeResourceUsage {
     uint64 event_store_write_bytes = 1;
+    string node_id = 2;
 }

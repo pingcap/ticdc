@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -103,7 +104,8 @@ func newManagerMaintainerSetForAddTest(t *testing.T) *managerMaintainerSet {
 
 	testutil.SetUpTestServices(t)
 	selfNode := node.NewInfo("", "")
-	maintainers := newManagerMaintainerSet(config.NewDefaultSchedulerConfig(), selfNode, nil)
+	maintainers := newManagerMaintainerSet(
+		config.NewDefaultSchedulerConfig(), selfNode, nil, replica.NewNodeResourceUsageTracker())
 	t.Cleanup(maintainers.closeAll)
 	return maintainers
 }

@@ -28,6 +28,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type fixedNodeResourceUsageProvider uint64
+
+func (p fixedNodeResourceUsageProvider) EventStoreWriteBytes() uint64 {
+	return uint64(p)
+}
+
 func TestSetNodeLivenessRejectEpochMismatch(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
@@ -307,6 +313,50 @@ func TestNodeHeartbeatResponseRenewsP2PWriteLease(t *testing.T) {
 	responseMessage.Message[0].(*heartbeatpb.NodeHeartbeatResponse).CoordinatorVersion = 10
 	m.onNodeHeartbeatResponse(responseMessage)
 	require.False(t, gate.IsWritable())
+}
+
+func TestNodeHeartbeatReportsAndReceivesResourceUsage(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	gate := writelease.NewGate()
+	appcontext.SetService(appcontext.CaptureWriteGate, gate)
+
+	var nodeLiveness liveness.Liveness
+	m := NewMaintainerManagerWithResourceUsage(
+		&node.Info{ID: node.ID("n1")},
+		&config.SchedulerConfig{},
+		&nodeLiveness,
+		fixedNodeResourceUsageProvider(123),
+	)
+	m.coordinatorID = node.ID("coordinator")
+	m.coordinatorVersion = 10
+
+	m.sendNodeHeartbeat(true)
+	heartbeatMessage := <-mc.GetMessageChannel()
+	heartbeat := heartbeatMessage.Message[0].(*heartbeatpb.NodeHeartbeat)
+	require.Equal(t, uint64(123), heartbeat.GetNodeResourceUsage().GetEventStoreWriteBytes())
+	require.Empty(t, heartbeat.GetNodeResourceUsage().GetNodeId())
+
+	responseMessage := messaging.NewSingleTargetMessage(
+		m.nodeInfo.ID,
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.NodeHeartbeatResponse{
+			CoordinatorVersion: 10,
+			TargetNodeEpoch:    m.node.nodeEpoch,
+			RequestSeq:         heartbeat.WriteLeaseRequestSeq,
+			LeaseDurationMs:    0,
+			NodeResourceUsages: []*heartbeatpb.NodeResourceUsage{
+				{NodeId: "n1", EventStoreWriteBytes: 123},
+				{NodeId: "n2", EventStoreWriteBytes: 456},
+			},
+		},
+	)
+	responseMessage.From = m.coordinatorID
+	m.onNodeHeartbeatResponse(responseMessage)
+
+	writeBytes, ok := m.nodeResourceUsage.EventStoreWriteBytes([]node.ID{"n1", "n2"})
+	require.True(t, ok)
+	require.Equal(t, map[node.ID]uint64{"n1": 123, "n2": 456}, writeBytes)
 }
 
 func TestNodeHeartbeatResponseUpdatesClusterP2PMode(t *testing.T) {

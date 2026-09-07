@@ -48,6 +48,27 @@ func TestNodeResourceUsageTrackerRequiresFreshCompleteSnapshot(t *testing.T) {
 	require.Equal(t, map[node.ID]uint64{"node1": 300, "node2": 400}, writeBytes)
 }
 
+func TestNodeResourceUsageTrackerReplacesClusterSnapshot(t *testing.T) {
+	now := time.Unix(100, 0)
+	tracker := NewNodeResourceUsageTracker()
+	tracker.now = func() time.Time { return now }
+
+	tracker.ReplaceEventStoreWriteBytes(map[node.ID]uint64{
+		"node1": 100,
+		"node2": 200,
+	})
+	writeBytes, ok := tracker.EventStoreWriteBytes([]node.ID{"node1", "node2"})
+	require.True(t, ok)
+	require.Equal(t, map[node.ID]uint64{"node1": 100, "node2": 200}, writeBytes)
+
+	tracker.ReplaceEventStoreWriteBytes(map[node.ID]uint64{"node1": 300})
+	_, ok = tracker.EventStoreWriteBytes([]node.ID{"node1", "node2"})
+	require.False(t, ok)
+	writeBytes, ok = tracker.EventStoreWriteBytes([]node.ID{"node1"})
+	require.True(t, ok)
+	require.Equal(t, map[node.ID]uint64{"node1": 300}, writeBytes)
+}
+
 func TestSplitSpanCheckerRebuildsBaselineAfterStaleSample(t *testing.T) {
 	now := time.Unix(100, 0)
 	tracker := NewNodeResourceUsageTracker()

@@ -27,13 +27,17 @@ import (
 )
 
 const (
-	witnessNonceSize        = 16
-	witnessChallengeTimeout = time.Second
+	witnessNonceSize                = 16
+	witnessChallengeTimeout         = time.Second
+	nodeResourceUsageStaleThreshold = 5 * time.Second
 )
 
 type captureLeaseNodeState struct {
-	nodeEpoch      uint64
-	lastRequestSeq uint64
+	nodeEpoch             uint64
+	lastRequestSeq        uint64
+	eventStoreWriteBytes  uint64
+	resourceUsageUpdated  time.Time
+	resourceUsageReported bool
 }
 
 type pendingWitnessChallenge struct {
@@ -120,6 +124,13 @@ func (c *captureWriteLeaseController) handleHeartbeat(
 		return nil
 	}
 	state.lastRequestSeq = heartbeat.GetWriteLeaseRequestSeq()
+	if usage := heartbeat.GetNodeResourceUsage(); usage != nil {
+		state.eventStoreWriteBytes = usage.GetEventStoreWriteBytes()
+		state.resourceUsageUpdated = c.now()
+		state.resourceUsageReported = true
+	} else {
+		state.resourceUsageReported = false
+	}
 
 	messages := c.handleWitnessAck(from, heartbeat)
 	if from != c.selfNodeID {
@@ -256,8 +267,29 @@ func (c *captureWriteLeaseController) newGrant(
 			TargetNodeEpoch:    targetNodeEpoch,
 			RequestSeq:         requestSeq,
 			LeaseDurationMs:    leaseDurationMs,
+			NodeResourceUsages: c.nodeResourceUsageSnapshot(),
 		},
 	)
+}
+
+func (c *captureWriteLeaseController) nodeResourceUsageSnapshot() []*heartbeatpb.NodeResourceUsage {
+	now := c.now()
+	nodeIDs := make([]node.ID, 0, len(c.nodes))
+	for nodeID, state := range c.nodes {
+		if state.resourceUsageReported && now.Sub(state.resourceUsageUpdated) <= nodeResourceUsageStaleThreshold {
+			nodeIDs = append(nodeIDs, nodeID)
+		}
+	}
+	slices.Sort(nodeIDs)
+
+	result := make([]*heartbeatpb.NodeResourceUsage, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		result = append(result, &heartbeatpb.NodeResourceUsage{
+			NodeId:               nodeID.String(),
+			EventStoreWriteBytes: c.nodes[nodeID].eventStoreWriteBytes,
+		})
+	}
+	return result
 }
 
 func (c *captureWriteLeaseController) removeNode(id node.ID) {
