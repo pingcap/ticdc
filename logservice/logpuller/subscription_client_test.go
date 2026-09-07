@@ -393,7 +393,25 @@ func TestRegionFailureHandlerQueuesCanceledError(t *testing.T) {
 	}, &requestCancelledErr{}))
 
 	require.Len(t, client.failureHandler.cache.cache, 1)
-	require.Nil(t, client.spanRegistry.Get(span.subID))
+	require.Same(t, span, client.spanRegistry.Get(span.subID))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- client.failureHandler.Run(ctx)
+	}()
+
+	require.Eventually(t, func() bool {
+		return client.spanRegistry.Get(span.subID) == nil
+	}, time.Second, 10*time.Millisecond)
+	cancel()
+	select {
+	case err := <-runDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("failure handler did not exit after context cancellation")
+	}
 }
 
 type mockDynamicStream struct{}
