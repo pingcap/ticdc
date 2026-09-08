@@ -118,7 +118,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	if replicaConfig != nil {
 		schedulerCfg = replicaConfig.Scheduler
 	}
-	spanController := span.NewControllerWithNodeResourceUsage(
+	spanController := span.NewController(
 		changefeedID, ddlSpan, splitter, schedulerCfg, refresher,
 		keyspaceMeta.ID, common.DefaultMode, nodeResourceUsage)
 
@@ -127,7 +127,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		redoOC             *operator.Controller
 	)
 	if enableRedo {
-		redoSpanController = span.NewControllerWithNodeResourceUsage(
+		redoSpanController = span.NewController(
 			changefeedID, redoDDLSpan, splitter, schedulerCfg, refresher,
 			keyspaceMeta.ID, common.RedoMode, nodeResourceUsage)
 		redoOC = operator.NewOperatorController(changefeedID, redoSpanController, batchSize, common.RedoMode)

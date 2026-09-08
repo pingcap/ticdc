@@ -314,7 +314,7 @@ func newDrainSchedulerTestHarness(
 		self,
 		false,
 	)
-	sc := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	sc := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode, replica.NewNodeResourceUsageTracker())
 	oc := operator.NewOperatorController(cfID, sc, 100, common.DefaultMode)
 	return cfID, nodeManager, oc, sc, NewDrainState(), self
 }

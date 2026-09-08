@@ -42,7 +42,7 @@ func newControllerForCheckpointTsTrackerTest(t *testing.T) *Controller {
 			CheckpointTs:    1,
 		}, "node1", false)
 	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
-	return NewController(changefeedID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	return NewController(changefeedID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode, replica.NewNodeResourceUsageTracker())
 }
 
 func newSpanReplicationForCheckpointTsTrackerTest(
@@ -206,7 +206,7 @@ func TestNewController(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1", false)
 	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
-	controller := NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	controller := NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode, replica.NewNodeResourceUsageTracker())
 	require.NotNil(t, controller)
 	require.Equal(t, cfID, controller.changefeedID)
 	require.False(t, controller.enableTableAcrossNodes)
@@ -231,6 +231,7 @@ func TestController_AddNewTable(t *testing.T) {
 		nil,
 		common.DefaultKeyspaceID,
 		common.DefaultMode,
+		replica.NewNodeResourceUsageTracker(),
 	)
 
 	table := commonEvent.Table{
@@ -269,6 +270,7 @@ func TestController_GetTaskByID(t *testing.T) {
 		nil,
 		common.DefaultKeyspaceID,
 		common.DefaultMode,
+		replica.NewNodeResourceUsageTracker(),
 	)
 
 	// Add a table first
@@ -324,6 +326,7 @@ func TestController_GetTasksByTableID(t *testing.T) {
 		nil,
 		common.DefaultKeyspaceID,
 		common.DefaultMode,
+		replica.NewNodeResourceUsageTracker(),
 	)
 
 	// Add a table
@@ -362,6 +365,7 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 		nil,
 		common.DefaultKeyspaceID,
 		common.DefaultMode,
+		replica.NewNodeResourceUsageTracker(),
 	)
 
 	// Add tables from the same schema
@@ -404,6 +408,7 @@ func TestController_UpdateSchemaID(t *testing.T) {
 		nil,
 		common.DefaultKeyspaceID,
 		common.DefaultMode,
+		replica.NewNodeResourceUsageTracker(),
 	)
 
 	// Add a table
@@ -447,6 +452,7 @@ func TestController_Statistics(t *testing.T) {
 		nil,
 		common.DefaultKeyspaceID,
 		common.DefaultMode,
+		replica.NewNodeResourceUsageTracker(),
 	)
 
 	// Add some tables
@@ -679,5 +685,6 @@ func newControllerWithCheckerForTest(t *testing.T) *Controller {
 		nil,
 		common.DefaultKeyspaceID,
 		common.DefaultMode,
+		replica.NewNodeResourceUsageTracker(),
 	)
 }

@@ -97,22 +97,6 @@ func NewController(
 	refresher *replica.RegionCountRefresher,
 	keyspaceID uint32,
 	mode int64,
-) *Controller {
-	return NewControllerWithNodeResourceUsage(
-		changefeedID, ddlSpan, splitter, schedulerCfg, refresher,
-		keyspaceID, mode, replica.NewNodeResourceUsageTracker())
-}
-
-// NewControllerWithNodeResourceUsage creates a span controller backed by a
-// node resource snapshot shared with other local maintainers.
-func NewControllerWithNodeResourceUsage(
-	changefeedID common.ChangeFeedID,
-	ddlSpan *replica.SpanReplication,
-	splitter *split.Splitter,
-	schedulerCfg *config.ChangefeedSchedulerConfig,
-	refresher *replica.RegionCountRefresher,
-	keyspaceID uint32,
-	mode int64,
 	nodeResourceUsage *replica.NodeResourceUsageTracker,
 ) *Controller {
 	c := &Controller{
