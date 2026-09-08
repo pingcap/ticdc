@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -1523,7 +1524,11 @@ func (e *eventStore) writeEvents(
 	updateKVEntryCount.Add(float64(updateCount))
 	deleteKVEntryCount.Add(float64(deleteCount))
 	writeBytes := uint64(batch.Len())
-	e.writeBytes.Add(writeBytes)
+	reportedWriteBytes := writeBytes
+	failpoint.Inject("InjectEventStoreWriteBytes", func(val failpoint.Value) {
+		reportedWriteBytes = uint64(val.(int))
+	})
+	e.writeBytes.Add(reportedWriteBytes)
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
 	metrics.EventStoreWriteBatchSizeHist.Observe(float64(writeBytes))
 	metrics.EventStoreWriteBytes.Add(float64(writeBytes))

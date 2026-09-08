@@ -1,0 +1,6 @@
+[scheduler]
+enable-table-across-nodes = true
+region-threshold = 2
+region-count-per-span = 2
+write-key-threshold = 1073741824
+balance-score-threshold = 1
