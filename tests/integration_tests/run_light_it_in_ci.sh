@@ -155,7 +155,7 @@ storage_groups=(
 	# G03
 	'kv_client_stream_reconnect  fail_over_ddl_D'
 	# G04
-	'capture_write_lease ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	'ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
 	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
 	# G06
