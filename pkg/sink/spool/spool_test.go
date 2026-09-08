@@ -15,7 +15,6 @@ package spool
 
 import (
 	"context"
-	stderrors "errors"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -820,7 +819,7 @@ func TestWaitForDiskQuotaReturnsAfterTransientTruncateFailure(t *testing.T) {
 	var allowTruncate atomic.Bool
 	manager.truncateFile = func(file *os.File, size int64) error {
 		if !allowTruncate.Load() {
-			return stderrors.New("injected truncate failure")
+			return errors.New("injected truncate failure")
 		}
 		return file.Truncate(size)
 	}
@@ -897,7 +896,7 @@ func TestWaitForDiskQuotaReturnsAfterTransientRemoveFailure(t *testing.T) {
 	var allowRemove atomic.Bool
 	manager.removeFile = func(path string) error {
 		if path == firstSegmentPath && !allowRemove.Load() {
-			return stderrors.New("injected remove failure")
+			return errors.New("injected remove failure")
 		}
 		return os.Remove(path)
 	}
