@@ -22,6 +22,8 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 	"github.com/twmb/franz-go/pkg/sasl"
 	"github.com/twmb/franz-go/pkg/sasl/oauth"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
@@ -81,7 +83,13 @@ func clientOptions(ctx context.Context, o *options) ([]kgo.Opt, error) {
 }
 
 func producerOptions(o *options) []kgo.Opt {
+	// Produce v10+ leader hints can bypass retry backoff and rapidly exhaust retries
+	// during Kafka rolling restarts. Cap Produce at v9 to use metadata-based recovery.
+	// Remove this cap after adopting an upstream fix for https://github.com/twmb/franz-go/issues/1412.
+	versions := kversion.Stable()
+	versions.SetMaxKeyVersion(int16(kmsg.Produce), 9)
 	return []kgo.Opt{
+		kgo.MaxVersions(versions),
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		kgo.RequiredAcks(requiredAcks(o.RequiredAcks)),
 		// Retried requests may create duplicates because broker-side producer ID deduplication is disabled.

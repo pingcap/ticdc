@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -60,7 +61,8 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 		kgo.WithContext(ctx),
 		kgo.WithLogger(newClientLogger(changefeedID, "shared")),
 		kgo.WithHooks(metricsHook),
-		kgo.MetadataMinAge(adminMetadataMinAge))
+		// With Produce v9, metadata refreshes pace leader-error retries.
+		kgo.MetadataMinAge(time.Second))
 	opts = append(opts, producerOpts...)
 
 	client, err := kgo.NewClient(opts...)
