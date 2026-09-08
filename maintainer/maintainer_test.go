@@ -488,7 +488,7 @@ func TestMaintainerHeartbeatDuringRemovingSkipsFailoverRecovery(t *testing.T) {
 			}, captureID, false)
 		refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
 		controller := NewController(cfID, 10, &mockThreadPool{},
-			config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 1, nil)
+			config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 1, replica.NewNodeResourceUsageTracker())
 
 		totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
 		dispatcherID := common.NewDispatcherID()

@@ -76,7 +76,7 @@ func TestSchedule(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1", false)
 	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
-	controller := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 9, time.Minute, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, nil)
+	controller := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 9, time.Minute, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
 	for i := 0; i < 10; i++ {
 		controller.spanController.AddNewTable(commonEvent.Table{
 			SchemaID: 1,
@@ -131,7 +131,7 @@ func TestNewControllerInitializesMaintainerEpoch(t *testing.T) {
 		true,
 		testBalanceMoveBatchSize,
 		maintainerEpoch,
-		nil,
+		replica.NewNodeResourceUsageTracker(),
 	)
 
 	require.Equal(t, maintainerEpoch, controller.currentMaintainerEpoch())
@@ -165,7 +165,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 			MinTrafficPercentage:   util.AddressOf(0.8),
 			MaxTrafficPercentage:   util.AddressOf(1.2),
 		},
-	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, nil)
+	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
 
 	nodeID := node.ID("node1")
 	for i := range 100 {
@@ -297,7 +297,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 			MinTrafficPercentage:   util.AddressOf(0.8),
 			MaxTrafficPercentage:   util.AddressOf(1.2),
 		},
-	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, nil)
+	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
 
 	regionCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
 
@@ -419,7 +419,7 @@ func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
 			MinTrafficPercentage:   util.AddressOf(0.8),
 			MaxTrafficPercentage:   util.AddressOf(1.2),
 		},
-	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, nil)
+	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
 
 	nodeIDList := []node.ID{"node1", "node2", "node3"}
 	for i := 0; i < 100; i++ {
@@ -521,7 +521,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 			MinTrafficPercentage:       util.AddressOf(0.8),
 			MaxTrafficPercentage:       util.AddressOf(1.2),
 		},
-	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, nil)
+	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
 
 	nodeIDList := []node.ID{"node1", "node2", "node3"}
 	// make a group
@@ -1122,7 +1122,7 @@ func TestBalance(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1", false)
 	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
-	s := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, nil)
+	s := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
 	for i := 0; i < 100; i++ {
 		sz := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
@@ -1228,7 +1228,7 @@ func TestDefaultSpanIntoSplit(t *testing.T) {
 			MinTrafficPercentage:       util.AddressOf(0.8),
 			MaxTrafficPercentage:       util.AddressOf(1.2),
 		},
-	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, nil)
+	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
 	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
 	dispatcherID := common.NewDispatcherID()
@@ -1370,7 +1370,7 @@ func TestStoppedWhenMoving(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1", false)
 	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
-	s := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, nil)
+	s := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
 	for i := 0; i < 2; i++ {
 		sz := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
@@ -1423,7 +1423,7 @@ func TestFinishBootstrap(t *testing.T) {
 		}, "node1", false)
 	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
 	s := NewController(cfID, 1, &mockThreadPool{},
-		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, nil)
+		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
 	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
 	schemaStore := eventservice.NewMockSchemaStore()
@@ -1496,7 +1496,7 @@ func TestFinishBootstrapReturnsErrorWhenCheckpointMissing(t *testing.T) {
 		}, "node1", false)
 	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
 	controller := NewController(cfID, 1, &mockThreadPool{},
-		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, nil)
+		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
 
 	postBootstrapRequest, err := controller.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"node1": {
@@ -1560,7 +1560,7 @@ func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
 				}, "node1", false)
 			refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
 			s := NewController(cfID, 1, &mockThreadPool{},
-				config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, nil)
+				config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
 
 			// The schema-store snapshot is empty at bootstrap startTs, which models a table
 			// that has already been dropped before failover recovery starts.
@@ -2049,7 +2049,7 @@ func newMergeBootstrapTestEnv(t *testing.T) *mergeBootstrapTestEnv {
 		MaxTrafficPercentage:   util.AddressOf(1.2),
 	}
 	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
-	controller := NewController(cfID, 1, &mockThreadPool{}, cfg, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, nil)
+	controller := NewController(cfID, 1, &mockThreadPool{}, cfg, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
 
 	schemaStore := eventservice.NewMockSchemaStore()
 	schemaStore.SetTables([]commonEvent.Table{
@@ -2326,7 +2326,7 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
-	s := NewController(cfID, 1, nil, defaultConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, nil)
+	s := NewController(cfID, 1, nil, defaultConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
 	s.taskPool = &mockThreadPool{}
 	schemaStore := eventservice.NewMockSchemaStore()
 	schemaStore.SetTables(
@@ -2514,7 +2514,7 @@ func TestLargeTableInitialization(t *testing.T) {
 			MinTrafficPercentage:       util.AddressOf(0.8),
 			MaxTrafficPercentage:       util.AddressOf(1.2),
 		},
-	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, nil)
+	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
 
 	// Create a large table with 10000 regions
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(1))

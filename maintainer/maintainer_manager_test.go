@@ -327,7 +327,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	schedulerConf.AddTableBatchSize = 1000
 	schedulerConf.CheckBalanceInterval = 0
 	var nodeLiveness liveness.Liveness
-	manager := NewMaintainerManager(selfNode, schedulerConf, &nodeLiveness, nil)
+	manager := NewMaintainerManager(selfNode, schedulerConf, &nodeLiveness, fixedNodeResourceUsageProvider(0))
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -555,7 +555,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 		return nil
 	})
 	var nodeLiveness liveness.Liveness
-	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, &nodeLiveness, nil)
+	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, &nodeLiveness, fixedNodeResourceUsageProvider(0))
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -701,7 +701,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	schedulerConf := config.NewDefaultSchedulerConfig()
 	schedulerConf.AddTableBatchSize = 1000
 	var nodeLiveness liveness.Liveness
-	manager := NewMaintainerManager(selfNode, schedulerConf, &nodeLiveness, nil)
+	manager := NewMaintainerManager(selfNode, schedulerConf, &nodeLiveness, fixedNodeResourceUsageProvider(0))
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
