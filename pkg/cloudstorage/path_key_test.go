@@ -63,7 +63,7 @@ func TestGenerateDMLFilePath(t *testing.T) {
 		index          uint64
 		fileIndexWidth int
 		extension      string
-		dateSeparator  string
+		dateSeparator  config.DateSeparator
 		path           string
 		dmlkey         DMLPathKey
 	}{
@@ -71,7 +71,7 @@ func TestGenerateDMLFilePath(t *testing.T) {
 			index:          10,
 			fileIndexWidth: 20,
 			extension:      ".csv",
-			dateSeparator:  config.DateSeparatorDay.String(),
+			dateSeparator:  config.DateSeparatorDay,
 			path:           fmt.Sprintf("schema1/table1/123456/2023-05-09/CDC_%s_00000000000000000010.csv", dispatcherID.String()),
 			dmlkey: DMLPathKey{
 				SchemaPathKey: SchemaPathKey{
@@ -87,7 +87,7 @@ func TestGenerateDMLFilePath(t *testing.T) {
 			index:          10,
 			fileIndexWidth: 20,
 			extension:      ".csv",
-			dateSeparator:  config.DateSeparatorNone.String(),
+			dateSeparator:  config.DateSeparatorNone,
 			path:           fmt.Sprintf("12345/123456/CDC_%s_00000000000000000010.csv", dispatcherID.String()),
 			dmlkey: DMLPathKey{
 				SchemaPathKey: SchemaPathKey{
@@ -102,7 +102,7 @@ func TestGenerateDMLFilePath(t *testing.T) {
 			index:          10,
 			fileIndexWidth: 20,
 			extension:      ".csv",
-			dateSeparator:  config.DateSeparatorDay.String(),
+			dateSeparator:  config.DateSeparatorDay,
 			path:           fmt.Sprintf("schema1/table1/123456/55/2023-05-09/CDC_%s_00000000000000000010.csv", dispatcherID.String()),
 			dmlkey: DMLPathKey{
 				SchemaPathKey: SchemaPathKey{
@@ -168,22 +168,22 @@ func TestParseIndexFilePathRejectsUnsupportedPath(t *testing.T) {
 
 	testCases := []struct {
 		name          string
-		dateSeparator string
+		dateSeparator config.DateSeparator
 		path          string
 	}{
 		{
 			name:          "legacy schema table date index",
-			dateSeparator: config.DateSeparatorDay.String(),
+			dateSeparator: config.DateSeparatorDay,
 			path:          "test/binary_columns_dummy/2026-06-23/meta/CDC.index",
 		},
 		{
 			name:          "invalid index file name",
-			dateSeparator: config.DateSeparatorNone.String(),
+			dateSeparator: config.DateSeparatorNone,
 			path:          "schema1/table1/123456/meta/notCDC.index",
 		},
 		{
 			name:          "date does not match separator",
-			dateSeparator: config.DateSeparatorMonth.String(),
+			dateSeparator: config.DateSeparatorMonth,
 			path:          "schema1/table1/123456/2023-05-09/meta/CDC.index",
 		},
 	}

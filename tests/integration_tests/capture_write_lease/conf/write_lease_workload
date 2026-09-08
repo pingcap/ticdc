@@ -1,0 +1,13 @@
+threadcount=4
+workload=core
+
+readallfields=true
+fieldcount=1
+fieldlength=32
+
+readproportion=0
+updateproportion=0.5
+scanproportion=0
+insertproportion=0.5
+
+requestdistribution=uniform

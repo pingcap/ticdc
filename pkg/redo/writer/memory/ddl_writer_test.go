@@ -16,12 +16,14 @@ package memory
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,4 +65,41 @@ func TestWriteDDL(t *testing.T) {
 
 	require.NoError(t, lw.Close())
 	require.NoError(t, lw.Close())
+}
+
+func TestWriteDDLWaitsForWriteGate(t *testing.T) {
+	ctx := t.Context()
+
+	extStorage, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
+	require.NoError(t, err)
+	cfg, err := writer.NewConfig(
+		common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
+		testutil.NewConsistentConfig(uri.String()),
+	)
+	require.NoError(t, err)
+
+	const filename = "gated-ddl.log"
+	lw, err := NewDDLWriter(ctx, cfg, writer.WithLogFileName(func() string {
+		return filename
+	}))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, lw.Close()) }()
+	gate := writelease.NewGate()
+	lw.SetWriteGate(gate)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- lw.WriteDDLEvent(ctx, &pevent.DDLEvent{FinishedTs: 1})
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	exists, err := extStorage.FileExists(ctx, filename)
+	require.NoError(t, err)
+	require.False(t, exists)
+
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	require.NoError(t, <-done)
+	exists, err = extStorage.FileExists(ctx, filename)
+	require.NoError(t, err)
+	require.True(t, exists)
 }

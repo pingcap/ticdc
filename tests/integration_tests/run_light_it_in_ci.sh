@@ -40,7 +40,7 @@ mysql_groups=(
 	# G03
 	'capture_suicide_while_balance_table capture_local_fence_on_session_done kv_client_stream_reconnect ddl_default_current_timestamp fail_over_ddl_D'
 	# G04
-	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	'capture_write_lease ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
 	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
 	# G06
@@ -79,7 +79,7 @@ kafka_groups=(
 	# G03
 	'kv_client_stream_reconnect  fail_over_ddl_D'
 	# G04
-	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	'capture_write_lease ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
 	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
 	# G06
@@ -99,7 +99,7 @@ kafka_groups=(
 	# G13
 	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
-	'kafka_simple_basic avro_basic avro_schema_registry_error fail_over_ddl_O update_changefeed_check_config'
+	'kafka_simple_basic kafka_simple_include_start_ts avro_basic avro_schema_registry_error fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'kafka_simple_basic_avro split_region autorandom gc_safepoint'
 )
@@ -117,7 +117,7 @@ pulsar_groups=(
 	# G03
 	'kv_client_stream_reconnect  fail_over_ddl_D'
 	# G04
-	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	'capture_write_lease ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
 	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
 	# G06
@@ -155,7 +155,7 @@ storage_groups=(
 	# G03
 	'kv_client_stream_reconnect  fail_over_ddl_D'
 	# G04
-	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	'capture_write_lease ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
 	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
 	# G06

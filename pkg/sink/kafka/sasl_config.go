@@ -68,6 +68,7 @@ type oauth2Config struct {
 	clientID     string
 	clientSecret string
 	tokenURL     string
+	caPath       string
 	scopes       []string
 	grantType    string
 	audience     string
