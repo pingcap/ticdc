@@ -22,8 +22,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"github.com/twmb/franz-go/pkg/kmsg"
-	"github.com/twmb/franz-go/pkg/kversion"
 	"github.com/twmb/franz-go/pkg/sasl"
 	"github.com/twmb/franz-go/pkg/sasl/oauth"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
@@ -83,21 +81,14 @@ func clientOptions(ctx context.Context, o *options) ([]kgo.Opt, error) {
 }
 
 func producerOptions(o *options) []kgo.Opt {
-	// Produce v10+ leader hints can bypass retry backoff and rapidly exhaust retries
-	// during Kafka rolling restarts. Cap Produce at v9 to use metadata-based recovery.
-	// Remove this cap after adopting an upstream fix for https://github.com/twmb/franz-go/issues/1412.
-	versions := kversion.Stable()
-	versions.SetMaxKeyVersion(int16(kmsg.Produce), 9)
 	return []kgo.Opt{
-		kgo.MaxVersions(versions),
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		kgo.RequiredAcks(requiredAcks(o.RequiredAcks)),
 		// Retried requests may create duplicates because broker-side producer ID deduplication is disabled.
 		kgo.DisableIdempotentWrite(),
 		// More than one in-flight request can reorder records when an earlier request is retried.
 		kgo.MaxProduceRequestsInflightPerBroker(1),
-		// The default of five retries allows six Produce attempts. franz-go's
-		// default jittered backoff adds about 6.2s to 9.3s across five retries.
+		// The default of five retries allows six Produce attempts.
 		kgo.RecordRetries(o.MaxRetry),
 		kgo.UnknownTopicRetries(o.MaxRetry),
 		// Limit each client to 128 MiB of buffered payload. The in-flight limit
@@ -116,11 +107,9 @@ func producerOptions(o *options) []kgo.Opt {
 		// socket read deadline is read-timeout plus write-timeout.
 		// With the default 10s timeout, the Broker may process a Produce request
 		// for 10s, the socket write deadline is 10s, and the socket read deadline
-		// is 20s. Across six attempts, consecutive timeouts take about 66s-69s
-		// when the Broker returns on its processing deadline, 126s-129s when it
-		// never replies, or 186s-189s if every write and read reaches its deadline.
-		// Buffering, metadata lookup, connection setup, and Broker throttling are
-		// not included; the caller context is the end-to-end bound.
+		// is 20s. Total delivery time also includes retries, buffering, metadata
+		// lookup, connection setup, and Broker throttling; the caller context is
+		// the end-to-end bound.
 		// A Broker processing timeout returns REQUEST_TIMED_OUT, which franz-go
 		// retries. The original record may already be stored, so retries may create
 		// duplicates while idempotent writes are disabled. Exhausting the retry

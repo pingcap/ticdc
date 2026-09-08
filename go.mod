@@ -75,7 +75,7 @@ require (
 	github.com/tikv/pd v1.1.0-beta.0.20260604125942-9f1c47b1e851
 	github.com/tikv/pd/client v0.0.0-20260805103528-afa43111d149
 	github.com/tinylib/msgp v1.5.0
-	github.com/twmb/franz-go v1.21.6
+	github.com/twmb/franz-go v1.21.7-0.20260908061941-0672c02324bb
 	github.com/twmb/franz-go/pkg/kadm v1.18.0
 	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260727183601-4176fc0fcaf7
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1
