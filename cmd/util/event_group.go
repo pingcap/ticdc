@@ -671,8 +671,8 @@ func getFilesystemUsage(path string) (filesystemUsage, error) {
 		return filesystemUsage{}, errors.ErrSpillFileOp.FastGenByArgs("spill filesystem has invalid block size")
 	}
 	blockSize := uint64(stat.Bsize)
-	totalBytes := uint64(stat.Blocks) * blockSize
-	availableBytes := uint64(stat.Bavail) * blockSize
+	totalBytes := stat.Blocks * blockSize
+	availableBytes := stat.Bavail * blockSize
 	if availableBytes > totalBytes {
 		return filesystemUsage{}, errors.ErrSpillFileOp.FastGenByArgs("spill filesystem has invalid available blocks")
 	}
@@ -896,7 +896,11 @@ func (g *EventsGroup) PrepareResolve(
 	if err != nil {
 		return nil, false, errors.WrapError(errors.ErrSpillFileOp, err, "create spill event iterator")
 	}
-	defer iterator.Close()
+	defer func() {
+		if err := iterator.Close(); err != nil {
+			log.Warn("close spill event iterator failed", zap.Error(err))
+		}
+	}()
 
 	// Most groups have no event below a given global watermark. Allocate the
 	// batch lazily so polling those groups does not create a full-sized slice.
