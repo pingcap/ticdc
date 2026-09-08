@@ -106,8 +106,7 @@ func TestCaptureWriteLeaseSharesFreshNodeResourceUsage(t *testing.T) {
 	// A node that does not declare the resource protocol is a rolling-upgrade
 	// compatibility case, distinct from interrupted telemetry.
 	secondHeartbeat.WriteLeaseRequestSeq = 4
-	secondHeartbeat.NodeResourceUsageProtocolVersion =
-		heartbeatpb.LegacyNodeResourceUsageProtocolVersion
+	secondHeartbeat.NodeResourceUsageProtocolVersion = heartbeatpb.LegacyNodeResourceUsageProtocolVersion
 	messages = controller.handleHeartbeat(node.ID("capture-1"), secondHeartbeat, nil)
 	require.Len(t, messages, 1)
 	response = requireWriteLeaseResponse(t, messages[0])
