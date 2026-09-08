@@ -15,10 +15,16 @@ package schemastore
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logpuller"
+	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
@@ -26,6 +32,125 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+type trackingSubscriptionClient struct {
+	nextID        atomic.Uint64
+	mu            sync.Mutex
+	subscriptions map[logpuller.SubscriptionID]struct{}
+}
+
+func newTrackingSubscriptionClient() *trackingSubscriptionClient {
+	return &trackingSubscriptionClient{subscriptions: make(map[logpuller.SubscriptionID]struct{})}
+}
+
+func (s *trackingSubscriptionClient) Name() string { return "trackingSubscriptionClient" }
+
+func (s *trackingSubscriptionClient) Run(context.Context) error { return nil }
+
+func (s *trackingSubscriptionClient) Close(context.Context) error { return nil }
+
+func (s *trackingSubscriptionClient) AllocSubscriptionID() logpuller.SubscriptionID {
+	return logpuller.SubscriptionID(s.nextID.Add(1))
+}
+
+func (s *trackingSubscriptionClient) Subscribe(
+	subID logpuller.SubscriptionID,
+	_ heartbeatpb.TableSpan,
+	_ uint64,
+	_ func([]common.RawKVEntry, func()) bool,
+	_ func(uint64),
+	_ int64,
+	_ bool,
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscriptions[subID] = struct{}{}
+}
+
+func (s *trackingSubscriptionClient) Unsubscribe(subID logpuller.SubscriptionID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.subscriptions, subID)
+}
+
+func (s *trackingSubscriptionClient) contains(subID logpuller.SubscriptionID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.subscriptions[subID]
+	return ok
+}
+
+func TestRemoveTombstoneKeyspace(t *testing.T) {
+	const keyspaceID = uint32(42)
+	keyspaceMeta := common.KeyspaceMeta{ID: keyspaceID, Name: "tombstone-keyspace"}
+	storeCtx, cancel := context.WithCancel(context.Background())
+	storage := newPersistentStorageForTest(t.TempDir(), nil)
+	require.NoError(t, storage.run())
+
+	subClient := newTrackingSubscriptionClient()
+	fetcher := newDDLJobFetcher(storeCtx, subClient, nil, keyspaceID, nil, nil)
+	subID := subClient.AllocSubscriptionID()
+	subClient.Subscribe(subID, heartbeatpb.TableSpan{}, 0, nil, nil, 0, false)
+	fetcher.resolvedTsTracker.resolvedTsItemMap[subID] = &resolvedTsItem{}
+
+	keyspaceStore := &keyspaceSchemaStore{
+		ctx:           storeCtx,
+		cancel:        cancel,
+		ddlJobFetcher: fetcher,
+		dataStorage:   storage,
+		unsortedCache: newDDLCache(),
+		notifyCh:      make(chan any, 1),
+	}
+	store := &schemaStore{
+		keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{keyspaceID: keyspaceStore},
+		tombstoneKeyspaces:     make(map[uint32]struct{}),
+	}
+	t.Cleanup(func() { require.NoError(t, keyspaceStore.close()) })
+
+	// Hold one active user to verify teardown waits before closing storage.
+	require.True(t, keyspaceStore.acquire())
+	cleanupDone := make(chan struct{})
+	go func() {
+		store.removeTombstoneKeyspace(keyspaceMeta, keyspaceStore)
+		close(cleanupDone)
+	}()
+
+	require.Eventually(t, func() bool {
+		store.keyspaceLocker.RLock()
+		defer store.keyspaceLocker.RUnlock()
+		_, exists := store.keyspaceSchemaStoreMap[keyspaceID]
+		_, tombstone := store.tombstoneKeyspaces[keyspaceID]
+		return !exists && tombstone
+	}, time.Second, 10*time.Millisecond)
+	require.Error(t, store.RegisterKeyspace(context.Background(), keyspaceMeta))
+	require.False(t, keyspaceStore.acquire())
+	select {
+	case <-cleanupDone:
+		require.Fail(t, "teardown closed storage while a user was active")
+	default:
+	}
+
+	keyspaceStore.release()
+	require.Eventually(t, func() bool {
+		select {
+		case <-cleanupDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	require.ErrorIs(t, storeCtx.Err(), context.Canceled)
+	require.False(t, subClient.contains(subID))
+	var panicValue any
+	func() {
+		defer func() { panicValue = recover() }()
+		_, _, _ = storage.db.Get([]byte("closed"))
+	}()
+	panicErr, ok := panicValue.(error)
+	require.True(t, ok)
+	require.ErrorIs(t, panicErr, pebble.ErrClosed)
+}
 
 type flakyEncryptionManagerForTest struct {
 	failTimes  int

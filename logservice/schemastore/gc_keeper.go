@@ -98,7 +98,11 @@ func (k *schemaStoreGCKeeper) close(ctx context.Context) error {
 	)
 }
 
-func (k *schemaStoreGCKeeper) run(ctx context.Context, resolvedTsGetter func() uint64) {
+func (k *schemaStoreGCKeeper) run(
+	ctx context.Context,
+	resolvedTsGetter func() uint64,
+	onTombstone func(),
+) {
 	ticker := time.NewTicker(schemaStoreGCRefreshInterval)
 	go func() {
 		defer ticker.Stop()
@@ -108,6 +112,7 @@ func (k *schemaStoreGCKeeper) run(ctx context.Context, resolvedTsGetter func() u
 				return
 			case <-ticker.C:
 				if !k.refreshSafepoint(ctx, resolvedTsGetter()) {
+					onTombstone()
 					return
 				}
 			}
@@ -129,10 +134,6 @@ func (k *schemaStoreGCKeeper) refreshSafepoint(ctx context.Context, resolvedTs u
 		// extra PD request on the healthy path.
 		keyspaceMeta, loadErr := k.pdCli.LoadKeyspaceByID(ctx, k.keyspaceMeta.ID)
 		if loadErr == nil && keyspaceMeta.GetState() == keyspacepb.KeyspaceState_TOMBSTONE {
-			log.Info("stop schema store gc safepoint refresh for tombstone keyspace",
-				zap.Any("keyspace", k.keyspaceMeta),
-				zap.String("serviceID", k.serviceID()),
-				zap.Error(err))
 			return false
 		}
 		keyspaceStateErr = loadErr
