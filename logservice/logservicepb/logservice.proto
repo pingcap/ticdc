@@ -55,6 +55,9 @@ message EventBrokerDispatcherCountResponse {
     uint32 DispatcherCount = 3;
     uint64 ReportAgeMs = 4;
     bool Observed = 5;
+    // AssumedEmpty is true when no fresh report arrived within the bounded
+    // wait period and the dispatcher count is treated as zero.
+    bool AssumedEmpty = 6;
 }
 
 message ReusableEventServiceRequest {

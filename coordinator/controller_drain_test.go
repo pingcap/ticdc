@@ -209,7 +209,7 @@ func TestDrainNodeEventBrokerDispatcherCountBlocksCompletion(t *testing.T) {
 
 	drainController.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{
 		TargetNodeId: target.String(),
-		Observed:     true,
+		AssumedEmpty: true,
 	})
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)

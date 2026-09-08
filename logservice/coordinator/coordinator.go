@@ -38,10 +38,11 @@ import (
 )
 
 const (
-	eventStoreTopic                     = messaging.EventStoreTopic
-	logCoordinatorTopic                 = messaging.LogCoordinatorTopic
-	logCoordinatorClientTopic           = messaging.LogCoordinatorClientTopic
-	eventBrokerDispatcherCountReportTTL = 3 * time.Second
+	eventStoreTopic                           = messaging.EventStoreTopic
+	logCoordinatorTopic                       = messaging.LogCoordinatorTopic
+	logCoordinatorClientTopic                 = messaging.LogCoordinatorClientTopic
+	eventBrokerDispatcherCountReportTTL       = 3 * time.Second
+	eventBrokerDispatcherCountNoReportTimeout = 5 * time.Second
 )
 
 type LogCoordinator interface {
@@ -56,6 +57,9 @@ type requestAndTarget struct {
 type eventBrokerDispatcherCountState struct {
 	dispatcherCount uint32
 	receivedAt      time.Time
+	// unavailableSince starts when the last report becomes unavailable. After
+	// the bounded wait, the coordinator may assume an empty dispatcher set.
+	unavailableSince time.Time
 }
 
 type changefeedState struct {
@@ -263,17 +267,29 @@ func (c *logCoordinator) sendEventBrokerDispatcherCount(
 	targetNodeID := node.ID(req.GetTargetNodeId())
 	c.eventBrokerDispatcherCounts.Lock()
 	state, ok := c.eventBrokerDispatcherCounts.m[targetNodeID]
-	if ok {
-		age := time.Since(state.receivedAt)
+	now := time.Now()
+	if !ok {
+		state.unavailableSince = now
+	}
+	if !state.receivedAt.IsZero() {
+		age := now.Sub(state.receivedAt)
 		if age < 0 {
 			age = 0
 		}
 		if age <= eventBrokerDispatcherCountReportTTL {
+			state.unavailableSince = time.Time{}
 			response.DispatcherCount = state.dispatcherCount
 			response.ReportAgeMs = uint64(age / time.Millisecond)
 			response.Observed = true
+		} else if state.unavailableSince.IsZero() {
+			state.unavailableSince = now
 		}
 	}
+	if !response.Observed && !state.unavailableSince.IsZero() &&
+		now.Sub(state.unavailableSince) >= eventBrokerDispatcherCountNoReportTimeout {
+		response.AssumedEmpty = true
+	}
+	c.eventBrokerDispatcherCounts.m[targetNodeID] = state
 	c.eventBrokerDispatcherCounts.Unlock()
 
 	_ = c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(

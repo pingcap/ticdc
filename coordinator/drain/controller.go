@@ -198,7 +198,8 @@ func (c *Controller) ObserveHeartbeat(nodeID node.ID, hb *heartbeatpb.NodeHeartb
 
 // ObserveEventBrokerDispatcherCountResponse records the latest snapshot
 // returned by the log coordinator. An absent or stale snapshot is treated as
-// unknown so it cannot authorize a restart.
+// unknown, while a bounded timeout may explicitly allow an assumed-empty
+// snapshot to authorize a restart.
 func (c *Controller) ObserveEventBrokerDispatcherCountResponse(
 	resp *logservicepb.EventBrokerDispatcherCountResponse,
 ) {
@@ -211,6 +212,15 @@ func (c *Controller) ObserveEventBrokerDispatcherCountResponse(
 
 	st := c.ensureNodeStateLocked(node.ID(resp.GetTargetNodeId()))
 	st.eventBrokerDispatcherCountObserved = false
+	if resp.GetAssumedEmpty() {
+		if resp.GetDispatcherCount() != 0 {
+			return
+		}
+		st.eventBrokerDispatcherCount = 0
+		st.eventBrokerDispatcherCountObserved = true
+		st.eventBrokerDispatcherCountObservedAt = time.Now()
+		return
+	}
 	if !resp.GetObserved() || resp.GetReportAgeMs() > uint64(eventBrokerDispatcherCountReportTTL/time.Millisecond) {
 		return
 	}

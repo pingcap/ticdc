@@ -57,6 +57,25 @@ func TestEventBrokerDispatcherCountReportAndQuery(t *testing.T) {
 	require.Equal(t, uint32(7), response.GetDispatcherCount())
 }
 
+func TestEventBrokerDispatcherCountAssumesEmptyAfterReportTimeout(t *testing.T) {
+	c := newLogCoordinatorForTest()
+	mc := messaging.NewMockMessageCenter()
+	c.messageCenter = mc
+	nodeID := node.ID("node-1")
+	c.eventBrokerDispatcherCounts.m[nodeID] = eventBrokerDispatcherCountState{
+		unavailableSince: time.Now().Add(-eventBrokerDispatcherCountNoReportTimeout - time.Second),
+	}
+
+	c.sendEventBrokerDispatcherCount(node.ID("coordinator"), &logservicepb.EventBrokerDispatcherCountRequest{
+		TargetNodeId: nodeID.String(),
+	})
+	message := <-mc.GetMessageChannel()
+	response := message.Message[0].(*logservicepb.EventBrokerDispatcherCountResponse)
+	require.False(t, response.GetObserved())
+	require.True(t, response.GetAssumedEmpty())
+	require.Zero(t, response.GetDispatcherCount())
+}
+
 func TestGetCandidateNodes(t *testing.T) {
 	coordinator := newLogCoordinatorForTest()
 
