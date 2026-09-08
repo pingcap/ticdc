@@ -15,6 +15,7 @@ package spool
 
 import (
 	"context"
+	stderrors "errors"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -46,6 +47,12 @@ func spoolDirectorySize(t *testing.T, workDir string) int64 {
 		}
 	}
 	return size
+}
+
+func spoolDiskBytes(manager *Spool) int64 {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return manager.quota.budget.DiskBytes()
 }
 
 func TestDirectoryNamespaceIsolation(t *testing.T) {
@@ -792,6 +799,139 @@ func TestWaitForDiskQuotaReturnsAfterRelease(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("wait for disk quota did not return after release")
 	}
+}
+
+func TestWaitForDiskQuotaReturnsAfterTransientTruncateFailure(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool-truncate-retry")
+	manager, err := New(
+		changefeedID,
+		WithDiskQuotaBytes(40),
+		WithRootDir(t.TempDir()),
+		WithSegmentBytes(1<<20),
+		WithMemoryRatio(0.01),
+		WithHighWatermarkRatio(0.5),
+		WithLowWatermarkRatio(0.25),
+	)
+	require.NoError(t, err)
+	defer manager.Close()
+
+	var allowTruncate atomic.Bool
+	manager.truncateFile = func(file *os.File, size int64) error {
+		if !allowTruncate.Load() {
+			return stderrors.New("injected truncate failure")
+		}
+		return file.Truncate(size)
+	}
+
+	var postEnqueueCount atomic.Int64
+	entry, err := manager.Enqueue(
+		[]*common.Message{newTestMessage("first-entry", 1)},
+		func() { postEnqueueCount.Add(1) },
+	)
+	require.NoError(t, err)
+	require.True(t, entry.IsSpilled())
+	require.Zero(t, postEnqueueCount.Load())
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- manager.WaitForDiskQuota(
+			context.Background(), []*common.Message{newTestMessage("second-entry", 1)},
+		)
+	}()
+	require.Eventually(t, func() bool {
+		manager.quota.waitersMu.Lock()
+		defer manager.quota.waitersMu.Unlock()
+		return len(manager.quota.waiters) == 1
+	}, time.Second, 10*time.Millisecond)
+
+	manager.Release(entry)
+	require.NotZero(t, spoolDiskBytes(manager))
+	require.NotZero(t, spoolDirectorySize(t, manager.workDir))
+	require.Zero(t, postEnqueueCount.Load())
+	select {
+	case err := <-waitDone:
+		t.Fatalf("wait returned before the segment was reclaimed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	allowTruncate.Store(true)
+	select {
+	case err := <-waitDone:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("wait for disk quota did not return after truncate retry")
+	}
+	require.Zero(t, spoolDiskBytes(manager))
+	require.Zero(t, spoolDirectorySize(t, manager.workDir))
+	require.Eventually(t, func() bool {
+		return postEnqueueCount.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestWaitForDiskQuotaReturnsAfterTransientRemoveFailure(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool-remove-retry")
+	manager, err := New(
+		changefeedID,
+		WithDiskQuotaBytes(60),
+		WithRootDir(t.TempDir()),
+		WithSegmentBytes(40),
+		WithMemoryRatio(0.01),
+	)
+	require.NoError(t, err)
+	defer manager.Close()
+
+	firstEntry, err := manager.Enqueue([]*common.Message{newTestMessage("ten-bytes!", 1)}, nil)
+	require.NoError(t, err)
+	secondEntry, err := manager.Enqueue([]*common.Message{newTestMessage("ten-bytes!", 1)}, nil)
+	require.NoError(t, err)
+	defer manager.Release(secondEntry)
+	require.NotEqual(t, firstEntry.location.id, secondEntry.location.id)
+	totalDiskBytes := spoolDiskBytes(manager)
+	remainingDiskBytes := secondEntry.accountingBytes
+
+	firstSegmentPath := filepath.Join(manager.workDir, "segment-000001.log")
+	var allowRemove atomic.Bool
+	manager.removeFile = func(path string) error {
+		if path == firstSegmentPath && !allowRemove.Load() {
+			return stderrors.New("injected remove failure")
+		}
+		return os.Remove(path)
+	}
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- manager.WaitForDiskQuota(
+			context.Background(), []*common.Message{newTestMessage("ten-bytes!", 1)},
+		)
+	}()
+	require.Eventually(t, func() bool {
+		manager.quota.waitersMu.Lock()
+		defer manager.quota.waitersMu.Unlock()
+		return len(manager.quota.waiters) == 1
+	}, time.Second, 10*time.Millisecond)
+
+	manager.Release(firstEntry)
+	require.Equal(t, totalDiskBytes, spoolDiskBytes(manager))
+	require.Equal(t, totalDiskBytes, spoolDirectorySize(t, manager.workDir))
+	select {
+	case err := <-waitDone:
+		t.Fatalf("wait returned before the segment was reclaimed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	allowRemove.Store(true)
+	select {
+	case err := <-waitDone:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("wait for disk quota did not return after remove retry")
+	}
+	require.Equal(t, remainingDiskBytes, spoolDiskBytes(manager))
+	require.Equal(t, remainingDiskBytes, spoolDirectorySize(t, manager.workDir))
 }
 
 func TestWaitForDiskQuotaRemovesCanceledWaiter(t *testing.T) {

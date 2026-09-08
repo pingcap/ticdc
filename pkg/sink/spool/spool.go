@@ -57,6 +57,10 @@ const (
 	// Resume pending PostEnqueue callbacks only after usage has dropped enough
 	// to avoid bouncing immediately back into the paused state.
 	defaultLowWatermarkRatio = 0.6
+
+	// Retry asynchronously so a transient filesystem error cannot leave disk
+	// quota charged forever after its entry has already been released.
+	segmentReclaimRetryInterval = time.Second
 )
 
 type options struct {
@@ -248,6 +252,17 @@ type Spool struct {
 	activeSegment *segment
 	// segments keeps every live segment so Load/Release can find it by ID.
 	segments map[segmentID]*segment
+
+	// truncateFile and removeFile perform the filesystem operations used to
+	// reclaim segment bytes. They are fields so retry behavior can be tested
+	// without changing process-wide filesystem state.
+	truncateFile func(*os.File, int64) error
+	removeFile   func(string) error
+
+	// reclaimCh schedules immediate reclamation of zero-reference segments.
+	// reclaimStopCh stops the background retry loop during Close.
+	reclaimCh     chan struct{}
+	reclaimStopCh chan struct{}
 }
 
 // segment is one append-only local file that stores spilled message batches.
@@ -361,7 +376,14 @@ func New(
 		metricRotatedCount: spoolMetrics.RotatedCount,
 		metricSegmentCount: spoolMetrics.SegmentCount,
 		segments:           make(map[segmentID]*segment),
+		truncateFile: func(file *os.File, size int64) error {
+			return file.Truncate(size)
+		},
+		removeFile:    os.Remove,
+		reclaimCh:     make(chan struct{}, 1),
+		reclaimStopCh: make(chan struct{}),
 	}
+	go spool.runSegmentReclaimer()
 	return spool, nil
 }
 
@@ -686,32 +708,27 @@ func (s *Spool) Release(entry *Entry) {
 	}
 
 	releasedBytes := accountingBytes
+	reclaimed := true
 	if spilled {
 		releasedBytes = 0
 		seg := s.segments[location.id]
 		if seg != nil {
 			seg.refCnt--
 			if seg.refCnt == 0 {
-				if s.activeSegment == seg {
-					releasedBytes = s.truncateSegmentLocked(seg)
-				} else {
-					releasedBytes = seg.size
-					if !s.removeSegmentLocked(seg) {
-						releasedBytes = 0
-					}
-					s.metricSegmentCount.Set(float64(len(s.segments)))
-				}
+				releasedBytes, reclaimed = s.reclaimSegmentLocked(seg)
 			}
 		}
 	}
-	postEnqueueCallbacks := s.quota.release(releasedBytes, spilled)
-	s.mu.Unlock()
-
-	for _, postEnqueueCallback := range postEnqueueCallbacks {
-		if postEnqueueCallback != nil {
-			postEnqueueCallback()
-		}
+	var postEnqueueCallbacks []func()
+	if releasedBytes > 0 {
+		postEnqueueCallbacks = s.quota.release(releasedBytes, spilled)
 	}
+	s.mu.Unlock()
+	if !reclaimed {
+		s.scheduleSegmentReclaim()
+	}
+
+	runCallbacks(postEnqueueCallbacks)
 }
 
 // Discard runs the entry postFlush callbacks and then releases its local spool
@@ -734,6 +751,7 @@ func (s *Spool) Close() {
 	if !s.closed.CompareAndSwap(false, true) {
 		return
 	}
+	close(s.reclaimStopCh)
 
 	s.mu.Lock()
 	for _, seg := range s.segments {
@@ -816,28 +834,53 @@ func (s *Spool) rotateLocked() error {
 	s.segments[segmentID] = seg
 	s.activeSegment = seg
 	if oldSegment != nil && oldSegment.refCnt == 0 {
-		s.removeSegmentLocked(oldSegment)
+		// A non-empty zero-reference segment can only remain after an earlier
+		// truncate failure. Let the reclaimer remove it and release its disk
+		// quota instead of dropping the accounting result here.
+		if oldSegment.size == 0 {
+			if !s.removeSegmentLocked(oldSegment) {
+				s.scheduleSegmentReclaim()
+			}
+		} else {
+			s.scheduleSegmentReclaim()
+		}
 	}
 	s.metricRotatedCount.Inc()
 	s.metricSegmentCount.Set(float64(len(s.segments)))
 	return nil
 }
 
-func (s *Spool) truncateSegmentLocked(seg *segment) int64 {
+func (s *Spool) reclaimSegmentLocked(seg *segment) (int64, bool) {
+	if seg == nil || seg.refCnt != 0 {
+		return 0, true
+	}
+	if s.activeSegment == seg {
+		return s.truncateSegmentLocked(seg)
+	}
+
+	releasedBytes := seg.size
+	if !s.removeSegmentLocked(seg) {
+		return 0, false
+	}
+	s.metricSegmentCount.Set(float64(len(s.segments)))
+	return releasedBytes, true
+}
+
+func (s *Spool) truncateSegmentLocked(seg *segment) (int64, bool) {
 	if seg == nil || seg.size == 0 {
-		return 0
+		return 0, true
 	}
 	releasedBytes := seg.size
-	if err := seg.file.Truncate(0); err != nil {
+	if err := s.truncateFile(seg.file, 0); err != nil {
 		log.Warn(
 			"truncate active spool segment file failed",
 			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
 			zap.String("path", seg.path), zap.Error(err),
 		)
-		return 0
+		return 0, false
 	}
 	seg.size = 0
-	return releasedBytes
+	return releasedBytes, true
 }
 
 func (s *Spool) removeSegmentLocked(seg *segment) bool {
@@ -850,8 +893,9 @@ func (s *Spool) removeSegmentLocked(seg *segment) bool {
 				zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
 				zap.Error(err))
 		}
+		seg.file = nil
 	}
-	if err := os.Remove(seg.path); err != nil {
+	if err := s.removeFile(seg.path); err != nil && !os.IsNotExist(err) {
 		log.Warn(
 			"remove spool segment file failed",
 			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
@@ -860,6 +904,70 @@ func (s *Spool) removeSegmentLocked(seg *segment) bool {
 	}
 	delete(s.segments, seg.id)
 	return true
+}
+
+func (s *Spool) scheduleSegmentReclaim() {
+	select {
+	case s.reclaimCh <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Spool) runSegmentReclaimer() {
+	var retryCh <-chan time.Time
+	for {
+		select {
+		case <-s.reclaimStopCh:
+			return
+		case <-s.reclaimCh:
+		case <-retryCh:
+		}
+
+		if !s.reclaimReleasedSegments() {
+			retryCh = time.After(segmentReclaimRetryInterval)
+		} else {
+			retryCh = nil
+		}
+	}
+}
+
+// reclaimReleasedSegments retries physical reclamation independently of
+// Release. This is required because Release consumes the entry before a
+// truncate or remove can fail, so no caller remains to retry the operation.
+// It returns true when every zero-reference segment was reclaimed.
+func (s *Spool) reclaimReleasedSegments() bool {
+	s.mu.Lock()
+	if s.closed.Load() {
+		s.mu.Unlock()
+		return true
+	}
+
+	var releasedBytes int64
+	reclaimed := true
+	for _, seg := range s.segments {
+		if seg.refCnt != 0 {
+			continue
+		}
+		segmentBytes, segmentReclaimed := s.reclaimSegmentLocked(seg)
+		releasedBytes += segmentBytes
+		reclaimed = reclaimed && segmentReclaimed
+	}
+	var postEnqueueCallbacks []func()
+	if releasedBytes > 0 {
+		postEnqueueCallbacks = s.quota.release(releasedBytes, true)
+	}
+	s.mu.Unlock()
+
+	runCallbacks(postEnqueueCallbacks)
+	return reclaimed
+}
+
+func runCallbacks(callbacks []func()) {
+	for _, callback := range callbacks {
+		if callback != nil {
+			callback()
+		}
+	}
 }
 
 func takePostFlushCallbacks(entry *Entry) []func() {
