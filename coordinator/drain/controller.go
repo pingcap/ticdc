@@ -29,6 +29,11 @@ const (
 	resendInterval                      = time.Second
 	defaultLivenessTTL                  = 30 * time.Second
 	eventBrokerDispatcherCountReportTTL = 3 * time.Second
+	// Keep the timeout on the coordinator side as well as the log-coordinator
+	// side. During a rolling upgrade the elected log coordinator can still be
+	// an older binary that does not understand the dispatcher-count request, so
+	// no response will arrive to carry the log-coordinator-side fallback.
+	eventBrokerDispatcherCountNoReportTimeout = 5 * time.Second
 )
 
 // State is the coordinator-derived node liveness state.
@@ -62,6 +67,11 @@ type nodeState struct {
 	// eventBrokerDispatcherCountObserved indicates the count is trustworthy.
 	eventBrokerDispatcherCountObserved   bool
 	eventBrokerDispatcherCountObservedAt time.Time
+	// eventBrokerDispatcherCountUnavailableSince tracks how long the
+	// coordinator has been unable to obtain a fresh count. This also covers the
+	// mixed-version case where the old log coordinator sends no response at all.
+	eventBrokerDispatcherCountUnavailableSince time.Time
+	eventBrokerDispatcherCountFallbackLogged   bool
 
 	// lastDrainCmdSentAt is the last send time of a DRAINING command for resend throttling.
 	lastDrainCmdSentAt time.Time
@@ -219,6 +229,8 @@ func (c *Controller) ObserveEventBrokerDispatcherCountResponse(
 		st.eventBrokerDispatcherCount = 0
 		st.eventBrokerDispatcherCountObserved = true
 		st.eventBrokerDispatcherCountObservedAt = time.Now()
+		st.eventBrokerDispatcherCountUnavailableSince = time.Time{}
+		st.eventBrokerDispatcherCountFallbackLogged = false
 		return
 	}
 	if !resp.GetObserved() || resp.GetReportAgeMs() > uint64(eventBrokerDispatcherCountReportTTL/time.Millisecond) {
@@ -227,6 +239,8 @@ func (c *Controller) ObserveEventBrokerDispatcherCountResponse(
 	st.eventBrokerDispatcherCount = resp.GetDispatcherCount()
 	st.eventBrokerDispatcherCountObserved = true
 	st.eventBrokerDispatcherCountObservedAt = time.Now()
+	st.eventBrokerDispatcherCountUnavailableSince = time.Time{}
+	st.eventBrokerDispatcherCountFallbackLogged = false
 }
 
 // ObserveSetNodeLivenessResponse updates drain progression from explicit liveness responses.
@@ -475,11 +489,33 @@ func (c *Controller) GetEventBrokerDispatcherCount(nodeID node.ID) (uint32, bool
 	defer c.mu.Unlock()
 
 	st, ok := c.nodes[nodeID]
-	if !ok || !st.observedSet || !st.eventBrokerDispatcherCountObserved ||
-		time.Since(st.eventBrokerDispatcherCountObservedAt) > eventBrokerDispatcherCountReportTTL {
+	if !ok || !st.observedSet {
 		return 0, false
 	}
-	return st.eventBrokerDispatcherCount, true
+
+	now := time.Now()
+	if st.eventBrokerDispatcherCountObserved &&
+		now.Sub(st.eventBrokerDispatcherCountObservedAt) <= eventBrokerDispatcherCountReportTTL {
+		st.eventBrokerDispatcherCountUnavailableSince = time.Time{}
+		st.eventBrokerDispatcherCountFallbackLogged = false
+		return st.eventBrokerDispatcherCount, true
+	}
+
+	if st.eventBrokerDispatcherCountUnavailableSince.IsZero() {
+		st.eventBrokerDispatcherCountUnavailableSince = now
+		return 0, false
+	}
+	if now.Sub(st.eventBrokerDispatcherCountUnavailableSince) < eventBrokerDispatcherCountNoReportTimeout {
+		return 0, false
+	}
+
+	if !st.eventBrokerDispatcherCountFallbackLogged {
+		log.Warn("event broker dispatcher count unavailable, assuming empty after bounded wait",
+			zap.Stringer("nodeID", nodeID),
+			zap.Duration("timeout", eventBrokerDispatcherCountNoReportTimeout))
+		st.eventBrokerDispatcherCountFallbackLogged = true
+	}
+	return 0, true
 }
 
 // GetState returns coordinator-derived liveness state.
