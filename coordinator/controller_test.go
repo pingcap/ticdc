@@ -204,7 +204,6 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 		})
 		controller.drainController.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{
 			TargetNodeId: targetNodeID.String(),
-			NodeEpoch:    1,
 			Observed:     true,
 		})
 

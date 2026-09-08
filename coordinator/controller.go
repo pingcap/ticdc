@@ -413,13 +413,8 @@ func (c *Controller) requestActiveEventBrokerDispatcherCount() {
 	if !ok || c.nodeManager == nil || c.messageCenter == nil {
 		return
 	}
-	nodeEpoch, ok := c.drainController.GetNodeEpoch(target)
-	if !ok {
-		return
-	}
 	request := &logservicepb.EventBrokerDispatcherCountRequest{
 		TargetNodeId: target.String(),
-		NodeEpoch:    nodeEpoch,
 	}
 	for _, id := range c.nodeManager.GetAliveNodeIDs() {
 		_ = c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(

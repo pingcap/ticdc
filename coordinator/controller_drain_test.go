@@ -198,7 +198,6 @@ func TestDrainNodeEventBrokerDispatcherCountBlocksCompletion(t *testing.T) {
 	})
 	drainController.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{
 		TargetNodeId:    target.String(),
-		NodeEpoch:       1,
 		DispatcherCount: 1,
 		Observed:        true,
 		ReportAgeMs:     0,
@@ -209,18 +208,7 @@ func TestDrainNodeEventBrokerDispatcherCountBlocksCompletion(t *testing.T) {
 	require.Equal(t, 1, remaining)
 
 	drainController.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{
-		TargetNodeId:    target.String(),
-		NodeEpoch:       0,
-		DispatcherCount: 0,
-		Observed:        true,
-	})
-	remaining, err = c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 1, remaining)
-
-	drainController.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{
 		TargetNodeId: target.String(),
-		NodeEpoch:    1,
 		Observed:     true,
 	})
 	remaining, err = c.DrainNode(context.Background(), target)
@@ -1227,7 +1215,6 @@ func setTargetStoppingObserved(
 	})
 	drainController.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{
 		TargetNodeId:    target.String(),
-		NodeEpoch:       1,
 		Observed:        true,
 		DispatcherCount: 0,
 	})

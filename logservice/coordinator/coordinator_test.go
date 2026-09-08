@@ -44,37 +44,17 @@ func TestEventBrokerDispatcherCountReportAndQuery(t *testing.T) {
 	c.messageCenter = mc
 	nodeID := node.ID("node-1")
 
-	c.sendEventBrokerDispatcherCount(node.ID("coordinator"), &logservicepb.EventBrokerDispatcherCountRequest{
-		TargetNodeId: nodeID.String(),
-		NodeEpoch:    2,
-	})
-	<-mc.GetMessageChannel()
 	c.updateEventBrokerDispatcherCount(nodeID, &logservicepb.EventBrokerDispatcherCount{
-		DispatcherCount: 3,
-		BrokerID:        1,
-	})
-	c.updateEventBrokerDispatcherCount(nodeID, &logservicepb.EventBrokerDispatcherCount{
-		DispatcherCount: 4,
-		BrokerID:        2,
+		DispatcherCount: 7,
 	})
 
 	c.sendEventBrokerDispatcherCount(node.ID("coordinator"), &logservicepb.EventBrokerDispatcherCountRequest{
 		TargetNodeId: nodeID.String(),
-		NodeEpoch:    2,
 	})
 	message := <-mc.GetMessageChannel()
 	response := message.Message[0].(*logservicepb.EventBrokerDispatcherCountResponse)
 	require.True(t, response.GetObserved())
-	require.Equal(t, uint64(2), response.GetNodeEpoch())
 	require.Equal(t, uint32(7), response.GetDispatcherCount())
-
-	c.sendEventBrokerDispatcherCount(node.ID("coordinator"), &logservicepb.EventBrokerDispatcherCountRequest{
-		TargetNodeId: nodeID.String(),
-		NodeEpoch:    3,
-	})
-	message = <-mc.GetMessageChannel()
-	response = message.Message[0].(*logservicepb.EventBrokerDispatcherCountResponse)
-	require.False(t, response.GetObserved())
 }
 
 func TestGetCandidateNodes(t *testing.T) {

@@ -183,7 +183,6 @@ func (mc *metricsCollector) Run(ctx context.Context) error {
 			mc.logSlowDispatchers(snapshot)
 		case <-reportTicker.C:
 			mc.reportChangefeedStatesToLogCoordinator()
-			mc.broker.reportDispatcherCountToLogCoordinator()
 		}
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/eventstore"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -34,6 +35,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
+
+const defaultReportDispatcherCountInterval = time.Second
 
 type DispatcherInfo interface {
 	// GetID returns the ID of the dispatcher.
@@ -134,6 +137,8 @@ func (s *eventService) Run(ctx context.Context) error {
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
+	reportDispatcherCountTicker := time.NewTicker(defaultReportDispatcherCountInterval)
+	defer reportDispatcherCountTicker.Stop()
 	dispatcherChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("dispatcherInfo")
 	heartbeatChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("heartbeat")
 	for {
@@ -143,6 +148,8 @@ func (s *eventService) Run(ctx context.Context) error {
 		case <-ticker.C:
 			dispatcherChanSize.Set(float64(len(s.dispatcherInfoChan)))
 			heartbeatChanSize.Set(float64(len(s.dispatcherHeartbeat)))
+		case <-reportDispatcherCountTicker.C:
+			s.reportDispatcherCountToLogCoordinator()
 		case info := <-s.dispatcherInfoChan:
 			switch info.GetActionType() {
 			case eventpb.ActionType_ACTION_TYPE_REGISTER:
@@ -157,6 +164,34 @@ func (s *eventService) Run(ctx context.Context) error {
 		case heartbeat := <-s.dispatcherHeartbeat:
 			s.handleDispatcherHeartbeat(heartbeat)
 		}
+	}
+}
+
+// reportDispatcherCountToLogCoordinator reports the total number of
+// dispatchers registered on this capture. EventService owns the broker
+// registry, so it can report zero even when no event broker has been created.
+func (s *eventService) reportDispatcherCountToLogCoordinator() {
+	logCoordinatorID := s.eventStore.GetLogCoordinatorNodeID()
+	if logCoordinatorID == "" {
+		return
+	}
+
+	s.brokersMu.RLock()
+	count := 0
+	for _, broker := range s.brokers {
+		count += broker.getDispatcherCount()
+	}
+	s.brokersMu.RUnlock()
+
+	message := messaging.NewSingleTargetMessage(
+		logCoordinatorID,
+		messaging.LogCoordinatorTopic,
+		&logservicepb.EventBrokerDispatcherCount{
+			DispatcherCount: uint32(max(count, 0)),
+		},
+	)
+	if err := s.mc.SendEvent(message); err != nil {
+		log.Warn("send dispatcher count to log coordinator failed", zap.Error(err))
 	}
 }
 

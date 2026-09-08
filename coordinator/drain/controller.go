@@ -58,8 +58,7 @@ type nodeState struct {
 	stoppingObserved bool
 	// eventBrokerDispatcherCount is the latest log-coordinator-reported count
 	// of dispatchers registered in the event broker.
-	eventBrokerDispatcherCount     uint32
-	eventBrokerDispatcherNodeEpoch uint64
+	eventBrokerDispatcherCount uint32
 	// eventBrokerDispatcherCountObserved indicates the count is trustworthy.
 	eventBrokerDispatcherCountObserved   bool
 	eventBrokerDispatcherCountObservedAt time.Time
@@ -198,8 +197,8 @@ func (c *Controller) ObserveHeartbeat(nodeID node.ID, hb *heartbeatpb.NodeHeartb
 }
 
 // ObserveEventBrokerDispatcherCountResponse records the latest snapshot
-// returned by the log coordinator. An absent, stale, or wrong-epoch snapshot
-// is treated as unknown so it cannot authorize a restart.
+// returned by the log coordinator. An absent or stale snapshot is treated as
+// unknown so it cannot authorize a restart.
 func (c *Controller) ObserveEventBrokerDispatcherCountResponse(
 	resp *logservicepb.EventBrokerDispatcherCountResponse,
 ) {
@@ -215,11 +214,7 @@ func (c *Controller) ObserveEventBrokerDispatcherCountResponse(
 	if !resp.GetObserved() || resp.GetReportAgeMs() > uint64(eventBrokerDispatcherCountReportTTL/time.Millisecond) {
 		return
 	}
-	if !st.observedSet || st.nodeEpoch != resp.GetNodeEpoch() {
-		return
-	}
 	st.eventBrokerDispatcherCount = resp.GetDispatcherCount()
-	st.eventBrokerDispatcherNodeEpoch = resp.GetNodeEpoch()
 	st.eventBrokerDispatcherCountObserved = true
 	st.eventBrokerDispatcherCountObservedAt = time.Now()
 }
@@ -471,7 +466,6 @@ func (c *Controller) GetEventBrokerDispatcherCount(nodeID node.ID) (uint32, bool
 
 	st, ok := c.nodes[nodeID]
 	if !ok || !st.observedSet || !st.eventBrokerDispatcherCountObserved ||
-		st.nodeEpoch != st.eventBrokerDispatcherNodeEpoch ||
 		time.Since(st.eventBrokerDispatcherCountObservedAt) > eventBrokerDispatcherCountReportTTL {
 		return 0, false
 	}

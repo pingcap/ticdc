@@ -53,16 +53,9 @@ type requestAndTarget struct {
 	target node.ID
 }
 
-type eventBrokerDispatcherReport struct {
+type eventBrokerDispatcherCountState struct {
 	dispatcherCount uint32
 	receivedAt      time.Time
-}
-
-type eventBrokerDispatcherCountState struct {
-	// nodeEpoch is supplied by the coordinator query. A new epoch clears the
-	// reports collected from the previous process instance.
-	nodeEpoch uint64
-	brokers   map[uint64]eventBrokerDispatcherReport
 }
 
 type changefeedState struct {
@@ -255,17 +248,10 @@ func (c *logCoordinator) updateEventBrokerDispatcherCount(
 	c.eventBrokerDispatcherCounts.Lock()
 	defer c.eventBrokerDispatcherCounts.Unlock()
 
-	current, ok := c.eventBrokerDispatcherCounts.m[nodeID]
-	if !ok {
-		current = eventBrokerDispatcherCountState{
-			brokers: make(map[uint64]eventBrokerDispatcherReport),
-		}
-	}
-	current.brokers[report.GetBrokerID()] = eventBrokerDispatcherReport{
+	c.eventBrokerDispatcherCounts.m[nodeID] = eventBrokerDispatcherCountState{
 		dispatcherCount: report.GetDispatcherCount(),
 		receivedAt:      time.Now(),
 	}
-	c.eventBrokerDispatcherCounts.m[nodeID] = current
 }
 
 func (c *logCoordinator) sendEventBrokerDispatcherCount(
@@ -277,36 +263,14 @@ func (c *logCoordinator) sendEventBrokerDispatcherCount(
 	targetNodeID := node.ID(req.GetTargetNodeId())
 	c.eventBrokerDispatcherCounts.Lock()
 	state, ok := c.eventBrokerDispatcherCounts.m[targetNodeID]
-	if !ok || state.nodeEpoch != req.GetNodeEpoch() {
-		state = eventBrokerDispatcherCountState{
-			nodeEpoch: req.GetNodeEpoch(),
-			brokers:   make(map[uint64]eventBrokerDispatcherReport),
+	if ok {
+		age := time.Since(state.receivedAt)
+		if age < 0 {
+			age = 0
 		}
-		c.eventBrokerDispatcherCounts.m[targetNodeID] = state
-		ok = false
-	}
-	if ok && len(state.brokers) != 0 {
-		var dispatcherCount uint32
-		var maxAge time.Duration
-		observed := true
-		for _, report := range state.brokers {
-			age := time.Since(report.receivedAt)
-			if age < 0 {
-				age = 0
-			}
-			if age > eventBrokerDispatcherCountReportTTL {
-				observed = false
-				break
-			}
-			dispatcherCount += report.dispatcherCount
-			if age > maxAge {
-				maxAge = age
-			}
-		}
-		if observed {
-			response.NodeEpoch = state.nodeEpoch
-			response.DispatcherCount = dispatcherCount
-			response.ReportAgeMs = uint64(maxAge / time.Millisecond)
+		if age <= eventBrokerDispatcherCountReportTTL {
+			response.DispatcherCount = state.dispatcherCount
+			response.ReportAgeMs = uint64(age / time.Millisecond)
 			response.Observed = true
 		}
 	}
