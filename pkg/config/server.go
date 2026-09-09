@@ -203,11 +203,11 @@ func (c *ServerConfig) String() string {
 	return s
 }
 
-// Redacted returns a configuration view with metering credentials removed.
+// Redacted omits the metering destination from the public configuration view.
 // It does not change the configuration used by clients or Clone.
 func (c *ServerConfig) Redacted() *ServerConfig {
 	clone := *c
-	clone.Metering = metering.RedactConfig(c.Metering)
+	clone.Metering = nil
 	return &clone
 }
 

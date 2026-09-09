@@ -56,6 +56,7 @@ func TestRegisterRoutesConfig(t *testing.T) {
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
 	require.Equal(t, testConfig.DataDir, payload["data-dir"])
+	require.NotContains(t, payload, "metering")
 	for _, secret := range []string{"metering-access", "metering-secret", "metering-token"} {
 		require.NotContains(t, resp.Body.String(), secret)
 	}

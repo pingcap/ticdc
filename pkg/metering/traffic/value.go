@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package metering measures canonical SQL values selected by a sink's encoder.
+// Package traffic measures canonical SQL values selected by a sink's encoder.
 // It does not select columns, count delivery attempts, or confirm delivery.
-package metering
+package traffic
 
 import (
 	"fmt"

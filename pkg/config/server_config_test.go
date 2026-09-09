@@ -62,7 +62,7 @@ session-token = "test-token"
 	for _, secret := range []string{"test-access", "test-secret", "test-token"} {
 		require.NotContains(t, cfg.String(), secret)
 	}
-	cfg.Metering.Bucket = ""
+	cfg.Metering.SharedPoolID = "../pool"
 	require.Error(t, cfg.ValidateAndAdjust())
 }
 

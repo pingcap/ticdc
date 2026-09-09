@@ -39,7 +39,7 @@ func TestMeteringInitializationFailure(t *testing.T) {
 		cfg  *meteringconfig.MeteringConfig
 		code string
 	}{
-		{"invalid config", &meteringconfig.MeteringConfig{Type: "s3"}, string(errors.ErrInvalidServerOption.RFCCode())},
+		{"unsupported provider", &meteringconfig.MeteringConfig{Type: "unknown"}, string(errors.ErrExternalStorageAPI.RFCCode())},
 		{"provider initialization", meteringconfig.NewMeteringConfig().WithLocalFS(filepath.Join(base, "child")), string(errors.ErrExternalStorageAPI.RFCCode())},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
