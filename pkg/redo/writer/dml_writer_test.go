@@ -61,7 +61,7 @@ func TestNewDMLWriter(t *testing.T) {
 	lw, err := NewDMLWriter(ctx, cfg)
 	require.NoError(t, err)
 	spoolDir := filepath.Join(
-		dataDir, config.DefaultRedoDir, cfg.CaptureID(),
+		dataDir, config.DefaultRedoDir, redoSpoolDirectory, cfg.CaptureID(),
 		changefeedID.Keyspace(), changefeedID.Name(),
 	)
 	require.DirExists(t, spoolDir)
@@ -91,7 +91,7 @@ func TestDMLWriterCloseWaitsForRunBeforeClosingSpool(t *testing.T) {
 	lw, err := NewDMLWriter(ctx, cfg)
 	require.NoError(t, err)
 	spoolDir := filepath.Join(
-		dataDir, config.DefaultRedoDir, cfg.CaptureID(),
+		dataDir, config.DefaultRedoDir, redoSpoolDirectory, cfg.CaptureID(),
 		changefeedID.Keyspace(), changefeedID.Name(),
 	)
 
