@@ -16,7 +16,6 @@ package metering
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +28,7 @@ import (
 	"github.com/pingcap/metering_sdk/writer"
 	meteringwriter "github.com/pingcap/metering_sdk/writer/metering"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/retry"
 	"go.uber.org/zap"
 )
 
@@ -50,11 +50,9 @@ type TrafficRecord struct {
 // collection loop or pending queue. The caller retains responsibility for durable
 // state and scheduling, including recovery after an unsuccessful Report.
 type TrafficReporter struct {
-	mu       sync.Mutex
-	inner    *meteringwriter.MeteringWriter
-	id       string
-	sequence uint64
-	closed   bool
+	mu     sync.Mutex
+	inner  *meteringwriter.MeteringWriter
+	closed bool
 }
 
 // NewTrafficReporter initializes the SDK without starting a goroutine. The owner
@@ -71,10 +69,8 @@ func NewTrafficReporter(c *config.MeteringConfig) (*TrafficReporter, error) {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
 	return &TrafficReporter{
-		// SDK defaults disable pagination and refuse overwrites. The wrapper logs
-		// one result per batch; SDK per-page logs are unnecessary here.
+		// SDK defaults disable pagination and refuse overwrites.
 		inner: meteringwriter.NewMeteringWriterFromConfig(provider, config.DefaultConfig(), c),
-		id:    "ticdc" + strings.ReplaceAll(uuid.NewString(), "-", ""),
 	}, nil
 }
 
@@ -106,44 +102,22 @@ func (w *TrafficReporter) Report(ctx context.Context, reportedAt time.Time, reco
 			"traffic_bytes":  common.MeteringValue{Value: record.TrafficBytes, Unit: "Bytes"},
 		}
 	}
-	w.sequence++
 	batch := &common.MeteringData{
-		SelfID:    w.id + "b" + strconv.FormatUint(w.sequence, 16),
+		SelfID:    "ticdc" + strings.ReplaceAll(uuid.NewString(), "-", ""),
 		Timestamp: ts,
 		Category:  "ticdc",
 		Data:      data,
 	}
-	return writeWithRetry(ctx, func(attemptCtx context.Context) error {
-		return w.inner.Write(attemptCtx, batch)
-	}, time.Second)
-}
-
-func writeWithRetry(ctx context.Context, write func(context.Context) error, baseDelay time.Duration) error {
-	var err error
-	for attempt := 0; attempt < writeAttempts; attempt++ {
-		if ctx.Err() != nil {
-			return errors.WrapError(errors.ErrExternalStorageAPI, ctx.Err())
-		}
+	err := retry.Do(ctx, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, writeTimeout)
-		err = write(attemptCtx)
-		cancel()
-		if err == nil {
-			return nil
-		}
-		// Existence alone cannot prove that this payload was uploaded. Leave the
-		// result failed and let the caller decide how to recover.
-		if errors.Is(err, writer.ErrFileExists) || attempt == writeAttempts-1 {
-			break
-		}
-		delay := min(baseDelay<<attempt, 10*baseDelay)
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return errors.WrapError(errors.ErrExternalStorageAPI, ctx.Err())
-		case <-timer.C:
-		}
-	}
+		defer cancel()
+		return w.inner.Write(attemptCtx, batch)
+	}, retry.WithMaxTries(writeAttempts),
+		retry.WithBackoffBaseDelay(1000), retry.WithBackoffMaxDelay(10000),
+		retry.WithIsRetryableErr(func(err error) bool {
+			// Existence alone cannot prove that this payload was uploaded.
+			return !errors.Is(err, writer.ErrFileExists)
+		}))
 	return errors.WrapError(errors.ErrExternalStorageAPI, err)
 }
 

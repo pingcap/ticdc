@@ -73,18 +73,33 @@ func TestMeteringCoordinatorTerm(t *testing.T) {
 			cfg.Metering = tc.cfg
 			config.StoreGlobalServerConfig(cfg)
 			c := &coordinator{
-				gcTickInterval: time.Hour,
-				controller:     &Controller{},
-				gcCleaner:      gccleaner.New(nil, "test"),
-				eventCh:        chann.NewAutoDrainChann[*Event](),
+				gcTickInterval:     time.Hour,
+				controller:         &Controller{},
+				gcCleaner:          gccleaner.New(nil, "test"),
+				eventCh:            chann.NewAutoDrainChann[*Event](),
+				changefeedChangeCh: make(chan []*changefeedChange),
 			}
 			defer c.eventCh.CloseAndDrain()
-			// A configured follower has not initialized metering. Entering Run
-			// creates the writer for this term, even when cancellation is pending.
-			require.Nil(t, c.trafficReporter)
 			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- c.Run(ctx) }()
+			// An unbuffered submission completes only after the coordinator has
+			// initialized and entered its event loop. No polling or sleep is needed.
+			select {
+			case c.changefeedChangeCh <- nil:
+			case err := <-done:
+				t.Fatalf("coordinator exited before handling a submission: %v", err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("coordinator did not start")
+			}
 			cancel()
-			require.ErrorIs(t, c.Run(ctx), context.Canceled)
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(10 * time.Second):
+				t.Fatal("coordinator did not stop")
+			}
 			if tc.cfg == nil || tc.cfg.Type == "" {
 				require.Nil(t, c.trafficReporter)
 			} else {
