@@ -39,6 +39,10 @@ type DrainState struct {
 	targetNodeID node.ID
 	// targetEpoch is the monotonic epoch paired with targetNodeID.
 	targetEpoch uint64
+	// lastTargetClearedAt is shared by all balance schedulers of this
+	// changefeed. Keeping it here lets schedulers created during a drain inherit
+	// the post-drain cooldown.
+	lastTargetClearedAt time.Time
 }
 
 type drainStateSnapshot struct {
@@ -48,6 +52,8 @@ type drainStateSnapshot struct {
 	targetNodeID node.ID
 	// targetEpoch is the snapshot copy of the active drain target epoch.
 	targetEpoch uint64
+	// lastTargetClearedAt is the most recent accepted drain-target clear time.
+	lastTargetClearedAt time.Time
 }
 
 // NewDrainState creates an empty drain state with no active drain target.
@@ -84,11 +90,25 @@ func (s *DrainState) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
 		}
 		if target.IsEmpty() && !s.targetNodeID.IsEmpty() {
 			s.targetNodeID = target
+			s.lastTargetClearedAt = time.Now()
 		}
 		return
 	}
 	s.targetNodeID = target
 	s.targetEpoch = epoch
+}
+
+// SetLastDrainTargetClearedAt seeds the node-scoped clear time into a newly
+// created maintainer. Older observations cannot shorten the current cooldown.
+func (s *DrainState) SetLastDrainTargetClearedAt(clearedAt time.Time) {
+	if s == nil || clearedAt.IsZero() {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if clearedAt.After(s.lastTargetClearedAt) {
+		s.lastTargetClearedAt = clearedAt
+	}
 }
 
 // DispatcherDrainTarget returns the current drain target and epoch snapshot
@@ -110,9 +130,10 @@ func (s *DrainState) snapshot() drainStateSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return drainStateSnapshot{
-		selfNodeID:   s.selfNodeID,
-		targetNodeID: s.targetNodeID,
-		targetEpoch:  s.targetEpoch,
+		selfNodeID:          s.selfNodeID,
+		targetNodeID:        s.targetNodeID,
+		targetEpoch:         s.targetEpoch,
+		lastTargetClearedAt: s.lastTargetClearedAt,
 	}
 }
 
@@ -131,13 +152,12 @@ func activeDrainTarget(state drainStateSnapshot) (node.ID, uint64, bool) {
 func shouldPauseBalanceForDrain(
 	state drainStateSnapshot,
 	now time.Time,
-	blockedUntil *time.Time,
 ) bool {
 	if _, _, drainActive := activeDrainTarget(state); drainActive {
-		*blockedUntil = now.Add(balanceDrainCooldown)
 		return true
 	}
-	return now.Before(*blockedUntil)
+	return !state.lastTargetClearedAt.IsZero() &&
+		now.Before(state.lastTargetClearedAt.Add(balanceDrainCooldown))
 }
 
 // filterNodeIDsByDrainTarget removes the active drain target from a slice of

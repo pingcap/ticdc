@@ -15,6 +15,7 @@ package maintainer
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -111,10 +112,12 @@ func TestSetDispatcherDrainTargetApplyAndClear(t *testing.T) {
 		},
 	)
 	msg.From = m.coordinatorID
+	clearStartedAt := time.Now()
 	m.onSetDispatcherDrainTargetRequest(msg)
-	target, epoch = m.getDispatcherDrainTarget()
+	target, epoch, lastClearedAt := m.getDispatcherDrainState()
 	require.Equal(t, node.ID(""), target)
 	require.Equal(t, uint64(1), epoch)
+	require.False(t, lastClearedAt.Before(clearStartedAt))
 }
 
 func TestSetDispatcherDrainTargetRejectStaleUpdate(t *testing.T) {

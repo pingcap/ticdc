@@ -47,8 +47,9 @@ type managerNodeState struct {
 	// even when this capture currently hosts no maintainers.
 	dispatcherDrainTarget struct {
 		sync.RWMutex
-		target node.ID
-		epoch  uint64
+		target        node.ID
+		epoch         uint64
+		lastClearedAt time.Time
 	}
 
 	// lastNodeHeartbeatSentAt records the last successful periodic node heartbeat
@@ -187,6 +188,14 @@ func (m *Manager) getDispatcherDrainTarget() (node.ID, uint64) {
 	return m.node.dispatcherDrainTarget.target, m.node.dispatcherDrainTarget.epoch
 }
 
+func (m *Manager) getDispatcherDrainState() (node.ID, uint64, time.Time) {
+	m.node.dispatcherDrainTarget.RLock()
+	defer m.node.dispatcherDrainTarget.RUnlock()
+	return m.node.dispatcherDrainTarget.target,
+		m.node.dispatcherDrainTarget.epoch,
+		m.node.dispatcherDrainTarget.lastClearedAt
+}
+
 // tryUpdateDispatcherDrainTarget applies only monotonic target updates.
 // A higher epoch always wins, while the same epoch may only perform the
 // one-way transition from a non-empty target to an empty target.
@@ -206,12 +215,16 @@ func (n *managerNodeState) tryUpdateDispatcherDrainTarget(target node.ID, epoch 
 		}
 		if target.IsEmpty() && !n.dispatcherDrainTarget.target.IsEmpty() {
 			n.dispatcherDrainTarget.target = target
+			n.dispatcherDrainTarget.lastClearedAt = time.Now()
 			return true
 		}
 		return false
 	}
 	n.dispatcherDrainTarget.target = target
 	n.dispatcherDrainTarget.epoch = epoch
+	if target.IsEmpty() {
+		n.dispatcherDrainTarget.lastClearedAt = time.Now()
+	}
 	return true
 }
 

@@ -50,8 +50,6 @@ type balanceScheduler struct {
 	mode   int64
 
 	drainState *DrainState
-
-	drainBalanceBlockedUntil time.Time
 }
 
 func NewBalanceScheduler(
@@ -85,7 +83,7 @@ func (s *balanceScheduler) Execute() time.Time {
 		failpoint.Return(nextCheckTime)
 	})
 	state := s.drainState.snapshot()
-	if shouldPauseBalanceForDrain(state, now, &s.drainBalanceBlockedUntil) {
+	if shouldPauseBalanceForDrain(state, now) {
 		// Pause regular balance scheduling while dispatcher drain is active
 		// and keep a cooldown window after drain completion to avoid churn.
 		return nextCheckTime

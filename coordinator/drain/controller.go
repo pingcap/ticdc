@@ -427,6 +427,25 @@ func (c *Controller) SetSchedulingFrozen(frozen bool) {
 	c.schedulingFrozen = frozen
 }
 
+// ShouldPauseRegularBalance reports whether coordinator-side regular balance
+// must stay paused for an in-flight drain workflow. Unlike node liveness, a
+// drain request remains active while its target is temporarily Unknown and
+// until membership removal and the drain-target clear handshake have finished.
+func (c *Controller) ShouldPauseRegularBalance() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.schedulingFrozen || c.targetSchedulerGate != nil || c.clearSchedulerGate != nil {
+		return true
+	}
+	for _, st := range c.nodes {
+		if st.drainRequested {
+			return true
+		}
+	}
+	return false
+}
+
 // resetObservedStateForNewEpoch clears per-epoch observations when the node
 // restarts with a newer epoch, while preserving the drain request so the
 // coordinator can continue driving the drain workflow for the replacement

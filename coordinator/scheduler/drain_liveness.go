@@ -33,12 +33,6 @@ func filterSchedulableNodeIDs(nodeIDs []node.ID, liveness *drain.Controller) []n
 	return filtered
 }
 
-// hasDrainingOrStoppingNode reports whether drain-aware schedulers should keep
-// considering node evacuation in the current tick.
-func hasDrainingOrStoppingNode(liveness *drain.Controller) bool {
-	return liveness != nil && len(liveness.GetDrainingOrStoppingNodes()) > 0
-}
-
 // filterSchedulableAliveNodes applies the same destination constraint to the
 // alive-node map used by balance schedulers.
 func filterSchedulableAliveNodes(

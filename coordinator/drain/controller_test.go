@@ -148,6 +148,37 @@ func TestDrainControllerRemoveNodeClearsState(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestShouldPauseRegularBalanceForWholeDrainWorkflow(t *testing.T) {
+	c := NewController(messaging.NewMockMessageCenter())
+	target := node.ID("target")
+
+	require.False(t, c.ShouldPauseRegularBalance())
+
+	// A requested drain must block regular balance before DRAINING is observed
+	// and after heartbeat expiry changes the derived state to Unknown.
+	c.RequestDrain(target)
+	require.True(t, c.ShouldPauseRegularBalance())
+	c.mu.Lock()
+	st := c.ensureNodeStateLocked(target)
+	st.observedSet = true
+	st.lastSeen = time.Now().Add(-c.ttl - time.Second)
+	st.liveness = heartbeatpb.NodeLiveness_DRAINING
+	c.mu.Unlock()
+	require.Equal(t, StateUnknown, c.GetState(target))
+	require.True(t, c.ShouldPauseRegularBalance())
+
+	// Membership removal completes the per-node drain state.
+	c.RemoveNode(target)
+	require.False(t, c.ShouldPauseRegularBalance())
+
+	// The clear handshake remains part of the drain workflow.
+	pending := map[node.ID]struct{}{node.ID("peer"): {}}
+	c.StartDrainTargetClearGate(target, 1, pending)
+	require.True(t, c.ShouldPauseRegularBalance())
+	c.ClearDrainTargetClearGate(target, 1)
+	require.False(t, c.ShouldPauseRegularBalance())
+}
+
 func TestDrainControllerResetObservedStateForNewEpoch(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	c := NewController(mc)

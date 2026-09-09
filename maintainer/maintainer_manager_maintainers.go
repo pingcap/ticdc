@@ -92,7 +92,7 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 		return nil
 	}
 
-	return m.maintainers.handleAddMaintainer(req, m.getDispatcherDrainTarget)
+	return m.maintainers.handleAddMaintainer(req, m.getDispatcherDrainState)
 }
 
 // onRemoveMaintainerRequest delegates changefeed removal to the maintainer part.
@@ -189,7 +189,7 @@ func (p *managerMaintainerSet) buildBootstrapResponse() *heartbeatpb.Coordinator
 // with the latest node-scoped dispatcher drain target.
 func (p *managerMaintainerSet) handleAddMaintainer(
 	req *heartbeatpb.AddMaintainerRequest,
-	getDrainTarget func() (node.ID, uint64),
+	getDrainState func() (node.ID, uint64, time.Time),
 ) *heartbeatpb.MaintainerStatus {
 	changefeedID := common.NewChangefeedIDFromPB(req.Id)
 	if req.CheckpointTs == 0 {
@@ -227,8 +227,9 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 	}
 	// Register the maintainer before seeding the drain snapshot so concurrent
 	// manager-level drain fanout can always observe it in the registry.
-	target, epoch := getDrainTarget()
+	target, epoch, lastClearedAt := getDrainState()
 	registeredMaintainer.SetDispatcherDrainTarget(target, epoch)
+	registeredMaintainer.SetLastDrainTargetClearedAt(lastClearedAt)
 	registeredMaintainer.pushEvent(&Event{changefeedID: changefeedID, eventType: EventInit})
 	return nil
 }
