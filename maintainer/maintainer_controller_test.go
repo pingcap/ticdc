@@ -1614,6 +1614,93 @@ func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
 	}
 }
 
+// TestFinishBootstrapAdoptsWorkingDispatcherOfTableCreatedAfterStartTs covers maintainer failover
+// while an in-flight CREATE TABLE DDL for a brand-new table is pending beyond the bootstrap startTs.
+//
+// The old maintainer had already created the new table's full-span dispatcher on a node, but the
+// bootstrap schema-store snapshot (taken at startTs, before the create-table DDL commit) does not
+// contain the table yet. The dispatcher is therefore reported as a leftover working span whose table
+// is absent from the initial table map.
+//
+// Bootstrap must keep tracking such a runtime dispatcher instead of treating it as a dropped-table
+// artifact, so that when the pending CREATE TABLE barrier re-adds the table it does not schedule a
+// second, duplicate full-span dispatcher for the same table.
+func TestFinishBootstrapAdoptsWorkingDispatcherOfTableCreatedAfterStartTs(t *testing.T) {
+	for _, state := range []heartbeatpb.ComponentState{
+		heartbeatpb.ComponentState_Working,
+		heartbeatpb.ComponentState_Initializing,
+	} {
+		t.Run(state.String(), func(t *testing.T) {
+			testutil.SetUpTestServices(t)
+			nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+			nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+
+			tableTriggerEventDispatcherID := common.NewDispatcherID()
+			cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+			ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+				common.DDLSpanSchemaID,
+				common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+					ID:              tableTriggerEventDispatcherID.ToPB(),
+					ComponentStatus: heartbeatpb.ComponentState_Working,
+					CheckpointTs:    1,
+				}, "node1", false)
+			refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+			s := NewController(cfID, 1, &mockThreadPool{},
+				config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0)
+
+			// Only table 1 exists at the bootstrap startTs. Table 2 is a brand-new table whose CREATE
+			// TABLE DDL commit is beyond startTs, so it is missing from this snapshot.
+			schemaStore := eventservice.NewMockSchemaStore()
+			schemaStore.SetTables([]commonEvent.Table{
+				{TableID: 1, SchemaID: 1, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t1"}},
+			})
+			appcontext.SetService(appcontext.SchemaStore, schemaStore)
+
+			totalSpan1 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
+			totalSpan2 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 2)
+			dispatcherID1 := common.NewDispatcherID()
+			dispatcherID2 := common.NewDispatcherID()
+			resp := &heartbeatpb.MaintainerBootstrapResponse{
+				ChangefeedID: cfID.ToPB(),
+				Spans: []*heartbeatpb.BootstrapTableSpan{
+					{
+						ID:              dispatcherID1.ToPB(),
+						SchemaID:        1,
+						Span:            &heartbeatpb.TableSpan{TableID: 1, StartKey: totalSpan1.StartKey, EndKey: totalSpan1.EndKey, KeyspaceID: common.DefaultKeyspaceID},
+						ComponentStatus: heartbeatpb.ComponentState_Working,
+						CheckpointTs:    10,
+						Mode:            common.DefaultMode,
+					},
+					{
+						ID:              dispatcherID2.ToPB(),
+						SchemaID:        2,
+						Span:            &heartbeatpb.TableSpan{TableID: 2, StartKey: totalSpan2.StartKey, EndKey: totalSpan2.EndKey, KeyspaceID: common.DefaultKeyspaceID},
+						ComponentStatus: state,
+						CheckpointTs:    10,
+						Mode:            common.DefaultMode,
+					},
+				},
+				CheckpointTs: 10,
+			}
+
+			_, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{"node1": resp}, false)
+			require.NoError(t, err)
+			require.True(t, s.bootstrapped)
+
+			// The runtime dispatcher of the not-yet-visible table must stay tracked so the later CREATE
+			// TABLE barrier cannot schedule a duplicate full-span dispatcher.
+			require.NotNil(t, s.spanController.GetTaskByID(dispatcherID2))
+			require.Len(t, s.spanController.GetTasksByTableID(2), 1)
+
+			// Simulate the pending CREATE TABLE t4 barrier replaying after bootstrap (the new maintainer
+			// re-adds the table through the barrier's AddNewTable path).
+			s.spanController.AddNewTable(commonEvent.Table{SchemaID: 2, TableID: 2, Splitable: false}, 20)
+			require.Len(t, s.spanController.GetTasksByTableID(2), 1)
+			require.NotNil(t, s.spanController.GetTaskByID(dispatcherID2))
+		})
+	}
+}
+
 // TestFinishBootstrapRepairsCoverageAfterRestoredStandaloneRemove covers failover after an
 // orphan Working dispatcher has already been journaled under a standalone remove request. The
 // test restores that request alongside adjacent live coverage, reports one terminal status, and
