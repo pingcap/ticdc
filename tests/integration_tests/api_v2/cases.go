@@ -109,7 +109,6 @@ var customReplicaConfig = &ReplicaConfig{
 		EncoderWorkerNum:      31,
 		FlushWorkerNum:        18,
 		SpoolDiskQuota:        redo.DefaultSpoolDiskQuota,
-		SpoolBaseDir:          "",
 	},
 }
 
@@ -164,7 +163,6 @@ var defaultReplicaConfig = &ReplicaConfig{
 		Storage:               "",
 		UseFileBackend:        false,
 		SpoolDiskQuota:        redo.DefaultSpoolDiskQuota,
-		SpoolBaseDir:          "",
 	},
 }
 

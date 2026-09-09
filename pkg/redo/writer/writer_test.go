@@ -35,7 +35,6 @@ func TestNewConfigUsesConsistentConfigValues(t *testing.T) {
 	compressionType := "lz4"
 	flushConcurrency := 7
 	spoolDiskQuota := int64(8 * 1024 * 1024)
-	spoolBaseDir := t.TempDir()
 	consistentCfg := testutil.NewConsistentConfig("nfs:///tmp/redo")
 	consistentCfg.MaxLogSize = util.AddressOf(maxLogSize)
 	consistentCfg.FlushIntervalInMs = util.AddressOf(flushIntervalInMs)
@@ -44,7 +43,6 @@ func TestNewConfigUsesConsistentConfigValues(t *testing.T) {
 	consistentCfg.Compression = util.AddressOf(compressionType)
 	consistentCfg.FlushConcurrency = util.AddressOf(flushConcurrency)
 	consistentCfg.SpoolDiskQuota = util.AddressOf(spoolDiskQuota)
-	consistentCfg.SpoolBaseDir = util.AddressOf(spoolBaseDir)
 	cfg, err := NewConfig(changefeedID, consistentCfg)
 	require.NoError(t, err)
 
@@ -60,7 +58,6 @@ func TestNewConfigUsesConsistentConfigValues(t *testing.T) {
 	require.Equal(t, flushConcurrency, cfg.FlushConcurrency())
 	require.Equal(t, compressionType, cfg.Compression())
 	require.Equal(t, spoolDiskQuota, cfg.SpoolDiskQuota())
-	require.Equal(t, spoolBaseDir, cfg.SpoolBaseDir())
 }
 
 func TestNewConfigReturnsErrorForInvalidStorageURI(t *testing.T) {

@@ -75,8 +75,14 @@ func TestNewClosesWritersWhenDMLConstructionFails(t *testing.T) {
 
 	spoolBaseDir := filepath.Join(t.TempDir(), "not-a-directory")
 	require.NoError(t, os.WriteFile(spoolBaseDir, []byte("file"), 0o600))
+	originalServerConfig := config.GetGlobalServerConfig()
+	testServerConfig := originalServerConfig.Clone()
+	testServerConfig.DataDir = spoolBaseDir
+	config.StoreGlobalServerConfig(testServerConfig)
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalServerConfig)
+	})
 	cfg := newTestConsistentConfig("file:///tmp/redo")
-	cfg.SpoolBaseDir = util.AddressOf(spoolBaseDir)
 
 	_, err := New(
 		t.Context(),

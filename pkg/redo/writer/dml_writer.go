@@ -16,12 +16,14 @@ package writer
 import (
 	"context"
 	"encoding/binary"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -59,7 +61,6 @@ type redoSpoolEntry struct {
 
 const (
 	redoSpoolDirectory = "redo-sink-spool"
-
 	// Keep the redo spool's in-memory hot set small enough that it does not
 	// compete with the changefeed event quota. The spool can use local disk for
 	// the remaining encoded events.
@@ -108,9 +109,12 @@ func newDMLWriter(
 	fileWorkerInput := make(chan *polymorphicRedoEvent, redo.DefaultEncodingOutputChanSize)
 	fileWorkers := newFileWorkerGroup(
 		cfg, fileWorkerInput, extStorage, opts...)
+	spoolRootDir := filepath.Join(
+		config.GetGlobalServerConfig().DataDir, config.DefaultRedoDir,
+	)
 	spoolBuffer, err := spool.New(
 		cfg.ChangeFeedID(),
-		spool.WithRootDir(cfg.SpoolBaseDir()),
+		spool.WithRootDir(spoolRootDir),
 		spool.WithDirectoryNamespace(redoSpoolDirectory, cfg.CaptureID()),
 		spool.WithDiskQuotaBytes(cfg.SpoolDiskQuota()),
 		spool.WithMemoryRatio(redoSpoolMemoryRatio(cfg.SpoolDiskQuota())),

@@ -41,6 +41,5 @@ func NewConsistentConfig(storage string) *config.ConsistentConfig {
 		Compression:           util.AddressOf(compressionType),
 		FlushConcurrency:      util.AddressOf(flushConcurrency),
 		SpoolDiskQuota:        util.AddressOf(redo.DefaultSpoolDiskQuota),
-		SpoolBaseDir:          util.AddressOf(""),
 	}
 }

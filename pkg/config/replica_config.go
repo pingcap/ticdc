@@ -99,7 +99,6 @@ var defaultReplicaConfig = &ReplicaConfig{
 		UseFileBackend:        util.AddressOf(false),
 		Compression:           util.AddressOf(""),
 		SpoolDiskQuota:        util.AddressOf(redo.DefaultSpoolDiskQuota),
-		SpoolBaseDir:          util.AddressOf(""),
 		MemoryUsage: &ConsistentMemoryUsage{
 			MemoryQuotaPercentage: 50,
 		},

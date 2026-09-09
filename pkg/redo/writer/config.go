@@ -51,7 +51,6 @@ type Config struct {
 	flushConcurrency int
 	// Used by the memory backend to configure local spool storage.
 	spoolDiskQuota int64
-	spoolBaseDir   string
 }
 
 // NewConfig builds the runtime writer config from an adjusted ConsistentConfig.
@@ -77,7 +76,6 @@ func NewConfig(changefeedID common.ChangeFeedID, consistentCfg *config.Consisten
 		compression:       util.GetOrZero(consistentCfg.Compression),
 		flushConcurrency:  util.GetOrZero(consistentCfg.FlushConcurrency),
 		spoolDiskQuota:    util.GetOrZero(consistentCfg.SpoolDiskQuota),
-		spoolBaseDir:      util.GetOrZero(consistentCfg.SpoolBaseDir),
 	}
 	return cfg, nil
 }
@@ -134,8 +132,4 @@ func (cfg *Config) FlushConcurrency() int {
 
 func (cfg *Config) SpoolDiskQuota() int64 {
 	return cfg.spoolDiskQuota
-}
-
-func (cfg *Config) SpoolBaseDir() string {
-	return cfg.spoolBaseDir
 }

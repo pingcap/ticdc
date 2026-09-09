@@ -24,6 +24,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -31,18 +32,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewDMLWriter(t *testing.T) {
-	t.Parallel()
+func useTestDataDir(t *testing.T) string {
+	t.Helper()
+	originalConfig := config.GetGlobalServerConfig()
+	testConfig := originalConfig.Clone()
+	testConfig.DataDir = t.TempDir()
+	config.StoreGlobalServerConfig(testConfig)
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
+	return testConfig.DataDir
+}
 
+func TestNewDMLWriter(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
+	dataDir := useTestDataDir(t)
 
 	_, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
 	require.NoError(t, err)
 	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
 	consistentCfg := testutil.NewConsistentConfig(uri.String())
-	spoolBaseDir := t.TempDir()
-	consistentCfg.SpoolBaseDir = util.AddressOf(spoolBaseDir)
 	consistentCfg.SpoolDiskQuota = util.AddressOf(int64(1024))
 	cfg, err := NewConfig(changefeedID, consistentCfg)
 	require.NoError(t, err)
@@ -51,7 +61,7 @@ func TestNewDMLWriter(t *testing.T) {
 	lw, err := NewDMLWriter(ctx, cfg)
 	require.NoError(t, err)
 	spoolDir := filepath.Join(
-		spoolBaseDir, redoSpoolDirectory, cfg.CaptureID(),
+		dataDir, config.DefaultRedoDir, cfg.CaptureID(),
 		changefeedID.Keyspace(), changefeedID.Name(),
 	)
 	require.DirExists(t, spoolDir)
@@ -64,13 +74,12 @@ func TestNewDMLWriter(t *testing.T) {
 func TestDMLWriterCloseWaitsForRunBeforeClosingSpool(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
+	dataDir := useTestDataDir(t)
 
 	_, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
 	require.NoError(t, err)
 	changefeedID := common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName)
 	consistentCfg := testutil.NewConsistentConfig(uri.String())
-	spoolBaseDir := t.TempDir()
-	consistentCfg.SpoolBaseDir = util.AddressOf(spoolBaseDir)
 	consistentCfg.SpoolDiskQuota = util.AddressOf(int64(1))
 	consistentCfg.MaxLogSize = util.AddressOf(int64(1))
 	consistentCfg.EncodingWorkerNum = util.AddressOf(1)
@@ -82,7 +91,7 @@ func TestDMLWriterCloseWaitsForRunBeforeClosingSpool(t *testing.T) {
 	lw, err := NewDMLWriter(ctx, cfg)
 	require.NoError(t, err)
 	spoolDir := filepath.Join(
-		spoolBaseDir, redoSpoolDirectory, cfg.CaptureID(),
+		dataDir, config.DefaultRedoDir, cfg.CaptureID(),
 		changefeedID.Keyspace(), changefeedID.Name(),
 	)
 

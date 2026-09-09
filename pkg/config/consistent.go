@@ -15,7 +15,6 @@ package config
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -67,9 +66,6 @@ type ConsistentConfig struct {
 	// SpoolDiskQuota is the disk quota in bytes for redo spool files.
 	// Default is 10 GiB.
 	SpoolDiskQuota *int64 `toml:"spool-disk-quota" json:"spool-disk-quota,omitempty"`
-	// SpoolBaseDir is the base directory for redo spool files.
-	// It must be an absolute path when configured.
-	SpoolBaseDir *string `toml:"spool-base-dir" json:"spool-base-dir,omitempty"`
 	// MemoryUsage represents the percentage of ReplicaConfig.MemoryQuota
 	// that can be utilized by the redo log module.
 	MemoryUsage *ConsistentMemoryUsage `toml:"memory-usage" json:"memory-usage,omitempty"`
@@ -149,12 +145,6 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 	} else if *c.SpoolDiskQuota <= 0 {
 		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
 			"consistent.spool-disk-quota must be greater than 0")
-	}
-	if c.SpoolBaseDir == nil {
-		c.SpoolBaseDir = util.AddressOf("")
-	} else if *c.SpoolBaseDir != "" && !filepath.IsAbs(*c.SpoolBaseDir) {
-		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
-			"consistent.spool-base-dir must be an absolute path")
 	}
 
 	uri, err := objstore.ParseRawURL(util.GetOrZero(c.Storage))
