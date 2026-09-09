@@ -148,7 +148,7 @@ func (c *Controller) FinishBootstrap(
 	}
 
 	// Step 4: Handle any remaining working tasks (likely dropped tables)
-	c.handleRemainingWorkingTasks(workingTaskMap, redoWorkingTaskMap)
+	c.handleRemainingWorkingTasks(allNodesResp, workingTaskMap, redoWorkingTaskMap)
 
 	// Step 5: Initialize route admission before barrier starts handling bootstrap
 	// block states. The barrier captures the route admin pointer at construction time.
@@ -373,8 +373,11 @@ func buildTableSplitMap(tables []commonEvent.Table) map[int64]bool {
 }
 
 func (c *Controller) handleRemainingWorkingTasks(
+	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	workingTaskMap, redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 ) {
+	c.adoptLeftoverWorkingSpans(redoWorkingTaskMap, common.RedoMode, collectReferencedBootstrapDispatcherIDs(allNodesResp, common.RedoMode))
+	c.adoptLeftoverWorkingSpans(workingTaskMap, common.DefaultMode, collectReferencedBootstrapDispatcherIDs(allNodesResp, common.DefaultMode))
 	for tableID := range redoWorkingTaskMap {
 		log.Warn("found a redo working table that is not in initial table map, just ignore it",
 			zap.Stringer("changefeed", c.changefeedID),
@@ -385,6 +388,130 @@ func (c *Controller) handleRemainingWorkingTasks(
 			zap.Stringer("changefeed", c.changefeedID),
 			zap.Int64("tableID", tableID))
 	}
+}
+
+// collectReferencedBootstrapDispatcherIDs returns the set of dispatcher IDs referenced by any
+// scheduling (create/remove) or merge request in the bootstrap responses for the given mode.
+//
+// Such requests carry the concrete convergence intent of a dispatcher (restore the create, finish
+// the remove, drive the merge, or keep the removed range as temporary coverage until cleanup is
+// confirmed). A leftover working span referenced by one of them must not be adopted here; it is
+// already owned and will be driven by the restored operator.
+func collectReferencedBootstrapDispatcherIDs(
+	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+	mode int64,
+) map[common.DispatcherID]struct{} {
+	referenced := make(map[common.DispatcherID]struct{})
+	for _, resp := range allNodesResp {
+		if resp == nil {
+			continue
+		}
+		for _, req := range resp.Operators {
+			if req == nil || req.Config == nil || req.Config.Mode != mode ||
+				req.Config.DispatcherID == nil {
+				continue
+			}
+			dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
+			if !dispatcherID.IsZero() {
+				referenced[dispatcherID] = struct{}{}
+			}
+		}
+		for _, mergeReq := range resp.MergeOperators {
+			if mergeReq == nil || mergeReq.Mode != mode {
+				continue
+			}
+			if mergeReq.MergedDispatcherID != nil {
+				if dispatcherID := common.NewDispatcherIDFromPB(mergeReq.MergedDispatcherID); !dispatcherID.IsZero() {
+					referenced[dispatcherID] = struct{}{}
+				}
+			}
+			for _, idPB := range mergeReq.DispatcherIDs {
+				if idPB == nil {
+					continue
+				}
+				if dispatcherID := common.NewDispatcherIDFromPB(idPB); !dispatcherID.IsZero() {
+					referenced[dispatcherID] = struct{}{}
+				}
+			}
+		}
+	}
+	return referenced
+}
+
+// adoptLeftoverWorkingSpans keeps tracking working dispatchers whose table is absent from the
+// bootstrap schema snapshot but which are genuinely still running on a node.
+//
+// This state happens when the old maintainer is in the middle of a CREATE TABLE DDL whose commit ts
+// is beyond the bootstrap startTs: the schema snapshot does not contain the table yet, but the new
+// table's full-span dispatcher already exists in the runtime and is reported as a working span.
+// Dropping it here (the dropped-table path) would make the later CREATE TABLE barrier re-add the
+// table and schedule a second, duplicate full-span dispatcher on the same node.
+//
+// A leftover dispatcher is only adopted when nothing else owns it:
+//   - it is in a live state (Initializing or Working; terminal / being-removed spans must not be
+//     resurrected),
+//   - it is not referenced by any scheduling (create/remove) or merge request in the bootstrap
+//     response (such requests carry the concrete convergence intent of the dispatcher), and
+//   - no restored operator (in-flight create/remove, bootstrap cleanup, or merge recovery) targets it.
+//
+// Owned spans are left to converge through their operator, which preserves the behavior
+// required for genuinely dropped tables. A table whose spans are all adopted is removed from the
+// working task map so handleRemainingWorkingTasks does not warn about a table it already tracks.
+func (c *Controller) adoptLeftoverWorkingSpans(
+	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	mode int64,
+	referencedDispatcherIDs map[common.DispatcherID]struct{},
+) {
+	spanController := c.getSpanController(mode)
+	operatorController := c.getOperatorController(mode)
+	if spanController == nil || operatorController == nil {
+		return
+	}
+	for tableID, tableSpans := range workingTaskMap {
+		unhandled := false
+		tableSpans.Ascend(func(_ *heartbeatpb.TableSpan, replicaSet *replica.SpanReplication) bool {
+			if replicaSet == nil || replicaSet.ID.IsZero() || replicaSet.GetNodeID() == "" {
+				unhandled = true
+				return true
+			}
+			status := replicaSet.GetStatus()
+			if status == nil || !isLiveBootstrapDispatcherState(status.ComponentStatus) {
+				unhandled = true
+				return true
+			}
+			if spanController.GetTaskByID(replicaSet.ID) != nil {
+				return true
+			}
+			if _, ok := referencedDispatcherIDs[replicaSet.ID]; ok {
+				unhandled = true
+				return true
+			}
+			if operatorController.GetOperator(replicaSet.ID) != nil {
+				unhandled = true
+				return true
+			}
+			spanController.AddReplicatingSpan(replicaSet)
+			log.Info("adopt working dispatcher whose table is missing from the bootstrap schema snapshot",
+				zap.Stringer("changefeed", c.changefeedID),
+				zap.Int64("tableID", tableID),
+				zap.String("dispatcherID", replicaSet.ID.String()),
+				zap.String("nodeID", replicaSet.GetNodeID().String()),
+				zap.String("componentStatus", status.ComponentStatus.String()),
+				zap.Int64("mode", mode))
+			return true
+		})
+		if !unhandled {
+			delete(workingTaskMap, tableID)
+		}
+	}
+}
+
+// isLiveBootstrapDispatcherState reports whether a bootstrap-reported dispatcher is genuinely alive
+// and producing data, so its span must keep being tracked. Preparing/MergeReady merge targets and
+// terminal states are owned by their operators (or already gone) and must not be adopted here.
+func isLiveBootstrapDispatcherState(state heartbeatpb.ComponentState) bool {
+	return state == heartbeatpb.ComponentState_Initializing ||
+		state == heartbeatpb.ComponentState_Working
 }
 
 func (c *Controller) initializeComponents(
