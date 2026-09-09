@@ -1,0 +1,3 @@
+[filter]
+rules = ["changefeed_tables_at_start_ts.pt_0000"]
+

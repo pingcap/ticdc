@@ -16,11 +16,13 @@ package v2
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/logservice/txnutil"
+	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"go.uber.org/zap"
@@ -35,9 +37,18 @@ func (h *OpenAPIV2) CDCMetaData(c *gin.Context) {
 	}
 	resp := make([]EtcdData, 0, len(kvs))
 	for _, pair := range kvs {
+		value := string(pair.Value)
+		if strings.Contains(string(pair.Key), "/changefeed/info/") {
+			info := new(config.ChangeFeedInfo)
+			if err := info.Unmarshal(pair.Value); err != nil {
+				value = "<redacted>"
+			} else {
+				value = info.String()
+			}
+		}
 		resp = append(resp, EtcdData{
 			Key:   string(pair.Key),
-			Value: string(pair.Value),
+			Value: value,
 		})
 	}
 	c.IndentedJSON(http.StatusOK, resp)

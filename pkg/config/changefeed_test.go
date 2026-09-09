@@ -79,6 +79,53 @@ func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
 	require.True(t, changefeedConfig.IsLowLatencyMode())
 }
 
+func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
+	cfg := GetDefaultReplicaConfig()
+	cfg.Sink.SchemaRegistry = util.AddressOf("https://registry.example.com?access-key=registry-secret-sentinel")
+	cfg.Sink.KafkaConfig = &KafkaConfig{
+		SASLPassword:          util.AddressOf("plain-password-sentinel"),
+		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
+		SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
+		SASLOAuthTokenURL:     util.AddressOf("https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
+		Key:                   util.AddressOf("private-key-sentinel"),
+		LargeMessageHandle:    &LargeMessageHandleConfig{ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel"},
+		GlueSchemaRegistryConfig: &GlueSchemaRegistryConfig{
+			AccessKey:       "glue-access-sentinel",
+			SecretAccessKey: "glue-secret-sentinel",
+			Token:           "glue-token-sentinel",
+		},
+	}
+	info := &ChangeFeedInfo{
+		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
+		Config:  cfg,
+	}
+	original, err := info.Marshal()
+	require.NoError(t, err)
+
+	output := info.String()
+	for _, secret := range []string{
+		"sink-password-sentinel",
+		"uri-secret-sentinel",
+		"registry-secret-sentinel",
+		"plain-password-sentinel",
+		"gssapi-password-sentinel",
+		"oauth-secret-sentinel",
+		"token-url-secret-sentinel",
+		"private-key-sentinel",
+		"claim-check-secret-sentinel",
+		"glue-access-sentinel",
+		"glue-secret-sentinel",
+		"glue-token-sentinel",
+	} {
+		require.NotContains(t, output, secret)
+	}
+	require.Contains(t, output, "xxxxx")
+	require.Contains(t, output, "******")
+	after, err := info.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
+
 func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *testing.T) {
 	t.Parallel()
 

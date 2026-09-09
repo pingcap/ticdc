@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
@@ -110,7 +111,7 @@ func TestVerifyInvalidConfig(t *testing.T) {
 	factory := kafka.NewMockFactory(ctrl)
 	gomock.InOrder(
 		factory.EXPECT().AdminClient(gomock.Any()).Return(adminClient, nil),
-		adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, true).Return(
+		adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, false).Return(
 			map[string]kafka.TopicDetail{kafkaSinkTestTopic: {Name: kafkaSinkTestTopic}}, nil),
 		adminClient.EXPECT().Close(),
 	)
@@ -230,6 +231,59 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	kafkaSink.AddCheckpointTs(12345)
 }
 
+func TestKafkaSinkWriteGateBlocksDMLSend(t *testing.T) {
+	eventHelper := commonEvent.NewEventTestHelper(t)
+	defer eventHelper.Close()
+	eventHelper.Tk().MustExec("use test")
+	require.NotNil(t, eventHelper.DDL2Job("create table t (id int primary key)"))
+	dmlEvent := eventHelper.DML2Event("test", "t", "insert into t values (1)")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	kafkaSink, topicManager, asyncProducer, _ := newKafkaSinkForTest(
+		t, ctx, config.ProtocolOpen, &config.SinkConfig{})
+	topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(1), nil)
+	sent := make(chan struct{}, 1)
+	asyncProducer.EXPECT().AsyncRunCallback(gomock.Any()).Return(nil).AnyTimes()
+	asyncProducer.EXPECT().AsyncSend(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(
+			_ context.Context,
+			_ string,
+			_ int32,
+			message *codecCommon.Message,
+		) error {
+			if message.Callback != nil {
+				message.Callback()
+			}
+			sent <- struct{}{}
+			return nil
+		}).Times(1)
+	gate := writelease.NewGate()
+	kafkaSink.SetWriteGate(gate)
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- kafkaSink.Run(ctx)
+	}()
+	kafkaSink.AddDMLEvent(dmlEvent)
+
+	select {
+	case <-sent:
+		t.Fatal("Kafka DML was sent while the capture write gate was closed")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	select {
+	case <-sent:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Kafka DML was not sent after the capture write gate reopened")
+	}
+
+	cancel()
+	require.ErrorIs(t, <-runDone, context.Canceled)
+}
+
 func TestKafkaSinkBatchConfig(t *testing.T) {
 	sink := &sink{}
 	require.Equal(t, 4096, sink.BatchCount())
@@ -245,8 +299,10 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		cause := errors.ErrKafkaSendMessage.GenWithStackByArgs()
 
 		factory.EXPECT().AsyncProducer(gomock.Any()).Return(nil, cause)
-		adminClient.EXPECT().Close()
-		topicManager.EXPECT().Close()
+		gomock.InOrder(
+			adminClient.EXPECT().Close(),
+			topicManager.EXPECT().Close(),
+		)
 
 		kafkaSink, err := newWithComponents(
 			t.Context(),
@@ -270,9 +326,11 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 
 		factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
 		factory.EXPECT().SyncProducer(gomock.Any()).Return(nil, cause)
-		asyncProducer.EXPECT().Close()
-		adminClient.EXPECT().Close()
-		topicManager.EXPECT().Close()
+		gomock.InOrder(
+			asyncProducer.EXPECT().Close(),
+			adminClient.EXPECT().Close(),
+			topicManager.EXPECT().Close(),
+		)
 
 		kafkaSink, err := newWithComponents(
 			t.Context(),
@@ -298,10 +356,12 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
 		factory.EXPECT().SyncProducer(gomock.Any()).Return(syncProducer, nil)
 		factory.EXPECT().MetricsCollector(adminClient).Return(noopMetricsCollector{})
-		asyncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) })
-		syncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) })
-		adminClient.EXPECT().Close().Do(func() { closeCount.Add(1) })
-		topicManager.EXPECT().Close().Do(func() { closeCount.Add(1) })
+		gomock.InOrder(
+			syncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) }),
+			asyncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) }),
+			adminClient.EXPECT().Close().Do(func() { closeCount.Add(1) }),
+			topicManager.EXPECT().Close().Do(func() { closeCount.Add(1) }),
+		)
 
 		kafkaSink, err := newWithComponents(
 			t.Context(),
@@ -313,8 +373,20 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Zero(t, closeCount.Load())
+		require.True(t, kafkaSink.IsNormal())
+
 		kafkaSink.Close()
 		require.Equal(t, int64(4), closeCount.Load())
+		require.False(t, kafkaSink.IsNormal())
+		kafkaSink.AddDMLEvent(&commonEvent.DMLEvent{})
+		require.Zero(t, kafkaSink.eventChan.Len())
+
+		_, ok, err := kafkaSink.eventChan.GetWithContext(t.Context())
+		require.NoError(t, err)
+		require.False(t, ok)
+		_, ok, err = kafkaSink.rowChan.GetWithContext(t.Context())
+		require.NoError(t, err)
+		require.False(t, ok)
 	})
 }
 
@@ -393,6 +465,22 @@ func TestKafkaSinkDML(t *testing.T) {
 		kafkaSink.AddDMLEvent(dmlEvent)
 
 		require.Equal(t, cause, kafkaSink.calculateKeyPartitions(t.Context()))
+	})
+
+	t.Run("canceled after topic lookup", func(t *testing.T) {
+		dmlEvent := eventHelper.DML2Event("test", "t", "insert into t values (4, 'four')")
+		ctx, cancel := context.WithCancelCause(t.Context())
+		kafkaSink, topicManager, _, _ := newKafkaSinkForTest(
+			t, ctx, config.ProtocolOpen, &config.SinkConfig{})
+		cause := errors.ErrKafkaSinkClosed.GenWithStackByArgs()
+		topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).
+			DoAndReturn(func(context.Context, string) (int32, error) {
+				cancel(cause)
+				return 1, nil
+			})
+		kafkaSink.AddDMLEvent(dmlEvent)
+		require.Equal(t, cause, kafkaSink.calculateKeyPartitions(ctx))
+		require.Zero(t, kafkaSink.rowChan.Len())
 	})
 }
 
@@ -575,9 +663,9 @@ func newKafkaSinkForTest(
 	require.NoError(t, err)
 	encoderConfig := codecCommon.NewConfig(protocol).WithChangefeedID(changefeedID)
 	encoderConfig.MaxBatchSize = 1
-	encoderGroup, err := codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, nil, changefeedID)
+	encoderGroup, err := codec.NewEncoderGroup(sinkConfig, encoderConfig, nil, nil, changefeedID)
 	require.NoError(t, err)
-	encoder, err := codec.NewEventEncoder(ctx, encoderConfig, nil)
+	encoder, err := codec.NewEventEncoder(encoderConfig, nil, nil)
 	require.NoError(t, err)
 	topicManager := topicmanager.NewMockTopicManager(ctrl)
 	asyncProducer := kafka.NewMockAsyncProducer(ctrl)

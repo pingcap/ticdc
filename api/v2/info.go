@@ -16,6 +16,9 @@ package v2
 import (
 	"fmt"
 	"net/http"
+	"strings"
+
+	"github.com/pingcap/ticdc/pkg/config"
 )
 
 func (h *OpenAPIV2) handleDebugInfo(w http.ResponseWriter, req *http.Request) {
@@ -28,6 +31,15 @@ func (h *OpenAPIV2) handleDebugInfo(w http.ResponseWriter, req *http.Request) {
 	}
 
 	for _, kv := range kvs {
-		fmt.Fprintf(w, "%s\n\t%s\n\n", string(kv.Key), string(kv.Value))
+		value := string(kv.Value)
+		if strings.Contains(string(kv.Key), "/changefeed/info/") {
+			info := new(config.ChangeFeedInfo)
+			if err := info.Unmarshal(kv.Value); err != nil {
+				value = "<redacted>"
+			} else {
+				value = info.String()
+			}
+		}
+		_, _ = fmt.Fprintf(w, "%s\n\t%s\n\n", string(kv.Key), value)
 	}
 }

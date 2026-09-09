@@ -490,6 +490,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				SASLOAuthClientID:            c.Sink.KafkaConfig.SASLOAuthClientID,
 				SASLOAuthClientSecret:        c.Sink.KafkaConfig.SASLOAuthClientSecret,
 				SASLOAuthTokenURL:            c.Sink.KafkaConfig.SASLOAuthTokenURL,
+				SASLOAuthCA:                  c.Sink.KafkaConfig.SASLOAuthCA,
 				SASLOAuthScopes:              c.Sink.KafkaConfig.SASLOAuthScopes,
 				SASLOAuthGrantType:           c.Sink.KafkaConfig.SASLOAuthGrantType,
 				SASLOAuthAudience:            c.Sink.KafkaConfig.SASLOAuthAudience,
@@ -561,6 +562,12 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				OutputOldValue: c.Sink.OpenProtocolConfig.OutputOldValue,
 			}
 		}
+		var simpleConfig *config.SimpleConfig
+		if c.Sink.SimpleConfig != nil && c.Sink.SimpleConfig.IncludeStartTs != nil {
+			simpleConfig = &config.SimpleConfig{
+				IncludeStartTs: util.AddressOf(*c.Sink.SimpleConfig.IncludeStartTs),
+			}
+		}
 
 		res.Sink = &config.SinkConfig{
 			DispatchRules:                    dispatchRules,
@@ -583,6 +590,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			SafeMode:                         c.Sink.SafeMode,
 			OpenProtocol:                     openProtocolConfig,
 			Debezium:                         debeziumConfig,
+			Simple:                           simpleConfig,
 		}
 
 		if c.Sink.TxnAtomicity != nil {
@@ -832,6 +840,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				SASLOAuthClientID:            cloned.Sink.KafkaConfig.SASLOAuthClientID,
 				SASLOAuthClientSecret:        cloned.Sink.KafkaConfig.SASLOAuthClientSecret,
 				SASLOAuthTokenURL:            cloned.Sink.KafkaConfig.SASLOAuthTokenURL,
+				SASLOAuthCA:                  cloned.Sink.KafkaConfig.SASLOAuthCA,
 				SASLOAuthScopes:              cloned.Sink.KafkaConfig.SASLOAuthScopes,
 				SASLOAuthGrantType:           cloned.Sink.KafkaConfig.SASLOAuthGrantType,
 				SASLOAuthAudience:            cloned.Sink.KafkaConfig.SASLOAuthAudience,
@@ -930,6 +939,12 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				OutputOldValue: cloned.Sink.OpenProtocol.OutputOldValue,
 			}
 		}
+		var simpleConfig *SimpleConfig
+		if cloned.Sink.Simple != nil && cloned.Sink.Simple.IncludeStartTs != nil {
+			simpleConfig = &SimpleConfig{
+				IncludeStartTs: util.AddressOf(*cloned.Sink.Simple.IncludeStartTs),
+			}
+		}
 		res.Sink = &SinkConfig{
 			Protocol:                         cloned.Sink.Protocol,
 			SchemaRegistry:                   cloned.Sink.SchemaRegistry,
@@ -951,6 +966,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			SafeMode:                         cloned.Sink.SafeMode,
 			DebeziumConfig:                   debeziumConfig,
 			OpenProtocolConfig:               openProtocolConfig,
+			SimpleConfig:                     simpleConfig,
 		}
 
 		if cloned.Sink.TxnAtomicity != nil {
@@ -1191,17 +1207,17 @@ type Table struct {
 // SinkConfig represents sink config for a changefeed
 // This is a duplicate of config.SinkConfig
 type SinkConfig struct {
-	Protocol                 *string           `json:"protocol,omitempty" toml:"protocol,omitempty"`
-	SchemaRegistry           *string           `json:"schema_registry,omitempty" toml:"schema-registry,omitempty"`
-	CSVConfig                *CSVConfig        `json:"csv,omitempty" toml:"csv,omitempty"`
-	DispatchRules            []*DispatchRule   `json:"dispatchers,omitempty" toml:"dispatchers,omitempty"`
-	ColumnSelectors          []*ColumnSelector `json:"column_selectors,omitempty" toml:"column-selectors,omitempty"`
-	TxnAtomicity             *string           `json:"transaction_atomicity,omitempty" toml:"transaction-atomicity,omitempty"`
-	EncoderConcurrency       *int              `json:"encoder_concurrency,omitempty" toml:"encoder-concurrency,omitempty"`
-	Terminator               *string           `json:"terminator,omitempty" toml:"terminator,omitempty"`
-	DateSeparator            *string           `json:"date_separator,omitempty" toml:"date-separator,omitempty"`
-	EnablePartitionSeparator *bool             `json:"enable_partition_separator,omitempty" toml:"enable-partition-separator,omitempty"`
-	FileIndexWidth           *int              `json:"file_index_width,omitempty" toml:"file-index-digit,omitempty"`
+	Protocol                 *string               `json:"protocol,omitempty" toml:"protocol,omitempty"`
+	SchemaRegistry           *string               `json:"schema_registry,omitempty" toml:"schema-registry,omitempty"`
+	CSVConfig                *CSVConfig            `json:"csv,omitempty" toml:"csv,omitempty"`
+	DispatchRules            []*DispatchRule       `json:"dispatchers,omitempty" toml:"dispatchers,omitempty"`
+	ColumnSelectors          []*ColumnSelector     `json:"column_selectors,omitempty" toml:"column-selectors,omitempty"`
+	TxnAtomicity             *string               `json:"transaction_atomicity,omitempty" toml:"transaction-atomicity,omitempty"`
+	EncoderConcurrency       *int                  `json:"encoder_concurrency,omitempty" toml:"encoder-concurrency,omitempty"`
+	Terminator               *string               `json:"terminator,omitempty" toml:"terminator,omitempty"`
+	DateSeparator            *config.DateSeparator `json:"date_separator,omitempty" toml:"date-separator,omitempty"`
+	EnablePartitionSeparator *bool                 `json:"enable_partition_separator,omitempty" toml:"enable-partition-separator,omitempty"`
+	FileIndexWidth           *int                  `json:"file_index_width,omitempty" toml:"file-index-digit,omitempty"`
 	// deprecated: it's become useless since v9.0.0
 	EnableKafkaSinkV2                *bool               `json:"enable_kafka_sink_v2,omitempty" toml:"enable-kafka-sink-v2,omitempty"`
 	OnlyOutputUpdatedColumns         *bool               `json:"only_output_updated_columns,omitempty" toml:"only-output-updated-columns,omitempty"`
@@ -1220,6 +1236,7 @@ type SinkConfig struct {
 	DebeziumDisableSchema            *bool               `json:"debezium_disable_schema,omitempty" toml:"debezium-disable-schema,omitempty"`
 	DebeziumConfig                   *DebeziumConfig     `json:"debezium,omitempty" toml:"debezium,omitempty"`
 	OpenProtocolConfig               *OpenProtocolConfig `json:"open,omitempty" toml:"open,omitempty"`
+	SimpleConfig                     *SimpleConfig       `json:"simple,omitempty" toml:"simple,omitempty"`
 }
 
 // CSVConfig denotes the csv config
@@ -1411,6 +1428,63 @@ func (info *ChangeFeedInfo) Clone() (*ChangeFeedInfo, error) {
 	return cloned, err
 }
 
+// CloneWithMaskedSensitiveData returns a clone safe for user-visible output.
+func (info *ChangeFeedInfo) CloneWithMaskedSensitiveData() (*ChangeFeedInfo, error) {
+	cloned, err := info.Clone()
+	if err != nil {
+		return nil, err
+	}
+
+	cloned.SinkURI = util.MaskSensitiveDataInURI(cloned.SinkURI)
+	cloned.Config.maskSensitiveData()
+	return cloned, nil
+}
+
+// maskSensitiveData masks configured API fields without populating omitted fields.
+func (c *ReplicaConfig) maskSensitiveData() {
+	if c == nil {
+		return
+	}
+	if c.Consistent != nil && c.Consistent.Storage != nil {
+		*c.Consistent.Storage = util.MaskSensitiveDataInURI(*c.Consistent.Storage)
+	}
+	if c.Sink == nil {
+		return
+	}
+
+	if c.Sink.SchemaRegistry != nil {
+		*c.Sink.SchemaRegistry = util.MaskSensitiveDataInURI(*c.Sink.SchemaRegistry)
+	}
+	var sensitiveFields []*string
+	if kafka := c.Sink.KafkaConfig; kafka != nil {
+		sensitiveFields = append(sensitiveFields,
+			kafka.SASLPassword,
+			kafka.SASLGssAPIPassword,
+			kafka.SASLOAuthClientSecret,
+			kafka.Key)
+		if kafka.SASLOAuthTokenURL != nil {
+			*kafka.SASLOAuthTokenURL = util.MaskSensitiveDataInURI(*kafka.SASLOAuthTokenURL)
+		}
+		if kafka.LargeMessageHandle != nil {
+			kafka.LargeMessageHandle.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(kafka.LargeMessageHandle.ClaimCheckStorageURI)
+		}
+		if glue := kafka.GlueSchemaRegistryConfig; glue != nil {
+			sensitiveFields = append(sensitiveFields, &glue.AccessKey, &glue.SecretAccessKey, &glue.Token)
+		}
+	}
+	if pulsar := c.Sink.PulsarConfig; pulsar != nil {
+		sensitiveFields = append(sensitiveFields, pulsar.AuthenticationToken, pulsar.BasicPassword)
+		if pulsar.OAuth2 != nil {
+			sensitiveFields = append(sensitiveFields, &pulsar.OAuth2.OAuth2PrivateKey)
+		}
+	}
+	for _, field := range sensitiveFields {
+		if field != nil && *field != "" {
+			*field = "******"
+		}
+	}
+}
+
 // Unmarshal unmarshals into *ChangeFeedInfo from json marshal byte slice
 func (info *ChangeFeedInfo) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, &info)
@@ -1524,6 +1598,7 @@ type KafkaConfig struct {
 	SASLOAuthClientID            *string                   `json:"sasl_oauth_client_id,omitempty" toml:"sasl-oauth-client-id,omitempty"`
 	SASLOAuthClientSecret        *string                   `json:"sasl_oauth_client_secret,omitempty" toml:"sasl-oauth-client-secret,omitempty"`
 	SASLOAuthTokenURL            *string                   `json:"sasl_oauth_token_url,omitempty" toml:"sasl-oauth-token-url,omitempty"`
+	SASLOAuthCA                  *string                   `json:"sasl_oauth_ca,omitempty" toml:"sasl-oauth-ca,omitempty"`
 	SASLOAuthScopes              []string                  `json:"sasl_oauth_scopes,omitempty" toml:"sasl-oauth-scopes,omitempty"`
 	SASLOAuthGrantType           *string                   `json:"sasl_oauth_grant_type,omitempty" toml:"sasl-oauth-grant-type,omitempty"`
 	SASLOAuthAudience            *string                   `json:"sasl_oauth_audience,omitempty" toml:"sasl-oauth-audience,omitempty"`
@@ -1603,6 +1678,11 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue *bool `json:"output_old_value,omitempty" toml:"output-old-value,omitempty"`
+	IncludeStartTs *bool `json:"include_start_ts,omitempty" toml:"include-start-ts,omitempty"`
+}
+
+// SimpleConfig represents the configurations for simple protocol encoding
+type SimpleConfig struct {
 	IncludeStartTs *bool `json:"include_start_ts,omitempty" toml:"include-start-ts,omitempty"`
 }
 

@@ -214,6 +214,9 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 	}, retry.WithBackoffBaseDelay(500),
 		retry.WithBackoffMaxDelay(1000),
 		retry.WithMaxTries(6),
+		retry.WithIsRetryableErr(func(err error) bool {
+			return !kafka.IsUnretryableKafkaError(err)
+		}),
 	)
 	if err != nil {
 		log.Warn("kafka topic metadata refresh failed",
@@ -260,8 +263,6 @@ func (m *kafkaTopicManager) createTopic(
 		return 0, err
 	}
 
-	m.tryUpdatePartitionsAndLogging(topicName, m.cfg.PartitionNum)
-
 	return m.cfg.PartitionNum, nil
 }
 
@@ -272,27 +273,15 @@ func (m *kafkaTopicManager) createTopic(
 func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	ctx context.Context, topicName string,
 ) (int32, error) {
-	// If the topic is not in the cache, we try to get the metadata of the topic.
-	// ignoreTopicErr is set to true to ignore the error if the topic is not found,
-	// which means we should create the topic later.
-	topicDetails, err := m.admin.GetTopicsMeta([]string{topicName}, true)
-	if err != nil {
-		if kafka.IsAuthorizationFailed(err) {
-			return m.useConfiguredPartitionNum(topicName, err), nil
+	// If the topic is not in the cache, try to get its metadata.
+	topicDetails, err := m.admin.GetTopicsMeta([]string{topicName}, false)
+	if err == nil {
+		if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
+			return numPartition, nil
 		}
-		return 0, err
 	}
-	if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
-		return numPartition, nil
-	}
-
-	topicDetails, err = m.admin.GetTopicsMeta([]string{topicName}, false)
-	if err != nil {
-		if kafka.IsAuthorizationFailed(err) {
-			return m.useConfiguredPartitionNum(topicName, err), nil
-		}
-	} else if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
-		return numPartition, nil
+	if kafka.IsAuthorizationFailed(err) {
+		return m.useConfiguredPartitionNum(topicName, err), nil
 	}
 
 	start := time.Now()
@@ -308,6 +297,7 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	if err != nil {
 		return 0, err
 	}
+	m.tryUpdatePartitionsAndLogging(topicName, partitionNum)
 
 	log.Info(
 		"kafka topic created",

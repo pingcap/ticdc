@@ -14,7 +14,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"strings"
 
 	"github.com/pingcap/log"
@@ -117,6 +116,18 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 		return nil
 	}
 	cmd.Printf("Diff of changefeed config:\n")
+	safeOld, err := old.CloneWithMaskedSensitiveData()
+	if err != nil {
+		return err
+	}
+	safeNew, err := newInfo.CloneWithMaskedSensitiveData()
+	if err != nil {
+		return err
+	}
+	changelog, err = diff.Diff(safeOld, safeNew)
+	if err != nil {
+		return err
+	}
 	for _, change := range changelog {
 		cmd.Printf("%+v\n", change)
 	}
@@ -169,7 +180,7 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	infoStr, err := json.Marshal(info)
+	infoStr, err := info.Marshal()
 	if err != nil {
 		return err
 	}

@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
@@ -64,20 +65,7 @@ func transformDDLJobQuery(job *model.Job) (string, error) {
 // isSplitable returns whether the table is eligible for split in all sinks
 // Only the table with pk and no uk can be splitted in all sinks.
 func isSplitable(tableInfo *model.TableInfo) bool {
-	if tableInfo.GetPkColInfo() == nil {
-		return false
-	}
-
-	indices := tableInfo.Indices
-	for _, index := range indices {
-		if index.Primary {
-			continue
-		}
-		if index.Unique {
-			return false
-		}
-	}
-	return true
+	return common.IsSplitable(tableInfo.GetPkColInfo(), tableInfo.Indices)
 }
 
 func getIndexIDs(job *model.Job) []int64 {
