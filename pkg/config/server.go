@@ -24,7 +24,9 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	meteringconfig "github.com/pingcap/metering_sdk/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/metering"
 	"github.com/pingcap/ticdc/pkg/security"
 	"go.uber.org/zap"
 )
@@ -164,6 +166,9 @@ type ServerConfig struct {
 	Encryption *EncryptionConfig    `toml:"encryption" json:"encryption"`
 	Debug      *DebugConfig         `toml:"debug" json:"debug"`
 	ClusterID  string               `toml:"cluster-id" json:"cluster-id"`
+
+	Metering *meteringconfig.MeteringConfig `toml:"metering" json:"metering,omitempty"`
+
 	// Deprecated: we don't use this field anymore.
 	GcTunerMemoryThreshold uint64  `toml:"gc-tuner-memory-threshold" json:"gc-tuner-memory-threshold"`
 	MemoryLimitPercentage  float64 `toml:"memory-limit-percentage" json:"memory-limit-percentage"`
@@ -194,8 +199,16 @@ func (c *ServerConfig) Unmarshal(data []byte) error {
 
 // String implements the Stringer interface
 func (c *ServerConfig) String() string {
-	s, _ := c.Marshal()
+	s, _ := c.Redacted().Marshal()
 	return s
+}
+
+// Redacted returns a configuration view with metering credentials removed.
+// It does not change the configuration used by clients or Clone.
+func (c *ServerConfig) Redacted() *ServerConfig {
+	clone := *c
+	clone.Metering = metering.RedactConfig(c.Metering)
+	return &clone
 }
 
 // Clone clones a replication
@@ -216,6 +229,9 @@ func (c *ServerConfig) Clone() *ServerConfig {
 
 // ValidateAndAdjust validates and adjusts the server configuration
 func (c *ServerConfig) ValidateAndAdjust() error {
+	if err := metering.ValidateConfig(c.Metering); err != nil {
+		return err
+	}
 	if !isValidClusterID(c.ClusterID) {
 		return cerror.ErrInvalidServerOption.GenWithStack(fmt.Sprintf("bad cluster-id"+
 			"please match the pattern \"^[a-zA-Z0-9]+(\\-[a-zA-Z0-9]+)*$\", and not the list of"+

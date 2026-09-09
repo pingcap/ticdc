@@ -37,6 +37,35 @@ func TestServerConfigMarshal(t *testing.T) {
 	require.Equal(t, conf, conf2)
 }
 
+func TestServerMeteringConfig(t *testing.T) {
+	t.Parallel()
+	cfg := GetDefaultServerConfig()
+	require.Nil(t, cfg.Metering)
+	md, err := toml.Decode(`
+[metering]
+type = "s3"
+region = "us-west-2"
+bucket = "metering-bucket"
+shared-pool-id = "pool1"
+[metering.aws]
+access-key = "test-access"
+secret-access-key = "test-secret"
+session-token = "test-token"
+`, cfg)
+	require.NoError(t, err)
+	require.Empty(t, md.Undecoded())
+	require.NoError(t, cfg.ValidateAndAdjust())
+	clone := cfg.Clone()
+	require.Equal(t, cfg, clone)
+	clone.Metering.AWS.SecretAccessKey = "changed"
+	require.Equal(t, "test-secret", cfg.Metering.AWS.SecretAccessKey)
+	for _, secret := range []string{"test-access", "test-secret", "test-token"} {
+		require.NotContains(t, cfg.String(), secret)
+	}
+	cfg.Metering.Bucket = ""
+	require.Error(t, cfg.ValidateAndAdjust())
+}
+
 func TestServerConfigDecodeEnableLegacySafePoint(t *testing.T) {
 	t.Parallel()
 

@@ -1,1 +1,17 @@
 newarch=true
+
+# Metering destination (disabled when type is absent).
+# A nonempty type initializes the traffic reporter when this node becomes coordinator.
+# Initialization errors propagate to the server and cause it to exit.
+# Periodic submission of changefeed traffic records is pending.
+# [metering]
+# type = "s3"
+# region = "us-west-2"
+# bucket = "example-metering"
+# prefix = "ticdc"
+# shared-pool-id = "example-pool"
+# Use the provider credential chain, such as a workload identity.
+# For local validation use type = "localfs" and:
+# [metering.localfs]
+# base-path = "/tmp/ticdc-metering"
+# create-dirs = true
