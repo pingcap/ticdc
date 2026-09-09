@@ -28,7 +28,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const defaultCaptureRemoveTTL = 5
+const defaultCaptureRemoveTTL = 10
 
 // GlobalReactorState represents a global state which stores all key-value pairs in ETCD
 type GlobalReactorState struct {
@@ -64,6 +64,12 @@ func NewGlobalState(clusterID string, captureSessionTTL int) *GlobalReactorState
 		captureRemoveTTL: captureRemoveTTL,
 		toRemoveCaptures: make(map[config.CaptureID]time.Time),
 	}
+}
+
+// CaptureRemoveTTLSeconds returns the delay between observing capture-key
+// deletion and publishing the capture removal to schedulers.
+func (s *GlobalReactorState) CaptureRemoveTTLSeconds() int {
+	return s.captureRemoveTTL
 }
 
 // NewGlobalStateForTest creates a new global state for test.
