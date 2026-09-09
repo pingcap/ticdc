@@ -958,8 +958,8 @@ github.com/tmc/grpc-websocket-proxy v0.0.0-20220101234140-673ab2c3ae75/go.mod h1
 github.com/twitchyliquid64/golang-asm v0.15.1 h1:SU5vSMR7hnwNxj24w34ZyCi/FmDZTkS4MhqMhdFk5YI=
 github.com/twitchyliquid64/golang-asm v0.15.1/go.mod h1:a1lVb/DtPvCB8fslRZhAngC2+aY1QWCk3Cedj/Gdt08=
 github.com/twmb/franz-go v1.7.0/go.mod h1:PMze0jNfNghhih2XHbkmTFykbMF5sJqmNJB31DOOzro=
-github.com/twmb/franz-go v1.21.7-0.20260908061941-0672c02324bb h1:k+v0aE21w873ZOAGCttw2yDmBgVYuD44AVwZ97V3LLw=
-github.com/twmb/franz-go v1.21.7-0.20260908061941-0672c02324bb/go.mod h1:wMepkgCatAdV9vCsuwM+wr+C1fl7KV/41+uHGAjt/wc=
+github.com/twmb/franz-go v1.21.7-0.20260908230303-83e2b295ffca h1:EkZA1IAW50n2opjXO6GE49ctsv3+c2mSOfqbjnRa1Ds=
+github.com/twmb/franz-go v1.21.7-0.20260908230303-83e2b295ffca/go.mod h1:wMepkgCatAdV9vCsuwM+wr+C1fl7KV/41+uHGAjt/wc=
 github.com/twmb/franz-go/pkg/kadm v1.18.0 h1:WRf/LZmDdcDXwX7WMbtDU++v+b3NzYh2bCGoPMmzirw=
 github.com/twmb/franz-go/pkg/kadm v1.18.0/go.mod h1:XeLhGoLXLFzK8/ryv5FfpxPxGwj4oFEGpPJMB/x6KDE=
 github.com/twmb/franz-go/pkg/kfake v0.0.0-20260727183601-4176fc0fcaf7 h1:OLL/h1pOsMuCnJEp3IW0L2W3jHATeTUMAmE6PxxbhtU=
