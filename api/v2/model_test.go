@@ -157,7 +157,6 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(2000), util.GetOrZero(internalCfg.Consistent.FlushIntervalInMs))
 	require.Equal(t, "s3://test", util.GetOrZero(internalCfg.Consistent.Storage))
 	require.Equal(t, int64(2048), util.GetOrZero(internalCfg.Consistent.SpoolDiskQuota))
-	require.Equal(t, "/tmp/redo-spool", util.GetOrZero(internalCfg.Consistent.SpoolBaseDir))
 	// output_old_value is omitted in apiCfg and must keep its default (true).
 	require.True(t, internalCfg.Sink.Debezium.OutputOldValue)
 
@@ -201,7 +200,6 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
 	require.Equal(t, "eventual", *apiCfgBack.Consistent.Level)
 	require.Equal(t, int64(2048), *apiCfgBack.Consistent.SpoolDiskQuota)
-	require.Equal(t, "/tmp/redo-spool", *apiCfgBack.Consistent.SpoolBaseDir)
 
 	// Test case 4: batch fields round trip and nil preservation
 	apiBatchCfg := &ReplicaConfig{

@@ -355,9 +355,6 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		if c.Consistent.SpoolDiskQuota != nil {
 			res.Consistent.SpoolDiskQuota = c.Consistent.SpoolDiskQuota
 		}
-		if c.Consistent.SpoolBaseDir != nil {
-			res.Consistent.SpoolBaseDir = c.Consistent.SpoolBaseDir
-		}
 
 		if c.Consistent.MemoryUsage != nil {
 			res.Consistent.MemoryUsage = &config.ConsistentMemoryUsage{
@@ -1042,9 +1039,6 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		}
 		if cloned.Consistent.SpoolDiskQuota != nil {
 			res.Consistent.SpoolDiskQuota = cloned.Consistent.SpoolDiskQuota
-		}
-		if cloned.Consistent.SpoolBaseDir != nil {
-			res.Consistent.SpoolBaseDir = cloned.Consistent.SpoolBaseDir
 		}
 		if cloned.Consistent.MemoryUsage != nil {
 			res.Consistent.MemoryUsage = &ConsistentMemoryUsage{
