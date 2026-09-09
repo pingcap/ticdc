@@ -58,7 +58,7 @@ mysql_groups=(
 	# G13
 	'tidb_mysql_test fail_over region_merge fail_over_ddl_mix_random_delay'
 	# G14
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix capture_write_lease'
 	# G15
 	'fail_over_ddl_mix_with_syncpoint'
 )
