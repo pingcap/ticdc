@@ -28,12 +28,15 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
+<<<<<<< HEAD
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/file"
 	"github.com/pingcap/ticdc/pkg/util"
 	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
 	"github.com/pingcap/tidb/br/pkg/storage"
+=======
+>>>>>>> fbb2228d1 (redo: add DML two-stage ack (#5956))
 	"github.com/pingcap/tidb/pkg/meta/model"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/stretchr/testify/require"
@@ -42,22 +45,13 @@ import (
 )
 
 func genLogFile(
-	ctx context.Context, t *testing.T,
+	_ context.Context, t *testing.T,
 	dir string, logType string,
 	minCommitTs, maxCommitTs uint64,
 ) {
-	consistentCfg := testutil.NewConsistentConfig("file://" + dir)
-	consistentCfg.MaxLogSize = util.AddressOf(int64(1))
-	cfg, err := writer.NewConfig(
-		common.NewChangeFeedIDWithName("reader-test", common.DefaultKeyspaceName),
-		consistentCfg,
-	)
-	require.NoError(t, err)
 	fileName := fmt.Sprintf(redo.RedoLogFileFormatV2, "capture", "default",
 		"changefeed", logType, maxCommitTs, uuid.NewString(), redo.LogEXT)
-	w, err := file.NewFileWriter(ctx, cfg, logType, writer.WithLogFileName(func() string {
-		return fileName
-	}))
+	w, err := newFramedFileWriter(filepath.Join(dir, fileName))
 	require.Nil(t, err)
 	if logType == redo.RedoRowLogFileType {
 		// generate unsorted logs
@@ -71,8 +65,7 @@ func genLogFile(
 			log := event.ToRedoLog()
 			rawData, err := codec.MarshalRedoLog(log, nil)
 			require.Nil(t, err)
-			_, err = w.Write(rawData)
-			require.Nil(t, err)
+			require.NoError(t, w.Write(rawData))
 		}
 	} else if logType == redo.RedoDDLLogFileType {
 		event := &pevent.DDLEvent{
@@ -82,8 +75,7 @@ func genLogFile(
 		log := event.ToRedoLog()
 		rawData, err := codec.MarshalRedoLog(log, nil)
 		require.Nil(t, err)
-		_, err = w.Write(rawData)
-		require.Nil(t, err)
+		require.NoError(t, w.Write(rawData))
 	}
 	err = w.Close()
 	require.Nil(t, err)

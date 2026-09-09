@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memory
+package writer
 
 import (
 	"context"
@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -31,14 +30,17 @@ import (
 
 // polymorphicRedoEvent wraps RedoLog and callback for file worker.
 type polymorphicRedoEvent struct {
-	commitTs common.Ts
-	data     []byte
-	callback func()
+	commitTs         common.Ts
+	data             []byte
+	postEnqueue      func()
+	postFlush        func()
+	flushImmediately bool
+	flushBarrier     chan error
 }
 
 func (e *polymorphicRedoEvent) PostFlush() {
-	if e.callback != nil {
-		e.callback()
+	if e.postFlush != nil {
+		e.postFlush()
 	}
 }
 
@@ -51,14 +53,17 @@ func toPolymorphicDMLEvent(
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrMarshalFailed, err)
 	}
-	lenField, padBytes := writer.EncodeFrameSize(len(rawData))
+	lenField, padBytes := EncodeFrameSize(len(rawData))
 	data := make([]byte, 8+len(rawData)+padBytes)
 	binary.LittleEndian.PutUint64(data[:8], lenField)
 	copy(data[8:], rawData)
+	// Store the callback fields instead of method values such as event.PostFlush.
+	// A method value captures event and would retain its RowChange and TableInfo until the callback runs.
 	return &polymorphicRedoEvent{
-		commitTs: rl.GetCommitTs(),
-		callback: event.PostFlush,
-		data:     data,
+		commitTs:    rl.GetCommitTs(),
+		postEnqueue: event.EnqueueCallback,
+		postFlush:   event.Callback,
+		data:        data,
 	}, nil
 }
 
@@ -73,7 +78,7 @@ type encodingWorkerGroup struct {
 	closed     chan error
 }
 
-func newEncodingWorkerGroup(cfg *writer.Config) *encodingWorkerGroup {
+func newEncodingWorkerGroup(cfg *Config) *encodingWorkerGroup {
 	workerNum := cfg.EncodingWorkerNum()
 	if workerNum <= 0 {
 		workerNum = redo.DefaultEncodingWorkerNum

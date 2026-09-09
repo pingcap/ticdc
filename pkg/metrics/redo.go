@@ -92,14 +92,19 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
 	}, []string{getKeyspaceLabel(), "changefeed", "type"})
 
-	// RedoWorkerBusyRatio records the busy ratio of redo sink worker.
+	// RedoWorkerBusyRatio records the busy time of redo writer workers.
 	RedoWorkerBusyRatio = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Subsystem: subsystem,
 			Name:      "worker_busy_ratio",
+<<<<<<< HEAD
 			Help:      "Busy ratio for redo sink worker.",
 		}, []string{getKeyspaceLabel(), "changefeed", "type"})
+=======
+			Help:      "Busy time in seconds for redo writer workers.",
+		}, []string{GetKeyspaceLabel(), "changefeed", "type"})
+>>>>>>> fbb2228d1 (redo: add DML two-stage ack (#5956))
 )
 
 func initRedoMetrics(registry *prometheus.Registry) {

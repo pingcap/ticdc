@@ -107,6 +107,8 @@ func TestReplicaConfigConversion(t *testing.T) {
 			MaxLogSize:        util.AddressOf(int64(128)),
 			FlushIntervalInMs: util.AddressOf(int64(2000)),
 			Storage:           util.AddressOf("s3://test"),
+			SpoolDiskQuota:    util.AddressOf(int64(2048)),
+			SpoolBaseDir:      util.AddressOf("/tmp/redo-spool"),
 		},
 	}
 
@@ -132,6 +134,25 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(128), util.GetOrZero(internalCfg.Consistent.MaxLogSize))
 	require.Equal(t, int64(2000), util.GetOrZero(internalCfg.Consistent.FlushIntervalInMs))
 	require.Equal(t, "s3://test", util.GetOrZero(internalCfg.Consistent.Storage))
+<<<<<<< HEAD
+=======
+	require.Equal(t, int64(2048), util.GetOrZero(internalCfg.Consistent.SpoolDiskQuota))
+	// output_old_value is omitted in apiCfg and must keep its default (true).
+	require.True(t, internalCfg.Sink.Debezium.OutputOldValue)
+
+	// An explicit output_old_value must be honored.
+	apiCfgDebezium := &ReplicaConfig{
+		Sink: &SinkConfig{
+			DebeziumConfig: &DebeziumConfig{
+				OutputOldValue: util.AddressOf(false),
+				IncludeStartTs: util.AddressOf(true),
+			},
+		},
+	}
+	internalDebezium := apiCfgDebezium.ToInternalReplicaConfig()
+	require.False(t, internalDebezium.Sink.Debezium.OutputOldValue)
+	require.True(t, util.GetOrZero(internalDebezium.Sink.Debezium.IncludeStartTs))
+>>>>>>> fbb2228d1 (redo: add DML two-stage ack (#5956))
 
 	// Test case 2: Nil fields (should use defaults or be nil)
 	apiCfgNil := &ReplicaConfig{}
@@ -155,6 +176,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
 	require.Equal(t, "eventual", *apiCfgBack.Consistent.Level)
+	require.Equal(t, int64(2048), *apiCfgBack.Consistent.SpoolDiskQuota)
 
 	// Test case 4: batch fields round trip and nil preservation
 	apiBatchCfg := &ReplicaConfig{

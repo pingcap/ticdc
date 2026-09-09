@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package blackhole
+package writer
 
 import (
 	"context"
@@ -19,14 +19,13 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"go.uber.org/zap"
 )
 
 var (
-	_ writer.RedoDMLWriter = (*blackHoleDMLWriter)(nil)
-	_ writer.RedoDDLWriter = (*blackHoleDDLWriter)(nil)
+	_ RedoDMLWriter = (*blackHoleDMLWriter)(nil)
+	_ RedoDDLWriter = (*blackHoleDDLWriter)(nil)
 )
 
 // blackHoleSink defines a blackHole storage, it receives events and persists
@@ -39,15 +38,13 @@ type blackHoleDDLWriter struct {
 	invalid bool
 }
 
-// NewDMLWriter creates a blackHole DML writer.
-func NewDMLWriter(invalid bool) *blackHoleDMLWriter {
+func newBlackHoleDMLWriter(invalid bool) *blackHoleDMLWriter {
 	return &blackHoleDMLWriter{
 		invalid: invalid,
 	}
 }
 
-// NewDDLWriter creates a blackHole DDL writer.
-func NewDDLWriter(invalid bool) *blackHoleDDLWriter {
+func newBlackHoleDDLWriter(invalid bool) *blackHoleDDLWriter {
 	return &blackHoleDDLWriter{
 		invalid: invalid,
 	}
@@ -77,6 +74,7 @@ func (bs *blackHoleDMLWriter) AddDMLEvents(_ context.Context, events ...*event.R
 	log.Debug("write redo events", fields...)
 	for _, e := range events {
 		if e != nil {
+			e.PostEnqueue()
 			e.PostFlush()
 		}
 	}
