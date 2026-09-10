@@ -109,9 +109,10 @@ const (
 	TypeSetNodeLivenessRequest                   IOType = 43
 	TypeSetNodeLivenessResponse                  IOType = 44
 	TypeSetDispatcherDrainTargetRequest          IOType = 45
-	TypeLogCoordinatorEventBrokerDispatcherCount IOType = 46
-	TypeEventBrokerDispatcherCountRequest        IOType = 47
-	TypeEventBrokerDispatcherCountResponse       IOType = 48
+	TypeNodeHeartbeatResponse                    IOType = 46
+	TypeLogCoordinatorEventBrokerDispatcherCount IOType = 47
+	TypeEventBrokerDispatcherCountRequest        IOType = 48
+	TypeEventBrokerDispatcherCountResponse       IOType = 49
 )
 
 func (t IOType) String() string {
@@ -206,6 +207,8 @@ func (t IOType) String() string {
 		return "SetNodeLivenessResponse"
 	case TypeSetDispatcherDrainTargetRequest:
 		return "SetDispatcherDrainTargetRequest"
+	case TypeNodeHeartbeatResponse:
+		return "NodeHeartbeatResponse"
 	case TypeLogCoordinatorEventBrokerDispatcherCount:
 		return "TypeLogCoordinatorEventBrokerDispatcherCount"
 	case TypeEventBrokerDispatcherCountRequest:
@@ -412,6 +415,8 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.SetNodeLivenessResponse{}
 	case TypeSetDispatcherDrainTargetRequest:
 		m = &heartbeatpb.SetDispatcherDrainTargetRequest{}
+	case TypeNodeHeartbeatResponse:
+		m = &heartbeatpb.NodeHeartbeatResponse{}
 	case TypeLogCoordinatorEventBrokerDispatcherCount:
 		m = &logservicepb.EventBrokerDispatcherCount{}
 	case TypeEventBrokerDispatcherCountRequest:
@@ -538,6 +543,8 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeSetNodeLivenessResponse
 	case *heartbeatpb.SetDispatcherDrainTargetRequest:
 		ioType = TypeSetDispatcherDrainTargetRequest
+	case *heartbeatpb.NodeHeartbeatResponse:
+		ioType = TypeNodeHeartbeatResponse
 	case *logservicepb.EventBrokerDispatcherCount:
 		ioType = TypeLogCoordinatorEventBrokerDispatcherCount
 	case *logservicepb.EventBrokerDispatcherCountRequest:
