@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -53,6 +54,10 @@ type SharedInfo struct {
 	// If true, we need to check whether a DDL event received by a split dispatcher
 	// will break the splittability of this table.
 	enableSplittableCheck bool
+
+	// router is used to route source schema/table names to target schema/table names.
+	// It is used to apply routing to TableInfo before storing it.
+	router routing.Router
 
 	// Shared resources
 	// statusesChan is used to store the status of dispatchers when status changed
@@ -87,6 +92,7 @@ func NewSharedInfo(
 	syncPointConfig *syncpoint.SyncPointConfig,
 	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
+	router routing.Router,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	errCh chan error,
@@ -101,6 +107,7 @@ func NewSharedInfo(
 		filterConfig:          filterConfig,
 		syncPointConfig:       syncPointConfig,
 		enableSplittableCheck: enableSplittableCheck,
+		router:                router,
 		statusesChan:          statusesChan,
 		blockStatusesChan:     blockStatusesChan,
 		blockExecutor:         newBlockEventExecutor(),
@@ -174,6 +181,10 @@ func (d *BasicDispatcher) GetTimezone() string {
 
 func (d *BasicDispatcher) IsOutputRawChangeEvent() bool {
 	return d.sharedInfo.outputRawChangeEvent
+}
+
+func (d *BasicDispatcher) GetRouter() routing.Router {
+	return d.sharedInfo.GetRouter()
 }
 
 func (d *BasicDispatcher) GetFilterConfig() *eventpb.FilterConfig {
@@ -264,6 +275,12 @@ func (s *SharedInfo) GetErrCh() chan error {
 
 func (s *SharedInfo) GetBlockEventExecutor() *blockEventExecutor {
 	return s.blockExecutor
+}
+
+// GetRouter returns the router for schema/table name routing.
+// The zero value router is a no-op router.
+func (s *SharedInfo) GetRouter() routing.Router {
+	return s.router
 }
 
 func (s *SharedInfo) Close() {

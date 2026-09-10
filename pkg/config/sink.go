@@ -16,6 +16,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -140,7 +141,6 @@ type SinkConfig struct {
 	// Protocol is NOT available when the downstream is DB.
 	Protocol *string `toml:"protocol" json:"protocol,omitempty"`
 
-	// DispatchRules is only available when the downstream is MQ.
 	DispatchRules []*DispatchRule `toml:"dispatchers" json:"dispatchers,omitempty"`
 
 	ColumnSelectors []*ColumnSelector `toml:"column-selectors" json:"column-selectors,omitempty"`
@@ -249,6 +249,22 @@ func (s *SinkConfig) ShouldSendAllBootstrapAtStart() bool {
 	should := s.ShouldSendBootstrapMsg() && util.GetOrZero(s.SendAllBootstrapAtStart)
 	log.Info("should send all bootstrap at start", zap.Bool("should", should))
 	return should
+}
+
+// TableRouteEnabled return true if there is at least one rule enabled.
+func (s *SinkConfig) TableRouteEnabled() bool {
+	if s == nil {
+		return false
+	}
+	for _, rule := range s.DispatchRules {
+		if rule == nil {
+			continue
+		}
+		if rule.TargetSchema != "" || rule.TargetTable != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // CSVConfig defines a series of configuration items for csv codec.
@@ -387,8 +403,11 @@ func (d DateSeparator) String() string {
 	}
 }
 
-// DispatchRule represents partition rule for a table.
+// DispatchRules configures event routing.
+// For MQ sinks, rules control topic / partition dispatching.
+// TargetSchema and TargetTable configure table routing.
 type DispatchRule struct {
+	// Rules are evaluated in order, and the first matching rule wins.
 	Matcher []string `toml:"matcher" json:"matcher"`
 	// Deprecated, please use PartitionRule.
 	DispatcherRule string `toml:"dispatcher" json:"dispatcher"`
@@ -403,6 +422,22 @@ type DispatchRule struct {
 	Columns []string `toml:"columns" json:"columns"`
 
 	TopicRule string `toml:"topic" json:"topic"`
+
+	// TargetSchema sets the routed downstream schema name.
+	// Leave it empty to keep the source schema name.
+	// For example, if the source table is `sales`.`orders`, `target-schema = "sales_bak"`
+	// writes to `sales_bak`.`orders`.
+	// You can also use placeholders. For example, `target-schema = "{schema}_bak"`
+	// becomes `sales_bak`.
+	TargetSchema string `toml:"target-schema" json:"target-schema"`
+
+	// TargetTable sets the routed downstream table name.
+	// Leave it empty to keep the source table name.
+	// For example, if the source table is `sales`.`orders`, `target-table = "orders_bak"`
+	// writes to `sales`.`orders_bak`.
+	// You can also use placeholders. For example, `target-table = "{schema}_{table}"`
+	// becomes `sales_orders`.
+	TargetTable string `toml:"target-table" json:"target-table"`
 }
 
 // ColumnSelector represents a column selector for a table.
@@ -744,6 +779,10 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		return err
 	}
 
+	if err := s.validateTableRoute(); err != nil {
+		return err
+	}
+
 	if IsMySQLCompatibleScheme(sinkURI.Scheme) {
 		return nil
 	}
@@ -859,6 +898,21 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		s.AdvanceTimeoutInSec = util.AddressOf(DefaultAdvanceTimeoutInSec)
 	}
 
+	return nil
+}
+
+func (s *SinkConfig) validateTableRoute() error {
+	for _, rule := range s.DispatchRules {
+		if rule == nil || (rule.TargetSchema == "" && rule.TargetTable == "") {
+			continue
+		}
+		if err := validateRoutingExpression("target-schema", rule.TargetSchema); err != nil {
+			return err
+		}
+		if err := validateRoutingExpression("target-table", rule.TargetTable); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1113,4 +1167,21 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
+}
+
+// validRoutingExpressionRegexp accepts routing expressions made of literal text
+// and the {schema}/{table} placeholders, such as "archive", "{table}_bak", or "{schema}_{table}".
+var validRoutingExpressionRegexp = regexp.MustCompile(`^(?:[^{}]|\{schema\}|\{table\})*$`)
+
+// validateRoutingExpression validates a routing expression for a single routing field.
+// Valid expressions can contain literal text and {schema} or {table} placeholders.
+func validateRoutingExpression(fieldName, expr string) error {
+	if expr == "" || validRoutingExpressionRegexp.MatchString(expr) {
+		return nil
+	}
+	return cerror.ErrInvalidTableRoutingRule.GenWithStack(
+		"%s %q must contain only literal text, {schema}, and {table}",
+		fieldName,
+		expr,
+	)
 }

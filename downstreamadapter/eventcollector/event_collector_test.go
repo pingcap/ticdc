@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -114,6 +115,10 @@ func (m *mockEventDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 
 func (m *mockEventDispatcher) IsOutputRawChangeEvent() bool {
 	return false
+}
+
+func (m *mockEventDispatcher) GetRouter() routing.Router {
+	return routing.Router{}
 }
 
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {

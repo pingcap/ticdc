@@ -48,6 +48,26 @@ func TestBuildActiveActiveUpsertSQLMultiRows(t *testing.T) {
 	require.Equal(t, common.RowTypeInsert, rowTypes)
 }
 
+func TestBuildActiveActiveUpsertSQLUsesRoutedTargetTable(t *testing.T) {
+	writer, _, _ := newTestMysqlWriter(t)
+	defer writer.db.Close()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table t (id int primary key, name varchar(32), _tidb_origin_ts bigint unsigned null, _tidb_softdelete_time timestamp null);")
+	require.NotNil(t, job)
+
+	event := helper.DML2Event("test", "t", "insert into t values (1, 'alice', 10, NULL)")
+	event.TableInfo = helper.GetTableInfo(job).CloneWithRouting("target_db", "target_table")
+
+	rows, commitTs := writer.collectActiveActiveRows(event)
+	sql, _, _ := buildActiveActiveUpsertSQL(event.TableInfo, rows, commitTs)
+	require.Contains(t, sql, "INSERT INTO `target_db`.`target_table`")
+	require.NotContains(t, sql, "`test`.`t`")
+}
+
 func TestActiveActiveNormalSQLs(t *testing.T) {
 	writer, _, _ := newTestMysqlWriter(t)
 	defer writer.db.Close()

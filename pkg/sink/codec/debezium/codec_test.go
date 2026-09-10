@@ -28,6 +28,44 @@ import (
 	"github.com/thanhpk/randstr"
 )
 
+func TestTableRouteDDLRenameUsesTargetNames(t *testing.T) {
+	codec := &dbzCodec{
+		config:    common.NewConfig(config.ProtocolDebezium),
+		clusterID: "test_cluster",
+		nowFunc:   func() time.Time { return time.Unix(1701326309, 0) },
+	}
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job(`create table test.table1(id int primary key)`)
+	sourceDDL := helper.DDL2Event(`rename table test.table1 to test.table2`)
+	require.NotNil(t, sourceDDL)
+
+	routedDDL := commonEvent.NewRoutedDDLEvent(
+		sourceDDL,
+		"RENAME TABLE `target_db`.`old_target_table` TO `target_db`.`new_target_table`",
+		"target_db",
+		"new_target_table",
+		"target_db",
+		"old_target_table",
+		sourceDDL.TableInfo.CloneWithRouting("target_db", "new_target_table"),
+		nil,
+		nil,
+	)
+
+	keyBuf := bytes.NewBuffer(nil)
+	valueBuf := bytes.NewBuffer(nil)
+	err := codec.EncodeDDLEvent(routedDDL, keyBuf, valueBuf)
+	require.NoError(t, err)
+
+	require.Contains(t, keyBuf.String(), "\"databaseName\":\"target_db\"")
+	require.Contains(t, valueBuf.String(), "\"db\":\"target_db\"")
+	require.Contains(t, valueBuf.String(), "\"table\":\"new_target_table\"")
+	require.Contains(t, valueBuf.String(), "\"id\":\"\\\"target_db\\\".\\\"old_target_table\\\",\\\"target_db\\\".\\\"new_target_table\\\"\"")
+}
+
 func TestDDLEvent(t *testing.T) {
 	codec := &dbzCodec{
 		config:    common.NewConfig(config.ProtocolDebezium),

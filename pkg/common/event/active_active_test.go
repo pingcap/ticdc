@@ -369,7 +369,6 @@ func newTestTableInfo(t *testing.T, activeActive, softDelete bool) *commonpkg.Ta
 	ti := commonpkg.WrapTableInfo("test", table)
 	ti.ActiveActiveTable = activeActive
 	ti.SoftDeleteTable = softDelete
-	ti.InitPrivateFields()
 	return ti
 }
 
