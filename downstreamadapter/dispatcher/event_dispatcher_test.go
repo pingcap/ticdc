@@ -15,7 +15,6 @@ package dispatcher
 
 import (
 	"fmt"
-	"github.com/pingcap/ticdc/pkg/routing"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -30,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/stretchr/testify/require"
 )
 

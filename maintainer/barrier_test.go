@@ -570,7 +570,7 @@ func TestBarrierRejectsNonblockingRouteConflict(t *testing.T) {
 }
 
 func TestBarrierAppliesRecoveredRouteEventBeforeActionResend(t *testing.T) {
-	testutil.SetUpTestServices(t)
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -628,7 +628,7 @@ func TestBarrierAppliesRecoveredRouteEventBeforeActionResend(t *testing.T) {
 }
 
 func TestBarrierCommitsForwardedRouteEventBeforeLaterRouteEvent(t *testing.T) {
-	testutil.SetUpTestServices(t)
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -841,7 +841,7 @@ func newBarrierRoutePrecheckTestFixture(
 	rules []*config.DispatchRule,
 ) (*Barrier, *routing.Admin, common.ChangeFeedID, common.DispatcherID, common.DispatcherID, *heartbeatpb.InfluencedTables) {
 	t.Helper()
-	testutil.SetUpTestServices(t)
+	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,

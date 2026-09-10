@@ -1377,7 +1377,8 @@ func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
 
 	stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
 	stat.connState.setEventServiceID(remoteServerID)
-	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+	stat.epoch.Store(10)
+	stat.lastEventSeq.Store(1)
 	stat.lastEventCommitTs.Store(50)
 
 	tableDDL.Epoch = 10

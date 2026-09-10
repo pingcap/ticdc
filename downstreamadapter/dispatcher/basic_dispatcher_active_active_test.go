@@ -13,12 +13,12 @@
 package dispatcher
 
 import (
-	"github.com/pingcap/ticdc/pkg/routing"
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -136,6 +136,7 @@ func newTestBasicDispatcher(t *testing.T, sinkType common.SinkType, enableActive
 		nil,
 		nil,
 		false,
+		routing.Router{},
 		statuses,
 		blockStatuses,
 		errCh,

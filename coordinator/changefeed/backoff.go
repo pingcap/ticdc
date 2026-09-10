@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -253,7 +254,7 @@ func findFastFailError(errs []*heartbeatpb.RunningError) *heartbeatpb.RunningErr
 		if err == nil {
 			continue
 		}
-		if errors.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(err.Code)) ||
+		if errors.IsChangefeedGCFastFailErrorCode(perrors.RFCErrorCode(err.Code)) ||
 			ShouldFailChangefeed(err) {
 			return err
 		}
