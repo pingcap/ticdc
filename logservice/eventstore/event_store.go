@@ -1521,6 +1521,9 @@ func (e *eventStore) writeEvents(
 	}
 	metrics.EventStoreWritePrepareDurationHistogram.Observe(time.Since(prepareStart).Seconds())
 	start := time.Now()
+	// Simulate slow EventStore storage so write workers remain occupied and
+	// incoming events queue up behind them.
+	failpoint.Inject("SlowEventStoreWrite", nil)
 	err := batch.Commit(pebble.NoSync)
 	metrics.EventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
 	return err
