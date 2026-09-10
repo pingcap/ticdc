@@ -87,7 +87,34 @@ func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 	require.Equal(t, 0, oc.OperatorSize())
 }
 
-func TestBalanceSchedulerSkipsUntilObservedDrainBlockWindowExpires(t *testing.T) {
+func TestBalanceSchedulerSkipsWhileDrainRequestedWithoutLiveness(t *testing.T) {
+	setupCoordinatorSchedulerTestServices()
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+
+	target := node.ID("target")
+	nodeA := node.ID("node-a")
+	nodeB := node.ID("node-b")
+	nodeManager.GetAliveNodes()[target] = &node.Info{ID: target}
+	nodeManager.GetAliveNodes()[nodeA] = &node.Info{ID: nodeA}
+	nodeManager.GetAliveNodes()[nodeB] = &node.Info{ID: nodeB}
+
+	drainController := drain.NewController(mc)
+	drainController.RequestDrain(target)
+
+	db := changefeed.NewChangefeedDB(1)
+	addReplicatingMaintainer(t, db, "cf-a-1", nodeA)
+	addReplicatingMaintainer(t, db, "cf-a-2", nodeA)
+
+	selfNode := &node.Info{ID: node.ID("coordinator")}
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
+	s := NewBalanceScheduler("test", 10, oc, db, 0, drainController)
+	_ = s.Execute()
+
+	require.Equal(t, 0, oc.OperatorSize())
+}
+
+func TestBalanceSchedulerSkipsUntilDrainWorkflowBlockWindowExpires(t *testing.T) {
 	setupCoordinatorSchedulerTestServices()
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -126,7 +153,8 @@ func TestBalanceSchedulerSkipsUntilObservedDrainBlockWindowExpires(t *testing.T)
 	_ = s.Execute()
 	require.Equal(t, 0, oc.OperatorSize())
 
-	// One node remains draining, so another observation keeps extending the block window.
+	// A new incarnation becoming alive does not finish the drain session for the old
+	// incarnation. Regular balance must remain blocked until membership cleanup.
 	drainController.ObserveHeartbeat(drainingA, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
 		NodeEpoch: 2,
@@ -134,11 +162,10 @@ func TestBalanceSchedulerSkipsUntilObservedDrainBlockWindowExpires(t *testing.T)
 	_ = s.Execute()
 	require.Equal(t, 0, oc.OperatorSize())
 
-	// After drain disappears, the previously extended block window still blocks balance.
-	drainController.ObserveHeartbeat(drainingB, &heartbeatpb.NodeHeartbeat{
-		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
-		NodeEpoch: 2,
-	})
+	// Membership cleanup completes both drain workflows. The previously extended
+	// block window still prevents an immediate balance burst.
+	drainController.RemoveNode(drainingA)
+	drainController.RemoveNode(drainingB)
 	s.drainBalanceBlockedUntil = time.Now().Add(100 * time.Millisecond)
 	_ = s.Execute()
 	require.Equal(t, 0, oc.OperatorSize())
