@@ -24,8 +24,10 @@ func TestHeartbeatIntervalsByPerformanceMode(t *testing.T) {
 	manager := &DispatcherManager{config: &config.ChangefeedConfig{}}
 	require.Equal(t, defaultHeartbeatInterval, heartbeatInterval(manager))
 	require.Equal(t, defaultHeartbeatInitialDelay, heartbeatInitialDelay(manager))
+	require.Equal(t, 1, completeStatusHeartbeatCount(manager))
 
 	manager.config.PerformanceMode = config.PerformanceModeLowLatency
 	require.Equal(t, lowLatencyHeartbeatInterval, heartbeatInterval(manager))
 	require.Zero(t, heartbeatInitialDelay(manager))
+	require.Equal(t, 4, completeStatusHeartbeatCount(manager))
 }

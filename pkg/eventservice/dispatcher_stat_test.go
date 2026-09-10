@@ -59,6 +59,9 @@ func TestNewDispatcherStat(t *testing.T) {
 	require.Equal(t, startTs, stat.receivedResolvedTs.Load())
 	require.Equal(t, startTs, stat.checkpointTs.Load())
 	require.Equal(t, startTs, stat.sentResolvedTs.Load())
+	require.Equal(t, int64(1024*1024), stat.currentScanLimitInBytes.Load())
+	require.Equal(t, int64(1024*1024), stat.lastScanBytes.Load())
+	require.Equal(t, uint64(1024*1024), stat.availableMemoryQuota.Load())
 }
 
 func TestDispatcherStatResolvedTs(t *testing.T) {
