@@ -4,7 +4,7 @@
 # 2. we enable the split table param, and start a changefeed.
 # 2. one thread we execute ddl randomly(including add column, drop column, rename table, add index, drop index)
 # 3. one thread we execute dmls, and insert data to these table.
-# 4. one thread we randomly move the table(all related dispatchers) to other nodes.
+# 4. one thread repeatedly moves every table(all related dispatchers) across nodes.
 # finally, we check the data consistency between the upstream and downstream.
 
 set -eu
@@ -18,12 +18,12 @@ SINK_TYPE=$1
 check_time=60
 ddl_operation_count=40
 dml_operation_count=1000
-move_operation_count=40
+move_operation_count=20
 
 function prepare() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
-	start_tidb_cluster --workdir $WORK_DIR
+	SKIP_TIFLASH=1 start_tidb_cluster --workdir $WORK_DIR
 
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
@@ -90,26 +90,26 @@ function execute_dml() {
 
 function move_split_table() {
 	for ((i = 0; i < move_operation_count; i++)); do
-		table_num=$((RANDOM % 5 + 1))
+		table_num=$((i % 5 + 1))
+		port=$(((i / 5) % 2 + 8300))
 		table_name="table_$table_num"
-		port=$((RANDOM % 2 + 8300))
 
-		# move table to a random node
+		# move all table dispatchers to the target node
 		table_id=$(get_table_id "test" "$table_name")
-		move_split_table_with_retry "127.0.0.1:$port" $table_id "test" 10 || true
+		move_split_table_with_retry "127.0.0.1:$port" $table_id "test" 10
 		sleep 1
 	done
 }
 
 function move_split_table_consistent() {
 	for ((i = 0; i < move_operation_count; i++)); do
-		table_num=$((RANDOM % 5 + 1))
+		table_num=$((i % 5 + 1))
+		port=$(((i / 5) % 2 + 8300))
 		table_name="table_$table_num"
-		port=$((RANDOM % 2 + 8300))
 
-		# move table to a random node
+		# move all table dispatchers to the target node
 		table_id=$(get_table_id "test" "$table_name")
-		move_split_table_with_retry "127.0.0.1:$port" $table_id "test" 10 1 || true
+		move_split_table_with_retry "127.0.0.1:$port" $table_id "test" 10 1
 		sleep 1
 	done
 }
