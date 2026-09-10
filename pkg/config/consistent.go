@@ -52,9 +52,8 @@ type ConsistentConfig struct {
 	FlushWorkerNum *int `toml:"flush-worker-num" json:"flush-worker-num,omitempty"`
 	// Storage is the storage path(uri) to store redo log.
 	Storage *string `toml:"storage" json:"storage,omitempty"`
-	// UseFileBackend is a flag to enable file backend for redo log.
-	// file backend means before flush redo log to storage, it will be written to local file.
-	// Default is false.
+	// UseFileBackend is retained for compatibility and ignored. Redo always uses
+	// the spooled memory writer.
 	UseFileBackend *bool `toml:"use-file-backend" json:"use-file-backend,omitempty"`
 	// Compression is the compression algorithm used for redo log.
 	// Default is "", it means no compression, equals to `none`.
@@ -64,6 +63,9 @@ type ConsistentConfig struct {
 	// Default is 1. It means a single log file will be flushed by only one worker.
 	// The singe file concurrent flushing feature supports only `s3` storage.
 	FlushConcurrency *int `toml:"flush-concurrency" json:"flush-concurrency,omitempty"`
+	// SpoolDiskQuota is the disk quota in bytes for redo spool files.
+	// Default is 10 GiB.
+	SpoolDiskQuota *int64 `toml:"spool-disk-quota" json:"spool-disk-quota,omitempty"`
 	// MemoryUsage represents the percentage of ReplicaConfig.MemoryQuota
 	// that can be utilized by the redo log module.
 	MemoryUsage *ConsistentMemoryUsage `toml:"memory-usage" json:"memory-usage,omitempty"`
@@ -136,6 +138,13 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 	}
 	if util.GetOrZero(c.FlushWorkerNum) == 0 {
 		c.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
+	}
+
+	if c.SpoolDiskQuota == nil {
+		c.SpoolDiskQuota = util.AddressOf(redo.DefaultSpoolDiskQuota)
+	} else if *c.SpoolDiskQuota <= 0 {
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
+			"consistent.spool-disk-quota must be greater than 0")
 	}
 
 	uri, err := objstore.ParseRawURL(util.GetOrZero(c.Storage))
