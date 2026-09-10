@@ -1524,10 +1524,7 @@ func (e *eventStore) writeEvents(
 	updateKVEntryCount.Add(float64(updateCount))
 	deleteKVEntryCount.Add(float64(deleteCount))
 	writeBytes := uint64(batch.Len())
-	e.writeBytes.Add(writeBytes)
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
-	metrics.EventStoreWriteBatchSizeHist.Observe(float64(writeBytes))
-	metrics.EventStoreWriteBytes.Add(float64(writeBytes))
 	if totalValueBytesAfter > 0 {
 		metrics.EventStoreCompressionRatioHistogram.Observe(float64(totalValueBytesBefore) / float64(totalValueBytesAfter))
 	}
@@ -1538,6 +1535,11 @@ func (e *eventStore) writeEvents(
 	failpoint.Inject("SlowEventStoreWrite", nil)
 	err := batch.Commit(pebble.NoSync)
 	metrics.EventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
+	if err == nil {
+		e.writeBytes.Add(writeBytes)
+		metrics.EventStoreWriteBatchSizeHist.Observe(float64(writeBytes))
+		metrics.EventStoreWriteBytes.Add(float64(writeBytes))
+	}
 	return err
 }
 
