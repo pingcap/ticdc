@@ -1614,89 +1614,233 @@ func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
 	}
 }
 
-// TestFinishBootstrapAdoptsWorkingDispatcherOfTableCreatedAfterStartTs covers maintainer failover
-// while an in-flight CREATE TABLE DDL for a brand-new table is pending beyond the bootstrap startTs.
-//
-// The old maintainer had already created the new table's full-span dispatcher on a node, but the
-// bootstrap schema-store snapshot (taken at startTs, before the create-table DDL commit) does not
-// contain the table yet. The dispatcher is therefore reported as a leftover working span whose table
-// is absent from the initial table map.
-//
-// Bootstrap must keep tracking such a runtime dispatcher instead of treating it as a dropped-table
-// artifact, so that when the pending CREATE TABLE barrier re-adds the table it does not schedule a
-// second, duplicate full-span dispatcher for the same table.
+// Bootstrap must preserve new tables using DDL history, including their split
+// eligibility and ranges lost with the failed node. Replay must remain idempotent.
 func TestFinishBootstrapAdoptsWorkingDispatcherOfTableCreatedAfterStartTs(t *testing.T) {
-	for _, state := range []heartbeatpb.ComponentState{
-		heartbeatpb.ComponentState_Working,
-		heartbeatpb.ComponentState_Initializing,
-	} {
+	for _, mode := range []int64{common.DefaultMode, common.RedoMode} {
+		for _, state := range []heartbeatpb.ComponentState{heartbeatpb.ComponentState_Working, heartbeatpb.ComponentState_Initializing} {
+			for _, partial := range []bool{false, true} {
+				t.Run(fmt.Sprintf("mode=%d/state=%s/partial=%t", mode, state, partial), func(t *testing.T) {
+					env := newMergeBootstrapTestEnv(t)
+					cfg := env.controller.replicaConfig.Clone()
+					cfg.Scheduler.EnableSplittableCheck = util.AddressOf(true)
+					ddlSpan := env.controller.spanController.GetDDLDispatcher()
+					var redoDDLSpan *replica.SpanReplication
+					if common.IsRedoMode(mode) {
+						id := common.NewDispatcherID()
+						redoDDLSpan = replica.NewWorkingSpanReplication(env.cfID, id, common.DDLSpanSchemaID,
+							common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+								ID: id.ToPB(), ComponentStatus: heartbeatpb.ComponentState_Working,
+								CheckpointTs: 1, Mode: common.RedoMode,
+							}, env.nodeID, false)
+					}
+					controller := NewController(env.cfID, 1, &mockThreadPool{}, cfg, ddlSpan, redoDDLSpan,
+						1000, 0, replica.NewRegionCountRefresher(env.cfID, time.Minute), common.DefaultKeyspace,
+						common.IsRedoMode(mode), testBalanceMoveBatchSize, 0)
+					// Exercise deterministic hole repair without asking PD to subdivide a hole.
+					controller.splitter = nil
+
+					table := commonEvent.Table{SchemaID: 2, TableID: 2, Splitable: true}
+					schemaStore := eventservice.NewMockSchemaStore()
+					schemaStore.SetResolvedTs(200)
+					schemaStore.SetTables(nil)
+					schemaStore.AppendDDLEvent(common.DDLSpanTableID, commonEvent.DDLEvent{
+						FinishedTs: 20, NeedAddedTables: []commonEvent.Table{table},
+					})
+					appcontext.SetService(appcontext.SchemaStore, schemaStore)
+					fullSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, table.TableID)
+					reportedSpan := fullSpan
+					if partial {
+						reportedSpan.EndKey = appendNew(fullSpan.StartKey, 'a')
+					}
+					dispatcherID := common.NewDispatcherID()
+					spanInfo := &heartbeatpb.BootstrapTableSpan{
+						ID: dispatcherID.ToPB(), SchemaID: table.SchemaID, Span: &reportedSpan,
+						ComponentStatus: state, CheckpointTs: 25, Mode: mode,
+					}
+					responses := env.bootstrapResponses(nil, spanInfo)
+					responses[env.nodeID].RedoCheckpointTs = 12
+					postBootstrap, err := controller.FinishBootstrap(responses, true)
+					require.NoError(t, err)
+					// Future table metadata must still be applied by its DDL, not the
+					// schema/name snapshot sent in the post-bootstrap request.
+					require.Empty(t, postBootstrap.Schemas)
+					require.Empty(t, postBootstrap.RedoSchemas)
+
+					sc := controller.getSpanController(mode)
+					adopted := sc.GetTaskByID(dispatcherID)
+					require.NotNil(t, adopted)
+					require.True(t, adopted.IsSplitEnabled())
+					require.Equal(t, state, adopted.GetStatus().ComponentStatus)
+					spans := utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](lessBootstrapTableSpan)
+					for _, task := range sc.GetTasksByTableID(table.TableID) {
+						spans.ReplaceOrInsert(task.Span, task)
+						require.True(t, task.IsSplitEnabled())
+						if task.ID != dispatcherID {
+							require.Equal(t, uint64(20), task.GetStatus().CheckpointTs)
+						}
+					}
+					require.Empty(t, findHoles(spans, &fullSpan))
+					expectedTasks := 1
+					if partial {
+						expectedTasks = 2
+					}
+					require.Len(t, sc.GetTasksByTableID(table.TableID), expectedTasks)
+					sc.AddNewTable(table, 20)
+					require.Len(t, sc.GetTasksByTableID(table.TableID), expectedTasks)
+					require.Same(t, adopted, sc.GetTaskByID(dispatcherID))
+				})
+			}
+		}
+	}
+}
+
+func TestFinishBootstrapReplacesTerminalSpanOfAddedTable(t *testing.T) {
+	for _, state := range []heartbeatpb.ComponentState{heartbeatpb.ComponentState_Stopped, heartbeatpb.ComponentState_Removed} {
 		t.Run(state.String(), func(t *testing.T) {
-			testutil.SetUpTestServices(t)
-			nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
-			nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
-
-			tableTriggerEventDispatcherID := common.NewDispatcherID()
-			cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-			ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-				common.DDLSpanSchemaID,
-				common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-					ID:              tableTriggerEventDispatcherID.ToPB(),
-					ComponentStatus: heartbeatpb.ComponentState_Working,
-					CheckpointTs:    1,
-				}, "node1", false)
-			refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
-			s := NewController(cfID, 1, &mockThreadPool{},
-				config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0)
-
-			// Only table 1 exists at the bootstrap startTs. Table 2 is a brand-new table whose CREATE
-			// TABLE DDL commit is beyond startTs, so it is missing from this snapshot.
+			env := newMergeBootstrapTestEnv(t)
+			env.controller.splitter = nil
 			schemaStore := eventservice.NewMockSchemaStore()
-			schemaStore.SetTables([]commonEvent.Table{
-				{TableID: 1, SchemaID: 1, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t1"}},
+			schemaStore.SetResolvedTs(200)
+			schemaStore.AppendDDLEvent(common.DDLSpanTableID, commonEvent.DDLEvent{
+				FinishedTs: 20, NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1, Splitable: true}},
 			})
 			appcontext.SetService(appcontext.SchemaStore, schemaStore)
-
-			totalSpan1 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
-			totalSpan2 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 2)
-			dispatcherID1 := common.NewDispatcherID()
-			dispatcherID2 := common.NewDispatcherID()
-			resp := &heartbeatpb.MaintainerBootstrapResponse{
-				ChangefeedID: cfID.ToPB(),
-				Spans: []*heartbeatpb.BootstrapTableSpan{
-					{
-						ID:              dispatcherID1.ToPB(),
-						SchemaID:        1,
-						Span:            &heartbeatpb.TableSpan{TableID: 1, StartKey: totalSpan1.StartKey, EndKey: totalSpan1.EndKey, KeyspaceID: common.DefaultKeyspaceID},
-						ComponentStatus: heartbeatpb.ComponentState_Working,
-						CheckpointTs:    10,
-						Mode:            common.DefaultMode,
-					},
-					{
-						ID:              dispatcherID2.ToPB(),
-						SchemaID:        2,
-						Span:            &heartbeatpb.TableSpan{TableID: 2, StartKey: totalSpan2.StartKey, EndKey: totalSpan2.EndKey, KeyspaceID: common.DefaultKeyspaceID},
-						ComponentStatus: state,
-						CheckpointTs:    10,
-						Mode:            common.DefaultMode,
-					},
-				},
-				CheckpointTs: 10,
-			}
-
-			_, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{"node1": resp}, false)
+			live := env.bootstrapSpan(env.sourceDispatcherID1, env.sourceSpan1, heartbeatpb.ComponentState_Working)
+			terminal := env.bootstrapSpan(env.sourceDispatcherID2, env.sourceSpan2, state)
+			live.CheckpointTs = 25
+			terminal.CheckpointTs = 25
+			_, err := env.controller.FinishBootstrap(env.bootstrapResponses(nil, live, terminal), false)
 			require.NoError(t, err)
-			require.True(t, s.bootstrapped)
+			require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID2))
+			require.NotNil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
+			require.Equal(t, 1, env.controller.spanController.GetAbsentSize())
+			for _, task := range env.controller.spanController.GetTasksByTableID(1) {
+				if task.ID != env.sourceDispatcherID1 {
+					require.Equal(t, env.sourceSpan2, task.Span)
+					require.Equal(t, uint64(20), task.GetStatus().CheckpointTs)
+				}
+			}
+		})
+	}
+}
 
-			// The runtime dispatcher of the not-yet-visible table must stay tracked so the later CREATE
-			// TABLE barrier cannot schedule a duplicate full-span dispatcher.
-			require.NotNil(t, s.spanController.GetTaskByID(dispatcherID2))
-			require.Len(t, s.spanController.GetTasksByTableID(2), 1)
+func TestFinishBootstrapAddedTableHistory(t *testing.T) {
+	t.Run("paginated history", func(t *testing.T) {
+		env := newMergeBootstrapTestEnv(t)
+		schemaStore := eventservice.NewMockSchemaStore()
+		schemaStore.SetResolvedTs(200)
+		for ts := uint64(11); ts < 112; ts++ {
+			schemaStore.AppendDDLEvent(common.DDLSpanTableID, commonEvent.DDLEvent{FinishedTs: ts})
+		}
+		schemaStore.AppendDDLEvent(common.DDLSpanTableID, commonEvent.DDLEvent{
+			FinishedTs: 112, NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1, Splitable: true}},
+		})
+		appcontext.SetService(appcontext.SchemaStore, schemaStore)
+		spanInfo := env.bootstrapSpan(env.sourceDispatcherID1, env.mergedSpan, heartbeatpb.ComponentState_Working)
+		spanInfo.CheckpointTs = 112
+		_, err := env.controller.FinishBootstrap(env.bootstrapResponses(nil, spanInfo), false)
+		require.NoError(t, err)
+		require.NotNil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
+		require.Equal(t, uint64(112), env.controller.bootstrapAddedTables[common.DefaultMode][1].startTs)
+	})
+	t.Run("unresolved history is retried before rebuilding tasks", func(t *testing.T) {
+		env := newMergeBootstrapTestEnv(t)
+		schemaStore := eventservice.NewMockSchemaStore()
+		schemaStore.SetResolvedTs(10)
+		schemaStore.AppendDDLEvent(common.DDLSpanTableID, commonEvent.DDLEvent{
+			FinishedTs: 20, NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1, Splitable: true}},
+		})
+		appcontext.SetService(appcontext.SchemaStore, schemaStore)
+		spanInfo := env.bootstrapSpan(env.sourceDispatcherID1, env.mergedSpan, heartbeatpb.ComponentState_Working)
+		spanInfo.CheckpointTs = 25
+		responses := env.bootstrapResponses(nil, spanInfo)
+		_, err := env.controller.FinishBootstrap(responses, false)
+		require.ErrorIs(t, err, cerrors.ErrChangefeedRetryable)
+		require.False(t, env.controller.bootstrapped)
+		require.Empty(t, env.controller.spanController.GetTasksByTableID(1))
+		schemaStore.SetResolvedTs(25)
+		_, err = env.controller.FinishBootstrap(responses, false)
+		require.NoError(t, err)
+		require.NotNil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
+	})
+}
 
-			// Simulate the pending CREATE TABLE t4 barrier replaying after bootstrap (the new maintainer
-			// re-adds the table through the barrier's AddNewTable path).
-			s.spanController.AddNewTable(commonEvent.Table{SchemaID: 2, TableID: 2, Splitable: false}, 20)
-			require.Len(t, s.spanController.GetTasksByTableID(2), 1)
-			require.NotNil(t, s.spanController.GetTaskByID(dispatcherID2))
+func TestFinishBootstrapRestoresOperatorsForAddedTable(t *testing.T) {
+	for _, action := range []heartbeatpb.ScheduleAction{heartbeatpb.ScheduleAction_Create, heartbeatpb.ScheduleAction_Remove} {
+		t.Run(action.String(), func(t *testing.T) {
+			env := newMergeBootstrapTestEnv(t)
+			env.controller.splitter = nil
+			schemaStore := eventservice.NewMockSchemaStore()
+			schemaStore.SetResolvedTs(200)
+			schemaStore.AppendDDLEvent(common.DDLSpanTableID, commonEvent.DDLEvent{
+				FinishedTs: 20, NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1, Splitable: true}},
+			})
+			appcontext.SetService(appcontext.SchemaStore, schemaStore)
+			responses := env.bootstrapResponses(nil)
+			req := env.standaloneRemoveRequest(env.sourceDispatcherID1, env.mergedSpan)
+			req.Config.StartTs = 20
+			req.ScheduleAction = action
+			if action == heartbeatpb.ScheduleAction_Create {
+				req.OperatorType = heartbeatpb.OperatorType_O_Add
+			} else {
+				spanInfo := env.bootstrapSpan(env.sourceDispatcherID1, env.mergedSpan, heartbeatpb.ComponentState_Working)
+				spanInfo.CheckpointTs = 25
+				responses[env.nodeID].Spans = []*heartbeatpb.BootstrapTableSpan{spanInfo}
+			}
+			responses[env.nodeID].Operators = []*heartbeatpb.ScheduleDispatcherRequest{req}
+			_, err := env.controller.FinishBootstrap(responses, false)
+			require.NoError(t, err)
+			require.NotNil(t, env.controller.operatorController.GetOperator(env.sourceDispatcherID1))
+			require.Len(t, env.controller.spanController.GetTasksByTableID(1), 1)
+			if action == heartbeatpb.ScheduleAction_Remove {
+				env.controller.HandleStatus(env.nodeID, []*heartbeatpb.TableSpanStatus{{
+					ID: env.sourceDispatcherID1.ToPB(), ComponentStatus: heartbeatpb.ComponentState_Stopped,
+					CheckpointTs: 25, Mode: common.DefaultMode,
+				}})
+				env.controller.operatorController.Execute()
+				require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
+			}
+			tasks := env.controller.spanController.GetTasksByTableID(1)
+			require.Len(t, tasks, 1)
+			require.Equal(t, uint64(20), tasks[0].GetStatus().CheckpointTs)
+		})
+	}
+}
+
+func TestFinishBootstrapDoesNotAdoptDroppedTableWithoutOperator(t *testing.T) {
+	for _, laterAdd := range []bool{false, true} {
+		t.Run(fmt.Sprintf("laterAdd=%t", laterAdd), func(t *testing.T) {
+			env := newMergeBootstrapTestEnv(t)
+			schemaStore := eventservice.NewMockSchemaStore()
+			schemaStore.SetResolvedTs(200)
+			schemaStore.SetTables(nil)
+			table := commonEvent.Table{SchemaID: 1, TableID: 1, Splitable: true}
+			// This table was created and dropped before the bootstrap checkpoint.
+			schemaStore.AppendDDLEvent(common.DDLSpanTableID, commonEvent.DDLEvent{
+				FinishedTs: 5, NeedAddedTables: []commonEvent.Table{table},
+			})
+			if laterAdd {
+				// A later RECOVER/rename into the filter must not validate a
+				// stale dispatcher whose checkpoint precedes that admission.
+				schemaStore.AppendDDLEvent(common.DDLSpanTableID, commonEvent.DDLEvent{
+					FinishedTs: 30, NeedAddedTables: []commonEvent.Table{table},
+				})
+			}
+			appcontext.SetService(appcontext.SchemaStore, schemaStore)
+			spanInfo := env.bootstrapSpan(env.sourceDispatcherID1, env.mergedSpan, heartbeatpb.ComponentState_Working)
+			spanInfo.CheckpointTs = 25
+			_, err := env.controller.FinishBootstrap(env.bootstrapResponses(nil, spanInfo), false)
+			require.NoError(t, err)
+			require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
+			require.Empty(t, env.controller.spanController.GetTasksByTableID(1))
+			require.Zero(t, env.controller.spanController.GetAbsentSize())
+			env.controller.HandleStatus(env.nodeID, []*heartbeatpb.TableSpanStatus{{
+				ID: env.sourceDispatcherID1.ToPB(), ComponentStatus: heartbeatpb.ComponentState_Stopped,
+				CheckpointTs: 25, Mode: common.DefaultMode,
+			}})
+			require.Empty(t, env.controller.spanController.GetTasksByTableID(1))
+			require.Zero(t, env.controller.spanController.GetAbsentSize())
 		})
 	}
 }

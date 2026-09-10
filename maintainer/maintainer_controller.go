@@ -46,6 +46,8 @@ type Controller struct {
 	// it's not affected by new node join the cluster.
 	bootstrapped bool
 	startTs      uint64
+	// Immutable after bootstrap; restored cleanup operators may repair ranges later.
+	bootstrapAddedTables map[int64]map[int64]bootstrapAddedTable
 
 	schedulerController    *pkgscheduler.Controller
 	operatorController     *operator.Controller
