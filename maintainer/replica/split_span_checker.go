@@ -1062,7 +1062,7 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 	eventStoreWriteBytes map[node.ID]uint64,
 	nodeResourceUsageStatus heartbeatpb.NodeResourceUsageStatus,
 ) ([]SplitSpanCheckResult, bool) {
-	results := make([]SplitSpanCheckResult, 0)
+	results := make([]SplitSpanCheckResult, 0, 1)
 	if nodeResourceUsageStatus != heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE ||
 		len(aliveNodeIDs) < 2 {
 		s.eventStoreBalanceCondition.reset()
