@@ -1,10 +1,10 @@
 #!/bin/bash
 # This test is aimed to test the ddl execution for split tables when the table is scheduled to be moved.
-# 1. we start three TiCDC servers, and create a table with some data and multiple regions.
+# 1. we start two TiCDC servers, and create a table with some data and multiple regions.
 # 2. we enable the split table param, and start a changefeed.
 # 2. one thread we execute ddl randomly(including add column, drop column, rename table, add index, drop index)
 # 3. one thread we execute dmls, and insert data to these table.
-# 4. one thread we randomly move the table(all related dispatchers) to other nodes.
+# 4. one thread repeatedly moves every table(all related dispatchers) across nodes.
 # finally, we check the data consistency between the upstream and downstream.
 
 set -eu
@@ -16,11 +16,14 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 check_time=60
+ddl_operation_count=40
+dml_operation_count=1000
+move_operation_count=20
 
 function prepare() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
-	start_tidb_cluster --workdir $WORK_DIR
+	SKIP_TIFLASH=1 start_tidb_cluster --workdir $WORK_DIR
 
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
@@ -28,7 +31,6 @@ function prepare() {
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "2" --addr "127.0.0.1:8302"
 
 	run_sql_file $CUR/data/pre.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -51,7 +53,7 @@ function prepare() {
 }
 
 function execute_ddls() {
-	while true; do
+	for ((i = 0; i < ddl_operation_count; i++)); do
 		table_num=$((RANDOM % 5 + 1))
 		table_name="table_$table_num"
 
@@ -83,42 +85,57 @@ function execute_ddls() {
 
 function execute_dml() {
 	table_name="table_$1"
-	execute_mixed_dml "$table_name" "${UP_TIDB_HOST}" "${UP_TIDB_PORT}"
+	execute_mixed_dml "$table_name" "${UP_TIDB_HOST}" "${UP_TIDB_PORT}" "$dml_operation_count"
 }
 
 function move_split_table() {
-	while true; do
-		table_num=$((RANDOM % 5 + 1))
+	for ((i = 0; i < move_operation_count; i++)); do
+		table_num=$((i % 5 + 1))
+		port=$(((i / 5) % 2 + 8300))
 		table_name="table_$table_num"
-		port=$((RANDOM % 3 + 8300))
 
-		# move table to a random node
+		# move all table dispatchers to the target node
 		table_id=$(get_table_id "test" "$table_name")
-		move_split_table_with_retry "127.0.0.1:$port" $table_id "test" 10 || true
+		move_split_table_with_retry "127.0.0.1:$port" $table_id "test" 10
 		sleep 1
 	done
 }
 
 function move_split_table_consistent() {
-	while true; do
-		table_num=$((RANDOM % 5 + 1))
+	for ((i = 0; i < move_operation_count; i++)); do
+		table_num=$((i % 5 + 1))
+		port=$(((i / 5) % 2 + 8300))
 		table_name="table_$table_num"
-		port=$((RANDOM % 3 + 8300))
 
-		# move table to a random node
+		# move all table dispatchers to the target node
 		table_id=$(get_table_id "test" "$table_name")
-		move_split_table_with_retry "127.0.0.1:$port" $table_id "test" 10 1 || true
+		move_split_table_with_retry "127.0.0.1:$port" $table_id "test" 10 1
 		sleep 1
 	done
 }
 
+function wait_for_workload() {
+	wait "$NORMAL_TABLE_DDL_PID"
+	for pid in "${pids[@]}"; do
+		wait "$pid"
+	done
+	wait "$MOVE_TABLE_PID"
+}
+
+function wait_for_replication() {
+	run_sql "CREATE TABLE test.workload_finished (id INT PRIMARY KEY);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	check_table_exists "test.workload_finished" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 150
+}
+
 main() {
 	prepare changefeed
+	# Each table must still be split into multiple dispatchers after reducing regions.
+	query_dispatcher_count "127.0.0.1:8300" "test" 11 100 ge
 
 	execute_ddls &
 	NORMAL_TABLE_DDL_PID=$!
 
-	# do execute dml for 100 tables, and store the pid for each thread
+	# execute DML for five tables, and store the PID for each thread
 	declare -a pids=()
 
 	for i in {1..5}; do
@@ -129,13 +146,10 @@ main() {
 	move_split_table &
 	MOVE_TABLE_PID=$!
 
-	sleep 500
+	wait_for_workload
+	wait_for_replication
 
-	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MOVE_TABLE_PID
-
-	sleep 10
-
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 30
 
 	cleanup_process $CDC_BINARY
 }
@@ -145,11 +159,12 @@ main_with_consistent() {
 		return
 	fi
 	prepare consistent_changefeed
+	query_dispatcher_count "127.0.0.1:8300" "test" 11 100 ge 1
 
 	execute_ddls &
 	NORMAL_TABLE_DDL_PID=$!
 
-	# do execute dml for 100 tables, and store the pid for each thread
+	# execute DML for five tables, and store the PID for each thread
 	declare -a pids=()
 
 	for i in {1..5}; do
@@ -160,11 +175,8 @@ main_with_consistent() {
 	move_split_table_consistent &
 	MOVE_TABLE_PID=$!
 
-	sleep 500
-
-	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MOVE_TABLE_PID
-	# to ensure row changed events have been replicated to TiCDC
-	sleep 20
+	wait_for_workload
+	wait_for_replication
 	if ((RANDOM % 2)); then
 		# For rename table, modify column ddl, drop column, drop index and drop table ddl, the struct of table is wrong when appling snapshot.
 		# see https://github.com/pingcap/tidb/issues/63464.
@@ -181,7 +193,7 @@ main_with_consistent() {
 			--sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 	else
-		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 30
 		cleanup_process $CDC_BINARY
 	fi
 }
