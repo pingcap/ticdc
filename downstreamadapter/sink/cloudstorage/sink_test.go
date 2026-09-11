@@ -740,7 +740,13 @@ func TestCloseBeforeRunDoesNotPanicAndCleansSpool(t *testing.T) {
 	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, nil, common.DefaultKeyspaceID)
 	require.NoError(t, err)
 
-	spoolDir := filepath.Join(spoolBaseDir, changefeedID.Keyspace(), changefeedID.Name())
+	spoolDir := filepath.Join(
+		spoolBaseDir,
+		cloudStorageSpoolDirectory,
+		config.GetGlobalServerConfig().AdvertiseAddr,
+		changefeedID.Keyspace(),
+		changefeedID.Name(),
+	)
 	_, err = os.Stat(spoolDir)
 	require.NoError(t, err)
 
