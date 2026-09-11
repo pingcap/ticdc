@@ -1524,15 +1524,15 @@ func (e *eventStore) writeEvents(
 	updateKVEntryCount.Add(float64(updateCount))
 	deleteKVEntryCount.Add(float64(deleteCount))
 	writeBytes := uint64(batch.Len())
+	failpoint.Inject("InjectEventStoreWriteBytes", func(val failpoint.Value) {
+		writeBytes = uint64(val.(int))
+	})
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
 	if totalValueBytesAfter > 0 {
 		metrics.EventStoreCompressionRatioHistogram.Observe(float64(totalValueBytesBefore) / float64(totalValueBytesAfter))
 	}
 	metrics.EventStoreWritePrepareDurationHistogram.Observe(time.Since(prepareStart).Seconds())
 	start := time.Now()
-	// Simulate slow EventStore storage so write workers remain occupied and
-	// incoming events queue up behind them.
-	failpoint.Inject("SlowEventStoreWrite", nil)
 	err := batch.Commit(pebble.NoSync)
 	metrics.EventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
 	if err == nil {

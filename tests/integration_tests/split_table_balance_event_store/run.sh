@@ -14,7 +14,7 @@ TABLE_NAME=t
 CHANGEFEED_ID=test
 API_ADDR=127.0.0.1:8300
 SOURCE_ADDR=127.0.0.1:8301
-EVENT_STORE_FAILPOINT=github.com/pingcap/ticdc/logservice/eventstore/SlowEventStoreWrite
+EVENT_STORE_FAILPOINT=github.com/pingcap/ticdc/logservice/eventstore/InjectEventStoreWriteBytes
 
 workload_pid=""
 failpoint_enabled=false
@@ -123,9 +123,10 @@ function run() {
 	source_id=$(get_capture_id "$SOURCE_ADDR")
 	initial_count=$(wait_for_split_table_on_source "$table_id" "$source_id")
 
-	# Delay each EventStore commit on the selected source node. This keeps the
-	# write workers occupied and lets incoming events queue behind them.
-	enable_failpoint --addr "$SOURCE_ADDR" --name "$EVENT_STORE_FAILPOINT" --expr "sleep(1000)"
+	# Count each real EventStore write batch as 1 GiB on the selected source node.
+	# Real DML supplies stable per-dispatcher traffic, while the failpoint only
+	# changes the node-wide resource signal used to select a safe destination.
+	enable_failpoint --addr "$SOURCE_ADDR" --name "$EVENT_STORE_FAILPOINT" --expr "return(1073741824)"
 	failpoint_enabled=true
 	generate_table_traffic &
 	workload_pid=$!
