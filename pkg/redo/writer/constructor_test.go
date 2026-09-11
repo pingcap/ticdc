@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package factory
+package writer
 
 import (
 	"context"
@@ -19,24 +19,23 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewRedoWriters(t *testing.T) {
+func TestNewWritersWithBlackholeStorage(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := writer.NewConfig(
+	cfg, err := NewConfig(
 		common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
 		testutil.NewConsistentConfig("blackhole://"),
 	)
 	require.NoError(t, err)
 
-	dmlWriter, err := NewRedoDMLWriter(context.Background(), cfg)
+	dmlWriter, err := NewDMLWriter(context.Background(), cfg)
 	require.NoError(t, err)
-	require.Implements(t, (*writer.RedoDMLWriter)(nil), dmlWriter)
+	require.IsType(t, &blackHoleDMLWriter{}, dmlWriter)
 
-	ddlWriter, err := NewRedoDDLWriter(context.Background(), cfg)
+	ddlWriter, err := NewDDLWriter(context.Background(), cfg)
 	require.NoError(t, err)
-	require.Implements(t, (*writer.RedoDDLWriter)(nil), ddlWriter)
+	require.IsType(t, &blackHoleDDLWriter{}, ddlWriter)
 }

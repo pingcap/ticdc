@@ -32,7 +32,6 @@ type metricCollector struct {
 	rowTotalCount prometheus.Counter
 	ddlTotalCount prometheus.Counter
 
-	rowWorkerBusyRatio prometheus.Counter
 	ddlWorkerBusyRatio prometheus.Counter
 }
 
@@ -44,7 +43,6 @@ func newMetricCollector(changefeedID common.ChangeFeedID) *metricCollector {
 		name:                name,
 		rowTotalCount:       metrics.RedoTotalRowsCountGauge.WithLabelValues(keyspace, name, redo.RedoRowLogFileType),
 		rowWriteLogDuration: metrics.RedoWriteLogDurationHistogram.WithLabelValues(keyspace, name, redo.RedoRowLogFileType),
-		rowWorkerBusyRatio:  metrics.RedoWorkerBusyRatio.WithLabelValues(keyspace, name, redo.RedoRowLogFileType),
 
 		ddlTotalCount:       metrics.RedoTotalRowsCountGauge.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
 		ddlWriteLogDuration: metrics.RedoWriteLogDurationHistogram.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
@@ -56,9 +54,9 @@ func (m *metricCollector) observeRowWrite(rows int, duration time.Duration) {
 	if rows > 0 {
 		m.rowTotalCount.Add(float64(rows))
 	}
-	// todo: it looks this metric only record the cost on send events to the channel, not fully consumed, it's not accurate.
+	// DML write duration is the enqueue latency exposed by AddDMLEvents.
+	// The actual DML worker busy time is recorded by fileWorkerGroup.
 	m.rowWriteLogDuration.Observe(duration.Seconds())
-	m.rowWorkerBusyRatio.Add(duration.Seconds())
 }
 
 func (m *metricCollector) observeDDLWrite(duration time.Duration) {
@@ -71,6 +69,6 @@ func (m *metricCollector) close() {
 	for _, logType := range []string{redo.RedoRowLogFileType, redo.RedoDDLLogFileType} {
 		metrics.RedoWriteLogDurationHistogram.DeleteLabelValues(m.keyspace, m.name, logType)
 		metrics.RedoTotalRowsCountGauge.DeleteLabelValues(m.keyspace, m.name, logType)
-		metrics.RedoWorkerBusyRatio.DeleteLabelValues(m.keyspace, m.name, logType)
 	}
+	metrics.RedoWorkerBusyRatio.DeleteLabelValues(m.keyspace, m.name, redo.RedoDDLLogFileType)
 }

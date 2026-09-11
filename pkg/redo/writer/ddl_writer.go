@@ -11,13 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memory
+package writer
 
 import (
 	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
@@ -38,13 +38,13 @@ import (
 	"go.uber.org/zap"
 )
 
-var _ writer.RedoDDLWriter = (*ddlWriter)(nil)
+var _ RedoDDLWriter = (*ddlWriter)(nil)
 
 type ddlWriter struct {
 	mu sync.Mutex
 
-	cfg        *writer.Config
-	op         *writer.LogWriterOptions
+	cfg        *Config
+	op         *LogWriterOptions
 	extStorage storeapi.Storage
 	uuidGen    uuid.Generator
 
@@ -55,16 +55,26 @@ type ddlWriter struct {
 	writeGate   *writelease.Gate
 }
 
-// NewDDLWriter creates a new memory DDL writer.
+// NewDDLWriter creates a new redo DDL writer.
 func NewDDLWriter(
-	ctx context.Context, cfg *writer.Config, opts ...writer.Option,
-) (writer.RedoDDLWriter, error) {
+	ctx context.Context, cfg *Config, opts ...Option,
+) (RedoDDLWriter, error) {
+	uri := cfg.URI()
+	if redo.IsBlackholeStorage(uri.Scheme) {
+		return newBlackHoleDDLWriter(strings.HasSuffix(uri.Scheme, "invalid")), nil
+	}
+	return newDDLWriter(ctx, cfg, opts...)
+}
+
+func newDDLWriter(
+	ctx context.Context, cfg *Config, opts ...Option,
+) (RedoDDLWriter, error) {
 	extStorage, err := redo.InitExternalStorage(ctx, *cfg.URI())
 	if err != nil {
 		return nil, err
 	}
 
-	op := &writer.LogWriterOptions{}
+	op := &LogWriterOptions{}
 	for _, opt := range opts {
 		opt(op)
 	}
@@ -126,6 +136,8 @@ func (l *ddlWriter) Close() error {
 		return nil
 	}
 	l.closed = true
+	l.extStorage.Close()
+	l.extStorage = nil
 	l.closeMetrics()
 	return nil
 }
@@ -229,14 +241,14 @@ func toPolymorphicDDLEvent(
 	if err != nil {
 		return nil, err
 	}
-	lenField, padBytes := writer.EncodeFrameSize(len(rawData))
+	lenField, padBytes := EncodeFrameSize(len(rawData))
 	data := make([]byte, 8+len(rawData)+padBytes)
 	binary.LittleEndian.PutUint64(data[:8], lenField)
 	copy(data[8:], rawData)
 
 	return &polymorphicRedoEvent{
-		commitTs: rl.GetCommitTs(),
-		callback: event.PostFlush,
-		data:     data,
+		commitTs:  rl.GetCommitTs(),
+		postFlush: event.PostFlush,
+		data:      data,
 	}, nil
 }

@@ -23,8 +23,8 @@
 #    - Arithmetic operation updates
 # 3. DELETE: Randomly deletes records while ensuring at least one record remains
 #
-# Usage: execute_mixed_dml <table_name> <host> <port>
-# Example: execute_mixed_dml "my_table" "127.0.0.1" "4000"
+# Usage: execute_mixed_dml <table_name> <host> <port> [max_operations]
+# Example: execute_mixed_dml "my_table" "127.0.0.1" "4000" 100
 #
 # Note: This function assumes the table exists in the 'test' database
 # and uses the 'run_sql_ignore_error' function for error handling.
@@ -32,9 +32,12 @@ function execute_mixed_dml() {
 	local table_name="$1"
 	local host="$2"
 	local port="$3"
+	# Keep existing callers unbounded unless they opt into a fixed operation count.
+	local max_operations=${4:-0}
 
 	# Initialize DML operation counter
 	local dml_counter=0
+	local operation_count=0
 
 	echo "DML: Executing mixed operations on $table_name..."
 
@@ -42,7 +45,7 @@ function execute_mixed_dml() {
 	run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('initial_data_1_${dml_counter}'), ('initial_data_2_$((dml_counter + 1))'), ('initial_data_3_$((dml_counter + 2))');" $host $port || true
 	dml_counter=$((dml_counter + 3))
 
-	while true; do
+	while [[ $max_operations -eq 0 || $operation_count -lt $max_operations ]]; do
 		# Randomly choose between INSERT, UPDATE, and DELETE operations
 		case $((RANDOM % 3)) in
 		0)
@@ -120,6 +123,7 @@ function execute_mixed_dml() {
 			dml_counter=$((dml_counter + 1))
 			;;
 		esac
+		operation_count=$((operation_count + 1))
 
 		# Add a small delay to prevent overwhelming the database
 		sleep 0.1
