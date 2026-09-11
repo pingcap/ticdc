@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metering"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -84,6 +85,10 @@ type coordinator struct {
 
 	pdClient pd.Client
 	pdClock  pdutil.Clock
+
+	// trafficReporter belongs to this coordinator term and is never shared with
+	// followers or the next coordinator instance.
+	trafficReporter *metering.TrafficReporter
 
 	// eventCh is used to receive the event from message center, basically these messages
 	// are from maintainer.
@@ -172,8 +177,15 @@ func (c *coordinator) recvMessages(ctx context.Context, msg *messaging.TargetMes
 func (c *coordinator) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
+	defer cancel()
+	if err := c.initializeMetering(); err != nil {
+		return err
+	}
 
 	eg, ctx := errgroup.WithContext(ctx)
+	if c.trafficReporter != nil {
+		defer c.trafficReporter.Close()
+	}
 	eg.Go(func() error {
 		return c.run(ctx)
 	})
@@ -189,6 +201,16 @@ func (c *coordinator) Run(ctx context.Context) error {
 	})
 
 	return eg.Wait()
+}
+
+func (c *coordinator) initializeMetering() error {
+	destination := config.GetGlobalServerConfig().Metering
+	if destination == nil || destination.Type == "" {
+		return nil
+	}
+	var err error
+	c.trafficReporter, err = metering.NewTrafficReporter(destination)
+	return err
 }
 
 // run handles the following:

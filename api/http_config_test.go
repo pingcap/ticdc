@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	meteringconfig "github.com/pingcap/metering_sdk/config"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -33,6 +34,9 @@ func TestRegisterRoutesConfig(t *testing.T) {
 
 	testConfig := originalConfig.Clone()
 	testConfig.DataDir = "/tmp/codex-test-data-dir"
+	testConfig.Metering = meteringconfig.NewMeteringConfig().WithAWSConfig(&meteringconfig.MeteringAWSConfig{
+		AccessKey: "metering-access", SecretAccessKey: "metering-secret", SessionToken: "metering-token",
+	})
 	config.StoreGlobalServerConfig(testConfig)
 
 	originalGatherer := prometheus.DefaultGatherer
@@ -52,4 +56,9 @@ func TestRegisterRoutesConfig(t *testing.T) {
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
 	require.Equal(t, testConfig.DataDir, payload["data-dir"])
+	require.NotContains(t, payload, "metering")
+	for _, secret := range []string{"metering-access", "metering-secret", "metering-token"} {
+		require.NotContains(t, resp.Body.String(), secret)
+	}
+	require.Equal(t, "metering-secret", config.GetGlobalServerConfig().Metering.AWS.SecretAccessKey)
 }
