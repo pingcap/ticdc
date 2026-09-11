@@ -9,6 +9,8 @@ set -eu
 #   and merge requests.
 # - After the maintainer fails over, the new maintainer can restore these unfinished operators from
 #   bootstrap responses and keep table scheduling converging instead of leaking or duplicating dispatchers.
+# - Newly added tables have one replication before splitting, retain automatic split eligibility after
+#   bootstrap, and replicate changes across their key ranges. Dropped tables leave no scheduled tasks.
 #
 # Main steps (per subcase):
 # 1) Start a 3-capture CDC cluster and create a changefeed.
@@ -50,6 +52,7 @@ export -f cdc_cli_changefeed run_cdc_cli
 
 FAILPOINT_NOT_READY_TO_CLOSE_DISPATCHER="github.com/pingcap/ticdc/downstreamadapter/dispatcher/NotReadyToCloseDispatcher"
 FAILPOINT_BLOCK_CREATE_DISPATCHER="github.com/pingcap/ticdc/downstreamadapter/dispatchermanager/BlockCreateDispatcher"
+FAILPOINT_STOP_BALANCE_SCHEDULER="github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler"
 
 function get_capture_id_by_addr() {
 	local api_addr=$1
@@ -388,7 +391,7 @@ function run_impl() {
 	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
 
 	# Disable balance scheduler to avoid unexpected auto split/move interfering with this test.
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
+	export GO_FAILPOINTS="$FAILPOINT_STOP_BALANCE_SCHEDULER=return(true)"
 	# Always pass the freshly started upstream PD explicitly so every capture joins the test cluster
 	# instead of silently falling back to the default 2379 endpoint during isolated local reruns.
 	run_cdc_server --workdir "$work_dir" --binary $CDC_BINARY --logsuffix 1 --addr "${CDC_ADDRS[0]}" --pd "$pd_addr"
@@ -497,6 +500,7 @@ function run_impl() {
 	run_sql "CREATE TABLE maintainer_failover_when_operator.t5(id INT PRIMARY KEY, val VARCHAR(20));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t4 VALUES (1, 'a'), (2, 'b');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t5 VALUES (1, 'a'), (2, 'b');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "INSERT INTO maintainer_failover_when_operator.t4 VALUES (5000, 'before'), (25000, 'before'), (50000, 'before'), (75000, 'before'), (99999, 'before');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	table_id_4=$(get_table_id "maintainer_failover_when_operator" "t4")
 	table_id_5=$(get_table_id "maintainer_failover_when_operator" "t5")
 
@@ -560,17 +564,36 @@ function run_impl() {
 	check_table_exists "maintainer_failover_when_operator.t6" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_not_exists "maintainer_failover_when_operator.t3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 
+	# DDL replay must not add another replication for a table restored during bootstrap.
+	# Check scheduler state as well as downstream DDL, since a dropped table can leave an orphan task.
+	wait_for_table_replication_count "$api_addr" "$changefeed_id" "$table_id_4" 1 eq "$mode" 60
+	wait_for_table_replication_count "$api_addr" "$changefeed_id" "$table_id_5" 1 eq "$mode" 60
+	wait_for_table_replication_count "$api_addr" "$changefeed_id" "$table_id_3" 0 eq "$mode" 60
+
+	# Verify the restored new table remains eligible for automatic splitting with enable-splittable-check.
+	# Do not use the manual split API: it does not exercise the scheduler's split eligibility check.
+	# Run this only after checking restored merge convergence, because enabling balance can split t6 again.
+	run_sql "SPLIT TABLE maintainer_failover_when_operator.t4 BETWEEN (1) AND (100000) REGIONS 20;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	disable_failpoint --addr "$new_maintainer_addr" --name "$FAILPOINT_STOP_BALANCE_SCHEDULER"
+	wait_for_table_replication_count "$api_addr" "$changefeed_id" "$table_id_4" 2 ge "$mode" 90
+	enable_failpoint --addr "$new_maintainer_addr" --name "$FAILPOINT_STOP_BALANCE_SCHEDULER" --expr "return(true)"
+
 	run_sql "ALTER TABLE maintainer_failover_when_operator.t1 ADD COLUMN c2 INT DEFAULT 0;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "UPDATE maintainer_failover_when_operator.t1 SET c2 = 1 WHERE id = 1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t1 VALUES (3, 'c', 2);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t2 VALUES (3, 'c');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t4 VALUES (3, 'c');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "UPDATE maintainer_failover_when_operator.t4 SET val = 'after' WHERE id IN (5000, 50000, 99999);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "DELETE FROM maintainer_failover_when_operator.t4 WHERE id = 75000;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "INSERT INTO maintainer_failover_when_operator.t4 VALUES (12500, 'after'), (87500, 'after');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t5 VALUES (3, 'c');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t6 VALUES (3, 'c');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	diff_config="$work_dir/diff_config.toml"
 	create_diff_config "$work_dir" "$diff_config"
 	check_sync_diff "$work_dir" "$diff_config"
+	wait_for_table_replication_count "$api_addr" "$changefeed_id" "$table_id_3" 0 eq "$mode" 30
+	wait_for_table_replication_count "$api_addr" "$changefeed_id" "$table_id_5" 1 eq "$mode" 30
 
 	cleanup_process $CDC_BINARY
 }
