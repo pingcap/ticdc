@@ -5,6 +5,4 @@ enable-table-across-nodes = true
 # to be split by operator.
 region-threshold = 10
 region-count-per-span = 10
-# Refresh promptly so the post-failover automatic split check does not wait for the five-minute default.
-region-count-refresh-interval = "5s"
 enable-splittable-check = true
