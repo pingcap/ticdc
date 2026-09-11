@@ -48,7 +48,6 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/time/rate"
 )
 
 var (
@@ -242,9 +241,6 @@ type eventStore struct {
 	tableCache     *pebble.TableCache
 	chs            []*chann.UnlimitedChannel[eventWithCallback, uint64]
 	writeTaskPools []*writeTaskPool
-	// Used only by SlowEventStoreWrite; shared by every DB and write worker.
-	slowWriteLimiterOnce sync.Once
-	slowWriteLimiter     *rate.Limiter
 
 	gcManager *gcManager
 
@@ -392,10 +388,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 						queueDuration.Observe(float64(time.Now().UnixNano()-events[0].enqueueTimeNano) / float64(time.Second))
 					}
 					start := time.Now()
-					if err = p.store.writeEvents(ctx, p.db, events, encoder, &compressionBuf, &rawValueBuf); err != nil {
-						if ctx.Err() != nil {
-							return
-						}
+					if err = p.store.writeEvents(p.db, events, encoder, &compressionBuf, &rawValueBuf); err != nil {
 						log.Panic("write events failed", zap.Error(err))
 					}
 					ioWriteDuration.Observe(time.Since(start).Seconds())
@@ -1395,7 +1388,6 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 }
 
 func (e *eventStore) writeEvents(
-	ctx context.Context,
 	db *pebble.DB,
 	events []eventWithCallback,
 	encoder *zstd.Encoder,
@@ -1530,49 +1522,12 @@ func (e *eventStore) writeEvents(
 	}
 	metrics.EventStoreWritePrepareDurationHistogram.Observe(time.Since(prepareStart).Seconds())
 	start := time.Now()
-	// return(bytesPerSecond) limits aggregate encoded batch throughput across
-	// all DBs and workers, allowing incoming events to build up naturally.
-	failpoint.Inject("SlowEventStoreWrite", func(val failpoint.Value) {
-		if bytesPerSecond, ok := val.(int); ok && bytesPerSecond > 0 && batch.Count() > 0 {
-			if err := e.waitForWriteBandwidth(ctx, batch.Len(), bytesPerSecond); err != nil {
-				failpoint.Return(err)
-			}
-		}
-	})
+	// Simulate slow EventStore storage so write workers remain occupied and
+	// incoming events queue up behind them.
+	failpoint.Inject("SlowEventStoreWrite", nil)
 	err := batch.Commit(pebble.NoSync)
 	metrics.EventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
 	return err
-}
-
-func (e *eventStore) waitForWriteBandwidth(ctx context.Context, size, bytesPerSecond int) error {
-	const burst = 1 << 20
-	e.slowWriteLimiterOnce.Do(func() {
-		e.slowWriteLimiter = rate.NewLimiter(rate.Limit(bytesPerSecond), burst)
-		// Charge the first batch too; idle time can later accumulate up to 1 MiB.
-		e.slowWriteLimiter.AllowN(time.Now(), burst)
-	})
-	limiter := e.slowWriteLimiter
-	if limiter.Limit() != rate.Limit(bytesPerSecond) {
-		limiter.SetLimit(rate.Limit(bytesPerSecond))
-	}
-	for size > 0 {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		// Split large batches so reservations never exceed the limiter's burst.
-		n := min(size, burst, bytesPerSecond)
-		reservation := limiter.ReserveN(time.Now(), n)
-		timer := time.NewTimer(reservation.Delay())
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			reservation.Cancel()
-			return ctx.Err()
-		case <-timer.C:
-		}
-		size -= n
-	}
-	return nil
 }
 
 func encodeAndMaybeCompressValue(

@@ -108,7 +108,7 @@ func BenchmarkEventStoreWriteEvents(b *testing.B) {
 					b.ReportAllocs()
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
-						if err := store.writeEvents(b.Context(), store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf); err != nil {
+						if err := store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf); err != nil {
 							b.Fatal(err)
 						}
 					}
@@ -172,7 +172,7 @@ func BenchmarkEventStoreIteratorNext(b *testing.B) {
 	defer encoder.Close()
 	var compressionBuf []byte
 	var rawValueBuf []byte
-	if err := store.writeEvents(b.Context(), db, events, encoder, &compressionBuf, &rawValueBuf); err != nil {
+	if err := store.writeEvents(db, events, encoder, &compressionBuf, &rawValueBuf); err != nil {
 		b.Fatal(err)
 	}
 

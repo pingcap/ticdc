@@ -26,7 +26,6 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -354,7 +353,7 @@ func TestEventStoreUsesKeyspaceIDForEncryption(t *testing.T) {
 	}
 	var compressionBuf []byte
 	var rawValueBuf []byte
-	err = es.writeEvents(context.Background(), es.dbs[subStat.dbIndex], events, encoder, &compressionBuf, &rawValueBuf)
+	err = es.writeEvents(es.dbs[subStat.dbIndex], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 	require.Equal(t, uint32(42), spy.encryptKeyspaceID)
 	require.Equal(t, 2, spy.encryptCalls)
@@ -448,7 +447,7 @@ func TestEventStoreHandlesUnencryptedValuesFromEncryptionLayer(t *testing.T) {
 	}
 	var compressionBuf []byte
 	var rawValueBuf []byte
-	err = es.writeEvents(context.Background(), es.dbs[subStat.dbIndex], events, encoder, &compressionBuf, &rawValueBuf)
+	err = es.writeEvents(es.dbs[subStat.dbIndex], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	subStat.resolvedTs.Store(largeKV.CRTs)
@@ -1299,7 +1298,7 @@ func TestEventStoreRowLevelScanPositionSurvivesSubStatSwitch(t *testing.T) {
 	var compressionBuf []byte
 	var rawValueBuf []byte
 	writeRows := func(subStat *subscriptionStat) {
-		err := store.writeEvents(context.Background(), store.dbs[subStat.dbIndex], []eventWithCallback{{
+		err := store.writeEvents(store.dbs[subStat.dbIndex], []eventWithCallback{{
 			subID:    subStat.subID,
 			tableID:  tableID,
 			kvs:      rows,
@@ -1423,7 +1422,7 @@ func TestWriteToEventStore(t *testing.T) {
 
 	var compressionBuf []byte
 	var rawValueBuf []byte
-	err = store.writeEvents(context.Background(), store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	// Read events back and verify.
@@ -1505,7 +1504,7 @@ func TestWriteToEventStoreZstdCompressionDisabled(t *testing.T) {
 
 	var compressionBuf []byte
 	var rawValueBuf []byte
-	err = store.writeEvents(context.Background(), store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	iter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
@@ -1613,7 +1612,7 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	defer encoder.Close()
 	var compressionBuf []byte
 	var rawValueBuf []byte
-	err = store.writeEvents(context.Background(), store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 	afterMetric := testutil.ToFloat64(metrics.EventStoreCompressedRowsCount)
 	require.InDelta(t, float64(len(expectedValues)), afterMetric-beforeMetric, 1e-9)
@@ -1662,62 +1661,6 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	require.Equal(t, int64(len(expectedValues)), rowCount)
 }
 
-func TestEventStoreSharedWriteBandwidth(t *testing.T) {
-	store := &eventStore{}
-	const bytesPerSecond = 10 << 20
-	start := time.Now()
-	// Initialize without consuming bandwidth, so all workers share the same
-	// empty limiter before starting their reservations.
-	require.NoError(t, store.waitForWriteBandwidth(context.Background(), 0, bytesPerSecond))
-	var wg sync.WaitGroup
-	for _, size := range []int{1 << 19, 1 << 20, 3 << 19} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			assertErr := store.waitForWriteBandwidth(context.Background(), size, bytesPerSecond)
-			if assertErr != nil {
-				t.Errorf("wait for write bandwidth: %v", assertErr)
-			}
-		}()
-	}
-	wg.Wait()
-	// Three concurrent batches total 3 MiB, including one larger than burst.
-	// Independent per-worker limits would incorrectly finish sooner.
-	require.GreaterOrEqual(t, time.Since(start), 300*time.Millisecond)
-}
-
-func TestSlowEventStoreWrite(t *testing.T) {
-	const failpointName = "github.com/pingcap/ticdc/logservice/eventstore/SlowEventStoreWrite"
-	require.NoError(t, failpoint.Enable(failpointName, "return(1)"))
-	t.Cleanup(func() { require.NoError(t, failpoint.Disable(failpointName)) })
-	db, err := pebble.Open(t.TempDir(), &pebble.Options{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	store := &eventStore{}
-	events := []eventWithCallback{{
-		subID:   1,
-		tableID: 1,
-		kvs: []common.RawKVEntry{{
-			OpType: common.OpTypePut, StartTs: 1, CRTs: 2,
-			Key: []byte("key"), Value: []byte("value"),
-		}},
-	}}
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	require.ErrorIs(t, store.writeEvents(ctx, db, events, nil, nil, nil), context.DeadlineExceeded)
-	iter, err := db.NewIter(nil)
-	require.NoError(t, err)
-	require.False(t, iter.First(), "canceled writes must not commit")
-	require.NoError(t, iter.Close())
-
-	require.NoError(t, failpoint.Disable(failpointName))
-	require.NoError(t, store.writeEvents(context.Background(), db, events, nil, nil, nil))
-	iter, err = db.NewIter(nil)
-	require.NoError(t, err)
-	require.True(t, iter.First(), "writes should resume after disabling the failpoint")
-	require.NoError(t, iter.Close())
-}
-
 func TestEventStoreKVEntryCount(t *testing.T) {
 	dir := t.TempDir()
 	_, storeInt := newEventStoreForTest(dir)
@@ -1748,7 +1691,7 @@ func TestEventStoreKVEntryCount(t *testing.T) {
 	encoder, err := zstd.NewWriter(nil)
 	require.NoError(t, err)
 	defer encoder.Close()
-	require.NoError(t, store.writeEvents(context.Background(), store.dbs[0], events, encoder, nil, nil))
+	require.NoError(t, store.writeEvents(store.dbs[0], events, encoder, nil, nil))
 
 	for i, metric := range entryMetrics {
 		require.Equal(t, before[i]+1, testutil.ToFloat64(metric))
@@ -1784,7 +1727,7 @@ func TestEventStoreIterReadsLegacyCompressedValuesWithEncryptionManager(t *testi
 
 	var compressionBuf []byte
 	var rawValueBuf []byte
-	err = store.writeEvents(context.Background(), store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	innerIter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
@@ -1859,7 +1802,7 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 	defer encoder.Close()
 	var compressionBuf []byte
 	var rawValueBuf []byte
-	err = store.(*eventStore).writeEvents(context.Background(), store.(*eventStore).dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
+	err = store.(*eventStore).writeEvents(store.(*eventStore).dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	// 3. Advance resolved ts for the subscription.
@@ -1947,7 +1890,7 @@ func TestEventStoreResumeTokenSupportsRowLevelResume(t *testing.T) {
 	defer encoder.Close()
 	var compressionBuf []byte
 	var rawValueBuf []byte
-	err = store.writeEvents(context.Background(), store.dbs[subStat.dbIndex], events, encoder, &compressionBuf, &rawValueBuf)
+	err = store.writeEvents(store.dbs[subStat.dbIndex], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 	subStat.resolvedTs.Store(nextCommitTs)
 
