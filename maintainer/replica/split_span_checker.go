@@ -157,7 +157,8 @@ type SplitSpanChecker struct {
 	minTrafficPercentage  float64
 	maxTrafficPercentage  float64
 
-	balanceCondition BalanceCondition
+	balanceCondition           BalanceCondition
+	eventStoreBalanceCondition BalanceCondition
 
 	mergeThreshold  int
 	mergeCheckCount int
@@ -270,6 +271,7 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 	}
 
 	s.balanceCondition.statusUpdated = true
+	s.eventStoreBalanceCondition.statusUpdated = true
 
 	log.Debug("split span checker update status",
 		zap.Any("changefeedID", s.changefeedID),
@@ -353,7 +355,16 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 		return results
 	}
 
-	// step2. check whether the whole dispatchers should be merged together.
+	// step2. move a dispatcher away from a node with excessive EventStore traffic.
+	var eventStoreBalanceNeeded bool
+	results, eventStoreBalanceNeeded = s.checkBalanceEventStore(
+		aliveNodeIDs, lastThreeTrafficPerNode, taskMap,
+		eventStoreWriteBytes, nodeResourceUsageStatus)
+	if len(results) > 0 || eventStoreBalanceNeeded {
+		return results
+	}
+
+	// step3. check whether the whole dispatchers should be merged together.
 	//        only when all spans' total region count and traffic are less then threshold/2, we can merge them together
 	//        consider we only support to merge the spans in the same node, we first do move, then merge
 	results = s.checkMergeWhole(totalRegionCount, lastThreeTrafficSum, lastThreeTrafficPerNode)
@@ -361,7 +372,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 		return results
 	}
 
-	// step3. check the traffic of each node. If the traffic is not balanced,
+	// step4. check the traffic of each node. If the traffic is not balanced,
 	//        we try to move some spans from the node with max traffic to the node with min traffic
 	results, minTrafficNodeID, maxTrafficNodeID := s.checkBalanceTraffic(
 		aliveNodeIDs, lastThreeTrafficSum, lastThreeTrafficPerNode, taskMap,
@@ -370,7 +381,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 		return results
 	}
 
-	// step4. check whether we need to do merge some spans.
+	// step5. check whether we need to do merge some spans.
 	//        we can only merge spans when the lag is low.
 	minCheckpointTs := uint64(math.MaxUint64)
 	for _, status := range s.allTasks {
@@ -1040,6 +1051,100 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 	}
 
 	return results, totalRegionCount
+}
+
+// checkBalanceEventStore moves one dispatcher away from a node whose
+// EventStore traffic is persistently above the cluster average.
+func (s *SplitSpanChecker) checkBalanceEventStore(
+	aliveNodeIDs []node.ID,
+	lastThreeTrafficPerNode map[node.ID][]float64,
+	taskMap map[node.ID][]*splitSpanStatus,
+	eventStoreWriteBytes map[node.ID]uint64,
+	nodeResourceUsageStatus heartbeatpb.NodeResourceUsageStatus,
+) ([]SplitSpanCheckResult, bool) {
+	results := make([]SplitSpanCheckResult, 0)
+	if nodeResourceUsageStatus != heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE ||
+		len(aliveNodeIDs) < 2 {
+		s.eventStoreBalanceCondition.reset()
+		return results, false
+	}
+	if !s.eventStoreBalanceCondition.statusUpdated {
+		return results, false
+	}
+
+	var totalWriteBytes float64
+	var sourceNodeID node.ID
+	var sourceWriteBytes uint64
+	for _, nodeID := range aliveNodeIDs {
+		writeBytes := eventStoreWriteBytes[nodeID]
+		totalWriteBytes += float64(writeBytes)
+		if sourceNodeID == "" || writeBytes > sourceWriteBytes ||
+			(writeBytes == sourceWriteBytes && nodeID < sourceNodeID) {
+			sourceNodeID = nodeID
+			sourceWriteBytes = writeBytes
+		}
+	}
+	avgWriteBytes := totalWriteBytes / float64(len(aliveNodeIDs))
+	if avgWriteBytes == 0 || float64(sourceWriteBytes) <= avgWriteBytes*s.maxTrafficPercentage {
+		s.eventStoreBalanceCondition.reset()
+		return results, false
+	}
+	if len(taskMap[sourceNodeID]) == 0 {
+		s.eventStoreBalanceCondition.reset()
+		return results, false
+	}
+
+	var targetNodeID node.ID
+	for _, nodeID := range aliveNodeIDs {
+		writeBytes := eventStoreWriteBytes[nodeID]
+		if nodeID == sourceNodeID || float64(writeBytes) >= avgWriteBytes {
+			continue
+		}
+		if targetNodeID == "" ||
+			lastThreeTrafficPerNode[nodeID][latestTrafficIndex] < lastThreeTrafficPerNode[targetNodeID][latestTrafficIndex] ||
+			(lastThreeTrafficPerNode[nodeID][latestTrafficIndex] == lastThreeTrafficPerNode[targetNodeID][latestTrafficIndex] &&
+				(writeBytes < eventStoreWriteBytes[targetNodeID] ||
+					(writeBytes == eventStoreWriteBytes[targetNodeID] && nodeID < targetNodeID))) {
+			targetNodeID = nodeID
+		}
+	}
+	if targetNodeID == "" {
+		metrics.TrafficBalanceSkipCounter.WithLabelValues(
+			trafficBalanceSkipNoEventStoreHeadroom).Inc()
+		s.eventStoreBalanceCondition.reset()
+		return results, true
+	}
+
+	s.eventStoreBalanceCondition.updateScore(targetNodeID, sourceNodeID, true, true)
+	if s.eventStoreBalanceCondition.balanceScore < s.balanceScoreThreshold {
+		return results, true
+	}
+
+	moveSpan := taskMap[sourceNodeID][0]
+	for _, candidate := range taskMap[sourceNodeID][1:] {
+		if candidate.lastThreeTraffic[latestTrafficIndex] > moveSpan.lastThreeTraffic[latestTrafficIndex] ||
+			(candidate.lastThreeTraffic[latestTrafficIndex] == moveSpan.lastThreeTraffic[latestTrafficIndex] &&
+				candidate.ID.String() < moveSpan.ID.String()) {
+			moveSpan = candidate
+		}
+	}
+
+	log.Info("move dispatcher away from busy event store",
+		zap.String("changefeed", s.changefeedID.String()),
+		zap.Int64("group", s.groupID),
+		zap.String("dispatcherID", moveSpan.ID.String()),
+		zap.Stringer("sourceNodeID", sourceNodeID),
+		zap.Stringer("targetNodeID", targetNodeID),
+		zap.Uint64("sourceWriteBytesDelta", sourceWriteBytes),
+		zap.Uint64("targetWriteBytesDelta", eventStoreWriteBytes[targetNodeID]))
+	results = append(results, SplitSpanCheckResult{
+		OpType:     OpMove,
+		MoveSpans:  []*SpanReplication{moveSpan.SpanReplication},
+		TargetNode: targetNodeID,
+	})
+	s.eventStoreBalanceCondition.reset()
+	s.balanceCondition.reset()
+	return results, true
 }
 
 // checkBalanceTraffic checks whether the traffic is balanced for each node.

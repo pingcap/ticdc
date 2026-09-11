@@ -82,7 +82,7 @@ function wait_for_redistribution() {
 function generate_table_traffic() {
 	while true; do
 		mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -N -s \
-			-e "UPDATE ${DB_NAME}.${TABLE_NAME} SET payload=REPEAT(IF(LEFT(payload, 1)='x', 'y', 'x'), 65536), seq=seq+1;" \
+			-e "UPDATE ${DB_NAME}.${TABLE_NAME} SET payload=REPEAT(IF(LEFT(payload, 1)='x', 'y', 'x'), 1024), seq=seq+1;" \
 			>/dev/null
 		sleep 0.2
 	done
@@ -123,9 +123,9 @@ function run() {
 	source_id=$(get_capture_id "$SOURCE_ADDR")
 	initial_count=$(wait_for_split_table_on_source "$table_id" "$source_id")
 
-	# Count each real EventStore write batch as 1 GiB on the selected source node.
-	# Real DML supplies stable per-dispatcher traffic, while the failpoint only
-	# changes the node-wide resource signal used to select a safe destination.
+	# Keep dispatcher output below the normal 1 MiB/s traffic-balance threshold,
+	# while counting each EventStore write batch as 1 GiB on the source node.
+	# This makes EventStore pressure the only reason to move a dispatcher.
 	enable_failpoint --addr "$SOURCE_ADDR" --name "$EVENT_STORE_FAILPOINT" --expr "return(1073741824)"
 	failpoint_enabled=true
 	generate_table_traffic &
