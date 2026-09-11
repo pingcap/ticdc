@@ -1218,14 +1218,37 @@ func (c *Controller) GetChangefeed(
 
 // GetPersistedChangefeedInfo returns the latest changefeed info persisted in the backend.
 //
-// Use this for resume-time validation because stopped changefeed metadata can
-// be changed outside the coordinator process, for example during metadata
-// migration or by legacy tooling. GetChangefeed intentionally returns the
-// coordinator's in-memory copy.
+// Use this when an operation must validate durable state because changefeed
+// metadata can differ from the coordinator's in-memory view, for example while
+// deletion is finishing or after metadata migration. GetChangefeed
+// intentionally returns the coordinator's in-memory copy.
 func (c *Controller) GetPersistedChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error) {
 	c.apiLock.RLock()
 	defer c.apiLock.RUnlock()
 	return c.backend.GetChangefeedInfo(ctx, id)
+}
+
+// updateChangefeedCheckpointTs serializes checkpoint persistence with API
+// lifecycle changes. Pause and remove persist a non-none progress while holding
+// apiLock, so a checkpoint collected before that operation must not overwrite
+// the newer progress after the operation releases the lock.
+func (c *Controller) updateChangefeedCheckpointTs(
+	ctx context.Context,
+	checkpointTs map[common.ChangeFeedID]uint64,
+) error {
+	c.apiLock.RLock()
+	defer c.apiLock.RUnlock()
+
+	for id := range checkpointTs {
+		cf := c.changefeedDB.GetByID(id)
+		if cf == nil || !shouldRunChangefeed(cf.GetInfo().State) {
+			delete(checkpointTs, id)
+		}
+	}
+	if len(checkpointTs) == 0 {
+		return nil
+	}
+	return c.backend.UpdateChangefeedCheckpointTs(ctx, checkpointTs)
 }
 
 // getChangefeed returns the changefeed by id, return nil if not found

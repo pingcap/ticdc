@@ -1013,6 +1013,41 @@ func TestRemoveChangefeed(t *testing.T) {
 	require.Equal(t, uint64(1), cp)
 }
 
+func TestUpdateChangefeedCheckpointTsSkipsStoppedAndRemovedChangefeeds(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	controller := &Controller{backend: backend, changefeedDB: changefeedDB}
+
+	runningID := common.NewChangeFeedIDWithName("running", common.DefaultKeyspaceName)
+	stoppedID := common.NewChangeFeedIDWithName("stopped", common.DefaultKeyspaceName)
+	removedID := common.NewChangeFeedIDWithName("removed", common.DefaultKeyspaceName)
+	running := changefeed.NewChangefeed(runningID, &config.ChangeFeedInfo{
+		ChangefeedID: runningID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+	}, 1, true)
+	stopped := changefeed.NewChangefeed(stoppedID, &config.ChangeFeedInfo{
+		ChangefeedID: stoppedID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateStopped,
+	}, 1, true)
+	changefeedDB.AddAbsentChangefeed(running)
+	changefeedDB.AddStoppedChangefeed(stopped)
+
+	checkpointTs := map[common.ChangeFeedID]uint64{
+		runningID: 100,
+		stoppedID: 200,
+		removedID: 300,
+	}
+	backend.EXPECT().UpdateChangefeedCheckpointTs(gomock.Any(), map[common.ChangeFeedID]uint64{
+		runningID: 100,
+	}).Return(nil)
+
+	require.NoError(t, controller.updateChangefeedCheckpointTs(context.Background(), checkpointTs))
+	require.Equal(t, map[common.ChangeFeedID]uint64{runningID: 100}, checkpointTs)
+}
+
 func TestListChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
