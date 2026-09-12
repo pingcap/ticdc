@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -46,6 +47,7 @@ const (
 var (
 	cachePadString = make(map[int]string)
 	cacheIdx       atomic.Int64
+	errTableEmpty  = errors.New("table is empty")
 )
 
 // InitPadStringCache initializes the cache with random pad strings
@@ -139,6 +141,9 @@ func (c *SysbenchWorkload) getOrCreateCache(conn *sql.Conn, tableIndex int, opts
 
 	// Initialize ranges
 	if err := c.initializeRanges(conn, cache, tableIndex, opts.Batch); err != nil {
+		if errors.Is(err, errTableEmpty) {
+			return nil
+		}
 		log.Error("failed to initialize ranges", zap.Error(err))
 		return nil
 	}
@@ -161,8 +166,8 @@ func (c *SysbenchWorkload) initializeRanges(conn *sql.Conn, cache *schema.TableU
 	tableName := fmt.Sprintf("sbtest%d", tableIndex)
 
 	if len(ids) == 0 {
-		log.Warn("no records found in table", zap.String("tableName", tableName))
-		return fmt.Errorf("no records found in table %s", tableName)
+		log.Debug("skip sysbench update on empty table", zap.String("tableName", tableName))
+		return errTableEmpty
 	}
 
 	c.divideIntoRanges(cache, ids, tableIndex)
@@ -223,6 +228,17 @@ func (c *SysbenchWorkload) divideIntoRanges(cache *schema.TableUpdateRangeCache,
 		}
 		cache.AddTableUpdateRange(irange)
 	}
+}
+
+func (c *SysbenchWorkload) OnTableTruncated(_ string, tableName string) {
+	var tableIndex int
+	if _, err := fmt.Sscanf(tableName, "sbtest%d", &tableIndex); err != nil {
+		return
+	}
+
+	c.mu.Lock()
+	delete(c.tableUpdateRangesCache, tableIndex)
+	c.mu.Unlock()
 }
 
 // buildRangeUpdateSQL builds the final update SQL for a range

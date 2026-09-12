@@ -31,6 +31,9 @@ Run DDL workload based on a TOML config file:
     -ddl-timeout 2m
 ```
 
+Each DDL type is scheduled evenly across the minute instead of being burst-enqueued at the minute boundary.
+For example, `truncate_table = 1` runs about once every 60s, and `add_column = 6` runs about once every 10s.
+
 `ddl.toml` example (fixed mode):
 
 ```toml
@@ -49,6 +52,23 @@ drop_index = 5
 truncate_table = 1
 ```
 
+`ddl.toml` example (fixed mode with regex-matched tables in one schema):
+
+```toml
+mode = "fixed"
+
+table_patterns = [
+  "^sbtest[0-9]+$",
+]
+
+[rate_per_minute]
+truncate_table = 60
+add_column = 120
+drop_column = 120
+add_index = 30
+drop_index = 30
+```
+
 `ddl.toml` example (random mode, omit `tables`):
 
 ```toml
@@ -60,6 +80,70 @@ drop_column = 10
 add_index = 5
 drop_index = 5
 truncate_table = 0
+```
+
+Prebuilt examples:
+
+- `examples/ddl_truncate_table_mixed.toml`: periodically runs `TRUNCATE TABLE` while add/drop column and add/drop index continue in parallel.
+- `examples/ddl_partition_table_mixed.toml`: targets partitioned `bank4` tables and mixes `TRUNCATE TABLE`, add/drop column, and add/drop index.
+
+DDL table selection notes:
+
+- `tables = [...]` uses explicit table names.
+- `table_patterns = [...]` uses Go regular expressions to match table names inside `-database-db-name`.
+- `table_patterns` currently supports only a single database connection (`-db-num=1` and no `-db-prefix`).
+- You can mix `tables` and `table_patterns` in the same fixed-mode config.
+
+DDL rate notes:
+
+- `rate_per_minute` is the total rate for that DDL type across the selected table set, not a per-table rate.
+- In fixed mode, tasks are distributed round-robin across the matched tables.
+- Example: if you select 60 tables and set `truncate_table = 60`, each table will be truncated about once per minute on average.
+- Example: if you select 200 tables and want each table truncated about once every 5 minutes, set `truncate_table = 40`.
+- `add/drop column` and `add/drop index` may be skipped on some tables depending on current schema state, so scheduled rate and successful execution rate can differ.
+
+Truncate-table mixed DDL example:
+
+```bash
+./bin/workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name test \
+    -workload-type sysbench \
+    -table-count 4 \
+    -thread 32 \
+    -batch-size 64 \
+    -ddl-config ./examples/ddl_truncate_table_mixed.toml \
+    -ddl-worker 1 \
+    -ddl-timeout 2m
+```
+
+Partition-table mixed DDL example (prepare 126-partition `bank4` tables first):
+
+```bash
+./bin/workload -action prepare \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name partition_ddl \
+    -workload-type bank4 \
+    -partitioned=true \
+    -table-count 4 \
+    -total-row-count 0
+
+./bin/workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name partition_ddl \
+    -workload-type bank4 \
+    -partitioned=true \
+    -table-count 4 \
+    -thread 16 \
+    -batch-size 64 \
+    -percentage-for-update 0.5 \
+    -percentage-for-delete 0.1 \
+    -ddl-config ./examples/ddl_partition_table_mixed.toml \
+    -ddl-worker 1 \
+    -ddl-timeout 2m
 ```
 
 ### 1. Sysbench-style Data Insertion
@@ -176,7 +260,24 @@ Run insert and update concurrently, and execute DDL in parallel:
     -ddl-timeout 2m
 ```
 
-### 7. Wide Table With JSON Workload
+### 7. Table Info Sharing Workload
+
+Generate multiple table-info variants. Tables in the same variant should be shareable, while different variants intentionally differ by defaults, type attributes, nullability, index layout, generated columns, or extra columns so they should not share table info. This workload covers a broad set of column types including numeric, bit, string, binary, temporal, enum/set, generated columns, and JSON.
+
+```bash
+./workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name table_info_sharing \
+    -table-count 14 \
+    -workload-type table_info_sharing \
+    -thread 32 \
+    -batch-size 32 \
+    -percentage-for-update 0.5 \
+    -percentage-for-delete 0.1
+```
+
+### 8. Wide Table With JSON Workload
 
 Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_secondary` (two tables per shard). Use `-row-size` to control payload width and `-table-count` to control shard count.
 
@@ -201,5 +302,6 @@ Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_sec
 - Adjust the thread and batch-size parameters based on your needs.
 - Use `-batch-in-txn` to wrap each batch in a single explicit transaction (BEGIN/COMMIT).
 - `wide_table_with_json` always generates JSON-like payload data.
-- For workloads that support partitioned tables (e.g. bank3), set `-partitioned=false` to create non-partitioned tables.
+- For workloads that support partitioned tables (e.g. bank3, bank4), set `-partitioned=false` to create non-partitioned tables.
+- `bank4` partitioned mode creates 126 monthly partitions per table, which is suitable for partition-heavy DDL stress.
 - `-bank3-partitioned` is deprecated; use `-partitioned`.

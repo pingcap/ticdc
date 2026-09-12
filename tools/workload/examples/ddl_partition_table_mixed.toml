@@ -1,0 +1,10 @@
+# Use this with a dedicated database that only contains partitioned bank4 tables.
+# bank4 creates 126 monthly partitions per table (2021-07 through 2031-12).
+mode = "random"
+
+[rate_per_minute]
+truncate_table = 1
+add_column = 6
+drop_column = 6
+add_index = 3
+drop_index = 3
