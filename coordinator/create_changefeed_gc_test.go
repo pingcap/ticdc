@@ -140,7 +140,7 @@ func TestUpdateGCSafepointCallsGCManagerUpdate(t *testing.T) {
 			Return(nil).Times(1)
 	}
 	gcManager.EXPECT().
-		CheckStaleCheckpointTs(info.KeyspaceID, cfID, common.Ts(info.StartTs)).
+		CheckStaleCheckpointTs(info.KeyspaceID, cfID, info.StartTs).
 		Return(nil).Times(1)
 
 	changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(cfID, info, info.StartTs, true))
@@ -321,7 +321,7 @@ func TestConcurrentDeleteLastChangefeedAndCreateNewOneKeepsExpectedGCSafepoint(t
 			Return(nil).
 			Times(1)
 		gcManager.EXPECT().
-			CheckStaleCheckpointTs(newInfo.KeyspaceID, newID, common.Ts(newInfo.StartTs)).
+			CheckStaleCheckpointTs(newInfo.KeyspaceID, newID, newInfo.StartTs).
 			Return(nil).
 			Times(1)
 
