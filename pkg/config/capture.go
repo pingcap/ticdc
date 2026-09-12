@@ -50,6 +50,13 @@ type CaptureInfo struct {
 	DeployPath     string `json:"deploy-path"`
 	StartTimestamp int64  `json:"start-timestamp"`
 	IsNewArch      bool   `json:"is-new-arch"`
+
+	// WriteLeaseProtocolVersion records the write-fencing protocol supported by
+	// this capture. A missing value means that the capability is unknown.
+	WriteLeaseProtocolVersion uint32 `json:"write-lease-protocol-version,omitempty"`
+	// WriteStopped is published only after every local module has stopped, so
+	// observers can remove this capture without waiting for its write leases.
+	WriteStopped bool `json:"write-stopped,omitempty"`
 }
 
 // Marshal using json.Marshal.
