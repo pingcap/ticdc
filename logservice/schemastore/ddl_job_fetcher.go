@@ -109,6 +109,19 @@ func (p *ddlJobFetcher) run(startTs uint64) error {
 	return nil
 }
 
+func (p *ddlJobFetcher) close() {
+	p.resolvedTsTracker.Lock()
+	subscriptionIDs := make([]logpuller.SubscriptionID, 0, len(p.resolvedTsTracker.resolvedTsItemMap))
+	for subID := range p.resolvedTsTracker.resolvedTsItemMap {
+		subscriptionIDs = append(subscriptionIDs, subID)
+	}
+	p.resolvedTsTracker.Unlock()
+
+	for _, subID := range subscriptionIDs {
+		p.subClient.Unsubscribe(subID)
+	}
+}
+
 func (p *ddlJobFetcher) tryAdvanceResolvedTs(subID logpuller.SubscriptionID, newResolvedTs uint64) {
 	p.resolvedTsTracker.Lock()
 	defer p.resolvedTsTracker.Unlock()
