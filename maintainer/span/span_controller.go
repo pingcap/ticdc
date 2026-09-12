@@ -97,11 +97,12 @@ func NewController(
 	refresher *replica.RegionCountRefresher,
 	keyspaceID uint32,
 	mode int64,
+	nodeResourceUsage *replica.NodeResourceUsageTracker,
 ) *Controller {
 	c := &Controller{
 		changefeedID:                    changefeedID,
 		ddlSpan:                         ddlSpan,
-		newGroupChecker:                 replica.GetNewGroupChecker(changefeedID, schedulerCfg, refresher),
+		newGroupChecker:                 replica.GetNewGroupChecker(changefeedID, schedulerCfg, refresher, nodeResourceUsage),
 		nodeManager:                     appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:                        splitter,
 		ddlDispatcherID:                 ddlSpan.ID,

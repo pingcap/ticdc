@@ -46,6 +46,11 @@ func TestNodeHeartbeatResponseRemoteRoundTrip(t *testing.T) {
 		TargetNodeEpoch:    11,
 		RequestSeq:         12,
 		LeaseDurationMs:    5000,
+		NodeResourceUsages: []*heartbeatpb.NodeResourceUsage{
+			{NodeId: "capture-1", EventStoreWriteBytes: 100},
+			{NodeId: "capture-2", EventStoreWriteBytes: 200},
+		},
+		NodeResourceUsageStatus: heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE,
 	}
 	require.NoError(t, sender.SendCommand(
 		NewSingleTargetMessage(receiver.id, MaintainerManagerTopic, response),
@@ -75,6 +80,10 @@ func TestNodeHeartbeatResponseIOTypeRoundTrip(t *testing.T) {
 			WitnessNodeEpoch:     13,
 			Nonce:                []byte("nonce"),
 		},
+		NodeResourceUsages: []*heartbeatpb.NodeResourceUsage{
+			{NodeId: "capture-1", EventStoreWriteBytes: 100},
+		},
+		NodeResourceUsageStatus: heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE,
 	}
 	message := NewSingleTargetMessage(node.ID("capture"), MaintainerManagerTopic, response)
 	require.Equal(t, TypeNodeHeartbeatResponse, message.Type)

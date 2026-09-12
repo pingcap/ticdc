@@ -51,6 +51,70 @@ func TestCaptureWriteLeaseGrantsRemoteNode(t *testing.T) {
 	require.Equal(t, uint64(12), requireWriteLeaseResponse(t, messages[0]).TargetNodeEpoch)
 }
 
+func TestCaptureWriteLeaseSharesFreshNodeResourceUsage(t *testing.T) {
+	now := time.Unix(100, 0)
+	controller := newCaptureWriteLeaseController(10, node.ID("coordinator"))
+	controller.now = func() time.Time { return now }
+	enableP2PForNodes(controller, node.ID("capture-1"), node.ID("capture-2"))
+
+	firstHeartbeat := newWriteLeaseHeartbeat(21, 1)
+	firstHeartbeat.NodeResourceUsage = &heartbeatpb.NodeResourceUsage{
+		EventStoreWriteBytes: 200,
+	}
+	controller.handleHeartbeat(node.ID("capture-2"), firstHeartbeat, nil)
+
+	secondHeartbeat := newWriteLeaseHeartbeat(11, 1)
+	secondHeartbeat.NodeResourceUsage = &heartbeatpb.NodeResourceUsage{
+		EventStoreWriteBytes: 100,
+	}
+	messages := controller.handleHeartbeat(node.ID("capture-1"), secondHeartbeat, nil)
+	require.Len(t, messages, 1)
+	require.Equal(t,
+		heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE,
+		requireWriteLeaseResponse(t, messages[0]).NodeResourceUsageStatus)
+	require.Equal(t, []*heartbeatpb.NodeResourceUsage{
+		{NodeId: "capture-1", EventStoreWriteBytes: 100},
+		{NodeId: "capture-2", EventStoreWriteBytes: 200},
+	}, requireWriteLeaseResponse(t, messages[0]).NodeResourceUsages)
+
+	// A fresh report must not keep another node's stale sample in the cluster
+	// snapshot. All nodes support reporting, so this is an interruption rather
+	// than a rolling-upgrade fallback.
+	now = now.Add(nodeResourceUsageStaleThreshold + time.Nanosecond)
+	secondHeartbeat.WriteLeaseRequestSeq = 2
+	secondHeartbeat.NodeResourceUsage.EventStoreWriteBytes = 300
+	messages = controller.handleHeartbeat(node.ID("capture-1"), secondHeartbeat, nil)
+	require.Len(t, messages, 1)
+	response := requireWriteLeaseResponse(t, messages[0])
+	require.Equal(t,
+		heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE,
+		response.NodeResourceUsageStatus)
+	require.Empty(t, response.NodeResourceUsages)
+
+	// Missing usage means the sender no longer supports or cannot provide the
+	// counter, so its previous value is removed immediately.
+	secondHeartbeat.WriteLeaseRequestSeq = 3
+	secondHeartbeat.NodeResourceUsage = nil
+	messages = controller.handleHeartbeat(node.ID("capture-1"), secondHeartbeat, nil)
+	require.Len(t, messages, 1)
+	response = requireWriteLeaseResponse(t, messages[0])
+	require.Equal(t,
+		heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE,
+		response.NodeResourceUsageStatus)
+	require.Empty(t, response.NodeResourceUsages)
+
+	// A node that does not declare the resource protocol is a rolling-upgrade
+	// compatibility case, distinct from interrupted telemetry.
+	secondHeartbeat.WriteLeaseRequestSeq = 4
+	secondHeartbeat.NodeResourceUsageProtocolVersion = heartbeatpb.LegacyNodeResourceUsageProtocolVersion
+	messages = controller.handleHeartbeat(node.ID("capture-1"), secondHeartbeat, nil)
+	require.Len(t, messages, 1)
+	response = requireWriteLeaseResponse(t, messages[0])
+	require.Equal(t,
+		heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_UNSUPPORTED,
+		response.NodeResourceUsageStatus)
+}
+
 func TestCaptureWriteLeaseRequiresRemoteWitnessForCoordinatorNode(t *testing.T) {
 	now := time.Unix(100, 0)
 	controller := newCaptureWriteLeaseController(10, node.ID("coordinator"))
@@ -246,10 +310,11 @@ func TestCaptureWriteLeaseRejectsInvalidHeartbeatAndLateWitness(t *testing.T) {
 
 func newWriteLeaseHeartbeat(nodeEpoch, requestSeq uint64) *heartbeatpb.NodeHeartbeat {
 	return &heartbeatpb.NodeHeartbeat{
-		Liveness:                  heartbeatpb.NodeLiveness_ALIVE,
-		NodeEpoch:                 nodeEpoch,
-		WriteLeaseRequestSeq:      requestSeq,
-		WriteLeaseProtocolVersion: heartbeatpb.CurrentWriteLeaseProtocolVersion,
+		Liveness:                         heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                        nodeEpoch,
+		WriteLeaseRequestSeq:             requestSeq,
+		WriteLeaseProtocolVersion:        heartbeatpb.CurrentWriteLeaseProtocolVersion,
+		NodeResourceUsageProtocolVersion: heartbeatpb.CurrentNodeResourceUsageProtocolVersion,
 	}
 }
 

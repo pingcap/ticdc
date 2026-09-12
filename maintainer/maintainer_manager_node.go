@@ -108,11 +108,15 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 		NodeEpoch: m.node.nodeEpoch,
 		// Report the manager-level dispatcher drain target so coordinator can
 		// confirm both activation and clearing even when no maintainers exist.
-		DispatcherDrainTargetNodeId: drainTarget.String(),
-		DispatcherDrainTargetEpoch:  drainEpoch,
-		WriteLeaseRequestSeq:        requestSeq,
-		WriteLeaseProtocolVersion:   heartbeatpb.CurrentWriteLeaseProtocolVersion,
-		WriteLeaseWitnessAck:        m.node.pendingWitnessAck,
+		DispatcherDrainTargetNodeId:      drainTarget.String(),
+		DispatcherDrainTargetEpoch:       drainEpoch,
+		WriteLeaseRequestSeq:             requestSeq,
+		WriteLeaseProtocolVersion:        heartbeatpb.CurrentWriteLeaseProtocolVersion,
+		WriteLeaseWitnessAck:             m.node.pendingWitnessAck,
+		NodeResourceUsageProtocolVersion: heartbeatpb.CurrentNodeResourceUsageProtocolVersion,
+		NodeResourceUsage: &heartbeatpb.NodeResourceUsage{
+			EventStoreWriteBytes: m.resourceUsageProvider.EventStoreWriteBytes(),
+		},
 	}
 	target := m.newCoordinatorTopicMessage(hb)
 	if err := m.mc.SendCommand(target); err != nil {
@@ -190,6 +194,17 @@ func (m *Manager) onNodeHeartbeatResponse(msg *messaging.TargetMessage) {
 		}
 		m.writeGate.SetP2PRequired(true)
 	}
+	var resourceUsage map[node.ID]uint64
+	if response.NodeResourceUsageStatus == heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE {
+		resourceUsage = make(map[node.ID]uint64, len(response.NodeResourceUsages))
+		for _, usage := range response.NodeResourceUsages {
+			if usage == nil || usage.NodeId == "" {
+				continue
+			}
+			resourceUsage[node.ID(usage.NodeId)] = usage.EventStoreWriteBytes
+		}
+	}
+	m.nodeResourceUsage.ReplaceEventStoreWriteBytes(resourceUsage, response.NodeResourceUsageStatus)
 	metrics.CaptureLeaseResponseCounter.WithLabelValues("accepted").Inc()
 	m.node.lastAppliedLeaseSeq = requestSeq
 	for seq := range m.node.writeLeaseRequestSentAt {

@@ -385,7 +385,7 @@ func TestMaintainerSchedule(t *testing.T) {
 		},
 		&config.ChangeFeedInfo{
 			Config: config.GetDefaultReplicaConfig(),
-		}, n, taskScheduler, 10, true, common.DefaultKeyspaceID)
+		}, n, taskScheduler, 10, true, common.DefaultKeyspaceID, replica.NewNodeResourceUsageTracker())
 	defer maintainer.Close()
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic,
@@ -443,7 +443,7 @@ func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
 			CheckpointTs:    10,
 			Mode:            common.DefaultMode,
 		}, "node1", false)
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode, replica.NewNodeResourceUsageTracker())
 	spanController.AdvanceMaintainerCommittedCheckpointTs(20)
 
 	m := &Maintainer{
@@ -488,7 +488,7 @@ func TestMaintainerHeartbeatDuringRemovingSkipsFailoverRecovery(t *testing.T) {
 			}, captureID, false)
 		refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
 		controller := NewController(cfID, 10, &mockThreadPool{},
-			config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 1)
+			config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 1, replica.NewNodeResourceUsageTracker())
 
 		totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
 		dispatcherID := common.NewDispatcherID()
@@ -814,7 +814,7 @@ func newMaintainerForCheckpointCalculationTest(t testing.TB) (*Maintainer, node.
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	selfNode := node.NewInfo("127.0.0.1:8300", "")
 	_, ddlSpan := newDDLSpan(common.DefaultKeyspaceID, cfID, 1, selfNode, common.DefaultMode)
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode, replica.NewNodeResourceUsageTracker())
 	operatorController := operator.NewOperatorController(cfID, spanController, 1, common.DefaultMode)
 
 	controller := &Controller{
@@ -862,9 +862,9 @@ func newMaintainerForRedoCheckpointCalculationTest(t testing.TB) (*Maintainer, n
 	selfNode := node.NewInfo("127.0.0.1:8300", "")
 	_, ddlSpan := newDDLSpan(common.DefaultKeyspaceID, cfID, 1, selfNode, common.DefaultMode)
 	_, redoDDLSpan := newDDLSpan(common.DefaultKeyspaceID, cfID, 1, selfNode, common.RedoMode)
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode, replica.NewNodeResourceUsageTracker())
 	operatorController := operator.NewOperatorController(cfID, spanController, 1, common.DefaultMode)
-	redoSpanController := span.NewController(cfID, redoDDLSpan, nil, nil, nil, common.DefaultKeyspaceID, common.RedoMode)
+	redoSpanController := span.NewController(cfID, redoDDLSpan, nil, nil, nil, common.DefaultKeyspaceID, common.RedoMode, replica.NewNodeResourceUsageTracker())
 	redoOperatorController := operator.NewOperatorController(cfID, redoSpanController, 1, common.RedoMode)
 
 	controller := &Controller{

@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -98,6 +99,8 @@ type EventStore interface {
 	GetIterator(dispatcherID common.DispatcherID, request ScanRequest) (EventIterator, error)
 
 	GetLogCoordinatorNodeID() node.ID
+
+	EventStoreWriteBytes() uint64
 }
 
 type DMLEventState struct {
@@ -267,6 +270,9 @@ type eventStore struct {
 
 	// closed is used to indicate the event store is closed.
 	closed atomic.Bool
+	// writeBytes is the authoritative process-wide cumulative write counter used
+	// by scheduling. The Prometheus counter remains an observability-only copy.
+	writeBytes atomic.Uint64
 
 	// compressionThreshold is the size in bytes above which a value will be compressed.
 	compressionThreshold int
@@ -1027,6 +1033,10 @@ func (e *eventStore) GetLogCoordinatorNodeID() node.ID {
 	return e.getCoordinatorInfo()
 }
 
+func (e *eventStore) EventStoreWriteBytes() uint64 {
+	return e.writeBytes.Load()
+}
+
 func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat *subscriptionStat) {
 	if subStat == nil {
 		return
@@ -1513,9 +1523,11 @@ func (e *eventStore) writeEvents(
 	insertKVEntryCount.Add(float64(insertCount))
 	updateKVEntryCount.Add(float64(updateCount))
 	deleteKVEntryCount.Add(float64(deleteCount))
+	writeBytes := uint64(batch.Len())
+	failpoint.Inject("InjectEventStoreWriteBytes", func(val failpoint.Value) {
+		writeBytes = uint64(val.(int))
+	})
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
-	metrics.EventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
-	metrics.EventStoreWriteBytes.Add(float64(batch.Len()))
 	if totalValueBytesAfter > 0 {
 		metrics.EventStoreCompressionRatioHistogram.Observe(float64(totalValueBytesBefore) / float64(totalValueBytesAfter))
 	}
@@ -1523,6 +1535,11 @@ func (e *eventStore) writeEvents(
 	start := time.Now()
 	err := batch.Commit(pebble.NoSync)
 	metrics.EventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
+	if err == nil {
+		e.writeBytes.Add(writeBytes)
+		metrics.EventStoreWriteBatchSizeHist.Observe(float64(writeBytes))
+		metrics.EventStoreWriteBytes.Add(float64(writeBytes))
+	}
 	return err
 }
 

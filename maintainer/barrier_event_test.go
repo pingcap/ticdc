@@ -41,7 +41,7 @@ func TestScheduleEvent(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "test1", false)
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode, replica.NewNodeResourceUsageTracker())
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
@@ -94,7 +94,7 @@ func TestResendAction(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode, replica.NewNodeResourceUsageTracker())
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
@@ -202,7 +202,7 @@ func TestFanoutPassResendWaitsForQuietStatus(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode, replica.NewNodeResourceUsageTracker())
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
@@ -256,7 +256,7 @@ func TestNormalPassResendDoesNotWaitForQuietStatus(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode, replica.NewNodeResourceUsageTracker())
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
@@ -298,7 +298,7 @@ func TestSendPassActionTypeDBIncludesWriterNode(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node2", false)
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode, replica.NewNodeResourceUsageTracker())
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
@@ -341,7 +341,7 @@ func TestUpdateSchemaID(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode, replica.NewNodeResourceUsageTracker())
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	require.Equal(t, 1, spanController.GetAbsentSize())

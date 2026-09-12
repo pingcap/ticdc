@@ -242,7 +242,7 @@ func (c *server) initialize(ctx context.Context) error {
 		subscriptionClient,
 		schemaStore,
 		eventStore,
-		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler, &c.liveness),
+		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler, &c.liveness, eventStore),
 		eventService,
 	}
 	// register it into global var
