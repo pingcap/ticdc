@@ -26,6 +26,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -136,6 +137,9 @@ func TestUpdateGCSafepointCallsGCManagerUpdate(t *testing.T) {
 			TryUpdateKeyspaceGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), common.Ts(info.StartTs-1)).
 			Return(nil).Times(1)
 	}
+	gcManager.EXPECT().
+		CheckStaleCheckpointTs(info.KeyspaceID, cfID, info.StartTs).
+		Return(nil).Times(1)
 
 	changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(cfID, info, info.StartTs, true))
 
@@ -148,3 +152,200 @@ func TestUpdateGCSafepointCallsGCManagerUpdate(t *testing.T) {
 	require.Equal(t, config.StateNormal, cf.GetInfo().State)
 	require.Nil(t, cf.GetInfo().Error)
 }
+<<<<<<< HEAD
+=======
+
+func TestUpdateGCSafepointChecksFailedChangefeedGCTTL(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	gcManager := gc.NewMockManager(ctrl)
+
+	co, changefeedDB := newTestCoordinatorWithGCManager(t, backend, gcManager)
+	co.changefeedChangeCh = make(chan []*changefeedChange, 1)
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	checkpointTs := common.Ts(100)
+	info := &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		State:        config.StateFailed,
+		Error: &config.RunningError{
+			Code: string(errors.ErrTableRouteConflict.ID()),
+		},
+		Config:     config.GetDefaultReplicaConfig(),
+		SinkURI:    "kafka://127.0.0.1:9092",
+		KeyspaceID: 1,
+	}
+	changefeedDB.AddStoppedChangefeed(changefeed.NewChangefeed(cfID, info, checkpointTs, false))
+
+	if kerneltype.IsClassic() {
+		gcManager.EXPECT().
+			TryUpdateServiceGCSafepoint(gomock.Any(), checkpointTs-1).
+			Return(nil).Times(1)
+	} else {
+		gcManager.EXPECT().
+			TryUpdateKeyspaceGCBarrier(gomock.Any(), info.KeyspaceID, cfID.Keyspace(), checkpointTs-1).
+			Return(nil).Times(1)
+	}
+	ttlErr := errors.ErrGCTTLExceeded.GenWithStackByArgs(checkpointTs, cfID)
+	gcManager.EXPECT().
+		CheckStaleCheckpointTs(info.KeyspaceID, cfID, checkpointTs).
+		Return(ttlErr).Times(1)
+
+	require.NoError(t, co.updateGCSafepoint(context.Background()))
+
+	select {
+	case changes := <-co.changefeedChangeCh:
+		require.Len(t, changes, 1)
+		require.Equal(t, config.StateFailed, changes[0].state)
+		require.Equal(t, ChangeState, changes[0].changeType)
+		require.Equal(t, string(errors.ErrGCTTLExceeded.ID()), changes[0].err.Code)
+	default:
+		require.FailNow(t, "expected gc ttl state change")
+	}
+}
+
+func TestUpdateGCSafepointDeletesServiceSafepointWhenNoChangefeed(t *testing.T) {
+	if !kerneltype.IsClassic() {
+		t.Skip("classic mode only")
+	}
+
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	gcManager := gc.NewMockManager(ctrl)
+
+	co, _ := newTestCoordinatorWithGCManager(t, backend, gcManager)
+
+	gcManager.EXPECT().
+		TryDeleteServiceGCSafepoint(gomock.Any()).
+		Return(nil).
+		Times(1)
+	gcManager.EXPECT().
+		TryUpdateServiceGCSafepoint(gomock.Any(), gomock.Any()).
+		Times(0)
+
+	require.NoError(t, co.updateGCSafepoint(context.Background()))
+}
+
+func TestRemoveLastChangefeedDeletesServiceSafepointImmediately(t *testing.T) {
+	if !kerneltype.IsClassic() {
+		t.Skip("classic mode only")
+	}
+
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	gcManager := gc.NewMockManager(ctrl)
+
+	co, changefeedDB := newTestCoordinatorWithGCManager(t, backend, gcManager)
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 101, true)
+	changefeedDB.AddReplicatingMaintainer(cf, "node1")
+
+	backend.EXPECT().
+		SetChangefeedProgress(gomock.Any(), cfID, config.ProgressRemoving).
+		Return(nil).
+		Times(1)
+	gcManager.EXPECT().
+		TryDeleteServiceGCSafepoint(gomock.Any()).
+		Return(nil).
+		Times(1)
+
+	cpCh := make(chan uint64, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		cp, err := co.RemoveChangefeed(context.Background(), cfID)
+		cpCh <- cp
+		errCh <- err
+	}()
+
+	var op interface{ OnTaskRemoved() }
+	require.Eventually(t, func() bool {
+		op = co.controller.operatorController.GetOperator(cfID)
+		return op != nil
+	}, 5*time.Second, 10*time.Millisecond)
+	op.OnTaskRemoved()
+
+	require.NoError(t, <-errCh)
+	require.Equal(t, uint64(101), <-cpCh)
+}
+
+func TestConcurrentDeleteLastChangefeedAndCreateNewOneKeepsExpectedGCSafepoint(t *testing.T) {
+	if !kerneltype.IsClassic() {
+		t.Skip("classic mode only")
+	}
+
+	for i := 0; i < 5; i++ {
+		ctrl := gomock.NewController(t)
+		backend := mock_changefeed.NewMockBackend(ctrl)
+		gcManager := gc.NewMockManager(ctrl)
+
+		co, changefeedDB := newTestCoordinatorWithGCManager(t, backend, gcManager)
+
+		oldID := common.NewChangeFeedIDWithName("old", common.DefaultKeyspaceName)
+		oldCF := changefeed.NewChangefeed(oldID, &config.ChangeFeedInfo{
+			ChangefeedID: oldID,
+			Config:       config.GetDefaultReplicaConfig(),
+			State:        config.StateNormal,
+			SinkURI:      "mysql://127.0.0.1:3306",
+		}, 101, true)
+		changefeedDB.AddReplicatingMaintainer(oldCF, "node1")
+
+		newID := common.NewChangeFeedIDWithName("new", common.DefaultKeyspaceName)
+		newInfo := &config.ChangeFeedInfo{
+			ChangefeedID: newID,
+			StartTs:      205,
+			State:        config.StateNormal,
+			Config:       config.GetDefaultReplicaConfig(),
+			SinkURI:      "kafka://127.0.0.1:9092",
+			KeyspaceID:   1,
+		}
+
+		backend.EXPECT().
+			SetChangefeedProgress(gomock.Any(), oldID, config.ProgressRemoving).
+			Return(nil).
+			Times(1)
+		backend.EXPECT().
+			CreateChangefeed(gomock.Any(), gomock.Any()).
+			Return(nil).
+			Times(1)
+		gcManager.EXPECT().
+			TryDeleteServiceGCSafepoint(gomock.Any()).
+			Times(0)
+		gcManager.EXPECT().
+			TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(newInfo.StartTs-1)).
+			Return(nil).
+			Times(1)
+		gcManager.EXPECT().
+			CheckStaleCheckpointTs(newInfo.KeyspaceID, newID, newInfo.StartTs).
+			Return(nil).
+			Times(1)
+
+		cpCh := make(chan uint64, 1)
+		errCh := make(chan error, 1)
+		go func() {
+			cp, err := co.RemoveChangefeed(context.Background(), oldID)
+			cpCh <- cp
+			errCh <- err
+		}()
+
+		var op interface{ OnTaskRemoved() }
+		require.Eventually(t, func() bool {
+			op = co.controller.operatorController.GetOperator(oldID)
+			return op != nil
+		}, 5*time.Second, 10*time.Millisecond)
+
+		require.NoError(t, co.CreateChangefeed(context.Background(), newInfo))
+		op.OnTaskRemoved()
+
+		require.NoError(t, <-errCh)
+		require.Equalf(t, uint64(101), <-cpCh, "iteration %d", i)
+
+		require.NoError(t, co.updateGCSafepoint(context.Background()))
+	}
+}
+>>>>>>> 8334f62ad (coordinator: enforce gc ttl for stalled changefeeds (#6206))
