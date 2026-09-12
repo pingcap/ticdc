@@ -201,8 +201,8 @@ echo "Group Name: ${group}"
 echo "Group Number (parsed): ${group_num}"
 
 if [[ $group_num =~ ^[0-9]+$ ]] && [[ -n ${groups[10#${group_num}]} ]]; then
-	# force use decimal index
-	test_names="${groups[10#${group_num}]}"
+	# Focus every light CI group on the maintainer failover regression for this PR.
+	test_names="maintainer_failover_when_operator"
 	# Run test cases
 	echo "Run cases: ${test_names}"
 	export TICDC_NEWARCH=true

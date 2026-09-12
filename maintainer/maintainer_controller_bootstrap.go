@@ -122,13 +122,28 @@ func (c *Controller) FinishBootstrap(
 	}
 
 	// Step 3: Build working task map from bootstrap responses and Process tables and build schema info
-	workingTaskMap, schemaInfos, err := c.buildTaskInfo(allNodesResp, tables, isMysqlCompatibleBackend, common.DefaultMode)
+	addedTables, err := c.loadBootstrapAddedTables(allNodesResp, tables, startTs, common.DefaultMode)
+	if err != nil {
+		return nil, err
+	}
+	var redoAddedTables map[int64]bootstrapAddedTable
+	if c.enableRedo {
+		redoAddedTables, err = c.loadBootstrapAddedTables(allNodesResp, redoTables, redoStartTs, common.RedoMode)
+		if err != nil {
+			return nil, err
+		}
+	}
+	c.bootstrapAddedTables = map[int64]map[int64]bootstrapAddedTable{
+		common.DefaultMode: addedTables,
+		common.RedoMode:    redoAddedTables,
+	}
+	workingTaskMap, schemaInfos, err := c.buildTaskInfo(allNodesResp, tables, addedTables, isMysqlCompatibleBackend, common.DefaultMode)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
 	if c.enableRedo {
-		redoWorkingTaskMap, redoSchemaInfos, err = c.buildTaskInfo(allNodesResp, redoTables, isMysqlCompatibleBackend, common.RedoMode)
+		redoWorkingTaskMap, redoSchemaInfos, err = c.buildTaskInfo(allNodesResp, redoTables, redoAddedTables, isMysqlCompatibleBackend, common.RedoMode)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -138,10 +153,10 @@ func (c *Controller) FinishBootstrap(
 	// Merge restoration needs the per-dispatcher task map from buildTaskInfo, but must run
 	// before we discard any leftover working tasks as dropped-table artifacts.
 	mergeTableSplitMaps := map[int64]map[int64]bool{
-		common.DefaultMode: buildTableSplitMap(tables),
+		common.DefaultMode: buildBootstrapTableSplitMap(tables, addedTables),
 	}
 	if c.enableRedo {
-		mergeTableSplitMaps[common.RedoMode] = buildTableSplitMap(redoTables)
+		mergeTableSplitMaps[common.RedoMode] = buildBootstrapTableSplitMap(redoTables, redoAddedTables)
 	}
 	if err := c.restoreCurrentMergeOperators(allNodesResp, mergeTableSplitMaps); err != nil {
 		return nil, errors.Trace(err)
@@ -227,6 +242,12 @@ func (c *Controller) buildWorkingTaskMap(
 			if dispatcherID.IsZero() || spanController.IsDDLDispatcher(dispatcherID) {
 				continue
 			}
+			if _, added := c.bootstrapAddedTables[mode][spanInfo.Span.TableID]; added &&
+				(spanInfo.ComponentStatus == heartbeatpb.ComponentState_Stopped || spanInfo.ComponentStatus == heartbeatpb.ComponentState_Removed) {
+				// A completed dispatcher is not live coverage. Remove restoration can
+				// still use the raw snapshot; otherwise repair its range from the add DDL.
+				continue
+			}
 			splitEnabled := spanController.ShouldEnableSplit(tableSplitMap[spanInfo.Span.TableID])
 			spanReplication := c.createSpanReplication(spanInfo, node, splitEnabled)
 			addToWorkingTaskMap(workingTaskMap, spanInfo.Span, spanReplication)
@@ -255,7 +276,7 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 		tableInfo := getTableInfo(table, isMysqlCompatibleBackend, util.GetOrZero(c.replicaConfig.EnableActiveActive))
 		schemaInfos[schemaID].Tables = append(schemaInfos[schemaID].Tables, tableInfo)
 
-		c.processTableSpans(table, workingTaskMap, mode)
+		c.processTableSpans(table, workingTaskMap, mode, c.startTs)
 	}
 
 	return schemaInfos
@@ -265,6 +286,7 @@ func (c *Controller) processTableSpans(
 	table commonEvent.Table,
 	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 	mode int64,
+	startTs uint64,
 ) {
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
 	spanController := c.getSpanController(mode)
@@ -312,14 +334,14 @@ func (c *Controller) processTableSpans(
 					tableSpans.ReplaceOrInsert(replicaSet.Span, replicaSet)
 				}
 			}
-			c.handleTableHoles(spanController, table, tableSpans, tableSpan, splitEnabled)
+			c.handleTableHoles(spanController, table, tableSpans, tableSpan, splitEnabled, startTs)
 		}
 		// Remove processed table from working task map
 		if isTableWorking {
 			delete(workingTaskMap, table.TableID)
 		}
 	} else {
-		spanController.AddNewTable(table, c.startTs)
+		spanController.AddNewTable(table, startTs)
 	}
 }
 
@@ -329,21 +351,23 @@ func (c *Controller) handleTableHoles(
 	tableSpans utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 	tableSpan *heartbeatpb.TableSpan,
 	splitEnabled bool,
+	startTs uint64,
 ) {
 	holes := findHoles(tableSpans, tableSpan)
 	if c.splitter != nil {
 		for _, hole := range holes {
 			spans := c.splitter.Split(context.Background(), hole, 0, split.SplitTypeRegionCount)
-			spanController.AddNewSpans(table.SchemaID, spans, c.startTs, splitEnabled)
+			spanController.AddNewSpans(table.SchemaID, spans, startTs, splitEnabled)
 		}
 	} else {
-		spanController.AddNewSpans(table.SchemaID, holes, c.startTs, splitEnabled)
+		spanController.AddNewSpans(table.SchemaID, holes, startTs, splitEnabled)
 	}
 }
 
 func (c *Controller) buildTaskInfo(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	tables []commonEvent.Table,
+	addedTables map[int64]bootstrapAddedTable,
 	isMysqlCompatibleBackend bool,
 	mode int64) (
 	map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
@@ -351,7 +375,7 @@ func (c *Controller) buildTaskInfo(
 	error,
 ) {
 	// Build table splitability map for later use
-	tableSplitMap := buildTableSplitMap(tables)
+	tableSplitMap := buildBootstrapTableSplitMap(tables, addedTables)
 	workingTaskMap := c.buildWorkingTaskMap(allNodesResp, tableSplitMap, mode)
 	// Restore current working operators first so spanController reflects "in-flight scheduling intent"
 	// captured by dispatcher managers. This avoids bootstrap creating duplicate tasks for a dispatcherID
@@ -361,7 +385,20 @@ func (c *Controller) buildTaskInfo(
 	}
 	c.removeUnexpectedBootstrapOverlaps(workingTaskMap, allNodesResp, mode)
 	schemaInfos := c.processTablesAndBuildSchemaInfo(tables, workingTaskMap, isMysqlCompatibleBackend, mode)
+	// Restore only runtime topology here. Schema/name and route admission metadata
+	// must still follow the DDL replay from the original bootstrap snapshot.
+	for _, added := range addedTables {
+		c.processTableSpans(added.table, workingTaskMap, mode, added.startTs)
+	}
 	return workingTaskMap, schemaInfos, nil
+}
+
+func buildBootstrapTableSplitMap(tables []commonEvent.Table, addedTables map[int64]bootstrapAddedTable) map[int64]bool {
+	tableSplitMap := buildTableSplitMap(tables)
+	for tableID, added := range addedTables {
+		tableSplitMap[tableID] = added.table.Splitable
+	}
+	return tableSplitMap
 }
 
 func buildTableSplitMap(tables []commonEvent.Table) map[int64]bool {
@@ -385,6 +422,86 @@ func (c *Controller) handleRemainingWorkingTasks(
 			zap.Stringer("changefeed", c.changefeedID),
 			zap.Int64("tableID", tableID))
 	}
+}
+
+// bootstrapAddedTable is a table admitted by a DDL after the bootstrap snapshot.
+// Its DDL timestamp, rather than the changefeed checkpoint, is the earliest safe
+// start timestamp for any missing ranges.
+type bootstrapAddedTable struct {
+	table   commonEvent.Table
+	startTs uint64
+}
+
+// loadBootstrapAddedTables distinguishes newly admitted tables from dropped-table
+// leftovers using filtered DDL history. A runtime span alone is not evidence of
+// an add: DROP may have completed before its remove reached the node.
+//
+// Only inspect history up to timestamps reported for missing tables, and only
+// recover tables whose add has already happened by their runtime timestamp.
+func (c *Controller) loadBootstrapAddedTables(
+	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+	tables []commonEvent.Table,
+	startTs uint64,
+	mode int64,
+) (map[int64]bootstrapAddedTable, error) {
+	knownTables := buildTableSplitMap(tables)
+	candidates := make(map[int64]uint64)
+	var endTs uint64
+	recordCandidate := func(span *heartbeatpb.TableSpan, ts uint64) {
+		if span == nil || span.TableID == common.DDLSpanTableID || ts <= startTs {
+			return
+		}
+		if _, ok := knownTables[span.TableID]; ok {
+			return
+		}
+		candidates[span.TableID] = max(candidates[span.TableID], ts)
+		endTs = max(endTs, ts)
+	}
+	for _, resp := range allNodesResp {
+		for _, spanInfo := range resp.Spans {
+			if spanInfo != nil && spanInfo.Mode == mode {
+				recordCandidate(spanInfo.Span, spanInfo.CheckpointTs)
+			}
+		}
+		for _, req := range resp.Operators {
+			if req != nil && req.Config != nil && req.Config.Mode == mode {
+				recordCandidate(req.Config.Span, req.Config.StartTs)
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	f, err := filter.NewFilter(c.replicaConfig.Filter, "", util.GetOrZero(c.replicaConfig.CaseSensitive), util.GetOrZero(c.replicaConfig.ForceReplicate))
+	if err != nil {
+		return nil, err
+	}
+	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
+	dispatcherID := c.getSpanController(mode).GetDDLDispatcherID()
+	addedTables := make(map[int64]bootstrapAddedTable)
+	for cursor := startTs; cursor < endTs && len(candidates) > 0; {
+		events, resolvedTs, err := schemaStore.FetchTableTriggerDDLEvents(c.keyspaceMeta, dispatcherID, f, cursor, 100)
+		if err != nil {
+			return nil, err
+		}
+		for _, event := range events {
+			for _, table := range event.NeedAddedTables {
+				if upperTs, ok := candidates[table.TableID]; ok && event.FinishedTs <= upperTs {
+					addedTables[table.TableID] = bootstrapAddedTable{table: table, startTs: event.FinishedTs}
+					delete(candidates, table.TableID)
+				}
+			}
+		}
+		if len(candidates) > 0 && resolvedTs <= cursor {
+			// Do not classify an unresolved add as a dropped table. Retry bootstrap
+			// after schema store catches up instead of deleting a live dispatcher.
+			return nil, errors.ErrChangefeedRetryable.GenWithStack(
+				"schema store has not resolved bootstrap table history through %d (resolved %d)", endTs, resolvedTs)
+		}
+		cursor = resolvedTs
+	}
+	return addedTables, nil
 }
 
 func (c *Controller) initializeComponents(
@@ -789,10 +906,14 @@ func (c *Controller) repairBootstrapTableCoverage(removedReplicaSet *replica.Spa
 		EndKey:     totalSpan.EndKey,
 		KeyspaceID: removedReplicaSet.Span.KeyspaceID,
 	})
+	startTs := c.startTs
+	if added, ok := c.bootstrapAddedTables[removedReplicaSet.GetMode()][removedReplicaSet.Span.TableID]; ok {
+		startTs = added.startTs
+	}
 	spanController.AddNewSpans(
 		removedReplicaSet.GetSchemaID(),
 		holes,
-		c.startTs,
+		startTs,
 		removedReplicaSet.IsSplitEnabled(),
 	)
 }
@@ -1059,9 +1180,8 @@ func (c *Controller) restoreCurrentWorkingCreateAction(
 ) error {
 	splitable, tableExists := tableSplitMap[span.TableID]
 	if !tableExists {
-		// The bootstrap schema-store snapshot is already taken at startTs. If the table is absent there,
-		// this create request is stale (for example, add/move/split was in-flight before a DROP TABLE) and
-		// restoring it would recreate a ghost task/operator for a table that should stay removed.
+		// The table is absent from both the snapshot and confirmed post-snapshot
+		// additions. Restoring this stale create would recreate a dropped table.
 		log.Warn("bootstrap create operator references table missing from schema snapshot, skip restoring it",
 			zap.String("nodeID", nodeID.String()),
 			zap.String("changefeed", resp.ChangefeedID.String()),
