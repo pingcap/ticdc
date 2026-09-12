@@ -83,6 +83,78 @@ func TestResumeChangefeedRejectsNormalBeforeGC(t *testing.T) {
 	require.False(t, co.resumeCalled)
 }
 
+func TestDeleteChangefeedChecksPersistedMetadata(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	testCases := []struct {
+		name             string
+		coordinator      *deleteCoordinator
+		expectError      bool
+		expectRemoveCall bool
+	}{
+		{
+			name: "idempotent delete after metadata is gone",
+			coordinator: &deleteCoordinator{
+				getChangefeedErr: errors.ErrChangeFeedNotExists.GenWithStackByArgs(cfID.Name()),
+				persistedErr:     errors.ErrChangeFeedNotExists.GenWithStackByArgs(cfID.Name()),
+			},
+		},
+		{
+			name: "memory is gone but metadata remains",
+			coordinator: &deleteCoordinator{
+				getChangefeedErr: errors.ErrChangeFeedNotExists.GenWithStackByArgs(cfID.Name()),
+				persistedInfo: &config.ChangeFeedInfo{
+					ChangefeedID: cfID,
+				},
+			},
+			expectError: true,
+		},
+		{
+			name: "delete returns only after metadata is gone",
+			coordinator: &deleteCoordinator{
+				changefeedInfo: &config.ChangeFeedInfo{
+					ChangefeedID: cfID,
+					State:        config.StateStopped,
+				},
+				changefeedStatus: &config.ChangeFeedStatus{CheckpointTs: 123},
+				persistedInfo: &config.ChangeFeedInfo{
+					ChangefeedID: cfID,
+				},
+				persistedExistsChecks: 1,
+				persistedErr:          errors.ErrChangeFeedNotExists.GenWithStackByArgs(cfID.Name()),
+			},
+			expectRemoveCall: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &resumeNormalServer{coordinator: tc.coordinator}
+			h := &OpenAPIV2{server: srv}
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodDelete, "/api/v2/changefeeds/test?keyspace=default", nil)
+			c.Params = gin.Params{{Key: api.APIOpVarChangefeedID, Value: "test"}}
+
+			h.DeleteChangefeed(c)
+
+			require.Equal(t, tc.expectRemoveCall, tc.coordinator.removeCalled)
+			if tc.expectError {
+				require.Len(t, c.Errors, 1)
+				require.True(t, errors.ErrChangeFeedDeletionUnfinished.Equal(c.Errors.Last().Err))
+				return
+			}
+			require.Empty(t, c.Errors)
+			require.Equal(t, http.StatusOK, w.Code)
+			if tc.expectRemoveCall {
+				require.GreaterOrEqual(t, tc.coordinator.persistedReadCount, 2)
+			}
+		})
+	}
+}
+
 type resumeNormalServer struct {
 	coordinator         server.Coordinator
 	pdClientRequested   bool
@@ -121,6 +193,42 @@ func (s *resumeNormalServer) GetMaintainerManager() *maintainer.Manager { return
 
 type resumeNormalCoordinator struct {
 	resumeCalled bool
+}
+
+type deleteCoordinator struct {
+	resumeNormalCoordinator
+	changefeedInfo        *config.ChangeFeedInfo
+	changefeedStatus      *config.ChangeFeedStatus
+	getChangefeedErr      error
+	persistedInfo         *config.ChangeFeedInfo
+	persistedErr          error
+	persistedExistsChecks int
+	persistedReadCount    int
+	removeCalled          bool
+}
+
+func (c *deleteCoordinator) GetChangefeed(
+	ctx context.Context,
+	changefeedDisplayName common.ChangeFeedDisplayName,
+) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error) {
+	return c.changefeedInfo, c.changefeedStatus, c.getChangefeedErr
+}
+
+func (c *deleteCoordinator) GetPersistedChangefeedInfo(
+	ctx context.Context,
+	id common.ChangeFeedID,
+) (*config.ChangeFeedInfo, error) {
+	c.persistedReadCount++
+	if c.persistedExistsChecks > 0 {
+		c.persistedExistsChecks--
+		return c.persistedInfo, nil
+	}
+	return c.persistedInfo, c.persistedErr
+}
+
+func (c *deleteCoordinator) RemoveChangefeed(ctx context.Context, id common.ChangeFeedID) (uint64, error) {
+	c.removeCalled = true
+	return 0, nil
 }
 
 func (c *resumeNormalCoordinator) Stop() {}

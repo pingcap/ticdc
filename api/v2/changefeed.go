@@ -43,6 +43,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
@@ -641,7 +642,22 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 	cfInfo, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		if errors.ErrChangeFeedNotExists.Equal(err) {
-			c.JSON(getStatus(c), nil)
+			// GetChangefeed only checks the coordinator's in-memory state. The
+			// changefeed can already be absent there while its metadata deletion is
+			// still pending or has failed, so only report idempotent success after
+			// checking the metastore as well.
+			cfID := common.NewChangeFeedIDWithDisplayName(changefeedDisplayName)
+			persistedInfo, persistedErr := co.GetPersistedChangefeedInfo(ctx, cfID)
+			switch {
+			case errors.ErrChangeFeedNotExists.Equal(persistedErr):
+				c.JSON(getStatus(c), nil)
+			case persistedErr != nil:
+				_ = c.Error(persistedErr)
+			default:
+				middleware.SetChangefeedOperationTarget(
+					c, persistedInfo.ChangefeedID.Keyspace(), persistedInfo.ChangefeedID.Name())
+				_ = c.Error(errors.ErrChangeFeedDeletionUnfinished.GenWithStackByArgs(changefeedDisplayName.Name))
+			}
 			return
 		}
 		_ = c.Error(err)
@@ -659,7 +675,35 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	verifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err = waitChangefeedDeleted(verifyCtx, co, cfInfo.ChangefeedID); err != nil {
+		_ = c.Error(err)
+		return
+	}
 	c.JSON(getStatus(c), &EmptyResponse{})
+}
+
+func waitChangefeedDeleted(ctx context.Context, co server.Coordinator, id common.ChangeFeedID) error {
+	const checkInterval = 50 * time.Millisecond
+
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+	for {
+		_, err := co.GetPersistedChangefeedInfo(ctx, id)
+		if errors.ErrChangeFeedNotExists.Equal(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return errors.ErrChangeFeedDeletionUnfinished.GenWithStackByArgs(id.Name())
+		case <-ticker.C:
+		}
+	}
 }
 
 // PauseChangefeed handles pause changefeed request

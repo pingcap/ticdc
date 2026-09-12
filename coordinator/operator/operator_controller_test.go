@@ -80,8 +80,8 @@ func TestController_StopChangefeed(t *testing.T) {
 
 	oc.StopChangefeed(context.Background(), cfID, false)
 	require.Len(t, oc.operators, 1)
-	// the old  PostFinish will be called
-	backend.EXPECT().SetChangefeedProgress(gomock.Any(), gomock.Any(), config.ProgressNone).Return(nil).Times(1)
+	// Replacing the pause operator must not run its successful PostFinish path,
+	// because the remove path has already persisted ProgressRemoving.
 	oc.StopChangefeed(context.Background(), cfID, true)
 	require.Len(t, oc.operators, 1)
 	oc.StopChangefeed(context.Background(), cfID, true)
@@ -180,7 +180,6 @@ func TestController_StopChangefeedDoesNotReuseStaleOwnerCleanup(t *testing.T) {
 	staleOp := oc.StopRemoteMaintainerWithMaintainerEpoch(cfID, staleOwner.ID, false, 10)
 	require.Equal(t, staleOwner.ID, staleOp.Schedule().To)
 
-	backend.EXPECT().SetChangefeedProgress(gomock.Any(), cfID, config.ProgressNone).Return(nil).Times(1)
 	currentOp := oc.StopChangefeedWithMaintainerEpoch(context.Background(), cfID, false, 20)
 	require.NotSame(t, staleOp, currentOp)
 	currentReqMsg := currentOp.Schedule()
