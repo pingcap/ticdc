@@ -314,9 +314,13 @@ func (c *coordinator) handleStateChange(
 }
 
 // checkStaleCheckpointTs checks if the checkpointTs is stale, if it is, it will send a state change event to the stateChangedCh
-func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *changefeed.Changefeed, reportedCheckpointTs uint64) {
+func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *changefeed.Changefeed, checkpointTs uint64) {
 	id := changefeed.ID
+<<<<<<< HEAD
 	err := c.gcManager.CheckStaleCheckpointTs(id, reportedCheckpointTs)
+=======
+	err := c.gcManager.CheckStaleCheckpointTs(changefeed.GetKeyspaceID(), id, checkpointTs)
+>>>>>>> 8334f62ad (coordinator: enforce gc ttl for stalled changefeeds (#6206))
 	if err == nil {
 		return
 	}
@@ -342,6 +346,18 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *ch
 			zap.String("changefeed", id.String()),
 			zap.Error(context.Cause(ctx)))
 	case c.changefeedChangeCh <- []*changefeedChange{change}:
+	}
+}
+
+// checkStaleCheckpoints also checks non-running changefeeds because their
+// checkpoints no longer advance and cannot trigger the heartbeat-driven check.
+func (c *coordinator) checkStaleCheckpoints(ctx context.Context) {
+	for _, cf := range c.controller.changefeedDB.GetAllChangefeeds() {
+		info := cf.GetInfo()
+		if info == nil || !info.NeedBlockGC() {
+			continue
+		}
+		c.checkStaleCheckpointTs(ctx, cf, cf.GetLastSavedCheckPointTs())
 	}
 }
 
@@ -503,5 +519,19 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
 // On next gen, we should update the gc barrier for all keyspaces
 // Otherwise we should update the global gc safepoint
 func (c *coordinator) updateGCSafepoint(ctx context.Context) error {
+<<<<<<< HEAD
 	return c.updateGlobalGcSafepoint(ctx)
+=======
+	var err error
+	if kerneltype.IsNextGen() {
+		err = c.updateAllKeyspaceGcBarriers(ctx)
+	} else {
+		err = c.updateGlobalGcSafepoint(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	c.checkStaleCheckpoints(ctx)
+	return nil
+>>>>>>> 8334f62ad (coordinator: enforce gc ttl for stalled changefeeds (#6206))
 }
