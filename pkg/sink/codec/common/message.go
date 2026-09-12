@@ -25,6 +25,13 @@ import (
 // which will be treated as `version = 2` by sarama producer.
 const MaxRecordOverhead = 5*binary.MaxVarintLen32 + binary.MaxVarintLen64 + 1
 
+// kafkaRecordBatchOverhead is the maximum framing added to one headerless
+// record in a Kafka record batch. franz-go counts 65 bytes of fixed batch
+// framing. The record adds at most 19 bytes: 5 for its length, 1 each for
+// attributes, timestamp delta and offset delta, 5 each for key and value
+// lengths, and 1 for the zero header count.
+const kafkaRecordBatchOverhead = 65 + 19
+
 // MessageType is the type of message, which is used by MqSink and RedoLog.
 type MessageType int
 
@@ -92,6 +99,12 @@ type CheckpointLogInfo struct {
 // If `ProducerMessage` Headers fields used, this method should also adjust.
 func (m *Message) Length() int {
 	return len(m.Key) + len(m.Value) + MaxRecordOverhead
+}
+
+// KafkaRecordBatchLength returns a conservative uncompressed size for a record
+// batch containing only this message and no record headers.
+func (m *Message) KafkaRecordBatchLength() int {
+	return len(m.Key) + len(m.Value) + kafkaRecordBatchOverhead
 }
 
 // GetRowsCount returns the number of rows batched in one Message

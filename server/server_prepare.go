@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	appctx "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -200,20 +201,25 @@ func (c *server) setUpDir() {
 
 // registerNodeToEtcd the server by put the server's information in etcd
 func (c *server) registerNodeToEtcd(ctx context.Context) error {
-	cInfo := &config.CaptureInfo{
-		ID:             config.CaptureID(c.info.ID),
-		AdvertiseAddr:  c.info.AdvertiseAddr,
-		Version:        c.info.Version,
-		GitHash:        c.info.GitHash,
-		DeployPath:     c.info.DeployPath,
-		StartTimestamp: c.info.StartTimestamp,
-		IsNewArch:      true,
-	}
-	err := c.EtcdClient.PutCaptureInfo(ctx, cInfo, c.session.Lease())
+	err := c.EtcdClient.PutCaptureInfo(ctx, c.captureInfo(false), c.session.Lease())
 	if err != nil {
 		return errors.WrapError(errors.ErrCaptureRegister, err)
 	}
 	return nil
+}
+
+func (c *server) captureInfo(writeStopped bool) *config.CaptureInfo {
+	return &config.CaptureInfo{
+		ID:                        config.CaptureID(c.info.ID),
+		AdvertiseAddr:             c.info.AdvertiseAddr,
+		Version:                   c.info.Version,
+		GitHash:                   c.info.GitHash,
+		DeployPath:                c.info.DeployPath,
+		StartTimestamp:            c.info.StartTimestamp,
+		IsNewArch:                 true,
+		WriteLeaseProtocolVersion: heartbeatpb.CurrentWriteLeaseProtocolVersion,
+		WriteStopped:              writeStopped,
+	}
 }
 
 func (c *server) newEtcdSession(ctx context.Context) (*concurrency.Session, error) {

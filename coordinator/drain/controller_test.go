@@ -17,10 +17,69 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 )
+
+func TestEventBrokerDispatcherCountFallsBackWhenOldLogCoordinatorDoesNotRespond(t *testing.T) {
+	c := NewController(messaging.NewMockMessageCenter())
+	target := node.ID("old-log-coordinator")
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		NodeEpoch: 1,
+	})
+
+	count, observed := c.GetEventBrokerDispatcherCount(target)
+	require.Zero(t, count)
+	require.False(t, observed)
+
+	// Avoid sleeping in the test while exercising the no-response path. In
+	// this path ObserveEventBrokerDispatcherCountResponse is never called.
+	c.mu.Lock()
+	c.ensureNodeStateLocked(target).eventBrokerDispatcherCountUnavailableSince =
+		time.Now().Add(-eventBrokerDispatcherCountNoReportTimeout - time.Second)
+	c.mu.Unlock()
+
+	count, observed = c.GetEventBrokerDispatcherCount(target)
+	require.Zero(t, count)
+	require.True(t, observed)
+}
+
+func TestEventBrokerDispatcherCountFreshResponseResetsCoordinatorFallback(t *testing.T) {
+	c := NewController(messaging.NewMockMessageCenter())
+	target := node.ID("target")
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		NodeEpoch: 1,
+	})
+
+	c.mu.Lock()
+	st := c.ensureNodeStateLocked(target)
+	st.eventBrokerDispatcherCountUnavailableSince =
+		time.Now().Add(-eventBrokerDispatcherCountNoReportTimeout - time.Second)
+	c.mu.Unlock()
+
+	count, observed := c.GetEventBrokerDispatcherCount(target)
+	require.Zero(t, count)
+	require.True(t, observed)
+
+	c.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{
+		TargetNodeId:    target.String(),
+		DispatcherCount: 2,
+		Observed:        true,
+	})
+	count, observed = c.GetEventBrokerDispatcherCount(target)
+	require.Equal(t, uint32(2), count)
+	require.True(t, observed)
+
+	c.mu.Lock()
+	st = c.ensureNodeStateLocked(target)
+	require.True(t, st.eventBrokerDispatcherCountUnavailableSince.IsZero())
+	require.False(t, st.eventBrokerDispatcherCountFallbackLogged)
+	c.mu.Unlock()
+}
 
 func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
@@ -87,6 +146,37 @@ func TestDrainControllerRemoveNodeClearsState(t *testing.T) {
 	_, ok := c.nodes[target]
 	c.mu.Unlock()
 	require.False(t, ok)
+}
+
+func TestShouldPauseRegularBalanceForWholeDrainWorkflow(t *testing.T) {
+	c := NewController(messaging.NewMockMessageCenter())
+	target := node.ID("target")
+
+	require.False(t, c.ShouldPauseRegularBalance())
+
+	// A requested drain must block regular balance before DRAINING is observed
+	// and after heartbeat expiry changes the derived state to Unknown.
+	c.RequestDrain(target)
+	require.True(t, c.ShouldPauseRegularBalance())
+	c.mu.Lock()
+	st := c.ensureNodeStateLocked(target)
+	st.observedSet = true
+	st.lastSeen = time.Now().Add(-c.ttl - time.Second)
+	st.liveness = heartbeatpb.NodeLiveness_DRAINING
+	c.mu.Unlock()
+	require.Equal(t, StateUnknown, c.GetState(target))
+	require.True(t, c.ShouldPauseRegularBalance())
+
+	// Membership removal completes the per-node drain state.
+	c.RemoveNode(target)
+	require.False(t, c.ShouldPauseRegularBalance())
+
+	// The clear handshake remains part of the drain workflow.
+	pending := map[node.ID]struct{}{node.ID("peer"): {}}
+	c.StartDrainTargetClearGate(target, 1, pending)
+	require.True(t, c.ShouldPauseRegularBalance())
+	c.ClearDrainTargetClearGate(target, 1)
+	require.False(t, c.ShouldPauseRegularBalance())
 }
 
 func TestDrainControllerResetObservedStateForNewEpoch(t *testing.T) {

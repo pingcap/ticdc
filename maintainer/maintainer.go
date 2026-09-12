@@ -440,6 +440,12 @@ func (m *Maintainer) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
 	m.markStatusChanged()
 }
 
+// SetLastDrainTargetClearedAt makes a newly created maintainer inherit the
+// capture-wide post-drain balance cooldown.
+func (m *Maintainer) SetLastDrainTargetClearedAt(clearedAt time.Time) {
+	m.controller.SetLastDrainTargetClearedAt(clearedAt)
+}
+
 func (m *Maintainer) initialize() error {
 	start := time.Now()
 	log.Info("start to initialize changefeed maintainer",

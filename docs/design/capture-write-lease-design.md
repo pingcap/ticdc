@@ -30,8 +30,9 @@ following goal:
   blocking rather than immediate capture termination.
 - A confirmed loss of the etcd session irreversibly fences the capture and
   terminates the process.
-- After capture-key deletion, `captureRemoveTTL` delays scheduler-visible node
-  removal so a replacement cannot take over too early.
+- Scheduler-visible removal uses a durable write-stopped marker, a bounded
+  same-address current-protocol path, or the conservative `captureRemoveTTL`,
+  so a replacement cannot take over before the applicable safety boundary.
 - During a rolling upgrade, P2P is required only after every active capture
   has reported support for the protocol.
 - Normal writes perform only a local atomic state read and do not add a
@@ -85,11 +86,12 @@ The proofs have separate responsibilities:
 
 ## 3. Safety ordering and proof
 
-`captureRemoveTTL` is the scheduling barrier for a replacement. Define:
+The capture-removal policy is the scheduling barrier for a replacement. Define:
 
 ```text
 Le   = maximum etcd proof lifetime = 5s
-R    = captureRemoveTTL = max(captureSessionTTL / 2, 10s)
+Lf   = max(P2P lease, etcd proof lifetime) = 5s
+R    = conservative captureRemoveTTL = max(captureSessionTTL / 2, 10s)
 td   = time the old capture key is deleted in a linearizable etcd view
 tobs = time another CDC node observes that deletion, tobs >= td
 ```
@@ -102,32 +104,40 @@ proof begins at `requestSentAt` and lasts at most `Le`, so:
 oldLastAdmission < td + Le = td + 5s
 ```
 
-Another node does not publish node removal immediately after observing the key
-deletion. It first waits `R`:
+A different capture ID that registers the same address with a non-older start
+time can select the shortened path only when both registrations advertise the
+current write-lease protocol. It waits `Lf` from deletion observation:
 
 ```text
-newFirstAdmission >= tobs + R >= td + 10s
+newFirstAdmission >= tobs + Lf >= td + 5s
 ```
 
-With default values:
+Therefore:
 
 ```text
-oldLastAdmission < td + 5s < td + 10s <= tobs + R <= newFirstAdmission
+oldLastAdmission < td + 5s <= tobs + Lf <= newFirstAdmission
 ```
 
 ![Write admission safety proof](../media/capture-write-lease-safety-proof.svg)
 
-This proves that the new-operation admission windows do not overlap. P2P
-usually stops the old writer sooner, but the proof does not depend on P2P.
-Mixed-version and single-capture modes therefore retain the same time-separation
-lower bound.
+The diagram shows the wider conservative `R` path. Legacy, capability-unknown,
+different-address, and ambiguous cases retain that path. The shortened proof
+does not assume that a recent P2P grant means graceful shutdown; it waits the
+maximum lifetime of both local proofs.
+
+A second path is stronger than either timer. After every local module has
+closed successfully, the server conditionally publishes `write-stopped=true`
+under the capture key's existing session lease and then deletes the key. Since
+all local writers and sinks have closed before marker publication, observers
+can remove the marked capture immediately on deletion. The lease comparison
+prevents a slow shutdown from recreating a key whose session already expired.
 
 The proof depends on four implementation conditions:
 
 1. Every real downstream side effect passes through a transport-owned final
    gate.
 2. Every replacement is produced through the same scheduling path that
-   observes capture removal.
+   observes capture removal and applies the selected removal boundary.
 3. Capture-key deletion and observation follow etcd linearizability.
 4. In-process deadline comparison uses Go's monotonic clock, which advances
    normally for the process.
@@ -213,8 +223,8 @@ O(N) scan and creating O(N^2) control-plane work.
 When no remote capture exists, the coordinator's local capture receives a
 direct grant. This keeps single-node deployments available, but P2P cannot
 prove external connectivity in that topology. The etcd proof remains
-mandatory, and etcd proof plus `captureRemoveTTL` still establishes the
-replacement ordering.
+mandatory, and the etcd proof plus the selected capture-removal boundary still
+establishes replacement ordering.
 
 ### 4.5 Rolling upgrades and capability negotiation
 
@@ -448,11 +458,47 @@ use the same gate.
 Blackhole has no real external side effect, so `SetWriteGate` is a no-op. It
 still satisfies the common interface without waiting.
 
-## 8. Role of `captureRemoveTTL`
+## 8. Capture-removal policy
 
-`captureRemoveTTL` is neither an etcd lease nor the mechanism that terminates
-the old process. It delays scheduler-visible node removal after `NodeManager`
-observes deletion of a capture key:
+The removal policy is neither an etcd lease nor the mechanism that terminates
+the old process. `NodeManager` chooses one of three paths after capture metadata
+changes.
+
+### 8.1 Graceful write-stopped marker
+
+Capture registration includes two additive fields:
+
+- `write-lease-protocol-version` records the write-fencing capability without
+  inferring it from the binary version string.
+- `write-stopped` is false during normal operation. The server sets it only
+  after all submodules, node modules, network modules, pre-services, dispatcher
+  managers, and sinks close successfully.
+
+The marker update uses an etcd transaction comparing the capture key's lease
+with the local session lease. If the key expired, changed ownership, the marker
+write failed, or any module failed or timed out during close, no graceful proof
+is published. When an observer sees deletion of a capture whose latest value
+has `write-stopped=true`, it publishes node removal immediately.
+
+### 8.2 Same-address current-protocol replacement
+
+An unmarked deleted capture uses a five-second boundary when a replacement
+satisfies all of these conditions:
+
+- deletion of the old ID has been observed before removal is published;
+- the new ID differs from the old ID;
+- both values advertise the current write-lease protocol;
+- both have the same non-empty advertised address;
+- the new start timestamp is not older; and
+- the new value is not itself write-stopped.
+
+The replacement may arrive before or after the delete event. Removal is not
+published until five seconds have elapsed since local deletion observation,
+which is no earlier than the expiry of either old write proof.
+
+### 8.3 Conservative fallback
+
+Every case without one of the proofs above retains the existing delay:
 
 ```text
 captureRemoveTTL = max(captureSessionTTL / 2, 10s)
@@ -461,13 +507,13 @@ captureRemoveTTL = max(captureSessionTTL / 2, 10s)
 The default `captureSessionTTL` is ten seconds, so the default
 `captureRemoveTTL` is ten seconds.
 
-The sequence is:
+The delayed sequence is:
 
 ```text
 observe capture key deletion
     -> record pending removal time
     -> keep capture in the node view
-    -> wait captureRemoveTTL
+    -> wait the five-second fenced-replacement bound or captureRemoveTTL
     -> publish node removal
     -> scheduler may create a replacement
 ```
@@ -480,11 +526,12 @@ The separation of responsibilities is:
 
 - The local etcd proof establishes the latest time the old writer may admit a
   new operation.
-- `captureRemoveTTL` establishes an earliest time when replacement scheduling
-  may begin.
+- The durable marker proves that all local write paths have closed.
+- Otherwise the selected delay establishes an earliest time when replacement
+  scheduling may begin.
 
-P2P improves stop-write latency during isolation, but it is not the replacement
-scheduling barrier.
+P2P improves stop-write latency during isolation, but a fresh P2P lease alone
+is not proof of graceful shutdown and never permits immediate removal.
 
 ## 9. Failure behavior
 
@@ -494,8 +541,9 @@ scheduling barrier.
 | Coordinator capture is isolated from other nodes | Witness cannot ACK; local P2P expires. | Only if the etcd session is also confirmed lost. | Depends on capture-key deletion. |
 | One witness is unreachable | Rotate after one second; no interruption if another witness succeeds in time. | No. | Not triggered. |
 | PD/etcd TTL query temporarily fails | Do not renew etcd proof; stop writes after proof expiry. | No. | Not triggered while the key remains. |
-| etcd session is confirmed lost | Irreversible local fence. | Yes. | Wait `captureRemoveTTL` after observing key deletion. |
-| Control plane is unreachable but downstream remains reachable | At least one required proof expires and transports stop new writes. | Only after confirmed session loss. | Constrained by `captureRemoveTTL`. |
+| etcd session is confirmed lost | Irreversible local fence. | Yes. | Wait five seconds only after a matching current-protocol restart; otherwise wait `captureRemoveTTL`. |
+| Normal process shutdown completes | Gate and every local writer/sink are closed before metadata changes. | Yes. | Remove immediately after observing the marked key deletion. |
+| Control plane is unreachable but downstream remains reachable | At least one required proof expires and transports stop new writes. | Only after confirmed session loss. | Uses the same-address bounded path only with matching capability evidence; otherwise `captureRemoveTTL`. |
 | A legacy node participates in a rolling upgrade | P2P is not required; etcd proof remains required. | Follows etcd session semantics. | Constrained by `captureRemoveTTL`. |
 
 ### 9.1 Complete example
@@ -510,14 +558,17 @@ coordinator/witness and PD while retaining access to MySQL:
    operation, send, object publication, or redo flush.
 3. Around `t0+10s`, the default session TTL expires and the capture key is
    deleted from etcd.
-4. Other nodes observe the deletion and wait the default ten-second
-   `captureRemoveTTL`.
+4. With no matching same-address registration or graceful marker, other nodes
+   observe the deletion and wait the default ten-second `captureRemoveTTL`.
 5. Only then can the scheduler publish node removal and create a replacement;
-   the replacement's first actual write is later still.
+   the replacement's first actual write is later still. If the same address
+   restarts with the current protocol, the post-observation wait is five
+   seconds instead.
 
 The old writer therefore stops new admission by about `t0+5s`, while a
-replacement normally cannot write until after `t0+20s`. The boundaries create
-an explicit separation interval.
+replacement on the conservative path normally cannot write until after
+`t0+20s`. The shortened same-address path still cannot publish removal before
+the final five-second proof expires.
 
 ### 9.2 Late completion remains possible
 
@@ -554,7 +605,7 @@ The design exposes these primary metrics:
 | `ticdc_coordinator_capture_lease_heartbeat_total{result}` | Coordinator heartbeat-processing results. |
 | `ticdc_server_capture_lease_response_total{result}` | Capture response-processing results. |
 | `ticdc_coordinator_capture_p2p_witness_available` | Whether a remote witness is available for the coordinator capture. |
-| `ticdc_server_capture_safe_to_reschedule_delay_seconds` | Effective `captureRemoveTTL`. |
+| `ticdc_server_capture_safe_to_reschedule_delay_seconds` | Conservative fallback `captureRemoveTTL`; proven graceful and same-address paths may be shorter. |
 
 A writable-to-blocked transition logs its reason, and a blocked-to-writable
 transition logs recovery. Local fencing has a separate explicit log, allowing
@@ -601,6 +652,10 @@ Server and orchestrator tests cover:
 - Gate state and block-transition metrics.
 - `captureRemoveTTL` calculation, delayed removal, and cancellation of pending
   removal when the same capture re-registers.
+- Immediate removal after a write-stopped marker and conditional marker updates
+  bound to the current etcd session lease.
+- Five-second removal for matching same-address current-protocol replacements,
+  with conservative fallback for legacy or different-address registrations.
 
 Messaging tests include in-process and remote serialization round trips for
 the response and witness fields, ensuring that the protocol works through the
@@ -723,7 +778,7 @@ assumption in the proof has direct evidence:
 | The gate opens only when every required proof is fresh. | Gate truth-table, deadline, fence, and mode tests. |
 | A delayed or replayed message cannot extend a lease. | Epoch, sequence, request-age tests and integration failpoints. |
 | Every real side effect checks final admission. | Component tests for five sink types, claim-check, and redo, plus the mandatory sink interface. |
-| Replacement does not start immediately after key deletion. | `captureRemoveTTL` state tests and lifecycle chaos. |
+| Replacement starts only after its selected safety boundary. | Write-stopped, same-address fenced replacement, conservative `captureRemoveTTL`, and lifecycle tests. |
 | A capture stops and recovers when the control plane is isolated but downstream remains reachable. | PD-only and PD+CDC reachability probes and the two-hour rotation. |
 | Recovery leaves no residual data error. | Checkpoint catch-up, 100-table CRC, Sync Diff, and panic scan. |
 
@@ -750,6 +805,7 @@ substitute for a missing safety-proof obligation.
 | etcd TTL safety margin | 1 s | Absorb TTL rounding and transport time. |
 | etcd proof duration | At most 5 s | Bound new writes after PD/etcd loss. |
 | Capture session TTL | 10 s by default | Server-side lifetime of the capture key. |
+| Fenced replacement delay | 5 s | Match the maximum P2P or etcd write-proof lifetime after deletion observation. |
 | `captureRemoveTTL` | `max(sessionTTL / 2, 10s)` | Establish a later replacement-takeover boundary. |
 | Gate monitor interval | 100 ms | Record gate metrics and transition logs. |
 
@@ -762,9 +818,9 @@ substitute for a missing safety-proof obligation.
 | Heartbeat admission and initialized-node snapshot | [`coordinator/controller.go`](../../coordinator/controller.go), [`pkg/bootstrap/bootstrap.go`](../../pkg/bootstrap/bootstrap.go) |
 | Capture heartbeat, response validation, and witness ACK | [`maintainer/maintainer_manager_node.go`](../../maintainer/maintainer_manager_node.go) |
 | Coordinator-generation changes | [`maintainer/maintainer_manager.go`](../../maintainer/maintainer_manager.go) |
-| etcd TTL watchdog and local fence | [`server/server.go`](../../server/server.go) |
+| etcd TTL watchdog, local fence, and graceful write-stopped marker | [`server/server.go`](../../server/server.go), [`server/server_prepare.go`](../../server/server_prepare.go) |
 | Capture-wide gate injection | [`server/server.go`](../../server/server.go), [`pkg/common/context/app_context.go`](../../pkg/common/context/app_context.go) |
-| Replacement delay | [`pkg/orchestrator/reactor_state.go`](../../pkg/orchestrator/reactor_state.go) |
+| Capture metadata and replacement-removal policy | [`pkg/config/capture.go`](../../pkg/config/capture.go), [`pkg/orchestrator/reactor_state.go`](../../pkg/orchestrator/reactor_state.go) |
 | Common outer sink gate | [`downstreamadapter/sink/write_gate.go`](../../downstreamadapter/sink/write_gate.go) |
 | Transport final gates | `downstreamadapter/sink/{mysql,kafka,pulsar,cloudstorage,redo}` |
 | MySQL final SQL check | [`pkg/sink/mysql`](../../pkg/sink/mysql) |
@@ -779,9 +835,11 @@ substitute for a missing safety-proof obligation.
 
 The capture write lease reduces "may this capture still write?" to one local,
 low-overhead, fail-closed gate. The P2P lease proves the current coordinator
-relationship, the etcd proof confirms the capture session identity, and
-`captureRemoveTTL` delays the replacement. Final checks at every real sink
-mutation boundary make asynchronous queues obey the same safety condition.
+relationship, the etcd proof confirms the capture session identity, and the
+capture-removal policy chooses a durable graceful proof, a five-second fenced
+replacement bound, or conservative `captureRemoveTTL`. Final checks at every
+real sink mutation boundary make asynchronous queues obey the same safety
+condition.
 
 The design proves that the new-write admission windows of the old and
 replacement writers do not overlap, and it automatically blocks and recovers

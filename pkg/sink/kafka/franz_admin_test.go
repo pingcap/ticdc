@@ -1,0 +1,389 @@
+// Copyright 2026 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package kafka
+
+import (
+	"context"
+	"io"
+	"testing"
+	"time"
+
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kmsg"
+)
+
+func TestIsUnretryableClientError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		err         error
+		unretryable bool
+	}{
+		{name: "unknown topic", err: kerr.UnknownTopicOrPartition},
+		{name: "leader unavailable", err: kerr.LeaderNotAvailable},
+		{name: "request timeout", err: kerr.RequestTimedOut},
+		{name: "network exception", err: kerr.NetworkException},
+		{name: "controller changed", err: kerr.NotController},
+		{name: "EOF", err: io.EOF},
+		{name: "invalid topic", err: kerr.InvalidTopicException, unretryable: true},
+		{name: "invalid config", err: kerr.InvalidConfig, unretryable: true},
+		{name: "SASL authentication failure", err: kerr.SaslAuthenticationFailed, unretryable: true},
+		{name: "unsupported SASL mechanism", err: kerr.UnsupportedSaslMechanism, unretryable: true},
+		{name: "illegal SASL state", err: kerr.IllegalSaslState, unretryable: true},
+		{name: "unsupported version", err: kerr.UnsupportedVersion, unretryable: true},
+		{name: "invalid request", err: kerr.InvalidRequest, unretryable: true},
+		{
+			name:        "wrapped invalid topic",
+			err:         errors.WrapError(errors.ErrKafkaAdminAPI, kerr.InvalidTopicException, "describe-topic", "test-topic"),
+			unretryable: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, test.unretryable, IsUnretryableKafkaError(test.err))
+		})
+	}
+}
+
+func TestFranzTopicDetailsFromMetadata(t *testing.T) {
+	t.Parallel()
+
+	const topic = "topic"
+	testCases := []struct {
+		name             string
+		metadata         kadm.Metadata
+		ignoreTopicError bool
+		expected         map[string]TopicDetail
+		expectedError    error
+		expectedCause    error
+	}{
+		{
+			name: "success",
+			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
+				topic: {Topic: topic, Partitions: kadm.PartitionDetails{0: {}, 1: {}}},
+			}},
+			expected: map[string]TopicDetail{
+				topic: {Name: topic, NumPartitions: 2},
+			},
+		},
+		{
+			name: "ignore unknown topic",
+			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
+				topic: {Topic: topic, Err: kerr.UnknownTopicOrPartition},
+			}},
+			ignoreTopicError: true,
+			expected:         map[string]TopicDetail{},
+		},
+		{
+			name: "strict unknown topic",
+			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
+				topic: {Topic: topic, Err: kerr.UnknownTopicOrPartition},
+			}},
+			expectedError: errors.ErrKafkaAdminAPI,
+			expectedCause: kerr.UnknownTopicOrPartition,
+		},
+		{
+			name:          "strict missing topic",
+			metadata:      kadm.Metadata{Topics: kadm.TopicDetails{}},
+			expectedError: errors.ErrKafkaAdminAPI,
+			expectedCause: kerr.UnknownTopicOrPartition,
+		},
+		{
+			name: "return authorization failure",
+			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
+				topic: {Topic: topic, Err: kerr.TopicAuthorizationFailed},
+			}},
+			expectedError: errors.ErrKafkaAuthorizationFailed,
+			expectedCause: kerr.TopicAuthorizationFailed,
+		},
+		{
+			name: "ignore authorization failure",
+			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
+				topic: {Topic: topic, Err: kerr.TopicAuthorizationFailed},
+			}},
+			ignoreTopicError: true,
+			expected:         map[string]TopicDetail{},
+		},
+		{
+			name: "ignore general failure",
+			metadata: kadm.Metadata{Topics: kadm.TopicDetails{
+				topic: {Topic: topic, Err: kerr.InvalidTopicException},
+			}},
+			ignoreTopicError: true,
+			expected:         map[string]TopicDetail{},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			actual, err := topicDetailsFromMetadata(tc.metadata, []string{topic}, tc.ignoreTopicError)
+			if tc.expectedError != nil {
+				require.ErrorIs(t, err, tc.expectedError)
+				if tc.expectedCause != nil {
+					require.ErrorIs(t, err, tc.expectedCause)
+				}
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, actual)
+		})
+	}
+}
+
+func TestFranzGetTopicsMetaIgnoresTopicAuthorizationFailure(t *testing.T) {
+	cluster := kfake.MustCluster(kfake.NumBrokers(1))
+	defer cluster.Close()
+
+	cluster.ControlKey(int16(kmsg.Metadata), func(req kmsg.Request) (kmsg.Response, error, bool) {
+		request := req.(*kmsg.MetadataRequest)
+		response := request.ResponseKind().(*kmsg.MetadataResponse)
+		for _, requestTopic := range request.Topics {
+			responseTopic := kmsg.NewMetadataResponseTopic()
+			responseTopic.Topic = requestTopic.Topic
+			responseTopic.ErrorCode = kerr.TopicAuthorizationFailed.Code
+			response.Topics = append(response.Topics, responseTopic)
+		}
+		return response, nil, true
+	})
+
+	o := testOptions(cluster.ListenAddrs())
+	admin, err := newAdmin(
+		t.Context(),
+		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "ignore-topic-authorization"),
+		testClientOptions(t, o),
+	)
+	require.NoError(t, err)
+	defer admin.Close()
+
+	topics, err := admin.GetTopicsMeta(t.Context(), []string{"topic"}, true)
+	require.NoError(t, err)
+	require.Empty(t, topics)
+
+	_, err = admin.GetTopicsMeta(t.Context(), []string{"topic"}, false)
+	require.ErrorIs(t, err, errors.ErrKafkaAuthorizationFailed)
+	require.ErrorIs(t, err, kerr.TopicAuthorizationFailed)
+}
+
+func TestFranzIsAuthorizationFailed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "TiCDC authorization error",
+			err:      errors.ErrKafkaAuthorizationFailed.GenWithStackByArgs("describe-topic", "test-topic"),
+			expected: true,
+		},
+		{name: "topic authorization error", err: kerr.TopicAuthorizationFailed, expected: true},
+		{name: "cluster authorization error", err: kerr.ClusterAuthorizationFailed, expected: true},
+		{name: "general error", err: kerr.InvalidTopicException},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) { require.Equal(t, test.expected, isAuthorizationFailed(test.err)) })
+	}
+}
+
+func TestAdminHonorsCallContext(t *testing.T) {
+	o := testOptions([]string{"127.0.0.1:1"})
+	admin, err := newAdmin(
+		t.Context(),
+		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "context"),
+		testClientOptions(t, o),
+	)
+	require.NoError(t, err)
+	t.Cleanup(admin.Close)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, err = admin.GetTopicsMeta(ctx, []string{"topic"}, false)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestAdminOperations(t *testing.T) {
+	const existingTopic = "existing-topic"
+	ctx := t.Context()
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(3, existingTopic))
+	defer cluster.Close()
+	o := testOptions(cluster.ListenAddrs())
+
+	admin, err := newAdmin(
+		ctx,
+		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
+		testClientOptions(t, o),
+	)
+	require.NoError(t, err)
+	defer admin.Close()
+
+	require.Len(t, admin.GetAllBrokers(ctx), 1)
+
+	value, found, err := admin.GetBrokerConfig(ctx, "message.max.bytes")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "1048588", value)
+
+	_, found, err = admin.GetBrokerConfig(ctx, "missing")
+	require.NoError(t, err)
+	require.False(t, found)
+
+	value, found, err = admin.GetTopicConfig(ctx, existingTopic, "max.message.bytes")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "1048588", value)
+
+	_, found, err = admin.GetTopicConfig(ctx, existingTopic, "missing")
+	require.NoError(t, err)
+	require.False(t, found)
+
+	partitions, err := admin.GetTopicsPartitionsNum(ctx, []string{existingTopic})
+	require.NoError(t, err)
+	require.Equal(t, map[string]int32{existingTopic: 3}, partitions)
+
+	const topic = "test-topic"
+	topics, err := admin.GetTopicsMeta(ctx, []string{topic}, true)
+	require.NoError(t, err)
+	require.Empty(t, topics)
+
+	err = admin.CreateTopic(ctx, &TopicDetail{
+		Name:              topic,
+		NumPartitions:     3,
+		ReplicationFactor: 1,
+	})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		topics, err = admin.GetTopicsMeta(ctx, []string{topic}, false)
+		return err == nil && topics[topic].NumPartitions == 3
+	}, time.Second, 20*time.Millisecond)
+
+	require.NoError(t, admin.CreateTopic(ctx, &TopicDetail{Name: topic, NumPartitions: 3, ReplicationFactor: 1}))
+}
+
+func TestAdminConfigErrors(t *testing.T) {
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "topic"))
+	defer cluster.Close()
+	o := testOptions(cluster.ListenAddrs())
+	admin, err := newAdmin(
+		t.Context(),
+		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "config-errors"),
+		testClientOptions(t, o),
+	)
+	require.NoError(t, err)
+	defer admin.Close()
+
+	for _, test := range []struct {
+		name          string
+		broker        bool
+		responseError *kerr.Error
+		expectedError error
+	}{
+		{name: "broker authorization", broker: true, responseError: kerr.ClusterAuthorizationFailed, expectedError: errors.ErrKafkaAuthorizationFailed},
+		{name: "broker error", broker: true, responseError: kerr.InvalidRequest, expectedError: errors.ErrKafkaAdminAPI},
+		{name: "topic authorization", responseError: kerr.TopicAuthorizationFailed, expectedError: errors.ErrKafkaAuthorizationFailed},
+		{name: "topic error", responseError: kerr.InvalidTopicException, expectedError: errors.ErrKafkaAdminAPI},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cluster.ControlKey(int16(kmsg.DescribeConfigs), func(req kmsg.Request) (kmsg.Response, error, bool) {
+				request := req.(*kmsg.DescribeConfigsRequest)
+				response := req.ResponseKind().(*kmsg.DescribeConfigsResponse)
+				for _, requested := range request.Resources {
+					resource := kmsg.NewDescribeConfigsResponseResource()
+					resource.ResourceType = requested.ResourceType
+					resource.ResourceName = requested.ResourceName
+					resource.ErrorCode = test.responseError.Code
+					response.Resources = append(response.Resources, resource)
+				}
+				return response, nil, true
+			})
+
+			if test.broker {
+				_, _, err = admin.GetBrokerConfig(t.Context(), "message.max.bytes")
+			} else {
+				_, _, err = admin.GetTopicConfig(t.Context(), "topic", "max.message.bytes")
+			}
+			require.ErrorIs(t, err, test.expectedError)
+			require.ErrorIs(t, err, test.responseError)
+		})
+	}
+}
+
+func TestCreateTopicErrors(t *testing.T) {
+	ctx := t.Context()
+	cluster := kfake.MustCluster(kfake.NumBrokers(1))
+	defer cluster.Close()
+	o := testOptions(cluster.ListenAddrs())
+
+	admin, err := newAdmin(
+		ctx,
+		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "create-errors"),
+		testClientOptions(t, o),
+	)
+	require.NoError(t, err)
+	defer admin.Close()
+
+	detail := &TopicDetail{Name: "topic", NumPartitions: 1, ReplicationFactor: 1}
+
+	cluster.ControlKey(int16(kmsg.CreateTopics), func(req kmsg.Request) (kmsg.Response, error, bool) {
+		return req.ResponseKind(), nil, true
+	})
+	require.ErrorIs(t, admin.CreateTopic(ctx, detail), errors.ErrKafkaAdminAPI)
+
+	for _, test := range []struct {
+		name     string
+		code     int16
+		expected error
+	}{
+		{
+			name:     "invalid replication factor",
+			code:     kerr.InvalidReplicationFactor.Code,
+			expected: errors.ErrKafkaInvalidConfig,
+		},
+		{
+			name:     "authorization",
+			code:     kerr.TopicAuthorizationFailed.Code,
+			expected: errors.ErrKafkaAuthorizationFailed,
+		},
+		{
+			name:     "admin API",
+			code:     kerr.InvalidTopicException.Code,
+			expected: errors.ErrKafkaAdminAPI,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cluster.ControlKey(int16(kmsg.CreateTopics), func(req kmsg.Request) (kmsg.Response, error, bool) {
+				response := req.ResponseKind().(*kmsg.CreateTopicsResponse)
+				topic := kmsg.NewCreateTopicsResponseTopic()
+				topic.Topic, topic.ErrorCode = detail.Name, test.code
+				response.Topics = append(response.Topics, topic)
+				return response, nil, true
+			})
+
+			require.ErrorIs(t, admin.CreateTopic(ctx, detail), test.expected)
+		})
+	}
+}

@@ -112,9 +112,9 @@ func encodeRowChangedEvent(
 		return nil, nil, 0, err
 	}
 
-	// for single message that is longer than max-message-bytes
-	// 16 is the length of `keyLenByte` and `valueLenByte`, 8 is the length of `versionHead`
-	length := len(key) + len(valueCompressed) + common.MaxRecordOverhead + 16 + 8
+	// Open Protocol adds an 8-byte version, key length, and value length to
+	// the encoded row before it becomes one Kafka record.
+	length := config.MessageLengthForKeyValue(len(key)+16, len(valueCompressed)+8)
 	return key, valueCompressed, length, nil
 }
 

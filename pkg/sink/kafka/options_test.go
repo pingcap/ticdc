@@ -14,6 +14,7 @@
 package kafka
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -28,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kfake"
 )
 
 const (
@@ -37,6 +39,78 @@ const (
 	mockBrokerMessageMaxBytes = "1048588"
 	mockTopicMessageMaxBytes  = "1048588"
 )
+
+func TestKafkaClientSelection(t *testing.T) {
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "client-selection")
+	require.Equal(t, KafkaClientFranz, NewOptions().Client)
+
+	for _, test := range []struct {
+		name     string
+		uri      string
+		expected string
+		wantErr  bool
+	}{
+		{
+			name:     "URI selects sarama",
+			uri:      "kafka://127.0.0.1:9092/topic?kafka-client=sarama",
+			expected: KafkaClientSarama,
+		},
+		{
+			name:     "URI value is case insensitive",
+			uri:      "kafka://127.0.0.1:9092/topic?kafka-client=FRANZ",
+			expected: KafkaClientFranz,
+		},
+		{
+			name:    "invalid client",
+			uri:     "kafka://127.0.0.1:9092/topic?kafka-client=other",
+			wantErr: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sinkURI, err := url.Parse(test.uri)
+			require.NoError(t, err)
+
+			options := NewOptions()
+			err = options.Apply(changefeedID, sinkURI, &config.SinkConfig{})
+			if test.wantErr {
+				require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, test.expected, options.Client)
+		})
+	}
+}
+
+func TestFactorySelection(t *testing.T) {
+	const topic = "factory-selection"
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	defer cluster.Close()
+
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "factory-selection")
+	for _, test := range []struct {
+		client   string
+		expected Factory
+	}{
+		{client: KafkaClientFranz, expected: &franzFactory{}},
+		{client: KafkaClientSarama, expected: &saramaFactory{}},
+	} {
+		t.Run(test.client, func(t *testing.T) {
+			o := NewOptions()
+			o.Client = test.client
+			o.ClientID = "ticdc-test"
+			o.BrokerEndpoints = cluster.ListenAddrs()
+			o.Topic = topic
+
+			factory, err := NewFactory(context.Background(), o, changefeedID)
+			require.NoError(t, err)
+			require.IsType(t, test.expected, factory)
+
+			factory.Close()
+		})
+	}
+}
 
 func TestCompleteOptions(t *testing.T) {
 	options := NewOptions()
@@ -647,13 +721,13 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 			ctrl := gomock.NewController(t)
 			adminClient := NewMockAdminClient(ctrl)
 			gomock.InOrder(
-				adminClient.EXPECT().GetTopicsMeta([]string{topicName}, true).Return(
+				adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{topicName}, true).Return(
 					map[string]TopicDetail{
 						topicName: {Name: topicName, NumPartitions: 3},
 					}, nil),
-				adminClient.EXPECT().GetTopicConfig(topicName, TopicMaxMessageBytesConfigName).
+				adminClient.EXPECT().GetTopicConfig(gomock.Any(), topicName, TopicMaxMessageBytesConfigName).
 					Return("", false, nil),
-				adminClient.EXPECT().GetBrokerConfig(BrokerMessageMaxBytesConfigName).
+				adminClient.EXPECT().GetBrokerConfig(gomock.Any(), BrokerMessageMaxBytesConfigName).
 					Return(mockBrokerMessageMaxBytes, true, nil),
 			)
 			sinkURI, err := url.Parse(fmt.Sprintf(
@@ -668,7 +742,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 			require.Equal(t, test.configuredMaxMessageBytes, options.MaxMessageBytes)
 			require.Equal(t, test.configuredMaxMessageBytes, options.MaxBatchedBytes)
 
-			err = adjustOptions(changefeedID, adminClient, options, topicName)
+			err = adjustOptions(t.Context(), changefeedID, adminClient, options, topicName)
 			require.NoError(t, err)
 
 			require.NotEqual(t, test.configuredMaxMessageBytes, options.MaxMessageBytes)
@@ -686,9 +760,9 @@ func TestValidateReplicationFactor(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	adminClient := NewMockAdminClient(ctrl)
 	gomock.InOrder(
-		adminClient.EXPECT().GetBrokerConfig(MinInsyncReplicasConfigName).
+		adminClient.EXPECT().GetBrokerConfig(gomock.Any(), MinInsyncReplicasConfigName).
 			Return("2", true, nil),
-		adminClient.EXPECT().GetBrokerConfig(MinInsyncReplicasConfigName).
+		adminClient.EXPECT().GetBrokerConfig(gomock.Any(), MinInsyncReplicasConfigName).
 			Return("", false, nil),
 	)
 
@@ -697,7 +771,7 @@ func TestValidateReplicationFactor(t *testing.T) {
 		ReplicationFactor: 1,
 		RequiredAcks:      WaitForAll,
 	}
-	err := topicConfig.ValidateReplicationFactor(adminClient)
+	err := topicConfig.ValidateReplicationFactor(t.Context(), adminClient)
 	require.Regexp(
 		t,
 		".*`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of broker.*",
@@ -709,7 +783,7 @@ func TestValidateReplicationFactor(t *testing.T) {
 		ReplicationFactor: 1,
 		RequiredAcks:      WaitForLocal,
 	}
-	err = localAcksConfig.ValidateReplicationFactor(adminClient)
+	err = localAcksConfig.ValidateReplicationFactor(t.Context(), adminClient)
 	require.NoError(t, err)
 
 	missingBrokerConfig := &AutoCreateTopicConfig{
@@ -717,13 +791,13 @@ func TestValidateReplicationFactor(t *testing.T) {
 		ReplicationFactor: 1,
 		RequiredAcks:      WaitForAll,
 	}
-	err = missingBrokerConfig.ValidateReplicationFactor(adminClient)
+	err = missingBrokerConfig.ValidateReplicationFactor(t.Context(), adminClient)
 	require.NoError(t, err)
 
 	t.Run("replication factor satisfies min insync replicas", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		adminClient := NewMockAdminClient(ctrl)
-		adminClient.EXPECT().GetBrokerConfig(MinInsyncReplicasConfigName).
+		adminClient.EXPECT().GetBrokerConfig(gomock.Any(), MinInsyncReplicasConfigName).
 			Return("2", true, nil)
 
 		topicConfig := &AutoCreateTopicConfig{
@@ -731,14 +805,14 @@ func TestValidateReplicationFactor(t *testing.T) {
 			RequiredAcks:      WaitForAll,
 		}
 
-		err := topicConfig.ValidateReplicationFactor(adminClient)
+		err := topicConfig.ValidateReplicationFactor(t.Context(), adminClient)
 		require.NoError(t, err)
 	})
 
 	t.Run("invalid min insync replicas", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		adminClient := NewMockAdminClient(ctrl)
-		adminClient.EXPECT().GetBrokerConfig(MinInsyncReplicasConfigName).
+		adminClient.EXPECT().GetBrokerConfig(gomock.Any(), MinInsyncReplicasConfigName).
 			Return("invalid", true, nil)
 
 		topicConfig := &AutoCreateTopicConfig{
@@ -746,7 +820,7 @@ func TestValidateReplicationFactor(t *testing.T) {
 			RequiredAcks:      WaitForAll,
 		}
 
-		err := topicConfig.ValidateReplicationFactor(adminClient)
+		err := topicConfig.ValidateReplicationFactor(t.Context(), adminClient)
 		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
 	})
 
@@ -757,7 +831,7 @@ func TestValidateReplicationFactor(t *testing.T) {
 			"describe-config",
 			MinInsyncReplicasConfigName,
 		)
-		adminClient.EXPECT().GetBrokerConfig(MinInsyncReplicasConfigName).
+		adminClient.EXPECT().GetBrokerConfig(gomock.Any(), MinInsyncReplicasConfigName).
 			Return("", false, lookupErr)
 
 		topicConfig := &AutoCreateTopicConfig{
@@ -765,7 +839,7 @@ func TestValidateReplicationFactor(t *testing.T) {
 			RequiredAcks:      WaitForAll,
 		}
 
-		err := topicConfig.ValidateReplicationFactor(adminClient)
+		err := topicConfig.ValidateReplicationFactor(t.Context(), adminClient)
 		require.NoError(t, err)
 	})
 }
@@ -930,7 +1004,7 @@ func TestConfigurationCombinations(t *testing.T) {
 
 			ctrl := gomock.NewController(t)
 			adminClient := NewMockAdminClient(ctrl)
-			metadataCall := adminClient.EXPECT().GetTopicsMeta([]string{topic}, true)
+			metadataCall := adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{topic}, true)
 			sourceMaxMessageBytes := a.brokerMessageMaxBytes
 			if topic == defaultMockTopicName {
 				metadataCall.Return(map[string]TopicDetail{
@@ -938,7 +1012,7 @@ func TestConfigurationCombinations(t *testing.T) {
 				}, nil)
 				gomock.InOrder(
 					metadataCall,
-					adminClient.EXPECT().GetTopicConfig(topic, TopicMaxMessageBytesConfigName).
+					adminClient.EXPECT().GetTopicConfig(gomock.Any(), topic, TopicMaxMessageBytesConfigName).
 						Return(a.topicMaxMessageBytes, true, nil),
 				)
 				sourceMaxMessageBytes = a.topicMaxMessageBytes
@@ -946,7 +1020,7 @@ func TestConfigurationCombinations(t *testing.T) {
 				metadataCall.Return(map[string]TopicDetail{}, nil)
 				gomock.InOrder(
 					metadataCall,
-					adminClient.EXPECT().GetBrokerConfig(BrokerMessageMaxBytesConfigName).
+					adminClient.EXPECT().GetBrokerConfig(gomock.Any(), BrokerMessageMaxBytesConfigName).
 						Return(a.brokerMessageMaxBytes, true, nil),
 				)
 			}
@@ -959,7 +1033,7 @@ func TestConfigurationCombinations(t *testing.T) {
 			expectedMaxMessageBytes, err := strconv.Atoi(sourceMaxMessageBytes)
 			require.NoError(t, err)
 			changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
-			err = adjustOptions(changefeedID, adminClient, options, topic)
+			err = adjustOptions(t.Context(), changefeedID, adminClient, options, topic)
 			require.Nil(t, err)
 			require.Equal(t, expectedMaxMessageBytes, options.MaxMessageBytes)
 			require.Equal(

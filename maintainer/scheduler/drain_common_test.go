@@ -15,6 +15,7 @@ package scheduler
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
@@ -45,4 +46,18 @@ func TestDrainStateRejectSameEpochReactivation(t *testing.T) {
 	target, epoch = state.DispatcherDrainTarget()
 	require.Equal(t, node.ID("n2"), target)
 	require.Equal(t, uint64(2), epoch)
+}
+
+func TestDrainStateCarriesBalanceCooldownAcrossSchedulers(t *testing.T) {
+	state := NewDrainState()
+	state.SetDispatcherDrainTarget(node.ID("n1"), 1)
+	require.True(t, shouldPauseBalanceForDrain(state.snapshot(), time.Now()))
+
+	state.SetDispatcherDrainTarget("", 1)
+	require.True(t, shouldPauseBalanceForDrain(state.snapshot(), time.Now()))
+
+	state.mu.Lock()
+	state.lastTargetClearedAt = time.Now().Add(-balanceDrainCooldown - time.Second)
+	state.mu.Unlock()
+	require.False(t, shouldPauseBalanceForDrain(state.snapshot(), time.Now()))
 }

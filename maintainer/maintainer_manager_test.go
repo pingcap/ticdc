@@ -142,7 +142,7 @@ func TestManagerMaintainerSet_AddMaintainerRejectsLiveNewerEpoch(t *testing.T) {
 	maintainers := newManagerMaintainerSetForAddTest(t)
 	cfID := common.NewChangeFeedIDWithName("reject-live-newer-epoch", common.DefaultKeyspaceName)
 	cleanupMaintainerMetricsForTest(t, cfID)
-	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
+	noDrainTarget := func() (node.ID, uint64, time.Time) { return "", 0, time.Time{} }
 	keyspace, changefeed := cfID.Keyspace(), cfID.Name()
 
 	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 1, 1), noDrainTarget)
@@ -166,7 +166,7 @@ func TestManagerMaintainerSet_AddMaintainerAfterStoppedKeepsReplacement(t *testi
 	maintainers := newManagerMaintainerSetForAddTest(t)
 	cfID := common.NewChangeFeedIDWithName("stopped-maintainer-replacement", common.DefaultKeyspaceName)
 	cleanupMaintainerMetricsForTest(t, cfID)
-	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
+	noDrainTarget := func() (node.ID, uint64, time.Time) { return "", 0, time.Time{} }
 	keyspace, changefeed := cfID.Keyspace(), cfID.Name()
 
 	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 1, 1), noDrainTarget)
@@ -200,7 +200,7 @@ func TestManagerMaintainerSet_AddMaintainerAfterStoppedKeepsReplacement(t *testi
 func TestManagerMaintainerSet_AddMaintainerKeepsCompatibilityEpoch(t *testing.T) {
 	maintainers := newManagerMaintainerSetForAddTest(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
+	noDrainTarget := func() (node.ID, uint64, time.Time) { return "", 0, time.Time{} }
 
 	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 3, 0), noDrainTarget)
 	compatMaintainer, ok := maintainers.getMaintainer(cfID)
@@ -216,7 +216,7 @@ func TestManagerMaintainerSet_AddMaintainerKeepsCompatibilityEpoch(t *testing.T)
 func TestManagerMaintainerSet_AddMaintainerRejectsOlderEpoch(t *testing.T) {
 	maintainers := newManagerMaintainerSetForAddTest(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
+	noDrainTarget := func() (node.ID, uint64, time.Time) { return "", 0, time.Time{} }
 
 	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 2, 2), noDrainTarget)
 	currentMaintainer, ok := maintainers.getMaintainer(cfID)
@@ -237,7 +237,7 @@ func TestManagerMaintainerSet_AddMaintainerRejectsOlderEpoch(t *testing.T) {
 func TestManagerMaintainerSet_AddMaintainerDoesNotCreateRejectedDuplicate(t *testing.T) {
 	maintainers := newManagerMaintainerSetForAddTest(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
+	noDrainTarget := func() (node.ID, uint64, time.Time) { return "", 0, time.Time{} }
 
 	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 2, 2), noDrainTarget)
 	currentMaintainer, ok := maintainers.getMaintainer(cfID)

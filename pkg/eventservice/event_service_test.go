@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/eventstore"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -201,11 +202,29 @@ func TestHandleMessageIgnoresInvalidSingleMessagePayloads(t *testing.T) {
 	})
 }
 
+func TestEventServiceReportsZeroDispatcherCountWithoutBrokers(t *testing.T) {
+	store := newMockEventStore(100)
+	store.logCoordinatorID = node.ID("log-coordinator")
+	mc := messaging.NewMockMessageCenter()
+	es := &eventService{
+		mc:         mc,
+		eventStore: store,
+		brokers:    make(map[uint64]*eventBroker),
+	}
+
+	es.reportDispatcherCountToLogCoordinator()
+	message := <-mc.GetMessageChannel()
+	require.Equal(t, messaging.TypeLogCoordinatorEventBrokerDispatcherCount, message.Type)
+	report := message.Message[0].(*logservicepb.EventBrokerDispatcherCount)
+	require.Zero(t, report.GetDispatcherCount())
+}
+
 var _ eventstore.EventStore = &mockEventStore{}
 
 // mockEventStore is a mock implementation of the EventStore interface
 type mockEventStore struct {
 	resolvedTsUpdateInterval time.Duration
+	logCoordinatorID         node.ID
 	dispatcherMap            sync.Map // key is common.DispatcherID, value is span
 	spansMap                 sync.Map // key is *heartbeatpb.TableSpan
 	unregisterCount          atomic.Uint64
@@ -351,7 +370,7 @@ func (m *mockEventStore) GetIterator(
 }
 
 func (m *mockEventStore) GetLogCoordinatorNodeID() node.ID {
-	return ""
+	return m.logCoordinatorID
 }
 
 func (m *mockEventStore) RegisterDispatcher(

@@ -60,6 +60,18 @@ func newMockDispatcherInfoForTest(t *testing.T) *mockDispatcherInfo {
 	return newMockDispatcherInfo(t, 300, did, 100, eventpb.ActionType_ACTION_TYPE_REGISTER)
 }
 
+func TestEventBrokerDispatcherCount(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	require.NoError(t, broker.addDispatcher(info))
+	require.Equal(t, 1, broker.getDispatcherCount())
+
+	broker.removeDispatcher(info)
+	require.Zero(t, broker.getDispatcherCount())
+}
+
 func TestScanRequestCoalescing(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()
