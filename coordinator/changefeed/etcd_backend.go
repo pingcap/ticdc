@@ -418,8 +418,7 @@ func (b *EtcdBackend) SetChangefeedProgress(ctx context.Context, id common.Chang
 			return nil
 		}
 		if progress == config.ProgressNone && status.Progress == config.ProgressRemoving {
-			// Pause can finish after removal persists its intent but before the
-			// pause operator is canceled. Preserve that intent on every CAS retry.
+			// ProgressRemoving is a durable removal intent and must not be cleared.
 			return nil
 		}
 
