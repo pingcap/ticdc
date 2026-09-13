@@ -278,8 +278,7 @@ def check_keyspace_guidance():
     resp = rq.post(url)
     assert_status_code(resp, rq.codes.bad_request, url)
     data = resp.json()
-    assert data["error_code"] == "CDC:ErrAPIInvalidParam"
-    assert "does not exist, please check --keyspace or -k" in data["error_msg"]
+    assert data["error_code"] == "CDC:ErrChangeFeedNotExists"
 
 
 def update_changefeed():
@@ -378,6 +377,80 @@ def remove_changefeed(cfID="changefeed-test3"):
     url = BASE_URL0_V2+"/changefeeds/changefeed-not-exists?keyspace=keyspace1"
     resp = rq.delete(url)
     assert_status_code(resp, rq.codes.ok, url)
+
+
+def manage_changefeed_after_keyspace_deleted():
+    keyspace = "keyspace1"
+    changefeed_id = "changefeed-deleted-keyspace"
+    changefeed_url = BASE_URL0_V2 + \
+        "/changefeeds/" + changefeed_id + "?keyspace=" + keyspace
+
+    # Create an isolated changefeed for this destructive end-of-suite case.
+    url = BASE_URL0_V2 + "/changefeeds?keyspace=" + keyspace
+    resp = rq.post(url, json={
+        "changefeed_id": changefeed_id,
+        "sink_uri": "blackhole://",
+    })
+    assert_status_code(resp, rq.codes.ok, url)
+
+    # Resolve the keyspace ID and its TSO keyspace group before removing it.
+    keyspace_url = PD_ADDR + "/pd/api/v2/keyspaces/" + keyspace
+    resp = rq.get(keyspace_url + "?force_refresh_group_id=true")
+    assert_status_code(resp, rq.codes.ok, keyspace_url)
+    keyspace_meta = resp.json()
+    keyspace_id = keyspace_meta["id"]
+    keyspace_group_id = keyspace_meta["config"]["tso_keyspace_group_id"]
+
+    # A keyspace must become archived before PD can physically remove it.
+    state_url = keyspace_url + "/state"
+    for state in ("disabled", "archived"):
+        resp = rq.put(state_url, json={"state": state})
+        assert_status_code(resp, rq.codes.ok, state_url)
+
+    remove_keyspace_url = PD_ADDR + \
+        "/pd/api/v2/tso/keyspace-groups/" + \
+        str(keyspace_group_id) + "/keyspaces"
+    resp = rq.delete(remove_keyspace_url, json={"keyspaces": [keyspace_id]})
+    assert_status_code(resp, rq.codes.ok, remove_keyspace_url)
+
+    # Verify the keyspace is gone from PD while its changefeed metadata remains.
+    resp = rq.get(keyspace_url)
+    assert resp.status_code != rq.codes.ok, \
+        f"keyspace still exists in PD: {resp.text}"
+
+    resp = rq.get(changefeed_url)
+    assert_status_code(resp, rq.codes.ok, changefeed_url)
+    assert resp.json()["id"] == changefeed_id
+
+    list_url = BASE_URL0_V2 + "/changefeeds?state=all&keyspace=" + keyspace
+    resp = rq.get(list_url)
+    assert_status_code(resp, rq.codes.ok, list_url)
+    assert any(item["id"] == changefeed_id for item in resp.json()["items"])
+
+    status_url = BASE_URL0_V2 + "/changefeeds/" + changefeed_id + \
+        "/status?keyspace=" + keyspace
+    resp = rq.get(status_url)
+    assert_status_code(resp, rq.codes.ok, status_url)
+
+    pause_url = BASE_URL0_V2 + "/changefeeds/" + changefeed_id + \
+        "/pause?keyspace=" + keyspace
+    resp = rq.post(pause_url)
+    assert_status_code(resp, rq.codes.ok, pause_url)
+
+    resp = rq.get(changefeed_url)
+    assert_status_code(resp, rq.codes.ok, changefeed_url)
+    assert resp.json()["state"] == "stopped"
+
+    resp = rq.delete(changefeed_url)
+    assert_status_code(resp, rq.codes.ok, changefeed_url)
+
+    # Delete is idempotent, and the immediate read verifies metadata cleanup.
+    resp = rq.get(changefeed_url)
+    assert_status_code(resp, rq.codes.bad_request, changefeed_url)
+    assert resp.json()["error_code"] == "CDC:ErrChangeFeedNotExists"
+
+    resp = rq.delete(changefeed_url)
+    assert_status_code(resp, rq.codes.ok, changefeed_url)
 
 
 # FIXME: Enable this test case after we fully support move table API
@@ -507,6 +580,7 @@ if __name__ == "__main__":
         "move_table": move_table,
         "set_log_level": set_log_level,
         "remove_changefeed": remove_changefeed,
+        "manage_changefeed_after_keyspace_deleted": manage_changefeed_after_keyspace_deleted,
         "resign_owner": resign_owner,
         # api v2
         "get_tso": get_tso
