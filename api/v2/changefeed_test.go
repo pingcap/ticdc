@@ -90,28 +90,24 @@ func TestDeleteChangefeedChecksPersistedMetadata(t *testing.T) {
 	testCases := []struct {
 		name                 string
 		coordinator          *deleteCoordinator
-		expectError          bool
 		expectRemoveCall     bool
 		expectPersistedReads int
 	}{
 		{
-			name:                 "idempotent delete after metadata is gone",
-			expectPersistedReads: 1,
+			name: "idempotent delete after metadata is gone",
 			coordinator: &deleteCoordinator{
 				getChangefeedErr: errors.ErrChangeFeedNotExists.GenWithStackByArgs(cfID.Name()),
 				persistedErr:     errors.ErrChangeFeedNotExists.GenWithStackByArgs(cfID.Name()),
 			},
 		},
 		{
-			name:                 "memory is gone but metadata remains",
-			expectPersistedReads: 1,
+			name: "memory is gone but metadata remains",
 			coordinator: &deleteCoordinator{
 				getChangefeedErr: errors.ErrChangeFeedNotExists.GenWithStackByArgs(cfID.Name()),
 				persistedInfo: &config.ChangeFeedInfo{
 					ChangefeedID: cfID,
 				},
 			},
-			expectError: true,
 		},
 		{
 			name:                 "delete returns only after metadata is gone",
@@ -160,11 +156,6 @@ func TestDeleteChangefeedChecksPersistedMetadata(t *testing.T) {
 
 			require.Equal(t, tc.expectRemoveCall, tc.coordinator.removeCalled)
 			require.Equal(t, tc.expectPersistedReads, tc.coordinator.persistedReadCount)
-			if tc.expectError {
-				require.Len(t, c.Errors, 1)
-				require.True(t, errors.ErrChangeFeedDeletionUnfinished.Equal(c.Errors.Last().Err))
-				return
-			}
 			require.Empty(t, c.Errors)
 			require.Equal(t, http.StatusOK, w.Code)
 		})

@@ -642,22 +642,7 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 	cfInfo, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		if errors.ErrChangeFeedNotExists.Equal(err) {
-			// GetChangefeed only checks the coordinator's in-memory state. The
-			// changefeed can already be absent there while its metadata deletion is
-			// still pending or has failed, so only report idempotent success after
-			// checking the metastore as well.
-			cfID := common.NewChangeFeedIDWithDisplayName(changefeedDisplayName)
-			persistedInfo, persistedErr := co.GetPersistedChangefeedInfo(ctx, cfID)
-			switch {
-			case errors.ErrChangeFeedNotExists.Equal(persistedErr):
-				c.JSON(getStatus(c), nil)
-			case persistedErr != nil:
-				_ = c.Error(persistedErr)
-			default:
-				middleware.SetChangefeedOperationTarget(
-					c, persistedInfo.ChangefeedID.Keyspace(), persistedInfo.ChangefeedID.Name())
-				_ = c.Error(errors.ErrChangeFeedDeletionUnfinished.GenWithStackByArgs(changefeedDisplayName.Name))
-			}
+			c.JSON(getStatus(c), nil)
 			return
 		}
 		_ = c.Error(err)
