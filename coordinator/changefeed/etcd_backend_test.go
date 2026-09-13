@@ -491,6 +491,37 @@ func TestSetChangefeedProgressRetriesOnCASConflict(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSetChangefeedProgressPreservesRemoving(t *testing.T) {
+	for _, conflict := range []bool{false, true} {
+		name := "already removing"
+		if conflict {
+			name = "remove wins CAS race"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+			etcdClient := etcd.NewMockClient(ctrl)
+			cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
+			cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
+			backend := NewEtcdBackend(cdcClient)
+			cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+
+			if conflict {
+				cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), cfID).
+					Return(&config.ChangeFeedStatus{Progress: config.ProgressStopping}, int64(1), nil)
+				etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+					Return(&clientv3.TxnResponse{Succeeded: false}, nil)
+			}
+			cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), cfID).
+				Return(&config.ChangeFeedStatus{Progress: config.ProgressRemoving}, int64(2), nil)
+
+			// Completing pause must not write ProgressNone over the remove intent,
+			// including when removal wins between the first read and the CAS.
+			require.NoError(t, backend.SetChangefeedProgress(context.Background(), cfID, config.ProgressNone))
+		})
+	}
+}
+
 func TestUpdateChangefeedCheckpointTs(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

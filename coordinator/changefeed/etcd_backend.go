@@ -417,6 +417,11 @@ func (b *EtcdBackend) SetChangefeedProgress(ctx context.Context, id common.Chang
 			// Another goroutine (or a previous retry) already persisted the desired progress.
 			return nil
 		}
+		if progress == config.ProgressNone && status.Progress == config.ProgressRemoving {
+			// Pause can finish after removal persists its intent but before the
+			// pause operator is canceled. Preserve that intent on every CAS retry.
+			return nil
+		}
 
 		status.Progress = progress
 		jobValue, err := status.Marshal()

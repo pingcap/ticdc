@@ -88,20 +88,23 @@ func TestDeleteChangefeedChecksPersistedMetadata(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	testCases := []struct {
-		name             string
-		coordinator      *deleteCoordinator
-		expectError      bool
-		expectRemoveCall bool
+		name                 string
+		coordinator          *deleteCoordinator
+		expectError          bool
+		expectRemoveCall     bool
+		expectPersistedReads int
 	}{
 		{
-			name: "idempotent delete after metadata is gone",
+			name:                 "idempotent delete after metadata is gone",
+			expectPersistedReads: 1,
 			coordinator: &deleteCoordinator{
 				getChangefeedErr: errors.ErrChangeFeedNotExists.GenWithStackByArgs(cfID.Name()),
 				persistedErr:     errors.ErrChangeFeedNotExists.GenWithStackByArgs(cfID.Name()),
 			},
 		},
 		{
-			name: "memory is gone but metadata remains",
+			name:                 "memory is gone but metadata remains",
+			expectPersistedReads: 1,
 			coordinator: &deleteCoordinator{
 				getChangefeedErr: errors.ErrChangeFeedNotExists.GenWithStackByArgs(cfID.Name()),
 				persistedInfo: &config.ChangeFeedInfo{
@@ -111,7 +114,8 @@ func TestDeleteChangefeedChecksPersistedMetadata(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name: "delete returns only after metadata is gone",
+			name:                 "delete returns only after metadata is gone",
+			expectPersistedReads: 2,
 			coordinator: &deleteCoordinator{
 				changefeedInfo: &config.ChangeFeedInfo{
 					ChangefeedID: cfID,
@@ -125,6 +129,20 @@ func TestDeleteChangefeedChecksPersistedMetadata(t *testing.T) {
 				persistedErr:          errors.ErrChangeFeedNotExists.GenWithStackByArgs(cfID.Name()),
 			},
 			expectRemoveCall: true,
+		},
+		{
+			name: "same name recreated after deletion",
+			coordinator: &deleteCoordinator{
+				changefeedInfo: &config.ChangeFeedInfo{
+					ChangefeedID: cfID,
+					State:        config.StateStopped,
+				},
+				persistedInfo: &config.ChangeFeedInfo{
+					ChangefeedID: common.NewChangeFeedIDWithDisplayName(cfID.DisplayName),
+				},
+			},
+			expectRemoveCall:     true,
+			expectPersistedReads: 1,
 		},
 	}
 
@@ -141,6 +159,7 @@ func TestDeleteChangefeedChecksPersistedMetadata(t *testing.T) {
 			h.DeleteChangefeed(c)
 
 			require.Equal(t, tc.expectRemoveCall, tc.coordinator.removeCalled)
+			require.Equal(t, tc.expectPersistedReads, tc.coordinator.persistedReadCount)
 			if tc.expectError {
 				require.Len(t, c.Errors, 1)
 				require.True(t, errors.ErrChangeFeedDeletionUnfinished.Equal(c.Errors.Last().Err))
@@ -148,9 +167,6 @@ func TestDeleteChangefeedChecksPersistedMetadata(t *testing.T) {
 			}
 			require.Empty(t, c.Errors)
 			require.Equal(t, http.StatusOK, w.Code)
-			if tc.expectRemoveCall {
-				require.GreaterOrEqual(t, tc.coordinator.persistedReadCount, 2)
-			}
 		})
 	}
 }

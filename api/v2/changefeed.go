@@ -690,12 +690,17 @@ func waitChangefeedDeleted(ctx context.Context, co server.Coordinator, id common
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 	for {
-		_, err := co.GetPersistedChangefeedInfo(ctx, id)
+		info, err := co.GetPersistedChangefeedInfo(ctx, id)
 		if errors.ErrChangeFeedNotExists.Equal(err) {
 			return nil
 		}
 		if err != nil {
 			return err
+		}
+		if info.ChangefeedID.ID() != id.ID() {
+			// The backend looks up metadata by display name. A different GID
+			// means the original changefeed was deleted and its name reused.
+			return nil
 		}
 
 		select {
