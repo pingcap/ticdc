@@ -28,9 +28,8 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-// TestPauseReplacedByRemoveWithEtcd covers the complete metadata lifecycle for
-// the regression where a canceled pause operator reset ProgressRemoving to
-// ProgressNone before the remove operator deleted the changefeed.
+// TestPauseReplacedByRemoveWithEtcd covers both cancellation and normal pause
+// completion racing with the remove operation's persisted intent.
 func TestPauseReplacedByRemoveWithEtcd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -50,39 +49,58 @@ func TestPauseReplacedByRemoveWithEtcd(t *testing.T) {
 	require.NoError(t, err)
 	backend := changefeed.NewEtcdBackend(cdcClient)
 
-	cfID := common.NewChangeFeedIDWithName("pause-then-remove", common.DefaultKeyspaceName)
-	info := &config.ChangeFeedInfo{
-		ChangefeedID: cfID,
-		Config:       config.GetDefaultReplicaConfig(),
-		SinkURI:      "blackhole://",
-		StartTs:      1,
-		State:        config.StateNormal,
+	for _, tc := range []struct {
+		name        string
+		finishPause bool
+	}{
+		{name: "pause-canceled"},
+		{name: "pause-finishes-before-replacement", finishPause: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfID := common.NewChangeFeedIDWithName(tc.name, common.DefaultKeyspaceName)
+			info := &config.ChangeFeedInfo{
+				ChangefeedID: cfID,
+				Config:       config.GetDefaultReplicaConfig(),
+				SinkURI:      "blackhole://",
+				StartTs:      1,
+				State:        config.StateNormal,
+			}
+			require.NoError(t, backend.CreateChangefeed(ctx, info))
+
+			changefeedDB := changefeed.NewChangefeedDB(1216)
+			cf := changefeed.NewChangefeed(cfID, info, info.StartTs, true)
+			oc, self, _ := newOperatorControllerForTest(t, changefeedDB, backend, nil)
+			changefeedDB.AddReplicatingMaintainer(cf, self.ID)
+
+			// Match the controller's pause path, then persist the remove intent
+			// before installing the remove operator.
+			require.NoError(t, backend.PauseChangefeed(ctx, cfID))
+			pauseOp := oc.StopChangefeed(ctx, cfID, false)
+			require.NoError(t, backend.SetChangefeedProgress(ctx, cfID, config.ProgressRemoving))
+			if tc.finishPause {
+				// The executor can finish pause after RemoveChangefeed persists its
+				// intent but before it acquires the operator lock to replace pause.
+				pauseOp.Check(self.ID, &heartbeatpb.MaintainerStatus{
+					State:           heartbeatpb.ComponentState_Stopped,
+					MaintainerEpoch: info.Epoch,
+				})
+				oc.Execute()
+			}
+			removeOp := oc.StopChangefeed(ctx, cfID, true)
+			require.NotSame(t, pauseOp, removeOp)
+
+			status, _, err := cdcClient.GetChangeFeedStatus(ctx, cfID)
+			require.NoError(t, err)
+			require.Equal(t, config.ProgressRemoving, status.Progress)
+
+			removeOp.Check(self.ID, &heartbeatpb.MaintainerStatus{
+				State:           heartbeatpb.ComponentState_Stopped,
+				MaintainerEpoch: info.Epoch,
+			})
+			oc.Execute()
+
+			_, err = backend.GetChangefeedInfo(ctx, cfID)
+			require.True(t, errors.ErrChangeFeedNotExists.Equal(err))
+		})
 	}
-	require.NoError(t, backend.CreateChangefeed(ctx, info))
-
-	changefeedDB := changefeed.NewChangefeedDB(1216)
-	cf := changefeed.NewChangefeed(cfID, info, info.StartTs, true)
-	oc, self, _ := newOperatorControllerForTest(t, changefeedDB, backend, nil)
-	changefeedDB.AddReplicatingMaintainer(cf, self.ID)
-
-	// Match the controller's pause path, then replace its in-flight stop
-	// operator with a remove operation before the maintainer has stopped.
-	require.NoError(t, backend.PauseChangefeed(ctx, cfID))
-	pauseOp := oc.StopChangefeed(ctx, cfID, false)
-	require.NoError(t, backend.SetChangefeedProgress(ctx, cfID, config.ProgressRemoving))
-	removeOp := oc.StopChangefeed(ctx, cfID, true)
-	require.NotSame(t, pauseOp, removeOp)
-
-	status, _, err := cdcClient.GetChangeFeedStatus(ctx, cfID)
-	require.NoError(t, err)
-	require.Equal(t, config.ProgressRemoving, status.Progress)
-
-	removeOp.Check(self.ID, &heartbeatpb.MaintainerStatus{
-		State:           heartbeatpb.ComponentState_Stopped,
-		MaintainerEpoch: info.Epoch,
-	})
-	oc.Execute()
-
-	_, err = backend.GetChangefeedInfo(ctx, cfID)
-	require.True(t, errors.ErrChangeFeedNotExists.Equal(err))
 }
