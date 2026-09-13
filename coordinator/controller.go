@@ -1234,21 +1234,21 @@ func (c *Controller) GetPersistedChangefeedInfo(ctx context.Context, id common.C
 // the newer progress after the operation releases the lock.
 func (c *Controller) updateChangefeedCheckpointTs(
 	ctx context.Context,
-	checkpointTs map[common.ChangeFeedID]uint64,
+	checkpointTsMap map[common.ChangeFeedID]uint64,
 ) error {
 	c.apiLock.RLock()
 	defer c.apiLock.RUnlock()
 
-	for id := range checkpointTs {
+	for id := range checkpointTsMap {
 		cf := c.changefeedDB.GetByID(id)
 		if cf == nil || !shouldRunChangefeed(cf.GetInfo().State) {
-			delete(checkpointTs, id)
+			delete(checkpointTsMap, id)
 		}
 	}
-	if len(checkpointTs) == 0 {
+	if len(checkpointTsMap) == 0 {
 		return nil
 	}
-	return c.backend.UpdateChangefeedCheckpointTs(ctx, checkpointTs)
+	return c.backend.UpdateChangefeedCheckpointTs(ctx, checkpointTsMap)
 }
 
 // getChangefeed returns the changefeed by id, return nil if not found

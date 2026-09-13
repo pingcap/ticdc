@@ -492,10 +492,13 @@ func TestSetChangefeedProgressRetriesOnCASConflict(t *testing.T) {
 }
 
 func TestSetChangefeedProgressPreservesRemoving(t *testing.T) {
+	// Verify a completed pause cannot clear ProgressRemoving.
+	// false: progress is already ProgressRemoving when pause tries to clear it.
+	// true: progress changes from ProgressStopping to ProgressRemoving while pause tries to clear it.
 	for _, conflict := range []bool{false, true} {
 		name := "already removing"
 		if conflict {
-			name = "remove wins CAS race"
+			name = "remove wins while clearing progress"
 		}
 		t.Run(name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
@@ -515,8 +518,6 @@ func TestSetChangefeedProgressPreservesRemoving(t *testing.T) {
 			cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), cfID).
 				Return(&config.ChangeFeedStatus{Progress: config.ProgressRemoving}, int64(2), nil)
 
-			// Completing pause must not write ProgressNone over the remove intent,
-			// including when removal wins between the first read and the CAS.
 			require.NoError(t, backend.SetChangefeedProgress(context.Background(), cfID, config.ProgressNone))
 		})
 	}
