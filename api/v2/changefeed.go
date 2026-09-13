@@ -641,6 +641,9 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 	cfInfo, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		if errors.ErrChangeFeedNotExists.Equal(err) {
+			if !middleware.AuthenticateRequest(c, h.server) {
+				return
+			}
 			c.JSON(getStatus(c), nil)
 			return
 		}
