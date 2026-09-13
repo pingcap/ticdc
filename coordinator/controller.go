@@ -1218,10 +1218,10 @@ func (c *Controller) GetChangefeed(
 
 // GetPersistedChangefeedInfo returns the latest changefeed info persisted in the backend.
 //
-// Use this when an operation must validate durable state because changefeed
-// metadata can differ from the coordinator's in-memory view, for example while
-// deletion is finishing or after metadata migration. GetChangefeed
-// intentionally returns the coordinator's in-memory copy.
+// Use this for resume-time validation because stopped changefeed metadata can
+// be changed outside the coordinator process, for example during metadata
+// migration or by legacy tooling. GetChangefeed intentionally returns the
+// coordinator's in-memory copy.
 func (c *Controller) GetPersistedChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error) {
 	c.apiLock.RLock()
 	defer c.apiLock.RUnlock()
