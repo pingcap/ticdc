@@ -43,7 +43,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/routing"
-	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
@@ -660,40 +659,7 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	verifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err = waitChangefeedDeleted(verifyCtx, co, cfInfo.ChangefeedID); err != nil {
-		_ = c.Error(err)
-		return
-	}
 	c.JSON(getStatus(c), &EmptyResponse{})
-}
-
-func waitChangefeedDeleted(ctx context.Context, co server.Coordinator, id common.ChangeFeedID) error {
-	const checkInterval = 50 * time.Millisecond
-
-	ticker := time.NewTicker(checkInterval)
-	defer ticker.Stop()
-	for {
-		info, err := co.GetPersistedChangefeedInfo(ctx, id)
-		if errors.ErrChangeFeedNotExists.Equal(err) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if info.ChangefeedID.ID() != id.ID() {
-			// The backend looks up metadata by display name. A different GID
-			// means the original changefeed was deleted and its name reused.
-			return nil
-		}
-
-		select {
-		case <-ctx.Done():
-			return errors.ErrChangeFeedDeletionUnfinished.GenWithStackByArgs(id.Name())
-		case <-ticker.C:
-		}
-	}
 }
 
 // PauseChangefeed handles pause changefeed request
