@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -577,32 +578,11 @@ func NewRoutedDDLEvent(
 		TiDBOnly:          d.TiDBOnly,
 		BDRMode:           d.BDRMode,
 		Err:               d.Err,
-		PostTxnFlushed:    clonePostTxnFlushed(d.PostTxnFlushed),
-		IndexIDs:          cloneIndexIDs(d.IndexIDs),
+		PostTxnFlushed:    slices.Clone(d.PostTxnFlushed),
 		eventSize:         d.eventSize,
 		IsBootstrap:       d.IsBootstrap,
 		NotSync:           d.NotSync,
 	}
-}
-
-func cloneIndexIDs(indexIDs []int64) []int64 {
-	if indexIDs == nil {
-		return nil
-	}
-
-	cloned := make([]int64, len(indexIDs))
-	copy(cloned, indexIDs)
-	return cloned
-}
-
-func clonePostTxnFlushed(postTxnFlushed []func()) []func() {
-	if postTxnFlushed == nil {
-		return nil
-	}
-
-	cloned := make([]func(), len(postTxnFlushed))
-	copy(cloned, postTxnFlushed)
-	return cloned
 }
 
 func (t *DDLEvent) Len() int32 {

@@ -249,7 +249,7 @@ func NewDispatcherManager(
 
 	router, err := routing.NewRouter(
 		manager.changefeedID,
-		util.GetOrZero(manager.config.SinkConfig.CaseSensitive),
+		manager.config.CaseSensitive,
 		manager.config.SinkConfig.DispatchRules,
 	)
 	if err != nil {

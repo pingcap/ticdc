@@ -34,7 +34,6 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/format"
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -804,31 +803,14 @@ func SplitQueries(queries string) ([]string, error) {
 
 	var res []string
 	for _, stmt := range stmts {
-		var sb strings.Builder
-		// translate TiDB feature to special comment
-		restoreFlags := format.RestoreTiDBSpecialComment
-		// escape the keyword
-		restoreFlags |= format.RestoreNameBackQuotes
-		// upper case keyword
-		restoreFlags |= format.RestoreKeyWordUppercase
-		// wrap string with single quote
-		restoreFlags |= format.RestoreStringSingleQuotes
-		// remove placement rule
-		restoreFlags |= format.SkipPlacementRuleForRestore
-		// force disable ttl
-		restoreFlags |= format.RestoreWithTTLEnableOff
-		err := stmt.Restore(&format.RestoreCtx{
-			Flags: restoreFlags,
-			In:    &sb,
-		})
+		query, err := Restore(stmt)
 		if err != nil {
 			return nil, errors.WrapError(errors.ErrTiDBUnexpectedJobMeta, err)
 		}
 		// The (ast.Node).Restore function generates a SQL string representation of the AST (Abstract Syntax Tree) node.
 		// By default, the resulting SQL string does not include a trailing semicolon ";".
 		// Therefore, we explicitly append a semicolon here to ensure the SQL statement is complete.
-		sb.WriteByte(';')
-		res = append(res, sb.String())
+		res = append(res, query+";")
 	}
 
 	return res, nil

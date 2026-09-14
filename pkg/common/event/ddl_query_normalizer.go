@@ -19,7 +19,20 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/format"
 )
+
+// Restore serializes a DDL statement with CDC's TiDB comment and TTL handling.
+func Restore(stmt ast.StmtNode) (string, error) {
+	var sb strings.Builder
+	flags := format.RestoreTiDBSpecialComment | format.RestoreNameBackQuotes |
+		format.RestoreKeyWordUppercase | format.RestoreStringSingleQuotes |
+		format.SkipPlacementRuleForRestore | format.RestoreWithTTLEnableOff
+	if err := stmt.Restore(format.NewRestoreCtx(flags, &sb)); err != nil {
+		return "", errors.Trace(err)
+	}
+	return sb.String(), nil
+}
 
 // NormalizeCreateViewQueryWithStoredSelect replaces the SELECT body in a
 // CREATE VIEW query with TiDB's stored View.SelectStmt when the stored SELECT

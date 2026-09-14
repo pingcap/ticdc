@@ -92,7 +92,7 @@ func NewRouter(
 ) (Router, error) {
 	routingRules := make([]rule, 0, len(rules))
 	for _, r := range rules {
-		if r.TargetSchema == "" && r.TargetTable == "" {
+		if r == nil || (r.TargetSchema == "" && r.TargetTable == "") {
 			continue
 		}
 

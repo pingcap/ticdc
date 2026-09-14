@@ -756,6 +756,10 @@ func CheckUseTableIDAsPathCompatibility(
 }
 
 func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
+	if s.TableRouteEnabled() && !IsMySQLCompatibleScheme(GetScheme(sinkURI)) {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("table routing only supports MySQL-compatible sinks")
+	}
+
 	if err := s.validateAndAdjustSinkURI(sinkURI); err != nil {
 		return err
 	}
@@ -880,6 +884,19 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 	}
 
 	return nil
+}
+
+// TableRouteEnabled reports whether any dispatch rule specifies a target name.
+func (s *SinkConfig) TableRouteEnabled() bool {
+	if s == nil {
+		return false
+	}
+	for _, rule := range s.DispatchRules {
+		if rule != nil && (rule.TargetSchema != "" || rule.TargetTable != "") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *SinkConfig) validateTableRoute() error {

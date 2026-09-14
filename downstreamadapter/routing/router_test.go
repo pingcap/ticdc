@@ -103,6 +103,7 @@ func TestNewRouter(t *testing.T) {
 		t.Parallel()
 
 		router, err := NewRouter(newTestChangefeedID(), true, []*config.DispatchRule{
+			nil,
 			{Matcher: []string{"db1.*"}},
 		})
 		require.NoError(t, err)
