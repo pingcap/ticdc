@@ -391,6 +391,50 @@ func (p *persistentStorage) forceGetTableInfo(tableID int64, ts uint64) (*common
 	return store.getTableInfo(ts)
 }
 
+// getTableInfoForDDL reads the schema immediately preceding a DDL without
+// reconstructing every retained version for tables without local dispatchers.
+func (p *persistentStorage) getTableInfoForDDL(tableID int64, ts uint64) (*common.TableInfo, error) {
+	p.mu.RLock()
+	if store, ok := p.tableInfoStoreMap[tableID]; ok {
+		p.mu.RUnlock()
+		store.waitTableInfoInitialized()
+		return store.getTableInfo(ts)
+	}
+	if ts < p.gcTs {
+		gcTs := p.gcTs
+		p.mu.RUnlock()
+		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs(ts, gcTs)
+	}
+	// Capture the disk snapshot, GC timestamp and history together. History entries
+	// are append-only and GC only reslices them, so reading this prefix does not
+	// require copying the entire history while concurrent appends or GC proceed.
+	storageSnap := p.db.NewSnapshot()
+	gcTs := p.gcTs
+	history := p.tablesDDLHistory[tableID]
+	end := sort.Search(len(history), func(i int) bool { return history[i] > ts })
+	history = history[:end]
+	p.mu.RUnlock()
+	defer storageSnap.Close()
+
+	for i := len(history) - 1; i >= 0; i-- {
+		event := readPersistedDDLEventWithEncryption(storageSnap, history[i], p.encryptionManager, p.keyspaceID)
+		handler := allDDLHandlers[model.ActionType(event.Type)]
+		tableInfo, deleted := handler.extractTableInfoFunc(&event, tableID)
+		if tableInfo != nil {
+			return tableInfo, nil
+		}
+		if deleted {
+			return nil, &TableDeletedError{}
+		}
+		// For example, CREATE TABLE LIKE is recorded for the referenced table,
+		// but does not change that table's schema.
+	}
+	if tableInfo := readTableInfoInKVSnapWithEncryption(storageSnap, tableID, gcTs, p.encryptionManager, p.keyspaceID); tableInfo != nil {
+		return tableInfo, nil
+	}
+	return nil, errors.ErrSchemaStorageTableMiss.GenWithStackByArgs(tableID)
+}
+
 // TODO: this may consider some shouldn't be send ddl, like create table, does it matter?
 func (p *persistentStorage) getMaxEventCommitTs(tableID int64, ts uint64) uint64 {
 	p.mu.RLock()
@@ -767,7 +811,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 			if isPartitionTable(ddlEvent.TableInfo) && len(ddlEvent.TableInfo.Partition.Definitions) > 0 {
 				physicalTableID = ddlEvent.TableInfo.Partition.Definitions[0].ID
 			}
-			previousTableInfo, err := p.forceGetTableInfo(physicalTableID, ddlEvent.FinishedTs-1)
+			previousTableInfo, err := p.getTableInfoForDDL(physicalTableID, ddlEvent.FinishedTs-1)
 			if err != nil {
 				return err
 			}

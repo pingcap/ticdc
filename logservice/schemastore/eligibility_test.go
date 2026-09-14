@@ -27,29 +27,39 @@ import (
 )
 
 func TestForceGetTableInfoWaitsForRegistration(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		store := newEmptyVersionedTableInfoStore(100)
-		storage := &persistentStorage{
-			tableInfoStoreMap: map[int64]*versionedTableInfoStore{100: store},
-		}
-		info := common.WrapTableInfo("test", newEligibleTableInfoForTest(100, "a"))
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			actual, err := storage.forceGetTableInfo(100, 10)
-			require.NoError(t, err)
-			require.Same(t, info, actual)
-		}()
-		synctest.Wait()
-		select {
-		case <-done:
-			t.Fatal("table info read completed before registration initialized the store")
-		default:
-		}
-		store.addInitialTableInfo(info, 0)
-		store.setTableInfoInitialized()
-		<-done
-	})
+	for _, lookup := range []struct {
+		name string
+		get  func(*persistentStorage, int64, uint64) (*common.TableInfo, error)
+	}{
+		{"full history", (*persistentStorage).forceGetTableInfo},
+		{"DDL lookup", (*persistentStorage).getTableInfoForDDL},
+	} {
+		t.Run(lookup.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				store := newEmptyVersionedTableInfoStore(100)
+				storage := &persistentStorage{
+					tableInfoStoreMap: map[int64]*versionedTableInfoStore{100: store},
+				}
+				info := common.WrapTableInfo("test", newEligibleTableInfoForTest(100, "a"))
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					actual, err := lookup.get(storage, 100, 10)
+					require.NoError(t, err)
+					require.Same(t, info, actual)
+				}()
+				synctest.Wait()
+				select {
+				case <-done:
+					t.Fatal("table info read completed before registration initialized the store")
+				default:
+				}
+				store.addInitialTableInfo(info, 0)
+				store.setTableInfoInitialized()
+				<-done
+			})
+		})
+	}
 }
 
 func TestDDLTableBecomesEligible(t *testing.T) {
