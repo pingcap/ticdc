@@ -215,6 +215,9 @@ func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
 //	  CREATE VIEW `target_db`.`v_r` AS
 //	    SELECT `target_db`.`t_r`.`id` FROM `target_db`.`t_r`
 type tableRenameVisitor struct {
+	sourceNames []commonEvent.SchemaTableName
+	// Each SELECT owns its wildcard references, including nested SELECTs.
+	wildcardScopes []wildcardScope
 	// targetNames contains routed names aligned with tableNameExtractor output.
 	targetNames []commonEvent.SchemaTableName
 	// targetByQualifiedSource maps qualified source table names to routed names.
@@ -225,9 +228,23 @@ type tableRenameVisitor struct {
 	hasErr bool
 }
 
+type wildcardScope struct {
+	fields  *ast.FieldList
+	targets map[*ast.WildCardField]commonEvent.SchemaTableName
+}
+
 func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
 	if v.hasErr {
 		return in, true
+	}
+	switch n := in.(type) {
+	case *ast.SelectStmt:
+		v.wildcardScopes = append(v.wildcardScopes, wildcardScope{
+			fields:  n.Fields,
+			targets: make(map[*ast.WildCardField]commonEvent.SchemaTableName),
+		})
+	case *ast.TableSource:
+		v.collectWildcards(n)
 	}
 	if t, ok := in.(*ast.TableName); ok {
 		if v.i >= len(v.targetNames) {
@@ -250,7 +267,44 @@ func (v *tableRenameVisitor) Leave(in ast.Node) (ast.Node, bool) {
 	if v.hasErr {
 		return in, false
 	}
+	if _, ok := in.(*ast.SelectStmt); ok {
+		scope := v.wildcardScopes[len(v.wildcardScopes)-1]
+		for field, target := range scope.targets {
+			field.Schema = ast.NewCIStr(target.SchemaName)
+			field.Table = ast.NewCIStr(target.TableName)
+		}
+		v.wildcardScopes = v.wildcardScopes[:len(v.wildcardScopes)-1]
+	}
 	return in, true
+}
+
+func (v *tableRenameVisitor) collectWildcards(table *ast.TableSource) {
+	if table.AsName.O != "" || len(v.wildcardScopes) == 0 {
+		return
+	}
+	if _, ok := table.Source.(*ast.TableName); !ok {
+		return
+	}
+	if v.i >= len(v.sourceNames) || v.i >= len(v.targetNames) {
+		return
+	}
+	// The TableName immediately following this TableSource uses index i.
+	source, target := v.sourceNames[v.i], v.targetNames[v.i]
+	scope := v.wildcardScopes[len(v.wildcardScopes)-1]
+	if scope.fields == nil {
+		return
+	}
+	for _, field := range scope.fields.Fields {
+		wildcard := field.WildCard
+		if wildcard == nil || wildcard.Table.O == "" || !strings.EqualFold(wildcard.Table.O, source.TableName) {
+			continue
+		}
+		if wildcard.Schema.O != "" && !strings.EqualFold(wildcard.Schema.O, source.SchemaName) {
+			continue
+		}
+		// Apply after visiting FROM so routed names cannot match another source.
+		scope.targets[wildcard] = target
+	}
 }
 
 // rewriteColumnName rewrites only schema-qualified column references
@@ -275,6 +329,7 @@ func newTableRenameVisitor(
 	targetTables []commonEvent.SchemaTableName,
 ) *tableRenameVisitor {
 	visitor := &tableRenameVisitor{
+		sourceNames:             sourceTables,
 		targetNames:             targetTables,
 		targetByQualifiedSource: make(map[commonEvent.SchemaTableName]commonEvent.SchemaTableName, len(sourceTables)),
 	}
@@ -303,6 +358,7 @@ func normalizedSchemaTableName(schema, table string) commonEvent.SchemaTableName
 // traversal order produced by extractTableNames. TableName nodes are rewritten
 // positionally. For CREATE VIEW, schema-qualified column references are also
 // updated so `db`.`table`.`column` keeps pointing at the routed table.
+// Table-qualified wildcards follow their unaliased table within each SELECT.
 //
 // Returned DDL uses StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
 func rewriteDDLStmtTables(

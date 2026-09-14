@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	cdcfilter "github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/tidb/pkg/testkit"
 	"github.com/stretchr/testify/require"
 )
 
@@ -894,6 +895,51 @@ func TestApplyToDDLEventRejectsParserUnsupportedIndexDDL(t *testing.T) {
 			_, err := router.ApplyToDDLEvent(ddl)
 			require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 			require.Contains(t, err.Error(), "table routing does not support ddl type")
+		})
+	}
+}
+
+func TestViewWildcardRouting(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("USE test")
+	helper.DDL2Event("CREATE TABLE t (id INT PRIMARY KEY)")
+	helper.Tk().MustExec("INSERT INTO t VALUES (7)")
+	helper.Tk().MustExec("CREATE DATABASE dst")
+	for _, table := range []string{"dst.t_r", "dst.t", "test.t_r"} {
+		helper.Tk().MustExec("CREATE TABLE " + table + " (id INT PRIMARY KEY)")
+		helper.Tk().MustExec("INSERT INTO " + table + " VALUES (7)")
+	}
+	for _, tc := range []struct{ name, query string }{
+		{"v_table", "SELECT t.* FROM t"},
+		{"v_schema", "SELECT test.t.* FROM test.t"},
+		{"v_star", "SELECT * FROM t"},
+		{"v_alias", "SELECT x.* FROM t AS x"},
+		{"v_same_alias", "SELECT t.* FROM t AS t"},
+		{"v_join", "SELECT t.* FROM t JOIN t AS x ON t.id = x.id"},
+		{"v_nested", "SELECT x.* FROM (SELECT t.* FROM t) AS x"},
+		{"v_scopes", "SELECT t.* FROM t WHERE EXISTS (SELECT t.* FROM t AS t)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			helper.Tk().MustExec("USE test")
+			ddl := helper.DDL2Event("CREATE VIEW " + tc.name + " AS " + tc.query)
+			helper.Tk().MustQuery("SELECT * FROM " + tc.name).Check(testkit.Rows("7"))
+			helper.Tk().MustExec("DROP VIEW " + tc.name)
+			for _, rule := range []*config.DispatchRule{
+				{Matcher: []string{"test.*"}, TargetSchema: "dst", TargetTable: "{table}_r"},
+				{Matcher: []string{"test.*"}, TargetSchema: "dst"},
+				{Matcher: []string{"test.*"}, TargetTable: "{table}_r"},
+				{Matcher: []string{"other.*"}, TargetSchema: "dst"},
+			} {
+				router := newTestRouter(t, false, []*config.DispatchRule{rule})
+				routed, err := router.ApplyToDDLEvent(ddl)
+				require.NoError(t, err)
+				helper.Tk().MustExec("USE " + common.QuoteName(routed.GetTargetSchemaName()))
+				helper.Tk().MustExec(routed.Query)
+				view := common.QuoteSchema(routed.GetTargetSchemaName(), routed.GetTargetTableName())
+				helper.Tk().MustQuery("SELECT * FROM " + view).Check(testkit.Rows("7"))
+				helper.Tk().MustExec("DROP VIEW " + view)
+			}
 		})
 	}
 }
