@@ -92,6 +92,11 @@ type PersistedDDLEvent struct {
 	// IndexIDs store the add index ids in SQL order for add index and multi schema change DDLs.
 	// MySQL sink uses them to recover anonymous index names.
 	IndexIDs []int64 `msg:"index_ids"`
+
+	// TableBecameEligible records a transition from no usable key to a primary
+	// key or non-null unique key. Force-replicating changefeeds already replicate
+	// the table and must handle this DDL through their existing dispatchers.
+	TableBecameEligible bool `msg:"table_became_eligible"`
 }
 
 // TODO: use msgp.Raw to do version management

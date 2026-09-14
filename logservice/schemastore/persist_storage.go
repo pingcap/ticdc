@@ -379,6 +379,7 @@ func (p *persistentStorage) forceGetTableInfo(tableID int64, ts uint64) (*common
 	// if there is already a store, it must contain all table info on disk, so we can use it directly
 	if store, ok := p.tableInfoStoreMap[tableID]; ok {
 		p.mu.RUnlock()
+		store.waitTableInfoInitialized()
 		return store.getTableInfo(ts)
 	}
 	p.mu.RUnlock()
@@ -516,8 +517,7 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
 			rawEvent := readPersistedDDLEventWithEncryption(storageSnap, ts, p.encryptionManager, p.keyspaceID)
-			// the tableID of buildDDLEvent is not used in this function, set it to 0
-			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, 0)
+			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, common.DDLSpanTableID)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
@@ -759,6 +759,21 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		// ExtraTableInfo is the normal table info before exchange
 		ddlEvent.ExtraTableInfo, _ = p.forceGetTableInfo(ddlEvent.TableID, ddlEvent.FinishedTs)
 	}
+	switch job.Type {
+	case model.ActionAddPrimaryKey, model.ActionAddIndex, model.ActionModifyColumn, model.ActionMultiSchemaChange:
+		if ddlEvent.TableInfo != nil && common.OriginalHasPKOrNotNullUK(ddlEvent.TableInfo) {
+			// Partition DDL history is indexed by physical table ID.
+			physicalTableID := ddlEvent.TableID
+			if isPartitionTable(ddlEvent.TableInfo) && len(ddlEvent.TableInfo.Partition.Definitions) > 0 {
+				physicalTableID = ddlEvent.TableInfo.Partition.Definitions[0].ID
+			}
+			previousTableInfo, err := p.forceGetTableInfo(physicalTableID, ddlEvent.FinishedTs-1)
+			if err != nil {
+				return err
+			}
+			ddlEvent.TableBecameEligible = !previousTableInfo.IsEligible(false)
+		}
+	}
 	failpoint.Inject("beforePersistingDDL", func() {
 		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/beforePersistingDDL")
 	})
@@ -894,9 +909,8 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	return false
 }
 
-// NOTE: tableID is only used in fetchTableDDLEvents to fetch exchange table partition and rename tables DDL
-// for the corresponding dispatcher.
-// It's not used in fetchTableTriggerDDLEvents, so it can be 0.
+// NOTE: tableID identifies the dispatcher for exchange partition, rename tables,
+// and eligibility-changing DDLs. Table trigger callers use common.DDLSpanTableID.
 func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	handler, ok := allDDLHandlers[model.ActionType(rawEvent.Type)]
 	if !ok {

@@ -119,9 +119,8 @@ type persistStorageDDLHandler struct {
 	// extractTableInfoFunc extract (table info, deleted) for the specified `tableID` from ddl event
 	extractTableInfoFunc func(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool)
 	// buildDDLEvent build a DDLEvent from a PersistedDDLEvent
-	// NOTE: the tableID is used in exchange table partition and rename tables DDL only,
-	// see the details in buildDDLEventForExchangeTablePartition and buildDDLEventForRenameTables.
-	// For other DDLs, tableID is not used and can be set to 0.
+	// NOTE: tableID identifies the dispatcher for exchange partition, rename tables,
+	// and eligibility-changing DDLs. Table trigger callers use common.DDLSpanTableID.
 	buildDDLEventFunc func(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error)
 }
 
@@ -1263,6 +1262,9 @@ func updateDDLHistoryForAddDropTable(args updateDDLHistoryFuncArgs) []uint64 {
 }
 
 func updateDDLHistoryForNormalDDLOnSingleTable(args updateDDLHistoryFuncArgs) []uint64 {
+	if args.ddlEvent.TableBecameEligible {
+		args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	}
 	if isPartitionTable(args.ddlEvent.TableInfo) {
 		for _, partitionID := range getAllPartitionIDs(args.ddlEvent.TableInfo) {
 			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, partitionID)
@@ -2323,6 +2325,18 @@ func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.F
 }
 
 func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	if rawEvent.TableBecameEligible {
+		// Without force replication, no dispatcher exists for the old schema.
+		// Let the table trigger execute the DDL and add the physical tables.
+		if tableFilter != nil && !tableFilter.IsEligibleTable(&common.TableInfo{}) {
+			return buildDDLEventForNewTableDDL(rawEvent, tableFilter, tableID)
+		}
+		// Force replication (or no filter) already includes the table. Only its
+		// existing dispatchers should receive the DDL, avoiding duplicate execution.
+		if tableID == common.DDLSpanTableID {
+			return commonEvent.DDLEvent{}, false, nil
+		}
+	}
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err

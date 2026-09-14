@@ -303,6 +303,12 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 					return
 				}
 			}
+		case "table_became_eligible":
+			z.TableBecameEligible, err = dc.ReadBool()
+			if err != nil {
+				err = msgp.WrapError(err, "TableBecameEligible")
+				return
+			}
 		default:
 			err = dc.Skip()
 			if err != nil {
@@ -316,9 +322,9 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 
 // EncodeMsg implements msgp.Encodable
 func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
-	// map header, size 27
+	// map header, size 28
 	// write "id"
-	err = en.Append(0xde, 0x0, 0x1b, 0xa2, 0x69, 0x64)
+	err = en.Append(0xde, 0x0, 0x1c, 0xa2, 0x69, 0x64)
 	if err != nil {
 		return
 	}
@@ -650,15 +656,25 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 			return
 		}
 	}
+	// write "table_became_eligible"
+	err = en.Append(0xb5, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x62, 0x65, 0x63, 0x61, 0x6d, 0x65, 0x5f, 0x65, 0x6c, 0x69, 0x67, 0x69, 0x62, 0x6c, 0x65)
+	if err != nil {
+		return
+	}
+	err = en.WriteBool(z.TableBecameEligible)
+	if err != nil {
+		err = msgp.WrapError(err, "TableBecameEligible")
+		return
+	}
 	return
 }
 
 // MarshalMsg implements msgp.Marshaler
 func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	o = msgp.Require(b, z.Msgsize())
-	// map header, size 27
+	// map header, size 28
 	// string "id"
-	o = append(o, 0xde, 0x0, 0x1b, 0xa2, 0x69, 0x64)
+	o = append(o, 0xde, 0x0, 0x1c, 0xa2, 0x69, 0x64)
 	o = msgp.AppendInt64(o, z.ID)
 	// string "type"
 	o = append(o, 0xa4, 0x74, 0x79, 0x70, 0x65)
@@ -765,6 +781,9 @@ func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	for za0009 := range z.IndexIDs {
 		o = msgp.AppendInt64(o, z.IndexIDs[za0009])
 	}
+	// string "table_became_eligible"
+	o = append(o, 0xb5, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x62, 0x65, 0x63, 0x61, 0x6d, 0x65, 0x5f, 0x65, 0x6c, 0x69, 0x67, 0x69, 0x62, 0x6c, 0x65)
+	o = msgp.AppendBool(o, z.TableBecameEligible)
 	return
 }
 
@@ -1065,6 +1084,12 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 					return
 				}
 			}
+		case "table_became_eligible":
+			z.TableBecameEligible, bts, err = msgp.ReadBoolBytes(bts)
+			if err != nil {
+				err = msgp.WrapError(err, "TableBecameEligible")
+				return
+			}
 		default:
 			bts, err = msgp.Skip(bts)
 			if err != nil {
@@ -1095,7 +1120,7 @@ func (z *PersistedDDLEvent) Msgsize() (s int) {
 	for za0008 := range z.MultipleTableInfosValue {
 		s += msgp.BytesPrefixSize + len(z.MultipleTableInfosValue[za0008])
 	}
-	s += 9 + msgp.StringPrefixSize + len(z.BDRRole) + 17 + msgp.Uint64Size + 10 + msgp.ArrayHeaderSize + (len(z.IndexIDs) * (msgp.Int64Size))
+	s += 9 + msgp.StringPrefixSize + len(z.BDRRole) + 17 + msgp.Uint64Size + 10 + msgp.ArrayHeaderSize + (len(z.IndexIDs) * (msgp.Int64Size)) + 22 + msgp.BoolSize
 	return
 }
 
