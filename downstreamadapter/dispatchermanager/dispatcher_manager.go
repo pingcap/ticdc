@@ -176,6 +176,15 @@ func NewDispatcherManager(
 ) (*DispatcherManager, error) {
 	failpoint.Inject("NewDispatcherManagerDelay", nil)
 
+	router, err := routing.NewRouter(
+		changefeedID,
+		cfConfig.CaseSensitive,
+		cfConfig.SinkConfig.DispatchRules,
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 
@@ -232,7 +241,6 @@ func NewDispatcherManager(
 		}
 	}
 
-	var err error
 	manager.sink, err = sink.New(ctx, manager.config, manager.changefeedID)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -245,15 +253,6 @@ func NewDispatcherManager(
 		outputRawChangeEvent = manager.config.SinkConfig.CloudStorageConfig.GetOutputRawChangeEvent()
 	case common.KafkaSinkType:
 		outputRawChangeEvent = manager.config.SinkConfig.KafkaConfig.GetOutputRawChangeEvent()
-	}
-
-	router, err := routing.NewRouter(
-		manager.changefeedID,
-		manager.config.CaseSensitive,
-		manager.config.SinkConfig.DispatchRules,
-	)
-	if err != nil {
-		return nil, err
 	}
 
 	// Create shared info for all dispatchers
