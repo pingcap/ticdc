@@ -126,7 +126,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 	}
 
 	isAvroLike := o.protocol == config.ProtocolAvro || o.protocol == config.ProtocolDebeziumAvro
-	eventRouter, err := eventrouter.NewEventRouter(o.sinkConfig, o.topic, false, isAvroLike)
+	eventRouter, err := eventrouter.NewEventRouter(o.sinkConfig, o.caseSensitive, o.topic, false, isAvroLike)
 	if err != nil {
 		log.Panic("initialize the event router failed",
 			zap.Any("protocol", o.protocol), zap.Any("topic", o.topic),
