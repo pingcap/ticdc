@@ -44,6 +44,12 @@ const (
 	latestTrafficIndex                        = 0
 	trafficBalanceSkipResourceUsageIncomplete = "resource_usage_incomplete"
 	trafficBalanceSkipNoEventStoreHeadroom    = "no_event_store_headroom"
+	trafficBalanceSkipNoImprovingSpan         = "no_improving_span"
+	// Ignore small relative skews that do not indicate meaningful storage pressure.
+	minEventStoreWriteBytesPerSecond = 2 * 1024 * 1024
+	// EventStore traffic is node-wide and shared by all split-table groups. Limit
+	// evacuation to one dispatcher per changefeed during each observation window.
+	eventStoreBalanceCooldown = 5 * time.Minute
 )
 
 var (
@@ -76,6 +82,11 @@ type BalanceCondition struct {
 	balanceScore     int
 	balanceCause     BalanceCause
 	statusUpdated    bool
+}
+
+type eventStoreBalanceLimiter struct {
+	generation uint64
+	nextMoveAt time.Time
 }
 
 func (b *BalanceCondition) reset() {
@@ -157,8 +168,10 @@ type SplitSpanChecker struct {
 	minTrafficPercentage  float64
 	maxTrafficPercentage  float64
 
-	balanceCondition           BalanceCondition
-	eventStoreBalanceCondition BalanceCondition
+	balanceCondition            BalanceCondition
+	eventStoreBalanceCondition  BalanceCondition
+	eventStoreBalanceGeneration uint64
+	eventStoreBalanceLimiter    *eventStoreBalanceLimiter
 
 	mergeThreshold  int
 	mergeCheckCount int
@@ -189,25 +202,27 @@ func NewSplitSpanChecker(
 	schedulerCfg *config.ChangefeedSchedulerConfig,
 	refresher *RegionCountRefresher,
 	nodeResourceUsage *NodeResourceUsageTracker,
+	eventStoreBalanceLimiter *eventStoreBalanceLimiter,
 ) *SplitSpanChecker {
 	if schedulerCfg == nil {
 		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))
 	}
 	return &SplitSpanChecker{
-		changefeedID:           changefeedID,
-		groupID:                groupID,
-		allTasks:               make(map[common.DispatcherID]*splitSpanStatus),
-		writeThreshold:         util.GetOrZero(schedulerCfg.WriteKeyThreshold),
-		regionThreshold:        util.GetOrZero(schedulerCfg.RegionThreshold),
-		balanceScoreThreshold:  util.GetOrZero(schedulerCfg.BalanceScoreThreshold),
-		minTrafficPercentage:   util.GetOrZero(schedulerCfg.MinTrafficPercentage),
-		maxTrafficPercentage:   util.GetOrZero(schedulerCfg.MaxTrafficPercentage),
-		mergeThreshold:         mergeThreshold,
-		mergeCheckCount:        0,
-		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
-		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
-		nodeResourceUsage:      nodeResourceUsage,
-		splitSpanCheckDuration: metrics.SplitSpanCheckDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), replica.GetGroupName(groupID)),
+		changefeedID:             changefeedID,
+		groupID:                  groupID,
+		allTasks:                 make(map[common.DispatcherID]*splitSpanStatus),
+		writeThreshold:           util.GetOrZero(schedulerCfg.WriteKeyThreshold),
+		regionThreshold:          util.GetOrZero(schedulerCfg.RegionThreshold),
+		balanceScoreThreshold:    util.GetOrZero(schedulerCfg.BalanceScoreThreshold),
+		minTrafficPercentage:     util.GetOrZero(schedulerCfg.MinTrafficPercentage),
+		maxTrafficPercentage:     util.GetOrZero(schedulerCfg.MaxTrafficPercentage),
+		eventStoreBalanceLimiter: eventStoreBalanceLimiter,
+		mergeThreshold:           mergeThreshold,
+		mergeCheckCount:          0,
+		nodeManager:              appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		pdClock:                  appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		nodeResourceUsage:        nodeResourceUsage,
+		splitSpanCheckDuration:   metrics.SplitSpanCheckDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), replica.GetGroupName(groupID)),
 
 		refresher: refresher,
 	}
@@ -335,7 +350,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	}
 
 	aliveNodeIDs := s.nodeManager.GetAliveNodeIDs()
-	eventStoreWriteBytes, nodeResourceUsageStatus := s.nodeResourceUsage.EventStoreWriteBytesDelta(aliveNodeIDs)
+	eventStoreWriteBytesPerSecond, nodeResourceUsageStatus := s.nodeResourceUsage.EventStoreWriteBytesPerSecond(aliveNodeIDs)
 
 	lastThreeTrafficPerNode := make(map[node.ID][]float64)
 	lastThreeTrafficSum := make([]float64, 3)
@@ -359,7 +374,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	var eventStoreBalanceNeeded bool
 	results, eventStoreBalanceNeeded = s.checkBalanceEventStore(
 		aliveNodeIDs, lastThreeTrafficPerNode, taskMap,
-		eventStoreWriteBytes, nodeResourceUsageStatus)
+		eventStoreWriteBytesPerSecond, nodeResourceUsageStatus)
 	if len(results) > 0 || eventStoreBalanceNeeded {
 		return results
 	}
@@ -367,7 +382,9 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	// step3. check whether the whole dispatchers should be merged together.
 	//        only when all spans' total region count and traffic are less then threshold/2, we can merge them together
 	//        consider we only support to merge the spans in the same node, we first do move, then merge
-	results = s.checkMergeWhole(totalRegionCount, lastThreeTrafficSum, lastThreeTrafficPerNode)
+	results = s.checkMergeWhole(
+		totalRegionCount, lastThreeTrafficSum, lastThreeTrafficPerNode,
+		eventStoreWriteBytesPerSecond, nodeResourceUsageStatus)
 	if len(results) > 0 {
 		return results
 	}
@@ -376,7 +393,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	//        we try to move some spans from the node with max traffic to the node with min traffic
 	results, minTrafficNodeID, maxTrafficNodeID := s.checkBalanceTraffic(
 		aliveNodeIDs, lastThreeTrafficSum, lastThreeTrafficPerNode, taskMap,
-		eventStoreWriteBytes, nodeResourceUsageStatus)
+		eventStoreWriteBytesPerSecond, nodeResourceUsageStatus)
 	if len(results) > 0 {
 		return results
 	}
@@ -446,7 +463,10 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	}
 
 	// step5. try to check whether we need move dispatchers to make merge possible
-	return s.chooseMoveSpans(minTrafficNodeID, maxTrafficNodeID, sortedSpanByStartKey, lastThreeTrafficPerNode, taskMap)
+	return s.chooseMoveSpans(
+		minTrafficNodeID, maxTrafficNodeID, sortedSpanByStartKey,
+		lastThreeTrafficPerNode, taskMap,
+		eventStoreWriteBytesPerSecond, nodeResourceUsageStatus)
 }
 
 // chooseMoveSpans finds multiple optimal span moves using a multi-priority search strategy:
@@ -454,7 +474,15 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 // 2. Priority 2: Merge moves with compensation to maintain balance
 // 3. Priority 3: Pure traffic balance moves
 // Returns multiple move plans sorted by priority and effectiveness
-func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficNodeID node.ID, sortedSpanByStartKey []*splitSpanStatus, lastThreeTrafficPerNode map[node.ID][]float64, taskMap map[node.ID][]*splitSpanStatus) []SplitSpanCheckResult {
+func (s *SplitSpanChecker) chooseMoveSpans(
+	minTrafficNodeID node.ID,
+	maxTrafficNodeID node.ID,
+	sortedSpanByStartKey []*splitSpanStatus,
+	lastThreeTrafficPerNode map[node.ID][]float64,
+	taskMap map[node.ID][]*splitSpanStatus,
+	eventStoreWriteBytesPerSecond map[node.ID]uint64,
+	nodeResourceUsageStatus heartbeatpb.NodeResourceUsageStatus,
+) []SplitSpanCheckResult {
 	log.Debug("chooseMoveSpans try to choose move spans",
 		zap.Any("changefeedID", s.changefeedID),
 		zap.Any("groupID", s.groupID),
@@ -466,6 +494,12 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 
 	// If no any span in minTrafficNodeID, we random select one span from maxTrafficNodeID for it.
 	if len(taskMap[minTrafficNodeID]) == 0 && len(taskMap[maxTrafficNodeID]) > 0 {
+		if !eventStoreDestinationEligible(
+			maxTrafficNodeID, minTrafficNodeID,
+			eventStoreWriteBytesPerSecond, nodeResourceUsageStatus,
+		) {
+			return results
+		}
 		randomSpan := taskMap[maxTrafficNodeID][rand.Intn(len(taskMap[maxTrafficNodeID]))]
 		results = append(results, SplitSpanCheckResult{
 			OpType: OpMove,
@@ -481,7 +515,11 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 	adjacencyMap := s.buildAdjacencyMap(sortedSpanByStartKey)
 
 	// Try to find optimal span moves using multi-priority strategy
-	if result := s.findOptimalSpanMoves(minTrafficNodeID, maxTrafficNodeID, sortedSpanByStartKey, adjacencyMap, lastThreeTrafficPerNode); len(result) > 0 {
+	if result := s.findOptimalSpanMoves(
+		minTrafficNodeID, maxTrafficNodeID, sortedSpanByStartKey,
+		adjacencyMap, lastThreeTrafficPerNode,
+		eventStoreWriteBytesPerSecond, nodeResourceUsageStatus,
+	); len(result) > 0 {
 		results = append(results, result...)
 		log.Info("chooseMoveSpans found multiple move plans",
 			zap.Any("changefeedID", s.changefeedID),
@@ -492,6 +530,23 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 	}
 
 	return results
+}
+
+func eventStoreDestinationEligible(
+	sourceNodeID node.ID,
+	targetNodeID node.ID,
+	eventStoreWriteBytesPerSecond map[node.ID]uint64,
+	nodeResourceUsageStatus heartbeatpb.NodeResourceUsageStatus,
+) bool {
+	if nodeResourceUsageStatus == heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED {
+		return true
+	}
+	if nodeResourceUsageStatus != heartbeatpb.NodeResourceUsageStatus_AVAILABLE {
+		return false
+	}
+	sourceWriteBytes, sourceOK := eventStoreWriteBytesPerSecond[sourceNodeID]
+	targetWriteBytes, targetOK := eventStoreWriteBytesPerSecond[targetNodeID]
+	return sourceOK && targetOK && targetWriteBytes < sourceWriteBytes
 }
 
 // buildAdjacencyMap builds a map from span ID to its adjacent spans for O(1) lookup
@@ -531,6 +586,8 @@ func (s *SplitSpanChecker) findOptimalSpanMoves(
 	sortedSpanByStartKey []*splitSpanStatus,
 	adjacencyMap map[common.DispatcherID][]*splitSpanStatus,
 	lastThreeTrafficPerNode map[node.ID][]float64,
+	eventStoreWriteBytesPerSecond map[node.ID]uint64,
+	nodeResourceUsageStatus heartbeatpb.NodeResourceUsageStatus,
 ) []SplitSpanCheckResult {
 	moveSpanTarget := make(map[common.DispatcherID]node.ID) // moveSpanTarget is used to store the target node for the spans ready to move
 
@@ -574,6 +631,12 @@ func (s *SplitSpanChecker) findOptimalSpanMoves(
 			if span.GetNodeID() == targetNodeID || selectedSpans[span.ID] {
 				continue
 			}
+			if !eventStoreDestinationEligible(
+				span.GetNodeID(), targetNodeID,
+				eventStoreWriteBytesPerSecond, nodeResourceUsageStatus,
+			) {
+				continue
+			}
 
 			// Check if moving this span to targetNodeID would enable merge
 			if mergedSpans, ok := s.canMergeAfterMove(span, targetNodeID, adjacencyMap, moveSpanTarget); ok {
@@ -605,7 +668,8 @@ func (s *SplitSpanChecker) findOptimalSpanMoves(
 
 				// Single move violates balance, try to find compensation move
 				if compensationMove, compSpan := s.findCompensationMove(span, mergedSpans, targetNodeID, span.GetNodeID(), sortedSpanByStartKey, afterMoveTrafficPerNode,
-					currentMinTraffic, currentMaxTraffic, selectedSpans, moveSpanTarget); compensationMove != nil {
+					currentMinTraffic, currentMaxTraffic, selectedSpans, moveSpanTarget,
+					eventStoreWriteBytesPerSecond, nodeResourceUsageStatus); compensationMove != nil {
 					results = append(results, SplitSpanCheckResult{
 						OpType: OpMove,
 						MoveSpans: []*SpanReplication{
@@ -652,6 +716,8 @@ func (s *SplitSpanChecker) findCompensationMove(
 	currentMaxTraffic float64,
 	selectedSpans map[common.DispatcherID]bool,
 	moveSpanTarget map[common.DispatcherID]node.ID,
+	eventStoreWriteBytesPerSecond map[node.ID]uint64,
+	nodeResourceUsageStatus heartbeatpb.NodeResourceUsageStatus,
 ) (*SplitSpanCheckResult, *splitSpanStatus) {
 	movedTraffic := movedSpan.lastThreeTraffic[latestTrafficIndex]
 
@@ -676,6 +742,12 @@ func (s *SplitSpanChecker) findCompensationMove(
 
 	// Look for spans in targetNode that can be moved to sourceNode
 	for _, span := range targetNodeSpans {
+		if !eventStoreDestinationEligible(
+			span.GetNodeID(), sourceNode,
+			eventStoreWriteBytesPerSecond, nodeResourceUsageStatus,
+		) {
+			continue
+		}
 		// Try to find a span that can balance traffic
 		// Note: compensation move doesn't need to enable merge, its main purpose is traffic balancing
 		compensationTraffic := span.lastThreeTraffic[latestTrafficIndex]
@@ -896,7 +968,13 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 // check whether the whole dispatchers should be merged together.
 // only when all spans' total region count and traffic are less then threshold/2, we can merge them together
 // consider we only support to merge the spans in the same node, we first do move, then merge
-func (s *SplitSpanChecker) checkMergeWhole(totalRegionCount int, lastThreeTrafficSum []float64, lastThreeTrafficPerNode map[node.ID][]float64) []SplitSpanCheckResult {
+func (s *SplitSpanChecker) checkMergeWhole(
+	totalRegionCount int,
+	lastThreeTrafficSum []float64,
+	lastThreeTrafficPerNode map[node.ID][]float64,
+	eventStoreWriteBytesPerSecond map[node.ID]uint64,
+	nodeResourceUsageStatus heartbeatpb.NodeResourceUsageStatus,
+) []SplitSpanCheckResult {
 	log.Debug("checkMergeWhole try to merge whole spans",
 		zap.Any("changefeedID", s.changefeedID),
 		zap.Any("groupID", s.groupID),
@@ -942,6 +1020,31 @@ func (s *SplitSpanChecker) checkMergeWhole(totalRegionCount int, lastThreeTraffi
 
 		results = append(results, ret)
 		return results
+	}
+	if nodeResourceUsageStatus == heartbeatpb.NodeResourceUsageStatus_INCOMPLETE {
+		return results
+	}
+	if nodeResourceUsageStatus == heartbeatpb.NodeResourceUsageStatus_AVAILABLE {
+		targetNode = ""
+		for nodeID, traffic := range lastThreeTrafficPerNode {
+			if traffic[latestTrafficIndex] == 0 {
+				continue
+			}
+			if targetNode == "" ||
+				eventStoreWriteBytesPerSecond[nodeID] < eventStoreWriteBytesPerSecond[targetNode] ||
+				(eventStoreWriteBytesPerSecond[nodeID] == eventStoreWriteBytesPerSecond[targetNode] && nodeID < targetNode) {
+				targetNode = nodeID
+			}
+		}
+		for nodeID, traffic := range lastThreeTrafficPerNode {
+			if traffic[latestTrafficIndex] > 0 && nodeID != targetNode &&
+				!eventStoreDestinationEligible(
+					nodeID, targetNode,
+					eventStoreWriteBytesPerSecond, nodeResourceUsageStatus,
+				) {
+				return results
+			}
+		}
 	}
 
 	// move all spans to the targetNode
@@ -1059,10 +1162,14 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 	aliveNodeIDs []node.ID,
 	lastThreeTrafficPerNode map[node.ID][]float64,
 	taskMap map[node.ID][]*splitSpanStatus,
-	eventStoreWriteBytes map[node.ID]uint64,
+	eventStoreWriteBytesPerSecond map[node.ID]uint64,
 	nodeResourceUsageStatus heartbeatpb.NodeResourceUsageStatus,
 ) ([]SplitSpanCheckResult, bool) {
 	results := make([]SplitSpanCheckResult, 0, 1)
+	if s.eventStoreBalanceGeneration != s.eventStoreBalanceLimiter.generation {
+		s.eventStoreBalanceCondition.reset()
+		s.eventStoreBalanceGeneration = s.eventStoreBalanceLimiter.generation
+	}
 	if nodeResourceUsageStatus != heartbeatpb.NodeResourceUsageStatus_AVAILABLE ||
 		len(aliveNodeIDs) < 2 {
 		s.eventStoreBalanceCondition.reset()
@@ -1076,7 +1183,7 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 	var sourceNodeID node.ID
 	var sourceWriteBytes uint64
 	for _, nodeID := range aliveNodeIDs {
-		writeBytes := eventStoreWriteBytes[nodeID]
+		writeBytes := eventStoreWriteBytesPerSecond[nodeID]
 		totalWriteBytes += float64(writeBytes)
 		if sourceNodeID == "" || writeBytes > sourceWriteBytes ||
 			(writeBytes == sourceWriteBytes && nodeID < sourceNodeID) {
@@ -1085,7 +1192,8 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 		}
 	}
 	avgWriteBytes := totalWriteBytes / float64(len(aliveNodeIDs))
-	if avgWriteBytes == 0 || float64(sourceWriteBytes) <= avgWriteBytes*s.maxTrafficPercentage {
+	if sourceWriteBytes < minEventStoreWriteBytesPerSecond ||
+		avgWriteBytes == 0 || float64(sourceWriteBytes) <= avgWriteBytes*s.maxTrafficPercentage {
 		s.eventStoreBalanceCondition.reset()
 		return results, false
 	}
@@ -1095,22 +1203,41 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 	}
 
 	var targetNodeID node.ID
+	var moveSpan *splitSpanStatus
+	bestAfterMoveDifference := math.MaxFloat64
+	hasTarget := false
 	for _, nodeID := range aliveNodeIDs {
-		writeBytes := eventStoreWriteBytes[nodeID]
+		writeBytes := eventStoreWriteBytesPerSecond[nodeID]
 		if nodeID == sourceNodeID || float64(writeBytes) >= avgWriteBytes {
 			continue
 		}
-		if targetNodeID == "" ||
-			lastThreeTrafficPerNode[nodeID][latestTrafficIndex] < lastThreeTrafficPerNode[targetNodeID][latestTrafficIndex] ||
-			(lastThreeTrafficPerNode[nodeID][latestTrafficIndex] == lastThreeTrafficPerNode[targetNodeID][latestTrafficIndex] &&
-				(writeBytes < eventStoreWriteBytes[targetNodeID] ||
-					(writeBytes == eventStoreWriteBytes[targetNodeID] && nodeID < targetNodeID))) {
-			targetNodeID = nodeID
+		hasTarget = true
+		beforeMoveDifference := float64(sourceWriteBytes - writeBytes)
+		for _, candidate := range taskMap[sourceNodeID] {
+			spanTraffic := candidate.lastThreeTraffic[latestTrafficIndex]
+			afterMoveDifference := math.Abs(beforeMoveDifference - 2*spanTraffic)
+			if spanTraffic <= 0 || afterMoveDifference >= beforeMoveDifference {
+				continue
+			}
+			if moveSpan == nil || afterMoveDifference < bestAfterMoveDifference ||
+				(afterMoveDifference == bestAfterMoveDifference &&
+					(nodeID < targetNodeID ||
+						(nodeID == targetNodeID && candidate.ID.String() < moveSpan.ID.String()))) {
+				targetNodeID = nodeID
+				moveSpan = candidate
+				bestAfterMoveDifference = afterMoveDifference
+			}
 		}
 	}
-	if targetNodeID == "" {
+	if !hasTarget {
 		metrics.TrafficBalanceSkipCounter.WithLabelValues(
 			trafficBalanceSkipNoEventStoreHeadroom).Inc()
+		s.eventStoreBalanceCondition.reset()
+		return results, true
+	}
+	if moveSpan == nil {
+		metrics.TrafficBalanceSkipCounter.WithLabelValues(
+			trafficBalanceSkipNoImprovingSpan).Inc()
 		s.eventStoreBalanceCondition.reset()
 		return results, true
 	}
@@ -1119,14 +1246,8 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 	if s.eventStoreBalanceCondition.balanceScore < s.balanceScoreThreshold {
 		return results, true
 	}
-
-	moveSpan := taskMap[sourceNodeID][0]
-	for _, candidate := range taskMap[sourceNodeID][1:] {
-		if candidate.lastThreeTraffic[latestTrafficIndex] > moveSpan.lastThreeTraffic[latestTrafficIndex] ||
-			(candidate.lastThreeTraffic[latestTrafficIndex] == moveSpan.lastThreeTraffic[latestTrafficIndex] &&
-				candidate.ID.String() < moveSpan.ID.String()) {
-			moveSpan = candidate
-		}
+	if time.Now().Before(s.eventStoreBalanceLimiter.nextMoveAt) {
+		return results, false
 	}
 
 	log.Info("move dispatcher away from busy event store",
@@ -1135,13 +1256,16 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 		zap.String("dispatcherID", moveSpan.ID.String()),
 		zap.Stringer("sourceNodeID", sourceNodeID),
 		zap.Stringer("targetNodeID", targetNodeID),
-		zap.Uint64("sourceWriteBytesDelta", sourceWriteBytes),
-		zap.Uint64("targetWriteBytesDelta", eventStoreWriteBytes[targetNodeID]))
+		zap.Uint64("sourceWriteBytesPerSecond", sourceWriteBytes),
+		zap.Uint64("targetWriteBytesPerSecond", eventStoreWriteBytesPerSecond[targetNodeID]))
 	results = append(results, SplitSpanCheckResult{
 		OpType:     OpMove,
 		MoveSpans:  []*SpanReplication{moveSpan.SpanReplication},
 		TargetNode: targetNodeID,
 	})
+	s.eventStoreBalanceLimiter.generation++
+	s.eventStoreBalanceLimiter.nextMoveAt = time.Now().Add(eventStoreBalanceCooldown)
+	s.eventStoreBalanceGeneration = s.eventStoreBalanceLimiter.generation
 	s.eventStoreBalanceCondition.reset()
 	s.balanceCondition.reset()
 	return results, true
@@ -1155,7 +1279,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	lastThreeTrafficSum []float64,
 	lastThreeTrafficPerNode map[node.ID][]float64,
 	taskMap map[node.ID][]*splitSpanStatus,
-	eventStoreWriteBytes map[node.ID]uint64,
+	eventStoreWriteBytesPerSecond map[node.ID]uint64,
 	nodeResourceUsageStatus heartbeatpb.NodeResourceUsageStatus,
 ) (results []SplitSpanCheckResult, minTrafficNodeID node.ID, maxTrafficNodeID node.ID) {
 	log.Debug("checkBalanceTraffic try to balance traffic",
@@ -1286,12 +1410,12 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		for _, nodeID := range aliveNodeIDs {
 			if nodeID == maxTrafficNodeID ||
 				lastThreeTrafficPerNode[nodeID][latestTrafficIndex] >= avgLastThreeTraffic[latestTrafficIndex] ||
-				eventStoreWriteBytes[nodeID] >= eventStoreWriteBytes[maxTrafficNodeID] {
+				eventStoreWriteBytesPerSecond[nodeID] >= eventStoreWriteBytesPerSecond[maxTrafficNodeID] {
 				continue
 			}
-			if targetNodeID == "" || eventStoreWriteBytes[nodeID] < targetWriteBytes {
+			if targetNodeID == "" || eventStoreWriteBytesPerSecond[nodeID] < targetWriteBytes {
 				targetNodeID = nodeID
-				targetWriteBytes = eventStoreWriteBytes[nodeID]
+				targetWriteBytes = eventStoreWriteBytesPerSecond[nodeID]
 			}
 		}
 		if targetNodeID == "" {

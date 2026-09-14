@@ -22,66 +22,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNodeResourceUsageTrackerSharesDeltaSnapshot(t *testing.T) {
+func TestNodeResourceUsageTrackerSharesRateSnapshot(t *testing.T) {
 	now := time.Unix(100, 0)
 	tracker := NewNodeResourceUsageTracker()
 	tracker.now = func() time.Time { return now }
 	nodeIDs := []node.ID{"node1", "node2"}
 
-	tracker.ReplaceEventStoreWriteBytes(map[node.ID]uint64{
-		"node1": 100,
-		"node2": 200,
+	tracker.ReplaceEventStoreWriteBytesPerSecond([]*heartbeatpb.NodeResourceUsage{
+		{NodeId: "node1", EventStoreWriteBytesPerSecond: 10},
+		{NodeId: "node2", EventStoreWriteBytesPerSecond: 20},
 	}, heartbeatpb.NodeResourceUsageStatus_AVAILABLE)
-	_, status := tracker.EventStoreWriteBytesDelta(nodeIDs)
-	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE, status)
-
-	now = now.Add(time.Second)
-	tracker.ReplaceEventStoreWriteBytes(map[node.ID]uint64{
-		"node1": 110,
-		"node2": 220,
-	}, heartbeatpb.NodeResourceUsageStatus_AVAILABLE)
-	delta, status := tracker.EventStoreWriteBytesDelta(nodeIDs)
+	rate, status := tracker.EventStoreWriteBytesPerSecond(nodeIDs)
 	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_AVAILABLE, status)
-	require.Equal(t, map[node.ID]uint64{"node1": 10, "node2": 20}, delta)
+	require.Equal(t, map[node.ID]uint64{"node1": 10, "node2": 20}, rate)
 
-	deltaAgain, status := tracker.EventStoreWriteBytesDelta(nodeIDs)
+	rateAgain, status := tracker.EventStoreWriteBytesPerSecond(nodeIDs)
 	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_AVAILABLE, status)
-	require.Equal(t, delta, deltaAgain)
+	require.Equal(t, rate, rateAgain)
 	require.Zero(t, testing.AllocsPerRun(100, func() {
-		tracker.EventStoreWriteBytesDelta(nodeIDs)
+		tracker.EventStoreWriteBytesPerSecond(nodeIDs)
 	}))
 
 	now = now.Add(nodeResourceUsageStaleThreshold + time.Nanosecond)
-	_, status = tracker.EventStoreWriteBytesDelta(nodeIDs)
+	_, status = tracker.EventStoreWriteBytesPerSecond(nodeIDs)
 	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE, status)
-
-	// Fresh reports after an interruption establish a new baseline. They must
-	// not be compared with counters from before the interruption.
-	tracker.ReplaceEventStoreWriteBytes(map[node.ID]uint64{
-		"node1": 200,
-		"node2": 400,
-	}, heartbeatpb.NodeResourceUsageStatus_AVAILABLE)
-	_, status = tracker.EventStoreWriteBytesDelta(nodeIDs)
-	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE, status)
-
-	now = now.Add(time.Second)
-	tracker.ReplaceEventStoreWriteBytes(map[node.ID]uint64{
-		"node1": 230,
-		"node2": 440,
-	}, heartbeatpb.NodeResourceUsageStatus_AVAILABLE)
-	delta, status = tracker.EventStoreWriteBytesDelta(nodeIDs)
-	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_AVAILABLE, status)
-	require.Equal(t, map[node.ID]uint64{"node1": 30, "node2": 40}, delta)
 }
 
 func TestNodeResourceUsageTrackerDistinguishesUnsupportedAndIncomplete(t *testing.T) {
 	tracker := NewNodeResourceUsageTracker()
 	nodeIDs := []node.ID{"node1", "node2"}
 
-	_, status := tracker.EventStoreWriteBytesDelta(nodeIDs)
+	_, status := tracker.EventStoreWriteBytesPerSecond(nodeIDs)
+	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE, status)
+
+	tracker.ReplaceEventStoreWriteBytesPerSecond(nil, heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED)
+	_, status = tracker.EventStoreWriteBytesPerSecond(nodeIDs)
 	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED, status)
 
-	tracker.ReplaceEventStoreWriteBytes(nil, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE)
-	_, status = tracker.EventStoreWriteBytesDelta(nodeIDs)
+	tracker.ReplaceEventStoreWriteBytesPerSecond(nil, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE)
+	_, status = tracker.EventStoreWriteBytesPerSecond(nodeIDs)
 	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE, status)
 }

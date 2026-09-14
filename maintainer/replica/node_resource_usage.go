@@ -26,30 +26,27 @@ import (
 // incomplete and suppressing traffic-driven moves.
 const nodeResourceUsageStaleThreshold = 5 * time.Second
 
-// NodeResourceUsageTracker converts cluster-wide cumulative counters into one
-// immutable delta snapshot shared by all local changefeed group checkers.
+// NodeResourceUsageTracker stores one immutable rate snapshot shared by all
+// local changefeed group checkers.
 type NodeResourceUsageTracker struct {
-	mu                   sync.RWMutex
-	previousWriteBytes   map[node.ID]uint64
-	eventStoreWriteDelta map[node.ID]uint64
-	status               heartbeatpb.NodeResourceUsageStatus
-	updatedAt            time.Time
-	now                  func() time.Time
+	mu                            sync.RWMutex
+	eventStoreWriteBytesPerSecond map[node.ID]uint64
+	status                        heartbeatpb.NodeResourceUsageStatus
+	updatedAt                     time.Time
+	now                           func() time.Time
 }
 
 func NewNodeResourceUsageTracker() *NodeResourceUsageTracker {
 	return &NodeResourceUsageTracker{
-		status: heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED,
+		status: heartbeatpb.NodeResourceUsageStatus_INCOMPLETE,
 		now:    time.Now,
 	}
 }
 
-// ReplaceEventStoreWriteBytes atomically replaces the cluster snapshot and
-// computes one delta map for all group checkers. Incomplete telemetry clears
-// the baseline; unsupported telemetry preserves the rolling-upgrade fallback.
-// The tracker takes ownership of writeBytes and never mutates it.
-func (t *NodeResourceUsageTracker) ReplaceEventStoreWriteBytes(
-	writeBytes map[node.ID]uint64,
+// ReplaceEventStoreWriteBytesPerSecond atomically replaces the cluster-wide
+// rate snapshot computed by the coordinator.
+func (t *NodeResourceUsageTracker) ReplaceEventStoreWriteBytesPerSecond(
+	usages []*heartbeatpb.NodeResourceUsage,
 	status heartbeatpb.NodeResourceUsageStatus,
 ) {
 	t.mu.Lock()
@@ -60,40 +57,32 @@ func (t *NodeResourceUsageTracker) ReplaceEventStoreWriteBytes(
 		if status != heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED {
 			status = heartbeatpb.NodeResourceUsageStatus_INCOMPLETE
 		}
-		t.previousWriteBytes = nil
-		t.eventStoreWriteDelta = nil
+		t.eventStoreWriteBytesPerSecond = nil
 		t.status = status
 		t.updatedAt = now
 		return
 	}
 
-	current := writeBytes
-	previous := t.previousWriteBytes
-	previousIsFresh := !t.updatedAt.IsZero() && now.Sub(t.updatedAt) <= nodeResourceUsageStaleThreshold
-	t.previousWriteBytes = current
-	t.eventStoreWriteDelta = nil
-	t.status = heartbeatpb.NodeResourceUsageStatus_INCOMPLETE
-	t.updatedAt = now
-	if !previousIsFresh || len(previous) != len(current) {
-		return
-	}
-
-	delta := make(map[node.ID]uint64, len(current))
-	for nodeID, currentValue := range current {
-		previousValue, ok := previous[nodeID]
-		if !ok || currentValue < previousValue {
+	rates := make(map[node.ID]uint64, len(usages))
+	for _, usage := range usages {
+		if usage == nil || usage.NodeId == "" {
+			t.eventStoreWriteBytesPerSecond = nil
+			t.status = heartbeatpb.NodeResourceUsageStatus_INCOMPLETE
+			t.updatedAt = now
 			return
 		}
-		delta[nodeID] = currentValue - previousValue
+		nodeID := node.ID(usage.NodeId)
+		rates[nodeID] = usage.EventStoreWriteBytesPerSecond
 	}
-	t.eventStoreWriteDelta = delta
+	t.updatedAt = now
+	t.eventStoreWriteBytesPerSecond = rates
 	t.status = heartbeatpb.NodeResourceUsageStatus_AVAILABLE
 }
 
-// EventStoreWriteBytesDelta returns a shared immutable delta snapshot and its
+// EventStoreWriteBytesPerSecond returns a shared immutable rate snapshot and its
 // availability. Unsupported means callers may use the legacy policy during a
 // rolling upgrade. Incomplete means resource-aware moves must be suppressed.
-func (t *NodeResourceUsageTracker) EventStoreWriteBytesDelta(
+func (t *NodeResourceUsageTracker) EventStoreWriteBytesPerSecond(
 	nodeIDs []node.ID,
 ) (map[node.ID]uint64, heartbeatpb.NodeResourceUsageStatus) {
 	t.mu.RLock()
@@ -107,9 +96,9 @@ func (t *NodeResourceUsageTracker) EventStoreWriteBytesDelta(
 		return nil, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE
 	}
 	for _, nodeID := range nodeIDs {
-		if _, ok := t.eventStoreWriteDelta[nodeID]; !ok {
+		if _, ok := t.eventStoreWriteBytesPerSecond[nodeID]; !ok {
 			return nil, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE
 		}
 	}
-	return t.eventStoreWriteDelta, heartbeatpb.NodeResourceUsageStatus_AVAILABLE
+	return t.eventStoreWriteBytesPerSecond, heartbeatpb.NodeResourceUsageStatus_AVAILABLE
 }

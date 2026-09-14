@@ -15,5 +15,5 @@ package heartbeatpb
 
 const (
 	LegacyNodeResourceUsageProtocolVersion  uint32 = 0
-	CurrentNodeResourceUsageProtocolVersion uint32 = 1
+	CurrentNodeResourceUsageProtocolVersion uint32 = 2
 )

@@ -562,10 +562,14 @@ message DispatcherSetChecksumUpdateRequest {
     DispatcherSetChecksum checksum = 5;
 }
 
-// NodeResourceUsage carries node-wide cumulative resource counters. A node
-// heartbeat request omits node_id because the sender identity is authoritative;
-// coordinator responses set it for every entry in the cluster snapshot.
+// NodeResourceUsage carries node-wide EventStore resource usage. Node heartbeat
+// requests report the cumulative counter; coordinator responses set node_id and
+// the derived rate for every entry in the cluster snapshot.
 message NodeResourceUsage {
+    // Set by node heartbeat requests.
     uint64 event_store_write_bytes = 1;
+    // Set by coordinator heartbeat responses.
     string node_id = 2;
+    // Set by coordinator heartbeat responses.
+    uint64 event_store_write_bytes_per_second = 3;
 }

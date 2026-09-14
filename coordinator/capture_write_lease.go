@@ -33,11 +33,13 @@ const (
 )
 
 type captureLeaseNodeState struct {
-	nodeEpoch                    uint64
-	lastRequestSeq               uint64
-	resourceUsageProtocolVersion uint32
-	eventStoreWriteBytes         uint64
-	resourceUsageUpdated         time.Time
+	nodeEpoch                     uint64
+	lastRequestSeq                uint64
+	resourceUsageProtocolVersion  uint32
+	eventStoreWriteBytes          uint64
+	eventStoreWriteBytesPerSecond uint64
+	resourceUsageRateAvailable    bool
+	resourceUsageUpdated          time.Time
 }
 
 type pendingWitnessChallenge struct {
@@ -134,10 +136,25 @@ func (c *captureWriteLeaseController) handleHeartbeat(
 	state.resourceUsageProtocolVersion = heartbeat.GetNodeResourceUsageProtocolVersion()
 	usage := heartbeat.GetNodeResourceUsage()
 	if state.resourceUsageProtocolVersion == heartbeatpb.CurrentNodeResourceUsageProtocolVersion && usage != nil {
-		state.eventStoreWriteBytes = usage.GetEventStoreWriteBytes()
-		state.resourceUsageUpdated = c.now()
+		now := c.now()
+		writeBytes := usage.GetEventStoreWriteBytes()
+		if !state.resourceUsageUpdated.IsZero() && now.After(state.resourceUsageUpdated) {
+			if writeBytes >= state.eventStoreWriteBytes {
+				state.eventStoreWriteBytesPerSecond = uint64(
+					float64(writeBytes-state.eventStoreWriteBytes) /
+						now.Sub(state.resourceUsageUpdated).Seconds())
+				state.resourceUsageRateAvailable = true
+			} else {
+				state.resourceUsageRateAvailable = false
+			}
+		}
+		if state.resourceUsageUpdated.IsZero() || now.After(state.resourceUsageUpdated) {
+			state.eventStoreWriteBytes = writeBytes
+			state.resourceUsageUpdated = now
+		}
 	} else {
 		state.resourceUsageUpdated = time.Time{}
+		state.resourceUsageRateAvailable = false
 	}
 
 	messages := c.handleWitnessAck(from, heartbeat)
@@ -301,7 +318,7 @@ func (c *captureWriteLeaseController) nodeResourceUsageSnapshot() (
 	nodeIDs := make([]node.ID, 0, len(c.activeNodes))
 	for nodeID := range c.activeNodes {
 		state := c.nodes[nodeID]
-		if state.resourceUsageUpdated.IsZero() ||
+		if !state.resourceUsageRateAvailable || state.resourceUsageUpdated.IsZero() ||
 			now.Sub(state.resourceUsageUpdated) > nodeResourceUsageStaleThreshold {
 			return nil, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE
 		}
@@ -312,8 +329,8 @@ func (c *captureWriteLeaseController) nodeResourceUsageSnapshot() (
 	result := make([]*heartbeatpb.NodeResourceUsage, 0, len(nodeIDs))
 	for _, nodeID := range nodeIDs {
 		result = append(result, &heartbeatpb.NodeResourceUsage{
-			NodeId:               nodeID.String(),
-			EventStoreWriteBytes: c.nodes[nodeID].eventStoreWriteBytes,
+			NodeId:                        nodeID.String(),
+			EventStoreWriteBytesPerSecond: c.nodes[nodeID].eventStoreWriteBytesPerSecond,
 		})
 	}
 	return result, heartbeatpb.NodeResourceUsageStatus_AVAILABLE

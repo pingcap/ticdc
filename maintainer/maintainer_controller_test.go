@@ -157,6 +157,8 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1", false)
 	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	resourceUsageTracker := replica.NewNodeResourceUsageTracker()
+	resourceUsageTracker.ReplaceEventStoreWriteBytesPerSecond(nil, heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED)
 	s := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
 			EnableTableAcrossNodes: util.AddressOf(true),
@@ -165,7 +167,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 			MinTrafficPercentage:   util.AddressOf(0.8),
 			MaxTrafficPercentage:   util.AddressOf(1.2),
 		},
-	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
+	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, resourceUsageTracker)
 
 	nodeID := node.ID("node1")
 	for i := range 100 {
@@ -289,6 +291,8 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1", false)
 	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	resourceUsageTracker := replica.NewNodeResourceUsageTracker()
+	resourceUsageTracker.ReplaceEventStoreWriteBytesPerSecond(nil, heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED)
 	s := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
 			EnableTableAcrossNodes: util.AddressOf(true),
@@ -297,7 +301,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 			MinTrafficPercentage:   util.AddressOf(0.8),
 			MaxTrafficPercentage:   util.AddressOf(1.2),
 		},
-	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
+	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, resourceUsageTracker)
 
 	regionCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
 
@@ -511,6 +515,8 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		}, "node1", false)
 
 	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	resourceUsageTracker := replica.NewNodeResourceUsageTracker()
+	resourceUsageTracker.ReplaceEventStoreWriteBytesPerSecond(nil, heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED)
 	controller := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
 			EnableTableAcrossNodes:     util.AddressOf(true),
@@ -521,7 +527,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 			MinTrafficPercentage:       util.AddressOf(0.8),
 			MaxTrafficPercentage:       util.AddressOf(1.2),
 		},
-	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, replica.NewNodeResourceUsageTracker())
+	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0, resourceUsageTracker)
 
 	nodeIDList := []node.ID{"node1", "node2", "node3"}
 	// make a group

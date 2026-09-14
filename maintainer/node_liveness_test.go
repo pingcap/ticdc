@@ -348,8 +348,8 @@ func TestNodeHeartbeatReportsAndReceivesResourceUsage(t *testing.T) {
 			RequestSeq:         heartbeat.WriteLeaseRequestSeq,
 			LeaseDurationMs:    0,
 			NodeResourceUsages: []*heartbeatpb.NodeResourceUsage{
-				{NodeId: "n1", EventStoreWriteBytes: 123},
-				{NodeId: "n2", EventStoreWriteBytes: 456},
+				{NodeId: "n1", EventStoreWriteBytesPerSecond: 10},
+				{NodeId: "n2", EventStoreWriteBytesPerSecond: 20},
 			},
 			NodeResourceUsageStatus: heartbeatpb.NodeResourceUsageStatus_AVAILABLE,
 		},
@@ -357,8 +357,9 @@ func TestNodeHeartbeatReportsAndReceivesResourceUsage(t *testing.T) {
 	responseMessage.From = m.coordinatorID
 	m.onNodeHeartbeatResponse(responseMessage)
 
-	_, status := m.nodeResourceUsage.EventStoreWriteBytesDelta([]node.ID{"n1", "n2"})
-	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE, status)
+	rate, status := m.nodeResourceUsage.EventStoreWriteBytesPerSecond([]node.ID{"n1", "n2"})
+	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_AVAILABLE, status)
+	require.Equal(t, map[node.ID]uint64{"n1": 10, "n2": 20}, rate)
 
 	m.sendNodeHeartbeat(true)
 	heartbeatMessage = <-mc.GetMessageChannel()
@@ -372,8 +373,8 @@ func TestNodeHeartbeatReportsAndReceivesResourceUsage(t *testing.T) {
 			RequestSeq:         heartbeat.WriteLeaseRequestSeq,
 			LeaseDurationMs:    0,
 			NodeResourceUsages: []*heartbeatpb.NodeResourceUsage{
-				{NodeId: "n1", EventStoreWriteBytes: 133},
-				{NodeId: "n2", EventStoreWriteBytes: 476},
+				{NodeId: "n1", EventStoreWriteBytesPerSecond: 30},
+				{NodeId: "n2", EventStoreWriteBytesPerSecond: 40},
 			},
 			NodeResourceUsageStatus: heartbeatpb.NodeResourceUsageStatus_AVAILABLE,
 		},
@@ -381,9 +382,9 @@ func TestNodeHeartbeatReportsAndReceivesResourceUsage(t *testing.T) {
 	responseMessage.From = m.coordinatorID
 	m.onNodeHeartbeatResponse(responseMessage)
 
-	delta, status := m.nodeResourceUsage.EventStoreWriteBytesDelta([]node.ID{"n1", "n2"})
+	rate, status = m.nodeResourceUsage.EventStoreWriteBytesPerSecond([]node.ID{"n1", "n2"})
 	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_AVAILABLE, status)
-	require.Equal(t, map[node.ID]uint64{"n1": 10, "n2": 20}, delta)
+	require.Equal(t, map[node.ID]uint64{"n1": 30, "n2": 40}, rate)
 }
 
 func TestNodeHeartbeatResponseUpdatesClusterP2PMode(t *testing.T) {
