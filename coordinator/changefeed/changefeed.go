@@ -165,31 +165,27 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 		newStatus = &statusWithMonotonicCheckpoint
 	}
 
-	if newStatus.CheckpointTs >= old.CheckpointTs {
-		c.status.Store(newStatus)
+	c.status.Store(newStatus)
 
-		changed, state, err := c.backoff.checkFailedStatus(newStatus)
-		if state == config.StateFailed {
-			return changed, state, err
-		}
-
-		if old.BootstrapDone != newStatus.BootstrapDone {
-			log.Info("Received changefeed status with bootstrapDone",
-				zap.Stringer("changefeed", c.ID),
-				zap.Bool("bootstrapDone", newStatus.BootstrapDone))
-			return true, config.StateNormal, nil
-		}
-
-		info := c.GetInfo()
-		// the changefeed reaches the targetTs
-		if info.TargetTs != 0 && newStatus.CheckpointTs >= info.TargetTs {
-			return true, config.StateFinished, nil
-		}
-
-		return c.backoff.CheckStatus(newStatus)
+	changed, state, err := c.backoff.checkFailedStatus(newStatus)
+	if state == config.StateFailed {
+		return changed, state, err
 	}
 
-	return false, config.StateNormal, nil
+	if old.BootstrapDone != newStatus.BootstrapDone {
+		log.Info("Received changefeed status with bootstrapDone",
+			zap.Stringer("changefeed", c.ID),
+			zap.Bool("bootstrapDone", newStatus.BootstrapDone))
+		return true, config.StateNormal, nil
+	}
+
+	info := c.GetInfo()
+	// the changefeed reaches the targetTs
+	if info.TargetTs != 0 && newStatus.CheckpointTs >= info.TargetTs {
+		return true, config.StateFinished, nil
+	}
+
+	return c.backoff.CheckStatus(newStatus)
 }
 
 func (c *Changefeed) GetLogCoordinatorResolvedTs() uint64 {
