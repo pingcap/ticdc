@@ -1797,8 +1797,7 @@ func verifyRouteConflict(
 	ineligibleTables []common.TableName,
 	replicaCfg *config.ReplicaConfig,
 ) error {
-	if len(eligibleTables)+len(ineligibleTables) == 0 || replicaCfg == nil ||
-		replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
+	if replicaCfg == nil || replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
 		return nil
 	}
 	if util.GetOrZero(replicaCfg.ForceReplicate) {
