@@ -98,7 +98,17 @@ func (c *Controller) FinishBootstrap(
 	}
 
 	// Step 2: Load tables from schema store
-	tables, err := c.loadTables(startTs)
+	// Share the filter and schema store across snapshot and DDL history queries in both modes.
+	// Use an empty timezone because table filtering does not need it.
+	f, err := filter.NewFilter(c.replicaConfig.Filter, "", util.GetOrZero(c.replicaConfig.CaseSensitive), util.GetOrZero(c.replicaConfig.ForceReplicate))
+	if err != nil {
+		log.Error("load table from scheme store failed",
+			zap.String("changefeed", c.changefeedID.Name()),
+			zap.Error(err))
+		return nil, err
+	}
+	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
+	tables, err := c.loadTables(startTs, schemaStore, f)
 	if err != nil {
 		log.Error("load table from scheme store failed",
 			zap.String("changefeed", c.changefeedID.Name()),
@@ -112,7 +122,7 @@ func (c *Controller) FinishBootstrap(
 		redoSchemaInfos    map[int64]*heartbeatpb.SchemaInfo
 	)
 	if c.enableRedo {
-		redoTables, err = c.loadTables(redoStartTs)
+		redoTables, err = c.loadTables(redoStartTs, schemaStore, f)
 		if err != nil {
 			log.Error("load table from scheme store failed",
 				zap.String("changefeed", c.changefeedID.Name()),
@@ -122,13 +132,13 @@ func (c *Controller) FinishBootstrap(
 	}
 
 	// Step 3: Build working task map from bootstrap responses and Process tables and build schema info
-	addedTables, err := c.loadBootstrapAddedTables(allNodesResp, tables, startTs, common.DefaultMode)
+	addedTables, err := c.loadBootstrapAddedTables(allNodesResp, tables, startTs, common.DefaultMode, schemaStore, f)
 	if err != nil {
 		return nil, err
 	}
 	var redoAddedTables map[int64]bootstrapAddedTable
 	if c.enableRedo {
-		redoAddedTables, err = c.loadBootstrapAddedTables(allNodesResp, redoTables, redoStartTs, common.RedoMode)
+		redoAddedTables, err = c.loadBootstrapAddedTables(allNodesResp, redoTables, redoStartTs, common.RedoMode, schemaStore, f)
 		if err != nil {
 			return nil, err
 		}
@@ -443,6 +453,8 @@ func (c *Controller) loadBootstrapAddedTables(
 	tables []commonEvent.Table,
 	startTs uint64,
 	mode int64,
+	schemaStore schemastore.SchemaStore,
+	f filter.Filter,
 ) (map[int64]bootstrapAddedTable, error) {
 	knownTables := buildTableSplitMap(tables)
 	candidates := make(map[int64]uint64)
@@ -473,11 +485,6 @@ func (c *Controller) loadBootstrapAddedTables(
 		return nil, nil
 	}
 
-	f, err := filter.NewFilter(c.replicaConfig.Filter, "", util.GetOrZero(c.replicaConfig.CaseSensitive), util.GetOrZero(c.replicaConfig.ForceReplicate))
-	if err != nil {
-		return nil, err
-	}
-	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
 	dispatcherID := c.getSpanController(mode).GetDDLDispatcherID()
 	addedTables := make(map[int64]bootstrapAddedTable)
 	for cursor := startTs; cursor < endTs && len(candidates) > 0; {
@@ -554,16 +561,8 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 	)
 }
 
-func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
-	// Use a empty timezone because table filter does not need it.
-	f, err := filter.NewFilter(c.replicaConfig.Filter, "", util.GetOrZero(c.replicaConfig.CaseSensitive), util.GetOrZero(c.replicaConfig.ForceReplicate))
-	if err != nil {
-		return nil, errors.Cause(err)
-	}
-
-	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
-	tables, err := schemaStore.GetAllPhysicalTables(c.keyspaceMeta, startTs, f)
-	return tables, err
+func (c *Controller) loadTables(startTs uint64, schemaStore schemastore.SchemaStore, f filter.Filter) ([]commonEvent.Table, error) {
+	return schemaStore.GetAllPhysicalTables(c.keyspaceMeta, startTs, f)
 }
 
 func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool, enableActiveActive bool) *heartbeatpb.SchemaInfo {
