@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -414,10 +415,12 @@ func (p *persistentStorage) getTableInfoForDDL(tableID int64, ts uint64) (*commo
 	end := sort.Search(len(history), func(i int) bool { return history[i] > ts })
 	history = history[:end]
 	p.mu.RUnlock()
-	defer storageSnap.Close()
+	defer func() {
+		_ = storageSnap.Close()
+	}()
 
-	for i := len(history) - 1; i >= 0; i-- {
-		event := readPersistedDDLEventWithEncryption(storageSnap, history[i], p.encryptionManager, p.keyspaceID)
+	for _, version := range slices.Backward(history) {
+		event := readPersistedDDLEventWithEncryption(storageSnap, version, p.encryptionManager, p.keyspaceID)
 		handler := allDDLHandlers[model.ActionType(event.Type)]
 		tableInfo, deleted := handler.extractTableInfoFunc(&event, tableID)
 		if tableInfo != nil {

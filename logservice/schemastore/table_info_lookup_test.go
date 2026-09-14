@@ -167,7 +167,7 @@ func TestGetTableInfoForDDLConcurrentGC(t *testing.T) {
 	readerDone := make(chan lookupResult, 1)
 	go func() {
 		var result lookupResult
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			result.info, result.err = storage.getTableInfoForDDL(100, 50)
 			if result.err != nil || result.info.GetTableName() != "a" || !result.info.IsEligible(false) {
 				break
