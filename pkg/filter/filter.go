@@ -259,7 +259,7 @@ func isAllowedDDL(actionType timodel.ActionType) bool {
 func IsSchemaDDL(actionType timodel.ActionType) bool {
 	switch actionType {
 	case timodel.ActionCreateSchema, timodel.ActionDropSchema,
-		timodel.ActionModifySchemaCharsetAndCollate:
+		timodel.ActionModifySchemaCharsetAndCollate, timodel.ActionRecoverSchema:
 		return true
 	default:
 		return false

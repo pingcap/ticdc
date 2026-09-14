@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/tidb/pkg/kv"
+	"github.com/pingcap/tidb/pkg/meta"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -720,6 +721,12 @@ func (p *persistentStorage) persistUpperBoundPeriodically(ctx context.Context) {
 }
 
 func (p *persistentStorage) handleDDLJob(job *model.Job) error {
+	if job.Type == model.ActionRecoverSchema {
+		if err := p.prepareRecoverSchemaJob(job); err != nil {
+			return err
+		}
+	}
+
 	p.mu.Lock()
 
 	if shouldSkipDDL(job, p.tableMap) {
@@ -819,6 +826,52 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	return nil
 }
 
+func (p *persistentStorage) prepareRecoverSchemaJob(job *model.Job) error {
+	args, err := model.GetRecoverArgs(job)
+	if err != nil {
+		return errors.WrapError(errors.ErrDDLEventError, err)
+	}
+	if args.RecoverInfo == nil || args.RecoverInfo.DBInfo == nil {
+		return errors.ErrDDLEventError.GenWithStackByArgs()
+	}
+	if !args.RecoverInfo.LoadTablesOnExecute || len(args.RecoverInfo.RecoverTableInfos) > 0 {
+		return nil
+	}
+	if p.kvStorage == nil {
+		return errors.ErrDDLEventError.GenWithStackByArgs()
+	}
+
+	ctx := p.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	snapshot := p.kvStorage.GetSnapshot(kv.NewVersion(args.RecoverInfo.SnapshotTS))
+	tables, err := meta.NewReader(snapshot).ListTables(ctx, args.RecoverInfo.DBInfo.ID)
+	if err != nil {
+		return errors.WrapError(errors.ErrDDLEventError, err)
+	}
+	args.RecoverInfo.RecoverTableInfos = make([]*model.RecoverTableInfo, 0, len(tables))
+	for _, tableInfo := range tables {
+		if tableInfo == nil {
+			return errors.ErrDDLEventError.GenWithStackByArgs()
+		}
+		args.RecoverInfo.RecoverTableInfos = append(args.RecoverInfo.RecoverTableInfos, &model.RecoverTableInfo{
+			SchemaID:      args.RecoverInfo.DBInfo.ID,
+			TableInfo:     tableInfo,
+			DropJobID:     args.RecoverInfo.DropJobID,
+			SnapshotTS:    args.RecoverInfo.SnapshotTS,
+			OldSchemaName: args.RecoverInfo.OldSchemaName.O,
+			OldTableName:  tableInfo.Name.O,
+		})
+	}
+	if job.Version == model.JobVersion1 {
+		if _, err := job.Encode(true); err != nil {
+			return errors.WrapError(errors.ErrDDLEventError, err)
+		}
+	}
+	return nil
+}
+
 func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	switch job.Type {
 	// Skipping ActionCreateTable and ActionCreateTables when the table already exists:
@@ -880,7 +933,6 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 		model.ActionAlterCacheTable,
 		model.ActionAlterNoCacheTable,
 		model.ActionFlashbackCluster,
-		model.ActionRecoverSchema,
 		model.ActionCreateResourceGroup,
 		model.ActionAlterResourceGroup,
 		model.ActionDropResourceGroup:

@@ -40,6 +40,7 @@ var ddlWhiteListMap = map[timodel.ActionType]bf.EventType{
 	timodel.ActionCreateSchema:                  bf.CreateDatabase,
 	timodel.ActionDropSchema:                    bf.DropDatabase,
 	timodel.ActionModifySchemaCharsetAndCollate: bf.ModifySchemaCharsetAndCollate,
+	timodel.ActionRecoverSchema:                 bf.CreateDatabase,
 
 	// table related DDLs
 	timodel.ActionCreateTable:                  bf.CreateTable,
@@ -148,7 +149,6 @@ var singleTableDDLs = map[timodel.ActionType]struct{}{
 	// timodel.ActionRepairTable,
 	// timodel.ActionCreatePlacementPolicy, timodel.ActionAlterPlacementPolicy,
 	// timodel.ActionDropPlacementPolicy,
-	// timodel.ActionRecoverSchema,
 }
 
 // multiTableDDLs affect multiple tables.
@@ -173,6 +173,7 @@ var globalTableDDLs = map[timodel.ActionType]struct{}{
 	timodel.ActionDropTable:                     {},
 	timodel.ActionCreateTables:                  {},
 	timodel.ActionRecoverTable:                  {},
+	timodel.ActionRecoverSchema:                 {},
 }
 
 func ShouldBlock(action timodel.ActionType) bool {
@@ -184,7 +185,8 @@ func ShouldBlock(action timodel.ActionType) bool {
 	}
 	switch action {
 	case timodel.ActionCreateSchema, timodel.ActionCreateTables,
-		timodel.ActionCreateTable, timodel.ActionRecoverTable:
+		timodel.ActionCreateTable, timodel.ActionRecoverTable,
+		timodel.ActionRecoverSchema:
 		// not block since there are no affected dispatchers.
 		return false
 	default:

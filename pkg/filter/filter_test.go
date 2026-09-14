@@ -946,7 +946,7 @@ func TestIsEligible(t *testing.T) {
 }
 
 func TestIsAllowedDDL(t *testing.T) {
-	require.Len(t, ddlWhiteListMap, 41)
+	require.Len(t, ddlWhiteListMap, 42)
 	type testCase struct {
 		model.ActionType
 		allowed bool
@@ -971,6 +971,7 @@ func TestIsSchemaDDL(t *testing.T) {
 		{model.ActionCreateSchema, true},
 		{model.ActionDropSchema, true},
 		{model.ActionModifySchemaCharsetAndCollate, true},
+		{model.ActionRecoverSchema, true},
 		{model.ActionCreateTable, false},
 		{model.ActionDropTable, false},
 		{model.ActionTruncateTable, false},

@@ -351,6 +351,15 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNewTableDDL,
 	},
+	model.ActionRecoverSchema: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForRecoverSchema,
+		updateDDLHistoryFunc:       updateDDLHistoryForCreateTables,
+		updateFullTableInfoFunc:    updateFullTableInfoForMultiTablesDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForRecoverSchema,
+		iterateEventTablesFunc:     iterateEventTablesForCreateTables,
+		extractTableInfoFunc:       extractTableInfoFuncForCreateTables,
+		buildDDLEventFunc:          buildDDLEventForRecoverSchema,
+	},
 	model.ActionModifySchemaCharsetAndCollate: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForSchemaDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForSchemaDDL,
@@ -592,6 +601,28 @@ func buildPersistedDDLEventForSchemaDDL(args buildPersistedDDLEventFuncArgs) Per
 		zap.Int64("schemaID", event.SchemaID),
 		zap.String("schemaName", event.DBInfo.Name.O))
 	event.SchemaName = event.DBInfo.Name.O
+	return event
+}
+
+func buildPersistedDDLEventForRecoverSchema(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
+	recoverArgs, err := model.GetRecoverArgs(args.job)
+	if err != nil {
+		log.Panic("GetRecoverArgs failed", zap.Error(err))
+	}
+	if recoverArgs.RecoverInfo == nil || recoverArgs.RecoverInfo.DBInfo == nil {
+		log.Panic("recover schema info is missing")
+	}
+	event.SchemaID = recoverArgs.RecoverInfo.DBInfo.ID
+	event.SchemaName = recoverArgs.RecoverInfo.DBInfo.Name.O
+	event.DBInfo = recoverArgs.RecoverInfo.DBInfo
+	event.MultipleTableInfos = make([]*model.TableInfo, 0, len(recoverArgs.RecoverInfo.RecoverTableInfos))
+	for _, recoverTableInfo := range recoverArgs.RecoverInfo.RecoverTableInfos {
+		if recoverTableInfo == nil || recoverTableInfo.TableInfo == nil {
+			log.Panic("recovered table info is missing")
+		}
+		event.MultipleTableInfos = append(event.MultipleTableInfos, recoverTableInfo.TableInfo)
+	}
 	return event
 }
 
@@ -1609,6 +1640,15 @@ func updateSchemaMetadataForCreateTables(args updateSchemaMetadataFuncArgs) {
 	}
 }
 
+func updateSchemaMetadataForRecoverSchema(args updateSchemaMetadataFuncArgs) {
+	schemaID := args.event.SchemaID
+	args.databaseMap[schemaID] = &BasicDatabaseInfo{
+		Name:   args.event.SchemaName,
+		Tables: make(map[int64]bool),
+	}
+	updateSchemaMetadataForCreateTables(args)
+}
+
 func updateSchemaMetadataForReorganizePartition(args updateSchemaMetadataFuncArgs) {
 	tableID := args.event.TableID
 	physicalIDs := getAllPartitionIDs(args.event.TableInfo)
@@ -2120,6 +2160,58 @@ func buildDDLEventForCreateSchema(rawEvent *PersistedDDLEvent, tableFilter filte
 		TableIDs:      []int64{common.DDLSpanTableID},
 	}
 	return ddlEvent, true, err
+}
+
+func buildDDLEventForRecoverSchema(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
+	if err != nil {
+		return commonEvent.DDLEvent{}, false, err
+	}
+	if !ok {
+		return ddlEvent, false, err
+	}
+
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeNormal,
+		TableIDs:      []int64{common.DDLSpanTableID},
+	}
+	ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0)
+	ddlEvent.MultipleTableInfos = make([]*common.TableInfo, 0, len(rawEvent.MultipleTableInfos))
+	ddlEvent.TableNameChange = &commonEvent.TableNameChange{}
+	for _, tableInfo := range rawEvent.MultipleTableInfos {
+		filtered, notSync, err := filterDDL(
+			tableFilter, rawEvent.SchemaName, tableInfo.Name.O, rawEvent.Query,
+			model.ActionRecoverTable, tableInfo, rawEvent.StartTs)
+		if err != nil {
+			return commonEvent.DDLEvent{}, false, err
+		}
+		if filtered {
+			continue
+		}
+		if isPartitionTable(tableInfo) {
+			for _, partitionID := range getAllPartitionIDs(tableInfo) {
+				ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
+					SchemaID:  rawEvent.SchemaID,
+					TableID:   partitionID,
+					Splitable: isSplitable(tableInfo),
+				})
+			}
+		} else {
+			ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
+				SchemaID:  rawEvent.SchemaID,
+				TableID:   tableInfo.ID,
+				Splitable: isSplitable(tableInfo),
+			})
+		}
+		ddlEvent.TableNameChange.AddName = append(ddlEvent.TableNameChange.AddName, commonEvent.SchemaTableName{
+			SchemaName: rawEvent.SchemaName,
+			TableName:  tableInfo.Name.O,
+		})
+		if !notSync {
+			ddlEvent.MultipleTableInfos = append(ddlEvent.MultipleTableInfos, common.WrapTableInfo(rawEvent.SchemaName, tableInfo))
+		}
+	}
+	return ddlEvent, true, nil
 }
 
 func buildDDLEventForDropSchema(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
