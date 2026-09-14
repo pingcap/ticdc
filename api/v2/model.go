@@ -506,14 +506,28 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		}
 		var debeziumConfig *config.DebeziumConfig
 		if c.Sink.DebeziumConfig != nil {
+			// Fall back to the default when OutputOldValue is omitted.
+			outputOldValue := config.DefaultDebeziumOutputOldValue
+			if c.Sink.DebeziumConfig.OutputOldValue != nil {
+				outputOldValue = *c.Sink.DebeziumConfig.OutputOldValue
+			}
 			debeziumConfig = &config.DebeziumConfig{
-				OutputOldValue: c.Sink.DebeziumConfig.OutputOldValue,
+				OutputOldValue: outputOldValue,
+			}
+			if c.Sink.DebeziumConfig.IncludeStartTs != nil {
+				debeziumConfig.IncludeStartTs = util.AddressOf(*c.Sink.DebeziumConfig.IncludeStartTs)
 			}
 		}
 		var openProtocolConfig *config.OpenProtocolConfig
 		if c.Sink.OpenProtocolConfig != nil {
 			openProtocolConfig = &config.OpenProtocolConfig{
 				OutputOldValue: c.Sink.OpenProtocolConfig.OutputOldValue,
+			}
+		}
+		var simpleConfig *config.SimpleConfig
+		if c.Sink.SimpleConfig != nil && c.Sink.SimpleConfig.IncludeStartTs != nil {
+			simpleConfig = &config.SimpleConfig{
+				IncludeStartTs: util.AddressOf(*c.Sink.SimpleConfig.IncludeStartTs),
 			}
 		}
 
@@ -538,6 +552,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			SafeMode:                         c.Sink.SafeMode,
 			OpenProtocol:                     openProtocolConfig,
 			Debezium:                         debeziumConfig,
+			Simple:                           simpleConfig,
 		}
 
 		if c.Sink.TxnAtomicity != nil {
@@ -863,13 +878,22 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		var debeziumConfig *DebeziumConfig
 		if cloned.Sink.Debezium != nil {
 			debeziumConfig = &DebeziumConfig{
-				OutputOldValue: cloned.Sink.Debezium.OutputOldValue,
+				OutputOldValue: util.AddressOf(cloned.Sink.Debezium.OutputOldValue),
+			}
+			if cloned.Sink.Debezium.IncludeStartTs != nil {
+				debeziumConfig.IncludeStartTs = util.AddressOf(*cloned.Sink.Debezium.IncludeStartTs)
 			}
 		}
 		var openProtocolConfig *OpenProtocolConfig
 		if cloned.Sink.OpenProtocol != nil {
 			openProtocolConfig = &OpenProtocolConfig{
 				OutputOldValue: cloned.Sink.OpenProtocol.OutputOldValue,
+			}
+		}
+		var simpleConfig *SimpleConfig
+		if cloned.Sink.Simple != nil && cloned.Sink.Simple.IncludeStartTs != nil {
+			simpleConfig = &SimpleConfig{
+				IncludeStartTs: util.AddressOf(*cloned.Sink.Simple.IncludeStartTs),
 			}
 		}
 		res.Sink = &SinkConfig{
@@ -893,6 +917,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			SafeMode:                         cloned.Sink.SafeMode,
 			DebeziumConfig:                   debeziumConfig,
 			OpenProtocolConfig:               openProtocolConfig,
+			SimpleConfig:                     simpleConfig,
 		}
 
 		if cloned.Sink.TxnAtomicity != nil {
@@ -1156,6 +1181,7 @@ type SinkConfig struct {
 	DebeziumDisableSchema            *bool               `json:"debezium_disable_schema,omitempty"`
 	DebeziumConfig                   *DebeziumConfig     `json:"debezium,omitempty"`
 	OpenProtocolConfig               *OpenProtocolConfig `json:"open,omitempty"`
+	SimpleConfig                     *SimpleConfig       `json:"simple,omitempty"`
 }
 
 // CSVConfig denotes the csv config
@@ -1545,7 +1571,13 @@ type OpenProtocolConfig struct {
 
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
-	OutputOldValue bool `json:"output_old_value"`
+	OutputOldValue *bool `json:"output_old_value,omitempty"`
+	IncludeStartTs *bool `json:"include_start_ts,omitempty"`
+}
+
+// SimpleConfig represents the configurations for simple protocol encoding
+type SimpleConfig struct {
+	IncludeStartTs *bool `json:"include_start_ts,omitempty"`
 }
 
 type DispatcherCount struct {
