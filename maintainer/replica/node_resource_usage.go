@@ -39,7 +39,7 @@ type NodeResourceUsageTracker struct {
 
 func NewNodeResourceUsageTracker() *NodeResourceUsageTracker {
 	return &NodeResourceUsageTracker{
-		status: heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_UNSUPPORTED,
+		status: heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED,
 		now:    time.Now,
 	}
 }
@@ -56,9 +56,9 @@ func (t *NodeResourceUsageTracker) ReplaceEventStoreWriteBytes(
 	defer t.mu.Unlock()
 
 	now := t.now()
-	if status != heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE {
-		if status != heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_UNSUPPORTED {
-			status = heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE
+	if status != heartbeatpb.NodeResourceUsageStatus_AVAILABLE {
+		if status != heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED {
+			status = heartbeatpb.NodeResourceUsageStatus_INCOMPLETE
 		}
 		t.previousWriteBytes = nil
 		t.eventStoreWriteDelta = nil
@@ -72,7 +72,7 @@ func (t *NodeResourceUsageTracker) ReplaceEventStoreWriteBytes(
 	previousIsFresh := !t.updatedAt.IsZero() && now.Sub(t.updatedAt) <= nodeResourceUsageStaleThreshold
 	t.previousWriteBytes = current
 	t.eventStoreWriteDelta = nil
-	t.status = heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE
+	t.status = heartbeatpb.NodeResourceUsageStatus_INCOMPLETE
 	t.updatedAt = now
 	if !previousIsFresh || len(previous) != len(current) {
 		return
@@ -87,7 +87,7 @@ func (t *NodeResourceUsageTracker) ReplaceEventStoreWriteBytes(
 		delta[nodeID] = currentValue - previousValue
 	}
 	t.eventStoreWriteDelta = delta
-	t.status = heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE
+	t.status = heartbeatpb.NodeResourceUsageStatus_AVAILABLE
 }
 
 // EventStoreWriteBytesDelta returns a shared immutable delta snapshot and its
@@ -99,17 +99,17 @@ func (t *NodeResourceUsageTracker) EventStoreWriteBytesDelta(
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	if t.status == heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_UNSUPPORTED {
+	if t.status == heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED {
 		return nil, t.status
 	}
-	if t.status != heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE ||
+	if t.status != heartbeatpb.NodeResourceUsageStatus_AVAILABLE ||
 		t.now().Sub(t.updatedAt) > nodeResourceUsageStaleThreshold {
-		return nil, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE
+		return nil, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE
 	}
 	for _, nodeID := range nodeIDs {
 		if _, ok := t.eventStoreWriteDelta[nodeID]; !ok {
-			return nil, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE
+			return nil, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE
 		}
 	}
-	return t.eventStoreWriteDelta, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE
+	return t.eventStoreWriteDelta, heartbeatpb.NodeResourceUsageStatus_AVAILABLE
 }

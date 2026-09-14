@@ -195,7 +195,7 @@ func (m *Manager) onNodeHeartbeatResponse(msg *messaging.TargetMessage) {
 		m.writeGate.SetP2PRequired(true)
 	}
 	var resourceUsage map[node.ID]uint64
-	if response.NodeResourceUsageStatus == heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE {
+	if response.NodeResourceUsageStatus == heartbeatpb.NodeResourceUsageStatus_AVAILABLE {
 		resourceUsage = make(map[node.ID]uint64, len(response.NodeResourceUsages))
 		for _, usage := range response.NodeResourceUsages {
 			if usage == nil || usage.NodeId == "" {

@@ -351,14 +351,14 @@ func TestNodeHeartbeatReportsAndReceivesResourceUsage(t *testing.T) {
 				{NodeId: "n1", EventStoreWriteBytes: 123},
 				{NodeId: "n2", EventStoreWriteBytes: 456},
 			},
-			NodeResourceUsageStatus: heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE,
+			NodeResourceUsageStatus: heartbeatpb.NodeResourceUsageStatus_AVAILABLE,
 		},
 	)
 	responseMessage.From = m.coordinatorID
 	m.onNodeHeartbeatResponse(responseMessage)
 
 	_, status := m.nodeResourceUsage.EventStoreWriteBytesDelta([]node.ID{"n1", "n2"})
-	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE, status)
+	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE, status)
 
 	m.sendNodeHeartbeat(true)
 	heartbeatMessage = <-mc.GetMessageChannel()
@@ -375,14 +375,14 @@ func TestNodeHeartbeatReportsAndReceivesResourceUsage(t *testing.T) {
 				{NodeId: "n1", EventStoreWriteBytes: 133},
 				{NodeId: "n2", EventStoreWriteBytes: 476},
 			},
-			NodeResourceUsageStatus: heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE,
+			NodeResourceUsageStatus: heartbeatpb.NodeResourceUsageStatus_AVAILABLE,
 		},
 	)
 	responseMessage.From = m.coordinatorID
 	m.onNodeHeartbeatResponse(responseMessage)
 
 	delta, status := m.nodeResourceUsage.EventStoreWriteBytesDelta([]node.ID{"n1", "n2"})
-	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE, status)
+	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_AVAILABLE, status)
 	require.Equal(t, map[node.ID]uint64{"n1": 10, "n2": 20}, delta)
 }
 

@@ -99,9 +99,9 @@ func setEventStoreWriteBytesSnapshots(
 	previous, current map[node.ID]uint64,
 ) {
 	tracker.ReplaceEventStoreWriteBytes(
-		previous, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE)
+		previous, heartbeatpb.NodeResourceUsageStatus_AVAILABLE)
 	tracker.ReplaceEventStoreWriteBytes(
-		current, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE)
+		current, heartbeatpb.NodeResourceUsageStatus_AVAILABLE)
 }
 
 func TestSplitTableSpanIntoMultiple_Properties(t *testing.T) {

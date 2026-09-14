@@ -1063,7 +1063,7 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 	nodeResourceUsageStatus heartbeatpb.NodeResourceUsageStatus,
 ) ([]SplitSpanCheckResult, bool) {
 	results := make([]SplitSpanCheckResult, 0, 1)
-	if nodeResourceUsageStatus != heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE ||
+	if nodeResourceUsageStatus != heartbeatpb.NodeResourceUsageStatus_AVAILABLE ||
 		len(aliveNodeIDs) < 2 {
 		s.eventStoreBalanceCondition.reset()
 		return results, false
@@ -1271,13 +1271,13 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	}
 
 	targetNodeID := minTrafficNodeID
-	if nodeResourceUsageStatus == heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE {
+	if nodeResourceUsageStatus == heartbeatpb.NodeResourceUsageStatus_INCOMPLETE {
 		metrics.TrafficBalanceSkipCounter.WithLabelValues(
 			trafficBalanceSkipResourceUsageIncomplete).Inc()
 		s.balanceCondition.reset()
 		return
 	}
-	if nodeResourceUsageStatus == heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE {
+	if nodeResourceUsageStatus == heartbeatpb.NodeResourceUsageStatus_AVAILABLE {
 		// Restrict candidates to nodes below this group's average traffic, then
 		// require less node-wide EventStore work than the source. Ranking alone
 		// is insufficient when every otherwise eligible destination is busier.

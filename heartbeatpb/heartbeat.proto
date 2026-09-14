@@ -11,7 +11,6 @@ message TableSpan {
 }
 
 message HeartBeatRequest {
-    reserved 7;
     ChangefeedID changefeedID = 1;
     Watermark watermark = 2;
     Watermark redoWatermark = 3;
@@ -243,9 +242,9 @@ message NodeHeartbeatResponse {
 // NodeResourceUsageStatus distinguishes rolling-upgrade compatibility from a
 // telemetry interruption on nodes that have declared support for reporting.
 enum NodeResourceUsageStatus {
-    NODE_RESOURCE_USAGE_UNSUPPORTED = 0;
-    NODE_RESOURCE_USAGE_INCOMPLETE = 1;
-    NODE_RESOURCE_USAGE_AVAILABLE = 2;
+    UNSUPPORTED = 0;
+    INCOMPLETE = 1;
+    AVAILABLE = 2;
 }
 
 // SetNodeLivenessRequest asks a node to transition its local liveness.

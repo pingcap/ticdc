@@ -287,13 +287,13 @@ func (c *captureWriteLeaseController) nodeResourceUsageSnapshot() (
 	heartbeatpb.NodeResourceUsageStatus,
 ) {
 	if len(c.activeNodes) == 0 {
-		return nil, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_UNSUPPORTED
+		return nil, heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED
 	}
 	for nodeID := range c.activeNodes {
 		state := c.nodes[nodeID]
 		if state == nil ||
 			state.resourceUsageProtocolVersion != heartbeatpb.CurrentNodeResourceUsageProtocolVersion {
-			return nil, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_UNSUPPORTED
+			return nil, heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED
 		}
 	}
 
@@ -303,7 +303,7 @@ func (c *captureWriteLeaseController) nodeResourceUsageSnapshot() (
 		state := c.nodes[nodeID]
 		if state.resourceUsageUpdated.IsZero() ||
 			now.Sub(state.resourceUsageUpdated) > nodeResourceUsageStaleThreshold {
-			return nil, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE
+			return nil, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE
 		}
 		nodeIDs = append(nodeIDs, nodeID)
 	}
@@ -316,7 +316,7 @@ func (c *captureWriteLeaseController) nodeResourceUsageSnapshot() (
 			EventStoreWriteBytes: c.nodes[nodeID].eventStoreWriteBytes,
 		})
 	}
-	return result, heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE
+	return result, heartbeatpb.NodeResourceUsageStatus_AVAILABLE
 }
 
 func (c *captureWriteLeaseController) removeNode(id node.ID) {

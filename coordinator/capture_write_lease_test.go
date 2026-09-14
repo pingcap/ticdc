@@ -70,7 +70,7 @@ func TestCaptureWriteLeaseSharesFreshNodeResourceUsage(t *testing.T) {
 	messages := controller.handleHeartbeat(node.ID("capture-1"), secondHeartbeat, nil)
 	require.Len(t, messages, 1)
 	require.Equal(t,
-		heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_AVAILABLE,
+		heartbeatpb.NodeResourceUsageStatus_AVAILABLE,
 		requireWriteLeaseResponse(t, messages[0]).NodeResourceUsageStatus)
 	require.Equal(t, []*heartbeatpb.NodeResourceUsage{
 		{NodeId: "capture-1", EventStoreWriteBytes: 100},
@@ -87,7 +87,7 @@ func TestCaptureWriteLeaseSharesFreshNodeResourceUsage(t *testing.T) {
 	require.Len(t, messages, 1)
 	response := requireWriteLeaseResponse(t, messages[0])
 	require.Equal(t,
-		heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE,
+		heartbeatpb.NodeResourceUsageStatus_INCOMPLETE,
 		response.NodeResourceUsageStatus)
 	require.Empty(t, response.NodeResourceUsages)
 
@@ -99,7 +99,7 @@ func TestCaptureWriteLeaseSharesFreshNodeResourceUsage(t *testing.T) {
 	require.Len(t, messages, 1)
 	response = requireWriteLeaseResponse(t, messages[0])
 	require.Equal(t,
-		heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_INCOMPLETE,
+		heartbeatpb.NodeResourceUsageStatus_INCOMPLETE,
 		response.NodeResourceUsageStatus)
 	require.Empty(t, response.NodeResourceUsages)
 
@@ -111,7 +111,7 @@ func TestCaptureWriteLeaseSharesFreshNodeResourceUsage(t *testing.T) {
 	require.Len(t, messages, 1)
 	response = requireWriteLeaseResponse(t, messages[0])
 	require.Equal(t,
-		heartbeatpb.NodeResourceUsageStatus_NODE_RESOURCE_USAGE_UNSUPPORTED,
+		heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED,
 		response.NodeResourceUsageStatus)
 }
 
