@@ -1,5 +1,6 @@
 import sys
 import os
+import subprocess
 import requests as rq
 from requests.exceptions import RequestException
 import time
@@ -380,6 +381,32 @@ def remove_changefeed(cfID="changefeed-test3"):
     assert_status_code(resp, rq.codes.ok, url)
 
 
+def remove_keyspace_metadata_from_etcd(pd_cluster_id, keyspace_id, keyspace):
+    # Integrated PD does not initialize the keyspace group manager, so its
+    # public keyspace-group removal API is unavailable. Mirror PD's keyspace
+    # storage removal to construct the deleted-keyspace state needed by this
+    # TiCDC API test.
+    keys = (
+        f"/pd/{pd_cluster_id}/keyspaces/meta/{keyspace_id:08d}",
+        f"/pd/{pd_cluster_id}/keyspaces/id/{keyspace}",
+    )
+    env = os.environ.copy()
+    env["ETCDCTL_API"] = "3"
+    for key in keys:
+        result = subprocess.run(
+            ["etcdctl", f"--endpoints={PD_ADDR}", "del", key],
+            capture_output=True,
+            text=True,
+            timeout=REQUEST_TIMEOUT,
+            env=env,
+            check=False,
+        )
+        assert result.returncode == 0, \
+            f"failed to delete PD keyspace metadata {key}: {result.stderr}"
+        assert result.stdout.strip() == "1", \
+            f"PD keyspace metadata {key} does not exist"
+
+
 def manage_changefeed_after_keyspace_deleted():
     keyspace = "keyspace1"
     changefeed_id = "changefeed-deleted-keyspace"
@@ -393,15 +420,24 @@ def manage_changefeed_after_keyspace_deleted():
         "sink_uri": "blackhole://",
     }, timeout=REQUEST_TIMEOUT)
     assert_status_code(resp, rq.codes.ok, url)
+    pd_cluster_id = resp.json()["upstream_id"]
 
     # Resolve the keyspace ID and its TSO keyspace group before removing it.
     keyspace_url = PD_ADDR + "/pd/api/v2/keyspaces/" + keyspace
-    resp = rq.get(keyspace_url + "?force_refresh_group_id=true",
-                  timeout=REQUEST_TIMEOUT)
+    resp = rq.get(keyspace_url, timeout=REQUEST_TIMEOUT)
     assert_status_code(resp, rq.codes.ok, keyspace_url)
     keyspace_meta = resp.json()
     keyspace_id = keyspace_meta["id"]
-    keyspace_group_id = keyspace_meta["config"]["tso_keyspace_group_id"]
+
+    resp = rq.get(keyspace_url + "?force_refresh_group_id=true",
+                  timeout=REQUEST_TIMEOUT)
+    if resp.status_code == rq.codes.ok:
+        keyspace_group_id = resp.json()["config"]["tso_keyspace_group_id"]
+    else:
+        assert resp.status_code == rq.codes.internal_server_error and \
+            "keyspace group manager is not initialized" in resp.text, \
+            f"unexpected failure while resolving keyspace group: {resp.text}"
+        keyspace_group_id = None
 
     # A keyspace must become archived before PD can physically remove it.
     state_url = keyspace_url + "/state"
@@ -410,12 +446,17 @@ def manage_changefeed_after_keyspace_deleted():
                       timeout=REQUEST_TIMEOUT)
         assert_status_code(resp, rq.codes.ok, state_url)
 
-    remove_keyspace_url = PD_ADDR + \
-        "/pd/api/v2/tso/keyspace-groups/" + \
-        str(keyspace_group_id) + "/keyspaces"
-    resp = rq.delete(remove_keyspace_url, json={"keyspaces": [keyspace_id]},
-                     timeout=REQUEST_TIMEOUT)
-    assert_status_code(resp, rq.codes.ok, remove_keyspace_url)
+    if keyspace_group_id is not None:
+        remove_keyspace_url = PD_ADDR + \
+            "/pd/api/v2/tso/keyspace-groups/" + \
+            str(keyspace_group_id) + "/keyspaces"
+        resp = rq.delete(remove_keyspace_url,
+                         json={"keyspaces": [keyspace_id]},
+                         timeout=REQUEST_TIMEOUT)
+        assert_status_code(resp, rq.codes.ok, remove_keyspace_url)
+    else:
+        remove_keyspace_metadata_from_etcd(
+            pd_cluster_id, keyspace_id, keyspace)
 
     # Verify the keyspace is gone from PD while its changefeed metadata remains.
     resp = rq.get(keyspace_url, timeout=REQUEST_TIMEOUT)
