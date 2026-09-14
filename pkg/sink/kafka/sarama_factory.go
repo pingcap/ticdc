@@ -32,12 +32,10 @@ type saramaFactory struct {
 	metricRegistry metrics.Registry
 }
 
-// NewSaramaFactory constructs a Factory with sarama implementation.
-func NewSaramaFactory(
-	ctx context.Context,
-	o *options,
-	changefeedID common.ChangeFeedID,
-) (Factory, error) {
+func (*saramaFactory) Close() {}
+
+// newSaramaFactory constructs a Factory with sarama implementation.
+func newSaramaFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
 	start := time.Now()
 	config, err := newSaramaConfig(ctx, o)
 	duration := time.Since(start)
@@ -59,7 +57,7 @@ func NewSaramaFactory(
 		admin.Close()
 	}()
 
-	if err = adjustOptions(changefeedID, admin, o, o.Topic); err != nil {
+	if err = adjustOptions(ctx, changefeedID, admin, o, o.Topic); err != nil {
 		return nil, err
 	}
 	log.Info("kafka sink configuration resolved",
@@ -182,9 +180,7 @@ func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error
 	}, nil
 }
 
-func (f *saramaFactory) MetricsCollector(
-	adminClient AdminClient,
-) MetricsCollector {
+func (f *saramaFactory) MetricsCollector(adminClient AdminClient) MetricsCollector {
 	return &saramaMetricsCollector{
 		changefeedID: f.changefeedID,
 		adminClient:  adminClient,

@@ -38,9 +38,11 @@ import (
 )
 
 const (
-	eventStoreTopic           = messaging.EventStoreTopic
-	logCoordinatorTopic       = messaging.LogCoordinatorTopic
-	logCoordinatorClientTopic = messaging.LogCoordinatorClientTopic
+	eventStoreTopic                           = messaging.EventStoreTopic
+	logCoordinatorTopic                       = messaging.LogCoordinatorTopic
+	logCoordinatorClientTopic                 = messaging.LogCoordinatorClientTopic
+	eventBrokerDispatcherCountReportTTL       = 3 * time.Second
+	eventBrokerDispatcherCountNoReportTimeout = 5 * time.Second
 )
 
 type LogCoordinator interface {
@@ -50,6 +52,14 @@ type LogCoordinator interface {
 type requestAndTarget struct {
 	req    *logservicepb.ReusableEventServiceRequest
 	target node.ID
+}
+
+type eventBrokerDispatcherCountState struct {
+	dispatcherCount uint32
+	receivedAt      time.Time
+	// unavailableSince starts when the last report becomes unavailable. After
+	// the bounded wait, the coordinator may assume an empty dispatcher set.
+	unavailableSince time.Time
 }
 
 type changefeedState struct {
@@ -87,6 +97,11 @@ type logCoordinator struct {
 		m map[common.GID]*changefeedState
 	}
 
+	eventBrokerDispatcherCounts struct {
+		sync.RWMutex
+		m map[node.ID]eventBrokerDispatcherCountState
+	}
+
 	requestChan *chann.DrainableChann[requestAndTarget]
 }
 
@@ -100,6 +115,7 @@ func New() LogCoordinator {
 	c.nodes.m = make(map[node.ID]*node.Info)
 	c.eventStoreStates.m = make(map[node.ID]*logservicepb.EventStoreState)
 	c.changefeedStates.m = make(map[common.GID]*changefeedState)
+	c.eventBrokerDispatcherCounts.m = make(map[node.ID]eventBrokerDispatcherCountState)
 
 	// recv and handle messages
 	messageCenter.RegisterHandler(logCoordinatorTopic, c.handleMessage)
@@ -157,6 +173,10 @@ func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messagi
 			c.updateEventStoreState(targetMessage.From, msg)
 		case *logservicepb.ChangefeedStates:
 			c.updateChangefeedStates(targetMessage.From, msg)
+		case *logservicepb.EventBrokerDispatcherCount:
+			c.updateEventBrokerDispatcherCount(targetMessage.From, msg)
+		case *logservicepb.EventBrokerDispatcherCountRequest:
+			c.sendEventBrokerDispatcherCount(targetMessage.From, msg)
 		case *logservicepb.ReusableEventServiceRequest:
 			c.requestChan.In() <- requestAndTarget{
 				req:    msg,
@@ -212,6 +232,10 @@ func (c *logCoordinator) handleNodeChange(allNodes map[node.ID]*node.Info) {
 				delete(state.nodeReportPhyTs, id)
 			}
 			c.changefeedStates.Unlock()
+
+			c.eventBrokerDispatcherCounts.Lock()
+			delete(c.eventBrokerDispatcherCounts.m, id)
+			c.eventBrokerDispatcherCounts.Unlock()
 		}
 	}
 	for id, node := range allNodes {
@@ -220,6 +244,59 @@ func (c *logCoordinator) handleNodeChange(allNodes map[node.ID]*node.Info) {
 			log.Info("log coordinator detect node added", zap.String("nodeId", id.String()))
 		}
 	}
+}
+
+func (c *logCoordinator) updateEventBrokerDispatcherCount(
+	nodeID node.ID, report *logservicepb.EventBrokerDispatcherCount,
+) {
+	c.eventBrokerDispatcherCounts.Lock()
+	defer c.eventBrokerDispatcherCounts.Unlock()
+
+	c.eventBrokerDispatcherCounts.m[nodeID] = eventBrokerDispatcherCountState{
+		dispatcherCount: report.GetDispatcherCount(),
+		receivedAt:      time.Now(),
+	}
+}
+
+func (c *logCoordinator) sendEventBrokerDispatcherCount(
+	target node.ID, req *logservicepb.EventBrokerDispatcherCountRequest,
+) {
+	response := &logservicepb.EventBrokerDispatcherCountResponse{
+		TargetNodeId: req.GetTargetNodeId(),
+	}
+	targetNodeID := node.ID(req.GetTargetNodeId())
+	c.eventBrokerDispatcherCounts.Lock()
+	state, ok := c.eventBrokerDispatcherCounts.m[targetNodeID]
+	now := time.Now()
+	if !ok {
+		state.unavailableSince = now
+	}
+	if !state.receivedAt.IsZero() {
+		age := now.Sub(state.receivedAt)
+		if age < 0 {
+			age = 0
+		}
+		if age <= eventBrokerDispatcherCountReportTTL {
+			state.unavailableSince = time.Time{}
+			response.DispatcherCount = state.dispatcherCount
+			response.ReportAgeMs = uint64(age / time.Millisecond)
+			response.Observed = true
+		} else if state.unavailableSince.IsZero() {
+			state.unavailableSince = now
+		}
+	}
+	if !response.Observed && !state.unavailableSince.IsZero() &&
+		now.Sub(state.unavailableSince) >= eventBrokerDispatcherCountNoReportTimeout {
+		response.AssumedEmpty = true
+	}
+	c.eventBrokerDispatcherCounts.m[targetNodeID] = state
+	c.eventBrokerDispatcherCounts.Unlock()
+
+	_ = c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(
+		target,
+		messaging.CoordinatorTopic,
+		response,
+	))
 }
 
 func (c *logCoordinator) updateEventStoreState(nodeID node.ID, newState *logservicepb.EventStoreState) {

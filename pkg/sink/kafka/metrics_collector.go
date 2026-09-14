@@ -93,7 +93,7 @@ func (m *saramaMetricsCollector) Run(ctx context.Context) {
 }
 
 func (m *saramaMetricsCollector) updateBrokers(ctx context.Context) {
-	brokers := m.adminClient.GetAllBrokers()
+	brokers := m.adminClient.GetAllBrokers(ctx)
 	for _, b := range brokers {
 		m.brokers[b.ID] = struct{}{}
 	}
@@ -125,6 +125,7 @@ func (m *saramaMetricsCollector) collectProducerMetrics() {
 func (m *saramaMetricsCollector) collectBrokerMetrics() {
 	keyspace := m.changefeedID.Keyspace()
 	changefeedID := m.changefeedID.Name()
+
 	for id := range m.brokers {
 		brokerID := strconv.Itoa(int(id))
 		outgoingByteRateMetric := m.registry.Get(

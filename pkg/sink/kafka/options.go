@@ -14,6 +14,7 @@
 package kafka
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -40,6 +41,10 @@ const (
 	defaultMaxRetry = 5
 	// defaultTimeout is the default timeout for Kafka connections.
 	defaultTimeout = 10 * time.Second
+	// KafkaClientFranz is the default Kafka client implementation.
+	KafkaClientFranz = "franz"
+	// KafkaClientSarama keeps the master implementation available as a fallback.
+	KafkaClientSarama = "sarama"
 )
 
 const (
@@ -108,6 +113,7 @@ func requireAcksFromString(acks int) (RequiredAcks, error) {
 }
 
 type urlConfig struct {
+	KafkaClient                  *string `form:"kafka-client"`
 	PartitionNum                 *int32  `form:"partition-num"`
 	ReplicationFactor            *int16  `form:"replication-factor"`
 	KafkaVersion                 *string `form:"kafka-version"`
@@ -140,6 +146,7 @@ type urlConfig struct {
 
 // options stores Kafka sink configurations
 type options struct {
+	Client          string
 	Topic           string
 	BrokerEndpoints []string
 
@@ -177,6 +184,7 @@ type options struct {
 // NewOptions returns a default Kafka configuration
 func NewOptions() *options {
 	return &options{
+		Client:             KafkaClientFranz,
 		Version:            "2.4.0",
 		MaxMessageBytes:    config.DefaultMaxMessageBytes,
 		MaxBatchedBytes:    config.DefaultMaxMessageBytes,
@@ -262,6 +270,12 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		o.MaxMessageBytes = *urlParameter.MaxMessageBytes
 	}
 	o.MaxBatchedBytes = o.MaxMessageBytes
+	if urlParameter.KafkaClient != nil {
+		o.Client = strings.ToLower(strings.TrimSpace(*urlParameter.KafkaClient))
+	}
+	if o.Client != KafkaClientFranz && o.Client != KafkaClientSarama {
+		return errors.ErrKafkaInvalidConfig.GenWithStack("invalid kafka-client %q, only support franz and sarama", o.Client)
+	}
 
 	if urlParameter.MaxRetry != nil && *urlParameter.MaxRetry >= 0 {
 		o.MaxRetry = *urlParameter.MaxRetry
@@ -574,12 +588,12 @@ func (o *options) DeriveTopicConfig() *AutoCreateTopicConfig {
 
 // ValidateReplicationFactor checks whether a topic created with this config
 // can satisfy the configured acknowledgment requirement.
-func (c *AutoCreateTopicConfig) ValidateReplicationFactor(admin AdminClient) error {
+func (c *AutoCreateTopicConfig) ValidateReplicationFactor(ctx context.Context, admin AdminClient) error {
 	if c.RequiredAcks != WaitForAll {
 		return nil
 	}
 
-	raw, found, err := admin.GetBrokerConfig(MinInsyncReplicasConfigName)
+	raw, found, err := admin.GetBrokerConfig(ctx, MinInsyncReplicasConfigName)
 	if err != nil {
 		log.Warn("kafka broker configuration lookup failed, skipping replication factor validation",
 			zap.String("configName", MinInsyncReplicasConfigName),
@@ -636,15 +650,10 @@ func NewKafkaClientID(captureAddr string,
 // adjustOptions adjusts options with Kafka runtime metadata.
 // It overwrites MaxMessageBytes with the final producer message limit derived
 // from the topic or broker configuration.
-func adjustOptions(
-	changefeedID common.ChangeFeedID,
-	admin AdminClient,
-	options *options,
-	topic string,
-) error {
+func adjustOptions(ctx context.Context, changefeedID common.ChangeFeedID, admin AdminClient, options *options, topic string) error {
 	// The topic may not exist yet and will be created later by the topic manager,
 	// so ignore per-topic metadata errors here.
-	topics, err := admin.GetTopicsMeta([]string{topic}, true)
+	topics, err := admin.GetTopicsMeta(ctx, []string{topic}, true)
 	if err != nil {
 		return err
 	}
@@ -653,9 +662,9 @@ func adjustOptions(
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
 	if exists {
-		err = adjustExistingTopicOption(changefeedID, admin, options, info)
+		err = adjustExistingTopicOption(ctx, changefeedID, admin, options, info)
 	} else {
-		adjustNewTopicOptions(admin, changefeedID, options)
+		adjustNewTopicOptions(ctx, admin, changefeedID, options)
 	}
 	if err != nil {
 		return err
@@ -665,13 +674,8 @@ func adjustOptions(
 	return nil
 }
 
-func adjustExistingTopicOption(
-	changefeedID common.ChangeFeedID,
-	admin AdminClient,
-	options *options,
-	info TopicDetail,
-) error {
-	maxMessageBytes, found, err := getTopicMaxMessageBytes(admin, info.Name)
+func adjustExistingTopicOption(ctx context.Context, changefeedID common.ChangeFeedID, admin AdminClient, options *options, info TopicDetail) error {
+	maxMessageBytes, found, err := getTopicMaxMessageBytes(ctx, admin, info.Name)
 	if err != nil || !found {
 		log.Warn("kafka topic `max.message.bytes` unavailable, using configured value",
 			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
@@ -686,14 +690,10 @@ func adjustExistingTopicOption(
 	return nil
 }
 
-func adjustNewTopicOptions(
-	admin AdminClient,
-	changefeedID common.ChangeFeedID,
-	options *options,
-) {
+func adjustNewTopicOptions(ctx context.Context, admin AdminClient, changefeedID common.ChangeFeedID, options *options) {
 	// when create the topic, `max.message.bytes` is decided by the broker,
 	// it would use broker's `message.max.bytes` to set topic's `max.message.bytes`.
-	messageMaxBytes, found, err := getBrokerMaxMessageBytes(admin)
+	messageMaxBytes, found, err := getBrokerMaxMessageBytes(ctx, admin)
 	if err != nil || !found {
 		log.Warn("kafka broker `message.max.bytes` unavailable, using configured value",
 			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
@@ -708,15 +708,8 @@ func adjustNewTopicOptions(
 	}
 }
 
-func getTopicMaxMessageBytes(
-	admin AdminClient,
-	topic string,
-) (int, bool, error) {
-	raw, found, err := getTopicConfig(
-		admin, topic,
-		TopicMaxMessageBytesConfigName,
-		BrokerMessageMaxBytesConfigName,
-	)
+func getTopicMaxMessageBytes(ctx context.Context, admin AdminClient, topic string) (int, bool, error) {
+	raw, found, err := getTopicConfig(ctx, admin, topic, TopicMaxMessageBytesConfigName, BrokerMessageMaxBytesConfigName)
 	if err != nil {
 		return 0, false, err
 	}
@@ -730,8 +723,8 @@ func getTopicMaxMessageBytes(
 	return maxMessageBytes, true, nil
 }
 
-func getBrokerMaxMessageBytes(admin AdminClient) (int, bool, error) {
-	raw, found, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
+func getBrokerMaxMessageBytes(ctx context.Context, admin AdminClient) (int, bool, error) {
+	raw, found, err := admin.GetBrokerConfig(ctx, BrokerMessageMaxBytesConfigName)
 	if err != nil {
 		return 0, false, err
 	}
@@ -749,16 +742,11 @@ func getBrokerMaxMessageBytes(admin AdminClient) (int, bool, error) {
 // If the topic does not have this configuration,
 // we will try to get it from the broker's configuration.
 // NOTICE: The configuration names of topic and broker may be different for the same configuration.
-func getTopicConfig(
-	admin AdminClient,
-	topicName string,
-	topicConfigName string,
-	brokerConfigName string,
-) (string, bool, error) {
-	c, found, err := admin.GetTopicConfig(topicName, topicConfigName)
+func getTopicConfig(ctx context.Context, admin AdminClient, topicName, topicConfigName, brokerConfigName string) (string, bool, error) {
+	c, found, err := admin.GetTopicConfig(ctx, topicName, topicConfigName)
 	if err == nil && found {
 		return c, true, nil
 	}
 
-	return admin.GetBrokerConfig(brokerConfigName)
+	return admin.GetBrokerConfig(ctx, brokerConfigName)
 }

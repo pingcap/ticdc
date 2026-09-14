@@ -391,6 +391,12 @@ func (c *Controller) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
 	c.drainState.SetDispatcherDrainTarget(target, epoch)
 }
 
+// SetLastDrainTargetClearedAt seeds the capture-wide drain cooldown into this
+// changefeed so newly created balance schedulers do not immediately rebalance.
+func (c *Controller) SetLastDrainTargetClearedAt(clearedAt time.Time) {
+	c.drainState.SetLastDrainTargetClearedAt(clearedAt)
+}
+
 // getDispatcherDrainTarget returns the current drain target snapshot used by
 // status reporting and later drain-aware schedulers.
 func (c *Controller) getDispatcherDrainTarget() (node.ID, uint64) {
