@@ -129,6 +129,14 @@ func TestApplyToDDLEvent(t *testing.T) {
 	renameTablesDDL := helper.DDL2Event("RENAME TABLE `multi_db`.`t1` TO `multi_db`.`t1_new`, `multi_db`.`t2` TO `multi_db`.`t2_new`")
 	oldOrdersDDL := helper.DDL2Event("CREATE TABLE `old_db`.`orders` (`id` INT PRIMARY KEY)")
 	renameDDL := helper.DDL2Event("RENAME TABLE `old_db`.`orders` TO `new_db`.`orders_archive`")
+	helper.DDL2Event("CREATE DATABASE `db{table}`")
+	literalSchemaDDL := helper.DDL2Event("CREATE TABLE `db{table}`.`orders` (`id` INT PRIMARY KEY)")
+	literalTableDDL := helper.DDL2Event("CREATE TABLE `source_db`.`table{table}` (`id` INT PRIMARY KEY)")
+	literalNameRouter := newTestRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"*.*"},
+		TargetSchema: "{schema}_archive",
+		TargetTable:  "{schema}_{table}",
+	}})
 
 	var zeroRouter Router
 	noMatchedRouter := newTestRouter(t, false, []*config.DispatchRule{{
@@ -176,6 +184,26 @@ func TestApplyToDDLEvent(t *testing.T) {
 			router:     zeroRouter,
 			ddl:        singleTableDDL,
 			expectSame: true,
+		},
+		{
+			name:   "placeholder in source schema stays literal",
+			router: literalNameRouter,
+			ddl:    literalSchemaDDL,
+			check: func(t *testing.T, original, routed *event.DDLEvent) {
+				require.Contains(t, routed.Query, "`db{table}_archive`.`db{table}_orders`")
+				require.Equal(t, "db{table}_archive", routed.TableInfo.GetTargetSchemaName())
+				require.Equal(t, "db{table}_orders", routed.TableInfo.GetTargetTableName())
+			},
+		},
+		{
+			name:   "placeholder in source table stays literal",
+			router: literalNameRouter,
+			ddl:    literalTableDDL,
+			check: func(t *testing.T, original, routed *event.DDLEvent) {
+				require.Contains(t, routed.Query, "`source_db_archive`.`source_db_table{table}`")
+				require.Equal(t, "source_db_archive", routed.TableInfo.GetTargetSchemaName())
+				require.Equal(t, "source_db_table{table}", routed.TableInfo.GetTargetTableName())
+			},
 		},
 		{
 			name:       "no matched rule keeps original",
