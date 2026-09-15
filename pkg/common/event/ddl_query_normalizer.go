@@ -14,6 +14,7 @@
 package event
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -131,8 +132,7 @@ func (n *createViewSelectNormalizer) qualifyColumnName(c *ast.ColumnName) {
 
 	tableKey := strings.ToLower(c.Table.O)
 	// Resolve correlated references from the innermost SELECT outward.
-	for i := len(n.scopes) - 1; i >= 0; i-- {
-		scope := n.scopes[i]
+	for _, scope := range slices.Backward(n.scopes) {
 		if _, ok := scope.aliases[tableKey]; ok {
 			return
 		}

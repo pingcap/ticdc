@@ -989,10 +989,9 @@ func TestViewCTERouting(t *testing.T) {
 }
 
 func TestEmptyTargetSchema(t *testing.T) {
-	router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{
+	router := newTestRouter(t, false, []*config.DispatchRule{
 		{Matcher: []string{"source_db.*"}, TargetSchema: "{table}"},
 	})
-	require.NoError(t, err)
 	for _, tc := range []struct {
 		query  string
 		action model.ActionType
@@ -1020,10 +1019,9 @@ func TestCorrelatedView(t *testing.T) {
 	stored := "SELECT orders.id FROM source_db.orders WHERE EXISTS (SELECT 1 FROM source_db.lines WHERE lines.order_id = orders.id)"
 	query, err := event.NormalizeCreateViewQueryWithStoredSelect("CREATE VIEW source_db.v AS "+stored, stored, "source_db")
 	require.NoError(t, err)
-	router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{
+	router := newTestRouter(t, false, []*config.DispatchRule{
 		{Matcher: []string{"source_db.*"}, TargetSchema: "target_db", TargetTable: "{table}_r"},
 	})
-	require.NoError(t, err)
 	routed, err := router.ApplyToDDLEvent(&event.DDLEvent{
 		Query: query, Type: byte(model.ActionCreateView), SchemaName: "source_db", TableName: "v",
 	})
