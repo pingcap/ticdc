@@ -943,3 +943,46 @@ func TestViewWildcardRouting(t *testing.T) {
 		})
 	}
 }
+
+func TestViewCTERouting(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("USE test")
+	helper.DDL2Event("CREATE TABLE t (id INT PRIMARY KEY)")
+	helper.Tk().MustExec("INSERT INTO t VALUES (7)")
+	helper.DDL2Event("CREATE TABLE orders (id INT PRIMARY KEY)")
+	helper.Tk().MustExec("INSERT INTO orders VALUES (99)")
+	helper.Tk().MustExec("CREATE DATABASE dst")
+	for _, table := range []string{"t", "orders"} {
+		helper.Tk().MustExec("CREATE TABLE dst." + table + "_r LIKE test." + table)
+		helper.Tk().MustExec("INSERT INTO dst." + table + "_r SELECT * FROM test." + table)
+	}
+	router := newTestRouter(t, false, []*config.DispatchRule{{Matcher: []string{"test.*"}, TargetSchema: "dst", TargetTable: "{table}_r"}})
+	for _, tc := range []struct{ name, query string }{
+		{"plain", "WITH c AS (SELECT id FROM t) SELECT id FROM c"},
+		{"shadow", "WITH orders AS (SELECT id FROM t) SELECT id FROM orders"},
+		{"column", "WITH orders AS (SELECT id FROM t) SELECT orders.id FROM orders"},
+		{"wildcard", "WITH orders AS (SELECT id FROM t) SELECT orders.* FROM orders"},
+		{"definition", "WITH t AS (SELECT id FROM t) SELECT id FROM t"},
+		{"qualified", "WITH t AS (SELECT 99 AS id) SELECT test.t.* FROM test.t"},
+		{"forward", "WITH a AS (SELECT id FROM t), t AS (SELECT 99 AS id) SELECT id FROM a"},
+		{"multiple", "WITH a AS (SELECT id FROM t), b AS (SELECT id FROM a) SELECT id FROM b"},
+		{"nested", "WITH c AS (SELECT id FROM t) SELECT id FROM (WITH c AS (SELECT id FROM c) SELECT id FROM c) AS x"},
+		{"scope", "SELECT t.* FROM t WHERE EXISTS (WITH t AS (SELECT 99 AS id) SELECT id FROM t)"},
+		{"union", "WITH c AS (SELECT id FROM t) SELECT id FROM c UNION SELECT id FROM c"},
+		{"recursive", "WITH RECURSIVE c(id) AS (SELECT id - 1 FROM t UNION ALL SELECT id + 1 FROM c WHERE id < 7) SELECT id FROM c WHERE id = 7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			helper.Tk().MustExec("USE test")
+			ddl := helper.DDL2Event("CREATE VIEW v AS " + tc.query)
+			helper.Tk().MustQuery("SELECT * FROM v").Check(testkit.Rows("7"))
+			routed, err := router.ApplyToDDLEvent(ddl)
+			require.NoError(t, err)
+			helper.Tk().MustExec("USE dst")
+			helper.Tk().MustExec(routed.Query)
+			helper.Tk().MustQuery("SELECT * FROM v_r").Check(testkit.Rows("7"))
+			helper.Tk().MustExec("DROP VIEW v_r")
+			helper.Tk().MustExec("DROP VIEW test.v")
+		})
+	}
+}
