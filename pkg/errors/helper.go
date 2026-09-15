@@ -24,6 +24,9 @@ import (
 	tmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 )
 
+// RFCErrorCode identifies a normalized error code.
+type RFCErrorCode = errors.RFCErrorCode
+
 // WrapError generates a new error based on given `*errors.Error`, wraps the err
 // as cause error.
 // If given `err` is nil, returns a nil error, which a the different behavior
@@ -117,6 +120,9 @@ var changefeedUnRetryableErrors = []*errors.Error{
 	ErrKafkaInvalidConfig,
 	ErrMySQLInvalidConfig,
 	ErrStorageSinkInvalidConfig,
+	ErrInvalidTableRoutingRule,
+	ErrTableRoutingFailed,
+	ErrTableRouteConflict,
 
 	// gc related errors
 	ErrGCTTLExceeded,

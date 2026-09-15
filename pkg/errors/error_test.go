@@ -109,6 +109,16 @@ func TestShouldFailChangefeed(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "ErrInvalidTableRoutingRule should return true",
+			err:      ErrInvalidTableRoutingRule.GenWithStackByArgs("invalid matcher"),
+			expected: true,
+		},
+		{
+			name:     "ErrTableRoutingFailed should return true",
+			err:      ErrTableRoutingFailed.GenWithStackByArgs("failed to rewrite ddl"),
+			expected: true,
+		},
+		{
 			name:     "Error with RFC code matching should return true",
 			err:      errors.New("CDC:ErrGCTTLExceeded some error message"),
 			expected: true,

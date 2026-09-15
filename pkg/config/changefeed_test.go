@@ -54,3 +54,36 @@ func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *test
 		})
 	}
 }
+
+func TestChangeFeedInfoRmUnusedFieldsKeepsTableRouting(t *testing.T) {
+	for _, sinkURI := range []string{"mysql://127.0.0.1:3306", "file:///tmp/cdc"} {
+		t.Run(sinkURI, func(t *testing.T) {
+			cfg := GetDefaultReplicaConfig()
+			cfg.Sink.DispatchRules = []*DispatchRule{
+				nil,
+				{
+					Matcher:        []string{"sales.*", "!sales.tmp"},
+					TargetSchema:   "archive",
+					TargetTable:    "{schema}_{table}",
+					DispatcherRule: "ts",
+					PartitionRule:  "index-value",
+					IndexName:      "primary",
+					Columns:        []string{"id"},
+					TopicRule:      "sales-events",
+				},
+			}
+			info := &ChangeFeedInfo{SinkURI: sinkURI, Config: cfg}
+
+			info.RmUnusedFields()
+
+			require.Equal(t, []*DispatchRule{
+				nil,
+				{
+					Matcher:      []string{"sales.*", "!sales.tmp"},
+					TargetSchema: "archive",
+					TargetTable:  "{schema}_{table}",
+				},
+			}, info.Config.Sink.DispatchRules)
+		})
+	}
+}

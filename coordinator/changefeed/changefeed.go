@@ -151,30 +151,56 @@ func (c *Changefeed) ShouldRun() bool {
 // It returns false if the status is not changed
 // It returns the new state and error if the status is changed
 func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, config.FeedState, *heartbeatpb.RunningError) {
+	if newStatus == nil {
+		return false, config.StateNormal, nil
+	}
+
 	old := c.status.Load()
 	failpoint.Inject("CoordinatorDontUpdateChangefeedCheckpoint", func() {
 		newStatus.CheckpointTs = old.CheckpointTs
 	})
 
-	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
-		c.status.Store(newStatus)
-		if old.BootstrapDone != newStatus.BootstrapDone {
-			log.Info("Received changefeed status with bootstrapDone",
-				zap.Stringer("changefeed", c.ID),
-				zap.Bool("bootstrapDone", newStatus.BootstrapDone))
-			return true, config.StateNormal, nil
+	if newStatus.CheckpointTs < old.CheckpointTs {
+		if len(newStatus.Err) == 0 {
+			return false, config.StateNormal, nil
 		}
-
-		info := c.GetInfo()
-		// the changefeed reaches the targetTs
-		if info.TargetTs != 0 && newStatus.CheckpointTs >= info.TargetTs {
-			return true, config.StateFinished, nil
-		}
-
-		return c.backoff.CheckStatus(newStatus)
+		statusWithMonotonicCheckpoint := *newStatus
+		statusWithMonotonicCheckpoint.CheckpointTs = old.CheckpointTs
+		newStatus = &statusWithMonotonicCheckpoint
 	}
 
-	return false, config.StateNormal, nil
+	// Bootstrap completion survives maintainer replacement until an explicit resume.
+	if old.BootstrapDone && !newStatus.BootstrapDone {
+		statusWithBootstrapDone := *newStatus
+		statusWithBootstrapDone.BootstrapDone = true
+		newStatus = &statusWithBootstrapDone
+	}
+	c.status.Store(newStatus)
+	bootstrapChanged := !old.BootstrapDone && newStatus.BootstrapDone
+	if bootstrapChanged {
+		// Record accepted bootstrap progress before returning without CheckStatus.
+		c.backoff.checkpointTs = newStatus.CheckpointTs
+	}
+
+	changed, state, err := c.backoff.checkFailedStatus(newStatus)
+	if state == config.StateFailed {
+		return changed, state, err
+	}
+
+	if bootstrapChanged {
+		log.Info("Received changefeed status with bootstrapDone",
+			zap.Stringer("changefeed", c.ID),
+			zap.Bool("bootstrapDone", newStatus.BootstrapDone))
+		return true, config.StateNormal, nil
+	}
+
+	info := c.GetInfo()
+	// the changefeed reaches the targetTs
+	if info.TargetTs != 0 && newStatus.CheckpointTs >= info.TargetTs {
+		return true, config.StateFinished, nil
+	}
+
+	return c.backoff.CheckStatus(newStatus)
 }
 
 func (c *Changefeed) GetLogCoordinatorResolvedTs() uint64 {

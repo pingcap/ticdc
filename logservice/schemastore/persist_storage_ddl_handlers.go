@@ -590,6 +590,7 @@ func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) Pe
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = args.job.TableName
+	normalizeCreateViewQueryWithStoredSelect(&event)
 	return event
 }
 
@@ -603,12 +604,47 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 	return event
 }
 
+// TiDB persists the normalized SELECT body of a view in
+// event.TableInfo.View.SelectStmt when executing CREATE VIEW, so this field can
+// carry fully resolved source-table references even if job.Query keeps the
+// original session-level text.
+// Field definition:
+// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/meta/model/table.go#L762-L770
+// Value assignment in CREATE VIEW:
+// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/create_table.go#L1668-L1678
+func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
+	if event.TableInfo == nil || event.TableInfo.View == nil {
+		return
+	}
+
+	query, err := commonEvent.NormalizeCreateViewQueryWithStoredSelect(
+		event.Query,
+		event.TableInfo.View.SelectStmt,
+		event.SchemaName,
+	)
+	if err != nil {
+		log.Warn("normalize create view query with stored select failed",
+			zap.String("query", event.Query),
+			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
+			zap.Error(err))
+		return
+	}
+	event.Query = query
+}
+
 func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = event.TableInfo.Name.O
 	setReferTableForCreateTableLike(&event, args)
 	return event
+}
+
+type createTableLikeReferSchemaInfo struct {
+	schemaName string
+	schemaID   int64
+	// true when the source schema was inferred and should be written back to query.
+	qualifyQuery bool
 }
 
 func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersistedDDLEventFuncArgs) {
@@ -627,22 +663,33 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 		return
 	}
 	refTable := createStmt.ReferTable.Name.O
-	refSchema := createStmt.ReferTable.Schema.O
-	if refSchema == "" {
-		refSchema = event.SchemaName
-	}
-	refSchemaID, ok := findSchemaIDByName(args.databaseMap, refSchema)
+	// refSchema is the schema name of the table referenced by
+	// CREATE TABLE ... LIKE. It can be absent in the original query.
+	refSchemaInQuery := createStmt.ReferTable.Schema.O
+	referSchemaInfo, ok := resolveCreateTableLikeReferSchema(args, refSchemaInQuery, refTable)
 	if !ok {
 		log.Warn("refer schema not found for create table like",
-			zap.String("schema", refSchema),
+			zap.String("schema", referSchemaInfo.schemaName),
 			zap.String("table", refTable),
 			zap.String("query", event.Query))
 		return
 	}
-	refTableID, ok := findTableIDByName(args.tableMap, refSchemaID, refTable)
+	if referSchemaInfo.qualifyQuery {
+		createStmt.ReferTable.Schema = ast.NewCIStr(referSchemaInfo.schemaName)
+		query, err := commonEvent.Restore(createStmt)
+		if err != nil {
+			log.Warn("restore create table like ddl failed",
+				zap.String("schema", referSchemaInfo.schemaName),
+				zap.String("query", event.Query),
+				zap.Error(err))
+			return
+		}
+		event.Query = query
+	}
+	refTableID, ok := findTableIDByName(args.tableMap, referSchemaInfo.schemaID, refTable)
 	if !ok {
 		log.Warn("refer table not found for create table like",
-			zap.String("schema", refSchema),
+			zap.String("schema", referSchemaInfo.schemaName),
 			zap.String("table", refTable),
 			zap.String("query", event.Query))
 		return
@@ -654,6 +701,50 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 			event.ReferTablePartitionIDs = append(event.ReferTablePartitionIDs, id)
 		}
 	}
+}
+
+func resolveCreateTableLikeReferSchema(
+	args buildPersistedDDLEventFuncArgs,
+	refSchemaInQuery string,
+	refTable string,
+) (createTableLikeReferSchemaInfo, bool) {
+	if refSchemaInQuery != "" {
+		schemaID, ok := findSchemaIDByName(args.databaseMap, refSchemaInQuery)
+		return createTableLikeReferSchemaInfo{
+			schemaName: refSchemaInQuery,
+			schemaID:   schemaID,
+		}, ok
+	}
+
+	for _, info := range args.job.InvolvingSchemaInfo {
+		// TiDB records the LIKE source table as a shared involving table.
+		// For CREATE TABLE db2.t LIKE db1.t, the target db2.t is also in
+		// InvolvingSchemaInfo, but it is exclusive. Without this mode check,
+		// the target table may be mistaken as the referenced table.
+		// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/executor.go#L1009-L1023
+		if info.Mode != model.SharedInvolving ||
+			info.Database == "" ||
+			!strings.EqualFold(info.Table, refTable) {
+			continue
+		}
+		schemaID, ok := findSchemaIDByName(args.databaseMap, info.Database)
+		if !ok {
+			continue
+		}
+		refSchema := getSchemaName(args.databaseMap, schemaID)
+		return createTableLikeReferSchemaInfo{
+			schemaName:   refSchema,
+			schemaID:     schemaID,
+			qualifyQuery: !strings.EqualFold(refSchema, getSchemaName(args.databaseMap, args.job.SchemaID)),
+		}, true
+	}
+
+	// If TiDB does not provide the referenced schema, fall back to the schema
+	// that the CREATE TABLE event belongs to, matching MySQL/TiDB resolution.
+	return createTableLikeReferSchemaInfo{
+		schemaName: getSchemaName(args.databaseMap, args.job.SchemaID),
+		schemaID:   args.job.SchemaID,
+	}, true
 }
 
 func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
@@ -2615,38 +2706,17 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 	}
 	// For exchange table partition, we only set NotSync to true when the partition table is filtered.
 	ddlEvent.NotSync = notSyncPartitionTable
+	// The default event (including the DDL trigger) describes the partition table.
+	// Keep the old normal table info for storage sinks to emit its column schema.
+	ddlEvent.TableInfo = common.WrapTableInfo(rawEvent.ExtraSchemaName, rawEvent.TableInfo)
 	ddlEvent.MultipleTableInfos = []*common.TableInfo{
-		common.WrapTableInfo(rawEvent.SchemaName, rawEvent.TableInfo),
+		ddlEvent.TableInfo,
 		rawEvent.ExtraTableInfo,
 	}
-	if tableID != 0 {
-		// Here we set TableInfo to the table info of tableID.
-		// First, check whether the tableID is a normal table after exchange.
-		// If false, set TableInfo to rawEvent.TableInfo, because the rawEvent.TableInfo is the partition table info after exchange.
-		// NOTE: ddlEvent.TableInfo is already the rawEvent.TableInfo in buildDDLEventCommon. So we don't need to set it again if false.
-		// If true, set TableInfo to rawEvent.ExtraTableInfo,
-		// because the rawEvent.ExtraTableInfo is the normal table info before exchange,
-		// but the tableID is the normal table after exchange, so we need to get a new TableInfo for it.
-		// NOTE: We can't just check tableID == rawEvent.ExtraTableInfo.TableName.TableID,
-		// because rawEvent.ExtraTableInfo is the table info before exchange,
-		// and the tableID is the table id after exchange.
-		isNormalTableAfterExchange := true
-		for _, id := range physicalIDs {
-			if id == tableID {
-				isNormalTableAfterExchange = false
-				break
-			}
-		}
-		if isNormalTableAfterExchange {
-			ddlEvent.TableInfo = common.NewTableInfo(
-				rawEvent.ExtraSchemaName,
-				ast.NewCIStr(rawEvent.ExtraTableName).O,
-				tableID,
-				false,
-				rawEvent.ExtraTableInfo.ShadowCopyColumnSchema(),
-				rawEvent.ExtraTableInfo.ToTiDBTableInfo(),
-			)
-		}
+	if tableID == targetPartitionID {
+		// The old partition is now the normal table. Use the same identity and
+		// column schema as a fresh table-info lookup after the exchange.
+		ddlEvent.TableInfo, _ = extractTableInfoFuncForExchangeTablePartition(rawEvent, tableID)
 	}
 	return ddlEvent, true, err
 }
