@@ -153,8 +153,10 @@ func (n *createViewSelectNormalizer) qualifyColumnName(c *ast.ColumnName) {
 			return
 		}
 		if schema, ok := scope.tableByName[tableKey]; ok {
-			c.Schema = ast.NewCIStr(schema)
-			n.changed = true
+			if schema != "" {
+				c.Schema = ast.NewCIStr(schema)
+				n.changed = true
+			}
 			return
 		}
 	}
@@ -188,7 +190,7 @@ func collectCreateViewSelectTables(node ast.ResultSetNode, scope *createViewSele
 			return
 		}
 		tableName, ok := v.Source.(*ast.TableName)
-		if !ok || tableName.Schema.O == "" || tableName.Name.O == "" {
+		if !ok || tableName.Name.O == "" {
 			return
 		}
 		tableKey := strings.ToLower(tableName.Name.O)

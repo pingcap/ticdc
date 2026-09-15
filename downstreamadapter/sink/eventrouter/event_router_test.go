@@ -140,6 +140,65 @@ func TestEventRouter(t *testing.T) {
 	require.IsType(t, &partition.TablePartitionGenerator{}, partitionDispatcher)
 }
 
+func TestRoutingRuleIsolation(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		rule          config.DispatchRule
+		expectedTopic string
+		expectedTs    bool
+	}{
+		{
+			name: "schema routing only", rule: config.DispatchRule{TargetSchema: "archive"},
+			expectedTopic: "sales-events", expectedTs: true,
+		},
+		{
+			name: "table routing only", rule: config.DispatchRule{TargetTable: "orders_archive"},
+			expectedTopic: "sales-events", expectedTs: true,
+		},
+		{
+			name: "routing and topic", rule: config.DispatchRule{TargetSchema: "archive", TopicRule: "archive-events"},
+			expectedTopic: "archive-events",
+		},
+		{
+			name: "routing and partition", rule: config.DispatchRule{TargetSchema: "archive", PartitionRule: "ts"},
+			expectedTopic: "default-topic", expectedTs: true,
+		},
+		{
+			name: "routing and explicit default", rule: config.DispatchRule{TargetSchema: "archive", PartitionRule: "default"},
+			expectedTopic: "default-topic",
+		},
+		{
+			name: "matcher only", rule: config.DispatchRule{},
+			expectedTopic: "default-topic",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, isPulsar := range []bool{false, true} {
+				rule := tc.rule
+				rule.Matcher = []string{"sales.orders"}
+				sinkConfig := &config.SinkConfig{DispatchRules: []*config.DispatchRule{
+					&rule,
+					{Matcher: []string{"sales.*"}, TopicRule: "sales-events", PartitionRule: "ts"},
+				}}
+				router, err := NewEventRouter(sinkConfig, false, "default-topic", isPulsar, false)
+				require.NoError(t, err)
+				require.Equal(t, tc.expectedTopic, router.GetTopicForRowChange("sales", "orders"))
+				require.Equal(t, tc.expectedTopic, router.GetTopicForDDL(&commonEvent.DDLEvent{
+					SchemaName: "sales", TableName: "orders",
+				}))
+				generator := router.GetPartitionGenerator("sales", "orders")
+				if tc.expectedTs {
+					require.IsType(t, &partition.TsPartitionGenerator{}, generator)
+				} else if isPulsar && rule.PartitionRule == "" {
+					require.IsType(t, &partition.KeyPartitionGenerator{}, generator)
+				} else {
+					require.IsType(t, &partition.TablePartitionGenerator{}, generator)
+				}
+			}
+		})
+	}
+}
+
 func TestGetActiveTopics(t *testing.T) {
 	t.Parallel()
 

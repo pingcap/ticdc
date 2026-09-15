@@ -62,6 +62,16 @@ function run() {
 	check_contains 'matched_ids: 1,3'
 	check_table_not_exists target_db.transient_view_routed "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 
+	# Compare actual CTE results, including a CTE that shadows a physical table.
+	sed 's/_routed//g' "$CUR/data/cte_query.sql" |
+		mysql -uroot -h"$UP_TIDB_HOST" -P"$UP_TIDB_PORT" -Dsource_db -N -B >"$WORK_DIR/cte_upstream.txt"
+	mysql -uroot -h"$DOWN_TIDB_HOST" -P"$DOWN_TIDB_PORT" -Dtarget_db -N -B \
+		<"$CUR/data/cte_query.sql" >"$WORK_DIR/cte_downstream.txt"
+	diff -u "$WORK_DIR/cte_upstream.txt" "$WORK_DIR/cte_downstream.txt"
+
+	run_sql_file "$CUR/data/exchange_partition.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_sync_diff "$WORK_DIR" "$CUR/conf/diff_config.toml" 120
+
 	run_sql "DROP DATABASE source_extra_db" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	run_sql "DROP DATABASE source_db" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	check_db_not_exists target_extra_db "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 90

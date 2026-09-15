@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	cdcfilter "github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/testkit"
 	"github.com/stretchr/testify/require"
 )
 
@@ -130,6 +131,14 @@ func TestApplyToDDLEvent(t *testing.T) {
 	renameTablesDDL := helper.DDL2Event("RENAME TABLE `multi_db`.`t1` TO `multi_db`.`t1_new`, `multi_db`.`t2` TO `multi_db`.`t2_new`")
 	oldOrdersDDL := helper.DDL2Event("CREATE TABLE `old_db`.`orders` (`id` INT PRIMARY KEY)")
 	renameDDL := helper.DDL2Event("RENAME TABLE `old_db`.`orders` TO `new_db`.`orders_archive`")
+	helper.DDL2Event("CREATE DATABASE `db{table}`")
+	literalSchemaDDL := helper.DDL2Event("CREATE TABLE `db{table}`.`orders` (`id` INT PRIMARY KEY)")
+	literalTableDDL := helper.DDL2Event("CREATE TABLE `source_db`.`table{table}` (`id` INT PRIMARY KEY)")
+	literalNameRouter := newTestRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"*.*"},
+		TargetSchema: "{schema}_archive",
+		TargetTable:  "{schema}_{table}",
+	}})
 
 	var zeroRouter Router
 	noMatchedRouter := newTestRouter(t, false, []*config.DispatchRule{{
@@ -177,6 +186,26 @@ func TestApplyToDDLEvent(t *testing.T) {
 			router:     zeroRouter,
 			ddl:        singleTableDDL,
 			expectSame: true,
+		},
+		{
+			name:   "placeholder in source schema stays literal",
+			router: literalNameRouter,
+			ddl:    literalSchemaDDL,
+			check: func(t *testing.T, original, routed *event.DDLEvent) {
+				require.Contains(t, routed.Query, "`db{table}_archive`.`db{table}_orders`")
+				require.Equal(t, "db{table}_archive", routed.TableInfo.GetTargetSchemaName())
+				require.Equal(t, "db{table}_orders", routed.TableInfo.GetTargetTableName())
+			},
+		},
+		{
+			name:   "placeholder in source table stays literal",
+			router: literalNameRouter,
+			ddl:    literalTableDDL,
+			check: func(t *testing.T, original, routed *event.DDLEvent) {
+				require.Contains(t, routed.Query, "`source_db_archive`.`source_db_table{table}`")
+				require.Equal(t, "source_db_archive", routed.TableInfo.GetTargetSchemaName())
+				require.Equal(t, "source_db_table{table}", routed.TableInfo.GetTargetTableName())
+			},
 		},
 		{
 			name:       "no matched rule keeps original",
@@ -932,4 +961,92 @@ func TestRouteCorrelatedViewColumns(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Contains(t, routed.Query, "`target_db`.`lines_r`.`order_id`=`target_db`.`orders_r`.`id`")
+}
+
+func TestViewWildcardRouting(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("USE test")
+	helper.DDL2Event("CREATE TABLE t (id INT PRIMARY KEY)")
+	helper.Tk().MustExec("INSERT INTO t VALUES (7)")
+	helper.Tk().MustExec("CREATE DATABASE dst")
+	for _, table := range []string{"dst.t_r", "dst.t", "test.t_r"} {
+		helper.Tk().MustExec("CREATE TABLE " + table + " (id INT PRIMARY KEY)")
+		helper.Tk().MustExec("INSERT INTO " + table + " VALUES (7)")
+	}
+	for _, tc := range []struct{ name, query string }{
+		{"v_table", "SELECT t.* FROM t"},
+		{"v_schema", "SELECT test.t.* FROM test.t"},
+		{"v_star", "SELECT * FROM t"},
+		{"v_alias", "SELECT x.* FROM t AS x"},
+		{"v_same_alias", "SELECT t.* FROM t AS t"},
+		{"v_join", "SELECT t.* FROM t JOIN t AS x ON t.id = x.id"},
+		{"v_nested", "SELECT x.* FROM (SELECT t.* FROM t) AS x"},
+		{"v_scopes", "SELECT t.* FROM t WHERE EXISTS (SELECT t.* FROM t AS t)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			helper.Tk().MustExec("USE test")
+			ddl := helper.DDL2Event("CREATE VIEW " + tc.name + " AS " + tc.query)
+			helper.Tk().MustQuery("SELECT * FROM " + tc.name).Check(testkit.Rows("7"))
+			helper.Tk().MustExec("DROP VIEW " + tc.name)
+			for _, rule := range []*config.DispatchRule{
+				{Matcher: []string{"test.*"}, TargetSchema: "dst", TargetTable: "{table}_r"},
+				{Matcher: []string{"test.*"}, TargetSchema: "dst"},
+				{Matcher: []string{"test.*"}, TargetTable: "{table}_r"},
+				{Matcher: []string{"other.*"}, TargetSchema: "dst"},
+			} {
+				router := newTestRouter(t, false, []*config.DispatchRule{rule})
+				routed, err := router.ApplyToDDLEvent(ddl)
+				require.NoError(t, err)
+				helper.Tk().MustExec("USE " + common.QuoteName(routed.GetTargetSchemaName()))
+				helper.Tk().MustExec(routed.Query)
+				view := common.QuoteSchema(routed.GetTargetSchemaName(), routed.GetTargetTableName())
+				helper.Tk().MustQuery("SELECT * FROM " + view).Check(testkit.Rows("7"))
+				helper.Tk().MustExec("DROP VIEW " + view)
+			}
+		})
+	}
+}
+
+func TestViewCTERouting(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("USE test")
+	helper.DDL2Event("CREATE TABLE t (id INT PRIMARY KEY)")
+	helper.Tk().MustExec("INSERT INTO t VALUES (7)")
+	helper.DDL2Event("CREATE TABLE orders (id INT PRIMARY KEY)")
+	helper.Tk().MustExec("INSERT INTO orders VALUES (99)")
+	helper.Tk().MustExec("CREATE DATABASE dst")
+	for _, table := range []string{"t", "orders"} {
+		helper.Tk().MustExec("CREATE TABLE dst." + table + "_r LIKE test." + table)
+		helper.Tk().MustExec("INSERT INTO dst." + table + "_r SELECT * FROM test." + table)
+	}
+	router := newTestRouter(t, false, []*config.DispatchRule{{Matcher: []string{"test.*"}, TargetSchema: "dst", TargetTable: "{table}_r"}})
+	for _, tc := range []struct{ name, query string }{
+		{"plain", "WITH c AS (SELECT id FROM t) SELECT id FROM c"},
+		{"shadow", "WITH orders AS (SELECT id FROM t) SELECT id FROM orders"},
+		{"column", "WITH orders AS (SELECT id FROM t) SELECT orders.id FROM orders"},
+		{"wildcard", "WITH orders AS (SELECT id FROM t) SELECT orders.* FROM orders"},
+		{"definition", "WITH t AS (SELECT id FROM t) SELECT id FROM t"},
+		{"qualified", "WITH t AS (SELECT 99 AS id) SELECT test.t.* FROM test.t"},
+		{"forward", "WITH a AS (SELECT id FROM t), t AS (SELECT 99 AS id) SELECT id FROM a"},
+		{"multiple", "WITH a AS (SELECT id FROM t), b AS (SELECT id FROM a) SELECT id FROM b"},
+		{"nested", "WITH c AS (SELECT id FROM t) SELECT id FROM (WITH c AS (SELECT id FROM c) SELECT id FROM c) AS x"},
+		{"scope", "SELECT t.* FROM t WHERE EXISTS (WITH t AS (SELECT 99 AS id) SELECT id FROM t)"},
+		{"union", "WITH c AS (SELECT id FROM t) SELECT id FROM c UNION SELECT id FROM c"},
+		{"recursive", "WITH RECURSIVE c(id) AS (SELECT id - 1 FROM t UNION ALL SELECT id + 1 FROM c WHERE id < 7) SELECT id FROM c WHERE id = 7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			helper.Tk().MustExec("USE test")
+			ddl := helper.DDL2Event("CREATE VIEW v AS " + tc.query)
+			helper.Tk().MustQuery("SELECT * FROM v").Check(testkit.Rows("7"))
+			routed, err := router.ApplyToDDLEvent(ddl)
+			require.NoError(t, err)
+			helper.Tk().MustExec("USE dst")
+			helper.Tk().MustExec(routed.Query)
+			helper.Tk().MustQuery("SELECT * FROM v_r").Check(testkit.Rows("7"))
+			helper.Tk().MustExec("DROP VIEW v_r")
+			helper.Tk().MustExec("DROP VIEW test.v")
+		})
+	}
 }

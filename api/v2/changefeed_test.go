@@ -152,3 +152,33 @@ func TestVerifyTablesForSinkCaseSensitive(t *testing.T) {
 		})
 	}
 }
+
+func TestRouteMatcherValidation(t *testing.T) {
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	for _, tc := range []struct {
+		name       string
+		eligible   []common.TableName
+		ineligible []common.TableName
+	}{
+		{name: "empty"},
+		{name: "eligible", eligible: []common.TableName{{Schema: "sales", Table: "orders"}}},
+		{name: "ineligible", ineligible: []common.TableName{{Schema: "sales", Table: "orders"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, forceReplicate := range []bool{false, true} {
+				cfg := config.GetDefaultReplicaConfig()
+				cfg.ForceReplicate = util.AddressOf(forceReplicate)
+				cfg.Sink.DispatchRules = []*config.DispatchRule{{
+					Matcher: []string{"["}, TargetSchema: "archive",
+				}}
+				err := verifyRouteConflict(changefeedID, tc.eligible, tc.ineligible, cfg)
+				code, ok := errors.RFCCode(err)
+				require.True(t, ok)
+				require.Equal(t, errors.ErrInvalidTableRoutingRule.RFCCode(), code)
+
+				cfg.Sink.DispatchRules[0].Matcher = []string{"sales.*"}
+				require.NoError(t, verifyRouteConflict(changefeedID, tc.eligible, tc.ineligible, cfg))
+			}
+		})
+	}
+}

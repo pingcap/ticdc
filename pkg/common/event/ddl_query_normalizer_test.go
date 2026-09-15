@@ -65,6 +65,8 @@ func TestNormalizeCorrelatedViewColumns(t *testing.T) {
 		{"multiple levels", "SELECT * FROM source_db.orders WHERE EXISTS (SELECT 1 FROM source_db.lines WHERE EXISTS (SELECT 1 WHERE orders.id = 1))", "`source_db`.`orders`.`id`=1"},
 		{"alias shadows outer", "SELECT * FROM source_db.orders WHERE EXISTS (SELECT 1 FROM source_db.lines AS orders WHERE orders.id = 1)", "WHERE `orders`.`id`=1"},
 		{"local table shadows outer", "SELECT * FROM source_db.orders WHERE EXISTS (SELECT 1 FROM other_db.orders WHERE orders.id = 1)", "WHERE `other_db`.`orders`.`id`=1"},
+		{"unqualified local table", "SELECT * FROM source_db.orders WHERE EXISTS (SELECT 1 FROM orders WHERE orders.id = 1)", "WHERE `orders`.`id`=1"},
+		{"CTE shadows outer", "SELECT * FROM source_db.orders WHERE EXISTS (WITH orders AS (SELECT 1 AS id) SELECT 1 FROM orders WHERE orders.id = 1)", "WHERE `orders`.`id`=1"},
 		{"ambiguous local table", "SELECT * FROM source_db.orders WHERE EXISTS (SELECT 1 FROM a.orders JOIN b.orders WHERE orders.id = 1)", "WHERE `orders`.`id`=1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

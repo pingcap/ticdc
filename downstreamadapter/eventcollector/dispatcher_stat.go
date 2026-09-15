@@ -14,6 +14,7 @@
 package eventcollector
 
 import (
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
 )
 
@@ -533,7 +535,13 @@ func (d *dispatcherStat) updateTableInfoByDDL(ddl *commonEvent.DDLEvent) {
 		expectedTableID = current.(*common.TableInfo).TableName.TableID
 	}
 	if ddl.TableInfo.TableName.TableID != expectedTableID {
-		return
+		// EXCHANGE changes the logical owner of each participating physical span.
+		// Other DDLs, including unrelated broadcasts, must retain the ID guard.
+		if ddl.GetDDLType() != model.ActionExchangeTablePartition ||
+			ddl.BlockedTables == nil || ddl.BlockedTables.InfluenceType != commonEvent.InfluenceTypeNormal ||
+			!slices.Contains(ddl.BlockedTables.TableIDs, tableSpan.TableID) {
+			return
+		}
 	}
 
 	d.tableInfo.Store(ddl.TableInfo)

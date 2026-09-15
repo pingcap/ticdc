@@ -350,6 +350,7 @@ func (r Router) applyToBlockedTableNames(tableNames []commonEvent.SchemaTableNam
 }
 
 // substituteExpression replaces {schema} and {table} placeholders with actual values.
+// Placeholder-like text in source names is preserved literally.
 // If expr is empty, returns defaultValue (typically sourceSchema for schema expressions,
 // sourceTable for table expressions).
 func substituteExpression(expr, sourceSchema, sourceTable, defaultValue string) string {
@@ -357,10 +358,10 @@ func substituteExpression(expr, sourceSchema, sourceTable, defaultValue string) 
 		return defaultValue
 	}
 
-	result := expr
-	result = strings.ReplaceAll(result, SchemaPlaceholder, sourceSchema)
-	result = strings.ReplaceAll(result, TablePlaceholder, sourceTable)
-	return result
+	return strings.NewReplacer(
+		SchemaPlaceholder, sourceSchema,
+		TablePlaceholder, sourceTable,
+	).Replace(expr)
 }
 
 // ValidateNoStaticRouteConflict checks whether the given table names would produce

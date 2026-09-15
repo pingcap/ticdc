@@ -15,6 +15,7 @@ package eventcollector
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -28,6 +29,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/tidb/pkg/domain"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -1404,4 +1408,123 @@ func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
 	require.Equal(t, viewDDL.FinishedTs, stat.tableInfoVersion.Load())
 	require.Len(t, mockDisp.events, 2)
 	require.Same(t, viewDDL, mockDisp.events[1].Event)
+}
+
+func TestExchangeDMLRouting(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.DDL2Job("CREATE DATABASE normal_db")
+	helper.DDL2Job("CREATE DATABASE partition_db")
+	normal := helper.DDL2Job("CREATE TABLE normal_db.nt (id INT PRIMARY KEY)")
+	partition := helper.DDL2Job("CREATE TABLE partition_db.pt (id INT PRIMARY KEY) PARTITION BY RANGE(id) (PARTITION p0 VALUES LESS THAN (100), PARTITION p1 VALUES LESS THAN MAXVALUE)")
+	oldNormal := common.WrapTableInfo("normal_db", normal.BinlogInfo.TableInfo)
+	oldPartition := common.WrapTableInfo("partition_db", partition.BinlogInfo.TableInfo)
+	partitionID := partition.BinlogInfo.TableInfo.Partition.Definitions[0].ID
+	job := helper.DDL2Job("ALTER TABLE partition_db.pt EXCHANGE PARTITION p0 WITH TABLE normal_db.nt")
+	for _, tc := range []struct {
+		schema, table string
+		physical      int64
+		old           *common.TableInfo
+		row           int64
+	}{
+		{"partition_db", "pt", normal.TableID, oldNormal, 7},
+		{"normal_db", "nt", partitionID, oldPartition, 8},
+	} {
+		table, err := domain.GetDomain(helper.Tk().Session()).InfoSchema().TableByName(t.Context(), ast.NewCIStr(tc.schema), ast.NewCIStr(tc.table))
+		require.NoError(t, err)
+		helper.ApplyJob(&model.Job{SchemaName: tc.schema, BinlogInfo: &model.HistoryInfo{TableInfo: table.Meta()}})
+		next := common.WrapTableInfo(tc.schema, table.Meta())
+		var dml *commonEvent.DMLEvent
+		if tc.table == "pt" {
+			dml = helper.DML2Event4PartitionTable(tc.schema, tc.table, "p0", "INSERT INTO partition_db.pt VALUES (7)")
+		} else {
+			dml = helper.DML2Event(tc.schema, tc.table, "INSERT INTO normal_db.nt VALUES (8)")
+		}
+		require.Equal(t, tc.physical, dml.PhysicalTableID)
+		batch := &commonEvent.BatchDMLEvent{Version: commonEvent.BatchDMLEventVersion1, DMLEvents: []*commonEvent.DMLEvent{dml}, Rows: dml.Rows, TableInfo: dml.TableInfo}
+		data, err := batch.Marshal()
+		require.NoError(t, err)
+		for _, route := range []bool{false, true} {
+			for _, local := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/route=%t/local=%t", tc.table, route, local), func(t *testing.T) {
+					mock := newMockDispatcher(common.NewDispatcherID(), 0)
+					mock.tableSpan = &heartbeatpb.TableSpan{TableID: tc.physical}
+					mock.handleEvents = func([]dispatcher.DispatcherEvent, func()) bool { return true }
+					if route {
+						mock.router, err = routing.NewRouter(mock.changefeedID, false, []*config.DispatchRule{
+							{Matcher: []string{"normal_db.*"}, TargetSchema: "normal_target"},
+							{Matcher: []string{"partition_db.*"}, TargetSchema: "partition_target"},
+						})
+						require.NoError(t, err)
+					}
+					stat := newDispatcherStat(mock, newTestEventCollector(node.ID("local")), nil)
+					stat.epoch.Store(1)
+					from := createNodeID("service1")
+					handshake := commonEvent.NewHandshakeEvent(mock.id, 0, 1, tc.old)
+					stat.handleHandshakeEvent(dispatcher.NewDispatcherEvent(from, &handshake))
+					ddl := &commonEvent.DDLEvent{
+						Version: commonEvent.DDLEventVersion1, Type: byte(model.ActionExchangeTablePartition), TableInfo: next, FinishedTs: job.BinlogInfo.FinishedTS,
+						Query: job.Query, SchemaName: "normal_db", TableName: "nt", ExtraSchemaName: "partition_db", ExtraTableName: "pt",
+						DispatcherID: mock.id, Epoch: 1, Seq: 2,
+						BlockedTables: &commonEvent.InfluencedTables{InfluenceType: commonEvent.InfluenceTypeNormal, TableIDs: []int64{normal.TableID, partitionID, common.DDLSpanTableID}},
+					}
+					// A remote DDL carries the same table identity as a local DDL.
+					if !local {
+						encoded, err := ddl.Marshal()
+						require.NoError(t, err)
+						ddl = &commonEvent.DDLEvent{}
+						require.NoError(t, ddl.Unmarshal(encoded))
+					}
+					require.True(t, stat.handleSingleDataEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(from, ddl)}))
+					incoming := &commonEvent.BatchDMLEvent{}
+					require.NoError(t, incoming.Unmarshal(data))
+					if local {
+						incoming.AssembleRows(next)
+					}
+					incoming.DMLEvents[0].Seq = 3
+					incoming.DMLEvents[0].Epoch = 1
+					incoming.DMLEvents[0].CommitTs = ddl.FinishedTs + 1
+					incoming.DMLEvents[0].DispatcherID = mock.id
+					require.True(t, stat.handleBatchDataEvents([]dispatcher.DispatcherEvent{dispatcher.NewDispatcherEvent(from, incoming)}))
+					received := mock.events[len(mock.events)-1].Event.(*commonEvent.DMLEvent)
+					expected, err := mock.router.ApplyToTableInfo(next)
+					require.NoError(t, err)
+					require.Equal(t, expected.GetSchemaName(), received.TableInfo.GetSchemaName())
+					require.Equal(t, expected.GetTableName(), received.TableInfo.GetTableName())
+					require.Equal(t, expected.GetTargetSchemaName(), received.TableInfo.GetTargetSchemaName())
+					require.Equal(t, expected.GetTargetTableName(), received.TableInfo.GetTargetTableName())
+					require.Equal(t, expected.TableName.TableID, received.TableInfo.TableName.TableID)
+					require.Equal(t, tc.row, received.Rows.GetRow(0).GetInt64(0))
+					require.Equal(t, ddl.FinishedTs, stat.tableInfoVersion.Load())
+					stat.epoch.Store(2)
+					recovered := commonEvent.NewHandshakeEvent(mock.id, ddl.FinishedTs, 2, next)
+					stat.handleHandshakeEvent(dispatcher.NewDispatcherEvent(from, &recovered))
+					require.Equal(t, expected.TableName, stat.tableInfo.Load().(*common.TableInfo).TableName)
+				})
+			}
+		}
+	}
+}
+
+func TestExchangeCacheGuard(t *testing.T) {
+	old := &common.TableInfo{TableName: common.TableName{TableID: 100}}
+	next := &common.TableInfo{TableName: common.TableName{TableID: 200}}
+	for _, tc := range []struct {
+		name    string
+		blocked *commonEvent.InfluencedTables
+	}{
+		{"missing", nil},
+		{"database", &commonEvent.InfluencedTables{InfluenceType: commonEvent.InfluenceTypeDB, SchemaID: 1}},
+		{"other span", &commonEvent.InfluencedTables{InfluenceType: commonEvent.InfluenceTypeNormal, TableIDs: []int64{201, 202}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newMockDispatcher(common.NewDispatcherID(), 0)
+			mock.tableSpan = &heartbeatpb.TableSpan{TableID: 101}
+			stat := newDispatcherStat(mock, newTestEventCollector(node.ID("local")), nil)
+			stat.tableInfo.Store(old)
+			stat.updateTableInfoByDDL(&commonEvent.DDLEvent{Type: byte(model.ActionExchangeTablePartition), TableInfo: next, BlockedTables: tc.blocked, FinishedTs: 10})
+			require.Same(t, old, stat.tableInfo.Load())
+			require.Equal(t, uint64(10), stat.tableInfoVersion.Load())
+		})
+	}
 }
