@@ -375,26 +375,9 @@ func (p *persistentStorage) getTableInfo(tableID int64, ts uint64) (*common.Tabl
 	return store.getTableInfo(ts)
 }
 
-func (p *persistentStorage) forceGetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error) {
-	p.mu.RLock()
-	// if there is already a store, it must contain all table info on disk, so we can use it directly
-	if store, ok := p.tableInfoStoreMap[tableID]; ok {
-		p.mu.RUnlock()
-		store.waitTableInfoInitialized()
-		return store.getTableInfo(ts)
-	}
-	p.mu.RUnlock()
-	// build a temp store to get table info
-	store := newEmptyVersionedTableInfoStore(tableID)
-	if err := p.buildVersionedTableInfoStore(store); err != nil {
-		return nil, err
-	}
-	return store.getTableInfo(ts)
-}
-
-// getTableInfoForDDL reads the schema immediately preceding a DDL without
+// getTableInfoAtTs reads the table schema at ts without
 // reconstructing every retained version for tables without local dispatchers.
-func (p *persistentStorage) getTableInfoForDDL(tableID int64, ts uint64) (*common.TableInfo, error) {
+func (p *persistentStorage) getTableInfoAtTs(tableID int64, ts uint64) (*common.TableInfo, error) {
 	p.mu.RLock()
 	if store, ok := p.tableInfoStoreMap[tableID]; ok {
 		p.mu.RUnlock()
@@ -800,24 +783,9 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	p.mu.Unlock()
 
-	// TODO: do we have a better way to do this?
-	if ddlEvent.Type == byte(model.ActionExchangeTablePartition) {
-		// ExtraTableInfo is the normal table info before exchange
-		ddlEvent.ExtraTableInfo, _ = p.forceGetTableInfo(ddlEvent.TableID, ddlEvent.FinishedTs)
-	}
-	switch job.Type {
-	case model.ActionAddPrimaryKey, model.ActionAddIndex, model.ActionModifyColumn, model.ActionMultiSchemaChange:
-		if ddlEvent.TableInfo != nil && common.OriginalHasPKOrNotNullUK(ddlEvent.TableInfo) {
-			// Partition DDL history is indexed by physical table ID.
-			physicalTableID := ddlEvent.TableID
-			if isPartitionTable(ddlEvent.TableInfo) && len(ddlEvent.TableInfo.Partition.Definitions) > 0 {
-				physicalTableID = ddlEvent.TableInfo.Partition.Definitions[0].ID
-			}
-			previousTableInfo, err := p.getTableInfoForDDL(physicalTableID, ddlEvent.FinishedTs-1)
-			if err != nil {
-				return err
-			}
-			ddlEvent.TableBecameEligible = !previousTableInfo.IsEligible(false)
+	if handler.enrichPersistedDDLEventFunc != nil {
+		if err := handler.enrichPersistedDDLEventFunc(p.getTableInfoAtTs, &ddlEvent); err != nil {
+			return err
 		}
 	}
 	failpoint.Inject("beforePersistingDDL", func() {

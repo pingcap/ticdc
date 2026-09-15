@@ -304,9 +304,15 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 				}
 			}
 		case "table_became_eligible":
-			z.TableBecameEligible, err = dc.ReadBool()
+			z.TableAcquiredReplicationKey, err = dc.ReadBool()
 			if err != nil {
-				err = msgp.WrapError(err, "TableBecameEligible")
+				err = msgp.WrapError(err, "TableAcquiredReplicationKey")
+				return
+			}
+		case "table_lost_replication_key":
+			z.TableLostReplicationKey, err = dc.ReadBool()
+			if err != nil {
+				err = msgp.WrapError(err, "TableLostReplicationKey")
 				return
 			}
 		default:
@@ -322,9 +328,9 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 
 // EncodeMsg implements msgp.Encodable
 func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
-	// map header, size 28
+	// map header, size 29
 	// write "id"
-	err = en.Append(0xde, 0x0, 0x1c, 0xa2, 0x69, 0x64)
+	err = en.Append(0xde, 0x0, 0x1d, 0xa2, 0x69, 0x64)
 	if err != nil {
 		return
 	}
@@ -661,9 +667,19 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 	if err != nil {
 		return
 	}
-	err = en.WriteBool(z.TableBecameEligible)
+	err = en.WriteBool(z.TableAcquiredReplicationKey)
 	if err != nil {
-		err = msgp.WrapError(err, "TableBecameEligible")
+		err = msgp.WrapError(err, "TableAcquiredReplicationKey")
+		return
+	}
+	// write "table_lost_replication_key"
+	err = en.Append(0xba, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x6c, 0x6f, 0x73, 0x74, 0x5f, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x5f, 0x6b, 0x65, 0x79)
+	if err != nil {
+		return
+	}
+	err = en.WriteBool(z.TableLostReplicationKey)
+	if err != nil {
+		err = msgp.WrapError(err, "TableLostReplicationKey")
 		return
 	}
 	return
@@ -672,9 +688,9 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 // MarshalMsg implements msgp.Marshaler
 func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	o = msgp.Require(b, z.Msgsize())
-	// map header, size 28
+	// map header, size 29
 	// string "id"
-	o = append(o, 0xde, 0x0, 0x1c, 0xa2, 0x69, 0x64)
+	o = append(o, 0xde, 0x0, 0x1d, 0xa2, 0x69, 0x64)
 	o = msgp.AppendInt64(o, z.ID)
 	// string "type"
 	o = append(o, 0xa4, 0x74, 0x79, 0x70, 0x65)
@@ -783,7 +799,10 @@ func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	}
 	// string "table_became_eligible"
 	o = append(o, 0xb5, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x62, 0x65, 0x63, 0x61, 0x6d, 0x65, 0x5f, 0x65, 0x6c, 0x69, 0x67, 0x69, 0x62, 0x6c, 0x65)
-	o = msgp.AppendBool(o, z.TableBecameEligible)
+	o = msgp.AppendBool(o, z.TableAcquiredReplicationKey)
+	// string "table_lost_replication_key"
+	o = append(o, 0xba, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x6c, 0x6f, 0x73, 0x74, 0x5f, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x5f, 0x6b, 0x65, 0x79)
+	o = msgp.AppendBool(o, z.TableLostReplicationKey)
 	return
 }
 
@@ -1085,9 +1104,15 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 				}
 			}
 		case "table_became_eligible":
-			z.TableBecameEligible, bts, err = msgp.ReadBoolBytes(bts)
+			z.TableAcquiredReplicationKey, bts, err = msgp.ReadBoolBytes(bts)
 			if err != nil {
-				err = msgp.WrapError(err, "TableBecameEligible")
+				err = msgp.WrapError(err, "TableAcquiredReplicationKey")
+				return
+			}
+		case "table_lost_replication_key":
+			z.TableLostReplicationKey, bts, err = msgp.ReadBoolBytes(bts)
+			if err != nil {
+				err = msgp.WrapError(err, "TableLostReplicationKey")
 				return
 			}
 		default:
@@ -1120,7 +1145,7 @@ func (z *PersistedDDLEvent) Msgsize() (s int) {
 	for za0008 := range z.MultipleTableInfosValue {
 		s += msgp.BytesPrefixSize + len(z.MultipleTableInfosValue[za0008])
 	}
-	s += 9 + msgp.StringPrefixSize + len(z.BDRRole) + 17 + msgp.Uint64Size + 10 + msgp.ArrayHeaderSize + (len(z.IndexIDs) * (msgp.Int64Size)) + 22 + msgp.BoolSize
+	s += 9 + msgp.StringPrefixSize + len(z.BDRRole) + 17 + msgp.Uint64Size + 10 + msgp.ArrayHeaderSize + (len(z.IndexIDs) * (msgp.Int64Size)) + 22 + msgp.BoolSize + 27 + msgp.BoolSize
 	return
 }
 

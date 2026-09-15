@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetTableInfoForDDL(t *testing.T) {
+func TestGetTableInfoAtTs(t *testing.T) {
 	normal := newEligibleTableInfoForTest(100, "normal")
 	partition := newEligiblePartitionTableInfoForTest(200, "partitioned", []model.PartitionDefinition{{ID: 201}, {ID: 202}})
 	renamed := newEligibleTableInfoForTest(100, "renamed")
@@ -97,28 +97,30 @@ func TestGetTableInfoForDDL(t *testing.T) {
 				require.NoError(t, writePersistedDDLEvent(storage.db, &event))
 				storage.tablesDDLHistory[tc.tableID] = append(storage.tablesDDLHistory[tc.tableID], event.FinishedTs)
 			}
-			actual, err := storage.getTableInfoForDDL(tc.tableID, tc.ts)
+			actual, err := storage.getTableInfoAtTs(tc.tableID, tc.ts)
 			if tc.deleted {
 				require.ErrorAs(t, err, new(*TableDeletedError))
 				require.Nil(t, actual)
 			} else {
 				require.NoError(t, err)
-				expected, err := storage.forceGetTableInfo(tc.tableID, tc.ts)
+				store := newEmptyVersionedTableInfoStore(tc.tableID)
+				require.NoError(t, storage.buildVersionedTableInfoStore(store))
+				expected, err := store.getTableInfo(tc.ts)
 				require.NoError(t, err)
 				require.Equal(t, expected.ToTiDBTableInfo(), actual.ToTiDBTableInfo())
 				require.Equal(t, expected.GetSchemaName(), actual.GetSchemaName())
 			}
 			require.Empty(t, storage.tableInfoStoreMap)
-			_, err = storage.getTableInfoForDDL(999, tc.ts)
+			_, err = storage.getTableInfoAtTs(999, tc.ts)
 			require.ErrorIs(t, err, errors.ErrSchemaStorageTableMiss)
 			storage.cleanObsoleteDataInMemory(tc.ts + 1)
-			_, err = storage.getTableInfoForDDL(tc.tableID, tc.ts)
+			_, err = storage.getTableInfoAtTs(tc.tableID, tc.ts)
 			require.ErrorIs(t, err, errors.ErrSnapshotLostByGC)
 		})
 	}
 }
 
-func TestGetTableInfoForDDLReadsOnlyLatestSchema(t *testing.T) {
+func TestGetTableInfoAtTsReadsOnlyLatestSchema(t *testing.T) {
 	const historyLength = 100
 	storage := newPersistentStorageForTest(t.TempDir(), nil)
 	t.Cleanup(func() { require.NoError(t, storage.close()) })
@@ -132,18 +134,17 @@ func TestGetTableInfoForDDLReadsOnlyLatestSchema(t *testing.T) {
 		require.NoError(t, writePersistedDDLEventWithEncryption(storage.db, &event, manager, 0))
 		storage.tablesDDLHistory[100] = append(storage.tablesDDLHistory[100], ts)
 	}
-	info, err := storage.getTableInfoForDDL(100, historyLength)
+	info, err := storage.getTableInfoAtTs(100, historyLength)
 	require.NoError(t, err)
 	require.True(t, info.IsEligible(false))
 	require.Equal(t, 1, manager.decryptCalls)
 	require.Empty(t, storage.tableInfoStoreMap)
 	manager.decryptCalls = 0
-	_, err = storage.forceGetTableInfo(100, historyLength)
-	require.NoError(t, err)
+	require.NoError(t, storage.buildVersionedTableInfoStore(newEmptyVersionedTableInfoStore(100)))
 	require.Equal(t, historyLength, manager.decryptCalls)
 }
 
-func TestGetTableInfoForDDLConcurrentGC(t *testing.T) {
+func TestGetTableInfoAtTsConcurrentGC(t *testing.T) {
 	initial := []mockDBInfo{{
 		dbInfo: &model.DBInfo{ID: 1, Name: ast.NewCIStr("test")},
 		tables: []*model.TableInfo{newEligibleTableInfoForTest(100, "a")},
@@ -168,7 +169,7 @@ func TestGetTableInfoForDDLConcurrentGC(t *testing.T) {
 	go func() {
 		var result lookupResult
 		for range 100 {
-			result.info, result.err = storage.getTableInfoForDDL(100, 50)
+			result.info, result.err = storage.getTableInfoAtTs(100, 50)
 			if result.err != nil || result.info.GetTableName() != "a" || !result.info.IsEligible(false) {
 				break
 			}
@@ -184,7 +185,7 @@ func TestGetTableInfoForDDLConcurrentGC(t *testing.T) {
 	require.NoError(t, result.err)
 	require.Equal(t, "a", result.info.GetTableName())
 	require.True(t, result.info.IsEligible(false))
-	info, err := storage.getTableInfoForDDL(100, 50)
+	info, err := storage.getTableInfoAtTs(100, 50)
 	require.NoError(t, err)
 	require.Equal(t, "a", info.GetTableName())
 }
@@ -209,8 +210,14 @@ func BenchmarkEligibilityTableInfoLookup(b *testing.B) {
 				name string
 				get  func(int64, uint64) (*common.TableInfo, error)
 			}{
-				{"latest", storage.getTableInfoForDDL},
-				{"fullHistory", storage.forceGetTableInfo},
+				{"latest", storage.getTableInfoAtTs},
+				{"fullHistory", func(tableID int64, ts uint64) (*common.TableInfo, error) {
+					store := newEmptyVersionedTableInfoStore(tableID)
+					if err := storage.buildVersionedTableInfoStore(store); err != nil {
+						return nil, err
+					}
+					return store.getTableInfo(ts)
+				}},
 			} {
 				b.Run(lookup.name, func(b *testing.B) {
 					require.Empty(b, storage.tableInfoStoreMap)

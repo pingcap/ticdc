@@ -79,6 +79,7 @@ type PersistedDDLEvent struct {
 	TableInfoValue []byte           `msg:"table_info_value"`
 	// - for ExchangeTablePartition, it is the the info of the normal table before exchange
 	//   and we derive the normal table info after exchange from this field(by clone it with a different table id)
+	// - for TableLostReplicationKey, it is the table info before losing the key
 	ExtraTableInfo      *common.TableInfo `msg:"-"`
 	ExtraTableInfoValue []byte            `msg:"extra_table_info_value"`
 	// the following fields are just used for CreateTables and RenameTables
@@ -93,10 +94,13 @@ type PersistedDDLEvent struct {
 	// MySQL sink uses them to recover anonymous index names.
 	IndexIDs []int64 `msg:"index_ids"`
 
-	// TableBecameEligible records a transition from no usable key to a primary
-	// key or non-null unique key. Force-replicating changefeeds already replicate
-	// the table and must handle this DDL through their existing dispatchers.
-	TableBecameEligible bool `msg:"table_became_eligible"`
+	// TableAcquiredReplicationKey records acquisition of a primary key or non-null
+	// unique key, independently of changefeed filters and force replication.
+	// Keep the existing message key so previously persisted events remain readable.
+	TableAcquiredReplicationKey bool `msg:"table_became_eligible"`
+	// TableLostReplicationKey records loss of the last usable replication key.
+	// ExtraTableInfo holds the pre-DDL schema for filtering the removal event.
+	TableLostReplicationKey bool `msg:"table_lost_replication_key"`
 }
 
 // TODO: use msgp.Raw to do version management
