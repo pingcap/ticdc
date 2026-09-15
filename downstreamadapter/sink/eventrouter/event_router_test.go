@@ -180,7 +180,7 @@ func TestRoutingRuleIsolation(t *testing.T) {
 					&rule,
 					{Matcher: []string{"sales.*"}, TopicRule: "sales-events", PartitionRule: "ts"},
 				}}
-				router, err := NewEventRouter(sinkConfig, "default-topic", isPulsar, false)
+				router, err := NewEventRouter(sinkConfig, false, "default-topic", isPulsar, false)
 				require.NoError(t, err)
 				require.Equal(t, tc.expectedTopic, router.GetTopicForRowChange("sales", "orders"))
 				require.Equal(t, tc.expectedTopic, router.GetTopicForDDL(&commonEvent.DDLEvent{
@@ -196,6 +196,9 @@ func TestRoutingRuleIsolation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
 func TestEventRouterCaseSensitive(t *testing.T) {
 	for _, caseSensitive := range []bool{false, true} {
 		sinkConfig := &config.SinkConfig{
