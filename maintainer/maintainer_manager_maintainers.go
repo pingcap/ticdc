@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -52,6 +53,8 @@ type managerMaintainerSet struct {
 	taskScheduler threadpool.ThreadPool
 	// heartbeatCh coalesces prompt reports from low-latency maintainers.
 	heartbeatCh chan<- struct{}
+	// nodeResourceUsage is shared by all local changefeed maintainers.
+	nodeResourceUsage *replica.NodeResourceUsageTracker
 
 	// registryMu serializes registry mutations that create, replace, or fully
 	// close maintainers because maintainer metrics share changefeed labels across
@@ -66,12 +69,14 @@ func newManagerMaintainerSet(
 	conf *config.SchedulerConfig,
 	nodeInfo *node.Info,
 	heartbeatCh chan<- struct{},
+	nodeResourceUsage *replica.NodeResourceUsageTracker,
 ) *managerMaintainerSet {
 	return &managerMaintainerSet{
-		conf:          conf,
-		nodeInfo:      nodeInfo,
-		taskScheduler: threadpool.NewThreadPoolDefault(),
-		heartbeatCh:   heartbeatCh,
+		conf:              conf,
+		nodeInfo:          nodeInfo,
+		taskScheduler:     threadpool.NewThreadPoolDefault(),
+		heartbeatCh:       heartbeatCh,
+		nodeResourceUsage: nodeResourceUsage,
 	}
 }
 
@@ -218,7 +223,7 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 	// Create the maintainer only after epoch admission so normal duplicate
 	// add retries do not start short-lived goroutines or metrics.
 	newMaintainer := func() *Maintainer {
-		maintainer := NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
+		maintainer := NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId, p.nodeResourceUsage)
 		maintainer.managerHeartbeatCh = p.heartbeatCh
 		return maintainer
 	}
@@ -354,6 +359,7 @@ func (p *managerMaintainerSet) handleRemoveMaintainer(msg *messaging.TargetMessa
 				p.taskScheduler,
 				req.KeyspaceId,
 				req.MaintainerEpoch,
+				p.nodeResourceUsage,
 			)
 			p.registry.Store(changefeedID, maintainer)
 		}

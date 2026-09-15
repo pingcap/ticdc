@@ -34,6 +34,7 @@ func GetNewGroupChecker(
 	cfID common.ChangeFeedID,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
 	refresher *RegionCountRefresher,
+	nodeResourceUsage *NodeResourceUsageTracker,
 ) func(replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication] {
 	if schedulerCfg == nil || !util.GetOrZero(schedulerCfg.EnableTableAcrossNodes) {
 		return replica.NewEmptyChecker[common.DispatcherID, *SpanReplication]
@@ -44,7 +45,7 @@ func GetNewGroupChecker(
 		case replica.GroupDefault:
 			return NewDefaultSpanSplitChecker(cfID, schedulerCfg, refresher)
 		case replica.GroupTable:
-			return NewSplitSpanChecker(cfID, groupID, schedulerCfg, refresher)
+			return NewSplitSpanChecker(cfID, groupID, schedulerCfg, refresher, nodeResourceUsage)
 		}
 		log.Panic("unknown group type", zap.String("changefeed", cfID.Name()), zap.Int8("groupType", int8(groupType)))
 		return nil

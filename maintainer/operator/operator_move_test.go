@@ -65,7 +65,7 @@ func setupTestEnvironment(t *testing.T) (*span.Controller, common.ChangeFeedID, 
 	)
 
 	refresher := replica.NewRegionCountRefresher(changefeedID, time.Minute)
-	spanController := span.NewController(changefeedID, ddlSpan, nil, nil, refresher, common.DefaultKeyspaceID, common.DefaultMode)
+	spanController := span.NewController(changefeedID, ddlSpan, nil, nil, refresher, common.DefaultKeyspaceID, common.DefaultMode, replica.NewNodeResourceUsageTracker())
 
 	replicaSet := replica.NewWorkingSpanReplication(
 		changefeedID,
