@@ -891,3 +891,45 @@ func TestApplyToDDLEventPreservesIndexIDs(t *testing.T) {
 	routed.IndexIDs[0] = 43
 	require.Equal(t, []int64{42}, original.IndexIDs)
 }
+
+func TestSchemaDDLRejectsEmptyTarget(t *testing.T) {
+	router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{
+		{Matcher: []string{"source_db.*"}, TargetSchema: "{table}"},
+	})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		query  string
+		action model.ActionType
+	}{
+		{"CREATE DATABASE source_db", model.ActionCreateSchema},
+		{"ALTER DATABASE source_db CHARACTER SET utf8mb4", model.ActionModifySchemaCharsetAndCollate},
+		{"DROP DATABASE source_db", model.ActionDropSchema},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			ddl := &event.DDLEvent{Query: tc.query, Type: byte(tc.action), SchemaName: "source_db"}
+			_, err := router.ApplyToDDLEvent(ddl)
+			require.Error(t, err)
+			require.True(t, errors.ErrTableRoutingFailed.Equal(err))
+			require.Contains(t, err.Error(), "target schema is empty")
+			require.Equal(t, tc.query, ddl.Query)
+		})
+	}
+	binding, err := router.route("source_db", "orders")
+	require.NoError(t, err)
+	require.Equal(t, "orders", binding.Target.Schema)
+}
+
+func TestRouteCorrelatedViewColumns(t *testing.T) {
+	stored := "SELECT orders.id FROM source_db.orders WHERE EXISTS (SELECT 1 FROM source_db.lines WHERE lines.order_id = orders.id)"
+	query, err := event.NormalizeCreateViewQueryWithStoredSelect("CREATE VIEW source_db.v AS "+stored, stored, "source_db")
+	require.NoError(t, err)
+	router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{
+		{Matcher: []string{"source_db.*"}, TargetSchema: "target_db", TargetTable: "{table}_r"},
+	})
+	require.NoError(t, err)
+	routed, err := router.ApplyToDDLEvent(&event.DDLEvent{
+		Query: query, Type: byte(model.ActionCreateView), SchemaName: "source_db", TableName: "v",
+	})
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "`target_db`.`lines_r`.`order_id`=`target_db`.`orders_r`.`id`")
+}

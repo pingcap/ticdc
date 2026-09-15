@@ -142,20 +142,22 @@ func (n *createViewSelectNormalizer) qualifyColumnName(c *ast.ColumnName) {
 		return
 	}
 
-	scope := n.scopes[len(n.scopes)-1]
 	tableKey := strings.ToLower(c.Table.O)
-	if _, ok := scope.aliases[tableKey]; ok {
-		return
+	// Resolve correlated references from the innermost SELECT outward.
+	for i := len(n.scopes) - 1; i >= 0; i-- {
+		scope := n.scopes[i]
+		if _, ok := scope.aliases[tableKey]; ok {
+			return
+		}
+		if _, ok := scope.ambiguousTables[tableKey]; ok {
+			return
+		}
+		if schema, ok := scope.tableByName[tableKey]; ok {
+			c.Schema = ast.NewCIStr(schema)
+			n.changed = true
+			return
+		}
 	}
-	if _, ok := scope.ambiguousTables[tableKey]; ok {
-		return
-	}
-	schema, ok := scope.tableByName[tableKey]
-	if !ok {
-		return
-	}
-	c.Schema = ast.NewCIStr(schema)
-	n.changed = true
 }
 
 func buildCreateViewSelectScope(selectStmt *ast.SelectStmt) createViewSelectScope {

@@ -54,3 +54,26 @@ func TestExtractTableSchemas(t *testing.T) {
 
 	require.Nil(t, extractTableSchemas(nil))
 }
+
+func TestNormalizeCorrelatedViewColumns(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{"outer table", "SELECT * FROM source_db.orders WHERE EXISTS (SELECT 1 FROM source_db.lines WHERE lines.id = orders.id)", "`source_db`.`lines`.`id`=`source_db`.`orders`.`id`"},
+		{"multiple levels", "SELECT * FROM source_db.orders WHERE EXISTS (SELECT 1 FROM source_db.lines WHERE EXISTS (SELECT 1 WHERE orders.id = 1))", "`source_db`.`orders`.`id`=1"},
+		{"alias shadows outer", "SELECT * FROM source_db.orders WHERE EXISTS (SELECT 1 FROM source_db.lines AS orders WHERE orders.id = 1)", "WHERE `orders`.`id`=1"},
+		{"local table shadows outer", "SELECT * FROM source_db.orders WHERE EXISTS (SELECT 1 FROM other_db.orders WHERE orders.id = 1)", "WHERE `other_db`.`orders`.`id`=1"},
+		{"ambiguous local table", "SELECT * FROM source_db.orders WHERE EXISTS (SELECT 1 FROM a.orders JOIN b.orders WHERE orders.id = 1)", "WHERE `orders`.`id`=1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parser.New().ParseOneStmt(tc.query, "", "")
+			require.NoError(t, err)
+			normalizeCreateViewSelect(stmt, "source_db")
+			query, err := Restore(stmt)
+			require.NoError(t, err)
+			require.Contains(t, query, tc.want)
+		})
+	}
+}
