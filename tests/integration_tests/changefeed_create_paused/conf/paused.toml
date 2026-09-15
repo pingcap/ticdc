@@ -1,0 +1,5 @@
+# Only affects creation. Use changefeed resume to start replication later.
+pause = true
+
+[filter]
+rules = ["create_paused.cli"]
