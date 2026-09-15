@@ -161,7 +161,7 @@ func TestChangefeedUpdateStatusFastFailWithLowerCheckpoint(t *testing.T) {
 	require.False(t, cf.ShouldRun())
 }
 
-func TestChangefeed_UpdateStatusFastFailWhenBootstrapDoneChanges(t *testing.T) {
+func TestBootstrapDoneFastFail(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
@@ -189,7 +189,7 @@ func TestChangefeed_UpdateStatusFastFailWhenBootstrapDoneChanges(t *testing.T) {
 	require.False(t, cf.ShouldRun())
 }
 
-func TestChangefeed_UpdateStatusRetryableErrorWhenBootstrapDoneChanges(t *testing.T) {
+func TestBootstrapDoneRetryableError(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",

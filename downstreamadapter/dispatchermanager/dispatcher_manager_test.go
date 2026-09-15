@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -662,4 +663,71 @@ func TestAbortMergeRestoresSourceDispatchersRegistration(t *testing.T) {
 	require.Equal(t, heartbeatpb.ComponentState_Working, dispatcher2.GetComponentStatus())
 	require.True(t, ec.HasDispatcher(dispatcher1.GetId()))
 	require.True(t, ec.HasDispatcher(dispatcher2.GetId()))
+}
+
+func TestDispatcherManagerTableRoutingCaseSensitive(t *testing.T) {
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	collector := &HeartBeatCollector{
+		heartBeatReqQueue:                       NewHeartbeatRequestQueue(),
+		blockStatusReqQueue:                     NewBlockStatusRequestQueue(),
+		heartBeatResponseDynamicStream:          newHeartBeatResponseDynamicStream(dispatcher.GetDispatcherStatusDynamicStream()),
+		schedulerDispatcherRequestDynamicStream: newSchedulerDispatcherRequestDynamicStream(),
+		mergeDispatcherRequestDynamicStream:     newMergeDispatcherRequestDynamicStream(),
+	}
+	appcontext.SetService(appcontext.HeartbeatCollector, collector)
+	defer collector.heartBeatResponseDynamicStream.Close()
+	defer collector.schedulerDispatcherRequestDynamicStream.Close()
+	defer collector.mergeDispatcherRequestDynamicStream.Close()
+
+	for _, tc := range []struct {
+		name          string
+		caseSensitive *bool
+	}{
+		{name: "unset"},
+		{name: "insensitive", caseSensitive: util.AddressOf(false)},
+		{name: "sensitive", caseSensitive: util.AddressOf(true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.GetDefaultReplicaConfig()
+			cfg.CaseSensitive = tc.caseSensitive
+			cfg.Sink.DispatchRules = []*config.DispatchRule{
+				{Matcher: []string{"Sales.*"}, TargetSchema: "archive"},
+				{Matcher: []string{"Mixed.*"}, TargetSchema: "copy_{schema}", TargetTable: "{table}_copy"},
+			}
+			info := &config.ChangeFeedInfo{Config: cfg, SinkURI: "blackhole://"}
+			manager, err := NewDispatcherManager(common.DefaultKeyspaceID,
+				common.NewChangefeedID4Test("test", tc.name), info.ToChangefeedConfig(), nil, nil, 1, node.NewID(), false)
+			require.NoError(t, err)
+			defer manager.close(false)
+			router := manager.sharedInfo.GetRouter()
+			for _, source := range []common.TableName{
+				{Schema: "sales", Table: "orders"},
+				{Schema: "archive", Table: "orders"},
+				{Schema: "Mixed", Table: "OrDeRs"},
+				{Schema: "mIxEd", Table: "OrDeRs"},
+			} {
+				wantSchema, wantTable := source.Schema, source.Table
+				if source.Schema == "sales" && !util.GetOrZero(tc.caseSensitive) {
+					wantSchema = "archive"
+				}
+				if source.Schema == "Mixed" || source.Schema == "mIxEd" && !util.GetOrZero(tc.caseSensitive) {
+					wantSchema, wantTable = "copy_"+source.Schema, source.Table+"_copy"
+				}
+				tableInfo := &common.TableInfo{TableName: source}
+				routed, err := router.ApplyToTableInfo(tableInfo)
+				require.NoError(t, err)
+				require.Equal(t, wantSchema, routed.GetTargetSchemaName())
+				require.Equal(t, wantTable, routed.GetTargetTableName())
+				ddl, err := router.ApplyToDDLEvent(&event.DDLEvent{
+					Type: byte(model.ActionCreateTable), SchemaName: source.Schema, TableName: source.Table,
+					Query: "CREATE TABLE `" + source.Schema + "`.`" + source.Table + "` (`id` INT)", TableInfo: tableInfo,
+				})
+				require.NoError(t, err)
+				require.Contains(t, ddl.Query, "`"+wantSchema+"`.`"+wantTable+"`")
+				require.Equal(t, wantSchema, ddl.TableInfo.GetTargetSchemaName())
+				require.Equal(t, wantTable, ddl.TableInfo.GetTargetTableName())
+				require.Equal(t, source, tableInfo.TableName)
+			}
+		})
+	}
 }

@@ -294,7 +294,7 @@ func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) 
 	// already been flushed to downstream (AppliedWatermark), otherwise the replay cannot
 	// heal the missing window.
 	replicaCfg := config.GetDefaultReplicaConfig()
-	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
+	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, false, "test-topic", false, false)
 	require.NoError(t, err)
 
 	w := &writer{

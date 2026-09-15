@@ -53,6 +53,7 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
+	caseSensitive bool,
 	factoryCreator kafka.FactoryCreator,
 ) (components, config.Protocol, error) {
 	kafkaComponent := components{}
@@ -78,12 +79,12 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 	}
 
 	kafkaComponent.eventRouter, err = eventrouter.NewEventRouter(
-		sinkConfig, topic, false, protocol == config.ProtocolAvro)
+		sinkConfig, caseSensitive, topic, false, protocol == config.ProtocolAvro)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
-	kafkaComponent.columnSelector, err = columnselector.New(sinkConfig)
+	kafkaComponent.columnSelector, err = columnselector.New(sinkConfig, caseSensitive)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
@@ -134,8 +135,9 @@ func newKafkaSinkComponent(
 	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
+	caseSensitive bool,
 ) (components, config.Protocol, error) {
-	return newKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, kafka.NewSaramaFactory)
+	return newKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive, kafka.NewSaramaFactory)
 }
 
 func newKafkaSinkComponentForTest(
@@ -143,6 +145,7 @@ func newKafkaSinkComponentForTest(
 	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
+	caseSensitive bool,
 ) (components, config.Protocol, error) {
-	return newKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, kafka.NewMockFactory)
+	return newKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive, kafka.NewMockFactory)
 }

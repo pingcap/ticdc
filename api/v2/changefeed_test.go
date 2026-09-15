@@ -20,6 +20,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,4 +79,73 @@ func TestVerifyRouteConflict(t *testing.T) {
 	require.Contains(t, err.Error(), "target `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db2`.`orders`")
+}
+
+func TestVerifyRouteConflictCaseSensitive(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		caseSensitive *bool
+	}{
+		{name: "unset"},
+		{name: "insensitive", caseSensitive: util.AddressOf(false)},
+		{name: "sensitive", caseSensitive: util.AddressOf(true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.GetDefaultReplicaConfig()
+			cfg.CaseSensitive = tc.caseSensitive
+			cfg.Sink.DispatchRules = []*config.DispatchRule{{Matcher: []string{"Sales.*"}, TargetSchema: "archive"}}
+			cfg = ToAPIReplicaConfig(cfg).ToInternalReplicaConfig()
+			runtimeCfg := (&config.ChangeFeedInfo{Config: cfg}).ToChangefeedConfig()
+			require.Equal(t, util.GetOrZero(tc.caseSensitive), runtimeCfg.CaseSensitive)
+			err := verifyRouteConflict(common.NewChangefeedID4Test("test", tc.name),
+				[]common.TableName{{Schema: "sales", Table: "orders"}, {Schema: "archive", Table: "orders"}}, nil, cfg)
+			if util.GetOrZero(tc.caseSensitive) {
+				require.NoError(t, err)
+			} else {
+				require.True(t, errors.ErrTableRouteConflict.Equal(err), "%v", err)
+			}
+		})
+	}
+}
+
+func TestVerifyTable4MQCaseSensitive(t *testing.T) {
+	idType := types.NewFieldType(mysql.TypeLong)
+	idType.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	table := common.WrapTableInfo("sales", &model.TableInfo{
+		ID: 1, Name: ast.NewCIStr("orders"), PKIsHandle: true,
+		Columns: []*model.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), State: model.StatePublic, FieldType: *idType}},
+	})
+	for _, tc := range []struct {
+		name          string
+		caseSensitive *bool
+	}{
+		{name: "unset"},
+		{name: "insensitive", caseSensitive: util.AddressOf(false)},
+		{name: "sensitive", caseSensitive: util.AddressOf(true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, scheme := range []string{config.KafkaScheme, config.PulsarScheme} {
+				t.Run(scheme, func(t *testing.T) {
+					cfg := config.GetDefaultReplicaConfig()
+					cfg.CaseSensitive = tc.caseSensitive
+					cfg.Sink.ColumnSelectors = []*config.ColumnSelector{{Matcher: []string{"Sales.*"}, Columns: []string{"*", "!id"}}}
+					cfg = ToAPIReplicaConfig(cfg).ToInternalReplicaConfig()
+					err := verifyTable4MQ(cfg, scheme, "default-topic", config.ProtocolCanalJSON, []*common.TableInfo{table})
+					if util.GetOrZero(tc.caseSensitive) {
+						require.NoError(t, err)
+					} else {
+						require.True(t, errors.ErrColumnSelectorFailed.Equal(err), "%v", err)
+					}
+					cfg.Sink.ColumnSelectors = nil
+					cfg.Sink.DispatchRules = []*config.DispatchRule{{Matcher: []string{"Sales.*"}, PartitionRule: "index-value", IndexName: "missing_index"}}
+					err = verifyTable4MQ(cfg, scheme, "default-topic", config.ProtocolCanalJSON, []*common.TableInfo{table})
+					if util.GetOrZero(tc.caseSensitive) {
+						require.NoError(t, err)
+					} else {
+						require.True(t, errors.ErrDispatcherFailed.Equal(err), "%v", err)
+					}
+				})
+			}
+		})
+	}
 }
