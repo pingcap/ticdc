@@ -27,9 +27,6 @@ group_num=${group#G}
 # For pulsar: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_pulsar_integration_light.groovy
 # For storage: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_storage_integration_light.groovy
 
-# TODO: Re-enable partial_index when the TiDB artifacts for release-nextgen-20251011
-# support partial index conditions. It is skipped for all sink types below.
-
 # Resource allocation for mysql light integration tests in CI pipelines:
 # https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pod-pull_cdc_mysql_integration_light.yaml
 # 4 CPU, 16 Gi memory.
