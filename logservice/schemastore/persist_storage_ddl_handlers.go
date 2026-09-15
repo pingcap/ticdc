@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -567,28 +568,51 @@ func prepareRecoverSchemaJob(p *persistentStorage, job *model.Job) error {
 	if args.RecoverInfo == nil || args.RecoverInfo.DBInfo == nil {
 		return cerror.ErrDDLEventError.GenWithStackByArgs()
 	}
+
+	// Current TiDB defers loading tables, while older versions put them in the
+	// job directly. Let integration tests exercise the compatibility path.
+	forceTableInfo := false
+	failpoint.Inject("forceRecoverSchemaJobWithTableInfo", func() {
+		forceTableInfo = true
+	})
+	failpoint.Inject("verifyRecoverSchemaJobWithSnapshotTS", func() {
+		if args.RecoverInfo.LoadTablesOnExecute && len(args.RecoverInfo.RecoverTableInfos) == 0 {
+			log.Info("verified recover schema job uses snapshot TS")
+		}
+	})
+	if forceTableInfo && args.RecoverInfo.LoadTablesOnExecute && len(args.RecoverInfo.RecoverTableInfos) == 0 {
+		args.RecoverInfo.LoadTablesOnExecute = false
+		if err := loadRecoverSchemaTableInfos(p, job, args.RecoverInfo); err != nil {
+			return err
+		}
+		log.Info("forced recover schema job to use embedded table infos")
+	}
 	if !args.RecoverInfo.LoadTablesOnExecute || len(args.RecoverInfo.RecoverTableInfos) > 0 {
 		return nil
 	}
 
 	// TiDB may defer loading the recovered tables to the DDL owner to avoid
 	// putting a large table list into the job arguments.
-	snapshot := p.kvStorage.GetSnapshot(kv.NewVersion(args.RecoverInfo.SnapshotTS))
-	tables, err := meta.NewReader(snapshot).ListTables(p.ctx, args.RecoverInfo.DBInfo.ID)
+	return loadRecoverSchemaTableInfos(p, job, args.RecoverInfo)
+}
+
+func loadRecoverSchemaTableInfos(p *persistentStorage, job *model.Job, recoverInfo *model.RecoverSchemaInfo) error {
+	snapshot := p.kvStorage.GetSnapshot(kv.NewVersion(recoverInfo.SnapshotTS))
+	tables, err := meta.NewReader(snapshot).ListTables(p.ctx, recoverInfo.DBInfo.ID)
 	if err != nil {
 		return cerror.WrapError(cerror.ErrDDLEventError, err)
 	}
-	args.RecoverInfo.RecoverTableInfos = make([]*model.RecoverTableInfo, 0, len(tables))
+	recoverInfo.RecoverTableInfos = make([]*model.RecoverTableInfo, 0, len(tables))
 	for _, tableInfo := range tables {
 		if tableInfo == nil {
 			return cerror.ErrDDLEventError.GenWithStackByArgs()
 		}
-		args.RecoverInfo.RecoverTableInfos = append(args.RecoverInfo.RecoverTableInfos, &model.RecoverTableInfo{
-			SchemaID:      args.RecoverInfo.DBInfo.ID,
+		recoverInfo.RecoverTableInfos = append(recoverInfo.RecoverTableInfos, &model.RecoverTableInfo{
+			SchemaID:      recoverInfo.DBInfo.ID,
 			TableInfo:     tableInfo,
-			DropJobID:     args.RecoverInfo.DropJobID,
-			SnapshotTS:    args.RecoverInfo.SnapshotTS,
-			OldSchemaName: args.RecoverInfo.OldSchemaName.O,
+			DropJobID:     recoverInfo.DropJobID,
+			SnapshotTS:    recoverInfo.SnapshotTS,
+			OldSchemaName: recoverInfo.OldSchemaName.O,
 			OldTableName:  tableInfo.Name.O,
 		})
 	}

@@ -9,7 +9,7 @@
 # and maintainer ask table trigger to write ddl,
 # when the table trigger event dispatcher have not write the ddl yet, the two node are both restarted.
 # --> we expect the cluster will get the correct table count and continue to sync the following events successfully.
-#     1 ddl is drop, flashback, and drop databases
+#     1 ddl is drop databases
 #     2 ddl is drop table
 #     3 ddl is rename table
 #     5 ddl is truncate table
@@ -95,15 +95,6 @@ function failOverCaseD-1() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
 	ensure 30 "run_sql 'show databases;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'fail_over_ddl_test'"
-
-	# Recover the dropped database and drop it again to verify FLASHBACK DATABASE
-	# restores the schema metadata in TiCDC.
-	run_sql "flashback database fail_over_ddl_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	ensure 30 "check_db_exists fail_over_ddl_test ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}"
-	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_contains 'test1' && check_contains 'test2'"
-
-	run_sql "drop database fail_over_ddl_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	ensure 30 "check_db_not_exists fail_over_ddl_test ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}"
 
 	## continue to write ddl and dml to test the cdc server is working well
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
