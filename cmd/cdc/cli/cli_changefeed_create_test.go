@@ -239,9 +239,20 @@ func TestCreateChangefeedPauseFromToml(t *testing.T) {
 			o := newCreateChangefeedOptions(common)
 			require.NoError(t, o.completeReplicaCfg())
 			request := o.getChangefeedConfig()
-			require.Equal(t, option == "pause = true", request.Pause)
+			if option == "" {
+				require.Nil(t, request.Pause)
+			} else {
+				require.NotNil(t, request.Pause)
+				require.Equal(t, option == "pause = true", *request.Pause)
+			}
+			// Preserve omitted versus explicit false through JSON as well as TOML.
+			data, err := json.Marshal(request)
+			require.NoError(t, err)
+			var decoded v2.ChangefeedConfig
+			require.NoError(t, json.Unmarshal(data, &decoded))
+			require.Equal(t, request.Pause, decoded.Pause)
 			// The create-only option must not become a runtime replica setting.
-			require.False(t, request.ReplicaConfig.ToInternalReplicaConfig().Pause)
+			require.Nil(t, request.ReplicaConfig.ToInternalReplicaConfig().Pause)
 		})
 	}
 }

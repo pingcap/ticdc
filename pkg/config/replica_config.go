@@ -152,7 +152,7 @@ type ReplicaConfig replicaConfig
 type replicaConfig struct {
 	// Pause is a CLI create-only option, forwarded to the API creation request.
 	// It does not control the state of an existing changefeed.
-	Pause            bool    `toml:"pause" json:"pause,omitempty"`
+	Pause            *bool   `toml:"pause" json:"pause,omitempty"`
 	PerformanceMode  *string `toml:"performance-mode" json:"performance-mode,omitempty"`
 	MemoryQuota      *uint64 `toml:"memory-quota" json:"memory-quota,omitempty"`
 	CaseSensitive    *bool   `toml:"case-sensitive" json:"case-sensitive,omitempty"`

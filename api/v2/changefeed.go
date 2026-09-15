@@ -303,7 +303,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		KeyspaceID:     keyspaceMeta.GetId(),
 	}
 
-	if cfg.Pause {
+	if util.GetOrZero(cfg.Pause) {
 		info.State = config.StateStopped
 	}
 
