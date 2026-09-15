@@ -21,13 +21,17 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
+	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/maintainer"
 	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server"
@@ -39,6 +43,64 @@ import (
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 )
+
+func TestDeleteMissingChangefeedRequiresAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	cfg.Security.ClientAllowedUser = []string{"alice"}
+	config.StoreGlobalServerConfig(cfg)
+
+	ctrl := gomock.NewController(t)
+	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient.EXPECT().GetEtcdClient().Return(nil)
+
+	coordinator := &deleteMissingCoordinator{}
+	handler := &OpenAPIV2{server: &deleteMissingServer{
+		coordinator: coordinator,
+		etcdClient:  etcdClient,
+	}}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodDelete,
+		"/api/v2/changefeeds/missing?keyspace=test",
+		nil,
+	)
+	c.Params = gin.Params{{Key: api.APIOpVarChangefeedID, Value: "missing"}}
+
+	handler.DeleteChangefeed(c)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.False(t, coordinator.removeCalled)
+}
+
+func TestLoadKeyspaceInContext(t *testing.T) {
+	if !kerneltype.IsNextGen() {
+		t.Skip("keyspace authentication context is only needed in next-gen")
+	}
+
+	ctrl := gomock.NewController(t)
+	keyspaceManager := keyspace.NewMockManager(ctrl)
+	keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), "test").Return(&keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 1},
+		Name:     "test",
+	}, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodDelete, "/api/v2/changefeeds/missing?keyspace=test", nil)
+
+	loadKeyspaceInContext(c, keyspaceManager)
+
+	require.Equal(t, uint32(1), middleware.GetKeyspaceFromContext(c).GetId())
+}
 
 // TestValidateResumeChangefeedState covers the API-side guard that runs before
 // resume GC safepoint/barrier setup. Running states must fail fast, while states
@@ -177,6 +239,44 @@ func (c *resumeNormalCoordinator) DrainNode(ctx context.Context, target node.ID)
 }
 
 func (c *resumeNormalCoordinator) Initialized() bool { return true }
+
+type deleteMissingServer struct {
+	server.Server
+	coordinator server.Coordinator
+	etcdClient  etcd.CDCEtcdClient
+}
+
+func (s *deleteMissingServer) GetCoordinator() (server.Coordinator, error) {
+	return s.coordinator, nil
+}
+
+func (s *deleteMissingServer) GetEtcdClient() etcd.CDCEtcdClient {
+	return s.etcdClient
+}
+
+type deleteMissingCoordinator struct {
+	server.Coordinator
+	removeCalled bool
+}
+
+func (c *deleteMissingCoordinator) Initialized() bool {
+	return true
+}
+
+func (c *deleteMissingCoordinator) GetChangefeed(
+	_ context.Context,
+	changefeedDisplayName common.ChangeFeedDisplayName,
+) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error) {
+	return nil, nil, errors.ErrChangeFeedNotExists.GenWithStackByArgs(changefeedDisplayName.String())
+}
+
+func (c *deleteMissingCoordinator) RemoveChangefeed(
+	_ context.Context,
+	_ common.ChangeFeedID,
+) (uint64, error) {
+	c.removeCalled = true
+	return 0, nil
+}
 
 // TestMaskSinkURIForError verifies that error messages mask sensitive sink URI
 // fields. It checks both a valid URI with secret query parameters and an invalid
