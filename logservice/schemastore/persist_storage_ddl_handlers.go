@@ -354,7 +354,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForNewTableDDL,
 	},
 	model.ActionRecoverSchema: {
-		prepareJobFunc:             (*persistentStorage).prepareRecoverSchemaJob,
+		prepareJobFunc:             prepareRecoverSchemaJob,
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForRecoverSchema,
 		updateDDLHistoryFunc:       updateDDLHistoryForCreateTables,
 		updateFullTableInfoFunc:    updateFullTableInfoForMultiTablesDDL,
@@ -2190,7 +2190,7 @@ func buildDDLEventForRecoverSchema(rawEvent *PersistedDDLEvent, tableFilter filt
 	for _, tableInfo := range rawEvent.MultipleTableInfos {
 		filtered, notSync, err := filterDDL(
 			tableFilter, rawEvent.SchemaName, tableInfo.Name.O, rawEvent.Query,
-			model.ActionRecoverTable, tableInfo, rawEvent.StartTs)
+			model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
 		if err != nil {
 			return commonEvent.DDLEvent{}, false, err
 		}

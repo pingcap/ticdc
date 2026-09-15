@@ -185,8 +185,9 @@ func (f *filter) ShouldDiscardDDL(schema, table string, ddlType timodel.ActionTy
 		return true
 	}
 
-	// If the DDL is a schema DDL, we should ignore it if the schema is not allowed.
-	if IsSchemaDDL(ddlType) {
+	// Schema DDLs without a table are filtered at schema scope. Some schema
+	// DDLs, such as recover schema, also carry tables that need table filtering.
+	if IsSchemaDDL(ddlType) && table == "" {
 		return f.ShouldIgnoreSchema(schema)
 	}
 

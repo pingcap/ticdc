@@ -2758,7 +2758,7 @@ func TestPrepareRecoverSchemaJob(t *testing.T) {
 		ctx:       context.Background(),
 		kvStorage: tikvStore,
 	}
-	require.NoError(t, storage.prepareRecoverSchemaJob(job))
+	require.NoError(t, prepareRecoverSchemaJob(storage, job))
 	require.Len(t, args.RecoverInfo.RecoverTableInfos, 1)
 	require.Equal(t, tableInfo.ID, args.RecoverInfo.RecoverTableInfos[0].TableInfo.ID)
 
@@ -2782,7 +2782,7 @@ func TestPrepareRecoverSchemaJob(t *testing.T) {
 	require.NoError(t, err)
 	decodedJobV1 := &model.Job{}
 	require.NoError(t, decodedJobV1.Decode(rawJob))
-	require.NoError(t, storage.prepareRecoverSchemaJob(decodedJobV1))
+	require.NoError(t, prepareRecoverSchemaJob(storage, decodedJobV1))
 	argsV1, err := model.GetRecoverArgs(decodedJobV1)
 	require.NoError(t, err)
 	require.Len(t, argsV1.RecoverInfo.RecoverTableInfos, 1)

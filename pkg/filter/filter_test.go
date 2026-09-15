@@ -310,6 +310,9 @@ func TestShouldDiscardDDL(t *testing.T) {
 	require.False(t, f.ShouldDiscardDDL("filter", "", model.ActionCreateSchema, nil))
 	require.False(t, f.ShouldDiscardDDL("filter", "t1", model.ActionCreateTable, nil))
 	require.True(t, f.ShouldDiscardDDL("filter", "t2", model.ActionCreateTable, nil))
+	require.False(t, f.ShouldDiscardDDL("filter", "", model.ActionRecoverSchema, nil))
+	require.False(t, f.ShouldDiscardDDL("filter", "t1", model.ActionRecoverSchema, nil))
+	require.True(t, f.ShouldDiscardDDL("filter", "t2", model.ActionRecoverSchema, nil))
 }
 
 func TestShouldIgnoreDDL(t *testing.T) {

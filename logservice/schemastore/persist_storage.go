@@ -833,7 +833,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	return nil
 }
 
-func (p *persistentStorage) prepareRecoverSchemaJob(job *model.Job) error {
+func prepareRecoverSchemaJob(p *persistentStorage, job *model.Job) error {
 	args, err := model.GetRecoverArgs(job)
 	if err != nil {
 		return errors.WrapError(errors.ErrDDLEventError, err)
