@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	cdcfilter "github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -871,4 +872,22 @@ func TestApplyToDDLEventRejectsParserUnsupportedIndexDDL(t *testing.T) {
 			require.Contains(t, err.Error(), "table routing does not support ddl type")
 		})
 	}
+}
+
+func TestApplyToDDLEventPreservesIndexIDs(t *testing.T) {
+	router := newTestRouter(t, false, []*config.DispatchRule{{
+		Matcher: []string{"source_db.*"}, TargetSchema: "target_db",
+	}})
+	original := &event.DDLEvent{
+		Type:       byte(model.ActionAddIndex),
+		SchemaName: "source_db", TableName: "t",
+		Query:    "ALTER TABLE `source_db`.`t` ADD INDEX `idx` (`id`)",
+		IndexIDs: []int64{42},
+	}
+	routed, err := router.ApplyToDDLEvent(original)
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "`target_db`.`t`")
+	require.Equal(t, original.IndexIDs, routed.IndexIDs)
+	routed.IndexIDs[0] = 43
+	require.Equal(t, []int64{42}, original.IndexIDs)
 }

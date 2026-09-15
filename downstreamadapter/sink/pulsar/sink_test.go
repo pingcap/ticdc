@@ -45,7 +45,7 @@ func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	comp, protocol, err := newPulsarSinkComponentForTest(ctx, changefeedID, sinkURI, replicaConfig.Sink)
+	comp, protocol, err := newPulsarSinkComponentForTest(ctx, changefeedID, sinkURI, replicaConfig.Sink, false)
 	require.NoError(t, err)
 
 	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "sink")

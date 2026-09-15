@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -354,6 +355,10 @@ func (e *DDLEvent) GetUpdatedSchemas() []SchemaIDChange {
 }
 
 func (e *DDLEvent) GetDDLQuery() string {
+	if e == nil {
+		log.Error("DDLEvent is nil, should not happened in production env", zap.Any("event", e))
+		return ""
+	}
 	return e.Query
 }
 
@@ -576,32 +581,12 @@ func NewRoutedDDLEvent(
 		TiDBOnly:          d.TiDBOnly,
 		BDRMode:           d.BDRMode,
 		Err:               d.Err,
-		PostTxnFlushed:    clonePostTxnFlushed(d.PostTxnFlushed),
-		IndexIDs:          cloneIndexIDs(d.IndexIDs),
+		PostTxnFlushed:    slices.Clone(d.PostTxnFlushed),
+		IndexIDs:          slices.Clone(d.IndexIDs),
 		eventSize:         d.eventSize,
 		IsBootstrap:       d.IsBootstrap,
 		NotSync:           d.NotSync,
 	}
-}
-
-func cloneIndexIDs(indexIDs []int64) []int64 {
-	if indexIDs == nil {
-		return nil
-	}
-
-	cloned := make([]int64, len(indexIDs))
-	copy(cloned, indexIDs)
-	return cloned
-}
-
-func clonePostTxnFlushed(postTxnFlushed []func()) []func() {
-	if postTxnFlushed == nil {
-		return nil
-	}
-
-	cloned := make([]func(), len(postTxnFlushed))
-	copy(cloned, postTxnFlushed)
-	return cloned
 }
 
 func (t *DDLEvent) Len() int32 {

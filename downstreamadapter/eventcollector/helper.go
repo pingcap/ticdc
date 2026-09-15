@@ -76,8 +76,7 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		return false
 	}
 	// Only check the first event type, because all events in the same batch should be in the same type group.
-	firstEvent := events[0]
-	switch firstEvent.GetType() {
+	switch events[0].GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeResolvedEvent,
 		commonEvent.TypeDDLEvent,
@@ -90,19 +89,22 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 			log.Panic("unexpected multiple events for TypeReadyEvent or TypeNotReusableEvent",
 				zap.Int("count", len(events)))
 		}
-		stat.handleSignalEvent(firstEvent)
+		stat.handleSignalEvent(events[0])
+		return false
 	case commonEvent.TypeDropEvent:
 		if len(events) > 1 {
 			log.Panic("unexpected multiple events for TypeDropEvent",
 				zap.Int("count", len(events)))
 		}
-		stat.handleDropEvent(firstEvent)
+		stat.handleDropEvent(events[0])
+		return false
 	case commonEvent.TypeHandshakeEvent:
 		if len(events) > 1 {
 			log.Panic("unexpected multiple events for TypeHandshakeEvent",
 				zap.Int("count", len(events)))
 		}
-		stat.handleHandshakeEvent(firstEvent)
+		stat.handleHandshakeEvent(events[0])
+		return false
 	default:
 		log.Panic("unknown event type", zap.Int("type", int(events[0].GetType())))
 	}

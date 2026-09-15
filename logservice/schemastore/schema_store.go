@@ -47,10 +47,7 @@ type SchemaStore interface {
 
 	UnregisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64) error
 
-	// GetTableInfo returns full table schema with the largest version <= ts.
-	// It is for already admitted table dispatchers: the table must have been
-	// registered through RegisterTable so schema store keeps its versioned table
-	// info cache.
+	// GetTableInfo return table info with the largest version <= ts
 	GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 
 	// TODO: how to respect tableFilter

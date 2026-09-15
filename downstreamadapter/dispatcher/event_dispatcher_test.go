@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -29,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -490,7 +490,6 @@ func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
 	case msg := <-dispatcher.GetBlockStatusesChan():
 		require.True(t, msg.State.IsBlocked)
 		require.Equal(t, uint64(10), msg.State.BlockTs)
-		require.Empty(t, msg.State.RouteTableAdmissions)
 		require.Equal(t, heartbeatpb.BlockStage_WAITING, msg.State.Stage)
 	case <-time.After(time.Second):
 		require.FailNow(t, "expected blocking DDL to enter WAITING after local flush")
@@ -514,7 +513,6 @@ func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
 	case msg := <-dispatcher.GetBlockStatusesChan():
 		require.True(t, msg.State.IsBlocked)
 		require.Equal(t, uint64(10), msg.State.BlockTs)
-		require.Empty(t, msg.State.RouteTableAdmissions)
 		require.Equal(t, heartbeatpb.BlockStage_DONE, msg.State.Stage)
 	case <-time.After(time.Second):
 		require.FailNow(t, "expected DONE after write action")
@@ -1270,7 +1268,6 @@ func TestHoldBlockEventUntilNoResendTasks(t *testing.T) {
 		require.False(t, msg.State.IsBlocked)
 		require.False(t, msg.State.IsSyncPoint)
 		require.Equal(t, uint64(10), msg.State.BlockTs)
-		require.Empty(t, msg.State.RouteTableAdmissions)
 	case <-time.After(time.Second):
 		require.FailNow(t, "expected add-table block status")
 	}

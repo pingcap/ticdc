@@ -57,8 +57,9 @@ func newPulsarSinkComponent(
 	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
+	caseSensitive bool,
 ) (component, config.Protocol, error) {
-	return newPulsarSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, pulsar.NewCreatorFactory)
+	return newPulsarSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive, pulsar.NewCreatorFactory)
 }
 
 func newPulsarSinkComponentForTest(
@@ -66,14 +67,16 @@ func newPulsarSinkComponentForTest(
 	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
+	caseSensitive bool,
 ) (component, config.Protocol, error) {
-	return newPulsarSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, pulsar.NewMockCreatorFactory)
+	return newPulsarSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive, pulsar.NewMockCreatorFactory)
 }
 
 func newPulsarSinkComponentWithFactory(ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
+	caseSensitive bool,
 	factoryCreator pulsar.FactoryCreator,
 ) (component, config.Protocol, error) {
 	pulsarComponent := component{}
@@ -108,12 +111,12 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 	}
 
 	// pulsar only support canal-json, so we don't need to check the protocol
-	pulsarComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, topic, true, false)
+	pulsarComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, caseSensitive, topic, true, false)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.columnSelector, err = columnselector.New(sinkConfig)
+	pulsarComponent.columnSelector, err = columnselector.New(sinkConfig, caseSensitive)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}

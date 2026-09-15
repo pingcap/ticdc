@@ -28,8 +28,7 @@ type TableName struct {
 	IsPartition bool  `toml:"is-partition" msg:"is-partition"`
 
 	// TargetSchema and TargetTable are used as an in-memory routing overlay.
-	// They are intentionally excluded from msgpack serialization because redo
-	// persists routed names canonically in Schema/Table.
+	// They are excluded from msgpack serialization to preserve the wire format.
 	TargetSchema string `toml:"target-db-name" msg:"-"`
 	TargetTable  string `toml:"target-tbl-name" msg:"-"`
 }

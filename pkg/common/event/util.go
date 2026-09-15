@@ -34,7 +34,6 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/format"
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -613,6 +612,7 @@ func (s *EventTestHelper) DML2Event4PartitionTable(schema, table, partition, dml
 // 3. You must set the preRow of the DMLEvent by yourself, since we can not get it from TiDB.
 func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEvent {
 	key := toTableInfosKey(schema, table)
+	log.Info("dml2event", zap.String("key", key))
 	tableInfo, ok := s.tableInfos[key]
 	require.True(s.t, ok)
 	did := common.NewDispatcherID()
@@ -786,27 +786,6 @@ func toTableInfosKey(schema, table string) string {
 	return schema + "." + table
 }
 
-func Restore(stmt ast.StmtNode) (string, error) {
-	var sb strings.Builder
-	// translate TiDB feature to special comment
-	restoreFlags := format.RestoreTiDBSpecialComment
-	// escape the keyword
-	restoreFlags |= format.RestoreNameBackQuotes
-	// upper case keyword
-	restoreFlags |= format.RestoreKeyWordUppercase
-	// wrap string with single quote
-	restoreFlags |= format.RestoreStringSingleQuotes
-	// remove placement rule
-	restoreFlags |= format.SkipPlacementRuleForRestore
-	// force disable ttl
-	restoreFlags |= format.RestoreWithTTLEnableOff
-	err := stmt.Restore(format.NewRestoreCtx(restoreFlags, &sb))
-	if err != nil {
-		return "", errors.Trace(err)
-	}
-	return sb.String(), nil
-}
-
 // SplitQueries takes a string containing multiple SQL statements and splits them into individual SQL statements.
 // This function is designed for scenarios like batch creation of tables, where multiple `CREATE TABLE` statements
 // might be combined into a single query string.
@@ -831,7 +810,7 @@ func SplitQueries(queries string) ([]string, error) {
 		// The (ast.Node).Restore function generates a SQL string representation of the AST (Abstract Syntax Tree) node.
 		// By default, the resulting SQL string does not include a trailing semicolon ";".
 		// Therefore, we explicitly append a semicolon here to ensure the SQL statement is complete.
-		res = append(res, fmt.Sprintf("%s;", query))
+		res = append(res, query+";")
 	}
 
 	return res, nil

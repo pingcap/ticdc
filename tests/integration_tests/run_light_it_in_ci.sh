@@ -27,6 +27,9 @@ group_num=${group#G}
 # For pulsar: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_pulsar_integration_light.groovy
 # For storage: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_storage_integration_light.groovy
 
+# TODO: Re-enable partial_index when the TiDB artifacts for release-nextgen-20251011
+# support partial index conditions. It is skipped for all sink types below.
+
 # Resource allocation for mysql light integration tests in CI pipelines:
 # https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pod-pull_cdc_mysql_integration_light.yaml
 # 4 CPU, 16 Gi memory.
@@ -46,7 +49,7 @@ mysql_groups=(
 	# G06
 	'http_api http_api_compatibility http_api_tls http_api_tls_old_arch fail_over_ddl_G synced_status same_upstream_downstream'
 	# G07
-	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config synced_status_with_redo redo_apply_table_route'
+	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config synced_status_with_redo'
 	# G08
 	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I table_route'
 	# G09
@@ -89,7 +92,7 @@ kafka_groups=(
 	# G07
 	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08
-	'capture_session_done_during_task fail_over_ddl_I table_route'
+	'capture_session_done_during_task fail_over_ddl_I'
 	# G09
 	'cdc_server_tips ddl_sequence log_redaction fail_over_ddl_J'
 	# G10
@@ -183,7 +186,7 @@ storage_groups=(
 	# disables the no-operator terminal-status fallback; the case depends on that rescheduling path.
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	'csv_storage_partition_table csv_storage_multi_tables_ddl table_route fail_over_ddl_O update_changefeed_check_config'
+	'csv_storage_partition_table csv_storage_multi_tables_ddl fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'split_region autorandom gc_safepoint'
 )

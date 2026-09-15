@@ -62,18 +62,6 @@ func TestCanalJSONTxnEventEncoderMaxMessageBytes(t *testing.T) {
 	require.NotNil(t, err)
 }
 
-func TestCanalJSONTxnEventEncoderUsesTargetNames(t *testing.T) {
-	t.Parallel()
-
-	encoder := NewJSONTxnEventEncoder(common.NewConfig(config.ProtocolCanalJSON))
-	require.NoError(t, appendTxnEventForTest(encoder, common.NewRoutedDMLEvent4Test(), nil))
-
-	messages := encoder.Build()
-	require.Len(t, messages, 1)
-	require.Contains(t, string(messages[0].Value), `"database":"target_db"`)
-	require.Contains(t, string(messages[0].Value), `"table":"target_table"`)
-}
-
 func TestCanalJSONAppendTxnEventEncoderWithCallback(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -121,7 +109,7 @@ func TestCanalJSONTxnEventEncoderWithColumnSelector(t *testing.T) {
 		ColumnSelectors: []*config.ColumnSelector{
 			{Matcher: []string{"test.t"}, Columns: []string{"col1"}},
 		},
-	})
+	}, false)
 	require.NoError(t, err)
 
 	encoder := NewJSONTxnEventEncoder(common.NewConfig(config.ProtocolCanalJSON))

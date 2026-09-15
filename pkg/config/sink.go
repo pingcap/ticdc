@@ -208,7 +208,6 @@ type SinkConfig struct {
 	// DebeziumConfig related configurations
 	Debezium *DebeziumConfig `toml:"debezium" json:"debezium,omitempty"`
 
-	CaseSensitive *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	// Integrity is only available when the downstream is MQ.
 	Integrity      *IntegrityConfig `toml:"integrity" json:"integrity"`
 	ForceReplicate *bool            `toml:"force-replicate" json:"force-replicate,omitempty"`
@@ -249,22 +248,6 @@ func (s *SinkConfig) ShouldSendAllBootstrapAtStart() bool {
 	should := s.ShouldSendBootstrapMsg() && util.GetOrZero(s.SendAllBootstrapAtStart)
 	log.Info("should send all bootstrap at start", zap.Bool("should", should))
 	return should
-}
-
-// TableRouteEnabled return true if there is at least one rule enabled.
-func (s *SinkConfig) TableRouteEnabled() bool {
-	if s == nil {
-		return false
-	}
-	for _, rule := range s.DispatchRules {
-		if rule == nil {
-			continue
-		}
-		if rule.TargetSchema != "" || rule.TargetTable != "" {
-			return true
-		}
-	}
-	return false
 }
 
 // CSVConfig defines a series of configuration items for csv codec.
@@ -775,6 +758,10 @@ func CheckUseTableIDAsPathCompatibility(
 }
 
 func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
+	if s.TableRouteEnabled() && !IsMySQLCompatibleScheme(GetScheme(sinkURI)) {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("table routing only supports MySQL-compatible sinks")
+	}
+
 	if err := s.validateAndAdjustSinkURI(sinkURI); err != nil {
 		return err
 	}
@@ -899,6 +886,19 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 	}
 
 	return nil
+}
+
+// TableRouteEnabled reports whether any dispatch rule specifies a target name.
+func (s *SinkConfig) TableRouteEnabled() bool {
+	if s == nil {
+		return false
+	}
+	for _, rule := range s.DispatchRules {
+		if rule != nil && (rule.TargetSchema != "" || rule.TargetTable != "") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *SinkConfig) validateTableRoute() error {
