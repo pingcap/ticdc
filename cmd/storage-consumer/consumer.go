@@ -124,7 +124,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	if err != nil {
 		return nil, err
 	}
-	columnSelectors, err := columnselector.New(replicaConfig.Sink, false)
+	columnSelectors, err := columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
 	if err != nil {
 		return nil, err
 	}

@@ -1702,7 +1702,7 @@ func verifyTablesForSink(
 	tableInfos []*common.TableInfo,
 ) error {
 	if config.IsStorageScheme(scheme) {
-		selectors, err := columnselector.New(replicaConfig.Sink, false)
+		selectors, err := columnselector.New(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive))
 		if err != nil {
 			return err
 		}

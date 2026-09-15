@@ -108,7 +108,7 @@ func TestVerifyRouteConflictCaseSensitive(t *testing.T) {
 	}
 }
 
-func TestVerifyTable4MQCaseSensitive(t *testing.T) {
+func TestVerifyTablesForSinkCaseSensitive(t *testing.T) {
 	idType := types.NewFieldType(mysql.TypeLong)
 	idType.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
 	table := common.WrapTableInfo("sales", &model.TableInfo{
@@ -124,7 +124,7 @@ func TestVerifyTable4MQCaseSensitive(t *testing.T) {
 		{name: "sensitive", caseSensitive: util.AddressOf(true)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, scheme := range []string{config.KafkaScheme, config.PulsarScheme} {
+			for _, scheme := range []string{config.FileScheme, config.KafkaScheme, config.PulsarScheme} {
 				t.Run(scheme, func(t *testing.T) {
 					cfg := config.GetDefaultReplicaConfig()
 					cfg.CaseSensitive = tc.caseSensitive
@@ -135,6 +135,9 @@ func TestVerifyTable4MQCaseSensitive(t *testing.T) {
 						require.NoError(t, err)
 					} else {
 						require.True(t, errors.ErrColumnSelectorFailed.Equal(err), "%v", err)
+					}
+					if !config.IsMQScheme(scheme) {
+						return
 					}
 					cfg.Sink.ColumnSelectors = nil
 					cfg.Sink.DispatchRules = []*config.DispatchRule{{Matcher: []string{"Sales.*"}, PartitionRule: "index-value", IndexName: "missing_index"}}
