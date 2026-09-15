@@ -245,6 +245,11 @@ func (r Router) Route(originSchema, originTable string) (binding RouteBinding, e
 	}
 
 	targetSchema := substituteExpression(rule.targetSchemaExpr, originSchema, originTable, originSchema)
+	if targetSchema == "" {
+		return RouteBinding{}, errors.ErrTableRoutingFailed.GenWithStack(
+			"target schema is empty for source %s.%s with target-schema expression %q",
+			originSchema, originTable, rule.targetSchemaExpr)
+	}
 	if originTable == "" {
 		return NewRouteBinding(originSchema, originTable, targetSchema, originTable), nil
 	}

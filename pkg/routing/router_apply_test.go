@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	cdcfilter "github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/testkit"
 	"github.com/stretchr/testify/require"
 )
@@ -985,4 +986,57 @@ func TestViewCTERouting(t *testing.T) {
 			helper.Tk().MustExec("DROP VIEW test.v")
 		})
 	}
+}
+
+func TestEmptyTargetSchema(t *testing.T) {
+	router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{
+		{Matcher: []string{"source_db.*"}, TargetSchema: "{table}"},
+	})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		query  string
+		action model.ActionType
+	}{
+		{"CREATE DATABASE source_db", model.ActionCreateSchema},
+		{"ALTER DATABASE source_db CHARACTER SET utf8mb4", model.ActionModifySchemaCharsetAndCollate},
+		{"DROP DATABASE source_db", model.ActionDropSchema},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			ddl := &event.DDLEvent{Query: tc.query, Type: byte(tc.action), SchemaName: "source_db"}
+			original := *ddl
+			_, err := router.ApplyToDDLEvent(ddl)
+			require.Error(t, err)
+			require.True(t, errors.ErrTableRoutingFailed.Equal(err))
+			require.Contains(t, err.Error(), "target schema is empty")
+			require.Equal(t, original, *ddl)
+		})
+	}
+	binding, err := router.Route("source_db", "orders")
+	require.NoError(t, err)
+	require.Equal(t, "orders", binding.Target.Schema)
+}
+
+func TestCorrelatedView(t *testing.T) {
+	stored := "SELECT orders.id FROM source_db.orders WHERE EXISTS (SELECT 1 FROM source_db.lines WHERE lines.order_id = orders.id)"
+	query, err := event.NormalizeCreateViewQueryWithStoredSelect("CREATE VIEW source_db.v AS "+stored, stored, "source_db")
+	require.NoError(t, err)
+	router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{
+		{Matcher: []string{"source_db.*"}, TargetSchema: "target_db", TargetTable: "{table}_r"},
+	})
+	require.NoError(t, err)
+	routed, err := router.ApplyToDDLEvent(&event.DDLEvent{
+		Query: query, Type: byte(model.ActionCreateView), SchemaName: "source_db", TableName: "v",
+	})
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "`target_db`.`lines_r`.`order_id`=`target_db`.`orders_r`.`id`")
+
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("CREATE DATABASE target_db")
+	helper.Tk().MustExec("CREATE TABLE target_db.orders_r (id INT PRIMARY KEY)")
+	helper.Tk().MustExec("CREATE TABLE target_db.lines_r (order_id INT)")
+	helper.Tk().MustExec("INSERT INTO target_db.orders_r VALUES (1), (2)")
+	helper.Tk().MustExec("INSERT INTO target_db.lines_r VALUES (1)")
+	helper.Tk().MustExec(routed.Query)
+	helper.Tk().MustQuery("SELECT * FROM target_db.v_r").Check(testkit.Rows("1"))
 }

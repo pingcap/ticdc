@@ -105,6 +105,13 @@ CREATE VIEW `source_extra_db`.`users_view_from_default` AS
 CREATE VIEW `source_extra_db`.`orders_column_view_from_default` AS
     SELECT `orders`.`id`, `orders`.`amount` FROM `orders` WHERE `orders`.`id` IN (1, 3);
 
+-- Correlated columns must resolve through the outer SELECT scope.
+CREATE VIEW `source_extra_db`.`correlated_users_view` AS
+    SELECT `users`.`id` FROM `users`
+    WHERE EXISTS (
+        SELECT 1 FROM `orders` WHERE `orders`.`user_id` = `users`.`id`
+    );
+
 CREATE TABLE `source_db`.`cross_move_source` (
     id INT PRIMARY KEY,
     value VARCHAR(50)
