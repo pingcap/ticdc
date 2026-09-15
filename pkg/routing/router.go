@@ -245,6 +245,11 @@ func (r Router) Route(originSchema, originTable string) (binding RouteBinding, e
 	}
 
 	targetSchema := substituteExpression(rule.targetSchemaExpr, originSchema, originTable, originSchema)
+	if targetSchema == "" {
+		return RouteBinding{}, errors.ErrTableRoutingFailed.GenWithStack(
+			"target schema is empty for source %s.%s with target-schema expression %q",
+			originSchema, originTable, rule.targetSchemaExpr)
+	}
 	if originTable == "" {
 		return NewRouteBinding(originSchema, originTable, targetSchema, originTable), nil
 	}
@@ -359,6 +364,7 @@ func (r Router) applyToBlockedTableNames(tableNames []commonEvent.SchemaTableNam
 }
 
 // substituteExpression replaces {schema} and {table} placeholders with actual values.
+// Placeholder-like text in source names is preserved literally.
 // If expr is empty, returns defaultValue (typically sourceSchema for schema expressions,
 // sourceTable for table expressions).
 func substituteExpression(expr, sourceSchema, sourceTable, defaultValue string) string {
@@ -366,10 +372,10 @@ func substituteExpression(expr, sourceSchema, sourceTable, defaultValue string) 
 		return defaultValue
 	}
 
-	result := expr
-	result = strings.ReplaceAll(result, SchemaPlaceholder, sourceSchema)
-	result = strings.ReplaceAll(result, TablePlaceholder, sourceTable)
-	return result
+	return strings.NewReplacer(
+		SchemaPlaceholder, sourceSchema,
+		TablePlaceholder, sourceTable,
+	).Replace(expr)
 }
 
 // ValidateNoStaticRouteConflict checks whether the given table names would produce

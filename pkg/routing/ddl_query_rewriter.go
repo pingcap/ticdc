@@ -15,6 +15,7 @@ package routing
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -142,14 +143,66 @@ func fillDefaultSchema(tables []commonEvent.SchemaTableName, defaultSchema strin
 	}
 }
 
+// cteScopes tracks CTE visibility in AST visit order. Non-recursive CTEs
+// become visible after their definition; recursive CTEs can reference themselves.
+// Both extraction and rewriting must skip the same CTE references.
+type cteScopes struct {
+	scopes []map[string]struct{}
+}
+
+func (c *cteScopes) enter(in ast.Node) {
+	switch n := in.(type) {
+	case *ast.SelectStmt, *ast.SetOprStmt, *ast.SetOprSelectList:
+		c.scopes = append(c.scopes, nil)
+	case *ast.CommonTableExpression:
+		if n.IsRecursive {
+			c.add(n.Name.L)
+		}
+	}
+}
+
+func (c *cteScopes) leave(in ast.Node) {
+	switch n := in.(type) {
+	case *ast.SelectStmt, *ast.SetOprStmt, *ast.SetOprSelectList:
+		c.scopes = c.scopes[:len(c.scopes)-1]
+	case *ast.CommonTableExpression:
+		c.add(n.Name.L)
+	}
+}
+
+func (c *cteScopes) add(name string) {
+	i := len(c.scopes) - 1
+	if c.scopes[i] == nil {
+		c.scopes[i] = make(map[string]struct{})
+	}
+	c.scopes[i][name] = struct{}{}
+}
+
+func (c *cteScopes) contains(table *ast.TableName) bool {
+	if table.Schema.O != "" {
+		return false
+	}
+	for _, scope := range slices.Backward(c.scopes) {
+		if _, ok := scope[table.Name.L]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // tableNameExtractor extracts table names from DDL AST nodes.
 // ref: https://github.com/pingcap/tidb/blob/09feccb529be2830944e11f5fed474020f50370f/server/sql_info_fetcher.go#L46
 type tableNameExtractor struct {
+	ctes  cteScopes
 	names []commonEvent.SchemaTableName
 }
 
 func (tne *tableNameExtractor) Enter(in ast.Node) (ast.Node, bool) {
+	tne.ctes.enter(in)
 	if t, ok := in.(*ast.TableName); ok {
+		if tne.ctes.contains(t) {
+			return in, true
+		}
 		tne.names = append(tne.names, commonEvent.SchemaTableName{SchemaName: t.Schema.O, TableName: t.Name.O})
 		return in, true
 	}
@@ -157,6 +210,7 @@ func (tne *tableNameExtractor) Enter(in ast.Node) (ast.Node, bool) {
 }
 
 func (tne *tableNameExtractor) Leave(in ast.Node) (ast.Node, bool) {
+	tne.ctes.leave(in)
 	return in, true
 }
 
@@ -195,8 +249,9 @@ func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
 // TableName nodes are rewritten positionally in the same traversal order as
 // extractTableNames. For CREATE VIEW, TiDB represents `db`.`table`.`column` as
 // a ColumnName node, so the visitor also rewrites the schema/table qualifier
-// when it is explicitly schema-qualified. Unqualified qualifiers such as
-// `table`.`column` may be aliases and are left unchanged.
+// when it is explicitly schema-qualified. Table-qualified columns and wildcards
+// follow unaliased physical tables in their SELECT; CTE and alias references
+// retain their names.
 //
 // Example for a CREATE VIEW with routing rule source_db.* → target_db.{table}_r:
 //
@@ -215,6 +270,10 @@ func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
 //	  CREATE VIEW `target_db`.`v_r` AS
 //	    SELECT `target_db`.`t_r`.`id` FROM `target_db`.`t_r`
 type tableRenameVisitor struct {
+	ctes        cteScopes
+	sourceNames []commonEvent.SchemaTableName
+	// Each SELECT owns its unqualified column and wildcard references.
+	selectScopes []selectScope
 	// targetNames contains routed names aligned with tableNameExtractor output.
 	targetNames []commonEvent.SchemaTableName
 	// targetByQualifiedSource maps qualified source table names to routed names.
@@ -225,11 +284,32 @@ type tableRenameVisitor struct {
 	hasErr bool
 }
 
+type selectScope struct {
+	columns []*ast.ColumnName
+	tables  map[string]commonEvent.SchemaTableName
+	fields  *ast.FieldList
+	targets map[*ast.WildCardField]commonEvent.SchemaTableName
+}
+
 func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
 	if v.hasErr {
 		return in, true
 	}
+	v.ctes.enter(in)
+	switch n := in.(type) {
+	case *ast.SelectStmt:
+		v.selectScopes = append(v.selectScopes, selectScope{
+			fields:  n.Fields,
+			tables:  make(map[string]commonEvent.SchemaTableName),
+			targets: make(map[*ast.WildCardField]commonEvent.SchemaTableName),
+		})
+	case *ast.TableSource:
+		v.collectTable(n)
+	}
 	if t, ok := in.(*ast.TableName); ok {
+		if v.ctes.contains(t) {
+			return in, true
+		}
 		if v.i >= len(v.targetNames) {
 			v.hasErr = true
 			return in, true
@@ -240,6 +320,10 @@ func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
 		return in, true
 	}
 	if c, ok := in.(*ast.ColumnName); ok {
+		if c.Schema.O == "" && c.Table.O != "" && len(v.selectScopes) > 0 {
+			scope := &v.selectScopes[len(v.selectScopes)-1]
+			scope.columns = append(scope.columns, c)
+		}
 		v.rewriteColumnName(c)
 		return in, true
 	}
@@ -250,7 +334,55 @@ func (v *tableRenameVisitor) Leave(in ast.Node) (ast.Node, bool) {
 	if v.hasErr {
 		return in, false
 	}
+	v.ctes.leave(in)
+	if _, ok := in.(*ast.SelectStmt); ok {
+		scope := v.selectScopes[len(v.selectScopes)-1]
+		for _, column := range scope.columns {
+			if target, ok := scope.tables[column.Table.L]; ok {
+				column.Schema = ast.NewCIStr(target.SchemaName)
+				column.Table = ast.NewCIStr(target.TableName)
+			}
+		}
+		for field, target := range scope.targets {
+			field.Schema = ast.NewCIStr(target.SchemaName)
+			field.Table = ast.NewCIStr(target.TableName)
+		}
+		v.selectScopes = v.selectScopes[:len(v.selectScopes)-1]
+	}
 	return in, true
+}
+
+func (v *tableRenameVisitor) collectTable(table *ast.TableSource) {
+	if table.AsName.O != "" || len(v.selectScopes) == 0 {
+		return
+	}
+	sourceTable, ok := table.Source.(*ast.TableName)
+	if !ok || v.ctes.contains(sourceTable) {
+		return
+	}
+	if v.i >= len(v.sourceNames) || v.i >= len(v.targetNames) {
+		return
+	}
+	// The TableName immediately following this TableSource uses index i.
+	source, target := v.sourceNames[v.i], v.targetNames[v.i]
+	scope := v.selectScopes[len(v.selectScopes)-1]
+	// Stored view queries can omit a column's schema even when FROM is qualified.
+	// Only unaliased physical tables in this SELECT can bind these references.
+	scope.tables[strings.ToLower(source.TableName)] = target
+	if scope.fields == nil {
+		return
+	}
+	for _, field := range scope.fields.Fields {
+		wildcard := field.WildCard
+		if wildcard == nil || wildcard.Table.O == "" || !strings.EqualFold(wildcard.Table.O, source.TableName) {
+			continue
+		}
+		if wildcard.Schema.O != "" && !strings.EqualFold(wildcard.Schema.O, source.SchemaName) {
+			continue
+		}
+		// Apply after visiting FROM so routed names cannot match another source.
+		scope.targets[wildcard] = target
+	}
 }
 
 // rewriteColumnName rewrites only schema-qualified column references
@@ -275,6 +407,7 @@ func newTableRenameVisitor(
 	targetTables []commonEvent.SchemaTableName,
 ) *tableRenameVisitor {
 	visitor := &tableRenameVisitor{
+		sourceNames:             sourceTables,
 		targetNames:             targetTables,
 		targetByQualifiedSource: make(map[commonEvent.SchemaTableName]commonEvent.SchemaTableName, len(sourceTables)),
 	}
@@ -303,6 +436,7 @@ func normalizedSchemaTableName(schema, table string) commonEvent.SchemaTableName
 // traversal order produced by extractTableNames. TableName nodes are rewritten
 // positionally. For CREATE VIEW, schema-qualified column references are also
 // updated so `db`.`table`.`column` keeps pointing at the routed table.
+// Table-qualified wildcards follow their unaliased table within each SELECT.
 //
 // Returned DDL uses StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
 func rewriteDDLStmtTables(

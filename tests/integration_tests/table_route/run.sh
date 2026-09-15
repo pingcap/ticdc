@@ -47,7 +47,24 @@ function verify_table_route_result() {
 	check_contains "orders_column_view_from_default_routed"
 	check_contains "\`${target_db}\`.\`orders_routed\`.\`id\`"
 	check_contains "FROM \`${target_db}\`.\`orders_routed\`"
+	check_table_not_exists source_extra_db.correlated_users_view "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	run_sql "SHOW CREATE VIEW ${target_extra_db}.correlated_users_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_contains "\`${target_db}\`.\`orders_routed\`.\`user_id\`"
+	check_contains "\`${target_db}\`.\`users_routed\`.\`id\`"
+	# Users 2 and 4 have no orders, so this also detects a lost correlation.
+	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM source_extra_db.correlated_users_view" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_contains 'matched_ids: 1,3'
+	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM ${target_extra_db}.correlated_users_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_contains 'matched_ids: 1,3'
 	check_table_not_exists "$target_db.transient_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+
+	# Compare view results explicitly: table data checks alone cannot detect a
+	# CTE accidentally reading an existing physical table.
+	sed 's/_routed//g' "$CUR/data/cte_query.sql" |
+		mysql -uroot -h"$UP_TIDB_HOST" -P"$UP_TIDB_PORT" -Dsource_db -N -B >"$work_dir/cte_upstream.txt"
+	mysql -uroot -h"$DOWN_TIDB_HOST" -P"$DOWN_TIDB_PORT" -D"$target_db" -N -B \
+		<"$CUR/data/cte_query.sql" >"$work_dir/cte_downstream.txt"
+	diff -u "$work_dir/cte_upstream.txt" "$work_dir/cte_downstream.txt"
 }
 
 function drop_table_route_source_databases() {
@@ -341,6 +358,8 @@ function run_mysql() {
 	run_sql_file "$CUR/data/test.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 
 	verify_table_route_result "$WORK_DIR"
+	run_sql_file "$CUR/data/exchange_partition.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_sync_diff "$WORK_DIR" "$CUR/conf/diff_config.toml" 120
 	drop_table_route_source_databases
 	verify_table_route_drop_database
 	cdc_cli_changefeed remove -c "$normal_changefeed_id"

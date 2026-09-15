@@ -4840,3 +4840,43 @@ func assertTableDeleted(t *testing.T, storage *persistentStorage, tableID int64,
 	require.Nil(t, info)
 	require.IsType(t, &TableDeletedError{}, err)
 }
+
+func TestExchangeTableInfo(t *testing.T) {
+	for _, partitionSchema := range []string{"normal_db", "partition_db"} {
+		t.Run(partitionSchema, func(t *testing.T) {
+			normal := common.WrapTableInfo("normal_db", newEligibleTableInfoForTest(200, "nt"))
+			partition := newEligiblePartitionTableInfoForTest(100, "pt", []model.PartitionDefinition{{ID: 200}, {ID: 102}})
+			raw := &PersistedDDLEvent{
+				Type: byte(model.ActionExchangeTablePartition), SchemaName: "normal_db", TableName: "nt", TableID: 200,
+				ExtraSchemaName: partitionSchema, ExtraTableName: "pt", ExtraTableID: 100,
+				TableInfo: partition, ExtraTableInfo: normal, PrevPartitions: []int64{101, 102},
+			}
+			for _, tc := range []struct {
+				physical, logical int64
+				schema, table     string
+				partition         bool
+			}{
+				{0, 100, partitionSchema, "pt", true},
+				{200, 100, partitionSchema, "pt", true},
+				{101, 101, "normal_db", "nt", false},
+			} {
+				ddl, ok, err := buildDDLEventForExchangeTablePartition(raw, nil, tc.physical)
+				require.NoError(t, err)
+				require.True(t, ok)
+				require.Equal(t, tc.schema, ddl.TableInfo.GetSchemaName())
+				require.Equal(t, tc.table, ddl.TableInfo.GetTableName())
+				require.Equal(t, tc.logical, ddl.TableInfo.TableName.TableID)
+				require.Equal(t, tc.partition, ddl.TableInfo.TableName.IsPartition)
+				require.Equal(t, partitionSchema, ddl.MultipleTableInfos[0].GetSchemaName())
+				require.Same(t, normal, ddl.MultipleTableInfos[1])
+				if tc.physical != 0 {
+					stored, deleted := extractTableInfoFuncForExchangeTablePartition(raw, tc.physical)
+					require.False(t, deleted)
+					require.Equal(t, stored.TableName, ddl.TableInfo.TableName)
+					require.Equal(t, stored.GetColumns(), ddl.TableInfo.GetColumns())
+				}
+			}
+			require.Equal(t, int64(200), normal.TableName.TableID)
+		})
+	}
+}

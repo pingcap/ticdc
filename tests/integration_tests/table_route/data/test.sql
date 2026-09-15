@@ -105,6 +105,13 @@ CREATE VIEW `source_extra_db`.`users_view_from_default` AS
 CREATE VIEW `source_extra_db`.`orders_column_view_from_default` AS
     SELECT `orders`.`id`, `orders`.`amount` FROM `orders` WHERE `orders`.`id` IN (1, 3);
 
+-- Correlated columns must resolve through the outer SELECT scope.
+CREATE VIEW `source_extra_db`.`correlated_users_view` AS
+    SELECT `users`.`id` FROM `users`
+    WHERE EXISTS (
+        SELECT 1 FROM `orders` WHERE `orders`.`user_id` = `users`.`id`
+    );
+
 CREATE TABLE `source_db`.`cross_move_source` (
     id INT PRIMARY KEY,
     value VARCHAR(50)
@@ -159,6 +166,16 @@ CREATE VIEW `source_db`.`transient_view` AS
     SELECT `id`, `name` FROM `source_db`.`users`;
 
 DROP VIEW `source_db`.`transient_view`;
+
+-- CTE references must retain their names while the underlying users table is routed.
+CREATE VIEW source_db.cte_view AS
+    WITH selected_users AS (SELECT id FROM users WHERE id <= 2)
+    SELECT id FROM selected_users;
+
+-- The CTE shadows the real orders table, whose rows differ from users.
+CREATE VIEW source_db.cte_shadow_view AS
+    WITH orders AS (SELECT id FROM users WHERE id <= 2)
+    SELECT id FROM orders;
 
 -- ============================================
 -- DDL: PARTITION TABLE
@@ -231,6 +248,22 @@ UPDATE products SET name = 'Super Widget', price = 12.99 WHERE id = 1;
 
 -- Delete with condition
 DELETE FROM products WHERE price < 15.00;
+
+-- Prepare both sides of EXCHANGE PARTITION. The MySQL case waits for the
+-- initial sync-diff before executing exchange_partition.sql.
+CREATE TABLE source_db.exchange_partitioned (
+    id INT PRIMARY KEY,
+    note VARCHAR(64)
+) PARTITION BY RANGE (id) (
+    PARTITION p0 VALUES LESS THAN (100),
+    PARTITION p1 VALUES LESS THAN MAXVALUE
+);
+CREATE TABLE source_extra_db.exchange_normal (
+    id INT PRIMARY KEY,
+    note VARCHAR(64)
+);
+INSERT INTO source_db.exchange_partitioned VALUES (1, 'partition_before');
+INSERT INTO source_extra_db.exchange_normal VALUES (2, 'normal_before');
 
 -- ============================================
 -- Create finish marker table
