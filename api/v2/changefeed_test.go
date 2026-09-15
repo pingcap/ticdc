@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/maintainer"
 	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -82,18 +81,10 @@ func TestDeleteMissingChangefeedRequiresAuthentication(t *testing.T) {
 	require.False(t, coordinator.removeCalled)
 }
 
-func TestSetKeyspaceInContextForAuthentication(t *testing.T) {
+func TestLoadKeyspaceInContext(t *testing.T) {
 	if !kerneltype.IsNextGen() {
 		t.Skip("keyspace authentication context is only needed in next-gen")
 	}
-
-	originalConfig := config.GetGlobalServerConfig()
-	t.Cleanup(func() {
-		config.StoreGlobalServerConfig(originalConfig)
-	})
-	cfg := originalConfig.Clone()
-	cfg.Security.ClientUserRequired = true
-	config.StoreGlobalServerConfig(cfg)
 
 	ctrl := gomock.NewController(t)
 	keyspaceManager := keyspace.NewMockManager(ctrl)
@@ -101,14 +92,12 @@ func TestSetKeyspaceInContextForAuthentication(t *testing.T) {
 		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 1},
 		Name:     "test",
 	}, nil)
-	appcontext.SetService(appcontext.KeyspaceManager, keyspaceManager)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodDelete, "/api/v2/changefeeds/missing?keyspace=test", nil)
-	c.Request.SetBasicAuth("alice", "password")
 
-	setKeyspaceInContextForAuthentication(c)
+	loadKeyspaceInContext(c, keyspaceManager)
 
 	require.Equal(t, uint32(1), middleware.GetKeyspaceFromContext(c).GetId())
 }

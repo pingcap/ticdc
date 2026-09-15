@@ -687,6 +687,10 @@ func setKeyspaceInContextForAuthentication(c *gin.Context) {
 	}
 
 	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
+	loadKeyspaceInContext(c, keyspaceManager)
+}
+
+func loadKeyspaceInContext(c *gin.Context, keyspaceManager keyspace.Manager) {
 	keyspaceMeta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), GetKeyspaceValueWithDefault(c))
 	if err == nil {
 		middleware.SetKeyspaceInContext(c, keyspaceMeta)
