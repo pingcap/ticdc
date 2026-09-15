@@ -70,16 +70,20 @@ func (s *sink) SinkType() commonType.SinkType {
 	return commonType.PulsarSinkType
 }
 
-func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
-	comp, _, err := newPulsarSinkComponent(ctx, changefeedID, uri, sinkConfig)
+func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool) error {
+	comp, _, err := newPulsarSinkComponent(ctx, changefeedID, uri, sinkConfig, caseSensitive)
 	defer comp.close()
 	return err
 }
 
 func New(
+<<<<<<< HEAD
 	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+=======
+	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, keyspaceID uint32,
+>>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))
 ) (*sink, error) {
-	comp, protocol, err := newPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
+	comp, protocol, err := newPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive)
 	if err != nil {
 		return nil, err
 	}

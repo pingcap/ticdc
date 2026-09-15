@@ -122,6 +122,13 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	if err != nil {
 		return nil, err
 	}
+<<<<<<< HEAD
+=======
+	columnSelectors, err := columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
+	if err != nil {
+		return nil, err
+	}
+>>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))
 
 	extension := helper.GetFileExtension(protocol)
 
