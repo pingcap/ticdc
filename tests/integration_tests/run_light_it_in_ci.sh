@@ -27,6 +27,9 @@ group_num=${group#G}
 # For pulsar: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_pulsar_integration_light.groovy
 # For storage: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_storage_integration_light.groovy
 
+# TODO: Re-enable partial_index when the TiDB artifacts for release-nextgen-20251011
+# support partial index conditions. It is skipped for all sink types below.
+
 # Resource allocation for mysql light integration tests in CI pipelines:
 # https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pod-pull_cdc_mysql_integration_light.yaml
 # 4 CPU, 16 Gi memory.
@@ -57,7 +60,7 @@ mysql_groups=(
 	'kill_owner_with_ddl multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12
 	# ds_memory_control
-	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
@@ -95,7 +98,7 @@ kafka_groups=(
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
@@ -133,7 +136,7 @@ pulsar_groups=(
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
@@ -171,7 +174,7 @@ storage_groups=(
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
