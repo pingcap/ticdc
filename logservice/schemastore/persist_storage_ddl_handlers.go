@@ -598,7 +598,7 @@ func prepareRecoverSchemaJob(p *persistentStorage, job *model.Job) error {
 
 func loadRecoverSchemaTableInfos(p *persistentStorage, job *model.Job, recoverInfo *model.RecoverSchemaInfo) error {
 	snapshot := p.kvStorage.GetSnapshot(kv.NewVersion(recoverInfo.SnapshotTS))
-	tables, err := meta.NewReader(snapshot).ListTables(p.ctx, recoverInfo.DBInfo.ID)
+	tables, err := meta.NewReader(snapshot).ListTables(p.ctx, recoverInfo.ID)
 	if err != nil {
 		return cerror.WrapError(cerror.ErrDDLEventError, err)
 	}
@@ -608,7 +608,7 @@ func loadRecoverSchemaTableInfos(p *persistentStorage, job *model.Job, recoverIn
 			return cerror.ErrDDLEventError.GenWithStackByArgs()
 		}
 		recoverInfo.RecoverTableInfos = append(recoverInfo.RecoverTableInfos, &model.RecoverTableInfo{
-			SchemaID:      recoverInfo.DBInfo.ID,
+			SchemaID:      recoverInfo.ID,
 			TableInfo:     tableInfo,
 			DropJobID:     recoverInfo.DropJobID,
 			SnapshotTS:    recoverInfo.SnapshotTS,
@@ -685,7 +685,7 @@ func buildPersistedDDLEventForRecoverSchema(args buildPersistedDDLEventFuncArgs)
 		return PersistedDDLEvent{}, cerror.ErrDDLEventError.GenWithStackByArgs()
 	}
 	event := buildPersistedDDLEventCommon(args)
-	event.SchemaID = recoverArgs.RecoverInfo.DBInfo.ID
+	event.SchemaID = recoverArgs.RecoverInfo.ID
 	event.SchemaName = recoverArgs.RecoverInfo.DBInfo.Name.O
 	event.DBInfo = recoverArgs.RecoverInfo.DBInfo
 	event.MultipleTableInfos = make([]*model.TableInfo, 0, len(recoverArgs.RecoverInfo.RecoverTableInfos))
@@ -2240,7 +2240,7 @@ func buildDDLEventForCreateSchema(rawEvent *PersistedDDLEvent, tableFilter filte
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForRecoverSchema(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+func buildDDLEventForRecoverSchema(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, _ int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
