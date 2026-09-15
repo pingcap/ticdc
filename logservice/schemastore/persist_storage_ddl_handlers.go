@@ -2836,38 +2836,17 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 	}
 	// For exchange table partition, we only set NotSync to true when the partition table is filtered.
 	ddlEvent.NotSync = notSyncPartitionTable
+	// The default event (including the DDL trigger) describes the partition table.
+	// Keep the old normal table info for storage sinks to emit its column schema.
+	ddlEvent.TableInfo = common.WrapTableInfo(rawEvent.ExtraSchemaName, rawEvent.TableInfo)
 	ddlEvent.MultipleTableInfos = []*common.TableInfo{
-		common.WrapTableInfo(rawEvent.SchemaName, rawEvent.TableInfo),
+		ddlEvent.TableInfo,
 		rawEvent.ExtraTableInfo,
 	}
-	if tableID != 0 {
-		// Here we set TableInfo to the table info of tableID.
-		// First, check whether the tableID is a normal table after exchange.
-		// If false, set TableInfo to rawEvent.TableInfo, because the rawEvent.TableInfo is the partition table info after exchange.
-		// NOTE: ddlEvent.TableInfo is already the rawEvent.TableInfo in buildDDLEventCommon. So we don't need to set it again if false.
-		// If true, set TableInfo to rawEvent.ExtraTableInfo,
-		// because the rawEvent.ExtraTableInfo is the normal table info before exchange,
-		// but the tableID is the normal table after exchange, so we need to get a new TableInfo for it.
-		// NOTE: We can't just check tableID == rawEvent.ExtraTableInfo.TableName.TableID,
-		// because rawEvent.ExtraTableInfo is the table info before exchange,
-		// and the tableID is the table id after exchange.
-		isNormalTableAfterExchange := true
-		for _, id := range physicalIDs {
-			if id == tableID {
-				isNormalTableAfterExchange = false
-				break
-			}
-		}
-		if isNormalTableAfterExchange {
-			ddlEvent.TableInfo = common.NewTableInfo(
-				rawEvent.ExtraSchemaName,
-				ast.NewCIStr(rawEvent.ExtraTableName).O,
-				tableID,
-				false,
-				rawEvent.ExtraTableInfo.ShadowCopyColumnSchema(),
-				rawEvent.ExtraTableInfo.ToTiDBTableInfo(),
-			)
-		}
+	if tableID == targetPartitionID {
+		// The old partition is now the normal table. Use the same identity and
+		// column schema as a fresh table-info lookup after the exchange.
+		ddlEvent.TableInfo, _ = extractTableInfoFuncForExchangeTablePartition(rawEvent, tableID)
 	}
 	return ddlEvent, true, err
 }

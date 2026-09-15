@@ -15,6 +15,7 @@ package routing
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -181,8 +182,8 @@ func (c *cteScopes) contains(table *ast.TableName) bool {
 	if table.Schema.O != "" {
 		return false
 	}
-	for i := len(c.scopes) - 1; i >= 0; i-- {
-		if _, ok := c.scopes[i][table.Name.L]; ok {
+	for _, scope := range slices.Backward(c.scopes) {
+		if _, ok := scope[table.Name.L]; ok {
 			return true
 		}
 	}
