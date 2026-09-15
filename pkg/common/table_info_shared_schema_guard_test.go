@@ -84,6 +84,7 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 				"TempTableType", "TableCacheStatusType", "PlacementPolicyRef", "StatsOptions",
 				"ExchangePartitionInfo", "TTLInfo", "IsActiveActive", "SoftdeleteInfo", "Affinity",
 				"Revision", "DBID", "Mode", "EngineAttribute", "StorageClassTier", "StorageClassTransitions",
+				"MaterializedView", "MaterializedViewBase", "MaterializedViewLog",
 			},
 		},
 		{
