@@ -95,7 +95,10 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 			CheckGCSafePoint: util.AddressOf(false),
 			Sink: &SinkConfig{
 				DebeziumConfig: &DebeziumConfig{
-					IncludeStartTs: util.AddressOf(true),
+					IncludeStartTs:             util.AddressOf(true),
+					DecimalHandlingMode:        util.AddressOf("string"),
+					BigintUnsignedHandlingMode: util.AddressOf("string"),
+					BinaryHandlingMode:         util.AddressOf("hex"),
 				},
 				SimpleConfig: &SimpleConfig{
 					IncludeStartTs: util.AddressOf(true),
@@ -146,6 +149,9 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 	require.Equal(t, "correctness", util.GetOrZero(wrapper.Config.Integrity.IntegrityCheckLevel))
 	require.Equal(t, "eventual", util.GetOrZero(wrapper.Config.Consistent.Level))
 	require.True(t, util.GetOrZero(wrapper.Config.Sink.Debezium.IncludeStartTs))
+	require.Equal(t, "string", util.GetOrZero(wrapper.Config.Sink.Debezium.DecimalHandlingMode))
+	require.Equal(t, "string", util.GetOrZero(wrapper.Config.Sink.Debezium.BigintUnsignedHandlingMode))
+	require.Equal(t, "hex", util.GetOrZero(wrapper.Config.Sink.Debezium.BinaryHandlingMode))
 	require.True(t, util.GetOrZero(wrapper.Config.Sink.Simple.IncludeStartTs))
 }
 
