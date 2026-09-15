@@ -51,10 +51,11 @@ expect_invalid() {
 	local status
 	status=$(curl -sS -o "$WORK_DIR/error.json" -w '%{http_code}' -X POST "$API?keyspace=$KEYSPACE_NAME" \
 		-H 'Content-Type: application/json' -d "{\"changefeed_id\":\"$id\",\"pause\":true,$fields}")
-	[ "$status" -ge 400 ]
+	[ "$status" = 400 ]
 	grep -q "$error" "$WORK_DIR/error.json"
-	status=$(curl -sS -o /dev/null -w '%{http_code}' "$API/$id?keyspace=$KEYSPACE_NAME")
-	[ "$status" = 404 ]
+	status=$(curl -sS -o "$WORK_DIR/missing.json" -w '%{http_code}' "$API/$id?keyspace=$KEYSPACE_NAME")
+	[ "$status" = 400 ]
+	jq -e '.error_code == "CDC:ErrChangeFeedNotExists"' "$WORK_DIR/missing.json"
 }
 
 run() {
