@@ -3435,7 +3435,7 @@ func TestRenameTable(t *testing.T) {
 		Table:    "t3",
 	})
 	job.Query = "RENAME TABLE t3 TO test.t1"
-	ddl := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "test", Tables: map[int64]bool{101: true, 102: true}},
@@ -3456,7 +3456,7 @@ func TestRenameTable(t *testing.T) {
 		Table:    "t1",
 	})
 	job.Query = "RENAME TABLE t1 TO t2"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "test", Tables: map[int64]bool{101: true, 102: true}},
@@ -3477,7 +3477,7 @@ func TestRenameTable(t *testing.T) {
 		Table:    "t1",
 	})
 	job.Query = "ALTER TABLE t1 RENAME TO t2"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "test", Tables: map[int64]bool{101: true, 102: true}},
@@ -3504,7 +3504,7 @@ func TestRenameTable(t *testing.T) {
 		NewTableName:  ast.NewCIStr("t1"),
 	})
 	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "ArchiveDB", Tables: map[int64]bool{101: true}},
@@ -3522,7 +3522,7 @@ func TestRenameTable(t *testing.T) {
 		Table:    "t1",
 	})
 	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "ArchiveDB", Tables: map[int64]bool{101: true}},
@@ -3543,7 +3543,7 @@ func TestRenameTable(t *testing.T) {
 		NewTableName:  ast.NewCIStr("t1"),
 	})
 	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "ArchiveDB", Tables: map[int64]bool{101: true}},
@@ -3563,7 +3563,7 @@ func TestRenameTableRepairsOldTableMetadata(t *testing.T) {
 			Table:    "t1",
 		})
 		job.Query = "RENAME TABLE t1 TO t2"
-		rawEvent := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		rawEvent, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "test", Tables: map[int64]bool{101: true}},
@@ -3599,7 +3599,7 @@ func TestRenameTableRepairsOldTableMetadata(t *testing.T) {
 		_, err := job.Encode(true)
 		require.NoError(t, err)
 		job.Query = "RENAME TABLE t1 TO target_db.t1"
-		rawEvent := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		rawEvent, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "target_db", Tables: map[int64]bool{101: true}},
@@ -3656,7 +3656,7 @@ func TestRenameTableRepairsOldTableMetadata(t *testing.T) {
 		})
 		job.Query = `RENAME TABLE "SourceDB"."OldTable" TO "TargetDB"."NewTable"`
 
-		rawEvent := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		rawEvent, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "TargetDB", Tables: map[int64]bool{101: true}},
@@ -3683,7 +3683,7 @@ func TestRenameTableRepairsOldTableMetadata(t *testing.T) {
 		})
 		job.Query = "RENAME TABLE wrong_db.source_t TO target_db.target_t"
 
-		rawEvent := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		rawEvent, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "target_db", Tables: map[int64]bool{101: true}},
@@ -3705,7 +3705,7 @@ func TestRenameTableRepairsOldTableMetadata(t *testing.T) {
 	t.Run("fall back to complete snapshot identity", func(t *testing.T) {
 		job := buildRenameTableJobForTest(100, 101, "target_t", 100, nil)
 
-		rawEvent := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		rawEvent, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "snapshot_db", Tables: map[int64]bool{101: true}},
@@ -3733,7 +3733,7 @@ func TestBuildPersistedDDLEventForRenameTablesFallbackOldTableName(t *testing.T)
 	)
 	job.Query = "RENAME TABLE `source_db`.`source_t1` TO `target_db`.`target_t1`, `source_db`.`source_t2` TO `target_db`.`target_t2`"
 
-	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "source_db", Tables: map[int64]bool{200: true, 201: true}},
@@ -3767,7 +3767,7 @@ func TestBuildPersistedDDLEventForRenameTablesCyclicRename(t *testing.T) {
 	)
 	job.Query = "RENAME TABLE `test`.`a` TO `test`.`c`, `test`.`b` TO `test`.`a`, `test`.`c` TO `test`.`b`"
 
-	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "test", Tables: map[int64]bool{200: true, 201: true}},
@@ -3798,7 +3798,7 @@ func TestBuildPersistedDDLEventForRenameTablesPreferQueryNames(t *testing.T) {
 	)
 	job.Query = "RENAME TABLE `source_db`.`source_t1_from_query` TO `target_db`.`target_t1`, `source_db`.`source_t2_from_query` TO `target_db`.`target_t2`"
 
-	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "source_db", Tables: map[int64]bool{200: true, 201: true}},
@@ -3831,7 +3831,7 @@ func TestBuildPersistedDDLEventForRenameTablesKeepArgsWhenQueryUnavailable(t *te
 	job.Query = "RENAME TABLE"
 
 	require.NotPanics(t, func() {
-		ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "source_db", Tables: map[int64]bool{200: true, 201: true}},
@@ -3865,7 +3865,7 @@ func TestBuildPersistedDDLEventForRenameTablesPanicOnQueryInfoLengthMismatch(t *
 	job.Query = "RENAME TABLE `source_db`.`source_t1` TO `target_db`.`target_t1`, `source_db`.`source_t2` TO `target_db`.`target_t2`, `source_db`.`source_t3` TO `target_db`.`target_t3`"
 
 	require.Panics(t, func() {
-		_ = buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+		_, _ = buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "source_db", Tables: map[int64]bool{200: true, 201: true}},
@@ -3891,7 +3891,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 			1010,
 		)
 
-		ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "source`db", Tables: map[int64]bool{200: true, 201: true}},
@@ -3917,7 +3917,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 		// Keep empty to force using InvolvingSchemaInfo as source name.
 		job.Query = ""
 
-		ddl := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "target`db", Tables: map[int64]bool{101: true}},
@@ -3933,7 +3933,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 
 	t.Run("drop table", func(t *testing.T) {
 		job := buildDropTableJobForTest(100, 200, 1000)
-		ddl := buildPersistedDDLEventForDropTable(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForDropTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "schema`x", Tables: map[int64]bool{200: true}},
@@ -3948,7 +3948,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 	t.Run("drop view", func(t *testing.T) {
 		job := buildDropViewJobForTest(100, 1000)
 		job.TableName = "view`x"
-		ddl := buildPersistedDDLEventForDropView(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForDropView(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "schema`x", Tables: map[int64]bool{}},
@@ -3961,7 +3961,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 		job := buildExchangePartitionJobForTest(100, 200, 300, "pt`x", []int64{301}, 1000)
 		job.Query = "ALTER TABLE `ignored`.`ignored` EXCHANGE PARTITION `p``0` WITH TABLE `ignored2`.`ignored2` WITHOUT VALIDATION"
 
-		ddl := buildPersistedDDLEventForExchangePartition(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForExchangePartition(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "normal`db", Tables: map[int64]bool{200: true}},
@@ -4184,7 +4184,7 @@ func TestBuildPersistedDDLEventForCreateViewUsesStoredSelectStmt(t *testing.T) {
 		},
 	}
 
-	ddl := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			101: {Name: "target_db", Tables: map[int64]bool{}},
@@ -4209,7 +4209,7 @@ func TestBuildPersistedDDLEventForCreateViewKeepsOriginalQueryForSameSchemaSelec
 		},
 	}
 
-	ddl := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			101: {Name: "target_db", Tables: map[int64]bool{}},
@@ -4280,7 +4280,7 @@ func TestBuildPersistedDDLEventForCreateViewQualifiesTableColumnReferences(t *te
 				},
 			}
 
-			ddl := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
+			ddl, _ := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
 				job: job,
 				databaseMap: map[int64]*BasicDatabaseInfo{
 					101: {Name: "target_db", Tables: map[int64]bool{}},
@@ -4399,7 +4399,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 			}
 			partitionMap[tc.expectedReferID] = partitionInfo
 		}
-		ddl := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "test", Tables: map[int64]bool{101: true, 200: true}},
@@ -4427,7 +4427,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 		{Database: "extra", Table: "b"},
 		{Database: "test", Table: "a", Mode: model.SharedInvolving},
 	}
-	ddl := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "test", Tables: map[int64]bool{101: true}},
@@ -4449,7 +4449,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeUsesInvolvingReferSchema(t *tes
 		{Database: "src_db", Table: "t", Mode: model.SharedInvolving},
 	}
 
-	ddl := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "dst_db", Tables: map[int64]bool{200: true}},
@@ -4488,7 +4488,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeKeepsOriginalQueryInSameSchema(
 			{Database: "test", Table: "src", Mode: model.SharedInvolving},
 		}
 
-		ddl := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "test", Tables: map[int64]bool{101: true, 200: true}},

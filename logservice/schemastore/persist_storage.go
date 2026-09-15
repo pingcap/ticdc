@@ -747,13 +747,15 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	}
 	p.mu.Unlock()
 
-	if err := handler.prepareJob(p, job); err != nil {
-		return err
+	if handler.prepareJobFunc != nil {
+		if err := handler.prepareJobFunc(p, job); err != nil {
+			return err
+		}
 	}
 
 	p.mu.Lock()
 
-	ddlEvent, err := handler.buildPersistedDDLEvent(buildPersistedDDLEventFuncArgs{
+	ddlEvent, err := handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
 		job:          job,
 		databaseMap:  p.databaseMap,
 		tableMap:     p.tableMap,

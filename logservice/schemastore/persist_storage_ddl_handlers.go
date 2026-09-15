@@ -104,10 +104,7 @@ type persistStorageDDLHandler struct {
 	// prepareJobFunc prepares job arguments before building the persisted DDL event.
 	prepareJobFunc func(storage *persistentStorage, job *model.Job) error
 	// buildPersistedDDLEventFunc build a PersistedDDLEvent which will be write to disk from a ddl job
-	buildPersistedDDLEventFunc func(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent
-	// buildPersistedDDLEventWithErrorFunc is used by builders which may fail while
-	// parsing or validating job arguments.
-	buildPersistedDDLEventWithErrorFunc func(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error)
+	buildPersistedDDLEventFunc func(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error)
 	// updateDDLHistoryFunc add the finished ts of ddl event to the history of table trigger and related tables
 	updateDDLHistoryFunc func(args updateDDLHistoryFuncArgs) []uint64
 	// updateFullTableInfoFunc update the full table info map according to the ddl event
@@ -128,20 +125,6 @@ type persistStorageDDLHandler struct {
 	// see the details in buildDDLEventForExchangeTablePartition and buildDDLEventForRenameTables.
 	// For other DDLs, tableID is not used and can be set to 0.
 	buildDDLEventFunc func(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error)
-}
-
-func (h *persistStorageDDLHandler) prepareJob(storage *persistentStorage, job *model.Job) error {
-	if h.prepareJobFunc == nil {
-		return nil
-	}
-	return h.prepareJobFunc(storage, job)
-}
-
-func (h *persistStorageDDLHandler) buildPersistedDDLEvent(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
-	if h.buildPersistedDDLEventWithErrorFunc != nil {
-		return h.buildPersistedDDLEventWithErrorFunc(args)
-	}
-	return h.buildPersistedDDLEventFunc(args), nil
 }
 
 var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
@@ -371,14 +354,14 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForNewTableDDL,
 	},
 	model.ActionRecoverSchema: {
-		prepareJobFunc:                      (*persistentStorage).prepareRecoverSchemaJob,
-		buildPersistedDDLEventWithErrorFunc: buildPersistedDDLEventForRecoverSchema,
-		updateDDLHistoryFunc:                updateDDLHistoryForCreateTables,
-		updateFullTableInfoFunc:             updateFullTableInfoForMultiTablesDDL,
-		updateSchemaMetadataFunc:            updateSchemaMetadataForRecoverSchema,
-		iterateEventTablesFunc:              iterateEventTablesForCreateTables,
-		extractTableInfoFunc:                extractTableInfoFuncForCreateTables,
-		buildDDLEventFunc:                   buildDDLEventForRecoverSchema,
+		prepareJobFunc:             (*persistentStorage).prepareRecoverSchemaJob,
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForRecoverSchema,
+		updateDDLHistoryFunc:       updateDDLHistoryForCreateTables,
+		updateFullTableInfoFunc:    updateFullTableInfoForMultiTablesDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForRecoverSchema,
+		iterateEventTablesFunc:     iterateEventTablesForCreateTables,
+		extractTableInfoFunc:       extractTableInfoFuncForCreateTables,
+		buildDDLEventFunc:          buildDDLEventForRecoverSchema,
 	},
 	model.ActionModifySchemaCharsetAndCollate: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForSchemaDDL,
@@ -614,14 +597,14 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 	return event
 }
 
-func buildPersistedDDLEventForSchemaDDL(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForSchemaDDL(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	event := buildPersistedDDLEventCommon(args)
 	log.Info("buildPersistedDDLEvent for create/drop schema",
 		zap.Any("type", event.Type),
 		zap.Int64("schemaID", event.SchemaID),
 		zap.String("schemaName", event.DBInfo.Name.O))
 	event.SchemaName = event.DBInfo.Name.O
-	return event
+	return event, nil
 }
 
 func buildPersistedDDLEventForRecoverSchema(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
@@ -646,22 +629,22 @@ func buildPersistedDDLEventForRecoverSchema(args buildPersistedDDLEventFuncArgs)
 	return event, nil
 }
 
-func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = args.job.TableName
 	normalizeCreateViewQueryWithStoredSelect(&event)
-	return event
+	return event, nil
 }
 
-func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	// We don't store the relationship: view_id -> table_name, get table name from args.job
 	event.TableName = args.job.TableName
 	// The query in job maybe "DROP VIEW test1.view1, test2.view2", we need rebuild it here.
 	event.Query = fmt.Sprintf("DROP VIEW %s", common.QuoteSchema(event.SchemaName, event.TableName))
-	return event
+	return event, nil
 }
 
 // TiDB persists the normalized SELECT body of a view in
@@ -692,12 +675,12 @@ func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
 	event.Query = query
 }
 
-func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = event.TableInfo.Name.O
 	setReferTableForCreateTableLike(&event, args)
-	return event
+	return event, nil
 }
 
 type createTableLikeReferSchemaInfo struct {
@@ -807,37 +790,40 @@ func resolveCreateTableLikeReferSchema(
 	}, true
 }
 
-func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = getTableName(args.tableMap, event.TableID)
 	// The query in job maybe "DROP TABLE test1.table1, test2.table2", we need rebuild it here.
 	event.Query = fmt.Sprintf("DROP TABLE %s", common.QuoteSchema(event.SchemaName, event.TableName))
-	return event
+	return event, nil
 }
 
-func buildPersistedDDLEventForNormalDDLOnSingleTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForNormalDDLOnSingleTable(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = getTableName(args.tableMap, event.TableID)
-	return event
+	return event, nil
 }
 
-func buildPersistedDDLEventForMultiSchemaChange(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
-	event := buildPersistedDDLEventForNormalDDLOnSingleTable(args)
+func buildPersistedDDLEventForMultiSchemaChange(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
+	event, err := buildPersistedDDLEventForNormalDDLOnSingleTable(args)
+	if err != nil {
+		return PersistedDDLEvent{}, err
+	}
 	event.IndexIDs = getIndexIDs(args.job)
-	return event
+	return event, nil
 }
 
-func buildPersistedDDLEventForAddIndex(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForAddIndex(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = getTableName(args.tableMap, event.TableID)
 	event.IndexIDs = getIndexIDs(args.job)
-	return event
+	return event, nil
 }
 
-func buildPersistedDDLEventForTruncateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForTruncateTable(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	event := buildPersistedDDLEventCommon(args)
 	// only table id change after truncate
 	event.ExtraTableID = event.TableInfo.ID
@@ -849,10 +835,10 @@ func buildPersistedDDLEventForTruncateTable(args buildPersistedDDLEventFuncArgs)
 			event.PrevPartitions = append(event.PrevPartitions, id)
 		}
 	}
-	return event
+	return event, nil
 }
 
-func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = event.TableInfo.Name.O
@@ -987,21 +973,24 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 			common.QuoteSchema(event.ExtraSchemaName, event.ExtraTableName),
 			common.QuoteSchema(event.SchemaName, event.TableName))
 	}
-	return event
+	return event, nil
 }
 
-func buildPersistedDDLEventForNormalPartitionDDL(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
-	event := buildPersistedDDLEventForNormalDDLOnSingleTable(args)
+func buildPersistedDDLEventForNormalPartitionDDL(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
+	event, err := buildPersistedDDLEventForNormalDDLOnSingleTable(args)
+	if err != nil {
+		return PersistedDDLEvent{}, err
+	}
 	for id := range args.partitionMap[event.TableID] {
 		event.PrevPartitions = append(event.PrevPartitions, id)
 	}
-	return event
+	return event, nil
 }
 
 // buildPersistedDDLEventForExchangePartition build a exchange partition ddl event
 // the TableID belongs to the new table(nt)
 // the TableInfo belongs to the previous table(pt)
-func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	event := buildPersistedDDLEventCommon(args)
 	// these are the info of the normal table before exchange
 	event.TableName = getTableName(args.tableMap, event.TableID)
@@ -1038,7 +1027,7 @@ func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncA
 		log.Warn("exchange partition query is empty, should only happen in unit tests",
 			zap.Int64("jobID", event.ID))
 	}
-	return event
+	return event, nil
 }
 
 type renameTableQueryInfo struct {
@@ -1109,7 +1098,7 @@ func parseRenameTablesQueryInfos(query string) ([]renameTableQueryInfo, bool) {
 	return queryInfos, true
 }
 
-func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	// TODO: does rename tables has the same problem(finished ts is not the real commit ts) with rename table?
 	event := buildPersistedDDLEventCommon(args)
 	renameArgs, err := model.GetRenameTablesArgs(args.job)
@@ -1200,17 +1189,17 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 			visitTableIDs[id] = struct{}{}
 		}
 	}
-	return event
+	return event, nil
 }
 
-func buildPersistedDDLEventForCreateTables(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForCreateTables(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.MultipleTableInfos = args.job.BinlogInfo.MultipleTableInfos
-	return event
+	return event, nil
 }
 
-func buildPersistedDDLEventForAlterTablePartitioning(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForAlterTablePartitioning(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	event := buildPersistedDDLEventCommon(args)
 	event.ExtraTableID = event.TableID
 	event.TableID = event.TableInfo.ID
@@ -1227,10 +1216,10 @@ func buildPersistedDDLEventForAlterTablePartitioning(args buildPersistedDDLEvent
 			event.PrevPartitions = append(event.PrevPartitions, id)
 		}
 	}
-	return event
+	return event, nil
 }
 
-func buildPersistedDDLEventForRemovePartitioning(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForRemovePartitioning(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	event := buildPersistedDDLEventCommon(args)
 	event.ExtraTableID = event.TableID
 	event.TableID = event.TableInfo.ID
@@ -1248,7 +1237,7 @@ func buildPersistedDDLEventForRemovePartitioning(args buildPersistedDDLEventFunc
 	for id := range partitions {
 		event.PrevPartitions = append(event.PrevPartitions, id)
 	}
-	return event
+	return event, nil
 }
 
 // =======
