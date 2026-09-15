@@ -721,12 +721,6 @@ func (p *persistentStorage) persistUpperBoundPeriodically(ctx context.Context) {
 }
 
 func (p *persistentStorage) handleDDLJob(job *model.Job) error {
-	if job.Type == model.ActionRecoverSchema {
-		if err := p.prepareRecoverSchemaJob(job); err != nil {
-			return err
-		}
-	}
-
 	p.mu.Lock()
 
 	if shouldSkipDDL(job, p.tableMap) {
@@ -751,13 +745,24 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		p.mu.Unlock()
 		return nil
 	}
+	p.mu.Unlock()
 
-	ddlEvent := handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
+	if err := handler.prepareJob(p, job); err != nil {
+		return err
+	}
+
+	p.mu.Lock()
+
+	ddlEvent, err := handler.buildPersistedDDLEvent(buildPersistedDDLEventFuncArgs{
 		job:          job,
 		databaseMap:  p.databaseMap,
 		tableMap:     p.tableMap,
 		partitionMap: p.partitionMap,
 	})
+	if err != nil {
+		p.mu.Unlock()
+		return err
+	}
 
 	p.mu.Unlock()
 
@@ -772,7 +777,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	// Note: need write ddl event to disk before update ddl history,
 	// because other goroutines may read ddl events from disk according to ddl history
-	err := writePersistedDDLEventWithEncryption(p.db, &ddlEvent, p.encryptionManager, p.keyspaceID)
+	err = writePersistedDDLEventWithEncryption(p.db, &ddlEvent, p.encryptionManager, p.keyspaceID)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -837,16 +842,11 @@ func (p *persistentStorage) prepareRecoverSchemaJob(job *model.Job) error {
 	if !args.RecoverInfo.LoadTablesOnExecute || len(args.RecoverInfo.RecoverTableInfos) > 0 {
 		return nil
 	}
-	if p.kvStorage == nil {
-		return errors.ErrDDLEventError.GenWithStackByArgs()
-	}
 
-	ctx := p.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	// TiDB may defer loading the recovered tables to the DDL owner to avoid
+	// putting a large table list into the job arguments.
 	snapshot := p.kvStorage.GetSnapshot(kv.NewVersion(args.RecoverInfo.SnapshotTS))
-	tables, err := meta.NewReader(snapshot).ListTables(ctx, args.RecoverInfo.DBInfo.ID)
+	tables, err := meta.NewReader(snapshot).ListTables(p.ctx, args.RecoverInfo.DBInfo.ID)
 	if err != nil {
 		return errors.WrapError(errors.ErrDDLEventError, err)
 	}
@@ -864,6 +864,8 @@ func (p *persistentStorage) prepareRecoverSchemaJob(job *model.Job) error {
 			OldTableName:  tableInfo.Name.O,
 		})
 	}
+	// V1 arguments are decoded from RawArgs on each access, so persist the
+	// recovered table list for subsequent GetRecoverArgs calls.
 	if job.Version == model.JobVersion1 {
 		if _, err := job.Encode(true); err != nil {
 			return errors.WrapError(errors.ErrDDLEventError, err)

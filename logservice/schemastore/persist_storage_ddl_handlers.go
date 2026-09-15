@@ -101,8 +101,13 @@ type updateFullTableInfoFuncArgs struct {
 }
 
 type persistStorageDDLHandler struct {
+	// prepareJobFunc prepares job arguments before building the persisted DDL event.
+	prepareJobFunc func(storage *persistentStorage, job *model.Job) error
 	// buildPersistedDDLEventFunc build a PersistedDDLEvent which will be write to disk from a ddl job
 	buildPersistedDDLEventFunc func(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent
+	// buildPersistedDDLEventWithErrorFunc is used by builders which may fail while
+	// parsing or validating job arguments.
+	buildPersistedDDLEventWithErrorFunc func(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error)
 	// updateDDLHistoryFunc add the finished ts of ddl event to the history of table trigger and related tables
 	updateDDLHistoryFunc func(args updateDDLHistoryFuncArgs) []uint64
 	// updateFullTableInfoFunc update the full table info map according to the ddl event
@@ -123,6 +128,20 @@ type persistStorageDDLHandler struct {
 	// see the details in buildDDLEventForExchangeTablePartition and buildDDLEventForRenameTables.
 	// For other DDLs, tableID is not used and can be set to 0.
 	buildDDLEventFunc func(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error)
+}
+
+func (h *persistStorageDDLHandler) prepareJob(storage *persistentStorage, job *model.Job) error {
+	if h.prepareJobFunc == nil {
+		return nil
+	}
+	return h.prepareJobFunc(storage, job)
+}
+
+func (h *persistStorageDDLHandler) buildPersistedDDLEvent(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
+	if h.buildPersistedDDLEventWithErrorFunc != nil {
+		return h.buildPersistedDDLEventWithErrorFunc(args)
+	}
+	return h.buildPersistedDDLEventFunc(args), nil
 }
 
 var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
@@ -352,13 +371,14 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForNewTableDDL,
 	},
 	model.ActionRecoverSchema: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForRecoverSchema,
-		updateDDLHistoryFunc:       updateDDLHistoryForCreateTables,
-		updateFullTableInfoFunc:    updateFullTableInfoForMultiTablesDDL,
-		updateSchemaMetadataFunc:   updateSchemaMetadataForRecoverSchema,
-		iterateEventTablesFunc:     iterateEventTablesForCreateTables,
-		extractTableInfoFunc:       extractTableInfoFuncForCreateTables,
-		buildDDLEventFunc:          buildDDLEventForRecoverSchema,
+		prepareJobFunc:                      (*persistentStorage).prepareRecoverSchemaJob,
+		buildPersistedDDLEventWithErrorFunc: buildPersistedDDLEventForRecoverSchema,
+		updateDDLHistoryFunc:                updateDDLHistoryForCreateTables,
+		updateFullTableInfoFunc:             updateFullTableInfoForMultiTablesDDL,
+		updateSchemaMetadataFunc:            updateSchemaMetadataForRecoverSchema,
+		iterateEventTablesFunc:              iterateEventTablesForCreateTables,
+		extractTableInfoFunc:                extractTableInfoFuncForCreateTables,
+		buildDDLEventFunc:                   buildDDLEventForRecoverSchema,
 	},
 	model.ActionModifySchemaCharsetAndCollate: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForSchemaDDL,
@@ -604,26 +624,26 @@ func buildPersistedDDLEventForSchemaDDL(args buildPersistedDDLEventFuncArgs) Per
 	return event
 }
 
-func buildPersistedDDLEventForRecoverSchema(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
-	event := buildPersistedDDLEventCommon(args)
+func buildPersistedDDLEventForRecoverSchema(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	recoverArgs, err := model.GetRecoverArgs(args.job)
 	if err != nil {
-		log.Panic("GetRecoverArgs failed", zap.Error(err))
+		return PersistedDDLEvent{}, cerror.WrapError(cerror.ErrDDLEventError, err)
 	}
-	if recoverArgs.RecoverInfo == nil || recoverArgs.RecoverInfo.DBInfo == nil {
-		log.Panic("recover schema info is missing")
+	if recoverArgs == nil || recoverArgs.RecoverInfo == nil || recoverArgs.RecoverInfo.DBInfo == nil {
+		return PersistedDDLEvent{}, cerror.ErrDDLEventError.GenWithStackByArgs()
 	}
+	event := buildPersistedDDLEventCommon(args)
 	event.SchemaID = recoverArgs.RecoverInfo.DBInfo.ID
 	event.SchemaName = recoverArgs.RecoverInfo.DBInfo.Name.O
 	event.DBInfo = recoverArgs.RecoverInfo.DBInfo
 	event.MultipleTableInfos = make([]*model.TableInfo, 0, len(recoverArgs.RecoverInfo.RecoverTableInfos))
 	for _, recoverTableInfo := range recoverArgs.RecoverInfo.RecoverTableInfos {
 		if recoverTableInfo == nil || recoverTableInfo.TableInfo == nil {
-			log.Panic("recovered table info is missing")
+			return PersistedDDLEvent{}, cerror.ErrDDLEventError.GenWithStackByArgs()
 		}
 		event.MultipleTableInfos = append(event.MultipleTableInfos, recoverTableInfo.TableInfo)
 	}
-	return event
+	return event, nil
 }
 
 func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
