@@ -35,7 +35,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/tidb/pkg/kv"
-	"github.com/pingcap/tidb/pkg/meta"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -830,49 +829,6 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		partitionMap: p.partitionMap,
 	})
 
-	return nil
-}
-
-func prepareRecoverSchemaJob(p *persistentStorage, job *model.Job) error {
-	args, err := model.GetRecoverArgs(job)
-	if err != nil {
-		return errors.WrapError(errors.ErrDDLEventError, err)
-	}
-	if args.RecoverInfo == nil || args.RecoverInfo.DBInfo == nil {
-		return errors.ErrDDLEventError.GenWithStackByArgs()
-	}
-	if !args.RecoverInfo.LoadTablesOnExecute || len(args.RecoverInfo.RecoverTableInfos) > 0 {
-		return nil
-	}
-
-	// TiDB may defer loading the recovered tables to the DDL owner to avoid
-	// putting a large table list into the job arguments.
-	snapshot := p.kvStorage.GetSnapshot(kv.NewVersion(args.RecoverInfo.SnapshotTS))
-	tables, err := meta.NewReader(snapshot).ListTables(p.ctx, args.RecoverInfo.DBInfo.ID)
-	if err != nil {
-		return errors.WrapError(errors.ErrDDLEventError, err)
-	}
-	args.RecoverInfo.RecoverTableInfos = make([]*model.RecoverTableInfo, 0, len(tables))
-	for _, tableInfo := range tables {
-		if tableInfo == nil {
-			return errors.ErrDDLEventError.GenWithStackByArgs()
-		}
-		args.RecoverInfo.RecoverTableInfos = append(args.RecoverInfo.RecoverTableInfos, &model.RecoverTableInfo{
-			SchemaID:      args.RecoverInfo.DBInfo.ID,
-			TableInfo:     tableInfo,
-			DropJobID:     args.RecoverInfo.DropJobID,
-			SnapshotTS:    args.RecoverInfo.SnapshotTS,
-			OldSchemaName: args.RecoverInfo.OldSchemaName.O,
-			OldTableName:  tableInfo.Name.O,
-		})
-	}
-	// V1 arguments are decoded from RawArgs on each access, so persist the
-	// recovered table list for subsequent GetRecoverArgs calls.
-	if job.Version == model.JobVersion1 {
-		if _, err := job.Encode(true); err != nil {
-			return errors.WrapError(errors.ErrDDLEventError, err)
-		}
-	}
 	return nil
 }
 
