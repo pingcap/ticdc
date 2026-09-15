@@ -166,13 +166,18 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 	}
 
 	c.status.Store(newStatus)
+	bootstrapChanged := old.BootstrapDone != newStatus.BootstrapDone
+	if bootstrapChanged {
+		// Record accepted bootstrap progress before returning without CheckStatus.
+		c.backoff.checkpointTs = newStatus.CheckpointTs
+	}
 
 	changed, state, err := c.backoff.checkFailedStatus(newStatus)
 	if state == config.StateFailed {
 		return changed, state, err
 	}
 
-	if old.BootstrapDone != newStatus.BootstrapDone {
+	if bootstrapChanged {
 		log.Info("Received changefeed status with bootstrapDone",
 			zap.Stringer("changefeed", c.ID),
 			zap.Bool("bootstrapDone", newStatus.BootstrapDone))

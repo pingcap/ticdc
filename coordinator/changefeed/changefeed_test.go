@@ -235,6 +235,47 @@ func TestBootstrapDoneRetryableError(t *testing.T) {
 	require.True(t, cf.backoff.isRestarting.Load())
 }
 
+func TestBootstrapDoneProgressDoesNotSkipRetry(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	info := &config.ChangeFeedInfo{
+		SinkURI: "kafka://127.0.0.1:9092",
+		State:   config.StateNormal,
+		Config:  config.GetDefaultReplicaConfig(),
+	}
+	cf := NewChangefeed(cfID, info, 100, true)
+
+	// A lower checkpoint heartbeat must not replace the accepted status.
+	updated, state, err := cf.UpdateStatus(&heartbeatpb.MaintainerStatus{CheckpointTs: 90})
+	require.False(t, updated)
+	require.Equal(t, config.StateNormal, state)
+	require.Nil(t, err)
+	require.Equal(t, uint64(100), cf.GetStatus().CheckpointTs)
+
+	bootstrapStatus := &heartbeatpb.MaintainerStatus{CheckpointTs: 200, BootstrapDone: true}
+	updated, state, err = cf.UpdateStatus(bootstrapStatus)
+	require.True(t, updated)
+	require.Equal(t, config.StateNormal, state)
+	require.Nil(t, err)
+	require.Same(t, bootstrapStatus, cf.GetStatus())
+	require.False(t, cf.backoff.retrying.Load())
+	require.True(t, cf.backoff.nextRetryTime.Load().IsZero())
+
+	// Bootstrap progress has already been accepted, so this error must trigger retry.
+	retryableErr := &heartbeatpb.RunningError{
+		Node: "node-1", Code: "CDC:ErrChangefeedRetryable", Message: "retryable error",
+	}
+	updated, state, err = cf.UpdateStatus(&heartbeatpb.MaintainerStatus{
+		CheckpointTs: 200, BootstrapDone: true, Err: []*heartbeatpb.RunningError{retryableErr},
+	})
+	require.True(t, updated)
+	require.Equal(t, config.StateWarning, state)
+	require.Same(t, retryableErr, err)
+	require.Equal(t, uint64(200), cf.backoff.checkpointTs)
+	require.True(t, cf.backoff.retrying.Load())
+	require.True(t, cf.backoff.isRestarting.Load())
+	require.False(t, cf.ShouldRun())
+}
+
 func TestChangefeed_IsMQSink(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
