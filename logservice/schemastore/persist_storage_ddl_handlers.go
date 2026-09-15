@@ -1278,7 +1278,7 @@ func enrichPersistedDDLEventForReplicationKey(getTableInfo func(int64, uint64) (
 	}
 	hasKey := common.OriginalHasPKOrNotNullUK(event.TableInfo)
 	switch model.ActionType(event.Type) {
-	case model.ActionAddPrimaryKey, model.ActionAddIndex:
+	case model.ActionAddIndex:
 		if !hasKey {
 			return nil
 		}
