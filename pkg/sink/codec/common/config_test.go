@@ -17,11 +17,134 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/BurntSushi/toml"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDebeziumNumericHandlingConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		fileConfig    string
+		query         string
+		decimalMode   string
+		unsignedMode  string
+		invalidConfig bool
+	}{
+		{name: "defaults", decimalMode: "double", unsignedMode: "long"},
+		{
+			name:         "URI",
+			query:        "&debezium-decimal-handling-mode=string&debezium-bigint-unsigned-handling-mode=string",
+			decimalMode:  "string",
+			unsignedMode: "string",
+		},
+		{
+			name:         "file",
+			fileConfig:   "decimal-handling-mode = 'string'\nbigint-unsigned-handling-mode = 'string'",
+			decimalMode:  "string",
+			unsignedMode: "string",
+		},
+		{
+			name:         "URI overrides file",
+			fileConfig:   "decimal-handling-mode = 'string'\nbigint-unsigned-handling-mode = 'string'",
+			query:        "&debezium-decimal-handling-mode=double&debezium-bigint-unsigned-handling-mode=long",
+			decimalMode:  "double",
+			unsignedMode: "long",
+		},
+		{
+			name:          "invalid decimal mode",
+			query:         "&debezium-decimal-handling-mode=invalid",
+			decimalMode:   "invalid",
+			unsignedMode:  "long",
+			invalidConfig: true,
+		},
+		{
+			name:          "invalid bigint mode",
+			query:         "&debezium-bigint-unsigned-handling-mode=invalid",
+			decimalMode:   "double",
+			unsignedMode:  "invalid",
+			invalidConfig: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			replicaConfig := config.GetDefaultReplicaConfig()
+			_, err := toml.Decode("[sink.debezium]\n"+tc.fileConfig, replicaConfig)
+			require.NoError(t, err)
+			sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=debezium" + tc.query)
+			require.NoError(t, err)
+			cfg := NewConfig(config.ProtocolDebezium)
+			require.NoError(t, cfg.Apply(sinkURI, replicaConfig.Sink))
+			require.Equal(t, tc.decimalMode, cfg.DebeziumDecimalHandlingMode)
+			require.Equal(t, tc.unsignedMode, cfg.DebeziumBigintUnsignedHandlingMode)
+			if tc.invalidConfig {
+				require.ErrorIs(t, cfg.Validate(), errors.ErrCodecInvalidConfig)
+			} else {
+				require.NoError(t, cfg.Validate())
+			}
+		})
+	}
+
+	for _, protocol := range []config.Protocol{config.ProtocolDebeziumAvro, config.ProtocolOpen} {
+		t.Run(protocol.String(), func(t *testing.T) {
+			cfg := NewConfig(protocol)
+			cfg.DebeziumDecimalHandlingMode = DecimalHandlingModeString
+			require.ErrorIs(t, cfg.Validate(), errors.ErrCodecInvalidConfig)
+			cfg.DebeziumDecimalHandlingMode = "double"
+			cfg.DebeziumBigintUnsignedHandlingMode = BigintUnsignedHandlingModeString
+			require.ErrorIs(t, cfg.Validate(), errors.ErrCodecInvalidConfig)
+		})
+	}
+}
+
+func TestDebeziumBinaryHandlingConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		fileMode string
+		query    string
+		expected string
+		invalid  bool
+	}{
+		{name: "default", expected: "base64"},
+		{name: "bytes", query: "&debezium-binary-handling-mode=bytes", expected: "bytes"},
+		{name: "base64", query: "&debezium-binary-handling-mode=base64", expected: "base64"},
+		{name: "URL safe", query: "&debezium-binary-handling-mode=base64-url-safe", expected: "base64-url-safe"},
+		{name: "hex", query: "&debezium-binary-handling-mode=hex", expected: "hex"},
+		{name: "file", fileMode: "hex", expected: "hex"},
+		{name: "URI overrides file", fileMode: "hex", query: "&debezium-binary-handling-mode=base64", expected: "base64"},
+		{name: "invalid", query: "&debezium-binary-handling-mode=invalid", expected: "invalid", invalid: true},
+		{name: "empty", query: "&debezium-binary-handling-mode=", invalid: true},
+		{name: "empty URI overrides file", fileMode: "hex", query: "&debezium-binary-handling-mode=", invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			replicaConfig := config.GetDefaultReplicaConfig()
+			if tc.fileMode != "" {
+				_, err := toml.Decode("[sink.debezium]\nbinary-handling-mode = '"+tc.fileMode+"'", replicaConfig)
+				require.NoError(t, err)
+			}
+			sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=debezium" + tc.query)
+			require.NoError(t, err)
+			cfg := NewConfig(config.ProtocolDebezium)
+			require.NoError(t, cfg.Apply(sinkURI, replicaConfig.Sink))
+			require.Equal(t, tc.expected, cfg.DebeziumBinaryHandlingMode)
+			if tc.invalid {
+				require.ErrorIs(t, cfg.Validate(), errors.ErrCodecInvalidConfig)
+			} else {
+				require.NoError(t, cfg.Validate())
+			}
+		})
+	}
+	for _, protocol := range []config.Protocol{config.ProtocolAvro, config.ProtocolDebeziumAvro, config.ProtocolOpen} {
+		t.Run(protocol.String(), func(t *testing.T) {
+			cfg := NewConfig(protocol)
+			cfg.DebeziumBinaryHandlingMode = BinaryHandlingModeHex
+			err := cfg.Validate()
+			require.ErrorIs(t, err, errors.ErrCodecInvalidConfig)
+			require.ErrorContains(t, err, "debezium-binary-handling-mode")
+		})
+	}
+}
 
 func TestAvroIncludeBeforeValueConfig(t *testing.T) {
 	cfg := NewConfig(config.ProtocolAvro)
