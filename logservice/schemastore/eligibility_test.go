@@ -17,6 +17,7 @@ import (
 	"testing"
 	"testing/synctest"
 
+	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -58,6 +59,84 @@ func TestForceGetTableInfoWaitsForRegistration(t *testing.T) {
 				store.setTableInfoInitialized()
 				<-done
 			})
+		})
+	}
+}
+
+func TestDDLTableBecomesEligibleFiltering(t *testing.T) {
+	rawEvent := &PersistedDDLEvent{
+		Type: byte(model.ActionAddPrimaryKey), SchemaID: 1, SchemaName: "test",
+		TableID: 100, TableName: "a", TableInfo: newEligibleTableInfoForTest(100, "a"),
+		Query: "ALTER TABLE test.a ADD PRIMARY KEY (a)", FinishedTs: 20,
+		TableBecameEligible: true,
+	}
+	for _, tc := range []struct {
+		name           string
+		noFilter       bool
+		forceReplicate bool
+		excludeTable   bool
+		ignoreDDL      bool
+		triggerEvent   bool
+		tableEvent     bool
+		addTable       bool
+	}{
+		{name: "default replication", triggerEvent: true, tableEvent: true, addTable: true},
+		{name: "force replication", forceReplicate: true, tableEvent: true},
+		{name: "nil filter", noFilter: true, tableEvent: true},
+		{name: "excluded table", excludeTable: true},
+		{name: "excluded table with force replication", forceReplicate: true, excludeTable: true},
+		{name: "ignored DDL", ignoreDDL: true, triggerEvent: true, tableEvent: true, addTable: true},
+		{name: "ignored DDL with force replication", forceReplicate: true, ignoreDDL: true, tableEvent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tableFilter filter.Filter
+			if !tc.noFilter {
+				cfg := &config.FilterConfig{Rules: []string{"test.*"}}
+				if tc.excludeTable {
+					cfg.Rules = append(cfg.Rules, "!test.a")
+				}
+				if tc.ignoreDDL {
+					cfg.EventFilters = []*config.EventFilterRule{{
+						Matcher: []string{"test.a"}, IgnoreEvent: []bf.EventType{bf.AddPrimaryKey},
+					}}
+				}
+				var err error
+				tableFilter, err = filter.NewFilter(cfg, "", false, tc.forceReplicate)
+				require.NoError(t, err)
+			}
+			for _, caller := range []struct {
+				name    string
+				tableID int64
+				want    bool
+			}{
+				{"table trigger", common.DDLSpanTableID, tc.triggerEvent},
+				{"table dispatcher", rawEvent.TableID, tc.tableEvent},
+			} {
+				t.Run(caller.name, func(t *testing.T) {
+					event, ok, err := buildDDLEvent(rawEvent, tableFilter, caller.tableID)
+					require.NoError(t, err)
+					require.Equal(t, caller.want, ok)
+					if !ok {
+						return
+					}
+					require.Equal(t, rawEvent.Type, event.Type)
+					require.Equal(t, rawEvent.Query, event.Query)
+					require.Equal(t, rawEvent.FinishedTs, event.FinishedTs)
+					require.Equal(t, tc.ignoreDDL, event.NotSync)
+					if tc.addTable {
+						// Ignoring the downstream DDL must not prevent scheduling the table.
+						require.Len(t, event.NeedAddedTables, 1)
+						require.Equal(t, rawEvent.TableID, event.NeedAddedTables[0].TableID)
+						require.Equal(t, rawEvent.SchemaID, event.NeedAddedTables[0].SchemaID)
+						require.Equal(t, []int64{common.DDLSpanTableID}, event.BlockedTables.TableIDs)
+						require.NotNil(t, event.TableNameChange)
+					} else {
+						require.Empty(t, event.NeedAddedTables)
+						require.Equal(t, []int64{rawEvent.TableID}, event.BlockedTables.TableIDs)
+						require.Nil(t, event.TableNameChange)
+					}
+				})
+			}
 		})
 	}
 }

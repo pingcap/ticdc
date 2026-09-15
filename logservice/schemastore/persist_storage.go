@@ -401,8 +401,8 @@ func (p *persistentStorage) getTableInfoForDDL(tableID int64, ts uint64) (*commo
 		store.waitTableInfoInitialized()
 		return store.getTableInfo(ts)
 	}
-	if ts < p.gcTs {
-		gcTs := p.gcTs
+	gcTs := p.gcTs
+	if ts < gcTs {
 		p.mu.RUnlock()
 		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs(ts, gcTs)
 	}
@@ -410,7 +410,6 @@ func (p *persistentStorage) getTableInfoForDDL(tableID int64, ts uint64) (*commo
 	// are append-only and GC only reslices them, so reading this prefix does not
 	// require copying the entire history while concurrent appends or GC proceed.
 	storageSnap := p.db.NewSnapshot()
-	gcTs := p.gcTs
 	history := p.tablesDDLHistory[tableID]
 	end := sort.Search(len(history), func(i int) bool { return history[i] > ts })
 	history = history[:end]

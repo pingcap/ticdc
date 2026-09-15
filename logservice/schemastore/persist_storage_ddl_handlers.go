@@ -2328,9 +2328,10 @@ func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFi
 	if rawEvent.TableBecameEligible {
 		// Without force replication, no dispatcher exists for the old schema.
 		// Let the table trigger execute the DDL and add the physical tables.
-		if tableFilter != nil && !tableFilter.IsEligibleTable(&common.TableInfo{}) {
+		if tableFilter != nil && !tableFilter.IsForceReplicateEnabled() {
 			return buildDDLEventForNewTableDDL(rawEvent, tableFilter, tableID)
 		}
+		// A nil filter means no eligibility restriction, not the default config.
 		// Force replication (or no filter) already includes the table. Only its
 		// existing dispatchers should receive the DDL, avoiding duplicate execution.
 		if tableID == common.DDLSpanTableID {
