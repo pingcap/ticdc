@@ -142,6 +142,8 @@ func (c ChangefeedCommonInfo) MarshalJSON() ([]byte, error) {
 
 // ChangefeedConfig use by create changefeed api
 type ChangefeedConfig struct {
+	// Pause creates the changefeed in the stopped state. It defaults to false.
+	Pause         bool           `json:"pause,omitempty"`
 	Keyspace      string         `json:"keyspace"`
 	ID            string         `json:"changefeed_id"`
 	StartTs       uint64         `json:"start_ts"`

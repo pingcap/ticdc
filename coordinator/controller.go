@@ -1021,7 +1021,12 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	if err != nil {
 		return errors.Trace(err)
 	}
-	c.changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs, true))
+	cf := changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs, true)
+	if info.State == config.StateStopped {
+		c.changefeedDB.AddStoppedChangefeed(cf)
+	} else {
+		c.changefeedDB.AddAbsentChangefeed(cf)
+	}
 	return nil
 }
 

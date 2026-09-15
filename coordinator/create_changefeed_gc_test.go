@@ -79,80 +79,114 @@ func newTestCoordinatorWithGCManager(
 }
 
 func TestCreateChangefeedDoesNotUpdateGCSafepoint(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	backend := mock_changefeed.NewMockBackend(ctrl)
-	gcManager := gc.NewMockManager(ctrl)
+	for _, state := range []config.FeedState{config.StateNormal, config.StateStopped} {
+		t.Run(string(state), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			backend := mock_changefeed.NewMockBackend(ctrl)
+			gcManager := gc.NewMockManager(ctrl)
 
-	co, changefeedDB := newTestCoordinatorWithGCManager(t, backend, gcManager)
+			co, changefeedDB := newTestCoordinatorWithGCManager(t, backend, gcManager)
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	info := &config.ChangeFeedInfo{
-		ChangefeedID: cfID,
-		StartTs:      100,
-		State:        config.StateNormal,
-		Config:       config.GetDefaultReplicaConfig(),
-		SinkURI:      "kafka://127.0.0.1:9092",
-		KeyspaceID:   1,
+			cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+			info := &config.ChangeFeedInfo{
+				ChangefeedID: cfID,
+				StartTs:      100,
+				State:        state,
+				Config:       config.GetDefaultReplicaConfig(),
+				SinkURI:      "kafka://127.0.0.1:9092",
+				KeyspaceID:   1,
+			}
+
+			backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, saved *config.ChangeFeedInfo) error {
+					require.Equal(t, state, saved.State)
+					require.Equal(t, uint64(100), saved.StartTs)
+					return nil
+				}).Times(1)
+
+			if kerneltype.IsClassic() {
+				gcManager.EXPECT().
+					TryUpdateServiceGCSafepoint(gomock.Any(), gomock.Any()).
+					Times(0)
+			} else {
+				gcManager.EXPECT().
+					TryUpdateKeyspaceGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+					Times(0)
+			}
+
+			require.NoError(t, co.CreateChangefeed(context.Background(), info))
+			if state == config.StateStopped {
+				require.Equal(t, 0, changefeedDB.GetAbsentSize())
+				require.Equal(t, 1, changefeedDB.GetStoppedSize())
+			} else {
+				require.Equal(t, 1, changefeedDB.GetAbsentSize())
+				require.Equal(t, 0, changefeedDB.GetStoppedSize())
+			}
+			require.Equal(t, state, changefeedDB.GetByID(cfID).GetInfo().State)
+			require.Equal(t, info.StartTs, changefeedDB.GetByID(cfID).GetStatus().CheckpointTs)
+			require.Equal(t, info.StartTs, changefeedDB.CalculateGlobalGCSafepoint())
+			require.Equal(t, info.StartTs, changefeedDB.CalculateKeyspaceGCBarrier()[common.KeyspaceMeta{ID: 1, Name: cfID.Keyspace()}])
+			require.Equal(t, 1, co.gcCleaner.PendingLen())
+			if state == config.StateStopped {
+				cf := changefeedDB.GetByID(cfID)
+				expectResumeChangefeed(t, backend, cfID, cf, info.StartTs)
+				require.NoError(t, co.ResumeChangefeed(context.Background(), cfID, 0, false))
+				require.Equal(t, config.StateNormal, cf.GetInfo().State)
+				require.Equal(t, info.StartTs, cf.GetStatus().CheckpointTs)
+				require.Equal(t, 0, changefeedDB.GetStoppedSize())
+				require.Equal(t, 1, changefeedDB.GetAbsentSize())
+			}
+		})
 	}
-
-	backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).Return(nil).Times(1)
-
-	if kerneltype.IsClassic() {
-		gcManager.EXPECT().
-			TryUpdateServiceGCSafepoint(gomock.Any(), gomock.Any()).
-			Times(0)
-	} else {
-		gcManager.EXPECT().
-			TryUpdateKeyspaceGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-			Times(0)
-	}
-
-	require.NoError(t, co.CreateChangefeed(context.Background(), info))
-	require.Equal(t, 1, changefeedDB.GetAbsentSize())
-	require.Equal(t, 0, changefeedDB.GetStoppedSize())
-	require.Equal(t, 1, co.gcCleaner.PendingLen())
 }
 
 func TestUpdateGCSafepointCallsGCManagerUpdate(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	backend := mock_changefeed.NewMockBackend(ctrl)
-	gcManager := gc.NewMockManager(ctrl)
+	for _, state := range []config.FeedState{config.StateNormal, config.StateStopped} {
+		t.Run(string(state), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			backend := mock_changefeed.NewMockBackend(ctrl)
+			gcManager := gc.NewMockManager(ctrl)
 
-	co, changefeedDB := newTestCoordinatorWithGCManager(t, backend, gcManager)
+			co, changefeedDB := newTestCoordinatorWithGCManager(t, backend, gcManager)
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	info := &config.ChangeFeedInfo{
-		ChangefeedID: cfID,
-		StartTs:      100,
-		State:        config.StateNormal,
-		Config:       config.GetDefaultReplicaConfig(),
-		SinkURI:      "kafka://127.0.0.1:9092",
-		KeyspaceID:   1,
+			cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+			info := &config.ChangeFeedInfo{
+				ChangefeedID: cfID,
+				StartTs:      100,
+				State:        state,
+				Config:       config.GetDefaultReplicaConfig(),
+				SinkURI:      "kafka://127.0.0.1:9092",
+				KeyspaceID:   1,
+			}
+
+			if kerneltype.IsClassic() {
+				gcManager.EXPECT().
+					TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(info.StartTs-1)).
+					Return(nil).Times(1)
+			} else {
+				gcManager.EXPECT().
+					TryUpdateKeyspaceGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), common.Ts(info.StartTs-1)).
+					Return(nil).Times(1)
+			}
+			gcManager.EXPECT().
+				CheckStaleCheckpointTs(info.KeyspaceID, cfID, info.StartTs).
+				Return(nil).Times(1)
+
+			cf := changefeed.NewChangefeed(cfID, info, info.StartTs, true)
+			if state == config.StateStopped {
+				changefeedDB.AddStoppedChangefeed(cf)
+			} else {
+				changefeedDB.AddAbsentChangefeed(cf)
+			}
+
+			require.NoError(t, co.updateGCSafepoint(context.Background()))
+
+			cf = changefeedDB.GetByID(cfID)
+			require.NotNil(t, cf)
+			require.Equal(t, state, cf.GetInfo().State)
+			require.Nil(t, cf.GetInfo().Error)
+		})
 	}
-
-	if kerneltype.IsClassic() {
-		gcManager.EXPECT().
-			TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(info.StartTs-1)).
-			Return(nil).Times(1)
-	} else {
-		gcManager.EXPECT().
-			TryUpdateKeyspaceGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), common.Ts(info.StartTs-1)).
-			Return(nil).Times(1)
-	}
-	gcManager.EXPECT().
-		CheckStaleCheckpointTs(info.KeyspaceID, cfID, info.StartTs).
-		Return(nil).Times(1)
-
-	changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(cfID, info, info.StartTs, true))
-
-	require.NoError(t, co.updateGCSafepoint(context.Background()))
-
-	require.Equal(t, 1, changefeedDB.GetAbsentSize())
-	require.Equal(t, 0, changefeedDB.GetStoppedSize())
-	cf := changefeedDB.GetByID(cfID)
-	require.NotNil(t, cf)
-	require.Equal(t, config.StateNormal, cf.GetInfo().State)
-	require.Nil(t, cf.GetInfo().Error)
 }
 
 func TestUpdateGCSafepointChecksFailedChangefeedGCTTL(t *testing.T) {

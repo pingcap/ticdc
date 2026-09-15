@@ -227,3 +227,21 @@ compression = "snappy"
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "consistent.compression")
 }
+
+func TestCreateChangefeedPauseFromToml(t *testing.T) {
+	for _, option := range []string{"", "pause = false", "pause = true"} {
+		t.Run(option, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "changefeed.toml")
+			require.NoError(t, os.WriteFile(path, []byte(option+"\n[filter]\nrules = ['test.*']\n"), 0o600))
+			common := newChangefeedCommonOptions()
+			common.configFile = path
+			common.sinkURI = "blackhole://"
+			o := newCreateChangefeedOptions(common)
+			require.NoError(t, o.completeReplicaCfg())
+			request := o.getChangefeedConfig()
+			require.Equal(t, option == "pause = true", request.Pause)
+			// The create-only option must not become a runtime replica setting.
+			require.False(t, request.ReplicaConfig.ToInternalReplicaConfig().Pause)
+		})
+	}
+}
