@@ -128,3 +128,42 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 		})
 	}
 }
+
+func TestKeyspaceNameCheckerMiddleware(t *testing.T) {
+	tests := []struct {
+		name           string
+		keyspace       string
+		expectedStatus int
+		expectedAbort  bool
+	}{
+		{
+			name:           "missing keyspace",
+			expectedStatus: http.StatusBadRequest,
+			expectedAbort:  true,
+		},
+		{
+			name:           "specified keyspace",
+			keyspace:       "deleted-keyspace",
+			expectedStatus: http.StatusOK,
+			expectedAbort:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(
+				http.MethodGet,
+				fmt.Sprintf("/test?%s=%s", api.APIOpVarKeyspace, tt.keyspace),
+				nil,
+			)
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = req
+
+			KeyspaceNameCheckerMiddleware()(c)
+
+			require.Equal(t, tt.expectedAbort, c.IsAborted())
+			require.Equal(t, tt.expectedStatus, w.Code)
+		})
+	}
+}
