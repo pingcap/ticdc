@@ -23,12 +23,16 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
+	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/maintainer"
 	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server"
@@ -76,6 +80,37 @@ func TestDeleteMissingChangefeedRequiresAuthentication(t *testing.T) {
 
 	require.Equal(t, http.StatusUnauthorized, w.Code)
 	require.False(t, coordinator.removeCalled)
+}
+
+func TestSetKeyspaceInContextForAuthentication(t *testing.T) {
+	if !kerneltype.IsNextGen() {
+		t.Skip("keyspace authentication context is only needed in next-gen")
+	}
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	config.StoreGlobalServerConfig(cfg)
+
+	ctrl := gomock.NewController(t)
+	keyspaceManager := keyspace.NewMockManager(ctrl)
+	keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), "test").Return(&keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 1},
+		Name:     "test",
+	}, nil)
+	appcontext.SetService(appcontext.KeyspaceManager, keyspaceManager)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodDelete, "/api/v2/changefeeds/missing?keyspace=test", nil)
+	c.Request.SetBasicAuth("alice", "password")
+
+	setKeyspaceInContextForAuthentication(c)
+
+	require.Equal(t, uint32(1), middleware.GetKeyspaceFromContext(c).GetId())
 }
 
 // TestValidateResumeChangefeedState covers the API-side guard that runs before

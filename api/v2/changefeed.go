@@ -641,6 +641,7 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 	cfInfo, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		if errors.ErrChangeFeedNotExists.Equal(err) {
+			setKeyspaceInContextForAuthentication(c)
 			if !middleware.AuthenticateRequest(c, h.server) {
 				return
 			}
@@ -670,6 +671,26 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 		return
 	}
 	c.JSON(getStatus(c), &EmptyResponse{})
+}
+
+// setKeyspaceInContextForAuthentication restores the keyspace context that the
+// keyspace checker used to provide before authentication was moved into the
+// delete handler. It is needed when an idempotent delete cannot obtain the
+// keyspace ID from a persisted changefeed.
+func setKeyspaceInContextForAuthentication(c *gin.Context) {
+	security := config.GetGlobalServerConfig().Security
+	if !kerneltype.IsNextGen() || security == nil || !security.ClientUserRequired {
+		return
+	}
+	if _, _, ok := c.Request.BasicAuth(); !ok {
+		return
+	}
+
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
+	keyspaceMeta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), GetKeyspaceValueWithDefault(c))
+	if err == nil {
+		middleware.SetKeyspaceInContext(c, keyspaceMeta)
+	}
 }
 
 // PauseChangefeed handles pause changefeed request
