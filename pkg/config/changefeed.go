@@ -497,10 +497,18 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 }
 
 func (info *ChangeFeedInfo) rmMQOnlyFields() {
-	log.Info("since the downstream is not a MQ, remove MQ only fields",
-		zap.String("keyspace", info.ChangefeedID.Keyspace()),
-		zap.String("changefeed", info.ChangefeedID.Name()))
-	info.Config.Sink.DispatchRules = nil
+	// Don't nil out DispatchRules entirely - it may contain routing rules (TargetSchema/TargetTable)
+	// Remove only MQ-specific fields from each rule.
+	for _, rule := range info.Config.Sink.DispatchRules {
+		if rule == nil {
+			continue
+		}
+		rule.DispatcherRule = ""
+		rule.PartitionRule = ""
+		rule.IndexName = ""
+		rule.Columns = nil
+		rule.TopicRule = ""
+	}
 	info.Config.Sink.SchemaRegistry = nil
 	info.Config.Sink.EncoderConcurrency = nil
 	info.Config.Sink.OnlyOutputUpdatedColumns = nil

@@ -164,7 +164,7 @@ func buildInsert(
 // sql: `DELETE FROM `test`.`t` WHERE x = ? AND y >= ? LIMIT 1`
 func buildDelete(tableInfo *common.TableInfo, row commonEvent.RowChange) (string, []interface{}) {
 	var builder strings.Builder
-	quoteTable := tableInfo.TableName.QuoteString()
+	quoteTable := tableInfo.TableName.QuoteTargetString()
 	builder.WriteString("DELETE FROM ")
 	builder.WriteString(quoteTable)
 	builder.WriteString(" WHERE ")
@@ -292,7 +292,7 @@ func buildActiveActiveUpsertSQL(
 
 	var builder strings.Builder
 	builder.WriteString("INSERT INTO ")
-	builder.WriteString(tableInfo.TableName.QuoteString())
+	builder.WriteString(tableInfo.TableName.QuoteTargetString())
 	builder.WriteString(" (")
 	for i, colName := range insertColumns {
 		if i > 0 {

@@ -109,6 +109,19 @@ func TestChangefeedFastFailError(t *testing.T) {
 	require.Equal(t, false, IsChangefeedGCFastFailErrorCode(rfcCode))
 }
 
+func TestErrorCodeForTableRoutingErrors(t *testing.T) {
+	t.Parallel()
+
+	err := ErrInvalidTableRoutingRule.GenWithStackByArgs("invalid matcher")
+	require.Equal(t, ErrChangefeedUnretryable.RFCCode(), ErrorCode(err))
+
+	err = WrapError(ErrInvalidTableRoutingRule, errors.New("invalid matcher"))
+	require.Equal(t, ErrChangefeedUnretryable.RFCCode(), ErrorCode(err))
+
+	err = ErrTableRoutingFailed.GenWithStackByArgs("failed to rewrite ddl")
+	require.Equal(t, ErrChangefeedUnretryable.RFCCode(), ErrorCode(err))
+}
+
 func TestIsCliUnprintableError(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

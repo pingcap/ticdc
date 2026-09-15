@@ -135,8 +135,9 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	stdCtx := ctx
 
 	cfg := &config.ChangefeedConfig{
-		SinkURI:    downstreamURIStr,
-		SinkConfig: replicaConfig.Sink,
+		SinkURI:       downstreamURIStr,
+		SinkConfig:    replicaConfig.Sink,
+		CaseSensitive: putil.GetOrZero(replicaConfig.CaseSensitive),
 	}
 	sink, err := sink.New(stdCtx, cfg, commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspaceName))
 	if err != nil {

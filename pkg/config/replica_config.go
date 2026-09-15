@@ -274,6 +274,12 @@ func (c *replicaConfig) fillFromV1(v1 *outdated.ReplicaConfigV1) {
 
 // ValidateAndAdjust verifies and adjusts the replica configuration.
 func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sink uri
+	if c.Sink.TableRouteEnabled() {
+		if c.Consistent != nil && redo.IsConsistentEnabled(util.GetOrZero(c.Consistent.Level)) {
+			return cerror.ErrInvalidReplicaConfig.FastGenByArgs("table routing is incompatible with redo log/consistency feature")
+		}
+	}
+
 	enableRedoIOCheck := true
 	if c.EnableRedoIOCheck != nil {
 		enableRedoIOCheck = *c.EnableRedoIOCheck
