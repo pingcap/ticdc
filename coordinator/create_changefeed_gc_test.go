@@ -161,11 +161,11 @@ func TestUpdateGCSafepointCallsGCManagerUpdate(t *testing.T) {
 
 			if kerneltype.IsClassic() {
 				gcManager.EXPECT().
-					TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(info.StartTs-1)).
+					TryUpdateServiceGCSafepoint(gomock.Any(), info.StartTs-1).
 					Return(nil).Times(1)
 			} else {
 				gcManager.EXPECT().
-					TryUpdateKeyspaceGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), common.Ts(info.StartTs-1)).
+					TryUpdateKeyspaceGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), info.StartTs-1).
 					Return(nil).Times(1)
 			}
 			gcManager.EXPECT().
