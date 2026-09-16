@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/eventservice"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
@@ -1435,7 +1436,7 @@ func TestFinishBootstrap(t *testing.T) {
 			},
 		},
 	)
-	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+	schemaStore.RegisterMessageHandler(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter))
 	dispatcherID2 := common.NewDispatcherID()
 	require.False(t, s.bootstrapped)
 	msg, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
@@ -1565,7 +1566,7 @@ func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
 			// that has already been dropped before failover recovery starts.
 			schemaStore := eventservice.NewMockSchemaStore()
 			schemaStore.SetTables(nil)
-			appcontext.SetService(appcontext.SchemaStore, schemaStore)
+			schemaStore.RegisterMessageHandler(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter))
 
 			droppedDispatcherID := common.NewDispatcherID()
 			droppedSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 2)
@@ -1688,7 +1689,7 @@ func TestFinishBootstrapDoesNotRepairDroppedTableAfterRestoredStandaloneRemove(t
 	env := newMergeBootstrapTestEnv(t)
 	schemaStore := eventservice.NewMockSchemaStore()
 	schemaStore.SetTables(nil)
-	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+	schemaStore.RegisterMessageHandler(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter))
 
 	responses := env.bootstrapResponses(
 		nil,
@@ -2059,7 +2060,7 @@ func newMergeBootstrapTestEnv(t *testing.T) *mergeBootstrapTestEnv {
 			SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t1"},
 		},
 	})
-	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+	schemaStore.RegisterMessageHandler(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter))
 
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
 	midKey := appendNew(totalSpan.StartKey, 'a')
@@ -2165,7 +2166,7 @@ func TestFinishBootstrapSkipsMergeOperatorForDroppedTable(t *testing.T) {
 
 	schemaStore := eventservice.NewMockSchemaStore()
 	schemaStore.SetTables(nil)
-	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+	schemaStore.RegisterMessageHandler(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter))
 
 	_, err := env.controller.FinishBootstrap(env.bootstrapResponses(
 		[]*heartbeatpb.MergeDispatcherRequest{env.mergeRequest()},
@@ -2333,7 +2334,7 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 			{TableID: 1, SchemaID: 1, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t"}},
 			{TableID: 2, SchemaID: 2, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t2"}, Splitable: true},
 		})
-	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+	schemaStore.RegisterMessageHandler(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter))
 
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
 	totalSpan2 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 2)

@@ -418,7 +418,9 @@ func TestFinishBootstrapStopsStaleEpochMaintainerWithReportedEpoch(t *testing.T)
 			backend := mock_changefeed.NewMockBackend(ctrl)
 			mc := messaging.NewMockMessageCenter()
 			appcontext.SetService(appcontext.MessageCenter, mc)
-			appcontext.SetService(appcontext.SchemaStore, eventservice.NewMockSchemaStore())
+			mc.EnableLocalDispatch()
+			appcontext.SetID("coordinator")
+			eventservice.NewMockSchemaStore().RegisterMessageHandler(mc)
 
 			nodeManager := watcher.NewNodeManager(nil, nil)
 			appcontext.SetService(watcher.NodeManagerName, nodeManager)
@@ -513,7 +515,9 @@ func TestHandleBootstrapResponsesKeepsCurrentEpochAndStopsStaleDuplicate(t *test
 	nodeManager.GetAliveNodes()[oldNode] = &node.Info{ID: oldNode}
 	nodeManager.GetAliveNodes()[currentNode] = &node.Info{ID: currentNode}
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	appcontext.SetService(appcontext.SchemaStore, eventservice.NewMockSchemaStore())
+	mc.EnableLocalDispatch()
+	appcontext.SetID("coordinator")
+	eventservice.NewMockSchemaStore().RegisterMessageHandler(mc)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 
 	cfID := common.NewChangeFeedIDWithName("duplicate-epoch", common.DefaultKeyspaceName)

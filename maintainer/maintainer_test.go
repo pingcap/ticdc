@@ -356,13 +356,14 @@ func TestMaintainerSchedule(t *testing.T) {
 
 	schemaStore := eventservice.NewMockSchemaStore()
 	schemaStore.SetTables(tables)
-	appcontext.SetService(appcontext.SchemaStore, schemaStore)
 
 	n := node.NewInfo("", "")
 	mc := messaging.NewMessageCenter(ctx, n.ID, config.NewDefaultMessageCenterConfig(n.AdvertiseAddr), nil)
 	mc.Run(ctx)
 	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetID(n.ID.String())
+	schemaStore.RegisterMessageHandler(mc)
 
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)

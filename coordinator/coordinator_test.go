@@ -459,8 +459,8 @@ func TestCoordinatorScheduling(t *testing.T) {
 	mc.Run(ctx)
 	defer mc.Close()
 
-	mockSchemaStore := eventservice.NewMockSchemaStore()
-	appcontext.SetService(appcontext.SchemaStore, mockSchemaStore)
+	eventservice.NewMockSchemaStore().RegisterMessageHandler(mc)
+	appcontext.SetID(info.ID.String())
 
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	m := NewMaintainerManager(mc)
@@ -526,13 +526,14 @@ func TestScaleNode(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
-	appcontext.SetService(appcontext.SchemaStore, eventservice.NewMockSchemaStore())
 	nodeManager.GetAliveNodes()[info.ID] = info
 	cfg := config.NewDefaultMessageCenterConfig(info.AdvertiseAddr)
 	mc1 := messaging.NewMessageCenter(ctx, info.ID, cfg, nil)
 	mc1.Run(ctx)
 
 	appcontext.SetService(appcontext.MessageCenter, mc1)
+	appcontext.SetID(info.ID.String())
+	eventservice.NewMockSchemaStore().RegisterMessageHandler(mc1)
 	node1 := startMaintainerNode(ctx, info, mc1, nodeManager, lis1)
 	t.Cleanup(node1.stop)
 
@@ -656,13 +657,14 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
-	appcontext.SetService(appcontext.SchemaStore, eventservice.NewMockSchemaStore())
 	nodeManager.GetAliveNodes()[info.ID] = info
 
 	mc1 := messaging.NewMessageCenter(ctx, info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
 	mc1.Run(ctx)
 
 	appcontext.SetService(appcontext.MessageCenter, mc1)
+	appcontext.SetID(info.ID.String())
+	eventservice.NewMockSchemaStore().RegisterMessageHandler(mc1)
 	mNode := startMaintainerNode(ctx, info, mc1, nodeManager, lis)
 	defer mNode.stop()
 

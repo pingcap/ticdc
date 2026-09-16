@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/schemastoreclient"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"go.uber.org/zap"
 )
@@ -177,7 +178,7 @@ func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
 		ID:   d.tableSpan.KeyspaceID,
 		Name: d.sharedInfo.changefeedID.Keyspace(),
 	}
-	tableInfos, err := getSchemaStoreClient().getTableInfos(meta, tables, ts)
+	tableInfos, err := schemastoreclient.GetSchemaStoreClient().GetTableInfos(meta, tables, ts)
 	if err != nil {
 		log.Error("get table infos from schema store failed",
 			zap.Stringer("changefeed", d.sharedInfo.changefeedID),

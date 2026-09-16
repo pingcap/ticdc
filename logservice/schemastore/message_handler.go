@@ -18,6 +18,8 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/zap"
@@ -25,6 +27,14 @@ import (
 
 func (s *schemaStore) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
 	switch msg.Type {
+	case messaging.TypeSchemaStoreRequest:
+		for _, m := range msg.Message {
+			req, ok := m.(*messaging.SchemaStoreRequest)
+			if !ok {
+				continue
+			}
+			go s.handleRequest(ctx, msg.From, req)
+		}
 	case messaging.TypeSchemaStoreTableInfosRequest:
 		for _, m := range msg.Message {
 			req, ok := m.(*messaging.SchemaStoreTableInfosRequest)
@@ -129,5 +139,34 @@ func (s *schemaStore) handleTableInfosRequest(
 			TableID:   tableID,
 			TableInfo: tableInfoData,
 		})
+	}
+}
+
+func (s *schemaStore) handleRequest(ctx context.Context, from node.ID, req *messaging.SchemaStoreRequest) {
+	resp := &messaging.SchemaStoreResponse{RequestID: req.RequestID}
+	var err error
+	switch req.Operation {
+	case messaging.SchemaStoreRegisterKeyspace:
+		// The message handler's context has the service lifetime, independent of the caller.
+		err = s.RegisterKeyspace(ctx, req.Keyspace)
+	case messaging.SchemaStoreGetAllPhysicalTables:
+		// Table discovery does not need a timezone.
+		var f filter.Filter
+		f, err = filter.NewFilter(req.Filter, "", req.CaseSensitive, req.ForceReplicate)
+		if err == nil {
+			resp.Tables, err = s.GetAllPhysicalTables(req.Keyspace, req.Ts, f)
+		}
+	default:
+		err = errors.ErrSchemaStoreRequestFailed.GenWithStack("unknown schema store operation: %d", req.Operation)
+	}
+	if err != nil {
+		resp.Error = err.Error()
+		code, _ := errors.RFCCode(err)
+		resp.ErrorCode = string(code)
+	}
+	if err := s.mc.SendCommand(messaging.NewSingleTargetMessage(from, messaging.SchemaStoreClientTopic, resp)); err != nil {
+		log.Warn("send schema store response failed",
+			zap.Uint32("keyspaceID", req.Keyspace.ID),
+			zap.Uint64("requestID", req.RequestID), zap.Error(err))
 	}
 }

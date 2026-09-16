@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/tidb/pkg/kv"
 )
 
@@ -162,4 +163,21 @@ func (m *mockSchemaStore) RegisterKeyspace(ctx context.Context, keyspaceMeta com
 
 func (m *mockSchemaStore) GetKVStorage(keyspaceID uint32) (kv.Storage, error) {
 	return nil, nil
+}
+
+// RegisterMessageHandler exposes the preconfigured schema results to client tests.
+func (m *mockSchemaStore) RegisterMessageHandler(mc messaging.MessageCenter) {
+	mc.RegisterHandler(messaging.SchemaStoreTopic, func(_ context.Context, msg *messaging.TargetMessage) error {
+		for _, message := range msg.Message {
+			req := message.(*messaging.SchemaStoreRequest)
+			resp := &messaging.SchemaStoreResponse{RequestID: req.RequestID}
+			if req.Operation == messaging.SchemaStoreGetAllPhysicalTables {
+				resp.Tables = m.Tables
+			}
+			if err := mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic, resp)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

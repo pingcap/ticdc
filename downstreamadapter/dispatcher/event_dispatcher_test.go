@@ -1087,7 +1087,7 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 	require.True(t, ok)
 
 	dispatcher.BootstrapState = BootstrapNotStarted
-	require.True(t, dispatcher.EmitBootstrap())
+	require.True(t, dispatcher.EmitBootstrap(func() bool { return false }))
 	require.Equal(t, BootstrapFinished, loadBootstrapState(&dispatcher.BootstrapState))
 
 	select {

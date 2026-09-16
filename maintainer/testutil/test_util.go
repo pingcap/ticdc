@@ -51,6 +51,9 @@ func SetUpTestServices(t testing.TB) node.ID {
 	t.Helper()
 
 	n := node.NewInfo("", "")
+	previousID := appcontext.GetID()
+	appcontext.SetID(n.ID.String())
+	t.Cleanup(func() { appcontext.SetID(previousID) })
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 

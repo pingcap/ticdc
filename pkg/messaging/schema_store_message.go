@@ -13,7 +13,13 @@
 
 package messaging
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+)
 
 // SchemaStoreTableInfosRequest is used to query table infos from schema store.
 // It is mainly used for changefeed bootstrap in downstream adapter.
@@ -56,3 +62,36 @@ func (r *SchemaStoreTableInfosResponse) Marshal() ([]byte, error) {
 func (r *SchemaStoreTableInfosResponse) Unmarshal(data []byte) error {
 	return json.Unmarshal(data, r)
 }
+
+// SchemaStoreOperation identifies a non-streaming schema store request.
+type SchemaStoreOperation int
+
+const (
+	SchemaStoreRegisterKeyspace SchemaStoreOperation = iota + 1
+	SchemaStoreGetAllPhysicalTables
+)
+
+// SchemaStoreRequest registers a keyspace or queries its physical tables.
+type SchemaStoreRequest struct {
+	RequestID      uint64               `json:"request_id"`
+	Operation      SchemaStoreOperation `json:"operation"`
+	Keyspace       common.KeyspaceMeta  `json:"keyspace"`
+	Ts             uint64               `json:"ts,omitempty"`
+	Filter         *config.FilterConfig `json:"filter,omitempty"`
+	CaseSensitive  bool                 `json:"case_sensitive,omitempty"`
+	ForceReplicate bool                 `json:"force_replicate,omitempty"`
+}
+
+func (r *SchemaStoreRequest) Marshal() ([]byte, error)    { return json.Marshal(r) }
+func (r *SchemaStoreRequest) Unmarshal(data []byte) error { return json.Unmarshal(data, r) }
+
+// SchemaStoreResponse contains a request result and preserves the original error code.
+type SchemaStoreResponse struct {
+	RequestID uint64              `json:"request_id"`
+	Tables    []commonEvent.Table `json:"tables,omitempty"`
+	Error     string              `json:"error,omitempty"`
+	ErrorCode string              `json:"error_code,omitempty"`
+}
+
+func (r *SchemaStoreResponse) Marshal() ([]byte, error)    { return json.Marshal(r) }
+func (r *SchemaStoreResponse) Unmarshal(data []byte) error { return json.Unmarshal(data, r) }

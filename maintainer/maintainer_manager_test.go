@@ -307,12 +307,13 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	// Provide a mock to keep this integration-style test self-contained.
 	appcontext.SetService(appcontext.RegionCache, testutil.NewMockRegionCache())
 
-	appcontext.SetService(appcontext.SchemaStore, store)
 	mc := messaging.NewMessageCenter(ctx, selfNode.ID, config.NewDefaultMessageCenterConfig(selfNode.AdvertiseAddr), nil)
 	mc.Run(ctx)
 	defer mc.Close()
 
 	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetID(selfNode.ID.String())
+	store.RegisterMessageHandler(mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager, selfLis)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
 	// Discard maintainer manager messages, cuz we don't need to handle them in this test
@@ -539,13 +540,13 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	// test itself does not exercise region splitting behavior.
 	appcontext.SetService(appcontext.RegionCache, testutil.NewMockRegionCache())
 
-	appcontext.SetService(appcontext.SchemaStore, store)
-
 	mc := messaging.NewMessageCenter(ctx, selfNode.ID, config.NewDefaultMessageCenterConfig(selfNode.AdvertiseAddr), nil)
 	mc.Run(ctx)
 	defer mc.Close()
 
 	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetID(selfNode.ID.String())
+	store.RegisterMessageHandler(mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager, selfLis)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
 	// discard maintainer manager messages
@@ -666,8 +667,6 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	// RegionCache is required by maintainer constructors (used by split-related logic).
 	appcontext.SetService(appcontext.RegionCache, testutil.NewMockRegionCache())
 
-	appcontext.SetService(appcontext.SchemaStore, store)
-
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	meta := &keyspacepb.KeyspaceMeta{
@@ -689,6 +688,8 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	mc.Run(ctx)
 	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetID(selfNode.ID.String())
+	store.RegisterMessageHandler(mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager, selfLis)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
 	// discard maintainer manager messages
