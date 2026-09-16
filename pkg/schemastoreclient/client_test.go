@@ -40,8 +40,7 @@ func TestSchemaStoreClientFullResponseBuffer(t *testing.T) {
 			name = "completion"
 		}
 		t.Run(name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 			responses := make(chan *messaging.SchemaStoreTableInfosResponse, 4096)
 			for range cap(responses) {
 				responses <- &messaging.SchemaStoreTableInfosResponse{RequestID: 1}
@@ -221,11 +220,9 @@ func TestSchemaStoreClientDuplicateResponse(t *testing.T) {
 	// again while the caller is finishing the request.
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			require.NoError(t, client.handleMessage(context.Background(), msg))
-		}()
+		})
 	}
 	wg.Wait()
 	require.Empty(t, responses)
@@ -260,14 +257,12 @@ func TestSchemaStoreClientConcurrentRequests(t *testing.T) {
 	})
 	var wg sync.WaitGroup
 	for i := range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			require.Same(t, client, GetSchemaStoreClient())
 			tables, err := client.GetAllPhysicalTables(context.Background(), common.DefaultKeyspace, uint64(i+1), cfg, true, true)
 			require.NoError(t, err)
 			require.Equal(t, []commonEvent.Table{{TableID: int64(i + 1)}}, tables)
-		}()
+		})
 	}
 	wg.Wait()
 	require.NoError(t, client.RegisterKeyspace(context.Background(), common.DefaultKeyspace))

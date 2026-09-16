@@ -992,8 +992,7 @@ func TestDispatcherClose(t *testing.T) {
 }
 
 func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	serverID := node.NewID()
 	mc := messaging.NewMessageCenter(ctx, serverID, config.NewDefaultMessageCenterConfig("127.0.0.1:0"), nil)

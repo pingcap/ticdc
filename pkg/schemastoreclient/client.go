@@ -130,13 +130,7 @@ func (c *Client) GetTableInfos(
 	}
 	reqID := c.nextRequestID.Add(1)
 
-	bufferSize := len(tableIDs) + 1
-	if bufferSize < 8 {
-		bufferSize = 8
-	}
-	if bufferSize > 4096 {
-		bufferSize = 4096
-	}
+	bufferSize := min(max(len(tableIDs)+1, 8), 4096)
 
 	respCh := make(chan *messaging.SchemaStoreTableInfosResponse, bufferSize)
 	c.pending.Store(reqID, &tableInfosRequest{ctx: ctx, responses: respCh})
