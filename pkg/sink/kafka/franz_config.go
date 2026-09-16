@@ -100,20 +100,11 @@ func producerOptions(o *options) []kgo.Opt {
 		kgo.MaxBufferedRecords(producerMaxBufferedRecords),
 		// A record batch must fit in the 100 MiB Produce request limit.
 		kgo.ProducerBatchMaxBytes(int32(min(o.MaxMessageBytes, producerMaxRequestBytes))),
-		// This value limits how long the Broker may process a Produce request;
-		// read-timeout is therefore not an exact socket read deadline. Together
-		// with RequestTimeoutOverhead above, the socket write deadline is
-		// write-timeout, the Broker processing timeout is read-timeout, and the
-		// socket read deadline is read-timeout plus write-timeout.
-		// With the default 10s timeout, the Broker may process a Produce request
-		// for 10s, the socket write deadline is 10s, and the socket read deadline
-		// is 20s. Total delivery time also includes retries, buffering, metadata
-		// lookup, connection setup, and Broker throttling; the caller context is
-		// the end-to-end bound.
-		// A Broker processing timeout returns REQUEST_TIMED_OUT, which franz-go
-		// retries. The original record may already be stored, so retries may create
-		// duplicates while idempotent writes are disabled. Exhausting the retry
-		// budget fails the record and reports the error through its callback.
+		// Broker-side processing limit for a Produce request. Together with
+		// RequestTimeoutOverhead it forms the socket read deadline; the caller
+		// context remains the end-to-end bound. A processing timeout returns
+		// REQUEST_TIMED_OUT, which franz-go retries and which can duplicate a record
+		// while idempotent writes are disabled.
 		kgo.ProduceRequestTimeout(o.ReadTimeout),
 		kgo.ProducerLinger(0),
 		compressionOption(o.Compression),

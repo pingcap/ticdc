@@ -62,7 +62,7 @@ func (p *saramaSyncProducer) SendMessage(_ context.Context, topic string, partit
 	log.Error("kafka message send failed",
 		zap.String("keyspace", p.id.Keyspace()),
 		zap.String("changefeed", p.id.Name()),
-		zap.String("eventContext", BuildEventLogContext(p.id.Keyspace(), p.id.Name(), message.LogInfo)),
+		zap.String("eventContext", BuildEventLogContext(message.LogInfo)),
 		zap.Error(err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
@@ -88,7 +88,7 @@ func (p *saramaSyncProducer) SendMessages(_ context.Context, topic string, parti
 	log.Error("kafka message send failed",
 		zap.String("keyspace", p.id.Keyspace()),
 		zap.String("changefeed", p.id.Name()),
-		zap.String("eventContext", BuildEventLogContext(p.id.Keyspace(), p.id.Name(), message.LogInfo)),
+		zap.String("eventContext", BuildEventLogContext(message.LogInfo)),
 		zap.Error(err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }

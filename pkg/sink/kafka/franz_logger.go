@@ -15,7 +15,6 @@ package kafka
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/pingcap/log"
@@ -25,17 +24,15 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// logValueLimit bounds individual string fields emitted by the franz-go logger.
-const logValueLimit = 1024
-
+// clientLogger forwards franz-go log fields unchanged: the library logs request
+// metadata only, never record payloads, so no field needs filtering here.
 type clientLogger struct{ logger *zap.Logger }
 
-func newClientLogger(changefeedID common.ChangeFeedID, role string) kgo.Logger {
+func newClientLogger(changefeedID common.ChangeFeedID) kgo.Logger {
 	logger := log.L().With(
 		zap.String("component", "kafka-client"),
 		zap.String("keyspace", changefeedID.Keyspace()),
 		zap.String("changefeed", changefeedID.Name()),
-		zap.String("role", role),
 	).WithOptions(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
 		return zapcore.NewSamplerWithOptions(core, time.Minute, 5, 100)
 	}))
@@ -43,27 +40,28 @@ func newClientLogger(changefeedID common.ChangeFeedID, role string) kgo.Logger {
 }
 
 func (l *clientLogger) Level() kgo.LogLevel {
-	if log.GetLevel() <= zapcore.DebugLevel {
+	if debugLoggingEnabled() {
 		return kgo.LogLevelInfo
 	}
 	return kgo.LogLevelWarn
 }
 
-func (l *clientLogger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
-	fields := make([]zap.Field, 0, (len(keyvals)+1)/2)
-	for i := 0; i < len(keyvals); i += 2 {
-		key := fmt.Sprint(keyvals[i])
-		value := any("<missing>")
-		if i+1 < len(keyvals) {
-			value = keyvals[i+1]
-		}
+// debugLoggingEnabled reports whether TiCDC runs at debug level, where franz-go
+// info and debug records are kept.
+func debugLoggingEnabled() bool {
+	return log.GetLevel() <= zapcore.DebugLevel
+}
 
-		if isSensitiveLogKey(key) {
-			value = "[redacted]"
-		} else if text, ok := value.(string); ok && len(text) > logValueLimit {
-			value = text[:logValueLimit]
-		}
-		fields = append(fields, zap.Any(key, value))
+func (l *clientLogger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
+	// franz-go emits info and debug records without consulting Level, so drop them
+	// here instead of building fields that zap would discard anyway.
+	if level > kgo.LogLevelWarn && !debugLoggingEnabled() {
+		return
+	}
+
+	fields := make([]zap.Field, 0, len(keyvals)/2)
+	for i := 0; i+1 < len(keyvals); i += 2 {
+		fields = append(fields, zap.Any(fmt.Sprint(keyvals[i]), keyvals[i+1]))
 	}
 
 	switch level {
@@ -74,26 +72,4 @@ func (l *clientLogger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
 	default:
 		l.logger.Debug(msg, fields...)
 	}
-}
-
-func isSensitiveLogKey(key string) bool {
-	key = strings.ToLower(key)
-	if key == "key" || key == "value" {
-		return true
-	}
-
-	for _, fragment := range []string{
-		"password",
-		"passwd",
-		"secret",
-		"token",
-		"authorization",
-		"credential",
-		"sasl",
-	} {
-		if strings.Contains(key, fragment) {
-			return true
-		}
-	}
-	return false
 }

@@ -76,6 +76,8 @@ func (h *metricsHook) OnBrokerThrottle(meta kgo.BrokerMetadata, throttleInterval
 	h.broker(meta.NodeID).throttleTime.Observe(throttleInterval.Seconds())
 }
 
+// broker returns the metric handles for one broker. They are cached here so the
+// per-request hook paths resolve each label set only once.
 func (h *metricsHook) broker(nodeID int32) *brokerMetrics {
 	if cached, ok := h.brokers.Load(nodeID); ok {
 		return cached.(*brokerMetrics)

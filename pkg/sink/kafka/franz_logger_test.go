@@ -8,7 +8,6 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
@@ -27,36 +26,32 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
-func TestLoggerLevelAndFiltering(t *testing.T) {
-	oldLevel := log.GetLevel()
-	defer log.SetLevel(oldLevel)
+// TestClientLoggerConfiguration covers what newClientLogger decides for the
+// franz-go client: the level mapping, the fields identifying the changefeed,
+// the unchanged pass-through of client fields, and the sampler.
+func TestClientLoggerConfiguration(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	// The properties must be non-nil so the test can change the global level.
+	restore := log.ReplaceGlobals(zap.New(core), &log.ZapProperties{
+		Core:  core,
+		Level: zap.NewAtomicLevelAt(log.GetLevel()),
+	})
+	defer restore()
 
-	clientLogger := newClientLogger(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "logger"), "producer").(*clientLogger)
+	// The logger must be built after ReplaceGlobals to observe its output.
+	clientLogger := newClientLogger(
+		common.NewChangefeedID4Test("test-keyspace", "test-changefeed"))
 
 	log.SetLevel(zapcore.InfoLevel)
 	require.Equal(t, kgo.LogLevelWarn, clientLogger.Level())
-
 	log.SetLevel(zapcore.DebugLevel)
 	require.Equal(t, kgo.LogLevelInfo, clientLogger.Level())
 
-	for _, key := range []string{"password", "access_token", "key", "value", "sasl-user"} {
-		require.True(t, isSensitiveLogKey(key))
-	}
-
-	require.NotPanics(t, func() { clientLogger.Log(kgo.LogLevelWarn, "odd key value", "key-only") })
-}
-
-func TestLoggerPreservesContextAndRedactsValues(t *testing.T) {
-	core, logs := observer.New(zapcore.DebugLevel)
-	restore := log.ReplaceGlobals(zap.New(core), nil)
-	defer restore()
-
-	clientLogger := newClientLogger(common.NewChangefeedID4Test("keyspace", "changefeed"), "producer")
 	clientLogger.Log(
 		kgo.LogLevelWarn,
 		"connection failed",
-		"password", "secret",
-		"payload", strings.Repeat("x", logValueLimit+10),
+		"broker", "127.0.0.1:9092",
+		"payload", strings.Repeat("x", 2048),
 		"odd",
 	)
 
@@ -65,23 +60,27 @@ func TestLoggerPreservesContextAndRedactsValues(t *testing.T) {
 
 	fields := entries[0].ContextMap()
 	require.Equal(t, "kafka-client", fields["component"])
-	require.Equal(t, "keyspace", fields["keyspace"])
-	require.Equal(t, "changefeed", fields["changefeed"])
-	require.Equal(t, "producer", fields["role"])
-	require.Equal(t, "[redacted]", fields["password"])
-	require.Equal(t, strings.Repeat("x", logValueLimit), fields["payload"])
-	require.Equal(t, "<missing>", fields["odd"])
-}
+	require.Equal(t, "test-keyspace", fields["keyspace"])
+	require.Equal(t, "test-changefeed", fields["changefeed"])
+	// Client fields are passed through, including long values.
+	require.Equal(t, "127.0.0.1:9092", fields["broker"])
+	require.Equal(t, strings.Repeat("x", 2048), fields["payload"])
+	// A key without a value is dropped instead of panicking.
+	require.NotContains(t, fields, "odd")
 
-func TestLoggerSamplesRepeatedMessages(t *testing.T) {
-	core, logs := observer.New(zapcore.DebugLevel)
-	restore := log.ReplaceGlobals(zap.New(core), nil)
-	defer restore()
+	// franz-go info records are dropped before field conversion unless TiCDC logs
+	// at debug level, where they are emitted as debug records.
+	log.SetLevel(zapcore.InfoLevel)
+	clientLogger.Log(kgo.LogLevelInfo, "info record", "broker", "127.0.0.1:9092")
+	require.Empty(t, logs.FilterMessage("info record").AllUntimed())
 
-	clientLogger := newClientLogger(common.NewChangefeedID4Test("keyspace", "changefeed"), "producer")
+	log.SetLevel(zapcore.DebugLevel)
+	clientLogger.Log(kgo.LogLevelInfo, "info record", "broker", "127.0.0.1:9092")
+	require.Len(t, logs.FilterMessage("info record").AllUntimed(), 1)
+
+	// Repeated messages are sampled so a chatty client cannot flood the log.
 	for range 105 {
 		clientLogger.Log(kgo.LogLevelWarn, "repeated")
 	}
-
 	require.Len(t, logs.FilterMessage("repeated").AllUntimed(), 6)
 }
