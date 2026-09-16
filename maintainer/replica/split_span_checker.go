@@ -46,7 +46,7 @@ const (
 	trafficBalanceSkipNoEventStoreHeadroom    = "no_event_store_headroom"
 	trafficBalanceSkipNoImprovingSpan         = "no_improving_span"
 	// Ignore small relative skews that do not indicate meaningful storage pressure.
-	minEventStoreWriteBytesPerSecond = 2 * 1024 * 1024
+	minEventStoreWriteBytesPerSecond = 10 * 1024 * 1024
 )
 
 var (
