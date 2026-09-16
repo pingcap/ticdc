@@ -94,17 +94,27 @@ type CheckpointLogInfo struct {
 	CommitTs uint64
 }
 
+// recordLength returns the sarama record size estimate for one record.
+func recordLength(keyLength, valueLength int) int {
+	return keyLength + valueLength + MaxRecordOverhead
+}
+
+// kafkaRecordBatchLength returns the franz-go record size estimate for one record.
+func kafkaRecordBatchLength(keyLength, valueLength int) int {
+	return keyLength + valueLength + kafkaRecordBatchOverhead
+}
+
 // Length returns the expected size of the Kafka message
 // We didn't append any `Headers` when send the message, so ignore the calculations related to it.
 // If `ProducerMessage` Headers fields used, this method should also adjust.
 func (m *Message) Length() int {
-	return len(m.Key) + len(m.Value) + MaxRecordOverhead
+	return recordLength(len(m.Key), len(m.Value))
 }
 
 // KafkaRecordBatchLength returns a conservative uncompressed size for a record
 // batch containing only this message and no record headers.
 func (m *Message) KafkaRecordBatchLength() int {
-	return len(m.Key) + len(m.Value) + kafkaRecordBatchOverhead
+	return kafkaRecordBatchLength(len(m.Key), len(m.Value))
 }
 
 // GetRowsCount returns the number of rows batched in one Message
