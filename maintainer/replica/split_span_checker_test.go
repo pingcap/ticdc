@@ -846,6 +846,78 @@ func TestSplitSpanChecker_CheckBalanceEventStore_EvictsPersistentlyBusyNode(t *t
 	require.Empty(t, checker.Check(10))
 }
 
+func TestSplitSpanChecker_CheckBalanceEventStoreUsesShortFollowUpWindow(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	schedulerCfg := &config.ChangefeedSchedulerConfig{
+		WriteKeyThreshold:          util.AddressOf(100 * 1024 * 1024),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(5),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
+	}
+
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	for _, nodeID := range []node.ID{"busy", "idle"} {
+		nodeManager.GetAliveNodes()[nodeID] = node.NewInfo(nodeID.String(), "")
+	}
+
+	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
+	checker := newTestSplitChecker(t, cfID, replicas[0].GetGroupID(), schedulerCfg)
+	for i, replica := range replicas {
+		if i < 3 {
+			replica.SetNodeID("busy")
+		} else {
+			replica.SetNodeID("idle")
+		}
+		checker.AddReplica(replica)
+		status := checker.allTasks[replica.ID]
+		status.lastThreeTraffic = []float64{1024 * 1024, 1024 * 1024, 1024 * 1024}
+		status.regionCount = 3
+	}
+
+	overloadedRates := map[node.ID]uint64{
+		"busy": 4 * minEventStoreWriteBytesPerSecond,
+		"idle": minEventStoreWriteBytesPerSecond,
+	}
+	checkOverload := func() pkgreplica.GroupCheckResult {
+		setEventStoreWriteBytesPerSecond(checker.nodeResourceUsage, overloadedRates)
+		return checker.Check(10)
+	}
+
+	// The initial evacuation still requires the configured five overload
+	// observations.
+	for range 4 {
+		require.Empty(t, checkOverload())
+	}
+	results := checkOverload()
+	require.Len(t, results, 1)
+	firstMove := results.([]SplitSpanCheckResult)[0]
+	require.Len(t, firstMove.MoveSpans, 1)
+	firstMove.MoveSpans[0].SetNodeID("idle")
+
+	// Once evacuation has started, three fresh samples that still show overload
+	// are enough to move the next dispatcher.
+	for range 2 {
+		require.Empty(t, checkOverload())
+	}
+	results = checkOverload()
+	require.Len(t, results, 1)
+
+	// Recovery ends evacuation. A later overload must use the configured initial
+	// threshold again instead of the three-sample follow-up threshold.
+	setEventStoreWriteBytesPerSecond(checker.nodeResourceUsage,
+		map[node.ID]uint64{"busy": 100, "idle": 100})
+	require.Empty(t, checker.Check(10))
+	require.Empty(t, checker.eventStoreBalanceLimiter.evacuatingSourceNodeID)
+
+	for range 3 {
+		require.Empty(t, checkOverload())
+	}
+	require.Equal(t, 3, checker.eventStoreBalanceCondition.balanceScore)
+}
+
 func TestSplitSpanChecker_CheckBalanceEventStoreRequiresSameBusyNode(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
@@ -902,7 +974,7 @@ func TestSplitSpanChecker_CheckBalanceEventStoreRequiresSameBusyNode(t *testing.
 	require.Len(t, results, 1)
 	moveResult := results.([]SplitSpanCheckResult)[0]
 	require.Equal(t, replicas[0], moveResult.MoveSpans[0])
-	require.Equal(t, node.ID("idle"), moveResult.TargetNode)
+	require.Equal(t, node.ID("node-b"), moveResult.TargetNode)
 }
 
 func TestSplitSpanChecker_CheckBalanceEventStoreLimitsMovesAcrossGroups(t *testing.T) {

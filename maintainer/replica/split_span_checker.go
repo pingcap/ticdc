@@ -46,7 +46,8 @@ const (
 	trafficBalanceSkipNoEventStoreHeadroom    = "no_event_store_headroom"
 	trafficBalanceSkipNoImprovingSpan         = "no_improving_span"
 	// Ignore small relative skews that do not indicate meaningful storage pressure.
-	minEventStoreWriteBytesPerSecond = 10 * 1024 * 1024
+	minEventStoreWriteBytesPerSecond        = 10 * 1024 * 1024
+	eventStoreFollowUpBalanceScoreThreshold = 3
 )
 
 var (
@@ -84,6 +85,7 @@ type BalanceCondition struct {
 type eventStoreBalanceLimiter struct {
 	generation                 uint64
 	lastMoveSnapshotGeneration uint64
+	evacuatingSourceNodeID     node.ID
 }
 
 func (b *BalanceCondition) reset() {
@@ -1173,6 +1175,7 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 	if nodeResourceUsageStatus != heartbeatpb.NodeResourceUsageStatus_AVAILABLE ||
 		len(aliveNodeIDs) < 2 {
 		s.eventStoreBalanceCondition.reset()
+		s.eventStoreBalanceLimiter.evacuatingSourceNodeID = ""
 		return results, false
 	}
 	var totalWriteBytes float64
@@ -1191,7 +1194,12 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 	if sourceWriteBytes < minEventStoreWriteBytesPerSecond ||
 		avgWriteBytes == 0 || float64(sourceWriteBytes) <= avgWriteBytes*s.maxTrafficPercentage {
 		s.eventStoreBalanceCondition.reset()
+		s.eventStoreBalanceLimiter.evacuatingSourceNodeID = ""
 		return results, false
+	}
+	if s.eventStoreBalanceLimiter.evacuatingSourceNodeID != "" &&
+		s.eventStoreBalanceLimiter.evacuatingSourceNodeID != sourceNodeID {
+		s.eventStoreBalanceLimiter.evacuatingSourceNodeID = ""
 	}
 	if len(taskMap[sourceNodeID]) == 0 {
 		s.eventStoreBalanceCondition.reset()
@@ -1251,7 +1259,11 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 	}
 
 	s.eventStoreBalanceCondition.updateScore(targetNodeID, sourceNodeID, false, true)
-	if s.eventStoreBalanceCondition.balanceScore < s.balanceScoreThreshold {
+	balanceScoreThreshold := s.balanceScoreThreshold
+	if s.eventStoreBalanceLimiter.evacuatingSourceNodeID == sourceNodeID {
+		balanceScoreThreshold = min(balanceScoreThreshold, eventStoreFollowUpBalanceScoreThreshold)
+	}
+	if s.eventStoreBalanceCondition.balanceScore < balanceScoreThreshold {
 		return results, true
 	}
 	log.Info("move dispatcher away from busy event store",
@@ -1269,6 +1281,7 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 	})
 	s.eventStoreBalanceLimiter.generation++
 	s.eventStoreBalanceLimiter.lastMoveSnapshotGeneration = eventStoreSnapshotGeneration
+	s.eventStoreBalanceLimiter.evacuatingSourceNodeID = sourceNodeID
 	s.eventStoreBalanceGeneration = s.eventStoreBalanceLimiter.generation
 	s.eventStoreBalanceCondition.reset()
 	s.balanceCondition.reset()
