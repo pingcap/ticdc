@@ -18,10 +18,10 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
-	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/format"
 	"go.uber.org/zap"
 )
 
@@ -39,29 +39,11 @@ func transformDDLJobQuery(job *model.Job) (string, error) {
 		return "", errors.Trace(err)
 	}
 	var result string
-	buildQuery := func(stmt ast.StmtNode) (string, error) {
-		var sb strings.Builder
-		// translate TiDB feature to special comment
-		restoreFlags := format.RestoreTiDBSpecialComment
-		// escape the keyword
-		restoreFlags |= format.RestoreNameBackQuotes
-		// upper case keyword
-		restoreFlags |= format.RestoreKeyWordUppercase
-		// wrap string with single quote
-		restoreFlags |= format.RestoreStringSingleQuotes
-		// remove placement rule
-		restoreFlags |= format.SkipPlacementRuleForRestore
-		// force disable ttl
-		restoreFlags |= format.RestoreWithTTLEnableOff
-		if err = stmt.Restore(format.NewRestoreCtx(restoreFlags, &sb)); err != nil {
-			return "", errors.Trace(err)
-		}
-		return sb.String(), nil
-	}
+
 	if len(stmts) > 1 {
 		results := make([]string, 0, len(stmts))
 		for _, stmt := range stmts {
-			query, err := buildQuery(stmt)
+			query, err := commonEvent.Restore(stmt)
 			if err != nil {
 				return "", errors.Trace(err)
 			}
@@ -69,7 +51,7 @@ func transformDDLJobQuery(job *model.Job) (string, error) {
 		}
 		result = strings.Join(results, ";")
 	} else {
-		result, err = buildQuery(stmts[0])
+		result, err = commonEvent.Restore(stmts[0])
 		if err != nil {
 			return "", errors.Trace(err)
 		}
@@ -83,18 +65,46 @@ func transformDDLJobQuery(job *model.Job) (string, error) {
 // isSplitable returns whether the table is eligible for split in all sinks
 // Only the table with pk and no uk can be splitted in all sinks.
 func isSplitable(tableInfo *model.TableInfo) bool {
-	if tableInfo.GetPkColInfo() == nil {
-		return false
+	return common.IsSplitable(tableInfo.GetPkColInfo(), tableInfo.Indices)
+}
+
+func getIndexIDs(job *model.Job) []int64 {
+	if job == nil {
+		return nil
 	}
 
-	indices := tableInfo.Indices
-	for _, index := range indices {
-		if index.Primary {
+	// Anonymous index rewrite only needs IDs for ADD INDEX clauses, and it
+	// consumes them in SQL order. Other modify-index subjobs such as DROP INDEX,
+	// RENAME INDEX, or ADD PRIMARY KEY would shift that positional mapping and
+	// make the downstream rewrite pick the wrong upstream name.
+	if job.Type == model.ActionAddIndex {
+		return extractAddIndexIDs(job)
+	}
+
+	if job.MultiSchemaInfo == nil {
+		return nil
+	}
+
+	res := make([]int64, 0)
+	for idx, subJob := range job.MultiSchemaInfo.SubJobs {
+		if subJob.Type != model.ActionAddIndex {
 			continue
 		}
-		if index.Unique {
-			return false
-		}
+		proxyJob := subJob.ToProxyJob(job, idx)
+		res = append(res, extractAddIndexIDs(&proxyJob)...)
 	}
-	return true
+	return res
+}
+
+func extractAddIndexIDs(job *model.Job) []int64 {
+	idxArgs, err := model.GetModifyIndexArgs(job)
+	if idxArgs == nil || err != nil {
+		return nil
+	}
+
+	res := make([]int64, 0, len(idxArgs.IndexArgs))
+	for _, indexArg := range idxArgs.IndexArgs {
+		res = append(res, indexArg.IndexID)
+	}
+	return res
 }

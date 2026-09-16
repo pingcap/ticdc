@@ -21,6 +21,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -50,7 +51,7 @@ func (d *txnDecoder) AddKeyValue(_, value []byte) {
 	if err != nil {
 		log.Panic("decompress data failed",
 			zap.String("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value),
+			zap.Any("value", util.RedactAny(value)),
 			zap.Error(err))
 	}
 	d.data = value
@@ -95,19 +96,40 @@ func (d *txnDecoder) HasNext() (common.MessageType, bool) {
 	return d.msg.messageType(), true
 }
 
-func (d *txnDecoder) NextDMLEvent() *commonEvent.DMLEvent {
+func (d *txnDecoder) NextDMLMessage() *common.DMLMessage {
 	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
+		messageType := common.MessageTypeUnknown
+		if d.msg != nil {
+			messageType = d.msg.messageType()
+		}
 		log.Panic("message type is not row changed",
-			zap.Any("messageType", d.msg.messageType()), zap.Any("msg", d.msg))
+			zap.Any("messageType", messageType), zap.Any("msg", d.msg))
 	}
-	result := d.canalJSONMessage2RowChange()
+
+	msg := d.msg
 	d.msg = nil
-	return result
+	schemaName := *msg.getSchema()
+	tableName := *msg.getTable()
+	tableID := tableIDAllocator.Allocate(schemaName, tableName)
+
+	var rowType commonType.RowType
+	switch msg.eventType() {
+	case canal.EventType_DELETE:
+		rowType = commonType.RowTypeDelete
+	case canal.EventType_INSERT:
+		rowType = commonType.RowTypeInsert
+	case canal.EventType_UPDATE:
+		rowType = commonType.RowTypeUpdate
+	default:
+		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
+	}
+
+	return common.NewDMLMessage(tableID, schemaName, tableName, msg.getCommitTs(), rowType, func() *commonEvent.DMLEvent {
+		return d.canalJSONMessage2RowChange(msg)
+	})
 }
 
-func (d *txnDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
-	msg := d.msg
-
+func (d *txnDecoder) canalJSONMessage2RowChange(msg canalJSONMessageInterface) *commonEvent.DMLEvent {
 	tableInfo := newTableInfo(msg)
 	result := new(commonEvent.DMLEvent)
 	result.Length++                    // todo: set this field correctly

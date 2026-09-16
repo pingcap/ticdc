@@ -55,8 +55,12 @@ const (
 	closed
 
 	maxIdleDuration = time.Minute * 30
-	defaultMaxRetry = 5
+	defaultMaxRetry = 50
 )
+
+type pdClientProvider interface {
+	GetPDClient() pd.Client
+}
 
 // Upstream holds resources of a TiDB cluster, it can be shared by many changefeeds
 // and processors. All public fields and method of an upstream should be thread-safe.
@@ -124,16 +128,15 @@ func CreateTiStore(ctx context.Context, urls string, credential *security.Creden
 		// we should use OpenWithOptions to open a storage to avoid modifying tidb's GlobalConfig
 		// so that we can create different storage in TiCDC by different urls and credential
 		tiStore, err = d.OpenWithOptions(tiPath, driver.WithSecurity(securityCfg))
-		return err
+		if err != nil {
+			return err
+		}
+		return DisablePDRouterClient(tiStore)
 	}, retry.WithMaxTries(defaultMaxRetry),
 		retry.WithBackoffBaseDelay(200),
 		retry.WithBackoffMaxDelay(4000),
 		retry.WithIsRetryableErr(func(err error) bool {
-			switch errors.Cause(err) {
-			case context.Canceled:
-				return false
-			}
-			return true
+			return isCreateTiStoreRetryable(ctx, err)
 		}))
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrNewStore, err)
@@ -141,12 +144,35 @@ func CreateTiStore(ctx context.Context, urls string, credential *security.Creden
 	return tiStore, nil
 }
 
+// DisablePDRouterClient disables the streaming PD router used by a TiKV storage.
+// To be compatible with old PD which doesn't support the `QueryRegion` API.
+func DisablePDRouterClient(storage tidbkv.Storage) error {
+	provider, ok := storage.(pdClientProvider)
+	if !ok {
+		return nil
+	}
+	pdClient := provider.GetPDClient()
+	if pdClient == nil {
+		return nil
+	}
+	return errors.Trace(pdClient.UpdateOption(pdopt.EnableRouterClient, false))
+}
+
+func isCreateTiStoreRetryable(ctx context.Context, err error) bool {
+	switch errors.Cause(err) {
+	case context.Canceled:
+		// Only stop retrying if the caller's context is canceled.
+		// Otherwise treat it as transient (e.g. internal client cancellation).
+		return ctx.Err() == nil
+	}
+	return true
+}
+
 // init initializes the upstream
-func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error {
+func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) (err error) {
 	ctx, up.cancel = context.WithCancel(ctx)
 	grpcTLSOption, err := up.SecurityConfig.ToGRPCDialOption()
 	if err != nil {
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 	// init the tikv client tls global config
@@ -155,6 +181,7 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 	if !up.isDefaultUpstream {
 		up.PDClient, err = pd.NewClientWithContext(
 			ctx, "cdc-upstream", up.PdEndpoints, up.SecurityConfig.PDSecurityOption(),
+			pdopt.WithEnableRouterClient(false), // Compatible with old PD which doesn't support the `QueryRegion` API.
 			// the default `timeout` is 3s, maybe too small if the pd is busy,
 			// set to 10s to avoid frequent timeout.
 			pdopt.WithCustomTimeoutOption(10*time.Second),
@@ -171,7 +198,6 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 				}),
 			))
 		if err != nil {
-			up.err.Store(err)
 			return errors.Trace(err)
 		}
 
@@ -185,14 +211,12 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 	if up.ID != 0 && up.ID != clusterID {
 		err := fmt.Errorf("upstream id missmatch expected %d, actual: %d",
 			up.ID, clusterID)
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 	up.ID = clusterID
 
 	up.KVStorage, err = CreateTiStore(ctx, strings.Join(up.PdEndpoints, ","), up.SecurityConfig, "")
 	if err != nil {
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 
@@ -200,7 +224,6 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 
 	up.PDClock, err = pdutil.NewClock(ctx, up.PDClient)
 	if err != nil {
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 
@@ -254,7 +277,9 @@ func initGlobalConfig(secCfg *security.Credential) {
 func (up *Upstream) Close() {
 	up.mu.Lock()
 	defer up.mu.Unlock()
-	up.cancel()
+	if up.cancel != nil {
+		up.cancel()
+	}
 	if atomic.LoadInt32(&up.status) == closed ||
 		atomic.LoadInt32(&up.status) == closing {
 		return
@@ -371,7 +396,7 @@ func (up *Upstream) registerTopologyInfo(ctx context.Context, cfg *NodeTopologyC
 	}
 	// register capture info to upstream pd
 	key := fmt.Sprintf(topologyTiCDC, cfg.GCServiceID, cfg.AdvertiseAddr)
-	value, err := cfg.Info.Marshal()
+	value, err := cfg.Marshal()
 	if err != nil {
 		return errors.Trace(err)
 	}

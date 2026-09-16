@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/util"
 )
 
@@ -39,7 +40,7 @@ func ColumnValueString(c interface{}) string {
 	var data string
 	switch v := c.(type) {
 	case nil:
-		data = "null"
+		log.Panic("should not reach here when column value is nil")
 	case bool:
 		if v {
 			data = "1"

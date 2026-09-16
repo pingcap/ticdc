@@ -20,6 +20,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/mvccpb"
@@ -141,7 +142,7 @@ func TestCDCEtcdClientImpl_GetChangefeedInfoAndStatus(t *testing.T) {
 			name: "get changefeeds failed",
 			fields: func(ctx context.Context, ctrl *gomock.Controller) fields {
 				client := NewMockClient(ctrl)
-				client.EXPECT().Get(gomock.Eq(ctx), gomock.Eq("/tidb/cdc/cluster-id"), gomock.Any()).Return(nil, errors.New("etcd failed")).Times(1)
+				client.EXPECT().Get(gomock.Eq(ctx), gomock.Eq("/tidb/cdc/cluster-id/"), gomock.Any()).Return(nil, errors.New("etcd failed")).Times(1)
 				return fields{
 					Client:        client,
 					ClusterID:     "cluster-id",
@@ -162,7 +163,7 @@ func TestCDCEtcdClientImpl_GetChangefeedInfoAndStatus(t *testing.T) {
 			name: "get changefeeds success",
 			fields: func(ctx context.Context, ctrl *gomock.Controller) fields {
 				client := NewMockClient(ctrl)
-				client.EXPECT().Get(gomock.Eq(ctx), gomock.Eq("/tidb/cdc/cluster-id"), gomock.Any()).Return(&clientv3.GetResponse{
+				client.EXPECT().Get(gomock.Eq(ctx), gomock.Eq("/tidb/cdc/cluster-id/"), gomock.Any()).Return(&clientv3.GetResponse{
 					Header: &etcdserverpb.ResponseHeader{
 						Revision: 3,
 					},
@@ -269,4 +270,164 @@ func TestCDCEtcdClientImpl_GetChangefeedInfoAndStatus(t *testing.T) {
 			require.EqualValues(t, tt.wantInfoMap, gotInfoMap)
 		})
 	}
+}
+
+func TestCDCEtcdClientImpl_GetAllCDCInfo(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	client := NewMockClient(ctrl)
+	client.EXPECT().
+		Get(gomock.Eq(ctx), gomock.Eq("/tidb/cdc/cluster-id/"), gomock.Any()).
+		Return(&clientv3.GetResponse{
+			Kvs: []*mvccpb.KeyValue{
+				{
+					Key:   []byte("/tidb/cdc/cluster-id/default/changefeed/info/changefeed1"),
+					Value: []byte("{}"),
+				},
+			},
+		}, nil).
+		Times(1)
+
+	etcdClient := &CDCEtcdClientImpl{Client: client, ClusterID: "cluster-id"}
+	kvs, err := etcdClient.GetAllCDCInfo(ctx)
+	require.NoError(t, err)
+	require.Len(t, kvs, 1)
+	require.Equal(t, []byte("/tidb/cdc/cluster-id/default/changefeed/info/changefeed1"), kvs[0].Key)
+}
+
+func TestCDCEtcdClientImpl_ClearAllCDCInfo(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	client := NewMockClient(ctrl)
+	client.EXPECT().
+		Delete(gomock.Eq(ctx), gomock.Eq("/tidb/cdc/cluster-id/"), gomock.Any()).
+		Return(&clientv3.DeleteResponse{}, nil).
+		Times(1)
+
+	etcdClient := &CDCEtcdClientImpl{Client: client, ClusterID: "cluster-id"}
+	require.NoError(t, etcdClient.ClearAllCDCInfo(ctx))
+}
+
+func TestCDCEtcdClientImpl_CheckMultipleCDCClusterExist(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name      string
+		kvs       []*mvccpb.KeyValue
+		assertion require.ErrorAssertionFunc
+	}{
+		{
+			name: "only default cluster exists",
+			kvs: []*mvccpb.KeyValue{
+				{Key: []byte("/tidb/cdc/default/default/changefeed/info/changefeed1")},
+			},
+			assertion: require.NoError,
+		},
+		{
+			name: "default prefix collision should be treated as another cluster",
+			kvs: []*mvccpb.KeyValue{
+				{Key: []byte("/tidb/cdc/default-index/default/changefeed/info/changefeed1")},
+			},
+			assertion: func(t require.TestingT, err error, _ ...any) {
+				require.True(t, cerrors.ErrMultipleCDCClustersExist.Equal(err))
+			},
+		},
+		{
+			name: "reserved prefix collision should be treated as another cluster",
+			kvs: []*mvccpb.KeyValue{
+				{Key: []byte("/tidb/cdc/owner-index/default/changefeed/info/changefeed1")},
+			},
+			assertion: func(t require.TestingT, err error, _ ...any) {
+				require.True(t, cerrors.ErrMultipleCDCClustersExist.Equal(err))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			client := NewMockClient(ctrl)
+			client.EXPECT().
+				Get(gomock.Eq(ctx), gomock.Eq("/tidb/cdc/"), gomock.Any(), gomock.Any()).
+				Return(&clientv3.GetResponse{Kvs: tt.kvs}, nil).
+				Times(1)
+
+			etcdClient := &CDCEtcdClientImpl{Client: client, ClusterID: "cluster-id"}
+			err := etcdClient.CheckMultipleCDCClusterExist(ctx)
+			tt.assertion(t, err)
+		})
+	}
+}
+
+func TestCDCEtcdClientImpl_GetLogCoordinatorRevision(t *testing.T) {
+	ctx := context.Background()
+	clusterID := "cluster-id"
+	captureID := "capture-1"
+
+	t.Run("get leader failed", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		client := NewMockClient(ctrl)
+		client.EXPECT().
+			Get(gomock.Eq(ctx), gomock.Eq(LogCoordinatorKey(clusterID)), gomock.Any()).
+			Return(nil, errors.New("etcd failed")).
+			Times(1)
+
+		etcdClient := &CDCEtcdClientImpl{Client: client, ClusterID: clusterID}
+		_, err := etcdClient.GetLogCoordinatorRevision(ctx, captureID)
+		require.ErrorContains(t, err, "etcd failed")
+	})
+
+	t.Run("leader not found", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		client := NewMockClient(ctrl)
+		client.EXPECT().
+			Get(gomock.Eq(ctx), gomock.Eq(LogCoordinatorKey(clusterID)), gomock.Any()).
+			Return(&clientv3.GetResponse{Kvs: nil}, nil).
+			Times(1)
+
+		etcdClient := &CDCEtcdClientImpl{Client: client, ClusterID: clusterID}
+		_, err := etcdClient.GetLogCoordinatorRevision(ctx, captureID)
+		require.True(t, cerrors.ErrOwnerNotFound.Equal(err))
+	})
+
+	t.Run("not the log coordinator", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		client := NewMockClient(ctrl)
+		client.EXPECT().
+			Get(gomock.Eq(ctx), gomock.Eq(LogCoordinatorKey(clusterID)), gomock.Any()).
+			Return(&clientv3.GetResponse{
+				Kvs: []*mvccpb.KeyValue{
+					{Value: []byte("other-capture"), ModRevision: 99},
+				},
+			}, nil).
+			Times(1)
+
+		etcdClient := &CDCEtcdClientImpl{Client: client, ClusterID: clusterID}
+		_, err := etcdClient.GetLogCoordinatorRevision(ctx, captureID)
+		require.True(t, cerrors.ErrNotOwner.Equal(err))
+	})
+
+	t.Run("success", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		client := NewMockClient(ctrl)
+		client.EXPECT().
+			Get(gomock.Eq(ctx), gomock.Eq(LogCoordinatorKey(clusterID)), gomock.Any()).
+			Return(&clientv3.GetResponse{
+				Kvs: []*mvccpb.KeyValue{
+					{Value: []byte(captureID), ModRevision: 123},
+				},
+			}, nil).
+			Times(1)
+
+		etcdClient := &CDCEtcdClientImpl{Client: client, ClusterID: clusterID}
+		rev, err := etcdClient.GetLogCoordinatorRevision(ctx, captureID)
+		require.NoError(t, err)
+		require.Equal(t, int64(123), rev)
+	})
 }

@@ -28,6 +28,12 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	defaultHeartbeatInterval     = 200 * time.Millisecond
+	lowLatencyHeartbeatInterval  = 50 * time.Millisecond
+	defaultHeartbeatInitialDelay = time.Second
+)
+
 // HeartbeatTask is a perioic task to collect the heartbeat status from event dispatcher manager and push to heartbeatRequestQueue
 type HeartBeatTask struct {
 	taskHandle *threadpool.TaskHandle
@@ -42,7 +48,7 @@ func newHeartBeatTask(manager *DispatcherManager) *HeartBeatTask {
 		manager:    manager,
 		statusTick: 0,
 	}
-	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(time.Second*1))
+	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(heartbeatInitialDelay(manager)))
 	return t
 }
 
@@ -50,14 +56,27 @@ func (t *HeartBeatTask) Execute() time.Time {
 	if t.manager.closed.Load() {
 		return time.Time{}
 	}
-	executeInterval := time.Millisecond * 200
-	// 10s / 200ms = 50
+	executeInterval := heartbeatInterval(t.manager)
 	completeStatusInterval := int(time.Second * 10 / executeInterval)
 	t.statusTick++
 	needCompleteStatus := (t.statusTick)%completeStatusInterval == 0
 	message := t.manager.aggregateDispatcherHeartbeats(needCompleteStatus)
 	t.manager.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: t.manager.GetMaintainerID(), Request: message})
 	return time.Now().Add(executeInterval)
+}
+
+func heartbeatInterval(manager *DispatcherManager) time.Duration {
+	if manager.config.IsLowLatencyMode() {
+		return lowLatencyHeartbeatInterval
+	}
+	return defaultHeartbeatInterval
+}
+
+func heartbeatInitialDelay(manager *DispatcherManager) time.Duration {
+	if manager.config.IsLowLatencyMode() {
+		return 0
+	}
+	return defaultHeartbeatInitialDelay
 }
 
 func (t *HeartBeatTask) Cancel() {
@@ -208,6 +227,7 @@ func abortMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispa
 	}
 
 	removeDispatcher(t.manager, t.mergedDispatcher.GetId(), dispatcherMap, sinkType)
+	t.manager.RemoveMergeOperator(t.mergedDispatcher.GetId())
 }
 
 func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *DispatcherMap[T]) {
@@ -327,6 +347,8 @@ func buildMergedStartTsCandidate(minCheckpointTs uint64, pendingStates []*heartb
 	}
 
 	if len(pendingStates) == 0 {
+		// Defensive: without per-dispatcher pending barrier states, we can only fall back to the
+		// conservative choice (min checkpointTs) and avoid inferring anything about barriers.
 		candidate.allSamePending = false
 		return candidate
 	}
@@ -335,6 +357,7 @@ func buildMergedStartTsCandidate(minCheckpointTs uint64, pendingStates []*heartb
 	var pendingIsSyncPoint bool
 	for idx, state := range pendingStates {
 		if state == nil {
+			// If any source dispatcher is not waiting on a barrier, we can't derive a barrier-aligned startTs.
 			candidate.allSamePending = false
 			break
 		}
@@ -344,6 +367,7 @@ func buildMergedStartTsCandidate(minCheckpointTs uint64, pendingStates []*heartb
 			continue
 		}
 		if state.BlockTs != pendingCommitTs || state.IsSyncPoint != pendingIsSyncPoint {
+			// Mixed barrier states imply the merged dispatcher should start from minCheckpointTs.
 			candidate.allSamePending = false
 			break
 		}
@@ -352,6 +376,9 @@ func buildMergedStartTsCandidate(minCheckpointTs uint64, pendingStates []*heartb
 	candidate.pendingIsSyncPoint = pendingIsSyncPoint
 
 	if candidate.allSamePending {
+		// When all source dispatchers are blocked by the same barrier, pick a startTs that can replay it safely:
+		// - Syncpoint: start from commitTs.
+		// - DDL: start from (commitTs-1) to replay the DDL at commitTs and skip duplicate DML at commitTs.
 		if pendingIsSyncPoint {
 			candidate.startTs = pendingCommitTs
 		} else if pendingCommitTs > 0 {
@@ -368,6 +395,7 @@ func mergeMergedStartTsCandidateWithMySQLRecovery(t *MergeCheckTask, candidate m
 	finalSkipDMLAsStartTs := candidate.skipDMLAsStartTs
 
 	if !common.IsDefaultMode(t.mergedDispatcher.GetMode()) || t.manager.sink.SinkType() != common.MysqlSinkType {
+		// Only default-mode MySQL needs ddl_ts-based crash recovery; other sinks/modes keep the candidate decision.
 		return finalStartTs, finalSkipSyncpointAtStartTs, finalSkipDMLAsStartTs
 	}
 

@@ -26,6 +26,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 )
 
 type Sink interface {
@@ -33,39 +35,57 @@ type Sink interface {
 	IsNormal() bool
 
 	AddDMLEvent(event *commonEvent.DMLEvent)
+	// FlushDMLBeforeBlock is a pre-block hook before reporting or writing a block
+	// event (DDL/syncpoint). Sinks can use it as a barrier to flush/serialize
+	// prior DML events for ordering guarantees. Most non-storage sinks no-op.
+	FlushDMLBeforeBlock(event commonEvent.BlockEvent) error
+	// WriteBlockEvent writes the block event to downstream. On success, sink
+	// implementations are expected to call event.PostFlush().
 	WriteBlockEvent(event commonEvent.BlockEvent) error
 	AddCheckpointTs(ts uint64)
+	// SetWriteGate installs the capture-wide write admission gate. Every sink
+	// must enforce it again at its actual downstream mutation boundary.
+	SetWriteGate(gate *writelease.Gate)
 
 	SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore)
-	Close(removeChangefeed bool)
+	Close()
 	Run(ctx context.Context) error
+	BatchCount() int
+	BatchBytes() int
 }
 
-func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {
+func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID, keyspaceID uint32) (Sink, error) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrSinkURIInvalid, err)
+		return nil, errors.WrapError(
+			errors.ErrSinkURIInvalid,
+			util.MaskSensitiveDataInURLError(err),
+			util.MaskSensitiveDataInURIForError(cfg.SinkURI))
 	}
 	scheme := config.GetScheme(sinkURI)
 	switch scheme {
 	case config.MySQLScheme, config.MySQLSSLScheme, config.TiDBScheme, config.TiDBSSLScheme:
-		return mysql.New(ctx, changefeedID, cfg, sinkURI)
+		return mysql.New(ctx, changefeedID, cfg, sinkURI, keyspaceID)
 	case config.KafkaScheme, config.KafkaSSLScheme:
-		return kafka.New(ctx, changefeedID, sinkURI, cfg.SinkConfig)
+		return kafka.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, keyspaceID)
 	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
-		return pulsar.New(ctx, changefeedID, sinkURI, cfg.SinkConfig)
+		return pulsar.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, keyspaceID)
 	case config.S3Scheme, config.FileScheme, config.GCSScheme, config.GSScheme, config.AzblobScheme, config.AzureScheme, config.CloudStorageNoopScheme:
-		return cloudstorage.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.EnableTableAcrossNodes, nil)
+		return cloudstorage.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.EnableTableAcrossNodes, nil, keyspaceID)
 	case config.BlackHoleScheme:
-		return blackhole.New()
+		return blackhole.New(changefeedID, keyspaceID)
 	}
-	return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
+	return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(
+		util.MaskSensitiveDataInURIForError(sinkURI.String()))
 }
 
 func Verify(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) error {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	if err != nil {
-		return errors.WrapError(errors.ErrSinkURIInvalid, err)
+		return errors.WrapError(
+			errors.ErrSinkURIInvalid,
+			util.MaskSensitiveDataInURLError(err),
+			util.MaskSensitiveDataInURIForError(cfg.SinkURI))
 	}
 	scheme := config.GetScheme(sinkURI)
 	switch scheme {
@@ -80,5 +100,6 @@ func Verify(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID comm
 	case config.BlackHoleScheme:
 		return nil
 	}
-	return errors.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
+	return errors.ErrSinkURIInvalid.GenWithStackByArgs(
+		util.MaskSensitiveDataInURIForError(sinkURI.String()))
 }

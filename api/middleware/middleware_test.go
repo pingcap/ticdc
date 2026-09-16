@@ -24,6 +24,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/server"
@@ -201,6 +202,57 @@ func TestForwardToCoordinator(t *testing.T) {
 			if tt.ts != nil {
 				tt.ts.Close()
 			}
+		})
+	}
+}
+
+func TestErrorHandleMiddleware(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+	}{
+		{
+			name:       "no error returns 200",
+			err:        nil,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "registered bad-request error returns 400",
+			err:        cerrors.ErrAPIInvalidParam.GenWithStackByArgs("bad input"),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "duplicate changefeed returns 400",
+			err:        cerrors.ErrChangeFeedAlreadyExists.GenWithStackByArgs("foo"),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "unclassified error returns 500",
+			err:        errors.New("boom"),
+			wantStatus: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			router := gin.New()
+			router.Use(ErrorHandleMiddleware())
+			router.GET("/test", func(c *gin.Context) {
+				if tc.err != nil {
+					_ = c.Error(tc.err)
+					return
+				}
+				c.Status(http.StatusOK)
+			})
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			router.ServeHTTP(w, req)
+
+			require.Equal(t, tc.wantStatus, w.Code)
 		})
 	}
 }

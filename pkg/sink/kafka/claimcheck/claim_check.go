@@ -20,61 +20,48 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/errors"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/ticdc/pkg/writelease"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
-const (
-	defaultTimeout = 5 * time.Minute
-)
-
 // ClaimCheck manage send message to the claim-check external storage.
 type ClaimCheck struct {
-	storage  storage.ExternalStorage
+	storage  storeapi.Storage
 	rawValue bool
 
-	changefeedID commonType.ChangeFeedID
+	changefeedID common.ChangeFeedID
 	// metricSendMessageDuration tracks the time duration
 	// cost on send messages to the claim check external storage.
 	metricSendMessageDuration prometheus.Observer
 	metricSendMessageCount    prometheus.Counter
+	writeGate                 *writelease.Gate
 }
 
 // New return a new ClaimCheck.
-func New(ctx context.Context, config *config.LargeMessageHandleConfig, changefeedID commonType.ChangeFeedID) (*ClaimCheck, error) {
+func New(ctx context.Context, config *config.LargeMessageHandleConfig, changefeedID common.ChangeFeedID) (*ClaimCheck, error) {
 	if !config.EnableClaimCheck() {
 		return nil, nil
 	}
 
-	log.Info("claim check enabled, start create the external storage",
-		zap.String("keyspace", changefeedID.Keyspace()),
-		zap.String("changefeed", changefeedID.Name()),
-		zap.String("storageURI", util.MaskSensitiveDataInURI(config.ClaimCheckStorageURI)))
-
 	start := time.Now()
 	externalStorage, err := util.GetExternalStorageWithDefaultTimeout(ctx, config.ClaimCheckStorageURI)
 	if err != nil {
-		log.Error("create external storage failed",
+		log.Error("external storage creation failed",
 			zap.String("keyspace", changefeedID.Keyspace()),
 			zap.String("changefeed", changefeedID.Name()),
 			zap.String("storageURI", util.MaskSensitiveDataInURI(config.ClaimCheckStorageURI)),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
-		return nil, errors.Trace(err)
+		return nil, err
 	}
-
-	log.Info("claim-check create the external storage success",
-		zap.String("keyspace", changefeedID.Keyspace()),
-		zap.String("changefeed", changefeedID.Name()),
-		zap.String("storageURI", util.MaskSensitiveDataInURI(config.ClaimCheckStorageURI)),
-		zap.Duration("duration", time.Since(start)))
 
 	return &ClaimCheck{
 		changefeedID:              changefeedID,
@@ -88,23 +75,32 @@ func New(ctx context.Context, config *config.LargeMessageHandleConfig, changefee
 // WriteMessage write message to the claim check external storage.
 func (c *ClaimCheck) WriteMessage(ctx context.Context, key, value []byte, fileName string) (err error) {
 	if !c.rawValue {
-		m := common.ClaimCheckMessage{
+		m := codecCommon.ClaimCheckMessage{
 			Key:   key,
 			Value: value,
 		}
 		value, err = json.Marshal(m)
 		if err != nil {
-			return errors.Trace(err)
+			return errors.WrapError(errors.ErrMarshalFailed, err)
 		}
+	}
+	if err := writelease.WaitForWrite(ctx, c.writeGate); err != nil {
+		return err
 	}
 	start := time.Now()
 	err = c.storage.WriteFile(ctx, fileName, value)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	c.metricSendMessageDuration.Observe(time.Since(start).Seconds())
 	c.metricSendMessageCount.Inc()
 	return nil
+}
+
+// SetWriteGate installs capture-wide write admission for claim-check object
+// publication.
+func (c *ClaimCheck) SetWriteGate(gate *writelease.Gate) {
+	c.writeGate = gate
 }
 
 // FileNameWithPrefix returns the file name with prefix, the full path.
@@ -112,8 +108,15 @@ func (c *ClaimCheck) FileNameWithPrefix(fileName string) string {
 	return strings.TrimSuffix(c.storage.URI(), "/") + "/" + fileName
 }
 
-// CleanMetrics the claim check by clean up the metrics.
-func (c *ClaimCheck) CleanMetrics() {
+// Close closes the claim-check storage.
+func (c *ClaimCheck) Close() {
+	if c == nil {
+		return
+	}
+
+	if c.storage != nil {
+		c.storage.Close()
+	}
 	claimCheckSendMessageDuration.DeleteLabelValues(c.changefeedID.Keyspace(), c.changefeedID.Name())
 	claimCheckSendMessageCount.DeleteLabelValues(c.changefeedID.Keyspace(), c.changefeedID.Name())
 }

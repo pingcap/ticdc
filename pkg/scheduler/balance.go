@@ -27,6 +27,11 @@ import (
 // CheckBalanceStatus checks the dispatcher scheduling balance status
 // returns the table size need to be moved
 func CheckBalanceStatus(nodeTaskSize map[node.ID]int, allNodes map[node.ID]*node.Info) int {
+	if len(allNodes) == 0 {
+		// No schedulable node means no rebalance target.
+		return 0
+	}
+
 	nodeSize := make(map[node.ID]int)
 	// add the absent node to the node size map
 	for nodeID := range allNodes {
@@ -123,6 +128,7 @@ func Balance[T replica.ReplicationID, R replica.Replication[T]](
 			// update the task size priority queue
 			target.Load++
 			victim.Load--
+			clear(victim.Tasks[:1])
 			victim.Tasks = victim.Tasks[1:]
 			movedSize++
 			if movedSize >= batchSize || movedSize >= totalMoveSize {

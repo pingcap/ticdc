@@ -17,22 +17,81 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net/url"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo/testutil"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
+	ubergomock "go.uber.org/mock/gomock"
 	"golang.org/x/sync/errgroup"
 )
 
 // Use a smaller worker number for test to speed up the test.
 var workerNumberForTest = 2
+
+func newTestConsistentConfig(storage string) *config.ConsistentConfig {
+	cfg := testutil.NewConsistentConfig(storage)
+	cfg.FlushIntervalInMs = util.AddressOf(int64(redo.MinFlushIntervalInMs))
+	cfg.MetaFlushIntervalInMs = util.AddressOf(int64(redo.MinFlushIntervalInMs))
+	cfg.EncodingWorkerNum = util.AddressOf(workerNumberForTest)
+	cfg.FlushWorkerNum = util.AddressOf(workerNumberForTest)
+	return cfg
+}
+
+func TestNewClosesWritersWhenDMLConstructionFails(t *testing.T) {
+	ctrl := ubergomock.NewController(t)
+	ddlStorage := mockobjstore.NewMockStorage(ctrl)
+	dmlStorage := mockobjstore.NewMockStorage(ctrl)
+	ddlStorage.EXPECT().Close().Times(1)
+	dmlStorage.EXPECT().Close().Times(1)
+
+	oldInitExternalStorage := redo.InitExternalStorage
+	t.Cleanup(func() {
+		redo.InitExternalStorage = oldInitExternalStorage
+	})
+	initCalls := 0
+	redo.InitExternalStorage = func(context.Context, url.URL) (storeapi.Storage, error) {
+		initCalls++
+		if initCalls == 1 {
+			return ddlStorage, nil
+		}
+		return dmlStorage, nil
+	}
+
+	spoolBaseDir := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(spoolBaseDir, []byte("file"), 0o600))
+	originalServerConfig := config.GetGlobalServerConfig()
+	testServerConfig := originalServerConfig.Clone()
+	testServerConfig.DataDir = spoolBaseDir
+	config.StoreGlobalServerConfig(testServerConfig)
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalServerConfig)
+	})
+	cfg := newTestConsistentConfig("file:///tmp/redo")
+
+	_, err := New(
+		t.Context(),
+		common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName),
+		cfg,
+	)
+	require.Error(t, err)
+	require.Equal(t, 2, initCalls)
+}
 
 func TestConsistentConfig(t *testing.T) {
 	t.Parallel()
@@ -90,6 +149,68 @@ func TestConsistentConfig(t *testing.T) {
 	}
 }
 
+func TestRedoSinkBatchConfig(t *testing.T) {
+	cfg := newTestConsistentConfig("blackhole://")
+	cfg.MaxLogSize = util.AddressOf(int64(32))
+
+	sink, err := New(
+		context.Background(),
+		common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		cfg,
+	)
+	require.NoError(t, err)
+	defer sink.Close()
+
+	require.Equal(t, 4096, sink.BatchCount())
+	require.Equal(t, int(32*redo.Megabyte), sink.BatchBytes())
+}
+
+func TestRedoSinkTwoStageAck(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table t (id int primary key)")
+	require.NotNil(t, job)
+	event := helper.DML2Event("test", "t", "insert into t values (1), (2), (3)")
+
+	callbacks := make([]string, 0, 2)
+	event.AddPostEnqueueFunc(func() {
+		callbacks = append(callbacks, "enqueue")
+	})
+	event.AddPostFlushFunc(func() {
+		callbacks = append(callbacks, "flush")
+	})
+
+	sink := &Sink{
+		ctx:       context.Background(),
+		logBuffer: chann.NewUnlimitedChannelDefault[*commonEvent.RedoRowEvent](),
+	}
+	sink.AddDMLEvent(event)
+	require.Empty(t, callbacks)
+
+	sink.logBuffer.Close()
+	rowEvents, ok := sink.logBuffer.GetMultipleNoGroup(
+		make([]*commonEvent.RedoRowEvent, 0, event.Len()))
+	require.True(t, ok)
+	require.Len(t, rowEvents, int(event.Len()))
+
+	for _, rowEvent := range rowEvents[:len(rowEvents)-1] {
+		rowEvent.PostEnqueue()
+	}
+	require.Empty(t, callbacks)
+	rowEvents[len(rowEvents)-1].PostEnqueue()
+	require.Equal(t, []string{"enqueue"}, callbacks)
+
+	for _, rowEvent := range rowEvents[:len(rowEvents)-1] {
+		rowEvent.PostFlush()
+	}
+	require.Equal(t, []string{"enqueue"}, callbacks)
+
+	rowEvents[len(rowEvents)-1].PostFlush()
+	require.Equal(t, []string{"enqueue", "flush"}, callbacks)
+}
+
 // TestRedoSinkInProcessor tests how redo log manager is used in processor.
 func TestRedoSinkInProcessor(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
@@ -113,18 +234,11 @@ func TestRedoSinkInProcessor(t *testing.T) {
 
 	testWriteDMLs := func(storage string, useFileBackend bool) {
 		ctx, cancel := context.WithCancel(ctx)
-		cfg := &config.ConsistentConfig{
-			Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-			MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-			Storage:               util.AddressOf(storage),
-			FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-			MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-			EncodingWorkerNum:     util.AddressOf(workerNumberForTest),
-			FlushWorkerNum:        util.AddressOf(workerNumberForTest),
-			UseFileBackend:        util.AddressOf(useFileBackend),
-		}
-		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
-		defer dmlMgr.Close(false)
+		cfg := newTestConsistentConfig(storage)
+		cfg.UseFileBackend = util.AddressOf(useFileBackend)
+		dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+		require.NoError(t, err)
+		defer dmlMgr.Close()
 
 		var eg errgroup.Group
 		eg.Go(func() error {
@@ -204,17 +318,10 @@ func TestRedoSinkError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf("blackhole-invalid://"),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(workerNumberForTest),
-		FlushWorkerNum:        util.AddressOf(workerNumberForTest),
-	}
-	logMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
-	defer logMgr.Close(false)
+	cfg := newTestConsistentConfig("blackhole-invalid://")
+	logMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+	require.NoError(t, err)
+	defer logMgr.Close()
 
 	var eg errgroup.Group
 	eg.Go(func() error {
@@ -241,7 +348,7 @@ func TestRedoSinkError(t *testing.T) {
 		}
 	}
 
-	err := eg.Wait()
+	err = eg.Wait()
 	require.Regexp(t, ".*invalid black hole writer.*", err)
 	require.Regexp(t, ".*WriteLog.*", err)
 }
@@ -262,18 +369,13 @@ func BenchmarkFileWriter(b *testing.B) {
 
 func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf(storage),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
-		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
-		UseFileBackend:        util.AddressOf(useFileBackend),
-	}
-	dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
-	defer dmlMgr.Close(false)
+	cfg := newTestConsistentConfig(storage)
+	cfg.EncodingWorkerNum = util.AddressOf(redo.DefaultEncodingWorkerNum)
+	cfg.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
+	cfg.UseFileBackend = util.AddressOf(useFileBackend)
+	dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+	require.NoError(b, err)
+	defer dmlMgr.Close()
 
 	var eg errgroup.Group
 	eg.Go(func() error {
@@ -285,7 +387,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	tables := make([]common.TableID, 0, numOfTables)
 	maxTsMap := common.NewSpanHashMap[*common.Ts]()
 	startTs := uint64(100)
-	for i := 0; i < numOfTables; i++ {
+	for i := range numOfTables {
 		tableID := common.TableID(i)
 		tables = append(tables, tableID)
 		span := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID)
@@ -304,7 +406,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 			defer wg.Done()
 			maxCommitTs := maxTsMap.GetV(span)
 			var rows []*commonEvent.DMLEvent
-			for i := 0; i < maxRowCount; i++ {
+			for i := range maxRowCount {
 				if i%100 == 0 {
 					// prepare new row change events
 					b.StopTimer()
@@ -328,4 +430,43 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	cancel()
 
 	require.ErrorIs(b, eg.Wait(), context.Canceled)
+}
+
+func TestRedoSinkSendMessages(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockWriter := writer.NewMockRedoDMLWriter(ctrl)
+	mockWriter.EXPECT().
+		AddDMLEvents(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, events ...*commonEvent.RedoRowEvent) error {
+			require.Len(t, events, 1)
+			return nil
+		}).
+		Times(3)
+
+	s := &Sink{
+		dmlWriter: mockWriter,
+		logBuffer: chann.NewUnlimitedChannelDefault[*commonEvent.RedoRowEvent](),
+	}
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- s.sendMessages(ctx)
+	}()
+
+	events := make([]*commonEvent.RedoRowEvent, 0, 3)
+	for range 3 {
+		events = append(events, &commonEvent.RedoRowEvent{})
+	}
+	s.logBuffer.Push(events...)
+	s.logBuffer.Close()
+
+	err := <-doneCh
+	require.NoError(t, err)
 }

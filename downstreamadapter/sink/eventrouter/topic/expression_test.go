@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/pingcap/tiflow/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -265,19 +265,19 @@ func TestInvalidExpression(t *testing.T) {
 	topicExpr := Expression(invalidExpr)
 
 	err := topicExpr.validate()
-	require.ErrorIs(t, err, errors.ErrKafkaInvalidTopicExpression)
+	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 	require.ErrorContains(t, err, invalidExpr)
 
 	err = topicExpr.validateForAvro()
-	require.ErrorIs(t, err, errors.ErrKafkaInvalidTopicExpression)
+	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 	require.ErrorContains(t, err, "Avro")
 	require.ErrorContains(t, err, invalidExpr)
 }
 
-// cmd: go test -run='^$' -bench '^(BenchmarkSubstitute)$' github.com/pingcap/tiflow/cdc/sink/dispatcher/topic
+// cmd: go test -run='^$' -bench '^(BenchmarkSubstitute)$' github.com/pingcap/ticdc/cdc/sink/dispatcher/topic
 // goos: linux
 // goarch: amd64
-// pkg: github.com/pingcap/tiflow/cdc/sink/dispatcher
+// pkg: github.com/pingcap/ticdc/cdc/sink/dispatcher
 // cpu: Intel(R) Xeon(R) CPU E5-2630 v4 @ 2.20GHz
 // BenchmarkSubstitute/schema_substitution-40         	  199372	      6477 ns/op
 // BenchmarkSubstitute/schema_table_substitution-40   	  110752	     13637 ns/op

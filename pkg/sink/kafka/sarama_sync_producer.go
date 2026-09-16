@@ -17,25 +17,35 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
+type saramaSyncClient interface {
+	Brokers() []*sarama.Broker
+	Close() error
+}
+
+type saramaSyncProducerClient interface {
+	SendMessage(msg *sarama.ProducerMessage) (partition int32, offset int64, err error)
+	SendMessages(msgs []*sarama.ProducerMessage) error
+	Close() error
+}
+
 type saramaSyncProducer struct {
-	id       commonType.ChangeFeedID
-	client   sarama.Client
-	producer sarama.SyncProducer
+	id       common.ChangeFeedID
+	client   saramaSyncClient
+	producer saramaSyncProducerClient
 	closed   *atomic.Bool
 }
 
-func (p *saramaSyncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
+func (p *saramaSyncProducer) SendMessage(topic string, partitionNum int32, message *codecCommon.Message) error {
 	if p.closed.Load() {
-		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
+		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 
 	msg := &sarama.ProducerMessage{
@@ -45,24 +55,20 @@ func (p *saramaSyncProducer) SendMessage(topic string, partitionNum int32, messa
 		Partition: partitionNum,
 	}
 	_, _, err := p.producer.SendMessage(msg)
-
-	failpoint.Inject("KafkaSinkSyncSendMessageError", func() {
-		err = errors.WrapError(errors.ErrKafkaSendMessage, errors.New("kafka sink sync send message injected error"))
-	})
-	if err != nil {
-		err = AnnotateEventError(
-			p.id.Keyspace(),
-			p.id.Name(),
-			message.LogInfo,
-			err,
-		)
+	if err == nil {
+		return nil
 	}
+	log.Error("kafka message send failed",
+		zap.String("keyspace", p.id.Keyspace()),
+		zap.String("changefeed", p.id.Name()),
+		zap.String("eventContext", BuildEventLogContext(p.id.Keyspace(), p.id.Name(), message.LogInfo)),
+		zap.Error(err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 
-func (p *saramaSyncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
+func (p *saramaSyncProducer) SendMessages(topic string, partitionNum int32, message *codecCommon.Message) error {
 	if p.closed.Load() {
-		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
+		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 
 	msgs := make([]*sarama.ProducerMessage, partitionNum)
@@ -75,34 +81,20 @@ func (p *saramaSyncProducer) SendMessages(topic string, partitionNum int32, mess
 		}
 	}
 	err := p.producer.SendMessages(msgs)
-
-	failpoint.Inject("KafkaSinkSyncSendMessagesError", func() {
-		err = errors.WrapError(errors.ErrKafkaSendMessage, errors.New("kafka sink sync send messages injected error"))
-	})
-	if err != nil {
-		err = AnnotateEventError(
-			p.id.Keyspace(),
-			p.id.Name(),
-			message.LogInfo,
-			err,
-		)
+	if err == nil {
+		return nil
 	}
+	log.Error("kafka message send failed",
+		zap.String("keyspace", p.id.Keyspace()),
+		zap.String("changefeed", p.id.Name()),
+		zap.String("eventContext", BuildEventLogContext(p.id.Keyspace(), p.id.Name(), message.LogInfo)),
+		zap.Error(err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
-}
-
-func (p *saramaSyncProducer) Heartbeat() {
-	if p.closed.Load() {
-		return
-	}
-	brokers := p.client.Brokers()
-	for _, b := range brokers {
-		_, _ = b.ApiVersions(&sarama.ApiVersionsRequest{})
-	}
 }
 
 func (p *saramaSyncProducer) Close() {
 	if p.closed.Load() {
-		log.Warn("kafka DDL producer already closed",
+		log.Warn("kafka ddl producer already closed",
 			zap.String("keyspace", p.id.Keyspace()),
 			zap.String("changefeed", p.id.Name()))
 		return
@@ -110,17 +102,28 @@ func (p *saramaSyncProducer) Close() {
 
 	p.closed.Store(true)
 	start := time.Now()
-	// this also close the client.
-	err := p.producer.Close()
-	if err != nil {
-		log.Error("Close Kafka DDL producer with error",
-			zap.String("keyspace", p.id.Keyspace()),
-			zap.String("changefeed", p.id.Name()),
-			zap.Duration("duration", time.Since(start)),
-			zap.Error(err))
-		return
+	// sarama.NewSyncProducerFromClient wraps the provided client with a nopCloserClient,
+	// so producer.Close() alone won't release the underlying client resources.
+	if p.client != nil {
+		if err := p.client.Close(); err != nil {
+			log.Warn("kafka ddl producer client close failed",
+				zap.String("keyspace", p.id.Keyspace()),
+				zap.String("changefeed", p.id.Name()),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err))
+		}
 	}
-	log.Info("Kafka DDL producer closed",
+	if p.producer != nil {
+		if err := p.producer.Close(); err != nil {
+			log.Error("kafka ddl producer close failed",
+				zap.String("keyspace", p.id.Keyspace()),
+				zap.String("changefeed", p.id.Name()),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err))
+			return
+		}
+	}
+	log.Info("kafka ddl producer closed",
 		zap.String("keyspace", p.id.Keyspace()),
 		zap.String("changefeed", p.id.Name()),
 		zap.Duration("duration", time.Since(start)))

@@ -28,6 +28,44 @@ import (
 	"github.com/thanhpk/randstr"
 )
 
+func TestTableRouteDDLRenameUsesTargetNames(t *testing.T) {
+	codec := &dbzCodec{
+		config:    common.NewConfig(config.ProtocolDebezium),
+		clusterID: "test_cluster",
+		nowFunc:   func() time.Time { return time.Unix(1701326309, 0) },
+	}
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job(`create table test.table1(id int primary key)`)
+	sourceDDL := helper.DDL2Event(`rename table test.table1 to test.table2`)
+	require.NotNil(t, sourceDDL)
+
+	routedDDL := commonEvent.NewRoutedDDLEvent(
+		sourceDDL,
+		"RENAME TABLE `target_db`.`old_target_table` TO `target_db`.`new_target_table`",
+		"target_db",
+		"new_target_table",
+		"target_db",
+		"old_target_table",
+		sourceDDL.TableInfo.CloneWithRouting("target_db", "new_target_table"),
+		nil,
+		nil,
+	)
+
+	keyBuf := bytes.NewBuffer(nil)
+	valueBuf := bytes.NewBuffer(nil)
+	err := codec.EncodeDDLEvent(routedDDL, keyBuf, valueBuf)
+	require.NoError(t, err)
+
+	require.Contains(t, keyBuf.String(), "\"databaseName\":\"target_db\"")
+	require.Contains(t, valueBuf.String(), "\"db\":\"target_db\"")
+	require.Contains(t, valueBuf.String(), "\"table\":\"new_target_table\"")
+	require.Contains(t, valueBuf.String(), "\"id\":\"\\\"target_db\\\".\\\"old_target_table\\\",\\\"target_db\\\".\\\"new_target_table\\\"\"")
+}
+
 func TestDDLEvent(t *testing.T) {
 	codec := &dbzCodec{
 		config:    common.NewConfig(config.ProtocolDebezium),
@@ -1505,4 +1543,45 @@ func BenchmarkEncodeLargeBinary(b *testing.B) {
 		codec.EncodeKey(e, keyBuf)
 		codec.EncodeValue(e, buf)
 	}
+}
+
+func TestStartTsNotInDDLAndCheckpointEvents(t *testing.T) {
+	// Even with debezium-include-start-ts enabled, DDL and checkpoint
+	// (watermark) messages must not declare start_ts in their schemas:
+	// their payloads never carry the field (no per-row transaction), and a
+	// declared-but-absent non-optional field breaks schema-validating consumers.
+	codec := &dbzCodec{
+		config:    common.NewConfig(config.ProtocolDebezium),
+		clusterID: "test_cluster",
+		nowFunc:   func() time.Time { return time.Unix(1701326309, 0) },
+	}
+	codec.config.DebeziumIncludeStartTs = true
+	codec.config.DebeziumDisableSchema = false
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job(`create table test.table1(id int(10) primary key)`)
+	job := helper.DDL2Job(`RENAME TABLE test.table1 to test.table2`)
+	tableInfo := helper.GetTableInfo(job)
+
+	e := &commonEvent.DDLEvent{
+		FinishedTs:      1,
+		TableInfo:       tableInfo,
+		SchemaName:      "test",
+		TableName:       "table2",
+		ExtraSchemaName: "test",
+		ExtraTableName:  "table1",
+		Type:            byte(timodel.ActionRenameTable),
+		Query:           job.Query,
+	}
+	keyBuf := bytes.NewBuffer(nil)
+	buf := bytes.NewBuffer(nil)
+	require.NoError(t, codec.EncodeDDLEvent(e, keyBuf, buf))
+	require.NotContains(t, buf.String(), "start_ts")
+
+	keyBuf.Reset()
+	buf.Reset()
+	require.NoError(t, codec.EncodeCheckpointEvent(3, keyBuf, buf))
+	require.NotContains(t, buf.String(), "start_ts")
 }

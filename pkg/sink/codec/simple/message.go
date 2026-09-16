@@ -23,6 +23,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -223,8 +224,8 @@ func newTableSchema(tableInfo *commonType.TableInfo) *TableSchema {
 	}
 
 	return &TableSchema{
-		Schema:  tableInfo.TableName.Schema,
-		Table:   tableInfo.TableName.Table,
+		Schema:  tableInfo.GetTargetSchemaName(),
+		Table:   tableInfo.GetTargetTableName(),
 		TableID: tableInfo.TableName.TableID,
 		Version: tableInfo.GetUpdateTS(),
 		Columns: columns,
@@ -249,7 +250,11 @@ type message struct {
 	// SQL is only for the DDL event.
 	SQL      string `json:"sql,omitempty"`
 	CommitTs uint64 `json:"commitTs"`
-	BuildTs  int64  `json:"buildTs"`
+	// StartTs is the transaction start TSO. Present on DML messages only when
+	// simple-include-start-ts is enabled. omitempty keeps the pre-feature format
+	// when the field is unset (zero).
+	StartTs uint64 `json:"startTs,omitempty"`
+	BuildTs int64  `json:"buildTs"`
 	// SchemaVersion is for the DML event.
 	SchemaVersion uint64 `json:"schemaVersion,omitempty"`
 
@@ -322,14 +327,17 @@ func (a *jsonMarshaller) newDMLMessage(
 ) *message {
 	m := &message{
 		Version:            defaultVersion,
-		Schema:             event.TableInfo.GetSchemaName(),
-		Table:              event.TableInfo.GetTableName(),
+		Schema:             event.TableInfo.GetTargetSchemaName(),
+		Table:              event.TableInfo.GetTargetTableName(),
 		TableID:            event.GetTableID(),
 		CommitTs:           event.CommitTs,
 		BuildTs:            time.Now().UnixMilli(),
 		SchemaVersion:      event.TableInfo.GetUpdateTS(),
 		HandleKeyOnly:      onlyHandleKey,
 		ClaimCheckLocation: claimCheckFileName,
+	}
+	if a.config.SimpleIncludeStartTs {
+		m.StartTs = event.StartTs
 	}
 	if event.IsInsert() {
 		m.Type = DMLTypeInsert
@@ -415,7 +423,7 @@ func (a *avroMarshaller) encodeValue4Avro(row *chunk.Row, i int, ft *types.Field
 	case mysql.TypeBit:
 		v, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("invalid column value for bit", zap.Any("value", d.GetValue()), zap.Error(err))
+			log.Panic("invalid column value for bit", zap.String("value", util.RedactAny(d.GetValue())), zap.Error(err))
 		}
 		return strconv.FormatUint(v, 10), "string"
 	case mysql.TypeJSON:
@@ -440,7 +448,7 @@ func encodeValue(
 	case mysql.TypeBit:
 		v, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("invalid column value for bit", zap.Any("value", value), zap.Error(err))
+			log.Panic("invalid column value for bit", zap.String("value", util.RedactAny(value)), zap.Error(err))
 		}
 		value = strconv.FormatUint(v, 10)
 	case mysql.TypeTimestamp:

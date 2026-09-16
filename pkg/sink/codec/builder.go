@@ -20,29 +20,36 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/avro"
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
 	"github.com/pingcap/ticdc/pkg/sink/codec/debezium"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"go.uber.org/zap"
 )
 
-func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncoder, error) {
+func NewEventEncoder(
+	cfg *common.Config,
+	claimCheck *claimcheck.ClaimCheck,
+	schemaM schemamanager.SchemaManager,
+) (common.EventEncoder, error) {
 	switch cfg.Protocol {
 	case config.ProtocolDefault, config.ProtocolOpen:
-		return open.NewBatchEncoder(ctx, cfg)
+		return open.NewBatchEncoder(cfg, claimCheck)
 	case config.ProtocolAvro:
-		return avro.NewAvroEncoder(ctx, cfg)
+		return avro.NewAvroEncoder(cfg, schemaM)
 	case config.ProtocolCanalJSON:
-		return canal.NewJSONRowEventEncoder(ctx, cfg)
+		return canal.NewJSONRowEventEncoder(cfg, claimCheck)
 	case config.ProtocolDebezium:
 		return debezium.NewBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID), nil
+	case config.ProtocolDebeziumAvro:
+		return debezium.NewAvroBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID, schemaM)
 	case config.ProtocolSimple:
-		return simple.NewEncoder(ctx, cfg)
+		return simple.NewEncoder(cfg, claimCheck)
 	default:
 		return nil, errors.ErrSinkUnknownProtocol.GenWithStackByArgs(cfg.Protocol)
 	}
@@ -58,15 +65,17 @@ func NewEventDecoder(
 	case config.ProtocolCanalJSON:
 		return canal.NewDecoder(ctx, codecConfig, upstreamTiDB)
 	case config.ProtocolAvro:
-		schemaM, err := avro.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
+		schemaM, err := schemamanager.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
 		if err != nil {
-			return nil, cerror.Trace(err)
+			return nil, errors.Trace(err)
 		}
 		return avro.NewDecoder(codecConfig, idx, schemaM, topic, upstreamTiDB), nil
 	case config.ProtocolSimple:
 		return simple.NewDecoder(ctx, codecConfig, upstreamTiDB)
 	case config.ProtocolDebezium:
 		return debezium.NewDecoder(codecConfig, idx, upstreamTiDB), nil
+	case config.ProtocolDebeziumAvro:
+		return debezium.NewAvroDecoder(ctx, codecConfig, idx, upstreamTiDB)
 	default:
 	}
 	log.Panic("Protocol not supported", zap.Any("Protocol", codecConfig.Protocol))

@@ -39,6 +39,7 @@ type mockSchemaStore struct {
 	maxDDLCommitTs uint64
 
 	registerTableError error
+	getTableInfoError  error
 }
 
 func NewMockSchemaStore() *mockSchemaStore {
@@ -91,6 +92,9 @@ func (m *mockSchemaStore) SetTables(tables []commonEvent.Table) {
 }
 
 func (m *mockSchemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
+	if m.getTableInfoError != nil {
+		return nil, m.getTableInfoError
+	}
 	if info, ok := m.TableInfo[tableID]; ok {
 		if info.deleteVersion <= uint64(ts) {
 			return nil, &schemastore.TableDeletedError{}

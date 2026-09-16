@@ -16,10 +16,10 @@ package eventstore
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -27,6 +27,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -34,6 +35,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/encryption"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -49,6 +52,9 @@ import (
 var (
 	kvEventCount        = metrics.EventStoreReceivedEventCount.WithLabelValues("kv")
 	resolvedEventCount  = metrics.EventStoreReceivedEventCount.WithLabelValues("resolved")
+	insertKVEntryCount  = metrics.EventStoreKVEntryCount.WithLabelValues("insert")
+	updateKVEntryCount  = metrics.EventStoreKVEntryCount.WithLabelValues("update")
+	deleteKVEntryCount  = metrics.EventStoreKVEntryCount.WithLabelValues("delete")
 	scannedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("scanned")
 	skippedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("skipped")
 )
@@ -58,6 +64,8 @@ var (
 	metricEventStoreNextReadDurationHistogram  = metrics.EventStoreReadDurationHistogram.WithLabelValues("next")
 	metricEventStoreCloseReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("close")
 )
+
+const subscriptionIdleTTL = time.Minute
 
 type ResolvedTsNotifier func(watermark uint64, latestCommitTs uint64)
 
@@ -79,14 +87,15 @@ type EventStore interface {
 		notifier ResolvedTsNotifier,
 		onlyReuse bool,
 		bdrMode bool,
+		lowLatencyMode bool,
 	) bool
 
 	UnregisterDispatcher(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID)
 
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
 
-	// GetIterator return an iterator which scan the data in ts range (dataRange.CommitTsStart, dataRange.CommitTsEnd]
-	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator
+	// GetIterator returns an iterator for the requested range and resume cursor.
+	GetIterator(dispatcherID common.DispatcherID, request ScanRequest) (EventIterator, error)
 
 	GetLogCoordinatorNodeID() node.ID
 }
@@ -102,8 +111,17 @@ type EventIterator interface {
 	Next() (*common.RawKVEntry, bool)
 
 	// Close closes the iterator.
-	// It returns the number of events that are read from the iterator.
+	// It returns the number of events that are read from the iterator and any
+	// accumulated iterator error.
 	Close() (eventCnt int64, err error)
+}
+
+type EventIteratorWithScanPosition interface {
+	EventIterator
+
+	// NextWithScanPosition returns the next event, the opaque position of the
+	// returned event, and whether this event is from a new txn.
+	NextWithScanPosition() (*common.RawKVEntry, ScanPosition, bool)
 }
 
 type dispatcherStat struct {
@@ -113,7 +131,9 @@ type dispatcherStat struct {
 
 	resolvedTs atomic.Uint64
 	// the max ts of events which is not needed by this dispatcher
-	checkpointTs uint64
+	checkpointTs atomic.Uint64
+	// keyspaceID for encryption (0 means default/classic)
+	keyspaceID uint32
 	// the difference between `subStat`, `pendingSubStat` and `removingSubStat`:
 	//   1) if there is no existing subscriptions which can be reused,
 	//      or there is a existing subscription with exact span match,
@@ -147,12 +167,14 @@ type subscribersWithIdleTime struct {
 }
 
 type subscriptionStat struct {
-	subID logpuller.SubscriptionID
+	subID          logpuller.SubscriptionID
+	lowLatencyMode bool
 	// data span of the subscription, it can support dispatchers with smaller span
 	tableSpan   *heartbeatpb.TableSpan
 	subscribers atomic.Pointer[subscribersWithIdleTime]
-	// markedDeleteTime is the time when the subscription is marked for deletion.
-	markedDeleteTime atomic.Int64
+	// remainingLifetimeMs is the remaining time before the subscription can be deleted after it becomes idle.
+	// 0 means it can be deleted immediately once idle.
+	remainingLifetimeMs atomic.Int64
 	// the index of the db which stores the data of the subscription
 	// used to clean obselete data of the subscription
 	dbIndex int
@@ -178,19 +200,33 @@ type subscriptionStat struct {
 
 type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
 
+type tableStatsKey struct {
+	keyspaceID uint32
+	tableID    int64
+}
+
+func newTableStatsKey(span *heartbeatpb.TableSpan) tableStatsKey {
+	return tableStatsKey{
+		keyspaceID: span.KeyspaceID,
+		tableID:    span.TableID,
+	}
+}
+
 type eventWithCallback struct {
-	subID   logpuller.SubscriptionID
-	tableID int64
-	kvs     []common.RawKVEntry
+	subID      logpuller.SubscriptionID
+	tableID    int64
+	keyspaceID uint32
+	kvs        []common.RawKVEntry
 	// kv with commitTs <= currentResolvedTs will be filtered out
 	currentResolvedTs uint64
+	enqueueTimeNano   int64
 	callback          func()
 }
 
 func eventWithCallbackSizer(e eventWithCallback) int {
 	size := 0
 	for _, kv := range e.kvs {
-		size += int(kv.KeyLen + kv.ValueLen + kv.OldValueLen)
+		size += len(kv.Key) + len(kv.Value) + len(kv.OldValue)
 	}
 	return size
 }
@@ -200,6 +236,8 @@ type eventStore struct {
 	subClient logpuller.SubscriptionClient
 
 	dbs            []*pebble.DB
+	pebbleCache    *pebble.Cache
+	tableCache     *pebble.TableCache
 	chs            []*chann.UnlimitedChannel[eventWithCallback, uint64]
 	writeTaskPools []*writeTaskPool
 
@@ -221,8 +259,8 @@ type eventStore struct {
 		sync.RWMutex
 		// dispatcher id -> dispatcher stat
 		dispatcherStats map[common.DispatcherID]*dispatcherStat
-		// table id -> subscription stats
-		tableStats map[int64]subscriptionStats
+		// (keyspace id, table id) -> subscription stats
+		tableStats map[tableStatsKey]subscriptionStats
 	}
 
 	decoderPool *sync.Pool
@@ -232,6 +270,10 @@ type eventStore struct {
 
 	// compressionThreshold is the size in bytes above which a value will be compressed.
 	compressionThreshold int
+	// enableZstdCompression controls whether to enable zstd compression for large values.
+	enableZstdCompression bool
+	// encryptionManager for encrypting/decrypting data (optional).
+	encryptionManager encryption.EncryptionManager
 }
 
 const (
@@ -252,11 +294,16 @@ func New(
 		log.Panic("fail to remove path", zap.String("path", dbPath), zap.Error(err))
 	}
 
+	// Try to get encryption manager from appcontext (optional)
+	encMgr, _ := appcontext.TryGetService[encryption.EncryptionManager](appcontext.EncryptionManager)
+	dbs, pebbleCache, tableCache := createPebbleDBs(dbPath, dbCount)
 	store := &eventStore{
 		pdClock:   appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		subClient: subClient,
 
-		dbs:            createPebbleDBs(dbPath, dbCount),
+		dbs:            dbs,
+		pebbleCache:    pebbleCache,
+		tableCache:     tableCache,
 		chs:            make([]*chann.UnlimitedChannel[eventWithCallback, uint64], 0, dbCount),
 		writeTaskPools: make([]*writeTaskPool, 0, dbCount),
 
@@ -272,7 +319,9 @@ func New(
 				return decoder
 			},
 		},
-		compressionThreshold: config.GetGlobalServerConfig().Debug.EventStore.CompressionThreshold,
+		compressionThreshold:  config.GetGlobalServerConfig().Debug.EventStore.CompressionThreshold,
+		enableZstdCompression: config.GetGlobalServerConfig().Debug.EventStore.EnableZstdCompression,
+		encryptionManager:     encMgr,
 	}
 	store.gcManager = newGCManager(store.dbs, deleteDataRange, compactDataRange)
 
@@ -282,7 +331,7 @@ func New(
 		store.writeTaskPools = append(store.writeTaskPools, newWriteTaskPool(store, store.dbs[i], i, store.chs[i], writeWorkerNumPerDB))
 	}
 	store.dispatcherMeta.dispatcherStats = make(map[common.DispatcherID]*dispatcherStat)
-	store.dispatcherMeta.tableStats = make(map[int64]subscriptionStats)
+	store.dispatcherMeta.tableStats = make(map[tableStatsKey]subscriptionStats)
 
 	store.messageCenter.RegisterHandler(messaging.EventStoreTopic, store.handleMessage)
 	return store
@@ -311,12 +360,16 @@ func (p *writeTaskPool) run(ctx context.Context) {
 	for i := 0; i < p.workerNum; i++ {
 		go func(workerID int) {
 			defer p.store.wg.Done()
-			encoder, err := zstd.NewWriter(nil)
+			var compressionBuf []byte
+			var rawValueBuf []byte
+			encodeOpt := zstd.WithEncoderLevel(zstd.SpeedFastest)
+			encoder, err := zstd.NewWriter(nil, encodeOpt)
 			if err != nil {
 				log.Panic("failed to create zstd encoder", zap.Error(err))
 			}
 			defer encoder.Close()
 			buffer := make([]eventWithCallback, 0, 128)
+			queueDuration := metrics.EventStoreWriteQueueDurationHistogram
 
 			ioWriteDuration := metrics.EventStoreWriteWorkerIODuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
 			totalDuration := metrics.EventStoreWriteWorkerTotalDuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
@@ -330,16 +383,21 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					if !ok {
 						return
 					}
-					start := time.Now()
-					if err = p.store.writeEvents(p.db, events, encoder); err != nil {
-						log.Panic("write events failed", zap.Error(err))
+					if len(events) > 0 && events[0].enqueueTimeNano > 0 {
+						queueDuration.Observe(float64(time.Now().UnixNano()-events[0].enqueueTimeNano) / float64(time.Second))
 					}
-					for idx := range events {
-						events[idx].callback()
+					start := time.Now()
+					if err = p.store.writeEvents(p.db, events, encoder, &compressionBuf, &rawValueBuf); err != nil {
+						log.Panic("write events failed", zap.Error(err))
 					}
 					ioWriteDuration.Observe(time.Since(start).Seconds())
 					totalDuration.Observe(time.Since(totalStart).Seconds())
 					totalStart = time.Now()
+
+					for idx := range events {
+						events[idx].callback()
+					}
+
 					buffer = buffer[:0]
 				}
 			}
@@ -409,18 +467,29 @@ func (e *eventStore) Close(_ context.Context) error {
 			log.Error("failed to close pebble db", zap.Error(err))
 		}
 	}
+	if e.tableCache != nil {
+		if err := e.tableCache.Unref(); err != nil {
+			log.Warn("failed to unref pebble table cache", zap.Error(err))
+		}
+		e.tableCache = nil
+	}
+	if e.pebbleCache != nil {
+		e.pebbleCache.Unref()
+		e.pebbleCache = nil
+	}
 
 	return nil
 }
 
 func (e *eventStore) RegisterDispatcher(
-	changefeedID common.ChangeFeedID,
+	_ common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	dispatcherSpan *heartbeatpb.TableSpan,
 	startTs uint64,
 	notifier ResolvedTsNotifier,
 	onlyReuse bool,
 	bdrMode bool,
+	lowLatencyMode bool,
 ) (success bool) {
 	if e.closed.Load() {
 		return false
@@ -467,8 +536,9 @@ func (e *eventStore) RegisterDispatcher(
 	stat := &dispatcherStat{
 		dispatcherID: dispatcherID,
 		tableSpan:    dispatcherSpan,
-		checkpointTs: startTs,
+		keyspaceID:   dispatcherSpan.KeyspaceID,
 	}
+	stat.checkpointTs.Store(startTs)
 	stat.resolvedTs.Store(startTs)
 
 	wrappedNotifier := func(resolvedTs uint64, latestCommitTs uint64) {
@@ -479,8 +549,12 @@ func (e *eventStore) RegisterDispatcher(
 	if enableDataSharing {
 		e.dispatcherMeta.Lock()
 		var bestMatch *subscriptionStat
-		if subStats, ok := e.dispatcherMeta.tableStats[dispatcherSpan.TableID]; ok {
+		tableKey := newTableStatsKey(dispatcherSpan)
+		if subStats, ok := e.dispatcherMeta.tableStats[tableKey]; ok {
 			for _, subStat := range subStats {
+				if subStat.lowLatencyMode != lowLatencyMode {
+					continue
+				}
 				// Check if this subStat's span contains the dispatcherSpan
 				if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) <= 0 &&
 					bytes.Compare(subStat.tableSpan.EndKey, dispatcherSpan.EndKey) >= 0 {
@@ -553,10 +627,11 @@ func (e *eventStore) RegisterDispatcher(
 	// cannot find an existing subscription with the same span, create a new subscription
 	chIndex := common.HashTableSpan(dispatcherSpan, len(e.chs))
 	subStat := &subscriptionStat{
-		subID:     e.subClient.AllocSubscriptionID(),
-		tableSpan: dispatcherSpan,
-		dbIndex:   chIndex,
-		eventCh:   e.chs[chIndex],
+		subID:          e.subClient.AllocSubscriptionID(),
+		lowLatencyMode: lowLatencyMode,
+		tableSpan:      dispatcherSpan,
+		dbIndex:        chIndex,
+		eventCh:        e.chs[chIndex],
 	}
 	subStat.subscribers.Store(&subscribersWithIdleTime{
 		subscribers: map[common.DispatcherID]*Subscriber{dispatcherID: {notifyFunc: wrappedNotifier}},
@@ -573,14 +648,16 @@ func (e *eventStore) RegisterDispatcher(
 	}
 
 	e.dispatcherMeta.Lock()
+	tableKey := newTableStatsKey(dispatcherSpan)
 	e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
-	if len(e.dispatcherMeta.tableStats[dispatcherSpan.TableID]) == 0 {
-		e.dispatcherMeta.tableStats[dispatcherSpan.TableID] = make(subscriptionStats)
+	if len(e.dispatcherMeta.tableStats[tableKey]) == 0 {
+		e.dispatcherMeta.tableStats[tableKey] = make(subscriptionStats)
 	}
-	e.dispatcherMeta.tableStats[dispatcherSpan.TableID][subStat.subID] = subStat
+	e.dispatcherMeta.tableStats[tableKey][subStat.subID] = subStat
 	e.dispatcherMeta.Unlock()
 
 	consumeKVEvents := func(kvs []common.RawKVEntry, finishCallback func()) bool {
+		now := time.Now()
 		maxCommitTs := uint64(0)
 		// Must find the max commit ts in the kvs, since the kvs is not sorted yet.
 		for _, kv := range kvs {
@@ -588,13 +665,15 @@ func (e *eventStore) RegisterDispatcher(
 				maxCommitTs = kv.CRTs
 			}
 		}
-		subStat.lastReceiveDMLTime.Store(time.Now().UnixMilli())
+		subStat.lastReceiveDMLTime.Store(now.UnixMilli())
 		util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
 		subStat.eventCh.Push(eventWithCallback{
 			subID:             subStat.subID,
 			tableID:           subStat.tableSpan.TableID,
+			keyspaceID:        subStat.tableSpan.KeyspaceID,
 			kvs:               kvs,
 			currentResolvedTs: subStat.resolvedTs.Load(),
+			enqueueTimeNano:   now.UnixNano(),
 			callback:          finishCallback,
 		})
 		return true
@@ -627,6 +706,9 @@ func (e *eventStore) RegisterDispatcher(
 
 	serverConfig := config.GetGlobalServerConfig()
 	resolvedTsAdvanceInterval := int64(serverConfig.KVClient.AdvanceIntervalInMs)
+	if lowLatencyMode {
+		resolvedTsAdvanceInterval = 0
+	}
 	// Note: don't hold any lock when call Subscribe
 	e.subClient.Subscribe(subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, bdrMode)
 	log.Info("new subscription created",
@@ -651,9 +733,10 @@ func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, disp
 	}
 	e.dispatcherMeta.Lock()
 	if stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]; ok {
-		e.detachFromSubStat(dispatcherID, stat.subStat)
-		e.detachFromSubStat(dispatcherID, stat.pendingSubStat)
-		e.detachFromSubStat(dispatcherID, stat.removingSubStat)
+		subStats := []*subscriptionStat{stat.subStat, stat.pendingSubStat, stat.removingSubStat}
+		for _, subStat := range subStats {
+			e.detachFromSubStat(dispatcherID, subStat)
+		}
 		delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
 	}
 	e.dispatcherMeta.Unlock()
@@ -676,7 +759,9 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	if !ok {
 		return
 	}
-	dispatcherStat.checkpointTs = checkpointTs
+	if !util.CompareAndIncrease(&dispatcherStat.checkpointTs, checkpointTs) {
+		return
+	}
 
 	updateSubStatCheckpoint := func(subStat *subscriptionStat) {
 		if subStat == nil {
@@ -696,8 +781,9 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 				continue
 			}
 
-			if newCheckpointTs == 0 || dispatcherStat.checkpointTs < newCheckpointTs {
-				newCheckpointTs = dispatcherStat.checkpointTs
+			dispatcherCheckpointTs := dispatcherStat.checkpointTs.Load()
+			if newCheckpointTs == 0 || dispatcherCheckpointTs < newCheckpointTs {
+				newCheckpointTs = dispatcherCheckpointTs
 			}
 		}
 
@@ -710,21 +796,21 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		if newCheckpointTs == 0 {
 			return
 		}
-		oldCheckpointTs := subStat.checkpointTs.Load()
-		if newCheckpointTs == oldCheckpointTs {
-			return
-		}
-		if newCheckpointTs < oldCheckpointTs {
-			log.Panic("should not happen",
-				zap.Uint64("newCheckpointTs", newCheckpointTs),
-				zap.Uint64("oldCheckpointTs", oldCheckpointTs))
-		}
-		// If there is no dml event after old checkpoint ts, then there is no data to be deleted.
-		// So we can skip adding gc item.
-		lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load()
-		if lastReceiveDMLTime > 0 {
-			oldCheckpointPhysicalTime := oracle.GetTimeFromTS(oldCheckpointTs)
-			if lastReceiveDMLTime >= oldCheckpointPhysicalTime.UnixMilli() {
+		for {
+			oldCheckpointTs := subStat.checkpointTs.Load()
+			if newCheckpointTs == oldCheckpointTs {
+				return
+			}
+			if newCheckpointTs < oldCheckpointTs {
+				return
+			}
+			if !subStat.checkpointTs.CompareAndSwap(oldCheckpointTs, newCheckpointTs) {
+				continue
+			}
+			// If there is no dml event after old checkpoint ts, then there is no data to be deleted.
+			// So we can skip adding gc item.
+			maxEventCommitTs := subStat.maxEventCommitTs.Load()
+			if maxEventCommitTs != 0 && maxEventCommitTs >= oldCheckpointTs {
 				e.gcManager.addGCItem(
 					subStat.dbIndex,
 					uint64(subStat.subID),
@@ -733,21 +819,21 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 					newCheckpointTs,
 				)
 			}
-		}
-		e.subscriptionChangeCh.In() <- SubscriptionChange{
-			ChangeType:   SubscriptionChangeTypeUpdate,
-			SubID:        uint64(subStat.subID),
-			Span:         subStat.tableSpan,
-			CheckpointTs: newCheckpointTs,
-			ResolvedTs:   subStat.resolvedTs.Load(),
-		}
-		subStat.checkpointTs.Store(newCheckpointTs)
-		if log.GetLevel() <= zap.DebugLevel {
-			log.Debug("update checkpoint ts",
-				zap.Any("dispatcherID", dispatcherID),
-				zap.Uint64("subscriptionID", uint64(subStat.subID)),
-				zap.Uint64("newCheckpointTs", newCheckpointTs),
-				zap.Uint64("oldCheckpointTs", oldCheckpointTs))
+			e.subscriptionChangeCh.In() <- SubscriptionChange{
+				ChangeType:   SubscriptionChangeTypeUpdate,
+				SubID:        uint64(subStat.subID),
+				Span:         subStat.tableSpan,
+				CheckpointTs: newCheckpointTs,
+				ResolvedTs:   subStat.resolvedTs.Load(),
+			}
+			if logger.IsDebugEnabled() {
+				log.Debug("update checkpoint ts",
+					zap.Stringer("dispatcherID", dispatcherID),
+					zap.Uint64("subscriptionID", uint64(subStat.subID)),
+					zap.Uint64("newCheckpointTs", newCheckpointTs),
+					zap.Uint64("oldCheckpointTs", oldCheckpointTs))
+			}
+			return
 		}
 	}
 	updateSubStatCheckpoint(dispatcherStat.subStat)
@@ -755,17 +841,18 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	updateSubStatCheckpoint(dispatcherStat.removingSubStat)
 }
 
-func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator {
+func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, request ScanRequest) (EventIterator, error) {
 	if e.closed.Load() {
-		return nil
+		return nil, nil
 	}
+	dataRange := request.Range
 
 	e.dispatcherMeta.RLock()
 	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
 	if !ok {
 		log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", dispatcherID))
 		e.dispatcherMeta.RUnlock()
-		return nil
+		return nil, nil
 	}
 
 	tryGetDB := func(subStat *subscriptionStat, force bool) *pebble.DB {
@@ -776,7 +863,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 					zap.Int64("tableID", dataRange.Span.GetTableID()),
 					zap.Uint64("commitTsStart", dataRange.CommitTsStart),
 					zap.Uint64("commitTsEnd", dataRange.CommitTsEnd),
-					zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs))
+					zap.Uint64("lastScannedTxnStartTs", request.Cursor.TxnStartTs))
 			}
 			return nil
 		}
@@ -787,7 +874,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 				zap.Int64("tableID", dataRange.Span.GetTableID()),
 				zap.Uint64("commitTsStart", dataRange.CommitTsStart),
 				zap.Uint64("commitTsEnd", dataRange.CommitTsEnd),
-				zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs),
+				zap.Uint64("lastScannedTxnStartTs", request.Cursor.TxnStartTs),
 				zap.Uint64("subStatCheckpointTs", checkpointTs),
 				zap.Uint64("subStatResolvedTs", subStat.resolvedTs.Load()))
 		}
@@ -798,7 +885,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 					zap.Int64("tableID", dataRange.Span.GetTableID()),
 					zap.Uint64("commitTsStart", dataRange.CommitTsStart),
 					zap.Uint64("commitTsEnd", dataRange.CommitTsEnd),
-					zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs),
+					zap.Uint64("lastScannedTxnStartTs", request.Cursor.TxnStartTs),
 					zap.Uint64("subStatCheckpointTs", checkpointTs),
 					zap.Uint64("subStatResolvedTs", subStat.resolvedTs.Load()))
 			}
@@ -855,44 +942,85 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		e.dispatcherMeta.Unlock()
 	}
 
-	// convert range before pass it to pebble: (startTs, endTs] is equal to [startTs + 1, endTs + 1)
+	// request fields:
+	// Range defines the commit-ts scan window. Cursor.TxnStartTs records how far
+	// the previous scan progressed inside
+	// CommitTsStart. It is zero if there is no unfinished scan at CommitTsStart.
+	//
+	// Iterator key bounds:
+	// Pebble uses [LowerBound, UpperBound), so end is always encoded as
+	// CommitTsEnd+1.
+	//
+	// If Cursor.Position is present, continue scanning from the next
+	// eventstore key after that opaque position.
+	//
+	// If Cursor.TxnStartTs is zero, scan commit ts in
+	// (CommitTsStart, CommitTsEnd], and use CommitTsStart+1 as LowerBound.
+	//
+	// If Cursor.TxnStartTs is non-zero, continue scanning commit ts
+	// CommitTsStart with start ts greater than Cursor.TxnStartTs, then scan
+	// later commit ts up to CommitTsEnd.
+	//
 	var start []byte
-	if dataRange.LastScannedTxnStartTs != 0 {
-		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart, dataRange.LastScannedTxnStartTs+1)
+	if len(request.Cursor.Position) != 0 {
+		start = encodeRowLevelScanPositionLowerBound(
+			uint64(subStat.subID),
+			stat.tableSpan.TableID,
+			request.Cursor.Position,
+		)
+	} else if request.Cursor.TxnStartTs != 0 {
+		start = encodeScanLowerBound(
+			uint64(subStat.subID),
+			stat.tableSpan.TableID,
+			dataRange.CommitTsStart,
+			request.Cursor.TxnStartTs+1,
+		)
 	} else {
-		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
+		start = encodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
 	}
-	end := EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsEnd+1)
-	// TODO: optimize read performance
-	// it's impossible return error here
-	iter, _ := db.NewIter(&pebble.IterOptions{
+	end := encodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsEnd+1)
+	iter, err := db.NewIter(&pebble.IterOptions{
 		LowerBound: start,
 		UpperBound: end,
 	})
-	decoder := e.decoderPool.Get().(*zstd.Decoder)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
 	startTime := time.Now()
-	// todo: what happens if iter.First() returns false?
-	_ = iter.First()
+	hasFirstEvent := iter.First()
 	metricEventStoreFirstReadDurationHistogram.Observe(time.Since(startTime).Seconds())
 	metrics.EventStoreScanRequestsCount.Inc()
-
-	needCheckSpan := true
-	if stat.tableSpan.Equal(subStat.tableSpan) {
-		needCheckSpan = false
+	if !hasFirstEvent {
+		// Empty range or first-read error. Close returns any accumulated
+		// iterator error while also releasing Pebble resources.
+		closeStartTime := time.Now()
+		err := iter.Close()
+		metricEventStoreCloseReadDurationHistogram.Observe(time.Since(closeStartTime).Seconds())
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		return nil, nil
 	}
+
+	decoder := e.decoderPool.Get().(*zstd.Decoder)
+
+	needCheckSpan := !stat.tableSpan.Equal(subStat.tableSpan)
 
 	return &eventStoreIter{
-		tableSpan:     stat.tableSpan,
-		needCheckSpan: needCheckSpan,
-		innerIter:     iter,
-		prevStartTs:   0,
-		prevCommitTs:  0,
-		startTs:       dataRange.CommitTsStart,
-		endTs:         dataRange.CommitTsEnd,
-		rowCount:      0,
-		decoder:       decoder,
-		decoderPool:   e.decoderPool,
-	}
+		tableSpan:         stat.tableSpan,
+		needCheckSpan:     needCheckSpan,
+		innerIter:         iter,
+		prevStartTs:       0,
+		prevCommitTs:      0,
+		startTs:           dataRange.CommitTsStart,
+		endTs:             dataRange.CommitTsEnd,
+		rowCount:          0,
+		decoder:           decoder,
+		decoderPool:       e.decoderPool,
+		encryptionManager: e.encryptionManager,
+		keyspaceID:        stat.keyspaceID,
+	}, nil
 }
 
 func (e *eventStore) GetLogCoordinatorNodeID() node.ID {
@@ -919,6 +1047,11 @@ func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat
 	idleTime := int64(0)
 	if len(newMap) == 0 {
 		idleTime = time.Now().UnixMilli()
+		ttlMs := int64(0)
+		if config.GetGlobalServerConfig().Debug.EventStore.EnableDataSharing {
+			ttlMs = int64(subscriptionIdleTTL / time.Millisecond)
+		}
+		subStat.remainingLifetimeMs.Store(ttlMs)
 	}
 	newData := &subscribersWithIdleTime{subscribers: newMap, idleTime: idleTime}
 	// It is safe to call Store without checking oldData here,
@@ -979,46 +1112,86 @@ func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatche
 	// It is safe to call Store without checking oldData here,
 	// as all modifications to subStat are guarded by the dispatcherMeta lock.
 	subStat.subscribers.Store(newData)
+	subStat.remainingLifetimeMs.Store(0)
 }
 
 func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
-	ticker := time.NewTicker(1 * time.Minute)
-	ttlInMsForMarkDeletion := int64(60 * 1000) // 1min
+	ticker := time.NewTicker(10 * time.Second)
+	lastTick := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			now := time.Now().UnixMilli()
-			e.dispatcherMeta.Lock()
-			for tableID, subStats := range e.dispatcherMeta.tableStats {
-				for subID, subStat := range subStats {
-					subData := subStat.subscribers.Load()
-					if subData != nil && len(subData.subscribers) == 0 && subData.idleTime > 0 && now-subData.idleTime > ttlInMsForMarkDeletion {
-						log.Info("clean obsolete subscription",
-							zap.Uint64("subscriptionID", uint64(subID)),
-							zap.Int("dbIndex", subStat.dbIndex),
-							zap.Int64("tableID", subStat.tableSpan.TableID))
-						e.subClient.Unsubscribe(subID)
-						db := e.dbs[subStat.dbIndex]
-						if err := deleteDataRange(db, uint64(subID), subStat.tableSpan.TableID, 0, math.MaxUint64); err != nil {
-							log.Warn("fail to delete events", zap.Error(err))
-						}
-						delete(subStats, subID)
-						e.subscriptionChangeCh.In() <- SubscriptionChange{
-							ChangeType: SubscriptionChangeTypeRemove,
-							SubID:      uint64(subStat.subID),
-							Span:       subStat.tableSpan,
-						}
-						metrics.EventStoreSubscriptionGauge.Dec()
-						if len(subStats) == 0 {
-							delete(e.dispatcherMeta.tableStats, tableID)
-						}
-					}
-				}
-			}
-			e.dispatcherMeta.Unlock()
+			nowTick := time.Now()
+			deltaMs := int64(nowTick.Sub(lastTick) / time.Millisecond)
+			lastTick = nowTick
+			e.cleanObsoleteSubscriptionsOnce(deltaMs)
 		}
+	}
+}
+
+func (e *eventStore) cleanObsoleteSubscriptionsOnce(deltaMs int64) {
+	type obsoleteSubscription struct {
+		subID   logpuller.SubscriptionID
+		dbIndex int
+		span    *heartbeatpb.TableSpan
+		idleAt  time.Time
+	}
+
+	obsoleteSubs := make([]obsoleteSubscription, 0)
+
+	e.dispatcherMeta.Lock()
+	for tableKey, subStats := range e.dispatcherMeta.tableStats {
+		for subID, subStat := range subStats {
+			subData := subStat.subscribers.Load()
+			if subData == nil || len(subData.subscribers) != 0 || subData.idleTime <= 0 {
+				continue
+			}
+
+			remainingMs := subStat.remainingLifetimeMs.Load()
+			if remainingMs > 0 {
+				remainingMs -= deltaMs
+				if remainingMs < 0 {
+					remainingMs = 0
+				}
+				subStat.remainingLifetimeMs.Store(remainingMs)
+			}
+			if remainingMs != 0 {
+				continue
+			}
+
+			obsoleteSubs = append(obsoleteSubs, obsoleteSubscription{
+				subID:   subID,
+				dbIndex: subStat.dbIndex,
+				span:    subStat.tableSpan,
+				idleAt:  time.UnixMilli(subData.idleTime).In(time.Local),
+			})
+			delete(subStats, subID)
+		}
+		if len(subStats) == 0 {
+			delete(e.dispatcherMeta.tableStats, tableKey)
+		}
+	}
+	e.dispatcherMeta.Unlock()
+
+	for _, sub := range obsoleteSubs {
+		log.Info("clean obsolete subscription",
+			zap.Uint64("subscriptionID", uint64(sub.subID)),
+			zap.Int("dbIndex", sub.dbIndex),
+			zap.Int64("tableID", sub.span.TableID),
+			zap.Time("idleAt", sub.idleAt))
+		e.subClient.Unsubscribe(sub.subID)
+		db := e.dbs[sub.dbIndex]
+		if err := deleteDataRange(db, uint64(sub.subID), sub.span.TableID, 0, math.MaxUint64); err != nil {
+			log.Warn("fail to delete events", zap.Error(err))
+		}
+		e.subscriptionChangeCh.In() <- SubscriptionChange{
+			ChangeType: SubscriptionChangeTypeRemove,
+			SubID:      uint64(sub.subID),
+			Span:       sub.span,
+		}
+		metrics.EventStoreSubscriptionGauge.Dec()
 	}
 }
 
@@ -1095,6 +1268,19 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			memorySize += uint64(stats.BlockCache.Size)
 		}
 		metrics.EventStoreInMemoryDataSizeGauge.WithLabelValues(id).Set(float64(memorySize))
+
+		metrics.EventStorePebbleIteratorGauge.WithLabelValues(id).Set(float64(stats.TableIters))
+		metrics.EventStorePebbleCompactionDebtGauge.WithLabelValues(id).Set(float64(stats.Compact.EstimatedDebt))
+		metrics.EventStorePebbleCompactionInProgressGauge.WithLabelValues(id).Set(float64(stats.Compact.NumInProgress))
+		metrics.EventStorePebbleCompactionInProgressBytesGauge.WithLabelValues(id).Set(float64(stats.Compact.InProgressBytes))
+		metrics.EventStorePebbleFlushInProgressGauge.WithLabelValues(id).Set(float64(stats.Flush.NumInProgress))
+		metrics.EventStorePebbleReadAmpGauge.WithLabelValues(id).Set(float64(stats.ReadAmp()))
+
+		for level, metric := range stats.Levels {
+			metrics.EventStorePebbleLevelFilesGauge.WithLabelValues(id, strconv.Itoa(level)).Set(float64(metric.NumFiles))
+		}
+		metrics.EventStorePebbleBlockCacheAccess.WithLabelValues(id, "hit").Set(float64(stats.BlockCache.Hits))
+		metrics.EventStorePebbleBlockCacheAccess.WithLabelValues(id, "miss").Set(float64(stats.BlockCache.Misses))
 	}
 
 	pdCurrentTime := e.pdClock.CurrentTime()
@@ -1200,13 +1386,43 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLagInSec)
 }
 
-func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, encoder *zstd.Encoder) error {
+func (e *eventStore) writeEvents(
+	db *pebble.DB,
+	events []eventWithCallback,
+	encoder *zstd.Encoder,
+	compressionBuf *[]byte,
+	rawValueBuf *[]byte,
+) error {
 	metrics.EventStoreWriteRequestsCount.Inc()
+	prepareStart := time.Now()
 	batch := db.NewBatch()
+	defer batch.Close()
 	kvCount := 0
+	insertCount := 0
+	updateCount := 0
+	deleteCount := 0
+	var totalValueBytesBefore int64
+	var totalValueBytesAfter int64
+	var dstBuf []byte
+	if compressionBuf != nil {
+		dstBuf = *compressionBuf
+	}
+	var rawBuf []byte
+	if rawValueBuf != nil {
+		rawBuf = *rawValueBuf
+	}
 	for _, event := range events {
 		kvCount += len(event.kvs)
-		for _, kv := range event.kvs {
+		for i := range event.kvs {
+			kv := &event.kvs[i]
+			switch {
+			case kv.IsInsert():
+				insertCount++
+			case kv.IsUpdate():
+				updateCount++
+			case kv.IsDelete():
+				deleteCount++
+			}
 			if kv.CRTs <= event.currentResolvedTs {
 				log.Warn("event store received kv with commitTs less than resolvedTs",
 					zap.Uint64("commitTs", kv.CRTs),
@@ -1216,28 +1432,152 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 				continue
 			}
 
+			valueBytesBefore := kv.GetSize()
+			valueBytesAfter := valueBytesBefore
+			keyLen := encodedKeyLen(kv)
 			compressionType := CompressionNone
-			value := kv.Encode()
-			if len(value) > e.compressionThreshold {
-				value = encoder.EncodeAll(value, nil)
-				compressionType = CompressionZSTD
-				metrics.EventStoreCompressedRowsCount.Inc()
-			}
+			needCompress := e.enableZstdCompression && valueBytesBefore > int64(e.compressionThreshold)
+			if e.encryptionManager == nil && !needCompress {
+				// SetDeferred reserves the final Pebble batch space up front, so
+				// the uncompressed raw KV can be encoded directly into op.Value
+				// without allocating a separate value slice and copying it later.
+				op := batch.SetDeferred(keyLen, int(valueBytesBefore))
+				if err := encodeDeferredEventKey(op, keyLen, uint64(event.subID), event.tableID, kv, CompressionNone, false); err != nil {
+					return err
+				}
+				op.Value = kv.EncodeTo(op.Value[:0])
+				if len(op.Value) != int(valueBytesBefore) {
+					return fmt.Errorf("encoded raw kv entry size mismatch, expected %d, got %d",
+						valueBytesBefore, len(op.Value))
+				}
+				if err := op.Finish(); err != nil {
+					return err
+				}
+			} else if e.encryptionManager != nil {
+				var value []byte
+				value, compressionType, rawBuf, dstBuf = encodeAndMaybeCompressValue(kv, encoder, rawBuf, dstBuf, needCompress)
+				valueBytesAfter = int64(len(value))
 
-			key := EncodeKey(uint64(event.subID), event.tableID, &kv, compressionType)
-			if err := batch.Set(key, value, pebble.NoSync); err != nil {
-				log.Panic("failed to update pebble batch", zap.Error(err))
+				// Encrypt if encryption is enabled (after compression)
+				encryptedValue, err := e.encryptionManager.EncryptData(context.Background(), event.keyspaceID, value)
+				if err != nil {
+					return err
+				}
+
+				op := batch.SetDeferred(keyLen, len(encryptedValue))
+				if err := encodeDeferredEventKey(op, keyLen, uint64(event.subID), event.tableID, kv, compressionType, true); err != nil {
+					return err
+				}
+				copiedValueLen := copy(op.Value, encryptedValue)
+				op.Value = op.Value[:copiedValueLen]
+				if copiedValueLen != len(encryptedValue) {
+					return fmt.Errorf("encrypted raw kv entry size mismatch, expected %d, got %d",
+						len(encryptedValue), copiedValueLen)
+				}
+				if err := op.Finish(); err != nil {
+					return err
+				}
+			} else {
+				var value []byte
+				value, compressionType, rawBuf, dstBuf = encodeAndMaybeCompressValue(kv, encoder, rawBuf, dstBuf, true)
+				valueBytesAfter = int64(len(value))
+				// SetDeferred is a write path optimization. Now that the compressed
+				// value length is known, reserve the exact key/value space in the
+				// Pebble batch, encode the key directly into op.Key, and copy the
+				// compressed value into op.Value without building a temporary key.
+				op := batch.SetDeferred(keyLen, len(value))
+				if err := encodeDeferredEventKey(op, keyLen, uint64(event.subID), event.tableID, kv, compressionType, false); err != nil {
+					return err
+				}
+				copiedValueLen := copy(op.Value, value)
+				op.Value = op.Value[:copiedValueLen]
+				if copiedValueLen != len(value) {
+					return fmt.Errorf("compressed raw kv entry size mismatch, expected %d, got %d",
+						len(value), copiedValueLen)
+				}
+				if err := op.Finish(); err != nil {
+					return err
+				}
 			}
+			totalValueBytesBefore += valueBytesBefore
+			totalValueBytesAfter += valueBytesAfter
 		}
 	}
+	if compressionBuf != nil {
+		*compressionBuf = dstBuf
+	}
+	if rawValueBuf != nil {
+		*rawValueBuf = rawBuf
+	}
 	kvEventCount.Add(float64(kvCount))
+	insertKVEntryCount.Add(float64(insertCount))
+	updateKVEntryCount.Add(float64(updateCount))
+	deleteKVEntryCount.Add(float64(deleteCount))
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
 	metrics.EventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
 	metrics.EventStoreWriteBytes.Add(float64(batch.Len()))
+	if totalValueBytesAfter > 0 {
+		metrics.EventStoreCompressionRatioHistogram.Observe(float64(totalValueBytesBefore) / float64(totalValueBytesAfter))
+	}
+	metrics.EventStoreWritePrepareDurationHistogram.Observe(time.Since(prepareStart).Seconds())
 	start := time.Now()
 	err := batch.Commit(pebble.NoSync)
-	metrics.EventStoreWriteDurationHistogram.Observe(float64(time.Since(start).Milliseconds()) / 1000)
+	metrics.EventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
 	return err
+}
+
+func encodeAndMaybeCompressValue(
+	kv *common.RawKVEntry,
+	encoder *zstd.Encoder,
+	rawBuf []byte,
+	dstBuf []byte,
+	needCompress bool,
+) (value []byte, compressionType CompressionType, nextRawBuf []byte, nextDstBuf []byte) {
+	rawValue := ensureValueBuffer(rawBuf, int(kv.GetSize()))
+	rawValue = kv.EncodeTo(rawValue)
+	value = rawValue
+	compressionType = CompressionNone
+	nextRawBuf = rawValue[:0]
+	nextDstBuf = dstBuf
+	if !needCompress {
+		return value, compressionType, nextRawBuf, nextDstBuf
+	}
+
+	maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
+	value = ensureValueBuffer(dstBuf, maxEncodedSize)
+	value = encoder.EncodeAll(rawValue, value)
+	compressionType = CompressionZSTD
+	nextDstBuf = value[:0]
+	metrics.EventStoreCompressedRowsCount.Inc()
+	return value, compressionType, nextRawBuf, nextDstBuf
+}
+
+func ensureValueBuffer(buf []byte, minCap int) []byte {
+	if cap(buf) < minCap {
+		return make([]byte, 0, minCap)
+	}
+	return buf[:0]
+}
+
+func encodeDeferredEventKey(
+	op *pebble.DeferredBatchOp,
+	keyLen int,
+	subID uint64,
+	tableID int64,
+	kv *common.RawKVEntry,
+	compressionType CompressionType,
+	usesEncryptionLayer bool,
+) error {
+	if usesEncryptionLayer {
+		op.Key = encodeKeyToWithEncryptionLayer(op.Key[:0], subID, tableID, kv, compressionType)
+	} else {
+		op.Key = EncodeKeyTo(op.Key[:0], subID, tableID, kv, compressionType)
+	}
+	if len(op.Key) != keyLen {
+		return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
+			keyLen, len(op.Key))
+	}
+	return nil
 }
 
 type eventStoreIter struct {
@@ -1256,25 +1596,51 @@ type eventStoreIter struct {
 
 	decoder     *zstd.Decoder
 	decoderPool *sync.Pool
+	decodeBuf   []byte
+	// encryptionManager for decrypting data (optional, can be nil).
+	encryptionManager encryption.EncryptionManager
+	keyspaceID        uint32
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
+	rawKV, _, isNewTxn := iter.NextWithScanPosition()
+	return rawKV, isNewTxn
+}
+
+func (iter *eventStoreIter) NextWithScanPosition() (*common.RawKVEntry, ScanPosition, bool) {
 	rawKV := &common.RawKVEntry{}
+	var scanPosition ScanPosition
 	for {
 		if !iter.innerIter.Valid() {
-			return nil, false
+			return nil, nil, false
 		}
 		key := iter.innerIter.Key()
 		value := iter.innerIter.Value()
 
-		_, compressionType := DecodeKeyMetas(key)
+		if KeyUsesEncryptionLayer(key) {
+			if iter.encryptionManager == nil {
+				log.Panic("encountered encryption-layer value but no encryption manager is configured",
+					zap.Uint32("keyspaceID", iter.keyspaceID))
+			}
+			decryptedValue, err := iter.encryptionManager.DecryptData(context.Background(), iter.keyspaceID, value)
+			if err != nil {
+				log.Panic("failed to decrypt value", zap.Error(err))
+			}
+			value = decryptedValue
+		}
+		_, compressionType := DecodeKeyAttributes(key)
 		var decodedValue []byte
 		if compressionType == CompressionZSTD {
 			var err error
-			decodedValue, err = iter.decoder.DecodeAll(value, nil)
+			var dst []byte
+			if iter.decodeBuf != nil {
+				dst = iter.decodeBuf[:0]
+			}
+			decodedValue, err = iter.decoder.DecodeAll(value, dst)
 			if err != nil {
 				log.Panic("failed to decompress value", zap.Error(err))
 			}
+			iter.decodeBuf = decodedValue
 		} else {
 			decodedValue = value
 		}
@@ -1285,16 +1651,18 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		}
 		scannedBytesMetrics.Add(float64(len(value)))
 		if !iter.needCheckSpan {
+			scanPosition = encodeRowLevelScanPosition(key)
 			break
 		}
 		comparableKey := common.ToComparableKey(rawKV.Key)
 		if bytes.Compare(comparableKey, iter.tableSpan.StartKey) >= 0 &&
-			bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
+			bytes.Compare(comparableKey, iter.tableSpan.EndKey) < 0 {
+			scanPosition = encodeRowLevelScanPosition(key)
 			break
 		}
 		log.Debug("event store iter skip kv not in table span",
 			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
-			zap.String("key", hex.EncodeToString(rawKV.Key)),
+			zap.String("key", util.RedactKey(rawKV.Key)),
 			zap.Uint64("startTs", rawKV.StartTs),
 			zap.Uint64("commitTs", rawKV.CRTs),
 			zap.Bool("isInsert", rawKV.IsInsert()),
@@ -1303,21 +1671,19 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		skippedBytesMetrics.Add(float64(len(value)))
 		iter.innerIter.Next()
 	}
-	isNewTxn := false
+	isNewTxn := iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs)
 	// 2 PC transactions have different startTs and commitTs.
 	// async-commit transactions have different startTs and may have the same commitTs.
 	// at the moment, use commit-ts determine whether it is a new transaction, even though multiple
 	// different transactions may be grouped together, to satisfy the resolved-ts semantics.
-	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
-		isNewTxn = true
-	}
+
 	iter.prevCommitTs = rawKV.CRTs
 	iter.prevStartTs = rawKV.StartTs
 	iter.rowCount++
 	startTime := time.Now()
 	iter.innerIter.Next()
 	metricEventStoreNextReadDurationHistogram.Observe(time.Since(startTime).Seconds())
-	return rawKV, isNewTxn
+	return rawKV, scanPosition, isNewTxn
 }
 
 func (iter *eventStoreIter) Close() (int64, error) {
@@ -1334,7 +1700,7 @@ func (iter *eventStoreIter) Close() (int64, error) {
 	iter.decoderPool.Put(iter.decoder)
 	iter.innerIter = nil
 	metricEventStoreCloseReadDurationHistogram.Observe(time.Since(startTime).Seconds())
-	return iter.rowCount, err
+	return iter.rowCount, errors.Trace(err)
 }
 
 func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.TargetMessage) error {
@@ -1415,7 +1781,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 				if targetIndex == -1 {
 					log.Panic("cannot find subscription state", zap.Uint64("subscriptionID", change.SubID))
 				}
-				tableState.Subscriptions = append(tableState.Subscriptions[:targetIndex], tableState.Subscriptions[targetIndex+1:]...)
+				tableState.Subscriptions = slices.Delete(tableState.Subscriptions, targetIndex, targetIndex+1)
 			case SubscriptionChangeTypeUpdate:
 				tableState, ok := state.TableStates[change.Span.TableID]
 				if !ok {
@@ -1433,17 +1799,18 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					log.Warn("cannot find subscription state", zap.Uint64("subscriptionID", change.SubID))
 					continue
 				}
-				if change.CheckpointTs < tableState.Subscriptions[targetIndex].CheckpointTs ||
-					change.ResolvedTs < tableState.Subscriptions[targetIndex].ResolvedTs {
-					log.Panic("should not happen",
+				subState := tableState.Subscriptions[targetIndex]
+				if change.CheckpointTs < subState.CheckpointTs || change.ResolvedTs < subState.ResolvedTs {
+					log.Warn("ignore stale subscription state update",
 						zap.Uint64("subscriptionID", change.SubID),
-						zap.Uint64("oldCheckpointTs", tableState.Subscriptions[targetIndex].CheckpointTs),
-						zap.Uint64("oldResolvedTs", tableState.Subscriptions[targetIndex].ResolvedTs),
+						zap.Uint64("oldCheckpointTs", subState.CheckpointTs),
+						zap.Uint64("oldResolvedTs", subState.ResolvedTs),
 						zap.Uint64("newCheckpointTs", change.CheckpointTs),
 						zap.Uint64("newResolvedTs", change.ResolvedTs))
+					continue
 				}
-				tableState.Subscriptions[targetIndex].CheckpointTs = change.CheckpointTs
-				tableState.Subscriptions[targetIndex].ResolvedTs = change.ResolvedTs
+				subState.CheckpointTs = change.CheckpointTs
+				subState.ResolvedTs = change.ResolvedTs
 			default:
 				log.Panic("invalid subscription change type", zap.Int("changeType", int(change.ChangeType)))
 			}

@@ -29,6 +29,35 @@ function check_failpoint_log_value() {
 	return 1
 }
 
+function check_stream_reconnected() {
+	local log_file="$WORK_DIR/cdc.log"
+	local initial_count
+
+	for ((i = 0; i < 60; i++)); do
+		if [ -f "$log_file" ] && grep -q "inject force reconnect" "$log_file"; then
+			initial_count=$(grep -c "region request worker going to create grpc stream" "$log_file")
+			break
+		fi
+		sleep 1
+	done
+
+	if [ -z "${initial_count:-}" ]; then
+		echo "inject force reconnect log not found"
+		return 1
+	fi
+
+	for ((i = 0; i < 30; i++)); do
+		if [ "$(grep -c "region request worker going to create grpc stream" "$log_file")" -gt "$initial_count" ]; then
+			return 0
+		fi
+		sleep 1
+	done
+
+	echo "region request worker did not reconnect after force reconnect"
+	tail -n 200 "$log_file"
+	return 1
+}
+
 # This test mainly verifies kv client force reconnect can work
 # Trigger force reconnect by failpoint injection
 function run() {
@@ -47,7 +76,7 @@ function run() {
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1" ;;
 	esac
 
-	# this will be triggered every 5s in logpuller
+	# This will be triggered every 10s in logpuller.
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/logservice/logpuller/InjectForceReconnect=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
 	enable_failpoint --name "$FAILPOINT_API_TEST_NAME" --expr "return(\"$FAILPOINT_API_TEST_VALUE\")"
@@ -64,9 +93,9 @@ EOF
 	fi
 	changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" --config $WORK_DIR/pulsar_test.toml | grep '^ID:' | head -n1 | awk '{print $2}')
 	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --oauth2-private-key ${WORK_DIR}/credential.json --oauth2-issuer-url "http://localhost:9096" -- oauth2-client-id "1234" ;;
+	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" $WORK_DIR/pulsar_test.toml ;;
+	storage) run_storage_consumer $WORK_DIR $SINK_URI $WORK_DIR/pulsar_test.toml "" ;;
+	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config $WORK_DIR/pulsar_test.toml --oauth2-private-key ${WORK_DIR}/credential.json --oauth2-issuer-url "http://localhost:9096" --oauth2-client-id "1234" ;;
 	esac
 
 	run_sql "CREATE DATABASE kv_client_stream_reconnect;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -81,8 +110,10 @@ EOF
 		sleep 1
 	done
 
+	check_stream_reconnected
 	check_failpoint_log_value "$FAILPOINT_API_TEST_VALUE"
 	disable_failpoint --name "$FAILPOINT_API_TEST_NAME"
+	ensure 20 check_changefeed_state "$pd_addr" "$changefeed_id" "normal" "null" ""
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 	export GO_FAILPOINTS=''

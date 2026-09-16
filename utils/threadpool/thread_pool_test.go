@@ -109,7 +109,7 @@ func (t *longRunTask) Execute() time.Time {
 func TestThreadPoolTiming(t *testing.T) {
 	msgChan := make(chan TaskId, 1000)
 	var wg sync.WaitGroup
-	var countDown int = 0
+	countDown := 0
 
 	ts := newThreadPoolImpl(1)
 	// To make the scheduler stop executing any tasks

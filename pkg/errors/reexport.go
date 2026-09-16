@@ -19,23 +19,30 @@ import (
 	perrors "github.com/pingcap/errors"
 )
 
+type (
+	Error        = perrors.Error
+	RFCErrorCode = perrors.RFCErrorCode
+	ErrCode      = perrors.ErrCode
+)
+
 var (
-	// Is is a shortcut for errors.Is.
-	Is = errors.Is
-	// As is a shortcut for errors.As.
-	As = errors.As
-	// New is a shortcut for github.com/pingcap/errors.New.
-	New = perrors.New
-	// Errorf is a shortcut for github.com/pingcap/errors.Errorf.
-	Errorf = perrors.Errorf
-	// Trace is a shortcut for github.com/pingcap/errors.Trace.
-	Trace = perrors.Trace
-	// Cause is a shortcut for github.com/pingcap/errors.Cause.
-	Cause = perrors.Cause
-	// Annotate is a shortcut for github.com/pingcap/errors.Annotate.
-	Annotate = perrors.Annotate
-	// Annotatef is a shortcut for github.com/pingcap/errors.Annotatef.
-	Annotatef = perrors.Annotatef
-	// WithMessage is a shortcut for github.com/pingcap/errors.WithMessage.
-	WithMessage = perrors.WithMessage
+	Is               = errors.Is
+	As               = errors.As
+	New              = perrors.New
+	Errorf           = perrors.Errorf
+	Trace            = perrors.Trace
+	Cause            = perrors.Cause
+	Annotate         = perrors.Annotate
+	Annotatef        = perrors.Annotatef
+	WithMessage      = perrors.WithMessage
+	WithStack        = perrors.WithStack
+	ErrorStack       = perrors.ErrorStack
+	ErrorEqual       = perrors.ErrorEqual
+	NewNoStackError  = perrors.NewNoStackError
+	NotFoundf        = perrors.NotFoundf
+	NotValidf        = perrors.NotValidf
+	Normalize        = perrors.Normalize
+	RFCCodeText      = perrors.RFCCodeText
+	Unwrap           = perrors.Unwrap
+	RedactLogEnabled = &perrors.RedactLogEnabled
 )

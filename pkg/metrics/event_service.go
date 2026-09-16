@@ -55,6 +55,69 @@ var (
 			Name:      "resolved_ts_lag",
 			Help:      "resolved ts lag of eventService in seconds",
 		}, []string{"type"})
+	EventServiceScanWindowBaseTsGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_base_ts",
+			Help:      "The base ts of the scan window for each changefeed",
+		}, []string{"changefeed"})
+	EventServiceScanWindowIntervalGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_interval",
+			Help:      "The scan window interval in seconds for each changefeed",
+		}, []string{"changefeed"})
+	EventServiceScanWindowUsageRatioGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_usage_ratio",
+			Help:      "The usage ratio observed by the scan window controller for each changefeed",
+		}, []string{"changefeed", "type"})
+	EventServiceScanWindowUsageEMAGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_usage_ema",
+			Help:      "The usage EMA values used by the scan window controller for each changefeed",
+		}, []string{"changefeed", "type"})
+	EventServiceScanWindowTargetBandGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_target_band",
+			Help:      "Whether the observed scan window value is currently inside the target band for each changefeed",
+		}, []string{"changefeed", "type"})
+	EventServiceScanWindowTargetBandCrossCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_target_band_cross_count",
+			Help:      "The number of target band state changes observed by the scan window controller for each changefeed",
+		}, []string{"changefeed", "type"})
+	EventServiceScanWindowPressureScoreGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_pressure_score",
+			Help:      "The pressure score maintained by the scan window controller for each changefeed",
+		}, []string{"changefeed"})
+	EventServiceScanWindowMemoryReleaseCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_memory_release_count",
+			Help:      "The number of memory release events reported to the scan window controller for each changefeed",
+		}, []string{"changefeed"})
+	EventServiceScanWindowAdjustCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_adjust_count",
+			Help:      "The number of scan window adjustments made by the controller for each changefeed",
+		}, []string{"changefeed", "reason"})
 	EventServiceScanDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -92,6 +155,13 @@ var (
 			Subsystem: "event_service",
 			Name:      "pending_scan_task_count",
 			Help:      "The number of pending scan tasks",
+		})
+	EventServiceDroppedScanTaskCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "dropped_scan_task_count",
+			Help:      "The number of scan tasks dropped because the worker queue is full",
 		})
 	EventServiceDispatcherStatusCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -136,6 +206,19 @@ var (
 		Help:      "The number of transactions scanned from eventStore",
 		Buckets:   prometheus.ExponentialBuckets(1, 2.0, 8), // 1 ~ 256
 	})
+	EventServiceBigTxnSize = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "big_txn_size",
+		Help:      "The raw KV size of big transactions scanned from eventStore",
+		Buckets:   prometheus.ExponentialBuckets(1024*1024, 2.0, 16), // 1MB to 32GB
+	})
+	EventServiceBigTxnCount = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "big_txn_count",
+		Help:      "The number of big transactions scanned from eventStore",
+	})
 
 	EventServiceSkipScanCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -169,6 +252,13 @@ var (
 			Name:      "reset_dispatcher_count",
 			Help:      "The number of event dispatcher reset operations performed",
 		})
+
+	EventServiceSendDMLTypeCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "send_dml_type_count",
+		Help:      "The number of different dml events type sent by the event service,  it is potentially inaccurat if some dml events are filter",
+	}, []string{"mode", "dml_type"})
 )
 
 // initEventServiceMetrics registers all metrics in this file.
@@ -178,19 +268,32 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceSendEventDuration)
 	registry.MustRegister(EventServiceResolvedTsGauge)
 	registry.MustRegister(EventServiceResolvedTsLagGauge)
+	registry.MustRegister(EventServiceScanWindowBaseTsGaugeVec)
+	registry.MustRegister(EventServiceScanWindowIntervalGaugeVec)
+	registry.MustRegister(EventServiceScanWindowUsageRatioGaugeVec)
+	registry.MustRegister(EventServiceScanWindowUsageEMAGaugeVec)
+	registry.MustRegister(EventServiceScanWindowTargetBandGaugeVec)
+	registry.MustRegister(EventServiceScanWindowTargetBandCrossCount)
+	registry.MustRegister(EventServiceScanWindowPressureScoreGaugeVec)
+	registry.MustRegister(EventServiceScanWindowMemoryReleaseCount)
+	registry.MustRegister(EventServiceScanWindowAdjustCount)
 	registry.MustRegister(EventServiceScanDuration)
 	registry.MustRegister(EventServiceScannedCount)
 	registry.MustRegister(EventServiceDispatcherGauge)
 	registry.MustRegister(EventServiceScanTaskCount)
 	registry.MustRegister(EventServiceDispatcherStatusCount)
 	registry.MustRegister(EventServicePendingScanTaskCount)
+	registry.MustRegister(EventServiceDroppedScanTaskCount)
 	registry.MustRegister(EventServiceDispatcherUpdateResolvedTsDiff)
 	registry.MustRegister(EventServiceSkipResolvedTsCount)
 	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)
 	registry.MustRegister(EventServiceScannedDMLSize)
 	registry.MustRegister(EventServiceScannedTxnCount)
+	registry.MustRegister(EventServiceBigTxnSize)
+	registry.MustRegister(EventServiceBigTxnCount)
 	registry.MustRegister(EventServiceSkipScanCount)
 	registry.MustRegister(EventServiceInterruptScanCount)
 	registry.MustRegister(EventServiceGetDDLEventDuration)
 	registry.MustRegister(EventServiceResetDispatcherCount)
+	registry.MustRegister(EventServiceSendDMLTypeCount)
 }

@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -90,7 +91,7 @@ func LogMiddleware() gin.HandlerFunc {
 			zap.Int("status", c.Writer.Status()),
 			zap.String("method", c.Request.Method),
 			zap.String("path", path),
-			zap.String("query", query),
+			zap.String("query", util.RedactValue(query)),
 			zap.String("ip", c.ClientIP()),
 			zap.String("user-agent", c.Request.UserAgent()), zap.String("client-version", version),
 			zap.String("username", user),
@@ -222,7 +223,32 @@ func ForwardToServer(c *gin.Context, fromID node.ID, toAddr string) {
 	}
 }
 
-// KeyspaceCheckerMiddleware check if the request keyspace is valid
+// KeyspaceNameCheckerMiddleware checks that a keyspace name is specified in
+// next-gen mode. It is used by APIs that only access TiCDC metadata and do not
+// require the upstream keyspace to still exist.
+func KeyspaceNameCheckerMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// We do not need to check keyspace for classic mode. If classic mode
+		// supports multiple keyspaces in the future, this needs to be revisited.
+		if kerneltype.IsClassic() {
+			c.Next()
+			return
+		}
+
+		if c.Query(api.APIOpVarKeyspace) == "" {
+			err := errors.ErrAPIInvalidParam.GenWithStack(
+				"missing required query parameter keyspace, please specify --keyspace or -k",
+			)
+			c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// KeyspaceCheckerMiddleware checks if the request keyspace exists.
 func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// we not need to check keyspace for classic mode
@@ -235,7 +261,10 @@ func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 
 		ks := c.Query(api.APIOpVarKeyspace)
 		if ks == "" {
-			c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
+			err := errors.ErrAPIInvalidParam.GenWithStack(
+				"missing required query parameter keyspace, please specify --keyspace or -k",
+			)
+			c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
 			c.Abort()
 			return
 		}
@@ -243,7 +272,10 @@ func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 		meta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), ks)
 		if errors.IsKeyspaceNotExistError(err) {
-			c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
+			err = errors.ErrAPIInvalidParam.GenWithStack(
+				"keyspace %q does not exist, please check --keyspace or -k", ks,
+			)
+			c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
 			c.Abort()
 			return
 		} else if err != nil {
@@ -268,4 +300,9 @@ func GetKeyspaceFromContext(c *gin.Context) *keyspacepb.KeyspaceMeta {
 		}
 	}
 	return meta
+}
+
+// SetKeyspaceInContext stores keyspace metadata for downstream middleware.
+func SetKeyspaceInContext(c *gin.Context, meta *keyspacepb.KeyspaceMeta) {
+	c.Set(ctxKeyspaceKey, meta)
 }

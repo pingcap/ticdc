@@ -21,8 +21,10 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"go.uber.org/zap"
 )
 
@@ -45,6 +47,8 @@ func NewRedoDispatcher(
 	schemaIDToDispatchers *SchemaIDToDispatchers,
 	skipSyncpointAtStartTs bool,
 	skipDMLAsStartTs bool,
+	eventCollectorBatchCount int,
+	eventCollectorBatchBytes int,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
 ) *RedoDispatcher {
@@ -56,6 +60,8 @@ func NewRedoDispatcher(
 		schemaIDToDispatchers,
 		skipSyncpointAtStartTs,
 		skipDMLAsStartTs,
+		eventCollectorBatchCount,
+		eventCollectorBatchBytes,
 		0,
 		common.RedoMode,
 		sink,
@@ -88,17 +94,20 @@ func (rd *RedoDispatcher) GetRedoMeta() *redo.RedoMeta {
 
 // SetRedoMeta used to init redo meta
 // only for table trigger redo dispatcher
-func (rd *RedoDispatcher) SetRedoMeta(cfg *config.ConsistentConfig) {
+func (rd *RedoDispatcher) SetRedoMeta(ctx context.Context, cfg *config.ConsistentConfig) {
 	if !rd.IsTableTriggerDispatcher() {
 		log.Error("SetRedoMeta should be called by table trigger redo dispatcher", zap.Any("id", rd.GetId()))
 	}
-	ctx := context.Background()
 	ctx, rd.cancel = context.WithCancel(ctx)
 	rd.redoMeta = redo.NewRedoMeta(rd.sharedInfo.changefeedID, rd.startTs, cfg)
+	if gate, ok := appcontext.TryGetService[*writelease.Gate](appcontext.CaptureWriteGate); ok {
+		rd.redoMeta.SetWriteGate(gate)
+	}
 	go func() {
 		err := rd.redoMeta.PreStart(ctx)
 		if err != nil {
 			rd.HandleError(err)
+			return
 		}
 		err = rd.redoMeta.Run(ctx)
 		if err != nil {

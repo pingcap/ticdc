@@ -18,7 +18,13 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -195,6 +201,98 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEv
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 	}
 	return ddlEvent, insertEvent, updateEvent, deleteEvent
+}
+
+// NewRoutedTableInfo4Test creates a small routed table info shared by codec tests.
+func NewRoutedTableInfo4Test() *commonType.TableInfo {
+	idFieldType := types.NewFieldType(mysql.TypeLong)
+	idFieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	nameFieldType := types.NewFieldType(mysql.TypeVarchar)
+	nameFieldType.SetFlen(32)
+
+	return commonType.WrapTableInfo("source_db", &model.TableInfo{
+		ID:       20,
+		Name:     ast.NewCIStr("source_table"),
+		UpdateTS: 100,
+		Columns: []*model.ColumnInfo{
+			{
+				ID:        1,
+				Name:      ast.NewCIStr("id"),
+				FieldType: *idFieldType,
+				State:     model.StatePublic,
+				Offset:    0,
+			},
+			{
+				ID:        2,
+				Name:      ast.NewCIStr("name"),
+				FieldType: *nameFieldType,
+				State:     model.StatePublic,
+				Offset:    1,
+			},
+		},
+	}).CloneWithRouting("target_db", "target_table")
+}
+
+// NewRoutedDMLEvent4Test creates an insert DML whose source table is routed to target_db.target_table.
+func NewRoutedDMLEvent4Test() *commonEvent.DMLEvent {
+	tableInfo := NewRoutedTableInfo4Test()
+	event := commonEvent.NewDMLEvent(
+		commonType.NewDispatcherID(),
+		tableInfo.TableName.TableID,
+		1,
+		2,
+		tableInfo,
+	)
+	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
+	rows.AppendRow(chunk.MutRowFromValues(int64(1), "alice").ToRow())
+	event.SetRows(rows)
+	event.RowTypes = append(event.RowTypes, commonType.RowTypeInsert)
+	event.RowKeys = append(event.RowKeys, []byte("row-key"))
+	event.Length = 1
+	event.TableInfoVersion = tableInfo.GetUpdateTS()
+	return event
+}
+
+// NewRoutedRowEvent4Test creates a row event whose source table is routed to target_db.target_table.
+func NewRoutedRowEvent4Test() *commonEvent.RowEvent {
+	dml := NewRoutedDMLEvent4Test()
+	row, ok := dml.GetNextRow()
+	dml.Rewind()
+	if !ok {
+		panic("routed dml test event has no row")
+	}
+	return &commonEvent.RowEvent{
+		TableInfo:      dml.TableInfo,
+		CommitTs:       dml.CommitTs,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+}
+
+// NewRoutedDDLEvent4Test creates a routed CREATE TABLE DDL event.
+func NewRoutedDDLEvent4Test() *commonEvent.DDLEvent {
+	tableInfo := NewRoutedTableInfo4Test()
+	sourceDDL := &commonEvent.DDLEvent{
+		Version:    commonEvent.DDLEventVersion1,
+		Type:       byte(model.ActionCreateTable),
+		SchemaName: "source_db",
+		TableName:  "source_table",
+		Query:      "CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY, `name` VARCHAR(32))",
+		TableInfo:  tableInfo,
+		FinishedTs: 100,
+	}
+	return commonEvent.NewRoutedDDLEvent(
+		sourceDDL,
+		"CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY, `name` VARCHAR(32))",
+		"target_db",
+		"target_table",
+		"",
+		"",
+		tableInfo,
+		nil,
+		nil,
+	)
 }
 
 // LargeColumnKeyValues returns the key values of large columns

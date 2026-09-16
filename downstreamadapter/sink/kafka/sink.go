@@ -19,14 +19,22 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
+	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -39,7 +47,7 @@ const (
 )
 
 type sink struct {
-	changefeedID commonType.ChangeFeedID
+	changefeedID common.ChangeFeedID
 
 	dmlProducer      kafka.AsyncProducer
 	ddlProducer      kafka.SyncProducer
@@ -58,40 +66,135 @@ type sink struct {
 	rowChan   *chann.UnlimitedChannel[*commonEvent.MQRowEvent, any]
 
 	// isNormal indicate whether the sink is in the normal state.
-	isNormal *atomic.Bool
-	ctx      context.Context
+	isNormal  *atomic.Bool
+	ctx       context.Context
+	writeGate *writelease.Gate
 }
 
-func (s *sink) SinkType() commonType.SinkType {
-	return commonType.KafkaSinkType
+func (s *sink) SinkType() common.SinkType {
+	return common.KafkaSinkType
 }
 
-func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
-	comp, _, err := newKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig)
-	defer comp.close()
-	return err
+var createKafkaFactory = func(createSaramaFactory func() (kafka.Factory, error)) (kafka.Factory, error) {
+	return createSaramaFactory()
+}
+
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
+	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
+	if err != nil {
+		return err
+	}
+
+	topic, err := helper.GetTopic(uri)
+	if err != nil {
+		return err
+	}
+
+	options := kafka.NewOptions()
+	if err = options.Apply(changefeedID, uri, sinkConfig); err != nil {
+		return err
+	}
+	options.Topic = topic
+
+	encoderConfig, err := helper.GetEncoderConfig(
+		changefeedID, uri, protocol, sinkConfig,
+		options.MaxMessageBytes, options.MaxBatchedBytes,
+	)
+	if err != nil {
+		return err
+	}
+
+	claimCheck, err := claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
+	if err != nil {
+		return err
+	}
+	defer claimCheck.Close()
+
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
+		return err
+	}
+
+	if _, err = columnselector.New(sinkConfig); err != nil {
+		return err
+	}
+
+	factory, err := createKafkaFactory(func() (kafka.Factory, error) {
+		return kafka.NewSaramaFactory(ctx, options, changefeedID)
+	})
+	if err != nil {
+		return err
+	}
+
+	adminClient, err := factory.AdminClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer adminClient.Close()
+
+	err = topicmanager.EnsureTopic(ctx, changefeedID, topic, options.DeriveTopicConfig(), adminClient)
+	if err != nil {
+		return err
+	}
+
+	var schemaM schemamanager.SchemaManager
+	if isAvroLike {
+		schemaM, err = schemamanager.NewSchemaManager(ctx, encoderConfig)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = codec.NewEventEncoder(encoderConfig, claimCheck, schemaM)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func New(
-	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, keyspaceID uint32,
 ) (*sink, error) {
 	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
+	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp)
+}
+
+func newWithComponents(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	keyspaceID uint32,
+	protocol config.Protocol,
+	comp components,
+) (*sink, error) {
+	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "sink")
+	var (
+		err           error
+		asyncProducer kafka.AsyncProducer
+		syncProducer  kafka.SyncProducer
+	)
 	defer func() {
-		if err != nil {
-			comp.close()
+		if err == nil {
+			return
 		}
+		if syncProducer != nil {
+			syncProducer.Close()
+		}
+		if asyncProducer != nil {
+			asyncProducer.Close()
+		}
+		comp.close()
+		statistics.Close()
 	}()
 
-	statistics := metrics.NewStatistics(changefeedID, "sink")
-	asyncProducer, err := comp.factory.AsyncProducer(ctx)
+	asyncProducer, err = comp.factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	syncProducer, err := comp.factory.SyncProducer(ctx)
+	syncProducer, err = comp.factory.SyncProducer(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +235,7 @@ func (s *sink) Run(ctx context.Context) error {
 	})
 	err := g.Wait()
 	s.isNormal.Store(false)
-	return errors.Trace(err)
+	return err
 }
 
 func (s *sink) IsNormal() bool {
@@ -140,7 +243,21 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	if !s.isNormal.Load() {
+		return
+	}
 	s.eventChan.Push(event)
+}
+
+func (s *sink) SetWriteGate(gate *writelease.Gate) {
+	s.writeGate = gate
+	if s.comp.claimCheck != nil {
+		s.comp.claimCheck.SetWriteGate(gate)
+	}
+}
+
+func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -149,7 +266,7 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	case *commonEvent.DDLEvent:
 		err = s.sendDDLEvent(v)
 	default:
-		log.Error("kafka sink doesn't support this type of block event",
+		log.Error("unsupported kafka sink block event type",
 			zap.String("namespace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.String("eventType", commonEvent.TypeToString(event.GetType())))
@@ -164,6 +281,7 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *sink) close() {
+	s.isNormal.Store(false)
 	s.eventChan.Close()
 	s.rowChan.Close()
 }
@@ -199,72 +317,35 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		default:
 			event, ok := s.eventChan.Get()
 			if !ok {
-				log.Info("kafka sink event channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			schema := event.TableInfo.GetSchemaName()
 			table := event.TableInfo.GetTableName()
 			topic := s.comp.eventRouter.GetTopicForRowChange(schema, table)
+			if err := writelease.WaitForWrite(ctx, s.writeGate); err != nil {
+				return err
+			}
 			partitionNum, err := s.comp.topicManager.GetPartitionNum(ctx, topic)
 			if err != nil {
 				return err
 			}
 
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
-			selector := s.comp.columnSelector.Get(schema, table)
-			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
-				var calledCount atomic.Uint64
-				// The callback of the last row will trigger the callback of the txn.
-				return func() {
-					if calledCount.Inc() == totalCount {
-						for _, callback := range postTxnFlushed {
-							callback()
-						}
-					}
-				}
+			selector := s.comp.columnSelector.GetForTableInfo(event.TableInfo)
+			events, err := helper.NewMQRowEvents(event, topic, partitionNum, partitionGenerator, selector)
+			if err != nil {
+				return err
 			}
-
-			rowsCount := uint64(event.Len())
-			rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
-
-			for {
-				row, ok := event.GetNextRow()
-				if !ok {
-					event.Rewind()
-					break
-				}
-
-				index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(&row, partitionNum, event.TableInfo, event.CommitTs)
-				if err != nil {
-					return errors.Trace(err)
-				}
-
-				mqEvent := &commonEvent.MQRowEvent{
-					Key: commonEvent.TopicPartitionKey{
-						Topic:          topic,
-						Partition:      index,
-						PartitionKey:   key,
-						TotalPartition: partitionNum,
-					},
-					RowEvent: commonEvent.RowEvent{
-						PhysicalTableID: event.PhysicalTableID,
-						TableInfo:       event.TableInfo,
-						StartTs:         event.StartTs,
-						CommitTs:        event.CommitTs,
-						Event:           row,
-						Callback:        rowCallback,
-						ColumnSelector:  selector,
-						Checksum:        row.Checksum,
-					},
-				}
-				s.rowChan.Push(mqEvent)
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			default:
 			}
+			s.rowChan.Push(events...)
 		}
 	}
 }
@@ -273,13 +354,10 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		default:
 			event, ok := s.rowChan.Get()
 			if !ok {
-				log.Info("kafka sink event channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			if err := s.comp.encoderGroup.AddEvents(ctx, event.Key, &event.RowEvent); err != nil {
@@ -302,10 +380,6 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 		start := time.Now()
 		msgs, err := s.batch(ctx, msgsBuf)
 		if err != nil {
-			log.Error("kafka sink batch dml events failed",
-				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.String("changefeed", s.changefeedID.Name()),
-				zap.Error(err))
 			return err
 		}
 		if len(msgs) == 0 {
@@ -335,11 +409,9 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent) ([]*
 	default:
 		msgs, ok := s.rowChan.GetMultipleNoGroup(buffer)
 		if !ok {
-			log.Info("kafka sink event channel closed",
-				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.String("changefeed", s.changefeedID.Name()))
 			return nil, nil
 		}
+		buffer = buffer[:0]
 		return msgs, nil
 	}
 }
@@ -360,41 +432,31 @@ func (s *sink) sendMessages(ctx context.Context) error {
 	metricSendMessageDuration := metrics.WorkerSendMessageDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 	defer metrics.WorkerSendMessageDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
 	var err error
 	outCh := s.comp.encoderGroup.Output()
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
-		case <-ticker.C:
-			s.dmlProducer.Heartbeat()
+			return context.Cause(ctx)
 		case future, ok := <-outCh:
 			if !ok {
-				log.Info("kafka sink encoder's output channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			if err = future.Ready(ctx); err != nil {
 				return err
 			}
 			for _, message := range future.Messages {
+				if err = writelease.WaitForWrite(ctx, s.writeGate); err != nil {
+					return err
+				}
 				start := time.Now()
 				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
-					log.Debug("send message to kafka", zap.String("messageKey", string(message.Key)), zap.String("messageValue", string(message.Value)))
 					if err = s.dmlProducer.AsyncSend(
 						ctx,
 						future.Key.Topic,
 						future.Key.Partition,
 						message); err != nil {
-						log.Error("kafka sink send message failed",
-							zap.String("keyspace", s.changefeedID.Keyspace()),
-							zap.String("changefeed", s.changefeedID.Name()),
-							zap.Error(err))
 						return 0, 0, err
 					}
 					return message.GetRowsCount(), int64(message.Length()), nil
@@ -414,19 +476,26 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 			return err
 		}
 		if message == nil {
-			log.Info("Skip ddl event", zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", e.GetCommitTs()),
-				zap.String("query", e.Query),
-				zap.Stringer("changefeed", s.changefeedID))
+			log.Info("kafka ddl event skipped",
+				zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
+				zap.Uint64("startTs", e.GetStartTs()), zap.Uint64("commitTs", e.GetCommitTs()),
+				zap.String("query", e.Query))
 			continue
 		}
-		common.SetDDLMessageLogInfo(message, e)
+		codecCommon.SetDDLMessageLogInfo(message, e)
 		topic := s.comp.eventRouter.GetTopicForDDL(e)
+		if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
+			return err
+		}
 		// Notice: We must call GetPartitionNum here,
 		// which will be responsible for automatically creating topics when they don't exist.
 		// If it is not called here and kafka has `auto.create.topics.enable` turned on,
 		// then the auto-created topic will not be created as configured by ticdc.
 		partitionNum, err := s.comp.topicManager.GetPartitionNum(s.ctx, topic)
 		if err != nil {
+			return err
+		}
+		if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
 			return err
 		}
 		ddlType := e.GetDDLType().String()
@@ -442,11 +511,11 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
+		log.Info("kafka ddl event sent",
+			zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
+			zap.Uint64("startTs", e.GetStartTs()), zap.Uint64("commitTs", e.GetCommitTs()),
+			zap.String("query", e.GetDDLQuery()))
 	}
-	log.Info("kafka sink send DDL event",
-		zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
-		zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()),
-		zap.String("schema", event.GetSchemaName()), zap.String("table", event.GetTableName()))
 	return nil
 }
 
@@ -468,25 +537,17 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 	}()
 
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
 	var (
-		msg          *common.Message
+		msg          *codecCommon.Message
 		partitionNum int32
 		err          error
 	)
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
-		case <-ticker.C:
-			s.ddlProducer.Heartbeat()
+			return context.Cause(ctx)
 		case ts, ok := <-s.checkpointChan:
 			if !ok {
-				log.Warn("kafka sink checkpoint channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 
@@ -498,7 +559,10 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			if msg == nil {
 				continue
 			}
-			common.SetCheckpointMessageLogInfo(msg, ts)
+			codecCommon.SetCheckpointMessageLogInfo(msg, ts)
+			if !writelease.CanWrite(s.writeGate) {
+				continue
+			}
 
 			tableNames := s.getAllTableNames(ts)
 			// NOTICE: When there are no tables to replicate,
@@ -510,6 +574,9 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				if err != nil {
 					return err
 				}
+				if !writelease.CanWrite(s.writeGate) {
+					continue
+				}
 				err = s.ddlProducer.SendMessages(topic, partitionNum, msg)
 				if err != nil {
 					return err
@@ -520,6 +587,9 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 					partitionNum, err = s.comp.topicManager.GetPartitionNum(ctx, topic)
 					if err != nil {
 						return err
+					}
+					if !writelease.CanWrite(s.writeGate) {
+						break
 					}
 					err = s.ddlProducer.SendMessages(topic, partitionNum, msg)
 					if err != nil {
@@ -539,18 +609,23 @@ func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 
 func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 	if s.tableSchemaStore == nil {
-		log.Warn("kafka sink table schema store is not set",
-			zap.String("keyspace", s.changefeedID.Keyspace()),
-			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Uint64("ts", ts))
 		return nil
 	}
-	return s.tableSchemaStore.GetAllTableNames(ts)
+	return s.tableSchemaStore.GetAllTableNames(ts, true)
 }
 
-func (s *sink) Close(_ bool) {
+func (s *sink) Close() {
+	s.close()
 	s.ddlProducer.Close()
 	s.dmlProducer.Close()
 	s.comp.close()
 	s.statistics.Close()
+}
+
+func (s *sink) BatchCount() int {
+	return 4096
+}
+
+func (s *sink) BatchBytes() int {
+	return 0
 }

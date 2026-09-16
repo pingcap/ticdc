@@ -41,10 +41,11 @@ import (
 //   - OnNodeRemove(originNode): abort merge, mark old replicas absent, and remove the merged replica.
 //   - OnTaskRemoved(): abort merge due to DDL and clean up without clearing node binding of old replicas.
 type MergeDispatcherOperator struct {
-	spanController *span.Controller
-	originNode     node.ID
-	id             common.DispatcherID
-	dispatcherIDs  []*heartbeatpb.DispatcherID
+	spanController  *span.Controller
+	originNode      node.ID
+	id              common.DispatcherID
+	dispatcherIDs   []*heartbeatpb.DispatcherID
+	maintainerEpoch uint64
 
 	// aborted indicates the merge should not be applied successfully. It can be set by OnNodeRemove
 	// or OnTaskRemoved. When aborted is true, PostFinish follows the abort path.
@@ -62,11 +63,12 @@ type MergeDispatcherOperator struct {
 	sendThrottler sendThrottler
 }
 
-func buildMergedSpanInfo(toMergedSpans []*heartbeatpb.TableSpan) string {
+func buildMergedSpanInfo(toMergedReplicaSets []*replica.SpanReplication) string {
 	var spansInfo strings.Builder
-	for _, span := range toMergedSpans {
-		spansInfo.WriteString(fmt.Sprintf("[%s,%s,%d]",
-			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey), span.TableID))
+	for _, replicaSet := range toMergedReplicaSets {
+		span := replicaSet.Span
+		fmt.Fprintf(&spansInfo, "[%s,%s,%d]",
+			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey), span.TableID)
 	}
 	return spansInfo.String()
 }
@@ -97,57 +99,77 @@ func minCheckpointTs(toMergedReplicaSets []*replica.SpanReplication) uint64 {
 	return checkpointTs
 }
 
+// newMergeDispatcherOperator initializes state shared by newly scheduled and restored merges.
+// Callers remain responsible for creating and registering the merged replica set.
+func newMergeDispatcherOperator(
+	spanController *span.Controller,
+	toMergedReplicaSets []*replica.SpanReplication,
+	mergedReplicaSet *replica.SpanReplication,
+	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+	maintainerEpoch uint64,
+) *MergeDispatcherOperator {
+	return &MergeDispatcherOperator{
+		spanController:      spanController,
+		originNode:          toMergedReplicaSets[0].GetNodeID(),
+		id:                  mergedReplicaSet.ID,
+		dispatcherIDs:       buildDispatcherIDs(toMergedReplicaSets),
+		maintainerEpoch:     maintainerEpoch,
+		toMergedReplicaSets: toMergedReplicaSets,
+		mergedSpanInfo:      buildMergedSpanInfo(toMergedReplicaSets),
+		occupyOperators:     occupyOperators,
+		newReplicaSet:       mergedReplicaSet,
+		sendThrottler:       newSendThrottler(),
+	}
+}
+
+// NewMergeDispatcherOperator creates a merge operator and registers its new target as scheduling.
 func NewMergeDispatcherOperator(
 	spanController *span.Controller,
 	toMergedReplicaSets []*replica.SpanReplication,
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+	maintainerEpoch uint64,
 ) *MergeDispatcherOperator {
-	toMergedSpans := make([]*heartbeatpb.TableSpan, 0, len(toMergedReplicaSets))
-	for _, replicaSet := range toMergedReplicaSets {
-		toMergedSpans = append(toMergedSpans, replicaSet.Span)
-	}
-
-	nodeID := toMergedReplicaSets[0].GetNodeID()
+	firstReplicaSet := toMergedReplicaSets[0]
+	lastReplicaSet := toMergedReplicaSets[len(toMergedReplicaSets)-1]
+	nodeID := firstReplicaSet.GetNodeID()
 
 	newDispatcherID := common.NewDispatcherID()
 
-	dispatcherIDs := buildDispatcherIDs(toMergedReplicaSets)
-	spansInfo := buildMergedSpanInfo(toMergedSpans)
-
 	// bind the new replica set to the node.
 	mergeTableSpan := &heartbeatpb.TableSpan{
-		TableID:    toMergedSpans[0].TableID,
-		StartKey:   toMergedSpans[0].StartKey,
-		EndKey:     toMergedSpans[len(toMergedSpans)-1].EndKey,
+		TableID:    firstReplicaSet.Span.TableID,
+		StartKey:   firstReplicaSet.Span.StartKey,
+		EndKey:     lastReplicaSet.Span.EndKey,
 		KeyspaceID: spanController.GetkeyspaceID(),
 	}
 
 	checkpointTs := minCheckpointTs(toMergedReplicaSets)
 
 	newReplicaSet := replica.NewSpanReplication(
-		toMergedReplicaSets[0].ChangefeedID,
+		firstReplicaSet.ChangefeedID,
 		newDispatcherID,
-		toMergedReplicaSets[0].GetSchemaID(),
+		firstReplicaSet.GetSchemaID(),
 		mergeTableSpan,
 		checkpointTs,
-		toMergedReplicaSets[0].GetMode(),
-		toMergedReplicaSets[0].IsSplitEnabled())
+		firstReplicaSet.GetMode(),
+		firstReplicaSet.IsSplitEnabled())
 
 	spanController.AddSchedulingReplicaSet(newReplicaSet, nodeID)
+	return newMergeDispatcherOperator(
+		spanController, toMergedReplicaSets, newReplicaSet, occupyOperators, maintainerEpoch)
+}
 
-	op := &MergeDispatcherOperator{
-		spanController:      spanController,
-		originNode:          nodeID,
-		id:                  newDispatcherID,
-		dispatcherIDs:       dispatcherIDs,
-		toMergedReplicaSets: toMergedReplicaSets,
-		checkpointTs:        0,
-		mergedSpanInfo:      spansInfo,
-		occupyOperators:     occupyOperators,
-		newReplicaSet:       newReplicaSet,
-		sendThrottler:       newSendThrottler(),
-	}
-	return op
+// NewRestoredMergeDispatcherOperator builds a merge operator whose occupy sub-operators were restored from bootstrap.
+// The restored operator must keep the current maintainer epoch so dispatcher-manager fences accept its requests.
+func NewRestoredMergeDispatcherOperator(
+	spanController *span.Controller,
+	toMergedReplicaSets []*replica.SpanReplication,
+	mergedReplicaSet *replica.SpanReplication,
+	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+	maintainerEpoch uint64,
+) *MergeDispatcherOperator {
+	return newMergeDispatcherOperator(
+		spanController, toMergedReplicaSets, mergedReplicaSet, occupyOperators, maintainerEpoch)
 }
 
 func setOccupyOperatorsFinished(occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {
@@ -211,6 +233,7 @@ func (m *MergeDispatcherOperator) Schedule() *messaging.TargetMessage {
 			DispatcherIDs:      m.dispatcherIDs,
 			MergedDispatcherID: m.id.ToPB(),
 			Mode:               m.newReplicaSet.GetMode(),
+			MaintainerEpoch:    m.maintainerEpoch,
 		})
 }
 
@@ -223,7 +246,11 @@ func (m *MergeDispatcherOperator) OnTaskRemoved() {
 }
 
 func (m *MergeDispatcherOperator) PostFinish() {
-	setOccupyOperatorsFinished(m.occupyOperators)
+	// Keep occupy operators alive until the old replica sets have been fully removed or restored.
+	// Otherwise a late terminal status from an old dispatcher can observe "no operator" while the
+	// old task still exists in spanController, and maintainer fallback may incorrectly reschedule it.
+	defer setOccupyOperatorsFinished(m.occupyOperators)
+
 	if m.aborted.Load() {
 		if !m.abortedByDDL.Load() {
 			// if removed by node offline, we set the toMergedReplicaSet to be absent, to ignore the merge operation

@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
-	"github.com/pingcap/tidb/pkg/meta/metadef"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
@@ -97,9 +96,30 @@ func (p *ddlJobFetcher) run(startTs uint64) error {
 		advanceSubSpanResolvedTs := func(ts uint64) {
 			p.tryAdvanceResolvedTs(subID, ts)
 		}
-		p.subClient.Subscribe(subID, span, startTs, p.input, advanceSubSpanResolvedTs, 0, ddlPullerFilterLoop)
+		p.subClient.Subscribe(
+			subID,
+			span,
+			startTs,
+			p.input,
+			advanceSubSpanResolvedTs,
+			0,
+			ddlPullerFilterLoop,
+		)
 	}
 	return nil
+}
+
+func (p *ddlJobFetcher) close() {
+	p.resolvedTsTracker.Lock()
+	subscriptionIDs := make([]logpuller.SubscriptionID, 0, len(p.resolvedTsTracker.resolvedTsItemMap))
+	for subID := range p.resolvedTsTracker.resolvedTsItemMap {
+		subscriptionIDs = append(subscriptionIDs, subID)
+	}
+	p.resolvedTsTracker.Unlock()
+
+	for _, subID := range subscriptionIDs {
+		p.subClient.Unsubscribe(subID)
+	}
 }
 
 func (p *ddlJobFetcher) tryAdvanceResolvedTs(subID logpuller.SubscriptionID, newResolvedTs uint64) {
@@ -206,20 +226,6 @@ func (p *ddlJobFetcher) initDDLTableInfo(ctx context.Context, kvStorage kv.Stora
 	p.ddlTableInfo.DDLJobTable = common.WrapTableInfo(db.Name.L, tableInfo)
 	p.ddlTableInfo.JobMetaColumnIDinJobTable = col.ID
 
-	// for tidb_ddl_history
-	historyTableInfo, err := findTableByName(tbls, "tidb_ddl_history")
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	historyTableCol, err := findColumnByName(historyTableInfo.Columns, "job_meta")
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	p.ddlTableInfo.DDLHistoryTable = common.WrapTableInfo(db.Name.L, historyTableInfo)
-	p.ddlTableInfo.JobMetaColumnIDinHistoryTable = historyTableCol.ID
-
 	return nil
 }
 
@@ -257,39 +263,20 @@ func findColumnByName(cols []*model.ColumnInfo, name string) (*model.ColumnInfo,
 		errors.Errorf("can't find column %s", name))
 }
 
-const (
-	// JobTableID is the id of `tidb_ddl_job`.
-	JobTableID = metadef.TiDBDDLJobTableID
-	// JobHistoryID is the id of `tidb_ddl_history`
-	JobHistoryID = metadef.TiDBDDLHistoryTableID
-)
-
 func getAllDDLSpan(keyspaceID uint32) ([]heartbeatpb.TableSpan, error) {
-	spans := make([]heartbeatpb.TableSpan, 0, 2)
-
-	start, end, err := common.GetKeyspaceTableRange(keyspaceID, JobTableID)
+	// TiDB v8.3+ emits create-table jobs through tidb_ddl_job again, so the
+	// schema store only needs to subscribe to the job table.
+	start, end, err := common.GetKeyspaceTableRange(keyspaceID, common.JobTableID)
 	if err != nil {
 		return nil, err
 	}
 
-	spans = append(spans, heartbeatpb.TableSpan{
-		TableID:    JobTableID,
+	return []heartbeatpb.TableSpan{{
+		TableID:    common.JobTableID,
 		StartKey:   common.ToComparableKey(start),
 		EndKey:     common.ToComparableKey(end),
 		KeyspaceID: keyspaceID,
-	})
-
-	start, end, err = common.GetKeyspaceTableRange(keyspaceID, JobHistoryID)
-	if err != nil {
-		return nil, err
-	}
-	spans = append(spans, heartbeatpb.TableSpan{
-		TableID:    JobHistoryID,
-		StartKey:   common.ToComparableKey(start),
-		EndKey:     common.ToComparableKey(end),
-		KeyspaceID: keyspaceID,
-	})
-	return spans, nil
+	}}, nil
 }
 
 type resolvedTsItem struct {

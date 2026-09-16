@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/api"
+	"github.com/pingcap/ticdc/pkg/check"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -41,14 +42,32 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
-	tidbkv "github.com/pingcap/tidb/pkg/kv"
+	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
+
+// validateChangefeedIDParam extracts and validates the changefeed ID from the
+// URL path parameter. On failure it writes the error to c and returns false.
+func validateChangefeedIDParam(c *gin.Context) (common.ChangeFeedDisplayName, bool) {
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
+	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s, %s",
+			changefeedDisplayName.Name, err.Error()))
+		return common.ChangeFeedDisplayName{}, false
+	}
+	return changefeedDisplayName, true
+}
+
+func genSinkURIInvalidError(sinkURI string, err error) error {
+	return errors.WrapError(
+		errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err), util.MaskSensitiveDataInURIForError(sinkURI))
+}
 
 // CreateChangefeed handles create changefeed request,
 // it returns the changefeed's changefeedInfo that it just created
@@ -67,19 +86,15 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
 	cfg := &ChangefeedConfig{ReplicaConfig: GetDefaultReplicaConfig()}
 
-	if err := c.BindJSON(&cfg); err != nil {
+	var err error
+	if err = c.BindJSON(&cfg); err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 		return
 	}
 
-	// verify sinkURI
-	if cfg.SinkURI == "" {
-		_ = c.Error(errors.ErrSinkURIInvalid.GenWithStackByArgs(
-			"sink_uri is empty, cannot create a changefeed without sink_uri"))
-		return
-	}
-
 	keyspaceName := GetKeyspaceValueWithDefault(c)
+	// We use the keyspace in the query parameter
+	cfg.Keyspace = keyspaceName
 
 	var changefeedID common.ChangeFeedID
 	if cfg.ID == "" {
@@ -88,24 +103,19 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		changefeedID = common.NewChangeFeedIDWithName(cfg.ID, keyspaceName)
 	}
 	// verify changefeedID
-	if err := common.ValidateChangefeedID(changefeedID.Name()); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
-			"invalid changefeed_id: %s", cfg.ID))
+	if err = common.ValidateChangefeedID(changefeedID.Name()); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s, %s", changefeedID.Name(), err.Error()))
 		return
 	}
-
-	// We use the keyspace in the query parameter
-	cfg.Keyspace = keyspaceName
 
 	// verify changefeed keyspace
-	if err := common.ValidateKeyspace(changefeedID.Keyspace()); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
-			"invalid keyspace: %s", cfg.ID))
+	if err = common.ValidateKeyspace(changefeedID.Keyspace()); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid keyspace: %s", cfg.ID))
 		return
 	}
+	middleware.SetChangefeedOperationTarget(c, changefeedID.Keyspace(), changefeedID.Name())
 
 	keyspaceMeta := middleware.GetKeyspaceFromContext(c)
-
 	if keyspaceMeta.State != keyspacepb.KeyspaceState_ENABLED {
 		c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
 		c.Abort()
@@ -135,6 +145,27 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
+	if cfg.SinkURI == "" {
+		_ = c.Error(errors.ErrSinkURIInvalid.GenWithStackByArgs(
+			"sink_uri is empty, cannot create a changefeed without sink_uri"))
+		return
+	}
+	sinkURIParsed, err := url.Parse(cfg.SinkURI)
+	if err != nil {
+		_ = c.Error(genSinkURIInvalidError(cfg.SinkURI, err))
+		return
+	}
+
+	scheme := sinkURIParsed.Scheme
+	var topic string
+	if config.IsMQScheme(scheme) {
+		topic, err = helper.GetTopic(sinkURIParsed)
+		if err != nil {
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, util.MaskSensitiveDataInURIForError(cfg.SinkURI)))
+			return
+		}
+	}
+
 	ts, logical, err := h.server.GetPdClient().GetTS(ctx)
 	if err != nil {
 		_ = c.Error(errors.ErrPDEtcdAPIError.GenWithStackByArgs("fail to get ts from pd client"))
@@ -149,6 +180,36 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 			"invalid start-ts %v, larger than current tso %v", cfg.StartTs, currentTSO))
 		return
 	}
+
+	// verify target ts
+	if cfg.TargetTs > 0 && cfg.TargetTs <= cfg.StartTs {
+		_ = c.Error(errors.ErrTargetTsBeforeStartTs.GenWithStackByArgs(cfg.TargetTs, cfg.StartTs))
+		return
+	}
+	middleware.SetChangefeedOperationDetails(c, fmt.Sprintf(
+		"start_ts=%d target_ts=%d sink_scheme=%s", cfg.StartTs, cfg.TargetTs, scheme))
+
+	// fill replicaConfig
+	replicaCfg := cfg.ReplicaConfig.ToInternalReplicaConfig()
+	err = replicaCfg.ValidateAndAdjust(sinkURIParsed)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrInvalidReplicaConfig, err))
+		return
+	}
+
+	// do not shadow err after this point
+	pdClient := h.server.GetPdClient()
+	tmpInfo := &config.ChangeFeedInfo{
+		ChangefeedID: changefeedID,
+		SinkURI:      cfg.SinkURI,
+		Config:       replicaCfg,
+	}
+	err = check.ValidateActiveActiveTSOIndexes(ctx, pdClient, tmpInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	// Ensure the start ts is valid in the next 3600 seconds, aka 1 hour
 	const ensureTTL = 60 * 60
 	createGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceCreating)
@@ -156,7 +217,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		ctx,
 		h.server.GetPdClient(),
 		createGcServiceID,
-		keyspaceMeta.Id,
+		keyspaceMeta.GetId(),
 		changefeedID,
 		ensureTTL, cfg.StartTs); err != nil {
 		if !errors.ErrStartTsBeforeGC.Equal(err) {
@@ -167,41 +228,30 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	// verify target ts
-	if cfg.TargetTs > 0 && cfg.TargetTs <= cfg.StartTs {
-		_ = c.Error(errors.ErrTargetTsBeforeStartTs.GenWithStackByArgs(
-			cfg.TargetTs, cfg.StartTs))
-		return
-	}
-
-	// fill replicaConfig
-	replicaCfg := cfg.ReplicaConfig.ToInternalReplicaConfig()
-
-	// verify replicaConfig
-	sinkURIParsed, err := url.Parse(cfg.SinkURI)
-	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
-		return
-	}
-	err = replicaCfg.ValidateAndAdjust(sinkURIParsed)
-	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrInvalidReplicaConfig, err))
-		return
-	}
-
-	scheme := sinkURIParsed.Scheme
-	topic := ""
-	if config.IsMQScheme(scheme) {
-		topic, err = helper.GetTopic(sinkURIParsed)
-		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+	defer func() {
+		if err == nil {
 			return
 		}
-	}
-	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		undoErr := gc.UndoEnsureChangefeedStartTsSafety(
+			ctx,
+			pdClient,
+			keyspaceMeta.GetId(),
+			createGcServiceID,
+			changefeedID,
+		)
+		if undoErr != nil {
+			log.Warn("undo ensure changefeed start ts safety failed when creating the changefeed",
+				zap.String("changefeedID", changefeedID.Name()), zap.Uint64("startTs", cfg.StartTs),
+				zap.String("gcServiceID", createGcServiceID),
+				zap.Error(undoErr))
+		}
+		cancel()
+	}()
 
+	var kvStorage kv.Storage
 	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-	kvStorage, err := keyspaceManager.GetStorage(ctx, keyspaceName)
+	kvStorage, err = keyspaceManager.GetStorage(ctx, keyspaceName)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -213,27 +263,33 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	// Therefore, we cannot use the context of the HTTP request.
 	// We create a new context here.
 	schemaCxt := context.Background()
-	if err := schemaStore.RegisterKeyspace(schemaCxt, common.KeyspaceMeta{
-		ID:   keyspaceMeta.Id,
+	if err = schemaStore.RegisterKeyspace(schemaCxt, common.KeyspaceMeta{
+		ID:   keyspaceMeta.GetId(),
 		Name: keyspaceMeta.Name,
 	}); err != nil {
 		_ = c.Error(err)
 		return
 	}
 
-	ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	var (
+		ineligibleTables []common.TableName
+		eligibleTables   []common.TableName
+		allTables        []common.TableName
+	)
+	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
+	ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, changefeedID, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
 	if !util.GetOrZero(replicaCfg.ForceReplicate) && !util.GetOrZero(cfg.ReplicaConfig.IgnoreIneligibleTable) {
 		if len(ineligibleTables) != 0 {
-			_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
+			err = errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables)
+			_ = c.Error(err)
 			return
 		}
 	}
 
-	pdClient := h.server.GetPdClient()
 	info := &config.ChangeFeedInfo{
 		UpstreamID:     pdClient.GetClusterID(ctx),
 		ChangefeedID:   changefeedID,
@@ -244,45 +300,37 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		Config:         replicaCfg,
 		State:          config.StateNormal,
 		CreatorVersion: version.ReleaseVersion,
-		KeyspaceID:     keyspaceMeta.Id,
+		KeyspaceID:     keyspaceMeta.GetId(),
 	}
 
 	// verify sinkURI
 	cfConfig := info.ToChangefeedConfig()
+	// Reject a changefeed if the downstream is the same TiDB logical cluster as the upstream.
+	isSame, err := check.IsSameUpstreamDownstream(ctx, pdClient, cfConfig)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if isSame {
+		_ = c.Error(errors.ErrSameUpstreamDownstream.GenWithStack(
+			"TiCDC does not support creating a changefeed with the same TiDB cluster " +
+				"as both the source and the target for the changefeed."))
+		return
+	}
 	err = sink.Verify(ctx, cfConfig, changefeedID)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, util.MaskSensitiveDataInURIForError(cfg.SinkURI)))
 		return
 	}
 
-	needRemoveGCSafePoint := false
-	defer func() {
-		if !needRemoveGCSafePoint {
-			return
-		}
-
-		err = gc.UndoEnsureChangefeedStartTsSafety(
-			ctx,
-			pdClient,
-			keyspaceMeta.Id,
-			createGcServiceID,
-			changefeedID,
-		)
-		if err != nil {
-			_ = c.Error(err)
-			return
-		}
-	}()
-
 	err = co.CreateChangefeed(ctx, info)
 	if err != nil {
-		needRemoveGCSafePoint = true
 		_ = c.Error(err)
 		return
 	}
 
-	log.Info("Create changefeed successfully!",
-		zap.String("id", info.ChangefeedID.Name()),
+	log.Info("create changefeed successfully",
+		zap.String("changefeedID", info.ChangefeedID.Name()),
 		zap.String("state", string(info.State)),
 		zap.String("changefeedInfo", info.String()),
 		zap.Int("eligibleTablesLength", len(eligibleTables)),
@@ -411,7 +459,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 	// verify replicaConfig
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+		_ = c.Error(genSinkURIInvalidError(cfg.SinkURI, err))
 		return
 	}
 	err = replicaCfg.ValidateAndAdjust(sinkURIParsed)
@@ -425,7 +473,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 	if config.IsMQScheme(scheme) {
 		topic, err = helper.GetTopic(sinkURIParsed)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, util.MaskSensitiveDataInURIForError(cfg.SinkURI)))
 			return
 		}
 	}
@@ -438,7 +486,8 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	changefeedID := common.NewChangeFeedIDWithName(cfg.ID, keyspaceName)
+	ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, changefeedID, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -489,7 +538,7 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 
 	taskStatus := make([]config.CaptureTaskStatus, 0)
 	detail := CfInfoToAPIModel(cfInfo, status, taskStatus)
-	c.JSON(http.StatusOK, detail)
+	respondWithFormat(c, http.StatusOK, detail)
 }
 
 func shouldShowRunningError(state config.FeedState) bool {
@@ -531,21 +580,22 @@ func CfInfoToAPIModel(
 		}
 	}
 
-	sinkURI, err := util.MaskSinkURI(info.SinkURI)
-	if err != nil {
-		log.Error("failed to mask sink URI", zap.Error(err))
+	var replicaConfig *ReplicaConfig
+	if info.Config != nil {
+		replicaConfig = ToAPIReplicaConfig(info.Config)
+		replicaConfig.maskSensitiveData()
 	}
 
 	apiInfoModel := &ChangeFeedInfo{
 		UpstreamID:     info.UpstreamID,
 		ID:             info.ChangefeedID.Name(),
 		Keyspace:       info.ChangefeedID.Keyspace(),
-		SinkURI:        sinkURI,
+		SinkURI:        util.MaskSensitiveDataInURI(info.SinkURI),
 		CreateTime:     info.CreateTime,
 		StartTs:        info.StartTs,
 		TargetTs:       info.TargetTs,
 		AdminJobType:   info.AdminJobType,
-		Config:         ToAPIReplicaConfig(info.Config),
+		Config:         replicaConfig,
 		State:          info.State,
 		Error:          runningError,
 		CreatorVersion: info.CreatorVersion,
@@ -572,10 +622,8 @@ func CfInfoToAPIModel(
 // @Router	/api/v2/changefeeds/{changefeed_id} [delete]
 func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 	co, err := h.server.GetCoordinator()
@@ -584,27 +632,69 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isInitialized(co)
+	ok, err = isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
 	}
 
-	cfInfo, _, err := co.GetChangefeed(c, changefeedDisplayName)
+	cfInfo, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		if errors.ErrChangeFeedNotExists.Equal(err) {
+			setKeyspaceInContextForAuthentication(c)
+			if !middleware.AuthenticateRequest(c, h.server) {
+				return
+			}
 			c.JSON(getStatus(c), nil)
 			return
 		}
 		_ = c.Error(err)
 		return
 	}
+	middleware.SetChangefeedOperationTarget(c, cfInfo.ChangefeedID.Keyspace(), cfInfo.ChangefeedID.Name())
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: cfInfo.KeyspaceID},
+		Name:     cfInfo.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
+		return
+	}
+	var previousCheckpointTs uint64
+	if status != nil {
+		previousCheckpointTs = status.CheckpointTs
+	}
+	middleware.SetChangefeedOperationDetails(c, fmt.Sprintf(
+		"previous_state=%s previous_checkpoint_ts=%d", cfInfo.State, previousCheckpointTs))
 	_, err = co.RemoveChangefeed(ctx, cfInfo.ChangefeedID)
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
 	c.JSON(getStatus(c), &EmptyResponse{})
+}
+
+// setKeyspaceInContextForAuthentication restores the keyspace context that the
+// keyspace checker used to provide before authentication was moved into the
+// delete handler. It is needed when an idempotent delete cannot obtain the
+// keyspace ID from a persisted changefeed.
+func setKeyspaceInContextForAuthentication(c *gin.Context) {
+	security := config.GetGlobalServerConfig().Security
+	if !kerneltype.IsNextGen() || security == nil || !security.ClientUserRequired {
+		return
+	}
+	if _, _, ok := c.Request.BasicAuth(); !ok {
+		return
+	}
+
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
+	loadKeyspaceInContext(c, keyspaceManager)
+}
+
+func loadKeyspaceInContext(c *gin.Context, keyspaceManager keyspace.Manager) {
+	keyspaceMeta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), GetKeyspaceValueWithDefault(c))
+	if err == nil {
+		middleware.SetKeyspaceInContext(c, keyspaceMeta)
+	}
 }
 
 // PauseChangefeed handles pause changefeed request
@@ -621,10 +711,8 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 // @Router /api/v2/changefeeds/{changefeed_id}/pause [post]
 func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -634,7 +722,7 @@ func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isInitialized(co)
+	ok, err = isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -645,6 +733,16 @@ func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	middleware.SetChangefeedOperationTarget(c, cfInfo.ChangefeedID.Keyspace(), cfInfo.ChangefeedID.Name())
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: cfInfo.KeyspaceID},
+		Name:     cfInfo.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
+		return
+	}
+	middleware.SetChangefeedOperationDetails(c, fmt.Sprintf(
+		"previous_state=%s", cfInfo.State))
 	err = co.PauseChangefeed(ctx, cfInfo.ChangefeedID)
 	if err != nil {
 		_ = c.Error(err)
@@ -668,11 +766,10 @@ func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 // @Router	/api/v2/changefeeds/{changefeed_id}/resume [post]
 func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
-	keyspaceName := GetKeyspaceValueWithDefault(c)
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), keyspaceName)
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+
+	var err error
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -687,7 +784,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	if len(body) == 0 {
 		log.Info("resume changefeed config is empty, using defaults")
 	} else {
-		if err := json.Unmarshal(body, cfg); err != nil {
+		if err = json.Unmarshal(body, cfg); err != nil {
 			log.Error("failed to bind resume changefeed config", zap.Error(err), zap.String("body", string(body)))
 			_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 			return
@@ -700,13 +797,22 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isInitialized(co)
+	ok, err = isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
 	}
 
 	cfInfo, status, err := co.GetChangefeed(c, changefeedDisplayName)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	middleware.SetChangefeedOperationTarget(c, cfInfo.ChangefeedID.Keyspace(), cfInfo.ChangefeedID.Name())
+
+	// Resume validation must use persisted metadata because stopped changefeeds
+	// can be edited outside the coordinator process during legacy migration.
+	cfInfo, err = co.GetPersistedChangefeedInfo(ctx, cfInfo.ChangefeedID)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -719,6 +825,8 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		newCheckpointTs = cfg.OverwriteCheckpointTs
 		overwriteCheckpointTs = true
 	}
+	middleware.SetChangefeedOperationDetails(c, fmt.Sprintf(
+		"overwrite_checkpoint_ts=%t new_checkpoint_ts=%d", overwriteCheckpointTs, newCheckpointTs))
 
 	keyspaceMeta := middleware.GetKeyspaceFromContext(c)
 
@@ -727,36 +835,61 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		c.Abort()
 		return
 	}
+	if err = validateResumeChangefeedState(cfInfo.State); err != nil {
+		_ = c.Error(err)
+		return
+	}
 
+	// Reject a changefeed if the downstream is the same TiDB logical cluster as the upstream.
+	isSame, err := check.IsSameUpstreamDownstream(ctx, h.server.GetPdClient(), cfInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if isSame {
+		_ = c.Error(errors.ErrSameUpstreamDownstream.GenWithStack(
+			"TiCDC does not support resuming a changefeed with the same TiDB cluster " +
+				"as both the source and the target for the changefeed."))
+		return
+	}
+
+	err = check.ValidateActiveActiveTSOIndexes(ctx, h.server.GetPdClient(), cfInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	// do not shadow err after this point
 	resumeGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceResuming)
-	if err := verifyResumeChangefeedConfig(
+	if err = verifyResumeChangefeedConfig(
 		ctx,
 		h.server.GetPdClient(),
 		resumeGcServiceID,
-		keyspaceMeta.Id,
+		keyspaceMeta.GetId(),
 		cfInfo.ChangefeedID,
 		newCheckpointTs); err != nil {
 		_ = c.Error(err)
 		return
 	}
-
-	needRemoveGCSafePoint := false
 	defer func() {
-		if !needRemoveGCSafePoint {
+		if err == nil {
 			return
 		}
-
-		err = gc.UndoEnsureChangefeedStartTsSafety(
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		undoErr := gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			h.server.GetPdClient(),
-			keyspaceMeta.Id,
+			keyspaceMeta.GetId(),
 			resumeGcServiceID,
 			cfInfo.ChangefeedID,
 		)
-		if err != nil {
-			_ = c.Error(err)
-			return
+		if undoErr != nil {
+			log.Warn("undo ensure changefeed start ts safety failed when resuming the changefeed",
+				zap.String("changefeedID", cfInfo.ChangefeedID.Name()), zap.Uint64("startTs", newCheckpointTs),
+				zap.String("gcServiceID", resumeGcServiceID),
+				zap.Error(undoErr))
 		}
+		cancel()
 	}()
 
 	var (
@@ -765,29 +898,33 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		allTables        []common.TableName
 	)
 	if overwriteCheckpointTs {
-		sinkURIParsed, err := url.Parse(cfInfo.SinkURI)
+		var (
+			sinkURIParsed *url.URL
+			topic         string
+		)
+		sinkURIParsed, err = url.Parse(cfInfo.SinkURI)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfInfo.SinkURI))
+			_ = c.Error(genSinkURIInvalidError(cfInfo.SinkURI, err))
 			return
 		}
 		scheme := sinkURIParsed.Scheme
-		topic := ""
 		if config.IsMQScheme(scheme) {
 			topic, err = helper.GetTopic(sinkURIParsed)
 			if err != nil {
-				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfInfo.SinkURI))
+				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, util.MaskSensitiveDataInURIForError(cfInfo.SinkURI)))
 				return
 			}
 		}
 		protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(cfInfo.Config.Sink.Protocol))
 
+		var kvStorage kv.Storage
 		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-		kvStorage, err := keyspaceManager.GetStorage(ctx, keyspaceName)
+		kvStorage, err = keyspaceManager.GetStorage(ctx, changefeedDisplayName.Keyspace)
 		if err != nil {
 			_ = c.Error(err)
 			return
 		}
-		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, cfInfo.Config, kvStorage, newCheckpointTs, scheme, topic, protocol)
+		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, cfInfo.ChangefeedID, cfInfo.Config, kvStorage, newCheckpointTs, scheme, topic, protocol)
 		if err != nil {
 			_ = c.Error(err)
 			return
@@ -796,13 +933,12 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 
 	err = co.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs, overwriteCheckpointTs)
 	if err != nil {
-		needRemoveGCSafePoint = true
 		_ = c.Error(err)
 		return
 	}
 	c.Errors = nil
-	log.Info("Resume changefeed successfully!",
-		zap.String("id", cfInfo.ChangefeedID.Name()),
+	log.Info("resume changefeed successfully",
+		zap.String("changefeedID", cfInfo.ChangefeedID.Name()),
 		zap.String("state", string(cfInfo.State)),
 		zap.String("changefeedInfo", cfInfo.String()),
 		zap.Bool("overwriteCheckpointTs", overwriteCheckpointTs),
@@ -843,19 +979,18 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), keyspaceName)
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
+	middleware.SetChangefeedOperationTarget(c, changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
 	co, err := h.server.GetCoordinator()
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
 
-	ok, err := isInitialized(co)
+	ok, err = isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -884,7 +1019,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	var configUpdated, sinkURIUpdated bool
+	var configUpdated, sinkURIUpdated, targetTsUpdated bool
 	if updateCfConfig.TargetTs != 0 {
 		if updateCfConfig.TargetTs <= oldCfInfo.StartTs {
 			_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStack(
@@ -893,6 +1028,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 			return
 		}
 		oldCfInfo.TargetTs = updateCfConfig.TargetTs
+		targetTsUpdated = true
 	}
 	if updateCfConfig.ReplicaConfig != nil {
 		configUpdated = true
@@ -906,6 +1042,9 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("start_ts can not be updated"))
 		return
 	}
+	middleware.SetChangefeedOperationDetails(c, fmt.Sprintf(
+		"target_ts_changed=%t sink_uri_changed=%t replica_config_changed=%t",
+		targetTsUpdated, sinkURIUpdated, configUpdated))
 
 	var (
 		ineligibleTables []common.TableName
@@ -916,7 +1055,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		// verify replicaConfig
 		sinkURIParsed, err := url.Parse(oldCfInfo.SinkURI)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
+			_ = c.Error(genSinkURIInvalidError(oldCfInfo.SinkURI, err))
 			return
 		}
 		err = oldCfInfo.Config.ValidateAndAdjust(sinkURIParsed)
@@ -930,7 +1069,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		if config.IsMQScheme(scheme) {
 			topic, err = helper.GetTopic(sinkURIParsed)
 			if err != nil {
-				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
+				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, util.MaskSensitiveDataInURIForError(oldCfInfo.SinkURI)))
 				return
 			}
 		}
@@ -945,7 +1084,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		}
 
 		// use checkpointTs get snapshot from kv storage
-		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
+		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, oldCfInfo.ChangefeedID, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
 		if err != nil {
 			_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
 			return
@@ -959,9 +1098,28 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	}
 
 	// verify sink
+	// Reject a changefeed if the downstream is the same TiDB logical cluster as the upstream.
+	isSame, err := check.IsSameUpstreamDownstream(ctx, h.server.GetPdClient(), oldCfInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if isSame {
+		_ = c.Error(errors.ErrSameUpstreamDownstream.GenWithStack(
+			"TiCDC does not support updating a changefeed with the same TiDB cluster " +
+				"as both the source and the target for the changefeed."))
+		return
+	}
+
+	err = check.ValidateActiveActiveTSOIndexes(ctx, h.server.GetPdClient(), oldCfInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	err = sink.Verify(ctx, oldCfInfo.ToChangefeedConfig(), oldCfInfo.ChangefeedID)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, util.MaskSensitiveDataInURIForError(oldCfInfo.SinkURI)))
 		return
 	}
 
@@ -970,7 +1128,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	log.Info("Update changefeed successfully!",
+	log.Info("Update changefeed successfully",
 		zap.String("id", oldCfInfo.ChangefeedID.Name()),
 		zap.String("state", string(oldCfInfo.State)),
 		zap.String("changefeedInfo", oldCfInfo.String()),
@@ -982,6 +1140,15 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	)
 
 	c.JSON(getStatus(c), CfInfoToAPIModel(oldCfInfo, status, nil))
+}
+
+func validateResumeChangefeedState(state config.FeedState) error {
+	if state.IsResumable() {
+		return nil
+	}
+	return errors.ErrChangefeedUpdateRefused.GenWithStackByArgs(
+		fmt.Sprintf("can only resume changefeed when it is stopped, failed, or finished, but current state is %s", state),
+	)
 }
 
 // verifyResumeChangefeedConfig verifies the changefeed config before resuming a changefeed
@@ -1047,10 +1214,8 @@ func (h *OpenAPIV2) MoveTable(c *gin.Context) {
 		return
 	}
 
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -1095,7 +1260,16 @@ func (h *OpenAPIV2) MoveTable(c *gin.Context) {
 
 	targetNodeID := c.Query("targetNodeID")
 	mode, _ := strconv.ParseInt(c.Query("mode"), 10, 64)
-	err = maintainer.MoveTable(int64(tableId), node.ID(targetNodeID), mode)
+	wait := true
+	if waitStr := c.Query("wait"); waitStr != "" {
+		wait, err = strconv.ParseBool(waitStr)
+		if err != nil {
+			log.Error("failed to parse wait", zap.Error(err), zap.String("wait", waitStr))
+			_ = c.Error(err)
+			return
+		}
+	}
+	err = maintainer.MoveTable(int64(tableId), node.ID(targetNodeID), mode, wait)
 	if err != nil {
 		log.Error("failed to move table", zap.Error(err), zap.Int64("tableID", tableId), zap.String("targetNodeID", targetNodeID))
 		_ = c.Error(err)
@@ -1122,10 +1296,8 @@ func (h *OpenAPIV2) MoveSplitTable(c *gin.Context) {
 		return
 	}
 
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -1196,10 +1368,8 @@ func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
 		return
 	}
 
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -1272,10 +1442,8 @@ func (h *OpenAPIV2) MergeTable(c *gin.Context) {
 		return
 	}
 
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -1333,10 +1501,8 @@ func (h *OpenAPIV2) MergeTable(c *gin.Context) {
 // curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/tables
 // Note: This api is for inner test use, not public use. It may be changed or removed in the future.
 func (h *OpenAPIV2) ListTables(c *gin.Context) {
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -1404,10 +1570,8 @@ func (h *OpenAPIV2) ListTables(c *gin.Context) {
 // getDispatcherCount returns the count of dispatcher.
 // getDispatcherCount is just for inner test use, not public use.
 func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -1474,6 +1638,13 @@ func (h *OpenAPIV2) status(c *gin.Context) {
 	info, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		_ = c.Error(err)
+		return
+	}
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: info.KeyspaceID},
+		Name:     info.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
 		return
 	}
 	var (
@@ -1600,46 +1771,30 @@ func (h *OpenAPIV2) synced(c *gin.Context) {
 
 func getVerifiedTables(
 	ctx context.Context,
+	changefeedID common.ChangeFeedID,
 	replicaConfig *config.ReplicaConfig,
-	storage tidbkv.Storage, startTs uint64,
+	storage kv.Storage, startTs uint64,
 	scheme string, topic string, protocol config.Protocol,
 ) ([]common.TableName, []common.TableName, []common.TableName, error) {
 	f, err := filter.NewFilter(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate))
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	tableInfos, ineligibleTables, eligibleTables, allTables, err := schemastore.
-		VerifyTables(f, storage, startTs)
+	tableInfos, ineligibleTables, eligibleTables, allTables, err := schemastore.VerifyTables(f, storage, startTs)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	log.Info("verifyTables completed",
-		zap.Int("tableCount", len(tableInfos)),
-		zap.Uint64("startTs", startTs))
 
 	err = f.Verify(tableInfos)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if !config.IsMQScheme(scheme) {
-		return ineligibleTables, eligibleTables, allTables, nil
-	}
 
-	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	err = eventRouter.VerifyTables(tableInfos)
-	if err != nil {
+	if err := verifyTablesForSink(replicaConfig, scheme, topic, protocol, tableInfos); err != nil {
 		return nil, nil, nil, err
 	}
 
-	selectors, err := columnselector.New(replicaConfig.Sink)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	err = selectors.VerifyTables(tableInfos, eventRouter)
-	if err != nil {
+	if err := verifyRouteConflict(changefeedID, eligibleTables, ineligibleTables, replicaConfig); err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -1648,6 +1803,68 @@ func getVerifiedTables(
 	}
 
 	return ineligibleTables, eligibleTables, allTables, nil
+}
+
+func verifyTablesForSink(
+	replicaConfig *config.ReplicaConfig,
+	scheme string,
+	topic string,
+	protocol config.Protocol,
+	tableInfos []*common.TableInfo,
+) error {
+	if config.IsStorageScheme(scheme) {
+		selectors, err := columnselector.New(replicaConfig.Sink)
+		if err != nil {
+			return err
+		}
+		return selectors.VerifyTables(tableInfos, nil)
+	}
+
+	if !config.IsMQScheme(scheme) {
+		return nil
+	}
+
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), isAvroLike)
+	if err != nil {
+		return err
+	}
+	if err = eventRouter.VerifyTables(tableInfos); err != nil {
+		return err
+	}
+
+	selectors, err := columnselector.New(replicaConfig.Sink)
+	if err != nil {
+		return err
+	}
+	return selectors.VerifyTables(tableInfos, eventRouter)
+}
+
+func verifyRouteConflict(
+	changefeedID common.ChangeFeedID,
+	eligibleTables []common.TableName,
+	ineligibleTables []common.TableName,
+	replicaCfg *config.ReplicaConfig,
+) error {
+	if len(eligibleTables)+len(ineligibleTables) == 0 || replicaCfg == nil ||
+		replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
+		return nil
+	}
+	if util.GetOrZero(replicaCfg.ForceReplicate) {
+		return routing.ValidateNoStaticRouteConflict(
+			changefeedID,
+			util.GetOrZero(replicaCfg.CaseSensitive),
+			replicaCfg.Sink.DispatchRules,
+			eligibleTables,
+			ineligibleTables,
+		)
+	}
+	return routing.ValidateNoStaticRouteConflict(
+		changefeedID,
+		util.GetOrZero(replicaCfg.CaseSensitive),
+		replicaCfg.Sink.DispatchRules,
+		eligibleTables,
+	)
 }
 
 func GetKeyspaceValueWithDefault(c *gin.Context) string {

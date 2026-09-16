@@ -23,14 +23,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/failpoint"
 	pclock "github.com/pingcap/ticdc/pkg/clock"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	putil "github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/chann"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,10 +52,8 @@ func getTableFiles(t *testing.T, tableDir string) []string {
 	return fileNames
 }
 
-func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
-	parentDir := t.TempDir()
-
-	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=%ds", parentDir, 2)
+func verifyAddDMLEventDoesNotCallPostEnqueueBeforePipelineRun(t *testing.T) {
+	uri := fmt.Sprintf("file:///%s?protocol=csv", t.TempDir())
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 
@@ -63,44 +61,168 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 
-	replicaConfig.Sink.DateSeparator = putil.AddressOf(config.DateSeparatorNone.String())
-	replicaConfig.Sink.FileIndexWidth = putil.AddressOf(6)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	go cloudStorageSink.Run(ctx)
+	tableInfo := &common.TableInfo{
+		TableName: common.TableName{
+			Schema:  "test",
+			Table:   "t_enqueue",
+			TableID: 100,
+		},
+	}
+	event := commonEvent.NewDMLEvent(common.NewDispatcherID(), tableInfo.TableName.TableID, 1, 1, tableInfo)
+	event.TableInfoVersion = 1
+	event.Length = 1
+	event.ApproximateSize = 1
 
-	var cnt uint64 = 0
-	batch := 100
+	var enqueueCalled int64
+	event.AddPostEnqueueFunc(func() {
+		atomic.AddInt64(&enqueueCalled, 1)
+	})
+
+	// Without starting sink.Run, the event should only be accepted by AddDMLEvent
+	// and should not be considered enqueued into downstream write pipeline yet.
+	cloudStorageSink.AddDMLEvent(event)
+	require.Equal(t, int64(0), atomic.LoadInt64(&enqueueCalled))
+}
+
+func TestCloudStoragePostEnqueueBeforeFlush(t *testing.T) {
+	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s", t.TempDir())
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	setPDClockForTest(t, pdutil.NewClock4Test())
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- cloudStorageSink.Run(ctx)
+	}()
+
+	tableInfo := &common.TableInfo{
+		TableName: common.TableName{
+			Schema:  "test",
+			Table:   "t_enqueue_stage",
+			TableID: 101,
+		},
+	}
+	event := commonEvent.NewDMLEvent(common.NewDispatcherID(), tableInfo.TableName.TableID, 1, 1, tableInfo)
+	event.TableInfoVersion = 1
+	event.Length = 1
+	event.ApproximateSize = 1
+
+	var enqueueCalled atomic.Int64
+	var flushCalled atomic.Int64
+	event.AddPostEnqueueFunc(func() {
+		enqueueCalled.Add(1)
+	})
+	event.AddPostFlushFunc(func() {
+		flushCalled.Add(1)
+	})
+
+	cloudStorageSink.AddDMLEvent(event)
+
+	require.Eventually(t, func() bool {
+		return enqueueCalled.Load() == 1
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, int64(0), flushCalled.Load())
+
+	cancel()
+	require.ErrorIs(t, <-runDone, context.Canceled)
+}
+
+func TestCloudStorageWriteEvents(t *testing.T) {
+	t.Run("add dml does not call post enqueue before run", verifyAddDMLEventDoesNotCallPostEnqueueBeforePipelineRun)
+
+	helper, job, dmls, batch := newCloudStorageWriteEventsFixture(t)
+	t.Run("without date separator", func(t *testing.T) {
+		verifyCloudStorageWriteEventsWithoutDateSeparator(t, helper, job, dmls, batch)
+	})
+	t.Run("with date separator", func(t *testing.T) {
+		verifyCloudStorageWriteEventsWithDateSeparator(t, helper, job, dmls, batch)
+	})
+}
+
+func newCloudStorageWriteEventsFixture(
+	t *testing.T,
+) (*commonEvent.EventTestHelper, *timodel.Job, []string, int) {
+	t.Helper()
 
 	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
+	t.Cleanup(helper.Close)
 
 	helper.Tk().MustExec("use test")
 	job := helper.DDL2Job("create table table1(c1 int, c2 varchar(255))")
 	require.NotNil(t, job)
 	helper.ApplyJob(job)
+
+	batch := 100
 	dmls := make([]string, 0, batch)
-	for j := 0; j < batch; j++ {
-		dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", j))
+	for idx := range batch {
+		dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", idx))
 	}
+	return helper, job, dmls, batch
+}
+
+func verifyCloudStorageWriteEventsWithoutDateSeparator(
+	t *testing.T,
+	helper *commonEvent.EventTestHelper,
+	job *timodel.Job,
+	dmls []string,
+	batch int,
+) {
+	parentDir := t.TempDir()
+
+	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s&file-size=1024", parentDir)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	replicaConfig.Sink.DateSeparator = putil.AddressOf(config.DateSeparatorNone)
+	replicaConfig.Sink.FileIndexWidth = putil.AddressOf(6)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	setPDClockForTest(t, pdutil.NewClock4Test())
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
+	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
+	defer cancelAndWaitSink(t, cancel, runDone)
+
+	var cnt atomic.Uint64
 	dispatcherID := common.NewDispatcherID()
 	event := helper.DML2Event(job.SchemaName, job.TableName, dmls...)
 	event.TableInfoVersion = job.BinlogInfo.FinishedTS
 	event.AddPostFlushFunc(func() {
-		atomic.AddUint64(&cnt, uint64(len(dmls)))
+		cnt.Add(uint64(len(dmls)))
 	})
 	event.DispatcherID = dispatcherID
 
 	cloudStorageSink.AddDMLEvent(event)
-	time.Sleep(3 * time.Second)
+	require.Eventually(t, func() bool {
+		return cnt.Load() == uint64(batch)
+	}, testEventuallyTimeout, testEventuallyTick, "wait for first event consumed")
 	metaDir := path.Join(parentDir, "test/table1/meta")
 	files, err := os.ReadDir(metaDir)
 	require.NoError(t, err)
@@ -118,18 +240,20 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000001.csv\n", dispatcherID.String()), string(content))
-	require.Equal(t, uint64(100), atomic.LoadUint64(&cnt))
+	require.Equal(t, uint64(batch), cnt.Load())
 
 	// generating another dml file.
 	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
 	event.TableInfoVersion = job.BinlogInfo.FinishedTS
 	event.AddPostFlushFunc(func() {
-		atomic.AddUint64(&cnt, uint64(len(dmls)))
+		cnt.Add(uint64(len(dmls)))
 	})
 	event.DispatcherID = dispatcherID
 
 	cloudStorageSink.AddDMLEvent(event)
-	time.Sleep(3 * time.Second)
+	require.Eventually(t, func() bool {
+		return cnt.Load() == 2*uint64(batch)
+	}, testEventuallyTimeout, testEventuallyTick, "wait for second event consumed")
 
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 3)
@@ -143,15 +267,41 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000002.csv\n", dispatcherID.String()), string(content))
-	require.Equal(t, uint64(200), atomic.LoadUint64(&cnt))
-
-	cloudStorageSink.Close(false)
+	require.Equal(t, 2*uint64(batch), cnt.Load())
 }
 
-func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
+func TestSubmitTaskToEncoderExitOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	dmlWriters := &dmlWriters{
+		msgCh:       chann.NewUnlimitedChannelDefault[*task](),
+		encodeGroup: newEncoderGroup(newTestTxnEncoderConfig(t), 1, 1),
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- dmlWriters.addTasks(ctx)
+	}()
+
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("submitTaskToEncoder did not exit after context cancel")
+	}
+}
+
+func verifyCloudStorageWriteEventsWithDateSeparator(
+	t *testing.T,
+	helper *commonEvent.EventTestHelper,
+	job *timodel.Job,
+	dmls []string,
+	batch int,
+) {
 	parentDir := t.TempDir()
 
-	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=%ds", parentDir, 4)
+	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s&file-size=1024", parentDir)
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 
@@ -159,37 +309,21 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 
-	replicaConfig.Sink.DateSeparator = putil.AddressOf(config.DateSeparatorDay.String())
+	replicaConfig.Sink.DateSeparator = putil.AddressOf(config.DateSeparatorDay)
 	replicaConfig.Sink.FileIndexWidth = putil.AddressOf(6)
 
 	mockClock := pclock.NewMock()
 	mockClock.Set(time.Date(2023, 3, 8, 23, 59, 58, 0, time.UTC))
 	clock := pdutil.NewMonotonicClock(mockClock)
-	appcontext.SetService(appcontext.DefaultPDClock, clock)
+	setPDClock := setPDClockForTest(t, clock)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	go func() {
-		err = cloudStorageSink.Run(ctx)
-		require.ErrorIs(t, err, context.Canceled)
-	}()
+	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
 
-	var cnt uint64 = 0
-	batch := 100
-
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job("create table table1(c1 int, c2 varchar(255))")
-	require.NotNil(t, job)
-	helper.ApplyJob(job)
-	dmls := make([]string, 0, batch)
-	for j := 0; j < batch; j++ {
-		dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", j))
-	}
+	var cnt uint64
 
 	dispatcherID := common.NewDispatcherID()
 	event := helper.DML2Event(job.SchemaName, job.TableName, dmls...)
@@ -202,7 +336,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
 		return atomic.LoadUint64(&cnt) == uint64(batch)
-	}, 30*time.Second, time.Second, "wait for event consumed")
+	}, testEventuallyTimeout, testEventuallyTick, "wait for event consumed")
 
 	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d/2023-03-08", job.SchemaName, job.TableName, event.TableInfoVersion))
 	fileNames := getTableFiles(t, tableDir)
@@ -216,23 +350,19 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000001.csv\n", dispatcherID.String()), string(content))
 
-	cancel()
-	time.Sleep(5 * time.Second)
+	cancelAndWaitSink(t, cancel, runDone)
 
 	// test date (day) is NOT changed.
 	mockClock.Set(time.Date(2023, 3, 8, 23, 59, 59, 0, time.UTC))
 	clock = pdutil.NewMonotonicClock(mockClock)
 
-	appcontext.SetService(appcontext.DefaultPDClock, clock)
+	setPDClock(clock)
 
 	ctx, cancel = context.WithCancel(context.Background())
 	cloudStorageSink, err = newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	go func() {
-		err = cloudStorageSink.Run(ctx)
-		require.ErrorIs(t, err, context.Canceled)
-	}()
+	runDone = runSinkInBackground(t, ctx, cloudStorageSink)
 
 	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
 	event.TableInfoVersion = job.BinlogInfo.FinishedTS
@@ -244,7 +374,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
 		return atomic.LoadUint64(&cnt) == 2*uint64(batch)
-	}, 30*time.Second, time.Second, "wait for event consumed")
+	}, testEventuallyTimeout, testEventuallyTick, "wait for event consumed")
 
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 3)
@@ -256,29 +386,19 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000002.csv\n", dispatcherID.String()), string(content))
-	cancel()
-
-	time.Sleep(5 * time.Second)
+	cancelAndWaitSink(t, cancel, runDone)
 
 	// test date (day) is changed.
 	mockClock.Set(time.Date(2023, 3, 9, 0, 0, 10, 0, time.UTC))
 	clock = pdutil.NewMonotonicClock(mockClock)
 
-	appcontext.SetService(appcontext.DefaultPDClock, clock)
+	setPDClock(clock)
 
 	ctx, cancel = context.WithCancel(context.Background())
 	cloudStorageSink, err = newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	failpoint.Enable("github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/passTickerOnce", "1*return")
-	defer func() {
-		_ = failpoint.Disable("github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/passTickerOnce")
-	}()
-
-	go func() {
-		err = cloudStorageSink.Run(ctx)
-		require.ErrorIs(t, err, context.Canceled)
-	}()
+	runDone = runSinkInBackground(t, ctx, cloudStorageSink)
 
 	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
 	event.TableInfoVersion = job.BinlogInfo.FinishedTS
@@ -290,7 +410,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
 		return atomic.LoadUint64(&cnt) == 3*uint64(batch)
-	}, 30*time.Second, time.Second, "wait for event consumed")
+	}, testEventuallyTimeout, testEventuallyTick, "wait for event consumed")
 
 	tableDir = path.Join(parentDir, fmt.Sprintf("test/table1/%d/2023-03-09", event.TableInfoVersion))
 	fileNames = getTableFiles(t, tableDir)
@@ -303,26 +423,21 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000001.csv\n", dispatcherID.String()), string(content))
-	require.Equal(t, uint64(300), atomic.LoadUint64(&cnt))
-	cloudStorageSink.Close(false)
-
-	cancel()
-	time.Sleep(5 * time.Second)
+	require.Equal(t, 3*uint64(batch), atomic.LoadUint64(&cnt))
+	cancelAndWaitSink(t, cancel, runDone)
 
 	// test table is scheduled from one node to another
 	cnt = 0
 	mockClock = pclock.NewMock()
 	mockClock.Set(time.Date(2023, 3, 9, 0, 1, 10, 0, time.UTC))
-	appcontext.SetService(appcontext.DefaultPDClock, clock)
+	clock = pdutil.NewMonotonicClock(mockClock)
+	setPDClock(clock)
 
 	ctx, cancel = context.WithCancel(context.Background())
 	cloudStorageSink, err = newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	go func() {
-		err = cloudStorageSink.Run(ctx)
-		require.ErrorIs(t, err, context.Canceled)
-	}()
+	runDone = runSinkInBackground(t, ctx, cloudStorageSink)
 
 	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
 	event.TableInfoVersion = job.BinlogInfo.FinishedTS
@@ -334,7 +449,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
 		return atomic.LoadUint64(&cnt) == uint64(batch)
-	}, 30*time.Second, time.Second, "wait for event consumed")
+	}, testEventuallyTimeout, testEventuallyTick, "wait for event consumed")
 
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 3)
@@ -347,5 +462,5 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000002.csv\n", dispatcherID.String()), string(content))
 
-	cancel()
+	cancelAndWaitSink(t, cancel, runDone)
 }

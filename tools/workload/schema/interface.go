@@ -15,6 +15,20 @@ package schema
 
 import "sync/atomic"
 
+// DDLOption defines which table the DDL should operate on.
+type DDLOption struct {
+	TableIndex int
+}
+
+// DDLWorkload is an optional interface implemented by workloads that can generate DDL statements.
+//
+// Workloads that do not implement this interface will simply skip DDL execution.
+type DDLWorkload interface {
+	// BuildDDLSql returns a DDL statement for the given option.
+	// Return empty string to skip.
+	BuildDDLSql(opt DDLOption) string
+}
+
 type Workload interface {
 	// BuildCreateTableStatement returns the create-table sql of the table n
 	BuildCreateTableStatement(n int) string

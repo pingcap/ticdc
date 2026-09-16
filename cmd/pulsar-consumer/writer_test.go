@@ -1,0 +1,597 @@
+// Copyright 2026 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package main
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/apache/pulsar-client-go/pulsar"
+	"github.com/golang/mock/gomock"
+	"github.com/pingcap/ticdc/cmd/util"
+	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/util/chunk"
+	"github.com/stretchr/testify/require"
+)
+
+func newMockSink(t *testing.T) (*sinkmock.MockSink, *[]string) {
+	t.Helper()
+
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	ddls := make([]string, 0)
+
+	s.EXPECT().AddDMLEvent(gomock.Any()).AnyTimes()
+	s.EXPECT().WriteBlockEvent(gomock.Any()).DoAndReturn(func(event commonEvent.BlockEvent) error {
+		if ddl, ok := event.(*commonEvent.DDLEvent); ok {
+			ddls = append(ddls, ddl.Query)
+		}
+		return nil
+	}).AnyTimes()
+
+	return s, &ddls
+}
+
+func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T) {
+	// Scenario: If upstream resolved-ts is held back (e.g. failpoints in integration tests), the consumer
+	// watermark can stall below CREATE TABLE / CREATE DATABASE commitTs. Independent CREATE TABLE DDLs don't
+	// depend on any existing table schema and should still be applied to advance downstream schema.
+	//
+	// Steps:
+	// 1) Enqueue an independent CREATE TABLE DDL with commitTs > watermark.
+	// 2) Call writer.Write and expect the DDL is executed even without watermark catching up.
+	ctx := context.Background()
+	s, ddls := newMockSink(t)
+	w := &writer{
+		progresses: []*partitionProgress{
+			{partition: 0, watermark: 0},
+		},
+		mysqlSink: s,
+	}
+	w.ddlList = []*commonEvent.DDLEvent{
+		{
+			Query:      "CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)",
+			SchemaName: "test",
+			TableName:  "t",
+			Type:       byte(timodel.ActionCreateTable),
+			FinishedTs: 100,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				// DDLSpanTableID is always present; having only it means the DDL does not block any
+				// existing table's DML ordering (unlike CREATE TABLE ... LIKE ...).
+				TableIDs: []int64{common.DDLSpanTableID},
+			},
+		},
+	}
+
+	w.Write(ctx, codeccommon.MessageTypeDDL)
+
+	require.Equal(t, []string{"CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)"}, *ddls)
+	require.Empty(t, w.ddlList)
+}
+
+func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
+	// Scenario: DDLs must execute in commitTs order. A later non-blocking DDL must not bypass an earlier
+	// blocking DDL that is waiting for watermark, even if the later DDL is an independent CREATE TABLE.
+	//
+	// Steps:
+	// 1) Enqueue a blocking DDL followed by an independent CREATE TABLE DDL, with watermark behind the first DDL.
+	// 2) Call writer.Write and expect nothing executes.
+	// 3) Advance watermark beyond the first DDL and expect both execute in order.
+	ctx := context.Background()
+	s, ddls := newMockSink(t)
+	p := &partitionProgress{partition: 0, watermark: 0}
+	w := &writer{
+		progresses: []*partitionProgress{p},
+		mysqlSink:  s,
+	}
+	w.ddlList = []*commonEvent.DDLEvent{
+		{
+			Query:      "ALTER TABLE `test`.`t` ADD COLUMN `c2` INT",
+			SchemaName: "test",
+			TableName:  "t",
+			Type:       byte(timodel.ActionAddColumn),
+			FinishedTs: 100,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				TableIDs:      []int64{common.DDLSpanTableID, 1},
+			},
+		},
+		{
+			Query:      "CREATE TABLE `test`.`t2` (`id` INT PRIMARY KEY)",
+			SchemaName: "test",
+			TableName:  "t2",
+			Type:       byte(timodel.ActionCreateTable),
+			FinishedTs: 110,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				TableIDs:      []int64{common.DDLSpanTableID},
+			},
+		},
+	}
+
+	w.Write(ctx, codeccommon.MessageTypeDDL)
+	require.Empty(t, *ddls)
+	require.Len(t, w.ddlList, 2)
+
+	p.watermark = 200
+	w.Write(ctx, codeccommon.MessageTypeDDL)
+	require.Equal(t, []string{
+		"ALTER TABLE `test`.`t` ADD COLUMN `c2` INT",
+		"CREATE TABLE `test`.`t2` (`id` INT PRIMARY KEY)",
+	}, *ddls)
+	require.Empty(t, w.ddlList)
+}
+
+func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
+	// Scenario: CREATE TABLE ... LIKE ... depends on the referenced table schema being present and
+	// up-to-date downstream, so it must not bypass watermark gating.
+	//
+	// Steps:
+	// 1) Enqueue a CREATE TABLE ... LIKE ... DDL with commitTs > watermark.
+	// 2) Call writer.Write and expect the DDL is NOT executed.
+	// 3) Advance watermark beyond the DDL commitTs and expect the DDL executes.
+	ctx := context.Background()
+	s, ddls := newMockSink(t)
+	p := &partitionProgress{partition: 0, watermark: 0}
+	w := &writer{
+		progresses: []*partitionProgress{p},
+		mysqlSink:  s,
+	}
+	w.ddlList = []*commonEvent.DDLEvent{
+		{
+			Query:      "CREATE TABLE `test`.`t2` LIKE `test`.`t1`",
+			SchemaName: "test",
+			TableName:  "t2",
+			Type:       byte(timodel.ActionCreateTable),
+			FinishedTs: 100,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				// Besides the special DDL span, this DDL also blocks the referenced table (or its partitions).
+				TableIDs: []int64{common.DDLSpanTableID, 101},
+			},
+			BlockedTableNames: []commonEvent.SchemaTableName{
+				{SchemaName: "test", TableName: "t1"},
+			},
+		},
+	}
+
+	w.Write(ctx, codeccommon.MessageTypeDDL)
+	require.Empty(t, *ddls)
+	require.Len(t, w.ddlList, 1)
+
+	p.watermark = 200
+	w.Write(ctx, codeccommon.MessageTypeDDL)
+	require.Equal(t, []string{"CREATE TABLE `test`.`t2` LIKE `test`.`t1`"}, *ddls)
+	require.Empty(t, w.ddlList)
+}
+
+func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
+	// Scenario: In real topics, DDL messages can be received out of commit-ts order. A "future" DDL that
+	// is not yet eligible (commitTs > watermark) must not block earlier DDLs that are eligible; otherwise
+	// the subsequent watermark-based DML flush can observe an out-of-date downstream schema.
+	//
+	// Steps:
+	// 1) Provide a ddlList whose slice order is out of commit-ts order, and set watermark such that a
+	//    DDL in the middle is just beyond watermark.
+	// 2) Call writer.Write and expect all DDLs with commitTs <= watermark execute (in commit-ts order),
+	//    and only the truly "future" DDL remains pending.
+	ctx := context.Background()
+	s, ddls := newMockSink(t)
+	p := &partitionProgress{partition: 0, watermark: 944040962}
+	w := &writer{
+		progresses: []*partitionProgress{p},
+		mysqlSink:  s,
+	}
+	w.ddlList = []*commonEvent.DDLEvent{
+		{
+			Query:      "CREATE TABLE `common_1`.`add_and_drop_columns` (`id` INT(11) NOT NULL PRIMARY KEY)",
+			SchemaName: "common_1",
+			TableName:  "add_and_drop_columns",
+			Type:       byte(timodel.ActionCreateTable),
+			FinishedTs: 786754590,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+			},
+		},
+		{
+			Query:      "CREATE DATABASE `common`",
+			SchemaName: "common",
+			Type:       byte(timodel.ActionCreateSchema),
+			FinishedTs: 931195931,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+			},
+		},
+		{
+			// This DDL is just barely in the future of watermark, and would block later DDLs if we
+			// execute in slice order instead of commit-ts order.
+			Query:      "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)",
+			SchemaName: "common_1",
+			TableName:  "a",
+			Type:       byte(timodel.ActionCreateTable),
+			FinishedTs: 944040963,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+			},
+		},
+		{
+			Query:      "ALTER TABLE `common_1`.`add_and_drop_columns` ADD COLUMN `col1` INT NULL, ADD COLUMN `col2` INT NULL, ADD COLUMN `col3` INT NULL",
+			SchemaName: "common_1",
+			TableName:  "add_and_drop_columns",
+			Type:       byte(timodel.ActionAddColumn),
+			FinishedTs: 852290601,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				TableIDs:      []int64{9},
+			},
+		},
+		{
+			Query:      "ALTER TABLE `common_1`.`add_and_drop_columns` DROP COLUMN `col1`, DROP COLUMN `col2`",
+			SchemaName: "common_1",
+			TableName:  "add_and_drop_columns",
+			Type:       byte(timodel.ActionDropColumn),
+			FinishedTs: 904719361,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				TableIDs:      []int64{9},
+			},
+		},
+	}
+
+	w.Write(ctx, codeccommon.MessageTypeDDL)
+
+	require.Equal(t, []string{
+		"CREATE TABLE `common_1`.`add_and_drop_columns` (`id` INT(11) NOT NULL PRIMARY KEY)",
+		"ALTER TABLE `common_1`.`add_and_drop_columns` ADD COLUMN `col1` INT NULL, ADD COLUMN `col2` INT NULL, ADD COLUMN `col3` INT NULL",
+		"ALTER TABLE `common_1`.`add_and_drop_columns` DROP COLUMN `col1`, DROP COLUMN `col2`",
+		"CREATE DATABASE `common`",
+	}, *ddls)
+	require.Len(t, w.ddlList, 1)
+	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
+}
+
+func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	flushedCommitTs := make([]uint64, 0)
+	flushedRowTypeCounts := make([]int, 0)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
+		flushedCommitTs = append(flushedCommitTs, event.GetCommitTs())
+		flushedRowTypeCounts = append(flushedRowTypeCounts, len(event.RowTypes))
+		event.PostFlush()
+	}).Times(2)
+
+	p := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   0,
+	}
+	w := &writer{
+		progresses: []*partitionProgress{p},
+		mysqlSink:  s,
+		protocol:   config.ProtocolCanalJSON,
+	}
+
+	for _, message := range []*codeccommon.DMLMessage{
+		newDMLMessageForWriterTest(20),
+		newDMLMessageForWriterTest(10),
+		newDMLMessageForWriterTest(20),
+	} {
+		require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), p))
+	}
+
+	p.watermark = 20
+	needCommit, err := w.Write(ctx, codeccommon.MessageTypeResolved)
+	require.NoError(t, err)
+	require.True(t, needCommit)
+	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
+	require.Equal(t, []int{1, 2}, flushedRowTypeCounts)
+}
+
+func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Times(0)
+
+	decoder := &deferredDMLDecoder{
+		row: &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			CommitTs:        10,
+			RowTypes:        []common.RowType{common.RowTypeInsert},
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
+			},
+		},
+	}
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   20,
+		decoder:     util.NewDMLMessageDecoder(decoder),
+	}
+	w := &writer{
+		progresses: []*partitionProgress{progress},
+		mysqlSink:  s,
+		protocol:   config.ProtocolCanalJSON,
+	}
+
+	needCommit, err := w.WriteMessage(ctx, fakePulsarMessage{key: "k", payload: []byte(`{"fake":"row"}`)})
+	require.NoError(t, err)
+
+	require.False(t, needCommit)
+	require.Nil(t, progress.eventsGroup[1])
+}
+
+func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   20,
+	}
+	w := &writer{
+		progresses: []*partitionProgress{
+			progress,
+			{partition: 1, watermark: 5},
+		},
+		protocol: config.ProtocolCanalJSON,
+	}
+
+	message := newDMLMessageForWriterTest(10)
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), progress))
+
+	require.NotNil(t, progress.eventsGroup[1])
+	resolved, err := progress.eventsGroup[1].ResolveInto(20, nil)
+	require.NoError(t, err)
+	require.Len(t, resolved, 1)
+	require.Equal(t, uint64(10), resolved[0].GetCommitTs())
+}
+
+func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
+	w := &writer{
+		progresses: []*partitionProgress{
+			{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)},
+		},
+		protocol:               config.ProtocolCanalJSON,
+		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
+	}
+
+	ddl := &commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `target`.`dst` LIKE `target`.`src`",
+		SchemaName: "source",
+		TableName:  "dst",
+		Type:       byte(timodel.ActionCreateTable),
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{
+				Schema:       "source",
+				Table:        "dst",
+				IsPartition:  true,
+				TargetSchema: "target",
+				TargetTable:  "dst",
+			},
+		},
+	}
+	w.onDDL(ddl)
+	require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
+
+	progress := w.progresses[0]
+	first := newDMLMessageForWriterTest(200)
+	second := newDMLMessageForWriterTest(100)
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress))
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress))
+
+	resolved, err := progress.eventsGroup[1].ResolveInto(150, nil)
+	require.NoError(t, err)
+	require.Len(t, resolved, 1)
+	require.Equal(t, uint64(100), resolved[0].GetCommitTs())
+}
+
+func TestWriteMessageSpillsDMLImmediately(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
+		event.PostFlush()
+	}).Times(1)
+
+	decoder := &deferredDMLDecoder{
+		row: &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			CommitTs:        100,
+			RowTypes:        []common.RowType{common.RowTypeInsert},
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
+			},
+		},
+	}
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		decoder:     util.NewDMLMessageDecoder(decoder),
+	}
+	w := &writer{
+		progresses: []*partitionProgress{progress},
+		mysqlSink:  s,
+		protocol:   config.ProtocolCanalJSON,
+	}
+
+	needCommit, err := w.WriteMessage(ctx, fakePulsarMessage{key: "k", payload: []byte(`{"fake":"row"}`)})
+	require.NoError(t, err)
+	require.False(t, needCommit)
+	require.Equal(t, 1, decoder.addKeyValueCount)
+	require.Equal(t, 1, decoder.hasNextCount)
+	require.Equal(t, 1, decoder.nextDMLMessageCount)
+	require.Zero(t, decoder.toDMLEventCount)
+	resolved, err := progress.eventsGroup[1].ResolveInto(99, nil)
+	require.NoError(t, err)
+	require.Len(t, resolved, 0)
+
+	progress.watermark = 100
+	needCommit, err = w.Write(ctx, codeccommon.MessageTypeResolved)
+	require.NoError(t, err)
+	require.True(t, needCommit)
+	require.Equal(t, 2, decoder.addKeyValueCount)
+	require.Equal(t, 3, decoder.hasNextCount)
+	require.Equal(t, 2, decoder.nextDMLMessageCount)
+	require.Equal(t, 1, decoder.toDMLEventCount)
+	resolved, err = progress.eventsGroup[1].ResolveInto(100, nil)
+	require.NoError(t, err)
+	require.Empty(t, resolved)
+	require.Equal(t, []byte(`{"fake":"row"}`), decoder.lastValue)
+}
+
+type deferredDMLDecoder struct {
+	row *commonEvent.DMLEvent
+
+	addKeyValueCount    int
+	hasNextCount        int
+	nextDMLMessageCount int
+	toDMLEventCount     int
+	lastValue           []byte
+	pending             bool
+}
+
+func (d *deferredDMLDecoder) AddKeyValue(_, value []byte) {
+	d.addKeyValueCount++
+	d.lastValue = append(d.lastValue[:0], value...)
+	d.pending = true
+}
+
+func (d *deferredDMLDecoder) HasNext() (codeccommon.MessageType, bool) {
+	d.hasNextCount++
+	return codeccommon.MessageTypeRow, d.pending
+}
+
+func (d *deferredDMLDecoder) NextResolvedEvent() uint64 {
+	return 0
+}
+
+func (d *deferredDMLDecoder) NextDMLMessage() *codeccommon.DMLMessage {
+	d.nextDMLMessageCount++
+	d.pending = false
+	return codeccommon.NewDMLMessage(1, "test", "t", d.row.CommitTs, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+		d.toDMLEventCount++
+		return d.row
+	})
+}
+
+func (d *deferredDMLDecoder) NextDDLEvent() *commonEvent.DDLEvent {
+	return nil
+}
+
+func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
+	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
+		return &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			StartTs:         commitTs - 1,
+			CommitTs:        commitTs,
+			RowTypes:        []common.RowType{common.RowTypeUpdate},
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
+			},
+		}
+	})
+}
+
+func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codeccommon.DMLMessage {
+	messageData := codeccommon.NewDMLMessageData(nil, nil,
+		func([]byte) ([]*codeccommon.DMLMessage, error) {
+			return []*codeccommon.DMLMessage{message}, nil
+		},
+	)
+	messageData.AttachDMLMessage(message)
+	return message
+}
+
+type fakePulsarMessage struct {
+	key     string
+	payload []byte
+}
+
+func (m fakePulsarMessage) Topic() string {
+	return ""
+}
+
+func (m fakePulsarMessage) ProducerName() string {
+	return ""
+}
+
+func (m fakePulsarMessage) Properties() map[string]string {
+	return nil
+}
+
+func (m fakePulsarMessage) Payload() []byte {
+	return m.payload
+}
+
+func (m fakePulsarMessage) ID() pulsar.MessageID {
+	return nil
+}
+
+func (m fakePulsarMessage) PublishTime() time.Time {
+	return time.Time{}
+}
+
+func (m fakePulsarMessage) EventTime() time.Time {
+	return time.Time{}
+}
+
+func (m fakePulsarMessage) Key() string {
+	return m.key
+}
+
+func (m fakePulsarMessage) OrderingKey() string {
+	return ""
+}
+
+func (m fakePulsarMessage) RedeliveryCount() uint32 {
+	return 0
+}
+
+func (m fakePulsarMessage) IsReplicated() bool {
+	return false
+}
+
+func (m fakePulsarMessage) GetReplicatedFrom() string {
+	return ""
+}
+
+func (m fakePulsarMessage) GetSchemaValue(any) error {
+	return nil
+}
+
+func (m fakePulsarMessage) SchemaVersion() []byte {
+	return nil
+}
+
+func (m fakePulsarMessage) GetEncryptionContext() *pulsar.EncryptionContext {
+	return nil
+}
+
+func (m fakePulsarMessage) Index() *uint64 {
+	return nil
+}
+
+func (m fakePulsarMessage) BrokerPublishTime() *time.Time {
+	return nil
+}

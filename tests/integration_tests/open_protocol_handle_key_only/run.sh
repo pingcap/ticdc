@@ -19,6 +19,7 @@ function run() {
 	start_tidb_cluster --workdir $WORK_DIR
 
 	TOPIC_NAME="open-protocol-handle-key-only-$RANDOM"
+	kafka_topic --topic "$TOPIC_NAME" --max-message-bytes 2048
 
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
@@ -29,7 +30,7 @@ function run() {
 
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
 
-	cdc_kafka_consumer --log-level debug --upstream-uri $SINK_URI --downstream-uri="mysql://root@127.0.0.1:3306/?safe-mode=true&batch-dml-enable=false&enable-ddl-ts=false" --upstream-tidb-dsn="root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/?" --config="$CUR/conf/changefeed.toml" 2>&1 &
+	cdc_kafka_consumer --log-level debug --upstream-uri $SINK_URI --downstream-uri="mysql://root@127.0.0.1:3306/?safe-mode=true&batch-dml-enable=false&enable-ddl-ts=false" --upstream-tidb-dsn="root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/?" --config="$CUR/conf/changefeed.toml" --log-file $WORK_DIR/cdc_kafka_consumer.log 2>&1 &
 
 	run_sql_file $CUR/data/data.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 

@@ -73,7 +73,7 @@ func TestDefaultSpanSplitChecker_AddReplica(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_RemoveReplica(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -105,7 +105,7 @@ func TestDefaultSpanSplitChecker_UpdateStatus_TrafficCheck(t *testing.T) {
 		RegionCountRefreshInterval: util.AddressOf(time.Minute),
 	}
 
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 
 	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
 
@@ -154,7 +154,7 @@ func TestDefaultSpanSplitChecker_UpdateStatus_TrafficCheck(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -200,7 +200,7 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheckError(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -235,7 +235,7 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheckError(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_UpdateStatus_NonWorkingStatus(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -265,7 +265,7 @@ func TestDefaultSpanSplitChecker_UpdateStatus_NonWorkingStatus(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_CheckRegionSplit(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -314,7 +314,7 @@ func TestDefaultSpanSplitChecker_CheckRegionSplit(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_Check_BatchLimit(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -350,7 +350,7 @@ func TestDefaultSpanSplitChecker_Check_BatchLimit(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_Check_EmptyResults(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -384,7 +384,7 @@ func TestDefaultSpanSplitChecker_Check_EmptyResults(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_Stat(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{

@@ -7,6 +7,7 @@ create table t (
 
    primary key (a, b)
 );
+alter table t comment = 'test';
 begin;
 insert into t values ("a", 1, "a1");
 insert into t values ("b", 2, "b2");
@@ -17,6 +18,17 @@ update t set b = 0 where c = 'b2';
 
 update t set a = 'a', b = 2 where a = 'b' and b = 0;
 commit;
+
+create table partition_ddl_order (
+    id int,
+    birth_year int,
+    primary key (id, birth_year)
+) partition by range (birth_year) (
+    partition p0 values less than (2000),
+    partition p1 values less than maxvalue
+);
+insert into partition_ddl_order values (1, 1992), (2, 2001);
+alter table partition_ddl_order drop partition p0;
 
 insert into tp_int() values ();
 

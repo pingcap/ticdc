@@ -60,15 +60,6 @@ type PureCPUTask struct {
 	addCount  int
 }
 
-func newPureCPUTask(finalChan *chan int, ch *chan int, target int64, addCount int) *PureCPUTask {
-	return &PureCPUTask{
-		finalChan: finalChan,
-		ch:        ch,
-		target:    target,
-		addCount:  addCount,
-	}
-}
-
 func (t *PureCPUTask) Execute() time.Time {
 	select {
 	case <-*t.ch:

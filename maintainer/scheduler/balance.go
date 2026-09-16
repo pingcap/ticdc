@@ -43,42 +43,58 @@ type balanceScheduler struct {
 	spanController     *span.Controller
 	nodeManager        *watcher.NodeManager
 
-	splitter *split.Splitter
+	splitter             *split.Splitter
+	checkBalanceInterval time.Duration
 
 	random *rand.Rand
 	mode   int64
+
+	drainState *DrainState
+
+	drainBalanceBlockedUntil time.Time
 }
 
 func NewBalanceScheduler(
 	changefeedID common.ChangeFeedID,
-	batchSize int,
 	splitter *split.Splitter,
 	oc *operator.Controller,
 	sc *span.Controller,
-	_ time.Duration,
+	checkBalanceInterval time.Duration,
 	mode int64,
+	drainState *DrainState,
+	moveBatchSize int,
 ) *balanceScheduler {
 	return &balanceScheduler{
-		changefeedID:       changefeedID,
-		batchSize:          batchSize,
-		random:             rand.New(rand.NewSource(time.Now().UnixNano())),
-		operatorController: oc,
-		spanController:     sc,
-		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
-		splitter:           splitter,
-		mode:               mode,
+		changefeedID:         changefeedID,
+		batchSize:            moveBatchSize,
+		random:               rand.New(rand.NewSource(time.Now().UnixNano())), // #nosec G404
+		operatorController:   oc,
+		spanController:       sc,
+		nodeManager:          appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		splitter:             splitter,
+		checkBalanceInterval: checkBalanceInterval,
+		mode:                 mode,
+		drainState:           drainState,
 	}
 }
 
 func (s *balanceScheduler) Execute() time.Time {
+	now := time.Now()
+	nextCheckTime := now.Add(s.checkBalanceInterval)
 	failpoint.Inject("StopBalanceScheduler", func() {
-		failpoint.Return(time.Now().Add(time.Second * 5))
+		failpoint.Return(nextCheckTime)
 	})
+	state := s.drainState.snapshot()
+	if shouldPauseBalanceForDrain(state, now, &s.drainBalanceBlockedUntil) {
+		// Pause regular balance scheduling while dispatcher drain is active
+		// and keep a cooldown window after drain completion to avoid churn.
+		return nextCheckTime
+	}
 
 	// TODO: consider to ignore split tables' dispatcher basic schedule operator to decide whether we can make balance schedule
 	if s.operatorController.OperatorSize() > 0 || s.spanController.GetAbsentSize() > 0 {
 		// not in stable schedule state, skip balance
-		return time.Now().Add(time.Second * 5)
+		return nextCheckTime
 	}
 
 	// 1. check whether we have spans in defaultGroupID need to be splitted.
@@ -88,13 +104,15 @@ func (s *balanceScheduler) Execute() time.Time {
 
 	// to many split operators, do move operator later
 	if count >= s.batchSize {
-		return time.Now().Add(time.Second * 5)
+		return nextCheckTime
 	}
 
-	// 2. do balance for the spans in defaultGroupID
-	s.schedulerDefaultGroup(s.batchSize - count)
+	moveBudget := s.batchSize - count
 
-	return time.Now().Add(time.Second * 5)
+	// 2. do balance for the spans in defaultGroupID
+	s.schedulerDefaultGroup(moveBudget, state)
+
+	return nextCheckTime
 }
 
 func (s *balanceScheduler) Name() string {
@@ -104,8 +122,15 @@ func (s *balanceScheduler) Name() string {
 	return pkgScheduler.BalanceScheduler
 }
 
-func (s *balanceScheduler) schedulerDefaultGroup(maxSize int) int {
+func (s *balanceScheduler) schedulerDefaultGroup(
+	maxSize int,
+	state drainStateSnapshot,
+) int {
 	nodes := s.nodeManager.GetAliveNodes()
+	nodes = filterAliveNodesByDrainTarget(nodes, state)
+	if len(nodes) == 0 {
+		return 0
+	}
 	group := pkgreplica.DefaultGroupID
 	// fast path, check the balance status
 	moveSize := pkgScheduler.CheckBalanceStatus(s.spanController.GetTaskSizePerNodeByGroup(group), nodes)
@@ -126,7 +151,14 @@ func (s *balanceScheduler) doSplit(results pkgReplica.GroupCheckResult) int {
 		spansNum := max(result.SpanNum, len(s.nodeManager.GetAliveNodes())*2)
 		splitSpans := s.splitter.Split(context.Background(), result.Span.Span, spansNum, result.SpanType)
 		if len(splitSpans) > 1 {
-			op := operator.NewSplitDispatcherOperator(s.spanController, result.Span, splitSpans, []node.ID{}, nil)
+			op := operator.NewSplitDispatcherOperator(
+				s.spanController,
+				result.Span,
+				splitSpans,
+				[]node.ID{},
+				s.operatorController.MaintainerEpoch(),
+				nil,
+			)
 			ret := s.operatorController.AddOperator(op)
 			if ret {
 				splitCount++
@@ -138,6 +170,6 @@ func (s *balanceScheduler) doSplit(results pkgReplica.GroupCheckResult) int {
 }
 
 func (s *balanceScheduler) doMove(replication *replica.SpanReplication, id node.ID) bool {
-	op := operator.NewMoveDispatcherOperator(s.spanController, replication, replication.GetNodeID(), id)
+	op := s.operatorController.NewMoveOperator(replication, replication.GetNodeID(), id)
 	return s.operatorController.AddOperator(op)
 }

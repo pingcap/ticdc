@@ -418,7 +418,7 @@ func TestCancelByAddEventContext(t *testing.T) {
 			for j := 0; j < 64; j++ {
 				err := handler.AddEvent(ctx, j)
 				if err != nil {
-					return nil
+					return err
 				}
 			}
 			return nil

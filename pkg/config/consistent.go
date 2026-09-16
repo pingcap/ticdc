@@ -17,10 +17,10 @@ import (
 	"fmt"
 
 	"github.com/pingcap/ticdc/pkg/compression"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore"
 )
 
 // ConsistentConfig represents replication consistency config for a changefeed.
@@ -32,6 +32,7 @@ type ConsistentConfig struct {
 	Level *string `toml:"level" json:"level,omitempty"`
 	// MaxLogSize is the max size(MiB) of a log file written by redo log.
 	// Default is 64MiB.
+	// It also controls the redo default event collector batch bytes.
 	MaxLogSize *int64 `toml:"max-log-size" json:"max-log-size,omitempty"`
 	// FlushIntervalInMs is the flush interval(ms) of redo log to flush log to storage.
 	// Default is 2000ms.
@@ -40,6 +41,9 @@ type ConsistentConfig struct {
 	// flush meta(resolvedTs and checkpointTs) to storage.
 	// Default is 200ms.
 	MetaFlushIntervalInMs *int64 `toml:"meta-flush-interval" json:"meta-flush-interval,omitempty"`
+	// EventCollectorBatchCount overrides redo event collector batch count.
+	// If unset, redo uses the sink-derived default.
+	EventCollectorBatchCount *int `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
 	// EncodingWorkerNum is the number of workers to encode `RowChangeEvent`` to redo log.
 	// Default is 16.
 	EncodingWorkerNum *int `toml:"encoding-worker-num" json:"encoding-worker-num,omitempty"`
@@ -48,9 +52,8 @@ type ConsistentConfig struct {
 	FlushWorkerNum *int `toml:"flush-worker-num" json:"flush-worker-num,omitempty"`
 	// Storage is the storage path(uri) to store redo log.
 	Storage *string `toml:"storage" json:"storage,omitempty"`
-	// UseFileBackend is a flag to enable file backend for redo log.
-	// file backend means before flush redo log to storage, it will be written to local file.
-	// Default is false.
+	// UseFileBackend is retained for compatibility and ignored. Redo always uses
+	// the spooled memory writer.
 	UseFileBackend *bool `toml:"use-file-backend" json:"use-file-backend,omitempty"`
 	// Compression is the compression algorithm used for redo log.
 	// Default is "", it means no compression, equals to `none`.
@@ -60,6 +63,9 @@ type ConsistentConfig struct {
 	// Default is 1. It means a single log file will be flushed by only one worker.
 	// The singe file concurrent flushing feature supports only `s3` storage.
 	FlushConcurrency *int `toml:"flush-concurrency" json:"flush-concurrency,omitempty"`
+	// SpoolDiskQuota is the disk quota in bytes for redo spool files.
+	// Default is 10 GiB.
+	SpoolDiskQuota *int64 `toml:"spool-disk-quota" json:"spool-disk-quota,omitempty"`
 	// MemoryUsage represents the percentage of ReplicaConfig.MemoryQuota
 	// that can be utilized by the redo log module.
 	MemoryUsage *ConsistentMemoryUsage `toml:"memory-usage" json:"memory-usage,omitempty"`
@@ -72,7 +78,15 @@ type ConsistentMemoryUsage struct {
 }
 
 // ValidateAndAdjust validates the consistency config and adjusts it if necessary.
+// The exported API keeps the default behavior and always enables redo storage
+// I/O checks for normal callers.
 func (c *ConsistentConfig) ValidateAndAdjust() error {
+	return c.validateAndAdjust(true)
+}
+
+// validateAndAdjust is an internal helper that allows toggling redo storage
+// I/O checks. enableIOCheck=false is only used by CLI-side pre-validation.
+func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 	if !redo.IsConsistentEnabled(util.GetOrZero(c.Level)) {
 		return nil
 	}
@@ -85,7 +99,7 @@ func (c *ConsistentConfig) ValidateAndAdjust() error {
 		c.FlushIntervalInMs = util.AddressOf(int64(redo.DefaultFlushIntervalInMs))
 	}
 	if util.GetOrZero(c.FlushIntervalInMs) < redo.MinFlushIntervalInMs {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
 			fmt.Sprintf("The consistent.flush-interval:%d must be equal or greater than %d",
 				util.GetOrZero(c.FlushIntervalInMs), redo.MinFlushIntervalInMs))
 	}
@@ -94,14 +108,29 @@ func (c *ConsistentConfig) ValidateAndAdjust() error {
 		c.MetaFlushIntervalInMs = util.AddressOf(int64(redo.DefaultMetaFlushIntervalInMs))
 	}
 	if util.GetOrZero(c.MetaFlushIntervalInMs) < redo.MinFlushIntervalInMs {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
 			fmt.Sprintf("The consistent.meta-flush-interval:%d must be equal or greater than %d",
 				util.GetOrZero(c.MetaFlushIntervalInMs), redo.MinFlushIntervalInMs))
 	}
-	if len(util.GetOrZero(c.Compression)) > 0 &&
-		util.GetOrZero(c.Compression) != compression.None && util.GetOrZero(c.Compression) != compression.LZ4 {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
-			fmt.Sprintf("The consistent.compression:%s must be 'none' or 'lz4'", util.GetOrZero(c.Compression)))
+
+	if c.EventCollectorBatchCount != nil {
+		if *c.EventCollectorBatchCount < 0 {
+			return errors.ErrInvalidReplicaConfig.FastGenByArgs("consistent.event-collector-batch-count must be set not smaller than 0")
+		}
+		if *c.EventCollectorBatchCount > MaxEventCollectorBatchCount {
+			return errors.ErrInvalidReplicaConfig.FastGenByArgs("consistent.event-collector-batch-count must be set not larger than %d", MaxEventCollectorBatchCount)
+		}
+	}
+
+	compressionType := util.GetOrZero(c.Compression)
+	if len(compressionType) == 0 {
+		compressionType = compression.None
+		c.Compression = util.AddressOf(compressionType)
+	}
+
+	if compressionType != compression.None && compressionType != compression.LZ4 {
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
+			fmt.Sprintf("The consistent.compression:%s must be 'none' or 'lz4'", compressionType))
 	}
 
 	if util.GetOrZero(c.EncodingWorkerNum) == 0 {
@@ -111,12 +140,19 @@ func (c *ConsistentConfig) ValidateAndAdjust() error {
 		c.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
 	}
 
-	uri, err := storage.ParseRawURL(util.GetOrZero(c.Storage))
+	if c.SpoolDiskQuota == nil {
+		c.SpoolDiskQuota = util.AddressOf(redo.DefaultSpoolDiskQuota)
+	} else if *c.SpoolDiskQuota <= 0 {
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
+			"consistent.spool-disk-quota must be greater than 0")
+	}
+
+	uri, err := objstore.ParseRawURL(util.GetOrZero(c.Storage))
 	if err != nil {
-		return cerror.ErrInvalidReplicaConfig.GenWithStackByArgs(
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
 			fmt.Sprintf("invalid storage uri: %s", util.GetOrZero(c.Storage)))
 	}
-	return redo.ValidateStorage(uri)
+	return redo.ValidateStorageWithOptions(uri, redo.StorageValidationOptions{EnableIOCheck: enableIOCheck})
 }
 
 // MaskSensitiveData masks sensitive data in ConsistentConfig

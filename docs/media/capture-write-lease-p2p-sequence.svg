@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 820" width="1200" height="820">
+  <defs>
+    <marker id="arrow-red" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#a44a3f"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7a5c99"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#365f56"/>
+    </marker>
+    <marker id="arrow-gray" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#746b5f"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; fill: #24312f; }
+    .title { font-size: 26px; font-weight: 700; }
+    .subtitle { font-size: 13px; fill: #655f55; }
+    .lane { font-size: 14px; font-weight: 700; }
+    .step { font-size: 12px; font-weight: 700; }
+    .small { font-size: 11px; fill: #655f55; }
+    .type { font-size: 9px; font-weight: 700; letter-spacing: 1.1px; fill: #746b5f; }
+    .card-title { font-size: 15px; font-weight: 700; }
+  </style>
+  <rect width="1200" height="820" fill="#f7f2e8"/>
+
+  <text x="48" y="52" text-anchor="start" class="title">Figure 3: P2P lease issuance and coordinator witnessing</text>
+  <text x="48" y="77" class="subtitle">Every grant is bound to coordinator generation, process epoch, request sequence, and request send time</text>
+  <rect x="976" y="34" width="176" height="42" rx="7" fill="#fffdf7" stroke="#8c7d68" stroke-dasharray="6 4"/>
+  <text x="992" y="51" class="type">PROTOCOL VIEW</text>
+  <text x="992" y="68" font-size="11" font-weight="700">P2P WRITE PROOF</text>
+
+  <rect data-graph-role="container" x="48" y="112" width="1104" height="280" rx="12" fill="#fffdf7" fill-opacity="0.58" stroke="#8c7d68" stroke-dasharray="8 6"/>
+  <text x="68" y="137" class="type">PATH A</text>
+  <text x="68" y="160" class="card-title">Remote capture: direct grant</text>
+
+  <text x="170" y="198" text-anchor="middle" class="lane">Remote Capture</text>
+  <text x="600" y="198" text-anchor="middle" class="lane">Coordinator</text>
+  <line x1="170" y1="215" x2="170" y2="350" stroke="#c2b8a8" stroke-width="1.3" stroke-dasharray="5 5"/>
+  <line x1="600" y1="215" x2="600" y2="350" stroke="#c2b8a8" stroke-width="1.3" stroke-dasharray="5 5"/>
+  <path data-graph-role="edge" d="M 170 246 H 590" fill="none" stroke="#a44a3f" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <rect x="290" y="226" width="180" height="23" rx="5" fill="#f7f2e8"/>
+  <text x="380" y="242" text-anchor="middle" class="step" style="fill:#a44a3f">Heartbeat every 500ms</text>
+  <text x="380" y="267" text-anchor="middle" class="small">node epoch + request sequence</text>
+  <rect data-graph-role="node" x="500" y="280" width="200" height="50" rx="8" fill="#fef2f2" stroke="#d48c84"/>
+  <text x="600" y="302" text-anchor="middle" class="step">Validate sender and order</text>
+  <text x="600" y="319" text-anchor="middle" class="small">reject stale / replayed requests</text>
+  <path data-graph-role="edge" d="M 590 350 H 170" fill="none" stroke="#365f56" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <rect x="296" y="337" width="168" height="23" rx="5" fill="#f7f2e8"/>
+  <text x="380" y="353" text-anchor="middle" class="step" style="fill:#365f56">Grant: valid for at most 5s</text>
+  <text x="835" y="248" class="step">Admission result</text>
+  <text x="835" y="272" class="small">validUntil = requestSentAt + duration</text>
+  <text x="835" y="294" class="small">late response cannot extend the window</text>
+
+  <rect data-graph-role="container" x="48" y="420" width="1104" height="270" rx="12" fill="#fffdf7" fill-opacity="0.58" stroke="#8c7d68" stroke-dasharray="8 6"/>
+  <text x="68" y="445" class="type">PATH B</text>
+  <text x="68" y="468" class="card-title">Coordinator capture: remote witness required when one exists</text>
+
+  <text x="175" y="505" text-anchor="middle" class="lane">Coordinator Capture</text>
+  <text x="600" y="505" text-anchor="middle" class="lane">Coordinator Logic</text>
+  <text x="1020" y="505" text-anchor="middle" class="lane">Remote Witness</text>
+  <line x1="175" y1="520" x2="175" y2="655" stroke="#c2b8a8" stroke-width="1.3" stroke-dasharray="5 5"/>
+  <line x1="600" y1="520" x2="600" y2="655" stroke="#c2b8a8" stroke-width="1.3" stroke-dasharray="5 5"/>
+  <line x1="1020" y1="520" x2="1020" y2="655" stroke="#c2b8a8" stroke-width="1.3" stroke-dasharray="5 5"/>
+  <path data-graph-role="edge" d="M 175 545 H 590" fill="none" stroke="#a44a3f" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <text x="382" y="537" text-anchor="middle" class="step" style="fill:#a44a3f">Self heartbeat</text>
+  <path data-graph-role="edge" d="M 610 570 H 1010" fill="none" stroke="#7a5c99" stroke-width="2" marker-end="url(#arrow-purple)"/>
+  <text x="810" y="562" text-anchor="middle" class="step" style="fill:#7a5c99">Challenge: nonce + epochs + sequence</text>
+  <path data-graph-role="edge" d="M 1010 602 H 610" fill="none" stroke="#7a5c99" stroke-width="2" marker-end="url(#arrow-purple)"/>
+  <text x="810" y="623" text-anchor="middle" class="step" style="fill:#7a5c99">ACK within 1s</text>
+  <path data-graph-role="edge" d="M 590 640 H 175" fill="none" stroke="#365f56" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="382" y="632" text-anchor="middle" class="step" style="fill:#365f56">Self grant only after verified ACK</text>
+
+  <rect x="48" y="720" width="340" height="58" rx="9" fill="#fff7ed" stroke="#d9a35b"/>
+  <text x="68" y="744" class="step" style="fill:#8f5a1e">Any legacy or unknown capability</text>
+  <text x="68" y="764" class="small">zero-duration grant → P2P not required</text>
+  <path data-graph-role="edge" d="M 408 749 H 492" fill="none" stroke="#746b5f" stroke-width="1.8" marker-end="url(#arrow-gray)"/>
+  <rect x="512" y="720" width="300" height="58" rx="9" fill="#ecfdf5" stroke="#86b89d"/>
+  <text x="532" y="744" class="step" style="fill:#276749">All active captures are compatible</text>
+  <text x="532" y="764" class="small">P2P becomes required automatically</text>
+  <rect x="852" y="720" width="300" height="58" rx="9" fill="#f5f3ff" stroke="#a78bba"/>
+  <text x="872" y="744" class="step" style="fill:#6b4b88">Witness timeout: 1s</text>
+  <text x="872" y="764" class="small">rotate before the 5s lease expires</text>
+  <text x="48" y="806" class="subtitle">A single-capture cluster has no remote witness and therefore grants the coordinator capture directly.</text>
+</svg>

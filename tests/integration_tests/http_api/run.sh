@@ -42,6 +42,10 @@ function run() {
 	python3 $CUR/util/test_case.py check_health
 	python3 $CUR/util/test_case.py get_status
 
+	if [ "$NEXT_GEN" == "1" ]; then
+		python3 $CUR/util/test_case.py check_keyspace_guidance
+	fi
+
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
 	run_sql "CREATE table test.t1(id int primary key, val int);"
 	sleep 3
@@ -86,7 +90,6 @@ function run() {
 		"move_table"
 		"set_log_level"
 		"remove_changefeed"
-		"resign_owner"
 		# api v2
 		"get_tso"
 	)
@@ -94,6 +97,14 @@ function run() {
 	for case in ${sequential_cases2[@]}; do
 		python3 $CUR/util/test_case.py "$case"
 	done
+
+	# This case removes the upstream keyspace, so it must run after all
+	# keyspace-dependent cases. Run it before resigning the owner to avoid
+	# racing with coordinator re-election.
+	if [ "$NEXT_GEN" == "1" ]; then
+		python3 $CUR/util/test_case.py manage_changefeed_after_keyspace_deleted
+	fi
+	python3 $CUR/util/test_case.py resign_owner
 	cleanup_process $CDC_BINARY
 }
 

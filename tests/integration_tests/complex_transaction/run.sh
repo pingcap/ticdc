@@ -18,14 +18,14 @@ function prepare() {
 	run_sql "CREATE DATABASE complex_txn" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
 	# Start 2 CDC servers
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "cdc1"
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "cdc2" --addr "127.0.0.1:8301"
+	run_cdc_server_with_guard --workdir "$WORK_DIR" --binary "$CDC_BINARY" --logsuffix "cdc1" --max-restarts 3
+	run_cdc_server_with_guard --workdir "$WORK_DIR" --binary "$CDC_BINARY" --logsuffix "cdc2" --addr "127.0.0.1:8301" --max-restarts 3
 
 	# Create changefeed
 	cdc_cli_changefeed create --sink-uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/"
 }
 
-trap 'stop_test $WORK_DIR' EXIT
+trap 'stop_test "$WORK_DIR"' EXIT
 # Only support MySQL sink for complex transaction test
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare $*
@@ -45,10 +45,17 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 
 	echo "[$(date)] Workload completed, verifying data consistency with CDC sync..."
 
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "cdc1"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "cdc2"
+
 	# Use sync_diff_inspector to verify data consistency
 	# It will retry until data is consistent or timeout
 	check_sync_diff $WORK_DIR $CUR/diff_config.toml 100 3
 
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "cdc1"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "cdc2"
+
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 	echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
 fi

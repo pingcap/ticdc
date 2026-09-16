@@ -15,9 +15,6 @@ package topicmanager
 
 import (
 	"context"
-
-	"github.com/apache/pulsar-client-go/pulsar"
-	"github.com/pingcap/ticdc/pkg/config"
 )
 
 // pulsarTopicManager is a manager for pulsar topics.
@@ -26,16 +23,13 @@ type pulsarTopicManagerMock struct {
 }
 
 // NewMockPulsarTopicManager creates a new topic manager.
-func NewMockPulsarTopicManager(
-	cfg *config.PulsarConfig,
-	client pulsar.Client,
-) (TopicManager, error) {
+func NewMockPulsarTopicManager() (TopicManager, error) {
 	mgr := &pulsarTopicManagerMock{}
 	return mgr, nil
 }
 
 // GetPartitionNum spend more time,but no use.
 // mock 3 partitions
-func (m *pulsarTopicManagerMock) GetPartitionNum(ctx context.Context, topic string) (int32, error) {
+func (m *pulsarTopicManagerMock) GetPartitionNum(_ context.Context, _ string) (int32, error) {
 	return 3, nil
 }

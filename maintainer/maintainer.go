@@ -69,8 +69,14 @@ type Maintainer struct {
 	selfNode     *node.Info
 	controller   *Controller
 
-	pdClock pdutil.Clock
-	eventCh *chann.DrainableChann[*Event]
+	pdClock            pdutil.Clock
+	eventCh            *chann.DrainableChann[*Event]
+	checkpointUpdateCh chan struct{}
+	managerHeartbeatCh chan<- struct{}
+	// blockStatusPending keeps the dedupe window local to the maintainer event
+	// queue so duplicate block-status resends do not pile up while an earlier
+	// equivalent event is still pending or being handled.
+	blockStatusPending blockStatusPendingSet
 
 	mc messaging.MessageCenter
 
@@ -196,12 +202,13 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		Name: keyspaceName,
 	}
 	m := &Maintainer{
-		changefeedID:      cfID,
-		selfNode:          selfNode,
-		eventCh:           chann.NewAutoDrainChann[*Event](),
-		startCheckpointTs: checkpointTs,
+		changefeedID:       cfID,
+		selfNode:           selfNode,
+		eventCh:            chann.NewAutoDrainChann[*Event](),
+		checkpointUpdateCh: make(chan struct{}, 1),
+		startCheckpointTs:  checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
-			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo),
+			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo, conf.BalanceMoveBatchSize, info.Epoch),
 		mc:                    mc,
 		removed:               atomic.NewBool(false),
 		nodeManager:           nodeManager,
@@ -231,6 +238,8 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 	}
+	m.controller.SetSelfNodeID(selfNode.ID)
+	m.controller.SetErrorReporter(m.handleError)
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
@@ -282,11 +291,13 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	keyspaceID uint32,
+	maintainerEpoch uint64,
 ) *Maintainer {
 	unused := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		SinkURI:      "",
 		Config:       config.GetDefaultReplicaConfig(),
+		Epoch:        maintainerEpoch,
 	}
 	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, 1, false, keyspaceID)
 	m.cascadeRemoving.Store(true)
@@ -308,7 +319,10 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 					zap.Stringer("changefeedID", m.changefeedID),
 					zap.Int("eventType", event.eventType),
 					zap.Duration("duration", duration),
-					zap.Any("Message", event.message),
+					zap.String("from", event.message.From.String()),
+					zap.String("to", event.message.To.String()),
+					zap.String("type", event.message.Type.String()),
+					zap.String("topic", event.message.Topic),
 				)
 			} else {
 				log.Info("maintainer is too slow",
@@ -345,6 +359,9 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 }
 
 func (m *Maintainer) checkNodeChanged() {
+	if m.removing.Load() {
+		return
+	}
 	m.nodeChanged.Lock()
 	defer m.nodeChanged.Unlock()
 	if m.nodeChanged.changed {
@@ -373,14 +390,54 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 	}
 
 	status := &heartbeatpb.MaintainerStatus{
-		ChangefeedID:  m.changefeedID.ToPB(),
-		State:         heartbeatpb.ComponentState(m.scheduleState.Load()),
-		CheckpointTs:  m.getWatermark().CheckpointTs,
-		Err:           runningErrors,
-		BootstrapDone: m.initialized.Load(),
-		LastSyncedTs:  m.getWatermark().LastSyncedTs,
+		ChangefeedID:    m.changefeedID.ToPB(),
+		State:           heartbeatpb.ComponentState(m.scheduleState.Load()),
+		CheckpointTs:    m.controller.spanController.GetMaintainerCommittedCheckpointTs(),
+		Err:             runningErrors,
+		BootstrapDone:   m.initialized.Load(),
+		LastSyncedTs:    m.getWatermark().LastSyncedTs,
+		MaintainerEpoch: m.currentMaintainerEpoch(),
+	}
+	drainTarget, drainEpoch := m.controller.getDispatcherDrainTarget()
+	if !drainTarget.IsEmpty() && drainEpoch > 0 {
+		// Report drain progress against the controller snapshot that all local
+		// schedulers are using. Coordinator compares this status with its own
+		// drain epoch, so stale or cleared targets naturally stop contributing.
+		// DrainProgress is changefeed-scoped, so aggregate default and redo
+		// dispatchers into one target view instead of reporting mode-specific
+		// counters.
+		dispatcherCount := m.controller.spanController.GetTaskSizeByNodeID(drainTarget)
+		inflightDrainMoveCount := m.controller.operatorController.CountInflightDrainMovesFromNode(drainTarget)
+		if m.enableRedo {
+			dispatcherCount += m.controller.redoSpanController.GetTaskSizeByNodeID(drainTarget)
+			inflightDrainMoveCount += m.controller.redoOperatorController.CountInflightDrainMovesFromNode(drainTarget)
+		}
+		status.DrainProgress = &heartbeatpb.DrainProgress{
+			TargetNodeId:                 drainTarget.String(),
+			TargetEpoch:                  drainEpoch,
+			TargetDispatcherCount:        clampIntToUint32(dispatcherCount),
+			TargetInflightDrainMoveCount: clampIntToUint32(inflightDrainMoveCount),
+		}
 	}
 	return status
+}
+
+// clampIntToUint32 converts local int counters to heartbeat protobuf counters.
+func clampIntToUint32(v int) uint32 {
+	if v <= 0 {
+		return 0
+	}
+	if uint64(v) > uint64(math.MaxUint32) {
+		return math.MaxUint32
+	}
+	return uint32(v)
+}
+
+// SetDispatcherDrainTarget applies the newest drain target to this maintainer
+// and marks its status dirty so coordinator observes the new epoch promptly.
+func (m *Maintainer) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
+	m.controller.SetDispatcherDrainTarget(target, epoch)
+	m.markStatusChanged()
 }
 
 func (m *Maintainer) initialize() error {
@@ -414,7 +471,7 @@ func (m *Maintainer) initialize() error {
 		zap.String("status", common.FormatMaintainerStatus(m.GetMaintainerStatus())),
 		zap.String("info", m.info.String()),
 		zap.Duration("duration", time.Since(start)))
-	m.statusChanged.Store(true)
+	m.markStatusChanged()
 	return nil
 }
 
@@ -439,6 +496,13 @@ func (m *Maintainer) cleanupMetrics() {
 	metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "redo")
 	metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "default")
 	metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "redo")
+}
+
+func (m *Maintainer) markRemoved() {
+	if !m.removed.CompareAndSwap(false, true) {
+		return
+	}
+	metrics.MaintainerGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name()).Dec()
 }
 
 func (m *Maintainer) onInit() bool {
@@ -475,6 +539,14 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 		m.onMaintainerCloseResponse(msg.From, resp)
 	case messaging.TypeRemoveMaintainerRequest:
 		req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+		if !m.isMaintainerEpochRequestAllowed(req.MaintainerEpoch) {
+			log.Warn("drop stale remove maintainer request",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Stringer("from", msg.From),
+				zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
+				zap.Uint64("currentMaintainerEpoch", m.currentMaintainerEpoch()))
+			return
+		}
 		m.onRemoveMaintainer(req.Cascade, req.Removed)
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
@@ -491,14 +563,28 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 }
 
 func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
+	if !m.initialized.Load() && !cascade && !changefeedRemoved {
+		// A non-cascade remove can arrive before bootstrap finishes in move/restart scenarios.
+		// If we mark the maintainer as removing here, later bootstrap responses may be dropped,
+		// leaving the maintainer permanently not bootstrapped and the coordinator stuck retrying.
+		log.Info("ignore non-cascade remove request before bootstrap",
+			zap.Stringer("changefeedID", m.changefeedID))
+		return
+	}
 	m.removing.Store(true)
 	m.cascadeRemoving.Store(cascade)
 	m.changefeedRemoved.Store(changefeedRemoved)
+	// Freeze ordinary scheduling on the old maintainer before we start the close flow.
+	// Only the DDL trigger close operator is allowed to keep running.
+	allowedDispatcherIDs := []common.DispatcherID{m.ddlSpan.ID}
+	if m.enableRedo {
+		allowedDispatcherIDs = append(allowedDispatcherIDs, m.redoDDLSpan.ID)
+	}
+	m.controller.EnterRemovingMode(allowedDispatcherIDs...)
 	closed := m.tryCloseChangefeed()
 	if closed {
-		m.removed.Store(true)
+		m.markRemoved()
 		m.scheduleState.Store(int32(heartbeatpb.ComponentState_Stopped))
-		metrics.MaintainerGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name()).Dec()
 		log.Info("changefeed maintainer closed", zap.Stringer("changefeedID", m.changefeedID),
 			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs), zap.Bool("removed", m.removed.Load()))
 	}
@@ -516,11 +602,14 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 func (m *Maintainer) onRedoPersisted(req *heartbeatpb.RedoResolvedTsProgressMessage) {
 	if m.redoResolvedTs < req.ResolvedTs {
 		m.redoResolvedTs = req.ResolvedTs
-		msgs := make([]*messaging.TargetMessage, 0, len(m.bootstrapper.GetAllNodeIDs()))
-		for _, id := range m.bootstrapper.GetAllNodeIDs() {
+		nodeIDs := m.bootstrapper.GetAllNodeIDs()
+		maintainerEpoch := m.currentMaintainerEpoch()
+		msgs := make([]*messaging.TargetMessage, 0, len(nodeIDs))
+		for _, id := range nodeIDs {
 			msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoResolvedTsForwardMessage{
-				ChangefeedID: req.ChangefeedID,
-				ResolvedTs:   m.redoResolvedTs,
+				ChangefeedID:    req.ChangefeedID,
+				ResolvedTs:      m.redoResolvedTs,
+				MaintainerEpoch: maintainerEpoch,
 			}))
 		}
 		m.sendMessages(msgs)
@@ -562,39 +651,14 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 				break
 			}
 			needUpdate := false
-			updateCheckpointTs := true
-
-			newWatermark := heartbeatpb.NewMaxWatermark()
-			// Calculate operator and barrier constraints first to ensure atomicity.
-			// This prevents a race condition where checkpointTsByCapture contains old heartbeat data
-			// while operators have completed based on newer heartbeat processing.
-			// For more detailed comments, please refer to `calculateNewCheckpointTs`.
-			minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs(newWatermark.CheckpointTs)
-			minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
-
-			// if there is no tables, there must be a table trigger redo dispatcher
-			for _, id := range m.bootstrapper.GetAllNodeIDs() {
-				// maintainer node has the table trigger redo dispatcher
-				if id != m.selfNode.ID && m.controller.redoSpanController.GetTaskSizeByNodeID(id) <= 0 {
-					continue
-				}
-				// node level watermark reported, ignore this round
-				watermark, ok := m.redoTsByCapture.Get(id)
-				if !ok {
-					updateCheckpointTs = false
-					log.Warn("redo checkpointTs can not be advanced, since missing capture heartbeat",
-						zap.Stringer("changefeedID", m.changefeedID),
-						zap.Any("node", id))
-					continue
-				}
-				newWatermark.UpdateMin(watermark)
+			redoWatermark, canUpdate := m.calculateNewRedoCheckpointTs()
+			if canUpdate {
+				// Keep the redo scheduling baseline aligned with the redo pipeline checkpoint.
+				// Recreated redo dispatchers clamp their startTs to this controller owned value.
+				m.controller.redoSpanController.AdvanceMaintainerCommittedCheckpointTs(redoWatermark.CheckpointTs)
 			}
-
-			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForScheduler, ResolvedTs: minRedoCheckpointTsForScheduler})
-			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForBarrier, ResolvedTs: minRedoCheckpointTsForBarrier})
-
-			if m.redoMetaTs.ResolvedTs < newWatermark.CheckpointTs && updateCheckpointTs {
-				m.redoMetaTs.ResolvedTs = newWatermark.CheckpointTs
+			if canUpdate && m.redoMetaTs.ResolvedTs < redoWatermark.CheckpointTs {
+				m.redoMetaTs.ResolvedTs = redoWatermark.CheckpointTs
 				needUpdate = true
 			}
 			if m.redoMetaTs.CheckpointTs < m.getWatermark().CheckpointTs {
@@ -605,14 +669,21 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 				zap.Any("needUpdate", needUpdate),
 				zap.Any("redoMetaTs", m.redoMetaTs),
 				zap.Any("checkpointTs", m.getWatermark().CheckpointTs),
-				zap.Any("resolvedTs", newWatermark.CheckpointTs),
+				zap.Bool("canUpdateRedoCheckpointTs", canUpdate),
+				zap.Uint64("redoCheckpointTs", func() uint64 {
+					if !canUpdate {
+						return 0
+					}
+					return redoWatermark.CheckpointTs
+				}()),
 			)
 			if needUpdate {
 				m.sendMessages([]*messaging.TargetMessage{
 					messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMetaMessage{
-						ChangefeedID: m.redoMetaTs.ChangefeedID,
-						CheckpointTs: m.redoMetaTs.CheckpointTs,
-						ResolvedTs:   m.redoMetaTs.ResolvedTs,
+						ChangefeedID:    m.redoMetaTs.ChangefeedID,
+						CheckpointTs:    m.redoMetaTs.CheckpointTs,
+						ResolvedTs:      m.redoMetaTs.ResolvedTs,
+						MaintainerEpoch: m.currentMaintainerEpoch(),
 					}),
 				})
 			}
@@ -631,27 +702,33 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !m.initialized.Load() {
-				log.Warn("can not advance checkpointTs since not bootstrapped",
-					zap.Stringer("changefeedID", m.changefeedID),
-					zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
-					zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
-				break
-			}
+		case <-m.checkpointUpdateCh:
+		}
 
-			// first check the online/offline nodes
-			// we need to check node changed before calculating checkpointTs
-			// to avoid the case when a node is offline, the node's heartbeat is missing
-			// while the span in this node still not set to absent, which may cause
-			// the checkpointTs be advanced incorrectly
-			m.checkNodeChanged()
+		if !m.initialized.Load() {
+			log.Warn("can not advance checkpointTs since not bootstrapped",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
+				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
+			continue
+		}
 
-			// CRITICAL SECTION: Calculate checkpointTs with proper ordering to prevent race condition
-			newWatermark, canUpdate := m.calculateNewCheckpointTs()
-			if canUpdate {
-				m.setWatermark(*newWatermark)
-				m.updateMetrics()
+		// first check the online/offline nodes
+		// we need to check node changed before calculating checkpointTs
+		// to avoid the case when a node is offline, the node's heartbeat is missing
+		// while the span in this node still not set to absent, which may cause
+		// the checkpointTs be advanced incorrectly
+		m.checkNodeChanged()
+
+		// CRITICAL SECTION: Calculate checkpointTs with proper ordering to prevent race condition
+		newWatermark, canUpdate := m.calculateNewCheckpointTs()
+		if canUpdate {
+			m.controller.spanController.AdvanceMaintainerCommittedCheckpointTs(newWatermark.CheckpointTs)
+			watermarkChanged := m.setWatermark(*newWatermark)
+			if watermarkChanged && m.isLowLatencyMode() {
+				m.markStatusChanged()
 			}
+			m.updateMetrics()
 		}
 	}
 }
@@ -712,6 +789,18 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForBarrier, ResolvedTs: minCheckpointTsForBarrier})
 	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
 
+	// MaxUint64 means this round still has no effective global checkpoint.
+	// Skipping the update keeps the committed checkpoint from being poisoned.
+	// Only all the heartbeat from dispatcherManager contains no dispatcher span (eg. all dispatchers are in absent state), will cause MaxUint64.
+	if newWatermark.CheckpointTs == math.MaxUint64 {
+		log.Debug("checkpointTs can not be advanced, since global checkpoint is invalid",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Uint64("resolvedTs", newWatermark.ResolvedTs),
+			zap.Uint64("minCheckpointTsForScheduler", minCheckpointTsForScheduler),
+			zap.Uint64("minCheckpointTsForBarrier", minCheckpointTsForBarrier))
+		return nil, false
+	}
+
 	log.Debug("can advance checkpointTs",
 		zap.Stringer("changefeedID", m.changefeedID),
 		zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
@@ -720,6 +809,57 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 		zap.Uint64("minCheckpointTsForBarrier", minCheckpointTsForBarrier),
 	)
 
+	return newWatermark, true
+}
+
+func (m *Maintainer) calculateNewRedoCheckpointTs() (*heartbeatpb.Watermark, bool) {
+	if !m.enableRedo || m.controller == nil || m.controller.redoSpanController == nil || m.controller.redoBarrier == nil {
+		return nil, false
+	}
+
+	newWatermark := heartbeatpb.NewMaxWatermark()
+	minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs(newWatermark.CheckpointTs)
+	minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
+
+	updateCheckpointTs := true
+	for _, id := range m.bootstrapper.GetAllNodeIDs() {
+		// The maintainer node hosts the table trigger redo dispatcher.
+		if id != m.selfNode.ID && m.controller.redoSpanController.GetTaskSizeByNodeID(id) <= 0 {
+			continue
+		}
+		watermark, ok := m.redoTsByCapture.Get(id)
+		if !ok {
+			updateCheckpointTs = false
+			log.Warn("redo checkpointTs can not be advanced, since missing capture heartbeat",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Any("node", id))
+			continue
+		}
+		newWatermark.UpdateMin(watermark)
+	}
+
+	if !updateCheckpointTs {
+		return nil, false
+	}
+
+	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForBarrier, ResolvedTs: minRedoCheckpointTsForBarrier})
+	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForScheduler, ResolvedTs: minRedoCheckpointTsForScheduler})
+
+	if newWatermark.CheckpointTs == math.MaxUint64 {
+		log.Debug("redo checkpointTs can not be advanced, since redo global checkpoint is invalid",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Uint64("resolvedTs", newWatermark.ResolvedTs),
+			zap.Uint64("minCheckpointTsForScheduler", minRedoCheckpointTsForScheduler),
+			zap.Uint64("minCheckpointTsForBarrier", minRedoCheckpointTsForBarrier))
+		return nil, false
+	}
+
+	log.Debug("can advance redo checkpointTs",
+		zap.Stringer("changefeedID", m.changefeedID),
+		zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
+		zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
+		zap.Uint64("minCheckpointTsForScheduler", minRedoCheckpointTsForScheduler),
+		zap.Uint64("minCheckpointTsForBarrier", minRedoCheckpointTsForBarrier))
 	return newWatermark, true
 }
 
@@ -750,6 +890,13 @@ func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 	}
 }
 
+func (m *Maintainer) currentMaintainerEpoch() uint64 {
+	if m.info == nil {
+		return 0
+	}
+	return m.info.Epoch
+}
+
 func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	// ignore the heartbeat if the maintainer not bootstrapped
 	if !m.initialized.Load() {
@@ -760,6 +907,7 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	// ATOMIC CHECKPOINT UPDATE: Part 1 of race condition fix
 	// Update checkpointTsByCapture BEFORE processing operator status to ensure atomicity
 	// This works together with calCheckpointTs to prevent incorrect checkpoint advancement
+	watermarkUpdated := false
 	if req.Watermark != nil {
 		// The sequence increases when a dispatcher status changes, so accept the new watermark
 		// even if the reported checkpoint regresses (new dispatcher might replay from
@@ -768,6 +916,7 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 		old, ok := m.checkpointTsByCapture.Get(msg.From)
 		if !ok || req.Watermark.Seq > old.Seq || (req.Watermark.Seq == old.Seq && req.Watermark.CheckpointTs > old.CheckpointTs) {
 			m.checkpointTsByCapture.Set(msg.From, *req.Watermark)
+			watermarkUpdated = true
 		}
 		// Update last synced ts from all dispatchers.
 		// We don't care about the checkpoint ts of scheduler or barrier here,
@@ -799,7 +948,48 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	// Process operator status updates AFTER checkpointTsByCapture is updated
 	// This ensures when operators complete, checkpointTsByCapture already contains the complete heartbeat
 	// Works with calCheckpointTs constraint ordering to prevent checkpoint advancing past new dispatcher startTs
+	if m.removing.Load() {
+		// Once RemoveMaintainer starts, we still need status updates for the close flow itself
+		// (for example DDL-trigger close operators reaching terminal states), but we must not run
+		// failover self-healing. A late Stopped/Working heartbeat from a closing dispatcher manager
+		// would otherwise mark spans absent or remove/recreate dispatchers after shutdown has begun.
+		m.controller.handleStatus(msg.From, req.Statuses, false)
+		if watermarkUpdated {
+			m.notifyCheckpointUpdate()
+		}
+		return
+	}
 	m.controller.HandleStatus(msg.From, req.Statuses)
+	if watermarkUpdated {
+		m.notifyCheckpointUpdate()
+	}
+}
+
+func (m *Maintainer) notifyCheckpointUpdate() {
+	if !m.isLowLatencyMode() {
+		return
+	}
+	select {
+	case m.checkpointUpdateCh <- struct{}{}:
+	default:
+	}
+}
+
+func (m *Maintainer) isLowLatencyMode() bool {
+	return m.info != nil && m.info.Config != nil && m.info.Config.IsLowLatencyMode()
+}
+
+func (m *Maintainer) markStatusChanged() {
+	if m.statusChanged != nil {
+		m.statusChanged.Store(true)
+	}
+	if !m.isLowLatencyMode() || m.managerHeartbeatCh == nil {
+		return
+	}
+	select {
+	case m.managerHeartbeatCh <- struct{}{}:
+	default:
+	}
 }
 
 func (m *Maintainer) onError(from node.ID, err *heartbeatpb.RunningError) {
@@ -808,14 +998,14 @@ func (m *Maintainer) onError(from node.ID, err *heartbeatpb.RunningError) {
 		err.Node = info.AdvertiseAddr
 	}
 	m.runningErrors.Lock()
-	m.statusChanged.Store(true)
+	m.markStatusChanged()
 	m.runningErrors.m[from] = err
 	m.runningErrors.Unlock()
 }
 
 func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 	// the barrier is not initialized
-	if !m.initialized.Load() {
+	if !m.initialized.Load() || m.removing.Load() {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
@@ -838,6 +1028,10 @@ func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage)
 		zap.Stringer("sourceNodeID", msg.From))
 
 	resp := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
+	if !m.isMaintainerEpochResponseAllowed(resp.MaintainerEpoch) {
+		m.logDroppedMaintainerResponse("bootstrap", msg.From, resp.MaintainerEpoch)
+		return
+	}
 	if resp.Err != nil {
 		log.Warn("maintainer bootstrap failed",
 			zap.Stringer("changefeedID", m.changefeedID),
@@ -861,6 +1055,10 @@ func (m *Maintainer) onMaintainerPostBootstrapResponse(msg *messaging.TargetMess
 		zap.Stringer("changefeedID", m.changefeedID),
 		zap.Any("server", msg.From))
 	resp := msg.Message[0].(*heartbeatpb.MaintainerPostBootstrapResponse)
+	if !m.isMaintainerEpochResponseAllowed(resp.MaintainerEpoch) {
+		m.logDroppedMaintainerResponse("post-bootstrap", msg.From, resp.MaintainerEpoch)
+		return
+	}
 	if resp.Err != nil {
 		log.Warn("maintainer post bootstrap failed",
 			zap.Stringer("changefeedID", m.changefeedID),
@@ -870,6 +1068,36 @@ func (m *Maintainer) onMaintainerPostBootstrapResponse(msg *messaging.TargetMess
 	}
 	// disable resend post bootstrap message
 	m.postBootstrapMsg = nil
+}
+
+// isMaintainerEpochResponseAllowed accepts current-generation responses while
+// preserving epoch-0 compatibility during rolling upgrades.
+func (m *Maintainer) isMaintainerEpochResponseAllowed(responseEpoch uint64) bool {
+	return common.MaintainerEpochMatches(responseEpoch, m.currentMaintainerEpoch())
+}
+
+// isMaintainerEpochRequestAllowed fences dispatcher-manager requests that can
+// close or mutate local dispatcher state on behalf of a maintainer generation.
+func (m *Maintainer) isMaintainerEpochRequestAllowed(requestEpoch uint64) bool {
+	currentEpoch := m.currentMaintainerEpoch()
+	if requestEpoch == 0 {
+		// Epoch 0 is only valid while this maintainer is still in compatibility
+		// mode. A strict maintainer must not accept an unfenced tombstone.
+		return currentEpoch == 0
+	}
+	// A strict request can still control a compatibility maintainer during
+	// rolling upgrade, but strict maintainers require an exact epoch match.
+	return currentEpoch == 0 || requestEpoch == currentEpoch
+}
+
+// logDroppedMaintainerResponse records responses rejected by maintainer epoch fencing.
+func (m *Maintainer) logDroppedMaintainerResponse(responseType string, from node.ID, responseEpoch uint64) {
+	log.Warn("drop stale maintainer response",
+		zap.Stringer("changefeedID", m.changefeedID),
+		zap.String("responseType", responseType),
+		zap.Stringer("from", from),
+		zap.Uint64("responseMaintainerEpoch", responseEpoch),
+		zap.Uint64("currentMaintainerEpoch", m.currentMaintainerEpoch()))
 }
 
 // isMysqlCompatible returns true if the sinkURIStr is mysql compatible.
@@ -913,6 +1141,7 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 		m.handleError(err)
 		return
 	}
+	m.bootstrapper.ClearBootstrapResponses()
 
 	if postBootstrapRequest == nil {
 		return
@@ -925,7 +1154,7 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 	// For a normal case(100w tables, and 16 ascii characters for each name), the memory consumption is about 30MB.
 	m.postBootstrapMsg = postBootstrapRequest
 	m.sendPostBootstrapRequest()
-	m.statusChanged.Store(true)
+	m.markStatusChanged()
 }
 
 func (m *Maintainer) sendPostBootstrapRequest() {
@@ -940,6 +1169,20 @@ func (m *Maintainer) sendPostBootstrapRequest() {
 }
 
 func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeatpb.MaintainerCloseResponse) {
+	if !m.isMaintainerEpochResponseAllowed(response.MaintainerEpoch) {
+		m.logDroppedMaintainerResponse("close", from, response.MaintainerEpoch)
+		return
+	}
+	if !m.removing.Load() {
+		// Close responses only complete an active remove flow. A delayed compat
+		// response from a superseded maintainer can share this changefeed ID.
+		log.Warn("drop unexpected maintainer close response",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Stringer("from", from),
+			zap.Uint64("responseMaintainerEpoch", response.MaintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", m.currentMaintainerEpoch()))
+		return
+	}
 	if response.Success {
 		m.closedNodes[from] = struct{}{}
 		m.onRemoveMaintainer(m.cascadeRemoving.Load(), m.changefeedRemoved.Load())
@@ -948,8 +1191,12 @@ func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeat
 
 func (m *Maintainer) handleResendMessage() {
 	// resend closing message
-	if m.removing.Load() && m.cascadeRemoving.Load() {
-		m.trySendMaintainerCloseRequestToAllNode()
+	if m.removing.Load() {
+		// After RemoveMaintainer starts, the old maintainer must stop resending bootstrap/barrier
+		// traffic. Otherwise stale control-plane messages can race with the new maintainer.
+		if m.cascadeRemoving.Load() {
+			m.trySendMaintainerCloseRequestToAllNode()
+		}
 		return
 	}
 	// resend bootstrap message
@@ -967,7 +1214,7 @@ func (m *Maintainer) handleResendMessage() {
 
 func (m *Maintainer) tryCloseChangefeed() bool {
 	if m.scheduleState.Load() != int32(heartbeatpb.ComponentState_Stopped) {
-		m.statusChanged.Store(true)
+		m.markStatusChanged()
 	}
 	if !m.cascadeRemoving.Load() {
 		m.controller.operatorController.RemoveTasksByTableIDs(m.ddlSpan.Span.TableID)
@@ -991,8 +1238,9 @@ func (m *Maintainer) trySendMaintainerCloseRequestToAllNode() bool {
 				n,
 				messaging.DispatcherManagerManagerTopic,
 				&heartbeatpb.MaintainerCloseRequest{
-					ChangefeedID: m.changefeedID.ToPB(),
-					Removed:      m.changefeedRemoved.Load(),
+					ChangefeedID:    m.changefeedID.ToPB(),
+					Removed:         m.changefeedRemoved.Load(),
+					MaintainerEpoch: m.currentMaintainerEpoch(),
 				}))
 		}
 	}
@@ -1026,7 +1274,7 @@ func (m *Maintainer) handleError(err error) {
 		Code:    code,
 		Message: err.Error(),
 	}
-	m.statusChanged.Store(true)
+	m.markStatusChanged()
 }
 
 // createBootstrapMessageFactory returns a function that generates bootstrap messages
@@ -1053,6 +1301,7 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 			TableTriggerRedoDispatcherId:  nil,
 			IsNewChangefeed:               false,
 			KeyspaceId:                    m.info.KeyspaceID,
+			MaintainerEpoch:               m.currentMaintainerEpoch(),
 		}
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node
@@ -1141,7 +1390,13 @@ func (m *Maintainer) runHandleEvents(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case event := <-m.eventCh.Out():
-			m.HandleEvent(event)
+			if event == nil {
+				continue
+			}
+			func() {
+				defer m.blockStatusPending.release(event.blockStatusReleaseKeys)
+				m.HandleEvent(event)
+			}()
 		case <-ticker.C:
 			m.HandleEvent(&Event{
 				changefeedID: m.changefeedID,
@@ -1154,7 +1409,11 @@ func (m *Maintainer) runHandleEvents(ctx context.Context) {
 // pushEvent is used to push event to maintainer's event channel
 // event will be handled by maintainer's main loop
 func (m *Maintainer) pushEvent(event *Event) {
-	m.eventCh.In() <- event
+	filteredEvent, ok := m.filterBlockStatusEvent(event)
+	if !ok {
+		return
+	}
+	m.eventCh.In() <- filteredEvent
 }
 
 func (m *Maintainer) getWatermark() heartbeatpb.Watermark {
@@ -1168,13 +1427,17 @@ func (m *Maintainer) getWatermark() heartbeatpb.Watermark {
 	return res
 }
 
-func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
+func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) bool {
 	m.watermark.mu.Lock()
 	defer m.watermark.mu.Unlock()
-	if newWatermark.CheckpointTs != math.MaxUint64 {
+	changed := false
+	if newWatermark.CheckpointTs != math.MaxUint64 && newWatermark.CheckpointTs != m.watermark.CheckpointTs {
 		m.watermark.CheckpointTs = newWatermark.CheckpointTs
+		changed = true
 	}
-	if newWatermark.ResolvedTs != math.MaxUint64 {
+	if newWatermark.ResolvedTs != math.MaxUint64 && newWatermark.ResolvedTs != m.watermark.ResolvedTs {
 		m.watermark.ResolvedTs = newWatermark.ResolvedTs
+		changed = true
 	}
+	return changed
 }

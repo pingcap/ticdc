@@ -110,6 +110,14 @@ var (
 		"cluster ID mismatch, tikv cluster ID is %d and request cluster ID is %d",
 		errors.RFCCodeText("CDC:ErrClusterIDMismatch"),
 	)
+	ErrSameUpstreamDownstream = errors.Normalize(
+		"upstream and downstream are the same, %s",
+		errors.RFCCodeText("CDC:ErrSameUpstreamDownstream"),
+	)
+	ErrActiveActiveTSOIndexIncompatible = errors.Normalize(
+		"active active tso index is incompatible, %s",
+		errors.RFCCodeText("CDC:ErrActiveActiveTSOIndexIncompatible"),
+	)
 	ErrMultipleCDCClustersExist = errors.Normalize(
 		"multiple TiCDC clusters exist while using --pd",
 		errors.RFCCodeText("CDC:ErrMultipleCDCClustersExist"),
@@ -119,50 +127,25 @@ var (
 		"kafka send message failed",
 		errors.RFCCodeText("CDC:ErrKafkaSendMessage"),
 	)
-	ErrKafkaProducerClosed = errors.Normalize(
-		"kafka producer closed",
-		errors.RFCCodeText("CDC:ErrKafkaProducerClosed"),
+	ErrKafkaSinkClosed = errors.Normalize(
+		"kafka sink closed",
+		errors.RFCCodeText("CDC:ErrKafkaSinkClosed"),
 	)
-	ErrKafkaAsyncSendMessage = errors.Normalize(
-		"kafka async send message failed",
-		errors.RFCCodeText("CDC:ErrKafkaAsyncSendMessage"),
-	)
-	ErrKafkaInvalidPartitionNum = errors.Normalize(
-		"invalid partition num %d",
-		errors.RFCCodeText("CDC:ErrKafkaInvalidPartitionNum"),
-	)
-	ErrKafkaInvalidRequiredAcks = errors.Normalize(
-		"invalid required acks %d, "+
-			"only support these values: 0(NoResponse),1(WaitForLocal) and -1(WaitForAll)",
-		errors.RFCCodeText("CDC:ErrKafkaInvalidRequiredAcks"),
-	)
-	ErrKafkaNewProducer = errors.Normalize(
-		"new kafka producer",
-		errors.RFCCodeText("CDC:ErrKafkaNewProducer"),
-	)
-	ErrKafkaInvalidClientID = errors.Normalize(
-		"invalid kafka client ID '%s'",
-		errors.RFCCodeText("CDC:ErrKafkaInvalidClientID"),
-	)
-	ErrKafkaInvalidVersion = errors.Normalize(
-		"invalid kafka version",
-		errors.RFCCodeText("CDC:ErrKafkaInvalidVersion"),
+	ErrNewKafkaSink = errors.Normalize(
+		"new kafka sink",
+		errors.RFCCodeText("CDC:ErrNewKafkaSink"),
 	)
 	ErrKafkaInvalidConfig = errors.Normalize(
 		"kafka config invalid",
 		errors.RFCCodeText("CDC:ErrKafkaInvalidConfig"),
 	)
-	ErrKafkaCreateTopic = errors.Normalize(
-		"kafka create topic failed",
-		errors.RFCCodeText("CDC:ErrKafkaCreateTopic"),
+	ErrKafkaAdminAPI = errors.Normalize(
+		"kafka admin API %s failed: %s",
+		errors.RFCCodeText("CDC:ErrKafkaAdminAPI"),
 	)
-	ErrKafkaInvalidTopicExpression = errors.Normalize(
-		"invalid topic expression: %s ",
-		errors.RFCCodeText("CDC:ErrKafkaTopicExprInvalid"),
-	)
-	ErrKafkaConfigNotFound = errors.Normalize(
-		"kafka config item not found",
-		errors.RFCCodeText("CDC:ErrKafkaConfigNotFound"),
+	ErrKafkaAuthorizationFailed = errors.Normalize(
+		"kafka %s authorization failed: %s",
+		errors.RFCCodeText("CDC:ErrKafkaAuthorizationFailed"),
 	)
 	ErrPulsarInvalidTopicExpression = errors.Normalize(
 		"invalid topic expression",
@@ -252,6 +235,18 @@ var (
 	ErrSinkInvalidConfig = errors.Normalize(
 		"sink config invalid",
 		errors.RFCCodeText("CDC:ErrSinkInvalidConfig"),
+	)
+	ErrInvalidTableRoutingRule = errors.Normalize(
+		"invalid table routing rule",
+		errors.RFCCodeText("CDC:ErrInvalidTableRoutingRule"),
+	)
+	ErrTableRoutingFailed = errors.Normalize(
+		"table routing failed",
+		errors.RFCCodeText("CDC:ErrTableRoutingFailed"),
+	)
+	ErrTableRouteConflict = errors.Normalize(
+		"table route conflict: target `%s`.`%s` is mapped by both source `%s`.`%s` and source `%s`.`%s`",
+		errors.RFCCodeText("CDC:ErrTableRouteConflict"),
 	)
 	ErrMessageTooLarge = errors.Normalize(
 		"message is too large. table:%s, length:%d, maxMessageBytes:%d",
@@ -584,6 +579,14 @@ var (
 		"updating service safepoint failed",
 		errors.RFCCodeText("CDC:ErrUpdateServiceSafepointFailed"),
 	)
+	ErrGetServiceSafepointFailed = errors.Normalize(
+		"get service safepoint failed",
+		errors.RFCCodeText("CDC:ErrGetServiceSafepointFailed"),
+	)
+	ErrDeleteServiceSafepointFailed = errors.Normalize(
+		"delete service safepoint failed",
+		errors.RFCCodeText("CDC:ErrDeleteServiceSafepointFailed"),
+	)
 	ErrUpdateGCBarrierFailed = errors.Normalize(
 		"updating gc barrier failed",
 		errors.RFCCodeText("CDC:ErrUpdateGCBarrierFailed"),
@@ -697,6 +700,10 @@ var (
 		"fail to open storage for redo log",
 		errors.RFCCodeText("CDC:ErrStorageInitialize"),
 	)
+	ErrSpillFileOp = errors.Normalize(
+		"spill file operation failed: %s",
+		errors.RFCCodeText("CDC:ErrSpillFileOp"),
+	)
 
 	ErrRedoConfigInvalid = errors.Normalize(
 		"redo log config invalid",
@@ -770,6 +777,10 @@ var (
 		"failed to init table trigger dispatcher",
 		errors.RFCCodeText("CDC:ErrChangefeedInitTableTriggerDispatcherFailed"),
 	)
+	ErrDispatcherManagerWritePathClosed = errors.Normalize(
+		"dispatcher manager write path is closed",
+		errors.RFCCodeText("CDC:ErrDispatcherManagerWritePathClosed"),
+	)
 	ErrDDLEventError = errors.Normalize(
 		"ddl event meets error",
 		errors.RFCCodeText("CDC:ErrDDLEventError"),
@@ -812,6 +823,37 @@ var (
 	ErrUnimplementedIOType = errors.Normalize(
 		"unimplemented IOType: %d",
 		errors.RFCCodeText("CDC:ErrUnimplementedIOType"),
+	)
+
+	// encryption related errors
+	ErrEncryptionMetaNotFound = errors.Normalize(
+		"encryption meta not found",
+		errors.RFCCodeText("CDC:ErrEncryptionMetaNotFound"),
+	)
+
+	ErrUnsupportedEncryptionAlgorithm = errors.Normalize(
+		"unsupported encryption algorithm: %s",
+		errors.RFCCodeText("CDC:ErrUnsupportedEncryptionAlgorithm"),
+	)
+
+	ErrEncryptionFailed = errors.Normalize(
+		"encryption failed: %s",
+		errors.RFCCodeText("CDC:ErrEncryptionFailed"),
+	)
+
+	ErrDecryptionFailed = errors.Normalize(
+		"decryption failed: %s",
+		errors.RFCCodeText("CDC:ErrDecryptionFailed"),
+	)
+
+	ErrInvalidDataKeyID = errors.Normalize(
+		"invalid data key ID: %s",
+		errors.RFCCodeText("CDC:ErrInvalidDataKeyID"),
+	)
+
+	ErrDataKeyNotFound = errors.Normalize(
+		"data key not found: %s",
+		errors.RFCCodeText("CDC:ErrDataKeyNotFound"),
 	)
 )
 

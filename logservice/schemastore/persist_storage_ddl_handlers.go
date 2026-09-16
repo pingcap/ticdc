@@ -14,7 +14,9 @@
 package schemastore
 
 import (
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/pingcap/log"
@@ -68,6 +70,13 @@ type updateSchemaMetadataFuncArgs struct {
 	partitionMap map[int64]BasicPartitionInfo
 }
 
+type iterateEventTablesFuncArgs struct {
+	event        *PersistedDDLEvent
+	databaseMap  map[int64]*BasicDatabaseInfo
+	partitionMap map[int64]BasicPartitionInfo
+	apply        func(tableIDs ...int64)
+}
+
 func (args *updateSchemaMetadataFuncArgs) addTableToDB(tableID int64, schemaID int64) {
 	databaseInfo, ok := args.databaseMap[schemaID]
 	if !ok {
@@ -106,7 +115,7 @@ type persistStorageDDLHandler struct {
 	// iterateEventTablesFunc iterates through all physical table IDs affected by the DDL event
 	// and calls the provided `apply` function with those IDs. For partition tables, it includes
 	// all partition IDs.
-	iterateEventTablesFunc func(event *PersistedDDLEvent, apply func(tableIDs ...int64))
+	iterateEventTablesFunc func(args iterateEventTablesFuncArgs)
 	// extractTableInfoFunc extract (table info, deleted) for the specified `tableID` from ddl event
 	extractTableInfoFunc func(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool)
 	// buildDDLEvent build a DDLEvent from a PersistedDDLEvent
@@ -131,8 +140,8 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateDDLHistoryFunc:       updateDDLHistoryForSchemaDDL,
 		updateFullTableInfoFunc:    updateFullTableInfoForDropSchema,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropSchema,
-		iterateEventTablesFunc:     iterateEventTablesIgnore,
-		extractTableInfoFunc:       extractTableInfoFuncIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForDropSchema,
+		extractTableInfoFunc:       extractTableInfoFuncForDropSchema,
 		buildDDLEventFunc:          buildDDLEventForDropSchema,
 	},
 	model.ActionCreateTable: {
@@ -172,7 +181,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionAddIndex: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForAddIndex,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
@@ -406,7 +415,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForCreateTables,
 	},
 	model.ActionMultiSchemaChange: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForMultiSchemaChange,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
@@ -444,7 +453,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionAlterTablePartitioning: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForAlterTablePartitioning,
 		updateDDLHistoryFunc:       updateDDLHistoryForAlterTablePartitioning,
-		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
+		updateFullTableInfoFunc:    updateFullTableInfoForPartitioningDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForAlterTablePartitioning,
 		iterateEventTablesFunc:     iterateEventTablesForAlterTablePartitioning,
 		extractTableInfoFunc:       extractTableInfoFuncForAlterTablePartitioning,
@@ -453,7 +462,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionRemovePartitioning: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForRemovePartitioning,
 		updateDDLHistoryFunc:       updateDDLHistoryForRemovePartitioning,
-		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
+		updateFullTableInfoFunc:    updateFullTableInfoForPartitioningDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForRemovePartitioning,
 		iterateEventTablesFunc:     iterateEventTablesForRemovePartitioning,
 		extractTableInfoFunc:       extractTableInfoFuncForRemovePartitioning,
@@ -519,7 +528,7 @@ func getSchemaID(tableMap map[int64]*BasicTableInfo, tableID int64) int64 {
 // schemaName should be "Name.O"
 func findSchemaIDByName(databaseMap map[int64]*BasicDatabaseInfo, schemaName string) (int64, bool) {
 	for id, info := range databaseMap {
-		if info.Name == schemaName {
+		if strings.EqualFold(info.Name, schemaName) {
 			return id, true
 		}
 	}
@@ -529,7 +538,7 @@ func findSchemaIDByName(databaseMap map[int64]*BasicDatabaseInfo, schemaName str
 // tableName should be "Name.O"
 func findTableIDByName(tableMap map[int64]*BasicTableInfo, schemaID int64, tableName string) (int64, bool) {
 	for id, info := range tableMap {
-		if info.SchemaID == schemaID && info.Name == tableName {
+		if info.SchemaID == schemaID && strings.EqualFold(info.Name, tableName) {
 			return id, true
 		}
 	}
@@ -590,6 +599,7 @@ func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) Pe
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = args.job.TableName
+	normalizeCreateViewQueryWithStoredSelect(&event)
 	return event
 }
 
@@ -599,8 +609,36 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 	// We don't store the relationship: view_id -> table_name, get table name from args.job
 	event.TableName = args.job.TableName
 	// The query in job maybe "DROP VIEW test1.view1, test2.view2", we need rebuild it here.
-	event.Query = fmt.Sprintf("DROP VIEW `%s`.`%s`", event.SchemaName, event.TableName)
+	event.Query = fmt.Sprintf("DROP VIEW %s", common.QuoteSchema(event.SchemaName, event.TableName))
 	return event
+}
+
+// TiDB persists the normalized SELECT body of a view in
+// event.TableInfo.View.SelectStmt when executing CREATE VIEW, so this field can
+// carry fully resolved source-table references even if job.Query keeps the
+// original session-level text.
+// Field definition:
+// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/meta/model/table.go#L762-L770
+// Value assignment in CREATE VIEW:
+// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/create_table.go#L1668-L1678
+func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
+	if event.TableInfo == nil || event.TableInfo.View == nil {
+		return
+	}
+
+	query, err := commonEvent.NormalizeCreateViewQueryWithStoredSelect(
+		event.Query,
+		event.TableInfo.View.SelectStmt,
+		event.SchemaName,
+	)
+	if err != nil {
+		log.Warn("normalize create view query with stored select failed",
+			zap.String("query", event.Query),
+			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
+			zap.Error(err))
+		return
+	}
+	event.Query = query
 }
 
 func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
@@ -609,6 +647,13 @@ func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) P
 	event.TableName = event.TableInfo.Name.O
 	setReferTableForCreateTableLike(&event, args)
 	return event
+}
+
+type createTableLikeReferSchemaInfo struct {
+	schemaName string
+	schemaID   int64
+	// true when the source schema was inferred and should be written back to query.
+	qualifyQuery bool
 }
 
 func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersistedDDLEventFuncArgs) {
@@ -627,22 +672,33 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 		return
 	}
 	refTable := createStmt.ReferTable.Name.O
-	refSchema := createStmt.ReferTable.Schema.O
-	if refSchema == "" {
-		refSchema = event.SchemaName
-	}
-	refSchemaID, ok := findSchemaIDByName(args.databaseMap, refSchema)
+	// refSchema is the schema name of the table referenced by
+	// CREATE TABLE ... LIKE. It can be absent in the original query.
+	refSchemaInQuery := createStmt.ReferTable.Schema.O
+	referSchemaInfo, ok := resolveCreateTableLikeReferSchema(args, refSchemaInQuery, refTable)
 	if !ok {
 		log.Warn("refer schema not found for create table like",
-			zap.String("schema", refSchema),
+			zap.String("schema", referSchemaInfo.schemaName),
 			zap.String("table", refTable),
 			zap.String("query", event.Query))
 		return
 	}
-	refTableID, ok := findTableIDByName(args.tableMap, refSchemaID, refTable)
+	if referSchemaInfo.qualifyQuery {
+		createStmt.ReferTable.Schema = ast.NewCIStr(referSchemaInfo.schemaName)
+		query, err := commonEvent.Restore(createStmt)
+		if err != nil {
+			log.Warn("restore create table like ddl failed",
+				zap.String("schema", referSchemaInfo.schemaName),
+				zap.String("query", event.Query),
+				zap.Error(err))
+			return
+		}
+		event.Query = query
+	}
+	refTableID, ok := findTableIDByName(args.tableMap, referSchemaInfo.schemaID, refTable)
 	if !ok {
 		log.Warn("refer table not found for create table like",
-			zap.String("schema", refSchema),
+			zap.String("schema", referSchemaInfo.schemaName),
 			zap.String("table", refTable),
 			zap.String("query", event.Query))
 		return
@@ -656,12 +712,56 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 	}
 }
 
+func resolveCreateTableLikeReferSchema(
+	args buildPersistedDDLEventFuncArgs,
+	refSchemaInQuery string,
+	refTable string,
+) (createTableLikeReferSchemaInfo, bool) {
+	if refSchemaInQuery != "" {
+		schemaID, ok := findSchemaIDByName(args.databaseMap, refSchemaInQuery)
+		return createTableLikeReferSchemaInfo{
+			schemaName: refSchemaInQuery,
+			schemaID:   schemaID,
+		}, ok
+	}
+
+	for _, info := range args.job.InvolvingSchemaInfo {
+		// TiDB records the LIKE source table as a shared involving table.
+		// For CREATE TABLE db2.t LIKE db1.t, the target db2.t is also in
+		// InvolvingSchemaInfo, but it is exclusive. Without this mode check,
+		// the target table may be mistaken as the referenced table.
+		// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/executor.go#L1009-L1023
+		if info.Mode != model.SharedInvolving ||
+			info.Database == "" ||
+			!strings.EqualFold(info.Table, refTable) {
+			continue
+		}
+		schemaID, ok := findSchemaIDByName(args.databaseMap, info.Database)
+		if !ok {
+			continue
+		}
+		refSchema := getSchemaName(args.databaseMap, schemaID)
+		return createTableLikeReferSchemaInfo{
+			schemaName:   refSchema,
+			schemaID:     schemaID,
+			qualifyQuery: !strings.EqualFold(refSchema, getSchemaName(args.databaseMap, args.job.SchemaID)),
+		}, true
+	}
+
+	// If TiDB does not provide the referenced schema, fall back to the schema
+	// that the CREATE TABLE event belongs to, matching MySQL/TiDB resolution.
+	return createTableLikeReferSchemaInfo{
+		schemaName: getSchemaName(args.databaseMap, args.job.SchemaID),
+		schemaID:   args.job.SchemaID,
+	}, true
+}
+
 func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = getTableName(args.tableMap, event.TableID)
 	// The query in job maybe "DROP TABLE test1.table1, test2.table2", we need rebuild it here.
-	event.Query = fmt.Sprintf("DROP TABLE `%s`.`%s`", event.SchemaName, event.TableName)
+	event.Query = fmt.Sprintf("DROP TABLE %s", common.QuoteSchema(event.SchemaName, event.TableName))
 	return event
 }
 
@@ -669,6 +769,20 @@ func buildPersistedDDLEventForNormalDDLOnSingleTable(args buildPersistedDDLEvent
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = getTableName(args.tableMap, event.TableID)
+	return event
+}
+
+func buildPersistedDDLEventForMultiSchemaChange(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventForNormalDDLOnSingleTable(args)
+	event.IndexIDs = getIndexIDs(args.job)
+	return event
+}
+
+func buildPersistedDDLEventForAddIndex(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
+	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
+	event.TableName = getTableName(args.tableMap, event.TableID)
+	event.IndexIDs = getIndexIDs(args.job)
 	return event
 }
 
@@ -689,63 +803,138 @@ func buildPersistedDDLEventForTruncateTable(args buildPersistedDDLEventFuncArgs)
 
 func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
-	// Note: schema id/schema name/table name may be changed or not
-	// table id does not change, we use it to get the table's prev schema id/name and table name
-	event.ExtraSchemaID = getSchemaID(args.tableMap, event.TableID)
-	// TODO: check how ExtraTableName will be used later
-	event.ExtraTableName = getTableName(args.tableMap, event.TableID)
-	event.ExtraSchemaName = getSchemaName(args.databaseMap, event.ExtraSchemaID)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
-	// get the table's current table name from the ddl job
 	event.TableName = event.TableInfo.Name.O
+
+	// Why the old table identity must be recovered instead of being read directly from tableMap:
+	// suppose `RENAME TABLE test.t1 TO test2.t2` commits at ts=100 and SchemaStore starts
+	// from ts=99. SchemaStore first loads a TiDB metadata snapshot at ts=99, then replays
+	// DDL jobs after that snapshot. Since https://github.com/pingcap/tidb/pull/43341, the
+	// snapshot at ts=99 may already contain the post-rename table `test2.t2`. Therefore,
+	// tableMap[event.TableID] is not guaranteed to describe the table before this DDL.
+	// Using it directly would make ExtraSchemaID/ExtraSchemaName/ExtraTableName describe
+	// the new table, although these fields are consumed as the old table identity by DDL
+	// filtering, barrier construction, table-name changes, and cross-schema updates.
+	//
+	// Recover the old identity from independent fields in the DDL job:
+	//  1. InvolvingSchemaInfo[0] contains the old schema/table names. TiDB deliberately
+	//     stores these values in lower case (Schema.Name.L and Table.Name.L), so they are
+	//     useful for lookup but do not preserve the original identifier capitalization.
+	//  2. RenameTableArgs.OldSchemaID identifies the old schema. OldSchemaName preserves
+	//     its original capitalization. TiDB has included both fields in rename-table job
+	//     args since v5.3.0, so they are available in every supported TiDB version (v7.5.0+).
+	//  3. TiDB always records the original rename SQL in job.Query. It always contains the
+	//     old table name, but the old schema name is optional. Prefer names parsed from SQL
+	//     because they preserve the identifier capitalization written by the user.
+	//  4. Complete the old schema identity with databaseMap: look up the schema ID when only
+	//     its name is known, or look up its name when only the ID is known. If the original
+	//     SQL explicitly specifies the old schema name, preserve that spelling.
+	//
+	// Rename jobs from supported TiDB versions provide enough information to recover all three
+	// old identity fields. tableMap is only a defensive fallback for a malformed or unsupported
+	// job whose args cannot be decoded or whose SQL cannot be parsed. If this fallback is used
+	// with a post-rename snapshot, the Extra fields may describe the new table and cause incorrect
+	// filter or table-name-store behavior.
+	oldSchemaID := int64(0)
+	oldSchemaName := ""
+	oldTableName := ""
+	oldSchemaSource := "unknown"
+
+	// Start with the lower-case old schema/table names recorded for DDL dependency checks.
 	if len(args.job.InvolvingSchemaInfo) > 0 {
-		log.Info("buildPersistedDDLEvent for rename table",
-			zap.String("query", event.Query),
-			zap.Int64("schemaID", event.SchemaID),
-			zap.String("SchemaName", event.SchemaName),
-			zap.String("tableName", event.TableName),
-			zap.Int64("ExtraSchemaID", event.ExtraSchemaID),
-			zap.String("ExtraSchemaName", event.ExtraSchemaName),
-			zap.String("ExtraTableName", event.ExtraTableName),
-			zap.Any("involvingSchemaInfo", args.job.InvolvingSchemaInfo))
-		// The query in job maybe "RENAME TABLE table1 to test2.table2", we need rebuild it here.
-		//
-		// Note: Why use args.job.InvolvingSchemaInfo to build query?
-		// because event.ExtraSchemaID may not be accurate for rename table in some case.
-		// after pr: https://github.com/pingcap/tidb/pull/43341,
-		// assume there is a table `test.t` and a ddl: `rename table t to test2.t;`, and its commit ts is `100`.
-		// if you get a ddl snapshot at ts `99`, table `t` is already in `test2`.
-		// so event.ExtraSchemaName will also be `test2`.
-		// And because SchemaStore is the source of truth inside cdc,
-		// we can use event.ExtraSchemaID(even it is wrong) to update the internal state of the cdc.
-		// But event.Query will be emit to downstream(out of cdc), we must make it correct.
-		//
-		// InvolvingSchemaInfo returns the schema info involved in the job.
-		// The value should be stored in lower case.
-		oldSchemaName := args.job.InvolvingSchemaInfo[0].Database
-		oldTableName := args.job.InvolvingSchemaInfo[0].Table
-		stmt, err := parser.New().ParseOneStmt(args.job.Query, "", "")
-		if err != nil {
-			log.Error("parse statement failed for build persisted DDL event", zap.Any("DDL", args.job.Query), zap.Error(err))
+		oldSchemaName = args.job.InvolvingSchemaInfo[0].Database
+		oldTableName = args.job.InvolvingSchemaInfo[0].Table
+		if oldSchemaName != "" {
+			oldSchemaSource = "involving_schema_info"
+		}
+	}
+
+	// Recover the authoritative old schema ID and its case-preserving name from job args.
+	if args.job.Version == model.JobVersion1 || args.job.Version == model.JobVersion2 {
+		if renameArgs, err := model.GetRenameTableArgs(args.job); err == nil {
+			oldSchemaID = renameArgs.OldSchemaID
+			if renameArgs.OldSchemaName.O != "" {
+				oldSchemaName = renameArgs.OldSchemaName.O
+			}
+			if oldSchemaID != 0 || renameArgs.OldSchemaName.O != "" {
+				oldSchemaSource = "rename_table_args"
+			}
 		} else {
-			switch s := stmt.(type) {
-			case *ast.AlterTableStmt:
-				oldTableName = s.Table.Name.O
-				if schemaName := s.Table.Schema.O; schemaName != "" {
-					oldSchemaName = schemaName
-				}
-			case *ast.RenameTableStmt:
-				oldTableName = s.TableToTables[0].OldTable.Name.O
-				if schemaName := s.TableToTables[0].OldTable.Schema.O; schemaName != "" {
-					oldSchemaName = schemaName
-				}
-			default:
-				log.Error("unknown stmt type", zap.String("query", args.job.Query), zap.Any("stmt", stmt))
+			log.Warn("failed to get rename table args from ddl job",
+				zap.Int64("jobID", args.job.ID),
+				zap.String("query", event.Query),
+				zap.Error(err))
+		}
+	}
+
+	// Recover the old table name from the normalized SQL, and prefer its schema spelling
+	// when it identifies the same schema as the DDL job args. event.Query has already been
+	// parsed with job.SQLMode and restored by buildPersistedDDLEventCommon.
+	queryInfo, parsed := parseRenameTableQueryInfo(event.Query)
+	if parsed {
+		if queryInfo.oldTableName != "" {
+			oldTableName = queryInfo.oldTableName
+		}
+		if queryInfo.oldSchemaName != "" {
+			queryOldSchemaID, _ := findSchemaIDByName(args.databaseMap, queryInfo.oldSchemaName)
+			if oldSchemaID != 0 && oldSchemaID != queryOldSchemaID {
+				log.Warn("rename table old schema is inconsistent between job args and query",
+					zap.Int64("jobID", args.job.ID),
+					zap.Int64("argsOldSchemaID", oldSchemaID),
+					zap.Int64("queryOldSchemaID", queryOldSchemaID),
+					zap.String("queryOldSchemaName", queryInfo.oldSchemaName),
+					zap.String("query", event.Query))
+				oldSchemaName = getSchemaName(args.databaseMap, oldSchemaID)
+			} else {
+				oldSchemaID = queryOldSchemaID
+				oldSchemaName = queryInfo.oldSchemaName
+				oldSchemaSource = "query"
 			}
 		}
-		event.Query = fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`",
-			oldSchemaName, oldTableName,
-			event.SchemaName, event.TableName)
+	}
+
+	// Complete a missing old schema ID or name through databaseMap.
+	if oldSchemaID == 0 && oldSchemaName != "" {
+		oldSchemaID, _ = findSchemaIDByName(args.databaseMap, oldSchemaName)
+	}
+	if queryInfo.oldSchemaName == "" {
+		if oldSchemaID != 0 {
+			// SQL does not provide the old schema spelling. Use databaseMap to replace
+			// the lower-case InvolvingSchemaInfo name with its original capitalization.
+			oldSchemaName = getSchemaName(args.databaseMap, oldSchemaID)
+		}
+	}
+
+	// TiDB v7.5+ rename jobs provide the old schema through job args and the old table
+	// through SQL. For malformed or unsupported jobs, fall back to the complete snapshot
+	// identity instead of combining fields from different sources.
+	if oldSchemaID == 0 || oldSchemaName == "" || oldTableName == "" {
+		oldSchemaID = getSchemaID(args.tableMap, event.TableID)
+		oldSchemaName = getSchemaName(args.databaseMap, oldSchemaID)
+		oldTableName = getTableName(args.tableMap, event.TableID)
+		oldSchemaSource = "table_map_fallback"
+	}
+
+	// Persist the recovered old identity for downstream filtering and coordination.
+	event.ExtraSchemaID = oldSchemaID
+	event.ExtraSchemaName = oldSchemaName
+	event.ExtraTableName = oldTableName
+
+	// Keep the executable query consistent with the recovered structured metadata.
+	if event.ExtraSchemaName != "" && event.ExtraTableName != "" {
+		log.Info("rebuild rename table query",
+			zap.Int64("jobID", event.ID),
+			zap.String("query", event.Query),
+			zap.Int64("schemaID", event.SchemaID),
+			zap.String("schemaName", event.SchemaName),
+			zap.String("tableName", event.TableName),
+			zap.Int64("extraSchemaID", event.ExtraSchemaID),
+			zap.String("extraSchemaName", event.ExtraSchemaName),
+			zap.String("extraTableName", event.ExtraTableName),
+			zap.String("oldSchemaSource", oldSchemaSource))
+		event.Query = fmt.Sprintf("RENAME TABLE %s TO %s",
+			common.QuoteSchema(event.ExtraSchemaName, event.ExtraTableName),
+			common.QuoteSchema(event.SchemaName, event.TableName))
 	}
 	return event
 }
@@ -785,9 +974,11 @@ func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncA
 
 		// Note that partition name should be parsed from original query, not the upperQuery.
 		partName := strings.TrimSpace(event.Query[idx1:idx2])
-		partName = strings.Replace(partName, "`", "", -1)
-		event.Query = fmt.Sprintf("ALTER TABLE `%s`.`%s` EXCHANGE PARTITION `%s` WITH TABLE `%s`.`%s`",
-			event.ExtraSchemaName, event.ExtraTableName, partName, event.SchemaName, event.TableName)
+		partName = common.UnquoteName(partName)
+		event.Query = fmt.Sprintf("ALTER TABLE %s EXCHANGE PARTITION %s WITH TABLE %s",
+			common.QuoteSchema(event.ExtraSchemaName, event.ExtraTableName),
+			common.QuoteName(partName),
+			common.QuoteSchema(event.SchemaName, event.TableName))
 
 		if strings.HasSuffix(upperQuery, "WITHOUT VALIDATION") {
 			event.Query += " WITHOUT VALIDATION"
@@ -799,6 +990,74 @@ func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncA
 	return event
 }
 
+type renameTableQueryInfo struct {
+	oldSchemaName string
+	oldTableName  string
+	newSchemaName string
+	newTableName  string
+}
+
+func parseRenameTableQueryInfo(query string) (renameTableQueryInfo, bool) {
+	if query == "" {
+		return renameTableQueryInfo{}, false
+	}
+	stmt, err := parser.New().ParseOneStmt(query, "", "")
+	if err != nil {
+		log.Warn("parse rename table query failed",
+			zap.String("query", query),
+			zap.Error(err))
+		return renameTableQueryInfo{}, false
+	}
+
+	switch s := stmt.(type) {
+	case *ast.AlterTableStmt:
+		return renameTableQueryInfo{
+			oldSchemaName: s.Table.Schema.O,
+			oldTableName:  s.Table.Name.O,
+		}, true
+	case *ast.RenameTableStmt:
+		if len(s.TableToTables) == 0 {
+			return renameTableQueryInfo{}, false
+		}
+		return renameTableQueryInfo{
+			oldSchemaName: s.TableToTables[0].OldTable.Schema.O,
+			oldTableName:  s.TableToTables[0].OldTable.Name.O,
+			newSchemaName: s.TableToTables[0].NewTable.Schema.O,
+			newTableName:  s.TableToTables[0].NewTable.Name.O,
+		}, true
+	default:
+		return renameTableQueryInfo{}, false
+	}
+}
+
+func parseRenameTablesQueryInfos(query string) ([]renameTableQueryInfo, bool) {
+	if query == "" {
+		return nil, false
+	}
+	stmt, err := parser.New().ParseOneStmt(query, "", "")
+	if err != nil {
+		log.Warn("parse rename tables query failed",
+			zap.String("query", query),
+			zap.Error(err))
+		return nil, false
+	}
+	renameStmt, ok := stmt.(*ast.RenameTableStmt)
+	if !ok {
+		return nil, false
+	}
+
+	queryInfos := make([]renameTableQueryInfo, 0, len(renameStmt.TableToTables))
+	for _, tableToTable := range renameStmt.TableToTables {
+		queryInfos = append(queryInfos, renameTableQueryInfo{
+			oldSchemaName: tableToTable.OldTable.Schema.O,
+			oldTableName:  tableToTable.OldTable.Name.O,
+			newSchemaName: tableToTable.NewTable.Schema.O,
+			newTableName:  tableToTable.NewTable.Name.O,
+		})
+	}
+	return queryInfos, true
+}
+
 func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	// TODO: does rename tables has the same problem(finished ts is not the real commit ts) with rename table?
 	event := buildPersistedDDLEventCommon(args)
@@ -808,25 +1067,71 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 			zap.String("query", args.job.Query),
 			zap.Error(err))
 	}
-	if len(renameArgs.RenameTableInfos) != len(args.job.BinlogInfo.MultipleTableInfos) {
+	renameTableInfos := renameArgs.RenameTableInfos
+	multipleTableInfos := args.job.BinlogInfo.MultipleTableInfos
+	if len(renameTableInfos) != len(multipleTableInfos) {
 		log.Panic("should not happen",
-			zap.Int("renameArgsLen", len(renameArgs.RenameTableInfos)),
-			zap.Int("multipleTableInfosLen", len(args.job.BinlogInfo.MultipleTableInfos)))
+			zap.Int("renameArgsLen", len(renameTableInfos)),
+			zap.Int("multipleTableInfosLen", len(multipleTableInfos)),
+			zap.String("query", args.job.Query))
+	}
+
+	// RenameTableInfos may store normalized lower-case names,
+	// while the original query can keep user-provided identifier case.
+	// Prefer names parsed from the original query whenever possible.
+	// See https://github.com/pingcap/ticdc/pull/2218 for background.
+	queryInfos, queryParsed := parseRenameTablesQueryInfos(args.job.Query)
+	if queryParsed && len(queryInfos) != len(renameTableInfos) {
+		log.Panic("rename tables query info length is inconsistent with args",
+			zap.Int("queryInfosLen", len(queryInfos)),
+			zap.Int("renameArgsLen", len(renameTableInfos)),
+			zap.String("query", args.job.Query))
+	}
+
+	// TiDB <= v8.1 may emit empty old table names for RENAME TABLES args.
+	// See https://github.com/pingcap/tidb/pull/64421 for the upstream fix.
+	if !queryParsed && renameTableInfos[0].OldTableName.O == "" {
+		// TODO: return error instead of falling back to args once builder supports error propagation.
+		log.Warn("rename tables args miss old table name and query is unavailable, keep args as-is",
+			zap.Int("tableCount", len(renameTableInfos)),
+			zap.String("query", args.job.Query))
 	}
 
 	var querys []string
-	for _, info := range renameArgs.RenameTableInfos {
-		event.ExtraSchemaIDs = append(event.ExtraSchemaIDs, info.OldSchemaID)
-		event.ExtraSchemaNames = append(event.ExtraSchemaNames, info.OldSchemaName.O)
-		event.ExtraTableNames = append(event.ExtraTableNames, info.OldTableName.O)
+	for i, info := range renameTableInfos {
+		oldSchemaID := info.OldSchemaID
+		oldSchemaName := info.OldSchemaName.O
+		oldTableName := info.OldTableName.O
+		newSchemaName := getSchemaName(args.databaseMap, info.NewSchemaID)
+		newTableName := info.NewTableName.O
+		if queryParsed {
+			queryInfo := queryInfos[i]
+			if queryInfo.oldSchemaName != "" {
+				oldSchemaName = queryInfo.oldSchemaName
+			}
+			if queryInfo.oldTableName != "" {
+				oldTableName = queryInfo.oldTableName
+			}
+			if queryInfo.newSchemaName != "" {
+				newSchemaName = queryInfo.newSchemaName
+			}
+			if queryInfo.newTableName != "" {
+				newTableName = queryInfo.newTableName
+			}
+		}
+
+		event.ExtraSchemaIDs = append(event.ExtraSchemaIDs, oldSchemaID)
+		event.ExtraSchemaNames = append(event.ExtraSchemaNames, oldSchemaName)
+		event.ExtraTableNames = append(event.ExtraTableNames, oldTableName)
 		event.SchemaIDs = append(event.SchemaIDs, info.NewSchemaID)
-		SchemaName := getSchemaName(args.databaseMap, info.NewSchemaID)
-		event.SchemaNames = append(event.SchemaNames, SchemaName)
-		querys = append(querys, fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`;", info.OldSchemaName.O, info.OldTableName.O, SchemaName, info.NewTableName.O))
+		event.SchemaNames = append(event.SchemaNames, newSchemaName)
+		querys = append(querys, fmt.Sprintf("RENAME TABLE %s TO %s;",
+			common.QuoteSchema(oldSchemaName, oldTableName),
+			common.QuoteSchema(newSchemaName, newTableName)))
 	}
 
 	event.Query = strings.Join(querys, "")
-	event.MultipleTableInfos = args.job.BinlogInfo.MultipleTableInfos
+	event.MultipleTableInfos = multipleTableInfos
 	// we have to reverse MultipleTableInfos to get correct schema name
 	// see https://github.com/pingcap/tidb/issues/63710
 	//
@@ -925,8 +1230,8 @@ func updateDDLHistoryForSchemaDDL(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	for tableID := range args.databaseMap[args.ddlEvent.SchemaID].Tables {
 		if partitionInfo, ok := args.partitionMap[tableID]; ok {
-			for id := range partitionInfo {
-				args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, id)
+			for partitionID := range partitionInfo {
+				args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, partitionID)
 			}
 		} else {
 			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
@@ -1109,6 +1414,11 @@ func updateFullTableInfoForDropTable(args updateFullTableInfoFuncArgs) {
 func updateFullTableInfoForTruncateTable(args updateFullTableInfoFuncArgs) {
 	delete(args.tableInfoMap, args.event.TableID)
 	args.tableInfoMap[args.event.ExtraTableID] = args.event.TableInfo
+}
+
+func updateFullTableInfoForPartitioningDDL(args updateFullTableInfoFuncArgs) {
+	delete(args.tableInfoMap, args.event.ExtraTableID)
+	args.tableInfoMap[args.event.TableID] = args.event.TableInfo
 }
 
 func updateFullTableInfoForExchangeTablePartition(args updateFullTableInfoFuncArgs) {
@@ -1346,9 +1656,22 @@ func updateSchemaMetadataForRemovePartitioning(args updateSchemaMetadataFuncArgs
 // iterateEventTablesFunc begin
 // =======
 
-func iterateEventTablesIgnore(event *PersistedDDLEvent, apply func(tableId ...int64)) {}
+func iterateEventTablesIgnore(_ iterateEventTablesFuncArgs) {}
 
-func iterateEventTablesForSingleTableDDL(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForDropSchema(args iterateEventTablesFuncArgs) {
+	for tableID := range args.databaseMap[args.event.SchemaID].Tables {
+		if partitionInfo, ok := args.partitionMap[tableID]; ok {
+			for partitionID := range partitionInfo {
+				args.apply(partitionID)
+			}
+		} else {
+			args.apply(tableID)
+		}
+	}
+}
+
+func iterateEventTablesForSingleTableDDL(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	if isPartitionTable(event.TableInfo) {
 		apply(getAllPartitionIDs(event.TableInfo)...)
 	} else {
@@ -1356,7 +1679,8 @@ func iterateEventTablesForSingleTableDDL(event *PersistedDDLEvent, apply func(ta
 	}
 }
 
-func iterateEventTablesForTruncateTable(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForTruncateTable(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	if isPartitionTable(event.TableInfo) {
 		apply(event.PrevPartitions...)
 		apply(getAllPartitionIDs(event.TableInfo)...)
@@ -1365,25 +1689,24 @@ func iterateEventTablesForTruncateTable(event *PersistedDDLEvent, apply func(tab
 	}
 }
 
-func iterateEventTablesForAddPartition(event *PersistedDDLEvent, apply func(tableId ...int64)) {
-	newCreatedIDs := getCreatedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
-	apply(newCreatedIDs...)
+func iterateEventTablesForAddPartition(args iterateEventTablesFuncArgs) {
+	args.apply(getAllPartitionIDs(args.event.TableInfo)...)
 }
 
-func iterateEventTablesForDropPartition(event *PersistedDDLEvent, apply func(tableId ...int64)) {
-	droppedIDs := getDroppedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
-	apply(droppedIDs...)
+func iterateEventTablesForDropPartition(args iterateEventTablesFuncArgs) {
+	args.apply(args.event.PrevPartitions...)
 }
 
-func iterateEventTablesForTruncatePartition(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForTruncatePartition(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	physicalIDs := getAllPartitionIDs(event.TableInfo)
-	droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
-	apply(droppedIDs...)
+	apply(event.PrevPartitions...)
 	newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
 	apply(newCreatedIDs...)
 }
 
-func iterateEventTablesForExchangeTablePartition(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForExchangeTablePartition(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	physicalIDs := getAllPartitionIDs(event.TableInfo)
 	droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
 	if len(droppedIDs) != 1 {
@@ -1394,7 +1717,8 @@ func iterateEventTablesForExchangeTablePartition(event *PersistedDDLEvent, apply
 	apply(targetPartitionID, event.TableID)
 }
 
-func iterateEventTablesForRenameTables(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForRenameTables(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	for _, info := range event.MultipleTableInfos {
 		if info.ID == InvalidTableID {
 			continue
@@ -1407,7 +1731,8 @@ func iterateEventTablesForRenameTables(event *PersistedDDLEvent, apply func(tabl
 	}
 }
 
-func iterateEventTablesForCreateTables(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForCreateTables(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	for _, info := range event.MultipleTableInfos {
 		if isPartitionTable(info) {
 			apply(getAllPartitionIDs(info)...)
@@ -1417,15 +1742,16 @@ func iterateEventTablesForCreateTables(event *PersistedDDLEvent, apply func(tabl
 	}
 }
 
-func iterateEventTablesForReorganizePartition(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForReorganizePartition(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	physicalIDs := getAllPartitionIDs(event.TableInfo)
-	droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
-	apply(droppedIDs...)
+	apply(event.PrevPartitions...)
 	newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
 	apply(newCreatedIDs...)
 }
 
-func iterateEventTablesForAlterTablePartitioning(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForAlterTablePartitioning(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	if len(event.PrevPartitions) > 0 {
 		apply(event.PrevPartitions...)
 	} else {
@@ -1434,7 +1760,8 @@ func iterateEventTablesForAlterTablePartitioning(event *PersistedDDLEvent, apply
 	apply(getAllPartitionIDs(event.TableInfo)...)
 }
 
-func iterateEventTablesForRemovePartitioning(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForRemovePartitioning(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	apply(event.PrevPartitions...)
 	apply(event.TableID)
 }
@@ -1511,6 +1838,12 @@ func extractTableInfoFuncIgnore(event *PersistedDDLEvent, tableID int64) (*commo
 	return nil, false
 }
 
+func extractTableInfoFuncForDropSchema(_ *PersistedDDLEvent, _ int64) (*common.TableInfo, bool) {
+	// Drop-schema events are only added to the DDL history of physical tables in
+	// the dropped schema, so reaching this extractor means this table was deleted.
+	return nil, true
+}
+
 func extractTableInfoFuncForDropTable(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
 	if isPartitionTable(event.TableInfo) {
 		for _, partitionID := range getAllPartitionIDs(event.TableInfo) {
@@ -1550,21 +1883,22 @@ func extractTableInfoFuncForTruncateTable(event *PersistedDDLEvent, tableID int6
 }
 
 func extractTableInfoFuncForAddPartition(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
-	newCreatedIDs := getCreatedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
-	for _, partition := range newCreatedIDs {
-		if tableID == partition {
-			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
-		}
+	if slices.Contains(getAllPartitionIDs(event.TableInfo), tableID) {
+		return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 	}
 	return nil, false
 }
 
 func extractTableInfoFuncForDropPartition(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
-	droppedIDs := getDroppedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
+	physicalIDs := getAllPartitionIDs(event.TableInfo)
+	droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
 	for _, partition := range droppedIDs {
 		if tableID == partition {
 			return nil, true
 		}
+	}
+	if slices.Contains(physicalIDs, tableID) {
+		return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 	}
 	return nil, false
 }
@@ -1577,11 +1911,8 @@ func extractTableInfoFuncForTruncateAndReorganizePartition(event *PersistedDDLEv
 			return nil, true
 		}
 	}
-	newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
-	for _, partition := range newCreatedIDs {
-		if tableID == partition {
-			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
-		}
+	if slices.Contains(physicalIDs, tableID) {
+		return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 	}
 	return nil, false
 }
@@ -1742,7 +2073,8 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 		TiDBOnly:   tiDBOnly,
 		BDRMode:    rawEvent.BDRRole,
 
-		NotSync: notSync,
+		NotSync:  notSync,
+		IndexIDs: rawEvent.IndexIDs,
 	}, !filtered, nil
 }
 
@@ -1829,6 +2161,14 @@ func buildDDLEventForModifySchemaCharsetAndCollate(
 	return ddlEvent, true, err
 }
 
+func ignoreParseErrorForActiveActiveSyntax(err error, query string) bool {
+	// ignore the syntax error caused by `ACTIVE ACTIVE or SOFTDELETE` Related syntax
+	if errors.Is(err, parser.ErrSyntax) && (strings.Contains(strings.ToUpper(query), "ACTIVE_ACTIVE") || strings.Contains(strings.ToUpper(query), "SOFTDELETE")) {
+		return true
+	}
+	return false
+}
+
 func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
@@ -1841,7 +2181,7 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 		InfluenceType: commonEvent.InfluenceTypeNormal,
 		TableIDs:      []int64{common.DDLSpanTableID},
 	}
-	if rawEvent.ExtraTableID != 0 {
+	if shouldBlockCreateTableLikeReferTable(rawEvent, tableFilter) {
 		if len(rawEvent.ReferTablePartitionIDs) > 0 {
 			ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, rawEvent.ReferTablePartitionIDs...)
 		} else {
@@ -1882,8 +2222,14 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 			log.Error("parse create table ddl failed",
 				zap.String("query", rawEvent.Query),
 				zap.Error(err))
-			return ddlEvent, false, err
+
+			if ignoreParseErrorForActiveActiveSyntax(err, rawEvent.Query) {
+				return ddlEvent, true, nil
+			} else {
+				return ddlEvent, false, err
+			}
 		}
+
 		if createStmt, ok := stmt.(*ast.CreateTableStmt); ok && createStmt.ReferTable != nil {
 			refTable := createStmt.ReferTable.Name.O
 			refSchema := createStmt.ReferTable.Schema.O
@@ -1897,8 +2243,40 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 				},
 			}
 		}
+
 	}
 	return ddlEvent, true, err
+}
+
+func shouldBlockCreateTableLikeReferTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) bool {
+	if rawEvent.ExtraTableID == 0 {
+		return false
+	}
+	if tableFilter == nil || rawEvent.Query == "" {
+		return true
+	}
+
+	stmt, err := parser.New().ParseOneStmt(rawEvent.Query, "", "")
+	if err != nil {
+		log.Warn("parse create table ddl failed when checking create table like reference filter",
+			zap.String("query", rawEvent.Query),
+			zap.Error(err))
+		return true
+	}
+	createStmt, ok := stmt.(*ast.CreateTableStmt)
+	if !ok || createStmt.ReferTable == nil {
+		return true
+	}
+
+	referSchema := createStmt.ReferTable.Schema.O
+	if referSchema == "" {
+		referSchema = rawEvent.SchemaName
+	}
+	referTable := createStmt.ReferTable.Name.O
+	if referTable == "" {
+		return true
+	}
+	return !tableFilter.ShouldIgnoreTable(referSchema, referTable)
 }
 
 func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
@@ -2534,8 +2912,8 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			continue
 		}
 		allFiltered = false
-		if isPartitionTable(rawEvent.TableInfo) {
-			allPhysicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
+		if isPartitionTable(tableInfo) {
+			allPhysicalIDs := getAllPartitionIDs(tableInfo)
 			if !ignorePrevTable {
 				if !notSyncPrevTable {
 					// only when the previous table is not filtered and not NotSync, we add the query and table info

@@ -43,9 +43,9 @@ function prepare() {
 	esac
 	do_retry 5 3 cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
 	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
+	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" "$CUR/conf/$1.toml" ;;
+	storage) run_storage_consumer $WORK_DIR $SINK_URI "$CUR/conf/$1.toml" "" ;;
+	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config "$CUR/conf/$1.toml" ;;
 	esac
 }
 
@@ -181,7 +181,7 @@ main_with_consistent() {
 
 	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MERGE_AND_SPLIT_TABLE_PID
 	# to ensure row changed events have been replicated to TiCDC
-	sleep 20
+	sleep 30
 	if ((RANDOM % 2)); then
 		# For rename table, modify column ddl, drop column, drop index and drop table ddl, the struct of table is wrong when appling snapshot.
 		# see https://github.com/pingcap/tidb/issues/63464.

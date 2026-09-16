@@ -28,12 +28,15 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/br/pkg/version"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
-	"github.com/pingcap/tidb/pkg/disttask/framework/handle"
+	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/stretchr/testify/require"
@@ -50,8 +53,9 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	cfg.BatchDMLEnable = true
 	cfg.EnableDDLTs = defaultEnableDDLTs
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
-	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
+	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	t.Cleanup(writer.Close)
 	// assign a no-op stmt cache to bypass actual DB operations in unit tests
 	cache, err := lru.New(prepStmtCacheSize)
 	require.NoError(t, err)
@@ -72,8 +76,9 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 	cfg.ServerInfo = version.ParseServerInfo(defaultRunningAddIndexNewSQLVersion)
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
-	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
+	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	t.Cleanup(writer.Close)
 
 	if kerneltype.IsNextGen() {
 		ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
@@ -121,6 +126,109 @@ func TestMysqlWriter_FlushDML(t *testing.T) {
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
+}
+
+func TestMysqlWriterWaitsForWriteGrantBeforeExecute(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	require.NotNil(t, helper.DDL2Job("create table t (id int primary key, name varchar(32));"))
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')")
+	dmlEvent.CommitTs = 2
+	dmlEvent.ReplicatingTs = 1
+	dmlEvent.DispatcherID = common.NewDispatcherID()
+
+	gate := writelease.NewGate()
+	gate.SetP2PRequired(true)
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	writer.SetWriteGate(gate)
+
+	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
+		WithArgs(1, "test").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- writer.Flush([]*commonEvent.DMLEvent{dmlEvent})
+	}()
+
+	require.Never(t, func() bool {
+		return db.Stats().InUse != 0
+	}, 50*time.Millisecond, time.Millisecond, "writer held a connection while waiting for a write grant")
+
+	select {
+	case err := <-done:
+		t.Fatalf("DML execute returned before the transport received a write grant: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	require.True(t, gate.RenewP2P(time.Now(), writelease.P2PLeaseDuration))
+	require.NoError(t, <-done)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMysqlWriterReleasesConnectionWhenFinalAdmissionFails(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+
+	callbackCalled := false
+	admitted, err := writer.dmlSession.withConn(writer, time.Second, func() bool {
+		return false
+	}, func(*sql.Conn) error {
+		callbackCalled = true
+		return nil
+	})
+	require.NoError(t, err)
+	require.False(t, admitted)
+	require.False(t, callbackCalled)
+	require.Nil(t, writer.dmlSession.conn)
+	require.Zero(t, db.Stats().InUse)
+}
+
+func TestMysqlWriterGrantWriteRejectsAfterShutdown(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+
+	gate := writelease.NewGate()
+	gate.SetP2PRequired(true)
+	writer.SetWriteGate(gate)
+	writer.cancel()
+
+	require.False(t, writer.grantWrite())
+}
+
+func TestMysqlWriter_FlushNoopWhenActiveActiveRowsDropped(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.EnableActiveActive = true
+	writer.cfg.IsTiDB = true
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t (id int primary key, name varchar(32), _tidb_origin_ts bigint unsigned null, _tidb_softdelete_time timestamp null);"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'a', 10, NULL)")
+	dmlEvent.CommitTs = 2
+	dmlEvent.ReplicatingTs = 1
+	dmlEvent.DispatcherID = common.NewDispatcherID()
+
+	flushed := false
+	dmlEvent.AddPostFlushFunc(func() {
+		flushed = true
+	})
+
+	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent})
+	require.NoError(t, err)
+	require.True(t, flushed)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
@@ -255,6 +363,7 @@ func TestMysqlWriter_FlushDDLEvent(t *testing.T) {
 	// Step 2: execDDLWithMaxRetries - Execute the actual DDL
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -292,6 +401,7 @@ func TestMysqlWriter_FlushDDLEvent(t *testing.T) {
 	// Step 2: execDDLWithMaxRetries - Execute the actual DDL
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("alter table t add column age int;").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -320,6 +430,52 @@ func TestMysqlWriter_Flush_EmptyEvents(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestMysqlWriterExecDDLUsesRoutedSchemaName(t *testing.T) {
+	router, err := routing.NewRouter(
+		common.NewChangefeedID4Test("test", "test"),
+		true,
+		[]*config.DispatchRule{{
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  "{table}_routed",
+		}},
+	)
+	require.NoError(t, err)
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	createSchemaDDL := helper.DDL2Event("CREATE DATABASE `source_db`")
+	routedCreateSchemaDDL, err := router.ApplyToDDLEvent(createSchemaDDL)
+	require.NoError(t, err)
+	require.Equal(t, "target_db", routedCreateSchemaDDL.GetTargetSchemaName())
+
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(routedCreateSchemaDDL.Query).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+	require.NoError(t, writer.execDDL(routedCreateSchemaDDL))
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	createTableDDL := helper.DDL2Event("CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)")
+	routedCreateTableDDL, err := router.ApplyToDDLEvent(createTableDDL)
+	require.NoError(t, err)
+	require.Equal(t, "target_db", routedCreateTableDDL.GetTargetSchemaName())
+	require.Equal(t, "source_table_routed", routedCreateTableDDL.GetTargetTableName())
+
+	writer, db, mock = newTestMysqlWriter(t)
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectExec("USE `target_db`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(routedCreateTableDDL.Query).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+	require.NoError(t, writer.execDDL(routedCreateTableDDL))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
@@ -327,7 +483,7 @@ func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	syncPointEvent := &commonEvent.SyncPointEvent{
 		CommitTs: 1,
 	}
-	tableSchemaStore := commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
+	tableSchemaStore := commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType, false)
 	writer.SetTableSchemaStore(tableSchemaStore)
 
 	// First sync point: Step 0: Create syncpoint table (only for first sync point)
@@ -471,6 +627,79 @@ func TestWaitAsyncDDLDone_CreateTableLikeShouldQueryDownstreamAddIndexJob(t *tes
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestExecDDLUsesControlAsyncDBOnlyForTiDBAddIndex(t *testing.T) {
+	writer, controlDB, controlMock := newTestMysqlWriterForTiDB(t)
+	defer controlDB.Close()
+
+	controlAsyncDB, controlAsyncMock := newTestMockDB(t)
+	defer controlAsyncDB.Close()
+	writer.SetControlAsyncDB(controlAsyncDB)
+	writer.cfg.ReadTimeout = "2m"
+	writer.cfg.AsyncDDLTimeout = "30m"
+
+	addIndexEvent := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionAddIndex),
+		Query:      "alter table t add index idx_name(name);",
+		SchemaName: "test",
+		TableName:  "t",
+	}
+	controlAsyncMock.ExpectBegin()
+	controlAsyncMock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlAsyncMock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlAsyncMock.ExpectExec("alter table t add index idx_name(name);").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlAsyncMock.ExpectCommit()
+
+	require.NoError(t, writer.execDDL(addIndexEvent))
+	require.Equal(t, "30m", writer.getDDLReadTimeout(addIndexEvent))
+	require.NoError(t, controlAsyncMock.ExpectationsWereMet())
+	require.NoError(t, controlMock.ExpectationsWereMet())
+
+	addColumnEvent := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionAddColumn),
+		Query:      "alter table t add column age int;",
+		SchemaName: "test",
+		TableName:  "t",
+	}
+	controlMock.ExpectBegin()
+	controlMock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec("alter table t add column age int;").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectCommit()
+
+	require.NoError(t, writer.execDDL(addColumnEvent))
+	require.Equal(t, "2m", writer.getDDLReadTimeout(addColumnEvent))
+	require.NoError(t, controlMock.ExpectationsWereMet())
+	require.NoError(t, controlAsyncMock.ExpectationsWereMet())
+}
+
+func TestExecDDLUsesControlDBForMySQLAddIndex(t *testing.T) {
+	writer, controlDB, controlMock := newTestMysqlWriter(t)
+	defer controlDB.Close()
+
+	controlAsyncDB, controlAsyncMock := newTestMockDB(t)
+	defer controlAsyncDB.Close()
+	writer.SetControlAsyncDB(controlAsyncDB)
+	writer.cfg.ReadTimeout = "2m"
+	writer.cfg.AsyncDDLTimeout = "30m"
+
+	addIndexEvent := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionAddIndex),
+		Query:      "alter table t add index idx_name(name);",
+		SchemaName: "test",
+		TableName:  "t",
+	}
+	controlMock.ExpectBegin()
+	controlMock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec("alter table t add index idx_name(name);").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectCommit()
+
+	require.NoError(t, writer.execDDL(addIndexEvent))
+	require.Equal(t, "2m", writer.getDDLReadTimeout(addIndexEvent))
+	require.NoError(t, controlMock.ExpectationsWereMet())
+	require.NoError(t, controlAsyncMock.ExpectationsWereMet())
+}
+
 // Test the async ddl can be write successfully
 func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	writer, db, mock := newTestMysqlWriterForTiDB(t)
@@ -520,6 +749,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	mock.ExpectQuery("BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;").WillReturnRows(sqlmock.NewRows([]string{"@ticdc_ts"}).AddRow("2021-05-26 11:33:37.776000"))
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 	mock.ExpectBegin()
@@ -541,6 +771,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
 	log.Info("before add index")
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("alter table t add index nameIndex(name);").WillDelayFor(10 * time.Second).WillReturnError(mysql.ErrInvalidConn)
 	log.Info("after add index")
 	mock.ExpectQuery(fmt.Sprintf(checkRunningSQL, "2021-05-26 11:33:37.776000", "alter table t add index nameIndex(name);")).
@@ -562,6 +793,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	mock.ExpectQuery("BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;").WillReturnRows(sqlmock.NewRows([]string{"@ticdc_ts"}).AddRow("2021-05-26 11:33:37.776000"))
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("create table t1 (id int primary key, name varchar(32));").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 	mock.ExpectBegin()
@@ -576,6 +808,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	mock.ExpectQuery("BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;").WillReturnRows(sqlmock.NewRows([]string{"@ticdc_ts"}).AddRow("2021-05-26 11:33:37.776000"))
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("alter table t add column age int;").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 	mock.ExpectBegin()
@@ -608,7 +841,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	}
 
 	{
-		// ensure the dml can be writen succesfully before add index finished
+		// ensure the dml can be written successfully before add index finished
 		dmlEvent := helper.DML2Event("test", "t", "insert into t values (3, 'test3');")
 		dmlEvent.CommitTs = 3
 		dmlEvent.ReplicatingTs = 4

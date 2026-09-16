@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -192,4 +193,121 @@ func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
 	config := GetDefaultReplicaConfig()
 	require.NotNil(t, config.Scheduler)
 	require.False(t, util.GetOrZero(config.Scheduler.EnableSplittableCheck))
+}
+
+func TestReplicaConfigClonePreservesKafkaOAuthCA(t *testing.T) {
+	t.Parallel()
+
+	cfg := GetDefaultReplicaConfig()
+	cfg.Sink.KafkaConfig = &KafkaConfig{
+		SASLOAuthCA: util.AddressOf("/etc/ssl/oauth-ca.pem"),
+	}
+
+	cloned := cfg.Clone()
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(cloned.Sink.KafkaConfig.SASLOAuthCA))
+	require.NotSame(t, cfg.Sink.KafkaConfig.SASLOAuthCA, cloned.Sink.KafkaConfig.SASLOAuthCA)
+	encoded, err := cfg.Marshal()
+	require.NoError(t, err)
+	require.Contains(t, encoded, `"sasl-oauth-ca":"/etc/ssl/oauth-ca.pem"`)
+
+	*cloned.Sink.KafkaConfig.SASLOAuthCA = "/etc/ssl/other-ca.pem"
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(cfg.Sink.KafkaConfig.SASLOAuthCA))
+}
+
+func TestReplicaConfigPerformanceMode(t *testing.T) {
+	sinkURI, err := url.Parse("mysql://localhost:3306/test")
+	require.NoError(t, err)
+
+	cfg := GetDefaultReplicaConfig()
+	require.Equal(t, PerformanceModeThroughput, util.GetOrZero(cfg.PerformanceMode))
+	require.False(t, cfg.IsLowLatencyMode())
+
+	cfg.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
+	require.NoError(t, cfg.ValidateAndAdjust(sinkURI))
+	require.True(t, cfg.IsLowLatencyMode())
+
+	cfg.PerformanceMode = util.AddressOf("invalid")
+	require.ErrorContains(t, cfg.ValidateAndAdjust(sinkURI), "unknown performance mode")
+
+	cfg.PerformanceMode = nil
+	require.NoError(t, cfg.ValidateAndAdjust(sinkURI))
+	require.Equal(t, PerformanceModeThroughput, util.GetOrZero(cfg.PerformanceMode))
+}
+
+// TestReplicaConfigValidateBatchConfig verifies validation accepts zero as an
+// explicit override and rejects values outside the supported range.
+func TestReplicaConfigValidateBatchConfig(t *testing.T) {
+	sinkURI, err := url.Parse("mysql://localhost:3306/test")
+	require.NoError(t, err)
+
+	assertBatchConfig := func(batchCount *int, batchBytes *int, wantErr string) {
+		cfg := GetDefaultReplicaConfig()
+		cfg.EventCollectorBatchCount = batchCount
+		cfg.EventCollectorBatchBytes = batchBytes
+
+		err := cfg.ValidateAndAdjust(sinkURI)
+		if wantErr != "" {
+			require.ErrorContains(t, err, wantErr)
+			return
+		}
+		require.NoError(t, err)
+	}
+
+	assertBatchConfig(util.AddressOf(0), nil, "")
+	assertBatchConfig(nil, util.AddressOf(0), "")
+	assertBatchConfig(util.AddressOf(1), util.AddressOf(1), "")
+	assertBatchConfig(util.AddressOf(MaxEventCollectorBatchCount), nil, "")
+	assertBatchConfig(util.AddressOf(MaxEventCollectorBatchCount+1), nil, "event-collector-batch-count")
+	assertBatchConfig(util.AddressOf(-1), nil, "event-collector-batch-count")
+	assertBatchConfig(nil, util.AddressOf(-1), "event-collector-batch-bytes")
+}
+
+func TestReplicaConfig_EnableRedoIOCheck_DefaultValue(t *testing.T) {
+	config := GetDefaultReplicaConfig()
+	require.True(t, util.GetOrZero(config.EnableRedoIOCheck))
+}
+
+func TestConsistentConfigSpoolDiskQuota(t *testing.T) {
+	newConfig := func() *ConsistentConfig {
+		cfg := GetDefaultReplicaConfig().Consistent
+		cfg.Level = util.AddressOf(string(redo.ConsistentLevelEventual))
+		cfg.Storage = util.AddressOf("blackhole://")
+		return cfg
+	}
+
+	cfg := newConfig()
+	cfg.SpoolDiskQuota = nil
+	require.NoError(t, cfg.validateAndAdjust(false))
+	require.Equal(t, redo.DefaultSpoolDiskQuota, util.GetOrZero(cfg.SpoolDiskQuota))
+
+	for _, quota := range []int64{0, -1} {
+		cfg = newConfig()
+		cfg.SpoolDiskQuota = util.AddressOf(quota)
+		require.ErrorContains(t, cfg.validateAndAdjust(false), "consistent.spool-disk-quota")
+	}
+
+	cfg = newConfig()
+	cfg.SpoolDiskQuota = util.AddressOf(int64(1024))
+	require.NoError(t, cfg.validateAndAdjust(false))
+}
+
+func TestReplicaConfig_EnableRedoIOCheck_DefaultEnabled(t *testing.T) {
+	config := GetDefaultReplicaConfig()
+	config.Consistent.Level = util.AddressOf("eventual")
+	config.Consistent.Storage = util.AddressOf("s3:///redo-test-no-bucket")
+
+	sinkURI, err := url.Parse("blackhole://")
+	require.NoError(t, err)
+	require.Error(t, config.ValidateAndAdjust(sinkURI))
+}
+
+func TestReplicaConfig_EnableRedoIOCheck_CanDisableForCLI(t *testing.T) {
+	config := GetDefaultReplicaConfig()
+	config.EnableRedoIOCheck = util.AddressOf(false)
+	config.Consistent.Level = util.AddressOf("eventual")
+	config.Consistent.Storage = util.AddressOf("s3:///redo-test-no-bucket")
+
+	sinkURI, err := url.Parse("blackhole://")
+	require.NoError(t, err)
+	require.NoError(t, config.ValidateAndAdjust(sinkURI))
 }

@@ -27,13 +27,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -94,7 +93,7 @@ const (
 )
 
 const (
-	defaultMaxRetry       = 5
+	defaultMaxRetry       = 50
 	defaultRequestTimeout = 5 * time.Second
 )
 
@@ -124,7 +123,7 @@ func NewPDAPIClient(pdClient pd.Client, conf *security.Credential) (PDAPIClient,
 		return nil, errors.Trace(err)
 	}
 
-	pdHttpClient, err := newPdHttpClient(pdClient, conf)
+	pdHttpClient, err := NewPDHTTPClient(pdClient, conf)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -136,7 +135,11 @@ func NewPDAPIClient(pdClient pd.Client, conf *security.Credential) (PDAPIClient,
 	}, nil
 }
 
-func newPdHttpClient(pdClient pd.Client, conf *security.Credential) (pdhttp.Client, error) {
+// NewPDHTTPClient creates a PD HTTP client using the service discovery from the
+// given gRPC PD client and the optional TLS configuration.
+//
+// The returned client must be closed by the caller.
+func NewPDHTTPClient(pdClient pd.Client, conf *security.Credential) (pdhttp.Client, error) {
 	discovery := pdClient.GetServiceDiscovery()
 	pdhttpOpts := make([]pdhttp.ClientOption, 0)
 
@@ -183,11 +186,7 @@ func (pc *pdAPIClient) UpdateMetaLabel(ctx context.Context) error {
 		retry.WithBackoffBaseDelay(200),
 		retry.WithBackoffMaxDelay(4000),
 		retry.WithIsRetryableErr(func(err error) bool {
-			switch errors.Cause(err) {
-			case context.Canceled:
-				return false
-			}
-			return true
+			return !errors.Is(errors.Cause(err), context.Canceled)
 		}))
 	return err
 }
@@ -279,8 +278,7 @@ func (pc *pdAPIClient) scanRegions(
 				// Because start key is less than end key, there must be some regions.
 				log.Error("fail to scan region, missing region",
 					zap.String("endpoint", endpoint))
-				return nil, cerror.WrapError(cerror.ErrInternalServerError,
-					fmt.Errorf("fail to scan region, missing region"))
+				return nil, errors.ErrInternalServerError.GenWithStack("fail to scan region, missing region")
 			}
 			if r[0].StartKey != startKeyHex {
 				r[0].StartKey = strings.ToUpper(hex.EncodeToString(startKey))
@@ -360,11 +358,7 @@ func (pc *pdAPIClient) ListGcServiceSafePoint(
 		}
 		return nil
 	}, retry.WithMaxTries(defaultMaxRetry), retry.WithIsRetryableErr(func(err error) bool {
-		switch errors.Cause(err) {
-		case context.Canceled:
-			return false
-		}
-		return true
+		return !errors.Is(errors.Cause(err), context.Canceled)
 	}))
 	return resp, err
 }

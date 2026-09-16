@@ -24,6 +24,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
@@ -107,6 +108,7 @@ var customReplicaConfig = &ReplicaConfig{
 		UseFileBackend:        false,
 		EncoderWorkerNum:      31,
 		FlushWorkerNum:        18,
+		SpoolDiskQuota:        redo.DefaultSpoolDiskQuota,
 	},
 }
 
@@ -160,6 +162,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		FlushWorkerNum:        8,
 		Storage:               "",
 		UseFileBackend:        false,
+		SpoolDiskQuota:        redo.DefaultSpoolDiskQuota,
 	},
 }
 
@@ -416,7 +419,7 @@ func testSetLogLevel(ctx context.Context, client *CDCRESTClient) error {
 }
 
 func assertEmptyResponseBody(resp *Result) {
-	if "{}" != string(resp.body) {
+	if string(resp.body) != "{}" {
 		log.Panic("failed call api", zap.String("body", string(resp.body)))
 	}
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/pulsar"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,17 +42,15 @@ func newPulsarConfig(t *testing.T) (*config.PulsarConfig, *url.URL) {
 func TestGetPartitionNumMock(t *testing.T) {
 	t.Parallel()
 
-	cfg, _ := newPulsarConfig(t)
-
 	replicaConfig := config.GetDefaultReplicaConfig()
 	replicaConfig.Sink = &config.SinkConfig{
-		Protocol: str2Pointer("canal-json"),
+		Protocol: util.AddressOf("canal-json"),
 	}
 
 	ctx := context.Background()
 
 	ctx = context.WithValue(ctx, "testing.T", t)
-	pm, err := NewMockPulsarTopicManager(cfg, nil)
+	pm, err := NewMockPulsarTopicManager()
 	require.NoError(t, err)
 	require.NotNil(t, pm)
 

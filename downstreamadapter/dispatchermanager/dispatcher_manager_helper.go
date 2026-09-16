@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
@@ -63,7 +64,7 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 		return &heartbeatpb.TableSpanStatus{
 			ID:                 id.ToPB(),
 			ComponentStatus:    heartBeatInfo.ComponentStatus,
-			CheckpointTs:       heartBeatInfo.Watermark.CheckpointTs,
+			CheckpointTs:       heartBeatInfo.CheckpointTs,
 			EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
 			Mode:               dispatcherItem.GetMode(),
 		}, nil, &heartBeatInfo.Watermark
@@ -81,7 +82,7 @@ func prepareCreateDispatcher[T dispatcher.Dispatcher](infos map[common.Dispatche
 	schemaIds := make([]int64, 0, len(infos))
 	skipDMLAsStartTsList := make([]bool, 0, len(infos))
 	for _, info := range infos {
-		id := info.Id
+		id := info.ID
 		if _, ok := dispatcherMap.Get(id); ok {
 			continue
 		}
@@ -254,7 +255,8 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
 
 		// for non-mysql class sink, only the event dispatcher manager with table trigger event dispatcher need to receive the checkpointTs message.
-		if common.IsDefaultMode(dispatcherItem.GetMode()) && dispatcherItem.IsTableTriggerDispatcher() && sinkType != common.MysqlSinkType {
+		needCheckpointUpdates := commonEvent.NeedTableNameStoreAndCheckpointTs(sinkType == common.MysqlSinkType, e.sharedInfo.EnableActiveActive())
+		if common.IsDefaultMode(dispatcherItem.GetMode()) && dispatcherItem.IsTableTriggerDispatcher() && needCheckpointUpdates {
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
 			if err != nil {
 				log.Error("remove checkpointTs message failed",
@@ -264,17 +266,7 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 			}
 		}
 
-		// Submit async remove task to thread pool
-		task := &RemoveDispatcherTask{
-			manager:        e,
-			dispatcherItem: dispatcherItem,
-			retryCount:     0,
-		}
-		scheduler := GetRemoveDispatcherTaskScheduler()
-		taskHandle := scheduler.Submit(task, time.Now())
-
-		// Save taskHandle for later cancellation
-		e.removeTaskHandles.Store(id, taskHandle)
+		e.submitRemoveDispatcherTask(dispatcherItem)
 
 		dispatcherItem.SetTryRemoving()
 
@@ -294,6 +286,17 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 	}
 }
 
+func (e *DispatcherManager) submitRemoveDispatcherTask(dispatcherItem dispatcher.Dispatcher) {
+	task := &RemoveDispatcherTask{
+		manager:        e,
+		dispatcherItem: dispatcherItem,
+		retryCount:     0,
+	}
+	scheduler := GetRemoveDispatcherTaskScheduler()
+	taskHandle := scheduler.Submit(task, time.Now())
+	e.removeTaskHandles.Store(dispatcherItem.GetId(), taskHandle)
+}
+
 // closeAllDispatchers is called when the event dispatcher manager is closing
 func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
 	dispatcherMap *DispatcherMap[T],
@@ -303,7 +306,8 @@ func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeed
 		// Remove dispatcher from eventService
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
 
-		if common.IsDefaultMode(dispatcherItem.GetMode()) && dispatcherItem.IsTableTriggerDispatcher() && sinkType != common.MysqlSinkType {
+		needCheckpointUpdates := commonEvent.NeedTableNameStoreAndCheckpointTs(sinkType == common.MysqlSinkType, dispatcherItem.EnableActiveActive())
+		if common.IsDefaultMode(dispatcherItem.GetMode()) && dispatcherItem.IsTableTriggerDispatcher() && needCheckpointUpdates {
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
 			if err != nil {
 				log.Error("remove checkpointTs message failed",

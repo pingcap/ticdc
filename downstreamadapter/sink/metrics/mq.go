@@ -14,6 +14,8 @@
 package metrics
 
 import (
+	"sync"
+
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
@@ -50,11 +52,19 @@ var (
 		}, []string{"namespace", "changefeed"})
 )
 
-var mqServerRegistry *prometheus.Registry
+var (
+	mqServerRegistryMu sync.RWMutex
+	// mqServerRegistry is shared by all MQ sinks on the node. Bootstrap can now
+	// create multiple changefeeds concurrently, so both reads and the fallback
+	// initialization must be synchronized to avoid racing on the global pointer.
+	mqServerRegistry *prometheus.Registry
+)
 
 // InitMQMetrics registers all metrics in this file.
 func InitMQMetrics(registry *prometheus.Registry) {
+	mqServerRegistryMu.Lock()
 	mqServerRegistry = registry
+	mqServerRegistryMu.Unlock()
 
 	registry.MustRegister(WorkerSendMessageDuration)
 	registry.MustRegister(WorkerBatchSize)
@@ -66,7 +76,17 @@ func InitMQMetrics(registry *prometheus.Registry) {
 
 // GetMQMetricRegistry for add pulsar default metrics
 func GetMQMetricRegistry() *prometheus.Registry {
-	// make sure registry is not nil
+	mqServerRegistryMu.RLock()
+	registry := mqServerRegistry
+	mqServerRegistryMu.RUnlock()
+	if registry != nil {
+		return registry
+	}
+
+	mqServerRegistryMu.Lock()
+	defer mqServerRegistryMu.Unlock()
+	// Make sure registry is not nil when MQ sink metrics are first requested
+	// before the server metrics bootstrap wires in the shared registry.
 	if mqServerRegistry == nil {
 		mqServerRegistry = prometheus.DefaultRegisterer.(*prometheus.Registry)
 	}

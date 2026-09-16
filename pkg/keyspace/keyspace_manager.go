@@ -54,8 +54,8 @@ type manager struct {
 }
 
 var defaultKeyspaceMeta = &keyspacepb.KeyspaceMeta{
-	Name: common.DefaultKeyspaceName,
-	Id:   common.DefaultKeyspaceID,
+	Name:     common.DefaultKeyspaceName,
+	Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: common.DefaultKeyspaceID},
 }
 
 func (k *manager) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {

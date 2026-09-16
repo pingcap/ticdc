@@ -14,10 +14,35 @@
 package metrics
 
 import (
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
+	grpcMetrics = grpc_prometheus.NewClientMetrics()
+
+	EventFeedErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "kvclient",
+			Name:      "event_feed_error_count",
+			Help:      "The number of error return by tikv",
+		}, []string{"type"})
+	PullerEventCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "kvclient",
+			Name:      "pull_event_count",
+			Help:      "event count received by this puller",
+		}, []string{"type"})
+	BatchResolvedEventSize = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "kvclient",
+			Name:      "batch_resolved_event_size",
+			Help:      "The number of region in one batch resolved ts event",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 16),
+		}, []string{"type"})
 	LogPullerPrewriteCacheRowNum = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -39,6 +64,43 @@ var (
 			Name:      "resolved_ts_lag",
 			Help:      "The lag of resolved ts",
 		})
+	LogPullerMemoryQuota = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota",
+			Help:      "The log puller local memory quota usage.",
+		}, []string{"type"})
+	LogPullerMemoryQuotaEventWaiterCount = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota_event_waiter_count",
+			Help:      "The number of event receivers waiting at the log puller memory hard limit.",
+		})
+	LogPullerMemoryQuotaEventWaitDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota_event_wait_duration",
+			Help:      "The duration in seconds that an event receiver waits at the log puller memory hard limit.",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 24),
+		})
+	LogPullerMemoryQuotaScanWaiterCount = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota_scan_waiter_count",
+			Help:      "The number of region scans waiting at the log puller memory quota gate.",
+		})
+	LogPullerMemoryQuotaScanWaitDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "memory_quota_scan_wait_duration",
+			Help:      "The duration in seconds that a region scan waits at the log puller memory quota gate.",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 24),
+		})
 
 	SubscriptionClientResolvedTsLagGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
@@ -53,7 +115,7 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
 			Name:      "requested_region_count",
-			Help:      "The number of requested regions",
+			Help:      "The number of region requests by state.",
 		}, []string{"state"})
 	RegionRequestFinishScanDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
@@ -61,14 +123,6 @@ var (
 			Subsystem: "subscription_client",
 			Name:      "region_request_finish_scan_duration",
 			Help:      "duration (s) for region request to be finished.",
-			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
-		})
-	SubscriptionClientAddRegionRequestDuration = prometheus.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "subscription_client",
-			Name:      "add_region_request_duration",
-			Help:      "The cost of adding region request",
 			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 		})
 	SubscriptionClientSubscribedRegionCount = prometheus.NewGauge(
@@ -85,15 +139,72 @@ var (
 			Name:      "resolve_lock_task_drop_count",
 			Help:      "The number of resolve lock tasks dropped before being processed",
 		})
+	SubscriptionClientResolveLockCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "resolve_lock_count",
+			Help:      "The number of resolve lock executions",
+		}, []string{"status"})
+	SubscriptionClientResolveLockProcessedLockCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "resolve_lock_processed_lock_count",
+			Help:      "The number of locks found or resolved by resolve lock",
+		}, []string{"status"})
+	SubscriptionClientResolveLockOperationDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "resolve_lock_operation_duration",
+			Help:      "duration (s) for successful scan lock and resolve lock operations",
+			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
+		}, []string{"type"})
+
+	SubscriptionClientRegionEventHandleDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "region_event_handle_duration",
+			Help:      "duration (s) for subscription client to handle region events and build KV cache",
+			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
+		}, []string{"type"}) // types: entries, resolved, mixed, error.
+
+	SubscriptionClientConsumeKVEventsCallbackDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "consume_kv_events_callback_duration",
+			Help:      "duration (s) from calling consumeKVEvents to wake callback execution",
+			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
+		}, []string{"type"})
 )
 
+func GetGlobalGrpcMetrics() *grpc_prometheus.ClientMetrics {
+	return grpcMetrics
+}
+
 func initLogPullerMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(grpcMetrics)
+	registry.MustRegister(EventFeedErrorCounter)
+	registry.MustRegister(PullerEventCounter)
+	registry.MustRegister(BatchResolvedEventSize)
 	registry.MustRegister(LogPullerPrewriteCacheRowNum)
 	registry.MustRegister(LogPullerMatcherCount)
 	registry.MustRegister(LogPullerResolvedTsLag)
+	registry.MustRegister(LogPullerMemoryQuota)
+	registry.MustRegister(LogPullerMemoryQuotaEventWaiterCount)
+	registry.MustRegister(LogPullerMemoryQuotaEventWaitDuration)
+	registry.MustRegister(LogPullerMemoryQuotaScanWaiterCount)
+	registry.MustRegister(LogPullerMemoryQuotaScanWaitDuration)
 	registry.MustRegister(SubscriptionClientRequestedRegionCount)
-	registry.MustRegister(SubscriptionClientAddRegionRequestDuration)
 	registry.MustRegister(RegionRequestFinishScanDuration)
 	registry.MustRegister(SubscriptionClientSubscribedRegionCount)
 	registry.MustRegister(SubscriptionClientResolveLockTaskDropCounter)
+	registry.MustRegister(SubscriptionClientResolveLockCounter)
+	registry.MustRegister(SubscriptionClientResolveLockProcessedLockCounter)
+	registry.MustRegister(SubscriptionClientResolveLockOperationDuration)
+	registry.MustRegister(SubscriptionClientRegionEventHandleDuration)
+	registry.MustRegister(SubscriptionClientConsumeKVEventsCallbackDuration)
 }

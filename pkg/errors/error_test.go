@@ -99,6 +99,31 @@ func TestShouldFailChangefeed(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "ErrNewKafkaSink should return false",
+			err:      ErrNewKafkaSink.GenWithStackByArgs(),
+			expected: false,
+		},
+		{
+			name:     "ErrKafkaAdminAPI should return false",
+			err:      ErrKafkaAdminAPI.GenWithStackByArgs("describe-topic", "test-topic"),
+			expected: false,
+		},
+		{
+			name:     "ErrKafkaAuthorizationFailed should return false",
+			err:      ErrKafkaAuthorizationFailed.GenWithStackByArgs("describe-topic", "test-topic"),
+			expected: false,
+		},
+		{
+			name:     "ErrKafkaSendMessage should return false",
+			err:      ErrKafkaSendMessage.GenWithStackByArgs(),
+			expected: false,
+		},
+		{
+			name:     "ErrKafkaSinkClosed should return false",
+			err:      ErrKafkaSinkClosed.GenWithStackByArgs(),
+			expected: false,
+		},
+		{
 			name:     "ErrMySQLInvalidConfig should return true",
 			err:      ErrMySQLInvalidConfig.GenWithStackByArgs("invalid config"),
 			expected: true,
@@ -106,6 +131,16 @@ func TestShouldFailChangefeed(t *testing.T) {
 		{
 			name:     "ErrStorageSinkInvalidConfig should return true",
 			err:      ErrStorageSinkInvalidConfig.GenWithStackByArgs("invalid config"),
+			expected: true,
+		},
+		{
+			name:     "ErrInvalidTableRoutingRule should return true",
+			err:      ErrInvalidTableRoutingRule.GenWithStackByArgs("invalid matcher"),
+			expected: true,
+		},
+		{
+			name:     "ErrTableRoutingFailed should return true",
+			err:      ErrTableRoutingFailed.GenWithStackByArgs("failed to rewrite ddl"),
 			expected: true,
 		},
 		{

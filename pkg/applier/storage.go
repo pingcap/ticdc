@@ -186,6 +186,7 @@ func (t *tempTxnInsertEventStorage) readNextEvent() (*commonEvent.RedoDMLEvent, 
 	}
 
 	event := t.events[0]
+	clear(t.events[:1])
 	t.events = t.events[1:]
 	return event, nil
 }

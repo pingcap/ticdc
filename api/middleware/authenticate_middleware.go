@@ -30,19 +30,37 @@ import (
 	"go.uber.org/zap"
 )
 
+const ctxAuthenticatedKey = "ctx-authenticated"
+
 // AuthenticateMiddleware authenticates the request by query upstream TiDB.
 func AuthenticateMiddleware(server server.Server) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		security := config.GetGlobalServerConfig().Security
-		if security != nil && security.ClientUserRequired {
-			if err := verify(ctx, server.GetEtcdClient().GetEtcdClient()); err != nil {
-				ctx.IndentedJSON(http.StatusUnauthorized, api.NewHTTPError(err))
-				ctx.Abort()
-				return
-			}
+		if !AuthenticateRequest(ctx, server) {
+			return
 		}
 		ctx.Next()
 	}
+}
+
+// AuthenticateRequest authenticates a request when client user authentication
+// is enabled. It can be called from a handler after the target changefeed has
+// supplied its persisted keyspace ID.
+func AuthenticateRequest(ctx *gin.Context, server server.Server) bool {
+	if ctx.GetBool(ctxAuthenticatedKey) {
+		return true
+	}
+	security := config.GetGlobalServerConfig().Security
+	if security == nil || !security.ClientUserRequired {
+		ctx.Set(ctxAuthenticatedKey, true)
+		return true
+	}
+	if err := verify(ctx, server.GetEtcdClient().GetEtcdClient()); err != nil {
+		ctx.IndentedJSON(http.StatusUnauthorized, api.NewHTTPError(err))
+		ctx.Abort()
+		return false
+	}
+	ctx.Set(ctxAuthenticatedKey, true)
+	return true
 }
 
 func verify(ctx *gin.Context, etcdCli etcd.Client) error {
@@ -67,7 +85,7 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 
 	// verifyTiDBUser verify whether the username and password are valid in TiDB. It does the validation via
 	// the successfully build of a connection with upstream TiDB with the username and password.
-	tidbs, err := upstream.FetchTiDBTopology(ctx, etcdCli, keyspaceMeta.Id)
+	tidbs, err := upstream.FetchTiDBTopology(ctx, etcdCli, keyspaceMeta.GetId())
 	if err != nil {
 		return errors.Trace(err)
 	}

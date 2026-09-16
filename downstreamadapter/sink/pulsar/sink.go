@@ -26,10 +26,24 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/writelease"
+	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
+
+type newPulsarDMLProducerFunc func(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	failpointCh chan error,
+) (dmlProducer, error)
+
+type newPulsarDDLProducerFunc func(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	sinkConfig *config.SinkConfig,
+) (ddlProducer, error)
 
 type sink struct {
 	changefeedID commonType.ChangeFeedID
@@ -49,8 +63,9 @@ type sink struct {
 
 	tableSchemaStore *commonEvent.TableSchemaStore
 	checkpointTsChan chan uint64
-	eventChan        chan *commonEvent.DMLEvent
-	rowChan          chan *commonEvent.MQRowEvent
+	eventChan        *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
+	rowChan          *chann.UnlimitedChannel[*commonEvent.MQRowEvent, any]
+	writeGate        *writelease.Gate
 }
 
 func (s *sink) SinkType() commonType.SinkType {
@@ -64,26 +79,86 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 }
 
 func New(
-	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, keyspaceID uint32,
 ) (*sink, error) {
 	comp, protocol, err := newPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, err
 	}
+	return newWithComponent(
+		ctx,
+		changefeedID,
+		keyspaceID,
+		sinkConfig,
+		comp,
+		protocol,
+		newPulsarDMLProducer,
+		newPulsarDDLProducer,
+	)
+}
+
+func newPulsarDMLProducer(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	failpointCh chan error,
+) (dmlProducer, error) {
+	producer, err := newDMLProducers(changefeedID, comp, failpointCh)
+	if err != nil {
+		return nil, err
+	}
+	return producer, nil
+}
+
+func newPulsarDDLProducer(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	sinkConfig *config.SinkConfig,
+) (ddlProducer, error) {
+	producer, err := newDDLProducers(changefeedID, comp, sinkConfig)
+	if err != nil {
+		return nil, err
+	}
+	return producer, nil
+}
+
+func newWithComponent(
+	ctx context.Context,
+	changefeedID commonType.ChangeFeedID,
+	keyspaceID uint32,
+	sinkConfig *config.SinkConfig,
+	comp component,
+	protocol config.Protocol,
+	newDMLProducer newPulsarDMLProducerFunc,
+	newDDLProducer newPulsarDDLProducerFunc,
+) (_ *sink, err error) {
+	var (
+		dmlProducer dmlProducer
+		ddlProducer ddlProducer
+		statistics  *metrics.Statistics
+	)
 	defer func() {
 		if err != nil {
+			if ddlProducer != nil {
+				ddlProducer.close()
+			}
+			if dmlProducer != nil {
+				dmlProducer.close()
+			}
+			if statistics != nil {
+				statistics.Close()
+			}
 			comp.close()
 		}
 	}()
 
 	failpointCh := make(chan error, 1)
-	statistics := metrics.NewStatistics(changefeedID, "pulsar")
-	dmlProducer, err := newDMLProducers(changefeedID, comp, failpointCh)
+	statistics = metrics.NewStatistics(changefeedID, keyspaceID, "pulsar")
+	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
 	if err != nil {
 		return nil, err
 	}
 
-	ddlProducer, err := newDDLProducers(changefeedID, comp, sinkConfig)
+	ddlProducer, err = newDDLProducer(changefeedID, comp, sinkConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -94,8 +169,8 @@ func New(
 		ddlProducer:  ddlProducer,
 
 		checkpointTsChan: make(chan uint64, 16),
-		eventChan:        make(chan *commonEvent.DMLEvent, 32),
-		rowChan:          make(chan *commonEvent.MQRowEvent, 32),
+		eventChan:        chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
+		rowChan:          chann.NewUnlimitedChannelDefault[*commonEvent.MQRowEvent](),
 
 		protocol:      protocol,
 		partitionRule: helper.GetDDLDispatchRule(protocol),
@@ -124,7 +199,15 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.eventChan <- event
+	s.eventChan.Push(event)
+}
+
+func (s *sink) SetWriteGate(gate *writelease.Gate) {
+	s.writeGate = gate
+}
+
+func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -153,7 +236,19 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
+		if message == nil {
+			log.Info("Skip ddl event",
+				zap.Uint64("startTs", event.GetStartTs()),
+				zap.Uint64("commitTs", e.GetCommitTs()),
+				zap.String("query", e.Query),
+				zap.Stringer("changefeed", s.changefeedID))
+			continue
+		}
+		common.SetDDLMessageLogInfo(message, e)
 		topic := s.comp.eventRouter.GetTopicForDDL(e)
+		if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
+			return err
+		}
 		// Notice: We must call GetPartitionNum here,
 		// which will be responsible for automatically creating topics when they don't exist.
 		// If it is not called here and kafka has `auto.create.topics.enable` turned on,
@@ -162,14 +257,17 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
+		if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
+			return err
+		}
 		ddlType := e.GetDDLType().String()
 		if s.partitionRule == helper.PartitionAll {
 			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.syncBroadcastMessage(s.ctx, topic, message)
+				return ddlType, s.ddlProducer.syncBroadcastMessage(s.ctx, topic, message, common.MessageTypeDDL)
 			})
 		} else {
 			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.syncSendMessage(s.ctx, topic, message)
+				return ddlType, s.ddlProducer.syncSendMessage(s.ctx, topic, message, common.MessageTypeDDL)
 			})
 		}
 		if err != nil {
@@ -229,6 +327,10 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			if msg == nil {
 				continue
 			}
+			common.SetCheckpointMessageLogInfo(msg, ts)
+			if !writelease.CanWrite(s.writeGate) {
+				continue
+			}
 
 			tableNames := s.getAllTableNames(ts)
 			// NOTICE: When there are no tables to replicate,
@@ -240,7 +342,10 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				if err != nil {
 					return errors.Trace(err)
 				}
-				err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg)
+				if !writelease.CanWrite(s.writeGate) {
+					continue
+				}
+				err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg, common.MessageTypeResolved)
 				if err != nil {
 					return errors.Trace(err)
 				}
@@ -251,7 +356,10 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 					if err != nil {
 						return errors.Trace(err)
 					}
-					err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg)
+					if !writelease.CanWrite(s.writeGate) {
+						break
+					}
+					err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg, common.MessageTypeResolved)
 					if err != nil {
 						return errors.Trace(err)
 					}
@@ -262,6 +370,11 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			checkpointTsMessageDuration.Observe(time.Since(start).Seconds())
 		}
 	}
+}
+
+func (s *sink) close() {
+	s.eventChan.Close()
+	s.rowChan.Close()
 }
 
 func (s *sink) sendDMLEvent(ctx context.Context) error {
@@ -279,6 +392,9 @@ func (s *sink) sendDMLEvent(ctx context.Context) error {
 		return s.nonBatchEncodeRun(ctx)
 	})
 	g.Go(func() error {
+		// UnlimitedChannel will block when there is no event, they cannot dirrectly find ctx.Done()
+		// Thus, we need to close the channel when the context is done
+		defer s.close()
 		return s.sendMessages(ctx)
 	})
 	g.Go(func() error {
@@ -292,64 +408,32 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case event := <-s.eventChan:
+		default:
+			event, ok := s.eventChan.Get()
+			if !ok {
+				log.Info("pulsar sink event channel closed",
+					zap.String("keyspace", s.changefeedID.Keyspace()),
+					zap.String("changefeed", s.changefeedID.Name()))
+				return nil
+			}
 			schema := event.TableInfo.GetSchemaName()
 			table := event.TableInfo.GetTableName()
 			topic := s.comp.eventRouter.GetTopicForRowChange(schema, table)
+			if err := writelease.WaitForWrite(ctx, s.writeGate); err != nil {
+				return errors.Trace(err)
+			}
 			partitionNum, err := s.comp.topicManager.GetPartitionNum(ctx, topic)
 			if err != nil {
 				return errors.Trace(err)
 			}
 
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
-			selector := s.comp.columnSelector.Get(schema, table)
-			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
-				var calledCount atomic.Uint64
-				// The callback of the last row will trigger the callback of the txn.
-				return func() {
-					if calledCount.Inc() == totalCount {
-						for _, callback := range postTxnFlushed {
-							callback()
-						}
-					}
-				}
+			selector := s.comp.columnSelector.GetForTableInfo(event.TableInfo)
+			events, err := helper.NewMQRowEvents(event, topic, partitionNum, partitionGenerator, selector)
+			if err != nil {
+				return errors.Trace(err)
 			}
-
-			rowsCount := uint64(event.Len())
-			rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
-
-			for {
-				row, ok := event.GetNextRow()
-				if !ok {
-					event.Rewind()
-					break
-				}
-
-				index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(&row, partitionNum, event.TableInfo, event.CommitTs)
-				if err != nil {
-					return errors.Trace(err)
-				}
-
-				mqEvent := &commonEvent.MQRowEvent{
-					Key: commonEvent.TopicPartitionKey{
-						Topic:          topic,
-						Partition:      index,
-						PartitionKey:   key,
-						TotalPartition: partitionNum,
-					},
-					RowEvent: commonEvent.RowEvent{
-						PhysicalTableID: event.PhysicalTableID,
-						TableInfo:       event.TableInfo,
-						StartTs:         event.StartTs,
-						CommitTs:        event.CommitTs,
-						Event:           row,
-						Callback:        rowCallback,
-						ColumnSelector:  selector,
-						Checksum:        row.Checksum,
-					},
-				}
-				s.rowChan <- mqEvent
-			}
+			s.rowChan.Push(events...)
 		}
 	}
 }
@@ -357,9 +441,6 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 const (
 	// batchSize is the maximum size of the number of messages in a batch.
 	batchSize = 2048
-	// batchInterval is the interval of the worker to collect a batch of messages.
-	// It shouldn't be too large, otherwise it will lead to a high latency.
-	batchInterval = 15 * time.Millisecond
 )
 
 // batchEncodeRun collect messages into batch and add them to the encoder group.
@@ -372,12 +453,10 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 		metrics.WorkerBatchSize.DeleteLabelValues(keyspace, changefeed)
 	}()
 
-	ticker := time.NewTicker(batchInterval)
-	defer ticker.Stop()
 	msgsBuf := make([]*commonEvent.MQRowEvent, batchSize)
 	for {
 		start := time.Now()
-		msgCount, err := s.batch(ctx, msgsBuf, ticker)
+		msgs, err := s.batch(ctx, msgsBuf)
 		if err != nil {
 			log.Error("pulsar sink batch dml events failed",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -385,14 +464,13 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 				zap.Error(err))
 			return errors.Trace(err)
 		}
-		if msgCount == 0 {
+		if len(msgs) == 0 {
 			continue
 		}
 
-		metricBatchSize.Observe(float64(msgCount))
+		metricBatchSize.Observe(float64(len(msgs)))
 		metricBatchDuration.Observe(time.Since(start).Seconds())
 
-		msgs := msgsBuf[:msgCount]
 		// Group messages by its TopicPartitionKey before adding them to the encoder group.
 		groupedMsgs := s.group(msgs)
 		for key, msg := range groupedMsgs {
@@ -404,52 +482,23 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 }
 
 // batch collects a batch of messages from w.msgChan into buffer.
-// It returns the number of messages collected.
 // Note: It will block until at least one message is received.
-func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) (int, error) {
-	msgCount := 0
-	maxBatchSize := len(buffer)
+func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent) ([]*commonEvent.MQRowEvent, error) {
 	// We need to receive at least one message or be interrupted,
 	// otherwise it will lead to idling.
 	select {
 	case <-ctx.Done():
-		return msgCount, ctx.Err()
-	case msg, ok := <-s.rowChan:
+		return nil, ctx.Err()
+	default:
+		msgs, ok := s.rowChan.GetMultipleNoGroup(buffer)
 		if !ok {
 			log.Info("pulsar sink row event channel closed",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()))
-			return msgCount, nil
+			return nil, nil
 		}
-
-		buffer[msgCount] = msg
-		msgCount++
-	}
-
-	// Reset the ticker to start a new batching.
-	// We need to stop batching when the interval is reached.
-	ticker.Reset(batchInterval)
-	for {
-		select {
-		case <-ctx.Done():
-			return msgCount, ctx.Err()
-		case msg, ok := <-s.rowChan:
-			if !ok {
-				log.Info("pulsar sink row event channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
-				return msgCount, nil
-			}
-
-			buffer[msgCount] = msg
-			msgCount++
-
-			if msgCount >= maxBatchSize {
-				return msgCount, nil
-			}
-		case <-ticker.C:
-			return msgCount, nil
-		}
+		buffer = buffer[:0]
+		return msgs, nil
 	}
 }
 
@@ -471,7 +520,8 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case event, ok := <-s.rowChan:
+		default:
+			event, ok := s.rowChan.Get()
 			if !ok {
 				log.Info("pulsar sink row event channel closed",
 					zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -506,6 +556,9 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				return errors.Trace(err)
 			}
 			for _, message := range future.Messages {
+				if err = writelease.WaitForWrite(ctx, s.writeGate); err != nil {
+					return errors.Trace(err)
+				}
 				start := time.Now()
 				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
@@ -530,12 +583,20 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 			zap.Uint64("ts", ts))
 		return nil
 	}
-	return s.tableSchemaStore.GetAllTableNames(ts)
+	return s.tableSchemaStore.GetAllTableNames(ts, true)
 }
 
-func (s *sink) Close(_ bool) {
+func (s *sink) Close() {
 	s.ddlProducer.close()
 	s.dmlProducer.close()
 	s.comp.close()
 	s.statistics.Close()
+}
+
+func (s *sink) BatchCount() int {
+	return 4096
+}
+
+func (s *sink) BatchBytes() int {
+	return 0
 }

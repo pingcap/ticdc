@@ -1,0 +1,7 @@
+[replication]
+max-replicas = 1
+enable-placement-rules = true
+
+[schedule]
+low-space-ratio = 0.01
+high-space-ratio = 0.005

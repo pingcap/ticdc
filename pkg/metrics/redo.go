@@ -23,13 +23,29 @@ const (
 )
 
 var (
+	// RedoResolvedTsGauge records the resolved ts persisted by redo meta.
+	RedoResolvedTsGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "resolved_ts",
+		Help:      "Resolved ts persisted by redo meta",
+	}, []string{GetKeyspaceLabel(), "changefeed"})
+
+	// RedoCheckpointTsGauge records the checkpoint ts persisted by redo meta.
+	RedoCheckpointTsGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "checkpoint_ts",
+		Help:      "Checkpoint ts persisted by redo meta",
+	}, []string{GetKeyspaceLabel(), "changefeed"})
+
 	// RedoWriteBytesGauge records the total number of bytes written to redo log.
 	RedoWriteBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "write_bytes_total",
 		Help:      "Total number of bytes redo log written",
-	}, []string{getKeyspaceLabel(), "changefeed", "type"})
+	}, []string{GetKeyspaceLabel(), "changefeed", "type"})
 
 	// RedoFsyncDurationHistogram records the latency distributions of fsync called by redo writer.
 	RedoFsyncDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -38,7 +54,7 @@ var (
 		Name:      "fsync_duration_seconds",
 		Help:      "The latency distributions of fsync called by redo writer",
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
-	}, []string{getKeyspaceLabel(), "changefeed", "type"})
+	}, []string{GetKeyspaceLabel(), "changefeed", "type"})
 
 	// RedoFlushAllDurationHistogram records the latency distributions of flushAll
 	// called by redo writer.
@@ -48,7 +64,24 @@ var (
 		Name:      "flush_all_duration_seconds",
 		Help:      "The latency distributions of flushall called by redo writer",
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
-	}, []string{getKeyspaceLabel(), "changefeed", "type"})
+	}, []string{GetKeyspaceLabel(), "changefeed", "type"})
+
+	// RedoTotalRowsCountGauge records the total number of rows written to redo log.
+	RedoTotalRowsCountGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "total_rows_count",
+		Help:      "The total count of rows that are processed by redo writer",
+	}, []string{GetKeyspaceLabel(), "changefeed", "type"})
+
+	// RedoWriteLogDurationHistogram records the latency distributions of writeLog.
+	RedoWriteLogDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "write_log_duration_seconds",
+		Help:      "The latency distributions of writeLog called by redo sink",
+		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
+	}, []string{GetKeyspaceLabel(), "changefeed", "type"})
 
 	// RedoFlushLogDurationHistogram records the latency distributions of flushLog.
 	RedoFlushLogDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -57,12 +90,26 @@ var (
 		Name:      "flush_log_duration_seconds",
 		Help:      "The latency distributions of flushLog called by redo sink",
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
-	}, []string{getKeyspaceLabel(), "changefeed", "type"})
+	}, []string{GetKeyspaceLabel(), "changefeed", "type"})
+
+	// RedoWorkerBusyRatio records the busy time of redo writer workers.
+	RedoWorkerBusyRatio = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "worker_busy_ratio",
+			Help:      "Busy time in seconds for redo writer workers.",
+		}, []string{GetKeyspaceLabel(), "changefeed", "type"})
 )
 
 func initRedoMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(RedoResolvedTsGauge)
+	registry.MustRegister(RedoCheckpointTsGauge)
 	registry.MustRegister(RedoFsyncDurationHistogram)
+	registry.MustRegister(RedoTotalRowsCountGauge)
 	registry.MustRegister(RedoWriteBytesGauge)
 	registry.MustRegister(RedoFlushAllDurationHistogram)
+	registry.MustRegister(RedoWriteLogDurationHistogram)
 	registry.MustRegister(RedoFlushLogDurationHistogram)
+	registry.MustRegister(RedoWorkerBusyRatio)
 }

@@ -19,12 +19,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/writelease"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -46,15 +49,15 @@ func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 	comp, protocol, err := newPulsarSinkComponentForTest(ctx, changefeedID, sinkURI, replicaConfig.Sink)
 	require.NoError(t, err)
 
-	statistics := metrics.NewStatistics(changefeedID, "sink")
+	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "sink")
 	pulsarSink := &sink{
 		changefeedID: changefeedID,
 		dmlProducer:  newMockDMLProducer(),
 		ddlProducer:  newMockDDLProducer(),
 
 		checkpointTsChan: make(chan uint64, 16),
-		eventChan:        make(chan *commonEvent.DMLEvent, 32),
-		rowChan:          make(chan *commonEvent.MQRowEvent, 32),
+		eventChan:        chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
+		rowChan:          chann.NewUnlimitedChannelDefault[*commonEvent.MQRowEvent](),
 
 		protocol:      protocol,
 		partitionRule: helper.GetDDLDispatchRule(protocol),
@@ -64,13 +67,17 @@ func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 		statistics: statistics,
 		ctx:        ctx,
 	}
-	go pulsarSink.Run(ctx)
 	return pulsarSink, nil
 }
 
 func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	pulsarSink, err := newPulsarSinkForTest(t)
 	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- pulsarSink.Run(ctx)
+	}()
 
 	var count atomic.Int64
 
@@ -130,4 +137,102 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	require.Len(t, pulsarSink.ddlProducer.(*mockProducer).GetAllEvents(), 1)
 
 	require.Equal(t, count.Load(), int64(3))
+	cancel()
+	require.ErrorIs(t, <-runDone, context.Canceled)
+	pulsarSink.Close()
+}
+
+func TestPulsarSinkWriteGateBlocksDDLSend(t *testing.T) {
+	pulsarSink, err := newPulsarSinkForTest(t)
+	require.NoError(t, err)
+	defer pulsarSink.Close()
+	gate := writelease.NewGate()
+	pulsarSink.SetWriteGate(gate)
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      "create table t (id int primary key)",
+		FinishedTs: 1,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- pulsarSink.WriteBlockEvent(ddlEvent)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Pulsar DDL returned while the capture write gate was closed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	require.Empty(t, pulsarSink.ddlProducer.(*mockProducer).GetAllEvents())
+
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	require.NoError(t, <-done)
+	require.Len(t, pulsarSink.ddlProducer.(*mockProducer).GetAllEvents(), 1)
+}
+
+func TestPulsarSinkBatchConfig(t *testing.T) {
+	sink := &sink{}
+	require.Equal(t, 4096, sink.BatchCount())
+	require.Zero(t, sink.BatchBytes())
+}
+
+func TestPulsarSinkNewWithComponentReturnsDMLProducerError(t *testing.T) {
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	expectedErr := cerror.ErrPulsarNewProducer.GenWithStackByArgs()
+	ddlProducerCreated := false
+	var err error
+
+	require.NotPanics(t, func() {
+		_, err = newWithComponent(
+			context.Background(),
+			changefeedID,
+			common.DefaultKeyspaceID,
+			&config.SinkConfig{},
+			component{},
+			config.ProtocolCanalJSON,
+			func(common.ChangeFeedID, component, chan error) (dmlProducer, error) {
+				var producer *dmlProducers
+				return producer, expectedErr
+			},
+			func(common.ChangeFeedID, component, *config.SinkConfig) (ddlProducer, error) {
+				ddlProducerCreated = true
+				return newMockDDLProducer(), nil
+			},
+		)
+	})
+
+	require.Error(t, err)
+	require.EqualError(t, err, expectedErr.Error())
+	require.False(t, ddlProducerCreated)
+}
+
+func TestPulsarSinkNewWithComponentReturnsDDLProducerError(t *testing.T) {
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	expectedErr := cerror.ErrPulsarNewProducer.GenWithStackByArgs()
+	var err error
+
+	require.NotPanics(t, func() {
+		_, err = newWithComponent(
+			context.Background(),
+			changefeedID,
+			common.DefaultKeyspaceID,
+			&config.SinkConfig{},
+			component{},
+			config.ProtocolCanalJSON,
+			func(common.ChangeFeedID, component, chan error) (dmlProducer, error) {
+				return newMockDMLProducer(), nil
+			},
+			func(common.ChangeFeedID, component, *config.SinkConfig) (ddlProducer, error) {
+				var producer *ddlProducers
+				return producer, expectedErr
+			},
+		)
+	})
+
+	require.Error(t, err)
+	require.EqualError(t, err, expectedErr.Error())
 }

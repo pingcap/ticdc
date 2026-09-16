@@ -15,6 +15,7 @@ package mysql
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
@@ -45,7 +46,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		ddlTs := event.GetCommitTs()
 		flag, err := w.isDDLExecuted(tableID, ddlTs)
 		if err != nil {
-			return nil
+			return err
 		}
 		if flag {
 			log.Info("Skip Already Executed DDL", zap.String("sql", event.GetDDLQuery()))
@@ -56,6 +57,28 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	ctx := w.ctx
 	shouldSwitchDB := needSwitchDB(event)
 
+	switch event.GetDDLType() {
+	case timodel.ActionMultiSchemaChange, timodel.ActionAddIndex:
+		// TiDB may generate index names for anonymous ADD INDEX clauses. Rewrite
+		// the DDL to use the upstream-generated names so downstream schema stays
+		// deterministic across retries and CREATE TABLE LIKE replication.
+		// event.IndexIDs is pre-filtered to contain only ADD INDEX IDs in clause
+		// order, so restoreAnonymousIndexToNamedIndex can remap each anonymous
+		// secondary index to the exact upstream-generated name.
+		newQuery, changed, err := restoreAnonymousIndexToNamedIndex(event.Query, event.TableInfo, event.IndexIDs)
+		if err != nil {
+			log.Warn("failed to restore anonymous index name",
+				zap.String("changefeed", w.ChangefeedID.String()),
+				zap.String("query", event.Query),
+				zap.Error(err))
+		} else if changed {
+			log.Info("restore anonymous index to named index",
+				zap.String("changefeed", w.ChangefeedID.String()),
+				zap.String("query", event.Query),
+				zap.String("newQuery", newQuery))
+			event.Query = newQuery
+		}
+	}
 	// Convert vector type to string type for unsupport database
 	if w.cfg.HasVectorType {
 		if newQuery := formatQuery(event.Query); newQuery != event.Query {
@@ -78,16 +101,58 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		}
 	})
 
-	tx, err := w.db.BeginTx(ctx, nil)
+	db := w.getDDLExecDB(event)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 
 	if shouldSwitchDB {
-		_, err = tx.ExecContext(ctx, "USE "+common.QuoteName(event.GetSchemaName())+";")
+		_, err = tx.ExecContext(ctx, "USE "+common.QuoteName(event.GetTargetSchemaName())+";")
 		if err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {
 				log.Error("Failed to rollback", zap.Error(err))
+			}
+			return err
+		}
+	}
+
+	// Reset session timestamp before DDL to avoid leaking from pooled connections.
+	if err := resetSessionTimestamp(ctx, tx); err != nil {
+		log.Error("Failed to reset session timestamp before DDL execution",
+			zap.String("changefeed", w.ChangefeedID.String()),
+			zap.String("query", event.GetDDLQuery()),
+			zap.Error(err))
+		if rbErr := tx.Rollback(); rbErr != nil {
+			log.Error("Failed to rollback", zap.String("changefeed", w.ChangefeedID.String()), zap.Error(rbErr))
+		}
+		return err
+	}
+
+	ddlTimestamp, useSessionTimestamp := ddlSessionTimestampFromOriginDefault(event, w.cfg.Timezone)
+	skipSetTimestamp := false
+	failpoint.Inject("MySQLSinkSkipSetSessionTimestamp", func(val failpoint.Value) {
+		skipSetTimestamp = matchFailpointValue(val, event.GetDDLQuery())
+	})
+	skipResetAfterDDL := false
+	failpoint.Inject("MySQLSinkSkipResetSessionTimestampAfterDDL", func(val failpoint.Value) {
+		skipResetAfterDDL = matchFailpointValue(val, event.GetDDLQuery())
+	})
+
+	if useSessionTimestamp && skipSetTimestamp {
+		log.Warn("Skip setting session timestamp due to failpoint",
+			zap.String("changefeed", w.ChangefeedID.String()),
+			zap.String("query", event.GetDDLQuery()))
+	}
+	if useSessionTimestamp && !skipSetTimestamp {
+		// set the session timestamp to match upstream DDL execution time
+		if err := setSessionTimestamp(ctx, tx, ddlTimestamp); err != nil {
+			log.Error("Fail to set session timestamp for DDL",
+				zap.Float64("timestamp", ddlTimestamp),
+				zap.String("query", event.GetDDLQuery()),
+				zap.Error(err))
+			if rbErr := tx.Rollback(); rbErr != nil {
+				log.Error("Failed to rollback", zap.String("changefeed", w.ChangefeedID.String()), zap.Error(rbErr))
 			}
 			return err
 		}
@@ -97,15 +162,49 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	_, err = tx.ExecContext(ctx, query)
 	if err != nil {
 		log.Error("Fail to ExecContext", zap.Any("err", err), zap.Any("query", query))
+		if useSessionTimestamp {
+			if skipResetAfterDDL {
+				log.Warn("Skip resetting session timestamp after DDL execution failure due to failpoint",
+					zap.String("changefeed", w.ChangefeedID.String()),
+					zap.String("query", event.GetDDLQuery()))
+			} else if tsErr := resetSessionTimestamp(ctx, tx); tsErr != nil {
+				log.Warn("Failed to reset session timestamp after DDL execution failure", zap.Error(tsErr))
+			}
+		}
 		if rbErr := tx.Rollback(); rbErr != nil {
-			log.Error("Failed to rollback", zap.String("sql", event.GetDDLQuery()), zap.Error(err))
+			log.Error("Failed to rollback", zap.String("sql", event.GetDDLQuery()), zap.Error(rbErr))
 		}
 		return err
+	}
+
+	if useSessionTimestamp {
+		// reset session timestamp after DDL execution to avoid affecting subsequent operations
+		if skipResetAfterDDL {
+			log.Warn("Skip resetting session timestamp after DDL execution due to failpoint",
+				zap.String("changefeed", w.ChangefeedID.String()),
+				zap.String("query", event.GetDDLQuery()))
+		} else if err := resetSessionTimestamp(ctx, tx); err != nil {
+			log.Error("Failed to reset session timestamp after DDL execution", zap.Error(err))
+			if rbErr := tx.Rollback(); rbErr != nil {
+				log.Error("Failed to rollback", zap.String("sql", event.GetDDLQuery()), zap.Error(rbErr))
+			}
+			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Query info: %s; ", event.GetDDLQuery())))
+		}
 	}
 
 	if err = tx.Commit(); err != nil {
 		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Query info: %s; ", event.GetDDLQuery())))
 	}
+
+	logFields := []zap.Field{
+		zap.String("query", event.GetDDLQuery()),
+	}
+
+	if useSessionTimestamp {
+		logFields = append(logFields, zap.Float64("sessionTimestamp", ddlTimestamp))
+	}
+
+	log.Info("Exec DDL succeeded", logFields...)
 
 	return nil
 }
@@ -125,33 +224,52 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 			if errors.IsIgnorableMySQLDDLError(err) {
 				// NOTE: don't change the log, some tests depend on it.
 				log.Info("Execute DDL failed, but error can be ignored",
-					zap.String("ddl", event.Query),
 					zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
-					zap.Error(err))
+					zap.String("ddl", event.Query), zap.Error(err))
 				// If the error is ignorable, we will ignore the error directly.
 				return nil
 			}
-			if w.cfg.IsTiDB && ddlCreateTime != "" && errors.Cause(err) == mysql.ErrInvalidConn {
-				log.Warn("Wait the asynchronous ddl to synchronize", zap.String("ddl", event.Query), zap.String("ddlCreateTime", ddlCreateTime),
+			if w.cfg.IsTiDB && ddlCreateTime != "" && errors.Is(errors.Cause(err), mysql.ErrInvalidConn) {
+				log.Warn("Wait the asynchronous ddl to synchronize",
 					zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
-					zap.String("readTimeout", w.cfg.ReadTimeout), zap.Error(err))
+					zap.String("ddl", event.Query), zap.String("ddlCreateTime", ddlCreateTime),
+					zap.String("readTimeout", w.getDDLReadTimeout(event)), zap.Error(err))
 				return w.waitDDLDone(w.ctx, event, ddlCreateTime)
 			}
 			log.Warn("Execute DDL with error, retry later",
-				zap.String("ddl", event.Query),
 				zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
-				zap.Error(err))
+				zap.String("ddl", event.Query), zap.Error(err))
 			return errors.WrapError(errors.ErrExecDDLFailed, errors.WithMessage(err, fmt.Sprintf("Execute DDL failed, Query info: %s; ", event.GetDDLQuery())))
 		}
 		log.Info("Execute DDL succeeded",
-			zap.String("changefeed", w.ChangefeedID.String()), zap.String("query", event.GetDDLQuery()),
+			zap.String("changefeed", w.ChangefeedID.String()),
 			zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
-			zap.Any("ddl", event))
+			zap.String("query", event.GetDDLQuery()))
 		return nil
 	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
 		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),
 		retry.WithMaxTries(defaultDDLMaxRetry),
 		retry.WithIsRetryableErr(errors.IsRetryableDDLError))
+}
+
+func (w *Writer) getDDLExecDB(event *commonEvent.DDLEvent) *sql.DB {
+	if w.useAsyncDB(event) {
+		return w.asyncDB
+	}
+	return w.db
+}
+
+func (w *Writer) getDDLReadTimeout(event *commonEvent.DDLEvent) string {
+	if w.useAsyncDB(event) {
+		return w.cfg.AsyncDDLTimeout
+	}
+	return w.cfg.ReadTimeout
+}
+
+func (w *Writer) useAsyncDB(event *commonEvent.DDLEvent) bool {
+	return w.asyncDB != nil &&
+		w.cfg.IsTiDB &&
+		event.GetDDLType() == timodel.ActionAddIndex
 }
 
 // waitDDLDone wait current ddl

@@ -23,9 +23,10 @@ import (
 	"unsafe"
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	ptypes "github.com/pingcap/tidb/pkg/parser/types"
@@ -267,7 +268,8 @@ func queryRowChecksumAux(
 	query := fmt.Sprintf("set @@tidb_snapshot=%d", commitTs)
 	_, err := conn.ExecContext(ctx, query)
 	if err != nil {
-		mysqlErr, ok := errors.Cause(err).(*mysqlDriver.MySQLError)
+		var mysqlErr *mysqlDriver.MySQLError
+		ok := errors.As(err, &mysqlErr)
 		if ok {
 			// Error 8055 (HY000): snapshot is older than GC safe point
 			if mysqlErr.Number == 8055 {
@@ -300,7 +302,7 @@ func queryRowChecksumAux(
 	err = conn.QueryRowContext(ctx, query).Scan(&result)
 	if err != nil {
 		log.Panic("scan row failed",
-			zap.String("query", query),
+			zap.String("query", util.RedactValue(query)),
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
@@ -323,7 +325,8 @@ func MustSnapshotQuery(
 	query := fmt.Sprintf("set @@tidb_snapshot=%d", commitTs)
 	_, err = conn.ExecContext(ctx, query)
 	if err != nil {
-		mysqlErr, ok := errors.Cause(err).(*mysqlDriver.MySQLError)
+		var mysqlErr *mysqlDriver.MySQLError
+		ok := errors.As(errors.Cause(err), &mysqlErr)
 		if ok {
 			// Error 8055 (HY000): snapshot is older than GC safe point
 			if mysqlErr.Number == 8055 {
@@ -351,7 +354,7 @@ func MustSnapshotQuery(
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
 		log.Panic("query row failed",
-			zap.String("query", query),
+			zap.String("query", util.RedactValue(query)),
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
@@ -360,15 +363,17 @@ func MustSnapshotQuery(
 	holder, err := newColumnHolder(rows)
 	if err != nil {
 		log.Panic("obtain the columns holder failed",
-			zap.String("query", query),
+			zap.String("query", util.RedactValue(query)),
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
+	// go-mysql-driver 1.8 converts integer/float values into int64/double even in text protocol.
+	// This doesn't increase allocation compared to []byte and conversion cost is negilible.
 	for rows.Next() {
 		err = rows.Scan(holder.ValuePointers...)
 		if err != nil {
 			log.Panic("scan row failed",
-				zap.String("query", query),
+				zap.String("query", util.RedactValue(query)),
 				zap.String("schema", schema), zap.String("table", table),
 				zap.Uint64("commitTs", commitTs), zap.Error(err))
 		}

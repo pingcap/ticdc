@@ -110,6 +110,46 @@ insert into t1_7 values(685477580, 6);
 insert into t2_7 values(1715679991826145, 7);
 insert into t2_7 values(2036854775807, 8);
 
+create table rename_mix_normal_1 (
+ id int not null,
+ value32 int not null,
+ primary key(id)
+);
+
+create table rename_mix_part_1 (
+ id int not null,
+ value32 int not null,
+ primary key(id)
+) partition by hash(id) partitions 2;
+
+insert into rename_mix_normal_1 values(1, 10), (2, 20);
+insert into rename_mix_part_1 values(11, 110), (12, 120);
+
+rename table rename_mix_normal_1 to rename_mix_normal_1_done, rename_mix_part_1 to rename_mix_part_1_done;
+
+insert into rename_mix_normal_1_done values(3, 30);
+insert into rename_mix_part_1_done values(13, 130);
+
+create table rename_mix_part_2 (
+ id int not null,
+ value32 int not null,
+ primary key(id)
+) partition by hash(id) partitions 2;
+
+create table rename_mix_normal_2 (
+ id int not null,
+ value32 int not null,
+ primary key(id)
+);
+
+insert into rename_mix_part_2 values(21, 210), (22, 220);
+insert into rename_mix_normal_2 values(31, 310), (32, 320);
+
+rename table rename_mix_part_2 to rename_mix_part_2_done, rename_mix_normal_2 to rename_mix_normal_2_done;
+
+insert into rename_mix_part_2_done values(23, 230);
+insert into rename_mix_normal_2_done values(33, 330);
+
 insert into t3 select * from t1_7;
 insert into t4 select * from t2_7;
 drop table t3, t4;

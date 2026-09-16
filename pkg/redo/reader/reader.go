@@ -223,7 +223,7 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 		// read next and push again
 		rl, err := fileReaders[item.idx].Read()
 		if err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) {
 				return errors.Trace(err)
 			}
 			continue
@@ -267,6 +267,7 @@ func (l *LogReader) initMeta(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	defer extStorage.Close()
 	metas := make([]*misc.LogMeta, 0, 64)
 	err = extStorage.WalkDir(ctx, nil, func(path string, size int64) error {
 		if !strings.HasSuffix(path, redo.MetaEXT) {
@@ -337,7 +338,7 @@ func newLogHeap(fileReaders []fileReader) (logHeap, error) {
 	for i := 0; i < len(fileReaders); i++ {
 		rl, err := fileReaders[i].Read()
 		if err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) {
 				return nil, err
 			}
 			continue

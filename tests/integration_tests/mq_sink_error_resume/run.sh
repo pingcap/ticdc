@@ -13,8 +13,7 @@ DB_COUNT=4
 MAX_RETRIES=20
 
 function run() {
-	# test MQ sink only in this case
-	if [ "$SINK_TYPE" != "kafka" ] && [ "$SINK_TYPE" != "pulsar" ]; then
+	if [ "$SINK_TYPE" != "pulsar" ]; then
 		return
 	fi
 
@@ -24,22 +23,14 @@ function run() {
 	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
 	TOPIC_NAME="ticdc-mq-sink-error-resume-test-$RANDOM"
 
-	case $SINK_TYPE in
-	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-	pulsar)
-		run_pulsar_cluster $WORK_DIR normal
-		SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
-		;;
-	esac
-	# Return an failpoint error to fail a kafka changefeed.
+	run_pulsar_cluster $WORK_DIR normal
+	SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
+	# Return one failpoint error to fail the changefeed.
 	# Note we return one error for the failpoint, if owner retry changefeed frequently, it may break the test.
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/kafka/KafkaSinkAsyncSendError=1*return(true);github.com/pingcap/ticdc/downstreamadapter/sink/pulsar/PulsarSinkAsyncSendError=1*return(true)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/sink/pulsar/PulsarSinkAsyncSendError=1*return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
 	changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" | grep '^ID:' | head -n1 | awk '{print $2}')
-	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
-	esac
+	run_pulsar_consumer --upstream-uri $SINK_URI
 
 	run_sql "CREATE DATABASE mq_sink_error_resume;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE table mq_sink_error_resume.t1(id int primary key auto_increment, val int);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}

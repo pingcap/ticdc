@@ -31,6 +31,7 @@ import (
 // 4. Verify that the span is marked as absent, and split is not executed
 func TestSplitOperator_OriginNodeRemovedBeforeStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
 
 	// Define split spans
 	splitSpans := []*heartbeatpb.TableSpan{
@@ -49,7 +50,7 @@ func TestSplitOperator_OriginNodeRemovedBeforeStopped(t *testing.T) {
 	// Split targets are empty, meaning let scheduler decide
 	splitTargetNodes := []node.ID{"", ""}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, splitTargetNodes, nil)
+	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, splitTargetNodes, 7, nil)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -82,6 +83,7 @@ func TestSplitOperator_OriginNodeRemovedBeforeStopped(t *testing.T) {
 // 4. Verify that the span is still marked as absent, and split is not executed
 func TestSplitOperator_OriginNodeRemovedAfterStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
 
 	// Define split spans
 	splitSpans := []*heartbeatpb.TableSpan{
@@ -100,7 +102,7 @@ func TestSplitOperator_OriginNodeRemovedAfterStopped(t *testing.T) {
 	// Split targets are empty, meaning let scheduler decide
 	splitTargetNodes := []node.ID{"", ""}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, splitTargetNodes, nil)
+	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, splitTargetNodes, 7, nil)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -153,7 +155,7 @@ func TestSplitOperator_SuccessfulSplitCreatesAbsentSpans(t *testing.T) {
 		},
 	}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, []node.ID{}, nil)
+	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, []node.ID{}, 7, nil)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -244,7 +246,7 @@ func TestSplitOperator_SuccessfulSplitToSchedulingTargets(t *testing.T) {
 	}
 	splitTargetNodes := []node.ID{nodeA, nodeB}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSetToSplit, splitSpans, splitTargetNodes, nil)
+	op := NewSplitDispatcherOperator(spanController, replicaSetToSplit, splitSpans, splitTargetNodes, 7, nil)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -337,7 +339,7 @@ func TestSplitOperator_PostFinishCallbackFailureMarksSpanAbsent(t *testing.T) {
 	}
 	splitTargetNodes := []node.ID{nodeA, nodeB}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSetToSplit, splitSpans, splitTargetNodes,
+	op := NewSplitDispatcherOperator(spanController, replicaSetToSplit, splitSpans, splitTargetNodes, 7,
 		func(_ *replica.SpanReplication, target node.ID) bool {
 			return target != nodeB
 		})
@@ -368,6 +370,62 @@ func TestSplitOperator_PostFinishCallbackFailureMarksSpanAbsent(t *testing.T) {
 	require.True(t, hasEmpty)
 }
 
+// TestSplitOperator_PostFinishSkipsWhenTargetNodesMismatch tests the scenario where:
+//  1. A split operation is initiated with splitTargetNodes and a postFinish callback
+//  2. The actual split result produces a different number of spans than splitTargetNodes
+//  3. Verify that ReplaceReplicaSet falls back to absent spans and PostFinish skips invoking the callback
+//     to avoid racing add operators with the basic scheduler.
+func TestSplitOperator_PostFinishSkipsWhenTargetNodesMismatch(t *testing.T) {
+	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+
+	splitSpans := []*heartbeatpb.TableSpan{
+		{
+			TableID:  100,
+			StartKey: []byte("a"),
+			EndKey:   []byte("m"),
+		},
+		{
+			TableID:  100,
+			StartKey: []byte("m"),
+			EndKey:   []byte("z"),
+		},
+	}
+
+	// Mismatch: splitTargetNodes count does not match the actual split spans count.
+	splitTargetNodes := []node.ID{nodeA}
+
+	postFinishCalled := 0
+	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, splitTargetNodes, 7,
+		func(_ *replica.SpanReplication, _ node.ID) bool {
+			postFinishCalled++
+			return true
+		})
+	require.NotNil(t, op)
+
+	op.Start()
+
+	stoppedStatus := &heartbeatpb.TableSpanStatus{
+		ID:              replicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Stopped,
+		CheckpointTs:    1500,
+	}
+	op.Check(nodeA, stoppedStatus)
+	require.True(t, op.IsFinished())
+	require.False(t, op.removed.Load())
+
+	op.PostFinish()
+
+	require.Equal(t, 0, postFinishCalled)
+	require.Nil(t, spanController.GetTaskByID(replicaSet.ID))
+	require.Equal(t, 2, len(spanController.GetTasksByTableID(100)))
+	require.Equal(t, 2, spanController.GetAbsentSize())
+	require.Equal(t, 0, spanController.GetSchedulingSize())
+	for _, s := range spanController.GetTasksByTableID(100) {
+		require.Equal(t, "", s.GetNodeID().String())
+	}
+}
+
 // TestSplitOperator_TaskRemovedByDDLDoesNotSplit tests the scenario where:
 // 1. A split operation is initiated to split dispatcher on node A
 // 2. The task is removed (for example, due to DDL) before the origin dispatcher stops
@@ -389,7 +447,7 @@ func TestSplitOperator_TaskRemovedByDDLDoesNotSplit(t *testing.T) {
 		},
 	}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, []node.ID{}, nil)
+	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, []node.ID{}, 7, nil)
 	require.NotNil(t, op)
 
 	op.Start()

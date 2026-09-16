@@ -20,18 +20,18 @@ type numbers interface {
 type genericAtomic[T numbers] interface {
 	Load() T
 	Store(T)
-	CompareAndSwap(old, new T) bool
+	CompareAndSwap(old, newVal T) bool
 }
 
 // CompareAndIncrease updates the target if the new value is larger than or equal to the old value.
 // It returns false if the new value is smaller than the old value.
-func CompareAndIncrease[T numbers](target genericAtomic[T], new T) bool {
+func CompareAndIncrease[T numbers](target genericAtomic[T], newVal T) bool {
 	for {
 		old := target.Load()
-		if new < old {
+		if newVal < old {
 			return false
 		}
-		if new == old || target.CompareAndSwap(old, new) {
+		if newVal == old || target.CompareAndSwap(old, newVal) {
 			return true
 		}
 	}
@@ -39,13 +39,13 @@ func CompareAndIncrease[T numbers](target genericAtomic[T], new T) bool {
 
 // CompareAndMonotonicIncrease updates the target if the new value is larger than the old value.
 // It returns false if the new value is smaller than or equal to the old value.
-func CompareAndMonotonicIncrease[T numbers](target genericAtomic[T], new T) bool {
+func CompareAndMonotonicIncrease[T numbers](target genericAtomic[T], newVal T) bool {
 	for {
 		old := target.Load()
-		if new <= old {
+		if newVal <= old {
 			return false
 		}
-		if target.CompareAndSwap(old, new) {
+		if target.CompareAndSwap(old, newVal) {
 			return true
 		}
 	}
@@ -53,6 +53,6 @@ func CompareAndMonotonicIncrease[T numbers](target genericAtomic[T], new T) bool
 
 // MustCompareAndMonotonicIncrease updates the target if the new value is larger than the old value. It do nothing
 // if the new value is smaller than or equal to the old value.
-func MustCompareAndMonotonicIncrease[T numbers](target genericAtomic[T], new T) {
-	_ = CompareAndMonotonicIncrease(target, new)
+func MustCompareAndMonotonicIncrease[T numbers](target genericAtomic[T], newVal T) {
+	_ = CompareAndMonotonicIncrease(target, newVal)
 }

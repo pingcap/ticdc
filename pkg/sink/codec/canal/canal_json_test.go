@@ -15,15 +15,19 @@ package canal
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
+	"github.com/pingcap/tidb/pkg/kv"
+	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
@@ -67,7 +71,7 @@ func TestIntegerContentCompatible(t *testing.T) {
 	codecConfig.ContentCompatible = true
 	codecConfig.OnlyOutputUpdatedColumns = true
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
@@ -84,7 +88,7 @@ func TestIntegerContentCompatible(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decodedInsert := decoder.NextDMLEvent()
+	decodedInsert := decoder.NextDMLMessage().ToDMLEvent()
 	require.NotNil(t, decodedInsert)
 }
 
@@ -151,7 +155,7 @@ func TestIntegerTypes(t *testing.T) {
 	for _, enableTiDBExtension := range []bool{true, false} {
 		for _, event := range []*commonEvent.RowEvent{minValueEvent, maxValueEvent} {
 			codecConfig.EnableTiDBExtension = enableTiDBExtension
-			encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+			encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			err = encoder.AppendRowChangedEvent(ctx, "", event)
@@ -169,7 +173,7 @@ func TestIntegerTypes(t *testing.T) {
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
-			decoded := decoder.NextDMLEvent()
+			decoded := decoder.NextDMLMessage().ToDMLEvent()
 			if enableTiDBExtension {
 				require.Equal(t, event.CommitTs, decoded.GetCommitTs())
 			}
@@ -213,7 +217,7 @@ func TestFloatTypes(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -230,7 +234,7 @@ func TestFloatTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -262,7 +266,7 @@ func TestTimeTypes(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -279,7 +283,7 @@ func TestTimeTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -312,7 +316,7 @@ func TestStringTypes(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -329,7 +333,7 @@ func TestStringTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -362,7 +366,7 @@ func TestBlobTypes(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -379,7 +383,7 @@ func TestBlobTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -412,7 +416,7 @@ func TestTextTypes(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -429,7 +433,7 @@ func TestTextTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -471,7 +475,7 @@ func TestOtherTypes(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	codecConfig.ContentCompatible = true
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -488,7 +492,7 @@ func TestOtherTypes(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -529,7 +533,7 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -546,7 +550,7 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -588,7 +592,7 @@ func TestDMLMultiplePK(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	codecConfig.ContentCompatible = true
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -605,7 +609,7 @@ func TestDMLMultiplePK(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -674,7 +678,7 @@ func TestDMLMessageTooLarge(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	codecConfig = codecConfig.WithMaxMessageBytes(300)
 	codecConfig.EnableTiDBExtension = true
-	encoder, err := NewJSONRowEventEncoder(context.Background(), codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	err = encoder.AppendRowChangedEvent(context.Background(), "", rowEvent)
 	require.ErrorIs(t, err, errors.ErrMessageTooLarge)
@@ -772,7 +776,10 @@ func TestLargeMessageClaimCheck(t *testing.T) {
 	codecConfig.LargeMessageHandle.LargeMessageHandleCompression = "snappy"
 	codecConfig.LargeMessageHandle.ClaimCheckStorageURI = "file:///tmp/canal-json-claim-check"
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	claimCheck, err := claimcheck.New(ctx, codecConfig.LargeMessageHandle, codecConfig.ChangefeedID)
+	require.NoError(t, err)
+	t.Cleanup(claimCheck.Close)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, claimCheck)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", insertEvent)
@@ -790,7 +797,7 @@ func TestLargeMessageClaimCheck(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decodedInsert := dec.NextDMLEvent()
+	decodedInsert := dec.NextDMLMessage().ToDMLEvent()
 	require.NotNil(t, decodedInsert)
 
 	change, ok := decodedInsert.GetNextRow()
@@ -863,7 +870,7 @@ func TestMessageLargeHandleKeyOnly(t *testing.T) {
 	codecConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
 	codecConfig.EnableTiDBExtension = true
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
@@ -881,7 +888,7 @@ func TestMessageLargeHandleKeyOnly(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLEvent()
+	event := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -949,7 +956,7 @@ func TestDMLTypeEvent(t *testing.T) {
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -972,7 +979,7 @@ func TestDMLTypeEvent(t *testing.T) {
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, messageType)
 
-		decoded := decoder.NextDMLEvent()
+		decoded := decoder.NextDMLMessage().ToDMLEvent()
 		change, ok := decoded.GetNextRow()
 		require.True(t, ok)
 
@@ -981,7 +988,7 @@ func TestDMLTypeEvent(t *testing.T) {
 
 	// update with only updated columns
 	codecConfig.OnlyOutputUpdatedColumns = true
-	encoder, err = NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err = NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", updateEvent)
@@ -998,7 +1005,7 @@ func TestDMLTypeEvent(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded := decoder.NextDMLEvent()
+	decoded := decoder.NextDMLMessage().ToDMLEvent()
 	change, ok := decoded.GetNextRow()
 	require.True(t, ok)
 
@@ -1012,7 +1019,7 @@ func TestDDLSequence(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	dec, err := NewDecoder(ctx, codecConfig, nil)
@@ -1092,7 +1099,7 @@ func TestDDLSequence(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decodedInsert := dec.NextDMLEvent()
+	decodedInsert := dec.NextDMLMessage().ToDMLEvent()
 	require.NotZero(t, decodedInsert.GetTableID())
 
 	addColumn := helper.DDL2Event(`alter table t add column c int`)
@@ -1129,6 +1136,148 @@ func TestDDLSequence(t *testing.T) {
 	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
 }
 
+func TestDecoderTableInfoCacheUsesDDLCommitTsAcrossColumnChanges(t *testing.T) {
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+	codecConfig.EnableTiDBExtension = true
+
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	buildRowMessage := func(commitTs uint64, mysqlTypes map[string]string) *canalJSONMessageWithTiDBExtension {
+		data := map[string]any{
+			"data": "insert_1",
+			"id":   "525",
+		}
+		if _, ok := mysqlTypes["new_col"]; ok {
+			data["new_col"] = nil
+		}
+		return &canalJSONMessageWithTiDBExtension{
+			JSONMessage: &JSONMessage{
+				Schema:    "test",
+				Table:     "table_5",
+				PKNames:   []string{"id"},
+				IsDDL:     false,
+				EventType: "INSERT",
+				SQLType: map[string]int32{
+					"data":    12,
+					"id":      4,
+					"new_col": 4,
+				},
+				MySQLType: mysqlTypes,
+				Data:      []map[string]any{data},
+			},
+			Extensions: &tidbExtension{CommitTs: commitTs},
+		}
+	}
+
+	decodeRow := func(message *canalJSONMessageWithTiDBExtension) *commonEvent.DMLEvent {
+		payload, err := json.Marshal(message)
+		require.NoError(t, err)
+		decoder.AddKeyValue(nil, payload)
+		messageType, hasNext := decoder.HasNext()
+		require.True(t, hasNext)
+		require.Equal(t, common.MessageTypeRow, messageType)
+		return decoder.NextDMLMessage().ToDMLEvent()
+	}
+
+	columnNames := func(event *commonEvent.DMLEvent) []string {
+		columns := event.TableInfo.GetColumns()
+		result := make([]string, 0, len(columns))
+		for _, column := range columns {
+			result = append(result, column.Name.O)
+		}
+		return result
+	}
+
+	oldSchema := map[string]string{
+		"data": "varchar(255)",
+		"id":   "int",
+	}
+	newSchema := map[string]string{
+		"data":    "varchar(255)",
+		"id":      "int",
+		"new_col": "int",
+	}
+
+	oldEvent := decodeRow(buildRowMessage(100, oldSchema))
+	require.Equal(t, []string{"data", "id"}, columnNames(oldEvent))
+
+	ddlMessage := &canalJSONMessageWithTiDBExtension{
+		JSONMessage: &JSONMessage{
+			Schema:    "test",
+			Table:     "table_5",
+			IsDDL:     true,
+			EventType: "ALTER",
+			Query:     "ALTER TABLE `test`.`table_5` ADD COLUMN `new_col` INT",
+		},
+		Extensions: &tidbExtension{CommitTs: 200},
+	}
+	payload, err := json.Marshal(ddlMessage)
+	require.NoError(t, err)
+	decoder.AddKeyValue(nil, payload)
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+	ddl := decoder.NextDDLEvent()
+	require.Equal(t, oldEvent.GetTableID(), ddl.GetBlockedTables().TableIDs[0])
+
+	newEvent := decodeRow(buildRowMessage(300, newSchema))
+	require.Equal(t, []string{"data", "id", "new_col"}, columnNames(newEvent))
+
+	lateOldEvent := decodeRow(buildRowMessage(100, oldSchema))
+	require.Equal(t, []string{"data", "id"}, columnNames(lateOldEvent))
+	require.Equal(t, oldEvent.GetTableID(), lateOldEvent.GetTableID())
+	require.Equal(t, oldEvent.GetTableID(), newEvent.GetTableID())
+}
+
+func TestDecoderTableInfoCacheUsesDDLCommitTsBoundary(t *testing.T) {
+	tableIDAllocator.Clean()
+	dec := &decoder{
+		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
+		ddlCommitTs:    make(map[tableNameKey][]uint64),
+	}
+	buildMessage := func(commitTs uint64, mysqlTypes map[string]string) *canalJSONMessageWithTiDBExtension {
+		return &canalJSONMessageWithTiDBExtension{
+			JSONMessage: &JSONMessage{
+				Schema:    "test",
+				Table:     "table_5",
+				PKNames:   []string{"id"},
+				MySQLType: mysqlTypes,
+			},
+			Extensions: &tidbExtension{CommitTs: commitTs},
+		}
+	}
+	columnNames := func(tableInfo *commonType.TableInfo) []string {
+		columns := tableInfo.GetColumns()
+		result := make([]string, 0, len(columns))
+		for _, column := range columns {
+			result = append(result, column.Name.O)
+		}
+		return result
+	}
+	beforeDropSchema := map[string]string{
+		"data":    "varchar(255)",
+		"id":      "int",
+		"new_col": "int",
+	}
+	afterDropSchema := map[string]string{
+		"data": "varchar(255)",
+		"id":   "int",
+	}
+
+	dec.addDDLCommitTs("test", "table_5", 200)
+	sameTsAsDDL := dec.queryTableInfo(buildMessage(200, beforeDropSchema))
+	afterDDL := dec.queryTableInfo(buildMessage(300, afterDropSchema))
+	lateSameTsAsDDL := dec.queryTableInfo(buildMessage(200, beforeDropSchema))
+
+	require.Equal(t, []string{"data", "id", "new_col"}, columnNames(sameTsAsDDL))
+	require.Equal(t, []string{"data", "id"}, columnNames(afterDDL))
+	require.NotSame(t, sameTsAsDDL, afterDDL)
+	require.Same(t, sameTsAsDDL, lateSameTsAsDDL)
+	require.Equal(t, []uint64{200}, dec.ddlCommitTs[tableNameKey{schema: "test", table: "table_5"}])
+}
+
 func TestCreateTableDDL(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -1142,7 +1291,7 @@ func TestCreateTableDDL(t *testing.T) {
 
 	for _, enableTiDBExtension := range []bool{false, true} {
 		codecConfig.EnableTiDBExtension = enableTiDBExtension
-		encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+		encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		message, err := encoder.EncodeDDLEvent(ddlEvent)
@@ -1173,7 +1322,7 @@ func TestCreateTableDDL(t *testing.T) {
 func TestCheckpointTs(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	watermark := uint64(179394)
@@ -1183,7 +1332,7 @@ func TestCheckpointTs(t *testing.T) {
 
 	// with extension
 	codecConfig.EnableTiDBExtension = true
-	encoder, err = NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err = NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	message, err = encoder.EncodeCheckpointEvent(watermark)
 	require.NoError(t, err)
@@ -1243,7 +1392,7 @@ func TestRowKey(t *testing.T) {
 	codecConfig.OnlyOutputUpdatedColumns = true
 	codecConfig.EnableTiDBExtension = true
 	codecConfig.OutputRowKey = true
-	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	encoder, err := NewJSONRowEventEncoder(codecConfig, nil)
 	require.NoError(t, err)
 	err = encoder.AppendRowChangedEvent(ctx, "", event)
 	require.NoError(t, err)
@@ -1263,9 +1412,7 @@ func TestRowKey(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotEqual(t, tidb_ext.CommitTs, 0)
-	expected := "dIAAAAAAAAByX3KAAAAAAAAAAQ=="
-	if kerneltype.IsNextGen() {
-		expected = "dIAAAAAAAAAHX3KAAAAAAAAAAQ=="
-	}
+	expectedRowKey := tablecodec.EncodeRowKeyWithHandle(tableInfo.TableName.TableID, kv.IntHandle(1))
+	expected := base64.StdEncoding.EncodeToString(expectedRowKey)
 	require.Equal(t, expected, tidb_ext.Rowkey)
 }

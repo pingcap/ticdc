@@ -1,0 +1,37 @@
+name: Check Next Gen Grafana
+
+on:
+  push:
+    branches:
+      - master
+      - "release-[0-9].[0-9]*"
+      - "release-nextgen-[0-9]*"
+    paths:
+      - 'metrics/grafana/*.json'
+      - 'metrics/grafana/**/*.json'
+
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - master
+      - "release-[0-9].[0-9]*"
+      - "release-nextgen-[0-9]*"
+    paths:
+      - 'metrics/grafana/*.json'
+      - 'metrics/grafana/**/*.json'
+
+# See: https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions#concurrency.
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  check-next-gen-grafana:
+    name: Check Next Gen Grafana
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Check Next Gen Grafana
+        run: make check-next-gen-grafana

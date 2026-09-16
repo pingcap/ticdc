@@ -30,10 +30,15 @@ function run() {
 	cdc_cli_changefeed create --sink-uri="$SINK_URI" --server="127.0.0.1:8300" --config=$CUR/conf/cf.toml
 
 	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
+	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" "$CUR/conf/cf.toml" ;;
+	storage) run_storage_consumer $WORK_DIR $SINK_URI "$CUR/conf/cf.toml" "" ;;
+	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config "$CUR/conf/cf.toml" ;;
 	esac
+
+	# CDC forwards CREATE TABLE ... LIKE ... as-is, so the downstream must have the
+	# referenced table available for the DDL to succeed.
+	run_sql "CREATE DATABASE IF NOT EXISTS filtered_like_src;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	run_sql "CREATE TABLE IF NOT EXISTS filtered_like_src.t_src_like (id INT PRIMARY KEY, val INT);" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -48,6 +53,7 @@ function run() {
 	check_table_exists "event_filter.t_name2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "event_filter.t_name3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "event_filter.t_virtual" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_table_exists "event_filter.t_like_from_filtered" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	sleep 20
 
 	# check those rows that are not filtered are synced to downstream
@@ -91,6 +97,12 @@ function run() {
 	# Verify that rows with is_discounted=true are filtered
 	run_sql "select count(1) from event_filter.t_virtual where quantity > 10;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_contains "count(1): 0" # All discounted items should be filtered
+
+	run_sql "select count(1) from event_filter.t_like_from_filtered;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains "count(1): 1"
+
+	run_sql "select count(1) from event_filter.t_like_from_filtered where id=1 and val=200;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains "count(1): 1"
 
 	run_sql "TRUNCATE TABLE event_filter.t_truncate;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	run_sql_file $CUR/data/test_truncate.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}

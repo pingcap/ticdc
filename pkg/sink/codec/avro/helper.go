@@ -33,6 +33,7 @@ const (
 	tidbOp           = "_tidb_op"
 	tidbCommitTs     = "_tidb_commit_ts"
 	tidbPhysicalTime = "_tidb_commit_physical_time"
+	ticdcBefore      = "_ticdc_before"
 
 	// row level checksum related fields
 	tidbRowLevelChecksum = "_tidb_row_level_checksum"
@@ -43,13 +44,15 @@ const (
 const (
 	insertOperation = "c"
 	updateOperation = "u"
+	deleteOperation = "d"
 )
 
 const (
-	// avro does not send ddl and checkpoint message, the following 2 field is used to distinguish
-	// TiCDC DDL event and checkpoint event, only used for testing purpose, not for production
+	// avro does not send ddl and checkpoint messages, the following bytes are used
+	// to distinguish TiCDC internal events, only used for testing purpose, not for production.
 	ddlByte        = uint8(1)
 	checkpointByte = uint8(2)
+	deleteByte     = uint8(3)
 )
 
 var type2TiDBType = map[byte]string{
@@ -148,6 +151,8 @@ func getOperation(e *commonEvent.RowEvent) string {
 		return insertOperation
 	} else if e.IsUpdate() {
 		return updateOperation
+	} else if e.IsDelete() {
+		return deleteOperation
 	}
 	return ""
 }

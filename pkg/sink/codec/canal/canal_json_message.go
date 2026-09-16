@@ -143,7 +143,3 @@ type canalJSONMessageWithTiDBExtension struct {
 func (c *canalJSONMessageWithTiDBExtension) getCommitTs() uint64 {
 	return c.Extensions.CommitTs
 }
-
-func (c *canalJSONMessageWithTiDBExtension) getRowKey() string {
-	return c.Extensions.RowKey
-}

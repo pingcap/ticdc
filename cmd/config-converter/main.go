@@ -58,7 +58,7 @@ func main() {
 	}
 }
 
-func run(cmd *cobra.Command, args []string) {
+func run(_ *cobra.Command, _ []string) {
 	if cfgPath != "" && modelPath != "" {
 		fmt.Fprintln(os.Stderr, "can't specify both config and model")
 		os.Exit(ExitCodeInvalidFlag)

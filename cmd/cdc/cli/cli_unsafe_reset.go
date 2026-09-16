@@ -139,9 +139,9 @@ func removeKeyspaceGCBarrier(ctx context.Context, pdCli pd.Client, serviceID str
 			log.Warn("load keyspace error", zap.String("keyspace", keyspace), zap.Error(err))
 			continue
 		}
-		err = gc.UnifyDeleteGcSafepoint(ctx, pdCli, keyspaceMeta.Id, serviceID)
+		err = gc.UnifyDeleteGcSafepoint(ctx, pdCli, keyspaceMeta.GetId(), serviceID)
 		if err != nil {
-			log.Warn("DeleteGcSafepoint error", zap.Uint32("keyspaceID", keyspaceMeta.Id), zap.String("keyspace", keyspace), zap.String("serviceID", serviceID), zap.Error(err))
+			log.Warn("DeleteGcSafepoint error", zap.Uint32("keyspaceID", keyspaceMeta.GetId()), zap.String("keyspace", keyspace), zap.String("serviceID", serviceID), zap.Error(err))
 			continue
 		}
 	}

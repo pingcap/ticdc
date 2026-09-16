@@ -18,23 +18,25 @@ import (
 	"net/url"
 
 	pulsarClient "github.com/apache/pulsar-client-go/pulsar"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	putil "github.com/pingcap/ticdc/pkg/util"
+	"go.uber.org/zap"
 )
 
 type component struct {
 	config         *config.PulsarConfig
 	encoderGroup   codec.EncoderGroup
-	encoder        common.EventEncoder
+	encoder        codecCommon.EventEncoder
 	columnSelector *columnselector.ColumnSelectors
 	eventRouter    *eventrouter.EventRouter
 	topicManager   topicmanager.TopicManager
@@ -46,13 +48,13 @@ func (c component) close() {
 		c.topicManager.Close()
 	}
 	if c.client != nil {
-		go c.client.Close()
+		c.client.Close()
 	}
 }
 
 func newPulsarSinkComponent(
 	ctx context.Context,
-	changefeedID commonType.ChangeFeedID,
+	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
 ) (component, config.Protocol, error) {
@@ -61,7 +63,7 @@ func newPulsarSinkComponent(
 
 func newPulsarSinkComponentForTest(
 	ctx context.Context,
-	changefeedID commonType.ChangeFeedID,
+	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
 ) (component, config.Protocol, error) {
@@ -69,15 +71,24 @@ func newPulsarSinkComponentForTest(
 }
 
 func newPulsarSinkComponentWithFactory(ctx context.Context,
-	changefeedID commonType.ChangeFeedID,
+	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
 	factoryCreator pulsar.FactoryCreator,
-) (component, config.Protocol, error) {
-	pulsarComponent := component{}
-	protocol, err := helper.GetProtocol(putil.GetOrZero(sinkConfig.Protocol))
+) (pulsarComponent component, protocol config.Protocol, err error) {
+	defer func() {
+		if err != nil {
+			pulsarComponent.close()
+		}
+	}()
+	protocol, err = helper.GetProtocol(putil.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return pulsarComponent, config.ProtocolUnknown, errors.Trace(err)
+	}
+	if !config.IsPulsarSupportedProtocols(protocol) {
+		return pulsarComponent, protocol, errors.ErrSinkURIInvalid.
+			GenWithStackByArgs("unsupported protocol, " +
+				"pulsar sink currently only support these protocols: [canal-json]")
 	}
 
 	pulsarComponent.config, err = pulsar.NewPulsarConfig(sinkURI, sinkConfig.PulsarConfig)
@@ -87,7 +98,7 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 
 	pulsarComponent.client, err = factoryCreator(pulsarComponent.config, changefeedID, sinkConfig)
 	if err != nil {
-		return pulsarComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return pulsarComponent, protocol, errors.WrapError(errors.ErrPulsarNewProducer, err)
 	}
 
 	topic, err := helper.GetTopic(sinkURI)
@@ -95,7 +106,7 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.topicManager, err = topicmanager.GetPulsarTopicManagerAndTryCreateTopic(ctx, pulsarComponent.config, topic, pulsarComponent.client)
+	pulsarComponent.topicManager, err = topicmanager.GetPulsarTopicManagerAndTryCreateTopic(ctx, pulsarComponent.config, pulsarComponent.client)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
@@ -111,19 +122,58 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, config.DefaultMaxMessageBytes)
+	encoderConfig, err := helper.GetEncoderConfig(
+		changefeedID, sinkURI, protocol, sinkConfig,
+		config.DefaultMaxMessageBytes, config.DefaultMaxMessageBytes,
+	)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.encoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
+	pulsarComponent.encoderGroup, err = codec.NewEncoderGroup(sinkConfig, encoderConfig, nil, nil, changefeedID)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
+	pulsarComponent.encoder, err = codec.NewEventEncoder(encoderConfig, nil, nil)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 	return pulsarComponent, protocol, nil
+}
+
+// newProducer creates a pulsar producer
+// One topic is used by one producer
+func newProducer(
+	pConfig *config.PulsarConfig,
+	client pulsarClient.Client,
+	topicName string,
+) (pulsarClient.Producer, error) {
+	maxReconnectToBroker := uint(config.DefaultMaxReconnectToPulsarBroker)
+	option := pulsarClient.ProducerOptions{
+		Topic:                topicName,
+		MaxReconnectToBroker: &maxReconnectToBroker,
+	}
+	if pConfig.BatchingMaxMessages != nil {
+		option.BatchingMaxMessages = *pConfig.BatchingMaxMessages
+	}
+	if pConfig.BatchingMaxPublishDelay != nil {
+		option.BatchingMaxPublishDelay = pConfig.BatchingMaxPublishDelay.Duration()
+	}
+	if pConfig.CompressionType != nil {
+		option.CompressionType = pConfig.CompressionType.Value()
+		option.CompressionLevel = pulsarClient.Default
+	}
+	if pConfig.SendTimeout != nil {
+		option.SendTimeout = pConfig.SendTimeout.Duration()
+	}
+
+	producer, err := client.CreateProducer(option)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Info("create pulsar producer success", zap.String("topic", topicName))
+
+	return producer, nil
 }

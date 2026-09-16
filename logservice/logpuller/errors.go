@@ -16,12 +16,9 @@ package logpuller
 import (
 	"fmt"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/tikv/client-go/v2/tikv"
 )
-
-var errUnreachable = errors.New("kv client unreachable error")
 
 type eventError struct {
 	err *cdcpb.Error
@@ -45,9 +42,9 @@ type getStoreErr struct{}
 
 func (e *getStoreErr) Error() string { return "get store error" }
 
-type sendRequestToStoreErr struct{}
+type storeStreamErr struct{}
 
-func (e *sendRequestToStoreErr) Error() string { return "send request to store error" }
+func (e *storeStreamErr) Error() string { return "store stream error" }
 
 type requestCancelledErr struct{}
 

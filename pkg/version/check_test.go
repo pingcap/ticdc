@@ -54,7 +54,7 @@ func (m *mockPDClient) ServeHTTP(resp http.ResponseWriter, _ *http.Request) {
 	}
 
 	if m.getPDVersion != nil {
-		_, _ = resp.Write([]byte(fmt.Sprintf(`{"version":"%s"}`, m.getPDVersion())))
+		_, _ = fmt.Fprintf(resp, `{"version":"%s"}`, m.getPDVersion())
 	}
 }
 
@@ -413,16 +413,27 @@ func TestCheckTiCDCVersion(t *testing.T) {
 	err = CheckTiCDCVersion(versions)
 	require.NoError(t, err)
 
+	// Versions that used to be above the hard-coded maximum are accepted now; the
+	// 9999 sentinel keeps this check from blocking future TiCDC releases.
 	versions = map[string]struct{}{
 		"v7.5.0":        {},
 		"v15.0.0-alpha": {},
 	}
 	err = CheckTiCDCVersion(versions)
-	require.Regexp(t, "TiCDC .* not supported, only support version less than.*", err)
+	require.NoError(t, err)
 
 	versions = map[string]struct{}{
 		"v7.5.0":  {},
 		"v15.0.0": {},
+	}
+	err = CheckTiCDCVersion(versions)
+	require.NoError(t, err)
+
+	// The configured sentinel upper bound itself is still rejected, so the range
+	// check remains active even though practical future versions are allowed.
+	versions = map[string]struct{}{
+		"v7.5.0":                       {},
+		"v" + MaxTiCDCVersion.String(): {},
 	}
 	err = CheckTiCDCVersion(versions)
 	require.Regexp(t, "TiCDC .* not supported, only support version less than.*", err)

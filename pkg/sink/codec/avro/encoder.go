@@ -23,43 +23,31 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"go.uber.org/zap"
 )
 
 // BatchEncoder converts the events to binary Avro data
 type BatchEncoder struct {
-	keyspace string
-	schemaM  SchemaManager
-	result   []*common.Message
+	keyspace   string
+	schemaM    schemamanager.SchemaManager
+	codecCache *CodecCache
+	result     []*common.Message
 
 	config *common.Config
 }
 
-// NewAvroEncoder return a avro encoder.
-func NewAvroEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
-	var schemaM SchemaManager
-	var err error
-
-	schemaRegistryType := config.SchemaRegistryType()
-	switch schemaRegistryType {
-	case common.SchemaRegistryTypeConfluent:
-		schemaM, err = NewConfluentSchemaManager(ctx, config.AvroConfluentSchemaRegistry, nil)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-	case common.SchemaRegistryTypeGlue:
-		schemaM, err = NewGlueSchemaManager(ctx, config.AvroGlueSchemaRegistry)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-	default:
-		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(schemaRegistryType)
+// NewAvroEncoder returns an Avro encoder using the given schema manager.
+func NewAvroEncoder(config *common.Config, schemaM schemamanager.SchemaManager) (common.EventEncoder, error) {
+	if schemaM == nil {
+		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs("schema manager is nil")
 	}
 	return &BatchEncoder{
-		keyspace: config.ChangefeedID.Keyspace(),
-		schemaM:  schemaM,
-		result:   make([]*common.Message, 0, 1),
-		config:   config,
+		keyspace:   config.ChangefeedID.Keyspace(),
+		schemaM:    schemaM,
+		codecCache: NewCodecCache(schemaM),
+		result:     make([]*common.Message, 0, 1),
+		config:     config,
 	}, nil
 }
 
@@ -93,7 +81,7 @@ func (a *BatchEncoder) AppendRowChangedEvent(
 			zap.Int("maxMessageBytes", a.config.MaxMessageBytes),
 			zap.Int("length", message.Length()),
 			zap.Any("table", e.TableInfo.TableName))
-		return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTableName(), message.Length(), a.config.MaxMessageBytes)
+		return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), message.Length(), a.config.MaxMessageBytes)
 	}
 
 	a.result = append(a.result, message)
@@ -129,8 +117,8 @@ func (a *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 		event := &ddlEvent{
 			Query:    e.Query,
 			Type:     e.GetDDLType(),
-			Schema:   e.GetSchemaName(),
-			Table:    e.GetTableName(),
+			Schema:   e.GetTargetSchemaName(),
+			Table:    e.GetTargetTableName(),
 			CommitTs: e.GetCommitTs(),
 		}
 		data, err := json.Marshal(event)

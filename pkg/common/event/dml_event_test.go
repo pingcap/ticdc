@@ -15,14 +15,17 @@ package event
 
 import (
 	"encoding/binary"
+	"sync"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
 func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
@@ -51,19 +54,19 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 		err := e.AppendRow(&common.RawKVEntry{
 			OpType: common.OpTypePut,
 			Value:  []byte("value1"),
-		}, mockDecodeRawKVToChunk, nil)
+		}, mockDecodeRawKVToChunk, nil, filter.DMLFilterContext{})
 		require.Nil(t, err)
 		// update
 		err = e.AppendRow(&common.RawKVEntry{
 			OpType:   common.OpTypePut,
 			Value:    []byte("value1"),
 			OldValue: []byte("old_value1"),
-		}, mockDecodeRawKVToChunk, nil)
+		}, mockDecodeRawKVToChunk, nil, filter.DMLFilterContext{})
 		require.Nil(t, err)
 		// delete
 		err = e.AppendRow(&common.RawKVEntry{
 			OpType: common.OpTypeDelete,
-		}, mockDecodeRawKVToChunk, nil)
+		}, mockDecodeRawKVToChunk, nil, filter.DMLFilterContext{})
 		require.Nil(t, err)
 	}
 	// TableInfo is not encoded, for test comparison purpose, set it to nil.
@@ -146,6 +149,112 @@ func TestBatchDMLEvent(t *testing.T) {
 	data, err = batchDMLEvent.Marshal()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported BatchDMLEvent version")
+}
+
+func TestBatchDMLEventAssembleRowsRebindsRoutedTableInfoForLocalRows(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.tk.MustExec("use test")
+	helper.DDL2Job(createTableSQL)
+
+	dmlEvent := helper.DML2Event("test", "t", insertDataSQL)
+	require.NotNil(t, dmlEvent)
+
+	originTableInfo := dmlEvent.TableInfo
+	routedTableInfo := originTableInfo.CloneWithRouting("target_schema", "target_table")
+	require.NotNil(t, routedTableInfo)
+
+	batchDMLEvent := &BatchDMLEvent{
+		Version:       BatchDMLEventVersion1,
+		DMLEventCount: 1,
+		DMLEvents:     []*DMLEvent{dmlEvent},
+		Rows:          dmlEvent.Rows,
+		TableInfo:     originTableInfo,
+	}
+
+	batchDMLEvent.AssembleRows(routedTableInfo)
+
+	require.Same(t, dmlEvent.Rows, batchDMLEvent.Rows)
+	require.Same(t, routedTableInfo, batchDMLEvent.TableInfo)
+	require.Same(t, routedTableInfo, batchDMLEvent.DMLEvents[0].TableInfo)
+	require.Equal(t, "target_schema", batchDMLEvent.TableInfo.GetTargetSchemaName())
+	require.Equal(t, "target_table", batchDMLEvent.TableInfo.GetTargetTableName())
+	require.Contains(t, batchDMLEvent.TableInfo.GetPreInsertSQL(), common.QuoteSchema("target_schema", "target_table"))
+}
+
+func TestBatchDMLEventAssembleRowsKeepsOriginalTableInfoForLocalRowsWithoutRouting(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.tk.MustExec("use test")
+	helper.DDL2Job(createTableSQL)
+
+	dmlEvent := helper.DML2Event("test", "t", insertDataSQL)
+	require.NotNil(t, dmlEvent)
+
+	originTableInfo := dmlEvent.TableInfo
+	notRoutedTableInfo := originTableInfo.CloneWithRouting("", "")
+	require.NotNil(t, notRoutedTableInfo)
+	require.False(t, notRoutedTableInfo.TableName.IsRouted())
+	notRoutedTableInfo.UpdateTS++
+
+	batchDMLEvent := &BatchDMLEvent{
+		Version:       BatchDMLEventVersion1,
+		DMLEventCount: 1,
+		DMLEvents:     []*DMLEvent{dmlEvent},
+		Rows:          dmlEvent.Rows,
+		TableInfo:     originTableInfo,
+	}
+
+	batchDMLEvent.AssembleRows(notRoutedTableInfo)
+
+	require.Same(t, dmlEvent.Rows, batchDMLEvent.Rows)
+	require.Same(t, originTableInfo, batchDMLEvent.TableInfo)
+	require.Same(t, originTableInfo, batchDMLEvent.DMLEvents[0].TableInfo)
+	require.Equal(t, "test", batchDMLEvent.TableInfo.GetTargetSchemaName())
+	require.Equal(t, "t", batchDMLEvent.TableInfo.GetTargetTableName())
+}
+
+// TestBatchDMLEventAssembleRowsDecodesRemoteRawRows verifies size accounting
+// before and after a remotely received batch decodes its raw row payload.
+func TestBatchDMLEventAssembleRowsDecodesRemoteRawRows(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.tk.MustExec("use test")
+	helper.DDL2Job(createTableSQL)
+
+	dmlEvent := helper.DML2Event("test", "t", insertDataSQL)
+	require.NotNil(t, dmlEvent)
+
+	batchDMLEvent := &BatchDMLEvent{
+		Version:       BatchDMLEventVersion1,
+		DMLEventCount: 1,
+		DMLEvents:     []*DMLEvent{dmlEvent},
+		Rows:          dmlEvent.Rows,
+		TableInfo:     dmlEvent.TableInfo,
+	}
+	require.Equal(t, batchDMLEvent.Rows.MemoryUsage(), batchDMLEvent.GetSize())
+	require.Positive(t, batchDMLEvent.GetSize())
+
+	data, err := batchDMLEvent.Marshal()
+	require.NoError(t, err)
+
+	reverseEvents := &BatchDMLEvent{}
+	err = reverseEvents.Unmarshal(data)
+	require.NoError(t, err)
+	require.Nil(t, reverseEvents.Rows)
+	require.NotEmpty(t, reverseEvents.RawRows)
+	require.Equal(t, int64(len(reverseEvents.RawRows)), reverseEvents.GetSize())
+
+	reverseEvents.AssembleRows(batchDMLEvent.TableInfo)
+
+	require.Nil(t, reverseEvents.RawRows)
+	require.Equal(t, reverseEvents.Rows.MemoryUsage(), reverseEvents.GetSize())
+	require.Positive(t, reverseEvents.GetSize())
+	require.Same(t, batchDMLEvent.TableInfo, reverseEvents.TableInfo)
+	require.Equal(t, batchDMLEvent.Rows.ToString(batchDMLEvent.TableInfo.GetFieldSlice()), reverseEvents.Rows.ToString(batchDMLEvent.TableInfo.GetFieldSlice()))
 }
 
 func TestEncodeAnddecodeV1(t *testing.T) {
@@ -341,4 +450,114 @@ func TestBatchDMLEventHeaderValidation(t *testing.T) {
 	err = reverseEvent.Unmarshal(incompleteData)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "incomplete data")
+}
+
+func TestDMLEventPostCallbacks(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	var called atomic.Int64
+	event.AddPostEnqueueFunc(func() {
+		called.Inc()
+	})
+	event.AddPostEnqueueFunc(func() {
+		called.Inc()
+	})
+
+	event.PostEnqueue()
+	event.PostEnqueue()
+
+	require.Equal(t, int64(2), called.Load())
+	t.Run("post flush triggers post enqueue once", verifyDMLEventPostFlushTriggersPostEnqueueOnce)
+	t.Run("post flush order and fallback", verifyDMLEventPostFlushRunsFlushBeforePostEnqueueFallback)
+	t.Run("post enqueue concurrent with post flush", verifyDMLEventPostEnqueueConcurrentWithPostFlush)
+	t.Run("detach callbacks", verifyDMLEventDetachPostCallbacks)
+}
+
+func verifyDMLEventPostFlushTriggersPostEnqueueOnce(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	var enqueueCalled atomic.Int64
+	var flushCalled atomic.Int64
+	event.AddPostEnqueueFunc(func() {
+		enqueueCalled.Inc()
+	})
+	event.AddPostFlushFunc(func() {
+		flushCalled.Inc()
+	})
+
+	event.PostFlush()
+	event.PostFlush()
+
+	require.Equal(t, int64(1), enqueueCalled.Load())
+	require.Equal(t, int64(2), flushCalled.Load())
+}
+
+func verifyDMLEventPostFlushRunsFlushBeforePostEnqueueFallback(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	order := make([]string, 0, 3)
+	event.AddPostFlushFunc(func() {
+		order = append(order, "flush")
+	})
+	event.AddPostEnqueueFunc(func() {
+		order = append(order, "enqueue")
+	})
+
+	event.PostFlush()
+	event.PostFlush()
+
+	require.Equal(t, []string{"flush", "enqueue", "flush"}, order)
+}
+
+func verifyDMLEventPostEnqueueConcurrentWithPostFlush(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	var enqueueCalled atomic.Int64
+	event.AddPostEnqueueFunc(func() {
+		enqueueCalled.Inc()
+	})
+
+	var wg sync.WaitGroup
+	const loops = 256
+	for i := 0; i < loops; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			event.PostEnqueue()
+		}()
+		go func() {
+			defer wg.Done()
+			event.PostFlush()
+		}()
+	}
+	wg.Wait()
+
+	require.Equal(t, int64(1), enqueueCalled.Load())
+}
+
+func verifyDMLEventDetachPostCallbacks(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	order := make([]string, 0, 3)
+	event.AddPostFlushFunc(func() {
+		order = append(order, "flush")
+	})
+	event.AddPostEnqueueFunc(func() {
+		order = append(order, "enqueue")
+	})
+
+	postEnqueue, postFlush := event.DetachPostCallbacks()
+	require.Empty(t, event.PostTxnFlushed)
+	require.Empty(t, event.PostTxnEnqueued)
+
+	postFlush()
+	postEnqueue()
+	event.PostFlush()
+
+	require.Equal(t, []string{"flush", "enqueue"}, order)
 }

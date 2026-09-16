@@ -126,7 +126,7 @@ func TestFilter(t *testing.T) {
 	require.Equal(t, Do, action)
 
 	// invalid rule
-	err = filter.Selector.Insert("test_1_*", "abc*", "error", selector.Insert)
+	err = filter.Insert("test_1_*", "abc*", "error", selector.Insert)
 	require.NoError(t, err)
 	_, err = filter.Filter("test_1_a", "abc", InsertEvent, "")
 	require.Error(t, err)

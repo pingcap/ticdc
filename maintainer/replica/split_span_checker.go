@@ -46,8 +46,11 @@ var (
 	minTrafficBalanceThreshold         = float64(1024 * 1024) // 1MB
 	maxMoveSpansCountForTrafficBalance = 4
 	maxMoveSpansCountForMerge          = 16
-	maxLagThreshold                    = float64(30) // 30s
-	mergeThreshold                     = 5
+	// maxMergeOperatorsPerGroup limits how many merge operators one split-table group can create per check.
+	// The value limits concurrent incremental scan tasks while still making merge progress each scheduler round.
+	maxMergeOperatorsPerGroup = 8
+	maxLagThreshold           = float64(30) // 30s
+	mergeThreshold            = 5
 )
 
 type BalanceCause string
@@ -106,7 +109,8 @@ func (b *BalanceCondition) updateScore(minTrafficNodeID node.ID,
 	if b.balanceScore == 0 {
 		b.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
 	} else {
-		if b.balanceCause == BalanceCauseByBoth {
+		switch b.balanceCause {
+		case BalanceCauseByBoth:
 			if b.minTrafficNodeID == minTrafficNodeID && b.maxTrafficNodeID == maxTrafficNodeID {
 				b.balanceScore += 1
 			} else if b.minTrafficNodeID == minTrafficNodeID {
@@ -118,13 +122,13 @@ func (b *BalanceCondition) updateScore(minTrafficNodeID node.ID,
 			} else {
 				b.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
 			}
-		} else if b.balanceCause == BalanceCauseByMaxNode {
+		case BalanceCauseByMaxNode:
 			if b.maxTrafficNodeID == maxTrafficNodeID {
 				b.balanceScore += 1
 			} else {
 				b.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
 			}
-		} else if b.balanceCause == BalanceCauseByMinNode {
+		case BalanceCauseByMinNode:
 			if b.minTrafficNodeID == minTrafficNodeID {
 				b.balanceScore += 1
 			} else {
@@ -242,7 +246,7 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 			log.Debug("update traffic score",
 				zap.String("changefeed", s.changefeedID.String()),
 				zap.Int64("group", s.groupID),
-				zap.String("span", status.SpanReplication.ID.String()),
+				zap.String("span", status.ID.String()),
 				zap.Any("trafficScore", status.trafficScore),
 				zap.Any("eventSizePerSecond", status.GetStatus().EventSizePerSecond),
 			)
@@ -315,7 +319,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	if !s.checkAllTaskAvailableLocked() {
 		log.Debug("some task is not available, skip check",
 			zap.String("changefeed", s.changefeedID.String()),
-			zap.Int64("group", int64(s.groupID)),
+			zap.Int64("group", s.groupID),
 		)
 		return results
 	}
@@ -387,7 +391,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	if s.regionThreshold > 0 {
 		countByRegion := int(math.Ceil(float64(totalRegionCount) / float64(s.regionThreshold)))
 		if countByRegion > upperSpanCount {
-			upperSpanCount = int(countByRegion)
+			upperSpanCount = countByRegion
 		}
 	}
 
@@ -764,6 +768,7 @@ func (s *SplitSpanChecker) isTrafficBalanceMaintained(
 func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckResult, []*splitSpanStatus) {
 	log.Debug("chooseMergedSpans try to choose merge spans", zap.Any("changefeedID", s.changefeedID), zap.Any("groupID", s.groupID))
 	results := make([]SplitSpanCheckResult, 0)
+	mergeBatchSize := min(batchSize, maxMergeOperatorsPerGroup)
 
 	sortedSpanByStartKey := make([]*splitSpanStatus, 0, len(s.allTasks))
 	for _, status := range s.allTasks {
@@ -781,23 +786,33 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 	traffic := prev.lastThreeTraffic[latestTrafficIndex]
 	mergeSpans = append(mergeSpans, prev.SpanReplication)
 
-	submitAndClear := func(cur *splitSpanStatus) {
-		if len(mergeSpans) > 1 {
-			log.Info("chooseMergedSpans merge spans",
-				zap.String("changefeed", s.changefeedID.String()),
-				zap.Int64("group", int64(s.groupID)),
-				zap.Any("mergeSpans", mergeSpans),
-				zap.Any("node", mergeSpans[0].GetNodeID()),
-			)
-			results = append(results, SplitSpanCheckResult{
-				OpType:     OpMerge,
-				MergeSpans: append([]*SpanReplication{}, mergeSpans...),
-			})
+	appendMergeResult := func() bool {
+		if len(mergeSpans) <= 1 {
+			return false
 		}
+		if len(results) >= mergeBatchSize {
+			return true
+		}
+		log.Info("chooseMergedSpans merge spans",
+			zap.String("changefeed", s.changefeedID.String()),
+			zap.Int64("group", s.groupID),
+			zap.Any("mergeSpans", mergeSpans),
+			zap.Any("node", mergeSpans[0].GetNodeID()),
+		)
+		results = append(results, SplitSpanCheckResult{
+			OpType:     OpMerge,
+			MergeSpans: append([]*SpanReplication{}, mergeSpans...),
+		})
+		return len(results) >= mergeBatchSize
+	}
+
+	submitAndClear := func(cur *splitSpanStatus) bool {
+		reachedLimit := appendMergeResult()
 		mergeSpans = mergeSpans[:0]
 		mergeSpans = append(mergeSpans, cur.SpanReplication)
 		regionCount = cur.regionCount
 		traffic = cur.lastThreeTraffic[latestTrafficIndex]
+		return reachedLimit
 	}
 
 	idx := 1
@@ -815,7 +830,9 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 		}
 		// not in the same node, can't merge
 		if prev.GetNodeID() != cur.GetNodeID() {
-			submitAndClear(cur)
+			if submitAndClear(cur) {
+				return results, sortedSpanByStartKey
+			}
 			prev = cur
 			idx++
 			continue
@@ -823,14 +840,18 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 
 		// we can't merge if beyond the threshold
 		if s.regionThreshold > 0 && regionCount+cur.regionCount > s.regionThreshold/4*3 {
-			submitAndClear(cur)
+			if submitAndClear(cur) {
+				return results, sortedSpanByStartKey
+			}
 			prev = cur
 			idx++
 			continue
 		}
 
 		if s.writeThreshold > 0 && traffic+cur.lastThreeTraffic[latestTrafficIndex] > float64(s.writeThreshold)/4*3 {
-			submitAndClear(cur)
+			if submitAndClear(cur) {
+				return results, sortedSpanByStartKey
+			}
 			prev = cur
 			idx++
 			continue
@@ -843,24 +864,9 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 
 		prev = cur
 		idx++
-
-		if len(results) >= batchSize {
-			return results, sortedSpanByStartKey
-		}
 	}
 
-	if len(mergeSpans) > 1 {
-		log.Info("chooseMergedSpans merge spans",
-			zap.String("changefeed", s.changefeedID.String()),
-			zap.Int64("group", s.groupID),
-			zap.Any("mergeSpans", mergeSpans),
-			zap.Any("node", mergeSpans[0].GetNodeID()),
-		)
-		results = append(results, SplitSpanCheckResult{
-			OpType:     OpMerge,
-			MergeSpans: mergeSpans,
-		})
-	}
+	appendMergeResult()
 
 	return results, sortedSpanByStartKey
 }
@@ -976,7 +982,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 				log.Info("chooseSplitSpans split span by traffic",
 					zap.String("changefeed", s.changefeedID.String()),
 					zap.Int64("group", s.groupID),
-					zap.String("splitSpan", status.SpanReplication.ID.String()),
+					zap.String("splitSpan", status.ID.String()),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
 				spanNum := int(math.Ceil(status.lastThreeTraffic[latestTrafficIndex] / float64(s.writeThreshold)))
@@ -1000,7 +1006,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 			if status.regionCount > s.regionThreshold {
 				log.Info("chooseSplitSpans split span by region",
 					zap.String("changefeed", s.changefeedID.String()),
-					zap.String("splitSpan", status.SpanReplication.ID.String()),
+					zap.String("splitSpan", status.ID.String()),
 					zap.Int64("group", s.groupID),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
@@ -1211,7 +1217,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 
 	log.Info("checkBalanceTraffic split span",
 		zap.Stringer("changefeed", s.changefeedID),
-		zap.String("splitSpan", span.SpanReplication.ID.String()),
+		zap.String("splitSpan", span.ID.String()),
 		zap.Int64("group", s.groupID),
 		zap.Any("splitTargetNodes", []node.ID{minTrafficNodeID, maxTrafficNodeID}),
 	)
@@ -1247,13 +1253,13 @@ func (s *SplitSpanChecker) Stat() string {
 		res.WriteString("traffic infos:")
 		// record all the latest three traffic of tasks
 		for _, status := range s.allTasks {
-			res.WriteString(fmt.Sprintf("[task: %s, traffic: %f, %f, %f];", status.ID, status.lastThreeTraffic[0], status.lastThreeTraffic[1], status.lastThreeTraffic[2]))
+			fmt.Fprintf(&res, "[task: %s, traffic: %f, %f, %f];", status.ID, status.lastThreeTraffic[0], status.lastThreeTraffic[1], status.lastThreeTraffic[2])
 		}
 	}
 	if s.regionThreshold > 0 {
 		res.WriteString("region infos:")
 		for _, status := range s.allTasks {
-			res.WriteString(fmt.Sprintf("[task: %s, region: %d];", status.ID, status.regionCount))
+			fmt.Fprintf(&res, "[task: %s, region: %d];", status.ID, status.regionCount)
 		}
 	}
 	return res.String()

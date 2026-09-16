@@ -15,8 +15,10 @@ package debezium
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +26,7 @@ import (
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -41,12 +44,80 @@ type dbzCodec struct {
 	nowFunc   func() time.Time
 }
 
+func (c *dbzCodec) isDebeziumAvro() bool {
+	return c.config.Protocol == config.ProtocolDebeziumAvro
+}
+
+func (c *dbzCodec) debeziumAvroNamespace(schema string) string {
+	return fmt.Sprintf("%s.%s",
+		common.SanitizeName(c.clusterID),
+		common.SanitizeName(schema))
+}
+
+func (c *dbzCodec) debeziumAvroTableName(table string) string {
+	return common.SanitizeName(table)
+}
+
+func (c *dbzCodec) keySchemaName(schema string, table string) string {
+	if c.isDebeziumAvro() {
+		return fmt.Sprintf("%s.%sKey",
+			c.debeziumAvroNamespace(schema),
+			c.debeziumAvroTableName(table))
+	}
+	return fmt.Sprintf("%s.Key", getSchemaTopicName(c.clusterID, schema, table))
+}
+
+func (c *dbzCodec) envelopeSchemaName(schema string, table string) string {
+	if c.isDebeziumAvro() {
+		return fmt.Sprintf("%s.%sEnvelope",
+			c.debeziumAvroNamespace(schema),
+			c.debeziumAvroTableName(table))
+	}
+	return fmt.Sprintf("%s.Envelope", getSchemaTopicName(c.clusterID, schema, table))
+}
+
+func (c *dbzCodec) valueSchemaName(schema string, table string) string {
+	if c.isDebeziumAvro() {
+		return fmt.Sprintf("%s.%s",
+			c.debeziumAvroNamespace(schema),
+			c.debeziumAvroTableName(table))
+	}
+	return fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, schema, table))
+}
+
+func (c *dbzCodec) sourceSchemaName(schema string) string {
+	if c.isDebeziumAvro() {
+		return fmt.Sprintf("%s.Source", c.debeziumAvroNamespace(schema))
+	}
+	return "io.debezium.connector.mysql.Source"
+}
+
+func decimalPrecisionAndScale(ft *types.FieldType) (int, int) {
+	defaultPrecision, defaultScale := mysql.GetDefaultFieldLengthAndDecimal(ft.GetType())
+	precision, scale := ft.GetFlen(), ft.GetDecimal()
+	if precision == -1 {
+		precision = defaultPrecision
+	}
+	if scale == -1 {
+		scale = defaultScale
+	}
+	return precision, scale
+}
+
+func (c *dbzCodec) columnOptional(ft *types.FieldType) bool {
+	if c.isDebeziumAvro() {
+		return true
+	}
+	return !mysql.HasNotNullFlag(ft.GetFlag())
+}
+
 func (c *dbzCodec) writeDebeziumFieldValues(
 	writer *util.JSONWriter,
 	fieldName string,
 	row *chunk.Row,
 	tableInfo *commonType.TableInfo,
 	columnSelector commonEvent.Selector,
+	commitTs uint64,
 ) error {
 	var err error
 	writer.WriteObjectField(fieldName, func() {
@@ -56,7 +127,32 @@ func (c *dbzCodec) writeDebeziumFieldValues(
 			}
 			err = c.writeDebeziumFieldValue(writer, row, i, colInfo)
 			if err != nil {
-				log.Error("write Debezium field value meet error", zap.Error(err))
+				// Get value for logging with truncation
+				ft := &colInfo.FieldType
+				datum := row.GetDatum(i, ft)
+				var valueStr string
+				// Use hex encoding for binary types for better readability
+				switch ft.GetType() {
+				case mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob, mysql.TypeVarString, mysql.TypeString:
+					if mysql.HasBinaryFlag(ft.GetFlag()) {
+						valueStr = hex.EncodeToString(datum.GetBytes())
+					} else {
+						valueStr = datum.String()
+					}
+				default:
+					valueStr = datum.String()
+				}
+				const maxValueLen = 1024
+				if len(valueStr) > maxValueLen {
+					valueStr = valueStr[:maxValueLen] + "...(truncated)"
+				}
+				log.Error("failed to write Debezium field value",
+					zap.String("schema", tableInfo.GetTargetSchemaName()),
+					zap.String("table", tableInfo.GetTargetTableName()),
+					zap.String("column", colInfo.Name.O),
+					zap.String("value", valueStr),
+					zap.Uint64("commitTs", commitTs),
+					zap.Error(err))
 				break
 			}
 		}
@@ -92,14 +188,14 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 			if n == 1 {
 				writer.WriteStringField("type", "boolean")
-				writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+				writer.WriteBoolField("optional", c.columnOptional(ft))
 				writer.WriteStringField("field", colName)
 				if col.GetDefaultValue() != nil {
 					writer.WriteBoolField("default", v != 0) // bool
 				}
 			} else {
 				writer.WriteStringField("type", "bytes")
-				writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+				writer.WriteBoolField("optional", c.columnOptional(ft))
 				writer.WriteStringField("name", "io.debezium.data.Bits")
 				writer.WriteIntField("version", 1)
 				writer.WriteObjectField("parameters", func() {
@@ -112,15 +208,19 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 		case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeTinyBlob,
 			mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
-			writer.WriteStringField("type", "string")
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			if c.isDebeziumAvro() && mysql.HasBinaryFlag(ft.GetFlag()) {
+				writer.WriteStringField("type", "bytes")
+			} else {
+				writer.WriteStringField("type", "string")
+			}
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
 			if col.GetDefaultValue() != nil {
 				writer.WriteAnyField("default", col.GetDefaultValue())
 			}
 		case mysql.TypeEnum:
 			writer.WriteStringField("type", "string")
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("name", "io.debezium.data.Enum")
 			writer.WriteIntField("version", 1)
 			writer.WriteObjectField("parameters", func() {
@@ -137,7 +237,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 		case mysql.TypeSet:
 			writer.WriteStringField("type", "string")
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("name", "io.debezium.data.EnumSet")
 			writer.WriteIntField("version", 1)
 			writer.WriteObjectField("parameters", func() {
@@ -149,7 +249,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 		case mysql.TypeDate, mysql.TypeNewDate:
 			writer.WriteStringField("type", "int32")
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("name", "io.debezium.time.Date")
 			writer.WriteIntField("version", 1)
 			writer.WriteStringField("field", colName)
@@ -179,7 +279,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 		case mysql.TypeDatetime:
 			writer.WriteStringField("type", "int64")
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			if ft.GetDecimal() <= 3 {
 				writer.WriteStringField("name", "io.debezium.time.Timestamp")
 			} else {
@@ -224,7 +324,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 		case mysql.TypeTimestamp:
 			writer.WriteStringField("type", "string")
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("name", "io.debezium.time.ZonedTimestamp")
 			writer.WriteIntField("version", 1)
 			writer.WriteStringField("field", colName)
@@ -266,7 +366,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 		case mysql.TypeDuration:
 			writer.WriteStringField("type", "int64")
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("name", "io.debezium.time.MicroTime")
 			writer.WriteIntField("version", 1)
 			writer.WriteStringField("field", colName)
@@ -283,7 +383,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 		case mysql.TypeJSON:
 			writer.WriteStringField("type", "string")
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("name", "io.debezium.data.Json")
 			writer.WriteIntField("version", 1)
 			writer.WriteStringField("field", colName)
@@ -292,7 +392,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 		case mysql.TypeTiny: // TINYINT
 			writer.WriteStringField("type", "int16")
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
 			if col.GetDefaultValue() != nil {
 				v, ok := col.GetDefaultValue().(string)
@@ -311,7 +411,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			} else {
 				writer.WriteStringField("type", "int16")
 			}
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
 			if col.GetDefaultValue() != nil {
 				v, ok := col.GetDefaultValue().(string)
@@ -326,7 +426,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 		case mysql.TypeInt24: // MEDIUMINT
 			writer.WriteStringField("type", "int32")
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
 			if col.GetDefaultValue() != nil {
 				v, ok := col.GetDefaultValue().(string)
@@ -345,7 +445,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			} else {
 				writer.WriteStringField("type", "int32")
 			}
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
 			if col.GetDefaultValue() != nil {
 				v, ok := col.GetDefaultValue().(string)
@@ -359,8 +459,14 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 				writer.WriteFloat64Field("default", floatV)
 			}
 		case mysql.TypeLonglong: // BIGINT
-			writer.WriteStringField("type", "int64")
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			if c.isDebeziumAvro() &&
+				mysql.HasUnsignedFlag(ft.GetFlag()) &&
+				c.config.AvroBigintUnsignedHandlingMode == common.BigintUnsignedHandlingModeString {
+				writer.WriteStringField("type", "string")
+			} else {
+				writer.WriteStringField("type", "int64")
+			}
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
 			if col.GetDefaultValue() != nil {
 				v, ok := col.GetDefaultValue().(string)
@@ -379,7 +485,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			} else {
 				writer.WriteStringField("type", "float")
 			}
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
 			if col.GetDefaultValue() != nil {
 				v, ok := col.GetDefaultValue().(string)
@@ -392,15 +498,48 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 				}
 				writer.WriteFloat64Field("default", floatV)
 			}
-		case mysql.TypeDouble, mysql.TypeNewDecimal:
+		case mysql.TypeDouble:
 			// https://dev.mysql.com/doc/refman/8.4/en/numeric-types.html
 			// MySQL also treats REAL as a synonym for DOUBLE PRECISION (a nonstandard variation), unless the REAL_AS_FLOAT SQL mode is enabled.
 			writer.WriteStringField("type", "double")
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
 			if col.GetDefaultValue() != nil {
 				v, ok := col.GetDefaultValue().(string)
 				if !ok {
+					return
+				}
+				floatV, err := strconv.ParseFloat(v, 64)
+				if err != nil {
+					return
+				}
+				writer.WriteFloat64Field("default", floatV)
+			}
+		case mysql.TypeNewDecimal:
+			if c.isDebeziumAvro() &&
+				c.config.AvroDecimalHandlingMode == common.DecimalHandlingModePrecise {
+				precision, scale := decimalPrecisionAndScale(ft)
+				writer.WriteStringField("type", "bytes")
+				writer.WriteStringField("name", "org.apache.kafka.connect.data.Decimal")
+				writer.WriteObjectField("parameters", func() {
+					writer.WriteStringField("precision", strconv.Itoa(precision))
+					writer.WriteStringField("scale", strconv.Itoa(scale))
+				})
+			} else if c.isDebeziumAvro() &&
+				c.config.AvroDecimalHandlingMode == common.DecimalHandlingModeString {
+				writer.WriteStringField("type", "string")
+			} else {
+				writer.WriteStringField("type", "double")
+			}
+			writer.WriteBoolField("optional", c.columnOptional(ft))
+			writer.WriteStringField("field", colName)
+			if col.GetDefaultValue() != nil {
+				v, ok := col.GetDefaultValue().(string)
+				if !ok {
+					return
+				}
+				if c.isDebeziumAvro() {
+					writer.WriteStringField("default", v)
 					return
 				}
 				floatV, err := strconv.ParseFloat(v, 64)
@@ -411,7 +550,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 		case mysql.TypeYear:
 			writer.WriteStringField("type", "int32")
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("name", "io.debezium.time.Year")
 			writer.WriteIntField("version", 1)
 			writer.WriteStringField("field", colName)
@@ -435,7 +574,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			}
 		case mysql.TypeTiDBVectorFloat32:
 			writer.WriteStringField("type", "string")
-			writer.WriteBoolField("optional", !mysql.HasNotNullFlag(ft.GetFlag()))
+			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("name", "io.debezium.data.TiDBVectorFloat32")
 			writer.WriteStringField("field", colName)
 			if col.GetDefaultValue() != nil {
@@ -527,6 +666,10 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 		return nil
 
 	case mysql.TypeNewDecimal:
+		if c.isDebeziumAvro() {
+			writer.WriteStringField(colName, datum.GetMysqlDecimal().String())
+			return nil
+		}
 		v, err := datum.GetMysqlDecimal().ToFloat64()
 		if err != nil {
 			return errors.WrapError(
@@ -684,6 +827,18 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 		isUnsigned := mysql.HasUnsignedFlag(colInfo.GetFlag())
 		if isUnsigned {
 			v := datum.GetUint64()
+			if c.isDebeziumAvro() && ft.GetType() == mysql.TypeLonglong {
+				if c.config.AvroBigintUnsignedHandlingMode == common.BigintUnsignedHandlingModeString {
+					writer.WriteStringField(colName, strconv.FormatUint(v, 10))
+				} else {
+					if v > math.MaxInt64 {
+						return errors.ErrDebeziumEncodeFailed.GenWithStackByArgs(
+							fmt.Sprintf("unsigned bigint value %d overflows avro long", v))
+					}
+					writer.WriteInt64Field(colName, int64(v))
+				}
+				return nil
+			}
 			if ft.GetType() == mysql.TypeLonglong && v == maxValue.GetUint64() || v > maxValue.GetUint64() {
 				writer.WriteAnyField(colName, -1)
 			} else {
@@ -731,7 +886,10 @@ func (c *dbzCodec) writeBinaryField(writer *util.JSONWriter, fieldName string, v
 	writer.WriteBase64StringField(fieldName, value)
 }
 
-func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter) {
+// includeStartTs indicates whether start_ts should be declared in the source
+// schema. DML callers pass the configured value, while DDL, checkpoint, and
+// Avro callers pass false because their payloads do not carry the field.
+func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter, schemaName string, includeStartTs bool) {
 	writer.WriteObjectElement(func() {
 		writer.WriteStringField("type", "struct")
 		writer.WriteArrayField("fields", func() {
@@ -758,12 +916,14 @@ func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter) {
 			writer.WriteObjectElement(func() {
 				writer.WriteStringField("type", "string")
 				writer.WriteBoolField("optional", true)
-				writer.WriteStringField("name", "io.debezium.data.Enum")
-				writer.WriteIntField("version", 1)
-				writer.WriteObjectField("parameters", func() {
-					writer.WriteStringField("allowed", "true,last,false,incremental")
-				})
-				writer.WriteStringField("default", "false")
+				if !c.isDebeziumAvro() {
+					writer.WriteStringField("name", "io.debezium.data.Enum")
+					writer.WriteIntField("version", 1)
+					writer.WriteObjectField("parameters", func() {
+						writer.WriteStringField("allowed", "true,last,false,incremental")
+					})
+					writer.WriteStringField("default", "false")
+				}
 				writer.WriteStringField("field", "snapshot")
 			})
 			writer.WriteObjectElement(func() {
@@ -771,14 +931,16 @@ func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter) {
 				writer.WriteBoolField("optional", false)
 				writer.WriteStringField("field", "db")
 			})
+			if !c.isDebeziumAvro() {
+				writer.WriteObjectElement(func() {
+					writer.WriteStringField("type", "string")
+					writer.WriteBoolField("optional", true)
+					writer.WriteStringField("field", "sequence")
+				})
+			}
 			writer.WriteObjectElement(func() {
 				writer.WriteStringField("type", "string")
-				writer.WriteBoolField("optional", true)
-				writer.WriteStringField("field", "sequence")
-			})
-			writer.WriteObjectElement(func() {
-				writer.WriteStringField("type", "string")
-				writer.WriteBoolField("optional", true)
+				writer.WriteBoolField("optional", !c.isDebeziumAvro())
 				writer.WriteStringField("field", "table")
 			})
 			writer.WriteObjectElement(func() {
@@ -816,9 +978,28 @@ func (c *dbzCodec) writeSourceSchema(writer *util.JSONWriter) {
 				writer.WriteBoolField("optional", true)
 				writer.WriteStringField("field", "query")
 			})
+			if c.config.EnableTiDBExtension || c.isDebeziumAvro() {
+				writer.WriteObjectElement(func() {
+					writer.WriteStringField("type", "int64")
+					writer.WriteBoolField("optional", false)
+					writer.WriteStringField("field", "commit_ts")
+				})
+				writer.WriteObjectElement(func() {
+					writer.WriteStringField("type", "string")
+					writer.WriteBoolField("optional", false)
+					writer.WriteStringField("field", "cluster_id")
+				})
+			}
+			if includeStartTs {
+				writer.WriteObjectElement(func() {
+					writer.WriteStringField("type", "int64")
+					writer.WriteBoolField("optional", false)
+					writer.WriteStringField("field", "start_ts")
+				})
+			}
 		})
 		writer.WriteBoolField("optional", false)
-		writer.WriteStringField("name", "io.debezium.connector.mysql.Source")
+		writer.WriteStringField("name", c.sourceSchemaName(schemaName))
 		writer.WriteStringField("field", "source")
 	})
 }
@@ -834,6 +1015,8 @@ func (c *dbzCodec) EncodeKey(
 	defer util.ReturnJSONWriter(jWriter)
 
 	var err error
+	schemaName := e.TableInfo.GetTargetSchemaName()
+	tableName := e.TableInfo.GetTargetTableName()
 	jWriter.WriteObject(func() {
 		jWriter.WriteObjectField("payload", func() {
 			columns := e.TableInfo.GetColumns()
@@ -850,8 +1033,7 @@ func (c *dbzCodec) EncodeKey(
 		if !c.config.DebeziumDisableSchema {
 			jWriter.WriteObjectField("schema", func() {
 				jWriter.WriteStringField("type", "struct")
-				jWriter.WriteStringField("name",
-					fmt.Sprintf("%s.Key", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
+				jWriter.WriteStringField("name", c.keySchemaName(schemaName, tableName))
 				jWriter.WriteBoolField("optional", false)
 				jWriter.WriteArrayField("fields", func() {
 					columns := e.TableInfo.GetColumns()
@@ -878,6 +1060,8 @@ func (c *dbzCodec) EncodeValue(
 	commitTime := oracle.GetTimeFromTS(e.CommitTs)
 
 	var err error
+	schemaName := e.TableInfo.GetTargetSchemaName()
+	tableName := e.TableInfo.GetTargetTableName()
 
 	jWriter.WriteObject(func() {
 		jWriter.WriteObjectField("payload", func() {
@@ -889,26 +1073,41 @@ func (c *dbzCodec) EncodeValue(
 				// https://debezium.io/documentation/reference/stable/connectors/mysql.html#mysql-create-events
 				jWriter.WriteInt64Field("ts_ms", commitTime.UnixMilli())
 				// snapshot field is a string of true,last,false,incremental
-				jWriter.WriteStringField("snapshot", "false")
-				jWriter.WriteStringField("db", e.TableInfo.GetSchemaName())
-				jWriter.WriteStringField("table", e.TableInfo.GetTableName())
+				if c.isDebeziumAvro() {
+					jWriter.WriteNullField("snapshot")
+				} else {
+					jWriter.WriteStringField("snapshot", "false")
+				}
+				jWriter.WriteStringField("db", schemaName)
+				jWriter.WriteStringField("table", tableName)
 				jWriter.WriteInt64Field("server_id", 0)
 				jWriter.WriteNullField("gtid")
 				jWriter.WriteStringField("file", "")
 				jWriter.WriteInt64Field("pos", 0)
 				jWriter.WriteInt64Field("row", 0)
-				jWriter.WriteInt64Field("thread", 0)
+				if c.isDebeziumAvro() {
+					jWriter.WriteNullField("thread")
+				} else {
+					jWriter.WriteInt64Field("thread", 0)
+				}
 				jWriter.WriteNullField("query")
 
 				// The followings are TiDB extended fields
 				jWriter.WriteUint64Field("commit_ts", e.CommitTs)
+				// start_ts: the start TSO of the transaction that made this change,
+				// exposed for downstream consumers that need transaction correlation.
+				if c.config.DebeziumIncludeStartTs {
+					jWriter.WriteUint64Field("start_ts", e.StartTs)
+				}
 				jWriter.WriteStringField("cluster_id", c.clusterID)
 			})
 
 			// ts_ms: displays the time at which the connector processed the event
 			// https://debezium.io/documentation/reference/stable/connectors/mysql.html#mysql-create-events
 			jWriter.WriteInt64Field("ts_ms", c.nowFunc().UnixMilli())
-			jWriter.WriteNullField("transaction")
+			if !c.isDebeziumAvro() {
+				jWriter.WriteNullField("transaction")
+			}
 			if e.IsInsert() {
 				// op: Mandatory string that describes the type of operation that caused the connector to generate the event.
 				// Valid values are:
@@ -928,18 +1127,18 @@ func (c *dbzCodec) EncodeValue(
 				// after: An optional field that specifies the state of the row after the event occurred.
 				// Optional field that specifies the state of the row after the event occurred.
 				// In a delete event value, the after field is null, signifying that the row no longer exists.
-				err = c.writeDebeziumFieldValues(jWriter, "after", e.GetRows(), e.TableInfo, e.ColumnSelector)
+				err = c.writeDebeziumFieldValues(jWriter, "after", e.GetRows(), e.TableInfo, e.ColumnSelector, e.CommitTs)
 			} else if e.IsDelete() {
 				jWriter.WriteStringField("op", "d")
 				jWriter.WriteNullField("after")
-				err = c.writeDebeziumFieldValues(jWriter, "before", e.GetPreRows(), e.TableInfo, e.ColumnSelector)
+				err = c.writeDebeziumFieldValues(jWriter, "before", e.GetPreRows(), e.TableInfo, e.ColumnSelector, e.CommitTs)
 			} else if e.IsUpdate() {
 				jWriter.WriteStringField("op", "u")
 				if c.config.DebeziumOutputOldValue {
-					err = c.writeDebeziumFieldValues(jWriter, "before", e.GetPreRows(), e.TableInfo, e.ColumnSelector)
+					err = c.writeDebeziumFieldValues(jWriter, "before", e.GetPreRows(), e.TableInfo, e.ColumnSelector, e.CommitTs)
 				}
 				if err == nil {
-					err = c.writeDebeziumFieldValues(jWriter, "after", e.GetRows(), e.TableInfo, e.ColumnSelector)
+					err = c.writeDebeziumFieldValues(jWriter, "after", e.GetRows(), e.TableInfo, e.ColumnSelector, e.CommitTs)
 				}
 			}
 		})
@@ -948,8 +1147,7 @@ func (c *dbzCodec) EncodeValue(
 			jWriter.WriteObjectField("schema", func() {
 				jWriter.WriteStringField("type", "struct")
 				jWriter.WriteBoolField("optional", false)
-				jWriter.WriteStringField("name",
-					fmt.Sprintf("%s.Envelope", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
+				jWriter.WriteStringField("name", c.envelopeSchemaName(schemaName, tableName))
 				jWriter.WriteIntField("version", 1)
 				jWriter.WriteArrayField("fields", func() {
 					// schema is the same for `before` and `after`. So we build a new buffer to
@@ -978,8 +1176,7 @@ func (c *dbzCodec) EncodeValue(
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("type", "struct")
 						jWriter.WriteBoolField("optional", true)
-						jWriter.WriteStringField("name",
-							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
+						jWriter.WriteStringField("name", c.valueSchemaName(schemaName, tableName))
 						jWriter.WriteStringField("field", "before")
 						jWriter.WriteArrayField("fields", func() {
 							jWriter.WriteRaw(fieldsJSON)
@@ -988,14 +1185,13 @@ func (c *dbzCodec) EncodeValue(
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("type", "struct")
 						jWriter.WriteBoolField("optional", true)
-						jWriter.WriteStringField("name",
-							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
+						jWriter.WriteStringField("name", c.valueSchemaName(schemaName, tableName))
 						jWriter.WriteStringField("field", "after")
 						jWriter.WriteArrayField("fields", func() {
 							jWriter.WriteRaw(fieldsJSON)
 						})
 					})
-					c.writeSourceSchema(jWriter)
+					c.writeSourceSchema(jWriter, schemaName, c.config.DebeziumIncludeStartTs)
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("type", "string")
 						jWriter.WriteBoolField("optional", false)
@@ -1003,33 +1199,35 @@ func (c *dbzCodec) EncodeValue(
 					})
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("type", "int64")
-						jWriter.WriteBoolField("optional", true)
+						jWriter.WriteBoolField("optional", !c.isDebeziumAvro())
 						jWriter.WriteStringField("field", "ts_ms")
 					})
-					jWriter.WriteObjectElement(func() {
-						jWriter.WriteStringField("type", "struct")
-						jWriter.WriteArrayField("fields", func() {
-							jWriter.WriteObjectElement(func() {
-								jWriter.WriteStringField("type", "string")
-								jWriter.WriteBoolField("optional", false)
-								jWriter.WriteStringField("field", "id")
+					if !c.isDebeziumAvro() {
+						jWriter.WriteObjectElement(func() {
+							jWriter.WriteStringField("type", "struct")
+							jWriter.WriteArrayField("fields", func() {
+								jWriter.WriteObjectElement(func() {
+									jWriter.WriteStringField("type", "string")
+									jWriter.WriteBoolField("optional", false)
+									jWriter.WriteStringField("field", "id")
+								})
+								jWriter.WriteObjectElement(func() {
+									jWriter.WriteStringField("type", "int64")
+									jWriter.WriteBoolField("optional", false)
+									jWriter.WriteStringField("field", "total_order")
+								})
+								jWriter.WriteObjectElement(func() {
+									jWriter.WriteStringField("type", "int64")
+									jWriter.WriteBoolField("optional", false)
+									jWriter.WriteStringField("field", "data_collection_order")
+								})
 							})
-							jWriter.WriteObjectElement(func() {
-								jWriter.WriteStringField("type", "int64")
-								jWriter.WriteBoolField("optional", false)
-								jWriter.WriteStringField("field", "total_order")
-							})
-							jWriter.WriteObjectElement(func() {
-								jWriter.WriteStringField("type", "int64")
-								jWriter.WriteBoolField("optional", false)
-								jWriter.WriteStringField("field", "data_collection_order")
-							})
+							jWriter.WriteBoolField("optional", true)
+							jWriter.WriteStringField("name", "event.block")
+							jWriter.WriteIntField("version", 1)
+							jWriter.WriteStringField("field", "transaction")
 						})
-						jWriter.WriteBoolField("optional", true)
-						jWriter.WriteStringField("name", "event.block")
-						jWriter.WriteIntField("version", 1)
-						jWriter.WriteStringField("field", "transaction")
-					})
+					}
 				})
 			})
 		}
@@ -1158,14 +1356,14 @@ func (c *dbzCodec) EncodeDDLEvent(
 					switch e.GetDDLType() {
 					case timodel.ActionRenameTable:
 						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\",\"%s\".\"%s\"",
-							e.ExtraSchemaName,
-							e.ExtraTableName,
+							e.GetTargetExtraSchemaName(),
+							e.GetTargetExtraTableName(),
 							dbName,
 							tableName))
 					case timodel.ActionExchangeTablePartition:
 						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\"",
-							e.ExtraSchemaName,
-							e.ExtraTableName))
+							e.GetTargetExtraSchemaName(),
+							e.GetTargetExtraTableName()))
 					case timodel.ActionDropTable:
 						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\"",
 							dbName,
@@ -1186,8 +1384,8 @@ func (c *dbzCodec) EncodeDDLEvent(
 							}
 						})
 						jWriter.WriteArrayField("columns", func() {
-							parseColumns(e.Query, e.TableInfo.GetColumns())
-							for pos, col := range e.TableInfo.GetColumns() {
+							columns := parseColumns(e.Query, e.TableInfo.GetColumns())
+							for pos, col := range columns {
 								if col.Hidden {
 									continue
 								}
@@ -1281,7 +1479,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 				jWriter.WriteIntField("version", 1)
 				jWriter.WriteStringField("name", "io.debezium.connector.mysql.SchemaChangeValue")
 				jWriter.WriteArrayField("fields", func() {
-					c.writeSourceSchema(jWriter)
+					c.writeSourceSchema(jWriter, dbName, false)
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("field", "ts_ms")
 						jWriter.WriteBoolField("optional", false)
@@ -1520,7 +1718,7 @@ func (c *dbzCodec) EncodeCheckpointEvent(
 					fmt.Sprintf("%s.%s.Envelope", common.SanitizeName(c.clusterID), "watermark"))
 				jWriter.WriteIntField("version", 1)
 				jWriter.WriteArrayField("fields", func() {
-					c.writeSourceSchema(jWriter)
+					c.writeSourceSchema(jWriter, "watermark", false)
 					jWriter.WriteObjectElement(func() {
 						jWriter.WriteStringField("type", "string")
 						jWriter.WriteBoolField("optional", false)

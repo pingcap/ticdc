@@ -28,7 +28,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const defaultCaptureRemoveTTL = 5
+const defaultCaptureRemoveTTL = 10
 
 // GlobalReactorState represents a global state which stores all key-value pairs in ETCD
 type GlobalReactorState struct {
@@ -64,6 +64,12 @@ func NewGlobalState(clusterID string, captureSessionTTL int) *GlobalReactorState
 		captureRemoveTTL: captureRemoveTTL,
 		toRemoveCaptures: make(map[config.CaptureID]time.Time),
 	}
+}
+
+// CaptureRemoveTTLSeconds returns the delay between observing capture-key
+// deletion and publishing the capture removal to schedulers.
+func (s *GlobalReactorState) CaptureRemoveTTLSeconds() int {
+	return s.captureRemoveTTL
 }
 
 // NewGlobalStateForTest creates a new global state for test.
@@ -115,6 +121,8 @@ func (s *GlobalReactorState) Update(key util.EtcdKey, value []byte, _ bool) erro
 		}
 
 		log.Info("remote capture online", zap.Any("info", newCaptureInfo), zap.String("role", s.Role))
+		// A fresh online event supersedes any pending delayed removal for the same capture.
+		delete(s.toRemoveCaptures, k.CaptureID)
 		if s.onCaptureAdded != nil {
 			s.onCaptureAdded(k.CaptureID, newCaptureInfo.AdvertiseAddr)
 		}
@@ -157,7 +165,7 @@ func (s *GlobalReactorState) Update(key util.EtcdKey, value []byte, _ bool) erro
 	case etcd.CDCKeyTypeMetaVersion:
 	default:
 		log.Warn("receive an unexpected etcd event", zap.String("key", key.String()),
-			zap.ByteString("value", value), zap.String("role", s.Role))
+			zap.String("role", s.Role))
 	}
 	return nil
 }
@@ -429,7 +437,7 @@ func (s *ChangefeedReactorState) Update(key util.EtcdKey, value []byte, _ bool) 
 		return errors.Trace(err)
 	}
 	if err := s.UpdateCDCKey(k, value); err != nil {
-		log.Error("failed to update status", zap.String("key", key.String()), zap.ByteString("value", value))
+		log.Error("failed to update status", zap.String("key", key.String()))
 		return errors.Trace(err)
 	}
 	return nil

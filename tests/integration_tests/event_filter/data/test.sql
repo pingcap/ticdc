@@ -143,3 +143,13 @@ CREATE TABLE t_rename4 (
 );
 
 CREATE TABLE t_create (id INT PRIMARY KEY, val INT);
+
+CREATE DATABASE filtered_like_src;
+CREATE TABLE filtered_like_src.t_src_like (
+  id INT PRIMARY KEY,
+  val INT
+);
+INSERT INTO filtered_like_src.t_src_like VALUES (1, 100);
+
+CREATE TABLE event_filter.t_like_from_filtered LIKE filtered_like_src.t_src_like;
+INSERT INTO event_filter.t_like_from_filtered VALUES (1, 200);

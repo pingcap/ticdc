@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	stdlog "log"
 	"os"
 	"strconv"
 	"strings"
@@ -24,8 +25,8 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/gin-gonic/gin"
 	"github.com/go-sql-driver/mysql"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc/grpclog"
@@ -85,6 +86,11 @@ func SetLogLevel(level string) error {
 	}
 	log.SetLevel(lv)
 	return nil
+}
+
+// IsDebugEnabled reports whether DEBUG logs are enabled for the global logger.
+func IsDebugEnabled() bool {
+	return log.GetLevel() <= zapcore.DebugLevel
 }
 
 // loggerOp is the op for logger control
@@ -232,7 +238,7 @@ func initOptionalComponent(op *loggerOp, cfg *Config) error {
 func ZapErrorFilter(err error, filterErrors ...error) zap.Field {
 	cause := errors.Cause(err)
 	for _, ferr := range filterErrors {
-		if cause == ferr {
+		if errors.Is(cause, ferr) {
 			return zap.Error(nil)
 		}
 	}
@@ -252,6 +258,11 @@ func initMySQLLogger() error {
 
 // initSaramaLogger hacks logger used in sarama lib
 func initSaramaLogger(level zapcore.Level) error {
+	if zapcore.InfoLevel.Enabled(level) {
+		sarama.Logger = stdlog.New(io.Discard, "[Sarama] ", stdlog.LstdFlags)
+		return nil
+	}
+
 	logger, err := zap.NewStdLogAt(log.L().With(zap.String("component", "sarama")), level)
 	if err != nil {
 		return errors.Trace(err)
@@ -334,7 +345,7 @@ func ErrorFilterContextCanceled(logger *zap.Logger, msg string, fields ...zap.Fi
 			}
 		case zapcore.ErrorType:
 			err, ok := field.Interface.(error)
-			if ok && errors.Cause(err) == context.Canceled {
+			if ok && errors.Is(errors.Cause(err), context.Canceled) {
 				return
 			}
 		}

@@ -160,7 +160,7 @@ func (c *cluster) moveAllTables(sourceNode, targetNode string, mode int64) error
 		err := c.
 			client.
 			Changefeeds().
-			MoveTable(ctx, table.changefeedKeySpace, table.changefeedName, table.id, targetNode, mode)
+			MoveTable(ctx, table.changefeedKeySpace, table.changefeedName, table.id, targetNode, mode, true)
 
 		log.Info("move table",
 			zap.String("sourceNode", sourceNode),

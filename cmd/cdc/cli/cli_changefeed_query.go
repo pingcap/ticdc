@@ -95,7 +95,7 @@ func (o *queryChangefeedOptions) run(cmd *cobra.Command) error {
 	}
 
 	detail, err := o.apiClientV2.Changefeeds().Get(ctx, o.keyspace, o.changefeedID)
-	if err != nil && cerror.ErrChangeFeedNotExists.NotEqual(err) {
+	if err != nil {
 		return err
 	}
 	meta := &cfMeta{

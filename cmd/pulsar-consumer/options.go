@@ -26,8 +26,9 @@ import (
 
 // option represents the options of the pulsar consumer
 type option struct {
-	address []string
-	topic   string
+	address          []string
+	topic            string
+	subscriptionName string
 
 	protocol            config.Protocol
 	enableTiDBExtension bool
@@ -56,6 +57,9 @@ type option struct {
 func newConsumerOption() *option {
 	return &option{
 		protocol: config.ProtocolCanalJSON,
+		// Keep the historical default so existing users continue from the same
+		// durable subscription unless overridden.
+		subscriptionName: "pulsar-test-subscription",
 		// the default value of partitionNum is 1
 		partitionNum: 1,
 	}

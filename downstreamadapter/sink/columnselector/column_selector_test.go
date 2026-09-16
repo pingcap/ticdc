@@ -16,9 +16,13 @@ package columnselector
 import (
 	"testing"
 
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -180,5 +184,58 @@ func TestColumnSelectorGetSelector(t *testing.T) {
 		for _, col := range columns {
 			require.True(t, selector.Select(col))
 		}
+	}
+}
+
+func TestVerifyTablesRequiresFullUniqueKey(t *testing.T) {
+	t.Parallel()
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.ColumnSelectors = []*config.ColumnSelector{
+		{
+			Matcher: []string{"test.t"},
+			Columns: []string{"a"},
+		},
+	}
+	selectors, err := New(replicaConfig.Sink)
+	require.NoError(t, err)
+
+	tableInfo := commonType.WrapTableInfo("test", &model.TableInfo{
+		Name: ast.NewCIStr("t"),
+		Columns: []*model.ColumnInfo{
+			newColumnInfoForSelectorTest(1, "a", mysql.NotNullFlag),
+			newColumnInfoForSelectorTest(2, "b", mysql.NotNullFlag),
+		},
+		Indices: []*model.IndexInfo{
+			{
+				Name: ast.NewCIStr("uk_ab"),
+				Columns: []*model.IndexColumn{
+					{Name: ast.NewCIStr("a"), Offset: 0},
+					{Name: ast.NewCIStr("b"), Offset: 1},
+				},
+				Unique: true,
+				State:  model.StatePublic,
+			},
+		},
+	})
+
+	err = selectors.VerifyTables([]*commonType.TableInfo{tableInfo}, nil)
+	require.Error(t, err)
+	require.True(t, errors.ErrColumnSelectorFailed.Equal(err))
+
+	replicaConfig.Sink.ColumnSelectors[0].Columns = []string{"a", "b"}
+	selectors, err = New(replicaConfig.Sink)
+	require.NoError(t, err)
+	require.NoError(t, selectors.VerifyTables([]*commonType.TableInfo{tableInfo}, nil))
+}
+
+func newColumnInfoForSelectorTest(id int64, name string, flag uint) *model.ColumnInfo {
+	ft := types.NewFieldType(mysql.TypeLong)
+	ft.AddFlag(flag)
+	return &model.ColumnInfo{
+		ID:        id,
+		Name:      ast.NewCIStr(name),
+		FieldType: *ft,
+		State:     model.StatePublic,
 	}
 }

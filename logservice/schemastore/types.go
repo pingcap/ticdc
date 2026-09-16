@@ -88,6 +88,10 @@ type PersistedDDLEvent struct {
 	// TODO: do we need the following two fields?
 	BDRRole        string `msg:"bdr_role"`
 	CDCWriteSource uint64 `msg:"cdc_write_source"`
+
+	// IndexIDs store the add index ids in SQL order for add index and multi schema change DDLs.
+	// MySQL sink uses them to recover anonymous index names.
+	IndexIDs []int64 `msg:"index_ids"`
 }
 
 // TODO: use msgp.Raw to do version management

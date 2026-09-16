@@ -23,7 +23,7 @@ var (
 			Name:      "handle_event_duration",
 			Help:      "Bucketed histogram of maintainer handle event time (s).",
 			Buckets:   prometheus.ExponentialBuckets(0.01 /* 10 ms */, 2, 18),
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 
 	MaintainerEventChLenGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -31,7 +31,7 @@ var (
 			Subsystem: "maintainer",
 			Name:      "event_ch_len",
 			Help:      "length of maintainer event channel",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 
 	OperatorCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -39,7 +39,7 @@ var (
 			Subsystem: "maintainer",
 			Name:      "created_count",
 			Help:      "number of created operators",
-		}, []string{getKeyspaceLabel(), "changefeed", "type", "mode"})
+		}, []string{GetKeyspaceLabel(), "changefeed", "type", "mode"})
 
 	TotalOperatorCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -47,7 +47,7 @@ var (
 			Subsystem: "maintainer",
 			Name:      "total_operator_count",
 			Help:      "number of total operators",
-		}, []string{getKeyspaceLabel(), "changefeed", "type", "mode"})
+		}, []string{GetKeyspaceLabel(), "changefeed", "type", "mode"})
 
 	OperatorDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -56,7 +56,7 @@ var (
 			Name:      "finish_operators_duration_seconds",
 			Help:      "Bucketed histogram of processing time (s) of finished operator.",
 			Buckets:   []float64{0.5, 1, 2, 4, 8, 16, 20, 40, 60, 90, 120, 180, 240, 300, 480, 600, 720, 900, 1200, 1800, 3600},
-		}, []string{getKeyspaceLabel(), "changefeed", "type", "mode"})
+		}, []string{GetKeyspaceLabel(), "changefeed", "type", "mode"})
 )
 
 func initMaintainerMetrics(registry *prometheus.Registry) {

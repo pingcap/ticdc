@@ -16,6 +16,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +38,8 @@ const (
 
 	// TxnAtomicityKey specifies the key of the transaction-atomicity in the SinkURI.
 	TxnAtomicityKey = "transaction-atomicity"
+	// UseTableIDAsPathKey specifies the key of the use-table-id-as-path in the SinkURI.
+	UseTableIDAsPathKey = "use-table-id-as-path"
 	// defaultTxnAtomicity is the default atomicity level.
 	defaultTxnAtomicity = noneTxnAtomicity
 	// unknownTxnAtomicity is an invalid atomicity level and will be treated as
@@ -92,6 +95,10 @@ const (
 	// to send all tables bootstrap message at changefeed start.
 	DefaultSendAllBootstrapAtStart = false
 
+	// DefaultDebeziumOutputOldValue is the default value of whether
+	// to output the old value in debezium protocol messages.
+	DefaultDebeziumOutputOldValue = true
+
 	// DefaultMaxReconnectToPulsarBroker is the default max reconnect times to pulsar broker.
 	// The pulsar client uses an exponential backoff with jitter to reconnect to the broker.
 	// Based on test, when the max reconnect times is 3,
@@ -138,18 +145,18 @@ type SinkConfig struct {
 	// Protocol is NOT available when the downstream is DB.
 	Protocol *string `toml:"protocol" json:"protocol,omitempty"`
 
-	// DispatchRules is only available when the downstream is MQ.
 	DispatchRules []*DispatchRule `toml:"dispatchers" json:"dispatchers,omitempty"`
 
 	ColumnSelectors []*ColumnSelector `toml:"column-selectors" json:"column-selectors,omitempty"`
-	// SchemaRegistry is only available when the downstream is MQ using avro protocol.
+	// SchemaRegistry is only available when the downstream is MQ using avro protocol
+	// or debezium protocol with Confluent Avro encoding.
 	SchemaRegistry *string `toml:"schema-registry" json:"schema-registry,omitempty"`
 	// EncoderConcurrency is only available when the downstream is MQ.
 	EncoderConcurrency *int `toml:"encoder-concurrency" json:"encoder-concurrency,omitempty"`
 	// Terminator is NOT available when the downstream is DB.
 	Terminator *string `toml:"terminator" json:"terminator,omitempty"`
 	// DateSeparator is only available when the downstream is Storage.
-	DateSeparator *string `toml:"date-separator" json:"date-separator,omitempty"`
+	DateSeparator *DateSeparator `toml:"date-separator" json:"date-separator,omitempty"`
 	// EnablePartitionSeparator is only available when the downstream is Storage.
 	EnablePartitionSeparator *bool `toml:"enable-partition-separator" json:"enable-partition-separator,omitempty"`
 	// FileIndexWidth is only available when the downstream is Storage
@@ -204,6 +211,8 @@ type SinkConfig struct {
 	OpenProtocol *OpenProtocolConfig `toml:"open" json:"open,omitempty"`
 	// DebeziumConfig related configurations
 	Debezium *DebeziumConfig `toml:"debezium" json:"debezium,omitempty"`
+	// Simple protocol related configurations
+	Simple *SimpleConfig `toml:"simple" json:"simple,omitempty"`
 
 	CaseSensitive *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	// Integrity is only available when the downstream is MQ.
@@ -246,6 +255,22 @@ func (s *SinkConfig) ShouldSendAllBootstrapAtStart() bool {
 	should := s.ShouldSendBootstrapMsg() && util.GetOrZero(s.SendAllBootstrapAtStart)
 	log.Info("should send all bootstrap at start", zap.Bool("should", should))
 	return should
+}
+
+// TableRouteEnabled return true if there is at least one rule enabled.
+func (s *SinkConfig) TableRouteEnabled() bool {
+	if s == nil {
+		return false
+	}
+	for _, rule := range s.DispatchRules {
+		if rule == nil {
+			continue
+		}
+		if rule.TargetSchema != "" || rule.TargetTable != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // CSVConfig defines a series of configuration items for csv codec.
@@ -353,6 +378,20 @@ func (d *DateSeparator) FromString(separator string) error {
 	return nil
 }
 
+// MarshalText implements encoding.TextMarshaler.
+func (d DateSeparator) MarshalText() ([]byte, error) {
+	return []byte(d.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (d *DateSeparator) UnmarshalText(text []byte) error {
+	if err := d.FromString(string(text)); err != nil {
+		return cerror.ErrStorageSinkInvalidConfig.GenWithStack(
+			"invalid date separator %q", text)
+	}
+	return nil
+}
+
 // GetPattern returns the pattern of the date separator.
 func (d DateSeparator) GetPattern() string {
 	switch d {
@@ -384,8 +423,11 @@ func (d DateSeparator) String() string {
 	}
 }
 
-// DispatchRule represents partition rule for a table.
+// DispatchRules configures event routing.
+// For MQ sinks, rules control topic / partition dispatching.
+// TargetSchema and TargetTable configure table routing.
 type DispatchRule struct {
+	// Rules are evaluated in order, and the first matching rule wins.
 	Matcher []string `toml:"matcher" json:"matcher"`
 	// Deprecated, please use PartitionRule.
 	DispatcherRule string `toml:"dispatcher" json:"dispatcher"`
@@ -400,6 +442,22 @@ type DispatchRule struct {
 	Columns []string `toml:"columns" json:"columns"`
 
 	TopicRule string `toml:"topic" json:"topic"`
+
+	// TargetSchema sets the routed downstream schema name.
+	// Leave it empty to keep the source schema name.
+	// For example, if the source table is `sales`.`orders`, `target-schema = "sales_bak"`
+	// writes to `sales_bak`.`orders`.
+	// You can also use placeholders. For example, `target-schema = "{schema}_bak"`
+	// becomes `sales_bak`.
+	TargetSchema string `toml:"target-schema" json:"target-schema"`
+
+	// TargetTable sets the routed downstream table name.
+	// Leave it empty to keep the source table name.
+	// For example, if the source table is `sales`.`orders`, `target-table = "orders_bak"`
+	// writes to `sales`.`orders_bak`.
+	// You can also use placeholders. For example, `target-table = "{schema}_{table}"`
+	// becomes `sales_orders`.
+	TargetTable string `toml:"target-table" json:"target-table"`
 }
 
 // ColumnSelector represents a column selector for a table.
@@ -415,6 +473,7 @@ type CodecConfig struct {
 	AvroEnableWatermark            *bool   `toml:"avro-enable-watermark" json:"avro-enable-watermark"`
 	AvroDecimalHandlingMode        *string `toml:"avro-decimal-handling-mode" json:"avro-decimal-handling-mode,omitempty"`
 	AvroBigintUnsignedHandlingMode *string `toml:"avro-bigint-unsigned-handling-mode" json:"avro-bigint-unsigned-handling-mode,omitempty"`
+	AvroIncludeBeforeValue         *bool   `toml:"avro-include-before-value" json:"avro-include-before-value,omitempty"`
 	EncodingFormat                 *string `toml:"encoding-format" json:"encoding-format,omitempty"`
 	OutputRowKey                   *bool   `toml:"output-row-key" json:"output-row-key,omitempty"`
 }
@@ -446,6 +505,7 @@ type KafkaConfig struct {
 	SASLOAuthClientID            *string                   `toml:"sasl-oauth-client-id" json:"sasl-oauth-client-id,omitempty"`
 	SASLOAuthClientSecret        *string                   `toml:"sasl-oauth-client-secret" json:"sasl-oauth-client-secret,omitempty"`
 	SASLOAuthTokenURL            *string                   `toml:"sasl-oauth-token-url" json:"sasl-oauth-token-url,omitempty"`
+	SASLOAuthCA                  *string                   `toml:"sasl-oauth-ca" json:"sasl-oauth-ca,omitempty"`
 	SASLOAuthScopes              []string                  `toml:"sasl-oauth-scopes" json:"sasl-oauth-scopes,omitempty"`
 	SASLOAuthGrantType           *string                   `toml:"sasl-oauth-grant-type" json:"sasl-oauth-grant-type,omitempty"`
 	SASLOAuthAudience            *string                   `toml:"sasl-oauth-audience" json:"sasl-oauth-audience,omitempty"`
@@ -472,17 +532,23 @@ func (k *KafkaConfig) GetOutputRawChangeEvent() bool {
 
 // MaskSensitiveData masks sensitive data in KafkaConfig
 func (k *KafkaConfig) MaskSensitiveData() {
-	k.SASLPassword = aws.String("******")
-	k.SASLGssAPIPassword = aws.String("******")
-	k.SASLOAuthClientSecret = aws.String("******")
-	k.Key = aws.String("******")
+	sensitiveFields := []*string{k.SASLPassword, k.SASLGssAPIPassword, k.SASLOAuthClientSecret, k.Key}
 	if k.GlueSchemaRegistryConfig != nil {
-		k.GlueSchemaRegistryConfig.AccessKey = "******"
-		k.GlueSchemaRegistryConfig.Token = "******"
-		k.GlueSchemaRegistryConfig.SecretAccessKey = "******"
+		sensitiveFields = append(sensitiveFields,
+			&k.GlueSchemaRegistryConfig.AccessKey,
+			&k.GlueSchemaRegistryConfig.Token,
+			&k.GlueSchemaRegistryConfig.SecretAccessKey)
+	}
+	for _, field := range sensitiveFields {
+		if field != nil && *field != "" {
+			*field = "******"
+		}
 	}
 	if k.SASLOAuthTokenURL != nil {
 		k.SASLOAuthTokenURL = aws.String(util.MaskSensitiveDataInURI(*k.SASLOAuthTokenURL))
+	}
+	if k.LargeMessageHandle != nil {
+		k.LargeMessageHandle.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(k.LargeMessageHandle.ClaimCheckStorageURI)
 	}
 }
 
@@ -683,6 +749,7 @@ type MySQLConfig struct {
 	WriteTimeout                 *string `toml:"write-timeout" json:"write-timeout,omitempty"`
 	ReadTimeout                  *string `toml:"read-timeout" json:"read-timeout,omitempty"`
 	Timeout                      *string `toml:"timeout" json:"timeout,omitempty"`
+	AsyncDDLTimeout              *string `toml:"async-ddl-timeout" json:"async-ddl-timeout,omitempty"`
 	EnableBatchDML               *bool   `toml:"enable-batch-dml" json:"enable-batch-dml,omitempty"`
 	EnableMultiStatement         *bool   `toml:"enable-multi-statement" json:"enable-multi-statement,omitempty"`
 	EnableCachePreparedStatement *bool   `toml:"enable-cache-prepared-statement" json:"enable-cache-prepared-statement,omitempty"`
@@ -690,14 +757,18 @@ type MySQLConfig struct {
 
 // CloudStorageConfig represents a cloud storage sink configuration
 type CloudStorageConfig struct {
-	WorkerCount   *int    `toml:"worker-count" json:"worker-count,omitempty"`
-	FlushInterval *string `toml:"flush-interval" json:"flush-interval,omitempty"`
-	FileSize      *int    `toml:"file-size" json:"file-size,omitempty"`
+	WorkerCount    *int    `toml:"worker-count" json:"worker-count,omitempty"`
+	FlushInterval  *string `toml:"flush-interval" json:"flush-interval,omitempty"`
+	FileSize       *int    `toml:"file-size" json:"file-size,omitempty"`
+	SpoolDiskQuota *int64  `toml:"spool-disk-quota" json:"spool-disk-quota,omitempty"`
+	SpoolBaseDir   *string `toml:"spool-base-dir" json:"spool-base-dir,omitempty"`
 
 	OutputColumnID      *bool   `toml:"output-column-id" json:"output-column-id,omitempty"`
 	FileExpirationDays  *int    `toml:"file-expiration-days" json:"file-expiration-days,omitempty"`
 	FileCleanupCronSpec *string `toml:"file-cleanup-cron-spec" json:"file-cleanup-cron-spec,omitempty"`
 	FlushConcurrency    *int    `toml:"flush-concurrency" json:"flush-concurrency,omitempty"`
+	// UseTableIDAsPath is only available when the downstream is Storage (TiCI only).
+	UseTableIDAsPath *bool `toml:"use-table-id-as-path" json:"use-table-id-as-path,omitempty"`
 
 	// OutputRawChangeEvent controls whether to split the update pk/uk events.
 	OutputRawChangeEvent *bool `toml:"output-raw-change-event" json:"output-raw-change-event,omitempty"`
@@ -711,8 +782,33 @@ func (c *CloudStorageConfig) GetOutputRawChangeEvent() bool {
 	return *c.OutputRawChangeEvent
 }
 
+// CheckUseTableIDAsPathCompatibility checks the compatibility between sink config and sink URI.
+func CheckUseTableIDAsPathCompatibility(
+	sinkConfig *SinkConfig,
+	useTableIDAsPathFromURI *bool,
+) error {
+	if sinkConfig == nil ||
+		sinkConfig.CloudStorageConfig == nil ||
+		sinkConfig.CloudStorageConfig.UseTableIDAsPath == nil ||
+		useTableIDAsPathFromURI == nil {
+		return nil
+	}
+	useTableIDAsPathFromConfig := sinkConfig.CloudStorageConfig.UseTableIDAsPath
+	if util.GetOrZero(useTableIDAsPathFromConfig) == util.GetOrZero(useTableIDAsPathFromURI) {
+		return nil
+	}
+	return cerror.ErrIncompatibleSinkConfig.GenWithStackByArgs(
+		fmt.Sprintf("%s=%t", UseTableIDAsPathKey, util.GetOrZero(useTableIDAsPathFromURI)),
+		fmt.Sprintf("%s=%t", UseTableIDAsPathKey, util.GetOrZero(useTableIDAsPathFromConfig)),
+	)
+}
+
 func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 	if err := s.validateAndAdjustSinkURI(sinkURI); err != nil {
+		return err
+	}
+
+	if err := s.validateTableRoute(); err != nil {
 		return err
 	}
 
@@ -804,14 +900,6 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 
 	// validate storage sink related config
 	if sinkURI != nil && IsStorageScheme(sinkURI.Scheme) {
-		// validate date separator
-		if len(util.GetOrZero(s.DateSeparator)) > 0 {
-			var separator DateSeparator
-			if err := separator.FromString(util.GetOrZero(s.DateSeparator)); err != nil {
-				return cerror.WrapError(cerror.ErrSinkInvalidConfig, err)
-			}
-		}
-
 		// File index width should be in [minFileIndexWidth, maxFileIndexWidth].
 		// In most scenarios, the user does not need to change this configuration,
 		// so the default value of this parameter is not set and just make silent
@@ -831,6 +919,21 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		s.AdvanceTimeoutInSec = util.AddressOf(DefaultAdvanceTimeoutInSec)
 	}
 
+	return nil
+}
+
+func (s *SinkConfig) validateTableRoute() error {
+	for _, rule := range s.DispatchRules {
+		if rule == nil || (rule.TargetSchema == "" && rule.TargetTable == "") {
+			continue
+		}
+		if err := validateRoutingExpression("target-schema", rule.TargetSchema); err != nil {
+			return err
+		}
+		if err := validateRoutingExpression("target-table", rule.TargetTable); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -884,7 +987,7 @@ func (s *SinkConfig) ValidateProtocol(scheme string) error {
 		if s.OpenProtocol != nil {
 			outputOldValue = s.OpenProtocol.OutputOldValue
 		}
-	case ProtocolDebezium:
+	case ProtocolDebezium, ProtocolDebeziumAvro:
 		if s.Debezium != nil {
 			outputOldValue = s.Debezium.OutputOldValue
 		}
@@ -958,7 +1061,7 @@ func (s *SinkConfig) applyParameterBySinkURI(sinkURI *url.URL) error {
 		getErrMsg := func(cfgIn map[string]string) string {
 			var errMsg strings.Builder
 			for k, v := range cfgIn {
-				errMsg.WriteString(fmt.Sprintf("%s=%s, ", k, v))
+				fmt.Fprintf(&errMsg, "%s=%s, ", k, v)
 			}
 			return errMsg.String()[0 : errMsg.Len()-2]
 		}
@@ -977,14 +1080,58 @@ func (s *SinkConfig) CheckCompatibilityWithSinkURI(
 		return cerror.WrapError(cerror.ErrSinkURIInvalid, err)
 	}
 
+	var useTableIDAsPathFromURI *bool
+	if IsStorageScheme(sinkURI.Scheme) {
+		useTableIDAsPathValue := sinkURI.Query().Get(UseTableIDAsPathKey)
+		if useTableIDAsPathValue != "" {
+			enabled, parseErr := strconv.ParseBool(useTableIDAsPathValue)
+			if parseErr != nil {
+				return cerror.WrapError(cerror.ErrSinkURIInvalid, parseErr)
+			}
+			useTableIDAsPathFromURI = util.AddressOf(enabled)
+		}
+	}
+
+	getUseTableIDAsPath := func(cfg *SinkConfig) *bool {
+		if cfg == nil || cfg.CloudStorageConfig == nil {
+			return nil
+		}
+		return cfg.CloudStorageConfig.UseTableIDAsPath
+	}
+
+	useTableIDAsPathChanged := func() bool {
+		newVal := getUseTableIDAsPath(s)
+		oldVal := getUseTableIDAsPath(oldSinkConfig)
+		if newVal == nil && oldVal == nil {
+			return false
+		}
+		if newVal == nil || oldVal == nil {
+			return true
+		}
+		return *newVal != *oldVal
+	}
+
 	cfgParamsChanged := s.Protocol != oldSinkConfig.Protocol ||
-		s.TxnAtomicity != oldSinkConfig.TxnAtomicity
+		s.TxnAtomicity != oldSinkConfig.TxnAtomicity ||
+		useTableIDAsPathChanged()
 
 	isURIParamsChanged := func(oldCfg SinkConfig) bool {
 		err := oldCfg.applyParameterBySinkURI(sinkURI)
-		return cerror.ErrIncompatibleSinkConfig.Equal(err)
+		if cerror.ErrIncompatibleSinkConfig.Equal(err) {
+			return true
+		}
+		if useTableIDAsPathFromURI == nil {
+			return false
+		}
+		return CheckUseTableIDAsPathCompatibility(&oldCfg, useTableIDAsPathFromURI) != nil
 	}
 	uriParamsChanged := isURIParamsChanged(*oldSinkConfig)
+
+	if !uriParamsChanged && IsStorageScheme(sinkURI.Scheme) {
+		if err := CheckUseTableIDAsPathCompatibility(s, useTableIDAsPathFromURI); err != nil {
+			return err
+		}
+	}
 
 	if !uriParamsChanged && !cfgParamsChanged {
 		return nil
@@ -1041,4 +1188,31 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
+	// IncludeStartTs controls whether the transaction start_ts is included in
+	// the source block of Debezium JSON output.
+	IncludeStartTs *bool `toml:"include-start-ts" json:"include-start-ts,omitempty"`
+}
+
+// SimpleConfig represents the configurations for simple protocol encoding
+type SimpleConfig struct {
+	// IncludeStartTs controls whether the transaction start_ts is included in
+	// Simple JSON DML messages. Encoding-format=avro rejects this option.
+	IncludeStartTs *bool `toml:"include-start-ts" json:"include-start-ts,omitempty"`
+}
+
+// validRoutingExpressionRegexp accepts routing expressions made of literal text
+// and the {schema}/{table} placeholders, such as "archive", "{table}_bak", or "{schema}_{table}".
+var validRoutingExpressionRegexp = regexp.MustCompile(`^(?:[^{}]|\{schema\}|\{table\})*$`)
+
+// validateRoutingExpression validates a routing expression for a single routing field.
+// Valid expressions can contain literal text and {schema} or {table} placeholders.
+func validateRoutingExpression(fieldName, expr string) error {
+	if expr == "" || validRoutingExpressionRegexp.MatchString(expr) {
+		return nil
+	}
+	return cerror.ErrInvalidTableRoutingRule.GenWithStack(
+		"%s %q must contain only literal text, {schema}, and {table}",
+		fieldName,
+		expr,
+	)
 }

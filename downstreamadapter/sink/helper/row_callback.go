@@ -1,0 +1,36 @@
+// Copyright 2026 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package helper
+
+import (
+	"github.com/pingcap/ticdc/pkg/common/event"
+	"go.uber.org/atomic"
+)
+
+// NewPostFlushRowCallback returns a row-level callback that triggers txn-level
+// PostFlush exactly once when the callback has been invoked totalCount times.
+func NewPostFlushRowCallback(event *event.DMLEvent, totalCount uint64) func() {
+	return NewRowCallback(totalCount, event.PostFlush)
+}
+
+// NewRowCallback returns a row-level callback that triggers callback exactly
+// once after it has been invoked totalCount times.
+func NewRowCallback(totalCount uint64, callback func()) func() {
+	var calledCount atomic.Uint64
+	return func() {
+		if calledCount.Inc() == totalCount {
+			callback()
+		}
+	}
+}

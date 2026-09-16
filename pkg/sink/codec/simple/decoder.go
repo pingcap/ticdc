@@ -29,8 +29,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -49,7 +49,7 @@ type Decoder struct {
 	marshaller marshaller
 
 	upstreamTiDB *sql.DB
-	storage      storage.ExternalStorage
+	storage      storeapi.Storage
 
 	value []byte
 	msg   *message
@@ -57,8 +57,8 @@ type Decoder struct {
 
 	// cachedMessages is used to store the messages which does not have received corresponding table info yet.
 	cachedMessages *list.List
-	// CachedRowChangedEvents are events just decoded from the cachedMessages
-	CachedRowChangedEvents []*commonEvent.DMLEvent
+	// CachedDMLMessages are messages just released from the cachedMessages.
+	CachedDMLMessages []*common.DMLMessage
 }
 
 // NewDecoder returns a new Decoder
@@ -66,7 +66,7 @@ func NewDecoder(
 	ctx context.Context, config *common.Config, db *sql.DB,
 ) (common.Decoder, error) {
 	var (
-		externalStorage storage.ExternalStorage
+		externalStorage storeapi.Storage
 		err             error
 	)
 	if config.LargeMessageHandle.EnableClaimCheck() {
@@ -105,7 +105,7 @@ func (d *Decoder) AddKeyValue(_, value []byte) {
 	if err != nil {
 		log.Panic("decompress the value failed",
 			zap.Any("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value),
+			zap.Any("value", util.RedactAny(value)),
 			zap.Error(err))
 	}
 	d.value = value
@@ -120,7 +120,7 @@ func (d *Decoder) HasNext() (common.MessageType, bool) {
 	m := new(message)
 	err := d.marshaller.Unmarshal(d.value, m)
 	if err != nil {
-		log.Panic("decoder unmarshal failed", zap.Any("value", d.value), zap.Error(err))
+		log.Panic("decoder unmarshal failed", zap.Any("value", util.RedactAny(d.value)), zap.Error(err))
 	}
 	d.msg = m
 	d.value = nil
@@ -147,42 +147,68 @@ func (d *Decoder) NextResolvedEvent() uint64 {
 	return ts
 }
 
-// NextDMLEvent returns the next dml event if exists
-func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
+// NextDMLMessage returns the next dml message if exists
+func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 	if d.msg == nil || (d.msg.Data == nil && d.msg.Old == nil) {
-		log.Panic("invalid data for the DML event", zap.Any("message", d.msg))
+		log.Panic("invalid data for the DML event", zap.String("message", util.RedactAny(d.msg)))
 	}
 
-	if d.msg.ClaimCheckLocation != "" {
-		return d.assembleClaimCheckRowChangedEvent(d.msg.ClaimCheckLocation)
-	}
+	msg := d.msg
+	d.msg = nil
 
-	if d.msg.HandleKeyOnly {
-		return d.assembleHandleKeyOnlyRowChangedEvent(d.msg)
-	}
-
-	tableInfo := d.memo.Read(d.msg.Schema, d.msg.Table, d.msg.SchemaVersion)
+	tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
 	if tableInfo == nil {
-		log.Debug("table info not found for the event, "+
-			"the consumer should cache this event temporarily, and update the tableInfo after it's received",
-			zap.String("schema", d.msg.Schema),
-			zap.String("table", d.msg.Table),
-			zap.Uint64("version", d.msg.SchemaVersion))
-		d.cachedMessages.PushBack(d.msg)
-		d.msg = nil
+		log.Debug("table info not found for the message, "+
+			"the consumer should cache this message temporarily, and update the tableInfo after it's received",
+			zap.String("schema", msg.Schema),
+			zap.String("table", msg.Table),
+			zap.Uint64("version", msg.SchemaVersion))
+		d.cachedMessages.PushBack(msg)
 		return nil
 	}
 
-	event := buildDMLEvent(d.msg, tableInfo, d.config.EnableRowChecksum, d.upstreamTiDB)
-	d.msg = nil
+	return d.newDMLMessage(msg, tableInfo)
+}
 
-	tableIDAllocator.AddBlockTableID(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName(), event.GetTableID())
+func (d *Decoder) newDMLMessage(msg *message, tableInfo *commonType.TableInfo) *common.DMLMessage {
+	tableIDAllocator.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
+	return common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), func() *commonEvent.DMLEvent {
+		return d.assembleDMLEvent(msg, tableInfo)
+	})
+}
+
+func rowTypeFromMessageType(tp MessageType) commonType.RowType {
+	switch tp {
+	case DMLTypeInsert:
+		return commonType.RowTypeInsert
+	case DMLTypeUpdate:
+		return commonType.RowTypeUpdate
+	case DMLTypeDelete:
+		return commonType.RowTypeDelete
+	default:
+		log.Panic("unknown row type for the DML message", zap.Any("type", tp))
+	}
+	return commonType.RowTypeInsert
+}
+
+func (d *Decoder) assembleDMLEvent(msg *message, tableInfo *commonType.TableInfo) *commonEvent.DMLEvent {
+	if msg.ClaimCheckLocation != "" {
+		return d.assembleClaimCheckRowChangedEvent(msg.ClaimCheckLocation, tableInfo)
+	}
+
+	if msg.HandleKeyOnly {
+		return d.assembleHandleKeyOnlyRowChangedEvent(msg, tableInfo)
+	}
+
+	event := buildDMLEvent(msg, tableInfo, d.config.EnableRowChecksum, d.upstreamTiDB)
 
 	log.Debug("row changed event assembled", zap.Any("event", event))
 	return event
 }
 
-func (d *Decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) *commonEvent.DMLEvent {
+func (d *Decoder) assembleClaimCheckRowChangedEvent(
+	claimCheckLocation string, tableInfo *commonType.TableInfo,
+) *commonEvent.DMLEvent {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
 	data, err := d.storage.ReadFile(context.Background(), claimCheckFileName)
 	if err != nil {
@@ -201,32 +227,21 @@ func (d *Decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) *
 	if err != nil {
 		log.Panic("decompress the claim check message failed",
 			zap.Any("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value),
+			zap.Any("value", util.RedactAny(value)),
 			zap.Error(err))
 	}
 
 	m := new(message)
 	err = d.marshaller.Unmarshal(value, m)
 	if err != nil {
-		log.Panic("unmarshal claim check message failed", zap.Any("value", value), zap.Error(err))
+		log.Panic("unmarshal claim check message failed", zap.Any("value", util.RedactAny(value)), zap.Error(err))
 	}
-	d.msg = m
-	return d.NextDMLEvent()
+	return d.assembleDMLEvent(m, tableInfo)
 }
 
-func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.DMLEvent {
-	tableInfo := d.memo.Read(m.Schema, m.Table, m.SchemaVersion)
-	if tableInfo == nil {
-		log.Debug("table info not found for the event, "+
-			"the consumer should cache this event temporarily, and update the tableInfo after it's received",
-			zap.String("schema", d.msg.Schema),
-			zap.String("table", d.msg.Table),
-			zap.Uint64("version", d.msg.SchemaVersion))
-		d.cachedMessages.PushBack(d.msg)
-		d.msg = nil
-		return nil
-	}
-
+func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(
+	m *message, tableInfo *commonType.TableInfo,
+) *commonEvent.DMLEvent {
 	fieldTypeMap := make(map[string]*types.FieldType, len(tableInfo.GetColumns()))
 	for _, col := range tableInfo.GetColumns() {
 		fieldTypeMap[col.Name.O] = &col.FieldType
@@ -239,6 +254,7 @@ func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.
 		TableID:       m.TableID,
 		Type:          m.Type,
 		CommitTs:      m.CommitTs,
+		StartTs:       m.StartTs,
 		SchemaVersion: m.SchemaVersion,
 	}
 
@@ -259,8 +275,7 @@ func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.
 		result.Old = d.buildData(holder, fieldTypeMap, timezone)
 	}
 
-	d.msg = result
-	return d.NextDMLEvent()
+	return d.assembleDMLEvent(result, tableInfo)
 }
 
 func (d *Decoder) buildData(
@@ -291,22 +306,28 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	d.memo.Write(ddl.MultipleTableInfos[1])
 
 	for ele := d.cachedMessages.Front(); ele != nil; {
-		d.msg = ele.Value.(*message)
-		event := d.NextDMLEvent()
-		d.CachedRowChangedEvents = append(d.CachedRowChangedEvents, event)
-
+		msg := ele.Value.(*message)
 		next := ele.Next()
-		d.cachedMessages.Remove(ele)
+		tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
+		if tableInfo != nil {
+			d.CachedDMLMessages = append(d.CachedDMLMessages, d.newDMLMessage(msg, tableInfo))
+			d.cachedMessages.Remove(ele)
+		}
 		ele = next
 	}
 	return ddl
 }
 
-// GetCachedEvents returns the cached events
-func (d *Decoder) GetCachedEvents() []*commonEvent.DMLEvent {
-	result := d.CachedRowChangedEvents
-	d.CachedRowChangedEvents = nil
+// GetCachedMessages returns the cached messages.
+func (d *Decoder) GetCachedMessages() []*common.DMLMessage {
+	result := d.CachedDMLMessages
+	d.CachedDMLMessages = nil
 	return result
+}
+
+// GetTableIDs identifies every table and partition whose events belong to the logical table.
+func (d *Decoder) GetTableIDs(schema, table string) []int64 {
+	return tableIDAllocator.GetBlockedTables(schema, table)
 }
 
 // TableInfoProvider is used to store and read table info
@@ -531,80 +552,64 @@ func parseValue(
 	if value == nil {
 		return nil
 	}
+	var val string
+	switch v := value.(type) {
+	case []byte:
+		val = string(v)
+	default:
+		val = fmt.Sprintf("%v", value)
+	}
 	var err error
 	switch ft.GetType() {
 	case mysql.TypeBit:
-		switch v := value.(type) {
-		case []uint8:
-			value = common.MustBinaryLiteralToInt(v)
-		default:
-		}
+		v := common.MustBinaryLiteralToInt([]byte(val))
+		return strconv.FormatUint(v, 10)
 	case mysql.TypeTimestamp:
-		var ts string
-		switch v := value.(type) {
-		case string:
-			ts = v
-		// the timestamp value maybe []uint8 if it's queried from upstream TiDB.
-		case []uint8:
-			ts = string(v)
-		}
 		return map[string]interface{}{
 			"location": location,
-			"value":    ts,
+			"value":    val,
 		}
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeDuration,
 		mysql.TypeTiDBVectorFloat32, mysql.TypeJSON:
-		return string(value.([]uint8))
+		return val
 	case mysql.TypeEnum:
-		switch v := value.(type) {
-		case []uint8:
-			data := string(v)
-			var enum types.Enum
-			enum, err = types.ParseEnumName(ft.GetElems(), data, ft.GetCollate())
-			value = enum.Value
+		var enum types.Enum
+		enum, err = types.ParseEnumName(ft.GetElems(), val, ft.GetCollate())
+		if err != nil {
+			log.Panic("parse enum name failed",
+				zap.Any("elems", ft.GetElems()), zap.Any("name", value), zap.Error(err))
 		}
+		return strconv.FormatUint(enum.Value, 10)
 	case mysql.TypeSet:
-		switch v := value.(type) {
-		case []uint8:
-			data := string(v)
-			var set types.Set
-			set, err = types.ParseSetName(ft.GetElems(), data, ft.GetCollate())
-			value = set.Value
+		var set types.Set
+		set, err = types.ParseSetName(ft.GetElems(), val, ft.GetCollate())
+		if err != nil {
+			log.Panic("parse set name failed",
+				zap.Any("elems", ft.GetElems()), zap.Any("name", value), zap.Error(err))
 		}
+		return strconv.FormatUint(set.Value, 10)
 	default:
 	}
 	if err != nil {
 		log.Panic("parse enum / set name failed",
 			zap.Any("elems", ft.GetElems()), zap.Any("name", value), zap.Error(err))
 	}
-	var result string
-	switch v := value.(type) {
-	case int64:
-		result = strconv.FormatInt(v, 10)
-	case uint64:
-		result = strconv.FormatUint(v, 10)
-	case float32:
-		result = strconv.FormatFloat(float64(v), 'f', -1, 32)
-	case float64:
-		result = strconv.FormatFloat(v, 'f', -1, 64)
-	case string:
-		result = v
-	case []byte:
-		if mysql.HasBinaryFlag(ft.GetFlag()) {
-			result = base64.StdEncoding.EncodeToString(v)
-		} else {
-			result = string(v)
-		}
-	case types.VectorFloat32:
-		result = v.String()
-	default:
-		result = fmt.Sprintf("%v", v)
+	if mysql.HasBinaryFlag(ft.GetFlag()) {
+		val = base64.StdEncoding.EncodeToString([]byte(val))
 	}
-	return result
+	return val
+}
+
+func startTsFromMessage(msg *message) uint64 {
+	if msg.StartTs != 0 {
+		return msg.StartTs
+	}
+	return msg.CommitTs
 }
 
 func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowChecksum bool, db *sql.DB) *commonEvent.DMLEvent {
 	result := &commonEvent.DMLEvent{
+		StartTs:         startTsFromMessage(msg),
 		CommitTs:        msg.CommitTs,
 		PhysicalTableID: msg.TableID,
 		TableInfo:       tableInfo,
@@ -663,14 +668,15 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 }
 
 func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {
+	result := make(map[string]any, len(data))
 	for _, col := range columns {
 		raw, ok := data[col.Name.O]
 		if !ok {
 			continue
 		}
-		data[col.Name.O] = formatValue(raw, col.FieldType)
+		result[col.Name.O] = formatValue(raw, col.FieldType)
 	}
-	return data
+	return result
 }
 
 // formatValue formats the value according to the field type
@@ -684,14 +690,14 @@ func formatValue(value any, ft types.FieldType) any {
 	case mysql.TypeBit:
 		v, err := strconv.ParseUint(value.(string), 10, 64)
 		if err != nil {
-			log.Panic("invalid column value for bit", zap.Any("value", value), zap.Error(err))
+			log.Panic("invalid column value for bit", zap.String("value", util.RedactAny(value)), zap.Error(err))
 		}
 		value = types.NewBinaryLiteralFromUint(v, -1)
 	case mysql.TypeTimestamp:
 		v := value.(map[string]interface{})["value"]
 		value, err = types.ParseTime(types.DefaultStmtNoWarningContext, v.(string), ft.GetType(), ft.GetDecimal())
 		if err != nil {
-			log.Panic("invalid column value for time", zap.Any("value", value), zap.Error(err))
+			log.Panic("invalid column value for time", zap.String("value", util.RedactAny(value)), zap.Error(err))
 		}
 	case mysql.TypeEnum:
 		var v uint64
@@ -699,14 +705,14 @@ func formatValue(value any, ft types.FieldType) any {
 		case string:
 			v, err = strconv.ParseUint(val, 10, 64)
 			if err != nil {
-				log.Panic("invalid column value for enum", zap.Any("value", value), zap.Error(err))
+				log.Panic("invalid column value for enum", zap.String("value", util.RedactAny(value)), zap.Error(err))
 			}
 		case int64:
 			v = uint64(val)
 		}
 		value, err = types.ParseEnumValue(ft.GetElems(), v)
 		if err != nil {
-			log.Panic("invalid column value for enum", zap.Any("value", value), zap.Error(err))
+			log.Panic("invalid column value for enum", zap.String("value", util.RedactAny(value)), zap.Error(err))
 		}
 	case mysql.TypeSet:
 		var v uint64
@@ -714,14 +720,14 @@ func formatValue(value any, ft types.FieldType) any {
 		case string:
 			v, err = strconv.ParseUint(val, 10, 64)
 			if err != nil {
-				log.Panic("invalid column value for set", zap.Any("value", value), zap.Error(err))
+				log.Panic("invalid column value for set", zap.String("value", util.RedactAny(value)), zap.Error(err))
 			}
 		case int64:
 			v = uint64(val)
 		}
 		value, err = types.ParseSetValue(ft.GetElems(), v)
 		if err != nil {
-			log.Panic("invalid column value for set", zap.Any("value", value), zap.Error(err))
+			log.Panic("invalid column value for set", zap.String("value", util.RedactAny(value)), zap.Error(err))
 		}
 	case mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob,
 		mysql.TypeVarchar, mysql.TypeVarString, mysql.TypeString:
@@ -730,7 +736,7 @@ func formatValue(value any, ft types.FieldType) any {
 			if mysql.HasBinaryFlag(ft.GetFlag()) {
 				value, err = base64.StdEncoding.DecodeString(val)
 				if err != nil {
-					log.Panic("invalid column value for binary char", zap.Any("value", value), zap.Error(err))
+					log.Panic("invalid column value for binary char", zap.String("value", util.RedactAny(value)), zap.Error(err))
 				}
 			} else {
 				value = []byte(val)
@@ -747,7 +753,7 @@ func formatValue(value any, ft types.FieldType) any {
 				value, err = strconv.ParseInt(val, 10, 64)
 			}
 			if err != nil {
-				log.Panic("cannot parse int64 value from string", zap.Any("value", value), zap.Error(err))
+				log.Panic("cannot parse int64 value from string", zap.String("value", util.RedactAny(value)), zap.Error(err))
 			}
 		}
 	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong:
@@ -756,12 +762,12 @@ func formatValue(value any, ft types.FieldType) any {
 		case string:
 			v, err = strconv.ParseInt(val, 10, 64)
 			if err != nil {
-				log.Panic("cannot parse int64 value from string", zap.Any("value", value), zap.Error(err))
+				log.Panic("cannot parse int64 value from string", zap.String("value", util.RedactAny(value)), zap.Error(err))
 			}
 		case int64:
 			v = val
 		default:
-			log.Panic("invalid column value for int", zap.Any("value", value), zap.String("type", fmt.Sprintf("%T", value)))
+			log.Panic("invalid column value for int", zap.String("value", util.RedactAny(value)), zap.String("type", fmt.Sprintf("%T", value)))
 		}
 		if mysql.HasUnsignedFlag(ft.GetFlag()) {
 			value = uint64(v)
@@ -773,7 +779,7 @@ func formatValue(value any, ft types.FieldType) any {
 		case string:
 			value, err = strconv.ParseInt(val, 10, 64)
 			if err != nil {
-				log.Panic("cannot parse int64 value from string", zap.Any("value", value), zap.Error(err))
+				log.Panic("cannot parse int64 value from string", zap.String("value", util.RedactAny(value)), zap.Error(err))
 			}
 		}
 	case mysql.TypeFloat:
@@ -782,7 +788,7 @@ func formatValue(value any, ft types.FieldType) any {
 			var v float64
 			v, err = strconv.ParseFloat(val, 32)
 			if err != nil {
-				log.Panic("cannot parse float32 value from string", zap.Any("value", value), zap.Error(err))
+				log.Panic("cannot parse float32 value from string", zap.String("value", util.RedactAny(value)), zap.Error(err))
 			}
 			value = float32(v)
 		}
@@ -791,44 +797,44 @@ func formatValue(value any, ft types.FieldType) any {
 		case string:
 			value, err = strconv.ParseFloat(val, 64)
 			if err != nil {
-				log.Panic("cannot parse float64 value from string", zap.Any("value", value), zap.Error(err))
+				log.Panic("cannot parse float64 value from string", zap.String("value", util.RedactAny(value)), zap.Error(err))
 			}
 		}
 	case mysql.TypeJSON:
 		value, err = types.ParseBinaryJSONFromString(value.(string))
 		if err != nil {
-			log.Panic("invalid column value for json. Use zero json instead", zap.Any("value", value), zap.Error(err))
+			log.Panic("invalid column value for json. Use zero json instead", zap.String("value", util.RedactAny(value)), zap.Error(err))
 		}
 	case mysql.TypeNewDecimal:
 		result := new(types.MyDecimal)
 		err = result.FromString([]byte(value.(string)))
 		if err != nil {
-			log.Panic("invalid column value for decimal", zap.Any("value", value), zap.Error(err))
+			log.Panic("invalid column value for decimal", zap.String("value", util.RedactAny(value)), zap.Error(err))
 		}
 		// workaround the decimal `digitInt` field incorrect problem.
 		bin, err := result.ToBin(ft.GetFlen(), ft.GetDecimal())
 		if err != nil {
-			log.Panic("convert decimal to binary failed", zap.Any("value", value), zap.Error(err))
+			log.Panic("convert decimal to binary failed", zap.String("value", util.RedactAny(value)), zap.Error(err))
 		}
 		_, err = result.FromBin(bin, ft.GetFlen(), ft.GetDecimal())
 		if err != nil {
-			log.Panic("convert binary to decimal failed", zap.Any("value", value), zap.Error(err))
+			log.Panic("convert binary to decimal failed", zap.String("value", util.RedactAny(value)), zap.Error(err))
 		}
 		value = result
 	case mysql.TypeDuration:
 		value, _, err = types.ParseDuration(types.DefaultStmtNoWarningContext, value.(string), ft.GetDecimal())
 		if err != nil {
-			log.Panic("invalid column value for duration.", zap.Any("value", value))
+			log.Panic("invalid column value for duration.", zap.String("value", util.RedactAny(value)))
 		}
 	case mysql.TypeDate, mysql.TypeDatetime:
 		value, err = types.ParseTime(types.DefaultStmtNoWarningContext, value.(string), ft.GetType(), ft.GetDecimal())
 		if err != nil {
-			log.Panic("invalid column value for time.", zap.Any("value", value), zap.Error(err))
+			log.Panic("invalid column value for time.", zap.String("value", util.RedactAny(value)), zap.Error(err))
 		}
 	case mysql.TypeTiDBVectorFloat32:
 		value, err = types.ParseVectorFloat32(value.(string))
 		if err != nil {
-			log.Panic("cannot parse vector32 value from string.", zap.Any("value", value), zap.Error(err))
+			log.Panic("cannot parse vector32 value from string.", zap.String("value", util.RedactAny(value)), zap.Error(err))
 		}
 	default:
 	}

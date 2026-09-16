@@ -97,6 +97,15 @@ func updateMetricEventServiceSkipResolvedTsCount(mode int64) {
 	updateCounter(mode, metricEventServiceSkipResolvedTsCount, metricRedoEventServiceSkipResolvedTsCount)
 }
 
+// updateMetricEventServiceSendDMLTypeCount records the DML event types being sent.
+// insert/delete/update/updateUK
+func updateMetricEventServiceSendDMLTypeCount(mode int64, rawType string, updateUK bool) {
+	if rawType == "update" && updateUK {
+		rawType = "updateUK"
+	}
+	metrics.EventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(mode), rawType).Inc()
+}
+
 // dispatcherHeapItem wraps dispatcherStat to implement heap.Item interface.
 // The heap maintains the slowest dispatchers by checkpointTs.
 // The heap top is the fastest (largest checkpointTs) among the slowest ones.
@@ -328,7 +337,7 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 					time.Since(dispatcher.lastReceivedResolvedTsTime.Load())),
 			zap.Uint64("epoch", dispatcher.epoch),
 			zap.Uint64("seq", dispatcher.seq.Load()),
-			zap.Bool("isTaskScanning", dispatcher.isTaskScanning.Load()),
+			zap.Bool("isTaskScanning", dispatcher.isScanBusy()),
 		)
 	}
 }

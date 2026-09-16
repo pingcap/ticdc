@@ -29,9 +29,9 @@ function run_with_fast_create_table() {
 	esac
 	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
 	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
+	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" "$CUR/conf/changefeed.toml" ;;
+	storage) run_storage_consumer $WORK_DIR $SINK_URI "$CUR/conf/changefeed.toml" "" ;;
+	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config "$CUR/conf/changefeed.toml" ;;
 	esac
 
 	## to generate batch create ddl. In changefeed.toml, we filter test.t_1
