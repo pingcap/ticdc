@@ -65,17 +65,25 @@ func NewDMLSession(idleTimeout time.Duration) *dmlSession {
 //
 // The lock is held during fn to guarantee that the underlying sql.Conn is never
 // used concurrently by DML execution and background maintenance.
+// If admit rejects the write after connection acquisition, the connection is
+// released and the caller can wait for admission again without holding session
+// resources.
 func (s *dmlSession) withConn(
 	w *Writer,
 	writeTimeout time.Duration,
+	admit func() bool,
 	fn func(conn *sql.Conn) error,
-) error {
+) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	conn, err := s.getOrCreateLocked(w, writeTimeout)
 	if err != nil {
-		return err
+		return false, err
+	}
+	if !admit() {
+		s.closeLocked(w)
+		return false, nil
 	}
 	if err := fn(conn); err != nil {
 		// fn must best-effort clean up any explicit transaction state it started on conn
@@ -83,10 +91,10 @@ func (s *dmlSession) withConn(
 		// handle on error to avoid reusing a connection with uncertain state.
 		// Discard the session on error to avoid reusing a session with unknown txn state.
 		s.closeLocked(w)
-		return err
+		return true, err
 	}
 	s.lastActive = time.Now()
-	return nil
+	return true, nil
 }
 
 // CheckStats performs best-effort maintenance for the current session:

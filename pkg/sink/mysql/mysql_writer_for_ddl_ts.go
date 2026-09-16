@@ -512,6 +512,10 @@ func selectDDLTsQuery(tableIDs []int64, ticdcClusterID string, changefeedID stri
 }
 
 func (w *Writer) RemoveDDLTsItem() error {
+	if !w.grantWrite() {
+		return w.ctx.Err()
+	}
+
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
 		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, "select ddl ts table: begin Tx fail;"))

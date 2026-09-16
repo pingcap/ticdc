@@ -30,7 +30,7 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'api_v2 generate_column many_pk_or_uk multi_source table_route_conflict_detection'
+	'api_v2 generate_column many_pk_or_uk multi_source table_route_conflict_detection changefeed_tables_at_start_ts'
 	# G01
 	'ddl_for_split_tables_with_random_move_table'
 	# G02
@@ -58,7 +58,7 @@ mysql_groups=(
 	# G13
 	'tidb_mysql_test fail_over region_merge fail_over_ddl_mix_random_delay'
 	# G14
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix capture_write_lease'
 	# G15
 	'fail_over_ddl_mix_with_syncpoint'
 )

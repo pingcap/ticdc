@@ -28,6 +28,13 @@ import (
 	"go.uber.org/zap"
 )
 
+type stopChangefeedKind int
+
+const (
+	stopChangefeedKindCurrentPlacement stopChangefeedKind = iota
+	stopChangefeedKindStaleOwner
+)
+
 // StopChangefeedOperator is an operator to remove a maintainer from a node
 type StopChangefeedOperator struct {
 	keyspaceID        uint32
@@ -35,9 +42,11 @@ type StopChangefeedOperator struct {
 	nodeID            node.ID
 	changefeedRemoved bool
 	finished          atomic.Bool
+	canceled          atomic.Bool
 	coordinatorNodeID node.ID
 	backend           changefeed.Backend
 	maintainerEpoch   uint64
+	kind              stopChangefeedKind
 }
 
 func NewStopChangefeedOperator(
@@ -48,6 +57,7 @@ func NewStopChangefeedOperator(
 	backend changefeed.Backend,
 	removed bool,
 	maintainerEpoch uint64,
+	kind stopChangefeedKind,
 ) *StopChangefeedOperator {
 	return &StopChangefeedOperator{
 		keyspaceID:        keyspaceID,
@@ -57,6 +67,7 @@ func NewStopChangefeedOperator(
 		coordinatorNodeID: coordinatorNode,
 		backend:           backend,
 		maintainerEpoch:   maintainerEpoch,
+		kind:              kind,
 	}
 }
 
@@ -105,6 +116,7 @@ func (m *StopChangefeedOperator) IsFinished() bool {
 }
 
 func (m *StopChangefeedOperator) OnTaskRemoved() {
+	m.canceled.Store(true)
 	m.finished.Store(true)
 }
 
@@ -114,6 +126,13 @@ func (m *StopChangefeedOperator) Start() {
 }
 
 func (m *StopChangefeedOperator) PostFinish() {
+	// A stop operator can be replaced by a remove operator. In that case the
+	// replacement has already persisted ProgressRemoving, so the canceled stop
+	// operator must not reset it to ProgressNone.
+	if m.canceled.Load() {
+		return
+	}
+
 	if m.changefeedRemoved {
 		if err := m.backend.DeleteChangefeed(context.Background(), m.cfID); err != nil {
 			log.Warn("failed to delete changefeed",

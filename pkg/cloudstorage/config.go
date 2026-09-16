@@ -80,7 +80,7 @@ type Config struct {
 	FlushInterval            time.Duration
 	FileSize                 int
 	FileIndexWidth           int
-	DateSeparator            string
+	DateSeparator            config.DateSeparator
 	FileExpirationDays       int
 	FileCleanupCronSpec      string
 	EnablePartitionSeparator bool

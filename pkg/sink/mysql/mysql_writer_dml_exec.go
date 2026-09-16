@@ -54,42 +54,51 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 				log.Info("Slow Query", zap.Any("sql", dmls.LogWithoutValues()), zap.Any("writerID", w.id))
 			}
 		}()
-		err := w.dmlSession.withConn(w, writeTimeout, func(conn *sql.Conn) error {
-			if fallbackToSeqWay || !w.cfg.MultiStmtEnable {
-				// use sequence way to execute the dmls
-				tx, err := conn.BeginTx(w.ctx, nil)
-				if err != nil {
-					return errors.Trace(err)
+		for {
+			if !w.grantWrite() {
+				return 0, 0, errors.Trace(w.ctx.Err())
+			}
+			admitted, err := w.dmlSession.withConn(w, writeTimeout, func() bool {
+				return w.writeGate == nil || w.writeGate.IsWritable()
+			}, func(conn *sql.Conn) error {
+				if fallbackToSeqWay || !w.cfg.MultiStmtEnable {
+					// use sequence way to execute the dmls
+					tx, err := conn.BeginTx(w.ctx, nil)
+					if err != nil {
+						return errors.Trace(err)
+					}
+
+					err = w.sequenceExecute(dmls, tx, writeTimeout)
+					if err != nil {
+						return err
+					}
+
+					if err = tx.Commit(); err != nil {
+						return err
+					}
+
+					log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount), zap.Int("writerID", w.id))
+					return nil
 				}
 
-				err = w.sequenceExecute(dmls, tx, writeTimeout)
-				if err != nil {
+				// use multi stmt way to execute the dmls
+				if err := w.multiStmtExecute(conn, dmls, writeTimeout); err != nil {
+					log.Warn("multiStmtExecute failed, fallback to sequence way",
+						zap.Error(err),
+						zap.Any("sql", dmls.LogWithoutValues()),
+						zap.Int("writerID", w.id))
+					fallbackToSeqWay = true
 					return err
 				}
-
-				if err = tx.Commit(); err != nil {
-					return err
-				}
-
-				log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount), zap.Int("writerID", w.id))
 				return nil
+			})
+			if err != nil {
+				return 0, 0, err
 			}
-
-			// use multi stmt way to execute the dmls
-			if err := w.multiStmtExecute(conn, dmls, writeTimeout); err != nil {
-				log.Warn("multiStmtExecute failed, fallback to sequence way",
-					zap.Error(err),
-					zap.Any("sql", dmls.LogWithoutValues()),
-					zap.Int("writerID", w.id))
-				fallbackToSeqWay = true
-				return err
+			if admitted {
+				return dmls.rowCount, dmls.approximateSize, nil
 			}
-			return nil
-		})
-		if err != nil {
-			return 0, 0, err
 		}
-		return dmls.rowCount, dmls.approximateSize, nil
 	}
 	return retry.Do(w.ctx, func() error {
 		failpoint.Inject("MySQLSinkTxnRandomError", func() {

@@ -31,6 +31,7 @@ import (
 // 4. Verify that the span is marked as absent, and split is not executed
 func TestSplitOperator_OriginNodeRemovedBeforeStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
 
 	// Define split spans
 	splitSpans := []*heartbeatpb.TableSpan{
@@ -82,6 +83,7 @@ func TestSplitOperator_OriginNodeRemovedBeforeStopped(t *testing.T) {
 // 4. Verify that the span is still marked as absent, and split is not executed
 func TestSplitOperator_OriginNodeRemovedAfterStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
 
 	// Define split spans
 	splitSpans := []*heartbeatpb.TableSpan{

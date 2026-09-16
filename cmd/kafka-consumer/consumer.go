@@ -151,7 +151,10 @@ func (c *consumer) readMessage(ctx context.Context) error {
 			log.Error("read message failed, just continue to retry", zap.Error(err))
 			continue
 		}
-		needCommit := c.writer.WriteMessage(ctx, msg)
+		needCommit, err := c.writer.WriteMessage(ctx, msg)
+		if err != nil {
+			return err
+		}
 		if !needCommit {
 			continue
 		}
@@ -169,7 +172,13 @@ func (c *consumer) readMessage(ctx context.Context) error {
 }
 
 // Run the consumer, read data and write to the downstream target.
-func (c *consumer) Run(ctx context.Context) error {
+func (c *consumer) Run(ctx context.Context) (err error) {
+	defer func() {
+		if cleanupErr := c.writer.cleanupEventsGroups(); err == nil && cleanupErr != nil {
+			err = cleanupErr
+		}
+	}()
+
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return c.writer.run(ctx)

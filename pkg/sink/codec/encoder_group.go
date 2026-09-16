@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/prometheus/client_golang/prometheus"
@@ -66,10 +67,10 @@ type encoderGroup struct {
 
 // NewEncoderGroup creates a new EncoderGroup instance
 func NewEncoderGroup(
-	ctx context.Context,
 	cfg *config.SinkConfig,
 	encoderConfig *common.Config,
 	claimCheck *claimcheck.ClaimCheck,
+	schemaM schemamanager.SchemaManager,
 	changefeedID commonType.ChangeFeedID,
 ) (*encoderGroup, error) {
 	concurrency := util.GetOrZero(cfg.EncoderConcurrency)
@@ -83,7 +84,7 @@ func NewEncoderGroup(
 	var err error
 	for i := 0; i < concurrency; i++ {
 		inputCh[i] = make(chan *future, defaultInputChanSize)
-		rowEventEncoders[i], err = NewEventEncoder(ctx, encoderConfig, claimCheck)
+		rowEventEncoders[i], err = NewEventEncoder(encoderConfig, claimCheck, schemaM)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)
@@ -93,7 +94,7 @@ func NewEncoderGroup(
 
 	var bw *bootstrapWorker
 	if cfg.ShouldSendBootstrapMsg() {
-		encoder, err := NewEventEncoder(ctx, encoderConfig, claimCheck)
+		encoder, err := NewEventEncoder(encoderConfig, claimCheck, schemaM)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)

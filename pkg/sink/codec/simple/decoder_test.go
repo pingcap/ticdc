@@ -25,12 +25,15 @@ import (
 
 func TestCachedDMLReturnsMessage(t *testing.T) {
 	const (
-		schema        = "test"
-		table         = "t"
-		tableID       = int64(1)
-		schemaVersion = uint64(100)
-		commitTs      = uint64(90)
+		schema          = "test"
+		table           = "t"
+		logicalTableID  = int64(1)
+		physicalTableID = int64(2)
+		schemaVersion   = uint64(100)
+		commitTs        = uint64(90)
 	)
+	tableIDAllocator.Clean()
+	t.Cleanup(tableIDAllocator.Clean)
 
 	decoder := &Decoder{
 		config:         common.NewConfig(config.ProtocolSimple),
@@ -41,7 +44,7 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 		Version:       defaultVersion,
 		Schema:        schema,
 		Table:         table,
-		TableID:       tableID,
+		TableID:       physicalTableID,
 		Type:          DMLTypeInsert,
 		CommitTs:      commitTs,
 		SchemaVersion: schemaVersion,
@@ -58,7 +61,7 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 		TableSchema: &TableSchema{
 			Schema:  schema,
 			Table:   table,
-			TableID: tableID,
+			TableID: logicalTableID,
 			Version: schemaVersion,
 			Columns: []*columnSchema{
 				{
@@ -81,11 +84,12 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 	require.Zero(t, decoder.cachedMessages.Len())
 
 	dmlMessage := cachedMessages[0]
-	require.Equal(t, tableID, dmlMessage.TableID)
+	require.Equal(t, physicalTableID, dmlMessage.TableID)
 	require.Equal(t, schema, dmlMessage.Schema)
 	require.Equal(t, table, dmlMessage.Table)
 	require.Equal(t, commitTs, dmlMessage.GetCommitTs())
 	require.Equal(t, commonType.RowTypeInsert, dmlMessage.RowType)
+	require.ElementsMatch(t, []int64{logicalTableID, physicalTableID}, decoder.GetTableIDs(schema, table))
 
 	decoder.msg = &message{
 		Version:  defaultVersion,
@@ -94,7 +98,7 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 	}
 	dmlEvent := dmlMessage.ToDMLEvent()
 	require.NotNil(t, dmlEvent)
-	require.Equal(t, tableID, dmlEvent.GetTableID())
+	require.Equal(t, physicalTableID, dmlEvent.GetTableID())
 	require.Equal(t, commitTs, dmlEvent.GetCommitTs())
 	require.Equal(t, schema, dmlEvent.TableInfo.GetSchemaName())
 	require.Equal(t, table, dmlEvent.TableInfo.GetTableName())

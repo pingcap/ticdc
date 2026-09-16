@@ -90,3 +90,42 @@ func TestDebeziumIncludeStartTsConfig(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, errors.ErrCodecInvalidConfig.RFCCode(), errCode)
 }
+
+func TestSimpleIncludeStartTsConfig(t *testing.T) {
+	cfg := NewConfig(config.ProtocolSimple)
+	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=simple&simple-include-start-ts=true")
+	require.NoError(t, err)
+	require.NoError(t, cfg.Apply(sinkURI, config.GetDefaultReplicaConfig().Sink))
+	require.True(t, cfg.SimpleIncludeStartTs)
+	require.NoError(t, cfg.Validate())
+
+	on := true
+	cfg2 := NewConfig(config.ProtocolSimple)
+	sinkConfig := config.GetDefaultReplicaConfig().Sink
+	sinkConfig.Simple = &config.SimpleConfig{IncludeStartTs: &on}
+	sinkURI2, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=simple")
+	require.NoError(t, err)
+	require.NoError(t, cfg2.Apply(sinkURI2, sinkConfig))
+	require.True(t, cfg2.SimpleIncludeStartTs)
+
+	cfg3 := NewConfig(config.ProtocolSimple)
+	sinkConfig3 := config.GetDefaultReplicaConfig().Sink
+	sinkConfig3.Simple = &config.SimpleConfig{IncludeStartTs: &on}
+	sinkURI3, err := url.Parse("kafka://127.0.0.1:9092/topic?protocol=simple&simple-include-start-ts=false")
+	require.NoError(t, err)
+	require.NoError(t, cfg3.Apply(sinkURI3, sinkConfig3))
+	require.False(t, cfg3.SimpleIncludeStartTs)
+
+	cfg4 := NewConfig(config.ProtocolSimple)
+	cfg4.SimpleIncludeStartTs = true
+	cfg4.EncodingFormat = EncodingFormatAvro
+	errCode, ok := errors.RFCCode(cfg4.Validate())
+	require.True(t, ok)
+	require.Equal(t, errors.ErrCodecInvalidConfig.RFCCode(), errCode)
+
+	cfg5 := NewConfig(config.ProtocolDebezium)
+	cfg5.SimpleIncludeStartTs = true
+	errCode, ok = errors.RFCCode(cfg5.Validate())
+	require.True(t, ok)
+	require.Equal(t, errors.ErrCodecInvalidConfig.RFCCode(), errCode)
+}

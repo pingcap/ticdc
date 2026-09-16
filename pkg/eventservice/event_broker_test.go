@@ -760,7 +760,7 @@ func TestScanRangeCappedByScanWindow(t *testing.T) {
 	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), result.request.Range.CommitTsEnd)
 }
 
-func TestGetScanTaskDataRangeEmptyAfterCappingDoesNotResetScanRange(t *testing.T) {
+func TestGetScanTaskRequestKeepsTxnCursorInsideShrunkWindow(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
 	broker.close()
@@ -785,8 +785,12 @@ func TestGetScanTaskDataRangeEmptyAfterCappingDoesNotResetScanRange(t *testing.T
 	changefeedStatus.minSentTs.Store(baseTs)
 	changefeedStatus.scanInterval.Store(int64(defaultScanInterval))
 
-	needScan, _ := broker.getScanTaskRequest(disp)
-	require.False(t, needScan)
+	needScan, request := broker.getScanTaskRequest(disp)
+	require.True(t, needScan)
+	require.Equal(t, commitStart, request.Range.CommitTsStart)
+	require.Equal(t, commitStart, request.Range.CommitTsEnd)
+	require.Equal(t, lastStartTs, request.Cursor.TxnStartTs)
+	require.Empty(t, request.Cursor.Position)
 	require.Equal(t, commitStart, disp.loadScanProgress().txnCommitTs)
 	require.Equal(t, lastStartTs, disp.loadScanProgress().txnStartTs)
 }

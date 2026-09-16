@@ -104,6 +104,7 @@ func newDrainTestController(t *testing.T) (*Controller, *drain.Controller, node.
 				)
 			},
 		),
+		writeLease: newCaptureWriteLeaseController(1, selfNode.ID),
 	}
 	return c, drainController, target
 }

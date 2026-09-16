@@ -18,6 +18,7 @@ import (
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/uuid"
+	"github.com/pingcap/ticdc/pkg/writelease"
 )
 
 var (
@@ -34,6 +35,7 @@ type RedoEvent interface {
 // RedoDMLWriter writes row redo events, all operations are thread-safe.
 type RedoDMLWriter interface {
 	AddDMLEvents(ctx context.Context, events ...*commonEvent.RedoRowEvent) error
+	SetWriteGate(gate *writelease.Gate)
 	Run(ctx context.Context) error
 	Close() error
 }
@@ -41,6 +43,7 @@ type RedoDMLWriter interface {
 // RedoDDLWriter writes DDL redo events, all operations are thread-safe.
 type RedoDDLWriter interface {
 	WriteDDLEvent(ctx context.Context, event *commonEvent.DDLEvent) error
+	SetWriteGate(gate *writelease.Gate)
 	Close() error
 	SetTableSchemaStore(*commonEvent.TableSchemaStore)
 }

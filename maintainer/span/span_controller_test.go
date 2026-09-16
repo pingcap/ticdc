@@ -592,6 +592,32 @@ func TestReplaceReplicaSet(t *testing.T) {
 	require.Equal(t, 2, controller.GetTaskSizeBySchemaID(1))
 }
 
+func TestMarkSpanAbsentIgnoresRemovedSpan(t *testing.T) {
+	controller := newControllerWithCheckerForTest(t)
+	replicaSpanID := common.NewDispatcherID()
+	replicaSpan := replica.NewWorkingSpanReplication(controller.changefeedID, replicaSpanID,
+		1,
+		testutil.GetTableSpanByID(3), &heartbeatpb.TableSpanStatus{
+			ID:              replicaSpanID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	controller.AddReplicatingSpan(replicaSpan)
+
+	controller.ReplaceReplicaSet(
+		[]*replica.SpanReplication{replicaSpan},
+		[]*heartbeatpb.TableSpan{testutil.GetTableSpanByID(3), testutil.GetTableSpanByID(4)},
+		5,
+		[]node.ID{},
+	)
+	require.False(t, controller.MarkSpanAbsent(replicaSpan))
+
+	require.Nil(t, controller.GetTaskByID(replicaSpan.ID))
+	require.NotContains(t, controller.GetAbsentForTest(3), replicaSpan)
+	require.NotContains(t, controller.nonReplicatingCheckpointTs.checkpointTsBySpanID, replicaSpan.ID)
+	require.Equal(t, 2, controller.GetAbsentSize())
+}
+
 // TestMarkSpanAbsent tests the MarkSpanAbsent functionality
 func TestMarkSpanAbsent(t *testing.T) {
 	controller := newControllerWithCheckerForTest(t)
@@ -605,8 +631,32 @@ func TestMarkSpanAbsent(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1", false)
 	controller.AddReplicatingSpan(replicaSpan)
-	controller.MarkSpanAbsent(replicaSpan)
+	require.True(t, controller.MarkSpanAbsent(replicaSpan))
 	require.Equal(t, 1, controller.GetAbsentSize())
+	require.Equal(t, "", replicaSpan.GetNodeID().String())
+}
+
+func TestMarkSpanAbsentIfCurrentRejectsOldOwner(t *testing.T) {
+	controller := newControllerWithCheckerForTest(t)
+	replicaSpanID := common.NewDispatcherID()
+	replicaSpan := replica.NewWorkingSpanReplication(controller.changefeedID, replicaSpanID,
+		1,
+		testutil.GetTableSpanByID(3), &heartbeatpb.TableSpanStatus{
+			ID:              replicaSpanID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	controller.AddReplicatingSpan(replicaSpan)
+	controller.BindSpanToNode("node1", "node2", replicaSpan)
+
+	require.False(t, controller.MarkSpanAbsentIfCurrent(replicaSpan, "node1"))
+	require.Equal(t, 0, controller.GetAbsentSize())
+	require.Equal(t, 1, controller.GetSchedulingSize())
+	require.Equal(t, "node2", replicaSpan.GetNodeID().String())
+
+	require.True(t, controller.MarkSpanAbsentIfCurrent(replicaSpan, "node2"))
+	require.Equal(t, 1, controller.GetAbsentSize())
+	require.Equal(t, 0, controller.GetSchedulingSize())
 	require.Equal(t, "", replicaSpan.GetNodeID().String())
 }
 

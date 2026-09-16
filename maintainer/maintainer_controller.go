@@ -282,22 +282,21 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 		// rescheduling, so we mark the span absent to let the scheduler recreate it.
 		//
 		// Safety against message reordering/resend:
-		// - We only reach here when stm != nil and stm.GetNodeID() == from (checked above). If the span was already
-		//   rebound to a different node, we skip it, so late statuses from the old node won't trigger rescheduling.
-		// - MarkSpanAbsent is idempotent and only affects the scheduler state, so even if we get duplicate terminal
-		//   statuses, the worst case is an extra no-op absent mark.
+		// MarkSpanAbsentIfCurrent atomically verifies that stm is still the current desired task and is still bound
+		// to the reporting node. A concurrent split, merge, move, or DDL removal therefore makes this a no-op.
 		if status.ComponentStatus == heartbeatpb.ComponentState_Stopped ||
 			status.ComponentStatus == heartbeatpb.ComponentState_Removed {
 			if op := operatorController.GetOperator(dispatcherID); op == nil {
 				if c.removeTerminalSpanCoveredByMergedSpan(spanController, stm) {
 					continue
 				}
-				log.Warn("dispatcher becomes non-working without operator, mark span absent for rescheduling",
-					zap.String("changefeed", c.changefeedID.Name()),
-					zap.String("from", from.String()),
-					zap.String("dispatcherID", dispatcherID.String()),
-					zap.Any("status", status))
-				spanController.MarkSpanAbsent(stm)
+				if spanController.MarkSpanAbsentIfCurrent(stm, from) {
+					log.Warn("dispatcher becomes non-working without operator, mark span absent for rescheduling",
+						zap.String("changefeed", c.changefeedID.Name()),
+						zap.String("from", from.String()),
+						zap.String("dispatcherID", dispatcherID.String()),
+						zap.Any("status", status))
+				}
 			}
 		}
 	}

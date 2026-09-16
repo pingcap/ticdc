@@ -25528,7 +25528,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Redo bgUpdateLog worker busy ratio",
+          "description": "Busy ratio of redo DML file worker and DDL writer",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -25572,9 +25572,9 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_redo_worker_busy_ratio{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])*100) by (changefeed,instance)",
+              "expr": "sum(rate(ticdc_redo_worker_busy_ratio{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])*100) by (keyspace_name,changefeed,type,instance)",
               "interval": "",
-              "legendFormat": "{{changefeed}}-{{instance}}",
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{type}}-{{instance}}",
               "queryType": "randomWalk",
               "refId": "A"
             }

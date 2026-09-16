@@ -21,13 +21,17 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
+	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/maintainer"
 	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server"
@@ -39,6 +43,64 @@ import (
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 )
+
+func TestDeleteMissingChangefeedRequiresAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	cfg.Security.ClientAllowedUser = []string{"alice"}
+	config.StoreGlobalServerConfig(cfg)
+
+	ctrl := gomock.NewController(t)
+	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient.EXPECT().GetEtcdClient().Return(nil)
+
+	coordinator := &deleteMissingCoordinator{}
+	handler := &OpenAPIV2{server: &deleteMissingServer{
+		coordinator: coordinator,
+		etcdClient:  etcdClient,
+	}}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodDelete,
+		"/api/v2/changefeeds/missing?keyspace=test",
+		nil,
+	)
+	c.Params = gin.Params{{Key: api.APIOpVarChangefeedID, Value: "missing"}}
+
+	handler.DeleteChangefeed(c)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.False(t, coordinator.removeCalled)
+}
+
+func TestLoadKeyspaceInContext(t *testing.T) {
+	if !kerneltype.IsNextGen() {
+		t.Skip("keyspace authentication context is only needed in next-gen")
+	}
+
+	ctrl := gomock.NewController(t)
+	keyspaceManager := keyspace.NewMockManager(ctrl)
+	keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), "test").Return(&keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 1},
+		Name:     "test",
+	}, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodDelete, "/api/v2/changefeeds/missing?keyspace=test", nil)
+
+	loadKeyspaceInContext(c, keyspaceManager)
+
+	require.Equal(t, uint32(1), middleware.GetKeyspaceFromContext(c).GetId())
+}
 
 // TestValidateResumeChangefeedState covers the API-side guard that runs before
 // resume GC safepoint/barrier setup. Running states must fail fast, while states
@@ -178,6 +240,44 @@ func (c *resumeNormalCoordinator) DrainNode(ctx context.Context, target node.ID)
 
 func (c *resumeNormalCoordinator) Initialized() bool { return true }
 
+type deleteMissingServer struct {
+	server.Server
+	coordinator server.Coordinator
+	etcdClient  etcd.CDCEtcdClient
+}
+
+func (s *deleteMissingServer) GetCoordinator() (server.Coordinator, error) {
+	return s.coordinator, nil
+}
+
+func (s *deleteMissingServer) GetEtcdClient() etcd.CDCEtcdClient {
+	return s.etcdClient
+}
+
+type deleteMissingCoordinator struct {
+	server.Coordinator
+	removeCalled bool
+}
+
+func (c *deleteMissingCoordinator) Initialized() bool {
+	return true
+}
+
+func (c *deleteMissingCoordinator) GetChangefeed(
+	_ context.Context,
+	changefeedDisplayName common.ChangeFeedDisplayName,
+) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error) {
+	return nil, nil, errors.ErrChangeFeedNotExists.GenWithStackByArgs(changefeedDisplayName.String())
+}
+
+func (c *deleteMissingCoordinator) RemoveChangefeed(
+	_ context.Context,
+	_ common.ChangeFeedID,
+) (uint64, error) {
+	c.removeCalled = true
+	return 0, nil
+}
+
 // TestMaskSinkURIForError verifies that error messages mask sensitive sink URI
 // fields. It checks both a valid URI with secret query parameters and an invalid
 // URI parse error that previously exposed raw credentials.
@@ -185,7 +285,7 @@ func TestMaskSinkURIForError(t *testing.T) {
 	sinkURI := "kafka://127.0.0.1:9092/topic?protocol=canal-json" +
 		"&sasl-user=ticdc&sasl-password=verysecure&secret-access-key=rawsecret"
 
-	maskedURI := maskSinkURIForError(sinkURI)
+	maskedURI := util.MaskSensitiveDataInURIForError(sinkURI)
 	require.NotContains(t, maskedURI, "verysecure")
 	require.NotContains(t, maskedURI, "rawsecret")
 	require.Contains(t, maskedURI, "sasl-password=xxxxx")
@@ -193,13 +293,81 @@ func TestMaskSinkURIForError(t *testing.T) {
 	require.Contains(t, maskedURI, "sasl-user=ticdc")
 
 	invalidURI := "mysql://root:verysecure@127.0.0.1/%zz"
-	require.Equal(t, "<invalid uri>", maskSinkURIForError(invalidURI))
+	require.Equal(t, "<invalid uri>", util.MaskSensitiveDataInURIForError(invalidURI))
 
 	err := genSinkURIInvalidError(invalidURI, mustParseURLError(t, invalidURI))
 	require.NotContains(t, err.Error(), "verysecure")
 	require.Contains(t, err.Error(), "<invalid uri>")
 	require.Contains(t, err.Error(), `parse "<invalid uri>"`)
 	require.Contains(t, err.Error(), "invalid URL escape")
+}
+
+func TestCfInfoToAPIModelMasksKafkaCredentials(t *testing.T) {
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.SchemaRegistry = util.AddressOf(
+		"https://registry-user:registry-password-sentinel@registry.example.com?access-key=registry-access-sentinel")
+	replicaConfig.Sink.KafkaConfig = &config.KafkaConfig{
+		SASLUser:              util.AddressOf("ticdc-user"),
+		SASLPassword:          util.AddressOf("plain-password-sentinel"),
+		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
+		SASLOAuthClientID:     util.AddressOf("oauth-client-id"),
+		SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
+		SASLOAuthTokenURL: util.AddressOf(
+			"https://oauth.example.com/token?client_secret=token-url-secret-sentinel&audience=ticdc"),
+		Key: util.AddressOf("private-key-sentinel"),
+		LargeMessageHandle: &config.LargeMessageHandleConfig{
+			ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel",
+		},
+		GlueSchemaRegistryConfig: &config.GlueSchemaRegistryConfig{
+			AccessKey:       "glue-access-sentinel",
+			SecretAccessKey: "glue-secret-sentinel",
+			Token:           "glue-token-sentinel",
+		},
+	}
+	info := &config.ChangeFeedInfo{
+		ChangefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		SinkURI: "kafka://sink-user:sink-password-sentinel@127.0.0.1:9092/topic" +
+			"?protocol=canal-json&sasl-password=uri-sasl-password-sentinel&secret-access-key=uri-secret-sentinel",
+		Config: replicaConfig,
+	}
+	status := &config.ChangeFeedStatus{CheckpointTs: 123}
+
+	apiInfo := CfInfoToAPIModel(info, status, nil)
+	response, err := apiInfo.Marshal()
+	require.NoError(t, err)
+
+	for _, secret := range []string{
+		"sink-password-sentinel",
+		"uri-sasl-password-sentinel",
+		"uri-secret-sentinel",
+		"registry-password-sentinel",
+		"registry-access-sentinel",
+		"plain-password-sentinel",
+		"gssapi-password-sentinel",
+		"oauth-secret-sentinel",
+		"token-url-secret-sentinel",
+		"private-key-sentinel",
+		"claim-check-secret-sentinel",
+		"glue-access-sentinel",
+		"glue-secret-sentinel",
+		"glue-token-sentinel",
+	} {
+		require.NotContains(t, response, secret)
+	}
+	require.Contains(t, apiInfo.SinkURI, "sink-user:xxxxx@")
+	require.Contains(t, apiInfo.SinkURI, "sasl-password=xxxxx")
+	require.Contains(t, apiInfo.SinkURI, "secret-access-key=xxxxx")
+	require.Equal(t, "******", *apiInfo.Config.Sink.KafkaConfig.SASLPassword)
+	require.Equal(t, "******", *apiInfo.Config.Sink.KafkaConfig.SASLGssAPIPassword)
+	require.Equal(t, "******", *apiInfo.Config.Sink.KafkaConfig.SASLOAuthClientSecret)
+	require.Equal(t, "******", *apiInfo.Config.Sink.KafkaConfig.Key)
+	require.Equal(t, "ticdc-user", *apiInfo.Config.Sink.KafkaConfig.SASLUser)
+	require.Equal(t, "oauth-client-id", *apiInfo.Config.Sink.KafkaConfig.SASLOAuthClientID)
+
+	// Building an API response must not modify the in-memory changefeed config.
+	require.Equal(t, "plain-password-sentinel", *info.Config.Sink.KafkaConfig.SASLPassword)
+	require.Equal(t, "oauth-secret-sentinel", *info.Config.Sink.KafkaConfig.SASLOAuthClientSecret)
+	require.Contains(t, info.SinkURI, "sink-password-sentinel")
 }
 
 func mustParseURLError(t *testing.T, rawURL string) error {
@@ -282,6 +450,50 @@ func TestVerifyTablesForSinkValidatesStorageColumnSelectors(t *testing.T) {
 
 	replicaCfg.Sink.ColumnSelectors[0].Columns = []string{"id", "name"}
 	require.NoError(t, verifyTablesForSink(replicaCfg, config.FileScheme, "", config.ProtocolCanalJSON, tableInfos))
+}
+
+func TestVerifyTablesForSinkCaseSensitive(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		caseSensitive *bool
+	}{
+		{name: "unset"},
+		{name: "insensitive", caseSensitive: util.AddressOf(false)},
+		{name: "sensitive", caseSensitive: util.AddressOf(true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, scheme := range []string{config.FileScheme, config.KafkaScheme, config.PulsarScheme} {
+				t.Run(scheme, func(t *testing.T) {
+					cfg := config.GetDefaultReplicaConfig()
+					cfg.CaseSensitive = tc.caseSensitive
+					cfg.Sink.ColumnSelectors = []*config.ColumnSelector{{
+						Matcher: []string{"Test.*"}, Columns: []string{"name"},
+					}}
+					// Exercise the CLI/API conversion before checking the effective matcher.
+					cfg = ToAPIReplicaConfig(cfg).ToInternalReplicaConfig()
+					tables := []*common.TableInfo{newTableInfoWithPrimaryKeyForTest()}
+					err := verifyTablesForSink(cfg, scheme, "default-topic", config.ProtocolCanalJSON, tables)
+					if util.GetOrZero(tc.caseSensitive) {
+						require.NoError(t, err)
+					} else {
+						require.True(t, errors.ErrColumnSelectorFailed.Equal(err), "%v", err)
+					}
+					if config.IsMQScheme(scheme) {
+						cfg.Sink.ColumnSelectors = nil
+						cfg.Sink.DispatchRules = []*config.DispatchRule{{
+							Matcher: []string{"Test.*"}, PartitionRule: "index-value", IndexName: "missing_index",
+						}}
+						err = verifyTablesForSink(cfg, scheme, "default-topic", config.ProtocolCanalJSON, tables)
+						if util.GetOrZero(tc.caseSensitive) {
+							require.NoError(t, err)
+						} else {
+							require.True(t, errors.ErrDispatcherFailed.Equal(err), "%v", err)
+						}
+					}
+				})
+			}
+		})
+	}
 }
 
 func newTableInfoWithPrimaryKeyForTest() *common.TableInfo {

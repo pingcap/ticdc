@@ -73,7 +73,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		},
 		EncoderConcurrency:               util.AddressOf(DefaultEncoderGroupConcurrency),
 		Terminator:                       util.AddressOf(CRLF),
-		DateSeparator:                    util.AddressOf(DateSeparatorDay.String()),
+		DateSeparator:                    util.AddressOf(DateSeparatorDay),
 		EnablePartitionSeparator:         util.AddressOf(true),
 		OnlyOutputUpdatedColumns:         util.AddressOf(false),
 		DeleteOnlyOutputHandleKeyColumns: util.AddressOf(false),
@@ -98,6 +98,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		Storage:               util.AddressOf(""),
 		UseFileBackend:        util.AddressOf(false),
 		Compression:           util.AddressOf(""),
+		SpoolDiskQuota:        util.AddressOf(redo.DefaultSpoolDiskQuota),
 		MemoryUsage: &ConsistentMemoryUsage{
 			MemoryQuotaPercentage: 50,
 		},

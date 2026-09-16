@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -194,6 +195,25 @@ func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
 	require.False(t, util.GetOrZero(config.Scheduler.EnableSplittableCheck))
 }
 
+func TestReplicaConfigClonePreservesKafkaOAuthCA(t *testing.T) {
+	t.Parallel()
+
+	cfg := GetDefaultReplicaConfig()
+	cfg.Sink.KafkaConfig = &KafkaConfig{
+		SASLOAuthCA: util.AddressOf("/etc/ssl/oauth-ca.pem"),
+	}
+
+	cloned := cfg.Clone()
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(cloned.Sink.KafkaConfig.SASLOAuthCA))
+	require.NotSame(t, cfg.Sink.KafkaConfig.SASLOAuthCA, cloned.Sink.KafkaConfig.SASLOAuthCA)
+	encoded, err := cfg.Marshal()
+	require.NoError(t, err)
+	require.Contains(t, encoded, `"sasl-oauth-ca":"/etc/ssl/oauth-ca.pem"`)
+
+	*cloned.Sink.KafkaConfig.SASLOAuthCA = "/etc/ssl/other-ca.pem"
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(cfg.Sink.KafkaConfig.SASLOAuthCA))
+}
+
 func TestReplicaConfigPerformanceMode(t *testing.T) {
 	sinkURI, err := url.Parse("mysql://localhost:3306/test")
 	require.NoError(t, err)
@@ -245,6 +265,30 @@ func TestReplicaConfigValidateBatchConfig(t *testing.T) {
 func TestReplicaConfig_EnableRedoIOCheck_DefaultValue(t *testing.T) {
 	config := GetDefaultReplicaConfig()
 	require.True(t, util.GetOrZero(config.EnableRedoIOCheck))
+}
+
+func TestConsistentConfigSpoolDiskQuota(t *testing.T) {
+	newConfig := func() *ConsistentConfig {
+		cfg := GetDefaultReplicaConfig().Consistent
+		cfg.Level = util.AddressOf(string(redo.ConsistentLevelEventual))
+		cfg.Storage = util.AddressOf("blackhole://")
+		return cfg
+	}
+
+	cfg := newConfig()
+	cfg.SpoolDiskQuota = nil
+	require.NoError(t, cfg.validateAndAdjust(false))
+	require.Equal(t, redo.DefaultSpoolDiskQuota, util.GetOrZero(cfg.SpoolDiskQuota))
+
+	for _, quota := range []int64{0, -1} {
+		cfg = newConfig()
+		cfg.SpoolDiskQuota = util.AddressOf(quota)
+		require.ErrorContains(t, cfg.validateAndAdjust(false), "consistent.spool-disk-quota")
+	}
+
+	cfg = newConfig()
+	cfg.SpoolDiskQuota = util.AddressOf(int64(1024))
+	require.NoError(t, cfg.validateAndAdjust(false))
 }
 
 func TestReplicaConfig_EnableRedoIOCheck_DefaultEnabled(t *testing.T) {

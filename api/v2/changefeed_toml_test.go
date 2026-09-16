@@ -97,6 +97,9 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 				DebeziumConfig: &DebeziumConfig{
 					IncludeStartTs: util.AddressOf(true),
 				},
+				SimpleConfig: &SimpleConfig{
+					IncludeStartTs: util.AddressOf(true),
+				},
 			},
 			SyncPointInterval: &JSONDuration{duration: 10 * time.Minute},
 			Integrity: &IntegrityConfig{
@@ -120,7 +123,11 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 	require.Contains(t, out, `sink-uri = "blackhole://"`)
 	require.Contains(t, out, "start-ts")
 	require.Contains(t, out, "[config.sink.debezium]")
-	require.Contains(t, out, "include-start-ts = true")
+	require.Contains(t, out, "[config.sink.simple]")
+	// Assert include-start-ts under each protocol table so a Debezium-only
+	// serialization cannot satisfy the Simple round-trip.
+	require.Regexp(t, `(?s)\[config\.sink\.debezium\][^\[]*include-start-ts = true`, out)
+	require.Regexp(t, `(?s)\[config\.sink\.simple\][^\[]*include-start-ts = true`, out)
 	require.NotContains(t, out, "gid") // GID is omitted from TOML (toml:"-")
 
 	// The [config] section must decode into the internal ReplicaConfig used by
@@ -139,6 +146,7 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 	require.Equal(t, "correctness", util.GetOrZero(wrapper.Config.Integrity.IntegrityCheckLevel))
 	require.Equal(t, "eventual", util.GetOrZero(wrapper.Config.Consistent.Level))
 	require.True(t, util.GetOrZero(wrapper.Config.Sink.Debezium.IncludeStartTs))
+	require.True(t, util.GetOrZero(wrapper.Config.Sink.Simple.IncludeStartTs))
 }
 
 func TestCodecConfigTOMLRoundTripToInternal(t *testing.T) {

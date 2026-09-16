@@ -92,13 +92,13 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
 	}, []string{GetKeyspaceLabel(), "changefeed", "type"})
 
-	// RedoWorkerBusyRatio records the busy ratio of redo sink worker.
+	// RedoWorkerBusyRatio records the busy time of redo writer workers.
 	RedoWorkerBusyRatio = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Subsystem: subsystem,
 			Name:      "worker_busy_ratio",
-			Help:      "Busy ratio for redo sink worker.",
+			Help:      "Busy time in seconds for redo writer workers.",
 		}, []string{GetKeyspaceLabel(), "changefeed", "type"})
 )
 
