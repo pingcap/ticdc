@@ -518,7 +518,7 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 			Columns: []string{"a"},
 		},
 	}
-	selectors, err := columnselector.New(replicaConfig.Sink)
+	selectors, err := columnselector.New(replicaConfig.Sink, false)
 	require.NoError(t, err)
 
 	rowEvent := &commonEvent.RowEvent{

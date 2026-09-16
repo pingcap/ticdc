@@ -57,11 +57,11 @@ func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.
 	case config.MySQLScheme, config.MySQLSSLScheme, config.TiDBScheme, config.TiDBSSLScheme:
 		return mysql.New(ctx, changefeedID, cfg, sinkURI, keyspaceID)
 	case config.KafkaScheme, config.KafkaSSLScheme:
-		return kafka.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, keyspaceID)
+		return kafka.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.CaseSensitive, keyspaceID)
 	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
-		return pulsar.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, keyspaceID)
+		return pulsar.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.CaseSensitive, keyspaceID)
 	case config.S3Scheme, config.FileScheme, config.GCSScheme, config.GSScheme, config.AzblobScheme, config.AzureScheme, config.CloudStorageNoopScheme:
-		return cloudstorage.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.EnableTableAcrossNodes, nil, keyspaceID)
+		return cloudstorage.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.CaseSensitive, cfg.EnableTableAcrossNodes, nil, keyspaceID)
 	case config.BlackHoleScheme:
 		return blackhole.New()
 	}
@@ -78,11 +78,11 @@ func Verify(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID comm
 	case config.MySQLScheme, config.MySQLSSLScheme, config.TiDBScheme, config.TiDBSSLScheme:
 		return mysql.Verify(ctx, sinkURI, cfg)
 	case config.KafkaScheme, config.KafkaSSLScheme:
-		return kafka.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig)
+		return kafka.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.CaseSensitive)
 	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
-		return pulsar.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig)
+		return pulsar.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.CaseSensitive)
 	case config.S3Scheme, config.FileScheme, config.GCSScheme, config.GSScheme, config.AzblobScheme, config.AzureScheme, config.CloudStorageNoopScheme:
-		return cloudstorage.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.EnableTableAcrossNodes)
+		return cloudstorage.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.CaseSensitive, cfg.EnableTableAcrossNodes)
 	case config.BlackHoleScheme:
 		return nil
 	}

@@ -182,6 +182,23 @@ func TestBuildInsert(t *testing.T) {
 	require.Equal(t, exportedArgs, args)
 }
 
+func TestBuildDMLUsesRoutedTargetTable(t *testing.T) {
+	insert, deleteRow, updateRow, tableInfo := getRowForTest(t)
+	routedTableInfo := tableInfo.CloneWithRouting("target_db", "target_table")
+
+	insertSQL, _ := buildInsert(routedTableInfo, insert, false)
+	require.Contains(t, insertSQL, "INSERT INTO `target_db`.`target_table`")
+	require.NotContains(t, insertSQL, "`test`.`t`")
+
+	deleteSQL, _ := buildDelete(routedTableInfo, deleteRow)
+	require.Contains(t, deleteSQL, "DELETE FROM `target_db`.`target_table`")
+	require.NotContains(t, deleteSQL, "`test`.`t`")
+
+	updateSQL, _ := buildUpdate(routedTableInfo, updateRow)
+	require.Contains(t, updateSQL, "UPDATE `target_db`.`target_table`")
+	require.NotContains(t, updateSQL, "`test`.`t`")
+}
+
 func TestBuildDelete(t *testing.T) {
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()

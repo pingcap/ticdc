@@ -41,8 +41,9 @@ type option struct {
 	maxMessageBytes int
 	maxBatchSize    int
 
-	codecConfig *common.Config
-	sinkConfig  *config.SinkConfig
+	codecConfig   *common.Config
+	sinkConfig    *config.SinkConfig
+	caseSensitive bool
 
 	timezone string
 
@@ -144,6 +145,7 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	replicaConfig.Sink.TiDBSourceID = 1
 	replicaConfig.Sink.Protocol = putil.AddressOf(protocol.String())
 	o.sinkConfig = replicaConfig.Sink
+	o.caseSensitive = putil.GetOrZero(replicaConfig.CaseSensitive)
 
 	o.codecConfig = common.NewConfig(protocol)
 	if err = o.codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {

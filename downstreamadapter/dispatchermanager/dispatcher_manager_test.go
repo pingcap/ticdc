@@ -22,6 +22,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
@@ -39,6 +40,7 @@ import (
 	mysqlcfg "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,6 +66,8 @@ func newDispatcherManagerTestSink(t *testing.T, sinkType common.SinkType) sink.S
 
 // createTestDispatcher creates a test dispatcher with given parameters
 func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.DispatcherID, tableID int64, startKey, endKey []byte) *dispatcher.EventDispatcher {
+	t.Helper()
+
 	span := &heartbeatpb.TableSpan{
 		TableID:  tableID,
 		StartKey: startKey,
@@ -71,22 +75,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 	}
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
-	defaultAtomicity := config.DefaultAtomicityLevel()
-	sharedInfo := dispatcher.NewSharedInfo(
-		manager.changefeedID,
-		"system",
-		false,
-		false,
-		false,
-		nil,
-		nil,
-		nil,
-		&defaultAtomicity,
-		false,
-		make(chan dispatcher.TableSpanStatusWithSeq, 1),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
-		make(chan error, 1),
-	)
+	require.NotNil(t, manager.sharedInfo)
 	d := dispatcher.NewEventDispatcher(
 		id,
 		span,
@@ -97,7 +86,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		false, // skipDMLAsStartTs
 		0,     // currentPDTs
 		manager.sink,
-		sharedInfo,
+		manager.sharedInfo,
 		false,
 		&redoTs,
 	)
@@ -144,6 +133,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		nil,   // syncPointConfig
 		&defaultAtomicity,
 		false,
+		routing.Router{},
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		make(chan error, 1),
@@ -1088,4 +1078,71 @@ func TestAbortMergeRestoresSourceDispatchersRegistration(t *testing.T) {
 	require.Equal(t, heartbeatpb.ComponentState_Working, dispatcher2.GetComponentStatus())
 	require.True(t, ec.HasDispatcher(dispatcher1.GetId()))
 	require.True(t, ec.HasDispatcher(dispatcher2.GetId()))
+}
+
+func TestDispatcherManagerTableRoutingCaseSensitive(t *testing.T) {
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	collector := &HeartBeatCollector{
+		heartBeatReqQueue:                       NewHeartbeatRequestQueue(),
+		blockStatusReqQueue:                     NewBlockStatusRequestQueue(),
+		heartBeatResponseDynamicStream:          newHeartBeatResponseDynamicStream(dispatcher.GetDispatcherStatusDynamicStream()),
+		schedulerDispatcherRequestDynamicStream: newSchedulerDispatcherRequestDynamicStream(),
+		mergeDispatcherRequestDynamicStream:     newMergeDispatcherRequestDynamicStream(),
+	}
+	appcontext.SetService(appcontext.HeartbeatCollector, collector)
+	defer collector.heartBeatResponseDynamicStream.Close()
+	defer collector.schedulerDispatcherRequestDynamicStream.Close()
+	defer collector.mergeDispatcherRequestDynamicStream.Close()
+
+	for _, tc := range []struct {
+		name          string
+		caseSensitive *bool
+	}{
+		{name: "unset"},
+		{name: "insensitive", caseSensitive: util.AddressOf(false)},
+		{name: "sensitive", caseSensitive: util.AddressOf(true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.GetDefaultReplicaConfig()
+			cfg.CaseSensitive = tc.caseSensitive
+			cfg.Sink.DispatchRules = []*config.DispatchRule{
+				{Matcher: []string{"Sales.*"}, TargetSchema: "archive"},
+				{Matcher: []string{"Mixed.*"}, TargetSchema: "copy_{schema}", TargetTable: "{table}_copy"},
+			}
+			info := &config.ChangeFeedInfo{Config: cfg, SinkURI: "blackhole://"}
+			manager, err := NewDispatcherManager(common.DefaultKeyspaceID,
+				common.NewChangefeedID4Test("test", tc.name), info.ToChangefeedConfig(), nil, nil, 1, node.NewID(), false)
+			require.NoError(t, err)
+			defer manager.close()
+			router := manager.sharedInfo.GetRouter()
+			for _, source := range []common.TableName{
+				{Schema: "sales", Table: "orders"},
+				{Schema: "archive", Table: "orders"},
+				{Schema: "Mixed", Table: "OrDeRs"},
+				{Schema: "mIxEd", Table: "OrDeRs"},
+			} {
+				wantSchema, wantTable := source.Schema, source.Table
+				if source.Schema == "sales" && !util.GetOrZero(tc.caseSensitive) {
+					wantSchema = "archive"
+				}
+				if source.Schema == "Mixed" || source.Schema == "mIxEd" && !util.GetOrZero(tc.caseSensitive) {
+					wantSchema, wantTable = "copy_"+source.Schema, source.Table+"_copy"
+				}
+				tableInfo := &common.TableInfo{TableName: source}
+				routed, err := router.ApplyToTableInfo(tableInfo)
+				require.NoError(t, err)
+				require.Equal(t, wantSchema, routed.GetTargetSchemaName())
+				require.Equal(t, wantTable, routed.GetTargetTableName())
+				ddl, err := router.ApplyToDDLEvent(&event.DDLEvent{
+					Type: byte(model.ActionCreateTable), SchemaName: source.Schema, TableName: source.Table,
+					Query: "CREATE TABLE `" + source.Schema + "`.`" + source.Table + "` (`id` INT)", TableInfo: tableInfo,
+				})
+				require.NoError(t, err)
+				require.Contains(t, ddl.Query, "`"+wantSchema+"`.`"+wantTable+"`")
+				require.Equal(t, wantSchema, ddl.TableInfo.GetTargetSchemaName())
+				require.Equal(t, wantTable, ddl.TableInfo.GetTargetTableName())
+				require.Equal(t, source, tableInfo.TableName)
+			}
+		})
+	}
 }

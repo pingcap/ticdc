@@ -240,8 +240,6 @@ func TestDDLEvent(t *testing.T) {
 		},
 		Err: errors.ErrDDLEventError.GenWithStackByArgs("test").Error(),
 	}
-	ddlEvent.TableInfo.InitPrivateFields()
-
 	// Test normal marshal/unmarshal
 	data, err := ddlEvent.Marshal()
 	require.Nil(t, err)
@@ -418,6 +416,14 @@ INSERT INTO test VALUES ('This; is; a test');
 			expectedError: false,
 		},
 		{
+			name:  "DDL with semicolons inside default string",
+			input: "CREATE TABLE test (c VARCHAR(100) DEFAULT 'a;b;c');",
+			expected: []string{
+				"CREATE TABLE `test` (`c` VARCHAR(100) DEFAULT _UTF8MB4'a;b;c');",
+			},
+			expectedError: false,
+		},
+		{
 			name: "Query with escaped quotes inside strings",
 			input: `
 CREATE TABLE test (name VARCHAR(50));
@@ -475,13 +481,23 @@ INSERT INTO test VALUES (1);
 			expectedError: false,
 		},
 		{
+			name: "Queries with semicolons inside comments",
+			input: `
+/* comment; not a statement */
+CREATE TABLE test1 (id INT); -- inline; comment
+CREATE TABLE test2 (id INT);
+`,
+			expected: []string{
+				"CREATE TABLE `test1` (`id` INT);",
+				"CREATE TABLE `test2` (`id` INT);",
+			},
+			expectedError: false,
+		},
+		{
 			name: "Queries with whitespace and newlines",
 			input: `
-    
     CREATE TABLE test (id INT);
-    
     INSERT INTO test VALUES (1);
-    
 `,
 			expected: []string{
 				"CREATE TABLE `test` (`id` INT);",

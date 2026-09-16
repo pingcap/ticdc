@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
@@ -224,6 +225,15 @@ func NewDispatcherManager(
 ) (manager *DispatcherManager, err error) {
 	failpoint.Inject("NewDispatcherManagerDelay", nil)
 
+	router, err := routing.NewRouter(
+		changefeedID,
+		cfConfig.CaseSensitive,
+		cfConfig.SinkConfig.DispatchRules,
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 
@@ -325,6 +335,7 @@ func NewDispatcherManager(
 		syncPointConfig,
 		manager.config.SinkConfig.TxnAtomicity,
 		manager.config.EnableSplittableCheck,
+		router,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		make(chan error, 1),
