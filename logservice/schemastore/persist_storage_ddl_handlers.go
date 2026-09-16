@@ -686,7 +686,7 @@ func buildPersistedDDLEventForRecoverSchema(args buildPersistedDDLEventFuncArgs)
 	}
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaID = recoverArgs.RecoverInfo.ID
-	event.SchemaName = recoverArgs.RecoverInfo.DBInfo.Name.O
+	event.SchemaName = recoverArgs.RecoverInfo.Name.O
 	event.DBInfo = recoverArgs.RecoverInfo.DBInfo
 	event.MultipleTableInfos = make([]*model.TableInfo, 0, len(recoverArgs.RecoverInfo.RecoverTableInfos))
 	for _, recoverTableInfo := range recoverArgs.RecoverInfo.RecoverTableInfos {
