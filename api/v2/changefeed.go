@@ -305,6 +305,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 
 	if util.GetOrZero(cfg.Pause) {
 		info.State = config.StateStopped
+		info.BootstrapPending = util.AddressOf(true)
 	}
 
 	// verify sinkURI

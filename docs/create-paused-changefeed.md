@@ -38,3 +38,8 @@ If `start_ts` is omitted, creation chooses the current TSO as usual. A restart
 preserves the stopped state, and resume without a checkpoint override continues
 from the saved checkpoint. Existing paused-changefeed GC protection and GC TTL
 limits apply; this option does not provide indefinite data retention.
+
+The first resume retains fresh-changefeed initialization, including cleanup of
+stale MySQL `ddl_ts_v1` records for a reused changefeed name. An internal pending
+bootstrap marker survives coordinator restarts and is cleared after the current
+maintainer reports successful bootstrap. Subsequent resumes use normal recovery.

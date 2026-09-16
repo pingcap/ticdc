@@ -58,6 +58,13 @@ expect_invalid() {
 	jq -e '.error_code == "CDC:ErrChangeFeedNotExists"' "$WORK_DIR/missing.json"
 }
 
+# Wait for real replication, rather than the normal state persisted by resume.
+api_caught_up() {
+	run_sql "SELECT count(*) AS row_count FROM create_paused.api" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_contains "row_count: 1"
+}
+export -f api_caught_up
+
 run() {
 	rm -rf "$WORK_DIR" && mkdir -p "$WORK_DIR"
 	start_tidb_cluster --workdir "$WORK_DIR"
@@ -75,6 +82,21 @@ run() {
 	START_TS=$(run_cdc_cli tso query --pd="$PD_ADDR")
 	for id in api cli omitted explicit legacy; do
 		run_sql "INSERT INTO create_paused.$id VALUES (1, 10)" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	done
+
+	# Simulate recovery records left by an older changefeed with the same name.
+	# Their timestamp is newer than row 1, so accidental recovery would skip it.
+	local stale_ts
+	stale_ts=$(run_cdc_cli tso query --pd="$PD_ADDR")
+	run_sql "CREATE DATABASE IF NOT EXISTS tidb_cdc" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	run_sql "CREATE TABLE IF NOT EXISTS tidb_cdc.ddl_ts_v1 (
+        ticdc_cluster_id VARCHAR(255), changefeed VARCHAR(255), ddl_ts VARCHAR(18),
+        table_id BIGINT, finished BOOL, is_syncpoint BOOL,
+        PRIMARY KEY(ticdc_cluster_id, changefeed, table_id))" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	for id in api cli; do
+		run_sql "INSERT INTO tidb_cdc.ddl_ts_v1 VALUES
+            ('default', '$KEYSPACE_NAME/$id', '$stale_ts', -1, 1, 0),
+            ('default', '$KEYSPACE_NAME/$id', '$stale_ts', 0, 1, 0)" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 	done
 
 	curl -sf -X POST "$API?keyspace=$KEYSPACE_NAME" -H 'Content-Type: application/json' \
@@ -121,17 +143,22 @@ $pause_field\"start_ts\":$START_TS,
 		ensure 30 assert_gc_handoff
 	fi
 
+	# Exercise first resume both with and without a coordinator restart.
+	cdc_cli_changefeed resume --changefeed-id=api
+	ensure 30 check_changefeed_state "$PD_ADDR" api normal null ""
+	ensure 30 api_caught_up
 	cleanup_process "$CDC_BINARY"
 	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY"
-	ensure 30 check_changefeed_state "$PD_ADDR" api stopped null ""
+	ensure 30 check_changefeed_state "$PD_ADDR" cli stopped null ""
 	for i in $(seq 1 5); do
-		assert_paused api
 		assert_paused cli
 		sleep 1
 	done
 	for id in api cli; do
 		run_sql "INSERT INTO create_paused.$id VALUES (2, 20)" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-		cdc_cli_changefeed resume --changefeed-id="$id"
+		if [ "$id" = cli ]; then
+			cdc_cli_changefeed resume --changefeed-id="$id"
+		fi
 		ensure 30 check_changefeed_state "$PD_ADDR" "$id" normal null ""
 	done
 	check_sync_diff "$WORK_DIR" "$CUR/conf/diff_config.toml"

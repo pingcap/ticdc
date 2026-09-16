@@ -80,6 +80,21 @@ func (mr *MockBackendMockRecorder) DeleteChangefeed(ctx, id interface{}) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteChangefeed", reflect.TypeOf((*MockBackend)(nil).DeleteChangefeed), ctx, id)
 }
 
+// FinishInit mocks base method.
+func (m *MockBackend) FinishInit(ctx context.Context, id common.ChangeFeedID, epoch uint64) (*config.ChangeFeedInfo, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FinishInit", ctx, id, epoch)
+	ret0, _ := ret[0].(*config.ChangeFeedInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FinishInit indicates an expected call of FinishInit.
+func (mr *MockBackendMockRecorder) FinishInit(ctx, id, epoch interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FinishInit", reflect.TypeOf((*MockBackend)(nil).FinishInit), ctx, id, epoch)
+}
+
 // GetAllChangefeeds mocks base method.
 func (m *MockBackend) GetAllChangefeeds(ctx context.Context) (map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper, error) {
 	m.ctrl.T.Helper()

@@ -15,6 +15,7 @@ package coordinator
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	mock_changefeed "github.com/pingcap/ticdc/coordinator/changefeed/mock"
 	"github.com/pingcap/ticdc/coordinator/gccleaner"
 	"github.com/pingcap/ticdc/coordinator/operator"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -32,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
@@ -380,5 +383,70 @@ func TestConcurrentDeleteLastChangefeedAndCreateNewOneKeepsExpectedGCSafepoint(t
 		require.Equalf(t, uint64(101), <-cpCh, "iteration %d", i)
 
 		require.NoError(t, co.updateGCSafepoint(context.Background()))
+	}
+}
+
+// TestPausedCreationFirstBootstrap verifies that resume, persistence round trips,
+// stale owners and failed acknowledgements cannot lose fresh-start semantics.
+func TestPausedCreationFirstBootstrap(t *testing.T) {
+	for _, restart := range []bool{false, true} {
+		t.Run(fmt.Sprintf("restart=%t", restart), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			backend := mock_changefeed.NewMockBackend(ctrl)
+			co, db := newTestCoordinatorWithGCManager(t, backend, gc.NewMockManager(ctrl))
+			id := common.NewChangeFeedIDWithName("paused", common.DefaultKeyspaceName)
+			info := &config.ChangeFeedInfo{
+				ChangefeedID: id, State: config.StateStopped,
+				BootstrapPending: util.AddressOf(true), StartTs: 100, Epoch: 1,
+				Config: config.GetDefaultReplicaConfig(), SinkURI: "mysql://127.0.0.1:3306",
+			}
+			cf := changefeed.NewChangefeed(id, info, 100, true)
+			if restart {
+				// Bootstrap loads persisted metadata and constructs with isNew=false.
+				data, err := info.Marshal()
+				require.NoError(t, err)
+				info = &config.ChangeFeedInfo{}
+				require.NoError(t, info.Unmarshal([]byte(data)))
+				cf = changefeed.NewChangefeed(id, info, 100, false)
+			}
+			db.AddStoppedChangefeed(cf)
+			expectResumeChangefeed(t, backend, id, cf, 100)
+			require.NoError(t, co.ResumeChangefeed(context.Background(), id, 0, false))
+			request := func() *heartbeatpb.AddMaintainerRequest {
+				return cf.NewAddMaintainerMessage("owner").Message[0].(*heartbeatpb.AddMaintainerRequest)
+			}
+			require.True(t, request().IsNewChangefeed)
+			// Reconstruct after resume as well, covering a failover before scheduling.
+			cf = changefeed.NewChangefeed(id, cf.GetInfo(), 100, false)
+			db = changefeed.NewChangefeedDB(1)
+			co.controller.changefeedDB = db
+			db.AddReplicatingMaintainer(cf, "owner")
+			require.True(t, request().IsNewChangefeed)
+			epoch := cf.GetInfo().Epoch
+			status := &heartbeatpb.MaintainerStatus{
+				MaintainerEpoch: epoch,
+				State:           heartbeatpb.ComponentState_Working, CheckpointTs: 100, FeedState: string(config.StateNormal),
+			}
+			require.NotNil(t, co.controller.handleSingleMaintainerStatus("owner", status, id))
+			require.True(t, request().IsNewChangefeed)
+			status.BootstrapDone = true
+			require.Nil(t, co.controller.handleSingleMaintainerStatus("other", status, id))
+			status.MaintainerEpoch = epoch - 1
+			require.Nil(t, co.controller.handleSingleMaintainerStatus("owner", status, id))
+			status.MaintainerEpoch = epoch
+			backend.EXPECT().FinishInit(gomock.Any(), id, epoch).
+				Return(nil, errors.ErrMetaOpFailed.GenWithStackByArgs("test failure"))
+			require.Nil(t, co.controller.handleSingleMaintainerStatus("owner", status, id))
+			require.True(t, request().IsNewChangefeed)
+			updated, err := cf.GetInfo().Clone()
+			require.NoError(t, err)
+			updated.BootstrapPending = nil
+			backend.EXPECT().FinishInit(gomock.Any(), id, epoch).Return(updated, nil)
+			require.NotNil(t, co.controller.handleSingleMaintainerStatus("owner", status, id))
+			require.False(t, request().IsNewChangefeed)
+			// Later resumes/restarts retain normal DDL crash recovery semantics.
+			cf = changefeed.NewChangefeed(id, updated, 100, false)
+			require.False(t, request().IsNewChangefeed)
+		})
 	}
 }

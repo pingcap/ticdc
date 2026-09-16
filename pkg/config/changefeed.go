@@ -250,6 +250,10 @@ func (cfg *ChangefeedConfig) String() string {
 
 // ChangeFeedInfo describes the detail of a ChangeFeed
 type ChangeFeedInfo struct {
+	// BootstrapPending preserves fresh-start semantics until the first maintainer
+	// bootstrap succeeds. Nil means an existing changefeed with no pending bootstrap.
+	BootstrapPending *bool `json:"bootstrap-pending,omitempty"`
+
 	ChangefeedID common.ChangeFeedID `json:"id"`
 	UpstreamID   uint64              `json:"upstream-id"`
 	SinkURI      string              `json:"sink-uri"`

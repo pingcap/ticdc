@@ -37,6 +37,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -679,10 +680,18 @@ func (c *Controller) handleSingleMaintainerStatus(
 	status *heartbeatpb.MaintainerStatus,
 	cfID common.ChangeFeedID,
 ) *changefeedChange {
-	// Update the operator status first
+	cf := c.getChangefeed(cfID)
+	// A paused creation remains new across resume/restart until a current owner
+	// reports successful bootstrap and the acknowledgement is durably stored.
+	if cf != nil && util.GetOrZero(cf.GetInfo().BootstrapPending) &&
+		status.State == heartbeatpb.ComponentState_Working && status.BootstrapDone {
+		if !c.markChangefeedBootstrapped(cf, from, status.MaintainerEpoch) {
+			return nil
+		}
+	}
+	// Do not finish the add operator before the initial marker is persisted.
 	c.operatorController.UpdateOperatorStatus(cfID, from, status)
 
-	cf := c.getChangefeed(cfID)
 	if cf == nil {
 		c.handleNonExistentChangefeed(cfID, from, status)
 		return nil
@@ -702,6 +711,34 @@ func (c *Controller) handleSingleMaintainerStatus(
 
 	change := c.updateChangefeedStatus(cf, cfID, status)
 	return change
+}
+
+// markChangefeedBootstrapped serializes the acknowledgement with API lifecycle
+// operations. Failed persistence is retried by the next maintainer heartbeat.
+func (c *Controller) markChangefeedBootstrapped(cf *changefeed.Changefeed, from node.ID, epoch uint64) bool {
+	c.apiLock.Lock()
+	defer c.apiLock.Unlock()
+	info := cf.GetInfo()
+	if cf.GetNodeID() != from || info.Epoch != epoch {
+		return false
+	}
+	if !util.GetOrZero(info.BootstrapPending) {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	updated, err := c.backend.FinishInit(ctx, cf.ID, epoch)
+	if err != nil {
+		log.Warn("failed to persist initial bootstrap completion, will retry",
+			zap.Stringer("changefeedID", cf.ID), zap.Error(err))
+		return false
+	}
+	if updated == nil {
+		return false
+	}
+	cf.SetInfo(updated)
+	cf.SetIsNew(false)
+	return true
 }
 
 func (c *Controller) handleNonExistentChangefeed(
