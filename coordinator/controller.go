@@ -1253,6 +1253,29 @@ func (c *Controller) GetPersistedChangefeedInfo(ctx context.Context, id common.C
 	return c.backend.GetChangefeedInfo(ctx, id)
 }
 
+// updateChangefeedCheckpointTs serializes checkpoint persistence with API
+// lifecycle changes. Pause and remove persist a non-none progress while holding
+// apiLock, so a checkpoint collected before that operation must not overwrite
+// the newer progress after the operation releases the lock.
+func (c *Controller) updateChangefeedCheckpointTs(
+	ctx context.Context,
+	checkpointTsMap map[common.ChangeFeedID]uint64,
+) error {
+	c.apiLock.RLock()
+	defer c.apiLock.RUnlock()
+
+	for id := range checkpointTsMap {
+		cf := c.changefeedDB.GetByID(id)
+		if cf == nil || !shouldRunChangefeed(cf.GetInfo().State) {
+			delete(checkpointTsMap, id)
+		}
+	}
+	if len(checkpointTsMap) == 0 {
+		return nil
+	}
+	return c.backend.UpdateChangefeedCheckpointTs(ctx, checkpointTsMap)
+}
+
 // getChangefeed returns the changefeed by id, return nil if not found
 func (c *Controller) getChangefeed(id common.ChangeFeedID) *changefeed.Changefeed {
 	return c.changefeedDB.GetByID(id)
