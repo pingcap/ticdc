@@ -18,8 +18,6 @@ import (
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/stretchr/testify/require"
 )
 
@@ -67,14 +65,12 @@ func TestResolveDDL(t *testing.T) {
 			[]commonEvent.SchemaTableName{{SchemaName: "xs1", TableName: ""}},
 			"DROP DATABASE IF EXISTS `xs1`",
 		},
-		// ALTER DATABASE without explicit name - cannot rename since AST doesn't store database name
+		// ALTER DATABASE without explicit name: nothing to route, text is kept as is
 		{
 			"alter database collate utf8mb4_general_ci",
 			[]commonEvent.SchemaTableName{{SchemaName: "", TableName: ""}},
 			[]commonEvent.SchemaTableName{{SchemaName: "xtest", TableName: ""}},
-			// Note: When no database name is in original SQL, RenameDDLTable cannot add it
-			// because the AST parser tracks whether name was present
-			"ALTER DATABASE COLLATE = utf8mb4_general_ci",
+			"alter database collate utf8mb4_general_ci",
 		},
 		// DROP TABLE - single table
 		{
@@ -318,81 +314,52 @@ func TestResolveDDL(t *testing.T) {
 			[]commonEvent.SchemaTableName{{SchemaName: "xtest", TableName: ""}},
 			"ALTER DATABASE `xtest` CHARACTER SET = utf8mb4",
 		},
-		// ALTER TABLE ADD COLUMN with multiple columns (no splitting)
+		// ALTER TABLE ADD COLUMN with multiple columns, identity mapping: text is kept as is
 		{
 			"alter table `t1` add column (c1 int, c2 int)",
 			[]commonEvent.SchemaTableName{{SchemaName: "", TableName: "t1"}},
 			[]commonEvent.SchemaTableName{{SchemaName: "xtest", TableName: "t1"}},
-			"ALTER TABLE `xtest`.`t1` ADD COLUMN (`c1` INT, `c2` INT)",
+			"alter table `t1` add column (c1 int, c2 int)",
 		},
 	}
-	p := parser.New()
-
 	for _, ca := range testCases {
-		stmts, _, err := p.Parse(ca.sql, "", "")
-		require.NoError(t, err)
-		require.Len(t, stmts, 1)
-
-		// Test extractTableNames
-		tableNames := extractTableNames(stmts[0])
-		require.Equal(t, ca.expectedTableNames, tableNames, "extractTableNames failed for: %s", ca.sql)
-
-		// Re-parse for rewriteDDLStmtTables since it modifies AST in place
-		stmts, _, err = p.Parse(ca.sql, "", "")
-		require.NoError(t, err)
-
-		// Test rewriteDDLStmtTables
-		targetSQL, err := rewriteDDLStmtTables(stmts[0], ca.expectedTableNames, ca.targetTableNames, false)
-		require.NoError(t, err, "rewriteDDLStmtTables failed for: %s", ca.sql)
-		require.Equal(t, ca.targetSQL, targetSQL, "rewriteDDLStmtTables failed for: %s", ca.sql)
+		router := newTestRouter(t, false, routeRulesForTest(t, ca.expectedTableNames, ca.targetTableNames))
+		newQuery, changed, err := router.rewriteSingleDDLQuery(ca.sql, "xtest")
+		require.NoError(t, err, "rewriteSingleDDLQuery failed for: %s", ca.sql)
+		if !changed {
+			require.Equal(t, ca.sql, newQuery, "unrouted statement changed: %s", ca.sql)
+			continue
+		}
+		require.Equal(t, ca.targetSQL, newQuery, "rewriteSingleDDLQuery failed for: %s", ca.sql)
 	}
 }
 
-func TestFetchDDLTablesError(t *testing.T) {
-	t.Parallel()
+// routeRulesForTest builds one rule per routed source/target pair, so each test
+// case keeps expressing the mapping it asserts.
+func routeRulesForTest(t *testing.T, sources, targets []commonEvent.SchemaTableName) []*config.DispatchRule {
+	t.Helper()
+	require.Len(t, targets, len(sources))
 
-	p := parser.New()
-	// SELECT is not a DDL statement - extractTableNames returns empty names
-	stmts, _, err := p.Parse("SELECT 1", "", "")
-	require.NoError(t, err)
-	require.Len(t, stmts, 1)
-
-	names := extractTableNames(stmts[0])
-	require.Empty(t, names)
-}
-
-func TestRewriteDDLStmtTablesError(t *testing.T) {
-	t.Parallel()
-
-	p := parser.New()
-
-	t.Run("non ddl statement", func(t *testing.T) {
-		stmts, _, err := p.Parse("SELECT 1", "", "")
-		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{}, false)
-		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
-	})
-
-	t.Run("unexpected target table count for alter database", func(t *testing.T) {
-		stmts, _, err := p.Parse("ALTER DATABASE `test` CHARACTER SET utf8mb4", "", "")
-		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{}, {}}, false)
-		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
-	})
-
-	t.Run("too few target tables", func(t *testing.T) {
-		stmts, _, err := p.Parse("RENAME TABLE `db1`.`t1` TO `db2`.`t2`", "", "")
-		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{SchemaName: "db1", TableName: "t1"}}, false)
-		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
-	})
-
-	t.Run("too many target tables", func(t *testing.T) {
-		stmts, _, err := p.Parse("CREATE TABLE `t1` (id INT)", "", "")
-		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{}, {}, {}}, false)
-		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
-	})
+	var rules []*config.DispatchRule
+	for i, source := range sources {
+		target := targets[i]
+		schema := source.SchemaName
+		if schema == "" {
+			schema = "xtest"
+		}
+		if target.SchemaName == schema && target.TableName == source.TableName {
+			continue
+		}
+		rule := &config.DispatchRule{TargetSchema: target.SchemaName}
+		if source.TableName == "" {
+			rule.Matcher = []string{schema + ".*"}
+		} else {
+			rule.Matcher = []string{schema + "." + source.TableName}
+			rule.TargetTable = target.TableName
+		}
+		rules = append(rules, rule)
+	}
+	return rules
 }
 
 func TestRewriteParserBackedDDLQueryWithSemicolonsInLiteralsAndComments(t *testing.T) {

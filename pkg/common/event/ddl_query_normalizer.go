@@ -126,16 +126,9 @@ func (n *createViewSelectNormalizer) Leave(in ast.Node) (ast.Node, bool) {
 }
 
 // qualifyColumnName resolves a table qualifier to its source schema by walking
-// the SELECT scopes from the innermost outward. Routed statements resolve the
-// same references to the routed table in pkg/routing's tableRenameVisitor; keep
-// both rule sets in sync:
-//
-//   - an alias hides tables of outer scopes,
-//   - an ambiguous declaration cannot be resolved,
-//   - a CTE name only binds where it is referenced in FROM.
-//
-// pkg/routing's TestRewriteParserBackedDDLQueryRangeVariableResolution pins the
-// same case list for the routed path.
+// the SELECT scopes from the innermost outward. pkg/routing's tableRenameVisitor
+// applies the same rules to routed targets; keep both in sync
+// (TestRewriteParserBackedDDLQueryRangeVariableResolution pins the case list).
 func (n *createViewSelectNormalizer) qualifyColumnName(c *ast.ColumnName) {
 	if len(n.scopes) == 0 || c == nil || c.Schema.O != "" || c.Table.O == "" {
 		return

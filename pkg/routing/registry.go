@@ -43,17 +43,6 @@ func NewTargetTableRegistry(changefeedID common.ChangeFeedID, caseSensitive bool
 	}
 }
 
-// remove releases a source table name from the registry. It is idempotent.
-func (r *TargetTableRegistry) remove(source TableKey) {
-	key := source.normalized(r.caseSensitive)
-	target, ok := r.source2Target[key]
-	if !ok {
-		return
-	}
-	delete(r.source2Target, key)
-	delete(r.target2Source, target.normalized(r.caseSensitive))
-}
-
 // ApplyTransition validates and applies source removals and source-to-target
 // additions for one ordered table-info transition.
 //
@@ -77,36 +66,12 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 		// two live source names that route to the same target.
 		if existingSource, ok := r.target2Source[targetKey]; ok && !existingSource.normalized(r.caseSensitive).Equal(sourceKey) {
 			if _, removed := removeSet[existingSource.normalized(r.caseSensitive)]; !removed {
-				log.Warn("table route conflict detected",
-					zap.String("keyspace", r.changefeedID.Keyspace()),
-					zap.String("changefeed", r.changefeedID.Name()),
-					zap.String("targetSchema", add.Target.Schema),
-					zap.String("targetTable", add.Target.Table),
-					zap.String("existingSourceSchema", existingSource.Schema),
-					zap.String("existingSourceTable", existingSource.Table),
-					zap.String("incomingSourceSchema", add.Source.Schema),
-					zap.String("incomingSourceTable", add.Source.Table))
-				return errors.ErrTableRouteConflict.GenWithStackByArgs(
-					add.Target.Schema, add.Target.Table,
-					existingSource.Schema, existingSource.Table,
-					add.Source.Schema, add.Source.Table)
+				return r.conflict(existingSource, add.Target, add.Source)
 			}
 		}
 		// Likewise, two newly added live sources cannot claim the same target.
 		if existingSource, ok := addedTargets[targetKey]; ok && !existingSource.normalized(r.caseSensitive).Equal(sourceKey) {
-			log.Warn("table route conflict detected",
-				zap.String("keyspace", r.changefeedID.Keyspace()),
-				zap.String("changefeed", r.changefeedID.Name()),
-				zap.String("targetSchema", add.Target.Schema),
-				zap.String("targetTable", add.Target.Table),
-				zap.String("existingSourceSchema", existingSource.Schema),
-				zap.String("existingSourceTable", existingSource.Table),
-				zap.String("incomingSourceSchema", add.Source.Schema),
-				zap.String("incomingSourceTable", add.Source.Table))
-			return errors.ErrTableRouteConflict.GenWithStackByArgs(
-				add.Target.Schema, add.Target.Table,
-				existingSource.Schema, existingSource.Table,
-				add.Source.Schema, add.Source.Table)
+			return r.conflict(existingSource, add.Target, add.Source)
 		}
 		addedTargets[targetKey] = add.Source
 	}
@@ -118,11 +83,34 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 	// All validation above is side-effect free. Only after the complete transition
 	// is known to be valid do we update both indexes.
 	for _, source := range removes {
-		r.remove(source)
+		sourceKey := source.normalized(r.caseSensitive)
+		target, tracked := r.source2Target[sourceKey]
+		if !tracked {
+			continue
+		}
+		delete(r.source2Target, sourceKey)
+		delete(r.target2Source, target.normalized(r.caseSensitive))
 	}
 	for _, add := range adds {
 		r.target2Source[add.Target.normalized(r.caseSensitive)] = add.Source
 		r.source2Target[add.Source.normalized(r.caseSensitive)] = add.Target
 	}
 	return nil
+}
+
+// conflict reports two live source tables that own the same target table.
+func (r *TargetTableRegistry) conflict(existingSource, target, incomingSource TableKey) error {
+	log.Warn("table route conflict detected",
+		zap.String("keyspace", r.changefeedID.Keyspace()),
+		zap.String("changefeed", r.changefeedID.Name()),
+		zap.String("targetSchema", target.Schema),
+		zap.String("targetTable", target.Table),
+		zap.String("existingSourceSchema", existingSource.Schema),
+		zap.String("existingSourceTable", existingSource.Table),
+		zap.String("incomingSourceSchema", incomingSource.Schema),
+		zap.String("incomingSourceTable", incomingSource.Table))
+	return errors.ErrTableRouteConflict.GenWithStackByArgs(
+		target.Schema, target.Table,
+		existingSource.Schema, existingSource.Table,
+		incomingSource.Schema, incomingSource.Table)
 }

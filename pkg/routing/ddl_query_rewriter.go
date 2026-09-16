@@ -42,11 +42,11 @@ func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, 
 	)
 	for i := range queries {
 		query := queries[i]
-		newQuery, err := r.rewriteSingleDDLQuery(query, ddl.GetSchemaName())
+		newQuery, changed, err := r.rewriteSingleDDLQuery(query, ddl.GetSchemaName())
 		if err != nil {
 			return "", err
 		}
-		if newQuery != query {
+		if changed {
 			routed = true
 			query = newQuery
 		}
@@ -79,73 +79,100 @@ func splitMultiStmtDDLQuery(query string) ([]string, error) {
 	return queries, nil
 }
 
-// rewriteSingleDDLQuery routes a single DDL statement.
-// If the schema is not qualified, fill it with the default schema.
-// Cross schema scenario must be qualified before enter the router.
+// rewriteSingleDDLQuery routes one DDL statement and reports whether the
+// statement text changed. Unqualified table names are resolved with the
+// statement's default schema.
+//
 // Example:
 //
 //	defaultSchema = "source_db"
 //	query         = "ALTER TABLE t ADD COLUMN c INT"
-//	fillDefaultSchema → [{source_db, t}]
-//	route({source_db, t}) with rule source_db.* → target_db.{table}_r
+//	route {source_db, t} with rule source_db.* → target_db.{table}_r
 //	→ "ALTER TABLE `target_db`.`t_r` ADD COLUMN `c` INT"
-func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, error) {
-	p := parser.New()
-	stmt, err := p.ParseOneStmt(query, "", "")
+func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, bool, error) {
+	stmt, err := parser.New().ParseOneStmt(query, "", "")
+	if err != nil {
+		return "", false, errors.WrapError(errors.ErrTableRoutingFailed, err)
+	}
+	if _, ok := stmt.(ast.DDLNode); !ok {
+		// Non-DDL statements carry no routed names.
+		return query, false, nil
+	}
+
+	routed, err := rewriteDDLStmt(stmt, r, defaultSchema)
+	if err != nil {
+		return "", false, err
+	}
+	if !routed {
+		return query, false, nil
+	}
+
+	newQuery, err := restoreDDLStmt(stmt)
+	if err != nil {
+		return "", false, err
+	}
+	return newQuery, true, nil
+}
+
+// rewriteDDLStmt routes the names of one DDL AST in place and reports whether
+// anything was routed.
+func rewriteDDLStmt(stmt ast.StmtNode, router Router, defaultSchema string) (bool, error) {
+	switch stmt := stmt.(type) {
+	case *ast.AlterDatabaseStmt:
+		return routeDatabaseName(&stmt.Name, router)
+	case *ast.CreateDatabaseStmt:
+		return routeDatabaseName(&stmt.Name, router)
+	case *ast.DropDatabaseStmt:
+		return routeDatabaseName(&stmt.Name, router)
+	}
+
+	visitor := newTableRenameVisitor(router, defaultSchema)
+	stmt.Accept(visitor)
+	if visitor.err != nil {
+		return false, visitor.err
+	}
+	visitor.resolveBindings()
+	return visitor.routed, nil
+}
+
+// routeDatabaseName routes the database name of a database-level DDL.
+func routeDatabaseName(name *ast.CIStr, router Router) (bool, error) {
+	binding, err := router.Route(name.O, "")
+	if err != nil {
+		return false, err
+	}
+	if !binding.routed() {
+		return false, nil
+	}
+	*name = ast.NewCIStr(binding.Target.Schema)
+	return true, nil
+}
+
+// restoreDDLStmt serializes a routed DDL AST.
+//
+// Returned DDL uses StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
+func restoreDDLStmt(stmt ast.StmtNode) (string, error) {
+	bf := &bytes.Buffer{}
+	err := stmt.Restore(&format.RestoreCtx{
+		// TiDB stores the original SQL in sessionctx.QueryString and copies it into
+		// DDL job.Query:
+		// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/session/session.go#L2905
+		// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/executor.go#L6952-L6957
+		// After routing mutates the AST, CDC must serialize it again. Keep the
+		// parser's standard restore style, TiDB special comments, and default
+		// charset handling consistent with CDC's DDL query normalization.
+		Flags: format.DefaultRestoreFlags | format.RestoreTiDBSpecialComment | format.RestoreStringWithoutDefaultCharset,
+		In:    bf,
+	})
 	if err != nil {
 		return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
-
-	sourceTables := extractTableNames(stmt)
-	if len(sourceTables) == 0 {
-		return query, nil
-	}
-	fillDefaultSchema(sourceTables, defaultSchema)
-
-	var (
-		routed       bool
-		targetTables = make([]commonEvent.SchemaTableName, 0, len(sourceTables))
-	)
-	for _, srcTable := range sourceTables {
-		binding, err := r.Route(srcTable.SchemaName, srcTable.TableName)
-		if err != nil {
-			return "", err
-		}
-		if binding.routed() {
-			routed = true
-		}
-		targetTables = append(targetTables, commonEvent.SchemaTableName{
-			SchemaName: binding.Target.Schema,
-			TableName:  binding.Target.Table,
-		})
-	}
-
-	if !routed {
-		return query, nil
-	}
-
-	newQuery, err := rewriteDDLStmtTables(stmt, sourceTables, targetTables, r.caseSensitive)
-	if err != nil {
-		return "", err
-	}
-	return newQuery, nil
-}
-
-func fillDefaultSchema(tables []commonEvent.SchemaTableName, defaultSchema string) {
-	if defaultSchema == "" {
-		return
-	}
-
-	for i := range tables {
-		if tables[i].SchemaName == "" && tables[i].TableName != "" {
-			tables[i].SchemaName = defaultSchema
-		}
-	}
+	return bf.String(), nil
 }
 
 // cteScopes tracks CTE visibility in AST visit order. Non-recursive CTEs
 // become visible after their definition; recursive CTEs can reference themselves.
-// Both extraction and rewriting must skip the same CTE references.
+// CTE references are not physical tables and must not be renamed.
 type cteScopes struct {
 	scopes []map[string]struct{}
 }
@@ -190,74 +217,20 @@ func (c *cteScopes) contains(table *ast.TableName) bool {
 	return false
 }
 
-// tableNameExtractor extracts table names from DDL AST nodes.
-// ref: https://github.com/pingcap/tidb/blob/09feccb529be2830944e11f5fed474020f50370f/server/sql_info_fetcher.go#L46
-type tableNameExtractor struct {
-	ctes  cteScopes
-	names []commonEvent.SchemaTableName
-}
-
-func (tne *tableNameExtractor) Enter(in ast.Node) (ast.Node, bool) {
-	tne.ctes.enter(in)
-	if t, ok := in.(*ast.TableName); ok {
-		if tne.ctes.contains(t) {
-			return in, true
-		}
-		tne.names = append(tne.names, commonEvent.SchemaTableName{SchemaName: t.Schema.O, TableName: t.Name.O})
-		return in, true
-	}
-	return in, false
-}
-
-func (tne *tableNameExtractor) Leave(in ast.Node) (ast.Node, bool) {
-	tne.ctes.leave(in)
-	return in, true
-}
-
-// extractTableNames returns the tables in a DDL statement in AST visit order.
-// The first element is always the topmost table (the DDL target).
+// tableRenameVisitor rewrites table names and table references of a DDL AST.
 //
-// Examples (sourceTables returned):
-//
-//	CREATE TABLE `db`.`t1` LIKE `db`.`t2`
-//	    → [{db, t1}, {db, t2}]
-//	RENAME TABLE `db`.`a` TO `db`.`b`, `db`.`c` TO `db`.`d`
-//	    → [{db, a}, {db, b}, {db, c}, {db, d}]
-//	ALTER TABLE `db`.`t` ADD COLUMN `c` INT
-//	    → [{db, t}]
-func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
-	// Special cases: schema related SQLs don't have tableName
-	switch v := stmt.(type) {
-	case *ast.AlterDatabaseStmt:
-		return []commonEvent.SchemaTableName{{SchemaName: v.Name.O, TableName: ""}}
-	case *ast.CreateDatabaseStmt:
-		return []commonEvent.SchemaTableName{{SchemaName: v.Name.O, TableName: ""}}
-	case *ast.DropDatabaseStmt:
-		return []commonEvent.SchemaTableName{{SchemaName: v.Name.O, TableName: ""}}
-	}
-
-	e := &tableNameExtractor{
-		names: make([]commonEvent.SchemaTableName, 0),
-	}
-	stmt.Accept(e)
-
-	return e.names
-}
-
-// tableRenameVisitor rewrites table names in a DDL AST.
-//
-// TableName nodes are rewritten positionally in the same traversal order as
-// extractTableNames. References to those tables are rewritten through the SELECT
+// Every physical table name is routed and rewritten where it is visited, so no
+// positional bookkeeping is needed. References are rewritten through the SELECT
 // scope chain:
 //
-//   - `db`.`table`.`col` and `db`.`table`.* name a physical table directly, so
-//     they use the qualified lookup.
+//   - `db`.`table`.`col` and `db`.`table`.* name a physical table directly and
+//     are routed directly.
 //   - `table`.`col` and `table`.* resolve to a range variable. The innermost
 //     SELECT wins; when it does not declare the name, the search continues in
 //     the enclosing SELECT. An alias, a CTE name, or an ambiguous declaration
 //     stops the search, because the reference does not denote a physical table.
 //
-// The resolution rules below are shared with the CREATE VIEW normalization in
+// The resolution rules are shared with the CREATE VIEW normalization in
 // pkg/common/event (createViewSelectNormalizer.qualifyColumnName), which resolves
 // the same references to their source schema instead of the routed table. Keep
 // both in sync; TestRewriteParserBackedDDLQueryRangeVariableResolution pins the
@@ -269,34 +242,21 @@ func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
 //	  CREATE VIEW `source_db`.`v` AS
 //	    SELECT `source_db`.`t`.`id` FROM `source_db`.`t`
 //
-//	Positional: {source_db, v} → {target_db, v_r}
-//	            {source_db, t} → {target_db, t_r}
-//
-//	Schema-qualified column reference: `source_db`.`t`.`id`
-//	    qualified lookup: {source_db, t} → {target_db, t_r}
-//	    → `target_db`.`t_r`.`id`
-//
 //	Rewritten AST:
 //	  CREATE VIEW `target_db`.`v_r` AS
 //	    SELECT `target_db`.`t_r`.`id` FROM `target_db`.`t_r`
 type tableRenameVisitor struct {
-	ctes        cteScopes
-	sourceNames []commonEvent.SchemaTableName
-	// targetNames contains routed names aligned with tableNameExtractor output.
-	targetNames []commonEvent.SchemaTableName
-	// targetByQualifiedSource maps qualified source table names to routed names.
-	targetByQualifiedSource map[commonEvent.SchemaTableName]commonEvent.SchemaTableName
-	// caseSensitive keeps physical table names case-sensitive, like the router's
-	// rule matching. Range variable aliases stay case-insensitive.
-	caseSensitive bool
+	ctes          cteScopes
+	router        Router
+	defaultSchema string
 	// scope is the innermost SELECT scope being visited.
 	scope *selectScope
 	// bindings are table-qualified references, resolved after the whole walk.
 	bindings []pendingBinding
-	// i is the next targetNames index to consume.
-	i int
-	// hasErr records targetNames exhaustion because ast.Visitor cannot return an error.
-	hasErr bool
+	// routed records whether any name changed.
+	routed bool
+	// err holds the first routing error; ast.Visitor cannot return errors.
+	err error
 }
 
 // selectScope records the range variables of one SELECT (or set operation) node.
@@ -310,7 +270,7 @@ type selectScope struct {
 	// table aliases, derived tables, and CTE references. A name found here hides
 	// physical tables declared in outer scopes.
 	aliases map[string]struct{}
-	// tables maps a lower-cased unaliased physical table name to its routed name.
+	// tables maps a normalized unaliased physical table name to its routed name.
 	tables map[string]commonEvent.SchemaTableName
 	// ambiguousTables holds physical table names declared more than once in this
 	// scope; their qualifiers cannot be bound to a single table.
@@ -330,8 +290,15 @@ type pendingBinding struct {
 	wildcard *ast.WildCardField
 }
 
+func newTableRenameVisitor(router Router, defaultSchema string) *tableRenameVisitor {
+	return &tableRenameVisitor{
+		router:        router,
+		defaultSchema: defaultSchema,
+	}
+}
+
 func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
-	if v.hasErr {
+	if v.err != nil {
 		return in, true
 	}
 	v.ctes.enter(in)
@@ -345,16 +312,9 @@ func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
 		v.collectTable(n)
 	}
 	if t, ok := in.(*ast.TableName); ok {
-		if v.ctes.contains(t) {
-			return in, true
+		if !v.ctes.contains(t) {
+			v.renameTable(t)
 		}
-		if v.i >= len(v.targetNames) {
-			v.hasErr = true
-			return in, true
-		}
-		t.Schema = ast.NewCIStr(v.targetNames[v.i].SchemaName)
-		t.Name = ast.NewCIStr(v.targetNames[v.i].TableName)
-		v.i++
 		return in, true
 	}
 	if c, ok := in.(*ast.ColumnName); ok {
@@ -374,7 +334,7 @@ func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
 }
 
 func (v *tableRenameVisitor) Leave(in ast.Node) (ast.Node, bool) {
-	if v.hasErr {
+	if v.err != nil {
 		return in, false
 	}
 	v.ctes.leave(in)
@@ -383,6 +343,45 @@ func (v *tableRenameVisitor) Leave(in ast.Node) (ast.Node, bool) {
 		v.leaveScope()
 	}
 	return in, true
+}
+
+// route resolves one name, filling an empty schema with the statement default.
+func (v *tableRenameVisitor) route(schema, table string) (RouteBinding, error) {
+	if schema == "" && table != "" {
+		schema = v.defaultSchema
+	}
+	return v.router.Route(schema, table)
+}
+
+// renameTable routes one physical table name and rewrites it in place.
+func (v *tableRenameVisitor) renameTable(t *ast.TableName) {
+	binding, err := v.route(t.Schema.O, t.Name.O)
+	if err != nil {
+		v.err = err
+		return
+	}
+	t.Schema = ast.NewCIStr(binding.Target.Schema)
+	t.Name = ast.NewCIStr(binding.Target.Table)
+	v.routed = v.routed || binding.routed()
+}
+
+// qualifiedTarget routes a schema-qualified table reference
+// (`db`.`table`.`col` or `db`.`table`.*) and reports whether it moved.
+func (v *tableRenameVisitor) qualifiedTarget(schema, table string) (commonEvent.SchemaTableName, bool) {
+	binding, err := v.router.Route(schema, table)
+	if err != nil {
+		v.err = err
+		return commonEvent.SchemaTableName{}, false
+	}
+	if !binding.routed() {
+		return commonEvent.SchemaTableName{}, false
+	}
+	v.routed = true
+	return schemaTableName(binding.Target), true
+}
+
+func schemaTableName(key TableKey) commonEvent.SchemaTableName {
+	return commonEvent.SchemaTableName{SchemaName: key.Schema, TableName: key.Table}
 }
 
 func (v *tableRenameVisitor) enterScope() {
@@ -407,10 +406,9 @@ func (v *tableRenameVisitor) addRangeVariable(name string) {
 	v.scope.aliases[name] = struct{}{}
 }
 
-// collectWildCards records the table-qualified wildcards of one SELECT field
-// list. WildCardField nodes are not visited by ast.Visitor, so they are read from
-// the field list. A schema-qualified wildcard names a physical table and is
-// rewritten immediately, like a schema-qualified column.
+// collectWildCards rewrites the schema-qualified wildcards of one SELECT field
+// list and records the rest. WildCardField nodes are not visited by ast.Visitor,
+// so they are read from the field list.
 func (v *tableRenameVisitor) collectWildCards(fields *ast.FieldList) {
 	if fields == nil || v.scope == nil {
 		return
@@ -421,7 +419,7 @@ func (v *tableRenameVisitor) collectWildCards(fields *ast.FieldList) {
 			continue
 		}
 		if wildcard.Schema.O != "" {
-			if target, ok := v.targetByQualifiedSource[qualifiedSourceKey(wildcard.Schema.O, wildcard.Table.O, v.caseSensitive)]; ok {
+			if target, ok := v.qualifiedTarget(wildcard.Schema.O, wildcard.Table.O); ok {
 				wildcard.Schema = ast.NewCIStr(target.SchemaName)
 				wildcard.Table = ast.NewCIStr(target.TableName)
 			}
@@ -445,7 +443,7 @@ func (v *tableRenameVisitor) collectTable(table *ast.TableSource) {
 		return
 	}
 	sourceTable, ok := table.Source.(*ast.TableName)
-	if !ok {
+	if !ok || sourceTable.Name.O == "" {
 		return
 	}
 	if v.ctes.contains(sourceTable) {
@@ -453,15 +451,12 @@ func (v *tableRenameVisitor) collectTable(table *ast.TableSource) {
 		v.addRangeVariable(sourceTable.Name.L)
 		return
 	}
-	if v.i >= len(v.sourceNames) || v.i >= len(v.targetNames) {
+	binding, err := v.route(sourceTable.Schema.O, sourceTable.Name.O)
+	if err != nil {
+		v.err = err
 		return
 	}
-	// The TableName immediately following this TableSource uses index i.
-	source, target := v.sourceNames[v.i], v.targetNames[v.i]
-	if source.TableName == "" {
-		return
-	}
-	key := v.tableKey(source.TableName)
+	key := v.tableKey(sourceTable.Name.O)
 	if _, exists := v.scope.tables[key]; exists {
 		delete(v.scope.tables, key)
 		v.scope.ambiguousTables[key] = struct{}{}
@@ -470,7 +465,7 @@ func (v *tableRenameVisitor) collectTable(table *ast.TableSource) {
 	if _, ambiguous := v.scope.ambiguousTables[key]; ambiguous {
 		return
 	}
-	v.scope.tables[key] = target
+	v.scope.tables[key] = schemaTableName(binding.Target)
 }
 
 // resolveBindings rewrites the collected table-qualified references. It runs
@@ -511,14 +506,13 @@ func resolveRangeVariable(scope *selectScope, aliasKey, tableKey string) (common
 	return commonEvent.SchemaTableName{}, false
 }
 
-// rewriteColumnName rewrites only schema-qualified column references
-// (e.g. `db`.`t`.`col`) to match routed table names.
+// rewriteColumnName rewrites a schema-qualified column reference
+// (e.g. `db`.`t`.`col`) so it keeps pointing at the routed table.
 func (v *tableRenameVisitor) rewriteColumnName(c *ast.ColumnName) {
 	if c == nil || c.Schema.O == "" || c.Table.O == "" {
 		return
 	}
-
-	target, ok := v.targetByQualifiedSource[qualifiedSourceKey(c.Schema.O, c.Table.O, v.caseSensitive)]
+	target, ok := v.qualifiedTarget(c.Schema.O, c.Table.O)
 	if !ok {
 		return
 	}
@@ -526,116 +520,10 @@ func (v *tableRenameVisitor) rewriteColumnName(c *ast.ColumnName) {
 	c.Table = ast.NewCIStr(target.TableName)
 }
 
-// newTableRenameVisitor builds the lookup map used for schema-qualified column
-// references. It pairs each source table with its routed target.
-func newTableRenameVisitor(
-	sourceTables []commonEvent.SchemaTableName,
-	targetTables []commonEvent.SchemaTableName,
-	caseSensitive bool,
-) *tableRenameVisitor {
-	visitor := &tableRenameVisitor{
-		sourceNames:             sourceTables,
-		targetNames:             targetTables,
-		caseSensitive:           caseSensitive,
-		targetByQualifiedSource: make(map[commonEvent.SchemaTableName]commonEvent.SchemaTableName, len(sourceTables)),
-	}
-
-	for i, source := range sourceTables {
-		if i >= len(targetTables) || source.TableName == "" {
-			continue
-		}
-		target := targetTables[i]
-		if source.SchemaName != "" {
-			visitor.targetByQualifiedSource[qualifiedSourceKey(source.SchemaName, source.TableName, caseSensitive)] = target
-		}
-	}
-	return visitor
-}
-
 // tableKey normalizes an unqualified physical table name. Table names follow the
 // router's case sensitivity, so a case-sensitive router keeps `T` and `t`
 // distinct. Aliases are not normalized here: they are matched through their
 // lower-cased form, like SQL identifiers.
 func (v *tableRenameVisitor) tableKey(name string) string {
-	return normalizeIdentifier(name, v.caseSensitive)
-}
-
-// qualifiedSourceKey normalizes a schema-qualified table name for lookup.
-func qualifiedSourceKey(schema, table string, caseSensitive bool) commonEvent.SchemaTableName {
-	return commonEvent.SchemaTableName{
-		SchemaName: normalizeIdentifier(schema, caseSensitive),
-		TableName:  normalizeIdentifier(table, caseSensitive),
-	}
-}
-
-// rewriteDDLStmtTables rewrites table names in a DDL AST.
-// sourceTables and targetTables must have matching lengths and follow the
-// traversal order produced by extractTableNames. TableName nodes are rewritten
-// positionally. Column and wildcard references that name a table are rewritten
-// through the SELECT scope chain, so schema-qualified, table-qualified, and
-// correlated references all keep pointing at the routed table.
-//
-// Returned DDL uses StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
-func rewriteDDLStmtTables(
-	stmt ast.StmtNode,
-	sourceTables []commonEvent.SchemaTableName,
-	targetTables []commonEvent.SchemaTableName,
-	caseSensitive bool,
-) (string, error) {
-	if _, ok := stmt.(ast.DDLNode); !ok {
-		return "", errors.ErrTableRoutingFailed.GenWithStack(
-			"rewrite ddl query got non ddl statement: %T", stmt)
-	}
-
-	switch v := stmt.(type) {
-	case *ast.AlterDatabaseStmt:
-		if len(targetTables) != 1 {
-			return "", errors.ErrTableRoutingFailed.GenWithStack(
-				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
-		}
-		v.Name = ast.NewCIStr(targetTables[0].SchemaName)
-	case *ast.CreateDatabaseStmt:
-		if len(targetTables) != 1 {
-			return "", errors.ErrTableRoutingFailed.GenWithStack(
-				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
-		}
-		v.Name = ast.NewCIStr(targetTables[0].SchemaName)
-	case *ast.DropDatabaseStmt:
-		if len(targetTables) != 1 {
-			return "", errors.ErrTableRoutingFailed.GenWithStack(
-				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
-		}
-		v.Name = ast.NewCIStr(targetTables[0].SchemaName)
-	default:
-		visitor := newTableRenameVisitor(sourceTables, targetTables, caseSensitive)
-		stmt.Accept(visitor)
-		if visitor.hasErr {
-			return "", errors.ErrTableRoutingFailed.GenWithStack(
-				"rewrite ddl query got too few target tables: count=%d", len(targetTables))
-		}
-		// Check if all target tables were consumed - extra targets indicate a configuration mismatch
-		if visitor.i < len(targetTables) {
-			return "", errors.ErrTableRoutingFailed.GenWithStack(
-				"rewrite ddl query got too many target tables: count=%d, used=%d", len(targetTables), visitor.i)
-		}
-		visitor.resolveBindings()
-	}
-
-	bf := &bytes.Buffer{}
-	err := stmt.Restore(&format.RestoreCtx{
-		// TiDB stores the original SQL in sessionctx.QueryString and copies it into
-		// DDL job.Query:
-		// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/session/session.go#L2905
-		// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/executor.go#L6952-L6957
-		// After routing mutates the AST, CDC must serialize it again. Keep the
-		// parser's standard restore style, TiDB special comments, and default
-		// charset handling consistent with CDC's DDL query normalization.
-		Flags: format.DefaultRestoreFlags | format.RestoreTiDBSpecialComment | format.RestoreStringWithoutDefaultCharset,
-		In:    bf,
-	})
-	if err != nil {
-		return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
-	}
-
-	return bf.String(), nil
+	return normalizeIdentifier(name, v.router.caseSensitive)
 }

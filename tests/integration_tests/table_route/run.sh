@@ -14,6 +14,25 @@ ROUTE_NAME_EXTRA_TARGET_DB=route_name_extra_target
 ROUTE_FAILPOINT_BLOCK_BEFORE_WRITE=github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite
 ROUTE_CDC_ADDRS=("127.0.0.1:8300" "127.0.0.1:8301")
 
+# verify_correlated_view <target_extra_db> <view> <expected fragments...>
+# Checks the routed view definition and compares upstream and downstream rows;
+# users 2 and 4 have no orders, so a lost correlation changes the row set.
+function verify_correlated_view() {
+	local target_extra_db=$1
+	local view=$2
+	shift 2
+
+	check_table_not_exists "source_extra_db.${view}" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	run_sql "SHOW CREATE VIEW ${target_extra_db}.${view}_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	for fragment in "$@"; do
+		check_contains "$fragment"
+	done
+	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM source_extra_db.${view}" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_contains 'matched_ids: 1,3'
+	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM ${target_extra_db}.${view}_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_contains 'matched_ids: 1,3'
+}
+
 function verify_table_route_result() {
 	local work_dir=$1
 	local target_db=${2:-target_db}
@@ -47,35 +66,19 @@ function verify_table_route_result() {
 	check_contains "orders_column_view_from_default_routed"
 	check_contains "\`${target_db}\`.\`orders_routed\`.\`id\`"
 	check_contains "FROM \`${target_db}\`.\`orders_routed\`"
-	check_table_not_exists source_extra_db.correlated_users_view "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
-	run_sql "SHOW CREATE VIEW ${target_extra_db}.correlated_users_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
-	check_contains "\`${target_db}\`.\`orders_routed\`.\`user_id\`"
-	check_contains "\`${target_db}\`.\`users_routed\`.\`id\`"
-	# Users 2 and 4 have no orders, so this also detects a lost correlation.
-	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM source_extra_db.correlated_users_view" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	check_contains 'matched_ids: 1,3'
-	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM ${target_extra_db}.correlated_users_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
-	check_contains 'matched_ids: 1,3'
+	verify_correlated_view "$target_extra_db" correlated_users_view \
+		"\`${target_db}\`.\`orders_routed\`.\`user_id\`" \
+		"\`${target_db}\`.\`users_routed\`.\`id\`"
 
 	# Aliased correlated references keep the alias while the table is routed.
-	check_table_not_exists source_extra_db.aliased_correlated_view "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
-	run_sql "SHOW CREATE VIEW ${target_extra_db}.aliased_correlated_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
-	check_contains "FROM \`${target_db}\`.\`users_routed\` AS \`u\`"
-	check_contains "\`o\`.\`user_id\`=\`u\`.\`id\`"
-	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM source_extra_db.aliased_correlated_view" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	check_contains 'matched_ids: 1,3'
-	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM ${target_extra_db}.aliased_correlated_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
-	check_contains 'matched_ids: 1,3'
+	verify_correlated_view "$target_extra_db" aliased_correlated_view \
+		"FROM \`${target_db}\`.\`users_routed\` AS \`u\`" \
+		"\`o\`.\`user_id\`=\`u\`.\`id\`"
 
 	# The nested view references `users` two SELECTs out, and the parent alias `o1`.
-	check_table_not_exists source_extra_db.nested_correlated_view "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
-	run_sql "SHOW CREATE VIEW ${target_extra_db}.nested_correlated_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
-	check_contains "\`${target_db}\`.\`users_routed\`.\`id\`"
-	check_contains "\`o1\`.\`user_id\`=\`${target_db}\`.\`users_routed\`.\`id\`"
-	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM source_extra_db.nested_correlated_view" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	check_contains 'matched_ids: 1,3'
-	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM ${target_extra_db}.nested_correlated_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
-	check_contains 'matched_ids: 1,3'
+	verify_correlated_view "$target_extra_db" nested_correlated_view \
+		"\`${target_db}\`.\`users_routed\`.\`id\`" \
+		"\`o1\`.\`user_id\`=\`${target_db}\`.\`users_routed\`.\`id\`"
 	check_table_not_exists "$target_db.transient_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 
 	# Compare view results explicitly: table data checks alone cannot detect a

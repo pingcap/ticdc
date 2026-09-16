@@ -32,11 +32,8 @@ import (
 // DDL is known to have advanced. Related DDL events are serialized by commit ts.
 type Admin struct {
 	changefeedID common.ChangeFeedID
-	// caseSensitive normalizes the keys of activeRoutes and of the route
-	// registry; it is the same setting that drives rule matching.
-	caseSensitive bool
-	router        Router
-	registry      *TargetTableRegistry
+	router       Router
+	registry     *TargetTableRegistry
 	// activeRoutes is the route admission snapshot keyed by logical source
 	// schema/table name. Partition DDLs may change physical table IDs, but they
 	// do not change this lifecycle unless the logical source route changes.
@@ -116,7 +113,6 @@ func NewAdmin(
 	activeRoutes := make(map[TableKey]RouteBinding, len(tables))
 	admin := &Admin{
 		changefeedID:       changefeedID,
-		caseSensitive:      caseSensitive,
 		router:             router,
 		registry:           NewTargetTableRegistry(changefeedID, caseSensitive, len(tables)),
 		activeRoutes:       activeRoutes,
@@ -246,10 +242,10 @@ func (a *Admin) applyTransition(transition *routeTransition, mutate bool) error 
 		return nil
 	}
 	for _, source := range releases {
-		delete(a.activeRoutes, source.normalized(a.caseSensitive))
+		delete(a.activeRoutes, source.normalized(a.registry.caseSensitive))
 	}
 	for _, admit := range admits {
-		a.activeRoutes[admit.Source.normalized(a.caseSensitive)] = admit
+		a.activeRoutes[admit.Source.normalized(a.registry.caseSensitive)] = admit
 	}
 	return nil
 }
@@ -261,9 +257,9 @@ func (a *Admin) buildAdmissionChange(transition *routeTransition) ([]TableKey, [
 	releases := append([]TableKey(nil), transition.releases...)
 	admits := transition.admits
 	for _, schema := range transition.releaseSchemas {
-		releaseSchema := normalizeIdentifier(schema, a.caseSensitive)
+		releaseSchema := normalizeIdentifier(schema, a.registry.caseSensitive)
 		for source := range a.activeRoutes {
-			if normalizeIdentifier(source.Schema, a.caseSensitive) == releaseSchema {
+			if normalizeIdentifier(source.Schema, a.registry.caseSensitive) == releaseSchema {
 				releases = append(releases, source)
 			}
 		}
