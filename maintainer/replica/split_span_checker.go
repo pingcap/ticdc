@@ -47,9 +47,6 @@ const (
 	trafficBalanceSkipNoImprovingSpan         = "no_improving_span"
 	// Ignore small relative skews that do not indicate meaningful storage pressure.
 	minEventStoreWriteBytesPerSecond = 2 * 1024 * 1024
-	// EventStore traffic is node-wide and shared by all split-table groups. Limit
-	// evacuation to one dispatcher per changefeed during each observation window.
-	eventStoreBalanceCooldown = 5 * time.Minute
 )
 
 var (
@@ -85,8 +82,8 @@ type BalanceCondition struct {
 }
 
 type eventStoreBalanceLimiter struct {
-	generation uint64
-	nextMoveAt time.Time
+	generation                 uint64
+	lastMoveSnapshotGeneration uint64
 }
 
 func (b *BalanceCondition) reset() {
@@ -168,10 +165,11 @@ type SplitSpanChecker struct {
 	minTrafficPercentage  float64
 	maxTrafficPercentage  float64
 
-	balanceCondition            BalanceCondition
-	eventStoreBalanceCondition  BalanceCondition
-	eventStoreBalanceGeneration uint64
-	eventStoreBalanceLimiter    *eventStoreBalanceLimiter
+	balanceCondition             BalanceCondition
+	eventStoreBalanceCondition   BalanceCondition
+	eventStoreBalanceGeneration  uint64
+	eventStoreSnapshotGeneration uint64
+	eventStoreBalanceLimiter     *eventStoreBalanceLimiter
 
 	mergeThreshold  int
 	mergeCheckCount int
@@ -350,7 +348,8 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	}
 
 	aliveNodeIDs := s.nodeManager.GetAliveNodeIDs()
-	eventStoreWriteBytesPerSecond, nodeResourceUsageStatus := s.nodeResourceUsage.EventStoreWriteBytesPerSecond(aliveNodeIDs)
+	eventStoreWriteBytesPerSecond, nodeResourceUsageStatus, eventStoreSnapshotGeneration :=
+		s.nodeResourceUsage.EventStoreWriteBytesPerSecond(aliveNodeIDs)
 
 	lastThreeTrafficPerNode := make(map[node.ID][]float64)
 	lastThreeTrafficSum := make([]float64, 3)
@@ -373,8 +372,9 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	// step2. move a dispatcher away from a node with excessive EventStore traffic.
 	var eventStoreBalanceNeeded bool
 	results, eventStoreBalanceNeeded = s.checkBalanceEventStore(
-		aliveNodeIDs, lastThreeTrafficPerNode, taskMap,
-		eventStoreWriteBytesPerSecond, nodeResourceUsageStatus)
+		aliveNodeIDs, taskMap,
+		eventStoreWriteBytesPerSecond, nodeResourceUsageStatus,
+		eventStoreSnapshotGeneration)
 	if len(results) > 0 || eventStoreBalanceNeeded {
 		return results
 	}
@@ -1160,10 +1160,10 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 // EventStore traffic is persistently above the cluster average.
 func (s *SplitSpanChecker) checkBalanceEventStore(
 	aliveNodeIDs []node.ID,
-	lastThreeTrafficPerNode map[node.ID][]float64,
 	taskMap map[node.ID][]*splitSpanStatus,
 	eventStoreWriteBytesPerSecond map[node.ID]uint64,
 	nodeResourceUsageStatus heartbeatpb.NodeResourceUsageStatus,
+	eventStoreSnapshotGeneration uint64,
 ) ([]SplitSpanCheckResult, bool) {
 	results := make([]SplitSpanCheckResult, 0, 1)
 	if s.eventStoreBalanceGeneration != s.eventStoreBalanceLimiter.generation {
@@ -1175,10 +1175,6 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 		s.eventStoreBalanceCondition.reset()
 		return results, false
 	}
-	if !s.eventStoreBalanceCondition.statusUpdated {
-		return results, false
-	}
-
 	var totalWriteBytes float64
 	var sourceNodeID node.ID
 	var sourceWriteBytes uint64
@@ -1201,6 +1197,18 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 		s.eventStoreBalanceCondition.reset()
 		return results, false
 	}
+	// EventStore traffic is node-wide and shared by all split-table groups. Do
+	// not emit multiple moves from one snapshot or count repeated checker runs
+	// as additional overload observations.
+	if eventStoreSnapshotGeneration == s.eventStoreBalanceLimiter.lastMoveSnapshotGeneration {
+		s.eventStoreBalanceCondition.reset()
+		s.balanceCondition.reset()
+		return results, true
+	}
+	if eventStoreSnapshotGeneration == s.eventStoreSnapshotGeneration {
+		return results, true
+	}
+	s.eventStoreSnapshotGeneration = eventStoreSnapshotGeneration
 
 	var targetNodeID node.ID
 	var moveSpan *splitSpanStatus
@@ -1242,14 +1250,10 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 		return results, true
 	}
 
-	s.eventStoreBalanceCondition.updateScore(targetNodeID, sourceNodeID, true, true)
+	s.eventStoreBalanceCondition.updateScore(targetNodeID, sourceNodeID, false, true)
 	if s.eventStoreBalanceCondition.balanceScore < s.balanceScoreThreshold {
 		return results, true
 	}
-	if time.Now().Before(s.eventStoreBalanceLimiter.nextMoveAt) {
-		return results, false
-	}
-
 	log.Info("move dispatcher away from busy event store",
 		zap.String("changefeed", s.changefeedID.String()),
 		zap.Int64("group", s.groupID),
@@ -1264,7 +1268,7 @@ func (s *SplitSpanChecker) checkBalanceEventStore(
 		TargetNode: targetNodeID,
 	})
 	s.eventStoreBalanceLimiter.generation++
-	s.eventStoreBalanceLimiter.nextMoveAt = time.Now().Add(eventStoreBalanceCooldown)
+	s.eventStoreBalanceLimiter.lastMoveSnapshotGeneration = eventStoreSnapshotGeneration
 	s.eventStoreBalanceGeneration = s.eventStoreBalanceLimiter.generation
 	s.eventStoreBalanceCondition.reset()
 	s.balanceCondition.reset()

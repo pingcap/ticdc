@@ -32,6 +32,7 @@ type NodeResourceUsageTracker struct {
 	mu                            sync.RWMutex
 	eventStoreWriteBytesPerSecond map[node.ID]uint64
 	status                        heartbeatpb.NodeResourceUsageStatus
+	generation                    uint64
 	updatedAt                     time.Time
 	now                           func() time.Time
 }
@@ -53,6 +54,7 @@ func (t *NodeResourceUsageTracker) ReplaceEventStoreWriteBytesPerSecond(
 	defer t.mu.Unlock()
 
 	now := t.now()
+	t.generation++
 	if status != heartbeatpb.NodeResourceUsageStatus_AVAILABLE {
 		if status != heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED {
 			status = heartbeatpb.NodeResourceUsageStatus_INCOMPLETE
@@ -79,26 +81,27 @@ func (t *NodeResourceUsageTracker) ReplaceEventStoreWriteBytesPerSecond(
 	t.status = heartbeatpb.NodeResourceUsageStatus_AVAILABLE
 }
 
-// EventStoreWriteBytesPerSecond returns a shared immutable rate snapshot and its
-// availability. Unsupported means callers may use the legacy policy during a
-// rolling upgrade. Incomplete means resource-aware moves must be suppressed.
+// EventStoreWriteBytesPerSecond returns a shared immutable rate snapshot, its
+// availability, and a generation that advances when the snapshot is replaced.
+// Unsupported means callers may use the legacy policy during a rolling upgrade.
+// Incomplete means resource-aware moves must be suppressed.
 func (t *NodeResourceUsageTracker) EventStoreWriteBytesPerSecond(
 	nodeIDs []node.ID,
-) (map[node.ID]uint64, heartbeatpb.NodeResourceUsageStatus) {
+) (map[node.ID]uint64, heartbeatpb.NodeResourceUsageStatus, uint64) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
 	if t.status == heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED {
-		return nil, t.status
+		return nil, t.status, t.generation
 	}
 	if t.status != heartbeatpb.NodeResourceUsageStatus_AVAILABLE ||
 		t.now().Sub(t.updatedAt) > nodeResourceUsageStaleThreshold {
-		return nil, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE
+		return nil, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE, t.generation
 	}
 	for _, nodeID := range nodeIDs {
 		if _, ok := t.eventStoreWriteBytesPerSecond[nodeID]; !ok {
-			return nil, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE
+			return nil, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE, t.generation
 		}
 	}
-	return t.eventStoreWriteBytesPerSecond, heartbeatpb.NodeResourceUsageStatus_AVAILABLE
+	return t.eventStoreWriteBytesPerSecond, heartbeatpb.NodeResourceUsageStatus_AVAILABLE, t.generation
 }

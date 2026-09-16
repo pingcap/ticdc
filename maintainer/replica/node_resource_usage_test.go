@@ -32,34 +32,45 @@ func TestNodeResourceUsageTrackerSharesRateSnapshot(t *testing.T) {
 		{NodeId: "node1", EventStoreWriteBytesPerSecond: 10},
 		{NodeId: "node2", EventStoreWriteBytesPerSecond: 20},
 	}, heartbeatpb.NodeResourceUsageStatus_AVAILABLE)
-	rate, status := tracker.EventStoreWriteBytesPerSecond(nodeIDs)
+	rate, status, generation := tracker.EventStoreWriteBytesPerSecond(nodeIDs)
 	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_AVAILABLE, status)
 	require.Equal(t, map[node.ID]uint64{"node1": 10, "node2": 20}, rate)
+	require.Equal(t, uint64(1), generation)
 
-	rateAgain, status := tracker.EventStoreWriteBytesPerSecond(nodeIDs)
+	rateAgain, status, generationAgain := tracker.EventStoreWriteBytesPerSecond(nodeIDs)
 	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_AVAILABLE, status)
 	require.Equal(t, rate, rateAgain)
+	require.Equal(t, generation, generationAgain)
 	require.Zero(t, testing.AllocsPerRun(100, func() {
 		tracker.EventStoreWriteBytesPerSecond(nodeIDs)
 	}))
 
 	now = now.Add(nodeResourceUsageStaleThreshold + time.Nanosecond)
-	_, status = tracker.EventStoreWriteBytesPerSecond(nodeIDs)
+	_, status, generationAgain = tracker.EventStoreWriteBytesPerSecond(nodeIDs)
 	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE, status)
+	require.Equal(t, generation, generationAgain)
+
+	tracker.ReplaceEventStoreWriteBytesPerSecond([]*heartbeatpb.NodeResourceUsage{
+		{NodeId: "node1", EventStoreWriteBytesPerSecond: 10},
+		{NodeId: "node2", EventStoreWriteBytesPerSecond: 20},
+	}, heartbeatpb.NodeResourceUsageStatus_AVAILABLE)
+	_, status, generationAgain = tracker.EventStoreWriteBytesPerSecond(nodeIDs)
+	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_AVAILABLE, status)
+	require.Equal(t, generation+1, generationAgain)
 }
 
 func TestNodeResourceUsageTrackerDistinguishesUnsupportedAndIncomplete(t *testing.T) {
 	tracker := NewNodeResourceUsageTracker()
 	nodeIDs := []node.ID{"node1", "node2"}
 
-	_, status := tracker.EventStoreWriteBytesPerSecond(nodeIDs)
+	_, status, _ := tracker.EventStoreWriteBytesPerSecond(nodeIDs)
 	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE, status)
 
 	tracker.ReplaceEventStoreWriteBytesPerSecond(nil, heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED)
-	_, status = tracker.EventStoreWriteBytesPerSecond(nodeIDs)
+	_, status, _ = tracker.EventStoreWriteBytesPerSecond(nodeIDs)
 	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED, status)
 
 	tracker.ReplaceEventStoreWriteBytesPerSecond(nil, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE)
-	_, status = tracker.EventStoreWriteBytesPerSecond(nodeIDs)
+	_, status, _ = tracker.EventStoreWriteBytesPerSecond(nodeIDs)
 	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_INCOMPLETE, status)
 }

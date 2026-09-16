@@ -750,7 +750,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_AvoidsBusyEventStore(t *testing.T)
 	require.Equal(t, replicas[0], moveResult.MoveSpans[0])
 }
 
-func TestSplitSpanChecker_CheckBalanceEventStore_EvictsBusyNode(t *testing.T) {
+func TestSplitSpanChecker_CheckBalanceEventStore_EvictsPersistentlyBusyNode(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -758,7 +758,7 @@ func TestSplitSpanChecker_CheckBalanceEventStore_EvictsBusyNode(t *testing.T) {
 		WriteKeyThreshold:          util.AddressOf(1000),
 		RegionThreshold:            util.AddressOf(10),
 		RegionCountRefreshInterval: util.AddressOf(time.Minute),
-		BalanceScoreThreshold:      util.AddressOf(1),
+		BalanceScoreThreshold:      util.AddressOf(3),
 		MinTrafficPercentage:       util.AddressOf(0.8),
 		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
@@ -789,22 +789,41 @@ func TestSplitSpanChecker_CheckBalanceEventStore_EvictsBusyNode(t *testing.T) {
 		status.GetStatus().CheckpointTs = oracle.ComposeTS(
 			time.Now().Add(-10*time.Second).UnixMilli(), 0)
 	}
-	checker.balanceCondition.statusUpdated = true
-	checker.eventStoreBalanceCondition.statusUpdated = true
 	// A large relative skew at low absolute throughput is not evidence that the
 	// EventStore is overloaded.
 	setEventStoreWriteBytesPerSecond(checker.nodeResourceUsage,
 		map[node.ID]uint64{"busy": 4000, "idle": 100})
 	require.Empty(t, checker.Check(10))
 
-	checker.balanceCondition.statusUpdated = true
-	checker.eventStoreBalanceCondition.statusUpdated = true
-	setEventStoreWriteBytesPerSecond(checker.nodeResourceUsage,
-		map[node.ID]uint64{
-			"busy": 4 * minEventStoreWriteBytesPerSecond,
-			"idle": 100,
-		})
+	overloadedRates := map[node.ID]uint64{
+		"busy": 4 * minEventStoreWriteBytesPerSecond,
+		"idle": 100,
+	}
+	setEventStoreWriteBytesPerSecond(checker.nodeResourceUsage, overloadedRates)
+	require.Empty(t, checker.Check(10))
+	require.Equal(t, 1, checker.eventStoreBalanceCondition.balanceScore)
 
+	// Dispatcher heartbeats and repeated checks must not count the same resource
+	// snapshot more than once.
+	for range 3 {
+		checker.eventStoreBalanceCondition.statusUpdated = true
+		require.Empty(t, checker.Check(10))
+		require.Equal(t, 1, checker.eventStoreBalanceCondition.balanceScore)
+	}
+
+	// A normal sample breaks the consecutive-overload sequence, so a transient
+	// spike cannot trigger a move.
+	setEventStoreWriteBytesPerSecond(checker.nodeResourceUsage,
+		map[node.ID]uint64{"busy": 100, "idle": 100})
+	require.Empty(t, checker.Check(10))
+	require.Zero(t, checker.eventStoreBalanceCondition.balanceScore)
+
+	// Only three distinct, consecutive overload samples reach the threshold.
+	for range 2 {
+		setEventStoreWriteBytesPerSecond(checker.nodeResourceUsage, overloadedRates)
+		require.Empty(t, checker.Check(10))
+	}
+	setEventStoreWriteBytesPerSecond(checker.nodeResourceUsage, overloadedRates)
 	results := checker.Check(10)
 	require.Len(t, results, 1)
 	moveResult := results.([]SplitSpanCheckResult)[0]
@@ -827,12 +846,71 @@ func TestSplitSpanChecker_CheckBalanceEventStore_EvictsBusyNode(t *testing.T) {
 	require.Empty(t, checker.Check(10))
 }
 
+func TestSplitSpanChecker_CheckBalanceEventStoreRequiresSameBusyNode(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	schedulerCfg := &config.ChangefeedSchedulerConfig{
+		WriteKeyThreshold:          util.AddressOf(10 * 1024 * 1024),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(3),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
+	}
+
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	for _, nodeID := range []node.ID{"node-a", "node-b", "idle"} {
+		nodeManager.GetAliveNodes()[nodeID] = node.NewInfo(nodeID.String(), "")
+	}
+
+	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
+	checker := newTestSplitChecker(t, cfID, replicas[0].GetGroupID(), schedulerCfg)
+	for i, replica := range replicas {
+		replica.SetNodeID([]node.ID{"node-a", "node-b", "idle"}[i])
+		checker.AddReplica(replica)
+		status := checker.allTasks[replica.ID]
+		status.lastThreeTraffic = []float64{1024 * 1024, 1024 * 1024, 1024 * 1024}
+		status.regionCount = 3
+		status.GetStatus().CheckpointTs = oracle.ComposeTS(
+			time.Now().Add(-10*time.Second).UnixMilli(), 0)
+	}
+
+	setRates := func(busyNode node.ID) {
+		rates := map[node.ID]uint64{
+			"node-a": 5 * 1024 * 1024,
+			"node-b": 5 * 1024 * 1024,
+			"idle":   100,
+		}
+		rates[busyNode] = 4 * minEventStoreWriteBytesPerSecond
+		setEventStoreWriteBytesPerSecond(checker.nodeResourceUsage, rates)
+	}
+
+	// Alternating spikes share the same idle destination but must not be treated
+	// as persistent overload on either source node.
+	for _, busyNode := range []node.ID{"node-a", "node-b", "node-a"} {
+		setRates(busyNode)
+		require.Empty(t, checker.Check(10))
+		require.Equal(t, 1, checker.eventStoreBalanceCondition.balanceScore)
+	}
+
+	// Two more samples for node-a make three consecutive observations and allow
+	// one dispatcher to move away from node-a.
+	setRates("node-a")
+	require.Empty(t, checker.Check(10))
+	setRates("node-a")
+	results := checker.Check(10)
+	require.Len(t, results, 1)
+	moveResult := results.([]SplitSpanCheckResult)[0]
+	require.Equal(t, replicas[0], moveResult.MoveSpans[0])
+	require.Equal(t, node.ID("idle"), moveResult.TargetNode)
+}
+
 func TestSplitSpanChecker_CheckBalanceEventStoreLimitsMovesAcrossGroups(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		EnableTableAcrossNodes:     util.AddressOf(true),
-		WriteKeyThreshold:          util.AddressOf(1000),
+		WriteKeyThreshold:          util.AddressOf(10 * 1024 * 1024),
 		RegionThreshold:            util.AddressOf(10),
 		RegionCountRefreshInterval: util.AddressOf(time.Minute),
 		BalanceScoreThreshold:      util.AddressOf(1),
@@ -860,11 +938,16 @@ func TestSplitSpanChecker_CheckBalanceEventStoreLimitsMovesAcrossGroups(t *testi
 			}
 			checker.AddReplica(replica)
 			status := checker.allTasks[replica.ID]
-			status.lastThreeTraffic = []float64{0.1, 0.1, 0.1}
+			traffic := 0.1
+			if tableID == 100001 && i == 0 {
+				traffic = 2 * 1024 * 1024
+			}
+			status.lastThreeTraffic = []float64{traffic, traffic, traffic}
 			status.regionCount = 3
 			status.GetStatus().CheckpointTs = oracle.ComposeTS(
 				time.Now().Add(-10*time.Second).UnixMilli(), 0)
 		}
+		checker.balanceCondition.statusUpdated = true
 		checker.eventStoreBalanceCondition.statusUpdated = true
 		checkers = append(checkers, checker)
 	}
@@ -877,14 +960,19 @@ func TestSplitSpanChecker_CheckBalanceEventStoreLimitsMovesAcrossGroups(t *testi
 		})
 	require.Len(t, checkers[0].Check(10), 1)
 
-	// The first move invalidates every group's accumulated score. Even after a
-	// fresh status update, another group cannot emit a move during the cooldown.
+	// The second group also has traffic imbalance that would normally emit a
+	// split operation. Only one EventStore move is allowed for one resource
+	// snapshot, and the checker must not fall through to later scheduling paths.
 	require.Empty(t, checkers[1].Check(10))
+	require.False(t, checkers[1].balanceCondition.statusUpdated)
 	checkers[1].eventStoreBalanceCondition.statusUpdated = true
 	require.Empty(t, checkers[1].Check(10))
 
-	checkers[1].eventStoreBalanceLimiter.nextMoveAt = time.Now().Add(-time.Second)
-	checkers[1].eventStoreBalanceCondition.statusUpdated = true
+	setEventStoreWriteBytesPerSecond(tracker,
+		map[node.ID]uint64{
+			"busy": 4 * minEventStoreWriteBytesPerSecond,
+			"idle": 100,
+		})
 	require.Len(t, checkers[1].Check(10), 1)
 }
 
@@ -981,7 +1069,6 @@ func TestSplitSpanChecker_CheckBalanceEventStoreChoosesImprovingSpan(t *testing.
 	// configured 1.3x boundary. The 100 MiB/s span would produce 10/150 and
 	// immediately invite the reverse move.
 	replicas[1].SetNodeID("node-b")
-	checker.eventStoreBalanceLimiter.nextMoveAt = time.Now().Add(-time.Second)
 	checker.eventStoreBalanceCondition.statusUpdated = true
 	checker.balanceCondition.statusUpdated = true
 	setEventStoreWriteBytesPerSecond(checker.nodeResourceUsage,

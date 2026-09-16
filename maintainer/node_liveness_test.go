@@ -357,7 +357,7 @@ func TestNodeHeartbeatReportsAndReceivesResourceUsage(t *testing.T) {
 	responseMessage.From = m.coordinatorID
 	m.onNodeHeartbeatResponse(responseMessage)
 
-	rate, status := m.nodeResourceUsage.EventStoreWriteBytesPerSecond([]node.ID{"n1", "n2"})
+	rate, status, _ := m.nodeResourceUsage.EventStoreWriteBytesPerSecond([]node.ID{"n1", "n2"})
 	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_AVAILABLE, status)
 	require.Equal(t, map[node.ID]uint64{"n1": 10, "n2": 20}, rate)
 
@@ -382,7 +382,7 @@ func TestNodeHeartbeatReportsAndReceivesResourceUsage(t *testing.T) {
 	responseMessage.From = m.coordinatorID
 	m.onNodeHeartbeatResponse(responseMessage)
 
-	rate, status = m.nodeResourceUsage.EventStoreWriteBytesPerSecond([]node.ID{"n1", "n2"})
+	rate, status, _ = m.nodeResourceUsage.EventStoreWriteBytesPerSecond([]node.ID{"n1", "n2"})
 	require.Equal(t, heartbeatpb.NodeResourceUsageStatus_AVAILABLE, status)
 	require.Equal(t, map[node.ID]uint64{"n1": 30, "n2": 40}, rate)
 }
