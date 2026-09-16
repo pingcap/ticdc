@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -42,9 +42,8 @@ type Client struct {
 
 	nextRequestID atomic.Uint64
 
-	pendingMu sync.Mutex
-	pending   map[uint64]*tableInfosRequest
-	requests  map[uint64]chan *messaging.SchemaStoreResponse
+	pending  sync.Map // uint64 request ID -> *tableInfosRequest
+	requests sync.Map // uint64 request ID -> chan *messaging.SchemaStoreResponse
 }
 
 var (
@@ -70,11 +69,7 @@ func GetSchemaStoreClient() *Client {
 		return c
 	}
 
-	c := &Client{
-		mc:       mc,
-		pending:  make(map[uint64]*tableInfosRequest),
-		requests: make(map[uint64]chan *messaging.SchemaStoreResponse),
-	}
+	c := &Client{mc: mc}
 	c.mc.RegisterHandler(messaging.SchemaStoreClientTopic, c.handleMessage)
 	schemaStoreClientInstance.Store(c)
 	return c
@@ -83,14 +78,10 @@ func GetSchemaStoreClient() *Client {
 func (c *Client) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
 	for _, m := range msg.Message {
 		if resp, ok := m.(*messaging.SchemaStoreResponse); ok {
-			c.pendingMu.Lock()
-			ch := c.requests[resp.RequestID]
-			c.pendingMu.Unlock()
-			if ch != nil {
-				select {
-				case ch <- resp:
-				default:
-				}
+			if value, ok := c.requests.LoadAndDelete(resp.RequestID); ok {
+				// Only one response can claim this channel. Its single buffered slot
+				// stays open so delivery cannot block even if the caller has canceled.
+				value.(chan *messaging.SchemaStoreResponse) <- resp
 			}
 			continue
 		}
@@ -102,9 +93,7 @@ func (c *Client) handleMessage(ctx context.Context, msg *messaging.TargetMessage
 			continue
 		}
 
-		c.pendingMu.Lock()
-		req, ok := c.pending[resp.RequestID]
-		c.pendingMu.Unlock()
+		value, ok := c.pending.Load(resp.RequestID)
 		if !ok {
 			log.Debug("schema store response received but request already removed",
 				zap.Uint64("requestID", resp.RequestID),
@@ -112,6 +101,7 @@ func (c *Client) handleMessage(ctx context.Context, msg *messaging.TargetMessage
 				zap.Bool("done", resp.Done))
 			continue
 		}
+		req := value.(*tableInfosRequest)
 
 		// Apply backpressure while the caller decodes earlier responses. Cancellation
 		// releases the router if the caller exits without draining the channel.
@@ -149,16 +139,8 @@ func (c *Client) GetTableInfos(
 	}
 
 	respCh := make(chan *messaging.SchemaStoreTableInfosResponse, bufferSize)
-	c.pendingMu.Lock()
-	c.pending[reqID] = &tableInfosRequest{ctx: ctx, responses: respCh}
-	c.pendingMu.Unlock()
-
-	cleanup := func() {
-		c.pendingMu.Lock()
-		delete(c.pending, reqID)
-		c.pendingMu.Unlock()
-	}
-	defer cleanup()
+	c.pending.Store(reqID, &tableInfosRequest{ctx: ctx, responses: respCh})
+	defer c.pending.Delete(reqID)
 
 	target := node.ID(appcontext.GetID())
 	if target.IsEmpty() {
@@ -262,14 +244,8 @@ func (c *Client) request(ctx context.Context, req *messaging.SchemaStoreRequest)
 	}
 	req.RequestID = c.nextRequestID.Add(1)
 	ch := make(chan *messaging.SchemaStoreResponse, 1)
-	c.pendingMu.Lock()
-	c.requests[req.RequestID] = ch
-	c.pendingMu.Unlock()
-	defer func() {
-		c.pendingMu.Lock()
-		delete(c.requests, req.RequestID)
-		c.pendingMu.Unlock()
-	}()
+	c.requests.Store(req.RequestID, ch)
+	defer c.requests.Delete(req.RequestID)
 	if err := c.mc.SendCommand(messaging.NewSingleTargetMessage(target, messaging.SchemaStoreTopic, req)); err != nil {
 		return nil, err
 	}

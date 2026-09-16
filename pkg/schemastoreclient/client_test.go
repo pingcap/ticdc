@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -46,7 +46,8 @@ func TestSchemaStoreClientFullResponseBuffer(t *testing.T) {
 			for range cap(responses) {
 				responses <- &messaging.SchemaStoreTableInfosResponse{RequestID: 1}
 			}
-			client := &Client{pending: map[uint64]*tableInfosRequest{1: {ctx: ctx, responses: responses}}}
+			client := &Client{}
+			client.pending.Store(uint64(1), &tableInfosRequest{ctx: ctx, responses: responses})
 			extra := &messaging.SchemaStoreTableInfosResponse{RequestID: 1, TableID: 4097, Done: done}
 			handled := make(chan error, 1)
 			go func() {
@@ -78,7 +79,8 @@ func TestSchemaStoreClientFullResponseBuffer(t *testing.T) {
 		defer cancel()
 		responses := make(chan *messaging.SchemaStoreTableInfosResponse, 1)
 		responses <- &messaging.SchemaStoreTableInfosResponse{RequestID: 1}
-		client := &Client{pending: map[uint64]*tableInfosRequest{1: {ctx: ctx, responses: responses}}}
+		client := &Client{}
+		client.pending.Store(uint64(1), &tableInfosRequest{ctx: ctx, responses: responses})
 		handled := make(chan error, 1)
 		go func() {
 			handled <- client.handleMessage(context.Background(), messaging.NewSingleTargetMessage("test",
@@ -158,7 +160,7 @@ func TestSchemaStoreClientTableInfosCompletion(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mc := mock.NewMockMessageCenter(gomock.NewController(t))
-			client := &Client{mc: mc, pending: make(map[uint64]*tableInfosRequest)}
+			client := &Client{mc: mc}
 			mc.EXPECT().SendCommand(gomock.Any()).DoAndReturn(func(msg *messaging.TargetMessage) error {
 				req := msg.Message[0].(*messaging.SchemaStoreTableInfosRequest)
 				for _, resp := range tt.responses {
@@ -191,9 +193,43 @@ func TestSchemaStoreClientTableInfosCompletion(t *testing.T) {
 				}
 				require.Equal(t, tt.wantIDs, ids)
 			}
-			require.Empty(t, client.pending)
+			requireNoPendingRequests(t, client)
 		})
 	}
+}
+
+func requireNoPendingRequests(t *testing.T, client *Client) {
+	t.Helper()
+	for _, requests := range []*sync.Map{&client.pending, &client.requests} {
+		requests.Range(func(key, _ any) bool {
+			t.Errorf("request %v was not cleaned up", key)
+			return true
+		})
+	}
+}
+
+func TestSchemaStoreClientDuplicateResponse(t *testing.T) {
+	client := &Client{}
+	responses := make(chan *messaging.SchemaStoreResponse, 1)
+	resp := &messaging.SchemaStoreResponse{RequestID: 1}
+	client.requests.Store(resp.RequestID, responses)
+	msg := messaging.NewSingleTargetMessage("test", messaging.SchemaStoreClientTopic, resp)
+	require.NoError(t, client.handleMessage(context.Background(), msg))
+	require.Same(t, resp, <-responses)
+
+	// Even after the first response is consumed, duplicates must not be delivered
+	// again while the caller is finishing the request.
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			require.NoError(t, client.handleMessage(context.Background(), msg))
+		}()
+	}
+	wg.Wait()
+	require.Empty(t, responses)
+	requireNoPendingRequests(t, client)
 }
 
 func newTestClient(t *testing.T) (*Client, messaging.MessageCenter) {
@@ -247,7 +283,7 @@ func TestSchemaStoreClientConcurrentRequests(t *testing.T) {
 			require.True(t, req.ForceReplicate)
 		}
 	}
-	require.Empty(t, client.requests)
+	requireNoPendingRequests(t, client)
 	next, _ := newTestClient(t)
 	require.NotSame(t, client, next)
 }
@@ -261,7 +297,7 @@ func TestSchemaStoreClientRequestErrors(t *testing.T) {
 			&messaging.SchemaStoreResponse{RequestID: req.RequestID, Error: remoteErr.Error(), ErrorCode: string(errors.ErrKeyspaceNotFound.RFCCode())}))
 	})
 	require.True(t, errors.ErrKeyspaceNotFound.Equal(client.RegisterKeyspace(context.Background(), common.DefaultKeyspace)))
-	require.Empty(t, client.requests)
+	requireNoPendingRequests(t, client)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	requestSeen := make(chan uint64, 1)
@@ -271,7 +307,7 @@ func TestSchemaStoreClientRequestErrors(t *testing.T) {
 		return nil
 	})
 	require.ErrorIs(t, client.RegisterKeyspace(ctx, common.DefaultKeyspace), context.Canceled)
-	require.Empty(t, client.requests)
+	requireNoPendingRequests(t, client)
 	// A response arriving after cancellation must not block the message handler.
 	require.NoError(t, client.handleMessage(context.Background(), messaging.NewSingleTargetMessage(
 		node.ID(appcontext.GetID()), messaging.SchemaStoreClientTopic,
@@ -283,5 +319,5 @@ func TestSchemaStoreClientRequestErrors(t *testing.T) {
 	require.Empty(t, requestSeen)
 	appcontext.SetID("missing-target")
 	require.Error(t, client.RegisterKeyspace(context.Background(), common.DefaultKeyspace))
-	require.Empty(t, client.requests)
+	requireNoPendingRequests(t, client)
 }
