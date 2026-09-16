@@ -531,14 +531,8 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		}
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
-<<<<<<< HEAD
-			rawEvent := readPersistedDDLEvent(storageSnap, ts)
-			// the tableID of buildDDLEvent is not used in this function, set it to 0
-			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, 0)
-=======
 			rawEvent := readPersistedDDLEventWithEncryption(storageSnap, ts, p.encryptionManager, p.keyspaceID)
 			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, common.DDLSpanTableID)
->>>>>>> cf33e2a9d ( schemastore: fix replication when DDL makes a table eligible (#6254))
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
