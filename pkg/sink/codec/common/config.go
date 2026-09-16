@@ -417,9 +417,9 @@ func (c *Config) MessageLength(message *Message) int {
 // before a Message has been constructed.
 func (c *Config) MessageLengthForKeyValue(keyLength, valueLength int) int {
 	if c.useKafkaRecordBatchSize {
-		return keyLength + valueLength + kafkaRecordBatchOverhead
+		return kafkaRecordBatchLength(keyLength, valueLength)
 	}
-	return keyLength + valueLength + MaxRecordOverhead
+	return recordLength(keyLength, valueLength)
 }
 
 // WithChangefeedID set the `changefeedID`
