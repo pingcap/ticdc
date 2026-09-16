@@ -58,7 +58,7 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 	opts = append(opts, clientOpts...)
 	opts = append(opts,
 		kgo.WithContext(ctx),
-		kgo.WithLogger(newClientLogger(changefeedID, "shared")),
+		kgo.WithLogger(newClientLogger(changefeedID)),
 		kgo.WithHooks(metricsHook),
 		kgo.MetadataMinAge(adminMetadataMinAge))
 	opts = append(opts, producerOpts...)
@@ -75,7 +75,7 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 	}
 
 	log.Info("kafka sink configuration resolved",
-		zap.String("namespace", changefeedID.Keyspace()),
+		zap.String("keyspace", changefeedID.Keyspace()),
 		zap.String("changefeed", changefeedID.Name()),
 		zap.String("client", KafkaClientFranz),
 		zap.String("topic", o.Topic),
@@ -126,9 +126,6 @@ func (f *franzFactory) Close() {
 }
 
 func (f *franzFactory) MetricsCollector(AdminClient) MetricsCollector {
-	return noopMetricsCollector{}
+	// franz-go reports producer metrics through hooks, so there is nothing to poll.
+	return nil
 }
-
-type noopMetricsCollector struct{}
-
-func (noopMetricsCollector) Run(ctx context.Context) { <-ctx.Done() }

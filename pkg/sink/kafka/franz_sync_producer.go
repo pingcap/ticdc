@@ -16,7 +16,6 @@ package kafka
 import (
 	"context"
 	"sync/atomic"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -69,7 +68,7 @@ func (p *syncProducer) sendRecords(ctx context.Context, message *codecCommon.Mes
 
 	log.Error("kafka message send failed",
 		zap.String("keyspace", p.id.Keyspace()), zap.String("changefeed", p.id.Name()),
-		zap.String("eventContext", BuildEventLogContext(p.id.Keyspace(), p.id.Name(), message.LogInfo)),
+		zap.String("eventContext", BuildEventLogContext(message.LogInfo)),
 		zap.Error(err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
@@ -81,8 +80,6 @@ func (p *syncProducer) Close() {
 		return
 	}
 
-	start := time.Now()
 	log.Info("kafka ddl producer closed",
-		zap.String("keyspace", p.id.Keyspace()), zap.String("changefeed", p.id.Name()),
-		zap.Duration("duration", time.Since(start)))
+		zap.String("keyspace", p.id.Keyspace()), zap.String("changefeed", p.id.Name()))
 }

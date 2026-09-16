@@ -16,7 +16,6 @@ package kafka
 import (
 	"context"
 	"sync/atomic"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -45,11 +44,9 @@ func (p *asyncProducer) Close() {
 		return
 	}
 
-	start := time.Now()
 	log.Info("kafka async producer closed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
-		zap.String("changefeed", p.changefeedID.Name()),
-		zap.Duration("duration", time.Since(start)))
+		zap.String("changefeed", p.changefeedID.Name()))
 }
 
 func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *codeccommon.Message) error {
@@ -102,8 +99,7 @@ func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
 				log.Error("kafka message send failed",
 					zap.String("keyspace", p.changefeedID.Keyspace()),
 					zap.String("changefeed", p.changefeedID.Name()),
-					zap.String("eventContext", BuildEventLogContext(
-						p.changefeedID.Keyspace(), p.changefeedID.Name(), result.logInfo)),
+					zap.String("eventContext", BuildEventLogContext(result.logInfo)),
 					zap.Error(result.err))
 				return errors.WrapError(errors.ErrKafkaSendMessage, result.err)
 			}

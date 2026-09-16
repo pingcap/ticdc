@@ -227,10 +227,12 @@ func (s *sink) Run(ctx context.Context) error {
 	g.Go(func() error {
 		return s.sendDMLEvent(ctx)
 	})
-	g.Go(func() error {
-		s.metricsCollector.Run(ctx)
-		return nil
-	})
+	if s.metricsCollector != nil {
+		g.Go(func() error {
+			s.metricsCollector.Run(ctx)
+			return nil
+		})
+	}
 	err := g.Wait()
 	s.isNormal.Store(false)
 	return err
