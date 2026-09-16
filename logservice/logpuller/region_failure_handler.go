@@ -216,7 +216,7 @@ func (r *regionFailureHandler) Report(errInfo regionErrorInfo) {
 	if errInfo.subscribedSpan.rangeLock.UnlockRange(
 		errInfo.span.StartKey, errInfo.span.EndKey,
 		errInfo.verID.GetID(), errInfo.verID.GetVer(), errInfo.resolvedTs()) {
-		// Defer span cleanup to Run so Report never calls back into dynstream.
+		// defer span cleanup to Run so `Report` never calls back into dynstream.
 		r.cache.addDrainedSpan(errInfo.subscribedSpan)
 		return
 	}
