@@ -19,15 +19,182 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/messaging/mock"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSchemaStoreClientFullResponseBuffer(t *testing.T) {
+	for _, done := range []bool{false, true} {
+		name := "table response"
+		if done {
+			name = "completion"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			responses := make(chan *messaging.SchemaStoreTableInfosResponse, 4096)
+			for range cap(responses) {
+				responses <- &messaging.SchemaStoreTableInfosResponse{RequestID: 1}
+			}
+			client := &Client{pending: map[uint64]*tableInfosRequest{1: {ctx: ctx, responses: responses}}}
+			extra := &messaging.SchemaStoreTableInfosResponse{RequestID: 1, TableID: 4097, Done: done}
+			handled := make(chan error, 1)
+			go func() {
+				handled <- client.handleMessage(ctx, messaging.NewSingleTargetMessage("test",
+					messaging.SchemaStoreClientTopic, extra))
+			}()
+			select {
+			case err := <-handled:
+				t.Fatalf("handler discarded a response from a full buffer: %v", err)
+			case <-time.After(20 * time.Millisecond):
+			}
+			// Free one slot so the handler can deliver the response without dropping it.
+			<-responses
+			select {
+			case err := <-handled:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("handler did not resume after the buffer was drained")
+			}
+			for range cap(responses) - 1 {
+				<-responses
+			}
+			require.Same(t, extra, <-responses)
+		})
+	}
+
+	t.Run("cancellation releases blocked handler", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		responses := make(chan *messaging.SchemaStoreTableInfosResponse, 1)
+		responses <- &messaging.SchemaStoreTableInfosResponse{RequestID: 1}
+		client := &Client{pending: map[uint64]*tableInfosRequest{1: {ctx: ctx, responses: responses}}}
+		handled := make(chan error, 1)
+		go func() {
+			handled <- client.handleMessage(context.Background(), messaging.NewSingleTargetMessage("test",
+				messaging.SchemaStoreClientTopic, &messaging.SchemaStoreTableInfosResponse{RequestID: 1, Done: true}))
+		}()
+		cancel()
+		select {
+		case err := <-handled:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("handler remained blocked after the request was canceled")
+		}
+	})
+}
+
+func TestSchemaStoreClientTableInfosCompletion(t *testing.T) {
+	previousID := appcontext.GetID()
+	appcontext.SetID("test")
+	t.Cleanup(func() { appcontext.SetID(previousID) })
+	tableInfos := make(map[int64][]byte)
+	for _, id := range []int64{1, 2} {
+		info := common.WrapTableInfo("test", &model.TableInfo{ID: id, Name: ast.NewCIStr("t")})
+		data, err := info.Marshal()
+		require.NoError(t, err)
+		tableInfos[id] = data
+	}
+	tests := []struct {
+		name      string
+		responses []*messaging.SchemaStoreTableInfosResponse
+		wantIDs   []int64
+		wantError string
+		noDone    bool
+	}{
+		{
+			name: "all tables in request order",
+			responses: []*messaging.SchemaStoreTableInfosResponse{
+				{TableID: 2, TableInfo: tableInfos[2]}, {TableID: 1, TableInfo: tableInfos[1]}, {Done: true},
+			},
+			wantIDs: []int64{1, 2},
+		},
+		{
+			name: "explicit table error accounts for a table",
+			responses: []*messaging.SchemaStoreTableInfosResponse{
+				{TableID: 1, TableInfo: tableInfos[1]}, {TableID: 2, Error: "table dropped"}, {Done: true},
+			},
+			wantIDs: []int64{1},
+		},
+		{
+			name: "missing table response",
+			responses: []*messaging.SchemaStoreTableInfosResponse{
+				{TableID: 1, TableInfo: tableInfos[1]}, {Done: true},
+			},
+			wantError: "no result for table 2",
+		},
+		{
+			name: "duplicate response cannot hide missing table",
+			responses: []*messaging.SchemaStoreTableInfosResponse{
+				{TableID: 1, TableInfo: tableInfos[1]}, {TableID: 1, TableInfo: tableInfos[1]}, {Done: true},
+			},
+			wantError: "no result for table 2",
+		},
+		{
+			name: "failed server delivery",
+			responses: []*messaging.SchemaStoreTableInfosResponse{
+				{TableID: 1, TableInfo: tableInfos[1]}, {Done: true, Error: "response delivery failed"},
+			},
+			wantError: "response delivery failed",
+		},
+		{
+			name: "missing completion",
+			responses: []*messaging.SchemaStoreTableInfosResponse{
+				{TableID: 1, TableInfo: tableInfos[1]}, {TableID: 2, TableInfo: tableInfos[2]},
+			},
+			noDone: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mc := mock.NewMockMessageCenter(gomock.NewController(t))
+			client := &Client{mc: mc, pending: make(map[uint64]*tableInfosRequest)}
+			mc.EXPECT().SendCommand(gomock.Any()).DoAndReturn(func(msg *messaging.TargetMessage) error {
+				req := msg.Message[0].(*messaging.SchemaStoreTableInfosRequest)
+				for _, resp := range tt.responses {
+					resp.RequestID = req.RequestID
+					require.NoError(t, client.handleMessage(context.Background(), messaging.NewSingleTargetMessage(
+						msg.From, messaging.SchemaStoreClientTopic, resp)))
+				}
+				return nil
+			})
+			ctx := context.Background()
+			if tt.noDone {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 50*time.Millisecond)
+				defer cancel()
+			}
+			infos, err := client.GetTableInfos(ctx, common.DefaultKeyspace, []int64{1, 2}, 100)
+			switch {
+			case tt.noDone:
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				require.Nil(t, infos)
+			case tt.wantError != "":
+				require.ErrorContains(t, err, tt.wantError)
+				require.True(t, errors.ErrSchemaStoreRequestFailed.Equal(err))
+				require.Nil(t, infos)
+			default:
+				require.NoError(t, err)
+				var ids []int64
+				for _, info := range infos {
+					ids = append(ids, info.TableName.TableID)
+				}
+				require.Equal(t, tt.wantIDs, ids)
+			}
+			require.Empty(t, client.pending)
+		})
+	}
+}
 
 func newTestClient(t *testing.T) (*Client, messaging.MessageCenter) {
 	t.Helper()

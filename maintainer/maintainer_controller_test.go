@@ -1408,8 +1408,18 @@ func TestStoppedWhenMoving(t *testing.T) {
 	require.Equal(t, 0, s.spanController.GetTaskSizeByNodeID("node2"))
 }
 
+// Bootstrap tests use the schema client to route requests to the local message
+// center. Keep the global ID changes here, outside the helper shared by parallel tests.
+func setUpBootstrapTestServices(t *testing.T) {
+	t.Helper()
+	previousID := appcontext.GetID()
+	id := testutil.SetUpTestServices(t)
+	appcontext.SetID(id.String())
+	t.Cleanup(func() { appcontext.SetID(previousID) })
+}
+
 func TestFinishBootstrap(t *testing.T) {
-	testutil.SetUpTestServices(t)
+	setUpBootstrapTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -1545,7 +1555,7 @@ func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
 		// Each subtest restores bootstrap state from a dropped-table snapshot and checks that
 		// no maintainer task/operator is recreated for the stale create request.
 		t.Run(tc.name, func(t *testing.T) {
-			testutil.SetUpTestServices(t)
+			setUpBootstrapTestServices(t)
 			nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 			nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 
@@ -2026,7 +2036,7 @@ type mergeBootstrapTestEnv struct {
 func newMergeBootstrapTestEnv(t *testing.T) *mergeBootstrapTestEnv {
 	t.Helper()
 
-	testutil.SetUpTestServices(t)
+	setUpBootstrapTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeID := node.ID("node1")
 	nodeManager.GetAliveNodes()[nodeID] = &node.Info{ID: nodeID}
@@ -2302,7 +2312,7 @@ func TestHandleStatusDropsTerminalSourcesCoveredByMergedSpanAfterJournalCleanup(
 }
 
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
-	testutil.SetUpTestServices(t)
+	setUpBootstrapTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}

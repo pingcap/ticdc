@@ -32,13 +32,18 @@ import (
 
 const schemaStoreRequestTimeout = 10 * time.Minute
 
+type tableInfosRequest struct {
+	ctx       context.Context
+	responses chan *messaging.SchemaStoreTableInfosResponse
+}
+
 type Client struct {
 	mc messaging.MessageCenter
 
 	nextRequestID atomic.Uint64
 
 	pendingMu sync.Mutex
-	pending   map[uint64]chan *messaging.SchemaStoreTableInfosResponse
+	pending   map[uint64]*tableInfosRequest
 	requests  map[uint64]chan *messaging.SchemaStoreResponse
 }
 
@@ -67,7 +72,7 @@ func GetSchemaStoreClient() *Client {
 
 	c := &Client{
 		mc:       mc,
-		pending:  make(map[uint64]chan *messaging.SchemaStoreTableInfosResponse),
+		pending:  make(map[uint64]*tableInfosRequest),
 		requests: make(map[uint64]chan *messaging.SchemaStoreResponse),
 	}
 	c.mc.RegisterHandler(messaging.SchemaStoreClientTopic, c.handleMessage)
@@ -75,7 +80,7 @@ func GetSchemaStoreClient() *Client {
 	return c
 }
 
-func (c *Client) handleMessage(_ context.Context, msg *messaging.TargetMessage) error {
+func (c *Client) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
 	for _, m := range msg.Message {
 		if resp, ok := m.(*messaging.SchemaStoreResponse); ok {
 			c.pendingMu.Lock()
@@ -98,7 +103,7 @@ func (c *Client) handleMessage(_ context.Context, msg *messaging.TargetMessage) 
 		}
 
 		c.pendingMu.Lock()
-		ch, ok := c.pending[resp.RequestID]
+		req, ok := c.pending[resp.RequestID]
 		c.pendingMu.Unlock()
 		if !ok {
 			log.Debug("schema store response received but request already removed",
@@ -108,23 +113,31 @@ func (c *Client) handleMessage(_ context.Context, msg *messaging.TargetMessage) 
 			continue
 		}
 
+		// Apply backpressure while the caller decodes earlier responses. Cancellation
+		// releases the router if the caller exits without draining the channel.
 		select {
-		case ch <- resp:
-		default:
-			log.Warn("schema store response channel is full, drop response",
-				zap.Uint64("requestID", resp.RequestID),
-				zap.Int64("tableID", resp.TableID),
-				zap.Bool("done", resp.Done))
+		case req.responses <- resp:
+		case <-req.ctx.Done():
+		case <-ctx.Done():
+			return nil
 		}
 	}
 	return nil
 }
 
+// GetTableInfos waits for a result or explicit error for every requested table,
+// followed by a successful completion. Cancellation discards any partial result.
 func (c *Client) GetTableInfos(
+	ctx context.Context,
 	keyspaceMeta common.KeyspaceMeta,
 	tableIDs []int64,
 	ts uint64,
 ) ([]*common.TableInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, schemaStoreRequestTimeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
+	}
 	reqID := c.nextRequestID.Add(1)
 
 	bufferSize := len(tableIDs) + 1
@@ -137,7 +150,7 @@ func (c *Client) GetTableInfos(
 
 	respCh := make(chan *messaging.SchemaStoreTableInfosResponse, bufferSize)
 	c.pendingMu.Lock()
-	c.pending[reqID] = respCh
+	c.pending[reqID] = &tableInfosRequest{ctx: ctx, responses: respCh}
 	c.pendingMu.Unlock()
 
 	cleanup := func() {
@@ -149,7 +162,7 @@ func (c *Client) GetTableInfos(
 
 	target := node.ID(appcontext.GetID())
 	if target.IsEmpty() {
-		return nil, errors.New("server id is empty")
+		return nil, errors.ErrSchemaStoreRequestFailed.GenWithStack("server id is empty")
 	}
 	err := c.mc.SendCommand(messaging.NewSingleTargetMessage(target, messaging.SchemaStoreTopic, &messaging.SchemaStoreTableInfosRequest{
 		RequestID:    reqID,
@@ -159,28 +172,30 @@ func (c *Client) GetTableInfos(
 		Ts:           ts,
 	}))
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), schemaStoreRequestTimeout)
-	defer cancel()
 
 	tableInfosByID := make(map[int64]*common.TableInfo, len(tableIDs))
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, errors.Trace(ctx.Err())
+			return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, ctx.Err())
 		case resp := <-respCh:
 			if resp == nil {
 				continue
 			}
 			if resp.Done {
 				if resp.Error != "" {
-					return nil, errors.New(resp.Error)
+					return nil, errors.ErrSchemaStoreRequestFailed.GenWithStack("%s", resp.Error)
 				}
 				result := make([]*common.TableInfo, 0, len(tableIDs))
 				for _, tableID := range tableIDs {
-					if tableInfo, ok := tableInfosByID[tableID]; ok {
+					tableInfo, received := tableInfosByID[tableID]
+					if !received {
+						return nil, errors.ErrSchemaStoreRequestFailed.GenWithStack(
+							"incomplete schema store response: no result for table %d", tableID)
+					}
+					if tableInfo != nil {
 						result = append(result, tableInfo)
 					}
 				}
@@ -188,6 +203,8 @@ func (c *Client) GetTableInfos(
 			}
 
 			if resp.Error != "" {
+				// An explicit table error accounts for this table; a missing response does not.
+				tableInfosByID[resp.TableID] = nil
 				log.Warn("get table info from schema store failed, ignore it",
 					zap.Any("keyspace", keyspaceMeta),
 					zap.Int64("tableID", resp.TableID),
@@ -198,7 +215,7 @@ func (c *Client) GetTableInfos(
 
 			tableInfo, err := common.UnmarshalJSONToTableInfo(resp.TableInfo)
 			if err != nil {
-				return nil, errors.Trace(err)
+				return nil, errors.WrapError(errors.ErrUnmarshalFailed, err)
 			}
 			tableInfosByID[resp.TableID] = tableInfo
 		}

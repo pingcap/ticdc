@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -178,7 +179,7 @@ func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
 		ID:   d.tableSpan.KeyspaceID,
 		Name: d.sharedInfo.changefeedID.Keyspace(),
 	}
-	tableInfos, err := schemastoreclient.GetSchemaStoreClient().GetTableInfos(meta, tables, ts)
+	tableInfos, err := schemastoreclient.GetSchemaStoreClient().GetTableInfos(context.Background(), meta, tables, ts)
 	if err != nil {
 		log.Error("get table infos from schema store failed",
 			zap.Stringer("changefeed", d.sharedInfo.changefeedID),

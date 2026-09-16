@@ -18,15 +18,106 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/messaging/mock"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/schemastoreclient"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSchemaStoreTableInfosResponseDelivery(t *testing.T) {
+	congested := errors.AppError{Type: errors.ErrorTypeMessageCongested, Reason: "queue full"}
+	tests := []struct {
+		name               string
+		tableFailures      int
+		completionFailures int
+		sendError          error
+		wantTableAttempts  int
+		wantCompleteError  bool
+	}{
+		{
+			name: "retry congested table response", tableFailures: 1, sendError: congested,
+			wantTableAttempts: 3,
+		},
+		{
+			name: "retry temporary connection failure", tableFailures: 1,
+			sendError:         errors.NewAppError(errors.ErrorTypeConnectionNotFound, "connection not ready"),
+			wantTableAttempts: 3,
+		},
+		{
+			name: "retry congested completion", completionFailures: 1, sendError: congested,
+			wantTableAttempts: 2,
+		},
+		{
+			name: "report permanent table delivery failure", tableFailures: 1,
+			sendError:         errors.NewAppError(errors.ErrorTypeTargetMismatch, "target mismatch"),
+			wantTableAttempts: 1, wantCompleteError: true,
+		},
+		{
+			name: "report exhausted table delivery retries", tableFailures: schemaStoreResponseMaxTries,
+			sendError: congested, wantTableAttempts: schemaStoreResponseMaxTries, wantCompleteError: true,
+		},
+		{
+			name: "bound completion retries", completionFailures: schemaStoreResponseMaxTries,
+			sendError: congested, wantTableAttempts: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mc := mock.NewMockMessageCenter(gomock.NewController(t))
+			// A dropped keyspace produces explicit per-table errors without requiring storage.
+			store := &schemaStore{mc: mc, tombstoneKeyspaces: map[uint32]struct{}{7: {}}}
+			req := &messaging.SchemaStoreTableInfosRequest{RequestID: 123, KeyspaceID: 7, TableIDs: []int64{1, 2}}
+			var completion *messaging.SchemaStoreTableInfosResponse
+			var deliveredIDs []int64
+			tableAttempts, completionAttempts := 0, 0
+			wantCompletionAttempts := min(tt.completionFailures+1, schemaStoreResponseMaxTries)
+			mc.EXPECT().SendCommand(gomock.Any()).Times(tt.wantTableAttempts + wantCompletionAttempts).
+				DoAndReturn(func(msg *messaging.TargetMessage) error {
+					require.Equal(t, node.ID("client"), msg.To)
+					require.Equal(t, messaging.SchemaStoreClientTopic, msg.Topic)
+					resp := msg.Message[0].(*messaging.SchemaStoreTableInfosResponse)
+					require.Equal(t, req.RequestID, resp.RequestID)
+					if resp.Done {
+						completionAttempts++
+						if completionAttempts <= tt.completionFailures {
+							return tt.sendError
+						}
+						completion = resp
+						return nil
+					}
+					tableAttempts++
+					if tableAttempts <= tt.tableFailures {
+						require.Equal(t, int64(1), resp.TableID)
+						return tt.sendError
+					}
+					require.NotEmpty(t, resp.Error)
+					deliveredIDs = append(deliveredIDs, resp.TableID)
+					return nil
+				})
+			store.handleTableInfosRequest(context.Background(), "client", req)
+			require.Equal(t, tt.wantTableAttempts, tableAttempts)
+			require.Equal(t, wantCompletionAttempts, completionAttempts)
+			if tt.completionFailures == schemaStoreResponseMaxTries {
+				require.Nil(t, completion)
+				return
+			}
+			require.NotNil(t, completion)
+			if tt.wantCompleteError {
+				require.Contains(t, completion.Error, tt.sendError.Error())
+				require.Empty(t, deliveredIDs)
+			} else {
+				require.Empty(t, completion.Error)
+				require.Equal(t, req.TableIDs, deliveredIDs)
+			}
+		})
+	}
+}
 
 func TestSchemaStoreRequests(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

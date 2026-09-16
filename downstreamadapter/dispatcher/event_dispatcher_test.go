@@ -1000,7 +1000,9 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 	mc.Run(ctx)
 	t.Cleanup(mc.Close)
 
+	previousID := appcontext.GetID()
 	appcontext.SetID(serverID.String())
+	t.Cleanup(func() { appcontext.SetID(previousID) })
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
 	helper := commonEvent.NewEventTestHelper(t)
@@ -1018,6 +1020,8 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 		tableInfo2.TableName.TableID: tableInfo2,
 	}
 
+	var omitResponse atomic.Bool
+	omitResponse.Store(true)
 	handlerErrCh := make(chan error, 1)
 	mc.RegisterHandler(messaging.SchemaStoreTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		for _, m := range msg.Message {
@@ -1031,6 +1035,9 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 			}
 
 			for _, tableID := range req.TableIDs {
+				if omitResponse.Load() && tableID == tableInfo2.TableName.TableID {
+					continue
+				}
 				tableInfo, ok := tableInfoByID[tableID]
 				if !ok {
 					_ = mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic, &messaging.SchemaStoreTableInfosResponse{
@@ -1087,6 +1094,18 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 	require.True(t, ok)
 
 	dispatcher.BootstrapState = BootstrapNotStarted
+	// A clean Done with one missing table must not emit a partial bootstrap.
+	require.False(t, dispatcher.EmitBootstrap(func() bool { return false }))
+	require.Equal(t, BootstrapNotStarted, loadBootstrapState(&dispatcher.BootstrapState))
+	require.Empty(t, events)
+	select {
+	case err := <-dispatcher.sharedInfo.errCh:
+		require.True(t, errors.ErrSchemaStoreRequestFailed.Equal(err))
+	default:
+		t.Fatal("incomplete schema response did not report a bootstrap error")
+	}
+
+	omitResponse.Store(false)
 	require.True(t, dispatcher.EmitBootstrap(func() bool { return false }))
 	require.Equal(t, BootstrapFinished, loadBootstrapState(&dispatcher.BootstrapState))
 

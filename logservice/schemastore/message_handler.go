@@ -22,8 +22,30 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/retry"
 	"go.uber.org/zap"
 )
+
+const schemaStoreResponseMaxTries = 10
+
+func (s *schemaStore) sendResponse(ctx context.Context, to node.ID, resp messaging.IOTypeT) error {
+	msg := messaging.NewSingleTargetMessage(to, messaging.SchemaStoreClientTopic, resp)
+	return retry.Do(ctx, func() error {
+		return s.mc.SendCommand(msg)
+	}, retry.WithMaxTries(schemaStoreResponseMaxTries), retry.WithBackoffBaseDelay(10),
+		retry.WithBackoffMaxDelay(100), retry.WithIsRetryableErr(func(err error) bool {
+			var appErr interface{ GetType() errors.ErrorType }
+			if !errors.As(err, &appErr) {
+				return false
+			}
+			switch appErr.GetType() {
+			case errors.ErrorTypeMessageCongested, errors.ErrorTypeConnectionNotFound, errors.ErrorTypeConnectionFailed:
+				return true
+			default:
+				return false
+			}
+		}))
+}
 
 func (s *schemaStore) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
 	switch msg.Type {
@@ -63,26 +85,15 @@ func (s *schemaStore) handleTableInfosRequest(
 		return
 	}
 
-	sendResponse := func(resp *messaging.SchemaStoreTableInfosResponse) {
-		if resp == nil {
-			return
-		}
-		msg := messaging.NewSingleTargetMessage(from, messaging.SchemaStoreClientTopic, resp)
-		err := s.mc.SendCommand(msg)
-		if err != nil {
+	completion := &messaging.SchemaStoreTableInfosResponse{RequestID: req.RequestID, Done: true}
+	defer func() {
+		if err := s.sendResponse(ctx, from, completion); err != nil {
 			log.Warn("send schema store response failed",
 				zap.Any("keyspaceID", req.KeyspaceID),
 				zap.Uint64("requestID", req.RequestID),
-				zap.Int64("tableID", resp.TableID),
-				zap.Bool("done", resp.Done),
 				zap.Error(err))
 		}
-	}
-
-	defer sendResponse(&messaging.SchemaStoreTableInfosResponse{
-		RequestID: req.RequestID,
-		Done:      true,
-	})
+	}()
 
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   req.KeyspaceID,
@@ -90,55 +101,33 @@ func (s *schemaStore) handleTableInfosRequest(
 	}
 
 	for _, tableID := range req.TableIDs {
-		select {
-		case <-ctx.Done():
+		if err := ctx.Err(); err != nil {
+			completion.Error = err.Error()
 			return
-		default:
 		}
 
+		resp := &messaging.SchemaStoreTableInfosResponse{RequestID: req.RequestID, TableID: tableID}
 		err := s.RegisterTable(keyspaceMeta, tableID, req.Ts)
+		if err == nil {
+			var tableInfo *common.TableInfo
+			tableInfo, err = s.GetTableInfo(keyspaceMeta, tableID, req.Ts)
+			if err == nil {
+				if tableInfo == nil {
+					resp.Error = "table info is nil"
+				} else {
+					resp.TableInfo, err = tableInfo.Marshal()
+					err = errors.WrapError(errors.ErrMarshalFailed, err)
+				}
+			}
+		}
 		if err != nil {
-			sendResponse(&messaging.SchemaStoreTableInfosResponse{
-				RequestID: req.RequestID,
-				TableID:   tableID,
-				Error:     err.Error(),
-			})
-			continue
+			resp.Error = err.Error()
 		}
-
-		tableInfo, err := s.GetTableInfo(keyspaceMeta, tableID, req.Ts)
-		if err != nil {
-			sendResponse(&messaging.SchemaStoreTableInfosResponse{
-				RequestID: req.RequestID,
-				TableID:   tableID,
-				Error:     err.Error(),
-			})
-			continue
+		if err := s.sendResponse(ctx, from, resp); err != nil {
+			// A failed delivery must never be followed by a successful completion.
+			completion.Error = err.Error()
+			return
 		}
-		if tableInfo == nil {
-			sendResponse(&messaging.SchemaStoreTableInfosResponse{
-				RequestID: req.RequestID,
-				TableID:   tableID,
-				Error:     "table info is nil",
-			})
-			continue
-		}
-
-		tableInfoData, err := tableInfo.Marshal()
-		if err != nil {
-			sendResponse(&messaging.SchemaStoreTableInfosResponse{
-				RequestID: req.RequestID,
-				TableID:   tableID,
-				Error:     err.Error(),
-			})
-			continue
-		}
-
-		sendResponse(&messaging.SchemaStoreTableInfosResponse{
-			RequestID: req.RequestID,
-			TableID:   tableID,
-			TableInfo: tableInfoData,
-		})
 	}
 }
 
@@ -164,7 +153,7 @@ func (s *schemaStore) handleRequest(ctx context.Context, from node.ID, req *mess
 		code, _ := errors.RFCCode(err)
 		resp.ErrorCode = string(code)
 	}
-	if err := s.mc.SendCommand(messaging.NewSingleTargetMessage(from, messaging.SchemaStoreClientTopic, resp)); err != nil {
+	if err := s.sendResponse(ctx, from, resp); err != nil {
 		log.Warn("send schema store response failed",
 			zap.Uint32("keyspaceID", req.Keyspace.ID),
 			zap.Uint64("requestID", req.RequestID), zap.Error(err))
