@@ -25,15 +25,19 @@ import (
 // registering the same source-target mapping repeatedly is idempotent.
 type TargetTableRegistry struct {
 	changefeedID  common.ChangeFeedID
+	caseSensitive bool
 	target2Source map[TableKey]TableKey
 	source2Target map[TableKey]TableKey
 }
 
 // NewTargetTableRegistry creates an empty registry and preallocates the internal
-// indexes for the expected source table count.
-func NewTargetTableRegistry(changefeedID common.ChangeFeedID, capacity int) *TargetTableRegistry {
+// indexes for the expected source table count. Keys are normalized with the
+// changefeed's case sensitivity, so a case-insensitive changefeed reports `T` and
+// `t` as one table, matching rule matching and statement rewriting.
+func NewTargetTableRegistry(changefeedID common.ChangeFeedID, caseSensitive bool, capacity int) *TargetTableRegistry {
 	return &TargetTableRegistry{
 		changefeedID:  changefeedID,
+		caseSensitive: caseSensitive,
 		target2Source: make(map[TableKey]TableKey, capacity),
 		source2Target: make(map[TableKey]TableKey, capacity),
 	}
@@ -41,12 +45,13 @@ func NewTargetTableRegistry(changefeedID common.ChangeFeedID, capacity int) *Tar
 
 // remove releases a source table name from the registry. It is idempotent.
 func (r *TargetTableRegistry) remove(source TableKey) {
-	target, ok := r.source2Target[source]
+	key := source.normalized(r.caseSensitive)
+	target, ok := r.source2Target[key]
 	if !ok {
 		return
 	}
-	delete(r.source2Target, source)
-	delete(r.target2Source, target)
+	delete(r.source2Target, key)
+	delete(r.target2Source, target.normalized(r.caseSensitive))
 }
 
 // ApplyTransition validates and applies source removals and source-to-target
@@ -59,17 +64,19 @@ func (r *TargetTableRegistry) remove(source TableKey) {
 func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBinding, mutate bool) error {
 	removeSet := make(map[TableKey]struct{}, len(removes))
 	for _, source := range removes {
-		removeSet[source] = struct{}{}
+		removeSet[source.normalized(r.caseSensitive)] = struct{}{}
 	}
 
 	addedTargets := make(map[TableKey]TableKey, len(adds))
 	for _, add := range adds {
+		targetKey := add.Target.normalized(r.caseSensitive)
+		sourceKey := add.Source.normalized(r.caseSensitive)
 		// A target that is already owned by another source can only be claimed if
 		// that old owner is removed in the same transition. This is what makes
 		// rename/drop-and-create style replacements atomic while still rejecting
 		// two live source names that route to the same target.
-		if existingSource, ok := r.target2Source[add.Target]; ok && !existingSource.Equal(add.Source) {
-			if _, removed := removeSet[existingSource]; !removed {
+		if existingSource, ok := r.target2Source[targetKey]; ok && !existingSource.normalized(r.caseSensitive).Equal(sourceKey) {
+			if _, removed := removeSet[existingSource.normalized(r.caseSensitive)]; !removed {
 				log.Warn("table route conflict detected",
 					zap.String("keyspace", r.changefeedID.Keyspace()),
 					zap.String("changefeed", r.changefeedID.Name()),
@@ -86,7 +93,7 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 			}
 		}
 		// Likewise, two newly added live sources cannot claim the same target.
-		if existingSource, ok := addedTargets[add.Target]; ok && !existingSource.Equal(add.Source) {
+		if existingSource, ok := addedTargets[targetKey]; ok && !existingSource.normalized(r.caseSensitive).Equal(sourceKey) {
 			log.Warn("table route conflict detected",
 				zap.String("keyspace", r.changefeedID.Keyspace()),
 				zap.String("changefeed", r.changefeedID.Name()),
@@ -101,7 +108,7 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 				existingSource.Schema, existingSource.Table,
 				add.Source.Schema, add.Source.Table)
 		}
-		addedTargets[add.Target] = add.Source
+		addedTargets[targetKey] = add.Source
 	}
 
 	if !mutate {
@@ -114,8 +121,8 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 		r.remove(source)
 	}
 	for _, add := range adds {
-		r.target2Source[add.Target] = add.Source
-		r.source2Target[add.Source] = add.Target
+		r.target2Source[add.Target.normalized(r.caseSensitive)] = add.Source
+		r.source2Target[add.Source.normalized(r.caseSensitive)] = add.Target
 	}
 	return nil
 }

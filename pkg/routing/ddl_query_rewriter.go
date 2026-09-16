@@ -124,7 +124,7 @@ func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (strin
 		return query, nil
 	}
 
-	newQuery, err := rewriteDDLStmtTables(stmt, sourceTables, targetTables)
+	newQuery, err := rewriteDDLStmtTables(stmt, sourceTables, targetTables, r.caseSensitive)
 	if err != nil {
 		return "", err
 	}
@@ -247,11 +247,21 @@ func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
 // tableRenameVisitor rewrites table names in a DDL AST.
 //
 // TableName nodes are rewritten positionally in the same traversal order as
-// extractTableNames. For CREATE VIEW, TiDB represents `db`.`table`.`column` as
-// a ColumnName node, so the visitor also rewrites the schema/table qualifier
-// when it is explicitly schema-qualified. Table-qualified columns and wildcards
-// follow unaliased physical tables in their SELECT; CTE and alias references
-// retain their names.
+// extractTableNames. References to those tables are rewritten through the SELECT
+// scope chain:
+//
+//   - `db`.`table`.`col` and `db`.`table`.* name a physical table directly, so
+//     they use the qualified lookup.
+//   - `table`.`col` and `table`.* resolve to a range variable. The innermost
+//     SELECT wins; when it does not declare the name, the search continues in
+//     the enclosing SELECT. An alias, a CTE name, or an ambiguous declaration
+//     stops the search, because the reference does not denote a physical table.
+//
+// The resolution rules below are shared with the CREATE VIEW normalization in
+// pkg/common/event (createViewSelectNormalizer.qualifyColumnName), which resolves
+// the same references to their source schema instead of the routed table. Keep
+// both in sync; TestRewriteParserBackedDDLQueryRangeVariableResolution pins the
+// same case list.
 //
 // Example for a CREATE VIEW with routing rule source_db.* → target_db.{table}_r:
 //
@@ -272,23 +282,52 @@ func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
 type tableRenameVisitor struct {
 	ctes        cteScopes
 	sourceNames []commonEvent.SchemaTableName
-	// Each SELECT owns its unqualified column and wildcard references.
-	selectScopes []selectScope
 	// targetNames contains routed names aligned with tableNameExtractor output.
 	targetNames []commonEvent.SchemaTableName
 	// targetByQualifiedSource maps qualified source table names to routed names.
 	targetByQualifiedSource map[commonEvent.SchemaTableName]commonEvent.SchemaTableName
+	// caseSensitive keeps physical table names case-sensitive, like the router's
+	// rule matching. Range variable aliases stay case-insensitive.
+	caseSensitive bool
+	// scope is the innermost SELECT scope being visited.
+	scope *selectScope
+	// bindings are table-qualified references, resolved after the whole walk.
+	bindings []pendingBinding
 	// i is the next targetNames index to consume.
 	i int
 	// hasErr records targetNames exhaustion because ast.Visitor cannot return an error.
 	hasErr bool
 }
 
+// selectScope records the range variables of one SELECT (or set operation) node.
+// Scopes form a chain through parent: a table-qualified reference is resolved
+// from its own SELECT outward, so a correlated reference finds the enclosing
+// table. The maps are filled during the AST walk but only read afterwards, so
+// resolution does not depend on the order in which nodes are visited.
 type selectScope struct {
-	columns []*ast.ColumnName
-	tables  map[string]commonEvent.SchemaTableName
-	fields  *ast.FieldList
-	targets map[*ast.WildCardField]commonEvent.SchemaTableName
+	parent *selectScope
+	// aliases holds range variable names that do not denote a physical table:
+	// table aliases, derived tables, and CTE references. A name found here hides
+	// physical tables declared in outer scopes.
+	aliases map[string]struct{}
+	// tables maps a lower-cased unaliased physical table name to its routed name.
+	tables map[string]commonEvent.SchemaTableName
+	// ambiguousTables holds physical table names declared more than once in this
+	// scope; their qualifiers cannot be bound to a single table.
+	ambiguousTables map[string]struct{}
+}
+
+// pendingBinding is one table-qualified reference: a column such as `t`.`c`, or
+// a wildcard such as `t`.*. Schema-qualified references are rewritten
+// immediately and never become pending.
+type pendingBinding struct {
+	scope *selectScope
+	// aliasKey is lower-cased, like every alias and CTE key.
+	aliasKey string
+	// tableKey follows the router's case sensitivity for physical table names.
+	tableKey string
+	column   *ast.ColumnName
+	wildcard *ast.WildCardField
 }
 
 func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
@@ -298,11 +337,10 @@ func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
 	v.ctes.enter(in)
 	switch n := in.(type) {
 	case *ast.SelectStmt:
-		v.selectScopes = append(v.selectScopes, selectScope{
-			fields:  n.Fields,
-			tables:  make(map[string]commonEvent.SchemaTableName),
-			targets: make(map[*ast.WildCardField]commonEvent.SchemaTableName),
-		})
+		v.enterScope()
+		v.collectWildCards(n.Fields)
+	case *ast.SetOprStmt, *ast.SetOprSelectList:
+		v.enterScope()
 	case *ast.TableSource:
 		v.collectTable(n)
 	}
@@ -320,11 +358,16 @@ func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
 		return in, true
 	}
 	if c, ok := in.(*ast.ColumnName); ok {
-		if c.Schema.O == "" && c.Table.O != "" && len(v.selectScopes) > 0 {
-			scope := &v.selectScopes[len(v.selectScopes)-1]
-			scope.columns = append(scope.columns, c)
+		if c.Schema.O != "" {
+			v.rewriteColumnName(c)
+		} else if c.Table.O != "" {
+			v.bindings = append(v.bindings, pendingBinding{
+				scope:    v.scope,
+				aliasKey: c.Table.L,
+				tableKey: v.tableKey(c.Table.O),
+				column:   c,
+			})
 		}
-		v.rewriteColumnName(c)
 		return in, true
 	}
 	return in, false
@@ -335,29 +378,79 @@ func (v *tableRenameVisitor) Leave(in ast.Node) (ast.Node, bool) {
 		return in, false
 	}
 	v.ctes.leave(in)
-	if _, ok := in.(*ast.SelectStmt); ok {
-		scope := v.selectScopes[len(v.selectScopes)-1]
-		for _, column := range scope.columns {
-			if target, ok := scope.tables[column.Table.L]; ok {
-				column.Schema = ast.NewCIStr(target.SchemaName)
-				column.Table = ast.NewCIStr(target.TableName)
-			}
-		}
-		for field, target := range scope.targets {
-			field.Schema = ast.NewCIStr(target.SchemaName)
-			field.Table = ast.NewCIStr(target.TableName)
-		}
-		v.selectScopes = v.selectScopes[:len(v.selectScopes)-1]
+	switch in.(type) {
+	case *ast.SelectStmt, *ast.SetOprStmt, *ast.SetOprSelectList:
+		v.leaveScope()
 	}
 	return in, true
 }
 
+func (v *tableRenameVisitor) enterScope() {
+	v.scope = &selectScope{
+		parent:          v.scope,
+		aliases:         make(map[string]struct{}),
+		tables:          make(map[string]commonEvent.SchemaTableName),
+		ambiguousTables: make(map[string]struct{}),
+	}
+}
+
+func (v *tableRenameVisitor) leaveScope() {
+	v.scope = v.scope.parent
+}
+
+// addRangeVariable records a range variable that is not a physical table, so it
+// hides physical tables with the same name declared in outer scopes.
+func (v *tableRenameVisitor) addRangeVariable(name string) {
+	if v.scope == nil {
+		return
+	}
+	v.scope.aliases[name] = struct{}{}
+}
+
+// collectWildCards records the table-qualified wildcards of one SELECT field
+// list. WildCardField nodes are not visited by ast.Visitor, so they are read from
+// the field list. A schema-qualified wildcard names a physical table and is
+// rewritten immediately, like a schema-qualified column.
+func (v *tableRenameVisitor) collectWildCards(fields *ast.FieldList) {
+	if fields == nil || v.scope == nil {
+		return
+	}
+	for _, field := range fields.Fields {
+		wildcard := field.WildCard
+		if wildcard == nil || wildcard.Table.O == "" {
+			continue
+		}
+		if wildcard.Schema.O != "" {
+			if target, ok := v.targetByQualifiedSource[qualifiedSourceKey(wildcard.Schema.O, wildcard.Table.O, v.caseSensitive)]; ok {
+				wildcard.Schema = ast.NewCIStr(target.SchemaName)
+				wildcard.Table = ast.NewCIStr(target.TableName)
+			}
+			continue
+		}
+		v.bindings = append(v.bindings, pendingBinding{
+			scope:    v.scope,
+			aliasKey: wildcard.Table.L,
+			tableKey: v.tableKey(wildcard.Table.O),
+			wildcard: wildcard,
+		})
+	}
+}
+
 func (v *tableRenameVisitor) collectTable(table *ast.TableSource) {
-	if table.AsName.O != "" || len(v.selectScopes) == 0 {
+	if v.scope == nil {
+		return
+	}
+	if table.AsName.O != "" {
+		v.addRangeVariable(table.AsName.L)
 		return
 	}
 	sourceTable, ok := table.Source.(*ast.TableName)
-	if !ok || v.ctes.contains(sourceTable) {
+	if !ok {
+		return
+	}
+	if v.ctes.contains(sourceTable) {
+		// A CTE reference is a range variable, not a physical table.
+		v.addRangeVariable(sourceTable.Name.L)
 		return
 	}
 	if v.i >= len(v.sourceNames) || v.i >= len(v.targetNames) {
@@ -365,24 +458,57 @@ func (v *tableRenameVisitor) collectTable(table *ast.TableSource) {
 	}
 	// The TableName immediately following this TableSource uses index i.
 	source, target := v.sourceNames[v.i], v.targetNames[v.i]
-	scope := v.selectScopes[len(v.selectScopes)-1]
-	// Stored view queries can omit a column's schema even when FROM is qualified.
-	// Only unaliased physical tables in this SELECT can bind these references.
-	scope.tables[strings.ToLower(source.TableName)] = target
-	if scope.fields == nil {
+	if source.TableName == "" {
 		return
 	}
-	for _, field := range scope.fields.Fields {
-		wildcard := field.WildCard
-		if wildcard == nil || wildcard.Table.O == "" || !strings.EqualFold(wildcard.Table.O, source.TableName) {
-			continue
-		}
-		if wildcard.Schema.O != "" && !strings.EqualFold(wildcard.Schema.O, source.SchemaName) {
-			continue
-		}
-		// Apply after visiting FROM so routed names cannot match another source.
-		scope.targets[wildcard] = target
+	key := v.tableKey(source.TableName)
+	if _, exists := v.scope.tables[key]; exists {
+		delete(v.scope.tables, key)
+		v.scope.ambiguousTables[key] = struct{}{}
+		return
 	}
+	if _, ambiguous := v.scope.ambiguousTables[key]; ambiguous {
+		return
+	}
+	v.scope.tables[key] = target
+}
+
+// resolveBindings rewrites the collected table-qualified references. It runs
+// after the whole statement is visited, so every scope is complete.
+func (v *tableRenameVisitor) resolveBindings() {
+	for _, binding := range v.bindings {
+		target, ok := resolveRangeVariable(binding.scope, binding.aliasKey, binding.tableKey)
+		if !ok {
+			continue
+		}
+		if binding.column != nil {
+			binding.column.Schema = ast.NewCIStr(target.SchemaName)
+			binding.column.Table = ast.NewCIStr(target.TableName)
+			continue
+		}
+		binding.wildcard.Schema = ast.NewCIStr(target.SchemaName)
+		binding.wildcard.Table = ast.NewCIStr(target.TableName)
+	}
+}
+
+// resolveRangeVariable returns the routed name of the table a table-qualified
+// reference denotes. The search starts at the reference's own SELECT and walks
+// outward, so a correlated reference resolves to the enclosing table. An alias,
+// a CTE name, or an ambiguous declaration stops the search. aliasKey is matched
+// case-insensitively; tableKey follows the router's case sensitivity.
+func resolveRangeVariable(scope *selectScope, aliasKey, tableKey string) (commonEvent.SchemaTableName, bool) {
+	for s := scope; s != nil; s = s.parent {
+		if _, ok := s.aliases[aliasKey]; ok {
+			return commonEvent.SchemaTableName{}, false
+		}
+		if _, ok := s.ambiguousTables[tableKey]; ok {
+			return commonEvent.SchemaTableName{}, false
+		}
+		if target, ok := s.tables[tableKey]; ok {
+			return target, true
+		}
+	}
+	return commonEvent.SchemaTableName{}, false
 }
 
 // rewriteColumnName rewrites only schema-qualified column references
@@ -392,7 +518,7 @@ func (v *tableRenameVisitor) rewriteColumnName(c *ast.ColumnName) {
 		return
 	}
 
-	target, ok := v.targetByQualifiedSource[normalizedSchemaTableName(c.Schema.O, c.Table.O)]
+	target, ok := v.targetByQualifiedSource[qualifiedSourceKey(c.Schema.O, c.Table.O, v.caseSensitive)]
 	if !ok {
 		return
 	}
@@ -405,10 +531,12 @@ func (v *tableRenameVisitor) rewriteColumnName(c *ast.ColumnName) {
 func newTableRenameVisitor(
 	sourceTables []commonEvent.SchemaTableName,
 	targetTables []commonEvent.SchemaTableName,
+	caseSensitive bool,
 ) *tableRenameVisitor {
 	visitor := &tableRenameVisitor{
 		sourceNames:             sourceTables,
 		targetNames:             targetTables,
+		caseSensitive:           caseSensitive,
 		targetByQualifiedSource: make(map[commonEvent.SchemaTableName]commonEvent.SchemaTableName, len(sourceTables)),
 	}
 
@@ -418,31 +546,41 @@ func newTableRenameVisitor(
 		}
 		target := targetTables[i]
 		if source.SchemaName != "" {
-			visitor.targetByQualifiedSource[normalizedSchemaTableName(source.SchemaName, source.TableName)] = target
+			visitor.targetByQualifiedSource[qualifiedSourceKey(source.SchemaName, source.TableName, caseSensitive)] = target
 		}
 	}
 	return visitor
 }
 
-func normalizedSchemaTableName(schema, table string) commonEvent.SchemaTableName {
+// tableKey normalizes an unqualified physical table name. Table names follow the
+// router's case sensitivity, so a case-sensitive router keeps `T` and `t`
+// distinct. Aliases are not normalized here: they are matched through their
+// lower-cased form, like SQL identifiers.
+func (v *tableRenameVisitor) tableKey(name string) string {
+	return normalizeIdentifier(name, v.caseSensitive)
+}
+
+// qualifiedSourceKey normalizes a schema-qualified table name for lookup.
+func qualifiedSourceKey(schema, table string, caseSensitive bool) commonEvent.SchemaTableName {
 	return commonEvent.SchemaTableName{
-		SchemaName: strings.ToLower(schema),
-		TableName:  strings.ToLower(table),
+		SchemaName: normalizeIdentifier(schema, caseSensitive),
+		TableName:  normalizeIdentifier(table, caseSensitive),
 	}
 }
 
 // rewriteDDLStmtTables rewrites table names in a DDL AST.
 // sourceTables and targetTables must have matching lengths and follow the
 // traversal order produced by extractTableNames. TableName nodes are rewritten
-// positionally. For CREATE VIEW, schema-qualified column references are also
-// updated so `db`.`table`.`column` keeps pointing at the routed table.
-// Table-qualified wildcards follow their unaliased table within each SELECT.
+// positionally. Column and wildcard references that name a table are rewritten
+// through the SELECT scope chain, so schema-qualified, table-qualified, and
+// correlated references all keep pointing at the routed table.
 //
 // Returned DDL uses StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
 func rewriteDDLStmtTables(
 	stmt ast.StmtNode,
 	sourceTables []commonEvent.SchemaTableName,
 	targetTables []commonEvent.SchemaTableName,
+	caseSensitive bool,
 ) (string, error) {
 	if _, ok := stmt.(ast.DDLNode); !ok {
 		return "", errors.ErrTableRoutingFailed.GenWithStack(
@@ -469,7 +607,7 @@ func rewriteDDLStmtTables(
 		}
 		v.Name = ast.NewCIStr(targetTables[0].SchemaName)
 	default:
-		visitor := newTableRenameVisitor(sourceTables, targetTables)
+		visitor := newTableRenameVisitor(sourceTables, targetTables, caseSensitive)
 		stmt.Accept(visitor)
 		if visitor.hasErr {
 			return "", errors.ErrTableRoutingFailed.GenWithStack(
@@ -480,6 +618,7 @@ func rewriteDDLStmtTables(
 			return "", errors.ErrTableRoutingFailed.GenWithStack(
 				"rewrite ddl query got too many target tables: count=%d, used=%d", len(targetTables), visitor.i)
 		}
+		visitor.resolveBindings()
 	}
 
 	bf := &bytes.Buffer{}

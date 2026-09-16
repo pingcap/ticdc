@@ -56,6 +56,26 @@ function verify_table_route_result() {
 	check_contains 'matched_ids: 1,3'
 	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM ${target_extra_db}.correlated_users_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 	check_contains 'matched_ids: 1,3'
+
+	# Aliased correlated references keep the alias while the table is routed.
+	check_table_not_exists source_extra_db.aliased_correlated_view "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	run_sql "SHOW CREATE VIEW ${target_extra_db}.aliased_correlated_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_contains "FROM \`${target_db}\`.\`users_routed\` AS \`u\`"
+	check_contains "\`o\`.\`user_id\`=\`u\`.\`id\`"
+	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM source_extra_db.aliased_correlated_view" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_contains 'matched_ids: 1,3'
+	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM ${target_extra_db}.aliased_correlated_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_contains 'matched_ids: 1,3'
+
+	# The nested view references `users` two SELECTs out, and the parent alias `o1`.
+	check_table_not_exists source_extra_db.nested_correlated_view "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	run_sql "SHOW CREATE VIEW ${target_extra_db}.nested_correlated_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_contains "\`${target_db}\`.\`users_routed\`.\`id\`"
+	check_contains "\`o1\`.\`user_id\`=\`${target_db}\`.\`users_routed\`.\`id\`"
+	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM source_extra_db.nested_correlated_view" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_contains 'matched_ids: 1,3'
+	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM ${target_extra_db}.nested_correlated_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_contains 'matched_ids: 1,3'
 	check_table_not_exists "$target_db.transient_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 
 	# Compare view results explicitly: table data checks alone cannot detect a

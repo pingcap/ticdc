@@ -112,6 +112,24 @@ CREATE VIEW `source_extra_db`.`correlated_users_view` AS
         SELECT 1 FROM `orders` WHERE `orders`.`user_id` = `users`.`id`
     );
 
+-- Aliases are the range variable, so correlated references must keep them.
+CREATE VIEW `source_extra_db`.`aliased_correlated_view` AS
+    SELECT `u`.`id` FROM `users` AS `u`
+    WHERE EXISTS (
+        SELECT 1 FROM `orders` AS `o` WHERE `o`.`user_id` = `u`.`id`
+    );
+
+-- A correlated reference two SELECTs out must still follow the outer table.
+CREATE VIEW `source_extra_db`.`nested_correlated_view` AS
+    SELECT `users`.`id` FROM `users`
+    WHERE EXISTS (
+        SELECT 1 FROM `orders` AS `o1`
+        WHERE `o1`.`user_id` = `users`.`id`
+          AND EXISTS (
+              SELECT 1 FROM `orders` AS `o2` WHERE `o2`.`id` = `o1`.`id`
+          )
+    );
+
 CREATE TABLE `source_db`.`cross_move_source` (
     id INT PRIMARY KEY,
     value VARCHAR(50)

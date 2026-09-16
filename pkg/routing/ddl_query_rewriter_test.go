@@ -342,7 +342,7 @@ func TestResolveDDL(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test rewriteDDLStmtTables
-		targetSQL, err := rewriteDDLStmtTables(stmts[0], ca.expectedTableNames, ca.targetTableNames)
+		targetSQL, err := rewriteDDLStmtTables(stmts[0], ca.expectedTableNames, ca.targetTableNames, false)
 		require.NoError(t, err, "rewriteDDLStmtTables failed for: %s", ca.sql)
 		require.Equal(t, ca.targetSQL, targetSQL, "rewriteDDLStmtTables failed for: %s", ca.sql)
 	}
@@ -369,28 +369,28 @@ func TestRewriteDDLStmtTablesError(t *testing.T) {
 	t.Run("non ddl statement", func(t *testing.T) {
 		stmts, _, err := p.Parse("SELECT 1", "", "")
 		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{})
+		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{}, false)
 		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 	})
 
 	t.Run("unexpected target table count for alter database", func(t *testing.T) {
 		stmts, _, err := p.Parse("ALTER DATABASE `test` CHARACTER SET utf8mb4", "", "")
 		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{}, {}})
+		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{}, {}}, false)
 		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 	})
 
 	t.Run("too few target tables", func(t *testing.T) {
 		stmts, _, err := p.Parse("RENAME TABLE `db1`.`t1` TO `db2`.`t2`", "", "")
 		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{SchemaName: "db1", TableName: "t1"}})
+		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{SchemaName: "db1", TableName: "t1"}}, false)
 		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 	})
 
 	t.Run("too many target tables", func(t *testing.T) {
 		stmts, _, err := p.Parse("CREATE TABLE `t1` (id INT)", "", "")
 		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{}, {}, {}})
+		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{}, {}, {}}, false)
 		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 	})
 }
@@ -505,6 +505,209 @@ func TestRewriteParserBackedDDLQueryUsesEventSchemaForUnqualifiedReferences(t *t
 			require.Equal(t, tc.expected, newQuery)
 		})
 	}
+}
+
+// TestRewriteParserBackedDDLQueryCorrelatedReference covers references that are
+// bound through the SELECT scope chain: a table-qualified `orders`.`id` that
+// resolves to a table of an enclosing SELECT follows that table's routed name,
+// and an alias reference stays untouched.
+//
+// The statement carrier is `CREATE TABLE ... AS SELECT`, which TiDB rejects
+// before it reaches CDC (pkg/planner/core/preprocess.go, issue 4754). The same
+// scope rules apply to every DDL that carries a SELECT, so the test pins the
+// resolution behavior independently of that reachability.
+func TestRewriteParserBackedDDLQueryCorrelatedReference(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter(t, false, []*config.DispatchRule{
+		{
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  "{table}_r",
+		},
+	})
+
+	rewrite := func(t *testing.T, table, query string) string {
+		t.Helper()
+		newQuery, err := router.rewriteParserBackedDDLQuery(&commonEvent.DDLEvent{
+			SchemaName: "source_db",
+			TableName:  table,
+			Query:      query,
+		})
+		require.NoError(t, err)
+		return newQuery
+	}
+
+	t.Run("where clause", func(t *testing.T) {
+		t.Parallel()
+		require.Equal(t,
+			"CREATE TABLE `target_db`.`t3_r` AS SELECT `id` FROM `target_db`.`orders_r` "+
+				"WHERE EXISTS (SELECT 1 FROM `target_db`.`line_items_r` "+
+				"WHERE `target_db`.`line_items_r`.`order_id`=`target_db`.`orders_r`.`id`)",
+			rewrite(t, "t3", "CREATE TABLE t3 AS SELECT id FROM source_db.orders WHERE EXISTS "+
+				"(SELECT 1 FROM source_db.line_items WHERE line_items.order_id = orders.id)"))
+	})
+
+	// The reference is visited before the FROM of its own SELECT, so resolution
+	// must not depend on the order in which the AST is walked.
+	t.Run("field list", func(t *testing.T) {
+		t.Parallel()
+		newQuery := rewrite(t, "t4", "CREATE TABLE t4 AS SELECT (SELECT orders.id "+
+			"FROM source_db.line_items WHERE line_items.order_id = orders.id) AS x "+
+			"FROM source_db.orders")
+		require.Contains(t, newQuery, "`target_db`.`orders_r`.`id`")
+		require.NotContains(t, newQuery, "`orders`.`id`")
+	})
+
+	t.Run("alias reference", func(t *testing.T) {
+		t.Parallel()
+		newQuery := rewrite(t, "t5", "CREATE TABLE t5 AS SELECT x.id FROM source_db.orders AS x "+
+			"WHERE EXISTS (SELECT 1 FROM source_db.line_items WHERE line_items.order_id = x.id)")
+		require.Contains(t, newQuery, "`target_db`.`orders_r` AS `x`")
+		require.Contains(t, newQuery, "`x`.`id`")
+		require.NotContains(t, newQuery, "`target_db`.`orders_r`.`id`")
+	})
+}
+
+// TestRewriteParserBackedDDLQueryRangeVariableResolution pins the resolution
+// rules that pkg/common/event's view normalizer also implements (see
+// TestCorrelatedColumns there): a table-qualified reference resolves from its own
+// SELECT outward, and an alias, a CTE name, or an ambiguous declaration stops the
+// search and keeps the reference unchanged.
+func TestRewriteParserBackedDDLQueryRangeVariableResolution(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter(t, false, []*config.DispatchRule{
+		{Matcher: []string{"source_db.*"}, TargetSchema: "target_db", TargetTable: "{table}_r"},
+		{Matcher: []string{"other_db.*"}, TargetSchema: "other_target", TargetTable: "{table}_r"},
+	})
+
+	tests := []struct {
+		name        string
+		eventSchema string
+		query       string
+		expected    []string
+		absent      []string
+	}{
+		{
+			name:     "case insensitive reference matches",
+			query:    "CREATE TABLE routed AS SELECT Orders.id FROM source_db.orders",
+			expected: []string{"`target_db`.`orders_r`.`id`"},
+		},
+		{
+			name:     "local table shadows outer",
+			query:    "CREATE TABLE routed AS SELECT id FROM source_db.orders WHERE EXISTS (SELECT 1 FROM other_db.orders WHERE orders.id = 1)",
+			expected: []string{"`other_target`.`orders_r`.`id`"},
+			absent:   []string{"`target_db`.`orders_r`.`id`"},
+		},
+		{
+			name:        "unqualified local table shadows outer",
+			eventSchema: "other_db",
+			query:       "CREATE TABLE routed AS SELECT id FROM source_db.line_items WHERE EXISTS (SELECT 1 FROM orders WHERE orders.id = 1)",
+			expected:    []string{"`other_target`.`orders_r`.`id`"},
+		},
+		{
+			name:     "alias shadows outer",
+			query:    "CREATE TABLE routed AS SELECT id FROM source_db.line_items WHERE EXISTS (SELECT 1 FROM other_db.orders AS orders WHERE orders.id = 1)",
+			expected: []string{"`orders`.`id`", "FROM `other_target`.`orders_r` AS `orders`"},
+			absent:   []string{"`other_target`.`orders_r`.`id`"},
+		},
+		{
+			name:     "CTE shadows outer",
+			query:    "CREATE TABLE routed AS SELECT id FROM source_db.orders WHERE EXISTS (WITH orders AS (SELECT 1 AS id) SELECT 1 FROM orders WHERE orders.id = 1)",
+			expected: []string{"`orders`.`id`"},
+			absent:   []string{"`target_db`.`orders_r`.`id`"},
+		},
+		{
+			name:     "ambiguous local table",
+			query:    "CREATE TABLE routed AS SELECT id FROM source_db.line_items WHERE EXISTS (SELECT 1 FROM source_db.orders, other_db.orders WHERE orders.id = 1)",
+			expected: []string{"`orders`.`id`"},
+			absent:   []string{"`orders_r`.`id`"},
+		},
+		{
+			name:     "multiple levels",
+			query:    "CREATE TABLE routed AS SELECT id FROM source_db.orders WHERE EXISTS (SELECT 1 FROM source_db.line_items WHERE EXISTS (SELECT 1 WHERE orders.id = 1))",
+			expected: []string{"`target_db`.`orders_r`.`id`"},
+			absent:   []string{"`orders`.`id`"},
+		},
+		{
+			name:     "cross schema correlated",
+			query:    "CREATE TABLE routed AS SELECT id FROM other_db.orders WHERE EXISTS (SELECT 1 FROM source_db.line_items WHERE line_items.order_id = orders.id)",
+			expected: []string{"`other_target`.`orders_r`.`id`"},
+			absent:   []string{"`target_db`.`orders_r`.`id`"},
+		},
+		{
+			name:     "union branch",
+			query:    "CREATE TABLE routed AS SELECT id FROM source_db.orders WHERE EXISTS (SELECT orders.id FROM source_db.line_items UNION SELECT orders.id FROM source_db.line_items)",
+			expected: []string{"`target_db`.`orders_r`.`id`"},
+			absent:   []string{"`orders`.`id`"},
+		},
+		{
+			name:     "derived table alias",
+			query:    "CREATE TABLE routed AS SELECT x.id FROM (SELECT id FROM source_db.orders) AS x WHERE EXISTS (SELECT 1 FROM source_db.line_items WHERE line_items.order_id = x.id)",
+			expected: []string{"FROM (SELECT `id` FROM `target_db`.`orders_r`) AS `x`", "`x`.`id`"},
+			absent:   []string{"`target_db`.`orders_r`.`id`"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			eventSchema := tc.eventSchema
+			if eventSchema == "" {
+				eventSchema = "source_db"
+			}
+			newQuery, err := router.rewriteParserBackedDDLQuery(&commonEvent.DDLEvent{
+				SchemaName: eventSchema,
+				TableName:  "routed",
+				Query:      tc.query,
+			})
+			require.NoError(t, err)
+			for _, fragment := range tc.expected {
+				require.Contains(t, newQuery, fragment)
+			}
+			for _, fragment := range tc.absent {
+				require.NotContains(t, newQuery, fragment)
+			}
+		})
+	}
+}
+
+// TestRewriteParserBackedDDLQueryCaseSensitiveBinding covers the router's
+// case-sensitive mode: physical table names stay distinct, while aliases are
+// still matched case-insensitively.
+func TestRewriteParserBackedDDLQueryCaseSensitiveBinding(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter(t, true, []*config.DispatchRule{
+		{Matcher: []string{"source_db.Orders"}, TargetSchema: "target_db", TargetTable: "{table}_r"},
+		{Matcher: []string{"other_db.orders"}, TargetSchema: "other_target", TargetTable: "{table}_r"},
+	})
+
+	rewrite := func(t *testing.T, query string) string {
+		t.Helper()
+		newQuery, err := router.rewriteParserBackedDDLQuery(&commonEvent.DDLEvent{
+			SchemaName: "source_db",
+			TableName:  "routed",
+			Query:      query,
+		})
+		require.NoError(t, err)
+		return newQuery
+	}
+
+	t.Run("tables differing only by case stay distinct", func(t *testing.T) {
+		t.Parallel()
+		newQuery := rewrite(t, "CREATE TABLE routed AS SELECT Orders.id, orders.id FROM source_db.Orders, other_db.orders")
+		require.Contains(t, newQuery, "`target_db`.`Orders_r`.`id`")
+		require.Contains(t, newQuery, "`other_target`.`orders_r`.`id`")
+	})
+
+	t.Run("reference case must match", func(t *testing.T) {
+		t.Parallel()
+		newQuery := rewrite(t, "CREATE TABLE routed AS SELECT orders.id FROM source_db.Orders")
+		require.Contains(t, newQuery, "`orders`.`id`")
+		require.NotContains(t, newQuery, "`target_db`.`Orders_r`.`id`")
+	})
 }
 
 func TestRewriteParserBackedDDLQueryUsesQuerySchemaForCreateTableLike(t *testing.T) {
