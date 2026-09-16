@@ -410,7 +410,9 @@ func needSwitchDB(event *commonEvent.DDLEvent) bool {
 	if len(event.GetTargetSchemaName()) == 0 {
 		return false
 	}
-	if event.GetDDLType() == timodel.ActionCreateSchema || event.GetDDLType() == timodel.ActionDropSchema {
+	if event.GetDDLType() == timodel.ActionCreateSchema ||
+		event.GetDDLType() == timodel.ActionDropSchema ||
+		event.GetDDLType() == timodel.ActionRecoverSchema {
 		return false
 	}
 	return true
