@@ -233,8 +233,8 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 		return errors.WrapError(errors.ErrSinkInvalidConfig, err)
 	}
 	// Keep the raw URI parameters: mergeConfig uses mergo, which cannot
-	// override a *bool "true" (from the config file) with an explicit
-	// "false" from the sink URI, so explicit URI values are applied last.
+	// override non-zero file values with explicit zero values (false or an
+	// empty string) from the sink URI, so explicit URI values take precedence.
 	rawURLParameter := urlParameter
 	if urlParameter, err = mergeConfig(sinkConfig, urlParameter); err != nil {
 		return err
@@ -352,10 +352,14 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	if rawURLParameter.DebeziumIncludeStartTs != nil {
 		c.DebeziumIncludeStartTs = *rawURLParameter.DebeziumIncludeStartTs
 	}
-	if urlParameter.DebeziumDecimalHandlingMode != nil {
+	if rawURLParameter.DebeziumDecimalHandlingMode != nil {
+		c.DebeziumDecimalHandlingMode = *rawURLParameter.DebeziumDecimalHandlingMode
+	} else if urlParameter.DebeziumDecimalHandlingMode != nil {
 		c.DebeziumDecimalHandlingMode = *urlParameter.DebeziumDecimalHandlingMode
 	}
-	if urlParameter.DebeziumBigintUnsignedHandlingMode != nil {
+	if rawURLParameter.DebeziumBigintUnsignedHandlingMode != nil {
+		c.DebeziumBigintUnsignedHandlingMode = *rawURLParameter.DebeziumBigintUnsignedHandlingMode
+	} else if urlParameter.DebeziumBigintUnsignedHandlingMode != nil {
 		c.DebeziumBigintUnsignedHandlingMode = *urlParameter.DebeziumBigintUnsignedHandlingMode
 	}
 	if rawURLParameter.DebeziumBinaryHandlingMode != nil {

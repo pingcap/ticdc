@@ -54,6 +54,32 @@ func TestDebeziumNumericHandlingConfig(t *testing.T) {
 			unsignedMode: "long",
 		},
 		{
+			name:          "empty decimal mode",
+			query:         "&debezium-decimal-handling-mode=",
+			unsignedMode:  "long",
+			invalidConfig: true,
+		},
+		{
+			name:          "empty bigint mode",
+			query:         "&debezium-bigint-unsigned-handling-mode=",
+			decimalMode:   "double",
+			invalidConfig: true,
+		},
+		{
+			name:          "empty decimal URI overrides file",
+			fileConfig:    "decimal-handling-mode = 'string'\nbigint-unsigned-handling-mode = 'string'",
+			query:         "&debezium-decimal-handling-mode=",
+			unsignedMode:  "string",
+			invalidConfig: true,
+		},
+		{
+			name:          "empty bigint URI overrides file",
+			fileConfig:    "decimal-handling-mode = 'string'\nbigint-unsigned-handling-mode = 'string'",
+			query:         "&debezium-bigint-unsigned-handling-mode=",
+			decimalMode:   "string",
+			invalidConfig: true,
+		},
+		{
 			name:          "invalid decimal mode",
 			query:         "&debezium-decimal-handling-mode=invalid",
 			decimalMode:   "invalid",
