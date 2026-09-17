@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/phayes/freeport"
@@ -127,8 +128,8 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 			// omits their repetition, to keep that control case focused on replay.
 			mysqlCfg.EnableDDLTs = completed
 			mysqlCfg.IsTiDB = false
-			stat := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
-			metadataWriter := pkgMysql.NewWriter(ctx, 0, db, mysqlCfg, changefeedID, stat, nil)
+			stat := metrics.NewStatistics(changefeedID, "mysqlSink")
+			metadataWriter := pkgMysql.NewWriter(ctx, 0, db, mysqlCfg, changefeedID, stat)
 			defer metadataWriter.Close()
 			ddl := &commonEvent.DDLEvent{
 				Type: byte(timodel.ActionDropColumn), SchemaName: "test", TableName: "t",
@@ -202,7 +203,7 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 			ap := NewRedoApplier(&RedoApplierConfig{Dir: t.TempDir()})
 			ap.rd = NewMockReader(100, 130, rows, ddls)
 			ap.updateSplitter = newUpdateEventSplitter(ap.rd, ap.cfg.Dir)
-			ap.mysqlSink = dmysql.NewMySQLSink(ctx, changefeedID, mysqlCfg, db, false, false, time.Second, common.DefaultKeyspaceID)
+			ap.mysqlSink = dmysql.NewMySQLSink(ctx, changefeedID, mysqlCfg, db, false)
 			defer ap.mysqlSink.Close()
 			require.True(t, ap.needRecoveryInfo)
 			require.ErrorIs(t, ap.consumeLogs(ctx), errApplyFinished)
