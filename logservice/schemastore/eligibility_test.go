@@ -16,6 +16,7 @@ package schemastore
 import (
 	"bytes"
 	"testing"
+	"testing/synctest"
 
 	"github.com/cockroachdb/pebble"
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
@@ -28,7 +29,6 @@ import (
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/stretchr/testify/require"
 	"github.com/tinylib/msgp/msgp"
-	"testing/synctest"
 )
 
 func TestPersistedReplicationKeyCompatibility(t *testing.T) {
