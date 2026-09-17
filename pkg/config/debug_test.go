@@ -47,5 +47,5 @@ func TestPullerConfigValidateAndAdjustRegionRequestWindow(t *testing.T) {
 
 func TestDefaultEventServiceConfig(t *testing.T) {
 	defaultCfg := NewDefaultEventServiceConfig()
-	require.Equal(t, 1024*1024*1024, defaultCfg.ScanLimitInBytes)
+	require.Equal(t, 10*1024*1024*1024, defaultCfg.ScanLimitInBytes)
 }

@@ -207,7 +207,7 @@ type EventServiceConfig struct {
 func NewDefaultEventServiceConfig() *EventServiceConfig {
 	return &EventServiceConfig{
 		ScanTaskQueueSize:        1024 * 8,
-		ScanLimitInBytes:         1024 * 1024 * 1024, // 1GB
+		ScanLimitInBytes:         10 * 1024 * 1024 * 1024, // 10GB
 		DMLEventMaxRows:          256,
 		DMLEventMaxBytes:         1024 * 1024 * 1, // 1MB
 		LargeTxnThresholdInBytes: 1024 * 1024 * 1, // 1MB
