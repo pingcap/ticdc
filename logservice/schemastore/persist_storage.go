@@ -388,7 +388,7 @@ func (p *persistentStorage) getTableInfoAtTs(tableID int64, ts uint64) (*common.
 	}()
 
 	for _, version := range slices.Backward(history) {
-		event := readPersistedDDLEventWithEncryption(storageSnap, version, p.encryptionManager, p.keyspaceID)
+		event := readPersistedDDLEvent(storageSnap, version)
 		handler := allDDLHandlers[model.ActionType(event.Type)]
 		tableInfo, deleted := handler.extractTableInfoFunc(&event, tableID)
 		if tableInfo != nil {
@@ -400,7 +400,7 @@ func (p *persistentStorage) getTableInfoAtTs(tableID int64, ts uint64) (*common.
 		// For example, CREATE TABLE LIKE is recorded for the referenced table,
 		// but does not change that table's schema.
 	}
-	if tableInfo := readTableInfoInKVSnapWithEncryption(storageSnap, tableID, gcTs, p.encryptionManager, p.keyspaceID); tableInfo != nil {
+	if tableInfo := readTableInfoInKVSnap(storageSnap, tableID, gcTs); tableInfo != nil {
 		return tableInfo, nil
 	}
 	return nil, errors.ErrSchemaStorageTableMiss.GenWithStackByArgs(tableID)
@@ -531,7 +531,7 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		}
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
-			rawEvent := readPersistedDDLEventWithEncryption(storageSnap, ts, p.encryptionManager, p.keyspaceID)
+			rawEvent := readPersistedDDLEvent(storageSnap, ts)
 			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, common.DDLSpanTableID)
 			if err != nil {
 				return nil, errors.Trace(err)

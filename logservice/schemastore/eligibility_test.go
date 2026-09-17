@@ -26,7 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/stretchr/testify/require"
 	"github.com/tinylib/msgp/msgp"
 )
@@ -205,7 +205,7 @@ func TestDDLReplicationKeyTransitions(t *testing.T) {
 			acquire := helper.DDL2Job(tc.acquireSQL)
 			path := t.TempDir()
 			storage := newPersistentStorageForTest(path, []mockDBInfo{{
-				dbInfo: &model.DBInfo{ID: create.SchemaID, Name: ast.NewCIStr("test")},
+				dbInfo: &model.DBInfo{ID: create.SchemaID, Name: parser_model.NewCIStr("test")},
 			}})
 			t.Cleanup(func() { require.NoError(t, storage.close()) })
 			require.NoError(t, storage.handleDDLJob(create))
@@ -291,7 +291,7 @@ func TestEnrichPersistedDDLEventLookupError(t *testing.T) {
 	for _, job := range jobs {
 		t.Run(job.Type.String(), func(t *testing.T) {
 			storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{{
-				dbInfo: &model.DBInfo{ID: job.SchemaID, Name: ast.NewCIStr("test")},
+				dbInfo: &model.DBInfo{ID: job.SchemaID, Name: parser_model.NewCIStr("test")},
 				tables: []*model.TableInfo{a.BinlogInfo.TableInfo, p.BinlogInfo.TableInfo},
 			}})
 			t.Cleanup(func() { require.NoError(t, storage.close()) })
@@ -341,7 +341,7 @@ func TestDDLTableBecomesEligible(t *testing.T) {
 			likeJob := helper.DDL2Job("create table b like a")
 			dbPath := t.TempDir()
 			storage := newPersistentStorageForTest(dbPath, []mockDBInfo{{
-				dbInfo: &model.DBInfo{ID: createJob.SchemaID, Name: ast.NewCIStr("test")},
+				dbInfo: &model.DBInfo{ID: createJob.SchemaID, Name: parser_model.NewCIStr("test")},
 			}})
 			t.Cleanup(func() { require.NoError(t, storage.close()) })
 			require.NoError(t, storage.handleDDLJob(createJob))
