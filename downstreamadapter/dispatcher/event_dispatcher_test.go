@@ -1017,12 +1017,20 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 		tableInfo2.TableName.TableID: tableInfo2,
 	}
 
+	bootstrapCtx, cancelBootstrap := context.WithCancel(t.Context())
+	defer cancelBootstrap()
+	var cancelOnRequest atomic.Bool
+	cancelOnRequest.Store(true)
 	var omitResponse atomic.Bool
 	omitResponse.Store(true)
 	handlerErrCh := make(chan error, 1)
 	mc.RegisterHandler(messaging.SchemaStoreTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		req := msg.Message[0].(*messaging.SchemaStoreRequest)
 		if req.Operation == messaging.SchemaStoreCancelRequest {
+			return nil
+		}
+		if cancelOnRequest.Load() {
+			cancelBootstrap()
 			return nil
 		}
 		resp := &messaging.SchemaStoreResponse{RequestID: req.RequestID}
@@ -1064,8 +1072,20 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 	require.True(t, ok)
 
 	dispatcher.BootstrapState = BootstrapNotStarted
+	canceled := make(chan bool, 1)
+	go func() { canceled <- dispatcher.EmitBootstrap(bootstrapCtx, func() bool { return false }) }()
+	select {
+	case success := <-canceled:
+		require.False(t, success)
+	case <-time.After(time.Second):
+		t.Fatal("bootstrap did not cancel its schema request")
+	}
+	require.Equal(t, BootstrapNotStarted, loadBootstrapState(&dispatcher.BootstrapState))
+	require.Empty(t, events)
+	require.Empty(t, dispatcher.sharedInfo.errCh, "closing bootstrap must not report a changefeed error")
+	cancelOnRequest.Store(false)
 	// A batch with one missing table must not emit a partial bootstrap.
-	require.False(t, dispatcher.EmitBootstrap(func() bool { return false }))
+	require.False(t, dispatcher.EmitBootstrap(t.Context(), func() bool { return false }))
 	require.Equal(t, BootstrapNotStarted, loadBootstrapState(&dispatcher.BootstrapState))
 	require.Empty(t, events)
 	select {
@@ -1076,7 +1096,7 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 	}
 
 	omitResponse.Store(false)
-	require.True(t, dispatcher.EmitBootstrap(func() bool { return false }))
+	require.True(t, dispatcher.EmitBootstrap(t.Context(), func() bool { return false }))
 	require.Equal(t, BootstrapFinished, loadBootstrapState(&dispatcher.BootstrapState))
 
 	select {

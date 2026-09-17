@@ -22,15 +22,20 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/mock"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/store/mockstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,8 +52,10 @@ func newRequestTestStore(t *testing.T, mc messaging.MessageCenter, workers int) 
 }
 
 func testRequest(id uint64, operation messaging.SchemaStoreOperation, keyspace uint32) *messaging.SchemaStoreRequest {
-	return &messaging.SchemaStoreRequest{RequestID: id, Operation: operation, Keyspace: common.KeyspaceMeta{ID: keyspace},
-		Deadline: time.Now().Add(time.Minute).UnixNano(), TableIDs: []int64{1}, Ts: 100}
+	return &messaging.SchemaStoreRequest{
+		RequestID: id, Operation: operation, Keyspace: common.KeyspaceMeta{ID: keyspace},
+		Deadline: time.Now().Add(time.Minute).UnixNano(), TableIDs: []int64{1}, Ts: 100,
+	}
 }
 
 func waitRequestInStore(t *testing.T, ks *keyspaceSchemaStore) {
@@ -80,7 +87,12 @@ func TestSchemaStoreRequestPool(t *testing.T) {
 	})
 	require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
 		testRequest(1, messaging.SchemaStoreRegisterKeyspace, 7))))
-	require.Equal(t, uint64(1), <-responses)
+	select {
+	case id := <-responses:
+		require.Equal(t, uint64(1), id)
+	case <-time.After(time.Second):
+		t.Fatal("first request did not run")
+	}
 	queued := testRequest(2, messaging.SchemaStoreGetTableInfos, 7)
 	queued.Deadline = time.Now().Add(30 * time.Millisecond).UnixNano()
 	require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic, queued)))
@@ -176,6 +188,20 @@ func TestSchemaStoreRequestQueueLimitAndClose(t *testing.T) {
 	})
 	require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
 		testRequest(1000, messaging.SchemaStoreGetTableInfos, 1))))
+	// Cancellation bypasses a saturated queue, including for the running task.
+	for id := schemaStoreMaxPendingRequests; id >= 1; id-- {
+		require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+			&messaging.SchemaStoreRequest{RequestID: uint64(id), Operation: messaging.SchemaStoreCancelRequest})))
+	}
+	require.Eventually(t, func() bool {
+		store.requestMu.Lock()
+		defer store.requestMu.Unlock()
+		return len(store.activeRequests) == 0
+	}, time.Second, time.Millisecond)
+	require.NoError(t, ctx.Err())
+	require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+		testRequest(1000, messaging.SchemaStoreGetTableInfos, 1))))
+	waitRequestInStore(t, ks)
 	closed := make(chan error, 1)
 	go func() { closed <- store.Close(context.Background()) }()
 	select {
@@ -309,4 +335,55 @@ func TestSchemaStoreRequests(t *testing.T) {
 	cfg.Rules = []string{"["}
 	_, err = schemaClient.GetAllPhysicalTables(ctx, meta, 1020, cfg, true, false)
 	require.Error(t, err)
+}
+
+// A successful registration transfers ownership to the service. Cancellation
+// during initialization must instead close its context and leave no store behind.
+func TestSchemaStoreRegistrationLifetime(t *testing.T) {
+	for _, cancelInit := range []bool{false, true} {
+		t.Run(map[bool]string{false: "successful registration", true: "canceled initialization"}[cancelInit], func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mc := mock.NewMockMessageCenter(ctrl)
+			mc.EXPECT().DeRegisterHandler(messaging.SchemaStoreTopic).AnyTimes()
+			store := newRequestTestStore(t, mc, 1)
+			store.root = t.TempDir()
+			meta := common.KeyspaceMeta{ID: 42, Name: "test"}
+			store.pdClock = pdutil.NewClock4Test()
+			pdCli, _ := newMockGCServiceClientForSchemaStoreGC(t)
+			store.pdCli = pdCli
+			kvStore, err := mockstore.NewMockStore()
+			require.NoError(t, err)
+			defer func() { require.NoError(t, kvStore.Close()) }()
+			manager := keyspace.NewMockManager(ctrl)
+			appcontext.SetService(appcontext.KeyspaceManager, manager)
+			appcontext.SetService(appcontext.SubscriptionClient, newTrackingSubscriptionClient())
+			requestCtx, cancelRequest := context.WithCancel(t.Context())
+			defer cancelRequest()
+			manager.EXPECT().GetStorage(gomock.Any(), meta.Name).DoAndReturn(func(context.Context, string) (kv.Storage, error) {
+				if cancelInit {
+					cancelRequest()
+				}
+				return kvStore, nil
+			})
+			pdCli.UpdateServiceGCSafePointFunc = func(ctx context.Context, _ string, _ int64, _ uint64) (uint64, error) {
+				if err := ctx.Err(); err != nil {
+					return 0, err
+				}
+				return 100, nil
+			}
+			err = store.registerKeyspace(requestCtx, store.requestCtx, meta)
+			if cancelInit {
+				require.Error(t, err)
+				require.NotContains(t, store.keyspaceSchemaStoreMap, meta.ID)
+				return
+			}
+			require.NoError(t, err)
+			ks := store.keyspaceSchemaStoreMap[meta.ID]
+			cancelRequest()
+			require.NoError(t, ks.ctx.Err())
+			require.NoError(t, ks.dataStorage.ctx.Err())
+			require.NoError(t, store.Close(context.Background()))
+			require.ErrorIs(t, ks.ctx.Err(), context.Canceled)
+		})
+	}
 }

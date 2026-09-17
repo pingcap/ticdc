@@ -96,7 +96,11 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 func createTestManager(t *testing.T) *DispatcherManager {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	testSink := newDispatcherManagerTestSink(t, common.BlackHoleSinkType)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
 	manager := &DispatcherManager{
+		ctx:                     ctx,
+		cancel:                  cancel,
 		changefeedID:            changefeedID,
 		dispatcherMap:           newDispatcherMap[*dispatcher.EventDispatcher](),
 		heartbeatRequestQueue:   NewHeartbeatRequestQueue(),

@@ -69,6 +69,7 @@ func (c *Client) GetTableInfos(ctx context.Context, meta common.KeyspaceMeta, ta
 	defer cancel()
 	result := make([]*common.TableInfo, 0, len(tableIDs))
 	skipped := 0
+	var firstSkipped messaging.SchemaStoreTableInfo
 	for len(tableIDs) > 0 {
 		batch := tableIDs[:min(len(tableIDs), messaging.SchemaStoreTableBatchSize)]
 		resp, err := c.request(ctx, &messaging.SchemaStoreRequest{
@@ -89,6 +90,9 @@ func (c *Client) GetTableInfos(ctx context.Context, meta common.KeyspaceMeta, ta
 				return nil, errors.ErrSchemaStoreRequestFailed.GenWithStack("unexpected table in schema store batch: expected %d, received %d", batch[i], table.TableID)
 			}
 			if table.Error != "" {
+				if skipped == 0 {
+					firstSkipped = table
+				}
 				skipped++
 				continue
 			}
@@ -104,7 +108,8 @@ func (c *Client) GetTableInfos(ctx context.Context, meta common.KeyspaceMeta, ta
 		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
 	}
 	if skipped > 0 {
-		log.Warn("schema store skipped tables with explicit errors", zap.Any("keyspace", meta), zap.Uint64("ts", ts), zap.Int("tables", skipped))
+		log.Warn("schema store skipped tables with explicit errors", zap.Any("keyspace", meta), zap.Uint64("ts", ts), zap.Int("tables", skipped),
+			zap.Int64("firstTableID", firstSkipped.TableID), zap.String("firstError", firstSkipped.Error))
 	}
 	return result, nil
 }

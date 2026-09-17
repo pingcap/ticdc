@@ -455,7 +455,12 @@ func (s *schemaStore) Close(_ context.Context) error {
 	if s.requestPool != nil {
 		// Close the keyspace stores first to release requests waiting for resolved ts.
 		// Stop waits for running tasks and must run after keyspaceLocker is unlocked.
-		defer s.requestPool.Stop()
+		defer func() {
+			s.requestPool.Stop()
+			s.requestMu.Lock()
+			clear(s.activeRequests)
+			s.requestMu.Unlock()
+		}()
 	}
 
 	s.keyspaceLocker.Lock()

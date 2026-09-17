@@ -157,7 +157,7 @@ func (d *EventDispatcher) Remove() {
 // EmitBootstrap emits the table bootstrap event in a blocking way after changefeed started.
 // It will return after the bootstrap event is sent, or when shouldStop asks it
 // to stop because the local write path has been fenced.
-func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
+func (d *EventDispatcher) EmitBootstrap(ctx context.Context, shouldStop func() bool) bool {
 	bootstrap := loadBootstrapState(&d.BootstrapState)
 	switch bootstrap {
 	case BootstrapFinished:
@@ -178,15 +178,18 @@ func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
 		ID:   d.tableSpan.KeyspaceID,
 		Name: d.sharedInfo.changefeedID.Keyspace(),
 	}
-	currentTables, err := client.GetSchemaStoreClient().GetTableInfos(context.Background(), meta, tables, ts)
+	currentTables, err := client.GetSchemaStoreClient().GetTableInfos(ctx, meta, tables, ts)
 	if err != nil {
+		storeBootstrapState(&d.BootstrapState, BootstrapNotStarted)
+		if ctx.Err() != nil || shouldStop() {
+			return false
+		}
 		log.Error("get table infos from schema store failed",
 			zap.Stringer("changefeed", d.sharedInfo.changefeedID),
 			zap.Any("keyspace", meta),
 			zap.Int("tables", len(tables)),
 			zap.Uint64("startTs", ts),
 			zap.Error(err))
-		storeBootstrapState(&d.BootstrapState, BootstrapNotStarted)
 		d.HandleError(err)
 		return false
 	}
