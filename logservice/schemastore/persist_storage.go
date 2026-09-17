@@ -375,11 +375,25 @@ func (p *persistentStorage) getTableInfo(tableID int64, ts uint64) (*common.Tabl
 }
 
 func (p *persistentStorage) forceGetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error) {
+	return p.forceGetTableInfoWithContext(context.Background(), tableID, ts)
+}
+
+func (p *persistentStorage) forceGetTableInfoWithContext(ctx context.Context, tableID int64, ts uint64) (*common.TableInfo, error) {
 	p.mu.RLock()
+	if ts < p.gcTs {
+		gcTs := p.gcTs
+		p.mu.RUnlock()
+		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs(ts, gcTs)
+	}
 	// if there is already a store, it must contain all table info on disk, so we can use it directly
 	if store, ok := p.tableInfoStoreMap[tableID]; ok {
 		p.mu.RUnlock()
-		return store.getTableInfo(ts)
+		select {
+		case <-ctx.Done():
+			return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, ctx.Err())
+		case <-store.readyToRead:
+			return store.getTableInfo(ts)
+		}
 	}
 	p.mu.RUnlock()
 	// build a temp store to get table info

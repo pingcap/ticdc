@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -362,7 +363,7 @@ func TestMaintainerSchedule(t *testing.T) {
 	mc.Run(ctx)
 	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	appcontext.SetID(n.ID.String())
+	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, n.ID))
 	schemaStore.RegisterMessageHandler(mc)
 
 	nodeManager := watcher.NewNodeManager(nil, nil)

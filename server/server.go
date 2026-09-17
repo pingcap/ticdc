@@ -43,6 +43,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/pkg/security"
 	tiserver "github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/tcpserver"
@@ -280,6 +281,7 @@ func (c *server) setPreServices(ctx context.Context) error {
 	messageCenter := messaging.NewMessageCenter(ctx, c.info.ID, mcCfg, c.security)
 	messageCenter.Run(ctx)
 	appctx.SetService(appctx.MessageCenter, messageCenter)
+	appctx.SetService(appctx.SchemaStoreClient, client.New(messageCenter, c.info.ID))
 	c.preServices = append(c.preServices, messageCenter)
 
 	// Set EventCollector to Global Context

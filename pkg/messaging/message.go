@@ -103,8 +103,6 @@ const (
 	TypeRedoResolvedTsForwardMessage       IOType = 39
 	TypeDispatcherSetChecksumUpdateRequest IOType = 40
 	TypeDispatcherSetChecksumAckResponse   IOType = 41
-	TypeSchemaStoreTableInfosRequest       IOType = 47
-	TypeSchemaStoreTableInfosResponse      IOType = 48
 	TypeSchemaStoreRequest                 IOType = 49
 	TypeSchemaStoreResponse                IOType = 50
 
@@ -200,10 +198,6 @@ func (t IOType) String() string {
 		return "MergeDispatcherRequest"
 	case TypeLogCoordinatorChangefeedStates:
 		return "TypeLogCoordinatorChangefeedStates"
-	case TypeSchemaStoreTableInfosRequest:
-		return "TypeSchemaStoreTableInfosRequest"
-	case TypeSchemaStoreTableInfosResponse:
-		return "TypeSchemaStoreTableInfosResponse"
 	case TypeSchemaStoreRequest:
 		return "SchemaStoreRequest"
 	case TypeSchemaStoreResponse:
@@ -410,10 +404,6 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.LogCoordinatorResolvedTsRequest{}
 	case TypeLogCoordinatorResolvedTsResponse:
 		m = &heartbeatpb.LogCoordinatorResolvedTsResponse{}
-	case TypeSchemaStoreTableInfosRequest:
-		m = &SchemaStoreTableInfosRequest{}
-	case TypeSchemaStoreTableInfosResponse:
-		m = &SchemaStoreTableInfosResponse{}
 	case TypeSchemaStoreRequest:
 		m = &SchemaStoreRequest{}
 	case TypeSchemaStoreResponse:
@@ -540,10 +530,6 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeLogCoordinatorResolvedTsRequest
 	case *heartbeatpb.LogCoordinatorResolvedTsResponse:
 		ioType = TypeLogCoordinatorResolvedTsResponse
-	case *SchemaStoreTableInfosRequest:
-		ioType = TypeSchemaStoreTableInfosRequest
-	case *SchemaStoreTableInfosResponse:
-		ioType = TypeSchemaStoreTableInfosResponse
 	case *SchemaStoreRequest:
 		ioType = TypeSchemaStoreRequest
 	case *SchemaStoreResponse:

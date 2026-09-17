@@ -24,7 +24,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/schemastoreclient"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"go.uber.org/zap"
 )
@@ -174,12 +174,11 @@ func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
 	}
 	start := time.Now()
 	ts := d.GetStartTs()
-	currentTables := make([]*common.TableInfo, 0, len(tables))
 	meta := common.KeyspaceMeta{
 		ID:   d.tableSpan.KeyspaceID,
 		Name: d.sharedInfo.changefeedID.Keyspace(),
 	}
-	tableInfos, err := schemastoreclient.GetSchemaStoreClient().GetTableInfos(context.Background(), meta, tables, ts)
+	currentTables, err := client.GetSchemaStoreClient().GetTableInfos(context.Background(), meta, tables, ts)
 	if err != nil {
 		log.Error("get table infos from schema store failed",
 			zap.Stringer("changefeed", d.sharedInfo.changefeedID),
@@ -188,10 +187,9 @@ func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
 			zap.Uint64("startTs", ts),
 			zap.Error(err))
 		storeBootstrapState(&d.BootstrapState, BootstrapNotStarted)
-		d.HandleError(errors.Trace(err))
+		d.HandleError(err)
 		return false
 	}
-	currentTables = append(currentTables, tableInfos...)
 
 	if len(currentTables) == 0 {
 		storeBootstrapState(&d.BootstrapState, BootstrapFinished)

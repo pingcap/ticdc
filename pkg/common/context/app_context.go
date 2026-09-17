@@ -29,6 +29,7 @@ const (
 	HeartbeatCollector      = "HeartbeatCollector"
 	SubscriptionClient      = "SubscriptionClient"
 	SchemaStore             = "SchemaStore"
+	SchemaStoreClient       = "SchemaStoreClient"
 	EventStore              = "EventStore"
 	EventService            = "EventService"
 	DispatcherDynamicStream = "DispatcherDynamicStream"

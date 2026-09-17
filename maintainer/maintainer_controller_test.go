@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
 	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
@@ -1408,14 +1409,12 @@ func TestStoppedWhenMoving(t *testing.T) {
 	require.Equal(t, 0, s.spanController.GetTaskSizeByNodeID("node2"))
 }
 
-// Bootstrap tests use the schema client to route requests to the local message
-// center. Keep the global ID changes here, outside the helper shared by parallel tests.
+// Bootstrap tests register a client for their local message center.
 func setUpBootstrapTestServices(t *testing.T) {
 	t.Helper()
-	previousID := appcontext.GetID()
 	id := testutil.SetUpTestServices(t)
-	appcontext.SetID(id.String())
-	t.Cleanup(func() { appcontext.SetID(previousID) })
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, id))
 }
 
 func TestFinishBootstrap(t *testing.T) {

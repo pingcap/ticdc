@@ -30,7 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/routing"
-	"github.com/pingcap/ticdc/pkg/schemastoreclient"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
@@ -436,7 +436,7 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 }
 
 func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
-	return schemastoreclient.GetSchemaStoreClient().GetAllPhysicalTables(
+	return client.GetSchemaStoreClient().GetAllPhysicalTables(
 		context.Background(), c.keyspaceMeta, startTs, c.replicaConfig.Filter,
 		util.GetOrZero(c.replicaConfig.CaseSensitive), util.GetOrZero(c.replicaConfig.ForceReplicate))
 }

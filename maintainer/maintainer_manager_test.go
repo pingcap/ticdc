@@ -42,6 +42,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/server/watcher"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -312,7 +313,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	defer mc.Close()
 
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	appcontext.SetID(selfNode.ID.String())
+	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, selfNode.ID))
 	store.RegisterMessageHandler(mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager, selfLis)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
@@ -545,7 +546,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	defer mc.Close()
 
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	appcontext.SetID(selfNode.ID.String())
+	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, selfNode.ID))
 	store.RegisterMessageHandler(mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager, selfLis)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
@@ -688,7 +689,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	mc.Run(ctx)
 	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	appcontext.SetID(selfNode.ID.String())
+	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, selfNode.ID))
 	store.RegisterMessageHandler(mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager, selfLis)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)

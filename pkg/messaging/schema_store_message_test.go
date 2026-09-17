@@ -28,8 +28,9 @@ func TestSchemaStoreMessageRoundTrip(t *testing.T) {
 		typ     IOType
 		message IOTypeT
 	}{
-		{TypeSchemaStoreTableInfosRequest, &SchemaStoreTableInfosRequest{RequestID: 1, KeyspaceID: 2, KeyspaceName: "ks", TableIDs: []int64{3}, Ts: 4}},
-		{TypeSchemaStoreTableInfosResponse, &SchemaStoreTableInfosResponse{RequestID: 1, TableID: 3, TableInfo: []byte("table"), Done: true}},
+		{TypeSchemaStoreRequest, &SchemaStoreRequest{RequestID: 1, Operation: SchemaStoreGetTableInfos, Deadline: 123456, Keyspace: common.KeyspaceMeta{ID: 2, Name: "ks"}, TableIDs: []int64{3}, Ts: 4}},
+		{TypeSchemaStoreRequest, &SchemaStoreRequest{RequestID: 1, Operation: SchemaStoreCancelRequest}},
+		{TypeSchemaStoreResponse, &SchemaStoreResponse{RequestID: 1, TableInfos: []SchemaStoreTableInfo{{TableID: 3, TableInfo: []byte("table")}, {TableID: 4, Error: "table deleted"}}, More: true}},
 		{TypeSchemaStoreRequest, &SchemaStoreRequest{RequestID: 5, Operation: SchemaStoreRegisterKeyspace, Keyspace: common.KeyspaceMeta{ID: 2, Name: "ks"}}},
 		{TypeSchemaStoreRequest, &SchemaStoreRequest{RequestID: 6, Operation: SchemaStoreGetAllPhysicalTables, Keyspace: common.KeyspaceMeta{ID: 2, Name: "ks"}, Ts: 10, Filter: config.NewDefaultFilterConfig(), CaseSensitive: true, ForceReplicate: true}},
 		{TypeSchemaStoreResponse, &SchemaStoreResponse{RequestID: 6, Tables: []commonEvent.Table{{SchemaID: 10, TableID: 20, Splitable: true, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t"}}}}},

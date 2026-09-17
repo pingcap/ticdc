@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -419,7 +420,7 @@ func TestFinishBootstrapStopsStaleEpochMaintainerWithReportedEpoch(t *testing.T)
 			mc := messaging.NewMockMessageCenter()
 			appcontext.SetService(appcontext.MessageCenter, mc)
 			mc.EnableLocalDispatch()
-			appcontext.SetID("coordinator")
+			appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, "coordinator"))
 			eventservice.NewMockSchemaStore().RegisterMessageHandler(mc)
 
 			nodeManager := watcher.NewNodeManager(nil, nil)
@@ -516,7 +517,7 @@ func TestHandleBootstrapResponsesKeepsCurrentEpochAndStopsStaleDuplicate(t *test
 	nodeManager.GetAliveNodes()[currentNode] = &node.Info{ID: currentNode}
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	mc.EnableLocalDispatch()
-	appcontext.SetID("coordinator")
+	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, "coordinator"))
 	eventservice.NewMockSchemaStore().RegisterMessageHandler(mc)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 

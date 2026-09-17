@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
 )
@@ -999,10 +1000,7 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 	mc.Run(ctx)
 	t.Cleanup(mc.Close)
 
-	previousID := appcontext.GetID()
-	appcontext.SetID(serverID.String())
-	t.Cleanup(func() { appcontext.SetID(previousID) })
-	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, serverID))
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -1023,50 +1021,23 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 	omitResponse.Store(true)
 	handlerErrCh := make(chan error, 1)
 	mc.RegisterHandler(messaging.SchemaStoreTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
-		for _, m := range msg.Message {
-			req, ok := m.(*messaging.SchemaStoreTableInfosRequest)
-			if !ok {
-				select {
-				case handlerErrCh <- errors.New("invalid schema store request message"):
-				default:
-				}
+		req := msg.Message[0].(*messaging.SchemaStoreRequest)
+		if req.Operation == messaging.SchemaStoreCancelRequest {
+			return nil
+		}
+		resp := &messaging.SchemaStoreResponse{RequestID: req.RequestID}
+		for _, tableID := range req.TableIDs {
+			if omitResponse.Load() && tableID == tableInfo2.TableName.TableID {
 				continue
 			}
-
-			for _, tableID := range req.TableIDs {
-				if omitResponse.Load() && tableID == tableInfo2.TableName.TableID {
-					continue
-				}
-				tableInfo, ok := tableInfoByID[tableID]
-				if !ok {
-					_ = mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic, &messaging.SchemaStoreTableInfosResponse{
-						RequestID: req.RequestID,
-						TableID:   tableID,
-						Error:     "table not found",
-					}))
-					continue
-				}
-				data, err := tableInfo.Marshal()
-				if err != nil {
-					select {
-					case handlerErrCh <- err:
-					default:
-					}
-					continue
-				}
-				_ = mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic, &messaging.SchemaStoreTableInfosResponse{
-					RequestID: req.RequestID,
-					TableID:   tableID,
-					TableInfo: data,
-				}))
+			data, err := tableInfoByID[tableID].Marshal()
+			if err != nil {
+				handlerErrCh <- err
+				return err
 			}
-
-			_ = mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic, &messaging.SchemaStoreTableInfosResponse{
-				RequestID: req.RequestID,
-				Done:      true,
-			}))
+			resp.TableInfos = append(resp.TableInfos, messaging.SchemaStoreTableInfo{TableID: tableID, TableInfo: data})
 		}
-		return nil
+		return mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic, resp))
 	})
 
 	ddlTableSpan := common.KeyspaceDDLSpan(getTestingKeyspaceID())
@@ -1093,7 +1064,7 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 	require.True(t, ok)
 
 	dispatcher.BootstrapState = BootstrapNotStarted
-	// A clean Done with one missing table must not emit a partial bootstrap.
+	// A batch with one missing table must not emit a partial bootstrap.
 	require.False(t, dispatcher.EmitBootstrap(func() bool { return false }))
 	require.Equal(t, BootstrapNotStarted, loadBootstrapState(&dispatcher.BootstrapState))
 	require.Empty(t, events)

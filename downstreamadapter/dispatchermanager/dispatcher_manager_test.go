@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -465,25 +466,23 @@ func TestLocalFenceCancelsWritePathWithoutWaitingForCleanup(t *testing.T) {
 func TestLocalFenceDoesNotWaitForBootstrapWriteBlockEvent(t *testing.T) {
 	manager := createTestManager(t)
 	serverID := node.NewID()
-	previousID := appcontext.GetID()
-	appcontext.SetID(serverID.String())
-	t.Cleanup(func() { appcontext.SetID(previousID) })
 	mc := messaging.NewMessageCenter(context.Background(), serverID, config.NewDefaultMessageCenterConfig("127.0.0.1:0"), nil)
 	mc.Run(context.Background())
 	t.Cleanup(mc.Close)
 	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, serverID))
 	tableInfo := common.WrapTableInfo("test", &model.TableInfo{ID: 11, Name: ast.NewCIStr("t")})
 	tableInfoData, err := tableInfo.Marshal()
 	require.NoError(t, err)
 	mc.RegisterHandler(messaging.SchemaStoreTopic, func(_ context.Context, msg *messaging.TargetMessage) error {
-		req := msg.Message[0].(*messaging.SchemaStoreTableInfosRequest)
-		if err := mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic,
-			&messaging.SchemaStoreTableInfosResponse{RequestID: req.RequestID, TableID: 11, TableInfo: tableInfoData})); err != nil {
-			return err
+		req := msg.Message[0].(*messaging.SchemaStoreRequest)
+		if req.Operation == messaging.SchemaStoreCancelRequest {
+			return nil
 		}
 		return mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic,
-			&messaging.SchemaStoreTableInfosResponse{RequestID: req.RequestID, Done: true}))
+			&messaging.SchemaStoreResponse{RequestID: req.RequestID, TableInfos: []messaging.SchemaStoreTableInfo{{TableID: 11, TableInfo: tableInfoData}}}))
 	})
+
 	heartbeatCollector := &HeartBeatCollector{}
 	heartbeatCollector.isClosed.Store(true)
 	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)

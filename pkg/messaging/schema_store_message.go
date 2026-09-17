@@ -15,68 +15,38 @@ package messaging
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 )
 
-// SchemaStoreTableInfosRequest is used to query table infos from schema store.
-// It is mainly used for changefeed bootstrap in downstream adapter.
-type SchemaStoreTableInfosRequest struct {
-	RequestID    uint64  `json:"request_id"`
-	KeyspaceID   uint32  `json:"keyspace_id"`
-	KeyspaceName string  `json:"keyspace_name"`
-	TableIDs     []int64 `json:"table_ids"`
-	Ts           uint64  `json:"ts"`
-}
+const (
+	SchemaStoreRequestTimeout  = 10 * time.Minute
+	SchemaStoreTableBatchSize  = 128
+	SchemaStoreTableBatchBytes = 4 << 20
+)
 
-func (r *SchemaStoreTableInfosRequest) Marshal() ([]byte, error) {
-	return json.Marshal(r)
-}
-
-func (r *SchemaStoreTableInfosRequest) Unmarshal(data []byte) error {
-	return json.Unmarshal(data, r)
-}
-
-// SchemaStoreTableInfosResponse is a streamed response for SchemaStoreTableInfosRequest.
-//
-// For each requested table, schema store sends one response with:
-// - RequestID + TableID + TableInfo (or Error)
-//
-// Then it sends a final response with:
-// - RequestID + Done=true (and optional Error for request-level failures).
-type SchemaStoreTableInfosResponse struct {
-	RequestID uint64 `json:"request_id"`
-	TableID   int64  `json:"table_id"`
-	// TableInfo is the marshaled bytes of `common.TableInfo`.
-	TableInfo []byte `json:"table_info,omitempty"`
-	Error     string `json:"error,omitempty"`
-	Done      bool   `json:"done,omitempty"`
-}
-
-func (r *SchemaStoreTableInfosResponse) Marshal() ([]byte, error) {
-	return json.Marshal(r)
-}
-
-func (r *SchemaStoreTableInfosResponse) Unmarshal(data []byte) error {
-	return json.Unmarshal(data, r)
-}
-
-// SchemaStoreOperation identifies a non-streaming schema store request.
 type SchemaStoreOperation int
 
 const (
 	SchemaStoreRegisterKeyspace SchemaStoreOperation = iota + 1
 	SchemaStoreGetAllPhysicalTables
+	SchemaStoreGetTableInfos
+	SchemaStoreCancelRequest
 )
 
-// SchemaStoreRequest registers a keyspace or queries its physical tables.
+// SchemaStoreRequest has one response. Deadline is an absolute Unix timestamp in
+// nanoseconds, including time spent waiting in the server's queue. Cancellation
+// uses the original RequestID and does not produce another response.
 type SchemaStoreRequest struct {
 	RequestID      uint64               `json:"request_id"`
 	Operation      SchemaStoreOperation `json:"operation"`
+	Deadline       int64                `json:"deadline"`
 	Keyspace       common.KeyspaceMeta  `json:"keyspace"`
 	Ts             uint64               `json:"ts,omitempty"`
+	TableIDs       []int64              `json:"table_ids,omitempty"`
 	Filter         *config.FilterConfig `json:"filter,omitempty"`
 	CaseSensitive  bool                 `json:"case_sensitive,omitempty"`
 	ForceReplicate bool                 `json:"force_replicate,omitempty"`
@@ -85,12 +55,23 @@ type SchemaStoreRequest struct {
 func (r *SchemaStoreRequest) Marshal() ([]byte, error)    { return json.Marshal(r) }
 func (r *SchemaStoreRequest) Unmarshal(data []byte) error { return json.Unmarshal(data, r) }
 
-// SchemaStoreResponse contains a request result and preserves the original error code.
+// SchemaStoreTableInfo accounts for one table, including explicit table errors.
+type SchemaStoreTableInfo struct {
+	TableID   int64  `json:"table_id"`
+	TableInfo []byte `json:"table_info,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// SchemaStoreResponse preserves error codes. TableInfos contains results in the
+// requested order. More is set only when the byte limit stops the batch early;
+// the client requests the remaining IDs in a new request.
 type SchemaStoreResponse struct {
-	RequestID uint64              `json:"request_id"`
-	Tables    []commonEvent.Table `json:"tables,omitempty"`
-	Error     string              `json:"error,omitempty"`
-	ErrorCode string              `json:"error_code,omitempty"`
+	RequestID  uint64                 `json:"request_id"`
+	Tables     []commonEvent.Table    `json:"tables,omitempty"`
+	TableInfos []SchemaStoreTableInfo `json:"table_infos,omitempty"`
+	More       bool                   `json:"more,omitempty"`
+	Error      string                 `json:"error,omitempty"`
+	ErrorCode  string                 `json:"error_code,omitempty"`
 }
 
 func (r *SchemaStoreResponse) Marshal() ([]byte, error)    { return json.Marshal(r) }

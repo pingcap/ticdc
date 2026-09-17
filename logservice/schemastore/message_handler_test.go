@@ -15,160 +15,298 @@ package schemastore
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/mock"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/schemastoreclient"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
+	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 )
 
-func TestSchemaStoreTableInfosResponseDelivery(t *testing.T) {
-	congested := errors.AppError{Type: errors.ErrorTypeMessageCongested, Reason: "queue full"}
-	tests := []struct {
-		name               string
-		tableFailures      int
-		completionFailures int
-		sendError          error
-		wantTableAttempts  int
-		wantCompleteError  bool
-	}{
-		{
-			name: "retry congested table response", tableFailures: 1, sendError: congested,
-			wantTableAttempts: 3,
-		},
-		{
-			name: "retry temporary connection failure", tableFailures: 1,
-			sendError:         errors.NewAppError(errors.ErrorTypeConnectionNotFound, "connection not ready"),
-			wantTableAttempts: 3,
-		},
-		{
-			name: "retry congested completion", completionFailures: 1, sendError: congested,
-			wantTableAttempts: 2,
-		},
-		{
-			name: "report permanent table delivery failure", tableFailures: 1,
-			sendError:         errors.NewAppError(errors.ErrorTypeTargetMismatch, "target mismatch"),
-			wantTableAttempts: 1, wantCompleteError: true,
-		},
-		{
-			name: "report exhausted table delivery retries", tableFailures: schemaStoreResponseMaxTries,
-			sendError: congested, wantTableAttempts: schemaStoreResponseMaxTries, wantCompleteError: true,
-		},
-		{
-			name: "bound completion retries", completionFailures: schemaStoreResponseMaxTries,
-			sendError: congested, wantTableAttempts: 2,
-		},
+func newRequestTestStore(t *testing.T, mc messaging.MessageCenter, workers int) *schemaStore {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	store := &schemaStore{
+		mc: mc, requestPool: threadpool.NewThreadPool(workers), requestCtx: ctx, requestCancel: cancel,
+		activeRequests:         make(map[schemaRequestKey]context.CancelFunc),
+		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore), tombstoneKeyspaces: map[uint32]struct{}{7: {}},
 	}
-	for _, tt := range tests {
+	t.Cleanup(func() { require.NoError(t, store.Close(context.Background())) })
+	return store
+}
+
+func testRequest(id uint64, operation messaging.SchemaStoreOperation, keyspace uint32) *messaging.SchemaStoreRequest {
+	return &messaging.SchemaStoreRequest{RequestID: id, Operation: operation, Keyspace: common.KeyspaceMeta{ID: keyspace},
+		Deadline: time.Now().Add(time.Minute).UnixNano(), TableIDs: []int64{1}, Ts: 100}
+}
+
+func waitRequestInStore(t *testing.T, ks *keyspaceSchemaStore) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		if ks.lifecycleMu.TryLock() {
+			ks.lifecycleMu.Unlock()
+			return false
+		}
+		return true
+	}, time.Second, time.Millisecond)
+}
+
+func TestSchemaStoreRequestPool(t *testing.T) {
+	mc := mock.NewMockMessageCenter(gomock.NewController(t))
+	mc.EXPECT().DeRegisterHandler(messaging.SchemaStoreTopic).AnyTimes()
+	store := newRequestTestStore(t, mc, 1)
+	responses := make(chan uint64, 2)
+	release := make(chan struct{})
+	releaseRequest := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseRequest)
+	mc.EXPECT().SendCommand(gomock.Any()).Times(2).DoAndReturn(func(msg *messaging.TargetMessage) error {
+		id := msg.Message[0].(*messaging.SchemaStoreResponse).RequestID
+		responses <- id
+		if id == 1 {
+			<-release
+		}
+		return nil
+	})
+	require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+		testRequest(1, messaging.SchemaStoreRegisterKeyspace, 7))))
+	require.Equal(t, uint64(1), <-responses)
+	queued := testRequest(2, messaging.SchemaStoreGetTableInfos, 7)
+	queued.Deadline = time.Now().Add(30 * time.Millisecond).UnixNano()
+	require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic, queued)))
+	require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+		testRequest(3, messaging.SchemaStoreGetTableInfos, 7))))
+	require.Never(t, func() bool { return len(responses) > 0 }, 50*time.Millisecond, time.Millisecond)
+	releaseRequest()
+	select {
+	case id := <-responses:
+		require.Equal(t, uint64(3), id, "expired queued requests must do no work")
+	case <-time.After(time.Second):
+		t.Fatal("queued request did not run")
+	}
+}
+
+func TestSchemaStoreRequestCancellation(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		operation  messaging.SchemaStoreOperation
+		dropCancel bool
+	}{
+		{"cancel table query", messaging.SchemaStoreGetTableInfos, false},
+		{"cancel table discovery", messaging.SchemaStoreGetAllPhysicalTables, false},
+		{"deadline without cancellation delivery", messaging.SchemaStoreGetTableInfos, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			id := node.NewID()
+			mc := messaging.NewMessageCenter(t.Context(), id, config.NewDefaultMessageCenterConfig("127.0.0.1:0"), nil)
+			mc.Run(t.Context())
+			t.Cleanup(mc.Close)
+			store := newRequestTestStore(t, mc, 1)
+			ksCtx, ksCancel := context.WithCancel(t.Context())
+			ks := &keyspaceSchemaStore{ctx: ksCtx, cancel: ksCancel}
+			store.keyspaceSchemaStoreMap[1] = ks
+			mc.RegisterHandler(messaging.SchemaStoreTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
+				if test.dropCancel && msg.Message[0].(*messaging.SchemaStoreRequest).Operation == messaging.SchemaStoreCancelRequest {
+					return nil
+				}
+				return store.handleMessage(ctx, msg)
+			})
+			schemaClient := client.New(mc, id)
+			timeout := time.Minute
+			if test.dropCancel {
+				timeout = 100 * time.Millisecond
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), timeout)
+			defer cancel()
+			finished := make(chan error, 1)
+			go func() {
+				var err error
+				if test.operation == messaging.SchemaStoreGetTableInfos {
+					_, err = schemaClient.GetTableInfos(ctx, common.KeyspaceMeta{ID: 1}, []int64{1}, 100)
+				} else {
+					_, err = schemaClient.GetAllPhysicalTables(ctx, common.KeyspaceMeta{ID: 1}, 100, config.NewDefaultFilterConfig(), true, false)
+				}
+				finished <- err
+			}()
+			waitRequestInStore(t, ks)
+			if !test.dropCancel {
+				cancel()
+			}
+			select {
+			case err := <-finished:
+				require.Error(t, err)
+			case <-time.After(time.Second):
+				t.Fatal("caller did not finish")
+			}
+			followCtx, followCancel := context.WithTimeout(t.Context(), time.Second)
+			defer followCancel()
+			require.True(t, errors.ErrKeyspaceNotFound.Equal(schemaClient.RegisterKeyspace(followCtx, common.KeyspaceMeta{ID: 7})))
+			require.NoError(t, ksCtx.Err(), "canceling a query must not close the keyspace")
+		})
+	}
+}
+
+func TestSchemaStoreRequestQueueLimitAndClose(t *testing.T) {
+	mc := mock.NewMockMessageCenter(gomock.NewController(t))
+	mc.EXPECT().DeRegisterHandler(messaging.SchemaStoreTopic).AnyTimes()
+	store := newRequestTestStore(t, mc, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	ks := &keyspaceSchemaStore{ctx: ctx, cancel: cancel}
+	store.keyspaceSchemaStoreMap[1] = ks
+	require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+		testRequest(1, messaging.SchemaStoreGetTableInfos, 1))))
+	waitRequestInStore(t, ks)
+	for id := 2; id <= schemaStoreMaxPendingRequests; id++ {
+		require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+			testRequest(uint64(id), messaging.SchemaStoreGetTableInfos, 1))))
+	}
+	mc.EXPECT().SendCommand(gomock.Any()).DoAndReturn(func(msg *messaging.TargetMessage) error {
+		require.Contains(t, msg.Message[0].(*messaging.SchemaStoreResponse).Error, "queue is full")
+		return nil
+	})
+	require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+		testRequest(1000, messaging.SchemaStoreGetTableInfos, 1))))
+	closed := make(chan error, 1)
+	go func() { closed <- store.Close(context.Background()) }()
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("closing the pool did not release schema requests")
+	}
+	require.ErrorIs(t, store.submitRequest(t.Context(), schemaRequestKey{}, testRequest(1001, messaging.SchemaStoreRegisterKeyspace, 2)), context.Canceled)
+	require.True(t, errors.ErrSchemaStoreRequestFailed.Equal(store.RegisterKeyspace(t.Context(), common.KeyspaceMeta{ID: 2})))
+}
+
+func TestSchemaStoreResponseDelivery(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		failures int
+		err      error
+		attempts int
+	}{
+		{"congestion", 1, errors.AppError{Type: errors.ErrorTypeMessageCongested}, 2},
+		{"temporary connection", 1, errors.AppError{Type: errors.ErrorTypeConnectionNotFound}, 2},
+		{"permanent failure", 1, errors.AppError{Type: errors.ErrorTypeTargetMismatch}, 1},
+		{"exhausted retries", schemaStoreResponseMaxTries, errors.AppError{Type: errors.ErrorTypeMessageCongested}, schemaStoreResponseMaxTries},
+	} {
 		t.Run(tt.name, func(t *testing.T) {
 			mc := mock.NewMockMessageCenter(gomock.NewController(t))
-			// A dropped keyspace produces explicit per-table errors without requiring storage.
-			store := &schemaStore{mc: mc, tombstoneKeyspaces: map[uint32]struct{}{7: {}}}
-			req := &messaging.SchemaStoreTableInfosRequest{RequestID: 123, KeyspaceID: 7, TableIDs: []int64{1, 2}}
-			var completion *messaging.SchemaStoreTableInfosResponse
-			var deliveredIDs []int64
-			tableAttempts, completionAttempts := 0, 0
-			wantCompletionAttempts := min(tt.completionFailures+1, schemaStoreResponseMaxTries)
-			mc.EXPECT().SendCommand(gomock.Any()).Times(tt.wantTableAttempts + wantCompletionAttempts).
-				DoAndReturn(func(msg *messaging.TargetMessage) error {
-					require.Equal(t, node.ID("client"), msg.To)
-					require.Equal(t, messaging.SchemaStoreClientTopic, msg.Topic)
-					resp := msg.Message[0].(*messaging.SchemaStoreTableInfosResponse)
-					require.Equal(t, req.RequestID, resp.RequestID)
-					if resp.Done {
-						completionAttempts++
-						if completionAttempts <= tt.completionFailures {
-							return tt.sendError
-						}
-						completion = resp
-						return nil
-					}
-					tableAttempts++
-					if tableAttempts <= tt.tableFailures {
-						require.Equal(t, int64(1), resp.TableID)
-						return tt.sendError
-					}
-					require.NotEmpty(t, resp.Error)
-					deliveredIDs = append(deliveredIDs, resp.TableID)
-					return nil
-				})
-			store.handleTableInfosRequest(context.Background(), "client", req)
-			require.Equal(t, tt.wantTableAttempts, tableAttempts)
-			require.Equal(t, wantCompletionAttempts, completionAttempts)
-			if tt.completionFailures == schemaStoreResponseMaxTries {
-				require.Nil(t, completion)
-				return
-			}
-			require.NotNil(t, completion)
-			if tt.wantCompleteError {
-				require.Contains(t, completion.Error, tt.sendError.Error())
-				require.Empty(t, deliveredIDs)
+			store := &schemaStore{mc: mc}
+			attempts := 0
+			mc.EXPECT().SendCommand(gomock.Any()).Times(tt.attempts).DoAndReturn(func(msg *messaging.TargetMessage) error {
+				attempts++
+				if attempts <= tt.failures {
+					return tt.err
+				}
+				return nil
+			})
+			err := store.sendResponse(t.Context(), "client", &messaging.SchemaStoreResponse{RequestID: 1})
+			if tt.failures >= tt.attempts {
+				require.Error(t, err)
 			} else {
-				require.Empty(t, completion.Error)
-				require.Equal(t, req.TableIDs, deliveredIDs)
+				require.NoError(t, err)
 			}
 		})
 	}
+}
+
+func TestSchemaStoreTableBatchSize(t *testing.T) {
+	mc := mock.NewMockMessageCenter(gomock.NewController(t))
+	mc.EXPECT().DeRegisterHandler(messaging.SchemaStoreTopic).AnyTimes()
+	store := newRequestTestStore(t, mc, 1)
+	storage := newPersistentStorageForTest(t.TempDir(), nil)
+	ks := &keyspaceSchemaStore{dataStorage: storage}
+	ks.resolvedTs.Store(100)
+	store.keyspaceSchemaStoreMap[1] = ks
+	for _, id := range []int64{1, 2} {
+		versioned := newEmptyVersionedTableInfoStore(id)
+		versioned.addInitialTableInfo(common.WrapTableInfo("test", &model.TableInfo{ID: id, Name: ast.NewCIStr("t"), Comment: strings.Repeat("x", 2<<20)}), 1)
+		versioned.setTableInfoInitialized()
+		storage.tableInfoStoreMap[id] = versioned
+	}
+	req := testRequest(1, messaging.SchemaStoreGetTableInfos, 1)
+	req.TableIDs = []int64{1, 2}
+	infos, more, err := store.getTableInfosBatch(t.Context(), req)
+	require.NoError(t, err)
+	require.True(t, more)
+	require.Len(t, infos, 1)
+	encoded, err := (&messaging.SchemaStoreResponse{RequestID: 1, TableInfos: infos, More: more}).Marshal()
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(encoded), messaging.SchemaStoreTableBatchBytes)
+	req.TableIDs = []int64{2}
+	infos, more, err = store.getTableInfosBatch(t.Context(), req)
+	require.NoError(t, err)
+	require.False(t, more)
+	require.Len(t, infos, 1)
+	require.Equal(t, int64(2), infos[0].TableID)
+	oversized := newEmptyVersionedTableInfoStore(3)
+	oversized.addInitialTableInfo(common.WrapTableInfo("test", &model.TableInfo{ID: 3, Name: ast.NewCIStr("t"), Comment: strings.Repeat("x", 4<<20)}), 1)
+	oversized.setTableInfoInitialized()
+	storage.tableInfoStoreMap[3] = oversized
+	req.TableIDs = []int64{3}
+	_, _, err = store.getTableInfosBatch(t.Context(), req)
+	require.ErrorContains(t, err, "exceeds the response size limit")
 }
 
 func TestSchemaStoreRequests(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	id := node.NewID()
-	previousID := appcontext.GetID()
-	appcontext.SetID(id.String())
-	defer appcontext.SetID(previousID)
 	mc := messaging.NewMessageCenter(ctx, id, config.NewDefaultMessageCenterConfig("127.0.0.1:0"), nil)
 	mc.Run(ctx)
 	defer mc.Close()
-	appcontext.SetService(appcontext.MessageCenter, mc)
 
 	storage := newPersistentStorageForTest(t.TempDir(), nil)
-	defer func() { require.NoError(t, storage.close()) }()
 	require.NoError(t, storage.handleDDLJob(buildCreateSchemaJobForTest(100, "test", 1000)))
 	require.NoError(t, storage.handleDDLJob(buildCreateTableJobForTest(100, 200, "t1", 1010)))
 	require.NoError(t, storage.handleDDLJob(buildCreateTableJobForTest(100, 201, "t2", 1020)))
 	ks := &keyspaceSchemaStore{dataStorage: storage}
 	ks.resolvedTs.Store(1020)
 	meta := common.KeyspaceMeta{ID: 7, Name: "ks"}
-	store := &schemaStore{
-		mc:                     mc,
-		keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{meta.ID: ks},
-		tombstoneKeyspaces:     map[uint32]struct{}{8: {}},
-	}
+	store := newRequestTestStore(t, mc, schemaStoreRequestWorkers)
+	store.keyspaceSchemaStoreMap[meta.ID] = ks
+	store.tombstoneKeyspaces = map[uint32]struct{}{8: {}}
 	mc.RegisterHandler(messaging.SchemaStoreTopic, store.handleMessage)
-	client := schemastoreclient.GetSchemaStoreClient()
-	require.NoError(t, client.RegisterKeyspace(ctx, meta))
-	require.True(t, errors.ErrKeyspaceNotFound.Equal(client.RegisterKeyspace(ctx, common.KeyspaceMeta{ID: 8})))
+	schemaClient := client.New(mc, id)
+	require.NoError(t, schemaClient.RegisterKeyspace(ctx, meta))
+	require.True(t, errors.ErrKeyspaceNotFound.Equal(schemaClient.RegisterKeyspace(ctx, common.KeyspaceMeta{ID: 8})))
+	infos, err := schemaClient.GetTableInfos(ctx, meta, []int64{200, 201}, 1020)
+	require.NoError(t, err)
+	require.Len(t, infos, 2)
+	require.Equal(t, int64(200), infos[0].TableName.TableID)
+	require.Empty(t, storage.tableRegisteredCount, "bootstrap reads must not pin table registrations")
 	cfg := config.NewDefaultFilterConfig()
 	cfg.Rules = []string{"TEST.T1"}
-	tables, err := client.GetAllPhysicalTables(ctx, meta, 1020, cfg, false, false)
+	tables, err := schemaClient.GetAllPhysicalTables(ctx, meta, 1020, cfg, false, false)
 	require.NoError(t, err)
 	require.Len(t, tables, 1)
 	require.Equal(t, int64(200), tables[0].TableID)
 	require.Equal(t, "test", tables[0].SchemaName)
 	require.Equal(t, "t1", tables[0].TableName)
-	tables, err = client.GetAllPhysicalTables(ctx, meta, 1020, cfg, true, false)
+	tables, err = schemaClient.GetAllPhysicalTables(ctx, meta, 1020, cfg, true, false)
 	require.NoError(t, err)
 	require.Empty(t, tables)
 	cfg.Rules = []string{"test.*"}
-	tables, err = client.GetAllPhysicalTables(ctx, meta, 1010, cfg, true, false)
+	tables, err = schemaClient.GetAllPhysicalTables(ctx, meta, 1010, cfg, true, false)
 	require.NoError(t, err)
 	require.Len(t, tables, 1)
 	storage.mu.Lock()
 	storage.gcTs = 100
 	storage.mu.Unlock()
-	_, err = client.GetAllPhysicalTables(ctx, meta, 0, cfg, true, false)
+	_, err = schemaClient.GetAllPhysicalTables(ctx, meta, 0, cfg, true, false)
 	require.True(t, errors.ErrSnapshotLostByGC.Equal(err))
 	cfg.Rules = []string{"["}
-	_, err = client.GetAllPhysicalTables(ctx, meta, 1020, cfg, true, false)
+	_, err = schemaClient.GetAllPhysicalTables(ctx, meta, 1020, cfg, true, false)
 	require.Error(t, err)
 }

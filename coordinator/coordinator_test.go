@@ -43,6 +43,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -460,7 +461,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 	defer mc.Close()
 
 	eventservice.NewMockSchemaStore().RegisterMessageHandler(mc)
-	appcontext.SetID(info.ID.String())
+	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, info.ID))
 
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	m := NewMaintainerManager(mc)
@@ -532,7 +533,7 @@ func TestScaleNode(t *testing.T) {
 	mc1.Run(ctx)
 
 	appcontext.SetService(appcontext.MessageCenter, mc1)
-	appcontext.SetID(info.ID.String())
+	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc1, info.ID))
 	eventservice.NewMockSchemaStore().RegisterMessageHandler(mc1)
 	node1 := startMaintainerNode(ctx, info, mc1, nodeManager, lis1)
 	t.Cleanup(node1.stop)
@@ -663,7 +664,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	mc1.Run(ctx)
 
 	appcontext.SetService(appcontext.MessageCenter, mc1)
-	appcontext.SetID(info.ID.String())
+	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc1, info.ID))
 	eventservice.NewMockSchemaStore().RegisterMessageHandler(mc1)
 	mNode := startMaintainerNode(ctx, info, mc1, nodeManager, lis)
 	defer mNode.stop()
