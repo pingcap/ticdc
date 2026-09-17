@@ -38,6 +38,7 @@ func TestGetTableInfoAtTs(t *testing.T) {
 		SchemaName: "test", TableInfo: other, FinishedTs: 30,
 	}
 	drop := PersistedDDLEvent{Type: byte(model.ActionDropTable), TableID: 100, TableInfo: normal, FinishedTs: 20}
+	dropSchema := PersistedDDLEvent{Type: byte(model.ActionDropSchema), SchemaID: 1, FinishedTs: 20}
 	dropPartition := PersistedDDLEvent{
 		Type: byte(model.ActionDropTablePartition), TableID: 200, SchemaName: "test", FinishedTs: 20,
 		PrevPartitions: []int64{201, 202},
@@ -75,8 +76,12 @@ func TestGetTableInfoAtTs(t *testing.T) {
 			MultipleTableInfos: []*model.TableInfo{other},
 		}}},
 		{name: "drop", tableID: 100, ts: 20, events: []PersistedDDLEvent{drop}, deleted: true},
-		{name: "drop schema", tableID: 100, ts: 20, events: []PersistedDDLEvent{{
-			Type: byte(model.ActionDropSchema), FinishedTs: 20,
+		{name: "before drop schema", tableID: 100, ts: 19, events: []PersistedDDLEvent{dropSchema}},
+		{name: "drop schema", tableID: 100, ts: 20, events: []PersistedDDLEvent{dropSchema}, deleted: true},
+		{name: "after drop schema", tableID: 100, ts: 30, events: []PersistedDDLEvent{dropSchema}, deleted: true},
+		{name: "drop schema partition", tableID: 201, ts: 20, events: []PersistedDDLEvent{dropSchema}, deleted: true},
+		{name: "drop schema after table DDL", tableID: 100, ts: 30, events: []PersistedDDLEvent{rename, {
+			Type: byte(model.ActionDropSchema), SchemaID: 1, FinishedTs: 30,
 		}}, deleted: true},
 		{name: "recover", tableID: 100, ts: 30, events: []PersistedDDLEvent{drop, {
 			Type: byte(model.ActionRecoverTable), TableID: 100, SchemaName: "test", TableInfo: normal, FinishedTs: 30,
