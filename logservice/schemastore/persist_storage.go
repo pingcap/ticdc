@@ -304,9 +304,9 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 	defer storageSnap.Close()
 
 	p.mu.Lock()
-	if _, _err_ := failpoint.Eval(_curpkg_("getAllPhysicalTablesGCFastFail")); _err_ == nil {
+	failpoint.Inject("getAllPhysicalTablesGCFastFail", func() {
 		snapTs = 0
-	}
+	})
 	if snapTs < p.gcTs {
 		p.mu.Unlock()
 		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs(snapTs, p.gcTs)
@@ -583,9 +583,9 @@ func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableIn
 	// section, so they describe a consistent view. A DDL persisted before this
 	// view but not yet added to history will be applied through the online path.
 	storageSnap := p.db.NewSnapshot()
-	if _, _err_ := failpoint.Eval(_curpkg_("afterCreatingVersionStoreSnapshot")); _err_ == nil {
+	failpoint.Inject("afterCreatingVersionStoreSnapshot", func() {
 		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/afterCreatingVersionStoreSnapshot", p)
-	}
+	})
 	kvSnapVersion := p.gcTs
 	var allDDLFinishedTs []uint64
 	allDDLFinishedTs = append(allDDLFinishedTs, p.tablesDDLHistory[tableID]...)
@@ -802,9 +802,9 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 			return err
 		}
 	}
-	if _, _err_ := failpoint.Eval(_curpkg_("beforePersistingDDL")); _err_ == nil {
+	failpoint.Inject("beforePersistingDDL", func() {
 		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/beforePersistingDDL")
-	}
+	})
 
 	// Note: need write ddl event to disk before update ddl history,
 	// because other goroutines may read ddl events from disk according to ddl history
@@ -812,9 +812,9 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	if _, _err_ := failpoint.Eval(_curpkg_("afterPersistingDDL")); _err_ == nil {
+	failpoint.Inject("afterPersistingDDL", func() {
 		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/afterPersistingDDL")
-	}
+	})
 
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -202,7 +202,7 @@ func (s *schemaStore) getTableInfosBatch(ctx context.Context, req *messaging.Sch
 		}
 		item := messaging.SchemaStoreTableInfo{TableID: tableID}
 		var info *common.TableInfo
-		info, err = store.dataStorage.forceGetTableInfoWithContext(ctx, tableID, req.Ts)
+		info, err = store.dataStorage.getTableInfoAtTsWithContext(ctx, tableID, req.Ts)
 		if err == nil {
 			if info == nil {
 				return nil, false, errors.ErrSchemaStoreRequestFailed.GenWithStack("table info is nil for table %d", tableID)
