@@ -206,9 +206,10 @@ func (v *versionedTableInfoStore) doApplyDDL(event *PersistedDDLEvent) {
 	}
 	tableInfo, deleted := handler.extractTableInfoFunc(event, v.tableID)
 	if tableInfo != nil {
-		if ddlType == model.ActionRecoverTable || ddlType == model.ActionRecoverSchema {
+		switch ddlType {
+		case model.ActionRecoverTable, model.ActionRecoverSchema:
 			v.deleteVersion = math.MaxUint64
-		} else {
+		default:
 			assertNonDeleted(v)
 		}
 		v.infos = append(v.infos, &tableInfoItem{Version: event.FinishedTs, Info: tableInfo})
