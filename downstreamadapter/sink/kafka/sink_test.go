@@ -111,7 +111,7 @@ func TestVerifyInvalidConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	changefeedID := common.NewChangefeedID4Test("test", "verify-invalid-config")
-	err = Verify(context.Background(), changefeedID, sinkURI, sinkConfig)
+	err = Verify(context.Background(), changefeedID, sinkURI, sinkConfig, false)
 	require.ErrorContains(t, err, "ErrAvroSchemaAPIError")
 }
 
@@ -646,9 +646,9 @@ func newKafkaSinkForTest(
 	testSinkConfig := *sinkConfig
 	testSinkConfig.Protocol = &protocolName
 	sinkConfig = &testSinkConfig
-	router, err := eventrouter.NewEventRouter(sinkConfig, kafkaSinkTestTopic, false, false)
+	router, err := eventrouter.NewEventRouter(sinkConfig, false, kafkaSinkTestTopic, false, false)
 	require.NoError(t, err)
-	columnSelector, err := columnselector.New(sinkConfig)
+	columnSelector, err := columnselector.New(sinkConfig, false)
 	require.NoError(t, err)
 	encoderConfig := codecCommon.NewConfig(protocol).WithChangefeedID(changefeedID)
 	encoderConfig.MaxBatchSize = 1
