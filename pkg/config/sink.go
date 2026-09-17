@@ -214,7 +214,6 @@ type SinkConfig struct {
 	// Simple protocol related configurations
 	Simple *SimpleConfig `toml:"simple" json:"simple,omitempty"`
 
-	CaseSensitive *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	// Integrity is only available when the downstream is MQ.
 	Integrity      *IntegrityConfig `toml:"integrity" json:"integrity"`
 	ForceReplicate *bool            `toml:"force-replicate" json:"force-replicate,omitempty"`
