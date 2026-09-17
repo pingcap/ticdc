@@ -38,6 +38,10 @@ const (
 	// memory reaches twice the soft capacity.
 	defaultHardLimitRatio = 2.0
 
+	// Pause all new region scans once their estimated memory exceeds three
+	// times the soft capacity, including scans with high priority.
+	defaultPauseAllScansRatio uint64 = 3
+
 	// defaultScanLagUnit is the lag unit used by the logarithmic scan estimate.
 	defaultScanLagUnit = 10 * time.Minute
 
@@ -131,7 +135,8 @@ func (n *eventMemoryNotifier) notify() {
 // and is capped at maxScanLagFactor times the base size. Scan admission
 // compares max(event used, scan used) with the soft capacity: low-priority
 // scans pause at pauseLowPriorityLimit and resume at
-// resumeLowPriorityLimit, while high-priority scans continue to make progress.
+// resumeLowPriorityLimit. All new scans pause when estimated scan memory
+// exceeds three times the soft capacity.
 type memoryQuotaController struct {
 	capacity uint64
 	// used tracks event bytes retained until downstream finishes consuming them.
@@ -157,6 +162,7 @@ type memoryQuotaController struct {
 
 	pauseLowPriorityLimit  uint64
 	resumeLowPriorityLimit uint64
+	pauseAllScansLimit     uint64
 	hardLimit              uint64
 
 	scanEstimate uint64
@@ -167,11 +173,16 @@ func newMemoryQuotaController(capacity, scanBaseSize uint64) *memoryQuotaControl
 	if capacity <= math.MaxUint64/uint64(defaultHardLimitRatio) {
 		hardLimit = capacity * uint64(defaultHardLimitRatio)
 	}
+	pauseAllScansLimit := uint64(math.MaxUint64)
+	if capacity <= math.MaxUint64/defaultPauseAllScansRatio {
+		pauseAllScansLimit = capacity * defaultPauseAllScansRatio
+	}
 	c := &memoryQuotaController{
 		capacity:               capacity,
 		level:                  admissionNormal,
 		pauseLowPriorityLimit:  uint64(math.Ceil(float64(capacity) * defaultPauseLowPriorityRatio)),
 		resumeLowPriorityLimit: uint64(float64(capacity) * defaultResumeLowPriorityRatio),
+		pauseAllScansLimit:     pauseAllScansLimit,
 		hardLimit:              hardLimit,
 		scanEstimate:           scanBaseSize,
 		eventNotifier:          newEventMemoryNotifier(),
@@ -201,6 +212,9 @@ func (c *memoryQuotaController) AcquireScan(
 	c.scanMu.Lock()
 	defer c.scanMu.Unlock()
 	c.refreshLevelLocked()
+	if c.scanUsed > c.pauseAllScansLimit {
+		return 0, c.scanReady, false
+	}
 	lowPriority := isLowPriorityScan(region, currentTs)
 	// Admission is based on the pressure before accounting this scan. This lets
 	// one scan make progress even when its estimate alone exceeds the threshold.
@@ -220,9 +234,10 @@ func (c *memoryQuotaController) ReleaseScan(bytes uint64) {
 	}
 	c.scanMu.Lock()
 	previousLevel := c.level
+	wasAboveAllScansLimit := c.scanUsed > c.pauseAllScansLimit
 	c.scanUsed = subtractFloor(c.scanUsed, bytes)
 	c.refreshLevelLocked()
-	if c.level < previousLevel {
+	if c.level < previousLevel || (wasAboveAllScansLimit && c.scanUsed <= c.pauseAllScansLimit) {
 		c.notifyScanAdmissionLocked()
 	}
 	c.scanMu.Unlock()

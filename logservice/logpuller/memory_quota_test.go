@@ -170,6 +170,7 @@ func TestMemoryQuotaReleaseEventClampsToZero(t *testing.T) {
 func TestMemoryQuotaDerivedLimitsSaturate(t *testing.T) {
 	quota := newMemoryQuotaController(math.MaxUint64, math.MaxUint64/2+1)
 	require.Equal(t, uint64(math.MaxUint64), quota.hardLimit)
+	require.Equal(t, uint64(math.MaxUint64), quota.pauseAllScansLimit)
 
 	span := newTestQuotaSpan(1)
 	currentTs := setTestQuotaSpanLag(span, 24*time.Hour)
@@ -378,6 +379,36 @@ func TestMemoryQuotaLowLagScanBypassesWarmingGate(t *testing.T) {
 
 	quota.ReleaseScan(scanBytes)
 	quota.ReleaseEvent(20)
+}
+
+func TestMemoryQuotaPausesAllNewScansAboveThreeTimesCapacity(t *testing.T) {
+	quota := newMemoryQuotaController(100, 60)
+	span := newTestQuotaSpan(1)
+	currentTs := span.resolvedTs.Load()
+	region := newTestQuotaRegionWithPriority(span, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH)
+
+	for range 6 {
+		bytes, _, admitted := quota.AcquireScan(region, currentTs)
+		require.True(t, admitted)
+		require.Equal(t, uint64(60), bytes)
+	}
+	require.Equal(t, uint64(360), getMemoryQuotaTestState(quota).scanUsed)
+
+	_, retry, admitted := quota.AcquireScan(region, currentTs)
+	require.False(t, admitted)
+	require.NotNil(t, retry)
+
+	quota.ReleaseScan(60)
+	select {
+	case <-retry:
+	default:
+		t.Fatal("new scans were not woken after scan estimate dropped to 300%")
+	}
+	bytes, _, admitted := quota.AcquireScan(region, currentTs)
+	require.True(t, admitted)
+	require.Equal(t, uint64(60), bytes)
+	quota.ReleaseScan(360)
+	require.Zero(t, getMemoryQuotaTestState(quota).scanUsed)
 }
 
 func TestAdmissionWaitsForMemoryAndReleasesScanMemory(t *testing.T) {
