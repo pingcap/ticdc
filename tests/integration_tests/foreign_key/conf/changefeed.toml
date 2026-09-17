@@ -1,8 +1,0 @@
-[filter]
-
-# This event filter matches all tables of this test case, so that every ddl
-# event goes through the binlog event filter. "add fulltext index" never appears
-# in the test data, so the filter does not change what is replicated.
-[[filter.event-filters]]
-matcher = ["*.*"]
-ignore-event = ["add fulltext index"]

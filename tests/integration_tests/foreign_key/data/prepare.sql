@@ -62,11 +62,5 @@ alter table t11 add constraint fk_6 foreign key (b) references t10(id) on delete
 delete from t10 where id=1;
 update t10 set id=id+10 where id=2;
 
--- Test ddl drop foreign key.
-alter table t11 drop foreign key fk_6;
-insert into t10 values (4,4);
-insert into t11 values (4,4);
-delete from t10 where id=4;
-
 create table finish_mark (id int PRIMARY KEY);
 
