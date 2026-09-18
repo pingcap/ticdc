@@ -14,6 +14,7 @@
 package debezium
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -102,34 +103,19 @@ func (s *debeziumSuite) requireDebeziumJSONEq(dbzOutput []byte, tiCDCOutput []by
 	}
 }
 
-<<<<<<< HEAD
-=======
-func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
-	cfg := common.NewConfig(config.ProtocolDebezium)
-	cfg.EnableTiDBExtension = true
-	cfg.TimeZone = time.UTC
-
-	encoder := NewBatchEncoder(cfg, "dbserver1")
-	rowEvent := common.NewRoutedRowEvent4Test()
-	require.NoError(t, encoder.AppendRowChangedEvent(context.Background(), "", rowEvent))
-
-	messages := encoder.Build()
-	require.Len(t, messages, 1)
-
-	decoder := NewDecoder(cfg, 0, nil)
-	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
-
-	messageType, hasNext := decoder.HasNext()
-	require.True(t, hasNext)
-	require.Equal(t, common.MessageTypeRow, messageType)
-
-	decoded := decoder.NextDMLMessage().ToDMLEvent()
-	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
-	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
-
-	change, ok := decoded.GetNextRow()
-	require.True(t, ok)
-	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, decoded.TableInfo)
+func schemaFieldsByName(t *testing.T, schema map[string]any, name string) map[string]any {
+	t.Helper()
+	fields, ok := schema["fields"].([]any)
+	require.True(t, ok, "schema has no fields: %v", schema)
+	for _, value := range fields {
+		field, ok := value.(map[string]any)
+		require.True(t, ok, "invalid schema field: %v", value)
+		if field["field"] == name {
+			return field
+		}
+	}
+	require.FailNow(t, "schema field not found", "field: %s", name)
+	return nil
 }
 
 func TestDebeziumNumericStringHandling(t *testing.T) {
@@ -221,31 +207,6 @@ func TestDebeziumNumericStringHandling(t *testing.T) {
 	}
 }
 
-func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
-	cfg := common.NewConfig(config.ProtocolDebezium)
-	cfg.EnableTiDBExtension = true
-	cfg.TimeZone = time.UTC
-
-	encoder := NewBatchEncoder(cfg, "dbserver1")
-	routedDDL := common.NewRoutedDDLEvent4Test()
-	message, err := encoder.EncodeDDLEvent(routedDDL)
-	require.NoError(t, err)
-	require.NotNil(t, message)
-
-	decoder := NewDecoder(cfg, 0, nil)
-	decoder.AddKeyValue(message.Key, message.Value)
-
-	messageType, hasNext := decoder.HasNext()
-	require.True(t, hasNext)
-	require.Equal(t, common.MessageTypeDDL, messageType)
-
-	decoded := decoder.NextDDLEvent()
-	require.Equal(t, "target_db", decoded.SchemaName)
-	require.Equal(t, "target_table", decoded.TableName)
-	require.Equal(t, routedDDL.Query, decoded.Query)
-}
-
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 func TestDebeziumSuiteEnableSchema(t *testing.T) {
 	suite.Run(t, &debeziumSuite{
 		disableSchema: false,

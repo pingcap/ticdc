@@ -95,20 +95,11 @@ type Config struct {
 	DebeziumDisableSchema bool
 	// Debezium only. Whether before value should be included in the output.
 	DebeziumOutputOldValue bool
-<<<<<<< HEAD
-=======
-	// Debezium only. Whether the transaction start_ts should be included in
-	// the source block of the output. JSON protocol only.
-	DebeziumIncludeStartTs bool
 	// Debezium JSON only. Use string to preserve the full precision of numeric values.
 	DebeziumDecimalHandlingMode        string
 	DebeziumBigintUnsignedHandlingMode string
 	// Debezium JSON only. Controls the representation of binary columns.
 	DebeziumBinaryHandlingMode string
-	// Simple only. Whether the transaction start_ts should be included in
-	// Simple JSON DML messages. Encoding-format=avro rejects this option.
-	SimpleIncludeStartTs bool
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 	// CSV only. Whether header should be included in the output.
 	CSVOutputFieldHeader bool
 }
@@ -150,22 +141,13 @@ func NewConfig(protocol config.Protocol) *Config {
 		TimeZone: time.Local,
 
 		// default value is true
-<<<<<<< HEAD
-		DebeziumOutputOldValue: true,
-		OpenOutputOldValue:     true,
-		DebeziumDisableSchema:  false,
-		CSVOutputFieldHeader:   false,
-=======
 		DebeziumOutputOldValue:             true,
 		OpenOutputOldValue:                 true,
 		DebeziumDisableSchema:              false,
-		DebeziumIncludeStartTs:             false,
 		DebeziumDecimalHandlingMode:        "double",
 		DebeziumBigintUnsignedHandlingMode: BigintUnsignedHandlingModeLong,
 		DebeziumBinaryHandlingMode:         BinaryHandlingModeBase64,
-		SimpleIncludeStartTs:               false,
 		CSVOutputFieldHeader:               false,
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 	}
 }
 
@@ -212,16 +194,10 @@ type urlConfig struct {
 	OnlyOutputUpdatedColumns *bool  `form:"only-output-updated-columns"`
 	ContentCompatible        *bool  `form:"content-compatible"`
 
-<<<<<<< HEAD
-	DebeziumDisableSchema *bool `form:"debezium-disable-schema"`
-=======
 	DebeziumDisableSchema              *bool   `form:"debezium-disable-schema"`
-	DebeziumIncludeStartTs             *bool   `form:"debezium-include-start-ts"`
 	DebeziumDecimalHandlingMode        *string `form:"debezium-decimal-handling-mode"`
 	DebeziumBigintUnsignedHandlingMode *string `form:"debezium-bigint-unsigned-handling-mode"`
 	DebeziumBinaryHandlingMode         *string `form:"debezium-binary-handling-mode"`
-	SimpleIncludeStartTs               *bool   `form:"simple-include-start-ts"`
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 	// EncodingFormatType is only works for the simple protocol,
 	// can be `json` and `avro`, default to `json`.
 	EncodingFormatType *string `form:"encoding-format"`
@@ -239,13 +215,10 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	if err = binding.Query.Bind(req, urlParameter); err != nil {
 		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
-<<<<<<< HEAD
-=======
 	// Keep the raw URI parameters: mergeConfig uses mergo, which cannot
 	// override non-zero file values with explicit zero values (false or an
 	// empty string) from the sink URI, so explicit URI values take precedence.
 	rawURLParameter := urlParameter
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 	if urlParameter, err = mergeConfig(sinkConfig, urlParameter); err != nil {
 		return err
 	}
@@ -353,14 +326,6 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	if urlParameter.DebeziumDisableSchema != nil {
 		c.DebeziumDisableSchema = *urlParameter.DebeziumDisableSchema
 	}
-<<<<<<< HEAD
-=======
-	if urlParameter.DebeziumIncludeStartTs != nil {
-		c.DebeziumIncludeStartTs = *urlParameter.DebeziumIncludeStartTs
-	}
-	if rawURLParameter.DebeziumIncludeStartTs != nil {
-		c.DebeziumIncludeStartTs = *rawURLParameter.DebeziumIncludeStartTs
-	}
 	if rawURLParameter.DebeziumDecimalHandlingMode != nil {
 		c.DebeziumDecimalHandlingMode = *rawURLParameter.DebeziumDecimalHandlingMode
 	} else if urlParameter.DebeziumDecimalHandlingMode != nil {
@@ -376,13 +341,6 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	} else if urlParameter.DebeziumBinaryHandlingMode != nil {
 		c.DebeziumBinaryHandlingMode = *urlParameter.DebeziumBinaryHandlingMode
 	}
-	if urlParameter.SimpleIncludeStartTs != nil {
-		c.SimpleIncludeStartTs = *urlParameter.SimpleIncludeStartTs
-	}
-	if rawURLParameter.SimpleIncludeStartTs != nil {
-		c.SimpleIncludeStartTs = *rawURLParameter.SimpleIncludeStartTs
-	}
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 
 	return nil
 }
@@ -414,18 +372,11 @@ func mergeConfig(
 		if sinkConfig.DebeziumDisableSchema != nil {
 			dest.DebeziumDisableSchema = sinkConfig.DebeziumDisableSchema
 		}
-<<<<<<< HEAD
-=======
 		if sinkConfig.Debezium != nil {
-			dest.DebeziumIncludeStartTs = sinkConfig.Debezium.IncludeStartTs
 			dest.DebeziumDecimalHandlingMode = sinkConfig.Debezium.DecimalHandlingMode
 			dest.DebeziumBigintUnsignedHandlingMode = sinkConfig.Debezium.BigintUnsignedHandlingMode
 			dest.DebeziumBinaryHandlingMode = sinkConfig.Debezium.BinaryHandlingMode
 		}
-		if sinkConfig.Simple != nil && sinkConfig.Simple.IncludeStartTs != nil {
-			dest.SimpleIncludeStartTs = sinkConfig.Simple.IncludeStartTs
-		}
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 	}
 	if err := mergo.Merge(dest, urlParameters, mergo.WithOverride); err != nil {
 		return nil, err
@@ -463,13 +414,6 @@ func (c *Config) Validate() error {
 		)
 	}
 
-<<<<<<< HEAD
-=======
-	if c.DebeziumIncludeStartTs && c.Protocol != config.ProtocolDebezium {
-		return errors.ErrCodecInvalidConfig.GenWithStack(
-			`debezium-include-start-ts only takes effect with protocol "debezium"`,
-		)
-	}
 	if c.Protocol == config.ProtocolDebezium {
 		if c.DebeziumDecimalHandlingMode != "double" &&
 			c.DebeziumDecimalHandlingMode != DecimalHandlingModeString {
@@ -499,20 +443,6 @@ func (c *Config) Validate() error {
 			`debezium-binary-handling-mode only takes effect with protocol "debezium"`)
 	}
 
-	if c.SimpleIncludeStartTs {
-		if c.Protocol != config.ProtocolSimple {
-			return errors.ErrCodecInvalidConfig.GenWithStack(
-				`simple-include-start-ts only takes effect with protocol "simple"`,
-			)
-		}
-		if c.EncodingFormat == EncodingFormatAvro {
-			return errors.ErrCodecInvalidConfig.GenWithStack(
-				`simple-include-start-ts is not supported with encoding-format "avro"`,
-			)
-		}
-	}
-
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 	if c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebeziumAvro {
 		if c.AvroConfluentSchemaRegistry != "" && c.AvroGlueSchemaRegistry != nil {
 			protocol := "Avro"

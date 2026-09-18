@@ -19,14 +19,11 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
-<<<<<<< HEAD
-func TestDebeziumAvroSchemaRegistryConfig(t *testing.T) {
-	t.Parallel()
-=======
 func TestDebeziumNumericHandlingConfig(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -175,10 +172,8 @@ func TestDebeziumBinaryHandlingConfig(t *testing.T) {
 	}
 }
 
-func TestAvroIncludeBeforeValueConfig(t *testing.T) {
-	cfg := NewConfig(config.ProtocolAvro)
-	require.False(t, cfg.AvroIncludeBeforeValue)
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
+func TestDebeziumAvroSchemaRegistryConfig(t *testing.T) {
+	t.Parallel()
 
 	cfg := NewConfig(config.ProtocolDebeziumAvro)
 	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"

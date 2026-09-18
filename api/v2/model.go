@@ -1572,20 +1572,10 @@ type OpenProtocolConfig struct {
 
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
-<<<<<<< HEAD
-	OutputOldValue bool `json:"output_old_value"`
-=======
-	OutputOldValue             *bool   `json:"output_old_value,omitempty" toml:"output-old-value,omitempty"`
-	IncludeStartTs             *bool   `json:"include_start_ts,omitempty" toml:"include-start-ts,omitempty"`
+	OutputOldValue             bool    `json:"output_old_value"`
 	DecimalHandlingMode        *string `json:"decimal_handling_mode,omitempty" toml:"decimal-handling-mode,omitempty"`
 	BigintUnsignedHandlingMode *string `json:"bigint_unsigned_handling_mode,omitempty" toml:"bigint-unsigned-handling-mode,omitempty"`
 	BinaryHandlingMode         *string `json:"binary_handling_mode,omitempty" toml:"binary-handling-mode,omitempty"`
-}
-
-// SimpleConfig represents the configurations for simple protocol encoding
-type SimpleConfig struct {
-	IncludeStartTs *bool `json:"include_start_ts,omitempty" toml:"include-start-ts,omitempty"`
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 }
 
 type DispatcherCount struct {
