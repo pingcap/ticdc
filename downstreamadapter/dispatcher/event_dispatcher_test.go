@@ -1025,9 +1025,6 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 	handlerErrCh := make(chan error, 1)
 	mc.RegisterHandler(messaging.SchemaStoreTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		req := msg.Message[0].(*messaging.SchemaStoreRequest)
-		if req.Operation == messaging.SchemaStoreCancelRequest {
-			return nil
-		}
 		if cancelOnRequest.Load() {
 			cancelBootstrap()
 			return nil
@@ -1077,7 +1074,7 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 	case success := <-canceled:
 		require.False(t, success)
 	case <-time.After(time.Second):
-		t.Fatal("bootstrap did not cancel its schema request")
+		t.Fatal("bootstrap did not stop waiting for its schema request")
 	}
 	require.Equal(t, BootstrapNotStarted, loadBootstrapState(&dispatcher.BootstrapState))
 	require.Empty(t, events)

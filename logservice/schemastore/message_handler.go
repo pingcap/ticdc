@@ -59,11 +59,10 @@ type schemaRequestKey struct {
 	id   uint64
 }
 
-// Keep the queued message separate from the pool task so cancellation can
-// release it while workers are busy. Fields are protected by requestMu.
+// Keep the queued message separate from the pool task so timeout or shutdown
+// can release it while workers are busy. Fields are protected by requestMu.
 type schemaRequest struct {
 	message *messaging.SchemaStoreRequest
-	cancel  context.CancelFunc
 }
 
 func (s *schemaStore) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
@@ -73,15 +72,6 @@ func (s *schemaStore) handleMessage(ctx context.Context, msg *messaging.TargetMe
 			continue
 		}
 		key := schemaRequestKey{from: msg.From, id: req.RequestID}
-		if req.Operation == messaging.SchemaStoreCancelRequest {
-			s.requestMu.Lock()
-			if request := s.activeRequests[key]; request != nil {
-				request.message = nil
-				request.cancel()
-			}
-			s.requestMu.Unlock()
-			continue
-		}
 		if err := s.submitRequest(ctx, key, req); err != nil {
 			// Rejection must not wait or retry on the shared command router.
 			resp := &messaging.SchemaStoreResponse{RequestID: req.RequestID, Error: err.Error()}
@@ -113,9 +103,10 @@ func (s *schemaStore) submitRequest(ctx context.Context, key schemaRequestKey, r
 	if req.Operation == messaging.SchemaStoreGetTableInfos && (len(req.TableIDs) == 0 || len(req.TableIDs) > messaging.SchemaStoreTableBatchSize) {
 		return errors.ErrSchemaStoreRequestFailed.GenWithStack("invalid schema store batch size %d", len(req.TableIDs))
 	}
-	// Start the server timeout before submission so it includes time in the queue.
+	// Bound queued message retention and response delivery. Existing schema store
+	// calls keep their own waiting and lifetime semantics.
 	requestCtx, cancel := context.WithTimeout(s.requestCtx, messaging.SchemaStoreRequestTimeout)
-	request := &schemaRequest{message: req, cancel: cancel}
+	request := &schemaRequest{message: req}
 	s.activeRequests[key] = request
 	stopRelease := context.AfterFunc(requestCtx, func() {
 		s.requestMu.Lock()
@@ -134,8 +125,8 @@ func (s *schemaStore) submitRequest(ctx context.Context, key schemaRequestKey, r
 		message := request.message
 		request.message = nil
 		s.requestMu.Unlock()
-		// Cancellation releases the queued message, but keeps the slot until
-		// dequeued so repeated cancellation cannot grow the pool queue.
+		// Expiration releases the queued message, but keeps the slot until
+		// dequeued so timed out requests cannot grow the pool queue.
 		if message != nil && requestCtx.Err() == nil {
 			s.handleRequest(requestCtx, key.from, message)
 		}
@@ -145,23 +136,19 @@ func (s *schemaStore) submitRequest(ctx context.Context, key schemaRequestKey, r
 }
 
 func (s *schemaStore) handleRequest(ctx context.Context, from node.ID, req *messaging.SchemaStoreRequest) {
+	if ctx.Err() != nil {
+		return
+	}
 	resp := &messaging.SchemaStoreResponse{RequestID: req.RequestID}
 	var err error
 	switch req.Operation {
 	case messaging.SchemaStoreRegisterKeyspace:
-		err = s.registerRequestKeyspace(ctx, req.Keyspace)
+		err = s.RegisterKeyspace(s.requestCtx, req.Keyspace)
 	case messaging.SchemaStoreGetAllPhysicalTables:
 		var f filter.Filter
 		f, err = filter.NewFilter(req.Filter, "", req.CaseSensitive, req.ForceReplicate)
 		if err == nil {
-			var store *keyspaceSchemaStore
-			store, err = s.acquireRequestStore(ctx, req)
-			if err == nil {
-				// Existing storage calls are synchronous. Cancellation suppresses
-				// their response but does not interrupt an in-progress scan.
-				resp.Tables, err = store.dataStorage.getAllPhysicalTables(req.Ts, f)
-				store.release()
-			}
+			resp.Tables, err = s.GetAllPhysicalTables(req.Keyspace, req.Ts, f)
 		}
 	case messaging.SchemaStoreGetTableInfos:
 		resp.TableInfos, resp.More, err = s.getTableInfosBatch(ctx, req)
@@ -183,82 +170,15 @@ func (s *schemaStore) handleRequest(ctx context.Context, from node.ID, req *mess
 	}
 }
 
-// Request registration uses the service lifetime without changing the existing
-// RegisterKeyspace API. Once started, registration completes even if its caller
-// cancels; only the response is discarded.
-func (s *schemaStore) registerRequestKeyspace(ctx context.Context, keyspaceMeta common.KeyspaceMeta) error {
-	if err := ctx.Err(); err != nil {
-		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
-	if err := s.requestCtx.Err(); err != nil {
-		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
-	if err := s.RegisterKeyspace(s.requestCtx, keyspaceMeta); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
-	return nil
-}
-
-func (s *schemaStore) acquireRequestKeyspace(ctx context.Context, keyspaceMeta common.KeyspaceMeta) (*keyspaceSchemaStore, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
-	s.keyspaceLocker.RLock()
-	store, ok := s.keyspaceSchemaStoreMap[keyspaceMeta.ID]
-	if ok && !store.acquire() {
-		ok = false
-	}
-	s.keyspaceLocker.RUnlock()
-	if ok {
-		return store, nil
-	}
-
-	if err := s.registerRequestKeyspace(ctx, keyspaceMeta); err != nil {
-		return nil, err
-	}
-	return s.acquireKeyspaceSchemaStore(keyspaceMeta)
-}
-
-// acquireRequestStore waits with the request context, independently of the
-// keyspace lifetime, so a stalled resolved ts cannot retain a worker forever.
-func (s *schemaStore) acquireRequestStore(ctx context.Context, req *messaging.SchemaStoreRequest) (*keyspaceSchemaStore, error) {
-	store, err := s.acquireRequestKeyspace(ctx, req.Keyspace)
-	if err != nil {
-		return nil, err
-	}
-	var storeDone <-chan struct{}
-	if store.ctx != nil {
-		storeDone = store.ctx.Done()
-	}
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for store.resolvedTs.Load() < req.Ts {
-		select {
-		case <-ctx.Done():
-			store.release()
-			return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, ctx.Err())
-		case <-storeDone:
-			store.release()
-			return nil, errors.ErrKeyspaceNotFound.GenWithStackByArgs(req.Keyspace.ID)
-		case <-ticker.C:
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		store.release()
-		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
-	return store, nil
-}
-
 func (s *schemaStore) getTableInfosBatch(ctx context.Context, req *messaging.SchemaStoreRequest) ([]messaging.SchemaStoreTableInfo, bool, error) {
-	store, err := s.acquireRequestStore(ctx, req)
+	store, err := s.acquireKeyspaceSchemaStore(req.Keyspace)
 	if err != nil {
 		return nil, false, err
 	}
 	defer store.release()
+	if !store.waitResolvedTs(0, req.Ts, 2*time.Second) {
+		return nil, false, errors.ErrKeyspaceNotFound.FastGenByArgs(req.Keyspace.ID)
+	}
 	result := make([]messaging.SchemaStoreTableInfo, 0, len(req.TableIDs))
 	// Reserve space for the response envelope; account for base64 and JSON
 	// overhead in each table result, not just the raw schema bytes.

@@ -34,11 +34,9 @@ const (
 	SchemaStoreRegisterKeyspace SchemaStoreOperation = iota + 1
 	SchemaStoreGetAllPhysicalTables
 	SchemaStoreGetTableInfos
-	SchemaStoreCancelRequest
 )
 
-// SchemaStoreRequest has one response. Cancellation uses the original RequestID
-// and does not produce another response.
+// SchemaStoreRequest has one response.
 type SchemaStoreRequest struct {
 	RequestID      uint64               `json:"request_id"`
 	Operation      SchemaStoreOperation `json:"operation"`

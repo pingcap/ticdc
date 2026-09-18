@@ -151,7 +151,7 @@ func TestSchemaStoreClientBatchErrors(t *testing.T) {
 			c, mc := newTestClient(t)
 			mc.RegisterHandler(messaging.SchemaStoreTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 				req := msg.Message[0].(*messaging.SchemaStoreRequest)
-				if req.Operation == messaging.SchemaStoreCancelRequest || tt.response == nil {
+				if tt.response == nil {
 					return nil
 				}
 				resp := *tt.response
@@ -232,26 +232,27 @@ func TestSchemaStoreClientRequestErrors(t *testing.T) {
 			&messaging.SchemaStoreResponse{RequestID: req.RequestID, Error: remoteErr.Error(), ErrorCode: string(errors.ErrKeyspaceNotFound.RFCCode())}))
 	})
 	require.True(t, errors.ErrKeyspaceNotFound.Equal(c.RegisterKeyspace(t.Context(), common.DefaultKeyspace)))
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	canceled := make(chan uint64, 1)
-	mc.RegisterHandler(messaging.SchemaStoreTopic, func(_ context.Context, msg *messaging.TargetMessage) error {
-		req := msg.Message[0].(*messaging.SchemaStoreRequest)
-		if req.Operation == messaging.SchemaStoreCancelRequest {
-			canceled <- req.RequestID
-		} else {
+	t.Run("cancellation only stops local wait", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		mc := mock.NewMockMessageCenter(gomock.NewController(t))
+		mc.EXPECT().RegisterHandler(messaging.SchemaStoreClientTopic, gomock.Any())
+		c := New(mc, "test")
+		var requestID uint64
+		mc.EXPECT().SendCommand(gomock.Any()).Times(1).DoAndReturn(func(msg *messaging.TargetMessage) error {
+			req := msg.Message[0].(*messaging.SchemaStoreRequest)
+			require.Equal(t, messaging.SchemaStoreRegisterKeyspace, req.Operation)
+			requestID = req.RequestID
 			cancel()
-		}
-		return nil
+			return nil
+		})
+		require.ErrorIs(t, c.RegisterKeyspace(ctx, common.DefaultKeyspace), context.Canceled)
+		requireNoPendingRequests(t, c)
+		// A late response is discarded after the caller has stopped waiting.
+		require.NoError(t, c.handleMessage(t.Context(), messaging.NewSingleTargetMessage(c.target, messaging.SchemaStoreClientTopic,
+			&messaging.SchemaStoreResponse{RequestID: requestID})))
+		requireNoPendingRequests(t, c)
 	})
-	require.ErrorIs(t, c.RegisterKeyspace(ctx, common.DefaultKeyspace), context.Canceled)
-	select {
-	case id := <-canceled:
-		require.NoError(t, c.handleMessage(t.Context(), messaging.NewSingleTargetMessage(c.target, messaging.SchemaStoreClientTopic, &messaging.SchemaStoreResponse{RequestID: id})))
-	case <-time.After(time.Second):
-		t.Fatal("server was not notified of cancellation")
-	}
-	requireNoPendingRequests(t, c)
 	c.target = "missing-target"
 	require.Error(t, c.RegisterKeyspace(t.Context(), common.DefaultKeyspace))
 	requireNoPendingRequests(t, c)

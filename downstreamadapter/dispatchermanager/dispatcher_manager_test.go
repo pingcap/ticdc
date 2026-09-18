@@ -480,9 +480,6 @@ func TestLocalFenceDoesNotWaitForBootstrapWriteBlockEvent(t *testing.T) {
 	require.NoError(t, err)
 	mc.RegisterHandler(messaging.SchemaStoreTopic, func(_ context.Context, msg *messaging.TargetMessage) error {
 		req := msg.Message[0].(*messaging.SchemaStoreRequest)
-		if req.Operation == messaging.SchemaStoreCancelRequest {
-			return nil
-		}
 		return mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic,
 			&messaging.SchemaStoreResponse{RequestID: req.RequestID, TableInfos: []messaging.SchemaStoreTableInfo{{TableID: 11, TableInfo: tableInfoData}}}))
 	})
