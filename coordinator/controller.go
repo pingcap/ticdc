@@ -682,7 +682,9 @@ func (c *Controller) handleSingleMaintainerStatus(
 	cf := c.getChangefeed(cfID)
 	acceptMoveOriginCheckpoint := c.operatorController.AcceptsMoveOriginStopStatus(cfID, from, status)
 	handoffCheckpointAdvanced := false
-	if acceptMoveOriginCheckpoint && cf != nil {
+	if acceptMoveOriginCheckpoint &&
+		cf != nil &&
+		c.validateMaintainerNode(cf, from, cfID) {
 		// Advance the handoff checkpoint before the operator enters OriginStopped.
 		// This prevents a concurrent Schedule from creating the target maintainer
 		// with the checkpoint that preceded the terminal origin report.
