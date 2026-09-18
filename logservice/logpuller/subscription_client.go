@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
@@ -254,19 +255,53 @@ func (s *subscriptionClient) Subscribe(
 	s.spanRegistry.Add(rt)
 	s.eventSink.AddPath(rt)
 
-	select {
-	case <-s.ctx.Done():
-		log.Warn("subscribes span failed, the subscription client has closed")
-	case s.rangeTaskCh <- rangeTask{
+	// Only newly created subscriptions reach this point; reused subscriptions
+	// continue making progress while this subscription waits to scan.
+	var initialRangeTaskDelay time.Duration
+	failpoint.Inject("DelayNewSubscriptionRangeTask", func(val failpoint.Value) {
+		if seconds, ok := val.(int); ok && seconds > 0 {
+			initialRangeTaskDelay = time.Duration(seconds) * time.Second
+		}
+	})
+	s.enqueueInitialRangeTask(rangeTask{
 		span:           span,
 		subscribedSpan: rt,
 		filterLoop:     rt.filterLoop,
 		priority:       cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
-	}:
-		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
-			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
-			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
+	}, initialRangeTaskDelay)
+}
+
+func (s *subscriptionClient) enqueueInitialRangeTask(task rangeTask, delay time.Duration) {
+	enqueue := func() {
+		if task.subscribedSpan.stopped.Load() {
+			return
+		}
+		select {
+		case <-s.ctx.Done():
+			log.Warn("subscribes span failed, the subscription client has closed")
+		case s.rangeTaskCh <- task:
+			log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(task.subscribedSpan.subID)),
+				zap.Int64("tableID", task.span.TableID), zap.Uint64("startTs", task.subscribedSpan.startTs),
+				zap.String("startKey", spanz.HexKey(task.span.StartKey)), zap.String("endKey", spanz.HexKey(task.span.EndKey)))
+		}
 	}
+	if delay <= 0 {
+		enqueue()
+		return
+	}
+	log.Info("delaying new subscription range task",
+		zap.Uint64("subscriptionID", uint64(task.subscribedSpan.subID)),
+		zap.Int64("tableID", task.span.TableID), zap.Duration("delay", delay))
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-timer.C:
+			enqueue()
+		}
+	}()
 }
 
 // Unsubscribe the given table span. All covered regions will be deregistered asynchronously.
@@ -368,6 +403,9 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 ) error {
 	span := task.span
 	subscribedSpan := task.subscribedSpan
+	if subscribedSpan.stopped.Load() {
+		return nil
+	}
 
 	// Limit the number of regions loaded at a time to make the load more stable.
 	limit := 1024
