@@ -590,7 +590,7 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 		columns := newTiColumns(msg)
 		tidbTableInfo.Columns = columns
 		tidbTableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
-		tidbTableInfo.PKIsHandle = len(tidbTableInfo.Indices) != 0
+		setHandleKeyFlags(tidbTableInfo)
 		tableInfo = commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
 		d.tableInfoCache[cacheKey] = tableInfo
 	}
@@ -655,6 +655,7 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 		name := rawColumn.name
 		col := new(timodel.ColumnInfo)
 		col.ID = nextColumnID
+		col.Offset = int(nextColumnID)
 		col.Name = ast.NewCIStr(name)
 		basicType := common.ExtractBasicMySQLType(mysqlType)
 		col.FieldType = *types.NewFieldType(basicType)
@@ -719,7 +720,31 @@ func newTiIndices(columns []*timodel.ColumnInfo, keys map[string]struct{}) []*ti
 		Columns: indexColumns,
 		Primary: true,
 		Unique:  true,
+		State:   timodel.StatePublic,
 	}
 	result = append(result, indexInfo)
 	return result
+}
+
+// setHandleKeyFlags describes how the primary key is stored as the row handle,
+// mirroring TiDB: a single integer primary key column is a handle (PKIsHandle),
+// any other primary key is a common handle. Callers that locate a row by the
+// handle key - the MySQL sink's WHERE clause for example - read the key from
+// here, so reporting a composite primary key as PKIsHandle would make them use
+// only the first primary key column instead of the whole key.
+func setHandleKeyFlags(tableInfo *timodel.TableInfo) {
+	if len(tableInfo.Indices) == 0 {
+		return
+	}
+	// This decoder builds at most the primary index from the message columns.
+	primary := tableInfo.Indices[0]
+	if len(primary.Columns) == 1 {
+		for _, column := range tableInfo.Columns {
+			if column.Name.L == primary.Columns[0].Name.L && mysql.IsIntegerType(column.GetType()) {
+				tableInfo.PKIsHandle = true
+				return
+			}
+		}
+	}
+	tableInfo.IsCommonHandle = true
 }
