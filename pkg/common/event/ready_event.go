@@ -14,6 +14,7 @@
 package event
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -28,12 +29,20 @@ var _ Event = &ReadyEvent{}
 type ReadyEvent struct {
 	Version      int
 	DispatcherID common.DispatcherID
+	// ProgressTs is the source progress available before the dispatcher is reset.
+	// Zero means that the sender did not report progress.
+	ProgressTs uint64
 }
 
-func NewReadyEvent(dispatcherID common.DispatcherID) ReadyEvent {
+func NewReadyEvent(dispatcherID common.DispatcherID, progressTs ...uint64) ReadyEvent {
+	var progress uint64
+	if len(progressTs) != 0 {
+		progress = progressTs[0]
+	}
 	return ReadyEvent{
 		Version:      ReadyEventVersion1,
 		DispatcherID: dispatcherID,
+		ProgressTs:   progress,
 	}
 }
 
@@ -77,8 +86,11 @@ func (e *ReadyEvent) GetStartTs() common.Ts {
 // GetSize returns the approximate size of the event in bytes
 func (e *ReadyEvent) GetSize() int64 {
 	// Size does not include header or version (those are only for serialization)
-	// Only business data: dispatcherID
-	return int64(e.DispatcherID.GetSize())
+	return int64(e.DispatcherID.GetSize() + 8)
+}
+
+func (e *ReadyEvent) GetProgressTs() uint64 {
+	return e.ProgressTs
 }
 
 func (e *ReadyEvent) IsPaused() bool {
@@ -129,25 +141,35 @@ func (e *ReadyEvent) Unmarshal(data []byte) error {
 
 func (e ReadyEvent) encodeV1() ([]byte, error) {
 	// Note: version is now handled in the header by Marshal(), not here
-	// payload: dispatcherID
-	payloadSize := e.DispatcherID.GetSize()
+	// Keep the original dispatcher ID prefix so older readers can ignore progress.
+	payloadSize := e.DispatcherID.GetSize() + 8
 	data := make([]byte, payloadSize)
 	offset := 0
 
 	// DispatcherID
 	copy(data[offset:], e.DispatcherID.Marshal())
+	offset += e.DispatcherID.GetSize()
+	binary.BigEndian.PutUint64(data[offset:], e.ProgressTs)
 
 	return data, nil
 }
 
 func (e *ReadyEvent) decodeV1(data []byte) error {
 	// Note: header (magic + event type + version + length) has already been read and removed from data
+	if len(data) != e.DispatcherID.GetSize() && len(data) != e.DispatcherID.GetSize()+8 {
+		return fmt.Errorf("invalid ready event payload length: %d", len(data))
+	}
 	offset := 0
 
 	// DispatcherID
 	err := e.DispatcherID.Unmarshal(data[offset:])
 	if err != nil {
 		return err
+	}
+	offset += e.DispatcherID.GetSize()
+	e.ProgressTs = 0
+	if len(data) > offset {
+		e.ProgressTs = binary.BigEndian.Uint64(data[offset:])
 	}
 
 	return nil

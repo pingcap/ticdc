@@ -50,7 +50,7 @@ const (
 	defaultReportDispatcherStatToStoreInterval = time.Second * 10
 	defaultLargeTxnCleanupRetryInterval        = time.Second * 10
 
-	maxReadyEventIntervalSeconds = 10
+	maxReadyEventIntervalSeconds = 2
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
 	defaultSendResolvedTsInterval           = time.Second * 2
 	defaultRefreshMinSentResolvedTsInterval = time.Second * 1
@@ -644,7 +644,20 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 			return false
 		}
 		remoteID := node.ID(task.info.GetServerID())
-		event := event.NewReadyEvent(task.info.GetID())
+		progressTs := uint64(0)
+		span := task.info.GetTableSpan()
+		if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
+			if task.receivedResolvedTs.Load() > task.startTs {
+				progressTs = task.receivedResolvedTs.Load()
+			}
+		} else if task.hasReceivedFirstResolvedTs.Load() {
+			keyspaceMeta := common.KeyspaceMeta{ID: span.KeyspaceID, Name: task.changefeedStat.changefeedID.Keyspace()}
+			ddlState, err := c.schemaStore.GetTableDDLEventState(keyspaceMeta, span.TableID)
+			if err == nil {
+				progressTs = min(task.receivedResolvedTs.Load(), ddlState.ResolvedTs)
+			}
+		}
+		event := event.NewReadyEvent(task.info.GetID(), progressTs)
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 		log.Debug("send ready event to dispatcher",

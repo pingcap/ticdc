@@ -60,6 +60,26 @@ func newMockDispatcherInfoForTest(t *testing.T) *mockDispatcherInfo {
 	return newMockDispatcherInfo(t, 300, did, 100, eventpb.ActionType_ACTION_TYPE_REGISTER)
 }
 
+func TestReadyProgressUsesEventStoreAndSchema(t *testing.T) {
+	broker, _, schemaStore, _ := newEventBrokerForTest()
+	broker.close()
+	info := newMockDispatcherInfoForTest(t)
+	status := broker.getOrSetChangefeedStatus(info)
+	stat := newDispatcherStat(info, 1, 1, nil, status)
+	readyCh := make(chan *wrapEvent, 2)
+	broker.messageCh[stat.messageWorkerIndex] = readyCh
+
+	require.False(t, broker.checkAndSendReady(stat))
+	require.Zero(t, (<-readyCh).e.(*event.ReadyEvent).ProgressTs)
+
+	stat.hasReceivedFirstResolvedTs.Store(true)
+	stat.receivedResolvedTs.Store(oracle.GoTimeToTS(time.UnixMilli(20000)))
+	schemaStore.resolvedTs = oracle.GoTimeToTS(time.UnixMilli(15000))
+	stat.lastReadySendTime.Store(0)
+	require.False(t, broker.checkAndSendReady(stat))
+	require.Equal(t, schemaStore.resolvedTs, (<-readyCh).e.(*event.ReadyEvent).ProgressTs)
+}
+
 func TestEventBrokerDispatcherCount(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()

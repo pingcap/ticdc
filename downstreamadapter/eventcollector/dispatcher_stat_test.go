@@ -177,6 +177,7 @@ func (m *mockDispatcher) HandleError(err error) {
 // mockEvent implements the Event interface for testing
 type mockEvent struct {
 	eventType    int
+	progressTs   uint64
 	seq          uint64
 	dispatcherID common.DispatcherID
 	commitTs     common.Ts
@@ -185,6 +186,10 @@ type mockEvent struct {
 	isPaused     bool
 	len          int32
 	epoch        uint64
+}
+
+func (m *mockEvent) GetProgressTs() uint64 {
+	return m.progressTs
 }
 
 func (m *mockEvent) GetType() int {
@@ -807,7 +812,8 @@ func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 		return dispatcher.DispatcherEvent{
 			From: &from,
 			Event: &mockEvent{
-				eventType: commonEvent.TypeReadyEvent,
+				eventType:  commonEvent.TypeReadyEvent,
+				progressTs: 100,
 			},
 		}
 	}
@@ -823,8 +829,8 @@ func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 		requireDispatcherRequests(
 			t,
 			readDispatcherRequests(t, mockEventCollector, 2),
-			dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
 			dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+			dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
 		)
 		requireNoDispatcherRequest(t, mockEventCollector)
 	})
@@ -840,11 +846,44 @@ func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 		requireDispatcherRequests(
 			t,
 			readDispatcherRequests(t, mockEventCollector, 3),
+			dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
 			dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
 			dispatcherRequestRecord{to: anotherRemoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
-			dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
 		)
 		requireNoDispatcherRequest(t, mockEventCollector)
+	})
+
+	t.Run("local ready waits until source is within five seconds of remote progress", func(t *testing.T) {
+		mockDisp := newMockDispatcher(dispatcherID, 0)
+		remoteProgress := oracle.GoTimeToTS(time.UnixMilli(20000))
+		mockEventCollector := newTestEventCollector(localServerID)
+		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+		stat.loadCurrentEpochState().maxEventTs.Store(remoteProgress)
+		setSessionState(stat.session, remoteServerID, true, "")
+
+		localReady := newReadyEvent(localServerID)
+		localReady.Event.(*mockEvent).progressTs = 0
+		stat.handleSignalEvent(localReady)
+		requireNoDispatcherRequest(t, mockEventCollector)
+
+		localReady.Event.(*mockEvent).progressTs = oracle.GoTimeToTS(time.UnixMilli(14000))
+		stat.handleSignalEvent(localReady)
+		current, pending, _ := sessionState(stat.session)
+		require.Equal(t, remoteServerID, current)
+		require.True(t, pending)
+		requireNoDispatcherRequest(t, mockEventCollector)
+
+		localReady.Event.(*mockEvent).progressTs = oracle.GoTimeToTS(time.UnixMilli(15000))
+		stat.handleSignalEvent(localReady)
+		current, pending, _ = sessionState(stat.session)
+		require.Equal(t, localServerID, current)
+		require.False(t, pending)
+		requireDispatcherRequests(
+			t,
+			readDispatcherRequests(t, mockEventCollector, 2),
+			dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+			dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+		)
 	})
 
 	t.Run("local ready with callback still removes speculative remote register", func(t *testing.T) {

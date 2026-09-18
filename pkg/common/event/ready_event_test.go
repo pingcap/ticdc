@@ -23,7 +23,7 @@ import (
 
 func TestReadyEvent(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewReadyEvent(did)
+	e := NewReadyEvent(did, 123)
 	data, err := e.Marshal()
 	require.NoError(t, err)
 	require.Len(t, data, int(e.GetSize())+int(GetEventHeaderSize()))
@@ -33,6 +33,17 @@ func TestReadyEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, e.Version, e2.Version)
 	require.Equal(t, e.DispatcherID, e2.DispatcherID)
+	require.Equal(t, e.ProgressTs, e2.ProgressTs)
+}
+
+func TestReadyEventLegacyPayload(t *testing.T) {
+	did := common.NewDispatcherID()
+	data, err := MarshalEventWithHeader(TypeReadyEvent, ReadyEventVersion1, did.Marshal())
+	require.NoError(t, err)
+	var decoded ReadyEvent
+	require.NoError(t, decoded.Unmarshal(data))
+	require.Equal(t, did, decoded.DispatcherID)
+	require.Zero(t, decoded.ProgressTs)
 }
 
 func TestReadyEventMethods(t *testing.T) {
@@ -201,7 +212,7 @@ func TestReadyEventSize(t *testing.T) {
 	e := NewReadyEvent(did)
 
 	// GetSize should only return business data size, not including header
-	expectedSize := int64(did.GetSize())
+	expectedSize := int64(did.GetSize() + 8)
 	require.Equal(t, expectedSize, e.GetSize())
 
 	// Marshaled data should include header

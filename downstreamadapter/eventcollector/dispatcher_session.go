@@ -24,8 +24,11 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
+
+const localSwitchMaxLagMilliseconds = 5000
 
 // dispatcherConnState owns the EventService registration state for one dispatcher.
 // It does not send messages. Its job is to apply atomic state transitions and
@@ -44,12 +47,12 @@ import (
 //     pendingRemoteEventServiceID="<remote>"
 //   - after remote ready first: current="<remote>", localReadyPending=true,
 //     pendingRemoteEventServiceID=""
-//   - after local ready later: current="<local>", localReadyPending=false,
-//     pendingRemoteEventServiceID=""
+//   - after local ready later and local source catches up: current="<local>",
+//     localReadyPending=false, pendingRemoteEventServiceID=""
 //
 // This means local registration and remote probing can overlap. A remote service
-// may serve data first, but a later local ready still moves the dispatcher back
-// to local and cleans up remote registrations.
+// may serve data first. A later local ready moves the dispatcher back only after
+// local source progress is close to the remote stream, then cleans up remote registrations.
 type dispatcherConnState struct {
 	sync.RWMutex
 	// removed marks the session as terminal after removal starts. New
@@ -60,7 +63,7 @@ type dispatcherConnState struct {
 	currentEventServiceID node.ID
 	// localReadyPending means the local register request has been sent but local
 	// ready has not been accepted. It may be true while a remote service is
-	// already current; local ready wins when it arrives later.
+	// already current; local ready waits for source progress before switching.
 	localReadyPending bool
 	// pendingRemoteEventServiceID is the remote EventService currently being
 	// probed for reuse. It waits for either ready or not reusable, and only one
@@ -125,10 +128,10 @@ type readyDecision struct {
 //  1. once local is already serving, any later remote ready is stale and should
 //     only trigger cleanup;
 //  2. local ready can be accepted while local registration is still pending, and
-//     local wins over any remote that started serving earlier;
+//     local replaces an active remote when its source progress is close enough;
 //  3. remote ready is accepted only from the single remote candidate currently
 //     being probed.
-func (d *dispatcherConnState) acceptReady(from node.ID, localServerID node.ID) readyDecision {
+func (d *dispatcherConnState) acceptReady(from node.ID, localServerID node.ID, localProgressTs uint64, remoteProgressTs uint64) readyDecision {
 	d.Lock()
 	defer d.Unlock()
 	if d.removed {
@@ -137,6 +140,10 @@ func (d *dispatcherConnState) acceptReady(from node.ID, localServerID node.ID) r
 
 	if from == localServerID {
 		if !d.localReadyPending {
+			return readyDecision{}
+		}
+		if !d.currentEventServiceID.IsEmpty() && d.currentEventServiceID != localServerID &&
+			(localProgressTs == 0 || oracle.ExtractPhysical(localProgressTs)+localSwitchMaxLagMilliseconds < oracle.ExtractPhysical(remoteProgressTs)) {
 			return readyDecision{}
 		}
 
@@ -433,14 +440,18 @@ func (s *dispatcherSession) removeFromLocked(serverID node.ID) {
 	s.sendMessage(msg)
 }
 
-func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) {
+func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent, remoteProgressTs uint64) {
 	if s.connState.isRemoved() {
 		return
 	}
 	from := *event.From
 	switch event.GetType() {
 	case commonEvent.TypeReadyEvent:
-		s.handleReadyEvent(from)
+		progressTs := uint64(0)
+		if ready, ok := event.Event.(interface{ GetProgressTs() uint64 }); ok {
+			progressTs = ready.GetProgressTs()
+		}
+		s.handleReadyEvent(from, progressTs, remoteProgressTs)
 	case commonEvent.TypeNotReusableEvent:
 		if from == s.localServerID {
 			log.Panic("should not happen: local event service should not send not reusable event")
@@ -457,14 +468,22 @@ func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) 
 	}
 }
 
-// handleReadyEvent applies the ready decision produced by connState: clean up
-// any stale registrations, then commit whichever target won the ready race.
-func (s *dispatcherSession) handleReadyEvent(from node.ID) {
+// handleReadyEvent applies the ready decision produced by connState. The local
+// reset precedes remote cleanup when the dispatcher is already committed.
+func (s *dispatcherSession) handleReadyEvent(from node.ID, progressTs uint64, remoteProgressTs uint64) {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
 	// connState decides whether this ready should be accepted and which stale
 	// registrations must be cleaned up. Session only applies the side effects.
-	accepted := s.connState.acceptReady(from, s.localServerID)
+	accepted := s.connState.acceptReady(from, s.localServerID, progressTs, remoteProgressTs)
+	if accepted.commitTarget == s.localServerID && s.readyCallback == nil {
+		// Start the local stream before removing the remote registration.
+		s.handleAcceptedLocalReadyLocked()
+		for _, target := range accepted.cleanupTargets {
+			s.removeFromLocked(target)
+		}
+		return
+	}
 	for _, target := range accepted.cleanupTargets {
 		s.removeFromLocked(target)
 	}

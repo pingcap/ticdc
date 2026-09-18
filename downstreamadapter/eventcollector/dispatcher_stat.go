@@ -517,7 +517,7 @@ func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) 
 // "signalEvent" refers to the types of events that may modify the event service with which this dispatcher communicates.
 // "signalEvent" includes TypeReadyEvent/TypeNotReusableEvent
 func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
-	d.session.handleSignalEvent(event)
+	d.session.handleSignalEvent(event, d.loadCurrentEpochState().maxEventTs.Load())
 }
 
 func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
