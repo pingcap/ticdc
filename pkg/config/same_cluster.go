@@ -408,7 +408,7 @@ func parseRulePattern(pattern string, normalize func(string) string) (tablePatte
 func splitRulePattern(pattern string) (string, string, bool) {
 	var quote byte
 	dot := -1
-	for i := 0; i < len(pattern); i++ {
+	for i := range len(pattern) {
 		switch c := pattern[i]; {
 		case quote != 0:
 			if c == quote {
@@ -446,22 +446,21 @@ func parseNamePattern(part string) (namePattern, bool) {
 			return namePattern{}, false
 		}
 		return namePattern{kind: patternLiteral, value: name}, true
-	case '*':
-		rest := part[1:]
+	}
+	if rest, ok := strings.CutPrefix(part, "*"); ok {
 		if rest == "" {
 			return namePattern{kind: patternAny}, true
 		}
-		if !strings.ContainsAny(rest, unsupportedPatternChars) {
-			return namePattern{kind: patternSuffix, value: rest}, true
+		if strings.ContainsAny(rest, unsupportedPatternChars) {
+			return namePattern{}, false
 		}
-		return namePattern{}, false
+		return namePattern{kind: patternSuffix, value: rest}, true
 	}
-	if strings.HasSuffix(part, "*") {
-		rest := part[:len(part)-1]
-		if !strings.ContainsAny(rest, unsupportedPatternChars) {
-			return namePattern{kind: patternPrefix, value: rest}, true
+	if rest, ok := strings.CutSuffix(part, "*"); ok {
+		if strings.ContainsAny(rest, unsupportedPatternChars) {
+			return namePattern{}, false
 		}
-		return namePattern{}, false
+		return namePattern{kind: patternPrefix, value: rest}, true
 	}
 	if strings.ContainsAny(part, unsupportedPatternChars) {
 		return namePattern{}, false
