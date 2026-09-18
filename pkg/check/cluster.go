@@ -41,6 +41,8 @@ var (
 // because it can easily lead to self-replication loops.
 //
 // Compatibility and trade-offs:
+//   - If the changefeed config sets `allow-same-cluster = true`, the check is skipped and this
+//     returns false, so that creating/updating/resuming the changefeed is not blocked.
 //   - If the sink is not TiDB, or the downstream `cluster_id` is unavailable, this returns false (keep legacy behavior).
 //   - In TiDB Next-Gen, multiple keyspaces share the same physical `cluster_id`. When the downstream keyspace
 //     can be determined, we treat (cluster_id, keyspace) as the cluster identity to allow cross-keyspace replication.
@@ -49,11 +51,18 @@ var (
 func IsSameUpstreamDownstream(
 	ctx context.Context, upPD pd.Client, changefeedCfg *config.ChangefeedConfig,
 ) (bool, error) {
-	if upPD == nil {
-		return false, cerrors.New("pd client is nil")
-	}
 	if changefeedCfg == nil {
 		return false, cerrors.New("changefeed config is nil")
+	}
+	// The user explicitly opted out of this check, report "not same" so that the callers proceed.
+	if changefeedCfg.AllowSameCluster {
+		log.Warn("skip the upstream/downstream cluster check because allow-same-cluster is enabled",
+			zap.String("changefeedID", changefeedCfg.ChangefeedID.Name()),
+			zap.String("sinkURI", util.MaskSensitiveDataInURI(changefeedCfg.SinkURI)))
+		return false, nil
+	}
+	if upPD == nil {
+		return false, cerrors.New("pd client is nil")
 	}
 
 	upID := upPD.GetClusterID(ctx)

@@ -58,6 +58,41 @@ function run() {
 		exit 1
 	fi
 
+	# 4) Create is allowed when the changefeed config sets `allow-same-cluster`, as long as the
+	# changefeed cannot capture its own writes: the sink writes to the same cluster, but into a
+	# table which is not matched by the filter.
+	allow_same_cluster_db="allow_same_cluster"
+	allow_same_cluster_id="allow-same-cluster"
+	run_sql "create database $allow_same_cluster_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "create table $allow_same_cluster_db.t1 (id int primary key, v varchar(16));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "create table $allow_same_cluster_db.t2 (id int primary key, v varchar(16));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+
+	result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
+		--config="$CUR/conf/allow_same_cluster.toml" -c "$allow_same_cluster_id" 2>&1 || true)
+	if [[ "$result" != *"Create changefeed successfully"* ]]; then
+		echo "Expected create to be allowed with allow-same-cluster, got:"
+		echo "$result"
+		exit 1
+	fi
+
+	run_sql "insert into $allow_same_cluster_db.t1 values (1, 'a'), (2, 'b');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+
+	count=0
+	for _ in $(seq 1 60); do
+		count=$(mysql -h"$UP_TIDB_HOST" -P"$UP_TIDB_PORT" -uroot -N \
+			-e "select count(*) from $allow_same_cluster_db.t2" 2>/dev/null || echo 0)
+		if [ "$count" == "2" ]; then
+			break
+		fi
+		sleep 2
+	done
+	if [ "$count" != "2" ]; then
+		echo "Expected 2 rows in $allow_same_cluster_db.t2 of the upstream cluster, got: $count"
+		exit 1
+	fi
+
+	cdc_cli_changefeed remove -c "$allow_same_cluster_id"
+
 	cleanup_process $CDC_BINARY
 }
 
