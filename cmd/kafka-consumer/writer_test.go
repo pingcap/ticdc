@@ -362,7 +362,7 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
 		order = append(order, "dml")
 		event.PostFlush()
-	})
+	}).Times(2)
 	s.EXPECT().WriteBlockEvent(gomock.Any()).DoAndReturn(func(commonEvent.BlockEvent) error {
 		order = append(order, "ddl")
 		return nil
@@ -424,15 +424,20 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{logicalTableID},
 		},
-	})
+	}, true)
 	require.NoError(t, err)
-	require.Equal(t, []string{"dml", "ddl"}, order)
+	// Every event below the DDL commit ts is applied before the DDL, also for a
+	// table the upstream did not mark as blocked: the blocked tables are
+	// reconstructed from the ids the decoder allocated itself, so they can miss a
+	// table whose events the consumer has not decoded yet.
+	require.Len(t, order, 3)
+	require.Equal(t, []string{"ddl"}, order[2:])
 	partitionMessages, err := partitionGroup.GetAllMessages()
 	require.NoError(t, err)
 	require.Empty(t, partitionMessages)
 	unrelatedMessages, err := unrelatedGroup.GetAllMessages()
 	require.NoError(t, err)
-	require.Len(t, unrelatedMessages, 1)
+	require.Empty(t, unrelatedMessages)
 }
 
 func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {

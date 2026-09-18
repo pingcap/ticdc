@@ -308,7 +308,7 @@ func (w *writer) cleanupEventsGroups() error {
 	return cleanupErr
 }
 
-func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
+func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent, flushBelow bool) error {
 	// The DDL flush uses the sink itself, so the resolve pipeline has to be
 	// quiesced first: otherwise it could submit events of the blocked tables
 	// after the DDL was executed.
@@ -317,15 +317,17 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 	tableIDs := w.getBlockTableIDs(ddl)
 	commitTs := ddl.GetCommitTs()
 	start := time.Now()
-	groups := make([]*util.EventsGroup, 0)
-	for tableID := range tableIDs {
-		for _, progress := range w.progresses {
-			group := progress.group(tableID, nil)
-			if group == nil {
-				continue
-			}
-			groups = append(groups, group)
-		}
+	// A DDL is a barrier at its commit ts: every event below it must reach the
+	// downstream before the DDL, every event above it after. Flush every group
+	// instead of the blocked tables alone, because the blocked tables are
+	// reconstructed by the decoder from the table ids it allocated itself: a
+	// rename of a table whose events the consumer has not decoded yet blocks
+	// nothing, and the older events of that table are then applied after the DDL.
+	// The caller passes flushBelow only once the watermark reached the commit ts,
+	// which is when the upstream has sent every event below it.
+	var groups []*util.EventsGroup
+	if flushBelow {
+		groups = w.snapshotEventsGroups()
 	}
 	total, err := w.flushEventsFromGroups(ctx, groups, commitTs,
 		zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query))
@@ -741,7 +743,7 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) (boo
 			ddlList = append(ddlList, w.ddlList[i:]...)
 			break
 		}
-		if err := w.flushDDLEvent(ctx, todoDDL); err != nil {
+		if err := w.flushDDLEvent(ctx, todoDDL, todoDDL.GetCommitTs() <= watermark); err != nil {
 			return false, err
 		}
 	}
