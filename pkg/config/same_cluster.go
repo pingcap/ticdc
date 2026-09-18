@@ -14,6 +14,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -37,6 +38,9 @@ import (
 const (
 	schemaPlaceholder = "{schema}"
 	tablePlaceholder  = "{table}"
+	// unsupportedPatternChars are characters which this check does not parse, so a pattern which
+	// contains one of them is rejected as unsupported.
+	unsupportedPatternChars = "*?[]{}/\\`\""
 )
 
 // namePatternKind classifies the supported pattern forms.
@@ -102,6 +106,21 @@ func (s substitution) apply(name string) string {
 	return s.prefix + name + s.suffix
 }
 
+// targetName is a parsed route target expression: literal text around one placeholder, or a literal
+// name. An empty expression keeps the source name, which is an empty substitution.
+type targetName struct {
+	literal     string
+	sub         substitution
+	hasVariable bool
+}
+
+func (t targetName) apply(name string) string {
+	if t.hasVariable {
+		return t.sub.apply(name)
+	}
+	return t.literal
+}
+
 // requirement is a conjunction of constraints over one name: the name is a given value, or it
 // starts with and ends with given text.
 type requirement struct {
@@ -112,19 +131,15 @@ type requirement struct {
 }
 
 func (r requirement) merge(other requirement) requirement {
-	merged := requirement{
-		starts: append(append([]string{}, r.starts...), other.starts...),
-		ends:   append(append([]string{}, r.ends...), other.ends...),
+	if r.exact != nil && other.exact != nil && *r.exact != *other.exact {
+		r.conflict = true
 	}
-	switch {
-	case r.exact != nil && other.exact != nil && *r.exact != *other.exact:
-		merged.conflict = true
-	case other.exact != nil:
-		merged.exact = other.exact
-	default:
-		merged.exact = r.exact
+	if other.exact != nil {
+		r.exact = other.exact
 	}
-	return merged
+	r.starts = slices.Concat(r.starts, other.starts)
+	r.ends = slices.Concat(r.ends, other.ends)
+	return r
 }
 
 // name returns a concrete name which satisfies every constraint, if one exists.
@@ -263,49 +278,28 @@ func suffixRequirements(need string, sub substitution) []requirement {
 	return alternatives
 }
 
-func (r filterRuleToCheck) matches(schema, table string) bool {
-	return r.schema.matches(schema) && r.table.matches(table)
-}
-
-func (m matcherToCheck) matches(schema, table string) bool {
-	return m.schema.matches(schema) && m.table.matches(table)
-}
-
-// filterRuleToCheck is a parsed `filter.rules` entry.
-type filterRuleToCheck struct {
+// tablePattern is a parsed `schema.table` pattern: a filter rule, or a matcher of a dispatch rule
+// which has a target.
+type tablePattern struct {
 	raw    string
 	schema namePattern
 	table  namePattern
 }
 
-// matcherToCheck is a parsed matcher pattern of a dispatch rule which has a target.
-type matcherToCheck struct {
-	schema namePattern
-	table  namePattern
+func (p tablePattern) matches(schema, table string) bool {
+	return p.schema.matches(schema) && p.table.matches(table)
 }
 
-// routeRuleToCheck is a parsed dispatch rule which has a target. A target expression is either a
-// literal name, or literal text around one placeholder; an empty expression keeps the source name.
+// routeRuleToCheck is a parsed dispatch rule which has a target.
 type routeRuleToCheck struct {
-	rawMatchers       []string
-	matchers          []matcherToCheck
-	schemaLiteral     string
-	schemaSub         substitution
-	schemaHasVariable bool
-	tableLiteral      string
-	tableSub          substitution
-	tableHasVariable  bool
+	rawMatchers []string
+	matchers    []tablePattern
+	schema      targetName
+	table       targetName
 }
 
 func (r routeRuleToCheck) target(schema, table string) (string, string) {
-	targetSchema, targetTable := r.schemaLiteral, r.tableLiteral
-	if r.schemaHasVariable {
-		targetSchema = r.schemaSub.apply(schema)
-	}
-	if r.tableHasVariable {
-		targetTable = r.tableSub.apply(table)
-	}
-	return targetSchema, targetTable
+	return r.schema.apply(schema), r.table.apply(table)
 }
 
 // validateSameClusterRouting rejects a changefeed which replicates into the same cluster as its
@@ -349,15 +343,15 @@ func effectiveFilterRules(cfg *FilterConfig) []string {
 	return cfg.Rules
 }
 
-func parseFilterRules(rules []string, normalize func(string) string) ([]filterRuleToCheck, error) {
-	parsed := make([]filterRuleToCheck, 0, len(rules))
+func parseFilterRules(rules []string, normalize func(string) string) ([]tablePattern, error) {
+	parsed := make([]tablePattern, 0, len(rules))
 	for _, rule := range rules {
-		schema, table, err := parseRulePattern(rule, normalize)
+		pattern, err := parseRulePattern(rule, normalize)
 		if err != nil {
 			return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, err,
 				"allow-same-cluster does not support the filter rule "+rule)
 		}
-		parsed = append(parsed, filterRuleToCheck{raw: rule, schema: schema, table: table})
+		parsed = append(parsed, pattern)
 	}
 	return parsed, nil
 }
@@ -371,19 +365,19 @@ func parseRouteRules(rules []*DispatchRule, normalize func(string) string) ([]ro
 		}
 		route := routeRuleToCheck{rawMatchers: rule.Matcher}
 		for _, matcher := range rule.Matcher {
-			schema, table, err := parseRulePattern(matcher, normalize)
+			pattern, err := parseRulePattern(matcher, normalize)
 			if err != nil {
 				return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, err,
 					"allow-same-cluster does not support the dispatch rule matcher "+matcher)
 			}
-			route.matchers = append(route.matchers, matcherToCheck{schema: schema, table: table})
+			route.matchers = append(route.matchers, pattern)
 		}
 		var err error
-		if route.schemaLiteral, route.schemaSub, route.schemaHasVariable, err = parseTargetExpression(rule.TargetSchema, schemaPlaceholder); err != nil {
+		if route.schema, err = parseTargetExpression(rule.TargetSchema, schemaPlaceholder); err != nil {
 			return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, err,
 				"allow-same-cluster does not support the target schema of the dispatch rule matching "+strings.Join(rule.Matcher, ","))
 		}
-		if route.tableLiteral, route.tableSub, route.tableHasVariable, err = parseTargetExpression(rule.TargetTable, tablePlaceholder); err != nil {
+		if route.table, err = parseTargetExpression(rule.TargetTable, tablePlaceholder); err != nil {
 			return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, err,
 				"allow-same-cluster does not support the target table of the dispatch rule matching "+strings.Join(rule.Matcher, ","))
 		}
@@ -393,20 +387,20 @@ func parseRouteRules(rules []*DispatchRule, normalize func(string) string) ([]ro
 }
 
 // parseRulePattern parses a `schema.table` pattern into its two parts.
-func parseRulePattern(pattern string, normalize func(string) string) (namePattern, namePattern, error) {
+func parseRulePattern(pattern string, normalize func(string) string) (tablePattern, error) {
 	schemaPart, tablePart, ok := splitRulePattern(pattern)
 	if !ok {
-		return namePattern{}, namePattern{}, errors.New("expected a `schema.table` pattern")
+		return tablePattern{}, errors.New("expected a `schema.table` pattern")
 	}
 	schema, ok := parseNamePattern(normalize(schemaPart))
 	if !ok {
-		return namePattern{}, namePattern{}, errors.New("unsupported schema pattern")
+		return tablePattern{}, errors.New("unsupported schema pattern")
 	}
 	table, ok := parseNamePattern(normalize(tablePart))
 	if !ok {
-		return namePattern{}, namePattern{}, errors.New("unsupported table pattern")
+		return tablePattern{}, errors.New("unsupported table pattern")
 	}
-	return schema, table, nil
+	return tablePattern{raw: pattern, schema: schema, table: table}, nil
 }
 
 // splitRulePattern splits a `schema.table` pattern at its single dot. A dot inside a quoted name
@@ -457,19 +451,19 @@ func parseNamePattern(part string) (namePattern, bool) {
 		if rest == "" {
 			return namePattern{kind: patternAny}, true
 		}
-		if !strings.ContainsAny(rest, "*?[]{}/\\`\"") {
+		if !strings.ContainsAny(rest, unsupportedPatternChars) {
 			return namePattern{kind: patternSuffix, value: rest}, true
 		}
 		return namePattern{}, false
 	}
 	if strings.HasSuffix(part, "*") {
 		rest := part[:len(part)-1]
-		if !strings.ContainsAny(rest, "*?[]{}/\\`\"") {
+		if !strings.ContainsAny(rest, unsupportedPatternChars) {
 			return namePattern{kind: patternPrefix, value: rest}, true
 		}
 		return namePattern{}, false
 	}
-	if strings.ContainsAny(part, "*?[]{}/\\`\"") {
+	if strings.ContainsAny(part, unsupportedPatternChars) {
 		return namePattern{}, false
 	}
 	return namePattern{kind: patternLiteral, value: part}, true
@@ -488,47 +482,41 @@ func unquoteName(part string) (string, bool) {
 	return name, true
 }
 
-// parseTargetExpression splits a route target expression into the literal text around one
-// placeholder. An empty expression keeps the source name, which is an empty substitution.
-func parseTargetExpression(expr, placeholder string) (string, substitution, bool, error) {
+// parseTargetExpression parses a route target expression. An empty expression keeps the source
+// name, which is an empty substitution.
+func parseTargetExpression(expr, placeholder string) (targetName, error) {
 	if expr == "" {
-		return "", substitution{}, true, nil
+		return targetName{hasVariable: true}, nil
 	}
 	head, tail, found := strings.Cut(expr, placeholder)
 	if !found {
 		if strings.ContainsAny(expr, "{}") {
-			return "", substitution{}, false, errors.New("expected literal text or a single " + placeholder + " placeholder")
+			return targetName{}, errors.New("expected literal text or a single " + placeholder + " placeholder")
 		}
-		return expr, substitution{}, false, nil
+		return targetName{literal: expr}, nil
 	}
 	if strings.ContainsAny(head+tail, "{}") {
-		return "", substitution{}, false, errors.New("expected literal text or a single " + placeholder + " placeholder")
+		return targetName{}, errors.New("expected literal text or a single " + placeholder + " placeholder")
 	}
-	return "", substitution{prefix: head, suffix: tail}, true, nil
+	return targetName{sub: substitution{prefix: head, suffix: tail}, hasVariable: true}, nil
 }
 
 // checkFilterRulesCovered rejects filter rules which no dispatch rule with a target would route:
 // such a table keeps its own name and is replicated into itself.
-func checkFilterRulesCovered(filters []filterRuleToCheck, routes []routeRuleToCheck) error {
-	matchers := make([]matcherToCheck, 0, len(routes))
+func checkFilterRulesCovered(filters []tablePattern, routes []routeRuleToCheck) error {
+	matchers := make([]tablePattern, 0, len(routes))
 	for _, route := range routes {
 		matchers = append(matchers, route.matchers...)
 	}
 	for _, filter := range filters {
-		if !coveredByAnyMatcher(filter, matchers) {
+		covered := slices.ContainsFunc(matchers, func(matcher tablePattern) bool {
+			return filter.schema.covers(matcher.schema) && filter.table.covers(matcher.table)
+		})
+		if !covered {
 			return errors.ErrInvalidReplicaConfig.FastGen("allow-same-cluster requires every filter rule to be routed to another table, but filter rule %q is not covered by any dispatch rule matcher", filter.raw)
 		}
 	}
 	return nil
-}
-
-func coveredByAnyMatcher(filter filterRuleToCheck, matchers []matcherToCheck) bool {
-	for _, matcher := range matchers {
-		if filter.schema.covers(matcher.schema) && filter.table.covers(matcher.table) {
-			return true
-		}
-	}
-	return false
 }
 
 // witness is a replicated table whose routed target is replicated as well.
@@ -539,7 +527,7 @@ type witness struct {
 
 // checkRouteTargets rejects a dispatch rule which can route a replicated table to a table which the
 // filter replicates as well. It searches for a witness of such a pair and reports the witness.
-func checkRouteTargets(filters []filterRuleToCheck, routes []routeRuleToCheck) error {
+func checkRouteTargets(filters []tablePattern, routes []routeRuleToCheck) error {
 	for _, route := range routes {
 		for _, matcher := range route.matchers {
 			if found, ok := findWitness(filters, route, matcher); ok {
@@ -552,7 +540,7 @@ func checkRouteTargets(filters []filterRuleToCheck, routes []routeRuleToCheck) e
 
 // findWitness looks for a table matched by one filter rule, routed by the given matcher, and
 // captured again by another filter rule after routing.
-func findWitness(filters []filterRuleToCheck, route routeRuleToCheck, matcher matcherToCheck) (witness, bool) {
+func findWitness(filters []tablePattern, route routeRuleToCheck, matcher tablePattern) (witness, bool) {
 	for _, source := range filters {
 		for _, target := range filters {
 			if found, ok := buildWitness(source, target, route, matcher); ok {
@@ -565,16 +553,16 @@ func findWitness(filters []filterRuleToCheck, route routeRuleToCheck, matcher ma
 
 // buildWitness combines the constraints of the source rule, the matcher and the target rule, and
 // verifies the candidate names against every pattern.
-func buildWitness(source, target filterRuleToCheck, route routeRuleToCheck, matcher matcherToCheck) (witness, bool) {
+func buildWitness(source, target tablePattern, route routeRuleToCheck, matcher tablePattern) (witness, bool) {
 	schemaRequirements := combineRequirements(
 		source.schema.requirements(substitution{}),
 		matcher.schema.requirements(substitution{}),
-		targetSchemaRequirements(target, route),
+		targetRequirements(target.schema, route.schema),
 	)
 	tableRequirements := combineRequirements(
 		source.table.requirements(substitution{}),
 		matcher.table.requirements(substitution{}),
-		targetTableRequirements(target, route),
+		targetRequirements(target.table, route.table),
 	)
 	for _, schemaRequirement := range schemaRequirements {
 		schemaName, ok := schemaRequirement.name()
@@ -595,7 +583,7 @@ func buildWitness(source, target filterRuleToCheck, route routeRuleToCheck, matc
 }
 
 // verifyWitness checks the candidate table against every pattern.
-func verifyWitness(source, target filterRuleToCheck, route routeRuleToCheck, matcher matcherToCheck, schema, table string) (witness, bool) {
+func verifyWitness(source, target tablePattern, route routeRuleToCheck, matcher tablePattern, schema, table string) (witness, bool) {
 	if !source.matches(schema, table) || !matcher.matches(schema, table) {
 		return witness{}, false
 	}
@@ -606,44 +594,30 @@ func verifyWitness(source, target filterRuleToCheck, route routeRuleToCheck, mat
 	return witness{schema: schema, table: table, targetSchema: targetSchema, targetTable: targetTable}, true
 }
 
-// targetSchemaRequirements returns the constraints which a target-capturing rule puts on the source
-// schema, or no alternative when the target schema can never match that rule.
-func targetSchemaRequirements(target filterRuleToCheck, route routeRuleToCheck) []requirement {
-	if !route.schemaHasVariable {
-		if !target.schema.matches(route.schemaLiteral) {
+// targetRequirements returns the constraints which a target-capturing rule puts on the source name,
+// or no alternative when the target can never match that rule.
+func targetRequirements(capture namePattern, target targetName) []requirement {
+	if !target.hasVariable {
+		if !capture.matches(target.literal) {
 			return nil
 		}
 		return []requirement{{}}
 	}
-	return target.schema.requirements(route.schemaSub)
+	return capture.requirements(target.sub)
 }
 
-// targetTableRequirements returns the constraints which a target-capturing rule puts on the source
-// table, or no alternative when the target table can never match that rule.
-func targetTableRequirements(target filterRuleToCheck, route routeRuleToCheck) []requirement {
-	if !route.tableHasVariable {
-		if !target.table.matches(route.tableLiteral) {
-			return nil
-		}
-		return []requirement{{}}
+// combineRequirements merges the alternatives of three constraint groups into one list.
+func combineRequirements(first, second, third []requirement) []requirement {
+	if len(first) == 0 || len(second) == 0 || len(third) == 0 {
+		return nil
 	}
-	return target.table.requirements(route.tableSub)
-}
-
-// combineRequirements merges the alternatives of several constraint groups into one list.
-func combineRequirements(groups ...[]requirement) []requirement {
-	combined := []requirement{{}}
-	for _, group := range groups {
-		if len(group) == 0 {
-			return nil
-		}
-		next := make([]requirement, 0, len(combined)*len(group))
-		for _, base := range combined {
-			for _, item := range group {
-				next = append(next, base.merge(item))
+	combined := make([]requirement, 0, len(first)*len(second)*len(third))
+	for _, a := range first {
+		for _, b := range second {
+			for _, c := range third {
+				combined = append(combined, a.merge(b).merge(c))
 			}
 		}
-		combined = next
 	}
 	return combined
 }
