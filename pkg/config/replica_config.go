@@ -284,10 +284,10 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 			return cerror.ErrInvalidReplicaConfig.FastGenByArgs("table routing is incompatible with redo log/consistency feature")
 		}
 	}
-	// Replicating into the upstream cluster is only allowed when every replicated table is routed
-	// to a table outside the changefeed, otherwise the changefeed captures the writes of its own sink.
-	if util.GetOrZero(c.AllowSameCluster) && !c.Sink.TableRouteEnabled() {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("allow-same-cluster requires table routing to be enabled")
+	// Replicating into the upstream cluster is only allowed when no replicated table is routed to a
+	// table which the filter replicates as well, otherwise the changefeed captures its own writes.
+	if err := c.validateSameClusterRouting(); err != nil {
+		return err
 	}
 
 	enableRedoIOCheck := true

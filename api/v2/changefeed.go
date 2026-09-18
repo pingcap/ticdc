@@ -20,7 +20,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"slices"
 	"strconv"
 	"time"
 
@@ -1688,10 +1687,6 @@ func getVerifiedTables(
 		return nil, nil, nil, err
 	}
 
-	if err := verifySameClusterRouting(changefeedID, replicaConfig, eligibleTables, ineligibleTables, f); err != nil {
-		return nil, nil, nil, err
-	}
-
 	if ctx.Err() != nil {
 		return nil, nil, nil, errors.Trace(ctx.Err())
 	}
@@ -1757,31 +1752,6 @@ func verifyRouteConflict(
 		util.GetOrZero(replicaCfg.CaseSensitive),
 		replicaCfg.Sink.DispatchRules,
 		eligibleTables,
-	)
-}
-
-// verifySameClusterRouting rejects a changefeed which is allowed to replicate into the same TiDB
-// cluster as its upstream, unless every table it replicates is routed outside the changefeed.
-func verifySameClusterRouting(
-	changefeedID common.ChangeFeedID,
-	replicaCfg *config.ReplicaConfig,
-	eligibleTables []common.TableName,
-	ineligibleTables []common.TableName,
-	f filter.Filter,
-) error {
-	if !util.GetOrZero(replicaCfg.AllowSameCluster) || replicaCfg.Sink == nil {
-		return nil
-	}
-	tables := eligibleTables
-	if util.GetOrZero(replicaCfg.ForceReplicate) {
-		tables = slices.Concat(eligibleTables, ineligibleTables)
-	}
-	return routing.ValidateSameClusterRouting(
-		changefeedID,
-		util.GetOrZero(replicaCfg.CaseSensitive),
-		replicaCfg.Sink.DispatchRules,
-		tables,
-		f,
 	)
 }
 

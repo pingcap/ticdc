@@ -108,7 +108,7 @@ function run() {
 
 	result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
 		--config="$CUR/conf/allow_same_cluster_bad_route.toml" -c "allow-same-cluster-bad-route" 2>&1 || true)
-	if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"which is replicated as well"* ]]; then
+	if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"which the filter replicates"* ]]; then
 		echo "Expected create to be rejected when the route target is replicated as well, got:"
 		echo "$result"
 		exit 1

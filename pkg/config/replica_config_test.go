@@ -251,7 +251,9 @@ func TestReplicaConfigTableRouteSupport(t *testing.T) {
 		activeActive bool
 		// allowSameCluster mirrors the changefeed config `allow-same-cluster`.
 		allowSameCluster bool
-		wantError        string
+		// filterRules defaults to `*.*` when it is nil.
+		filterRules []string
+		wantError   string
 	}{
 		{name: "mysql routing", uri: "mysql://localhost:3306", routed: true},
 		{name: "tidb routing", uri: "tidb://localhost:4000", routed: true},
@@ -264,7 +266,7 @@ func TestReplicaConfigTableRouteSupport(t *testing.T) {
 		{name: "active active without routing", uri: "tidb://localhost:4000", activeActive: true},
 		{name: "kafka dispatch without routing", uri: "kafka://localhost:9092/topic?protocol=open-protocol"},
 		{name: "allow-same-cluster without routing", uri: "mysql://localhost:3306", allowSameCluster: true, wantError: "allow-same-cluster requires table routing to be enabled"},
-		{name: "allow-same-cluster with routing", uri: "mysql://localhost:3306", routed: true, allowSameCluster: true},
+		{name: "allow-same-cluster with routing", uri: "mysql://localhost:3306", routed: true, allowSameCluster: true, filterRules: []string{"db.*"}},
 		{name: "allow-same-cluster with kafka sink", uri: "kafka://localhost:9092/topic?protocol=open-protocol", allowSameCluster: true, wantError: "allow-same-cluster requires table routing to be enabled"},
 	}
 	for _, tc := range cases {
@@ -274,6 +276,9 @@ func TestReplicaConfigTableRouteSupport(t *testing.T) {
 			cfg.EnableActiveActive = util.AddressOf(tc.activeActive)
 			cfg.BDRMode = util.AddressOf(tc.activeActive)
 			cfg.AllowSameCluster = util.AddressOf(tc.allowSameCluster)
+			if tc.filterRules != nil {
+				cfg.Filter.Rules = tc.filterRules
+			}
 			if tc.redoEnabled {
 				cfg.Consistent.Level = util.AddressOf("eventual")
 				cfg.Consistent.Storage = util.AddressOf("file:///tmp/table-route-redo")

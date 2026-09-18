@@ -1,8 +1,8 @@
 # This changefeed writes to the upstream cluster itself, which is only allowed because
 # `allow-same-cluster` is set.
 #
-# Table routing maps `allow_same_cluster_src.t1` to `allow_same_cluster_dst.t1_routed`,
-# which is not matched by the filter, so the changefeed cannot capture its own writes.
+# The matcher covers the whole filter rule and maps every matched table to `allow_same_cluster_dst`,
+# which the filter never replicates, so the changefeed cannot capture its own writes.
 allow-same-cluster = true
 
 [filter]
@@ -10,6 +10,6 @@ rules = ['allow_same_cluster_src.*']
 
 [sink]
 [[sink.dispatchers]]
-matcher = ['allow_same_cluster_src.t1']
+matcher = ['allow_same_cluster_src.*']
 target-schema = 'allow_same_cluster_dst'
 target-table = '{table}_routed'

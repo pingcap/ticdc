@@ -1,5 +1,5 @@
-# The route target still lives in the schema the filter replicates, so the changefeed would
-# capture the writes of its own sink. This changefeed must be rejected before it is created.
+# The route target still lives in the schema the filter replicates, so the changefeed would capture
+# the writes of its own sink. This changefeed must be rejected before it is created.
 allow-same-cluster = true
 
 [filter]
@@ -7,6 +7,6 @@ rules = ['allow_same_cluster_src.*']
 
 [sink]
 [[sink.dispatchers]]
-matcher = ['allow_same_cluster_src.t1']
+matcher = ['allow_same_cluster_src.*']
 target-schema = 'allow_same_cluster_src'
 target-table = '{table}_copy'
