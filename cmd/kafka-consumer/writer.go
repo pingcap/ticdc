@@ -143,9 +143,6 @@ type writer struct {
 
 const statsLogInterval = 30 * time.Second
 
-// pipelineStopTimeout bounds how long shutdown waits for the resolve pipeline.
-const pipelineStopTimeout = 10 * time.Second
-
 // pipelineStats accumulates per-stage progress between windowed summary logs.
 // Counters are atomic because the stages are split across goroutines once the
 // read loop no longer performs the resolve itself.
@@ -292,16 +289,7 @@ func (w *writer) stopPipeline() {
 	if w.pipeline == nil {
 		return
 	}
-	done := make(chan struct{})
-	go func() {
-		w.pipeline.stop()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(pipelineStopTimeout):
-		log.Warn("resolve pipeline did not stop in time")
-	}
+	w.pipeline.stop()
 }
 
 func (w *writer) getSpillStore() *util.SpillStore {

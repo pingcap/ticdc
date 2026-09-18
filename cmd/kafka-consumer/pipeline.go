@@ -30,10 +30,6 @@ import (
 // stops restoring and the read loop keeps appending to the spill store.
 const batchChannelSize = 64
 
-// sinkBatchMessages caps how many events the submitter hands to the sink before
-// waiting for the flush callbacks, mirroring the single goroutine batching.
-const sinkBatchMessages = 10000
-
 // preparedBatch is a restored group prefix on its way to the downstream.
 //
 // A barrier batch carries no events: the submitter drains everything submitted
@@ -77,10 +73,8 @@ type pipeline struct {
 
 	wg sync.WaitGroup
 
-	errMu   sync.Mutex
-	failure error
-
-	failed atomic.Bool
+	// failure is the first resolve failure, which stops the consumer.
+	failure atomic.Pointer[error]
 }
 
 func newPipeline(w *writer) *pipeline {
@@ -104,24 +98,18 @@ func (p *pipeline) request() {
 
 // fail records the first resolve failure so the read loop can stop the consumer.
 func (p *pipeline) fail(err error) {
-	p.errMu.Lock()
-	if p.failure == nil {
-		p.failure = err
+	if p.failure.CompareAndSwap(nil, &err) {
 		log.Error("resolve pipeline failed, stop the consumer", zap.Error(err))
 	}
-	p.errMu.Unlock()
-	p.failed.Store(true)
 	p.request()
 }
 
 // err returns the first resolve failure, if any.
 func (p *pipeline) err() error {
-	if !p.failed.Load() {
-		return nil
+	if failure := p.failure.Load(); failure != nil {
+		return *failure
 	}
-	p.errMu.Lock()
-	defer p.errMu.Unlock()
-	return p.failure
+	return nil
 }
 
 // appliedWatermark is the watermark whose events are known to be applied.
@@ -252,6 +240,9 @@ func (p *pipeline) submitLoop(ctx context.Context) {
 		prepared []*preparedBatch
 		events   []*event.DMLEvent
 	)
+	// Pack events the way the single goroutine path does, so one pack handed to
+	// the sink stays bounded.
+	sinkBatchMessages := p.w.getSpillStore().ResolveLimit().MaxMessages
 	flush := func() error {
 		if len(events) == 0 {
 			return nil

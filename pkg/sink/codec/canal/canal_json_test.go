@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/tidb/pkg/kv"
-	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -1417,66 +1416,6 @@ func TestRowKey(t *testing.T) {
 	expectedRowKey := tablecodec.EncodeRowKeyWithHandle(tableInfo.TableName.TableID, kv.IntHandle(1))
 	expected := base64.StdEncoding.EncodeToString(expectedRowKey)
 	require.Equal(t, expected, tidb_ext.Rowkey)
-}
-
-func TestTableInfoFromMessageKeepsPrimaryKeyAsRowLocator(t *testing.T) {
-	tableIDAllocator.Clean()
-	dec := &decoder{
-		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
-		ddlCommitTs:    make(map[tableNameKey][]uint64),
-	}
-	buildMessage := func(table string, pkNames []string, mysqlTypes map[string]string) *canalJSONMessageWithTiDBExtension {
-		return &canalJSONMessageWithTiDBExtension{
-			JSONMessage: &JSONMessage{
-				Schema:    "test",
-				Table:     table,
-				PKNames:   pkNames,
-				MySQLType: mysqlTypes,
-			},
-			Extensions: &tidbExtension{CommitTs: 100},
-		}
-	}
-
-	// A composite primary key stays a common handle over the whole key, so a
-	// caller that locates rows by the handle key does not collapse to the first
-	// column of the table.
-	composite := dec.queryTableInfo(buildMessage("stock", []string{"s_i_id", "s_w_id"}, map[string]string{
-		"s_data":     "varchar(50)",
-		"s_i_id":     "int",
-		"s_quantity": "int",
-		"s_w_id":     "int",
-	}))
-	require.False(t, composite.PKIsHandle())
-	indices := composite.GetIndices()
-	require.Len(t, indices, 1)
-	require.True(t, indices[0].Primary)
-	require.True(t, indices[0].Unique)
-	require.Equal(t, model.StatePublic, indices[0].State)
-	require.Equal(t, []string{"s_i_id", "s_w_id"}, []string{
-		indices[0].Columns[0].Name.O, indices[0].Columns[1].Name.O,
-	})
-	// Column offsets must match the column position: a row locator built from an
-	// index offset resolves through them.
-	for i, column := range composite.GetColumns() {
-		require.Equal(t, i, column.Offset)
-	}
-	require.Equal(t, []int{1, 3}, []int{
-		indices[0].Columns[0].Offset, indices[0].Columns[1].Offset,
-	})
-
-	// A single integer primary key column is the handle, and its offset is the
-	// offset of that column, not zero.
-	single := dec.queryTableInfo(buildMessage("sbtest16", []string{"id"}, map[string]string{
-		"c":   "varchar(120)",
-		"id":  "int",
-		"k":   "int",
-		"pad": "char(60)",
-	}))
-	require.True(t, single.PKIsHandle())
-	pkCol := single.GetPkColInfo()
-	require.NotNil(t, pkCol)
-	require.Equal(t, "id", pkCol.Name.O)
-	require.Equal(t, 1, pkCol.Offset)
 }
 
 // TestTableInfoFromMessageLocatesRowByPrimaryKey checks the contract between the
