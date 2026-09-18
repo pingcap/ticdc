@@ -96,6 +96,24 @@ function run() {
 
 	cdc_cli_changefeed remove -c "$allow_same_cluster_id"
 
+	# 5) `allow-same-cluster` is rejected without table routing, and when the route target stays
+	# inside the filter range, because the changefeed would then capture the writes of its own sink.
+	result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
+		--config="$CUR/conf/allow_same_cluster_no_route.toml" -c "allow-same-cluster-no-route" 2>&1 || true)
+	if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"requires table routing to be enabled"* ]]; then
+		echo "Expected create to be rejected without table routing, got:"
+		echo "$result"
+		exit 1
+	fi
+
+	result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
+		--config="$CUR/conf/allow_same_cluster_bad_route.toml" -c "allow-same-cluster-bad-route" 2>&1 || true)
+	if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"which is replicated as well"* ]]; then
+		echo "Expected create to be rejected when the route target is replicated as well, got:"
+		echo "$result"
+		exit 1
+	fi
+
 	cleanup_process $CDC_BINARY
 }
 
