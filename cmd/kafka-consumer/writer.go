@@ -85,11 +85,11 @@ type tableIDProvider interface {
 	GetTableIDs(schema, table string) []int64
 }
 
-func newPartitionProgress(partition int32, decoder common.Decoder) *partitionProgress {
+func newPartitionProgress(partition int32, decoder *util.DMLMessageDecoder) *partitionProgress {
 	return &partitionProgress{
 		partition:   partition,
 		eventsGroup: make(map[int64]*util.EventsGroup),
-		decoder:     util.NewDMLMessageDecoder(decoder),
+		decoder:     decoder,
 	}
 }
 
@@ -217,7 +217,15 @@ func newWriter(ctx context.Context, o *option) *writer {
 		if err != nil {
 			log.Panic("cannot create the decoder", zap.Error(err))
 		}
-		w.progresses[i] = newPartitionProgress(int32(i), decoder)
+		// The resolve pipeline restores spilled payloads on its own goroutine while
+		// the read loop keeps decoding with decoder, so the restore path builds a
+		// decoder of its own: one codec decoder holds the cursor of the input it
+		// decodes and the two paths must not share it.
+		progress := util.NewDMLMessageDecoderWithRestoreFactory(decoder,
+			func() (common.Decoder, error) {
+				return codec.NewEventDecoder(ctx, i, o.codecConfig, o.topic, db)
+			})
+		w.progresses[i] = newPartitionProgress(int32(i), progress)
 	}
 
 	isAvroLike := o.protocol == config.ProtocolAvro || o.protocol == config.ProtocolDebeziumAvro
