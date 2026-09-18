@@ -69,9 +69,6 @@ type pipeline struct {
 	barriers chan chan struct{}
 	resume   chan struct{}
 
-	mu     sync.Mutex
-	paused bool
-
 	// appliedWatermarkValue is the highest watermark whose events reached the
 	// downstream. The read loop commits a resolved message only after this
 	// reaches that message's watermark, because the spill store is temporary: an
@@ -177,9 +174,6 @@ func (p *pipeline) resolveLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case barrier := <-p.barriers:
-			p.mu.Lock()
-			p.paused = true
-			p.mu.Unlock()
 			// The barrier travels on the batch channel, so the submitter
 			// acknowledges it after everything submitted before it.
 			select {
@@ -192,9 +186,6 @@ func (p *pipeline) resolveLoop(ctx context.Context) {
 				return
 			case <-p.resume:
 			}
-			p.mu.Lock()
-			p.paused = false
-			p.mu.Unlock()
 			continue
 		case <-p.requests:
 		}
@@ -279,8 +270,6 @@ func (p *pipeline) submitLoop(ctx context.Context) {
 		for _, item := range prepared {
 			p.w.stats.flushedMessages.Add(int64(len(item.batch.Messages)))
 		}
-		p.w.stats.flushCalls.Add(1)
-		p.w.stats.flushEvents.Add(int64(len(events)))
 		prepared = prepared[:0]
 		events = events[:0]
 		// A group whose batch was just acknowledged may hold events that arrived

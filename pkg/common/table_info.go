@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/table/tables"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"go.uber.org/zap"
@@ -509,24 +510,16 @@ func (ti *TableInfo) IsEligible(forceReplicate bool) bool {
 // read the key from these flags, so a composite primary key must not be reported
 // as PKIsHandle: doing so makes them fall back to a single column of the table.
 func SetHandleKeyFlags(tableInfo *model.TableInfo) {
-	var primary *model.IndexInfo
-	for _, index := range tableInfo.Indices {
-		if index.Primary {
-			primary = index
-			break
-		}
-	}
+	primary := tables.FindPrimaryIndex(tableInfo)
 	if primary == nil {
 		return
 	}
 
 	if len(primary.Columns) == 1 {
-		name := primary.Columns[0].Name.L
-		for _, column := range tableInfo.Columns {
-			if column.Name.L == name && mysql.IsIntegerType(column.GetType()) {
-				tableInfo.PKIsHandle = true
-				return
-			}
+		column := model.FindColumnInfo(tableInfo.Columns, primary.Columns[0].Name.L)
+		if column != nil && mysql.IsIntegerType(column.GetType()) {
+			tableInfo.PKIsHandle = true
+			return
 		}
 	}
 	tableInfo.IsCommonHandle = true

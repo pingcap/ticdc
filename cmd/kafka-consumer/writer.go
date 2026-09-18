@@ -154,8 +154,6 @@ type pipelineStats struct {
 
 	ingestMessages  atomic.Int64
 	flushedMessages atomic.Int64
-	flushEvents     atomic.Int64
-	flushCalls      atomic.Int64
 	restoreNanos    atomic.Int64
 	applyWaitNanos  atomic.Int64
 }
@@ -171,13 +169,11 @@ func (w *writer) maybeLogStats() {
 	w.stats.lastLog = time.Now()
 
 	var (
-		ingest      = w.stats.ingestMessages.Swap(0)
-		flushed     = w.stats.flushedMessages.Swap(0)
-		flushEvents = w.stats.flushEvents.Swap(0)
-		flushCalls  = w.stats.flushCalls.Swap(0)
-		restore     = time.Duration(w.stats.restoreNanos.Swap(0))
-		applyWait   = time.Duration(w.stats.applyWaitNanos.Swap(0))
-		spill       = w.getSpillStore().Stats()
+		ingest    = w.stats.ingestMessages.Swap(0)
+		flushed   = w.stats.flushedMessages.Swap(0)
+		restore   = time.Duration(w.stats.restoreNanos.Swap(0))
+		applyWait = time.Duration(w.stats.applyWaitNanos.Swap(0))
+		spill     = w.getSpillStore().Stats()
 	)
 	log.Info("kafka consumer pipeline stats",
 		zap.Duration("interval", interval),
@@ -185,8 +181,6 @@ func (w *writer) maybeLogStats() {
 		zap.Float64("ingestPerSecond", float64(ingest)/interval.Seconds()),
 		zap.Int64("flushedMessages", flushed),
 		zap.Float64("flushedPerSecond", float64(flushed)/interval.Seconds()),
-		zap.Int64("flushEvents", flushEvents),
-		zap.Int64("flushCalls", flushCalls),
 		zap.Duration("restoreTime", restore),
 		zap.Float64("restoreDuty", restore.Seconds()/interval.Seconds()),
 		zap.Duration("applyWaitTime", applyWait),
@@ -388,8 +382,6 @@ func (w *writer) flushEventsFromGroups(
 				return err
 			}
 		}
-		w.stats.flushCalls.Add(1)
-		w.stats.flushEvents.Add(int64(len(batchEvents)))
 		total += len(batchEvents)
 		batchEvents = nil
 		prepared = prepared[:0]

@@ -194,7 +194,6 @@ type SpillStore struct {
 	stats      SpillStats
 
 	indexDeleteRangeCount int64
-	indexDeleteKeyCount   int64
 }
 
 var nextSpillStoreID atomic.Uint64
@@ -537,7 +536,6 @@ func (s *SpillStore) deleteIndexKeys(entries []spilledMessage) error {
 		if err := s.index.Delete(entries[i].key, pebble.NoSync); err != nil {
 			return errors.WrapError(errors.ErrSpillFileOp, err, "delete applied spill event key")
 		}
-		s.indexDeleteKeyCount++
 	}
 	return nil
 }
