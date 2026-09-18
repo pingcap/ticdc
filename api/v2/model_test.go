@@ -41,6 +41,21 @@ func TestReplicaConfigConversion(t *testing.T) {
 				SpoolDiskQuota:   util.AddressOf(int64(1024)),
 				SpoolBaseDir:     util.AddressOf("/tmp/ticdc-spool"),
 			},
+<<<<<<< HEAD
+=======
+			DebeziumConfig: &DebeziumConfig{
+				IncludeStartTs:             util.AddressOf(true),
+				DecimalHandlingMode:        util.AddressOf("string"),
+				BigintUnsignedHandlingMode: util.AddressOf("string"),
+				BinaryHandlingMode:         util.AddressOf("hex"),
+			},
+			SimpleConfig: &SimpleConfig{
+				IncludeStartTs: util.AddressOf(true),
+			},
+			KafkaConfig: &KafkaConfig{
+				SASLOAuthCA: util.AddressOf("/etc/ssl/oauth-ca.pem"),
+			},
+>>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 		},
 		Mounter: &MounterConfig{
 			WorkerNum: util.AddressOf(16),
@@ -73,6 +88,15 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(internalCfg.Sink.CloudStorageConfig.UseTableIDAsPath))
 	require.Equal(t, int64(1024), util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolDiskQuota))
 	require.Equal(t, "/tmp/ticdc-spool", util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolBaseDir))
+<<<<<<< HEAD
+=======
+	require.True(t, util.GetOrZero(internalCfg.Sink.Debezium.IncludeStartTs))
+	require.Equal(t, "string", util.GetOrZero(internalCfg.Sink.Debezium.DecimalHandlingMode))
+	require.Equal(t, "string", util.GetOrZero(internalCfg.Sink.Debezium.BigintUnsignedHandlingMode))
+	require.Equal(t, "hex", util.GetOrZero(internalCfg.Sink.Debezium.BinaryHandlingMode))
+	require.True(t, util.GetOrZero(internalCfg.Sink.Simple.IncludeStartTs))
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(internalCfg.Sink.KafkaConfig.SASLOAuthCA))
+>>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
 	require.True(t, util.GetOrZero(internalCfg.Scheduler.EnableTableAcrossNodes))
 	require.Equal(t, 1000, util.GetOrZero(internalCfg.Scheduler.RegionThreshold))
@@ -82,6 +106,28 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(128), util.GetOrZero(internalCfg.Consistent.MaxLogSize))
 	require.Equal(t, int64(2000), util.GetOrZero(internalCfg.Consistent.FlushIntervalInMs))
 	require.Equal(t, "s3://test", util.GetOrZero(internalCfg.Consistent.Storage))
+<<<<<<< HEAD
+=======
+	require.Equal(t, int64(2048), util.GetOrZero(internalCfg.Consistent.SpoolDiskQuota))
+	// output_old_value is omitted in apiCfg and must keep its default (true).
+	require.True(t, internalCfg.Sink.Debezium.OutputOldValue)
+
+	// An explicit output_old_value must be honored.
+	apiCfgDebezium := &ReplicaConfig{
+		Sink: &SinkConfig{
+			DebeziumConfig: &DebeziumConfig{
+				OutputOldValue: util.AddressOf(false),
+				IncludeStartTs: util.AddressOf(true),
+			},
+		},
+	}
+	internalDebezium := apiCfgDebezium.ToInternalReplicaConfig()
+	require.False(t, internalDebezium.Sink.Debezium.OutputOldValue)
+	require.True(t, util.GetOrZero(internalDebezium.Sink.Debezium.IncludeStartTs))
+	require.Nil(t, internalDebezium.Sink.Debezium.DecimalHandlingMode)
+	require.Nil(t, internalDebezium.Sink.Debezium.BigintUnsignedHandlingMode)
+	require.Nil(t, internalDebezium.Sink.Debezium.BinaryHandlingMode)
+>>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 
 	// Test case 2: Nil fields (should use defaults or be nil)
 	apiCfgNil := &ReplicaConfig{}
@@ -100,6 +146,16 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, *apiCfgBack.Sink.CloudStorageConfig.UseTableIDAsPath)
 	require.Equal(t, int64(1024), *apiCfgBack.Sink.CloudStorageConfig.SpoolDiskQuota)
 	require.Equal(t, "/tmp/ticdc-spool", *apiCfgBack.Sink.CloudStorageConfig.SpoolBaseDir)
+<<<<<<< HEAD
+=======
+	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.IncludeStartTs))
+	require.Equal(t, "string", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.DecimalHandlingMode))
+	require.Equal(t, "string", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.BigintUnsignedHandlingMode))
+	require.Equal(t, "hex", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.BinaryHandlingMode))
+	require.True(t, util.GetOrZero(apiCfgBack.Sink.SimpleConfig.IncludeStartTs))
+	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.OutputOldValue))
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(apiCfgBack.Sink.KafkaConfig.SASLOAuthCA))
+>>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 	require.Equal(t, 16, *apiCfgBack.Mounter.WorkerNum)
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
