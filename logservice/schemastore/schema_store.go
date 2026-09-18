@@ -398,11 +398,7 @@ func (s *schemaStore) acquireKeyspaceSchemaStoreWithContext(ctx context.Context,
 		return store, nil
 	}
 
-	lifetimeCtx := s.requestCtx
-	if lifetimeCtx == nil {
-		lifetimeCtx = context.Background()
-	}
-	if err := s.registerKeyspace(ctx, lifetimeCtx, keyspaceMeta); err != nil {
+	if err := s.RegisterKeyspace(ctx, keyspaceMeta); err != nil {
 		return nil, err
 	}
 
@@ -646,7 +642,11 @@ func (s *schemaStore) RegisterKeyspace(
 	ctx context.Context,
 	keyspaceMeta common.KeyspaceMeta,
 ) error {
-	return s.registerKeyspace(ctx, ctx, keyspaceMeta)
+	lifetimeCtx := s.requestCtx
+	if lifetimeCtx == nil {
+		lifetimeCtx = context.Background()
+	}
+	return s.registerKeyspace(ctx, lifetimeCtx, keyspaceMeta)
 }
 
 func (s *schemaStore) registerKeyspace(ctx, lifetimeCtx context.Context, keyspaceMeta common.KeyspaceMeta) error {

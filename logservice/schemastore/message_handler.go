@@ -137,7 +137,7 @@ func (s *schemaStore) handleRequest(ctx context.Context, from node.ID, req *mess
 	var err error
 	switch req.Operation {
 	case messaging.SchemaStoreRegisterKeyspace:
-		err = s.registerKeyspace(ctx, s.requestCtx, req.Keyspace)
+		err = s.RegisterKeyspace(ctx, req.Keyspace)
 	case messaging.SchemaStoreGetAllPhysicalTables:
 		var f filter.Filter
 		f, err = filter.NewFilter(req.Filter, "", req.CaseSensitive, req.ForceReplicate)
@@ -145,7 +145,7 @@ func (s *schemaStore) handleRequest(ctx context.Context, from node.ID, req *mess
 			var store *keyspaceSchemaStore
 			store, err = s.acquireRequestStore(ctx, req)
 			if err == nil {
-				resp.Tables, err = store.dataStorage.getAllPhysicalTables(req.Ts, f)
+				resp.Tables, err = store.dataStorage.getAllPhysicalTablesWithContext(ctx, req.Ts, f)
 				store.release()
 			}
 		}

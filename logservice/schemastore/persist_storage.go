@@ -262,7 +262,7 @@ func (p *persistentStorage) initializeFromDisk() {
 
 	var err error
 	if p.databaseMap, err = loadDatabasesInKVSnapWithEncryption(
-		storageSnap, p.gcTs, p.encryptionManager, p.keyspaceID); err != nil {
+		context.Background(), storageSnap, p.gcTs, p.encryptionManager, p.keyspaceID); err != nil {
 		log.Fatal("load database info from disk failed")
 	}
 
@@ -300,6 +300,13 @@ func (p *persistentStorage) close() error {
 // getAllPhysicalTables returns all physical tables in the snapshot
 // caller must ensure current resolve ts is larger than snapTs
 func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filter.Filter) ([]commonEvent.Table, error) {
+	return p.getAllPhysicalTablesWithContext(context.Background(), snapTs, tableFilter)
+}
+
+func (p *persistentStorage) getAllPhysicalTablesWithContext(ctx context.Context, snapTs uint64, tableFilter filter.Filter) ([]commonEvent.Table, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
+	}
 	storageSnap := p.db.NewSnapshot()
 	defer storageSnap.Close()
 
@@ -320,7 +327,7 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 		log.Debug("getAllPhysicalTables finish",
 			zap.Any("duration(s)", time.Since(start).Seconds()))
 	}()
-	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter, p.encryptionManager, p.keyspaceID)
+	return loadAllPhysicalTablesAtTs(ctx, storageSnap, gcTs, snapTs, tableFilter, p.encryptionManager, p.keyspaceID)
 }
 
 // only return when table info is initialized

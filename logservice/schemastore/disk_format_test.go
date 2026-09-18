@@ -96,7 +96,7 @@ func TestSchemaStoreDoesNotDecryptLegacyValuesWhenManagerIsConfigured(t *testing
 	snapshot := db.NewSnapshot()
 	defer snapshot.Close()
 
-	databaseMap, err := loadDatabasesInKVSnapWithEncryption(snapshot, snapshotTs, manager, 42)
+	databaseMap, err := loadDatabasesInKVSnapWithEncryption(t.Context(), snapshot, snapshotTs, manager, 42)
 	require.NoError(t, err)
 	_, _, err = loadTablesInKVSnapWithEncryption(snapshot, snapshotTs, databaseMap, manager, 42)
 	require.NoError(t, err)
@@ -316,7 +316,7 @@ func TestGetAllPhysicalTablesSkipsViews(t *testing.T) {
 		require.NoError(t, snapshot.Close())
 	}()
 
-	tables, err := loadAllPhysicalTablesAtTs(snapshot, snapshotTs, snapshotTs, nil, nil, 0)
+	tables, err := loadAllPhysicalTablesAtTs(t.Context(), snapshot, snapshotTs, snapshotTs, nil, nil, 0)
 	require.NoError(t, err)
 	require.Equal(t, []commonEvent.Table{
 		{
