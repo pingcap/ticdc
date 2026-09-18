@@ -8,6 +8,45 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
+function check_recover_schema_tables() {
+	ensure 30 "check_db_exists recover_schema_test ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}"
+	ensure 30 "run_sql 'use recover_schema_test; show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_contains 'included1' && check_contains 'included2' && check_not_contains 'filtered'"
+}
+
+function test_recover_schema() {
+	run_sql "drop database if exists recover_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "create database recover_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "create table recover_schema_test.included1 (id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "create table recover_schema_test.filtered (id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "create table recover_schema_test.included2 (id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	check_recover_schema_tables
+
+	run_sql "drop database recover_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	ensure 30 "check_db_not_exists recover_schema_test ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}"
+
+	# Current TiDB stores only a snapshot TS in the recover-schema job.
+	run_sql "flashback database recover_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	ensure 30 "grep -q 'verified recover schema job uses snapshot TS' $WORK_DIR/cdc.log"
+	check_recover_schema_tables
+
+	run_sql "drop database recover_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	ensure 30 "check_db_not_exists recover_schema_test ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}"
+
+	# Simulate the old TiDB job format, which embeds all recovered table infos.
+	cdc_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
+	kill_cdc_pid $cdc_pid
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/logservice/schemastore/forceRecoverSchemaJobWithTableInfo=return(true)'
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "-recover-schema" --data-dir "$WORK_DIR/cdc_data"
+	export GO_FAILPOINTS=''
+
+	run_sql "flashback database recover_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	ensure 30 "grep -q 'forced recover schema job to use embedded table infos' $WORK_DIR/cdc-recover-schema.log"
+	check_recover_schema_tables
+
+	run_sql "drop database recover_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	ensure 30 "check_db_not_exists recover_schema_test ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}"
+}
+
 function run() {
 	# storage and pulsar is not supported yet.
 	if [ "$SINK_TYPE" == "storage" ]; then
@@ -26,7 +65,9 @@ function run() {
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/logservice/schemastore/verifyRecoverSchemaJobWithSnapshotTS=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	export GO_FAILPOINTS=''
 
 	# this test contains `recover table`, which requires super privilege, so we
 	# can't use the normal user
@@ -50,7 +91,7 @@ function run() {
 EOF
 		cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config=$WORK_DIR/pulsar_test.toml
 	else
-		cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+		cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
 	fi
 
 	case $SINK_TYPE in
@@ -58,6 +99,8 @@ EOF
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
 	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config $WORK_DIR/pulsar_test.toml --ca "${WORK_DIR}/ca.cert.pem" --auth-tls-private-key-path "${WORK_DIR}/broker_client.key-pk8.pem" --auth-tls-certificate-path="${WORK_DIR}/broker_client.cert.pem" ;;
 	esac
+
+	test_recover_schema
 
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql_file $CUR/data/test_v5.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
